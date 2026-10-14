@@ -323,6 +323,22 @@ jobs:
           # passed here vs 146 on a Gentoo host: its section C execution tier needs
           # portage and prints "NOTE ... execution tier SKIPPED" otherwise, so CI gets
           # its static tier only — the other nine are identical on both.
+          # tests/scripts/test-builder-resume-safety.sh and tests/scripts/
+          # test-makefile-reown-skips-sysroot.sh (hugmesh-generator#659): the x86
+          # builder's --resume checks (owner gate, seed choice, static restore, link
+          # test, stale-mount refusal and umount_chroot, run through a symlink, a
+          # space, an umlaut and a relative path against a fixture mount table) and
+          # the Makefile's post-build reown, executed against fixtures and stubs with
+          # a mutation battery (the first suite re-runs itself against 28 mutated
+          # copies of the library, which is why it takes a minute and a half).
+          # MEASURED, 2026-10-07, in alpine:3 with EXACTLY this job's apk set, as
+          # root (checkout copied in; busybox sed, grep and find): 128 passed / 0
+          # failed in 98 s (the one `unshare -Ur` leg SKIPs here — user namespaces
+          # are blocked in a container — and its stat-shim twin covers the pass
+          # path) and 9 / 0. Their sibling
+          # tests/scripts/test-builder-unmount-real.sh needs `unshare -Urm` and exits
+          # 2 SKIPPED-LOUDLY in this image (measured the same way), so it is NOT
+          # listed: see PREMERGE_UNGATED and `make builder-unmount-real-check`.
           SUITES="
             tests/api/test-bff-admin.sh
             tests/auto-update/test-provision-update.sh
@@ -382,6 +398,7 @@ jobs:
             tests/scripts/test-binpkg-pool-fingerprint.sh
             tests/scripts/test-brand-path-validation.sh
             tests/scripts/test-builder-log-paths.sh
+            tests/scripts/test-builder-resume-safety.sh
             tests/scripts/test-calamares-boost-seed.sh
             tests/scripts/test-casdoor-domains-appset.sh
             tests/scripts/test-casdoor-init-honesty.sh
@@ -416,6 +433,7 @@ jobs:
             tests/scripts/test-kind-profile-app-closure.sh
             tests/scripts/test-kind-profile-route-closure.sh
             tests/scripts/test-lsm-posture-honesty.sh
+            tests/scripts/test-makefile-reown-skips-sysroot.sh
             tests/scripts/test-no-duplicate-env.sh
             tests/scripts/test-no-literal-vault-brand-prose.sh
             tests/scripts/test-nullmailer-cross-postinst.sh
@@ -802,6 +820,9 @@ jobs:
           # test-optional-netpol-autosync.sh (#617) is here for kubectl kustomize: it
           # renders every git-served overlay the build's prune touched, and FAILS
           # without kubectl.
+          # test-gateway-vanity-domains.sh (hugmesh-generator#582) is here for helm:
+          # it renders the fe-gateway chart with `vanityDomains[i]` parameters exactly
+          # as ArgoCD does, and FAILS (never skips) without helm.
           missing=""
           for b in bash jq openssl python3 git helm kubectl checkpolicy make; do command -v "$b" >/dev/null 2>&1 || missing="$missing $b"; done
           [ -z "$missing" ] || { echo "::error::preflight: missing$missing — suites would silently skip"; exit 1; }
@@ -819,6 +840,7 @@ jobs:
             tests/scripts/test-kind-tor.sh
             tests/scripts/test-tor-onion-ingress.sh
             tests/scripts/test-optional-netpol-autosync.sh
+            tests/scripts/test-gateway-vanity-domains.sh
           "
           rc=0; failed=""; ran=0
           for t in $SUITES; do

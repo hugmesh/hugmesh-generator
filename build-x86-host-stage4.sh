@@ -48,6 +48,12 @@ source "${SCRIPT_DIR}/scripts/_binpkg-pool-lib.sh"
 # scripts/_shared-assets-lib.sh and docs/SHARED-BINPKG.md.
 # shellcheck source=scripts/_shared-assets-lib.sh
 source "${SCRIPT_DIR}/scripts/_shared-assets-lib.sh"
+# What a --resume must check before it reuses a build system (ownership, the
+# seed it came from, its stripped static libraries, a link test) and how mounts
+# under the build system are listed and cleared (#659). Shared with the rpi5
+# builder. See scripts/_builder-resume-lib.sh.
+# shellcheck source=scripts/_builder-resume-lib.sh
+source "${SCRIPT_DIR}/scripts/_builder-resume-lib.sh"
 # Signed-kernel artifact cache (G4): a kernel+modules+initramfs+UKI set is reusable
 # across images of the SAME board when board+kernel version+config digest+SIGNING KEY
 # FINGERPRINT all match. The key fingerprint is in the cache key so a re-keyed fleet
@@ -828,7 +834,13 @@ build-x86-host-stage4.sh — hardened Gentoo amd64 k8s/GPU worker image.
       --no-live-iso         Skip the live ISO (clean disable; no installer ISO implied).
       --installer-iso       Also build a stage4 + install-x86.sh data ISO.
       --no-tar              Don't emit the mounted-filesystem tarball (.fs.tar.xz).
-      --resume              Reuse an existing sysroot.
+      --resume              Reuse an existing sysroot. Refused, in one sentence,
+                            when that sysroot is not root's, when its stripped
+                            static libraries cannot be restored from the seed
+                            it came from, when that cached seed no longer
+                            verifies against its signed DIGESTS, or when it
+                            cannot link a C program; then rebuild without
+                            --resume (#659).
       --print-plan          Resolve + validate all flags, print the build plan
                             (PLAN_KEY=VALUE lines) and exit 0 — no root, no
                             writes, no network. Secrets print as REDACTED.
@@ -3689,7 +3701,42 @@ acquire_build_lock() {
 # ── 3. Extract ─────────────────────────────────────────────────────
 banner "Extracting stage3 into sysroot"
 acquire_build_lock
+# NEVER touch a sysroot that still has mounts under it — on EITHER branch. A
+# live (or crashed) build leaves /proc,/sys,/dev RBINDS, the SHARED portage
+# scratch and the distfiles cache attached: rm -rf (non-resume) would delete
+# straight through them, and a --resume used to STACK its own binds on top of
+# them (three distfiles-ro binds were found under one sysroot on 2026-09-30,
+# #659). The flock above excludes a LIVE same-BUILD_ROOT build; this catches a
+# crashed one (flock died with it, mounts did not). Captured into a variable,
+# never piped into `grep -q`: under this script's pipefail, grep -q exiting at the
+# first match can SIGPIPE the producer on a mount-heavy host, turning the pipeline
+# status non-zero — the guard silently NOT firing with mounts present. The
+# listing is read from the kernel's own table and compared against the path the
+# kernel uses (symlinks resolved, escapes undone: scripts/_builder-resume-lib.sh),
+# so a work directory reached through a symlink, a relative --work-dir, or a name
+# with a space or an umlaut is checked the same as any other, and a table that
+# cannot be read stops the build instead of reading as "nothing mounted". The
+# refusal prints every mount as the umount command that removes it, deepest
+# first, once per stacked layer (`umount -R <sysroot>` named a directory that is
+# not itself a mount point and did nothing).
+if [ -d "${SYSROOT}" ]; then
+    _stale_mounts="$(hmr_stale_mounts "${SYSROOT}")"
+    if [ -n "${_stale_mounts}" ]; then
+        hmr_stale_mount_refuse "${SYSROOT}" "${_stale_mounts}"
+        exit 1
+    fi
+fi
 if [ -f "${SYSROOT}/etc/gentoo-release" ] && ${RESUME}; then
+    # A build system is only reusable when it is still ROOT'S. After a native
+    # build through `make`, chown-artifacts used to hand the whole work
+    # directory to the invoking user, sysroot included; a build resumed from
+    # that tree finished green and wrote an image whose every directory was
+    # uid 1002 (sshd, systemd-tmpfiles, snort and tor all refused to start,
+    # #659). This is the FIRST thing that looks at the sysroot on the resume
+    # path: no mount, emerge or write has happened yet. Restoring ownership is
+    # not an option (see the lib: a stage3 ships 24 non-root entries, a built
+    # image many more, and portage records no owner) — refuse, in one sentence.
+    hmr_owner_gate "${SYSROOT}" || exit 1
     info "Sysroot populated and --resume — skipping extraction"
 else
     # A non-resume build must start from a CLEAN sysroot. Extracting stage3 OVER a
@@ -3698,29 +3745,18 @@ else
     # slots surviving + libselinux[python] conflicts). Wipe first so the extract
     # is pristine. (Warm reuse is the explicit --resume path above.)
     if [ -f "${SYSROOT}/etc/gentoo-release" ]; then
-        # NEVER rm -rf a sysroot that still has mounts under it: a live (or
-        # crashed) build leaves /proc,/sys,/dev RBINDS and the SHARED portage
-        # scratch attached, and rm -rf would delete straight through them.
-        # The flock above excludes a LIVE same-BUILD_ROOT build; this catches a
-        # crashed one (flock died with it, mounts did not).
-        # Captured into a variable, NOT `findmnt | grep -q`: under this script's
-        # pipefail, grep -q exiting at the first match can SIGPIPE findmnt on a
-        # mount-heavy host (>64K of table after the match), turning the pipeline
-        # status non-zero — i.e. the guard silently NOT firing with mounts
-        # present, the one direction this check must never fail in.
-        _stale_mounts="$(findmnt -rn -o TARGET 2>/dev/null | grep "^${SYSROOT}/" || true)"
-        if [ -n "${_stale_mounts}" ]; then
-            err "mounts are still attached under ${SYSROOT} (a crashed build?):"
-            printf '%s\n' "${_stale_mounts}" | head -5 >&2
-            err "rm -rf would delete THROUGH those binds (host /dev, the shared portage"
-            err "scratch). Unmount first:  umount -R '${SYSROOT}'  — then re-run."
-            exit 1
-        fi
         warn "Non-resume build over a populated sysroot — wiping for a clean stage3 extract"
         rm -rf "${SYSROOT}"; mkdir -p "${SYSROOT}"
     fi
     tar -C "${SYSROOT}" --xattrs-include='*.*' -xpf "${STAGE3_LOCAL}" 2>/dev/null || \
         tar -C "${SYSROOT}" -xpf "${STAGE3_LOCAL}"
+    # Record which seed this build system came from, BESIDE the sysroot (the
+    # clean step and the image never see it). A later --resume restores the
+    # stripped static libraries from THIS seed, not from whatever seed is
+    # newest that day (binutils moved 2.46.1 -> 2.47 between two seeds a week
+    # apart while glibc and gcc did not; a restore from the wrong one is the
+    # silent variant of the same failure).
+    hmr_seed_marker_write "${BUILD_ROOT}" "${STAGE3_LOCAL}" || true
 fi
 
 # Portage pkg_postinst calls sudo internally (as the portage build user); stage3
@@ -5032,24 +5068,40 @@ ${ROLE_HEADSCALE} || rm -f "${SYSROOT}/etc/runlevels/default/headscale"
 # nothing extra is enabled when they stay off.
 harden_radios "${SYSROOT}"
 
-# ── 4b. Toolchain static restore (source-compiling roles) ──────────
-# §8 (clean) strips *.a + crt*.o from usr/lib{,64} to shrink the IMAGE, but the
-# sysroot is SHARED across roles (same BUILD_SUBDIR) and §3 skips re-extracting
-# stage3 on --resume. So once any prior role's clean has stripped the toolchain
-# statics, a source-compiling role (GPU: llvm/mesa) hits `ld: cannot find -lgcc`
-# (then missing crt*.o / libc_nonshared.a) during emerge. Idempotently restore
-# the compiler+glibc statics from the seed tarball before emerge — additive only,
-# a cheap no-op when they're already present. Only GPU roles compile from source;
-# binpkg-only roles (pki/backend/frontend) never link a toolchain and don't need these.
-if ${GPU} && [ -z "$(find "${SYSROOT}/usr/lib/gcc" -name libgcc.a -print -quit 2>/dev/null)" ]; then
-    banner "Restoring toolchain static libs from seed (GPU source-compile)"
-    _statics_list="$(mktemp)"
-    tar tJf "${STAGE3_LOCAL}" 2>/dev/null | grep -E '\.a$|/[^/]*crt[^/]*\.o$' > "${_statics_list}" || true
-    if [ -s "${_statics_list}" ]; then
-        tar xJf "${STAGE3_LOCAL}" -C "${SYSROOT}" -T "${_statics_list}" 2>/dev/null || true
-        info "Restored $(wc -l < "${_statics_list}") toolchain static archives/crt objects from $(basename "${STAGE3_LOCAL}")"
+# ── 4b. Toolchain static restore (every role) ──────────────────────
+# §8 (clean) strips *.a from usr/lib{,64} to shrink the IMAGE, but the sysroot
+# is SHARED across roles (same BUILD_SUBDIR) and §3 skips re-extracting stage3
+# on --resume. So once any prior build's clean has stripped the toolchain
+# statics, ANY package that has to compile hits `C compiler cannot create
+# executables` / `cannot find -lpthread` / `cannot find /usr/lib64/
+# libc_nonshared.a` during emerge. This used to run only for GPU roles ("binpkg-
+# only roles never link a toolchain") — true only while every package a role
+# needs exists prebuilt at the version the tree wants; six days after a pki
+# build three packages had moved and pki had to compile (#659). Now: whenever
+# the statics are missing, for every role, and from the seed this build system
+# was extracted from (the marker beside the sysroot, or the cached seed whose
+# glibc/gcc/binutils match the sysroot's package database), or a plain refusal.
+# That seed is VERIFIED again before root extracts a byte of it, unless it is
+# the current seed sa_seed_acquire verified minutes ago in this run: the seed
+# cache is a directory the Makefile hands to the invoking user, and "verified
+# when it was fetched" is not "verified now" (the same rule the current seed is
+# held to on every run). Additive only; a cheap no-op when the files are
+# present (every fresh extract).
+if hmr_statics_missing "${SYSROOT}"; then
+    banner "Restoring toolchain static libs from the seed this build system came from"
+    _hmr_listing="$(mktemp)"
+    if ! _hmr_seed="$(hmr_seed_for_resume "${BUILD_ROOT}" "${SYSROOT}" "${STAGE3_LOCAL}" "${_hmr_listing}")"; then
+        rm -f "${_hmr_listing}"
+        exit 1
     fi
-    rm -f "${_statics_list}"
+    hmr_seed_verify "${_hmr_seed}" "${STAGE3_LOCAL}" "${STAGE3_URL}" || { rm -f "${_hmr_listing}"; exit 1; }
+    hmr_statics_restore "${SYSROOT}" "${_hmr_seed}" "${_hmr_listing}" || { rm -f "${_hmr_listing}"; exit 1; }
+    rm -f "${_hmr_listing}"
+    # Record the seed the restore came from whenever the marker does not already
+    # say so: a pre-marker build system (extracted before the marker existed) has
+    # its seed established by the version match, and a marker naming a seed that
+    # has since left the cache is corrected instead of retried on every resume.
+    [ "$(hmr_seed_marker_read "${BUILD_ROOT}")" = "$(basename "${_hmr_seed}")" ] || hmr_seed_marker_write "${BUILD_ROOT}" "${_hmr_seed}" || true
 fi
 # ── configure_root_login <sysroot> ────────────────────────────────────────────
 # Root SSH login is DISABLED BY DEFAULT (hardened posture). Write an AUTHORITATIVE
@@ -5218,13 +5270,42 @@ mount_chroot() {
     fi
 }
 umount_chroot() {
-    ${PORTAGE_SCRATCH_MOUNTED:-false} && umount -l "${SYSROOT}/var/tmp/portage" 2>/dev/null || true
-    ${HOST_REPO_MOUNTED:-false} && umount -l "${SYSROOT}/var/db/repos/gentoo" 2>/dev/null || true
-    ${X86_POOL_MOUNTED:-false} && umount -l "${SYSROOT}/var/cache/binpkgs" 2>/dev/null || true
+    # Detach exactly what mount_chroot attached in THIS run — each flag below is
+    # set by the matching mount above — and nothing else: a mount somebody else
+    # made under the sysroot is theirs, and the stale-mount refusal at the
+    # Extract phase names it before the next build. The distfiles-ro bind was
+    # MISSING from this list until #659: every build (failed or successful)
+    # left one behind per mount_chroot call, stacked on the previous run's.
+    # Each flag is reset after its umount so a second mount_chroot/umount_chroot
+    # pair (the live-ISO dracut step) starts from a clean slate. hmr_umount_own
+    # peels ONE layer (ours) whatever the mount table says (the umount never
+    # waits for a count, so a path spelled differently from the kernel's — a
+    # symlink, a space, an umlaut, a relative --work-dir — is unmounted like any
+    # other), then counts layers before and after and warns when the count did
+    # not go down (`umount -l ... || true` alone is silent).
+    if ${DISTFILES_MOUNTED:-false}; then
+        hmr_umount_own "${SYSROOT}/var/cache/distfiles-ro" || true; DISTFILES_MOUNTED=false
+    fi
+    if ${PORTAGE_SCRATCH_MOUNTED:-false}; then
+        hmr_umount_own "${SYSROOT}/var/tmp/portage" || true; PORTAGE_SCRATCH_MOUNTED=false
+    fi
+    if ${HOST_REPO_MOUNTED:-false}; then
+        hmr_umount_own "${SYSROOT}/var/db/repos/gentoo" || true; HOST_REPO_MOUNTED=false
+    fi
+    if ${X86_POOL_MOUNTED:-false}; then
+        hmr_umount_own "${SYSROOT}/var/cache/binpkgs" || true; X86_POOL_MOUNTED=false
+    fi
     for m in run dev sys proc; do umount -lR "${SYSROOT}/$m" 2>/dev/null || true; done
 }
 trap umount_chroot EXIT
 mount_chroot
+# A resumed build system must be able to LINK before anything is emerged: the
+# static restore above (4b) is the fix, this is the proof, in seconds instead
+# of three packages failing with compiler errors minutes in (#659). Runs inside
+# the chroot with the mounts up; one sentence and exit 1 when it cannot.
+if ${RESUME}; then
+    hmr_link_check_chroot "${SYSROOT}" || exit 1
+fi
 
 # Base package set; the vendor-agnostic GPU stack (Mesa/Vulkan/libva) is appended
 # ONLY for GPU roles (backend-gpu / omnibus) so pki/backend/frontend images stay slim.
@@ -6681,7 +6762,11 @@ umount_chroot; trap - EXIT
 if mountpoint -q "${SYSROOT}/var/cache/binpkgs" 2>/dev/null; then
     err "${SYSROOT}/var/cache/binpkgs is STILL a mountpoint after umount_chroot —"
     err "refusing to touch it: it is the SHARED binpkg pool every amd64 image"
-    err "reuses (${X86_POOL_DIR:-<unset>}). Unmount first:  umount -R '${SYSROOT}'  — then re-run."
+    err "reuses (${X86_POOL_DIR:-<unset>}). Unmount what is still attached (as root, top to"
+    err "bottom; every mount under the build system is listed), then re-run:"
+    _still_mounted="$(hmr_stale_mounts "${SYSROOT}" 2>/dev/null || true)"
+    [ -n "${_still_mounted}" ] || _still_mounted="$(hmr_canon "${SYSROOT}/var/cache/binpkgs")"
+    hmr_stale_mount_hint "${_still_mounted}" "    " >&2
     exit 1
 fi
 # --cached carve-out (shared-binpkg): a CACHED image PROMISES an embedded binpkg
