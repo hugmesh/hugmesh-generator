@@ -2327,6 +2327,9 @@ fences = re.findall(r"```[a-z]*\n(.*?)```", s9, re.S)
 deletes = [f for f in fences if re.search(r"\bDELETE\s+FROM\b", f)]
 if not deletes:
     bad.append("no fenced DELETE block in section 9 (the break-glass is gone)")
+# the read step the dry run is compared against: a SELECT-only block counting the three tables
+if not [f for f in fences if re.search(r"\bSELECT\b", f) and "mfa_recovery_code" in f and "webauthn_credential" in f and not re.search(r"\bDELETE\b", f)]:
+    bad.append("no SELECT-only section 9 block counts the break-glass rows (the G1 look-first step is gone)")
 for f in deletes:
     if re.search(r"\bSELECT\b", f):
         bad.append("a section 9 block both SELECTs and DELETEs in one input (a piped heredoc cannot be read before it commits)")
