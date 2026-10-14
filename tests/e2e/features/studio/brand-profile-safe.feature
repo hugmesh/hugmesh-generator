@@ -32,3 +32,15 @@ Feature: The generated builder profile cannot run code in a builder
     And the builder harness sources the generated profile and reads "BRAND_TITLE" as "Acme Mesh"
     And the builder harness sources the generated profile and reads "BRAND" as "acme"
     And the builder harness sources whatever profile exists and the sentinel file does not exist
+
+  # A record the Studio refuses to SAVE (and `up` refuses to start) must not reach
+  # the builders through the profile verb either: the id rule is one rule on every
+  # path, not a rule the save keeps and the profile skips.
+  Scenario: a record the Studio would refuse to save writes no profile
+    Given a scratch brand record whose brands both carry the reserved id "default"
+    When I write the builder profile from the brand record in a fresh Studio process
+    Then the command failed
+    And the command output contains "is reserved"
+    And the command output contains "no profile written"
+    And no builder profile was written for the brand record
+    And the builder harness sources whatever profile exists and the sentinel file does not exist

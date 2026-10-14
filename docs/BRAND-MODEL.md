@@ -115,9 +115,10 @@ Casdoor by table position (`own_casdoor.port_for`), so `show-record` prints both
 numbers when they differ ("sign-in port 8002 recorded — the Docker mesh still
 publishes it at 8001") and the plan says the same under the own-sign-in list. The
 stored port becomes the published port when the stack node passes
-`brand_model.issuer_ports(record)` to `own_casdoor`, which already accepts it. While
-the test-only `BRAND_B` knob is set it owns port 8001 and the Studio's brands start at
-8002.
+`brand_model.issuer_ports(record)` to `own_casdoor`, which already accepts it. The
+test-only `BRAND_B` knob owns port 8001, so `issuer_ports(record, brand_b=True)`
+allocates from 8002; nothing passes that flag yet (the stack node does not read
+`BRAND_B`), so today the Studio's brands start at 8001 whether or not brand B runs.
 
 ## The look: inherit, then override
 
@@ -148,11 +149,24 @@ flags as they were.
 
 What each start path does with a recorded way today is printed by `show-record` and
 held in `plain_words.WAY_EFFECT`. In short: the Tor choice is applied on the Docker
-mesh (with Tor on) and per brand on the kind cluster, and baked into a node image with
-the hold flag; a production image or mesh holds its Tor addresses until Go live; the
+mesh (with Tor on) and per brand on the kind cluster; an image built with Tor on
+starts its Tor service at first boot and its address is live whenever that service
+runs (`hugmesh-go-live` says so) — no image holds it until Go live today; the
 internal name is recorded and not served yet; a public name is recorded only on the
 Docker mesh and the kind cluster, and baked into the plan the Go-Live wizard reads
 on a device.
+
+**The production hold (D14) is not built yet.** D14 holds a production Docker mesh's
+Tor addresses until Go live through the Makefile knob `TOR_HOLD=1`, which the Studio
+passes to `make stack-up` for a production mesh with Tor on whose Go live was not
+pressed (`--tor-release` says it was). The Makefile's side belongs to the
+docker-mesh-tor lane and does not exist today: `make stack-up TOR=1` starts
+`hugmesh-tor` on every env. The Studio measures this
+(`LocalMeshBootstrap.makefile_holds_tor`, a word-match on `TOR_HOLD` in the
+Makefile) and the confirm-before-run plan says which is true: "HELD … until Go live"
+only when the knob is read, otherwise "NOT HELD YET: this production mesh publishes
+its Tor address at start". `studio/tests/test_brand_record_cli.py` pins the sentence
+to the real Makefile, so it flips the day the hold lands.
 
 ## What is written from the record
 
@@ -165,14 +179,24 @@ on a device.
   sign-ins, and whether the mesh starts with Tor on; every other flag still
   applies), and `show-record --record FILE` prints
   every brand's effective look with the source of each value and the effect of each
-  way on each path, in the words above, from a fresh process.
+  way on each path, in the words above, from a fresh process. Without a record file
+  both read the flags, in the order given: two own sign-ins named `zed` then `alpha`
+  get ports 8001 and 8002 in `show-record`, in the plan and on the running mesh alike.
+  The Docker start runs the record's id, duplicate, look, ways and secret checks
+  (`record_problems(…, docker_start=True)`) but not the title rule, and allows the
+  bootstrap's 63-character label: a title is written into no sourced file on this
+  path, so a mesh that started before the record existed — a brand titled "Bob's
+  Shop", a 61-character brand — still starts. The record file and the generated
+  profile keep the strict rule at their own write.
 - **The image builders**: a generated shell profile
   (`python3 -m hugmesh_studio.core.brand_model profile --record FILE --out PROFILE`).
   Every value is single-quoted and limited to letters, digits, space and
   `. _ : / @ + , = -`; the Studio re-parses the file strictly before any builder
   sources it, and a title such as `$(touch /tmp/x)` is refused, so no file is written
-  and nothing can run. A branding folder (`brand.conf` in the strict `KEY="VALUE"`
-  form the desktop applier reads without sourcing) is written the same way.
+  and nothing can run. A record that `validate` refuses (a reserved or duplicate id,
+  a secret-shaped value) writes no profile either. A branding folder (`brand.conf`
+  in the strict `KEY="VALUE"` form the desktop applier reads without sourcing) is
+  written the same way.
 - **Key generation** on the image path is given the brand and the internal root name
   (`BRAND` and `--superdomain`), so a node's `provision.json` names the root the
   images were built for.
@@ -180,10 +204,13 @@ on a device.
 
 ## The superbrand store
 
-A superbrand design can be kept in the Studio state folder under `superbrands/`.
-Choosing a design **copies** it into the mesh record and notes "copied from design X
-on <date>"; the record never refers back to the store, and editing the stored design
-later changes no existing mesh.
+A superbrand design can be kept in the Studio state folder under `superbrands/`. A
+design is the part of a superbrand one would reuse on another mesh: its title,
+organisation and look (`brand_model.DESIGN_KEYS`); the fields that name a mesh (id,
+public name, internal root name, central sign-in) and its ways are never stored in a
+design and never overwritten by one. Choosing a design **copies** those three into
+the mesh record and notes "copied from design X on <date>"; the record never refers
+back to the store, and editing the stored design later changes no existing mesh.
 
 ## The copy sites
 

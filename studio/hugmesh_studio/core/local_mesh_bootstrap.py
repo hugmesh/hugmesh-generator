@@ -352,21 +352,27 @@ class LocalMeshBootstrapConfig:
     # decoration (brand_model.Superbrand.to_dict, every key OMIT-WHEN-EMPTY). The
     # recorded ``domains`` rows are the record's brands. EMPTY (the default) on every
     # pre-#654 config: the plan, env and argv are byte-identical, and the saved-mesh
-    # record grows by one key as it did for ``domains``.
+    # record grows by two keys (this one and ``tor_release``, both at their
+    # defaults) as it grew by one for ``domains``; to_dict drops nothing by design.
     superbrand: dict = field(default_factory=dict)
-    # ── Tor RELEASE on a production mesh (#654, D14). A production mesh HOLDS its
-    # Tor addresses until Go live; this is the explicit release the Studio passes
-    # only after Go live was pressed (TOR_RELEASE=1 to `make stack-up`; the Makefile's
-    # hold itself is the docker-mesh-tor lane's). A TEST mesh ignores it: a Tor tick
-    # there starts the address with the mesh as it always did (open question 2 = A).
+    # ── Go live pressed on a production mesh (#654, D14). D14 holds a production
+    # mesh's Tor addresses until Go live with the Makefile knob TOR_HOLD=1, which the
+    # Studio passes to `make stack-up` for production only, and not once Go live was
+    # pressed (this flag). The Makefile's side of the hold is the docker-mesh-tor
+    # lane's and is NOT built yet: whether the knob is read is measured
+    # (LocalMeshBootstrap.makefile_holds_tor) and the plan says what happens today. A
+    # TEST mesh ignores all of it: a Tor tick there starts the address with the mesh
+    # as it always did (open question 2 = A).
     tor_release: bool = False
 
     def is_prod(self) -> bool:
         return self.env == "prod"
 
-    def tor_held(self) -> bool:
-        """Whether this mesh's Tor addresses are HELD at start (D14): production with
-        Tor on and no release given. False on a test mesh, or when Tor is off."""
+    def tor_hold_requested(self) -> bool:
+        """Whether this config ASKS for the production hold (D14): production with Tor
+        on and Go live not pressed. False on a test mesh, or when Tor is off. Whether
+        the mesh is then actually held is LocalMeshBootstrap.tor_held, which also
+        needs a Makefile that reads the knob."""
         return self.is_prod() and self.effective_with_tor() and not self.tor_release
 
     # ── services selection -> the two back-ends ─────────────────────────────────
@@ -689,17 +695,37 @@ class LocalMeshBootstrap:
         recorded domain rows its brands (brand_model.record_from_bootstrap)."""
         return brand_model.record_from_bootstrap(self.cfg)
 
-    def _hand_over_tor_release(self) -> None:
-        """The Tor release hand-over (#654, D14), run right before every `make
-        stack-up`: TOR_RELEASE=1 reaches the Makefile ONLY when the operator pressed
-        Go live (cfg.tor_release); an ambient TOR_RELEASE inherited from the shell is
-        dropped, so a production mesh can never be released by an environment nobody
-        chose. LocalStackNode builds its env from os.environ (the TS_AUTHKEY
-        precedent in _start_seed_overlay). The hold itself is the Makefile's."""
-        if self.cfg.tor_release:
-            os.environ["TOR_RELEASE"] = "1"
+    def makefile_holds_tor(self) -> bool:
+        """Whether this checkout's Makefile reads the hold knob (a word-match on
+        TOR_HOLD). Measured, never assumed: until the docker-mesh-tor lane lands the
+        knob, `make stack-up TOR=1` starts hugmesh-tor on every env, and the plan must
+        say so instead of promising a hold. The same pinning pattern as the
+        --brand-record argv test (studio/tests/test_brand_record_copy_sites.py), which
+        emits the flag exactly when a builder parses it."""
+        try:
+            with open(os.path.join(self.generator_dir, "Makefile"), encoding="utf-8") as fh:
+                return re.search(r"\bTOR_HOLD\b", fh.read()) is not None
+        except OSError:
+            return False
+
+    def tor_held(self) -> bool:
+        """Whether this mesh's Tor addresses are really HELD at start (D14): the
+        config asks for the hold AND the Makefile reads the knob."""
+        return self.cfg.tor_hold_requested() and self.makefile_holds_tor()
+
+    def _hand_over_tor_hold(self) -> None:
+        """The Tor hold hand-over (#654, D14), run right before every `make stack-up`:
+        TOR_HOLD=1 (D14's knob) reaches the Makefile for a production mesh with Tor
+        on whose Go live was not pressed, and for nothing else; an ambient TOR_HOLD
+        inherited from the shell is dropped, so a test mesh can never be held, nor a
+        released one re-held, by an environment nobody chose. LocalStackNode builds
+        its env from os.environ (the TS_AUTHKEY precedent in _start_seed_overlay).
+        Passing the knob to a Makefile that does not read it yet changes nothing;
+        the plan says which of the two this checkout is."""
+        if self.cfg.tor_hold_requested():
+            os.environ["TOR_HOLD"] = "1"
         else:
-            os.environ.pop("TOR_RELEASE", None)
+            os.environ.pop("TOR_HOLD", None)
 
     def _mesh_node(self) -> LocalMeshNode:
         return LocalMeshNode(self.generator_dir, LocalMeshConfig(
@@ -880,9 +906,13 @@ class LocalMeshBootstrap:
                 problems.append(
                     f"own-Casdoor domain '{name.strip()}' is this mesh's own domain — "
                     "it signs in via the central Casdoor and cannot have an own one.")
-        # ── the brand record (#654): the id rule for every brand (D4), every look and
-        # ways block, and the secret scan (D5) — the same checks a save runs, so a
-        # record the Studio would refuse to write is a mesh this will not start.
+        # ── the brand record (#654): the id rule for every brand (D4), duplicate
+        # ids, every look and ways block, and the secret scan (D5). The Docker start's
+        # form of the save checks (docker_start): NO title rule, because on this path
+        # a title reaches no sourced file and no sed (the compose overlay uses names
+        # only; the generated profile refuses an unsafe title at its own write), and
+        # the id length is _BRAND_DNS_LABEL's 63, not the record file's 59 — so a mesh
+        # that started before the record existed still starts.
         if self.cfg.domains or self.cfg.superbrand:
             try:
                 rec = self.record()
@@ -892,7 +922,8 @@ class LocalMeshBootstrap:
                 problems.extend(
                     f"brand record: {p}" for p in
                     brand_model.record_problems(
-                        rec, profiles=brand_model.profile_names(self.generator_dir)))
+                        rec, profiles=brand_model.profile_names(self.generator_dir),
+                        docker_start=True))
                 problems.extend(
                     f"brand record: {p}" for p in
                     brand_model.secret_problems(
@@ -1030,14 +1061,21 @@ class LocalMeshBootstrap:
             for name, slug, tenant in self.tor_domains():
                 lines.append(f"             + {name}: its own onion (key ‘{slug}’), "
                              f"served as brand ‘{tenant}’")
-            # production HOLDS the addresses until Go live (#654, D14); a test mesh
-            # starts them with the mesh as it always did
-            if c.tor_held():
+            # production HOLDS the addresses until Go live (#654, D14) — ONLY once the
+            # Makefile reads the knob; until then the plan says what really happens
+            # (the confirm-before-run text must never promise a hold that is not
+            # built). A test mesh starts them with the mesh as it always did.
+            if self.tor_held():
                 lines.append("             HELD: a production mesh starts no Tor address "
-                             "until Go live (TOR_RELEASE is not set)")
+                             "until Go live (TOR_HOLD=1 is passed to make stack-up)")
+            elif c.tor_hold_requested():
+                lines.append("             NOT HELD YET: this production mesh publishes its "
+                             "Tor address at start — this Makefile does not read TOR_HOLD, "
+                             "so the production hold is not built yet (TOR_HOLD=1 is "
+                             "passed for the day it is)")
             elif c.is_prod():
-                lines.append("             RELEASED at start (TOR_RELEASE=1 — Go live "
-                             "was pressed)")
+                lines.append("             starts with this mesh (Go live was pressed: no "
+                             "hold is asked for)")
         elif self.tor_domains():
             lines.append("          -> NO onion for the Tor domains ("
                          + ", ".join(n for n, _s, _t in self.tor_domains())
@@ -1164,11 +1202,15 @@ class LocalMeshBootstrap:
             # 'Public ... already ON', which is not what an onion does
             lines.append("      A Tor address is another way in to this mesh (the .onion")
             lines.append("      above): it opens no public port and needs no public")
-            lines.append("      IP or DNS. " + ("It is HELD until Go live (a production mesh)."
-                                                if c.tor_held() else
-                                                "It starts with this mesh" + (
-                                                    " (a test mesh)." if not c.is_prod()
-                                                    else " (released: TOR_RELEASE=1).")))
+            if self.tor_held():
+                how = "It is HELD until Go live (a production mesh)."
+            elif not c.is_prod():
+                how = "It starts with this mesh (a test mesh)."
+            elif c.tor_hold_requested():
+                how = "It starts with this mesh (a production mesh; the hold is not built yet)."
+            else:
+                how = "It starts with this mesh (Go live was pressed)."
+            lines.append("      IP or DNS. " + how)
             lines.append("      'Open public ports 80 and 443' is the separate public flip.")
         else:
             lines.append("      Public exposure is a SEPARATE, opt-in step — run Go Live")
@@ -1313,7 +1355,7 @@ class LocalMeshBootstrap:
         share; the ONLY difference between the two is what runs BEFORE it (mint
         fresh credentials, or reuse the saved ones)."""
         stack = self._stack_node()
-        self._hand_over_tor_release()
+        self._hand_over_tor_hold()
         ok, msg = stack.start(on_line=on_line, cancel=cancel)
         _note(f"[stack-up] {'ok' if ok else 'FAILED'}: {_tail(msg)}")
         if not ok:
@@ -1497,7 +1539,7 @@ class LocalMeshBootstrap:
         _note(f"[saved-mesh] starting '{rec.label}' — reattaching its "
               f"{rec.volume_count()} data volume(s); nothing is re-minted or re-seeded")
         stack = self._stack_node()
-        self._hand_over_tor_release()
+        self._hand_over_tor_hold()
         ok, msg = stack.start(on_line=on_line, cancel=cancel)
         _note(f"[stack-up] {'ok' if ok else 'FAILED'}: {_tail(msg)}")
         if ok:
@@ -1790,10 +1832,10 @@ def _show_record_cli(args: argparse.Namespace) -> int:
     rec = brand_model.record_from_bootstrap(cfg)
     for line in brand_model.show_record_lines(rec, env=cfg.env):
         print(line)
-    # the same check `up` runs (validate()), profiles included, so a record shown
-    # clean here is never refused at the start
+    # the same check `up` runs (validate()), profiles and the Docker start's form
+    # included, so a record shown clean here is never refused at the start
     problems = brand_model.record_problems(
-        rec, profiles=brand_model.profile_names(args.generator_dir))
+        rec, profiles=brand_model.profile_names(args.generator_dir), docker_start=True)
     if problems:
         print("")
         print("PROBLEMS (this record would be refused):")
@@ -1918,9 +1960,12 @@ def main(argv: list[str] | None = None) -> int:
                         "starts a mesh from a record; `show-record --record FILE` "
                         "prints it.")
     p.add_argument("--tor-release", action="store_true",
-                   help="production only: RELEASE the Tor addresses at start "
-                        "(TOR_RELEASE=1). Without it a production mesh HOLDS them until "
-                        "Go live; a test mesh starts them with the mesh either way.")
+                   help="production only: Go live was pressed, so no hold is asked for "
+                        "(TOR_HOLD is not passed). Without it a production mesh with Tor "
+                        "on is passed TOR_HOLD=1, which holds its Tor addresses until Go "
+                        "live ONCE the Makefile reads that knob — the plan says whether "
+                        "this checkout's does. A test mesh starts them with the mesh "
+                        "either way.")
     p.add_argument("mesh_id", nargs="?", default="",
                    help="mesh-restore: the saved record id "
                         "(`python3 -m hugmesh_studio.core.saved_meshes list`).")

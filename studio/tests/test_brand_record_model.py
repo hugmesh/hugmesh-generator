@@ -158,6 +158,24 @@ def test_an_empty_look_value_sets_nothing_on_the_image_config():
     assert cfg.login_bg_effect == before and cfg.login_primary_color == "#112233"
 
 
+def test_a_record_that_says_nothing_about_a_field_leaves_the_image_config_alone():
+    """One rule for every superbrand field: a record that carries no style, decoration
+    or internal root name says nothing, so applying it keeps what the image config
+    had (skeptic r1 C2: three fields were blanked while the others were kept)."""
+    rec = bm.BrandRecord(superbrand=bm.Superbrand(id="acme", look={"primary": "#112233"}))
+    cfg = ImageConfig(mode="mesh", role="omnibus", login_style="sharp", login_decor="none",
+                      superdomain="core.acme.internal", brand_title="Kept")
+    bm.apply_record_to_image_config(rec, cfg)
+    assert (cfg.login_style, cfg.login_decor, cfg.superdomain, cfg.brand_title) == (
+        "sharp", "none", "core.acme.internal", "Kept")
+    assert cfg.brand == "acme" and cfg.login_primary_color == "#112233"
+    # a record that DOES say something overrides, as before
+    rec.superbrand.look.update({"style": "glass", "decor": "none"})
+    rec.superbrand.internal_root = "acme.internal"
+    bm.apply_record_to_image_config(rec, cfg)
+    assert (cfg.login_style, cfg.superdomain) == ("glass", "acme.internal")
+
+
 # ── the id rule (D4) ───────────────────────────────────────────────────────────────
 @pytest.mark.parametrize("candidate,why", [
     ("", "needs an id"),
@@ -346,20 +364,37 @@ def test_branding_dir_writes_strict_key_value_and_refuses_a_quote(tmp_path):
 
 # ── the superbrand store (D5) ──────────────────────────────────────────────────────
 def test_choosing_a_design_copies_it_and_later_edits_change_no_record(tmp_path, monkeypatch):
+    """A design is a superbrand's title, organisation and look — what one would reuse
+    on another mesh. Choosing it copies those three; the mesh's own identity (id,
+    public name, internal root name, central sign-in) and its ways stay (skeptic r1
+    C1: a design with no id used to leave the record unsaveable, and one with another
+    id used to replace the mesh's)."""
     monkeypatch.setenv("HUGMESH_STUDIO_STATE_DIR", str(tmp_path / "state"))
-    design = bm.Superbrand(id="acme", title="Acme Mesh", look={"primary": "#112233"})
-    bm.save_design("acme-blue", design)
+    design = bm.Superbrand(id="other", public_name="other.example", title="Acme Mesh",
+                           org="example", look={"primary": "#112233"})
+    path = bm.save_design("acme-blue", design)
     assert bm.list_designs() == ["acme-blue"]
-    rec = bm.BrandRecord()
+    # the stored file holds the design's three fields, nothing that names a mesh
+    assert set(json.load(open(path, encoding="utf-8"))) == {"title", "org", "look"}
+    rec = bm.BrandRecord(superbrand=bm.Superbrand(id="acme", public_name="mesh.example",
+                                                  internal_root="acme.internal",
+                                                  ways={"tor": True}))
     bm.choose_design(rec, "acme-blue", "2026-10-14")
     assert rec.superbrand.look == {"primary": "#112233"}
+    assert (rec.superbrand.title, rec.superbrand.org) == ("Acme Mesh", "example")
+    assert (rec.superbrand.id, rec.superbrand.public_name, rec.superbrand.internal_root,
+            rec.superbrand.ways) == ("acme", "mesh.example", "acme.internal", {"tor": True})
     assert rec.copied_from == {"design": "acme-blue", "date": "2026-10-14"}
-    # the stored design changes; the record does not
+    # the stored design changes; the record does not — and the loaded copy is not
+    # the record's object either
     design.look["primary"] = "#ff0000"
     bm.save_design("acme-blue", design)
     assert rec.superbrand.look == {"primary": "#112233"}
+    loaded = bm.load_design("acme-blue")
+    loaded.look["primary"] = "#00ff00"
+    assert rec.superbrand.look == {"primary": "#112233"}
     text = open(bm.save_record(rec, str(tmp_path / "r.json")), encoding="utf-8").read()
-    assert "acme-blue" in text and "#ff0000" not in text
+    assert "acme-blue" in text and "#ff0000" not in text and "other.example" not in text
     with pytest.raises(ValueError):
         bm.choose_design(rec, "acme-blue", "today")      # the date is an input, YYYY-MM-DD
     with pytest.raises(ValueError):
