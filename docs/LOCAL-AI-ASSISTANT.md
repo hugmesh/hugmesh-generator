@@ -509,7 +509,11 @@ loop), `issues.py` (reads `gh` output: which issues to pick, how to print one) a
   is not `start`, `r`, `clear` or `q` is sent to the local model); `q` returns to
   exactly where you were. The plain-prompt face (no urwid, or `NO_TUI=1`) prints the
   status line above every prompt and opens the same screen when you type `local-ai`
-  (the urwid face accepts that too).
+  (the urwid face accepts that too). The key and the command work on every screen —
+  the welcome, each wizard step, the previous-builds list (`q` there returns to the
+  list, not to the welcome) — and on the Local AI screen itself they re-read the state
+  and say so, never open a second screen, and never send the word `local-ai` to the
+  model.
 * **Command line.** `python -m hugmesh_studio --local-ai-status [--json]` and
   `python -m hugmesh_studio --local-ai-prompt "question"`; both exit non-zero with a
   plain sentence when Ollama is down.

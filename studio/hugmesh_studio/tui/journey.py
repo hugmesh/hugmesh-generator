@@ -1061,9 +1061,14 @@ class Journey:
         self.effect = None
         line = line.strip()
         screen = self.screen()
-        if line.lower() == _LOCAL_AI_COMMAND and not isinstance(screen, _LocalAIScreen):
+        if line.lower() == _LOCAL_AI_COMMAND:
             # global, like q: the Local AI screen opens over whatever screen this is, and
-            # q returns to exactly it (an overlay that was open stays open underneath)
+            # q returns to exactly it (an overlay that was open stays open underneath).
+            # On the Local AI screen itself it is a re-read: never a second screen, and
+            # never the word "local-ai" sent to the model as a question.
+            if isinstance(screen, _LocalAIScreen):
+                screen.reopen()
+                return
             ai = _LocalAIScreen(generator_dir=self.generator_dir)
             ai._under = self.overlay
             self.open_overlay(ai)

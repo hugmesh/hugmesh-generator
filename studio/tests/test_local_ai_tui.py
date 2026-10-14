@@ -235,6 +235,119 @@ def test_local_ai_is_not_a_value_a_step_can_swallow(state):
     assert j.title() == "Local AI"
 
 
+# ── every screen: the command opens the screen, q returns, nothing is swallowed ──────
+def every_journey_slug():
+    """Every screen the journey can show: the welcome, the mode menu, each wizard step,
+    the side flows, the two expert entry points and the stubs for steps not ported yet."""
+    return sorted(journey.Journey(".")._screens)
+
+
+@pytest.mark.parametrize("slug", every_journey_slug())
+def test_local_ai_opens_over_every_journey_screen_and_q_returns_to_it_unchanged(state, slug, monkeypatch):
+    sent = []
+    monkeypatch.setattr(lai, "send_prompt", lambda text, *a, **k: sent.append(text) or "a")
+    j = journey.Journey(".")
+    j.goto(slug)
+    before = (j.slug, j.overlay, j.title(), j.prompt(), j.lines())
+    for _ in range(2):                                  # twice: the second round proves nothing stuck
+        j.feed("local-ai")
+        assert isinstance(j.screen(), local_ai.LocalAIScreen) and not j.done, slug
+        assert j.prompt() == "local-ai> "
+        opened = j.screen()
+        j.feed("local-ai")                              # again, on the screen itself
+        assert j.screen() is opened, f"a second Local AI screen was opened on {slug}"
+        assert "This is the Local AI screen" in "\n".join(j.lines())
+        j.feed("q")
+        assert not j.done, f"q on the Local AI screen quit the journey from {slug}"
+        assert (j.slug, j.overlay, j.title(), j.prompt(), j.lines()) == before, slug
+    assert sent == [], f"the word local-ai was sent to the model from {slug}: {sent}"
+
+
+def test_local_ai_over_a_screen_in_a_sub_state_returns_to_that_sub_state(state):
+    """A screen mid-flow (the e2e screen showing one environment's plan) is not reset by a
+    detour to the Local AI screen: q lands on the same sub-state with the same lines."""
+    j = journey.Journey(".")
+    j.goto("e2e")
+    j.feed("1")                                        # the first environment's plan
+    assert "(q = back to the environment list)" in "\n".join(j.lines())
+    before = (j.prompt(), j.lines())
+    j.feed("local-ai")
+    assert j.title() == "Local AI"
+    j.feed("q")
+    assert (j.prompt(), j.lines()) == before
+    j.feed("q")                                        # the screen's own q still means its own back
+    assert j.slug == "e2e" and "(q = back to the environment list)" not in "\n".join(j.lines())
+
+
+def test_the_screen_reopened_from_itself_rereads_and_sends_nothing(state):
+    reads, sent = [], []
+    scr = local_ai.LocalAIScreen(snapshot_fn=lambda: reads.append(1) or fake_snapshot(),
+                                 prompt_fn=lambda t, h: sent.append(t) or "a")
+    j = journey.Journey(".")
+    j.open_overlay(scr)
+    assert reads == [1]
+    j.feed("local-ai")
+    assert j.screen() is scr and reads == [1, 1] and sent == []
+    assert "This is the Local AI screen" in "\n".join(j.lines())
+    j.feed("a real question")                          # the next line is a prompt again
+    assert sent == ["a real question"]
+
+
+def test_plain_sessions_review_shows_the_line_and_opens_the_screen_over_the_list(state, tmp_path, monkeypatch):
+    """The previous-builds list is a screen too: the status line is on it, local-ai opens
+    the screen, q returns to the list (not to the welcome), and the list still works."""
+    monkeypatch.setenv("HUGMESH_STUDIO_STATE_DIR", str(tmp_path / "studio"))
+    rc, text = run_plain("2\nlocal-ai\nlocal-ai\nhello\nq\nr\nq\nq\n")
+    assert rc == 0
+    lists = text.count("previous builds (newest first):")
+    assert lists == 3, text                           # on entry, after the screen closed, after r
+    assert text.count("local-ai> ") == 3                # the screen is redrawn before each prompt
+    assert text.count("Local AI\n") == 3 and text.count("Local AI: ready, qwen3:8b loaded") == 3
+    assert "ai:  fake answer to: hello" in text
+    assert "This is the Local AI screen" in text        # the second local-ai re-read, no second screen
+    i_list, i_ai, i_back = (text.index("previous builds"), text.index("Local AI\n"),
+                            text.index("previous builds", text.index("Local AI\n")))
+    assert i_list < i_ai < i_back
+    assert text.count("welcome> ") == 2                 # welcome, then welcome again after the review's q
+    lines = text.splitlines()
+    helps = [n for n, ln in enumerate(lines) if "local-ai=the Local AI screen" in ln]
+    assert len(helps) == 3, "the list's help line names the command each time the list is shown"
+    for n in helps:                                     # the status line sits right under the list
+        assert lines[n + 1].startswith("[Local AI:") and lines[n + 1].endswith("type local-ai]"), lines[n:n + 2]
+
+
+def test_plain_sessions_review_standalone_opens_the_screen_too(state, tmp_path, monkeypatch):
+    monkeypatch.setenv("HUGMESH_STUDIO_STATE_DIR", str(tmp_path / "studio"))
+    out = io.StringIO()
+    rc = plain.run_sessions_review(inp=io.StringIO("local-ai\nq\nq\n"), out=out, generator_dir=".")
+    text = out.getvalue()
+    assert rc == 0 and "Local AI\n" in text and text.count("previous builds") == 2
+
+
+def test_eof_on_the_screen_over_the_review_quits_cleanly(state, tmp_path, monkeypatch):
+    monkeypatch.setenv("HUGMESH_STUDIO_STATE_DIR", str(tmp_path / "studio"))
+    out = io.StringIO()
+    rc = plain.run_sessions_review(inp=io.StringIO("local-ai\n"), out=out)
+    assert rc == 0 and "Local AI\n" in out.getvalue()
+
+
+def test_standalone_host_drives_the_screen_without_a_journey():
+    sent = []
+    host = local_ai.Standalone(".", snapshot_fn=fake_snapshot, prompt_fn=lambda t, h: sent.append(t) or "ok")
+    assert not host.is_open and host.lines() == []
+    scr = host.open()
+    assert host.is_open and host.title() == "Local AI" and host.prompt() == "local-ai> "
+    assert host.open() is scr                          # opening again re-reads, same screen
+    host.feed("local-ai")
+    assert host.overlay is scr and sent == []
+    host.feed("why")
+    assert sent == ["why"] and "ai:  ok" in "\n".join(host.lines())
+    host.feed("q")
+    assert not host.is_open
+    host.feed("ignored")                               # closed: nothing to feed, no crash
+    assert sent == ["why"]
+
+
 # ── the urwid face ───────────────────────────────────────────────────────────────────
 try:
     import urwid
@@ -303,42 +416,122 @@ def test_the_sessions_review_shows_the_line_too(state, tmp_path, monkeypatch):
 
 
 @needs_urwid
-def test_f2_works_on_the_previous_builds_list_inside_the_journey(state, tmp_path, monkeypatch):
-    """The review's footer shows [F2]; the key must really open the Local AI screen."""
+@pytest.mark.parametrize("slug", every_journey_slug())
+def test_f2_on_every_journey_screen_opens_the_screen_once_and_q_returns_with_typing_intact(state, slug, monkeypatch):
+    """F2 on each screen of the urwid face: the screen opens over it, F2 again on the
+    Local AI screen re-reads (one screen, nothing sent), q returns to the very same
+    screen, and the next keystroke still lands in the prompt."""
+    sent = []
+    monkeypatch.setattr(lai, "send_prompt", lambda text, *a, **k: sent.append(text) or "a")
+    from hugmesh_studio.tui import urwid_ui
+    app = urwid_ui.JourneyApp(".")
+    app.journey.goto(slug)
+    app.sync()
+    before = (app.journey.slug, app.journey.overlay, app.header.text, app.input.caption,
+              screen_text(app.frame)[:-2])
+    app.frame.keypress((100, 30), "x")                 # a half-typed answer ...
+    app.unhandled("f2")
+    assert app.journey.title() == "Local AI", slug
+    opened = app.journey.screen()
+    assert app.input.edit_text == "", "... is not carried onto the Local AI prompt"
+    assert "local-ai>" in screen_text(app.frame)[-2], slug
+    app.unhandled("f2")                                # F2 on the Local AI screen itself
+    assert app.journey.screen() is opened, f"F2 opened a second Local AI screen on {slug}"
+    assert "This is the Local AI screen" in "\n".join(screen_text(app.frame))
+    app.frame.keypress((100, 30), "q")
+    app.unhandled("enter")
+    assert not app.journey.done and app.journey.screen() is not opened, slug
+    assert (app.journey.slug, app.journey.overlay, app.header.text, app.input.caption,
+            screen_text(app.frame)[:-2]) == before, slug
+    app.frame.keypress((100, 30), "y")
+    assert app.input.edit_text == "y", "typing after the return must land in the prompt"
+    assert sent == [], f"F2 sent a question to the model from {slug}: {sent}"
+
+
+@needs_urwid
+def test_f2_on_the_previous_builds_list_opens_the_screen_over_it_and_q_returns_to_the_list(state, tmp_path, monkeypatch):
+    """The review's footer shows [F2]; the key opens the Local AI screen OVER the list and
+    q comes back to the list — not to the journey's welcome — with the journey unchanged."""
+    monkeypatch.setenv("HUGMESH_STUDIO_STATE_DIR", str(tmp_path / "studio"))
+    sent = []
+    monkeypatch.setattr(lai, "send_prompt", lambda text, *a, **k: sent.append(text) or "a")
+    from hugmesh_studio.tui import urwid_ui
+    app = urwid_ui.JourneyApp(".")
+    app.feed("2")                                      # welcome -> previous builds
+    assert app.sessions is not None and "[F2]" in app.sessions.review.ai_line.text
+    review_frame = app.sessions.review.frame
+    app.unhandled("f2")
+    assert app.sessions is not None, "F2 must not leave the review"
+    assert app.sessions.panel is not None and app.root.original_widget is app.sessions.root
+    assert app.sessions.root.original_widget is app.sessions.panel.frame
+    text = "\n".join(screen_text(app.root))
+    assert "HugMesh Studio — Local AI" in text and "local-ai>" in text and "Local AI: ready" in text
+    assert app.journey.title() == "HugMesh Image Studio" and app.journey.overlay is None
+    app.unhandled("f2")                                # again: one panel, a re-read, nothing sent
+    assert app.sessions.panel is not None and "This is the Local AI screen" in "\n".join(screen_text(app.root))
+    app.sessions.panel.input.set_edit_text("hello")
+    app.unhandled("enter")
+    assert sent == ["hello"] and "ai:  a" in "\n".join(screen_text(app.root))
+    app.sessions.panel.input.set_edit_text("q")
+    app.unhandled("enter")
+    assert app.sessions is not None and app.sessions.panel is None
+    assert app.root.original_widget is app.sessions.root and app.sessions.root.original_widget is review_frame
+    assert "previous builds" in "\n".join(screen_text(app.root))
+    app.unhandled("q")                                 # the review's own q: back to the journey
+    assert app.sessions is None and app.journey.title() == "HugMesh Image Studio"
+    assert app.journey.overlay is None and not app.journey.done
+
+
+@needs_urwid
+def test_f2_in_every_review_mode_opens_the_screen_and_drops_a_pending_delete_question(state, tmp_path, monkeypatch):
+    monkeypatch.setenv("HUGMESH_STUDIO_STATE_DIR", str(tmp_path / "studio"))
+    from hugmesh_studio.tui import urwid_ui
+    win = urwid_ui.SessionsWindow(".")
+    for mode in ("list", "detail", "worklist", "confirm"):
+        win.review.mode = mode
+        win.review._confirm_row = object()
+        win.unhandled("f2")
+        assert win.panel is not None and win.review._confirm_row is None, mode
+        win.panel.input.set_edit_text("q")
+        win.unhandled("enter")
+        assert win.panel is None and win.root.original_widget is win.review.frame, mode
+        assert win.review.mode == mode                  # the review's own state is untouched
+
+
+@needs_urwid
+def test_the_standalone_review_offers_f2_and_it_works(state, tmp_path, monkeypatch):
+    """`tui --sessions` on its own: the same key, the same screen, back to the same list."""
+    monkeypatch.setenv("HUGMESH_STUDIO_STATE_DIR", str(tmp_path / "studio"))
+    from hugmesh_studio.tui import urwid_ui
+    win = urwid_ui.SessionsWindow(".")
+    rows = screen_text(win.root)
+    assert "Local AI:" in rows[-1] and "[F2]" in rows[-1]
+    win.unhandled("f2")
+    assert win.panel is not None and "Local AI: ready, qwen3:8b loaded" in "\n".join(screen_text(win.root))
+    assert "Local AI:" in screen_text(win.root)[-1]    # the status line stays on the bottom row
+    first = win.panel
+    win.open_local_ai()                                # the review's own door, asked again: same panel
+    assert win.panel is first and win.root.original_widget is first.frame
+    win.unhandled("esc")                               # not a panel key: ignored, no crash, no close
+    assert win.panel is not None
+    win.panel.input.set_edit_text("q")
+    win.unhandled("enter")
+    assert win.panel is None and "previous builds" in "\n".join(screen_text(win.root))
+    with pytest.raises(urwid.ExitMainLoop):            # the list's q still quits the standalone window
+        win.unhandled("q")
+
+
+@needs_urwid
+def test_the_timer_redraws_the_line_on_the_panel_too(state, worker_proc, tmp_path, monkeypatch):
     monkeypatch.setenv("HUGMESH_STUDIO_STATE_DIR", str(tmp_path / "studio"))
     from hugmesh_studio.tui import urwid_ui
     app = urwid_ui.JourneyApp(".")
-    app._open_sessions()
-    assert app.sessions is not None and "[F2]" in app.sessions.ai_line.text
+    app.feed("2")
     app.unhandled("f2")
-    assert app.sessions is None                      # left the review ...
-    assert app.journey.title() == "Local AI"         # ... onto the Local AI screen
-    app.feed("q")
-    assert app.journey.title() == "HugMesh Image Studio"
-
-
-@needs_urwid
-def test_f2_in_every_review_mode_drops_a_pending_delete_question(state, tmp_path, monkeypatch):
-    monkeypatch.setenv("HUGMESH_STUDIO_STATE_DIR", str(tmp_path / "studio"))
-    from hugmesh_studio.tui import urwid_ui
-    opened = []
-    review = urwid_ui.SessionsReview(open_local_ai=lambda: opened.append(1))
-    review.mode = "confirm"
-    review._confirm_row = object()
-    review.unhandled("f2")
-    assert opened == [1] and review._confirm_row is None
-
-
-@needs_urwid
-def test_the_standalone_review_does_not_advertise_a_key_that_does_nothing(state, tmp_path, monkeypatch):
-    monkeypatch.setenv("HUGMESH_STUDIO_STATE_DIR", str(tmp_path / "studio"))
-    from hugmesh_studio.tui import urwid_ui
-    review = urwid_ui.SessionsReview()
-    assert "Local AI:" in review.ai_line.text and "F2" not in review.ai_line.text
-    assert "F2" not in "\n".join(screen_text(review.frame))
-    before = review.frame.body
-    review.unhandled("f2")                           # nothing to open it over: no change, no crash
-    assert review.frame.body is before and review.mode == "list"
+    write_status(state, worker_proc.pid)
+    queue_job(state, "pending", "20260101-000001-draft-hugmesh-generator-5")
+    app.refresh_ai_line()
+    assert "1 queued" in app.sessions.panel.ai_line.text
 
 
 def test_the_status_line_hint_can_be_left_off(state):

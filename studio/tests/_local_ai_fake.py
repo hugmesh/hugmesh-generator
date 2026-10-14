@@ -16,7 +16,8 @@ class FakeOllama:
         self.chunks = ["Hel", "lo ", "there"]
         self.chat_status = 200
         self.error_line = ""
-        self.stall = 0.0
+        self.stall = 0.0             # seconds before the first chunk
+        self.chunk_delay = 0.0       # seconds between chunks: lets a test act mid-answer
         self.redirect = False
         self.requests = []           # (method, path, body-dict)
         outer = self
@@ -65,7 +66,9 @@ class FakeOllama:
                 if outer.stall:
                     time.sleep(outer.stall)
                 try:
-                    for c in outer.chunks:
+                    for i, c in enumerate(outer.chunks):
+                        if i and outer.chunk_delay:
+                            time.sleep(outer.chunk_delay)
                         self.wfile.write(json.dumps({"message": {"content": c}, "done": False}).encode() + b"\n")
                         self.wfile.flush()
                     if outer.error_line:

@@ -487,3 +487,76 @@ def test_a_stopped_worker_with_waiting_jobs_says_so_in_the_summary(fake, env):
     snap = lai.read_snapshot(env, builds=no_builds)
     assert snap.counts["pending"] == 1
     assert "1 queued" in snap.summary and "worker stopped" in snap.summary
+
+
+# ── the pid probe on Windows ─────────────────────────────────────────────────────────
+def test_on_windows_the_pid_probe_never_sends_a_signal(monkeypatch):
+    """``os.kill(pid, 0)`` TERMINATES a process on Windows (any signal number but the two
+    console events does). A status line that only wanted to know whether a stale pid was
+    alive must never reach os.kill there; the question goes to the process API."""
+    asked = []
+    monkeypatch.setattr(lai.os, "kill", lambda *a: (_ for _ in ()).throw(
+        AssertionError(f"os.kill{a} was called on the Windows path")))
+    monkeypatch.setattr(lai, "_pid_alive_windows", lambda pid: asked.append(pid) or True)
+    assert lai._pid_alive(4242, "local-ai", os_name="nt") is True
+    assert asked == [4242]
+    monkeypatch.setattr(lai, "_pid_alive_windows", lambda pid: asked.append(pid) or False)
+    assert lai._pid_alive(4242, os_name="nt") is False
+    assert lai._pid_alive(0, os_name="nt") is False and asked == [4242, 4242]
+
+
+def test_on_posix_the_pid_probe_still_uses_the_zero_signal(monkeypatch):
+    sent = []
+    monkeypatch.setattr(lai.os, "kill", lambda pid, sig: sent.append((pid, sig)))
+    monkeypatch.setattr(lai, "_pid_alive_windows", lambda pid: (_ for _ in ()).throw(
+        AssertionError("the Windows probe ran on posix")))
+    assert lai._pid_alive(os.getpid(), os_name="posix") is True
+    assert sent == [(os.getpid(), 0)]
+
+
+def test_the_windows_probe_fails_closed_where_there_is_no_windows_api():
+    # on this (non-Windows) host ctypes has no windll: a dead answer, never an exception
+    assert lai._pid_alive_windows(os.getpid()) is False
+
+
+def test_the_real_os_name_is_used_when_none_is_injected(monkeypatch):
+    seen = []
+    monkeypatch.setattr(lai.os, "name", "nt")
+    monkeypatch.setattr(lai, "_pid_alive_windows", lambda pid: seen.append(pid) or True)
+    monkeypatch.setattr(lai.os, "kill", lambda *a: (_ for _ in ()).throw(AssertionError("os.kill on nt")))
+    assert lai._pid_alive(7) is True and seen == [7]
+
+
+# ── the suite's own isolation (tests/conftest.py: _inert_local_ai) ────────────────────
+def test_by_default_a_probe_sees_no_server_and_an_empty_state_dir(tmp_path):
+    """Under pytest the host's Ollama and the operator's queue are out of reach: a reader
+    that takes the process environment sees "down" and an empty folder, whatever the host
+    has running."""
+    snap = lai.read_snapshot(builds=no_builds)
+    assert not snap.ollama_up and snap.host == "127.0.0.1:1"
+    assert snap.state_dir.startswith(str(tmp_path)) and snap.counts["pending"] == 0
+    assert lai.quick_line() == "Local AI: no worker running"
+
+
+def test_a_request_to_the_hosts_own_ollama_is_refused_and_reported(monkeypatch, _inert_local_ai):
+    """The guard behind every other test here: a call that would reach 127.0.0.1:11434
+    is stopped before a socket opens, raised as a failure naming the fixture, and put on
+    record for the fixture's teardown check (which fails the test even when the code under
+    test swallowed the raise)."""
+    monkeypatch.setenv("OLLAMA_HOST", "127.0.0.1:11434")
+    import urllib.request
+    monkeypatch.setattr(urllib.request.OpenerDirector, "open",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("a socket was opened")))
+    with pytest.raises(AssertionError, match="reached the host's own Ollama.*_inert_local_ai"):
+        lai._get_json(None, "/api/tags", 1)
+    assert _inert_local_ai == ["http://127.0.0.1:11434/api/tags"]
+    # the snapshot reader, which swallows a server that is down, does NOT swallow this:
+    # the refusal comes through it, and the record grows either way
+    with pytest.raises(AssertionError, match="reached the host's own Ollama"):
+        lai.read_snapshot(builds=no_builds)
+    assert len(_inert_local_ai) == 2
+    _inert_local_ai.clear()        # this test exists to prove the record; do not fail on it
+
+
+def test_a_fake_server_on_another_loopback_port_is_not_refused(fake, env):
+    assert lai.read_snapshot(env, builds=no_builds).ollama_up

@@ -305,7 +305,9 @@ line (it reads the worker's `status.json`, never the network, so redrawing it is
 In the urwid face press **F2**, and in either face type `local-ai`, to open the Local AI
 screen over the screen you are on: a live status, the work list (queued, running and
 finished drafts), and a prompt line — anything you type there that is not `start`, `r`,
-`clear` or `q` is sent to the local model; `q` returns to the screen you left.
+`clear` or `q` is sent to the local model; `q` returns to the screen you left. Both work
+on every screen, the previous-builds list included (`q` returns to the list), and on the
+Local AI screen itself they re-read the state instead of opening a second screen.
 
 ## Package a Windows .exe
 

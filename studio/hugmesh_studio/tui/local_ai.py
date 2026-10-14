@@ -12,6 +12,11 @@ and ``--local-ai-status`` read.
   snapshot when it opens, shows the work list, and treats any line you type as a prompt
   for the local model. ``start`` starts the local Ollama and the queue worker,
   ``r`` re-reads, ``q`` goes back.
+* The key and the command are GLOBAL: they work on every screen of both faces, the
+  previous-builds review included, and on the Local AI screen itself they re-read the
+  state (:meth:`LocalAIScreen.reopen`) instead of opening a second screen or sending
+  the word ``local-ai`` to the model. :class:`Standalone` hosts the screen where there
+  is no journey to open it over.
 
 Nothing here talks to anything but this machine.
 """
@@ -19,7 +24,8 @@ from __future__ import annotations
 
 from ..core import local_ai_status as lai
 
-__all__ = ["OPEN_COMMAND", "FOOTER_KEY", "LocalAIScreen", "status_line", "plain_status_line"]
+__all__ = ["OPEN_COMMAND", "FOOTER_KEY", "LocalAIScreen", "Standalone", "status_line",
+           "plain_status_line"]
 
 #: Typed into either face, it opens the screen. Hyphenated so it cannot collide with a
 #: value a journey step asks for.
@@ -72,6 +78,12 @@ class LocalAIScreen:
     def enter(self, j) -> None:  # noqa: ARG002 — screen-protocol signature
         self.snapshot = self._snapshot_fn()
 
+    def reopen(self) -> None:
+        """F2 or ``local-ai`` while this screen is already up: re-read, say so, and send
+        nothing to the model. The screen stays the one it was (no second one underneath)."""
+        self.snapshot = self._snapshot_fn()
+        self.message = "This is the Local AI screen (state re-read); q goes back."
+
     def lines(self, j) -> list[str]:  # noqa: ARG002
         snap = self.snapshot
         out = lai.format_status(snap).split("\n") if snap is not None else ["(no snapshot)"]
@@ -112,3 +124,54 @@ class LocalAIScreen:
                          {"role": "assistant", "content": answer}]
         del self.history[:-40]
         self.transcript += [f"you: {line.strip()}"] + [f"ai:  {ln}" for ln in answer.strip().split("\n")]
+
+
+class Standalone:
+    """Hosts the screen where there is no journey: the previous-builds review opened on
+    its own (``tui --sessions``) or from inside the journey, which owns the terminal
+    while it is up. It is the two things the screen protocol touches on its host —
+    ``overlay`` (None once the screen said back) and ``open_overlay`` — plus the same
+    ``lines`` / ``prompt`` / ``feed`` the journey offers a face, so a face drives it
+    with the code it already has."""
+
+    def __init__(self, generator_dir: str = ".", **screen_kw):
+        self.generator_dir = generator_dir
+        self.overlay: LocalAIScreen | None = None
+        self.status = ""
+        self._screen_kw = screen_kw
+
+    def open(self) -> LocalAIScreen:
+        if self.overlay is None:
+            self.open_overlay(LocalAIScreen(generator_dir=self.generator_dir, **self._screen_kw))
+        else:
+            self.overlay.reopen()
+        return self.overlay
+
+    def open_overlay(self, screen) -> None:
+        self.overlay = screen
+        screen.enter(self)
+
+    @property
+    def is_open(self) -> bool:
+        return self.overlay is not None
+
+    def title(self) -> str:
+        return self.overlay.title if self.overlay is not None else ""
+
+    def lines(self) -> list[str]:
+        if self.overlay is None:
+            return []
+        return [self.overlay.title, ""] + self.overlay.lines(self)
+
+    def prompt(self) -> str:
+        return self.overlay.prompt(self) if self.overlay is not None else "> "
+
+    def feed(self, line: str) -> None:
+        """One input line while the screen is up. ``local-ai`` typed here is a re-read, as
+        on the journey; everything else is the screen's own (q = back, closes it)."""
+        if self.overlay is None:
+            return
+        if line.strip().lower() == OPEN_COMMAND:
+            self.overlay.reopen()
+            return
+        self.overlay.feed(self, line)

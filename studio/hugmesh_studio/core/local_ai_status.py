@@ -234,11 +234,38 @@ def _read_json(path: str) -> dict:
     return data if isinstance(data, dict) else {}
 
 
-def _pid_alive(pid: int, needle: str = "") -> bool:
+def _pid_alive_windows(pid: int) -> bool:
+    """Is ``pid`` a running process, asked of the Windows API (never a signal)."""
+    try:
+        import ctypes
+        kernel32 = ctypes.windll.kernel32                      # noqa: attribute only exists on Windows
+    except (ImportError, AttributeError, OSError):
+        return False
+    query_limited, still_active, access_denied = 0x1000, 259, 5
+    handle = kernel32.OpenProcess(query_limited, False, int(pid))
+    if not handle:
+        return kernel32.GetLastError() == access_denied      # exists, just not ours to inspect
+    try:
+        code = ctypes.c_ulong()
+        if not kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
+            return True
+        return code.value == still_active
+    finally:
+        kernel32.CloseHandle(handle)
+
+
+def _pid_alive(pid: int, needle: str = "", *, os_name: str | None = None) -> bool:
     """True when ``pid`` exists and (where /proc says so) is still OUR process: a pid
-    that the system reused for something else must not make a dead worker look alive."""
+    that the system reused for something else must not make a dead worker look alive.
+
+    ``os_name`` is ``os.name`` unless a test injects one. On Windows ``os.kill(pid, 0)``
+    is not a probe: any signal number other than the two console events TERMINATES the
+    process, so a status line that merely looked at a stale pid would kill whatever now
+    holds it. There the question goes to the process API instead."""
     if pid <= 0:
         return False
+    if (os.name if os_name is None else os_name) == "nt":
+        return _pid_alive_windows(pid)
     try:
         os.kill(pid, 0)
     except ProcessLookupError:

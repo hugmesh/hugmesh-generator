@@ -19,7 +19,7 @@ from . import journey as journey_mod
 from . import local_ai
 from . import model
 
-__all__ = ["run_journey", "run_sessions_review", "print_worklist",
+__all__ = ["run_journey", "run_sessions_review", "run_local_ai", "print_worklist",
            "print_meshemu", "prompt_yes_no"]
 
 
@@ -46,7 +46,7 @@ def prompt_yes_no(inp: IO[str], out: IO[str], question: str) -> bool:
 
 # ── sessions review ────────────────────────────────────────────────────────────────
 _HELP = ("commands: NUMBER=inspect · d NUMBER=delete · w NUMBER=worklist table · "
-         "r=refresh · q=quit")
+         "r=refresh · local-ai=the Local AI screen · q=quit")
 
 
 def _print_list(out: IO[str], rows: list[model.SessionRow], unreadable: list[str]) -> None:
@@ -58,6 +58,25 @@ def _print_list(out: IO[str], rows: list[model.SessionRow], unreadable: list[str
     for path in unreadable:
         _say(out, f"  ! unreadable record skipped: {path}")
     _say(out, _HELP)
+    _say(out, local_ai.plain_status_line())
+
+
+def run_local_ai(inp: IO[str], out: IO[str], generator_dir: str = ".") -> bool:
+    """The Local AI screen on its own — where there is no journey underneath (the
+    previous-builds review). Returns when the person types ``q``; False on EOF, which
+    is the quit signal everywhere in this face and the caller passes on."""
+    host = local_ai.Standalone(generator_dir)
+    host.open()
+    while host.is_open:
+        _say(out)
+        for line in host.lines():
+            _say(out, line)
+        _say(out, local_ai.plain_status_line())
+        answer = _prompt(inp, out, host.prompt())
+        if answer is None:
+            return False
+        host.feed(answer)
+    return True
 
 
 def _pick(rows: list[model.SessionRow], token: str) -> model.SessionRow | None:
@@ -140,7 +159,7 @@ def run_journey(inp: IO[str] | None = None, out: IO[str] | None = None, *,
         if j.effect == "sessions":
             # the review owns the terminal until it quits; then the journey
             # resumes right where it was (the welcome screen).
-            run_sessions_review(inp=inp, out=out)
+            run_sessions_review(inp=inp, out=out, generator_dir=generator_dir)
     return 0
 
 
@@ -150,7 +169,8 @@ def print_worklist(out: IO[str], s: build_sessions.BuildSession) -> None:
         _say(out, line)
 
 
-def run_sessions_review(inp: IO[str] | None = None, out: IO[str] | None = None) -> int:
+def run_sessions_review(inp: IO[str] | None = None, out: IO[str] | None = None, *,
+                        generator_dir: str = ".") -> int:
     """The SESSIONS REVIEW loop (plain face). Returns a process exit code."""
     inp = inp if inp is not None else sys.stdin
     out = out if out is not None else sys.stdout
@@ -164,6 +184,12 @@ def run_sessions_review(inp: IO[str] | None = None, out: IO[str] | None = None) 
             continue
         if answer.lower() in ("r", "refresh"):
             rows, unreadable = model.session_rows()
+            _print_list(out, rows, unreadable)
+            continue
+        if answer.lower() == local_ai.OPEN_COMMAND:
+            # the same screen the journey opens, over this list; q comes back here
+            if not run_local_ai(inp, out, generator_dir):
+                return 0
             _print_list(out, rows, unreadable)
             continue
         verb, _, arg = answer.partition(" ")

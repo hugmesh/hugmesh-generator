@@ -1,0 +1,168 @@
+// studio-local-ai.steps.ts — the Studio's Local AI dock, driven end to end offscreen.
+//
+// One When runs tests/e2e/studio-local-ai-driver.py, which opens a REAL Studio window
+// through StudioShell.open_window (the call that mounts the dock), presses Start local
+// assistant, asks the model a question and presses Clear mid-answer, grabbing the window
+// after each act. The Thens read ONLY what the driver reported about the live widgets.
+//
+// PINNED world KEYS this file owns:
+//   world['studio.localai']  the driver's JSON report
+//   world['studio.grab']     the LAST grab (shared key: 'the Studio grab is a non-empty
+//                            PNG' in common.steps.ts reads it)
+import { expect } from '@playwright/test';
+import { When, Then } from './world';
+import { runCli, REPO_ROOT } from './runners';
+import { StudioGrab, recordStudio, runDir } from './evidence';
+import { studioPython } from './dimensions';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+
+const REPORT_KEY = 'studio.localai';
+const STUDIO_KEY = 'studio.grab';
+
+interface DockReport {
+  ok: boolean;
+  binding: string;
+  png?: string;
+  grabs: { name: string; png: string }[];
+  errors: string[];
+  modal: string | null;
+  standInStartScript: string;
+  model: string;
+  width?: number;
+  height?: number;
+  dock?: {
+    visible: boolean; expanded: boolean; insideWindow: boolean; bottomStrip: boolean;
+    coversAWizardButton: boolean; summary: string; barHeight: number; startButton: string;
+    startButtonHeight: number; workButton: string; page: string; promptHeight?: number;
+    promptVisible?: boolean;
+  };
+  start?: {
+    buttonSaidWhilePending: string; scriptRan: boolean; args: string | null;
+    ollamaHostSeenByScript: string | null; ownSession: boolean; note: string;
+    startLogWritten: boolean; workWindowOpened: boolean;
+  };
+  prompt?: {
+    text: string; enter: string; promptClearedOnSend: boolean; sendButtonWhileBusy: string;
+    busy: boolean; streamedBeforeClear: boolean; answerBeforeClear: string;
+    requestsToModel: string[]; modelAsked: string | null;
+  };
+  clear?: {
+    pressedWhileBusy: boolean; answerRightAfter: string; answerAfterTheModelFinished: string;
+    historyAfter: number; sendButtonAfter: string; promptEnabled: boolean;
+  };
+}
+
+function driverPath(): string {
+  return path.resolve(__dirname, '..', 'studio-local-ai-driver.py');
+}
+
+function report(world: { get<T>(k: string): T }): DockReport {
+  return world.get<DockReport>(REPORT_KEY);
+}
+
+When('I open the Studio and drive its Local AI dock through Start, a prompt and Clear',
+  async ({ world }) => {
+    const grabDir = path.join(runDir(), '.driver-tmp', `local-ai-${process.pid}-${Date.now()}`);
+    fs.mkdirSync(grabDir, { recursive: true });
+    const t = runCli(
+      [studioPython(), driverPath(), '--generator-dir', REPO_ROOT, '--grab-dir', grabDir],
+      { cwd: REPO_ROOT, timeoutMs: 240_000, env: { QT_QPA_PLATFORM: 'offscreen' } },
+    );
+    let parsed: DockReport;
+    const last = t.stdout.trim().split('\n').filter(Boolean).pop() ?? '';
+    try {
+      parsed = JSON.parse(last) as DockReport;
+    } catch {
+      throw new Error(
+        `the Local AI dock driver did not end with a JSON report. Last stdout line:\n  ${last.slice(0, 400)}\n`
+        + `--- driver stderr ---\n${t.stderr.slice(0, 3000)}`,
+      );
+    }
+    world.set(REPORT_KEY, parsed);
+    let lastGrab: StudioGrab | undefined;
+    for (const g of parsed.grabs ?? []) {
+      const grab: StudioGrab = {
+        pngPath: g.png, page: `local-ai-dock/${g.name}`, binding: parsed.binding ?? 'unknown',
+        width: parsed.width ?? -1, height: parsed.height ?? -1, transcript: t,
+      };
+      recordStudio(grab);
+      lastGrab = grab;
+    }
+    if (lastGrab) world.set(STUDIO_KEY, lastGrab);
+    expect(parsed.errors ?? [], `the driver reported errors. stderr:\n${t.stderr.slice(0, 3000)}`)
+      .toEqual([]);
+  });
+
+Then('the Local AI dock is on the page, inside the window, clear of the wizard buttons',
+  async ({ world }) => {
+    const d = report(world).dock;
+    expect(d, 'the driver reported no dock').toBeTruthy();
+    expect(d!.visible).toBe(true);
+    expect(d!.insideWindow).toBe(true);
+    expect(d!.bottomStrip, 'the dock is not the window\'s bottom strip').toBe(true);
+    expect(d!.coversAWizardButton, 'the dock covers Back/Next/Cancel').toBe(false);
+    expect(d!.startButton).toBe('Start local assistant');
+    expect(d!.workButton).toBe('Current work');
+    expect(d!.startButtonHeight).toBeGreaterThanOrEqual(26);
+    expect(d!.promptVisible).toBe(true);
+    expect(d!.promptHeight ?? 0).toBeGreaterThanOrEqual(26);
+  });
+
+Then('the dock\'s status line counts the queued work read from the local-AI state folder',
+  async ({ world }) => {
+    const d = report(world).dock!;
+    expect(d.summary).toMatch(/^Local AI: ready, qwen3:8b loaded/);
+    expect(d.summary).toContain('1 queued');
+  });
+
+Then('pressing Start local assistant ran the local-ai start command detached and said so inline',
+  async ({ world }) => {
+    const s = report(world).start;
+    expect(s, 'the driver reported no start act').toBeTruthy();
+    expect(s!.buttonSaidWhilePending).toBe('Starting…');
+    expect(s!.scriptRan, 'the start command never ran').toBe(true);
+    expect(s!.args).toBe('start');
+    expect(s!.ownSession, 'the start command shares the Studio\'s session (not detached)').toBe(true);
+    expect(s!.startLogWritten).toBe(true);
+    expect(s!.note).toContain('Starting the local assistant');
+    expect(s!.workWindowOpened, 'a successful start opened the work window uninvited').toBe(false);
+  });
+
+Then('the question went to the loopback model only and its answer streamed into the dock',
+  async ({ world }) => {
+    const r = report(world);
+    const p = r.prompt!;
+    expect(p.promptClearedOnSend).toBe(true);
+    expect(p.sendButtonWhileBusy).toBe('Stop');
+    expect(p.streamedBeforeClear, 'no piece of the answer arrived').toBe(true);
+    expect(p.answerBeforeClear).toContain(`You: ${p.text}`);
+    expect(p.answerBeforeClear).toContain('The dock talks');
+    expect(p.requestsToModel).toEqual(['/api/chat']);
+    expect(p.modelAsked).toBe('qwen3:8b');
+    expect(r.model).toMatch(/^127\.0\.0\.1:\d+$/);
+  });
+
+Then('Clear pressed mid-answer left the answer area empty and the conversation forgotten',
+  async ({ world }) => {
+    const c = report(world).clear!;
+    expect(c.pressedWhileBusy, 'Clear was not pressed while the answer was arriving').toBe(true);
+    expect(c.answerRightAfter).toBe('');
+    expect(c.answerAfterTheModelFinished, 'late pieces of the cleared answer came back').toBe('');
+    expect(c.historyAfter).toBe(0);
+    expect(c.sendButtonAfter).toBe('Send');
+    expect(c.promptEnabled).toBe(true);
+  });
+
+Then('the Local AI dock opened no modal dialog', async ({ world }) => {
+  expect(report(world).modal).toBeNull();
+});
+
+Then('a grab exists for each act of the Local AI dock scenario', async ({ world }) => {
+  const r = report(world);
+  const names = r.grabs.map((g) => g.name);
+  expect(names).toEqual(['1-opened-collapsed', '2-expanded', '3-started', '4-answer-streaming', '5-after-clear']);
+  for (const g of r.grabs) {
+    expect(fs.statSync(g.png).size, `${g.png} is empty`).toBeGreaterThan(0);
+  }
+});
