@@ -126,8 +126,12 @@ When('I walk the Studio to the Repo source step in {string} mode with {string} c
     drive(world, p, '');
   });
 
-/** The checkouts appear on disk after the first read, as a finished clone leaves them. */
-When('the checkouts {string} appear on disk and the Studio refreshes',
+/**
+ * The checkouts appear on disk after the first read, as a finished clone leaves
+ * them, and the driver then finishes a run the way 'Generate & start' does. No
+ * control is touched: the rows must follow through the verb's own completion path.
+ */
+When('the checkouts {string} appear on disk and the run that made them finishes',
   async ({ world }, names: string) => {
     const p = world.get<Params>(PARAMS_KEY);
     p.also = names;

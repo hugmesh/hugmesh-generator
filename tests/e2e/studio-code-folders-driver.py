@@ -129,8 +129,9 @@ def main(argv: "list[str]") -> int:
     ap.add_argument("--click", default="",
                     help="open:<domain>:<app> | all:<domain> | root | '' (nothing)")
     ap.add_argument("--also-create", default="",
-                    help="comma list of app folders to create AFTER the first read "
-                         "(the Studio must pick them up on its own refresh path)")
+                    help="comma list of app folders to create AFTER the first read, "
+                         "then finish a run the way 'Generate & start' does (the "
+                         "Studio must pick them up on that path, nothing else)")
     args = ap.parse_args(argv)
 
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -230,12 +231,22 @@ def main(argv: "list[str]") -> int:
         app.processEvents()
 
     # Stage-4 style change AFTER the first read: the checkouts appear on disk (a
-    # clone finished) and the Studio has to notice through its own refresh path.
+    # clone finished) and the Studio has to notice through the path a finished
+    # 'Generate & start' really takes, _verb_done — no form control changes when
+    # make stack-clone creates the folders, so nothing else would re-read them.
+    # The verb itself (make, docker) is not run here; what stands in for it is
+    # what the widget test uses: no run log is written, the docker status probe
+    # and the mesh-state re-read are silenced (they read docker, which this driver
+    # promises never to touch), and the run list is empty.
     if args.also_create:
         root = block.map.root
         for name in args.also_create.split(","):
             os.makedirs(os.path.join(root, name), exist_ok=True)
-        ctl._refresh_code_folders()
+        ctl._probe_mesh_state = lambda: None
+        ctl._refresh_status = lambda: None
+        ctl._save_run_log = lambda run, ok: ""
+        ctl._runs = []
+        ctl._verb_done(True)
         app.processEvents()
 
     mode_name = args.source_mode

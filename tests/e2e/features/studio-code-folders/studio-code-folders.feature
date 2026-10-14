@@ -47,7 +47,7 @@ Feature: The Studio opens the git checkout behind every app of every domain
   @interface:studio
   Scenario: once the download has made the checkouts the same rows become openable @interface:studio
     When I walk the Studio to the Repo source step in "clone" mode with "none" checkouts and a file manager that "ok"
-    And the checkouts "hugmesh-gateway,hugmesh-forum-api" appear on disk and the Studio refreshes
+    And the checkouts "hugmesh-gateway,hugmesh-forum-api" appear on disk and the run that made them finishes
     Then the Code folders row "hugmesh-gateway" under "hugmesh.net" is enabled
     And the Code folders row "hugmesh-forum-api" under "chat.example.org" is enabled
     And the Code folders row "hugmesh-admin-ui" under "hugmesh.net" is disabled and says "not downloaded yet"

@@ -74,7 +74,9 @@ does the block) — parsed from the
 resolves. The source directory is read exactly as the build reads it, so `~` is not
 expanded (type the full path) and the block names the same folder the coverage line
 above it counts. The block re-reads the disk when a run finishes, so folders the
-Studio just cloned become openable without touching a control. A folder that is not
+Studio just cloned become openable without touching a control (the end-to-end
+scenario below finishes a run the way *Generate & start* does and reads the rows
+after it, so removing that re-read turns it red). A folder that is not
 there yet is a disabled button with the reason beside it ("not downloaded yet…",
 "no hugmesh-<name> checkout in …"); a service that runs a stock image (Akkoma,
 tuwunel, the databases) gets a note instead of a row. In *Download the source* mode
