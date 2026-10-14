@@ -2,7 +2,7 @@
 
 Every window page, text screen and printed plan that talks about brands reads its
 words from THIS table, and docs/BRAND-MODEL.md carries the same table in prose.
-tests/scripts/test-brand-words.sh checks the two are equal, so a screen cannot
+studio/tests/test_brand_record_words.py checks the two are equal, so a screen cannot
 quietly start calling the same thing by a second name.
 
 Why a table and not a comment: the survey behind #654 found 'brand' already meant a

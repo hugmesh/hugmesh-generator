@@ -2,7 +2,8 @@
 # (hugmesh-generator#654, decisions D2, D5 and D10).
 #
 # WHAT IS DRIVEN: the Studio's Qt-free command line, in a FRESH python process each
-# time, exactly as the Makefile and the text screens call it:
+# time — the verbs the Makefile and the text screens are meant to call (nothing in the
+# Makefile or the screens calls them yet; the lanes that own those files add the calls):
 #   python3 -m hugmesh_studio.core.local_mesh_bootstrap show-record --record FILE
 #   python3 -m hugmesh_studio.core.local_mesh_bootstrap plan        --record FILE
 #   python3 -m hugmesh_studio.core.brand_model          profile     --record FILE
@@ -16,7 +17,8 @@
 # and the words are the ones docs/BRAND-MODEL.md defines (the step reads the
 # document's table, never a copy). The same superbrand id must appear in the Docker
 # plan, the kind line of the record and the generated builder profile: one block,
-# three paths.
+# three paths. The plan is asked for WITHOUT --with-tor: Tor is on because the
+# record's superbrand says so, and a flag that contradicts the record is refused.
 #
 # OFFLINE and Qt-free: no mesh, no cluster, no browser. The kind path is proven only
 # as far as the printed plan: nothing here starts a cluster.
@@ -49,6 +51,7 @@ Feature: One brand record drives every brand's look and ways on every start path
     Then the command succeeded
     And the command output contains "Brand:      acme  (Acme Mesh)"
     And the command output contains "Domain:     mesh.example"
+    And the command output contains "TOR=on"
     And the command output contains "shop.mesh.example: its own onion (key ‘shop-mesh-example’), served as brand ‘shop-mesh-example’"
     When I write the builder profile from the brand record in a fresh Studio process
     Then the command succeeded
@@ -57,3 +60,13 @@ Feature: One brand record drives every brand's look and ways on every start path
     And the generated profile sets "TOR_BRANDS" to "shop-mesh-example=shop-mesh-example"
     When I show the brand record in a fresh Studio process
     Then the command output contains "kind cluster:      brand acme; Tor per brand: shop.mesh.example"
+
+  Scenario: a command-line flag that contradicts the record's Tor way is refused, not obeyed
+    Given a scratch brand record "acme" whose superbrand has no Tor address
+    When I print the Docker mesh plan from the brand record in a fresh Studio process
+    Then the command succeeded
+    And the command output contains "TOR=off"
+    And the command output contains "NO onion for the Tor domains (shop.mesh.example)"
+    When I ask the Docker mesh plan for Tor on the command line against the brand record
+    Then the command failed
+    And the command output contains "the brand record says this mesh has no Tor address, but --with-tor was given"

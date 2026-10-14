@@ -105,32 +105,45 @@ def ports_for(names, stored=None, *, brand_b: bool = False) -> dict[str, int]:
     return out
 
 
-def issuer_for(name: str, index: int, port: int | None = None) -> str:
+def brand_id_for(name: str, ids=None) -> str:
+    """The one text every consumer of an own-sign-in domain shares (#654, D4): the
+    id the brand record STORES for ``name`` (``ids``: name -> id) when it has one,
+    else the derived slug. Every service name, volume name, tenant key and issuer
+    below goes through this, so a stored id reaches all of them or none."""
+    return str((ids or {}).get(name) or "").strip() or slug(name)
+
+
+def issuer_for(name: str, index: int, port: int | None = None,
+               brand_id: str = "") -> str:
     """The per-domain Casdoor issuer/origin URL (the brand-b shape: PUBLISHED
     host URL, resolvable in-network via the dotted alias). ``port`` (a stored
-    port, see :func:`ports_for`) wins over the table-position default."""
-    return f"http://casdoor-{slug(name)}.localtest.me:{port or port_for(index)}"
+    port, see :func:`ports_for`) wins over the table-position default; ``brand_id``
+    (a stored id) over the derived slug."""
+    return (f"http://casdoor-{brand_id or slug(name)}.localtest.me:"
+            f"{port or port_for(index)}")
 
 
 def overlay_path(generator_dir: str) -> str:
     return os.path.join(generator_dir, OVERLAY_RELPATH)
 
 
-def tenancy_env(names, base_issuer: str, ports=None) -> dict[str, str]:
+def tenancy_env(names, base_issuer: str, ports=None, ids=None) -> dict[str, str]:
     """The gateways' opt-in multi-issuer registry for the own-idp domains: the
     central issuer stays tenant `default`, each own domain maps its derived
     issuer AND its Host to its slug (STACK_BRAND_B_ENV's shape, scaled per
     domain). {} when no domain opted in, so the untouched `make stack-*` env
     stays byte-identical — the same emit-nothing-by-default rule every other
     stack knob follows. ``ports`` (name -> port, :func:`ports_for`) overrides the
-    table-position ports; None keeps them."""
+    table-position ports; None keeps them. ``ids`` (name -> stored brand id,
+    :func:`brand_id_for`) names the tenant keys; None derives them as before."""
     names = tuple(names)
     if not names:
         return {}
     ports = dict(ports or {})
     issuers = [f"{base_issuer}=default"] + [
-        f"{issuer_for(n, i, ports.get(n))}={slug(n)}" for i, n in enumerate(names)]
-    hosts = [f"{n}={slug(n)}" for n in names]
+        f"{issuer_for(n, i, ports.get(n), brand_id_for(n, ids))}={brand_id_for(n, ids)}"
+        for i, n in enumerate(names)]
+    hosts = [f"{n}={brand_id_for(n, ids)}" for n in names]
     return {"APP_TENANCY_ISSUERS": ",".join(issuers),
             "APP_TENANCY_HOSTS": ",".join(hosts)}
 
@@ -180,11 +193,12 @@ _SERVICE_TMPL = """\
 """
 
 
-def compose_overlay(names, ports=None) -> str:
+def compose_overlay(names, ports=None, ids=None) -> str:
     """The overlay YAML text for the given own-idp domain names, "" when there
     are none (write nothing — the superdomain-only stack stays byte-identical).
-    ``ports`` as in :func:`tenancy_env`: the same mapping must be given to both,
-    or the issuer the gateway trusts and the port Casdoor publishes on disagree."""
+    ``ports`` and ``ids`` as in :func:`tenancy_env`: the same mappings must be given
+    to both, or the issuer the gateway trusts and the service Casdoor runs as
+    disagree."""
     names = tuple(names)
     if not names:
         return ""
@@ -192,9 +206,10 @@ def compose_overlay(names, ports=None) -> str:
     parts = [_HEADER]
     for i, name in enumerate(names):
         port = ports.get(name) or port_for(i)
+        bid = brand_id_for(name, ids)
         parts.append(_SERVICE_TMPL.format(
-            name=name, slug=slug(name), profile=PROFILE,
-            issuer=issuer_for(name, i, port), port=port))
+            name=name, slug=bid, profile=PROFILE,
+            issuer=issuer_for(name, i, port, bid), port=port))
     parts.append("volumes:\n")
-    parts += [f"  casdoor-{slug(n)}-pg:\n" for n in names]
+    parts += [f"  casdoor-{brand_id_for(n, ids)}-pg:\n" for n in names]
     return "".join(parts)

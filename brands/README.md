@@ -96,5 +96,9 @@ a profile in this file's format (`python3 -m hugmesh_studio.core.brand_model pro
 --record FILE --out PROFILE`): every value single-quoted and limited to a safe
 character set, re-parsed strictly before a builder sources it, so a brand title can
 never run code in a builder. A hand-written `brands/<yourbrand>.conf` still works as
-before; the record's `BRAND` must not name an existing profile here, because
-`make BRAND=<id>` would source it.
+before. A *brand's* id must not name a profile here (`make BRAND=<id>` would source a
+whole-mesh profile for one brand, and the record refuses it); the *superbrand's* id is
+the builder's `BRAND` and may match a profile — `example` and `local` are exactly such
+files — in which case the builder sources that hand-written file as it always has and
+the generated profile is a second description of the same brand, written to the path
+the Studio is told, never into this folder.
