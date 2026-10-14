@@ -127,6 +127,21 @@ class _ElidedLabel(QtWidgets.QLabel):
         return QtCore.QSize(40, super().minimumSizeHint().height())
 
 
+class _PromptLine(QtWidgets.QLineEdit):
+    """The prompt box. Enter here means "send" and nothing else.
+
+    A plain QLineEdit emits ``returnPressed`` and then leaves the key UNACCEPTED, so the
+    dialog it sits in gets it next and presses its default button. The dock sits in a
+    QWizard on every page: that button is Next, or on the worklist page the one that
+    commits a build. So the key is accepted here once the line has handled it; every
+    other key goes where it always went."""
+
+    def keyPressEvent(self, event):
+        super().keyPressEvent(event)
+        if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            event.accept()
+
+
 class _Threads:
     """Run a function on a daemon thread; collect results on the window thread.
 
@@ -437,7 +452,7 @@ class LocalAIDock(QtWidgets.QFrame):
         self.note.setVisible(False)
         row = QtWidgets.QHBoxLayout()
         row.setSpacing(6)
-        self.prompt = QtWidgets.QLineEdit()
+        self.prompt = _PromptLine()
         self.prompt.setMinimumHeight(MIN_CLICK_PX)
         self.prompt.setPlaceholderText("Ask the local model (stays on this machine). Enter sends.")
         self.prompt.setAccessibleName("Prompt for the local model")

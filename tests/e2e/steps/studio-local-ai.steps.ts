@@ -47,7 +47,10 @@ interface DockReport {
     cliStderr: string; cliModelAsked: string | null;
   };
   prompt?: {
-    text: string; enter: string; promptClearedOnSend: boolean; sendButtonWhileBusy: string;
+    text: string; enter: string; promptClearedOnSend: boolean;
+    wizardBeforeEnter: { id: number; title: string; page: string };
+    wizardAfterEnter: { id: number; title: string; page: string };
+    sendButtonWhileBusy: string;
     busy: boolean; streamedBeforeClear: boolean; answerBeforeClear: string;
     requestsToModel: string[]; modelAsked: string | null;
   };
@@ -145,6 +148,17 @@ Then('the question went to the loopback model only and its answer streamed into 
     expect(p.requestsToModel).toEqual(['/api/chat']);
     expect(r.model).toMatch(/^127\.0\.0\.1:\d+$/);
   });
+
+Then('pressing Enter in the prompt did not move the wizard off its page', async ({ world }) => {
+  const p = report(world).prompt!;
+  // the driver pressed a real key (a QKeyEvent), not the signal: only a key can travel
+  // on to the wizard, so only a key can show the defect this step is about
+  expect(p.enter, 'Enter was not delivered as a key event').toMatch(/^QKeyEvent/);
+  expect(p.wizardBeforeEnter, 'the driver did not read the page before Enter').toBeTruthy();
+  expect(p.wizardAfterEnter,
+    `Enter in the prompt moved the wizard from "${p.wizardBeforeEnter.title}" to "${p.wizardAfterEnter?.title}"`)
+    .toEqual(p.wizardBeforeEnter);
+});
 
 Then('the dock asked the model named by LOCAL_AI_MODEL, the same one the command line asks',
   async ({ world }) => {

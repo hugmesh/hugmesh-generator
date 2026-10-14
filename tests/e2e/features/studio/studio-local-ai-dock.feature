@@ -9,6 +9,9 @@
 #     opening on its own);
 #   * a question typed into the dock goes to the model on THIS machine only (one
 #     POST /api/chat to a loopback address) and the answer streams into the dock;
+#   * the Enter that sends it does nothing else: the wizard stays on the page it was
+#     on (a dialog presses its default button, Next, on an Enter nobody claimed, and on
+#     the worklist page that button starts a build);
 #   * the dock asks the model LOCAL_AI_MODEL names — the one `--local-ai-prompt` asks
 #     under the same setting — not whatever model happens to be loaded;
 #   * Clear pressed while the answer is still arriving empties the answer area and
@@ -34,6 +37,7 @@ Feature: The Studio's Local AI dock starts the assistant, answers a question and
     And the dock's status line counts the queued work read from the local-AI state folder
     And pressing Start local assistant ran the local-ai start command detached and said so inline
     And the question went to the loopback model only and its answer streamed into the dock
+    And pressing Enter in the prompt did not move the wizard off its page
     And the dock asked the model named by LOCAL_AI_MODEL, the same one the command line asks
     And Clear pressed mid-answer left the answer area empty and the conversation forgotten
     And the Local AI dock opened no modal dialog

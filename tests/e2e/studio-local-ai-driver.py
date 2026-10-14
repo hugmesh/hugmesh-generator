@@ -225,12 +225,18 @@ def main(argv):
             "workWindowOpened": dock.work_window is not None,
         }
         modal_check("start")
+        app.processEvents()            # the button was just re-labelled: let the bar re-lay out before the grab
         grab("3-started")
 
         # ── act 3: a question, answered by the loopback model, streaming ──
+        # The wizard page is read before and after Enter: a prompt line that let the key
+        # travel on would press the wizard's default button (Next) along with sending.
         question = "What does the dock talk to?"
         dock.prompt.setText(question)
         dock.prompt.setFocus()
+        app.processEvents()
+        page_before = {"id": wiz.currentId(), "title": wiz.currentPage().title(),
+                       "page": type(wiz.currentPage()).__name__}
         try:
             # a real Enter key press delivered through Qt's event system (QtTest is not
             # part of every binding install; QKeyEvent is)
@@ -244,8 +250,11 @@ def main(argv):
             enter_how = f"returnPressed.emit() (key event failed: {exc})"
         streamed = pump(lambda: fake.chunks[0] in dock.answer.toPlainText(), 15)
         before_clear = dock.answer.toPlainText()
+        page_after = {"id": wiz.currentId(), "title": wiz.currentPage().title(),
+                      "page": type(wiz.currentPage()).__name__}
         report["prompt"] = {
             "text": question, "enter": enter_how, "promptClearedOnSend": dock.prompt.text() == "",
+            "wizardBeforeEnter": page_before, "wizardAfterEnter": page_after,
             "sendButtonWhileBusy": dock.send_btn.text(), "busy": dock._busy,
             "streamedBeforeClear": streamed, "answerBeforeClear": before_clear,
             "requestsToModel": [p for m, p, _ in fake.requests if m == "POST"],

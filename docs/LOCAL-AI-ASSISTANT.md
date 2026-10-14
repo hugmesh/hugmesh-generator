@@ -498,8 +498,9 @@ loop), `issues.py` (reads `gh` output: which issues to pick, how to print one) a
 
 * **Window.** Every Studio page has a **Local AI** bar along the bottom: one line of
   status (`Local AI: ready, qwen3:8b loaded, 2 queued, 1 running`), a chevron that
-  expands it into a prompt line and an answer area (Enter sends; the answer streams
-  in), a **Start local assistant** button (runs `scripts/local-ai.sh start` detached)
+  expands it into a prompt line and an answer area (Enter sends, and only sends: the
+  wizard stays on the page you were on, so a question never presses Next or starts a
+  build; the answer streams in), a **Start local assistant** button (runs `scripts/local-ai.sh start` detached)
   and a **Current work** button that opens a window listing the queue, the drafts with
   their STATUS and a button to open each draft diff, the model loaded and the Studio's
   own running builds. The bar remembers whether you left it open or closed. Nothing

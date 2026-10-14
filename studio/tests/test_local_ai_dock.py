@@ -40,7 +40,8 @@ from hugmesh_studio.core.platform_info import HostInfo                 # noqa: E
 from hugmesh_studio.gui import _local_ai_dock as dock_mod              # noqa: E402
 from hugmesh_studio.gui import shell as shell_mod                      # noqa: E402
 from hugmesh_studio.gui import wizard as wizard_mod                    # noqa: E402
-from hugmesh_studio.gui.qt import Qt, QtCore, QtWidgets               # noqa: E402
+from hugmesh_studio.gui.qt import Qt, QtCore, QtGui, QtWidgets        # noqa: E402
+from hugmesh_studio.tui import local_ai as tui_local_ai                # noqa: E402
 
 STUDIO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 GENERATOR_DIR = os.path.dirname(STUDIO_ROOT)
@@ -110,6 +111,16 @@ def wait_for(qapp, cond, timeout=5.0):
         time.sleep(0.02)
     qapp.processEvents()
     return bool(cond())
+
+
+def press_enter(qapp, widget):
+    """Enter as a keyboard delivers it: a press and a release through Qt's event system,
+    so the key travels on to the widget's parents exactly as it would for a person.
+    ``returnPressed.emit()`` would skip that path, and the path is what matters here."""
+    for kind in (QtCore.QEvent.Type.KeyPress, QtCore.QEvent.Type.KeyRelease):
+        qapp.sendEvent(widget, QtGui.QKeyEvent(kind, Qt.Key.Key_Return,
+                                               Qt.KeyboardModifier.NoModifier, "\r"))
+    qapp.processEvents()
 
 
 def open_at(shell, qapp, size):
@@ -349,7 +360,7 @@ def test_enter_sends_the_prompt_on_a_worker_thread_and_the_answer_streams_in(qap
                                 auto_poll=False, expanded=True)
     dock.show()
     dock.prompt.setText("hello there")
-    dock.prompt.returnPressed.emit()                              # what Enter does
+    press_enter(qapp, dock.prompt)
     assert dock.prompt.text() == "" and dock.send_btn.text() == "Stop"
     assert wait_for(qapp, lambda: "First part, " in dock.answer.toPlainText())
     assert where and where[0] != main
@@ -361,6 +372,38 @@ def test_enter_sends_the_prompt_on_a_worker_thread_and_the_answer_streams_in(qap
     assert dock.send_btn.text() == "Send"
     assert dock._history[-1] == {"role": "assistant", "content": "First part, second part."}
     dock.close()
+
+
+@pytest.mark.parametrize("key", [Qt.Key.Key_Return, Qt.Key.Key_Enter], ids=["Return", "keypad-Enter"])
+def test_enter_in_the_prompt_sends_and_leaves_the_wizard_on_its_page(shell, qapp, monkeypatch, key):
+    """Enter in the prompt means "send", nothing more. A QLineEdit leaves the Return key
+    unaccepted after ``returnPressed``, and a dialog then presses its default button: here
+    that is the wizard's Next (and on the worklist page the button that commits a build).
+    The dock is on every page, so the key must stop at the prompt."""
+    sent = []
+    monkeypatch.setattr(lai, "send_prompt",
+                        lambda text, *a, **k: sent.append(text) or "ok")
+    wiz = open_at(shell, qapp, NORMAL)
+    dock = wiz.local_ai_dock
+    dock.set_expanded(True)
+    qapp.processEvents()
+    page_before, title_before = wiz.currentId(), wiz.currentPage().title()
+    assert wiz.button(QtWidgets.QWizard.WizardButton.NextButton).isDefault(), \
+        "the welcome page has no default Next button: this test would prove nothing"
+    dock.prompt.setText("hello local model")
+    dock.prompt.setFocus()
+    qapp.processEvents()
+    for kind in (QtCore.QEvent.Type.KeyPress, QtCore.QEvent.Type.KeyRelease):
+        qapp.sendEvent(dock.prompt, QtGui.QKeyEvent(kind, key, Qt.KeyboardModifier.NoModifier, "\r"))
+    assert wait_for(qapp, lambda: sent and not dock._busy)
+    assert sent == ["hello local model"]
+    assert (wiz.currentId(), wiz.currentPage().title()) == (page_before, title_before), \
+        f"Enter in the prompt moved the wizard to {wiz.currentPage().title()!r}"
+    # and a key the prompt does not own still reaches the wizard: Escape is Cancel there
+    assert dock.prompt.text() == ""
+    qapp.sendEvent(dock.prompt, QtGui.QKeyEvent(QtCore.QEvent.Type.KeyPress, Qt.Key.Key_A,
+                                                Qt.KeyboardModifier.NoModifier, "a"))
+    assert dock.prompt.text() == "a", "ordinary typing no longer reaches the prompt"
 
 
 def test_a_second_prompt_carries_the_conversation_and_clear_forgets_it(qapp):
@@ -675,9 +718,9 @@ def test_clear_mid_answer_tells_the_running_prompt_to_stop(qapp):
 ], ids=["LOCAL_AI_MODEL-set", "LOCAL_AI_MODEL-unset"])
 def test_the_dock_asks_the_same_model_as_the_command_line(qapp, monkeypatch, tmp_path,
                                                            asked, loaded, expect, capsys):
-    """One place picks the model (``pick_model``) and every face goes through it. Both
-    requests here hit the same fake, so the ``model`` each one carries is compared on the
-    wire, not inferred."""
+    """One place picks the model (``pick_model``) and every face goes through it. The
+    three requests here — the command line, the dock, the text screen — hit the same
+    fake, so the ``model`` each one carries is compared on the wire, not inferred."""
     fake = FakeOllama()
     try:
         fake.models = [{"name": "qwen3:8b"}, {"name": "qwen2.5-coder:7b"}]
@@ -702,9 +745,17 @@ def test_the_dock_asks_the_same_model_as_the_command_line(qapp, monkeypatch, tmp
         assert dock.send()
         assert wait_for(qapp, lambda: not dock._busy)
         dock.close()
+        # the text screen, hosted as the TUI hosts it when no journey is up; it too knows
+        # what is loaded and must not prefer it
+        host = tui_local_ai.Standalone(".", snapshot_fn=lambda: snap)
+        screen = host.open()
+        assert screen.snapshot.loaded == loaded
+        host.feed("hi")                                # the typed line, as either face sends it
+        assert screen.transcript[:1] == ["you: hi"], screen.message
 
         chats = [r[2]["model"] for r in fake.requests if r[1] == "/api/chat"]
-        assert len(chats) == 2, fake.requests
-        assert chats == [expect, expect], f"CLI asked {chats[0]}, dock asked {chats[1]}"
+        assert len(chats) == 3, fake.requests
+        assert chats == [expect] * 3, (f"CLI asked {chats[0]}, dock asked {chats[1]}, "
+                                       f"text screen asked {chats[2]}")
     finally:
         fake.close()
