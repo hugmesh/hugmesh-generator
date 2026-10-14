@@ -274,6 +274,52 @@ def test_the_local_mesh_route_records_an_added_rows_org(wiz):
                for r in recorded), recorded
 
 
+def test_the_local_mesh_route_keeps_the_own_rows_org_through_next(wiz, qapp):
+    """Generate a new mesh -> Domains step: an org typed on the OWN row (row 0)
+    survives Next. ``_commit_domains`` rebuilds row 0 as a fresh ``Domain`` (name,
+    idp, the services carried over by name); measured before the fix it carried
+    everything but the org: 'exampleorg' before Next, '' after, and the bring-up
+    recorded no org for the mesh's own domain — the one domain the export step is
+    about by default."""
+    wiz.next()
+    mode = wiz.currentPage()
+    mode._buttons["localmesh"].setChecked(True)
+    mode._on_mode_toggled()
+    wiz.next()
+    wiz.currentPage()._buttons["generate"].setChecked(True)
+    wiz.next()
+    assert isinstance(wiz.currentPage(), localmesh_mod.LocalMeshEnvPage)
+    wiz.next()
+    assert isinstance(wiz.currentPage(), localmesh_mod.LocalMeshDomainsPage)
+    ctl = wiz.page(wiz._page_ids["localmesh"])
+    md = ctl.mesh_domains
+    own = md.own_name
+    assert own and md.by_name(own) is not None and md.by_name(own).github_org == ""
+    assert ctl.domains_table.is_own_row(0)
+    cell = ctl.domains_table.table.cellWidget(0, _COL_ORG)
+    cell.setText("exampleorg")
+    cell.editingFinished.emit()                 # the cell's write-through (focus loss)
+    _settle(qapp)
+    assert md.by_name(own).github_org == "exampleorg"      # before Next
+    assert ctl._commit_domains()
+    assert ctl.mesh_domains.own_name == own
+    assert ctl.mesh_domains.by_name(own).github_org == "exampleorg", "lost on Next"
+    # a second Next (Back, then Next again) must not drop it either
+    assert ctl._commit_domains()
+    assert ctl.mesh_domains.by_name(own).github_org == "exampleorg"
+    recorded = ctl.collect_bootstrap().domains
+    assert any(r["name"] == own and r.get("github_org") == "exampleorg"
+               for r in recorded), recorded
+    # and an own row that never named an org still records none (absent, not "")
+    cell = ctl.domains_table.table.cellWidget(0, _COL_ORG)
+    cell.setText("")
+    cell.editingFinished.emit()
+    _settle(qapp)
+    assert ctl._commit_domains()
+    assert all("github_org" not in r for r in ctl.collect_bootstrap().domains
+               if r["name"] == own)
+
+
 # ── the Go-Live export step ─────────────────────────────────────────────────────────
 def _at_generate(golive):
     golive.setStartId(golive._page_ids["generate"])

@@ -1136,7 +1136,10 @@ class LocalMeshPage(QtWidgets.QWizardPage):
             own = md.own_name or own
         prev = md.by_name(md.own_name) if md.own_name else None
         own_row = Domain(name=own, title="", idp=DOMAIN_IDP_SUPERDOMAIN,
-                         optional_services=list(prev.optional_services) if prev else [])
+                         optional_services=list(prev.optional_services) if prev else [],
+                         # the org the own row's cell wrote through (a validated
+                         # slug) is state too, or Next would drop the export's org
+                         github_org=getattr(prev, "github_org", "") if prev else "")
         md.domains = [own_row] + added
         md.own_name = own
         record_reviewed(md, md.domain_services_reviewed)
