@@ -10,8 +10,8 @@
 // "a scratch brand record", "I show the brand record", "I print the Docker mesh plan",
 // "I ask the Docker mesh plan",
 // "I write the builder profile", "the record output", "every look value", "every term",
-// "for brand", "the generated profile", "no builder profile" or "the builder harness",
-// and was grepped across steps/ before it was written.
+// "for brand", "the generated profile", "no builder profile", "the builder harness" or
+// "the plan says", and was grepped across steps/ before it was written.
 //
 // The words the assertions compare against come from docs/BRAND-MODEL.md (its
 // "## The seven words" table) — read at run time, never copied here, so the
@@ -140,7 +140,40 @@ Given('a scratch brand record whose superbrand title is a command that would cre
     world.set(SENTINEL_KEY, sentinel);
   });
 
+Given('a scratch brand record whose brands both carry the reserved id {string}',
+  async ({ world }, reserved: string) => {
+    expect(reserved).toBe('default');
+    // Written directly, bypassing the Studio's save (which refuses a reserved id):
+    // `validate` and `up` refuse this record, and the profile verb must too.
+    const rec = acmeRecord('Acme Mesh');
+    for (const b of rec.brands) (b as { id?: string }).id = reserved;
+    writeRecord(world, rec);
+  });
+
 // ── When ───────────────────────────────────────────────────────────────────────
+
+/** The own sign-ins the two-port scenarios name, in the order they are given. */
+const OWN_SIGN_INS = ['zed.mesh.example', 'alpha.mesh.example'];
+const PLAN_KEY = 'brand.plan.transcript';
+
+When('I show the brand record and print the Docker mesh plan from two own sign-ins named in reverse alphabetical order in fresh Studio processes',
+  async ({ world }) => {
+    // no record file: both verbs read the same flags, and the running mesh
+    // (local_stack_node) publishes each sign-in on a port by its position here
+    const flags = ['--brand', 'acme', '--cluster-domain', 'mesh.example', '--generator-dir', REPO_ROOT];
+    for (const name of OWN_SIGN_INS) flags.push('--own-casdoor-domain', name);
+    const plan = runCli([studioPython(), '-m', 'hugmesh_studio.core.local_mesh_bootstrap', 'plan', ...flags],
+      { cwd: STUDIO, env: { QT_QPA_PLATFORM: 'offscreen' } });
+    world.set(PLAN_KEY, plan);
+    studio(world, 'local_mesh_bootstrap', ['show-record', ...flags]);
+  });
+
+When('I print the Docker mesh plan for a production mesh from the brand record in a fresh Studio process', async ({ world }) => {
+  // production, Tor on from the record: the plan must say what happens to the Tor
+  // address at start — held, or not held because the Makefile has no hold yet
+  studio(world, 'local_mesh_bootstrap', ['plan', '--record', world.get<string>(REC_KEY),
+    '--env', 'prod', '--generator-dir', REPO_ROOT]);
+});
 
 When('I show the brand record in a fresh Studio process', async ({ world }) => {
   studio(world, 'local_mesh_bootstrap', ['show-record', '--record', world.get<string>(REC_KEY),
@@ -234,6 +267,41 @@ Then('the record output uses no word the brand screens forbid', async ({ world }
   const text = out(world).toLowerCase();
   for (const w of FORBIDDEN) {
     expect(text, `the record says "${w}"`).not.toMatch(new RegExp(`\\b${w}\\b`));
+  }
+});
+
+Then('the record output and the plan give the same sign-in port to each own sign-in, {int} then {int}',
+  async ({ world }, first: number, second: number) => {
+    const plan = world.get<CliTranscript>(PLAN_KEY);
+    expect(plan.exitCode, `plan: ${plan.stderr}`).toBe(0);
+    const record = out(world);
+    const want = [first, second];
+    OWN_SIGN_INS.forEach((name, i) => {
+      const planLine = plan.stdout.split('\n').find((l) => l.includes(`* ${name}: host port `));
+      expect(planLine, `no port line for ${name} in the plan:\n${plan.stdout}`).toBeDefined();
+      expect(planLine!).toContain(`* ${name}: host port ${want[i]},`);
+      const block = brandBlock(record, name.replace(/\./g, '-'));
+      expect(block, `the record's port for ${name}`).toContain(`sign-in port ${want[i]} on the Docker mesh`);
+    });
+  });
+
+// ── Then: the production hold, measured against the Makefile ───────────────────
+
+Then('the plan says the Tor address is held until Go live exactly when the Makefile reads TOR_HOLD', async ({ world }) => {
+  // the Makefile is the authority: a word-match on the knob (the Studio's own
+  // makefile_holds_tor does the same), so this scenario flips the day the hold lands
+  const makefile = fs.readFileSync(path.join(REPO_ROOT, 'Makefile'), 'utf8');
+  const readsKnob = /\bTOR_HOLD\b/.test(makefile);
+  const text = out(world);
+  if (readsKnob) {
+    expect(text).toContain('HELD: a production mesh starts no Tor address until Go live (TOR_HOLD=1');
+    expect(text).toContain('It is HELD until Go live (a production mesh).');
+    expect(text).not.toContain('NOT HELD YET');
+  } else {
+    expect(text).toContain('NOT HELD YET: this production mesh publishes its Tor address at start');
+    expect(text).toContain('does not read TOR_HOLD');
+    expect(text).toContain('It starts with this mesh (a production mesh; the hold is not built yet).');
+    expect(text).not.toContain('HELD:');
   }
 });
 

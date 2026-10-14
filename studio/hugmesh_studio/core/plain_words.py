@@ -94,8 +94,9 @@ WAY_EFFECT: dict[tuple[str, str], str] = {
     ("tor", "kind"):
         "applied per brand through the kind Tor step once the cluster is up",
     ("tor", "image"):
-        "baked: the image carries the Tor brand list and the hold flag; a production "
-        "image holds the address until Go live",
+        "baked: an image built with Tor on starts its Tor service at first boot, and "
+        "the address is live whenever that service runs (hugmesh-go-live); no image "
+        "holds it until Go live today",
     ("public", "docker"):
         "recorded only: this mesh has no public name; nothing here applies this yet",
     ("public", "kind"):

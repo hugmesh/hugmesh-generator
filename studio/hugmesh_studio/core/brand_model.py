@@ -53,8 +53,8 @@ from .state_paths import state_dir
 from .validate import IdentityValidationError, validate_brand_title
 
 __all__ = [
-    "SCHEMA", "RECORD_FILENAME", "DESIGNS_SUBDIR", "LOOK_KEYS", "COPY_SITES",
-    "COPY_SITES_STILL_DROPPING",
+    "SCHEMA", "RECORD_FILENAME", "DESIGNS_SUBDIR", "DESIGN_KEYS", "LOOK_KEYS",
+    "BRAND_ID_MAX", "DOCKER_LABEL_MAX", "COPY_SITES", "COPY_SITES_STILL_DROPPING",
     "Superbrand", "BrandRecord", "RecordRefused", "ProfileRefused",
     "brand_id", "brand_id_problem", "stored_id_problem", "profile_names",
     "look_problems", "secret_problems",
@@ -109,9 +109,19 @@ COPY_SITES_STILL_DROPPING: tuple[str, ...] = (
 #: issuer sanitiser is unbounded — the record uses the tightest so every consumer
 #: accepts the one text).
 BRAND_ID_RE = re.compile(r"^[a-z0-9]([a-z0-9-]{0,57}[a-z0-9])?$")
+BRAND_ID_MAX = 59
+#: The Docker start's own limit: a plain DNS label (local_mesh_bootstrap's
+#: _BRAND_DNS_LABEL and domain_services.onion_slug both allow 63). A mesh that
+#: started before the record existed must still start, so the Docker path checks
+#: ids against THIS length and the record file against BRAND_ID_MAX.
+DOCKER_LABEL_MAX = 63
 #: ``default`` is the superbrand's run-time key in every back end; ``domains`` names
 #: brands/domains.conf, the CA registry, which discover_brands never offers either.
 RESERVED_IDS: tuple[str, ...] = ("default", "domains")
+
+
+def _label_re(max_len: int) -> "re.Pattern[str]":
+    return re.compile(r"^[a-z0-9]([a-z0-9-]{0,%d}[a-z0-9])?$" % (max_len - 2))
 
 
 def brand_id(row) -> str:
@@ -158,16 +168,17 @@ def stored_id_problem(row) -> str:
 
 
 def brand_id_problem(candidate: str, *, superbrand_id: str = "", taken=(),
-                     profiles=()) -> str:
+                     profiles=(), max_len: int = BRAND_ID_MAX) -> str:
     """Why ``candidate`` cannot be a brand's id ("" when it can): every refusal of D4,
     each with its reason. ``taken`` are the other brands' ids; ``profiles`` the
-    brands/*.conf names (:func:`profile_names`)."""
+    brands/*.conf names (:func:`profile_names`); ``max_len`` the label length the
+    caller's consumers accept (the record's 59, or the Docker start's 63)."""
     cid = (candidate or "").strip()
     if not cid:
         return "a brand needs an id (the default is made from its public name)"
-    if not BRAND_ID_RE.match(cid):
-        return (f"‘{cid}’ is not a DNS label of at most 59 characters that starts and "
-                "ends with a letter or digit (lowercase letters, digits and dashes only)")
+    if not _label_re(max_len).match(cid):
+        return (f"‘{cid}’ is not a DNS label of at most {max_len} characters that starts "
+                "and ends with a letter or digit (lowercase letters, digits and dashes only)")
     if cid in RESERVED_IDS:
         return (f"‘{cid}’ is reserved: " +
                 ("it is the superbrand's run-time key in every back end"
@@ -567,21 +578,30 @@ def secret_problems(obj: Any, where: str = "record") -> list[str]:
 
 # ── whole-record checks (D4, D5, D20) ────────────────────────────────────────────────
 def record_problems(record: BrandRecord, *, unaffiliated: bool = False,
-                    profiles=()) -> list[str]:
+                    profiles=(), docker_start: bool = False) -> list[str]:
     """Why the record cannot be saved ([] when it can): the id rule for the superbrand
     and every brand, duplicate ids, every look and ways block, and — on an
     unaffiliated image (D20) — any identity (a brand IS an affiliation; the look is
-    allowed)."""
+    allowed).
+
+    ``docker_start`` is the Docker mesh's bring-up (LocalMeshBootstrap.validate and
+    show-record): the same checks MINUS the title rule and with the bootstrap's own
+    63-character label limit. On the compose path a title is written into no file a
+    shell sources and no sed replacement (the overlay uses names only), and the two
+    places where it is — the record file and the generated profile — keep the strict
+    rule at their own write; so a mesh that started before the record existed, with
+    a title like "Bob's Shop" or a 61-character brand, still starts."""
     sb = record.superbrand
     problems: list[str] = []
+    max_len = DOCKER_LABEL_MAX if docker_start else BRAND_ID_MAX
     sid = sb.id.strip()
     if sid:
-        p = brand_id_problem(sid, profiles=())
+        p = brand_id_problem(sid, profiles=(), max_len=max_len)
         if p and not p.startswith(f"‘{sid}’ names an existing"):
             problems.append(f"superbrand: {p}")
     else:
         problems.append("superbrand: a superbrand needs an id")
-    if sb.title:
+    if sb.title and not docker_start:
         try:
             validate_brand_title(sb.title)
         except IdentityValidationError as e:
@@ -592,13 +612,14 @@ def record_problems(record: BrandRecord, *, unaffiliated: bool = False,
     seen: list[str] = []
     for d in record.brands:
         bid = brand_id(d)
-        p = brand_id_problem(bid, superbrand_id=sid, taken=seen, profiles=profiles)
+        p = brand_id_problem(bid, superbrand_id=sid, taken=seen, profiles=profiles,
+                             max_len=max_len)
         if p:
             problems.append(f"brand {d.name or bid}: {p}")
         elif (d.id or "").strip() and bid != default_brand_id(d.name):
             problems.append(f"brand {d.name}: {stored_id_problem(d)}")
         seen.append(bid)
-        if d.title:
+        if d.title and not docker_start:
             try:
                 validate_brand_title(d.title)
             except IdentityValidationError as e:
@@ -685,11 +706,17 @@ def apply_record_to_image_config(record: BrandRecord, cfg: ImageConfig) -> None:
         cfg.org = sb.org
     if sb.public_name:
         cfg.cluster_domain = sb.public_name
-    cfg.superdomain = sb.internal_root
+    # one rule for every superbrand field: a value the record does not carry says
+    # nothing and leaves the config's field alone (the block is omit-when-empty, so
+    # "" can only mean "not chosen", never "clear it")
+    if sb.internal_root:
+        cfg.superdomain = sb.internal_root
     # the look is the one place style and decoration live (Superbrand.login_style
-    # reads it); an empty look value says nothing and leaves the field alone
-    cfg.login_style = sb.login_style
-    cfg.login_decor = sb.login_decor
+    # reads it)
+    if sb.login_style:
+        cfg.login_style = sb.login_style
+    if sb.login_decor:
+        cfg.login_decor = sb.login_decor
     look = {k: v for k, v in (sb.look or {}).items() if v}
     if "primary" in look:
         cfg.login_primary_color = look["primary"]
@@ -729,8 +756,11 @@ def record_from_bootstrap(cfg) -> BrandRecord:
         if name in own_idp:
             row.idp = DOMAIN_IDP_OWN
         rows.append(row)
-    for name in sorted(own_idp):
-        if name != own and not any(r.name == name for r in rows):
+    # in the GIVEN order, never sorted: the stack node and the plan publish each
+    # own sign-in on own_casdoor.port_for(<position in this list>), and show-record
+    # must print the port the running mesh uses for that name
+    for name in (n.strip() for n in (getattr(cfg, "own_idp_domains", None) or ())):
+        if name and name != own and not any(r.name == name for r in rows):
             rows.append(Domain(name=name, idp=DOMAIN_IDP_OWN))
     tor_on = bool(cfg.effective_with_tor())
     if "tor" not in (sb.ways or {}):
@@ -1009,16 +1039,30 @@ def _design_path(name: str) -> str:
     return os.path.join(designs_dir(), f"{name}.json")
 
 
+#: What a stored design IS: the parts of a superbrand one would reuse on another
+#: mesh. Everything else in the block names THIS mesh (id, public name, internal root
+#: name, central sign-in) or says how it is reached (ways), and a design never
+#: carries or overwrites those.
+DESIGN_KEYS: tuple[str, ...] = ("title", "org", "look")
+
+
+def _design_block(superbrand: Superbrand) -> dict[str, Any]:
+    return {k: v for k, v in superbrand.to_dict().items() if k in DESIGN_KEYS}
+
+
 def save_design(name: str, superbrand: Superbrand) -> str:
-    """Keep a superbrand design in the store (scanned for secrets first)."""
-    problems = look_problems(superbrand.look, f"design {name}")
-    problems += secret_problems(superbrand.to_dict(), f"design {name}")
+    """Keep a superbrand design in the store: its title, organisation and look
+    (DESIGN_KEYS), scanned for secrets first. The block's mesh-naming fields are
+    not written."""
+    block = _design_block(superbrand)
+    problems = look_problems(block.get("look", {}), f"design {name}")
+    problems += secret_problems(block, f"design {name}")
     if problems:
         raise RecordRefused(problems)
     path = _design_path(name)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w", encoding="utf-8") as fh:
-        fh.write(_dump(superbrand.to_dict()))
+        fh.write(_dump(block))
     return path
 
 
@@ -1040,8 +1084,12 @@ def choose_design(record: BrandRecord, name: str, date: str) -> None:
     mesh. ``date`` (YYYY-MM-DD) is the caller's input, never read from a clock here."""
     if not re.match(r"^\d{4}-\d{2}-\d{2}$", date or ""):
         raise ValueError(f"the copy date must be YYYY-MM-DD, got {date!r}")
-    design = load_design(name)
-    record.superbrand = Superbrand.from_dict(design.to_dict())   # a copy, by value
+    design = _design_block(load_design(name))
+    # a NEW block built by value: the mesh's own fields from the record, the
+    # design's three (DESIGN_KEYS) from the store — a design file carrying an id or a
+    # public name (an older store) never renames the mesh
+    kept = {k: v for k, v in record.superbrand.to_dict().items() if k not in DESIGN_KEYS}
+    record.superbrand = Superbrand.from_dict({**kept, **design})
     record.copied_from = {"design": name, "date": date}
 
 
@@ -1079,11 +1127,17 @@ def main(argv: list[str] | None = None) -> int:
             print(f"  - {pr}")
         print("ok" if not problems else f"{len(problems)} problem(s)")
         return 0 if not problems else 1
-    # profile: refused values write NO file
+    # profile: a record that validate (and so `up`) refuses writes NO file either —
+    # otherwise this verb would be an unchecked way to a profile the builders source
+    # — and nor does a value outside the profile's character set. Every reason is
+    # printed, both kinds, then nothing is written.
+    text = ""
     try:
         text = builder_profile(rec)
     except ProfileRefused as e:
-        for pr in e.problems:
+        problems += e.problems
+    if problems:
+        for pr in problems:
             print(f"[refused] {pr}", file=sys.stderr)
         print("[refused] no profile written", file=sys.stderr)
         return 1

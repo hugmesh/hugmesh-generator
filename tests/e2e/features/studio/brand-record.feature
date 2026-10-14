@@ -70,3 +70,20 @@ Feature: One brand record drives every brand's look and ways on every start path
     When I ask the Docker mesh plan for Tor on the command line against the brand record
     Then the command failed
     And the command output contains "the brand record says this mesh has no Tor address, but --with-tor was given"
+
+  # show-record exists to say what the running mesh does. The stack node publishes
+  # each own sign-in on a port by its position in the GIVEN list, so the record must
+  # list them in that order too: zed then alpha is 8001 then 8002 in both verbs.
+  Scenario: show-record and the plan give each own sign-in the same port, in the order given
+    When I show the brand record and print the Docker mesh plan from two own sign-ins named in reverse alphabetical order in fresh Studio processes
+    Then the command succeeded
+    And the record output and the plan give the same sign-in port to each own sign-in, 8001 then 8002
+
+  # D14 (the production hold) is another lane's and is not built yet. The plan is the
+  # confirm-before-run text, so it may say "held" ONLY when the Makefile reads the
+  # knob; the step reads the Makefile itself, so this flips the day the hold lands.
+  Scenario: the plan tells a production operator the truth about the Tor hold
+    When I print the Docker mesh plan for a production mesh from the brand record in a fresh Studio process
+    Then the command succeeded
+    And the command output contains "TOR=on"
+    And the plan says the Tor address is held until Go live exactly when the Makefile reads TOR_HOLD
