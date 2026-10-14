@@ -4089,7 +4089,15 @@ cp "${SHARED_SPECS}/etc/headscale/policy.bootstrap.hujson" "${SYSROOT}/etc/heads
 cp "${SHARED_SPECS}/etc/keys-provision/provision.sh"  "${SYSROOT}/usr/sbin/keys-provision"; chmod +x "${SYSROOT}/usr/sbin/keys-provision"
 mkdir -p "${SYSROOT}/usr/local/sbin"
 cp "${SHARED_SPECS}/usr/local/sbin/hugmesh-backup"  "${SYSROOT}/usr/local/sbin/hugmesh-backup"; chmod +x "${SYSROOT}/usr/local/sbin/hugmesh-backup"
-fi   # ! UNAFFILIATED (headscale/keys-provision/backup platform tools)
+# Opt-in host-binary auto-update (binpkg deltas from the tailnet binhost): the SAME poller
+# + boot oneshot build-rpi5-stage4.sh and build-frite-stage4.sh bake. Without this
+# provision_update() takes its "poller not baked" branch and only stages
+# /etc/hugmesh/cron-update.staged. Plumbing only: the poller is DEFAULT-OFF and does
+# nothing until a superadmin sets enabled:true. Platform machinery (reads /etc/hugmesh),
+# so it stays inside this ! UNAFFILIATED block; the runlevel links below are gated alike.
+cp "${SHARED_SPECS}/usr/local/sbin/hugmesh-update"  "${SYSROOT}/usr/local/sbin/hugmesh-update"; chmod +x "${SYSROOT}/usr/local/sbin/hugmesh-update"
+cp "${SHARED_SPECS}/etc/init.d/hugmesh-update"      "${SYSROOT}/etc/init.d/hugmesh-update";      chmod +x "${SYSROOT}/etc/init.d/hugmesh-update"
+fi   # ! UNAFFILIATED (headscale/keys-provision/backup/update platform tools)
 # UNAFFILIATED keeps only growroot (first-boot .img root expansion — generic).
 if ${UNAFFILIATED}; then _base_svcs="growroot"; else _base_svcs="containerd kubelet headscale tailscaled keys-provision growroot"; fi
 for svc in ${_base_svcs}; do
@@ -4874,6 +4882,8 @@ if ${ROLE_CLIENT}; then
         SVCS=(sshd NetworkManager cronie haveged growroot auditd local dbus elogind display-manager)
     else
         SVCS=(sshd NetworkManager cronie haveged growroot keys-provision auditd local dbus elogind display-manager)
+        # Opt-in auto-update oneshot (client array): plumbing, default-off poller.
+        SVCS+=(hugmesh-update)
     fi
     # gui-libs/display-manager-init's /etc/init.d/display-manager reads this to decide
     # WHICH DM to launch; lightdm ships no OpenRC service. Without it the service falls
@@ -4928,6 +4938,9 @@ else
     # nftables backstop (hugmesh-firewall-reconcile) owns the host firewall
     # (tests/qemu/assertions.sh keys its firewalld gate on exactly this).
     SVCS=(sshd NetworkManager cronie haveged growroot keys-provision hugmesh-firewall-reconcile hugmesh-coturn-firewall hugmesh-go-live-reconcile containerd kubelet auditd local)
+    # Opt-in auto-update oneshot (host array): plumbing, default-off poller. Gated like
+    # the bake: an --unaffiliated image carries no poller, so a link would dangle.
+    ${UNAFFILIATED} || SVCS+=(hugmesh-update)
     ${ROLE_HEADSCALE} && SVCS+=(headscale)
 fi
 ${SKIP_MESH} || ${SKIP_TAILSCALE} || SVCS+=(tailscaled)
