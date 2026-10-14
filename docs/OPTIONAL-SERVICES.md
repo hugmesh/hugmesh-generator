@@ -400,8 +400,9 @@ Internal mTLS / `svc.cluster.local` SANs are unaffected.
 > That is what "no hardcoded `30-*`/`50-*` app forces a service on" means in practice.
 > The hardcoded `30-*`/`50-*`/`52-*`/`53-*` Applications stay the build-time *owners* of
 > the surviving workloads. Moving *runtime ownership* to the ApplicationSet, so an admin
-> can flip a slug on a live cluster, means deleting the hardcoded apps and enabling the
-> §7.1 reconciler. That is the remaining cross-repo step (§10). The build-time
+> can flip a slug on a live cluster, means moving each slug's ownership to the
+> ApplicationSet (not simply deleting the hardcoded apps: §10.3 derives why) and enabling
+> the §7.1 reconciler. That is the remaining cross-repo step (§10). The build-time
 > *exclusion* requirement is fully met today.
 
 ArgoCD syncs from the repo, not the baked copy, so live add/remove uses the **runtime
@@ -418,9 +419,11 @@ model**, not baked-file surgery:
 
   > **Cut-over:** while the hardcoded `apps/30-*`/`50-*` Applications exist, the
   > ApplicationSet ships with every element `installed: "false"`, so it creates nothing and
-  > cannot duplicate an Application name. The cut-over deletes the hardcoded apps and
-  > lets the ApplicationSet own them (mirroring the ConfigMap into its `elements`). That
-  > step makes runtime add/remove fully live.
+  > cannot duplicate an Application name. The cut-over hands each slug's directory from its
+  > hardcoded owner to the ApplicationSet (mirroring the ConfigMap into its `elements`),
+  > and it is not a plain delete: one element covers one directory, the generated name
+  > differs, and neither side carries a finalizer. §10.3 derives the per-slug matrix and the
+  > order for a running cluster. That step makes runtime add/remove fully live.
 
 - **UI hide/show** uses the federation-api `OverrideService` kill-switch
   (`/api/federation/overrides`, ROLE_ADMIN). It flips
@@ -963,7 +966,7 @@ elements: 14 (single-app 8, multi-app 3, runtime-only 3)
 finalizers on the hardcoded owners: none
 <!-- cutover-matrix:end -->
 
-**State on main (re-measured 2026-10-14, origin/main 702b590d).**
+**State on main (re-measured 2026-10-14, origin/main 5f450a48).**
 
 * The build-time prune governs a device: `bootstrap/bootstrap.sh` applies the baked
   `apps/` tree (commit `a08484f8`; `tests/cluster/test-bootstrap-applies-baked-apps.sh`
@@ -1026,7 +1029,8 @@ finalizers on the hardcoded owners: none
    (`Fabric8OptionalServiceApplicationSetPatcher.applyDesiredToElements` copies every
    other key), but the roots ignore `/spec/generators/0/list/elements`, so a live element
    list would lack the new key while the template (`missingkey=error`) requires it.
-   Use `index . "wave"` in the template, never `.wave`.
+   Use `index . "wave"` in the template, never `.wave`. NOT VERIFIED against a live
+   ArgoCD: that `index . "wave"` is tolerated under `missingkey=error`.
 7. *Name and file consumers break.* Found by `grep -rna` over every owner and orphan file
    name in the matrix (plain `grep` skips a file that holds a NUL byte and reports a miss).
    Functional consumers, which act on a name or file and would change behaviour:
