@@ -11,7 +11,7 @@
 # WHAT THIS PINS (all derived by tests/scripts/optional_services_cutover_matrix.py from
 # optional-services.yaml + apps/13a + apps/*.yaml; no slug, path or count is hard-coded):
 #   A  the checker's invariants hold on the real tree: I1 element dir exists strictly
-#      inside the tree (resolved: '.', 'specs/..' and an outbound symlink fail), I2 no
+#      inside the tree (resolved: '.', 'specs/..', an outbound symlink and a leading '..' fail), I2 no
 #      cross-slug ownership, I3 registry apps exist and parse, I4 the slug has an owner,
 #      I5 namespaces agree, I6 no directory claimed twice (within and across elements,
 #      by RESOLVED path), I7 registry entry, derived template/selector keys and the string
@@ -367,6 +367,21 @@ d="$(stage i1d)"
 mutate "${d}/${APPSET_REL}" "s#(slug: ${rslug},[[:space:]]*path: )${rpath//\//\\/}#\\1..#"
 redset i1d "runtime-only ${rslug} given path '..' (an existing directory OUTSIDE the tree)" "I1" 'empty, absolute, the tree root or leaves the tree .resolves to \.\.\)'
 
+d="$(stage i1k)"
+# leaves the tree by '..' and comes back in by the checkout directory's own NAME: it
+# resolves inside the tree here, and not on a checkout with another name
+mutate "${d}/${APPSET_REL}" "s#(slug: ${rslug},[[:space:]]*path: )${rpath//\//\\/}#\\1../${d##*/}/${rpath//\//\\/}#"
+redset i1k "runtime-only ${rslug} given '../<checkout dir name>/<its dir>' (resolves INSIDE the tree on this machine)" "I1" 'leaves the tree'
+
+# a registry that is gone: the checker must say it cannot derive the matrix and exit 1,
+# not fall through to a pass
+d="$(stage nd1)"
+rm -f "${d}/${REG_REL}"
+o="$(python3 "${CHK}" --root "${d}" check 2>&1)"; rc2=$?
+if [ "${rc2}" -eq 1 ] && printf '%s\n' "${o}" | grep -E '^FAIL cannot derive the matrix' >/dev/null; then
+    ok "NC nd1: a missing registry -> FAIL cannot derive the matrix, rc=1"
+else bad "NC nd1: a missing registry was not reported as underivable (rc=${rc2}): $(printf '%s' "${o}" | tail -1)"; fi
+
 d="$(stage i2)"
 cat > "${d}/specs/cluster/apps/99-stray-owner.yaml" <<YML
 apiVersion: argoproj.io/v1alpha1
@@ -655,8 +670,9 @@ else bad "E2 comparator is not sensitive: owned ${ow} -> ${ow2} (free ${fr2}), m
 # `path: <dir>` line (comments stripped); the checker resolves the path. So an owner spelled
 # any other way is owned for the checker and invisible to the guard, which would then lift
 # and flip the element to "true" over a directory something still owns. That gap is in the
-# build guard, not closed by this suite: E1 keeps the REAL tree free of such a spelling, and
-# these plants prove E1 would turn red on one (each must report at least one mismatch). If
+# build guard, not closed by this suite: E1 keeps the REAL tree free of such a spelling (when
+# the suite runs, which is post-merge only), and these plants prove E1 would turn red on one
+# (each must report at least one mismatch; not which slug). If
 # the guard is ever made to resolve paths these go red; flip them to expect 0 then.
 e3() { # <name> <spelling-of-path-line> [pre-command]
     local dd; dd="$(stage "$1")"

@@ -423,7 +423,8 @@ model**, not baked-file surgery:
   > hardcoded owner to the ApplicationSet (mirroring the ConfigMap into its `elements`),
   > and it is not a plain delete: one element covers one directory, the generated name
   > differs, and neither side carries a finalizer. §10.3 derives the per-slug matrix and the
-  > order for a running cluster. That step makes runtime add/remove fully live.
+  > order for a running cluster. Runtime remove is not live until the finalizer and
+  > stateful-data decision in §10.3 point 3 is made.
 
 - **UI hide/show** uses the federation-api `OverrideService` kill-switch
   (`/api/federation/overrides`, ROLE_ADMIN). It flips
@@ -930,7 +931,9 @@ tree. The invariants, each with an isolating negative control in the suite:
 
 * I1 every element path is a non-empty, relative path whose resolved location (symlinks and
   `..` followed) is an existing directory strictly inside the tree: `""`, `.`, `./` and
-  `specs/..` all resolve to the tree root and fail, as does a symlink pointing outside. The
+  `specs/..` all resolve to the tree root and fail, as does a symlink pointing outside, and
+  so does any path that begins with `..` (`../<checkout dir name>/x` resolves back inside
+  the tree on one machine and nowhere on another). The
   claims below (I2, I4, I6) compare that same resolved location, so two spellings of one
   directory, or a symlink and its target, are one directory
 * I2 every hardcoded owner of an element's directory is one of THAT slug's registry apps
@@ -938,7 +941,8 @@ tree. The invariants, each with an isolating negative control in the suite:
 * I3 every registry app of an element slug exists and parses
 * I4 a slug that has registry apps has an owner for the element directory
 * I5 the element namespace equals the owner's destination namespace
-* I6 no directory is claimed twice: per directory, the hardcoded owners plus the elements
+* I6 no directory is claimed twice (the same resolved directory; an element naming an
+  ancestor or a descendant of another's directory is not checked): per directory, the hardcoded owners plus the elements
   with `installed:"true"` number at most one, and no two elements name the same directory
   (even when both are `"false"`: flipping either would double-manage it)
 * I7 every element slug has a registry entry; every element carries every key the template
@@ -975,7 +979,13 @@ elements: 14 (single-app 8, multi-app 3, runtime-only 3)
 finalizers on the hardcoded owners: none
 <!-- cutover-matrix:end -->
 
-**State on main (re-measured 2026-10-14, origin/main 5f450a48).**
+**State on main (re-measured 2026-10-14).**
+
+`_opt_appset_cutover_done` matches a literal `path: <dir>` line, while the checker resolves
+paths. The suite compares the two on every slug of the real tree (E1: they agree on all
+of them), so an owner spelled with a trailing slash, `./`, an interior `..`, a symlink or a
+flow-style `source:` turns the suite red; the guard itself is not changed here, and the
+suite runs post-merge only (see the end of this section).
 
 * The build-time prune governs a device: `bootstrap/bootstrap.sh` applies the baked
   `apps/` tree (commit `a08484f8`; `tests/cluster/test-bootstrap-applies-baked-apps.sh`

@@ -776,15 +776,15 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # RUNNING this file on the tree with the suite wired (GUARD_PREMERGE=0), not computed:
 #     198 of 222 suites are named by a pull_request-triggered workflow
 #     PASS the ungated SET matches its pin exactly (24 suite(s))
-# 198 of 223 -> 198 of 224 and ungated SET 25 -> 26 on 2026-10-14 for the 13a cut-over
-# matrix (the 222 / 24 above is the figure at #629's own merge; origin/main measures
-# 223 / 25 when run, one suite later): tests/scripts/test-optional-services-cutover-matrix.sh
+# 198 of 224 -> 198 of 225 and ungated SET 26 -> 27 on 2026-10-14 for the 13a cut-over
+# matrix (origin/main e3e95369 measures 224 / 26 when run; the 222 / 24 above is the figure
+# at #629's own merge): tests/scripts/test-optional-services-cutover-matrix.sh
 # is a new suite that is NOT named by a pull_request workflow (it is wired post-merge by .gitlab-ci.yml and
 # recorded in PREMERGE_UNGATED above), so the denominator rose and the gated count did
-# not. MEASURED by RUNNING this file on the tree (GUARD_PREMERGE=0), not computed:
-#     198 of 224 suites are named by a pull_request-triggered workflow
-#     PASS the ungated SET matches its pin exactly (26 suite(s))
-# tests/scripts/run-ungated-lane.sh's header counts (26 of 26, 8 of 26) were taken from
+# not. MEASURED by RUNNING this file on the merge with e3e95369 (GUARD_PREMERGE=0), not computed:
+#     198 of 225 suites are named by a pull_request-triggered workflow
+#     PASS the ungated SET matches its pin exactly (27 suite(s))
+# tests/scripts/run-ungated-lane.sh's header counts (27 of 27, 8 of 27) were taken from
 # its E2E_UNGATED_DRY_RUN=1 output for both sets. The "stays 21/22" lines in the entries
 # above are history and are left as written.
 PREMERGE_BASELINE="${GUARD_PREMERGE:-198}"

@@ -34,7 +34,8 @@ invariant and no other), so a dead check cannot hide behind a live one:
   I1 every element path is a non-empty, relative path whose RESOLVED location (symlinks and
      `..` followed) is an existing directory strictly inside the tree. The tree root itself
      fails: '', '.', './' and 'specs/..' all resolve to it and would pass isdir; so does a
-     symlink whose target is outside the tree. Claims (I2, I4, I6) compare the same resolved
+     symlink whose target is outside the tree, and any path that BEGINS with '..' (it can
+     resolve back inside on one checkout directory name and nowhere on another). Claims (I2, I4, I6) compare the same resolved
      key, so two spellings, or a symlink and its target, are one directory
   I2 every owner of an element's path is one of THAT slug's registry apps (no cross-slug
      ownership of a directory)
@@ -207,7 +208,11 @@ def derive(root):
         path = el.get("path") or ""
         reg_apps = [("specs/cluster/" + a) for a in (svc.get("apps") or [])]
         key = ckey(root, path)
-        if not path or os.path.isabs(path) or key == "." or key == ".." or key.startswith("../"):
+        # a LEADING '..' is refused lexically, whatever it resolves to here: '../<this
+        # checkout's directory name>/x' resolves back inside the tree on this machine, and
+        # ArgoCD clones the repo into a directory with another name
+        if (not path or os.path.isabs(path) or key == "." or key == ".." or key.startswith("../")
+                or os.path.normpath(path).split("/")[0] == ".."):
             errors.append("I1 %s: element path %r is empty, absolute, the tree root or leaves the tree (resolves to %s)"
                           % (slug, path, key or "nothing"))
         elif not os.path.isdir(os.path.join(root, path)):
