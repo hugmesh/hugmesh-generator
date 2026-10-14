@@ -284,6 +284,31 @@ emerge --ask dev-python/urwid
 
 (everywhere else: `pip install urwid`.)
 
+### Go-Live: export a domain's repositories to a GitHub org (optional step)
+
+Every domain row (the Domains step, both faces) has a **GitHub org** cell: an org slug,
+never a token. When some domain names one, the Go-Live wizard gains a step **Export to
+GitHub org** (`python -m hugmesh_studio --go-live`; `x` on the TUI's go-live plan screen)
+that copies the domain's repositories — the Code-folders map's apps plus the Java build
+chain and the generator — into that organisation as fresh single-commit snapshots,
+renamed `hugmesh-<name> -> <brand>-<name>` (`exampleorg -> example`), with the org path
+segments and repository names rewritten inside files (Java packages, Maven groupIds,
+Angular scopes and label keys are deliberately left alone), and creates a
+`<domain>.github.io` site repository whose workflows clone every exported repository and
+run what each one's own CI runs. Plan is the default and touches nothing; Apply needs the
+org name typed (GUI/TUI) or `--apply` (CLI); nothing is ever force-pushed or deleted.
+
+```sh
+python -m hugmesh_studio --org-export PLAN  --domain mesh.example --org exampleorg --source-dir ~/src
+python -m hugmesh_studio --org-export PLAN  --config export.json --rename-map extra.json --out /tmp/export
+python -m hugmesh_studio --org-export APPLY --config export.json --apply
+```
+
+The engine is `core/org_export.py` (Qt-free; every git/gh call through one injected runner,
+so `tests/test_org_export.py` proves it against bare repositories and a fake `gh`). The
+full flow, the rename map's format and what a person still has to set up are in
+[docs/GOLIVE-ORG-EXPORT.md](../docs/GOLIVE-ORG-EXPORT.md).
+
 ## Package a Windows .exe
 
 The PyInstaller spec is committed at `packaging/hugmesh-studio.spec`; the MSI, the Flatpak
