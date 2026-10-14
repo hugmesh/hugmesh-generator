@@ -465,7 +465,7 @@ Classification:
 | D12 | Stage vocabulary: `Phase N:` prefixes on all 7 ARM builders, bare verbs on x86 | all | **family convention**, never reconciled | **MUST-UNIFY** | `progress-tables.json` labels |
 | D13 | "Rebrand baked config" banner exists on x86+rpi5 only, though **all 8** call `rebrand_sysroot` | jetson, frite, orangepi5, opiz2, opiz2w, opiz3 | **drift** — a real stage that is invisible on 6 platforms | **MUST-UNIFY** | call sites: jetson :1358, frite :1343, opi5 :1370, z2 :1432, z2w :1443, z3 :1446 |
 | D14 | "Brand desktop image" / "Stage egress VPN" stages exist only on x86 | x86 | x86 is the only desktop-branding + egress-VPN platform today (`BRANDING_THEME` 11 hits, `EGRESS_VPN` 15 hits, 0 elsewhere) | **MAY-DIFFER-BUT-MUST-BE-NAMED-CONSISTENTLY** (declare as N/A per platform, do not omit) | grep counts per builder |
-| D15 | "Restore toolchain static libs from seed" only on x86 | x86 | **genuine** — native chroot GPU source-compile needs the seed's static libs; a cross build never runs target binaries | **GENUINELY-PLATFORM-SPECIFIC** | x86 :4161 |
+| D15 | "Restore toolchain static libs from the seed this build system came from" only on x86 | x86 | **genuine** — a native chroot build links against the sysroot, whose static libraries every build's clean step deletes, so a `--resume` of ANY role restores them (GPU roles only until hugmesh-generator#659) from the seed the build system was extracted from, verified against its signed DIGESTS first unless it is the seed this run already verified; a cross build links against the crossdev toolchain's own sysroot (`aarch64-unknown-linux-gnu-gcc -print-sysroot` = `/usr/aarch64-unknown-linux-gnu`), never the image sysroot | **GENUINELY-PLATFORM-SPECIFIC** | x86 §4b; `scripts/_builder-resume-lib.sh` |
 | D16 | `ROOT=/` + chroot (x86) vs `ROOT=${SYSROOT}` (ARM), producing the ` for/to <sysroot>` counter tail | all | **genuine** — cross vs native | **GENUINELY-PLATFORM-SPECIFIC** (already handled by PR #483) | `emerge_packages.py:165-180` |
 | D17 | `--with-bdeps=n` + `--root-deps=rdeps` on ARM only | all cross | **genuine** — build-time deps belong to the host, not the target sysroot; `--root-deps` is injected by the crossdev wrapper | **GENUINELY-PLATFORM-SPECIFIC** | `/usr/bin/aarch64-unknown-linux-gnu-emerge` tail |
 | D18 | u-boot (`Phase 3.5`) on frite+orangepi\*, extlinux on jetson, GRUB-EFI folded into the `.img` stage on x86, none on rpi5 (firmware blobs) | all | **genuine** — different boot chains | **MAY-DIFFER-BUT-MUST-BE-NAMED-CONSISTENTLY** (one canonical "Bootloader / firmware" stage, platform-specific detail in the sub-label) | banner tables §1.3 |
@@ -498,7 +498,7 @@ platforms.
 | 7 | `install-specs` | Install spec files | — |
 | 8 | `brand-image` | Brand desktop image | N/A on non-desktop boards — say so |
 | 9 | `stage-egress-vpn` | Stage egress VPN | N/A where unsupported — say so |
-| 10 | `restore-toolchain` | Restore toolchain static libs | N/A on cross builds (no native GPU compile) |
+| 10 | `restore-toolchain` | Restore toolchain static libs | N/A on cross builds (the cross toolchain links against its own sysroot, never the image's); on x86 it runs for every role whose reused build system lacks them, not only GPU roles (#659) |
 | 11 | `emerge-system` | Emerge `@system` | native `@world` on x86; cross `@system` on ARM |
 | 12 | `emerge-payload` | Emerge role payload | — |
 | 13 | `mesh-vpn` | Install mesh VPN | — |
