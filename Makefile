@@ -399,7 +399,7 @@ ORANGEPI4LTS_PASS    := ORANGEPI4LTS_FLAVOR='$(ORANGEPI4LTS_FLAVOR)'
         playwright-deps e2e e2e-list ci ci-quick docker-image ensure-image image-gen-docker-image \
         docker docker-build local prod \
         stack-clone stack-mastodon-env stack-m2-bootstrap stack-certs stack-build stack-up stack-halt stack-down stack-logs stack-ps stack-e2e stack-e2e-list \
-        stack-onion stack-e2e-tor stack-tor-mechanism-check \
+        stack-onion stack-e2e-tor stack-e2e-tor-domains stack-tor-mechanism-check \
         kind-images kind-up kind-e2e kind-e2e-mfa kind-mfa-posture kind-down kind-honesty \
         kind-metrics-check kind-addon-check kind-tor kind-tor-down kind-tor-status kind-e2e-tor kind-tor-check \
         view view-list view-stop view-trust view-untrust view-honesty \
@@ -1665,6 +1665,15 @@ ANUBIS          ?=
 # a recorded residual (#586), not a guarantee this knob makes.
 TOR             ?=
 TOR_SOCKS_HOST_PORT ?= 9050
+# TOR_ONION_DOMAINS="<slug>=<tenant> ..." — per-DOMAIN onions (hugmesh-generator#582,
+# decision 68 = A): one more HiddenService per entry, fronting the SAME gateway, each
+# registered in the fe-gateway's host map (hugmesh-gateway#38) so its onion Host
+# serves <tenant>'s brand. The Studio sets it from the Domain services step's ‘Tor
+# front door’ rows; BRAND_B=1 TOR=1 adds `brandb=brandb` on its own, so
+#   make stack-up TOR=1 BRAND_B=1   mints TWO onions: the mesh's (default) and brand B's
+# (`ls tests/stack/tor-onion/` -> hostname + brandb.hostname). Does nothing without
+# TOR=1, and a TOR=1 stack with no Tor domain is the one-onion stack it always was.
+TOR_ONION_DOMAINS ?=
 # TTS=1 — edge-ai-tts (Piper TTS + visemes; compose.edge-ai-tts.yaml, DEFAULT-OFF)
 TTS             ?=
 # POISONER=1 — the AI MEDIA CLOAK worker (hugmesh-media-poisoner;
@@ -1832,6 +1841,23 @@ STACK_TOR_ANUBIS_UPSTREAM := hugmesh-anubis:8923
 # ANUBIS_COOKIE_SECURE wins, like TOR_ONION_UPSTREAM.
 STACK_TOR_ANUBIS_COOKIE_ENV := $(if $(strip $(ANUBIS_COOKIE_SECURE)),, ANUBIS_COOKIE_SECURE='false')
 STACK_TOR_ENV := $(if $(strip $(TOR)), TOR_SOCKS_HOST_PORT='$(TOR_SOCKS_HOST_PORT)'$(if $(strip $(ANUBIS)),$(if $(strip $(TOR_ONION_UPSTREAM)),, TOR_ONION_UPSTREAM='$(STACK_TOR_ANUBIS_UPSTREAM)')$(STACK_TOR_ANUBIS_COOKIE_ENV),),)
+# #582 — per-domain onions. STACK_TOR_DOMAINS is the list a TOR=1 stack mints: the
+# caller's TOR_ONION_DOMAINS plus brand B's when BRAND_B=1; EMPTY without TOR=1. When
+# it is non-empty — and only then — two things are added, together:
+#   * TOR_ONION_DOMAINS='<the list>' in the stack env (STACK_TOR_DOMAINS_ENV);
+#   * `-f tests/stack/compose.tor-domains.yaml` on the `up` (STACK_TOR_DOMAINS_FLAGS),
+#     the overlay that gives hugmesh-tor the per-domain key volume and hands the
+#     fe-gateway the onion host map (APP_TENANCY_HOSTS_FILE). With the map set the
+#     gateway REFUSES an onion the map does not name, so hugmesh-tor registers the
+#     mesh's own onion as `default` first (the hugmesh-gateway#39 writer contract).
+# Both are empty for a stack with no Tor domain, so its env and its compose argv are
+# byte-identical to before (TOR=1 alone included). Its own variable, joined into
+# STACK_ENV on its first line, so STACK_TOR_ENV above and the STACK_ENV tail keep the
+# exact spelling tests/stack/test-tor-flip-wiring.sh's mutators anchor on.
+STACK_TOR_DOMAINS_COMPOSE := tests/stack/compose.tor-domains.yaml
+STACK_TOR_DOMAINS := $(if $(strip $(TOR)),$(strip $(TOR_ONION_DOMAINS) $(if $(strip $(BRAND_B)),brandb=brandb,)),)
+STACK_TOR_DOMAINS_ENV := $(if $(STACK_TOR_DOMAINS), TOR_ONION_DOMAINS='$(STACK_TOR_DOMAINS)',)
+STACK_TOR_DOMAINS_FLAGS := $(if $(STACK_TOR_DOMAINS), -f $(STACK_TOR_DOMAINS_COMPOSE),)
 # MFA OPERATIONAL FLIP, opt-in per run — issue #47, following the PHPBB=1/AKKOMA=1
 # knob precedent. ONE switch, three lanes, and it flips ONLY app.mfa.enabled — the
 # freshness window keeps its default (600000) and the privileged floor stays on its
@@ -1889,7 +1915,7 @@ STACK_BRAND_B_ENV := $(if $(strip $(BRAND_B)),APP_TENANCY_ISSUERS='$(CASDOOR_ISS
 # a `:=` immediate assignment, so a variable referenced there but defined later
 # expands to EMPTY and the knob silently does nothing.
 STACK_POISONER_ENV := $(if $(strip $(POISONER)),MEDIA_POISONING_ENABLED='true' MEDIA_POISONING_WORKER_URL='http://hugmesh-media-poisoner:8080' MEDIA_POISONING_DEFAULT_MODE='$(POISON_MODE)' MEDIA_POISONING_FALLBACK_MODE='$(POISON_FALLBACK)' ,)
-STACK_ENV := $(STACK_BRAND_B_ENV)$(STACK_POISONER_ENV)$(STACK_OIDC_ENV)$(STACK_THEME_ENV) \
+STACK_ENV := $(STACK_BRAND_B_ENV)$(STACK_POISONER_ENV)$(STACK_OIDC_ENV)$(STACK_THEME_ENV)$(STACK_TOR_DOMAINS_ENV) \
              STACK_SRC='$(STACK_SRC)' CASDOOR_ISSUER_URI='$(CASDOOR_ISSUER)' \
              PUBLIC_HOST_PORT='$(PUBLIC_HOST_PORT)' \
              PUBLIC_HTTPS_PORT='$(PUBLIC_HTTPS_PORT)' \
@@ -2057,7 +2083,7 @@ stack-build: stack-clone stack-certs stack-m2-check $(STACK_SOCIAL_DEP) ## build
 stack-up: stack-clone stack-certs stack-m2-check $(STACK_SOCIAL_DEP) ## clone -> build -> run the FULL stack (ENV=test|prod; SOCIAL=1 adds matrix/mastodon)
 	@echo "==> Local stack: ENV=$(ENV), issuer=$(CASDOOR_ISSUER), host port=$(PUBLIC_HOST_PORT), social=$(if $(strip $(SOCIAL)),on,off)$(if $(strip $(MFA)), mfa=ON(explicit),)$(if $(strip $(MFA_FLOOR)), mfa-floor=ON,)$(if $(wildcard $(STACK_M2_ENV)), m2-registry=on,)"
 	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_M2_FLAGS) $(STACK_PROFILE) $(STACK_ALT_PROFILE) $(STACK_TOR_PROFILE) $(STACK_GAMES_PROFILE) $(STACK_BRAND_B_PROFILE) $(STACK_OWN_CASDOOR_FLAGS) $(STACK_LIMITS_FLAGS) $(STACK_EGRESS_FLAGS) build
-	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_M2_FLAGS) $(STACK_PROFILE) $(STACK_ALT_PROFILE) $(STACK_TOR_PROFILE) $(STACK_GAMES_PROFILE) $(STACK_BRAND_B_PROFILE) $(STACK_OWN_CASDOOR_FLAGS) $(STACK_LIMITS_FLAGS) $(STACK_EGRESS_FLAGS) up -d
+	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_M2_FLAGS) $(STACK_PROFILE) $(STACK_ALT_PROFILE) $(STACK_TOR_PROFILE)$(STACK_TOR_DOMAINS_FLAGS) $(STACK_GAMES_PROFILE) $(STACK_BRAND_B_PROFILE) $(STACK_OWN_CASDOOR_FLAGS) $(STACK_LIMITS_FLAGS) $(STACK_EGRESS_FLAGS) up -d
 	@echo "==> Up. Front door: http://localhost:$(PUBLIC_HOST_PORT)  |  https://localhost:$(PUBLIC_HTTPS_PORT)  | Casdoor: http://localhost:8000"
 	@echo "    (https uses the per-machine CA $(STACK_TLS_DIR)/ca.crt - import it to trust, or accept the browser warning)"
 	@echo "    Logs: make stack-logs   Down: make stack-down"
@@ -2115,7 +2141,7 @@ stack-down: ## stop the local stack and DROP ITS VOLUMES (destroys identity/room
 	# knobs): `down` must reap containers started by an EARLIER `up` whose knobs
 	# this invocation does not repeat, or `make stack-down` leaves the phpbb/
 	# akkoma containers and volumes orphaned while reporting success.
-	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) -f $(STACK_EGRESS_COMPOSE) --profile social --profile tor --profile anubis --profile phpbb --profile akkoma --profile games --profile brandb --profile edge-ai-tts --profile media-poisoner --profile egress-vpn $(STACK_OWN_CASDOOR_DOWN_FLAGS) down -v
+	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) -f $(STACK_EGRESS_COMPOSE) -f $(STACK_TOR_DOMAINS_COMPOSE) --profile social --profile tor --profile anubis --profile phpbb --profile akkoma --profile games --profile brandb --profile edge-ai-tts --profile media-poisoner --profile egress-vpn $(STACK_OWN_CASDOOR_DOWN_FLAGS) down -v
 
 # stack-down PLUS the disk: the ~28 images this stack BUILT (`--rmi local` — only
 # images with no registry name, i.e. ours; never the pulled postgres/cassandra/
@@ -2127,7 +2153,7 @@ stack-down: ## stop the local stack and DROP ITS VOLUMES (destroys identity/room
 stack-clean: ## stop the local stack AND remove the images it built + the m2 registry/cache
 	@echo "==> Removing the local stack: containers, volumes, and the images IT built."
 	@echo "    Pulled base images (postgres/cassandra/mastodon/...) are KEPT."
-	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) -f $(STACK_EGRESS_COMPOSE) --profile social --profile tor --profile anubis --profile phpbb --profile akkoma --profile games --profile brandb --profile edge-ai-tts --profile media-poisoner --profile egress-vpn $(STACK_OWN_CASDOOR_DOWN_FLAGS) down -v --rmi local --remove-orphans
+	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) -f $(STACK_EGRESS_COMPOSE) -f $(STACK_TOR_DOMAINS_COMPOSE) --profile social --profile tor --profile anubis --profile phpbb --profile akkoma --profile games --profile brandb --profile edge-ai-tts --profile media-poisoner --profile egress-vpn $(STACK_OWN_CASDOOR_DOWN_FLAGS) down -v --rmi local --remove-orphans
 	@docker rm -f $(M2_REGISTRY_NAME) >/dev/null 2>&1 || true
 	@rm -f $(STACK_M2_ENV)
 	@echo '==> Clean. Next bring-up is a COLD build: run "make stack-m2-bootstrap", then "make stack-up".'
@@ -2276,6 +2302,17 @@ stack-e2e-tor: ## run the @via:onion sign-in over the stack's Tor .onion (needs 
 	@$(E2E_READY) || exit 2
 	SNAP_BASE_URL='https://localhost:$(PUBLIC_HTTPS_PORT)' TOR_SOCKS_HOST_PORT='$(TOR_SOCKS_HOST_PORT)' \
 	  bash tests/e2e/run.sh --bdd --env docker --via onion $(if $(strip $(BDD_TAGS)),--tags '$(BDD_TAGS)',) $(BDD_ARGS)
+
+# stack-e2e-tor-domains: the PER-DOMAIN onions (hugmesh-generator#582): the
+# @via:onion-domains Gherkin scenario(s), through Tor, on a stack that has a Tor
+# domain — `make stack-up TOR=1 BRAND_B=1` mints brand B's onion beside the mesh's
+# own, and `make stack-seed` seeds brand B's persona. Its own target and tag, not
+# a variant of stack-e2e-tor: a skip fails an onion lane, so the scenario that
+# needs a second onion must never be collected by the lane that has one.
+stack-e2e-tor-domains: ## run the per-domain onion sign-in (#582) over brand B's .onion (needs stack-up TOR=1 BRAND_B=1 + stack-seed)
+	@$(E2E_READY) || exit 2
+	SNAP_BASE_URL='https://localhost:$(PUBLIC_HTTPS_PORT)' TOR_SOCKS_HOST_PORT='$(TOR_SOCKS_HOST_PORT)' \
+	  bash tests/e2e/run.sh --bdd --via onion-domains --env docker $(if $(strip $(BDD_TAGS)),--tags '$(BDD_TAGS)',) $(BDD_ARGS)
 
 # stack-tor-mechanism-check: the host-Tor MECHANISM proof (tests/stack/tor-onion-
 # e2e.sh via its census-named wrapper) — mint a real v3 onion for a loopback
