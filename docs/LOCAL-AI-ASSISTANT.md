@@ -190,6 +190,8 @@ read all of it.
 
 ### 6.1 Give the assistant a copy, never your working checkout
 
+The Studio can do 6.1 and 6.2 for you: the card *Work on this mesh with a local AI agent* on the local-mesh Bring-up page makes this copy and opens the terminal ([studio/README.md](../studio/README.md)).
+
 The assistant gets a scratch clone **with no remote**, so nothing it does can be
 pushed, and nothing it breaks touches your real checkout.
 

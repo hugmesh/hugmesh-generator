@@ -461,6 +461,7 @@ jobs:
             tests/scripts/test-sunshine-fence.sh
             tests/scripts/test-superadmin-bff-reachability.sh
             tests/scripts/test-tools-path-lib.sh
+            tests/scripts/test-tor-export-sync.sh
             tests/scripts/test-tor-node-contract.sh
             tests/scripts/test-x86-fetchcommand-bound.sh
             tests/scripts/test-x86-identity-injection.sh
@@ -819,6 +820,9 @@ jobs:
           # test-optional-netpol-autosync.sh (#617) is here for kubectl kustomize: it
           # renders every git-served overlay the build's prune touched, and FAILS
           # without kubectl.
+          # test-gateway-vanity-domains.sh (hugmesh-generator#582) is here for helm:
+          # it renders the fe-gateway chart with `vanityDomains[i]` parameters exactly
+          # as ArgoCD does, and FAILS (never skips) without helm.
           missing=""
           for b in bash jq openssl python3 git helm kubectl checkpolicy make; do command -v "$b" >/dev/null 2>&1 || missing="$missing $b"; done
           [ -z "$missing" ] || { echo "::error::preflight: missing$missing — suites would silently skip"; exit 1; }
@@ -836,6 +840,7 @@ jobs:
             tests/scripts/test-kind-tor.sh
             tests/scripts/test-tor-onion-ingress.sh
             tests/scripts/test-optional-netpol-autosync.sh
+            tests/scripts/test-gateway-vanity-domains.sh
           "
           rc=0; failed=""; ran=0
           for t in $SUITES; do
