@@ -20,7 +20,7 @@
 # re-learning about. If the array cannot be parsed, this script FAILS (exit 1)
 # rather than running a guessed subset.
 #
-#   E2E_UNGATED_SET=all   (DEFAULT)  every PREMERGE_UNGATED entry — 25 of 25
+#   E2E_UNGATED_SET=all   (DEFAULT)  every PREMERGE_UNGATED entry — 26 of 26
 #                                    today; the runner prints the live count
 #                                    every run and hardcodes no number. Operator
 #                                    decision 32c on #347, 2026-09-17: the
@@ -32,7 +32,7 @@
 #                                    DEFAULT COSTS, below.
 #   E2E_UNGATED_SET=e2e              only the tests/scripts/test-e2e-*.sh
 #                                    entries — the browser/Qt family #246 was
-#                                    written about, 8 of 25 today. This is the
+#                                    written about, 8 of 26 today. This is the
 #                                    old default and is now an explicit opt-in.
 #   E2E_UNGATED_DRY_RUN=1            print the selection and whether a real run
 #                                    would be allowed beside whatever is up, then

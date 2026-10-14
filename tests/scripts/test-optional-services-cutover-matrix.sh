@@ -10,10 +10,12 @@
 #
 # WHAT THIS PINS (all derived by tests/scripts/optional_services_cutover_matrix.py from
 # optional-services.yaml + apps/13a + apps/*.yaml; no slug, path or count is hard-coded):
-#   A  the checker's seven invariants hold on the real tree: I1 element dir exists, I2 no
+#   A  the checker's invariants hold on the real tree: I1 element dir exists strictly
+#      inside the tree (resolved: '.', 'specs/..' and an outbound symlink fail), I2 no
 #      cross-slug ownership, I3 registry apps exist and parse, I4 the slug has an owner,
-#      I5 namespaces agree, I6 no directory claimed twice (within and across elements),
-#      I7 registry entry and template keys present
+#      I5 namespaces agree, I6 no directory claimed twice (within and across elements,
+#      by RESOLVED path), I7 registry entry, derived template/selector keys and the string
+#      value of installed, I8 the generated Application name optional-<slug> is unique
 #   B  the generated matrix block in docs/OPTIONAL-SERVICES.md section 10.3 equals what the
 #      tree derives, so the cut-over plan cannot rot into a hand-written list again
 #   C  a CORRECT cut-over of one single-app slug (owner deleted, registry apps emptied)
@@ -23,7 +25,13 @@
 #   D  negative controls: each breakage, planted in a STAGED copy, must go red. Every
 #      invariant has an ISOLATING control, asserted by the exact SET of invariant ids the
 #      checker reports: a plant that trips I2 alone proves I2 is live, where a regex that
-#      accepts "I2 or I6" is satisfied by whichever invariant happens to survive
+#      accepts "I2 or I6" is satisfied by whichever invariant happens to survive.
+#      D3 pins the DERIVED claims the doc rests on (what the generated Application loses:
+#      owner finalizer, ignoreDifferences, syncOptions; the derived key set; the claim
+#      made by a bare YAML installed: true) by asserting the emitted lines themselves,
+#      because a whole-block DRIFT compare is satisfied by any one of several lines
+#   E  the checker's notion of "owner" and the real build guard's (_opt_appset_cutover_done)
+#      agree on every slug of the real tree
 #
 # It does NOT prove anything about a live ArgoCD (adoption, finalizers, the reconciler
 # keystone): that needs a cluster. It does not edit or wire anything under .github/.
@@ -345,15 +353,15 @@ redset i1a "runtime-only ${rslug} retargeted to a directory that does not exist"
 
 d="$(stage i1b)"
 mutate "${d}/${APPSET_REL}" "s#(slug: ${rslug},[[:space:]]*path: )${rpath//\//\\/}#\\1\"\"#"
-redset i1b "runtime-only ${rslug} given an EMPTY path (join(root, '') is the tree root, which isdir)" "I1" 'empty, absolute'
+redset i1b "runtime-only ${rslug} given an EMPTY path (join(root, '') is the tree root, which isdir)" "I1" 'empty, absolute, the tree root'
 
 d="$(stage i1c)"
 mutate "${d}/${APPSET_REL}" "s#(slug: ${rslug},[[:space:]]*path: )${rpath//\//\\/}#\\1/usr#"
-redset i1c "runtime-only ${rslug} given an ABSOLUTE path that exists on the host" "I1" 'empty, absolute'
+redset i1c "runtime-only ${rslug} given an ABSOLUTE path that exists on the host" "I1" 'empty, absolute, the tree root'
 
 d="$(stage i1d)"
 mutate "${d}/${APPSET_REL}" "s#(slug: ${rslug},[[:space:]]*path: )${rpath//\//\\/}#\\1..#"
-redset i1d "runtime-only ${rslug} given path '..' (an existing directory OUTSIDE the tree)" "I1" 'empty, absolute or leaves'
+redset i1d "runtime-only ${rslug} given path '..' (an existing directory OUTSIDE the tree)" "I1" 'empty, absolute, the tree root or leaves the tree .resolves to \.\.\)'
 
 d="$(stage i2)"
 cat > "${d}/specs/cluster/apps/99-stray-owner.yaml" <<YML
@@ -417,6 +425,217 @@ assert n == 1
 open(p, "w").write(t2)
 PY
 redset i7b "runtime-only ${rslug} removed from the registry while its element stays" "I7" 'has no entry'
+
+# ── I1, the wider class: a path that RESOLVES to the tree root or out of it ──────────
+d="$(stage i1e)"
+mutate "${d}/${APPSET_REL}" "s#(slug: ${rslug},[[:space:]]*path: )${rpath//\//\\/}#\\1.#"
+redset i1e "runtime-only ${rslug} given path '.' (the tree root, spelled without a leading ..)" "I1" 'the tree root'
+
+d="$(stage i1f)"
+mutate "${d}/${APPSET_REL}" "s#(slug: ${rslug},[[:space:]]*path: )${rpath//\//\\/}#\\1./#"
+redset i1f "runtime-only ${rslug} given path './'" "I1" 'resolves to \.\)'
+
+d="$(stage i1g)"
+mutate "${d}/${APPSET_REL}" "s#(slug: ${rslug},[[:space:]]*path: )${rpath//\//\\/}#\\1specs/..#"
+redset i1g "runtime-only ${rslug} given path 'specs/..' (normalises to the tree root)" "I1" 'resolves to \.\)'
+
+d="$(stage i1h)"
+mkdir -p "${WORK}/outside"
+rm -rf "${d:?}/${rpath}"; ln -s "${WORK}/outside" "${d}/${rpath}"
+redset i1h "runtime-only ${rslug}'s directory is a SYMLINK to a directory outside the tree" "I1" 'resolves to \.\./'
+
+d="$(stage i1i)"
+rm -rf "${d:?}/${rpath}"; ln -s "${WORK}/i1i/${r2path}" "${d}/${rpath}"
+redset i1i "runtime-only ${rslug}'s directory is a symlink to ${r2slug}'s (one real directory, two claims)" "I6" 'all name manifest dir'
+
+d="$(stage i6e)"
+mutate "${d}/${APPSET_REL}" "s#(slug: ${rslug},[[:space:]]*path: )${rpath//\//\\/}#\\1specs/cluster/../cluster/${r2path#specs/cluster/}#"
+redset i6e "elements ${rslug} and ${r2slug} name one directory, one spelled with an interior .." "I6" 'all name manifest dir'
+
+d="$(stage i2c)"
+ln -s "${WORK}/i2c/${rpath}" "${d}/specs/cluster/manifests/alias-dir"
+cat > "${d}/specs/cluster/apps/99-stray-owner.yaml" <<YML
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata: {name: stray-owner, namespace: devops}
+spec:
+  project: default
+  source: {repoURL: x, targetRevision: main, path: specs/cluster/manifests/alias-dir}
+  destination: {server: x, namespace: ${rns}}
+YML
+redset i2c "a hardcoded Application names a SYMLINK to runtime-only ${rslug}'s directory (owner matching is on the resolved path)" "I2" 'owns .* but is not among its registry apps'
+
+# ── I7: the value and the derived key set ───────────────────────────────────────────
+d="$(stage i7c)"
+mutate "${d}/${APPSET_REL}" "/slug: ${rslug},/ s#,[[:space:]]*installed: \"false\"##"
+redset i7c "runtime-only ${rslug} loses the installed key (the selector reads it; the template does not render it)" "I7" "lacks key.*installed"
+
+d="$(stage i7d)"
+mutate "${d}/${APPSET_REL}" "/slug: ${rslug},/ s#slug: ${rslug},[[:space:]]*##"
+redset i7d "runtime-only ${rslug} loses the slug key" "I7" "lacks key.*slug"
+
+d="$(stage i7e)"
+mutate "${d}/${APPSET_REL}" "/slug: ${rslug},/ s#path: [^,]+,[[:space:]]*##"
+redset i7e "runtime-only ${rslug} loses the path key (I1 reports the empty path as well)" "I1 I7" "lacks key.*path"
+
+d="$(stage i7f)"
+mutate "${d}/${APPSET_REL}" "s#path: \"\{\{ \.path \}\}\"#path: \"{{ .path }}/{{ .extrakey }}\"#"
+redset i7f "the template starts to render a key no element carries (the key set is derived from the template)" "I7" "lacks key.*extrakey"
+
+d="$(stage i7g)"
+mutate "${d}/${APPSET_REL}" "s#^( +)matchLabels:\$#\\1matchLabels:\\n\\1  tier: \"x\"#"
+redset i7g "the selector starts to read a label no element carries (selector keys are part of the derived set)" "I7" "lacks key.*tier"
+
+d="$(stage i7h)"
+mutate "${d}/${APPSET_REL}" "/slug: ${rslug},/ s#installed: \"false\"#installed: true#"
+redset i7h "runtime-only ${rslug} given a BARE YAML installed: true (the generator's sed only rewrites the quoted form)" "I7" 'must be the string'
+
+d="$(stage i7i)"
+mutate "${d}/${APPSET_REL}" "/slug: ${rslug},/ s#installed: \"false\"#installed: \"True\"#"
+redset i7i "runtime-only ${rslug} given installed: \"True\" (the selector matches the string true only)" "I7" 'must be the string'
+
+d="$(stage i6d)"
+mutate "${d}/${APPSET_REL}" "/slug: ${mslug},/ s#installed: \"false\"#installed: true#"
+redset i6d "owned ${mslug} given a bare installed: true: the claim still counts, so I6 fires beside the I7 spelling error" "I6 I7" 'claimed 2 times'
+
+# ── I8: the generated Application name ──────────────────────────────────────────────
+d="$(stage i8a)"
+mkdir -p "${d}/specs/cluster/manifests/dup-dir"
+python3 - "${d}/${APPSET_REL}" "${rslug}" "${rns}" <<'PY'
+import re, sys
+p, slug, ns = sys.argv[1:4]
+t = open(p).read()
+line = [l for l in t.splitlines(True) if re.search(r"\{\s*slug:\s*%s\s*," % re.escape(slug), l)][0]
+dup = '          - { slug: %s, path: specs/cluster/manifests/dup-dir, namespace: %s, installed: "false" }\n' % (slug, ns)
+open(p, "w").write(t.replace(line, line + dup, 1))
+PY
+redset i8a "slug ${rslug} on a SECOND element (its own directory): both generate optional-${rslug}" "I8" "appears 2 times"
+
+d="$(stage i8b)"
+mkdir -p "${d}/specs/cluster/manifests/unclaimed-dir"
+cat > "${d}/specs/cluster/apps/99-name-clash.yaml" <<YML
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata: {name: optional-${rslug}, namespace: devops}
+spec:
+  project: default
+  source: {repoURL: x, targetRevision: main, path: specs/cluster/manifests/unclaimed-dir}
+  destination: {server: x, namespace: x}
+YML
+redset i8b "a hardcoded Application already named optional-${rslug} (on a directory no element names)" "I8" "is already named optional-${rslug}"
+
+d="$(stage i8c)"
+python3 - "${d}/${REG_REL}" "${rslug}" <<'PY'
+import re, sys
+p, slug = sys.argv[1:3]
+t = open(p).read()
+m = re.search(r"(?ms)^    - slug: %s\n.*?(?=^    - slug: |\Z)" % re.escape(slug), t)
+assert m
+blk = m.group(0) if m.group(0).endswith("\n") else m.group(0) + "\n"
+open(p, "w").write(t[:m.end()] + blk + t[m.end():])
+PY
+redset i8c "registry lists ${rslug} twice" "I8" "listed 2 times"
+
+echo "== D3. the derived claims the doc rests on, asserted on the emitted lines =="
+# yamledit <file> <python statements over d, the first Application/ApplicationSet doc>
+yamledit() {
+    python3 - "$1" "$2" <<'PY'
+import sys, yaml
+p, code = sys.argv[1:3]
+docs = list(yaml.safe_load_all(open(p)))
+d = [x for x in docs if isinstance(x, dict) and x.get("kind") in ("Application", "ApplicationSet")][0]
+exec(code)
+open(p, "w").write(yaml.safe_dump_all(docs, sort_keys=False))
+PY
+}
+# emit_has <stage> <regex> <what> / emit_lacks: grep the EMITTED matrix of a staged tree
+emit_has()   { if python3 "${CHK}" --root "${WORK}/$1" emit | grep -E -- "$2" >/dev/null; then ok "$1: $3"; else bad "$1: $3 (no emitted line matches /$2/)"; fi; }
+emit_lacks() { if python3 "${CHK}" --root "${WORK}/$1" emit | grep -E -- "$2" >/dev/null; then bad "$1: $3 (an emitted line matches /$2/)"; else ok "$1: $3"; fi; }
+FIN="resources-finalizer.argocd.argoproj.io"
+ROW="^\\| ${mslug} \\|"
+
+d="$(stage f1)"
+yamledit "${d}/${mowner}" "d['metadata']['finalizers'] = ['${FIN}']"
+emit_has f1 "${ROW}.*finalizers \\['${FIN}'\\]" "an owner finalizer the template lacks is listed as lost in ${mslug}'s row"
+emit_has f1 "^finalizers on the hardcoded owners: \\['${FIN}'\\]" "the owner-finalizer line lists it (it is the line doc 10.3 point 2 rests on)"
+emit_has f1 "^13a template finalizers: none" "the template line still says none"
+
+d="$(stage f2)"
+yamledit "${d}/${mowner}" "d['metadata']['finalizers'] = ['${FIN}']"
+yamledit "${d}/${APPSET_REL}" "d['spec']['template']['metadata']['finalizers'] = ['${FIN}']"
+emit_lacks f2 "${ROW}.*finalizers" "owner and template carrying the SAME finalizer: nothing lost"
+emit_has f2 "^finalizers on the hardcoded owners: \\['${FIN}'\\]" "the owner line still lists it"
+
+d="$(stage g1)"
+yamledit "${d}/${mowner}" "d['spec']['ignoreDifferences'] = [{'group': 'apps', 'kind': 'Deployment', 'jsonPointers': ['/spec/replicas']}]"
+emit_has g1 "${ROW}.*ignoreDifferences" "an owner ignoreDifferences the template lacks is listed as lost"
+
+d="$(stage g2)"
+yamledit "${d}/${mowner}" "d['spec']['ignoreDifferences'] = [{'group': 'apps', 'kind': 'Deployment', 'jsonPointers': ['/spec/replicas']}]"
+yamledit "${d}/${APPSET_REL}" "d['spec']['template']['spec']['ignoreDifferences'] = [{'group': 'apps', 'kind': 'Deployment', 'jsonPointers': ['/spec/replicas']}]"
+emit_lacks g2 "${ROW}.*ignoreDifferences" "ignoreDifferences on both owner and template: nothing lost"
+
+d="$(stage h1)"
+yamledit "${d}/${mowner}" "d['spec'].setdefault('syncPolicy', {})['syncOptions'] = ['ServerSideApply=true']"
+emit_has h1 "${ROW}.*syncOptions \\['ServerSideApply=true'\\] vs template \\['CreateNamespace=true'\\]" "owner syncOptions that differ from the template are listed as lost"
+
+d="$(stage w1)"
+yamledit "${d}/${APPSET_REL}" "d['spec']['template']['metadata'].setdefault('annotations', {})['argocd.argoproj.io/sync-wave'] = '2'"
+yamledit "${d}/${mowner}" "d['metadata'].setdefault('annotations', {})['argocd.argoproj.io/sync-wave'] = '2'"
+emit_lacks w1 "${ROW}.*sync-wave" "the same sync-wave on owner and template: nothing lost"
+emit_has w1 "^13a template finalizers: none; template sync-wave: 2" "the template line reports the wave it carries"
+
+echo "== E. the checker's notion of owner agrees with the real build guard's =="
+# For every element slug: _opt_appset_cutover_done (exact `path:` line, comments stripped)
+# returns 0 iff the checker finds NO owner. Two notions of "owner" that disagree would let
+# the guard lift on a directory the checker says is owned, or hold on one it says is free.
+agree() { # <root> -> prints "<owned> <free> <mismatches>"
+    python3 - "$1" > "${WORK}/agree.list" <<'PY'
+import os, sys
+sys.path.insert(0, os.environ["CHK_DIR"])
+import optional_services_cutover_matrix as m
+rows, _, _ = m.derive(sys.argv[1])
+for r in rows:
+    print(r["slug"], 1 if r["owners"] else 0)
+PY
+    local owned=0 free=0 miss=0 slug o rc2 appset="$1/specs/cluster/apps/13a-optional-services.yaml"
+    while read -r slug o; do
+        ( info() { :; }; warn() { :; }; set +u; . "${LIB}"; _opt_appset_cutover_done "${slug}" "${appset}" ) >/dev/null 2>&1; rc2=$?
+        # guard rc 0 = cut over (free); 1 = still owned
+        if [ "${o}" = 1 ]; then owned=$((owned+1)); [ "${rc2}" -eq 1 ] || miss=$((miss+1))
+        else free=$((free+1)); [ "${rc2}" -eq 0 ] || miss=$((miss+1)); fi
+    done < "${WORK}/agree.list"
+    echo "${owned} ${free} ${miss}"
+}
+export CHK_DIR="${REPO}/tests/scripts"
+read -r ow fr mm < <(agree "${REPO}")
+if [ "${mm}" -eq 0 ] && [ "${ow}" -ge 1 ] && [ "${fr}" -ge 1 ]; then
+    ok "E1 real tree: guard and checker agree on all $((ow+fr)) slugs (${ow} owned, ${fr} free)"
+else bad "E1 real tree: ${mm} slug(s) where the guard and the checker disagree on ownership (owned ${ow}, free ${fr})"; fi
+d="$(stage e2)"
+# BLOCK style on purpose: the guard reads a `path:` key at the start of a line, the form every
+# real apps/*.yaml uses. A FLOW-style `source: {path: ...}` owner is seen by the checker and
+# not by the guard; that gap is real, is not closed here, and is reported in the PR, not pinned.
+cat > "${d}/specs/cluster/apps/99-stray-owner.yaml" <<YML
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: stray-owner
+  namespace: devops
+spec:
+  project: default
+  source:
+    repoURL: x
+    targetRevision: main
+    path: ${rpath}
+  destination:
+    server: x
+    namespace: ${rns}
+YML
+read -r ow2 fr2 mm2 < <(agree "${d}")
+if [ "${mm2}" -eq 0 ] && [ "${ow2}" -eq $((ow+1)) ]; then
+    ok "E2 a plant that claims ${rslug}'s directory: the guard flips to 'owned' with the checker (owned ${ow} -> ${ow2})"
+else bad "E2 comparator is not sensitive: owned ${ow} -> ${ow2} (free ${fr2}), mismatches ${mm2}"; fi
 fi
 
 echo

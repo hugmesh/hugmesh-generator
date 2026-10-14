@@ -31,8 +31,11 @@ INVARIANTS (exit 1 on any violation; exit 3 when the corpus is empty - a derived
 nothing is vacuous, never a pass). Every one has an ISOLATING negative control in
 tests/scripts/test-optional-services-cutover-matrix.sh (a plant that trips exactly that
 invariant and no other), so a dead check cannot hide behind a live one:
-  I1 every element path is a non-empty, relative path that stays inside the tree and is an
-     existing directory (an empty path would resolve to the tree root and pass isdir)
+  I1 every element path is a non-empty, relative path whose RESOLVED location (symlinks and
+     `..` followed) is an existing directory strictly inside the tree. The tree root itself
+     fails: '', '.', './' and 'specs/..' all resolve to it and would pass isdir; so does a
+     symlink whose target is outside the tree. Claims (I2, I4, I6) compare the same resolved
+     key, so two spellings, or a symlink and its target, are one directory
   I2 every owner of an element's path is one of THAT slug's registry apps (no cross-slug
      ownership of a directory)
   I3 every registry app of an element slug exists and parses as an Application (or, for
@@ -46,15 +49,23 @@ invariant and no other), so a dead check cannot hide behind a live one:
      same path are a violation even when both are "false" (flipping either is the
      reconciler's job, and the second flip would double-manage the directory)
   I7 every element slug exists in the registry (I7 no-entry); every element has every key
-     the template renders (I7 key)
+     the template renders or the selector reads (I7 key; the set is DERIVED from the
+     ApplicationSet, not listed here); `installed` is the STRING "true" or "false" and
+     nothing else (I7 value: the selector matches the string, and the generator's own sed
+     only rewrites the quoted form, so a bare `installed: true` is a flag nothing flips)
+  I8 the generated Application name optional-<slug> is unique: no slug appears on two
+     elements or twice in the registry, and no hardcoded Application already carries
+     that name
 
 Usage:
   optional_services_cutover_matrix.py --root <repo> check            print + enforce
   optional_services_cutover_matrix.py --root <repo> emit             the matrix text block
 """
 import argparse
+import collections
 import glob
 import os
+import re
 import sys
 
 try:
@@ -67,12 +78,35 @@ APPSET_REL = "specs/cluster/apps/13a-optional-services.yaml"
 REGISTRY_REL = "specs/cluster/optional-services.yaml"
 APPS_REL = "specs/cluster/apps"
 WAVE = "argocd.argoproj.io/sync-wave"
-TEMPLATE_KEYS = ("slug", "path", "namespace", "installed")
+# keys this checker itself reads from every element; the set checked in I7 is these PLUS
+# every key the template renders ({{ .key }}) or the selector reads (matchLabels), derived
+READ_KEYS = ("slug", "path", "namespace", "installed")
 
 
-def norm(path):
-    """a path as a claim key: 'a/b/', './a/b' and 'a//b' are the same directory"""
-    return os.path.normpath(path) if path else path
+def ckey(root, path):
+    """a path as a claim key: the RESOLVED location relative to the resolved tree root.
+    'a/b/', './a/b', 'a//b', 'a/../a/b' and a symlink to a/b are all the same directory,
+    and '.', './' and 'specs/..' are all the tree root ('.'); a location outside the tree
+    starts with '..'."""
+    if not path:
+        return path
+    real_root = os.path.realpath(root)
+    return os.path.relpath(os.path.realpath(os.path.join(real_root, path)), real_root)
+
+
+def template_keys(appset):
+    """the element keys the ApplicationSet reads: {{ .key }} / index . "key" in the
+    template, plus the generator selector's matchLabels keys"""
+    spec = appset["spec"]
+    keys = set(READ_KEYS)
+    text = yaml.safe_dump(spec.get("template") or {})
+    for expr in re.findall(r"\{\{(.*?)\}\}", text, re.S):
+        keys.update(re.findall(r"(?<![\w.])\.([A-Za-z_]\w*)", expr))
+        keys.update(re.findall(r"index\s+\.\s+[\"']([A-Za-z_]\w*)[\"']", expr))
+    gens = spec.get("generators") or [{}]
+    for k in (((gens[0].get("selector") or {}).get("matchLabels")) or {}):
+        keys.add(k)
+    return sorted(keys)
 
 
 def load(path):
@@ -128,8 +162,14 @@ def load_corpus(root):
     return services, elements, tpl, load_apps(root)
 
 
+def registry_slug_list(root):
+    reg = load(os.path.join(root, REGISTRY_REL))[0]
+    return [s["slug"] for s in reg["spec"]["services"]]
+
+
 def derive(root):
     services, elements, tpl, apps = load_corpus(root)
+    keys = template_keys(load(os.path.join(root, APPSET_REL))[0])
     tpl_md = tpl.get("metadata") or {}
     tpl_sp = tpl.get("spec") or {}
     tpl_fin = list(tpl_md.get("finalizers") or [])
@@ -138,19 +178,38 @@ def derive(root):
     tpl_ign = bool(tpl_sp.get("ignoreDifferences"))
     rows, errors = [], []
     by_path = {}
+    # I8: the generated Application is named optional-<slug>; that name must be unique
+    for name, n in sorted(collections.Counter(registry_slug_list(root)).items()):
+        if n > 1:
+            errors.append("I8 registry slug %r is listed %d times" % (name, n))
+    for name, n in sorted(collections.Counter(el.get("slug") for el in elements).items(),
+                          key=lambda kv: str(kv[0])):
+        if n > 1:
+            errors.append("I8 element slug %r appears %d times: each generates Application optional-%s"
+                          % (name, n, name))
+    taken = {"optional-%s" % el.get("slug"): el.get("slug") for el in elements}
+    for f, a in sorted(apps.items()):
+        if a.get("name") in taken:
+            errors.append("I8 %s is already named %s, the name the generated Application for %r takes"
+                          % (f, a["name"], taken[a["name"]]))
     for el in elements:
         slug = el.get("slug")
-        miss = [k for k in TEMPLATE_KEYS if k not in el]
+        miss = [k for k in keys if k not in el]
         if miss:
-            errors.append("I7 element %r lacks key(s) %s that the template renders" % (slug, miss))
+            errors.append("I7 element %r lacks key(s) %s that the template or selector reads" % (slug, miss))
+        if "installed" in el and not (isinstance(el["installed"], str) and el["installed"] in ("true", "false")):
+            errors.append("I7 element %r installed is %r (%s): it must be the string \"true\" or \"false\""
+                          % (slug, el["installed"], type(el["installed"]).__name__))
         svc = services.get(slug)
         if svc is None:
             errors.append("I7 element %r has no entry in %s" % (slug, REGISTRY_REL))
             svc = {}
         path = el.get("path") or ""
         reg_apps = [("specs/cluster/" + a) for a in (svc.get("apps") or [])]
-        if not path or os.path.isabs(path) or norm(path).split("/")[0] == "..":
-            errors.append("I1 %s: element path %r is empty, absolute or leaves the tree" % (slug, path))
+        key = ckey(root, path)
+        if not path or os.path.isabs(path) or key == "." or key == ".." or key.startswith("../"):
+            errors.append("I1 %s: element path %r is empty, absolute, the tree root or leaves the tree (resolves to %s)"
+                          % (slug, path, key or "nothing"))
         elif not os.path.isdir(os.path.join(root, path)):
             errors.append("I1 %s: element path %s is not a directory" % (slug, path))
         for a in reg_apps:
@@ -159,7 +218,7 @@ def derive(root):
             elif "error" in apps[a]:
                 errors.append("I3 %s: registry app %s does not parse (%s)" % (slug, a, apps[a]["error"]))
         owners = sorted(f for f, a in apps.items()
-                        if a.get("path") and path and norm(a["path"]) == norm(path))
+                        if a.get("path") and path and ckey(root, a["path"]) == key)
         for o in owners:
             if o not in reg_apps:
                 errors.append("I2 %s: %s owns %s but is not among its registry apps %s"
@@ -172,16 +231,18 @@ def derive(root):
             if ns != el.get("namespace"):
                 errors.append("I5 %s: element namespace %r != %s destination %r"
                               % (slug, el.get("namespace"), o, ns))
-        installed = str(el.get("installed")) == "true"
+        # any spelling of true counts as a claim (a bare YAML true too): the I7 value check
+        # reports the spelling, and the claim must not vanish because of it
+        installed = el.get("installed") is True or el.get("installed") == "true"
         n_claims = len(owners) + (1 if installed else 0)
         if n_claims > 1:
             errors.append("I6 %s: manifest dir %s is claimed %d times (owners %s, element installed=%s)"
                           % (slug, path, n_claims, owners, installed))
-        by_path.setdefault(norm(path), {"owners": set(), "installed": [], "elements": []})
-        by_path[norm(path)]["owners"].update(owners)
-        by_path[norm(path)]["elements"].append(slug)
+        by_path.setdefault(key, {"owners": set(), "installed": [], "elements": []})
+        by_path[key]["owners"].update(owners)
+        by_path[key]["elements"].append(slug)
         if installed:
-            by_path[norm(path)]["installed"].append(slug)
+            by_path[key]["installed"].append(slug)
         orphans = [a for a in reg_apps if a not in owners]
         if not reg_apps and not owners:
             klass = "runtime-only"
@@ -210,9 +271,8 @@ def derive(root):
             errors.append("I6 elements %s all name manifest dir %s (installed: %s)"
                           % (c["elements"], path, c["installed"] or "none"))
     tpl_facts = {"finalizers": tpl_fin, "wave": tpl_wave,
-                 "owner_finalizers": sorted({f for a in apps.values()
-                                             for f in a.get("finalizers", [])
-                                             if a.get("path") in {r["path"] for r in rows}})}
+                 "owner_finalizers": sorted({f for r in rows for o in r["owners"]
+                                             for f in apps[o]["finalizers"]})}
     return rows, errors, tpl_facts
 
 

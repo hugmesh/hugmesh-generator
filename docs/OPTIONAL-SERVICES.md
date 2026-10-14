@@ -922,10 +922,14 @@ worst defect it catches is invisible from inside this repo.
 
 `tests/scripts/test-optional-services-cutover-matrix.sh` derives the table below from
 `specs/cluster/optional-services.yaml` (`apps:`), `apps/13a-optional-services.yaml` and
-`apps/*.yaml`, enforces seven invariants on it, and fails when this block drifts from the
+`apps/*.yaml`, enforces the invariants below on it, and fails when this block drifts from the
 tree. The invariants, each with an isolating negative control in the suite:
 
-* I1 every element path is a non-empty, relative path inside the tree and an existing directory
+* I1 every element path is a non-empty, relative path whose resolved location (symlinks and
+  `..` followed) is an existing directory strictly inside the tree: `""`, `.`, `./` and
+  `specs/..` all resolve to the tree root and fail, as does a symlink pointing outside. The
+  claims below (I2, I4, I6) compare that same resolved location, so two spellings of one
+  directory, or a symlink and its target, are one directory
 * I2 every hardcoded owner of an element's directory is one of THAT slug's registry apps
   (no cross-slug ownership)
 * I3 every registry app of an element slug exists and parses
@@ -934,8 +938,13 @@ tree. The invariants, each with an isolating negative control in the suite:
 * I6 no directory is claimed twice: per directory, the hardcoded owners plus the elements
   with `installed:"true"` number at most one, and no two elements name the same directory
   (even when both are `"false"`: flipping either would double-manage it)
-* I7 every element slug has a registry entry, and every element carries every key the
-  template renders
+* I7 every element slug has a registry entry; every element carries every key the template
+  renders or the selector reads (derived from the ApplicationSet, not listed in the checker);
+  `installed` is the string `"true"` or `"false"` and nothing else, because the selector
+  matches the string and the generator's own `sed` rewrites only the quoted form (a bare
+  `installed: true` is a flag nothing flips; it still counts as a claim for I6)
+* I8 the generated name `optional-<slug>` is unique: no slug on two elements or twice in the
+  registry, and no hardcoded Application already carries that name
 
  Regenerate with
 `python3 tests/scripts/optional_services_cutover_matrix.py --root . emit`.
@@ -963,7 +972,7 @@ elements: 14 (single-app 8, multi-app 3, runtime-only 3)
 finalizers on the hardcoded owners: none
 <!-- cutover-matrix:end -->
 
-**State on main (re-measured 2026-10-14, origin/main 702b590d).**
+**State on main (re-measured 2026-10-14, origin/main 5f450a48).**
 
 * The build-time prune governs a device: `bootstrap/bootstrap.sh` applies the baked
   `apps/` tree (commit `a08484f8`; `tests/cluster/test-bootstrap-applies-baked-apps.sh`
@@ -983,8 +992,8 @@ finalizers on the hardcoded owners: none
    root is the repo-recursing `hugmesh-root` (`app-of-apps.yaml:41`, `prune: true`)
    deleting `apps/30-akkoma.yaml` prunes Application `akkoma`.
 2. *No hardcoded owner carries a `resources-finalizer`, and neither does the 13a template*
-   (derived above, and `grep -n finalizer specs/cluster/apps/*.yaml` finds only the waved
-   root). So, as ArgoCD documents it, the prune orphans the workloads rather than deleting
+   (derived above; outside comments, `grep -n finalizer specs/cluster/apps/*.yaml |
+   grep -v ':[0-9]*:[[:space:]]*#'` finds only the waved root). So, as ArgoCD documents it, the prune orphans the workloads rather than deleting
    them, and 13a, held at `"false"`, creates nothing to adopt them: the services keep
    running but nothing manages them. Setting the element `"true"` in the same git commit
    would not fix this on a cluster where `optional-services` already exists: both roots

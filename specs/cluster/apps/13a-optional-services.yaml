@@ -24,9 +24,10 @@
 # scaffolded with a DISTINCT name suffix and DISABLED-by-default membership note;
 # the cut-over is a follow-up. It is NOT "delete the hardcoded apps": one element covers
 # ONE manifest directory (phpbb, games and character-forge own several Applications),
-# the generated name differs from the owner's, and the finalizer / sync-wave of owner
-# and template differ. The derived per-slug matrix (finalizers included) and the order
-# for a running cluster are in docs/OPTIONAL-SERVICES.md section 10.3, pinned to this file by
+# the generated name differs from the owner's, and the owners that carry a sync-wave
+# annotation lose it (the template has none). Neither the owners nor the template carry a
+# finalizer: that is not a difference but a gap, set out in section 10.3 with the derived
+# per-slug matrix and the order for a running cluster, pinned to this file by
 # tests/scripts/test-optional-services-cutover-matrix.sh. Until cut-over,
 # keep every element installed:"false" so it creates nothing and cannot collide.
 apiVersion: argoproj.io/v1alpha1
