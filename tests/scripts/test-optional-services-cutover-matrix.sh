@@ -359,6 +359,10 @@ d="$(stage i1c)"
 mutate "${d}/${APPSET_REL}" "s#(slug: ${rslug},[[:space:]]*path: )${rpath//\//\\/}#\\1/usr#"
 redset i1c "runtime-only ${rslug} given an ABSOLUTE path that exists on the host" "I1" 'empty, absolute, the tree root'
 
+d="$(stage i1j)"
+mutate "${d}/${APPSET_REL}" "s#(slug: ${rslug},[[:space:]]*path: )${rpath//\//\\/}#\\1${d}/${rpath//\//\\/}#"
+redset i1j "runtime-only ${rslug} given an ABSOLUTE path that points INSIDE the tree (it would resolve and pass without the absolute check)" "I1" 'empty, absolute, the tree root'
+
 d="$(stage i1d)"
 mutate "${d}/${APPSET_REL}" "s#(slug: ${rslug},[[:space:]]*path: )${rpath//\//\\/}#\\1..#"
 redset i1d "runtime-only ${rslug} given path '..' (an existing directory OUTSIDE the tree)" "I1" 'empty, absolute, the tree root or leaves the tree .resolves to \.\.\)'
@@ -481,6 +485,17 @@ redset i7e "runtime-only ${rslug} loses the path key (I1 reports the empty path 
 d="$(stage i7f)"
 mutate "${d}/${APPSET_REL}" "s#path: \"\{\{ \.path \}\}\"#path: \"{{ .path }}/{{ .extrakey }}\"#"
 redset i7f "the template starts to render a key no element carries (the key set is derived from the template)" "I7" "lacks key.*extrakey"
+
+d="$(stage i7j)"
+python3 - "${d}/${APPSET_REL}" <<'PY'
+import sys
+p = sys.argv[1]
+t = open(p).read()
+a = 'path: "{{ .path }}"'
+assert t.count(a) == 1
+open(p, "w").write(t.replace(a, "path: '{{ .path }}{{ index . \"wave\" }}'"))
+PY
+redset i7j "the template reads a key with index . \"wave\" (the missingkey=error-safe spelling doc 10.3 recommends) that no element carries" "I7" "lacks key.*wave"
 
 d="$(stage i7g)"
 mutate "${d}/${APPSET_REL}" "s#^( +)matchLabels:\$#\\1matchLabels:\\n\\1  tier: \"x\"#"
@@ -613,9 +628,9 @@ if [ "${mm}" -eq 0 ] && [ "${ow}" -ge 1 ] && [ "${fr}" -ge 1 ]; then
     ok "E1 real tree: guard and checker agree on all $((ow+fr)) slugs (${ow} owned, ${fr} free)"
 else bad "E1 real tree: ${mm} slug(s) where the guard and the checker disagree on ownership (owned ${ow}, free ${fr})"; fi
 d="$(stage e2)"
-# BLOCK style on purpose: the guard reads a `path:` key at the start of a line, the form every
-# real apps/*.yaml uses. A FLOW-style `source: {path: ...}` owner is seen by the checker and
-# not by the guard; that gap is real, is not closed here, and is reported in the PR, not pinned.
+# BLOCK style, the exact `path:` line the guard reads (the form every real apps/*.yaml uses),
+# so this proves the comparator is sensitive and not that the two notions are equal in general:
+# the other spellings are E3.
 cat > "${d}/specs/cluster/apps/99-stray-owner.yaml" <<YML
 apiVersion: argoproj.io/v1alpha1
 kind: Application
@@ -636,6 +651,75 @@ read -r ow2 fr2 mm2 < <(agree "${d}")
 if [ "${mm2}" -eq 0 ] && [ "${ow2}" -eq $((ow+1)) ]; then
     ok "E2 a plant that claims ${rslug}'s directory: the guard flips to 'owned' with the checker (owned ${ow} -> ${ow2})"
 else bad "E2 comparator is not sensitive: owned ${ow} -> ${ow2} (free ${fr2}), mismatches ${mm2}"; fi
+# E3: the comparator must be able to SEE a disagreement. The guard matches a literal
+# `path: <dir>` line (comments stripped); the checker resolves the path. So an owner spelled
+# any other way is owned for the checker and invisible to the guard, which would then lift
+# and flip the element to "true" over a directory something still owns. That gap is in the
+# build guard, not closed by this suite: E1 keeps the REAL tree free of such a spelling, and
+# these plants prove E1 would turn red on one (each must report at least one mismatch). If
+# the guard is ever made to resolve paths these go red; flip them to expect 0 then.
+e3() { # <name> <spelling-of-path-line> [pre-command]
+    local dd; dd="$(stage "$1")"
+    [ -n "${3:-}" ] && eval "$3"
+    cat > "${dd}/specs/cluster/apps/99-stray-owner.yaml" <<YML
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: stray-owner
+  namespace: devops
+spec:
+  project: default
+  source:
+    repoURL: x
+    targetRevision: main
+${2}
+  destination:
+    server: x
+    namespace: ${rns}
+YML
+    local o3 f3 m3
+    read -r o3 f3 m3 < <(agree "${dd}")
+    if [ "${m3}" -ge 1 ]; then ok "E3 $1: an owner spelled $(printf '%s' "${2}" | sed 's/^ *//') is seen by the checker and not by the guard (mismatches ${m3})"
+    else bad "E3 $1: the comparator did not report the disagreement (mismatches ${m3}, owned ${o3}, free ${f3})"; fi
+}
+e3 e3a "    path: ${rpath}/"
+e3 e3b "    path: ./${rpath}"
+e3 e3c "    path: specs/../${rpath}"
+e3 e3d "    path: specs/cluster/manifests/alias-e3" 'ln -s "${WORK}/e3d/${rpath}" "${dd}/specs/cluster/manifests/alias-e3"'
+# flow style: the whole source on one line
+e3f() {
+    local dd; dd="$(stage e3f)"
+    cat > "${dd}/specs/cluster/apps/99-stray-owner.yaml" <<YML
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata: {name: stray-owner, namespace: devops}
+spec:
+  project: default
+  source: {repoURL: x, targetRevision: main, path: ${rpath}}
+  destination: {server: x, namespace: ${rns}}
+YML
+    local o3 f3 m3
+    read -r o3 f3 m3 < <(agree "${dd}")
+    if [ "${m3}" -ge 1 ]; then ok "E3 e3f: a FLOW-style source {path: ...} is seen by the checker and not by the guard (mismatches ${m3})"
+    else bad "E3 e3f: the comparator did not report the disagreement (mismatches ${m3})"; fi
+}
+e3f
+# the other direction: the guard counts ANY `path:` line, the checker only Applications. A
+# non-Application document that happens to carry the directory makes the guard hold while the
+# checker says free (the safe direction, but still a disagreement the comparator must report)
+dd="$(stage e3g)"
+cat > "${dd}/specs/cluster/apps/99-not-an-app.yaml" <<YML
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: not-an-app
+data:
+  path: ${rpath}
+YML
+read -r o3 f3 m3 < <(agree "${dd}")
+if [ "${m3}" -ge 1 ] && [ "${o3}" -eq "${ow}" ]; then
+    ok "E3 e3g: a non-Application document naming ${rslug}'s directory is free for the checker and owned for the guard (mismatches ${m3})"
+else bad "E3 e3g: the comparator did not report the reverse disagreement (mismatches ${m3}, owned ${o3} vs ${ow})"; fi
 fi
 
 echo
