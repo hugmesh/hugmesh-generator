@@ -300,9 +300,20 @@ class FleetConfig:
             want = type(f.default)
             ok = (isinstance(value, want) and not (want is int and isinstance(value, bool)))
             if not ok:
-                kind = {bool: "true or false", str: "text", int: "a whole number"}[want]
+                kind = {bool: "true or false", str: "text",
+                        int: "a whole number"}.get(want, want.__name__)
                 raise IdentityValidationError(
                     f"fleet record: {name} must be {kind}, not {type(value).__name__}")
+        # ``jobs`` is a whole number AND inside JOBS_RANGE, here as well as in
+        # validate(): a saved 0, -1 or 999 used to be clamped by the GUI's spin box
+        # without a word (the record said one -j, the RESTART built another, and the
+        # Review pane said Preflight OK), and 2**31 or more made QSpinBox.setValue
+        # raise OverflowError — an ArithmeticError, which no (ValueError, TypeError)
+        # guard around the RESTART slot catches — and PyQt6 aborted the Studio.
+        if "jobs" in kw and not JOBS_RANGE[0] <= kw["jobs"] <= JOBS_RANGE[1]:
+            raise IdentityValidationError(
+                f"fleet record: jobs must be a whole number from {JOBS_RANGE[0]} to "
+                f"{JOBS_RANGE[1]}, not {kw['jobs']!r}")
         # REHYDRATE the rows. asdict() -> JSON -> back yields plain dicts, and the
         # gate reads ``getattr(d, "name", "")`` — "" on a dict — so an un-rehydrated
         # record would pass the gate on every RESTART/REDO however unwalked it was.
@@ -332,13 +343,35 @@ class FleetConfig:
                 raise IdentityValidationError(
                     f"fleet record: domains[{i}] must be a domain row (an object), "
                     f"not {type(x).__name__}")
-            if not isinstance(x.name, str):
-                raise IdentityValidationError(
-                    f"fleet record: domains[{i}].name must be text, "
-                    f"not {type(x.name).__name__}")
+            for fld in ("name", "title"):
+                if not isinstance(getattr(x, fld), str):
+                    raise IdentityValidationError(
+                        f"fleet record: domains[{i}].{fld} must be text, "
+                        f"not {type(getattr(x, fld)).__name__}")
+            # The row's two list fields are iterated by the Domain services step (its
+            # ``load`` and the state line): an int there passed the row builder and
+            # the name check, Review showed a preflight refusal, and ONE Back click
+            # raised TypeError ("'int' object is not iterable") from inside the Back
+            # button's slot; a plain string ("akkoma") was iterated as letters.
+            for fld in ("images", "optional_services"):
+                v = getattr(x, fld)
+                if not isinstance(v, list) or not all(isinstance(s, str) for s in v):
+                    bad = v if not isinstance(v, list) else next(
+                        s for s in v if not isinstance(s, str))
+                    raise IdentityValidationError(
+                        f"fleet record: domains[{i}].{fld} must be a list of text, "
+                        f"not {type(bad).__name__}")
             rows.append(x)
         kw["domains"] = rows
-        kw["domain_services_reviewed"] = [str(n) for n in raw_marks]
+        for j, n in enumerate(raw_marks):
+            # a marker is a domain name the step was walked for; a dict or a number
+            # here is a hand edit, named like every other one (str() of it matched
+            # no domain, so it was harmless, but silently so)
+            if not isinstance(n, str):
+                raise IdentityValidationError(
+                    f"fleet record: domain_services_reviewed[{j}] must be text, "
+                    f"not {type(n).__name__}")
+        kw["domain_services_reviewed"] = list(raw_marks)
         return cls(**kw)
 
     def _services_words(self) -> str:

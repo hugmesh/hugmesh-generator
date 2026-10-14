@@ -359,6 +359,37 @@ def test_the_tui_delete_prunes_the_deleted_rows_reviewed_marker():
     ({"domains": ""}, "domains must be a list, not str"),
     ({"domains": 0}, "domains must be a list, not int"),
     ({"domain_services_reviewed": ""}, "domain_services_reviewed must be a list, not str"),
+    # round-8 (both round-2 skeptics): an int OUTSIDE JOBS_RANGE passed the type check;
+    # 2**31 and up then raised OverflowError from QSpinBox.setValue (not a ValueError
+    # or TypeError: the slot's guard let it through and PyQt6 aborted the Studio), and
+    # 0 / -1 / 999 were clamped by the spin box without a word while Preflight said OK
+    ({"jobs": 2 ** 40}, "jobs must be a whole number from 1 to 128, not 1099511627776"),
+    ({"jobs": 2 ** 31}, "jobs must be a whole number from 1 to 128, not 2147483648"),
+    ({"jobs": -(2 ** 40)}, "jobs must be a whole number from 1 to 128, not -1099511627776"),
+    ({"jobs": 0}, "jobs must be a whole number from 1 to 128, not 0"),
+    ({"jobs": -1}, "jobs must be a whole number from 1 to 128, not -1"),
+    ({"jobs": 999}, "jobs must be a whole number from 1 to 128, not 999"),
+    # a row's list fields: an int passed the row builder and the name check, and ONE
+    # Back click from Review to the Domain services step raised TypeError ("'int'
+    # object is not iterable") inside the Back button's slot; a string was iterated
+    # as letters; a title that is not text reaches a QTableWidgetItem
+    ({"domains": [{"name": "mesh.example", "optional_services": 5}]},
+     "domains[0].optional_services must be a list of text, not int"),
+    ({"domains": [{"name": "mesh.example", "optional_services": "akkoma"}]},
+     "domains[0].optional_services must be a list of text, not str"),
+    ({"domains": [{"name": "mesh.example", "optional_services": [1, 2]}]},
+     "domains[0].optional_services must be a list of text, not int"),
+    ({"domains": [{"name": "mesh.example", "images": {"a": 1}}]},
+     "domains[0].images must be a list of text, not dict"),
+    ({"domains": [{"name": "mesh.example", "images": ["pki.x86", None]}]},
+     "domains[0].images must be a list of text, not NoneType"),
+    ({"domains": [{"name": "mesh.example", "title": 5}]},
+     "domains[0].title must be text, not int"),
+    # a marker that is not a domain name: str() of it matched nothing, silently
+    ({"domains": [{"name": "mesh.example"}], "domain_services_reviewed": [{"a": 1}]},
+     "domain_services_reviewed[0] must be text, not dict"),
+    ({"domain_services_reviewed": ["mesh.example", 7]},
+     "domain_services_reviewed[1] must be text, not int"),
 ])
 def test_a_damaged_fleet_record_is_refused_at_load_naming_the_field(damage, field):
     from hugmesh_studio.core.config import IdentityValidationError
@@ -383,6 +414,16 @@ def test_an_undamaged_record_with_absent_or_null_rows_still_loads():
     assert FleetConfig.from_dict(cfg.to_dict()) == cfg
     # an unknown key (a future field, or a typo) is still ignored, not refused
     assert FleetConfig.from_dict({"jobs": 3, "no_such_field": ["x"]}).jobs == 3
+    # both ends of JOBS_RANGE load; a well-formed row with every list field loads whole
+    from hugmesh_studio.core.fleet import JOBS_RANGE
+    assert FleetConfig.from_dict({"jobs": JOBS_RANGE[0]}).jobs == JOBS_RANGE[0]
+    assert FleetConfig.from_dict({"jobs": JOBS_RANGE[1]}).jobs == JOBS_RANGE[1]
+    row = {"name": "mesh.example", "title": "Mesh", "images": ["pki.x86"],
+           "optional_services": ["akkoma", "tuwunel"]}
+    back = FleetConfig.from_dict({"domains": [row], "domain_services_reviewed": ["mesh.example"]})
+    assert back.domains[0].optional_services == ["akkoma", "tuwunel"]
+    assert back.domains[0].images == ["pki.x86"]
+    assert back.domain_services_reviewed == ["mesh.example"]
 
 
 def test_fleet_domain_fields_hands_out_copies_of_the_rows():
@@ -595,6 +636,10 @@ def test_restarting_a_damaged_record_shows_the_refusal_inline_and_pins_nothing(p
     text = page.problems.toPlainText()
     assert "Cannot restart fleet record fleet-damaged-1" in text
     assert "domains[0] must be a domain row" in text
+    # the pane says what the enabled ‘Build fleet now’ under it WOULD build (a refusal
+    # above an enabled build button must say which configuration that button holds)
+    assert "Nothing from that record was applied" in text
+    assert "keep the configuration this window already showed" in text
     # the damaged record's id is NOT pinned: Review minted its own fresh id for the
     # window's own config (the normal lazy mint), so a Build there never reuses the
     # damaged record's workdir
@@ -613,6 +658,18 @@ def test_restarting_a_damaged_record_shows_the_refusal_inline_and_pins_nothing(p
     ({"cluster_domain": 5}, "cluster_domain must be text, not int"),
     ({"x86_roles": ["pki"]}, "x86_roles must be text, not list"),
     ({"extra_flags": ["--a"]}, "extra_flags must be text, not list"),
+    # round-8: the two round-2 skeptics' escaping shapes — an int past the C int range
+    # (OverflowError out of QSpinBox.setValue, which the guard did not catch: the real
+    # abort, measured rc=134 in a clicked slot), the clamped-without-a-word ones, and
+    # a row list field that is an int (TypeError on the Back click from Review)
+    ({"jobs": 2 ** 40}, "jobs must be a whole number from 1 to 128, not 1099511627776"),
+    ({"jobs": 2 ** 31}, "jobs must be a whole number from 1 to 128, not 2147483648"),
+    ({"jobs": 0}, "jobs must be a whole number from 1 to 128, not 0"),
+    ({"jobs": 999}, "jobs must be a whole number from 1 to 128, not 999"),
+    ({"domains": [{"name": "a.example", "optional_services": 5}]},
+     "domains[0].optional_services must be a list of text, not int"),
+    ({"domains": [{"name": "a.example", "images": "pki.x86"}]},
+     "domains[0].images must be a list of text, not str"),
 ])
 def test_restarting_a_record_with_a_wrong_typed_scalar_or_idp_typo_is_refused_inline(
         page, damage, field):
@@ -641,6 +698,58 @@ def test_a_refusal_from_dict_does_not_name_yet_still_stays_inside_the_slot(page,
     text = page.problems.toPlainText()
     assert "Cannot restart fleet record fleet-damaged-1" in text
     assert "unexpected type 'str'" in text
+    assert page.pending_session_id != "fleet-damaged-1"
+    assert page.runs == [] and page.worker is None
+
+
+@pytest.mark.parametrize("backend", [5, ["docker"], {"b": "docker"}, 1.5])
+def test_restarting_a_record_whose_backend_is_not_text_is_refused_inline(page, backend):
+    """The session record's OWN ``backend`` field (the same JSON file as the config;
+    ``BuildSession.from_dict`` leaves ``str | None`` fields uncoerced) used to reach
+    ``QComboBox.setCurrentText`` OUTSIDE the guarded region: a TypeError out of the
+    RESTART / REDO slot. It is checked first, before anything is applied, named, and
+    the config next to it is not applied either."""
+    page.cluster_domain.setText("keep.example"); page.jobs.setValue(5)
+    page.backend.setCurrentText("native")
+    s = _DamagedSession(dict(_cfg().to_dict(), cluster_domain="evil.example"))
+    s.backend = backend
+    page.load_from_session(s, pin=True)
+    assert page.stack.currentIndex() == fleet_mod.STEP_REVIEW
+    text = page.problems.toPlainText()
+    assert "Cannot restart fleet record fleet-damaged-1" in text
+    assert f"backend must be text, not {type(backend).__name__}" in text, text
+    assert page.pending_session_id != "fleet-damaged-1"
+    assert page.cluster_domain.text() == "keep.example" and page.jobs.value() == 5
+    assert page.backend.currentText() == "native"
+    assert page.runs == [] and page.worker is None
+
+
+@pytest.mark.parametrize("backend", [None, ""])
+def test_a_record_with_no_backend_still_loads_as_auto(page, backend):
+    """The lenient case stays lenient: an absent backend (an old record) is ‘auto’,
+    and the record IS applied and pinned."""
+    page.backend.setCurrentText("native")
+    s = _DamagedSession(dict(_cfg().to_dict(), cluster_domain="rec.example"))
+    s.backend = backend
+    page.load_from_session(s, pin=True)
+    assert page.backend.currentText() == "auto"
+    assert page.cluster_domain.text() == "rec.example"
+    assert page.pending_session_id == "fleet-damaged-1"
+
+
+def test_an_overflow_from_a_setter_inside_apply_stays_inside_the_slot(page, monkeypatch):
+    """The last line for the shape that measured as the real abort: a number past the
+    C int ``QSpinBox.setValue`` takes raises OverflowError, an ArithmeticError that is
+    neither ValueError nor TypeError. With from_dict's range check bypassed (a future
+    loader that forgets it), the REAL ``apply`` on the REAL spin box raises it, and the
+    slot still shows it inline and pins nothing."""
+    big = _cfg(); big.jobs = 2 ** 40
+    monkeypatch.setattr(fleet_mod.FleetConfig, "from_dict", staticmethod(lambda _d: big))
+    page.jobs.setValue(5)
+    page.load_from_session(_DamagedSession({"jobs": 2 ** 40}), pin=True)
+    text = page.problems.toPlainText()
+    assert "Cannot restart fleet record fleet-damaged-1" in text
+    assert "overflowed" in text, text
     assert page.pending_session_id != "fleet-damaged-1"
     assert page.runs == [] and page.worker is None
 

@@ -668,23 +668,36 @@ class FleetPage(QtWidgets.QWidget):
         page's RESTART / REDO slot, where an exception would abort the Studio.
 
         ``from_dict`` names the field for every damaged shape it knows (a scalar of
-        the wrong type, a row that is not a domain, an ``idp`` typo). A ValueError or
-        TypeError that still reaches here — a shape no check names yet, or a Qt setter
-        in ``apply`` refusing a value — is shown through the same pane and the record
-        is not pinned, so no record can abort the Studio from this slot; the lenient
-        path is never widened."""
+        the wrong type or out of range, a row that is not a domain, an ``idp`` typo, a
+        row list field that is not a list of text). The record's own ``backend`` (the
+        same JSON file, left uncoerced by ``BuildSession.from_dict``) is checked here
+        BEFORE anything is applied, so a refusal never leaves half a record in the
+        widgets. A ValueError, TypeError or OverflowError that still reaches here — a
+        shape no check names yet, or a Qt setter in ``apply`` refusing a value (a
+        number past the C int QSpinBox.setValue takes raises OverflowError, an
+        ArithmeticError that the earlier two did not cover) — is shown through the
+        same pane and the record is not pinned, so no record can abort the Studio
+        from this slot; the lenient path is never widened."""
         try:
+            raw = getattr(s, "backend", None)
+            backend = "auto" if raw in (None, "") else raw
+            if not isinstance(backend, str):
+                raise IdentityValidationError(
+                    f"fleet record: backend must be text, not {type(backend).__name__}")
             cfg = FleetConfig.from_dict(s.config)
             self.apply(cfg)
-        except (IdentityValidationError, ValueError, TypeError) as e:
+        except (IdentityValidationError, ValueError, TypeError, OverflowError) as e:
             self.pending_session_id = None
             self._goto(STEP_REVIEW)
             self.problems.setPlainText(
                 f"Cannot restart fleet record {getattr(s, 'id', '?')}: {e}\n"
                 "Its saved config is damaged. Fix the record's JSON under the Studio "
-                "state directory, or start this fleet again from the first step.")
+                "state directory, or start this fleet again from the first step. "
+                "Nothing from that record was applied: the steps, the command below "
+                "and ‘Build fleet now’ keep the configuration this window already "
+                "showed, not the record you clicked.")
             return
-        self.backend.setCurrentText(s.backend or "auto")
+        self.backend.setCurrentText(backend)
         self.pending_session_id = s.id if pin else None
         self._goto(STEP_REVIEW)
 
