@@ -922,9 +922,22 @@ worst defect it catches is invisible from inside this repo.
 
 `tests/scripts/test-optional-services-cutover-matrix.sh` derives the table below from
 `specs/cluster/optional-services.yaml` (`apps:`), `apps/13a-optional-services.yaml` and
-`apps/*.yaml`, enforces seven invariants on it (element dirs exist; no cross-slug
-ownership; namespaces agree; no directory claimed twice), and fails when this block
-drifts from the tree. Regenerate with
+`apps/*.yaml`, enforces seven invariants on it, and fails when this block drifts from the
+tree. The invariants, each with an isolating negative control in the suite:
+
+* I1 every element path is a non-empty, relative path inside the tree and an existing directory
+* I2 every hardcoded owner of an element's directory is one of THAT slug's registry apps
+  (no cross-slug ownership)
+* I3 every registry app of an element slug exists and parses
+* I4 a slug that has registry apps has an owner for the element directory
+* I5 the element namespace equals the owner's destination namespace
+* I6 no directory is claimed twice: per directory, the hardcoded owners plus the elements
+  with `installed:"true"` number at most one, and no two elements name the same directory
+  (even when both are `"false"`: flipping either would double-manage it)
+* I7 every element slug has a registry entry, and every element carries every key the
+  template renders
+
+ Regenerate with
 `python3 tests/scripts/optional_services_cutover_matrix.py --root . emit`.
 
 <!-- cutover-matrix:begin (generated; test-optional-services-cutover-matrix.sh pins it) -->
@@ -950,7 +963,7 @@ elements: 14 (single-app 8, multi-app 3, runtime-only 3)
 finalizers on the hardcoded owners: none
 <!-- cutover-matrix:end -->
 
-**State on main (re-measured 2026-10-14, origin/main c0c46601).**
+**State on main (re-measured 2026-10-14, origin/main 702b590d).**
 
 * The build-time prune governs a device: `bootstrap/bootstrap.sh` applies the baked
   `apps/` tree (commit `a08484f8`; `tests/cluster/test-bootstrap-applies-baked-apps.sh`
@@ -971,14 +984,16 @@ finalizers on the hardcoded owners: none
    deleting `apps/30-akkoma.yaml` prunes Application `akkoma`.
 2. *No hardcoded owner carries a `resources-finalizer`, and neither does the 13a template*
    (derived above, and `grep -n finalizer specs/cluster/apps/*.yaml` finds only the waved
-   root). So the prune orphans the workloads rather than deleting them, and 13a, held at
-   `"false"`, creates nothing to adopt them: the services keep running but nothing manages
-   them. Setting the element `"true"` in the same git commit does NOT fix this on a cluster
-   where `optional-services` already exists: both roots (`app-of-apps.yaml`,
-   `apps/00-app-of-apps-waved.yaml`) ignore `/spec/generators/0/list/elements` with
-   `RespectIgnoreDifferences=true`, so a git edit to `installed` is never applied to the
-   live object. A git `"true"` takes effect only when the ApplicationSet is first created
-   (a fresh image).
+   root). So, as ArgoCD documents it, the prune orphans the workloads rather than deleting
+   them, and 13a, held at `"false"`, creates nothing to adopt them: the services keep
+   running but nothing manages them. Setting the element `"true"` in the same git commit
+   would not fix this on a cluster where `optional-services` already exists: both roots
+   (`app-of-apps.yaml`, `apps/00-app-of-apps-waved.yaml`) ignore
+   `/spec/generators/0/list/elements` with `RespectIgnoreDifferences=true` (read from the
+   manifests), so a git edit to `installed` should never reach the live object. A git
+   `"true"` would take effect only when the ApplicationSet is first created (a fresh
+   image). NOT VERIFIED against a live ArgoCD: the orphan-on-prune behaviour with no
+   finalizer, and `RespectIgnoreDifferences` holding a live element list back.
 3. *The reverse is also true, and is a decision nobody has made.* With no finalizer on the
    template, flipping an element to `"false"` at runtime deletes the Application and leaves
    the pods, Services and PVCs running: "runtime remove" would not remove anything.
@@ -1012,13 +1027,31 @@ finalizers on the hardcoded owners: none
    other key), but the roots ignore `/spec/generators/0/list/elements`, so a live element
    list would lack the new key while the template (`missingkey=error`) requires it.
    Use `index . "wave"` in the template, never `.wave`.
-7. *Name and file consumers break.* Files that name an owner by file or Application name:
-   `scripts/_optional-services-lib.sh` (the per-slug `rm -f` prune), `specs/cluster/optional-services.yaml`
-   (`apps:`), `tests/scripts/test-backing-service-endpoints-closure.sh:166-175`
-   (names `52-owncast`, `53-tube`, `30-phpbb` as the Application that carries a manifest),
+7. *Name and file consumers break.* Found by `grep -rna` over every owner and orphan file
+   name in the matrix (plain `grep` skips a file that holds a NUL byte and reports a miss).
+   Functional consumers, which act on a name or file and would change behaviour:
+   `scripts/_optional-services-lib.sh` (the per-slug `rm -f` prune),
+   `specs/cluster/optional-services.yaml` (`apps:`), `specs/cluster/backing-services.yaml`
+   (`apps: [apps/38-forum-bff-db.yaml]`), `build-x86-host-stage4.sh` and
+   `build-rpi5-stage4.sh` (`_mgd_pg ... apps/38-forum-bff-db.yaml`, and the IdP prune of
+   `06-casdoor-games.yaml`), and the brand templates `templates/apps/39-forum-bff.yaml.hbs`
+   and `49-forum-ui.yaml.hbs` (they render the phpbb orphans). Tests that name them:
+   `tests/scripts/test-backing-service-endpoints-closure.sh:166-175` (`52-owncast`,
+   `53-tube`, `30-phpbb` as the Application that carries a manifest),
    `tests/stack/test-optional-services-exclude.sh`, `tests/stack/test-optional-services-parity.sh`,
    `tests/scripts/test-selected-services-only.sh`, `tests/cluster/test-bootstrap-applies-baked-apps.sh`,
-   and the brand templates `templates/apps/39-forum-bff.yaml.hbs`, `49-forum-ui.yaml.hbs`.
+   `tests/scripts/test-idp-builder-functions.sh` and
+   `tests/managed-services/test-managed-services-gate.sh`.
+   Prose only (a stale mention is not a break, but should move with the cut-over):
+   `apps/17-backing-service-endpoints.yaml:91`, `apps/23-headwind.yaml:1,12`,
+   `apps/05b-casdoor-domains.yaml`, `apps/06-casdoor-games.yaml`, `apps/30-phpbb.yaml`,
+   `apps/30-hugmesh-apis.yaml`, `apps/50-games.yaml`, `bootstrap/bootstrap.sh:131,160`,
+   `bootstrap/kind-local/bootstrap-kind.sh:998`, `bootstrap/kind-local/README.md:181`,
+   `manifests/admin-bff-api/deployment.yaml:610`, `manifests/forum/network-policy.yaml:22`,
+   `manifests/optional-services-operator/seed-optionalservices.yaml:17`,
+   `tests/scripts/kind_route_closure.py:68-80`, `docs/EDGE-AI.md`, `docs/XR-CHAT.md`,
+   `docs/RESERVED-PREFIXES.md`, `docs/GAMES-APPSTORE.md` and
+   `tests/e2e/specs/18-rbac-phase8-10-pending.spec.ts`.
    The kind profiles do not apply any owner (`bootstrap-kind.sh` lists them only in a
    comment), so they are not a consumer.
 

@@ -28,8 +28,11 @@ THE MATRIX. For each 13a element:
            / syncOptions the template does not repeat.
 
 INVARIANTS (exit 1 on any violation; exit 3 when the corpus is empty - a derived guard over
-nothing is vacuous, never a pass):
-  I1 every element path is an existing directory under the tree
+nothing is vacuous, never a pass). Every one has an ISOLATING negative control in
+tests/scripts/test-optional-services-cutover-matrix.sh (a plant that trips exactly that
+invariant and no other), so a dead check cannot hide behind a live one:
+  I1 every element path is a non-empty, relative path that stays inside the tree and is an
+     existing directory (an empty path would resolve to the tree root and pass isdir)
   I2 every owner of an element's path is one of THAT slug's registry apps (no cross-slug
      ownership of a directory)
   I3 every registry app of an element slug exists and parses as an Application (or, for
@@ -37,8 +40,13 @@ nothing is vacuous, never a pass):
   I4 a slug with registry apps has an owner for the element path (else the element and the
      registry disagree about which app is the slug's main workload)
   I5 element namespace == the owner's destination.namespace
-  I6 no manifest directory is claimed twice: owners + (element installed:"true") <= 1
-  I7 every element slug exists in the registry; every element has the keys the template uses
+  I6 no manifest directory is claimed twice, ACROSS elements as well as within one. Per
+     path, the claimants are the set of hardcoded owner files plus every element with
+     installed:"true"; more than one claimant is a violation. Two elements that name the
+     same path are a violation even when both are "false" (flipping either is the
+     reconciler's job, and the second flip would double-manage the directory)
+  I7 every element slug exists in the registry (I7 no-entry); every element has every key
+     the template renders (I7 key)
 
 Usage:
   optional_services_cutover_matrix.py --root <repo> check            print + enforce
@@ -60,6 +68,11 @@ REGISTRY_REL = "specs/cluster/optional-services.yaml"
 APPS_REL = "specs/cluster/apps"
 WAVE = "argocd.argoproj.io/sync-wave"
 TEMPLATE_KEYS = ("slug", "path", "namespace", "installed")
+
+
+def norm(path):
+    """a path as a claim key: 'a/b/', './a/b' and 'a//b' are the same directory"""
+    return os.path.normpath(path) if path else path
 
 
 def load(path):
@@ -124,7 +137,7 @@ def derive(root):
     tpl_sync = sorted((tpl_sp.get("syncPolicy") or {}).get("syncOptions") or [])
     tpl_ign = bool(tpl_sp.get("ignoreDifferences"))
     rows, errors = [], []
-    claimed = {}
+    by_path = {}
     for el in elements:
         slug = el.get("slug")
         miss = [k for k in TEMPLATE_KEYS if k not in el]
@@ -136,14 +149,17 @@ def derive(root):
             svc = {}
         path = el.get("path") or ""
         reg_apps = [("specs/cluster/" + a) for a in (svc.get("apps") or [])]
-        if not os.path.isdir(os.path.join(root, path)):
+        if not path or os.path.isabs(path) or norm(path).split("/")[0] == "..":
+            errors.append("I1 %s: element path %r is empty, absolute or leaves the tree" % (slug, path))
+        elif not os.path.isdir(os.path.join(root, path)):
             errors.append("I1 %s: element path %s is not a directory" % (slug, path))
         for a in reg_apps:
             if a not in apps:
                 errors.append("I3 %s: registry app %s does not exist as an Application" % (slug, a))
             elif "error" in apps[a]:
                 errors.append("I3 %s: registry app %s does not parse (%s)" % (slug, a, apps[a]["error"]))
-        owners = sorted(f for f, a in apps.items() if a.get("path") == path)
+        owners = sorted(f for f, a in apps.items()
+                        if a.get("path") and path and norm(a["path"]) == norm(path))
         for o in owners:
             if o not in reg_apps:
                 errors.append("I2 %s: %s owns %s but is not among its registry apps %s"
@@ -158,10 +174,14 @@ def derive(root):
                               % (slug, el.get("namespace"), o, ns))
         installed = str(el.get("installed")) == "true"
         n_claims = len(owners) + (1 if installed else 0)
-        claimed[path] = claimed.get(path, 0) + n_claims
         if n_claims > 1:
             errors.append("I6 %s: manifest dir %s is claimed %d times (owners %s, element installed=%s)"
                           % (slug, path, n_claims, owners, installed))
+        by_path.setdefault(norm(path), {"owners": set(), "installed": [], "elements": []})
+        by_path[norm(path)]["owners"].update(owners)
+        by_path[norm(path)]["elements"].append(slug)
+        if installed:
+            by_path[norm(path)]["installed"].append(slug)
         orphans = [a for a in reg_apps if a not in owners]
         if not reg_apps and not owners:
             klass = "runtime-only"
@@ -184,6 +204,11 @@ def derive(root):
         rows.append({"slug": slug, "path": path, "klass": klass, "owners": owners,
                      "orphans": orphans, "loses": loses, "installed": installed,
                      "kinds": {o: apps[o].get("kind") for o in orphans if o in apps}})
+    # I6 across elements: the per-element check above cannot see two elements on one path
+    for path, c in sorted(by_path.items()):
+        if len(c["elements"]) > 1:
+            errors.append("I6 elements %s all name manifest dir %s (installed: %s)"
+                          % (c["elements"], path, c["installed"] or "none"))
     tpl_facts = {"finalizers": tpl_fin, "wave": tpl_wave,
                  "owner_finalizers": sorted({f for a in apps.values()
                                              for f in a.get("finalizers", [])

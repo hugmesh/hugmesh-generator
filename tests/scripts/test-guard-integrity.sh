@@ -754,6 +754,16 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # RUNNING this file on the merged tree (GUARD_PREMERGE=0), not computed:
 #     197 of 221 suites are named by a pull_request-triggered workflow
 #     PASS the ungated SET matches its pin exactly (24 suite(s))
+# 197 of 221 -> 197 of 222 and ungated SET 24 -> 25 on 2026-10-14 for the 13a cut-over
+# matrix: tests/scripts/test-optional-services-cutover-matrix.sh is a new suite that is
+# NOT named by a pull_request workflow (it is wired post-merge by .gitlab-ci.yml and
+# recorded in PREMERGE_UNGATED above), so the denominator rose and the gated count did
+# not. MEASURED by RUNNING this file on the tree (GUARD_PREMERGE=0), not computed:
+#     197 of 222 suites are named by a pull_request-triggered workflow
+#     PASS the ungated SET matches its pin exactly (25 suite(s))
+# tests/scripts/run-ungated-lane.sh's header counts (25 of 25, 8 of 25) were taken from
+# its E2E_UNGATED_DRY_RUN=1 output for both sets. The "stays 21/22" lines in the entries
+# above are history and are left as written.
 PREMERGE_BASELINE="${GUARD_PREMERGE:-197}"
 
 # 182 -> 192 (denominator 205 -> 215) on 2026-09-30 for #385: the census gained a

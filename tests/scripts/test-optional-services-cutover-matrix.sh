@@ -10,15 +10,20 @@
 #
 # WHAT THIS PINS (all derived by tests/scripts/optional_services_cutover_matrix.py from
 # optional-services.yaml + apps/13a + apps/*.yaml; no slug, path or count is hard-coded):
-#   A  the checker's seven invariants hold on the real tree (element dirs exist, no
-#      cross-slug ownership, namespaces agree, no directory claimed twice, ...)
+#   A  the checker's seven invariants hold on the real tree: I1 element dir exists, I2 no
+#      cross-slug ownership, I3 registry apps exist and parse, I4 the slug has an owner,
+#      I5 namespaces agree, I6 no directory claimed twice (within and across elements),
+#      I7 registry entry and template keys present
 #   B  the generated matrix block in docs/OPTIONAL-SERVICES.md section 10.3 equals what the
 #      tree derives, so the cut-over plan cannot rot into a hand-written list again
 #   C  a CORRECT cut-over of one single-app slug (owner deleted, registry apps emptied)
 #      still passes the invariants AND makes the real build guard
 #      (_opt_appset_cutover_done / _opt_render_appset_flag) flip that slug's element:
 #      the guard does not block the work it exists to enable
-#   D  negative controls: each breakage, planted in a STAGED copy, must go red
+#   D  negative controls: each breakage, planted in a STAGED copy, must go red. Every
+#      invariant has an ISOLATING control, asserted by the exact SET of invariant ids the
+#      checker reports: a plant that trips I2 alone proves I2 is live, where a regex that
+#      accepts "I2 or I6" is satisfied by whichever invariant happens to survive
 #
 # It does NOT prove anything about a live ArgoCD (adoption, finalizers, the reconciler
 # keystone): that needs a cluster. It does not edit or wire anything under .github/.
@@ -107,6 +112,25 @@ red() {
         printf '%s\n' "${o}" | tail -3 | sed 's/^/      /'
     fi
 }
+# redset <name> <why> "<ids>" [msg-regex] : the checker must exit 1 and report EXACTLY the
+# invariant ids given (space separated, e.g. "I2 I6"), and, when msg-regex is given, at
+# least one VIOLATION line matching it. An id outside the set, or a missing one, is a FAIL:
+# this is what stops a dead invariant hiding behind a live one.
+redset() {
+    local name="$1" why="$2" want="$3" msg="${4:-}" d="${WORK}/$1" o rc2 got
+    o="$(python3 "${CHK}" --root "${d}" check 2>&1)"; rc2=$?
+    got="$(printf '%s\n' "${o}" | sed -n -E 's/^  VIOLATION (I[0-9]+) .*/\1/p' | sort -u | tr '\n' ' ' | sed 's/ $//')"
+    want="$(printf '%s\n' ${want} | sort -u | tr '\n' ' ' | sed 's/ $//')"
+    if [ "${rc2}" -ne 1 ] || [ "${got}" != "${want}" ]; then
+        bad "NC ${name}: ${why}: rc=${rc2}, invariants reported [${got}], expected exactly [${want}]"
+        printf '%s\n' "${o}" | grep VIOLATION | head -4 | sed 's/^/      /'
+    elif [ -n "${msg}" ] && ! printf '%s\n' "${o}" | grep -E "VIOLATION .*${msg}" >/dev/null; then
+        bad "NC ${name}: ${why}: no VIOLATION line matches /${msg}/"
+        printf '%s\n' "${o}" | grep VIOLATION | head -4 | sed 's/^/      /'
+    else
+        ok "NC ${name}: ${why} -> exactly [${got}]${msg:+ ($msg)}"
+    fi
+}
 # sed -i -E over a staged file, then verify the file ACTUALLY changed (a mutation that
 # changes nothing makes its control vacuous)
 mutate() { # <file> <sed-expr>
@@ -190,23 +214,23 @@ PY
 echo "  (controls use slug ${mslug} owned by ${mowner##*/}; ${oslug}; multi-app ${xslug})"
 
 d="$(stage n1)"; rm -f "${d}/${mowner}"
-red n1 "owner file ${mowner##*/} deleted but still listed in the registry" 'I3 '
+redset n1 "owner file ${mowner##*/} deleted but still listed in the registry" "I3 I4" 'does not exist as an Application'
 
 d="$(stage n2)"
 mutate "${d}/${APPSET_REL}" "s#(slug: ${mslug},[[:space:]]*path: )${mpath//\//\\/}#\\1specs/cluster/manifests/does-not-exist#"
-red n2 "element path retargeted to a directory that does not exist" 'I1 '
+redset n2 "element path retargeted to a directory that does not exist (the owner then owns nothing)" "I1 I4" 'is not a directory'
 
 d="$(stage n3)"
 mutate "${d}/${APPSET_REL}" "s#(slug: ${mslug},[[:space:]]*path: )${mpath//\//\\/}#\\1${opath//\//\\/}#"
-red n3 "element ${mslug} retargeted onto ${oslug}'s directory" 'I2 |I4 |I6 '
+redset n3 "element ${mslug} retargeted onto ${oslug}'s directory" "I2 I6" 'I2 '
 
 d="$(stage n4)"
 mutate "${d}/${APPSET_REL}" "/slug: ${mslug},/ s#installed: \"false\"#installed: \"true\"#"
-red n4 "element ${mslug} installed:true while ${mowner##*/} still owns the dir" 'I6 '
+redset n4 "element ${mslug} installed:true while ${mowner##*/} still owns the dir" "I6" 'claimed 2 times'
 
 d="$(stage n5)"
 mutate "${d}/${APPSET_REL}" "/slug: ${mslug},/ s#namespace: [a-z0-9-]+#namespace: wrong-ns#"
-red n5 "element namespace differs from the owner's destination" 'I5 '
+redset n5 "element namespace differs from the owner's destination" "I5"
 
 d="$(stage n6)"
 cat > "${d}/specs/cluster/apps/99-second-owner.yaml" <<EOF
@@ -218,11 +242,11 @@ spec:
   source: {repoURL: x, targetRevision: main, path: ${mpath}}
   destination: {server: x, namespace: x}
 EOF
-red n6 "a second hardcoded Application claims ${mpath}" 'I2 |I6 '
+redset n6 "a second hardcoded Application claims ${mpath}" "I2 I5 I6" 'I6 '
 
 d="$(stage n7)"
 mutate "${d}/${REG_REL}" "/slug: ${xslug}\$/,/manifestPath:/ s#^( +apps:)\$#\\1\\n        - apps/does-not-exist.yaml#"
-red n7 "a fourth app added to multi-app slug ${xslug} that has no Application file" 'I3 '
+redset n7 "a fourth app added to multi-app slug ${xslug} that has no Application file" "I3" 'does not exist as an Application'
 
 d="$(stage n8)"
 python3 - "${d}" "${xslug}" <<'PY'
@@ -277,13 +301,123 @@ t2, n = re.subn(r"(?ms)^    - slug: %s\n.*?(?=^    - slug: )" % re.escape(slug),
 assert n == 1
 open(p, "w").write(t2)
 PY
-red n12 "slug ${mslug} removed from the registry while its 13a element stays" 'I7 '
+redset n12 "slug ${mslug} removed from the registry while its 13a element stays" "I2 I7" 'has no entry'
 
 d="$(stage n13)"
 sed -i "s/<!-- cutover-matrix:begin/<!-- cutover-matrix:gone/" "${d}/docs/OPTIONAL-SERVICES.md"
 if [ "$(doc_block "${d}/docs/OPTIONAL-SERVICES.md" | head -1)" = "MARKERS:0/1" ]; then
     ok "NC n13: a missing doc marker is detected (the section-B compare cannot pass vacuously)"
 else bad "NC n13: a missing doc marker was not detected"; fi
+
+echo "== D2. one ISOLATING control per invariant (the exact set of ids reported is asserted) =="
+# two runtime-only slugs (no owner, no registry apps), derived: with no owner, I2/I4/I5 cannot
+# fire, so a plant on them reaches exactly the one invariant under test
+read -r rslug rpath rns r2slug r2path < <(python3 - "${REPO}" <<'PY'
+import os, sys
+sys.path.insert(0, os.path.join(sys.argv[1], "tests/scripts"))
+import optional_services_cutover_matrix as m
+rows, _, _ = m.derive(sys.argv[1])
+_, els, _, _ = m.load_corpus(sys.argv[1])
+ns = {e["slug"]: e["namespace"] for e in els}
+r = [r for r in rows if r["klass"] == "runtime-only"]
+if len(r) >= 2:
+    print(r[0]["slug"], r[0]["path"], ns[r[0]["slug"]], r[1]["slug"], r[1]["path"])
+PY
+)
+# an orphan Application file of the multi-app slug (a registry app no element owns), derived
+orphan="$(python3 - "${REPO}" "${xslug}" <<'PY'
+import os, sys
+sys.path.insert(0, os.path.join(sys.argv[1], "tests/scripts"))
+import optional_services_cutover_matrix as m
+rows, _, _ = m.derive(sys.argv[1])
+r = [r for r in rows if r["slug"] == sys.argv[2]][0]
+print([o for o in r["orphans"] if r["kinds"].get(o) == "Application"][0])
+PY
+)"
+if [ -z "${rslug:-}" ] || [ -z "${r2slug:-}" ] || [ -z "${orphan}" ]; then
+    bad "D2: need two runtime-only slugs and a multi-app orphan Application; derived [${rslug:-}] [${r2slug:-}] [${orphan}]"
+else
+echo "  (isolating controls use runtime-only ${rslug} and ${r2slug}; orphan ${orphan##*/})"
+
+d="$(stage i1a)"
+mutate "${d}/${APPSET_REL}" "s#(slug: ${rslug},[[:space:]]*path: )${rpath//\//\\/}#\\1specs/cluster/manifests/does-not-exist#"
+redset i1a "runtime-only ${rslug} retargeted to a directory that does not exist" "I1" 'is not a directory'
+
+d="$(stage i1b)"
+mutate "${d}/${APPSET_REL}" "s#(slug: ${rslug},[[:space:]]*path: )${rpath//\//\\/}#\\1\"\"#"
+redset i1b "runtime-only ${rslug} given an EMPTY path (join(root, '') is the tree root, which isdir)" "I1" 'empty, absolute'
+
+d="$(stage i1c)"
+mutate "${d}/${APPSET_REL}" "s#(slug: ${rslug},[[:space:]]*path: )${rpath//\//\\/}#\\1/usr#"
+redset i1c "runtime-only ${rslug} given an ABSOLUTE path that exists on the host" "I1" 'empty, absolute'
+
+d="$(stage i1d)"
+mutate "${d}/${APPSET_REL}" "s#(slug: ${rslug},[[:space:]]*path: )${rpath//\//\\/}#\\1..#"
+redset i1d "runtime-only ${rslug} given path '..' (an existing directory OUTSIDE the tree)" "I1" 'empty, absolute or leaves'
+
+d="$(stage i2)"
+cat > "${d}/specs/cluster/apps/99-stray-owner.yaml" <<YML
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata: {name: stray-owner, namespace: devops}
+spec:
+  project: default
+  source: {repoURL: x, targetRevision: main, path: ${rpath}}
+  destination: {server: x, namespace: ${rns}}
+YML
+redset i2 "a hardcoded Application (right namespace) claims runtime-only ${rslug}'s directory" "I2" 'owns .* but is not among its registry apps'
+
+d="$(stage i2b)"
+cat > "${d}/specs/cluster/apps/99-stray-owner.yaml" <<YML
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata: {name: stray-owner, namespace: devops}
+spec:
+  project: default
+  source: {repoURL: x, targetRevision: main, path: ./${rpath}/}
+  destination: {server: x, namespace: ${rns}}
+YML
+redset i2b "the same stray owner spelled ./path/ (owner matching is on the normalised path)" "I2" 'owns .* but is not among its registry apps'
+
+d="$(stage i3a)"
+printf '\n  : : [unbalanced\n' >> "${d}/${orphan}"
+redset i3a "registry app ${orphan##*/} of ${xslug} (no element owns it) no longer parses" "I3" 'does not parse'
+
+d="$(stage i4)"
+mkdir -p "${d}/specs/cluster/manifests/unclaimed-dir"
+mutate "${d}/${mowner}" "s#^(    path: ).*\$#\\1specs/cluster/manifests/unclaimed-dir#"
+redset i4 "owner ${mowner##*/} moved to a directory no element names (registry still lists it)" "I4" 'none owns the element path'
+
+d="$(stage i6a)"
+mutate "${d}/${APPSET_REL}" "s#(slug: ${rslug},[[:space:]]*path: )${rpath//\//\\/}#\\1${r2path//\//\\/}#"
+redset i6a "elements ${rslug} and ${r2slug} name one directory, both still \"false\"" "I6" 'all name manifest dir'
+
+d="$(stage i6c)"
+mutate "${d}/${APPSET_REL}" "s#(slug: ${rslug},[[:space:]]*path: )${rpath//\//\\/}#\\1./${r2path//\//\\/}/#"
+redset i6c "elements ${rslug} and ${r2slug} name one directory, one spelled ./path/ (the claim key is normalised)" "I6" 'all name manifest dir'
+
+d="$(stage i6b)"
+mutate "${d}/${APPSET_REL}" "s#(slug: ${rslug},[[:space:]]*path: )${rpath//\//\\/}#\\1${r2path//\//\\/}#"
+mutate "${d}/${APPSET_REL}" "/slug: ${rslug},/ s#installed: \"false\"#installed: \"true\"#"
+mutate "${d}/${APPSET_REL}" "/slug: ${r2slug},/ s#installed: \"false\"#installed: \"true\"#"
+redset i6b "elements ${rslug} and ${r2slug} on one directory, both installed:true, no owner" "I6" 'all name manifest dir'
+
+d="$(stage i7a)"
+mutate "${d}/${APPSET_REL}" "/slug: ${rslug},/ s#namespace: [a-z0-9-]+,[[:space:]]*##"
+redset i7a "runtime-only ${rslug} loses the namespace key the template renders (no owner, so I5 cannot mask it)" "I7" 'lacks key'
+
+d="$(stage i7b)"
+python3 - "${d}" "${rslug}" <<'PY'
+import re, sys
+d, slug = sys.argv[1:3]
+p = d + "/specs/cluster/optional-services.yaml"
+t = open(p).read()
+t2, n = re.subn(r"(?ms)^    - slug: %s\n.*?(?=^    - slug: )" % re.escape(slug), "", t, count=1)
+assert n == 1
+open(p, "w").write(t2)
+PY
+redset i7b "runtime-only ${rslug} removed from the registry while its element stays" "I7" 'has no entry'
+fi
 
 echo
 echo "== RESULT: ${P} passed, ${F} failed =="
