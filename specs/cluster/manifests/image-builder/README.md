@@ -87,7 +87,7 @@ testing, and now `kv patch`es in only `push_name`/`push_secret`, leaving the pul
 alone (`../../../../tests/scripts/test-harbor-robots-ownership.sh` executes both writers and
 asserts exactly that). It is DELIBERATELY distinct from the runtime `harbor-registry` **pull**-scoped robot
 imagePullSecret (formerly `gitlab-registry`) so the runtime pull credential can never push.
-Mirrors the #110 `service-catalog-builder-registry` contract.
+Same Vault source and auth shape as `service-catalog-registry-credentials` (which carries it as an Opaque `config.json`; this one stays a dockerconfigjson).
 
 ## Live validation pending
 
