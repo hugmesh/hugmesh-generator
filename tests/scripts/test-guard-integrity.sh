@@ -939,7 +939,7 @@ PREMERGE_UNGATED=(
   # network, no root, no docker -- it would run in any shell-suites image. It sits
   # here only because naming it in shell-suites.yml is an edit under .github/, which
   # the change that added it was not allowed to make. THE FOLLOW-UP IS TO ADD IT TO
-  # THAT WORKFLOW'S SUITES LIST AND DELETE THIS ENTRY (gated count 196 -> 197). It is
+  # THAT WORKFLOW'S SUITES LIST, DELETE THIS ENTRY AND RAISE PREMERGE_BASELINE BY ONE. It is
   # run today by `make binpkg-reuse-report-check`.
   tests/scripts/test-binpkg-reuse-report.sh
   # Needs `unshare -Urm` (a private user+mount namespace) to stack REAL bind

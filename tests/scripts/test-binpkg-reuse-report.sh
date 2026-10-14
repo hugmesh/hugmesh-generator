@@ -314,5 +314,22 @@ else
     echo "  SKIP make not installed: the Makefile quoting cases not run"
 fi
 
+# -- (8b) the make wrapper hands paths and walls to the script as ONE word each ---------------
+# A path with a quote and a space must arrive intact; a wall holding shell syntax must not run.
+if command -v make >/dev/null 2>&1 && [ -f "${REPO}/Makefile" ]; then
+    QD="${TMP}/it's a dir"; mkdir -p "${QD}"
+    cp "${FX}/cold.log" "${QD}/cold.log"; cp "${FX}/warm-full.log" "${QD}/warm.log"
+    make -s -C "${REPO}" binpkg-reuse-report COLD="${QD}/cold.log" WARM="${QD}/warm.log" \
+        COLD_WALL=2h WARM_WALL=30m >"${TMP}/mk.txt" 2>&1; rc=$?
+    expect_eq "make wrapper: quoted+spaced path reaches the script (exit)" "${rc}" 0
+    case "$(cat "${TMP}/mk.txt")" in *"4.00x whole-run"*) ok "make wrapper: walls forwarded";; *) bad "make wrapper: walls not forwarded";; esac
+    make -s -C "${REPO}" binpkg-reuse-report COLD="${QD}/cold.log" WARM="${QD}/warm.log" \
+        COLD_WALL="1h; touch ${TMP}/pwned" >"${TMP}/mk.txt" 2>&1; rc=$?
+    expect_eq "make wrapper: a wall holding shell syntax is a usage error (exit 2)" "${rc}" 2
+    if [ -e "${TMP}/pwned" ]; then bad "make wrapper: a wall value was executed as shell"; else ok "make wrapper: a wall value is not executed as shell"; fi
+else
+    echo "  SKIP make wrapper checks (no make or no Makefile)"
+fi
+
 echo "== binpkg-reuse-report: ${P} passed, ${F} failed =="
 [ "${F}" -eq 0 ]
