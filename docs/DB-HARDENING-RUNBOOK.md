@@ -11,7 +11,7 @@ and a preflight instead of being done:
 | C | Tier egress default-deny NetworkPolicies, per namespace, `devops` last | manual-sync overlay `manifests/networkpolicy-egress` | dark, renders zero objects |
 
 **This document flips nothing.** Every command below that changes the cluster is one an
-operator types on purpose. Re-measured on origin/main `c0c46601` on 2026-10-14.
+operator types on purpose. Re-measured on origin/main `702b590d` on 2026-10-14.
 
 ## 0. State, measured (the roadmap list was written around 2026-08-14)
 
@@ -22,7 +22,7 @@ operator types on purpose. Re-measured on origin/main `c0c46601` on 2026-10-14.
 | the ESO objects exist | **true for all nine** | `external-secrets/pki-externalsecrets.yaml` holds a `VaultDynamicSecret` + `ExternalSecret` per DB; `vault-pki/pki-init-configmap.yaml` has the nine issuing roles. Whether they are *Ready on a given cluster* is exactly what the preflight asks. |
 | "Cassandra auth ships ON" | **true** | `apps/00-cassandra.yaml:53` `dbUser.existingSecret: cassandra-admin`; roles from `apps/00b-cassandra-init.yaml`. `CLUSTER-HARDENING-PLAN.md` §H used to say the opposite ("stays AllowAllAuthenticator"); corrected in the same change. |
 | "only TLS stage 2 is open" | **true** | `apps/00a-cassandra-hardening.yaml:53` sources `cassandra-hardening-empty` (`resources: []`), manual sync. `bootstrap-job.yaml:74` `CASSANDRA_TLS_ENABLED: "false"`. See part B for what the tree does not contain. |
-| "tier-egress ... manual-sync with an overlay whose `resources: []` renders zero objects" | **true** | `apps/08a-networkpolicy-egress.yaml` has no `automated:` block; `manifests/networkpolicy-egress/kustomization.yaml:22` `resources: []`; `kubectl kustomize` of it prints nothing. |
+| "tier-egress ... manual-sync with an overlay whose `resources: []` renders zero objects" | **true** | `apps/08a-networkpolicy-egress.yaml` has no `automated:` block; `manifests/networkpolicy-egress/kustomization.yaml` `resources: []`; `kubectl kustomize` of it prints nothing. |
 | "per-namespace staged enablement with the devops namespace last" | **true, but the documented enable step could not work** | The overlay header said to uncomment `- ../networkpolicy/tier-egress.yaml`. kustomize's default load restrictor rejects that (`security; file ... is not in or below ...`), and nothing in the tree sets ArgoCD's `kustomize.buildOptions`. Replaced by `scripts/netpol-egress-scope.py` (part C). |
 
 Stale text found and corrected on the way: `POSTGRES-HARDENING.md` said "six DB pods"; the
@@ -67,9 +67,9 @@ keeps that table equal to the manifests.
 | 4 | `forum-bff-db` | `forum-bff-db` | hugmesh-backend | hugmesh-forum-bff-api | user-visible, not sign-in |
 | 5 | `mod-bff-db` | `mod-bff-db` | hugmesh-backend | hugmesh-mod-bff-api | moderation only |
 | 6 | `user-bff-db` | `user-bff-db` | hugmesh-backend | hugmesh-user-bff-api | on the sign-in path (`/bff/internal/accounts/ensure`) |
-| 7 | `federation-db` | `federation-db` | hugmesh-backend | hugmesh-federation-api | module manifest + overrides |
+| 7 | `federation-db` | `federation-db` | hugmesh-backend | hugmesh-federation-api; Job `federation-modules-gate` (PostSync, `PGHOST=federation-db`) | module manifest + overrides |
 | 8 | `admin-bff-db` | `admin-bff-db` | hugmesh-backend | hugmesh-admin-bff-api | accounts, sessions, grants: sign-in path |
-| 9 | `route-access-db` | **`route-access`** | **hugmesh-pki** | hugmesh-admin-bff-api (writer), hugmesh-pki-gateway, hugmesh-be-gateway, hugmesh-fe-gateway | every gateway reads `route_access`; last, and not before 1-8 are quiet |
+| 9 | `route-access-db` | **`route-access`** | **hugmesh-pki** | hugmesh-admin-bff-api (writer), hugmesh-pki-gateway, hugmesh-superadmin-gateway, hugmesh-be-gateway, hugmesh-fe-gateway | every gateway reads `route_access`; last, and not before 1-8 are quiet |
 
 Do not start unless: ESO and Vault are healthy, the cluster is otherwise quiet (no rollout in
 flight, no `networkpolicy-egress` cutover in progress), and you have time to watch each DB for
@@ -82,8 +82,10 @@ a few minutes. Nothing in part A depends on part B or C; do not interleave them.
 git fetch origin && git switch --detach origin/main
 kubectl config current-context
 kubectl -n devops get applications                       # the nine DB apps Synced/Healthy
-kubectl get externalsecret -A | grep -- '-mtls'         # nine <db>-mtls rows
-# every Ready, or the preflight below will say which one is not
+scripts/pg-tls-preflight.sh --list | while read -r db ns; do kubectl -n "$ns" get externalsecret "$db-mtls"; done
+#                                                        # nine rows, each Ready; do not grep -mtls across the
+#                                                        # cluster, 22 ExternalSecrets carry that suffix
+# the preflight below says which one is not
 scripts/pg-tls-preflight.sh                              # all nine, read-only
 ```
 
@@ -97,7 +99,8 @@ carried unrelated `SecretSyncedError`s, see issue #352); the preflight reads the
 # --- set the row, e.g. row 1 -------------------------------------------------------------
 DB=wiki-bff-db; DIR=wiki-bff-db; NS=hugmesh-backend; CONSUMER=hugmesh-wiki-bff-api; CNS=hugmesh-backend
 # row 9 is:  DB=route-access-db; DIR=route-access; NS=hugmesh-pki; CONSUMER=hugmesh-admin-bff-api; CNS=hugmesh-backend
-#            and ALSO watch the three gateways:  kubectl -n hugmesh-pki get deploy; kubectl -n hugmesh-backend get deploy; kubectl -n hugmesh-frontend get deploy
+#            and ALSO watch the four gateways (pki + superadmin in hugmesh-pki, be, fe):
+#            kubectl -n hugmesh-pki get deploy; kubectl -n hugmesh-backend get deploy; kubectl -n hugmesh-frontend get deploy
 
 # 1. PREFLIGHT. Must print READY and exit 0. Anything else: stop, do not flip.
 scripts/pg-tls-preflight.sh --db "$DB"
@@ -304,8 +307,10 @@ kubectl -n hugmesh-backend delete networkpolicy egress-proxy-egress   # backend 
 kubectl -n hugmesh-backend delete networkpolicy db-egress-admin-bff-db   # one DB lock; names from `get networkpolicy`
 ```
 
-then remove the line from the overlay's `kustomization.yaml` and manual-sync, so Git and the
-cluster agree again. Keep a `kubectl` context that reaches the apiserver directly (not via a
+then remove the line from the overlay's `kustomization.yaml`, merge, and repeat step 4 (it
+carries `prune: true`; `apps/08a` has no `prune` sync option of its own, so a plain sync of the
+shortened list would leave the policy in the cluster as OutOfSync), so Git and the cluster
+agree again. Keep a `kubectl` context that reaches the apiserver directly (not via a
 route that goes through anything in the namespace you are cutting) open for the whole
 operation, and do the `devops` step from a shell that does not need ArgoCD to be working.
 

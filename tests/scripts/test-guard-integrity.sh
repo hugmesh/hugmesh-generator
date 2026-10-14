@@ -983,11 +983,13 @@ PREMERGE_UNGATED=(
   # Lands outside the pull_request gate ONLY because wiring it there means an edit
   # under .github/workflows/shell-suites.yml, which the change that added it was
   # not permitted to make (operator action, 2026-10-14). It is NOT an exemption on
-  # the merits: it is offline, needs python3 + openssl + bash (it was MEASURED only
-  # on a developer host, 196 passed / 0 failed / 0 skipped, NOT in a shell-suites
-  # image), and is run post-merge by .gitlab-ci.yml's lint:pg-tls-preflight. Wire it
-  # into shell-suites.yml's DEBIAN job, measure it there, and DELETE this entry (the
-  # baseline then moves 196 -> 197). The same goes for the next entry.
+  # the merits: both suites are offline (python3 + openssl + bash; the netpol one also
+  # takes kubectl when present). They were MEASURED only on a developer host, NOT in a
+  # shell-suites image, and are run post-merge by .gitlab-ci.yml's lint:pg-tls-preflight
+  # and lint:netpol-egress-scope. Wire both into shell-suites.yml's DEBIAN job, measure
+  # them there, and DELETE both entries (PREMERGE_BASELINE then moves 197 -> 199). Added
+  # ungated: denominator 221 -> 223 and the ungated SET 24 -> 26, baseline unchanged at 197
+  # (MEASURED: this file prints "197 of 223" and "(26 suite(s))").
   tests/scripts/test-netpol-egress-scope.sh
   tests/scripts/test-pg-tls-preflight.sh
   tests/scripts/test-service-env-contract.sh

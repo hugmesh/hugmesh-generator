@@ -49,9 +49,11 @@
 # namespace with scripts/netpol-egress-scope.py --with-db-egress. See
 # docs/DB-HARDENING-RUNBOOK.md part C.
 #
-# ROLLBACK, if a DB pod ever does turn out to need outbound: remove the carved
-# db-egress-<namespace>.yaml from the overlay's kustomization.yaml and manual-sync
-# apps/08a (the pods return to default-allow egress) or add the missing allow rule.
+# ROLLBACK, if a DB pod ever does turn out to need outbound: `kubectl delete networkpolicy
+# db-egress-<db> -n <namespace>` (the pod returns to default-allow egress at once), then
+# remove the carved db-egress-<namespace>.yaml from the overlay's kustomization.yaml,
+# merge, and manual-sync apps/08a WITH prune (it has no prune option); or add the missing
+# allow rule instead.
 # Ingress isolation is untouched either way — Ingress and Egress are independent
 # axes and db-ingress.yaml owns the other one.
 #

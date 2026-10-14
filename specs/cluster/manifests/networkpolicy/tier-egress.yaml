@@ -7,8 +7,12 @@
 # NO `automated:` block) so even after it is added to the kustomization it will not
 # auto-sync into a live cluster. Enabling is a deliberate, staged operator action:
 #   1. Validate on the live cluster FIRST (see §B "live-validate-only").
-#   2. Add ONE of the per-namespace blocks below to kustomization.yaml `resources:`
-#      (uncomment one namespace at a time — NEVER all five at once).
+#   2. Carve ONE namespace's block(s) out of this file into the overlay directory with
+#      scripts/netpol-egress-scope.py <namespace> [--with-db-egress], list the generated
+#      file under `resources:` in manifests/networkpolicy-egress/kustomization.yaml —
+#      NEVER all five at once. (Do NOT list THIS file there: kustomize's default load
+#      restrictor rejects a file outside the overlay directory, and it carries all five
+#      tiers anyway. Per-namespace order and rollback: docs/DB-HARDENING-RUNBOOK.md part C.)
 #   3. Manually sync apps/08a-networkpolicy-egress.yaml and smoke-test that
 #      namespace's flows before moving to the next.
 # Until then this file is pure documentation that ships dark: it changes NOTHING.

@@ -403,7 +403,9 @@ read is refused) — the per-cluster roll itself is what remains live-gated.
    `clientEncryption` leaves `require_client_auth` optional, so a not-yet-TLS client
    is not instantly severed — flip consumers (`CASSANDRA_SSL=true` + truststore;
    `CASSANDRA_TLS_ENABLED=true` on the bootstrap Job), confirm, then tighten to
-   required.
+   required. (Unverified: `require_client_auth` is mutual TLS, and whether plaintext
+   clients are still accepted is the separate `optional` flag in
+   `client_encryption_options`; see `DB-HARDENING-RUNBOOK.md` B.3.)
 
 **Rollback:** revert the values merge on `apps/00-cassandra.yaml` (back to no
 authenticator / plaintext) and re-point `apps/00a-cassandra-hardening.yaml` at the

@@ -29,9 +29,12 @@
 #      self-reconciles and reaches the git repo.
 #   4. Repeat per namespace. Leave `devops` for LAST (ArgoCD self-wedge risk).
 #
-# ROLLBACK: re-comment the namespace in the overlay kustomization and manual-sync (or
-# `kubectl delete networkpolicy tier-egress -n <ns>`). Egress policies are independent
+# ROLLBACK: `kubectl delete networkpolicy tier-egress -n <ns>` frees egress at once; then
+# remove the carved file from the overlay kustomization, merge, and manual-sync WITH
+# prune (this app has no `prune` sync option and no `automated:` block, so a plain sync
+# of the shortened list leaves the policy in the cluster). Egress policies are independent
 # of the ingress axis, so removing them fully restores egress connectivity.
+# docs/DB-HARDENING-RUNBOOK.md part C has the commands.
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:

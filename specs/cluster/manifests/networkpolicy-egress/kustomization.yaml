@@ -26,6 +26,7 @@ kind: Kustomization
 #   2. List the generated file(s) under `resources:` below, commit, merge.
 #   3. Manually sync apps/08a-networkpolicy-egress.yaml (it has NO `automated:` block).
 #   4. Smoke-test that namespace's egress (DNS, DB, Vault, ArgoCD reconcile) before
-#      proceeding to the next namespace. ROLLBACK = remove the line + manual sync (egress
-#      policies pruned -> egress fully open again).
+#      proceeding to the next namespace. ROLLBACK = `kubectl delete networkpolicy` the
+#      carved policies (frees egress at once), remove the line, merge, and manual-sync
+#      WITH prune (apps/08a has no prune option, so a plain sync leaves them in place).
 resources: []

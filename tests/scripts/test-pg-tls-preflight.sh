@@ -30,7 +30,12 @@
 #      SAN, key mismatch, foreign CA, fsGroup 0, wrong volume, not ready, odd
 #      gate value) fails ONLY the DB that has it; a kubectl that errors fails
 #      closed; a missing openssl is UNVERIFIED (3) not a pass; --post checks the
-#      live result; no certificate or key material reaches stdout.
+#      live result; no certificate or key material reaches stdout; the EKU
+#      branch (client-auth-only cert refused, no EKU accepted); a Deployment
+#      whose name differs from the one asked for; a --post log that carries
+#      "Postgres" but not the wrapper's marker; the scratch directory holding the
+#      private key is removed on exit. The marker is also pinned to the nine
+#      entrypoints that print it.
 #   C. MUTATION BATTERY. Each mutation edits one load-bearing line of the
 #      script, the suite proves the file really changed, and the scenario that
 #      guards that line must then go the other way.
@@ -110,6 +115,20 @@ while IFS=$'\t' read -r dir name ns gate vol opt fsg strat; do
   [ "$gate" = "false" ] || [ "$gate" = "true" ] && ok "$name: PG_TLS_ENABLED is a literal \"$gate\"" \
                                                  || bad "$name: PG_TLS_ENABLED value '$gate' is not a literal true/false"
 done <"$W/derived.tsv"
+
+# The --post marker is what the wrapper really logs: read it out of the script and find
+# it in an echo line of every entrypoint (a reworded log line would make --post fail
+# every DB, or, if the marker were loosened, pass a DB that never enabled ssl).
+MARK="$(sed -n "s/^MARKER='\(.*\)'\$/\1/p" "$SCRIPT" | head -n1)"
+if [ -z "$MARK" ]; then bad "could not read MARKER out of the script"
+else
+  while IFS=$'\t' read -r dir name _; do
+    ep="${MAN}/${dir}/entrypoint/pg-tls-entrypoint.sh"
+    [ -f "$ep" ] && grep -v '^[[:space:]]*#' "$ep" >"$W/ep.live"
+    if [ -f "$ep" ] && grep -qF -e "echo \"${name}: ${MARK}" "$W/ep.live"; then ok "$name: its entrypoint logs '${MARK}'"
+    else bad "$name: ${ep#$REPO/} does not echo '${MARK}' (the --post check would never pass)"; fi
+  done <"$W/derived.tsv"
+fi
 
 python3 -I - "$MAN" "$W/derived.tsv" <<'PY' >"$W/eso.out"
 import os, re, sys
@@ -262,12 +281,13 @@ CA="$W/pki"; mkdir -p "$CA"
 mkca(){ # name
   openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -days 3650 \
     -keyout "$CA/$1.key" -out "$CA/$1.crt" -subj "/CN=test $1" >/dev/null 2>&1; }
-mkleaf(){ # db ns outprefix signer days [san-override]
-  local db="$1" ns="$2" out="$3" signer="$4" days="$5" san
+mkleaf(){ # db ns outprefix signer days [san-override] [eku-override; empty = no EKU extension]
+  local db="$1" ns="$2" out="$3" signer="$4" days="$5" san eku
   san="${6-DNS:${db},DNS:${db}.${ns},DNS:${db}.${ns}.svc.cluster.local}"
+  eku="${7-serverAuth,clientAuth}"
   openssl req -new -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes \
     -keyout "$out.key" -out "$out.csr" -subj "/CN=${db}.${ns}.svc.cluster.local" >/dev/null 2>&1
-  { [ -n "$san" ] && echo "subjectAltName=$san"; echo "extendedKeyUsage=serverAuth,clientAuth"; } >"$out.ext"
+  { [ -n "$san" ] && echo "subjectAltName=$san"; [ -n "$eku" ] && echo "extendedKeyUsage=$eku"; true; } >"$out.ext"
   openssl x509 -req -in "$out.csr" -CA "$CA/$signer.crt" -CAkey "$CA/$signer.key" -CAcreateserial \
     -days "$days" -extfile "$out.ext" -out "$out.crt" >/dev/null 2>&1; }
 mkca ca; mkca foreign
@@ -396,6 +416,12 @@ run "$SCRIPT"; expect "cert with no SAN" 1 "SAN does not cover"; only_fails "no 
 mkleaf $DB $NS "$W/partsan" ca 365 "DNS:${DB}"
 gen_fixtures; fxsec $NS $DB tls.crt "$W/partsan.crt"; fxsec $NS $DB tls.key "$W/partsan.key"
 run "$SCRIPT"; expect "cert missing the FQDN SAN" 1 "SAN does not cover ${DB}.${NS}.svc.cluster.local"
+mkleaf $DB $NS "$W/clientonly" ca 365 "DNS:${DB},DNS:${DB}.${NS},DNS:${DB}.${NS}.svc.cluster.local" "clientAuth"
+gen_fixtures; fxsec $NS $DB tls.crt "$W/clientonly.crt"; fxsec $NS $DB tls.key "$W/clientonly.key"
+run "$SCRIPT"; expect "cert whose EKU is clientAuth only" 1 "EKU present but lacks"; only_fails "client-only EKU" $DB
+mkleaf $DB $NS "$W/noeku" ca 365 "DNS:${DB},DNS:${DB}.${NS},DNS:${DB}.${NS}.svc.cluster.local" ""
+gen_fixtures; fxsec $NS $DB tls.crt "$W/noeku.crt"; fxsec $NS $DB tls.key "$W/noeku.key"
+run "$SCRIPT" --db $DB; expect "cert with NO EKU extension is accepted" 0 "no EKU restriction"
 gen_fixtures; fxsec $NS $DB tls.key "$CA/mesh-bff-db.key"
 run "$SCRIPT"; expect "key from a different cert" 1 "does not match"; only_fails "key mismatch" $DB
 mkleaf $DB $NS "$W/foreign" foreign 365
@@ -415,6 +441,8 @@ gen_fixtures; fxmod deployment $NS $DB 'd["spec"]["template"]["spec"]["container
 run "$SCRIPT"; expect "gate holds an unexpected value" 1 "PG_TLS_ENABLED is 'maybe'"; only_fails "gate" $DB
 gen_fixtures; rm -f "$FIX/deployment/$NS/$DB.json"
 run "$SCRIPT"; expect "Deployment absent" 1 "not readable"; only_fails "deployment absent" $DB
+gen_fixtures; fxmod deployment $NS $DB 'd["metadata"]["name"]="some-other-deployment"'
+run "$SCRIPT"; expect "Deployment answers under another name" 1 "not readable"; only_fails "deployment name" $DB
 gen_fixtures; fxmod deployment $NS $DB 'd["spec"]["template"]["spec"]["containers"][0]["env"][1]["value"]="true"'
 run "$SCRIPT" --db $DB; expect "gate already true is reported, not an error" 0 "already \"true\""
 
@@ -453,10 +481,23 @@ post_fixtures; fxmod deployment $NS $DB 'd["spec"]["template"]["spec"]["containe
 run "$SCRIPT" --post; expect "--post, gate still false" 1 "has not synced"; only_fails "post gate" $DB
 post_fixtures; printf 'boot\n%s: PG_TLS_ENABLED=false -> ssl off\n' "$DB" >"$FIX/logs/$NS/$DB.txt"
 run "$SCRIPT" --post; expect "--post, wrapper did not log ssl=on" 1 "did not log"; only_fails "post log" $DB
+post_fixtures; printf 'PostgreSQL init process complete; ready for start up.\n%s: starting Postgres with defaults\n' "$DB" >"$FIX/logs/$NS/$DB.txt"
+run "$SCRIPT" --post; expect "--post, log mentions Postgres but not the wrapper's marker" 1 "did not log"; only_fails "post marker" $DB
 post_fixtures; printf 'off\n' >"$FIX/exec/$NS/$DB.txt"
 run "$SCRIPT" --post; expect "--post, show ssl = off" 1 "show ssl='off'"; only_fails "post ssl" $DB
 post_fixtures; rm -f "$FIX/exec/$NS/$DB.txt"
 run "$SCRIPT" --post; expect "--post, exec unavailable" 1 "show ssl="; only_fails "post exec" $DB
+
+# 9. the scratch directory holds the private key: it must be gone after the run, on a
+#    pass, on a fail and on an early exit
+leftovers(){ ls -d "$W"/pg-tls-preflight.* 2>/dev/null | wc -l | tr -d ' '; }
+rm -rf "$W"/pg-tls-preflight.*
+gen_fixtures; run "$SCRIPT"
+[ "$(leftovers)" = "0" ] && ok "no pg-tls-preflight.* scratch directory is left behind after a passing run" || { bad "a passing run left $(leftovers) scratch dir(s) holding key material"; rm -rf "$W"/pg-tls-preflight.*; }
+gen_fixtures; rm -f "$FIX/secret/$NS/$DB-mtls.json"; run "$SCRIPT"
+[ "$(leftovers)" = "0" ] && ok "no scratch directory is left behind after a failing run" || { bad "a failing run left $(leftovers) scratch dir(s)"; rm -rf "$W"/pg-tls-preflight.*; }
+run "$SCRIPT" --db no-such-db
+[ "$(leftovers)" = "0" ] && ok "no scratch directory is left behind after a usage error" || { bad "a usage error left $(leftovers) scratch dir(s)"; rm -rf "$W"/pg-tls-preflight.*; }
 
 # ─── C. mutation battery ──────────────────────────────────────────────────────
 echo "-- C. mutation battery (each mutation must change the file AND be caught)"
@@ -479,7 +520,14 @@ PY
   if [ "$prc" -ne 0 ]; then bad "mutation '$name': the target text occurs $( [ $prc -eq 7 ] && echo 'not exactly once' || echo '?') — the mutation does not apply"; SURV=$((SURV+1)); return; fi
   cmp -s "$SCRIPT" "$m" && { bad "mutation '$name' did not change the file"; SURV=$((SURV+1)); return; }
   "$scen"
+  rm -rf "$W"/pg-tls-preflight.*
   run "$m" $MUT_ARGS
+  if [ "$want" = "LEFTOVER" ]; then   # caught iff the scratch directory with the key survives the run
+    local left; left="$(leftovers)"; rm -rf "$W"/pg-tls-preflight.*
+    if [ "$left" -gt 0 ]; then ok "mutation '$name' caught ($left scratch dir left behind)"; KILLED=$((KILLED+1))
+    else bad "mutation '$name' SURVIVED (no scratch dir left behind)"; SURV=$((SURV+1)); fi
+    return
+  fi
   if [ "$RC" -eq "$want" ]; then
     bad "mutation '$name' SURVIVED (exit $RC, the unmutated script gives something else)"; SURV=$((SURV+1))
   else ok "mutation '$name' caught (exit $RC)"; KILLED=$((KILLED+1)); fi
@@ -501,6 +549,9 @@ s_postssl(){ post_fixtures; printf 'off\n' >"$FIX/exec/$NS/$DB.txt"; MUT_ARGS="-
 s_postgate(){ post_fixtures; fxmod deployment $NS $DB 'd["spec"]["template"]["spec"]["containers"][0]["env"][1]["value"]="false"'; MUT_ARGS="--post --db $DB"; }
 s_unknown(){ gen_fixtures; MUT_ARGS="--db no-such-db"; }
 s_good(){ gen_fixtures; MUT_ARGS="--db $DB"; }
+s_clientonly(){ gen_fixtures; fxsec $NS $DB tls.crt "$W/clientonly.crt"; fxsec $NS $DB tls.key "$W/clientonly.key"; MUT_ARGS="--db $DB"; }
+s_postmarker(){ post_fixtures; printf 'PostgreSQL init process complete; ready for start up.\n%s: starting Postgres with defaults\n' "$DB" >"$FIX/logs/$NS/$DB.txt"; MUT_ARGS="--post --db $DB"; }
+s_depname(){ gen_fixtures; fxmod deployment $NS $DB 'd["metadata"]["name"]="some-other-deployment"'; MUT_ARGS="--db $DB"; }
 
 mutate "a missing Secret is not a failure" \
   'fail "secret/$sec does not exist in $ns — flipping now would crash-loop the DB ($(why))"' \
@@ -547,6 +598,15 @@ mutate "post: live gate not required" \
   'if [ "$out" = "true" ]; then pass "live PG_TLS_ENABLED is \"true\""' 'if true; then pass "live PG_TLS_ENABLED is \"true\""' s_postgate 1
 mutate "unknown DB no longer a usage error" \
   'done))" >&2; exit 2; }' 'done))" >&2; }' s_unknown 2
+mutate "EKU without server auth tolerated" \
+  '*) fail "EKU present but lacks TLS Web Server Authentication" ;; esac' \
+  '*) pass "EKU present but lacks TLS Web Server Authentication" ;; esac' s_clientonly 1
+mutate "post marker weakened to the word Postgres" \
+  "MARKER='PG_TLS_ENABLED=true -> Postgres ssl=on'" "MARKER='Postgres'" s_postmarker 1
+mutate "deployment name answer not compared" \
+  'if [ $rc -ne 0 ] || [ "$out" != "$db" ]; then' 'if [ $rc -ne 0 ]; then' s_depname 1
+mutate "the key scratch directory is not removed on exit" \
+  "trap 'rm -rf \"\$WORK\"' EXIT" "trap ':' EXIT" s_good LEFTOVER
 # control: the unmutated script on the same unmutated scenario is GREEN, so the
 # battery above is not catching a harness that is red for another reason
 s_good; run "$SCRIPT" $MUT_ARGS
