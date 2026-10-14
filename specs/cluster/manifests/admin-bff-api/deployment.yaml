@@ -497,15 +497,19 @@ spec:
             #    RestFederationModuleClient against APPSTORE_FEDERATION_BASE_URL, which
             #    is already pinned above.
             #
-            # KNOWN GAP, deliberately not papered over: neither leg's bearer token has
-            # a source in this tree. APPSTORE_ARGOCD_AUTH_TOKEN and
-            # APPSTORE_FEDERATION_AUTH_TOKEN both default EMPTY in application.yml and
-            # there is no ExternalSecret for either (grep external-secrets/ — argocd
-            # has none; the federation token must be a Casdoor JWT carrying
-            # ROLE_SUPERADMIN). Until they are provisioned these two legs make a REAL
-            # call that fails LOUDLY — surfaced to the caller, which is why it is
-            # acceptable to land ahead of the tokens, unlike the builder below whose
-            # failure mode is silent.
+            # THE TOKEN SOURCE (2026-10-14). APPSTORE_ARGOCD_AUTH_TOKEN and
+            # APPSTORE_FEDERATION_AUTH_TOKEN both default EMPTY in application.yml. They
+            # now have a SOURCE: external-secrets/appstore-effector-externalsecrets.yaml
+            # materializes Secret appstore-effector-tokens in this namespace from
+            # secret/<brand>/appstore-effector-tokens, and the two env entries below read
+            # it as `optional: true` secretKeyRefs. The VALUES are operator-seeded (the
+            # ArgoCD token is minted by ArgoCD, the federation one is a Casdoor JWT
+            # carrying ROLE_SUPERADMIN; the generator can mint neither), so until an
+            # operator writes that Vault path the Secret does not exist and the env vars
+            # are unset - byte-for-byte the previous behaviour (empty Bearer). Until they
+            # are provisioned these two legs make a REAL call that fails LOUDLY —
+            # surfaced to the caller, which is why it is acceptable to land ahead of the
+            # tokens, unlike the builder below whose failure mode is silent.
             #
             # CORRECTION, MEASURED 2026-09-17 — this note used to say both legs "come
             # back 401". NEITHER DOES. Both fail earlier, at the TLS handshake, so the
@@ -534,10 +538,11 @@ spec:
             # Neither finding affects the base-url values pinned here: every correct
             # https:// address for these Services hits the same wall, and dropping to
             # plaintext would be a decision nobody has made.
-            # The tokens are NOT wired here as
-            # secretKeyRefs on purpose: a non-optional secretKeyRef naming a Secret
-            # that does not exist wedges this very pod in CreateContainerConfigError,
-            # which would reproduce the exact hang class this unit exists to avoid.
+            # The tokens are wired as secretKeyRefs with `optional: true` and ONLY that:
+            # a non-optional secretKeyRef naming a Secret that does not exist wedges this
+            # very pod in CreateContainerConfigError, which would reproduce the exact hang
+            # class this unit exists to avoid. test-appstore-effector-flags.sh fails if
+            # `optional: true` is dropped.
             #
             # 3) APPSTORE_BUILDER_ENABLED — STAYS FALSE. ORDERING CONSTRAINT.
             #    false → no KanikoBuildLauncher bean (@ConditionalOnProperty) and
@@ -562,6 +567,20 @@ spec:
             - { name: APPSTORE_EFFECTOR_ENABLED,   value: "true" }
             - { name: APPSTORE_FEDERATION_ENABLED, value: "true" }
             - { name: APPSTORE_BUILDER_ENABLED,    value: "false" }
+            # The two effector bearer tokens — see "THE TOKEN SOURCE" above. `optional: true`
+            # is load-bearing: the Secret is operator-seeded and absent until then.
+            - name: APPSTORE_ARGOCD_AUTH_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: appstore-effector-tokens
+                  key: argocd-auth-token
+                  optional: true
+            - name: APPSTORE_FEDERATION_AUTH_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: appstore-effector-tokens
+                  key: federation-auth-token
+                  optional: true
             # app.appstore.argocd.base-url — the ArgoCD API server the effector in (1)
             # above actually dials. The packaged default is
             # `https://argocd-server.argocd.svc.cluster.local` (application.yml:759),
