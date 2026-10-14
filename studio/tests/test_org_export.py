@@ -480,6 +480,60 @@ def test_a_repository_whose_content_is_on_another_branch_is_refused_too(world):
     assert _git(bare, "rev-parse", "master") == theirs
 
 
+def test_a_repository_gh_calls_non_empty_with_no_branch_at_all_is_refused(world):
+    """The other half of the non-main refusal: ``gh repo view`` says ``isEmpty: false``
+    while ``git ls-remote --heads`` lists no branch (the repository holds tags only).
+    The fake gh derives isEmpty from refs/heads, so it cannot answer this way; a
+    wrapping runner answers the view itself and lets every other call through. Before
+    this test, dropping gh's answer (``elif branches:``) left the suite green and apply
+    pushed a new main into a repository gh had just called non-empty (skeptic, round 2,
+    mutation M-E)."""
+    cfg, runner = world["cfg"], world["runner"]
+    bare = _bare(world, "example-parent")
+    os.makedirs(os.path.dirname(bare))
+    _git(world["gh_root"], "init", "-q", "--bare", bare)
+    other = world["tmp"] / "other"
+    other.mkdir()
+    (other / "README.md").write_text("theirs, tagged only\n")
+    _git(str(other), "init", "-q", "-b", "main")
+    _git(str(other), "add", "-A")
+    _git(str(other), "-c", "commit.gpgsign=false", "commit", "-q", "-m", "theirs")
+    _git(str(other), "push", "-q", bare, "HEAD:refs/tags/v1")
+    assert _git(bare, "for-each-ref", "--format=%(refname)").splitlines() == ["refs/tags/v1"]
+    assert _git(bare, "ls-remote", "--heads", bare) == ""          # no branch, really
+
+    class NonEmptyViewRunner(RecordingRunner):
+        def run(self, argv, *, cwd=None, env=None, timeout=600):
+            if argv[:3] == ["gh", "repo", "view"] and argv[3] == "exampleorg/example-parent":
+                self.calls.append(list(argv))
+                body = json.dumps({"name": "example-parent", "isEmpty": False,
+                                   "visibility": "PRIVATE"}).encode()
+                return oe.RunResult(0, body, b"")
+            return super().run(argv, cwd=cwd, env=env, timeout=timeout)
+
+    stub = NonEmptyViewRunner(runner.fake_bin, runner.gh_root, runner.gh_log)
+    p = oe.plan(cfg, stub, stamp="20260101T000000Z")
+    parent = next(r for r in p.repos if r.source == "hugmesh-parent")
+    assert parent.action == "exists (compared at apply)"
+    res = oe.apply(p, stub)
+    r = next(x for x in res.repos if x.target == "exampleorg/example-parent")
+    assert r.action == "refused: existing non-empty repository", (r.action, r.skipped)
+    assert "content gh reports as non-empty" in r.skipped and r.branch == ""
+    assert _git(bare, "for-each-ref", "--format=%(refname)").splitlines() == ["refs/tags/v1"]
+    pushes = [c for c in stub.calls if c[:2] == ["git", "push"] and "example-parent" in c[3]]
+    assert pushes == [], pushes
+    # the other repositories, which the fake gh really saw as missing, were created
+    assert {x.action for x in res.repos if x.target != "exampleorg/example-parent"} == {"create"}
+    # update via branch: export/<stamp> beside the tag, no main invented
+    cfg.update = oe.UPDATE_BRANCH
+    res2 = oe.apply(oe.plan(cfg, stub, stamp="20260303T000000Z"), stub)
+    r2 = next(x for x in res2.repos if x.target == "exampleorg/example-parent")
+    assert r2.action == "update via branch" and r2.branch == "export/20260303T000000Z"
+    assert not r2.skipped
+    assert sorted(_git(bare, "for-each-ref", "--format=%(refname)").splitlines()) == \
+        ["refs/heads/export/20260303T000000Z", "refs/tags/v1"]
+
+
 def test_a_missing_checkout_is_reported_not_invented(world):
     cfg, runner = world["cfg"], world["runner"]
     shutil.rmtree(os.path.join(world["src"], "hugmesh-commons"))
@@ -783,6 +837,34 @@ def test_the_own_domains_selected_services_reach_its_repository_set(world, tmp_p
     # without the selection the forum api is NOT in the set: the assertion above bites
     cfg.optional_services = []
     assert "hugmesh-forum-api" not in oe.domain_repo_names(cfg)[0]
+
+
+def test_a_services_value_that_is_not_a_list_is_no_selection_not_five_letters(tmp_path):
+    """A hand-edited record can hold ``"optional_services": "phpbb"``; read raw and
+    listed, that is ``['p', 'h', 'p', 'b', 'b']`` — five services the catalogue never
+    heard of (skeptic, round 2). Only a list of strings counts, on the own row, on an
+    added row and on an ImageConfig's ``cluster_domain_services`` alike."""
+    rec = {"id": "m1", "label": "edited", "generator_dir": "/gen",
+           "config": {"cluster_domain": "mesh.example",
+                      "domains": [{"name": "mesh.example", "idp": "superdomain",
+                                   "optional_services": "phpbb", "github_org": "exampleorg"},
+                                  {"name": "chat.mesh.example", "idp": "own",
+                                   "optional_services": "akkoma", "github_org": "otherorg"},
+                                  {"name": "mixed.mesh.example", "idp": "own",
+                                   "optional_services": ["phpbb", 7, None, "akkoma"],
+                                   "github_org": "thirdorg"}]}}
+    path = tmp_path / "rec.json"
+    path.write_text(json.dumps(rec))
+    cands = oe.candidates_from_file(str(path))
+    assert [(c.domain, c.optional_services) for c in cands] == \
+        [("mesh.example", []), ("chat.mesh.example", []), ("mixed.mesh.example", ["phpbb", "akkoma"])]
+    img = {"mode": "mesh", "cluster_domain": "mesh.example",
+           "cluster_domain_github_org": "exampleorg", "cluster_domain_services": "phpbb",
+           "domains": []}
+    ipath = tmp_path / "image.json"
+    ipath.write_text(json.dumps(img))
+    (c,) = oe.candidates_from_file(str(ipath), "/g")
+    assert c.optional_services == []
 
 
 def test_saved_mesh_candidates_scan_the_studio_state_dir(tmp_path, monkeypatch):

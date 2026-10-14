@@ -404,10 +404,10 @@ def _candidates_from_rows(rows, own_name: str, own_org: str, *, own_services=(),
     seen: set[str] = set()
     own = (own_name or "").strip()
     if own and (own_org or "").strip():
-        services = list(own_services or [])
+        services = _slugs(own_services)
         for row in rows or ():
             if str(_get(row, "name", "") or "").strip() == own:
-                services = list(_get(row, "optional_services", []) or []) or services
+                services = _slugs(_get(row, "optional_services", [])) or services
         out.append(ExportCandidate(own, own_org.strip(), services, source_mode, source_dir,
                                    generator_dir, where, path))
         seen.add(own)
@@ -417,7 +417,7 @@ def _candidates_from_rows(rows, own_name: str, own_org: str, *, own_services=(),
         if not name or not org or name in seen:
             continue
         seen.add(name)
-        out.append(ExportCandidate(name, org, list(_get(row, "optional_services", []) or []),
+        out.append(ExportCandidate(name, org, _slugs(_get(row, "optional_services", [])),
                                    source_mode, source_dir, generator_dir, where, path))
     return out
 
@@ -426,6 +426,16 @@ def _get(row, key, default=None):
     if isinstance(row, dict):
         return row.get(key, default)
     return getattr(row, key, default)
+
+
+def _slugs(value) -> list[str]:
+    """A service list read RAW off a record: a list (or tuple) of strings, nothing
+    else. A hand-edited record can hold ``"phpbb"`` where a list belongs, and
+    ``list("phpbb")`` is five one-letter services; anything that is not a list is
+    "no selection", the way the ImageConfig door treats ``cluster_domain_services``."""
+    if not isinstance(value, (list, tuple)):
+        return []
+    return [s for s in value if isinstance(s, str)]
 
 
 def candidates_from_file(path: str, generator_dir: str = "") -> list[ExportCandidate]:
@@ -465,8 +475,7 @@ def candidates_from_file(path: str, generator_dir: str = "") -> list[ExportCandi
         return _candidates_from_rows(
             data.get("domains") or (), str(data.get("cluster_domain") or ""),
             str(data.get("cluster_domain_github_org") or ""),
-            own_services=[s for s in (data.get("cluster_domain_services") or ())
-                          if isinstance(s, str)],
+            own_services=_slugs(data.get("cluster_domain_services")),
             source_mode="clone", source_dir="", generator_dir=generator_dir,
             where=where, path=path)
     raise ValueError(f"{path}: neither an export config, an image config nor a "
