@@ -718,6 +718,19 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 #     194 of 218 suites are named by a pull_request-triggered workflow
 #     PASS the ungated SET matches its pin exactly (24 suite(s))
 #
+# Gated count unchanged, denominator +1 and ungated SET 24 -> 25, on 2026-10-14 for
+# #693: every signed-in call on kind answered 500 because the BFF manifests set only CASDOOR_ISSUER_URI and
+# the key fetch went to the public issuer host, which does not resolve in-cluster.
+# tests/scripts/test-bff-jwks-in-cluster.sh pins the in-cluster CASDOOR_JWKS_URI, its
+# Service closure and the NetworkPolicy admission offline. It is NOT yet named by
+# shell-suites.yml — the lane that wrote it could not edit .github — so it lands in
+# PREMERGE_UNGATED below with that reason (the set pin moves 24 -> 25) and is run
+# post-merge by .gitlab-ci.yml's lint:bff-jwks-in-cluster. MEASURED by RUNNING this
+# file on this branch merged with origin/main c0c46601:
+#     196 of 221 suites are named by a pull_request-triggered workflow
+#     PASS the ungated SET matches its pin exactly (25 suite(s))
+# When the shell-suites.yml line lands: delete that entry and raise the baseline by one.
+
 # 192 -> 193 (denominator 215 -> 216) on 2026-09-30 for #663: the kind sign-in
 # answered 500 because the BFF autoscalers' maxReplicas (6) times the unconfigured
 # R2DBC pool (10) exceeded the app role's CONNECTION LIMIT (20).
@@ -774,6 +787,12 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # this file on the merged tree (GUARD_PREMERGE=0), not computed:
 #     199 of 223 suites are named by a pull_request-triggered workflow
 #     PASS the ungated SET matches its pin exactly (24 suite(s))
+# Re-measured the same way on the merge with origin/main e3e95369 (main had since
+# listed tests/go-live/test-onion-refuse.sh and tests/scripts/test-bff-jwks-in-cluster.sh
+# in PREMERGE_UNGATED, both still waiting for their shell-suites.yml line): the gated
+# count is unchanged, only the denominator and the ungated set moved:
+#     199 of 225 suites are named by a pull_request-triggered workflow
+#     PASS the ungated SET matches its pin exactly (26 suite(s))
 PREMERGE_BASELINE="${GUARD_PREMERGE:-199}"
 
 # 182 -> 192 (denominator 205 -> 215) on 2026-09-30 for #385: the census gained a
@@ -937,6 +956,14 @@ PREMERGE_UNGATED=(
   tests/casdoor/test-jwt-custom-token.sh
   tests/device-registry/test-layer-a-headscale-acl.sh
   tests/egress-vpn/test-secret-contract.sh
+  # Offline, bash + python3 only, 48 passed / 0 failed on 2026-10-14 (#654 D12:
+  # the driver refuses `commit` for a Tor address; its three-mutation battery is
+  # inside). It belongs in shell-suites.yml's ALPINE job beside
+  # tests/go-live/test-go-live-driver.sh, and .gitlab-ci.yml's
+  # orphan-guards-verify already runs it post-merge. Listed here, not gated,
+  # only because the lane that added it may not edit .github/: the operator adds
+  # the one line there, raises PREMERGE_BASELINE by one and drops this entry.
+  tests/go-live/test-onion-refuse.sh
   tests/pentest/nuclei/test-templates.sh
   # Needs `unshare -Urm` (a private user+mount namespace) to stack REAL bind
   # mounts under a scratch build system and drive the x86 builder's own
@@ -950,6 +977,14 @@ PREMERGE_UNGATED=(
   # 2026-09-30); the same code paths are proven against a fixture table,
   # pre-merge, by tests/scripts/test-builder-resume-safety.sh.
   tests/scripts/test-builder-unmount-real.sh
+  # NOT YET IN THE PULL_REQUEST GATE, and that is the only reason it is here: it is
+  # offline, PyYAML-only, ~12 s, and belongs beside test-db-connection-budget.sh in
+  # shell-suites.yml's debian job. The lane that wrote it (hugmesh-generator#693,
+  # 2026-10-07) was forbidden to edit anything under .github, so until that one
+  # line lands it runs post-merge in .gitlab-ci.yml's lint:bff-jwks-in-cluster and
+  # locally under `make e2e-ungated`. When the line lands: delete this entry and
+  # raise PREMERGE_BASELINE 196 -> 197 (check 7 will say so).
+  tests/scripts/test-bff-jwks-in-cluster.sh
   tests/scripts/test-e2e-cli-lane.sh
   tests/scripts/test-e2e-coverage-matrix.sh
   tests/scripts/test-e2e-env-interface-dimensions.sh
