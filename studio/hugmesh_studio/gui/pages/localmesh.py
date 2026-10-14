@@ -152,6 +152,7 @@ from .domain_services import DomainServicesWidget
 from .domains import DomainsTableWidget
 from ._mesh_monitor_widget import MeshMonitorProbe, MeshMonitorWidget, MeshScaleWorker
 from ._add_user_dialog import AddUserDialog
+from ._local_agent_widget import LocalAgentWidget, context_from_page
 from ._code_folders_widget import CodeFoldersWidget
 from ._saved_meshes_widget import SavedMeshProbe, SavedMeshesWidget
 from ._logintheme import LoginThemeGroup
@@ -1785,6 +1786,20 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         # No trailing addStretch: a FlowLayout has no stretch concept, and a
         # spacer item would be wrapped as if it were another button.
         lay.addWidget(brow_box)
+        # LOCAL AI AGENT (#695). The Docker mesh and the kind DevOps lane end on this one
+        # page, so one card serves both (its Lane drop-down only changes the brief). It
+        # reads the source choice and domains at press time through the context callable;
+        # the one hook is completeChanged, which fires at every verb start and end, so the
+        # card's Lane follows the lane whose verb just ran (Start DevOps lane -> kind).
+        self.local_agent = LocalAgentWidget(
+            self.generator_dir, context=lambda: context_from_page(self))
+        lay.addWidget(self.local_agent)
+        self.completeChanged.connect(self.local_agent.refresh_apps)
+        # The source cards too: the stepped wizard re-shows the card after the Repo
+        # source step, but the single-page frame has no step change, so a changed
+        # source choice there would keep listing the other tree's apps until Re-check.
+        self.src_existing.toggled.connect(lambda _on: self.local_agent.refresh_apps())
+        self.src_dir.textChanged.connect(lambda _t: self.local_agent.refresh_apps())
 
         # ── RUNNING-MESH MONITOR (operator ask, 2026-09-01): every pod and container
         # of BOTH lanes, its addresses, and an Open button only where the browser may
