@@ -274,13 +274,8 @@ def test_the_local_mesh_route_records_an_added_rows_org(wiz):
                for r in recorded), recorded
 
 
-def test_the_local_mesh_route_keeps_the_own_rows_org_through_next(wiz, qapp):
-    """Generate a new mesh -> Domains step: an org typed on the OWN row (row 0)
-    survives Next. ``_commit_domains`` rebuilds row 0 as a fresh ``Domain`` (name,
-    idp, the services carried over by name); measured before the fix it carried
-    everything but the org: 'exampleorg' before Next, '' after, and the bring-up
-    recorded no org for the mesh's own domain — the one domain the export step is
-    about by default."""
+def _local_mesh_domains_step(wiz):
+    """Generate a new local mesh -> the Domains step; returns the controller page."""
     wiz.next()
     mode = wiz.currentPage()
     mode._buttons["localmesh"].setChecked(True)
@@ -291,33 +286,117 @@ def test_the_local_mesh_route_keeps_the_own_rows_org_through_next(wiz, qapp):
     assert isinstance(wiz.currentPage(), localmesh_mod.LocalMeshEnvPage)
     wiz.next()
     assert isinstance(wiz.currentPage(), localmesh_mod.LocalMeshDomainsPage)
-    ctl = wiz.page(wiz._page_ids["localmesh"])
+    return wiz.page(wiz._page_ids["localmesh"])
+
+
+def test_the_local_mesh_route_keeps_the_own_rows_org_through_next(wiz, qapp):
+    """Generate a new mesh -> Domains step: an org typed on the OWN row (row 0)
+    survives Next WITHOUT the cell ever losing focus. The Next shortcut and a
+    programmatic ``next()`` do not move focus, so ``editingFinished`` never fires;
+    measured before the fix ``_commit_domains`` rebuilt row 0 from the STATE that
+    only that signal writes: 'exampleorg' in the cell, '' after Next, and the
+    bring-up recorded no org for the mesh's own domain (correctness skeptic B3).
+    The cell is the carrier; the state is read only when there is no own row."""
+    ctl = _local_mesh_domains_step(wiz)
     md = ctl.mesh_domains
     own = md.own_name
     assert own and md.by_name(own) is not None and md.by_name(own).github_org == ""
     assert ctl.domains_table.is_own_row(0)
     cell = ctl.domains_table.table.cellWidget(0, _COL_ORG)
-    cell.setText("exampleorg")
-    cell.editingFinished.emit()                 # the cell's write-through (focus loss)
+    cell.setText("exampleorg")                  # typed; NO editingFinished
     _settle(qapp)
-    assert md.by_name(own).github_org == "exampleorg"      # before Next
-    assert ctl._commit_domains()
+    assert ctl.domains_table.own_row_github_org() == "exampleorg"
+    assert md.by_name(own).github_org == ""     # the state has not seen it yet
+    before = wiz.currentId()
+    wiz.next()                                  # the real Next, as the shortcut does it
+    assert wiz.currentId() != before, "Next refused"
     assert ctl.mesh_domains.own_name == own
     assert ctl.mesh_domains.by_name(own).github_org == "exampleorg", "lost on Next"
     # a second Next (Back, then Next again) must not drop it either
+    wiz.back()
     assert ctl._commit_domains()
     assert ctl.mesh_domains.by_name(own).github_org == "exampleorg"
     recorded = ctl.collect_bootstrap().domains
     assert any(r["name"] == own and r.get("github_org") == "exampleorg"
                for r in recorded), recorded
-    # and an own row that never named an org still records none (absent, not "")
+    # clearing the cell (again without focus loss) clears the state on Next: the
+    # cell wins over the state in BOTH directions, or a cleared org would come back
     cell = ctl.domains_table.table.cellWidget(0, _COL_ORG)
     cell.setText("")
-    cell.editingFinished.emit()
     _settle(qapp)
     assert ctl._commit_domains()
+    assert ctl.mesh_domains.by_name(own).github_org == ""
     assert all("github_org" not in r for r in ctl.collect_bootstrap().domains
                if r["name"] == own)
+
+
+def test_the_local_mesh_route_refuses_a_bad_slug_on_next_never_a_modal(wiz, qapp):
+    """The image flow refuses a non-slug org inline on Next (DomainsPage.validatePage);
+    the local-mesh route ran only the name checks and ACCEPTED 'bad-' into the state
+    and the saved record (correctness skeptic B2). Both faces now refuse with the
+    same sentence, inline, and the bad value never reaches the record."""
+    ctl = _local_mesh_domains_step(wiz)
+    own = ctl.mesh_domains.own_name
+    ctl.domains_table._add("chat.example", "Chat", github_org="bad-")
+    before = wiz.currentId()
+    wiz.next()
+    assert wiz.currentId() == before, "Next ACCEPTED the bad slug"
+    assert ctl.domains_note.isVisible()
+    assert "not a GitHub org slug" in ctl.domains_note.text()
+    assert "chat.example" in ctl.domains_note.text()
+    assert not [w for w in QtWidgets.QApplication.topLevelWidgets()
+                if w.isVisible() and w is not wiz
+                and isinstance(w, (QtWidgets.QDialog, QtWidgets.QMessageBox))]
+    assert all(r.get("github_org", "") == "" for r in ctl.collect_bootstrap().domains)
+    # the own row's cell too (its validator allows the in-progress trailing hyphen)
+    for r in range(ctl.domains_table.table.rowCount()):
+        if not ctl.domains_table.is_own_row(r):
+            ctl.domains_table.table.cellWidget(r, _COL_ORG).setText("otherorg")
+    cell = ctl.domains_table.table.cellWidget(0, _COL_ORG)
+    cell.setText("own-")
+    _settle(qapp)
+    assert not ctl._commit_domains()
+    assert "not a GitHub org slug" in ctl.domains_note.text()
+    assert ctl.mesh_domains.by_name(own).github_org == ""   # never written to the state
+    # fixing the cell lets Next through, and the note clears
+    cell.setText("exampleorg")
+    _settle(qapp)
+    assert ctl._commit_domains()
+    assert not ctl.domains_note.isVisible()
+    assert ctl.mesh_domains.by_name(own).github_org == "exampleorg"
+    assert ctl.mesh_domains.by_name("chat.example").github_org == "otherorg"
+
+
+def test_a_reopened_saved_mesh_shows_every_org_and_records_them_again(wiz, qapp):
+    """A saved mesh naming orgs is re-opened the way the Studio does it
+    (``_load_saved`` -> ``from_dict`` -> ``apply_bootstrap``): every cell shows its
+    org, and the next Next + record still carry them. Red on the unfixed head: the
+    loader dropped the key, the cells were empty, and the re-saved record named no
+    org and no own row (both skeptics, round 0)."""
+    from hugmesh_studio.core import saved_meshes
+    from hugmesh_studio.core.local_mesh_bootstrap import LocalMeshBootstrapConfig
+    from hugmesh_studio.core.local_mesh_domains import bootstrap_domain_records
+    ctl = _local_mesh_domains_step(wiz)
+    own = ctl.mesh_domains.own_name
+    rec = saved_meshes.SavedMesh(id="20260101-000000-abcd", label="named orgs",
+                                 generator_dir=GENERATOR_DIR)
+    rec.config = LocalMeshBootstrapConfig(
+        cluster_domain=own,
+        domains=bootstrap_domain_records(
+            [Domain(name=own, github_org="exampleorg"),
+             Domain(name="chat.example", title="Chat", github_org="otherorg"),
+             Domain(name="plain.example")], own)).to_dict()
+    assert rec.config["domains"][0]["github_org"] == "exampleorg"     # on disk
+    ctl._load_saved(rec)
+    _settle(qapp)
+    t = ctl.domains_table
+    assert t.is_own_row(0) and t.own_row_github_org() == "exampleorg"
+    assert [t.row_github_org(r) for r in range(1, t.table.rowCount())] == ["otherorg", ""]
+    assert ctl.mesh_domains.by_name(own).github_org == "exampleorg"
+    assert ctl._commit_domains()
+    recorded = ctl.collect_bootstrap().domains
+    assert [(r["name"], r.get("github_org")) for r in recorded] == [
+        (own, "exampleorg"), ("chat.example", "otherorg"), ("plain.example", None)]
 
 
 # ── the Go-Live export step ─────────────────────────────────────────────────────────
@@ -394,7 +473,7 @@ def test_plan_then_typed_org_arms_apply_and_the_run_goes_through_the_runner(
     content = page._content_scroll.widget()
     assert content.minimumSizeHint().width() <= viewport.width(), \
         (content.minimumSizeHint().width(), viewport.width())
-    for name in ("source", "plan_btn", "confirm", "apply_btn", "status", "table"):
+    for name in ("source", "rename_map", "plan_btn", "confirm", "apply_btn", "status", "table"):
         ctl = getattr(page, name)
         if name == "status" and not ctl.isVisible():
             continue
@@ -464,6 +543,128 @@ def test_a_config_file_can_be_added_as_a_source(golive, world, tmp_path):
     # the page is not the current one here, so isVisible() is False for every child;
     # isHidden() is the widget's own flag
     assert not page.status.isHidden() and "missing.json" in page.status.text()
+
+
+def test_a_config_files_rules_reach_the_plan_and_the_rename_map_field_works(
+        golive, world, qapp, tmp_path):
+    """The config-file door kept only domain/org/source: a file saying
+    include_generator:false, skip_repos, an exclude rule, public, update:branch was
+    planned with the DEFAULTS (correctness skeptic B4). Now: the pickers are seeded
+    from the file, the plan honours every rule, the Terminal line hands the file
+    over as --config, and a 'Rename map' field (the CLI's --rename-map) merges extra
+    rules — the way to drop a file a 'refused: banned marker' row points at."""
+    import json
+    cfg = world["cfg"]
+    cfg.visibility = "public"
+    cfg.update = oe.UPDATE_BRANCH
+    cfg.rename_map = oe.merge_rename_maps({}, {"exclude": ["hugmesh-actions:Dockerfile"]})
+    cfg_path = tmp_path / "export.json"
+    cfg_path.write_text(json.dumps(cfg.to_dict()))
+    golive.export_runner = world["runner"]
+    golive.export_remote_base = f"file://{world['gh_root']}/"
+    _at_generate(golive)
+    page = golive.page(golive._page_ids["org-export"])
+    page.config_path.setText(str(cfg_path))
+    page._add_config()
+    golive.next()
+    assert golive.currentPage() is page
+    # the file's own choices seeded the pickers and the Terminal line carries the file
+    assert page.visibility.currentText() == "public"
+    assert page.update_mode.currentData() == oe.UPDATE_BRANCH
+    assert page.out_dir.text() == cfg.out_dir
+    assert f"--config {cfg_path}" in page.cmd.text() and "--domain mesh.example" in page.cmd.text()
+    assert "--org " not in page.cmd.text()
+    planned = page.export_config()
+    assert planned.include_generator is False and planned.skip_repos == cfg.skip_repos
+    assert planned.visibility == "public" and planned.update == oe.UPDATE_BRANCH
+    page.plan_btn.click()
+    _wait_worker(page, qapp)
+    assert page.plan is not None, page.status.text()
+    targets = [page.table.item(r, 1).text() for r in range(page.table.rowCount())]
+    assert targets == ["exampleorg/example-actions", "exampleorg/example-parent",
+                       "exampleorg/example-commons", "exampleorg/mesh.example.github.io"]
+    actions = next(r for r in page.plan.repos if r.source == "hugmesh-actions")
+    assert "Dockerfile: excluded by the rename map" in actions.excluded
+    # the Rename map field: an extra file merged over the config's own map
+    rm = tmp_path / "extra.json"
+    rm.write_text(json.dumps({"repos": {"hugmesh-commons": "example-core"},
+                              "exclude": ["hugmesh-parent:LICENSE"]}))
+    page.rename_map.setText(str(rm))
+    page.rename_map.editingFinished.emit()
+    assert f"--rename-map {rm}" in page.cmd.text()
+    page.plan_btn.click()
+    _wait_worker(page, qapp)
+    targets = [page.table.item(r, 1).text() for r in range(page.table.rowCount())]
+    assert "exampleorg/example-core" in targets and "exampleorg/example-commons" not in targets
+    parent = next(r for r in page.plan.repos if r.source == "hugmesh-parent")
+    assert "LICENSE: excluded by the rename map" in parent.excluded
+    actions = next(r for r in page.plan.repos if r.source == "hugmesh-actions")
+    assert "Dockerfile: excluded by the rename map" in actions.excluded   # both maps apply
+    assert f"--rename-map {rm}" in page.cmd.text() and page.cmd.text().endswith("--apply")
+    # a rename map that cannot be read is said inline, and nothing is planned
+    page.rename_map.setText(str(tmp_path / "nope.json"))
+    page.plan = None
+    page.plan_btn.click()
+    _wait_worker(page, qapp)
+    assert page.plan is None
+    assert page.status.isVisible() and "nope.json" in page.status.text()
+    # the field is drawn where a person can use it (#647): visible, inside the
+    # viewport, wide enough for a path, on the first screen at the smallest size
+    page.rename_map.setText(str(rm))
+    page.rename_map.editingFinished.emit()
+    golive.resize(820, 640)
+    _settle(qapp, 10)
+    viewport = page._content_scroll.viewport()
+    assert page.rename_map.isVisible()
+    top = page.rename_map.mapTo(viewport, page.rename_map.rect().topLeft())
+    bottom = page.rename_map.mapTo(viewport, page.rename_map.rect().bottomRight())
+    assert 0 <= top.x() and bottom.x() <= viewport.width(), (top, bottom)
+    assert 0 <= top.y() and bottom.y() <= viewport.height(), (top, bottom)
+    assert page.rename_map.width() >= 300, page.rename_map.width()
+    _shot(golive, "golive-org-export-rename-map-field.png", tmp_path)
+
+
+def test_a_banned_marker_is_cleared_from_the_gui_with_the_rename_map_field(
+        golive, world, qapp, tmp_path):
+    """The whole remedy a person gets in the GUI: a planted marker blocks one
+    repository (its row red, the file named), Apply cannot be armed; an exclude
+    rule typed into the Rename map field unblocks it and Apply arms."""
+    import json
+    from _org_export_helpers import git as _git
+    token = "github_pat_" + "11FAKE" + "A" * 30
+    src = os.path.join(world["src"], "hugmesh-commons")
+    os.makedirs(os.path.join(src, "tests"), exist_ok=True)
+    with open(os.path.join(src, "tests", "fake-token.sh"), "w", encoding="utf-8") as fh:
+        fh.write(f"TOKEN={token}\n")
+    _git(src, "add", "-A")
+    _git(src, "-c", "commit.gpgsign=false", "commit", "-q", "-m", "plant")
+    cfg_path = tmp_path / "export.json"
+    cfg_path.write_text(json.dumps(world["cfg"].to_dict()))
+    golive.export_runner = world["runner"]
+    golive.export_remote_base = f"file://{world['gh_root']}/"
+    _at_generate(golive)
+    page = golive.page(golive._page_ids["org-export"])
+    page.config_path.setText(str(cfg_path))
+    page._add_config()
+    golive.next()
+    page.plan_btn.click()
+    _wait_worker(page, qapp)
+    assert page.plan is not None and page.plan.blocked, page.status.text()
+    row = next(r for r in range(page.table.rowCount())
+               if page.table.item(r, 0).text() == "hugmesh-commons")
+    assert page.table.item(row, 2).text() == "refused: banned marker"
+    assert "tests/fake-token.sh: GitHub fine-grained token" in page.table.item(row, 2).toolTip()
+    assert "blocked" in page.status.text()
+    page.confirm.setText("exampleorg")
+    assert not page.apply_btn.isEnabled()
+    rm = tmp_path / "unblock.json"
+    rm.write_text(json.dumps({"exclude": ["hugmesh-commons:tests/fake-token.sh"]}))
+    page.rename_map.setText(str(rm))
+    page.plan_btn.click()
+    _wait_worker(page, qapp)
+    assert page.plan is not None and not page.plan.blocked
+    assert page.apply_btn.isEnabled()
+    assert not os.path.isdir(os.path.join(world["gh_root"], "exampleorg"))    # still a plan
 
 
 def test_no_modal_dialogs_in_the_new_page_logic():

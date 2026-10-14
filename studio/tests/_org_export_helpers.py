@@ -94,9 +94,16 @@ def make_source_repo(root: str, name: str, extra_files: dict | None = None,
     return dst
 
 
+#: The git identity of "the person running the export" in every test: the engine
+#: names no author of its own, so git would otherwise read the test host's
+#: ``user.name`` / ``user.email`` and the suite would depend on the box it runs on.
+RUNNER_IDENTITY = ("Test Exporter", "exporter@example.invalid")
+
+
 class RecordingRunner(oe.SubprocessRunner):
-    """The real runner with the fake gh first on PATH, every call recorded, and a
-    hard refusal of anything that names a real host."""
+    """The real runner with the fake gh first on PATH, every call recorded, a
+    pinned git identity for the runner (see :data:`RUNNER_IDENTITY`), and a hard
+    refusal of anything that names a real host."""
 
     def __init__(self, fake_bin: str, gh_root: str, gh_log: str):
         self.calls: list[list[str]] = []
@@ -111,6 +118,12 @@ class RecordingRunner(oe.SubprocessRunner):
         full["PATH"] = self.fake_bin + os.pathsep + os.environ.get("PATH", "")
         full["FAKE_GH_ROOT"] = self.gh_root
         full["FAKE_GH_LOG"] = self.gh_log
+        # the runner's own identity, as `git config user.*` would give it; a config
+        # that names an author wins because the engine passes it in ``env``
+        full.setdefault("GIT_AUTHOR_NAME", RUNNER_IDENTITY[0])
+        full.setdefault("GIT_AUTHOR_EMAIL", RUNNER_IDENTITY[1])
+        full.setdefault("GIT_COMMITTER_NAME", RUNNER_IDENTITY[0])
+        full.setdefault("GIT_COMMITTER_EMAIL", RUNNER_IDENTITY[1])
         return super().run(argv, cwd=cwd, env=full, timeout=timeout)
 
     def gh_calls(self) -> list[str]:

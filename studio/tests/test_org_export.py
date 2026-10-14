@@ -17,9 +17,10 @@ What is pinned:
   packages, Maven groupIds, Angular scopes and label keys untouched;
 * exclusions (CLAUDE.md, .claude/, node_modules, secret-shaped files) and the
   refusal on a planted banned marker, naming the file;
-* apply: one fresh commit per repository with the operator's authorship, never a
-  force push or a delete, ``unchanged`` on a second run, an existing non-empty
-  repository refused unless 'update via branch';
+* apply: one fresh commit per repository authored as the person running it (the
+  runner's git identity, or the config's author), never a force push or a delete,
+  ``unchanged`` on a second run, an existing non-empty repository refused unless
+  'update via branch', and nothing created when there is no identity at all;
 * the generated site repository: its files, its workflows parse as YAML and list
   every exported repository, on vars.RUNS_ON;
 * the CLI: PLAN prints the plan, APPLY refuses without --apply;
@@ -30,6 +31,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shlex
 import shutil
 
 import pytest
@@ -41,8 +43,8 @@ from hugmesh_studio.core.config import Domain, ImageConfig, github_org_problem
 from hugmesh_studio.core.local_mesh_bootstrap import LocalMeshBootstrapConfig
 
 from _org_export_helpers import (  # noqa: E402
-    FIXTURES, RecordingRunner, bare as _bare, bare_log as _bare_log, git as _git,
-    make_world)
+    FIXTURES, RUNNER_IDENTITY, RecordingRunner, bare as _bare, bare_log as _bare_log,
+    git as _git, make_world)
 
 # the banned markers are spelled from parts here too: this file is part of the
 # generator's own exported tree
@@ -85,6 +87,8 @@ def test_defaults_name_no_real_organisation():
     cfg = oe.ExportConfig()
     assert cfg.org == "" and cfg.brand == "" and cfg.domain == ""
     assert cfg.rename_map == {}
+    assert cfg.author_name == "" and cfg.author_email == ""     # no person built in
+    assert not hasattr(oe, "SNAPSHOT_AUTHOR")
     rules = oe.rename_rules(oe.ExportConfig(org="exampleorg"), ["hugmesh-parent"])
     assert all("exampleorg" in rep or "example-" in rep for _rx, rep, _n in rules)
 
@@ -314,8 +318,9 @@ def test_apply_pushes_one_fresh_commit_per_repository_never_force(world):
         assert r.url.startswith("file://")
         log = _bare_log(world, r.target.split("/", 1)[1])
         assert len(log) == 1, log                       # a single commit: no history
-        # the LITERAL, not oe.SNAPSHOT_AUTHOR: a changed default must turn this red
-        assert log[0].endswith("Usi Diamond <28960829+UsiDiamond@users.noreply.github.com>")
+        # authored as the PERSON RUNNING the export (the runner's git identity): the
+        # engine names nobody of its own (the neutrality rule covers people too)
+        assert log[0].endswith(f"{RUNNER_IDENTITY[0]} <{RUNNER_IDENTITY[1]}>"), log[0]
         assert log[0].startswith(r.commit)
     # the fixture's own commit never travelled: the bare repo knows nothing of it
     src_head = _git(os.path.join(world["src"], "hugmesh-parent"), "rev-parse", "HEAD")
@@ -336,6 +341,51 @@ def test_apply_pushes_one_fresh_commit_per_repository_never_force(world):
     data = json.load(open(res.result_path))
     assert {r["target"] for r in data["repos"]} == {r.target for r in res.repos}
     assert all(r["commit"] and not r["skipped"] for r in data["repos"])
+
+
+def test_a_configured_author_wins_and_no_identity_at_all_creates_nothing(world):
+    """``author_name`` / ``author_email`` in the config override the runner's
+    identity. With neither — no config author, no git identity — apply refuses
+    BEFORE creating anything: every repository is reported skipped with git's own
+    reason, and the stand-in GitHub stays empty (otherwise `gh repo create` would
+    have made the empty repositories and the commits failed one by one)."""
+    cfg, runner = world["cfg"], world["runner"]
+    cfg.author_name, cfg.author_email = "Someone Else", "someone@example.invalid"
+    p = oe.plan(cfg, runner, stamp="20260101T000000Z")
+    assert "Snapshot commits authored as: Someone Else <someone@example.invalid> (from the config)" \
+        in oe.plan_lines(p)
+    res = oe.apply(p, runner)
+    assert res.failures == []
+    assert _bare_log(world, "example-parent")[0].endswith("Someone Else <someone@example.invalid>")
+
+    class NoIdentityRunner(RecordingRunner):
+        def run(self, argv, *, cwd=None, env=None, timeout=600):
+            full = dict(env or {})
+            for k in ("GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME",
+                      "GIT_COMMITTER_EMAIL"):
+                full[k] = ""                 # an empty value: git treats it as unset
+            # and no user.name / user.email anywhere git looks
+            full["HOME"] = str(world["tmp"] / "no-home")
+            full["XDG_CONFIG_HOME"] = str(world["tmp"] / "no-home")
+            full["GIT_CONFIG_GLOBAL"] = os.devnull
+            full["GIT_CONFIG_SYSTEM"] = os.devnull
+            full["GIT_CONFIG_NOSYSTEM"] = "1"
+            return oe.SubprocessRunner.run(self, argv, cwd=cwd, env={
+                **full, "PATH": self.fake_bin + os.pathsep + os.environ.get("PATH", ""),
+                "FAKE_GH_ROOT": self.gh_root, "FAKE_GH_LOG": self.gh_log}, timeout=timeout)
+
+    cfg.author_name = cfg.author_email = ""
+    cfg.org = "otherorg"                          # a fresh org folder: nothing exists yet
+    bare_runner = NoIdentityRunner(runner.fake_bin, runner.gh_root, runner.gh_log)
+    p = oe.plan(cfg, bare_runner, stamp="20260101T000000Z")
+    assert "Snapshot commits authored as: your own git identity" in "\n".join(oe.plan_lines(p))
+    res = oe.apply(p, bare_runner)
+    assert len(res.failures) == len(res.repos) == 4
+    assert all("no git identity for the snapshot commits" in r.skipped for r in res.repos)
+    assert not os.path.isdir(os.path.join(world["gh_root"], "otherorg"))
+    assert not any(c.startswith("repo create") for c in bare_runner.gh_calls()
+                   if "otherorg" in c)
+    assert os.path.isfile(res.result_path)
 
 
 def test_second_run_reports_unchanged_and_pushes_nothing(world):
@@ -457,6 +507,117 @@ def test_plan_lines_name_every_target_and_what_is_not_renamed(world):
     assert cmd.startswith("python3 -m hugmesh_studio --org-export APPLY --domain mesh.example "
                           "--org exampleorg --source-dir")
     assert cmd.endswith("--apply")
+    # what is snapshotted is said per repository: the ref and the commit
+    for r in p.repos:
+        assert f"  {r.source}: {r.ref} @ {r.source_commit[:12]}" in lines
+    assert any(ln.startswith("Snapshot commits authored as:") for ln in lines)
+    # handed over with a config file: --config carries the file's rules, --domain
+    # picks the row; a rename map travels too
+    cmd = oe.cli_command(world["cfg"], "PLAN", config_path="/x/export.json",
+                         rename_map_path="/x/map.json")
+    assert cmd == ("python3 -m hugmesh_studio --org-export PLAN --config /x/export.json "
+                   "--domain mesh.example --rename-map /x/map.json --out "
+                   + shlex.quote(world["cfg"].out_dir))
+
+
+def test_a_candidate_from_a_generic_config_file_keeps_the_files_rules(world, tmp_path):
+    """The GUI/TUI 'Add config file' door: a generic export config's skip_repos,
+    include_generator, rename_map, visibility and update used to be dropped on the
+    way to the candidate, so both faces planned the DEFAULTS of such a file
+    (correctness skeptic B4). The candidate now carries the loaded config and
+    ``to_config`` starts from it; what a face passes explicitly still wins."""
+    cfg = world["cfg"]
+    cfg.visibility = "public"
+    cfg.update = oe.UPDATE_BRANCH
+    cfg.rename_map = oe.merge_rename_maps({}, {"exclude": ["hugmesh-actions:Dockerfile"],
+                                               "repos": {"hugmesh-commons": "example-core"}})
+    path = tmp_path / "export.json"
+    path.write_text(json.dumps(cfg.to_dict()))
+    (c,) = oe.candidates_from_file(str(path), "/ignored")
+    assert c.config is not None and c.config.skip_repos == cfg.skip_repos
+    back = c.to_config()
+    assert back.to_dict() == cfg.to_dict()
+    over = c.to_config(visibility="internal", out_dir="/elsewhere")
+    assert over.visibility == "internal" and over.out_dir == "/elsewhere"
+    assert over.include_generator is False and over.skip_repos == cfg.skip_repos
+    assert over.rename_map["exclude"] == ["hugmesh-actions:Dockerfile"]
+    # a candidate from a saved mesh / image config carries no file config: defaults
+    mesh = oe.candidates_from_file(os.path.join(FIXTURES, "mesh-config.json"), "/g")[0]
+    assert mesh.config is None and mesh.to_config().include_generator is True
+    # and the plan made from the file candidate honours every rule
+    p = oe.plan(c.to_config(), world["runner"], stamp="20260101T000000Z", probe=False)
+    targets = [r.target for r in p.repos]
+    assert "example-generator" not in targets and "example-build-config" not in targets
+    assert "example-core" in targets
+    actions = next(r for r in p.repos if r.source == "hugmesh-actions")
+    assert "Dockerfile: excluded by the rename map" in actions.excluded
+
+
+def test_the_forbidden_flag_guard_fires_on_every_spelling(world):
+    """``_run_checked`` is the ONE door every git/gh call takes at apply; a mutation
+    that dropped its check survived the suite (correctness skeptic C2). Pinned: a
+    force, a mirror, a delete, a prune and a ``+ref`` force-spelling all raise
+    before the runner is reached, and the recorded call list stays empty."""
+    runner = world["runner"]
+    calls: list = []
+    for argv in (["git", "push", "--force", "x"], ["git", "push", "-f", "x"],
+                 ["git", "push", "--force-with-lease", "x"], ["git", "push", "--mirror", "x"],
+                 ["git", "push", "--delete", "x", "main"], ["git", "fetch", "--prune", "x"],
+                 ["git", "push", "x", "+HEAD:refs/heads/main"]):
+        with pytest.raises(RuntimeError, match="never used"):
+            oe._run_checked(runner, calls, argv)
+    assert calls == [] and not any(c[:2] == ["git", "push"] for c in runner.calls)
+    ok = oe._run_checked(runner, calls, ["git", "--version"])
+    assert ok.returncode == 0 and calls == [["git", "--version"]]
+
+
+def test_the_site_title_is_html_escaped_and_a_bad_inline_regex_is_a_problem(world):
+    cfg = world["cfg"]
+    cfg.site_title = 'Mesh <b>"&"</b>'
+    p = oe.plan(cfg, world["runner"], stamp="20260101T000000Z", probe=False)
+    html_text = open(os.path.join(p.site.workdir, "index.html"), encoding="utf-8").read()
+    assert "Mesh &lt;b&gt;&quot;&amp;&quot;&lt;/b&gt;" in html_text
+    assert "<b>" not in html_text.split("<h1>", 1)[1].split("</h1>", 1)[0]
+    cfg.rename_map = {"tokens": [{"pattern": "ok"}]}
+    assert any("needs pattern and replace" in pr for pr in cfg.problems())
+    cfg.rename_map = {"tokens": [{"pattern": "(", "replace": "x"}]}
+    assert any("bad regex" in pr for pr in cfg.problems())
+    with pytest.raises(ValueError, match="bad regex"):      # a problem line, no traceback
+        oe.plan(cfg, world["runner"], probe=False)
+
+
+def test_the_generators_own_tree_exports_clean_with_the_documented_exclusions():
+    """The generator is exported by default, and its own tree carries two test
+    fixtures the banned-marker scan refuses (a fake AWS key, a fake fine-grained
+    token). Without a way to drop them every GUI/TUI plan for a real domain was
+    'refused: banned marker' (correctness skeptic B4). The ready-made exclusion
+    map fixtures/org_export/generator-rename-map.json, which docs/GOLIVE-ORG-EXPORT.md
+    points at, must keep this checkout's tree exportable — and this test is what
+    goes red when a new fixture with a marker lands. Scans HEAD of this checkout
+    (~5 s)."""
+    gen = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    if not (os.path.isdir(os.path.join(gen, ".git")) or os.path.isfile(os.path.join(gen, ".git"))):
+        pytest.skip("not a git checkout of the generator")
+    out = os.path.join(os.environ.get("TMPDIR") or "/tmp", "org-export-self-scan")
+    cfg = oe.ExportConfig(domain="mesh.example", org="exampleorg", generator_dir=gen,
+                          out_dir=out, ref="HEAD")
+    rules = oe.rename_rules(cfg, [oe.GENERATOR_REPO])
+    runner = oe.SubprocessRunner()
+    bare = oe._prepare_repo(runner, oe.GENERATOR_REPO, cfg, rules, out, [])
+    assert bare.banned == ["tests/cloud-deploy/test-cloud-deploy-driver.sh: AWS access key",
+                           "tests/scripts/test-stack-clone-credential.sh: GitHub fine-grained token"], \
+        ("the generator's own banned markers changed: update generator-rename-map.json, "
+         "docs/GOLIVE-ORG-EXPORT.md and this list", bare.banned)
+    cfg.rename_map = oe.merge_rename_maps(
+        {}, oe.load_rename_map(os.path.join(FIXTURES, "generator-rename-map.json")))
+    clean = oe._prepare_repo(runner, oe.GENERATOR_REPO, cfg, rules, out, [])
+    assert clean.banned == [] and not clean.blocked, clean.banned
+    assert sum("excluded by the rename map" in x for x in clean.excluded) == 2
+    doc = open(os.path.join(gen, "docs", "GOLIVE-ORG-EXPORT.md"), encoding="utf-8").read()
+    for rel in ("tests/cloud-deploy/test-cloud-deploy-driver.sh",
+                "tests/scripts/test-stack-clone-credential.sh", "generator-rename-map.json"):
+        assert rel in doc, f"docs/GOLIVE-ORG-EXPORT.md does not name {rel}"
+    shutil.rmtree(out, ignore_errors=True)
 
 
 def test_cli_plan_prints_and_apply_refuses_without_the_flag(world, monkeypatch, capsys):
@@ -464,6 +625,12 @@ def test_cli_plan_prints_and_apply_refuses_without_the_flag(world, monkeypatch, 
     monkeypatch.setenv("PATH", world["runner"].fake_bin + os.pathsep + os.environ["PATH"])
     monkeypatch.setenv("FAKE_GH_ROOT", world["gh_root"])
     monkeypatch.setenv("FAKE_GH_LOG", world["runner"].gh_log)
+    # the CLI uses the real runner: the person's git identity, pinned here so the
+    # test does not depend on the box's user.name / user.email
+    for k, v in (("GIT_AUTHOR_NAME", RUNNER_IDENTITY[0]), ("GIT_AUTHOR_EMAIL", RUNNER_IDENTITY[1]),
+                 ("GIT_COMMITTER_NAME", RUNNER_IDENTITY[0]),
+                 ("GIT_COMMITTER_EMAIL", RUNNER_IDENTITY[1])):
+        monkeypatch.setenv(k, v)
     cfg_path = world["tmp"] / "export.json"
     cfg_path.write_text(json.dumps(world["cfg"].to_dict()))
     base = ["--generator-dir", world["gen"], "--config", str(cfg_path)]
@@ -585,8 +752,40 @@ def test_local_mesh_record_carries_the_org_and_the_own_row_when_it_has_one():
     assert dict(cfg.domains[1])["github_org"] == "thirdorg"
     lines = lmd.imported_domains_lines(md)
     assert any("exports to GitHub org otherorg" in ln for ln in lines)
-    # the on-disk record (to_dict) keeps the key; NOTE the bootstrap loader's own
-    # _domain_record (core/local_mesh_bootstrap.py, not this feature's file) still
-    # drops it on from_dict — the export step therefore reads records RAW
-    # (candidates_from_file / saved_mesh_candidates), never through that loader.
     assert cfg.to_dict()["domains"][0]["github_org"] == "exampleorg"
+
+
+def test_a_saved_mesh_reopened_through_the_bootstrap_loader_keeps_every_org():
+    """The Studio re-opens a saved mesh through ``LocalMeshBootstrapConfig.from_dict``
+    (pages/localmesh._load_saved), then saves it again from the form. Measured
+    before the fix: from_dict dropped ``github_org`` from every row, the form showed
+    no org, and the next save wrote the record back WITHOUT it — the export
+    candidate vanished after one re-open (both skeptics, round 0)."""
+    rows = [Domain(name="mesh.example", github_org="exampleorg"),
+            Domain(name="chat.mesh.example", github_org="otherorg", tor=True),
+            Domain(name="plain.mesh.example")]
+    on_disk = LocalMeshBootstrapConfig(
+        cluster_domain="mesh.example",
+        domains=lmd.bootstrap_domain_records(rows, "mesh.example")).to_dict()
+    assert [r.get("github_org") for r in on_disk["domains"]] == ["exampleorg", "otherorg", None]
+    back = LocalMeshBootstrapConfig.from_dict(on_disk)
+    assert [dict(r).get("github_org") for r in back.domains] == ["exampleorg", "otherorg", None]
+    assert "github_org" not in dict(back.domains[2])        # omit-when-empty survives too
+    md = lmd.domains_from_bootstrap(back)
+    assert [(d.name, d.github_org) for d in md.domains] == [
+        ("mesh.example", "exampleorg"), ("chat.mesh.example", "otherorg"),
+        ("plain.mesh.example", "")]
+    # the re-save paths: a walk written into the record, and a fresh record from the form
+    lmd.record_walk(back, md, ["chat.mesh.example"])
+    assert [r.get("github_org") for r in back.to_dict()["domains"]] == \
+        ["exampleorg", "otherorg", None]
+    again = lmd.bootstrap_domain_records(md.domains, md.own_name)
+    assert [r.get("github_org") for r in again] == ["exampleorg", "otherorg", None]
+    assert LocalMeshBootstrapConfig.from_dict(
+        LocalMeshBootstrapConfig(cluster_domain="mesh.example", domains=again).to_dict()
+    ).to_dict()["domains"] == list(again)
+    # a hand-edited record with a non-slug org is dropped by the loader, like a
+    # non-true tor: the form never shows a value the Domains step would refuse
+    bad = dict(on_disk)
+    bad["domains"] = [dict(on_disk["domains"][0], github_org="bad-")]
+    assert "github_org" not in dict(LocalMeshBootstrapConfig.from_dict(bad).domains[0])

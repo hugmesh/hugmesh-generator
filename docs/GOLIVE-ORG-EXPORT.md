@@ -31,11 +31,17 @@ Where the value lives:
 | Flow | Field | Saved shape |
 | --- | --- | --- |
 | image flow, added row | `Domain.github_org` | `domains[].github_org`, omitted when empty |
-| image flow, own domain | `ImageConfig.cluster_domain_github_org` | omitted when empty; also in the mesh manifest |
+| image flow, own domain | `ImageConfig.cluster_domain_github_org` | omitted when empty; also in the mesh manifest (both the per-image v1 shim and the format-2 envelope a fleet build writes, byte for byte) |
 | local mesh | the own `Domain` row and every added row | the saved mesh's `config.domains[].github_org`, omitted when empty |
 
 An untouched configuration therefore keeps its bytes: no key appears anywhere until an
-org is typed.
+org is typed. A saved mesh re-opened in the Studio (Saved meshes -> Load) shows every
+org in its cells again, and the next save or bring-up records them again; a non-slug in
+a hand-edited record is dropped on load, like a `tor` that is not `true`.
+
+A GitHub org that is not a slug is refused on **Next**, inline and never in a dialog,
+on both routes (image flow and local mesh) with one sentence; the typed text stays in
+the cell for you to fix, and never reaches the state or a record.
 
 ## 2. Plan
 
@@ -77,9 +83,15 @@ that are not a repository name, file and directory names, the cluster domain. Ma
 is consistent — and the exported Java apps build only after that chain has been
 published from the new organisation (each library carries its release workflow).
 
+The plan also lists, per repository, the ref and commit it snapshots (the checkout's
+default branch — `origin/HEAD`, else `origin/main`, else `HEAD` — never the branch that
+happens to be checked out) and who the snapshot commits are authored as.
+
 ### Extending the rename map
 
-`--rename-map FILE` (CLI) merges a JSON file over the defaults:
+`--rename-map FILE` (CLI), the **Rename map** field of the GUI step, or `r FILE` on the
+text-mode step (`r -` drops it) merge a JSON file over the defaults — and over the
+`rename_map` of a config file the step was pointed at, so both apply:
 
 ```json
 {
@@ -96,6 +108,35 @@ globs drop files from the snapshot altogether — what a banned-marker refusal p
 at when the marker is an example token in a test script. A glob written
 `<repo>:<glob>` applies to one source repository; a bare glob to every one.
 
+### The generator's own tree needs two exclusions
+
+The generator is exported by default (`include_generator`), and its own tree holds two
+test fixtures the banned-marker scan refuses — correctly, they look exactly like
+secrets: a fake AWS key in `tests/cloud-deploy/test-cloud-deploy-driver.sh` and a fake
+fine-grained token in `tests/scripts/test-stack-clone-credential.sh`. Without an
+exclusion every plan that includes the generator is `refused: banned marker` for it.
+The ready-made map `studio/tests/fixtures/org_export/generator-rename-map.json` drops
+exactly those two files:
+
+```json
+{ "exclude": [ "hugmesh-generator:tests/cloud-deploy/test-cloud-deploy-driver.sh",
+               "hugmesh-generator:tests/scripts/test-stack-clone-credential.sh" ] }
+```
+
+Point the Rename map field (GUI), `r FILE` (TUI) or `--rename-map` (CLI) at it, or
+merge its `exclude` list into your own map. `test_org_export.py` scans this checkout's
+own tree with that map on every run, so a new fixture carrying a marker turns a test
+red here before it blocks an export.
+
+### Pointing the step at a config file
+
+The GUI step's **Config file -> Add** and the TUI's `c FILE` accept an export config, an
+image config or a saved-mesh record. A generic export config is taken WHOLE: its
+`skip_repos`, `include_generator`, `include_build_libraries`, `extra_repos`, `brand`,
+`rename_map`, `out_dir`, `visibility` and `update` all reach the plan (the visibility and
+existing-repository pickers are seeded from it and stay editable), and the step's
+*Terminal* line hands the same file over as `--config FILE --domain <domain>`.
+
 ## 3. Apply
 
 In the GUI, **Apply** is armed only by typing the organisation's name into the
@@ -107,9 +148,11 @@ For every repository that is not blocked, apply:
 * creates the target with `gh repo create <org>/<name> --private` when it does not
   exist (visibility is a plan field: private by default, `public` or `internal` on
   request; an existing repository's visibility is never changed);
-* commits the snapshot once, authored as the operator (`Usi Diamond
-  <28960829+UsiDiamond@users.noreply.github.com>` by default; `author_name` /
-  `author_email` in the config);
+* commits the snapshot once, authored as **you** — the git identity of the person
+  running the export (`git config user.name` / `user.email`), unless the config names
+  `author_name` / `author_email`. No person is built in. With neither, apply refuses
+  BEFORE creating anything: every repository is reported skipped with git's own
+  "Author identity unknown" reason and the organisation is left untouched;
 * pushes it to `main` with a plain `git push` — **never** `--force`, never a delete,
   never a mirror;
 * on an existing non-empty repository: reports **unchanged** when `main` already
@@ -183,6 +226,18 @@ fake `gh` on PATH that records its calls; `test_org_export_gui.py` and
 `test_org_export_neutrality.py` is the guard that keeps this feature free of any real
 organisation's name. To rehearse your own export the same way, point `--remote-base`
 at a `file:///…/` folder of bare repositories and put a fake `gh` first on `PATH`.
+
+The end-to-end record of the design choices is the Gherkin feature
+`tests/e2e/features/studio-org-export/studio-org-export.feature` (steps in
+`tests/e2e/steps/studio-org-export.steps.ts`), driven by
+`tests/e2e/studio-org-export-driver.py`: the REAL Studio wizards offscreen — the
+local-mesh Domains step for typing, saving and re-opening an org, the Go-Live wizard
+for the export step — with a folder of bare repositories as GitHub, a fake `gh` and a
+logging `git` shim first on PATH, so every assertion reads what was created, pushed and
+logged rather than the Studio's own say-so. Run them with
+`cd tests/e2e && SNAP_STUDIO_PYTHON=<python with PySide6 or PyQt6> npx bddgen test &&
+QT_QPA_PLATFORM=offscreen npx playwright test --project=bdd -g "Export to GitHub org"`.
+They need no mesh, no network and start nothing.
 
 ## 7. What a person must still do
 

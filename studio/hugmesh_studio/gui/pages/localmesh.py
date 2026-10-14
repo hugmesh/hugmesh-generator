@@ -116,7 +116,7 @@ from .. import console
 from ..choice_cards import ChoiceCard, ChoiceCardGroup
 from ..flow_layout import flow_box
 from ...core import saved_meshes, vaults
-from ...core.config import IDP_CHOICES, IDP_LABELS, idp_effective_jwks
+from ...core.config import IDP_CHOICES, IDP_LABELS, github_org_problem, idp_effective_jwks
 from ...core.config import DOMAIN_IDP_OWN, DOMAIN_IDP_SUPERDOMAIN, Domain
 from ...core.domain_services import ACTION_MESH_START, gate_reason, record_reviewed
 from ...core.local_mesh_domains import (
@@ -1135,16 +1135,32 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         else:
             own = md.own_name or own
         prev = md.by_name(md.own_name) if md.own_name else None
+        # The own row's org comes from its CELL, like every added row's: the state
+        # is written only by the cell's focus-loss slot, and the Next shortcut or a
+        # programmatic next() never moves focus. The state is read only when the
+        # table has no own row to read. A non-slug stays out of the state (the
+        # refusal below names it); the cell keeps it for the operator to fix.
+        table = self.domains_table
+        if any(table.is_own_row(r) for r in range(table.table.rowCount())):
+            own_org = table.own_row_github_org()
+            if github_org_problem(own_org):
+                own_org = ""
+        else:
+            own_org = getattr(prev, "github_org", "") if prev else ""
         own_row = Domain(name=own, title="", idp=DOMAIN_IDP_SUPERDOMAIN,
                          optional_services=list(prev.optional_services) if prev else [],
-                         # the org the own row's cell wrote through (a validated
-                         # slug) is state too, or Next would drop the export's org
-                         github_org=getattr(prev, "github_org", "") if prev else "")
+                         github_org=own_org)
+        for d in added:
+            if github_org_problem(getattr(d, "github_org", "")):
+                d.github_org = ""
         md.domains = [own_row] + added
         md.own_name = own
         record_reviewed(md, md.domain_services_reviewed)
         blank = prod and not own
-        problems = self._domain_row_problems()
+        # a GitHub org that is not a slug is refused here, inline, with the sentence
+        # the image flow's DomainsPage.validatePage uses — it used to be accepted on
+        # this route and reach the saved record
+        problems = table.org_problems() + self._domain_row_problems()
         lines = list(problems)
         if blank:
             lines.append(

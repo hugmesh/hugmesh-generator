@@ -210,6 +210,90 @@ def test_a_config_file_can_be_added_with_c(world, tmp_path):
     assert "missing.json" in j.status
 
 
+def test_a_config_files_rules_reach_the_tui_plan_and_r_merges_a_rename_map(world, tmp_path):
+    """The TUI's `c FILE` door kept only domain/org/source, so `p` planned a generic
+    config file's DEFAULTS (correctness skeptic B4). Now the file's own visibility
+    and update seed `v`/`u`, `p` honours include_generator / skip_repos / exclude,
+    the terminal line hands the file over as --config, and `r FILE` merges an extra
+    rename map (`r -` drops it) — the TUI's spelling of the GUI's Rename map field."""
+    import json
+    cfg = world["cfg"]
+    cfg.visibility = "public"
+    cfg.update = oe.UPDATE_BRANCH
+    cfg.rename_map = oe.merge_rename_maps({}, {"exclude": ["hugmesh-actions:Dockerfile"]})
+    cfg_path = tmp_path / "export.json"
+    cfg_path.write_text(json.dumps(cfg.to_dict()))
+    j, screen = _golive_at_plan(world)
+    screen.stage = "export"
+    j.feed(f"c {cfg_path}")
+    assert screen.export_visibility == "public" and screen.export_update == oe.UPDATE_BRANCH
+    text = "\n".join(j.lines())
+    assert f"--config {cfg_path} --domain mesh.example" in text and "--org " not in text
+    assert "r FILE|-=rename map" in text
+    j.feed("p")
+    assert screen.export_plan is not None, j.status
+    targets = [r.target for r in screen.export_plan.repos]
+    assert targets == ["example-actions", "example-parent", "example-commons"]
+    actions = next(r for r in screen.export_plan.repos if r.source == "hugmesh-actions")
+    assert "Dockerfile: excluded by the rename map" in actions.excluded
+    assert screen.export_plan.config.visibility == "public"
+    # r FILE: merged over the file's own map; the plan is dropped until re-made
+    rm = tmp_path / "extra.json"
+    rm.write_text(json.dumps({"repos": {"hugmesh-commons": "example-core"},
+                              "exclude": ["hugmesh-parent:LICENSE"]}))
+    j.feed(f"r {rm}")
+    assert screen.export_rename_map == str(rm) and screen.export_plan is None
+    assert f"--rename-map {rm}" in "\n".join(j.lines())
+    j.feed("p")
+    targets = [r.target for r in screen.export_plan.repos]
+    assert "example-core" in targets and "example-commons" not in targets
+    parent = next(r for r in screen.export_plan.repos if r.source == "hugmesh-parent")
+    assert "LICENSE: excluded by the rename map" in parent.excluded
+    actions = next(r for r in screen.export_plan.repos if r.source == "hugmesh-actions")
+    assert "Dockerfile: excluded by the rename map" in actions.excluded    # both maps apply
+    # a file that cannot be read is refused on the status line and nothing changes
+    j.feed(f"r {tmp_path / 'nope.json'}")
+    assert "nope.json" in j.status and screen.export_rename_map == str(rm)
+    j.feed("r")
+    assert "r needs a rename-map FILE" in j.status
+    j.feed("r -")
+    assert screen.export_rename_map == "" and screen.export_plan is None
+    assert "--rename-map" not in "\n".join(j.lines())
+
+
+def test_a_banned_marker_is_cleared_from_the_tui_with_r(world, tmp_path):
+    """The whole remedy a person gets in the TUI: a planted marker blocks one
+    repository (BLOCKED names the file), apply is refused; `r FILE` with an exclude
+    rule unblocks it on the next `p`."""
+    import json
+    from _org_export_helpers import git as _git
+    token = "github_pat_" + "11FAKE" + "A" * 30
+    src = os.path.join(world["src"], "hugmesh-commons")
+    os.makedirs(os.path.join(src, "tests"), exist_ok=True)
+    with open(os.path.join(src, "tests", "fake-token.sh"), "w", encoding="utf-8") as fh:
+        fh.write(f"TOKEN={token}\n")
+    _git(src, "add", "-A")
+    _git(src, "-c", "commit.gpgsign=false", "commit", "-q", "-m", "plant")
+    cfg_path = tmp_path / "export.json"
+    cfg_path.write_text(json.dumps(world["cfg"].to_dict()))
+    j, screen = _golive_at_plan(world)
+    screen.stage = "export"
+    j.feed(f"c {cfg_path}")
+    j.feed("p")
+    assert "plan blocked" in j.status and screen.export_plan.blocked
+    text = "\n".join(j.lines())
+    assert "BLOCKED" in text and "tests/fake-token.sh: GitHub fine-grained token" in text
+    j.feed("apply exampleorg")
+    assert "the plan is blocked" in j.status
+    assert not os.path.isdir(os.path.join(world["gh_root"], "exampleorg"))
+    rm = tmp_path / "unblock.json"
+    rm.write_text(json.dumps({"exclude": ["hugmesh-commons:tests/fake-token.sh"]}))
+    j.feed(f"r {rm}")
+    j.feed("p")
+    assert "planned; nothing created or pushed" in j.status and not screen.export_plan.blocked
+    assert not os.path.isdir(os.path.join(world["gh_root"], "exampleorg"))
+
+
 def test_the_gui_step_and_the_tui_stage_show_the_same_plan_text(world, tmp_path):
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
     pytest.importorskip("hugmesh_studio.gui.qt", reason="no Qt binding installed")

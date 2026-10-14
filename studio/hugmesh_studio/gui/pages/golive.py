@@ -631,6 +631,21 @@ class GoLiveOrgExportPage(QtWidgets.QWizardPage):
         self.out_dir.setPlaceholderText("where the plan, work trees and result go "
                                         "(default <generator>/out/org-export/<domain>)")
         lay.addWidget(_row("Plan / work folder", self.out_dir))
+        # extra rename rules and exclusions (the CLI's --rename-map): the way to drop
+        # a file a banned-marker refusal points at without a terminal
+        self.rename_map = QtWidgets.QLineEdit()
+        self.rename_map.setPlaceholderText(
+            "optional: a rename-map JSON (repos, tokens, skip_rewrite, exclude) merged "
+            "over the defaults")
+        self.rename_map.setToolTip(
+            "Extra rename rules merged over the defaults, the CLI's --rename-map. Its "
+            "'exclude' globs drop files from the snapshot — what a 'refused: banned "
+            "marker' row points at (\"<repo>:<path>\").")
+        self.rename_map.editingFinished.connect(self._refresh_cmd)
+        pick = _file_picker(self, self.rename_map, "Rename map", "JSON (*.json);;All files (*)")
+        w = QtWidgets.QWidget(); h = QtWidgets.QHBoxLayout(w); h.setContentsMargins(0, 0, 0, 0)
+        h.addWidget(self.rename_map, 1); h.addWidget(pick)
+        lay.addWidget(_row("Rename map", w))
         # the verbs: Plan always; Apply armed by the typed org name AND a clean plan
         self.plan_btn = QtWidgets.QPushButton("Plan (dry run — touches nothing)")
         self.plan_btn.clicked.connect(self._plan)
@@ -713,6 +728,14 @@ class GoLiveOrgExportPage(QtWidgets.QWizardPage):
             c = self.candidates[idx] if 0 <= idx < len(self.candidates) else None
             if c is not None:
                 self.source_dir.setText(c.source_dir if c.source_mode == "existing" else "")
+                # a generic config file's own choices seed the pickers, so the plan
+                # made here is the plan the file describes (the pickers stay editable)
+                if c.config is not None:
+                    self.visibility.setCurrentText(c.config.visibility)
+                    at = self.update_mode.findData(c.config.update)
+                    if at >= 0:
+                        self.update_mode.setCurrentIndex(at)
+                    self.out_dir.setText(c.config.out_dir)
                 self._refresh_cmd()
         except Exception:                      # noqa: BLE001 — PyQt6 qFatals on a slot raise
             pass
@@ -745,6 +768,10 @@ class GoLiveOrgExportPage(QtWidgets.QWizardPage):
         return self.candidates[idx] if 0 <= idx < len(self.candidates) else None
 
     def export_config(self) -> org_export.ExportConfig | None:
+        """The config a Plan here runs: the candidate's (a generic config file's own
+        rules included), the pickers over it, and the rename-map file merged over
+        its rename map. Raises ValueError/OSError for a rename map that cannot be
+        read; the callers say so inline."""
         c = self.current_candidate()
         if c is None:
             return None
@@ -755,13 +782,34 @@ class GoLiveOrgExportPage(QtWidgets.QWizardPage):
             out_dir=self.out_dir.text().strip(),
             source_mode="existing" if src else (c.source_mode or "clone"),
             source_dir=src, generator_dir=c.generator_dir or self.wiz.generator_dir)
+        rm = self.rename_map.text().strip()
+        if rm:
+            cfg.rename_map = org_export.merge_rename_maps(cfg.rename_map or {},
+                                                          org_export.load_rename_map(rm))
         if self.wiz.export_remote_base:
             cfg.remote_base = self.wiz.export_remote_base
         return cfg
 
+    def _cli_command(self, cfg, verb: str) -> str:
+        c = self.current_candidate()
+        return org_export.cli_command(
+            cfg, verb,
+            # a generic config file is handed over as --config, so its rules travel
+            config_path=c.path if (c is not None and c.config is not None) else "",
+            rename_map_path=self.rename_map.text().strip())
+
     def _refresh_cmd(self):
-        cfg = self.export_config()
-        self.cmd.setText(org_export.cli_command(cfg, "PLAN") if cfg else "")
+        try:
+            cfg = self.export_config()
+        except (OSError, ValueError) as exc:
+            self._say(f"{self.rename_map.text().strip()}: {exc}")
+            self._rename_map_said = True
+            self.cmd.setText("")
+            return
+        if getattr(self, "_rename_map_said", False):
+            self._say("")                     # the file reads now: the stale line goes
+            self._rename_map_said = False
+        self.cmd.setText(self._cli_command(cfg, "PLAN") if cfg else "")
 
     def _runner(self):
         return self.wiz.export_runner or org_export.SubprocessRunner()
@@ -769,7 +817,11 @@ class GoLiveOrgExportPage(QtWidgets.QWizardPage):
     def _plan(self):
         if self.worker and self.worker.isRunning():
             return
-        cfg = self.export_config()
+        try:
+            cfg = self.export_config()
+        except (OSError, ValueError) as exc:               # the rename-map file
+            self._say(f"{self.rename_map.text().strip()}: {exc}")
+            return
         if cfg is None:
             self._say(NO_EXPORT_DOMAINS_NOTE)
             return
@@ -801,7 +853,7 @@ class GoLiveOrgExportPage(QtWidgets.QWizardPage):
         self.plan = value
         self._fill_table(self.plan)
         self.plan_text.setPlainText("\n".join(org_export.plan_lines(self.plan)))
-        self.cmd.setText(org_export.cli_command(self.plan.config, "APPLY"))
+        self.cmd.setText(self._cli_command(self.plan.config, "APPLY"))
         if self.plan.blocked:
             self._say("The plan is blocked (see the table): nothing is applied until every "
                       "repository is clean.")

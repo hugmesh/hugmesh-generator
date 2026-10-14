@@ -33,7 +33,9 @@ can add (``extra_repos``) or drop (``skip_repos``) names; nothing here keeps a s
 list of "needed repositories".
 
 THE SNAPSHOT. Each repository is exported as a FRESH single commit of its default
-branch (``git archive``, no history), authored as :data:`SNAPSHOT_AUTHOR`. The tree
+branch (``git archive``, no history), authored as the person running the export
+(their own git identity — ``user.name`` / ``user.email`` — unless the config names
+``author_name`` / ``author_email``; no person is built in). The tree
 EXCLUDES ``CLAUDE.md``, any ``.claude/`` directory, ``.stack-src``, ``node_modules``,
 build output, worktree files and secret-shaped files (:data:`EXCLUDED_DIRS`,
 :data:`EXCLUDED_NAMES`, :data:`SECRET_GLOBS`), and the export REFUSES a repository —
@@ -76,6 +78,7 @@ from __future__ import annotations
 
 import datetime as _dt
 import fnmatch
+import html
 import io
 import json
 import os
@@ -91,7 +94,7 @@ from .config import Domain, github_org_problem
 __all__ = [
     "ExportConfig", "RepoPlan", "Plan", "RepoResult", "Result", "Runner",
     "SubprocessRunner", "RunResult", "ExportCandidate",
-    "SNAPSHOT_AUTHOR", "BUILD_LIBRARY_REPOS", "GENERATOR_REPO", "SITE_REPO_SUFFIX",
+    "BUILD_LIBRARY_REPOS", "GENERATOR_REPO", "SITE_REPO_SUFFIX",
     "VISIBILITY_CHOICES", "UPDATE_REFUSE", "UPDATE_BRANCH", "NOT_RENAMED",
     "EXCLUDED_DIRS", "EXCLUDED_NAMES", "SECRET_GLOBS", "BANNED_MARKERS",
     "brand_from_org", "repo_target_name", "rename_rules", "rewrite_text",
@@ -99,10 +102,6 @@ __all__ = [
     "saved_mesh_candidates", "plan", "apply", "plan_lines", "result_lines",
     "cli_command", "run_cli", "add_cli_arguments",
 ]
-
-#: Every snapshot commit is authored as the operator (the attribution rule of
-#: 2026-09-30: the work is theirs on GitHub). Overridable per config.
-SNAPSHOT_AUTHOR = ("Usi Diamond", "28960829+UsiDiamond@users.noreply.github.com")
 
 #: The Java build chain every exported service resolves at build time, in publish
 #: order — exported with the apps so the tree can build (and be published) at all.
@@ -242,8 +241,10 @@ class ExportConfig:
     include_build_libraries: bool = True
     rename_map: dict = field(default_factory=dict)
     out_dir: str = ""
-    author_name: str = SNAPSHOT_AUTHOR[0]
-    author_email: str = SNAPSHOT_AUTHOR[1]
+    # "" = the runner's own git identity (user.name / user.email): the snapshots
+    # are authored by whoever runs the export, and no person is built in here
+    author_name: str = ""
+    author_email: str = ""
     remote_base: str = "https://github.com/"
     ref: str = ""                         # "" = the checkout's origin/HEAD, origin/main, HEAD
     site_title: str = ""
@@ -280,6 +281,16 @@ class ExportConfig:
         for name in list(self.extra_repos) + list(self.skip_repos):
             if not _REPO_RE.match(name or ""):
                 out.append(f"not a repository name: {name!r}")
+        # an inline rename map is checked here as load_rename_map checks a file, so
+        # a bad regex is a problem line, never a traceback at plan time
+        for rule in (self.rename_map or {}).get("tokens") or []:
+            if not isinstance(rule, dict) or "pattern" not in rule or "replace" not in rule:
+                out.append("rename_map: every token rule needs pattern and replace")
+                continue
+            try:
+                re.compile(str(rule["pattern"]))
+            except re.error as exc:
+                out.append(f"rename_map: bad regex {rule['pattern']!r}: {exc}")
         if not self.remote_base.endswith("/"):
             out.append("remote_base must end with '/'")
         return out
@@ -348,7 +359,11 @@ def _glob_matches(rel: str, repo: str, globs) -> bool:
 
 @dataclass
 class ExportCandidate:
-    """A domain that names an org, as found in a saved mesh or a config file."""
+    """A domain that names an org, as found in a saved mesh or a config file. A
+    candidate read from a GENERIC export config keeps that whole config
+    (``config``), so its ``skip_repos``, ``include_generator``, ``rename_map`` and
+    the rest reach the plan a face makes from it — they used to be dropped here,
+    which left every GUI/TUI plan from such a file with the defaults."""
     domain: str
     org: str
     optional_services: list[str] = field(default_factory=list)
@@ -357,15 +372,19 @@ class ExportCandidate:
     generator_dir: str = ""
     where: str = ""                       # "saved mesh 'label'" / "config file x"
     path: str = ""
+    config: "ExportConfig | None" = None
 
     def label(self) -> str:
         return f"{self.domain} -> {self.org}" + (f"  ({self.where})" if self.where else "")
 
     def to_config(self, **over) -> ExportConfig:
-        kw = dict(domain=self.domain, org=self.org,
-                  optional_services=list(self.optional_services),
-                  source_mode=self.source_mode or "clone", source_dir=self.source_dir,
-                  generator_dir=self.generator_dir)
+        """An :class:`ExportConfig` for this candidate: the file's own config when
+        it came from one, else the defaults; ``over`` wins in both cases."""
+        kw = dict(self.config.to_dict()) if self.config is not None else {}
+        kw.update(dict(domain=self.domain, org=self.org,
+                       optional_services=list(self.optional_services),
+                       source_mode=self.source_mode or "clone", source_dir=self.source_dir,
+                       generator_dir=self.generator_dir))
         kw.update(over)
         return ExportConfig(**kw)
 
@@ -415,7 +434,7 @@ def candidates_from_file(path: str, generator_dir: str = "") -> list[ExportCandi
         cfg = load_config(path, generator_dir=generator_dir)
         return [ExportCandidate(cfg.domain, cfg.org, list(cfg.optional_services),
                                 cfg.source_mode, cfg.source_dir, cfg.generator_dir,
-                                where, path)]
+                                where, path, config=cfg)]
     if isinstance(data.get("config"), dict):          # a saved-mesh record
         c = data["config"]
         own = str(c.get("cluster_domain") or "").strip()
@@ -713,7 +732,12 @@ def _snapshot(runner: Runner, path: str, ref: str, workdir: str) -> list[str]:
                     and dest != os.path.abspath(workdir):
                 continue
             try:
-                tf.extract(member, workdir, filter="data")
+                try:
+                    tf.extract(member, workdir, filter="data")
+                except TypeError:
+                    # a Python older than 3.12 / 3.11.4 / 3.10.12 has no extraction
+                    # filter; the path check above is what keeps the write inside
+                    tf.extract(member, workdir)
             except (tarfile.FilterError, OSError):
                 # a link that points outside the tree, or a name the filter
                 # refuses: left out of the snapshot rather than written anywhere
@@ -906,8 +930,11 @@ def _prepare_site(cfg: ExportConfig, repos: list[RepoPlan], out_dir: str,
     # same tree, so a re-run reports the site `unchanged` like every other repository
     repos_json = {"domain": cfg.domain, "org": cfg.org, "brand": cfg.effective_brand,
                   "site": cfg.site_repo, "repos": rows}
+    # TITLE is free text and renders into index.html only, so it is HTML-escaped
+    # here; the other values are regex-validated slugs and hostnames
     values = {"DOMAIN": cfg.domain, "ORG": cfg.org, "BRAND": cfg.effective_brand,
-              "SITE_REPO": cfg.site_repo, "TITLE": cfg.site_title or cfg.domain,
+              "SITE_REPO": cfg.site_repo,
+              "TITLE": html.escape(cfg.site_title or cfg.domain, quote=True),
               "REPO_COUNT": str(len(rows))}
     from .org_export_site import TEMPLATES     # lazy: ~10 KB of text, only needed here
     written: list[str] = []
@@ -964,11 +991,15 @@ _FORBIDDEN_FLAGS = ("--force", "-f", "--force-with-lease", "--mirror", "--delete
 
 def _git_env(cfg: ExportConfig, stamp: str) -> dict[str, str]:
     date = stamp if stamp.endswith("Z") and "T" in stamp else ""
-    env = {"GIT_AUTHOR_NAME": cfg.author_name, "GIT_AUTHOR_EMAIL": cfg.author_email,
-           "GIT_COMMITTER_NAME": cfg.author_name,
-           "GIT_COMMITTER_EMAIL": cfg.author_email,
-           # the person's gh login is the credential — never a token in the env
-           "GIT_TERMINAL_PROMPT": "0"}
+    # the person's gh login is the credential — never a token in the env
+    env = {"GIT_TERMINAL_PROMPT": "0"}
+    # an author only when the config names one; otherwise git's own identity of
+    # the person running the export (user.name / user.email) authors the snapshot
+    if (cfg.author_name or "").strip() and (cfg.author_email or "").strip():
+        env.update({"GIT_AUTHOR_NAME": cfg.author_name.strip(),
+                    "GIT_AUTHOR_EMAIL": cfg.author_email.strip(),
+                    "GIT_COMMITTER_NAME": cfg.author_name.strip(),
+                    "GIT_COMMITTER_EMAIL": cfg.author_email.strip()})
     if date:
         iso = f"{date[0:4]}-{date[4:6]}-{date[6:8]}T{date[9:11]}:{date[11:13]}:{date[13:15]}+0000"
         env["GIT_AUTHOR_DATE"] = iso
@@ -1081,6 +1112,25 @@ def apply(p: Plan, runner: Runner | None = None, *, progress=None) -> Result:
     stamp = p.stamp
     calls: list[list[str]] = []
     results: list[RepoResult] = []
+    # No author in the config means git's own identity of the person running this.
+    # Asked ONCE, up front: without it every commit would fail AFTER `gh repo create`
+    # had already made the empty repositories.
+    if not ((cfg.author_name or "").strip() and (cfg.author_email or "").strip()):
+        ident = _run_checked(runner, calls, ["git", "var", "GIT_AUTHOR_IDENT"],
+                             cwd=p.out_dir, env=_git_env(cfg, stamp), timeout=60)
+        if ident.returncode != 0:
+            why = ("no git identity for the snapshot commits: set git config user.name "
+                   "and user.email, or author_name / author_email in the export config "
+                   f"({ident.err.strip().splitlines()[0] if ident.err.strip() else 'git var GIT_AUTHOR_IDENT failed'})")
+            results = [RepoResult(target=rp.target_full,
+                                  url=f"{cfg.remote_base}{rp.target_full}.git",
+                                  action=rp.action, skipped=why) for rp in [*p.repos, p.site]]
+            result = Result(stamp=stamp, repos=results, calls=calls)
+            path = os.path.join(p.out_dir, f"org-export-result-{stamp}.json")
+            with open(path, "w", encoding="utf-8") as fh:
+                json.dump(result.to_dict(), fh, indent=2)
+            result.result_path = path
+            return result
     for rp in [*p.repos, p.site]:
         if not rp.workdir and not rp.blocked:
             rp.action = "missing source"
@@ -1106,10 +1156,14 @@ def plan_lines(p: Plan) -> list[str]:
     """The plan as text — the ONE rendering the GUI step, the TUI step and the CLI
     print (parity-pinned by test)."""
     cfg = p.config
+    author = (f"{cfg.author_name.strip()} <{cfg.author_email.strip()}> (from the config)"
+              if (cfg.author_name or "").strip() and (cfg.author_email or "").strip()
+              else "your own git identity (git config user.name / user.email)")
     out = [f"Export for {cfg.domain} -> GitHub org {cfg.org} (brand {cfg.effective_brand}, "
            f"{cfg.visibility}, existing repositories: "
            f"{'update via export/<stamp> branch' if cfg.update == UPDATE_BRANCH else 'refused unless unchanged'})",
-           f"Plan files: {p.out_dir}", ""]
+           f"Plan files: {p.out_dir}",
+           f"Snapshot commits authored as: {author}", ""]
     rows = [("SOURCE", "TARGET", "ACTION", "KIND", "FILES", "REWRITTEN", "EXCLUDED")]
     for r in [*p.repos, p.site]:
         rows.append((r.source or "(generated)", r.target_full, r.action, r.kind,
@@ -1126,6 +1180,12 @@ def plan_lines(p: Plan) -> list[str]:
                 out.append(f"    {b}")
             for n in r.notes:
                 out.append(f"    {n}")
+    # what is snapshotted: the ref and commit per repository (the default branch of
+    # each checkout, never the branch that happens to be checked out)
+    snaps = [r for r in p.repos if r.source_commit]
+    if snaps:
+        out += ["", "Snapshots (the default branch of each checkout, at this commit):"]
+        out += [f"  {r.source}: {r.ref} @ {r.source_commit[:12]}" for r in snaps]
     out += ["", "Renamed (exact tokens, idempotent):"]
     out += [f"  {rule}" for rule in p.rename_rules]
     out += ["", "Deliberately NOT renamed (extend the rename map to change this):"]
@@ -1155,7 +1215,8 @@ def cli_command(cfg: ExportConfig, verb: str = "PLAN", config_path: str = "",
     """The exact terminal command for this export (what the GUI and TUI hand over)."""
     argv = ["python3", "-m", "hugmesh_studio", "--org-export", verb]
     if config_path:
-        argv += ["--config", config_path]
+        # --domain picks the row when the file carries several; harmless otherwise
+        argv += ["--config", config_path, "--domain", cfg.domain]
     else:
         argv += ["--domain", cfg.domain, "--org", cfg.org]
         if cfg.source_dir:

@@ -46,6 +46,8 @@ OWNED = (
     "studio/hugmesh_studio/core/golive_driver.py",
     "studio/hugmesh_studio/core/config.py",
     "studio/hugmesh_studio/core/local_mesh_domains.py",
+    "studio/hugmesh_studio/core/local_mesh_bootstrap.py",
+    "studio/hugmesh_studio/core/worklist_driver.py",
     "studio/hugmesh_studio/gui/pages/golive.py",
     "studio/hugmesh_studio/gui/pages/domains.py",
     "studio/hugmesh_studio/gui/pages/localmesh.py",
@@ -59,8 +61,12 @@ OWNED = (
     "studio/tests/test_org_export_neutrality.py",
     "studio/tests/_org_export_helpers.py",
     "studio/tests/fixtures/org_export",
+    "studio/tests/test_worklist_driver.py",
     "studio/README.md",
     "docs/GOLIVE-ORG-EXPORT.md",
+    "tests/e2e/features/studio-org-export",
+    "tests/e2e/steps/studio-org-export.steps.ts",
+    "tests/e2e/studio-org-export-driver.py",
 )
 
 

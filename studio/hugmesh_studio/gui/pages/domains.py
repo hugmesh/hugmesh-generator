@@ -97,8 +97,10 @@ _COL_CA = 5
 # both hosts have a field for it (ImageConfig.cluster_domain_github_org / the
 # local-mesh own Domain row).
 _COL_ORG = 6
-#: The org cell's placeholder — says what the field is, never a real org.
-_ORG_PLACEHOLDER = "none (not exported)"
+#: The org cell's placeholder — says what the field is, never a real org. Short on
+#: purpose: the cell is narrow at the table's default width and a longer text was
+#: drawn elided ("none (not export…"); the tooltip carries the explanation.
+_ORG_PLACEHOLDER = "none"
 _ORG_TIP = ("The GitHub organisation this domain's repositories are exported to by "
             "the Go-Live wizard's ‘Export to GitHub org’ step. An org SLUG only "
             "(letters, digits, single hyphens, at most 39) — never a token: the "
