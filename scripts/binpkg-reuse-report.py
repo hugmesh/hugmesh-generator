@@ -38,7 +38,18 @@ WHAT IT REFUSES TO CALL A MEASUREMENT (exit 2, report still printed)
       non-empty pool, so something was already in it;
     * a fingerprint-guard refusal ("binpkg pool ABI MISMATCH") in either log;
     * a ">>> Failed to emerge" in either log (a partial run proves nothing);
-    * a warm run that compiled nothing AND merged nothing from the pool.
+    * two runs that did not merge the same package set: more than --max-set-diff-pct
+      (default 10) of the cold run's atoms never merged in the warm run (a warm run
+      that stopped early or was truncated), or of the warm run's atoms were never
+      merged in the cold run (a cold run that stopped early, or a changed spec).
+
+EVERY FIGURE IS AGAINST THE COLD SET
+    A warm-only denominator reads 100% beside atoms that never merged, so no figure here
+    has one. An atom the cold run merged that the warm run never did counts as NOT reused
+    in the warm reuse rate (its denominator is the warm merges plus those atoms), in the
+    compile reduction (it counts as still compiled), in the hit rate (cold's compiled set
+    is the denominator), and in the per-group and per-root rates. The wall speedup is
+    reported as not comparable, and fails --min-speedup, while any such atom exists.
 
 WALL CLOCK
     Builder logs carry no per-line timestamps (and the build tools that do print them
@@ -57,7 +68,7 @@ A LOG MAY HOLD SEVERAL BUILDS
 EXIT STATUS
     0  measurement valid, and every requested gate passed (or none requested)
     1  measurement valid, a requested gate (--min-reuse, --min-compile-reduction,
-       --min-speedup) was not met
+       --min-hit-rate, --min-speedup) was not met
     2  the measurement is invalid or the input is unusable (see above), or a usage error
 """
 from __future__ import annotations
@@ -244,7 +255,7 @@ def load(path, label, segment):
     return run
 
 
-def analyse(cold, warm, cold_max_binary_pct):
+def analyse(cold, warm, cold_max_binary_pct, max_set_diff_pct=10.0):
     problems, notes = [], []
 
     for r in (cold, warm):
@@ -269,20 +280,36 @@ def analyse(cold, warm, cold_max_binary_pct):
     if cold.unstamped:
         problems.append("cold run adopted an UNSTAMPED non-empty pool (guard warning present): "
                         "the pool was not empty at the start")
-    if warm.merges == 0 and not any("warm log has no" in p for p in problems):
-        problems.append("warm log merged nothing")
 
     cold_compiled = cold.atoms("compiled")
     warm_compiled = warm.atoms("compiled")
     warm_binary = warm.atoms("binary")
+    cold_set = cold_compiled | cold.atoms("binary")
+    warm_set = warm_compiled | warm_binary
     common_hit = cold_compiled & warm_binary
     common_miss = cold_compiled & warm_compiled
-    common_absent = cold_compiled - warm_binary - warm_compiled
-    new_in_warm = warm_compiled - cold_compiled - cold.atoms("binary")
+    common_absent = cold_compiled - warm_set
+    new_in_warm = warm_compiled - cold_set
     common_den = len(common_hit) + len(common_miss)
+    # What cold merged and warm never did (a warm run that stopped early or was truncated,
+    # or a changed spec), and what warm merged and cold never did (a cold run that stopped
+    # early). Either means the two runs are not the same package set.
+    missing_from_warm = cold_set - warm_set
+    extra_in_warm = warm_set - cold_set
+    if cold.merges and warm.merges:
+        for who, other, items, whole in (("cold", "warm", missing_from_warm, cold_set),
+                                         ("warm", "cold", extra_in_warm, warm_set)):
+            share = pct(len(items), len(whole))
+            if share is not None and share > max_set_diff_pct:
+                problems.append(
+                    "the two runs did not merge the same package set: %d of the %d atoms the "
+                    "%s run merged (%s) were never merged in the %s run (limit %s%%): a run "
+                    "that stopped early or was truncated, or a changed spec; rerun both from "
+                    "the same spec" % (len(items), len(whole), who, fmt_pct(share), other,
+                                       max_set_diff_pct))
     if common_absent:
         notes.append("%d of the %d atoms cold compiled were never merged in the warm run (a "
-                     "different package set, or the run stopped early): the hit rate counts "
+                     "different package set, or the run stopped early): every rate here counts "
                      "them as not reused; 'of those warm merged' leaves them out"
                      % (len(common_absent), len(cold_compiled)))
 
@@ -314,13 +341,21 @@ def analyse(cold, warm, cold_max_binary_pct):
                          % (b, g, warm.count("binary", g)))
     if cold.compiled and warm.compiled and cold.merges and warm.merges \
             and cold.merges != warm.merges:
-        notes.append("total merges differ (cold %d, warm %d): reuse rate is still valid, "
-                     "package sets are not identical" % (cold.merges, warm.merges))
+        notes.append("total merges differ (cold %d, warm %d): the package sets are not "
+                     "identical; every rate counts the atoms cold merged and warm did not as "
+                     "not reused"
+                     % (cold.merges, warm.merges))
 
     speedup = None
     if cold.wall and warm.wall:
         speedup = round(cold.wall / warm.wall, 2)
-    reduction = pct(cold.compiled - warm.compiled, cold.compiled) if cold.compiled else None
+    # A warm run that skipped work cold did is faster for that reason alone: its wall is not
+    # comparable, and --min-speedup must not pass on it.
+    speedup_comparable = not missing_from_warm
+    # An atom cold merged and warm never did counts as still compiled (compile reduction) and
+    # as a merge that did not come from the pool (warm reuse): neither is read off warm alone.
+    reduction = (pct(cold.compiled - warm.compiled - len(common_absent), cold.compiled)
+                 if cold.compiled else None)
 
     # Host tools (no root tail: merged into the builder's own root) versus the target
     # image (" for <sysroot>"): the arm host-bdep pool (#72 section 4) is judged on the
@@ -333,13 +368,20 @@ def analyse(cold, warm, cold_max_binary_pct):
                 d.setdefault(role_name(role), {"compiled": 0, "binary": 0})[kind] += 1
         return d
     cs_, ws_ = split(cold), split(warm)
+    missing_by_role = {}
+    for _g, _a, role in missing_from_warm:
+        missing_by_role[role_name(role)] = missing_by_role.get(role_name(role), 0) + 1
+    missing_by_group = {}
+    for g, _a, _r in missing_from_warm:
+        missing_by_group[g] = missing_by_group.get(g, 0) + 1
     empty = {"compiled": 0, "binary": 0}
     by_root = {}
     for k in (("native",) if native else ("host", "target")):
         c, w = cs_.get(k, empty), ws_.get(k, empty)
         by_root[k] = {"cold_compiled": c["compiled"], "cold_binary": c["binary"],
                       "warm_compiled": w["compiled"], "warm_binary": w["binary"],
-                      "warm_reuse_pct": pct(w["binary"], w["binary"] + w["compiled"])}
+                      "warm_reuse_pct": pct(w["binary"], w["binary"] + w["compiled"]
+                                            + missing_by_role.get(k, 0))}
 
     per_group = OrderedDict()
     for g in list(cold.groups) + [g for g in warm.groups if g not in cold.groups]:
@@ -347,7 +389,8 @@ def analyse(cold, warm, cold_max_binary_pct):
             "cold_compiled": cold.count("compiled", g), "cold_binary": cold.count("binary", g),
             "warm_compiled": warm.count("compiled", g), "warm_binary": warm.count("binary", g),
             "warm_reuse_pct": pct(warm.count("binary", g),
-                                  warm.count("binary", g) + warm.count("compiled", g)),
+                                  warm.count("binary", g) + warm.count("compiled", g)
+                                  + missing_by_group.get(g, 0)),
         }
 
     return {
@@ -356,16 +399,19 @@ def analyse(cold, warm, cold_max_binary_pct):
         "notes": notes,
         "cold": {"compiled": cold.compiled, "binary": cold.binary, "wall_s": cold.wall},
         "warm": {"compiled": warm.compiled, "binary": warm.binary, "wall_s": warm.wall},
-        "warm_reuse_pct": pct(warm.binary, warm.merges),
+        "warm_reuse_pct": pct(warm.binary, warm.merges + len(missing_from_warm)),
         "compile_reduction_pct": reduction,
         "compiles_avoided": cold.compiled - warm.compiled,
         "wall_speedup": speedup,
+        "wall_speedup_comparable": speedup_comparable,
         "wall_saved_s": (cold.wall - warm.wall) if cold.wall and warm.wall else None,
         "common_set": {
             "cold_compiled_atoms": len(cold_compiled),
             "reused_in_warm": len(common_hit),
             "recompiled_in_warm": len(common_miss),
             "absent_from_warm": len(common_absent),
+            "missing_from_warm": len(missing_from_warm),
+            "extra_in_warm": len(extra_in_warm),
             "hit_rate_pct": pct(len(common_hit), len(cold_compiled)),
             "hit_rate_of_merged_pct": pct(len(common_hit), common_den),
         },
@@ -394,13 +440,15 @@ def render(res, cold, warm):
     w("  %-24s %8d %8d" % ("merged from the pool", res["cold"]["binary"], res["warm"]["binary"]))
     w("  %-24s %8s %8s" % ("whole-run wall", fmt_dur(res["cold"]["wall_s"]), fmt_dur(res["warm"]["wall_s"])))
     w("")
-    w("  warm reuse rate            %s of the warm run's merges came from the pool"
-      % fmt_pct(res["warm_reuse_pct"]))
-    w("  compile reduction          %s (%d fewer source compiles)"
-      % (fmt_pct(res["compile_reduction_pct"]), res["compiles_avoided"])
+    cs = res["common_set"]
+    w("  warm reuse rate            %s of the warm run's merges came from the pool (%d atoms "
+      "cold merged that warm never did count as not reused)"
+      % (fmt_pct(res["warm_reuse_pct"]), cs["missing_from_warm"]))
+    w("  compile reduction          %s (%d fewer source compiles; %d cold-compiled atoms "
+      "never merged in warm count as still compiled)"
+      % (fmt_pct(res["compile_reduction_pct"]), res["compiles_avoided"], cs["absent_from_warm"])
       if res["compile_reduction_pct"] is not None else
       "  compile reduction          n/a (cold compiled nothing)")
-    cs = res["common_set"]
     w("  hit rate on cold's set     %s (%d of the %d atoms cold compiled were reused; "
       "%d recompiled; %d not merged in warm)"
       % (fmt_pct(cs["hit_rate_pct"]), cs["reused_in_warm"], cs["cold_compiled_atoms"],
@@ -412,6 +460,9 @@ def render(res, cold, warm):
     else:
         w("  wall speedup               %.2fx whole-run (%s saved); a lower bound on the "
           "emerge-only speedup" % (res["wall_speedup"], fmt_dur(res["wall_saved_s"])))
+        if not res["wall_speedup_comparable"]:
+            w("    NOT COMPARABLE: the warm run never merged %d atoms the cold run did, so its "
+              "wall is short for that reason; --min-speedup fails" % cs["missing_from_warm"])
     w("")
     w("  per group (compiled/binary):")
     for g, d in res["per_group"].items():
@@ -462,7 +513,12 @@ def main(argv=None):
     ap.add_argument("--list-segments", action="store_true", help="list the builds in each log and exit")
     ap.add_argument("--cold-max-binary-pct", type=float, default=10.0,
                     help="a cold run with more than this %% of pool merges is not cold (default 10)")
+    ap.add_argument("--max-set-diff-pct", type=float, default=10.0,
+                    help="the runs are not the same package set when more than this %% of one "
+                         "run's atoms were never merged in the other (default 10)")
     ap.add_argument("--min-reuse", type=float, help="gate: warm reuse rate must be >= this %%")
+    ap.add_argument("--min-hit-rate", type=float,
+                    help="gate: hit rate on cold's set must be >= this %%")
     ap.add_argument("--min-compile-reduction", type=float, help="gate: compile reduction must be >= this %%")
     ap.add_argument("--min-speedup", type=float, help="gate: whole-run wall speedup must be >= this factor")
     ap.add_argument("--json", action="store_true", help="print the result as JSON instead of text")
@@ -493,13 +549,16 @@ def main(argv=None):
                 print("binpkg-reuse-report: --%s-wall must be positive" % run.label, file=sys.stderr)
                 return 2
 
-    res = analyse(cold, warm, a.cold_max_binary_pct)
+    res = analyse(cold, warm, a.cold_max_binary_pct, a.max_set_diff_pct)
 
     gates = []
     for name, want, got in (("--min-reuse", a.min_reuse, res["warm_reuse_pct"]),
+                            ("--min-hit-rate", a.min_hit_rate,
+                             res["common_set"]["hit_rate_pct"]),
                             ("--min-compile-reduction", a.min_compile_reduction,
                              res["compile_reduction_pct"]),
-                            ("--min-speedup", a.min_speedup, res["wall_speedup"])):
+                            ("--min-speedup", a.min_speedup,
+                             res["wall_speedup"] if res["wall_speedup_comparable"] else None)):
         if want is None:
             continue
         # An unknown figure never passes a gate: absence of evidence is a failure here.
@@ -508,7 +567,7 @@ def main(argv=None):
     res["gates"] = gates
 
     if a.json:
-        print(json.dumps(res, indent=2, default=list))
+        print(json.dumps(res, indent=2))
     else:
         print(render(res, cold, warm))
         for g in gates:

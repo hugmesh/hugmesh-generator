@@ -51,15 +51,15 @@ It does **not** prove, and no test in the tree can prove:
 | figure | meaning |
 |---|---|
 | compiled / from the pool, per run, per emerge group and host-vs-target | counts of `>>> Emerging` and `>>> Emerging binary` lines, the markers portage itself prints. **Host** = a merge with no root tail (into the builder's own root: the 33-49 host tools); **target** = ` for /out/<dir>/sysroot/` (into the image). A native build (x86) has no tail anywhere, so it is reported as one `native` root, not as a host. |
-| warm reuse rate | warm `binary / (binary + compiled)` |
-| compile reduction | `(cold compiled − warm compiled) / cold compiled` |
+| warm reuse rate | warm `binary / (binary + compiled + atoms cold merged that warm never did)`: an atom warm never merged is a merge that did not come from the pool, so a truncated warm run cannot read 100 % |
+| compile reduction | `(cold compiled − warm compiled − cold-compiled atoms warm never merged) / cold compiled`; a never-merged atom counts as still compiled |
 | hit rate on cold's set | of the atoms cold compiled, how many warm merged from the pool. Atoms warm never merged count as **not** reused; a second line, "of those warm merged", leaves them out, and a note names how many there were |
 | pool MISS list | atoms cold compiled that warm compiled **again** despite the pool: the actionable output |
 | new work list | atoms warm compiled that cold never saw (changed spec between runs) |
-| wall speedup | `cold wall / warm wall`, only when you supply both walls |
+| wall speedup | `cold wall / warm wall`, only when you supply both walls. Reported **not comparable**, and failing `--min-speedup`, while the warm run never merged an atom cold did (it is short for that reason) |
 
 ```
-make binpkg-reuse-report COLD=cold.log WARM=warm.log COLD_WALL=3h20m WARM_WALL=41m MIN_REUSE=90
+make binpkg-reuse-report COLD=cold.log WARM=warm.log COLD_WALL=3h20m WARM_WALL=41m MIN_HIT_RATE=95
 python3 scripts/binpkg-reuse-report.py --help          # segments, --json, gates
 ```
 
@@ -67,9 +67,14 @@ python3 scripts/binpkg-reuse-report.py --help          # segments, --json, gates
 line; the cold log is not cold (more than 10 % of its merges came from a pool, or the
 guard warned `adopting an UNSTAMPED binpkg pool`); either log holds a guard refusal
 (`binpkg pool ABI MISMATCH`); either holds `>>> Failed to emerge` (a failure portage
-retried, or went on past, counts too: rerun from a clean log). Gates
-(`--min-reuse`, `--min-compile-reduction`, `--min-speedup`) exit 1 when unmet, and an
-**unknown** figure (no wall supplied) never passes a gate.
+retried, or went on past, counts too: rerun from a clean log); the two runs did not
+merge the same package set (more than `--max-set-diff-pct`, default 10, of one run's atoms
+never merged in the other: a warm run that stopped early, a cold run that stopped early, a
+changed spec). No figure is read off the warm run alone; a run that skipped work cannot
+inflate a rate or pass a gate. Gates (`--min-reuse`, `--min-hit-rate`,
+`--min-compile-reduction`, `--min-speedup`) exit 1 when unmet, and an **unknown** figure
+(no wall supplied, or a wall that is not comparable) never passes a gate. `make` takes
+`MIN_REUSE=` and `MIN_HIT_RATE=`; `make` itself reports a failed gate as exit 2.
 
 **Wall time is supplied, not parsed.** Builder logs carry no per-line timestamps and
 build tools inside them print their own, so an auto-detector would read the wrong
@@ -159,7 +164,7 @@ and run once more as a "cold with warm distfiles"; compare A2 against the warm r
 The compile counts are unaffected either way.
 
 **Proposed acceptance (my proposal, not a measured result, set by the operator):**
-warm reuse rate ≥ 90 %, hit rate on cold's set ≥ 95 %, MISS list empty or explained
+warm reuse rate ≥ 90 % (`MIN_REUSE=90`), hit rate on cold's set ≥ 95 % (`MIN_HIT_RATE=95`), MISS list empty or explained
 (an atom whose USE differs between roles is a legitimate rebuild under
 `--binpkg-respect-use=y`), `MEASUREMENT VALID`. A wall speedup threshold should wait
 for the first real figure rather than be guessed.
@@ -205,7 +210,8 @@ After Leg A on rpi5, in the **same** `WORK_DIR`, build `RPI_BOARD=rpi4` (a72). E
 
 * **target** merges all `compiled` (a new pool `snap-build-pi4`): the report's
   `by root → target` line is the check, and run this as `--cold <leg A cold> --warm <rpi4>`
-  only for the numbers, never as a speedup;
+  only for the numbers, never as a speedup (if the two boards' package sets differ by more
+  than 10 %, the report refuses them as one set: add `--max-set-diff-pct 100` here);
 * **host** merges (no root tail: merged into the builder's own root; the shared
   `host-amd64-bdep` leg, keyed on the builder's gcc and glibc and not on the board) mostly
   `binary`: this is the #72 section 4 reuse rate, the figure `SHARED-BINPKG.md` owes.
