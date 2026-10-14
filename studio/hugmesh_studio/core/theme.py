@@ -756,10 +756,29 @@ def css_string(text: str) -> str:
     Same interpolation contract as DECOR_VARIANTS: the value lands verbatim in a
     ``content:`` declaration, so quotes/backslashes must be escaped and newlines become
     the CSS ``\\A`` escape — an unescaped quote would end the string early and drop the
-    whole declaration silently (the rgba() hazard, in string form)."""
-    escaped = text.replace("\\", "\\\\").replace("'", "\\'")
-    escaped = escaped.replace("\r\n", "\n").replace("\r", "\n").replace("\n", "\\A ")
-    return f"'{escaped}'"
+    whole declaration silently (the rgba() hazard, in string form).
+
+    EVERY control character is escaped, not only CR and LF. The CSS tokenizer
+    normalises CR, FF and CRLF to LF before it sees the string, so a raw form feed
+    ended the string early too — and everything after it was parsed as further
+    declarations and rules: header text could add a rule, including a ``url(``
+    (hugmesh-generator#654, D19). The remaining C0/C1 controls are escaped as hex
+    (``\\1F ``) so no text reaches the parser unescaped; the trailing space is part of
+    the escape — without it ``\\1`` followed by ``F`` would read as one code point."""
+    text = text.replace("\r\n", "\n").replace("\r", "\n").replace("\f", "\n")
+    out = []
+    for ch in text:
+        if ch == "\\":
+            out.append("\\\\")
+        elif ch == "'":
+            out.append("\\'")
+        elif ch == "\n":
+            out.append("\\A ")
+        elif ord(ch) < 0x20 or 0x7F <= ord(ch) <= 0x9F:
+            out.append(f"\\{ord(ch):X} ")
+        else:
+            out.append(ch)
+    return "'" + "".join(out) + "'"
 
 
 def chrome_tokens(*, header_hidden: bool = False, header_size: str = "",

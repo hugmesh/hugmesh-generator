@@ -169,6 +169,13 @@ provider_rows() {
         { id=$1; $1=$2=$3=""; sub(/^ +/,""); print id "\t" $0 }'
 }
 
+# provider_mechanism ID -> the MECHANISM column of the driver's list for that id
+# (empty when the driver does not list it). Same data source as provider_rows: this
+# front-end never carries registry knowledge of its own.
+provider_mechanism() {
+    drv list 2>/dev/null | awk -v id="$1" 'NR>1 && $1==id {print $2; exit}'
+}
+
 # plan_flags -> the driver flags derived from the session inputs (NEVER a secret).
 plan_flags() {
     local -a f=()
@@ -266,6 +273,13 @@ plan_screen() {
 # confirmation gate runs in the clear terminal (this front-end never weakens it).
 commit_screen() {
     [ -n "${OPT_PROVIDER}" ] || { ui_msg "Go Live" "Pick a provider first (menu → Provider)."; return 0; }
+    # A Tor address needs no public flip (#654 D12): the .onion is reachable with the
+    # host INTERNAL, and the marker would only open public 80/443. The driver refuses
+    # `commit` for it; this face says so inline and never asks the driver.
+    if [ "$(provider_mechanism "${OPT_PROVIDER}")" = "onion" ]; then
+        ui_msg "Go Live" "A Tor address needs no public flip.\n\nThe .onion of ${OPT_PROVIDER} is reachable with the host INTERNAL; 'commit' is refused for it and nothing was changed.\nTo ALSO serve a clearnet edge, pick a public provider (menu → Provider), plan it, then GO LIVE."
+        return 0
+    fi
     local -a args=(commit --provider "${OPT_PROVIDER}")
     ui_yesno "Persist" "ALSO persist release-state=public?\n\nNo  = marker only (rollback just deletes the marker)  ← recommended\nYes = survives a marker delete; rollback then needs --revert-release-state" \
         && args+=(--persist-public)
@@ -282,12 +296,18 @@ rollback_screen() {
 
 main_menu() {
     while true; do
-        local choice
+        local choice commit_item="4. GO LIVE — commit (driver's typed confirm) …"
+        # The entry stays in place but says why it is not offered after a Tor plan,
+        # so the menu never looks like it lost a step (the unaffiliated-rule idiom:
+        # a control that does not apply is drawn with the reason, not hidden).
+        if [ -n "${OPT_PROVIDER}" ] && [ "$(provider_mechanism "${OPT_PROVIDER}")" = "onion" ]; then
+            commit_item="4. GO LIVE — not offered: a Tor address needs no public flip"
+        fi
         choice="$(ui_menu "Main" "provider=${OPT_PROVIDER:-none}\nFlow: provider → inputs → plan (preview) → GO LIVE. The driver owns every action + the confirm gate." \
             provider "1. Pick provider (exposure model) …" \
             inputs   "2. Inputs (domain / IPs / DDNS / dirs) …" \
             plan     "3. Plan — preview & emit artifacts (dry-run) …" \
-            commit   "4. GO LIVE — commit (driver's typed confirm) …" \
+            commit   "${commit_item}" \
             rollback "Rollback — back to internal …" \
             status   "Show go-live status" \
             list     "List providers" \
