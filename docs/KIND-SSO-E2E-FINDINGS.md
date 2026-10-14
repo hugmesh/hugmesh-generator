@@ -35,15 +35,17 @@ the local fix.
 > profile does not deploy — those specs are out of scope here and this result
 > says nothing about them. **"the e2e is green" is not "the platform is finished"**.
 >
-> **Re-measured 2026-10-14:** blockers 1-16 hold on `main`, and #693 (item 27) is the
-> next one: [see the last section](#re-measured-2026-10-14).
->
-> **Item status on 2026-10-07 (`origin/main` @ `cbf5d9a6`).** Items 5-15 are
-> fixed on `main` (#540-#544, #551, #552; marked in the table). Item 24 is fixed in
-> the gateway source. Items 17, 25 and 26 are still open. Item 20 has a helper
-> (`apiContext`, #569) that only spec 29 uses; specs 19, 20 and 23 still call
-> Playwright's built-in `request` fixture. No kind e2e run after 2026-08-06 is
-> recorded in this repo, so the green result above is dated, not re-measured.
+> **Current status (re-measured 2026-10-14, `origin/main` @ `c0c46601`; read
+> [the last section](#re-measured-2026-10-14) for the evidence).** Blockers 1-16
+> are fixed on `main` (1 for kind only, 16 in the admin-bff source with the image
+> rebuild unverified). Open: 17, 20 (harness: specs 19, 20 and 23 still call
+> Playwright's built-in `request` fixture, only spec 29 uses `apiContext`), 25, 26,
+> and **27 (#693, `GET /bff/session` answers 500 on kind)**. Item 24 is fixed in
+> the gateway source. This tree-and-guards re-measurement supersedes the 2026-10-07
+> status note that stood here (it listed only 17, 25 and 26 as open, before item 27
+> was found); the `#NNN` numbers in the table are not reliable pull request numbers
+> (see the last section). No kind e2e run after 2026-08-06 is recorded in this
+> repo, so the green result above is dated, not re-measured.
 
 **During the 2026-08-05 run this section narrates, the e2e was not green.** The
 chain reached Casdoor and minted a real session against a real IdP. Then it
@@ -70,7 +72,7 @@ branches carried them (see the bottom; all four are merged).
 | 6 | No cluster-side keyspace bootstrap | **FIXED 2026-08-06 (#541, #551).** `manifests/cassandra-init` and `apps/00b-cassandra-init.yaml` create the keyspaces, roles and grants; #551 added the Application to the kind `sso` profile. Compose has a `cassandra-init` creating `hugmesh_gateway` / `hugmesh_federation`; the cluster payload has no equivalent, and `schema-action: CREATE_IF_NOT_EXISTS` creates tables, never keyspaces. |
 | 7 | **Gateway probes hit a role-gated endpoint** | **FIXED 2026-08-06 (#540).** The chart probes accept the 401 (`charts/hugmesh-gateway/templates/deployment.yaml:216-260`). The gateway image still gates `/actuator/**`; that was left as is. `/actuator/health/{liveness,readiness}` is gated by the gateway's own `SecurityConfig` (INFRA_PATHS), so an unauthenticated kubelet probe **always** gets 401 → readiness never passes → liveness kills a perfectly healthy pod. Compose documents this exact behaviour and accepts 401 in its healthcheck; the chart never got the fix. **No gateway can ever become Ready in k8s.** |
 | 8 | Casdoor never imports the mounted `init_data.json` | **FIXED 2026-08-06 (#542, #552).** `app.conf` now sets `initDataFile` (`casdoor/app-conf-configmap.yaml:44-48`); #552 added the one application the import needs. Verified on a *completely fresh* database, correct path (`/init_data.json`, cwd `/`), valid JSON. No `hugmesh` organization is ever created. |
-| 9 | …so the built-in admin keeps Casdoor's default password `123` | **FIXED 2026-08-06 (#542)** with item 8. `init_data.json` is what sets it. **Security exposure:** the identity provider ships with a well-known credential wherever it is reachable, and the Vault-provisioned password is never applied. |
+| 9 | …so the built-in admin keeps Casdoor's default password `123` | **FIXED 2026-08-06 (#542, #552).** Not by item 8: `init_data.json` declares no built-in/admin user and no password (its header says so). `casdoor-init` does it, through `reconcile_admin_password()` (`casdoor/init-job.yaml`), which logs in with the Vault/ESO value first and otherwise calls `/api/set-password` from Casdoor's bootstrap default, then re-logs in to prove it. **Security exposure (as found 2026-08-05):** the identity provider ships with a well-known credential wherever it is reachable, and the Vault-provisioned password is never applied. |
 | 10 | `casdoor-init` never checks API responses | **FIXED 2026-08-06 (#542).** The init Job now reads the response body, not just the HTTP status (`casdoor/init-job.yaml:14-22`). It prints `added app-user-bff` for every app while running **anonymous-denied** against Casdoor. A totally failed run is indistinguishable from a successful one — which is why 8/9 went unnoticed. |
 | 11 | `CASDOOR_ORG` unset in the cluster manifest | **FIXED 2026-08-06 (#543, #544).** `CASDOOR_ORG` is `hugmesh` (`user-bff-api/deployment.yaml:168`). user-bff uses its stale pre-rebrand default org → `The user: <pre-rebrand-org>/e2e-user doesn't exist`. Compose sets it, with a comment explaining precisely this. |
 | 12 | OIDC `client-id` mismatch | **FIXED 2026-08-06 (#543, #544).** `APP_BFF_OIDC_CLIENT_ID` is `app-user-bff` (`user-bff-api/deployment.yaml:496`). user-bff defaults to `user-bff`; `casdoor-init` registers `app-user-bff` → `Invalid client_id`. |
@@ -283,8 +285,12 @@ health either way.
 ## Re-measured 2026-10-14
 
 Blockers 1-16 are re-checked on `origin/main` @ `c0c46601` against the tree and
-the offline guards, not against a cluster. Nothing here was run on a live cluster; the last kind run on record is
-the 2026-08-06 one above (and the 2026-10-07 rebuild, which found item 27). The
+the offline guards, not against a cluster. `git diff c0c46601 origin/main` (now `702b590d`) touches
+no file cited below except the gateway chart's `configmap.yaml`, `service.yaml`
+and `values.yaml`, whose cited lines are not among the changes. Nothing here was run on a live cluster; the last kind run on record is
+the 2026-08-06 one above (and the 2026-10-07 rebuild, which found item 27).
+The live proof (a fresh `make kind-up`, then `make kind-e2e`) needs a kind cluster
+and is the operator's to run; no change in this repository can substitute for it. The
 `#NNN` numbers in the table above are issue or branch numbers from the original
 write-up, not reliable GitHub pull request numbers (`gh pr view 534` is an
 unrelated Studio change, and several of the others do not resolve), so this table
@@ -300,7 +306,7 @@ cites commits.
 | 6 | Fixed | `cff35917`, `1d57735d`; `manifests/cassandra-init/` and `apps/00b-cassandra-init.yaml`; `bootstrap-kind.sh` lists it in `APP_NAMES` for the sso profile. |
 | 7 | Fixed | `effd9364`; the chart's readiness and liveness probes accept 200 or 401 (`deployment.yaml:241-262`); `tests/stack/test-probe-auth-surface.sh`: 16 negative controls, PASS. |
 | 8 | Fixed | `da6d970a`, `668d386e`; `casdoor/app-conf-configmap.yaml:56` sets `initDataFile = "/init_data.json"`; `init-data-configmap.yaml` declares the `applications` block the import needs. |
-| 9 | Fixed in the manifests | Same commit: `init_data.json` and `casdoor-init` set the admin password from the ESO value. The live IdP behind a given cluster is not measured. |
+| 9 | Fixed in the manifests | `da6d970a`, `668d386e`; `casdoor-init` only: `reconcile_admin_password()` in `casdoor/init-job.yaml` applies the ESO value via `/api/set-password` and re-logs in. `init-data-configmap.yaml` declares no admin user and no password. The live IdP behind a given cluster is not measured. |
 | 10 | Fixed | `da6d970a`; `casdoor/init-job.yaml` reads response bodies; `test-casdoor-init-honesty.sh`: 67 passed, 0 failed. |
 | 11-13 | Fixed | `7742bde3`; `user-bff-api/deployment.yaml:168` (`CASDOOR_ORG`), `:496` (client id), `:508` (redirect URI). |
 | 14 | Fixed | `7742bde3`; `test-service-env-contract.sh` PASS with 27 negative controls. It reads the BFF source checkouts it finds next to this repo (here: `SERVICE_SRC_ROOT=/home/magus/Github`, whose HEADs are not all `origin/main`), so treat that run as indicative; CI clones the services itself. |
@@ -325,6 +331,8 @@ that admit the pods the hugmesh-pki tier policy did not
 (`manifests/networkpolicy/casdoor-jwks-ingress.yaml`), guarded offline by
 `tests/scripts/test-bff-jwks-in-cluster.sh` (25 negative controls). It is in
 draft pull request #709, which conflicts with current main only in
-`tests/scripts/test-guard-integrity.sh` (the suite census). The live proof (`make kind-tor`, then
+`tests/scripts/test-guard-integrity.sh` (the suite census, re-checked with
+`git merge-tree` on 2026-10-14). Draft pull request #736 is the same change
+merged with main and has no conflict; merge one of them, not both. The live proof (`make kind-tor`, then
 `make kind-e2e-tor`, on a fresh bootstrap) has not been run. Until it has, the
 spec 27 PASS above proves less than "login works".

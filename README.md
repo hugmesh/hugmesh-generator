@@ -37,7 +37,7 @@ subdirs included.
 
 ## Current State
 
-_As of 2026-08-05. State key: **✅ shipped** (on `main`) · **🚧 in-flight** · **🔭 planned**._
+_As of 2026-08-05, except the kind SSO e2e bullets, re-measured 2026-10-14. State key: **✅ shipped** (on `main`) · **🚧 in-flight** · **🔭 planned**._
 
 > **"Ships dark" counts as shipped.** Several capabilities below are complete on
 > `main` and deliberately inert behind a documented default-off flag — that is a
@@ -374,7 +374,7 @@ none), and compose green is not evidence for the cluster._
   The 2026-08-06 live run passed specs `01-frontpage` and `27-native-login`, but
   spec 27 only proves the cookie is minted. **Open:** `GET /bff/session` answers
   500 on kind because the BFF manifests give the signing-key fetch a public host
-  that does not resolve in-cluster (#693; fix in draft pull request #709), the
+  that does not resolve in-cluster (#693; fix in draft pull request #709, or #736, the same change merged with main), the
   kind lane still side-loads every image so the Harbor pull path is unexercised
   (finding 17), and findings 20, 25 and 26. No kind run is recorded after the
   2026-10-07 rebuild. Compose green is **not** evidence for the cluster, and
@@ -573,7 +573,7 @@ ships a full multi-tenant platform. State key: **✅ shipped** (on `main`) ·
   remote + two-SA RBAC), desktop app governance, coturn TURN relay, and the
   gateway MFA privileged floor are all on `main` behind documented default-off
   flags. See [Current State](#current-state) for each flag and its caveats.
-- **🚧 / 🔭 Roadmap** — the kind-cluster SSO e2e (harness shipped, **not green**),
+- **🚧 / 🔭 Roadmap** — the kind-cluster SSO e2e (harness shipped, blockers 1-16 fixed, the JWT-validating leg open: #693),
   SELinux node-policy modules that bake and wire but **fail to load on every
   boot**, the live MFA operator flip, desktop-governance go-live (three dark
   flags, no dial rows, no image ever built), the broken node-side headscale ACL
