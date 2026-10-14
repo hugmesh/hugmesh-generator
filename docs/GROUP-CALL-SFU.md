@@ -4,7 +4,7 @@
 > was chosen on 2026-09-23 (hugmesh-admin-bff-api#98, decisions 102a and 102b).
 > The **client half** has shipped dark in `hugmesh-matrix-ui`. The **server
 > half** (this repo) is not built. This page is the plan for it. Measured
-> 2026-10-14 against `hugmesh-generator` origin/main `702b590d`,
+> 2026-10-14 against `hugmesh-generator` origin/main `5f450a48`,
 > `hugmesh-matrix-ui` origin/main `3032591`, tuwunel main `f473d9a` and tag
 > `v1.7.0` (the tag the mesh pins). Where the two tuwunel refs differ, this
 > page says which one a statement is about.
@@ -136,8 +136,10 @@ Two consequences for this repo's name handling:
 
 Measured from tuwunel's own compliance table (`docs/development/compliance/msc.md`)
 at both refs, 2026-10-10 for main `f473d9a` and 2026-10-14 for the pinned tag
-`v1.7.0`. The two disagree on wording, not on what the mesh can rely on. The
-tag is what runs, so the tag column decides.
+`v1.7.0`. The status marks differ between the refs (the tag marks MSC4143 supported and
+MSC4195 unsupported, main marks both partial), but neither implements
+`get_token`, delayed events, `is_joined` or a proxy prefix. The tag is what
+runs, so the tag column decides.
 
 | MSC | pinned tag `v1.7.0` | main `f473d9a` | Effect here |
 |---|---|---|---|
@@ -350,7 +352,7 @@ wording.
 
 - hugmesh-admin-bff-api#98 and its comments (decisions 102a and 102b, slice 1 status).
 - `hugmesh-matrix-ui` `projects/matrix/src/app/rtc/*` and its README.
-- tuwunel: `docs/calls/matrix_rtc.md`, `tuwunel-example.toml`, `src/api/client/rtc.rs`
+- tuwunel: `docs/calls/matrix_rtc.md`, `tuwunel-example.toml`, `src/api/client/rtc.rs`,
   `src/api/router.rs` and `src/api/client/well_known.rs` (tag `v1.7.0`),
   `src/api/client/versions.rs` (tag `v1.7.0`, where it has no `msc4143` entry,
   and main, where it does), and `docs/development/compliance/msc.md` (tag
