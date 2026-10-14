@@ -966,15 +966,19 @@ finalizers on the hardcoded owners: none
 `main` does the moment it syncs, which is the one thing a dark change must not do.
 
 1. *The Application name changes.* Generated names are `optional-<slug>`; the owners are
-   `akkoma`, `hugmesh-games`, `hugmesh-character-forge-ui`, and so on. On a cluster whose
+   `akkoma`, `hugmesh-games`, `character-forge-bff-api`, and so on. On a cluster whose
    root is the repo-recursing `hugmesh-root` (`app-of-apps.yaml:41`, `prune: true`)
    deleting `apps/30-akkoma.yaml` prunes Application `akkoma`.
 2. *No hardcoded owner carries a `resources-finalizer`, and neither does the 13a template*
    (derived above, and `grep -n finalizer specs/cluster/apps/*.yaml` finds only the waved
    root). So the prune orphans the workloads rather than deleting them, and 13a, held at
    `"false"`, creates nothing to adopt them: the services keep running but nothing manages
-   them. The git commit that deletes an owner must therefore also set that element
-   `"true"`, in the same commit.
+   them. Setting the element `"true"` in the same git commit does NOT fix this on a cluster
+   where `optional-services` already exists: both roots (`app-of-apps.yaml`,
+   `apps/00-app-of-apps-waved.yaml`) ignore `/spec/generators/0/list/elements` with
+   `RespectIgnoreDifferences=true`, so a git edit to `installed` is never applied to the
+   live object. A git `"true"` takes effect only when the ApplicationSet is first created
+   (a fresh image).
 3. *The reverse is also true, and is a decision nobody has made.* With no finalizer on the
    template, flipping an element to `"false"` at runtime deletes the Application and leaves
    the pods, Services and PVCs running: "runtime remove" would not remove anything.
@@ -1018,12 +1022,27 @@ finalizers on the hardcoded owners: none
    The kind profiles do not apply any owner (`bootstrap-kind.sh` lists them only in a
    comment), so they are not a consumer.
 
-**Order for a live cluster, per single-app slug** (needs a live cluster, not exercised):
-confirm the old Application is Synced and Healthy and the reconciler is dark; record the
-workload UIDs; land the commit that deletes the owner and sets the element `"true"` (or
-`kubectl delete application <old> --cascade=orphan`, then flip the element); wait for
-`optional-<slug>` to be Synced and Healthy; check the UIDs did not change. Only after all
-eleven have moved, and the keystone checks in section 10 have passed, flip the reconciler.
+**Order for an already-running cluster, per single-app slug** (needs a live cluster, not
+exercised; each step below assumes the ignoreDifferences behaviour above, which is not
+verified against a live ArgoCD):
+
+1. Confirm the old Application is Synced and Healthy and the reconciler is dark; record
+   the workload UIDs.
+2. Land the git change that deletes the owner. On a `hugmesh-root` cluster the root prunes
+   the old Application and the workloads are orphaned. (On a baked-tree device nothing is
+   pruned: delete the Application by hand, `kubectl delete application <old>
+   --cascade=orphan`. On a root-tracking cluster a hand delete while the file is still in
+   git is undone by the root's selfHeal.)
+3. Live-patch the ApplicationSet element to `"true"` (`kubectl patch applicationset
+   optional-services`). It is the same field the reconciler will own, and selfHeal does not
+   revert it for the same ignoreDifferences reason. Do not patch first: that opens a window
+   with two owners on one directory, which is what `_opt_appset_cutover_done` exists to
+   prevent. The reconciler cannot do this step, because it is dark and is only enabled
+   after the cut-over.
+4. Wait for `optional-<slug>` to be Synced and Healthy and check the UIDs did not change.
+
+Only after all eleven have moved, and the keystone checks in section 10 have passed, flip
+the reconciler.
 
 **What is still open and needs an operator or a live cluster:** the finalizer and
 stateful-data decision (3); the multi-app design (5); the adoption order above; the three
