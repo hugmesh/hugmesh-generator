@@ -79,6 +79,7 @@ from ...core.config import (
     ORANGEPIZERO2_FLAVORS, ORANGEPIZERO2W_FLAVORS, ORANGEPIZERO3_FLAVORS, ORANGEPI3LTS_FLAVORS,
     ORANGEPI4LTS_FLAVORS,
     RPI_BOARDS,
+    IdentityValidationError,
 )
 from ...core.fleet import (FLEET_LANE_NOTE, JOBS_RANGE, WITH_TOR_NOTE, FleetConfig,
                            FleetDomains, FleetDriver, commit_fleet_domains,
@@ -649,8 +650,24 @@ class FleetPage(QtWidgets.QWidget):
         """RESTART/REDO entry: load a fleet session's recorded config back into the
         widgets and land on the Review step. ``pin=True`` (RESTART) reuses the SAME
         record id/workdir — new_fleet_session archives the prior outcome into
-        ``history``; ``pin=False`` (REDO) mints a fresh record at Review."""
-        self.apply(FleetConfig.from_dict(s.config))
+        ``history``; ``pin=False`` (REDO) mints a fresh record at Review.
+
+        A DAMAGED record (hand-edited JSON that ``FleetConfig.from_dict`` refuses) is
+        shown INLINE on the Review step — the preflight pane names the field — and
+        nothing is applied or pinned: the window keeps what it had and ‘Build fleet
+        now’ builds that, never the damaged record. This runs inside the Sessions
+        page's RESTART / REDO slot, where an exception would abort the Studio."""
+        try:
+            cfg = FleetConfig.from_dict(s.config)
+        except IdentityValidationError as e:
+            self.pending_session_id = None
+            self._goto(STEP_REVIEW)
+            self.problems.setPlainText(
+                f"Cannot restart fleet record {getattr(s, 'id', '?')}: {e}\n"
+                "Its saved config is damaged. Fix the record's JSON under the Studio "
+                "state directory, or start this fleet again from the first step.")
+            return
+        self.apply(cfg)
         self.backend.setCurrentText(s.backend or "auto")
         self.pending_session_id = s.id if pin else None
         self._goto(STEP_REVIEW)

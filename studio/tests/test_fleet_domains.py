@@ -330,6 +330,55 @@ def test_the_tui_delete_prunes_the_deleted_rows_reviewed_marker():
     assert st.domain_services_reviewed == ["mesh.example"]
 
 
+# ── a damaged record is refused at LOAD, with the field named (post-merge review of
+#    #645: hand-edited JSON used to pass from_dict and die later as a TypeError from
+#    dataclasses.asdict or an AttributeError in the gate, inside the RESTART slot) ────
+@pytest.mark.parametrize("damage, field", [
+    ({"domains": "junk"}, "domains must be a list"),
+    ({"domains": {"name": "mesh.example"}}, "domains must be a list"),
+    ({"domains": ["junk"]}, "domains[0] must be a domain row"),
+    ({"domains": [5]}, "domains[0] must be a domain row"),
+    ({"domains": [{"name": "mesh.example"}, 7]}, "domains[1] must be a domain row"),
+    ({"domains": [{"name": 7}]}, "domains[0].name must be text"),
+    ({"domains": [{"name": "mesh.example"}], "domain_services_reviewed": "abc"},
+     "domain_services_reviewed must be a list"),
+])
+def test_a_damaged_fleet_record_is_refused_at_load_naming_the_field(damage, field):
+    from hugmesh_studio.core.config import IdentityValidationError
+    record = dict(_cfg().to_dict()); record.update(damage)
+    with pytest.raises(IdentityValidationError) as ei:
+        FleetConfig.from_dict(record)
+    assert field in str(ei.value), str(ei.value)
+    # and the non-object record the loaders could meet (a top-level JSON array)
+    with pytest.raises(IdentityValidationError, match="must be a JSON object"):
+        FleetConfig.from_dict(["not", "a", "record"])
+
+
+def test_an_undamaged_record_with_absent_or_null_rows_still_loads():
+    """The lenient cases stay lenient: a pre-#645 record has no domains keys at all,
+    and ``null`` for either is what an old serialiser wrote — both are an empty list,
+    not a refusal (the legacy-record RESTART path, pinned above as passing the gate)."""
+    assert FleetConfig.from_dict({"jobs": 3}).domains == []
+    back = FleetConfig.from_dict({"domains": None, "domain_services_reviewed": None})
+    assert back.domains == [] and back.domain_services_reviewed == []
+
+
+def test_fleet_domain_fields_hands_out_copies_of_the_rows():
+    """The docstring's promise: the recorded config keeps COPIES, so editing the step
+    state after a Back (the live rows) cannot rewrite a record already made."""
+    from hugmesh_studio.core.fleet import fleet_domain_fields
+    st = FleetDomains()
+    seed_fleet_domains(st, "mesh.example")
+    st.domains.append(Domain(name="acme.example", optional_services=["akkoma"]))
+    fields_ = fleet_domain_fields(st)
+    assert fields_["domains"] == st.domains
+    assert all(a is not b for a, b in zip(fields_["domains"], st.domains))
+    fields_["domains"][1].optional_services.append("games")
+    fields_["domains"][0].name = "renamed.example"
+    assert st.by_name("acme.example").optional_services == ["akkoma"]
+    assert st.names() == ["mesh.example", "acme.example"]
+
+
 # ── the GUI face ─────────────────────────────────────────────────────────────────────
 pytest.importorskip("hugmesh_studio.gui.qt", reason="no Qt binding (PySide6/PyQt6) installed")
 
@@ -500,3 +549,33 @@ def test_the_gui_jobs_spin_box_is_bounded_by_the_same_range_validate_enforces(pa
     page.jobs.setValue(0)
     assert page.jobs.value() == JOBS_RANGE[0]
     page.collect().validate()                               # what it clamps to is valid
+
+
+class _DamagedSession:
+    """What the Sessions page hands RESTART / REDO: a record whose saved config was
+    hand-edited into a shape FleetConfig.from_dict refuses."""
+    def __init__(self, config):
+        self.id = "fleet-damaged-1"
+        self.backend = "native"
+        self.config = config
+
+
+@pytest.mark.parametrize("pin", [True, False])
+def test_restarting_a_damaged_record_shows_the_refusal_inline_and_pins_nothing(page, pin):
+    """RESTART (pin) and REDO of a damaged record: no exception leaves the slot (PyQt6
+    would abort the Studio), the Review step's preflight pane names the record and the
+    field, nothing is applied and no record id is pinned — ‘Build fleet now’ would
+    build what the window already had, never the damaged record."""
+    page.cluster_domain.setText("keep.example")
+    page.load_from_session(_DamagedSession({"cluster_domain": "evil.example",
+                                            "domains": ["junk"]}), pin=pin)
+    assert page.stack.currentIndex() == fleet_mod.STEP_REVIEW
+    text = page.problems.toPlainText()
+    assert "Cannot restart fleet record fleet-damaged-1" in text
+    assert "domains[0] must be a domain row" in text
+    # the damaged record's id is NOT pinned: Review minted its own fresh id for the
+    # window's own config (the normal lazy mint), so a Build there never reuses the
+    # damaged record's workdir
+    assert page.pending_session_id and page.pending_session_id != "fleet-damaged-1"
+    assert page.cluster_domain.text() == "keep.example"
+    assert page.runs == [] and page.worker is None

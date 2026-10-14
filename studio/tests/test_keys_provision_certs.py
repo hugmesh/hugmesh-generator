@@ -233,3 +233,20 @@ def test_the_first_boot_emulation_and_the_client_image_check_assert_the_import()
                    "KEYS cert file in trust store", "KEYS cert linked by update-ca-certificates",
                    "/usr/local/share/ca-certificates/cluster-ca.crt"):
         assert needle in vc, needle
+
+
+def test_only_crt_and_pem_are_imported_never_another_suffix(tmp_path):
+    """The note promises ``*.crt and *.pem`` — exactly those, so a stray ``.cer`` or
+    ``.der`` beside them (not a PEM the trust store can read) is never copied into
+    /usr/local/share/ca-certificates (the post-merge review of #645 found the exact
+    suffix list unpinned: a ``*.cer`` copy added to the step stayed green)."""
+    path, _manifest_ = _manifest("provision.host.json")
+    base = _stick(tmp_path, names=("cluster-ca.crt", "extra.pem", "odd.cer", "odd.der",
+                                   "README.txt"))
+    out = _run_import(_read(PROVISION), base, path)
+    copies = [ln for ln in out.splitlines() if ln.startswith("CALL cp ")]
+    assert copies == [
+        f"CALL cp -f {base}/certs/cluster-ca.crt /usr/local/share/ca-certificates/",
+        f"CALL cp -f {base}/certs/extra.pem /usr/local/share/ca-certificates/",
+    ], out
+    assert ".cer" not in out and ".der" not in out and "README" not in out

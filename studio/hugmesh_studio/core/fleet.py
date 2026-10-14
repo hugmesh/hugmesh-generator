@@ -271,15 +271,42 @@ class FleetConfig:
     def from_dict(cls, d: dict[str, Any]) -> "FleetConfig":
         # fields(), not __dataclass_fields__: the latter also lists the ``mode``
         # ClassVar, which is not an __init__ argument.
+        if not isinstance(d, dict):
+            raise IdentityValidationError(
+                f"fleet record must be a JSON object, not {type(d).__name__}")
         known = {f.name for f in fields(cls)}
         kw = {k: v for k, v in d.items() if k in known}
         # REHYDRATE the rows. asdict() -> JSON -> back yields plain dicts, and the
         # gate reads ``getattr(d, "name", "")`` — "" on a dict — so an un-rehydrated
         # record would pass the gate on every RESTART/REDO however unwalked it was.
-        kw["domains"] = [ImageConfig._domain_from_dict(x) if isinstance(x, dict) else x
-                         for x in (kw.get("domains") or [])]
-        kw["domain_services_reviewed"] = [
-            str(n) for n in (kw.get("domain_services_reviewed") or [])]
+        # A DAMAGED record (hand-edited JSON: ``domains`` a string, a row that is a
+        # number, a row whose name is not text, markers that are not a list) is
+        # refused HERE with the reason, as IdentityValidationError — the exception the
+        # loaders already show inline. It used to pass through and surface later as a
+        # TypeError from dataclasses.asdict / an AttributeError in the gate, inside the
+        # RESTART slot, where PyQt6 aborts the Studio on an unhandled exception.
+        raw_rows = kw.get("domains") or []
+        raw_marks = kw.get("domain_services_reviewed") or []
+        for label, value in (("domains", raw_rows),
+                             ("domain_services_reviewed", raw_marks)):
+            if not isinstance(value, list):
+                raise IdentityValidationError(
+                    f"fleet record: {label} must be a list, not {type(value).__name__}")
+        rows = []
+        for i, x in enumerate(raw_rows):
+            if isinstance(x, dict):
+                x = ImageConfig._domain_from_dict(x)
+            if not isinstance(x, Domain):
+                raise IdentityValidationError(
+                    f"fleet record: domains[{i}] must be a domain row (an object), "
+                    f"not {type(x).__name__}")
+            if not isinstance(x.name, str):
+                raise IdentityValidationError(
+                    f"fleet record: domains[{i}].name must be text, "
+                    f"not {type(x.name).__name__}")
+            rows.append(x)
+        kw["domains"] = rows
+        kw["domain_services_reviewed"] = [str(n) for n in raw_marks]
         return cls(**kw)
 
     def _services_words(self) -> str:
