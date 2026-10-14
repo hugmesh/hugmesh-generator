@@ -37,7 +37,7 @@ subdirs included.
 
 ## Current State
 
-_As of 2026-08-05. State key: **✅ shipped** (on `main`) · **🚧 in-flight** · **🔭 planned**._
+_As of 2026-08-05, except the kind SSO e2e bullets, re-measured 2026-10-14. State key: **✅ shipped** (on `main`) · **🚧 in-flight** · **🔭 planned**._
 
 > **"Ships dark" counts as shipped.** Several capabilities below are complete on
 > `main` and deliberately inert behind a documented default-off flag — that is a
@@ -332,7 +332,7 @@ _As of 2026-08-05. State key: **✅ shipped** (on `main`) · **🚧 in-flight** 
   (the runtime host↔remote walkthrough).
 - **🚧 Kind SSO e2e harness** — `KIND_PROFILE=sso` plus `make kind-images` /
   `kind-up` / `kind-doctor` / `kind-e2e` / `kind-down` stand up a real kind cluster and drive the
-  native-login path against it. **The e2e is NOT green** — see
+  native-login path against it. **Not yet proven end to end** — see
   [Roadmap](#roadmap) and
   [`docs/KIND-SSO-E2E-FINDINGS.md`](docs/KIND-SSO-E2E-FINDINGS.md).
 - **🚧 Cloud deploy (Studio/ncurses/`make deploy-*` side-flow)** — publish an
@@ -363,27 +363,24 @@ provable on a running cluster are marked **(needs a live cluster)** — this
 workstation has the compose mesh up but no kind cluster (`kind get clusters` →
 none), and compose green is not evidence for the cluster._
 
-- **🚧 SSO kind-cluster e2e — harness shipped, proof NOT achieved.** The
-  `KIND_PROFILE=sso` harness + `make kind-images|kind-up|kind-doctor|kind-e2e|kind-down` are
-  on `main`, and the first real run reached Casdoor and minted a session against
-  a real IdP. **The e2e is not green.** It fails downstream on **16 enumerated
-  fresh-cluster blockers** — the GitOps cluster payload had never been run end to
-  end, and every workaround lived in `tests/stack/compose.local.yaml` instead of
-  `specs/cluster`. Fixed in-repo so far: the `cluster-ca`/KV-mount/node-label
-  items (this harness) plus `fix/cluster-secret-contract-drift` and
-  `fix/pki-role-san-namespace`. **Blockers 5–16 are not fixed** — Cassandra
-  credentials + keyspace bootstrap, gateway probes hitting a role-gated actuator
-  path (no gateway can become Ready in k8s), Casdoor never importing
-  `init_data.json` (so the IdP keeps the default `123` admin password),
-  `casdoor-init` never checking API responses, `CASDOOR_ORG` / client-id /
-  redirect-uri / namespace pre-rebrand defaults across the BFFs, a hard-required
-  `SVC_PASSWORD` nothing provides, and an admin-bff Liquibase `GRANT` to a role
-  no initdb creates. Compose green is **not** evidence for the cluster — and there
-  is no cluster to re-run against right now (`kind get clusters` → none, while
-  `kubectl config current-context` still points at a dead `kind-hugmesh-local`).
+- **🚧 SSO kind-cluster e2e — harness shipped, payload blockers 1–16 fixed, the
+  JWT-validating leg is not.** The `KIND_PROFILE=sso` harness +
+  `make kind-images|kind-up|kind-doctor|kind-e2e|kind-down` are on `main`. The
+  first real run (2026-08-05) hit 16 fresh-cluster payload blockers because the
+  GitOps payload had never been run end to end; every one of 1–16 is now fixed
+  on `main` (item 1 for kind only, item 16 in the admin-bff source) and re-measured
+  on 2026-10-14 against the tree and the offline guards, with commit evidence per
+  item in
+  [`docs/KIND-SSO-E2E-FINDINGS.md`](docs/KIND-SSO-E2E-FINDINGS.md#re-measured-2026-10-14).
+  The 2026-08-06 live run passed specs `01-frontpage` and `27-native-login`, but
+  spec 27 only proves the cookie is minted. **Open:** `GET /bff/session` answers
+  500 on kind because the BFF manifests give the signing-key fetch a public host
+  that does not resolve in-cluster (#693; fix in draft pull request #709, or #736, the same change merged with main), the
+  kind lane still side-loads every image so the Harbor pull path is unexercised
+  (finding 17), and findings 20, 25 and 26. No kind run is recorded after the
+  2026-10-07 rebuild. Compose green is **not** evidence for the cluster, and
   `make kind-up` is the prerequisite for this and for every **(needs a live
-  cluster)** item below. See
-  [`docs/KIND-SSO-E2E-FINDINGS.md`](docs/KIND-SSO-E2E-FINDINGS.md).
+  cluster)** item below.
 - **🔭 MFA privileged-floor — the live operator flip. (needs a live cluster)**
   Seeds, gateway env wiring, the `gateway_route_access.mfa_required` column and
   its fail-closed enforcement, the per-feature step-up legs (SSH key issuance,
@@ -581,7 +578,7 @@ ships a full multi-tenant platform. State key: **✅ shipped** (on `main`) ·
   remote + two-SA RBAC), desktop app governance, coturn TURN relay, and the
   gateway MFA privileged floor are all on `main` behind documented default-off
   flags. See [Current State](#current-state) for each flag and its caveats.
-- **🚧 / 🔭 Roadmap** — the kind-cluster SSO e2e (harness shipped, **not green**),
+- **🚧 / 🔭 Roadmap** — the kind-cluster SSO e2e (harness shipped, blockers 1-16 fixed, the JWT-validating leg open: #693),
   SELinux node-policy modules that bake and wire but **fail to load on every
   boot**, the live MFA operator flip, desktop-governance go-live (three dark
   flags, no dial rows, no image ever built), the broken node-side headscale ACL

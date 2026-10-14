@@ -3689,6 +3689,14 @@ cp "${SHARED_SPECS}/usr/sbin/hugmesh-tor-reconcile"   "${SYSROOT}/usr/sbin/hugme
 # Its ingress half (#614): admits the exported onions as fe-gateway Ingress hosts from a
 # control-plane node; run by the same cron drop-in (*/5), inert without a hostname.
 cp "${SHARED_SPECS}/usr/sbin/hugmesh-tor-ingress-admit" "${SYSROOT}/usr/sbin/hugmesh-tor-ingress-admit"; chmod +x "${SYSROOT}/usr/sbin/hugmesh-tor-ingress-admit"
+# Its export half (#629, the node side of hugmesh-admin-bff-api#108): fetches admin-bff's
+# SIGNED per-node Tor export over the node's mTLS identity, verifies it against the baked
+# key-USB public half (tor-verify.sh sources the SAME registry-verify.sh baked above),
+# applies the managed upstream / domain-list files atomically, re-runs the reconcile, and
+# reports the exported onions back. Run every minute by the same cron drop-in, so it is
+# inert unless tor is selected; a node without node.env does nothing.
+cp "${SHARED_SPECS}/usr/sbin/hugmesh-tor-export-sync" "${SYSROOT}/usr/sbin/hugmesh-tor-export-sync"; chmod +x "${SYSROOT}/usr/sbin/hugmesh-tor-export-sync"
+cp "${SHARED_SPECS}/usr/lib/hugmesh/tor-verify.sh"    "${SYSROOT}/usr/lib/hugmesh/tor-verify.sh"
 cp "${SHARED_SPECS}/etc/init.d/hugmesh-tor-reconcile" "${SYSROOT}/etc/init.d/hugmesh-tor-reconcile"; chmod +x "${SYSROOT}/etc/init.d/hugmesh-tor-reconcile"
 cp "${SHARED_SPECS}/etc/cron.d/hugmesh-tor-reconcile"  "${SYSROOT}/etc/hugmesh/registry/cron-tor-reconcile"
 
