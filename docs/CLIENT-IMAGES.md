@@ -208,9 +208,16 @@ the native amd64 chroot build with grub-EFI.
   LOCAL group, so polkit resolves it through the stock `files` NSS source and
   nothing in the identity stack is touched (default-deny by construction).
   Everything renders only on a governed image with a valid domain (ships-dark).
-  The SSO greeter/PAM **token producer** stays 🔭 DEFERRED with FD-07
-  (Increment 2); until it lands the deposit path has no producer and the whole
-  leg stays inert-by-default.
+  The token **producer** now exists as code
+  (`specs/etc/hugmesh/desktop-governance/sso/hugmesh-sso-token.py.tmpl`): an
+  RFC 8628 device-flow client for the seeded `hugmesh-desktop` public client,
+  run by the session-start wrapper, writing the `oidc-token.src` drop the
+  deposit reads, with an optional `pam_exec` logout clear. It is unit-tested
+  end to end against the real deposit and mapper
+  (`tests/desktop-governance/test-sso-token-producer.sh`) but NEVER run against
+  a live Casdoor or on an image, and a lightdm-greeter / password-grant PAM
+  login (FD-07 proper) is still 🔭 DEFERRED. The whole leg stays inert until the
+  governance flags flip and a governed image exists.
 
 #### Go-live preconditions (the three dark flags)
 
@@ -281,8 +288,8 @@ What each flag needs before it does anything:
 5. **A desktop image must exist.** The desktop boot-verify (Qt6/KF6 Discover
    pull, the `hugmesh-desktop` PKCE client, the desktop-sudo claim to polkit
    path) has never run, because no laptop / chromebook / desktop image has ever
-   been built. The SSO-sudo leg also stays inert until the greeter / PAM token
-   producer lands (FD-07 increment 2).
+   been built. The SSO-sudo leg also stays inert until the SSO token producer
+   (FD-07 increment 2, written but never run against a live Casdoor) has run on one.
 
 ## Provisioning manifest additions (keys-provision)
 

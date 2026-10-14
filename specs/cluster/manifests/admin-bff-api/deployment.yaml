@@ -134,6 +134,12 @@ spec:
             # OAuth2 resource server: validate the cluster Casdoor JWT itself.
             - name: CASDOOR_ISSUER_URI
               value: "https://id.hugmesh.net"
+            # Key fetch stays IN-CLUSTER: the public issuer host need not resolve
+            # here (on kind it does not: hugmesh-generator#693). The issuer URI above
+            # stays the `iss` claim only. Same value as the gateway chart's
+            # casdoor.jwksUri; pinned by tests/scripts/test-bff-jwks-in-cluster.sh.
+            - name: CASDOOR_JWKS_URI
+              value: "http://casdoor.hugmesh-pki.svc.cluster.local:8000/.well-known/jwks"
             # ── Casdoor identity contract (must AGREE with casdoor-init) ────────
             # The Casdoor ORGANIZATION every login / admin write resolves against.
             # casdoor-init + init_data.json create org `hugmesh`; this app's

@@ -167,6 +167,43 @@ export function onionFrontDoor(env: NodeJS.ProcessEnv = process.env): OnionFront
 }
 
 /**
+ * The stack's PER-DOMAIN onion doors (hugmesh-generator#582): `{ slug: door }` from
+ * SNAP_ONION_DOMAIN_URLS ("<slug>=https://<onion> ..."), which tests/e2e/run.sh
+ * --via onion-domains sets from the `<slug>.hostname` readouts hugmesh-tor publishes
+ * beside the primary's. Each door carries the SAME proxy as the mesh's own onion —
+ * one tor-client, one SOCKS port — and is held to the same https://<v3>.onion rule.
+ * `{}` when the variable is unset (not that lane); a malformed entry throws, never
+ * silently drops: a door that is not there must read as absent, not as passed.
+ */
+export function domainOnionDoors(env: NodeJS.ProcessEnv = process.env): Record<string, OnionFrontDoor> {
+  const raw = (env.SNAP_ONION_DOMAIN_URLS || '').trim();
+  if (!raw) return {};
+  const proxy = env.SNAP_PROXY || '';
+  if (!/^socks5:\/\/[^/\s]+:\d+$/.test(proxy)) {
+    throw new Error(
+      `SNAP_ONION_DOMAIN_URLS is set but SNAP_PROXY='${proxy}' is not socks5://host:port — `
+      + 'tests/e2e/run.sh --via onion-domains sets both.',
+    );
+  }
+  const doors: Record<string, OnionFrontDoor> = {};
+  for (const entry of raw.split(/\s+/)) {
+    const eq = entry.indexOf('=');
+    const slug = eq > 0 ? entry.slice(0, eq) : '';
+    const url = eq > 0 ? entry.slice(eq + 1).replace(/\/+$/, '') : '';
+    if (!/^[a-z0-9][a-z0-9-]{0,62}$/.test(slug)) {
+      throw new Error(`SNAP_ONION_DOMAIN_URLS entry '${entry}' has no <slug>=<url> shape`);
+    }
+    let u: URL;
+    try { u = new URL(url); } catch { throw new Error(`SNAP_ONION_DOMAIN_URLS entry '${entry}' is not a URL`); }
+    if (u.protocol !== 'https:' || !V3_ONION_HOST.test(u.hostname) || u.port !== '') {
+      throw new Error(`SNAP_ONION_DOMAIN_URLS entry '${entry}' is not <slug>=https://<v3>.onion (no port)`);
+    }
+    doors[slug] = { baseUrl: url, host: u.hostname, proxy };
+  }
+  return doors;
+}
+
+/**
  * A browser context that reaches the mesh ONLY through Tor: `baseURL` is the
  * onion, so every relative `page.goto('/login')` in the shared helpers (onboard(),
  * registerOnly()) follows it unchanged, and `page.request` inherits the proxy
