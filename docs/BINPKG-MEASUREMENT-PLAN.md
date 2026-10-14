@@ -158,9 +158,24 @@ after a prebuild.
    `--role pki`. This is the **treatment** log.
 3. `binpkg-reuse-report --cold <M1 pki log> --warm <M2 pki log>`.
 
-Note `prebuild-binaries` has no docker branch: it runs the builder directly through
-`$(RPI)`/`$(X86)` (so `$(SUDO)` on the host), unlike `make rpi`. Both resolve the same
-`<WORK_DIR>/shared` root, so the treatment build finds the prebuilt pool.
+Note `prebuild-binaries` has no docker branch: its recipe calls `$(RPI)`/`$(X86)`
+directly, i.e. a **host** build through `sudo`. The arm builders only wire the shared
+host-bdep pool when the host-mutation guard says the root is disposable, which means
+inside the builder container (`build-rpi5-stage4.sh:3023-3035`: "container-only
+feature"), so a plain host `make prebuild-binaries` would leave the 33-49 host tools
+unpooled and is not the measurement. Run it in the container, with the same mounts
+`DOCKER_RUN` uses (`Makefile:239-243`):
+
+```bash
+make ensure-image
+docker run --rm --privileged -v "$PWD":/src -v "$M2":/out -w /src \
+    -e HOST_UID=$(id -u) -e HOST_GID=$(id -g) hugmesh-builder \
+    make prebuild-binaries ARCH=rpi5 WORK_DIR=/out
+```
+
+Both this and the later `make rpi WORK_DIR="$M2"` resolve the same
+`<WORK_DIR>/shared` root (`/out/shared` inside, `$M2/shared` outside), so the treatment
+build finds the prebuilt pool. I have not run this command; confirm it on the day.
 
 The prebuild is built under one role's USE (`PREBUILD_ROLE_RPI`, default `backend`), so
 a role whose USE differs rebuilds those atoms; the report's MISS list names them.
@@ -178,9 +193,19 @@ After Leg A on rpi5, in the **same** `WORK_DIR`, build `RPI_BOARD=rpi4` (a72). E
   glibc and not on the board) mostly `binary`: this is the #72 section 4 reuse rate, the
   figure `SHARED-BINPKG.md` owes.
 
-Then the guard's real-build proof: `cp -a "$M/shared/pkgdir/snap-build-pi5"
-"$M/shared/pkgdir/snap-build-pi4"` and build rpi4 again. It must die with `binpkg pool
-ABI MISMATCH`. Feed that log to the report as the warm side: it must exit **2**.
+Then the guard's real-build proof. The first rpi4 build already created
+`shared/pkgdir/snap-build-pi4`, so a plain `cp -a` of the pi5 pool would nest it inside
+and prove nothing. Copy **only the stamp** over the pi4 pool's:
+
+```bash
+cp "$M/shared/pkgdir/snap-build-pi5/.hugmesh-pool-fingerprint" \
+   "$M/shared/pkgdir/snap-build-pi4/.hugmesh-pool-fingerprint"
+```
+
+then build rpi4 again. It must die with `binpkg pool ABI MISMATCH` (a76 stamp against an
+a72 build). Feed that log to the report as the warm side: it must exit **2**.
+Restore the real stamp afterwards (or `rm -rf` the pi4 pool) before reusing that
+`WORK_DIR`.
 
 ### Leg D: correctness of the reused image
 
@@ -189,8 +214,10 @@ A fast image that SIGILLs is the failure the guard exists for.
 1. Boot the leg A **warm** image on the existing QEMU device harness
    (`tests/qemu`, see `docs/RUNNING.md`) and run the same checks as for the cold image.
 2. For an a53 target (`--board rpi3`) run a handful of reused binaries under
-   `qemu-aarch64 -cpu cortex-a53` (the lowest ISA in the fleet); a cortex-a76-tuned
-   binary faults there at once.
+   `qemu-aarch64 -cpu cortex-a53` (the lowest ISA in the fleet). A cortex-a76-tuned
+   binary should fault there; I have not tried it, and whether QEMU's a53 model traps
+   LSE atomics and dotprod is the thing to confirm first with a deliberately a76-built
+   test program.
 3. Toolchain identity (gap 3 above): record `gcc -dumpfullversion` and the glibc version
    of the builder image for runs 1 and 2. They should be equal. To test the gap
    deliberately, rebuild the builder image on a newer stage3, rerun, and read the report's
