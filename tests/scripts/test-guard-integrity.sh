@@ -911,7 +911,7 @@ PREMERGE_UNGATED=(
   # 2026-10-07) was forbidden to edit anything under .github, so until that one
   # line lands it runs post-merge in .gitlab-ci.yml's lint:bff-jwks-in-cluster and
   # locally under `make e2e-ungated`. When the line lands: delete this entry and
-  # raise PREMERGE_BASELINE 194 -> 195 (check 7 will say so).
+  # raise PREMERGE_BASELINE 196 -> 197 (check 7 will say so).
   tests/scripts/test-bff-jwks-in-cluster.sh
   tests/scripts/test-e2e-cli-lane.sh
   tests/scripts/test-e2e-coverage-matrix.sh
