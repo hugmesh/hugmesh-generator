@@ -908,6 +908,11 @@ PREMERGE_UNGATED=(
   # kind cluster up but no metrics-server synced it goes RED with 2 failures.
   # See the "NOT LISTED HERE" entry in .github/workflows/shell-suites.yml.
   tests/scripts/test-kind-metrics-api.sh
+  # Pure offline derivation (python3 + PyYAML + bash), wired post-merge by .gitlab-ci.yml's
+  # lint:optional-services-cutover-matrix. It is NOT in the pull_request gate only because
+  # adding it to .github/workflows/shell-suites.yml is an edit that PR did not make; gate it
+  # there (the job image needs PyYAML) and delete this entry.
+  tests/scripts/test-optional-services-cutover-matrix.sh
   tests/scripts/test-federation-module-slugs.sh
   tests/scripts/test-liquibase-grant-roles.sh
   # RED ON MAIN, and the reds are real defects rather than suite bugs: a jetson
