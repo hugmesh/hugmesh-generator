@@ -4,9 +4,10 @@
 > was chosen on 2026-09-23 (hugmesh-admin-bff-api#98, decisions 102a and 102b).
 > The **client half** has shipped dark in `hugmesh-matrix-ui`. The **server
 > half** (this repo) is not built. This page is the plan for it. Measured
-> 2026-10-14 against `hugmesh-generator` origin/main `c0c46601`,
+> 2026-10-14 against `hugmesh-generator` origin/main `702b590d`,
 > `hugmesh-matrix-ui` origin/main `3032591`, tuwunel main `f473d9a` and tag
-> `v1.7.0`.
+> `v1.7.0` (the tag the mesh pins). Where the two tuwunel refs differ, this
+> page says which one a statement is about.
 
 ## 1. Decision (already made; not reopened here)
 
@@ -62,9 +63,15 @@ no registry row, no secret, no firewall rule.
 `ghcr.io/matrix-construct/tuwunel:v1.7.0` already carries the discovery side:
 the tag's `tuwunel-example.toml` documents `[global.well_known] livekit_url`
 and `rtc_transports`, and `src/api/client/rtc.rs` at that tag serves
-`GET /_matrix/client/unstable/org.matrix.msc4143/rtc/transports` from them.
-`versions.rs` advertises `org.matrix.msc4143`. No tuwunel bump is needed for
-discovery.
+`GET /_matrix/client/unstable/org.matrix.msc4143/rtc/transports` from them
+(`src/api/router.rs:249` registers the route), and `src/api/client/well_known.rs`
+builds `rtc_foci` from the same source, so the client well-known carries the
+focus. The pinned tag does **not** list `org.matrix.msc4143` in
+`GET /_matrix/client/versions` (`versions.rs` at `v1.7.0` has no `msc4143`
+entry; the entry was added on main, `versions.rs:113`). That does not matter
+here, because the matrix-ui client reads the well-known, not `/versions`, but
+a person who probes `/versions` on the pinned image will not see it. No tuwunel
+bump is needed for discovery.
 
 ## 3. What the mesh needs
 
@@ -127,15 +134,17 @@ Two consequences for this repo's name handling:
 
 ### 4.1 tuwunel
 
-Measured from tuwunel's own compliance table (`docs/development/compliance/msc.md`
-at `f473d9a`, 2026-10-10):
+Measured from tuwunel's own compliance table (`docs/development/compliance/msc.md`)
+at both refs, 2026-10-10 for main `f473d9a` and 2026-10-14 for the pinned tag
+`v1.7.0`. The two disagree on wording, not on what the mesh can rely on. The
+tag is what runs, so the tag column decides.
 
-| MSC | State in tuwunel | Effect here |
-|---|---|---|
-| MSC4143 (transport discovery) | implemented | the one thing we need |
-| MSC4195 (LiveKit backend) | partial: "transport advertised; no get_token, derivation, salt or delayed leave" | lk-jwt-service must be a separate service |
-| MSC4140 (delayed events) | absent: no routes, no capability, no `delay_id` | no server-side cleanup of a crashed client's membership |
-| MSC4502 (`is_joined`) and MSC4512 (proxy prefix) | absent | lk-jwt-service **cannot run as an application service** against tuwunel |
+| MSC | pinned tag `v1.7.0` | main `f473d9a` | Effect here |
+|---|---|---|---|
+| MSC4143 (transport discovery) | ✅ ◐ "GET rtc/transports routed; only HS-side requirement of the MSC" | 🟨 ◐ partial, "GET rtc/transports served; slots and sticky membership are client and MSC4354" | the transports route is served, which is the one thing we need; the rest of MSC4143 is client side |
+| MSC4195 (LiveKit backend) | ❌ ◐ "livekit advertised in /rtc/transports; JWT and delayed events out of scope" | 🟨 partial, "MSC4143 transport advertised; no get_token, derivation, salt or delayed leave" | lk-jwt-service must be a separate service |
+| MSC4140 (delayed events) | ❌ "delayed events endpoints not implemented despite Ruma types" | ❌ "No delayed_event routes, no m.delayed_events capability, no delay_id anywhere" | no server-side cleanup of a crashed client's membership |
+| MSC4502 (`is_joined`) and MSC4512 (proxy prefix) | not in the tag's table; `git grep -i 'msc4502\|msc4512\|proxy_prefix'` over `src/` at the tag finds nothing | ❌ "no is_joined route, no scope token, no AS registration scopes" and "no proxy_prefix/proxy_url in AS registration" | lk-jwt-service **cannot run as an application service** against tuwunel |
 
 The last row decides the security posture (section 7). tuwunel has no
 application-service route to a membership check, so lk-jwt-service runs in its
@@ -342,8 +351,10 @@ wording.
 - hugmesh-admin-bff-api#98 and its comments (decisions 102a and 102b, slice 1 status).
 - `hugmesh-matrix-ui` `projects/matrix/src/app/rtc/*` and its README.
 - tuwunel: `docs/calls/matrix_rtc.md`, `tuwunel-example.toml`, `src/api/client/rtc.rs`
-  and `src/api/client/versions.rs` (tag `v1.7.0` and main), and
-  `docs/development/compliance/msc.md` (main `f473d9a`).
+  `src/api/router.rs` and `src/api/client/well_known.rs` (tag `v1.7.0`),
+  `src/api/client/versions.rs` (tag `v1.7.0`, where it has no `msc4143` entry,
+  and main, where it does), and `docs/development/compliance/msc.md` (tag
+  `v1.7.0` and main `f473d9a`).
 - element-hq/lk-jwt-service `README.md`, `LICENSE`, `.github/workflows/docker.yaml`.
 - livekit `config-sample.yaml`; Docker Hub tags for `livekit/livekit-server`.
 - This repo: `docs/COTURN.md`, `docs/XR-CHAT.md`,
