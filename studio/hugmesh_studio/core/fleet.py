@@ -38,7 +38,7 @@ from __future__ import annotations
 import os
 import re
 import shlex
-from dataclasses import asdict, dataclass, field, fields
+from dataclasses import MISSING, asdict, dataclass, field, fields
 from typing import Any, ClassVar
 
 from . import build_driver
@@ -274,19 +274,39 @@ class FleetConfig:
         if not isinstance(d, dict):
             raise IdentityValidationError(
                 f"fleet record must be a JSON object, not {type(d).__name__}")
-        known = {f.name for f in fields(cls)}
+        known = {f.name: f for f in fields(cls)}
         kw = {k: v for k, v in d.items() if k in known}
+        # A DAMAGED record (hand-edited JSON) is refused HERE with the field named, as
+        # IdentityValidationError — the exception the loaders already show inline. It
+        # used to pass through and surface later, inside the RESTART slot, where PyQt6
+        # aborts the Studio on an unhandled exception: a TypeError from a Qt setter
+        # (``"jobs": "8"`` into QSpinBox.setValue, ``"cluster_domain": 5`` or
+        # ``"x86_roles": ["pki"]`` into QLineEdit.setText), a TypeError from
+        # dataclasses.asdict or an AttributeError in the gate (a row that is not a
+        # domain), or a ValueError from the row builder (an ``idp`` typo).
+        # Every SCALAR field is checked against the type of its declared default:
+        # False -> a bool, "" -> text, 8 -> a whole number (not a bool, which is an
+        # int to Python). A missing key keeps the default (a pre-#645 record has none
+        # of the domains keys); null is a hand edit on a scalar and is refused.
+        for name, value in kw.items():
+            f = known[name]
+            if f.default is MISSING:                 # the list fields, checked below
+                continue
+            want = type(f.default)
+            ok = (isinstance(value, want) and not (want is int and isinstance(value, bool)))
+            if not ok:
+                kind = {bool: "true or false", str: "text", int: "a whole number"}[want]
+                raise IdentityValidationError(
+                    f"fleet record: {name} must be {kind}, not {type(value).__name__}")
         # REHYDRATE the rows. asdict() -> JSON -> back yields plain dicts, and the
         # gate reads ``getattr(d, "name", "")`` — "" on a dict — so an un-rehydrated
         # record would pass the gate on every RESTART/REDO however unwalked it was.
-        # A DAMAGED record (hand-edited JSON: ``domains`` a string, a row that is a
-        # number, a row whose name is not text, markers that are not a list) is
-        # refused HERE with the reason, as IdentityValidationError — the exception the
-        # loaders already show inline. It used to pass through and surface later as a
-        # TypeError from dataclasses.asdict / an AttributeError in the gate, inside the
-        # RESTART slot, where PyQt6 aborts the Studio on an unhandled exception.
-        raw_rows = kw.get("domains") or []
-        raw_marks = kw.get("domain_services_reviewed") or []
+        # Only an ABSENT key or null is an empty list (what an old serialiser wrote);
+        # "" or 0 in either place is a hand edit and is refused like any other text.
+        raw_rows = kw.get("domains")
+        raw_marks = kw.get("domain_services_reviewed")
+        raw_rows = [] if raw_rows is None else raw_rows
+        raw_marks = [] if raw_marks is None else raw_marks
         for label, value in (("domains", raw_rows),
                              ("domain_services_reviewed", raw_marks)):
             if not isinstance(value, list):
@@ -295,7 +315,14 @@ class FleetConfig:
         rows = []
         for i, x in enumerate(raw_rows):
             if isinstance(x, dict):
-                x = ImageConfig._domain_from_dict(x)
+                try:
+                    x = ImageConfig._domain_from_dict(x)
+                except (ValueError, TypeError) as e:
+                    # the row builder's own refusal (an ``idp`` outside its choices,
+                    # a nested field of the wrong shape): the same inline path, the
+                    # row numbered so the operator finds it in the JSON
+                    raise IdentityValidationError(
+                        f"fleet record: domains[{i}] is not a valid domain row ({e})") from e
             if not isinstance(x, Domain):
                 raise IdentityValidationError(
                     f"fleet record: domains[{i}] must be a domain row (an object), "

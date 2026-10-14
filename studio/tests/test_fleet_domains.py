@@ -342,6 +342,23 @@ def test_the_tui_delete_prunes_the_deleted_rows_reviewed_marker():
     ({"domains": [{"name": 7}]}, "domains[0].name must be text"),
     ({"domains": [{"name": "mesh.example"}], "domain_services_reviewed": "abc"},
      "domain_services_reviewed must be a list"),
+    # round-7 (the robustness skeptic's five escaping shapes, plus their kin): the
+    # scalars — these used to pass from_dict and die in a Qt setter inside apply()
+    ({"jobs": "8"}, "jobs must be a whole number, not str"),
+    ({"jobs": True}, "jobs must be a whole number, not bool"),
+    ({"jobs": None}, "jobs must be a whole number, not NoneType"),
+    ({"cluster_domain": 5}, "cluster_domain must be text, not int"),
+    ({"x86_roles": ["pki"]}, "x86_roles must be text, not list"),
+    ({"extra_flags": ["--a"]}, "extra_flags must be text, not list"),
+    ({"skip_x86": "yes"}, "skip_x86 must be true or false, not str"),
+    ({"with_tor": 1}, "with_tor must be true or false, not int"),
+    # the row builder's own ValueError (an idp typo) now arrives as the same refusal
+    ({"domains": [{"name": "mesh.example", "idp": "junk"}]},
+     "domains[0] is not a valid domain row (domain 'mesh.example': idp must be one of"),
+    # "" is a hand edit, not what an old serialiser wrote: refused, not silently empty
+    ({"domains": ""}, "domains must be a list, not str"),
+    ({"domains": 0}, "domains must be a list, not int"),
+    ({"domain_services_reviewed": ""}, "domain_services_reviewed must be a list, not str"),
 ])
 def test_a_damaged_fleet_record_is_refused_at_load_naming_the_field(damage, field):
     from hugmesh_studio.core.config import IdentityValidationError
@@ -361,6 +378,11 @@ def test_an_undamaged_record_with_absent_or_null_rows_still_loads():
     assert FleetConfig.from_dict({"jobs": 3}).domains == []
     back = FleetConfig.from_dict({"domains": None, "domain_services_reviewed": None})
     assert back.domains == [] and back.domain_services_reviewed == []
+    # a well-formed record round-trips with every scalar type as it was written
+    cfg = _cfg(); cfg.jobs = 3; cfg.with_tor = True; cfg.extra_flags = "--note x"
+    assert FleetConfig.from_dict(cfg.to_dict()) == cfg
+    # an unknown key (a future field, or a typo) is still ignored, not refused
+    assert FleetConfig.from_dict({"jobs": 3, "no_such_field": ["x"]}).jobs == 3
 
 
 def test_fleet_domain_fields_hands_out_copies_of_the_rows():
@@ -578,4 +600,61 @@ def test_restarting_a_damaged_record_shows_the_refusal_inline_and_pins_nothing(p
     # damaged record's workdir
     assert page.pending_session_id and page.pending_session_id != "fleet-damaged-1"
     assert page.cluster_domain.text() == "keep.example"
+    assert page.runs == [] and page.worker is None
+
+
+@pytest.mark.parametrize("damage, field", [
+    # the robustness skeptic's measurement (round 6): each of these passed from_dict
+    # and raised out of load_from_session — ValueError from the row builder, TypeError
+    # from QSpinBox.setValue / QLineEdit.setText — i.e. the PyQt6 abort the earlier
+    # round said it had closed
+    ({"domains": [{"name": "a.example", "idp": "junk"}]}, "domains[0] is not a valid domain row"),
+    ({"jobs": "8"}, "jobs must be a whole number, not str"),
+    ({"cluster_domain": 5}, "cluster_domain must be text, not int"),
+    ({"x86_roles": ["pki"]}, "x86_roles must be text, not list"),
+    ({"extra_flags": ["--a"]}, "extra_flags must be text, not list"),
+])
+def test_restarting_a_record_with_a_wrong_typed_scalar_or_idp_typo_is_refused_inline(
+        page, damage, field):
+    """No exception leaves the RESTART slot for the shapes the first guard missed, and
+    the refusal NAMES the field (from_dict's wording, not a Qt setter's)."""
+    page.cluster_domain.setText("keep.example"); page.jobs.setValue(5)
+    record = dict(_cfg().to_dict()); record.update(damage)
+    page.load_from_session(_DamagedSession(record), pin=True)
+    assert page.stack.currentIndex() == fleet_mod.STEP_REVIEW
+    text = page.problems.toPlainText()
+    assert "Cannot restart fleet record fleet-damaged-1" in text
+    assert field in text, text
+    assert page.pending_session_id != "fleet-damaged-1"
+    assert page.cluster_domain.text() == "keep.example" and page.jobs.value() == 5
+    assert page.runs == [] and page.worker is None
+
+
+def test_a_refusal_from_dict_does_not_name_yet_still_stays_inside_the_slot(page, monkeypatch):
+    """The last line: a ValueError or TypeError that no from_dict check names (a future
+    field, a Qt setter in apply refusing a value) is shown in the same pane, nothing is
+    pinned, and the slot returns normally — the Studio never aborts from here."""
+    def boom(_d):
+        raise TypeError("setValue(self, val: int): argument 1 has unexpected type 'str'")
+    monkeypatch.setattr(fleet_mod.FleetConfig, "from_dict", staticmethod(boom))
+    page.load_from_session(_DamagedSession({"jobs": "8"}), pin=True)
+    text = page.problems.toPlainText()
+    assert "Cannot restart fleet record fleet-damaged-1" in text
+    assert "unexpected type 'str'" in text
+    assert page.pending_session_id != "fleet-damaged-1"
+    assert page.runs == [] and page.worker is None
+
+
+def test_a_setter_refusing_a_value_inside_apply_stays_inside_the_slot(page, monkeypatch):
+    """``apply`` is INSIDE the guarded region: a record from_dict accepts but a widget
+    refuses (the exact way the five shapes used to abort the Studio) is shown inline
+    and not pinned, whatever check is missing upstream."""
+    def refusing_apply(_cfg):
+        raise TypeError("setText(self, a0: str|None): argument 1 has unexpected type 'int'")
+    monkeypatch.setattr(page, "apply", refusing_apply)
+    page.load_from_session(_DamagedSession(_cfg().to_dict()), pin=True)
+    text = page.problems.toPlainText()
+    assert "Cannot restart fleet record fleet-damaged-1" in text
+    assert "unexpected type 'int'" in text
+    assert page.pending_session_id != "fleet-damaged-1"
     assert page.runs == [] and page.worker is None

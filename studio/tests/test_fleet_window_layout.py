@@ -194,7 +194,12 @@ def test_the_navigation_row_is_outside_every_scroll_area_and_each_step_has_its_o
     (the pre-fix layout, which can leave Back/Next in view at one size and not at
     another) cannot come back unnoticed (the skeptic's L8): Back and Next have no
     QScrollArea ancestor at all, and every step is seen through exactly one — its
-    own, the stack's widget for that step."""
+    own, the stack's widget for that step — and the page INSIDE it holds no second
+    one. The last clause is what a merge with another branch that wraps a step page
+    in its own scroll area (``pages._scroll.scrollable``) produces WITHOUT a textual
+    conflict: measured on such a merge (this branch onto iss/582-per-domain-tor), the
+    Domain services step scrolled twice — once in the stack's area, once in its
+    page's — and the earlier clauses alone stayed green (37 passed)."""
     win, p = window, window.page
     for b in (p.back_btn, p.next_btn):
         assert _scroll_ancestors(b) == [], f"{b.text()!r} scrolls with a step"
@@ -204,6 +209,10 @@ def test_the_navigation_row_is_outside_every_scroll_area_and_each_step_has_its_o
         assert sa.widgetResizable(), f"step {i}'s scroll area does not resize its page"
         assert _scroll_ancestors(sa) == [], f"step {i} sits inside another scroll area"
         assert p.step_scroll(i) is sa
+        inner = sa.widget().findChildren(QtWidgets.QScrollArea)
+        assert inner == [], (
+            f"step {i}'s page holds {len(inner)} scroll area(s) of its own — it would "
+            "scroll twice (a nested wrap: scrollable() on the page AND _scrolled())")
 
 
 def test_the_domains_step_shows_its_buttons_and_its_whole_help(window):

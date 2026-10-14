@@ -656,10 +656,18 @@ class FleetPage(QtWidgets.QWidget):
         shown INLINE on the Review step — the preflight pane names the field — and
         nothing is applied or pinned: the window keeps what it had and ‘Build fleet
         now’ builds that, never the damaged record. This runs inside the Sessions
-        page's RESTART / REDO slot, where an exception would abort the Studio."""
+        page's RESTART / REDO slot, where an exception would abort the Studio.
+
+        ``from_dict`` names the field for every damaged shape it knows (a scalar of
+        the wrong type, a row that is not a domain, an ``idp`` typo). A ValueError or
+        TypeError that still reaches here — a shape no check names yet, or a Qt setter
+        in ``apply`` refusing a value — is shown through the same pane and the record
+        is not pinned, so no record can abort the Studio from this slot; the lenient
+        path is never widened."""
         try:
             cfg = FleetConfig.from_dict(s.config)
-        except IdentityValidationError as e:
+            self.apply(cfg)
+        except (IdentityValidationError, ValueError, TypeError) as e:
             self.pending_session_id = None
             self._goto(STEP_REVIEW)
             self.problems.setPlainText(
@@ -667,7 +675,6 @@ class FleetPage(QtWidgets.QWidget):
                 "Its saved config is damaged. Fix the record's JSON under the Studio "
                 "state directory, or start this fleet again from the first step.")
             return
-        self.apply(cfg)
         self.backend.setCurrentText(s.backend or "auto")
         self.pending_session_id = s.id if pin else None
         self._goto(STEP_REVIEW)
