@@ -754,7 +754,16 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # RUNNING this file on the merged tree (GUARD_PREMERGE=0), not computed:
 #     197 of 221 suites are named by a pull_request-triggered workflow
 #     PASS the ungated SET matches its pin exactly (24 suite(s))
-PREMERGE_BASELINE="${GUARD_PREMERGE:-197}"
+#
+# 197 -> 198 (denominator 221 -> 222) on 2026-10-14 for #629 (iss/629-tor-reconcile-
+# apply-export-report-onions, from origin/main 702b590d): one new suite,
+# tests/scripts/test-tor-export-sync.sh (the signed Tor export consumer + onion report),
+# landed on disk in the same commit that wires it into shell-suites.yml's alpine job
+# (beside tests/scripts/test-tor-node-contract.sh, which pins its wiring). MEASURED by
+# RUNNING this file on the tree with the suite wired (GUARD_PREMERGE=0), not computed:
+#     198 of 222 suites are named by a pull_request-triggered workflow
+#     PASS the ungated SET matches its pin exactly (24 suite(s))
+PREMERGE_BASELINE="${GUARD_PREMERGE:-198}"
 
 # 182 -> 192 (denominator 205 -> 215) on 2026-09-30 for #385: the census gained a
 # THIRD spelling, bare `tests/*.sh` at depth 1, and the ten suites it exposed were
