@@ -1004,9 +1004,9 @@ PREMERGE_UNGATED=(
   # takes kubectl when present). They were MEASURED only on a developer host, NOT in a
   # shell-suites image, and are run post-merge by .gitlab-ci.yml's lint:pg-tls-preflight
   # and lint:netpol-egress-scope. Wire both into shell-suites.yml's DEBIAN job, measure
-  # them there, and DELETE both entries (PREMERGE_BASELINE then moves 197 -> 199). Added
-  # ungated: denominator 221 -> 223 and the ungated SET 24 -> 26, baseline unchanged at 197
-  # (MEASURED: this file prints "197 of 223" and "(26 suite(s))").
+  # them there, and DELETE both entries (PREMERGE_BASELINE then moves 198 -> 200). Added
+  # ungated: denominator +2 and the ungated SET +2, baseline unchanged at 198
+  # (MEASURED on main 5f450a48 merged: this file prints "198 of 225" and "(27 suite(s))").
   tests/scripts/test-netpol-egress-scope.sh
   tests/scripts/test-pg-tls-preflight.sh
   tests/scripts/test-service-env-contract.sh
