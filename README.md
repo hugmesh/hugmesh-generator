@@ -66,7 +66,8 @@ _As of 2026-08-05, except the kind SSO e2e bullets, re-measured 2026-10-14. Stat
   (the `SLX` bucket of the build matrix). Flipping the fleet to **enforcing** is
   the honest remaining step — see [Roadmap](#roadmap).
 - **✅ Boot + kernel hardening (both arches)** — kernel lockdown (`lsm=lockdown,
-  yama,selinux,bpf` + `lockdown=integrity`), Secure Boot **UKI** signing on x86
+  yama,selinux,bpf` + `lockdown=integrity` on x86 + rpi5; `lsm=lockdown,yama,selinux`
+  + `lockdown=integrity` on the 8 ARM boards), Secure Boot **UKI** signing on x86
   (dracut `--uefi` → org-key `sbsign`), and sysctl/SSH hardening, plus the x86
   build fixes that supersede the earlier kernel-config changes. The **x86 k8s
   netfilter/NAT/eBPF kernel surface** the Service/kube-proxy/CNI path needs is now
@@ -431,21 +432,25 @@ none), and compose green is not evidence for the cluster._
   unnarrowed; and the enforce-gate flip (`HUGMESH_SELINUX_ENFORCE_GATE=1`)
   stays pending until an **enforcing** workout pass comes back AVC-clean —
   nodes still boot **PERMISSIVE** with the gate inert.
-- **🔭 bpf-LSM enforcement, and lockdown beyond x86 + rpi5.** The LSM stack each
+- **🔭 bpf-LSM enforcement beyond a registered hook layer.** The LSM stack each
   image advertises is now the one it runs — `yama` and `bpf` were named in
   `CONFIG_LSM`, the cmdline, the generated `grub.cfg` and the signed UKI while the
   kernel silently initialized only `lockdown,capability,selinux`; x86 + rpi5 now
   build `CONFIG_SECURITY_YAMA` + `CONFIG_BPF_LSM`, the 8 ARM boards dropped the
   `bpf` name they never built, and `tests/scripts/test-lsm-posture-honesty.sh`
-  fails the build if the two ever diverge again. Two things remain. **bpf-LSM can
-  register but not enforce:** attaching a `BPF_PROG_TYPE_LSM` program needs BTF,
-  which both arch fragments deliberately omit (it forces `CONFIG_DEBUG_INFO` and
-  needs `dev-util/pahole` in the kernel-build toolchain) — it arrives with the same
-  pahole-gated follow-up as cilium CO-RE. **Lockdown is a 2-of-10 posture, not a
-  fleet one:** only x86 and rpi5 build `CONFIG_SECURITY_LOCKDOWN_LSM` and pass
-  `lockdown=integrity`; the 8 ARM boards ship neither, which is now asserted in
-  both directions rather than papered over by the QEMU harness appending its own
-  `lockdown=integrity` to boards that never had it.
+  fails the build if the two ever diverge again. **Kernel lockdown is now a
+  fleet posture:** all 10 boards build `CONFIG_SECURITY_LOCKDOWN_LSM` (+ `_EARLY`),
+  list `lockdown` first in `CONFIG_LSM`/`lsm=` and pass `lockdown=integrity`; the
+  lint pins that for every board, not only agreement between fragment and cmdline.
+  What remains: **bpf-LSM can register but not enforce:** attaching a
+  `BPF_PROG_TYPE_LSM` program needs BTF, which both arch fragments deliberately omit
+  (it forces `CONFIG_DEBUG_INFO` and needs `dev-util/pahole` in the kernel-build
+  toolchain) — it arrives with the same pahole-gated follow-up as cilium CO-RE, and
+  the ARM boards also need `CONFIG_BPF_LSM` plus its deps before `bpf` may return to
+  their `lsm=`. The ARM lockdown change is **proven only by a Kconfig resolve and the
+  offline lint, not by a boot:** an image build plus the in-guest
+  `/sys/kernel/security/lockdown` assertion on real boards (or `launch-arm.sh`)
+  is still owed.
 - **🔭 Group-call SFU.** coturn gives 1:1/mesh TURN relay only. Scalable group
   calls (MatrixRTC / Element Call / LiveKit) do not exist in any form.
 - **🔭 Desktop-governance go-live — three dark flags, zero dial rows, no image.**
@@ -1344,7 +1349,8 @@ on a bad/placeholder key). See [`docs/DEVOPS.md`](docs/DEVOPS.md).
   roles; secrets via Vault/ESO. See [`docs/SECURITY.md`](docs/SECURITY.md) and
   [`docs/selinux-module-loading.md`](docs/selinux-module-loading.md).
 - The kernel boots with **lockdown** (`lsm=lockdown,yama,selinux,bpf`,
-  `lockdown=integrity`); x86 ships a **Secure Boot UKI** signed with the org key
+  `lockdown=integrity`; the 8 ARM boards carry `lsm=lockdown,yama,selinux` with the same
+  `lockdown=integrity`, no `bpf`); x86 ships a **Secure Boot UKI** signed with the org key
   (`sbsign`) and runs **firewalld** (test/prod zone profiles), while the
   cross-compiled rpi5 arm64 platform excludes firewalld deliberately (the
   `glib[introspection]` cross bootstrap does not compile) and uses `nftables` +
