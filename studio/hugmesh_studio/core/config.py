@@ -1284,6 +1284,10 @@ NON_ARGV_FIELDS = ("headscale_url", "pentest", "hw_profile",
                    "login_footer_hidden", "login_footer_size", "login_footer_bg",
                    "login_footer_text",
                    "login_bg_effect",
+                   # #654: the superbrand's shape/decoration ride the same channel,
+                   # and the brand record is a Studio-side path until the builders
+                   # parse --brand-record (see ImageConfig.brand_record).
+                   "login_style", "login_decor", "brand_record",
                    "additional_domains", "configure_users", "qemu_device_tests",
                    # #495: which domains have been through their Services page. Pure
                    # wizard-flow bookkeeping for the build/mesh-start gate — saved with
@@ -2748,10 +2752,28 @@ DOMAIN_IDP_OWN = "own"
 DOMAIN_IDP_CHOICES = (DOMAIN_IDP_SUPERDOMAIN, DOMAIN_IDP_OWN)
 
 
+#: The default brand id of a public name (hugmesh-generator#654, D4): the DNS name with
+#: every run of non-[a-z0-9] turned into one dash ("acme.example" -> "acme-example") —
+#: the rule own_casdoor.slug has always used for the tenant key, the Tor key folder and
+#: the compose service names, so a record without stored ids keeps the ids its running
+#: mesh already uses.
+_BRAND_ID_SLUG_RE = re.compile(r"[^a-z0-9]+")
+
+
+def default_brand_id(name: str) -> str:
+    return _BRAND_ID_SLUG_RE.sub("-", (name or "").strip().lower()).strip("-")
+
+
 @dataclass
 class Domain:
     name: str = ""
     title: str = ""
+    # The brand's one id (#654, D4): the text the registry's nsPrefix, an own-sign-in
+    # brand's tenant key, the Tor key-folder name, the certificate list's brand column
+    # and the Vault path segment all share. "" (every pre-#654 row) = the default
+    # derived from ``name`` (default_brand_id), which is what every consumer derived
+    # for itself before; brand_model.brand_id reads it. OMIT-WHEN-EMPTY when saved.
+    id: str = ""
     # Worklist entry-id refs this domain attaches to (f"{role}.{platform}"); empty =
     # attach to every eligible image. Legacy `games: bool` was DROPPED — from_dict
     # migrates a truthy games into optional_services += ["games"] (games never reached
@@ -2775,20 +2797,113 @@ class Domain:
     # legacy ``"tor"`` in ``optional_services`` (the pre-#227 freeform cell, a slot no
     # builder ever read) MOVES here at load — the ``games`` precedent.
     tor: bool = False
+    # The brand record (hugmesh-generator#654, D5/D7/D10). Three keys that every copy
+    # site carries by the FIELD LIST (``DOMAIN_FIELDS``), never by a literal key list,
+    # so a field added here reaches the manifest, the local mesh, the saved mesh and
+    # the fleet without a change at any of them. All three are OMIT-WHEN-EMPTY in
+    # every saved shape, so a row that uses none keeps its pre-#654 bytes.
+    #
+    # ``look``: ONLY the look fields this brand changes (brand_model.LOOK_KEYS); the
+    # superbrand's default supplies the rest (brand_model.effective_look).
+    look: dict[str, Any] = field(default_factory=dict)
+    # ``ways``: how this brand is reached, written through ONE function
+    # (brand_model.set_ways): {"internal_name": str, "public": {"provider", "inputs",
+    # "token_file"}}. The Tor way is the ``tor`` field above — one field, one writer.
+    ways: dict[str, Any] = field(default_factory=dict)
+    # ``issuer_port``: the published host port of an own-sign-in brand's Casdoor,
+    # STORED here and never recomputed from the row's position (D4): removing or
+    # reordering a brand must not move another brand's issuer. 0 = not allocated
+    # (a brand that signs in through the superbrand, or a pre-#654 row).
+    issuer_port: int = 0
+
+
+#: Every field a brand row carries, in declaration order — THE key list every copy
+#: site reads. A site that spells its own list is the defect brand_model.COPY_SITES
+#: and the mutation battery exist to catch.
+DOMAIN_FIELDS: tuple[str, ...] = tuple(Domain.__dataclass_fields__)
+
+#: Row keys left out of every SAVED shape when they are empty/false/zero, so a row
+#: that does not use them is written exactly as before the field existed.
+DOMAIN_OMIT_WHEN_EMPTY: tuple[str, ...] = ("id", "tor", "look", "ways", "issuer_port")
 
 
 def domain_rows_to_dict(domains) -> list[dict[str, Any]]:
-    """The SAVED shape of a list of domain rows (a config file, a session record):
-    every field, except ``tor`` when it is false (#582). A row that is not a Tor domain
-    is written exactly as it was before ``Domain.tor`` existed; loading treats an
-    absent key as false. A row that is already a plain dict is passed through the same
-    filter."""
+    """The SAVED shape of a list of domain rows (a config file, a session record, the
+    brand record): every field, except the ``DOMAIN_OMIT_WHEN_EMPTY`` ones when they
+    say nothing (``tor`` false since #582; ``look``/``ways`` empty and ``issuer_port``
+    0 since #654). A row that uses none of them is written exactly as it was before
+    they existed; loading treats an absent key as the empty default. A row that is
+    already a plain dict is passed through the same filter."""
     out: list[dict[str, Any]] = []
     for d in domains or []:
         row = dict(d) if isinstance(d, dict) else asdict(d)
-        if not row.get("tor"):
-            row.pop("tor", None)
+        for k in DOMAIN_OMIT_WHEN_EMPTY:
+            if not row.get(k):
+                row.pop(k, None)
         out.append(row)
+    return out
+
+
+def domain_from_record_row(rec: dict[str, Any]) -> Domain:
+    """A Domain from a RECORDED row (a saved mesh's ``domains`` entry), carrying every
+    field by the field list and coercing each to its declared shape WITHOUT raising —
+    the local-mesh route keeps a junk sign-in as the text it found and names it later
+    (``local_mesh_domains._import_problem``), where ``ImageConfig._domain_from_dict``
+    fails loudly for a saved config. One lenient loader, so no route spells its own
+    key list (#654)."""
+    kw: dict[str, Any] = {}
+    for k in DOMAIN_FIELDS:
+        if k not in rec:
+            continue
+        v = rec.get(k)
+        f = Domain.__dataclass_fields__[k]
+        if k == "tor":
+            kw[k] = v is True
+        elif k == "issuer_port":
+            kw[k] = v if isinstance(v, int) and not isinstance(v, bool) and v > 0 else 0
+        elif f.type in ("dict[str, Any]",):
+            kw[k] = dict(v) if isinstance(v, dict) else {}
+        elif f.type in ("list[str]",):
+            kw[k] = [str(s) for s in v] if isinstance(v, (list, tuple)) else []
+        elif f.type == "bool":
+            kw[k] = bool(v)
+        else:
+            kw[k] = "" if v is None else str(v)
+    # an empty sign-in is the default, as every reader before #654 took it
+    if not kw.get("idp"):
+        kw.pop("idp", None)
+    return Domain(**kw)
+
+
+def manifest_domain_rows(domains) -> list[dict[str, Any]]:
+    """The MANIFEST shape of the domain rows — what BOTH mesh manifest emitters write
+    (``ImageConfig.mesh_manifest`` and ``WorklistDriver.manifest_v2``), so the two
+    cannot disagree: the saved shape above, with ``idp`` left out when it is the
+    superdomain default (#47: absent == superdomain for every consumer)."""
+    out: list[dict[str, Any]] = []
+    for row in domain_rows_to_dict(domains):
+        if row.get("idp", DOMAIN_IDP_SUPERDOMAIN) == DOMAIN_IDP_SUPERDOMAIN:
+            row.pop("idp", None)
+        out.append(row)
+    return out
+
+
+def brand_header_fields(brand: str, brand_title: str, org: str, cluster_domain: str,
+                        superdomain: str, login_style: str = "",
+                        login_decor: str = "") -> dict[str, Any]:
+    """The manifest HEADER both emitters write, as a projection of the record's
+    superbrand block (#654, D5): the superbrand's id is the manifest's ``brand``, its
+    internal root name the manifest's ``superdomain``. ``login_style``/``login_decor``
+    (the superbrand's shape and menu decoration) are OMIT-WHEN-EMPTY so a pre-#654
+    manifest keeps its bytes."""
+    out: dict[str, Any] = {
+        "brand": brand, "brand_title": brand_title, "org": org,
+        "cluster_domain": cluster_domain, "superdomain": superdomain,
+    }
+    if login_style:
+        out["login_style"] = login_style
+    if login_decor:
+        out["login_decor"] = login_decor
     return out
 
 
@@ -3024,6 +3139,17 @@ class ImageConfig:
     # "vanta-<effect>" (theme.VANTA_EFFECTS) is persisted but not yet selectable in
     # the UI — the effect loader ships only in hugmesh-login-ui today.
     login_bg_effect: str = "gradient"  # theme.BG_EFFECTS
+    # ── the superbrand's shape and menu decoration (#654, D5/D6) — the two look
+    # axes the Themes editor had no field for. The same NON-argv plane as the
+    # login_* fields; they reach the mesh through the brand record and the manifest
+    # header (OMIT-WHEN-EMPTY), never a builder flag. "" = the shipped page.
+    login_style: str = ""              # theme.STYLE_VARIANTS id
+    login_decor: str = ""              # theme.DECOR_VARIANTS id
+    # ── the brand record this image is built from (#654, D5): a PATH the Studio
+    # resolves names and flags from. NON-argv UNTIL the image builders parse
+    # --brand-record (the builders-brand-record lane); test_brand_record_copy_sites
+    # pins that the flag is emitted exactly when a builder parses it.
+    brand_record: str = ""
     # ── egress VPN ──
     egress_vpn: str = ""               # --egress-vpn FILE
     egress_vpn_locked: bool = False
@@ -3248,6 +3374,28 @@ class ImageConfig:
             t = True
             kw["optional_services"] = [x for x in svcs if x != "tor"]
         kw["tor"] = t
+        # The brand record's keys (#654): absent/null — every pre-#654 row — is the
+        # empty default; a wrong SHAPE fails loudly at load like idp and tor do, never
+        # a dict field holding a string.
+        bid = kw.get("id")
+        kw["id"] = "" if bid is None else str(bid).strip()
+        for k in ("look", "ways"):
+            v = kw.get(k)
+            if v is None:
+                kw[k] = {}
+            elif not isinstance(v, dict):
+                raise ValueError(
+                    f"domain {kw.get('name', '')!r}: {k} must be an object, got {v!r}")
+        port = kw.get("issuer_port", 0)
+        if port is None or port == "":
+            port = 0
+        if isinstance(port, str) and port.strip().isdigit():
+            port = int(port.strip())
+        if isinstance(port, bool) or not isinstance(port, int) or port < 0 or port > 65535:
+            raise ValueError(
+                f"domain {kw.get('name', '')!r}: issuer_port must be a port number, "
+                f"got {port!r}")
+        kw["issuer_port"] = port
         return Domain(**kw)
 
     @staticmethod
@@ -3393,6 +3541,15 @@ class ImageConfig:
             family = os.path.splitext(os.path.basename(self.login_font_file))[0] \
                 .replace("-", " ").replace("_", " ")
         primary, secondary = self.login_primary_color, self.login_secondary_color
+        # The superbrand's shape/decoration (#654): an unknown id fails loudly here,
+        # like an unknown preset below — theme.style_tokens would otherwise fall back
+        # to the shipped style and the Studio preview would lie about the mesh.
+        for _fld, _table in (("login_style", _theme.STYLE_VARIANTS),
+                             ("login_decor", _theme.DECOR_VARIANTS)):
+            _v = getattr(self, _fld)
+            if _v and _v not in _table:
+                raise ValueError(f"unknown {_fld}: {_v!r} (one of "
+                                 f"{', '.join(sorted(_table))})")
         delta = ""
         if self.login_theme_preset:
             # A preset supplies the colours and its delta block; the shared
@@ -4706,15 +4863,15 @@ class ImageConfig:
         one backward-compatible reading for every consumer (old manifests provision
         identically; test_domain_idp_schema.py pins the exact golden bytes)."""
         return {
-            "brand": self.brand, "brand_title": self.brand_title, "org": self.org,
-            "cluster_domain": self.cluster_domain,
-            "superdomain": self.effective_superdomain(),
-            # per-domain ``tor`` (#582) is OMIT-WHEN-FALSE the same way: a domain
-            # without its own onion emits no key, so pre-#582 bytes never change.
-            "domains": [{k: v for k, v in asdict(d).items()
-                         if not (k == "idp" and v == DOMAIN_IDP_SUPERDOMAIN)
-                         and not (k == "tor" and not v)}
-                        for d in self.domains],
+            # The header is a projection of the record's superbrand block (#654, D5):
+            # the SAME function manifest_v2 calls, so the two emitters agree.
+            **brand_header_fields(self.brand, self.brand_title, self.org,
+                                  self.cluster_domain, self.effective_superdomain(),
+                                  self.login_style, self.login_decor),
+            # per-domain ``tor`` (#582), ``look``/``ways``/``issuer_port`` (#654) are
+            # OMIT-WHEN-EMPTY the same way: a domain that uses none emits no key, so
+            # pre-#582 bytes never change. ONE row writer for both emitters.
+            "domains": manifest_domain_rows(self.domains),
             # per-user ``roles`` (issue #228) is OMIT-WHEN-SINGLE the same way (User.to_dict):
             # ``role`` stays the primary every consumer reads; a multi-role account adds
             # the full list beside it. test_user_multi_role.py pins both shapes.

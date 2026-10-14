@@ -41,11 +41,11 @@ import re
 import subprocess
 import sys
 import time
-from dataclasses import asdict, dataclass, fields
+from dataclasses import asdict, dataclass, field, fields
 from typing import NamedTuple
 
-from . import own_casdoor, theme
-from .config import IDP_CHOICES, IDP_LABELS, _IDP_CLIENT_ID_RE, _IDP_URL_RE, \
+from . import brand_model, own_casdoor, theme
+from .config import DOMAIN_FIELDS, IDP_CHOICES, IDP_LABELS, _IDP_CLIENT_ID_RE, _IDP_URL_RE, \
     idp_effective_jwks
 from .local_mesh import ENV_AUTHKEY, LocalMeshConfig, LocalMeshNode
 from .local_services import (
@@ -166,17 +166,43 @@ def expected_build_contexts(generator_dir: str) -> list[str]:
 
 
 def _domain_record(x: dict) -> dict:
-    """One recorded domain row, coerced to its JSON shape (str fields, a list of str
-    slugs) — see ``LocalMeshBootstrapConfig.domains``."""
+    """One recorded domain row, coerced to its JSON shape — see
+    ``LocalMeshBootstrapConfig.domains``. COPY SITE (brand_model.COPY_SITES): every
+    ``config.Domain`` field is carried by the FIELD LIST (#654), each coerced to its
+    declared shape and left out when it says nothing, so a field added to Domain
+    reaches a saved mesh without a change here. A junk value keeps the pre-#654
+    leniency: it is coerced, never raised on (a saved mesh is JSON on a writable disk,
+    and ``_import_problem`` names an unknown sign-in later, by name)."""
     svcs = x.get("optional_services") or ()
-    rec = {"name": str(x.get("name") or "").strip(),
-           "title": str(x.get("title") or "").strip(),
-           "idp": str(x.get("idp") or "superdomain"),
-           "optional_services": [str(s) for s in svcs] if isinstance(svcs, (list, tuple)) else []}
-    # the domain's own Tor front door (#582): OMIT-WHEN-FALSE, and only a real
-    # ``true`` counts — a hand-edited "yes" must not mint an onion.
-    if x.get("tor") is True:
-        rec["tor"] = True
+    rec: dict = {"name": str(x.get("name") or "").strip(),
+                 "title": str(x.get("title") or "").strip(),
+                 "idp": str(x.get("idp") or "superdomain"),
+                 "optional_services": ([str(s) for s in svcs]
+                                       if isinstance(svcs, (list, tuple)) else [])}
+    for k in DOMAIN_FIELDS:
+        if k in rec or k not in x:
+            continue
+        v = x.get(k)
+        if k == "tor":
+            # the domain's own Tor front door (#582): OMIT-WHEN-FALSE, and only a real
+            # ``true`` counts — a hand-edited "yes" must not mint an onion.
+            if v is True:
+                rec["tor"] = True
+        elif k == "images":
+            if isinstance(v, (list, tuple)) and v:
+                rec["images"] = [str(s) for s in v]
+        elif k == "issuer_port":
+            if isinstance(v, int) and not isinstance(v, bool) and v > 0:
+                rec["issuer_port"] = v
+        elif isinstance(v, dict):
+            if v:
+                rec[k] = dict(v)
+        elif isinstance(v, str):
+            if v.strip():
+                rec[k] = v.strip()
+        elif isinstance(v, bool):
+            if v:
+                rec[k] = True
     return rec
 
 
@@ -319,9 +345,29 @@ class LocalMeshBootstrapConfig:
     # tuple is an explicit "none of them" and IS exported (as the literal `none`) —
     # see local_services.kind_addon_env for why those two must not collapse.
     kind_addons: tuple[str, ...] | None = None
+    # ── the SUPERBRAND block of the brand record (#654, D5) — everything the record's
+    # superbrand says beyond ``brand`` (its id) and ``cluster_domain`` (its public
+    # name), which stay the fields they always were: title, organisation, internal
+    # root name, central sign-in, default look, default ways, login style and
+    # decoration (brand_model.Superbrand.to_dict, every key OMIT-WHEN-EMPTY). The
+    # recorded ``domains`` rows are the record's brands. EMPTY (the default) on every
+    # pre-#654 config: the plan, env and argv are byte-identical, and the saved-mesh
+    # record grows by one key as it did for ``domains``.
+    superbrand: dict = field(default_factory=dict)
+    # ── Tor RELEASE on a production mesh (#654, D14). A production mesh HOLDS its
+    # Tor addresses until Go live; this is the explicit release the Studio passes
+    # only after Go live was pressed (TOR_RELEASE=1 to `make stack-up`; the Makefile's
+    # hold itself is the docker-mesh-tor lane's). A TEST mesh ignores it: a Tor tick
+    # there starts the address with the mesh as it always did (open question 2 = A).
+    tor_release: bool = False
 
     def is_prod(self) -> bool:
         return self.env == "prod"
+
+    def tor_held(self) -> bool:
+        """Whether this mesh's Tor addresses are HELD at start (D14): production with
+        Tor on and no release given. False on a test mesh, or when Tor is off."""
+        return self.is_prod() and self.effective_with_tor() and not self.tor_release
 
     # ── services selection -> the two back-ends ─────────────────────────────────
     def effective_social(self) -> bool:
@@ -430,7 +476,9 @@ class LocalMeshBootstrapConfig:
     _TUPLE_FIELDS = ("web_locales", "own_idp_domains", "domain_services_reviewed")
     #: tuples of JSON objects (the recorded domain rows, #494).
     _DICT_TUPLE_FIELDS = ("domains",)
-    _BOOL_FIELDS = ("social", "with_tor")
+    _BOOL_FIELDS = ("social", "with_tor", "tor_release")
+    #: plain JSON objects (the superbrand block, #654).
+    _DICT_FIELDS = ("superbrand",)
 
     def to_dict(self) -> dict:
         """Every field, JSON-shaped. A pure serialiser: it drops NOTHING — the
@@ -472,6 +520,9 @@ class LocalMeshBootstrapConfig:
         for k in cls._BOOL_FIELDS:
             if k in vals:
                 vals[k] = bool(vals[k])
+        for k in cls._DICT_FIELDS:
+            if k in vals and not isinstance(vals[k], dict):
+                vals[k] = {}          # a hand-edited scalar is ABSENT, never a crash
         for k, f in known.items():
             if k in vals and f.type == "str" and not isinstance(vals[k], str):
                 vals[k] = "" if vals[k] is None else str(vals[k])
@@ -630,6 +681,25 @@ class LocalMeshBootstrap:
                              else "superdomain"))
                 for r in self.cfg.domains]
         return tor_domain_entries(rows, own_name=own)
+
+    # ---- the brand record (#654, D5) ---------------------------------------------
+    def record(self) -> "brand_model.BrandRecord":
+        """The brand record this mesh carries: ``brand``/``cluster_domain`` are the
+        superbrand's id and public name, ``cfg.superbrand`` the rest of its block, the
+        recorded domain rows its brands (brand_model.record_from_bootstrap)."""
+        return brand_model.record_from_bootstrap(self.cfg)
+
+    def _hand_over_tor_release(self) -> None:
+        """The Tor release hand-over (#654, D14), run right before every `make
+        stack-up`: TOR_RELEASE=1 reaches the Makefile ONLY when the operator pressed
+        Go live (cfg.tor_release); an ambient TOR_RELEASE inherited from the shell is
+        dropped, so a production mesh can never be released by an environment nobody
+        chose. LocalStackNode builds its env from os.environ (the TS_AUTHKEY
+        precedent in _start_seed_overlay). The hold itself is the Makefile's."""
+        if self.cfg.tor_release:
+            os.environ["TOR_RELEASE"] = "1"
+        else:
+            os.environ.pop("TOR_RELEASE", None)
 
     def _mesh_node(self) -> LocalMeshNode:
         return LocalMeshNode(self.generator_dir, LocalMeshConfig(
@@ -810,6 +880,24 @@ class LocalMeshBootstrap:
                 problems.append(
                     f"own-Casdoor domain '{name.strip()}' is this mesh's own domain — "
                     "it signs in via the central Casdoor and cannot have an own one.")
+        # ── the brand record (#654): the id rule for every brand (D4), every look and
+        # ways block, and the secret scan (D5) — the same checks a save runs, so a
+        # record the Studio would refuse to write is a mesh this will not start.
+        if self.cfg.domains or self.cfg.superbrand:
+            try:
+                rec = self.record()
+            except ValueError as e:
+                problems.append(f"brand record: {e}")
+            else:
+                problems.extend(
+                    f"brand record: {p}" for p in
+                    brand_model.record_problems(
+                        rec, profiles=brand_model.profile_names(self.generator_dir)))
+                problems.extend(
+                    f"brand record: {p}" for p in
+                    brand_model.secret_problems(
+                        {"superbrand": self.cfg.superbrand,
+                         "brands": list(self.cfg.domains)}, "record"))
         if self.cfg.is_prod():
             if not self.cfg.cluster_domain.strip():
                 problems.append("prod requires a public cluster domain "
@@ -871,7 +959,9 @@ class LocalMeshBootstrap:
         lines.append(f"ENV:        {c.env}"
                      + ("  (LAN-only / offline — the safe default)" if not c.is_prod()
                         else "  (REAL public domain)"))
-        lines.append(f"Brand:      {c.brand}")
+        lines.append(f"Brand:      {c.brand}"
+                     + (f"  ({c.superbrand.get('title')})" if c.superbrand.get("title")
+                        else ""))
         lines.append(f"Domain:     {c.resolved_domain()}"
                      + ("" if c.is_prod() else "  (brand default; not a public issuer in test)"))
         lines.append(f"Issuer:     {c.issuer()}")
@@ -940,6 +1030,14 @@ class LocalMeshBootstrap:
             for name, slug, tenant in self.tor_domains():
                 lines.append(f"             + {name}: its own onion (key ‘{slug}’), "
                              f"served as brand ‘{tenant}’")
+            # production HOLDS the addresses until Go live (#654, D14); a test mesh
+            # starts them with the mesh as it always did
+            if c.tor_held():
+                lines.append("             HELD: a production mesh starts no Tor address "
+                             "until Go live (TOR_RELEASE is not set)")
+            elif c.is_prod():
+                lines.append("             RELEASED at start (TOR_RELEASE=1 — Go live "
+                             "was pressed)")
         elif self.tor_domains():
             lines.append("          -> NO onion for the Tor domains ("
                          + ", ".join(n for n, _s, _t in self.tor_domains())
@@ -1052,7 +1150,16 @@ class LocalMeshBootstrap:
         # hugmesh-tor (and OFF over one that does) — step (3) above already reads it
         # this way, and one plan must not say both things.
         if c.effective_with_tor():
-            lines.append("      Public (no IP/DNS): already ON — the Tor v3 .onion above.")
+            # #654: a Tor address is a way IN, not a public flip — the old line said
+            # 'Public ... already ON', which is not what an onion does
+            lines.append("      A Tor address is another way in to this mesh (the .onion")
+            lines.append("      above): it opens no public port and needs no public")
+            lines.append("      IP or DNS. " + ("It is HELD until Go live (a production mesh)."
+                                                if c.tor_held() else
+                                                "It starts with this mesh" + (
+                                                    " (a test mesh)." if not c.is_prod()
+                                                    else " (released: TOR_RELEASE=1).")))
+            lines.append("      'Open public ports 80 and 443' is the separate public flip.")
         else:
             lines.append("      Public exposure is a SEPARATE, opt-in step — run Go Live")
             lines.append("      after this is up (Studio 'Go Live' page / `hugmesh-go-live`):")
@@ -1196,6 +1303,7 @@ class LocalMeshBootstrap:
         share; the ONLY difference between the two is what runs BEFORE it (mint
         fresh credentials, or reuse the saved ones)."""
         stack = self._stack_node()
+        self._hand_over_tor_release()
         ok, msg = stack.start(on_line=on_line, cancel=cancel)
         _note(f"[stack-up] {'ok' if ok else 'FAILED'}: {_tail(msg)}")
         if not ok:
@@ -1379,6 +1487,7 @@ class LocalMeshBootstrap:
         _note(f"[saved-mesh] starting '{rec.label}' — reattaching its "
               f"{rec.volume_count()} data volume(s); nothing is re-minted or re-seeded")
         stack = self._stack_node()
+        self._hand_over_tor_release()
         ok, msg = stack.start(on_line=on_line, cancel=cancel)
         _note(f"[stack-up] {'ok' if ok else 'FAILED'}: {_tail(msg)}")
         if ok:
@@ -1632,7 +1741,7 @@ def _cfg_from_args(args: argparse.Namespace) -> LocalMeshBootstrapConfig:
     for w in theme.warnings(args.login_primary or theme._DEFAULT_PRIMARY,
                             args.login_secondary) if login_theme_css else []:
         print(f"WARNING: {w}", file=sys.stderr)
-    return LocalMeshBootstrapConfig(
+    cfg = LocalMeshBootstrapConfig(
         env=args.env, superadmin_username=args.superadmin_username,
         out_dir=args.out, social=args.social, with_tor=args.with_tor,
         # None (the flag absent) is NOT the same as an empty selection: absent means
@@ -1649,7 +1758,36 @@ def _cfg_from_args(args: argparse.Namespace) -> LocalMeshBootstrapConfig:
         login_theme_css=login_theme_css,
         idp=args.idp, idp_issuer=args.idp_issuer,
         idp_client_id=args.idp_client_id, idp_jwks=args.idp_jwks,
-        own_idp_domains=_parse_own_casdoor_domains(args.own_casdoor_domain))
+        own_idp_domains=_parse_own_casdoor_domains(args.own_casdoor_domain),
+        tor_release=bool(getattr(args, "tor_release", False)))
+    # `--record FILE` (#654, D5): the brand record is the authority for the brand, the
+    # public name, the superbrand block and the brands; every other flag stays.
+    if getattr(args, "record", ""):
+        rec = brand_model.load_record(args.record)
+        brand_model.apply_record_to_bootstrap(rec, cfg)
+    return cfg
+
+
+def _show_record_cli(args: argparse.Namespace) -> int:
+    """``show-record``: print every brand's effective look with the source of each
+    value and the effect of each way on each path, from a record file or, without
+    one, from the flags (D2, D5, D10). Reads nothing live."""
+    try:
+        cfg = _cfg_from_args(args)
+    except (OSError, ValueError) as e:
+        print(f"[refused] cannot read the brand record: {e}", file=sys.stderr)
+        return 2
+    rec = brand_model.record_from_bootstrap(cfg)
+    for line in brand_model.show_record_lines(rec, env=cfg.env):
+        print(line)
+    problems = brand_model.record_problems(rec)
+    if problems:
+        print("")
+        print("PROBLEMS (this record would be refused):")
+        for p in problems:
+            print(f"  - {p}")
+        return 1
+    return 0
 
 
 def _confirm_prod(action: str) -> int:
@@ -1746,7 +1884,7 @@ def main(argv: list[str] | None = None) -> int:
             "composes the gen scripts + `make stack-up` + the docker-compose.mesh.yml "
             "overlay. Host-local only (refuses to run in a cluster pod)."))
     p.add_argument("subcommand", choices=("plan", "up", "down", "status",
-                                          "mesh-save", "mesh-restore"),
+                                          "mesh-save", "mesh-restore", "show-record"),
                    help="plan = print the confirm-before-run manifest (no side "
                         "effects); up = GENERATE creds + START the stack (explicit "
                         "action; prod TTY-confirms); down = stop both projects; "
@@ -1756,7 +1894,20 @@ def main(argv: list[str] | None = None) -> int:
                         "inventory; never volume contents, never a password); "
                         "mesh-restore <id> = bring a saved mesh back: a warm start "
                         "when its volumes+images are still here, else bring up + "
-                        "re-seed WITHOUT re-minting credentials.")
+                        "re-seed WITHOUT re-minting credentials; show-record = print "
+                        "the brand record (every brand's effective look with the "
+                        "source of each value, and what each way to reach it does on "
+                        "each start path) — reads nothing live.")
+    p.add_argument("--record", default="",
+                   help="a brand-record.json (core/brand_model.py): its superbrand "
+                        "block and brands become this mesh's brand, public name and "
+                        "domains; every other flag still applies. `up --record FILE` "
+                        "starts a mesh from a record; `show-record --record FILE` "
+                        "prints it.")
+    p.add_argument("--tor-release", action="store_true",
+                   help="production only: RELEASE the Tor addresses at start "
+                        "(TOR_RELEASE=1). Without it a production mesh HOLDS them until "
+                        "Go live; a test mesh starts them with the mesh either way.")
     p.add_argument("mesh_id", nargs="?", default="",
                    help="mesh-restore: the saved record id "
                         "(`python3 -m hugmesh_studio.core.saved_meshes list`).")
@@ -1870,8 +2021,14 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.subcommand in ("mesh-save", "mesh-restore"):
         return _saved_mesh_cli(args)
+    if args.subcommand == "show-record":
+        return _show_record_cli(args)
 
-    cfg = _cfg_from_args(args)
+    try:
+        cfg = _cfg_from_args(args)
+    except (OSError, ValueError) as e:
+        print(f"[refused] cannot read the brand record: {e}", file=sys.stderr)
+        return 2
     boot = LocalMeshBootstrap(args.generator_dir, cfg)
 
     if args.subcommand == "plan":

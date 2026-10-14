@@ -34,9 +34,8 @@ nothing — the BRAND_B gating shape).
 from __future__ import annotations
 
 import os
-import re
 
-from .config import DOMAIN_IDP_OWN
+from .config import DOMAIN_IDP_OWN, default_brand_id
 
 # Base host port of the per-domain sequence (brand A's Casdoor owns :8000; the
 # brand-b proof runs the second instance on :8001).
@@ -49,8 +48,6 @@ PROFILE = "own-casdoor"
 # (the Makefile's wildcard -f include).
 OVERLAY_RELPATH = os.path.join("tests", "stack", ".compose.own-domains.yaml")
 
-_SLUG_RE = re.compile(r"[^a-z0-9]+")
-
 
 def own_domain_names(domains) -> tuple[str, ...]:
     """The names of the domains that chose idp='own', in table order (the order
@@ -61,8 +58,10 @@ def own_domain_names(domains) -> tuple[str, ...]:
 
 def slug(name: str) -> str:
     """DNS name -> compose-safe service/tenant slug ("acme.example" ->
-    "acme-example") — the analogue of brand-b's literal 'brandb' id."""
-    return _SLUG_RE.sub("-", name.lower()).strip("-")
+    "acme-example") — the analogue of brand-b's literal 'brandb' id. Since #654 this
+    is the brand's DEFAULT id (config.default_brand_id, one rule in one place); a
+    record may store a different id, which brand_model.brand_id prefers."""
+    return default_brand_id(name)
 
 
 def port_for(index: int) -> int:
@@ -70,28 +69,67 @@ def port_for(index: int) -> int:
     return BASE_PORT + index
 
 
-def issuer_for(name: str, index: int) -> str:
+# The first port a Studio own-sign-in brand may take while the test-only BRAND_B knob
+# is set: BRAND_B owns :8001 (compose.brand-b.yaml), so the Studio's brands start one
+# higher (hugmesh-generator#654, D4). Without BRAND_B the sequence is BASE_PORT as
+# before.
+BASE_PORT_WITH_BRAND_B = BASE_PORT + 1
+
+
+def ports_for(names, stored=None, *, brand_b: bool = False) -> dict[str, int]:
+    """name -> published host port for the own-sign-in domains ``names``, honouring
+    the ports the brand record already STORES (``stored``: name -> port, 0 = none)
+    and allocating the rest from the first free port of the sequence (D4: a stored
+    port is never recomputed from table position, so removing or reordering a brand
+    moves nobody else's issuer). A stored port that two names claim is kept by the
+    first and re-allocated for the second, so one port can never serve two brands.
+    With ``stored`` None and ``brand_b`` False this is exactly ``port_for(index)``."""
+    stored = dict(stored or {})
+    base = BASE_PORT_WITH_BRAND_B if brand_b else BASE_PORT
+    out: dict[str, int] = {}
+    taken: set[int] = set()
+    for n in names:
+        p = int(stored.get(n) or 0)
+        if p >= base and p not in taken:
+            out[n] = p
+            taken.add(p)
+    nxt = base
+    for n in names:
+        if n in out:
+            continue
+        while nxt in taken:
+            nxt += 1
+        out[n] = nxt
+        taken.add(nxt)
+        nxt += 1
+    return out
+
+
+def issuer_for(name: str, index: int, port: int | None = None) -> str:
     """The per-domain Casdoor issuer/origin URL (the brand-b shape: PUBLISHED
-    host URL, resolvable in-network via the dotted alias)."""
-    return f"http://casdoor-{slug(name)}.localtest.me:{port_for(index)}"
+    host URL, resolvable in-network via the dotted alias). ``port`` (a stored
+    port, see :func:`ports_for`) wins over the table-position default."""
+    return f"http://casdoor-{slug(name)}.localtest.me:{port or port_for(index)}"
 
 
 def overlay_path(generator_dir: str) -> str:
     return os.path.join(generator_dir, OVERLAY_RELPATH)
 
 
-def tenancy_env(names, base_issuer: str) -> dict[str, str]:
+def tenancy_env(names, base_issuer: str, ports=None) -> dict[str, str]:
     """The gateways' opt-in multi-issuer registry for the own-idp domains: the
     central issuer stays tenant `default`, each own domain maps its derived
     issuer AND its Host to its slug (STACK_BRAND_B_ENV's shape, scaled per
     domain). {} when no domain opted in, so the untouched `make stack-*` env
     stays byte-identical — the same emit-nothing-by-default rule every other
-    stack knob follows."""
+    stack knob follows. ``ports`` (name -> port, :func:`ports_for`) overrides the
+    table-position ports; None keeps them."""
     names = tuple(names)
     if not names:
         return {}
+    ports = dict(ports or {})
     issuers = [f"{base_issuer}=default"] + [
-        f"{issuer_for(n, i)}={slug(n)}" for i, n in enumerate(names)]
+        f"{issuer_for(n, i, ports.get(n))}={slug(n)}" for i, n in enumerate(names)]
     hosts = [f"{n}={slug(n)}" for n in names]
     return {"APP_TENANCY_ISSUERS": ",".join(issuers),
             "APP_TENANCY_HOSTS": ",".join(hosts)}
@@ -142,17 +180,21 @@ _SERVICE_TMPL = """\
 """
 
 
-def compose_overlay(names) -> str:
+def compose_overlay(names, ports=None) -> str:
     """The overlay YAML text for the given own-idp domain names, "" when there
-    are none (write nothing — the superdomain-only stack stays byte-identical)."""
+    are none (write nothing — the superdomain-only stack stays byte-identical).
+    ``ports`` as in :func:`tenancy_env`: the same mapping must be given to both,
+    or the issuer the gateway trusts and the port Casdoor publishes on disagree."""
     names = tuple(names)
     if not names:
         return ""
+    ports = dict(ports or {})
     parts = [_HEADER]
     for i, name in enumerate(names):
+        port = ports.get(name) or port_for(i)
         parts.append(_SERVICE_TMPL.format(
             name=name, slug=slug(name), profile=PROFILE,
-            issuer=issuer_for(name, i), port=port_for(i)))
+            issuer=issuer_for(name, i, port), port=port))
     parts.append("volumes:\n")
     parts += [f"  casdoor-{slug(n)}-pg:\n" for n in names]
     return "".join(parts)

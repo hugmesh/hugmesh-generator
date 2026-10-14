@@ -36,7 +36,7 @@ time, and points the node at the brand's own headscale control plane.
 | `ADMIN_EMAILS` | seeded Casdoor admin / BFF allowlist |
 | `TIMEZONE`, `HOSTNAME` | system settings (HOSTNAME empty ⇒ `<BRAND>-<role>`) |
 | `HEADSCALE_VERSION`, `TAILSCALE_VERSION` | mesh binary versions |
-| `VAULT_ADDR`, `VAULT_KV_MOUNT` | cluster-secret delivery (empty ADDR = offline/USB). `VAULT_KV_MOUNT` is the WRITER side only — the reader is pinned at mount `secret` with the literal `hugmesh/<service>` key prefix, so a non-`hugmesh` brand writes where the cluster does not read (pre-existing; see `brand.conf.example`, #285) |
+| `VAULT_ADDR`, `VAULT_KV_MOUNT` | cluster-secret delivery (empty ADDR = offline/USB). `VAULT_KV_MOUNT` is the WRITER side only: `gen-cluster-secrets.sh` writes to `<VAULT_KV_MOUNT>/<BRAND>/<service>`, while the cluster's ExternalSecrets read mount `secret` and the literal key prefix `hugmesh/<service>`. So a profile with a non-`hugmesh` `BRAND`, or a non-`secret` mount, writes where the cluster does not read; the base path is NOT derived from the brand on the reading side (pre-existing; see `brand.conf.example` and `scripts/gen-cluster-secrets.sh`, #285) |
 | `CA_CERT` | path to an EXISTING CA cert (PEM) to use as the cert issuer (optional) |
 | `CA_KEY` | **(secret — do not commit)** the CA's private key (PEM) |
 | `CA_KEY_PASS` | **(secret — do not commit)** passphrase for `CA_KEY`, if encrypted |
@@ -85,3 +85,16 @@ Precedence: **built-in defaults < the profile < explicit CLI flags**, so
 
 Auto-detection: if you copy a profile to `./brand.conf` (gitignored), the
 builders pick it up with no `--config` flag.
+
+## The brand record and the generated profile
+
+The Studio does not write into this folder. Its one description of a mesh's brands —
+the superbrand and the brands under it, with their looks and the ways to reach them —
+is the **brand record** (`brand-record.json` in the Studio state folder; see
+[`../docs/BRAND-MODEL.md`](../docs/BRAND-MODEL.md)). From it the Studio **generates**
+a profile in this file's format (`python3 -m hugmesh_studio.core.brand_model profile
+--record FILE --out PROFILE`): every value single-quoted and limited to a safe
+character set, re-parsed strictly before a builder sources it, so a brand title can
+never run code in a builder. A hand-written `brands/<yourbrand>.conf` still works as
+before; the record's `BRAND` must not name an existing profile here, because
+`make BRAND=<id>` would source it.
