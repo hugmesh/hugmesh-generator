@@ -95,6 +95,8 @@ interface ShotRow {
   login?: string;
   route?: string;
   do?: DoAction[];
+  /** Live regions (canvas / rAF loops) excluded from waitForSettle's frame comparison; see shot-table.mjs MASK_SELECTORS. */
+  settle?: { mask: string[] };
   note?: string;
 }
 
@@ -227,7 +229,7 @@ for (const row of ROWS) {
         // before shooting, so a plan image is never a ghosted mid-transition or
         // half-rendered frame. A row that never settles fails loudly here and
         // shoots nothing.
-        await waitForSettle(page, name);
+        await waitForSettle(page, name, { mask: row.settle?.mask });
         try {
           await shot(page, name);                   // specs/helpers.ts shot(): fullPage, into SNAP_SHOTS
         } finally {

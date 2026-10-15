@@ -566,6 +566,84 @@ EGRESSFAIL
 fi
 
 # ─────────────────────────────────────────────────────────────────────────
+# 1c) IN-NODE DNS PREFLIGHT — can the node's OWN resolver resolve a registry?
+#
+# hugmesh-generator#510 (child of #48). On 2026-09-09 argocd-repo-server sat in
+# ImagePullBackOff on quay.io/argoproj/argocd with
+#   dial tcp: lookup quay.io on 172.18.0.1:53: read udp ...: i/o timeout
+# The node's resolver timed out, and every ComparisonError and every
+# Init:ImagePullBackOff after it was downstream of that one fact. The bring-up
+# kept waiting on a cluster that could never pull anything.
+#
+# This runs AFTER the raw-TCP egress preflight above and is the complement of
+# it, not a duplicate: that probe deliberately avoids names (a host that lost its
+# netfilter tables still resolves through docker's host-netns resolver), this one
+# is a name lookup run INSIDE the node, so it uses the node's /etc/resolv.conf
+# and not the host's.
+#
+# FAILS CLOSED. The only way past it is SKIP_NODE_DNS_PREFLIGHT=1, and that
+# prints a banner on stderr every time it is used.
+#   NODE_DNS_PROBE_NAME      name to resolve (default quay.io: the registry whose
+#                            pull failed on 2026-09-09)
+#   NODE_DNS_PROBE_ATTEMPTS  tries before giving up (default 3)
+#   NODE_DNS_PROBE_SLEEP     seconds between tries (default 2)
+# ─────────────────────────────────────────────────────────────────────────
+if [ "${SKIP_NODE_DNS_PREFLIGHT:-0}" = "1" ]; then
+  {
+    echo
+    echo "  !! SKIP_NODE_DNS_PREFLIGHT=1 — the in-node DNS preflight is DISABLED for this run."
+    echo "  !! Nothing has checked that the kind node can resolve a registry name. If it"
+    echo "  !! cannot, image pulls will time out and the bring-up will look like"
+    echo "  !! ImagePullBackOff / ComparisonError downstream (hugmesh-generator#510)."
+    echo
+  } >&2
+else
+  _dns_node="${CLUSTER_NAME}-control-plane"
+  _dns_name="${NODE_DNS_PROBE_NAME:-quay.io}"
+  _dns_tries="${NODE_DNS_PROBE_ATTEMPTS:-3}"
+  _dns_ok=0
+  _dns_i=1
+  while [ "${_dns_i}" -le "${_dns_tries}" ]; do
+    if docker exec "${_dns_node}" timeout 20 getent hosts "${_dns_name}" >/dev/null 2>&1; then
+      _dns_ok=1; break
+    fi
+    if [ "${_dns_i}" -lt "${_dns_tries}" ]; then sleep "${NODE_DNS_PROBE_SLEEP:-2}"; fi
+    _dns_i=$((_dns_i + 1))
+  done
+  if [ "${_dns_ok}" -eq 0 ]; then
+    # `|| true`: this only builds the message, and under `set -euo pipefail` an
+    # unreadable resolv.conf must not kill the script before it can say why.
+    _dns_resolv="$(docker exec "${_dns_node}" cat /etc/resolv.conf 2>/dev/null \
+      | awk '$1 == "nameserver" { print $2 }' | paste -sd, - || true)"
+    cat >&2 <<DNSFAIL
+
+  ✗ The kind node cannot resolve '${_dns_name}' (${_dns_tries} attempt(s), run inside node '${_dns_node}').
+
+    The node's resolver is: ${_dns_resolv:-<could not read nameserver lines from /etc/resolv.conf in the node>}
+
+    Image pulls use the node's resolver, not the host's, so they will fail with
+      dial tcp: lookup ${_dns_name} on <resolver>:53: i/o timeout
+    and every ArgoCD Application and Init container behind them will follow.
+    This is the 2026-09-09 failure (hugmesh-generator#48 / #510).
+
+    Reproduce it by hand:
+      docker exec ${_dns_node} getent hosts ${_dns_name}
+      docker exec ${_dns_node} cat /etc/resolv.conf
+
+    Fix DNS for that resolver, then rebuild the cluster:
+      make kind-down && make kind-up
+
+    To proceed anyway (an air-gapped host with every image already loaded):
+      SKIP_NODE_DNS_PREFLIGHT=1 make kind-up
+    That prints a warning banner on every run.
+
+DNSFAIL
+    exit 1
+  fi
+  log "In-node DNS preflight: node '${_dns_node}' resolves '${_dns_name}'"
+fi
+
+# ─────────────────────────────────────────────────────────────────────────
 # 2) Label the single node with every capability the curated app subset
 #    needs. Discovered by grepping the actual manifests (not guessed):
 #      - hugmesh.net/pki=true         (vault, vault-pki-init, casdoor +
