@@ -266,6 +266,12 @@ class SuperbrandStep(QtWidgets.QWidget):
         import traceback
         print(f"superbrand: swallowed exception in {where}", file=sys.stderr)
         traceback.print_exc(file=sys.stderr)
+        # and one plain sentence under the design, where the person is looking
+        self.note.setStyleSheet("color: #b00020;")
+        self.note.setText("That change could not be applied, and nothing was changed by "
+                          "it. Try it again; if it comes back, the details are in the "
+                          "terminal.")
+        self.note.setVisible(True)
 
     # ── the host's exit ───────────────────────────────────────────────────────────
     def commit(self, *, save: bool = False) -> list[str]:

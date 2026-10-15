@@ -116,6 +116,7 @@ class BrandPicker(QtWidgets.QWidget):
             self._filling = False
         unaff = s.unaffiliated
         self.combo.setEnabled(not unaff)
+        self.note.setStyleSheet("color: #a65d00;")
         self.note.setText(UNAFFILIATED_REASON if unaff else s.message)
         self.note.setVisible(bool(self.note.text()))
         show_summary = (not unaff) and not s.designing
@@ -160,6 +161,13 @@ class BrandPicker(QtWidgets.QWidget):
         import traceback
         print(f"brand_picker: swallowed exception in {where}", file=sys.stderr)
         traceback.print_exc(file=sys.stderr)
+        # and said where the person is looking, once (the terminal is for whoever debugs)
+        self.note.setStyleSheet("color: #b00020;")
+        self.note.setText(
+            f"That {plain_words.term('superbrand')} choice could not be applied, and "
+            "nothing was changed by it. Pick again; if it comes back, the details are in "
+            "the terminal.")
+        self.note.setVisible(True)
 
     # ── reading ───────────────────────────────────────────────────────────────────
     def current_key(self) -> str:

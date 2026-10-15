@@ -151,7 +151,7 @@ from ...core.seeded_credentials import Roster, annotate, load_roster
 from ...core.instance import state_dir
 from ...core.stage_tracker import StageTracker
 from ...tui.localmesh import PUBLIC_NAME_HOME, sync_brand_session
-from ...tui.superbrand_step import session_for
+from ...tui.superbrand_step import CREATE_KEY, session_for
 from ...core import e2e_environments
 from ._credentials_dialog import CredentialsDialog
 from .domain_services import DomainServicesWidget
@@ -1042,6 +1042,14 @@ class LocalMeshPage(QtWidgets.QWizardPage):
             "sourced by gen-cluster-secrets.sh when present): it must be a DNS label — "
             "the same gate gen-keystores.sh applies.")
         lay.addWidget(self.brand_picker)
+        # one plain sentence when the drop-down or the design could not do what was asked
+        # (the page used to print a traceback to the terminal and carry on half-drawn)
+        self.brand_error = QtWidgets.QLabel("")
+        self.brand_error.setObjectName("brand_error")
+        self.brand_error.setWordWrap(True)
+        self.brand_error.setStyleSheet("color: #b00020;")
+        self.brand_error.setVisible(False)
+        lay.addWidget(self.brand_error)
         self.brand_note = QtWidgets.QLabel("")
         self.brand_note.setWordWrap(True)
         self.brand_note.setStyleSheet("color: gray;")
@@ -2131,6 +2139,7 @@ class LocalMeshPage(QtWidgets.QWizardPage):
                 self._brand_mounted = True
             finally:
                 self._brand_busy = False
+            self._brand_ok()
         except Exception:                       # noqa: BLE001 — never raise out of a slot
             self._brand_swallow("mount_brand")
 
@@ -2153,6 +2162,7 @@ class LocalMeshPage(QtWidgets.QWizardPage):
                 step.note.setVisible(True)
             self._fix_design_widgets()
             self.brand.currentTextChanged.emit(self._brand_boot.brand)
+            self._brand_ok()
         except Exception:                       # noqa: BLE001
             self._brand_swallow("_brand_changed")
 
@@ -2167,6 +2177,7 @@ class LocalMeshPage(QtWidgets.QWizardPage):
             self._brand_sync_in()
             self.superbrand_design.commit(save=True)
             self.brand.currentTextChanged.emit(self._brand_boot.brand)
+            self._brand_ok()
         except Exception:                       # noqa: BLE001
             self._brand_swallow("leave_brand")
         return True
@@ -2191,12 +2202,23 @@ class LocalMeshPage(QtWidgets.QWizardPage):
             self.mount_brand()
         self.brand.currentTextChanged.emit(brand)
 
-    @staticmethod
-    def _brand_swallow(where: str) -> None:
+    def _brand_swallow(self, where: str) -> None:
+        """A slot must never raise (PyQt6 aborts the process), so the failure is written
+        to the terminal for whoever debugs it AND said once on the page, where the person
+        is looking: they are never left with a half-drawn step and no word."""
         import sys
         import traceback
         print(f"localmesh: swallowed exception in {where}", file=sys.stderr)
         traceback.print_exc(file=sys.stderr)
+        self.brand_error.setText(
+            f"The {plain_words.term('superbrand')} step could not be drawn or saved just "
+            "now, and nothing was changed by that. Go back one step and forward again; if "
+            "it comes back, the details are in the terminal.")
+        self.brand_error.setVisible(True)
+
+    def _brand_ok(self) -> None:
+        self.brand_error.setText("")
+        self.brand_error.setVisible(False)
 
     def collect_bootstrap(self) -> LocalMeshBootstrapConfig:
         """BOOTSTRAP-tab widgets -> LocalMeshBootstrapConfig — EVERY operator-visible
@@ -2920,10 +2942,18 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         # (every path that changes either already lands here). Cheap: the widget
         # rebuilds only when the map differs.
         self._refresh_code_folders()
+        # The note is about a profile the person PICKED that has no brands/<id>.conf. Under
+        # ‘Create a new superbrand’ (the default) nothing was picked, and a brand being
+        # designed has no profile file by definition: the sentence there read as a
+        # warning about something the person did not choose.
+        sess = self.superbrand_design.session
+        creating = sess is not None and sess.choice == CREATE_KEY
         self.brand_note.setText(
-            "" if self.boot.brand_has_conf() or not self.brand.currentText().strip()
+            "" if creating or self.boot.brand_has_conf()
+            or not self.brand.currentText().strip()
             else f"No brands/{self.brand.currentText().strip()}.conf — runs with "
                  f"built-in defaults (profile presets stay unset).")
+        self.brand_note.setVisible(bool(self.brand_note.text()))
         self.plan_view.setPlainText(self.boot.plan())
         self._sync_boot_gate()
 

@@ -273,3 +273,36 @@ def test_a_brand_with_its_own_sign_in_reaches_the_same_record_from_both_faces(
         [(b.name, b.idp, b.optional_services) for b in t.brands]
     assert [(b.name, b.idp) for b in t.brands] == [("blog.example", "own")]
     assert w.superbrand.id == t.superbrand.id == "acme"
+
+
+def test_coming_back_to_the_step_refreshes_the_drop_down(qapp, monkeypatch, tmp_path):
+    """Back into the step fires no initializePage, so the showEvent re-mount is what makes
+    the drop-down describe the world as it is now: a design saved while the person was on
+    another step appears in it. (Mutation: delete LocalMeshEnvPage.showEvent's mount_brand
+    call and this goes red.)"""
+    monkeypatch.setenv("HUGMESH_STUDIO_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.setattr(wizard_mod, "detect",
+                        lambda builder_image="hugmesh-builder": HOST)
+    wiz = wizard_mod.StudioWizard(GENERATOR_DIR)
+    wiz.show()
+    try:
+        wiz.next()
+        wiz.currentPage()._buttons["localmesh"].setChecked(True)
+        wiz.currentPage()._on_mode_toggled()
+        wiz.next()
+        wiz.currentPage()._buttons["generate"].setChecked(True)
+        wiz.next()
+        ctl = wiz.page(wiz._page_ids["localmesh"])
+        assert isinstance(wiz.currentPage(), lm_mod.LocalMeshEnvPage)
+        assert not any("later-design" in x for x in ctl.brand_picker.item_labels())
+        wiz.next()
+        assert isinstance(wiz.currentPage(), lm_mod.LocalMeshDomainsPage)
+        brand_model.save_design("later-design", brand_model.Superbrand(
+            title="Later", look={"primary": "#102030"}))
+        wiz.back()
+        assert isinstance(wiz.currentPage(), lm_mod.LocalMeshEnvPage)
+        assert any("later-design" in x for x in ctl.brand_picker.item_labels()), \
+            ctl.brand_picker.item_labels()
+    finally:
+        wiz.close()
+        wiz.deleteLater()
