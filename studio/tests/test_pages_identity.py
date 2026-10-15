@@ -44,7 +44,7 @@ from hugmesh_studio.gui.qt import Qt, QtWidgets
 # consolidated in _helpers so a flow change is edited in ONE place (design 6). mesh now
 # skips RolePage, so the mesh identity tests drive their image off the WorklistPage.
 from _helpers import (   # noqa: E402
-    advance_to, back_to, check_worklist_rows, enable_additional_domains,
+    added_row, advance_to, back_to, check_worklist_rows, enable_additional_domains,
     enable_configure_users, pairs, pick_mode, pick_role,
 )
 
@@ -241,7 +241,7 @@ def test_exclude_services_is_gone_from_the_gui_but_still_emits(wiz):
 
     So this pins BOTH halves: no widget anywhere on the page, and a value arriving from a
     saved config / -C / extra flags still emits AND SURVIVES a trip through the page (a
-    blind `c.exclude_services = []` in validatePage would silently blank it on every
+    unconditional `c.exclude_services = []` in validatePage would silently blank it on every
     Next — the bug this test exists to catch)."""
     mesh_worklist(wiz)
     net = advance_to(wiz, wizard_mod.NetworkPage)
@@ -385,7 +385,7 @@ def test_the_x86_standalone_desktop_gets_no_services_picker_at_all(wiz):
 def test_hiding_the_standalone_services_picker_emits_an_explicit_none(wiz):
     """The emission half of DEFECT 4 — REWRITTEN, because its first version asserted the
     exact regression DEFECT 6 then proved (it demanded `--optional-services` and every
-    --no-<x> be ABSENT, and called that emission-neutral).
+    --no-<x> be ABSENT, and called that leaves the output unchanged).
 
     THE PROOF THAT VERSION RESTED ON IS FALSE. It claimed build-x86-host-stage4.sh
     performs the client-role override itself at :1130/:1146/:1162/:1178/:1214. Those five
@@ -406,7 +406,7 @@ def test_hiding_the_standalone_services_picker_emits_an_explicit_none(wiz):
     carries. The hide's answer is `none`, and the page now says so — the explicit-none
     sentinel plus the definitely-offs of every row the builder parses here, which is
     exactly what a visible picker with every box unticked emits. Absent a profile those
-    tokens are measurably inert (`--role backend-gpu --no-tor --no-character-studio
+    tokens are measurably ineffective (`--role backend-gpu --no-tor --no-character-studio
     --no-character-forge --no-edge-ai-tts --print-plan` -> akkoma tuwunel phpbb, identical
     to passing none of them); the leak they close is measured in
     test_services_section.py::test_a_hidden_picker_cannot_inherit_a_brand_profiles_services.
@@ -799,7 +799,7 @@ def test_domains_table_round_trips_per_domain_services(wiz):
     dom = advance_to(wiz, wizard_mod.DomainsPage)
     # #227: the services cell is a checkable menu, so the row reads back through the
     # widget — QTableWidget.item() returns None once setCellWidget() has been called.
-    assert dom.table.cellWidget(0, 2).selected_slugs() == ["akkoma", "tube"]
+    assert dom.table.cellWidget(added_row(dom, 0), 2).selected_slugs() == ["akkoma", "tube"]
     dom._add("beta.example", "Beta", "phpbb, owncast")
     # ask 20: the users TABLE is behind its own choice screen, which is the page that
     # now follows Domains — one Next past Domains still collects the table.
@@ -951,7 +951,7 @@ def test_the_apex_domain_is_not_emitted_on_a_standalone_x86_image(wiz):
     was still building — REMOVING --cluster-domain from a build they never touched. That
     is the opposite of the hiding-must-not-change-the-build rule this block exists to pin.
     Its sibling below is the regression test. See _x86_args' own mode gate for why the
-    reset was never load-bearing here: it is what suppresses the flags, field or no field.
+    reset was never relied on here: it is what suppresses the flags, field or no field.
     """
     c = wiz.cfg
     c.mode = "standalone"; c.role = "standalone-thick"; c.platform = "x86"
@@ -1100,7 +1100,7 @@ def test_the_composable_unaffiliated_flag_hides_the_brand_rows_too(wiz):
     assert not net.services_box.isVisible()
     net.validatePage()
     assert c.brand == "hugmesh" and c.brand_profile == ""
-    assert "--unaffiliated" in c.to_cli_args()     # non-vacuity: it really is that build
+    assert "--unaffiliated" in c.to_cli_args()     # real-cases check: it really is that build
 
 
 def test_the_unaffiliated_note_splits_identity_from_look(wiz):

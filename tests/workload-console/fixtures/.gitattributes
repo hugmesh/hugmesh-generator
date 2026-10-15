@@ -1,0 +1,7 @@
+# BYTE-EXACT captures of the SAME `du --help` (GNU coreutils 9.11, Gentoo 9.11-r1
+# p0) with and without terminal decoration. parser_self_test() in
+# exec_argv_property.py asserts that stripping the decorated one reproduces the
+# plain one EXACTLY, so any end-of-line normalisation on a checkout that normalises
+# would break a test whose whole subject is bytes. Marked binary: git hands these
+# back unchanged on every platform.
+*.txt -text

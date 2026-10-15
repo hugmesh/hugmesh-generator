@@ -219,11 +219,20 @@ spec:
           # Matches POSITIVELY on Accept: text/html so every asset/XHR/
           # remoteEntry.json request — including any with no Accept header —
           # falls through to the remote routes below, unchanged.
-          # Excludes /social/phpbb (server-rendered, must serve its own HTML) and
-          # /api-docs (mounted in the shell at /admin/docs, so it never collides).
+          # Excludes /social/phpbb (server-rendered, must serve its own HTML),
+          # /api-docs (mounted in the shell at /admin/docs, so it never
+          # collides) and /login (deliberately — the standalone login-ui is
+          # the designed door). hugmesh-generator#381: /user, /admin and /mod
+          # ARE in-shell remotes with their own routes below (like the ones
+          # already listed) and were missing here too — a compose-lane probe
+          # of /user/profile was measured serving user-ui's own standalone
+          # index.html instead of the shell. tests/scripts/
+          # test-deeplink-remote-coverage.sh asserts every in-shell `*-ui`
+          # remote route's Path is present here (and on the compose twin) and
+          # that /login/** never is.
           - id: remote-deeplink-to-host-shell
             uri: http://hugmesh-host-shell.hugmesh-frontend.svc.cluster.local:80
-            path: /social/matrix/**,/social/mastodon/**,/social/forum/**,/wiki/**,/tube/**,/owncast/**,/character-studio/**,/character-forge/**
+            path: /social/matrix/**,/social/mastodon/**,/social/forum/**,/wiki/**,/tube/**,/owncast/**,/character-studio/**,/character-forge/**,/admin/**,/mod/**,/user/**
             header: "Accept, .*text/html.*"
           - id: matrix-ui
             uri: http://hugmesh-matrix-ui.hugmesh-frontend.svc.cluster.local:80
@@ -441,12 +450,38 @@ spec:
           - id: hugmesh-user-bff-api-register
             uri: https://hugmesh-user-bff-api.hugmesh-backend.svc.cluster.local:8080
             path: /bff/register/**
+          # BAN-APPEAL CARVE-OUT (hugmesh-generator#480), same shape as the
+          # register/complete carve-out directly above: admin-bff owns POST+GET
+          # /bff/me/appeal (AccountAppealUserController) — a curtailed/suspended
+          # principal's own appeal surface — under the SAME /bff/me/** prefix
+          # user-bff's entry below claims. Without this exact-path entry ABOVE
+          # it, /bff/me/** swallows /bff/me/appeal and a suspended account's own
+          # appeal POST/GET 404s on the cluster (recorded on #366, this is the
+          # sixth path in that family). Compose already gets this right (its
+          # /bff/user-bff entry lists EXACT paths, never a /bff/me/** subtree),
+          # so this brings the cluster table in line. MORE SPECIFIC FIRST — same
+          # reason /bff/register/complete sits above /bff/register/**.
+          - id: hugmesh-admin-bff-api-me-appeal
+            uri: https://hugmesh-admin-bff-api.hugmesh-backend.svc.cluster.local:8080
+            path: /bff/me/appeal
           - id: hugmesh-user-bff-api-me
             uri: https://hugmesh-user-bff-api.hugmesh-backend.svc.cluster.local:8080
             path: /bff/me/**
           - id: hugmesh-user-bff-api-session
             uri: https://hugmesh-user-bff-api.hugmesh-backend.svc.cluster.local:8080
             path: /bff/session
+          # /bff/sessionOut (hugmesh-generator#549) — the POST alias clients
+          # (host-shell, login-ui) actually call for sign-out. SsoAuthController
+          # serves it as an alias of DELETE /bff/session (same cookie-read, same
+          # expiry). Before this route existed the path fell through to the
+          # /bff/** admin-bff catch-all below, whose own sessionOut read the
+          # token from a header a browser never sends (bffTokenFrom(null,
+          # header)) and could not expire the cookie (admin-bff cookie mode
+          # defaults off) — a complete no-op sign-out. MORE SPECIFIC FIRST, same
+          # reason every other exact-path entry on this table sits above /bff/**.
+          - id: hugmesh-user-bff-api-sessionout
+            uri: https://hugmesh-user-bff-api.hugmesh-backend.svc.cluster.local:8080
+            path: /bff/sessionOut
           - id: hugmesh-user-bff-api-provision
             uri: https://hugmesh-user-bff-api.hugmesh-backend.svc.cluster.local:8080
             path: /bff/provision/**
@@ -609,8 +644,17 @@ spec:
           # hop presents the fe-gateway client cert. The vanity resolve is still a
           # PUBLIC read at the federation app layer (permitAll GET vanity/**) — mTLS
           # only authenticates the GATEWAY pod to federation, not the end user.
+          # PER BRAND DOMAIN (hugmesh-generator#582): `vanity: true` tells the chart
+          # that this is the route each entry of `vanityDomains` extends — for a
+          # brand domain `brandb.example` listed there the predicate becomes
+          # Host=*.hugmesh.net,*.brandb.example and the Ingress admits
+          # *.brandb.example beside the extraHosts entry above. The literal `host`
+          # stays the cluster domain's own (the builders' rebrand rewrites it with
+          # every other hugmesh.net). `vanityDomains` is never set in git and has no
+          # writer yet — see the chart's values.yaml.
           - id: vanity-subdomain
             host: "*.hugmesh.net"
+            vanity: true
             uri: https://hugmesh-federation-api.hugmesh-backend.svc.cluster.local:8080
             filters:
               - SetPath=/api/federation/vanity

@@ -1,6 +1,6 @@
 """theme_presets — the wizard's named theme catalogue.
 
-Pins the properties that make the catalogue safe to offer blind from a GUI:
+Pins the properties that make the catalogue safe to offer from a GUI without inspecting each one:
 every preset derives on both ramps, text stays WCAG-legible after the light-mode
 neutral swap, the flag gradients carry the REAL stripe values, and the light
 neutral ramp can never leave a dark-ramp token dangling.

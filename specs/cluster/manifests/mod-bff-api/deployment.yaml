@@ -114,10 +114,15 @@ spec:
             - { name: SSL_TRUST_STORE_TYPE, value: "PKCS12" }
             - { name: SPRING_CONFIG_ADDITIONAL_LOCATION, value: "file:/stores/" }
             # OAuth2 resource server: validate the cluster Casdoor JWT itself.
-            # JWKS auto-discovered from the issuer well-known; no jwk-set-uri /
-            # client secret needed (pure resource server, like federation-api).
+            # No client secret needed (pure resource server, like federation-api).
             - name: CASDOOR_ISSUER_URI
               value: "https://id.hugmesh.net"
+            # Key fetch stays IN-CLUSTER: the public issuer host need not resolve
+            # here (on kind it does not: hugmesh-generator#693). The issuer URI above
+            # stays the `iss` claim only. Same value as the gateway chart's
+            # casdoor.jwksUri; pinned by tests/scripts/test-bff-jwks-in-cluster.sh.
+            - name: CASDOOR_JWKS_URI
+              value: "http://casdoor.hugmesh-pki.svc.cluster.local:8000/.well-known/jwks"
             # ── Casdoor identity contract (must AGREE with casdoor-init) ────────
             # The Casdoor ORGANIZATION logins resolve against. casdoor-init +
             # init_data.json create org `hugmesh`; this app's application.yml still
@@ -179,6 +184,24 @@ spec:
             # `modbff_app` (DML only, no DDL), created by mod-bff-db's
             # initdb/10-roles.sh. Password from its OWN ESO Secret
             # mod-bff-db-app-auth (the SAME the DB pod's MODBFF_APP_PASSWORD mounts).
+            # R2DBC POOL SIZE (hugmesh-generator#663: the kind sign-in answered 500).
+            # The app role below is created with CONNECTION LIMIT 20 (initdb/10-roles.sh)
+            # and the database runs with max_connections=60. With NO pool setting the
+            # Spring Boot / r2dbc-pool default of 10 connections per replica applies, so
+            # the autoscaler's maxReplicas of 6 asked for 6 x 10 = 60 against a limit of
+            # 20: the first two pods took the whole budget and every pod that came later
+            # failed every query ("Failed to obtain R2DBC Connection"; Postgres says
+            # FATAL: too many connections for role). Sized so the limit also holds during
+            # a rolling update at the top of the band: (6 replicas + 2 surge pods, the
+            # default maxSurge of 25 %) x 2 = 16 <= 20. initial-size 1: a pod needs one
+            # connection to start and opens the second only under load. initial-size must
+            # not exceed max-size (r2dbc-pool refuses to build the pool).
+            # tests/scripts/test-db-connection-budget.sh pins this for every Deployment
+            # that has a database role.
+            - name: SPRING_R2DBC_POOL_INITIAL_SIZE
+              value: "1"
+            - name: SPRING_R2DBC_POOL_MAX_SIZE
+              value: "2"
             - name: SPRING_R2DBC_URL
               value: "r2dbc:postgresql://mod-bff-db.hugmesh-backend.svc.cluster.local:5432/modbff"
             - name: SPRING_R2DBC_USERNAME
@@ -226,6 +249,20 @@ spec:
             # degrades to the pre-fix no-header behaviour (fail-open by design — every
             # downstream has its own fail-closed gate).
             - { name: APP_BFF_EXCHANGE_ENABLED, value: "true" }
+            # Positive-swap cache TTL = the suspension-bypass window (a cache hit
+            # skips admin-bff's suspensionGate() re-check on the exchange above).
+            # 0 = cache OFF, every exchange re-consults the gate. Decision 60
+            # (generator#347, operator 2026-09-18) extended decision 7's "B: zero
+            # window now" (hugmesh-gateway#2, pinned for the gateway in
+            # #398/PR#406) to this service's own mirror of the cache: "extend it:
+            # default 0 in both BFFs". The image default is 0 since
+            # hugmesh-mod-bff-api PR #20 (2026-09-18, mod-bff-api#15); image tags
+            # older than that default to 5000 (a 5 s window). This line states
+            # the posture regardless of image tag, mirroring
+            # admin-bff-api/deployment.yaml. tests/scripts/
+            # test-fe-bff-route-lane-parity.sh asserts both lanes carry this pin
+            # as the string "0".
+            - { name: APP_BFF_EXCHANGE_CACHE_TTL_MS, value: "0" }
           # HTTPS exec probe: client-auth=need rejects a cert-less kubelet httpGet,
           # so curl PRESENTS this pod's client cert and validates the server cert
           # against the cluster CA (--resolve maps the SAN to loopback). See

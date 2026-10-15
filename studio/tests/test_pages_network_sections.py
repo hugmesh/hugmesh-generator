@@ -270,7 +270,7 @@ def test_section_titles_are_not_eaten_as_mnemonics(wiz):
     "Identity & Domain" rendered as "Identity _Domain". Caught by looking at the page,
     not by any assertion — hence this one.
 
-    NON-VACUITY (issue #226): the Title Case pass could have spelled every '&' out as
+    REAL-CASES CHECK (issue #226): the Title Case pass could have spelled every '&' out as
     "and", which would leave this guard passing while proving nothing. It asserts on
     the ONE section title that deliberately keeps an ampersand, and this second
     assertion is what says so — if the last '&' ever leaves the page's section titles,
@@ -305,7 +305,7 @@ def test_out_of_scope_egress_section_leaves_no_orphan_header(wiz):
 
 
 def test_in_scope_egress_section_is_shown_and_usable(wiz):
-    """Non-vacuity for the test above: the section must really come back in scope."""
+    """Real-cases check for the test above: the section must really come back in scope."""
     page = _net(wiz, mode="cloud", role="laptop", platform="x86")
     assert page.egress_section.isVisible()
     assert page.egress_row.isVisibleTo(page)
@@ -352,7 +352,7 @@ def test_collapsing_every_section_does_not_change_the_emitted_argv(wiz):
     assert collapsed_argv == expanded_argv, (
         "collapsing a section changed the emitted argv — collapse must be presentation "
         "only")
-    # non-vacuity: the argv actually carries the collapsed sections' values
+    # real-cases check: the argv actually carries the collapsed sections' values
     assert "--with-character-studio" in expanded_argv
     assert "--no-tor" in expanded_argv
 
@@ -442,7 +442,7 @@ def test_an_untouched_section_still_tracks_the_config_on_revisit(wiz):
 
 
 def test_manual_expansion_state_is_presentation_only(wiz):
-    """Belt and braces on the load-bearing invariant: touching the folds changes no argv."""
+    """Belt and braces on the invariant that matters: touching the folds changes no argv."""
     page = _net(wiz, mode="mesh", role="backend", platform="x86")
     page.validatePage()
     before = list(wiz.cfg.to_cli_args())
@@ -515,7 +515,7 @@ def test_the_domain_rows_are_gone_on_a_standalone_x86_image(wiz):
 
 
 def test_the_domain_row_STAYS_on_a_standalone_rpi5_image(wiz):
-    """The non-vacuity half, and the regression the platform-scoped predicate exists to
+    """The real-cases check half, and the regression the platform-scoped predicate exists to
     prevent. A blanket `mode == "standalone"` hide would have looked right on the
     operator's x86 image and silently blanked a field NINE arm64 builders parse:
     core/config.py::_arm_common_args emits --cluster-domain with no mode fork at all, and
@@ -549,7 +549,7 @@ def test_the_identity_section_header_goes_with_its_last_row(wiz):
 
 
 def test_a_half_rejected_identity_section_keeps_its_header(wiz):
-    """Non-vacuity for the test above: the section must only vanish when it is EMPTY. An
+    """Real-cases check for the test above: the section must only vanish when it is EMPTY. An
     affiliated standalone desktop still owns a brand, so the header stays and carries the
     four rows that survive."""
     page = _net(wiz, mode="standalone", role="standalone-thick", platform="x86")
@@ -611,7 +611,7 @@ def test_the_services_section_header_goes_with_its_box(wiz):
 
 
 def test_the_services_section_survives_where_the_cluster_is_real(wiz):
-    """Non-vacuity for the test above, on both sides of the interesting boundary.
+    """Real-cases check for the test above, on both sides of the interesting boundary.
 
     * standalone rpi5 'generic' is NODE-class and DOES bake the cluster tree (G16), so it
       keeps the picker even though it is a standalone image;
@@ -748,7 +748,7 @@ def test_every_heading_and_caption_on_the_page_is_title_case(wiz):
         _assert_title_case(title, "services table group")
     for attr in _ROW_CAPTIONS:
         _assert_title_case(_caption(getattr(page, attr)), attr)
-    # NON-VACUITY: the loops above are all over collections, so an attribute rename or a
+    # REAL-CASES CHECK: the loops above are all over collections, so an attribute rename or a
     # dropped row would make them quietly examine less. Pin the counts the page has.
     assert len(_ROW_CAPTIONS) == 15
     assert len(page.group_items) >= 7
@@ -775,7 +775,7 @@ def test_the_two_renames_left_no_second_name_behind(wiz):
     blob = " ".join(visible).lower()
     assert "superdomain" not in blob, "a second name for the root domain is still on screen"
     assert "orchestration" not in blob, blob
-    # NON-VACUITY: the sweep is only worth anything if it is actually looking at the
+    # REAL-CASES CHECK: the sweep is only worth anything if it is actually looking at the
     # renamed control's own words.
     assert "tailscale root domain" in blob
 
@@ -801,7 +801,7 @@ def test_every_field_carries_its_own_explanatory_tooltip(wiz):
             assert w.toolTip() == help_text, (
                 f"a live field lost its help: {help_text[:60]!r} -> {w.toolTip()[:60]!r}")
             live += 1
-    # NON-VACUITY, twice over: the assertion sits behind an `if`, and the whole point is
+    # REAL-CASES CHECK, twice over: the assertion sits behind an `if`, and the whole point is
     # that the help SURVIVES the gates rather than being written before them.
     assert live >= 15, f"only {live} live fields were examined"
     assert len({h for _w, h in targets}) == len(targets), "two fields share one tooltip"
@@ -821,7 +821,7 @@ def test_the_in_table_edge_ai_cells_have_help_that_survives_their_gate(wiz):
     Named by attribute rather than read out of the production list, so adding a sixth
     cell without help fails here."""
     page = _net(wiz, mode="mesh", role="backend", platform="x86")
-    # NON-VACUITY: the row itself is on screen and the gate says SUPPORTED here, which is
+    # REAL-CASES CHECK: the row itself is on screen and the gate says SUPPORTED here, which is
     # the branch that writes "" over whatever __init__ had put there.
     assert page.edge_ai_runtime.isVisibleTo(page) and page.edge_ai_runtime.isEnabled()
     for name in ("edge_ai", "edge_ai_runtime", "edge_ai_models",

@@ -1,0 +1,410 @@
+#!/bin/bash
+# hugmesh-tor-export-sync — the node half of hugmesh-admin-bff-api#108
+# (hugmesh-generator#629): fetch admin-bff's SIGNED per-node Tor export, verify it, apply
+# it to the two node files hugmesh-tor-reconcile reads, re-render the torrc, and report
+# this node's exported onions back.
+#
+# It is the RUNTIME WRITER of
+#     /etc/hugmesh/tor/upstream    (one "host:port" line, or absent = the agent default)
+#     /etc/hugmesh/tor/domains     (one Tor-domain slug per line; empty = no per-domain onion)
+# — the files hugmesh-tor-reconcile turns into the managed torrc. Before this agent the
+# image bake or a person were the only writers. A sibling of hugmesh-tor-reconcile, run
+# from the SAME cron drop-in (/etc/cron.d/hugmesh-tor-reconcile, every minute), so it is
+# installed exactly when the 'tor' optional service is selected and inert otherwise.
+# Baked into every rpi5 image and every x86 image except --unaffiliated, like its sibling.
+#
+# TRANSPORT — nothing new. Both calls use the node.env the other node agents read
+# (/etc/hugmesh/registry/node.env: MACHINE_KEY_FP, BFF_EXPORT_URL, BFF_CLIENT_CERT,
+# BFF_CLIENT_KEY, BFF_CA) and the same curl idiom:
+#   1. GET  <BFF>/bff/admin/tor/export?node=<MACHINE_KEY_FP>   — the in-cluster mTLS
+#      identity hugmesh-vpn-reconcile presents for /bff/admin/egress-vpn/export. The
+#      fingerprint is URL-ENCODED (--data-urlencode): a raw '+' in a query string is a
+#      space on the server side.
+#   2. POST <BFF>/bff/internal/tor/onions   — the /bff/internal/** channel
+#      hugmesh-device-enrollment-report uses (mTLS, no JWT). admin-bff gates that prefix on
+#      ROLE_SERVICE, satisfied by the in-cluster X-Internal-Token header; the token is read
+#      from the file node.env names in BFF_INTERNAL_TOKEN_FILE (default
+#      /etc/hugmesh/registry/internal-token) and sent via a 0600 header file, never on the
+#      command line. Without the file the report is still sent (an unarmed BFF accepts it)
+#      and the agent says that an armed one will answer 401.
+#
+# THE EXPORT STEP — every rule from #629, in this order:
+#   * VERIFY FIRST. signed==true, the detached Ed25519 over the canonical v1-tor bytes
+#     (tor-verify.sh recomputes them) against the BAKED key-USB public half
+#     /etc/hugmesh/registry/registry-pub.ed25519, and a generation STRICTLY above the
+#     last applied one. Unsigned, a bad signature, a replay or a rollback => change
+#     NOTHING, keep the last-good files, log why.
+#   * body.node must equal THIS node's MACHINE_KEY_FP (a string compare after verifying;
+#     the fingerprint is inside the signed bytes). A foreign export is refused. The export
+#     for an UNKNOWN fingerprint is an empty signed body (node="", nothing managed): it
+#     fails this check and changes nothing.
+#   * upstreamManaged=false  => /etc/hugmesh/tor/upstream is LEFT ALONE (bake or a person).
+#     upstreamManaged=true, upstream=""  => the file is REMOVED (the agent default applies).
+#     upstreamManaged=true, upstream=X   => the file holds X as its one line.
+#   * domainsManaged=false   => /etc/hugmesh/tor/domains is LEFT ALONE (a baked list stays).
+#     domainsManaged=true    => the file holds exactly the listed slugs, one per line; an
+#     empty list is an EMPTY FILE (withdraws every per-domain onion; the primary stays).
+#   * Values are re-checked against hugmesh-tor-reconcile's own validators (the SAME
+#     _UPSTREAM_RE and slug pattern, pinned equal by tests/scripts/test-tor-node-contract.sh)
+#     before anything is written; admin-bff already checked them, this is depth.
+#   * Every write is ATOMIC: a temp file in the SAME directory, then rename over the
+#     target. A crash between write and rename leaves the old file in place.
+#   * The last-applied generation advances ONLY after every write succeeded, so a partly
+#     applied export is retried next cycle (idempotent: same bytes => no change).
+#   * After a write, hugmesh-tor-reconcile is run so the torrc changes in the same pass
+#     (it reloads a running tor; a per-domain onion is minted and exported by it).
+#
+# THE REPORT STEP — after EVERY export step, including when nothing changed and when the
+# export was refused, so a withdrawn slug drops out of the operator view:
+#     {"machineKeyFp": fp, "primary": <content of /var/lib/hugmesh/tor/hostname, omitted
+#      when absent>, "domains": {"<slug>": <content of /var/lib/hugmesh/tor/<slug>.hostname>}}
+# Only a v3 onion ([a-z2-7]{56}.onion) under a valid slug is reported (anything else is
+# logged and skipped, so one stray file cannot get the whole report refused); at most 64
+# domains. A 422 (or any non-2xx) is LOGGED with the answer and never aborts the agent.
+#
+# RECOVERY AFTER A RESEED. The export generation is the node's config_generation plus the
+# highest tor-onion capability generation, and both restart low after a rebuilt or
+# reseeded admin-bff database. The strict rule would then refuse every export. The
+# operator-run reset is
+#     hugmesh-tor-export-sync --reset-generation
+# on the node: it forgets the stored last-applied generation (and only that), so the
+# next export is accepted once it VERIFIES. A lower generation is never accepted silently.
+#
+# FAIL-SOFT, like its sibling: a missing input, an unreachable BFF or a refused export
+# keeps the last-good files and exits 0, so a failed sync never tears down a working
+# onion. Exit 2 only for a bad command line.
+#
+# TEST SEAM: HUGMESH_TOR_ROOT prefixes every filesystem path (the same seam as
+# hugmesh-tor-reconcile); HUGMESH_TOR_RECONCILE names the reconcile binary to run after a
+# write; HUGMESH_TOR_VERIFY_LIB names the verify library. The hermetic suite
+# tests/scripts/test-tor-export-sync.sh stubs curl on PATH, signs fixtures with a
+# throwaway Ed25519 key and bakes its public half into the sandbox root.
+set -uo pipefail
+
+R="${HUGMESH_TOR_ROOT:-}"
+NODE_ENV="${R}/etc/hugmesh/registry/node.env"
+PUB_KEY="${R}/etc/hugmesh/registry/registry-pub.ed25519"
+INTERNAL_TOKEN_DEFAULT="/etc/hugmesh/registry/internal-token"
+CACHE_DIR="${R}/var/lib/hugmesh/tor-export"
+EXPORT_JSON="${CACHE_DIR}/export.json"
+LAST_GOOD="${CACHE_DIR}/last-good-generation"
+TOR_ETC="${R}/etc/hugmesh/tor"
+UPSTREAM_FILE="${TOR_ETC}/upstream"
+DOMAINS_FILE="${TOR_ETC}/domains"
+EXPORT_DIR="${R}/var/lib/hugmesh/tor"
+RECONCILE="${HUGMESH_TOR_RECONCILE:-/usr/sbin/hugmesh-tor-reconcile}"
+LOG_TAG="hugmesh-tor-export-sync"
+MAX_DOMAINS=64
+
+# The SAME validators as hugmesh-tor-reconcile (the contract test pins the lines equal).
+_UPSTREAM_RE='^([A-Za-z0-9.-]+|\[[0-9A-Fa-f:.]+\]):[0-9]{1,5}$'
+_SLUG_RE='^[a-z0-9][a-z0-9-]{0,62}$'
+# admin-bff's TorOnionRules: a v3 onion address.
+_ONION_RE='^[a-z2-7]{56}\.onion$'
+
+# The verify library: next to this script's tree first (/usr/sbin/../lib/hugmesh on a
+# node, specs/usr/sbin/../lib/hugmesh in the repo), then the image path.
+_self_dir="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)"
+VERIFY_LIB="${HUGMESH_TOR_VERIFY_LIB:-}"
+if [ -z "${VERIFY_LIB}" ]; then
+    if [ -r "${_self_dir}/../lib/hugmesh/tor-verify.sh" ]; then
+        VERIFY_LIB="${_self_dir}/../lib/hugmesh/tor-verify.sh"
+    else
+        VERIFY_LIB="/usr/lib/hugmesh/tor-verify.sh"
+    fi
+fi
+
+log()  { echo "[${LOG_TAG} $(date -u '+%Y-%m-%dT%H:%M:%SZ')] $*"; command -v logger >/dev/null 2>&1 && logger -t "${LOG_TAG}" -- "$*" 2>/dev/null || true; }
+warn() { log "WARNING: $*"; }
+have() { command -v "$1" >/dev/null 2>&1; }
+
+# Read a bare KEY=VALUE from node.env WITHOUT sourcing it (identical to the sync agents).
+read_env() {
+    local k line
+    k="$1"
+    line="$(grep -E "^${k}=" "${NODE_ENV}" 2>/dev/null | head -1)" || return 1
+    [ -n "${line}" ] || return 1
+    printf '%s' "${line#*=}" | tr -d '"'"'"' '
+}
+
+# atomic_install TARGET CONTENT-FILE -> 0 written, 2 unchanged, 1 failed.
+# The candidate is created in the TARGET's own directory and renamed over it, so a crash
+# between write and rename leaves the old target untouched. 0644 like the files the bake
+# writes (tor-reconcile reads them as root; nothing secret is in them).
+atomic_install() {
+    local target content tmp
+    target="$1"; content="$2"
+    mkdir -p "$(dirname "${target}")" 2>/dev/null || return 1
+    if [ -e "${target}" ] && cmp -s "${content}" "${target}"; then
+        return 2
+    fi
+    tmp="$(mktemp "${target}.hugmesh.XXXXXX" 2>/dev/null)" || return 1
+    if ! cat "${content}" > "${tmp}" 2>/dev/null; then rm -f "${tmp}"; return 1; fi
+    chmod 0644 "${tmp}" 2>/dev/null || true
+    if ! mv -f "${tmp}" "${target}" 2>/dev/null; then rm -f "${tmp}"; return 1; fi
+    return 0
+}
+
+# Remember a generation atomically (temp + rename in the state dir).
+store_last_good() {
+    local gen tmp
+    gen="$1"
+    tmp="$(mktemp "${LAST_GOOD}.hugmesh.XXXXXX" 2>/dev/null)" || return 1
+    printf '%s\n' "${gen}" > "${tmp}" 2>/dev/null || { rm -f "${tmp}"; return 1; }
+    mv -f "${tmp}" "${LAST_GOOD}" 2>/dev/null || { rm -f "${tmp}"; return 1; }
+}
+
+reset_generation() {
+    local old
+    if [ -e "${LAST_GOOD}" ]; then
+        old="$(tr -dc '0-9' < "${LAST_GOOD}" 2>/dev/null)"
+        rm -f "${LAST_GOOD}" 2>/dev/null || { warn "could not remove ${LAST_GOOD}"; return 1; }
+        log "operator reset: forgot the last-applied export generation (${old:-?}); the next export is accepted once it VERIFIES, whatever its generation (a reseeded admin-bff restarts low)"
+    else
+        log "operator reset: no last-applied generation stored (${LAST_GOOD}) — nothing to forget"
+    fi
+    return 0
+}
+
+# ── the export step: fetch -> verify -> node guard -> apply -> remember -> re-render ──
+# Sets EXPORT_RESULT (a short phrase for the final log line). Never exits.
+EXPORT_RESULT="not attempted"
+export_step() {
+    local fetched gen body_node um up dm slugs s changed failed rc cand n
+    if [ ! -r "${VERIFY_LIB}" ]; then
+        warn "verify library missing (${VERIFY_LIB}) — export step skipped (fail-closed, files kept)"
+        EXPORT_RESULT="skipped: no verify library"; return 0
+    fi
+    # shellcheck source=/dev/null
+    if ! . "${VERIFY_LIB}" 2>/dev/null || ! declare -F tor_verify_export >/dev/null 2>&1; then
+        warn "could not source the verify library (${VERIFY_LIB}) — export step skipped (fail-closed, files kept)"
+        EXPORT_RESULT="skipped: verify library unusable"; return 0
+    fi
+    have openssl || { warn "openssl absent — cannot verify, export step skipped (fail-closed)"; EXPORT_RESULT="skipped: no openssl"; return 0; }
+    if [ ! -r "${PUB_KEY}" ]; then
+        warn "baked public key missing (${PUB_KEY#"${R}"}) — export step skipped (fail-closed, files kept)"
+        EXPORT_RESULT="skipped: no baked public key"; return 0
+    fi
+    mkdir -p "${CACHE_DIR}" 2>/dev/null || { warn "cannot create ${CACHE_DIR}"; EXPORT_RESULT="skipped: no state dir"; return 0; }
+    chmod 0700 "${CACHE_DIR}" 2>/dev/null || true
+
+    fetched="$(mktemp "${CACHE_DIR}/export.fetch.XXXXXX" 2>/dev/null)" || { warn "mktemp failed — export step skipped"; EXPORT_RESULT="skipped: mktemp"; return 0; }
+    local args=(--silent --show-error --fail --max-time 15 --cert "${BFF_CERT}" --key "${BFF_KEY}"
+                --get --data-urlencode "node=${FP}" -o "${fetched}")
+    [ -n "${BFF_CA}" ] && [ -r "${BFF_CA}" ] && args+=(--cacert "${BFF_CA}")
+    if ! curl "${args[@]}" "${EXPORT_URL}" 2>/dev/null; then
+        warn "fetch failed (${EXPORT_URL}?node=…) — keeping the last-good files"
+        rm -f "${fetched}"; EXPORT_RESULT="fetch failed"; return 0
+    fi
+    [ -s "${fetched}" ] || { warn "empty export body — keeping the last-good files"; rm -f "${fetched}"; EXPORT_RESULT="empty body"; return 0; }
+
+    # 1. VERIFY FIRST: signed, Ed25519 over the canonical bytes, generation strictly above.
+    if ! tor_verify_export "${fetched}" "${PUB_KEY}" "${LAST_GOOD}"; then
+        gen="$(tor_gen "${fetched}" 2>/dev/null || true)"
+        warn "export REFUSED (unsigned, bad signature, or generation '${gen:-?}' not above the last applied '$(tr -dc '0-9' < "${LAST_GOOD}" 2>/dev/null || true)') — nothing changed, last-good files kept"
+        rm -f "${fetched}"; EXPORT_RESULT="refused: verify"; return 0
+    fi
+    gen="$(tor_gen "${fetched}")" || gen=""
+    # 2. node binding: the fingerprint inside the signed bytes must be OURS.
+    body_node="$(tor_node "${fetched}" 2>/dev/null || true)"
+    if [ "${body_node}" != "${FP}" ]; then
+        warn "export gen=${gen} is for node '${body_node:-<none>}', not this node — REFUSED (an unknown fingerprint gets an empty export), nothing changed"
+        rm -f "${fetched}"; EXPORT_RESULT="refused: foreign node"; return 0
+    fi
+    um="$(tor_upstream_managed "${fetched}")"; up="$(tor_upstream "${fetched}")"
+    dm="$(tor_domains_managed "${fetched}")"
+    slugs="$(tor_domains "${fetched}")"
+    # 3. depth: the SAME validators the reconcile applies; refuse rather than write junk.
+    if [ "${um}" = true ] && [ -n "${up}" ] && ! [[ "${up}" =~ ${_UPSTREAM_RE} ]]; then
+        warn "export gen=${gen} carries a malformed upstream '${up}' (want host:port) — REFUSED, nothing changed"
+        rm -f "${fetched}"; EXPORT_RESULT="refused: malformed upstream"; return 0
+    fi
+    if [ "${dm}" = true ] && [ -n "${slugs}" ]; then
+        n=0
+        while IFS= read -r s || [ -n "${s}" ]; do
+            [ -n "${s}" ] || continue
+            n=$((n + 1))
+            if ! [[ "${s}" =~ ${_SLUG_RE} ]]; then
+                warn "export gen=${gen} carries an invalid Tor domain slug '${s}' — REFUSED, nothing changed"
+                rm -f "${fetched}"; EXPORT_RESULT="refused: invalid slug"; return 0
+            fi
+        done <<<"${slugs}"
+        # One line per array element: a slug smuggling a newline would read as two.
+        if [ "${n}" != "$(jq -r '(.body.domains // []) | length' "${fetched}" 2>/dev/null)" ]; then
+            warn "export gen=${gen}: the domain list does not read as one slug per entry — REFUSED, nothing changed"
+            rm -f "${fetched}"; EXPORT_RESULT="refused: domain list shape"; return 0
+        fi
+    fi
+
+    # 4. apply, each file atomically; honour the managed flags exactly.
+    changed=false; failed=false
+    if [ "${um}" = true ]; then
+        if [ -z "${up}" ]; then
+            if [ -e "${UPSTREAM_FILE}" ]; then
+                if rm -f "${UPSTREAM_FILE}" 2>/dev/null; then changed=true; log "removed ${UPSTREAM_FILE#"${R}"} (managed, empty upstream => the agent default)"
+                else failed=true; warn "could not remove ${UPSTREAM_FILE#"${R}"}"; fi
+            fi
+        else
+            cand="$(mktemp "${CACHE_DIR}/cand.XXXXXX" 2>/dev/null)" || { failed=true; cand=""; }
+            if [ -n "${cand}" ]; then
+                printf '%s\n' "${up}" > "${cand}"
+                atomic_install "${UPSTREAM_FILE}" "${cand}"; rc=$?
+                rm -f "${cand}"
+                case "${rc}" in
+                    0) changed=true; log "wrote ${UPSTREAM_FILE#"${R}"} = ${up}" ;;
+                    2) ;;
+                    *) failed=true; warn "could not write ${UPSTREAM_FILE#"${R}"} (old file kept)" ;;
+                esac
+            fi
+        fi
+    else
+        log "upstream not managed by the export — ${UPSTREAM_FILE#"${R}"} left alone"
+    fi
+    if [ "${dm}" = true ]; then
+        cand="$(mktemp "${CACHE_DIR}/cand.XXXXXX" 2>/dev/null)" || { failed=true; cand=""; }
+        if [ -n "${cand}" ]; then
+            : > "${cand}"
+            n=0
+            if [ -n "${slugs}" ]; then
+                while IFS= read -r s || [ -n "${s}" ]; do
+                    [ -n "${s}" ] || continue
+                    printf '%s\n' "${s}" >> "${cand}"; n=$((n + 1))
+                done <<<"${slugs}"
+            fi
+            atomic_install "${DOMAINS_FILE}" "${cand}"; rc=$?
+            rm -f "${cand}"
+            case "${rc}" in
+                0) changed=true; log "wrote ${DOMAINS_FILE#"${R}"} (${n} Tor domain slug(s)$( [ "${n}" -eq 0 ] && echo '; empty file withdraws every per-domain onion'))" ;;
+                2) ;;
+                *) failed=true; warn "could not write ${DOMAINS_FILE#"${R}"} (old file kept)" ;;
+            esac
+        fi
+    else
+        log "domains not managed by the export — ${DOMAINS_FILE#"${R}"} left alone"
+    fi
+
+    if ${failed}; then
+        warn "export gen=${gen} only partly applied — last-applied generation NOT advanced; retried next cycle"
+        rm -f "${fetched}"; EXPORT_RESULT="partly applied gen=${gen}"; return 0
+    fi
+    # 5. remember: cache + generation, both atomically, ONLY now.
+    mv -f "${fetched}" "${EXPORT_JSON}" 2>/dev/null || { rm -f "${fetched}"; warn "could not cache the export (continuing)"; }
+    if ! store_last_good "${gen}"; then
+        warn "could not store the last-applied generation ${gen} — the same export will be re-applied next cycle (idempotent)"
+    fi
+    if ${changed}; then
+        log "applied export gen=${gen} (upstreamManaged=${um} domainsManaged=${dm}) — files changed"
+        # 6. re-render the torrc in the same pass (reload a running tor; mint new onions).
+        if [ -x "${RECONCILE}" ]; then
+            if "${RECONCILE}" >/dev/null 2>&1; then log "re-rendered the torrc via ${RECONCILE}"
+            else warn "${RECONCILE} returned non-zero — the torrc is re-rendered by its next cron run"; fi
+        else
+            warn "${RECONCILE} not executable — the torrc is re-rendered by its next cron run"
+        fi
+        EXPORT_RESULT="applied gen=${gen}, files changed"
+    else
+        log "export gen=${gen} verified and already in force (nothing changed)"
+        EXPORT_RESULT="applied gen=${gen}, nothing changed"
+    fi
+    return 0
+}
+
+# ── the report step: POST this node's exported onions (telemetry, best-effort) ──────
+report_step() {
+    local primary f slug v pairs n dom_json body bodyf resp hdr code tok_file tok url
+    primary=""
+    if [ -s "${EXPORT_DIR}/hostname" ]; then
+        primary="$(tr -d '[:space:]' < "${EXPORT_DIR}/hostname" 2>/dev/null)"
+        if ! [[ "${primary}" =~ ${_ONION_RE} ]]; then
+            warn "exported primary hostname '${primary}' is not a v3 onion — not reported"
+            primary=""
+        fi
+    fi
+    pairs=(); n=0
+    for f in "${EXPORT_DIR}"/*.hostname; do
+        [ -e "${f}" ] || continue
+        slug="$(basename "${f}" .hostname)"
+        [[ "${slug}" =~ ${_SLUG_RE} ]] || { warn "export file $(basename "${f}") has an invalid slug — not reported"; continue; }
+        v="$(tr -d '[:space:]' < "${f}" 2>/dev/null)"
+        [[ "${v}" =~ ${_ONION_RE} ]] || { warn "exported hostname for domain '${slug}' ('${v}') is not a v3 onion — not reported"; continue; }
+        if [ "${n}" -ge "${MAX_DOMAINS}" ]; then warn "more than ${MAX_DOMAINS} domain onions exported — '${slug}' not reported"; continue; fi
+        pairs+=("${slug}	${v}"); n=$((n + 1))
+    done
+    dom_json="$(printf '%s\n' "${pairs[@]+"${pairs[@]}"}" \
+        | jq -R -s 'split("\n") | map(select(length > 0) | split("\t")) | map({key: .[0], value: .[1]}) | from_entries' 2>/dev/null)" || dom_json='{}'
+    [ -n "${dom_json}" ] || dom_json='{}'
+    body="$(jq -nc --arg fp "${FP}" --arg primary "${primary}" --argjson domains "${dom_json}" \
+        '{machineKeyFp: $fp} + (if $primary != "" then {primary: $primary} else {} end) + {domains: $domains}' 2>/dev/null)" \
+        || { warn "could not build the onion report body — report skipped"; return 0; }
+
+    mkdir -p "${CACHE_DIR}" 2>/dev/null || true
+    bodyf="$(mktemp "${CACHE_DIR}/report.XXXXXX" 2>/dev/null)" || { warn "mktemp failed — report skipped"; return 0; }
+    resp="${bodyf}.resp"; hdr="${bodyf}.hdr"
+    printf '%s' "${body}" > "${bodyf}"
+    url="${BFF_ORIGIN%/}/bff/internal/tor/onions"
+    local args=(-sS -m 15 -X POST -H 'Content-Type: application/json' --data-binary "@${bodyf}"
+                -o "${resp}" -w '%{http_code}' --cert "${BFF_CERT}" --key "${BFF_KEY}")
+    [ -n "${BFF_CA}" ] && [ -r "${BFF_CA}" ] && args+=(--cacert "${BFF_CA}")
+    # The in-cluster service credential admin-bff's /bff/internal/** floor requires.
+    tok_file="$(read_env BFF_INTERNAL_TOKEN_FILE 2>/dev/null)" || tok_file=""
+    [ -n "${tok_file}" ] || tok_file="${INTERNAL_TOKEN_DEFAULT}"
+    tok=""
+    [ -r "${R}${tok_file}" ] && tok="$(tr -d '[:space:]' < "${R}${tok_file}" 2>/dev/null)"
+    if [ -n "${tok}" ]; then
+        ( umask 077; printf 'X-Internal-Token: %s\n' "${tok}" > "${hdr}" ) 2>/dev/null
+        args+=(-H "@${hdr}")
+    else
+        warn "no internal service token at ${tok_file} (node.env BFF_INTERNAL_TOKEN_FILE) — the report is sent without X-Internal-Token; an ARMED admin-bff answers 401"
+    fi
+    code="$(curl "${args[@]}" "${url}" 2>/dev/null)" || true
+    case "${code}" in
+        2[0-9][0-9]) log "reported onions to ${url}: primary=$( [ -n "${primary}" ] && echo yes || echo none ) domains=${n} (HTTP ${code})" ;;
+        422) warn "onion report REFUSED by admin-bff (HTTP 422): $(head -c 400 "${resp}" 2>/dev/null | tr '\n' ' ') — continuing" ;;
+        401|403) warn "onion report refused (HTTP ${code}): the /bff/internal service credential (X-Internal-Token) is missing or wrong — continuing" ;;
+        ''|000) warn "onion report could not reach ${url} — continuing" ;;
+        *) warn "onion report failed (HTTP ${code}): $(head -c 400 "${resp}" 2>/dev/null | tr '\n' ' ') — continuing" ;;
+    esac
+    rm -f "${bodyf}" "${resp}" "${hdr}" 2>/dev/null
+    return 0
+}
+
+main() {
+    case "${1:-}" in
+        '') ;;
+        --reset-generation) reset_generation; exit $? ;;
+        *) echo "usage: hugmesh-tor-export-sync [--reset-generation]" >&2; exit 2 ;;
+    esac
+    # ── pre-flight (every miss => keep the files, exit 0) ─────────────────────────
+    [ -r "${NODE_ENV}" ] || { warn "node.env missing (${NODE_ENV#"${R}"}) — not a mesh node? nothing to do"; exit 0; }
+    have curl || { warn "curl absent — nothing to do"; exit 0; }
+    have jq   || { warn "jq absent — nothing to do"; exit 0; }
+    FP="$(read_env MACHINE_KEY_FP)" || FP=""
+    [ -n "${FP}" ] || { warn "MACHINE_KEY_FP not baked in node.env — nothing to do"; exit 0; }
+    BFF_URL="$(read_env BFF_EXPORT_URL)"   || BFF_URL=""
+    BFF_CERT="$(read_env BFF_CLIENT_CERT)" || BFF_CERT=""
+    BFF_KEY="$(read_env BFF_CLIENT_KEY)"   || BFF_KEY=""
+    BFF_CA="$(read_env BFF_CA)"            || BFF_CA="/etc/hugmesh/pki/ca-chain.crt"
+    [ -n "${BFF_URL}" ] || { warn "BFF_EXPORT_URL unset — bootstrap/offline, keeping the files as they are"; exit 0; }
+    if [ -z "${BFF_CERT}" ] || [ -z "${BFF_KEY}" ] || [ ! -r "${BFF_CERT}" ] || [ ! -r "${BFF_KEY}" ]; then
+        warn "mTLS client cert/key not present — both calls would be rejected; keeping the files as they are"
+        exit 0
+    fi
+    # The BFF origin: the same derivation hugmesh-vpn-reconcile uses for its export URL
+    # (BFF_EXPORT_URL is the device-registry export, or a /bff/admin/... URL, or an origin).
+    case "${BFF_URL}" in
+        */bff/admin/*) BFF_ORIGIN="${BFF_URL%%/bff/admin/*}" ;;
+        */bff/*)       BFF_ORIGIN="${BFF_URL%%/bff/*}" ;;
+        *)             BFF_ORIGIN="${BFF_URL%/}" ;;
+    esac
+    EXPORT_URL="${BFF_ORIGIN}/bff/admin/tor/export"
+
+    export_step
+    report_step
+    log "sync complete (export: ${EXPORT_RESULT})"
+    exit 0
+}
+
+# Guarded so a test can source the functions (atomic_install, read_env) without running.
+if [ "${BASH_SOURCE[0]:-$0}" = "${0}" ]; then
+    main "$@"
+fi

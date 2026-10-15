@@ -31,13 +31,13 @@ import { tags } from './report-tags';
 // roles.ts login()), then replace the body of the matching stub.
 
 test.describe('PENDING (Phase 8/10): systems host shell role-conditional nav', () => {
-  test.skip('host shell shows admin nav for ROLE_ADMIN, hides it for ROLE_USER', async () => {
-    // TODO(Phase8): when SessionService derives isAdmin from the Casdoor JWT
-    // `roles` claim (not just the mock email), assert e2e-admin sees nav-admin and
-    // e2e-user does not. Surface: hugmesh-matrix-ui/projects/host nav.
-    expect(true).toBe(true);
-  });
-
+  // The 'host shell shows admin nav for ROLE_ADMIN, hides it for ROLE_USER' stub
+  // that sat here is LIVE in spec 33 (33-console-access-matrix.spec.ts): e2e-admin
+  // must see `nav-admin`, e2e-user must render none. hugmesh-host-shell's isAdmin()
+  // reads the session `roles` (menu.component.ts gates nav-admin on it), not the
+  // mock email this stub waited to see replaced. Its greyed-with-helptext twin, the
+  // `/home` admin launcher card, is LIVE in spec 24 (E).
+  //
   // The ROLE_GAMES games entry-point stub that sat here is now the LIVE describe
   // at the bottom of this file — the surface it waited on shipped.
 
