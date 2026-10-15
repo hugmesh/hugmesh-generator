@@ -318,10 +318,19 @@ class BrandSession:
         self.message = ""
         #: nothing is written to the record file until the person changed something
         self.touched = False
+        #: True once the person PICKED an item in this session: from then on a field the
+        #: pick left blank is blank (or the shipped id), never what the configuration
+        #: held from an earlier pick (see :meth:`record`)
+        self.picked = False
         rec = host.read()
         self.sb: brand_model.Superbrand = rec.superbrand
         self.copied_from: dict[str, str] = dict(rec.copied_from)
         self.look: brand_look.Look = host.look(self.sb)
+        # a brand's stylesheet is the superbrand's look plus its own overrides, so a
+        # design edit is checked against every brand's finished sheet as the rows stand
+        # NOW (read at each edit), not only against the superbrand's own budget
+        self.look.dependents = lambda: {
+            brand_model.brand_id(d): dict(d.look or {}) for d in host.rows()}
         self._allow_look_identity()
         #: the open design: True while the design step is the thing on screen
         self.designing = False
@@ -410,14 +419,20 @@ class BrandSession:
             self.designing = False
         elif kind == "profile":
             name = key.split(":", 1)[1]
-            self.sb = dataclasses.replace(self.sb, id=name)
+            # the profile IS the superbrand: nothing of a design abandoned a moment ago
+            # (its title, organisation, look) goes with it; the mesh's own naming stays
+            self.sb = brand_model.Superbrand(
+                id=name, public_name=self.sb.public_name, internal_root=self.sb.internal_root,
+                central_signin=self.sb.central_signin, ways=dict(self.sb.ways))
             self.copied_from = {}
+            self.look = self._fresh_look()
             self.host.profile_chosen(name)
             self.designing = False
         else:
             self.designing = False
         self.choice = key
         self.touched = True
+        self.picked = True
         return self._say("")
 
     def change(self) -> str:
@@ -510,7 +525,12 @@ class BrandSession:
         # a blank id, title or organisation keeps what the configuration already has
         # (the shipped values on an untouched one), so a design that only chose colours
         # is still a complete superbrand
-        keep = self.host.read().superbrand
+        # An untouched configuration's own values are the blanks' answer; after a pick
+        # they are not: the host holds what the LAST commit wrote, which is the design or
+        # profile the person just left, and keeping its title under the new pick (or its
+        # id under Create) made the record say something the drop-down no longer did.
+        keep = (brand_model.Superbrand(id=_SHIPPED["id"][1]) if self.picked
+                else self.host.read().superbrand)
         sb = dataclasses.replace(
             self.sb, look=self.record_look(), id=self.sb.id or keep.id,
             title=self.sb.title or keep.title, org=self.sb.org or keep.org)

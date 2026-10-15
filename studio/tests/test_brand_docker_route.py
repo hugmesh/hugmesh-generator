@@ -301,6 +301,49 @@ def test_the_brand_note_still_says_a_missing_profile(ctl):
     assert "No brands/nosuchprofile.conf" in ctl.brand_note.text()
 
 
+def test_no_missing_profile_note_is_drawn_under_the_default_create(ctl):
+    """brands/hugmesh.conf does not exist in this checkout, and the note about it is
+    about a profile the person PICKED. Under ‘Create a new superbrand’ (selected on first
+    sight) it read as a warning about something they did not choose. Looked at too: the
+    label is hidden, not an empty line."""
+    assert ctl.brand_picker.current_key() == "create"
+    assert not os.path.exists(os.path.join(GENERATOR_DIR, "brands", "hugmesh.conf"))
+    ctl._refresh_plan()
+    assert ctl.brand_note.text() == "" and not ctl.brand_note.isVisibleTo(ctl)
+    _type(ctl.superbrand_design, "id", "acme")           # a design being typed: still none
+    ctl._refresh_plan()
+    assert ctl.brand_note.text() == ""
+    # a picked profile with no file still says it (the sentence is kept for that case)
+    ctl.brand.setCurrentText("nosuchprofile")
+    ctl._refresh_plan()
+    assert ctl.brand_note.text().startswith("No brands/nosuchprofile.conf")
+
+
+def test_a_failure_in_the_brand_step_is_one_plain_sentence_on_the_page(ctl, monkeypatch, capsys):
+    """mount_brand, _brand_changed and leave_brand used to print a traceback to the
+    terminal and leave a half-drawn page with no word; each now says one sentence where
+    the person is looking and a good run clears it. (Mutation: make _brand_swallow only
+    print.)"""
+    def boom(*_a, **_k):
+        raise RuntimeError("deliberate")
+    for where, call in (("mount_brand", ctl.mount_brand), ("_brand_changed", ctl._brand_changed),
+                        ("leave_brand", ctl.leave_brand)):
+        with monkeypatch.context() as m:
+            m.setattr(ctl, "_brand_sync_in", boom)
+            ctl._brand_mounted = True
+            call()
+        assert ctl.brand_error.isVisibleTo(ctl), where
+        assert "nothing was changed" in ctl.brand_error.text(), where
+        assert "deliberate" in capsys.readouterr().err, where     # the debugger still gets it
+        ctl.mount_brand()                                          # a good run clears it
+        assert not ctl.brand_error.isVisibleTo(ctl) and ctl.brand_error.text() == "", where
+    # the drop-down says it too when a pick cannot be applied
+    p = ctl.brand_picker
+    monkeypatch.setattr(p.session, "choose", boom)
+    p.select("profile:example")
+    assert p.note.isVisibleTo(p) and "nothing was changed" in p.note.text()
+
+
 # ── 6. no modal in what this lane added ─────────────────────────────────────────────
 def test_nothing_this_lane_added_opens_a_dialog():
     for name in ("mount_brand", "leave_brand", "_brand_changed", "_brand_sync_in",
@@ -309,3 +352,45 @@ def test_nothing_this_lane_added_opens_a_dialog():
         src = inspect.getsource(getattr(lm_mod.LocalMeshPage, name))
         for bad in ("QMessageBox", ".exec(", "QInputDialog", "QFileDialog"):
             assert bad not in src, f"LocalMeshPage.{name} uses {bad}"
+
+
+# ── round 2: the pick and the record say the same thing, in both directions ─────────
+def _design_acme(ctl):
+    step = ctl.superbrand_design
+    _type(step, "id", "acme")
+    _type(step, "title", "Acme Mesh")
+    _type(step, "org", "example")
+    ctl.leave_brand()
+    cfg = ctl.collect_bootstrap()
+    assert cfg.brand == "acme" and cfg.superbrand.get("title") == "Acme Mesh"
+
+
+def test_picking_a_profile_after_a_design_drops_the_designs_title_and_organisation(ctl):
+    """Designed 'acme' (title Acme Mesh), then picked the profile 'example': the mesh
+    is the profile 'example' with nothing of the abandoned design (it used to be brand
+    'example' with the block {title: Acme Mesh})."""
+    _design_acme(ctl)
+    ctl.brand_picker.select("profile:example")
+    cfg = ctl.collect_bootstrap()
+    assert cfg.brand == "example"
+    assert cfg.superbrand == {}, cfg.superbrand
+    rec = brand_model.record_from_bootstrap(cfg)
+    assert (rec.superbrand.id, rec.superbrand.title, rec.superbrand.org) == ("example", "", "")
+    ctl.leave_brand()
+    saved = brand_model.load_record()
+    assert (saved.superbrand.id, saved.superbrand.title) == ("example", "")
+
+
+def test_picking_create_after_a_pick_gives_the_blank_design_not_the_old_pick(ctl):
+    """Create selected means the record is the blank design (the shipped id), not the
+    profile or the design picked before it."""
+    _design_acme(ctl)
+    ctl.brand_picker.select("profile:example")
+    ctl.brand_picker.select("create")
+    assert ctl.brand_picker.current_key() == "create"
+    cfg = ctl.collect_bootstrap()
+    assert cfg.brand == "hugmesh" and cfg.superbrand == {}, (cfg.brand, cfg.superbrand)
+    assert ctl.superbrand_design.fields["id"].text() == ""
+    # and a design typed after it replaces the shipped id as before
+    _type(ctl.superbrand_design, "id", "second")
+    assert ctl.collect_bootstrap().brand == "second"
