@@ -38,19 +38,24 @@
 # route-access-db — `SHARDING_CITUS=on` plus the citusdata image; TURNING IT ON
 # MEANS ADDING A WORKER RULE HERE, because a coordinator does dial its workers.
 #
-# PRECEDENT, same shape, already live: homeserver-egress.yaml's
-# `homeserver-egress-akkoma-db` is exactly this policy for akkoma-db, and it
-# ships through the SAME auto-sync app (apps/08-networkpolicy.yaml) this file is
-# listed in. That is the reason this does NOT go into the dark, manual-sync
-# networkpolicy-egress overlay with tier-egress.yaml: the overlay's warning is
-# about TIER-WIDE egress ("a missed allow black-holes a whole namespace"), and a
-# per-pod lock on a server pod with a one-line allow-set is a different risk
-# class — the same one already accepted for akkoma-db.
+# PRECEDENT, same shape: homeserver-egress.yaml's `homeserver-egress-akkoma-db` is
+# exactly this policy for akkoma-db, and it ships through the auto-sync app
+# (apps/08-networkpolicy.yaml). THIS file originally joined it there on the same
+# argument (a per-pod lock on a server pod with a one-line allow-set is a different
+# risk class from tier-wide egress) and shipped for one commit (PR #325) as a
+# six-pod, self-healing default-deny with no live validation. It was moved on
+# 2026-09-09 and is NOT in networkpolicy/kustomization.yaml now: it belongs to the
+# dark, manual-sync overlay manifests/networkpolicy-egress (apps/08a), enabled per
+# namespace with scripts/netpol-egress-scope.py --with-db-egress. See
+# docs/DB-HARDENING-RUNBOOK.md part C.
 #
-# ROLLBACK, if a DB pod ever does turn out to need outbound: delete this file
-# from the kustomization (the pods return to default-allow egress) or add the
-# missing allow rule. Ingress isolation is untouched either way — Ingress and
-# Egress are independent axes and db-ingress.yaml owns the other one.
+# ROLLBACK, if a DB pod ever does turn out to need outbound: `kubectl delete networkpolicy
+# db-egress-<db> -n <namespace>` (the pod returns to default-allow egress at once), then
+# remove the carved db-egress-<namespace>.yaml from the overlay's kustomization.yaml,
+# merge, and manual-sync apps/08a WITH prune (it has no prune option); or add the missing
+# allow rule instead.
+# Ingress isolation is untouched either way — Ingress and Egress are independent
+# axes and db-ingress.yaml owns the other one.
 #
 # NOT the same set as tier-ingress.yaml's NotIn list, and that is CORRECT:
 # wiki-bff-db / mesh-bff-db / character-forge-bff-db are NOT in tier-egress's
