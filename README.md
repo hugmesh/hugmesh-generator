@@ -392,8 +392,10 @@ none), and compose green is not evidence for the cluster._
   principal can produce a fresh `mfa_satisfied` stamp, then flip `mfa.enabled` →
   `true`, then (separately — `enforce-privileged-floor` is **not** a sub-flag of
   `enabled`) `enforcePrivilegedFloor` → `true`, moving the posture-gate
-  expectations in lockstep. Order and lockout preconditions:
-  [`docs/MFA-ROLLOUT.md`](docs/MFA-ROLLOUT.md).
+  expectations in lockstep (three suites for the first flip, two for the second —
+  measured, listed in the runbook's §3 steps 6-7). Order, lockout preconditions and
+  the exact operator commands:
+  [`docs/MFA-ROLLOUT.md`](docs/MFA-ROLLOUT.md) §3 and §9.
 - **🚧 SELinux — both acknowledged load defects are FIXED; enforcing now waits
   on an AVC workout that has not run yet.** Updated 2026-08-19; this section
   previously acknowledged that the modules bake and the loader is wired "but
@@ -504,26 +506,35 @@ none), and compose green is not evidence for the cluster._
   run a real build, blocked behind bringing a cluster up. `APPSTORE_EFFECTOR_ENABLED`
   and `APPSTORE_FEDERATION_ENABLED` are now **`true`** in the admin-BFF deployment
   (the ArgoCD and federation seams are the real clients, not the Noop ones), but
-  neither leg's bearer token has a source in this tree — `APPSTORE_ARGOCD_AUTH_TOKEN`
-  and `APPSTORE_FEDERATION_AUTH_TOKEN` both default empty and there is no
-  ExternalSecret for either, so both legs make a real call that comes back **401**
-  until they are provisioned. `APPSTORE_BUILDER_ENABLED` is deliberately still
-  **`false`**: the push credential the Kaniko build pod mounts has **no
-  ExternalSecret** anywhere (its image-builder twin does), and because that mount is
-  NOT `optional`, enabling the builder first leaves the build pod wedged in
-  `ContainerCreating` for 1800s rather than failing. Worse, the two Kaniko templates
-  disagree about what to create: this repo's ships
-  `service-catalog-builder-registry` / key `.dockerconfigjson`, while the template
-  `KanikoBuildLauncher` actually loads from the admin-BFF classpath asks for
-  `service-catalog-registry-credentials` / key `config.json` — **the runtime name is
-  the one that must exist**. Both must be created **in `hugmesh-service-catalog-builds`**
-  (the namespace `APPSTORE_BUILDER_NAMESPACE` pins): a pod can only mount a Secret
-  from its own namespace, so copying `external-secrets/image-builder-externalsecrets.yaml`
-  and leaving its `namespace: hugmesh-image-builds` in place reproduces the wedge with
-  every name and key correct. `tests/scripts/test-appstore-effector-flags.sh` derives
-  both contracts from the templates, requires them in that namespace from a manifest
-  the kustomization actually applies, and turns RED if the builder flag is flipped
-  without them, so the ordering cannot be got wrong silently. `CASDOOR_ADMIN_ENABLED`
+  neither leg can send its bearer token yet. Both tokens now have a source
+  (`external-secrets/appstore-effector-externalsecrets.yaml` ->
+  Secret `appstore-effector-tokens`, read by the deployment as `optional: true`
+  secretKeyRefs), but the VALUES are operator-seeded in Vault
+  (`secret/<brand>/appstore-effector-tokens`: the ArgoCD token is minted by ArgoCD,
+  the federation token is a Casdoor superadmin JWT) and until then the ExternalSecret
+  reports SecretSyncedError by design. Neither leg gets as far as a 401 today: both
+  fail at the TLS handshake (admin-bff-api #62, #82), so the token is the second
+  wall. `APPSTORE_BUILDER_ENABLED` is deliberately still **`false`**. The push
+  credential the Kaniko build pod mounts is now created: Secret
+  `service-catalog-registry-credentials` (Opaque, key `config.json`, the name and key
+  the template `KanikoBuildLauncher` loads from the admin-BFF classpath asks for)
+  in **`hugmesh-service-catalog-builds`**, and this repo's own template carries the
+  same name and key. The builder stays off because that credential is not the only
+  wall: the runtime template names a `serviceAccountName: service-catalog-builder`
+  that no manifest creates, its pod spec cannot pass the namespace's `restricted`
+  PodSecurity level, and no Role lets the admin-BFF ServiceAccount create Jobs there
+  (all three live in the admin-BFF repo or its RBAC; see
+  `manifests/service-catalog-builder/README.md`). The mount is NOT `optional`, so a
+  missing Secret leaves the build pod wedged in `ContainerCreating` for 1800s rather
+  than failing, and a pod can only mount a Secret from its own namespace, so copying
+  `external-secrets/image-builder-externalsecrets.yaml` and leaving its
+  `namespace: hugmesh-image-builds` in place reproduces the wedge with every name and
+  key correct. `tests/scripts/test-appstore-effector-flags.sh` derives the contract from
+  both templates, requires them to agree and the Secret to exist in that namespace from
+  a manifest the kustomization actually applies (flag false or true), requires both
+  token refs to be optional refs to a Secret created in the admin-BFF's namespace, and
+  turns RED on the ServiceAccount / PodSecurity walls if the builder flag is flipped.
+  Nothing here has run a build. `CASDOOR_ADMIN_ENABLED`
   is still absent from the deployment (the per-service role leg stays skipped).
 - **🔭 DB-hardening flips. (needs a live cluster)** Merged dark, awaiting an
   operator: PG in-cluster TLS is implemented but `PG_TLS_ENABLED` is `"false"` on
@@ -532,13 +543,6 @@ none), and compose green is not evidence for the cluster._
   and the tier-egress default-deny NetworkPolicies are manual-sync with an overlay
   whose `resources: []` renders **zero objects** by design, needing per-namespace
   staged enablement with the devops namespace last (ArgoCD self-wedge risk).
-- **🔭 x86 auto-update poller is not baked.** `build-frite-stage4.sh` copies
-  `hugmesh-update` + its init script and adds it to both SVCS arrays;
-  `build-x86-host-stage4.sh` does neither, so `provision_update` falls to the else
-  branch and only writes `/etc/hugmesh/cron-update.staged` with a warning. Until
-  that protected edit lands, no x86 host and no x86 client image (laptop /
-  chromebook / desktop) can auto-update even if a superadmin flips `enabled: true`
-  — the per-node update schedule itself is shipped and ArgoCD-synced.
 - **🔭 Real cross-build proof for the shared binpkg pools** — the mechanism and
   the fingerprint guard are shipped; the compile-once speedup is unmeasured.
 

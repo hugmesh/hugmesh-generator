@@ -1,0 +1,17 @@
+REAL-SHAPE EXCERPT, DERIVED from real-pi5-warm.log: the system group only (the image group never merged, as after a build that stopped early).
+==== pki.rpi5 (wl-pki-2.rpi5) start 20260925T090000Z brand=hugmesh role=pki env=test ====
+[0;36m[1m==> Emerge group: system[0m
+>>> Emerging binary (1 of 137) dev-libs/xxhash-0.8.3-r2::gentoo for /out/wl-pki-2.rpi5/sysroot/
+>>> Emerging binary (2 of 137) dev-lang/python-exec-conf-2.4.6::gentoo
+>>> Emerging binary (3 of 137) net-libs/libnfnetlink-1.0.2::gentoo for /out/wl-pki-2.rpi5/sysroot/
+>>> Emerging binary (4 of 137) net-misc/ethertypes-0::gentoo for /out/wl-pki-2.rpi5/sysroot/
+>>> Emerging binary (5 of 137) sys-apps/diffutils-3.12::gentoo for /out/wl-pki-2.rpi5/sysroot/
+>>> Emerging binary (6 of 137) virtual/acl-2.4.0::gentoo
+>>> Emerging binary (7 of 137) dev-lang/python-exec-2.4.10::gentoo for /out/wl-pki-2.rpi5/sysroot/
+>>> Emerging (8 of 137) sys-libs/libseccomp-2.6.1::gentoo
+>>> Emerging binary (9 of 137) sys-libs/timezone-data-2026d::gentoo for /out/wl-pki-2.rpi5/sysroot/
+>>> Emerging (10 of 137) sys-libs/readline-8.3_p6::gentoo for /out/wl-pki-2.rpi5/sysroot/
+>>> Emerging binary (11 of 137) sys-apps/attr-2.6.0::gentoo for /out/wl-pki-2.rpi5/sysroot/
+>>> Emerging binary (12 of 137) app-arch/xz-utils-5.8.4::gentoo for /out/wl-pki-2.rpi5/sysroot/
+>>> Emerging binary (13 of 137) net-libs/nghttp2-1.69.0::gentoo
+>>> Emerging binary (14 of 137) net-libs/nghttp3-1.17.0::gentoo

@@ -68,13 +68,18 @@ resources:
   # has created the namespace.
   - image-builder-externalsecrets.yaml   # image-builder-registry
   # SUPERADMIN Service Catalog Kaniko builder PUSH credential (ns
-  # hugmesh-service-catalog-builds, dockerconfigjson) — the SAME Harbor push robot as
+  # hugmesh-service-catalog-builds, Opaque config.json - the runtime Job's mount) — the SAME Harbor push robot as
   # the line above, in the OTHER build namespace. Its Job template
   # (manifests/service-catalog-builder/kaniko-build-job.template.yaml) mounts the
   # Secret NON-optionally, so without this the build pod hangs in ContainerCreating
   # until activeDeadlineSeconds rather than failing. Materializes once
   # apps/54-service-catalog-builder.yaml has created the namespace.
-  - service-catalog-builder-externalsecrets.yaml   # service-catalog-builder-registry
+  - service-catalog-builder-externalsecrets.yaml   # service-catalog-registry-credentials
+  # admin-bff APP-STORE effector bearer tokens (ns hugmesh-backend, key
+  # argocd-auth-token + federation-auth-token) - OPERATOR-SEEDED from
+  # secret/<brand>/appstore-effector-tokens; consumed as optional secretKeyRefs, so the
+  # path being unseeded leaves the BFF exactly as it is today (empty Bearer).
+  - appstore-effector-externalsecrets.yaml   # appstore-effector-tokens
   # Azure Intune (Graph) phone-lock credential — DEFAULT-OFF, OPT-IN. Intune is a
   # CO-EQUAL second MDM provider alongside the sovereign self-hosted Headwind DPC;
   # Headwind is the DEFAULT. This leg routes lock traffic through Microsoft
@@ -124,8 +129,8 @@ replacements:
       name: hugmesh-vault
       fieldPath: metadata.annotations.[platform.hugmesh.net/vault-base]
     targets:
-      # (a) every ExternalSecret that carries spec.data[].remoteRef.key — 118 of the
-      #     121 base-bearing fields in the default render.
+      # (a) every ExternalSecret that carries spec.data[].remoteRef.key — 120 of the
+      #     123 base-bearing fields in the default render.
       - select:
           group: external-secrets.io
           kind: ExternalSecret
