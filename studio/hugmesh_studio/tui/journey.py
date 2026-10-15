@@ -183,7 +183,6 @@ _SIDE_FLOW_STUB = {
 _PENDING_STEPS = {
     "idp": "Identity provider",
     "hardware": "Hardware",
-    "network": "Network",
     "keyzip": "Admin key-zip",
     "home": "Home",
     "launch": "Launch",
@@ -986,6 +985,7 @@ class Journey:
         from .localcloud import LocalCloudScreen
         from .localmesh import LocalMeshScreen
         from .meshemu import MeshEmuScreen
+        from .network_step import NetworkScreen
         from .qemu import QemuScreen
         self.generator_dir = generator_dir
         self.cfg = cfg or ImageConfig()
@@ -1007,7 +1007,7 @@ class Journey:
                       "Add more domains beyond the internal Tailscale root "
                       "domain (public go-live domains this mesh serves)?",
                       "additional_domains"),
-            DomainsScreen(), DomainServicesScreen(),
+            NetworkScreen(), DomainsScreen(), DomainServicesScreen(),
             YesNoStep("users_choice", "User accounts",
                       "Configure user accounts for this mesh now?",
                       "configure_users"),
