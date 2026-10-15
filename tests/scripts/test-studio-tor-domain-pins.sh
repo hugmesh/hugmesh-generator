@@ -73,6 +73,7 @@ NAMED=(
   tests/test_fleet_domains.py
   tests/test_golive_domains.py
   tests/test_client_ca_inheritance.py
+  tests/test_domains_row_checks_saved_door.py
   tests/test_services_section.py
 )
 FAMILIES=(
