@@ -13,7 +13,7 @@ from hugmesh_studio.core import build_sessions as bs                    # noqa: 
 from hugmesh_studio.core.config import ImageConfig                      # noqa: E402
 from hugmesh_studio.core.worklist import (                              # noqa: E402
     WorklistConfig, WorklistEntry, synthesize)
-from hugmesh_studio.tui import urwid_ui                                 # noqa: E402
+from hugmesh_studio.tui import journey, urwid_ui                        # noqa: E402
 
 
 @pytest.fixture(autouse=True)
@@ -136,6 +136,29 @@ def test_journey_enter_feeds_the_edit_line_into_the_state_machine(tmp_path):
     assert "What do you want to build?" in text
     assert "Mesh emulation" in text                    # the #69 card renders
     assert app.input.edit_text == ""                   # the line was consumed
+
+
+def test_journey_mode_cards_are_reachable_by_paging_at_80x24(tmp_path):
+    app = urwid_ui.JourneyApp(str(tmp_path))
+    _typed(app, "")                                    # -> mode menu
+    last = journey.MODE_CHOICES[-1][1]
+    size = (80, 24)
+    first = "\n".join(ln.decode("utf-8", "replace")
+                      for ln in app.root.render(size).text)
+    assert last not in first                           # off-screen before paging
+    for _ in range(5):
+        app.root.keypress(size, "page down")
+    text = "\n".join(ln.decode("utf-8", "replace")
+                     for ln in app.root.render(size).text)
+    assert last in text
+    app.root.keypress(size, "page up")                 # and back up again
+    app.root.keypress(size, "page up")
+    app.root.keypress(size, "page up")
+    app.root.keypress(size, "page up")
+    app.root.keypress(size, "page up")
+    back = "\n".join(ln.decode("utf-8", "replace")
+                     for ln in app.root.render(size).text)
+    assert "What do you want to build?" in back
 
 
 def test_journey_sessions_entry_swaps_in_the_review_and_back(tmp_path):

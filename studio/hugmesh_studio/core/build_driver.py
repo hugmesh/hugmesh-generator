@@ -49,7 +49,7 @@ from .platform_info import HostInfo, detect
 # test_docker_asset_mounts.py pins this list against the real path-valued flag surface so a
 # newly-added path field cannot rejoin the silent-ignore club.
 DOCKER_ASSET_FIELDS: tuple[str, ...] = (
-    # Order is load-bearing ONLY in that each field's index names its /assets/<i>/ dir;
+    # Order is relied on ONLY in that each field's index names its /assets/<i>/ dir;
     # append new fields at the END so existing mounts keep their paths.
     "wallpaper", "grub_background", "login_background",
     "brand_logo", "color_scheme", "branding_dir", "egress_vpn",
@@ -153,7 +153,7 @@ def docker_memory_args() -> list[str]:
 #: 2026-09-04 incident: Studio pytest runs (tests/test_pages_fields_asks.py arriving at
 #: the ProgressPage, which dispatches on arrival) launched the REAL
 #: `sudo -A bash ./build-x86-host-stage4.sh` with the Qt askpass as SUDO_ASKPASS; 60
-#: root-owned launchers were found wedged on an OFFSCREEN password dialog, some two
+#: root-owned launchers were found hung on an OFFSCREEN password dialog, some two
 #: days old, each pinning a 15-58 MB Qt helper. Nothing ever authenticated.
 ELEVATION_PROGRAMS = frozenset({"sudo", "pkexec", "doas", "su", "run0"})
 
@@ -219,7 +219,7 @@ def guard_elevation(cmd: list[str]) -> None:
         return
     raise ElevationRefused(
         f"refusing to spawn {prog} ({why}): this process must not elevate, and an "
-        f"unanswerable password prompt would wedge a root-owned launcher forever "
+        f"unanswerable password prompt would leave a root-owned launcher hung forever "
         f"(command starts: {shlex.join(cmd[:4])} ...)")
 
 
@@ -247,7 +247,7 @@ def _askpass_helper_path() -> str | None:
     for a GUI-launched build (``graphical=True``), which is the one caller entitled to
     a password dialog. The bare ``--askpass`` never pops one — a headless run (no TTY on
     stdin, no credential source) fails fast there instead of blocking forever on an
-    offscreen dialog, which is how 60 root-owned launchers came to be wedged.
+    offscreen dialog, which is how 60 root-owned launchers came to be hung.
 
     Pointed at by ``SUDO_ASKPASS`` so ``sudo -A`` reads the admin password from the
     helper's stdout instead of prompting into an invisible terminal (the hang this
@@ -398,7 +398,7 @@ class BuildDriver:
         here so the BuildPage checkbox is never a widget-level no-op and the same
         config drives every channel identically. HUGMESH_QEMU_E2E=1 rides the same
         channel for cfg.qemu_device_tests (the post-build emulated-device tests).
-        THE ENV VAR KEEPS ITS NAME ON PURPOSE, and it is INERT for the builders: the
+        THE ENV VAR KEEPS ITS NAME ON PURPOSE, and it does nothing for the builders: the
         only readers of HUGMESH_QEMU_E2E anywhere in this tree are
         tests/qemu/run-matrix-e2e.sh and the Makefile's `qemu-matrix` target — no
         build-*-stage4.sh looks at it. So its presence in a build environment is NOT
@@ -548,7 +548,7 @@ class BuildDriver:
         spawn_env = self._elevation_env() if backend == "native" else None
         # LAST thing before the spawn: under pytest / HUGMESH_STUDIO_NO_ELEVATION a
         # sudo/pkexec launch is refused outright (ElevationRefused) rather than left to
-        # wedge on a prompt nobody can answer. See guard_elevation.
+        # hang on a prompt nobody can answer. See guard_elevation.
         guard_elevation(cmd)
         self._proc = subprocess.Popen(
             cmd, cwd=self.generator_dir, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -583,7 +583,7 @@ class BuildDriver:
         ONE run (the 2026-07-29 operator ask: "once the file is selected its held in
         memory until the build is completed" — see core/secret_files.py).
 
-        Consumption rules, each load-bearing:
+        Consumption rules, each relied on:
         * only a field the config ALREADY carries is swapped — the vault never adds a
           flag the preview didn't show (no injection: a leftover held key from an
           abandoned wizard walk must never silently sign an unrelated build);

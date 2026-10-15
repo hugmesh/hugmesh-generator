@@ -118,7 +118,7 @@ def test_gui_import_under_a_state_dir_override_never_touches_the_real_home(
 
 def test_core_extract_under_a_state_dir_override_never_touches_the_real_home(
         tmp_path, monkeypatch):
-    """Same guarantee at the core seam, with no Qt in the picture."""
+    """Same guarantee at the core override point, with no Qt in the picture."""
     home = tmp_path / "home"
     operator = home / ".hugmesh" / "keyzip"
     operator.mkdir(parents=True)
@@ -154,7 +154,7 @@ def test_both_keyzip_host_paths_follow_the_override(tmp_path, monkeypatch):
 
 def test_without_the_override_the_paths_are_the_documented_home_defaults(tmp_path,
                                                                         monkeypatch):
-    """The seam is an override, not a relocation: unset, behaviour is unchanged."""
+    """The env var is an override, not a relocation: unset, behaviour is unchanged."""
     monkeypatch.delenv(keyzip.STATE_DIR_ENV, raising=False)
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     assert keyzip.staging_dir() == str(tmp_path / "home" / ".hugmesh" / "keyzip")

@@ -99,6 +99,14 @@ class UsersPage(QtWidgets.QWizardPage):
     def __init__(self, wiz):
         super().__init__()
         self.wiz = wiz
+        #: The CONFIGURATION OBJECT this table was last filled from (#542) — the same
+        #: identity check DomainsPage and pages/domain_services.py carry, for the same
+        #: reason. ``load_config`` / ``load_session`` / ``start_build_from_session``
+        #: replace ``wiz.cfg`` and call ``restart()``; without this, a Users table that
+        #: was already populated keeps the PREVIOUS flow's accounts and validatePage
+        #: then rebuilds ``cfg.users`` from them, erasing every user the operator just
+        #: loaded. A restart() on the same object still preserves in-progress edits.
+        self._cfg_seen = None
         self.setTitle("Superusers & domain users")
         self.setSubTitle(
             "Name the superusers (locked to the Tailscale root domain) "
@@ -233,7 +241,7 @@ class UsersPage(QtWidgets.QWizardPage):
     def applies_to(self, cfg) -> bool:
         """Dynamic-skip predicate (wizard.nextId): a cloud NODE image emits no
         --person-role/--domains and writes no manifest, so the users table contributes
-        nothing and is skipped (emission-neutral).
+        nothing and is skipped (leaves the output unchanged).
 
         ASK 8 made the mesh arm conditional; ASK 20 gave it its OWN condition. The gate
         is no longer the domains opt-in (``superadmin_plane_applies``) but
@@ -249,6 +257,13 @@ class UsersPage(QtWidgets.QWizardPage):
 
     def initializePage(self):
         c = self.wiz.cfg
+        if c is not self._cfg_seen:
+            # A DIFFERENT configuration object (#542): Load config / Load session /
+            # restart-from-session. Drop the previous flow's rows so the fill below
+            # re-reads THIS configuration's users — otherwise validatePage writes the
+            # old table back over cfg.users and the loaded accounts are gone.
+            self.table.setRowCount(0)
+            self._cfg_seen = c
         if self.table.rowCount() == 0:
             for u in c.users:
                 self._add(u.username, u.domain, list(u.roles), u.email,
@@ -265,7 +280,18 @@ class UsersPage(QtWidgets.QWizardPage):
                         self._apply_role_lock(dom, role_cell)
         self._update_warning()
 
+    def forget_rows(self) -> None:
+        """Drop the table: ``cfg.users`` was REPLACED under this page on the SAME
+        object (the "Create nodes for local cloud" import, #707), which the identity
+        check in ``initializePage`` cannot see. Until the page is entered again it
+        writes nothing (``validatePage``) — ``collect_all()`` re-runs every visited
+        page's validatePage, and an emptied table must not erase the import."""
+        self.table.setRowCount(0)
+        self._cfg_seen = None
+
     def validatePage(self):
+        if self.wiz.cfg is not self._cfg_seen:
+            return True                     # no table for THIS config yet: write nothing
         out = []
         for r in range(self.table.rowCount()):
             username = self.table.item(r, _COL_USER).text().strip() if self.table.item(r, _COL_USER) else ""

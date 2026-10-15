@@ -25,7 +25,7 @@ row whose artefact is gone renders as a loud MISSING entry that stays in the tre
 Filtering it out would turn a broken run into a clean-looking one, which is the
 single most expensive thing this surface could do.
 
-HOUSE RULE, LOAD-BEARING: NO QMessageBox AND NO .exec() ANYWHERE IN THIS FILE'S
+HOUSE RULE, NOT OPTIONAL: NO QMessageBox AND NO .exec() ANYWHERE IN THIS FILE'S
 PAGE LOGIC. A modal opened from validatePage or an itemChanged handler hangs
 every headless test (feedback_no_modals_in_page_logic). Selection is wired to
 itemSelectionChanged/itemClicked and every refusal — unreadable file, absent run,

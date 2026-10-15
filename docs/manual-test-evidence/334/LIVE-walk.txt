@@ -1,0 +1,13 @@
+01-welcome: page=WelcomePage title='HugMesh Image Studio'
+02-mode-localmesh-picked: page=ModePage title='What do you want to build?'
+03b-choice-cards-with-live-mesh-running: page=LocalMeshChoicePage title='Local Docker mesh'
+03c-generate-card-picked: page=LocalMeshChoicePage title='Local Docker mesh'
+04-LocalMeshEnvPage: page=LocalMeshEnvPage title='Environment and brand'
+05-LocalMeshDomainsPage: page=LocalMeshDomainsPage title='Domains'
+06-LocalMeshDomainServicesPage: page=LocalMeshDomainServicesPage title='Domain services'
+07-LocalMeshSourcePage: page=LocalMeshSourcePage title='Repo source'
+08-LocalMeshServicesPage: page=LocalMeshServicesPage title='Services'
+09-LocalMeshIdpPage: page=LocalMeshIdpPage title='Identity provider'
+10-LocalMeshReviewPage: page=LocalMeshReviewPage title='Saved meshes and the plan'
+11-LocalMeshPage: page=LocalMeshPage title='Bring-up and monitor'
+stopped: Next did not advance

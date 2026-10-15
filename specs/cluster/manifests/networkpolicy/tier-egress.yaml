@@ -7,8 +7,12 @@
 # NO `automated:` block) so even after it is added to the kustomization it will not
 # auto-sync into a live cluster. Enabling is a deliberate, staged operator action:
 #   1. Validate on the live cluster FIRST (see §B "live-validate-only").
-#   2. Add ONE of the per-namespace blocks below to kustomization.yaml `resources:`
-#      (uncomment one namespace at a time — NEVER all five at once).
+#   2. Carve ONE namespace's block(s) out of this file into the overlay directory with
+#      scripts/netpol-egress-scope.py <namespace> [--with-db-egress], list the generated
+#      file under `resources:` in manifests/networkpolicy-egress/kustomization.yaml —
+#      NEVER all five at once. (Do NOT list THIS file there: kustomize's default load
+#      restrictor rejects a file outside the overlay directory, and it carries all five
+#      tiers anyway. Per-namespace order and rollback: docs/DB-HARDENING-RUNBOOK.md part C.)
 #   3. Manually sync apps/08a-networkpolicy-egress.yaml and smoke-test that
 #      namespace's flows before moving to the next.
 # Until then this file is pure documentation that ships dark: it changes NOTHING.
@@ -108,12 +112,15 @@ spec:
 # egress-vpn-interaction.yaml. db-egress.yaml is the one that DEPENDS on this
 # list: every pod named here is a pod nothing else selects on the Egress axis.
 #
-# The five excluded DB pods are NOT default-allow any more: db-egress.yaml gives each
-# one its own DNS-only Egress lock (the follow-up this comment used to defer). That
-# file ships through the AUTO-sync app (apps/08-networkpolicy.yaml) alongside
-# homeserver-egress.yaml's identical akkoma-db lock, so THESE FIVE stay egress-locked
-# whether or not this tier-wide cutover is ever enabled. Excluding them HERE remains
-# correct: their allow-set is one DNS rule, not this file's backend-tier allow-set.
+# The five excluded DB pods have their own DNS-only Egress lock in db-egress.yaml
+# (the follow-up this comment used to defer). ⚠ CORRECTED 2026-10-14: that file does
+# NOT ship through the auto-sync app. It was moved out of apps/08-networkpolicy.yaml on
+# 2026-09-09 (it had shipped for one commit, PR #325, with no live validation) and now
+# sits behind the same manual-sync overlay as this file, so UNTIL IT IS ENABLED THESE
+# FIVE ARE DEFAULT-ALLOW on Egress, with or without this cutover. Enable both together:
+# scripts/netpol-egress-scope.py hugmesh-backend --with-db-egress (docs/DB-HARDENING-
+# RUNBOOK.md part C). Excluding them HERE remains correct: their allow-set is one DNS
+# rule, not this file's backend-tier allow-set.
 #
 # ⚠ SCOPE OF THAT CLAIM — it is about these five pods, NOT about "the DB tier".
 # The exclusion lists in this file span two namespaces, and db-egress.yaml covers
@@ -182,11 +189,12 @@ spec:
 #
 # WHAT ACTUALLY COVERS THE TWO EXCLUSIONS — they are NOT the same story:
 #   * route-access-db — COVERED. db-egress.yaml's `db-egress-route-access-db`
-#     gives it the same DNS-only per-pod Egress lock as the five backend DB pods,
-#     through the AUTO-sync app (apps/08-networkpolicy.yaml), so it is locked
-#     whether or not this tier-wide cutover is ever enabled. It is the store the
-#     gateways read `route_access` from; leaving it default-allow was the widest
-#     hole this exclusion list created.
+#     is the same DNS-only per-pod Egress lock as the five backend DB pods. ⚠ CORRECTED
+#     2026-10-14: it is in the MANUAL-sync overlay, not the auto-sync app (see the
+#     backend block above), so route-access-db is default-allow on Egress until
+#     `scripts/netpol-egress-scope.py hugmesh-pki --with-db-egress` is enabled. It is
+#     the store the gateways read `route_access` from; leaving it default-allow is the
+#     widest hole this exclusion list creates.
 #   * cassandra — NOT COVERED, and knowingly so. Its egress is still
 #     DEFAULT-ALLOW: nothing in manifests/networkpolicy selects it on the Egress
 #     axis, and this policy excludes it. It is the one workload in these lists

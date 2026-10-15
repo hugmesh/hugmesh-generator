@@ -11,18 +11,42 @@ the native leg and ``docker -e`` on the docker leg (the G2 HEADSCALE_URL channel
 generalized); ``run()``/``cancel()``/streaming are inherited from BuildDriver.
 Per-role KEYS folder generation (gen-provision-keys.sh) is the script's own
 default behaviour — SKIP_KEYS=1 is the opt-out knob, fielded below.
+
+DOMAINS (#587). A fleet builds a mesh's node images, and the operator's rule is "a
+service page per domain you make, that you have to go through before building" — so a
+fleet run now carries the SAME domain rows and the SAME per-domain services gate as
+every other build route (``core.domain_services.gate_reason``, called from
+:meth:`FleetDriver.preflight`, so both the GUI's "Build fleet now" and a RESTART from
+the previous-builds manager refuse before ``build-all-roles.sh`` is ever spawned, and
+name every domain that was never walked). Row 0 is the fleet's OWN domain — the
+``--cluster-domain`` it passes, or the builders' default — and has a services page
+too (operator decision 69 = A).
+
+What the rows DO NOT do, measured on the builders rather than assumed: they reach no
+builder. ``FleetConfig.to_env`` / ``to_cli_args`` emit nothing for them, on purpose —
+the pass-through tail goes to EVERY builder of the run, node roles ignore
+``--domains`` (build-x86-host-stage4.sh warns "--person-role/--domains are ignored for
+non-client role"), and the unaffiliated desktop that ``X86_STANDALONE=1`` adds REFUSES
+it outright (``--unaffiliated conflicts with --person-role/--domains``, exit 1). And
+``build-all-roles.sh`` writes no mesh manifest, so cluster provisioning does not see a
+fleet's rows either. They are RECORDED with the fleet's session record
+(``to_dict``), gated, and said to be exactly that on both faces
+(:data:`FLEET_LANE_NOTE`).
 """
 from __future__ import annotations
 
 import os
 import re
 import shlex
-from dataclasses import asdict, dataclass, field  # noqa: F401  (field: dataclass idiom parity)
-from typing import Any
+from dataclasses import asdict, dataclass, field, fields
+from typing import Any, ClassVar
 
 from . import build_driver
 from .build_driver import BuildDriver
-from .config import IdentityValidationError, validate_domain_name
+from .config import (Domain, IdentityValidationError, ImageConfig,
+                     domain_rows_to_dict, validate_domain_name)
+from .domain_services import gate_reason
+from .local_mesh_domains import LocalMeshDomains
 
 FLEET_SCRIPT = "scripts/build-all-roles.sh"
 
@@ -30,6 +54,113 @@ FLEET_SCRIPT = "scripts/build-all-roles.sh"
 # argv — allow only slug-shaped tokens (matches every real role id incl. be+gpu),
 # fail-closed like ImageConfig.validate_identity().
 _ROLE_TOKEN_RE = re.compile(r"[A-Za-z0-9_+.-]+\Z")
+
+#: The builders' own cluster domain when no ``--cluster-domain`` is passed (x86 and
+#: rpi5 ``CLUSTER_DOMAIN=`` default; ImageConfig carries the same literal). A fleet
+#: whose Cluster domain field is empty builds for THIS domain, so it is row 0.
+#: studio/tests/test_fleet_domains.py pins it against both builders.
+FLEET_DEFAULT_DOMAIN: str = ImageConfig.__dataclass_fields__["cluster_domain"].default
+
+#: What the fleet's gate refusal says was refused (``gate_reason``'s ``action``).
+ACTION_FLEET_BUILD = "build this fleet"
+
+#: The fleet's remedy: this route has its OWN Domains / Domain services steps, so the
+#: image flow's sentence ("walk to the Domain services step of the image flow") would
+#: send the operator to a screen this window does not have.
+FLEET_REMEDY = (
+    "Go back to this fleet's ‘Domains’ and ‘Domain services’ steps — every domain "
+    "there has its own service page, and opening it is what records it — or remove "
+    "the domain from the Domains table.")
+
+#: The one sentence the fleet's services step adds (both faces; parity-pinned): what
+#: this route does with the selection, which is less than the image flow does.
+FLEET_LANE_NOTE = (
+    "ON A FLEET BUILD: the domains and their per-domain services are recorded with "
+    "this fleet's session and required before it builds — they reach NO builder "
+    "(node images take no --domains, the unaffiliated desktop refuses it, and "
+    "build-all-roles.sh writes no mesh manifest). The node services a fleet DOES bake "
+    "— the Tor onion (WITH_TOR) and the optional-service list — are set on the "
+    "‘Shared options’ step.")
+
+
+def fleet_own_domain(cluster_domain: str) -> str:
+    """Row 0's name: the ``--cluster-domain`` the fleet passes, else the builders'
+    default (what the images are really built for)."""
+    return (cluster_domain or "").strip() or FLEET_DEFAULT_DOMAIN
+
+
+class FleetDomains(LocalMeshDomains):
+    """The fleet's domain rows + the gate's bookkeeping, while the steps edit them —
+    the local-mesh route's state object, re-used as is (``mode`` = "mesh" so
+    ``domain_services.gate_applies`` bites; row 0 is a REAL row named ``own_name``).
+    A distinct name only so a reader of either route knows which one it is."""
+
+
+def seed_fleet_domains(state: FleetDomains, cluster_domain: str) -> None:
+    """Enter the Domains step: row 0 becomes the fleet's own domain. First visit seeds
+    it; a later visit after the Cluster domain changed RENAMES row 0 (keeping every
+    added row) and prunes the stale reviewed marker — a renamed domain is one nobody
+    has walked under that name. Both faces call this."""
+    from .domain_services import record_reviewed
+    own = fleet_own_domain(cluster_domain)
+    if not state.domains:
+        state.domains = [Domain(name=own, title="")]
+    elif state.own_name != own:
+        row = state.by_name(state.own_name)
+        if row is not None and row is state.domains[0]:
+            row.name = own
+        else:
+            state.domains.insert(0, Domain(name=own, title=""))
+    state.own_name = own
+    record_reviewed(state, state.domain_services_reviewed)
+
+
+def commit_fleet_domains(state: FleetDomains, added) -> list[str]:
+    """Leave the Domains step: ``added`` (the table's ADDED rows, row 0 excluded)
+    become the state's rows after the own row, which keeps its recorded services;
+    reviewed markers are pruned to rows that still exist. Returns why the added rows
+    cannot be recorded ([] when they can) — the local-mesh route's words
+    (``added_row_problems``: not a domain name / the own domain again / a duplicate).
+    The rows are recorded EITHER WAY, so a Back keeps what was typed; the refusal is
+    the caller's (on Next, inline). Both faces call this."""
+    from .domain_services import record_reviewed
+    from .local_mesh_domains import added_row_problems
+    own = state.own_name
+    prev = state.by_name(own) if own else None
+    own_row = Domain(name=own, title="",
+                     optional_services=list(prev.optional_services) if prev else [])
+    added = [d for d in added if (d.name or "").strip()]
+    state.domains = [own_row] + added
+    record_reviewed(state, state.domain_services_reviewed)
+    return added_row_problems([d.name for d in added], own)
+
+
+def fleet_domain_fields(state: FleetDomains) -> dict[str, Any]:
+    """The FleetConfig fields the steps' state becomes — COPIES (the config is recorded
+    with the session while the state keeps being edited after a Back). Both faces
+    build their FleetConfig through this, so they record identical rows."""
+    return {
+        "domains": [Domain(**asdict(d)) for d in state.domains],
+        "domain_services_reviewed": list(state.domain_services_reviewed),
+    }
+
+
+def fleet_gate_reason(cfg: "FleetConfig") -> str:
+    """The per-domain services gate for a fleet ("" = may build): the shared seam
+    with this route's action and remedy. ``FleetDriver.preflight`` and the TUI's
+    review both call exactly this."""
+    return gate_reason(cfg, ACTION_FLEET_BUILD, remedy=FLEET_REMEDY)
+
+
+def fleet_domains_from_config(cfg: "FleetConfig") -> FleetDomains:
+    """The step state a recorded FleetConfig carries (RESTART / REDO): its rows, row 0
+    first, and its reviewed markers as recorded — never "every row", so a record whose
+    walk was incomplete is still refused."""
+    rows = [Domain(**asdict(d)) for d in cfg.domains]
+    own = (rows[0].name or "").strip() if rows else ""
+    return FleetDomains(domains=rows,
+                        domain_services_reviewed=list(cfg.domain_services_reviewed),
+                        own_name=own)
 
 
 @dataclass
@@ -87,6 +218,24 @@ class FleetConfig:
     pentest_env: str = ""              # PENTEST_ENV compose|local|cluster
     pentest_scan: str = ""             # PENTEST_SCAN baseline|full
     pentest_pipeline: str = ""         # PENTEST_PIPELINE main|games
+    # ── node services (#579) ──
+    # WITH_TOR=1: every CLUSTER-NODE image of the run carries the Tor v3 onion
+    # (net-vpn/tor + hugmesh-tor-reconcile). The script emits it per builder through
+    # the channel that builder parses — x86 --with-tor, rpi5 'tor' folded into its
+    # --optional-services — and nowhere a builder cannot bake it; it REFUSES (exit 2,
+    # before any build) where it cannot be honoured exactly. Not an extra_flags
+    # string: a pass-through --with-tor would reach builders that have no such flag.
+    with_tor: bool = False             # WITH_TOR=1
+    optional_services: str = ""        # OPTIONAL_SERVICES="akkoma tuwunel ..." (both node
+                                       # builders' env knob; the rpi5 tor fold's base)
+    # ── domains (#587) — RECORDED + GATED, never emitted (see the module doc) ──
+    # Row 0 is the fleet's own domain; ``domain_services_reviewed`` is the gate's
+    # bookkeeping (the names whose services page was walked). ``mode`` is a CLASS
+    # constant, not a field: ``domain_services.gate_applies`` reads it, and "mesh" is
+    # the honest answer — a fleet builds a mesh's nodes.
+    domains: list[Domain] = field(default_factory=list)
+    domain_services_reviewed: list[str] = field(default_factory=list)
+    mode: ClassVar[str] = "mesh"
     # ── brand mesh (the same env channel BuildDriver forwards for G2) ──
     headscale_url: str = ""            # HEADSCALE_URL baked by the x86/rpi5/frite builders
     # ── pass-through builder args (forwarded to EVERY per-role builder) ──
@@ -99,20 +248,44 @@ class FleetConfig:
 
     # ---- (de)serialization (no SECRET fields in a fleet config) --------------
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        d = asdict(self)
+        # per-domain ``tor`` (#582) is OMIT-WHEN-FALSE, exactly as ImageConfig.to_dict
+        # writes it: a fleet record with no Tor domain keeps the bytes it had before.
+        d["domains"] = domain_rows_to_dict(self.domains)
+        return d
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "FleetConfig":
-        known = set(cls.__dataclass_fields__)  # type: ignore[attr-defined]
-        return cls(**{k: v for k, v in d.items() if k in known})
+        # fields(), not __dataclass_fields__: the latter also lists the ``mode``
+        # ClassVar, which is not an __init__ argument.
+        known = {f.name for f in fields(cls)}
+        kw = {k: v for k, v in d.items() if k in known}
+        # REHYDRATE the rows. asdict() -> JSON -> back yields plain dicts, and the
+        # gate reads ``getattr(d, "name", "")`` — "" on a dict — so an un-rehydrated
+        # record would pass the gate on every RESTART/REDO however unwalked it was.
+        kw["domains"] = [ImageConfig._domain_from_dict(x) if isinstance(x, dict) else x
+                         for x in (kw.get("domains") or [])]
+        kw["domain_services_reviewed"] = [
+            str(n) for n in (kw.get("domain_services_reviewed") or [])]
+        return cls(**kw)
+
+    def _services_words(self) -> str:
+        """``optional_services`` as the builders read it: commas tolerated as
+        separators (both node builders normalise ``,`` to a space), whitespace
+        collapsed."""
+        return " ".join(self.optional_services.replace(",", " ").split())
 
     # ---- validation (fail-closed, mirrors ImageConfig.validate_identity) -----
     def validate(self) -> None:
         if self.cluster_domain:
             validate_domain_name(self.cluster_domain)
+        for d in self.domains:
+            if (d.name or "").strip():
+                validate_domain_name(d.name.strip())
         for name, roleset in (("x86_roles", self.x86_roles),
                               ("rpi_roles", self.rpi_roles),
-                              ("jetson_roles", self.jetson_roles)):
+                              ("jetson_roles", self.jetson_roles),
+                              ("optional_services", self._services_words())):
             for tok in roleset.split():
                 if not _ROLE_TOKEN_RE.match(tok):
                     raise IdentityValidationError(
@@ -145,6 +318,7 @@ class FleetConfig:
             ("ORANGEPI4LTS_ONLY", self.orangepi4lts_only),
             ("SKIP_KEYS", self.skip_keys),
             ("PENTEST", self.pentest), ("PENTEST_ONLY", self.pentest_only),
+            ("WITH_TOR", self.with_tor),
         ):
             if val:
                 env[var] = "1"
@@ -165,6 +339,7 @@ class FleetConfig:
             ("PENTEST_ENV", self.pentest_env), ("PENTEST_SCAN", self.pentest_scan),
             ("PENTEST_PIPELINE", self.pentest_pipeline),
             ("HEADSCALE_URL", self.headscale_url),
+            ("OPTIONAL_SERVICES", self._services_words()),
         ):
             if val:
                 env[var] = val
@@ -248,4 +423,11 @@ class FleetDriver(BuildDriver):
             cfg.validate()
         except IdentityValidationError as e:
             problems.append(str(e))
+        # THE PER-DOMAIN SERVICES GATE (#587) — the same seam every other build route
+        # calls. Here, so "Build fleet now" (FleetPage._start refuses on any preflight
+        # problem, inline) and a previous-builds RESTART both refuse BEFORE
+        # build-all-roles.sh is spawned, naming each unwalked domain.
+        reason = fleet_gate_reason(cfg)
+        if reason:
+            problems.append(reason)
         return problems

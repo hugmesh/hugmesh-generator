@@ -378,7 +378,7 @@ def _save_argv(generator_dir: str, work_dir: str, dev: qd.Device, target: str,
 
 
 def _run_argv(argv: list[str]) -> int:
-    """Execute one runner invocation, streaming its output. The injectable seam:
+    """Execute one runner invocation, streaming its output. The injectable override point:
     tests swap this for a spy, exactly like the GUI swaps in its process runner."""
     try:
         return subprocess.call(argv)
@@ -451,7 +451,7 @@ def save_mesh(generator_dir: str, items=None, *, work_dir: str = "",
     * a blocked or unresolved device costs a report row, never an exception —
       "save everything" must save everything that exists to be saved.
 
-    ``run`` is the process seam (argv -> returncode); default runs the runner
+    ``run`` is the process override point (argv -> returncode); default runs the runner
     for real. The report's ``ok`` is strict: True only when EVERY requested
     device's disk landed.
     """

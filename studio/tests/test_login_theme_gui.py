@@ -8,7 +8,7 @@ The invariants that make the feature real rather than decorative:
      reason mesh stopped skipping this page).
   3. commit is UNCONDITIONAL: the unaffiliated-role / role-class clears may not
      touch login_* (mesh-plane data, image-scope clears).
-  4. LocalMeshPage: collect_bootstrap() carries the derived css (the dead-default
+  4. LocalMeshPage: collect_bootstrap() carries the derived css (the silently-does-nothing-default
      class guard), and a typo'd colour REFUSES the verb instead of silently
      shipping an unthemed stack.
   5. Slots never raise: garbage input -> error note, not a PyQt6 abort.

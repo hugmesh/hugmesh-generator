@@ -393,7 +393,9 @@ assert_role_topology() {  # $1 = root prefix ("" on the live guest; a fixture ro
     #     hugmesh-device-registry-sync (provision.sh:1116), hugmesh-policy-sync (:1242),
     #     hugmesh-node-storage-reconcile (:1789), hugmesh-domain-reconcile (:2021).
     #   BUILD-TIME OPTIONAL, linked only when the slug is selected —
-    #     hugmesh-vpn-reconcile (egress-vpn), hugmesh-tor-reconcile (tor).
+    #     hugmesh-vpn-reconcile (egress-vpn), hugmesh-tor-reconcile (tor; linked
+    #     TOGETHER with the distro `tor` service — decision 70 = B on #347 — and graded
+    #     as a unit by assert_tor_node_contract below).
     #   NEVER LINKED DIRECTLY, EVER — hugmesh-egress-vpn: its reconcile agent owns its
     #     lifecycle and rc-update adds it only once a verified assignment lands
     #     (specs/usr/sbin/hugmesh-vpn-reconcile:202). Linking it directly would bring a
@@ -444,6 +446,140 @@ assert_role_topology() {  # $1 = root prefix ("" on the live guest; a fixture ro
 }
 
 assert_role_topology ""
+
+# ── TOR NODE CONTRACT (hugmesh-generator#583, decision 70 = B on #347) ──────────
+# One tor selection on a cluster-node role produces FOUR artefacts together, from one
+# builder predicate (_tor_node_selected in build-{x86-host,rpi5}-stage4.sh):
+#   package   /usr/bin/tor (net-vpn/tor)          tor-linked       default runlevel `tor`
+#   cron      /etc/cron.d/hugmesh-tor-reconcile    reconcile-linked default runlevel
+#                                                                  `hugmesh-tor-reconcile`
+# The guest carries no record of whether tor was ASKED for (the QEMU lane passes no
+# tor selection today), so this grades CONSISTENCY, never intent: all four or none on a
+# cluster node, and NONE of the four — not even the package — on a CLIENT image (the
+# builders drop a client tor selection). A half-applied selection — the daemon linked
+# with no reconcile to write its torrc, or the reconcile linked with no daemon to converge —
+# is the defect. On a LIVE guest ($2 = live) a selected node must also be running
+# EXACTLY ONE tor (two owners, one daemon: the reconcile must never start a second),
+# carry the managed `HiddenServicePort 443` torrc, and have exported a v3 hostname.
+# Process census reads ${_R}/proc/*/comm (the guest's /proc when _R is empty) and the
+# service state asks rc-service, so tests/scripts/test-tor-node-contract.sh drives this
+# whole function against fixture trees with a stubbed rc-service.
+assert_tor_node_contract() {  # $1 = root prefix ("" on the live guest); $2 = "live" -> grade the running daemon
+    local _R
+    local _live
+    local _role
+    local _class
+    local _have
+    local _art
+    local _n
+    local _p
+    local _h
+    local _l
+    _R="${1-}"
+    _live="${2-}"
+    _role="$(sed -n '1p' "${_R}/etc/hugmesh/role" 2>/dev/null | tr -d '[:space:]')"
+    if [ -n "${_role}" ]; then
+        _role="$(hugmesh_role_canonicalize "${_role}" 2>/dev/null || printf '%s' "${_role}")"
+    fi
+    case "${_role}" in
+        pki|generic|omnibus|backend|frontend|backend-gpu|edge-ai) _class=cluster ;;
+        desktop|laptop|chromebook|standalone-thin|standalone-thick|standalone-unaffiliated) _class=client ;;
+        *) skip "tor node contract — role marker '${_role:-<none>}' unusable (graded by the role topology section); NOT evidence either way"
+           return ;;
+    esac
+
+    _have=""
+    [ -e "${_R}/usr/bin/tor" ] && _have="${_have} package"
+    _rl_has "${_R}" tor && _have="${_have} tor-linked"
+    _rl_has "${_R}" hugmesh-tor-reconcile && _have="${_have} reconcile-linked"
+    [ -f "${_R}/etc/cron.d/hugmesh-tor-reconcile" ] && _have="${_have} cron"
+
+    if [ "${_class}" = client ]; then
+        # ALL FOUR artefacts, the package included: #583 item 6 was net-vpn/tor emerged
+        # on a desktop with nothing linked, so a package-only regression must fail too.
+        if [ -n "${_have}" ]; then
+            bad "role ${_role}: tor node artefacts on a CLIENT image (found:${_have}) — the builders drop a client tor selection; the onion is a cluster-node service"
+        else
+            ok "role ${_role}: no tor node artefact (package, runlevel link or cron) on this client image"
+        fi
+        return
+    fi
+
+    if [ -z "${_have}" ]; then
+        ok "role ${_role}: tor not selected — no net-vpn/tor, no tor or hugmesh-tor-reconcile link, no reconcile cron (the whole contract is absent together)"
+        return
+    fi
+    for _art in package tor-linked reconcile-linked cron; do
+        case " ${_have} " in
+            *" ${_art} "*) ok "role ${_role}: tor selected — ${_art} present" ;;
+            *) bad "role ${_role}: tor selected (found:${_have}) but ${_art} is MISSING — a half-applied tor selection" ;;
+        esac
+    done
+    if [ -x "${_R}/usr/sbin/hugmesh-tor-reconcile" ] && [ -f "${_R}/etc/init.d/tor" ]; then
+        ok "role ${_role}: tor selected — /etc/init.d/tor and an executable /usr/sbin/hugmesh-tor-reconcile are baked"
+    else
+        bad "role ${_role}: tor selected but /etc/init.d/tor or an executable /usr/sbin/hugmesh-tor-reconcile is missing — the linked services cannot start"
+    fi
+    # The cron's */5 entry runs the ingress half (hugmesh-generator#614): without it the
+    # onion reaches the edge and gets ingress-nginx's 404, never the gateway.
+    if [ -x "${_R}/usr/sbin/hugmesh-tor-ingress-admit" ]; then
+        ok "role ${_role}: tor selected — an executable /usr/sbin/hugmesh-tor-ingress-admit is baked (the cron admits the onion at the ingress edge)"
+    else
+        bad "role ${_role}: tor selected but no executable /usr/sbin/hugmesh-tor-ingress-admit — the cron cannot admit the onion as an Ingress host (the edge answers 404)"
+    fi
+
+    if [ "${_live}" != live ]; then
+        skip "role ${_role}: tor runtime (service state, daemon count, torrc, exported hostname) — not a live guest"
+        return
+    fi
+    if rc-service tor status >/dev/null 2>&1; then
+        ok "role ${_role}: the tor service is started"
+    else
+        bad "role ${_role}: the tor service is NOT started on a tor-selected node"
+    fi
+    _n=0
+    for _p in "${_R}"/proc/[0-9]*/comm; do
+        [ -r "${_p}" ] || continue
+        [ "$(cat "${_p}" 2>/dev/null)" = tor ] && _n=$((_n + 1))
+    done
+    if [ "${_n}" -eq 1 ]; then
+        ok "role ${_role}: exactly one tor daemon is running"
+    elif [ "${_n}" -eq 0 ]; then
+        bad "role ${_role}: no tor daemon is running on a tor-selected node"
+    else
+        bad "role ${_role}: ${_n} tor daemons are running — two owners started two daemons (the reconcile must reload a running tor, never start another)"
+    fi
+    _p=""
+    while IFS= read -r _l || [ -n "${_l}" ]; do
+        [[ "${_l}" =~ ^HiddenServicePort\ 443\ [^[:space:]]+:[0-9]+$ ]] && { _p=yes; break; }
+    done 2>/dev/null < "${_R}/etc/tor/torrc"
+    if [ -n "${_p}" ]; then
+        ok "role ${_role}: the managed torrc publishes HiddenServicePort 443"
+    else
+        bad "role ${_role}: /etc/tor/torrc has no managed 'HiddenServicePort 443 host:port' line — the reconcile never wrote it"
+    fi
+    _h="$(tr -d '[:space:]' < "${_R}/var/lib/hugmesh/tor/hostname" 2>/dev/null)"
+    if [[ "${_h}" =~ ^[a-z2-7]{56}\.onion$ ]]; then
+        ok "role ${_role}: a v3 onion hostname is exported (${_h})"
+    else
+        bad "role ${_role}: /var/lib/hugmesh/tor/hostname holds no v3 onion ('${_h}') — nothing was minted or exported"
+    fi
+    # #614: the onion must be an Ingress host, or the edge answers 404. Only a
+    # control-plane node (admin.conf) can admit it; the agent's own `status` asks the
+    # live Application.
+    if [ ! -r "${_R}/etc/kubernetes/admin.conf" ]; then
+        skip "role ${_role}: onion Ingress admission — no /etc/kubernetes/admin.conf here (a worker cannot admit its onion; see hugmesh-generator#614)"
+        return
+    fi
+    _l="$(HUGMESH_TOR_ROOT="${_R}" "${_R}/usr/sbin/hugmesh-tor-ingress-admit" status 2>/dev/null)"
+    case "${_l}" in
+        *" NOT admitted"*) bad "role ${_role}: an exported onion is NOT an fe-gateway Ingress host — https://<onion>/ answers ingress-nginx's 404 (${_l//$'\n'/; })" ;;
+        *" admitted"*)     ok "role ${_role}: every exported onion is an fe-gateway Ingress host (${_l//$'\n'/; })" ;;
+        *) skip "role ${_role}: onion Ingress admission unknown — the fe-gateway Application is not readable from this node ('${_l}')" ;;
+    esac
+}
+
+assert_tor_node_contract "" live
 echo "-- kernel hardening --"
 # THE LSM STACK THE IMAGE ASKED FOR MUST BE THE ONE THE KERNEL IS RUNNING.
 #
@@ -468,11 +604,13 @@ done
 check "every LSM the cmdline requests is initialized (asked:${_lsm_req:-<none>} live:${_lsm_live:-<none>})" \
     '[ -n "${_lsm_req}" ] && [ -n "${_lsm_live}" ] && [ -z "${_lsm_missing}" ]'
 # Lockdown (integrity or higher) prevents /dev/mem writes, unsigned module loading,
-# kprobe redirection. It is requested by x86 + rpi5 only: the 8 ARM board images
-# ship no lockdown= in cmdline.base and no CONFIG_SECURITY_LOCKDOWN_LSM in their
-# fragments, so asserting it unconditionally would only ever grade the harness's
-# own -append literal. Assert it where the image ASKS for it, from the kernel's
-# report — never from the cmdline word, which is the claim under test.
+# kprobe redirection. Every board image now requests it (x86, rpi5 and the 8 ARM
+# boards all carry lockdown=integrity and build CONFIG_SECURITY_LOCKDOWN_LSM; the
+# fleet property is pinned by tests/scripts/test-lsm-posture-honesty.sh). The branch
+# stays conditional on the cmdline so a harness that boots a kernel WITHOUT the token
+# cannot be graded against a literal it made up. Assert it where the image ASKS for
+# it, from the kernel's report — never from the cmdline word, which is the claim
+# under test.
 _lockdown_req="$(tr ' ' '\n' < /proc/cmdline 2>/dev/null | sed -n 's/^lockdown=//p')"
 if [ -n "${_lockdown_req}" ]; then
     # securityfs marks the active level in brackets ("none [integrity] confidentiality");
@@ -484,7 +622,7 @@ if [ -n "${_lockdown_req}" ]; then
 else
     # skip(), not ok(): a check that does not apply to this node is not evidence that the
     # node is healthy. Counting it as a PASS inflated every ARM-board row.
-    skip "kernel lockdown — this image requests none; lockdown is x86 + rpi5 only"
+    skip "kernel lockdown — this boot requested none (every shipped board image asks for lockdown=integrity; the fleet lint fails the build if one stops)"
 fi
 # ── PRECONDITION FOR EVERY SELINUX ASSERTION BELOW ─────────────────────────
 # AN UNLABELLED ROOTFS PASSES ALL ~10 SELINUX CHECKS BELOW. That is not a
