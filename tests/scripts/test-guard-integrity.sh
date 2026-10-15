@@ -1033,6 +1033,19 @@ PREMERGE_UNGATED=(
   # .gitlab-ci.yml's lint:optional-service-slug-closure — nothing on the GitHub side
   # runs it; `make e2e-ungated` runs it locally. Leave it listed until #106 lands.
   tests/scripts/test-optional-service-slug-closure.sh
+  # Lands outside the pull_request gate ONLY because wiring it there means an edit
+  # under .github/workflows/shell-suites.yml, which the change that added it was
+  # not permitted to make (operator action, 2026-10-14). It is NOT an exemption on
+  # the merits: both suites are offline (python3 + openssl + bash; the netpol one also
+  # takes kubectl when present). They were MEASURED only on a developer host, NOT in a
+  # shell-suites image, and are run post-merge by .gitlab-ci.yml's lint:pg-tls-preflight
+  # and lint:netpol-egress-scope. Wire both into shell-suites.yml's DEBIAN job, measure
+  # them there, and DELETE both entries (PREMERGE_BASELINE then moves 198 -> 200). Added
+  # ungated: denominator +2 and the ungated SET +2, baseline unchanged at 198
+  # (RE-MEASURED on this branch merged with origin/main 9b1b733c, GUARD_PREMERGE=0: this
+  # file prints "198 of 228" and "(30 suite(s))").
+  tests/scripts/test-netpol-egress-scope.sh
+  tests/scripts/test-pg-tls-preflight.sh
   tests/scripts/test-service-env-contract.sh
   tests/stack/test-gateway-auth-flag-parity.sh
   tests/stack/test-m2-bootstrap.sh
