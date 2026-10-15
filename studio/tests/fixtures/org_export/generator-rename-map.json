@@ -1,11 +1,6 @@
 {
   "exclude": [
     "hugmesh-generator:tests/cloud-deploy/test-cloud-deploy-driver.sh",
-    "hugmesh-generator:tests/scripts/test-stack-clone-credential.sh",
-    "hugmesh-generator:scripts/secret-scan.sh",
-    "hugmesh-generator:tests/scripts/test-publish-images.sh",
-    "hugmesh-generator:studio/tests/test_pages_vault.py",
-    "hugmesh-generator:studio/tests/test_secret_files.py",
-    "hugmesh-generator:studio/tests/test_secret_files_gui.py"
+    "hugmesh-generator:tests/scripts/test-stack-clone-credential.sh"
   ]
 }

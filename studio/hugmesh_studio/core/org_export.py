@@ -181,10 +181,13 @@ BANNED_MARKERS = (
     # table) are not a key, and refusing them refused a real repository. NOT anchored to
     # the start of a line and the line break may be the two characters backslash-n: a key
     # in a YAML block (indented), in a quoted value, or in a service-account JSON file or
-    # a one-line env value (every newline escaped) is still a key
+    # a one-line env value (every newline escaped) is still a key. The body must run to
+    # 32 base64 characters: a real key's first line is 48 to 76, while the tests of the
+    # platform's own services write `...KEY-----\nQUJD\n` as a stand-in, and refusing
+    # those refused a real repository
     ("private key header", re.compile(
         r"-----BEGIN (?:RSA |EC |DSA |OPENSSH |PGP |ENCRYPTED )?PRIVATE KEY-----[ \t]*"
-        r"(?:\r?\n|\\(?:r\\)?n)(?:\s|\\[rn])*(?=[A-Za-z0-9+/])")),
+        r"(?:\r?\n|\\(?:r\\)?n)(?:\s|\\[rn])*(?=[A-Za-z0-9+/]{32})")),
 )
 
 #: What the default rename map deliberately leaves alone (shown in every plan).

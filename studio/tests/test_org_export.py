@@ -693,7 +693,7 @@ def test_a_planted_banned_marker_refuses_that_repository_and_names_the_file(worl
 
 def test_other_banned_markers_are_recognised():
     found = {label for label, rx in oe.BANNED_MARKERS
-             if rx.search("x\n" + PEM_HEADER + "\nabc\n")}
+             if rx.search("x\n" + PEM_HEADER + "\n" + _KEY_BODY + "\n")}
     assert found == {"private key header"}
     # the bare header strings inside a compiled program (an engine's .wasm string table:
     # header, NUL, footer, NUL ...) are not a key; the body is what makes it one
@@ -705,7 +705,7 @@ def test_other_banned_markers_are_recognised():
     old_rule = re.compile(r"^-----BEGIN (?:RSA |EC |DSA |OPENSSH |PGP |ENCRYPTED )?PRIVATE "
                           r"KEY-----\s*$", re.MULTILINE)
     assert old_rule.search("x\n" + wasm_like.replace("\0", ""))      # the old rule did match
-    assert any(rx.search("-----BEGIN " + "OPENSSH PRIVATE KEY-----\r\nb3BlbnNzaC1rZXk=\n")
+    assert any(rx.search("-----BEGIN " + "OPENSSH PRIVATE KEY-----\r\n" + _KEY_BODY + "\n")
                for _l, rx in oe.BANNED_MARKERS)
     # a quoted MENTION of the header (a scanner's own pattern) is not a key
     assert not any(rx.search('pat="-----BEGIN PRIVATE KEY-----"') for _l, rx in oe.BANNED_MARKERS)
@@ -1172,8 +1172,9 @@ def test_the_site_title_is_html_escaped_and_a_bad_inline_regex_is_a_problem(worl
 
 
 def test_the_generators_own_tree_exports_clean_with_the_documented_exclusions():
-    """The generator is exported by default, and its own tree carries test
-    fixtures the banned-marker scan refuses (a fake AWS key, fake tokens, fake PEM keys). Without a way to drop them every GUI/TUI plan for a real domain would be
+    """The generator is exported by default, and its own tree carries two test
+    fixtures the banned-marker scan refuses (a fake AWS key, a fake fine-grained
+    token). Without a way to drop them every GUI/TUI plan for a real domain would be
     'refused: banned marker'. The ready-made exclusion
     map fixtures/org_export/generator-rename-map.json, which docs/GOLIVE-ORG-EXPORT.md
     points at, must keep this checkout's tree exportable — and this test is what
@@ -1188,12 +1189,7 @@ def test_the_generators_own_tree_exports_clean_with_the_documented_exclusions():
     rules = oe.rename_rules(cfg, [oe.GENERATOR_REPO])
     runner = oe.SubprocessRunner()
     bare = oe._prepare_repo(runner, oe.GENERATOR_REPO, cfg, rules, out, [])
-    assert bare.banned == ["scripts/secret-scan.sh: private key header",
-                           "studio/tests/test_pages_vault.py: private key header",
-                           "studio/tests/test_secret_files.py: private key header",
-                           "studio/tests/test_secret_files_gui.py: private key header",
-                           "tests/cloud-deploy/test-cloud-deploy-driver.sh: AWS access key",
-                           "tests/scripts/test-publish-images.sh: private key header",
+    assert bare.banned == ["tests/cloud-deploy/test-cloud-deploy-driver.sh: AWS access key",
                            "tests/scripts/test-stack-clone-credential.sh: GitHub token",
                            "tests/scripts/test-stack-clone-credential.sh: GitHub fine-grained token"], \
         ("the generator's own banned markers changed: update generator-rename-map.json, "
@@ -1202,13 +1198,10 @@ def test_the_generators_own_tree_exports_clean_with_the_documented_exclusions():
         {}, oe.load_rename_map(os.path.join(FIXTURES, "generator-rename-map.json")))
     clean = oe._prepare_repo(runner, oe.GENERATOR_REPO, cfg, rules, out, [])
     assert clean.banned == [] and not clean.blocked, clean.banned
-    assert sum("excluded by the rename map" in x for x in clean.excluded) == 7
+    assert sum("excluded by the rename map" in x for x in clean.excluded) == 2
     doc = open(os.path.join(gen, "docs", "GOLIVE-ORG-EXPORT.md"), encoding="utf-8").read()
     for rel in ("tests/cloud-deploy/test-cloud-deploy-driver.sh",
-                "tests/scripts/test-stack-clone-credential.sh", "scripts/secret-scan.sh",
-                "tests/scripts/test-publish-images.sh", "studio/tests/test_pages_vault.py",
-                "studio/tests/test_secret_files.py", "studio/tests/test_secret_files_gui.py",
-                "generator-rename-map.json"):
+                "tests/scripts/test-stack-clone-credential.sh", "generator-rename-map.json"):
         assert rel in doc, f"docs/GOLIVE-ORG-EXPORT.md does not name {rel}"
     shutil.rmtree(out, ignore_errors=True)
 
@@ -1693,6 +1686,27 @@ def test_a_private_key_is_found_wherever_it_is_written(tmp_path, shape):
     f.write_text(_KEY_SHAPES[shape], encoding="utf-8")
     labels, _text, _clean = oe._scan_file(str(f))
     assert labels == ["private key header"], (shape, labels)
+
+
+@pytest.mark.parametrize("text", [
+    PEM_HEADER + "\nQUJD\n",                                   # the admin-bff Java test's stand-in
+    "-----BEGIN " + "PRIVATE KEY-----\\nQUJD\\n",              # ... as written in source code
+    "x\n" + PEM_HEADER + "\nx\n-----END RSA PRIVATE KEY-----\n",
+    PEM_HEADER + "\n" + "A" * 31 + "\n",                       # one short of a real first line
+])
+def test_a_stand_in_key_with_a_short_body_is_not_a_key(tmp_path, text):
+    """Java and shell tests of the platform's own services write a header and a few
+    characters as a key stand-in (`...KEY-----\\nQUJD\\n`); the looser rule refused two
+    such files in a real repository. A key's first body line is 48 to 76 characters."""
+    f = tmp_path / "Test.java"
+    f.write_text(text, encoding="utf-8")
+    assert oe._scan_file(str(f))[0] == []
+
+
+def test_a_key_body_of_32_characters_is_a_key(tmp_path):
+    f = tmp_path / "k.txt"
+    f.write_text(PEM_HEADER + "\n" + "A" * 32 + "\n", encoding="utf-8")
+    assert oe._scan_file(str(f))[0] == ["private key header"]
 
 
 @pytest.mark.parametrize("text", [
