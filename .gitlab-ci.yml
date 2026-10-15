@@ -2256,6 +2256,17 @@ lint:lsm-posture-honesty:
   script:
     - bash tests/scripts/test-lsm-posture-honesty.sh
 
+# docs/GROUP-CALL-SFU.md says the server half of group calls is designed, not
+# built. This lint checks that claim, and the repo facts the design reasons from
+# (tuwunel pin, coturn ports, reserved labels), against this checkout, so landing
+# the manifests or bumping the pin cannot leave the page stale. Static, no network.
+lint:group-call-sfu-doc-honesty:
+  stage: lint
+  image: python:3-slim
+  tags: [hugmesh-x86]
+  script:
+    - bash tests/scripts/test-group-call-sfu-doc-honesty.sh
+
 # Shell-injection remediation regression suite. Runs the fail-closed identity /
 # path / manifest validators added by the shell-injection hardening (build-x86 /
 # rpi5 / frite, gen-keystores, generate-brand-repos, provision.sh) against

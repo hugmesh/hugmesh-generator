@@ -4,8 +4,9 @@
 > was chosen on 2026-09-23 (hugmesh-admin-bff-api#98, decisions 102a and 102b).
 > The **client half** has shipped dark in `hugmesh-matrix-ui`. The **server
 > half** (this repo) is not built. This page is the plan for it. Measured
-> 2026-10-14 against `hugmesh-generator` origin/main `5f450a48`,
-> `hugmesh-matrix-ui` origin/main `3032591`, tuwunel main `f473d9a` and tag
+> 2026-10-15 against `hugmesh-generator` origin/main `a73be8ce`,
+> `hugmesh-matrix-ui` origin/main `b4c13dc` (its `rtc/` directory is unchanged
+> since `26408d5`), tuwunel main `f473d9a` and tag
 > `v1.7.0` (the tag the mesh pins). Where the two tuwunel refs differ, this
 > page says which one a statement is about.
 
@@ -54,10 +55,12 @@ Where it is used: only the chat3d voice mesh, and only when the roster is above
 the room's peer-to-peer cap and a focus is advertised. The 1:1 call screen is
 still `m.call.*`. With no focus the cap stands.
 
-**Server half, this repo: absent.** `git grep` for `livekit`, `matrixrtc`,
-`rtc_foci`, `call_member` over `specs/`, `scripts/` and `tests/` (excluding the
-vendored UI bundle under `tests/stack/.uidist`) finds only prose. No manifest,
-no registry row, no secret, no firewall rule.
+**Server half, this repo: absent.** A scan for `livekit`, `lk-jwt`,
+`rtc_foci` and `matrixrtc` over `specs/`, `scripts/` and `tests/` (excluding the
+vendored UI bundle under `tests/stack/.uidist`) finds nothing. No manifest,
+no registry row, no secret, no firewall rule. `tests/scripts/test-group-call-sfu-doc-honesty.sh`
+runs that scan and fails when it stops being true, so landing stage 1 forces this
+page and its status banner to be updated in the same change.
 
 **One thing already true on the homeserver.** The pinned tuwunel
 `ghcr.io/matrix-construct/tuwunel:v1.7.0` already carries the discovery side:
@@ -265,7 +268,9 @@ Because section 4.1 forces standalone mode, state the residual risk plainly:
 - **Browser side.** matrix-ui already refuses a non-`https` focus, a non-`wss`
   LiveKit URL, and sends no cookies to the focus origin. The page CSP already
   allows `connect-src https: wss:`, so no CSP change is needed.
-- **Rooms.** Rooms use `state_default: 50`, so an ordinary member cannot publish
+- **Rooms.** Most rooms give `state_default: 50` (matrix-ui's own comment in
+  `matrix-rtc.service.ts` says so, and `matrix.service.ts` falls back to 50 when
+  a room sets none), so an ordinary member cannot publish
   `org.matrix.msc3401.call.member`. Room setup needs an `events` override giving
   that type power level 0. The membership publish is best effort in the client
   (the SFU room works without it), but without the grant other MatrixRTC clients
