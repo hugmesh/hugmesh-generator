@@ -2455,6 +2455,7 @@ run_nongating_smokes() {
                 "image-spec-guards:${REPO_DIR}/tests/build-image-spec-guards.sh" \
                 "image-tor-onion:${REPO_DIR}/tests/build-image-tor-onion.sh" \
                 "image-idp:${REPO_DIR}/tests/build-image-idp.sh" \
+                "image-dial-identity:${REPO_DIR}/tests/build-image-dial-identity.sh" \
                 "idp-builder-functions:${REPO_DIR}/tests/scripts/test-idp-builder-functions.sh" \
                 "qemu-matrix-assertions:${REPO_DIR}/tests/qemu/assertions_test.sh" \
                 "qemu-avc-workout:${REPO_DIR}/tests/qemu/avc-workout_test.sh" \
