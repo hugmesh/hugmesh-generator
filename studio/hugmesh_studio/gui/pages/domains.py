@@ -79,6 +79,7 @@ import os
 
 from ..qt import Qt, QtWidgets
 from ..styles import WARN, muted
+from ...core import plain_words
 from ...core.config import (CLIENT_CA_INHERITANCE_NOTE, DOMAIN_FIELDS, DOMAIN_IDP_OWN,
                             DOMAIN_IDP_SUPERDOMAIN, Domain, image_class,
                             superadmin_plane_applies)
@@ -557,7 +558,8 @@ class DomainsTableBody:
         try:
             lines = self.brand_summaries()
             self.summary_box.setVisible(bool(lines))
-            self.summary_box.setText("<b>Brands</b> (read-only)<br>" + "<br>".join(
+            self.summary_box.setText(
+                f"<b>Brands</b> under the {plain_words.term('superbrand')} (read-only)<br>" + "<br>".join(
                 f"&nbsp;&nbsp;{html.escape(n or '(unnamed)')} — {html.escape(t)}"
                 for n, t in lines) if lines else "")
         except Exception:                       # noqa: BLE001 — PyQt6 qFatal guard

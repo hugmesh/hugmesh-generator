@@ -20,11 +20,10 @@ import os
 
 import pytest
 
-from hugmesh_studio.core import brand_look, brand_model
+from hugmesh_studio.core import brand_model
 from hugmesh_studio.core.config import Domain, ImageConfig
 from hugmesh_studio.core.fleet import FleetConfig, FleetDomains
 from hugmesh_studio.core.local_mesh_bootstrap import LocalMeshBootstrapConfig
-from hugmesh_studio.tui import superbrand_step as sbs
 from hugmesh_studio.tui.superbrand_step import (BootstrapHost, BrandSession,
                                                 CREATE_KEY, CREATE_LABEL, FleetHost,
                                                 ImageHost, UNAFFILIATED_REASON,
@@ -115,7 +114,8 @@ def test_choosing_a_stored_design_copies_it_and_notes_where_it_came_from(gen):
     assert s.copied_from == {"design": "acme-look", "date": DATE}
     s.touched = True
     assert s.record().copied_from == {"design": "acme-look", "date": DATE}
-    assert "Copied from design ‘acme-look’ on 2026-10-14" in "\n".join(s.summary_lines())
+    assert ("Copied from", "design ‘acme-look’ on 2026-10-14") in s.summary_rows()
+    assert any("design ‘acme-look’ on 2026-10-14" in ln for ln in s.summary_lines())
     # the existing choice shows a summary and Change it opens the design
     assert s.change() == "" and s.designing
 

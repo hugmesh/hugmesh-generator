@@ -31,8 +31,6 @@ Qt-free, like everything in this package; the window's tabs call the same functi
 """
 from __future__ import annotations
 
-from typing import Any
-
 from ..core import brand_look, brand_model, plain_words
 from ..core.config import DOMAIN_IDP_OWN, DOMAIN_IDP_SUPERDOMAIN
 from .superbrand_step import BrandSession
@@ -93,12 +91,16 @@ class BrandView:
         idp = plain_words.SIGN_IN.get(
             r.idp if r.idp in (DOMAIN_IDP_OWN, DOMAIN_IDP_SUPERDOMAIN)
             else DOMAIN_IDP_SUPERDOMAIN, "")
-        return [("Public name", r.name or "(not set)"),
+        rows = [("Public name", r.name or "(not set)"),
                 ("Title", r.title or "(not set)"),
                 ("Id", self.brand_id),
                 ("Sign-in", idp),
                 ("Applies to", ", ".join(r.images) if r.images
                  else "every eligible image")]
+        ca = self.session.host.base_ca(self.name)
+        if ca is not None:             # only a route with a Secrets-store step has one
+            rows.append(("Certificate authority", ca or "none (the mesh default)"))
+        return rows
 
     def identity_home(self) -> str:
         return SUPERBRAND_HOME if self.own else IDENTITY_HOME

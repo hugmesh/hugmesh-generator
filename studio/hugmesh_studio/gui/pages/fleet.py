@@ -69,6 +69,7 @@ from ...core.config import (
 from ...core.fleet import (FLEET_LANE_NOTE, FleetConfig, FleetDomains, FleetDriver,
                            commit_fleet_domains, fleet_domain_fields,
                            fleet_domains_from_config, seed_fleet_domains)
+from ...core import plain_words
 from ...tui.superbrand_step import session_for
 from ._scroll import scrollable
 from ._widgets import _file_picker, _row
@@ -82,7 +83,8 @@ from .superbrand import SuperbrandStep
 # was), and choosing ‘Create a new superbrand’ there opens the design on this step.
 (STEP_PLATFORMS, STEP_ROLES, STEP_SHARED, STEP_BRAND, STEP_DOMAINS,
  STEP_DOMAIN_SERVICES, STEP_REVIEW, STEP_RUN) = range(8)
-_STEP_TITLES = ("Platforms", "Roles & boards", "Shared options", "Superbrand", "Domains",
+_STEP_TITLES = ("Platforms", "Roles & boards", "Shared options",
+                plain_words.term("superbrand").capitalize(), "Domains",
                 "Domain services", "Review", "Run")
 
 

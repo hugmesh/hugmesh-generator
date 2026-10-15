@@ -94,6 +94,22 @@ def _drawn(page, widget, what, qapp, *, click=False):
         assert widget.width() >= 90, f"{what} is {widget.width()}px wide"
 
 
+def _no_overlap(widgets, what):
+    """No two of these visible widgets cover the same pixels (global coordinates)."""
+    rects = []
+    for w in widgets:
+        if w is None or not w.isVisible():
+            continue
+        tl = w.mapToGlobal(QtCore.QPoint(0, 0))
+        rects.append((QtCore.QRect(tl, w.size()), type(w).__name__,
+                      (getattr(w, "text", lambda: "")() or w.objectName())[:30]))
+    for i, (a, na, ta) in enumerate(rects):
+        for b, nb, tb in rects[i + 1:]:
+            inter = a.intersected(b)
+            assert inter.isEmpty() or (inter.width() <= 1 or inter.height() <= 1), \
+                f"{what}: {na} {ta!r} {a.getRect()} overlaps {nb} {tb!r} {b.getRect()}"
+
+
 def _page_fits(page, what, ignore=()):
     """No visible control reaches past the right edge of its viewport (#661)."""
     vp = viewport_of(page)
@@ -172,6 +188,8 @@ def test_geom_the_branding_pages_drop_down_and_design_are_drawn_whole(qapp, styl
                 _drawn(page, le, f"{what}: the {f} box", qapp, click=True)
             _drawn(page, sb.keep_btn, f"{what}: Keep this design", qapp, click=True)
             _drawn(page, sb.keep_name, f"{what}: the design name box", qapp, click=True)
+            _no_overlap([sb.picker.combo, *sb.fields.values(), sb.keep_name, sb.keep_btn,
+                         sb.picker.caption], what)
             _sentences_whole(page, sb, what, qapp, skip=(sb.look_editor,)
                              if sb.look_editor else ())
             _snap(page, "branding-design", style, pt, size)
@@ -200,9 +218,8 @@ def test_geom_an_unaffiliated_branding_page_says_why_and_keeps_the_look(qapp, st
             sb = page.superbrand
             assert not sb.picker.combo.isEnabled()
             _drawn(page, sb.picker.note, f"{what}: the reason beside the drop-down", qapp)
-            _drawn(page, sb.reason, f"{what}: the reason under the design", qapp)
+            assert sb.reason.isHidden(), "the reason is said once, beside the drop-down"
             assert_whole(sb.picker.note, f"{what}: the picker's reason")
-            assert_whole(sb.reason, f"{what}: the design's reason")
             assert sb.identity_box.isHidden()
             _snap(page, "branding-unaffiliated", style, pt, size)
         finally:
@@ -249,8 +266,11 @@ def test_geom_every_tab_of_the_brand_screen_is_drawn_whole(qapp, style, pt, size
                 _sentences_whole(page, cur if cur is not None else page.table.parentWidget(),
                                  t, qapp,
                                  skip=(tabs.look_editor,) if tabs.look_editor else ())
+                _no_overlap([tabs.bar, cur if cur is not None else None,
+                             page.front_door_table if title == "Services" else None], t)
                 if title == "Ways to reach it":
                     _drawn(page, tabs.ways_btn, f"{t}: the button", qapp, click=True)
+                    _no_overlap([tabs.ways_text, tabs.ways_btn, tabs.ways_note], t)
                     assert "Set up ways to reach this brand" == tabs.ways_btn.text()
                 if title == "Identity":
                     for lab in (tabs.identity_form.itemAt(i).widget()

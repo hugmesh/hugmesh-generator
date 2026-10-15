@@ -47,27 +47,29 @@ from typing import Any
 
 from ..core import brand_look, brand_model, plain_words, validate as validators
 from ..core.config import DOMAIN_FIELDS, Domain, ImageConfig, unaffiliated_image
-from . import model
 
 __all__ = ["CREATE_KEY", "CREATE_LABEL", "UNAFFILIATED_REASON", "Choice", "BrandHost",
            "ImageHost", "BootstrapHost", "FleetHost", "BrandSession", "SuperbrandScreen",
            "session_for", "IDENTITY_FIELDS", "IDENTITY_LABELS"]
 
 CREATE_KEY = "create"
-CREATE_LABEL = "Create a new superbrand"
+#: The word every screen uses for the mesh's governing brand: the table's, never a copy.
+SUPERBRAND = plain_words.term("superbrand")
+CREATE_LABEL = f"Create a new {SUPERBRAND}"
 
 #: Shown inline where the drop-down would be on an unaffiliated image (D20).
 UNAFFILIATED_REASON = (
-    "An unaffiliated image has no brand identity, so there is no superbrand to create "
+    f"An unaffiliated image has no brand identity, so there is no {plain_words.term('superbrand')} to create "
     "or choose: the builder refuses a brand id, title, organisation and logo for it. "
-    "Its look is still yours: set it on the look screen.")
+    "Its look is still yours.")
 
 #: The five identity fields of the superbrand block the design step edits, with the
 #: record field each one writes. (The superbrand's id is the first.)
 IDENTITY_FIELDS: tuple[str, ...] = ("id", "title", "org", "public_name", "internal_root")
 IDENTITY_LABELS: dict[str, str] = {
-    "id": "Superbrand id", "title": "Title", "org": "Organisation",
-    "public_name": "Public name", "internal_root": "Internal root name",
+    "id": f"{SUPERBRAND.capitalize()} id", "title": "Title", "org": "Organisation",
+    "public_name": "Public name",
+    "internal_root": plain_words.term("internal_root").capitalize(),
 }
 
 #: What an untouched configuration carries in the three identity fields: no choice yet.
@@ -123,6 +125,12 @@ class BrandHost:
         """An existing brands/<name>.conf was chosen: the route may point its profile
         field at it."""
 
+    def base_ca(self, name: str) -> str | None:
+        """The certificate authority recorded for brand ``name`` (its file's name, "" =
+        the mesh default), or None when this route has no such choice (the Docker mesh
+        and the fleet have no Secrets-store step)."""
+        return None
+
     # the rows, as fresh Domain objects (a snapshot the record can hold)
     def rows(self) -> list[Domain]:
         return [Domain(**dataclasses.asdict(d)) for d in self._live_rows()]
@@ -157,6 +165,10 @@ class ImageHost(BrandHost):
 
     def _live_rows(self) -> list[Domain]:
         return list(self.cfg.domains or [])
+
+    def base_ca(self, name: str) -> str | None:
+        return os.path.basename((getattr(self.cfg, "domain_ca", None) or {}).get(
+            (name or "").strip(), ""))
 
     def row(self, name: str):
         for d in self.cfg.domains or []:
@@ -557,20 +569,30 @@ class BrandSession:
         return self._say("")
 
     # ── the read-only summary ─────────────────────────────────────────────────────
-    def summary_lines(self) -> list[str]:
+    def summary_rows(self) -> list[tuple[str, str]]:
+        """``(label, value)`` rows of the read-only summary an existing choice shows —
+        the window draws them as a two-column table, the text screen as aligned lines."""
         sb = self.sb
-        out = [f"Superbrand: {sb.title or sb.id or '(not named yet)'}"]
+        rows: list[tuple[str, str]] = []
         for f in IDENTITY_FIELDS:
             v = getattr(sb, f) or (
                 f"({sb.effective_internal_root()})" if f == "internal_root"
                 else "(not set — the shipped value is kept)")
-            out.append(f"  {IDENTITY_LABELS[f]:<20}{v}")
+            rows.append((IDENTITY_LABELS[f], v))
         eff = brand_model.effective_look(brand_model.BrandRecord(superbrand=sb))
         shown = [f"{k} {v}" for k, (v, _src) in eff.items() if v]
-        out.append("  Look                " + (", ".join(shown) or "the shipped page"))
+        rows.append(("Look", ", ".join(shown) or "the shipped page"))
         if self.copied_from:
-            out.append(f"  Copied from design ‘{self.copied_from.get('design', '')}’ on "
-                       f"{self.copied_from.get('date', '')}")
+            rows.append(("Copied from", f"design ‘{self.copied_from.get('design', '')}’ on "
+                                        f"{self.copied_from.get('date', '')}"))
+        return rows
+
+    def summary_title(self) -> str:
+        return f"Superbrand: {self.sb.title or self.sb.id or '(not named yet)'}"
+
+    def summary_lines(self) -> list[str]:
+        out = [self.summary_title()]
+        out += [f"  {label:<20}{value}" for label, value in self.summary_rows()]
         return out
 
 

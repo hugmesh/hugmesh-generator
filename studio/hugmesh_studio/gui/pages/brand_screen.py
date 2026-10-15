@@ -36,7 +36,7 @@ from __future__ import annotations
 import html
 
 from ..qt import QtCore, QtWidgets, Signal
-from ...core import brand_look
+from ...core import plain_words
 from ...tui import brand_step
 from ._lookeditor import LookEditor
 
@@ -268,8 +268,9 @@ class BrandSettingsTabs(QtCore.QObject):
                 self.look_editor.setVisible(False)
             return
         self.look_note.setText(
-            "Every setting starts from the superbrand's. Change one to make it this "
-            "brand's own; ‘Use the superbrand's value’ gives it back.")
+            f"Every setting starts from the {plain_words.term('superbrand')}'s. Change one "
+            f"to make it this brand's own; ‘Use the {plain_words.term('superbrand')}'s "
+            "value’ gives it back.")
         self.look_summary.setVisible(False)
         if self.look_editor is None:
             self.look_editor = LookEditor(model, path=self.route)
