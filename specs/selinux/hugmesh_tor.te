@@ -6,14 +6,19 @@
 #                                OpenRC-oneshot + 24h-cron agent that writes
 #                                the managed /etc/tor/torrc, ensures the onion
 #                                state dir (/var/lib/tor/hugmesh-onion,
-#                                tor:tor 0700), restarts the DISTRO tor service
-#                                so it mints/refreshes the v3 keypair, and
+#                                tor:tor 0700), converges the DISTRO tor service
+#                                (reload via SIGHUP when the torrc changed; from
+#                                the cron only, start a stopped / restart a
+#                                crashed tor; the boot oneshot never starts or
+#                                restarts it) so it mints/refreshes the v3
+#                                keypair, and
 #                                exports the .onion hostname to
 #                                /var/lib/hugmesh/tor.
 #
 # WHY a dedicated domain: today it would run as an UNCONFINED initrc domain with
 # a default bin_t script. It needs to write /etc/tor/torrc, chown/chmod the Tor
-# state dirs to tor:tor, signal/restart the tor init script, and read an optional
+# state dirs to tor:tor, signal (SIGHUP) the tor daemon, run the tor init script
+# (rc-service tor status|reload|start|restart), and read an optional
 # /etc/hugmesh/tor/upstream override. Granting only those keeps it least-priv
 # on enforcing.
 #
@@ -73,12 +78,15 @@ read_files_pattern(hugmesh_tor_reconcile_t, hugmesh_tor_etc_t, hugmesh_tor_etc_t
 files_search_var_lib(hugmesh_tor_reconcile_t)
 
 ########################################
-# 3. Validate the config (`tor --verify-config`) + restart the distro tor service.
-#    CERTAIN: the agent runs `tor --verify-config` and `rc-service tor restart`.
+# 3. Validate the config (`tor --verify-config`) + converge the distro tor service.
+#    CERTAIN: the agent runs `tor --verify-config` and `rc-service tor status`;
+#    on a torrc change it reloads (`rc-service tor reload`, else `kill -HUP` of
+#    the pid in /run/tor/tor.pid); from the cron only it also runs
+#    `rc-service tor start|restart` for a stopped / crashed tor.
 ########################################
 init_signal_script(hugmesh_tor_reconcile_t)
-init_telinit(hugmesh_tor_reconcile_t)                                                 # INFERRED-WIDE: rc-service tor restart
-allow hugmesh_tor_reconcile_t tor_t:process signal;                                   # INFERRED-WIDE: restart path
+init_telinit(hugmesh_tor_reconcile_t)                                                 # INFERRED-WIDE: rc-service tor status|reload|start|restart
+allow hugmesh_tor_reconcile_t tor_t:process signal;                                   # INFERRED-WIDE: kill -HUP of tor_t (process signal -> sighup once an AVC confirms)
 corecmd_exec_bin(hugmesh_tor_reconcile_t)                                             # /usr/bin/tor --verify-config + rc-service
 corecmd_exec_shell(hugmesh_tor_reconcile_t)
 files_read_etc_files(hugmesh_tor_reconcile_t)
