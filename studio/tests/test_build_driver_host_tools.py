@@ -5,7 +5,7 @@ native build is missing a host tool it needs, instead of warning and silently
 dropping an artifact the operator asked for. This surfaces the most common
 shortfall in the Studio BEFORE the operator commits to a long build.
 
-Two properties are load-bearing and locked here:
+Two properties are relied on and locked here:
 
   1. It is ADVISORY, never blocking. It lives in preflight_warnings(), not
      preflight() — Review's isComplete gates on preflight(), and a blocking

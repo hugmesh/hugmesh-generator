@@ -86,8 +86,42 @@ case "${got}" in
 esac
 
 # ── Extract the REAL kernel ROLE_CLIENT arm (4-space-indented if ... fi) ──────
-KERN_ARM="$(awk '/^    if \$\{ROLE_CLIENT\}; then$/{p=1} p{print} p&&/^    fi$/{exit}' "${BUILDER}")"
-[ -n "${KERN_ARM}" ] || { echo "  FAIL could not extract the kernel ROLE_CLIENT arm"; exit 1; }
+# The builder carries MORE THAN ONE 4-space `if ${ROLE_CLIENT}; then` block: since
+# 06adabd7 (#224) bake_vault_conf() opens with one too, thousands of lines ABOVE
+# the kernel arm. The old extractor took the FIRST match, silently graded
+# bake_vault_conf's early-return instead, and went red with "anchor drifted" (#639).
+# So: collect EVERY candidate block, keep the ones whose body appends the
+# desktop kernel fragment (the kernel arm is the only place desktop.config is
+# cat'd into k.config), and REFUSE unless exactly one qualifies. Never "the
+# first" or "the last" match — either would silently start grading a different
+# block the next time the builder grows one. (Nested ifs inside the arm close at
+# 8 spaces, so a 4-space `fi` closes the arm itself.)
+KERN_CANDS="${WORK}/kern-candidates"; mkdir -p "${KERN_CANDS}"
+awk -v d="${KERN_CANDS}" '
+    /^    if \$\{ROLE_CLIENT\}; then$/ { n++; f = sprintf("%s/%04d.blk", d, n); p = 1
+                                        printf "%d\n", NR > (f ".line"); close(f ".line") }
+    p { print > f }
+    p && /^    fi$/ { p = 0; close(f); printf "closed\n" > (f ".closed"); close(f ".closed") }
+' "${BUILDER}"
+KERN_ALL=0; KERN_HITS=0; KERN_ARM=""; KERN_WHERE=""
+for blk in "${KERN_CANDS}"/*.blk; do
+    [ -e "${blk}" ] || continue
+    KERN_ALL=$((KERN_ALL+1))
+    # A candidate that never meets its 4-space `fi` ran to EOF: the builder's
+    # indentation changed shape, and grading a block of unknown extent is a guess.
+    [ -e "${blk}.closed" ] || { echo "  FAIL ROLE_CLIENT block at builder line $(cat "${blk}.line") never closes with a 4-space 'fi' — the arm's shape changed; re-read the builder"; exit 1; }
+    if grep -F 'cat "${SPECS_DIR}/kernel/desktop.config" >> "${SYSROOT}/tmp/k.config"' "${blk}" >/dev/null; then
+        KERN_HITS=$((KERN_HITS+1))
+        KERN_ARM="$(cat "${blk}")"
+        KERN_WHERE="${KERN_WHERE} :$(cat "${blk}.line")"
+    fi
+done
+if [ "${KERN_HITS}" -ne 1 ]; then
+    echo "  FAIL expected EXACTLY ONE 4-space 'if \${ROLE_CLIENT}; then' block that appends kernel/desktop.config;" \
+         "found ${KERN_HITS} of ${KERN_ALL} candidate block(s) (at${KERN_WHERE:- none}) — refusing to guess which is the kernel arm"
+    exit 1
+fi
+ok "kernel arm located unambiguously: 1 of ${KERN_ALL} ROLE_CLIENT block(s) appends desktop.config (builder line${KERN_WHERE})"
 case "${KERN_ARM}" in
     *wireguard.config*) ok "extracted the real kernel arm (it carries the WireGuard fragment)" ;;
     *) bad "kernel arm extraction missed the WireGuard fragment — anchor drifted"; exit 1 ;;

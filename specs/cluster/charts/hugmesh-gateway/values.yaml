@@ -164,6 +164,22 @@ cassandra:
 # real peer set; anything it matches can assert its own scheme/host.
 trustedProxies: ""
 
+# VANITY SUBDOMAINS PER BRAND DOMAIN (hugmesh-generator#582). A route marked
+# `vanity: true` (the fe-gateway's `vanity-subdomain`, apps/20-gateway-fe.yaml) matches
+# `<username>.<cluster domain>` through its own literal `host`. Each domain listed HERE
+# gets the same treatment: the route's Host predicate also matches `*.<domain>`, and the
+# Ingress admits `*.<domain>` (same backend as `host`) so the request can arrive at all.
+# One list, both halves — a route the Ingress does not admit is a route nobody reaches.
+# A brand domain that is a SUBDOMAIN of the cluster domain needs its own entry too:
+# `*.hugmesh.net` matches one label, so `alice.shop.hugmesh.net` is not covered by it.
+# NOT covered: the brand domain's own apex (`<domain>` itself) — that is the brand's
+# front page, a different question from vanity subdomains.
+# NEVER set in git. It is meant to be written as helm parameters `vanityDomains[i]` on
+# the gateway Application by whatever bakes or reconciles the mesh's domains; NOTHING
+# writes it yet (no builder reads the mesh manifest's domains[]). Empty => every
+# template renders byte-identically.
+vanityDomains: []
+
 # Downstream routes rendered into an application-routes.yml ConfigMap and
 # loaded via SPRING_CONFIG_ADDITIONAL_LOCATION. id/uri/path per route.
 routes:
@@ -314,6 +330,15 @@ ingress:
   # Additional hosts this gateway's Ingress serves (same backend). Used e.g. by
   # the be-gateway to front scale.<domain> (headscale) and forward it to pki.
   extraHosts: []
+  # Tor v3 .onion hosts this gateway's Ingress admits (same backend as `host`).
+  # NEVER set in git: on a hardware node /usr/sbin/hugmesh-tor-ingress-admit writes
+  # them at runtime as helm parameters `ingress.onionHosts[i]` on the fe-gateway
+  # Application, from the node's exported /var/lib/hugmesh/tor/{hostname,<slug>.hostname}
+  # (hugmesh-generator#614). A list of its own — not extraHosts — so the node never
+  # has to know how long the committed extraHosts list is, and kind's
+  # `make kind-tor` (which appends ingress.extraHosts[N]) and this writer can never
+  # take the same index. Empty => the template renders byte-identically.
+  onionHosts: []
   annotations: {}
   tls: false
   # PUBLIC POW SHIELD (Anubis). By default the Ingress backend is THIS gateway's

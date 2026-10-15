@@ -134,7 +134,7 @@ def test_unfocused_wheel_is_ignored_not_swallowed(qapp):
 
 def test_focused_combo_still_wheel_edits(qapp):
     """A DELIBERATE edit still works: click (focus) the combo, then wheel. Pins the
-    other half of the contract so the guard cannot rot into a dead control."""
+    other half of the contract so the guard cannot go stale into a dead control."""
     win = QtWidgets.QWidget()
     lay = QtWidgets.QVBoxLayout(win)
     combo = NoWheelComboBox()

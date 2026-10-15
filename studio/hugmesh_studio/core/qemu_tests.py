@@ -91,7 +91,7 @@ _STAMP_RE = re.compile(r"^\d{8}T\d{6}Z$")
 #: brand + platform + arch + <role…> + env + stamp.
 _MIN_NAME_FIELDS = 6
 
-#: Platforms whose rows are slowest and most load-bearing, in the order the
+#: Platforms whose rows are slowest and most relied on, in the order the
 #: runner boots them. aarch64 has no KVM on an x86_64 host, so every Pi/ARM row
 #: is pure TCG emulation and wants to start first; x86 gets KVM and is quick.
 _PLATFORM_ORDER = {"rpi5": 0, "rpi4": 0, "rpi3": 0}
@@ -667,7 +667,7 @@ def docker_available_async(on_result: Callable[[bool, str], None], *,
                            timeout_s: float = DOCKER_PROBE_TIMEOUT_S) -> threading.Thread:
     """``docker_available`` without the page freeze: probe on a daemon thread.
 
-    ``docker info`` against a wedged daemon takes the FULL timeout to answer, and
+    ``docker info`` against a hung daemon takes the FULL timeout to answer, and
     both device pages used to run it synchronously inside initializePage — 15
     seconds of a frozen window before the page even painted. This variant returns
     immediately and calls ``on_result(ok, reason)`` FROM THE WORKER THREAD once the

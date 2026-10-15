@@ -85,7 +85,7 @@ def _signal_group(proc: "subprocess.Popen[object]", sig: int, *, hard: bool) -> 
             )
             return True
         except (OSError, subprocess.SubprocessError):
-            pass  # taskkill missing or wedged — fall through
+            pass  # taskkill missing or hung — fall through
 
     # Last resort: the direct child only. Leaves grandchildren behind, which is
     # worse than a group kill and better than nothing.

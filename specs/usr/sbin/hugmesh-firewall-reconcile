@@ -10,7 +10,8 @@
 #
 # OWNS its own table end-to-end (render + `nft -f` apply) rather than
 # delegating to a package-provided nftables OpenRC service, mirroring how
-# hugmesh-tor-reconcile owns the `tor` daemon's lifecycle and
+# hugmesh-tor-reconcile owns the `tor` daemon's torrc + key custody (OpenRC
+# owns the daemon's lifecycle) and
 # hugmesh-vpn-reconcile owns hugmesh-egress-vpn's: one script, one
 # init.d oneshot, one clearly-scoped nftables table. It NEVER touches any
 # OTHER table — firewalld (net-firewall/firewalld, FirewallBackend=nftables)

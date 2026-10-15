@@ -59,9 +59,34 @@ THR_PASS=0;  THR_FAIL=0
 NEG_PASS=0;  NEG_FAIL=0
 CAT_PASS=0;  CAT_FAIL=0
 
+# Every FAIL headline is ALSO accumulated here and re-printed on stdout by the
+# verdict block at the very end of the run. WHY (hugmesh/hugmesh-generator#408):
+# these lines only ever went to stderr, so a combined `2>&1` capture put them ABOVE
+# ~1300 lines of PASS and a tailed run showed an unbroken wall of green. Three
+# separate reports called this suite green while it was exiting 1.
+FAIL_LINES=""
 _fail() { # _fail CHANNEL ROW REASON [OUTPUT-FILE]
     printf 'FAIL [%s] %s — %s\n' "$1" "$2" "$3" >&2
+    FAIL_LINES="${FAIL_LINES}$(printf 'FAIL [%s] %s — %s' "$1" "$2" "$3")
+"
     [ -n "${4:-}" ] && [ -s "${4:-}" ] && sed 's/^/    | /' "$4" | tail -n 6 >&2
+    return 0
+}
+
+# _fail_line is the same accounting for a headline SOMEONE ELSE already worded — a
+# delegate script's own "  FAIL …" lines, a child channel's "JOB FAIL …", a bucket
+# that echoes its own text. Those used to be written straight to stderr, so they were
+# counted into a bucket's FAIL total but never reached FAIL_LINES, and the verdict
+# block printed a FAILURES header with NOTHING under it (measured: breaking a TAXO
+# golden label emitted 3 stderr FAIL lines and an empty stdout FAILURES section).
+# That is the SAME defect #408 is about, one layer in, so every such site now routes
+# through here. Accepts one argument that may hold several newline-separated lines;
+# an empty argument is a no-op so `_fail_line "$(grep … || true)"` is safe.
+_fail_line() { # _fail_line HEADLINE[\nHEADLINE…]
+    [ -n "${1:-}" ] || return 0
+    printf '%s\n' "$1" >&2
+    FAIL_LINES="${FAIL_LINES}$1
+"
     return 0
 }
 
@@ -474,17 +499,50 @@ if [ -n "${rolesetthr_recipe:-}" ]; then
 fi
 
 # ── UNAFFILIATED MENU→MAKE threading probe ───────────────────────────────────
-# The unaffiliated desktop must thread --role standalone-unaffiliated into the
-# recipe and must NOT emit --theme even with the menu's persisted 'dark'
-# theme default in place (any branding flag is a builder HARD conflict there —
-# the role presets the neutral identity itself).
+# REVISED 2026-09-17 (hugmesh/hugmesh-generator#408). This probe was the ONE site the
+# 2026-08-26 "split identity from look" operator decision missed. It asserted that
+# --theme must NOT reach the builder, which was correct under the OLD rule (all ten
+# branding flags were a single hard conflict) and has been WRONG since the split
+# landed. All three enforcement sites now say a theme is legal here:
+#   build-x86-host-stage4.sh:1682  "The LOOK flags --theme/--branding-dir/--wallpaper/
+#       --grub-background/--grub-theme/--login-background/--accent-color/--color-scheme
+#       ARE allowed on an unaffiliated build."
+#   build-x86-host-stage4.sh:1687-1692  the fold deliberately no longer tests them.
+#   scripts/build-menu.sh:783-792  "--theme APPLIES TO THE UNAFFILIATED DESKTOP TOO
+#       since 2026-08-26" — the emit this probe called a leak is intentional.
+#   studio/hugmesh_studio/core/config.py:4160+  "ALLOWED (look): theme / branding_dir /
+#       wallpaper / grub_background / grub_theme / login_background / accent_color /
+#       color_scheme."
+# check.sh already contradicted ITSELF: run_negative_checks pins the builder side as
+# expect_ok "x86: unaffiliated role + --theme is ALLOWED" (line ~1433). f6b6dd20
+# (2026-08-27) rewrote that NEG block for the split and never touched this one, so the
+# suite has asserted both directions of the same rule — and exited 1 on main — ever since.
+# WHAT IT PINS NOW, one leg per side of the line the operator drew:
+#   LOOK must THREAD. The menu's persisted theme has to reach the builder; that is the
+#     operator's actual report against session 20260826-151356-64070a ("There should be
+#     the menu for adding the themes as in the branded images"). A silent drop here is
+#     exactly the regression the split was made to end.
+#   IDENTITY must NOT. build_make_cmd's `unaff` gate still suppresses the BRAND= profile
+#     make-var (which the Makefile expands to --config brands/<name>.conf), --brand-logo
+#     and --home-seed-code for this one target. Each is SET below so the three negative
+#     legs cannot pass vacuously — with the gate removed, brands/example.conf exists, so
+#     `make -n` still succeeds and the leak is observed as a leak rather than as an error.
 reset_opts
-OPT_SA_THEME=dark   # the default a branded standalone run leaves persisted
+OPT_SA_THEME=dark            # the default a branded standalone run leaves persisted
+OPT_BRAND=example            # -> BRAND=example -> --config brands/example.conf (IDENTITY)
+OPT_BR_LOGO=/tmp/probe-logo.png   # the brand MARK (IDENTITY)
+OPT_HOME_SEED=PROBESEED      # seeds the HugMesh stack into the home (platform machinery)
 build_make_cmd x86-standalone-unaffiliated "unaff-thread-probe" 1
 if recipe="$(make -n "${RUN_MAKE[@]}" NATIVE=1 2>&1)"; then
     miss=""
     case "${recipe}" in *"--role standalone-unaffiliated"*) ;; *) miss+=" '--role standalone-unaffiliated'" ;; esac
-    case "${recipe}" in *"--theme"*) miss+=" '--theme LEAKED'" ;; esac
+    # LOOK: must be threaded (2026-08-26 split).
+    case "${recipe}" in *"--theme dark"*) ;; *) miss+=" '--theme dark' DROPPED (a LOOK flag is legal on an unaffiliated build since 2026-08-26)" ;; esac
+    # IDENTITY: must never be threaded.
+    if has_elem "BRAND=example"; then miss+=" 'BRAND= make-var LEAKED'"; fi
+    case "${recipe}" in *"brands/example.conf"*) miss+=" '--config brand profile LEAKED'" ;; esac
+    case "${recipe}" in *--brand-logo*)     miss+=" '--brand-logo LEAKED'" ;; esac
+    case "${recipe}" in *--home-seed-code*) miss+=" '--home-seed-code LEAKED'" ;; esac
     if [ -n "${miss}" ]; then
         echo "UNAFFTHR FAIL x86-standalone-unaffiliated —${miss} (argv: ${RUN_MAKE[*]})"
     else
@@ -537,7 +595,13 @@ MENU_EOF
         _fail MENU "channel" "menu child exited ${rc}" "${TMP_DIR}/menu.err"
         MENU_FAIL=$((MENU_FAIL+1))
     fi
-    grep -E '^(MENU|MENUTHR|FLEETTHR|UNAFFTHR|ROLESETTHR) FAIL' "${out}" >&2 || true
+    local child_fails
+    child_fails="$(grep -E '^(MENU|MENUTHR|FLEETTHR|UNAFFTHR|ROLESETTHR) FAIL' "${out}" || true)"
+    if [ -n "${child_fails}" ]; then
+        printf '%s\n' "${child_fails}" >&2
+        FAIL_LINES="${FAIL_LINES}${child_fails}
+"
+    fi
 }
 
 # ── channel 4: GUI — hugmesh_studio --print-command (headless, Qt-free) ──────
@@ -933,7 +997,7 @@ JOB_EOF
         _fail JOB "channel" "job child exited ${rc}" "${TMP_DIR}/job.err"
         JOB_FAIL=$((JOB_FAIL+1))
     fi
-    grep -E '^(JOB|JOBNEG|JOBDRIFT) FAIL' "${out}" >&2 || true
+    _fail_line "$(grep -E '^(JOB|JOBNEG|JOBDRIFT) FAIL' "${out}" || true)"
 }
 
 # ── threading checks: STANDALONE_FLAGS + IMG_FLAGS must reach the builder argv ──
@@ -1587,7 +1651,7 @@ run_flag_coverage() {
         _fail FLAGCOV "script" "flag-coverage.sh exited ${rc}" "${out}"
         COV_FAIL=$((COV_FAIL+1))
     fi
-    grep '^FLAGCOV FAIL' "${out}" >&2 || true
+    _fail_line "$(grep '^FLAGCOV FAIL' "${out}" || true)"
 }
 
 # ── emerge-group banner probe (EGB) ─────────────────────────────────────────────
@@ -2051,7 +2115,7 @@ run_parity_taxonomy_checks() {
     # 1) GOLDEN source: the 4 labels live in the Studio reference (mode.py).
     for label in "${golden[@]}"; do
         if grep -qF -- "${label}" "${mode_py}"; then TAXO_PASS=$((TAXO_PASS+1))
-        else echo "TAXO FAIL golden/mode.py missing '${label}'" >&2; TAXO_FAIL=$((TAXO_FAIL+1)); fi
+        else _fail_line "TAXO FAIL golden/mode.py missing '${label}'"; TAXO_FAIL=$((TAXO_FAIL+1)); fi
     done
     # 2) menu channel — each choice must appear as a REAL ui_menu ITEM line
     #    (choice-tag + quoted label), NOT merely as prose. A whole-file substring grep
@@ -2068,7 +2132,7 @@ run_parity_taxonomy_checks() {
         if grep -qE -- "^[[:space:]]*${menu_tags[$i]}[[:space:]]+\"${label} " "${menu}"; then
             TAXO_PASS=$((TAXO_PASS+1))
         else
-            echo "TAXO FAIL menu channel missing opening choice item '${menu_tags[$i]}  \"${label} …\"' (${menu})" >&2
+            _fail_line "TAXO FAIL menu channel missing opening choice item '${menu_tags[$i]}  \"${label} …\"' (${menu})"
             TAXO_FAIL=$((TAXO_FAIL+1))
         fi
     done
@@ -2080,7 +2144,7 @@ run_parity_taxonomy_checks() {
         if grep -qE -- "^[[:space:]]*[0-9]+\.[[:space:]]+${label} " "${cli}"; then
             TAXO_PASS=$((TAXO_PASS+1))
         else
-            echo "TAXO FAIL cli channel missing numbered intent '${label}' (${cli})" >&2
+            _fail_line "TAXO FAIL cli channel missing numbered intent '${label}' (${cli})"
             TAXO_FAIL=$((TAXO_FAIL+1))
         fi
     done
@@ -2089,7 +2153,7 @@ run_parity_taxonomy_checks() {
     local bogus="Bare-metal cloud image" f
     for f in "${mode_py}" "${menu}" "${cli}"; do
         if grep -qF -- "${bogus}" "${f}"; then
-            echo "TAXO FAIL non-vacuity: bogus label '${bogus}' unexpectedly present in ${f} — grep is matching too broadly" >&2
+            _fail_line "TAXO FAIL non-vacuity: bogus label '${bogus}' unexpectedly present in ${f} — grep is matching too broadly"
             TAXO_FAIL=$((TAXO_FAIL+1))
         fi
     done
@@ -2097,7 +2161,7 @@ run_parity_taxonomy_checks() {
     local n
     n="$(grep -cE 'Mesh node|Local Docker mesh|Mesh desktop client|Standalone Gentoo desktop' "${mode_py}")"
     if [ "${n}" -ne 4 ]; then
-        echo "TAXO FAIL non-vacuity: mode.py golden taxonomy is ${n} lines, expected exactly 4 — the reference changed; update the golden set + every channel together" >&2
+        _fail_line "TAXO FAIL non-vacuity: mode.py golden taxonomy is ${n} lines, expected exactly 4 — the reference changed; update the golden set + every channel together"
         TAXO_FAIL=$((TAXO_FAIL+1))
     fi
 
@@ -2106,14 +2170,14 @@ run_parity_taxonomy_checks() {
     local tok
     for tok in derive discord gmail password; do
         if grep -qF -- "\"${tok}\"" "${users_py}"; then TAXO_PASS=$((TAXO_PASS+1))
-        else echo "TAXO FAIL registration token '${tok}' missing from ${users_py}" >&2; TAXO_FAIL=$((TAXO_FAIL+1)); fi
+        else _fail_line "TAXO FAIL registration token '${tok}' missing from ${users_py}"; TAXO_FAIL=$((TAXO_FAIL+1)); fi
     done
 
     # FAIL-CLOSED completeness gate (mirror COVG's COV_EXPECTED): every expected pass
     # must be present — a silent-skip (a file renamed away, a probe that never ran) is a
     # shortfall, not a vacuous green.
     if [ "${TAXO_PASS}" -lt "${TAXO_EXPECTED}" ]; then
-        echo "TAXO FAIL completeness: ${TAXO_PASS}/${TAXO_EXPECTED} parity assertions passed" >&2
+        _fail_line "TAXO FAIL completeness: ${TAXO_PASS}/${TAXO_EXPECTED} parity assertions passed"
         TAXO_FAIL=$((TAXO_FAIL + TAXO_EXPECTED - TAXO_PASS))
     fi
 }
@@ -2200,7 +2264,7 @@ PY
     then :; fi
     local passed
     passed=$(( CAT_EXPECTED - $(grep -c '^CAT FAIL' "${out}" || true) ))
-    grep '^CAT FAIL' "${out}" >&2 || true
+    _fail_line "$(grep '^CAT FAIL' "${out}" || true)"
     if [ "${passed}" -lt 0 ]; then passed=0; fi
     CAT_PASS=$((CAT_PASS + passed))
     CAT_FAIL=$((CAT_FAIL + CAT_EXPECTED - passed))
@@ -2214,9 +2278,20 @@ PY
 # that state, so this bucket is in TOTAL rather than in the informational smokes.
 # The delegate script does the work (static wiring + executing the real lib against a
 # fake sysroot); this bucket only runs it and folds its own PASS/FAIL tally in.
-# FAIL-CLOSED: the delegate emits a FIXED number of assertions (its host-dependent
-# branches emit a SKIP-pass so the count never moves), and a short tally is charged
-# as failures — a delegate that dies half-way cannot come back green.
+# FAIL-CLOSED: a short tally is charged as failures — a delegate that dies half-way
+# cannot come back green.
+# CORRECTION (measured 2026-09-17, #408): this comment used to add "its host-dependent
+# branches emit a SKIP-pass so the count never moves". That is FALSE, and it is exactly
+# the premise that makes a stale pin look like drift-that-does-not-matter. Three of the
+# delegate's fallbacks emit FEWER assertions than the path they replace:
+# tests/scripts/test-selinux-policy-install.sh:471 (C3d provision.sh missing) emits 1
+# where the success path emits 2; :518 (C3e provision.sh missing) emits 1 where the
+# success path emits 2; :531 (C3e relabel block not extractable) emits 1 where it
+# emits 2. So a tree without specs/etc/keys-provision/provision.sh emits 159, not 161,
+# and a tree whose relabel block moved emits 160. It stays HONEST — the shortfall is
+# charged as failures, so none of these can go green — but the count DOES move, and
+# the pin below is host- and tree-dependent for that reason. Do not read the accounting
+# that follows as "161 everywhere"; read it as "161 on a complete tree".
 # 136 = 126 (#518) + the 10 assertions #550 added when it fixed the D-real leg that had
 # skipped on every CI pipeline: 1 fixture-digest check + 9 "<module>: compiles against real
 # refpolicy headers" legs, one per node-policy module. #550 added the coverage and did NOT
@@ -2236,7 +2311,37 @@ PY
 # retry that isolates a failing module, the machine-readable selinux-modules.status
 # derived from `semodule -l`, the selinux-load-failed marker on any non-loaded
 # module, and the provision.sh <-> tests/qemu/assertions.sh status matched pair.
-SLX_EXPECTED=147
+# 161 = 147 + the 14 assertions the 2026-08-22 "SELinux is inert at boot" round added
+# across five commits (hugmesh/hugmesh-generator#408). DELIBERATE, and accounted for by
+# NAME rather than by delta: the delegate was run standalone at 23660a5d (147 emitted,
+# 0 failed) and at this commit (161 emitted, 0 failed), and the two assertion-name lists
+# were sorted and diffed with embedded line numbers normalised — 14 added, 0 removed,
+# 0 duplicated (`sort | uniq -d` empty). Each addition, with the commit that made it:
+#   29272055 "gate node-policy modules on the policy STORE, not on headers" — 4 C3b legs:
+#     headers-without-modules still succeeds; a module whose upstream .pp is ABSENT is
+#     skipped even though its headers are present; the manifest never names an unloadable
+#     module (so check_modules() can pass); the skip message names the package that would
+#     fix it.
+#   8fe62699 "/usr/sbin .fc rules can never match — usrmerge broke every transition" —
+#     1 C3c leg: every /usr/sbin exec rule also labels the /usr/bin path it resolves to.
+#   89a131cd "a relabel that changed nothing must not count as a relabel" — 2 C3d legs:
+#     a relabel that left work pending is treated as FAILED (so /.autorelabel is
+#     re-raised); a genuinely clean relabel still passes (the check is not always-red).
+#   6521e7b8 "setfiles labels EVERY path 'kernel' — use restorecon, which works" — 2 C3e
+#     legs: restorecon runs first; setfiles is not run when restorecon exists.
+#   2398e71c "refuse to ship policy that nothing will load" — 5 C3f legs: USE=selinux on
+#     openrc => the init will load policy; openrc merged WITHOUT USE=selinux is positively
+#     rejected; an image with no openrc USE record is UNKNOWN, not a silent pass or a
+#     false failure; marking selinux-aware FAILS when nothing will load the policy; a
+#     capable image is still marked (the check is not always-red).
+# All fourteen are distinct assertions over production behaviour, each one half of a
+# positive/negative pair — none is a duplicate or a loop artefact, so the EMITTER is
+# right and the PIN is what went stale. (Twelve further names differ between the two
+# runs purely because a builder line number is embedded in their text, and two more read
+# "all 6 mandatory .pp" where they read "all 7" — the store gate now skips the module
+# whose upstream .pp is absent. Neither kind changes the count; the nine per-module
+# "compiles against real refpolicy headers" legs are 9 in both runs.)
+SLX_EXPECTED=161
 SLX_PASS=0; SLX_FAIL=0
 run_selinux_policy_checks() {
     local out="${TMP_DIR}/selinux-policy.out"
@@ -2248,7 +2353,7 @@ run_selinux_policy_checks() {
     bash "${script}" >"${out}" 2>&1 || true
     SLX_PASS="$(grep -c '^  PASS ' "${out}" || true)"
     SLX_FAIL="$(grep -c '^  FAIL ' "${out}" || true)"
-    grep '^  FAIL ' "${out}" >&2 || true
+    _fail_line "$(grep '^  FAIL ' "${out}" | sed 's/^  FAIL /FAIL [SLX] /' || true)"
     local seen=$((SLX_PASS + SLX_FAIL))
     if [ "${seen}" -ne "${SLX_EXPECTED}" ]; then
         _fail SLX "assertion count" "emitted ${seen} assertions, expected ${SLX_EXPECTED} (update SLX_EXPECTED deliberately)" "${out}"
@@ -2276,7 +2381,7 @@ run_portage_config_sync_checks() {
     bash "${script}" >"${out}" 2>&1 || true
     PCS_PASS="$(grep -c '^  PASS ' "${out}" || true)"
     PCS_FAIL="$(grep -c '^  FAIL ' "${out}" || true)"
-    grep '^  FAIL ' "${out}" >&2 || true
+    _fail_line "$(grep '^  FAIL ' "${out}" | sed 's/^  FAIL /FAIL [PCS] /' || true)"
     local seen=$((PCS_PASS + PCS_FAIL))
     if [ "${seen}" -ne "${PCS_EXPECTED}" ]; then
         _fail PCS "assertion count" "emitted ${seen} assertions, expected ${PCS_EXPECTED} (update PCS_EXPECTED deliberately)" "${out}"
@@ -2312,7 +2417,7 @@ run_requested_atoms_checks() {
     bash "${script}" >"${out}" 2>&1 || true
     RAR_PASS="$(grep -c '^  PASS ' "${out}" || true)"
     RAR_FAIL="$(grep -c '^  FAIL ' "${out}" || true)"
-    grep '^  FAIL ' "${out}" >&2 || true
+    _fail_line "$(grep '^  FAIL ' "${out}" | sed 's/^  FAIL /FAIL [RAR] /' || true)"
     local seen=$((RAR_PASS + RAR_FAIL))
     if [ "${seen}" -ne "${RAR_EXPECTED}" ]; then
         _fail RAR "assertion count" "emitted ${seen} assertions, expected ${RAR_EXPECTED} (update RAR_EXPECTED deliberately)" "${out}"
@@ -2352,6 +2457,8 @@ run_nongating_smokes() {
                 "installer-ui-node-default:${REPO_DIR}/tests/scripts/test-installer-ui-node-default.sh" \
                 "host-selinux-tools:${REPO_DIR}/tests/scripts/test-host-selinux-tools.sh" \
                 "builder-log-paths:${REPO_DIR}/tests/scripts/test-builder-log-paths.sh" \
+                "builder-resume-safety:${REPO_DIR}/tests/scripts/test-builder-resume-safety.sh" \
+                "makefile-reown-skips-sysroot:${REPO_DIR}/tests/scripts/test-makefile-reown-skips-sysroot.sh" \
                 "dracut-cross-lib:${REPO_DIR}/tests/scripts/test-dracut-cross-lib.sh" \
                 "host-mutation-guard:${REPO_DIR}/tests/scripts/test-host-mutation-guard.sh" \
                 "sharedbinpkg-prebuild-target:${TEST_DIR}/prebuild-smoke.sh" \
@@ -2412,13 +2519,13 @@ score_sharedbinpkg_smokes() {
             SBP_PASS=$((SBP_PASS + 1))
         else
             SBP_FAIL=$((SBP_FAIL + 1))
-            printf 'FAIL [SBP] %s did not PASS (shared-binpkg family is FAIL-CLOSED)\n' "${n}" >&2
+            _fail_line "$(printf 'FAIL [SBP] %s did not PASS (shared-binpkg family is FAIL-CLOSED)' "${n}")"
         fi
     done
     # completeness: the name list and SBP_EXPECTED must not drift apart
     if [ "${#SBP_NAMES[@]}" -ne "${SBP_EXPECTED}" ]; then
-        printf 'FAIL [SBP] completeness: %d names vs SBP_EXPECTED=%d — update both\n' \
-            "${#SBP_NAMES[@]}" "${SBP_EXPECTED}" >&2
+        _fail_line "$(printf 'FAIL [SBP] completeness: %d names vs SBP_EXPECTED=%d — update both' \
+            "${#SBP_NAMES[@]}" "${SBP_EXPECTED}")"
         SBP_FAIL=$((SBP_FAIL + 1))
     fi
 }
@@ -2766,8 +2873,8 @@ CH_SHORT=0
 for _ch in CLI MAKE MENU GUI JOB; do
     _pv="${_ch}_PASS"
     if [ "${!_pv}" -ne "${ROWS}" ]; then
-        printf 'FAIL [%s] channel INCOMPLETE: %d/%d matrix rows passed\n' \
-            "${_ch}" "${!_pv}" "${ROWS}" >&2
+        _fail_line "$(printf 'FAIL [%s] channel INCOMPLETE: %d/%d matrix rows passed' \
+            "${_ch}" "${!_pv}" "${ROWS}")"
         CH_SHORT=1
     fi
 done
@@ -2798,4 +2905,74 @@ if [ -n "${SMOKE_REPORT}" ]; then
     echo "   sharedbinpkg-* family, which is scored fail-closed into SBP) ──"
     printf '%s' "${SMOKE_REPORT}"
 fi
-[ "${TOTAL_FAIL}" -eq 0 ] && [ "${ROWS}" -gt 0 ] && [ "${CH_SHORT}" -eq 0 ]
+# ── VERDICT (stdout, LAST line of the run) ──────────────────────────────────────
+# The TOTAL line above is followed by ~40 lines of informational smokes, so on a
+# tailed run it scrolls out of view while every visible line reads PASS. This block
+# is the last thing printed and states the rc in words, and it repeats the FAIL
+# headlines that otherwise exist only on stderr. #408 is the cost of not having it.
+_rc=0
+{ [ "${TOTAL_FAIL}" -eq 0 ] && [ "${ROWS}" -gt 0 ] && [ "${CH_SHORT}" -eq 0 ]; } || _rc=1
+# FAIL-CLOSED BACKSTOP over the verdict itself. A bucket can only be SEEN on stdout if
+# it worded its failure through _fail/_fail_line; a bucket that raises its counter and
+# writes nothing (or writes straight to stderr, as eight sites did before this commit)
+# produces a FAILURES section that under-reports — and, when it is the ONLY failure, a
+# section with nothing at all under the header. So: every counter that is non-zero must
+# have contributed at least one matching headline, or we say so here, by name. This is
+# the check that makes the next bypass loud instead of silent.
+# Left of ':' is the counter; right of ':' is an ERE matching the headline shapes that
+# bucket emits (_fail writes "FAIL [TAG] …"; some children word their own prefix).
+_VERDICT_TAGS=(
+    'CLI_FAIL:\[CLI\]'
+    'MAKE_FAIL:\[MAKE\]'
+    'MENU_FAIL:\[MENU\]|^MENU FAIL'
+    'GUI_FAIL:\[GUI\]'
+    'JOB_FAIL:\[JOB\]|^JOB FAIL|^JOBDRIFT FAIL'
+    'THR_FAIL:\[THREAD\]|\[GUITHR\]|^MENUTHR FAIL|^FLEETTHR FAIL|^UNAFFTHR FAIL|^ROLESETTHR FAIL'
+    'NEG_FAIL:\[NEG\]|^JOBNEG FAIL'
+    'COV_FAIL:\[FLAGCOV\]|^FLAGCOV FAIL'
+    'EGB_FAIL:\[EGB\]'
+    'EPL_FAIL:\[EPL\]'
+    'TAXO_FAIL:^TAXO FAIL'
+    'CAT_FAIL:^CAT FAIL'
+    'SLX_FAIL:\[SLX\]'
+    'PCS_FAIL:\[PCS\]'
+    'RAR_FAIL:\[RAR\]'
+    'SBP_FAIL:\[SBP\]'
+    'SFO_FAIL:\[SFO\]'
+    'BCF_FAIL:\[BCF\]'
+)
+_verdict_backstop() {
+    local spec counter tags n
+    for spec in "${_VERDICT_TAGS[@]}"; do
+        counter="${spec%%:*}"
+        tags="${spec#*:}"
+        n="${!counter:-0}"
+        [ "${n}" -gt 0 ] || continue
+        # grep -a: a NUL anywhere makes GNU grep skip the input and exit 1 (fails OPEN).
+        # No -q: under an inherited pipefail a matching grep -q can still report failure.
+        if ! printf '%s' "${FAIL_LINES}" | grep -aE -- "${tags}" >/dev/null; then
+            FAIL_LINES="${FAIL_LINES}$(printf 'FAIL [%s] %d failure(s) counted with NO headline — this bucket did not route through _fail/_fail_line; look on stderr and fix the bucket' \
+                "${counter%_FAIL}" "${n}")
+"
+        fi
+    done
+}
+if [ "${_rc}" -ne 0 ]; then
+    [ "${CH_SHORT}" -ne 0 ] && _fail_line "FAIL [channel] a channel did not pass every matrix row (see the INCOMPLETE lines above)"
+    [ "${ROWS}" -le 0 ] && _fail_line "FAIL [matrix] no matrix rows were read"
+    _verdict_backstop
+    # The header is printed ONLY when something follows it. An empty FAILURES section
+    # reads as "no specific failures" and is worse than no section at all.
+    if [ -n "${FAIL_LINES}" ]; then
+        echo "── FAILURES (also on stderr, where a 2>&1 capture buries them above the PASS wall) ──"
+        printf '%s' "${FAIL_LINES}"
+    else
+        echo "── FAILURES: rc=1 but NO bucket worded a failure — the verdict backstop found nothing to attribute; this is itself a defect in this harness ──"
+    fi
+fi
+if [ "${_rc}" -eq 0 ]; then
+    printf 'RESULT: PASS — %d passed, %d failed (rc=0)\n' "${TOTAL_PASS}" "${TOTAL_FAIL}"
+else
+    printf 'RESULT: FAIL — %d passed, %d failed (rc=1)\n' "${TOTAL_PASS}" "${TOTAL_FAIL}"
+fi
+exit "${_rc}"
