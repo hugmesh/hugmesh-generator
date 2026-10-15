@@ -948,6 +948,21 @@ PREMERGE_BASELINE="${GUARD_PREMERGE:-198}"
 # node_modules and a chromium no shell-suites image carries.
 PREMERGE_UNGATED=(
   tests/casdoor/test-jwt-custom-token.sh
+  # NOT an exemption, a wiring gap: this suite is offline (bash + python3 + PyYAML)
+  # and WOULD run in the shell-suites image, but wiring it into
+  # .github/workflows/shell-suites.yml is an edit the author of this suite was not
+  # permitted to make. It is gated post-merge today by .gitlab-ci.yml's
+  # desktop-governance-verify. TO CLOSE THIS: add the path to the SUITES list in
+  # shell-suites.yml (with py3-yaml in that job's apk set), delete this entry and
+  # raise PREMERGE_BASELINE by one to the number this file then prints.
+  tests/desktop-governance/test-governance-flags-visible.sh
+  # NOT a claim that it cannot gate: it needs only bash + python3 + openssl, the
+  # tool set its three siblings in tests/desktop-governance/ already run under in
+  # shell-suites.yml. It is listed solely because the change that added it could
+  # not edit .github/workflows/shell-suites.yml. It IS run post-merge, by
+  # .gitlab-ci.yml's desktop-governance-verify. WIRE IT into that SUITES list, then
+  # delete this entry and raise PREMERGE_BASELINE by one.
+  tests/desktop-governance/test-sso-token-producer.sh
   tests/device-registry/test-layer-a-headscale-acl.sh
   tests/egress-vpn/test-secret-contract.sh
   # Offline, bash + python3 only, 48 passed / 0 failed on 2026-10-14 (#654 D12:
@@ -959,6 +974,13 @@ PREMERGE_UNGATED=(
   # the one line there, raises PREMERGE_BASELINE by one and drops this entry.
   tests/go-live/test-onion-refuse.sh
   tests/pentest/nuclei/test-templates.sh
+  # NOT UNGATEABLE, JUST NOT GATED YET: python3 + bash over synthetic fixture logs, no
+  # network, no root, no docker -- it would run in any shell-suites image. It sits
+  # here only because naming it in shell-suites.yml is an edit under .github/, which
+  # the change that added it was not allowed to make. THE FOLLOW-UP IS TO ADD IT TO
+  # THAT WORKFLOW'S SUITES LIST, DELETE THIS ENTRY AND RAISE PREMERGE_BASELINE BY ONE. It is
+  # run today by `make binpkg-reuse-report-check`.
+  tests/scripts/test-binpkg-reuse-report.sh
   # Needs `unshare -Urm` (a private user+mount namespace) to stack REAL bind
   # mounts under a scratch build system and drive the x86 builder's own
   # umount_chroot, stale-mount listing and printed umount commands against the
@@ -1034,6 +1056,19 @@ PREMERGE_UNGATED=(
   # .gitlab-ci.yml's lint:optional-service-slug-closure — nothing on the GitHub side
   # runs it; `make e2e-ungated` runs it locally. Leave it listed until #106 lands.
   tests/scripts/test-optional-service-slug-closure.sh
+  # Lands outside the pull_request gate ONLY because wiring it there means an edit
+  # under .github/workflows/shell-suites.yml, which the change that added it was
+  # not permitted to make (operator action, 2026-10-14). It is NOT an exemption on
+  # the merits: both suites are offline (python3 + openssl + bash; the netpol one also
+  # takes kubectl when present). They were MEASURED only on a developer host, NOT in a
+  # shell-suites image, and are run post-merge by .gitlab-ci.yml's lint:pg-tls-preflight
+  # and lint:netpol-egress-scope. Wire both into shell-suites.yml's DEBIAN job, measure
+  # them there, and DELETE both entries (PREMERGE_BASELINE then moves 198 -> 200). Added
+  # ungated: denominator +2 and the ungated SET +2, baseline unchanged at 198
+  # (RE-MEASURED on this branch merged with origin/main 9b1b733c, GUARD_PREMERGE=0: this
+  # file prints "198 of 228" and "(30 suite(s))").
+  tests/scripts/test-netpol-egress-scope.sh
+  tests/scripts/test-pg-tls-preflight.sh
   tests/scripts/test-service-env-contract.sh
   tests/stack/test-gateway-auth-flag-parity.sh
   tests/stack/test-m2-bootstrap.sh
