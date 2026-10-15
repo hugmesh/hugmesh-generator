@@ -197,7 +197,7 @@ export creates a small new repository:
 | --- | --- |
 | `repos.json` | every exported repository: name, source, build kind (`java` / `angular` / `none`), visibility, URL |
 | `index.html` | a page listing them, read from `repos.json` |
-| `.github/workflows/build-all.yml` | one matrix job per repository: `actions/checkout` of `<org>/<name>` (the `EXPORT_READ_TOKEN` secret for private repositories), then, for Java, `./mvnw -B -s .github/maven-ci-settings.xml verify` with the package-registry login in `UPSTREAM_PACKAGES_ACTOR` / `UPSTREAM_PACKAGES_TOKEN` (from the `PACKAGES_READ_ACTOR` / `PACKAGES_READ_TOKEN` secrets), and for Angular `npm ci` / `npm run build` / `npm test` (Karma, ChromeHeadlessCI) |
+| `.github/workflows/build-all.yml` | one matrix job per repository: `actions/checkout` of `<org>/<name>` (the `EXPORT_READ_TOKEN` secret for private repositories), then, for Java, `./mvnw -B verify` with the settings file `repos.json` records for that repository (`-s .github/maven-ci-settings.xml` for the CI settings file) and the package-registry login in `UPSTREAM_PACKAGES_ACTOR` / `UPSTREAM_PACKAGES_TOKEN` (from the `PACKAGES_READ_ACTOR` / `PACKAGES_READ_TOKEN` secrets), and for Angular `npm ci` / `npm run build` / `npm test` (Karma, ChromeHeadlessCI) |
 | `.github/workflows/pages.yml` | publishes the site with GitHub Pages (`configure-pages` / `upload-pages-artifact` / `deploy-pages`) |
 
 Both workflows run on `${{ fromJSON(vars.RUNS_ON || '"ubuntu-latest"') }}`, the way

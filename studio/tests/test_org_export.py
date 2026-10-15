@@ -363,6 +363,11 @@ def test_a_rename_that_is_not_a_repository_name_is_a_problem_and_touches_nothing
     ({"tokens": {"pattern": "a", "replace": "b"}}, "tokens must be a list"),
     ({"tokens": 3}, "tokens must be a list"),
     ({"tokens": ["a"]}, "every token rule needs pattern and replace"),
+    # a string where a list of globs belongs would be read one character at a time,
+    # and the lone "*" would drop every file of every repository
+    ({"exclude": "*.md"}, "exclude must be a list of glob strings"),
+    ({"skip_rewrite": "*.md"}, "skip_rewrite must be a list of glob strings"),
+    ({"exclude": [3]}, "exclude must be a list of glob strings"),
 ])
 def test_a_rename_map_of_the_wrong_shape_is_a_problem_line_not_a_traceback(
         world, bad, fragment):
@@ -374,6 +379,28 @@ def test_a_rename_map_of_the_wrong_shape_is_a_problem_line_not_a_traceback(
     assert any(fragment in ln for ln in lines), lines
     with pytest.raises(ValueError, match=re.escape(fragment)):
         oe.plan(cfg, world["runner"], probe=False)
+
+
+@pytest.mark.parametrize("rename_map, fragment", [
+    (["x"], "rename_map must be an object"),
+    ({"exclude": "*.md"}, "exclude must be a list of glob strings"),
+    ({"skip_rewrite": "*.md"}, "skip_rewrite must be a list of glob strings"),
+    ({"tokens": {"pattern": "a", "replace": "b"}}, "tokens must be a list"),
+])
+def test_the_two_file_doors_refuse_a_rename_map_of_the_wrong_shape(
+        world, tmp_path, rename_map, fragment):
+    """The config file's inline map and a --rename-map file: a ValueError naming the
+    part, never an AttributeError further on and never characters read as globs."""
+    inline = tmp_path / "export.json"
+    inline.write_text(json.dumps({"org": "exampleorg", "domain": "mesh.example",
+                                  "rename_map": rename_map}))
+    with pytest.raises(ValueError, match=re.escape(fragment)):
+        oe.load_config(str(inline), world["gen"])
+    if isinstance(rename_map, dict):
+        standalone = tmp_path / "map.json"
+        standalone.write_text(json.dumps(rename_map))
+        with pytest.raises(ValueError, match=re.escape(fragment)):
+            oe.load_rename_map(str(standalone))
 
 
 def test_a_config_file_with_a_bad_inline_rename_is_refused_at_load(world, tmp_path):

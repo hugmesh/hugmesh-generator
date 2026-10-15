@@ -292,17 +292,10 @@ class ExportConfig:
                 out.append(f"not a repository name: {name!r}")
         # an inline rename map is checked here as load_rename_map checks a file, so
         # a bad regex is a problem line, never a traceback at plan time
-        rmap = self.rename_map
-        if rmap in (None, {}):
-            rmap = {}
-        elif not isinstance(rmap, dict):
-            out.append("rename_map must be an object with repos / tokens / skip_rewrite "
-                       f"/ exclude, got {type(rmap).__name__}")
-            rmap = {}
-        tokens = rmap.get("tokens") or []
-        if not isinstance(tokens, list):
-            out.append("rename_map: tokens must be a list of {pattern, replace} rules")
-            tokens = []
+        out.extend(rename_map_shape_problems(self.rename_map))
+        rmap = self.rename_map if isinstance(self.rename_map, dict) else {}
+        tokens = rmap.get("tokens")
+        tokens = tokens if isinstance(tokens, list) else []
         for rule in tokens:
             if not isinstance(rule, dict) or "pattern" not in rule or "replace" not in rule:
                 out.append("rename_map: every token rule needs pattern and replace")
@@ -318,6 +311,26 @@ class ExportConfig:
 
     def to_dict(self) -> dict:
         return asdict(self)
+
+
+def rename_map_shape_problems(rmap) -> list[str]:
+    """Problem lines for the SHAPE of a rename map (the type of each part), shared by
+    the config check and both file doors. Without it a hand-written ``"exclude":
+    "*.md"`` would be read as the four one-character globs ``* . m d`` and the
+    ``*`` would drop every file of every repository."""
+    if rmap is None:
+        return []
+    if not isinstance(rmap, dict):
+        return ["rename_map must be an object with repos / tokens / skip_rewrite "
+                f"/ exclude, got {type(rmap).__name__}"]
+    out: list[str] = []
+    if rmap.get("tokens") and not isinstance(rmap["tokens"], list):
+        out.append("rename_map: tokens must be a list of {pattern, replace} rules")
+    for key in ("skip_rewrite", "exclude"):
+        v = rmap.get(key)
+        if v and not (isinstance(v, list) and all(isinstance(g, str) for g in v)):
+            out.append(f"rename_map: {key} must be a list of glob strings")
+    return out
 
 
 def repo_rename_problems(repos) -> list[str]:
@@ -352,6 +365,9 @@ def load_rename_map(path: str) -> dict:
     unknown = sorted(set(data) - {"repos", "tokens", "skip_rewrite", "exclude"})
     if unknown:
         raise ValueError(f"rename map: unknown keys {', '.join(unknown)}")
+    shape = rename_map_shape_problems(data) + repo_rename_problems(data.get("repos"))
+    if shape:
+        raise ValueError("; ".join(shape))
     out = {"repos": dict(data.get("repos") or {}),
            "tokens": list(data.get("tokens") or []),
            "skip_rewrite": list(data.get("skip_rewrite") or []),
@@ -571,8 +587,10 @@ def load_config(path: str, generator_dir: str = "", domain: str = "",
         if unknown:
             raise ValueError(f"{path}: unknown keys {', '.join(unknown)}")
         kw = {k: v for k, v in data.items() if k in _GENERIC_KEYS}
-        if isinstance(kw.get("rename_map"), dict):
-            bad = repo_rename_problems(kw["rename_map"].get("repos"))
+        if kw.get("rename_map") is not None:
+            bad = rename_map_shape_problems(kw["rename_map"])
+            if not bad:
+                bad = repo_rename_problems(kw["rename_map"].get("repos"))
             if bad:
                 raise ValueError(f"{path}: {'; '.join(bad)}")
             kw["rename_map"] = merge_rename_maps({}, kw["rename_map"])
