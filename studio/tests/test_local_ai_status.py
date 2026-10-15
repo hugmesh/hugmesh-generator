@@ -426,15 +426,24 @@ def test_a_stream_line_that_is_json_but_not_an_object_is_skipped(fake, env):
 # ── a server that is up but not well ────────────────────────────────────────────────
 # A loopback server that dies mid-reply on /api/tags (IncompleteRead) or that answers
 # bytes that are not HTTP (BadStatusLine) raises http.client.HTTPException, which is NOT
-# an OSError. Every /api/tags lookup must treat that like a server that is down: the
-# reader promises never to raise, the worker's heartbeat must still be written (a live
-# worker that stops beating is shown as stalled), and every face says the sentence
-# with the fix instead of a traceback.
+# an OSError; one that answers HTTP 200 with valid JSON that is not an object (``[]``,
+# ``null`` — another service on the port, a proxy, a stub) used to escape as a bare
+# AttributeError from ``.get``. Every /api/tags lookup must treat all of these like a
+# server that is down: the reader promises never to raise, the worker's heartbeat must
+# still be written (a live worker that stops beating is shown as stalled), and every
+# face says the sentence with the fix instead of a traceback.
+NOT_WELL = {
+    "cut_tags": ("cut_tags", True), "garbage_tags": ("garbage_tags", True),
+    "tags=[]": ("tags_body", b"[]"), "tags=null": ("tags_body", b"null"),
+}
+
+
 def half_dead(fake, how):
-    setattr(fake, how, True)
+    attr, value = NOT_WELL.get(how, (how, True))
+    setattr(fake, attr, value)
 
 
-@pytest.mark.parametrize("how", ["cut_tags", "garbage_tags"])
+@pytest.mark.parametrize("how", list(NOT_WELL))
 def test_a_server_that_dies_mid_reply_reads_as_not_answering_and_never_raises(fake, env, monkeypatch, how):
     half_dead(fake, how)
     monkeypatch.setattr(lai.shutil, "which", lambda name: "/usr/bin/ollama")
@@ -444,7 +453,7 @@ def test_a_server_that_dies_mid_reply_reads_as_not_answering_and_never_raises(fa
     assert snap.summary.startswith("Local AI: Ollama is installed but is not answering")
 
 
-@pytest.mark.parametrize("how", ["cut_tags", "garbage_tags"])
+@pytest.mark.parametrize("how", list(NOT_WELL))
 def test_the_heartbeat_is_still_written_when_ollama_dies_mid_reply(fake, env, worker_proc, how):
     half_dead(fake, how)
     path = lai.write_status(worker_proc.pid, "draft x#1", env)
@@ -455,7 +464,43 @@ def test_the_heartbeat_is_still_written_when_ollama_dies_mid_reply(fake, env, wo
     assert lai.read_snapshot(env, builds=no_builds).worker == "running"
 
 
-@pytest.mark.parametrize("how", ["cut_tags", "garbage_tags"])
+def test_a_models_field_that_is_not_a_list_means_no_model_pulled_not_a_crash(fake, env):
+    """``{"models": 5}`` IS a JSON object, so the server counts as answering; what it
+    says about models is unusable and reads as none pulled. Used to be a TypeError
+    from iterating the number."""
+    fake.tags_body = b'{"models": 5}'
+    snap = lai.read_snapshot(env, builds=no_builds, timeout=2)
+    # /api/ps is healthy in this test, so what it reports as loaded still shows
+    assert snap.ollama_up is True and snap.models == [] and snap.loaded == ["qwen3:8b"]
+    assert snap.problem.startswith("Ollama is running but no model is pulled")
+    # a prompt with no model named falls back to the default instead of crashing
+    assert lai.send_prompt("hi", None, env=env) == "Hello there"
+    assert fake.requests[-1][2]["model"] == lai.DEFAULT_MODEL
+
+
+# /api/tags is healthy and only /api/ps is unwell: the server IS up and has models, so
+# the reader must say so, with nothing loaded, rather than raise or call it down. This
+# is the clause mutation M4 of the first skeptic round showed no test could fail.
+PS_NOT_WELL = {
+    "cut_ps": ("cut_ps", True), "garbage_ps": ("garbage_ps", True),
+    "ps=[]": ("ps_body", b"[]"), "ps=null": ("ps_body", b"null"),
+    "ps={models:5}": ("ps_body", b'{"models": 5}'),
+}
+
+
+@pytest.mark.parametrize("how", list(PS_NOT_WELL))
+def test_a_ps_lookup_that_is_unwell_reads_as_up_with_nothing_loaded(fake, env, worker_proc, how):
+    setattr(fake, *PS_NOT_WELL[how])
+    snap = lai.read_snapshot(env, builds=no_builds, timeout=2)
+    assert snap.ok and snap.ollama_up is True and snap.models == ["qwen3:8b"] and snap.loaded == []
+    assert snap.summary == "Local AI: ready, no model loaded, idle"
+    path = lai.write_status(worker_proc.pid, "", env)
+    data = json.load(open(path))
+    assert data["ollama_up"] is True and data["model_loaded"] == []
+    assert lai.read_snapshot(env, builds=no_builds).worker == "running"
+
+
+@pytest.mark.parametrize("how", list(NOT_WELL))
 def test_every_command_reports_a_half_dead_server_in_words(fake, env, monkeypatch, capsys, how):
     half_dead(fake, how)
     monkeypatch.setattr(lai.shutil, "which", lambda name: "/usr/bin/ollama")

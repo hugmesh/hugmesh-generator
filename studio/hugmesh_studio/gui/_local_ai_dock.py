@@ -172,14 +172,44 @@ class _AnswerArea(QtWidgets.QPlainTextEdit):
     into it (to select or copy the model's answer) focuses it. A read-only text edit
     takes neither Return nor Escape, so both would travel on to the wizard exactly as
     they did from a plain QLineEdit: Return presses Next (or the build button), Escape
-    closes the Studio. The dock keeps those two keys to itself from every widget of
-    the dock; arrows, Page keys and Ctrl+C still do what a text view does."""
+    closes the Studio. Both stop here; arrows, Page keys and Ctrl+C still do what a
+    text view does.
+
+    WHICH WIDGETS OF THE DOCK KEEP WHICH KEYS. The dock's keyboard stops, in Tab order,
+    are the chevron, Start local assistant, Current work, the prompt, Send, Clear and
+    this area. Enter never reaches the wizard from any of them: it sends (prompt),
+    shows or hides the prompt (chevron, :class:`_Chevron`), presses the focused button
+    (the four QPushButtons are autoDefault on a dialog window and take the key
+    themselves) or does nothing (here). Escape is kept where it has a dock meaning or
+    none at all — a half-typed question (cleared), the chevron and this area (nothing)
+    — and on the empty prompt and on the four buttons it is the window's Cancel, as it
+    is on the wizard's own buttons."""
 
     def keyPressEvent(self, event):
         code = _key_code(event)
         super().keyPressEvent(event)
         if self.isReadOnly() and (code in _SEND_KEYS or code == _ESCAPE):
             event.accept()
+
+
+class _Chevron(QtWidgets.QToolButton):
+    """The dock's handle: the arrow that shows or hides the prompt, and the FIRST Tab
+    stop of the dock (Tab from the page's last control lands here). A QToolButton
+    presses itself on Space but not on Return, and leaves Return unaccepted, so Enter
+    here used to travel on to the wizard and press Next — or, on the worklist page,
+    the button that starts a build — from the widget a keyboard user reaches first.
+    Enter now presses the chevron; Escape does nothing (see :class:`_AnswerArea`)."""
+
+    def keyPressEvent(self, event):
+        code = _key_code(event)
+        if code in _SEND_KEYS:
+            self.click()
+            event.accept()
+            return
+        if code == _ESCAPE:
+            event.accept()
+            return
+        super().keyPressEvent(event)
 
 
 class _Threads:
@@ -460,7 +490,7 @@ class LocalAIDock(QtWidgets.QFrame):
         bar = QtWidgets.QHBoxLayout(self.bar)
         bar.setContentsMargins(0, 0, 0, 0)
         bar.setSpacing(8)
-        self.chevron = QtWidgets.QToolButton()
+        self.chevron = _Chevron()
         self.chevron.setAutoRaise(True)
         self.chevron.setMinimumSize(MIN_CLICK_PX, MIN_CLICK_PX)
         self.chevron.clicked.connect(lambda: self.set_expanded(not self.expanded))

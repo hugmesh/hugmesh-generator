@@ -230,13 +230,16 @@ def test_a_real_cut_stream_through_the_screen_is_one_sentence_not_a_traceback(st
     assert "cut off" in text and "Traceback" not in text and "IncompleteRead" not in text
 
 
-@pytest.mark.parametrize("how", ["cut_tags", "garbage_tags"])
+@pytest.mark.parametrize("how", [("cut_tags", True), ("garbage_tags", True),
+                                 ("tags_body", b"[]"), ("tags_body", b"null")],
+                         ids=["cut", "garbage", "json-list", "json-null"])
 def test_the_screen_opens_over_a_server_that_dies_mid_reply(state, fake, monkeypatch, how):
     """The screen takes a LIVE snapshot in ``enter()``. A server that drops the
     connection mid-reply on /api/tags raises IncompleteRead inside the reader — an
-    HTTPException, not an OSError — and used to take the whole input loop down with
-    a traceback before the screen was drawn."""
-    setattr(fake, how, True)
+    HTTPException, not an OSError — and one that answers valid JSON that is not an
+    object raised AttributeError there; either used to take the whole input loop down
+    with a traceback before the screen was drawn."""
+    setattr(fake, *how)
     monkeypatch.setenv("OLLAMA_HOST", fake.host)
     monkeypatch.setattr(lai, "read_snapshot", REAL_READ_SNAPSHOT)
     monkeypatch.setattr(lai.shutil, "which", lambda name: "/usr/bin/ollama")

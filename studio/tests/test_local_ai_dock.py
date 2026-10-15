@@ -464,13 +464,19 @@ def test_escape_in_the_prompt_clears_a_half_typed_question_instead_of_closing_th
                                        (Qt.Key.Key_Escape, "\x1b")],
                          ids=["Return", "keypad-Enter", "Escape"])
 @pytest.mark.parametrize("pages_on", [0, 1], ids=["welcome", "second-page"])
-def test_enter_and_escape_in_the_answer_area_stop_there(shell, qapp, monkeypatch, key, text, pages_on):
-    """The answer area is the widget one Tab to the right of the prompt, and a click
-    into it (to select or copy the model's answer) focuses it. A read-only
-    QPlainTextEdit takes neither Return nor Escape, so without a handler of its own
-    both travel on to the wizard: Return presses the default button (Next, or the
-    build button on the worklist page) and Escape closes the whole Studio window.
-    The whole dock, not only the prompt line, must keep those two keys to itself."""
+@pytest.mark.parametrize("widget", ["chevron", "answer"])
+def test_enter_and_escape_on_the_chevron_and_in_the_answer_area_stop_there(
+        shell, qapp, monkeypatch, widget, key, text, pages_on):
+    """The two widgets of the dock that are not a command button and not the prompt.
+    The chevron is the dock's handle and the FIRST Tab stop of the dock (Tab from the
+    page's last control lands on it); a QToolButton presses itself on Space, not on
+    Return, so Return there used to travel on to the wizard and press Next (or the build
+    button) — from the widget a keyboard user reaches first. The answer area is where a
+    click lands to copy the model's words, and a read-only QPlainTextEdit takes neither
+    key. Both now keep Return/Enter and Escape to themselves: the chevron's Enter shows
+    or hides the prompt, the answer area's does nothing, and Escape on either does
+    nothing; neither key reaches the wizard. (The four buttons are different: see the
+    test after this one.)"""
     monkeypatch.setattr(lai, "send_prompt", lambda text, *a, **k: "ok")
     wiz = open_at(shell, qapp, NORMAL)
     dock = wiz.local_ai_dock
@@ -483,21 +489,86 @@ def test_enter_and_escape_in_the_answer_area_stop_there(shell, qapp, monkeypatch
         "this page has no default Next button: the test would prove nothing"
     rejected = []
     wiz.rejected.connect(lambda: rejected.append(True))
+    target = getattr(dock, widget)
     dock.answer.setPlainText("Local AI: an answer the person wants to copy")
-    dock.answer.setFocus()
+    target.setFocus()
     qapp.processEvents()
-    assert dock.answer.hasFocus(), "the answer area did not take the focus: nothing is tested"
+    assert target.hasFocus(), f"the {widget} did not take the focus: nothing is tested"
     page_before, title_before = wiz.currentId(), wiz.currentPage().title()
-    press_key(qapp, dock.answer, key, text)
+    press_key(qapp, target, key, text)
+    assert not rejected and wiz.isVisible(), f"the key on the {widget} closed the Studio window"
     assert (wiz.currentId(), wiz.currentPage().title()) == (page_before, title_before), \
         f"the key moved the wizard from {title_before!r} to {wiz.currentPage().title()!r}"
-    assert not rejected and wiz.isVisible(), "the key in the answer area closed the Studio window"
     assert dock.answer.toPlainText().startswith("Local AI: an answer"), "the answer was changed"
+    if widget == "chevron":
+        # Enter on the chevron is a press of the chevron: it hides the prompt, and a
+        # second one shows it again (and, as a click does, puts the focus in the prompt)
+        if key == Qt.Key.Key_Escape:
+            assert dock.expanded and dock.body.isVisible(), "Escape on the chevron hid the prompt"
+        else:
+            assert not dock.expanded and not dock.body.isVisible(), \
+                "Enter on the chevron did not hide the prompt (pressed nothing)"
+            press_key(qapp, dock.chevron, key, text)
+            assert dock.expanded and dock.body.isVisible(), "a second Enter did not show the prompt again"
+            assert dock.prompt.hasFocus(), "showing the prompt from the chevron must focus the prompt"
+            assert (wiz.currentId(), wiz.currentPage().title()) == (page_before, title_before)
+        return
     # arrow keys and copy still work in the answer area: it keeps only the two keys that
     # would otherwise act on the wizard, and a plain letter still reaches nothing it should not
     seen = _KeysSeenBy(wiz)
     press_key(qapp, dock.answer, Qt.Key.Key_Up, "")
     assert int(Qt.Key.Key_Up) not in seen.keys and dock.answer.hasFocus()
+
+
+@pytest.mark.parametrize("button", ["start_btn", "work_btn", "send_btn", "clear_btn"])
+def test_enter_on_a_dock_button_presses_that_button_and_escape_there_is_the_windows_cancel(
+        shell, qapp, monkeypatch, button):
+    """The complete list of the dock's keyboard stops is the chevron, the two bar buttons,
+    the prompt, Send, Clear and the answer area (in that Tab order). This pins the four
+    buttons so the rule is stated for every stop and a change to it is deliberate:
+    Enter on a focused dock button presses THAT button and moves no wizard page (a
+    QPushButton on a QDialog window is autoDefault and takes the key itself), and
+    Escape on a dock button is the window's Cancel, exactly as it is on the wizard's
+    own Back/Next/Cancel buttons and on the empty prompt line. Whether Escape anywhere
+    in the dock should stop closing the Studio is the operator's decision, not a
+    side effect of this change."""
+    started, sent = [], []
+    monkeypatch.setattr(lai, "send_prompt", lambda text, *a, **k: sent.append(text) or "ok")
+    monkeypatch.setattr(lai, "start_assistant",
+                        lambda *a, **k: started.append(1) or lai.StartResult(True, "Starting.", "x"))
+    wiz = open_at(shell, qapp, NORMAL)
+    dock = wiz.local_ai_dock
+    dock.set_expanded(True)
+    qapp.processEvents()
+    assert wiz.button(QtWidgets.QWizard.WizardButton.NextButton).isDefault()
+    rejected = []
+    wiz.rejected.connect(lambda: rejected.append(True))
+    dock.answer.setPlainText("an earlier answer")
+    dock.prompt.setText("a question")
+    target = getattr(dock, button)
+    target.setFocus()
+    qapp.processEvents()
+    assert target.hasFocus(), f"{button} did not take the focus: nothing is tested"
+    page_before, title_before = wiz.currentId(), wiz.currentPage().title()
+    press_key(qapp, target, Qt.Key.Key_Return, "\r")
+    assert (wiz.currentId(), wiz.currentPage().title()) == (page_before, title_before), \
+        f"Enter on {button} moved the wizard to {wiz.currentPage().title()!r}"
+    assert not rejected and wiz.isVisible()
+    if button == "start_btn":
+        assert wait_for(qapp, lambda: started), "Enter on Start did not start the assistant"
+    elif button == "work_btn":
+        assert dock.work_window is not None and dock.work_window.isVisible(), \
+            "Enter on Current work did not open the work window"
+    elif button == "send_btn":
+        assert wait_for(qapp, lambda: sent == ["a question"] and not dock._busy), \
+            "Enter on Send did not send the prompt"
+    else:
+        assert dock.answer.toPlainText() == "", "Enter on Clear did not clear the answer"
+    # Escape on the button: the window's Cancel, as on the wizard's own buttons
+    target.setFocus()
+    qapp.processEvents()
+    press_key(qapp, target, Qt.Key.Key_Escape, "\x1b")
+    assert rejected, f"Escape on {button} no longer cancels the window as it does on every other button"
 
 
 def test_the_prompt_reads_the_key_as_an_int_or_as_an_enum_member(qapp, monkeypatch):

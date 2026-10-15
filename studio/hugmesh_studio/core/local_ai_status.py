@@ -163,14 +163,33 @@ def _opener() -> urllib.request.OpenerDirector:
 
 
 def _get_json(env: dict | None, path: str, timeout: float) -> dict:
+    """GET ``path`` and return the JSON object it answers with.
+
+    :raises ValueError: when the body is not JSON, or is JSON but not an object (``[]``,
+        ``null``). Ollama answers an object on every path used here; whatever else is
+        listening on the port (another service, a proxy, a stub) is "not answering" to
+        every caller, the same as a server that is down."""
     with _opener().open(base_url(env) + path, timeout=timeout) as r:
-        return json.loads(r.read().decode("utf-8", "replace") or "{}")
+        data = json.loads(r.read().decode("utf-8", "replace") or "{}")
+    if not isinstance(data, dict):
+        raise ValueError(f"{path} answered JSON that is not an object")
+    return data
+
+
+def _model_names(answer: dict) -> list:
+    """The ``name`` of each entry of an /api/tags or /api/ps answer; a ``models`` field
+    that is not a list (``{"models": 5}``) is no models, not a TypeError."""
+    models = answer.get("models")
+    if not isinstance(models, list):
+        return []
+    return [m["name"] for m in models if isinstance(m, dict) and isinstance(m.get("name"), str) and m["name"]]
 
 
 #: Everything ``_get_json`` raises when the server is down OR up-but-not-well. A server
 #: that dies mid-reply raises IncompleteRead and one that answers non-HTTP bytes raises
 #: BadStatusLine: both are http.client.HTTPException, which is NOT an OSError, so a
 #: tuple without it let a restarting Ollama take the worker's heartbeat down with it.
+#: ValueError covers a body that is not JSON and one that is JSON but not an object.
 _NOT_ANSWERING = (OSError, ValueError, urllib.error.URLError, http.client.HTTPException)
 
 
@@ -391,13 +410,12 @@ def _probe(env: dict | None, timeout: float) -> tuple[bool, list, list, str]:
         return False, [], [], str(exc)
     except _NOT_ANSWERING:
         return False, [], [], ""
-    models = [m.get("name", "") for m in tags.get("models", []) if isinstance(m, dict)]
+    models = _model_names(tags)
     try:
-        ps = _get_json(env, "/api/ps", timeout)
-        loaded = [m.get("name", "") for m in ps.get("models", []) if isinstance(m, dict)]
+        loaded = _model_names(_get_json(env, "/api/ps", timeout))
     except _NOT_ANSWERING:
-        loaded = []
-    return True, [m for m in models if m], [m for m in loaded if m], ""
+        loaded = []                  # up (tags answered), nothing known to be loaded
+    return True, models, loaded, ""
 
 
 def read_snapshot(env: dict | None = None, *, now: float | None = None,
@@ -632,10 +650,10 @@ def send_prompt(text: str, model: str | None = None, *, env: dict | None = None,
     url = base_url(env)                                     # the loopback rule, first
     if not model:
         try:
-            tags = _get_json(env, "/api/tags", 5).get("models") or []
+            pulled = _model_names(_get_json(env, "/api/tags", 5))
         except _NOT_ANSWERING:
             raise LocalAIError(_down_message(env)) from None
-        model = pick_model(env, [m.get("name", "") for m in tags if isinstance(m, dict)])
+        model = pick_model(env, pulled)
     messages = ([{"role": "system", "content": system}] if system else []) \
         + list(history or []) + [{"role": "user", "content": text}]
     opts = {"num_ctx": int(env.get(CTX_ENV) or DEFAULT_CTX), "temperature": 0.2}

@@ -27,7 +27,7 @@ to count.
 
 Prints ONE JSON object on the LAST stdout line (the step file's contract):
 ``{ok, binding, png, grabs:[{name,png}], faces:{...}, dock:{...}, start:{...},
-prompt:{...}, clear:{...}, modal, errors:[...]}``. Exit codes: 0 driven and grabbed,
+escape:{...}, dockKeys:{...}, prompt:{...}, clear:{...}, modal, errors:[...]}``. Exit codes: 0 driven and grabbed,
 2 bad usage, 3 no Qt binding, 4 the Studio could not be built or driven.
 """
 import argparse
@@ -246,35 +246,53 @@ def main(argv):
             "how": "QKeyEvent(Key_Escape) via QApplication.sendEvent",
             "promptAfter": dock.prompt.text(), "windowRejected": bool(rejected),
             "windowVisible": wiz.isVisible(), "promptHasFocus": dock.prompt.hasFocus(),
-            "page": type(wiz.currentPage()).__name__,
+            "page": type(wiz.currentPage()).__name__ if wiz.currentPage() else None,
         }
         grab("3a-escape-cleared-the-prompt")
         modal_check("escape")
 
-        # ── act 3b: Enter and Escape with the focus in the ANSWER AREA ──
-        # A click into the answer area (to copy the model's words) focuses it. A read-only
-        # text edit takes neither key, so an unhandled one travels on to the wizard: Enter
-        # presses Next (on the worklist page, the build button), Escape closes the Studio.
-        # The wizard page and the window's `rejected` are read around each key.
+        # ── act 3b: Enter and Escape with the focus on the CHEVRON and in the ANSWER AREA ──
+        # The chevron is the dock's first Tab stop (Tab from the page lands on it) and a
+        # QToolButton presses itself on Space, not Return; a click into the answer area
+        # (to copy the model's words) focuses it, and a read-only text edit takes neither
+        # key. From either, an unhandled key travels on to the wizard: Enter presses Next
+        # (on the worklist page, the build button), Escape closes the Studio. The wizard
+        # page and the window's `rejected` are read around each key. Enter on the chevron
+        # hides the prompt and a second Enter shows it again, so the dock is expanded
+        # again when the answer area's turn comes.
+        def page_now():
+            p = wiz.currentPage()
+            return ({"id": wiz.currentId(), "title": p.title(), "page": type(p).__name__}
+                    if p is not None else None)
+
         dock.answer.setPlainText("Local AI: an answer the person wants to copy")
-        dock.answer.setFocus()
-        app.processEvents()
-        answer_keys = {"how": "QKeyEvent via QApplication.sendEvent, focus in the answer area",
-                       "answerHadFocus": dock.answer.hasFocus(), "keys": {}}
-        for name, k, txt in (("Return", Qt.Key.Key_Return, "\r"), ("Escape", Qt.Key.Key_Escape, "\x1b")):
-            before = {"id": wiz.currentId(), "title": wiz.currentPage().title(),
-                      "page": type(wiz.currentPage()).__name__}
-            for kind in (QtCore.QEvent.Type.KeyPress, QtCore.QEvent.Type.KeyRelease):
-                app.sendEvent(dock.answer, QtGui.QKeyEvent(kind, k, Qt.KeyboardModifier.NoModifier, txt))
-            app.processEvents()
-            after = ({"id": wiz.currentId(), "title": wiz.currentPage().title(),
-                      "page": type(wiz.currentPage()).__name__} if wiz.currentPage() else None)
-            answer_keys["keys"][name] = {"wizardBefore": before, "wizardAfter": after,
-                                         "windowRejected": bool(rejected), "windowVisible": wiz.isVisible()}
-        answer_keys["answerAfter"] = dock.answer.toPlainText()
-        report["answerArea"] = answer_keys
-        grab("3b-keys-in-the-answer-area")
-        modal_check("answer-area keys")
+        dock_keys = {"how": "QKeyEvent via QApplication.sendEvent, focus on the widget", "widgets": {}}
+        for widget_name, widget in (("chevron", dock.chevron), ("answer", dock.answer)):
+            entry = {"keys": {}}
+            for name, k, txt in (("Return", Qt.Key.Key_Return, "\r"), ("Escape", Qt.Key.Key_Escape, "\x1b")):
+                presses = 2 if (widget_name == "chevron" and name == "Return") else 1
+                before, expanded_before, had_focus, expanded_between = page_now(), dock.expanded, [], None
+                for n in range(presses):
+                    widget.setFocus()               # every press from the widget itself, focused
+                    app.processEvents()
+                    had_focus.append(widget.hasFocus())
+                    for kind in (QtCore.QEvent.Type.KeyPress, QtCore.QEvent.Type.KeyRelease):
+                        app.sendEvent(widget, QtGui.QKeyEvent(kind, k, Qt.KeyboardModifier.NoModifier, txt))
+                    app.processEvents()
+                    if n == 0 and presses == 2:
+                        expanded_between = dock.expanded
+                entry["keys"][name] = {
+                    "hadFocus": all(had_focus), "presses": presses,
+                    "wizardBefore": before, "wizardAfter": page_now(),
+                    "windowRejected": bool(rejected), "windowVisible": wiz.isVisible(),
+                    "expandedBefore": expanded_before, "expandedBetween": expanded_between,
+                    "expandedAfter": dock.expanded,
+                }
+            dock_keys["widgets"][widget_name] = entry
+        dock_keys["answerAfter"] = dock.answer.toPlainText()
+        report["dockKeys"] = dock_keys
+        grab("3b-keys-on-the-chevron-and-in-the-answer-area")
+        modal_check("chevron and answer-area keys")
         dock.answer.clear()
 
         # ── act 3: a question, answered by the loopback model, streaming ──
@@ -284,8 +302,7 @@ def main(argv):
         dock.prompt.setText(question)
         dock.prompt.setFocus()
         app.processEvents()
-        page_before = {"id": wiz.currentId(), "title": wiz.currentPage().title(),
-                       "page": type(wiz.currentPage()).__name__}
+        page_before = page_now()
         try:
             # a real Enter key press delivered through Qt's event system (QtTest is not
             # part of every binding install; QKeyEvent is)
@@ -298,8 +315,7 @@ def main(argv):
             enter_how = f"returnPressed.emit() (key event failed: {exc})"
         streamed = pump(lambda: fake.chunks[0] in dock.answer.toPlainText(), 15)
         before_clear = dock.answer.toPlainText()
-        page_after = {"id": wiz.currentId(), "title": wiz.currentPage().title(),
-                      "page": type(wiz.currentPage()).__name__}
+        page_after = page_now()                         # None when a key closed the window
         report["prompt"] = {
             "text": question, "enter": enter_how, "promptClearedOnSend": dock.prompt.text() == "",
             "wizardBeforeEnter": page_before, "wizardAfterEnter": page_after,

@@ -62,12 +62,16 @@ interface DockReport {
     how: string; promptAfter: string; windowRejected: boolean; windowVisible: boolean;
     promptHasFocus: boolean; page: string;
   };
-  answerArea?: {
-    how: string; answerHadFocus: boolean; answerAfter: string;
-    keys: Record<string, {
-      wizardBefore: { id: number; title: string; page: string };
-      wizardAfter: { id: number; title: string; page: string } | null;
-      windowRejected: boolean; windowVisible: boolean;
+  dockKeys?: {
+    how: string; answerAfter: string;
+    widgets: Record<string, {
+      keys: Record<string, {
+        hadFocus: boolean; presses: number;
+        wizardBefore: { id: number; title: string; page: string } | null;
+        wizardAfter: { id: number; title: string; page: string } | null;
+        windowRejected: boolean; windowVisible: boolean;
+        expandedBefore: boolean; expandedBetween: boolean | null; expandedAfter: boolean;
+      }>;
     }>;
   };
 }
@@ -185,24 +189,40 @@ Then('Escape in the prompt cleared a half-typed question and did not close the S
     expect(e!.promptHasFocus, 'the prompt lost the focus on Escape').toBe(true);
   });
 
-Then('Enter and Escape with the focus in the answer area moved no page and closed no window',
+Then('Enter and Escape with the focus on the chevron or in the answer area moved no page and closed no window',
   async ({ world }) => {
-    const a = report(world).answerArea;
-    expect(a, 'the driver did not press keys in the answer area').toBeTruthy();
-    // the answer area is where a person clicks to copy the model's words; a key it does
-    // not keep travels on to the wizard, a QDialog: Enter presses Next, Escape closes it
-    expect(a!.how).toMatch(/^QKeyEvent/);
-    expect(a!.answerHadFocus, 'the answer area never took the focus: nothing was tested').toBe(true);
-    for (const name of ['Return', 'Escape']) {
-      const k = a!.keys[name];
-      expect(k, `the driver did not press ${name} in the answer area`).toBeTruthy();
-      expect(k.wizardAfter,
-        `${name} in the answer area moved the wizard from "${k.wizardBefore.title}" to "${k.wizardAfter?.title}"`)
-        .toEqual(k.wizardBefore);
-      expect(k.windowRejected, `${name} in the answer area closed the Studio window`).toBe(false);
-      expect(k.windowVisible).toBe(true);
+    const d = report(world).dockKeys;
+    expect(d, 'the driver did not press keys on the chevron and in the answer area').toBeTruthy();
+    // the chevron is the dock's first Tab stop and a QToolButton takes Space, not Return;
+    // the answer area is where a person clicks to copy the model's words and a read-only
+    // text edit takes neither key. A key neither keeps travels on to the wizard, a
+    // QDialog: Enter presses Next (the build button on the worklist page), Escape closes it
+    expect(d!.how).toMatch(/^QKeyEvent/);
+    for (const widget of ['chevron', 'answer']) {
+      const w = d!.widgets[widget];
+      expect(w, `the driver did not press keys on the ${widget}`).toBeTruthy();
+      for (const name of ['Return', 'Escape']) {
+        const k = w.keys[name];
+        expect(k, `the driver did not press ${name} on the ${widget}`).toBeTruthy();
+        expect(k.hadFocus, `the ${widget} never took the focus: nothing was tested`).toBe(true);
+        expect(k.wizardBefore, `the driver did not read the page before ${name} on the ${widget}`).toBeTruthy();
+        expect(k.windowRejected, `${name} on the ${widget} closed the Studio window`).toBe(false);
+        expect(k.windowVisible).toBe(true);
+        expect(k.wizardAfter,
+          `${name} on the ${widget} moved the wizard from "${k.wizardBefore!.title}" to "${k.wizardAfter?.title}"`)
+          .toEqual(k.wizardBefore);
+      }
     }
-    expect(a!.answerAfter).toContain('an answer the person wants to copy');
+    // Enter on the chevron is a press of the chevron: the first hides the prompt, the
+    // second shows it again; Escape on it changes nothing
+    const chevronEnter = d!.widgets.chevron.keys.Return;
+    expect(chevronEnter.presses).toBe(2);
+    expect(chevronEnter.expandedBefore, 'the dock was not expanded when the chevron was pressed').toBe(true);
+    expect(chevronEnter.expandedBetween, 'Enter on the chevron did not hide the prompt (it pressed nothing)').toBe(false);
+    expect(chevronEnter.expandedAfter, 'a second Enter on the chevron did not show the prompt again').toBe(true);
+    const chevronEscape = d!.widgets.chevron.keys.Escape;
+    expect(chevronEscape.expandedAfter, 'Escape on the chevron hid the prompt').toBe(chevronEscape.expandedBefore);
+    expect(d!.answerAfter).toContain('an answer the person wants to copy');
   });
 
 Then('the dock asked the model named by LOCAL_AI_MODEL, the same one the command line asks',
@@ -239,7 +259,7 @@ Then('a grab exists for each act of the Local AI dock scenario', async ({ world 
   const r = report(world);
   const names = r.grabs.map((g) => g.name);
   expect(names).toEqual(['1-opened-collapsed', '2-expanded', '3-started', '3a-escape-cleared-the-prompt',
-    '3b-keys-in-the-answer-area', '4-answer-streaming', '5-after-clear']);
+    '3b-keys-on-the-chevron-and-in-the-answer-area', '4-answer-streaming', '5-after-clear']);
   for (const g of r.grabs) {
     expect(fs.statSync(g.png).size, `${g.png} is empty`).toBeGreaterThan(0);
   }

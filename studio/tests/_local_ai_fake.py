@@ -29,12 +29,19 @@ class FakeOllama:
         # end of file, so the reader is handed a truncated answer with no error at all.
         self.cut_in_chunk = False
         self.cut_between_chunks = False
-        # A server that is up but not well: ``cut_tags`` answers /api/tags with a
-        # Content-Length longer than the bytes it sends and drops the connection (a
-        # server dying mid-reply: IncompleteRead); ``garbage_tags`` answers with bytes
-        # that are not HTTP at all (BadStatusLine). Both are HTTPException, not OSError.
+        # A server that is up but not well, on either lookup. ``cut_tags``/``cut_ps``
+        # answer with a Content-Length longer than the bytes they send and drop the
+        # connection (a server dying mid-reply: IncompleteRead); ``garbage_tags``/
+        # ``garbage_ps`` answer with bytes that are not HTTP at all (BadStatusLine). Both
+        # are HTTPException, not OSError. ``tags_body``/``ps_body`` (bytes) answer HTTP 200
+        # with exactly those bytes: valid JSON that is not the object Ollama sends (``[]``,
+        # ``null``, ``{"models": 5}``), as another service on the port, or a proxy, might.
         self.cut_tags = False
         self.garbage_tags = False
+        self.cut_ps = False
+        self.garbage_ps = False
+        self.tags_body = None
+        self.ps_body = None
         self.requests = []           # (method, path, body-dict)
         outer = self
 
@@ -43,12 +50,35 @@ class FakeOllama:
                 pass
 
             def _json(self, obj, code=200):
-                body = json.dumps(obj).encode()
+                self._raw(json.dumps(obj).encode(), code)
+
+            def _raw(self, body, code=200):
                 self.send_response(code)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(body)))
                 self.end_headers()
                 self.wfile.write(body)
+
+            def _garbage(self):
+                try:
+                    self.wfile.write(b"HELLO NOT HTTP\r\n")
+                    self.wfile.flush()
+                except (BrokenPipeError, ConnectionResetError):
+                    pass
+                self.close_connection = True
+
+            def _cut(self, obj):
+                body = json.dumps(obj).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body) + 489))
+                self.end_headers()
+                try:
+                    self.wfile.write(body[:11])
+                    self.wfile.flush()
+                except (BrokenPipeError, ConnectionResetError):
+                    pass
+                self.close_connection = True
 
             def do_GET(self):
                 outer.requests.append(("GET", self.path, None))
@@ -57,29 +87,24 @@ class FakeOllama:
                     self.send_header("Location", f"http://127.0.0.1:{outer.port}/bounced")
                     self.end_headers()
                     return
-                if self.path == "/api/tags" and outer.garbage_tags:
-                    try:
-                        self.wfile.write(b"HELLO NOT HTTP\r\n")
-                        self.wfile.flush()
-                    except (BrokenPipeError, ConnectionResetError):
-                        pass
-                    self.close_connection = True
-                elif self.path == "/api/tags" and outer.cut_tags:
-                    body = json.dumps({"models": outer.models}).encode()
-                    self.send_response(200)
-                    self.send_header("Content-Type", "application/json")
-                    self.send_header("Content-Length", str(len(body) + 489))
-                    self.end_headers()
-                    try:
-                        self.wfile.write(body[:11])
-                        self.wfile.flush()
-                    except (BrokenPipeError, ConnectionResetError):
-                        pass
-                    self.close_connection = True
-                elif self.path == "/api/tags":
-                    self._json({"models": outer.models})
+                if self.path == "/api/tags":
+                    if outer.garbage_tags:
+                        self._garbage()
+                    elif outer.cut_tags:
+                        self._cut({"models": outer.models})
+                    elif outer.tags_body is not None:
+                        self._raw(outer.tags_body)
+                    else:
+                        self._json({"models": outer.models})
                 elif self.path == "/api/ps":
-                    self._json({"models": outer.loaded})
+                    if outer.garbage_ps:
+                        self._garbage()
+                    elif outer.cut_ps:
+                        self._cut({"models": outer.loaded})
+                    elif outer.ps_body is not None:
+                        self._raw(outer.ps_body)
+                    else:
+                        self._json({"models": outer.loaded})
                 else:
                     self._json({}, 404)
 
