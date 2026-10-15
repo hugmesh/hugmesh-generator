@@ -1,0 +1,6 @@
+SYNTHETIC FIXTURE for tests/scripts/test-binpkg-reuse-report.sh: hand-written in the shape of a builder log, NOT a capture of a real build.
+==== snap-build-pi5 (snap-build-pi5) start 20261001T080000Z brand=hugmesh role=pki env=test ====
+==> Emerge group: image
+>>> Emerging (1 of 2) dev-util/pkgconf-2.5.1::gentoo to /
+>>> Emerging (2 of 2) dev-util/pkgconf-2.5.1::gentoo for /out/wl-pki.pi5/sysroot/
+>>> Emerging (1 of 2) dev-util/pkgconf-2.5.1::gentoo to /

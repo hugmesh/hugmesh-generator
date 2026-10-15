@@ -676,6 +676,53 @@ has_v "${o}" FAIL "is NOT an fe-gateway Ingress host" && ok "D live: control pla
 fx live-unknown pki "${LIVE_OK[@]}" adminconf unknown; o="$(run_fx live 0)"
 has_v "${o}" SKIP "admission unknown" && hasnt "${o}" "every exported onion is an fe-gateway Ingress host" && ok "D live: Application unreadable -> SKIP, not PASS" || { bad "D live unknown"; echo "${o}" | sed 's/^/      | /'; }
 
+# ═══════════ E. the export half (#629): wiring + the shared validators (static) ═══════════
+# The fetch/verify/apply/report BEHAVIOUR is driven in tests/scripts/test-tor-export-sync.sh;
+# this section pins what makes it RUN on a node: the cron entry, both builders' bake lines
+# (executed), and that the sync refuses exactly the values the reconcile ignores.
+echo "== E. hugmesh-tor-export-sync wiring + shared validators =="
+SYNC="${REPO}/specs/usr/sbin/hugmesh-tor-export-sync"
+TVLIB="${REPO}/specs/usr/lib/hugmesh/tor-verify.sh"
+[ -f "${SYNC}" ] && [ -f "${TVLIB}" ] && ok "E the sync agent and tor-verify.sh exist" || bad "E missing ${SYNC} or ${TVLIB}"
+sline="$(printf '%s\n' "${cron_code}" | grep -aE '[[:space:]]root[[:space:]]+/usr/sbin/hugmesh-tor-export-sync([[:space:]]|$)' || true)"
+[ "$(printf '%s' "${sline}" | grep -ac .)" -eq 1 ] && ok "E cron.d: exactly one entry runs the export sync as root" || bad "E cron.d: sync entries: '${sline}'"
+[ "$(awk '{print $1" "$2" "$3" "$4" "$5}' <<<"${sline}")" = '* * * * *' ] \
+    && ok "E cron.d: the export sync runs every minute (the egress-VPN 60 s convergence floor; 'within one cron cycle' in #629)" \
+    || bad "E cron.d: sync cadence '$(awk '{print $1" "$2" "$3" "$4" "$5}' <<<"${sline}")' is not every minute"
+printf '%s\n' "${sline}" | grep -F 'RC_SVCNAME' >/dev/null && bad "E cron.d: the sync entry sets RC_SVCNAME" || ok "E cron.d: the sync entry does not pose as the boot oneshot"
+for B in "${X86}" "${RPI5}"; do
+    bn="$(basename "${B}")"
+    cps="$(grep -av -E '^[[:space:]]*#' "${B}" | grep -aE '^[[:space:]]*cp "\$\{SHARED_SPECS\}/(usr/sbin|usr/lib/hugmesh|etc/init.d|etc/cron.d)/(hugmesh-tor-|tor-verify)')"
+    SB="${WORK}/bake-e-${bn}"; rm -rf "${SB}"; mkdir -p "${SB}/usr/sbin" "${SB}/usr/lib/hugmesh" "${SB}/etc/init.d" "${SB}/etc/hugmesh/registry"
+    ( SHARED_SPECS="${REPO}/specs"; SYSROOT="${SB}"; eval "${cps}" ) >/dev/null 2>&1
+    if [ -x "${SB}/usr/sbin/hugmesh-tor-export-sync" ] && cmp -s "${SB}/usr/sbin/hugmesh-tor-export-sync" "${SYNC}" \
+       && [ -f "${SB}/usr/lib/hugmesh/tor-verify.sh" ] && cmp -s "${SB}/usr/lib/hugmesh/tor-verify.sh" "${TVLIB}" \
+       && [ -x "${SB}/usr/sbin/hugmesh-tor-reconcile" ]; then
+        ok "E ${bn}: its tor bake lines, executed, put an executable sync agent + tor-verify.sh next to the reconcile"
+    else
+        bad "E ${bn}: executed tor bake lines did not bake /usr/sbin/hugmesh-tor-export-sync (+x) and /usr/lib/hugmesh/tor-verify.sh"; printf '%s\n' "${cps}" | sed 's/^/      | /'
+    fi
+    # tor-verify.sh sources registry-verify.sh: the bake must put both in the same dir
+    grep -aE '^[[:space:]]*cp "\$\{SHARED_SPECS\}/usr/lib/hugmesh/registry-verify.sh"[[:space:]]+"\$\{SYSROOT\}/usr/lib/hugmesh/registry-verify.sh"' "${B}" >/dev/null \
+        && ok "E ${bn}: registry-verify.sh is baked to the same /usr/lib/hugmesh (tor-verify.sh sources it)" || bad "E ${bn}: registry-verify.sh bake line not found"
+done
+# the sync refuses exactly what the reconcile ignores: one spelling of each validator
+rec_up="$(grep -aE '^_UPSTREAM_RE=' "${AGENT}")"; syn_up="$(grep -aE '^_UPSTREAM_RE=' "${SYNC}")"
+[ -n "${rec_up}" ] && [ "${rec_up}" = "${syn_up}" ] && ok "E _UPSTREAM_RE is byte-identical in the reconcile and the sync" || bad "E _UPSTREAM_RE differs: reconcile '${rec_up}' sync '${syn_up}'"
+rec_slug="$(grep -aoE '\^\[a-z0-9\]\[a-z0-9-\]\{0,62\}\$' "${AGENT}" | head -1)"
+syn_slug="$(sed -n 's/^_SLUG_RE=.\(.*\).$/\1/p' "${SYNC}")"
+[ -n "${rec_slug}" ] && [ "${rec_slug}" = "${syn_slug}" ] && ok "E the slug pattern is the same in both agents (${syn_slug})" || bad "E slug pattern differs: reconcile '${rec_slug}' sync '${syn_slug}'"
+[ "$(sed -n 's/^_ONION_RE=.\(.*\).$/\1/p' "${SYNC}")" = '^[a-z2-7]{56}\.onion$' ] && ok "E the sync reports only v3 onions (admin-bff's TorOnionRules spelling)" || bad "E _ONION_RE drifted"
+# the sync writes the two files the reconcile reads, by the same paths
+grep -aF 'UPSTREAM_FILE="/etc/hugmesh/tor/upstream"' "${AGENT}" >/dev/null && grep -aF 'UPSTREAM_FILE="${TOR_ETC}/upstream"' "${SYNC}" >/dev/null && grep -aF 'TOR_ETC="${R}/etc/hugmesh/tor"' "${SYNC}" >/dev/null \
+    && grep -aF 'DOMAINS_FILE="/etc/hugmesh/tor/domains"' "${AGENT}" >/dev/null && grep -aF 'DOMAINS_FILE="${TOR_ETC}/domains"' "${SYNC}" >/dev/null \
+    && ok "E both agents name /etc/hugmesh/tor/upstream and /etc/hugmesh/tor/domains" || bad "E the two agents disagree on the file paths"
+grep -aF 'EXPORT_DIR="/var/lib/hugmesh/tor"' "${AGENT}" >/dev/null && grep -aF 'EXPORT_DIR="${R}/var/lib/hugmesh/tor"' "${SYNC}" >/dev/null \
+    && ok "E the sync reports from the directory the reconcile exports to (/var/lib/hugmesh/tor)" || bad "E export dir disagreement"
+grep -aF 'tor_canonical_bytes' "${TVLIB}" >/dev/null && grep -aF '"v1-tor\n"' "${TVLIB}" >/dev/null && grep -aF 'registry-verify.sh' "${TVLIB}" >/dev/null \
+    && ok "E tor-verify.sh spells v1-tor and layers on registry-verify.sh (one crypto path for every consumer)" || bad "E tor-verify.sh shape"
+grep -aE '[|][[:space:]]*grep[[:space:]]+-[a-zA-Z]*q' "${SYNC}" "${TVLIB}" "${REPO}/tests/scripts/test-tor-export-sync.sh" >/dev/null && bad "E a quiet grep fed by a pipe under pipefail (a found match can report failure)" || ok "E no quiet grep fed by a pipe in the sync, the lib or its suite"
+
 echo
 echo "== RESULT: ${P} passed, ${F} failed =="
 [ "${F}" -eq 0 ]

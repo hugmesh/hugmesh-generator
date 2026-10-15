@@ -134,6 +134,12 @@ spec:
             # OAuth2 resource server: validate the cluster Casdoor JWT itself.
             - name: CASDOOR_ISSUER_URI
               value: "https://id.hugmesh.net"
+            # Key fetch stays IN-CLUSTER: the public issuer host need not resolve
+            # here (on kind it does not: hugmesh-generator#693). The issuer URI above
+            # stays the `iss` claim only. Same value as the gateway chart's
+            # casdoor.jwksUri; pinned by tests/scripts/test-bff-jwks-in-cluster.sh.
+            - name: CASDOOR_JWKS_URI
+              value: "http://casdoor.hugmesh-pki.svc.cluster.local:8000/.well-known/jwks"
             # ── Casdoor identity contract (must AGREE with casdoor-init) ────────
             # The Casdoor ORGANIZATION every login / admin write resolves against.
             # casdoor-init + init_data.json create org `hugmesh`; this app's
@@ -382,6 +388,35 @@ spec:
             # tests/egress-vpn/test-secret-contract.sh.
             - { name: EGRESS_VPN_SECRET_DELIVERY_ENABLED, value: "false" }
             - { name: EGRESS_VPN_SECRET_NAMESPACE,        value: "hugmesh-egress-vpn" }
+            # ── Desktop governance: the three SHIPS-DARK device-exec flags ─────
+            # Declared here, all "false", so the lever is VISIBLE and REVIEWABLE.
+            # Before this block no manifest named them, and one of the three
+            # (app.desktop.remote-install.enabled) had no application.yml entry
+            # either, so nothing told an operator the switch existed. `kubectl set
+            # env` is NOT the lever: apps/31-admin-bff-api.yaml is automated
+            # {prune,selfHeal} and reverts it on the next reconcile. The lever is
+            # editing the value below in a reviewed commit.
+            #
+            # DO NOT FLIP THESE AS A BUNDLE, and not before the preconditions in
+            # docs/CLIENT-IMAGES.md section 7 "Go-live preconditions":
+            #  - DEVICE_TERMINAL_DIAL_ENABLED=true wires the host-key-PINNED sshj
+            #    channel factory. It REQUIRES a mandatory security re-review first,
+            #    and it is INERT without ACTIVE device_ssh_dial rows (per-device
+            #    host_key_fp pin, TOFU forbidden; rows are seeded PENDING by an
+            #    image-build ingest and activated by a SUPERADMIN, which itself 503s
+            #    while this flag is false) AND the per-device ESO-synced dial-key
+            #    Secrets mounted under /var/run/secrets/device-ssh-dial. This
+            #    Deployment mounts none, and no manifest in this tree delivers them.
+            #  - DEVICE_TERMINAL_ENABLED=true opens the live WebSocket transport; the
+            #    connect-time license + step-up re-checks run regardless.
+            #  - DESKTOP_REMOTE_INSTALL_ENABLED=true wires the exec client that rides
+            #    the SAME dial factory, so it dials nothing while the dial flag is
+            #    false. Needs an admin-bff image that carries the application.yml
+            #    entry; an older image ignores this env var silently.
+            # Pinned by tests/desktop-governance/test-governance-flags-visible.sh.
+            - { name: DEVICE_TERMINAL_ENABLED,        value: "false" }
+            - { name: DEVICE_TERMINAL_DIAL_ENABLED,   value: "false" }
+            - { name: DESKTOP_REMOTE_INSTALL_ENABLED, value: "false" }
             # ── Node-storage reconciler (the push-with-ack leg) — SHIPS DARK ───
             # NODESTORAGE_RECONCILER_ENABLED gates admin-bff's node-storage push
             # reconciler: the FAST propagation path that pushes the signed
@@ -497,15 +532,19 @@ spec:
             #    RestFederationModuleClient against APPSTORE_FEDERATION_BASE_URL, which
             #    is already pinned above.
             #
-            # KNOWN GAP, deliberately not papered over: neither leg's bearer token has
-            # a source in this tree. APPSTORE_ARGOCD_AUTH_TOKEN and
-            # APPSTORE_FEDERATION_AUTH_TOKEN both default EMPTY in application.yml and
-            # there is no ExternalSecret for either (grep external-secrets/ — argocd
-            # has none; the federation token must be a Casdoor JWT carrying
-            # ROLE_SUPERADMIN). Until they are provisioned these two legs make a REAL
-            # call that fails LOUDLY — surfaced to the caller, which is why it is
-            # acceptable to land ahead of the tokens, unlike the builder below whose
-            # failure mode is silent.
+            # THE TOKEN SOURCE (2026-10-14). APPSTORE_ARGOCD_AUTH_TOKEN and
+            # APPSTORE_FEDERATION_AUTH_TOKEN both default EMPTY in application.yml. They
+            # now have a SOURCE: external-secrets/appstore-effector-externalsecrets.yaml
+            # materializes Secret appstore-effector-tokens in this namespace from
+            # secret/<brand>/appstore-effector-tokens, and the two env entries below read
+            # it as `optional: true` secretKeyRefs. The VALUES are operator-seeded (the
+            # ArgoCD token is minted by ArgoCD, the federation one is a Casdoor JWT
+            # carrying ROLE_SUPERADMIN; the generator can mint neither), so until an
+            # operator writes that Vault path the Secret does not exist and the env vars
+            # are unset - byte-for-byte the previous behaviour (empty Bearer). Until they
+            # are provisioned these two legs make a REAL call that fails LOUDLY —
+            # surfaced to the caller, which is why it is acceptable to land ahead of the
+            # tokens, unlike the builder below whose failure mode is silent.
             #
             # CORRECTION, MEASURED 2026-09-17 — this note used to say both legs "come
             # back 401". NEITHER DOES. Both fail earlier, at the TLS handshake, so the
@@ -534,10 +573,11 @@ spec:
             # Neither finding affects the base-url values pinned here: every correct
             # https:// address for these Services hits the same wall, and dropping to
             # plaintext would be a decision nobody has made.
-            # The tokens are NOT wired here as
-            # secretKeyRefs on purpose: a non-optional secretKeyRef naming a Secret
-            # that does not exist wedges this very pod in CreateContainerConfigError,
-            # which would reproduce the exact hang class this unit exists to avoid.
+            # The tokens are wired as secretKeyRefs with `optional: true` and ONLY that:
+            # a non-optional secretKeyRef naming a Secret that does not exist wedges this
+            # very pod in CreateContainerConfigError, which would reproduce the exact hang
+            # class this unit exists to avoid. test-appstore-effector-flags.sh fails if
+            # `optional: true` is dropped.
             #
             # 3) APPSTORE_BUILDER_ENABLED — STAYS FALSE. ORDERING CONSTRAINT.
             #    false → no KanikoBuildLauncher bean (@ConditionalOnProperty) and
@@ -562,6 +602,20 @@ spec:
             - { name: APPSTORE_EFFECTOR_ENABLED,   value: "true" }
             - { name: APPSTORE_FEDERATION_ENABLED, value: "true" }
             - { name: APPSTORE_BUILDER_ENABLED,    value: "false" }
+            # The two effector bearer tokens — see "THE TOKEN SOURCE" above. `optional: true`
+            # is load-bearing: the Secret is operator-seeded and absent until then.
+            - name: APPSTORE_ARGOCD_AUTH_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: appstore-effector-tokens
+                  key: argocd-auth-token
+                  optional: true
+            - name: APPSTORE_FEDERATION_AUTH_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: appstore-effector-tokens
+                  key: federation-auth-token
+                  optional: true
             # app.appstore.argocd.base-url — the ArgoCD API server the effector in (1)
             # above actually dials. The packaged default is
             # `https://argocd-server.argocd.svc.cluster.local` (application.yml:759),

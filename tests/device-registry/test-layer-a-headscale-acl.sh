@@ -195,6 +195,145 @@ grep -q '@@TS_SSH_USER@@' "${BOOTSTRAP}" \
     && ok "bootstrap policy carries the conservative @@TS_SSH_USER@@ ssh accept" || bad "bootstrap ssh accept missing"
 
 # ══════════════════════════════════════════════════════════════════════════════
+# PART 1b — THE APPLY LEG: policy set -> restart -> ready -> force tags
+# ══════════════════════════════════════════════════════════════════════════════
+# The fleet ships headscale policy.mode:file, where `headscale policy set` is
+# REFUSED and the file is read at STARTUP only. The recurring writer used to throw
+# that error away and never reload, so the pki node rewrote policy.hujson every
+# minute while the running headscale kept serving the old one. These cases drive the
+# REAL apply_policy / retry_pending against stub `headscale` + `rc-service` binaries.
+echo
+echo "== Layer-A apply leg — a refused 'policy set' must restart headscale, and a failed apply must be retried =="
+
+APPLY_ROOT="$(mktemp -d)"
+trap 'rm -rf "${APPLY_ROOT}" 2>/dev/null; rm -f "${EXPORT}" "${RENDERED}" 2>/dev/null' EXIT
+
+# One case = one fresh state dir with stub binaries. Behaviour is switched by files
+# in ${STUB}: mode_db (policy set succeeds), restart_fail (rc-service exits 1),
+# reject (headscale does not come back up when its policy file contains REJECTME).
+apply_new_case() {
+    CASE="${APPLY_ROOT}/$1"; STUB="${CASE}/bin"; mkdir -p "${STUB}" "${CASE}/cache" "${CASE}/etc"
+    : > "${CASE}/calls"
+    cat > "${STUB}/headscale" <<STUBEOF
+#!/bin/bash
+case "\$1 \$2" in
+  "policy set")
+      echo "policy-set" >> "${CASE}/calls"
+      [ -e "${STUB}/mode_db" ] && exit 0
+      echo "Failed to set ACL Policy: rpc error: code = Unknown desc = update is disabled for modes other than 'database'" >&2
+      exit 1 ;;
+  "nodes list") [ -e "${STUB}/up" ] ;;
+esac
+STUBEOF
+    cat > "${STUB}/rc-service" <<STUBEOF
+#!/bin/bash
+echo "restart \$*" >> "${CASE}/calls"
+[ -e "${STUB}/restart_fail" ] && exit 1
+if [ -e "${STUB}/reject" ] && grep -F REJECTME "${CASE}/etc/policy.hujson" >/dev/null 2>&1; then
+    rm -f "${STUB}/up"
+else
+    : > "${STUB}/up"
+fi
+exit 0
+STUBEOF
+    printf '#!/bin/bash\necho forcetags >> "%s/calls"\n' "${CASE}" > "${STUB}/forcetags"
+    printf '#!/bin/bash\nexit 0\n' > "${STUB}/logger"
+    chmod +x "${STUB}"/*
+    : > "${STUB}/up"
+    printf '%s\n' '{"acls":[],"note":"OLD"}' > "${CASE}/etc/policy.hujson"
+    printf '%s\n' '{"acls":[],"note":"NEW"}' > "${CASE}/new.hujson"
+}
+# Run one command (an apply_policy / retry_pending call) against the case, in a
+# subshell so the overridden globals never leak. Output lands in ${CASE}/out.
+apply_run() {
+    ( PATH="${STUB}:${PATH}"
+      POLICY_OUT="${CASE}/etc/policy.hujson"; CACHE_DIR="${CASE}/cache"
+      APPLIED_MARK="${CASE}/cache/applied-policy-hash"; FORCETAGS="${STUB}/forcetags"
+      HS_READY_TRIES=3; HS_READY_SLEEP=0
+      "$@" ) >> "${CASE}/out" 2>&1
+}
+n_calls() { grep -c -F -- "$1" "${CASE}/calls" 2>/dev/null; }
+hash_of() { sha256sum "$1" | awk '{print $1}'; }
+
+echo "-- Scenario: mode:file refuses 'policy set' -> error is logged, headscale restarted, tags forced, applied marker written --"
+apply_new_case file_mode
+apply_run apply_policy "${CASE}/new.hujson"
+grep -F "update is disabled for modes other than 'database'" "${CASE}/out" >/dev/null \
+    && ok "the real 'policy set' refusal text reaches the log (stderr is captured, not discarded)" \
+    || bad "the 'policy set' refusal text is NOT in the log — stderr is still being thrown away"
+[ "$(n_calls 'restart headscale restart')" = 1 ] \
+    && ok "headscale is restarted exactly once so the rewritten policy.hujson is loaded" \
+    || bad "headscale was not restarted after the refused 'policy set' (restarts: $(n_calls 'restart headscale restart')) — the running server keeps the old policy"
+cmp -s "${CASE}/etc/policy.hujson" "${CASE}/new.hujson" \
+    && ok "the new policy is the one installed on disk" || bad "policy.hujson does not hold the rendered policy"
+[ "$(n_calls forcetags)" = 1 ] \
+    && ok "force-tags runs once, after headscale answers" || bad "force-tags did not run exactly once (ran $(n_calls forcetags))"
+[ "$(cat "${CASE}/cache/applied-policy-hash" 2>/dev/null)" = "$(hash_of "${CASE}/new.hujson")" ] \
+    && ok "applied marker records the hash of the policy now loaded" || bad "applied marker missing or wrong after a successful restart"
+
+echo "-- Scenario: the same policy on the next tick is a no-op (no restart storm every 60s) --"
+apply_run apply_policy "${CASE}/new.hujson"
+[ "$(n_calls 'restart headscale restart')" = 1 ] && [ "$(n_calls policy-set)" = 1 ] && [ "$(n_calls forcetags)" = 1 ] \
+    && ok "an unchanged, already-applied policy triggers no policy set, no restart, no force-tags" \
+    || bad "an unchanged policy re-applied (set=$(n_calls policy-set) restart=$(n_calls 'restart headscale restart') tags=$(n_calls forcetags))"
+
+echo "-- Scenario: database mode accepts 'policy set' -> no restart --"
+apply_new_case db_mode; : > "${STUB}/mode_db"
+apply_run apply_policy "${CASE}/new.hujson"
+[ "$(n_calls policy-set)" = 1 ] && [ "$(n_calls 'restart headscale restart')" = 0 ] \
+    && ok "when 'policy set' succeeds headscale is NOT restarted" \
+    || bad "database mode restarted headscale anyway (set=$(n_calls policy-set) restart=$(n_calls 'restart headscale restart'))"
+[ "$(n_calls forcetags)" = 1 ] && [ -s "${CASE}/cache/applied-policy-hash" ] \
+    && ok "database mode still force-tags and records the applied marker" || bad "database mode skipped force-tags or the marker"
+
+echo "-- Scenario: the restart FAILS on tick 1 -> not marked applied, retried on tick 2 --"
+apply_new_case restart_fails; : > "${STUB}/restart_fail"
+apply_run apply_policy "${CASE}/new.hujson"
+grep -F "restart FAILED" "${CASE}/out" >/dev/null \
+    && ok "a failed restart is reported loudly" || bad "a failed restart was not reported"
+[ ! -e "${CASE}/cache/applied-policy-hash" ] && [ "$(n_calls forcetags)" = 0 ] \
+    && ok "a failed restart leaves NO applied marker and does not force tags" \
+    || bad "a failed restart was recorded as applied"
+rm -f "${STUB}/restart_fail"
+apply_run retry_pending
+[ "$(n_calls 'restart headscale restart')" = 2 ] && [ "$(cat "${CASE}/cache/applied-policy-hash" 2>/dev/null)" = "$(hash_of "${CASE}/new.hujson")" ] \
+    && ok "tick 2 retries the activation WITHOUT a fresh export (the cursor already advanced) and succeeds" \
+    || bad "the failed apply was never retried (restarts: $(n_calls 'restart headscale restart'))"
+[ "$(n_calls forcetags)" = 1 ] \
+    && ok "force-tags runs once the retry lands" || bad "force-tags did not run after the retry"
+apply_run retry_pending
+[ "$(n_calls 'restart headscale restart')" = 2 ] \
+    && ok "once applied, retry_pending is a no-op" || bad "retry_pending restarted headscale again after a successful apply"
+
+echo "-- Scenario: apply_policy itself also retries an on-disk-but-unapplied policy --"
+apply_new_case retry_via_apply; : > "${STUB}/restart_fail"
+apply_run apply_policy "${CASE}/new.hujson"
+rm -f "${STUB}/restart_fail"
+apply_run apply_policy "${CASE}/new.hujson"
+[ "$(n_calls 'restart headscale restart')" = 2 ] && [ -s "${CASE}/cache/applied-policy-hash" ] \
+    && ok "an identical re-render is NOT skipped just because the file is already on disk" \
+    || bad "an identical re-render was skipped although the policy was never applied"
+
+echo "-- Scenario: the entrypoint runs the pending-retry before it fetches --"
+awk '/^main\(\)/{m=1} m' "${RENDERER}" | grep -F 'retry_pending' >/dev/null \
+    && ok "main() calls retry_pending (the fetch path alone cannot retry: its cursor already advanced)" \
+    || bad "main() never calls retry_pending — a failed apply would wait for the next export generation"
+
+echo "-- Scenario: headscale rejects the new policy at startup -> rolled back to the previous policy --"
+apply_new_case rejected; : > "${STUB}/reject"
+printf '%s\n' '{"acls":[],"note":"REJECTME"}' > "${CASE}/new.hujson"
+apply_run apply_policy "${CASE}/new.hujson"
+grep -F OLD "${CASE}/etc/policy.hujson" >/dev/null && ! grep -F REJECTME "${CASE}/etc/policy.hujson" >/dev/null \
+    && ok "the previous policy.hujson is restored" || bad "the rejected policy was left on disk"
+[ -e "${STUB}/up" ] && [ "$(n_calls 'restart headscale restart')" = 2 ] \
+    && ok "headscale is restarted again on the restored policy and is up" \
+    || bad "headscale was left down after rejecting the policy"
+[ "$(n_calls forcetags)" = 0 ] \
+    && ok "tags are not forced on a policy headscale rejected" || bad "force-tags ran for a rejected policy"
+[ "$(cat "${CASE}/cache/applied-policy-hash" 2>/dev/null)" = "$(hash_of "${CASE}/etc/policy.hujson")" ] \
+    && ok "applied marker names the restored policy, so retry_pending does not flap" || bad "applied marker does not match the restored policy"
+
+# ══════════════════════════════════════════════════════════════════════════════
 # PART 2 — COMPILE-SIDE RECONCILIATION (node renderer vs the DARK BFF compiler)
 # ══════════════════════════════════════════════════════════════════════════════
 echo
