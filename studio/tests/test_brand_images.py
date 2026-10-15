@@ -259,3 +259,36 @@ def test_the_data_uri_is_what_the_stylesheet_carries():
     assert base64.b64decode(uri.split(",", 1)[1]) == pic.data
     assert bi.sniff(pic.data) == "png" and bi.sniff(JPEG_PROGRESSIVE) == "jpeg"
     assert bi.sniff(SVG) == "svg" and bi.sniff(b"") == ""
+
+
+def _png_with_idat(w, h, comp, *, color_type=0):
+    """A PNG whose IDAT is exactly ``comp`` (so a test can hand the inflater a bomb or a
+    stream cut short, which make_png's honest compressor cannot)."""
+    ihdr = struct.pack(">IIBBBBB", w, h, 8, color_type, 0, 0, 0)
+    return PNG_SIG + _chunk(b"IHDR", ihdr) + _chunk(b"IDAT", comp) + _chunk(b"IEND", b"")
+
+
+def test_a_deflate_bomb_is_refused_without_inflating_it():
+    import tracemalloc
+    # 1x1 grayscale needs 2 bytes of pixels; this stream inflates to 200 MiB from a few
+    # hundred KiB. The cap must stop at expected+1 bytes: an uncapped flush() inflated
+    # the whole thing (0.5 s, 800 MB for 400 MiB) before the length check refused it.
+    bomb = zlib.compress(b"\x00" * (200 * 1024 * 1024), 9)
+    data = _png_with_idat(1, 1, bomb)
+    assert len(data) < bi.MAX_UPLOAD_BYTES
+    tracemalloc.start()
+    try:
+        with pytest.raises(bi.PictureRefused, match="longer than its size says"):
+            bi.reencode(data, "logo")
+        _cur, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    assert peak < 4 * 1024 * 1024, f"the refusal inflated {peak:,} bytes first"
+
+
+def test_a_pixel_stream_cut_short_before_its_end_is_refused():
+    # the right number of pixels, but the zlib trailer (adler32) is missing: the stream
+    # never ends, and a decoder would have to guess what follows
+    comp = zlib.compress(b"\x00\x80", 9)[:-4]
+    with pytest.raises(bi.PictureRefused, match="pixel"):
+        bi.reencode(_png_with_idat(1, 1, comp), "logo")

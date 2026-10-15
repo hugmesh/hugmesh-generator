@@ -438,3 +438,74 @@ def test_look_the_disabled_override_controls_are_drawn_with_the_sentence(
             ed.close()
             ed.deleteLater()
             settle(qapp)
+
+
+def _find_button(ed, field, text):
+    row = ed.controls[field].parentWidget()
+    return next(b for b in row.findChildren(QtWidgets.QPushButton) if b.text() == text)
+
+
+def test_tabbing_through_an_override_form_does_not_freeze_the_inherited_fields(qapp):
+    """Every box shows the inherited value and fires 'finished' when focus leaves it;
+    that must not turn each one into the brand's own copy (D7)."""
+    sb = {"primary": "#336699", "secondary": "#993366", "header_text": "Hello",
+          "footer_text": "Bye", "style": "sharp"}
+    ed = LookEditor(brand_look.Look({}, base=brand_look.Look(sb).effective()))
+    ed.show()
+    boxes = [c for c in ed.controls.values()
+             if isinstance(c, QtWidgets.QLineEdit) and c.isEnabled()]
+    assert len(boxes) >= 6
+    for box in boxes:
+        box.setFocus()
+        qapp.processEvents()
+        box.editingFinished.emit()
+    ed.primary.setFocus()
+    ed.secondary.setFocus()
+    ed.header_text.setFocus()
+    ed.primary.setFocus()
+    qapp.processEvents()
+    assert ed.model.own == {}, ed.model.own
+    assert ed.source_labels["primary"].text() == brand_look.INHERITED_TEXT
+    assert ed.model.record() == {}
+
+
+def test_an_emptied_colour_box_in_override_mode_goes_back_to_the_superbrands(qapp):
+    sb = brand_look.Look({"primary": "#336699"}).effective()
+    ed = LookEditor(brand_look.Look({"primary": "#112233"}, base=sb))
+    ed.primary.setText("")
+    ed.primary.editingFinished.emit()
+    assert ed.model.own == {}
+    assert ed.primary.text() == "#336699", "the box shows what is in force again"
+    assert ed.source_labels["primary"].text() == brand_look.INHERITED_TEXT
+
+
+def test_a_changed_value_in_override_mode_is_the_brands_own(qapp):
+    ed = _override()
+    ed.header_text.setText("Mine")
+    ed.header_text.editingFinished.emit()
+    assert ed.model.own == {"header_text": "Mine"}
+    assert ed.source_labels["header_text"].text() == brand_look.OWN_TEXT
+
+
+def test_clear_removes_a_stored_picture_in_step_with_the_text_face(qapp):
+    uri = brand_look.brand_images.reencode(png_bytes(8, 8), "logo").data_uri()
+    ed = LookEditor(brand_look.Look({"logo_image": uri, "login_bg_image": uri}))
+    ed.show()
+    assert ed.picture_paths["logo_image"].text() == "", "a stored picture shows no path"
+    _find_button(ed, "logo_image", "Clear").click()
+    assert ed.model.get("logo_image") == ""
+    assert not ed.picture_thumbs["logo_image"].isVisible()
+    assert ed.model.get("login_bg_image") == uri, "only that row is cleared"
+    _find_button(ed, "login_bg_image", "Clear").click()
+    assert ed.model.get("login_bg_image") == ""
+    assert ed.model.css() == brand_look.Look().css()
+
+
+def test_clear_over_an_inherited_picture_is_the_brands_own_no_picture(qapp):
+    uri = brand_look.brand_images.reencode(png_bytes(8, 8), "logo").data_uri()
+    base = brand_look.Look({"logo_image": uri}).effective()
+    ed = LookEditor(brand_look.Look({}, base=base))
+    _find_button(ed, "logo_image", "Clear").click()
+    assert ed.model.own == {"logo_image": ""}
+    assert ed.model.get("logo_image") == ""
+    assert ed.source_labels["logo_image"].text() == brand_look.OWN_TEXT

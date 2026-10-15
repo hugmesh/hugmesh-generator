@@ -213,8 +213,20 @@ class LookEditor(QtWidgets.QWidget):
         le = QtWidgets.QLineEdit()
         browse = _file_picker(self, le, caption, file_filter, directory=directory)
         clear = QtWidgets.QPushButton("Clear")
-        clear.clicked.connect(lambda _=False, e=le: e.setText(""))
-        le.textChanged.connect(on_change or (lambda t, f=field: self._write(f, t)))
+        handler = on_change or (lambda t, f=field: self._write(f, t))
+        # A stored picture is a data: URI, so its path box is EMPTY: setText("") on an
+        # empty box emits nothing and the picture could never be removed from the window
+        # (the text face removes it with 'logo -'). Clear therefore calls the handler
+        # itself, with the signal held so a box that does change is not handled twice.
+        def _clear(_=False, e=le, h=handler):
+            e.blockSignals(True)
+            try:
+                e.setText("")
+            finally:
+                e.blockSignals(False)
+            h("")
+        clear.clicked.connect(_clear)
+        le.textChanged.connect(handler)
         box.addWidget(self._field_row(field, label, le, [browse, clear]))
         return le
 
@@ -508,6 +520,7 @@ class LookEditor(QtWidgets.QWidget):
         sentence the text screens show)."""
         if self._loading:
             return
+        before = dict(self.model.own)
         try:
             out = self.model.try_set(field, value)
         except brand_look.LookError as exc:
@@ -517,7 +530,8 @@ class LookEditor(QtWidgets.QWidget):
             self._set_error(out.text)
             return
         self._set_error("")
-        self._after_edit()
+        if self.model.own != before:       # a box left unchanged is not an edit
+            self._after_edit()
 
     def _after_edit(self) -> None:
         self._disarm()
@@ -533,8 +547,10 @@ class LookEditor(QtWidgets.QWidget):
             return
         if field not in ("primary", "secondary"):
             self._write(field, text)
+            self._refill_emptied(field, text)
             return
         had_preset = bool(self.model.get("preset"))
+        before = dict(self.model.own)
         out = self.model.hand_edit_colour(field, text)
         if not out.ok:
             self._set_error(out.text)
@@ -546,7 +562,15 @@ class LookEditor(QtWidgets.QWidget):
             finally:
                 self.preset.blockSignals(False)
         self._set_error("")
-        self._after_edit()
+        if self.model.own != before:
+            self._after_edit()
+        self._refill_emptied(field, text)
+
+    def _refill_emptied(self, field: str, text: str) -> None:
+        """An emptied colour box in override mode means "use the superbrand's": the model
+        dropped the brand's own value, so the box shows the inherited one again."""
+        if self.model.mode == "override" and not text.strip() and field not in self.model.own:
+            self.load_from_model()
 
     def _hex_typing(self, field: str, text: str) -> None:
         """Live while typing: only a whole valid colour is applied, so a half-typed

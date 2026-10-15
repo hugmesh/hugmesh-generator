@@ -217,6 +217,43 @@ def test_css_root_refuses_url_except_a_data_picture_on_a_picture_token():
     assert "--sd-header-content: 'see url(https://x) here';" in css
 
 
+def test_css_root_refuses_the_spellings_that_hide_a_url_or_end_a_declaration():
+    """The plain 'url(' text is the easy case. Each of these was ACCEPTED by the first
+    version of the rule; the escape one made chromium fetch a remote address."""
+    uri = picture().data_uri()
+    for value in ("/* ' */url(https://evil/x) /* ' */",     # a comment hides the quotes
+                  "\\75rl(https://evil/x)",                  # a CSS escape spells url(
+                  "u\\72l(https://evil/x)",
+                  "red; } .a { background: image-set(\"https://evil/x.png\" 1x) } .b{",
+                  "red; } @import \"https://evil/x.css\"; .b{",
+                  'image-set("https://evil/x.png" 1x)',
+                  'src("https://evil")',
+                  "-webkit-image-set('https://evil/x.png' 1x)",
+                  "red; color: blue",
+                  "red } :root { --y: 1",
+                  "'unterminated",
+                  "\"unterminated"):
+        with pytest.raises(ValueError):
+            theme.css_root({"--sd-x": value})
+        with pytest.raises(ValueError):
+            theme.css_root({"--sd-logo-image": value})
+    # the same spellings are INERT inside a string literal, so header text can say them
+    css = theme.css_root(theme.chrome_tokens(
+        header_text="u\\72l( a; b } @import /* c */ image-set(x)"))
+    assert "--sd-header-content: 'u\\\\72l( a; b } @import /* c */ image-set(x)';" in css
+    # a name that only ends in a newline is not an allow-listed name
+    with pytest.raises(ValueError, match="allow"):
+        theme.css_root({"--sd-x\n": "1"})
+    # one picture is the whole value of a picture token: nothing rides along
+    with pytest.raises(ValueError, match="control"):
+        theme.css_root({"--sd-logo-image": f"url({uri})\n"})
+    # a data: URL whose label says PNG but whose bytes are not (long enough to get past
+    # the shape check, so the byte check is the one that refuses it)
+    fake = base64.b64encode(b"this is not a picture at all").decode()
+    with pytest.raises(ValueError, match="not that picture"):
+        theme.css_root({"--sd-logo-image": f"url(data:image/png;base64,{fake})"})
+
+
 def test_css_root_refuses_a_raw_control_character_in_a_value():
     with pytest.raises(ValueError, match="control"):
         theme.css_root({"--sd-primary": "#000000\f}"})
@@ -368,3 +405,21 @@ def test_the_picture_uri_in_a_record_must_be_one_the_re_encoder_made():
             bl.look_css({"logo_image": bad})
     assert bl.look_css({"logo_image": picture().data_uri()})
     assert base64.b64decode(picture().data_uri().split(",", 1)[1])[:8] == PNG_SIG
+
+
+def test_write_look_files_removes_a_dropped_brands_folder_but_not_a_folder_it_did_not_write(
+        tmp_path):
+    bl.write_look_files({}, {"shop": {}, "gone": {}}, str(tmp_path))
+    (tmp_path / "unrelated").mkdir()
+    (tmp_path / "unrelated" / "keep.txt").write_text("mine")
+    (tmp_path / "gone" / "notes.txt").write_text("not a look file")
+    (tmp_path / "shop2").mkdir()
+    bl.write_look_files({}, {"shop": {}}, str(tmp_path))
+    assert (tmp_path / "unrelated" / "keep.txt").read_text() == "mine"
+    assert (tmp_path / "gone" / "notes.txt").exists(), "a folder with other files stays"
+    assert not (tmp_path / "shop2").exists(), "an empty stale folder is a look folder"
+    bl.write_look_files({}, {"shop": {}}, str(tmp_path / "fresh"))
+    (tmp_path / "fresh" / "dropped").mkdir()
+    (tmp_path / "fresh" / "dropped" / "hug-theme.css").write_text("x")
+    bl.write_look_files({}, {"shop": {}}, str(tmp_path / "fresh"))
+    assert not (tmp_path / "fresh" / "dropped").exists()
