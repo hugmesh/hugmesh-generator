@@ -113,3 +113,12 @@ Feature: Layer-A headscale SSH ACL is generated from the signed device-license e
     And the Noop policy client is the wired client, issuing no HTTP at all
     # enabling is cluster-gated: live CANONICAL-FP confirmation + an API key +
     # the file-vs-DB single-writer decision
+
+  Scenario: A revocation survives a headscale that will not load the new policy
+    Given the running policy grants operators alice and bob an ssh edge
+    And the next export generation revokes bob
+    When headscale refuses to load (or is too late loading) the rendered policy
+    Then headscale keeps running the previous policy MINUS bob's edge, never bob's edge back
+    And the refused policy is retried on later ticks without a new export generation
+    And an alarm stays raised until the exported policy is loaded
+    # the cursor has already advanced, so a plain rollback would never be corrected

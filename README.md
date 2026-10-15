@@ -517,7 +517,12 @@ none), and compose green is not evidence for the cluster._
   The `gen-headscale-policy.sh` apply leg now captures the `policy set` refusal,
   restarts headscale to load the rewritten file (as `provision.sh` does since
   `e1743555`), waits for it to answer before forcing tags, and retries an apply that
-  failed. `tests/device-registry/test-layer-a-headscale-acl.sh` runs against the
+  failed. A policy headscale will not load is no longer rolled back to the previous
+  file as it was (that put a just-revoked operator's ssh edge back until some later
+  export generation): the fallback is the previous policy minus every ssh edge the
+  refused one revokes, the refused policy is retried on up to three later ticks, and
+  an alarm (`/var/lib/hugmesh/headscale-policy/apply-failed` plus a `daemon.crit`
+  line) stays raised until the exported policy is loaded. `tests/device-registry/test-layer-a-headscale-acl.sh` runs against the
   `net/hugmesh` BFF tree; its two policy-mode checks stay red against a `database` BFF
   until #634 lands, by design.
 - **🔭 Live in-cluster image build. (needs a live cluster)** The Kaniko manifests,
