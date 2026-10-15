@@ -357,7 +357,10 @@ def test_home_is_redirected_before_test_modules_are_imported():
 def test_the_import_time_keyzip_staging_binding_is_isolated():
     """The exact expression tests/test_pages_identity.py evaluates at import."""
     staging = os.path.join(os.path.expanduser("~"), ".hugmesh", "keyzip")
-    assert not staging.startswith(os.path.join(_login_home(), ".hugmesh")), staging
+    # compare whole path components: a bare prefix match also fires for a sibling such as
+    # ``~/.hugmesh-wt/...`` (a fake HOME under a TMPDIR whose name merely starts with it)
+    real = os.path.join(_login_home(), ".hugmesh")
+    assert not (staging == real or staging.startswith(real + os.sep)), staging
 
 
 # ── (c) the leak guard, mutation-tested in three directions ──────────────────────
