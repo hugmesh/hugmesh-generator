@@ -37,7 +37,7 @@ import base64
 import os
 import re
 import shutil
-from collections.abc import Mapping
+from collections.abc import Collection, Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -123,7 +123,7 @@ SUPERBRAND = "superbrand"
 OWN = "own"
 
 #: The sentences both faces show, defined ONCE here (the VANTA_DEPENDENCY_NOTE
-#: lesson: a copy in each face is how they stopped agreeing). test_look_parity.py pins
+#: lesson: a copy in each face is how they stopped agreeing). tests/test_look_text.py pins
 #: that the window and the text screen read these and nothing of their own.
 INHERITED_TEXT = "inherited from the superbrand"
 OWN_TEXT = "this brand's own"
@@ -142,7 +142,7 @@ HEX_FIELDS: tuple[str, ...] = ("primary", "secondary", "header_bg", "footer_bg",
                                "accent_color")
 
 #: The choice lists' labels, defined ONCE for both faces (the window's combos and the
-#: text screens' numbered lists read these; test_look_parity.py pins that nothing
+#: text screens' numbered lists read these; tests/test_look_text.py pins that nothing
 #: else carries a copy).
 EFFECT_LABELS = {
     "gradient": "Moving gradient (shipped default — colours follow the theme)",
@@ -257,21 +257,30 @@ def check_value(field: str, value: Any) -> str:
     return ""
 
 
-def requirements(look: Mapping[str, Any]) -> list[str]:
+def requirements(look: Mapping[str, Any], own: Collection[str] | None = None) -> list[str]:
     """What a look still needs before it can be built: the sentences both faces show
     under the font rows. Not an edit refusal (the person types the licence AFTER picking
     the file); the image build refuses the same gap (ImageConfig.validate), so a host
-    that saves a look should ask this first."""
+    that saves a look should ask this first.
+
+    ``own`` is the fields a brand set itself (override mode; None means every field is
+    its own). The font file, its licence and its source are ONE group: a brand's own
+    font file may not borrow the superbrand's licence and source, which describe a
+    different file."""
     eff = effective_look(look)
     out: list[str] = []
     if eff["font_file"]:
+        own_font = own is not None and "font_file" in own
         for field, label in (("font_licence", "The font's licence"),
                              ("font_source", "Where the font came from")):
             value = eff[field]
-            if not value or not value.isprintable():
+            borrowed = own_font and field not in own
+            if not value or not value.isprintable() or borrowed:
                 out.append(f"{label} is required with an uploaded font: embedding a face "
                            "nobody can attribute is the licensing problem the upload "
-                           "path exists to make explicit.")
+                           "path exists to make explicit."
+                           + (" This brand's own font file needs its own, not the "
+                              "superbrand's." if borrowed else ""))
     return out
 
 
@@ -327,17 +336,19 @@ def _check_picture_uri(field: str, uri: str) -> None:
         raise LookError(f"{field}: the data: URI says image/{m.group(1)} but the bytes are "
                         f"{kind or 'not a picture'}")
     try:
-        again = brand_images.reencode(raw, PICTURE_FIELDS[field])
+        left = brand_images.leftovers(raw, PICTURE_FIELDS[field])
     except brand_images.PictureRefused as exc:
         raise LookError(f"{field}: {exc}") from None
-    # "Would the re-encoder accept it" is not "did the re-encoder make it": a PNG with a
-    # tEXt chunk or bytes after IEND is accepted (and cleaned) on upload, but a record
-    # that holds the dirty bytes would ship them to every visitor. The re-encoder is
-    # idempotent, so its own output comes back byte for byte and anything else does not.
-    if again.data != raw:
+    # "Would the re-encoder accept it" is not "is it clean": a PNG with a tEXt chunk or
+    # bytes after IEND is accepted (and cleaned) on upload, but a record that holds the
+    # dirty bytes would ship them to every visitor. Cleanliness is judged from the
+    # file's structure, not by comparing bytes with a fresh re-encode: the compressed
+    # bytes depend on the zlib build, and a clean picture saved on another host must
+    # still load here.
+    if left:
         raise LookError(f"{field}: this picture was not made by the Studio's re-encoder "
-                        f"(it still carries {', '.join(again.dropped) or 'extra bytes'}); "
-                        "choose the file again so it is cleaned")
+                        f"(it still carries {', '.join(left)}); choose the file again so "
+                        "it is cleaned")
 
 
 def _font_bytes(look: Mapping[str, Any]) -> tuple[bytes, str]:
@@ -772,6 +783,10 @@ class Look:
 
     def css(self, *, enforce_budget: bool = True) -> str:
         return look_css(self.effective(), enforce_budget=enforce_budget)
+
+    def requirements(self) -> list[str]:
+        """What this look still needs, with the override-mode font group rule."""
+        return requirements(self.effective(), self.own if self.mode == "override" else None)
 
     def budget(self) -> Budget:
         return budget(self.effective())

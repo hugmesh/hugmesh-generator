@@ -36,7 +36,7 @@ import zlib
 from dataclasses import dataclass
 
 __all__ = ["LIMITS", "MAX_UPLOAD_BYTES", "Picture", "PictureRefused", "reencode", "sniff",
-           "png_chunk_types", "png_raw_scanlines", "jpeg_segment_markers"]
+           "png_chunk_types", "png_raw_scanlines", "jpeg_segment_markers", "leftovers"]
 
 #: kind -> (max width, max height), the design's numbers (D6).
 LIMITS: dict[str, tuple[int, int]] = {"logo": (256, 256), "background": (1280, 720)}
@@ -117,6 +117,7 @@ def reencode(data: bytes, kind: str, *, filename: str = "") -> Picture:
 
 # ── PNG ──────────────────────────────────────────────────────────────────────────────
 _PNG_KEEP = (b"IHDR", b"PLTE", b"tRNS", b"IDAT", b"IEND")
+_PNG_KEEP_NAMES = [k.decode("ascii") for k in _PNG_KEEP]
 _CHANNELS = {0: 1, 2: 3, 3: 1, 4: 2, 6: 4}
 _ADAM7 = ((0, 0, 8, 8), (4, 0, 8, 8), (0, 4, 4, 8), (2, 0, 4, 4),
           (0, 2, 2, 4), (1, 0, 2, 2), (0, 1, 1, 2))
@@ -261,6 +262,26 @@ def png_raw_scanlines(data: bytes) -> bytes:
     w, h, depth, color_type, _c, _f, interlace = struct.unpack(">IIBBBBB", chunks[0][1])
     idat = b"".join(p for k, p in chunks if k == b"IDAT")
     return _inflate_exactly(idat, _png_raw_length(w, h, depth, color_type, interlace))
+
+
+def leftovers(data: bytes, kind: str) -> tuple[str, ...]:
+    """What a picture that already passed :func:`reencode` still carries that the
+    re-encoder would remove: empty when it is clean. Judged from the structure, never by
+    comparing bytes with a fresh re-encode: a PNG's compressed bytes depend on the zlib
+    build that wrote them, so a clean file made on another host (or by another tool)
+    would be called dirty. A PNG is clean when its chunks are exactly IHDR, PLTE and
+    tRNS once at most and in that order, ONE IDAT, then IEND, with nothing after it. A
+    JPEG is only ever copied segment by segment, so there a byte-for-byte comparison is
+    exact."""
+    rebuilt = reencode(data, kind)
+    if rebuilt.mime == "image/jpeg":
+        return () if rebuilt.data == data else tuple(rebuilt.dropped) or ("extra bytes",)
+    order = png_chunk_types(data)
+    found = list(rebuilt.dropped)          # other chunks, trailing data, a useless PLTE/tRNS
+    rank = [_PNG_KEEP_NAMES.index(t) for t in order if t in _PNG_KEEP_NAMES]
+    if rank != sorted(rank) or any(order.count(t) > 1 for t in _PNG_KEEP_NAMES):
+        found.append("repeated or misplaced chunks")
+    return tuple(found)
 
 
 # ── JPEG ─────────────────────────────────────────────────────────────────────────────

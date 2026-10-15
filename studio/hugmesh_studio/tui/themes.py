@@ -285,7 +285,7 @@ def _selectable_effects() -> tuple[str, ...]:
 __all__ += ["LookText", "FIELD_COMMANDS", "SECTIONS"]
 
 #: look field -> the command that edits it. EVERY control of the window's LookEditor has
-#: a row here (tests/test_look_parity.py iterates the editor's controls and fails when
+#: a row here (tests/test_look_text.py iterates the editor's controls and fails when
 #: one has no command). The short verbs are the ThemesScreen's own (p, m, 1, 2, hh...).
 FIELD_COMMANDS: dict[str, str] = {
     "preset": "p", "mode": "m", "primary": "1", "secondary": "2",
@@ -420,7 +420,7 @@ class LookText:
                         src += "   [armed — " + brand_look.USE_SUPERBRAND_ARMED.lower() + "]"
                 out.append(f"   {cmd:<11} {_LABELS[field]:<26} {self._value_text(field, eff)}{src}")
             if title == "Font":
-                out += ["   ! " + need for need in brand_look.requirements(m.effective())]
+                out += ["   ! " + need for need in m.requirements()]
             if title.startswith("Page background"):
                 out.append("   " + f"The four Vanta effects are {brand_look.VANTA_UNSELECTABLE}: "
                            + theme.VANTA_DEPENDENCY_NOTE)
