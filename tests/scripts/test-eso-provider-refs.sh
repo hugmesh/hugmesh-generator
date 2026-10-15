@@ -959,6 +959,88 @@ print("  ok   vacuity assertions key on the real generator/reference counts")
 PY
 [ $? -eq 0 ] || fail "vacuity self-test failed"
 
+# ── (8) THE VAULT SERVER IS PINNED ON PURPOSE (#531, decision 88 = B) ───────
+# spec.provider.vault.server of the ClusterSecretStore is the in-cluster Vault by
+# decision, not by omission: an external Vault is not a supported topology and
+# VAULT_ADDR steers only the write side. tests/scripts/eso_vault_server_pin.py
+# fails if the literal moves, the note saying so is deleted, a render-time seam is
+# added onto the field, a generator drifts to another address, or the writer's
+# header stops saying VAULT_ADDR never reaches the store. Each defect class is
+# planted into a copy of the real files, and every plant is verified to have
+# CHANGED the file: a mutation that left it byte-identical would "prove" nothing.
+echo
+echo "-- 8) the ClusterSecretStore's Vault server is pinned (decision 88 = B) --"
+PIN_CHECKER="${HERE}/eso_vault_server_pin.py"
+[ -f "${PIN_CHECKER}" ] || fail "missing checker: ${PIN_CHECKER}"
+if python3 "${PIN_CHECKER}" "${REPO}"; then
+    ok "the repo's own ClusterSecretStore server is pinned and says so"
+else
+    fail "the ClusterSecretStore server pin is broken in the repo (see above)"
+fi
+
+PIN_FILES=(
+    specs/cluster/manifests/external-secrets/secretstore.yaml
+    specs/cluster/manifests/external-secrets/kustomization.yaml
+    specs/cluster/manifests/external-secrets/harbor-externalsecrets.yaml
+    specs/cluster/apps/04-external-secrets-config.yaml
+    scripts/gen-cluster-secrets.sh
+)
+# mk_pin_tree <dir>: a copy of the real files the checker reads
+mk_pin_tree() {
+    local d="$1" f
+    for f in "${PIN_FILES[@]}"; do
+        mkdir -p "${d}/$(dirname "${f}")"
+        cp "${REPO}/${f}" "${d}/${f}"
+    done
+}
+# pin_mutate <name> <file> <python-expression over s> <expected message fragment>
+# Plants the defect, asserts the file really changed, and requires the checker to
+# exit non-zero AND name the defect.
+pin_mutate() {
+    local name="$1" file="$2" expr="$3" want="$4" d out rc
+    d="${STAGE_ROOT}/pin-${name}"
+    mk_pin_tree "${d}"
+    cp "${d}/${file}" "${d}/${file}.orig"
+    python3 - "${d}/${file}" "${expr}" <<'PY'
+import sys
+p, expr = sys.argv[1], sys.argv[2]
+s = open(p).read()
+open(p, "w").write(eval(expr))
+PY
+    if cmp -s "${d}/${file}" "${d}/${file}.orig"; then
+        fail "pin control '${name}': the mutation did not change ${file} (the control proves nothing)"
+        return
+    fi
+    rm -f "${d}/${file}.orig"
+    out="$(python3 "${PIN_CHECKER}" "${d}" 2>&1)"; rc=$?
+    if [ "${rc}" -ne 0 ] && [[ "${out}" == *"${want}"* ]]; then
+        ok "pin control '${name}' bites (exit ${rc}, names: ${want})"
+    else
+        fail "pin control '${name}' did not bite (rc=${rc}, wanted: ${want}): ${out}"
+    fi
+}
+SS=specs/cluster/manifests/external-secrets/secretstore.yaml
+KU=specs/cluster/manifests/external-secrets/kustomization.yaml
+HB=specs/cluster/manifests/external-secrets/harbor-externalsecrets.yaml
+AP=specs/cluster/apps/04-external-secrets-config.yaml
+PINLIT='server: "https://vault.vault.svc.cluster.local:8200"'
+pin_mutate host   "${SS}" "s.replace('${PINLIT}', 'server: \"https://vault.example.net:8200\"')" "must stay the pinned"
+pin_mutate port   "${SS}" "s.replace('${PINLIT}', 'server: \"https://vault.vault.svc.cluster.local:8201\"')" "must stay the pinned"
+pin_mutate scheme "${SS}" "s.replace('${PINLIT}', 'server: \"http://vault.vault.svc.cluster.local:8200\"')" "must stay the pinned"
+pin_mutate note   "${SS}" "s.replace('eso-vault-server: pinned', 'server note')" "comment saying the server is pinned"
+pin_mutate cite   "${SS}" "s.replace('decision 88', 'a decision')" "no longer cites"
+pin_mutate seam-kustomization "${KU}" "s + '\n# plain comment, ignored\npatches:\n  - target: {kind: ClusterSecretStore}\n    patch: |-\n      - op: replace\n        path: /spec/provider/vault/server\n        value: https://elsewhere:8200\n'" "render-time re-point"
+pin_mutate seam-app "${AP}" "s + '\n# path: /spec/provider/vault/server\n  patches: [{path: /spec/provider/vault/server}]\n'" "render-time re-point"
+pin_mutate generator-drift "${HB}" "s.replace('server: https://vault.vault.svc.cluster.local:8200', 'server: https://vault.vault.svc.cluster.local:9200', 1)" "is not the pinned"
+pin_mutate writer-header scripts/gen-cluster-secrets.sh "s.replace('NEVER REACHES THE ClusterSecretStore', 'MAY REACH THE ClusterSecretStore')" "header no longer says"
+# vacuity: a tree with no store at all must not pass
+mkdir -p "${STAGE_ROOT}/pin-empty"
+if python3 "${PIN_CHECKER}" "${STAGE_ROOT}/pin-empty" >/dev/null 2>&1; then
+    fail "pin control 'empty tree' passed: a scan that found nothing reported success"
+else
+    ok "pin control 'empty tree' bites (nothing to verify is not a pass)"
+fi
+
 echo
 if [ "${RC}" -eq 0 ]; then
     echo "== PASS: ESO provider references are all provisioned, on every path =="
