@@ -219,6 +219,31 @@ def test_a_sign_in_address_a_saved_mesh_chose_itself_is_kept(ctl):
         "https://sso.example/realms/acme"
 
 
+def test_the_block_the_bring_up_gets_drops_a_derived_sign_in_address_on_a_switch_to_prod(ctl):
+    """The record file is re-derived at the save (the test above); the block that
+    ``collect_bootstrap`` hands the bring-up must be too. The first commit writes the
+    test mesh's localhost sign-in onto the carrier, so a block passed on as it stands
+    would send the localhost address into a production bring-up."""
+    _type(ctl.superbrand_design, "id", "acme")           # committed on a test mesh
+    assert "central_signin" not in ctl.collect_bootstrap().superbrand
+    ctl.env_prod.setChecked(True)
+    ctl.boot_domain.setText("mesh.example")
+    ctl.leave_brand()
+    block = ctl.collect_bootstrap().superbrand
+    assert "central_signin" not in block, block
+    assert "localhost" not in str(block)
+
+
+def test_the_block_the_bring_up_gets_keeps_a_sign_in_address_a_saved_mesh_chose(ctl):
+    chosen = "https://sso.example/realms/acme"
+    ctl.apply_bootstrap(LocalMeshBootstrapConfig(
+        brand="acme", superbrand={"title": "Acme Mesh", "central_signin": chosen}))
+    ctl.env_prod.setChecked(True)
+    ctl.boot_domain.setText("mesh.example")
+    ctl.leave_brand()
+    assert ctl.collect_bootstrap().superbrand.get("central_signin") == chosen
+
+
 # ── 4. Tor: one place says it ──────────────────────────────────────────────────────
 def test_the_block_the_page_passes_on_never_carries_a_tor_choice(ctl):
     _type(ctl.superbrand_design, "id", "acme")

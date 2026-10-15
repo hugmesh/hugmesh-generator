@@ -206,3 +206,33 @@ def test_the_records_sign_in_address_follows_a_switch_to_prod_after_the_design()
     rec = brand_model.load_record()
     assert rec.superbrand.public_name == "mesh.example"
     assert rec.superbrand.central_signin == "https://id.mesh.example"
+
+
+# ── a record file is offered only when THIS flow left a good one behind ────────────────
+def test_a_refused_save_does_not_offer_an_earlier_meshs_record_file(monkeypatch):
+    """A record from an earlier mesh sits in the same state folder. When the record
+    writer refuses THIS flow's save, the printed command carries no --record and no
+    'record saved' line: the file on disk is not this mesh's."""
+    first = _at_domains()
+    _design(first, id="acme")
+    _to_review(first)
+    assert os.path.isfile(brand_model.record_path())     # the earlier mesh's record
+
+    def refuse(*_a, **_k):
+        raise brand_model.RecordRefused(["superbrand: refused for this test"])
+    monkeypatch.setattr(brand_model, "save_record", refuse)
+    j = _at_domains()
+    _design(j, id="beta")
+    _to_review(j)
+    assert "--record" not in _command(j), _text(j)
+    assert "record saved" not in _text(j), _text(j)
+
+
+def test_a_flow_that_saved_a_good_record_offers_it():
+    """The other half of the one above: a flow whose save worked does print the file."""
+    j = _at_domains()
+    _design(j, id="acme")
+    _to_review(j)
+    argv = _command(j)
+    assert argv[argv.index("--record") + 1] == brand_model.record_path()
+    assert "record saved" in _text(j)
