@@ -1560,6 +1560,116 @@ else
   bad "this suite is not invoked by .gitlab-ci.yml — an unrun guard is not a guard"
 fi
 
+# ── the in-node DNS preflight (hugmesh-generator#510) ───────────────────────
+# 2026-09-09: argocd-repo-server sat in ImagePullBackOff because the NODE's
+# resolver timed out (`lookup quay.io on 172.18.0.1:53: i/o timeout`) and the
+# bring-up kept waiting on a cluster that could never pull. bootstrap-kind.sh
+# had no in-node name lookup at all.
+#
+# Behavioural: the REAL script runs against fake kind/kubectl/docker shims. The
+# fake docker answers `getent hosts <name>` run inside the node according to
+# STUB_DNS, and records every call; the fake kubectl records every call, so
+# "fails BEFORE anything waits on the cluster" is measured as "no kubectl
+# `label` call happened", not asserted from the source text. No cluster, no
+# docker, no network is touched.
+if ! command -v flock >/dev/null 2>&1; then
+  ok "SKIP in-node DNS preflight run: flock absent (the script warns and continues by design)"
+else
+  DN="${TMP}/dns"; mkdir -p "${DN}/bin"
+  for t in kind git jq openssl base64; do
+    printf '#!/usr/bin/env bash\nexit 0\n' > "${DN}/bin/${t}"; chmod +x "${DN}/bin/${t}"
+  done
+  # curl FAILS (exit 7, distinct from the preflight's exit 1): a run that gets past the preflight goes on to fetch the ArgoCD
+  # manifest, and this suite is offline — it must die there, after the node
+  # labelling the cases below look for, not reach the network.
+  printf '#!/usr/bin/env bash\nexit 7\n' > "${DN}/bin/curl"; chmod +x "${DN}/bin/curl"
+  cat > "${DN}/bin/kubectl" <<'DNSKUBECTL'
+#!/usr/bin/env bash
+echo "kubectl $*" >> "${STUB_DNS_DIR}/kubectl.log"
+exit 0
+DNSKUBECTL
+  cat > "${DN}/bin/docker" <<'DNSDOCKER'
+#!/usr/bin/env bash
+# fake docker: only `docker exec <node> ...` is modelled. STUB_DNS=ok|fail|flaky
+echo "docker $*" >> "${STUB_DNS_DIR}/docker.log"
+[ "${1:-}" = "exec" ] || exit 0
+shift; shift            # exec <node>
+case "$*" in
+  *"getent hosts "*)
+    case "${STUB_DNS:-ok}" in
+      ok)    exit 0 ;;
+      fail)  exit 2 ;;
+      flaky) # the first lookup times out, the second answers
+             if [ -e "${STUB_DNS_DIR}/flaky.seen" ]; then exit 0; fi
+             : > "${STUB_DNS_DIR}/flaky.seen"; exit 2 ;;
+    esac ;;
+  *"cat /etc/resolv.conf"*) printf 'search lan\nnameserver 172.18.0.1\noptions ndots:0\n'; exit 0 ;;
+esac
+exit 0
+DNSDOCKER
+  chmod +x "${DN}/bin/kubectl" "${DN}/bin/docker"
+
+  # run_dns <case-name> <STUB_DNS> [extra env assignments...]  -> rc in DN_RC, output in DN_OUT
+  run_dns() {
+    local name="$1" mode="$2"; shift 2
+    local d="${DN}/${name}"; rm -rf "${d}"; mkdir -p "${d}"
+    DN_DIR="${d}"
+    ( export PATH="${DN}/bin:${PATH}" TMPDIR="${TMP}" KIND_CLUSTER_NAME="dns${name}" \
+             STUB_DNS_DIR="${d}" STUB_DNS="${mode}" NODE_DNS_PROBE_SLEEP=0 SKIP_EGRESS_PREFLIGHT=1
+      env "$@" timeout 60 bash "${BOOTSTRAP}" ) > "${d}/out" 2>&1
+    DN_RC=$?
+    DN_OUT="$(cat "${d}/out")"
+  }
+  labelled() { grep -q 'kubectl label' "${DN_DIR}/kubectl.log" 2>/dev/null; }
+
+  # (a) the node cannot resolve: abort, say why, and do it BEFORE the cluster is touched further
+  run_dns fail fail
+  if [ "${DN_RC}" -eq 1 ]; then
+    ok "in-node DNS failure aborts the bring-up (exit 1)"
+  else
+    bad "a node that cannot resolve a registry did not abort with exit 1 (rc=${DN_RC}): $(tail -3 "${DN_DIR}/out" | tr '\n' ' ')"
+  fi
+  case "${DN_OUT}" in *"cannot resolve 'quay.io'"*) ok "the message names the name that failed (quay.io)";; *) bad "the failure does not name the name that failed: ${DN_OUT}";; esac
+  case "${DN_OUT}" in *"resolver is: 172.18.0.1"*) ok "the message names the node's resolver, read from the node's /etc/resolv.conf";; *) bad "the failure does not name the node's resolver: ${DN_OUT}";; esac
+  if labelled; then
+    bad "the run went on to label the node after the in-node lookup failed — the preflight does not gate anything"
+  else
+    ok "nothing after the preflight ran (no kubectl label) when the lookup failed"
+  fi
+  if grep -q 'docker exec dnsfail-control-plane timeout 20 getent hosts quay.io' "${DN_DIR}/docker.log"; then
+    ok "the lookup runs INSIDE the node (docker exec <cluster>-control-plane ... getent hosts quay.io)"
+  else
+    bad "no in-node getent was issued: $(cat "${DN_DIR}/docker.log" 2>/dev/null | tr '\n' '|')"
+  fi
+  tries="$(grep -c 'getent hosts' "${DN_DIR}/docker.log" 2>/dev/null)"
+  [ "${tries}" -eq 3 ] && ok "a failing lookup is retried to the default 3 attempts before giving up" || bad "expected 3 lookup attempts, saw ${tries}"
+
+  # (b) the node resolves: the run goes on, and says it checked
+  run_dns pass ok
+  case "${DN_OUT}" in *"In-node DNS preflight: node 'dnspass-control-plane' resolves 'quay.io'"*) ok "a healthy node logs that the in-node lookup passed";; *) bad "no pass line on the happy path: $(head -5 "${DN_DIR}/out" | tr '\n' ' ')";; esac
+  labelled && ok "a passing preflight lets the bring-up continue to the node labelling" || bad "the bring-up did not continue past a PASSING preflight (exit ${DN_RC}) — the guard is always-on"
+
+  # (c) the name is configurable and the configured name is what is probed and reported
+  run_dns name fail NODE_DNS_PROBE_NAME=registry.example.test
+  case "${DN_OUT}" in *"cannot resolve 'registry.example.test'"*) ok "NODE_DNS_PROBE_NAME changes the name that is probed and reported";; *) bad "NODE_DNS_PROBE_NAME is ignored: ${DN_OUT}";; esac
+  grep -q 'getent hosts registry.example.test' "${DN_DIR}/docker.log" && ok "the configured name reaches the in-node getent" || bad "the configured name never reached getent"
+
+  # (d) one lost race is not an abort
+  run_dns flaky flaky
+  labelled && ok "a single timed-out lookup followed by an answer does not abort the bring-up" || bad "one flaky lookup aborted the bring-up (rc=${DN_RC})"
+
+  # (e) the opt-out works, never silently, and does not probe
+  run_dns skip fail SKIP_NODE_DNS_PREFLIGHT=1
+  labelled && ok "SKIP_NODE_DNS_PREFLIGHT=1 lets a failing node through" || bad "the opt-out does not work (rc=${DN_RC})"
+  case "${DN_OUT}" in *"SKIP_NODE_DNS_PREFLIGHT=1"*"DISABLED"*) ok "using the opt-out prints a loud banner naming it";; *) bad "the opt-out is silent: $(head -5 "${DN_DIR}/out" | tr '\n' ' ')";; esac
+  grep -q 'getent hosts' "${DN_DIR}/docker.log" 2>/dev/null && bad "the opt-out still ran the lookup" || ok "the opt-out does not run the lookup"
+
+  # (f) default is ON: only the exact value 1 disables it
+  run_dns off fail SKIP_NODE_DNS_PREFLIGHT=0
+  [ "${DN_RC}" -eq 1 ] && ! labelled && ok "SKIP_NODE_DNS_PREFLIGHT=0 leaves the preflight on" || bad "a value other than 1 disabled the preflight (rc=${DN_RC})"
+
+fi
+
 echo
 echo "== kind SSO harness honesty: ${pass} passed, ${fail} failed =="
 [ "${fail}" -eq 0 ]

@@ -776,6 +776,20 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # RUNNING this file on the tree with the suite wired (GUARD_PREMERGE=0), not computed:
 #     198 of 222 suites are named by a pull_request-triggered workflow
 #     PASS the ungated SET matches its pin exactly (24 suite(s))
+# 198 of 224 -> 198 of 225 and ungated SET 26 -> 27 on 2026-10-14 for the 13a cut-over
+# matrix (origin/main e3e95369 measures 224 / 26 when run; the 222 / 24 above is the figure
+# at #629's own merge): tests/scripts/test-optional-services-cutover-matrix.sh
+# is a new suite that is NOT named by a pull_request workflow (it is wired post-merge by .gitlab-ci.yml and
+# recorded in PREMERGE_UNGATED above), so the denominator rose and the gated count did
+# not. MEASURED by RUNNING this file on the merge with e3e95369 (GUARD_PREMERGE=0), not computed:
+#     198 of 225 suites are named by a pull_request-triggered workflow
+#     PASS the ungated SET matches its pin exactly (27 suite(s))
+# Re-measured on the merge with origin/main fc498f8a (GUARD_PREMERGE=0), after other suites
+# landed on main: 198 of 230 suites are named by a pull_request-triggered workflow, and
+# the ungated SET matches its pin exactly (32 suite(s)). The baseline 198 is unchanged.
+# tests/scripts/run-ungated-lane.sh's header counts (32 of 32, 8 of 32) were taken from
+# its E2E_UNGATED_DRY_RUN=1 output for both sets. The "stays 21/22" lines in the entries
+# above are history and are left as written.
 PREMERGE_BASELINE="${GUARD_PREMERGE:-198}"
 
 # 182 -> 192 (denominator 205 -> 215) on 2026-09-30 for #385: the census gained a
@@ -963,6 +977,20 @@ PREMERGE_UNGATED=(
   # the one line there, raises PREMERGE_BASELINE by one and drops this entry.
   tests/go-live/test-onion-refuse.sh
   tests/pentest/nuclei/test-templates.sh
+  # NOT UNGATEABLE, JUST NOT GATED YET: python3 + bash over synthetic fixture logs, no
+  # network, no root, no docker -- it would run in any shell-suites image. It sits
+  # here only because naming it in shell-suites.yml is an edit under .github/, which
+  # the change that added it was not allowed to make. THE FOLLOW-UP IS TO ADD IT TO
+  # THAT WORKFLOW'S SUITES LIST, DELETE THIS ENTRY AND RAISE PREMERGE_BASELINE BY ONE. It is
+  # run today by `make binpkg-reuse-report-check`.
+  tests/scripts/test-binpkg-reuse-report.sh
+  # NOT an exemption, a wiring gap: the lane that added this suite (#509) may not
+  # edit .github/. It runs every stage4 builder with --print-plan and needs only
+  # bash, sed, paste and timeout, but is UNMEASURED in the shell-suites images
+  # (ALPINE/python:3.12-slim), so check that before gating it. The operator adds the
+  # one line to shell-suites.yml, raises PREMERGE_BASELINE by one and drops this
+  # entry. .gitlab-ci.yml's lint:domain-idp-flag runs it post-merge meanwhile.
+  tests/scripts/test-domain-idp-flag.sh
   # Needs `unshare -Urm` (a private user+mount namespace) to stack REAL bind
   # mounts under a scratch build system and drive the x86 builder's own
   # umount_chroot, stale-mount listing and printed umount commands against the
@@ -999,6 +1027,11 @@ PREMERGE_UNGATED=(
   # kind cluster up but no metrics-server synced it goes RED with 2 failures.
   # See the "NOT LISTED HERE" entry in .github/workflows/shell-suites.yml.
   tests/scripts/test-kind-metrics-api.sh
+  # Pure offline derivation (python3 + PyYAML + bash), wired post-merge by .gitlab-ci.yml's
+  # lint:optional-services-cutover-matrix. It is NOT in the pull_request gate only because
+  # adding it to .github/workflows/shell-suites.yml is an edit that PR did not make; gate it
+  # there (the job image needs PyYAML) and delete this entry.
+  tests/scripts/test-optional-services-cutover-matrix.sh
   tests/scripts/test-federation-module-slugs.sh
   tests/scripts/test-liquibase-grant-roles.sh
   # RED ON MAIN, and the reds are real defects rather than suite bugs: a jetson
@@ -1033,6 +1066,19 @@ PREMERGE_UNGATED=(
   # .gitlab-ci.yml's lint:optional-service-slug-closure — nothing on the GitHub side
   # runs it; `make e2e-ungated` runs it locally. Leave it listed until #106 lands.
   tests/scripts/test-optional-service-slug-closure.sh
+  # Lands outside the pull_request gate ONLY because wiring it there means an edit
+  # under .github/workflows/shell-suites.yml, which the change that added it was
+  # not permitted to make (operator action, 2026-10-14). It is NOT an exemption on
+  # the merits: both suites are offline (python3 + openssl + bash; the netpol one also
+  # takes kubectl when present). They were MEASURED only on a developer host, NOT in a
+  # shell-suites image, and are run post-merge by .gitlab-ci.yml's lint:pg-tls-preflight
+  # and lint:netpol-egress-scope. Wire both into shell-suites.yml's DEBIAN job, measure
+  # them there, and DELETE both entries (PREMERGE_BASELINE then moves 198 -> 200). Added
+  # ungated: denominator +2 and the ungated SET +2, baseline unchanged at 198
+  # (RE-MEASURED on this branch merged with origin/main 9b1b733c, GUARD_PREMERGE=0: this
+  # file prints "198 of 228" and "(30 suite(s))").
+  tests/scripts/test-netpol-egress-scope.sh
+  tests/scripts/test-pg-tls-preflight.sh
   tests/scripts/test-service-env-contract.sh
   tests/stack/test-gateway-auth-flag-parity.sh
   tests/stack/test-m2-bootstrap.sh
