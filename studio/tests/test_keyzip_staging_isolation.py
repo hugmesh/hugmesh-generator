@@ -266,6 +266,22 @@ def test_extract_refuses_a_staging_path_that_is_not_a_directory(tmp_path):
     assert os.path.islink(str(dangling))
 
 
+def test_extract_does_not_write_through_a_symlinked_staging_path(tmp_path):
+    """A symlink to an EMPTY directory used to pass the empty check; rmtree cannot
+    remove a link, so extraction then wrote the marker and every member into the
+    link's target. Now it is refused and the target is left untouched."""
+    zp = tmp_path / "z.zip"
+    _make_zip(zp, {"keys/ca.crt": "dummy-ca"})
+    target = tmp_path / "target"
+    target.mkdir()
+    link = tmp_path / "link"
+    os.symlink(str(target), str(link))
+    with pytest.raises(ValueError, match="not a directory"):
+        keyzip.extract(str(zp), str(link))
+    assert os.listdir(str(target)) == []
+    assert os.path.islink(str(link))
+
+
 # ── 4. package-wide sweep: no module hand-rolls a ~/.hugmesh path ──────────────────
 
 #: Modules allowed to build a ``~/.hugmesh`` path straight from $HOME: the seam
