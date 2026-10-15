@@ -608,7 +608,7 @@ class GoLiveOrgExportPage(QtWidgets.QWizardPage):
         self.config_path.setPlaceholderText(
             "an export config, image config or saved-mesh JSON with a GitHub org")
         pick = _file_picker(self, self.config_path, "Config file")
-        add = QtWidgets.QPushButton("Add")
+        self.add_btn = add = QtWidgets.QPushButton("Add")
         add.clicked.connect(self._add_config)
         w = QtWidgets.QWidget(); h = QtWidgets.QHBoxLayout(w); h.setContentsMargins(0, 0, 0, 0)
         h.addWidget(self.config_path, 1); h.addWidget(pick); h.addWidget(add)
@@ -691,6 +691,8 @@ class GoLiveOrgExportPage(QtWidgets.QWizardPage):
         self.plan = None
         self.result = None
         self.worker = None
+        self._applying = None
+        self._planning = False
         # every picker that changes the plan re-spells the Terminal line at once, so
         # what a person copies before Plan is what Plan would run (the rename-map
         # field used to be the only one wired, and a typed Source folder went stale).
@@ -699,10 +701,20 @@ class GoLiveOrgExportPage(QtWidgets.QWizardPage):
         # reach the line too — the e2e walk caught a stale line that way. The
         # rename-map field stays on editingFinished: it reads the file and would
         # otherwise say "cannot be read" on every half-typed character.
-        self.visibility.currentIndexChanged.connect(self._refresh_cmd)
-        self.update_mode.currentIndexChanged.connect(self._refresh_cmd)
-        self.source_dir.textChanged.connect(self._refresh_cmd)
-        self.out_dir.textChanged.connect(self._refresh_cmd)
+        #
+        # They also DROP the plan on screen: Apply runs the plan it was armed by, not
+        # whatever the pickers read now, so a plan made as public and then flipped
+        # to private must not stay armed (it would create public repositories under
+        # a screen that says private). Changing any picker means plan again.
+        self.visibility.currentIndexChanged.connect(self._inputs_changed)
+        self.update_mode.currentIndexChanged.connect(self._inputs_changed)
+        self.source_dir.textChanged.connect(self._inputs_changed)
+        self.out_dir.textChanged.connect(self._inputs_changed)
+        self.rename_map.textChanged.connect(self._drop_plan)
+        self.source.currentIndexChanged.connect(self._inputs_changed)
+        self._pickers = (self.source, self.visibility, self.update_mode, self.source_dir,
+                         self.out_dir, self.rename_map)
+        self._plan_stale = False   # set by a dropped plan while a Plan runs: its result is for old inputs
 
     # ── the step applies only when some domain names an org ───────────────────────
     def applies(self) -> bool:
@@ -722,8 +734,28 @@ class GoLiveOrgExportPage(QtWidgets.QWizardPage):
         self.progress_label.setVisible(False)
         self._refresh_candidates()
 
+    def _drop_plan(self, *_args) -> None:
+        """Forget the plan on screen and disarm Apply (the TUI's ``export_plan = None``).
+        A Plan still running when a picker changes is for the OLD inputs: its result
+        is discarded when it arrives (``_plan_stale``). While an Apply runs the
+        pickers are locked (see ``_apply``), so nothing can drop its plan."""
+        had_plan = self.plan is not None
+        if self._planning:                 # between Plan's click and its result being delivered
+            self._plan_stale = True
+        self.plan, self.result = None, None
+        self.apply_btn.setEnabled(False)
+        self.table.setRowCount(0)
+        self.plan_text.setPlainText("")
+        if had_plan:
+            self._say("")                  # the blocked / skipped note was about that plan
+
+    def _inputs_changed(self, *_args) -> None:
+        self._drop_plan()
+        self._refresh_cmd()                # the Terminal line is the PLAN line again
+
     def _refresh_candidates(self):
         self.candidates = self._candidates()
+        self._drop_plan()                  # the combo's signals are blocked below
         self.source.blockSignals(True)
         self.source.clear()
         for i, c in enumerate(self.candidates):
@@ -849,6 +881,8 @@ class GoLiveOrgExportPage(QtWidgets.QWizardPage):
             return
         self._say("")
         self.plan, self.result = None, None
+        self._plan_stale = False
+        self._planning = True
         self.apply_btn.setEnabled(False)
         self.plan_btn.setEnabled(False)
         self.progress_bar.setRange(0, 0)
@@ -862,9 +896,15 @@ class GoLiveOrgExportPage(QtWidgets.QWizardPage):
 
     def _planned(self, outcome):
         kind, value = outcome
+        self._planning = False
         self.plan_btn.setEnabled(True)
         self.progress_bar.setVisible(False)
         self.progress_label.setVisible(False)
+        if self._plan_stale:
+            # a picker changed while this ran: it planned inputs the screen no longer
+            # shows, and arming Apply from it would export what nobody is looking at
+            self._say("An input changed while the plan was running: plan again.")
+            return
         if kind != "ok":
             self._say(f"Plan failed: {value}")
             return
@@ -915,6 +955,8 @@ class GoLiveOrgExportPage(QtWidgets.QWizardPage):
         self._say("")
         self.apply_btn.setEnabled(False)
         self.plan_btn.setEnabled(False)
+        self._set_inputs_enabled(False)    # what is applied is the plan above: no picker moves now
+        self._applying = p
         total = len(p.repos) + 1
         self.progress_bar.setRange(0, total)
         self.progress_bar.setValue(0)
@@ -941,14 +983,20 @@ class GoLiveOrgExportPage(QtWidgets.QWizardPage):
         except Exception:                      # noqa: BLE001 — never raise in a slot
             pass
 
+    def _set_inputs_enabled(self, on: bool) -> None:
+        for w in (*self._pickers, self.config_path, self.add_btn):
+            w.setEnabled(on)
+
     def _applied(self, outcome):
         kind, value = outcome
+        p, self._applying = self._applying, None
         self.plan_btn.setEnabled(True)
-        if kind != "ok":
+        self._set_inputs_enabled(True)
+        if kind != "ok" or p is None:
             self._say(f"Apply failed: {value}")
             return
         self.result = value
-        self.plan_text.setPlainText("\n".join([*org_export.plan_lines(self.plan), "",
+        self.plan_text.setPlainText("\n".join([*org_export.plan_lines(p), "",
                                                *org_export.result_lines(value)]))
         self.progress_label.setText("done" if not value.failures
                                     else f"done, {len(value.failures)} skipped")

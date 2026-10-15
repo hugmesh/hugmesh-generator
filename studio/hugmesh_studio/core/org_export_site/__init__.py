@@ -107,7 +107,8 @@ BUILD_ALL_YML = r"""# Build every repository exported for {{DOMAIN}} into the {{
 # EXPORT_READ_TOKEN secret to a token that can read every exported repository;
 # without it the job's own GITHUB_TOKEN is used, which reads only this repository),
 # then built from what the repository ships:
-#   java    -> ./mvnw -B -s .github/maven-ci-settings.xml verify
+#   java    -> ./mvnw -B -s .github/maven-ci-settings.xml verify  (plain `mvn` for a
+#              repository that ships no wrapper; repos.json records which)
 #              (repos.json says which settings file a repository has; the
 #              repository-root settings.xml is the GitLab registry file and is not
 #              passed. The settings file reads UPSTREAM_PACKAGES_ACTOR and
@@ -152,7 +153,7 @@ jobs:
       - id: list
         run: |
           set -eu
-          matrix="$(jq -c '{include: [.repos[] | {name: .name, build: .build, settings: .settings}]}' repos.json)"
+          matrix="$(jq -c '{include: [.repos[] | {name: .name, build: .build, settings: .settings, mvnw: .mvnw}]}' repos.json)"
           count="$(jq '.repos | length' repos.json)"
           echo "matrix=${matrix}" >> "$GITHUB_OUTPUT"
           echo "count=${count}" >> "$GITHUB_OUTPUT"
@@ -191,16 +192,20 @@ jobs:
           UPSTREAM_PACKAGES_ACTOR: ${{ secrets.PACKAGES_READ_ACTOR || github.actor }}
           UPSTREAM_PACKAGES_TOKEN: ${{ secrets.PACKAGES_READ_TOKEN }}
           MAVEN_SETTINGS: ${{ matrix.settings }}
+          HAS_MVNW: ${{ matrix.mvnw }}
         run: |
           set -eu
+          # the repository's own wrapper when it ships one; a few (the shared
+          # build-config jar) have none and build with the runner's Maven
+          if [ "${HAS_MVNW}" = "true" ]; then MVN=./mvnw; else MVN=mvn; fi
           if [ -n "${MAVEN_SETTINGS}" ]; then
             if [ "${MAVEN_SETTINGS}" = ".github/maven-ci-settings.xml" ] && [ -z "${UPSTREAM_PACKAGES_TOKEN}" ]; then
               echo "::error::secret PACKAGES_READ_TOKEN is not set: Maven cannot read the private libraries from this organisation's package registry"
               exit 1
             fi
-            ./mvnw -B -s "${MAVEN_SETTINGS}" verify
+            "${MVN}" -B -s "${MAVEN_SETTINGS}" verify
           else
-            ./mvnw -B verify
+            "${MVN}" -B verify
           fi
 
       # ------------------------------------------------------------- angular

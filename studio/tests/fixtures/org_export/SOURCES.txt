@@ -2,3 +2,4 @@
 hugmesh-parent bdfce46ee3ccf0f55b6846201e6f2f161e9b1aa6 2026-10-14
 hugmesh-commons 2b56f0af20a593d25100cb4f6bfd6858650dbc4d 2026-10-14
 hugmesh-actions 797a192d60f1cacc334d2315dd35309aea1e61d9 2026-10-14
+hugmesh-build-config (hand-written stand-in shaped like the real one: a pom.xml and no mvnw)

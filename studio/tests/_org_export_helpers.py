@@ -155,7 +155,10 @@ def make_world(tmp_path) -> dict:
     # the other two links of the Java chain, as stand-ins (the parent fixture's
     # files under their names) so the default repository set has a checkout for each
     for name in ("hugmesh-build-config", "hugmesh-auth-core"):
-        shutil.copytree(os.path.join(SOURCES, "hugmesh-parent"), str(src / name))
+        # the build-config stand-in has the real one's shape (a pom and NO mvnw);
+        # a copy of the parent would hide the generated build's wrapper assumption
+        shutil.copytree(os.path.join(SOURCES, "hugmesh-build-config" if name.endswith("config")
+                                     else "hugmesh-parent"), str(src / name))
         (src / name / "STAND-IN.md").write_text(f"a stand-in for {name} in tests\n")
         git(str(src / name), "init", "-q", "-b", "main")
         git(str(src / name), "add", "-A")

@@ -720,6 +720,7 @@ class RepoPlan:
     action: str                       # see ACTIONS
     kind: str = "other"               # java | java+settings | angular | site | other
     maven_settings: str = ""          # the -s file a Java build passes ("" = none)
+    has_mvnw: bool = False            # the snapshot ships ./mvnw (hugmesh-build-config does not)
     source_path: str = ""
     ref: str = ""
     source_commit: str = ""
@@ -909,6 +910,9 @@ def _prepare_repo(runner: Runner, name: str, cfg: ExportConfig, rules, out_dir: 
     rp.kind = _kind(rp.workdir)
     if rp.kind.startswith("java"):
         rp.maven_settings, settings_note = _maven_settings(rp.workdir)
+        # not every Java repository carries the wrapper (the build-config one is a
+        # plain jar built with `mvn`): the generated step must not assume it
+        rp.has_mvnw = os.path.isfile(os.path.join(rp.workdir, "mvnw"))
     for rel in kept:
         full = os.path.join(rp.workdir, rel)
         if not _is_text(full):
@@ -1068,7 +1072,7 @@ def _prepare_site(cfg: ExportConfig, repos: list[RepoPlan], out_dir: str,
     os.makedirs(os.path.join(site.workdir, ".github", "workflows"))
     exported = [r for r in repos if not r.blocked]
     rows = [{"name": r.target, "source": r.source, "build": _build_word(r.kind),
-             "settings": r.maven_settings, "visibility": r.visibility,
+             "settings": r.maven_settings, "mvnw": r.has_mvnw, "visibility": r.visibility,
              "url": f"https://github.com/{r.org}/{r.target}"} for r in exported]
     # NO run stamp anywhere in the site's content: the same inputs must give the
     # same tree, so a re-run reports the site `unchanged` like every other repository

@@ -163,7 +163,11 @@ Plan the field shows the PLAN form; after Plan the same words plus `--apply`.
 
 In the GUI, **Apply** is armed only by typing the organisation's name into the
 confirmation field (inline; no dialog; letter case does not matter, as GitHub slugs
-are case-insensitive). In the text-mode step it is `apply <org>`.
+are case-insensitive). Apply runs exactly the plan on screen, so changing anything that
+shapes the plan after Plan (the domain, visibility, existing-repository choice, source
+folder, plan folder or rename map, or adding a config file) clears that plan and
+disarms Apply until you press Plan again; the text-mode step does the same. In the
+text-mode step it is `apply <org>`.
 From a terminal it is `--org-export APPLY --apply`.
 
 For every repository that is not blocked, apply:
@@ -197,7 +201,7 @@ export creates a small new repository:
 | --- | --- |
 | `repos.json` | every exported repository: name, source, build kind (`java` / `angular` / `none`), visibility, URL |
 | `index.html` | a page listing them, read from `repos.json` |
-| `.github/workflows/build-all.yml` | one matrix job per repository: `actions/checkout` of `<org>/<name>` (the `EXPORT_READ_TOKEN` secret for private repositories), then, for Java, `./mvnw -B verify` with the settings file `repos.json` records for that repository (`-s .github/maven-ci-settings.xml` for the CI settings file) and the package-registry login in `UPSTREAM_PACKAGES_ACTOR` / `UPSTREAM_PACKAGES_TOKEN` (from the `PACKAGES_READ_ACTOR` / `PACKAGES_READ_TOKEN` secrets), and for Angular `npm ci` / `npm run build` / `npm test` (Karma, ChromeHeadlessCI) |
+| `.github/workflows/build-all.yml` | one matrix job per repository: `actions/checkout` of `<org>/<name>` (the `EXPORT_READ_TOKEN` secret for private repositories), then, for Java, `./mvnw -B verify` (plain `mvn -B verify` for a repository that ships no `mvnw`, such as the shared build-config jar; `repos.json` records which) with the settings file `repos.json` records for that repository (`-s .github/maven-ci-settings.xml` for the CI settings file) and the package-registry login in `UPSTREAM_PACKAGES_ACTOR` / `UPSTREAM_PACKAGES_TOKEN` (from the `PACKAGES_READ_ACTOR` / `PACKAGES_READ_TOKEN` secrets), and for Angular `npm ci` / `npm run build` / `npm test` (Karma, ChromeHeadlessCI) |
 | `.github/workflows/pages.yml` | publishes the site with GitHub Pages (`configure-pages` / `upload-pages-artifact` / `deploy-pages`) |
 
 Both workflows run on `${{ fromJSON(vars.RUNS_ON || '"ubuntu-latest"') }}`, the way
@@ -275,7 +279,7 @@ logged rather than the Studio's own say-so. Run them with
 `cd tests/e2e && SNAP_STUDIO_PYTHON=<python with PySide6 or PyQt6> npx bddgen test &&
 QT_QPA_PLATFORM=offscreen npx playwright test --project=bdd -g "exports a domain's repositories"`
 (the `-g` filter is a case-sensitive regex over the generated titles; this one matches
-the feature's title and selects its nine scenarios). They need no mesh, no network and
+the feature's title and selects every scenario in it). They need no mesh, no network and
 start nothing.
 
 ## 7. What a person must still do

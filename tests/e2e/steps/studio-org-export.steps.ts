@@ -56,6 +56,12 @@ interface Facts {
   terminalPlan?: { interpreter: string; argv: string[]; rc: number; seconds: number;
     targets: string[]; stdoutTail: string; stderrTail: string; ghCalls: string[] };
   bareFiles?: Record<string, string | null>;
+  flip?: { planVisibility: string; applyEnabledBeforeFlip: boolean; pickerReads: string;
+    planKept: boolean; applyEnabledAfterFlip: boolean; tableRowsAfterFlip: number;
+    terminalLineAfterFlip: string; applyEnabledTypedAfterFlip: boolean;
+    createCallsAfterStaleApply: string[]; bareReposAfterStaleApply: string[];
+    freshPlanVisibility: string | null; applyEnabledAfterFreshPlan: boolean;
+    createCallsAfterFreshApply: string[] };
   workFolders?: string[]; sentinel?: string | null; escapeFolder?: string[] | null;
   preexisting?: { target: string; branch: string; refsBefore: string[]; shaBefore: string;
     refsAfter?: string[]; shaAfter?: string };
@@ -183,7 +189,14 @@ When('I walk the Go-Live wizard to the export step for a saved mesh naming the o
   async ({ world }, org: string) => {
     expect(org).toBe('exampleorg');
     drive(world, ['--scenario', 'export', '--action', 'apply',
-      '--read-file', 'mesh.example.github.io:repos.json']);
+      '--read-file', 'mesh.example.github.io:repos.json',
+      '--read-file', 'mesh.example.github.io:.github/workflows/build-all.yml']);
+  });
+
+When('I walk the Go-Live wizard to the export step for a saved mesh naming the org {string}, plan it as public, flip the visibility picker to private and press Apply with the name typed',
+  async ({ world }, org: string) => {
+    expect(org).toBe('exampleorg');
+    drive(world, ['--scenario', 'export', '--action', 'flip-visibility']);
   });
 
 When('I walk the Go-Live wizard to the export step with a token-free {string} and a placeholder-login {string} planted in {string}, apply it with the name typed, and read the published {string}',
@@ -512,6 +525,59 @@ Then('the published site list records {string} for {string} and no settings file
     expect(by[withFile]?.settings).toBe(settings);
     expect(by[without]?.build, `${without} is a Java repository`).toBe('java');
     expect(by[without]?.settings, `${without} must carry no settings file`).toBe('');
+  });
+
+// ── the Maven wrapper: not every Java repository ships ./mvnw ────────────────
+
+Then('the published site list records no Maven wrapper for {string} and one for {string}, and the build workflow falls back to plain mvn',
+  async ({ world }, without: string, withWrapper: string) => {
+    const f = facts(world);
+    const raw = (f.bareFiles ?? {})['mesh.example.github.io:repos.json'];
+    expect(raw, 'repos.json is not on main of the stand-in site repository').toBeTruthy();
+    const rows = (JSON.parse(raw as string).repos ?? []) as { name: string; mvnw: boolean; build: string }[];
+    const by = Object.fromEntries(rows.map((r) => [r.name, r]));
+    expect(by[without]?.build, `${without} is a Java repository`).toBe('java');
+    expect(by[without]?.mvnw, `${without} ships no mvnw`).toBe(false);
+    expect(by[withWrapper]?.mvnw, `${withWrapper} ships a mvnw`).toBe(true);
+    expect(f.bareRepos?.[without]?.files, `${without} on the stand-in GitHub`).not.toContain('mvnw');
+    expect(f.bareRepos?.[withWrapper]?.files).toContain('mvnw');
+    const wf = (f.bareFiles ?? {})['mesh.example.github.io:.github/workflows/build-all.yml'] as string;
+    expect(wf, 'build-all.yml is not on main of the stand-in site repository').toBeTruthy();
+    expect(wf).toContain('mvnw: .mvnw');
+    expect(wf).toContain('HAS_MVNW: ${{ matrix.mvnw }}');
+    expect(wf).toContain('MVN=mvn');
+    expect(wf, 'an unconditional ./mvnw call is back').not.toMatch(/^\s*\.\/mvnw -B/m);
+  });
+
+// ── a picker changed after Plan drops the plan ───────────────────────────────
+
+Then('the flipped picker dropped the plan, Apply stayed disarmed and the stand-in GitHub still holds no repository',
+  async ({ world }) => {
+    const fl = facts(world).flip;
+    expect(fl, 'the driver reported no flip').toBeDefined();
+    const x = fl as NonNullable<Facts['flip']>;
+    expect(x.planVisibility, 'the first Plan was made as public').toBe('public');
+    expect(x.applyEnabledBeforeFlip, 'Apply was armed by the public plan').toBe(true);
+    expect(x.pickerReads).toBe('private');
+    expect(x.planKept, 'the public plan is still on screen under a private picker').toBe(false);
+    expect(x.applyEnabledAfterFlip).toBe(false);
+    expect(x.applyEnabledTypedAfterFlip, 'typing the org name re-armed a dropped plan').toBe(false);
+    expect(x.tableRowsAfterFlip).toBe(0);
+    expect(x.terminalLineAfterFlip).toContain('--org-export PLAN');
+    expect(x.createCallsAfterStaleApply, 'gh repo create ran from a dropped plan').toEqual([]);
+    expect(x.bareReposAfterStaleApply).toEqual([]);
+  });
+
+Then('a fresh Plan after the flip creates only private repositories when applied',
+  async ({ world }) => {
+    const x = facts(world).flip as NonNullable<Facts['flip']>;
+    expect(x.freshPlanVisibility).toBe('private');
+    expect(x.applyEnabledAfterFreshPlan).toBe(true);
+    expect(x.createCallsAfterFreshApply.length, 'the fresh apply created nothing').toBeGreaterThan(0);
+    for (const c of x.createCallsAfterFreshApply) {
+      expect(c, 'a repository was created public').not.toContain('--public');
+      expect(c).toContain('--private');
+    }
   });
 
 Then('the plan notes that {string} has only the GitLab registry file', async ({ world }, target: string) => {

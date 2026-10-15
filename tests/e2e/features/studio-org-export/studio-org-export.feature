@@ -148,6 +148,27 @@ Feature: The Studio exports a domain's repositories to its GitHub org
     And no dialog opened in the org-export walk
     And the Studio grab is a non-empty PNG
 
+  # ── the Maven wrapper: not every Java repository has one ──────────────────
+  # hugmesh-build-config is a plain jar with a pom and no mvnw (its own release
+  # workflow runs `mvn`): the generated build must not call ./mvnw for it.
+  @interface:studio
+  Scenario: a Java repository without a Maven wrapper is built with plain mvn @interface:studio
+    When I walk the Go-Live wizard to the export step for a saved mesh naming the org "exampleorg", apply it with the name typed, and read the published site list
+    Then the published site list records no Maven wrapper for "example-build-config" and one for "example-parent", and the build workflow falls back to plain mvn
+    And no dialog opened in the org-export walk
+    And the Studio grab is a non-empty PNG
+
+  # ── a picker changed after Plan drops the plan ────────────────────────────
+  # Apply runs the plan it was armed by; a picker flipped afterwards must not leave
+  # that plan armed under a screen that now says something else.
+  @interface:studio
+  Scenario: flipping the visibility picker after Plan drops the plan and nothing is created until a fresh Plan @interface:studio
+    When I walk the Go-Live wizard to the export step for a saved mesh naming the org "exampleorg", plan it as public, flip the visibility picker to private and press Apply with the name typed
+    Then the flipped picker dropped the plan, Apply stayed disarmed and the stand-in GitHub still holds no repository
+    And a fresh Plan after the flip creates only private repositories when applied
+    And no dialog opened in the org-export walk
+    And the Studio grab is a non-empty PNG
+
   # ── an .npmrc is dropped when it holds a login, kept when it does not ─────
   @interface:studio
   Scenario: an .npmrc holding a login placeholder is dropped and a token-free one is published @interface:studio

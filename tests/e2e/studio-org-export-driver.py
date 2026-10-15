@@ -434,6 +434,8 @@ def scenario_export(args, app, result: dict, scratch: str, bindir: str, git_log:
     # the Terminal line as shown BEFORE Plan (the PLAN form; after Plan it is the
     # APPLY form): what a person would copy to run the same export themselves
     result["terminalLineBeforePlan"] = page.cmd.text()
+    if args.action == "flip-visibility":
+        page.visibility.setCurrentText("public")          # planned as PUBLIC first
     page.plan_btn.click()
     _wait_worker(page, app)
     plan = page.plan
@@ -492,6 +494,40 @@ def scenario_export(args, app, result: dict, scratch: str, bindir: str, git_log:
         app.processEvents()
         result["applyStatus"] = page.status.text()
         result["resultAfter"] = page.result is not None
+    elif args.action == "flip-visibility":
+        # the picker flipped back to private AFTER a public Plan armed Apply: the
+        # plan on screen must be gone, so there is nothing for Apply to run
+        flip = {"planVisibility": plan.config.visibility,
+                "applyEnabledBeforeFlip": page.apply_btn.isEnabled()}
+        page.visibility.setCurrentText("private")
+        app.processEvents()
+        flip.update({"pickerReads": page.visibility.currentText(),
+                     "planKept": page.plan is not None,
+                     "applyEnabledAfterFlip": page.apply_btn.isEnabled(),
+                     "tableRowsAfterFlip": page.table.rowCount(),
+                     "terminalLineAfterFlip": page.cmd.text()})
+        page.confirm.setText(plan.config.org)             # the name typed, as a person would
+        app.processEvents()
+        flip["applyEnabledTypedAfterFlip"] = page.apply_btn.isEnabled()
+        page.apply_btn.click()                            # disabled: ignored, as in the app
+        page._apply()                                     # and the slot refuses with no plan
+        _wait_worker(page, app)
+        flip["createCallsAfterStaleApply"] = [c for c in _lines(os.environ["FAKE_GH_LOG"])
+                                              if c.startswith("repo create")]
+        flip["bareReposAfterStaleApply"] = (sorted(os.listdir(org_dir))
+                                            if os.path.isdir(org_dir) else [])
+        # a FRESH plan under what the screen shows, then Apply: private, as the picker says
+        page.plan_btn.click()
+        _wait_worker(page, app)
+        flip["freshPlanVisibility"] = page.plan.config.visibility if page.plan else None
+        page.confirm.setText(plan.config.org)
+        app.processEvents()
+        flip["applyEnabledAfterFreshPlan"] = page.apply_btn.isEnabled()
+        page.apply_btn.click()
+        _wait_worker(page, app)
+        flip["createCallsAfterFreshApply"] = [c for c in _lines(os.environ["FAKE_GH_LOG"])
+                                              if c.startswith("repo create")]
+        result["flip"] = flip
     elif args.action == "apply":
         if not page.apply_btn.isEnabled():
             _fail(4, "Apply did not arm with the org name typed: %s" % page.status.text())
@@ -584,7 +620,8 @@ def main(argv: "list[str]") -> int:
     ap.add_argument("--scenario", required=True, choices=("no-org", "domains-org", "export"))
     ap.add_argument("--org", default=OWN_ORG_DEFAULT, help="domains-org: the own row's org")
     ap.add_argument("--added-org", default="", help="domains-org: an added row's org")
-    ap.add_argument("--action", choices=("plan", "apply-untyped", "apply"), default="plan")
+    ap.add_argument("--action", choices=("plan", "apply-untyped", "apply", "flip-visibility"),
+                    default="plan")
     ap.add_argument("--plant-marker", default="",
                     help="export: commit a fake token into this source repository first")
     ap.add_argument("--rename-map", choices=("none", "exclusions", "bad-target"),

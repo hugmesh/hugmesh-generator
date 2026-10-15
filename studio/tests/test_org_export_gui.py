@@ -802,6 +802,147 @@ def test_a_banned_marker_is_cleared_from_the_gui_with_the_rename_map_field(
     assert not os.path.isdir(os.path.join(world["gh_root"], "exampleorg"))    # still a plan
 
 
+def _planned_page(golive, world, qapp, tmp_path, visibility="public"):
+    """The step with a clean plan made under ``visibility`` and Apply armed."""
+    saved_mesh_naming_the_org(world)
+    golive.export_runner = world["runner"]
+    golive.export_remote_base = f"file://{world['gh_root']}/"
+    _at_generate(golive)
+    golive.next()
+    page = golive.currentPage()
+    assert isinstance(page, golive_mod.GoLiveOrgExportPage)
+    page.out_dir.setText(str(tmp_path / "out"))
+    page.visibility.setCurrentText(visibility)
+    page.plan_btn.click()
+    _wait_worker(page, qapp)
+    assert page.plan is not None and not page.plan.blocked, page.status.text()
+    page.confirm.setText("exampleorg")
+    assert page.apply_btn.isEnabled()
+    return page
+
+
+def _created(world) -> list[str]:
+    return [c for c in world["runner"].gh_calls() if c.startswith("repo create")]
+
+
+def test_flipping_the_visibility_picker_after_plan_disarms_apply_and_creates_nothing(
+        golive, world, qapp, tmp_path):
+    """The defect the correctness skeptic reproduced: Plan as public, flip the picker
+    back to private, type the org, click Apply -> `gh repo create --public` ran under a
+    screen that read private. The plan on screen is dropped by the change, so there is
+    nothing to apply until a fresh Plan."""
+    page = _planned_page(golive, world, qapp, tmp_path, visibility="public")
+    assert "--public" in page.plan_text.toPlainText() or page.plan.config.visibility == "public"
+    page.visibility.setCurrentText("private")
+    assert page.plan is None and page.result is None
+    assert not page.apply_btn.isEnabled()
+    assert page.table.rowCount() == 0 and page.plan_text.toPlainText() == ""
+    assert "--org-export PLAN" in page.cmd.text() and "--visibility" not in page.cmd.text()
+    page.confirm.setText("exampleorg")
+    assert not page.apply_btn.isEnabled()
+    _settle(qapp, 10)
+    _shot(golive, "golive-org-export-plan-dropped.png", tmp_path)
+    page.apply_btn.click()                       # a disabled button: nothing runs
+    page._apply()                                # and the slot itself refuses with no plan
+    _wait_worker(page, qapp)
+    assert _created(world) == [], world["runner"].gh_calls()
+    assert not os.path.isdir(os.path.join(world["gh_root"], "exampleorg"))
+    # a fresh Plan under what the screen shows is what arms Apply again, and it creates
+    # PRIVATE repositories, as the picker says
+    page.plan_btn.click()
+    _wait_worker(page, qapp)
+    assert page.plan is not None and page.plan.config.visibility == "private"
+    assert page.apply_btn.isEnabled()
+    page.apply_btn.click()
+    _wait_worker(page, qapp)
+    created = _created(world)
+    assert created and all("--private" in c and "--public" not in c for c in created), created
+
+
+@pytest.mark.parametrize("change", ["update_mode", "source_dir", "out_dir", "rename_map",
+                                    "config_added"])
+def test_every_other_input_change_after_plan_also_drops_the_plan(
+        golive, world, qapp, tmp_path, change):
+    import json
+    page = _planned_page(golive, world, qapp, tmp_path)
+    if change == "update_mode":
+        page.update_mode.setCurrentIndex(page.update_mode.findData(oe.UPDATE_BRANCH))
+    elif change == "source_dir":
+        other = tmp_path / "elsewhere"
+        other.mkdir()
+        page.source_dir.setText(str(other))
+    elif change == "out_dir":
+        page.out_dir.setText(str(tmp_path / "another-out"))
+    elif change == "rename_map":
+        rm = tmp_path / "rm.json"
+        rm.write_text(json.dumps({"exclude": ["hugmesh-commons:README.md"]}))
+        page.rename_map.setText(str(rm))
+    else:                                         # a second source: the domain combo changes
+        page.config_path.setText(os.path.join(os.path.dirname(os.path.abspath(oe.__file__)),
+                                              "..", "..", "tests", "fixtures", "org_export",
+                                              "mesh-config.json"))
+        page._add_config()
+        assert page.source.count() == 2
+    assert page.plan is None and not page.apply_btn.isEnabled(), change
+    assert page.table.rowCount() == 0 and page.plan_text.toPlainText() == "", change
+    page.apply_btn.click()
+    _wait_worker(page, qapp)
+    assert _created(world) == [], (change, world["runner"].gh_calls())
+
+
+def test_the_domain_combo_alone_drops_the_plan(golive, world, qapp, tmp_path):
+    """Two sources, the same pickers: choosing the other domain/org is an input too."""
+    import json
+    page = _planned_page(golive, world, qapp, tmp_path)
+    other = oe.ExportConfig(domain="other.example", org="otherorg", generator_dir=world["gen"],
+                            source_mode="existing", source_dir=world["src"],
+                            skip_repos=["hugmesh-build-config", "hugmesh-auth-core"],
+                            include_generator=False, out_dir=str(tmp_path / "other-out"))
+    path = tmp_path / "other.json"
+    path.write_text(json.dumps(other.to_dict()))
+    page.config_path.setText(str(path))
+    page._add_config()
+    assert page.source.count() == 2
+    page.visibility.setCurrentText("public")
+    page.plan_btn.click()
+    _wait_worker(page, qapp)
+    assert page.plan is not None
+    page.confirm.setText(page.plan.config.org)
+    assert page.apply_btn.isEnabled()
+    page.source.setCurrentIndex(0)                # same pickers, a different domain
+    assert page.plan is None and not page.apply_btn.isEnabled()
+
+
+def test_a_picker_changed_while_a_plan_runs_discards_that_plan(golive, world, qapp, tmp_path):
+    saved_mesh_naming_the_org(world)
+    golive.export_runner = world["runner"]
+    golive.export_remote_base = f"file://{world['gh_root']}/"
+    _at_generate(golive)
+    golive.next()
+    page = golive.currentPage()
+    page.out_dir.setText(str(tmp_path / "out"))
+    page.visibility.setCurrentText("public")
+    page.plan_btn.click()
+    page.visibility.setCurrentText("private")      # before the worker's result is delivered
+    _wait_worker(page, qapp)
+    assert page.plan is None and not page.apply_btn.isEnabled()
+    assert "plan again" in page.status.text()
+    page.confirm.setText("exampleorg")
+    assert not page.apply_btn.isEnabled()
+    assert page.plan_btn.isEnabled()
+
+
+def test_the_pickers_are_locked_while_apply_runs_and_free_afterwards(
+        golive, world, qapp, tmp_path):
+    page = _planned_page(golive, world, qapp, tmp_path, visibility="private")
+    page.apply_btn.click()
+    assert not any(w.isEnabled() for w in page._pickers) and not page.add_btn.isEnabled()
+    _wait_worker(page, qapp)
+    assert page.result is not None and all(w.isEnabled() for w in page._pickers)
+    assert page.plan_text.toPlainText().splitlines()[-1] != ""     # the result is shown
+    assert not page.apply_btn.isEnabled()
+
+
 def test_no_modal_dialogs_in_the_new_page_logic():
     src = inspect.getsource(golive_mod.GoLiveOrgExportPage)
     assert "QMessageBox" not in src and ".exec(" not in src and "exec_()" not in src

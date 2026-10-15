@@ -464,7 +464,8 @@ def test_the_generated_maven_step_runs_the_recorded_settings_and_needs_the_token
     import subprocess
     p = oe.plan(world["cfg"], world["runner"], stamp="20260101T000000Z", probe=False)
     script, env = _maven_step_script(p.site.workdir)
-    assert set(env) == {"UPSTREAM_PACKAGES_ACTOR", "UPSTREAM_PACKAGES_TOKEN", "MAVEN_SETTINGS"}
+    assert set(env) == {"UPSTREAM_PACKAGES_ACTOR", "UPSTREAM_PACKAGES_TOKEN", "MAVEN_SETTINGS",
+                        "HAS_MVNW"}
     work = tmp_path / "mvn-step"
     work.mkdir()
     mvnw = work / "mvnw"
@@ -472,7 +473,7 @@ def test_the_generated_maven_step_runs_the_recorded_settings_and_needs_the_token
     mvnw.chmod(0o755)
     res = subprocess.run(["bash", "-c", script], cwd=work, capture_output=True, text=True,
                          env={"PATH": os.environ["PATH"], "MAVEN_SETTINGS": settings,
-                              "UPSTREAM_PACKAGES_TOKEN": token,
+                              "HAS_MVNW": "true", "UPSTREAM_PACKAGES_TOKEN": token,
                               "UPSTREAM_PACKAGES_ACTOR": "someone"})
     assert res.returncode == want_rc, res.stdout + res.stderr
     if want_args:
@@ -520,9 +521,63 @@ def test_the_matrix_the_repos_job_builds_carries_each_repositorys_settings_file_
         done = subprocess.run(
             ["bash", "-c", script], cwd=work, capture_output=True, text=True,
             env={"PATH": os.environ["PATH"], "MAVEN_SETTINGS": rows[name]["settings"],
+                 "HAS_MVNW": str(rows[name]["mvnw"]).lower(),
                  "UPSTREAM_PACKAGES_TOKEN": "tok", "UPSTREAM_PACKAGES_ACTOR": "someone"})
         assert done.returncode == 0, done.stdout + done.stderr
         assert (work / "ran.txt").read_text().strip() == f"mvnw {want}", name
+
+
+def test_a_java_repository_with_no_maven_wrapper_is_built_with_plain_mvn(world, tmp_path):
+    """The shared build-config jar ships a pom and no mvnw (its own release workflow
+    runs plain `mvn`): the plan records that per repository, the matrix carries it, and
+    the Maven step runs `mvn` for it and ./mvnw for the others — never ./mvnw
+    unconditionally, which died with 'No such file' on the first real run."""
+    import subprocess
+    cfg = world["cfg"]
+    cfg.skip_repos = ["hugmesh-auth-core"]                  # export build-config too
+    p = oe.plan(cfg, world["runner"], stamp="20260101T000000Z", probe=False)
+    by = {r.source: r for r in p.repos}
+    assert by["hugmesh-build-config"].kind == "java+settings"
+    assert by["hugmesh-build-config"].has_mvnw is False
+    assert by["hugmesh-parent"].has_mvnw is True and by["hugmesh-commons"].has_mvnw is True
+    assert not os.path.exists(os.path.join(by["hugmesh-build-config"].workdir, "mvnw"))
+    rows = {r["name"]: r for r in json.load(
+        open(os.path.join(p.site.workdir, "repos.json")))["repos"]}
+    assert rows["example-build-config"]["mvnw"] is False
+    assert rows["example-parent"]["mvnw"] is True
+    # the jq hand-off, run for real, keeps the field
+    step = _site_step(p.site.workdir, "repos", step_id="list")
+    gh_out = tmp_path / "gh-output.txt"
+    gh_out.write_text("")
+    done = subprocess.run(["bash", "-c", step["run"]], cwd=p.site.workdir, capture_output=True,
+                          text=True, env={"PATH": os.environ["PATH"], "GITHUB_OUTPUT": str(gh_out)})
+    assert done.returncode == 0, done.stdout + done.stderr
+    outputs = dict(ln.split("=", 1) for ln in gh_out.read_text().splitlines() if "=" in ln)
+    matrix = {r["name"]: r for r in json.loads(outputs["matrix"])["include"]}
+    assert matrix["example-build-config"]["mvnw"] is False and matrix["example-parent"]["mvnw"] is True
+    script, _env = _maven_step_script(p.site.workdir)
+    for name, want in (("example-build-config", "mvn -B verify"),
+                       ("example-parent", "mvnw -B -s .github/maven-ci-settings.xml verify")):
+        work = tmp_path / f"wrap-{name}"
+        bin_dir = tmp_path / f"wrap-bin-{name}"
+        work.mkdir()
+        bin_dir.mkdir()
+        # a stub `mvn` on PATH; a stub ./mvnw only for a repository that has one
+        tool = bin_dir / "mvn"
+        tool.write_text('#!/bin/sh\necho "mvn $*" > ran.txt\n')
+        tool.chmod(0o755)
+        if matrix[name]["mvnw"]:
+            wrapper = work / "mvnw"
+            wrapper.write_text('#!/bin/sh\necho "mvnw $*" > ran.txt\n')
+            wrapper.chmod(0o755)
+        res = subprocess.run(
+            ["bash", "-c", script], cwd=work, capture_output=True, text=True,
+            env={"PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+                 "MAVEN_SETTINGS": matrix[name]["settings"],
+                 "HAS_MVNW": str(matrix[name]["mvnw"]).lower(),
+                 "UPSTREAM_PACKAGES_TOKEN": "tok", "UPSTREAM_PACKAGES_ACTOR": "someone"})
+        assert res.returncode == 0, res.stdout + res.stderr
+        assert (work / "ran.txt").read_text().strip() == want, name
 
 
 def test_a_root_settings_file_that_is_not_the_gitlab_one_is_used_when_no_ci_file(tmp_path):
@@ -1030,6 +1085,42 @@ def test_cli_plan_prints_and_apply_refuses_without_the_flag(world, monkeypatch, 
     assert app_mod.main(["--generator-dir", world["gen"], "--config", str(bad),
                          "--org-export", "PLAN"]) == 2
     assert "unknown keys token" in capsys.readouterr().err
+
+
+def test_cli_apply_of_a_blocked_plan_exits_1_and_creates_and_pushes_nothing(
+        world, monkeypatch, capsys):
+    """All or nothing at the terminal: with ONE repository refused for a banned
+    marker, `--org-export APPLY --apply` says so, exits 1, and creates and pushes
+    nothing at all — not even the clean repositories or the site (the engine's own
+    apply would skip only the blocked one, so this guard is the CLI's alone)."""
+    from hugmesh_studio import app as app_mod
+    monkeypatch.setenv("PATH", world["runner"].fake_bin + os.pathsep + os.environ["PATH"])
+    monkeypatch.setenv("FAKE_GH_ROOT", world["gh_root"])
+    monkeypatch.setenv("FAKE_GH_LOG", world["runner"].gh_log)
+    for k, v in (("GIT_AUTHOR_NAME", RUNNER_IDENTITY[0]), ("GIT_AUTHOR_EMAIL", RUNNER_IDENTITY[1]),
+                 ("GIT_COMMITTER_NAME", RUNNER_IDENTITY[0]),
+                 ("GIT_COMMITTER_EMAIL", RUNNER_IDENTITY[1])):
+        monkeypatch.setenv(k, v)
+    src = os.path.join(world["src"], "hugmesh-commons")
+    with open(os.path.join(src, "NOTES.md"), "w", encoding="utf-8") as fh:
+        fh.write(f"a note\n\n{CO_AUTHOR}: Someone <x@example>\n")
+    _git(src, "add", "-A")
+    _git(src, "-c", "commit.gpgsign=false", "commit", "-q", "-m", "plant")
+    cfg_path = world["tmp"] / "export.json"
+    cfg_path.write_text(json.dumps(world["cfg"].to_dict()))
+    base = ["--generator-dir", world["gen"], "--config", str(cfg_path)]
+    assert app_mod.main([*base, "--org-export", "PLAN"]) == 1        # the plan itself says so
+    capsys.readouterr()
+    rc = app_mod.main([*base, "--org-export", "APPLY", "--apply"])
+    cap = capsys.readouterr()
+    assert rc == 1, cap
+    assert "the plan is blocked; nothing is applied" in cap.err
+    assert "NOTES.md: co-author trailer" in cap.out
+    gh_log = world["runner"].gh_calls()
+    assert not any(c.startswith("repo create") for c in gh_log), gh_log
+    # no bare repository exists at all: no push can have happened either
+    assert not os.path.isdir(os.path.join(world["gh_root"], "exampleorg")) or \
+        not os.listdir(os.path.join(world["gh_root"], "exampleorg"))
 
 
 # ── where the domains with an org come from ─────────────────────────────────────────
