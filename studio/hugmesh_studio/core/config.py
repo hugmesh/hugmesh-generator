@@ -580,6 +580,33 @@ USER_LEVEL_SERVICES = ("akkoma", "tuwunel", "phpbb", "games", "owncast", "tube",
 ANUBIS_SLUG = "anubis"
 ANUBIS_OFF_TOKEN = "-anubis"
 ANUBIS_CHOICES = ("", "on", "off")
+# The words BOTH faces show for those three values (the GUI combo's items, the TUI's
+# state column), kept beside the values so the two cannot spell them differently.
+ANUBIS_LABELS = {"": "Default", "on": "Force on", "off": "Force off"}
+
+
+def anubis_locked(optional_services) -> bool:
+    """Is the anubis choice locked at Default by a whole-set selection?
+
+    ``--optional-services ""`` (no services at all) and ``--all-services`` each REPLACE
+    the slug list the choice rides in, so on both faces the row is decided by the preset
+    and reads Default until the operator goes back to picking services one by one."""
+    svcs = [str(s) for s in (optional_services or [])]
+    return SERVICES_NONE in svcs or SERVICES_ALL in svcs
+
+
+def anubis_shown(cfg) -> str:
+    """The value ("", "on" or "off") a face should SHOW for ``cfg``: the field itself,
+    else what a pre-tri-state picker spelling already says (the ``anubis`` slug is Force
+    on, ``-anubis`` / ``no-anubis`` is Force off). ``_services_args`` lets the field beat
+    a contradicting spelling, so the field is read first."""
+    mode = ImageConfig._anubis_mode(getattr(cfg, "anubis", ""))
+    if mode:
+        return mode
+    svcs = [str(x) for x in (getattr(cfg, "optional_services", None) or [])]
+    if ANUBIS_OFF_TOKEN in svcs or "no-anubis" in svcs:
+        return "off"
+    return "on" if ANUBIS_SLUG in svcs else ""
 
 
 def with_service_slug(services, slug: str) -> list[str]:
@@ -654,8 +681,9 @@ SERVICE_DESCRIPTIONS: dict[str, str] = {
     # (ImageConfig().env == "test"). Saying it "stays off on a test build" would be
     # false for the one action this row exists to perform.
     "anubis": "Anti-scraper proof-of-work gate in front of the public web routes. "
-              "Ticking it installs it on any build; left alone a prod build turns "
-              "it on by itself anyway and only a test build leaves it off.",
+              "Force on installs it on any build; Default leaves it to the build "
+              "(a prod build turns it on by itself, a test build leaves it off); "
+              "Force off keeps it out of a prod build.",
 }
 
 # Presentation grouping for the services surface: (group title, (slug, ...)). Ordered —

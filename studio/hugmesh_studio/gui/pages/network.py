@@ -49,6 +49,9 @@ from ._scroll import scrollable
 # page-local copy of it.
 from ...core import config as _config
 from ...core.config import (
+    ANUBIS_CHOICES,
+    ANUBIS_LABELS,
+    ANUBIS_SLUG,
     BUILTIN_DEFAULT_SERVICES,
     ImageConfig,
     MANAGED_SERVICE_DESCRIPTIONS,
@@ -65,6 +68,7 @@ from ...core.config import (
     UNAFFILIATED_ROLE,
     USER_LEVEL_SERVICES,
     X86_NODE_ROLES,
+    anubis_shown,
     field_default,
     tailnet_sso_visible,
 )
@@ -232,8 +236,17 @@ _HELP_SERVICES_PRESET = (
     "these two say what it cannot. No optional services emits an explicit empty "
     "list, which also suppresses the builders' own default set. Every user-level "
     "service emits --all-services, which expands a fixed USER-level catalogue and "
-    "leaves the infra rows (tor, egress-vpn, workloadConsole, anubis) to the "
-    "table — and anubis comes on by itself on a prod build besides.")
+    "leaves the infra rows (tor, egress-vpn, workloadConsole) to the table; "
+    "either shortcut locks anubis at Default, so a prod build still turns it on "
+    "by itself.")
+_HELP_ANUBIS = (
+    "The public proof-of-work gate in front of the web routes. Three values rather than "
+    "a checkbox because the build has its own policy: Default emits nothing and lets it "
+    "decide (on for a prod build, off for a test build), Force on adds the anubis "
+    "service, Force off adds -anubis, which keeps it out of a prod build too.")
+_ANUBIS_LOCKED_TIP = (
+    "Locked at Default: the whole-set selection above replaces the service list this "
+    "choice rides in. Pick services individually to force anubis on or off.")
 _HELP_EDGE_AI_RUNTIME = (
     "Which inference server actually runs the models on the GPU node "
     "(--edge-ai-runtime): ollama is the builder's default, vllm the alternative "
@@ -570,6 +583,8 @@ class NetworkPage(QtWidgets.QWizardPage):
         # (None = we are in CUSTOM and nothing is being held). Seeded here for the same
         # PyQt6 reason as the two above: _preset_changed is a slot.
         self._custom_checked: dict[str, bool] | None = None
+        # …and the same for the anubis choice (a combo index, not a tick).
+        self._anubis_held: int | None = None
         # Title/subtitle are set path-aware in initializePage (a standalone desktop has
         # no mesh/tailnet, so this page IS its network-identity + egress + security step,
         # while cloud/mesh use it for the domain, superdomain and cluster services).
@@ -926,6 +941,18 @@ class NetworkPage(QtWidgets.QWizardPage):
             gitem = self._group_row(group_title)
             for slug in slugs:
                 item = self._svc_row(gitem, slug, SERVICE_DESCRIPTIONS.get(slug, ""))
+                if slug == ANUBIS_SLUG:
+                    # NOT a tick: the build has its own ENV policy for this one, so the
+                    # question has three named answers (issue #384). A combo in the MODE
+                    # column, like the edge-AI runtime — and deliberately absent from
+                    # `service_boxes`, whose every member is a two-state checkbox.
+                    self.anubis_mode = QtWidgets.QComboBox()
+                    self.anubis_mode.addItems(
+                        [ANUBIS_LABELS[v] for v in ANUBIS_CHOICES])
+                    self.services_table.setItemWidget(
+                        item, _SVC_COL_MODE, self.anubis_mode)
+                    self._svc_items[slug] = item
+                    continue
                 box = QtWidgets.QCheckBox()
                 box.setToolTip(_OFF_TIP)
                 self.services_table.setItemWidget(item, _SVC_COL_ON, box)
@@ -1086,6 +1113,8 @@ class NetworkPage(QtWidgets.QWizardPage):
               back out: --no-character-studio / --no-character-forge only SKIP a fold-in
               (:1166-1171, :1182-1187 are `if [ "${WANT_…}" = "true" ]` with no false arm),
               and `games` has no --no- flag at all.
+          The anubis combo asks this same question (it is a slug-channel row too), so under
+          EITHER preset it is locked at Default.
           What it does NOT take over is a flag-channel row outside that set — `tor` on x86
           and `edge-ai-tts` — which is the (true) half of the claim this method's
           predecessor generalised from and got wrong for the other three.
@@ -1126,12 +1155,23 @@ class NetworkPage(QtWidgets.QWizardPage):
                     if saved is not None and slug in saved:
                         box.setChecked(saved[slug])
                     box.setEnabled(True)
+                held, self._anubis_held = self._anubis_held, None
+                if held is not None:
+                    self.anubis_mode.setCurrentIndex(held)
+                self.anubis_mode.setEnabled(True)
+                self.anubis_mode.setToolTip(_HELP_ANUBIS)
                 return
             # Snapshot ONCE per departure from CUSTOM: flipping none->all must not
             # overwrite the operator's ticks with the previous preset's forced state.
             if self._custom_checked is None:
                 self._custom_checked = {s: b.isChecked()
                                         for s, b in self.service_boxes.items()}
+                self._anubis_held = self.anubis_mode.currentIndex()
+            if self._preset_takes_over(ANUBIS_SLUG, idx):
+                # A force-on/off cannot ride a list the preset replaces: show Default.
+                self.anubis_mode.setCurrentIndex(ANUBIS_CHOICES.index(""))
+                self.anubis_mode.setEnabled(False)
+                self.anubis_mode.setToolTip(_ANUBIS_LOCKED_TIP)
             for slug, box in self.service_boxes.items():
                 if not self._preset_takes_over(slug, idx):
                     box.setEnabled(True)
@@ -1430,6 +1470,13 @@ class NetworkPage(QtWidgets.QWizardPage):
             # waiting to happen. setHidden on the item takes the whole line with it.
             self._svc_items[slug].setHidden(not offered)
             self._service_offered[slug] = offered
+        # The anubis row is a combo, not a box, so the loop above never saw it: seed it
+        # from the config (the field, else the picker spelling it replaces) and decide
+        # whether this platform offers it by the same channel rule as every other row.
+        anubis_offered = bool(_service_channel(ANUBIS_SLUG, c.platform, catalog))
+        self.anubis_mode.setCurrentIndex(ANUBIS_CHOICES.index(anubis_shown(c)))
+        self._svc_items[ANUBIS_SLUG].setHidden(not anubis_offered)
+        self._service_offered[ANUBIS_SLUG] = anubis_offered
         # A group whose every row is unreachable on this platform loses its header too,
         # or the section shows a bold "Network & access" over nothing (the orphan-header
         # lesson the egress section already learned). Reads the flags we just computed,
@@ -1461,6 +1508,7 @@ class NetworkPage(QtWidgets.QWizardPage):
         #     would snapshot the pre-forced (empty) state and blank the table on that
         #     switch, i.e. turn a fine-tuning gesture into "no services at all".
         self._custom_checked = None
+        self._anubis_held = None
         # CLIENT-class role (builder ROLE_CLIENT — see _client_class_role): the
         # services are accepted but IGNORED (no cluster GitOps tree in a desktop
         # image; the plan echoes OPTIONAL_SERVICES as n/a). Show the honesty note;
@@ -1803,6 +1851,7 @@ class NetworkPage(QtWidgets.QWizardPage):
             (self.snort, _HELP_SNORT),
             (self.root_login_row, _HELP_ROOT_LOGIN),
             (self.services_preset_row, _HELP_SERVICES_PRESET),
+            (self.anubis_mode, _HELP_ANUBIS),
             (self.edge_ai_runtime, _HELP_EDGE_AI_RUNTIME),
             (self.edge_ai_models, _HELP_EDGE_AI_MODELS),
             (self.edge_ai_default, _HELP_EDGE_AI_DEFAULT),
@@ -2044,6 +2093,16 @@ class NetworkPage(QtWidgets.QWizardPage):
             # emitting nothing rather than an unsupported explicit "none" that
             # clear_unsupported would strip anyway.
             c.optional_services = [SERVICES_NONE]
+        # The anubis choice rides --optional-services but is its OWN field (issue #384), so
+        # it is collected here, after the preset is known. It is collected only while the
+        # row is on screen AND live: a hidden picker, a platform with no such row, and a
+        # whole-set preset (which replaces the list the choice rides in) all leave the
+        # field at its default, which is exactly what the row shows.
+        if (offered.get(ANUBIS_SLUG) and not hidden
+                and not self._preset_takes_over(ANUBIS_SLUG, preset)):
+            c.anubis = ANUBIS_CHOICES[self.anubis_mode.currentIndex()]
+        else:
+            c.anubis = _field_default("anubis")
         # ASK 2, verbatim: "remove the exclude services field, it makes no sense". The
         # widget is gone; the FIELD and the --exclude-services flag are deliberately kept
         # (it is the only knob that can subtract a slug a brand.conf injected directly
@@ -2091,7 +2150,7 @@ class NetworkPage(QtWidgets.QWizardPage):
             "edge_ai_service", "edge_ai_runtime", "edge_ai_models",
             "edge_ai_model_default", "edge_ai_analysis", "edge_ai_tts", "tor_onion_service",
             "character_studio", "character_forge",
-            "optional_services", "exclude_services", "enable_games",
+            "optional_services", "exclude_services", "enable_games", "anubis",
             "managed_services",
         ))
         return True
