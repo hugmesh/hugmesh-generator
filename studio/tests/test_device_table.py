@@ -221,7 +221,7 @@ def test_flash_assignment_yields_post_build_plan_not_argv(wiz):
     # `standalone-thick` is exactly the token in this image's artifact name.
     assert a.role == "standalone-thick"
     assert a.arch == "x86"
-    assert wiz.flash_after == (False, None)              # legacy stash stays inert
+    assert wiz.flash_after == (False, None)              # legacy stash keeps doing nothing
 
 
 def test_two_devices_take_two_different_images_and_flash_sequentially(monkeypatch, wiz):
@@ -438,7 +438,7 @@ def test_slow_scan_never_blocks_the_main_thread(monkeypatch, qapp, wiz):
     release = threading.Event()
 
     def slow_list_targets():
-        release.wait(5.0)                                # a wedged lsblk
+        release.wait(5.0)                                # a hung lsblk
         return [SDB]
     monkeypatch.setattr("hugmesh_studio.core.flash_targets.list_targets",
                         slow_list_targets)
@@ -493,7 +493,7 @@ def test_run_records_each_entrys_artifact_by_snapshot_diff(wiz, tmp_path):
     assert page._entry_artifacts == {
         "backend.rpi5": os.path.join(str(tmp_path), "hugmesh-rpi5-arm64-backend-1.img"),
         "backend.jetson": os.path.join(str(tmp_path), "hugmesh-jetson-arm64-backend-2.img")}
-    page.driver = None                          # keep the wiz teardown inert
+    page.driver = None                          # keep the wiz teardown from doing anything
 
 
 def test_keys_role_fails_closed_when_the_gate_errors(wiz):

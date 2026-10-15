@@ -565,7 +565,7 @@ def test_installer_ui_resolver_runs_in_materialize_for_the_real_failed_shape():
     for eid in ("pki.x86", "omnibus.x86"):
         args = got[eid].to_cli_args()
         assert ("--installer-ui", "cli") in pairs_of(args), f"{eid}: {args}"
-        # the load-bearing assertion: WANT_CALAMARES can never go true
+        # the assertion that matters: WANT_CALAMARES can never go true
         for trigger in CALAMARES_TRIGGERS:
             assert ("--installer-ui", trigger) not in pairs_of(args)
     # ARM carries no --installer-ui flag at all (strip_platform_unsupported + _X86)

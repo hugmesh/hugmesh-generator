@@ -33,7 +33,30 @@
 # handle every error explicitly.
 set -u
 
-SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+# RESOLVE SYMLINKS FIRST (#635). The first-run bootstrap (scripts/_first-run-lib.sh)
+# installs ~/.local/bin/hugmesh-studio as a SYMLINK to this file, and a dirname of the
+# link's own path is ~/.local/bin — so the helpers, the venv, REPO_DIR and PYTHONPATH were
+# all looked for there and the installed command could never launch. Resolve the path of
+# THIS file (BASH_SOURCE[0]; $0 when bash does not set it) to the real one, then derive
+# every directory from that. The loop needs only `readlink` WITHOUT -f (BSD/macOS have no
+# -f on older releases, busybox and GNU do) and runs it ONLY while the path IS a link, so
+# a direct invocation touches no external at all (test 5 runs with PATH holding `dirname`
+# alone). Relative link targets resolve against the link's own directory; a 40-hop cap
+# stops a link cycle from spinning for ever (the cd below then fails loudly).
+_studio_realpath() {
+    local p="$1" t n=0
+    while [ -L "${p}" ] && [ "${n}" -lt 40 ]; do
+        t="$(readlink -- "${p}")" || break
+        case "${t}" in
+            /*) p="${t}" ;;
+            *)  p="$(dirname -- "${p}")/${t}" ;;
+        esac
+        n=$((n+1))
+    done
+    printf '%s' "${p}"
+}
+STUDIO_LAUNCH_SELF="$(_studio_realpath "${BASH_SOURCE[0]:-$0}")"
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "${STUDIO_LAUNCH_SELF}")" && pwd)"
 REPO_DIR="$(CDPATH= cd -- "${SCRIPT_DIR}/.." && pwd)"
 STUDIO_DIR="${REPO_DIR}/studio"
 # The bootstrap venv lives INSIDE the (writable) checkout — same path the Windows .bat uses
@@ -51,10 +74,11 @@ export PYTHONPATH="${STUDIO_DIR}${PYTHONPATH:+:${PYTHONPATH}}"
 # First-run bootstrap (issue #49): symlinks + properties + advisory doctor. Sourcing only
 # defines functions; the call sits in the dispatch below (guided/--menu paths — the headless
 # automation channel documents "no installs", and --detect documents "report only").
-# Located off BASH_SOURCE, not SCRIPT_DIR: when the TEST SUITE sources this launcher, $0
-# (hence SCRIPT_DIR) points at the test dir, but the lib always sits next to THIS file.
+# Located off the RESOLVED path of this file (SCRIPT_DIR, from BASH_SOURCE — see
+# _studio_realpath above): the lib always sits next to the real launcher, never next to
+# the ~/.local/bin symlink that runs it, and never next to a test that sources it.
 # shellcheck source=scripts/_first-run-lib.sh
-. "$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/_first-run-lib.sh"
+. "${SCRIPT_DIR}/_first-run-lib.sh"
 
 # ── Colours (only when stderr is a TTY, matching scripts/build-menu.sh) ──────────
 if [ -t 2 ]; then

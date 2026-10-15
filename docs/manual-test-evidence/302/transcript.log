@@ -1,0 +1,135 @@
+
+=================== step 1 - prove the stack is serving  (2026-09-30T16:42:10Z) ===================
+--- command (verbatim script body) ---
+docker ps --filter label=com.docker.compose.project=hugmesh-local --format '{{.Names}}\t{{.Status}}' | sort
+echo "container-count=$(docker ps --filter label=com.docker.compose.project=hugmesh-local -q | wc -l)  Up-lines=$(docker ps --filter label=com.docker.compose.project=hugmesh-local --format '{{.Status}}' | grep -c '^Up')  healthy=$(docker ps --filter label=com.docker.compose.project=hugmesh-local --format '{{.Status}}' | grep -c '(healthy)')  unhealthy=$(docker ps --filter label=com.docker.compose.project=hugmesh-local --format '{{.Status}}' | grep -c 'unhealthy')"
+curl -sk -o /dev/null -w 'front-door=%{http_code}\n' https://localhost:8488/
+curl -s -o /dev/null -w 'casdoor=%{http_code}\n' http://localhost:8000/
+--- output (redacted) ---
+hugmesh-local-admin-bff-db-1	Up 11 minutes (healthy)
+hugmesh-local-casdoor-1	Up 10 minutes
+hugmesh-local-casdoor-db-1	Up 11 minutes (healthy)
+hugmesh-local-cassandra-1	Up 11 minutes (healthy)
+hugmesh-local-character-forge-bff-db-1	Up 11 minutes (healthy)
+hugmesh-local-federation-db-1	Up 11 minutes (healthy)
+hugmesh-local-forum-bff-db-1	Up 11 minutes (healthy)
+hugmesh-local-hugmesh-admin-bff-api-1	Up 10 minutes (healthy)
+hugmesh-local-hugmesh-admin-ui-1	Up 11 minutes
+hugmesh-local-hugmesh-api-1	Up 10 minutes (healthy)
+hugmesh-local-hugmesh-api-docs-1	Up 11 minutes
+hugmesh-local-hugmesh-be-gateway-1	Up 10 minutes (healthy)
+hugmesh-local-hugmesh-character-forge-bff-api-1	Up 10 minutes (healthy)
+hugmesh-local-hugmesh-character-forge-ui-1	Up 11 minutes
+hugmesh-local-hugmesh-character-studio-ui-1	Up 11 minutes
+hugmesh-local-hugmesh-fe-gateway-1	Up 10 minutes (healthy)
+hugmesh-local-hugmesh-federation-api-1	Up 10 minutes (healthy)
+hugmesh-local-hugmesh-forum-bff-api-1	Up 10 minutes (healthy)
+hugmesh-local-hugmesh-forum-ui-1	Up 11 minutes
+hugmesh-local-hugmesh-host-shell-1	Up 11 minutes
+hugmesh-local-hugmesh-https-front-1	Up 10 minutes (healthy)
+hugmesh-local-hugmesh-login-ui-1	Up 11 minutes
+hugmesh-local-hugmesh-mastodon-ui-1	Up 11 minutes
+hugmesh-local-hugmesh-matrix-ui-1	Up 11 minutes
+hugmesh-local-hugmesh-mod-bff-api-1	Up 10 minutes (healthy)
+hugmesh-local-hugmesh-mod-ui-1	Up 11 minutes
+hugmesh-local-hugmesh-owncast-bff-api-1	Up 10 minutes (healthy)
+hugmesh-local-hugmesh-owncast-ui-1	Up 11 minutes
+hugmesh-local-hugmesh-pki-gateway-1	Up 10 minutes (healthy)
+hugmesh-local-hugmesh-remote-fragment-1	Up 10 minutes
+hugmesh-local-hugmesh-remote-fragment-web-1	Up 10 minutes (healthy)
+hugmesh-local-hugmesh-tube-bff-api-1	Up 10 minutes (healthy)
+hugmesh-local-hugmesh-tube-ui-1	Up 11 minutes
+hugmesh-local-hugmesh-user-bff-api-1	Up 10 minutes (healthy)
+hugmesh-local-hugmesh-user-ui-1	Up 11 minutes
+hugmesh-local-hugmesh-wiki-bff-api-1	Up 10 minutes (healthy)
+hugmesh-local-hugmesh-wiki-ui-1	Up 11 minutes
+hugmesh-local-owncast-bff-db-1	Up 11 minutes (healthy)
+hugmesh-local-route-access-db-1	Up 11 minutes (healthy)
+hugmesh-local-tube-bff-db-1	Up 11 minutes (healthy)
+hugmesh-local-wiki-bff-db-1	Up 11 minutes (healthy)
+container-count=41  Up-lines=41  healthy=25  unhealthy=0
+front-door=200
+casdoor=200
+(script exit=0)
+
+=================== step 2 - read the per-run secret  (2026-09-30T16:42:20Z) ===================
+--- command (verbatim script body) ---
+cd "$WT" && ls -l .e2e-credentials | sed 's/^\(.\{10\}\) [0-9]* \([^ ]*\) \([^ ]*\) .*\(\.e2e-credentials\)$/\1 \2 \3 \4/' && PW="$(grep '^E2E_PASSWORD=' .e2e-credentials | tail -n1 | cut -d= -f2-)"; [ -n "$PW" ] && echo "password resolved, length ${#PW}" || echo 'NO PASSWORD RESOLVED - STOP'
+echo "credential-file lines: $(wc -l < .e2e-credentials)  (keys: $(cut -d= -f1 .e2e-credentials | tr '\n' ' '))"
+--- output (redacted) ---
+-rw------- magus magus .e2e-credentials
+password resolved, length 32
+credential-file lines: 1  (keys: E2E_PASSWORD )
+(script exit=0)
+
+=================== step 3 - prove PW matches this mesh (control e2e-user)  (2026-09-30T16:42:20Z) ===================
+--- command (verbatim script body) ---
+JU="$W/tmp/ju-user.jar"; rm -f "$JU"
+curl -sk -c "$JU" -X POST "$B/bff/login" -H 'content-type: application/json' -d "$(jq -nc --arg p "$PW" '{username:"e2e-user",password:$p}')" -w '\nlogin=%{http_code}\n'
+curl -sk -b "$JU" "$B/bff/session" | jq -c '{registrationComplete,roles}'
+TOK_USER="$(awk '$6=="bff_<redacted>"{print $7}' "$JU")"; case "$TOK_USER" in bff_*) echo 'control token ok';; *) echo 'NO CONTROL TOKEN - STOP';; esac
+--- output (redacted) ---
+{"registrationComplete":true,"status":"active","mfaRequired":false}
+login=200
+{"registrationComplete":true,"roles":["user"]}
+control token ok
+(script exit=0)
+
+=================== step 4 - measure that no lane seeds this persona; open Casdoor admin session  (2026-09-30T16:42:30Z) ===================
+--- command (verbatim script body) ---
+grep -n 'ROLE_GAMES_SERVICES' tests/qemu/seed-accounts.sh tests/e2e-extra-personas.sh tests/stack/seed-e2e.sh; echo "grep-exit=$?"
+CJ="$W/state/cj302.jar"; rm -f "$CJ"
+curl -s -c "$CJ" -X POST http://localhost:8000/api/login -H 'content-type: application/json' -d "{\"application\":\"app-built-in\",\"organization\":\"built-in\",\"username\":\"admin\",\"password\":\"${CASDOOR_ADMIN_PASS:-123}\",\"type\":\"login\",\"autoSignin\":true}" | jq -c '{status,msg}'
+for r in ROLE_GAMES_SERVICES ROLE_GAMES_SERVICES_ADMIN ROLE_GAMES; do printf '%s: ' "$r"; curl -s -b "$CJ" "http://localhost:8000/api/get-role?id=hugmesh/$r" | jq -c '{status, data:(if .data==null then null else {name:.data.name,users:.data.users} end)}'; done
+curl -s 'http://localhost:8000/api/get-user?id=hugmesh/e2e-gamesservices' | jq -c '{status, user:.data.name}'
+--- output (redacted) ---
+grep-exit=1
+{"status":"ok","msg":""}
+ROLE_GAMES_SERVICES: {"status":"ok","data":null}
+ROLE_GAMES_SERVICES_ADMIN: {"status":"ok","data":null}
+ROLE_GAMES: {"status":"ok","data":{"name":"ROLE_GAMES","users":["hugmesh/e2e-gamesadmin","hugmesh/e2e-gamesonly"]}}
+{"status":"ok","user":null}
+(script exit=0)
+
+=================== step 4b - (extra, read-only) mesh-operator + role membership snapshot  (2026-09-30T16:42:38Z) ===================
+--- command (verbatim script body) ---
+CJ="$W/state/cj302.jar"
+echo '# extra read-only measurement (not a plan step): who is mesh-operator on THIS mesh?'
+curl -s -b "$CJ" 'http://localhost:8000/api/get-user?id=hugmesh/mesh-operator' | jq -c '{status, name:.data.name, roles:[.data.roles[]?.name], isForbidden:.data.isForbidden}'
+for r in ROLE_SUPERADMIN ROLE_ADMIN ROLE_USER ROLE_MOD ROLE_GAMES_ADMIN ROLE_IMAGE_BUILDER ROLE_FLEET_ADMIN; do printf '%s: ' "$r"; curl -s -b "$CJ" "http://localhost:8000/api/get-role?id=hugmesh/$r" | jq -c '{status, users:(.data.users // null)}'; done
+echo '# LOCAL_OPERATOR_ROLES / SEED_COMPLETE_REGISTRATION handling in seed-e2e.sh'
+grep -n 'LOCAL_OPERATOR_ROLES' tests/stack/seed-e2e.sh | head -12
+--- output (redacted) ---
+# extra read-only measurement (not a plan step): who is mesh-operator on THIS mesh?
+{"status":"ok","name":null,"roles":[],"isForbidden":null}
+ROLE_SUPERADMIN: {"status":"ok","users":["hugmesh/e2e-superadmin"]}
+ROLE_ADMIN: {"status":"ok","users":["hugmesh/admin-hugmesh-net","hugmesh/e2e-admin","hugmesh/e2e-adminonly","hugmesh/e2e-gamesadmin"]}
+ROLE_USER: {"status":"ok","users":["hugmesh/admin-hugmesh-net","hugmesh/alice-gmail-com","hugmesh/bob-gmail-com","hugmesh/carol-gmail-com","hugmesh/dave-gmail-com","hugmesh/dragoneer","hugmesh/e2e-admin","hugmesh/e2e-adminonly","hugmesh/e2e-banned","hugmesh/e2e-denied","hugmesh/e2e-fleet","hugmesh/e2e-forum","hugmesh/e2e-gamesadmin","hugmesh/e2e-gamesonly","hugmesh/e2e-mastodon","hugmesh/e2e-mastodon-domainlocked","hugmesh/e2e-mastodon-external-client","hugmesh/e2e-matrix","hugmesh/e2e-matrix-domainlocked","hugmesh/e2e-matrix-external-client","hugmesh/e2e-matrix-groupchat","hugmesh/e2e-user","hugmesh/eve-gmail-com","hugmesh/frank-gmail-com","hugmesh/rbac-approved-gmail-com","hugmesh/rbac-login-user-gmail-com","hugmesh/rbac-pending-gmail-com","hugmesh/rbac-plain-gmail-com"]}
+ROLE_MOD: {"status":"ok","users":["hugmesh/e2e-mod"]}
+ROLE_GAMES_ADMIN: {"status":"ok","users":[]}
+ROLE_IMAGE_BUILDER: {"status":"ok","users":null}
+ROLE_FLEET_ADMIN: {"status":"ok","users":["hugmesh/e2e-fleet"]}
+# LOCAL_OPERATOR_ROLES / SEED_COMPLETE_REGISTRATION handling in seed-e2e.sh
+430:LOCAL_OPERATOR_ROLES="${LOCAL_OPERATOR_ROLES:-ROLE_SUPERADMIN,ROLE_ADMIN,ROLE_MOD,ROLE_MATRIX,ROLE_MASTODON,ROLE_FORUM,ROLE_WIKI,ROLE_GAMES,ROLE_FLEET_ADMIN,ROLE_USER}"
+432:  EXTRA_SPECS="${EXTRA_SPECS} ${LOCAL_OPERATOR_USER}:${LOCAL_OPERATOR_ROLES}:E2E_PASSWORD"
+(script exit=0)
+
+=================== probe - control personas sign-in state (before step 9)  (2026-09-30T16:42:52Z) ===================
+--- command (verbatim script body) ---
+echo '# probe (read-only sign-ins) of the control personas the plan relies on; run before step 9 to learn whether the controls are valid'
+for u in e2e-user e2e-gamesonly e2e-admin mesh-operator e2e-gamesadmin e2e-adminonly e2e-superadmin; do
+  jar="$W/tmp/probe-$u.jar"; rm -f "$jar"
+  code="$(curl -sk -c "$jar" -o "$W/tmp/probe-body.json" -w '%{http_code}' -X POST "$B/bff/login" -H 'content-type: application/json' -d "$(jq -nc --arg u "$u" --arg p "$PW" '{username:$u,password:$p}')")"
+  printf '%-16s login=%s body=%s ' "$u" "$code" "$(head -c 160 "$W/tmp/probe-body.json")"
+  curl -sk -b "$jar" "$B/bff/session" | jq -c '{registrationComplete,roles}' 2>/dev/null || echo '(no session json)'
+  rm -f "$jar"
+done
+--- output (redacted) ---
+# probe (read-only sign-ins) of the control personas the plan relies on; run before step 9 to learn whether the controls are valid
+e2e-user         login=200 body={"registrationComplete":true,"status":"active","mfaRequired":false} {"registrationComplete":true,"roles":["user"]}
+e2e-gamesonly    login=200 body={"registrationComplete":false,"status":"active","mfaRequired":false} {"registrationComplete":false,"roles":["games","user"]}
+e2e-admin        login=200 body={"registrationComplete":false,"status":"active","mfaRequired":false} {"registrationComplete":false,"roles":["admin","user"]}
+mesh-operator    login=401 body={"error":"invalid_credentials","message":"The user: hugmesh/mesh-operator doesn't exist"} e2e-gamesadmin   login=200 body={"registrationComplete":false,"status":"active","mfaRequired":false} {"registrationComplete":false,"roles":["admin","games","user"]}
+e2e-adminonly    login=200 body={"registrationComplete":false,"status":"active","mfaRequired":false} {"registrationComplete":false,"roles":["admin","user"]}
+e2e-superadmin   login=200 body={"registrationComplete":false,"status":"active","mfaRequired":false} {"registrationComplete":false,"roles":["superadmin"]}
+(script exit=0)

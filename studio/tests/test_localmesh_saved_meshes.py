@@ -1,6 +1,6 @@
 """The SAVED MESHES table + 'Save this mesh' on the local-mesh page (ask C).
 
-Headless (QT_QPA_PLATFORM=offscreen); every docker/git seam is faked the way
+Headless (QT_QPA_PLATFORM=offscreen); every docker/git override point is faked the way
 test_localmesh_page_entry_offthread.py fakes them, so nothing here shells out.
 The Studio state dir is the autouse tmp dir, so the records these tests write
 never touch ~/.hugmesh.
@@ -464,6 +464,33 @@ def test_rows_state_what_a_restore_gives_back_before_the_click(qapp, page):
     assert not w.start_btn.isEnabled() and w.restore_btn.isEnabled()
 
 
+def test_a_probe_that_docker_could_not_answer_offers_neither_verb(qapp, page):
+    """#361: a wedged/unreachable docker made the probe say volumes gone + nothing
+    running, so the row OFFERED Restore (reseed) — over a live mesh once docker answered
+    again. The probe now reports None ('did not answer') and the row must disable BOTH
+    verbs and say it does not know, even though the page's own _mesh_up reads False
+    (LocalStackNode.status() also returns running=False when docker raises)."""
+    _record()
+    w = page.saved_meshes
+    table = w.table
+    for answer in (
+            dict(_PROBE_OK, mesh_running=None),                  # only `docker ps` failed
+            dict(_PROBE_OK, volumes_present=None, images_present=None,
+                 mesh_running=None, volumes_missing=())):        # docker down altogether
+        page.probe["answer"] = answer
+        page.initializePage()
+        _settle(qapp, page)
+        page._mesh_up = False
+        page._set_verbs_enabled(True)
+        page._probe_saved(w.records())
+        _settle(qapp, page)
+        restore_cell = table.item(0, smw._SM_COL_RESTORE).text()
+        assert not restore_cell.startswith(("Start", "Restore (reseed)")), restore_cell
+        _select(page)
+        assert not w.start_btn.isEnabled() and not w.restore_btn.isEnabled()
+    assert table.item(0, smw._SM_COL_VOLUMES).text() == "unknown"
+
+
 def test_start_is_disabled_for_a_record_from_another_checkout(qapp, page):
     _record(generator_dir="/somewhere/else/hugmesh-generator")
     page.initializePage()
@@ -587,9 +614,9 @@ def test_stop_tooltip_says_volumes_are_kept(qapp, page):
     assert "drops the containers and volumes" not in page.boot_start_btn.toolTip()
 
 
-# ── the cross-lane seam: a verb changes what a record's row is read FROM ──────────
+# ── the cross-lane hand-off: a verb changes what a record's row is read FROM ──────────
 def test_a_finished_verb_marks_the_saved_table_stale_without_reading_anything(page):
-    """_verb_done must not re-scan directly — that would run behind the seam tests use
+    """_verb_done must not re-scan directly — that would run behind the override point tests use
     to keep a page quiet while they drive verbs (`_probe_mesh_state = lambda: None`).
     It marks, and the state probe's answer is what acts."""
     page._probe_mesh_state = lambda: None
@@ -632,7 +659,7 @@ def test_the_saved_table_is_not_rescanned_when_no_verb_has_run(page):
 
 def test_the_state_probes_answer_re_probes_every_rows_facts_even_without_a_flip(qapp,
                                                                               page):
-    """refresh() KEEPS the probe answers it already holds, so the seam's re-scan alone
+    """refresh() KEEPS the probe answers it already holds, so the override point's re-scan alone
     re-probed NOTHING: a row probed 'Start · 3 present' went on offering that Start
     after the volumes were gone whenever _mesh_up did not flip (a Clean with the mesh
     already down, a Restore that failed). The per-row facts must be re-read, not

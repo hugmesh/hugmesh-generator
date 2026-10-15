@@ -52,10 +52,35 @@ is therefore "file rewritten AFTER the last completed seed".
 TRI-STATE, NEVER A FALSE NEGATIVE. "I could not establish it" is rendered as
 unknown, never as "no". A mesh whose docker daemon is unreachable is not an
 unseeded mesh, and saying the stored password is wrong is as much a lie as saying
-it is right. Unknown keeps the passwords on screen and MARKS them unverified. The
-kind lane is unknown BY CONSTRUCTION: bootstrap-kind.sh seeds seed-accounts.sh
-personas only (never seed-e2e.sh, so never mesh-operator) and its Casdoor is
-ClusterIP with no host port, so nothing here can ask it anything.
+it is right. Unknown keeps the passwords on screen and MARKS them unverified.
+
+THE KIND LANE IS ASKED, NOT ASSUMED (#539). This module used to declare the kind
+lane unknown BY CONSTRUCTION — "its Casdoor is ClusterIP with no host port, so
+nothing here can ask it anything". That premise was measurably false, and the cost
+of believing it was an operator report: a kind mesh whose identity seed had never
+run (bootstrap-kind.sh exited at the step-10 `wait_job casdoor-init` during the
+#396 sign-in lockout, while ArgoCD carried on converging) served a healthy login
+page over an EMPTY identity store, and this table answered "who can I sign in as"
+with the CHECKOUT's roster and a real-looking password. Casdoor's database is a
+pod, and a pod can be read without any host port:
+
+    kubectl -n hugmesh-pki exec deploy/casdoor-pg -- \
+      psql -U casdoor -d casdoor -Atc 'select owner, name from "user" ...'
+
+So :func:`gather_kind_identities` asks the RUNNING cluster who it holds, and
+:func:`annotate` marks every persona the cluster does not have ``not seeded``
+INSTEAD of showing it with a password. Three things that read the same to a
+careless probe are kept apart, because their fixes differ:
+
+  * the cluster answered and holds no personas  -> up-unseeded ("re-run the seed")
+  * the cluster could not be asked              -> unknown ("fix the probe's access")
+  * the lane is HALTED (casdoor-pg at 0 replicas) -> unknown, naming the halt
+
+THE HALT IS NOT AN ERROR PATH, IT IS THE COMMON ONE. `kubectl exec deploy/X` on a
+Deployment scaled to 0 does not fail — it BLOCKS until its own timeout waiting for
+a pod (measured on the halted reference cluster: 40s, killed by `timeout`, no
+diagnostic). So the gatherer reads ``.status.readyReplicas`` FIRST and never
+issues an exec it knows will hang.
 
 SECRET DISCIPLINE. :class:`CredentialsFile` carries key NAMES only, never a value.
 :attr:`CredentialTruth.headline` and :attr:`~CredentialTruth.detail` are asserted
@@ -66,6 +91,7 @@ only the dialog renders those. Nothing here writes anything anywhere.
 """
 from __future__ import annotations
 
+import json
 import os
 import re
 import time
@@ -119,14 +145,23 @@ HALTED = "halted"
 NOT_SEEDED = "not seeded"
 #: This lane's seeder never creates this persona (mesh-operator off the Studio path).
 NOT_ON_LANE = "not on this lane"
+#: The identity EXISTS but holds none of the roles the roster says it should (#539).
+#: Casdoor's ``role`` rows carry their members, and a persona in none of its own
+#: roles is not a working sign-in: the gateway floor alone lets it authenticate and
+#: then 403 on everything, which reads to an operator exactly like a wrong password.
+#: Never inferred from an absence — only from a role table this Studio actually read.
+NO_ROLES = "no roles"
 #: The value shown may well be right; nothing here could corroborate it.
 UNVERIFIED = "unverified"
-#: Nothing can be asked (the kind lane).
+#: Nothing could be established — the probe's own access failed (no kubectl, a
+#: halted lane, an API that did not answer). NOT "this account does not exist":
+#: that is NOT_SEEDED, and the two have different fixes.
 UNKNOWN = "unknown"
 #: Created by this session's Add user; its password was never stored.
 ADDED = "added this session"
 
-MARKERS = (LIVE, STALE, HALTED, NOT_SEEDED, NOT_ON_LANE, UNVERIFIED, UNKNOWN, ADDED)
+MARKERS = (LIVE, STALE, HALTED, NOT_SEEDED, NOT_ON_LANE, NO_ROLES, UNVERIFIED,
+           UNKNOWN, ADDED)
 
 # The env knob and default name of the run-state credentials file
 # (tests/stack/e2e-password.sh CONTRACT rule 3). seeded_credentials keeps no copy
@@ -141,6 +176,50 @@ SHARED_PASSWORD_ENV = "E2E_PASSWORD"
 IDENTITY_VOLUME_SUFFIX = "casdoor-pg"
 #: The persona seed-e2e.sh leg 1 always creates — its presence is "seeded".
 SEED_WITNESS_USER = "e2e-admin"
+
+# ── the kind lane's identity store (#539) ─────────────────────────────────────────
+# Casdoor on the kind lane keeps every org/role/user in a dedicated Postgres,
+# specs/cluster/manifests/casdoor/pg.yaml: Deployment ``casdoor-pg`` in namespace
+# ``hugmesh-pki``, POSTGRES_DB ``casdoor``, and the DB user fixed at ``casdoor`` by
+# the casdoor-db ExternalSecret template (scripts/gen-cluster-secrets.sh: "The DB
+# user is the fixed 'casdoor' … only the password is minted"). Named here rather
+# than parsed out of the manifest because these three are what the manifest's own
+# readinessProbe hard-codes (`pg_isready -U casdoor -d casdoor`) — if they ever
+# move, that probe moves with them and this constant is the next thing to fix.
+KIND_CASDOOR_NS = "hugmesh-pki"
+KIND_CASDOOR_DB_DEPLOY = "casdoor-pg"
+KIND_CASDOOR_DB_USER = "casdoor"
+KIND_CASDOOR_DB_NAME = "casdoor"
+#: Where bootstrap-kind.sh records the password its seed actually used. Absent =
+#: the seed never got that far (which is exactly what #539 found on the reference
+#: cluster). Read ONLY to compare against the value already on screen; the value
+#: never reaches a dataclass, a log or the GUI.
+KIND_SEED_SECRET_NS = "hugmesh-frontend"
+KIND_SEED_SECRET = "test-seed-passwords"
+KIND_SEED_SECRET_KEY = "E2E_PASSWORD"
+
+#: The issue's own query, verbatim, so what the Studio reads and what an operator
+#: can reproduce at a terminal are the same statement. ``-A -t`` makes psql print
+#: ``owner|name`` rows with no header and no padding.
+KIND_USERS_SQL = 'select owner, name from "user" order by owner, name'
+#: Casdoor's ``role`` rows carry their membership as a JSON array of ``owner/name``
+#: in the ``users`` column (xorm ``Users []string``). ``users`` is the LAST field,
+#: so a ``|`` split with maxsplit=1 cannot be confused by the JSON.
+KIND_ROLES_SQL = 'select name, users from "role" order by name'
+
+#: Per-call ceilings. The readiness read is tiny; the two execs each go through the
+#: API server into a pod. NOTHING here may be unbounded: `kubectl exec deploy/<x>`
+#: on a Deployment scaled to 0 BLOCKS waiting for a pod instead of failing, so an
+#: unbounded call on a halted lane hangs the probe thread forever.
+#: `make kind-halt`'s record, and where it lives — kept in step with
+#: scripts/kind-halt.sh's own ARGOCD_NS / STATE_CM defaults (and with
+#: mesh_monitor's copy of them).
+KIND_HALT_NS = "devops"
+KIND_HALT_CM = "hugmesh-kind-halt"
+
+KIND_READY_TIMEOUT_S = 15
+KIND_EXEC_TIMEOUT_S = 25
+KIND_SECRET_TIMEOUT_S = 15
 
 #: The Studio's run-log names for the THREE verbs that run `make stack-seed`
 #: (localmesh.py `_launch("Bootstrapping", …)`, `_launch(f"Adding user {u}", …)`
@@ -214,11 +293,34 @@ class CredentialTruth:
     marker: str = UNVERIFIED
     #: When set, REPLACES the password cell of every shared-password persona.
     password_marker: str = ""
+    #: The usernames the RUNNING identity store actually holds (#539), or None when
+    #: nothing could be read. NOT a roster: it is whatever Casdoor answered with,
+    #: service accounts included. ``annotate`` joins it per row, so a persona the
+    #: mesh does not have is marked ``not seeded`` instead of being shown with a
+    #: password. None never becomes "absent" — that is the whole tri-state rule.
+    present_users: frozenset[str] | None = None
+    #: ``(ROLE_NAME, {members})`` pairs read from the live role table, or None when
+    #: the role read failed (the user read can succeed while this one does not, and
+    #: then no row may be marked ``no roles``). A tuple, not a dict, so this frozen
+    #: dataclass stays hashable.
+    role_members: tuple[tuple[str, frozenset[str]], ...] | None = None
 
     @property
     def verified(self) -> bool:
         """True only when a shown password has been positively corroborated."""
         return self.state == STATE_SEEDED
+
+    def holds_any_role(self, user: str, roles) -> bool | None:
+        """Is ``user`` a member of ANY of ``roles`` in the live store? None = the
+        role table was not read, so nothing may be concluded either way."""
+        if self.role_members is None:
+            return None
+        wanted = {r for r in (roles or ()) if r}
+        if not wanted:
+            # A roster row with no roles at all cannot be failed on its roles.
+            return True
+        members = {name: mem for name, mem in self.role_members}
+        return any(user in members.get(r, frozenset()) for r in wanted)
 
 
 # ── the run-state file ────────────────────────────────────────────────────────────
@@ -369,6 +471,99 @@ def _newer(a: float | None, b: float | None) -> bool | None:
     return a > b
 
 
+# ── the kind lane's identity store: pure parsers (#539) ───────────────────────────
+
+@dataclass(frozen=True)
+class KindIdentities:
+    """What the RUNNING kind Casdoor holds — or why it could not be asked.
+
+    ``users``/``roles`` are None when NOT ESTABLISHED, never empty-as-a-guess. They
+    are independent: the user read can land while the role read does not, and then
+    the roster shows real presence with no role verdict at all, which is the honest
+    pair. ``reason`` is operator-facing prose naming the access problem, so the
+    banner can say "this Studio cannot tell, and here is what to fix" rather than
+    the much scarier "this mesh has nobody in it".
+
+    ``password_matches`` compares the on-screen shared password against the value
+    bootstrap-kind.sh recorded in the ``test-seed-passwords`` Secret. Only the
+    BOOLEAN survives this dataclass — the secret's value is compared inside the
+    gatherer and dropped."""
+    users: frozenset[str] | None = None
+    roles: tuple[tuple[str, frozenset[str]], ...] | None = None
+    reason: str = ""
+    #: True when the lane's own halt record explains an unreadable store.
+    halted: bool | None = None
+    password_matches: bool | None = None
+
+
+def parse_psql_users(text: str) -> frozenset[str] | None:
+    """``owner|name`` rows from ``psql -At`` -> the bare usernames.
+
+    None when the output cannot be read as that shape AT ALL, because a probe that
+    silently turns a psql error page into "zero users" reports an unseeded mesh for
+    what is really a broken read — the exact false negative this module forbids.
+    An output with no rows at all IS a real empty answer (`frozenset()`), and that
+    is the state #539 was reported over."""
+    if text is None:
+        return None
+    lines = [ln.strip() for ln in str(text).splitlines() if ln.strip()]
+    if not lines:
+        return frozenset()
+    out: set[str] = set()
+    for ln in lines:
+        if "|" not in ln:
+            # psql error prose ("ERROR:  relation ... does not exist", "could not
+            # connect"), a kubectl diagnostic, anything but a row.
+            return None
+        _owner, _, name = ln.partition("|")
+        name = name.strip()
+        if not name:
+            return None
+        out.add(name)
+    return frozenset(out)
+
+
+def parse_psql_roles(text: str) -> tuple[tuple[str, frozenset[str]], ...] | None:
+    """``name|["owner/user", …]`` rows -> ``(ROLE, {bare usernames})`` pairs.
+
+    ONE unparseable row voids the WHOLE answer. A partial role table would mark a
+    persona "no roles" on the strength of a row this Studio failed to read, which
+    is a fabricated negative about a sign-in — worse than no verdict."""
+    if text is None:
+        return None
+    lines = [ln.strip() for ln in str(text).splitlines() if ln.strip()]
+    if not lines:
+        return ()
+    pairs: list[tuple[str, frozenset[str]]] = []
+    for ln in lines:
+        if "|" not in ln:
+            return None
+        name, _, raw = ln.partition("|")
+        name = name.strip()
+        raw = raw.strip()
+        if not name:
+            return None
+        if not raw:
+            pairs.append((name, frozenset()))
+            continue
+        try:
+            members = json.loads(raw)
+        except ValueError:
+            return None
+        if members is None:
+            members = []
+        if not isinstance(members, list):
+            return None
+        bare: set[str] = set()
+        for m in members:
+            if not isinstance(m, str):
+                return None
+            # Casdoor stores membership as "owner/name".
+            bare.add(m.rsplit("/", 1)[-1].strip())
+        pairs.append((name, frozenset(bare)))
+    return tuple(pairs)
+
+
 # ── the state machine ─────────────────────────────────────────────────────────────
 
 def assess(*, mesh_running: bool | None, volumes_present: bool | None,
@@ -377,7 +572,8 @@ def assess(*, mesh_running: bool | None, volumes_present: bool | None,
            secrets_mtime: float | None, last_seed_ok: float | None,
            lane: str = LANE_COMPOSE, operator_user: str = "",
            superadmin: tuple[str, str] = ("", ""), env_password: bool = False,
-           status_detail: str = "", checked_at: str = "") -> CredentialTruth:
+           status_detail: str = "", checked_at: str = "",
+           kind: "KindIdentities | None" = None) -> CredentialTruth:
     """Fold plain facts into ONE :class:`CredentialTruth`. PURE — no I/O.
 
     Facts (None = not established, and None never becomes a claim):
@@ -391,6 +587,8 @@ def assess(*, mesh_running: bool | None, volumes_present: bool | None,
       last_seed_ok     when a seeding verb last COMPLETED (this Studio's record)
       lane             "compose" | "kind" | ""
       env_password     E2E_PASSWORD is set in the seeder's env (file not needed)
+      kind             what the RUNNING kind Casdoor holds (#539), or None when
+                       this is not the kind lane. Its own fields are tri-state.
     """
     checked_at = checked_at or time.strftime("%Y-%m-%d %H:%M:%S")
     seeded_at = fmt_time(last_seed_ok)
@@ -430,13 +628,17 @@ def assess(*, mesh_running: bool | None, volumes_present: bool | None,
     def truth(state: str, headline: str, detail: str, *, marker: str,
               stage2: bool | None, lane_: str = lane, op: str = operator_user,
               sa_seeded: bool | None = superadmin_seeded,
-              password_marker: str = "") -> CredentialTruth:
+              password_marker: str = "",
+              present: "frozenset[str] | None" = None,
+              role_members: "tuple[tuple[str, frozenset[str]], ...] | None" = None
+              ) -> CredentialTruth:
         return CredentialTruth(
             state=state, lane=lane_, headline=headline, detail=detail, file=creds,
             seeded_at=seeded_at, stage2=stage2, operator_user=op,
             superadmin=(sa_user, sa_pw) if sa_ok else ("", ""),
             checked_at=checked_at, superadmin_seeded=sa_seeded, marker=marker,
-            password_marker=password_marker)
+            password_marker=password_marker, present_users=present,
+            role_members=role_members)
 
     file_line = (f"Credentials file: {creds.path} (written {creds.written})."
                  if creds.exists else
@@ -460,19 +662,114 @@ def assess(*, mesh_running: bool | None, volumes_present: bool | None,
             + " Until then no password can be shown for the shared-password personas.",
             marker=UNVERIFIED, stage2=None, password_marker=UNREADABLE_MARKER)
 
-    # (h, lane rule) The kind lane is unknown BY CONSTRUCTION: bootstrap-kind.sh
-    # seeds seed-accounts.sh personas only (never seed-e2e.sh, never
-    # mesh-operator), and its Casdoor is ClusterIP with no host port.
+    # (h, lane rule) THE KIND LANE IS ASKED (#539). It used to return unknown
+    # unconditionally, on the premise that its ClusterIP Casdoor could not be
+    # reached — which was false: its database is a pod, and a pod can be read. What
+    # follows keeps the three unreadable-vs-empty cases apart, because their fixes
+    # differ: re-run the seed, resume the halted lane, or fix the probe's access.
     if lane == LANE_KIND:
+        k = kind if kind is not None else KindIdentities(
+            reason="the kind lane was not read")
+        # bootstrap-kind.sh runs seed-accounts.sh --roles and never seed-e2e.sh, so
+        # registration stage 2 does not happen here and the operator account is not
+        # created — that much really is by construction and is unchanged.
+        kind_lane_note = (
+            "bootstrap-kind.sh (step 10) seeds the seed-accounts.sh personas with "
+            "the same run-state password and never runs seed-e2e.sh, so the "
+            "operator account is not created on this lane and registration stage 2 "
+            "never ran. ")
+        if k.users is None:
+            # NOT ESTABLISHED. Every row keeps its password and is marked unknown;
+            # nothing here says an account is missing, because nothing was read.
+            halt_note = ""
+            if k.halted is True:
+                halt_note = ("The lane is HALTED — its workloads, casdoor-pg "
+                             "included, are scaled to 0. `make kind-resume` (or "
+                             "Resume DevOps lane) puts them back; until then the "
+                             "identity store cannot be read and this says nothing "
+                             "about who is seeded. ")
+            return truth(
+                STATE_UNKNOWN,
+                "Not established — this Studio could not read the kind cluster's "
+                "identity store, so it cannot say who is seeded (this is NOT "
+                "'nobody is seeded').",
+                halt_note + (f"Why: {k.reason}. " if k.reason else "")
+                + kind_lane_note
+                + "Passwords shown are whatever the run-state holds, unverified. "
+                + file_line + " " + seed_line,
+                marker=UNKNOWN, stage2=None, op="")
+
+        present = k.users
+        witness = SEED_WITNESS_USER in present
+        count = len(present)
+        # STAGE 2 FROM THE STORE, not from the lane's reputation. bootstrap-kind.sh
+        # runs seed-accounts.sh only, so the operator account is not created here —
+        # but that is a statement about the SEEDER, and the store is the thing being
+        # asked. An account somebody really did create must not be told it is "not
+        # on this lane"; an absent one still gets that precise marker, which carries
+        # its own explanation, rather than the blunter "not seeded".
+        has_op = bool(operator_user) and operator_user in present
+        op_name = operator_user if has_op else ""
+        if not witness:
+            # THE REPORTED STATE. The cluster answered; it holds service accounts
+            # and no persona. That is a seed that never ran, and it has a fix.
+            return truth(
+                STATE_UP_UNSEEDED,
+                "This kind mesh has NO identities seeded — Casdoor answered and "
+                f"holds {count} account(s), none of them a seeded persona. The "
+                "accounts below do not exist on this cluster and cannot sign in.",
+                f"Casdoor's database holds no '{SEED_WITNESS_USER}'. "
+                "bootstrap-kind.sh seeds identities at step 10, immediately after "
+                "`wait_job hugmesh-pki casdoor-init`; a bring-up that failed that "
+                "wait exits BEFORE seeding while ArgoCD carries on converging, "
+                "which leaves exactly this — a healthy, serving mesh with an empty "
+                "identity store. Fix: re-run the identity seed (`make kind-up` "
+                "re-enters step 10 idempotently), not a password reset. "
+                + kind_lane_note + file_line,
+                marker=NOT_SEEDED, stage2=has_op, op=op_name, sa_seeded=False,
+                present=present, role_members=k.roles)
+
+        # Seeded. Is the password ON SCREEN the one this cluster was seeded with?
+        # bootstrap-kind.sh records what it used in the test-seed-passwords Secret,
+        # so this is a real corroboration and not an inference from mtimes.
+        roles_note = ("" if k.roles is not None else
+                      "The role table could not be read, so no row's roles are "
+                      "vouched for. ")
+        if k.password_matches is False:
+            return truth(
+                STATE_SEEDED_SUSPECT,
+                "The personas exist on this kind mesh, but it was seeded with a "
+                "DIFFERENT password than the one shown — sign-in will 401 until "
+                "it is re-seeded.",
+                f"Casdoor holds '{SEED_WITNESS_USER}', and the "
+                f"{KIND_SEED_SECRET} Secret in {KIND_SEED_SECRET_NS} (written by "
+                "the bring-up that seeded this cluster) records a different value "
+                "from the one on disk here. Fix: re-run the identity seed, which "
+                "reconciles every persona to the current value. "
+                + roles_note + kind_lane_note + file_line,
+                marker=STALE, stage2=has_op, op=op_name,
+                present=present, role_members=k.roles)
+        if k.password_matches is True:
+            return truth(
+                STATE_SEEDED,
+                f"Seeded. Casdoor on this kind cluster holds {count} account(s) "
+                f"including '{SEED_WITNESS_USER}', and the password shown matches "
+                f"the one the bring-up recorded in {KIND_SEED_SECRET}.",
+                roles_note + kind_lane_note + file_line,
+                marker=LIVE, stage2=has_op, op=op_name,
+                present=present, role_members=k.roles)
         return truth(
             STATE_UNKNOWN,
-            "Not established — the kind lane is up and its Casdoor has no host "
-            "port, so nothing here can verify who is seeded.",
-            "bootstrap-kind.sh seeds the seed-accounts.sh personas with the same "
-            "run-state password, but never runs seed-e2e.sh, so the operator "
-            "account does not exist on this lane and registration stage 2 never "
-            "ran. Passwords shown are unverified. " + file_line + " " + seed_line,
-            marker=UNKNOWN, stage2=None, op="")
+            f"Seeded — Casdoor on this kind cluster holds {count} account(s) "
+            f"including '{SEED_WITNESS_USER}' — but the password shown could not "
+            "be corroborated.",
+            f"The {KIND_SEED_SECRET} Secret in {KIND_SEED_SECRET_NS}, where the "
+            "bring-up records the password it seeded with, could not be read"
+            + (f" ({k.reason})" if k.reason else "")
+            + ". The personas are real; the value beside them is unverified. "
+            + roles_note + kind_lane_note + file_line,
+            marker=UNVERIFIED, stage2=has_op, op=op_name,
+            present=present, role_members=k.roles)
 
     # (h) docker did not answer at all.
     if mesh_running is None:
@@ -694,6 +991,147 @@ def _default_logs_dir() -> str:
         return ""
 
 
+def _probe_safe(node, cmd: list[str], timeout: int) -> tuple[int, str]:
+    """``node._probe`` with every failure folded into a failed read — a stand-in
+    node without ``_probe`` reports rc 1 rather than raising through the probe."""
+    try:
+        rc, out = node._probe(cmd, timeout)
+        return int(rc), str(out or "")
+    except Exception as e:                           # noqa: BLE001 — folded on purpose
+        return 1, f"{type(e).__name__}: {e}"
+
+
+def gather_kind_identities(node, generator_dir: str, cluster: str,
+                           shared_password: str = "") -> KindIdentities:
+    """Ask the RUNNING kind cluster who its Casdoor holds. BLOCKING, never raises.
+
+    Every step can only ever downgrade a fact to "not established" (None) with a
+    ``reason`` — nothing here may conclude that an account is absent from a read it
+    did not take. The order is deliberate:
+
+      1. ``kubectl`` on PATH at all (the lane's own resolver, so the Studio and the
+         DevOps buttons mean the same binary);
+      2. ``casdoor-pg``'s ``.status.readyReplicas`` — because `kubectl exec
+         deploy/<x>` on a Deployment scaled to 0 does NOT fail, it blocks until its
+         own timeout waiting for a pod. Measured on the halted reference cluster:
+         40s with no diagnostic. A halted lane is the common case here, not an
+         exotic one, so it is answered without an exec;
+      3. the users query — the issue's own statement, verbatim;
+      4. the roles query — INDEPENDENT: it may fail while (3) succeeded, and then
+         no row gets a roles verdict;
+      5. the ``test-seed-passwords`` Secret, to corroborate the password already on
+         screen. Its value is compared here and dropped; only the boolean leaves.
+
+    ``node`` is duck-typed on ``_probe(cmd, timeout)`` exactly as the compose path
+    is, so a test hands in a fake cluster at this one override point."""
+    def run(cmd: list[str], timeout: int) -> tuple[int, str]:
+        return _probe_safe(node, cmd, timeout)
+
+    try:
+        from . import devops_tools
+        kubectl = devops_tools.which("kubectl", generator_dir)
+    except Exception as e:                           # noqa: BLE001
+        return KindIdentities(reason=f"kubectl could not be resolved "
+                                     f"({type(e).__name__}: {e})")
+    if not kubectl:
+        return KindIdentities(
+            reason="kubectl is not installed — press 'Install DevOps prerequisites' "
+                   "on this page")
+    ctx = f"kind-{cluster}"
+    base = [kubectl, "--context", ctx, "-n", KIND_CASDOOR_NS]
+
+    rc, out = run(base + ["get", "deploy", KIND_CASDOOR_DB_DEPLOY, "-o",
+                          "jsonpath={.status.readyReplicas}"], KIND_READY_TIMEOUT_S)
+    if rc != 0:
+        why = (out or "").strip()[:200] or "no output"
+        if "notfound" in why.lower() or "not found" in why.lower():
+            return KindIdentities(
+                reason=f"this cluster has no {KIND_CASDOOR_DB_DEPLOY} Deployment in "
+                       f"{KIND_CASDOOR_NS} — it is not a HugMesh identity cluster, "
+                       f"or its manifests never synced")
+        return KindIdentities(reason=f"the cluster's API did not answer "
+                                     f"({why})")
+    ready = 0
+    try:
+        ready = int((out or "0").strip() or "0")
+    except ValueError:
+        ready = 0
+    if ready < 1:
+        halted = _kind_halted(node, kubectl, ctx)
+        return KindIdentities(
+            halted=halted,
+            reason=f"{KIND_CASDOOR_DB_DEPLOY} has no ready replica, so its database "
+                   f"cannot be queried"
+                   + ("" if halted is not True else " (the lane is halted)"))
+
+    psql = ["psql", "-U", KIND_CASDOOR_DB_USER, "-d", KIND_CASDOOR_DB_NAME, "-Atc"]
+    exec_pfx = base + ["exec", f"deploy/{KIND_CASDOOR_DB_DEPLOY}", "--"]
+    rc, out = run(exec_pfx + psql + [KIND_USERS_SQL], KIND_EXEC_TIMEOUT_S)
+    if rc != 0:
+        return KindIdentities(
+            reason=f"the identity query failed ({(out or '').strip()[:200] or 'no output'})")
+    users = parse_psql_users(out)
+    if users is None:
+        return KindIdentities(
+            reason="the identity query answered with something that is not a row "
+                   "set, so who exists was not established")
+
+    rc, out = run(exec_pfx + psql + [KIND_ROLES_SQL], KIND_EXEC_TIMEOUT_S)
+    roles = parse_psql_roles(out) if rc == 0 else None
+
+    matches: bool | None = None
+    reason = ""
+    if shared_password:
+        rc, out = run([kubectl, "--context", ctx, "-n", KIND_SEED_SECRET_NS, "get",
+                       "secret", KIND_SEED_SECRET, "-o",
+                       "jsonpath={.data." + KIND_SEED_SECRET_KEY + "}"],
+                      KIND_SECRET_TIMEOUT_S)
+        raw = (out or "").strip()
+        if rc != 0 or not raw:
+            why = raw[:160] or "no output"
+            reason = (f"the {KIND_SEED_SECRET} Secret is absent from "
+                      f"{KIND_SEED_SECRET_NS}" if "notfound" in why.lower()
+                      or "not found" in why.lower() or not raw
+                      else f"reading {KIND_SEED_SECRET} failed: {why}")
+        else:
+            try:
+                import base64
+                # Compared and dropped: the decoded value is never returned, stored
+                # or rendered — only this boolean leaves the function.
+                matches = base64.b64decode(raw).decode("utf-8").strip() == shared_password
+            except Exception as e:                   # noqa: BLE001
+                reason = (f"the {KIND_SEED_SECRET} Secret could not be decoded "
+                          f"({type(e).__name__})")
+    else:
+        reason = "no shared password is available locally to compare against"
+    return KindIdentities(users=users, roles=roles, reason=reason,
+                          password_matches=matches)
+
+
+def _kind_halted(node, kubectl: str, ctx: str) -> bool | None:
+    """Is `make kind-halt`'s record on this cluster? True / False / **None**.
+
+    Asked by EXISTENCE (`-o name`), not by reading the record's field: a
+    ``jsonpath={.data.halt.json}`` needs the dot in the key escaped, and getting
+    that wrong yields an empty string with rc 0 — which reads as "not halted" on a
+    halted lane. Existence is the whole question here anyway; the record's contents
+    belong to `make kind-halt-status`, which is the authority.
+
+    Deliberately mirrors ``mesh_monitor._halt_record_present`` rather than importing
+    it: that module pulls in this lane's view catalogue and door logic, and this one
+    stays small and import-light. Only NotFound means "no halt record"; every other
+    failure is None, because unknown is not "not halted"."""
+    rc, out = _probe_safe(node, [kubectl, "--context", ctx, "-n", KIND_HALT_NS,
+                                 "get", "configmap", KIND_HALT_CM, "-o", "name"],
+                          KIND_READY_TIMEOUT_S)
+    if rc == 0:
+        return bool((out or "").strip())
+    low = (out or "").lower()
+    if "notfound" in low or "not found" in low:
+        return False
+    return None
+
+
 def probe_credentials(generator_dir: str, env: Mapping[str, str] | None, node, boot,
                       *, operator_user: str = "", logs_dir: str | None = None,
                       project: str = COMPOSE_PROJECT) -> CredentialTruth:
@@ -707,7 +1145,7 @@ def probe_credentials(generator_dir: str, env: Mapping[str, str] | None, node, b
 
     ``node`` is a LocalStackNode (``status()``, ``_probe()``, ``seeded_user()``);
     ``boot`` a LocalMeshBootstrap (``secrets_json``, ``superadmin_login()``). Both
-    are duck-typed so a test can hand in a fake at exactly this seam."""
+    are duck-typed so a test can hand in a fake at exactly this override point."""
     checked_at = time.strftime("%Y-%m-%d %H:%M:%S")
     creds = credentials_file(generator_dir, env)
     env_password = bool((env if env is not None else os.environ).get(SHARED_PASSWORD_ENV))
@@ -728,8 +1166,12 @@ def probe_credentials(generator_dir: str, env: Mapping[str, str] | None, node, b
     except Exception as e:
         mesh_running, status_detail = None, f"{type(e).__name__}: {e}"
 
-    # 2. the kind lane (only consulted when compose is not the running lane)
+    # 2. the kind lane (only consulted when compose is not the running lane).
+    #    #539: when it IS the lane, its identity store is READ — see
+    #    gather_kind_identities. That read is the whole point; "unknown by
+    #    construction" was the bug.
     kind_up: bool | None = None
+    kind: KindIdentities | None = None
     if not mesh_running:
         try:
             from .local_stack_node import _kind_cluster_name
@@ -739,6 +1181,16 @@ def probe_credentials(generator_dir: str, env: Mapping[str, str] | None, node, b
         rc, out = probe(["docker", "ps", "--filter", f"name=^{cluster}-control-plane$",
                          "--format", "{{.Names}}"])
         kind_up = bool(out.strip()) if rc == 0 else None
+        if kind_up:
+            # The password already on screen, resolved the same way the roster
+            # resolves it (env wins over the run-state file) — handed in so the
+            # gatherer can compare it against what the bring-up recorded, and
+            # never re-derived there.
+            src = env if env is not None else os.environ
+            shared = (src.get(SHARED_PASSWORD_ENV)
+                      or read_values(generator_dir, env).get(SHARED_PASSWORD_ENV, ""))
+            kind = gather_kind_identities(node, generator_dir, cluster,
+                                          shared_password=shared)
 
     # 3. the identity volume, by compose LABEL (never by name prefix, never from the
     #    compose file — volumes whose definitions were renamed survive `down -v`)
@@ -796,4 +1248,4 @@ def probe_credentials(generator_dir: str, env: Mapping[str, str] | None, node, b
                   secrets_mtime=secrets_mtime, last_seed_ok=seed_ok, lane=lane,
                   operator_user=operator_user, superadmin=superadmin,
                   env_password=env_password, status_detail=status_detail,
-                  checked_at=checked_at)
+                  checked_at=checked_at, kind=kind)

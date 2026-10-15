@@ -276,6 +276,19 @@ metadata:
   annotations:
     argocd.argoproj.io/hook: PostSync
     argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+    # THE MESH VAULT BASE SEGMENT (issue #285, decision 38 = B on #347). This Job is
+    # the SECOND Vault WRITER (vault_put_merge("<base>/harbor-robots", ...) below);
+    # gen-cluster-secrets.sh is the first. Its VAULT_KV_BASE env used to be the bare
+    # literal "hugmesh", so once the ESO READERS of <base>/harbor-robots
+    # (image-builder, service-catalog-builder and the six harbor-registry blocks in
+    # manifests/external-secrets) started following BRAND, this writer would have
+    # been left behind and the pair would disagree for every non-default brand.
+    # kustomization.yaml's `replacements` block copies this annotation onto that env
+    # var; apps/03b-harbor-provision.yaml patches the annotation; rebrand_sysroot()
+    # rewrites THAT patch to <BRAND>. Byte no-op at the default brand.
+    # The per-TENANT variant (harbor-provision-job.yaml.hbs) already spells it
+    # `value: "{{BRAND}}"` directly and is a different mechanism — do not conflate.
+    platform.hugmesh.net/vault-base: "hugmesh"
 spec:
   backoffLimit: 6
   ttlSecondsAfterFinished: 600

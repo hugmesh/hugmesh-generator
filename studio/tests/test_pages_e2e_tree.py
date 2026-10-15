@@ -4,7 +4,7 @@ THE DEFECT CLASS THIS FILE GUARDS. A button that runs everything is honest by
 accident: it cannot claim to have run something it did not. A tree can, and there are
 exactly three ways it does:
 
-  1. VACUITY — the tree renders, the operator checks one feature, and Run ignores the
+  1. CHECKED-NOTHING PASS — the tree renders, the operator checks one feature, and Run ignores the
      selection and runs the whole suite anyway (or runs nothing). Nothing on screen
      would show the difference: the log scrolls, a summary line appears, and it is
      green. So the centre of this file
@@ -56,7 +56,7 @@ GENERATOR_DIR = os.path.dirname(STUDIO_ROOT)
 FIXTURES = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                         "fixtures", "e2e-catalogue")
 
-#: The stub `make`. It echoes its own argv — that echo is the ONLY thing the vacuity
+#: The stub `make`. It echoes its own argv — that echo is the ONLY thing the checked-nothing pass
 #: test reads, so the assertion is about what a CHILD PROCESS was given, not about
 #: anything the page or the dialog printed to itself.
 _STUB_MAKE = """#!/usr/bin/env bash
@@ -212,7 +212,7 @@ def _texts_under(dlg, title):
     return [it.text(0) for it in _walk(_group(dlg, title))]
 
 
-# ── 1. THE VACUITY GUARD ─────────────────────────────────────────────────────────
+# ── 1. THE CHECKED-NOTHING PASS GUARD ─────────────────────────────────────────────────────────
 def test_the_checked_spec_reaches_the_spawned_make_argv(qapp, dlg, wired_page,
                                                         stub_make):
     """THE test. Check ONE feature, press Run, and read the argv a child got.
@@ -261,7 +261,7 @@ def test_two_checked_specs_both_arrive_and_nothing_else_does(qapp, dlg, wired_pa
 
 def test_the_dialog_click_is_wired_to_the_page_run(qapp, fake_gen, wired_page,
                                                    stub_make, monkeypatch):
-    """The seam between the two halves: opening the tree FROM THE PAGE and pressing
+    """The override point between the two halves: opening the tree FROM THE PAGE and pressing
     its Run must dispatch the page's run with that selection. A dialog that compiles a
     perfect selection nobody connected is the same defect wearing a suit."""
     page, echoed = wired_page()
@@ -310,7 +310,7 @@ def test_reopening_the_tree_replaces_the_previous_one(qapp, fake_gen, wired_page
 
 
 def test_run_refuses_an_empty_selection_inline_and_never_falls_back_to_all(dlg):
-    """The other half of vacuity: Run must not quietly mean "everything"."""
+    """The other half of the checked-nothing pass: Run must not quietly mean "everything"."""
     assert not dlg.run_btn.isEnabled(), "Run is armed with nothing checked"
     dlg._on_run()                       # drive it anyway, as a stuck UI would
     assert dlg.run_specs == ()
@@ -355,6 +355,72 @@ def test_uncovered_services_have_no_checkbox_and_carry_their_reason(dlg, catalog
         assert kids and kids[0].strip(), f"{node['slug']} has no reason node"
         assert "must not offer a Run button" in kids[0] or "NO spec" in kids[0], kids
     assert {"owncast", "tube", "wiki", "character-studio"} <= seen
+
+
+def test_the_tor_row_names_its_kind_lane_door_and_checks_it(dlg):
+    """#577: tor has no compose spec, so it stays a NO COVERAGE row with its reason
+    FIRST — but the row also states the kind lane's onion door, checked against the
+    tree. The fake checkout has no tor-onion-kind.feature, so the line must say the
+    door is MISSING rather than vouch for it."""
+    rows = [it for it in _walk(_group(dlg, GROUP_UNCOVERED))
+            if dlg.node_of(it).get("kind") == NODE_SERVICE
+            and dlg.node_of(it).get("slug") == "tor"]
+    assert len(rows) == 1, "tor is not a NO COVERAGE row"
+    kids = [rows[0].child(i).text(0) for i in range(rows[0].childCount())]
+    assert "NO spec" in kids[0], kids
+    door = [k for k in kids[1:] if k.startswith("kind:")]
+    assert len(door) == 1, kids
+    assert "make kind-tor" in door[0] and "MISSING" in door[0], door
+
+
+def _door_rows(d):
+    from hugmesh_studio.gui.pages.e2e_tree_dialog import GROUP_LANE_DOORS
+    return [it for it in _walk(_group(d, GROUP_LANE_DOORS))
+            if d.node_of(it).get("kind") == NODE_SERVICE
+            and d.node_of(it).get("slug") == "tor"]
+
+
+def test_the_kind_onion_door_has_its_own_group_row(dlg):
+    """#577: the door is listed in its OWN group whatever tor's compose verdict is,
+    and with no checkbox (a .feature runs through its own make target)."""
+    rows = _door_rows(dlg)
+    assert len(rows) == 1, "no tor row under the lane-door group"
+    assert not (rows[0].flags() & Qt.ItemFlag.ItemIsUserCheckable)
+    kids = [rows[0].child(i).text(0) for i in range(rows[0].childCount())]
+    assert len(kids) == 1 and kids[0].startswith("kind:") and "make kind-tor" in kids[0], kids
+
+
+def test_the_door_survives_tor_becoming_covered(qapp, fake_gen):
+    """THE REGRESSION the #613 skeptics found: once a compose spec names tor (#576's
+    onion helpers did), tor leaves NO COVERAGE — and a door listed only there
+    vanished from the tree. Here tor is COVERED and the door line must still show,
+    verified against the fake tree (feature present -> 'drives this service')."""
+    specs = fake_gen / "tests" / "e2e" / "specs"
+    # A helper that DRIVES something (page.) and names the onion — the shape of
+    # #576's specs/helpers.ts, which is what flipped tor to covered on main.
+    (specs / "helpers.ts").write_text(
+        "export async function openOnion(page: any) {\n"
+        "  const via = 'onion';\n"
+        "  await page.goto('/login');\n"
+        "  return via;\n"
+        "}\n", encoding="utf-8")
+    feat = fake_gen / ec.LANE_DOORS[0].feature
+    feat.parent.mkdir(parents=True, exist_ok=True)
+    feat.write_text("@env:kind @via:onion\nFeature: kind onion\n", encoding="utf-8")
+    cat = ec.load_catalogue(str(fake_gen), runner=_list_runner())
+    tor = [c for c in cat.services if c.slug == "tor"]
+    assert tor and not tor[0].needs_a_test and tor[0].reachable, tor
+    d = E2ETreeDialog(cat, str(fake_gen))
+    try:
+        assert not [it for it in _walk(_group(d, GROUP_UNCOVERED))
+                    if d.node_of(it).get("slug") == "tor"], "tor is covered here"
+        rows = _door_rows(d)
+        assert len(rows) == 1, "the kind onion door vanished once tor was covered"
+        line = rows[0].child(0).text(0)
+        assert line.startswith("kind: tor-onion-kind.feature drives this service"), line
+    finally:
+        d.deleteLater()
+        qapp.processEvents()
 
 
 def test_no_uncovered_slug_can_ever_reach_the_selection(dlg, catalogue):

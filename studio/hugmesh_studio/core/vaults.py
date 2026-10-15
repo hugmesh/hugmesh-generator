@@ -30,7 +30,7 @@ Vault token travels in the child's environment and a written value travels on st
 
 BLOCKING BY CONTRACT. Every function here shells out to docker with a timeout and must
 therefore be called OFF the GUI thread (see the _StatusProbe/own_probe idiom in
-gui/pages/_widgets.py). `docker volume` calls are fast, but a wedged daemon blocks each
+gui/pages/_widgets.py). `docker volume` calls are fast, but a hung daemon blocks each
 for its full timeout, and this module is reached from a dialog the operator opened.
 """
 
@@ -125,15 +125,28 @@ def docker_available() -> Capability:
                "for this distro) and reopen this dialog.")
 
 
-def list_volumes(project: str = DEFAULT_PROJECT) -> list[ManagedVolume]:
+class DockerDidNotAnswer(RuntimeError):
+    """``docker volume ls`` exited non-zero / timed out / could not be run: the volume
+    list is UNKNOWN, which is not the same thing as EMPTY (#361)."""
+
+
+def list_volumes(project: str = DEFAULT_PROJECT, *, strict: bool = False
+                 ) -> list[ManagedVolume]:
     """Every volume the mesh's compose project owns, newest-name-order stable.
 
     Selected by compose LABEL, not by name prefix: this module offers a delete, and a
     name-prefix match would happily sweep in an unrelated volume someone named similarly.
+
+    A failed ``docker volume ls`` returns ``[]`` (the dialogs render "none") unless
+    ``strict`` — then it raises :class:`DockerDidNotAnswer`, for a caller whose answer
+    is a claim about the operator's data and must tell "docker said none" from "docker
+    could not say" (the saved-mesh probe).
     """
     r = _run(["docker", "volume", "ls", "--filter", f"label={_LBL_PROJECT}={project}",
               "--format", "{{.Name}}"])
     if r.returncode != 0:
+        if strict:
+            raise DockerDidNotAnswer((r.stderr or "docker volume ls failed").strip()[:200])
         return []
     names = [n.strip() for n in r.stdout.splitlines() if n.strip()]
     if not names:
@@ -264,7 +277,7 @@ def vault_capability(project: str = DEFAULT_PROJECT) -> Capability:
     (specs/cluster/apps/02-vault.yaml) on the DevOps/Kubernetes lane, so a local compose
     mesh has no vault container to talk to. Returning an empty entry list instead would
     read as "vault is running and empty", which invites the operator to add an entry that
-    would go nowhere — the exact inert-control trap this codebase has hit repeatedly.
+    would go nowhere — the exact do-nothing-control trap this codebase has hit repeatedly.
     """
     addr = os.environ.get("VAULT_ADDR", "").strip()
     r = _run(["docker", "ps", "--filter", f"label={_LBL_PROJECT}={project}",
