@@ -30,6 +30,7 @@ from ..core import emulation as emu
 from ..core import emulation_save
 from ..core import mesh_emulation as me
 from ..core import qemu_devices, qemu_tests
+from ..core.domain_services import session_boot_gate_reason
 from . import model
 
 __all__ = ["MeshEmuScreen", "device_table", "device_detail_lines",
@@ -128,9 +129,14 @@ def save_hint_lines(eplan: emu.EmulationPlan) -> list[str]:
 
 
 def device_detail_lines(eplan: emu.EmulationPlan, planned: me.PlannedDevice,
-                        devices: list) -> list[str]:
+                        devices: list, boot_refusal: str = "") -> list[str]:
     """The per-device detail: identity, section statuses WITH their detail text,
-    and the copy-ready command hints (start / ssh / QMP / web tunnel / save)."""
+    and the copy-ready command hints (start / ssh / QMP / web tunnel / save).
+
+    ``boot_refusal`` (``core.domain_services.session_boot_gate_reason``, #637)
+    replaces the two START hints — this device's and the whole mesh's — with the
+    refusal: printing the argv the GUI refuses to run would make this face the way
+    around that gate. Stop, ssh, QMP and save stay: none of them boots anything."""
     plan = eplan.mesh
     assert plan is not None, "device_detail_lines needs a DEPLOY plan"
     generator_dir = eplan.generator_dir
@@ -161,6 +167,9 @@ def device_detail_lines(eplan: emu.EmulationPlan, planned: me.PlannedDevice,
             lines.append("web front door — start the tunnel, then browse "
                          f"{me.front_door_url(plan)}:")
             lines.append("  " + shlex.join(emu.web_tunnel_argv(dev, planned)))
+    elif boot_refusal:
+        lines.append("not running — and not started from here:")
+        lines.append("  ! refused: " + boot_refusal)
     else:
         lines.append("not running — start it (keep-alive) with:")
         lines.append("  " + shlex.join(
@@ -168,8 +177,9 @@ def device_detail_lines(eplan: emu.EmulationPlan, planned: me.PlannedDevice,
         lines.append(f"once up, ssh lands on {me.SSH_HOST}:{planned.ssh_port} "
                      "(planned — the device registry is authoritative).")
     lines.append("")
-    lines.append("start the WHOLE mesh with:")
-    lines.append("  " + shlex.join(emu.run_argv(eplan)))
+    if not boot_refusal:
+        lines.append("start the WHOLE mesh with:")
+        lines.append("  " + shlex.join(emu.run_argv(eplan)))
     lines.append("stop everything with:")
     lines.append("  " + shlex.join(emu.stop_all_argv(eplan)))
     lines.append("")
@@ -192,12 +202,14 @@ class MeshEmuScreen:
         self._eplan: emu.EmulationPlan | None = None
         self._plan: me.MeshPlan | None = None
         self._detail: me.PlannedDevice | None = None
+        self._refusal = ""               # #637: the picked session's boot refusal
 
     def enter(self, j) -> None:
         self._sub = "pick"
         self._eplan = None
         self._plan = None
         self._detail = None
+        self._refusal = ""
         # which prior sessions hold bootable images — the same discovery the
         # QEMU device-test lane uses (only_with_images: an empty session cannot
         # be emulated and is not offered).
@@ -223,9 +235,12 @@ class MeshEmuScreen:
         assert self._plan is not None and self._eplan is not None
         if self._sub == "detail" and self._detail is not None:
             return device_detail_lines(self._eplan, self._detail,
-                                       self._devices()) + \
+                                       self._devices(), self._refusal) + \
                 ["", "(r = refresh · q = back to the device list)"]
         out = plan_summary_lines(self._plan)
+        if self._refusal:
+            out.append("! refused — this session's devices are not started from "
+                       "here: " + self._refusal)
         out.append("")
         headers, rows = device_table(self._plan, self._devices())
         out += model.format_table(headers, rows)
@@ -252,6 +267,8 @@ class MeshEmuScreen:
             self._eplan = emu.plan(j.generator_dir, self._sessions[row],
                                    emu.EmulationMode.DEPLOY, epoch="")
             self._plan = self._eplan.mesh
+            # the SAME seam the GUI's Mesh emulation page reads (#637)
+            self._refusal = session_boot_gate_reason(self._sessions[row].name)
             self._sub = "table"
             return
         if self._sub == "detail":

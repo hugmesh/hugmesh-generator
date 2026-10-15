@@ -14,7 +14,7 @@ auto" does not say what auto resolves to on THIS host, "--env test" does not say
 is baked into the image, and "Parallel jobs 8" does not say the 8 was measured from this
 machine's memory rather than picked.
 
-Three things are pinned here, and the third is the one that rots quietest:
+Three things are pinned here, and the third is the one that goes stale quietest:
 
 1. PRESENCE — all four controls, and their _row() label wrappers, carry help. The wrapper
    matters: the label is what an operator reads before deciding to hover anything, and a
@@ -326,7 +326,7 @@ def test_no_gui_page_still_abbreviates_the_output_directory():
 
 
 def test_the_three_pages_that_have_this_field_all_name_it_the_same():
-    """Non-vacuity for the sweep above: the labels really are there, and really agree —
+    """Real-cases check for the sweep above: the labels really are there, and really agree —
     an empty scan would otherwise 'pass' if _row were renamed out from under it."""
     for fn in ("build.py", "fleet.py", "deploy.py"):
         labels = _row_labels(os.path.join(PAGES_DIR, fn))

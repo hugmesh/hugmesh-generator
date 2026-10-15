@@ -148,7 +148,7 @@ def test_compose_file_passes_the_theme_env_to_the_login_ui_service():
     assert "HUG_THEME_CSS: ${HUG_THEME_CSS:-${SNAP_THEME_CSS:-}}" in svc, (
         "the compose passthrough is the delivery leg — without it the Studio knob "
         "derives css that reaches no container")
-    # The NESTED default is load-bearing, not decoration: the producers in this repo
+    # The NESTED default is relied on, not decoration: the producers in this repo
     # export HUG_THEME_CSS, but an operator shell that still exports the legacy name
     # must keep working. Dropping the fallback takes their theme away with no error,
     # which is unobservable from inside this repo — hence a pin on the exact form.

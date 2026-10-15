@@ -163,6 +163,23 @@ class SessionsReview:
                 self.show_worklist(row)
 
 
+#: Keys the footer Edit never uses; the journey frame forwards them to the body so a
+#: page taller than the terminal (the 10 mode cards at 80x24) can be read.
+_SCROLL_KEYS = frozenset({"up", "down", "page up", "page down"})
+
+
+class _JourneyFrame(urwid.Frame):
+    """Frame whose focus stays in the footer Edit, but whose body still scrolls."""
+
+    def keypress(self, size, key):
+        key = super().keypress(size, key)
+        if key in _SCROLL_KEYS:
+            (top, bottom), _ = self.frame_top_bottom(size, True)
+            body_size = (size[0], max(1, size[1] - top - bottom))
+            return self.body.keypress(body_size, key)
+        return key
+
+
 class JourneyApp:
     """The JOURNEY (urwid face): a thin renderer over :class:`~.journey.Journey`.
 
@@ -173,11 +190,13 @@ class JourneyApp:
     :class:`SessionsReview` widget and returns here when it exits.
     """
 
-    def __init__(self, generator_dir: str = ".") -> None:
+    def __init__(self, generator_dir: str = ".", start: str | None = None) -> None:
         self.journey = journey_mod.Journey(generator_dir)
+        if start:                 # an expert entry point (--fleet / --go-live, #587)
+            self.journey.goto(start)
         self.input = urwid.Edit("> ")
         self.header = urwid.Text(("bold", ""))
-        self.frame = urwid.Frame(
+        self.frame = _JourneyFrame(
             body=urwid.ListBox(urwid.SimpleListWalker([])),
             header=self.header,
             footer=urwid.AttrMap(self.input, None, focus_map="reversed"),
@@ -231,8 +250,8 @@ class JourneyApp:
             self.feed(self.input.edit_text)
 
 
-def run_journey(generator_dir: str = ".") -> int:
-    app = JourneyApp(generator_dir)
+def run_journey(generator_dir: str = ".", start: str | None = None) -> int:
+    app = JourneyApp(generator_dir, start)
     urwid.MainLoop(app.root, palette=_PALETTE,
                    unhandled_input=app.unhandled).run()
     return 0

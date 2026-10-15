@@ -26,7 +26,7 @@ kind this repo has been bitten by (the TS persona catalogue vs the shell roster,
 still unreconciled). It is handled the way shellRoster() handles the roster: the
 TS file is PARSED, not copied — `legal_ids_from_dimensions_ts()` reads the array
 out of the real file, and test_e2e_environments.py asserts the two agree. Adding
-an environment on one side and not the other goes RED instead of going unnoticed.
+an environment on one side and not the other fails instead of going unnoticed.
 
 WHAT THIS MODULE IS NOT. It never RUNS anything. It builds argv and an env dict
 and reports refusals; the caller runs them. It is Qt-free and stdlib-only, so the

@@ -156,6 +156,32 @@ def test_failure_is_tolerated_and_summary_nonzero(monkeypatch, tmp_path):
     assert drv.summary_exit_code() == 1
 
 
+def test_a_raising_entry_is_failed_not_left_running_and_the_loop_continues(monkeypatch, tmp_path):
+    """#374: BuildDriver.run can RAISE (ElevationRefused under HUGMESH_STUDIO_NO_ELEVATION
+    / pytest, an OSError from Popen). Unhandled, run_all propagated with that entry still
+    RUNNING and still registered in _drivers, on_entry_done never called, and the session
+    later recorded 'stopped' (the operator-Stop state) instead of 'failed'."""
+    def boom(fake, cfg):
+        if cfg.role == "backend":
+            raise bd.ElevationRefused("refusing to spawn sudo (HUGMESH_STUDIO_NO_ELEVATION is set)")
+
+    _install_fake_builddriver(monkeypatch, on_run=boom)
+    _install_fake_genkeys(monkeypatch)
+    drv = WorklistDriver(str(tmp_path), _worklist(tmp_path), host=host())
+    lines, dones = [], []
+    code = drv.run_all(on_line=lambda i, ln: lines.append((i, ln)),
+                       on_entry_done=lambda i, c: dones.append((i, c)))
+    assert [r.status for r in drv.results] == ["ok", "failed", "ok"]   # tolerated, continued
+    assert drv.results[1].exit_code == 1
+    assert dones == [(0, 0), (1, 1), (2, 0)]        # the row reaches a terminal glyph
+    assert drv._drivers == {}                        # nothing left registered
+    assert any(i == 1 and ln.startswith("!! ") and "HUGMESH_STUDIO_NO_ELEVATION" in ln
+               for i, ln in lines), lines
+    assert code == 1
+    from hugmesh_studio.core import build_sessions as bs
+    assert bs.overall_status([r.status for r in drv.results]) == "failed"
+
+
 # ── mesh manifest v2 ─────────────────────────────────────────────────────────────────
 def test_manifest_v2_written_up_front(monkeypatch, tmp_path):
     _install_fake_builddriver(monkeypatch)
@@ -393,6 +419,28 @@ def test_preflight_flags_unwritable_output_dir(tmp_path, monkeypatch):
     assert len(hits) == 1, f"expected exactly one writability problem, got {problems}"
     assert str(out / "sessions") in hits[0]      # names the ancestor actually at fault
     assert "chown" in hits[0]                    # and the remedy
+    # The remedy must never be `chown -R <probe>`: followed on <out>, that hands
+    # the build system (<out>/snap-build-*/sysroot) to the user and the next
+    # --resume builds an image whose every directory is theirs (hugmesh-generator#659).
+    assert "chown -R" not in hits[0].split("(not 'chown -R'")[0]
+    assert "-name sysroot -prune" in hits[0]
+    assert "chown -h" in hits[0]
+
+
+def test_preflight_remedy_quotes_an_output_dir_with_a_space(tmp_path, monkeypatch):
+    # The remedy is a command to paste: a path with a space in it must reach `find`
+    # as ONE argument, or the person is told to chown two other directories.
+    out = tmp_path / "my builds" / "out"
+    (out / "sessions").mkdir(parents=True)
+    workdir = out / "sessions" / "20260930-090000-abcdef"
+    real_access = os.access
+    monkeypatch.setattr(
+        wd.os, "access",
+        lambda p, m: False if os.path.abspath(p) == str(out / "sessions") else real_access(p, m))
+    drv = WorklistDriver(str(tmp_path), _worklist(tmp_path), host=host(), workdir=str(workdir))
+    hits = [p for p in drv.preflight() if "not writable" in p]
+    assert len(hits) == 1
+    assert f"sudo find '{out / 'sessions'}' -type d -name sysroot -prune" in hits[0]
 
 
 def test_preflight_silent_when_output_dir_writable(tmp_path):
@@ -428,3 +476,31 @@ def test_run_all_hands_each_entry_its_own_hostname_to_its_own_builddriver(monkey
     argvs = [cfg.to_cli_args() for _e, cfg in drv.materialize()]
     assert [(a[a.index("--hostname") + 1] if "--hostname" in a else None) for a in argvs] == [
         "ca-1", "be-pi", None]
+
+
+# ── #494: the own domain's per-domain services on the v2 envelope ─────────────────
+def test_manifest_v2_omits_cluster_domain_services_when_empty(monkeypatch, tmp_path):
+    """OMIT-WHEN-EMPTY: an own domain that takes the cluster-wide set leaves the v2
+    envelope a mesh build writes byte-identical to one from before the key existed
+    (PR #595 skeptics: the v1 shim was pinned, the envelope was not)."""
+    _install_fake_builddriver(monkeypatch)
+    _install_fake_genkeys(monkeypatch)
+    wl = _worklist(tmp_path)
+    assert wl.base.cluster_domain_services == []
+    drv = WorklistDriver(str(tmp_path), wl, host=host())
+    assert "cluster_domain_services" not in drv.manifest_v2()
+    assert "cluster_domain_services" not in json.loads(open(drv.write_manifest_v2()).read())
+
+
+def test_manifest_v2_carries_cluster_domain_services_when_picked(monkeypatch, tmp_path):
+    _install_fake_builddriver(monkeypatch)
+    _install_fake_genkeys(monkeypatch)
+    wl = _worklist(tmp_path)
+    wl.base.cluster_domain_services = ["games", "akkoma"]
+    drv = WorklistDriver(str(tmp_path), wl, host=host())
+    assert drv.manifest_v2()["cluster_domain_services"] == ["games", "akkoma"]
+    written = json.loads(open(drv.write_manifest_v2()).read())
+    assert written["cluster_domain_services"] == ["games", "akkoma"]
+    # the v1 shim and the v2 envelope agree
+    for _entry, cfg in drv.materialize():
+        assert cfg.mesh_manifest()["cluster_domain_services"] == ["games", "akkoma"]

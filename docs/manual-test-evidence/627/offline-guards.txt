@@ -1,0 +1,47 @@
+# issue:   #627
+# label:   offline-guards
+# cwd:     /home/user/hugmesh-generator
+# command: bash tests/stack/test-tor-flip-wiring.sh 2>&1 | tail -25; echo; grep -n 'COOKIE_SECURE' Makefile tests/stack/compose.local.yaml | head; echo; echo '--- make -n stack-up flips the Anubis cookie only for ANUBIS=1 TOR=1:'; for k in 'ANUBIS=1 TOR=1' 'TOR=1' 'ANUBIS=1' ''; do printf '%-18s ' "[$k]"; make -n stack-up $k 2>/dev/null | grep -c "ANUBIS_COOKIE_SECURE='false'"; done
+# started: 2026-09-30T13:22:53Z
+# host:    Linux 6.18.44-fc-v50 x86_64, no docker daemon, no KVM, no tor, no kind/kubectl (Claude Code cloud container)
+# commit:  2017882
+-----
+  PASS N51-cookie-insecure-everywhere: T16-anubis-onion-cookie goes RED when its invariant is broken
+  PASS N52-cookie-caller-overridden: T16-anubis-onion-cookie goes RED when its invariant is broken
+  PASS N53-cookie-flip-on-tor-alone: T16-anubis-onion-cookie goes RED when its invariant is broken
+  PASS N54-cookie-var-renamed-one-side: T16-anubis-onion-cookie goes RED when its invariant is broken
+  PASS N55-sibling-module-fetches: T15-onion-steps-proxied goes RED when its invariant is broken
+  PASS N56-sibling-module-newcontext: T15-onion-steps-proxied goes RED when its invariant is broken
+  PASS N57-sibling-double-quoted-import: T15-onion-steps-proxied goes RED when its invariant is broken
+  PASS N58-sibling-js-suffix-import: T15-onion-steps-proxied goes RED when its invariant is broken
+  PASS N59-transitive-sibling-fetches: T15-onion-steps-proxied goes RED when its invariant is broken
+  PASS N60-dynamic-import-sibling-fetches: T15-onion-steps-proxied goes RED when its invariant is broken
+  PASS N61-subdirectory-sibling-fetches: T15-onion-steps-proxied goes RED when its invariant is broken
+  PASS W1-success-line-ignored: T14-mechanism-wrapper goes RED when its invariant is broken
+  PASS W2-rc-ignored: T14-mechanism-wrapper goes RED when its invariant is broken
+  PASS W3-skip-exits-0: T14-mechanism-wrapper goes RED when its invariant is broken
+  PASS W4-timeout-unnamed: T14-mechanism-wrapper goes RED when its invariant is broken
+  PASS W5-failure-as-skip: T14-mechanism-wrapper goes RED when its invariant is broken
+  PASS W6-no-opt-in: T14-mechanism-wrapper goes RED when its invariant is broken
+  PASS W7-success-unanchored: T14-mechanism-wrapper goes RED when its invariant is broken
+  PASS W8-no-timeout: T14-mechanism-wrapper goes RED when its invariant is broken
+  PASS W9-no-tor-not-skipped: T14-mechanism-wrapper goes RED when its invariant is broken
+  PASS N28: a missing source is INCOMPLETE (exit 3), not a silent pass
+  PASS coexistence: a kind-lane @env:kind @via:onion scenario is not graded as a compose-lane one
+  PASS positive control: an UNMUTATED staged copy passes (the mutants are what bite)
+
+== tor flip wiring: 73 passed, 0 failed ==
+
+Makefile:1823:# ANUBIS_COOKIE_SECURE wins, like TOR_ONION_UPSTREAM.
+Makefile:1824:STACK_TOR_ANUBIS_COOKIE_ENV := $(if $(strip $(ANUBIS_COOKIE_SECURE)),, ANUBIS_COOKIE_SECURE='false')
+tests/stack/compose.local.yaml:1123:      APP_SESSION_COOKIE_SECURE: "false"
+tests/stack/compose.local.yaml:1826:      COOKIE_SECURE: ${ANUBIS_COOKIE_SECURE:-true}
+
+--- make -n stack-up flips the Anubis cookie only for ANUBIS=1 TOR=1:
+[ANUBIS=1 TOR=1]   2
+[TOR=1]            0
+[ANUBIS=1]         0
+[]                 0
+-----
+# exit code: 1
+# finished: 2026-09-30T13:33:03Z

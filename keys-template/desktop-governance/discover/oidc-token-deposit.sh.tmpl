@@ -29,8 +29,15 @@
 #   HUGMESH_OIDC_ACCESS_TOKEN  (greeter/PAM-exported env), OR
 #   a user-private greeter drop at ${XDG_RUNTIME_DIR}/hugmesh/oidc-token.src
 # If NEITHER is present this script fails CLOSED: it removes any stale token and
-# exits 0 (empty store, no error). Wiring the actual export from the SSO greeter
-# is a protected-greeter follow-up; this depositor consumes whatever it surfaces.
+# exits 0 (empty store, no error). The PRODUCER of that drop is
+# /etc/hugmesh/desktop-governance/hugmesh-sso-token (sso/hugmesh-sso-token.py.tmpl:
+# RFC 8628 device flow, run by the session-start wrapper); this depositor only
+# consumes whatever a producer surfaces.
+#
+# --clear (session START) removes only the deposited token, so a greeter/PAM drop
+# made BEFORE the session started survives the wrapper's start-of-session clear.
+# --clear-all (LOGOUT) also removes the drop and the producer's refresh token, so
+# a logout cannot be undone by the next login quietly redepositing the old token.
 set -uo pipefail
 
 RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
@@ -57,10 +64,16 @@ is_governed() {
 clear_token() {
     rm -f "${TOKEN_FILE}" 2>/dev/null || true
 }
+# Logout: the deposit AND everything the producer left behind.
+clear_all() {
+    clear_token
+    rm -f "${TOKEN_SRC_FILE}" "${TOKEN_DIR}/oidc-refresh" 2>/dev/null || true
+}
 
 # --clear / logout: wipe the deposited token and exit. Always honored (even when
 # ungoverned) so a logout hook can clean up unconditionally.
 case "${1:-}" in
+    --clear-all) clear_all; exit 0 ;;
     --clear|logout) clear_token; exit 0 ;;
 esac
 

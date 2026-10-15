@@ -110,7 +110,7 @@ _PLAYWRIGHT_PLATFORM_TARGETS = {
 
 #: Wall clock for the ``--devices`` shell-out in :func:`status`. The subcommand
 #: boots nothing (a file read plus one ``docker ps``), so anything slower than
-#: this is a wedged daemon — and the registry fallback answers instead.
+#: this is a hung daemon — and the registry fallback answers instead.
 DEVICES_PROBE_TIMEOUT_S = 10.0
 #: Wall clock for the fallback lane's own ``docker ps``.
 DOCKER_PS_TIMEOUT_S = 5.0
@@ -586,6 +586,22 @@ def playwright_root_blocker() -> str:
         "need no root and work now.")
 
 
+def build_first_mode_note(picked_title: str, inherited_title: str) -> str:
+    """The sentence under the "Build new images first" mode picker (#638), on BOTH
+    faces: the GUI QEMU page's ``build_mode_note`` and the TUI QEMU screen's build
+    sub-state render exactly this. The route into that build passes no Mode screen,
+    so the picker preselects the mode the Studio session is already carrying and has
+    to SAY that it is a leftover, not a choice — and, once the operator picks another,
+    which build Next continues into."""
+    if picked_title == inherited_title:
+        return (f"Preselected: {picked_title} — the build mode this Studio session "
+                "is already carrying (from an earlier flow or a loaded "
+                "configuration), NOT a choice made for this test. Pick the build "
+                "these tests should run against.")
+    return (f"Next continues into the {picked_title} build (the session was "
+            f"carrying {inherited_title}).")
+
+
 # ── whole-mesh save: thin delegates over core/emulation_save ────────────────────────
 
 def plan_mesh_save(plan: EmulationPlan, *, session: str = "", stamp: str = "",
@@ -705,7 +721,7 @@ def _runner_devices(generator_dir: str, work_dir: str) -> list[Device] | None:
 def _docker_running_names() -> set[str] | None:
     """Names of running containers, or None when docker did not answer.
 
-    None is load-bearing: the fallback downgrade must NOT run on it. An unanswered
+    None is relied on: the fallback downgrade must NOT run on it. An unanswered
     daemon says nothing about the containers, and downgrading every record to
     stopped because docker was slow is the same lie in the other direction.
     """
