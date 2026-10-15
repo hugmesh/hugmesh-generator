@@ -86,3 +86,27 @@ def test_a_refused_record_file_is_said_on_the_page_and_on_the_plan(ctl):
     ctl._refresh_plan()
     assert "BRAND RECORD:" not in ctl.plan_view.toPlainText()
     assert brand_model.load_record().brands == []
+
+
+def test_arriving_at_the_review_step_writes_the_record_file(ctl, monkeypatch):
+    """A saved mesh restored straight onto the Review step never passed Domain services,
+    so the Review step is the last place the record file is written before a start.
+    (Mutation: drop ctl.leave_brand() from LocalMeshReviewPage.initializePage and the file
+    stays absent.)"""
+    step = ctl.superbrand_design
+    _type(step, "id", "acme")
+    _type(step, "title", "Acme Mesh")
+    path = brand_model.record_path()
+    if os.path.exists(path):
+        os.remove(path)
+    monkeypatch.setattr(ctl, "_probe_mesh_state", lambda: None)
+    monkeypatch.setattr(ctl.saved_meshes, "refresh", lambda: None)
+    wiz = types.SimpleNamespace(generator_dir=GENERATOR_DIR, localmesh_selected=True,
+                                localmesh_join_selected=False, localmesh_page=ctl)
+    page = lm_mod.LocalMeshReviewPage(wiz)
+    try:
+        page.initializePage()
+        assert os.path.exists(path), "the Review step did not write the record file"
+        assert brand_model.load_record().superbrand.id == "acme"
+    finally:
+        page.deleteLater()

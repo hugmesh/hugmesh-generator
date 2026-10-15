@@ -293,3 +293,33 @@ def test_the_copy_sites_paragraph_describes_the_table_as_it_is():
     with open(os.path.join(GENERATOR_DIR, "docs", "BRAND-MODEL.md"), encoding="utf-8") as fh:
         text = fh.read()
     assert "STILL_DROPPING" not in text and "not converted" not in text
+
+
+# ── the secret scan, the profile re-reader and the lenient loader ────────────────────
+def test_a_legal_brand_id_made_of_words_and_a_year_is_not_a_secret():
+    """A 45-character id such as shop-for-the-mesh-community-of-the-north-2026 passes the
+    id rule and used to be flagged ‘token-shaped’ wherever the id is stored. Only a dashed
+    id is let through, and only under the key ``id``: the same text as a free value, and a
+    dashless run of letters and digits as an id, are still refused."""
+    wordy = "shop-for-the-mesh-community-of-the-north-2026"
+    assert len(wordy) == 45 and bm.brand_id_problem(wordy) == ""
+    assert bm.secret_problems({"superbrand": {"id": wordy}}) == []
+    assert bm.secret_problems({"brands": [{"id": wordy}]}) == []
+    assert bm.secret_problems({"superbrand": {"title": wordy}}), "a free value stays judged"
+    dashless = "a1b2c3d4e5f6a7b8c9d0a1b2c3d4e5f6a7b8c9d0"
+    assert bm.secret_problems({"superbrand": {"id": dashless}}), "no dash: still token-shaped"
+
+
+def test_a_profile_that_repeats_a_key_is_refused():
+    text = "ORG='a'\nORG='b'\n"
+    with pytest.raises(ValueError, match="repeats ORG"):
+        bm.parse_builder_profile(text)
+
+
+def test_only_the_value_true_turns_tor_on_in_a_recorded_row():
+    """A hand-edited row that says ``"yes"`` or ``1`` is not a Tor domain: the loader is
+    strict about the one switch that publishes an address."""
+    from hugmesh_studio.core.config import domain_from_record_row
+    for junk in ("yes", 1, "true", "on"):
+        assert domain_from_record_row({"name": "a.example", "tor": junk}).tor is False
+    assert domain_from_record_row({"name": "a.example", "tor": True}).tor is True
