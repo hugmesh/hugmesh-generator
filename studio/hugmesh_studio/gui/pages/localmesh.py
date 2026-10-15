@@ -2139,9 +2139,31 @@ class LocalMeshPage(QtWidgets.QWizardPage):
                 self._brand_mounted = True
             finally:
                 self._brand_busy = False
+            self._refresh_brand_note()
             self._brand_ok()
         except Exception:                       # noqa: BLE001 — never raise out of a slot
             self._brand_swallow("mount_brand")
+
+    def _refresh_brand_note(self) -> None:
+        """The note about a picked profile that has no brands/<id>.conf. It is redrawn
+        whenever the pick can have changed (the plan refresh, the step mounting, the
+        drop-down or the design changing), not only with the plan: a note drawn before
+        the session existed would otherwise stay under the default Create."""
+        brand = self.brand.currentText().strip()
+        sess = self.superbrand_design.session
+        # About a profile the person PICKED. Under ‘Create a new superbrand’ (the default)
+        # nothing was picked, and a brand being designed has no profile file by
+        # definition: the sentence there read as a warning about something they did not
+        # choose.
+        creating = sess is not None and sess.choice == CREATE_KEY
+        # read the file, not self.boot: that object is built from the LAST plan refresh
+        # and may still hold the brand from before this pick
+        has_conf = os.path.isfile(os.path.join(self.generator_dir, "brands", f"{brand}.conf"))
+        self.brand_note.setText(
+            "" if creating or has_conf or not brand
+            else f"No brands/{brand}.conf — runs with built-in defaults "
+                 f"(profile presets stay unset).")
+        self.brand_note.setVisible(bool(self.brand_note.text()))
 
     def _brand_changed(self, *_args) -> None:
         """The picker or the design changed the session: write it onto the carrier (the
@@ -2162,6 +2184,7 @@ class LocalMeshPage(QtWidgets.QWizardPage):
                 step.note.setVisible(True)
             self._fix_design_widgets()
             self.brand.currentTextChanged.emit(self._brand_boot.brand)
+            self._refresh_brand_note()
             self._brand_ok()
         except Exception:                       # noqa: BLE001
             self._brand_swallow("_brand_changed")
@@ -2942,18 +2965,7 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         # (every path that changes either already lands here). Cheap: the widget
         # rebuilds only when the map differs.
         self._refresh_code_folders()
-        # The note is about a profile the person PICKED that has no brands/<id>.conf. Under
-        # ‘Create a new superbrand’ (the default) nothing was picked, and a brand being
-        # designed has no profile file by definition: the sentence there read as a
-        # warning about something the person did not choose.
-        sess = self.superbrand_design.session
-        creating = sess is not None and sess.choice == CREATE_KEY
-        self.brand_note.setText(
-            "" if creating or self.boot.brand_has_conf()
-            or not self.brand.currentText().strip()
-            else f"No brands/{self.brand.currentText().strip()}.conf — runs with "
-                 f"built-in defaults (profile presets stay unset).")
-        self.brand_note.setVisible(bool(self.brand_note.text()))
+        self._refresh_brand_note()
         self.plan_view.setPlainText(self.boot.plan())
         self._sync_boot_gate()
 

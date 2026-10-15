@@ -308,10 +308,17 @@ def test_no_missing_profile_note_is_drawn_under_the_default_create(ctl):
     label is hidden, not an empty line."""
     assert ctl.brand_picker.current_key() == "create"
     assert not os.path.exists(os.path.join(GENERATOR_DIR, "brands", "hugmesh.conf"))
-    ctl._refresh_plan()
+    # as the step shows it: mounted, with NO plan refresh after (the note used to be
+    # drawn by the plan refresh before the session existed, and stayed)
     assert ctl.brand_note.text() == "" and not ctl.brand_note.isVisibleTo(ctl)
     _type(ctl.superbrand_design, "id", "acme")           # a design being typed: still none
+    assert ctl.brand_note.text() == ""
     ctl._refresh_plan()
+    assert ctl.brand_note.text() == ""
+    # picking a profile that has a file says nothing; coming back to Create stays quiet
+    ctl.brand_picker.select("profile:example")
+    assert ctl.brand_note.text() == ""
+    ctl.brand_picker.select("create")
     assert ctl.brand_note.text() == ""
     # a picked profile with no file still says it (the sentence is kept for that case)
     ctl.brand.setCurrentText("nosuchprofile")
