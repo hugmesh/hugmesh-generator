@@ -29,7 +29,7 @@
 #   hugmesh_policy_sync.te           rc-service hugmesh-policy-sync (pki/control
 #                                    images only — gated by presence).
 #   hugmesh_tor.te                   rc-service hugmesh-tor-reconcile (writes
-#                                    the managed torrc + restarts distro tor).
+#                                    the managed torrc + reloads/starts distro tor).
 #   hugmesh_vpn.te                   rc-service hugmesh-egress-vpn (runner
 #                                    domain) + hugmesh-vpn-reconcile
 #                                    (reconcile domain).

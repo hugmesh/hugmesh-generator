@@ -1039,7 +1039,7 @@ run_threading_checks() {
 # Expectation grammar: 'token'  must appear in the printed command
 #                      '!token' must NOT appear in the printed command
 #                      'PLAN:pat' / 'PLAN:!pat'  must (not) match the plan output
-GUITHR_EXPECTED=73   # fail-closed: keep in sync with the guithr call list below
+GUITHR_EXPECTED=76   # fail-closed: keep in sync with the guithr call list below
                      # (68 on main, plus the 5 gDW* desktop-weight precedence/
                      # agreement probes from the desktop-axis-honesty branch)
                      # (66 before that — incl. the 2 orangepizero2w + 2
@@ -1183,6 +1183,20 @@ run_gui_threading_checks() {
     guithr g13-explicit-none-services \
         '{"platform":"x86","role":"backend","mode":"mesh","env":"test","optional_services":["none"]}' \
         "--optional-services ''" 'PLAN:^PLAN_OPTIONAL_SERVICES=none$'
+    # #384 anubis tri-state: the Studio's own --print-command, then the real builder's
+    # --print-plan, so the token is proved to be READ by the builder, not just emitted.
+    guithr g384-anubis-force-off \
+        '{"platform":"x86","role":"backend","mode":"mesh","env":"prod","anubis":"off"}' \
+        '--optional-services -anubis' '!--exclude-services' \
+        'PLAN:^PLAN_OPTIONAL_SERVICES=akkoma tuwunel phpbb -anubis$'
+    guithr g384-anubis-force-off-with-none \
+        '{"platform":"x86","role":"backend","mode":"mesh","env":"prod","anubis":"off","optional_services":["none"]}' \
+        '--optional-services -anubis' "--exclude-services 'akkoma tuwunel phpbb'" \
+        'PLAN:^PLAN_OPTIONAL_SERVICES=-anubis$'
+    guithr g384-anubis-force-on \
+        '{"platform":"x86","role":"backend","mode":"mesh","env":"test","anubis":"on"}' \
+        "--optional-services 'akkoma tuwunel phpbb anubis'" \
+        'PLAN:^PLAN_OPTIONAL_SERVICES=akkoma tuwunel phpbb anubis$'
     guithr g14-all-services \
         '{"platform":"x86","role":"backend","mode":"mesh","env":"test","optional_services":["all"]}' \
         '--all-services' 'PLAN:^PLAN_OPTIONAL_SERVICES=.*akkoma'
