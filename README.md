@@ -364,8 +364,8 @@ provable on a running cluster are marked **(needs a live cluster)** — this
 workstation has the compose mesh up but no kind cluster (`kind get clusters` →
 none), and compose green is not evidence for the cluster._
 
-- **🚧 SSO kind-cluster e2e — harness shipped, payload blockers 1–16 fixed, the
-  JWT-validating leg is not.** The `KIND_PROFILE=sso` harness +
+- **🚧 SSO kind-cluster e2e — harness shipped, payload blockers 1–16 and the
+  in-cluster signing-key fix merged, the live proof not run.** The `KIND_PROFILE=sso` harness +
   `make kind-images|kind-up|kind-doctor|kind-e2e|kind-down` are on `main`. The
   first real run (2026-08-05) hit 16 fresh-cluster payload blockers because the
   GitOps payload had never been run end to end; every one of 1–16 is now fixed
@@ -374,12 +374,18 @@ none), and compose green is not evidence for the cluster._
   item in
   [`docs/KIND-SSO-E2E-FINDINGS.md`](docs/KIND-SSO-E2E-FINDINGS.md#re-measured-2026-10-14).
   The 2026-08-06 live run passed specs `01-frontpage` and `27-native-login`, but
-  spec 27 only proves the cookie is minted. **Open:** `GET /bff/session` answers
-  500 on kind because the BFF manifests give the signing-key fetch a public host
-  that does not resolve in-cluster (#693; fix in draft pull request #709, or #736, the same change merged with main), the
-  kind lane still side-loads every image so the Harbor pull path is unexercised
-  (finding 17), and findings 20, 25 and 26. No kind run is recorded after the
-  2026-10-07 rebuild. Compose green is **not** evidence for the cluster, and
+  spec 27 only proves the cookie is minted. The `GET /bff/session` 500 on kind
+  (the BFF manifests gave the signing-key fetch a public host that does not
+  resolve in-cluster) is fixed on `main`: pull requests #709 and #736 merged on
+  2026-10-14 and #693 is closed. The BFF manifests now set an in-cluster
+  `CASDOOR_JWKS_URI`
+  (e.g. [`admin-bff-api/deployment.yaml`](specs/cluster/manifests/admin-bff-api/deployment.yaml)),
+  pinned offline by
+  [`tests/scripts/test-bff-jwks-in-cluster.sh`](tests/scripts/test-bff-jwks-in-cluster.sh).
+  **Open:** that guard reads manifests, not a cluster, so the fix has no live
+  proof; the kind lane still side-loads every image so the Harbor pull path is
+  unexercised (finding 17); and findings 20, 25 and 26. No kind run is recorded
+  after the 2026-10-07 rebuild. Compose green is **not** evidence for the cluster, and
   `make kind-up` is the prerequisite for this and for every **(needs a live
   cluster)** item below.
 - **🔭 MFA privileged-floor — the live operator flip. (needs a live cluster)**
@@ -585,7 +591,7 @@ ships a full multi-tenant platform. State key: **✅ shipped** (on `main`) ·
   remote + two-SA RBAC), desktop app governance, coturn TURN relay, and the
   gateway MFA privileged floor are all on `main` behind documented default-off
   flags. See [Current State](#current-state) for each flag and its caveats.
-- **🚧 / 🔭 Roadmap** — the kind-cluster SSO e2e (harness shipped, blockers 1-16 fixed, the JWT-validating leg open: #693),
+- **🚧 / 🔭 Roadmap** — the kind-cluster SSO e2e (harness shipped, blockers 1-16 and the in-cluster signing-key fix (#693) merged, the live proof not run),
   SELinux node-policy modules that bake and wire but **fail to load on every
   boot**, the live MFA operator flip, desktop-governance go-live (three dark
   flags, no dial rows, no image ever built), the broken node-side headscale ACL

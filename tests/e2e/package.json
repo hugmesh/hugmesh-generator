@@ -17,7 +17,9 @@
     "test:rbac:contract": "playwright test -c playwright.config.ts --reporter=list --grep-invert @layer:ui 12-rbac-gateway-route-access 16-rbac-mod-sibling-scope 18-rbac-phase8-10-pending",
     "//shots": "The screenshot-capture harness for the 17 manual test plans (issues #290-#314). Separate config on purpose: capturing plan evidence is not a test result and must not enter a run's summary.json or add a project to `npm test`. See shot-harness/README.md.",
     "shots": "bash shot-harness/shots.sh",
-    "shots:validate": "node shot-harness/shot-table.mjs validate"
+    "shots:validate": "node shot-harness/shot-table.mjs validate",
+    "shots:settle-unit": "playwright test -c shot-harness/settle.config.ts",
+    "shots:validate-unit": "node --test shot-harness/shot-table.test.mjs"
   },
   "devDependencies": {
     "@playwright/test": "~1.61.1",

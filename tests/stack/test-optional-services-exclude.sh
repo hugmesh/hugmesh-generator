@@ -1642,6 +1642,71 @@ for _n in ${X86_DESELECTABLE}; do
 done
 unset _n
 
+# ── a LONE deselect token keeps the built-in default selection (#384, option B) ──
+# `--optional-services "-anubis"` is all a caller that never touched the service
+# picker can say to force the PoW shield off. --optional-services REPLACES the
+# default, so before this a veto silently deleted akkoma/tuwunel/phpbb as well. Both
+# builders run for real (the arg-parse expansion is top-level code, so the REAL
+# script is the only honest oracle), and the resulting list is fed to the real
+# anubis decision so the token is proved to reach the gate, not just to be printed.
+echo "-- a lone deselect token keeps the built-in defaults, on BOTH builders --"
+_plain() { sed -e 's/\x1b\[[0-9;]*m//g'; }
+_kept_list() {   # echo the list the builder reports it kept, or nothing
+  printf '%s\n' "$1" | _plain | sed -n 's/.*kept the built-in default selection: //p' | head -1
+}
+_dflt_lib="$(sed -n 's/^_OPT_BUILTIN_DEFAULT_SERVICES="\(.*\)"$/\1/p' "${OPTLIB}")"
+for _b in "${BUILDER}" "${BUILDER_X86}"; do
+  _bn="${_b##*/}"
+  _dflt_b="$(sed -n 's/^OPTIONAL_SERVICES="${OPTIONAL_SERVICES:-\(.*\)}"$/\1/p' "${_b}")"
+  if [ -n "${_dflt_lib}" ] && [ "${_dflt_lib}" = "${_dflt_b}" ]; then
+    ok "${_bn}: its built-in default ('${_dflt_b}') is the one the lone-deselect rule restores"
+  else
+    bad "${_bn}: built-in default '${_dflt_b}' != the library's _OPT_BUILTIN_DEFAULT_SERVICES '${_dflt_lib}' — the veto would restore the wrong set"
+  fi
+  for _tok in -anubis no-anubis; do
+    _out="$(env -u OPTIONAL_SERVICES -u EXCLUDE_SERVICES timeout 60 bash "${_b}" --optional-services "${_tok}" --role bogus 2>&1)" || true
+    _kept="$(_kept_list "${_out}")"
+    if [ "${_kept}" = "${_dflt_b} ${_tok}" ]; then
+      ok "${_bn}: '--optional-services ${_tok}' alone keeps the defaults -> '${_kept}'"
+    else
+      bad "${_bn}: '--optional-services ${_tok}' alone resolved to '${_kept:-<no keep line>}', expected '${_dflt_b} ${_tok}': ${_out}"
+    fi
+    if _has 'command not found' "${_out}" || _has 'FATAL(optional-services)' "${_out}"; then
+      bad "${_bn}: '${_tok}' alone was refused or hit a missing function: ${_out}"
+    fi
+    # The kept list must reach the gate: prod would install anubis on its own, the
+    # token must turn it off, and the three defaults must still be selected.
+    if [ -n "${_kept}" ]; then
+      OPTIONAL_SERVICES="${_kept}"; ENV="prod"
+      [ "$(_opt_anubis_installed)" = "false" ] \
+        && ok "${_bn}: '${_tok}' reaches the gate -> anubis OFF under ENV=prod" \
+        || bad "${_bn}: '${_tok}' did not turn anubis off under ENV=prod"
+      for _d in ${_dflt_b}; do
+        _opt_selected "${_d}" || bad "${_bn}: default '${_d}' is NOT selected after '${_tok}' alone"
+      done
+      ENV="test"; OPTIONAL_SERVICES=""
+    fi
+  done
+  # What must NOT change: explicit none, an allow-list, and the `all` sentinel.
+  _out="$(env -u OPTIONAL_SERVICES -u EXCLUDE_SERVICES timeout 60 bash "${_b}" --optional-services "" --role bogus 2>&1)" || true
+  [ -z "$(_kept_list "${_out}")" ] \
+    && ok "${_bn}: an EXPLICIT empty list stays none (the rule does not fire)" \
+    || bad "${_bn}: an explicit empty --optional-services was given the defaults back: ${_out}"
+  _out="$(env -u OPTIONAL_SERVICES -u EXCLUDE_SERVICES timeout 60 bash "${_b}" --optional-services "owncast -anubis" --role bogus 2>&1)" || true
+  [ -z "$(_kept_list "${_out}")" ] \
+    && ok "${_bn}: an allow-list carrying a veto ('owncast -anubis') is left alone" \
+    || bad "${_bn}: 'owncast -anubis' had the defaults added to it: ${_out}"
+  _out="$(env -u OPTIONAL_SERVICES -u EXCLUDE_SERVICES timeout 60 bash "${_b}" --optional-services "all -anubis" --role bogus 2>&1)" || true
+  if [ -z "$(_kept_list "${_out}")" ] && _has "sentinel expanded" "$(printf '%s' "${_out}" | _plain)"; then
+    ok "${_bn}: 'all -anubis' still goes through the sentinel expansion, not the lone-veto rule"
+  else
+    bad "${_bn}: 'all -anubis' took the wrong arm: ${_out}"
+  fi
+done
+unset -f _plain _kept_list
+unset _b _bn _tok _out _kept _d _dflt_b _dflt_lib
+ENV="test"; OPTIONAL_SERVICES=""
+
 # ── the behavioural legs: run the real validator ─────────────────────────────
 VAL_OUT=""; VAL_RC=0
 run_val() {   # run_val "<OPTIONAL_SERVICES>" "<EXCLUDE_SERVICES>"
