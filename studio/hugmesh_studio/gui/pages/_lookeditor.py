@@ -38,7 +38,8 @@ from __future__ import annotations
 import os
 
 from ..qt import QtCore, QtGui, QtWidgets, Signal
-from ...core import brand_images, brand_look, fonts as core_fonts, theme, theme_presets
+from ...core import (brand_images, brand_look, fonts as core_fonts, plain_words, theme,
+                     theme_presets)
 from ...core.branding_themes import PREMADE_THEMES, THEME_SPECS
 from ._logintheme import open_platform_preview, populate_preset_combo
 from ._scroll import scrollable
@@ -681,10 +682,11 @@ class LookEditor(QtWidgets.QWidget):
                     if w is not self.source_labels[field]:
                         w.setEnabled(own_look_shows)
         self._refresh_sources()
+        sb = plain_words.term("superbrand")
         self.mode_note.setText(
-            "The superbrand's look: every brand starts from these choices."
+            f"The {sb}'s look: every brand starts from these choices."
             if self.model.mode == "design" else
-            "This brand's look: each setting is inherited from the superbrand until you "
+            f"This brand's look: each setting is inherited from the {sb} until you "
             f"change it; “{USE_SUPERBRAND}” hands it back (click twice).")
 
     def set_identity_allowed(self, allowed: bool, reason: str = "") -> None:

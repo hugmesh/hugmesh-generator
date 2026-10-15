@@ -336,14 +336,14 @@ def test_replacing_a_picture_frees_its_old_cost_first():
     assert ok                                            # the old picture's bytes are freed
 
 
-def test_the_environment_string_and_the_configmap_are_checked_with_their_numbers():
+def test_the_configmap_is_checked_with_its_numbers_and_no_environment_check_exists():
+    """The budget (102,400) sits under the environment entry (131,057 of value), so a
+    look inside the budget always starts a container and there is no separate check
+    (a refusal that could never fire was removed); the ConfigMap is the carrier that
+    can run out."""
+    assert not hasattr(bl, "fits_environment")
+    assert bl.LOOK_CSS_BUDGET < bl.ENV_VALUE_LIMIT
     css = bl.look_css({"preset": "ocean"})
-    ok, why = bl.fits_environment(css)
-    assert ok and why == ""
-    too_long = "x" * (bl.ENV_VALUE_LIMIT + 1)
-    ok, why = bl.fits_environment(too_long)
-    assert not ok and f"{len(too_long):,}" in why and "131,071" in why
-    assert bl.fits_environment("x" * bl.ENV_VALUE_LIMIT)[0]
     ok, why = bl.fits_configmap({"default": css, "shop": css})
     assert ok
     huge = {"default": "x" * 600_000, "shop": "x" * 500_000}

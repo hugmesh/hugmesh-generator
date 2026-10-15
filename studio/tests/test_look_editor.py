@@ -64,6 +64,24 @@ def test_a_design_edit_lands_in_the_record_and_emits_changed(qapp):
     assert ed.model.get("preset") == ""
 
 
+def test_a_box_left_with_the_value_it_already_holds_is_not_an_edit(qapp):
+    """Leaving a box unchanged emits nothing (the guard in LookEditor._write; with the
+    guard replaced by 'always' every tab through the form announced an edit and
+    re-drew the page)."""
+    ed = LookEditor(brand_look.Look(), path="docker")
+    seen = []
+    ed.changed.connect(lambda: seen.append(1))
+    ed.header_text.setText("Welcome")
+    ed.header_text.editingFinished.emit()
+    assert ed.model.get("header_text") == "Welcome" and len(seen) == 1
+    ed.header_text.editingFinished.emit()           # focus leaves again, nothing typed
+    ed.header_text.editingFinished.emit()
+    assert len(seen) == 1, "an unchanged box announced an edit"
+    ed.header_text.setText("Welcome back")
+    ed.header_text.editingFinished.emit()
+    assert len(seen) == 2
+
+
 def test_a_refused_value_is_a_sentence_beside_the_control_and_never_a_pop_up(qapp):
     ed = LookEditor(brand_look.Look(), path="docker")
     ed.show()

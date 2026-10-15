@@ -21,8 +21,8 @@ Semantics mirrored from the GUI editor:
 """
 from __future__ import annotations
 
-from ..core import (brand_images, brand_look, fonts as _fonts, login_preview, theme,
-                    theme_presets)
+from ..core import (brand_images, brand_look, fonts as _fonts, login_preview, plain_words,
+                    theme, theme_presets)
 from ..core.branding_themes import PREMADE_THEMES, THEME_SPECS
 
 __all__ = ["ThemesScreen", "EFFECT_LABELS", "VANTA_DEPENDENCY_NOTE", "chrome_summary"]
@@ -398,10 +398,11 @@ class LookText:
         m = self.model
         eff = m.effective()
         out: list[str] = []
+        sb = plain_words.term("superbrand")
         if m.mode == "design":
-            out.append("The superbrand's look: every brand starts from these choices.")
+            out.append(f"The {sb}'s look: every brand starts from these choices.")
         else:
-            out.append("This brand's look: each setting is inherited from the superbrand "
+            out.append(f"This brand's look: each setting is inherited from the {sb} "
                        "until you change it.")
             out.append(f"  'use COMMAND' twice hands one back ({brand_look.USE_SUPERBRAND}).")
         note = self._override_note()
@@ -557,7 +558,8 @@ class LookText:
         if field is None:
             return "'use' takes a command from the list, e.g. 'use shape'"
         if self.model.mode != "override":
-            return ("This is the superbrand's own look: there is no superbrand above it to "
+            sb = plain_words.term("superbrand")
+            return (f"This is the {sb}'s own look: there is no {sb} above it to "
                     "go back to.")
         note = self._override_note()
         if note:

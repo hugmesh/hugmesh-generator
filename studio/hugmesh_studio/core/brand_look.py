@@ -26,7 +26,9 @@ editor shows is :func:`budget` and a picture that would not fit is refused by
 environment entry (measured on this host: NAME=value of 131071 bytes starts a process,
 131072 does not), which is how the superbrand's look reaches the Docker containers as
 HUG_THEME_CSS, and the 1 MiB ConfigMap that carries looks on the kind cluster. They are
-checked where they apply (:func:`fits_environment`, :func:`fits_configmap`).
+kept below them by construction (the budget is under the environment entry, a test pins
+that, so no separate environment check exists) and the ConfigMap is checked where it
+applies (:func:`fits_configmap`).
 
 Qt-free, like the rest of core/: the window, the text screens and the start commands
 share it.
@@ -37,7 +39,7 @@ import base64
 import os
 import re
 import shutil
-from collections.abc import Collection, Mapping
+from collections.abc import Callable, Collection, Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -50,7 +52,7 @@ __all__ = [
     "PATHS_WITH_OWN_LOOK", "DOCKER_ONLY_SENTENCE", "VANTA_UNSELECTABLE",
     "normalise", "effective_look", "resolve", "look_css",
     "LOOK_CSS_BUDGET", "ENV_ENTRY_LIMIT", "ENV_VALUE_LIMIT", "CONFIGMAP_LIMIT",
-    "Budget", "budget", "picture_cost", "picture_fits", "fits_environment", "fits_configmap",
+    "Budget", "budget", "picture_cost", "picture_fits", "fits_configmap",
     "write_look_files", "look_from_cfg", "apply_look_to_cfg", "Look", "CfgLook",
     "Outcome", "HEX_FIELDS", "EFFECT_LABELS", "STYLE_LABELS", "DECOR_LABELS",
     "check_value", "check_carriers", "requirements", "Board", "board", "preview_html", "write_look_preview",
@@ -489,10 +491,10 @@ def picture_cost(field: str, picture_bytes: int, mime: str = "image/png") -> int
 def picture_fits(look: Mapping[str, Any], field: str, picture: brand_images.Picture,
                  others: Mapping[str, str] | None = None) -> tuple[bool, str]:
     """Would ``picture`` fit in ``field``? ``(True, "")`` or ``(False, the sentence with
-    the numbers)``. Three ceilings are asked in order: this look's own budget, the one
-    environment entry the Docker containers receive it in, and the ConfigMap that
-    carries it together with ``others`` (the other looks sharing that ConfigMap, id ->
-    stylesheet). A picture already in that field is replaced, so its bytes are freed
+    the numbers)``. Two ceilings are asked in order: this look's own budget (which sits
+    inside the one environment entry the Docker containers receive it in) and the
+    ConfigMap that carries it together with ``others`` (the other looks sharing that
+    ConfigMap, id -> stylesheet). A picture already in that field is replaced, so its bytes are freed
     first. Measured on the real composition, not estimated."""
     without = dict(normalise(look))
     without[field] = ""
@@ -517,30 +519,14 @@ def picture_fits(look: Mapping[str, Any], field: str, picture: brand_images.Pict
 
 
 def check_carriers(css: str, others: Mapping[str, str] | None = None) -> tuple[bool, str]:
-    """The ceilings a finished stylesheet meets after its own budget: the environment
-    entry, then the ConfigMap shared with ``others``. ``(True, "")`` or the sentence
-    with the numbers. Called with the look's final bytes by every path that grows a
-    look (a picture, a font, a longer header text)."""
-    ok, why = fits_environment(css)
-    if not ok:
-        return False, why
+    """The ceiling a finished stylesheet meets after its own budget: the ConfigMap
+    shared with ``others``. ``(True, "")`` or the sentence with the numbers. Called with
+    the look's final bytes by every path that grows a look (a picture, a font, a longer
+    header text). The environment entry has no check of its own: the budget is below it
+    (:data:`ENV_VALUE_LIMIT`), so a look inside the budget always fits."""
     if others:
-        ok, why = fits_configmap({**others, "this look": css})
-        if not ok:
-            return False, why
+        return fits_configmap({**others, "this look": css})
     return True, ""
-
-
-def fits_environment(css: str) -> tuple[bool, str]:
-    """Does this stylesheet fit the one environment entry (HUG_THEME_CSS) the Docker
-    containers receive it through?"""
-    n = len(css.encode("utf-8"))
-    if n <= ENV_VALUE_LIMIT:
-        return True, ""
-    return False, (
-        f"This stylesheet is {n:,} bytes; one environment entry holds at most "
-        f"{ENV_ENTRY_LIMIT:,} bytes including its name ({ENV_VALUE_LIMIT:,} of value), "
-        f"so the Docker containers could not start with it.")
 
 
 def fits_configmap(css_by_brand: Mapping[str, str]) -> tuple[bool, str]:
@@ -737,7 +723,11 @@ class Look:
 
     ``others`` is the stylesheets of the other looks that share this one's ConfigMap
     (id -> css); the host fills it, and a picture that would push the total past the
-    ConfigMap is refused with the numbers. ``identity_allowed`` False refuses the
+    ConfigMap is refused with the numbers. ``dependents`` is, in DESIGN mode, a function
+    the host sets that returns each brand's OWN overrides (id -> look): a brand's
+    stylesheet is the superbrand's look plus its own, so an edit here that would push
+    one of them past the budget is refused here, with that brand's name, and not later
+    by the writer that refuses the whole write (write_look_files). ``identity_allowed`` False refuses the
     desktop logo (an unaffiliated build: identity refused, look allowed)."""
 
     def __init__(self, own: Mapping[str, Any] | None = None, *,
@@ -748,6 +738,7 @@ class Look:
         self.mode = "design" if base is None else "override"
         self.armed: str | None = None
         self.others: dict[str, str] = {}
+        self.dependents: Callable[[], Mapping[str, Mapping[str, Any] | None]] | None = None
         self.identity_allowed = True
         self.identity_reason = ""
 
@@ -849,10 +840,33 @@ class Look:
             self._restore(field, had, old)
             return Outcome(False, LookBudgetError(used, LOOK_CSS_BUDGET).args[0])
         ok, why = check_carriers(css, self.others)
+        if ok:
+            why = self._dependents_problem()
+            ok = not why
         if not ok:
             self._restore(field, had, old)
             return Outcome(False, why)
         return Outcome(True)
+
+    def _dependents_problem(self) -> str:
+        """Design mode: the sentence for the first brand whose finished stylesheet (the
+        superbrand's look as it now is, plus that brand's own overrides) would pass the
+        budget; "" when none does or this is not the superbrand's look."""
+        if self.mode != "design" or self.dependents is None:
+            return ""
+        mine = self.effective()
+        for bid, own in self.dependents().items():
+            try:
+                css = look_css(effective_look(mine, own or {}), enforce_budget=False)
+            except LookError:
+                continue                       # that brand's own value is its own problem
+            used = len(css.encode("utf-8"))
+            if used > LOOK_CSS_BUDGET:
+                return (f"With this, the brand {bid} would have a stylesheet of {used:,} "
+                        f"bytes (it starts from this look and adds its own); the budget "
+                        f"is {LOOK_CSS_BUDGET:,}. Choose a smaller picture here, or "
+                        f"remove a picture {bid} adds itself.")
+        return ""
 
     def choose_preset(self, preset_id: str) -> Outcome:
         """A preset FILLS the two colours (and the model keeps the preset too, for its
