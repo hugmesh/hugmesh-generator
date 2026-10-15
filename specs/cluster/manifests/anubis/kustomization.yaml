@@ -11,8 +11,8 @@ images:
   - { name: ghcr.io/techarohq/anubis, newName: ghcr.io/techarohq/anubis, newTag: v1.25.0 }
 
 # The bot policy. botPolicies.yaml is the upstream default policy of the PINNED
-# tag above (https://github.com/TecharoHQ/anubis/blob/v1.25.0/data/botPolicies.yaml),
-# unchanged. The generator appends a content hash to the ConfigMap name and rewrites
+# tag above (https://github.com/TecharoHQ/anubis/blob/v1.25.0/data/botPolicies.yaml)
+# plus the rules between its hugmesh-local markers. The generator appends a content hash to the ConfigMap name and rewrites
 # the Deployment's volume to it, so editing the file rolls the pod.
 # WHEN YOU BUMP THE IMAGE TAG ABOVE, re-sync botPolicies.yaml from the new tag:
 # POLICY_FNAME replaces the built-in policy, so a stale copy would silently pin the
