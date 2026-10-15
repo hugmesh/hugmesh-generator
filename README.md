@@ -66,7 +66,8 @@ _As of 2026-08-05, except the kind SSO e2e bullets, re-measured 2026-10-14. Stat
   (the `SLX` bucket of the build matrix). Flipping the fleet to **enforcing** is
   the honest remaining step — see [Roadmap](#roadmap).
 - **✅ Boot + kernel hardening (both arches)** — kernel lockdown (`lsm=lockdown,
-  yama,selinux,bpf` + `lockdown=integrity`), Secure Boot **UKI** signing on x86
+  yama,selinux,bpf` + `lockdown=integrity` on x86 + rpi5; `lsm=lockdown,yama,selinux`
+  + `lockdown=integrity` on the 8 ARM boards), Secure Boot **UKI** signing on x86
   (dracut `--uefi` → org-key `sbsign`), and sysctl/SSH hardening, plus the x86
   build fixes that supersede the earlier kernel-config changes. The **x86 k8s
   netfilter/NAT/eBPF kernel surface** the Service/kube-proxy/CNI path needs is now
@@ -226,9 +227,10 @@ _As of 2026-08-05, except the kind SSO e2e bullets, re-measured 2026-10-14. Stat
   Discover/Flatpak wiring, autostart SSO deposit scripts); the server side is a
   full controller set in `hugmesh-admin-bff-api`. Dark behind
   `app.desktop.registry.enabled=false` / `app.desktop.remote-install.enabled=false`.
-  ⚠️ **Honest gap:** the SSO greeter/PAM **token producer** is still 🔭 deferred
-  (FD-07 increment 2), so the deposit path has no producer and the sudo leg is
-  inert even once the flags flip. (The original SSSD `id_provider = oidc` design
+  ⚠️ **Honest gap:** the SSO token **producer** (FD-07 increment 2) is now code
+  (`hugmesh-sso-token`, an RFC 8628 device-flow client) and unit-tested against
+  the real deposit and mapper, but it has never run against a live Casdoor or on
+  an image, so the sudo leg stays inert until the flags flip on a governed image. (The original SSSD `id_provider = oidc` design
   was retracted — that syntax exists in no released SSSD.) See
   [`docs/CLIENT-IMAGES.md`](docs/CLIENT-IMAGES.md) §7.
 - **✅ Workload Console — ships dark (the WHOLE console, not just an RBAC
@@ -390,8 +392,10 @@ none), and compose green is not evidence for the cluster._
   principal can produce a fresh `mfa_satisfied` stamp, then flip `mfa.enabled` →
   `true`, then (separately — `enforce-privileged-floor` is **not** a sub-flag of
   `enabled`) `enforcePrivilegedFloor` → `true`, moving the posture-gate
-  expectations in lockstep. Order and lockout preconditions:
-  [`docs/MFA-ROLLOUT.md`](docs/MFA-ROLLOUT.md).
+  expectations in lockstep (three suites for the first flip, two for the second —
+  measured, listed in the runbook's §3 steps 6-7). Order, lockout preconditions and
+  the exact operator commands:
+  [`docs/MFA-ROLLOUT.md`](docs/MFA-ROLLOUT.md) §3 and §9.
 - **🚧 SELinux — both acknowledged load defects are FIXED; enforcing now waits
   on an AVC workout that has not run yet.** Updated 2026-08-19; this section
   previously acknowledged that the modules bake and the loader is wired "but
@@ -430,65 +434,71 @@ none), and compose green is not evidence for the cluster._
   unnarrowed; and the enforce-gate flip (`HUGMESH_SELINUX_ENFORCE_GATE=1`)
   stays pending until an **enforcing** workout pass comes back AVC-clean —
   nodes still boot **PERMISSIVE** with the gate inert.
-- **🔭 bpf-LSM enforcement, and lockdown beyond x86 + rpi5.** The LSM stack each
+- **🔭 bpf-LSM enforcement beyond a registered hook layer.** The LSM stack each
   image advertises is now the one it runs — `yama` and `bpf` were named in
   `CONFIG_LSM`, the cmdline, the generated `grub.cfg` and the signed UKI while the
   kernel silently initialized only `lockdown,capability,selinux`; x86 + rpi5 now
   build `CONFIG_SECURITY_YAMA` + `CONFIG_BPF_LSM`, the 8 ARM boards dropped the
   `bpf` name they never built, and `tests/scripts/test-lsm-posture-honesty.sh`
-  fails the build if the two ever diverge again. Two things remain. **bpf-LSM can
-  register but not enforce:** attaching a `BPF_PROG_TYPE_LSM` program needs BTF,
-  which both arch fragments deliberately omit (it forces `CONFIG_DEBUG_INFO` and
-  needs `dev-util/pahole` in the kernel-build toolchain) — it arrives with the same
-  pahole-gated follow-up as cilium CO-RE. **Lockdown is a 2-of-10 posture, not a
-  fleet one:** only x86 and rpi5 build `CONFIG_SECURITY_LOCKDOWN_LSM` and pass
-  `lockdown=integrity`; the 8 ARM boards ship neither, which is now asserted in
-  both directions rather than papered over by the QEMU harness appending its own
-  `lockdown=integrity` to boards that never had it.
+  fails the build if the two ever diverge again. **Kernel lockdown is now a
+  fleet posture:** all 10 boards build `CONFIG_SECURITY_LOCKDOWN_LSM` (+ `_EARLY`),
+  list `lockdown` first in `CONFIG_LSM`/`lsm=` and pass `lockdown=integrity`; the
+  lint pins that for every board, not only agreement between fragment and cmdline.
+  What remains: **bpf-LSM can register but not enforce:** attaching a
+  `BPF_PROG_TYPE_LSM` program needs BTF, which both arch fragments deliberately omit
+  (it forces `CONFIG_DEBUG_INFO` and needs `dev-util/pahole` in the kernel-build
+  toolchain) — it arrives with the same pahole-gated follow-up as cilium CO-RE, and
+  the ARM boards also need `CONFIG_BPF_LSM` plus its deps before `bpf` may return to
+  their `lsm=`. The ARM lockdown change is **proven only by a Kconfig resolve and the
+  offline lint, not by a boot:** an image build plus the in-guest
+  `/sys/kernel/security/lockdown` assertion on real boards (or `launch-arm.sh`)
+  is still owed.
 - **🔭 Group-call SFU.** coturn gives 1:1/mesh TURN relay only. Scalable group
   calls (MatrixRTC / Element Call / LiveKit) do not exist in any form.
 - **🔭 Desktop-governance go-live — three dark flags, zero dial rows, no image.**
-  All three governance flags still default off, and one of them is invisible:
-  `app.device-terminal.enabled` and `app.device-terminal.dial.enabled` are in the
-  admin-BFF `application.yml`, but `app.desktop.remote-install.enabled` exists
-  only as a `@ConditionalOnProperty(..., matchIfMissing = true)` bean condition
-  with no yaml entry at all. Nothing overrides any of them in any cluster manifest
-  or compose file. Flipping the dial flag additionally requires a mandatory
-  security re-review **and** `device_ssh_dial` rows — the table has zero rows on
-  the running mesh, and the pinned channel factory refuses without an ACTIVE row
-  carrying a matching `host_key_fp` (TOFU forbidden), so the flag is inert even
-  when true. And no laptop / chromebook / desktop image has ever been built: the
-  default `X86_ROLE_LIST` is `pki backend frontend backend-gpu`, and 28 build sessions contain no
-  such artifact — so the desktop boot-verify (Qt6/KF6 Discover pull, the
-  `hugmesh-desktop` PKCE client, the desktop-sudo claim → polkit path) has never
-  run.
-- **🔭 Desktop-governance SSO greeter / PAM token producer** (FD-07 increment 2)
-  — without it the deposited-token path has no producer, so the SSO-sudo leg
-  stays inert even after the governance flags above flip.
+  All three governance flags still default off (`DEVICE_TERMINAL_ENABLED`,
+  `DEVICE_TERMINAL_DIAL_ENABLED`, `DESKTOP_REMOTE_INSTALL_ENABLED`), but they are
+  no longer invisible: each has an admin-BFF `application.yml` entry
+  (`app.desktop.remote-install.enabled` previously existed only as a
+  `matchIfMissing = true` bean condition), is declared `"false"` in the cluster
+  Deployment and read through `${NAME:-false}` in compose, and
+  `tests/desktop-governance/test-governance-flags-visible.sh` pins that. What
+  remains is not a flag flip: flipping the dial flag needs a mandatory security
+  re-review **and** `device_ssh_dial` rows (zero on the mesh audited 2026-08; the
+  pinned channel factory refuses without an ACTIVE row carrying a matching
+  `host_key_fp`, TOFU forbidden), **and** the per-device dial-key Secrets mounted
+  into the BFF pod, which no manifest does today. No laptop / chromebook /
+  desktop image has ever been built (the default `X86_ROLE_LIST` is `pki backend
+  frontend backend-gpu`, and 28 build sessions contain no such artifact), so the
+  desktop boot-verify (Qt6/KF6 Discover pull, the `hugmesh-desktop` PKCE client,
+  the desktop-sudo claim → polkit path) has never run. Preconditions in full:
+  [`docs/CLIENT-IMAGES.md`](docs/CLIENT-IMAGES.md) §7 "Go-live preconditions".
+- **🚧 Desktop-governance SSO token producer** (FD-07 increment 2) — the producer
+  is written and unit-tested (`specs/etc/hugmesh/desktop-governance/sso/`), but
+  unproven against a live Casdoor device endpoint and on a desktop image; the
+  lightdm-greeter / password-grant PAM login is not built.
 - **🔭 Notifications external channels** — Matrix DM + Akkoma feed + phpBB +
   email adapters on top of the shipped in-app MVP + SSE push.
 - **🚧 Live ApplicationSet cut-over for optional services** — the build-time
   prune ships; the hardcoded `30-*/50-*` Applications still own the workloads.
-- **🔭 Headscale ACL — the BFF push leg is dark, and the LIVE node applier is
-  broken.** The write seam itself landed (`HeadscalePolicyClient`, `GET`/`PUT
-  /api/v1/policy`, real impl + Noop default, leader-gated reconciler), so this is
-  no longer a read-only story; it stays dark behind
-  `app.registry.headscale-acl.enabled=false`, blocked on the single-writer
-  decision (headscale runs `policy: mode: file`, the node renderer is the writer,
-  while `PUT /api/v1/policy` is DB-mode only). Two open defects sit underneath.
-  **The guard against the silent no-op is not on org `main`:** the
-  `requireDbPolicyMode()` context-failure check exists only in `.stack-src`, so on
-  `main` today enabling the flag against the file-mode fleet boots clean and then
-  4xx-degrades every 60s forever behind one WARN line while an operator believes
-  push is live. **The node-side applier never reloads headscale:** commit
-  `e1743555` fixed exactly this in `provision.sh` (capture stderr, restart
-  headscale) but the RECURRING writer `specs/usr/sbin/gen-headscale-policy.sh`
-  still calls `headscale policy set` and ignores the same mode-`file` error — so
-  the pki node rewrites `policy.hujson` every 60s and the running headscale never
-  loads it, and Layer-A revocations do not propagate. The cross-repo parity gate
-  that would catch this cannot run either: it exits 3 ("COMPILE SIDE NOT CHECKED")
-  because it hardcodes the pre-rename `systems/hugmesh` package path against a
-  tree that is now `net/hugmesh`.
+- **🔭 Headscale ACL — the BFF push leg is dark, and the fleet is still file-mode.**
+  The write seam landed (`HeadscalePolicyClient`, `GET`/`PUT /api/v1/policy`, real
+  impl + Noop default, leader-gated reconciler) and stays dark behind
+  `app.registry.headscale-acl.enabled=false`. Decision 101 = B made the BFF the only
+  policy writer, which needs headscale in `policy.mode: database`; the fleet as built
+  still runs `mode: file` with the node renderer writing, tracked in
+  hugmesh-generator#634 (switch the mode, seed the stored policy so the tailnet does
+  not fall to allow-all, retire the node-side writer; needs a live control node to
+  confirm). Until then **nobody may flip `enabled`**. The BFF now refuses to wire the
+  push client unless it declares `policy-mode: database`
+  (`HeadscaleAclConfig.requireDbPolicyMode`, hugmesh-admin-bff-api), but headscale's
+  API does not report its mode, so the guard can only check the declaration.
+  The `gen-headscale-policy.sh` apply leg now captures the `policy set` refusal,
+  restarts headscale to load the rewritten file (as `provision.sh` does since
+  `e1743555`), waits for it to answer before forcing tags, and retries an apply that
+  failed. `tests/device-registry/test-layer-a-headscale-acl.sh` runs against the
+  `net/hugmesh` BFF tree; its two policy-mode checks stay red against a `database` BFF
+  until #634 lands, by design.
 - **🔭 Live in-cluster image build. (needs a live cluster)** The Kaniko manifests,
   the namespace + NetworkPolicy, the ESO wiring, the always-on ArgoCD Application
   (out of `apps-optional/`) and the `ROLE_IMAGE_BUILDER` seed + gateway route row
@@ -496,26 +506,35 @@ none), and compose green is not evidence for the cluster._
   run a real build, blocked behind bringing a cluster up. `APPSTORE_EFFECTOR_ENABLED`
   and `APPSTORE_FEDERATION_ENABLED` are now **`true`** in the admin-BFF deployment
   (the ArgoCD and federation seams are the real clients, not the Noop ones), but
-  neither leg's bearer token has a source in this tree — `APPSTORE_ARGOCD_AUTH_TOKEN`
-  and `APPSTORE_FEDERATION_AUTH_TOKEN` both default empty and there is no
-  ExternalSecret for either, so both legs make a real call that comes back **401**
-  until they are provisioned. `APPSTORE_BUILDER_ENABLED` is deliberately still
-  **`false`**: the push credential the Kaniko build pod mounts has **no
-  ExternalSecret** anywhere (its image-builder twin does), and because that mount is
-  NOT `optional`, enabling the builder first leaves the build pod wedged in
-  `ContainerCreating` for 1800s rather than failing. Worse, the two Kaniko templates
-  disagree about what to create: this repo's ships
-  `service-catalog-builder-registry` / key `.dockerconfigjson`, while the template
-  `KanikoBuildLauncher` actually loads from the admin-BFF classpath asks for
-  `service-catalog-registry-credentials` / key `config.json` — **the runtime name is
-  the one that must exist**. Both must be created **in `hugmesh-service-catalog-builds`**
-  (the namespace `APPSTORE_BUILDER_NAMESPACE` pins): a pod can only mount a Secret
-  from its own namespace, so copying `external-secrets/image-builder-externalsecrets.yaml`
-  and leaving its `namespace: hugmesh-image-builds` in place reproduces the wedge with
-  every name and key correct. `tests/scripts/test-appstore-effector-flags.sh` derives
-  both contracts from the templates, requires them in that namespace from a manifest
-  the kustomization actually applies, and turns RED if the builder flag is flipped
-  without them, so the ordering cannot be got wrong silently. `CASDOOR_ADMIN_ENABLED`
+  neither leg can send its bearer token yet. Both tokens now have a source
+  (`external-secrets/appstore-effector-externalsecrets.yaml` ->
+  Secret `appstore-effector-tokens`, read by the deployment as `optional: true`
+  secretKeyRefs), but the VALUES are operator-seeded in Vault
+  (`secret/<brand>/appstore-effector-tokens`: the ArgoCD token is minted by ArgoCD,
+  the federation token is a Casdoor superadmin JWT) and until then the ExternalSecret
+  reports SecretSyncedError by design. Neither leg gets as far as a 401 today: both
+  fail at the TLS handshake (admin-bff-api #62, #82), so the token is the second
+  wall. `APPSTORE_BUILDER_ENABLED` is deliberately still **`false`**. The push
+  credential the Kaniko build pod mounts is now created: Secret
+  `service-catalog-registry-credentials` (Opaque, key `config.json`, the name and key
+  the template `KanikoBuildLauncher` loads from the admin-BFF classpath asks for)
+  in **`hugmesh-service-catalog-builds`**, and this repo's own template carries the
+  same name and key. The builder stays off because that credential is not the only
+  wall: the runtime template names a `serviceAccountName: service-catalog-builder`
+  that no manifest creates, its pod spec cannot pass the namespace's `restricted`
+  PodSecurity level, and no Role lets the admin-BFF ServiceAccount create Jobs there
+  (all three live in the admin-BFF repo or its RBAC; see
+  `manifests/service-catalog-builder/README.md`). The mount is NOT `optional`, so a
+  missing Secret leaves the build pod wedged in `ContainerCreating` for 1800s rather
+  than failing, and a pod can only mount a Secret from its own namespace, so copying
+  `external-secrets/image-builder-externalsecrets.yaml` and leaving its
+  `namespace: hugmesh-image-builds` in place reproduces the wedge with every name and
+  key correct. `tests/scripts/test-appstore-effector-flags.sh` derives the contract from
+  both templates, requires them to agree and the Secret to exist in that namespace from
+  a manifest the kustomization actually applies (flag false or true), requires both
+  token refs to be optional refs to a Secret created in the admin-BFF's namespace, and
+  turns RED on the ServiceAccount / PodSecurity walls if the builder flag is flipped.
+  Nothing here has run a build. `CASDOOR_ADMIN_ENABLED`
   is still absent from the deployment (the per-service role leg stays skipped).
 - **🔭 DB-hardening flips. (needs a live cluster)** Merged dark, awaiting an
   operator: PG in-cluster TLS is implemented but `PG_TLS_ENABLED` is `"false"` on
@@ -524,13 +543,6 @@ none), and compose green is not evidence for the cluster._
   and the tier-egress default-deny NetworkPolicies are manual-sync with an overlay
   whose `resources: []` renders **zero objects** by design, needing per-namespace
   staged enablement with the devops namespace last (ArgoCD self-wedge risk).
-- **🔭 x86 auto-update poller is not baked.** `build-frite-stage4.sh` copies
-  `hugmesh-update` + its init script and adds it to both SVCS arrays;
-  `build-x86-host-stage4.sh` does neither, so `provision_update` falls to the else
-  branch and only writes `/etc/hugmesh/cron-update.staged` with a warning. Until
-  that protected edit lands, no x86 host and no x86 client image (laptop /
-  chromebook / desktop) can auto-update even if a superadmin flips `enabled: true`
-  — the per-node update schedule itself is shipped and ArgoCD-synced.
 - **🔭 Real cross-build proof for the shared binpkg pools** — the mechanism and
   the fingerprint guard are shipped; the compile-once speedup is unmeasured.
 
@@ -578,7 +590,7 @@ ships a full multi-tenant platform. State key: **✅ shipped** (on `main`) ·
   boot**, the live MFA operator flip, desktop-governance go-live (three dark
   flags, no dial rows, no image ever built), the broken node-side headscale ACL
   reload, the DB-hardening flips, a group-call SFU, the desktop-governance SSO
-  greeter/PAM token producer, notifications external channels, and the live
+  token producer (written, unproven on a live IdP or an image), notifications external channels, and the live
   optional-services ApplicationSet cut-over. See
   [Roadmap](#roadmap) and the Roadmap section of
   [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
@@ -1342,7 +1354,8 @@ on a bad/placeholder key). See [`docs/DEVOPS.md`](docs/DEVOPS.md).
   roles; secrets via Vault/ESO. See [`docs/SECURITY.md`](docs/SECURITY.md) and
   [`docs/selinux-module-loading.md`](docs/selinux-module-loading.md).
 - The kernel boots with **lockdown** (`lsm=lockdown,yama,selinux,bpf`,
-  `lockdown=integrity`); x86 ships a **Secure Boot UKI** signed with the org key
+  `lockdown=integrity`; the 8 ARM boards carry `lsm=lockdown,yama,selinux` with the same
+  `lockdown=integrity`, no `bpf`); x86 ships a **Secure Boot UKI** signed with the org key
   (`sbsign`) and runs **firewalld** (test/prod zone profiles), while the
   cross-compiled rpi5 arm64 platform excludes firewalld deliberately (the
   `glib[introspection]` cross bootstrap does not compile) and uses `nftables` +

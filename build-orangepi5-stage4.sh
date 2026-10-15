@@ -2061,7 +2061,7 @@ else
         for must in CONFIG_SECURITY_SELINUX CONFIG_SECURITY_SELINUX_BOOTPARAM; do
             grep -q "^${must}=y" .config || { err "SELinux kernel option ${must} not enabled after olddefconfig"; exit 1; }
         done
-        grep -q '^CONFIG_LSM="yama,selinux"$' .config || { err "CONFIG_LSM malformed (expected yama,selinux)"; exit 1; }
+        grep -q '^CONFIG_LSM="lockdown,yama,selinux"$' .config || { err "CONFIG_LSM malformed (expected lockdown,yama,selinux); lockdown/SELinux would not activate"; exit 1; }
         # ...and every NAME in that string must have its module COMPILED IN. The
         # string-only assert above is structurally blind to how this actually
         # failed on the fleet: the kernel does not diagnose an LSM name it cannot
