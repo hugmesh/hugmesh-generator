@@ -18,9 +18,11 @@ fails if any of these stop being true:
      apps/04-external-secrets-config.yaml name no spec/provider/vault/server
      path (a `replacements` target or a JSON-6902 op would be the seam #531 asked
      about, and decision 88 = B declined);
-  4. every other Vault `server:` literal under specs/cluster/manifests (the
-     generators') is the same pinned address, so the pin is not undone one file at
-     a time;
+  4. every `server: <http(s) URL>` line (also as a `- server:` list item) in a
+     *.yaml/*.yml/*.tpl under specs/cluster/manifests, whatever the host is
+     called, is the same pinned address, so the pin is not undone one file at a
+     time. Scope: single-line block-style fields only; flow style, JSON, a value on
+     the next line, and files outside specs/cluster/manifests are not read;
   5. scripts/gen-cluster-secrets.sh's header still says VAULT_ADDR never reaches
      the ClusterSecretStore.
 
@@ -44,9 +46,11 @@ MARKER = "eso-vault-server: pinned"
 DECISION = "decision 88"
 WRITER_PHRASE = "VAULT_ADDR never reaches the ClusterSecretStore"
 
-# A `server:` line whose value is a vault address (not the kubernetes API server
-# ArgoCD Applications name under spec.destination).
-SERVER_LINE = re.compile(r"""^\s*server:\s*["']?(https?://[^"'\s#]*vault[^"'\s#]*)""")
+# Any `server:` line (or `- server:` list item) whose value is an http(s) URL. Not
+# gated on the host name: a generator re-pointed at a host that does not say "vault"
+# must fail too. (ArgoCD Applications name the kubernetes API server under
+# spec.destination, but those live in specs/cluster/apps, outside MANIFESTS.)
+SERVER_LINE = re.compile(r"""^\s*(?:-\s+)?server:\s*["']?(https?://[^"'\s#]+)""")
 FIELD_PATH = re.compile(r"provider[/.]vault[/.]server")
 
 
@@ -107,7 +111,7 @@ def check(root):
             errs.append(f"{rel}: targets spec/provider/vault/server -- a render-time "
                         "re-point of the pinned address (decision 88 = B declined it)")
 
-    # 4: every other vault server literal is the same address.
+    # 4: every other server URL literal is the same address.
     mdir = os.path.join(root, MANIFESTS)
     literals = 0
     for dirpath, _dirs, files in os.walk(mdir):
@@ -122,10 +126,10 @@ def check(root):
                     if m:
                         literals += 1
                         if m.group(1) != PIN:
-                            errs.append(f"{rel}:{no}: vault server {m.group(1)!r} is not "
+                            errs.append(f"{rel}:{no}: server {m.group(1)!r} is not "
                                         f"the pinned {PIN!r}")
     if literals == 0:
-        errs.append(f"{MANIFESTS}: found no vault `server:` literal at all "
+        errs.append(f"{MANIFESTS}: found no `server:` URL literal at all "
                     "(the census is vacuous)")
 
     # 5: the writer's header.

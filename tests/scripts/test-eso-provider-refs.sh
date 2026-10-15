@@ -1032,6 +1032,7 @@ pin_mutate cite   "${SS}" "s.replace('decision 88', 'a decision')" "no longer ci
 pin_mutate seam-kustomization "${KU}" "s + '\n# plain comment, ignored\npatches:\n  - target: {kind: ClusterSecretStore}\n    patch: |-\n      - op: replace\n        path: /spec/provider/vault/server\n        value: https://elsewhere:8200\n'" "render-time re-point"
 pin_mutate seam-app "${AP}" "s + '\n# path: /spec/provider/vault/server\n  patches: [{path: /spec/provider/vault/server}]\n'" "render-time re-point"
 pin_mutate generator-drift "${HB}" "s.replace('server: https://vault.vault.svc.cluster.local:8200', 'server: https://vault.vault.svc.cluster.local:9200', 1)" "is not the pinned"
+pin_mutate generator-offhost "${HB}" "s.replace('server: https://vault.vault.svc.cluster.local:8200', 'server: https://secrets.example.com:8200', 1)" "is not the pinned"
 pin_mutate writer-header scripts/gen-cluster-secrets.sh "s.replace('NEVER REACHES THE ClusterSecretStore', 'MAY REACH THE ClusterSecretStore')" "header no longer says"
 # vacuity: a tree with no store at all must not pass
 mkdir -p "${STAGE_ROOT}/pin-empty"
