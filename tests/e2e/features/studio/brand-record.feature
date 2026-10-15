@@ -71,6 +71,17 @@ Feature: One brand record drives every brand's look and ways on every start path
     Then the command failed
     And the command output contains "the brand record says this mesh has no Tor address, but --with-tor was given"
 
+  # A typed --brand picks the Vault path (secret/<brand>) and --own-casdoor-domain picks
+  # which brands get a sign-in of their own: a record that silently beat either would
+  # start a mesh the person did not type. Both are refused, like --with-tor.
+  Scenario: a command-line brand or own sign-in that contradicts the record is refused, not overridden
+    When I ask the Docker mesh plan for the brand "other" on the command line against the brand record
+    Then the command failed
+    And the command output contains "the brand record names the superbrand acme, but --brand other was given"
+    When I ask the Docker mesh plan for the own sign-in "blog.mesh.example" on the command line against the brand record
+    Then the command failed
+    And the command output contains "which no --own-casdoor-domain names"
+
   # show-record exists to say what the running mesh does. The stack node publishes
   # each own sign-in on a port by its position in the GIVEN list, so the record must
   # list them in that order too: zed then alpha is 8001 then 8002 in both verbs.

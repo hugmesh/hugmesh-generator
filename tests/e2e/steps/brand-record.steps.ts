@@ -191,6 +191,18 @@ When('I ask the Docker mesh plan for Tor on the command line against the brand r
     '--with-tor', '--generator-dir', REPO_ROOT]);
 });
 
+When('I ask the Docker mesh plan for the brand {string} on the command line against the brand record',
+  async ({ world }, brand: string) => {
+    studio(world, 'local_mesh_bootstrap', ['plan', '--record', world.get<string>(REC_KEY),
+      '--brand', brand, '--generator-dir', REPO_ROOT]);
+  });
+
+When('I ask the Docker mesh plan for the own sign-in {string} on the command line against the brand record',
+  async ({ world }, name: string) => {
+    studio(world, 'local_mesh_bootstrap', ['plan', '--record', world.get<string>(REC_KEY),
+      '--own-casdoor-domain', name, '--generator-dir', REPO_ROOT]);
+  });
+
 When('I write the builder profile from the brand record in a fresh Studio process', async ({ world }) => {
   studio(world, 'brand_model', ['profile', '--record', world.get<string>(REC_KEY),
     '--out', world.get<string>(PROF_KEY)]);

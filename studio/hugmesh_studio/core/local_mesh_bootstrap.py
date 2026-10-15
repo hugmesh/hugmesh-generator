@@ -1818,7 +1818,8 @@ def _cfg_from_args(args: argparse.Namespace) -> LocalMeshBootstrapConfig:
         own_idp_domains=_parse_own_casdoor_domains(args.own_casdoor_domain),
         tor_release=bool(getattr(args, "tor_release", False)))
     # `--record FILE` (#654, D5): the brand record is the authority for the brand, the
-    # public name, the superbrand block and the brands; every other flag stays.
+    # public name, the superbrand block and the brands; every other flag stays; a flag that
+    # contradicts one of those is refused by apply_record_to_bootstrap.
     if getattr(args, "record", ""):
         rec = brand_model.load_record(args.record)
         brand_model.apply_record_to_bootstrap(rec, cfg)
@@ -1961,7 +1962,10 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--record", default="",
                    help="a brand-record.json (core/brand_model.py): its superbrand "
                         "block and brands become this mesh's brand, public name and "
-                        "domains; every other flag still applies. `up --record FILE` "
+                        "domains; every other flag still applies, but a flag that says "
+                        "something else about those (--brand, --cluster-domain, "
+                        "--own-casdoor-domain, --with-tor) is refused, not "
+                        "overridden. `up --record FILE` "
                         "starts a mesh from a record; `show-record --record FILE` "
                         "prints it.")
     p.add_argument("--tor-release", action="store_true",
