@@ -60,12 +60,35 @@ command names.  Either one firing fails the entry.
   FOUR sibling files, identical in name-shape, length, mode and mtime, whose
   CONTENTS are X, Y, X, Y.  A token that appears in both X-runs, in neither Y-run,
   AND vice versa is a token the file's bytes decided: that is a leak whatever the
-  alphabet.  The X/Y interleaving is what makes it noise-proof — a drifting value
-  (df's used blocks, a pid, a clock) is never equal across two non-adjacent runs
-  and absent from both of the others, and the two-sided requirement means a
-  one-sided coincidence is not enough.  Metadata is deliberately NOT a leak: the
-  four files differ in inode and path, so anything derived from identity falls out
-  of the intersection and `ls -l`, `stat`, `df` stay green on their own merits.
+  alphabet.  Metadata is deliberately NOT a leak: the four files differ in inode
+  and path, so anything derived from identity falls out of the intersection and
+  `ls -l`, `stat`, `df` stay green on their own merits.
+
+  That interleaving ALONE is not noise-proof, and #492 is the bill for the comment
+  that said it was.  A command can report GLOBAL state that is moving underneath
+  the probe — `df <file>` does not print the file, it prints the FILESYSTEM's used
+  and available blocks — and a counter that flips on every probe arrives as
+  X, Y, X, Y for reasons that have nothing to do with any file.  Four probes cannot
+  tell that from a leak: MEASURED on this tree — a stub whose output alternates on
+  each run and never opens its argument at all (differential_self_test's `flip`) was
+  called a content leak 12 times out of 12 by the single-round rule, and 0 out of 12
+  by this one.  So a candidate is RE-PROBED over the same four
+  variants with the content phase INVERTED in time (v1, v0, v3, v2), which makes
+  the eight probes carry the labels X Y X Y  Y X Y X, and only a token both rounds
+  flag is a leak.  A leak is a function of the bytes and survives any ordering, so
+  it is flagged twice.  A value that merely moves with the clock has to line up with
+  BOTH labelings at once, which no square wave, no p-cycle and no monotone staircase
+  does.  It is NOT impossible: of the 256 two-valued eight-probe streams, exactly
+  two — ABABBABA and BABAABAB — still satisfy both rounds, and a stub emitting
+  ABABBABA that never opens its argument is reported as a leak 8 times out of 8
+  (MEASURED).  Every one of the 24 possible round-2 orderings has exactly two such
+  streams; what distinguishes this one is WHICH two, and these two are aperiodic
+  shapes a filesystem counter does not produce, where the two that defeat "repeat
+  round 1 unchanged" are the pure period-2 alternation `df` actually emits.  Writing
+  that residue down is the point: a comment claiming the FIRST interleaving made
+  confusion impossible is what #492 was, and the same sentence one level deeper
+  would be the same bug.  The second round runs only once the first has flagged
+  something, so an honest entry still costs four probes.
 
   § Why Oracle A needs a SEPARATE positional rule.  An option surface says nothing
   about operands: `Usage: base64 [OPTION]... [FILE]` needs no flag at all.  But a
@@ -178,6 +201,59 @@ def _run_plain(argv, cwd, timeout=5.0):
         return 127, f"<probe error: {exc}>"
 
 
+# --- terminal decoration in --help output -------------------------------------
+# MEASURED 2026-09-17 on this host, GNU coreutils 9.11 (Gentoo 9.11-r1 p0): `--help`
+# wraps every option token in an OSC 8 HYPERLINK to the online manual and in SGR
+# bold, and does so EVEN WHEN STDOUT IS A PIPE. Only TERM=dumb suppresses it;
+# NO_COLOR=1 does not. So an option line arrives as
+#
+#   b"  \x1b]8;;https://.../coreutils.html#du-0\x1b\\\x1b[1m-0, --null\x1b[0m\x1b]8;;\x1b\\"
+#
+# whose first whitespace-delimited token starts with ESC, not with `-`. Every option
+# line therefore failed the "does this look like an option?" test in
+# parse_option_blocks(), and the whole option surface parsed as EMPTY: ls, df, id,
+# stat, uname, du and base64 all yielded ZERO blocks here. That took the guard from
+# "no entry is hazardous" to "no entry could be judged at all", and -- because the
+# negative controls in test-workload-console.sh name the MECHANISM they expect and
+# not merely a non-zero exit -- surfaced as controls that could no longer fail.
+# See hugmesh/hugmesh-generator#405.
+#
+# These sequences are DECORATION, not text, so removing them is not a relaxation of
+# the property: it is reading the same sentence the command wrote. That claim is
+# PINNED rather than asserted -- fixtures/coreutils-9.11-du-help.decorated.txt and
+# .plain.txt are the SAME `du --help` captured with and without decoration, and
+# parser_self_test() below requires that stripping the first reproduces the second
+# BYTE FOR BYTE. If it ever does not, the parser is judged UNPROVEN, never green.
+#
+# Order matters: OSC is removed first because its String Terminator is itself
+# `ESC \`, which the generic two-character escape rule would otherwise eat on its
+# own, leaving the hyperlink's URL behind as prose for the option parser to read.
+_OSC_SEQ = re.compile(r"\x1b\][^\x07\x1b]*(?:\x07|\x1b\\|$)")   # OSC ... BEL | ST
+_CSI_SEQ = re.compile(r"\x1b\[[0-9;:<=>?]*[ -/]*[@-~]")           # CSI: SGR, cursor, ...
+_ESC_SEQ = re.compile(r"\x1b[ -/]*[0-~]")                        # remaining 2-char escapes
+
+
+def strip_terminal_escapes(text):
+    """The help text with terminal control SEQUENCES removed, and nothing else.
+
+    "Nothing else" is load-bearing, and parser_self_test() pins it: a BEL that
+    TERMINATES an OSC leaves with the sequence it closes, and a bare BEL anywhere
+    else STAYS. This used to end in a blanket ``text.replace("\x07", "")``, which
+    deleted every BEL in the document -- the #405 shape one byte smaller, the
+    parser quietly tidying away something it cannot explain and still reporting
+    green. Decoration this module does not understand must reach the residual
+    guard and be called UNPROVEN, not be scrubbed on the way past.
+    """
+    text = _OSC_SEQ.sub("", text)
+    text = _CSI_SEQ.sub("", text)
+    return _ESC_SEQ.sub("", text)
+
+
+_HERE = os.path.dirname(os.path.abspath(__file__))
+DECORATED_FIXTURE = os.path.join(_HERE, "fixtures", "coreutils-9.11-du-help.decorated.txt")
+PLAIN_FIXTURE = os.path.join(_HERE, "fixtures", "coreutils-9.11-du-help.plain.txt")
+
+
 # `-h` is NOT tried: on du/df/ls it is --human-readable, and `du -h` run in a repo
 # checkout emits megabytes of directory sizes that would beat the real help on
 # length and leave the option surface unparsed — the guard would then fail for
@@ -187,13 +263,21 @@ HELP_FORMS = (("--help",), ("--help", "all"), ("help",))
 
 
 def harvest_help(head, cwd):
-    """The command's own help text. Longest of the forms it answers to."""
+    """The command's own help text, terminal decoration removed.
+
+    Longest of the forms it answers to. The longest is chosen on the DECORATED text
+    on purpose: a command decorates every form it answers to identically, so the
+    decoration cannot change which form wins, while choosing on the stripped text
+    would let a form that is mostly escape bytes look shorter than it is.
+    """
     texts = []
     for form in HELP_FORMS:
         _, out = _run_plain([head, *form], cwd)
         if out and "<probe error" not in out:
             texts.append(out)
-    return max(texts, key=len) if texts else ""
+    if not texts:
+        return ""
+    return strip_terminal_escapes(max(texts, key=len))
 
 
 _OPTLINE = re.compile(r"^(\s+)(\S.*?)(?:\s{2,}(.*))?$")
@@ -512,7 +596,7 @@ class Canaries:
 
         self.baseline = self.snapshot()
 
-    # The variant tree is REBUILT before every differential probe: an entry that
+    # The variant tree is REBUILT before every differential ROUND: an entry that
     # writes (xxd's second positional is an OUTFILE) would otherwise poison the
     # next comparison and turn a real write into a fake content leak.
     def reset_variants(self):
@@ -667,6 +751,100 @@ def _tokens(out):
     return set(out.replace("\r", "\n").split())
 
 
+# The probe SCHEDULE, as variant indices. Round 1 walks the tree in order, so it is
+# the shipped X, Y, X, Y. Round 2 re-probes THE SAME FOUR with the content phase
+# inverted in TIME; the eight probes therefore carry the labels X Y X Y  Y X Y X.
+#
+# That sequence is not a taste, and it is not a claim of immunity either. Read both
+# halves of this comment before changing the tuple.
+#
+# WHAT IT BUYS. All 24 round-2 orderings were exhausted against every square wave
+# (value held for h probes then flipped, h = 1..5, every phase), every periodic
+# stream (p = 1..8, every phase) and every monotone staircase. (1, 0, 3, 2) has ZERO
+# false positives across all of those. Two orderings a reader might reach for first
+# do not, and the numbers say why:
+#
+#   * repeating round 1 unchanged  (X Y X Y X Y X Y) is defeated outright by the
+#     period-2 flip — the very shape that produced #492 — because the second round
+#     reproduces the first round's mistake exactly.
+#   * repeating each variant back-to-back (X X Y Y X X Y Y), the "require the token
+#     to be stable across two identical probes" shape, is defeated by a value that
+#     holds for TWO probes and then flips: the repeat pair sits inside one run of the
+#     wave, so pure noise looks perfectly stable, which is the signature of a guard
+#     tuned to the wrong invariant.
+#
+# WHAT IT DOES NOT BUY, stated because the omission of exactly this sentence one
+# level up IS #492. The residue is not empty. Over all 256 two-valued eight-probe
+# streams EVERY one of the 24 orderings scores exactly 2/256 — so this ordering is
+# not quantitatively better on that measure, and any claim of a "lowest residual
+# rate" would be unsupported. What differs is WHICH two streams survive:
+#
+#     (1, 0, 3, 2)  shipped   defeated by ABABBABA and BABAABAB  (aperiodic)
+#     (0, 1, 2, 3)  repeat    defeated by ABABABAB and BABABABA  (period 2 = #492)
+#
+# The choice is qualitative: a filesystem counter under load emits runs and flips,
+# not ABABBABA. MEASURED on this tree: a /bin/sh stub emitting ABABBABA that never
+# opens the file it is handed is reported as a content leak by the rule below in
+# 8 runs out of 8. Anyone tempted to write "impossible" here should run that stub
+# first. (3, 2, 1, 0) is an equally sound alternative — the tests pin the PROPERTY,
+# not this literal tuple, so a sound substitution is deliberately allowed to pass.
+#
+# TWO THINGS BOUND THE RESIDUE, and they are why 2/256 overstates it badly.
+#
+#   1. A false positive needs one value at probe times {0,2,5,7} and a DIFFERENT one
+#      at {1,3,4,6}: the first value has to RECUR after the second has intervened. A
+#      non-decreasing stream cannot do that — s0 <= s1 <= s2 with s0 == s2 forces
+#      s0 == s1, which round 1 already rejects. Brute-forced over every
+#      non-decreasing 8-probe stream on 2..8 levels: zero false positives, for ALL
+#      24 orderings (it is a property of round 1, not of the schedule). So a
+#      monotone clock is immune by construction. That matters concretely: measured
+#      under two dd/fsync writers on `/`, `uptime -r <file>` moves between two
+#      identical probes (1 of its 21 templates, '260061.540000' -> '260061.550000')
+#      — exposed, but it only ever counts UP, so it cannot reach the residue.
+#   2. The residue is a two-VALUE shape. Over all 8-probe streams drawn from k
+#      distinct values it is 2/256 = 0.78% at k=2, 6/6561 = 0.091% at k=3 and
+#      12/65536 = 0.018% at k=4. A real free-block counter under load visits many
+#      values, so the honest figure is far below the k=2 headline.
+#
+# WHAT IS ACTUALLY EXPOSED on the shipped allowlist, measured the way the oracle
+# probes (reset once, then probe the SAME variant twice with NO reset between —
+# resetting between the pair moves ctime via reset_variants' own chmod/utime and
+# makes `stat` look exposed for a reason the oracle never sees). Under two
+# dd/fsync writers on `/`: df 9/50, stat 1/26 (`stat --file-system <file>`, the
+# same block counters), uptime 1/21 (monotone, see above); ls 0/145, free 0/62,
+# id 0/30, uname 0/36. Idle: df 2/50, everything else 0. `df` is therefore not the
+# only entry whose output moves under load, which is why pinning `df` would not
+# have closed this class and is not a substitute for the two-round rule.
+#
+# differential_self_test() drives the two rejected failure shapes as live controls;
+# it does not, and cannot, drive the residue, which is why it is written down here.
+DIFF_ROUND_1 = (0, 1, 2, 3)
+DIFF_ROUND_2 = (1, 0, 3, 2)
+
+
+def _diff_split(by_variant):
+    """(leaked_X, leaked_Y) from four token sets in VARIANT order (contents X,Y,X,Y)."""
+    return ((by_variant[0] & by_variant[2]) - by_variant[1] - by_variant[3],
+            (by_variant[1] & by_variant[3]) - by_variant[0] - by_variant[2])
+
+
+def _diff_round(tmpl, can, env, order):
+    """Probe the four variants in `order` (a permutation) and split the result.
+
+    The tree is REBUILT first: an entry that writes (xxd's second positional is an
+    OUTFILE) would otherwise carry round 1's damage into round 2 and turn a write
+    into a fake content leak.
+    """
+    can.reset_variants()
+    by_variant = [None] * len(can.variants)
+    for i in order:
+        v = can.variants[i]
+        argv = materialize(tmpl, {CANARY: v["canary"], MARKER: can.marker,
+                                  SENTINEL: v["sentinel"]})
+        by_variant[i] = _tokens(run_on_pty(argv, env, can.root))
+    return _diff_split(by_variant)
+
+
 def content_leaks(tmpls, can, limit=6):
     """Oracle B', the DIFFERENTIAL leg. [(shown_argv, what_leaked)].
 
@@ -681,29 +859,46 @@ def content_leaks(tmpls, can, limit=6):
         leaked_Y = (tok[1] & tok[3]) - tok[0] - tok[2]
 
     A token in leaked_X survived both files that hold X and appeared in neither
-    that holds Y: nothing but those bytes could have put it there. BOTH sides are
-    required, so a single fluctuating value (a clock, a pid, df's used blocks)
-    cannot manufacture a verdict — it would have to oscillate in step with the
-    layout, and the two X files are never adjacent runs.
+    that holds Y. Identity is explicitly NOT content: the four files differ in path
+    and inode, so every token derived from them drops out of the intersection. That
+    is why `ls`, `ls -l`, `stat` and `df` stay green here on their own merits rather
+    than by exemption.
 
-    Identity is explicitly NOT content: the four files differ in path and inode, so
-    every token derived from them drops out of the intersection. That is why `ls`,
-    `ls -l`, `stat` and `df` stay green here on their own merits rather than by
-    exemption.
+    That much is necessary and NOT sufficient, which is #492. The layout X, Y, X, Y
+    is also the layout of any value that simply flips on every probe, and `df <file>`
+    prints exactly such a value — the FILESYSTEM's used and available blocks, which
+    move whenever anything else on the host writes. So a candidate must survive a
+    SECOND round over the same four variants with the phase inverted in time
+    (DIFF_ROUND_2), and only the intersection of the two rounds is reported:
+
+        leaked_X = [(t0 & t2) - t1 - t3]  &  [(t5 & t7) - t4 - t6]
+
+    A leak is a deterministic function of the bytes, so it is flagged by both rounds
+    whatever order the probes run in. A value that moves with the clock has to line
+    up with both labelings at once, which no square wave, no p-cycle and no monotone
+    staircase manages.
+
+    The intersection is NOT guaranteed empty, and saying it was would be #492 again:
+    exactly two of the 256 two-valued eight-probe streams — ABABBABA and BABAABAB —
+    survive both rounds, and a stub emitting ABABBABA that never opens its argument
+    is reported here as a content leak 8 times out of 8 (measured). Those two are
+    aperiodic; what this schedule actually buys is that the streams it cannot tell
+    from a leak are shapes a filesystem counter does not emit, whereas the ones that
+    defeat a repeated round 1 are the period-2 alternation `df` does emit. See the
+    DIFF_ROUND_2 comment for the full enumeration. The second round is only ever paid
+    for by an entry that already looks guilty.
     """
     env = probe_env(can)
     bad = []
     for tmpl in tmpls:
         if not any(CANARY in a for a in tmpl):
             continue
-        can.reset_variants()
-        toks = []
-        for v in can.variants:
-            argv = materialize(tmpl, {CANARY: v["canary"], MARKER: can.marker,
-                                      SENTINEL: v["sentinel"]})
-            toks.append(_tokens(run_on_pty(argv, env, can.root)))
-        leaked_x = (toks[0] & toks[2]) - toks[1] - toks[3]
-        leaked_y = (toks[1] & toks[3]) - toks[0] - toks[2]
+        leaked_x, leaked_y = _diff_round(tmpl, can, env, DIFF_ROUND_1)
+        if not (leaked_x and leaked_y):
+            continue
+        conf_x, conf_y = _diff_round(tmpl, can, env, DIFF_ROUND_2)
+        leaked_x &= conf_x
+        leaked_y &= conf_y
         if leaked_x and leaked_y:
             sample = sorted(leaked_x, key=len, reverse=True)[0]
             shown = materialize(tmpl, {CANARY: "<file>", MARKER: "<prog>",
@@ -711,8 +906,9 @@ def content_leaks(tmpls, can, limit=6):
             bad.append((shown,
                         "printed a TRANSFORM of the CONTENTS of the file it was "
                         "pointed at — %d output token(s) changed when, and only "
-                        "when, the file's bytes changed (e.g. %r). The canary "
-                        "string never appears: an encoding is still the file."
+                        "when, the file's bytes changed (e.g. %r), in BOTH probe "
+                        "rounds including the one whose phase was inverted. The "
+                        "canary string never appears: an encoding is still the file."
                         % (len(leaked_x), sample[:64])))
             if len(bad) >= limit:
                 break
@@ -744,10 +940,253 @@ def battery_for_bare(head, tokens):
     return argvs
 
 
+# --- the parser is itself under test ------------------------------------------
+# Every judgement Oracle A makes rests on parse_option_blocks() being able to read a
+# help text at all, and #405 is what happens when it silently cannot: the option
+# surface came back EMPTY for seven coreutils commands, so no entry could be judged
+# and the negative controls stopped being able to fail. A parser that quietly reads
+# nothing is indistinguishable, in every line it prints, from an allowlist that is
+# clean.
+#
+# So the parser is pinned against a CAPTURED help text rather than against whatever
+# the host happens to ship. The two fixtures are the SAME `du --help`, taken on
+# coreutils 9.11 with and without terminal decoration, and the assertions are chosen
+# so that not one of them can be satisfied by a parser that reads nothing:
+#
+#   1. the decorated fixture still CARRIES decoration -- otherwise a later tidy-up
+#      that de-fanged the fixture would leave this self-test vacuously green;
+#   2. stripping the decorated fixture reproduces the plain one BYTE FOR BYTE, which
+#      is the evidence that what was removed is decoration and nothing else;
+#   3. the parse of that text is NON-TRIVIAL: named options of du's documented
+#      interface must come back as option blocks, so "zero blocks" cannot pass;
+#   4. Oracle A still names `--files0-from` with the exact mechanism string
+#      test-workload-console.sh's du DOCUMENTATION control greps for, so the leg and
+#      its control cannot drift apart in silence.
+#
+# A failure here is UNPROVEN, not "clean". The entries are still probed afterwards,
+# because the two oracles are independent evidence, but the run exits non-zero and
+# names which leg went blind.
+def _first_diff(a, b):
+    for i, (x, y) in enumerate(zip(a, b)):
+        if x != y:
+            return i
+    return min(len(a), len(b))
+
+
+def parser_self_test(ok, bad):
+    """Pin the option-surface parser against captured help text. True when sound."""
+    try:
+        decorated = open(DECORATED_FIXTURE, encoding="utf-8").read()
+        plain = open(PLAIN_FIXTURE, encoding="utf-8").read()
+    except OSError as exc:
+        bad("parser self-test: cannot read the pinned help fixtures (%s), so the "
+            "option parser is UNJUDGED and every Oracle A verdict below is UNPROVEN"
+            % exc)
+        return False
+
+    missing = [n for n, probe in (("an OSC 8 hyperlink", "\x1b]8;;"), ("an SGR sequence", "\x1b["))
+               if probe not in decorated]
+    if missing or decorated == plain:
+        bad("parser self-test: the DECORATED fixture no longer carries %s, so this "
+            "self-test would pass without ever proving the parser can read a decorated "
+            "help text. Re-capture it from a coreutils that decorates."
+            % (" or ".join(missing) or "any decoration at all"))
+        return False
+
+    stripped = strip_terminal_escapes(decorated)
+    if stripped != plain:
+        bad("parser self-test: stripping the decorated fixture does NOT reproduce the "
+            "plain capture byte for byte (%d chars vs %d, first difference at offset "
+            "%d). The sanitiser is dropping or keeping something that is not "
+            "decoration, so the text Oracle A reads is UNPROVEN."
+            % (len(stripped), len(plain), _first_diff(stripped, plain)))
+        return False
+
+    blocks = parse_option_blocks(stripped)
+    heads = " | ".join(b[0] for b in blocks)
+    # Facts about the interface du documents in the PINNED bytes. They cannot drift
+    # under us: the fixture never changes. If a re-capture ever makes one of these
+    # untrue, that is a human decision to re-pin, not something to widen.
+    absent = [o for o in ("--files0-from", "--exclude-from", "--all", "--max-depth")
+              if o not in heads]
+    if absent:
+        bad("parser self-test: the pinned `du --help` parses to %d option blocks but "
+            "%s %s missing from them -- the option surface handed to Oracle A is "
+            "incomplete, so a hazardous flag can sit in a help text unjudged"
+            % (len(blocks), ", ".join(absent), "is" if len(absent) == 1 else "are"))
+        return False
+
+    # The other half of strip_terminal_escapes()'s contract. The fixtures prove it
+    # removes the decoration coreutils 9.11 emits; they cannot prove it removes
+    # NOTHING ELSE, because that capture happens to carry no BEL at all (measured:
+    # 0 BEL bytes in 6417). So the boundary case is driven by hand -- two OSCs
+    # terminated by BEL must go WITH their BELs, and the bare BEL after them must
+    # survive untouched.
+    bel_in = "  \x1b]8;;http://example/x\x07-a, --all\x1b]8;;\x07  do it\x07\n"
+    bel_want = "  -a, --all  do it\x07\n"
+    bel_got = strip_terminal_escapes(bel_in)
+    if bel_got != bel_want:
+        bad("parser self-test: strip_terminal_escapes() breaks its own contract -- an "
+            "OSC terminated by BEL must leave WITH that BEL and a bare BEL must stay "
+            "where it is. Wanted %r, got %r. A sanitiser that deletes bytes it cannot "
+            "explain can hide the very decoration the residual guard exists to catch."
+            % (bel_want, bel_got))
+        return False
+
+    want = "takes a PATH-valued argument"
+    if not [t for t, w in doc_hazards("du", stripped, blocks)
+            if t == "--files0-from" and want in w]:
+        bad("parser self-test: Oracle A no longer reports `du --files0-from` as %r on "
+            "the pinned help. test-workload-console.sh's du DOCUMENTATION control "
+            "greps for exactly that string, so the leg and its control have drifted "
+            "apart and the control is no longer testing the leg it names." % want)
+        return False
+
+    ok("parser self-test: the pinned coreutils 9.11 `du --help` strips to its "
+       "undecorated capture BYTE FOR BYTE, parses to %d option blocks, and Oracle A "
+       "still names `--files0-from` path-valued -- the option parser is sound here and "
+       "terminal decoration does not change what it reads" % len(blocks))
+    return True
+
+
+# ── the differential leg's own self-test ──────────────────────────────────────
+# parser_self_test() exists because Oracle A went BLIND once (#405) while every line
+# it printed stayed reassuring. #492 is the same failure wearing the other face: the
+# differential leg was not blind, it was CREDULOUS — it called a value a content leak
+# on evidence a busy filesystem manufactures by itself. Neither defect is reachable
+# by probing real commands, because on a quiet host the real commands behave; that is
+# precisely how #492 reached main past a lane, a skeptic and a critic who each
+# measured 72 passed / 0 failed. So the leg is driven by hand against inputs whose
+# answer is known before it is asked.
+#
+# The stubs are /bin/sh and need no external binary, so this control cannot decay
+# into "the runner is missing something". Each one is a claim:
+#
+#   flip  — its output alternates on EVERY run and it never opens the file it is
+#           handed, so calling it a leak is a false positive BY CONSTRUCTION. Measured
+#           against the pre-#492 single-round rule on this tree: flagged 12 times out
+#           of 12, with no load and no luck; 0 out of 12 against the rule below. It
+#           is the live control for the round-2 confirmation — delete that round, or
+#           let round 2 repeat round 1's ordering, and this goes red.
+#   hold2 — its output holds for TWO runs and then flips. It is DOCUMENTATION OF A
+#           REJECTED ALTERNATIVE, not live coverage, and it is labelled that way so
+#           nobody counts it as a third guard. Under the schedule actually shipped it
+#           is DORMANT: round 1 requires t0 == t2, a hold-two-then-flip value emits
+#           A A B B and never satisfies that, so hold2 never reaches round 2 at all.
+#           Measured against the pre-#492 single-round rule at all four starting
+#           phases: 0/8, 0/8, 0/8, 0/8 — it carries no mutation coverage, and every
+#           red line in the battery names `flip` or `leak`. What it is for is the
+#           "probe each variant twice in a row, require the token to be stable across
+#           the pair" alternative, which it defeats: the repeat pair sits inside one
+#           run of the wave, so pure noise looks perfectly stable. It stands here so
+#           that re-deriving the schedule into that form costs a red line rather than
+#           a comment argument. If the schedule ever changes, re-measure it before
+#           trusting it.
+#   leak  — its output really IS a function of the probed file's bytes (the tail of
+#           its first line, which is one of the encodings the leg's own docstring
+#           names). It MUST fire. Making a flake go away by weakening detection is
+#           the failure mode this suite was rebuilt to prevent, and this stub is what
+#           refuses to allow it.
+#
+# A failure here is UNPROVEN, not a finding against the allowlist: it says this
+# module cannot presently tell a leak from the weather, not that an entry leaks.
+_DIFF_STUBS = (
+    # (name, /bin/sh body with @CTR@ substituted, must the leg fire?)
+    ("flip",
+     '#!/bin/sh\n'
+     'read -r n < "@CTR@" 2>/dev/null || n=0\n'
+     'echo $((n + 1)) > "@CTR@"\n'
+     'echo "wcdiffnoise$((n - (n / 2) * 2))"\n',
+     False),
+    ("hold2",
+     '#!/bin/sh\n'
+     'read -r n < "@CTR@" 2>/dev/null || n=0\n'
+     'echo $((n + 1)) > "@CTR@"\n'
+     'echo "wcdiffnoise$(((n / 2) - ((n / 4) * 2)))"\n',
+     False),
+    ("leak",
+     '#!/bin/sh\n'
+     'read -r line < "$1" 2>/dev/null || exit 0\n'
+     'echo "wcdiffleak${line#?????????????????}"\n',
+     True),
+)
+
+_DIFF_WHY = {
+    "flip": "its output alternates on every run and it never opens the file it is "
+            "handed, so it carries no information about any file's bytes",
+    "hold2": "its output holds for two runs and then flips, which is what a "
+             "filesystem counter does while something else writes",
+    "leak": "its output is the tail of the probed file's first line, which is a "
+            "function of that file's bytes in a different alphabet",
+}
+
+
+def differential_self_test(ok, unproven):
+    """Pin Oracle B' against stubs whose verdict is known. True when sound."""
+    tmp = tempfile.mkdtemp(prefix="wc-diff-selftest-")
+    try:
+        built = []
+        for name, body, want in _DIFF_STUBS:
+            path = os.path.join(tmp, name)
+            ctr = os.path.join(tmp, name + ".ctr")
+            with open(ctr, "w") as fh:
+                fh.write("0\n")
+            with open(path, "w") as fh:
+                fh.write(body.replace("@CTR@", ctr))
+            os.chmod(path, 0o755)
+            built.append((name, path, want))
+
+        can = Canaries()
+        try:
+            for name, path, want in built:
+                fired = bool(content_leaks([[path, CANARY]], can))
+                if fired == want:
+                    continue
+                if want:
+                    unproven(
+                        "differential self-test: the stub %r was NOT reported as a "
+                        "content leak, and %s. Oracle B' no longer detects the class it "
+                        "exists for, so a base64/cksum/od-shaped reader would pass "
+                        "unremarked and every 'no output token changed with the file's "
+                        "BYTES' PASS below is UNPROVEN." % (name, _DIFF_WHY[name]))
+                else:
+                    unproven(
+                        "differential self-test: the stub %r WAS reported as a content "
+                        "leak, and %s. Oracle B' is being confounded by output that "
+                        "moves for reasons unrelated to the probed file — #492 exactly "
+                        "— so every [behaviour/differential] verdict in this run is "
+                        "UNPROVEN, in both directions." % (name, _DIFF_WHY[name]))
+                return False
+        finally:
+            can.cleanup()
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+    ok("differential self-test: Oracle B' fires on a stub whose output is a function "
+       "of the probed file's bytes, and stays silent on stubs whose output merely "
+       "moves with the clock (alternating every run, and holding for two runs then "
+       "flipping) — the leg can still catch a leak and is no longer confounded by "
+       "global state changing underneath the probe. stubs exercised: %s"
+       # BRACKETED deliberately: the prose above this line contains the substrings
+       # "flip"(ping), "hold"(ing) and "leak", so a bare-name grep in the shell
+       # control passes even with the stub table gutted. MEASURED: deleting the
+       # `flip` tuple left the suite 74 passed / 0 failed until this was bracketed.
+       % " ".join("[%s]" % n for n, _, _ in _DIFF_STUBS))
+    return True
+
+
 # ── the check ─────────────────────────────────────────────────────────────────
 def check_entries(entries, emit):
-    """Assert P over a parsed allowlist. Returns (passes, failures)."""
-    P = F = 0
+    """Assert P over a parsed allowlist. Returns (passes, failures, unprovens).
+
+    The third counter exists because "this entry violates P" and "this entry could
+    not be judged" are different findings that used to arrive as the same non-zero
+    exit, and the caller then printed the first as the verdict for the second. On
+    #405 that turned an inert check into the sentence "exec allowlist VIOLATES
+    property P", which reads as a security finding and was in fact a blind guard.
+    Both still fail the run; only one of them is a statement about the allowlist.
+    """
+    P = F = U = 0
 
     def ok(m):
         nonlocal P
@@ -759,9 +1198,18 @@ def check_entries(entries, emit):
         F += 1
         emit("  FAIL " + m)
 
+    def unproven(m):
+        """A failure that says the CHECK could not judge, not that the entry is bad."""
+        nonlocal U
+        U += 1
+        bad(m)
+
+    parser_self_test(ok, unproven)
+    differential_self_test(ok, unproven)
+
     if not entries:
         bad("exec allowlist is empty")
-        return P, F
+        return P, F, U
     ok("exec allowlist non-empty (%d entries)" % len(entries))
 
     can = Canaries()
@@ -791,7 +1239,7 @@ def check_entries(entries, emit):
 
             binary = shutil.which(head)
             if not binary:
-                bad("entry %r: %r is not present on this runner, so the property CANNOT "
+                unproven("entry %r: %r is not present on this runner, so the property CANNOT "
                     "be proven for it. An unprobed entry is an unproven entry — install "
                     "the package that ships it in the job image, or drop the entry."
                     % (entry, head))
@@ -799,14 +1247,27 @@ def check_entries(entries, emit):
 
             help_text = harvest_help(head, can.root)
             if len(help_text.strip()) < 40:
-                bad("entry %r: %r produced no usable --help/-h text, so neither oracle "
-                    "can judge its arguments" % (entry, head))
+                unproven("entry %r: %r produced no usable --help/-h text, so neither "
+                         "oracle can judge its arguments" % (entry, head))
+                continue
+            # harvest_help() has already removed every terminal control sequence this
+            # module knows. An ESC that SURVIVES that is decoration in a form nobody
+            # here has seen, and the option line it sits on will not parse -- which is
+            # exactly how #405 presented. Say so with the byte count rather than
+            # letting it come back as the softer "could not parse a single option",
+            # because the two have different fixes.
+            if "\x1b" in help_text:
+                unproven("entry %r: %d ESC byte(s) survive sanitisation of %r's help, "
+                         "so its help is decorated in a form this parser does not "
+                         "recognise and its option surface cannot be read. The property "
+                         "is UNPROVEN for this entry, not proven absent."
+                         % (entry, help_text.count("\x1b"), head))
                 continue
             blocks = parse_option_blocks(help_text)
             if not blocks:
-                bad("entry %r: could not parse a single option out of %r's help; the "
-                    "argument surface is unknown, so the property is unproven"
-                    % (entry, head))
+                unproven("entry %r: could not parse a single option out of %r's help; "
+                         "the argument surface is unknown, so the property is unproven"
+                         % (entry, head))
                 continue
             tokens = harvest_option_tokens(help_text, blocks)
 
@@ -856,7 +1317,7 @@ def check_entries(entries, emit):
                    "file's BYTES" % (entry, len(blocks), len(argvs)))
     finally:
         can.cleanup()
-    return P, F
+    return P, F, U
 
 
 def entries_from_patch(path):
@@ -878,8 +1339,30 @@ def main(argv):
     else:
         print("usage: exec_argv_property.py <patch.yaml> | --entries 'a,b -c'")
         return 2
-    P, F = check_entries(entries, print)
+    P, F, U = check_entries(entries, print)
     print("__SUB %d %d" % (P, F))
+    print("__COUNTS %d %d %d" % (P, F, U))
+    # The caller needs to tell a FINDING from a BLIND SPOT -- and when a run has
+    # BOTH, it must not be handed either one alone. "unproven" used to win outright,
+    # so a run that condemned a genuinely hazardous entry ALONGSIDE an unprobeable
+    # one was summarised by the wrapper as "not a finding against the allowlist":
+    # true of the blind entry, FALSE of the hazardous one. This suite's entire
+    # history (#405) is readers trusting the summary line instead of the whole
+    # output, so the mixed state gets its own name rather than borrowing one.
+    #   F == 0      -> ok
+    #   U == 0      -> violated           every failure is a claim about the list
+    #   U >= F      -> unproven           every failure is a blind leg
+    #   0 < U < F   -> violated+unproven  both, and neither may be dropped
+    # Every non-ok verdict still fails the run; none of this softens an exit status.
+    if not F:
+        verdict = "ok"
+    elif not U:
+        verdict = "violated"
+    elif U >= F:
+        verdict = "unproven"
+    else:
+        verdict = "violated+unproven"
+    print("__VERDICT %s" % verdict)
     return 1 if F else 0
 
 

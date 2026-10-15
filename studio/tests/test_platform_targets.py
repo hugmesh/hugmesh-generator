@@ -407,7 +407,7 @@ class TestTheWarningsActuallyReachTheOperator:
 
     def _pin_mounts(self, monkeypatch, tmp_path, fstype):
         """Report the generator dir itself as a mount of ``fstype``, whatever path the
-        driver passes — read_mounts is the seam both mount_for callers go through."""
+        driver passes — read_mounts is the override point both mount_for callers go through."""
         here = os.path.realpath(str(tmp_path))
         monkeypatch.setattr(platform_info, "read_mounts",
                             lambda _p=None: [("/", "ext4"), (here, fstype)])

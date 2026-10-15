@@ -2,19 +2,21 @@
 
 This is the **authoritative enumeration** for the scaled-concurrent final sweep
 (`tests/e2e/specs/24-final-e2e-sweep.spec.ts` + `swarm-driver.ts`). The spec wires
-a **representative, non-truncated sample** of these rows as executable scenarios;
-this document is the complete list so nothing is *silently* dropped. A row marked
-**WIRED** has an executable scenario today; **DOC** rows are enumerated here and
-activate as their surface lands (the framework primitive already exists for each).
+a **representative, non-truncated sample** of these rows as executable scenarios.
+This page lists all of them, so nothing is dropped *silently*. A row marked
+**WIRED** has an executable scenario today. **DOC** rows are listed here and
+activate as their surface lands; the framework primitive already exists for each.
+A row marked **GAP** has no surface to test yet, and its scenario is skipped.
 
 ## The population (procedural, deterministic)
 
-`rbac-roles.ts → generateSwarm()` — default **120 plain users + 4 mods + 2 admins**
-(overridable via `SWARM_USERS/SWARM_MODS/SWARM_ADMINS`). All share one deterministic
-password (`E2E_SWARM_PASSWORD`); `seed-accounts.sh --roles --swarm N` seeds them and
-**pre-mints a JWT per member** into `PREMINT_DIR` so 126 actors do not serialize at
-Casdoor (`replicas: 1`) login. Mod *m* moderates the non-overlapping user block
-`swarmTargetsForMod(m)` — "mods moderate those below them".
+`rbac-roles.ts → generateSwarm()` builds the default population: **120 plain users +
+4 mods + 2 admins** (override with `SWARM_USERS/SWARM_MODS/SWARM_ADMINS`). All share
+one deterministic password (`E2E_SWARM_PASSWORD`). `tests/qemu/seed-accounts.sh
+--roles DIR --swarm N` seeds them and **pre-mints a JWT per member** into
+`PREMINT_DIR`, so 126 actors do not queue at the Casdoor login (`replicas: 1`). Mod
+*m* moderates the non-overlapping user block `swarmTargetsForMod(m)`: "mods moderate
+those below them".
 
 ## Enforcement layers (the columns)
 
@@ -30,10 +32,10 @@ Casdoor (`replicas: 1`) login. Mod *m* moderates the non-overlapping user block
 
 ## Concurrency invariant (applies to EVERY row)
 
-The whole population acts **simultaneously**; `runConcurrently()` records peak
-in-flight and the sweep asserts `maxInFlight >= floor`, so a run that silently
-serializes (correct results, one at a time) **FAILS** — concurrency is contract.
-**WIRED** — scenario (A).
+The whole population acts **simultaneously**. `runConcurrently()` records the peak
+in-flight count and the sweep asserts `maxInFlight >= floor`, so a run that
+silently serializes (correct results, one at a time) **FAILS**. Concurrency is part
+of the contract. **WIRED**: scenario (A).
 
 ## The matrix
 
@@ -55,7 +57,7 @@ serializes (correct results, one at a time) **FAILS** — concurrency is contrac
 | M2 | reach `/api/admin/**` (hugmesh admin) | — | **DENY** | **DENY** | — | — | hidden | deny msg | **WIRED** (B/C negative) |
 | M3 | reach `/bff/admin/**` | — | **DENY** | **DENY** | — | — | hidden | deny msg | **WIRED** (B/C negative) |
 | M4 | moderate an ADMIN or a peer mod | — | DENY (out of block) | DENY | no effect | — | disabled + helptext | deny msg | **DOC** (sibling rule under load; block scoping is M1's inverse) |
-| M5 | reach infra/logs/server-admin | — | DENY (no route) | — | — | — | absent | — | **DOC** (contract-locked in spec 16) |
+| M5 | reach infra/logs/server-admin | — | NO_RULE (no route row; no gateway routes it, so the gateway answers 404) | — | — | — | absent | — | **DOC** (contract-locked in spec 16: `/infra/vault/secret` and `/infra/logs` are asserted `NO_RULE`, not `DENY`) |
 | M6 | Matrix/Mastodon user-floor (own use) | — | ALLOW | — | PL50 | — | shown | — | **DOC** (spec 16 ALLOW rows) |
 
 ### Admin (`ROLE_ADMIN`, ×2)
@@ -71,35 +73,38 @@ serializes (correct results, one at a time) **FAILS** — concurrency is contrac
 
 | # | action | layer focus | status |
 |---|---|---|---|
-| X1 | `ROLE_GAMES ∩ ROLE_ADMIN` → derived `ROLE_GAMES_ADMIN` reaches `/games/admin/**` | casdoor→gateway | **DOC** (contract spec 12; gate spec 14) |
-| X2 | `ROLE_GAMES` alone / `ROLE_ADMIN` alone → DENIED `/games/admin/**` | gateway | **DOC** (specs 12/16/17) |
+| X1 | `ROLE_GAMES ∩ (ROLE_ADMIN ∪ ROLE_MOD)` → derived `ROLE_GAMES_ADMIN` reaches `/games/admin/**` | casdoor→gateway | **DOC** (contract spec 12; gate spec 14) |
+| X2 | `ROLE_GAMES` alone / `ROLE_ADMIN` alone (neither half of the AND) → DENIED `/games/admin/**` | gateway | **DOC** (specs 12/16/17) |
 | X3 | domain-locked user → toot/boost/announce does NOT federate; control DOES | homeserver+egress | **WIRED** (specs 19/20/21/22) |
 | X4 | pending (no roles, registration incomplete) → denied every user surface | gateway+ui | **DOC** (spec 17/18) |
-| X5 | every DISABLED UI control carries helptext (why-denied) | ui | **DOC** stub (E) — primitive `assertDisabledHasHelptext` ready; activates with the role-conditional host shell |
+| X5 | every DISABLED UI control carries helptext (why-denied) | ui | **WIRED** (E — the host shell's `/home` `card-admin` is greyed + explained (`card-admin-help`) for e2e-user and enabled for e2e-admin; a CORE card, so it runs on the default lane) |
 | X6 | domain-lock × mod-ban interaction: a domain-locked user banned by its mod — ban applies LOCALLY (post attempt rejected), NOTHING about the ban federates to the peer, and after the lift local posting recovers while the lock persists (independent axes) | bff+homeserver+egress | **WIRED** (spec 23; peer-gated like specs 19–22, positive control = spec 22) |
 | X7 | read-after-write across principals AT CONCURRENCY: N author→observer pairs post simultaneously; each OBSERVER (a different principal) sees its author's marker within a bounded window | homeserver | **WIRED** (G — `expectObservedWithin`, concurrency floor asserted) |
 
 ## Cross-realm authz matrix — systems × games × forum (spec 26)
 
 `tests/e2e/specs/26-rbac-cross-realm-matrix.spec.ts` is the **full cross-realm
-matrix** sibling of the single-invariant cross-realm spec 25. For each realm PAIR
-and each role it asserts **(a) ALLOW** (right realm+role+domain reaches its own
-resources), **(b) DENY isolation** (a principal from realm A / domain X is refused
-the cross-realm + cross-domain resources — a generic `DENY`, never a 404-vs-403
-existence leak), **(c) ROLE_SUPERADMIN cross-realm reach where designed**, and
-**(d) the per-domain least-privilege cascade** (the multi-tenant brand wall). The
-systems + superadmin decisions go through the SHARED `rbac-route-access` oracle;
-the forum rows + the `domain` column (absent from that oracle) are mirrored 1:1 from
-`route-access/initdb/20-schema.sql` **locally in the spec** so specs 12–18/25 are
-unperturbed. **VALIDATES OFFLINE** (no cluster); **LIVE pending a kernel-fixed x86
-image** (the QEMU cluster cannot boot yet).
+matrix**, a sibling of the single-invariant cross-realm spec 25. For each realm PAIR
+and each role it asserts four things: **(a) ALLOW** (the right realm, role and domain
+reaches its own resources); **(b) DENY isolation** (a principal from realm A or
+domain X is refused the cross-realm and cross-domain resources, with a generic
+`DENY`, never a 404-vs-403 existence leak); **(c) ROLE_SUPERADMIN cross-realm reach
+where designed**; and **(d) the per-domain least-privilege cascade** (the
+multi-tenant brand wall). The systems and superadmin decisions go through the SHARED
+`rbac-route-access` oracle. The forum rows and the `domain` column, which that oracle
+lacks, are mirrored 1:1 from `route-access/initdb/20-schema.sql` **locally in the
+spec**, so specs 12–18/25 are unperturbed. **VALIDATES OFFLINE** (no cluster). The
+live token probe is skipped unless `LIVE_GATEWAY=1`, the per-realm Casdoors and the
+tailnet superadmin gateway are up. The spec says live validation is **pending a
+kernel-fixed x86 image** (the QEMU cluster cannot boot yet).
 
-The realms: **SYSTEMS** (org `hugmesh`, issuer `id.hugmesh.net`, native
-`ROLE_*`), **GAMES** (org `threewizards`, issuer `id.hugmesh.games`, independent
-Casdoor, native lowercase `player`/`admin`; namespace surfaces `/games/admin/**` +
-`/games/api/admin/**` gated on the DERIVED systems `ROLE_GAMES_ADMIN`), **FORUM**
-(phpBB via forum-bff: `/social/forum/**` + `/bff/forum/**`, access role `ROLE_FORUM`,
-derived `ROLE_FORUM_MOD = ROLE_MOD ∩ ROLE_FORUM`; phpBB itself has NO gateway route).
+The realms: **SYSTEMS** (org `hugmesh`, issuer `id.hugmesh.net`, native `ROLE_*`);
+**GAMES** (org `threewizards`, issuer `id.hugmesh.games`, an independent Casdoor,
+native lowercase `player`/`admin`; the namespace surfaces `/games/admin/**` +
+`/games/api/admin/**` are gated on the DERIVED systems `ROLE_GAMES_ADMIN`);
+**FORUM** (phpBB via forum-bff: `/social/forum/**` + `/bff/forum/**`, access role
+`ROLE_FORUM`, derived `ROLE_FORUM_MOD = ROLE_MOD ∩ ROLE_FORUM`; phpBB itself has NO
+gateway route).
 
 | # | realm pair / role | assertion | kind | status |
 |---|---|---|---|---|
@@ -119,18 +124,18 @@ derived `ROLE_FORUM_MOD = ROLE_MOD ∩ ROLE_FORUM`; phpBB itself has NO gateway 
 | CR14 | per-domain · ROLE_GAMES_ADMIN | cross-brand wall holds for the forum + games surfaces | (d) DENY | **WIRED** |
 | CR15 | per-domain · model | `domainApplies`: NULL/blank/`default` unscoped; a brand row applies to its brand only | fidelity | **WIRED** |
 
-NB the systems→games SYNC **propagation** proof (`ROLE_GAMES_ADMIN`→games `admin`)
-is owned by `hugmesh-actions/e2e` (`sync-steps.ts`) and is NOT duplicated here;
-spec 26 asserts only the cross-realm **authz isolation** half (the catalogue +
+NB: the systems→games SYNC **propagation** proof (`ROLE_GAMES_ADMIN`→games `admin`)
+belongs to `hugmesh-actions/e2e` (`sync-steps.ts`) and is NOT repeated here. Spec 26
+asserts only the cross-realm **authz isolation** half (the catalogue and
 issuer-isolation invariants).
 
 ## WIRED vs DOC — why split
 
-The gateway/bff **contract** assertions are already exhaustively covered by specs
-12–18 (the `gateway_route_access` oracle). The final sweep's NEW value is the
-**concurrent population** + the **per-layer + SSE + disabled-helptext** axes, so it
-wires the rows that exercise *those* axes (A–D) and **documents** the rest here
-rather than duplicating specs 12–18 at scale. As the role-conditional **UI** lands,
-the **DOC** UI/SSE rows convert to **WIRED** by filling the spec-18-style stubs
-with `assertDisabledHasHelptext` / `expectSse` — the framework primitives already
-exist in `swarm-driver.ts`.
+The gateway/bff **contract** assertions are already covered in full by specs 12–18
+(the `gateway_route_access` oracle). The final sweep adds the **concurrent
+population** and the **per-layer + SSE + disabled-helptext** axes. It wires the rows
+that exercise those axes (A–C, E–G; D is skipped, see A1) and **documents** the rest
+here, rather than repeating specs 12–18 at scale. As the role-conditional **UI**
+lands, the **DOC** UI/SSE rows become **WIRED** by filling the spec-18-style stubs
+with `assertDisabledHasHelptext` / `expectSse`. Both primitives already exist in
+`swarm-driver.ts`.

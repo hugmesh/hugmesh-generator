@@ -120,10 +120,16 @@ spec:
             - { name: SSL_TRUST_STORE_TYPE, value: "PKCS12" }
             - { name: SPRING_CONFIG_ADDITIONAL_LOCATION, value: "file:/stores/" }
             # OAuth2 resource server: validate the cluster Casdoor JWTs presented
-            # by admin-bff + the remote-fragment sync sidecar. JWKS auto-discovered
-            # from the issuer well-known; no jwk-set-uri / client secret needed.
+            # by admin-bff + the remote-fragment sync sidecar. No client secret
+            # needed.
             - name: CASDOOR_ISSUER_URI
               value: "https://id.hugmesh.net"
+            # Key fetch stays IN-CLUSTER: the public issuer host need not resolve
+            # here (on kind it does not: hugmesh-generator#693). The issuer URI above
+            # stays the `iss` claim only. Same value as the gateway chart's
+            # casdoor.jwksUri; pinned by tests/scripts/test-bff-jwks-in-cluster.sh.
+            - name: CASDOOR_JWKS_URI
+              value: "http://casdoor.hugmesh-pki.svc.cluster.local:8000/.well-known/jwks"
             # Runtime reactive handle to federation's OWN Postgres (federation-db).
             # NOT the dangling `hugmesh-pg` the app default points at.
             # RUNTIME handle: log in as the dedicated NON-OWNER least-privilege role

@@ -31,7 +31,7 @@ _ALLOWED_LINK_SCHEMES = ("http", "https", "file")
 #:
 #: urlopen() WITHOUT a timeout blocks on the default socket timeout, which is normally
 #: None — i.e. forever. A server that accepts the connection and then never answers (a
-#: half-open NAT, a wedged reverse proxy, a black-holed IP) therefore hung the fetch with
+#: half-open NAT, a hung reverse proxy, a black-holed IP) therefore hung the fetch with
 #: no upper bound. That is bad enough on a worker thread; on the GUI thread, where this
 #: used to run, it hung the whole window with no Cancel and no way to close it.
 #:
@@ -46,12 +46,12 @@ def _fetch_to_zip(url: str, dest_path: str) -> str:
 
     User-initiated ONLY (the Fetch button); nothing here runs on its own, so there is
     no background/cluster contact. The scheme is allowlisted BEFORE ``urlopen`` runs,
-    the socket carries :data:`_FETCH_TIMEOUT_S` so a wedged server cannot block
+    the socket carries :data:`_FETCH_TIMEOUT_S` so a hung server cannot block
     forever, and the body is capped at :data:`core.keyzip.MAX_TOTAL` so a hostile link
     can't fill the disk. The caller then hands the bytes to the SAME
     :func:`core.keyzip.extract` / :meth:`KeyZipContents.apply_to` path a browsed .zip
     takes. (No remote-config service ships today; when one lands, point this at it —
-    the extract/apply seam below does not change.)
+    the extract/apply override point below does not change.)
 
     BLOCKING BY CONTRACT: this is network I/O, so it runs on :class:`_FetchWorker`, never
     on the GUI thread.

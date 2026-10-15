@@ -1,0 +1,7 @@
+# issue: #341
+# command: (studio) pytest -q tests/test_localmesh_monitor.py + synthetic-snapshot render of MeshMonitorWidget(scaling=True)
+# commit: 2017882
+-----
+...........                                                              [100%]
+83 passed in 7.86s
+localmesh.py:1796 mounts MeshMonitorWidget(self, scaling=True); localmesh.py:398 _MonitorProbe = MeshMonitorProbe (both items of the issue are in the code)

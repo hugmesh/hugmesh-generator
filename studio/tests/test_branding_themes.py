@@ -14,7 +14,7 @@ The third term is not an article of faith: the builder resolves
 ``${SPECS_DIR}/branding/themes/<name>`` and fails when that directory is absent, so its
 accepted set IS the directory listing — and
 :func:`test_builder_accepted_set_is_the_directory_listing` pins those two builder lines
-verbatim so the equivalence cannot rot underneath the assertion.
+verbatim so the equivalence cannot go stale underneath the assertion.
 
 Pure core + text greps: no Qt import, so this runs in plain CI. The GUI half (what the
 cards offer, what ``validatePage`` can emit) is ``test_branding_page_gui.py``.

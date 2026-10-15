@@ -18,7 +18,7 @@ It also owns the ONCE-PER-WORKLIST steps that used to live in ``BuildPage._build
   checkbox, default on).
 
 Sequential-only in v1 (same-arch build trees + loop-device contention under
-``docker --privileged``); the per-entry ``build_subdir`` is the later parallelism seam.
+``docker --privileged``); the per-entry ``build_subdir`` is the later hook for parallelism.
 
 Qt-free by construction — the GUI wraps :meth:`run_all` in a QThread and connects the
 callbacks to signals; the headless tests drive it directly.
@@ -28,6 +28,7 @@ from __future__ import annotations
 import getpass
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import threading
@@ -245,10 +246,19 @@ class WorklistDriver:
             owner = pwd.getpwuid(os.stat(probe).st_uid).pw_name if pwd else str(os.stat(probe).st_uid)
         except (KeyError, OSError):
             owner = str(os.stat(probe).st_uid)
+        # The remedy prunes any directory named `sysroot`: a build system that a
+        # person chowns to themselves produces, on the next --resume, an image
+        # whose every directory is theirs and whose sshd and tor refuse to start
+        # (hugmesh-generator#659). Same shape as the Makefile's chown-artifacts.
+        user = getpass.getuser()
+        # Quoted: a path with a space in it would otherwise be two arguments to find.
         return [f"Output directory is not writable: {probe} is owned by '{owner}' and "
-                f"this Studio runs as '{getpass.getuser()}'. A native (sudo) build "
+                f"this Studio runs as '{user}'. A native (sudo) build "
                 f"leaves root-owned dirs behind; fix with: "
-                f"sudo chown -R {getpass.getuser()} {probe}"]
+                f"sudo find {shlex.quote(probe)} -type d -name sysroot -prune -o -exec chown -h {shlex.quote(user)} {{}} + "
+                f"(not 'chown -R' over the whole directory: the build system "
+                f"snap-build-*/sysroot under it must stay root's, or a later "
+                f"--resume builds a broken image)"]
 
     def preflight_warnings(self) -> list[str]:
         """Aggregate ADVISORY warnings (see BuildDriver.preflight_warnings) — the
@@ -284,12 +294,19 @@ class WorklistDriver:
                          "optional_services": list(d.optional_services),
                          "images": list(d.images),
                          **({"idp": d.idp}
-                            if d.idp != DOMAIN_IDP_SUPERDOMAIN else {})}
+                            if d.idp != DOMAIN_IDP_SUPERDOMAIN else {}),
+                         # per-domain Tor front door (#582): OMIT-WHEN-FALSE, exactly
+                         # as the v1 shim emits it.
+                         **({"tor": True} if getattr(d, "tor", False) else {})}
                         for d in base.domains],
             # per-user `roles` (issue #228) is OMIT-WHEN-SINGLE too (User.to_dict), so
             # v2 and the v1 shim emit the same user rows byte for byte.
             "users": [u.to_dict() for u in self.manifest_users()],
             "images": images,
+            # the own domain's per-domain services (#494): OMIT-WHEN-EMPTY, exactly
+            # as the v1 shim (config.mesh_manifest) emits it.
+            **({"cluster_domain_services": list(base.cluster_domain_services)}
+               if base.cluster_domain_services else {}),
         }
 
     def manifest_users(self) -> list[User]:
@@ -350,8 +367,18 @@ class WorklistDriver:
                                  workdir=self.workdir)
             with self._lock:
                 self._drivers[i] = driver
-            code = driver.run(cfg, self.backend,
-                              on_line=(lambda ln, i=i: on_line(i, ln)) if on_line else None)
+            try:
+                code = driver.run(cfg, self.backend,
+                                  on_line=(lambda ln, i=i: on_line(i, ln)) if on_line else None)
+            except Exception as e:  # noqa: BLE001 - one image's raise must not strand the run
+                # #374: ElevationRefused (HUGMESH_STUDIO_NO_ELEVATION / pytest) or an
+                # OSError from Popen. Left to propagate, this entry stayed RUNNING and
+                # registered, on_entry_done never fired, and the session was recorded
+                # 'stopped' (the operator-Stop state). Fail THIS image and keep going —
+                # the same tolerate-failures contract as a non-zero exit.
+                if on_line:
+                    on_line(i, f"!! {e}")
+                code = 1
             with self._lock:
                 self._drivers.pop(i, None)
                 cancelled = i in self._cancelled or self._cancel_all.is_set()

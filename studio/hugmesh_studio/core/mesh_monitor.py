@@ -60,6 +60,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import time
 from dataclasses import dataclass, field
@@ -69,8 +70,15 @@ from . import devops_tools, view_doors
 from .local_stack_node import _COMPOSE_PROJECT, _compose_base, _kind_cluster_name
 
 #: Per-call ceilings. ONE ``kubectl get`` round trip for the whole cluster rather than a
-#: per-namespace loop: N calls is N timeouts on a wedged API server.
+#: per-namespace loop: N calls is N timeouts on a hung API server.
 KIND_CLUSTERS_TIMEOUT_S = 10
+#: Where scripts/kind-halt.sh keeps its record, and how long to wait for it. Kept
+#: in step with that script's own defaults (ARGOCD_NS / STATE_CM / STATE_KEY); it is
+#: one small read, so it gets a short ceiling and never eats the snapshot deadline.
+ARGOCD_NS = "devops"
+KIND_HALT_STATE_CM = "hugmesh-kind-halt"
+KIND_HALT_STATE_KEY = "halt.json"
+KIND_HALT_READ_TIMEOUT_S = 10
 KUBECTL_GET_TIMEOUT_S = 20
 DOCKER_INSPECT_TIMEOUT_S = 10
 COMPOSE_PS_TIMEOUT_S = 20
@@ -180,7 +188,12 @@ class MeshUnit:
     phase: str                    # "Running 1/1" | "ImagePullBackOff" | "Init:CreateContainerConfigError"
     ready: bool
     reason: str                   # why not ready, "" when ready
-    state: str                    # progress.py _STATUS_GLYPH key: ok|failed|running|queued|stopped
+    #: progress.py _STATUS_GLYPH key: ok|failed|running|queued|stopped|completed.
+    #: ``completed`` (Decision 99 = A, #378) is a one-shot that ran to completion — a
+    #: Succeeded pod owned by a Job, or an exit-0 compose service whose file says
+    #: ``restart: "no"``. It keeps its row but is outside the ``N/N ready`` headline and
+    #: is not a running replica; a service that merely stopped (exit 0) stays ``stopped``.
+    state: str
     cluster_path: str = ""        # in-mesh address, "" when no Service selects it
     external: str = ""            # "hugmesh.net/ (ingress)" | "0.0.0.0:8088->8080" | ""
     door: Door = field(default_factory=Door)
@@ -200,6 +213,12 @@ class LaneState:
     running: bool | None          # None = COULD NOT ESTABLISH (I5), never rendered as False
     detail: str = ""
     error: str = ""
+    #: kind lane only (#356): has `make kind-halt` halted this lane? TRI-STATE for
+    #: the same reason ``running`` is — True halted, False not halted, **None** the
+    #: question could not be answered. A halted lane still reads running=True (the
+    #: halt KEEPS the cluster), so without this the GUI offers Halt on an already
+    #: halted lane and Resume on one that was never halted, with no way to tell.
+    halted: bool | None = None
 
 
 @dataclass(frozen=True)
@@ -228,7 +247,11 @@ class MonitorSnapshot:
 
     @property
     def ready_counts(self) -> tuple[int, int]:
-        return sum(1 for u in self.units if u.ready), len(self.units)
+        """``(ready, total)`` for the headline. ``completed`` one-shots (finished work)
+        keep their table rows but are left out of BOTH numbers, so a healthy mesh reads
+        N/N instead of 41/43 (#378)."""
+        counted = [u for u in self.units if u.state != "completed"]
+        return sum(1 for u in counted if u.ready), len(counted)
 
 
 # ── the HSTS gate ──────────────────────────────────────────────────────────────────
@@ -551,7 +574,11 @@ def _join(objects: dict, host_ports: dict[int, tuple[str, int]], catalog, live: 
                       "no Service selects this pod — readiness read from its own "
                       "container status")
         if phase_text == "Succeeded":
-            state = "stopped"
+            # finished work is `completed` only when a JOB made it (what it IS, not how
+            # it ended): a bare / ReplicaSet-owned pod that exited cleanly is down.
+            job_owned = any((o or {}).get("kind") == "Job"
+                            for o in (meta.get("ownerReferences") or []))
+            state = "completed" if job_owned else "stopped"
         elif failure:
             state = "failed"
         elif ready:
@@ -774,7 +801,41 @@ def _kind_units(node, generator_dir: str, catalog, live: dict, budget: _Budget, 
         detail += f" · API https://{api[0]}:{api[1]}"
     if pods == 0:
         notes.append(f"the kind cluster {cluster} answered with zero pods")
-    return LaneState(True, detail=detail), units, notes, errors
+    halted = _halt_record_present(node, kubectl, ctx, budget)
+    if halted is True:
+        detail += " · HALTED"
+        notes.append(f"the kind lane is HALTED: {KIND_HALT_STATE_CM} exists in "
+                     f"{ARGOCD_NS}. Its workloads are at 0 and ArgoCD auto-sync is "
+                     f"suspended on the Applications the halt recorded. "
+                     f"`make kind-resume` (or Resume DevOps lane) puts them back.")
+    elif halted is None:
+        notes.append("whether the kind lane is HALTED could not be read, so Halt "
+                     "and Resume are both offered; `make kind-halt-status` is the "
+                     "authority. Unknown is not 'not halted'.")
+    return LaneState(True, detail=detail, halted=halted), units, notes, errors
+
+
+def _halt_record_present(node, kubectl: str, ctx: str, budget: _Budget) -> bool | None:
+    """Is `make kind-halt`'s record on the cluster? True / False / **None**.
+
+    None is not a formality. kind-halt.sh refuses (exit 5) when it cannot READ its
+    own record, precisely because "the ConfigMap is absent" and "the API would not
+    answer" are different answers and conflating them let a second halt overwrite a
+    good record with an all-zero one. The GUI makes the same distinction: a read it
+    could not take greys nothing and says so, rather than reporting 'not halted'.
+    """
+    if budget.remaining() <= 1:
+        return None
+    rc, out = _probe(node, [kubectl, "--context", ctx, "-n", ARGOCD_NS, "get",
+                            "configmap", KIND_HALT_STATE_CM, "-o",
+                            f"jsonpath={{.data.{KIND_HALT_STATE_KEY}}}"],
+                     budget.bounded(KIND_HALT_READ_TIMEOUT_S))
+    if rc == 0:
+        return bool((out or "").strip())
+    # NotFound is the ONE failure that means "there is no halt record".
+    if "notfound" in (out or "").lower() or "not found" in (out or "").lower():
+        return False
+    return None
 
 
 # ── compose lane ───────────────────────────────────────────────────────────────────
@@ -805,6 +866,72 @@ def _parse_compose_ps(text: str) -> list[dict] | None:
         if isinstance(r, dict):
             rows.append(r)
     return rows or None
+
+
+# The compose services TOR=1 starts (tests/stack/compose.local.yaml). Matched
+# EXACTLY: a substring test for "tor" also caught hugmesh-tor-client (and would
+# catch any future "*tor*" service, e.g. a "monitor"), and hung the onion on it.
+_COMPOSE_ONION_SERVICE = "hugmesh-tor"
+_COMPOSE_TOR_CLIENT_SERVICE = "hugmesh-tor-client"
+
+
+def _domain_onions(node) -> list[tuple[str, str, str]]:
+    """``[(domain label, slug, "https://<onion>/"), ...]`` — the PER-DOMAIN onions the
+    running hugmesh-tor published (#582, decision 68 = A; ``LocalStackNode.
+    onion_urls`` applies the #581 freshness rule). The label is the domain's NAME when
+    the node knows it (``tor_domains``), else its slug. Never raises: a node object
+    with no ``onion_urls`` (older callers, test doubles) has none."""
+    try:
+        urls = dict(node.onion_urls() or {})
+    except Exception:                                 # noqa: BLE001
+        return []
+    names = {}
+    for entry in (getattr(node, "tor_domains", None) or ()):
+        try:
+            names[str(entry[1])] = str(entry[0])
+        except (IndexError, TypeError):
+            continue
+    return [(names.get(slug, slug), slug, str(url))
+            for slug, url in sorted(urls.items()) if url]
+
+
+def _domain_onion_units(tor_unit: "MeshUnit", onions) -> list["MeshUnit"]:
+    """ONE row — one Door — per (domain, onion), each carrying THAT domain's login URL
+    ``https://<onion>/login``. They are the SAME container as the hugmesh-tor row (one
+    tor process, one HiddenService stanza per domain), so they share its phase and
+    readiness and scale with it, never on their own.
+
+    HTTPS, like the primary onion's door (``LocalStackNode.onion_url``): the onion's
+    :443 is the door — a secure context, a Secure session cookie on a production-
+    configured mesh, and the node agent's own port (docs/TOR-HIDDEN-SERVICE.md "Why
+    :443"; the older CSP reason was false, #628). The Door has no URL for the same reason the primary has none — a
+    normal browser cannot reach a .onion — and says where to open it instead."""
+    out: list[MeshUnit] = []
+    for label, slug, url in onions:
+        login = url.rstrip("/") + "/login"
+        out.append(MeshUnit(
+            lane=tor_unit.lane, namespace=tor_unit.namespace,
+            name=f"{tor_unit.name} · {label} onion", owner=tor_unit.owner,
+            phase=tor_unit.phase, ready=tor_unit.ready, reason=tor_unit.reason,
+            state=tor_unit.state, cluster_path=tor_unit.cluster_path, external=login,
+            door=Door(blocked=f"a normal browser cannot reach a .onion — open {login} "
+                              f"in Tor Browser (the {label} sign-in)"),
+            detail="\n".join([f"domain: {label}", f"onion key directory: {slug}",
+                              f"login: {login}",
+                              f"served by: the {tor_unit.owner or 'hugmesh-tor'} "
+                              "container (one tor, one stanza per domain)"]),
+            scale=ScaleTarget(refused=f"one onion of the {tor_unit.owner or 'tor'} "
+                                      "container — it is not a workload of its own")))
+    return out
+
+
+def _is_compose_service(service: str, name: str, want: str) -> bool:
+    """True when this row IS compose service ``want``: its service label, or — for
+    a row that carries no label — a container name of compose's
+    ``<project>-<service>-<n>`` shape."""
+    if service:
+        return service == want
+    return re.fullmatch(r"(?:.+[-_])?%s[-_]\d+" % re.escape(want), name or "") is not None
 
 
 def _parse_docker_ps(text: str) -> list[dict]:
@@ -839,16 +966,66 @@ def _parse_docker_ps(text: str) -> list[dict]:
                              "TargetPort": int(tport), "Protocol": proto})
             except ValueError:
                 continue
-        rows.append({
+        status = r.get("Status") or ""
+        row = {
             "Name": r.get("Names") or r.get("Name") or "",
             "Service": labels.get("com.docker.compose.service", ""),
             "State": str(r.get("State") or "").lower(),
-            "Status": r.get("Status") or "",
+            "Status": status,
             "Health": "",
             "Image": r.get("Image") or "",
             "Publishers": pubs,
-        })
+        }
+        # `docker ps --format {{json .}}` has no exit-code field of its own: it lives
+        # only in the Status text ("Exited (137) 5 minutes ago"). Without it
+        # _compose_units read 0 and showed a container that died non-zero as a clean
+        # 'stopped (exit 0)' (#377).
+        m = re.match(r"\s*Exited \((\d+)\)", str(status))
+        if m:
+            row["ExitCode"] = int(m.group(1))
+        rows.append(row)
     return rows
+
+
+_COMPOSE_SERVICES_HEAD = re.compile(r"^services:\s*(?:#.*)?$")
+_COMPOSE_SERVICE_KEY = re.compile(r"^  ([A-Za-z0-9][A-Za-z0-9_.-]*):\s*(?:#.*)?$")
+_COMPOSE_RESTART_NO = re.compile(r"""^    restart:\s*(?:"no"|'no'|no)\s*(?:#.*)?$""")
+
+
+def _compose_oneshot_services(compose_file: str) -> frozenset[str]:
+    """Compose services the file itself declares as one-shots: ``restart: "no"``.
+
+    Identified by what the service IS rather than by exit code, so a service that
+    merely stopped cleanly (exit 0) still reads as down (Decision 99 = A, #378). A text
+    scan, deliberately: Studio carries no YAML parser and ``tests/stack/compose.local.yaml``
+    is generated and uniformly formatted (a test pins the scan against the real file).
+    Any read failure is an EMPTY set, i.e. the conservative reading — nothing is
+    hidden from the headline. ``services:`` children sit at two spaces, their keys at
+    four."""
+    if not compose_file:
+        return frozenset()
+    try:
+        with open(compose_file, encoding="utf-8", errors="replace") as fh:
+            lines = fh.read(2_000_000).splitlines()
+    except OSError:
+        return frozenset()
+    out: set[str] = set()
+    in_services = False
+    current = ""
+    for line in lines:
+        if _COMPOSE_SERVICES_HEAD.match(line):
+            in_services, current = True, ""
+            continue
+        if in_services and line and not line[0].isspace() and not line.startswith("#"):
+            in_services, current = False, ""          # the next top-level key
+        if not in_services:
+            continue
+        m = _COMPOSE_SERVICE_KEY.match(line)
+        if m:
+            current = m.group(1)
+        elif current and _COMPOSE_RESTART_NO.match(line):
+            out.add(current)
+    return frozenset(out)
 
 
 def _compose_units(node, generator_dir: str, catalog, live: dict, budget: _Budget, *,
@@ -906,13 +1083,21 @@ def _compose_units(node, generator_dir: str, catalog, live: dict, budget: _Budge
     https_port = int(getattr(node, "public_https_port", 0) or 0)
     plain_port = int(getattr(node, "public_host_port", 0) or 0)
     web_url = str(getattr(node, "web_url", "") or "")
+    oneshots = (_compose_oneshot_services(compose_file)
+                if any(str(r.get("State") or "").lower() in ("exited", "dead")
+                       for r in rows) else frozenset())
     try:
         onion = str(node.onion_url() or "")
     except Exception:                                 # noqa: BLE001
         onion = ""
+    domain_onions = _domain_onions(node)
     by_name = {d.name: d for d in (catalog or [])}
     units: list[MeshUnit] = []
+    # Counted apart from the rows: a per-domain onion Door is a row of the same
+    # hugmesh-tor container, not a container of its own.
+    containers = 0
     for r in rows:
+        containers += 1
         name = str(r.get("Name") or "")
         service = str(r.get("Service") or "")
         state_s = str(r.get("State") or "").lower()
@@ -933,6 +1118,10 @@ def _compose_units(node, generator_dir: str, catalog, live: dict, budget: _Budge
         elif state_s in ("exited", "dead"):
             reason = f"{state_s} (exit {exit_code})"
             state = "failed" if exit_code != 0 else "stopped"
+            if state == "stopped" and service in oneshots:
+                # a declared one-shot (`restart: "no"`) that ran to completion
+                state = "completed"
+                phase = f"completed (exit {exit_code})"
         else:
             reason, state = state_s or "unknown", "queued"
         pubs = [p for p in (r.get("Publishers") or []) if isinstance(p, dict)]
@@ -973,10 +1162,17 @@ def _compose_units(node, generator_dir: str, catalog, live: dict, budget: _Budge
             else:
                 door = Door(label="Open", url=f"http://127.0.0.1:{plain_port}/",
                             via="compose")
-        elif onion and "tor" in (service or name).lower():
+        elif onion and _is_compose_service(service, name, _COMPOSE_ONION_SERVICE):
             external_bits.append(onion)
             door = Door(blocked="a normal browser cannot reach a .onion — use the "
                                 "'Copy .onion address' button and Tor Browser")
+        elif _is_compose_service(service, name, _COMPOSE_TOR_CLIENT_SERVICE):
+            # The SOCKS5 client the Tor e2e lane dials the onion through. It is
+            # NOT the onion: attributing the .onion (or the Tor Browser hint) to
+            # this row would point a person at a proxy port as if it were the door.
+            door = Door(blocked="a SOCKS5 proxy into Tor for the e2e lane "
+                                "(make stack-e2e-tor), not a web page — the onion "
+                                f"itself is the {_COMPOSE_ONION_SERVICE} row")
         else:
             web = [(pp, tp) for pp, tp in published if _port_is_http("", tp)]
             if web:
@@ -1007,9 +1203,11 @@ def _compose_units(node, generator_dir: str, catalog, live: dict, budget: _Budge
                    if service else
                    ScaleTarget(refused="this container carries no compose service "
                                        "label, so there is no service to scale"))))
+        if domain_onions and _is_compose_service(service, name, _COMPOSE_ONION_SERVICE):
+            units.extend(_domain_onion_units(units[-1], domain_onions))
     if not units:
         notes.append("the compose project reports running but listed zero containers")
-    bits = [f"project {_COMPOSE_PROJECT}", f"{len(units)} container(s)"]
+    bits = [f"project {_COMPOSE_PROJECT}", f"{containers} container(s)"]
     if detail and "container" not in detail:      # status() already counts them
         bits.append(detail)
     return LaneState(True, detail=" · ".join(bits)), units, notes, errors
@@ -1154,7 +1352,7 @@ def replicas_now(units, target: ScaleTarget) -> int:
     just deleted reads 2 for the seconds in between — which is what the table is
     showing anyway.
 
-    Rows in the terminal ``stopped`` state are NOT counted: a Succeeded pod and an
+    Rows in the terminal ``stopped`` / ``completed`` states are NOT counted: a Succeeded pod and an
     exited compose one-shot are finished work, not running replicas, and counting them
     would make a "+1" from the GUI hand compose a number it would immediately undo.
     """
@@ -1162,7 +1360,7 @@ def replicas_now(units, target: ScaleTarget) -> int:
         return 0
     rows = getattr(units, "units", units) or ()
     return sum(1 for u in rows
-               if u.scale.key == target.key and u.state != "stopped")
+               if u.scale.key == target.key and u.state not in ("stopped", "completed"))
 
 
 def scale_argv(unit: MeshUnit, replicas: int, *, generator_dir: str,
@@ -1197,7 +1395,15 @@ def scale_argv(unit: MeshUnit, replicas: int, *, generator_dir: str,
         # that are already up alone — without it, `up` re-creates every listed
         # container, which restarts a healthy mesh to change one service's count.
         # --no-deps keeps the blast radius to the named service.
-        return ([*base, "-p", _COMPOSE_PROJECT, "-f", compose_file, "up", "-d",
+        #
+        # A stack with Tor domains was brought up with one more compose file (#582:
+        # ``LocalStackNode.tor_domains_overlay``). A replica created WITHOUT it would
+        # be an fe-gateway with no onion host map — it would serve every onion as the
+        # default brand while its siblings refuse the unregistered ones — so the scale
+        # loads the same file. "" (every stack with no Tor domain) adds nothing.
+        overlay = str(getattr(node, "tor_domains_overlay", "") or "")
+        return ([*base, "-p", _COMPOSE_PROJECT, "-f", compose_file,
+                 *(("-f", overlay) if overlay else ()), "up", "-d",
                  "--no-deps", "--no-recreate", "--scale", f"{target.name}={n}",
                  target.name], "")
     kubectl = devops_tools.which("kubectl", generator_dir)
