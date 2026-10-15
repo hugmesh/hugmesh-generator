@@ -347,7 +347,19 @@ if arm_with_bpf:
     bad("ARM boards name bpf in CONFIG_LSM: %s — update this lint and the roadmap together once "
         "CONFIG_BPF_LSM + BTF are really built there" % ", ".join(arm_with_bpf))
 else:
-    ok("no ARM board names bpf in CONFIG_LSM (CONFIG_BPF_LSM + BTF are x86/rpi5-only, still pahole-gated)")
+    ok("no ARM board names bpf in CONFIG_LSM (CONFIG_BPF_LSM + BTF are x86/rpi5-only)")
+# A bpf LSM that is named but cannot take a BPF_PROG_TYPE_LSM program (no BTF) is the
+# registered-but-not-enforcing state this lint exists to keep from shipping quietly.
+# The pairing with pahole itself is tests/scripts/test-btf-pahole-pairing.sh.
+for board, frag, *_ in BOARDS:
+    ftext = read(frag) or ""
+    if "bpf" not in (frag_lsm(ftext) or "").split(","):
+        continue
+    if frag_enables(ftext, "CONFIG_DEBUG_INFO_BTF"):
+        ok("%s: names bpf and builds CONFIG_DEBUG_INFO_BTF, so a BPF_PROG_TYPE_LSM program can attach" % board)
+    else:
+        bad("%s: names bpf in CONFIG_LSM but %s does not build CONFIG_DEBUG_INFO_BTF — the bpf LSM "
+            "would register but could not enforce" % (board, os.path.basename(frag)))
 
 print()
 print("== %d passed, %d failed ==" % (P[0], F[0]))
