@@ -175,3 +175,28 @@ def test_q_closes_the_screen_back_to_branding_not_out():
     j = _at_themes()
     j.feed("q")
     assert j.overlay is None and j.slug == "branding" and not j.done
+
+
+# ── the text face makes the same check against the brands' stylesheets ───────────────
+def test_the_themes_screen_refuses_a_font_that_would_push_a_brand_over_its_budget(
+        tmp_path, monkeypatch):
+    """The window's editor and this screen write one record through one model, so the
+    per-brand check (a superbrand edit against every brand's finished stylesheet) is
+    made here too (decision 71 = A). A brand carrying its own picture inherits the
+    font on top of it. (Mutation: build the screen's look without `dependents`.)"""
+    from hugmesh_studio.core import brand_images, brand_look
+    from hugmesh_studio.core.config import Domain
+    from test_look_model import png_bytes
+    font = tmp_path / "Face.woff2"
+    font.write_bytes(b"wOF2" + bytes(3000))
+    bg = brand_images.reencode(png_bytes(40, 40, noise=True), "background").data_uri()
+    own = len(brand_look.look_css({"font_file": str(font)}).encode())
+    j = _at_themes()
+    j.cfg.domains = [Domain(name="shop.example", look={"login_bg_image": bg})]
+    monkeypatch.setattr(brand_look, "LOOK_CSS_BUDGET", own)       # the superbrand fits, the brand does not
+    j.feed(f"fontfile {font}")
+    assert "brand shop-example" in j.status, j.status
+    assert j.cfg.login_font_file == ""
+    j.cfg.domains = [Domain(name="shop.example")]                  # no picture of its own
+    j.feed(f"fontfile {font}")
+    assert j.cfg.login_font_file == str(font), j.status

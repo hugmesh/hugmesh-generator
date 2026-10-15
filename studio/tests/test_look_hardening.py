@@ -321,3 +321,21 @@ def _png_file(tmp_path, data):
     path = tmp_path / "logo.png"
     path.write_bytes(data)
     return str(path)
+
+
+def test_a_superbrand_edit_that_would_overfill_the_shared_configmap_is_refused(monkeypatch):
+    """The kind cluster carries every brand's stylesheet in one ConfigMap: a superbrand
+    edit is checked against the sum of the brands' finished sheets plus its own."""
+    m = bl.Look({})
+    m.dependents = lambda: {"shop": {}, "blog": {}}
+    assert m.try_set("primary", "#123456").ok
+    each = len(bl.look_css({"primary": "#123456"}).encode())
+    monkeypatch.setattr(bl, "CONFIGMAP_LIMIT", 3 * each - 1)
+    out = bl.Look({})
+    out.dependents = lambda: {"shop": {}, "blog": {}}
+    refused = out.try_set("primary", "#123456")
+    assert not refused.ok and "ConfigMap" in refused.text and "shop" in refused.text
+    monkeypatch.setattr(bl, "CONFIGMAP_LIMIT", 3 * each)
+    ok = bl.Look({})
+    ok.dependents = lambda: {"shop": {}, "blog": {}}
+    assert ok.try_set("primary", "#123456").ok
