@@ -1528,7 +1528,9 @@ everywhere), and expect `503` + `Retry-After: 5` for privileged callers during e
 gateway's cold start (§2). Then, from a session whose stamp is **older than 10
 minutes**, load an `/bff/admin…` page: expect `403` + `X-Route-Denied`; complete the
 challenge on the security page and reload: expect it to pass. A page outside the floor
-(for example `/bff/forum/admin/**`, §1.2a) must be untouched.
+(for example `/bff/mod/**`, the moderation surface left out of scope in §1.2a)
+must be untouched; the forum, wiki and owncast admin consoles are **not** such a
+page, they carry the floor too.
 
 **E-bypass. Option (b): the floor on `hugmesh-fe-gateway` only, temporarily, outside
 git.** Auto-sync must be suspended or it reverts you within a reconcile (§3 step 7).
