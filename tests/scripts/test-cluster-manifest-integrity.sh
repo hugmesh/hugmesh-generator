@@ -627,9 +627,9 @@ SCPY
 #       would stay green here — that is the whole difference between a guard and a
 #       restatement of a literal.
 expect_catch "kaniko template renames its Secret (nothing else changes)" "[build-template-secret]" '
-  sed -i "s/^            secretName: service-catalog-builder-registry$/            secretName: service-catalog-builder-registry-RENAMED/" \
+  sed -i "s/^            secretName: service-catalog-registry-credentials$/            secretName: service-catalog-registry-credentials-RENAMED/" \
       "$T/manifests/service-catalog-builder/kaniko-build-job.template.yaml"
-  grep -q "secretName: service-catalog-builder-registry-RENAMED" \
+  grep -q "secretName: service-catalog-registry-credentials-RENAMED" \
       "$T/manifests/service-catalog-builder/kaniko-build-job.template.yaml"
 '
 # (14b) the other direction — THE SHIPPED DEFECT re-injected: no ExternalSecret, the
@@ -640,10 +640,10 @@ expect_catch "the builder push ExternalSecret removed (template mount left dangl
 import sys
 p=sys.argv[1]+"/manifests/external-secrets/service-catalog-builder-externalsecrets.yaml"
 s=open(p,encoding="utf-8").read()
-old="    name: service-catalog-builder-registry\n    creationPolicy: Owner"
+old="    name: service-catalog-registry-credentials\n    creationPolicy: Owner"
 assert s.count(old)==1, "ES target anchor matched %d times, not 1" % s.count(old)
-s=s.replace(old,"    name: service-catalog-builder-registry-X\n    creationPolicy: Owner",1)
-s=s.replace("  name: service-catalog-builder-registry\n","  name: service-catalog-builder-registry-X\n",1)
+s=s.replace(old,"    name: service-catalog-registry-credentials-X\n    creationPolicy: Owner",1)
+s=s.replace("  name: service-catalog-registry-credentials\n","  name: service-catalog-registry-credentials-X\n",1)
 open(p,"w",encoding="utf-8").write(s)
 SCPY
 '
@@ -789,7 +789,7 @@ expect_catch "push credential marked optional:true AND its ExternalSecret remove
 import sys, os
 p=sys.argv[1]+"/manifests/service-catalog-builder/kaniko-build-job.template.yaml"
 s=open(p,encoding="utf-8").read()
-old="            secretName: service-catalog-builder-registry\n"
+old="            secretName: service-catalog-registry-credentials\n"
 assert s.count(old)==1, "secretName anchor matched %d times, not 1" % s.count(old)
 open(p,"w",encoding="utf-8").write(s.replace(old, old+"            optional: true\n",1))
 os.remove(sys.argv[1]+"/manifests/external-secrets/service-catalog-builder-externalsecrets.yaml")
@@ -806,9 +806,9 @@ p=sys.argv[1]+"/manifests/service-catalog-builder/kaniko-build-job.template.yaml
 s=open(p,encoding="utf-8").read()
 vol="""        - name: docker-config
           secret:
-            secretName: service-catalog-builder-registry
+            secretName: service-catalog-registry-credentials
             items:
-              - key: .dockerconfigjson
+              - key: config.json
                 path: config.json
 """
 mnt="""            - name: docker-config

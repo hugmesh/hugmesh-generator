@@ -81,6 +81,17 @@ source "${SCRIPT_DIR}/scripts/_binpkg-pool-lib.sh"
 # docs/SHARED-BINPKG.md.
 # shellcheck source=scripts/_shared-assets-lib.sh
 source "${SCRIPT_DIR}/scripts/_shared-assets-lib.sh"
+# Mounts left under the build system by a crashed run are listed and refused
+# before rm -rf can go through them (#659). This builder shares only THAT part
+# of the resume library with the x86 builder: its static-library restore and
+# link test do not apply here, because the aarch64 cross-compiler links
+# against its own built-in sysroot (/usr/aarch64-unknown-linux-gnu, measured
+# with `aarch64-unknown-linux-gnu-gcc -print-sysroot` on the host and in the
+# builder image), never against ${SYSROOT}, whose stripped *.a files are
+# therefore never on the link path; and its image is filled from a tarball
+# forced to --owner=0 --group=0, so a user-owned sysroot cannot leak into it.
+# shellcheck source=scripts/_builder-resume-lib.sh
+source "${SCRIPT_DIR}/scripts/_builder-resume-lib.sh"
 # Signed-kernel artifact cache (G4): a cross-compiled kernel + module tree + DTBs is
 # reusable across images of the SAME board when board + kernel version + kernel config
 # + SIGNING KEY FINGERPRINT all match. See scripts/_kernel-cache-lib.sh.
@@ -3200,6 +3211,20 @@ info "stage3 seed verified: ${STAGE3_LOCAL}"
 
 banner "Extracting stage3 into sysroot"
 
+# NEVER touch a sysroot that still has mounts under it, on EITHER branch: the
+# disk-initramfs step below binds host /proc, /sys and /dev under it, and a
+# build killed in that step leaves them attached — the non-resume `rm -rf`
+# would then delete straight through host /dev. Same check and the same
+# refusal as the x86 builder (#659): the listing comes from the kernel's own
+# mount table (symlinks resolved, escapes undone), and the refusal prints every
+# mount as the umount command that removes it, once per stacked layer.
+if [ -d "${SYSROOT}" ]; then
+    _stale_mounts="$(hmr_stale_mounts "${SYSROOT}")"
+    if [ -n "${_stale_mounts}" ]; then
+        hmr_stale_mount_refuse "${SYSROOT}" "${_stale_mounts}"
+        exit 1
+    fi
+fi
 if [ -f "${SYSROOT}/etc/gentoo-release" ] && ${RESUME}; then
     info "Sysroot already populated and --resume set, skipping extraction"
 else
@@ -3664,6 +3689,14 @@ cp "${SHARED_SPECS}/usr/sbin/hugmesh-tor-reconcile"   "${SYSROOT}/usr/sbin/hugme
 # Its ingress half (#614): admits the exported onions as fe-gateway Ingress hosts from a
 # control-plane node; run by the same cron drop-in (*/5), inert without a hostname.
 cp "${SHARED_SPECS}/usr/sbin/hugmesh-tor-ingress-admit" "${SYSROOT}/usr/sbin/hugmesh-tor-ingress-admit"; chmod +x "${SYSROOT}/usr/sbin/hugmesh-tor-ingress-admit"
+# Its export half (#629, the node side of hugmesh-admin-bff-api#108): fetches admin-bff's
+# SIGNED per-node Tor export over the node's mTLS identity, verifies it against the baked
+# key-USB public half (tor-verify.sh sources the SAME registry-verify.sh baked above),
+# applies the managed upstream / domain-list files atomically, re-runs the reconcile, and
+# reports the exported onions back. Run every minute by the same cron drop-in, so it is
+# inert unless tor is selected; a node without node.env does nothing.
+cp "${SHARED_SPECS}/usr/sbin/hugmesh-tor-export-sync" "${SYSROOT}/usr/sbin/hugmesh-tor-export-sync"; chmod +x "${SYSROOT}/usr/sbin/hugmesh-tor-export-sync"
+cp "${SHARED_SPECS}/usr/lib/hugmesh/tor-verify.sh"    "${SYSROOT}/usr/lib/hugmesh/tor-verify.sh"
 cp "${SHARED_SPECS}/etc/init.d/hugmesh-tor-reconcile" "${SYSROOT}/etc/init.d/hugmesh-tor-reconcile"; chmod +x "${SYSROOT}/etc/init.d/hugmesh-tor-reconcile"
 cp "${SHARED_SPECS}/etc/cron.d/hugmesh-tor-reconcile"  "${SYSROOT}/etc/hugmesh/registry/cron-tor-reconcile"
 
