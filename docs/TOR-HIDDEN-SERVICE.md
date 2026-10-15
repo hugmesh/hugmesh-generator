@@ -597,7 +597,7 @@ a 403.
 ```bash
 make kind-up && make kind-images   # the kind lane itself (unchanged)
 make kind-tor                      # host tor + Ingress rule; waits until the onion answers
-curl --socks5-hostname 127.0.0.1:9052 -k -I https://$(bash scripts/kind-tor.sh onion)/
+curl --socks5-hostname 127.0.0.1:9052 -sk -D - -o /dev/null https://$(bash scripts/kind-tor.sh onion)/
 make kind-e2e-tor                  # @env:kind @via:onion — tests/e2e/features/platform/tor-onion-kind.feature
 make kind-tor-down                 # stop tor, drop the Ingress rule (keys kept)
 make kind-tor-check                # OFFLINE guard: tests/scripts/test-kind-tor.sh

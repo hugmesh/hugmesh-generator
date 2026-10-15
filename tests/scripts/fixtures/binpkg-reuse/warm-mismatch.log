@@ -1,0 +1,38 @@
+SYNTHETIC FIXTURE for tests/scripts/test-binpkg-reuse-report.sh: hand-written in the shape of a builder log, NOT a capture of a real build.
+==== snap-build-pi5 (snap-build-pi5) start 20261001T120000Z brand=hugmesh role=pki env=test ====
+some builder chatter that is not an emerge line
+FATAL: binpkg pool ABI MISMATCH at /out/pkgdir/snap-build-pi5
+==> Emerge plan: system total=4 binary=4 ebuild=0
+[0;36m[1m==> Emerge group: system[0m
+>>> Emerging binary (1 of 4) sys-apps/portage-3.0.81.2::gentoo
+>>> Installing (1 of 4) sys-apps/portage-3.0.81.2::gentoo
+>>> Completed (1 of 4) sys-apps/portage-3.0.81.2::gentoo
+>>> Emerging binary (2 of 4) sys-libs/glibc-2.42-r1::gentoo
+>>> Installing (2 of 4) sys-libs/glibc-2.42-r1::gentoo
+>>> Completed (2 of 4) sys-libs/glibc-2.42-r1::gentoo
+>>> Emerging binary (3 of 4) sys-apps/baselayout-2.18::gentoo
+>>> Installing (3 of 4) sys-apps/baselayout-2.18::gentoo
+>>> Completed (3 of 4) sys-apps/baselayout-2.18::gentoo
+>>> Emerging binary (4 of 4) sys-devel/gettext-0.26::gentoo
+>>> Installing (4 of 4) sys-devel/gettext-0.26::gentoo
+>>> Completed (4 of 4) sys-devel/gettext-0.26::gentoo
+==> Emerge plan: image total=6 binary=6 ebuild=0
+[0;36m[1m==> Emerge group: image[0m
+>>> Emerging binary (1 of 6) net-misc/networkmanager-1.54.1::gentoo for /out/wl-pki.pi5/sysroot/
+>>> Installing (1 of 6) net-misc/networkmanager-1.54.1::gentoo for /out/wl-pki.pi5/sysroot/
+>>> Completed (1 of 6) net-misc/networkmanager-1.54.1::gentoo for /out/wl-pki.pi5/sysroot/
+>>> Emerging binary (2 of 6) net-fs/samba-4.22.3::gentoo for /out/wl-pki.pi5/sysroot/
+>>> Installing (2 of 6) net-fs/samba-4.22.3::gentoo for /out/wl-pki.pi5/sysroot/
+>>> Completed (2 of 6) net-fs/samba-4.22.3::gentoo for /out/wl-pki.pi5/sysroot/
+>>> Emerging binary (3 of 6) dev-libs/openssl-3.5.4::gentoo for /out/wl-pki.pi5/sysroot/
+>>> Installing (3 of 6) dev-libs/openssl-3.5.4::gentoo for /out/wl-pki.pi5/sysroot/
+>>> Completed (3 of 6) dev-libs/openssl-3.5.4::gentoo for /out/wl-pki.pi5/sysroot/
+>>> Emerging binary (4 of 6) sys-apps/systemd-257.9::gentoo for /out/wl-pki.pi5/sysroot/
+>>> Installing (4 of 6) sys-apps/systemd-257.9::gentoo for /out/wl-pki.pi5/sysroot/
+>>> Completed (4 of 6) sys-apps/systemd-257.9::gentoo for /out/wl-pki.pi5/sysroot/
+>>> Emerging binary (5 of 6) app-admin/sudo-1.9.17_p2::gentoo for /out/wl-pki.pi5/sysroot/
+>>> Installing (5 of 6) app-admin/sudo-1.9.17_p2::gentoo for /out/wl-pki.pi5/sysroot/
+>>> Completed (5 of 6) app-admin/sudo-1.9.17_p2::gentoo for /out/wl-pki.pi5/sysroot/
+>>> Emerging binary (6 of 6) net-misc/openssh-10.0_p1::gentoo for /out/wl-pki.pi5/sysroot/
+>>> Installing (6 of 6) net-misc/openssh-10.0_p1::gentoo for /out/wl-pki.pi5/sysroot/
+>>> Completed (6 of 6) net-misc/openssh-10.0_p1::gentoo for /out/wl-pki.pi5/sysroot/

@@ -95,6 +95,38 @@ domain is created (the planned DomainReconciler would take over this step).
 instance's pods stay pending on their Secret mounts. That is fail-closed, per-domain
 and loud.
 
+## Image CLI: `--domain-idp` (issue #509)
+
+Every stage4 builder (`build-*-stage4.sh`, all ten) takes a repeatable
+
+```
+--domain-idp <domain>=own|superdomain
+```
+
+* `own` marks the domain as running its own Casdoor; `superdomain` is the explicit
+  spelling of the default.
+* The vocabulary is the Studio's `DOMAIN_IDP_CHOICES`; `tests/scripts/test-domain-idp-flag.sh`
+  pins the two together.
+* The domain must be a lowercase DNS name, named once, and may not be the mesh's own
+  `--cluster-domain` as `own` (the own domain always uses the superdomain Casdoor,
+  the same rule the Studio CLI applies). On x86 client images, where `--domains` is
+  meaningful, the name must also be one of the `--domains` elements. The other nine
+  builders take no domain list, so they check the name's shape only.
+  `--unaffiliated` refuses the flag.
+* All ten parse it through `scripts/_domain-idp-lib.sh`, which each builder sources.
+
+What it does: the builders do not write the Studio's `hugmesh-mesh-manifest.json`,
+so the choice is recorded in the image, with the manifest's field name, values and
+omit-the-default rule, as `/etc/hugmesh/domain-idp`: one `<domain>=own` line per
+own-Casdoor domain. The file exists only when at least one domain is `own`, and
+`--print-plan` prints `PLAN_DOMAIN_IDP=<own domains>` under the same condition. A
+build with no flag, or with only `=superdomain`, is byte-identical to one built
+before the flag existed.
+
+Nothing on the image reads `/etc/hugmesh/domain-idp` yet: the build-time writer of
+the `casdoor-domains` elements (below) is still open, and this file is the input it
+would take.
+
 ## Removal runbook (idp flip back / domain deletion)
 
 1. Retire the domain's `APP_TENANCY_ISSUERS`/`APP_TENANCY_HOSTS` pair from the
