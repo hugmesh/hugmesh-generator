@@ -327,9 +327,17 @@ def _check_picture_uri(field: str, uri: str) -> None:
         raise LookError(f"{field}: the data: URI says image/{m.group(1)} but the bytes are "
                         f"{kind or 'not a picture'}")
     try:
-        brand_images.reencode(raw, PICTURE_FIELDS[field])
+        again = brand_images.reencode(raw, PICTURE_FIELDS[field])
     except brand_images.PictureRefused as exc:
         raise LookError(f"{field}: {exc}") from None
+    # "Would the re-encoder accept it" is not "did the re-encoder make it": a PNG with a
+    # tEXt chunk or bytes after IEND is accepted (and cleaned) on upload, but a record
+    # that holds the dirty bytes would ship them to every visitor. The re-encoder is
+    # idempotent, so its own output comes back byte for byte and anything else does not.
+    if again.data != raw:
+        raise LookError(f"{field}: this picture was not made by the Studio's re-encoder "
+                        f"(it still carries {', '.join(again.dropped) or 'extra bytes'}); "
+                        "choose the file again so it is cleaned")
 
 
 def _font_bytes(look: Mapping[str, Any]) -> tuple[bytes, str]:
@@ -552,7 +560,8 @@ def write_look_files(superbrand: Mapping[str, Any] | None,
 
     Everything is composed and checked before anything is written, so a brand past its
     budget or an unsafe id leaves the folder untouched; a brand that is no longer in
-    ``brands`` has its folder removed, so a dropped brand cannot keep serving a look."""
+    ``brands`` has its folder removed (when it holds only look files), so a dropped brand
+    cannot keep serving a look."""
     for bid in brands:
         if bid == _SUPERBRAND_DIR or not _ID_RE.match(bid):
             raise LookError(
@@ -565,8 +574,12 @@ def write_look_files(superbrand: Mapping[str, Any] | None,
         sheets[bid] = look_css(effective_look(sb, own or {}))
     os.makedirs(out_dir, exist_ok=True)
     for entry in os.listdir(out_dir):
-        if entry not in sheets and os.path.isdir(os.path.join(out_dir, entry)):
-            shutil.rmtree(os.path.join(out_dir, entry))
+        folder = os.path.join(out_dir, entry)
+        # Only a folder this function could have written (its files are the look files
+        # and nothing else) is removed: an out_dir shared with anything else keeps it.
+        if (entry not in sheets and os.path.isdir(folder) and not os.path.islink(folder)
+                and set(os.listdir(folder)) <= set(_FILE_NAMES)):
+            shutil.rmtree(folder)
     written: list[str] = []
     for bid, css in sheets.items():
         folder = os.path.join(out_dir, bid)
@@ -794,6 +807,20 @@ class Look:
         why = check_value(field, value)
         if why:
             return Outcome(False, why)
+        if self.mode == "override":
+            # D7 is field by field: a brand's field stays the superbrand's until the
+            # person CHANGES it. The window fills each box with the inherited value, and
+            # a box fires 'finished' when focus leaves it, so without this a person
+            # tabbing through the form froze every field into a copy. An emptied colour
+            # box says "use the superbrand's" (that is what its placeholder promises);
+            # any other emptied text is a real value (no header text over an inherited
+            # one), so it is kept.
+            if field in HEX_FIELDS and not value:
+                if field in self.own:
+                    self.use_superbrand(field)
+                return Outcome(True)
+            if normalise({field: value})[field] == self.get(field):
+                return Outcome(True)
         had = field in self.own
         old = self.own.get(field)
         self.set(field, value)

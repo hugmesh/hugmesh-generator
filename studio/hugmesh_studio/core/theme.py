@@ -454,7 +454,7 @@ def default_tokens() -> dict[str, str]:
 #: property (``color``, ``background``) or a foreign custom property is refused as a
 #: build bug rather than shipped. Lowercase only: the --hug twin is spelt from the --sd
 #: name, and a mixed-case name would make two tokens of one.
-TOKEN_NAME_RE = re.compile(r"^--(sd|hug|bs)-[a-z0-9][a-z0-9-]*$")
+TOKEN_NAME_RE = re.compile(r"--(sd|hug|bs)-[a-z0-9][a-z0-9-]*")   # used with fullmatch: $ lets a trailing newline through
 
 #: The two web pictures (D6): look field -> token. The --hug twin is written by css_root
 #: like every other --sd token. These are the ONLY tokens whose value may hold ``url(``,
@@ -463,7 +463,7 @@ PICTURE_TOKENS: dict[str, str] = {
     "logo_image": "--sd-logo-image",
     "login_bg_image": "--sd-login-bg-image",
 }
-_DATA_PICTURE_RE = re.compile(r"^url\(data:image/(png|jpeg);base64,([A-Za-z0-9+/]{16,}={0,2})\)$")
+_DATA_PICTURE_RE = re.compile(r"url\(data:image/(png|jpeg);base64,([A-Za-z0-9+/]{16,}={0,2})\)")
 _PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 # A CSS string literal as the tokenizer reads it (an escaped anything, or any char that
 # is not the quote or a backslash). Text INSIDE one is inert — 'url(https://x)' in a
@@ -472,10 +472,23 @@ _PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 _CSS_STRING_RE = re.compile(r"'(?:\\.|[^'\\])*'|\"(?:\\.|[^\"\\])*\"")
 
 
+# What may never stand OUTSIDE a string literal in a token value. A custom property is
+# stored as raw text and re-parsed wherever var() lands it, so these are the ways a value
+# could stop being one value: a backslash (a CSS escape can spell ``url(`` — chromium was
+# seen fetching a remote picture from ``u\\72l(...)``), a comment opener (it can hide a
+# quote and so fool the string-stripping below), and the characters that end a
+# declaration or open a rule or an @-rule. Inside a string literal all of these are inert
+# text (a header saying "a; b" is legitimate), so they are looked for only after the
+# strings are removed.
+_VALUE_BANNED = ("\\", "/*", "*/", "{", "}", ";", "@", "<", ">")
+#: Functions that fetch a picture or another document by a string, with no ``url(``.
+_FETCH_FUNCTIONS = ("image-set(", "src(", "image(", "cross-fade(", "element(", "paint(")
+
+
 def _check_token(name: str, value: str) -> None:
     """Refuse a declaration the allow-list does not cover. Raises ValueError with the
     word a test or an operator looks for ('allow', 'url', 'control')."""
-    if not TOKEN_NAME_RE.match(name):
+    if not TOKEN_NAME_RE.fullmatch(name):
         raise ValueError(f"property {name!r} is outside the writer's allow-list "
                          f"(--sd-*, --hug-*, --bs-*)")
     if "var(" in value:
@@ -483,12 +496,13 @@ def _check_token(name: str, value: str) -> None:
     if any(ord(ch) < 0x20 or 0x7F <= ord(ch) <= 0x9F for ch in value):
         raise ValueError(f"token {name} carries a raw control character: {value!r} "
                          "(css_string escapes text; a raw one here is a bug)")
-    if "url(" in _CSS_STRING_RE.sub("''", value).lower():
+    bare = _CSS_STRING_RE.sub("\ufffc", value).lower()    # strings out, one inert mark in
+    if "url(" in bare:
         if name not in PICTURE_TOKENS.values():
             raise ValueError(f"token {name} may not carry url(: only the picture tokens "
                              f"({', '.join(PICTURE_TOKENS.values())}) may, and only a "
                              f"data: PNG or JPEG")
-        m = _DATA_PICTURE_RE.match(value)
+        m = _DATA_PICTURE_RE.fullmatch(value)
         if not m:
             raise ValueError(f"token {name}: url( is allowed only as one data: PNG or "
                              f"JPEG made by the re-encoder, got {value[:60]!r}")
@@ -498,6 +512,21 @@ def _check_token(name: str, value: str) -> None:
         if (m.group(1) == "png" and not is_png) or (m.group(1) == "jpeg" and not is_jpeg):
             raise ValueError(f"token {name}: the data: url( says image/{m.group(1)} but "
                              "its bytes are not that picture")
+        return        # the whole value is that one picture; nothing else rides along
+    # A quote left after the strings are removed is an unterminated string, which would
+    # swallow whatever the stylesheet writes next.
+    if "'" in bare or '"' in bare:
+        raise ValueError(f"token {name} has an unterminated string: {value[:60]!r}")
+    for banned in _VALUE_BANNED:
+        if banned in bare:
+            raise ValueError(f"token {name} may not carry {banned!r} outside a string "
+                             f"(it could end the declaration or hide a url(): "
+                             f"{value[:60]!r})")
+    for fn in _FETCH_FUNCTIONS:
+        if fn in bare:
+            raise ValueError(f"token {name} may not carry {fn} (it can fetch a "
+                             f"picture; only the two picture tokens may, as a data: "
+                             f"URL): {value[:60]!r}")
 
 
 def picture_tokens(*, logo_uri: str = "", login_bg_uri: str = "") -> dict[str, str]:

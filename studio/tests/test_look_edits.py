@@ -5,8 +5,11 @@ ceilings). Qt-free: the window and the text screen are thin over these.
 Every refusal is asserted by the sentence a person reads, because both faces show the
 same one. Where a number is in the sentence the test computes it independently.
 """
+import base64
 import os
 import re
+import struct
+import zlib
 
 import pytest
 
@@ -152,6 +155,40 @@ def test_a_picture_field_takes_only_the_re_encoders_data_uri():
     assert m.get("login_bg_image") == ""
 
 
+def _dirty(uri: str) -> str:
+    """The re-encoder's own picture with a metadata chunk before IEND and a script after
+    it: bytes the re-encoder accepts on upload (and would clean) but did not make."""
+    raw = base64.b64decode(uri.split(",", 1)[1])
+    body, iend = raw[:-12], raw[-12:]
+    text = b"Comment\x00gps 51.5N 0.1W"
+    chunk = (struct.pack(">I", len(text)) + b"tEXt" + text
+             + struct.pack(">I", zlib.crc32(b"tEXt" + text) & 0xFFFFFFFF))
+    dirty = body + chunk + iend + b"<script>alert(1)</script>"
+    return "data:image/png;base64," + base64.b64encode(dirty).decode()
+
+
+def test_a_record_holds_only_pictures_the_re_encoder_made():
+    clean = bi.reencode(png_bytes(8, 8), "logo").data_uri()
+    assert bl.check_value("logo_image", clean) == ""
+    m = bl.Look()
+    assert m.try_set("logo_image", clean).ok
+    dirty = _dirty(clean)
+    # the re-encoder ACCEPTS these bytes (it would clean them), so "would it accept" is
+    # not the test; "is it exactly what it makes" is
+    assert bi.reencode(base64.b64decode(dirty.split(",", 1)[1]), "logo")
+    why = bl.check_value("logo_image", dirty)
+    assert "not made by the Studio's re-encoder" in why and "tEXt" in why, why
+    m2 = bl.Look()
+    out = m2.try_set("logo_image", dirty)
+    assert not out.ok and "re-encoder" in out.text and m2.get("logo_image") == ""
+    # a record built by hand (an imported brand) cannot ship the bytes either
+    with pytest.raises(bl.LookError, match="re-encoder"):
+        bl.look_css({"logo_image": dirty})
+    # and the upload path still cleans the same file into something the record takes
+    assert m2.try_set("logo_image", bi.reencode(
+        base64.b64decode(dirty.split(",", 1)[1]), "logo").data_uri()).ok
+
+
 def test_the_record_in_design_mode_is_what_differs_and_in_override_mode_is_the_overrides():
     sb = bl.Look()
     sb.choose_preset("forest")
@@ -265,3 +302,43 @@ def test_a_whole_look_at_its_limits_composes_within_the_cap():
     css = m.css()
     assert len(css.encode("utf-8")) <= 102400
     assert theme.css_root({"--sd-primary": "#112233"})   # the writer still takes plain tokens
+
+
+# ── D7: a brand's field stays the superbrand's until the person CHANGES it ──────────
+def test_setting_a_field_to_the_value_it_already_shows_does_not_make_it_the_brands_own():
+    sb = bl.Look({"primary": "#336699", "secondary": "#993366", "header_text": "Hello",
+                  "style": "sharp"})
+    brand = bl.Look(base=sb.effective())
+    for field, value in (("primary", "#336699"), ("secondary", "#993366"),
+                         ("header_text", "Hello"), ("style", "sharp"),
+                         ("font_licence", ""), ("color_scheme", ""), ("header_hidden", False)):
+        assert brand.try_set(field, value).ok
+    assert brand.own == {} and brand.record() == {}
+    assert brand.source("primary") == bl.SUPERBRAND
+    # a different value is a real override, and the same value typed over an OWN one
+    # leaves it own
+    assert brand.try_set("primary", "#112233").ok and brand.own == {"primary": "#112233"}
+    assert brand.try_set("primary", "#112233").ok and brand.own == {"primary": "#112233"}
+
+
+def test_an_emptied_colour_in_override_mode_means_the_superbrands_not_an_empty_own_value():
+    sb = bl.Look({"primary": "#336699"})
+    brand = bl.Look({"primary": "#112233"}, base=sb.effective())
+    out = brand.try_set("primary", "")
+    assert out.ok
+    assert brand.source("primary") == bl.SUPERBRAND and brand.get("primary") == "#336699"
+    assert brand.own == {}
+    # nothing own to drop: still the superbrand's
+    assert brand.try_set("primary", "").ok and brand.get("primary") == "#336699"
+    # in DESIGN mode an empty colour is simply empty (the shipped colour)
+    assert sb.try_set("primary", "").ok and sb.get("primary") == ""
+
+
+def test_an_override_can_say_no_picture_and_no_text_over_an_inherited_one():
+    clean = bi.reencode(png_bytes(8, 8), "logo").data_uri()
+    sb = bl.Look({"logo_image": clean, "header_text": "Hello"})
+    brand = bl.Look(base=sb.effective())
+    assert brand.try_set("logo_image", "").ok and brand.try_set("header_text", "").ok
+    assert brand.own == {"logo_image": "", "header_text": ""}
+    assert brand.get("logo_image") == "" and brand.get("header_text") == ""
+    assert brand.source("logo_image") == bl.OWN

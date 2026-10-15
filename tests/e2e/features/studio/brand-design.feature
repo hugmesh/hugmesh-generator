@@ -41,3 +41,13 @@ Feature: The superbrand design step and a brand's override agree in both faces
     When I run the shell command "cd studio && HUGMESH_STUDIO_NO_ELEVATION=1 QT_QPA_PLATFORM=offscreen ${SNAP_STUDIO_PYTHON:-python3} -m pytest -q -p no:cacheprovider tests/test_look_model.py tests/test_brand_images.py tests/test_look_edits.py"
     Then the command succeeded
     And the command output contains "passed"
+
+  Scenario: the stylesheet writer refuses the spellings that hide a url( and a picture that is not the re-encoder's own output @interface:cli
+    When I run the shell command "cd studio && HUGMESH_STUDIO_NO_ELEVATION=1 QT_QPA_PLATFORM=offscreen ${SNAP_STUDIO_PYTHON:-python3} -m pytest -q -p no:cacheprovider tests/test_look_model.py tests/test_look_edits.py tests/test_brand_images.py -k 'hide_a_url or re_encoder_made or deflate_bomb or cut_short'"
+    Then the command succeeded
+    And the command output contains "5 passed"
+
+  Scenario: tabbing through a brand's look keeps every inherited field inherited and Clear removes a stored picture @interface:studio
+    When I run the shell command "cd studio && HUGMESH_STUDIO_NO_ELEVATION=1 QT_QPA_PLATFORM=offscreen ${SNAP_STUDIO_PYTHON:-python3} -m pytest -q -p no:cacheprovider tests/test_look_editor.py tests/test_look_edits.py -k 'tabbing or emptied or clear_ or already_shows or no_picture'"
+    Then the command succeeded
+    And the command output contains "passed"

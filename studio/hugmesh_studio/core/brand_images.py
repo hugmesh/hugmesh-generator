@@ -167,13 +167,17 @@ def _inflate_exactly(comp: bytes, expected: int) -> bytes:
     d = zlib.decompressobj()
     try:
         raw = d.decompress(comp, expected + 1)
-        raw += d.flush(1)
     except zlib.error as exc:
         raise PictureRefused(f"This PNG's pixel data does not inflate: {exc}.") from None
-    if len(raw) != expected or d.unconsumed_tail:
+    # No flush(): it inflates whatever is left in unconsumed_tail with no limit, which
+    # made the cap above a cap on the FIRST call only (a 400 MiB bomb was inflated whole
+    # before being refused). Anything left over after the capped call is already "longer".
+    if len(raw) != expected or d.unconsumed_tail or not d.eof:
+        longer = len(raw) > expected or bool(d.unconsumed_tail)
+        shown = f"{len(raw):,}" if len(raw) <= expected else f"more than {expected:,}"
         raise PictureRefused(
-            f"This PNG's pixel data is {('shorter' if len(raw) < expected else 'longer')} "
-            f"than its size says ({len(raw):,} bytes for a picture that needs "
+            f"This PNG's pixel data is {'longer' if longer else 'shorter'} "
+            f"than its size says ({shown} bytes for a picture that needs "
             f"{expected:,}). A file whose pixel data and header disagree is refused.")
     return raw
 
