@@ -984,6 +984,17 @@ PREMERGE_UNGATED=(
   # THAT WORKFLOW'S SUITES LIST, DELETE THIS ENTRY AND RAISE PREMERGE_BASELINE BY ONE. It is
   # run today by `make binpkg-reuse-report-check`.
   tests/scripts/test-binpkg-reuse-report.sh
+  # NOT YET IN THE PULL_REQUEST GATE, and that is the only reason it is here: it is
+  # offline, bash + python3 only, and belongs in shell-suites.yml beside
+  # test-lsm-posture-honesty.sh (same job). It is gated post-merge by .gitlab-ci.yml's
+  # lint:btf-pahole-pairing. The lane that wrote it (hugmesh-generator#760) was
+  # forbidden to edit anything under .github, so: add the path to that SUITES list,
+  # delete this entry and raise PREMERGE_BASELINE by one to the number check 7 prints.
+  tests/scripts/test-btf-pahole-pairing.sh
+  # CANNOT gate: it needs a kernel SOURCE tree plus gcc, flex, bison and pahole, none
+  # of which a shell-suites image carries, and it exits 2 (never a silent pass) when
+  # given no tree. Run it with `make btf-kconfig-resolve-check KERNEL_TREE=<tree>`.
+  tests/scripts/test-btf-kconfig-resolve.sh
   # NOT an exemption, a wiring gap: the lane that added this suite (#509) may not
   # edit .github/. It runs every stage4 builder with --print-plan and needs only
   # bash, sed, paste and timeout, but is UNMEASURED in the shell-suites images
@@ -1080,6 +1091,14 @@ PREMERGE_UNGATED=(
   tests/scripts/test-netpol-egress-scope.sh
   tests/scripts/test-pg-tls-preflight.sh
   tests/scripts/test-service-env-contract.sh
+  # Lands outside the pull_request gate for the reason given above
+  # tests/scripts/test-netpol-egress-scope.sh and tests/scripts/test-pg-tls-preflight.sh:
+  # wiring it there is an edit under .github/workflows/shell-suites.yml, which the
+  # change that added it was not permitted to make. It is offline (python3 with PyYAML
+  # and tomllib, bash; kubectl optional) and is run post-merge by .gitlab-ci.yml's
+  # lint:tuwunel-instance-block-sync. Wire it into shell-suites.yml and DELETE this
+  # entry (PREMERGE_BASELINE then moves 198 -> 199).
+  tests/scripts/test-tuwunel-instance-block-sync.sh
   tests/stack/test-gateway-auth-flag-parity.sh
   tests/stack/test-m2-bootstrap.sh
   # Needs a host tor binary and the PUBLIC Tor network for minutes (it mints a real

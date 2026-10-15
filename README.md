@@ -364,8 +364,8 @@ provable on a running cluster are marked **(needs a live cluster)** — this
 workstation has the compose mesh up but no kind cluster (`kind get clusters` →
 none), and compose green is not evidence for the cluster._
 
-- **🚧 SSO kind-cluster e2e — harness shipped, payload blockers 1–16 fixed, the
-  JWT-validating leg is not.** The `KIND_PROFILE=sso` harness +
+- **🚧 SSO kind-cluster e2e — harness shipped, payload blockers 1–16 and the
+  in-cluster signing-key fix merged, the live proof not run.** The `KIND_PROFILE=sso` harness +
   `make kind-images|kind-up|kind-doctor|kind-e2e|kind-down` are on `main`. The
   first real run (2026-08-05) hit 16 fresh-cluster payload blockers because the
   GitOps payload had never been run end to end; every one of 1–16 is now fixed
@@ -374,12 +374,18 @@ none), and compose green is not evidence for the cluster._
   item in
   [`docs/KIND-SSO-E2E-FINDINGS.md`](docs/KIND-SSO-E2E-FINDINGS.md#re-measured-2026-10-14).
   The 2026-08-06 live run passed specs `01-frontpage` and `27-native-login`, but
-  spec 27 only proves the cookie is minted. **Open:** `GET /bff/session` answers
-  500 on kind because the BFF manifests give the signing-key fetch a public host
-  that does not resolve in-cluster (#693; fix in draft pull request #709, or #736, the same change merged with main), the
-  kind lane still side-loads every image so the Harbor pull path is unexercised
-  (finding 17), and findings 20, 25 and 26. No kind run is recorded after the
-  2026-10-07 rebuild. Compose green is **not** evidence for the cluster, and
+  spec 27 only proves the cookie is minted. The `GET /bff/session` 500 on kind
+  (the BFF manifests gave the signing-key fetch a public host that does not
+  resolve in-cluster) is fixed on `main`: pull requests #709 and #736 merged on
+  2026-10-14 and #693 is closed. The BFF manifests now set an in-cluster
+  `CASDOOR_JWKS_URI`
+  (e.g. [`admin-bff-api/deployment.yaml`](specs/cluster/manifests/admin-bff-api/deployment.yaml)),
+  pinned offline by
+  [`tests/scripts/test-bff-jwks-in-cluster.sh`](tests/scripts/test-bff-jwks-in-cluster.sh).
+  **Open:** that guard reads manifests, not a cluster, so the fix has no live
+  proof; the kind lane still side-loads every image so the Harbor pull path is
+  unexercised (finding 17); and findings 20, 25 and 26. No kind run is recorded
+  after the 2026-10-07 rebuild. Compose green is **not** evidence for the cluster, and
   `make kind-up` is the prerequisite for this and for every **(needs a live
   cluster)** item below.
 - **🔭 MFA privileged-floor — the live operator flip. (needs a live cluster)**
@@ -444,12 +450,21 @@ none), and compose green is not evidence for the cluster._
   fleet posture:** all 10 boards build `CONFIG_SECURITY_LOCKDOWN_LSM` (+ `_EARLY`),
   list `lockdown` first in `CONFIG_LSM`/`lsm=` and pass `lockdown=integrity`; the
   lint pins that for every board, not only agreement between fragment and cmdline.
-  What remains: **bpf-LSM can register but not enforce:** attaching a
-  `BPF_PROG_TYPE_LSM` program needs BTF, which both arch fragments deliberately omit
-  (it forces `CONFIG_DEBUG_INFO` and needs `dev-util/pahole` in the kernel-build
-  toolchain) — it arrives with the same pahole-gated follow-up as cilium CO-RE, and
-  the ARM boards also need `CONFIG_BPF_LSM` plus its deps before `bpf` may return to
-  their `lsm=`. The ARM lockdown change is **proven only by a Kconfig resolve and the
+  **bpf-LSM attach prerequisites (x86 + rpi5):** attaching a `BPF_PROG_TYPE_LSM`
+  program needs BTF, so both fragments now carry the BTF block
+  (`CONFIG_DEBUG_INFO_BTF`, `_BTF_MODULES`, the DWARF choice) and `dev-util/pahole`
+  is provided where each kernel is linked (x86: package list plus the chroot top-up;
+  rpi5: `Dockerfile.build`, since that kernel is cross-linked on the builder host).
+  Both builders fail the build if `olddefconfig` drops BTF,
+  `tests/scripts/test-btf-pahole-pairing.sh` pins the pairing, and
+  `tests/scripts/test-btf-kconfig-resolve.sh <kernel-tree>` shows the x86 symbols
+  survive a real Kconfig resolve. BTF and struct layout randomisation are mutually
+  exclusive in Kconfig (`DEBUG_INFO_BTF` depends on it being off); it is off today.
+  What remains: a **booted-image proof** that a bpf-LSM program really attaches (the
+  build proves the kernel config, not a boot, and the rpi5 resolve is only enforced by
+  its builder guard on the real tree), and the ARM boards, which also need
+  `CONFIG_BPF_LSM` plus its deps before `bpf` may return to their `lsm=`. The ARM
+  lockdown change is **proven only by a Kconfig resolve and the
   offline lint, not by a boot:** an image build plus the in-guest
   `/sys/kernel/security/lockdown` assertion on real boards (or `launch-arm.sh`)
   is still owed.
@@ -585,7 +600,7 @@ ships a full multi-tenant platform. State key: **✅ shipped** (on `main`) ·
   remote + two-SA RBAC), desktop app governance, coturn TURN relay, and the
   gateway MFA privileged floor are all on `main` behind documented default-off
   flags. See [Current State](#current-state) for each flag and its caveats.
-- **🚧 / 🔭 Roadmap** — the kind-cluster SSO e2e (harness shipped, blockers 1-16 fixed, the JWT-validating leg open: #693),
+- **🚧 / 🔭 Roadmap** — the kind-cluster SSO e2e (harness shipped, blockers 1-16 and the in-cluster signing-key fix (#693) merged, the live proof not run),
   SELinux node-policy modules that bake and wire but **fail to load on every
   boot**, the live MFA operator flip, desktop-governance go-live (three dark
   flags, no dial rows, no image ever built), the broken node-side headscale ACL
@@ -1264,7 +1279,7 @@ provisioning engine, the backup engine, and the `cluster/` GitOps payload).
 |---|---|
 | `specs-rpi5/portage/*` | RPi5 portage config (make.conf, packages, profile, keywords, USE) |
 | `specs-rpi5/kernel/hardened-k8s.config` | RPi kernel fragment (hardened + k8s + USB/VFAT + virtio); **reference** for the arch-neutral k8s netfilter/NAT/eBPF symbols both arches share |
-| `specs-x86/kernel/hardened-k8s.config` | amd64 kernel fragment (hardened + k8s). **Boot-critical:** carries the full netfilter/NAT/eBPF surface k8s Service networking needs — xtables match/target layer, `NF_NAT_MASQUERADE`, nft `NAT/MASQ/CT`, IPv6 nf tables, `IP_NF_MANGLE` (was a truncated copy that left ClusterIP/kube-proxy/MASQUERADE/dual-stack/NetworkPolicy dead). A **fail-closed build guard** in `build-x86-host-stage4.sh` (mirrored in `build-rpi5-stage4.sh`) asserts the load-bearing subset survives `make olddefconfig`; `tests/scripts/test-x86-kernel-net-symbols.sh` (CI `lint:x86-kernel-net-symbols`) keeps the fragment from re-truncating. eBPF CO-RE (BTF) is a separate pahole-gated follow-up — see the BTF note in the fragment. |
+| `specs-x86/kernel/hardened-k8s.config` | amd64 kernel fragment (hardened + k8s). **Boot-critical:** carries the full netfilter/NAT/eBPF surface k8s Service networking needs — xtables match/target layer, `NF_NAT_MASQUERADE`, nft `NAT/MASQ/CT`, IPv6 nf tables, `IP_NF_MANGLE` (was a truncated copy that left ClusterIP/kube-proxy/MASQUERADE/dual-stack/NetworkPolicy dead). A **fail-closed build guard** in `build-x86-host-stage4.sh` (mirrored in `build-rpi5-stage4.sh`) asserts the load-bearing subset survives `make olddefconfig`; `tests/scripts/test-x86-kernel-net-symbols.sh` (CI `lint:x86-kernel-net-symbols`) keeps the fragment from re-truncating. BTF (bpf-LSM attach, eBPF CO-RE) is built too, paired with `dev-util/pahole` — see the BTF note in the fragment. |
 | `specs-rpi5/boot/{config.txt.tmpl,cmdline.txt}` | RPi firmware boot config + kernel command line |
 | `specs-rpi5/etc/fstab` | RPi filesystem table (mounts the `/boot` firmware partition) |
 | `specs-rpi5/installer/install.sh` | SD/NVMe installer (ships in the RPi5 ISO) |

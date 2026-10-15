@@ -23,7 +23,7 @@ _GEN = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 # glib[introspection] chain does not cross-compile (the real build died in glib's
 # in-source gobject-introspection bootstrap), so the atom was removed behind a
 # paper-trail comment and tests/requested-atoms-resolvable.sh pins the exclusion.
-_RAW_TOTALS = {"x86": 150, "rpi5": 73, "jetson": 66, "frite": 52,
+_RAW_TOTALS = {"x86": 151, "rpi5": 73, "jetson": 66, "frite": 52,
                "orangepi5": 53, "orangepizero2": 32, "orangepizero2w": 32}
 
 _CONFIGS = [

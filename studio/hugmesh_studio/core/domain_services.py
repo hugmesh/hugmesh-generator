@@ -616,12 +616,22 @@ def image_service_state(cfg, slug: str) -> str:
       and reporting it as if it did would be exactly the kind of quiet lie this page
       exists to stop.
 
+    ``anubis`` reads ``cfg.anubis`` first (Force on / Force off beat the picker).
+
     ``tor`` additionally has a dedicated x86 flag (``--with-tor`` /
     ``cfg.tor_onion_service``); it is ORed in, because either spelling really does bake
     the onion."""
     svcs = [str(x) for x in (getattr(cfg, "optional_services", None) or [])]
     if slug == "tor" and getattr(cfg, "tor_onion_service", False):
         return "on (mesh-wide)"
+    # anubis is a tri-state (#384): a forced value lives in ``cfg.anubis`` and is folded
+    # into the argv AFTER the picker, so it outranks both the slug list and the sentinels.
+    if slug == "anubis":
+        forced = getattr(cfg, "anubis", "")
+        if forced == "on":
+            return "on (mesh-wide)"
+        if forced == "off":
+            return "off — forced off (-anubis)"
     if SERVICES_NONE in svcs:
         return "off — the services step selected ‘no optional services at all’"
     if SERVICES_ALL in svcs:
