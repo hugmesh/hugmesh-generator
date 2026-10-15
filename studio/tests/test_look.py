@@ -35,8 +35,9 @@ STUDIO_ROOT = os.path.dirname(HERE)
 #: The test files that carry ``test_look_*`` tests. A new look test in another file
 #: must be added here, or it would never run anywhere (test_every_look_test_is_run
 #: below fails when a file carries one that is not listed).
-LOOK_FILES = ("test_localcloud_nodes.py", "test_pages_qemu.py",
-              "test_pages_mesh_emulation.py", "test_look_editor.py")
+LOOK_FILES = ("test_anubis_tristate_page.py", "test_localcloud_nodes.py",
+              "test_pages_qemu.py", "test_pages_mesh_emulation.py",
+              "test_look_editor.py")
 
 
 def child_verdict(returncode: int, lines: list) -> str:

@@ -1282,6 +1282,13 @@ done
 # `case " ${OPTIONAL_SERVICES} "` folds) sees clean slugs. Mirrors DOMAINS.
 OPTIONAL_SERVICES="${OPTIONAL_SERVICES//,/ }"
 
+# A list of ONLY explicit-deselect tokens ("-anubis") is a veto, not a selection: it
+# keeps the built-in default instead of replacing it (hugmesh-generator#384). Runs
+# AFTER the comma normalisation (so "-anubis,-foo" is seen as tokens) and BEFORE the
+# `all` expansion below (a list holding `all` is not negative-only, so that arm is
+# untouched). The rule lives in scripts/_optional-services-lib.sh, once, for both builders.
+_opt_negative_only_keeps_defaults
+
 # FULL-SET sentinel: OPTIONAL_SERVICES=all (or --all-services, which sets the same
 # token) expands to EVERY user-level slug. Done HERE — after arg parse, before the
 # games/edge-ai/tor/character-studio opt-in folds and BEFORE EXCLUDE_SERVICES
@@ -6469,6 +6476,15 @@ if [ ! -e /usr/src/linux/Makefile ]; then
     emerge --noreplace --quiet-build sys-kernel/gentoo-sources \
         || emerge --quiet-build sys-kernel/gentoo-sources
 fi
+# dev-util/pahole must exist BEFORE make defconfig below: Kconfig reads its version
+# while it resolves, and CONFIG_DEBUG_INFO_BTF (the hardened-k8s.config BTF block)
+# is dropped by olddefconfig when it is missing. Same guarded top-up as above, with
+# no group banner of its own (the banner set is pinned by tests/build-matrix/check.sh); the
+# BTF assert after olddefconfig is what fails the build if this did not take.
+if ! command -v pahole >/dev/null 2>&1; then
+    emerge --noreplace --quiet-build dev-util/pahole \
+        || emerge --quiet-build dev-util/pahole
+fi
 eselect kernel set 1 || true
 if [ ! -e /usr/src/linux/Makefile ]; then
     echo "[build-x86] ERROR: /usr/src/linux is not set up (sys-kernel/gentoo-sources missing)"; exit 1
@@ -6602,6 +6618,13 @@ for _l in \$(sed -n 's/^CONFIG_LSM="\(.*\)"\$/\1/p' .config | tr ',' ' '); do
         *) echo "[build-x86] ERROR: CONFIG_LSM names '\${_l}', which this guard cannot verify — add its enabling CONFIG_* symbol to the case above"; exit 1 ;;
     esac
     grep -q "^\${_sym}=y\$" .config || { echo "[build-x86] ERROR: CONFIG_LSM names '\${_l}' but \${_sym} is not =y after olddefconfig — the kernel would SILENTLY DROP it from the LSM stack"; exit 1; }
+done
+# BTF is what lets a BPF_PROG_TYPE_LSM program attach to the bpf LSM that CONFIG_LSM
+# names. olddefconfig drops CONFIG_DEBUG_INFO_BTF silently when dev-util/pahole is
+# missing at configure time or when a struct-randomisation choice is on, so assert it
+# survived rather than ship a kernel whose bpf LSM registers but cannot enforce.
+for must in CONFIG_DEBUG_INFO_BTF CONFIG_DEBUG_INFO_BTF_MODULES; do
+    grep -q "^\${must}=y\$" .config || { echo "[build-x86] ERROR: \${must} not enabled after olddefconfig — dev-util/pahole missing at configure time, or struct layout randomisation is on (BTF depends on it being off); a BPF_PROG_TYPE_LSM program could not attach"; exit 1; }
 done
 make -j${JOBS} bzImage modules
 make modules_install
