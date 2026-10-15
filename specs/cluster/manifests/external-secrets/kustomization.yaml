@@ -129,8 +129,8 @@ replacements:
       name: hugmesh-vault
       fieldPath: metadata.annotations.[platform.hugmesh.net/vault-base]
     targets:
-      # (a) every ExternalSecret that carries spec.data[].remoteRef.key — 120 of the
-      #     123 base-bearing fields in the default render.
+      # (a) every ExternalSecret that carries spec.data[].remoteRef.key — 121 of the
+      #     124 base-bearing fields in the default render.
       - select:
           group: external-secrets.io
           kind: ExternalSecret

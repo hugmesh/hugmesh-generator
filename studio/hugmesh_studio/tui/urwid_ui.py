@@ -7,14 +7,17 @@ to a canvas headlessly; only :func:`run_sessions_review` starts a MainLoop.
 """
 from __future__ import annotations
 
+from typing import Callable
+
 import urwid
 
 from ..core import build_sessions
 from . import journey as journey_mod
+from . import local_ai
 from . import model
 
-__all__ = ["JourneyApp", "SessionsReview", "run_journey", "run_sessions_review",
-           "run_worklist"]
+__all__ = ["JourneyApp", "LocalAIPanel", "SessionsReview", "SessionsWindow", "run_journey",
+           "run_sessions_review", "run_worklist"]
 
 _LIST_HELP = "enter=inspect  d=delete  w=worklist  r=refresh  q=quit"
 _SUB_HELP = "q/esc=back"
@@ -25,19 +28,25 @@ def _text_lines(lines: list[str]) -> urwid.ListBox:
 
 
 class SessionsReview:
-    """SESSIONS REVIEW: list → detail / worklist / delete-with-confirm."""
+    """SESSIONS REVIEW: list → detail / worklist / delete-with-confirm.
 
-    def __init__(self) -> None:
+    ``open_local_ai`` is how F2 reaches the Local AI screen: :class:`SessionsWindow`
+    passes a callback that opens the screen over this review. Without one (a bare
+    review in a test) F2 is not offered and the footer does not claim it."""
+
+    def __init__(self, open_local_ai: Callable[[], None] | None = None) -> None:
+        self._open_local_ai = open_local_ai
         self.mode = "list"                 # list | detail | worklist | confirm
         self.rows: list[model.SessionRow] = []
         self.unreadable: list[str] = []
         self._confirm_row: model.SessionRow | None = None
         self._confirm_stage = ""           # record | artifacts
         self.status = urwid.Text("")
+        self.ai_line = urwid.Text(("muted", self._ai_text()))
         self.frame = urwid.Frame(
             body=urwid.ListBox(urwid.SimpleFocusListWalker([])),
             header=urwid.Text(("bold", "HugMesh Studio — previous builds")),
-            footer=urwid.Pile([self.status, urwid.Text(_LIST_HELP)]))
+            footer=urwid.Pile([self.status, urwid.Text(_LIST_HELP), self.ai_line]))
         self.refresh()
 
     # ── screens ──────────────────────────────────────────────────────────────
@@ -56,8 +65,15 @@ class SessionsReview:
         self.frame.body = urwid.ListBox(urwid.SimpleFocusListWalker(items))
         self._set_help(_LIST_HELP)
 
+    def _ai_text(self) -> str:
+        return local_ai.status_line(key_hint=self._open_local_ai is not None)
+
     def _set_help(self, text: str) -> None:
-        self.frame.footer = urwid.Pile([self.status, urwid.Text(text)])
+        self.ai_line.set_text(("muted", self._ai_text()))
+        self.frame.footer = urwid.Pile([self.status, urwid.Text(text), self.ai_line])
+
+    def refresh_ai_line(self) -> None:
+        self.ai_line.set_text(("muted", self._ai_text()))
 
     def _focused_row(self) -> model.SessionRow | None:
         if self.mode != "list" or not self.rows:
@@ -149,6 +165,11 @@ class SessionsReview:
                 self._confirm_row = None
             self.refresh()
             return
+        if key == "f2":
+            if self._open_local_ai is not None:
+                self._confirm_row = None          # a half-answered delete question is dropped
+                self._open_local_ai()
+            return
         if self.mode != "list":
             return
         if key in ("r", "R"):
@@ -180,6 +201,86 @@ class _JourneyFrame(urwid.Frame):
         return key
 
 
+class LocalAIPanel:
+    """The Local AI screen as its own frame, for the one place the journey is not
+    underneath: the previous-builds review. Same shape as a journey screen (lines in
+    the body, the ``local-ai>`` Edit and the status line in the footer), driven through
+    :class:`~.local_ai.Standalone`; ``on_close`` is called once the screen said back."""
+
+    def __init__(self, generator_dir: str, on_close: Callable[[], None]) -> None:
+        self.host = local_ai.Standalone(generator_dir)
+        self._on_close = on_close
+        self.input = urwid.Edit("")
+        self.header = urwid.Text(("bold", ""))
+        self.ai_line = urwid.Text(("muted", local_ai.status_line()))
+        self.frame = _JourneyFrame(
+            body=urwid.ListBox(urwid.SimpleListWalker([])),
+            header=self.header,
+            footer=urwid.Pile([urwid.AttrMap(self.input, None, focus_map="reversed"),
+                               self.ai_line], focus_item=0),
+            focus_part="footer")
+        self.host.open()
+        self.sync()
+
+    def sync(self) -> None:
+        self.header.set_text(("bold", f"HugMesh Studio — {self.host.title()}"))
+        self.frame.body = _text_lines(self.host.lines()[2:])
+        self.input.set_caption(self.host.prompt())
+        self.input.set_edit_text("")
+        self.refresh_ai_line()
+
+    def refresh_ai_line(self) -> None:
+        self.ai_line.set_text(("muted", local_ai.status_line()))
+
+    def feed(self, line: str) -> None:
+        self.host.feed(line)
+        if not self.host.is_open:
+            self._on_close()
+            return
+        self.sync()
+
+    def unhandled(self, key: str) -> None:
+        if key == "enter":
+            self.feed(self.input.edit_text)
+        elif key == "f2":
+            self.feed(local_ai.OPEN_COMMAND)          # already here: a re-read, not a second screen
+
+
+class SessionsWindow:
+    """The previous-builds review plus the Local AI panel F2 opens over it, and q closes
+    back onto the list exactly as it was. Used standalone (``tui --sessions``) and by
+    the journey, which swaps ``root`` in while the review is up."""
+
+    def __init__(self, generator_dir: str = ".") -> None:
+        self.generator_dir = generator_dir
+        self.review = SessionsReview(open_local_ai=self.open_local_ai)
+        self.root = urwid.WidgetPlaceholder(self.review.frame)
+        self.panel: LocalAIPanel | None = None
+
+    def open_local_ai(self) -> None:
+        if self.panel is not None:                    # F2 while it is up: re-read only
+            self.panel.feed(local_ai.OPEN_COMMAND)
+            return
+        self.panel = LocalAIPanel(self.generator_dir, on_close=self._close_local_ai)
+        self.root.original_widget = self.panel.frame
+
+    def _close_local_ai(self) -> None:
+        self.panel = None
+        self.root.original_widget = self.review.frame
+        self.review.refresh_ai_line()
+
+    def refresh_ai_line(self) -> None:
+        (self.panel or self.review).refresh_ai_line()
+
+    def unhandled(self, key: str) -> None:
+        if not isinstance(key, str):
+            return
+        if self.panel is not None:
+            self.panel.unhandled(key)
+            return
+        self.review.unhandled(key)
+
+
 class JourneyApp:
     """The JOURNEY (urwid face): a thin renderer over :class:`~.journey.Journey`.
 
@@ -196,13 +297,17 @@ class JourneyApp:
             self.journey.goto(start)
         self.input = urwid.Edit("> ")
         self.header = urwid.Text(("bold", ""))
+        # the Local AI status line sits UNDER the prompt on every screen; the Pile keeps
+        # focus on the Edit so every keystroke still lands there
+        self.ai_line = urwid.Text(("muted", local_ai.status_line()))
         self.frame = _JourneyFrame(
             body=urwid.ListBox(urwid.SimpleListWalker([])),
             header=self.header,
-            footer=urwid.AttrMap(self.input, None, focus_map="reversed"),
+            footer=urwid.Pile([urwid.AttrMap(self.input, None, focus_map="reversed"),
+                               self.ai_line], focus_item=0),
             focus_part="footer")           # every keystroke lands in the Edit
         self.root = urwid.WidgetPlaceholder(self.frame)
-        self.sessions: SessionsReview | None = None
+        self.sessions: SessionsWindow | None = None
         self.sync()
 
     def sync(self) -> None:
@@ -214,10 +319,19 @@ class JourneyApp:
         self.frame.body = _text_lines(j.lines()[1:])
         self.input.set_caption(j.prompt())
         self.input.set_edit_text("")
+        self.refresh_ai_line()
+
+    def refresh_ai_line(self) -> None:
+        """Re-read the Local AI line (files only, no network); also run by a timer."""
+        self.ai_line.set_text(("muted", local_ai.status_line()))
+        if self.sessions is not None:
+            self.sessions.refresh_ai_line()
 
     def _open_sessions(self) -> None:
-        self.sessions = SessionsReview()
-        self.root.original_widget = self.sessions.frame
+        # the review carries its own Local AI panel, so F2 there opens the screen OVER
+        # the list and q returns to the list, not to the journey's welcome screen
+        self.sessions = SessionsWindow(self.journey.generator_dir)
+        self.root.original_widget = self.sessions.root
 
     def _close_sessions(self) -> None:
         self.sessions = None
@@ -248,21 +362,34 @@ class JourneyApp:
             return
         if key == "enter":
             self.feed(self.input.edit_text)
+        elif key == "f2":
+            # on the Local AI screen the journey makes this a re-read (see Journey.feed)
+            self.feed(local_ai.OPEN_COMMAND)
+
+
+def _with_ai_line_timer(loop, app) -> "urwid.MainLoop":
+    """Redraw the Local AI line every few seconds (it reads files, never the network)."""
+    def tick(lp, _data=None):
+        app.refresh_ai_line()
+        lp.set_alarm_in(5, tick)
+    loop.set_alarm_in(5, tick)
+    return loop
 
 
 def run_journey(generator_dir: str = ".", start: str | None = None) -> int:
     app = JourneyApp(generator_dir, start)
-    urwid.MainLoop(app.root, palette=_PALETTE,
-                   unhandled_input=app.unhandled).run()
+    _with_ai_line_timer(urwid.MainLoop(app.root, palette=_PALETTE,
+                                       unhandled_input=app.unhandled), app).run()
     return 0
 
 
-_PALETTE = [("bold", "bold", ""), ("reversed", "standout", "")]
+_PALETTE = [("bold", "bold", ""), ("reversed", "standout", ""), ("muted", "dark gray", "")]
 
 
-def run_sessions_review() -> int:
-    app = SessionsReview()
-    urwid.MainLoop(app.frame, palette=_PALETTE, unhandled_input=app.unhandled).run()
+def run_sessions_review(generator_dir: str = ".") -> int:
+    app = SessionsWindow(generator_dir)
+    _with_ai_line_timer(urwid.MainLoop(app.root, palette=_PALETTE,
+                                       unhandled_input=app.unhandled), app).run()
     return 0
 
 
