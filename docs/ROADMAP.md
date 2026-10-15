@@ -91,11 +91,15 @@ Restated in 15 documents.
 
 ### ✅ Multi-tenancy provisioning
 
-Domain scoping is shipped in the federation API (asserted). **Verified:**
-`provision_domain_registry` is defined in
+Domain scoping is shipped in the federation API (asserted).
+`provision_domain_registry` is merged: it is defined in
 [`specs/etc/keys-provision/provision.sh`](../specs/etc/keys-provision/provision.sh)
 and called from the provisioning sequence, with suites under
-[`tests/domain-registry/`](../tests/domain-registry/). **Still open:**
+[`tests/domain-registry/`](../tests/domain-registry/). **Verified** only that it
+exists and is wired in. It is a default-off hook (`.domain_registry.enabled=false`)
+that emits nothing without a real key and transport, and that it materialises
+`domain_registry` rows into a provisioned tenant is **asserted** from the README, not
+re-read here. **Still open:**
 hugmesh-generator#344, the multi-brand cut-over that strands every
 `domain='default'` row in the services that have no migration for it.
 
@@ -104,7 +108,8 @@ Restated in 27 documents.
 ### ✅ Encrypted versioned backups
 
 Per-domain and superadmin scope. Shipped dark. **Verified:** the Velero Applications
-`apps/55-velero.yaml` and `apps/56-velero-config.yaml`, the manifests under
+`specs/cluster/apps/55-velero.yaml` and
+`specs/cluster/apps/56-velero-config.yaml`, the manifests under
 `specs/cluster/manifests/velero/` and `specs/usr/local/sbin/hugmesh-backup` exist on
 `main`. **Asserted** from the README's Current State: both Applications are
 manual-sync and the admin-bff effector stays a no-op until
@@ -166,9 +171,11 @@ Restated in 7 documents.
 ### ✅ Auth-core relocation
 
 Login, session and account logic moved out to `hugmesh-auth-core` and user-bff.
-Shipped. **Verified** on 2026-10-15 in the checkouts: user-bff's `pom.xml` depends on
-`hugmesh-auth-core` 2.4.2 and admin-bff's on 2.5.0 (the repository table in
-[`ARCHITECTURE.md`](ARCHITECTURE.md) agrees). Named in one
+Shipped. **Verified** on 2026-10-15 against `origin/main` of both consumers
+(`git show origin/main:pom.xml` after a fetch): user-bff and admin-bff both depend on
+`hugmesh-auth-core` 2.5.1. The local checkouts and the repository table in
+[`ARCHITECTURE.md`](ARCHITECTURE.md) lag behind and still show 2.4.2 and 2.5.0, so
+trust the poms on `main`, not those. Named in one
 document only — the least duplicated item here, and the one most likely to be
 forgotten.
 
