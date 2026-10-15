@@ -75,6 +75,9 @@ def test_a_refused_record_file_is_said_on_the_page_and_on_the_plan(ctl):
     assert "brand record file was not written" in sentence, sentence
     assert "Bob's Shop" in sentence and "still starts" in sentence, sentence
     assert not ctl.brand_error.isHidden()
+    # the design's own note says the same sentence, not just the record's first reason
+    # (Mutation: show problems[0] in SuperbrandStep.commit and this goes red.)
+    assert "brand record file was not written" in step.note.text(), step.note.text()
     ctl._refresh_plan()
     assert "BRAND RECORD: The brand record file was not written" in ctl.plan_view.toPlainText()
     # the mesh itself took the design
