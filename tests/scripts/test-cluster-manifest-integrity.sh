@@ -986,6 +986,96 @@ expect_catch "the matrix ServiceAccount cell renamed while the manifest keeps th
   printf "%s" "$WORK/mdocs" > "$WORK/docsdir"
 '
 
+# ── (20) IMAGE PINS: no floating tag; a third-party image carries a digest ────
+# The shipped defect: owncast/kustomization.yaml said `newTag: latest` (rendered:
+# image: owncast/owncast:latest) and tube's nginx was a bare mutable tag; this gate
+# never read a kustomization's `images:` list. Every control below is one SPELLING of
+# the same hole, each asserting its own anchor so none can silently match nothing.
+imgswap() {  # <file under $T> <old, must occur exactly once> <new>
+  python3 - "$T/$1" "$2" "$3" <<"PY"
+import sys
+p, old, new = sys.argv[1:4]
+s = open(p, encoding="utf-8").read()
+assert s.count(old) == 1, "anchor %r matched %d times, not 1" % (old, s.count(old))
+open(p, "w", encoding="utf-8").write(s.replace(old, new, 1))
+PY
+}
+OC_PIN='newTag: 0.3.0, digest: sha256:0f35b568b1098d2badbde2dbf3c73a902009c95eb687c647edea04d6da079a78 }'
+NG_PIN='newTag: "1.27-alpine", digest: sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10 }'
+# (20a) THE EXACT SHIPPED DEFECT.
+expect_catch "owncast upstream image pinned to newTag: latest" "[image-pin]" '
+  imgswap manifests/owncast/kustomization.yaml "${OC_PIN}" "newTag: latest }"
+  grep -q "newTag: latest }" "$T/manifests/owncast/kustomization.yaml"
+'
+# (20b) case spelling of the same tag.
+expect_catch "owncast upstream image pinned to newTag: Latest (case)" "[image-pin]" '
+  imgswap manifests/owncast/kustomization.yaml "${OC_PIN}" "newTag: Latest }"
+'
+# (20c) :latest even WITH a digest is still refused (the tag is what a reader trusts).
+expect_catch "newTag: latest kept alongside a digest" "[image-pin]" '
+  imgswap manifests/owncast/kustomization.yaml "newTag: 0.3.0, digest" "newTag: latest, digest"
+'
+# (20d) empty tag, and (20e) no tag at all: both are an implicit :latest.
+expect_catch "owncast upstream image newTag empty" "[image-pin]" '
+  imgswap manifests/owncast/kustomization.yaml "${OC_PIN}" "newTag: \"\" }"
+'
+expect_catch "owncast upstream image has no newTag and no digest" "[image-pin]" '
+  imgswap manifests/owncast/kustomization.yaml ", ${OC_PIN}" " }"
+'
+# (20f) a version tag with no digest on a third-party image (the tube/nginx shape).
+expect_catch "tube nginx tag without a digest" "[image-pin]" '
+  imgswap manifests/tube/kustomization.yaml ", digest: sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10 }" " }"
+'
+# (20g) a digest that pins nothing: truncated, uppercase algorithm, placeholder.
+expect_catch "digest one hex character short" "[image-pin]" '
+  imgswap manifests/tube/kustomization.yaml "17a54ef4b76fb8e2f2a10 }" "17a54ef4b76fb8e2f2a1 }"
+'
+expect_catch "digest algorithm in upper case" "[image-pin]" '
+  imgswap manifests/tube/kustomization.yaml "digest: sha256:" "digest: SHA256:"
+'
+expect_catch "placeholder all-zero digest" "[image-pin]" '
+  imgswap manifests/tube/kustomization.yaml "sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10" "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+'
+# (20h) a floating NAME that is not a version, even with a digest.
+expect_catch "third-party tag is a floating name (stable) with a digest" "[image-pin]" '
+  imgswap manifests/owncast/kustomization.yaml "newTag: 0.3.0, digest" "newTag: stable, digest"
+'
+# (20i) YAML turns an unquoted 1.30 into the float 1.3 -> a different image.
+expect_catch "unquoted numeric newTag (YAML float)" "[image-pin]" '
+  imgswap manifests/tube/kustomization.yaml "newTag: \"1.27-alpine\"" "newTag: 1.27"
+'
+# (20j) a workload spelled :latest literally, behind a rewrite that would hide it
+#       from a check that only reads kustomizations.
+expect_catch "Deployment container image written :latest" "[image-pin]" '
+  imgswap manifests/tube/deployment.yaml "          image: nginx" "          image: nginx:latest"
+'
+# (20k) a bare third-party image no kustomization rewrites: implicit :latest.
+expect_catch "Deployment image untagged and not rewritten by any kustomization" "[image-pin]" '
+  imgswap manifests/owncast/deployment.yaml "          image: owncast/owncast" "          image: owncast/owncast-extra"
+'
+# (20l) the known-gaps list cannot outlive its gap: give coturn a digest and the
+#       entry must be reported stale.
+expect_catch "a KNOWN_GAPS entry that has gained a digest is reported stale" "[image-pin]" '
+  imgswap manifests/coturn/kustomization.yaml "newTag: 4.6.2 }" "newTag: 4.6.2, digest: sha256:1111111111111111111111111111111111111111111111111111111111111112 }"
+'
+# (20m) NOT VACUOUS: with every kustomize `images:` list neutralised the check has
+#       nothing to read and must say so rather than pass.
+expect_catch "every kustomize images: list neutralised (the pin check must not go vacuous)" "[image-pin]" '
+  python3 - "$T" <<"PY"
+import os, sys
+n = 0
+for dp, _d, fns in os.walk(sys.argv[1]):
+    for f in fns:
+        if f == "kustomization.yaml":
+            p = os.path.join(dp, f)
+            t = open(p, encoding="utf-8").read()
+            if "\nimages:" in t:
+                open(p, "w", encoding="utf-8").write(t.replace("\nimages:", "\nimagesX:"))
+                n += 1
+assert n > 0, "no kustomization with images: found"
+PY
+'
+
 echo
 echo "== negative controls: ${NEG_P} passed, ${NEG_F} failed =="
 [ "${NEG_F}" -eq 0 ] || exit 1

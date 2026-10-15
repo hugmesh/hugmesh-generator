@@ -11,6 +11,7 @@ resources:
   - backing-service-endpoints.yaml
 
 images:
-  - { name: nginx, newName: nginx, newTag: "1.27-alpine" }
+  # Upstream image: version tag + index digest (see owncast/kustomization.yaml for the re-pin rule).
+  - { name: nginx, newName: nginx, newTag: "1.27-alpine", digest: sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10 }
   - { name: hugmesh/tube-bff-api, newName: registry.hugmesh.net/hugmesh/hugmesh-tube-bff-api, newTag: main }
   - { name: hugmesh/tube-ui, newName: registry.hugmesh.net/hugmesh/hugmesh-tube-ui, newTag: main }

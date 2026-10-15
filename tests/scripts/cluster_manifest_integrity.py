@@ -2714,6 +2714,223 @@ def check_workload_service_accounts(root):
               "; ".join(sorted(set(unenforceable))) or "none"))
 
 
+# ── 13) image pins: no floating tag, and a THIRD-PARTY image is pinned by digest ──
+# WHY. specs/cluster/manifests/owncast/kustomization.yaml shipped
+# `newTag: latest` for the upstream owncast/owncast image. Rendered with
+# `kubectl kustomize` that is `image: owncast/owncast:latest`: every pod restart (or
+# a node that has not cached it) pulls whatever the publisher pushed last, so the
+# running service is neither reproducible nor reviewable, and a compromised or
+# careless upstream push reaches the cluster with no commit in this repo. The
+# tube-media sidecar's nginx was the same shape one step milder (`1.27-alpine`: a
+# mutable minor tag, no digest). This gate read none of it: nothing above looks at
+# a kustomization's `images:` list at all.
+#
+# THE RULES (each is enforced below, and each has a negative control):
+#   a) a kustomize `images:` entry never resolves to `latest`, an empty tag, or no
+#      tag at all (an untagged ref IS an implicit :latest). Tree-wide, any registry.
+#      The comparison is case-insensitive (`Latest`), and a non-string newTag is
+#      refused outright: YAML reads `newTag: 1.30` as the float 1.3 and the cluster
+#      would pull a different image from the one written.
+#   b) a workload container `image:` that is spelled with `:latest`, or with no tag
+#      and no digest, is refused UNLESS the same directory's kustomization rewrites
+#      that name (the bare `hugmesh/<app>` and `owncast/owncast` placeholders are
+#      rewritten, which is exactly why (a) has to look at the rewrite).
+#   c) a `digest:` must be `sha256:` + 64 lowercase hex and not a single repeated
+#      character (a placeholder such as sha256:000...0 pins nothing).
+#   d) a THIRD-PARTY entry (anything not under registry.hugmesh.net or the bare
+#      `hugmesh/` org) must carry such a digest and a version-shaped tag
+#      (`1.27-alpine`, `v0.15.0`, never `stable`/`main`/`edge`). The tag stays as the
+#      human-readable name; kustomize renders `name:tag@sha256:...` and the digest
+#      is what the runtime resolves.
+#
+# NOT CLOSED, stated rather than skipped: FIRST-PARTY images are tracked by the
+# moving `main` tag (the image-builder pushes an immutable short-SHA / release tag
+# next to it from the same build; the kustomizations deliberately follow the moving
+# one in dev). This check does NOT reject `main` on a first-party image and does not
+# claim to; pinning them needs a release step that writes the immutable tag or
+# digest back, which does not exist yet. Third-party images that predate rule (d)
+# are listed in IMAGE_DIGEST_KNOWN_GAPS below with their real reason; a ratchet, not
+# an approval: a NEW undigested third-party image fails, and an entry that has since
+# gained a digest fails as stale so the list cannot outlive the gap.
+IMAGE_DIGEST_KNOWN_GAPS = {
+    # "<manifest dir>:<effective image name>": reason
+    "coturn:coturn/coturn": "pinned by version tag (4.6.2), digest not yet recorded",
+    "nvidia-device-plugin:nvcr.io/nvidia/k8s-device-plugin":
+        "pinned by version tag (v0.15.0), digest not yet recorded",
+    "edge-ai:ollama/ollama":
+        "pinned by version tag (0.40.0); tests/scripts/test-edge-ai-ollama-pin.sh compares "
+        "the tag in two files and has not been taught about a digest yet",
+    "anubis:ghcr.io/techarohq/anubis":
+        "pinned by version tag (v1.25.0); tests/scripts/test-anubis-env-gate.sh reads the "
+        "tag and has not been taught about a digest yet",
+}
+
+_DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
+_VERSION_TAG_RE = re.compile(r"^v?[0-9][A-Za-z0-9._+-]*$")
+_FIRST_PARTY_HOST = "registry.hugmesh.net"
+
+
+def _split_image_ref(ref):
+    """'host:5000/org/name:tag@sha256:..' -> (name, tag, digest); tag/digest may be ''."""
+    digest = ""
+    if "@" in ref:
+        ref, digest = ref.split("@", 1)
+    tag = ""
+    last = ref.rsplit("/", 1)[-1]
+    if ":" in last:
+        ref, tag = ref.rsplit(":", 1)
+    return ref, tag, digest
+
+
+def _is_first_party(name):
+    parts = name.split("/")
+    if len(parts) > 1 and ("." in parts[0] or ":" in parts[0] or parts[0] == "localhost"):
+        return parts[0] == _FIRST_PARTY_HOST
+    return parts[0] == "hugmesh"
+
+
+def _container_images(node):
+    """Every `image:` string under a containers/initContainers/ephemeralContainers list."""
+    if isinstance(node, dict):
+        for key, val in node.items():
+            if key in ("containers", "initContainers", "ephemeralContainers") \
+                    and isinstance(val, list):
+                for c in val:
+                    if isinstance(c, dict) and isinstance(c.get("image"), str):
+                        yield c["image"]
+            yield from _container_images(val)
+    elif isinstance(node, list):
+        for item in node:
+            yield from _container_images(item)
+
+
+def check_image_pins(root):
+    failed_before = len(failures)
+    entries = 0
+    third_party = 0
+    stale = []
+    rewritten_by_dir = {}
+    for path in yaml_files(root):
+        for doc in docs_of(path):
+            if doc.get("kind") != "Kustomization":
+                continue
+            rel = os.path.relpath(path, root)
+            d = os.path.dirname(path)
+            dname = os.path.basename(d)
+            names = rewritten_by_dir.setdefault(d, set())
+            imgs = doc.get("images") or []
+            if not isinstance(imgs, list):
+                fail("[image-pin]", "%s: `images:` is not a list" % rel)
+                continue
+            for e in imgs:
+                if not isinstance(e, dict) or not e.get("name"):
+                    fail("[image-pin]", "%s: an `images:` entry has no name: %r" % (rel, e))
+                    continue
+                entries += 1
+                name = str(e["name"])
+                names.add(name)
+                eff = str(e.get("newName") or name)
+                raw_tag = e.get("newTag")
+                digest = e.get("digest")
+                where = "%s: image %s" % (rel, eff)
+                if raw_tag is not None and not isinstance(raw_tag, str):
+                    fail("[image-pin]",
+                         "%s has newTag %r, which YAML read as a %s, not a string: quote it. "
+                         "An unquoted 1.30 becomes 1.3 and pulls a different image from the "
+                         "one written." % (where, raw_tag, type(raw_tag).__name__))
+                    continue
+                tag = (raw_tag or "").strip()
+                if digest is not None and (not isinstance(digest, str)
+                                           or not _DIGEST_RE.match(digest)
+                                           or len(set(digest[7:])) < 2):
+                    fail("[image-pin]",
+                         "%s has digest %r, which is not sha256:<64 lowercase hex> (or is a "
+                         "repeated-character placeholder); it pins nothing." % (where, digest))
+                    continue
+                if not tag and not digest:
+                    fail("[image-pin]",
+                         "%s has no newTag and no digest: an untagged image is an implicit "
+                         ":latest." % where)
+                    continue
+                if tag.lower() == "latest":
+                    fail("[image-pin]",
+                         "%s is pinned to the mutable tag %r: the pod runs whatever the "
+                         "publisher pushed last. Pin a release tag AND its digest." % (where, tag))
+                    continue
+                if _is_first_party(eff):
+                    continue
+                third_party += 1
+                gap = "%s:%s" % (dname, eff)
+                if not tag or not _VERSION_TAG_RE.match(tag):
+                    fail("[image-pin]",
+                         "%s (third-party) has tag %r, which is not a version (e.g. 1.27-alpine, "
+                         "v0.15.0): a floating name such as stable/main/edge moves under the "
+                         "cluster." % (where, tag))
+                elif digest:
+                    if gap in IMAGE_DIGEST_KNOWN_GAPS:
+                        stale.append(gap)
+                elif gap in IMAGE_DIGEST_KNOWN_GAPS:
+                    pass
+                else:
+                    fail("[image-pin]",
+                         "%s (third-party) is pinned by tag %r only: a tag is mutable, so the "
+                         "registry can change what it names. Add `digest: sha256:<64 hex>` "
+                         "(resolve it from the registry; kustomize renders name:tag@digest)."
+                         % (where, tag))
+    for gap in sorted(set(stale)):
+        fail("[image-pin]",
+             "IMAGE_DIGEST_KNOWN_GAPS lists %s but it now carries a digest: remove the entry so "
+             "the allowlist cannot outlive the gap." % gap)
+    for gap in sorted(IMAGE_DIGEST_KNOWN_GAPS):
+        d, _, n = gap.partition(":")
+        live = False
+        for path in yaml_files(root):
+            if os.path.basename(os.path.dirname(path)) != d:
+                continue
+            for doc in docs_of(path):
+                if doc.get("kind") == "Kustomization" and any(
+                        isinstance(e, dict) and str(e.get("newName") or e.get("name")) == n
+                        for e in doc.get("images") or []):
+                    live = True
+        if not live:
+            fail("[image-pin]",
+                 "IMAGE_DIGEST_KNOWN_GAPS lists %s but no kustomization carries it: the entry "
+                 "names nothing, remove or correct it." % gap)
+
+    raw = 0
+    for path in yaml_files(root):
+        if os.path.basename(path) in ("kustomization.yaml", "kustomization.yml"):
+            continue
+        rewritten = rewritten_by_dir.get(os.path.dirname(path), set())
+        for doc in docs_of(path):
+            for ref in _container_images(doc):
+                if "{{" in ref or "REPLACE_WITH_" in ref:
+                    continue
+                name, tag, digest = _split_image_ref(ref)
+                raw += 1
+                rel = os.path.relpath(path, root)
+                if tag.lower() == "latest" and not digest:
+                    fail("[image-pin]", "%s: container image %r uses the mutable :latest tag."
+                         % (rel, ref))
+                elif not tag and not digest and name not in rewritten:
+                    fail("[image-pin]",
+                         "%s: container image %r has no tag and no digest (an implicit :latest) "
+                         "and no kustomization in that directory rewrites it." % (rel, ref))
+    if not entries or not third_party or not raw:
+        fail("[image-pin]",
+             "vacuous: saw %d kustomize image entr(ies), %d third-party, %d workload image(s). "
+             "The scan is not reading the tree (a key was renamed?), so it proved nothing."
+             % (entries, third_party, raw))
+    elif len(failures) == failed_before:
+        ok("[image-pin]",
+           "%d kustomize image entr(ies) and %d workload image(s) carry no floating tag; %d "
+           "third-party image(s) are version-tagged and %d of them digest-pinned; %d are "
+           "recorded undigested in IMAGE_DIGEST_KNOWN_GAPS; first-party images follow the "
+           "moving `main` tag by design and are NOT checked for a digest"
+           % (entries, raw, third_party,
+              third_party - len(IMAGE_DIGEST_KNOWN_GAPS), len(IMAGE_DIGEST_KNOWN_GAPS)))
+
+
 def main():
     if len(sys.argv) != 2:
         print(__doc__)
@@ -2745,6 +2962,7 @@ def main():
     check_mcs_documented(root)
     check_gateway_netpol(root)
     check_workload_service_accounts(root)
+    check_image_pins(root)
     for check, msg in notes:
         print("  PASS %-24s %s" % (check, msg))
     for check, msg in failures:
