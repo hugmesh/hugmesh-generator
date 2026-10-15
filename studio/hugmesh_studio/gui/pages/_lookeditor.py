@@ -745,7 +745,7 @@ class LookEditor(QtWidgets.QWidget):
             sample.setFamily(core_fonts.FONT_PRESETS[eff["font"]].split(",")[0]
                              .strip().strip('"'))
         self.font_sample.setFont(sample)
-        needs = brand_look.requirements(self.model.effective())
+        needs = self.model.requirements()
         self.requirements_note.setText("\n".join(needs))
         self.requirements_note.setVisible(bool(needs))
         self._refresh_board(eff)
