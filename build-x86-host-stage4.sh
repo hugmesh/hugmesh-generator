@@ -1275,6 +1275,13 @@ done
 # `case " ${OPTIONAL_SERVICES} "` folds) sees clean slugs. Mirrors DOMAINS.
 OPTIONAL_SERVICES="${OPTIONAL_SERVICES//,/ }"
 
+# A list of ONLY explicit-deselect tokens ("-anubis") is a veto, not a selection: it
+# keeps the built-in default instead of replacing it (hugmesh-generator#384). Runs
+# AFTER the comma normalisation (so "-anubis,-foo" is seen as tokens) and BEFORE the
+# `all` expansion below (a list holding `all` is not negative-only, so that arm is
+# untouched). The rule lives in scripts/_optional-services-lib.sh, once, for both builders.
+_opt_negative_only_keeps_defaults
+
 # FULL-SET sentinel: OPTIONAL_SERVICES=all (or --all-services, which sets the same
 # token) expands to EVERY user-level slug. Done HERE — after arg parse, before the
 # games/edge-ai/tor/character-studio opt-in folds and BEFORE EXCLUDE_SERVICES

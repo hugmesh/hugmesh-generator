@@ -571,6 +571,52 @@ BUILTIN_DEFAULT_SERVICES = ("akkoma", "tuwunel", "phpbb")
 USER_LEVEL_SERVICES = ("akkoma", "tuwunel", "phpbb", "games", "owncast", "tube",
                        "character-studio", "character-forge")
 
+# The anubis (public proof-of-work gate) row is a TRI-STATE, not a tick (issue #384):
+#   ""    -> the build's own ENV policy decides (prod on, test off); emits nothing
+#   "on"  -> force ON  — the `anubis` slug in --optional-services
+#   "off" -> force OFF — the `-anubis` token in --optional-services (NEVER
+#            --exclude-services: both builders refuse that spelling for it, because
+#            subtraction cannot beat the ENV default)
+ANUBIS_SLUG = "anubis"
+ANUBIS_OFF_TOKEN = "-anubis"
+ANUBIS_CHOICES = ("", "on", "off")
+
+
+def with_service_slug(services, slug: str) -> list[str]:
+    """``services`` (an ImageConfig.optional_services value) with ``slug`` ADDED —
+    additively, the way a per-node infra toggle means it.
+
+    ``--optional-services`` is an ALLOW-LIST that REPLACES the builder's own default
+    (the builders' OPTIONAL_SERVICES default line), so a bare append is
+    only right when the list already names services. The three other shapes each
+    used to lose something without a word:
+
+    * ``[]`` (emit nothing, the builder default applies) -> ``["tor"]`` emitted
+      ``--optional-services tor`` and silently DROPPED akkoma/tuwunel/phpbb from the
+      node. It becomes the builder default plus the slug.
+    * ``[SERVICES_NONE]`` (the explicit "no optional services") -> ``["none", "tor"]``
+      emitted the literal slug ``none``. It becomes just the slug.
+    * ``[SERVICES_ALL, ...]`` -> ``--all-services`` expands to the USER-LEVEL set only,
+      which by construction excludes every infra slug, so the slug was dropped. It
+      becomes the user-level set spelled out, plus whatever else was listed, plus the
+      slug (both builders' own all-expansion keeps nothing beyond the user-level set).
+    """
+    svcs = [str(s) for s in (services or [])]
+    if slug in svcs:
+        return svcs
+    if svcs == [SERVICES_NONE]:
+        base: list[str] = []
+    elif SERVICES_ALL in svcs:
+        base = list(USER_LEVEL_SERVICES) + [
+            s for s in svcs if s not in (SERVICES_ALL, SERVICES_NONE)
+            and s not in USER_LEVEL_SERVICES]
+    elif not svcs:
+        base = list(BUILTIN_DEFAULT_SERVICES)
+    else:
+        base = svcs
+    return [*base, slug]
+
+
 # One line per service saying what ENABLING it does — the operator's "redo entire
 # services section" was in large part "these are eight slugs and I cannot tell what any
 # of them is". Keyed by the slug the builders parse, so the label and the emitted token
@@ -1205,6 +1251,7 @@ _FIELD_PLATFORMS: dict[str, tuple[str, ...]] = {
     "tor_onion_service": _X86, "character_studio": _X86_RPI5,
     "character_forge": _X86_RPI5,
     "optional_services": _X86_RPI5, "exclude_services": _X86_RPI5, "enable_games": _X86_RPI5,
+    "anubis": _X86_RPI5,
     # managed backing services (I8/M2) — the two node builders parse --managed-service;
     # a mesh-node cluster concern, so scoped to the only builders that bake a cluster tree.
     "managed_services": _X86_RPI5,
@@ -3055,6 +3102,10 @@ class ImageConfig:
     # ── cluster optional services + games (node-scoped) ──
     optional_services: list[str] = field(default_factory=list)  # --optional-services slugs (+ none/all sentinels)
     exclude_services: list[str] = field(default_factory=list)   # --exclude-services subtractive list (applied last)
+    # Tri-state for the public PoW gate, "" / "on" / "off" (ANUBIS_CHOICES, issue #384).
+    # "" = the build's ENV policy (prod on / test off); "on"/"off" force it, and are
+    # folded into --optional-services by _services_args (never --exclude-services).
+    anubis: str = ""
     enable_games: bool = False         # --enable-games (Game Studio + games.<domain>)
     # ── managed backing services (I8/M2; x86 + rpi5 node builders) ──
     # Map backing-service id -> operator-supplied HOSTED endpoint. The EMPTY default
@@ -3293,6 +3344,11 @@ class ImageConfig:
             if k in d:
                 v = cls._tri_explicit(d[k], k)
                 d[k] = "" if v is None else v
+        # anubis tri-state (#384): the three spellings plus the bool a checkbox-era
+        # hand-written config would use; junk fails closed AT LOAD, because a typo that
+        # silently meant "default" would ship a public PoW gate the operator said to turn off.
+        if "anubis" in d:
+            d["anubis"] = cls._anubis_mode(d["anubis"])
         # base CA certificates (#335): tolerate `null` / a hand-edited scalar the same
         # way "domains": null is tolerated above — treat it as ABSENT (the native
         # empty default) rather than constructing a config whose list field holds a
@@ -3823,22 +3879,61 @@ class ImageConfig:
         lvl = clamp_compress_level(self.compress_level)
         return [] if lvl == COMPRESS_LEVEL_DEFAULT else ["--compress-level", str(lvl)]
 
+    @staticmethod
+    def _anubis_mode(value) -> str:
+        """Normalize the anubis tri-state to "", "on" or "off". Accepts the bools a
+        hand-written config may carry (True -> "on", False/None -> ""); anything else
+        is rejected fail-closed rather than read as "default"."""
+        if value is True:
+            return "on"
+        if value is False or value is None:
+            return ""
+        v = str(value).strip().lower()
+        if v in ANUBIS_CHOICES:
+            return v
+        raise ValueError(f"anubis must be one of '', 'on', 'off' (got {value!r})")
+
     def _services_args(self) -> list[str]:
         """--optional-services allow-list (with the explicit-none / --all-services
         sentinels, G13/G14) + the subtractive --exclude-services list. Shared by x86 +
-        rpi5, the only builders that parse them."""
+        rpi5, the only builders that parse them.
+
+        The anubis tri-state (``self.anubis``, #384) is folded in here, because it has
+        no flag of its own: "on" adds the slug, "off" adds the ``-anubis`` token, "" adds
+        nothing (so an untouched config emits the argv it always did). A force-off beside
+        an EMPTY list relies on the builders' rule that a list of only deselect tokens
+        keeps the built-in default; beside the EXPLICIT-none sentinel it cannot, so the
+        default slugs are subtracted with --exclude-services instead."""
         a: list[str] = []
         svcs = list(self.optional_services or [])
+        excl = list(self.exclude_services or [])
+        mode = self._anubis_mode(self.anubis)
+        if mode == "on":
+            svcs = [s for s in svcs if s not in (ANUBIS_OFF_TOKEN, "no-anubis")]
+            if SERVICES_ALL in svcs:
+                # the builders' `all` expansion keeps deselect tokens but DROPS a
+                # positive slug, so spell the set out (with_service_slug does).
+                svcs = [s for s in svcs if s != ANUBIS_SLUG]
+            svcs = with_service_slug(svcs, ANUBIS_SLUG)
+        elif mode == "off":
+            svcs = [s for s in svcs if s != ANUBIS_SLUG]
+            if svcs == [SERVICES_NONE]:
+                # none + veto: a lone veto would give the defaults back, so say "none"
+                # the other way — keep the veto and subtract the default slugs.
+                svcs = [ANUBIS_OFF_TOKEN]
+                excl += [s for s in BUILTIN_DEFAULT_SERVICES if s not in excl]
+            elif not any(s in (ANUBIS_OFF_TOKEN, "no-anubis") for s in svcs):
+                svcs.append(ANUBIS_OFF_TOKEN)
         if svcs == [SERVICES_NONE]:
             a += ["--optional-services", ""]           # EXPLICIT none (suppress the builder default)
-        elif svcs == [SERVICES_ALL] or SERVICES_ALL in svcs:
+        elif SERVICES_ALL in svcs and mode != "off":
             a += ["--all-services"]                    # full user-level set
         elif svcs:
             # SPACE-separated: the builders word-split OPTIONAL_SERVICES on IFS
             # whitespace (it stays ONE argv element — shlex.quote on print).
             a += ["--optional-services", " ".join(svcs)]
-        if self.exclude_services:
-            a += ["--exclude-services", " ".join(self.exclude_services)]
+        if excl:
+            a += ["--exclude-services", " ".join(excl)]
         return a
 
     def _managed_services_args(self) -> list[str]:
