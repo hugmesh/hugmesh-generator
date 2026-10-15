@@ -18,9 +18,10 @@
 #      the brand's record holds only the other override and it still shows the
 #      superbrand's logo.
 #
-# The window half needs a Qt binding: a host without one reports ONE skipped test, and
-# the first scenario below asserts "3 passed", so a skipped window face is a red
-# scenario here, never a quiet pass.
+# The window half needs a Qt binding: a host without one reports skipped tests. Each
+# scenario keeps pytest's last line only when it names no skip, no failure and no error, and
+# then asks for the word " passed", so a skipped window face is a red scenario here, never
+# a quiet pass, and a test added to these files later does not turn the scenario red.
 #
 # THE LIVE EFFECT (a brand's own colours on a running mesh) is the L-LOOK scenario and
 # needs the Docker mesh; nothing here starts a mesh or a browser.
@@ -28,26 +29,26 @@
 Feature: The superbrand design step and a brand's override agree in both faces
 
   Scenario: J-DESIGN the window and the text screen walk the same script to the same record @interface:studio
-    When I run the shell command "cd studio && HUGMESH_STUDIO_NO_ELEVATION=1 QT_QPA_PLATFORM=offscreen ${SNAP_STUDIO_PYTHON:-python3} -m pytest -q -p no:cacheprovider tests/journey/test_brand_design.py"
+    When I run the shell command "set -o pipefail; cd studio && HUGMESH_STUDIO_NO_ELEVATION=1 QT_QPA_PLATFORM=offscreen ${SNAP_STUDIO_PYTHON:-python3} -m pytest -q -p no:cacheprovider tests/journey/test_brand_design.py 2>&1 | tail -1 | grep -Ev 'skipped|failed|error|no tests ran' | sed 's/^/ /'"
     Then the command succeeded
-    And the command output contains "3 passed"
+    And the command output contains " passed"
 
   Scenario: every control of the window's look editor has a text command that writes the same record @interface:studio
-    When I run the shell command "cd studio && HUGMESH_STUDIO_NO_ELEVATION=1 QT_QPA_PLATFORM=offscreen ${SNAP_STUDIO_PYTHON:-python3} -m pytest -q -p no:cacheprovider tests/test_look_text.py"
+    When I run the shell command "set -o pipefail; cd studio && HUGMESH_STUDIO_NO_ELEVATION=1 QT_QPA_PLATFORM=offscreen ${SNAP_STUDIO_PYTHON:-python3} -m pytest -q -p no:cacheprovider tests/test_look_text.py 2>&1 | tail -1 | grep -Ev 'skipped|failed|error|no tests ran' | sed 's/^/ /'"
     Then the command succeeded
     And the command output contains "passed"
 
   Scenario: the stylesheet writer refuses an unlisted property, a url( that is not a data picture, an SVG and an oversize picture @interface:cli
-    When I run the shell command "cd studio && HUGMESH_STUDIO_NO_ELEVATION=1 QT_QPA_PLATFORM=offscreen ${SNAP_STUDIO_PYTHON:-python3} -m pytest -q -p no:cacheprovider tests/test_look_model.py tests/test_brand_images.py tests/test_look_edits.py"
+    When I run the shell command "set -o pipefail; cd studio && HUGMESH_STUDIO_NO_ELEVATION=1 QT_QPA_PLATFORM=offscreen ${SNAP_STUDIO_PYTHON:-python3} -m pytest -q -p no:cacheprovider tests/test_look_model.py tests/test_brand_images.py tests/test_look_edits.py 2>&1 | tail -1 | grep -Ev 'skipped|failed|error|no tests ran' | sed 's/^/ /'"
     Then the command succeeded
     And the command output contains "passed"
 
   Scenario: the stylesheet writer refuses the spellings that hide a url( and a picture that is not the re-encoder's own output @interface:cli
-    When I run the shell command "cd studio && HUGMESH_STUDIO_NO_ELEVATION=1 QT_QPA_PLATFORM=offscreen ${SNAP_STUDIO_PYTHON:-python3} -m pytest -q -p no:cacheprovider tests/test_look_model.py tests/test_look_edits.py tests/test_brand_images.py -k 'hide_a_url or re_encoder_made or deflate_bomb or cut_short'"
+    When I run the shell command "set -o pipefail; cd studio && HUGMESH_STUDIO_NO_ELEVATION=1 QT_QPA_PLATFORM=offscreen ${SNAP_STUDIO_PYTHON:-python3} -m pytest -q -p no:cacheprovider tests/test_look_model.py tests/test_look_edits.py tests/test_brand_images.py -k 'hide_a_url or re_encoder_made or deflate_bomb or cut_short' 2>&1 | tail -1 | grep -Ev 'skipped|failed|error|no tests ran' | sed 's/^/ /'"
     Then the command succeeded
-    And the command output contains "5 passed"
+    And the command output contains " passed"
 
   Scenario: tabbing through a brand's look keeps every inherited field inherited and Clear removes a stored picture @interface:studio
-    When I run the shell command "cd studio && HUGMESH_STUDIO_NO_ELEVATION=1 QT_QPA_PLATFORM=offscreen ${SNAP_STUDIO_PYTHON:-python3} -m pytest -q -p no:cacheprovider tests/test_look_editor.py tests/test_look_edits.py -k 'tabbing or emptied or clear_ or already_shows or no_picture'"
+    When I run the shell command "set -o pipefail; cd studio && HUGMESH_STUDIO_NO_ELEVATION=1 QT_QPA_PLATFORM=offscreen ${SNAP_STUDIO_PYTHON:-python3} -m pytest -q -p no:cacheprovider tests/test_look_editor.py tests/test_look_edits.py -k 'tabbing or emptied or clear_ or already_shows or no_picture' 2>&1 | tail -1 | grep -Ev 'skipped|failed|error|no tests ran' | sed 's/^/ /'"
     Then the command succeeded
     And the command output contains "passed"

@@ -96,6 +96,17 @@ frozen. It is checked once against the strictest rule in use — a DNS label of 
 superbrand's own id, the name of an existing `brands/*.conf` profile, a name ending
 in `-pki` (another brand's PKI namespace), or already taken by another brand.
 
+**What the Docker start now refuses that it accepted before.** `hugmesh-mesh-bootstrap
+up` and the Studio's Docker route run these rules (with the 63-character DNS label
+instead of 59, and no title rule) on any mesh that carries a superbrand block or a
+domain row. A mesh that started on the old main with one of these now stops with the
+reason, and these are deliberate: a superbrand id that ends in `-pki` (it would be
+confused with another brand's PKI namespace), a superbrand or brand id of `default` (the
+run-time key of every back end) or `domains` (the CA registry's file), two brands that
+derive the same id, and a brand id that names an existing `brands/*.conf` profile
+(`make BRAND=<id>` would source that file). The superbrand's own id may name a profile:
+it is usually that very profile.
+
 The id is the same text as the registry's namespace prefix, the tenant key of a
 brand with its own sign-in, the Tor key-folder name, the brand column of the
 certificate list and the Vault path segment. Today one consumer still derives it:

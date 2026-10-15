@@ -22,33 +22,34 @@
 # 'this brand's own' and 'inherited from the superbrand', and none of the words a brand
 # screen never says. A leak of one brand's override into the other turns it red.
 #
-# The summary line is the LAST line of pytest's output with a space in front, so ' 3 passed
-# in ' cannot match '13 passed in '. LIVE TIER (press Generate and start, assert brand B's
+# The summary line is the LAST line of pytest's output; it is kept only when it names no
+# skip, failure or error, and the scenario asks for " passed" (no exact count, so a test
+# added later does not turn it red). LIVE TIER (press Generate and start, assert brand B's
 # sign-in and tenancy lines): needs a Docker mesh, UNEXERCISED here.
 @interface:studio @issue:generator-654
 Feature: The per-brand screen with its four tabs and numbered sections agrees in both faces
 
   Scenario: J-BRAND-SCREEN the window and the text screens leave the same record, and a fresh process reads it @interface:studio
-    When I run the shell command "set -o pipefail; cd studio && HUGMESH_STUDIO_NO_ELEVATION=1 QT_QPA_PLATFORM=offscreen ${SNAP_STUDIO_PYTHON:-python3} -m pytest -q -p no:cacheprovider tests/journey/test_brand_screen_journey.py 2>&1 | tail -1 | sed 's/^/ /'"
+    When I run the shell command "set -o pipefail; cd studio && HUGMESH_STUDIO_NO_ELEVATION=1 QT_QPA_PLATFORM=offscreen ${SNAP_STUDIO_PYTHON:-python3} -m pytest -q -p no:cacheprovider tests/journey/test_brand_screen_journey.py 2>&1 | tail -1 | grep -Ev 'skipped|failed|error|no tests ran' | sed 's/^/ /'"
     Then the command succeeded
-    And the command output contains " 3 passed in "
+    And the command output contains " passed"
 
   Scenario: the four numbered text sections edit what the four tabs edit and say where everything else is changed @interface:studio
-    When I run the shell command "set -o pipefail; cd studio && HUGMESH_STUDIO_NO_ELEVATION=1 QT_QPA_PLATFORM=offscreen ${SNAP_STUDIO_PYTHON:-python3} -m pytest -q -p no:cacheprovider tests/journey/test_brand_screens_text.py 2>&1 | tail -1 | sed 's/^/ /'"
+    When I run the shell command "set -o pipefail; cd studio && HUGMESH_STUDIO_NO_ELEVATION=1 QT_QPA_PLATFORM=offscreen ${SNAP_STUDIO_PYTHON:-python3} -m pytest -q -p no:cacheprovider tests/journey/test_brand_screens_text.py 2>&1 | tail -1 | grep -Ev 'skipped|failed|error|no tests ran' | sed 's/^/ /'"
     Then the command succeeded
-    And the command output contains " 17 passed in "
+    And the command output contains " passed"
 
   Scenario: the Domains step keeps every brand's id, look, ways and port, and shows one read-only summary per brand @interface:studio
-    When I run the shell command "set -o pipefail; cd studio && HUGMESH_STUDIO_NO_ELEVATION=1 QT_QPA_PLATFORM=offscreen ${SNAP_STUDIO_PYTHON:-python3} -m pytest -q -p no:cacheprovider tests/journey/test_brand_screens_window.py -k 'table or summary' 2>&1 | tail -1 | sed 's/^/ /'"
+    When I run the shell command "set -o pipefail; cd studio && HUGMESH_STUDIO_NO_ELEVATION=1 QT_QPA_PLATFORM=offscreen ${SNAP_STUDIO_PYTHON:-python3} -m pytest -q -p no:cacheprovider tests/journey/test_brand_screens_window.py -k 'table or summary' 2>&1 | tail -1 | grep -Ev 'skipped|failed|error|no tests ran' | sed 's/^/ /'"
     Then the command succeeded
-    And the command output contains " 6 passed, "
+    And the command output contains " passed"
 
   Scenario: no brand page or text screen opens a modal dialog @interface:studio
-    When I run the shell command "set -o pipefail; cd studio && HUGMESH_STUDIO_NO_ELEVATION=1 QT_QPA_PLATFORM=offscreen ${SNAP_STUDIO_PYTHON:-python3} -m pytest -q -p no:cacheprovider tests/journey/test_brand_screens_window.py tests/test_tui_journey.py -k 'modal' 2>&1 | tail -1 | sed 's/^/ /'"
+    When I run the shell command "set -o pipefail; cd studio && HUGMESH_STUDIO_NO_ELEVATION=1 QT_QPA_PLATFORM=offscreen ${SNAP_STUDIO_PYTHON:-python3} -m pytest -q -p no:cacheprovider tests/journey/test_brand_screens_window.py tests/test_tui_journey.py -k 'modal' 2>&1 | tail -1 | grep -Ev 'skipped|failed|error|no tests ran' | sed 's/^/ /'"
     Then the command succeeded
-    And the command output contains " 2 passed, "
+    And the command output contains " passed"
 
   Scenario: every tab, the tab bar and the brands table are drawn whole at 1040x780 and 736x736, under two styles and at 8 and 9 pt @interface:studio
-    When I run the shell command "set -o pipefail; cd studio && HUGMESH_STUDIO_NO_ELEVATION=1 QT_QPA_PLATFORM=offscreen ${SNAP_STUDIO_PYTHON:-python3} -m pytest -q -p no:cacheprovider tests/test_brand_screens_look.py -k 'the_brand_screens_are_drawn_whole_in_a_fresh_interpreter' 2>&1 | tail -1 | sed 's/^/ /'"
+    When I run the shell command "set -o pipefail; cd studio && HUGMESH_STUDIO_NO_ELEVATION=1 QT_QPA_PLATFORM=offscreen ${SNAP_STUDIO_PYTHON:-python3} -m pytest -q -p no:cacheprovider tests/test_brand_screens_look.py -k 'the_brand_screens_are_drawn_whole_in_a_fresh_interpreter' 2>&1 | tail -1 | grep -Ev 'skipped|failed|error|no tests ran' | sed 's/^/ /'"
     Then the command succeeded
-    And the command output contains " 1 passed, "
+    And the command output contains " passed"

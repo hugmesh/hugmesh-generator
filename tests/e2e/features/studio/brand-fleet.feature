@@ -15,22 +15,23 @@
 # four tabs of the Brand settings screen now fit with no sideways scroll, and the
 # geometry is measured under two styles at 8 pt too.
 #
-# The summary line is the LAST line of pytest's output with a space in front, so ' 4 passed
-# in ' cannot match '14 passed in '. UNEXERCISED here: running a fleet build.
+# The summary line is the LAST line of pytest's output; it is kept only when it names no
+# skip, failure or error, and the scenario asks for " passed" (no exact count, so a test
+# added later does not turn it red). UNEXERCISED here: running a fleet build.
 @interface:studio @issue:generator-654
 Feature: The Fleet window and its text twin offer the same superbrand drop-down
 
   Scenario: J-FLEET the three routes write the same record bytes, the drop-down is the same, and nothing scrolls sideways at 760x700 @interface:studio
-    When I run the shell command "set -o pipefail; cd studio && HUGMESH_STUDIO_NO_ELEVATION=1 QT_QPA_PLATFORM=offscreen ${SNAP_STUDIO_PYTHON:-python3} -m pytest -q -p no:cacheprovider tests/journey/test_brand_fleet_journey.py 2>&1 | tail -1 | sed 's/^/ /'"
+    When I run the shell command "set -o pipefail; cd studio && HUGMESH_STUDIO_NO_ELEVATION=1 QT_QPA_PLATFORM=offscreen ${SNAP_STUDIO_PYTHON:-python3} -m pytest -q -p no:cacheprovider tests/journey/test_brand_fleet_journey.py 2>&1 | tail -1 | grep -Ev 'skipped|failed|error|no tests ran' | sed 's/^/ /'"
     Then the command succeeded
-    And the command output contains " 4 passed in "
+    And the command output contains " passed"
 
   Scenario: the Fleet's text twin reaches the superbrand step with one command and keeps its old flow @interface:studio
-    When I run the shell command "set -o pipefail; cd studio && HUGMESH_STUDIO_NO_ELEVATION=1 QT_QPA_PLATFORM=offscreen ${SNAP_STUDIO_PYTHON:-python3} -m pytest -q -p no:cacheprovider tests/test_fleet_domains.py tests/test_tui_journey.py -k 'fleet' 2>&1 | tail -1 | sed 's/^/ /'"
+    When I run the shell command "set -o pipefail; cd studio && HUGMESH_STUDIO_NO_ELEVATION=1 QT_QPA_PLATFORM=offscreen ${SNAP_STUDIO_PYTHON:-python3} -m pytest -q -p no:cacheprovider tests/test_fleet_domains.py tests/test_tui_journey.py -k 'fleet' 2>&1 | tail -1 | grep -Ev 'skipped|failed|error|no tests ran' | sed 's/^/ /'"
     Then the command succeeded
-    And the command output contains " 23 passed, "
+    And the command output contains " passed"
 
   Scenario: the Fleet window's steps and tabs are drawn whole at 760x700 under two styles at the default font and at 8 pt @interface:studio
-    When I run the shell command "set -o pipefail; cd studio && HUGMESH_STUDIO_NO_ELEVATION=1 QT_QPA_PLATFORM=offscreen ${SNAP_STUDIO_PYTHON:-python3} -m pytest -q -p no:cacheprovider tests/test_brand_screens_look.py -k 'the_brand_screens_are_drawn_whole_in_a_fresh_interpreter' 2>&1 | tail -1 | sed 's/^/ /'"
+    When I run the shell command "set -o pipefail; cd studio && HUGMESH_STUDIO_NO_ELEVATION=1 QT_QPA_PLATFORM=offscreen ${SNAP_STUDIO_PYTHON:-python3} -m pytest -q -p no:cacheprovider tests/test_brand_screens_look.py -k 'the_brand_screens_are_drawn_whole_in_a_fresh_interpreter' 2>&1 | tail -1 | grep -Ev 'skipped|failed|error|no tests ran' | sed 's/^/ /'"
     Then the command succeeded
-    And the command output contains " 1 passed, "
+    And the command output contains " passed"
