@@ -221,6 +221,19 @@ Feature: The Studio exports a domain's repositories to its GitHub org
     And no dialog opened in the org-export walk
     And the Studio grab is a non-empty PNG
 
+  # ── a private key is found in the shapes real tools write ─────────────────
+  # A passphrase-protected OpenSSL key has two header lines and a blank line between
+  # its BEGIN line and the base64; a key pasted into Java source is split across
+  # string pieces. A rule that wanted the base64 straight after the header published
+  # both.
+  @interface:studio
+  Scenario: a passphrase-protected private key and a key split across Java strings block that repository @interface:studio
+    When I walk the Go-Live wizard to the export step with an encrypted private key and a Java-string private key planted in "hugmesh-commons" and press Plan
+    Then the plan is blocked for "hugmesh-commons" naming "notes/legacy.txt: private key header" and "src/Keys.java: private key header" and Apply cannot be armed
+    And the stand-in GitHub holds no repository and every gh call during the plan was a repo view
+    And no dialog opened in the org-export walk
+    And the Studio grab is a non-empty PNG
+
   # ── the commit holds exactly the files the plan counted ───────────────────
   # `git add -A` honoured the snapshot's own .gitignore and the person's global
   # ignore file, so a tracked file could be counted by the plan and left out.

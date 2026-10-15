@@ -715,13 +715,18 @@ def test_other_banned_markers_are_recognised():
     assert not any(rx.search("generated with `--enable-games`") for _l, rx in oe.BANNED_MARKERS)
 
 
-def test_the_other_named_key_formats_are_recognised_and_a_pgp_private_block_is_not():
+def test_the_other_named_key_formats_are_recognised_including_a_pgp_private_block():
     def hit(text):
         return [lbl for lbl, rx in oe.BANNED_MARKERS if rx.search(text)]
     assert hit("k=" + "AKIA" + "ABCDEFGHIJKLMNOP") == ["AWS access key"]
     assert hit("t=" + "github_pat_" + "A1b2C3d4E5f6G7h8I9j0K1") == ["GitHub fine-grained token"]
     assert hit("t=" + "xoxb" + "-1234567890-abcdefghij") == ["Slack token"]
-    # the one key format the scan does not know, as the docs say
+    # a PGP private key block is a key too (armor: header, optional Version: lines, a
+    # blank line, base64); the rule's old PGP alternative could never match the armor
+    body = "lQOYBGrQsqIBCAC8ft8T0JnDOVbJuhGxMhaL/LEnxMn0g1ilVKbhpNxJabZky+yq"
+    assert hit("-----BEGIN PGP " + "PRIVATE KEY BLOCK-----\n\n" + body + "\n") == \
+        ["private key header"]
+    # ... and a stand-in with a short body is not
     assert hit("-----BEGIN PGP " + "PRIVATE KEY BLOCK-----\n\nlQOYBF\n") == []
 
 
@@ -1673,6 +1678,36 @@ _KEY_SHAPES = {
     "env-escaped-blank-line": "K=" + PEM_HEADER + "\\n\\n" + _KEY_BODY + "\n",
     "column-zero": PEM_HEADER + "\n" + _KEY_BODY + "\n",
     "crlf-file": "x\r\n" + PEM_HEADER + "\r\n" + _KEY_BODY + "\r\n",
+    # a passphrase-protected traditional OpenSSL key: RFC 1421 header lines and a blank
+    # line sit between the BEGIN line and the base64 (the 32-character floor alone
+    # stopped refusing these)
+    "rsa-encrypted-proc-type": PEM_HEADER + "\nProc-Type: 4,ENCRYPTED\n"
+                               "DEK-Info: AES-128-CBC,BF2563ED338AA6AEBE90663CBEA68FCB\n\n"
+                               + _KEY_BODY + "\n",
+    "rsa-encrypted-crlf": PEM_HEADER + "\r\nProc-Type: 4,ENCRYPTED\r\n"
+                          "DEK-Info: AES-128-CBC,BF25\r\n\r\n" + _KEY_BODY + "\r\n",
+    "rsa-encrypted-escaped": '{"k": "' + PEM_HEADER + "\\nProc-Type: 4,ENCRYPTED\\n"
+                             "DEK-Info: AES-128-CBC,BF25\\n\\n" + _KEY_BODY + '"}\n',
+    "rsa-encrypted-yaml-block": "k: |\n  " + PEM_HEADER + "\n  Proc-Type: 4,ENCRYPTED\n"
+                                "  DEK-Info: AES-128-CBC,BF25\n\n  " + _KEY_BODY + "\n",
+    "rsa-encrypted-hash-comment": "# " + PEM_HEADER + "\n# Proc-Type: 4,ENCRYPTED\n"
+                                  "# DEK-Info: AES-128-CBC,BF25\n#\n# " + _KEY_BODY + "\n",
+    # a key split across string literals: Java and JavaScript concatenation, a
+    # comment prefix, and a doubly escaped newline (JSON inside a string)
+    "java-concatenation": 'String k = "' + PEM_HEADER + '\\n" +\n    "' + _KEY_BODY + '\\n";\n',
+    "java-concatenation-one-line": 'k = "' + PEM_HEADER + '\\n" + "' + _KEY_BODY + '";\n',
+    "python-single-quote-pieces": "k = ('" + PEM_HEADER + "\\n'\n     '" + _KEY_BODY + "\\n')\n",
+    "js-backtick-pieces": "const k = `" + PEM_HEADER + "\\n` + `" + _KEY_BODY + "`;\n",
+    "js-template-literal": "const k = `\n" + PEM_HEADER + "\n" + _KEY_BODY + "\n`;\n",
+    "hash-comment-prefix": "# " + PEM_HEADER + "\n# " + _KEY_BODY + "\n",
+    "slash-comment-prefix": "// " + PEM_HEADER + "\n// " + _KEY_BODY + "\n",
+    "star-comment-prefix": "/*\n * " + PEM_HEADER + "\n * " + _KEY_BODY + "\n */\n",
+    "doubly-escaped-newline": '"' + PEM_HEADER + "\\\\n" + _KEY_BODY + '"\n',
+    "pgp-private-block": "-----BEGIN PGP " + "PRIVATE KEY BLOCK-----\n\n" + _KEY_BODY + "\n",
+    "pgp-private-block-with-version": "-----BEGIN PGP " + "PRIVATE KEY BLOCK-----\n"
+                                      "Version: GnuPG v2\nComment: x\n\n" + _KEY_BODY + "\n",
+    "pkcs8-encrypted": "-----BEGIN ENCRYPTED " + "PRIVATE KEY-----\n" + _KEY_BODY + "\n",
+    "openssh": "-----BEGIN OPENSSH " + "PRIVATE KEY-----\n" + _KEY_BODY + "\n",
 }
 
 
@@ -1688,16 +1723,72 @@ def test_a_private_key_is_found_wherever_it_is_written(tmp_path, shape):
     assert labels == ["private key header"], (shape, labels)
 
 
+def _have(tool):
+    return shutil.which(tool) is not None
+
+
+@pytest.mark.skipif(not _have("openssl"), reason="openssl is not installed")
+@pytest.mark.parametrize("flags", [["-aes128", "-traditional"], ["-traditional"], []],
+                         ids=["rsa-encrypted-legacy", "rsa-plain-legacy", "default-format"])
+def test_a_key_made_by_openssl_is_found(tmp_path, flags):
+    """The refusal rule is only worth anything against the bytes a real tool writes: a
+    legacy passphrase-protected key (Proc-Type / DEK-Info lines before the base64) was
+    published once the rule needed 32 base64 characters straight after the header."""
+    import subprocess
+    out = tmp_path / "notes.txt"          # a harmless name: only the CONTENT may refuse it
+    cmd = ["openssl", "genrsa", *flags, *(["-passout", "pass:x"] if "-aes128" in flags else []),
+           "-out", str(out), "1024"]
+    done = subprocess.run(cmd, capture_output=True, text=True)
+    assert done.returncode == 0, done.stderr
+    if "-aes128" in flags:
+        assert "Proc-Type: 4,ENCRYPTED" in out.read_text()
+    assert oe._scan_file(str(out))[0] == ["private key header"]
+
+
+@pytest.mark.skipif(not _have("openssl"), reason="openssl is not installed")
+def test_an_encrypted_pkcs8_key_made_by_openssl_is_found(tmp_path):
+    import subprocess
+    out = tmp_path / "notes.txt"
+    done = subprocess.run(["openssl", "genpkey", "-algorithm", "RSA", "-pkeyopt",
+                           "rsa_keygen_bits:1024", "-aes128", "-pass", "pass:x",
+                           "-out", str(out)], capture_output=True, text=True)
+    assert done.returncode == 0, done.stderr
+    assert oe._scan_file(str(out))[0] == ["private key header"]
+
+
+@pytest.mark.skipif(not _have("gpg"), reason="gpg is not installed")
+def test_a_pgp_private_key_block_made_by_gpg_is_found(tmp_path):
+    import subprocess
+    home = tmp_path / "gnupg"
+    home.mkdir(mode=0o700)
+    env = dict(os.environ, GNUPGHOME=str(home))
+    made = subprocess.run(["gpg", "--batch", "--passphrase", "", "--quick-gen-key",
+                           "x@example.invalid", "rsa2048", "default", "never"],
+                          env=env, capture_output=True, text=True, timeout=120)
+    assert made.returncode == 0, made.stderr
+    armor = subprocess.run(["gpg", "--armor", "--export-secret-keys", "x@example.invalid"],
+                           env=env, capture_output=True, text=True, timeout=60)
+    assert armor.stdout.startswith("-----BEGIN PGP PRIVATE KEY BLOCK-----"), armor.stderr
+    out = tmp_path / "notes.txt"
+    out.write_text(armor.stdout)
+    assert oe._scan_file(str(out))[0] == ["private key header"]
+
+
 @pytest.mark.parametrize("text", [
     PEM_HEADER + "\nQUJD\n",                                   # the admin-bff Java test's stand-in
     "-----BEGIN " + "PRIVATE KEY-----\\nQUJD\\n",              # ... as written in source code
     "x\n" + PEM_HEADER + "\nx\n-----END RSA PRIVATE KEY-----\n",
     PEM_HEADER + "\n" + "A" * 31 + "\n",                       # one short of a real first line
+    # header lines are skipped, but what follows them is still judged by the same floor
+    PEM_HEADER + "\nProc-Type: 4,ENCRYPTED\nDEK-Info: AES-128-CBC,BF25\n\nQUJD\n",
+    "-----BEGIN PGP " + "PRIVATE KEY BLOCK-----\nVersion: x\n\nlQOYBF\n",
+    'k = "' + PEM_HEADER + '\\n" + "QUJD";\n',                # Java concatenation, stand-in body
 ])
 def test_a_stand_in_key_with_a_short_body_is_not_a_key(tmp_path, text):
     """Java and shell tests of the platform's own services write a header and a few
     characters as a key stand-in (`...KEY-----\\nQUJD\\n`); the looser rule refused two
-    such files in a real repository. A key's first body line is 48 to 76 characters."""
+    such files in a real repository. A key's first body line is 64 to 76 characters
+    and the floor is 32."""
     f = tmp_path / "Test.java"
     f.write_text(text, encoding="utf-8")
     assert oe._scan_file(str(f))[0] == []
@@ -2050,3 +2141,158 @@ def test_a_file_too_large_to_scan_or_unreadable_refuses_the_repository(world, mo
     rp = next(r for r in p.repos if r.source == "hugmesh-commons")
     assert rp.action == "refused: banned marker"
     assert "ok.txt: unreadable, so not scanned for secrets" in rp.banned, rp.banned
+
+
+# ── every refusal rule and every exclusion rule is pinned by name ───────────────────
+# A rule nobody tests can be deleted from its list and every other test stays green
+# (the review's mutations did exactly that), so each list is spelled out here AND
+# compared with the engine's own: an added, removed or renamed entry fails this file.
+_BANNED_EXAMPLES = {
+    "co-author trailer": CO_AUTHOR + ": Someone <someone@example.invalid>",
+    "tool footer": "Gener" + "ated with [a tool](https://example.invalid)",
+    "robot footer": "built by \U0001F916",
+    "assistant session link": "see https://" + "claude" + ".ai/code/abc",
+    "GitHub token": "TOKEN=ghp_" + "a1B2" * 10,
+    "GitHub fine-grained token": "TOKEN=github_pat_" + "A1b2C3d4E5f6G7h8I9j0K1",
+    "AWS access key": "k=" + "AKIA" + "ABCDEFGHIJKLMNOP",
+    "Slack token": "t=" + "xoxb" + "-1234567890-abcdefghij",
+    "URL with a literal password": "u=https://user:" + "p" * 20 + "@host.example/x",
+    "private key header": PEM_HEADER + "\n" + _KEY_BODY,
+}
+
+
+def test_every_banned_marker_has_a_planted_example_in_this_file():
+    assert sorted(_BANNED_EXAMPLES) == sorted(label for label, _rx in oe.BANNED_MARKERS)
+
+
+@pytest.mark.parametrize("label", sorted(_BANNED_EXAMPLES))
+def test_each_banned_marker_refuses_the_repository_and_names_the_file(world, label):
+    cfg, runner = world["cfg"], world["runner"]
+    _plant(os.path.join(world["src"], "hugmesh-commons"),
+           {"docs/NOTES.md": "a note\n\n" + _BANNED_EXAMPLES[label] + "\n"})
+    p = oe.plan(cfg, runner, stamp="20260101T000000Z", probe=False)
+    rp = next(r for r in p.repos if r.source == "hugmesh-commons")
+    assert rp.action == "refused: banned marker", (label, rp.action)
+    assert rp.banned == [f"docs/NOTES.md: {label}"], rp.banned
+    assert rp in p.blocked
+    # a clean sibling repository is not touched by it
+    assert not next(r for r in p.repos if r.source == "hugmesh-parent").blocked
+
+
+#: ``(glob, a file name only that glob matches)`` — spelled out, see the comment above.
+_SECRET_NAME_CASES = [
+    ("*.pem", "certs/server.pem"), ("*.key", "certs/server.key"),
+    ("*.p12", "certs/store.p12"), ("*.pfx", "certs/store.pfx"),
+    ("*.jks", "certs/store.jks"), ("*.keystore", "certs/app.keystore"),
+    (".env", "app/.env"), (".env.*", "app/.env.local"),
+    ("id_rsa*", "ssh/id_rsa"), ("id_ed25519*", "ssh/id_ed25519"),
+    ("id_ecdsa*", "ssh/id_ecdsa"), (".netrc", "home/.netrc"),
+    ("*.secret", "deploy/db.secret"), ("*credentials*.json", "gcp/service-credentials.json"),
+    ("*.kubeconfig", "deploy/prod.kubeconfig"), (".pypirc", "pkg/.pypirc"),
+    (".git-credentials", "home/.git-credentials"), (".htpasswd", "web/.htpasswd"),
+    (".yarnrc.yml", "web/.yarnrc.yml"), ("*.p8", "apple/AuthKey_X.p8"),
+    ("*.tfstate", "infra/main.tfstate"), ("*.tfstate.backup", "infra/main.tfstate.backup"),
+    ("*.tfvars", "infra/prod.tfvars"),
+]
+
+
+def test_every_secret_name_glob_has_a_case_in_this_file():
+    assert sorted(g for g, _n in _SECRET_NAME_CASES) == sorted(oe.SECRET_GLOBS)
+    assert set(oe.SECRET_PATHS) == {".docker/config.json"}
+    assert set(oe.EXCLUDED_NAMES) == {"CLAUDE.md", ".e2e-credentials"}
+    assert set(oe.EXCLUDED_DIRS) == set(_EXCLUDED_DIR_CASES)
+
+
+@pytest.mark.parametrize("glob, rel", _SECRET_NAME_CASES, ids=[g for g, _n in _SECRET_NAME_CASES])
+def test_each_secret_name_glob_drops_its_file_from_the_snapshot_and_says_why(world, glob, rel):
+    cfg, runner = world["cfg"], world["runner"]
+    _plant(os.path.join(world["src"], "hugmesh-parent"), {rel: "x = 1\n", "keep/a.txt": "ok\n"})
+    p = oe.plan(cfg, runner, stamp="20260101T000000Z", probe=False)
+    rp = next(r for r in p.repos if r.source == "hugmesh-parent")
+    assert not os.path.exists(os.path.join(rp.workdir, rel)), rel
+    assert f"{rel}: secret-shaped name ({glob})" in rp.excluded, rp.excluded
+    assert os.path.isfile(os.path.join(rp.workdir, "keep", "a.txt"))
+
+
+@pytest.mark.parametrize("rel", [".docker/config.json", "ci/.docker/config.json"])
+def test_the_docker_login_file_is_dropped_by_path(world, rel):
+    _plant(os.path.join(world["src"], "hugmesh-parent"), {rel: "{}\n", "app/config.json": "{}\n"})
+    p = oe.plan(world["cfg"], world["runner"], stamp="20260101T000000Z", probe=False)
+    rp = next(r for r in p.repos if r.source == "hugmesh-parent")
+    assert f"{rel}: secret-shaped path (.docker/config.json)" in rp.excluded, rp.excluded
+    assert os.path.isfile(os.path.join(rp.workdir, "app", "config.json"))
+
+
+@pytest.mark.parametrize("rel", ["CLAUDE.md", "docs/CLAUDE.md", ".e2e-credentials",
+                                 "tests/.e2e-credentials"])
+def test_an_excluded_file_name_is_dropped_wherever_it_sits(world, rel):
+    _plant(os.path.join(world["src"], "hugmesh-parent"), {rel: "x\n"})
+    p = oe.plan(world["cfg"], world["runner"], stamp="20260101T000000Z", probe=False)
+    rp = next(r for r in p.repos if r.source == "hugmesh-parent")
+    assert f"{rel}: excluded file name" in rp.excluded, rp.excluded
+    assert not os.path.exists(os.path.join(rp.workdir, rel))
+
+
+_EXCLUDED_DIR_CASES = (".claude", ".stack-src", "node_modules", "target", "dist", ".angular",
+                       "__pycache__", ".pytest_cache", ".git", ".worktrees")
+
+
+@pytest.mark.parametrize("name", _EXCLUDED_DIR_CASES)
+def test_each_excluded_directory_is_dropped_at_the_top_and_nested(world, name):
+    if name == ".git":
+        # git cannot track a path inside .git, so the rule is checked on the name itself
+        assert oe._excluded_reason(".git/config") == "directory .git/"
+        assert oe._excluded_reason("pkg/.git/config") == "directory .git/"
+        return
+    _plant(os.path.join(world["src"], "hugmesh-parent"),
+           {f"{name}/top.txt": "x\n", f"pkg/{name}/deep.txt": "x\n", "keep/a.txt": "ok\n"})
+    p = oe.plan(world["cfg"], world["runner"], stamp="20260101T000000Z", probe=False)
+    rp = next(r for r in p.repos if r.source == "hugmesh-parent")
+    assert f"{name}/top.txt: directory {name}/" in rp.excluded, rp.excluded
+    assert f"pkg/{name}/deep.txt: directory {name}/" in rp.excluded, rp.excluded
+    assert not os.path.exists(os.path.join(rp.workdir, name))
+    assert not os.path.exists(os.path.join(rp.workdir, "pkg", name))
+    assert os.path.isfile(os.path.join(rp.workdir, "keep", "a.txt"))
+
+
+# ── a Java repository with no root settings.xml gets the plain java build ───────────
+def test_a_plain_java_repository_gets_the_java_build_and_its_matrix_row(world, tmp_path):
+    """Kind 'java' (a pom.xml and no root settings.xml) is the shape of a repository
+    whose only Maven settings are the GitHub CI ones under .github: the build word must
+    still be 'java', or the generated build skips it."""
+    import subprocess
+    src = os.path.join(world["src"], "hugmesh-plain-java")
+    os.makedirs(os.path.join(src, ".github"))
+    for rel, text in {"pom.xml": "<project/>\n", "mvnw": "#!/bin/sh\n",
+                      ".github/maven-ci-settings.xml": "<settings/>\n"}.items():
+        with open(os.path.join(src, rel), "w", encoding="utf-8") as fh:
+            fh.write(text)
+    _git(src, "init", "-q", "-b", "main")
+    _git(src, "add", "-A")
+    _git(src, "-c", "commit.gpgsign=false", "commit", "-q", "-m", "plain java")
+    _git(src, "update-ref", "refs/remotes/origin/main", "HEAD")
+    cfg = world["cfg"]
+    cfg.extra_repos = ["hugmesh-plain-java"]
+    p = oe.plan(cfg, world["runner"], stamp="20260101T000000Z", probe=False)
+    rp = next(r for r in p.repos if r.source == "hugmesh-plain-java")
+    assert rp.kind == "java"
+    assert rp.maven_settings == ".github/maven-ci-settings.xml" and rp.has_mvnw is True
+    rows = {r["name"]: r for r in json.load(
+        open(os.path.join(p.site.workdir, "repos.json")))["repos"]}
+    assert rows["example-plain-java"]["build"] == "java", rows
+    assert rows["example-plain-java"]["settings"] == ".github/maven-ci-settings.xml"
+    step = _site_step(p.site.workdir, "repos", step_id="list")
+    gh_out = tmp_path / "gh-output.txt"
+    gh_out.write_text("")
+    res = subprocess.run(["bash", "-c", step["run"]], cwd=p.site.workdir,
+                         capture_output=True, text=True,
+                         env={"PATH": os.environ["PATH"], "GITHUB_OUTPUT": str(gh_out)})
+    assert res.returncode == 0, res.stdout + res.stderr
+    outputs = dict(ln.split("=", 1) for ln in gh_out.read_text().splitlines() if "=" in ln)
+    matrix = {r["name"]: r for r in json.loads(outputs["matrix"])["include"]}
+    assert matrix["example-plain-java"] == {
+        **matrix["example-plain-java"], "build": "java", "mvnw": True,
+        "settings": ".github/maven-ci-settings.xml"}, matrix
+    # the other three kinds map to their own words and anything else to none
+    assert [oe._build_word(k) for k in ("java", "java+settings", "angular", "other")] == \
+        ["java", "java", "angular", "none"]

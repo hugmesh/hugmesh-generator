@@ -253,6 +253,21 @@ When('I walk the Go-Live wizard to the export step with a fake token hidden in a
       '--plant-bytes', repo + ':nul.bin=' + binary]);
   });
 
+When('I walk the Go-Live wizard to the export step with an encrypted private key and a Java-string private key planted in {string} and press Plan',
+  async ({ world }, repo: string) => {
+    // spelled from parts: this file is part of the generator's own exported tree, and
+    // the bodies are made-up base64, never a real key
+    const header = '-----BEGIN ' + 'RSA PRIVATE KEY-----';
+    const body = 'MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC7';
+    const encrypted = Buffer.from(header + '\nProc-Type: 4,ENCRYPTED\n'
+      + 'DEK-Info: AES-128-CBC,BF2563ED338AA6AEBE90663CBEA68FCB\n\n' + body + '\n').toString('hex');
+    const javaPieces = Buffer.from('class Keys {\n  static final String K = "' + header + '\\n" +\n'
+      + '      "' + body + '\\n";\n}\n').toString('hex');
+    drive(world, ['--scenario', 'export', '--action', 'plan',
+      '--plant-bytes', repo + ':notes/legacy.txt=' + encrypted,
+      '--plant-bytes', repo + ':src/Keys.java=' + javaPieces]);
+  });
+
 When('I walk the Go-Live wizard to the export step with {string} tracked in {string} next to a {string} that ignores it, under a global git ignore of {string}, and apply it with the name typed',
   async ({ world }, file: string, repo: string, ignoreFile: string, pattern: string) => {
     drive(world, ['--scenario', 'export', '--action', 'apply',

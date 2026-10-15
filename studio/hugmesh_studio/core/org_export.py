@@ -40,8 +40,8 @@ EXCLUDES ``CLAUDE.md``, any ``.claude/`` directory, ``.stack-src``, ``node_modul
 build output, worktree files and secret-shaped files (:data:`EXCLUDED_DIRS`,
 :data:`EXCLUDED_NAMES`, :data:`SECRET_GLOBS`), and the export REFUSES a repository —
 naming the file — when a banned marker (:data:`BANNED_MARKERS`: a co-author trailer,
-a tool footer, an assistant session link, an API key, a PEM private-key header
-followed by a key body) is found
+a tool footer, an assistant session link, an API key, a PEM or PGP private-key
+header followed by a key body, with or without RFC 1421 header lines) is found
 in what would be published.
 
 THE RENAME MAP lives in one place (:func:`rename_rules`): repository names follow
@@ -158,6 +158,12 @@ _NPMRC_LOGIN_RE = re.compile(r"_authToken|_auth\s*=|_password|:_auth\b|://[^/\s@
 _CO_AUTHOR = "Co-Authored" + "-By"
 _TOOL_FOOTER = "Generated with"            # the footer's case; prose is lower-case
 _SESSION_URL = "claude" + ".ai/"
+#: A line break as a key is written in text: a real one, or the two characters
+#: backslash-n (one backslash, or two when the text was escaped twice).
+_KEY_NEWLINE = r"(?:\r?\n|\\{1,2}(?:r\\{1,2})?n)"
+#: What may sit between the lines of a key: white space, an escaped line break, and the
+#: punctuation of a quoted, concatenated or commented line.
+_KEY_FILLER = r"(?:\s|\\{1,2}[rn]|[\"'`+#*,/])*"
 #: ``(label, compiled regex)`` — a hit anywhere in a text file refuses the repository.
 BANNED_MARKERS = (
     ("co-author trailer", re.compile(re.escape(_CO_AUTHOR), re.IGNORECASE)),
@@ -181,13 +187,20 @@ BANNED_MARKERS = (
     # table) are not a key, and refusing them refused a real repository. NOT anchored to
     # the start of a line and the line break may be the two characters backslash-n: a key
     # in a YAML block (indented), in a quoted value, or in a service-account JSON file or
-    # a one-line env value (every newline escaped) is still a key. The body must run to
-    # 32 base64 characters: a real key's first line is 48 to 76, while the tests of the
-    # platform's own services write `...KEY-----\nQUJD\n` as a stand-in, and refusing
-    # those refused a real repository
+    # a one-line env value (every newline escaped) is still a key. Between the header and
+    # the body there may be RFC 1421 header lines (a passphrase-protected OpenSSL key
+    # has ``Proc-Type: 4,ENCRYPTED`` and ``DEK-Info: ...``, a PGP block ``Version:``)
+    # and what source code puts around a line: quotes and ``+`` (string concatenation),
+    # ``#`` ``//`` ``*`` (a comment prefix), backticks, ``,`` and a blank line. The
+    # body must then run to 32 base64 characters: a real key's first line is 64 to 76,
+    # while the tests of the platform's own services write `...KEY-----\nQUJD\n` as a
+    # stand-in, and refusing those refused a real repository. The PGP armor reads
+    # ``PGP PRIVATE KEY BLOCK``, not ``PGP PRIVATE KEY``.
     ("private key header", re.compile(
-        r"-----BEGIN (?:RSA |EC |DSA |OPENSSH |PGP |ENCRYPTED )?PRIVATE KEY-----[ \t]*"
-        r"(?:\r?\n|\\(?:r\\)?n)(?:\s|\\[rn])*(?=[A-Za-z0-9+/]{32})")),
+        r"-----BEGIN (?:(?:RSA |EC |DSA |OPENSSH |ENCRYPTED )?PRIVATE KEY|"
+        r"PGP PRIVATE KEY BLOCK)-----[ \t]*" + _KEY_NEWLINE + _KEY_FILLER +
+        r"(?:[A-Za-z][A-Za-z-]*:[^\r\n\\]*" + _KEY_NEWLINE + _KEY_FILLER + r")*"
+        r"(?=[A-Za-z0-9+/]{32})")),
 )
 
 #: What the default rename map deliberately leaves alone (shown in every plan).

@@ -90,16 +90,22 @@ mesh on this machine names an org, or when you add a config file on the step its
    an API key (a GitHub token of 36 or more characters after its `ghp_` / `gho_` /
    `ghu_` / `ghs_` / `ghr_` prefix, a `github_pat_` token, an AWS access key, a Slack
    token), a PEM private-key header followed by a key body (the tests cover `BEGIN RSA
-   PRIVATE KEY` and `BEGIN OPENSSH PRIVATE KEY`; the header may sit anywhere in a line,
-   so an indented YAML block or a quoted value is found, the line break after it
-   may be the two characters backslash and `n`, which is how a service-account JSON
-   file or a one-line environment value spells a key, and the body must run to at
-   least 32 base64 characters, so a test's stand-in such as `...KEY-----\nQUJD` is
-   not a key; the bare header strings a compiled
-   program such as an engine's `.wasm` carries are not a key, and other key formats,
-   such as a PGP `PRIVATE KEY BLOCK`, are not recognised by this rule), a URL with a
-   literal password of 16 or more
-   characters (`https://user:<long secret>@host`; placeholders such as
+   PRIVATE KEY`, `BEGIN OPENSSH PRIVATE KEY`, an encrypted PKCS#8 key and a PGP
+   `PRIVATE KEY BLOCK`, and the tests also run openssl and gpg to write real ones). The header may sit
+   anywhere in a line, so an indented YAML block or a quoted value is found; the line
+   break after it may be the two characters backslash and `n`, which is how a
+   service-account JSON file or a one-line environment value spells a key; header
+   lines such as `Proc-Type: 4,ENCRYPTED` and `DEK-Info:` (a passphrase-protected
+   OpenSSL key) or `Version:` (PGP) may come between the header and the body; and
+   quotes, `+`, `#`, `//`, `*` and backticks may sit in front of the lines (a key split
+   across Java or JavaScript string pieces, or written as a comment). The body must
+   run to at least 32 base64 characters, so a test's stand-in such as
+   `...KEY-----\nQUJD` is not a key (a real first body line is 64 to 76 characters).
+   The bare header strings a compiled program such as an engine's `.wasm` carries are
+   not a key. A key whose body is split into pieces shorter than 32 characters, or
+   one with something other than the characters above between its lines, is NOT
+   recognised, so look for such a file yourself before the real export), a URL with a
+   literal password of 16 or more characters (`https://user:<long secret>@host`; placeholders such as
    `user:$(PASSWORD)@host` and short test logins are left alone, because the
    platform's own manifests are full of them). EVERY kept file is scanned as bytes:
    one that is not valid UTF-8 is scanned with replacement characters, one with NUL
