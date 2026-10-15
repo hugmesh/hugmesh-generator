@@ -4,7 +4,7 @@
 # GEN-SSO deployment glue (the NO-provision.sh-edit vector). provision.sh's
 # provision_desktop_governance() render_gov's only its 4 NAMED templates and has
 # no generic loop, no /etc/xdg/autostart handling, and editing it is out of scope.
-# So this self-contained hook renders the THREE new GEN-SSO templates and
+# So this self-contained hook renders the GEN-SSO templates (incl. the token producer) and
 # publishes the XDG autostart entry, run AS ROOT at end of first boot by
 # keys-provision's provision_run_hooks() (KEYS_BASE exported) AFTER
 # provision_desktop_governance() has run. Wire via KEYS provision.json:
@@ -107,6 +107,15 @@ render "${SRC}/discover/oidc-token-deposit.sh.tmpl" \
        "${GOV_DST}/oidc-token-deposit.sh" 0755 || exit 0
 render "${SRC}/autostart/hugmesh-desktop-sso-start.sh.tmpl" \
        "${GOV_DST}/hugmesh-desktop-sso-start.sh" 0755 || exit 0
+
+# The token PRODUCER (RFC 8628 device flow). Run by the session wrapper; optional
+# so a KEYS dir from before the producer existed still installs the rest.
+if [ -f "${SRC}/sso/hugmesh-sso-token.py.tmpl" ]; then
+    render "${SRC}/sso/hugmesh-sso-token.py.tmpl" \
+           "${GOV_DST}/hugmesh-sso-token" 0755 || exit 0
+else
+    warn "sso/hugmesh-sso-token.py.tmpl not found in ${SRC} — no token producer installed (deposit stays inert)"
+fi
 
 # Publish the XDG autostart entry honored by LXDE + XFCE (no OnlyShowIn).
 render "${SRC}/autostart/hugmesh-desktop-sso.desktop.tmpl" \
