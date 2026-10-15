@@ -16,8 +16,11 @@ a name its kernel did not compile in):
 | x86, rpi5 | `lockdown,yama,selinux,bpf` | `integrity` |
 | the 8 ARM boards (La Frite, Jetson, Orange Pi Zero 2 / Zero 2W / Zero 3 / 3 LTS / 4 LTS / 5) | `lockdown,yama,selinux` | `integrity` |
 
-`bpf` is registered only on x86 and rpi5, and even there a `BPF_PROG_TYPE_LSM`
-program cannot attach until BTF is built (see the README roadmap). Lockdown selects
+`bpf` is registered only on x86 and rpi5. Both fragments now ask for the BTF a
+`BPF_PROG_TYPE_LSM` program needs to attach. Only the x86 configuration has been resolved
+against a real kernel tree (rpi5 is enforced by its builder guard at build time), and no
+image has been built or booted with it, so that an attach really succeeds is not yet
+proven (see the README roadmap). Lockdown selects
 `CONFIG_MODULE_SIG`, so modules built with the kernel are signed and an unsigned
 out-of-tree `.ko` is refused at runtime on every board.
 
