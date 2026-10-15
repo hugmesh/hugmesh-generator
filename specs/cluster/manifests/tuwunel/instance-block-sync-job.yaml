@@ -1,0 +1,219 @@
+# tuwunel-instance-block-sync — turns approved Matrix INSTANCE blocks into the
+# `forbidden_remote_server_names` key of tuwunel.toml (hugmesh-generator#564,
+# operator decision 50). It mirrors akkoma/domainlock-sync-job.yaml: a ConfigMap-
+# embedded stdlib Python script run by an ArgoCD PostSync Job as non-root, all caps
+# dropped, read-only root filesystem.
+#
+# DARK: this file is NOT listed in kustomization.yaml, so the auto-sync tuwunel
+# Application never renders it. tests/scripts/test-tuwunel-instance-block-sync.sh
+# pins that.
+#
+# THIS SLICE IS A DRY RUN. The Job reads the live config (the tuwunel-config
+# ConfigMap mounted read-only), reads the approved domains from the optional
+# ConfigMap tuwunel-instance-blocks-approved (key approved.txt, one domain per
+# line), and prints the unified diff the config edit WOULD make. It holds no
+# ServiceAccount token and no Secret, so it has no credential to patch the
+# ConfigMap or restart a pod. Still open on #564, each its own decision:
+#   - where the approved list comes from (federation-api moderation_requests),
+#   - how the edit is applied (live ConfigMap patch vs a PR against this repo),
+#   - how tuwunel picks it up (reload vs rollout restart),
+#   - un-block (this script only ever ADDS entries).
+#
+# The script's rules (each pinned by the test):
+#   - every approved domain becomes an ANCHORED, escaped regex, because tuwunel
+#     reads the key as a RegexSet matched against the host: ^evil\.example$.
+#   - existing entries keep their values and order and none is removed; the array
+#     is rewritten as one line, so comments inside it are lost.
+#   - the key is written inside [global], before any sub-table such as
+#     [global.well_known], never after one (a bare key after a sub-table header
+#     lands in that sub-table).
+#   - a malformed domain, or this server's own name, refuses the whole run.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: tuwunel-instance-block-sync-script
+  namespace: hugmesh-backend
+  labels: { app.kubernetes.io/name: tuwunel, app.kubernetes.io/part-of: hugmesh.net }
+data:
+  sync.py: |
+    #!/usr/bin/env python3
+    """Add approved Matrix instance blocks to forbidden_remote_server_names in a
+    tuwunel.toml and print the resulting diff. Pure stdlib (tomllib, difflib).
+
+    usage: sync.py CONFIG APPROVED [--out FILE]
+      CONFIG    the current tuwunel.toml
+      APPROVED  approved domains, one per line ('#' comments and blanks ignored)
+      --out     also write the edited config to FILE
+    exit 0 = ok (diff printed); exit 2 = refused (argparse errors also exit 2)."""
+    import argparse, difflib, json, re, sys, tomllib
+
+    KEY = "forbidden_remote_server_names"
+    LABEL = r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?"
+    DOMAIN = re.compile(rf"^(?:{LABEL}\.)+{LABEL}$")
+
+
+    class Refused(Exception):
+        pass
+
+
+    def normalise(raw, own_server_name):
+        d = raw.strip().lower().rstrip(".")
+        if len(d) > 253 or not DOMAIN.match(d) or not re.search(r"[a-z]", d.rsplit(".", 1)[1]):
+            raise Refused(f"not a server name: {raw.strip()!r}")
+        if d == own_server_name.lower():
+            raise Refused(f"refusing to block this server's own name: {d}")
+        return d
+
+
+    def pattern(domain):
+        # anchored + escaped: the key is a RegexSet matched against the host.
+        return "^" + re.escape(domain) + "$"
+
+
+    def approved_domains(text, own_server_name):
+        out = []
+        for line in text.splitlines():
+            line = line.split("#", 1)[0].strip()
+            if line:
+                d = normalise(line, own_server_name)
+                if d not in out:
+                    out.append(d)
+        return sorted(out)
+
+
+    def toml_string(s):
+        return json.dumps(s)  # a JSON string is a valid TOML basic string
+
+
+    def section_span(text, header):
+        """(start, end) of the [header] table body: end is the next table header."""
+        m = re.search(rf"^\[{re.escape(header)}\][ \t]*(?:#.*)?$", text, re.M)
+        if not m:
+            raise Refused(f"no [{header}] table")
+        nxt = re.compile(r"^\[", re.M).search(text, m.end())
+        return m.end(), nxt.start() if nxt else len(text)
+
+
+    def array_end(text, i):
+        """Index just past the ']' closing the array whose '[' is at text[i]."""
+        depth, quote = 0, None
+        while i < len(text):
+            c = text[i]
+            if quote:
+                if c == "\\" and quote == '"':
+                    i += 1
+                elif c == quote:
+                    quote = None
+            elif c in "\"'":
+                quote = c
+            elif c == "#":
+                i = text.index("\n", i) if "\n" in text[i:] else len(text)
+                continue
+            elif c == "[":
+                depth += 1
+            elif c == "]":
+                depth -= 1
+                if depth == 0:
+                    return i + 1
+            i += 1
+        raise Refused(f"unterminated {KEY} array")
+
+
+    def edit(config_text, approved_text):
+        cfg = tomllib.loads(config_text)["global"]
+        own = cfg.get("server_name", "")
+        wanted = [pattern(d) for d in approved_domains(approved_text, own)]
+        existing = list(cfg.get(KEY, []))
+        merged = existing + [p for p in wanted if p not in existing]
+        if merged == existing:
+            return config_text
+        line = KEY + " = [" + ", ".join(toml_string(p) for p in merged) + "]"
+        start, end = section_span(config_text, "global")
+        body = config_text[start:end]
+        m = re.search(rf"^{KEY}[ \t]*=[ \t]*\[", body, re.M)
+        if m:
+            a = start + m.end() - 1
+            b = array_end(config_text, a)
+            new = config_text[:start + m.start()] + line + config_text[b:]
+        else:
+            # right after server_name: inside [global], and never below a sub-table
+            sn = re.search(r"^server_name[ \t]*=.*$", body, re.M)
+            if not sn:
+                raise Refused("no server_name in [global]")
+            at = start + sn.end()
+            new = config_text[:at] + "\n" + line + config_text[at:]
+        if tomllib.loads(new)["global"].get(KEY) != merged:
+            raise Refused("the edited config does not parse back to the intended list")
+        return new
+
+
+    def main(argv):
+        ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+        ap.add_argument("config")
+        ap.add_argument("approved")
+        ap.add_argument("--out")
+        args = ap.parse_args(argv)
+        config_text = open(args.config, encoding="utf-8").read()
+        try:
+            approved = open(args.approved, encoding="utf-8").read()
+        except FileNotFoundError:
+            approved = ""  # optional ConfigMap not created: nothing approved
+        try:
+            new = edit(config_text, approved)
+        except (Refused, tomllib.TOMLDecodeError) as e:
+            print(f"tuwunel-instance-block-sync: REFUSED: {e}", file=sys.stderr)
+            return 2
+        diff = "".join(difflib.unified_diff(
+            config_text.splitlines(True), new.splitlines(True), "tuwunel.toml", "tuwunel.toml (edited)"))
+        print(diff or "tuwunel-instance-block-sync: no change")
+        if args.out:
+            open(args.out, "w", encoding="utf-8").write(new)
+        return 0
+
+
+    if __name__ == "__main__":
+        sys.exit(main(sys.argv[1:]))
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: tuwunel-instance-block-sync
+  namespace: hugmesh-backend
+  labels: { app.kubernetes.io/name: tuwunel, app.kubernetes.io/part-of: hugmesh.net }
+  annotations:
+    argocd.argoproj.io/hook: PostSync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+spec:
+  backoffLimit: 1
+  ttlSecondsAfterFinished: 600
+  template:
+    metadata:
+      labels: { app: tuwunel-instance-block-sync }
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      nodeSelector:
+        hugmesh.net/backend: "true"
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: sync
+          image: python:3.12-alpine
+          command: ["python3", "/script/sync.py", "/etc/tuwunel/tuwunel.toml", "/approved/approved.txt"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          volumeMounts:
+            - { name: script,   mountPath: /script, readOnly: true }
+            - { name: config,   mountPath: /etc/tuwunel, readOnly: true }
+            - { name: approved, mountPath: /approved, readOnly: true }
+      volumes:
+        - name: script
+          configMap: { name: tuwunel-instance-block-sync-script, defaultMode: 0555 }
+        - name: config
+          configMap: { name: tuwunel-config }
+        - name: approved
+          configMap: { name: tuwunel-instance-blocks-approved, optional: true }

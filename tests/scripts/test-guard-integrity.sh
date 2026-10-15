@@ -1054,6 +1054,14 @@ PREMERGE_UNGATED=(
   tests/scripts/test-netpol-egress-scope.sh
   tests/scripts/test-pg-tls-preflight.sh
   tests/scripts/test-service-env-contract.sh
+  # Lands outside the pull_request gate for the reason given above
+  # tests/scripts/test-netpol-egress-scope.sh and tests/scripts/test-pg-tls-preflight.sh:
+  # wiring it there is an edit under .github/workflows/shell-suites.yml, which the
+  # change that added it was not permitted to make. It is offline (python3 with PyYAML
+  # and tomllib, bash; kubectl optional) and is run post-merge by .gitlab-ci.yml's
+  # lint:tuwunel-instance-block-sync. Wire it into shell-suites.yml and DELETE this
+  # entry (PREMERGE_BASELINE then moves 198 -> 199).
+  tests/scripts/test-tuwunel-instance-block-sync.sh
   tests/stack/test-gateway-auth-flag-parity.sh
   tests/stack/test-m2-bootstrap.sh
   # Needs a host tor binary and the PUBLIC Tor network for minutes (it mints a real
