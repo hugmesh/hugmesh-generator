@@ -34,6 +34,7 @@ from __future__ import annotations
 
 from dataclasses import fields
 
+from ..core import plain_words
 from ..core.config import IdentityValidationError
 from ..core.domain_services import normalise_slugs, record_reviewed, reviewed_names
 from ..core.fleet import (FLEET_LANE_NOTE, FleetConfig, FleetDomains, FleetDriver,
@@ -158,7 +159,7 @@ class FleetScreen:
                        "pki/backend/frontend + x86 pki/backend/frontend/backend-gpu)")
         out += ["", "knobs: " + " ".join(FLEET_KNOBS), "",
                 "commands: set NAME VALUE (on/off for switches; - resets) · "
-                "brand=choose or design the superbrand · Enter=continue to Domains"]
+                f"brand=choose or design the {plain_words.term('superbrand')} · Enter=continue to Domains"]
         return out
 
     def _feed_options(self, j, line: str) -> None:

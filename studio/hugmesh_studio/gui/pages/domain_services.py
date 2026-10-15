@@ -138,6 +138,7 @@ from ..qt import Qt, QtCore, QtWidgets
 from ..styles import MUTED, WARN, muted
 from ._scroll import scrollable
 from .brand_screen import BrandSettingsTabs
+from ...core import plain_words
 from ...tui.brand_step import brand_view
 from ...core.domain_services import (
     DOMAIN_CATALOGUE, ENFORCEMENT_NOTE, OTHER_SCOPE_HEADERS, PER_DOMAIN_INFRA,
@@ -391,6 +392,8 @@ class DomainServicesBody:
         # draws no tab bar: just the services body, exactly as before.
         self.brand_tabs = BrandSettingsTabs(route=self._brand_route())
         self.brand_tabs.mount(lay)
+        self.brand_tabs.bar.setToolTip(
+            f"The settings of one brand under the {plain_words.term('superbrand')}")
         _services_from = lay.count()
 
         # ── the domain's FRONT DOOR (#582, decision 68 = A) ────────────────────────

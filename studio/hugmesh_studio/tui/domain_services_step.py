@@ -62,6 +62,7 @@ from ..core.domain_services import (
     implicit_own_domain, normalise_slugs, other_scope_rows, record_reviewed,
     reviewed_names, tor_row_state,
 )
+from ..core import plain_words
 from . import brand_step, model
 
 __all__ = ["DomainServicesScreen", "service_table", "other_scope_table",
@@ -304,8 +305,11 @@ class DomainServicesScreen:
         out = [f"{d.name}{own} — domain {self.index + 1} of {len(doms)}", ""]
         view = self._brand(j)
         if view is not None:
+            row = (f"the {plain_words.term('superbrand')}'s own row" if view.own
+                   else f"one brand under the {plain_words.term('superbrand')}")
             out += ["Brand settings: " + "   ".join(brand_step.section_menu(self.section)),
-                    "  (type ‘open N’ to switch section; n and p move between brands)", ""]
+                    f"  (type ‘open N’ to switch section; n and p move between brands; "
+                    f"this is {row})", ""]
             if self.section != brand_step.SECTION_SERVICES:
                 out += self._section_lines(j, view)
                 out += ["", "commands: open N=another section · n=next brand · "

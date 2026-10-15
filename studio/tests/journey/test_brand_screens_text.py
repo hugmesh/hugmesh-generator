@@ -11,14 +11,14 @@ import os
 import pytest
 
 from hugmesh_studio.core import brand_model
-from hugmesh_studio.core.config import DOMAIN_IDP_OWN, Domain, ImageConfig
+from hugmesh_studio.core.config import DOMAIN_IDP_OWN, Domain
 from hugmesh_studio.tui import brand_step
 from hugmesh_studio.tui.domain_services_step import DomainServicesScreen
 from hugmesh_studio.tui.domains_step import DomainsScreen
 from hugmesh_studio.tui.fleet import FleetScreen
 from hugmesh_studio.tui.journey import Journey
-from hugmesh_studio.tui.superbrand_step import (CREATE_LABEL, SuperbrandScreen,
-                                                UNAFFILIATED_REASON, session_for)
+from hugmesh_studio.tui.superbrand_step import (CREATE_LABEL, UNAFFILIATED_REASON,
+                                                session_for)
 
 DATE = "2026-10-14"
 

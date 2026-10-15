@@ -24,6 +24,7 @@ No modal anywhere. Every refusal is ``note``; slots never raise.
 from __future__ import annotations
 
 from ..qt import QtWidgets, Signal
+from ...core import plain_words
 from ...tui.superbrand_step import (BrandSession, IDENTITY_FIELDS, IDENTITY_LABELS,
                                     UNAFFILIATED_REASON)
 from ._lookeditor import LookEditor
@@ -78,7 +79,7 @@ class SuperbrandStep(QtWidgets.QWidget):
         dl = QtWidgets.QVBoxLayout(self.design)
         dl.setContentsMargins(0, 0, 0, 0)
         dl.setSpacing(6)
-        self.design_title = QtWidgets.QLabel("<b>Design your superbrand</b>")
+        self.design_title = QtWidgets.QLabel(f"<b>Design your {plain_words.term('superbrand')}</b>")
         dl.addWidget(self.design_title)
         self.identity_box = QtWidgets.QGroupBox("1. Identity")
         il = QtWidgets.QVBoxLayout(self.identity_box)
@@ -169,10 +170,13 @@ class SuperbrandStep(QtWidgets.QWidget):
                 le.setText(ident[f])
                 le.setEnabled(not unaff)
             self.identity_box.setVisible(not unaff)
-            self.reason.setVisible(unaff)
+            # the picker's own note says it once, right beside the drop-down; this label
+            # carries the sentence only where the picker is not drawn (the Fleet's step)
+            self.reason.setVisible(unaff and self.picker.isHidden())
             self.keep_row.setVisible(not unaff)
             self.design_title.setText(
-                "<b>Design your look</b>" if unaff else "<b>Design your superbrand</b>")
+                "<b>Design your look</b>" if unaff
+                else f"<b>Design your {plain_words.term('superbrand')}</b>")
             self._mount_look()
             self._refresh_notes()
         finally:

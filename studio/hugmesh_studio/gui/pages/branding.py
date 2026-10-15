@@ -63,6 +63,7 @@ from __future__ import annotations
 
 from ..qt import QtWidgets
 from ..choice_cards import ChoiceCard, ChoiceCardGroup
+from ...core import plain_words
 from ...tui.superbrand_step import session_for
 from ...core.branding_themes import theme_set_problem
 from ...core.config import (
@@ -335,6 +336,7 @@ class BrandingPage(QtWidgets.QWizardPage):
     def _ensure_superbrand(self) -> SuperbrandStep:
         if self.superbrand is None:
             self.superbrand = SuperbrandStep(route="image", look_in_step=False)
+            self.superbrand.setAccessibleName(plain_words.term("superbrand").capitalize())
             self.superbrand.changed.connect(self._superbrand_changed)
             # right under the unaffiliated note: the top of the page
             self._page_layout.insertWidget(1, self.superbrand)

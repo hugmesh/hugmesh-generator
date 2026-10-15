@@ -24,7 +24,7 @@ from hugmesh_studio.gui.pages.brand_screen import (TAB_TITLES, TAB_IDENTITY,  # 
                                                    TAB_LOOK, TAB_SERVICES, TAB_WAYS)
 from hugmesh_studio.gui.pages.superbrand import SuperbrandStep                # noqa: E402
 from hugmesh_studio.gui.qt import QtWidgets                                   # noqa: E402
-from hugmesh_studio.tui import brand_step, superbrand_step as sbs             # noqa: E402
+from hugmesh_studio.tui import brand_step             # noqa: E402
 from hugmesh_studio.tui.superbrand_step import (CREATE_LABEL, UNAFFILIATED_REASON,  # noqa: E402
                                                 session_for)
 
@@ -125,8 +125,15 @@ def test_an_unaffiliated_image_hides_the_identity_and_says_why_inline(qapp, gen)
     st = SuperbrandStep(session_for(w, "image", w.cfg, gen), look_in_step=False)
     st.show()
     assert st.identity_box.isHidden() and st.keep_row.isHidden()
-    assert not st.reason.isHidden() and st.reason.text() == UNAFFILIATED_REASON
+    # said once, beside the drop-down; the design's own label carries it only where the
+    # drop-down is not drawn (the Fleet window keeps it on its Shared options step)
+    assert not st.picker.note.isHidden() and st.picker.note.text() == UNAFFILIATED_REASON
+    assert st.reason.isHidden()
     assert not st.design.isHidden(), "the look is still the person's"
+    fleet_style = SuperbrandStep(session_for(w, "image", w.cfg, gen), look_in_step=False,
+                                 with_picker=False)
+    fleet_style.show()
+    assert not fleet_style.reason.isHidden() and fleet_style.reason.text() == UNAFFILIATED_REASON
     ed = st.ensure_look_editor()
     assert ed.model.identity_allowed is False and ed.identity_note.text()
 
@@ -138,6 +145,16 @@ def test_an_existing_choice_hides_the_design_until_change_it(qapp, gen):
     assert st.design.isHidden() and not st.picker.summary.isHidden()
     st.picker.change_btn.click()
     assert not st.design.isHidden()
+
+
+def test_an_existing_choice_summary_is_a_two_column_table_not_spaces(qapp, gen):
+    w = _wiz(gen)
+    p = BrandPicker(session_for(w, "image", w.cfg, gen))
+    p.select("profile:example")
+    html_text = p.summary.text()
+    assert "<table" in html_text and "<b>Superbrand id</b>" in html_text
+    assert "  " not in html_text.replace("&nbsp;", "")[html_text.index("<table"):], \
+        "alignment is the table's, never runs of spaces"
 
 
 def test_the_pictures_the_record_cannot_hold_are_said_in_the_step(qapp, gen, tmp_path):
@@ -364,6 +381,23 @@ def test_the_identity_tab_mirrors_the_row_and_says_where_it_is_changed(qapp, gen
     for i in range(tabs.identity_form.count()):
         assert isinstance(tabs.identity_form.itemAt(i).widget(), QtWidgets.QLabel), \
             "a mirror has no editable control"
+
+
+def test_the_certificate_authority_is_mirrored_on_the_image_route_only(qapp, gen):
+    cfg = _cfg(domains=[Domain(name="shop.example", title="Shop")],
+               domain_ca={"shop.example": "/example/ca/mesh-root.pem"})
+    w, page = _page(gen, cfg)
+    page._step(1)
+    tabs = page.brand_tabs
+    labels = [tabs.identity_form.itemAt(i).widget().text()
+              for i in range(tabs.identity_form.count())]
+    assert "Certificate authority" in labels and "mesh-root.pem" in labels
+    state, session, widget = _docker_widget(gen, [Domain(name="shop.example")])
+    widget._step(1)
+    docker = [widget.brand_tabs.identity_form.itemAt(i).widget().text()
+              for i in range(widget.brand_tabs.identity_form.count())]
+    assert "Certificate authority" not in docker, \
+        "the Docker route has no Secrets-store step, so no certificate authority to show"
 
 
 def test_the_own_domain_is_labelled_the_superbrand_and_points_at_its_step(qapp, gen):

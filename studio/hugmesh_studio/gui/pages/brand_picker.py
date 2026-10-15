@@ -21,7 +21,10 @@ escaping a Qt slot aborts PyQt6).
 """
 from __future__ import annotations
 
+import html
+
 from ..qt import QtCore, QtWidgets, Signal
+from ...core import plain_words
 from ...tui.superbrand_step import BrandSession, UNAFFILIATED_REASON
 from ._widgets import NoWheelComboBox
 
@@ -45,7 +48,7 @@ class BrandPicker(QtWidgets.QWidget):
 
         top = QtWidgets.QHBoxLayout()
         top.setContentsMargins(0, 0, 0, 0)
-        self.caption = QtWidgets.QLabel("Superbrand")
+        self.caption = QtWidgets.QLabel(plain_words.term("superbrand").capitalize())
         self.combo = NoWheelComboBox()
         self.combo.setObjectName("brand_picker_combo")
         self.combo.setSizeAdjustPolicy(
@@ -55,7 +58,7 @@ class BrandPicker(QtWidgets.QWidget):
         self.combo.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding,
                                  QtWidgets.QSizePolicy.Policy.Fixed)
         self.caption.setBuddy(self.combo)
-        self.combo.setAccessibleName("Superbrand")
+        self.combo.setAccessibleName(plain_words.term("superbrand").capitalize())
         top.addWidget(self.caption)
         top.addWidget(self.combo, 1)
         lay.addLayout(top)
@@ -72,6 +75,7 @@ class BrandPicker(QtWidgets.QWidget):
         self.summary = QtWidgets.QLabel("")
         self.summary.setObjectName("brand_picker_summary")
         self.summary.setWordWrap(True)
+        self.summary.setTextFormat(QtCore.Qt.TextFormat.RichText)
         self.summary.setTextInteractionFlags(
             QtCore.Qt.TextInteractionFlag.TextSelectableByMouse)
         lay.addWidget(self.summary)
@@ -115,9 +119,18 @@ class BrandPicker(QtWidgets.QWidget):
         self.note.setText(UNAFFILIATED_REASON if unaff else s.message)
         self.note.setVisible(bool(self.note.text()))
         show_summary = (not unaff) and not s.designing
-        self.summary.setText("\n".join(s.summary_lines()) if show_summary else "")
+        self.summary.setText(self._summary_html(s) if show_summary else "")
         self.summary.setVisible(show_summary)
         self.change_btn.setVisible(show_summary)
+
+    @staticmethod
+    def _summary_html(s: BrandSession) -> str:
+        """The read-only summary as a two-column table: a proportional font cannot align
+        columns of spaces (looked at: the labels and values drifted)."""
+        rows = "".join(
+            f"<tr><td style='padding-right:14px'><b>{html.escape(k)}</b></td>"
+            f"<td>{html.escape(v)}</td></tr>" for k, v in s.summary_rows())
+        return f"<b>{html.escape(s.summary_title())}</b><table cellspacing='2'>{rows}</table>"
 
     # ── events ────────────────────────────────────────────────────────────────────
     def _picked(self, _index: int) -> None:

@@ -43,6 +43,7 @@ from ..core.config import (
 )
 from ..core.domain_services import (ACTION_IMAGE_BUILD, gate_reason,
                                     services_page_applies)
+from ..core import plain_words
 from ..core.validate import validate_domain_name
 from ..core.worklist import (
     WorklistConfig, WorklistEntry, derived_hostname, duplicate_hostnames, entry_id,
@@ -873,8 +874,9 @@ class BrandingScreen:
                "to the TUI — configure them in the GUI if you need them.",
                ""]
         if self._superbrand_offered(j):
-            out += ["  s. Superbrand — which superbrand governs this mesh: "
-                    "‘Create a new superbrand’, or one you made before; design it",
+            sb = plain_words.term("superbrand")
+            out += [f"  s. {sb.capitalize()} — which {sb} governs this mesh: "
+                    f"‘Create a new {sb}’, or one you made before; design it",
                     ""]
         out += ["  t. Themes — edit the web login theme (colours, header/footer, "
                 "background effect)",

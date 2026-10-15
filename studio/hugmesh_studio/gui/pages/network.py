@@ -48,6 +48,7 @@ from ._scroll import scrollable
 # _cluster_identity_applies() for why both routes are the same rule and neither is a
 # page-local copy of it.
 from ...core import config as _config
+from ...core import plain_words
 from ...core.config import (
     BUILTIN_DEFAULT_SERVICES,
     ImageConfig,
@@ -600,8 +601,8 @@ class NetworkPage(QtWidgets.QWizardPage):
         # title, organisation and public name (#654, D8): this page SHOWS them, read-only,
         # and says where they are changed — one editing home per setting.
         self.brand_mirror_note = _hint(
-            "Brand ID, Brand Title, Org and Public Apex Domain are the superbrand's. "
-            "They are shown here, read-only: change them in the superbrand step on the "
+            f"Brand ID, Brand Title, Org and Public Apex Domain are the {plain_words.term('superbrand')}'s. "
+            f"They are shown here, read-only: change them in the {plain_words.term('superbrand')} step on the "
             "Branding page.")
         self.brand_mirror_note.setVisible(False)
         il.addWidget(self.brand_mirror_note)

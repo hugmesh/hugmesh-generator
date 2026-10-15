@@ -39,6 +39,7 @@ from __future__ import annotations
 import os
 import re
 
+from ..core import plain_words
 from ..core.config import (
     CLIENT_CA_INHERITANCE_NOTE, DOMAIN_IDP_CHOICES, DOMAIN_IDP_OWN,
     DOMAIN_IDP_SUPERDOMAIN, Domain,
@@ -140,7 +141,9 @@ class DomainsScreen:
         if implicit_own_domain(cfg):
             out.append("Row 'own' is this mesh's OWN domain (the cluster domain): "
                        "always served, never removable, its services picked on the "
-                       "next step like every other domain's.")
+                       "next step like every other domain's."
+                       + (f" It is the {plain_words.term('superbrand')}'s row."
+                          if cfg.mode == "mesh" else ""))
         out.append("")
         commands = ["a NAME=add a domain", "d NUMBER=delete"]
         if cfg.mode == "mesh":

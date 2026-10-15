@@ -108,8 +108,8 @@ class WindowFace:
 
     @property
     def reason(self):
-        s = self.page.superbrand
-        return s.reason.text() if not s.reason.isHidden() else ""
+        note = self.page.superbrand.picker.note
+        return note.text() if not note.isHidden() else ""
 
 
 class TextFace:
