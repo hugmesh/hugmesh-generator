@@ -784,7 +784,10 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # not. MEASURED by RUNNING this file on the merge with e3e95369 (GUARD_PREMERGE=0), not computed:
 #     198 of 225 suites are named by a pull_request-triggered workflow
 #     PASS the ungated SET matches its pin exactly (27 suite(s))
-# tests/scripts/run-ungated-lane.sh's header counts (27 of 27, 8 of 27) were taken from
+# Re-measured on the merge with origin/main fc498f8a (GUARD_PREMERGE=0), after other suites
+# landed on main: 198 of 230 suites are named by a pull_request-triggered workflow, and
+# the ungated SET matches its pin exactly (32 suite(s)). The baseline 198 is unchanged.
+# tests/scripts/run-ungated-lane.sh's header counts (32 of 32, 8 of 32) were taken from
 # its E2E_UNGATED_DRY_RUN=1 output for both sets. The "stays 21/22" lines in the entries
 # above are history and are left as written.
 PREMERGE_BASELINE="${GUARD_PREMERGE:-198}"
