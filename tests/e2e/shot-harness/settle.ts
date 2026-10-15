@@ -32,11 +32,28 @@
  * a row's actual, finite content is never touched by this, only loops that
  * were never going to finish on their own.
  *
+ * MASKED LIVE REGIONS (#563). A view can legitimately contain a region that
+ * repaints forever without the Web Animations API (a <canvas> or a
+ * requestAnimationFrame loop — the Character Forge's engine area). Freezing
+ * cannot stop that, so condition 3 could never hold. A row may declare
+ * `mask: [selector, ...]`: those elements' bounding boxes are painted over
+ * (Playwright's screenshot `mask`) in the frames COMPARED for condition 3.
+ * That is deliberately narrower than an opt-out:
+ *   - conditions 1 and 2 (fonts, finite animations) still cover the WHOLE page;
+ *   - condition 3 still compares every pixel OUTSIDE the masked boxes, so
+ *     movement anywhere else still fails the row;
+ *   - a selector that matches nothing masks nothing (the comparison stays
+ *     whole), and an empty selector is an error rather than "mask everything";
+ *   - masked boxes may cover at most MAX_MASK_FRACTION of the viewport, so a
+ *     selector like `body` cannot quietly turn the check off.
+ * Only the comparison is masked: the shot the caller takes afterwards still
+ * contains the live region as it happens to be painted.
+ *
  * FAILS LOUDLY. A page that never satisfies all three within `timeoutMs`
  * throws, naming which condition it was still waiting on. It never returns
  * silently, so a caller can never end up photographing an unsettled frame.
  */
-import type { Page } from '@playwright/test';
+import type { Locator, Page } from '@playwright/test';
 
 export interface SettleOptions {
   /** Total time budget for the whole sequence (fonts + finite animations +
@@ -44,16 +61,53 @@ export interface SettleOptions {
   timeoutMs?: number;
   /** Spacing between the two frames compared for stability. Default 300ms. */
   frameGapMs?: number;
+  /** CSS selectors of live regions (canvas / rAF loops) to paint over in the
+   *  frames compared for stability. See "MASKED LIVE REGIONS" above. Empty or
+   *  omitted means the whole viewport is compared. */
+  mask?: string[];
 }
 
 const DEFAULT_TIMEOUT_MS = 15_000;
 const DEFAULT_FRAME_GAP_MS = 300;
+/** Masked boxes together may cover at most this share of the viewport; past it
+ *  the mask is no longer "a live region" but a way to skip the comparison. */
+export const MAX_MASK_FRACTION = 0.5;
 
 // Stashed on `window` between two separate page.evaluate() calls (freeze in
 // waitForSettle, resume in resumeFrozenAnimations) — a JS Animation object
 // cannot cross the Node/browser boundary as a return value, but the SAME
 // browser-context global is visible to both evaluate() calls.
 const FREEZE_KEY = '__hugmeshSettleFrozenAnimations__';
+
+/**
+ * Resolve the row's mask selectors to Locators, refusing the shapes that would
+ * turn the frame comparison into a no-op. Returns [] when there is nothing to
+ * mask (no selectors, or none of them matches an element right now).
+ */
+async function resolveMask(page: Page, label: string, selectors: string[] | undefined): Promise<Locator[]> {
+  if (!selectors || selectors.length === 0) return [];
+  const locators: Locator[] = [];
+  let covered = 0;
+  for (const sel of selectors) {
+    if (typeof sel !== 'string' || sel.trim() === '') {
+      throw new Error(`${label}: settle mask selector ${JSON.stringify(sel)} is empty — name the live region to mask`);
+    }
+    const loc = page.locator(sel);
+    locators.push(loc);
+    for (const el of await loc.all()) {
+      const box = await el.boundingBox();
+      if (box) covered += box.width * box.height;
+    }
+  }
+  const vp = page.viewportSize();
+  if (vp && covered > MAX_MASK_FRACTION * vp.width * vp.height) {
+    throw new Error(
+      `${label}: settle mask ${JSON.stringify(selectors)} covers more than ${Math.round(MAX_MASK_FRACTION * 100)}% of the `
+      + 'viewport — a mask names one live region, it must not hide the view being compared',
+    );
+  }
+  return locators;
+}
 
 async function raceTimeout<T>(p: Promise<T>, ms: number): Promise<T | 'timeout'> {
   return Promise.race([
@@ -115,12 +169,22 @@ export async function waitForSettle(page: Page, label: string, opts: SettleOptio
     for (const a of infinite) a.pause();
   }, FREEZE_KEY);
 
-  // 4. Two consecutive viewport frames byte-identical.
-  let prev = await page.screenshot();
+  // 4. Two consecutive viewport frames byte-identical (outside any masked
+  //    live region). Resolved after the freeze so the boxes are final-ish; a
+  //    bad mask throws here, after the page is put back the way it was found.
+  let mask: Locator[];
+  try {
+    mask = await resolveMask(page, label, opts.mask);
+  } catch (e) {
+    await resumeFrozenAnimations(page).catch(() => { /* best effort on the way out */ });
+    throw e;
+  }
+  const frame = () => page.screenshot(mask.length ? { mask } : {});
+  let prev = await frame();
   let stable = false;
   while (Date.now() < deadline) {
     await page.waitForTimeout(frameGapMs);
-    const next = await page.screenshot();
+    const next = await frame();
     if (Buffer.compare(prev, next) === 0) { stable = true; break; }
     prev = next;
   }
@@ -128,7 +192,8 @@ export async function waitForSettle(page: Page, label: string, opts: SettleOptio
     await resumeFrozenAnimations(page).catch(() => { /* best effort on the way out */ });
     throw new Error(
       `${label}: settle timed out after ${timeoutMs}ms — two consecutive viewport screenshots `
-      + `${frameGapMs}ms apart never matched (the view never stopped changing)`,
+      + `${frameGapMs}ms apart never matched (the view never stopped changing`
+      + `${mask.length ? ` outside the masked region${mask.length > 1 ? 's' : ''} ${JSON.stringify(opts.mask)}` : ''})`,
     );
   }
 }

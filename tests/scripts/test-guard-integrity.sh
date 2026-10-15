@@ -776,6 +776,20 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # RUNNING this file on the tree with the suite wired (GUARD_PREMERGE=0), not computed:
 #     198 of 222 suites are named by a pull_request-triggered workflow
 #     PASS the ungated SET matches its pin exactly (24 suite(s))
+# 198 of 224 -> 198 of 225 and ungated SET 26 -> 27 on 2026-10-14 for the 13a cut-over
+# matrix (origin/main e3e95369 measures 224 / 26 when run; the 222 / 24 above is the figure
+# at #629's own merge): tests/scripts/test-optional-services-cutover-matrix.sh
+# is a new suite that is NOT named by a pull_request workflow (it is wired post-merge by .gitlab-ci.yml and
+# recorded in PREMERGE_UNGATED above), so the denominator rose and the gated count did
+# not. MEASURED by RUNNING this file on the merge with e3e95369 (GUARD_PREMERGE=0), not computed:
+#     198 of 225 suites are named by a pull_request-triggered workflow
+#     PASS the ungated SET matches its pin exactly (27 suite(s))
+# Re-measured on the merge with origin/main fc498f8a (GUARD_PREMERGE=0), after other suites
+# landed on main: 198 of 230 suites are named by a pull_request-triggered workflow, and
+# the ungated SET matches its pin exactly (32 suite(s)). The baseline 198 is unchanged.
+# tests/scripts/run-ungated-lane.sh's header counts (32 of 32, 8 of 32) were taken from
+# its E2E_UNGATED_DRY_RUN=1 output for both sets. The "stays 21/22" lines in the entries
+# above are history and are left as written.
 PREMERGE_BASELINE="${GUARD_PREMERGE:-198}"
 
 # 182 -> 192 (denominator 205 -> 215) on 2026-09-30 for #385: the census gained a
@@ -981,6 +995,13 @@ PREMERGE_UNGATED=(
   # of which a shell-suites image carries, and it exits 2 (never a silent pass) when
   # given no tree. Run it with `make btf-kconfig-resolve-check KERNEL_TREE=<tree>`.
   tests/scripts/test-btf-kconfig-resolve.sh
+  # NOT an exemption, a wiring gap: the lane that added this suite (#509) may not
+  # edit .github/. It runs every stage4 builder with --print-plan and needs only
+  # bash, sed, paste and timeout, but is UNMEASURED in the shell-suites images
+  # (ALPINE/python:3.12-slim), so check that before gating it. The operator adds the
+  # one line to shell-suites.yml, raises PREMERGE_BASELINE by one and drops this
+  # entry. .gitlab-ci.yml's lint:domain-idp-flag runs it post-merge meanwhile.
+  tests/scripts/test-domain-idp-flag.sh
   # Needs `unshare -Urm` (a private user+mount namespace) to stack REAL bind
   # mounts under a scratch build system and drive the x86 builder's own
   # umount_chroot, stale-mount listing and printed umount commands against the
@@ -1017,6 +1038,11 @@ PREMERGE_UNGATED=(
   # kind cluster up but no metrics-server synced it goes RED with 2 failures.
   # See the "NOT LISTED HERE" entry in .github/workflows/shell-suites.yml.
   tests/scripts/test-kind-metrics-api.sh
+  # Pure offline derivation (python3 + PyYAML + bash), wired post-merge by .gitlab-ci.yml's
+  # lint:optional-services-cutover-matrix. It is NOT in the pull_request gate only because
+  # adding it to .github/workflows/shell-suites.yml is an edit that PR did not make; gate it
+  # there (the job image needs PyYAML) and delete this entry.
+  tests/scripts/test-optional-services-cutover-matrix.sh
   tests/scripts/test-federation-module-slugs.sh
   tests/scripts/test-liquibase-grant-roles.sh
   # RED ON MAIN, and the reds are real defects rather than suite bugs: a jetson
@@ -1065,6 +1091,14 @@ PREMERGE_UNGATED=(
   tests/scripts/test-netpol-egress-scope.sh
   tests/scripts/test-pg-tls-preflight.sh
   tests/scripts/test-service-env-contract.sh
+  # Lands outside the pull_request gate for the reason given above
+  # tests/scripts/test-netpol-egress-scope.sh and tests/scripts/test-pg-tls-preflight.sh:
+  # wiring it there is an edit under .github/workflows/shell-suites.yml, which the
+  # change that added it was not permitted to make. It is offline (python3 with PyYAML
+  # and tomllib, bash; kubectl optional) and is run post-merge by .gitlab-ci.yml's
+  # lint:tuwunel-instance-block-sync. Wire it into shell-suites.yml and DELETE this
+  # entry (PREMERGE_BASELINE then moves 198 -> 199).
+  tests/scripts/test-tuwunel-instance-block-sync.sh
   tests/stack/test-gateway-auth-flag-parity.sh
   tests/stack/test-m2-bootstrap.sh
   # Needs a host tor binary and the PUBLIC Tor network for minutes (it mints a real
