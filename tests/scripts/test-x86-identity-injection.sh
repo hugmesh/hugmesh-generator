@@ -209,5 +209,29 @@ if grep -q "printf 'BRAND_TITLE=%q" "${BUILDER}"; then
   bad "brand.conf is back on printf %q — the applier cannot unescape it (GRUB title gets a literal backslash)"
 else ok "brand.conf is not emitted with %q"; fi
 
+# ── (F) the chat3d games origin follows a custom GAMES_DOMAIN (#470) ─────────────
+# parameterize_games_domain() rewrites the be-gateway `games` host for a custom
+# GAMES_DOMAIN; the matrix-ui HUG_GAMES_URL must follow it, in BOTH builders, or the
+# manifest names a host nothing serves. Run the REAL function from each builder over a
+# staged copy of specs/cluster. (rpi5 has no _sed_rep_escape; x86 needs the one above.)
+info(){ :; }
+for bld in build-x86-host-stage4.sh build-rpi5-stage4.sh; do
+  B="${REPO}/${bld}"
+  eval "$(awk '/^parameterize_games_domain\(\) \{/{p=1} p{print} /^\}/{if(p){exit}}' "${B}" | sed 's/^parameterize_games_domain()/_pgd()/')"
+  type _pgd >/dev/null 2>&1 || { bad "${bld}: could not extract parameterize_games_domain"; continue; }
+  for dom in games.acme.example games.hugmesh.net; do
+    SYSROOT="${WORK}/sys-${bld}-${dom}"; rm -rf "${SYSROOT}"
+    mkdir -p "${SYSROOT}/var/lib/hugmesh"
+    cp -r "${REPO}/specs/cluster" "${SYSROOT}/var/lib/hugmesh/cluster"
+    GAMES_DOMAIN="${dom}"; ( _pgd ) >/dev/null 2>&1
+    T="${SYSROOT}/var/lib/hugmesh/cluster"
+    got="$(grep -oE 'name: HUG_GAMES_URL, value: "[^"]*"' "${T}/manifests/social-ui/deployment.yaml" | sed 's/.*value: //')"
+    route="$(grep -E '^[[:space:]]+host: games\.' "${T}/apps/20-gateway-be.yaml" | head -1 | sed 's/.*host: //')"
+    if [ "${got}" = "\"https://${dom}\"" ] && [ "${route}" = "${dom}" ]; then
+      ok "${bld}: GAMES_DOMAIN=${dom} -> HUG_GAMES_URL ${got} == gateway games host ${route}"
+    else bad "${bld}: GAMES_DOMAIN=${dom} -> HUG_GAMES_URL=${got:-<none>} gateway host=${route:-<none>}"; fi
+  done
+done
+
 echo "== done: ${P} passed, ${F} failed =="
 [ "${F}" -eq 0 ]

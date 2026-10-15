@@ -342,6 +342,16 @@ Plus the games **public host**: a be-gateway host route `id: games`
 entry, and the `/games/**` route-access floor — all added in
 `apps/20-gateway-be.yaml` + `20-schema.sql`.
 
+The chat3d games origin is declared in the manifest too: the `hugmesh-matrix-ui`
+Deployment in `manifests/social-ui/deployment.yaml` carries
+`HUG_GAMES_URL=https://games.hugmesh.net` (the value the chat3d bridge reads as
+`__HUG_GAMES_URL__`), and the stage4 builders rewrite it with the `games` route
+host when `GAMES_DOMAIN` is custom. `[games-origin]` in
+`tests/scripts/cluster_manifest_integrity.py` fails when `apps/50-games.yaml` is
+present and that env is missing or names a different host than the route. The
+matrix-ui image does not yet turn the env into the window global, so until it
+does the app still falls back to its own default (hugmesh-generator#470).
+
 **Why this matters:** `rebrand_sysroot` rewrites `hugmesh.net` and
 `hugmesh-` but historically **left `.games` untouched**, so on the subdomain
 default the public host became `games.<primary>` while Casdoor still minted
