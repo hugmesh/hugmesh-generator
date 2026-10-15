@@ -1303,6 +1303,21 @@ lint:backing-service-endpoints-closure:
   script:
     - bash tests/scripts/test-backing-service-endpoints-closure.sh
 
+# The 13a ApplicationSet cut-over, derived. docs/OPTIONAL-SERVICES.md section 10 named
+# "delete the hardcoded apps" as the remaining step, by a hand-written list that omitted
+# the edge-ai apps and hid that phpbb/games/character-forge own 3-4 Applications while one
+# 13a element covers one manifest directory. This derives the matrix from the registry,
+# 13a and apps/*.yaml, pins the doc block to it, and proves a correct single-app cut-over
+# is not blocked by the real build guard. Nothing here touches a cluster.
+lint:optional-services-cutover-matrix:
+  stage: lint
+  image: python:3
+  tags: [hugmesh-x86]
+  before_script:
+    - pip install --quiet pyyaml
+  script:
+    - bash tests/scripts/test-optional-services-cutover-matrix.sh
+
 # A curated kind profile must apply the companion Applications its own
 # Applications name. KIND_PROFILE=sso listed apps/00-cassandra.yaml (the Bitnami
 # Helm chart) but not apps/00b-cassandra-init.yaml, which creates the keyspaces
@@ -1942,6 +1957,26 @@ lint:patch-stack-src:
   tags: [hugmesh-x86]
   script:
     - bash tests/stack/test-patch-stack-src.sh
+
+# Image-CLI per-domain IdP flag (#509, child of #47). Runs every stage4 builder
+# (found by glob) with --print-plan, which executes the real argument loop and
+# validation and stops before any build step: --domain-idp <domain>=own|superdomain
+# is accepted and threaded into PLAN_DOMAIN_IDP, every malformed value is refused,
+# =superdomain changes no byte of the plan, and a builder or a new eleventh builder
+# that lacks the flag turns it red. No root, no network, no docker.
+lint:domain-idp-flag:
+  stage: lint
+  image: python:3-slim
+  tags: [hugmesh-x86]
+  script:
+    - bash tests/scripts/test-domain-idp-flag.sh
+  rules:
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+    - changes:
+        - build-*-stage4.sh
+        - scripts/_domain-idp-lib.sh
+        - tests/scripts/test-domain-idp-flag.sh
+        - studio/hugmesh_studio/core/config.py
 
 # HTTPS front door wiring (tests/stack/test-tls-front.sh): compose service /
 # nginx terminator / Makefile stack-certs cross-consistency (ports + mount

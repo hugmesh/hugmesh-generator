@@ -76,6 +76,17 @@ spec:
             - { name: DIFFICULTY,   value: "5" }
             # Serve a default robots.txt that disallows scrapers, belt-and-braces.
             - { name: SERVE_ROBOTS_TXT, value: "true" }
+            # The bot policy: rules (allow / deny / challenge / weigh per user-agent,
+            # path, header) and the weight thresholds. It is the hugmesh-anubis-policy
+            # ConfigMap (kustomization.yaml, from botPolicies.yaml in this directory)
+            # mounted read-only below, so the rules are tuned by editing that file, not
+            # by rebuilding the image. Setting POLICY_FNAME REPLACES Anubis's built-in
+            # policy wholesale; the file shipped here starts from the upstream default.
+            - { name: POLICY_FNAME, value: "/etc/anubis/botPolicies.yaml" }
+          volumeMounts:
+            # A directory mount (not subPath) so a policy edit reaches the pod; read-only,
+            # which also keeps readOnlyRootFilesystem meaningful.
+            - { name: policy, mountPath: /etc/anubis, readOnly: true }
           # /healthz is served on the metrics listener (:9090), returns "OK".
           readinessProbe:
             httpGet: { path: /healthz, port: metrics }
@@ -88,6 +99,9 @@ spec:
           resources:
             requests: { cpu: 50m,  memory: 64Mi }
             limits:   { cpu: 500m, memory: 256Mi }
+      volumes:
+        - name: policy
+          configMap: { name: hugmesh-anubis-policy }
 ---
 apiVersion: v1
 kind: Service
