@@ -187,3 +187,62 @@ Feature: The Studio exports a domain's repositories to its GitHub org
     And the folder the rename pointed at still holds only its untouched file
     And no dialog opened in the org-export walk
     And the Studio grab is a non-empty PNG
+
+  # ── an .npmrc with a login written into a URL is dropped too ──────────────
+  # `registry=https://user:token@host/` is a login as much as an _authToken line.
+  @interface:studio
+  Scenario: an .npmrc with a login written into its registry address is dropped @interface:studio
+    When I walk the Go-Live wizard to the export step with a token-free ".npmrc" and a URL-login "web/.npmrc" planted in "hugmesh-parent", apply it with the name typed, and read the published ".npmrc"
+    Then the plan lists "web/.npmrc" as excluded for "hugmesh-parent" because of an npm login and does not list ".npmrc"
+    And the exported "example-parent" holds ".npmrc" with the text "legacy-peer-deps=true" and no "web/.npmrc"
+    And no dialog opened in the org-export walk
+    And the Studio grab is a non-empty PNG
+
+  # ── a token is found in a file whatever its encoding ──────────────────────
+  # A file that is not UTF-8 text, or holds a NUL byte, used to be skipped by the
+  # scan and published with the token in it.
+  @interface:studio
+  Scenario: a token hidden in a latin-1 file or a binary file blocks that repository @interface:studio
+    When I walk the Go-Live wizard to the export step with a fake token hidden in a latin-1 file and in a binary file of "hugmesh-commons" and press Plan
+    Then the plan is blocked for "hugmesh-commons" naming "latin.txt: GitHub token" and "nul.bin: GitHub token" and Apply cannot be armed
+    And the stand-in GitHub holds no repository and every gh call during the plan was a repo view
+    And no dialog opened in the org-export walk
+    And the Studio grab is a non-empty PNG
+
+  # ── the commit holds exactly the files the plan counted ───────────────────
+  # `git add -A` honoured the snapshot's own .gitignore and the person's global
+  # ignore file, so a tracked file could be counted by the plan and left out.
+  @interface:studio
+  Scenario: a tracked file that an ignore rule names is still published @interface:studio
+    When I walk the Go-Live wizard to the export step with "keep.log" tracked in "hugmesh-commons" next to a ".gitignore" that ignores it, under a global git ignore of "*.log", and apply it with the name typed
+    Then the exported "example-commons" holds "keep.log" and ".gitignore"
+    And every exported repository holds exactly as many files as its plan counted
+    And git was never asked to force, mirror, delete or prune
+    And no dialog opened in the org-export walk
+    And the Studio grab is a non-empty PNG
+
+  # ── the typed name belongs to the plan it was typed for ───────────────────
+  @interface:studio
+  Scenario: a name typed for a private plan does not arm a later public plan @interface:studio
+    When I walk the Go-Live wizard to the export step for a saved mesh naming the org "exampleorg", plan it as private with the name typed, flip the picker to public and press Plan again
+    Then the name typed for the private plan was cleared, the public plan is not armed and nothing is created until the name is typed again
+    And no dialog opened in the org-export walk
+    And the Studio grab is a non-empty PNG
+
+  # ── a config file's values have the right types ───────────────────────────
+  # A number for the brand, "no" for a switch (truthy!) and a string for a list
+  # used to crash the CLI or be read the wrong way round, and aborted the GUI.
+  @interface:studio
+  Scenario Outline: a config file whose <key> has the wrong type is refused inline and by the CLI @interface:studio
+    When I walk the Go-Live wizard to the export step and add a config file whose "<key>" is "<value>"
+    Then the export step refuses that config file inline naming "<key>", the CLI exits 2 with no traceback and nothing is exported
+    And the step still plans the saved mesh afterwards
+    And no dialog opened in the org-export walk
+    And the Studio grab is a non-empty PNG
+
+    Examples:
+      # a plain value is JSON (123 is a number); "text:" makes it a string
+      | key               | value                |
+      | brand             | 123                  |
+      | include_generator | text:no              |
+      | skip_repos        | text:hugmesh-parent  |

@@ -378,3 +378,30 @@ def test_the_gui_step_and_the_tui_stage_show_the_same_plan_text(world, tmp_path)
     qapp.processEvents()
     assert page.plan_text.toPlainText().splitlines() == screen.export_plan_lines()
     w.deleteLater()
+
+
+def test_a_config_file_with_a_wrongly_typed_value_is_refused_by_c_and_apply_needs_the_name_typed(
+        world, tmp_path):
+    """The round-1 skeptic's file shapes: a number for the brand, "no" for a switch,
+    a string for a list. `c FILE` says so in the status line and adds nothing; and
+    `apply ORG` takes the name as part of the command every time, so a name typed
+    for one plan cannot arm another."""
+    import json
+    saved_mesh_naming_the_org(world)
+    j, screen = _golive_at_plan(world)
+    screen.stage = "export"
+    for key, value in (("brand", 123), ("include_generator", "no"),
+                       ("extra_repos", "abc"), ("org", 7)):
+        data = world["cfg"].to_dict()
+        data[key] = value
+        path = tmp_path / f"bad-{key}.json"
+        path.write_text(json.dumps(data))
+        j.feed(f"c {path}")
+        assert key in j.status, (key, j.status)
+        assert len(screen.export_candidates(j)) == 1
+    j.feed("v public")
+    j.feed("p")
+    assert screen.export_plan is not None
+    j.feed("apply")
+    assert "type the org name" in j.status
+    assert not any(c.startswith("repo create") for c in world["runner"].gh_calls())

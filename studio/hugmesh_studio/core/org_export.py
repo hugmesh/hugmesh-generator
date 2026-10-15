@@ -135,7 +135,11 @@ SECRET_GLOBS = ("*.pem", "*.key", "*.p12", "*.pfx", "*.jks", "*.keystore", ".env
 ENV_TEMPLATE_NAMES = frozenset({".env.example", ".env.sample", ".env.template"})
 #: An ``.npmrc`` is dropped only when it holds a login. A token-free one
 #: (``legacy-peer-deps=true``) is build configuration that a Dockerfile may COPY.
-_NPMRC_LOGIN_RE = re.compile(r"_authToken|_auth\s*=|_password|:_auth\b", re.IGNORECASE)
+#: A login written INTO a URL (``registry=https://user:token@host/``,
+#: ``proxy=http://user:pass@proxy:3128``) counts too: any user part before an ``@``
+#: that comes before the first ``/`` of the address.
+_NPMRC_LOGIN_RE = re.compile(r"_authToken|_auth\s*=|_password|:_auth\b|://[^/\s@]+@",
+                             re.IGNORECASE)
 
 # The banned markers are spelled from PARTS so this module's own source (which is
 # part of the generator's exported tree) never carries one.
@@ -152,9 +156,18 @@ BANNED_MARKERS = (
     ("GitHub fine-grained token", re.compile(r"\bgithub_pat_[A-Za-z0-9_]{22,}\b")),
     ("AWS access key", re.compile(r"\bAKIA[0-9A-Z]{16}\b")),
     ("Slack token", re.compile(r"\bxox[baprs]-[A-Za-z0-9-]{10,}\b")),
+    # a password written into a URL, but only a LITERAL one of 16+ characters: the
+    # repositories are full of `user:$(PASSWORD)@host`, `user:${VAR}@host` and
+    # `gateway:gateway@host` (placeholders and test logins), and a rule that refused
+    # those would refuse the platform's own manifests
+    ("URL with a literal password", re.compile(
+        r"://[^/\s:@]+:(?![$<{(%\s])[^\s/@$:]{16,}@")),
+    # a header line FOLLOWED BY a base64 body: the bytes of a compiled program (an
+    # engine's .wasm holds the bare PEM header strings, each followed by a NUL, in its
+    # string table) are not a key, and refusing them refused a real repository
     ("private key header", re.compile(
-        r"^-----BEGIN (?:RSA |EC |DSA |OPENSSH |PGP |ENCRYPTED )?PRIVATE KEY-----\s*$",
-        re.MULTILINE)),
+        r"^-----BEGIN (?:RSA |EC |DSA |OPENSSH |PGP |ENCRYPTED )?PRIVATE KEY-----[ \t]*\r?\n\s*"
+        r"(?=[A-Za-z0-9+/])", re.MULTILINE)),
 )
 
 #: What the default rename map deliberately leaves alone (shown in every plan).
@@ -268,6 +281,12 @@ class ExportConfig:
 
     def problems(self) -> list[str]:
         """Why this config cannot be planned; [] when it can."""
+        # the TYPE of every field first: a value of the wrong type (a number for the
+        # brand, "no" for a switch, a string for a list) would otherwise crash the
+        # checks below or, worse, be read the wrong way (a "no" is truthy)
+        shape = config_shape_problems({k: getattr(self, k) for k in _CONFIG_FIELDS})
+        if shape:
+            return shape
         out: list[str] = []
         d = (self.domain or "").strip().lower()
         if not d or not _DOMAIN_RE.match(d):
@@ -294,16 +313,7 @@ class ExportConfig:
         # a bad regex is a problem line, never a traceback at plan time
         out.extend(rename_map_shape_problems(self.rename_map))
         rmap = self.rename_map if isinstance(self.rename_map, dict) else {}
-        tokens = rmap.get("tokens")
-        tokens = tokens if isinstance(tokens, list) else []
-        for rule in tokens:
-            if not isinstance(rule, dict) or "pattern" not in rule or "replace" not in rule:
-                out.append("rename_map: every token rule needs pattern and replace")
-                continue
-            try:
-                re.compile(str(rule["pattern"]))
-            except re.error as exc:
-                out.append(f"rename_map: bad regex {rule['pattern']!r}: {exc}")
+        out.extend(token_rule_problems(rmap.get("tokens")))
         out.extend(repo_rename_problems(rmap.get("repos")))
         if not self.remote_base.endswith("/"):
             out.append("remote_base must end with '/'")
@@ -311,6 +321,57 @@ class ExportConfig:
 
     def to_dict(self) -> dict:
         return asdict(self)
+
+
+_STR_FIELDS = ("domain", "org", "brand", "visibility", "update", "generator_dir",
+               "source_mode", "source_dir", "out_dir", "author_name", "author_email",
+               "remote_base", "ref", "site_title")
+_LIST_FIELDS = ("optional_services", "extra_repos", "skip_repos")
+_BOOL_FIELDS = ("include_generator", "include_build_libraries")
+_CONFIG_FIELDS = tuple(ExportConfig.__dataclass_fields__)
+
+
+def config_shape_problems(values: dict) -> list[str]:
+    """Problem lines for the TYPE of each config value (a hand-written file or a
+    caller can hand over any JSON): text where text belongs, a list of text where a
+    list belongs, a real true/false for a switch, an object for the rename map.
+    The one check both doors share — the config FILE reader and
+    :meth:`ExportConfig.problems` — so a bad value is a message (CLI exit 2, an
+    inline line in the GUI and TUI), never a traceback."""
+    out: list[str] = []
+    for key in _STR_FIELDS:
+        if key in values and not isinstance(values[key], str):
+            out.append(f"{key} must be text, got {type(values[key]).__name__}")
+    for key in _LIST_FIELDS:
+        v = values.get(key, [])
+        if not (isinstance(v, list) and all(isinstance(x, str) for x in v)):
+            out.append(f"{key} must be a list of text values, got {type(v).__name__}")
+    for key in _BOOL_FIELDS:
+        if key in values and not isinstance(values[key], bool):
+            out.append(f"{key} must be true or false, got {values[key]!r}")
+    if "rename_map" in values and not isinstance(values["rename_map"], dict):
+        out.append("rename_map must be an object with repos / tokens / skip_rewrite "
+                   f"/ exclude, got {type(values['rename_map']).__name__}")
+    return out
+
+
+def token_rule_problems(tokens) -> list[str]:
+    """Problem lines for a rename map's ``tokens`` rules: each is an object whose
+    ``pattern`` and ``replace`` are text, the pattern a valid regex and the
+    replacement a valid template (``re`` parses it before any match, so a stray
+    ``\\1`` is caught here and not halfway through a plan)."""
+    out: list[str] = []
+    for rule in tokens if isinstance(tokens, list) else []:
+        if not isinstance(rule, dict) or "pattern" not in rule or "replace" not in rule:
+            out.append("rename_map: every token rule needs pattern and replace")
+        elif not isinstance(rule["pattern"], str) or not isinstance(rule["replace"], str):
+            out.append("rename_map: a token rule's pattern and replace must be text")
+        else:
+            try:
+                re.compile(rule["pattern"]).sub(rule["replace"], "")
+            except re.error as exc:
+                out.append(f"rename_map: bad regex {rule['pattern']!r}: {exc}")
+    return out
 
 
 def rename_map_shape_problems(rmap) -> list[str]:
@@ -375,10 +436,11 @@ def load_rename_map(path: str) -> dict:
     for src, dst in out["repos"].items():
         if not (_REPO_RE.match(str(src)) and _REPO_RE.match(str(dst))):
             raise ValueError(f"rename map: bad repository rename {src!r} -> {dst!r}")
-    for rule in out["tokens"]:
-        if not isinstance(rule, dict) or "pattern" not in rule or "replace" not in rule:
-            raise ValueError("rename map: every token rule needs pattern and replace")
-        re.compile(rule["pattern"])          # fail loudly on a bad regex, at load
+    # a bad regex or template fails loudly HERE, as a ValueError the faces report
+    # inline (re.error is not one, and an uncaught one aborts the GUI)
+    bad = token_rule_problems(out["tokens"])
+    if bad:
+        raise ValueError("; ".join(p.replace("rename_map:", "rename map:", 1) for p in bad))
     return out
 
 
@@ -457,16 +519,16 @@ def _candidates_from_rows(rows, own_name: str, own_org: str, *, own_services=(),
     own = (own_name or "").strip()
     if own and (own_org or "").strip():
         services = _slugs(own_services)
-        for row in rows or ():
-            if str(_get(row, "name", "") or "").strip() == own:
+        for row in _list(rows):
+            if _text(_get(row, "name", "")).strip() == own:
                 recorded = _slugs(_get(row, "optional_services", []))
                 services = recorded + [s for s in services if s not in recorded]
         out.append(ExportCandidate(own, own_org.strip(), services, source_mode, source_dir,
                                    generator_dir, where, path))
         seen.add(own)
-    for row in rows or ():
-        name = str(_get(row, "name", "") or "").strip()
-        org = str(_get(row, "github_org", "") or "").strip()
+    for row in _list(rows):
+        name = _text(_get(row, "name", "")).strip()
+        org = _text(_get(row, "github_org", "")).strip()
         if not name or not org or name in seen:
             continue
         seen.add(name)
@@ -479,6 +541,17 @@ def _get(row, key, default=None):
     if isinstance(row, dict):
         return row.get(key, default)
     return getattr(row, key, default)
+
+
+def _text(value) -> str:
+    """A string read RAW off a record: the string itself, else "" (a hand-edited
+    record can hold a number or a list where text belongs)."""
+    return value if isinstance(value, str) else ""
+
+
+def _list(value) -> list:
+    """A list read RAW off a record, else none."""
+    return list(value) if isinstance(value, (list, tuple)) else []
 
 
 def _slugs(value) -> list[str]:
@@ -523,23 +596,23 @@ def candidates_from_file(path: str, generator_dir: str = "") -> list[ExportCandi
                                 where, path, config=cfg)]
     if isinstance(data.get("config"), dict):          # a saved-mesh record
         c = data["config"]
-        own = str(c.get("cluster_domain") or "").strip()
+        own = _text(c.get("cluster_domain")).strip()
         own_org = ""
-        for row in c.get("domains") or ():
-            if isinstance(row, dict) and str(row.get("name") or "").strip() == own:
-                own_org = str(row.get("github_org") or "")
+        for row in _list(c.get("domains")):
+            if isinstance(row, dict) and _text(row.get("name")).strip() == own:
+                own_org = _text(row.get("github_org"))
         return _candidates_from_rows(
-            c.get("domains") or (), own, own_org,
+            _list(c.get("domains")), own, own_org,
             own_services=_mesh_wide_optional_services(c),
-            source_mode=str(c.get("source_mode") or "clone"),
-            source_dir=str(c.get("source_dir") or ""),
-            generator_dir=str(data.get("generator_dir") or generator_dir or ""),
+            source_mode=_text(c.get("source_mode")) or "clone",
+            source_dir=_text(c.get("source_dir")),
+            generator_dir=_text(data.get("generator_dir")) or generator_dir or "",
             where=f"saved mesh {data.get('label') or data.get('id') or ''}".strip(),
             path=path)
     if "domains" in data:                             # an ImageConfig
         return _candidates_from_rows(
-            data.get("domains") or (), str(data.get("cluster_domain") or ""),
-            str(data.get("cluster_domain_github_org") or ""),
+            _list(data.get("domains")), _text(data.get("cluster_domain")),
+            _text(data.get("cluster_domain_github_org")),
             own_services=_slugs(data.get("cluster_domain_services")),
             source_mode="clone", source_dir="", generator_dir=generator_dir,
             where=where, path=path)
@@ -558,16 +631,16 @@ def saved_mesh_candidates(generator_dir: str = "") -> list[ExportCandidate]:
         return out
     for rec in recs:
         c = rec.config if isinstance(rec.config, dict) else {}
-        own = str(c.get("cluster_domain") or "").strip()
+        own = _text(c.get("cluster_domain")).strip()
         own_org = ""
-        for row in c.get("domains") or ():
-            if isinstance(row, dict) and str(row.get("name") or "").strip() == own:
-                own_org = str(row.get("github_org") or "")
+        for row in _list(c.get("domains")):
+            if isinstance(row, dict) and _text(row.get("name")).strip() == own:
+                own_org = _text(row.get("github_org"))
         out.extend(_candidates_from_rows(
-            c.get("domains") or (), own, own_org,
+            _list(c.get("domains")), own, own_org,
             own_services=_mesh_wide_optional_services(c),
-            source_mode=str(c.get("source_mode") or "clone"),
-            source_dir=str(c.get("source_dir") or ""),
+            source_mode=_text(c.get("source_mode")) or "clone",
+            source_dir=_text(c.get("source_dir")),
             generator_dir=rec.generator_dir or generator_dir,
             where=f"saved mesh {rec.label or rec.id}".strip(), path=rec.path()))
     return out
@@ -587,12 +660,16 @@ def load_config(path: str, generator_dir: str = "", domain: str = "",
         if unknown:
             raise ValueError(f"{path}: unknown keys {', '.join(unknown)}")
         kw = {k: v for k, v in data.items() if k in _GENERIC_KEYS}
-        if kw.get("rename_map") is not None:
-            bad = rename_map_shape_problems(kw["rename_map"])
-            if not bad:
-                bad = repo_rename_problems(kw["rename_map"].get("repos"))
-            if bad:
-                raise ValueError(f"{path}: {'; '.join(bad)}")
+        # the type of every value, before any of them is read: a "no" for a switch
+        # would be truthy, a string for a list would be read one letter at a time
+        bad = config_shape_problems(kw)
+        if not bad and "rename_map" in kw:
+            bad = (rename_map_shape_problems(kw["rename_map"])
+                   or repo_rename_problems(kw["rename_map"].get("repos"))
+                   or token_rule_problems(kw["rename_map"].get("tokens")))
+        if bad:
+            raise ValueError(f"{path}: {'; '.join(bad)}")
+        if "rename_map" in kw:
             kw["rename_map"] = merge_rename_maps({}, kw["rename_map"])
         cfg = ExportConfig(**kw)
         if domain:
@@ -768,13 +845,50 @@ class Plan:
                 "not_renamed": list(self.not_renamed), "notes": list(self.notes)}
 
 
-def _is_text(path: str) -> bool:
+#: A file larger than this is refused rather than half-scanned (a person can exclude
+#: it with the rename map's exclude list).
+SCAN_LIMIT = 128 << 20
+
+
+def _scan_file(path: str) -> tuple[list[str], str, bool]:
+    """``(banned labels, text, clean_utf8)`` for one kept file. The scan reads the
+    BYTES: a file that is not valid UTF-8 is decoded with replacement characters, a
+    file with NUL bytes is scanned a second time with the NULs removed (a UTF-16 file
+    spells every letter with one), and a file that cannot be read or is over
+    :data:`SCAN_LIMIT` is itself a finding — nothing is skipped silently, because a
+    scan that skips what it cannot read publishes it. ``clean_utf8`` says whether the
+    text may be rewritten and written back."""
     try:
+        if os.path.getsize(path) > SCAN_LIMIT:
+            return ["too large to scan for secrets"], "", False
         with open(path, "rb") as fh:
-            head = fh.read(8192)
+            data = fh.read()
     except OSError:
-        return False
-    return b"\0" not in head
+        return ["unreadable, so not scanned for secrets"], "", False
+    try:
+        text, clean = data.decode("utf-8"), b"\0" not in data
+    except UnicodeDecodeError:
+        text, clean = data.decode("utf-8", "replace"), False
+    views = [text]
+    if b"\0" in data:
+        views.append(data.replace(b"\0", b"").decode("utf-8", "replace"))
+    labels = [label for label, rx in BANNED_MARKERS if any(rx.search(v) for v in views)]
+    return labels, text, clean
+
+
+def _tree_entries(workdir: str) -> list[str]:
+    """Every file and link under ``workdir`` (not ``.git``) — what ``git add`` of the
+    folder must hold. A link to a directory is one entry and is not entered."""
+    out: list[str] = []
+    for dirpath, dirnames, filenames in os.walk(workdir):
+        if dirpath == workdir and ".git" in dirnames:
+            dirnames.remove(".git")
+        for d in list(dirnames):
+            if os.path.islink(os.path.join(dirpath, d)):
+                out.append(os.path.relpath(os.path.join(dirpath, d), workdir))
+                dirnames.remove(d)
+        out.extend(os.path.relpath(os.path.join(dirpath, f), workdir) for f in filenames)
+    return sorted(out)
 
 
 def _excluded_reason(rel: str, workdir: str = "") -> str:
@@ -905,7 +1019,6 @@ def _prepare_repo(runner: Runner, name: str, cfg: ExportConfig, rules, out_dir: 
                 os.rmdir(dirpath)
             except OSError:
                 pass
-    rp.files = len(kept)
     settings_note = ""
     rp.kind = _kind(rp.workdir)
     if rp.kind.startswith("java"):
@@ -913,25 +1026,35 @@ def _prepare_repo(runner: Runner, name: str, cfg: ExportConfig, rules, out_dir: 
         # not every Java repository carries the wrapper (the build-config one is a
         # plain jar built with `mvn`): the generated step must not assume it
         rp.has_mvnw = os.path.isfile(os.path.join(rp.workdir, "mvnw"))
+    unrewritten: list[str] = []
     for rel in kept:
         full = os.path.join(rp.workdir, rel)
-        if not _is_text(full):
-            continue
-        try:
-            with open(full, encoding="utf-8") as fh:
-                text = fh.read()
-        except (OSError, UnicodeDecodeError):
-            continue
-        for label, rx in BANNED_MARKERS:
-            if rx.search(text):
-                rp.banned.append(f"{rel}: {label}")
+        if os.path.islink(full):
+            continue                       # a link has no content of its own to scan
+        # EVERY kept file is scanned, as bytes: a file that is not UTF-8, or holds a
+        # NUL, was once skipped here and a token in it was published
+        labels, text, clean_utf8 = _scan_file(full)
+        for label in labels:
+            rp.banned.append(f"{rel}: {label}")
         if _glob_matches(rel, name, skip_globs):
             continue
         new, n = rewrite_text(text, rules)
-        if n:
-            rp.rewrites[rel] = n
-            with open(full, "w", encoding="utf-8") as fh:
-                fh.write(new)
+        if not n:
+            continue
+        if not clean_utf8:
+            # the bytes are published as they are (decoding with replacement and
+            # writing back would corrupt them); the plan says which files it left
+            unrewritten.append(rel)
+            continue
+        rp.rewrites[rel] = n
+        with open(full, "w", encoding="utf-8") as fh:
+            fh.write(new)
+    if unrewritten:
+        shown = ", ".join(unrewritten[:5]) + (" ..." if len(unrewritten) > 5 else "")
+        rp.notes.append(f"{len(unrewritten)} file(s) name a renamed token but are not UTF-8 "
+                        f"text, so they were published byte for byte, not rewritten: {shown}")
+    # what is counted is what the commit must hold (apply checks it): files and links
+    rp.files = len(_tree_entries(rp.workdir))
     if rp.banned:
         rp.action = "refused: banned marker"
         rp.notes.append("remove the marker from the source repository, or drop the "
@@ -1155,8 +1278,15 @@ def _git_env(cfg: ExportConfig, stamp: str) -> dict[str, str]:
     return env
 
 
-def _run_checked(runner: Runner, calls: list[list[str]], argv: list[str], **kw) -> RunResult:
+def _run_checked(runner: Runner, calls: list[list[str]], argv: list[str], *,
+                 stage: bool = False, **kw) -> RunResult:
+    """Run one call through the runner after the never-force check. ``stage`` is the
+    ONE exemption: a local ``git add --force`` of the snapshot folder, which forces
+    FILES past ignore rules and pushes nothing anywhere."""
     for flag in argv:
+        if stage and flag == "--force" and argv[:1] == ["git"] and "add" in argv \
+                and "push" not in argv:
+            continue
         if flag in _FORBIDDEN_FLAGS or (flag.startswith("+") and argv[0] == "git"):
             raise RuntimeError(f"refusing to run {shlex.join(argv)}: {flag} is never used")
     calls.append(list(argv))
@@ -1171,12 +1301,27 @@ def _commit_snapshot(runner, calls, rp: RepoPlan, cfg: ExportConfig, stamp: str,
     if os.path.isdir(os.path.join(wd, ".git")):
         shutil.rmtree(os.path.join(wd, ".git"))
     for argv in (["git", "init", "-q", "-b", "main"],
-                 ["git", "-c", "core.autocrlf=false", "add", "-A"],
+                 # --force: no ignore rule may apply. The snapshot's own .gitignore and
+                 # the person's global core.excludesFile would otherwise leave tracked
+                 # files out of the commit while the plan still counted them
+                 ["git", "-c", "core.autocrlf=false", "add", "-A", "--force"],
                  ["git", "-c", "commit.gpgsign=false", "commit", "-q", "--allow-empty",
                   "-m", message]):
-        r = _run_checked(runner, calls, argv, cwd=wd, env=env)
+        r = _run_checked(runner, calls, argv, cwd=wd, env=env, stage="add" in argv)
         if r.returncode != 0:
             raise RuntimeError(f"{shlex.join(argv)} failed in {wd}: {r.err.strip()}")
+    # the commit must hold every file the plan counted: a count that differs is
+    # reported, never pushed, and never compared as an 'unchanged' tree
+    listed = _run_checked(runner, calls, ["git", "ls-tree", "-r", "-z", "--name-only", "HEAD"],
+                          cwd=wd)
+    held = len([n for n in listed.stdout.split(b"\0") if n])
+    # against the PLAN's count, not a fresh walk of the folder: a folder that changed
+    # since Plan (another plan reusing the same out folder) is no longer what was shown
+    want = rp.files
+    if listed.returncode != 0 or held != want:
+        raise RuntimeError(f"the snapshot commit of {rp.target_full} holds {held} files "
+                           f"but the plan counted {want}: files were left out of (or "
+                           "added to) the commit, nothing is pushed")
     commit = _run_checked(runner, calls, ["git", "rev-parse", "HEAD"], cwd=wd).text.strip()
     tree = _run_checked(runner, calls, ["git", "rev-parse", "HEAD^{tree}"],
                         cwd=wd).text.strip()
@@ -1347,6 +1492,11 @@ def plan_lines(p: Plan) -> list[str]:
                 out.append(f"    {b}")
             for n in r.notes:
                 out.append(f"    {n}")
+    noted = [r for r in [*p.repos, p.site] if r.notes and not r.blocked]
+    if noted:
+        out += ["", "Per-repository notes:"]
+        for r in noted:
+            out += [f"  {r.source or '(generated)'}: {n}" for n in r.notes]
     # what is snapshotted: the ref and commit per repository (the default branch of
     # each checkout, never the branch that happens to be checked out)
     snaps = [r for r in p.repos if r.source_commit]

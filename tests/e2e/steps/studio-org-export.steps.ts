@@ -62,6 +62,13 @@ interface Facts {
     createCallsAfterStaleApply: string[]; bareReposAfterStaleApply: string[];
     freshPlanVisibility: string | null; applyEnabledAfterFreshPlan: boolean;
     createCallsAfterFreshApply: string[] };
+  retype?: { planVisibility: string; applyEnabledBeforeFlip: boolean; confirmTextAfterFlip: string;
+    applyEnabledAfterFlip: boolean; replanVisibility: string | null; confirmTextAfterReplan: string;
+    applyEnabledAfterReplan: boolean; createCallsAfterUnretypedApply: string[];
+    applyEnabledAfterRetype: boolean };
+  badConfig?: { key: string; candidatesBefore: number; candidatesAfter: number; statusShown: boolean;
+    statusText: string; cliRc: number; cliStderr: string; cliTraceback: boolean;
+    reposAfterCli: string[] };
   workFolders?: string[]; sentinel?: string | null; escapeFolder?: string[] | null;
   preexisting?: { target: string; branch: string; refsBefore: string[]; shaBefore: string;
     refsAfter?: string[]; shaAfter?: string };
@@ -126,7 +133,10 @@ const FORBIDDEN = ['--force', '-f', '--force-with-lease', '--mirror', '--delete'
 function forbiddenGitCalls(calls: string[]): string[] {
   return calls.filter((c) => {
     const words = c.split(/\s+/);
-    return words.some((w) => FORBIDDEN.includes(w))
+    // the one local --force is `git add`'s: it stages the snapshot folder past ignore
+    // rules (a global excludes file must not drop a published file) and reaches no remote
+    const stagingOnly = words.includes('add') && !words.includes('push');
+    return words.some((w) => FORBIDDEN.includes(w) && !(stagingOnly && w === '--force'))
       || (words[0] === 'push' && words.some((w) => w.startsWith('+')));
   });
 }
@@ -207,6 +217,52 @@ When('I walk the Go-Live wizard to the export step with a token-free {string} an
       '--plant-file', repo + ':' + plain + '=legacy-peer-deps=true\\n',
       '--plant-file', repo + ':' + tokened + '=//registry.example/:_authToken=${NPM_TOKEN}\\n',
       '--read-file', 'example-parent:.npmrc']);
+  });
+
+When('I walk the Go-Live wizard to the export step with a token-free {string} and a URL-login {string} planted in {string}, apply it with the name typed, and read the published {string}',
+  async ({ world }, plain: string, tokened: string, repo: string, read: string) => {
+    expect(plain).toBe('.npmrc');
+    expect(read).toBe('.npmrc');
+    drive(world, ['--scenario', 'export', '--action', 'apply',
+      '--plant-file', repo + ':' + plain + '=legacy-peer-deps=true\\n',
+      // a login written INTO the registry address, not as an _authToken line
+      '--plant-file', repo + ':' + tokened + '=registry=https://bob:s3cret@npm.example.com/\\n',
+      '--read-file', 'example-parent:.npmrc']);
+  });
+
+// a token spelled from parts, the shape and never a real one
+const FAKE_TOKEN = 'ghp_' + 'A'.repeat(36);
+
+When('I walk the Go-Live wizard to the export step with a fake token hidden in a latin-1 file and in a binary file of {string} and press Plan',
+  async ({ world }, repo: string) => {
+    const latin1 = Buffer.concat([Buffer.from([0x63, 0x61, 0x66, 0xe9, 0x20]),
+      Buffer.from(FAKE_TOKEN + '\n')]).toString('hex');
+    const binary = Buffer.concat([Buffer.from([0, 0, 0, 1, 2, 3, 0]),
+      Buffer.from('header ' + FAKE_TOKEN + '\n')]).toString('hex');
+    drive(world, ['--scenario', 'export', '--action', 'plan',
+      '--plant-bytes', repo + ':latin.txt=' + latin1,
+      '--plant-bytes', repo + ':nul.bin=' + binary]);
+  });
+
+When('I walk the Go-Live wizard to the export step with {string} tracked in {string} next to a {string} that ignores it, under a global git ignore of {string}, and apply it with the name typed',
+  async ({ world }, file: string, repo: string, ignoreFile: string, pattern: string) => {
+    drive(world, ['--scenario', 'export', '--action', 'apply',
+      '--plant-file', repo + ':' + ignoreFile + '=' + pattern + '\\n',
+      '--plant-file', repo + ':' + file + '=tracked\\n',
+      '--global-excludes', pattern]);
+  });
+
+When('I walk the Go-Live wizard to the export step for a saved mesh naming the org {string}, plan it as private with the name typed, flip the picker to public and press Plan again',
+  async ({ world }, org: string) => {
+    expect(org).toBe('exampleorg');
+    drive(world, ['--scenario', 'export', '--action', 'retype-after-flip']);
+  });
+
+When('I walk the Go-Live wizard to the export step and add a config file whose {string} is {string}',
+  async ({ world }, key: string, value: string) => {
+    // a plain value is JSON (123 is a number); 'text:no' is the string "no"
+    const json = value.startsWith('text:') ? JSON.stringify(value.slice(5)) : value;
+    drive(world, ['--scenario', 'export', '--action', 'plan', '--bad-config', `${key}=${json}`]);
   });
 
 When('I walk the Go-Live wizard to the export step and point the Rename map field at a file renaming {string} to {string} and press Plan',
@@ -376,7 +432,10 @@ Then('the result column reports create for every row and Apply is disarmed again
 });
 
 Then('git was never asked to force, mirror, delete or prune', async ({ world }) => {
-  const calls = facts(world).gitCalls ?? [];
+  // only the wizard's own calls: the fixture's set-up (planting a tracked file with
+  // `git add -f`) is logged by the same shim before the walk starts
+  const f = facts(world);
+  const calls = (f.gitCalls ?? []).slice(f.gitCallsAtWalkStart ?? 0);
   expect(calls.length, 'the git shim logged nothing — was the real git used?').toBeGreaterThan(0);
   expect(calls.some((c) => /^push\b/.test(c)), 'no push was logged').toBe(true);
   expect(forbiddenGitCalls(calls), 'git calls with a forbidden flag').toEqual([]);
@@ -493,6 +552,18 @@ Then('the plan is blocked for {string} naming {string} and Apply cannot be armed
     const i = rows.indexOf(row);
     expect((f.tableActions ?? [])[i]).toBe('refused: banned marker');
     expect((f.tableTooltips ?? [])[i], 'the table names the file').toContain(marker);
+    expect(f.planStatus).toContain('blocked');
+    expect(f.applyEnabledTyped, 'Apply armed on a blocked plan').toBe(false);
+  });
+
+Then('the plan is blocked for {string} naming {string} and {string} and Apply cannot be armed',
+  async ({ world }, repo: string, a: string, b: string) => {
+    const f = facts(world);
+    const rows = planRows(world);
+    expect(f.planBlocked, 'the blocked repositories').toEqual([repo]);
+    const row = rows.find((r) => r.source === repo) as PlanRow;
+    expect(row.action).toBe('refused: banned marker');
+    expect([...row.banned].sort()).toEqual([a, b].sort());
     expect(f.planStatus).toContain('blocked');
     expect(f.applyEnabledTyped, 'Apply armed on a blocked plan').toBe(false);
   });
@@ -614,6 +685,64 @@ Then('the exported {string} holds {string} with the text {string} and no {string
     expect(files, `${gone} was published`).not.toContain(gone);
     expect((f.bareFiles ?? {})[`${name}:${file}`]).toBe(text);
   });
+
+// ── what the commit holds is what the plan counted ───────────────────────────
+
+Then('the exported {string} holds {string} and {string}',
+  async ({ world }, name: string, a: string, b: string) => {
+    const files = facts(world).bareRepos?.[name]?.files ?? [];
+    expect(files, `${name} on the stand-in GitHub`).toContain(a);
+    expect(files, `${name} on the stand-in GitHub`).toContain(b);
+  });
+
+Then('every exported repository holds exactly as many files as its plan counted', async ({ world }) => {
+  const f = facts(world);
+  for (const row of planRows(world)) {
+    const name = row.target.split('/')[1];
+    const held = f.bareRepos?.[name]?.files ?? [];
+    expect(held.length, `${name}: files on the stand-in GitHub against ${row.files} in the plan`)
+      .toBe(row.files);
+  }
+});
+
+// ── a name typed for one plan arms no other ──────────────────────────────────
+
+Then('the name typed for the private plan was cleared, the public plan is not armed and nothing is created until the name is typed again',
+  async ({ world }) => {
+    const x = facts(world).retype as NonNullable<Facts['retype']>;
+    expect(x, 'the driver reported no retype walk').toBeDefined();
+    expect(x.planVisibility).toBe('private');
+    expect(x.applyEnabledBeforeFlip, 'the private plan was armed by the typed name').toBe(true);
+    expect(x.confirmTextAfterFlip, 'the typed name survived the flip').toBe('');
+    expect(x.applyEnabledAfterFlip).toBe(false);
+    expect(x.replanVisibility).toBe('public');
+    expect(x.confirmTextAfterReplan, 'the typed name came back with the new plan').toBe('');
+    expect(x.applyEnabledAfterReplan, 'the public plan was armed without retyping').toBe(false);
+    expect(x.createCallsAfterUnretypedApply, 'gh repo create ran from an unconfirmed plan').toEqual([]);
+    expect(x.applyEnabledAfterRetype, 'typing the name again does not arm the new plan').toBe(true);
+  });
+
+// ── a wrongly typed value in a config file ───────────────────────────────────
+
+Then('the export step refuses that config file inline naming {string}, the CLI exits 2 with no traceback and nothing is exported',
+  async ({ world }, key: string) => {
+    const f = facts(world);
+    const b = f.badConfig as NonNullable<Facts['badConfig']>;
+    expect(b, 'the driver reported no bad-config walk').toBeDefined();
+    expect(b.candidatesAfter, 'the bad file was added as a source').toBe(b.candidatesBefore);
+    expect(b.statusShown, 'no inline message').toBe(true);
+    expect(b.statusText).toContain(key);
+    expect(b.cliRc, `the CLI said ${b.cliStderr}`).toBe(2);
+    expect(b.cliStderr).toContain(key);
+    expect(b.cliTraceback, 'the CLI crashed with a traceback').toBe(false);
+    expect(b.reposAfterCli, 'the CLI exported something from a bad file').toEqual([]);
+  });
+
+Then('the step still plans the saved mesh afterwards', async ({ world }) => {
+  const f = facts(world);
+  expect(f.planFailed, `Plan failed: ${f.planStatus}`).toBe(false);
+  expect(planRows(world).length).toBeGreaterThan(0);
+});
 
 // ── a rename that leaves the work folder ─────────────────────────────────────
 

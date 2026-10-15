@@ -273,7 +273,8 @@ class GoLiveScreen:
             try:
                 found = org_export.candidates_from_file(arg, j.generator_dir)
             except (OSError, ValueError) as exc:
-                j.status = f"{arg}: {exc}"
+                # the engine's own messages already start with the path: say it once
+                j.status = str(exc) if str(exc).startswith(arg) else f"{arg}: {exc}"
                 return
             if not found:
                 j.status = f"{arg}: no domain in it names a GitHub org"

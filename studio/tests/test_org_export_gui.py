@@ -506,7 +506,9 @@ def test_plan_then_typed_org_arms_apply_and_the_run_goes_through_the_runner(
     assert not page.apply_btn.isEnabled()            # one apply per plan
     assert "Result file:" in page.plan_text.toPlainText()
     joined = [" ".join(c) for c in world["runner"].calls]
-    assert not any("--force" in c or "--mirror" in c or "--delete" in c for c in joined)
+    # (the one local `git add --force` stages the snapshot folder past ignore rules)
+    assert not any(("--force" in c and " add " not in f" {c} ") or "--mirror" in c
+                   or "--delete" in c for c in joined)
     _shot(golive, "golive-org-export-applied.png", tmp_path)
 
 
@@ -798,6 +800,8 @@ def test_a_banned_marker_is_cleared_from_the_gui_with_the_rename_map_field(
     page.plan_btn.click()
     _wait_worker(page, qapp)
     assert page.plan is not None and not page.plan.blocked
+    assert not page.apply_btn.isEnabled()           # the name typed for the BLOCKED plan is gone
+    page.confirm.setText("exampleorg")
     assert page.apply_btn.isEnabled()
     assert not os.path.isdir(os.path.join(world["gh_root"], "exampleorg"))    # still a plan
 
@@ -852,6 +856,8 @@ def test_flipping_the_visibility_picker_after_plan_disarms_apply_and_creates_not
     page.plan_btn.click()
     _wait_worker(page, qapp)
     assert page.plan is not None and page.plan.config.visibility == "private"
+    assert not page.apply_btn.isEnabled()           # the name is retyped for each plan
+    page.confirm.setText("exampleorg")
     assert page.apply_btn.isEnabled()
     page.apply_btn.click()
     _wait_worker(page, qapp)
@@ -948,3 +954,86 @@ def test_no_modal_dialogs_in_the_new_page_logic():
     assert "QMessageBox" not in src and ".exec(" not in src and "exec_()" not in src
     src = inspect.getsource(domains_mod._OrgCell) + inspect.getsource(domains_mod.DomainsTableBody)
     assert "QMessageBox" not in src and ".exec(" not in src
+
+
+# ── the round-1 skeptic findings ─────────────────────────────────────────────────────
+def test_a_name_typed_for_a_private_plan_does_not_arm_a_later_public_plan(
+        golive, world, qapp, tmp_path):
+    """The typed org name armed ANY later plan: plan private, type the name, flip to
+    public (the plan drops, Apply disarms, the text stayed), Plan again -> Apply was
+    armed on a public export nobody had confirmed. The name belongs to one plan."""
+    page = _planned_page(golive, world, qapp, tmp_path, visibility="private")
+    page.visibility.setCurrentText("public")
+    assert page.plan is None and not page.apply_btn.isEnabled()
+    assert page.confirm.text() == "", "the name typed for the private plan is still there"
+    page.plan_btn.click()
+    _wait_worker(page, qapp)
+    assert page.plan is not None and page.plan.config.visibility == "public"
+    assert not page.apply_btn.isEnabled(), "armed without retyping the name"
+    page.confirm.setText("exampleorg")
+    assert page.apply_btn.isEnabled()
+    assert _created(world) == []
+
+
+def test_a_name_typed_while_a_plan_runs_does_not_arm_the_plan_that_arrives(
+        golive, world, qapp, tmp_path):
+    saved_mesh_naming_the_org(world)
+    golive.export_runner = world["runner"]
+    golive.export_remote_base = f"file://{world['gh_root']}/"
+    _at_generate(golive)
+    golive.next()
+    page = golive.currentPage()
+    page.out_dir.setText(str(tmp_path / "out"))
+    page.plan_btn.click()
+    page.confirm.setText("exampleorg")            # typed before any plan can be read
+    _wait_worker(page, qapp)
+    assert page.plan is not None and not page.plan.blocked
+    assert not page.apply_btn.isEnabled()
+
+
+def test_a_config_file_with_a_wrongly_typed_value_is_refused_inline_and_nothing_aborts(
+        golive, world, qapp, tmp_path):
+    """`"brand": 123` used to be added as a candidate; Plan then raised inside the
+    slot, which aborts the whole Studio process under PyQt6 (rc 134)."""
+    import json
+    saved_mesh_naming_the_org(world)
+    _at_generate(golive)
+    golive.next()
+    page = golive.currentPage()
+    for key, value in (("brand", 123), ("org", 7), ("include_generator", "no"),
+                       ("skip_repos", "hugmesh-parent"), ("domain", ["x"])):
+        data = world["cfg"].to_dict()
+        data[key] = value
+        path = tmp_path / f"bad-{key}.json"
+        path.write_text(json.dumps(data))
+        before = page.source.count()
+        page.config_path.setText(str(path))
+        page._add_config()
+        assert page.source.count() == before, key
+        assert not page.status.isHidden() and key in page.status.text(), (key, page.status.text())
+    _settle(qapp, 10)
+    # the path is said ONCE (the engine's message already starts with it), and the
+    # red line is tall enough for its wrapped text, not clipped
+    assert page.status.text().count(str(path)) == 1, page.status.text()
+    assert page.status.height() >= page.status.heightForWidth(page.status.width()) - 2, \
+        (page.status.height(), page.status.heightForWidth(page.status.width()))
+    _shot(golive, "golive-org-export-bad-config-refused.png", tmp_path)
+    page.plan_btn.click()                         # the saved mesh's own plan still works
+    _wait_worker(page, qapp)
+    assert page.plan is not None
+
+
+def test_a_settings_error_inside_plan_is_said_inline_never_raised_out_of_the_slot(
+        golive, world, qapp, tmp_path, monkeypatch):
+    """Whatever the settings hold, the Plan slot must not let an exception out."""
+    saved_mesh_naming_the_org(world)
+    _at_generate(golive)
+    golive.next()
+    page = golive.currentPage()
+
+    def boom(self):
+        raise AttributeError("'int' object has no attribute 'strip'")
+    monkeypatch.setattr(oe.ExportConfig, "problems", boom)
+    page.plan_btn.click()                         # must return
+    assert not page.status.isHidden() and "could not be read" in page.status.text()
+    assert page.plan is None and not page.apply_btn.isEnabled()

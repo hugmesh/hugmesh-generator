@@ -620,6 +620,18 @@ def test_other_banned_markers_are_recognised():
     found = {label for label, rx in oe.BANNED_MARKERS
              if rx.search("x\n-----BEGIN RSA PRIVATE KEY-----\nabc\n")}
     assert found == {"private key header"}
+    # the bare header strings inside a compiled program (an engine's .wasm string table:
+    # header, NUL, footer, NUL ...) are not a key; the body is what makes it one
+    wasm_like = "x\0-----BEGIN PRIVATE KEY-----\n\0-----END PRIVATE KEY-----\n\0-----BEGIN EC PRIVATE KEY-----\0"
+    assert not any(rx.search(wasm_like) for _l, rx in oe.BANNED_MARKERS)
+    # ... including the view the scan takes with the NULs REMOVED (UTF-16 text), where
+    # those strings land on their own lines: this is what refused a real repository
+    assert not any(rx.search(wasm_like.replace("\0", "")) for _l, rx in oe.BANNED_MARKERS)
+    old_rule = re.compile(r"^-----BEGIN (?:RSA |EC |DSA |OPENSSH |PGP |ENCRYPTED )?PRIVATE "
+                          r"KEY-----\s*$", re.MULTILINE)
+    assert old_rule.search("x\n" + wasm_like.replace("\0", ""))      # the old rule did match
+    assert any(rx.search("-----BEGIN OPENSSH PRIVATE KEY-----\r\nb3BlbnNzaC1rZXk=\n")
+               for _l, rx in oe.BANNED_MARKERS)
     # a quoted MENTION of the header (a scanner's own pattern) is not a key
     assert not any(rx.search('pat="-----BEGIN PRIVATE KEY-----"') for _l, rx in oe.BANNED_MARKERS)
     assert any(rx.search("token ghp_" + "a" * 36) for _l, rx in oe.BANNED_MARKERS)
@@ -652,7 +664,11 @@ def test_apply_pushes_one_fresh_commit_per_repository_never_force(world):
     # never a force push, a delete, a mirror
     for call in res.calls:
         joined = " ".join(call)
-        assert "--force" not in joined and "--mirror" not in joined
+        # the ONE local --force is `git add`'s, staging the snapshot folder past ignore
+        # rules; no call that talks to a remote or to gh carries one
+        if not (call[:1] == ["git"] and "add" in call and "push" not in call):
+            assert "--force" not in joined
+        assert "--mirror" not in joined
         assert "--delete" not in joined and " -f " not in f" {joined} "
         if call[:2] == ["git", "push"]:
             assert call[-1].startswith("HEAD:refs/heads/")
@@ -1460,3 +1476,311 @@ def test_a_saved_mesh_reopened_through_the_bootstrap_loader_keeps_every_org():
     bad = dict(on_disk)
     bad["domains"] = [dict(on_disk["domains"][0], github_org="bad-")]
     assert "github_org" not in dict(LocalMeshBootstrapConfig.from_dict(bad).domains[0])
+
+
+# ── the round-1 skeptic findings: what the scan, the commit and the config read ─────
+def _plant_bytes(src, files):
+    """Like _plant, but the values are BYTES (a latin-1 file, a binary file)."""
+    for rel, data in files.items():
+        full = os.path.join(src, rel)
+        os.makedirs(os.path.dirname(full) or src, exist_ok=True)
+        with open(full, "wb") as fh:
+            fh.write(data)
+    _git(src, "add", "-A", "-f")
+    _git(src, "-c", "commit.gpgsign=false", "commit", "-q", "-m", "plant")
+    _git(src, "update-ref", "refs/remotes/origin/main", "HEAD")
+
+
+_GH_TOKEN = b"ghp_" + b"A" * 36
+
+
+@pytest.mark.parametrize("name,data", [
+    ("latin.txt", b"caf\xe9 " + _GH_TOKEN + b"\n"),               # not valid UTF-8
+    ("nul.bin", b"\0\0\0binary header\0 " + _GH_TOKEN + b"\n"),    # NUL in the first 8 KB
+    ("utf16.txt", ("token " + _GH_TOKEN.decode()).encode("utf-16")),   # a NUL between letters
+    ("late-nul.dat", b"x" * 20000 + b"\0" + _GH_TOKEN),
+])
+def test_a_banned_marker_in_a_non_utf8_or_binary_file_still_refuses(world, name, data):
+    """The scan used to skip a file that was not valid UTF-8 or held a NUL in its first
+    8 KB, so a token planted there was PUBLISHED. Every kept file is scanned as bytes."""
+    cfg, runner = world["cfg"], world["runner"]
+    _plant_bytes(os.path.join(world["src"], "hugmesh-commons"), {name: data})
+    p = oe.plan(cfg, runner, stamp="20260101T000000Z", probe=False)
+    rp = next(r for r in p.repos if r.source == "hugmesh-commons")
+    assert rp.action == "refused: banned marker", (rp.action, rp.banned)
+    assert rp.banned == [f"{name}: GitHub token"]
+    res = oe.apply(p, runner)
+    assert not os.path.isdir(_bare(world, "example-commons")), "a refused repository was pushed"
+    assert next(r for r in res.repos if r.target.endswith("example-commons")).skipped
+
+
+def test_a_clean_non_utf8_or_binary_file_is_published_byte_for_byte_and_noted(world):
+    cfg, runner = world["cfg"], world["runner"]
+    blob = b"caf\xe9 hugmesh-commons\n\0\x01\x02"
+    _plant_bytes(os.path.join(world["src"], "hugmesh-commons"), {"data.bin": blob})
+    p = oe.plan(cfg, runner, stamp="20260101T000000Z", probe=False)
+    rp = next(r for r in p.repos if r.source == "hugmesh-commons")
+    assert not rp.blocked
+    assert open(os.path.join(rp.workdir, "data.bin"), "rb").read() == blob      # never rewritten
+    assert any("data.bin" in n and "not rewritten" in n for n in rp.notes), rp.notes
+    # and the plan text a person reads says so too (it used to show notes only for
+    # blocked repositories)
+    assert any("data.bin" in ln and "not rewritten" in ln for ln in oe.plan_lines(p)), \
+        oe.plan_lines(p)
+
+
+def test_a_compiled_program_holding_pem_header_strings_is_not_refused(tmp_path):
+    """hugmesh-character-forge-bff-api ships a Godot .wasm whose string table holds the
+    bare PEM header strings; the byte scan (NULs removed) used to call it a private key."""
+    f = tmp_path / "index.wasm"
+    f.write_bytes(b"\0asm\x01\0\0\0" + b"-----BEGIN PRIVATE KEY-----\n\0-----END PRIVATE KEY-----\n\0"
+                  b"-----BEGIN EC PRIVATE KEY-----\0-----END EC PRIVATE KEY-----\n\0\xff\xfe")
+    labels, _text, clean = oe._scan_file(str(f))
+    assert labels == [] and clean is False
+
+
+def test_a_url_with_a_literal_password_is_banned_but_placeholders_are_not():
+    def hit(text):
+        return [lbl for lbl, rx in oe.BANNED_MARKERS if rx.search(text)]
+    assert hit("git clone https://bob:" + "x" * 20 + "@host.example/r.git") == ["URL with a literal password"]
+    # what the real repositories hold: placeholders, shell and k8s expansions, test logins
+    for ok in ("r2dbc:postgresql://admin_bff:$(ROUTE_ACCESS_DB_PASSWORD)@route-access-db:5432/g",
+               "https://oauth2:$TOKEN@github.com/x", "clickhouse://snap:${CLICKHOUSE_PASSWORD}@ch:9000",
+               "r2dbc:postgresql://gateway:gateway@route-access-db:5432/gateway",
+               "https://user:<password>@host/", "https://user:{{PASSWORD}}@host/"):
+        assert hit(ok) == [], ok
+
+
+@pytest.mark.parametrize("line", [
+    "registry=https://bob:s3cret@npm.example.com/",
+    "proxy=http://u:p@proxy.example:3128",
+    "@scope:registry=https://token123@npm.example.com/",
+])
+def test_an_npmrc_with_a_login_inside_a_url_is_dropped(world, line):
+    """A login written into a registry or proxy URL is a login like _authToken is."""
+    cfg, runner = world["cfg"], world["runner"]
+    _plant(os.path.join(world["src"], "hugmesh-parent"),
+           {"web/.npmrc": line + "\n", ".npmrc": "legacy-peer-deps=true\n"})
+    p = oe.plan(cfg, runner, stamp="20260101T000000Z", probe=False)
+    rp = next(r for r in p.repos if r.source == "hugmesh-parent")
+    assert "web/.npmrc: npm login in .npmrc" in rp.excluded, rp.excluded
+    assert not os.path.exists(os.path.join(rp.workdir, "web", ".npmrc"))
+    assert os.path.isfile(os.path.join(rp.workdir, ".npmrc"))
+
+
+@pytest.mark.parametrize("line", [
+    "legacy-peer-deps=true", "registry=https://registry.npmjs.org/",
+    "@scope:registry=https://npm.pkg.github.com", "//npm.pkg.github.com/:always-auth=true"])
+def test_a_token_free_npmrc_line_is_still_kept(tmp_path, line):
+    (tmp_path / ".npmrc").write_text(line + "\n")
+    assert oe._excluded_reason(".npmrc", str(tmp_path)) == ""
+
+
+def _published_files(world, target):
+    return _git(_bare(world, target), "ls-tree", "-r", "--name-only", "main").splitlines()
+
+
+def test_a_tracked_file_the_snapshots_gitignore_names_is_still_published(world):
+    """`git add -A` honoured the snapshot's OWN .gitignore, so a force-tracked file the
+    ignore rule names was counted by the plan and left out of the commit."""
+    cfg, runner = world["cfg"], world["runner"]
+    _plant(os.path.join(world["src"], "hugmesh-commons"),
+           {".gitignore": "*.log\n", "keep.log": "tracked\n"})
+    p = oe.plan(cfg, runner, stamp="20260101T000000Z", probe=False)
+    res = oe.apply(p, runner)
+    assert res.failures == []
+    rp = next(r for r in p.repos if r.source == "hugmesh-commons")
+    published = _published_files(world, "example-commons")
+    assert "keep.log" in published
+    assert len(published) == rp.files, (len(published), rp.files)
+
+
+def test_a_global_excludes_file_never_drops_a_published_file(world, monkeypatch):
+    """The person's own core.excludesFile (any machine may have one) must not change
+    what is pushed: the plan counted these files, apply must publish them."""
+    cfg, runner = world["cfg"], world["runner"]
+    _plant(os.path.join(world["src"], "hugmesh-commons"),
+           {"audit.log": "x\n", ".idea/x.xml": "<x/>\n", "src/a.txt": "a\n"})
+    excl = world["tmp"] / "global-excludes"
+    excl.write_text("*.log\n.idea\n")
+    gcfg = world["tmp"] / "global-gitconfig"
+    gcfg.write_text(f"[core]\n\texcludesFile = {excl}\n")
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(gcfg))
+    p = oe.plan(cfg, runner, stamp="20260101T000000Z", probe=False)
+    res = oe.apply(p, runner)
+    assert res.failures == []
+    published = _published_files(world, "example-commons")
+    for must in ("audit.log", ".idea/x.xml", "src/a.txt"):
+        assert must in published, published
+    for rp in p.repos:
+        assert len(_published_files(world, rp.target)) == rp.files, rp.target
+
+
+def test_apply_reports_a_commit_that_left_out_a_planned_file(world):
+    """If the commit holds fewer files than the plan counted, the repository is
+    reported skipped and nothing is pushed — never `done` on a truncated tree."""
+    class DropsOneFile(RecordingRunner):
+        def run(self, argv, *, cwd=None, env=None, timeout=600):
+            if argv[:1] == ["git"] and "commit" in argv and cwd:
+                listed = super().run(["git", "ls-files"], cwd=cwd).text.split()
+                if "keep.txt" in listed:
+                    super().run(["git", "rm", "-q", "--cached", "keep.txt"], cwd=cwd)
+            return super().run(argv, cwd=cwd, env=env, timeout=timeout)
+    r0 = world["runner"]
+    runner = DropsOneFile(r0.fake_bin, r0.gh_root, r0.gh_log)
+    _plant(os.path.join(world["src"], "hugmesh-commons"), {"keep.txt": "k\n"})
+    p = oe.plan(world["cfg"], runner, stamp="20260101T000000Z", probe=False)
+    res = oe.apply(p, runner)
+    bad = next(r for r in res.repos if r.target.endswith("example-commons"))
+    assert bad.skipped and "left out" in bad.skipped, bad
+    assert not os.path.isdir(_bare(world, "example-commons"))
+    assert all(r.ok for r in res.repos if r is not bad)
+
+
+def test_a_symlink_is_counted_by_the_plan_and_published(world):
+    cfg, runner = world["cfg"], world["runner"]
+    src = os.path.join(world["src"], "hugmesh-commons")
+    os.symlink("README.md", os.path.join(src, "link.md"))
+    _git(src, "add", "-A", "-f")
+    _git(src, "-c", "commit.gpgsign=false", "commit", "-q", "-m", "link")
+    _git(src, "update-ref", "refs/remotes/origin/main", "HEAD")
+    p = oe.plan(cfg, runner, stamp="20260101T000000Z", probe=False)
+    assert oe.apply(p, runner).failures == []
+    rp = next(r for r in p.repos if r.source == "hugmesh-commons")
+    assert "link.md" in _published_files(world, "example-commons")
+    assert len(_published_files(world, "example-commons")) == rp.files
+
+
+# every field has one type; a wrong one must come back as a problem line, never a crash
+_BAD_CONFIGS = [
+    ("brand", 123), ("org", 7), ("domain", ["x"]), ("source_dir", 3), ("visibility", 1),
+    ("update", None), ("generator_dir", 5), ("out_dir", ["a"]), ("remote_base", 9),
+    ("author_name", 1), ("ref", {}), ("site_title", 4), ("source_mode", 2),
+    ("include_generator", "no"), ("include_generator", 0), ("include_build_libraries", "false"),
+    ("extra_repos", "abc"), ("skip_repos", "hugmesh-parent"), ("skip_repos", 5),
+    ("optional_services", "phpbb"), ("extra_repos", [1, 2]), ("skip_repos", [None]),
+    ("rename_map", 3), ("rename_map", None), ("rename_map", ["x"]),
+]
+
+
+@pytest.mark.parametrize("key,value", _BAD_CONFIGS)
+def test_a_wrongly_typed_config_value_is_a_problem_line_never_a_crash(world, key, value):
+    base = world["cfg"].to_dict()
+    base[key] = value
+    cfg = oe.ExportConfig(**base)
+    problems = cfg.problems()                          # must not raise
+    assert problems and any(key in p for p in problems), problems
+    with pytest.raises(ValueError):
+        oe.plan(cfg, world["runner"], probe=False)     # plan refuses it as a ValueError
+
+
+@pytest.mark.parametrize("key,value", _BAD_CONFIGS)
+def test_a_config_file_with_a_wrongly_typed_value_is_refused_naming_the_key(world, key, value):
+    path = world["tmp"] / "bad.json"
+    data = world["cfg"].to_dict()
+    data[key] = value
+    path.write_text(json.dumps(data))
+    with pytest.raises(ValueError, match=key):
+        oe.load_config(str(path))
+    with pytest.raises(ValueError, match=key):
+        oe.candidates_from_file(str(path))
+
+
+@pytest.mark.parametrize("key,value", [("include_generator", "no"), ("extra_repos", "abc"),
+                                       ("skip_repos", 5), ("brand", 123), ("org", 7),
+                                       ("domain", ["x"]), ("rename_map", 3)])
+def test_the_cli_says_exit_2_for_a_wrongly_typed_config_value(world, key, value):
+    """Exit 2 is the CLI's word for bad input; these used to be a traceback (rc 1) or,
+    worse, an opt-out read the wrong way round (`"no"` is truthy) that APPLY acted on."""
+    path = world["tmp"] / "bad.json"
+    data = world["cfg"].to_dict()
+    data[key] = value
+    path.write_text(json.dumps(data))
+    from _org_export_helpers import studio_parser
+    args = studio_parser().parse_args(["--config", str(path), "--org-export", "APPLY",
+                                       "--apply", "--no-probe"])
+    errs = []
+    rc = oe.run_cli(args, world["gen"], out=lambda m: None, err=errs.append)
+    assert rc == 2 and any(key in e for e in errs), (rc, errs)
+    assert not os.path.isdir(os.path.join(world["gh_root"], "exampleorg"))
+
+
+def test_a_token_rule_with_a_non_string_pattern_or_a_bad_template_is_a_problem(world):
+    for rule in ({"pattern": 5, "replace": "x"}, {"pattern": "a", "replace": 7},
+                 {"pattern": "a", "replace": r"\1"}):
+        cfg = oe.ExportConfig(**{**world["cfg"].to_dict(),
+                                 "rename_map": {"tokens": [rule]}})
+        assert any("rename_map" in p for p in cfg.problems()), rule
+        path = world["tmp"] / "map.json"
+        path.write_text(json.dumps({"tokens": [rule]}))
+        with pytest.raises(ValueError):
+            oe.load_rename_map(str(path))
+
+
+def test_a_saved_mesh_or_image_config_with_odd_types_yields_no_candidates_never_a_crash(tmp_path):
+    for data in ({"domains": 5, "cluster_domain": "a.example"},
+                 {"config": {"domains": "x", "cluster_domain": 3}},
+                 {"domains": [1, "x", None], "cluster_domain": ["z"], "cluster_domain_github_org": 4}):
+        path = tmp_path / "odd.json"
+        path.write_text(json.dumps(data))
+        assert oe.candidates_from_file(str(path)) == []
+
+
+def test_a_folder_that_changed_since_plan_is_not_pushed(world):
+    """The commit is compared with the PLAN's count: a file added to the work folder
+    after Plan (another plan reusing the same out folder) is not what was shown."""
+    cfg, runner = world["cfg"], world["runner"]
+    p = oe.plan(cfg, runner, stamp="20260101T000000Z", probe=False)
+    rp = next(r for r in p.repos if r.source == "hugmesh-commons")
+    with open(os.path.join(rp.workdir, "added-after-plan.txt"), "w", encoding="utf-8") as fh:
+        fh.write("x\n")
+    res = oe.apply(p, runner)
+    bad = next(r for r in res.repos if r.target.endswith("example-commons"))
+    assert bad.skipped and "the plan counted" in bad.skipped, bad
+    assert not os.path.isdir(_bare(world, "example-commons"))
+
+
+def test_the_staging_exemption_allows_only_a_local_git_add_force(world):
+    """`stage=True` is the ONE hole in the never-force check: it admits `--force` on
+    `git add` and on nothing else, not even with the flag set."""
+    runner = world["runner"]
+    calls: list = []
+    for argv in (["git", "push", "--force", "x"], ["git", "add", "-f", "x"],
+                 ["git", "add", "--force-with-lease", "x"], ["git", "push", "--mirror", "x"],
+                 ["git", "add", "--force", "x", "--delete"],
+                 ["git", "push", "--force", "add"],            # 'add' as a word of a push
+                 ["gh", "repo", "create", "--force"]):
+        with pytest.raises(RuntimeError, match="never used"):
+            oe._run_checked(runner, calls, argv, stage=True)
+    assert calls == [] and not any(c[:2] == ["git", "push"] for c in runner.calls)
+    # and without the flag even `git add --force` is refused
+    with pytest.raises(RuntimeError, match="never used"):
+        oe._run_checked(runner, calls, ["git", "add", "--force", "x"])
+    ok = oe._run_checked(runner, calls, ["git", "-c", "core.autocrlf=false", "add", "--force",
+                                         "--dry-run", "."], cwd=world["tmp"], stage=True)
+    assert calls and calls[-1][-3:] == ["--force", "--dry-run", "."], (ok.returncode, calls)
+
+
+def test_a_file_too_large_to_scan_or_unreadable_refuses_the_repository(world, monkeypatch):
+    """The two fail-closed paths of the scan: a finding, never a silent skip."""
+    cfg, runner = world["cfg"], world["runner"]
+    src = os.path.join(world["src"], "hugmesh-commons")
+    _plant(src, {"big.txt": "x" * 4096 + "\n", "ok.txt": "fine\n"})
+    monkeypatch.setattr(oe, "SCAN_LIMIT", 1024)
+    p = oe.plan(cfg, runner, stamp="20260101T000000Z", probe=False)
+    rp = next(r for r in p.repos if r.source == "hugmesh-commons")
+    assert rp.action == "refused: banned marker"
+    assert "big.txt: too large to scan for secrets" in rp.banned, rp.banned
+    monkeypatch.setattr(oe, "SCAN_LIMIT", 128 << 20)
+
+    real_open = open
+
+    def flaky_open(file, mode="r", *a, **kw):
+        if str(file).endswith("/ok.txt") and "b" in mode and "w" not in mode:
+            raise PermissionError("denied")
+        return real_open(file, mode, *a, **kw)
+    monkeypatch.setattr("builtins.open", flaky_open)
+    p = oe.plan(cfg, runner, stamp="20260101T000000Z", probe=False)
+    rp = next(r for r in p.repos if r.source == "hugmesh-commons")
+    assert rp.action == "refused: banned marker"
+    assert "ok.txt: unreadable, so not scanned for secrets" in rp.banned, rp.banned

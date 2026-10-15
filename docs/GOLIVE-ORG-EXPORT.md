@@ -65,7 +65,9 @@ mesh on this machine names an org, or when you add a config file on the step its
 3. drops `CLAUDE.md`, `.claude/`, `.stack-src`, `node_modules`, build output and
    secret-shaped files (`*.pem`, `*.key`, `.env`, `id_rsa*`, …) and lists each one.
    Two names are decided by content: an `.npmrc` is dropped only when it holds a
-   login (`_authToken`, `_auth=`, `_password`), so a token-free one such as
+   login (`_authToken`, `_auth=`, `_password`, or a user part written into a URL such
+   as `registry=https://user:token@host/` or `proxy=http://user:pass@host:3128`), so a
+   token-free one such as
    `legacy-peer-deps=true`, which a Dockerfile may `COPY`, stays; and `.env.example`,
    `.env.sample` and `.env.template` stay (every other `.env.*` is dropped). An
    `.npmrc` that holds only a placeholder such as `${NPM_TOKEN}` still counts as a
@@ -74,7 +76,16 @@ mesh on this machine names an org, or when you add a config file on the step its
    dropped `.npmrc` then breaks: the plan lists the drop, not the dangling `COPY`;
 4. **refuses** a repository, naming the file, when a banned marker is found in what
    would be published: a co-author trailer, a tool footer, an assistant session link,
-   an API key, a private-key header;
+   an API key, a private-key header followed by its key body (the bare header strings
+   a compiled program such as an engine's `.wasm` carries are not a key), a URL with a literal password of 16 or more
+   characters (`https://user:<long secret>@host`; placeholders such as
+   `user:$(PASSWORD)@host` and short test logins are left alone, because the
+   platform's own manifests are full of them). EVERY kept file is scanned as bytes:
+   one that is not valid UTF-8 is scanned with replacement characters, one with NUL
+   bytes is scanned a second time with the NULs removed (UTF-16 text), and one that
+   cannot be read or is over 128 MiB is itself a finding, so nothing is skipped
+   silently. A file that is not UTF-8 text is published byte for byte, never rewritten;
+   the plan says so when such a file names a renamed token;
 5. renames: `hugmesh-<name>` becomes `<brand>-<name>` (`exampleorg -> example`, so
    `hugmesh-gateway -> example-gateway`); inside files the org path segment
    (`ghcr.io/hugmesh/`, `github.com/hugmesh/`, `maven.pkg.github.com/hugmesh/`,
@@ -140,6 +151,15 @@ red here before it blocks an export.
 
 ### Pointing the step at a config file
 
+Every value has one type, and a wrong one is a message, never a crash or a silent
+misreading: text for `domain`, `org`, `brand`, `visibility`, `update`, the folders,
+`author_*`, `remote_base`, `ref` and `site_title`; a list of text for `optional_services`,
+`extra_repos` and `skip_repos`; `true` or `false` for `include_generator` and
+`include_build_libraries` (a `"no"` would be truthy); an object for `rename_map`, whose
+`tokens` need text `pattern` and `replace` that compile. From a terminal that is exit 2
+naming the key; in the GUI and the text-mode step the file is refused inline and not
+added.
+
 The GUI step's **Config file -> Add** and the TUI's `c FILE` accept an export config, an
 image config or a saved-mesh record. A generic export config is taken WHOLE: its
 `skip_repos`, `include_generator`, `include_build_libraries`, `extra_repos`, `brand`,
@@ -166,7 +186,10 @@ confirmation field (inline; no dialog; letter case does not matter, as GitHub sl
 are case-insensitive). Apply runs exactly the plan on screen, so changing anything that
 shapes the plan after Plan (the domain, visibility, existing-repository choice, source
 folder, plan folder or rename map, or adding a config file) clears that plan and
-disarms Apply until you press Plan again; the text-mode step does the same. In the
+disarms Apply until you press Plan again, and the typed name is cleared with it, so
+a name typed for one plan (a private one, say) never arms a later one (the same
+repositories, made public): type it again for each plan. The text-mode step does the
+same: `apply <org>` carries the name in the command. In the
 text-mode step it is `apply <org>`.
 From a terminal it is `--org-export APPLY --apply`.
 
@@ -175,6 +198,11 @@ For every repository that is not blocked, apply:
 * creates the target with `gh repo create <org>/<name> --private` when it does not
   exist (visibility is a plan field: private by default, `public` or `internal` on
   request; an existing repository's visibility is never changed);
+* stages the snapshot folder with `git add --force`, so no ignore rule (the
+  snapshot's own `.gitignore`, your global `core.excludesFile`) can leave a tracked
+  file out, and checks that the commit holds exactly the files the plan counted: a
+  commit that holds fewer is reported skipped and never pushed. This is the only
+  `--force` the export uses, it is local, and it touches no remote;
 * commits the snapshot once, authored as **you** — the git identity of the person
   running the export (`git config user.name` / `user.email`), unless the config names
   `author_name` / `author_email`. No person is built in. With neither, apply refuses

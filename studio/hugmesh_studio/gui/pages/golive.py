@@ -743,6 +743,9 @@ class GoLiveOrgExportPage(QtWidgets.QWizardPage):
         if self._planning:                 # between Plan's click and its result being delivered
             self._plan_stale = True
         self.plan, self.result = None, None
+        # a typed name arms the plan it was typed for, not whichever plan comes next:
+        # without this a name typed under a private plan armed a later PUBLIC one
+        self.confirm.clear()
         self.apply_btn.setEnabled(False)
         self.table.setRowCount(0)
         self.plan_text.setPlainText("")
@@ -791,7 +794,8 @@ class GoLiveOrgExportPage(QtWidgets.QWizardPage):
         try:
             cands = org_export.candidates_from_file(path, self.wiz.generator_dir)
         except (OSError, ValueError) as exc:
-            self._say(f"{path}: {exc}")
+            # the engine's own messages already start with the path: say it once
+            self._say(str(exc) if str(exc).startswith(path) else f"{path}: {exc}")
             return
         if not cands:
             self._say(f"{path}: no domain in it names a GitHub org")
@@ -868,18 +872,23 @@ class GoLiveOrgExportPage(QtWidgets.QWizardPage):
             return
         try:
             cfg = self.export_config()
+            problems = cfg.problems() if cfg is not None else []
         except (OSError, ValueError) as exc:               # the rename-map file
             self._say(f"{self.rename_map.text().strip()}: {exc}")
             self._rename_map_said = True       # so a fixed field clears this line too
             return
+        except Exception as exc:               # noqa: BLE001 — PyQt6 aborts the whole
+            # process on an exception that leaves a slot; say it inline instead
+            self._say(f"The export settings could not be read: {exc}")
+            return
         if cfg is None:
             self._say(NO_EXPORT_DOMAINS_NOTE)
             return
-        problems = cfg.problems()
         if problems:
             self._say("\n".join(problems))
             return
         self._say("")
+        self.confirm.clear()               # a name typed for an earlier plan arms nothing
         self.plan, self.result = None, None
         self._plan_stale = False
         self._planning = True
@@ -909,6 +918,8 @@ class GoLiveOrgExportPage(QtWidgets.QWizardPage):
             self._say(f"Plan failed: {value}")
             return
         self.plan = value
+        # whatever was typed while the plan ran was typed before the plan could be read
+        self.confirm.clear()
         self._fill_table(self.plan)
         self.plan_text.setPlainText("\n".join(org_export.plan_lines(self.plan)))
         self.cmd.setText(self._cli_command(self.plan.config, "APPLY"))

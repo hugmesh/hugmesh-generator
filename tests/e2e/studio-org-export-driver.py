@@ -388,6 +388,30 @@ def scenario_export(args, app, result: dict, scratch: str, bindir: str, git_log:
         if os.path.exists(os.path.join(src, ".git", "refs", "remotes", "origin", "main")):
             # a checkout with an origin exports origin/main, not the local branch
             fixture_git(src, "update-ref", "refs/remotes/origin/main", "HEAD")
+    for spec in args.plant_bytes:
+        where, _, hexdata = spec.partition("=")
+        repo, _, rel = where.partition(":")
+        src = os.path.join(world["src"], repo)
+        if not (repo and rel and os.path.isdir(src)):
+            _fail(2, "--plant-bytes %r names no source repository" % spec)
+        full = os.path.join(src, rel)
+        os.makedirs(os.path.dirname(full), exist_ok=True)
+        with open(full, "wb") as fh:
+            fh.write(bytes.fromhex(hexdata))
+        fixture_git(src, "add", "-A", "-f")
+        fixture_git(src, "-c", "commit.gpgsign=false", "commit", "-q", "-m", "plant bytes")
+        if os.path.exists(os.path.join(src, ".git", "refs", "remotes", "origin", "main")):
+            fixture_git(src, "update-ref", "refs/remotes/origin/main", "HEAD")
+    if args.global_excludes:
+        # AFTER the plants (they force-add): from here on every git this run starts,
+        # the export's included, reads the person's own global ignore file
+        excl = os.path.join(scratch, "global-excludes")
+        with open(excl, "w", encoding="utf-8") as fh:
+            fh.write("\n".join(g for g in args.global_excludes.split(",") if g) + "\n")
+        gcfg = os.path.join(scratch, "global-gitconfig")
+        with open(gcfg, "w", encoding="utf-8") as fh:
+            fh.write("[core]\n\texcludesFile = %s\n" % excl)
+        os.environ["GIT_CONFIG_GLOBAL"] = gcfg
     saved_mesh_naming_the_org(world, label="e2e mesh",
                               services=[s for s in args.own_services.split(",") if s],
                               mesh_services=[s for s in args.mesh_services.split(",") if s])
@@ -430,6 +454,31 @@ def scenario_export(args, app, result: dict, scratch: str, bindir: str, git_log:
         result["renameMapField"] = {"text": page.rename_map.text(),
                                     "visible": page.rename_map.isVisible(),
                                     "width": page.rename_map.width()}
+    if args.bad_config:
+        key, _, raw = args.bad_config.partition("=")
+        bad = world["cfg"].to_dict()
+        bad[key] = json.loads(raw)
+        bad_path = os.path.join(scratch, "bad-config.json")
+        with open(bad_path, "w", encoding="utf-8") as fh:
+            json.dump(bad, fh)
+        before = page.source.count()
+        page.config_path.setText(bad_path)
+        page.add_btn.click()                         # the step's own "add" button
+        app.processEvents()
+        status_text, status_shown = page.status.text(), not page.status.isHidden()
+        cli_args = ["--generator-dir", args.generator_dir, "--config", bad_path,
+                    "--org-export", "APPLY", "--apply", "--no-probe"]
+        proc = subprocess.run([sys.executable, "-m", "hugmesh_studio", *cli_args],
+                              cwd=os.path.join(args.generator_dir, "studio"),
+                              capture_output=True, text=True, timeout=300,
+                              env=dict(os.environ), check=False)
+        org_dir_now = os.path.join(world["gh_root"], OWN_ORG_DEFAULT)
+        result["badConfig"] = {
+            "key": key, "candidatesBefore": before, "candidatesAfter": page.source.count(),
+            "statusShown": status_shown, "statusText": status_text,
+            "cliRc": proc.returncode, "cliStderr": proc.stderr[-1500:],
+            "cliTraceback": "Traceback" in proc.stderr,
+            "reposAfterCli": sorted(os.listdir(org_dir_now)) if os.path.isdir(org_dir_now) else []}
     gh_calls_before = len(_lines(os.environ["FAKE_GH_LOG"]))
     # the Terminal line as shown BEFORE Plan (the PLAN form; after Plan it is the
     # APPLY form): what a person would copy to run the same export themselves
@@ -494,6 +543,30 @@ def scenario_export(args, app, result: dict, scratch: str, bindir: str, git_log:
         app.processEvents()
         result["applyStatus"] = page.status.text()
         result["resultAfter"] = page.result is not None
+    elif args.action == "retype-after-flip":
+        # planned PRIVATE (the default), the name typed and Apply armed; now the picker
+        # goes to PUBLIC and Plan is pressed again: the name typed for the private plan
+        # must not arm the public one
+        rt = {"planVisibility": plan.config.visibility,
+              "applyEnabledBeforeFlip": page.apply_btn.isEnabled()}
+        page.visibility.setCurrentText("public")
+        app.processEvents()
+        rt["confirmTextAfterFlip"] = page.confirm.text()
+        rt["applyEnabledAfterFlip"] = page.apply_btn.isEnabled()
+        page.plan_btn.click()
+        _wait_worker(page, app)
+        rt["replanVisibility"] = page.plan.config.visibility if page.plan else None
+        rt["confirmTextAfterReplan"] = page.confirm.text()
+        rt["applyEnabledAfterReplan"] = page.apply_btn.isEnabled()
+        page.apply_btn.click()                            # disabled: ignored, as in the app
+        page._apply()                                     # and the slot refuses inline
+        _wait_worker(page, app)
+        rt["createCallsAfterUnretypedApply"] = [c for c in _lines(os.environ["FAKE_GH_LOG"])
+                                                if c.startswith("repo create")]
+        page.confirm.setText(plan.config.org)
+        app.processEvents()
+        rt["applyEnabledAfterRetype"] = page.apply_btn.isEnabled()
+        result["retype"] = rt
     elif args.action == "flip-visibility":
         # the picker flipped back to private AFTER a public Plan armed Apply: the
         # plan on screen must be gone, so there is nothing for Apply to run
@@ -620,8 +693,19 @@ def main(argv: "list[str]") -> int:
     ap.add_argument("--scenario", required=True, choices=("no-org", "domains-org", "export"))
     ap.add_argument("--org", default=OWN_ORG_DEFAULT, help="domains-org: the own row's org")
     ap.add_argument("--added-org", default="", help="domains-org: an added row's org")
-    ap.add_argument("--action", choices=("plan", "apply-untyped", "apply", "flip-visibility"),
+    ap.add_argument("--action", choices=("plan", "apply-untyped", "apply", "flip-visibility",
+                                         "retype-after-flip"),
                     default="plan")
+    ap.add_argument("--plant-bytes", action="append", default=[], metavar="REPO:PATH=HEX",
+                    help="export: commit a file of these raw bytes (hex) into a source "
+                         "repository first (a latin-1 file, a binary file); repeatable")
+    ap.add_argument("--global-excludes", default="", metavar="GLOB[,GLOB]",
+                    help="export: give the git this run uses a GLOBAL core.excludesFile "
+                         "naming these patterns (every machine may have one)")
+    ap.add_argument("--bad-config", default="", metavar="KEY=JSON",
+                    help="export: write an export config whose KEY holds this JSON value "
+                         "(a wrong type), add it through the step's config-file field, "
+                         "and run it through the CLI too")
     ap.add_argument("--plant-marker", default="",
                     help="export: commit a fake token into this source repository first")
     ap.add_argument("--rename-map", choices=("none", "exclusions", "bad-target"),
