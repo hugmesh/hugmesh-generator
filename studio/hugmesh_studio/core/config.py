@@ -609,6 +609,42 @@ def anubis_shown(cfg) -> str:
     return "on" if ANUBIS_SLUG in svcs else ""
 
 
+def client_class_role(role: str, platform: str) -> bool:
+    """True when ``role`` builds a CLIENT-class (desktop) image on ``platform`` — the
+    class whose builder accepts ``--optional-services`` but bakes no cluster GitOps tree
+    (build-x86 skips the specs/cluster copy for ROLE_CLIENT; build-rpi5's plan echoes
+    'n/a (role=desktop; no cluster GitOps tree baked)').
+
+    * x86 — every role NOT in X86_NODE_ROLES (laptop/chromebook/desktop and all the
+      standalone-* desktops);
+    * rpi5 — ONLY builder ``--role desktop`` (Studio id rpi5-desktop, RPI5_ROLE_MAP);
+      generic/pki/backend/frontend are cluster-node class, and standalone 'generic'
+      DOES bake the tree (G16), so it must NOT count as client.
+
+    Qt-free so the GUI Network page and the TUI Network step share ONE answer."""
+    p = platform or "x86"
+    if p == "rpi5":
+        return RPI5_ROLE_MAP.get(role, role) == "desktop"
+    if p == "x86":
+        return role not in X86_NODE_ROLES
+    return False
+
+
+def services_picker_hidden(cfg) -> bool:
+    """True when the Network page hides the whole cluster-services picker — and with it
+    the anubis row — for ``cfg``: an unaffiliated image (no HugMesh plane at all) or a
+    standalone CLIENT-class desktop (no cluster tree is baked, so a selection would be
+    accepted and ignored). Standalone rpi5 'generic' is cluster-node class and is NOT
+    hidden: its builder bakes the tree, so the row applies there on both faces."""
+    platform = getattr(cfg, "platform", "") or "x86"
+    return bool(
+        getattr(cfg, "role", "") == UNAFFILIATED_ROLE
+        or getattr(cfg, "unaffiliated", False)
+        or (getattr(cfg, "mode", "") == "standalone"
+            and platform in PLATFORM_FIELD_SUPPORT.get("optional_services", (platform,))
+            and client_class_role(getattr(cfg, "role", ""), platform)))
+
+
 def with_service_slug(services, slug: str) -> list[str]:
     """``services`` (an ImageConfig.optional_services value) with ``slug`` ADDED —
     additively, the way a per-node infra toggle means it.

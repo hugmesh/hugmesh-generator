@@ -122,6 +122,62 @@ def test_an_image_the_row_does_not_apply_to_cannot_be_set_and_is_cleared(cfg_kw)
     assert j.cfg.anubis == ""
 
 
+# ------------------------- a standalone rpi5 'generic' bakes the cluster tree: the row applies
+
+def test_a_standalone_rpi5_generic_image_offers_the_row_on_the_tui():
+    """The GUI keeps the picker (and the anubis row) for standalone rpi5 'generic' —
+    cluster-node class, its builder bakes the GitOps tree (G16) — so the TUI must not
+    refuse it as 'bakes no cluster services'."""
+    j = at_network(mode="standalone", role="generic", platform="rpi5")
+    assert "cannot be changed here" not in text(j)
+    j.feed("off")
+    assert j.cfg.anubis == "off" and "not changed" not in j.status
+    assert "-anubis" in " ".join(j.cfg._services_args())
+    j.feed("")
+    assert j.cfg.anubis == "off", "an applicable row keeps the operator's choice"
+
+
+@pytest.mark.parametrize("cfg_kw", [
+    dict(mode="mesh", role="generic", platform="x86"),
+    dict(mode="cloud", role="laptop", platform="x86"),
+    dict(mode="standalone", role="standalone-thick", platform="x86"),
+    dict(mode="standalone", role="standalone-unaffiliated", platform="x86"),
+    dict(mode="standalone", role="laptop", unaffiliated=True, platform="x86"),
+    dict(mode="standalone", role="generic", platform="rpi5"),
+    dict(mode="standalone", role="rpi5-desktop", platform="rpi5"),
+    dict(mode="cloud", role="generic", platform="rpi5"),
+    dict(mode="standalone", role="jetson-server", platform="jetson"),
+])
+def test_the_tui_and_the_gui_agree_on_whether_the_row_applies(cfg_kw):
+    """Same config, same answer on both faces: the GUI shows the anubis row iff its
+    services picker is on screen on a platform whose builder parses --optional-services."""
+    pytest.importorskip("hugmesh_studio.gui.qt", reason="no Qt binding installed")
+    import os
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from hugmesh_studio.gui import wizard as wizard_mod
+    from hugmesh_studio.gui.pages.network import NetworkPage
+    from hugmesh_studio.gui.qt import QtWidgets
+    from hugmesh_studio.tui.network_step import anubis_applies
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication(["anubis-parity"])
+    gen = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    w = wizard_mod.StudioWizard(gen)
+    try:
+        pid = [i for i in w.pageIds() if isinstance(w.page(i), NetworkPage)][0]
+        w.cfg = ImageConfig(**cfg_kw)
+        w.setStartId(pid)
+        w.restart()
+        w.setStartId(-1)
+        app.processEvents()
+        page = w.page(pid)
+        gui_applies = (not page._svc_items["anubis"].isHidden()
+                       and not page._services_hidden)
+        assert (anubis_applies(ImageConfig(**cfg_kw)) == "") == gui_applies, cfg_kw
+    finally:
+        w.close()
+        w.deleteLater()
+        app.processEvents()
+
+
 # --------------------------------------------- the domain-services table reads the field
 
 def test_the_domain_services_state_column_reads_the_forced_value():

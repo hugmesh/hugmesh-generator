@@ -60,16 +60,16 @@ from ...core.config import (
     MANAGED_SERVICE_TIER12_IDS,
     OPTIONAL_SERVICES_BY_PLATFORM,
     RELEASE_STATE_CHOICES,
-    RPI5_ROLE_MAP,
     SERVICE_DESCRIPTIONS,
     SERVICE_GROUPS,
     SERVICES_ALL,
     SERVICES_NONE,
     UNAFFILIATED_ROLE,
     USER_LEVEL_SERVICES,
-    X86_NODE_ROLES,
     anubis_shown,
+    client_class_role,
     field_default,
+    services_picker_hidden,
     tailnet_sso_visible,
 )
 from ._gating import (
@@ -441,34 +441,9 @@ def _hint(text: str) -> "QtWidgets.QLabel":
     return lab
 
 
-def _client_class_role(role: str, platform: str) -> bool:
-    """True when the selected role builds a CLIENT-class (desktop) image — the
-    class for which the builders accept --optional-services but never bake it
-    (no cluster GitOps tree on a desktop: build-x86 skips the specs/cluster copy
-    for ROLE_CLIENT and its plan echoes OPTIONAL_SERVICES 'none'; build-rpi5's
-    plan echoes 'n/a (role=desktop; no cluster GitOps tree baked)').
-
-    Mirrors the builders' own ROLE_CLIENT derivation, the same way config.py
-    gates --person-role/--domains on the role class (G18 / X86_NODE_ROLES):
-
-    * x86 — ROLE_CLIENT is every role NOT in X86_NODE_ROLES (build-x86's role
-      switch sets ROLE_CLIENT=true for laptop/chromebook/desktop AND all the
-      standalone-* desktops);
-    * rpi5 — ONLY builder --role desktop (Studio id rpi5-desktop, RPI5_ROLE_MAP)
-      is ROLE_CLIENT; generic/pki/backend/frontend are cluster-node class —
-      notably standalone 'generic' DOES bake the tree (G16), so it must NOT
-      count as client here.
-
-    Only x86 + rpi5 parse --optional-services at all (PLATFORM_FIELD_SUPPORT);
-    on every other platform the services box is greyed by gate_widgets with its
-    own explanation, so this note never applies there.
-    """
-    p = platform or "x86"
-    if p == "rpi5":
-        return RPI5_ROLE_MAP.get(role, role) == "desktop"
-    if p == "x86":
-        return role not in X86_NODE_ROLES
-    return False
+# The role-class predicate lives in core.config (``client_class_role``) so the TUI Network
+# step asks the SAME question this page does (#384 parity); the old private name stays.
+_client_class_role = client_class_role
 
 
 #: An ImageConfig field's declared default — ``core.config.field_default``, imported
@@ -1374,11 +1349,7 @@ class NetworkPage(QtWidgets.QWizardPage):
         # tree is baked, so a selection here is accepted and ignored). `_client_class_role`
         # — not a mode test — is what keeps standalone rpi5 'generic' OUT of the hide:
         # generic is cluster-node class and DOES bake the tree (G16).
-        hide_services = (
-            (c.role == UNAFFILIATED_ROLE or getattr(c, "unaffiliated", False))
-            or (c.mode == "standalone"
-                and platform_supports("optional_services", c.platform)
-                and _client_class_role(c.role, c.platform)))
+        hide_services = services_picker_hidden(c)
         # THE HIDE IS NOT ONE-WAY. validatePage writes the [SERVICES_NONE] sentinel while
         # the picker is hidden (that is the D6 fix — emitting NOTHING would hand the
         # selection to whatever OPTIONAL_SERVICES a brand.conf carries). But the seeder

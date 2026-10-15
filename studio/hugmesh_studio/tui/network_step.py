@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from ..core.config import (
     ANUBIS_CHOICES, ANUBIS_LABELS, PLATFORM_FIELD_SUPPORT, SERVICE_DESCRIPTIONS,
-    UNAFFILIATED_ROLE, anubis_locked, anubis_shown,
+    anubis_locked, anubis_shown, services_picker_hidden,
 )
 
 #: What each command word sets. Longest spelling first is irrelevant (exact match).
@@ -31,12 +31,13 @@ NOT_PORTED_NOTE = ("Only the anubis row of this step is ported to the TUI — co
 def anubis_applies(cfg) -> str:
     """"" when the anubis row applies to ``cfg``, else the reason it does not — the
     same cases the GUI row is absent for: a platform whose builder parses no
-    ``--optional-services``, and an image with no cluster to serve (standalone, or the
-    unaffiliated role)."""
+    ``--optional-services``, and an image whose cluster-services picker the GUI hides
+    (``config.services_picker_hidden``: the unaffiliated role, or a standalone
+    CLIENT-class desktop). A standalone rpi5 'generic' is a cluster node that bakes the
+    tree, so the row applies there, as it does on the GUI."""
     if (getattr(cfg, "platform", "") or "x86") not in PLATFORM_FIELD_SUPPORT["anubis"]:
         return f"the {cfg.platform} builder has no --optional-services"
-    if cfg.mode == "standalone" or cfg.role == UNAFFILIATED_ROLE \
-            or getattr(cfg, "unaffiliated", False):
+    if services_picker_hidden(cfg):
         return "this image bakes no cluster services"
     return ""
 
