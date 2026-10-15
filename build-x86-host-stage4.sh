@@ -1795,7 +1795,7 @@ if ${ROLE_CLIENT} && _opt_selected tor; then
 fi
 
 # ── Cluster-only optional services: CLIENT roles never carry them (#615) ──────────
-# edge-ai, character-studio, character-forge and edge-ai-tts are k8s NODE services
+# edge-ai, edge-ai-analysis, character-studio, character-forge and edge-ai-tts are k8s NODE services
 # (a cluster tree to bake into); a CLIENT / standalone / unaffiliated desktop has no
 # cluster tree. Same shape as the tor drop above and for the same reason: the folds
 # above run BEFORE the role case, and the refusals that used to sit beside them read
@@ -1803,7 +1803,7 @@ fi
 # the flag did nothing, and the slug rode in OPTIONAL_SERVICES to every later reader.
 # ROLE_CLIENT is FINAL here, so the drop (however the slug arrived: --with-*,
 # --optional-services or brand.conf) is warned and applied once, for every role.
-for _cs_slug in edge-ai character-studio character-forge edge-ai-tts; do
+for _cs_slug in edge-ai edge-ai-analysis character-studio character-forge edge-ai-tts; do
     if ${ROLE_CLIENT} && _opt_selected "${_cs_slug}"; then
         warn "${_cs_slug} selected on CLIENT role '${ROLE}' — dropped: it is a k8s NODE service (no cluster tree on a desktop); nothing ${_cs_slug}-related is baked."
         _cs_kept=""
