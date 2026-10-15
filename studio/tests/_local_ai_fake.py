@@ -16,6 +16,7 @@ class FakeOllama:
         self.chunks = ["Hel", "lo ", "there"]
         self.chat_status = 200
         self.error_line = ""
+        self.odd_lines = []          # raw lines sent before the chunks (valid JSON, not objects)
         self.stall = 0.0             # seconds before the first chunk
         self.chunk_delay = 0.0       # seconds between chunks: lets a test act mid-answer
         self.redirect = False
@@ -28,6 +29,12 @@ class FakeOllama:
         # end of file, so the reader is handed a truncated answer with no error at all.
         self.cut_in_chunk = False
         self.cut_between_chunks = False
+        # A server that is up but not well: ``cut_tags`` answers /api/tags with a
+        # Content-Length longer than the bytes it sends and drops the connection (a
+        # server dying mid-reply: IncompleteRead); ``garbage_tags`` answers with bytes
+        # that are not HTTP at all (BadStatusLine). Both are HTTPException, not OSError.
+        self.cut_tags = False
+        self.garbage_tags = False
         self.requests = []           # (method, path, body-dict)
         outer = self
 
@@ -50,7 +57,26 @@ class FakeOllama:
                     self.send_header("Location", f"http://127.0.0.1:{outer.port}/bounced")
                     self.end_headers()
                     return
-                if self.path == "/api/tags":
+                if self.path == "/api/tags" and outer.garbage_tags:
+                    try:
+                        self.wfile.write(b"HELLO NOT HTTP\r\n")
+                        self.wfile.flush()
+                    except (BrokenPipeError, ConnectionResetError):
+                        pass
+                    self.close_connection = True
+                elif self.path == "/api/tags" and outer.cut_tags:
+                    body = json.dumps({"models": outer.models}).encode()
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(body) + 489))
+                    self.end_headers()
+                    try:
+                        self.wfile.write(body[:11])
+                        self.wfile.flush()
+                    except (BrokenPipeError, ConnectionResetError):
+                        pass
+                    self.close_connection = True
+                elif self.path == "/api/tags":
                     self._json({"models": outer.models})
                 elif self.path == "/api/ps":
                     self._json({"models": outer.loaded})
@@ -78,6 +104,8 @@ class FakeOllama:
                 if outer.stall:
                     time.sleep(outer.stall)
                 try:
+                    for odd in outer.odd_lines:
+                        self.wfile.write(odd.encode() + b"\n")
                     for i, c in enumerate(outer.chunks):
                         if i and outer.chunk_delay:
                             time.sleep(outer.chunk_delay)

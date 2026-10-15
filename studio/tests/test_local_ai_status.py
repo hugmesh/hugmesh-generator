@@ -416,6 +416,64 @@ def test_a_stream_that_ends_without_done_is_not_passed_off_as_a_whole_answer(fak
     assert got == ["Hel", "lo ", "there"]
 
 
+def test_a_stream_line_that_is_json_but_not_an_object_is_skipped(fake, env):
+    """Ollama sends one JSON object per line. A line that parses but is not an object
+    (``[]``, ``3``, ``null``) used to escape as a bare AttributeError from ``.get``."""
+    fake.odd_lines = ["[]", "3", "null", '"text"']
+    assert lai.send_prompt("hi", "qwen3:8b", env=env) == "Hello there"
+
+
+# ── a server that is up but not well ────────────────────────────────────────────────
+# A loopback server that dies mid-reply on /api/tags (IncompleteRead) or that answers
+# bytes that are not HTTP (BadStatusLine) raises http.client.HTTPException, which is NOT
+# an OSError. Every /api/tags lookup must treat that like a server that is down: the
+# reader promises never to raise, the worker's heartbeat must still be written (a live
+# worker that stops beating is shown as stalled), and every face says the sentence
+# with the fix instead of a traceback.
+def half_dead(fake, how):
+    setattr(fake, how, True)
+
+
+@pytest.mark.parametrize("how", ["cut_tags", "garbage_tags"])
+def test_a_server_that_dies_mid_reply_reads_as_not_answering_and_never_raises(fake, env, monkeypatch, how):
+    half_dead(fake, how)
+    monkeypatch.setattr(lai.shutil, "which", lambda name: "/usr/bin/ollama")
+    snap = lai.read_snapshot(env, builds=no_builds, timeout=2)
+    assert snap.ollama_up is False and not snap.ok
+    assert "not answering" in snap.problem and "scripts/local-ai.sh up" in snap.fix
+    assert snap.summary.startswith("Local AI: Ollama is installed but is not answering")
+
+
+@pytest.mark.parametrize("how", ["cut_tags", "garbage_tags"])
+def test_the_heartbeat_is_still_written_when_ollama_dies_mid_reply(fake, env, worker_proc, how):
+    half_dead(fake, how)
+    path = lai.write_status(worker_proc.pid, "draft x#1", env)
+    assert os.path.isfile(path), "the worker's heartbeat was not written"
+    data = json.load(open(path))
+    assert data["pid"] == worker_proc.pid and data["ollama_up"] is False and data["running"] == "draft x#1"
+    # and the reader, told the truth about the server, still sees the worker as alive
+    assert lai.read_snapshot(env, builds=no_builds).worker == "running"
+
+
+@pytest.mark.parametrize("how", ["cut_tags", "garbage_tags"])
+def test_every_command_reports_a_half_dead_server_in_words(fake, env, monkeypatch, capsys, how):
+    half_dead(fake, how)
+    monkeypatch.setattr(lai.shutil, "which", lambda name: "/usr/bin/ollama")
+    for k, v in env.items():
+        monkeypatch.setenv(k, v)
+    assert lai.main(["status", "--brief"]) == 1
+    assert capsys.readouterr().out.startswith("Local AI: Ollama is installed but is not answering")
+    assert lai.main(["status"]) == 1
+    assert "Problem: Ollama is installed but is not answering" in capsys.readouterr().out
+    assert lai.main(["ping"]) == 1
+    out = io.StringIO()
+    assert lai.chat_loop(io.StringIO(""), out, env=env) == 1
+    assert "local-ai.sh up" in out.getvalue()
+    # a prompt with no model named asks /api/tags first: that lookup must fail in words too
+    with pytest.raises(lai.LocalAIError, match=r"scripts/local-ai\.sh up"):
+        lai.send_prompt("hi", None, env=env)
+
+
 # ── starting the assistant ──────────────────────────────────────────────────────────
 def test_start_assistant_runs_the_script_detached(tmp_path, env):
     gen = tmp_path / "gen"

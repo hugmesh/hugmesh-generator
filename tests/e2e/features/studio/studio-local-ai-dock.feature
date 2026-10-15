@@ -15,6 +15,9 @@
 #   * Escape with a half-typed question in the prompt clears the prompt and nothing
 #     else (a dialog closes itself on an Escape nobody claimed: here that is the whole
 #     Studio window);
+#   * the same two keys with the focus in the ANSWER AREA (where a person clicks to copy
+#     the model's words) also stop at the dock: Enter moves no page, Escape closes no
+#     window — the promise holds for the whole dock, not for one widget of it;
 #   * the dock asks the model LOCAL_AI_MODEL names — the one `--local-ai-prompt` asks
 #     under the same setting — not whatever model happens to be loaded;
 #   * Clear pressed while the answer is still arriving empties the answer area and
@@ -42,6 +45,7 @@ Feature: The Studio's Local AI dock starts the assistant, answers a question and
     And the question went to the loopback model only and its answer streamed into the dock
     And pressing Enter in the prompt did not move the wizard off its page
     And Escape in the prompt cleared a half-typed question and did not close the Studio window
+    And Enter and Escape with the focus in the answer area moved no page and closed no window
     And the dock asked the model named by LOCAL_AI_MODEL, the same one the command line asks
     And Clear pressed mid-answer left the answer area empty and the conversation forgotten
     And the Local AI dock opened no modal dialog

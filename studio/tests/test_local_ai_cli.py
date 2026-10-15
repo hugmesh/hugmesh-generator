@@ -54,6 +54,20 @@ def test_status_exits_non_zero_with_a_sentence_when_ollama_is_down(env, capsys):
     assert rc == 1 and json.loads(out)["ok"] is False
 
 
+@pytest.mark.parametrize("how", ["cut_tags", "garbage_tags"])
+def test_status_says_what_is_wrong_when_ollama_dies_mid_reply(fake, env, capsys, how):
+    """A server that drops the connection mid-reply, or answers bytes that are not
+    HTTP, raises an HTTPException (not an OSError) inside urllib. The flag promises
+    "exits 1 with the problem and its fix": a traceback is neither."""
+    setattr(fake, how, True)
+    env.setenv("OLLAMA_HOST", fake.host)
+    rc, out, err = cli(["--local-ai-status"], capsys)
+    assert rc == 1 and err.startswith("error: Ollama") and "scripts/local-ai.sh up" in err
+    assert "Traceback" not in err and "Problem:" in out
+    rc, out, err = cli(["--local-ai-status", "--json"], capsys)
+    assert rc == 1 and json.loads(out)["ok"] is False and json.loads(out)["ollama_up"] is False
+
+
 def test_status_lists_a_finished_draft(fake, env, capsys, tmp_path):
     env.setenv("OLLAMA_HOST", fake.host)
     d = tmp_path / "localai" / "drafts" / "hugmesh-generator-7"

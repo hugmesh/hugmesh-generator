@@ -460,6 +460,46 @@ def test_escape_in_the_prompt_clears_a_half_typed_question_instead_of_closing_th
     assert rejected, "Escape on the empty prompt must still cancel the window"
 
 
+@pytest.mark.parametrize("key, text", [(Qt.Key.Key_Return, "\r"), (Qt.Key.Key_Enter, "\r"),
+                                       (Qt.Key.Key_Escape, "\x1b")],
+                         ids=["Return", "keypad-Enter", "Escape"])
+@pytest.mark.parametrize("pages_on", [0, 1], ids=["welcome", "second-page"])
+def test_enter_and_escape_in_the_answer_area_stop_there(shell, qapp, monkeypatch, key, text, pages_on):
+    """The answer area is the widget one Tab to the right of the prompt, and a click
+    into it (to select or copy the model's answer) focuses it. A read-only
+    QPlainTextEdit takes neither Return nor Escape, so without a handler of its own
+    both travel on to the wizard: Return presses the default button (Next, or the
+    build button on the worklist page) and Escape closes the whole Studio window.
+    The whole dock, not only the prompt line, must keep those two keys to itself."""
+    monkeypatch.setattr(lai, "send_prompt", lambda text, *a, **k: "ok")
+    wiz = open_at(shell, qapp, NORMAL)
+    dock = wiz.local_ai_dock
+    dock.set_expanded(True)
+    qapp.processEvents()
+    for _ in range(pages_on):
+        wiz.next()
+        qapp.processEvents()
+    assert wiz.button(QtWidgets.QWizard.WizardButton.NextButton).isDefault(), \
+        "this page has no default Next button: the test would prove nothing"
+    rejected = []
+    wiz.rejected.connect(lambda: rejected.append(True))
+    dock.answer.setPlainText("Local AI: an answer the person wants to copy")
+    dock.answer.setFocus()
+    qapp.processEvents()
+    assert dock.answer.hasFocus(), "the answer area did not take the focus: nothing is tested"
+    page_before, title_before = wiz.currentId(), wiz.currentPage().title()
+    press_key(qapp, dock.answer, key, text)
+    assert (wiz.currentId(), wiz.currentPage().title()) == (page_before, title_before), \
+        f"the key moved the wizard from {title_before!r} to {wiz.currentPage().title()!r}"
+    assert not rejected and wiz.isVisible(), "the key in the answer area closed the Studio window"
+    assert dock.answer.toPlainText().startswith("Local AI: an answer"), "the answer was changed"
+    # arrow keys and copy still work in the answer area: it keeps only the two keys that
+    # would otherwise act on the wizard, and a plain letter still reaches nothing it should not
+    seen = _KeysSeenBy(wiz)
+    press_key(qapp, dock.answer, Qt.Key.Key_Up, "")
+    assert int(Qt.Key.Key_Up) not in seen.keys and dock.answer.hasFocus()
+
+
 def test_the_prompt_reads_the_key_as_an_int_or_as_an_enum_member(qapp, monkeypatch):
     """PyQt6's ``event.key()`` is an int; PySide6 >= 6.4 hands back an enum member. The
     prompt decides on the integer code, so both bindings see Enter and Escape."""

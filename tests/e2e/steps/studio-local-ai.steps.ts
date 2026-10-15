@@ -62,6 +62,14 @@ interface DockReport {
     how: string; promptAfter: string; windowRejected: boolean; windowVisible: boolean;
     promptHasFocus: boolean; page: string;
   };
+  answerArea?: {
+    how: string; answerHadFocus: boolean; answerAfter: string;
+    keys: Record<string, {
+      wizardBefore: { id: number; title: string; page: string };
+      wizardAfter: { id: number; title: string; page: string } | null;
+      windowRejected: boolean; windowVisible: boolean;
+    }>;
+  };
 }
 
 function driverPath(): string {
@@ -177,6 +185,26 @@ Then('Escape in the prompt cleared a half-typed question and did not close the S
     expect(e!.promptHasFocus, 'the prompt lost the focus on Escape').toBe(true);
   });
 
+Then('Enter and Escape with the focus in the answer area moved no page and closed no window',
+  async ({ world }) => {
+    const a = report(world).answerArea;
+    expect(a, 'the driver did not press keys in the answer area').toBeTruthy();
+    // the answer area is where a person clicks to copy the model's words; a key it does
+    // not keep travels on to the wizard, a QDialog: Enter presses Next, Escape closes it
+    expect(a!.how).toMatch(/^QKeyEvent/);
+    expect(a!.answerHadFocus, 'the answer area never took the focus: nothing was tested').toBe(true);
+    for (const name of ['Return', 'Escape']) {
+      const k = a!.keys[name];
+      expect(k, `the driver did not press ${name} in the answer area`).toBeTruthy();
+      expect(k.wizardAfter,
+        `${name} in the answer area moved the wizard from "${k.wizardBefore.title}" to "${k.wizardAfter?.title}"`)
+        .toEqual(k.wizardBefore);
+      expect(k.windowRejected, `${name} in the answer area closed the Studio window`).toBe(false);
+      expect(k.windowVisible).toBe(true);
+    }
+    expect(a!.answerAfter).toContain('an answer the person wants to copy');
+  });
+
 Then('the dock asked the model named by LOCAL_AI_MODEL, the same one the command line asks',
   async ({ world }) => {
     const r = report(world);
@@ -211,7 +239,7 @@ Then('a grab exists for each act of the Local AI dock scenario', async ({ world 
   const r = report(world);
   const names = r.grabs.map((g) => g.name);
   expect(names).toEqual(['1-opened-collapsed', '2-expanded', '3-started', '3a-escape-cleared-the-prompt',
-    '4-answer-streaming', '5-after-clear']);
+    '3b-keys-in-the-answer-area', '4-answer-streaming', '5-after-clear']);
   for (const g of r.grabs) {
     expect(fs.statSync(g.png).size, `${g.png} is empty`).toBeGreaterThan(0);
   }

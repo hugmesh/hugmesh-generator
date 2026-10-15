@@ -251,6 +251,32 @@ def main(argv):
         grab("3a-escape-cleared-the-prompt")
         modal_check("escape")
 
+        # ── act 3b: Enter and Escape with the focus in the ANSWER AREA ──
+        # A click into the answer area (to copy the model's words) focuses it. A read-only
+        # text edit takes neither key, so an unhandled one travels on to the wizard: Enter
+        # presses Next (on the worklist page, the build button), Escape closes the Studio.
+        # The wizard page and the window's `rejected` are read around each key.
+        dock.answer.setPlainText("Local AI: an answer the person wants to copy")
+        dock.answer.setFocus()
+        app.processEvents()
+        answer_keys = {"how": "QKeyEvent via QApplication.sendEvent, focus in the answer area",
+                       "answerHadFocus": dock.answer.hasFocus(), "keys": {}}
+        for name, k, txt in (("Return", Qt.Key.Key_Return, "\r"), ("Escape", Qt.Key.Key_Escape, "\x1b")):
+            before = {"id": wiz.currentId(), "title": wiz.currentPage().title(),
+                      "page": type(wiz.currentPage()).__name__}
+            for kind in (QtCore.QEvent.Type.KeyPress, QtCore.QEvent.Type.KeyRelease):
+                app.sendEvent(dock.answer, QtGui.QKeyEvent(kind, k, Qt.KeyboardModifier.NoModifier, txt))
+            app.processEvents()
+            after = ({"id": wiz.currentId(), "title": wiz.currentPage().title(),
+                      "page": type(wiz.currentPage()).__name__} if wiz.currentPage() else None)
+            answer_keys["keys"][name] = {"wizardBefore": before, "wizardAfter": after,
+                                         "windowRejected": bool(rejected), "windowVisible": wiz.isVisible()}
+        answer_keys["answerAfter"] = dock.answer.toPlainText()
+        report["answerArea"] = answer_keys
+        grab("3b-keys-in-the-answer-area")
+        modal_check("answer-area keys")
+        dock.answer.clear()
+
         # ── act 3: a question, answered by the loopback model, streaming ──
         # The wizard page is read before and after Enter: a prompt line that let the key
         # travel on would press the wizard's default button (Next) along with sending.

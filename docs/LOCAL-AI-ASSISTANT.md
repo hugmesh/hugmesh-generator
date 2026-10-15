@@ -385,7 +385,9 @@ scripts/local-ai.sh watch                    # the live dashboard (refreshes eve
 ```
 
 `status` exits 1 when something needs fixing (Ollama missing, not answering, no model
-pulled) and prints the problem, the fix and a link to this page.
+pulled) and prints the problem, the fix and a link to this page. A server that is up
+but drops the connection mid-reply, or answers something that is not HTTP, counts as
+not answering: the same sentence, never a traceback, and the worker keeps beating.
 
 **What a draft does.** `todo` asks `gh` (with your own login) for the open issues of
 the repository, drops the ones labelled `manual`, `decision`, `roadmap` or `blocked`
@@ -501,7 +503,9 @@ loop), `issues.py` (reads `gh` output: which issues to pick, how to print one) a
   expands it into a prompt line and an answer area (Enter sends, and only sends: the
   wizard stays on the page you were on, so a question never presses Next or starts a
   build; Escape with text in the prompt clears the prompt and nothing else, and on an
-  empty prompt it is the window's Cancel as everywhere else; the answer streams in, and
+  empty prompt it is the window's Cancel as everywhere else; with the focus in the
+  answer area — where you click to copy the model's words — Enter and Escape do
+  nothing at all, rather than reaching the wizard; the answer streams in, and
   a connection that drops mid-answer is reported in words under the status line rather
   than passed off as a finished answer), a **Start local assistant** button (runs `scripts/local-ai.sh start` detached)
   and a **Current work** button that opens a window listing the queue, the drafts with

@@ -27,6 +27,7 @@ from hugmesh_studio.tui import journey, local_ai, plain
 
 #: the real prompt function, taken before the autouse fixture below replaces it
 REAL_SEND_PROMPT = lai.send_prompt
+REAL_READ_SNAPSHOT = lai.read_snapshot
 
 
 @pytest.fixture
@@ -227,6 +228,23 @@ def test_a_real_cut_stream_through_the_screen_is_one_sentence_not_a_traceback(st
     rc, text = run_plain("local-ai\nhello\nq\n")
     assert rc == 0
     assert "cut off" in text and "Traceback" not in text and "IncompleteRead" not in text
+
+
+@pytest.mark.parametrize("how", ["cut_tags", "garbage_tags"])
+def test_the_screen_opens_over_a_server_that_dies_mid_reply(state, fake, monkeypatch, how):
+    """The screen takes a LIVE snapshot in ``enter()``. A server that drops the
+    connection mid-reply on /api/tags raises IncompleteRead inside the reader — an
+    HTTPException, not an OSError — and used to take the whole input loop down with
+    a traceback before the screen was drawn."""
+    setattr(fake, how, True)
+    monkeypatch.setenv("OLLAMA_HOST", fake.host)
+    monkeypatch.setattr(lai, "read_snapshot", REAL_READ_SNAPSHOT)
+    monkeypatch.setattr(lai.shutil, "which", lambda name: "/usr/bin/ollama")
+    rc, text = run_plain("local-ai\nq\n")
+    assert rc == 0, "the input loop died while opening the Local AI screen"
+    assert "Local AI\n" in text and "not answering" in text
+    assert "Traceback" not in text and "IncompleteRead" not in text and "BadStatusLine" not in text
+    assert text.count("welcome> ") == 2              # welcome, the screen, then welcome again
 
 
 def test_start_clear_and_refresh_on_the_screen():

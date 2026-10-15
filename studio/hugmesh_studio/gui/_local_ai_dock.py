@@ -167,6 +167,21 @@ class _PromptLine(QtWidgets.QLineEdit):
             event.accept()
 
 
+class _AnswerArea(QtWidgets.QPlainTextEdit):
+    """The read-only answer area. It sits one Tab to the right of the prompt and a click
+    into it (to select or copy the model's answer) focuses it. A read-only text edit
+    takes neither Return nor Escape, so both would travel on to the wizard exactly as
+    they did from a plain QLineEdit: Return presses Next (or the build button), Escape
+    closes the Studio. The dock keeps those two keys to itself from every widget of
+    the dock; arrows, Page keys and Ctrl+C still do what a text view does."""
+
+    def keyPressEvent(self, event):
+        code = _key_code(event)
+        super().keyPressEvent(event)
+        if self.isReadOnly() and (code in _SEND_KEYS or code == _ESCAPE):
+            event.accept()
+
+
 class _Threads:
     """Run a function on a daemon thread; collect results on the window thread.
 
@@ -489,7 +504,7 @@ class LocalAIDock(QtWidgets.QFrame):
         row.addWidget(self.prompt, 1)
         row.addWidget(self.send_btn)
         row.addWidget(self.clear_btn)
-        self.answer = QtWidgets.QPlainTextEdit()
+        self.answer = _AnswerArea()
         self.answer.setReadOnly(True)
         self.answer.setLineWrapMode(QtWidgets.QPlainTextEdit.LineWrapMode.WidgetWidth)
         self.answer.setMinimumHeight(36)

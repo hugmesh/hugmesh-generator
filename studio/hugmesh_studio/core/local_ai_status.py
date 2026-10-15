@@ -167,6 +167,13 @@ def _get_json(env: dict | None, path: str, timeout: float) -> dict:
         return json.loads(r.read().decode("utf-8", "replace") or "{}")
 
 
+#: Everything ``_get_json`` raises when the server is down OR up-but-not-well. A server
+#: that dies mid-reply raises IncompleteRead and one that answers non-HTTP bytes raises
+#: BadStatusLine: both are http.client.HTTPException, which is NOT an OSError, so a
+#: tuple without it let a restarting Ollama take the worker's heartbeat down with it.
+_NOT_ANSWERING = (OSError, ValueError, urllib.error.URLError, http.client.HTTPException)
+
+
 # ── the snapshot ─────────────────────────────────────────────────────────────────────
 @dataclass
 class Job:
@@ -382,13 +389,13 @@ def _probe(env: dict | None, timeout: float) -> tuple[bool, list, list, str]:
         tags = _get_json(env, "/api/tags", timeout)
     except NotLoopback as exc:
         return False, [], [], str(exc)
-    except (OSError, ValueError, urllib.error.URLError):
+    except _NOT_ANSWERING:
         return False, [], [], ""
     models = [m.get("name", "") for m in tags.get("models", []) if isinstance(m, dict)]
     try:
         ps = _get_json(env, "/api/ps", timeout)
         loaded = [m.get("name", "") for m in ps.get("models", []) if isinstance(m, dict)]
-    except (OSError, ValueError, urllib.error.URLError):
+    except _NOT_ANSWERING:
         loaded = []
     return True, [m for m in models if m], [m for m in loaded if m], ""
 
@@ -626,7 +633,7 @@ def send_prompt(text: str, model: str | None = None, *, env: dict | None = None,
     if not model:
         try:
             tags = _get_json(env, "/api/tags", 5).get("models") or []
-        except (OSError, ValueError, urllib.error.URLError):
+        except _NOT_ANSWERING:
             raise LocalAIError(_down_message(env)) from None
         model = pick_model(env, [m.get("name", "") for m in tags if isinstance(m, dict)])
     messages = ([{"role": "system", "content": system}] if system else []) \
@@ -657,6 +664,8 @@ def send_prompt(text: str, model: str | None = None, *, env: dict | None = None,
                 try:
                     piece = json.loads(raw)
                 except ValueError:
+                    continue
+                if not isinstance(piece, dict):            # valid JSON, not a stream line
                     continue
                 if piece.get("error"):
                     raise LocalAIError(f"Ollama said: {piece['error']}")
@@ -742,7 +751,7 @@ def chat_loop(inp, out, env: dict | None = None, model: str | None = None) -> in
     except NotLoopback as exc:
         print(str(exc), file=out)
         return 1
-    except (OSError, ValueError, urllib.error.URLError):
+    except _NOT_ANSWERING:
         print(_down_message(env), file=out)
         return 1
     history: list = []
@@ -821,7 +830,7 @@ def main(argv: list | None = None, *, out=None, err=None, inp=None) -> int:
     if cmd == "ping":                                        # 0 = the loopback Ollama answers
         try:
             _get_json(None, "/api/tags", 3)
-        except (LocalAIError, OSError, ValueError, urllib.error.URLError):
+        except (LocalAIError, *_NOT_ANSWERING):
             return 1
         return 0
     if cmd == "write-status":
