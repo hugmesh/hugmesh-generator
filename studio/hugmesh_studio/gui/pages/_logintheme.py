@@ -71,6 +71,67 @@ def default_chrome() -> dict:
     }
 
 
+def open_platform_preview(css: str, note: QtWidgets.QLabel,
+                          error_note: QtWidgets.QLabel, writer=None) -> None:
+    """Write the themed PLATFORM preview for ``css`` and open it in the operator's
+    browser, reporting what happened in ``note`` (green = verified, amber = dispatched
+    but unverifiable, red = nothing launched) and a write failure in ``error_note``.
+
+    Shared by the Themes group and the brand LookEditor so the open-path lesson below
+    is learnt once. That lesson (this button's history IS "the preview isn't working"
+    reports): the old order trusted QDesktopServices.openUrl FIRST and reported its True
+    as success — but on Linux that True means "the launch was dispatched", not
+    "something rendered" (xdg-open can exit 2 'no handler' a beat after Qt already
+    returned true), so the Qt-free fallback never ran and the note lied green while the
+    operator saw nothing. New order:
+      1. login_preview.open_in_browser — VERIFIED openers (waits for the opener's own
+         exit code);
+      2. QDesktopServices.openUrl only as the LAST resort (portal-only desktops with no
+         CLI opener), and its success is reported as UNVERIFIED;
+      3. the note ALWAYS carries the file path + the mechanism used, so even a browser
+         that never appears leaves the operator one manual open away — never a silent
+         no-op, and the mechanism name makes the next failure report diagnosable.
+    The file lands in login_preview.preview_out_dir() (~/.cache), NOT gettempdir():
+    $TMPDIR can point into build scratch that portage sweeps mid-session, which deletes
+    the preview before/while the browser reads it.
+
+    ``writer(css, out_dir) -> path`` writes the page; the default is the platform
+    preview, and the brand LookEditor passes the one that also draws the two web
+    pictures."""
+    note.setVisible(False)
+    out_dir = login_preview.preview_out_dir()
+    try:
+        path = (writer or platform_preview.write_platform_preview)(css, out_dir)
+    except (OSError, RuntimeError) as exc:
+        error_note.setText(f"preview failed: {exc}")
+        error_note.setVisible(True)
+        return
+    opened, how = login_preview.open_in_browser(path)
+    if not opened and bool(
+            QtGui.QDesktopServices.openUrl(QtCore.QUrl.fromLocalFile(path))):
+        opened, how = True, ("unverified: QDesktopServices.openUrl — Qt reports "
+                             "the launch was dispatched, not that a browser "
+                             "rendered anything")
+    if opened and how.startswith("verified"):
+        note.setStyleSheet("color: #2e7d32;")
+        note.setText(f"Platform preview opened ({how}).\nFile: {path}")
+    elif opened:
+        # Dispatched but unverifiable — the historical lie, now labelled amber
+        # with the manual path instead of claimed green.
+        note.setStyleSheet("color: #a65d00;")
+        note.setText(
+            f"A browser open was dispatched but cannot be confirmed ({how}).\n"
+            f"If no tab appeared, open this file manually:\n{path}\n"
+            "(Linux: check `xdg-settings get default-web-browser` — a missing or "
+            "non-browser handler is the usual cause of a silent no-op.)")
+    else:
+        note.setStyleSheet("color: #b00020;")
+        note.setText(
+            f"Could not launch a browser automatically ({how}).\n"
+            f"Open this file manually:\n{path}")
+    note.setVisible(True)
+
+
 def _swatch(hex_color: str, caption: str) -> QtWidgets.QLabel:
     """A colour tile whose text is auto black/white via the SAME on_color rule that
     ships — the board demonstrates the derivation by being built from it."""
@@ -562,25 +623,8 @@ class LoginThemeGroup(QtWidgets.QGroupBox):
     def _open_preview(self, *_):
         """Write the themed PLATFORM preview — the real captured login snapshot plus
         representative matrix/akkoma/forum panes (core/platform_preview.py) — and
-        open it in the operator's default browser.
-
-        Open-path lesson (this button's history IS "the preview isn't working"
-        reports): the old order trusted QDesktopServices.openUrl FIRST and reported
-        its True as success — but on Linux that True means "the launch was
-        dispatched", not "something rendered" (xdg-open can exit 2 'no handler' a
-        beat after Qt already returned true), so the Qt-free fallback never ran and
-        the note lied green while the operator saw nothing. New order:
-          1. login_preview.open_in_browser — VERIFIED openers (waits for the
-             opener's own exit code);
-          2. QDesktopServices.openUrl only as the LAST resort (portal-only desktops
-             with no CLI opener), and its success is reported as UNVERIFIED;
-          3. the note ALWAYS carries the file path + the mechanism used, so even a
-             browser that never appears leaves the operator one manual open away —
-             never a silent no-op, and the mechanism name makes the next failure
-             report diagnosable.
-        The file lands in login_preview.preview_out_dir() (~/.cache), NOT
-        gettempdir(): $TMPDIR can point into build scratch that portage sweeps
-        mid-session, which deletes the preview before/while the browser reads it."""
+        open it in the operator's default browser. The open path and its honesty
+        rules live in :func:`open_platform_preview`, shared with the brand LookEditor."""
         self.preview_note.setVisible(False)
         css = self.compose_css()
         if self._error:
@@ -590,35 +634,4 @@ class LoginThemeGroup(QtWidgets.QGroupBox):
             self.preview_note.setText("Fix the theme error above before previewing.")
             self.preview_note.setVisible(True)
             return
-        out_dir = login_preview.preview_out_dir()
-        try:
-            path = platform_preview.write_platform_preview(css, out_dir)
-        except (OSError, RuntimeError) as exc:
-            self.error_note.setText(f"preview failed: {exc}")
-            self.error_note.setVisible(True)
-            return
-        opened, how = login_preview.open_in_browser(path)
-        if not opened and bool(
-                QtGui.QDesktopServices.openUrl(QtCore.QUrl.fromLocalFile(path))):
-            opened, how = True, ("unverified: QDesktopServices.openUrl — Qt reports "
-                                 "the launch was dispatched, not that a browser "
-                                 "rendered anything")
-        if opened and how.startswith("verified"):
-            self.preview_note.setStyleSheet("color: #2e7d32;")
-            self.preview_note.setText(
-                f"Platform preview opened ({how}).\nFile: {path}")
-        elif opened:
-            # Dispatched but unverifiable — the historical lie, now labelled amber
-            # with the manual path instead of claimed green.
-            self.preview_note.setStyleSheet("color: #a65d00;")
-            self.preview_note.setText(
-                f"A browser open was dispatched but cannot be confirmed ({how}).\n"
-                f"If no tab appeared, open this file manually:\n{path}\n"
-                "(Linux: check `xdg-settings get default-web-browser` — a missing or "
-                "non-browser handler is the usual cause of a silent no-op.)")
-        else:
-            self.preview_note.setStyleSheet("color: #b00020;")
-            self.preview_note.setText(
-                f"Could not launch a browser automatically ({how}).\n"
-                f"Open this file manually:\n{path}")
-        self.preview_note.setVisible(True)
+        open_platform_preview(css, self.preview_note, self.error_note)
