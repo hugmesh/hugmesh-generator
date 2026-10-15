@@ -26,6 +26,8 @@ source "${SCRIPT_DIR}/scripts/_download-lib.sh"
 # the build host's libcrypt provably supports it, SHA-512 crypt ($6$) fallback.
 # shellcheck source=scripts/_passhash-lib.sh
 source "${SCRIPT_DIR}/scripts/_passhash-lib.sh"
+# shellcheck source=scripts/_domain-idp-lib.sh
+source "${SCRIPT_DIR}/scripts/_domain-idp-lib.sh"
 # THE role vocabulary — canonical tokens, the permanent input aliases, the hostname
 # defaults and the keys profiles, declared ONCE for every builder and for the Studio.
 # See scripts/_roles-lib.sh for why the long spelling won and why `+`/`_` are gone.
@@ -664,6 +666,10 @@ build-x86-host-stage4.sh — hardened Gentoo amd64 k8s/GPU worker image.
                             (default user). Baked to /etc/hugmesh/identity-role.
   --domains LIST            CLIENT only — domain tie (space/comma separated; first =
                             primary). Baked to /etc/hugmesh/domains + filename tag.
+  --domain-idp D=own|superdomain  (repeatable) Casdoor for domain D: own = a dedicated
+                            instance, superdomain = the mesh's (default; bakes nothing).
+                            Only `own` is baked: /etc/hugmesh/domain-idp. D must be in
+                            --domains when given. See docs/DOMAIN-IDP.md.
   --desktop WEIGHT          CLIENT only — thin (LXDE/openbox, default) | full (XFCE+).
   -H, --hostname NAME       Hostname. Default: derived from --role.
   -T, --timezone ZONE       Timezone. Default: ${TIMEZONE}
@@ -1079,6 +1085,7 @@ while [[ $# -gt 0 ]]; do
         --release-tag) RELEASE_TAG="$2"; shift 2 ;;
         --cluster-domain|--domain) CLUSTER_DOMAIN="$2"; shift 2 ;;
         --superdomain) SUPERDOMAIN="$2"; shift 2 ;;
+        --domain-idp) domain_idp_add "${2:-}"; shift 2 ;;   # repeatable <domain>=own|superdomain (#509)
         --release-state)      RELEASE_STATE="$2";      shift 2 ;;
         --brand) BRAND="$2"; shift 2 ;;
         --brand-title) BRAND_TITLE="$2"; shift 2 ;;
@@ -1723,6 +1730,7 @@ if ${UNAFFILIATED}; then
     [ "${MESH_FORCED}" = on ] && { err "--unaffiliated conflicts with --with-tailscale (the tailnet is HugMesh platform machinery)"; exit 1; }
     [ "${SSO_FORCED}" = on ] && { err "--unaffiliated conflicts with --with-sso (Casdoor SSO is HugMesh platform machinery)"; exit 1; }
     { [ -n "${PERSON_ROLE}" ] || [ -n "${DOMAINS}" ]; } && { err "--unaffiliated conflicts with --person-role/--domains (person-device identity is platform machinery)"; exit 1; }
+    [ -z "${DOMAIN_IDP_SPECS}" ] || { err "--unaffiliated conflicts with --domain-idp (an unaffiliated desktop has no identity provider to choose)"; exit 1; }
     BUNDLE_SOURCE=false
     # Neutral identity: every downstream sink (GRUB titles, ISO volids, UKI name,
     # installer text, artifact filenames, hostname) derives from BRAND/BRAND_TITLE,
@@ -2206,6 +2214,9 @@ if [ -n "${DOMAINS}" ]; then
     for _d in ${DOMAINS//,/ }; do _validate_dnsname "--domains element" "${_d}"; done
     unset _d
 fi
+# --domain-idp (#509): vocabulary + DNS shape were checked as each flag was read; this is
+# the cross-check against --cluster-domain and the --domains list.
+domain_idp_check "${CLUSTER_DOMAIN}" "${DOMAINS}"
 # Accent is written as ACCENT_COLOR="..." into brand.conf — which the applier reads with
 # its STRICT KEY=VALUE parser, never by dot-sourcing (specs/usr/sbin/hugmesh-branding:83).
 # Gate it with the same #RRGGBB shape the applier's _norm_accent enforces (empty = default
@@ -2526,6 +2537,7 @@ if ${PRINT_PLAN}; then
     _plan BRAND              "${BRAND}"
     _plan CLUSTER_DOMAIN     "${CLUSTER_DOMAIN}"
     _plan SUPERDOMAIN        "${SUPERDOMAIN}"
+    domain_idp_plan_line   # PLAN_DOMAIN_IDP=<own domains>; prints nothing when none (#509)
     _plan HOSTNAME           "${HOSTNAME:-${BRAND}-host}"
     _plan OPTIONAL_SERVICES  "$(${ROLE_CLIENT} && echo none || echo "${OPTIONAL_SERVICES:-none}")"
     # Additive PLAN_ key (grep -qx consumers unaffected): what the tor NODE gates below
@@ -4810,6 +4822,8 @@ if [ -n "${SUPERDOMAIN}" ]; then
     echo "${SUPERDOMAIN}" > "${SYSROOT}${_sd_etc}/superdomain"
     info "Baked orchestration superdomain -> ${_sd_etc}/superdomain (${SUPERDOMAIN})"
 fi
+# Per-domain IdP choice (#509): /etc/hugmesh/domain-idp, own domains only; absent otherwise.
+domain_idp_bake "${SYSROOT}/etc/hugmesh"
 if ${UNAFFILIATED}; then
     info "Unaffiliated desktop: no marker tree, no cluster payload, no identity tie."
 elif ${ROLE_CLIENT}; then
