@@ -240,9 +240,14 @@ class Superbrand:
                     raise ValueError(f"superbrand.{k} must be an object, got {v!r}")
                 v = dict(v)
             else:
+                # a number or a list where a name belongs is a hand-edit gone wrong,
+                # refused with a sentence: str() would turn id 5 into the brand "5" and
+                # a list into its Python spelling
+                if v is not None and not isinstance(v, str):
+                    raise ValueError(f"superbrand.{k} must be text, got {v!r}")
                 # stripped: a file edited by hand can end a value with a newline, and
                 # the profile (a shell file) must never carry one
-                v = "" if v is None else str(v).strip()
+                v = "" if v is None else v.strip()
             kw[k] = v
         # a block written with separate login_style/login_decor keys (an early shape
         # of this record) folds them into the look; the look's own value wins
@@ -260,6 +265,33 @@ class RecordRefused(ValueError):
     def __init__(self, problems: list[str]):
         super().__init__("; ".join(problems))
         self.problems = list(problems)
+
+
+def _checked_rows(raw: Any) -> list[Any]:
+    """The ``brands`` list of a record file: absent is no brands; anything but a list
+    is refused, because a record that quietly lost its brands plans and shows as fine."""
+    if raw is None:
+        return []
+    if not isinstance(raw, list):
+        raise ValueError(f"brands must be a list, got {raw!r}")
+    return raw
+
+
+def _checked_row(row: Any, index: int) -> dict[str, Any]:
+    """One brand row of a record file, refused with a sentence when its shape is wrong
+    (a row that is not an object, a name that is a list, a service list that is text)."""
+    if not isinstance(row, dict):
+        raise ValueError(f"brands[{index}] must be an object, got {row!r}")
+    for key, field_ in Domain.__dataclass_fields__.items():
+        v = row.get(key)
+        if v is None or key not in row:
+            continue
+        if field_.type == "str" and not isinstance(v, str):
+            raise ValueError(f"brands[{index}].{key} must be text, got {v!r}")
+        if field_.type == "list[str]" and not (
+                isinstance(v, list) and all(isinstance(x, str) for x in v)):
+            raise ValueError(f"brands[{index}].{key} must be a list of text, got {v!r}")
+    return row
 
 
 @dataclass
@@ -289,12 +321,17 @@ class BrandRecord:
             raise ValueError("brand record must be a JSON object")
         if "superbrand" not in d and ("brand" in d or "domains" in d):
             return cls._from_manifest(d)
-        sb = Superbrand.from_dict(d.get("superbrand") or {})
-        rows = [ImageConfig._domain_from_dict(x) for x in (d.get("brands") or [])
-                if isinstance(x, dict)]
-        copied = d.get("copied_from") or {}
-        if not isinstance(copied, dict):
+        raw_sb = d.get("superbrand")
+        if raw_sb is not None and not isinstance(raw_sb, dict):
+            raise ValueError(f"superbrand must be an object, got {raw_sb!r}")
+        sb = Superbrand.from_dict(raw_sb or {})
+        rows = [ImageConfig._domain_from_dict(_checked_row(x, i))
+                for i, x in enumerate(_checked_rows(d.get("brands")))]
+        copied = d.get("copied_from")
+        if copied is None:
             copied = {}
+        if not isinstance(copied, dict):
+            raise ValueError(f"copied_from must be an object, got {copied!r}")
         schema = d.get("schema", SCHEMA)
         if not isinstance(schema, int) or isinstance(schema, bool):
             raise ValueError(f"brand record schema must be a number, got {schema!r}")
@@ -307,6 +344,10 @@ class BrandRecord:
 
     @classmethod
     def _from_manifest(cls, m: dict[str, Any]) -> "BrandRecord":
+        for key in ("brand", "brand_title", "org", "cluster_domain", "superdomain",
+                    "login_style", "login_decor"):
+            if m.get(key) is not None and not isinstance(m.get(key), str):
+                raise ValueError(f"{key} must be text, got {m.get(key)!r}")
         look = {k: str(m.get(src)) for k, src in (("style", "login_style"),
                                                    ("decor", "login_decor"))
                 if m.get(src)}
@@ -314,8 +355,8 @@ class BrandRecord:
                         org=str(m.get("org") or ""),
                         public_name=str(m.get("cluster_domain") or ""),
                         internal_root=str(m.get("superdomain") or ""), look=look)
-        rows = [ImageConfig._domain_from_dict(x) for x in (m.get("domains") or [])
-                if isinstance(x, dict)]
+        rows = [ImageConfig._domain_from_dict(_checked_row(x, i))
+                for i, x in enumerate(_checked_rows(m.get("domains")))]
         return cls(superbrand=sb, brands=rows)
 
     def brand(self, bid: str) -> Domain | None:
@@ -819,14 +860,9 @@ def record_from_bootstrap(cfg) -> BrandRecord:
     return BrandRecord(superbrand=sb, brands=rows)
 
 
-#: ``--brand``'s default on the bootstrap (local_mesh_bootstrap.DEFAULT_BRAND, which
-#: imports this module and so cannot be imported here; a test pins the two together).
-#: A cfg that still carries it was not told a brand, so the record's id is no contradiction.
-_BOOTSTRAP_DEFAULT_BRAND = "hugmesh"
-
-
 def apply_record_to_bootstrap(record: BrandRecord, cfg, *,
-                              typed_flags: bool = True) -> None:
+                              typed_flags: bool = True,
+                              typed_brand: str | None = None) -> None:
     """Write the record onto a bootstrap config, in place (``up --record``): the
     superbrand's id and public name onto ``brand``/``cluster_domain``, the block onto
     ``superbrand``, the brands onto ``domains`` and ``own_idp_domains``, and the
@@ -834,8 +870,11 @@ def apply_record_to_bootstrap(record: BrandRecord, cfg, *,
     mesh show-record describes is the mesh that starts. A flag that says the opposite
     (``--with-tor`` or a ``--services`` selection) is a contradiction, not an
     override: ValueError, and nothing is applied; the same for a ``--brand`` that
-    names another superbrand and for ``--own-casdoor-domain`` names that are not
-    exactly the record's own-sign-in brands. ``typed_flags=False`` is for the
+    is not exactly the record's superbrand id (``typed_brand``: what the person typed,
+    None when the flag was absent, so the bootstrap's own default is never mistaken
+    for a typed value, and a typed ``hugmesh`` is refused like any other) and for
+    ``--own-casdoor-domain`` names that are not exactly the record's own-sign-in
+    brands, in the same order (the order decides the ports 8001, 8002, ...). ``typed_flags=False`` is for the
     Studio's own screens, whose configuration is the person's working copy and not
     a command line: there the record replaces the brand and the own-sign-in set,
     which is what the screen is for. Everything that is not the record's
@@ -864,15 +903,23 @@ def apply_record_to_bootstrap(record: BrandRecord, cfg, *,
     # names another one is a contradiction, never a silent loser. A different brand id
     # changes the Vault path (secret/<brand>); a different own-sign-in set changes
     # which brands get a sign-in of their own and on which port.
-    typed_brand = (cfg.brand or "").strip()
-    if (typed_flags and sb.id and typed_brand
-            and typed_brand not in (_BOOTSTRAP_DEFAULT_BRAND, sb.id.strip())):
+    # Compared as typed, not stripped: ' acme' is not acme (it would be refused at the
+    # start anyway, and the record's id must never replace it unseen).
+    if typed_flags and sb.id and typed_brand is not None and typed_brand != sb.id.strip():
         raise ValueError(
             f"the brand record names the superbrand {sb.id}, but --brand {typed_brand} "
             "was given: change the record or the flag, not both")
-    record_own = [d.name.strip() for d in record.brands
-                  if d.idp == DOMAIN_IDP_OWN and (d.name or "").strip()]
-    typed_own = [n.strip() for n in (cfg.own_idp_domains or ()) if n.strip()]
+    record_own = list(dict.fromkeys(d.name.strip() for d in record.brands
+                                    if d.idp == DOMAIN_IDP_OWN and (d.name or "").strip()))
+    typed_own = list(dict.fromkeys(n.strip() for n in (cfg.own_idp_domains or ())
+                                   if n.strip()))
+    if typed_flags and typed_own and set(typed_own) == set(record_own) \
+            and typed_own != record_own:
+        raise ValueError(
+            "the brand record and the flags name the same own sign-ins in a different "
+            f"order (record: {', '.join(record_own)}; flags: {', '.join(typed_own)}): the "
+            "order gives the host ports 8001, 8002 and so on, so put "
+            "--own-casdoor-domain in the record's order or change the record")
     if typed_flags and typed_own and set(typed_own) != set(record_own):
         extra = sorted(set(typed_own) - set(record_own))
         missing = sorted(set(record_own) - set(typed_own))

@@ -1798,6 +1798,7 @@ def _cfg_from_args(args: argparse.Namespace) -> LocalMeshBootstrapConfig:
     for w in theme.warnings(args.login_primary or theme._DEFAULT_PRIMARY,
                             args.login_secondary) if login_theme_css else []:
         print(f"WARNING: {w}", file=sys.stderr)
+    typed_brand = getattr(args, "brand", None)
     cfg = LocalMeshBootstrapConfig(
         env=args.env, superadmin_username=args.superadmin_username,
         out_dir=args.out, social=args.social, with_tor=args.with_tor,
@@ -1809,7 +1810,10 @@ def _cfg_from_args(args: argparse.Namespace) -> LocalMeshBootstrapConfig:
                   else tuple(args.services.replace(",", " ").split())),
         auth_key=_read_authkey(args),
         login_server=args.login_server, node_name=args.node_name,
-        brand=args.brand, cluster_domain=args.cluster_domain,
+        # --brand has no argparse default (None = not typed), so a typed 'hugmesh' can
+        # be told from the absent flag when a record is applied below
+        brand=typed_brand if typed_brand is not None else DEFAULT_BRAND,
+        cluster_domain=args.cluster_domain,
         source_mode=args.source_mode, source_dir=args.source_dir,
         web_locales=_parse_web_locales(args.web_locales),
         login_theme_css=login_theme_css,
@@ -1822,7 +1826,7 @@ def _cfg_from_args(args: argparse.Namespace) -> LocalMeshBootstrapConfig:
     # contradicts one of those is refused by apply_record_to_bootstrap.
     if getattr(args, "record", ""):
         rec = brand_model.load_record(args.record)
-        brand_model.apply_record_to_bootstrap(rec, cfg)
+        brand_model.apply_record_to_bootstrap(rec, cfg, typed_brand=typed_brand)
     return cfg
 
 
@@ -2004,8 +2008,9 @@ def main(argv: list[str] | None = None) -> int:
                         f"from: {' '.join(local_slugs())}. Omit to leave the stack as "
                         "shipped (--social/--with-tor still apply); pass an empty "
                         "string for an explicit none.")
-    p.add_argument("--brand", default=DEFAULT_BRAND,
-                   help=f"brand slug (default: {DEFAULT_BRAND}).")
+    p.add_argument("--brand", default=None,
+                   help=f"brand slug (default: {DEFAULT_BRAND}). With --record it must "
+                        "be the record's superbrand id, or it is refused.")
     p.add_argument("--cluster-domain", default="",
                    help="public apex domain (REQUIRED in prod).")
     p.add_argument("--source-mode", choices=("clone", "existing"), default="clone",

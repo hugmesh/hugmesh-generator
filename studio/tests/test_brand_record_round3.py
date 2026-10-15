@@ -90,13 +90,16 @@ def test_an_own_signin_set_the_record_does_not_have_is_refused_both_ways(tmp_pat
     assert rc == 2 and "shop.mesh.example" in capsys.readouterr().err
 
 
-def test_the_same_own_signin_set_in_any_order_is_no_contradiction(tmp_path, capsys):
+def test_the_same_own_signins_in_the_records_order_start_the_ports_in_that_order(
+        tmp_path, capsys):
     path = _record_file(tmp_path, own=("shop.mesh.example", "club.mesh.example"))
     rc = lmb.main(["plan", "--generator-dir", GENERATOR_DIR, "--record", path,
-                   "--own-casdoor-domain", "club.mesh.example",
-                   "--own-casdoor-domain", "shop.mesh.example"])
+                   "--own-casdoor-domain", "shop.mesh.example",
+                   "--own-casdoor-domain", "club.mesh.example"])
     out = capsys.readouterr().out
-    assert rc == 0 and "shop.mesh.example" in out and "club.mesh.example" in out, out
+    assert rc == 0, out
+    assert "shop.mesh.example: host port 8001" in out, out
+    assert "club.mesh.example: host port 8002" in out, out
 
 
 def test_a_refusal_applies_nothing_to_the_config(tmp_path):
@@ -104,7 +107,7 @@ def test_a_refusal_applies_nothing_to_the_config(tmp_path):
     rec.superbrand.ways = {"tor": True}
     cfg = LocalMeshBootstrapConfig(brand="other", own_idp_domains=("blog.mesh.example",))
     with pytest.raises(ValueError, match="--brand other"):
-        bm.apply_record_to_bootstrap(rec, cfg)
+        bm.apply_record_to_bootstrap(rec, cfg, typed_brand="other")
     assert cfg.brand == "other" and cfg.with_tor is False and not cfg.superbrand
     assert cfg.domains == () and cfg.own_idp_domains == ("blog.mesh.example",)
     # the cluster-domain refusal comes after the Tor way was read: it must not leave it set
@@ -122,8 +125,63 @@ def test_the_studios_own_screens_may_replace_the_brand_and_the_own_signin_set(tm
     assert cfg.brand == "acme" and cfg.own_idp_domains == ("shop.mesh.example",)
 
 
-def test_the_default_brand_the_check_skips_is_the_bootstraps_default():
-    assert bm._BOOTSTRAP_DEFAULT_BRAND == lmb.DEFAULT_BRAND
+def test_a_typed_default_brand_name_is_refused_like_any_other(tmp_path, capsys):
+    # --brand has no argparse default: 'hugmesh' typed is a typed brand (the Vault path
+    # secret/hugmesh), and only the ABSENT flag leaves the record to name the brand
+    path = _record_file(tmp_path)
+    for typed in ("hugmesh", " acme", "acme ", "ACME", ""):
+        rc = lmb.main(["plan", "--generator-dir", GENERATOR_DIR, "--record", path,
+                       "--brand", typed])
+        err = capsys.readouterr().err
+        assert rc == 2 and "names the superbrand acme" in err, (typed, rc, err)
+    assert lmb.main(["plan", "--generator-dir", GENERATOR_DIR, "--record", path]) == 0
+    assert "Brand:      acme" in capsys.readouterr().out
+    # without a record the absent flag is still the default brand
+    assert lmb.main(["plan", "--generator-dir", GENERATOR_DIR]) == 0
+    assert f"Brand:      {lmb.DEFAULT_BRAND}" in capsys.readouterr().out
+
+
+def test_apply_without_a_typed_brand_lets_the_record_name_it():
+    rec = bm.BrandRecord(superbrand=bm.Superbrand(id="acme"))
+    cfg = LocalMeshBootstrapConfig()
+    bm.apply_record_to_bootstrap(rec, cfg)
+    assert cfg.brand == "acme"
+    cfg2 = LocalMeshBootstrapConfig()
+    with pytest.raises(ValueError, match="--brand hugmesh"):
+        bm.apply_record_to_bootstrap(rec, cfg2, typed_brand="hugmesh")
+    assert cfg2.brand == "hugmesh"
+
+
+# ── 1b. the own sign-ins' ORDER is what the ports follow ─────────────────────────────
+def test_the_same_own_signins_in_another_order_are_refused_with_both_orders(
+        tmp_path, capsys):
+    path = _record_file(tmp_path, own=("shop.mesh.example", "club.mesh.example"))
+    rc = lmb.main(["plan", "--generator-dir", GENERATOR_DIR, "--record", path,
+                   "--own-casdoor-domain", "club.mesh.example",
+                   "--own-casdoor-domain", "shop.mesh.example"])
+    err = capsys.readouterr().err
+    assert rc == 2 and "different order" in err, err
+    assert "record: shop.mesh.example, club.mesh.example" in err, err
+    assert "flags: club.mesh.example, shop.mesh.example" in err, err
+
+
+def test_a_typed_list_that_is_only_part_of_the_records_own_signins_is_refused(
+        tmp_path, capsys):
+    # the strict subset: nothing the flags name is extra, so only the 'missing' half of
+    # the refusal can catch it (a mutation of that half passed every earlier test)
+    path = _record_file(tmp_path, own=("shop.mesh.example", "club.mesh.example"))
+    rc = lmb.main(["plan", "--generator-dir", GENERATOR_DIR, "--record", path,
+                   "--own-casdoor-domain", "shop.mesh.example"])
+    err = capsys.readouterr().err
+    assert rc == 2, err
+    assert ("the record gives its own sign-in to club.mesh.example, which no "
+            "--own-casdoor-domain names") in err, err
+    # and the refusal applies nothing
+    rec = bm.load_record(path)
+    cfg = LocalMeshBootstrapConfig(own_idp_domains=("shop.mesh.example",))
+    with pytest.raises(ValueError, match="club.mesh.example"):
+        bm.apply_record_to_bootstrap(rec, cfg)
+    assert cfg.own_idp_domains == ("shop.mesh.example",) and cfg.domains == ()
 
 
 # ── 2. a legal 40-character design name is no secret ────────────────────────────────
@@ -202,11 +260,53 @@ def test_a_test_mesh_keeps_no_public_name_even_when_a_domain_was_typed():
     assert s2.sb.public_name == "typed.example"
 
 
-@pytest.mark.parametrize("body", [{"brands": 5}, {"superbrand": ["x"]}, [1, 2]])
-def test_a_record_file_with_the_wrong_shape_is_refused_with_a_sentence(tmp_path, capsys, body):
+_SB = {"id": "acme"}
+_ROW = {"name": "shop.mesh.example", "idp": "own"}
+
+
+@pytest.mark.parametrize("body,words", [
+    ({"brands": 5}, "brands must be a list"),
+    ({"superbrand": ["x"]}, "superbrand must be an object"),
+    ([1, 2], "must be a JSON object"),
+    # each of these used to be a traceback or a record that quietly lost its brands
+    ({"superbrand": _SB, "brands": [{"name": ["x"], "idp": "own"}]},
+     "brands[0].name must be text"),
+    ({"superbrand": _SB, "brands": [5, "x"]}, "brands[0] must be an object"),
+    ({"superbrand": _SB, "brands": [_ROW, 1]}, "brands[1] must be an object"),
+    ({"superbrand": _SB, "brands": {"a": 1}}, "brands must be a list"),
+    ({"superbrand": []}, "superbrand must be an object"),
+    ({"superbrand": {"id": 5}}, "superbrand.id must be text"),
+    ({"superbrand": {"id": "acme", "public_name": 7}}, "superbrand.public_name must be text"),
+    ({"superbrand": {"id": "acme", "title": ["t"]}}, "superbrand.title must be text"),
+    ({"superbrand": _SB, "copied_from": ["x"]}, "copied_from must be an object"),
+    ({"superbrand": _SB, "brands": [{"name": "a.example", "images": "x.png"}]},
+     "brands[0].images must be a list of text"),
+    # the pre-#654 manifest shape is held to the same rule
+    ({"brand": ["x"], "domains": []}, "brand must be text"),
+    ({"brand": "acme", "domains": [{"name": ["x"]}]}, "brands[0].name"),
+])
+def test_a_record_file_with_the_wrong_shape_is_refused_with_a_sentence(
+        tmp_path, capsys, body, words):
     path = tmp_path / "bad.json"
     path.write_text(json.dumps(body))
     for verb in ("show-record", "plan"):
         rc = lmb.main([verb, "--record", str(path), "--generator-dir", GENERATOR_DIR])
         cap = capsys.readouterr()
         assert rc == 2 and "[refused]" in cap.err, (verb, rc, cap)
+        assert words in cap.err and "Traceback" not in cap.err, (verb, cap.err)
+
+
+def test_load_record_refuses_a_row_name_that_is_a_list(tmp_path, capsys):
+    path = tmp_path / "bad.json"
+    path.write_text(json.dumps({"superbrand": _SB, "brands": [{"name": ["x"]}]}))
+    with pytest.raises(ValueError, match="brands\\[0\\].name must be text"):
+        bm.load_record(str(path))
+
+
+def test_a_good_record_still_loads_after_the_strict_shape_rule(tmp_path):
+    rec = bm.load_record(_record_file(tmp_path))
+    assert rec.superbrand.id == "acme" and [d.name for d in rec.brands][0] == "shop.mesh.example"
+    # absent keys and nulls are the empty default, as before
+    path = tmp_path / "min.json"
+    path.write_text(json.dumps({"superbrand": None, "brands": None, "copied_from": None}))
+    assert bm.load_record(str(path)).brands == []

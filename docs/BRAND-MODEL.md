@@ -189,7 +189,11 @@ to the real Makefile, so it flips the day the hold lands.
   starts a mesh from a record (the record decides the brand, the public name, the brands and their
   sign-ins, and whether the mesh starts with Tor on; every other flag still
   applies, but a `--brand`, `--cluster-domain`, `--own-casdoor-domain` or `--with-tor`
-  that says something else is refused, not overridden), and `show-record --record FILE` prints
+  that says something else is refused, not overridden: a typed `--brand hugmesh` is a
+  typed brand like any other, only leaving the flag out lets the record name it, and
+  the `--own-casdoor-domain` names must be the record's own sign-ins in the record's
+  order, because the order gives the host ports 8001, 8002 and so on; a record edited
+  by hand into the wrong shape is refused with a sentence), and `show-record --record FILE` prints
   every brand's effective look with the source of each value and the effect of each
   way on each path, in the words above, from a fresh process. Without a record file
   both read the flags, in the order given: two own sign-ins named `zed` then `alpha`
