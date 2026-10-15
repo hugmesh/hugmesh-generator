@@ -28,6 +28,22 @@ spec:
         - name: web
           image: hugmesh/matrix-ui:dev
           ports: [{ name: http, containerPort: 80 }]
+          # Games origin for the chat3d (Shadows of the Net) iframe — the value
+          # chat3d-bridge.ts's GAMES_BASE_URL reads as `__HUG_GAMES_URL__`, stated
+          # HERE so the choice is explicit in the manifest instead of left to the
+          # app's built-in default (hugmesh-generator#470). It must equal the
+          # `games` host route of apps/20-gateway-be.yaml; tests/scripts/
+          # cluster_manifest_integrity.py [games-origin] fails when it is absent
+          # or differs while apps/50-games.yaml is present (it reads this repo
+          # tree only). A custom GAMES_DOMAIN or CLUSTER_DOMAIN rebrand is NOT
+          # followed: ArgoCD serves this file from git (apps/45-social-ui.yaml),
+          # so a sed over the baked copy would not reach the live Deployment.
+          # NOT YET READ: the matrix-ui image does not turn this env into the
+          # window global (its only entrypoint hook is 50-hug-theme.sh), and the
+          # global is read from the host page, so the app still uses its default
+          # (the same host) until an image-side consumer exists.
+          env:
+            - { name: HUG_GAMES_URL, value: "https://games.hugmesh.net" }
           resources: { requests: { cpu: 50m, memory: 96Mi }, limits: { cpu: 300m, memory: 192Mi } }
 ---
 apiVersion: v1
