@@ -246,6 +246,9 @@ SAMPLES = {
     "optional_services": [{"optional_services": ["akkoma"]},
                           {"optional_services": ["none"]}, {"optional_services": ["all"]}],
     "exclude_services": [{"exclude_services": ["games"]}],
+    # the anubis tri-state (#384) has no flag of its own: it rides --optional-services
+    # as the slug / the `-anubis` token, so both arms are fielded here.
+    "anubis": [{"anubis": "off"}, {"anubis": "on"}],
     "enable_games": [{"enable_games": True}],
     # managed backing services (I8/M2): a tier-1/2 id=endpoint fields --managed-service on
     # the two node builders (x86 + rpi5) — the field now FIELDS the flag the allowlist used
@@ -337,7 +340,12 @@ for platform in BUILDER_SCRIPTS:
             args = ImageConfig(**kwargs).to_cli_args()
         except ValueError:
             continue   # a rejected combination never reaches the builder
-        vocab.update(a for a in args if a.startswith("-"))
+        # A VALUE that starts with "-" is not a flag: `--optional-services -anubis` (#384)
+        # is the builders' deselect token riding the allow-list, and counting it as a
+        # flag made every x86/rpi5 build look like it emitted an unparsed `-anubis`.
+        vocab.update(a for i, a in enumerate(args)
+                     if a.startswith("-")
+                     and not (i and args[i - 1] == "--optional-services"))
     for flag in sorted(vocab):
         print(f"{platform} {flag}")
 PYEOF
