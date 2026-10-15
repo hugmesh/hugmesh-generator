@@ -15,8 +15,8 @@
 #      guard asserts post-olddefconfig;
 #   2) NO ARM/Pi-only symbol leaked into the x86 fragment (RP1/VC4/V3D/PL011/
 #      ARM64_*/CRYPTO_AES_ARM64_CE/NET_9P*);
-#   3) BTF stays OUT of BOTH fragments (eBPF CO-RE is a separate, toolchain-gated
-#      follow-up — adding it without dev-util/pahole breaks the build);
+#   3) the BTF block is complete or absent as a whole in BOTH fragments (its
+#      pairing with dev-util/pahole is test-btf-pahole-pairing.sh);
 #   4) the build guard in build-x86-host-stage4.sh (and its Pi mirror) greps the
 #      FULL load-bearing set (guard == fragment, NOT a subset — olddefconfig
 #      prunes per-leaf), so an olddefconfig prune of ANY required symbol FAILS
@@ -117,13 +117,22 @@ grep -q "^enable CONFIG_CRYPTO_AES_NI_INTEL\$" "${X86_FRAG}" \
     && ok "x86 AES path is CRYPTO_AES_NI_INTEL (ARM64 CE block cipher correctly excluded)" \
     || bad "x86 fragment lost CONFIG_CRYPTO_AES_NI_INTEL"
 
-# ── 3) BTF stays OUT of BOTH fragments (separate toolchain-gated follow-up) ────
+# ── 3) the BTF block is all-or-nothing in each fragment ───────────────────────
+# BTF used to be kept OUT of both fragments (no pahole). It is now built, but a HALF
+# block is the dangerous state: CONFIG_DEBUG_INFO_BTF without DEBUG_INFO (or the
+# DWARF choice) is dropped by olddefconfig with no message. The pairing with pahole
+# and the builders' guards is tests/scripts/test-btf-pahole-pairing.sh; this only
+# keeps a net-symbols edit from leaving a partial block behind.
 btf=0
 for f in "${X86_FRAG}" "${PI_FRAG}"; do
-    grep -qE "^enable (CONFIG_DEBUG_INFO_BTF|CONFIG_DEBUG_INFO_BTF_MODULES|CONFIG_DEBUG_INFO)\$" "${f}" \
-        && { bad "BTF/DEBUG_INFO enabled in ${f} — needs dev-util/pahole; must be a SEPARATE PR"; btf=$((btf+1)); }
+    n=0
+    for s in CONFIG_DEBUG_INFO_DWARF_TOOLCHAIN_DEFAULT CONFIG_DEBUG_INFO_BTF CONFIG_DEBUG_INFO_BTF_MODULES; do
+        grep -qE "^enable ${s}\$" "${f}" && n=$((n+1))
+    done
+    { [ "${n}" -eq 0 ] || [ "${n}" -eq 3 ]; } \
+        || { bad "partial BTF block in ${f}: ${n} of 3 lines (DWARF choice, BTF, BTF_MODULES)"; btf=$((btf+1)); }
 done
-[ "${btf}" -eq 0 ] && ok "BTF/DEBUG_INFO absent from both fragments (eBPF CO-RE deferred to a pahole-gated follow-up)"
+[ "${btf}" -eq 0 ] && ok "the BTF block is complete or absent in both fragments"
 
 # ── 4) Each build guard greps the FULL load-bearing set (guard == fragment) ───
 # olddefconfig prunes per-LEAF, so a surviving parent does NOT protect a dropped

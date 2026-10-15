@@ -4507,6 +4507,14 @@ else
             esac
             grep -q "^${_sym}=y$" .config || { err "CONFIG_LSM names '${_l}' but ${_sym} is not =y after olddefconfig — the kernel would SILENTLY DROP it from the LSM stack"; exit 1; }
         done
+        # BTF is what lets a BPF_PROG_TYPE_LSM program attach to the bpf LSM that
+        # CONFIG_LSM names. olddefconfig drops CONFIG_DEBUG_INFO_BTF silently when
+        # dev-util/pahole is missing on the BUILD HOST (Dockerfile.build installs it
+        # in its final stage; a stale builder image lacks it) or when a struct
+        # randomisation choice is on, so assert it survived.
+        for must in CONFIG_DEBUG_INFO_BTF CONFIG_DEBUG_INFO_BTF_MODULES; do
+            grep -q "^${must}=y$" .config || { err "${must} not enabled after olddefconfig — dev-util/pahole missing on the build host (rebuild the builder image) or struct layout randomisation is on (BTF depends on it being off); a BPF_PROG_TYPE_LSM program could not attach"; exit 1; }
+        done
         # LUKS2/dm-crypt (hardened-k8s.config enables this unconditionally, for
         # BOTH the existing attached-disk data-partition use case and the
         # --encrypt-root path): refuse to ship a kernel that silently lost it,
