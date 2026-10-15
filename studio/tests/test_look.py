@@ -1,6 +1,6 @@
 """The look tests, run where they can be fast: in a FRESH interpreter (#647, #656).
 
-Every ``test_look_*`` test in the three files below measures what a person sees — at
+Every ``test_look_*`` test in the files below measures what a person sees — at
 the wizard's default window size, under two Qt styles, at the default font and at
 8 pt — and skips in an ordinary run (``tests/_look.py`` says why: switching the
 application style in a process that has already run other wizard tests takes minutes).
@@ -36,7 +36,7 @@ STUDIO_ROOT = os.path.dirname(HERE)
 #: must be added here, or it would never run anywhere (test_every_look_test_is_run
 #: below fails when a file carries one that is not listed).
 LOOK_FILES = ("test_localcloud_nodes.py", "test_pages_qemu.py",
-              "test_pages_mesh_emulation.py")
+              "test_pages_mesh_emulation.py", "test_look_editor.py")
 
 
 def child_verdict(returncode: int, lines: list) -> str:
