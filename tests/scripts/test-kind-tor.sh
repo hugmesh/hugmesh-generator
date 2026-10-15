@@ -405,7 +405,8 @@ RUN=(env PATH="${SPATH}" KIND_TOR_STATE_DIR="${ST}" KIND_TOR_SOCKS_PORT="${SP}" 
 "${RUN[@]}" bash "${SCRIPT}" up > "${WORK}/up1.out" 2>&1; urc=$?; reap_stubs
 [ "${urc}" = 0 ] && ok "up rc=0 against the stubs" || bad "up rc=${urc}: $(tail -c 400 "${WORK}/up1.out")"
 # A HEAD (-I) reaches the gateway's 401, not the SPA shell the readiness probe GETs (#658): the hint must be a GET.
-grep -a 'try:.*curl' "${WORK}/up1.out" | grep -aq . && ! grep -a 'try:.*curl' "${WORK}/up1.out" | grep -aq -- ' -I ' && ok "the printed 'try:' hint is a GET (no curl -I)" || bad "the printed 'try:' hint is missing or uses curl -I: $(grep -a 'try:' "${WORK}/up1.out" | head -2 | tr '\n' ';')"
+TRYLINE="$(grep -a 'try:.*curl' "${WORK}/up1.out" | head -1)"
+if [ -n "${TRYLINE}" ] && ! grep -aE -e ' -[A-Za-z]*I' -e ' --head( |$)' >/dev/null <<<"${TRYLINE}"; then ok "the printed 'try:' hint is a GET (no curl -I / --head, alone or in a combined flag)"; else bad "the printed 'try:' hint is missing or is a HEAD request: $(grep -a 'try:' "${WORK}/up1.out" | head -2 | tr '\n' ';')"; fi
 grep -aF "tor -f ${ST}/torrc" "${CALLS}" >/dev/null && ok "tor launched as 'tor -f <state>/torrc'" || bad "tor was not launched with the state torrc: $(grep -a '^tor' "${CALLS}" | tr '\n' ';')"
 grep -axF "HiddenServicePort 443 127.0.0.1:8443" "${ST}/torrc" >/dev/null && ok "the WRITTEN torrc publishes 443 -> 127.0.0.1:8443" || bad "the written torrc lacks 'HiddenServicePort 443 127.0.0.1:8443'"
 if grep -a '^kubectl' "${CALLS}" | grep -av -- '--context kind-hugmesh-local' >/dev/null; then
