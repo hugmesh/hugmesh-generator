@@ -43,6 +43,7 @@ from ..core.config import (
     CLIENT_CA_INHERITANCE_NOTE, DOMAIN_IDP_CHOICES, DOMAIN_IDP_OWN,
     DOMAIN_IDP_SUPERDOMAIN, Domain,
 )
+from ..core.local_mesh_domains import added_row_problems
 from ..core.domain_services import (implicit_own_domain, reviewed_names,
                                     services_summary)
 from . import model
@@ -169,6 +170,10 @@ class DomainsScreen:
                 return
             if any(d.name == arg for d in cfg.domains):
                 j.status = f"already listed: {arg}"
+                return
+            own = implicit_own_domain(cfg)
+            if own and arg == own:                     # #631 section 2: the GUI's row-0 rule
+                j.status = added_row_problems([arg], own)[0]
                 return
             cfg.domains.append(Domain(name=arg))       # idp defaults superdomain
             return
