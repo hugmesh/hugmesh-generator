@@ -342,6 +342,20 @@ Plus the games **public host**: a be-gateway host route `id: games`
 entry, and the `/games/**` route-access floor — all added in
 `apps/20-gateway-be.yaml` + `20-schema.sql`.
 
+The chat3d games origin is declared in the manifest too: the `hugmesh-matrix-ui`
+Deployment in `manifests/social-ui/deployment.yaml` carries
+`HUG_GAMES_URL=https://games.hugmesh.net` (the value the chat3d bridge reads as
+`__HUG_GAMES_URL__`). `[games-origin]` in
+`tests/scripts/cluster_manifest_integrity.py` fails when `apps/50-games.yaml` is
+present in the repo tree and that env is missing or names a different host than
+the route there. It checks the repo tree only: the Deployment is served to the
+cluster from git, so a custom `GAMES_DOMAIN` (or a `CLUSTER_DOMAIN` rebrand) moves
+the live gateway route but does **not** move this env, which stays
+`https://games.hugmesh.net`; following it would need a kustomize patch in
+`apps/45-social-ui.yaml`. The env is also present when `games` is not selected.
+The matrix-ui image does not yet turn the env into the window global, so until it
+does the app still falls back to its own default (hugmesh-generator#470).
+
 **Why this matters:** `rebrand_sysroot` rewrites `hugmesh.net` and
 `hugmesh-` but historically **left `.games` untouched**, so on the subdomain
 default the public host became `games.<primary>` while Casdoor still minted
@@ -400,8 +414,9 @@ Internal mTLS / `svc.cluster.local` SANs are unaffected.
 > That is what "no hardcoded `30-*`/`50-*` app forces a service on" means in practice.
 > The hardcoded `30-*`/`50-*`/`52-*`/`53-*` Applications stay the build-time *owners* of
 > the surviving workloads. Moving *runtime ownership* to the ApplicationSet, so an admin
-> can flip a slug on a live cluster, means deleting the hardcoded apps and enabling the
-> §7.1 reconciler. That is the remaining cross-repo step (§10). The build-time
+> can flip a slug on a live cluster, means moving each slug's ownership to the
+> ApplicationSet (not simply deleting the hardcoded apps: §10.3 derives why) and enabling
+> the §7.1 reconciler. That is the remaining cross-repo step (§10). The build-time
 > *exclusion* requirement is fully met today.
 
 ArgoCD syncs from the repo, not the baked copy, so live add/remove uses the **runtime
@@ -418,9 +433,12 @@ model**, not baked-file surgery:
 
   > **Cut-over:** while the hardcoded `apps/30-*`/`50-*` Applications exist, the
   > ApplicationSet ships with every element `installed: "false"`, so it creates nothing and
-  > cannot duplicate an Application name. The cut-over deletes the hardcoded apps and
-  > lets the ApplicationSet own them (mirroring the ConfigMap into its `elements`). That
-  > step makes runtime add/remove fully live.
+  > cannot duplicate an Application name. The cut-over hands each slug's directory from its
+  > hardcoded owner to the ApplicationSet (mirroring the ConfigMap into its `elements`),
+  > and it is not a plain delete: one element covers one directory, the generated name
+  > differs, and neither side carries a finalizer. §10.3 derives the per-slug matrix and the
+  > order for a running cluster. Runtime remove is not live until the finalizer and
+  > stateful-data decision in §10.3 point 3 is made.
 
 - **UI hide/show** uses the federation-api `OverrideService` kill-switch
   (`/api/federation/overrides`, ROLE_ADMIN). It flips
@@ -811,15 +829,15 @@ When a service is **absent**, a user sees:
 
 **🚧 CLUSTER-GATED FOLLOW-UP (needs a live cluster to verify):**
 
-- **The cut-over.** Delete the hardcoded `apps/30-akkoma.yaml`, `apps/30-tuwunel.yaml`,
-  `apps/30-phpbb.yaml` (with `apps/38`/`39`/`49-forum-*`), `apps/50-games.yaml`,
-  `apps/52-owncast.yaml`, `apps/53-tube.yaml`, `apps/49b-character-studio-ui.yaml`,
-  `apps/{38b,39b}-character-forge-bff-*.yaml` and `apps/49c-character-forge-ui.yaml`, and
-  let the ApplicationSet own the surviving workloads. Coordinate the ESO split, the
-  route-access rows, stateful-service scale-to-zero and the `CanonicalSeed.java` gateway
-  floor (§9). THEN set `app.optional-services.reconcile.enabled=true` (with the Lease
-  under multi-replica). Enabling it BEFORE the cut-over double-manages
-  akkoma/tuwunel/phpbb (§7.1).
+- **The cut-over.** Not "delete the hardcoded apps": see §10.3 for the derived matrix.
+  Eight slugs are single-app (akkoma, tuwunel, owncast, tube, character-studio, edge-ai,
+  edge-ai-analysis, edge-ai-tts) and could be cut over one at a time; three are multi-app
+  (phpbb 4 apps, games 3, character-forge 3) and need a design decision first, because one
+  13a element covers ONE manifest directory. An earlier version of this bullet omitted the
+  three `edge-ai` apps. Coordinate the ESO split, the route-access rows, stateful-service
+  scale-to-zero and the `CanonicalSeed.java` gateway floor (§9). THEN set
+  `app.optional-services.reconcile.enabled=true` (with the Lease under multi-replica).
+  Enabling it BEFORE the cut-over double-manages akkoma/tuwunel/phpbb (§7.1).
 - **Live keystone verification.** Three things cannot be checked offline: that the
   fabric8 JSON write lands on the live `argoproj.io/v1alpha1 ApplicationSet`, that ArgoCD
   re-generates and prunes `optional-<slug>`, and that `ignoreDifferences` +
@@ -917,6 +935,191 @@ worst defect it catches is invisible from inside this repo.
 > `ConfigMapRunningServiceProvider`, for the cloud-backup menu). Do **not** close this
 > by inventing a consumer; it is recorded so the next reader does not infer one from
 > the writer's existence.
+
+### 10.3 The cut-over, derived: what it needs and why it cannot land dark
+
+`tests/scripts/test-optional-services-cutover-matrix.sh` derives the table below from
+`specs/cluster/optional-services.yaml` (`apps:`), `apps/13a-optional-services.yaml` and
+`apps/*.yaml`, enforces the invariants below on it, and fails when this block drifts from the
+tree. The invariants, each with an isolating negative control in the suite:
+
+* I1 every element path is a non-empty, relative path whose resolved location (symlinks and
+  `..` followed) is an existing directory strictly inside the tree: `""`, `.`, `./` and
+  `specs/..` all resolve to the tree root and fail, as does a symlink pointing outside, and
+  so does any path that begins with `..` (`../<checkout dir name>/x` resolves back inside
+  the tree on one machine and nowhere on another). The
+  claims below (I2, I4, I6) compare that same resolved location, so two spellings of one
+  directory, or a symlink and its target, are one directory
+* I2 every hardcoded owner of an element's directory is one of THAT slug's registry apps
+  (no cross-slug ownership)
+* I3 every registry app of an element slug exists and parses
+* I4 a slug that has registry apps has an owner for the element directory
+* I5 the element namespace equals the owner's destination namespace
+* I6 no directory is claimed twice (the same resolved directory; an element naming an
+  ancestor or a descendant of another's directory is not checked): per directory, the hardcoded owners plus the elements
+  with `installed:"true"` number at most one, and no two elements name the same directory
+  (even when both are `"false"`: flipping either would double-manage it)
+* I7 every element slug has a registry entry; every element carries every key the template
+  renders or the selector reads (derived from the ApplicationSet, not listed in the checker);
+  `installed` is the string `"true"` or `"false"` and nothing else, because the selector
+  matches the string and the generator's own `sed` rewrites only the quoted form (a bare
+  `installed: true` is a flag nothing flips; it still counts as a claim for I6)
+* I8 the generated name `optional-<slug>` is unique: no slug on two elements or twice in the
+  registry, and no hardcoded Application already carries that name
+
+ Regenerate with
+`python3 tests/scripts/optional_services_cutover_matrix.py --root . emit`.
+
+<!-- cutover-matrix:begin (generated; test-optional-services-cutover-matrix.sh pins it) -->
+| slug | class | hardcoded owner of the element dir | apps the element does NOT cover (orphaned by a plain delete) | what the generated Application loses |
+|---|---|---|---|---|
+| akkoma | single-app | `30-akkoma.yaml` | - | name akkoma -> optional-akkoma |
+| tuwunel | single-app | `30-tuwunel.yaml` | - | name tuwunel -> optional-tuwunel |
+| phpbb | multi-app | `30-phpbb.yaml` | `38-forum-bff-db.yaml`, `39-forum-bff-api.yaml`, `49-forum-ui.yaml` | name phpbb -> optional-phpbb |
+| games | multi-app | `50-games.yaml` | `06-casdoor-games.yaml`, `13c-games-instances.yaml` (ApplicationSet) | name hugmesh-games -> optional-games; sync-wave 2 |
+| owncast | single-app | `52-owncast.yaml` | - | name hugmesh-owncast -> optional-owncast; sync-wave 2 |
+| tube | single-app | `53-tube.yaml` | - | name hugmesh-tube -> optional-tube; sync-wave 2 |
+| character-studio | single-app | `49b-character-studio-ui.yaml` | - | name hugmesh-character-studio-ui -> optional-character-studio |
+| character-forge | multi-app | `39b-character-forge-bff-api.yaml` | `38b-character-forge-bff-db.yaml`, `49c-character-forge-ui.yaml` | name character-forge-bff-api -> optional-character-forge |
+| anubis | runtime-only | none | - | - |
+| coturn | runtime-only | none | - | - |
+| meshbridge | runtime-only | none | - | - |
+| edge-ai | single-app | `54-edge-ai.yaml` | - | name hugmesh-edge-ai -> optional-edge-ai; sync-wave 2 |
+| edge-ai-analysis | single-app | `55-edge-ai-analysis.yaml` | - | name hugmesh-edge-ai-analysis -> optional-edge-ai-analysis; sync-wave 3 |
+| edge-ai-tts | single-app | `55b-edge-ai-tts.yaml` | - | name hugmesh-edge-ai-tts -> optional-edge-ai-tts; sync-wave 2 |
+
+elements: 14 (single-app 8, multi-app 3, runtime-only 3)
+13a template finalizers: none; template sync-wave: none
+finalizers on the hardcoded owners: none
+<!-- cutover-matrix:end -->
+
+**State on main (re-measured 2026-10-14).**
+
+`_opt_appset_cutover_done` matches a literal `path: <dir>` line, while the checker resolves
+paths. The suite compares the two on every slug of the real tree (E1: they agree on all
+of them), so an owner spelled with a trailing slash, `./`, an interior `..`, a symlink or a
+flow-style `source:` turns the suite red; the guard itself is not changed here, and the
+suite runs post-merge only (see the end of this section).
+
+* The build-time prune governs a device: `bootstrap/bootstrap.sh` applies the baked
+  `apps/` tree (commit `a08484f8`; `tests/cluster/test-bootstrap-applies-baked-apps.sh`
+  48 passed). The 13a element for a selected slug stays `installed:"false"` while a
+  hardcoded owner exists (`_opt_appset_cutover_done`,
+  `scripts/_optional-services-lib.sh:550`). Every committed element is `"false"`, so the
+  ApplicationSet generates nothing for the eleven slugs that have an owner. anubis, coturn
+  and meshbridge have no hardcoded app; a prod build renders anubis `"true"`.
+* The reconciler is dark (`APP_OPTIONAL_SERVICES_RECONCILE_ENABLED` is `"false"` in
+  `manifests/admin-bff-api/deployment.yaml`), so nothing flips an element at runtime.
+
+**Why deleting the owners is not a dark change.** It changes what a cluster that tracks
+`main` does the moment it syncs, which is the one thing a dark change must not do.
+
+1. *The Application name changes.* Generated names are `optional-<slug>`; the owners are
+   `akkoma`, `hugmesh-games`, `character-forge-bff-api`, and so on. On a cluster whose
+   root is the repo-recursing `hugmesh-root` (`app-of-apps.yaml:41`, `prune: true`)
+   deleting `apps/30-akkoma.yaml` prunes Application `akkoma`.
+2. *No hardcoded owner carries a `resources-finalizer`, and neither does the 13a template*
+   (derived above; outside comments, `grep -n finalizer specs/cluster/apps/*.yaml |
+   grep -v ':[0-9]*:[[:space:]]*#'` finds only the waved root). So, as ArgoCD documents it, the prune orphans the workloads rather than deleting
+   them, and 13a, held at `"false"`, creates nothing to adopt them: the services keep
+   running but nothing manages them. Setting the element `"true"` in the same git commit
+   would not fix this on a cluster where `optional-services` already exists: both roots
+   (`app-of-apps.yaml`, `apps/00-app-of-apps-waved.yaml`) ignore
+   `/spec/generators/0/list/elements` with `RespectIgnoreDifferences=true` (read from the
+   manifests), so a git edit to `installed` should never reach the live object. A git
+   `"true"` would take effect only when the ApplicationSet is first created (a fresh
+   image). NOT VERIFIED against a live ArgoCD: the orphan-on-prune behaviour with no
+   finalizer, and `RespectIgnoreDifferences` holding a live element list back.
+3. *The reverse is also true, and is a decision nobody has made.* With no finalizer on the
+   template, flipping an element to `"false"` at runtime deletes the Application and leaves
+   the pods, Services and PVCs running: "runtime remove" would not remove anything.
+   `tests/scripts/test-selected-services-only.sh` check C7 already records exactly this and
+   is red on purpose (it is gated post-merge by `lint:selected-services-only-chain`, see
+   `PREMERGE_UNGATED`). Adding `resources-finalizer.argocd.argoproj.io` turns C7 green but
+   is not harmless: `manifests/akkoma`, `tuwunel`, `forum` (2) and `edge-ai` each ship a bare
+   `PersistentVolumeClaim` (no StatefulSet `volumeClaimTemplates`), so a cascade delete
+   destroys the data, and so would deleting the ApplicationSet or a bad element write. So
+   the finalizer must come with a stateful-data policy (scale to zero and keep the PVC, or
+   move the PVCs out of the slug's directory) and with
+   `syncPolicy.preserveResourcesOnDeletion` on the ApplicationSet. Not verified against a
+   live ArgoCD here.
+4. *Images self-switch.* `_opt_appset_cutover_done` lifts itself the moment an owner file is
+   gone, so the next image build flips selected slugs to `"true"` and ships a differently
+   named Application. For a freshly provisioned device that is clean (nothing to adopt). For
+   an already-running cluster it is the live adoption problem, and images are re-provisioned
+   rather than upgraded (`specs/cluster/README.md`, "What the device syncs").
+5. *One element is one directory.* The multi-app rows above have orphans: delete the
+   owner and the orphans keep their hardcoded Applications forever, so a runtime
+   "remove phpbb" leaves forum-bff-db, forum-bff-api and forum-ui running. Options, none
+   proven offline: a multi-source template (`sources:` from an element list, via
+   `templatePatch`), or one element per directory with a `parent` key (which changes the
+   slug-closure definition of G in 10.2). 13c `games-instances` is already a second
+   ApplicationSet with its own `installed` flag.
+6. *Sync waves are dropped* (games, owncast, tube, edge-ai, edge-ai-tts wave 2;
+   edge-ai-analysis wave 3). ArgoCD only orders children of one parent, so this matters
+   under `hugmesh-root` and not on a baked device, where `bootstrap.sh` applies each file
+   independently. Adding a per-element `wave` key is safe for the admin-bff writer
+   (`Fabric8OptionalServiceApplicationSetPatcher.applyDesiredToElements` copies every
+   other key), but the roots ignore `/spec/generators/0/list/elements`, so a live element
+   list would lack the new key while the template (`missingkey=error`) requires it.
+   Use `index . "wave"` in the template, never `.wave`. NOT VERIFIED against a live
+   ArgoCD: that `index . "wave"` is tolerated under `missingkey=error`.
+7. *Name and file consumers break.* Found by `grep -rna` over every owner and orphan file
+   name in the matrix (plain `grep` skips a file that holds a NUL byte and reports a miss).
+   Functional consumers, which act on a name or file and would change behaviour:
+   `scripts/_optional-services-lib.sh` (the per-slug `rm -f` prune),
+   `specs/cluster/optional-services.yaml` (`apps:`), `specs/cluster/backing-services.yaml`
+   (`apps: [apps/38-forum-bff-db.yaml]`), `build-x86-host-stage4.sh` and
+   `build-rpi5-stage4.sh` (`_mgd_pg ... apps/38-forum-bff-db.yaml`, and the IdP prune of
+   `06-casdoor-games.yaml`), and the brand templates `templates/apps/39-forum-bff.yaml.hbs`
+   and `49-forum-ui.yaml.hbs` (they render the phpbb orphans). Tests that name them:
+   `tests/scripts/test-backing-service-endpoints-closure.sh:166-175` (`52-owncast`,
+   `53-tube`, `30-phpbb` as the Application that carries a manifest),
+   `tests/stack/test-optional-services-exclude.sh`, `tests/stack/test-optional-services-parity.sh`,
+   `tests/scripts/test-selected-services-only.sh`, `tests/cluster/test-bootstrap-applies-baked-apps.sh`,
+   `tests/scripts/test-idp-builder-functions.sh` and
+   `tests/managed-services/test-managed-services-gate.sh`.
+   Prose only (a stale mention is not a break, but should move with the cut-over):
+   `apps/17-backing-service-endpoints.yaml:91`, `apps/23-headwind.yaml:1,12`,
+   `apps/05b-casdoor-domains.yaml`, `apps/06-casdoor-games.yaml`, `apps/30-phpbb.yaml`,
+   `apps/30-hugmesh-apis.yaml`, `apps/50-games.yaml`, `bootstrap/bootstrap.sh:131,160`,
+   `bootstrap/kind-local/bootstrap-kind.sh:998`, `bootstrap/kind-local/README.md:181`,
+   `manifests/admin-bff-api/deployment.yaml:610`, `manifests/forum/network-policy.yaml:22`,
+   `manifests/optional-services-operator/seed-optionalservices.yaml:17`,
+   `tests/scripts/kind_route_closure.py:68-80`, `docs/EDGE-AI.md`, `docs/XR-CHAT.md`,
+   `docs/RESERVED-PREFIXES.md`, `docs/GAMES-APPSTORE.md` and
+   `tests/e2e/specs/18-rbac-phase8-10-pending.spec.ts`.
+   The kind profiles do not apply any owner (`bootstrap-kind.sh` lists them only in a
+   comment), so they are not a consumer.
+
+**Order for an already-running cluster, per single-app slug** (needs a live cluster, not
+exercised; each step below assumes the ignoreDifferences behaviour above, which is not
+verified against a live ArgoCD):
+
+1. Confirm the old Application is Synced and Healthy and the reconciler is dark; record
+   the workload UIDs.
+2. Land the git change that deletes the owner. On a `hugmesh-root` cluster the root prunes
+   the old Application and the workloads are orphaned. (On a baked-tree device nothing is
+   pruned: delete the Application by hand, `kubectl delete application <old>
+   --cascade=orphan`. On a root-tracking cluster a hand delete while the file is still in
+   git is undone by the root's selfHeal.)
+3. Live-patch the ApplicationSet element to `"true"` (`kubectl patch applicationset
+   optional-services`). It is the same field the reconciler will own, and selfHeal does not
+   revert it for the same ignoreDifferences reason. Do not patch first: that opens a window
+   with two owners on one directory, which is what `_opt_appset_cutover_done` exists to
+   prevent. The reconciler cannot do this step, because it is dark and is only enabled
+   after the cut-over.
+4. Wait for `optional-<slug>` to be Synced and Healthy and check the UIDs did not change.
+
+Only after all eleven have moved, and the keystone checks in section 10 have passed, flip
+the reconciler.
+
+**What is still open and needs an operator or a live cluster:** the finalizer and
+stateful-data decision (3); the multi-app design (5); the adoption order above; the three
+keystone checks in section 10. The suite runs post-merge as `lint:optional-services-cutover-matrix` in `.gitlab-ci.yml`;
+adding it to `.github/workflows/shell-suites.yml` (the pull_request gate) is an edit under
+`.github/` and was not made, which is why `test-guard-integrity.sh` lists it in
+`PREMERGE_UNGATED`.
 
 ## 11. Verification & rollback
 

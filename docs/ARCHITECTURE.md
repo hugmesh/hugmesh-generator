@@ -90,7 +90,7 @@ flowchart TD
     end
 
     subgraph ROADMAP["Roadmap — genuinely NOT done"]
-        KINDE2E["kind SSO e2e: harness shipped, blockers 1-16 fixed, JWT leg open (#693)"]
+        KINDE2E["kind SSO e2e: harness shipped, blockers 1-16 and the JWKS fix (#693) merged, live proof not run"]
         MFAFLIP["MFA: the live-cluster operator flip (MFA-ROLLOUT.md)"]
         ENFORCE["SELinux enforcing (nodes boot permissive)"]
         SFU["Group-call SFU — does not exist"]
@@ -314,8 +314,10 @@ since shipped.
   kind-images|kind-up|kind-e2e|kind-down`) and reached a real Casdoor login. The
   16 fresh-cluster payload blockers it found on 2026-08-05 are fixed on `main`
   (re-measured against the tree and the offline guards, not a cluster). The next
-  one is open: `GET /bff/session` 500s on kind because the BFF manifests set no
-  in-cluster `CASDOOR_JWKS_URI` (#693, draft pull request #709, or #736, the same change merged with main). See
+  one, `GET /bff/session` 500ing on kind because the BFF manifests set no
+  in-cluster `CASDOOR_JWKS_URI` (#693), is fixed on `main` (pull requests #709
+  and #736, merged 2026-10-14, pinned by `tests/scripts/test-bff-jwks-in-cluster.sh`);
+  the live proof on a cluster has not been run. See
   [`KIND-SSO-E2E-FINDINGS.md`](KIND-SSO-E2E-FINDINGS.md).
 
 ## GitOps
@@ -504,14 +506,17 @@ are complete on `main`; each entry names what lights it and what caveat survives
 What is genuinely **not done**. Nothing here has a working default-off
 implementation on `main`.
 
-- **🚧 kind-cluster SSO e2e — harness shipped, payload blockers fixed, JWT leg open.**
+- **🚧 kind-cluster SSO e2e — harness shipped, payload blockers and the JWKS fix merged, live proof not run.**
   `KIND_PROFILE=sso` + `make kind-images|kind-up|kind-e2e|kind-down` stand up a
   real cluster, and the chain reaches Casdoor and mints a session against a real
   IdP. The 16 fresh-cluster blockers of the first run are fixed on `main` (item 1
   for kind only; item 16 in the admin-bff source, image rebuild unverified), as
-  re-measured on 2026-10-14 against the tree, not a cluster. **Open:** the BFFs
-  fetch Casdoor's signing keys from a public host that does not resolve
-  in-cluster, so `GET /bff/session` answers 500 (#693, draft pull request #709, or #736, the same change merged with main);
+  re-measured on 2026-10-14 against the tree, not a cluster. The BFFs
+  used to fetch Casdoor's signing keys from a public host that does not resolve
+  in-cluster, so `GET /bff/session` answered 500 (#693); that is fixed on `main`
+  (pull requests #709 and #736 merged 2026-10-14, #693 closed, the in-cluster
+  `CASDOOR_JWKS_URI` pinned by `tests/scripts/test-bff-jwks-in-cluster.sh`).
+  **Open:** the live proof (the guard reads manifests, not a cluster);
   the Harbor pull path is never exercised on kind (finding 17); findings 20, 25
   and 26. The last recorded green run (2026-08-06) covers the cookie mint only.
   See [`KIND-SSO-E2E-FINDINGS.md`](KIND-SSO-E2E-FINDINGS.md).

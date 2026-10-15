@@ -1,0 +1,8 @@
+REAL-SHAPE EXCERPT, DERIVED from real-x86-cold.log: every Emerging turned into Emerging binary, a later start stamp. Hand-derived, not a capture of a warm build.
+==== snap-build-x86 (snap-build-x86) start 20260930T123748Z brand=hugmesh role=pki env=test ====
+==> Emerge group: system
+>>> Emerging binary (1 of 5) virtual/libpcre2-internals-10.47::gentoo
+>>> Emerging binary (2 of 5) dev-lang/swig-4.3.1::gentoo
+>>> Emerging binary (3 of 5) sys-libs/libsepol-3.11::gentoo
+>>> Emerging binary (4 of 5) sys-libs/libselinux-3.11-r1::gentoo
+>>> Emerging binary (5 of 5) sys-apps/portage-3.0.82.2::gentoo
