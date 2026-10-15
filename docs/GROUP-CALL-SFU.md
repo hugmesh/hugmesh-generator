@@ -4,7 +4,7 @@
 > was chosen on 2026-09-23 (hugmesh-admin-bff-api#98, decisions 102a and 102b).
 > The **client half** has shipped dark in `hugmesh-matrix-ui`. The **server
 > half** (this repo) is not built. This page is the plan for it. Measured
-> 2026-10-15 against `hugmesh-generator` origin/main `a73be8ce`,
+> 2026-10-15 against `hugmesh-generator` origin/main `8501a755`,
 > `hugmesh-matrix-ui` origin/main `b4c13dc` (its `rtc/` directory is unchanged
 > since `26408d5`), tuwunel main `f473d9a` and tag
 > `v1.7.0` (the tag the mesh pins). Where the two tuwunel refs differ, this
