@@ -505,12 +505,16 @@ loop), `issues.py` (reads `gh` output: which issues to pick, how to print one) a
   status (`Local AI: ready, qwen3:8b loaded, 2 queued, 1 running`), a chevron that
   expands it into a prompt line and an answer area (Enter sends, and only sends: the
   wizard stays on the page you were on, so a question never presses Next or starts a
-  build; Escape with text in the prompt clears the prompt and nothing else, and on an
-  empty prompt it is the window's Cancel as everywhere else; with the focus on the
-  chevron, Enter shows or hides the prompt and Escape does nothing; with the focus in
-  the answer area — where you click to copy the model's words — Enter and Escape do
+  build; Escape only cancels the current input or dialog: with text in the prompt it
+  clears the prompt and nothing else, and from any other part of the bar (an empty
+  prompt, the chevron, the answer area, the buttons) it does nothing and never closes
+  the Studio window; the window's own Cancel button and its close button still close
+  it, and Escape in the Current work window closes that window only; with the focus on
+  the chevron, Enter shows or hides the prompt (a held key does it once); with the
+  focus in the answer area — where you click to copy the model's words — Enter does
   nothing at all, rather than reaching the wizard; on the bar's buttons Enter presses
-  that button and Escape is the window's Cancel, as on the wizard's own buttons; a
+  that button; Clear while an answer is still arriving frees the prompt at once, so the
+  next question is sent without waiting for the old one to stop; a
   server on the Ollama port that answers something other than Ollama's JSON is shown
   as "not answering", never as a crash; the answer streams in, and
   a connection that drops mid-answer is reported in words under the status line rather

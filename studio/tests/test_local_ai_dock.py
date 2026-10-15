@@ -113,6 +113,16 @@ def wait_for(qapp, cond, timeout=5.0):
     return bool(cond())
 
 
+def settle(qapp, dock):
+    """Wait until every prompt worker has ended AND the window thread has taken what they
+    queued, so a test asserts on a dock that has heard everything it is going to."""
+    assert wait_for(qapp, lambda: not [t for t in threading.enumerate()
+                                       if t.name == "local-ai-prompt" and t.is_alive()]), \
+        "a prompt worker never finished"
+    assert wait_for(qapp, lambda: dock._threads._q.empty()), "the dock never drained its results"
+    qapp.processEvents()
+
+
 def press_enter(qapp, widget):
     """Enter as a keyboard delivers it: a press and a release through Qt's event system,
     so the key travels on to the widget's parents exactly as it would for a person.
@@ -404,16 +414,13 @@ def test_enter_in_the_prompt_sends_and_leaves_the_wizard_on_its_page(shell, qapp
     qapp.sendEvent(dock.prompt, QtGui.QKeyEvent(QtCore.QEvent.Type.KeyPress, Qt.Key.Key_A,
                                                 Qt.KeyboardModifier.NoModifier, "a"))
     assert dock.prompt.text() == "a", "ordinary typing no longer reaches the prompt"
-    # ...and a key the prompt does not own still travels on to the wizard. Escape on an
-    # EMPTY prompt line is the wizard's (QDialog: Cancel); a prompt that accepted every
-    # key would keep it, and this is the assertion that catches that.
+    # ...and a key the prompt does not own still travels on to the wizard. F5 is not
+    # Enter, not Escape and not a typing key: a prompt that accepted EVERY key would keep
+    # it from the window, and this is the assertion that catches that.
     dock.prompt.clear()
     seen = _KeysSeenBy(wiz)
-    rejected = []
-    wiz.rejected.connect(lambda: rejected.append(True))
-    press_key(qapp, dock.prompt, Qt.Key.Key_Escape, "\x1b")
-    assert int(Qt.Key.Key_Escape) in seen.keys, "Escape on an empty prompt never reached the wizard"
-    assert rejected, "Escape on an empty prompt no longer cancels the window as it always did"
+    press_key(qapp, dock.prompt, Qt.Key.Key_F5, "")
+    assert int(Qt.Key.Key_F5) in seen.keys, "a key the prompt does not own never reached the wizard"
 
 
 class _KeysSeenBy(QtCore.QObject):
@@ -441,7 +448,7 @@ def test_escape_in_the_prompt_clears_a_half_typed_question_instead_of_closing_th
     """The dock puts a text field on EVERY wizard page, and a QWizard is a QDialog: an
     Escape that the line edit does not take closes the whole window. A person who
     starts a question and thinks better of it must lose the question, not the Studio.
-    Only that case is consumed; Escape on an empty line still cancels, as before."""
+    Escape on an already empty line cancels nothing either: it does not close the window."""
     wiz = open_at(shell, qapp, NORMAL)
     dock = wiz.local_ai_dock
     dock.set_expanded(True)
@@ -455,9 +462,12 @@ def test_escape_in_the_prompt_clears_a_half_typed_question_instead_of_closing_th
     assert dock.prompt.text() == "", "Escape did not clear the half-typed question"
     assert not rejected and wiz.isVisible(), "Escape with text in the prompt closed the Studio window"
     assert dock.prompt.hasFocus(), "the prompt must keep the focus after it is cleared"
-    # the same key on the now-empty line is the wizard's, exactly as before the dock existed
+    # the same key on the now-empty line has nothing left to cancel and must not reach
+    # the wizard, whose QDialog would close the Studio on an Escape nobody took
+    seen = _KeysSeenBy(wiz)
     press_key(qapp, dock.prompt, Qt.Key.Key_Escape, "\x1b")
-    assert rejected, "Escape on the empty prompt must still cancel the window"
+    assert not rejected and wiz.isVisible(), "Escape on the empty prompt closed the Studio window"
+    assert int(Qt.Key.Key_Escape) not in seen.keys, "Escape on the empty prompt reached the wizard"
 
 
 @pytest.mark.parametrize("key, text", [(Qt.Key.Key_Return, "\r"), (Qt.Key.Key_Enter, "\r"),
@@ -521,17 +531,15 @@ def test_enter_and_escape_on_the_chevron_and_in_the_answer_area_stop_there(
 
 
 @pytest.mark.parametrize("button", ["start_btn", "work_btn", "send_btn", "clear_btn"])
-def test_enter_on_a_dock_button_presses_that_button_and_escape_there_is_the_windows_cancel(
+def test_enter_on_a_dock_button_presses_that_button_and_escape_there_closes_nothing(
         shell, qapp, monkeypatch, button):
     """The complete list of the dock's keyboard stops is the chevron, the two bar buttons,
     the prompt, Send, Clear and the answer area (in that Tab order). This pins the four
     buttons so the rule is stated for every stop and a change to it is deliberate:
     Enter on a focused dock button presses THAT button and moves no wizard page (a
     QPushButton on a QDialog window is autoDefault and takes the key itself), and
-    Escape on a dock button is the window's Cancel, exactly as it is on the wizard's
-    own Back/Next/Cancel buttons and on the empty prompt line. Whether Escape anywhere
-    in the dock should stop closing the Studio is the operator's decision, not a
-    side effect of this change."""
+    Escape on a dock button closes nothing: the operator decided (2026-10-15) that
+    Escape only cancels the current input or dialog, and a dock button holds neither."""
     started, sent = [], []
     monkeypatch.setattr(lai, "send_prompt", lambda text, *a, **k: sent.append(text) or "ok")
     monkeypatch.setattr(lai, "start_assistant",
@@ -564,11 +572,13 @@ def test_enter_on_a_dock_button_presses_that_button_and_escape_there_is_the_wind
             "Enter on Send did not send the prompt"
     else:
         assert dock.answer.toPlainText() == "", "Enter on Clear did not clear the answer"
-    # Escape on the button: the window's Cancel, as on the wizard's own buttons
+    # Escape on the button: nothing is cancelled and the key never reaches the wizard
     target.setFocus()
     qapp.processEvents()
+    seen = _KeysSeenBy(wiz)
     press_key(qapp, target, Qt.Key.Key_Escape, "\x1b")
-    assert rejected, f"Escape on {button} no longer cancels the window as it does on every other button"
+    assert not rejected and wiz.isVisible(), f"Escape on {button} closed the Studio window"
+    assert int(Qt.Key.Key_Escape) not in seen.keys, f"Escape on {button} reached the wizard"
 
 
 def test_the_prompt_reads_the_key_as_an_int_or_as_an_enum_member(qapp, monkeypatch):
@@ -611,7 +621,7 @@ def test_the_prompt_reads_the_key_as_an_int_or_as_an_enum_member(qapp, monkeypat
     assert ev.accepted and line.text() == "", "Escape as an enum member did not clear the line"
     ev = StubEvent(Keys.Escape)
     line.keyPressEvent(ev)
-    assert not ev.accepted, "Escape on an empty line must travel on"
+    assert not ev.accepted, "Escape on an empty line is the dock's to take, not the line's"
     ev = StubEvent(Keys.A)
     line.keyPressEvent(ev)
     assert not ev.accepted and passed_on[-1] is ev
@@ -834,9 +844,11 @@ def test_clear_during_an_answer_is_not_undone_by_the_answer_arriving_late(qapp):
     def prompt_fn(text, history, on_chunk, should_stop):
         seen.append(list(history))
         on_chunk("partial answer")
-        gate.wait(5)
-        on_chunk(" and the rest")
-        return "partial answer and the rest"
+        if len(seen) == 1:
+            gate.wait(5)
+            on_chunk(" and the rest")
+            return "partial answer and the rest"
+        return "ok"
     dock = dock_mod.LocalAIDock(GENERATOR_DIR, snapshot_fn=make_snapshot, prompt_fn=prompt_fn,
                                 auto_poll=False, expanded=True)
     dock.show()
@@ -846,7 +858,7 @@ def test_clear_during_an_answer_is_not_undone_by_the_answer_arriving_late(qapp):
     dock.clear()                                               # mid-answer
     assert dock._history == [] and dock.answer.toPlainText() == ""
     gate.set()
-    assert wait_for(qapp, lambda: not dock._busy)
+    settle(qapp, dock)
     assert dock._history == [], dock._history
     assert dock.answer.toPlainText() == "", dock.answer.toPlainText()
     dock.prompt.setText("q2")
@@ -869,7 +881,7 @@ def test_an_error_from_a_cleared_question_is_not_shown_on_the_clean_screen(qapp)
     dock.send()
     dock.clear()
     gate.set()
-    assert wait_for(qapp, lambda: not dock._busy)
+    settle(qapp, dock)
     assert "old failure" not in dock.answer.toPlainText()
     assert dock.send_btn.text() == "Send" and dock.prompt.isEnabled()
     dock.close()
@@ -917,7 +929,7 @@ def test_clear_mid_answer_tells_the_running_prompt_to_stop(qapp):
     assert wait_for(qapp, lambda: "partial" in dock.answer.toPlainText())
     dock.clear()                                               # mid-answer
     gate.set()
-    assert wait_for(qapp, lambda: not dock._busy)
+    settle(qapp, dock)
     assert flag.get("stop") is True, "Clear did not tell the running prompt to stop"
     dock.close()
 
@@ -970,3 +982,225 @@ def test_the_dock_asks_the_same_model_as_the_command_line(qapp, monkeypatch, tmp
                                        f"text screen asked {chats[2]}")
     finally:
         fake.close()
+
+
+# ── ESCAPE ONLY CANCELS THE CURRENT INPUT OR DIALOG (operator decision 2026-10-15) ───────
+@pytest.mark.parametrize("pages_on", [0, 1], ids=["welcome", "second-page"])
+@pytest.mark.parametrize("stop", ["chevron", "start_btn", "work_btn", "prompt", "send_btn",
+                                  "clear_btn", "answer"])
+def test_escape_on_no_stop_of_the_dock_closes_the_studio_window(shell, qapp, monkeypatch,
+                                                                 stop, pages_on):
+    """Every keyboard stop of the dock, on the first page and on a later one: Escape
+    neither rejects the wizard nor reaches it. (Escape with text in the prompt is the one
+    case that DOES something, and it clears the text: see the test above.)"""
+    monkeypatch.setattr(lai, "start_assistant",
+                        lambda *a, **k: lai.StartResult(True, "Starting.", "x"))
+    wiz = open_at(shell, qapp, NORMAL)
+    dock = wiz.local_ai_dock
+    dock.set_expanded(True)
+    qapp.processEvents()
+    for _ in range(pages_on):
+        wiz.next()
+        qapp.processEvents()
+    rejected = []
+    wiz.rejected.connect(lambda: rejected.append(True))
+    target = getattr(dock, stop)
+    target.setFocus()
+    qapp.processEvents()
+    assert target.hasFocus(), f"{stop} did not take the focus: nothing is tested"
+    seen = _KeysSeenBy(wiz)
+    press_key(qapp, target, Qt.Key.Key_Escape, "\x1b")
+    assert not rejected and wiz.isVisible(), f"Escape on the {stop} closed the Studio window"
+    assert int(Qt.Key.Key_Escape) not in seen.keys, f"Escape on the {stop} reached the wizard"
+    assert dock.expanded and dock.isVisible(), f"Escape on the {stop} hid the dock"
+
+
+def test_the_wizards_own_cancel_and_closing_the_window_still_close_it(shell, qapp):
+    """The decision keeps the dock from closing the Studio on Escape; it does not take
+    away the ways a person closes it on purpose: the wizard's Cancel button (also on
+    Escape, a key that is the wizard's own when the focus is on one of its buttons), and
+    the window's close button."""
+    wiz = open_at(shell, qapp, NORMAL)
+    wiz.local_ai_dock.set_expanded(True)
+    qapp.processEvents()
+    rejected = []
+    wiz.rejected.connect(lambda: rejected.append("cancel"))
+    cancel = wiz.button(QtWidgets.QWizard.WizardButton.CancelButton)
+    cancel.setFocus()
+    qapp.processEvents()
+    assert cancel.hasFocus(), "the Cancel button did not take the focus: nothing is tested"
+    press_key(qapp, cancel, Qt.Key.Key_Escape, "\x1b")
+    assert rejected == ["cancel"] and not wiz.isVisible(), "Escape on the wizard's Cancel did not cancel"
+
+    second = open_at(shell, qapp, NORMAL)
+    second.rejected.connect(lambda: rejected.append("button"))
+    second.button(QtWidgets.QWizard.WizardButton.CancelButton).click()
+    qapp.processEvents()
+    assert rejected[-1] == "button" and not second.isVisible(), "the Cancel button no longer closes the window"
+
+    third = open_at(shell, qapp, NORMAL)
+    assert third.isVisible()
+    third.close()
+    qapp.processEvents()
+    assert not third.isVisible(), "the window's close no longer closes it"
+
+
+def test_escape_in_the_current_work_window_closes_that_window_and_not_the_studio(shell, qapp):
+    wiz = open_at(shell, qapp, NORMAL)
+    dock = wiz.local_ai_dock
+    rejected = []
+    wiz.rejected.connect(lambda: rejected.append(True))
+    work = dock.show_current_work()
+    qapp.processEvents()
+    assert work.isVisible() and work.isWindow()
+    seen = _KeysSeenBy(wiz)
+    work.tree.setFocus()
+    qapp.processEvents()
+    press_key(qapp, work.tree, Qt.Key.Key_Escape, "\x1b")
+    assert not work.isVisible(), "Escape did not close the Current work window"
+    assert not rejected and wiz.isVisible(), "Escape in the Current work window closed the Studio"
+    assert int(Qt.Key.Key_Escape) not in seen.keys
+
+
+# ── HOLDING RETURN ON THE CHEVRON ────────────────────────────────────────────────────────
+def test_holding_return_on_the_chevron_toggles_once_and_writes_the_setting_once(
+        shell, qapp, monkeypatch):
+    saves = []
+    monkeypatch.setattr(dock_mod, "save_expanded", lambda on: saves.append(on))
+    wiz = open_at(shell, qapp, NORMAL)
+    dock = wiz.local_ai_dock
+    dock.set_expanded(False)
+    qapp.processEvents()
+    del saves[:]
+    dock.chevron.setFocus()
+    qapp.processEvents()
+    mods = Qt.KeyboardModifier.NoModifier
+    qapp.sendEvent(dock.chevron, QtGui.QKeyEvent(QtCore.QEvent.Type.KeyPress, Qt.Key.Key_Return,
+                                                 mods, "\r", False))
+    for _ in range(12):                                   # the auto-repeat of a held key
+        qapp.sendEvent(dock.chevron, QtGui.QKeyEvent(QtCore.QEvent.Type.KeyPress, Qt.Key.Key_Return,
+                                                     mods, "\r", True))
+    qapp.sendEvent(dock.chevron, QtGui.QKeyEvent(QtCore.QEvent.Type.KeyRelease, Qt.Key.Key_Return,
+                                                 mods, "\r", False))
+    qapp.processEvents()
+    assert dock.expanded, "the first press of Return did not show the prompt"
+    assert saves == [True], f"a held Return rewrote the setting {len(saves)} times: {saves}"
+
+
+# ── CLEAR WHILE THE MODEL IS STILL LOADING ───────────────────────────────────────────────
+def test_clear_releases_the_dock_at_once_and_a_new_question_goes_through(qapp):
+    """Clear while the first answer is still waiting on the model: the button reads Send
+    again and the next question is sent, though the old request has not heard the stop."""
+    gate, calls = threading.Event(), []
+
+    def prompt_fn(text, history, on_chunk, should_stop):
+        calls.append(text)
+        if text == "q1":
+            gate.wait(5)                      # the model is "loading": stop is not heard
+        on_chunk(f"answer to {text}")
+        return f"answer to {text}"
+    dock = dock_mod.LocalAIDock(GENERATOR_DIR, snapshot_fn=make_snapshot, prompt_fn=prompt_fn,
+                                auto_poll=False, expanded=True)
+    dock.show()
+    dock.prompt.setText("q1")
+    assert dock.send()
+    assert dock._busy and dock.send_btn.text() == "Stop"
+    dock.clear()
+    assert not dock._busy and dock.send_btn.text() == "Send", "Clear left the dock busy"
+    dock.prompt.setText("q2")
+    assert dock.send() is True, "a question typed after Clear was refused"
+    assert wait_for(qapp, lambda: "answer to q2" in dock.answer.toPlainText())
+    gate.set()
+    settle(qapp, dock)
+    assert "answer to q1" not in dock.answer.toPlainText(), "the cleared answer came back"
+    assert calls == ["q1", "q2"]
+    dock.close()
+
+
+def test_a_cleared_answer_that_ends_late_leaves_the_next_question_running(qapp):
+    """The race Clear opens: the old request finishes (or fails) while the NEW one is
+    still running. Its late result must not release the new question's dock."""
+    old_gate, new_gate = threading.Event(), threading.Event()
+    boom = {"on": False}
+
+    def prompt_fn(text, history, on_chunk, should_stop):
+        if text == "old":
+            old_gate.wait(5)
+            if boom["on"]:
+                raise lai.LocalAIError("old failure")
+            on_chunk("old answer")
+            return "old answer"
+        new_gate.wait(5)
+        on_chunk("new answer")
+        return "new answer"
+    for fail in (False, True):
+        old_gate.clear(), new_gate.clear()
+        boom["on"] = fail
+        dock = dock_mod.LocalAIDock(GENERATOR_DIR, snapshot_fn=make_snapshot, prompt_fn=prompt_fn,
+                                    auto_poll=False, expanded=True)
+        dock.show()
+        dock.prompt.setText("old")
+        assert dock.send()
+        dock.clear()
+        dock.prompt.setText("new")
+        assert dock.send()
+        old_gate.set()                                      # the OLD request ends now
+        assert wait_for(qapp, lambda: False, timeout=0.6) is False   # let the drain run twice
+        assert dock._busy, f"the old request's late result (fail={fail}) released the new question"
+        assert dock.send_btn.text() == "Stop"
+        assert dock.send() is False                         # one question at a time still holds
+        new_gate.set()
+        assert wait_for(qapp, lambda: not dock._busy)
+        assert "new answer" in dock.answer.toPlainText()
+        assert "old answer" not in dock.answer.toPlainText() and "old failure" not in dock.answer.toPlainText()
+        dock.close()
+
+
+@pytest.mark.parametrize("size", [SMALLEST, NORMAL], ids=["smallest", "normal"])
+def test_the_dock_looks_right_after_clear_mid_answer_and_a_new_question(
+        shell, qapp, monkeypatch, tmp_path, size):
+    """LOOK, in the state the Clear fix creates: a cleared answer still stopping behind
+    a new question. The window is rendered offscreen to a PNG (the file must be a real
+    picture of the window's size, not blank) and the geometry is asserted: the dock sits
+    inside the window, covers none of Back/Next/Cancel, and Send/Clear are tall enough to
+    click and drawn in full."""
+    gate = threading.Event()
+
+    def slow(text, history=None, on_chunk=None, should_stop=None, **k):
+        if text == "first":
+            on_chunk("a few words")
+            gate.wait(5)
+        else:
+            on_chunk("fresh answer")
+        return "x"
+    monkeypatch.setattr(lai, "send_prompt", slow)
+    wiz = open_at(shell, qapp, size)
+    dock = wiz.local_ai_dock
+    dock.set_expanded(True)
+    dock.prompt.setText("first")
+    assert dock.send()
+    assert wait_for(qapp, lambda: "a few words" in dock.answer.toPlainText())
+    dock.clear()
+    dock.prompt.setText("second")
+    assert dock.send()
+    assert wait_for(qapp, lambda: "fresh answer" in dock.answer.toPlainText())
+    dock.prompt.setText("a third question typed while the second is still running")
+    qapp.processEvents()
+    png = tmp_path / "after-clear.png"
+    img = wiz.grab()
+    assert img.save(str(png)) and png.stat().st_size > 5000
+    assert (img.width(), img.height()) == (wiz.width(), wiz.height())
+    keep = os.environ.get("LOCAL_AI_DOCK_GRABS")
+    if keep:
+        os.makedirs(keep, exist_ok=True)
+        img.save(os.path.join(keep, f"after-clear-{size.width()}x{size.height()}.png"))
+    d = rect_in(wiz, dock)
+    assert QtCore.QRect(QtCore.QPoint(0, 0), wiz.size()).contains(d), f"the dock {d} leaves the window"
+    assert not any(d.intersects(b) for b in button_rects(wiz)), "the dock covers a wizard button"
+    for w in (dock.send_btn, dock.clear_btn, dock.prompt):
+        assert w.isVisible() and w.height() >= 26, f"{type(w).__name__} is only {w.height()}px tall"
+        assert w.width() >= w.minimumSizeHint().width() - 1
+        assert QtCore.QRect(QtCore.QPoint(0, 0), dock.size()).contains(
+            QtCore.QRect(w.mapTo(dock, QtCore.QPoint(0, 0)), w.size()))
+    gate.set()
+    settle(qapp, dock)

@@ -153,8 +153,9 @@ class _PromptLine(QtWidgets.QLineEdit):
     Escape is the other key a QDialog claims: unaccepted, it CLOSES THE WHOLE STUDIO
     WINDOW. A person who starts a question and thinks better of it should lose the
     question, not the Studio, so Escape with text in the line clears the line and stops
-    there. On an empty line it is not ours and travels on as it always did. Every other
-    key goes where it always went."""
+    there. On an empty line there is nothing left to cancel: the line leaves the key
+    alone and :meth:`LocalAIDock.keyPressEvent` takes it, so it still closes nothing.
+    Every other key goes where it always went."""
 
     def keyPressEvent(self, event):
         code = _key_code(event)
@@ -180,15 +181,14 @@ class _AnswerArea(QtWidgets.QPlainTextEdit):
     this area. Enter never reaches the wizard from any of them: it sends (prompt),
     shows or hides the prompt (chevron, :class:`_Chevron`), presses the focused button
     (the four QPushButtons are autoDefault on a dialog window and take the key
-    themselves) or does nothing (here). Escape is kept where it has a dock meaning or
-    none at all — a half-typed question (cleared), the chevron and this area (nothing)
-    — and on the empty prompt and on the four buttons it is the window's Cancel, as it
-    is on the wizard's own buttons."""
+    themselves) or does nothing (here). Escape cancels only what is being typed (the
+    prompt) and otherwise does nothing: it is never the wizard's Cancel from any stop
+    of the dock, because :meth:`LocalAIDock.keyPressEvent` takes it on the way up."""
 
     def keyPressEvent(self, event):
         code = _key_code(event)
         super().keyPressEvent(event)
-        if self.isReadOnly() and (code in _SEND_KEYS or code == _ESCAPE):
+        if self.isReadOnly() and code in _SEND_KEYS:
             event.accept()
 
 
@@ -198,15 +198,16 @@ class _Chevron(QtWidgets.QToolButton):
     presses itself on Space but not on Return, and leaves Return unaccepted, so Enter
     here used to travel on to the wizard and press Next — or, on the worklist page,
     the button that starts a build — from the widget a keyboard user reaches first.
-    Enter now presses the chevron; Escape does nothing (see :class:`_AnswerArea`)."""
+    Enter now presses the chevron, once per key press: a held key repeats the event and
+    each click would show or hide the prompt and rewrite the settings file, so repeats
+    are swallowed (Space already ignores them, as QAbstractButton does). Escape does
+    nothing here (see :class:`_AnswerArea`)."""
 
     def keyPressEvent(self, event):
         code = _key_code(event)
         if code in _SEND_KEYS:
-            self.click()
-            event.accept()
-            return
-        if code == _ESCAPE:
+            if not event.isAutoRepeat():
+                self.click()
             event.accept()
             return
         super().keyPressEvent(event)
@@ -350,6 +351,15 @@ class LocalWorkWindow(QtWidgets.QWidget):
         self._drain.setInterval(DRAIN_MS)
         self._drain.timeout.connect(self._on_drain)
         self._auto_poll = auto_poll
+
+    def keyPressEvent(self, event):
+        """Escape closes this window and nothing else (it is a window of its own and
+        its keys never reach the Studio's wizard)."""
+        if _key_code(event) == _ESCAPE:
+            self.close()
+            event.accept()
+            return
+        super().keyPressEvent(event)
 
     # ---- life cycle -----------------------------------------------------------------
     def showEvent(self, event):
@@ -555,6 +565,19 @@ class LocalAIDock(QtWidgets.QFrame):
         self.destroyed.connect(lambda *_: alive.set())      # a request outliving its window stops
         self._apply_expanded(notify=False)
 
+    def keyPressEvent(self, event):
+        """Escape never closes the Studio from the dock. A key a dock widget leaves
+        unaccepted travels up through here to the wizard, and a QDialog closes itself on
+        an Escape nobody took. The operator's rule is that Escape only cancels the
+        current input or dialog: the prompt clears its own text (:class:`_PromptLine`),
+        and on every other stop of the dock — a button, the chevron, the answer area, an
+        empty prompt — there is nothing of the dock's to cancel, so the key ends here.
+        The wizard's own Cancel button and the window's close button still close it."""
+        if _key_code(event) == _ESCAPE:
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
     # ---- geometry -------------------------------------------------------------------
     def bar_height(self) -> int:
         return max(MIN_CLICK_PX, self.bar.sizeHint().height()) + 7
@@ -685,6 +708,10 @@ class LocalAIDock(QtWidgets.QFrame):
         self.answer.clear()
         if self._busy:
             self._stop.set()
+            # Release the dock now. The old request may sit in the model's load for up to
+            # two minutes before it hears the stop, and a person who cleared it must be
+            # able to ask again at once; what it eventually sends back is dropped.
+            self._finish_prompt()
 
     def _append(self, text: str) -> None:
         cur = self.answer.textCursor()
@@ -749,12 +776,11 @@ class LocalAIDock(QtWidgets.QFrame):
                     self._history += [{"role": "user", "content": _text},
                                       {"role": "assistant", "content": answer}]
                     del self._history[:-40]
-            self._finish_prompt()
+                self._finish_prompt()
         elif tag == "error":
             born, message = value
             if born != self._clears:
-                self._finish_prompt()
-                return
+                return                       # Clear already released the dock; a newer question may own it
             self._append(f"\n[{message}]\n\n")
             self._finish_prompt()
             self._say(str(message), 30, warn=True)

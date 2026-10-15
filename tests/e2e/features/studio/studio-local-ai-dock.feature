@@ -21,7 +21,10 @@
 #     page, Enter in the answer area moves no page, Escape on either closes no window.
 #     Enter therefore reaches the wizard from NO widget of the dock (on the four buttons
 #     it presses the focused button, which the unit tests pin); Escape on a dock button
-#     or on the empty prompt stays the window's Cancel, as on the wizard's own buttons;
+#     or on the empty prompt cancels nothing and closes no window either (operator
+#     decision 2026-10-15: Escape only cancels the current input or dialog), which the
+#     unit tests pin for every stop of the dock; the wizard's own Cancel and the window's
+#     close button still close it;
 #   * the dock asks the model LOCAL_AI_MODEL names — the one `--local-ai-prompt` asks
 #     under the same setting — not whatever model happens to be loaded;
 #   * Clear pressed while the answer is still arriving empties the answer area and
