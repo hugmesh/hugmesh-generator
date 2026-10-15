@@ -154,6 +154,13 @@ OPERATOR_SEEDED_PATHS = {
         "secretstore.yaml: 'Provisioned MANUALLY in Casdoor (a "
         "client-credentials application bound to ROLE_SERVICE)' — a "
         "Casdoor-assigned client_id cannot be minted ahead of the application.",
+    "hugmesh/appstore-effector-tokens":
+        "appstore-effector-externalsecrets.yaml: 'OPERATOR-SEEDED ... the ArgoCD "
+        "one is created BY ArgoCD (an account with the apiKey capability + `argocd "
+        "account generate-token`) and the federation one is a JWT signed by "
+        "Casdoor for a superadmin; scripts/gen-cluster-secrets.sh cannot mint "
+        "either'. The admin-bff reads both as `optional: true` secretKeyRefs, so "
+        "an unseeded path leaves the effector legs with an empty Bearer, as before.",
     "hugmesh/cloudflared":
         "manifests/cloudflared/externalsecret.yaml: 'keys-provision populates "
         "[it] from the keys USB at provision time (KEYS/cloudflared/"

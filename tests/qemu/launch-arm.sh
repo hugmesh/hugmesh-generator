@@ -285,9 +285,10 @@ trap cleanup EXIT
 # We boot with -kernel/-append, so this string REPLACES the image's cmdline
 # entirely. That makes a hardcoded posture here actively misleading: this launcher
 # used to append `lsm=lockdown,yama,selinux,bpf lockdown=integrity` for ALL eight
-# non-Pi boards, none of which ships lockdown in its cmdline.base or builds
-# CONFIG_SECURITY_LOCKDOWN_LSM. Every in-guest LSM/lockdown assertion was therefore
-# grading the harness's own literal instead of the image — it could not fail.
+# non-Pi boards, when none of them shipped lockdown in its cmdline.base or built
+# CONFIG_SECURITY_LOCKDOWN_LSM (they now do, with `lsm=lockdown,yama,selinux` and no
+# bpf). Every in-guest LSM/lockdown assertion was therefore grading the harness's
+# own literal instead of the image — it could not fail.
 # Take the security tokens from the board's real cmdline.base; root=/console= stay
 # QEMU-specific below because -M virt has neither the board's storage nor its UART.
 specs_dir_for() {
