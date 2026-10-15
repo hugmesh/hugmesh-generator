@@ -1195,16 +1195,18 @@ def check_games_origin(root):
     deployed matrix remote iframes. The manifest now declares it as the env
     `HUG_GAMES_URL` on hugmesh-matrix-ui. Two defects are checked, as a PAIR:
     the env is absent, or it names a host other than the be-gateway `games` route's
-    `host:` (a custom GAMES_DOMAIN rewrites that route, so a literal left behind
-    points at a host nothing serves).
+    `host:` (so an edit of one without the other in the repo tree is caught).
 
     Conditioned on apps/50-games.yaml, the file the builders' optional-service gate
     `rm -f`s when games is not selected: with no games Application there is no
     games origin to state. Once games IS present, a missing Deployment or route is
     a FAILURE, never a pass over an empty set.
 
-    This proves only that the manifest declares the origin consistently. It does
-    not prove the browser receives it: that needs an image-side consumer.
+    This proves only that the repo-tree manifest declares the origin consistently.
+    It does not prove the browser receives it (that needs an image-side consumer),
+    and it cannot see a build-time rewrite: the stage4 builders rewrite the gateway
+    route for a custom GAMES_DOMAIN in the baked tree, while ArgoCD serves this
+    Deployment from git, so the live env is not moved by that rewrite.
     """
     check = "[games-origin]"
     if not os.path.isfile(os.path.join(root, "apps", "50-games.yaml")):

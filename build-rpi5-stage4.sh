@@ -2164,10 +2164,6 @@ parameterize_games_domain() {
     if [ "${GAMES_DOMAIN}" != "games.hugmesh.net" ]; then
         local be="${tree}/apps/20-gateway-be.yaml"
         [ -f "${be}" ] && sed -i -E "s#games\\.hugmesh\\.net#${GAMES_DOMAIN}#g" "${be}"
-        # The matrix-ui chat3d games origin (HUG_GAMES_URL) must follow the same
-        # host as the route above, or the manifest names a host nothing serves.
-        local mx="${tree}/manifests/social-ui/deployment.yaml"
-        [ -f "${mx}" ] && sed -i -E "s#games\\.hugmesh\\.net#${GAMES_DOMAIN}#g" "${mx}"
         info "Games domain: custom GAMES_DOMAIN — games host rewritten to ${GAMES_DOMAIN}"
     fi
 }

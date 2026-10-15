@@ -530,8 +530,8 @@ expect_catch "HUG_GAMES_URL names a different host than the gateway games route"
       "$T/manifests/social-ui/deployment.yaml"
   grep -q "games.elsewhere.example" "$T/manifests/social-ui/deployment.yaml"
 '
-# The gateway host moved but the manifest literal did not (what a custom GAMES_DOMAIN
-# build produced before parameterize_games_domain() learned this file).
+# The gateway host moved but the manifest literal did not (a repo-tree edit of one
+# side only; this checks the tree, not what a builder bakes or what ArgoCD serves).
 expect_catch "gateway games host rewritten while the matrix-ui literal is left behind" "[games-origin]" '
   sed -i "s#games\\.hugmesh\\.net#games.acme.example#g" "$T/apps/20-gateway-be.yaml"
   grep -q "host: games.acme.example" "$T/apps/20-gateway-be.yaml"
