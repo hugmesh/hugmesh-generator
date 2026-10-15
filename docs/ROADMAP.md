@@ -50,10 +50,11 @@ Restated in 14 documents.
 
 ### ✅ Casdoor MFA — enrollment and step-up
 
-Shipped: the gateway layer merged dark (PR #40), and enrollment and challenge (TOTP,
-WebAuthn, recovery codes) are live in admin-bff through `hugmesh-auth-core`, with the
-`login-ui` and `admin-ui` enroll and challenge pages. See the Casdoor MFA bullet in
-the README's Current State. **Still open, and not code:** the live operator flip of
+Shipped, **asserted** from the README's Current State (Casdoor MFA bullet; the BFF
+source was not re-read for this edit): the gateway layer merged dark (PR #40), and
+enrollment and challenge (TOTP, WebAuthn, recovery codes) are live in admin-bff
+through `hugmesh-auth-core`, with the `login-ui` and `admin-ui` enroll and challenge
+pages. **Still open, and not code:** the live operator flip of
 `mfa.enabled` and then `enforcePrivilegedFloor` on a real cluster
 ([`MFA-ROLLOUT.md`](MFA-ROLLOUT.md)).
 
@@ -72,11 +73,12 @@ Restated in 29 documents — the most duplicated item in the tree.
 
 ### ✅ Workload Console
 
-A podman/OpenShift-like console in the host shell. Shipped, behind documented
-default-off flags: the admin-bff module, the hidden-tier admin-ui remote and the
-two-ServiceAccount RBAC slug are on `main`
-([`tests/workload-console/test-workload-console.sh`](../tests/workload-console/test-workload-console.sh);
-README Current State, Workload Console).
+A podman/OpenShift-like console in the host shell. Shipped behind documented
+default-off flags, **asserted** from the README's Current State (Workload Console
+bullet): the admin-bff module, the hidden-tier admin-ui remote and the
+two-ServiceAccount RBAC slug. **Verified:** the generator-side guard
+[`tests/workload-console/test-workload-console.sh`](../tests/workload-console/test-workload-console.sh)
+is on `main`.
 
 Restated in 15 documents.
 
@@ -89,10 +91,11 @@ Restated in 15 documents.
 
 ### ✅ Multi-tenancy provisioning
 
-Domain scoping is shipped in the federation API, and `provision_domain_registry` in
+Domain scoping is shipped in the federation API (asserted). **Verified:**
+`provision_domain_registry` is defined in
 [`specs/etc/keys-provision/provision.sh`](../specs/etc/keys-provision/provision.sh)
-materialises the `domain_registry` rows (suites under
-[`tests/domain-registry/`](../tests/domain-registry/)). **Still open:**
+and called from the provisioning sequence, with suites under
+[`tests/domain-registry/`](../tests/domain-registry/). **Still open:**
 hugmesh-generator#344, the multi-brand cut-over that strands every
 `domain='default'` row in the services that have no migration for it.
 
@@ -100,19 +103,21 @@ Restated in 27 documents.
 
 ### ✅ Encrypted versioned backups
 
-Per-domain and superadmin scope. Shipped dark: Velero with Kopia
-(`specs/cluster/manifests/velero/`, `apps/55-velero.yaml` and `apps/56-velero-config.yaml`),
-the `hugmesh-backup` tool and the admin-bff `cloudbackup` package. Both Applications
-are manual-sync and the effector stays a no-op until `app.backups.effector.enabled`
-is set. See [`CLOUD-BACKUPS.md`](CLOUD-BACKUPS.md).
+Per-domain and superadmin scope. Shipped dark. **Verified:** the Velero Applications
+`apps/55-velero.yaml` and `apps/56-velero-config.yaml`, the manifests under
+`specs/cluster/manifests/velero/` and `specs/usr/local/sbin/hugmesh-backup` exist on
+`main`. **Asserted** from the README's Current State: both Applications are
+manual-sync and the admin-bff effector stays a no-op until
+`app.backups.effector.enabled` is set. See [`CLOUD-BACKUPS.md`](CLOUD-BACKUPS.md).
 
 Restated in 24 documents.
 
 ### ✅ A/V via coturn / TURN
 
-Shipped dark: a default-off `coturn` optional service in REST-credential mode, with
-public reachability as a separate opt-in overlay ([`COTURN.md`](COTURN.md)). **Still
-open:** a group-call SFU; coturn is a relay for 1:1 and small-mesh calls only.
+Shipped dark, **asserted** from the README's Current State and
+[`COTURN.md`](COTURN.md): a default-off `coturn` optional service, with public
+reachability as a separate opt-in overlay. **Still open:** a group-call SFU; coturn
+is a relay for 1:1 and small-mesh calls only.
 
 Restated in 24 documents.
 
@@ -124,27 +129,32 @@ Restated in 19 documents.
 
 ### ✅ Egress VPN and per-node attached storage
 
-Shipped: the admin-supplied egress-VPN drop-in ([`EGRESS-VPN.md`](EGRESS-VPN.md),
-`specs/usr/sbin/hugmesh-egress-vpn`) and the node-storage registries and reconcile
-agent ([`NODE-STORAGE.md`](NODE-STORAGE.md), `specs/selinux/hugmesh_node_storage.te`).
+Shipped, **asserted** from the README's Current State and ARCHITECTURE: the
+admin-supplied egress-VPN drop-in ([`EGRESS-VPN.md`](EGRESS-VPN.md)) and the
+node-storage registries and reconcile agent ([`NODE-STORAGE.md`](NODE-STORAGE.md)).
+**Verified:** `specs/usr/sbin/hugmesh-egress-vpn` and
+`specs/selinux/hugmesh_node_storage.te` exist on `main`.
 
 Restated in 15 documents.
 
 ### ✅ Binhost fleet auto-update
 
-Gentoo binhost-driven distribution across the fleet. Shipped default-off: the
-`hugmesh-update` poller is baked into every target, including both x86 service
-arrays (PR #744, merged 2026-10-14), and a fleet opts in through the
-`devops/hugmesh-update-policy` ConfigMap ([`DEVOPS.md`](DEVOPS.md)).
+Gentoo binhost-driven distribution across the fleet. Shipped default-off.
+**Verified:** `build-x86-host-stage4.sh` adds `hugmesh-update` to the client service
+array and, unless the image is `--unaffiliated`, to the host array (PR #744, merged
+2026-10-14), and `tests/auto-update/` holds the poller and opt-in suites. A fleet
+opts in through the `devops/hugmesh-update-policy` ConfigMap
+([`DEVOPS.md`](DEVOPS.md), asserted).
 
 Restated in 10 documents.
 
 ### ✅ Upstream supply-chain hardening
 
-Base-image and binary checksum/GPG verification. Shipped: stage3 GPG and sha
-checks and the headscale and tailscale binary checksums, enforced through
-[`scripts/_download-lib.sh`](../scripts/_download-lib.sh)
-([`CRYPTO-AUDIT.md`](CRYPTO-AUDIT.md)).
+Base-image and binary checksum/GPG verification. Shipped, **asserted** from the
+ARCHITECTURE Roadmap and [`CRYPTO-AUDIT.md`](CRYPTO-AUDIT.md): stage3 GPG and sha
+checks and the headscale and tailscale binary checksums, fail-closed in the builders.
+**Verified:** [`scripts/_download-lib.sh`](../scripts/_download-lib.sh) exists on
+`main`.
 
 **Verified:** the pen-test stages are real, not aspirational.
 `hugmesh-federation-api/.gitlab-ci.yml` declares
@@ -156,8 +166,9 @@ Restated in 7 documents.
 ### ✅ Auth-core relocation
 
 Login, session and account logic moved out to `hugmesh-auth-core` and user-bff.
-Shipped: `hugmesh-auth-core` 2.4.2 is consumed by user-bff and 2.5.0 by admin-bff
-(the repository table in [`ARCHITECTURE.md`](ARCHITECTURE.md)). Named in one
+Shipped. **Verified** on 2026-10-15 in the checkouts: user-bff's `pom.xml` depends on
+`hugmesh-auth-core` 2.4.2 and admin-bff's on 2.5.0 (the repository table in
+[`ARCHITECTURE.md`](ARCHITECTURE.md) agrees). Named in one
 document only — the least duplicated item here, and the one most likely to be
 forgotten.
 
