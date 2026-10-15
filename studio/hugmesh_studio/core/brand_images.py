@@ -164,7 +164,15 @@ def _png_raw_length(w: int, h: int, depth: int, color_type: int, interlace: int)
 def _inflate_exactly(comp: bytes, expected: int) -> bytes:
     """Inflate ``comp`` and insist on exactly ``expected`` bytes: shorter is a size lie,
     longer is a stream that keeps going past the picture (the inflation is capped, so a
-    deflate bomb costs at most ``expected`` + 1 bytes of memory)."""
+    deflate bomb costs at most ``expected`` + 1 bytes of memory). Bytes AFTER the end of
+    the zlib stream are not looked at here (the re-encoder drops them by recompressing);
+    :func:`_idat_trailing` is what counts them."""
+    return _inflate_stream(comp, expected)[0]
+
+
+def _inflate_stream(comp: bytes, expected: int) -> tuple[bytes, int]:
+    """:func:`_inflate_exactly`'s work: the inflated bytes and how many bytes followed
+    the end of the zlib stream inside ``comp``."""
     d = zlib.decompressobj()
     try:
         raw = d.decompress(comp, expected + 1)
@@ -180,7 +188,19 @@ def _inflate_exactly(comp: bytes, expected: int) -> bytes:
             f"This PNG's pixel data is {'longer' if longer else 'shorter'} "
             f"than its size says ({shown} bytes for a picture that needs "
             f"{expected:,}). A file whose pixel data and header disagree is refused.")
-    return raw
+    return raw, len(d.unused_data)
+
+
+def _idat_trailing(data: bytes) -> int:
+    """How many bytes follow the end of the zlib stream inside the IDAT chunks of a PNG
+    that already passed :func:`reencode` (0 when the stream ends where the chunks do).
+    The chunk walk cannot see them: they sit INSIDE a chunk whose CRC is right, and a
+    decoder stops at the end of the stream, so they are invisible in a browser and travel
+    in the stylesheet to every visitor."""
+    chunks = list(_png_chunks(data))
+    w, h, depth, color_type, _c, _f, interlace = struct.unpack(">IIBBBBB", chunks[0][1])
+    idat = b"".join(p for k, p in chunks if k == b"IDAT")
+    return _inflate_stream(idat, _png_raw_length(w, h, depth, color_type, interlace))[1]
 
 
 def _reencode_png(data: bytes) -> tuple[bytes, int, int, list[str]]:
@@ -270,7 +290,8 @@ def leftovers(data: bytes, kind: str) -> tuple[str, ...]:
     comparing bytes with a fresh re-encode: a PNG's compressed bytes depend on the zlib
     build that wrote them, so a clean file made on another host (or by another tool)
     would be called dirty. A PNG is clean when its chunks are exactly IHDR, PLTE and
-    tRNS once at most and in that order, ONE IDAT, then IEND, with nothing after it. A
+    tRNS once at most and in that order, ONE IDAT whose zlib stream ends where the chunk
+    does, then IEND, with nothing after it. A
     JPEG is only ever copied segment by segment, so there a byte-for-byte comparison is
     exact."""
     rebuilt = reencode(data, kind)
@@ -281,6 +302,8 @@ def leftovers(data: bytes, kind: str) -> tuple[str, ...]:
     rank = [_PNG_KEEP_NAMES.index(t) for t in order if t in _PNG_KEEP_NAMES]
     if rank != sorted(rank) or any(order.count(t) > 1 for t in _PNG_KEEP_NAMES):
         found.append("repeated or misplaced chunks")
+    if _idat_trailing(data):
+        found.append("bytes after the pixel data")
     return tuple(found)
 
 

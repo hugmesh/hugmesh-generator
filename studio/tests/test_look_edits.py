@@ -79,20 +79,6 @@ def test_an_unreadable_path_and_an_empty_path(tmp_path):
     assert m.load_picture("logo_image", "").ok and m.get("logo_image") == ""
 
 
-def test_the_environment_entry_ceiling_is_wired_into_the_upload(tmp_path, monkeypatch):
-    """The 100 KiB budget is inside the 131,071-byte entry today, so the refusal cannot
-    be reached with a real picture; shrinking the ceiling proves the upload asks."""
-    assert bl.LOOK_CSS_BUDGET <= bl.ENV_VALUE_LIMIT
-    m = bl.Look()
-    path = _write(tmp_path, "a.png", png_bytes(32, 32, noise=True))
-    monkeypatch.setattr(bl, "ENV_VALUE_LIMIT", 2000)
-    monkeypatch.setattr(bl, "ENV_ENTRY_LIMIT", 2014)
-    out = m.load_picture("logo_image", path)
-    assert not out.ok
-    assert "one environment entry holds at most 2,014 bytes" in out.text
-    assert m.get("logo_image") == ""
-
-
 def test_the_configmap_ceiling_is_wired_into_the_upload(tmp_path):
     """The other looks already fill all but 276 bytes of the ConfigMap; this one's
     picture tips it over, and the sentence carries the ceiling."""

@@ -203,3 +203,121 @@ def test_a_picture_that_was_refused_does_not_change_the_budget(tmp_path):
     out = m.load_picture("logo_image", str(bad))
     assert not out.ok and out.text.startswith("Refused:")
     assert m.budget().used == used and m.get("logo_image") == ""
+
+
+# ── round 2 findings ─────────────────────────────────────────────────────────────────
+# L1: the budget's edge. The mutations these were written against: `used > LOOK_CSS_BUDGET`
+# to `>=`, and `total <= LOOK_CSS_BUDGET` to `<`, each survived every other test.
+def _pad_look(monkeypatch, size):
+    """Make the stylesheet for an otherwise empty look exactly ``size`` bytes."""
+    monkeypatch.setattr(theme, "compose_login_css", lambda *a, **k: "x" * size)
+
+
+def test_a_stylesheet_of_exactly_the_budget_is_accepted_and_one_byte_more_is_refused(monkeypatch):
+    _pad_look(monkeypatch, bl.LOOK_CSS_BUDGET)
+    assert len(bl.look_css({}).encode()) == 102400
+    assert bl.budget({}).fits and bl.budget({}).free == 0
+    _pad_look(monkeypatch, bl.LOOK_CSS_BUDGET + 1)
+    with pytest.raises(bl.LookBudgetError, match="102,401"):
+        bl.look_css({})
+    assert not bl.budget({}).fits and bl.budget({}).free == -1
+
+
+def test_a_picture_that_makes_the_sheet_exactly_the_budget_fits_and_one_more_byte_does_not(
+        monkeypatch):
+    pic = bi.reencode(png_bytes(16, 16, noise=True), "logo")
+    _pad_look(monkeypatch, 0)
+    with_pic_only = len(bl.look_css({"logo_image": pic.data_uri()},
+                                    enforce_budget=False).encode())
+    room = bl.LOOK_CSS_BUDGET - with_pic_only - 1          # one byte of newline joins them
+    _pad_look(monkeypatch, room)
+    ok, why = bl.picture_fits({}, "logo_image", pic)
+    assert ok, why
+    assert len(bl.look_css({"logo_image": pic.data_uri()}).encode()) == bl.LOOK_CSS_BUDGET
+    _pad_look(monkeypatch, room + 1)
+    ok, why = bl.picture_fits({}, "logo_image", pic)
+    assert not ok and "102,401" in why
+
+
+def test_an_edit_that_makes_the_sheet_exactly_the_budget_is_taken_and_one_byte_more_is_refused(
+        monkeypatch):
+    """The checked edit path (Look.try_set) has its own edge, apart from look_css's."""
+    probe = bl.Look()
+    assert probe.try_set("primary", "#123456").ok
+    exact = len(probe.css().encode())
+    monkeypatch.setattr(bl, "LOOK_CSS_BUDGET", exact)
+    assert bl.Look().try_set("primary", "#123456").ok
+    monkeypatch.setattr(bl, "LOOK_CSS_BUDGET", exact - 1)
+    refused = bl.Look().try_set("primary", "#123456")
+    assert not refused.ok and f"{exact:,}" in refused.text
+
+
+# L2: a data: URI that says png over JPEG bytes. Mutation: delete the sniff comparison in
+# brand_look._check_picture_uri.
+def test_a_data_uri_whose_label_does_not_match_its_bytes_is_refused_by_check_value():
+    from test_brand_images import JPEG_BASELINE_EXIF
+    jpeg = bi.reencode(JPEG_BASELINE_EXIF, "logo")
+    assert jpeg.mime == "image/jpeg"
+    mislabelled = "data:image/png;base64," + base64.b64encode(jpeg.data).decode()
+    why = bl.check_value("logo_image", mislabelled)
+    assert "says image/png but the bytes are jpeg" in why
+    assert bl.check_value("logo_image", jpeg.data_uri()) == ""
+
+
+# L3: bytes after the end of the zlib stream, INSIDE the one IDAT chunk. The chunk walk
+# and the CRC cannot see them; a decoder stops at the end of the stream. Mutation: drop
+# the _idat_trailing line from leftovers.
+def test_text_after_the_end_of_the_pixel_stream_inside_the_idat_is_not_clean():
+    own = bi.reencode(png_bytes(16, 16, noise=True), "logo").data
+    chunks = list(bi._png_chunks(own))
+    ihdr = chunks[0][1]
+    idat = [p for k, p in chunks if k == b"IDAT"][0]
+    evil = (PNG_SIG + _chunk(b"IHDR", ihdr)
+            + _chunk(b"IDAT", idat + b"<script>alert(1)</script>") + _chunk(b"IEND", b""))
+    assert bi.png_chunk_types(evil) == ["IHDR", "IDAT", "IEND"]      # the walk sees nothing
+    assert bi.leftovers(evil, "logo") == ("bytes after the pixel data",)
+    why = bl.check_value("logo_image", _uri(evil))
+    assert "bytes after the pixel data" in why and "re-encoder" in why
+    with pytest.raises(bl.LookError):
+        bl.look_css({"logo_image": _uri(evil)})
+    assert bl.check_value("logo_image", _uri(own)) == ""
+    # the upload path cleans it: re-encoding recompresses only the pixels
+    cleaned = bi.reencode(evil, "logo").data
+    assert b"script" not in cleaned and bi.leftovers(cleaned, "logo") == ()
+
+
+# L5: design-mode edits are checked against each brand's finished sheet.
+def test_a_superbrand_edit_that_would_push_a_brand_over_its_budget_is_refused_by_name(
+        monkeypatch, tmp_path):
+    pic = bi.reencode(png_bytes(16, 16, noise=True), "logo")
+    pic2 = bi.reencode(png_bytes(40, 40, noise=True), "background")
+    brands = {"shop": {"login_bg_image": pic2.data_uri()}, "blog": {}}
+    m = bl.Look({})
+    m.dependents = lambda: brands
+    # room for either picture alone, but not for the brand's own picture under the logo
+    both = len(bl.look_css({"login_bg_image": pic2.data_uri(),
+                            "logo_image": pic.data_uri()}).encode())
+    alone = max(len(bl.look_css({"login_bg_image": pic2.data_uri()}).encode()),
+                len(bl.look_css({"logo_image": pic.data_uri()}).encode()))
+    assert alone < both - 1
+    monkeypatch.setattr(bl, "LOOK_CSS_BUDGET", both - 1)
+    out = m.try_set("logo_image", pic.data_uri())
+    assert not out.ok and "brand shop" in out.text and f"{both:,}" in out.text
+    assert m.get("logo_image") == ""                   # the record is as it was
+    # a picture chosen through the upload path is held to the same rule
+    out = m.load_picture("logo_image", _png_file(tmp_path, png_bytes(16, 16, noise=True)))
+    assert not out.ok and "brand shop" in out.text
+    # the same edit is fine once no brand carries a picture ...
+    brands["shop"] = {}
+    assert m.try_set("logo_image", pic.data_uri()).ok
+    # ... and a brand's own edit (override mode) is not checked against its siblings
+    brands["shop"] = {"login_bg_image": pic2.data_uri()}
+    ov = bl.Look({}, base={})
+    ov.dependents = lambda: brands
+    assert ov.mode == "override" and ov.try_set("logo_image", pic.data_uri()).ok
+
+
+def _png_file(tmp_path, data):
+    path = tmp_path / "logo.png"
+    path.write_bytes(data)
+    return str(path)

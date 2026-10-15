@@ -64,3 +64,12 @@ def test_angle_brackets_outside_a_string_are_refused_and_inside_one_are_text(ch)
     with pytest.raises(ValueError, match="may not carry"):
         write(f"</style>")
     assert f"'a{ch}b'" in write(f"'a{ch}b'")
+
+
+@pytest.mark.parametrize("value", ["@import 'x'", "a@b", "x @font-face"])
+def test_an_at_sign_outside_a_string_is_refused_and_inside_one_is_text(value):
+    """Remove "@" from _VALUE_BANNED: a value could then open an at-rule (@import fetches
+    another stylesheet) in the writer's output."""
+    with pytest.raises(ValueError, match="may not carry '@'"):
+        write(value)
+    assert "'a@b'" in write("'a@b'")
