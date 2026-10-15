@@ -245,3 +245,80 @@ def test_extract_rejects_an_empty_staging_path(tmp_path):
     for bad in ("", "   "):
         with pytest.raises(ValueError):
             keyzip.extract(str(zp), bad)
+
+
+def test_extract_refuses_a_staging_path_that_is_not_a_directory(tmp_path):
+    """A regular file or a dangling symlink at the staging path is refused with the
+    same ValueError as every other bad path, and the file is left intact."""
+    zp = tmp_path / "z.zip"
+    _make_zip(zp, {"keys/ca.crt": "dummy-ca"})
+
+    afile = tmp_path / "a-file"
+    afile.write_text("important", encoding="utf-8")
+    with pytest.raises(ValueError, match="not a directory"):
+        keyzip.extract(str(zp), str(afile))
+    assert afile.read_text(encoding="utf-8") == "important"
+
+    dangling = tmp_path / "dangling"
+    os.symlink(str(tmp_path / "nowhere"), str(dangling))
+    with pytest.raises(ValueError, match="not a directory"):
+        keyzip.extract(str(zp), str(dangling))
+    assert os.path.islink(str(dangling))
+
+
+# ── 4. package-wide sweep: no module hand-rolls a ~/.hugmesh path ──────────────────
+
+#: Modules allowed to build a ``~/.hugmesh`` path straight from $HOME: the seam
+#: definitions themselves. Each returns an override (or, under pytest, refuses the home
+#: fallback) before the home path is reachable; mesh_node's workdir is a constructor
+#: argument the caller overrides.
+_HOME_PATH_SEAM_OWNERS = {
+    "core/state_paths.py", "core/keyzip.py", "core/mesh_node.py",
+}
+
+#: Spellings of "a path under the real home's .hugmesh", matched on comment-stripped
+#: source with \s so a join split across lines is still one match.
+_HOME_PATH_SPELLINGS = (
+    re.compile(r'expanduser\(\s*["\']~["\']\s*\)\s*,\s*["\']\.hugmesh["\']'),
+    re.compile(r'expanduser\(\s*["\']~/\.hugmesh'),
+    re.compile(r'Path\.home\(\)\s*/\s*["\']\.hugmesh["\']'),
+)
+
+
+def _home_path_sites(src: str) -> int:
+    code = "\n".join(l.split("#", 1)[0] for l in src.splitlines())
+    return sum(len(rx.findall(code)) for rx in _HOME_PATH_SPELLINGS)
+
+
+def test_the_home_path_matcher_sees_every_spelling_it_claims_to():
+    """Vacuity guard for the sweep below: each spelling is detected, a comment is not."""
+    assert _home_path_sites('os.path.join(os.path.expanduser("~"), ".hugmesh", "x")') == 1
+    assert _home_path_sites('os.path.join(os.path.expanduser("~"),\n    ".hugmesh")') == 1
+    assert _home_path_sites('os.path.expanduser("~/.hugmesh/keyzip")') == 1
+    assert _home_path_sites('Path.home() / ".hugmesh" / "keyzip"') == 1
+    assert _home_path_sites('# os.path.join(os.path.expanduser("~"), ".hugmesh")') == 0
+    assert _home_path_sites('os.path.expanduser("~/.config")') == 0
+
+
+def test_no_module_hand_rolls_a_hugmesh_home_path_outside_the_seams():
+    """A ``~/.hugmesh`` path derived anywhere but a seam honours no override and so
+    cannot be isolated from the operator's real state -- the shape of the key-zip leak."""
+    pkg = os.path.join(STUDIO_ROOT, "hugmesh_studio")
+    scanned, found, offenders = 0, {}, []
+    for root, _dirs, files in os.walk(pkg):
+        for f in sorted(files):
+            if not f.endswith(".py"):
+                continue
+            scanned += 1
+            rel = os.path.relpath(os.path.join(root, f), pkg).replace(os.sep, "/")
+            with open(os.path.join(root, f), encoding="utf-8") as fh:
+                n = _home_path_sites(fh.read())
+            if n:
+                found[rel] = n
+                if rel not in _HOME_PATH_SEAM_OWNERS:
+                    offenders.append(f"{rel} ({n})")
+
+    assert scanned >= 25, f"only scanned {scanned} modules: the sweep is not reaching the package"
+    assert set(found) >= _HOME_PATH_SEAM_OWNERS, (
+        f"every seam owner must still show up (else the allow-list is stale): {found}")
+    assert not offenders, "hand-rolled ~/.hugmesh path outside a seam: " + ", ".join(offenders)

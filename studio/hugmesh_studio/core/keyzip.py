@@ -175,10 +175,15 @@ def _claim_staging(path: str) -> None:
     A directory is only ever deleted when it is empty, carries this module's
     :data:`STAGING_MARKER`, or IS the app's own :func:`staging_dir` (adopted once, so
     installs that staged a key-zip before the marker existed keep working). Anything
-    else raises ``ValueError`` before a single file is removed.
+    else raises ``ValueError`` before a single file is removed. So does a path that
+    exists but is not a directory (a regular file, a dangling symlink): the old
+    ``rmtree(ignore_errors=True)`` skipped it silently and ``makedirs`` then died with
+    a bare ``FileExistsError``.
     """
     if not path or not path.strip():
         raise ValueError("key-zip staging dir must be a real path, not empty")
+    if os.path.lexists(path) and not os.path.isdir(path):
+        raise ValueError(f"key-zip staging path is not a directory: {path}")
     if os.path.isdir(path) and os.listdir(path):
         owned = os.path.exists(os.path.join(path, STAGING_MARKER))
         canonical = os.path.abspath(path) == os.path.abspath(staging_dir())
