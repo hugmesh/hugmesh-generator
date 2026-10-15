@@ -199,8 +199,28 @@ else:
                         bad("the policy has no non-empty bots list")
                     if not isinstance(pol, dict) or not pol.get("thresholds"):
                         bad("the policy has no thresholds")
-                    if hashlib.sha256(raw).hexdigest() != sha:
-                        bad("the policy is not the pinned upstream %s default (sha256 differs); if a rule was changed on purpose, update POLICY_SRC_SHA256 in this suite and say so" % tag)
+                    # hugmesh's own rules live between two marker lines (and the one
+                    # blank line after the end marker); without them the file is the
+                    # upstream default policy of the pinned tag.
+                    lines = raw.decode().split("\n")
+                    if sum(l.strip().startswith("# hugmesh-local:begin") for l in lines) != \
+                       sum(l.strip() == "# hugmesh-local:end" for l in lines):
+                        bad("unbalanced hugmesh-local:begin / hugmesh-local:end markers")
+                    kept, skipping, eat_blank = [], False, False
+                    for l in lines:
+                        if l.strip().startswith("# hugmesh-local:begin"):
+                            skipping = True
+                        if skipping:
+                            if l.strip() == "# hugmesh-local:end":
+                                skipping, eat_blank = False, True
+                            continue
+                        if eat_blank and not l.strip():
+                            eat_blank = False
+                            continue
+                        eat_blank = False
+                        kept.append(l)
+                    if hashlib.sha256("\n".join(kept).encode()).hexdigest() != sha:
+                        bad("outside the hugmesh-local markers the policy is not the pinned upstream %s default (sha256 differs); a rule edit belongs between the markers, a re-sync from a new tag updates POLICY_SRC_SHA256" % tag)
 if ctr["securityContext"].get("readOnlyRootFilesystem") is not True:
     bad("readOnlyRootFilesystem is no longer true on the anubis container")
 tags = [i.get("newTag") for i in kust.get("images", []) if i.get("name") == "ghcr.io/techarohq/anubis"]
@@ -213,7 +233,7 @@ PY
 }
 echo "-- (6) bot policy ConfigMap: mount + POLICY_FNAME + parseable policy (source ${POLICY_SRC_URL}) --"
 if command -v python3 >/dev/null 2>&1 && python3 -c 'import yaml' 2>/dev/null; then
-    out="$(policy_wiring 2>&1)" && ok "POLICY_FNAME -> read-only configMap dir mount -> generated ConfigMap key; policy parses and is the pinned ${POLICY_SRC_TAG} default" \
+    out="$(policy_wiring 2>&1)" && ok "POLICY_FNAME -> read-only configMap dir mount -> generated ConfigMap key; policy parses and, outside the hugmesh-local markers, is the pinned ${POLICY_SRC_TAG} default" \
                                || bad "bot policy wiring: ${out}"
 else
     bad "bot policy leg needs python3 + PyYAML (the CI images carry both)"
@@ -238,6 +258,91 @@ sys.exit(0 if ok else 1)' \
     fi
 else
     echo "  SKIPPED kubectl absent: the render leg of (6) did not run (not a pass)"
+fi
+
+# ── 7) login, BFF login and health paths skip the challenge; / does not ──────────
+# (hugmesh-fe-gateway roadmap: "validate /login/**, /bff/login and /actuator/health
+# bypass the Anubis challenge"). This replays the INLINE rules of the policy file in
+# order, then its thresholds, for a browser user agent. It is a model of how Anubis
+# applies rules (first ALLOW/DENY/CHALLENGE wins, WEIGH adds to a weight that the
+# thresholds turn into an action); it is NOT Anubis. The (data)/ imports are upstream
+# files that are not in this repo, so they are skipped, and their ORDER relative to
+# the new rule is asserted instead. Whether a real pod stops challenging these paths
+# is open and needs a running ANUBIS=1 mesh.
+policy_paths() {
+    python3 - "${ANUBIS_DIR}/botPolicies.yaml" <<'PY'
+import re, sys
+import yaml
+pol = yaml.safe_load(open(sys.argv[1]))
+bots, thresholds = pol["bots"], pol["thresholds"]
+fails = []
+def bad(m): fails.append(m)
+
+def decide(path, ua):
+    weight = 0
+    for b in bots:
+        if "import" in b:
+            continue
+        if "path_regex" in b and not re.search(b["path_regex"], path):
+            continue
+        if "user_agent_regex" in b and not re.search(b["user_agent_regex"], ua):
+            continue
+        if "geoip" in b or "asns" in b:      # needs the client address; none in this model
+            continue
+        if b["action"] == "WEIGH":
+            weight += b["weight"]["adjust"]
+            continue
+        return b["action"]
+    for t in thresholds:
+        e = t["expression"]
+        conds = e["all"] if isinstance(e, dict) else [e]
+        for c in conds:
+            if not re.fullmatch(r"weight\s*(<=|>=|<|>|==)\s*-?\d+", c.strip()):
+                bad("threshold %r uses an expression this model does not evaluate" % t["name"])
+                return None
+        if all(eval(c, {"__builtins__": {}}, {"weight": weight}) for c in conds):
+            return t["action"]
+    return "NO-THRESHOLD"
+
+BROWSER = "Mozilla/5.0 (X11; Linux x86_64) Gecko/20100101 Firefox/130.0"
+for path in ("/login", "/login/", "/login/assets/app.js", "/bff/login", "/actuator/health",
+             "/actuator/health/liveness"):
+    got = decide(path, BROWSER)
+    if got != "ALLOW":
+        bad("%s gets %s, not ALLOW" % (path, got))
+for path in ("/", "/index.html", "/loginx", "/logins/x", "/bff/loginx", "/bff/login/x",
+             "/bff/session", "/actuator/env", "/actuator/healthx", "/x/login"):
+    got = decide(path, BROWSER)
+    if got != "CHALLENGE":
+        bad("%s gets %s, but only the three exempt paths may skip the challenge (want CHALLENGE)" % (path, got))
+
+names = [b.get("name") or b.get("import") for b in bots]
+rule = "hugmesh-login-and-health-paths"
+if rule not in names:
+    bad("the %s rule is missing" % rule)
+else:
+    at = names.index(rule)
+    imp = lambda frag: [i for i, n in enumerate(names) if frag in str(n)]
+    for frag in ("_deny-pathological", "aggressive-brazilian-scrapers", "ai-block-aggressive", "_allow-good"):
+        idx = imp(frag)
+        if not idx:
+            bad("the upstream import %s is gone" % frag)
+        elif idx[0] > at:
+            bad("the import %s sits AFTER the path allow, so the allow would shadow it" % frag)
+    weighs = [i for i, b in enumerate(bots) if b.get("action") == "WEIGH"]
+    if not weighs or min(weighs) < at:
+        bad("a WEIGH rule sits before the path allow, so those paths would be weighed first")
+for f in fails:
+    print(f)
+sys.exit(1 if fails else 0)
+PY
+}
+echo "-- (7) login, BFF login and health paths are allowed; / and near-miss paths still challenged --"
+if command -v python3 >/dev/null 2>&1 && python3 -c 'import yaml' 2>/dev/null; then
+    out="$(policy_paths 2>&1)" && ok "policy replay: /login/**, /bff/login, /actuator/health[/**] ALLOW; /, /loginx, /bff/loginx, /actuator/env ... CHALLENGE; rule sits after the deny imports and before every WEIGH rule" \
+                              || bad "login/health path allow: ${out}"
+else
+    bad "login/health path leg needs python3 + PyYAML (the CI images carry both)"
 fi
 
 echo "== RESULT: ${P} passed, ${F} failed =="
