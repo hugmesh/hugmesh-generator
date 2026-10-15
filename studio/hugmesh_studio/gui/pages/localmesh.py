@@ -67,9 +67,13 @@ claims nothing — still hosts the entire surface on it.
 NEW on the bootstrap tab (the operator's other two asks):
   - BRAND — the GUI was strictly less capable than its own CLI: collect_bootstrap()
     never passed ``brand=``, pinning every GUI run to secret/hugmesh/ while
-    ``--brand`` worked fine. The picker lists the real brands/ catalog
-    (discover_brands) and stays editable; validate() DNS-label-gates the slug
-    exactly as gen-keystores.sh does.
+    ``--brand`` worked fine. Since #654 (D8) the brand box is the SUPERBRAND
+    DROP-DOWN (``brand_picker.BrandPicker``): ‘Create a new superbrand’ first and the
+    default, then this configuration's own superbrand, saved designs and the real
+    brands/*.conf profiles; choosing Create opens ``superbrand.SuperbrandStep`` (the
+    design) at the foot of this section. ``self.brand`` keeps the text surface over the
+    brand carrier the session writes; validate() DNS-label-gates the slug exactly as
+    gen-keystores.sh does.
   - SOURCE — where the buildable repo files come from: download/update all repos
     into ./.stack-src (the default; exactly what `make stack-up` has always done,
     now VISIBLE), or an existing tree (STACK_SRC=<dir> + STACK_NO_CLONE=1 so the
@@ -104,6 +108,7 @@ widgets in the same order, with no tab bar in front of them.
 """
 from __future__ import annotations
 
+import dataclasses
 import os
 import re
 import threading
@@ -115,7 +120,7 @@ from ..qt import Qt, QtCore, QtGui, QtWidgets, Signal
 from .. import console
 from ..choice_cards import ChoiceCard, ChoiceCardGroup
 from ..flow_layout import flow_box
-from ...core import saved_meshes, vaults
+from ...core import plain_words, saved_meshes, vaults
 from ...core.config import IDP_CHOICES, IDP_LABELS, idp_effective_jwks
 from ...core.config import DOMAIN_IDP_OWN, DOMAIN_IDP_SUPERDOMAIN, Domain
 from ...core.domain_services import ACTION_MESH_START, gate_reason, record_reviewed
@@ -127,8 +132,7 @@ from ...core.e2e_catalogue import Catalogue, load_catalogue
 from ...core.egress_conf import validate_egress_conf
 from ...core.local_mesh import LocalMeshConfig, LocalMeshNode
 from ...core.local_mesh_bootstrap import (
-    LocalMeshBootstrap, LocalMeshBootstrapConfig, _parse_web_locales,
-    discover_brands)
+    LocalMeshBootstrap, LocalMeshBootstrapConfig, _parse_web_locales)
 from ...core.local_mesh_stages import verb_phases
 from ...core.local_stack_node import (
     LocalStackNode,
@@ -146,6 +150,8 @@ from ...core import kind_seed
 from ...core.seeded_credentials import Roster, annotate, load_roster
 from ...core.instance import state_dir
 from ...core.stage_tracker import StageTracker
+from ...tui.localmesh import PUBLIC_NAME_HOME, sync_brand_session
+from ...tui.superbrand_step import session_for
 from ...core import e2e_environments
 from ._credentials_dialog import CredentialsDialog
 from .domain_services import DomainServicesWidget
@@ -158,6 +164,8 @@ from ._saved_meshes_widget import SavedMeshProbe, SavedMeshesWidget
 from ._logintheme import LoginThemeGroup
 from ._scroll import scrollable
 from ._widgets import _row, collapsible, label_finish_as_exit, own_probe, probe_running
+from .brand_picker import BrandPicker
+from .superbrand import SuperbrandStep
 # The staged view is progress.py's, not a second one: importing its glyph palette and
 # its two formatters is what keeps a stage rendered here byte-identical to the same
 # stage rendered on the image-build screen. Re-declaring {"done": ("✓", "#188038"), …}
@@ -530,6 +538,26 @@ class _StageRun:
         return max((self.t_end if self.t_end is not None else now) - self.t_start, 0.0)
 
 
+class _BrandId(QtCore.QObject):
+    """The brand id this page reads and writes as TEXT — what the editable ``Brand`` box
+    was (#654, D8). ``collect_bootstrap``, the plan, the saved-mesh round trip and
+    ``tests/test_local_mesh_source_axis.py`` all say ``self.brand.currentText()`` and
+    ``setCurrentText``; the drop-down that replaced the box keeps that surface so none of
+    them changes, and the value lives in ONE place, the page's brand carrier."""
+
+    currentTextChanged = Signal(str)
+
+    def __init__(self, page: "LocalMeshPage"):
+        super().__init__(page)
+        self._page = page
+
+    def currentText(self) -> str:
+        return self._page._brand_boot.brand
+
+    def setCurrentText(self, text: str) -> None:
+        self._page._set_brand_id(text)
+
+
 class LocalMeshPage(QtWidgets.QWizardPage):
     def __init__(self, wiz):
         super().__init__()
@@ -543,6 +571,20 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         # steps, and a saved-mesh Start on a flow that never opened the step, keep
         # passing the gate exactly as before).
         self.mesh_domains = LocalMeshDomains()
+        # THE BRAND CARRIER (#654, D8): the one bootstrap configuration the superbrand
+        # session (tui/superbrand_step.py) reads and writes, so the picker, the design
+        # and the text screens all drive one model. It holds only what the session owns:
+        # the brand id and the superbrand block. ``collect_bootstrap`` takes exactly
+        # those two from it and everything else from the page's own controls, so there
+        # is one writer for each field. REPLACED, never edited in place, when a saved
+        # mesh is applied (the session belongs to the configuration object it was made
+        # for).
+        self._brand_boot = LocalMeshBootstrapConfig()
+        self._brand_mounted = False
+        self._brand_busy = False
+        #: a central sign-in address a SAVED MESH carried (a choice, kept); every other
+        #: address is derived from the environment and the domain and re-derived
+        self._brand_explicit_signin = ""
         # THE CONTROLLER HANDLE. Every local-mesh step page (LocalMeshChoicePage and
         # the _LocalMeshStep subclasses at the bottom of this module) finds this page
         # here, and only at initializePage time — so the wizard may construct the steps
@@ -815,6 +857,10 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         self.take_section("bringup", self._body)
         self.take_section("run", self._body)
         self._hide_stepped_sections()
+        # the standalone dialog hosts every section on this page and has no Environment
+        # step to give the brand drop-down its session; a wizard's step does it itself
+        # and this repeat is cheap and safe
+        self.mount_brand()
         self._refresh_status()
         self._refresh_plan()
         # ENTERING THE PAGE MUST TELL YOU WHAT IS ALREADY RUNNING. The stage tree
@@ -979,17 +1025,23 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         envcol.addWidget(self.env_prod)
         lay.addWidget(_row("Environment", self._wrap(envcol)))
 
-        # BRAND — the real catalog + an editable slug. Fixes the GUI-narrower-than-
-        # CLI bug: collect_bootstrap() used to omit brand=, pinning every GUI run to
-        # secret/hugmesh/ and the wrong <brand>-pki superadmin lookup.
-        self.brand = QtWidgets.QComboBox()
-        self.brand.setEditable(True)
-        self.brand.addItems(discover_brands(self.generator_dir))
-        self.brand.setToolTip(
-            "The Vault base path segment (secret/<brand>/) AND the profile selector "
-            "(brands/<brand>.conf, sourced by gen-cluster-secrets.sh when present). "
-            "Must be a DNS label — the same gate gen-keystores.sh applies.")
-        lay.addWidget(_row("Brand", self.brand))
+        # BRAND — the superbrand drop-down (#654, D8) where the editable slug box was.
+        # ‘Create a new superbrand’ is the first item and the default; then this
+        # configuration's own superbrand, the saved designs and the real brands/*.conf
+        # profiles (the old box's catalogue, discover_brands, is the profile half). The
+        # slug the old box fixed (collect_bootstrap() used to omit brand=, pinning every
+        # GUI run to secret/hugmesh/) is still collected: ``self.brand`` keeps the text
+        # surface and reads the carrier the picker writes. The design itself is the last
+        # block of this section, below.
+        self.brand = _BrandId(self)
+        self.brand_picker = BrandPicker()
+        sb = plain_words.term("superbrand")
+        self.brand_picker.setToolTip(
+            f"Which {sb} governs this mesh. A brand's id is also the Vault base "
+            "path segment (secret/<id>/) AND the profile selector (brands/<id>.conf, "
+            "sourced by gen-cluster-secrets.sh when present): it must be a DNS label — "
+            "the same gate gen-keystores.sh applies.")
+        lay.addWidget(self.brand_picker)
         self.brand_note = QtWidgets.QLabel("")
         self.brand_note.setWordWrap(True)
         self.brand_note.setStyleSheet("color: gray;")
@@ -1005,6 +1057,26 @@ class LocalMeshPage(QtWidgets.QWizardPage):
             "The platform superadmin login to mint. Its password is generated fresh "
             "and written ONLY to the offline secrets bundle — never shown here.")
         lay.addWidget(_row("Superadmin", self.superadmin))
+
+        # ‘DESIGN YOUR SUPERBRAND’ (#654, D8): the design the drop-down's ‘Create a new
+        # superbrand’ opens, drawn under the rest of this section so the environment
+        # and the account stay where they always were. It is the same step the image
+        # route's Branding page hosts, over the session of THIS route. The design is
+        # shown only while one is open (a created superbrand, or ‘Change it’ on an
+        # existing one); an existing choice shows its read-only summary in the picker.
+        self.superbrand_design = SuperbrandStep(route="docker", with_picker=False)
+        lay.addWidget(self.superbrand_design)
+        self.brand_effect_note = QtWidgets.QLabel(
+            "What this saves: the design goes into the mesh's brand record and the plan on "
+            "the review step. This Docker mesh still takes its web login look from the ‘Web login "
+            "theme’ on the Services step until the start path reads the record.")
+        self.brand_effect_note.setObjectName("brand_effect_note")
+        self.brand_effect_note.setWordWrap(True)
+        self.brand_effect_note.setStyleSheet("color: gray;")
+        lay.addWidget(self.brand_effect_note)
+        self.brand_picker.designing_changed.connect(self.superbrand_design.refresh)
+        self.brand_picker.designing_changed.connect(self._brand_changed)
+        self.superbrand_design.changed.connect(self._brand_changed)
         lay.addStretch(1)
         return w
 
@@ -1991,6 +2063,141 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         return tuple(s for s in local_slugs()
                      if self.service_boxes[s].isChecked())
 
+    # ── the superbrand drop-down and its design (#654, D8) ───────────────────────
+    def _brand_sync_in(self) -> None:
+        """Copy onto the carrier what the record also says and the page alone owns: the
+        environment, the typed domain and the Tor selection (the record reads them to
+        derive its public name, its central sign-in and its Tor way), and refresh the
+        session's cached copies of the two that are derived, so a design made on a test
+        mesh and saved after the person switched to prod says the prod name."""
+        c = self._brand_boot
+        c.env = "prod" if self.env_prod.isChecked() else "test"
+        c.cluster_domain = self.boot_domain.text().strip()
+        c.with_tor = self.with_tor.isChecked()
+        c.services = self.collect_services()
+        s = self.superbrand_design.session
+        if s is not None:
+            sync_brand_session(s, c, explicit_signin=self._brand_explicit_signin)
+
+    def _superbrand_block(self) -> dict:
+        """The designed superbrand block ``collect_bootstrap`` hands the bring-up: the
+        session's block without the things this page derives from its own controls.
+        A Tor choice would be a second statement of the Tor tick (and the start refuses
+        a record that contradicts the tick); a DERIVED sign-in address would go stale
+        the day the environment or the domain changes. A sign-in address a saved mesh
+        carried as its own choice is kept."""
+        block = dict(self._brand_boot.superbrand or {})
+        ways = {k: v for k, v in (block.get("ways") or {}).items() if k != "tor"}
+        if ways:
+            block["ways"] = ways
+        else:
+            block.pop("ways", None)
+        if not self._brand_explicit_signin:
+            block.pop("central_signin", None)       # derived: re-derived by whoever reads it
+        return block
+
+    def _fix_design_widgets(self) -> None:
+        """Put back what this route fixes about the design after the session redrew it
+        (every refresh re-enables its boxes). The public-name box is read-only: the
+        mesh's public name has ONE editing home, the Domains step's first row (a test
+        mesh has none), and a second box would be a setting editable in two places that
+        could disagree. The sentence about what a design saves shows under an open one."""
+        box = self.superbrand_design.fields["public_name"]
+        box.setEnabled(False)
+        box.setText("")
+        box.setPlaceholderText(PUBLIC_NAME_HOME)
+        box.setToolTip(f"The public name is {PUBLIC_NAME_HOME}.")
+        # the sentence about what a design saves belongs under an OPEN design only
+        s = self.superbrand_design.session
+        self.brand_effect_note.setVisible(bool(s is not None and s.designing))
+
+    def mount_brand(self) -> None:
+        """Give the drop-down and the design their session. Called whenever a step
+        claims the Environment section (and by the standalone dialog's page), so the
+        session always describes the page as it is now; cheap and safe to repeat."""
+        try:
+            self._brand_sync_in()
+            session = session_for(self, "docker", (self._brand_boot, self.mesh_domains),
+                                  self.generator_dir)
+            self._brand_busy = True
+            try:
+                if self.brand_picker.session is not session:
+                    self.brand_picker.set_session(session)
+                    self.superbrand_design.set_session(session)
+                else:
+                    self.brand_picker.refresh()
+                    self.superbrand_design.refresh()
+                self._fix_design_widgets()
+                self._brand_mounted = True
+            finally:
+                self._brand_busy = False
+        except Exception:                       # noqa: BLE001 — never raise out of a slot
+            self._brand_swallow("mount_brand")
+
+    def _brand_changed(self, *_args) -> None:
+        """The picker or the design changed the session: write it onto the carrier (the
+        session refuses a record that cannot be saved and says why inline) and let the
+        plan and the brand note follow."""
+        if self._brand_busy or self.superbrand_design.session is None:
+            return
+        try:
+            self._brand_sync_in()
+            step = self.superbrand_design
+            problems = step.session.commit()
+            # a refusal is added to the step's note, never wiped by a good commit: the
+            # design that just refused an id (and put its sentence there) commits the
+            # id it fell back to without a problem
+            if problems:
+                step.note.setStyleSheet("color: #b00020;")
+                step.note.setText(problems[0])
+                step.note.setVisible(True)
+            self._fix_design_widgets()
+            self.brand.currentTextChanged.emit(self._brand_boot.brand)
+        except Exception:                       # noqa: BLE001
+            self._brand_swallow("_brand_changed")
+
+    def leave_brand(self) -> bool:
+        """Leave the step (Next or Back), or reach the review: write the design onto the
+        carrier and the record file. NEVER blocks: a refusal is shown inline by the
+        design and the start refuses downstream; a page that refused its own Next would
+        strand a person who cannot see why. An untouched session writes nothing."""
+        if not self._brand_mounted or self.superbrand_design.session is None:
+            return True
+        try:
+            self._brand_sync_in()
+            self.superbrand_design.commit(save=True)
+            self.brand.currentTextChanged.emit(self._brand_boot.brand)
+        except Exception:                       # noqa: BLE001
+            self._brand_swallow("leave_brand")
+        return True
+
+    def _set_brand_id(self, text: str) -> None:
+        """``self.brand.setCurrentText``: the text surface the old box had."""
+        block = dict(self._brand_boot.superbrand or {})
+        if not self._brand_explicit_signin:
+            block.pop("central_signin", None)       # the carrier's one is derived
+        self._adopt_brand(text, block)
+
+    def _adopt_brand(self, brand: str, block: dict | None) -> None:
+        """Make ``brand`` and the designed ``block`` this page's brand (a typed slug, a
+        saved mesh applied). The carrier is REPLACED, not edited: the session belongs
+        to the configuration object it was made for, so a new carrier gets a new
+        session, which selects what the saved mesh carried."""
+        brand = (brand or "").strip()
+        self._brand_explicit_signin = str((block or {}).get("central_signin") or "")
+        self._brand_boot = dataclasses.replace(
+            self._brand_boot, brand=brand, superbrand=dict(block or {}))
+        if self._brand_mounted:
+            self.mount_brand()
+        self.brand.currentTextChanged.emit(brand)
+
+    @staticmethod
+    def _brand_swallow(where: str) -> None:
+        import sys
+        import traceback
+        print(f"localmesh: swallowed exception in {where}", file=sys.stderr)
+        traceback.print_exc(file=sys.stderr)
+
     def collect_bootstrap(self) -> LocalMeshBootstrapConfig:
         """BOOTSTRAP-tab widgets -> LocalMeshBootstrapConfig — EVERY operator-visible
         control, so none can silently do nothing (the silently-does-nothing-default class: ``brand``
@@ -2012,6 +2219,9 @@ class LocalMeshPage(QtWidgets.QWizardPage):
             auth_key=self.boot_auth_key.text().strip(),
             login_server=self.boot_login_server.text().strip(),
             brand=self.brand.currentText().strip(),
+            # the design's block, from the carrier the superbrand session writes (the one
+            # writer of this field, so a design cannot be lost the way ``brand`` once was)
+            superbrand=self._superbrand_block(),
             source_mode=("existing" if self.src_existing.isChecked() else "clone"),
             source_dir=self.src_dir.text().strip(),
             web_locales=_parse_web_locales(self.web_locales.text()),
@@ -2071,7 +2281,9 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         self._applying_bootstrap = True
         try:
             (self.env_prod if cfg.env == "prod" else self.env_test).setChecked(True)
-            self.brand.setCurrentText(cfg.brand)
+            # the id AND the designed block: the picker then shows what the saved mesh
+            # carried (a design as the current superbrand, a profile as itself)
+            self._adopt_brand(cfg.brand, cfg.superbrand)
             if cfg.source_mode == "existing":
                 self.src_existing.setChecked(True)
             else:
@@ -4167,8 +4379,32 @@ class LocalMeshEnvPage(_LocalMeshStep):
     SECTION = "env"
     TITLE = "Environment and brand"
     SUBTITLE = ("Where this mesh lives and whose name it carries: a LAN-only test "
-                "mesh or a public prod one, the brand whose Vault path and profile it "
-                "uses, and the superadmin account the bring-up mints.")
+                f"mesh or a public prod one, the {plain_words.term('superbrand')} that "
+                "governs it (create one, or pick an existing profile), and the "
+                "superadmin account the bring-up mints.")
+
+    def initializePage(self):
+        super().initializePage()
+        ctl = self.ctl
+        if ctl is not None:
+            ctl.mount_brand()
+
+    def showEvent(self, ev):
+        """Back into this step fires no initializePage, and the drop-down must describe
+        the page as it is now (the environment and the domain may have changed)."""
+        super().showEvent(ev)
+        ctl = self.ctl
+        if ctl is not None:
+            ctl.mount_brand()
+
+    def validatePage(self):
+        ctl = self.ctl
+        return True if ctl is None else ctl.leave_brand()
+
+    def cleanupPage(self):
+        ctl = self.ctl
+        if ctl is not None:
+            ctl.leave_brand()
 
 
 class LocalMeshDomainsPage(_LocalMeshStep):
@@ -4234,6 +4470,8 @@ class LocalMeshDomainServicesPage(_LocalMeshStep):
         ctl = self.ctl
         if ctl is not None:
             ctl.domain_services.record(ctl.mesh_domains)
+            # the brands (the Domains rows) are final here: save the record with them
+            ctl.leave_brand()
             ctl._refresh_plan()
         return True
 
@@ -4326,6 +4564,7 @@ class LocalMeshReviewPage(_LocalMeshStep):
         # Re-render the plan from the four steps behind this one, then answer "what is
         # already running?" and re-read the saved rows. Both probes are off-thread and
         # re-entrant-safe (probe_running), so arriving here twice starts no second one.
+        ctl.leave_brand()
         ctl._refresh_plan()
         ctl._probe_mesh_state()
         ctl.saved_meshes.refresh()

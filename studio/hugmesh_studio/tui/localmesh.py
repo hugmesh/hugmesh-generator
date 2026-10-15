@@ -14,6 +14,15 @@ so plainly and prints the ``hugmesh-mesh-bootstrap`` command that carries what t
 steps decided — but only once the gate is clear, so the TUI can never hand out a start
 command for a domain nobody configured.
 
+THE SUPERBRAND (#654, D8). The window's Environment-and-brand step has the superbrand
+drop-down (‘Create a new superbrand’ first and the default) with its design under it. The
+text screens have no Environment step, so the same controls are one command on the
+Domains screen: ``superbrand`` opens ``tui/superbrand_step.SuperbrandScreen`` over the
+SAME session class the window drives (``session_for(j, "docker", ...)``), and the record
+both faces save is written by the same call, so the same choices write the same bytes.
+Leaving the Domains screen without typing it changes nothing — an untouched brand writes
+no record — exactly as the window.
+
 What is the same as the GUI, by construction:
 
 * row 1 of the Domains table is the mesh's OWN domain — the brand-default apex on a
@@ -32,8 +41,10 @@ Choice default is ``join`` by id, as the GUI page's is.
 """
 from __future__ import annotations
 
+import dataclasses
 import shlex
 
+from ..core import brand_model, plain_words
 from ..core.config import DOMAIN_IDP_OWN, DOMAIN_IDP_SUPERDOMAIN, Domain
 from ..core.domain_services import (ACTION_MESH_START, gate_reason, normalise_slugs,
                                     record_reviewed)
@@ -44,9 +55,10 @@ from ..core.local_mesh_domains import (DOMAIN_NAME_RE, LOCAL_MESH_REMEDY,
 from . import model
 from .domain_services_step import DomainServicesScreen
 from .domains_step import IDP_LABELS, OWN_IDP
+from .superbrand_step import CREATE_KEY, BrandSession, SuperbrandScreen, session_for
 
 __all__ = ["LocalMeshScreen", "LOCALMESH_CHOICES", "LOCALMESH_DEFAULT_CHOICE",
-           "LANE_NOTE", "bootstrap_command"]
+           "LANE_NOTE", "bootstrap_command", "sync_brand_session", "PUBLIC_NAME_HOME"]
 
 #: (id, title) of the two cards — the GUI page's ``choices`` ids and titles
 #: (test_tui_gui_parity pins the match).
@@ -72,18 +84,74 @@ def _test_apex() -> str:
     return LocalMeshBootstrapConfig().resolved_domain()
 
 
-def bootstrap_command(md: LocalMeshDomains, prod: bool) -> list[str]:
-    """The ``hugmesh-mesh-bootstrap plan`` argv that carries what the two steps
-    decided: env, the prod apex, and one ``--own-casdoor-domain`` per Own row. The
-    per-domain optional services have no CLI flag — they are recorded by the GUI's
-    saved-mesh record — and the screen says so rather than inventing one."""
+#: Where the mesh's public name is typed on this route, said wherever the design shows
+#: its box (the window disables the box with this as its tooltip; the text screen prints
+#: it in the box's place). One home, so the two faces cannot disagree about it.
+PUBLIC_NAME_HOME = ("set on the Domains step (the first row, on a production mesh); "
+                    "a test mesh has none")
+
+
+def sync_brand_session(session: BrandSession, cfg: LocalMeshBootstrapConfig, *,
+                       explicit_signin: str = "") -> None:
+    """Make the session's cached copies of what the PAGE owns say what the page says now:
+    the public name (the domain row), the Tor way (the Tor tick or the selection) and the
+    central sign-in. The record reads them when it is saved, and the start's own check
+    refuses a record whose Tor way disagrees with the selection, so a copy cached when the
+    session was made — before the person ticked Tor or typed the domain — must not be the
+    one saved. Both faces call this before they commit (one implementation).
+
+    The sign-in address is DERIVED (the test mesh's localhost address, a production mesh's
+    ``https://id.<public name>``) unless a saved mesh carried one of its own
+    (``explicit_signin``, which is kept as the session has it). Derived means re-derived
+    every time: the first commit writes the derived value back onto the carrier, so
+    ``the key is there`` says nothing about who chose it."""
+    keep = {"public_name": cfg.resolved_domain(),
+            "ways": {**(session.sb.ways or {}), "tor": bool(cfg.effective_with_tor())}}
+    if not explicit_signin:
+        keep["central_signin"] = cfg.issuer()
+    session.sb = dataclasses.replace(session.sb, **keep)
+
+
+def bootstrap_command(md: LocalMeshDomains, prod: bool, *, brand: str = "",
+                      record: str = "") -> list[str]:
+    """The ``hugmesh-mesh-bootstrap plan`` argv that carries what the steps decided:
+    env, the prod apex, one ``--own-casdoor-domain`` per Own row, and — once the person
+    chose or designed a superbrand — ``--brand ID`` and ``--record FILE`` (the brand
+    record both faces save, which the CLI reads as the authority for the brand, the
+    designed block and the brands). The per-domain optional services have no CLI flag —
+    they are recorded by the GUI's saved-mesh record — and the screen says so rather than
+    inventing one."""
     argv = ["python3", "-m", "hugmesh_studio.core.local_mesh_bootstrap", "plan",
             "--env", "prod" if prod else "test"]
     if prod and md.own_name:
         argv += ["--cluster-domain", md.own_name]
     for name in own_idp_names(md.domains):
         argv += ["--own-casdoor-domain", name]
+    if brand:
+        argv += ["--brand", brand]
+    if record:
+        argv += ["--record", record]
     return argv
+
+
+class _DockerSuperbrandScreen(SuperbrandScreen):
+    """The shared superbrand screen with the one box this route does not edit: the public
+    name has a single editing home (the Domains rows), here as in the window."""
+
+    def lines(self, j) -> list[str]:
+        out = super().lines(j)
+        for i, ln in enumerate(out):
+            if ln.startswith("   public"):
+                out[i] = f"   {'public':<8}{'Public name':<22}{PUBLIC_NAME_HOME}"
+            elif ln.startswith("commands:") and "id|title|org|public|root" in ln:
+                out[i] = ln.replace("id|title|org|public|root", "id|title|org|root")
+        return out
+
+    def feed(self, j, line: str) -> None:
+        if line.strip().lower().partition(" ")[0] == "public":
+            j.status = f"the public name is {PUBLIC_NAME_HOME}"
+            return
+        super().feed(j, line)
 
 
 class LocalMeshScreen:
@@ -97,6 +165,8 @@ class LocalMeshScreen:
     def __init__(self):
         self.stage = "choice"
         self.prod = False
+        #: the record file the last save of this flow wrote ("" = none)
+        self.saved_record = ""
         self.services = DomainServicesScreen(
             cfg_of=lambda j: self.state(j),
             on_continue=lambda j: self._goto(j, "review"),
@@ -114,6 +184,64 @@ class LocalMeshScreen:
             md = LocalMeshDomains()
             j.localmesh_domains = md
         return md
+
+    # ── the superbrand (#654, D8) ───────────────────────────────────────────────
+    def boot(self, j) -> LocalMeshBootstrapConfig:
+        """The carrier the superbrand session reads and writes (the window's
+        ``LocalMeshPage._brand_boot``): the brand id and the designed block live on it,
+        the environment and the domain are put on it from this screen's own state every
+        time. Created on first use, never persisted into ``j.cfg``."""
+        cfg = getattr(j, "localmesh_boot", None)
+        if cfg is None:
+            cfg = LocalMeshBootstrapConfig()
+            j.localmesh_boot = cfg
+        md = self.state(j)
+        cfg.env = "prod" if self.prod else "test"
+        cfg.cluster_domain = md.own_name if self.prod else ""
+        return cfg
+
+    def brand_session(self, j) -> BrandSession:
+        return session_for(j, "docker", (self.boot(j), self.state(j)),
+                           getattr(j, "generator_dir", "") or "")
+
+    def commit_brand(self, j, *, save: bool = False) -> list[str]:
+        """Write the session onto the carrier and, with ``save``, the record file —
+        the window's ``leave_brand``. An untouched session writes nothing. Remembers
+        whether THIS call left a good record behind (``saved_record``): a file from an
+        earlier mesh in the same state folder is never offered as this mesh's."""
+        s = self.brand_session(j)
+        sync_brand_session(s, self.boot(j))
+        problems = s.commit(save=save)
+        if save:
+            self.saved_record = (brand_model.record_path()
+                                 if s.touched and not problems else "")
+        return problems
+
+    def brand_args(self, j) -> tuple[str, str]:
+        """``(brand id, record file)`` for the printed command: both empty while the
+        person has not chosen or designed anything (the command is then byte-identical
+        to what it was before this step existed)."""
+        s = self.brand_session(j)
+        if not s.touched:
+            return "", ""
+        return self.boot(j).brand, self.saved_record
+
+    def _brand_line(self, j) -> str:
+        s = self.brand_session(j)
+        word = plain_words.term("superbrand")
+        if s.choice == CREATE_KEY:
+            named = s.sb.title or s.sb.id
+            what = (f"a new {word}, ‘{named}’ (designing it)" if s.touched and named
+                    else f"Create a new {word}" + ("" if s.touched else " (default)"))
+        else:
+            what = next((c.label for c in s.choices() if c.key == s.choice), s.choice)
+        return (f"{word.capitalize()}: {what}. "
+                f"Type ‘{word}’ to choose or design it.")
+
+    def _open_brand(self, j) -> None:
+        screen = _DockerSuperbrandScreen(session_of=self.brand_session, route="docker")
+        screen.enter(j)
+        j.open_overlay(screen)
 
     def _seed(self, j) -> None:
         """Row 1 is the own domain: seed it on first entry, rename it when the env or
@@ -133,6 +261,12 @@ class LocalMeshScreen:
         if stage == "services":
             # the services screen walks the named rows; a blank prod apex is not one
             self.services.enter(j)
+        if stage == "review":
+            # the rows are final: write the superbrand onto the carrier and the record
+            # file with them (the window does the same on its way to the review step)
+            problems = self.commit_brand(j, save=True)
+            if problems:
+                j.status = f"the superbrand record was not saved: {problems[0]}"
         self.stage = stage
 
     # ── screen protocol ─────────────────────────────────────────────────────────
@@ -200,7 +334,8 @@ class LocalMeshScreen:
 
     def _lines_domains(self, j) -> list[str]:
         env = "prod" if self.prod else "test"
-        out = [f"Every domain this mesh serves, its own domain first ({env} mesh). "
+        out = [self._brand_line(j), "",
+               f"Every domain this mesh serves, its own domain first ({env} mesh). "
                "Each one gets its own service page on the next step, and the mesh "
                "will not start while any domain here has never been through it. A row "
                "whose sign-in is ‘Own’ brings up a Casdoor of its own beside the "
@@ -212,7 +347,9 @@ class LocalMeshScreen:
                 "always served and cannot be removed.",
                 "commands: a NAME=add a domain · d NUMBER=delete · s NUMBER=toggle its "
                 "sign-in (Superdomain Casdoor <-> Own Casdoor) · p NAME=prod mesh with "
-                "this public apex · p -=back to a test mesh · Enter=continue"]
+                "this public apex · p -=back to a test mesh · "
+                f"{plain_words.term('superbrand')}=choose or design the superbrand · "
+                "Enter=continue"]
         return out
 
     def _row(self, j, arg: str) -> int | None:
@@ -241,6 +378,9 @@ class LocalMeshScreen:
             return
         verb, _, arg = line.partition(" ")
         verb, arg = verb.lower(), arg.strip()
+        if verb == plain_words.term("superbrand") and not arg:
+            self._open_brand(j)
+            return
         if verb == "a":
             if not _NAME_RE.match(arg):
                 j.status = (f"not a domain name: {arg!r} (lowercase dotted hostname, "
@@ -311,13 +451,19 @@ class LocalMeshScreen:
                  ", ".join(normalise_slugs(d.optional_services)) or "cluster default"]
                 for d in md.domains]
         out += model.format_table(headers, rows)
+        brand, record = self.brand_args(j)
+        out += ["", self._brand_line(j)]
+        if record:
+            out += [f"  record saved: {record}"]
         out += ["",
                 "The rest of this route — repo source, services, identity provider, "
                 "overlay and the bring-up itself — is not yet ported to the TUI "
                 "(issue #519): finish it in the GUI (python -m hugmesh_studio), or "
                 "preview the bring-up headlessly with:",
-                "  " + shlex.join(bootstrap_command(md, self.prod)),
-                "That command carries the env, the apex and every Own sign-in; the "
+                "  " + shlex.join(bootstrap_command(md, self.prod, brand=brand,
+                                                  record=record)),
+                "That command carries the env, the apex, every Own sign-in and the "
+                "superbrand's record; the "
                 "per-domain services have no CLI flag — the GUI records them with the "
                 "saved mesh.",
                 "", "commands: b=back to the Domain services step · Enter=back to the "
