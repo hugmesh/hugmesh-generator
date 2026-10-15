@@ -853,7 +853,10 @@ class UsersScreen:
 
 class BrandingScreen:
     """Branding assets are pending; the THEMES surface (#63) is real — a screen,
-    not a popup (TUI-appropriate), opened with ``t``."""
+    not a popup (TUI-appropriate), opened with ``t`` — and so is the SUPERBRAND step
+    (#654, D8): the drop-down with ``Create a new superbrand`` first and the design,
+    opened with ``s`` and offered where the window's Branding page offers it (a mesh;
+    on an unaffiliated image it says why there is nothing to choose)."""
 
     slug = "branding"
     title = "Branding & Themes"
@@ -861,21 +864,38 @@ class BrandingScreen:
     def enter(self, j: "Journey") -> None:  # noqa: ARG002
         return None
 
-    def lines(self, j: "Journey") -> list[str]:  # noqa: ARG002
-        return ["Branding assets (logo/wallpaper/plymouth) are not yet ported "
-                "to the TUI — configure them in the GUI if you need them.",
-                "",
-                "  t. Themes — edit the web login theme (colours, header/footer, "
+    @staticmethod
+    def _superbrand_offered(j: "Journey") -> bool:
+        return getattr(j.cfg, "mode", "") == "mesh"
+
+    def lines(self, j: "Journey") -> list[str]:
+        out = ["Branding assets (logo/wallpaper/plymouth) are not yet ported "
+               "to the TUI — configure them in the GUI if you need them.",
+               ""]
+        if self._superbrand_offered(j):
+            out += ["  s. Superbrand — which superbrand governs this mesh: "
+                    "‘Create a new superbrand’, or one you made before; design it",
+                    ""]
+        out += ["  t. Themes — edit the web login theme (colours, header/footer, "
                 "background effect)",
-                "", "(Enter continues; t opens the Themes screen)"]
+                "", "(Enter continues; t opens the Themes screen"
+                + ("; s the Superbrand step)" if self._superbrand_offered(j) else ")")]
+        return out
 
     def prompt(self, j: "Journey") -> str:  # noqa: ARG002
         return "branding> "
 
     def feed(self, j: "Journey", line: str) -> None:
-        if line.strip().lower() == "t":
+        verb = line.strip().lower()
+        if verb == "t":
             from .themes import ThemesScreen
             j.open_overlay(ThemesScreen())
+            return
+        if verb == "s" and self._superbrand_offered(j):
+            from .superbrand_step import SuperbrandScreen
+            screen = SuperbrandScreen()
+            screen.enter(j)
+            j.open_overlay(screen)
             return
         j.advance()
 
@@ -986,6 +1006,7 @@ class Journey:
         from .localmesh import LocalMeshScreen
         from .meshemu import MeshEmuScreen
         from .qemu import QemuScreen
+        from .superbrand_step import session_for
         self.generator_dir = generator_dir
         self.cfg = cfg or ImageConfig()
         self.worklist: WorklistConfig | None = None
@@ -1006,7 +1027,9 @@ class Journey:
                       "Add more domains beyond the internal Tailscale root "
                       "domain (public go-live domains this mesh serves)?",
                       "additional_domains"),
-            DomainsScreen(), DomainServicesScreen(),
+            DomainsScreen(), DomainServicesScreen(
+                brand_session_of=lambda j: session_for(
+                    j, "image", j.cfg, j.generator_dir), route="image"),
             YesNoStep("users_choice", "User accounts",
                       "Configure user accounts for this mesh now?",
                       "configure_users"),

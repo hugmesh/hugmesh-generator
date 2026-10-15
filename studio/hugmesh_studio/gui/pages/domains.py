@@ -73,11 +73,13 @@ services mirror and the own-row rules are one implementation.
 """
 from __future__ import annotations
 
+import copy
+import html
 import os
 
 from ..qt import Qt, QtWidgets
 from ..styles import WARN, muted
-from ...core.config import (CLIENT_CA_INHERITANCE_NOTE, DOMAIN_IDP_OWN,
+from ...core.config import (CLIENT_CA_INHERITANCE_NOTE, DOMAIN_FIELDS, DOMAIN_IDP_OWN,
                             DOMAIN_IDP_SUPERDOMAIN, Domain, image_class,
                             superadmin_plane_applies)
 from ...core.domain_services import (implicit_own_domain, normalise_slugs,
@@ -273,6 +275,12 @@ class _ServicesCell(QtWidgets.QLabel):
         return list(self._slugs)
 
 
+#: The row fields the table has a cell for (or reads from the services step by name).
+#: Every other field is carried over from the config's row, by the field list.
+_ROW_FIELDS_WITH_CELL = ("name", "title", "optional_services", "images", "idp", "tor")
+_ROW_FIELDS_NO_CELL = tuple(f for f in DOMAIN_FIELDS if f not in _ROW_FIELDS_WITH_CELL)
+
+
 class DomainsTableBody:
     """The domains TABLE — columns, cell widgets, row rules — as a plain-Python mixin.
 
@@ -357,6 +365,19 @@ class DomainsTableBody:
         self.row_note.setStyleSheet(f"color: {WARN};")
         self.row_note.setVisible(False)
         lay.addWidget(self.row_note)
+        # THE BRANDS' SUMMARIES (#654, D9): one read-only line per brand under the table —
+        # a line per row rather than a seventh column, because the table's columns are an
+        # interface other pages and tests index (the base-CA column is appended last and
+        # the count is pinned). It says, for each brand, how it signs in, how much of its
+        # look is its own and how it is reached, and where each is changed. Hidden on a
+        # host with no brand record on offer.
+        self.summary_box = QtWidgets.QLabel("")
+        self.summary_box.setObjectName("brands_summary")
+        self.summary_box.setWordWrap(True)
+        self.summary_box.setTextFormat(Qt.TextFormat.RichText)
+        self.summary_box.setStyleSheet(muted())
+        self.summary_box.setVisible(False)
+        lay.addWidget(self.summary_box)
 
     # ── host hooks ────────────────────────────────────────────────────────────────
     def _cfg(self):
@@ -379,6 +400,12 @@ class DomainsTableBody:
         IS the public apex the operator must name."""
         return False
 
+    def _brand_session(self):
+        """The superbrand session of this host (``tui.superbrand_step.BrandSession``),
+        or None when the host offers no brand record: the Brand summary column is then
+        hidden."""
+        return None
+
     # ── rows ──────────────────────────────────────────────────────────────────────
     def _reviewed(self) -> set[str]:
         return reviewed_names(self._cfg())
@@ -394,8 +421,12 @@ class DomainsTableBody:
             _ServicesCell(services, reviewed=(name in self._reviewed())))
         self.table.setCellWidget(r, _COL_APPLIES,
                                  _AppliesToButton(self._entries(), images or []))
-        self.table.setCellWidget(r, _COL_IDP, _IdpCombo(idp))
+        combo = _IdpCombo(idp)
+        self.table.setCellWidget(r, _COL_IDP, combo)
         self.table.setCellWidget(r, _COL_CA, _BaseCaCombo(self._certs(), base_ca))
+        # the summary line states the sign-in the cell shows NOW, not the one last saved
+        combo.currentIndexChanged.connect(lambda *_a: self._refresh_summary_cells())
+        self._refresh_summary_cells()
 
     def _add_own(self, name: str, title: str = "", services=None,
                  reviewed: bool = False) -> None:
@@ -419,6 +450,7 @@ class DomainsTableBody:
             lab.setStyleSheet(muted())
             lab.setToolTip(_OWN_TIP)
             self.table.setCellWidget(0, col, lab)
+        self._refresh_summary_cells()
 
     def is_own_row(self, r: int) -> bool:
         item = self.table.item(r, _COL_NAME)
@@ -501,6 +533,38 @@ class DomainsTableBody:
             elif self.is_own_row(r):
                 cell.set_slugs(getattr(cfg, "cluster_domain_services", None),
                                reviewed=(name in done))
+        self._refresh_summary_cells()
+
+    def brand_summaries(self) -> list[tuple[str, str]]:
+        """``(domain, one read-only line)`` for every row, in table order ([] when the
+        host offers no brand record). The sign-in is the one the cell shows NOW: the
+        table is its editing home and it has not been committed yet."""
+        session = self._brand_session()
+        if session is None:
+            return []
+        from ...tui.brand_step import summary_line
+        out = []
+        for r in range(self.table.rowCount()):
+            item = self.table.item(r, _COL_NAME)
+            name = item.text().strip() if item else ""
+            idp_cell = self.table.cellWidget(r, _COL_IDP)
+            idp = idp_cell.selected_idp() if isinstance(idp_cell, _IdpCombo) else None
+            out.append((name, summary_line(session, name, own=self.is_own_row(r), idp=idp)))
+        return out
+
+    def _refresh_summary_cells(self) -> None:
+        """Re-read the read-only summaries under the table (never raises)."""
+        try:
+            lines = self.brand_summaries()
+            self.summary_box.setVisible(bool(lines))
+            self.summary_box.setText("<b>Brands</b> (read-only)<br>" + "<br>".join(
+                f"&nbsp;&nbsp;{html.escape(n or '(unnamed)')} — {html.escape(t)}"
+                for n, t in lines) if lines else "")
+        except Exception:                       # noqa: BLE001 — PyQt6 qFatal guard
+            import sys
+            import traceback
+            print("domains: swallowed exception in _refresh_summary_cells", file=sys.stderr)
+            traceback.print_exc(file=sys.stderr)
 
     def rows(self) -> "tuple[list[Domain], dict[str, str]]":
         """The table's ADDED domains as ``Domain`` rows (never the own row), plus the
@@ -515,6 +579,13 @@ class DomainsTableBody:
         # cell here at all — so it is carried BY NAME exactly like the services, or a
         # Next through this table would silently drop every domain's onion.
         recorded_tor = {(getattr(d, "name", "") or "").strip(): bool(getattr(d, "tor", False))
+                        for d in (getattr(cfg, "domains", None) or [])
+                        if (getattr(d, "name", "") or "").strip()}
+        # Every OTHER field of a brand row (its id, look, ways and sign-in port: the
+        # brand record, #654) has no cell here and is carried BY NAME from the config's
+        # row, by the field list — the table used to rebuild a row from its cells and a
+        # Next through it erased them (brand_model.COPY_SITES_STILL_DROPPING).
+        recorded_row = {(getattr(d, "name", "") or "").strip(): d
                         for d in (getattr(cfg, "domains", None) or [])
                         if (getattr(d, "name", "") or "").strip()}
         out: list[Domain] = []
@@ -540,9 +611,14 @@ class DomainsTableBody:
             ca = ca_combo.selected_ca() if isinstance(ca_combo, _BaseCaCombo) else ""
             if ca:
                 base_ca[name] = ca
-            out.append(Domain(name=name, title=title or name,
-                              optional_services=services, images=images, idp=idp,
-                              tor=recorded_tor.get(name, False)))
+            row = Domain(name=name, title=title or name,
+                         optional_services=services, images=images, idp=idp,
+                         tor=recorded_tor.get(name, False))
+            kept = recorded_row.get(name)
+            if kept is not None:
+                for f in _ROW_FIELDS_NO_CELL:
+                    setattr(row, f, copy.deepcopy(getattr(kept, f)))
+            out.append(row)
         return out, base_ca
 
 
@@ -632,6 +708,15 @@ class DomainsPage(QtWidgets.QWizardPage, DomainsTableBody):
         # keeps the work to the one that lands here. Rebuilding combos only — no
         # dialog, no cfg write, nothing page validation can reach.
         wiz.currentIdChanged.connect(self._on_page_changed)
+
+    def _brand_session(self):
+        """The image route's superbrand session — on a mesh only."""
+        from ...tui.superbrand_step import session_for
+        cfg = getattr(self.wiz, "cfg", None)
+        if cfg is None or getattr(cfg, "mode", "") != "mesh":
+            return None
+        return session_for(self.wiz, "image", cfg,
+                           getattr(self.wiz, "generator_dir", "") or "")
 
     def _on_page_changed(self, _page_id=None):
         if self.wiz.currentPage() is self:
@@ -836,10 +921,13 @@ class DomainsTableWidget(QtWidgets.QWidget, DomainsTableBody):
     No worklist and no Secrets-store step on that route, so Applies-to and Base CA
     are hidden rather than offered with one legal answer."""
 
-    def __init__(self, cfg, own_name_editable=None, parent=None):
+    def __init__(self, cfg, own_name_editable=None, brand_session=None, parent=None):
         super().__init__(parent)
         self._cfg_fn = cfg
         self._own_editable_fn = own_name_editable
+        #: a callable returning the host's superbrand session (or None): without one
+        #: the Brand summary column stays hidden (the table is what it always was)
+        self._brand_session_fn = brand_session
         lay = QtWidgets.QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         self._init_table(lay, with_applies=False, with_ca=False)
@@ -849,6 +937,15 @@ class DomainsTableWidget(QtWidgets.QWidget, DomainsTableBody):
 
     def _own_name_editable(self) -> bool:
         return bool(self._own_editable_fn()) if self._own_editable_fn else False
+
+    def _brand_session(self):
+        return self._brand_session_fn() if self._brand_session_fn else None
+
+    def set_brand_session(self, brand_session) -> None:
+        """Give a host that built this table without a session (the Docker route's
+        step) its superbrand session after the fact; the summary column appears."""
+        self._brand_session_fn = brand_session
+        self._refresh_summary_cells()
 
     def fill(self, domains, own_name: str, own_title: str = "") -> None:
         """Rebuild the table from ``domains`` (Domain rows; the one named

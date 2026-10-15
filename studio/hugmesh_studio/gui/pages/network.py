@@ -596,6 +596,15 @@ class NetworkPage(QtWidgets.QWizardPage):
         # sentence describes a section that is often not on screen — see defect (2).
         self.identity_help = _hint("")
         il.addWidget(self.identity_help)
+        # On a mesh the superbrand step (Branding) is the one home of the brand's id,
+        # title, organisation and public name (#654, D8): this page SHOWS them, read-only,
+        # and says where they are changed — one editing home per setting.
+        self.brand_mirror_note = _hint(
+            "Brand ID, Brand Title, Org and Public Apex Domain are the superbrand's. "
+            "They are shown here, read-only: change them in the superbrand step on the "
+            "Branding page.")
+        self.brand_mirror_note.setVisible(False)
+        il.addWidget(self.brand_mirror_note)
         # brand profile (G3): -C/--config brands/*.conf — the sole carrier of the
         # HEADSCALE_URL / RELEASE_STATE / ADMIN_EMAILS / MAIL_* / EXCLUDE_SERVICES
         # presets; sourced by every builder before its CLI flags (CLI wins).
@@ -1285,6 +1294,11 @@ class NetworkPage(QtWidgets.QWizardPage):
         # that was not there. Composed from what the section still HOLDS.
         self.identity_help.setText(_identity_help_text(brand_ok, cluster_ok, show_cp))
         self.identity_help.setVisible(bool(self.identity_help.text()))
+        # the brand rows are read-only mirrors where the superbrand step is shown
+        mirror = (c.mode == "mesh") and brand_ok
+        for edit in (self.brand, self.brand_title, self.org, self.domain):
+            edit.setReadOnly(mirror)
+        self.brand_mirror_note.setVisible(mirror)
         # Hide the SECTION when both axes reject, or the page keeps a bold
         # "Identity & domain" header over an empty body — the orphan-header rule the
         # tailnet and egress sections already follow (and which
