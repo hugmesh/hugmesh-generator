@@ -28,11 +28,14 @@ What is pinned:
 """
 from __future__ import annotations
 
+import io
 import json
 import os
 import re
 import shlex
 import shutil
+import sys
+import tarfile
 
 import pytest
 import yaml
@@ -1650,6 +1653,133 @@ def test_a_banned_marker_in_a_non_utf8_or_binary_file_still_refuses(world, name,
     res = oe.apply(p, runner)
     assert not os.path.isdir(_bare(world, "example-commons")), "a refused repository was pushed"
     assert next(r for r in res.repos if r.target.endswith("example-commons")).skipped
+
+
+_SCAN_SPELLINGS = [
+    ("latin1", b"caf\xe9 " + _GH_TOKEN + b"\n"),
+    ("nul-first", b"\0\0\0binary header\0 " + _GH_TOKEN),
+    ("utf16-bom", ("tok " + _GH_TOKEN.decode()).encode("utf-16")),
+    ("utf16-be-no-bom", ("tok " + _GH_TOKEN.decode()).encode("utf-16-be")),
+    ("utf32", ("tok " + _GH_TOKEN.decode()).encode("utf-32")),
+    ("late-nul", b"x" * 20000 + b"\0" + _GH_TOKEN),
+    ("nul-inside-the-token", _GH_TOKEN[:10] + b"\0" + _GH_TOKEN[10:]),
+    ("invalid-byte-then-token", b"\xff\xfe\x80" + _GH_TOKEN),
+    # a token glued to a character that `\b` counted as part of a word
+    ("glued-to-utf8-letter", "caf\u00e9".encode() + _GH_TOKEN),
+    ("glued-to-latin1-letter", b"caf\xe9" + _GH_TOKEN),
+    ("glued-to-underscore", b"X_" + _GH_TOKEN),
+    ("glued-to-digit", b"1" + _GH_TOKEN),
+    ("glued-to-letter", b"x" + _GH_TOKEN),
+    ("fine-grained-glued", b"1github_pat_" + b"B" * 30),
+]
+
+
+@pytest.mark.parametrize("name,data", _SCAN_SPELLINGS, ids=[n for n, _ in _SCAN_SPELLINGS])
+def test_scan_file_flags_a_planted_token_in_every_spelling(tmp_path, name, data):
+    """Unit level: whatever the bytes are, a token inside them is found."""
+    f = tmp_path / "planted.dat"
+    f.write_bytes(data)
+    labels, _text, _clean = oe._scan_file(str(f))
+    assert labels and all("token" in lb for lb in labels), (name, labels)
+
+
+def test_scan_file_says_so_when_it_cannot_scan(tmp_path, monkeypatch):
+    """An unreadable or oversize file is a finding, never a silent pass."""
+    f = tmp_path / "big.bin"
+    f.write_bytes(b"x")
+    monkeypatch.setattr(oe, "SCAN_LIMIT", 0)
+    assert oe._scan_file(str(f))[0] == ["too large to scan for secrets"]
+    monkeypatch.undo()
+    assert oe._scan_file(str(tmp_path / "missing"))[0] == \
+        ["unreadable, so not scanned for secrets"]
+
+
+def _tar_runner(members):
+    """A runner whose ``git archive`` answers with a tar of ``members``
+    (``(name, kind, data_or_target)``)."""
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w") as tf:
+        for name, kind, payload in members:
+            ti = tarfile.TarInfo(name)
+            if kind == "sym":
+                ti.type, ti.linkname = tarfile.SYMTYPE, payload
+                tf.addfile(ti)
+            elif kind == "dir":
+                ti.type = tarfile.DIRTYPE
+                ti.mode = 0o755
+                tf.addfile(ti)
+            else:
+                ti.size = len(payload)
+                tf.addfile(ti, io.BytesIO(payload))
+
+    class R(oe.Runner):
+        def run(self, argv, *, cwd=None, env=None, timeout=600):
+            return oe.RunResult(0, buf.getvalue(), b"")
+    return R()
+
+
+def test_snapshot_passes_the_data_filter_explicitly(tmp_path, monkeypatch):
+    seen = []
+    real = tarfile.TarFile.extract
+
+    def spy(self, member, path="", *a, **kw):
+        seen.append(kw.get("filter"))
+        return real(self, member, path, *a, **kw)
+    monkeypatch.setattr(tarfile.TarFile, "extract", spy)
+    files = oe._snapshot(_tar_runner([("a.txt", "file", b"hi")]), str(tmp_path), "HEAD",
+                         str(tmp_path / "w"))
+    assert files == ["a.txt"] and seen == ["data"]
+
+
+@pytest.mark.parametrize("members", [
+    # a link out of the tree, then a file written THROUGH it
+    [("esc", "sym", "../outside"), ("esc/pwn.txt", "file", b"x")],
+    # an absolute link, then a file through it
+    [("esc", "sym", "{abs}"), ("esc/pwn.txt", "file", b"x")],
+    # a link that climbs out from a sub folder
+    [("d", "dir", None), ("d/esc", "sym", "../../outside"), ("d/esc/pwn.txt", "file", b"x")],
+    # a plain name that climbs out
+    [("../outside/pwn.txt", "file", b"x")],
+], ids=["relative-link", "absolute-link", "nested-link", "dotdot-name"])
+def test_snapshot_never_writes_outside_even_without_extraction_filters(
+        tmp_path, monkeypatch, members):
+    """On a Python with no extraction filter (3.10 before .12, 3.11 before .4) the
+    snapshot used to rely on a name check that does not follow links. Emulated here by
+    a ``tarfile`` whose ``extract`` rejects ``filter=`` and extracts everything else
+    unfiltered."""
+    work = tmp_path / "w"
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    members = [(n, k, (str(outside) if p == "{abs}" else p)) for n, k, p in members]
+    real = tarfile.TarFile.extract
+
+    def old_python(self, member, path="", *a, **kw):
+        if "filter" in kw:
+            raise TypeError("extract() got an unexpected keyword argument 'filter'")
+        return real(self, member, path, *a, filter="fully_trusted", **kw)
+    monkeypatch.setattr(tarfile.TarFile, "extract", old_python)
+    oe._snapshot(_tar_runner(members), str(tmp_path), "HEAD", str(work))
+    assert os.listdir(outside) == [], "the snapshot wrote outside its folder"
+    assert not (tmp_path / "pwn.txt").exists()
+    assert not os.path.exists(tmp_path / "outside" / "pwn.txt")
+
+
+def test_snapshot_keeps_a_link_that_points_inside_the_tree(tmp_path):
+    files = oe._snapshot(_tar_runner([("real.txt", "file", b"hi"), ("d", "dir", None),
+                                      ("d/link", "sym", "../real.txt")]),
+                         str(tmp_path), "HEAD", str(tmp_path / "w"))
+    assert files == ["real.txt"]
+    assert os.path.islink(tmp_path / "w" / "d" / "link")
+
+
+def test_the_subprocess_runner_never_lets_git_prompt_for_a_login(monkeypatch):
+    """Pinned in the runner itself: not the ambient environment, and not a caller's
+    ``env``, can switch the terminal prompt on."""
+    monkeypatch.setenv("GIT_TERMINAL_PROMPT", "1")
+    argv = [sys.executable, "-c", "import os;print(os.environ['GIT_TERMINAL_PROMPT'])"]
+    for env in (None, {}, {"GIT_TERMINAL_PROMPT": "1"}):
+        r = oe.SubprocessRunner().run(argv, env=env)
+        assert r.returncode == 0 and r.text.strip() == "0", (env, r.text, r.err)
 
 
 def test_a_clean_non_utf8_or_binary_file_is_published_byte_for_byte_and_noted(world):

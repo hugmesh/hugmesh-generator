@@ -171,9 +171,13 @@ BANNED_MARKERS = (
     ("robot footer", re.compile("\U0001F916")),
     ("assistant session link", re.compile(re.escape(_SESSION_URL), re.IGNORECASE)),
     # 36 or MORE characters: the length of a token is GitHub's to change, and a longer
-    # one must not slip past a rule that wanted exactly 36
-    ("GitHub token", re.compile(r"\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{36,}")),
-    ("GitHub fine-grained token", re.compile(r"\bgithub_pat_[A-Za-z0-9_]{22,}\b")),
+    # one must not slip past a rule that wanted exactly 36. No boundary BEFORE the prefix:
+    # `\b` failed after an accented letter, an underscore or a digit, so a token glued
+    # to one was published, and nothing but a token spells `ghp_` plus 36 letters
+    ("GitHub token", re.compile(
+        r"(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{36,}")),
+    ("GitHub fine-grained token", re.compile(
+        r"github_pat_[A-Za-z0-9_]{22,}\b")),
     ("AWS access key", re.compile(r"\bAKIA[0-9A-Z]{16}\b")),
     ("Slack token", re.compile(r"\bxox[baprs]-[A-Za-z0-9-]{10,}\b")),
     # a password written into a URL, but only a LITERAL one of 16+ characters: the
@@ -256,6 +260,10 @@ class SubprocessRunner(Runner):
         full.pop("GH_TOKEN", None)
         full.pop("GITHUB_TOKEN", None)
         full.update(env or {})
+        # never a prompt for a password: a git call that wants a login fails, it does
+        # not wait on a terminal. Set LAST so neither the ambient environment nor a
+        # caller's env can turn it back on.
+        full["GIT_TERMINAL_PROMPT"] = "0"
         try:
             r = subprocess.run(argv, cwd=cwd, env=full, stdout=subprocess.PIPE,
                                stderr=subprocess.PIPE, timeout=timeout, check=False)
@@ -1020,17 +1028,15 @@ def _snapshot(runner: Runner, path: str, ref: str, workdir: str) -> list[str]:
         for member in tf.getmembers():
             if not (member.isfile() or member.isdir() or member.issym()):
                 continue
-            # never let an archive write outside its own directory
-            dest = os.path.normpath(os.path.join(workdir, member.name))
-            if not dest.startswith(os.path.abspath(workdir) + os.sep) \
-                    and dest != os.path.abspath(workdir):
+            if not _member_stays_inside(workdir, member):
                 continue
             try:
                 try:
                     tf.extract(member, workdir, filter="data")
                 except TypeError:
                     # a Python older than 3.12 / 3.11.4 / 3.10.12 has no extraction
-                    # filter; the path check above is what keeps the write inside
+                    # filter; _member_stays_inside above (name, parent folder and
+                    # link target, all resolved) is what keeps the write inside
                     tf.extract(member, workdir)
             except (tarfile.FilterError, OSError):
                 # a link that points outside the tree, or a name the filter
@@ -1039,6 +1045,28 @@ def _snapshot(runner: Runner, path: str, ref: str, workdir: str) -> list[str]:
             if member.isfile():
                 files.append(member.name)
     return sorted(files)
+
+
+def _member_stays_inside(workdir: str, member: tarfile.TarInfo) -> bool:
+    """True when extracting ``member`` can only write inside ``workdir``. Checked
+    whether or not the Python has extraction filters, so the safety does not hang on
+    the interpreter's default: the name must stay under the folder, the folder it lands
+    in must RESOLVE (links followed) to somewhere under it, and a link must be
+    relative and point inside."""
+    root = os.path.realpath(workdir)
+    dest = os.path.normpath(os.path.join(root, member.name))
+    if dest != root and not dest.startswith(root + os.sep):
+        return False
+    parent = os.path.realpath(os.path.dirname(dest))
+    if parent != root and not parent.startswith(root + os.sep):
+        return False
+    if member.issym():
+        if os.path.isabs(member.linkname):
+            return False
+        target = os.path.normpath(os.path.join(parent, member.linkname))
+        if target != root and not target.startswith(root + os.sep):
+            return False
+    return True
 
 
 def _prepare_repo(runner: Runner, name: str, cfg: ExportConfig, rules, out_dir: str,
