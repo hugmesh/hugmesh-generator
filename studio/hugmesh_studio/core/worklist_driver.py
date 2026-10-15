@@ -44,7 +44,8 @@ from dataclasses import asdict, dataclass, field
 
 from .build_driver import BuildDriver
 from . import roles
-from .config import DOMAIN_IDP_SUPERDOMAIN, ImageConfig, User, image_class
+from .config import (ImageConfig, User, brand_header_fields, image_class,
+                     manifest_domain_rows)
 from .platform_info import HostInfo, detect
 from .worklist import WorklistConfig, WorklistEntry
 
@@ -284,21 +285,17 @@ class WorklistDriver:
                   for entry, cfg in self.materialize()]
         return {
             "format": 2,
-            "brand": base.brand, "brand_title": base.brand_title, "org": base.org,
-            "cluster_domain": base.cluster_domain,
-            "superdomain": base.effective_superdomain(),
-            # per-domain idp (issue #47) is OMIT-WHEN-DEFAULT, exactly like the v1
-            # shim (config.mesh_manifest): absent == superdomain for every consumer,
-            # so a superdomain-only envelope keeps its pre-#47 bytes.
-            "domains": [{"name": d.name, "title": d.title,
-                         "optional_services": list(d.optional_services),
-                         "images": list(d.images),
-                         **({"idp": d.idp}
-                            if d.idp != DOMAIN_IDP_SUPERDOMAIN else {}),
-                         # per-domain Tor front door (#582): OMIT-WHEN-FALSE, exactly
-                         # as the v1 shim emits it.
-                         **({"tor": True} if getattr(d, "tor", False) else {})}
-                        for d in base.domains],
+            # The header and the rows come from the SAME two functions the v1 shim
+            # (config.mesh_manifest) calls (#654, D5): the header is a projection of
+            # the record's superbrand block, and the rows carry every Domain field by
+            # the field list — idp OMIT-WHEN-DEFAULT (#47), tor/look/ways/issuer_port
+            # OMIT-WHEN-EMPTY — so the two emitters cannot disagree and a field added
+            # to Domain reaches this envelope without a change here. (Until #654 this
+            # spelled its own four-key row and would have dropped any new field.)
+            **brand_header_fields(base.brand, base.brand_title, base.org,
+                                  base.cluster_domain, base.effective_superdomain(),
+                                  base.login_style, base.login_decor),
+            "domains": manifest_domain_rows(base.domains),
             # per-user `roles` (issue #228) is OMIT-WHEN-SINGLE too (User.to_dict), so
             # v2 and the v1 shim emit the same user rows byte for byte.
             "users": [u.to_dict() for u in self.manifest_users()],
@@ -411,14 +408,28 @@ class WorklistDriver:
         res = self.results[i]
         res.keys_path = keys_dir_
         script = os.path.join(self.generator_dir, GENKEYS_SCRIPT)
+        base = self.worklist.base
         try:
             # INSIDE the try on purpose: key_profile() now RAISES for a role with no
             # declared profile instead of guessing "host". That must fail this one
             # image's keys step (recorded, partial folder removed) — never abort the
             # rest of the worklist, and never silently mis-provision.
+            #
+            # The brand and the internal root name go WITH the call (#654, D5). Until
+            # then the script was started with neither: gen-provision-keys.sh reads
+            # BRAND from the environment (default hugmesh) and derives the superdomain
+            # as <BRAND>.internal, so a worklist built for brand acme / root
+            # acme.internal wrote provision.json entries for hugmesh.internal — the
+            # one file every node reads to join the mesh. --superdomain is the
+            # script's own flag; BRAND is its env knob (and the brands/<BRAND>.conf
+            # profile selector the builders use for the same images).
             cmd = [script, "--role", key_profile(entry.role, entry.platform),
-                   "--out", keys_dir_, "--random"]
-            proc = subprocess.Popen(cmd, cwd=self.generator_dir, stdout=subprocess.PIPE,
+                   "--out", keys_dir_, "--random",
+                   "--superdomain", base.effective_superdomain()]
+            env = dict(os.environ)
+            env["BRAND"] = base.brand
+            proc = subprocess.Popen(cmd, cwd=self.generator_dir, env=env,
+                                    stdout=subprocess.PIPE,
                                     stderr=subprocess.STDOUT, text=True, bufsize=1,
                                     **proc_text.TEXT_IO)
             assert proc.stdout is not None

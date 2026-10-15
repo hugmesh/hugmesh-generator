@@ -46,7 +46,8 @@ import re
 from dataclasses import dataclass, field
 from typing import ClassVar
 
-from .config import DOMAIN_IDP_CHOICES, DOMAIN_IDP_OWN, DOMAIN_IDP_SUPERDOMAIN, Domain
+from .config import (DOMAIN_IDP_CHOICES, DOMAIN_IDP_OWN, DOMAIN_IDP_SUPERDOMAIN, Domain,
+                     domain_from_record_row, domain_rows_to_dict)
 from .domain_services import normalise_slugs, record_reviewed, reviewed_names
 
 __all__ = ["LocalMeshDomains", "bootstrap_domain_records", "own_idp_names",
@@ -174,15 +175,24 @@ def bootstrap_domain_records(domains, own_name: str) -> tuple[dict, ...]:
             continue
         if name == own and _default_shaped(d):
             continue
-        rec = {"name": name, "title": (d.title or "").strip(),
-               "idp": getattr(d, "idp", DOMAIN_IDP_SUPERDOMAIN)
-               or DOMAIN_IDP_SUPERDOMAIN,
-               "optional_services": normalise_slugs(d.optional_services)}
+        # COPY SITE (brand_model.COPY_SITES): the row's saved shape comes from the
+        # field list, so a Domain field added later is recorded here without a change
+        # (#654); only the values this route normalises are touched.
+        rec = domain_rows_to_dict([d])[0]
+        rec["name"] = name
+        rec["title"] = (d.title or "").strip()
+        rec["idp"] = getattr(d, "idp", DOMAIN_IDP_SUPERDOMAIN) or DOMAIN_IDP_SUPERDOMAIN
+        rec["optional_services"] = normalise_slugs(d.optional_services)
+        # a docker mesh builds no image, so an empty worklist-entry list says nothing
+        # here and is left out (the pre-#654 record never carried the key)
+        if not rec.get("images"):
+            rec.pop("images", None)
         # the domain's own Tor front door (#582): OMIT-WHEN-FALSE, so every record
         # without one keeps its bytes. Unlike optional_services this one RUNS on the
         # local docker mesh — LocalStackNode passes it as TOR_ONION_DOMAINS when TOR=1.
-        if getattr(d, "tor", False) and name != own:
-            rec["tor"] = True
+        # The mesh's own row never has one: its front door is the primary onion.
+        if name == own:
+            rec.pop("tor", None)
         out.append(rec)
     return tuple(out)
 
@@ -218,12 +228,20 @@ def domains_from_bootstrap(cfg) -> "LocalMeshDomains | None":
     rows: list[Domain] = [Domain(name=own, title="")]
     for rec in rec_rows:
         name = rec["name"].strip()
+        # COPY SITE (brand_model.COPY_SITES): rebuild the row through the ONE lenient
+        # loader (every field by the field list; a junk sign-in kept as text for
+        # _import_problem to name), so a field the record carries is never left at
+        # its default here (#654); then apply this route's own-row rules.
+        loaded = domain_from_record_row(dict(rec, name=name))
         row = next((r for r in rows if r.name == name), None)
         if row is None:
-            row = Domain(name=name)
+            row = loaded
             rows.append(row)
+        else:
+            for k in Domain.__dataclass_fields__:
+                if k != "name":
+                    setattr(row, k, getattr(loaded, k))
         row.title = (rec.get("title") or "").strip()
-        row.idp = rec.get("idp") or DOMAIN_IDP_SUPERDOMAIN
         row.optional_services = list(rec.get("optional_services") or [])
         row.tor = rec.get("tor") is True and name != own
     for name in idp_names:
@@ -274,10 +292,15 @@ def record_walk(cfg, md: "LocalMeshDomains", names) -> None:
                    and name != (md.own_name or "").strip())
         row = by_name.get(name)
         if row is None:
-            row = {"name": name,
-                   "title": (form_row.title or "").strip() if form_row else "",
-                   "idp": DOMAIN_IDP_OWN if name in own_idp else DOMAIN_IDP_SUPERDOMAIN,
-                   "optional_services": picked}
+            # COPY SITE (brand_model.COPY_SITES): a new row starts from the form row's
+            # full saved shape (every field, #654), not a hand-listed subset; the
+            # sign-in is what the record said (own-IdP name), as domains_from_bootstrap
+            # read it.
+            row = domain_rows_to_dict([form_row])[0] if form_row else {}
+            row["name"] = name
+            row["title"] = (form_row.title or "").strip() if form_row else ""
+            row["idp"] = DOMAIN_IDP_OWN if name in own_idp else DOMAIN_IDP_SUPERDOMAIN
+            row["optional_services"] = picked
             rows.append(row)
             by_name[name] = row
         else:
@@ -393,7 +416,11 @@ def apply_imported_domains(cfg, md: "LocalMeshDomains | None") -> list[str]:
             continue
         if _import_problem(row):
             continue                        # imported_domains_lines says so, by name
-        dom = Domain(name=name)
+        # COPY SITE (brand_model.COPY_SITES): the image row is the saved row's full
+        # shape re-loaded (#654) — the title, sign-in, services and Tor front door as
+        # before, and every later field with them.
+        dom = domain_from_record_row(domain_rows_to_dict([row])[0])
+        dom.name = name
         dom.title = (row.title or "").strip()
         dom.idp = getattr(row, "idp", "") or DOMAIN_IDP_SUPERDOMAIN
         dom.optional_services = list(picked)
