@@ -778,40 +778,74 @@ INSERT INTO gateway_route_access (gateway, url_pattern, role, allow) VALUES
   -- path calls it (the operator UI at /admin/games-services rides the
   -- '/admin/games-services/**' + '/bff/games-services/**' families instead), so
   -- this costs nothing and keeps the control plane tailnet-only via
-  -- hugmesh-be-gateway / hugmesh-superadmin-gateway. NB the mfa_required flip at
-  -- the end of this file is `WHERE allow = true`, so a DENY row is never flipped.
-  -- ⚠ THE DENY ROW THIS BLOCK ARGUES FOR IS NOT SEEDED. Merge note, 2026-09-16
-  -- (#351, decision 20 "land the whole branch"). `integrate/superadmin` carried
-  --     ('hugmesh-fe-gateway','/bff/superadmin/games-services/**','ROLE_SUPERADMIN',false)
-  -- here (spelled out, not as a tuple, so no comment-naive reader parses it as a
-  -- seeded row — hugmesh-generator#379). It is NOT added. ⚠ THE ORDER OF THE TWO
-  -- OPERATOR ANSWERS IS THE OPPOSITE of what the first draft of this note claimed
-  -- (CORRECTED 2026-09-16 on the land pass, from #347 itself): decision 20 ("land
-  -- the whole branch") is the LATER answer — ANSWERED 2026-09-16 — and it is
-  -- GENERAL; decision 8 (#244 ACCEPT) is SIX DAYS EARLIER — ANSWERED 2026-09-10,
-  -- 2026-09-16 being merely its LANDING date (PR #395) — and it is SPECIFIC to
-  -- this row, answered on a question framed, in main's own words, as ACCEPT
-  -- "without the games-services deny row". So recency argues FOR the row and
-  -- specificity argues AGAINST it; the two answers genuinely point opposite ways.
-  -- The specific one is applied and the line left OUT, but that is a merge-time
-  -- reading of two operator answers, NOT an operator ruling — it is parked as
-  -- decision 28 on #351/#347 and the operator settles it. See the #244 block for
-  -- the full argument; in short the row denies NOBODY (a privileged principal
-  -- short-circuits before decide() runs, and a non-privileged one is already
-  -- governed-but-ungranted DENY under the floor), while as the LONGEST matching
-  -- pattern with allow=false it is skipped by the `WHERE allow = true` flip and
-  -- so STRIPS the MFA step-up floor from exactly this subtree.
-  -- MEASURED (RE-measured 2026-09-16 on the land pass; the first draft of this
-  -- note said 125/1 and 126/0, and BOTH were wrong — the suite runs 125
-  -- assertions either way, so the one that flips takes the PASS count DOWN):
-  -- with the row in, tests/scripts/test-mfa-required-rules.sh goes
-  -- 124 passed/1 failed —
-  --   "the deciding row at hugmesh-fe-gateway /bff/superadmin/games-services/
-  --    catalog is mfa_required=false — a longer row under /bff/superadmin/ has
-  --    taken over the match and stripped the step-up floor from that subtree"
-  -- and 125 passed/0 failed with it out. Reinstating it is an operator call,
-  -- not a merge call,
-  -- and it is parked on #351 rather than taken here.
+  -- hugmesh-be-gateway / hugmesh-superadmin-gateway.
+  --
+  -- ⚠ SEEDED, AND SEEDED WITH mfa_required = true — OPERATOR DECISION 28 = D,
+  -- answered 2026-09-17 on hugmesh-generator#347 (comment 5722264043) and tracked
+  -- on #351. This row is the one thing `integrate/superadmin` carried that the
+  -- 2026-09-16 land pass left out, on a merge-time reading that decision 8 (#244
+  -- ACCEPT, framed "without the games-services deny row") was the SPECIFIC answer
+  -- and decision 20 ("land the whole branch") merely the later GENERAL one. That
+  -- reading was parked for the operator rather than taken, and the operator did
+  -- NOT pick a side: D closes the trade-off instead. The row goes back (decision
+  -- 20 lands literally) AND the step-up floor survives (decision 8's one real
+  -- gain), because the row itself carries mfa_required = true.
+  --
+  -- WHY A true ON A DENY ROW IS NOT NOISE — TWO DIFFERENT GATEWAY FUNCTIONS.
+  -- Read out of hugmesh-gateway on 2026-09-17, not inferred:
+  --   * GatewayRouteAccessService.decide() raises its D8 floor
+  --     (`mfaRequiredOnGrant`) ONLY from rows that GRANT the principal — the
+  --     `if (r.allow())` arm and the isPublic() arm, nowhere else. A deny row can
+  --     never raise it. On the ALLOW path the true below is therefore genuinely
+  --     inert, which is exactly what "marking a deny row would be noise" meant,
+  --     and that sentence is still correct — for THAT function.
+  --   * GatewayRouteAccessFilter's D8 PRIVILEGED floor does not call decide() at
+  --     all. It calls GatewayRouteAccessService.isMfaRequiredSurface() (the JWT
+  --     branch and the opaque-`bff_`-session branch each call it once), and that
+  --     function is allow-BLIND and role-BLIND: it takes the LONGEST matching
+  --     url_pattern and returns true if ANY rule at that length carries
+  --     mfaRequired — `if (r.mfaRequired()) return true;`, with no allow test and
+  --     no authority test anywhere in its body.
+  -- That asymmetry is the whole of decision D. The deny row wins the longest
+  -- match for this subtree, so WITHOUT a true on it isMfaRequiredSurface() would
+  -- answer false for /bff/superadmin/games-services/** and the privileged step-up
+  -- floor would stop applying there — the cost the 2026-09-16 note measured, and
+  -- the reason option A (leave the row out) was recommended. WITH the true, the
+  -- floor is carried by the deny row itself and the subtree keeps it.
+  --
+  -- HOW THE true GETS ONTO THE ROW — not as a 5th value in the tuple.
+  -- Three independent reasons, the first two of which are this file's own
+  -- argument at the flip UPDATE (reasons 1-3 there) applied to one row:
+  --   1. mfa_required is NOT in uq_route_access_row, so a parallel 5-value row
+  --      collides on the 5-tuple and ON CONFLICT DO NOTHING silently drops it.
+  --   2. On an IN-PLACE re-apply the row already exists, ON CONFLICT DO NOTHING
+  --      skips it, and a 5-value INSERT leaves mfa_required false forever. Only a
+  --      write that CHANGES the existing row converges on both paths.
+  --   3. A 5-value tuple is invisible to every row parser in the repo: the
+  --      4-field ROW_FULL_RE in tests/scripts/cluster_manifest_integrity.py, and
+  --      the ROW_RE in tests/scripts/test-mfa-required-rules.sh,
+  --      tests/scripts/test-superadmin-bff-reachability.sh and
+  --      tests/e2e/specs/rbac-route-access.ts all stop at `,true|false)`. The row
+  --      would exist in Postgres and be absent from every static model of it.
+  -- So the row is seeded 4-value like every other row, and a ROW-SCOPED UPDATE
+  -- placed immediately BEFORE the blanket flip at the foot of this file pins its
+  -- mfa_required. That statement names this one
+  -- (gateway, url_pattern, role, allow=false) tuple and nothing else;
+  -- tests/scripts/test-mfa-required-rules.sh asserts its shape, that it changes
+  -- exactly one row on the first apply and zero on the second, that the BLANKET
+  -- flip still touches allow=true rows only, and that no OTHER deny row anywhere
+  -- in the file ends up mfa_required=true.
+  --
+  -- WHAT THE ROW COSTS, stated so the next reader does not re-litigate it: it
+  -- denies NOBODY who is not already denied. A privileged principal
+  -- short-circuits in GatewayRouteAccessFilter before decide() runs; a
+  -- non-privileged one is already governed-but-ungranted DENY under the
+  -- /bff/superadmin/** floor. Its value is posture, not enforcement — it states
+  -- that an OPTIONAL slug's control plane is not offered at the public browser
+  -- door, and it restores the exact status quo ante for a games-DESELECTED build
+  -- (which gate_optional_services cannot do on its own: _opt_drop_rows can only
+  -- REMOVE a row, never ADD one, so the deny must be unconditional).
+  ('hugmesh-fe-gateway',  '/bff/superadmin/games-services/**', 'ROLE_SUPERADMIN', false),  -- games app-store control plane: DENY at the PUBLIC browser door (tailnet-only posture); mfa_required pinned true by the row-scoped UPDATE below (#347 decision 28 = D)
   -- ── FLEET-OWNER phone console (fleet-admin entitlement tier) ────────────────
   -- The admin-bff /bff/admin/phone-fleet/** surface lets a NON-superadmin fleet
   -- owner manage ONLY their own phones on the PUBLIC fe-gateway. It rides the
@@ -906,28 +940,31 @@ INSERT INTO gateway_route_access (gateway, url_pattern, role, allow) VALUES
   -- of this file picks it up and the gate finally has a surface. That is the
   -- argument the operator accepted; the flag itself is NOT flipped here.
   --
-  -- NO games-services DENY REFINEMENT — deliberately. The carrier commit
-  -- 63c8952f paired its allow row with a DENY row on this gateway for the pattern
-  -- /bff/superadmin/games-services/** (role ROLE_SUPERADMIN, allow=false) —
-  -- spelled out rather than as a tuple so that no comment-naive reader parses it
-  -- as a seeded row (hugmesh-generator#379). Under the
-  -- current filter that row denies NOBODY: a privileged principal bypasses
-  -- decide() before it runs, and a non-privileged one is already DENY'd by the
-  -- row below (governed-but-ungranted — same verdict with or without it). Its one
-  -- measurable effect runs the WRONG way: as the longest matching pattern with
-  -- mfa_required left false (the flip is `allow = true` only) it would STRIP the
-  -- MFA floor from exactly the games-services subtree. It buys nothing and costs
-  -- the one thing this row exists for, so #244's decision question states ACCEPT
-  -- as "without the games-services deny row".
+  -- THE games-services DENY REFINEMENT IS NOW SEEDED — OPERATOR DECISION 28 = D
+  -- (#347, answered 2026-09-17), which SUPERSEDES the "without the games-services
+  -- deny row" clause this block used to carry. #244's question was framed that
+  -- way because the carrier commit 63c8952f paired its allow row with a DENY row
+  -- at /bff/superadmin/games-services/** whose mfa_required was left false: as
+  -- the LONGEST matching pattern it would then have taken the subtree out of the
+  -- step-up floor, which is the one thing #244's ACCEPT buys. That objection was
+  -- to the row AS 63c8952f WROTE IT, not to the row. The operator's answer seeds
+  -- it with mfa_required = true instead, so the subtree keeps the floor — see the
+  -- block above the row itself for the measurement (isMfaRequiredSurface() is
+  -- allow-blind and role-blind, decide()'s grant-scoped floor is not).
+  -- Unchanged: the row still denies NOBODY the floor below does not already deny
+  -- (a privileged principal bypasses decide() before it runs; a non-privileged
+  -- one is governed-but-ungranted either way). Its value is the posture — an
+  -- OPTIONAL slug's control plane is not offered at the public browser door.
   --
-  -- ⚠ DUAL-WRITE PARTNER in the OTHER repo, NOT done here: hugmesh-gateway's
-  -- CanonicalSeed.fe() baked floor, which carries no /bff/superadmin rule (its
-  -- only superadmin rules are be() :215 and the pki /** catch-all). On the
-  -- datastore-unreachable fallback the fe floor therefore still resolves
-  -- /bff/superadmin/… to NO_RULE and forwards, so both the header and the MFA
-  -- floor drop back to the pre-row behaviour until that lands. That divergence is
-  -- ASSERTED, not merely noted, in
-  -- tests/e2e/features/mined-governance/fallback-floor-parity.feature.
+  -- ✅ DUAL-WRITE PARTNER in the OTHER repo — LANDS WITH decision 41 (#33) and
+  -- decision 56 (#347, 2026-09-18) TOGETHER, not separately. hugmesh-gateway's
+  -- CanonicalSeed.fe() baked floor gains r(FE, "/bff/superadmin/**",
+  -- "ROLE_SUPERADMIN") (decision 41), and decision 56 puts that SAME row in
+  -- MFA_REQUIRED_FALLBACK_ROWS — so on the datastore-unreachable fallback the
+  -- fe floor now agrees with this file on BOTH the DENY/header AND the MFA
+  -- floor, not the DENY/header alone. Parity is ASSERTED, not merely noted, in
+  -- tests/e2e/features/mined-governance/fallback-floor-parity.feature (both the
+  -- pre-existing ALLOW/DENY parity scenario and the new MFA-parity one).
   --
   -- ⚠ REACHING A DATABASE THAT ALREADY EXISTS. This file is initdb-only on BOTH
   -- lanes: the cluster mounts it into /docker-entrypoint-initdb.d over a PVC
@@ -1227,10 +1264,23 @@ ON CONFLICT (gateway, url_pattern, role, COALESCE(casdoor_user, ''), COALESCE(NU
 --     with hugmesh-be-gateway carrying the longer /bff/admin/workloads/** row.
 --     Scoping this UPDATE to one gateway name would leave the other gateway as an
 --     un-MFA'd second door to the same paths, so it matches on pattern alone.
---   * `allow = true` only. A deny row denies at the longest match regardless of
---     MFA, so marking one would be noise. If a DENY row is ever added under these
---     prefixes, re-read GatewayRouteAccessService.isMfaRequiredSurface() before
---     assuming this UPDATE still covers the surface.
+--   * `allow = true` only, AND THAT IS WHY THE ROW-SCOPED SEED ABOVE EXISTS.
+--     This bullet used to end "a deny row denies at the longest match regardless
+--     of MFA, so marking one would be noise", with a standing instruction to
+--     re-read GatewayRouteAccessService.isMfaRequiredSurface() if a DENY row were
+--     ever added under these prefixes. One now is — the fe
+--     /bff/superadmin/games-services/** row (#347 decision 28 = D) — so that
+--     re-read was done, and it found the sentence half wrong. decide()'s D8 floor
+--     is grant-scoped, so a deny row cannot raise it and the true IS noise there.
+--     isMfaRequiredSurface(), which is what the PRIVILEGED floor in
+--     GatewayRouteAccessFilter actually calls, is allow-blind and role-blind: it
+--     ORs mfaRequired across EVERY rule at the longest matching pattern. A deny
+--     row that wins the longest match therefore DECIDES the floor for its whole
+--     subtree, and leaving it false silently removes the floor there. This
+--     blanket UPDATE deliberately still does not touch deny rows — widening it
+--     would flip every deny row in the file, which is not what anyone asked for.
+--     A deny row that must carry the floor gets a ROW-SCOPED UPDATE naming it,
+--     directly above this one.
 --   * `IS DISTINCT FROM true` makes a re-apply a genuine no-op instead of
 --     rewriting every row.
 --
@@ -1312,17 +1362,63 @@ ON CONFLICT (gateway, url_pattern, role, COALESCE(casdoor_user, ''), COALESCE(NU
 -- domain-scoped row whose url_pattern is listed in the per-domain arm. Exempt a
 -- surface by changing this predicate, not by hand-editing a row.
 --
--- DUAL-WRITE PARTNERS (checked 2026-07-30, no companion change needed):
---   * hugmesh-gateway cache/CanonicalSeed.java — its `r()` helper hard-codes
---     mfaRequired=false for EVERY baked row ON PURPOSE ("a datastore-unreachable
---     fallback can never accidentally lock out a privileged surface on the bare
---     floor"). These rules deliberately do NOT go there. Consequence to know: in a
---     dual-DB outage the gateway falls back to that floor and MFA enforcement
---     DROPS for these prefixes (role gating still applies).
+-- DUAL-WRITE PARTNERS (checked 2026-07-30; UPDATED 2026-09-18 for decision 56):
+--   * hugmesh-gateway cache/CanonicalSeed.java — its `r()` helper used to
+--     hard-code mfaRequired=false for EVERY baked row unconditionally. Decision
+--     56 (hugmesh-generator#347, operator answer 2026-09-18: "a declared set of
+--     privileged rows") NARROWED that: `r()` now looks each row up in the named
+--     constant `MFA_REQUIRED_FALLBACK_ROWS`, which is DERIVED from the blanket
+--     flip below (the intersection of "every ALLOW row this UPDATE touches" and
+--     "the rows CanonicalSeed actually bakes") — see that constant's own doc
+--     comment for the derivation and the full list. Every row OUTSIDE that
+--     declared set still gets mfaRequired=false (D8's original reasoning still
+--     applies to them: "a datastore-unreachable fallback can never accidentally
+--     lock out a privileged surface nobody declared"). Consequence to know: in
+--     a dual-DB outage the gateway falls back to that floor, and MFA
+--     enforcement now SURVIVES for the declared rows (the fe/be
+--     /bff/superadmin/** platform rows and the fe /bff/admin/** + phone-fleet
+--     rows) but still DROPS for everything else under these two prefixes that
+--     is NOT in the declared set — most notably the fe
+--     /bff/superadmin/games-services/** DENY row below (decision 28), which
+--     decision 56 was explicitly NOT authorised to mirror into the floor
+--     (`deny()` still hard-codes mfaRequired=false unconditionally; the
+--     declared-set mechanism only reaches rows built by `r()`).
 --   * hugmesh-admin-bff-api db/changelog/001-gateway-route-access.xml — table DDL
 --     ONLY (createTable + addColumn mfa_required); it contains ZERO <insert>
---     elements, so it is NOT a row-seed partner.
+--     elements, so it is NOT a row-seed partner. Unaffected by decision 56.
 -- ─────────────────────────────────────────────────────────────────────────────
+-- ────────────────────────────────────────────────────────────────────────────
+-- ROW-SCOPED mfa_required SEED — the ONE deny row that must carry the floor.
+-- Operator decision 28 = D (#347, 2026-09-17). Everything about WHY is stated
+-- beside the row itself, up in the INSERT; what matters here is the mechanics:
+--   * It is an UPDATE, not a 5th value on the tuple, for the same three reasons
+--     the blanket flip below is an UPDATE (uniqueness key, in-place re-apply,
+--     and the 4-field row regexes every static model of this file uses).
+--   * It runs BEFORE the blanket flip. Order is not load-bearing for the value
+--     (the two statements touch disjoint rows: allow=false here, allow=true
+--     there), but it IS load-bearing for the gates — docs/MFA-ROLLOUT.md's
+--     `expect=identical-to-seed` block compares against the LAST
+--     `SET mfa_required = true` statement in this file, which must stay the
+--     blanket flip.
+--   * It names the FULL row identity (gateway + url_pattern + role + allow) so
+--     it can never widen into a second blanket. allow = false is part of the
+--     predicate on purpose: if this row is ever changed to an ALLOW row, this
+--     statement stops matching it and the blanket flip picks it up instead.
+--   * `IS DISTINCT FROM true` keeps a re-apply a genuine no-op, exactly as the
+--     blanket flip does.
+-- tests/scripts/test-mfa-required-rules.sh classifies this statement explicitly
+-- (it is neither the blanket flip nor the NULL repair, and an UNCLASSIFIED
+-- mfa_required write fails that gate), asserts the tuple it names, and asserts
+-- that the set of deny rows ending up mfa_required=true is EXACTLY this one.
+-- ────────────────────────────────────────────────────────────────────────────
+UPDATE gateway_route_access
+   SET mfa_required = true
+ WHERE gateway = 'hugmesh-fe-gateway'
+   AND url_pattern = '/bff/superadmin/games-services/**'
+   AND role = 'ROLE_SUPERADMIN'
+   AND allow = false
+   AND mfa_required IS DISTINCT FROM true;
+
 UPDATE gateway_route_access
    SET mfa_required = true
  WHERE allow = true

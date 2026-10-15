@@ -15,3 +15,25 @@ resources:
   - externalsecret.yaml
   - configmap.yaml
   - deployment.yaml
+
+# THE MESH VAULT BASE SEGMENT (issue #285, decision 38 = B on #347). ArgoCD serves
+# this directory from git, not from the device's baked tree, so the base segment
+# moves at render time: the ExternalSecret's own platform.hugmesh.net/vault-base
+# annotation is the value surface, apps/12-cloudflared.yaml patches it, and
+# rebrand_sysroot() rewrites that patch to <BRAND>. Byte no-op at the default brand.
+replacements:
+  - source:
+      group: external-secrets.io
+      kind: ExternalSecret
+      name: cloudflared-tunnel-token
+      fieldPath: metadata.annotations.[platform.hugmesh.net/vault-base]
+    targets:
+      - select:
+          group: external-secrets.io
+          kind: ExternalSecret
+          name: cloudflared-tunnel-token
+        fieldPaths:
+          - spec.data.*.remoteRef.key
+        options:
+          delimiter: "/"
+          index: 0

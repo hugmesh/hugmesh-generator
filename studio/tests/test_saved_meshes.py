@@ -1,6 +1,6 @@
 """core/saved_meshes.py — the saved-mesh RECORD (ask C, 2026-09-01).
 
-Pure-core, no Qt, no docker: every docker/git seam is monkeypatched at the
+Pure-core, no Qt, no docker: every docker/git override point is monkeypatched at the
 function the module calls (``vaults.list_volumes``, ``_git``, ``_run``), and the
 Studio state dir is the autouse tmp dir from conftest.
 
@@ -92,10 +92,10 @@ def _vol(name, short, in_use=("c1",)):
 
 @pytest.fixture
 def seams(monkeypatch):
-    """Every subprocess seam faked; returns the recorder."""
+    """Every subprocess override point faked; returns the recorder."""
     calls = {"projects": [], "git": []}
 
-    def list_volumes(project=vaults.DEFAULT_PROJECT):
+    def list_volumes(project=vaults.DEFAULT_PROJECT, **_kw):
         calls["projects"].append(project)
         # a volume whose compose definition was RENAMED (survived stack-clean) —
         # only a LABEL inventory sees it
@@ -114,7 +114,9 @@ def seams(monkeypatch):
 
     monkeypatch.setattr(vaults, "list_volumes", list_volumes)
     monkeypatch.setattr(sm, "_git", git)
-    monkeypatch.setattr(sm, "_run", lambda *a, **k: (1, ""))
+    # docker ANSWERS and reports nothing running / no images (rc 0, empty). A docker that
+    # does not answer is rc != 0 and is pinned separately — it is UNKNOWN, not "no" (#361).
+    monkeypatch.setattr(sm, "_run", lambda *a, **k: (0, ""))
     return calls
 
 
@@ -256,7 +258,7 @@ def test_capture_records_a_volume_inventory_and_marks_included_false(seams, tmp_
 
 def test_capture_inventories_by_label_not_by_the_compose_file(seams, tmp_path):
     rec = _capture(_gen(tmp_path))
-    # the seam is vaults.list_volumes(<compose project>) — the LABEL query — and
+    # the override point is vaults.list_volumes(<compose project>) — the LABEL query — and
     # the renamed-away 'synapse' volume (absent from the current compose files) is
     # in the inventory because of it
     assert seams["projects"] == [vaults.DEFAULT_PROJECT]
@@ -393,7 +395,7 @@ def test_restore_plan_unknown_is_rendered_as_unknown_never_as_no():
 def test_probe_state_feeds_the_plan(seams, tmp_path, monkeypatch):
     rec = _capture(_gen(tmp_path))
     sm.save(rec)
-    # all volumes present, images absent (_run is faked to fail), nothing running
+    # all volumes present, images absent and nothing running (docker answered: empty)
     st = sm.probe_state(rec)
     assert st["volumes_present"] is True and st["volumes_missing"] == ()
     assert st["images_present"] is False and st["mesh_running"] is False
@@ -517,3 +519,243 @@ def test_a_mesh_that_cannot_say_its_env_is_not_called_a_disagreement(tmp_path, s
     rec = sm.capture(gen, LocalMeshBootstrapConfig(env="prod"),
                      _Node(running_env=""), _Boot(gen))
     assert "disagrees_with_running" not in rec.last_seen
+
+
+# ── #579: which record describes THIS checkout's mesh ────────────────────────────
+def _write_raw(rec):
+    os.makedirs(sm.meshes_dir(), exist_ok=True)
+    with open(rec.path(), "w", encoding="utf-8") as fh:
+        json.dump(rec.to_dict(), fh)
+
+
+def test_latest_for_checkout_picks_the_newest_save_of_this_checkout_and_host(tmp_path):
+    gd = str(tmp_path / "gen")
+    older = sm.SavedMesh(id="20260101-000000-aaaaaa", label="old", generator_dir=gd,
+                         hostname="h1", updated="2026-01-01T00:00:00+00:00")
+    # created EARLIER (smaller id) but re-saved LATER: `updated` decides, not the id
+    resaved = sm.SavedMesh(id="20250101-000000-bbbbbb", label="resaved",
+                           generator_dir=gd, hostname="h1",
+                           updated="2026-06-01T00:00:00-07:00")
+    other_dir = sm.SavedMesh(id="20270101-000000-cccccc", label="elsewhere",
+                             generator_dir=str(tmp_path / "other"), hostname="h1",
+                             updated="2027-01-01T00:00:00+00:00")
+    other_host = sm.SavedMesh(id="20270102-000000-dddddd", label="other-host",
+                              generator_dir=gd, hostname="h2",
+                              updated="2027-01-02T00:00:00+00:00")
+    for r in (older, resaved, other_dir, other_host):
+        _write_raw(r)
+    assert sm.latest_for_checkout(gd, hostname="h1").label == "resaved"
+    assert sm.latest_for_checkout(gd, hostname="h2").label == "other-host"
+    assert sm.latest_for_checkout(str(tmp_path / "nowhere"), hostname="h1") is None
+
+
+def test_latest_for_checkout_is_none_with_no_records(tmp_path):
+    assert sm.latest_for_checkout(str(tmp_path)) is None
+
+
+# ── #363: a record is a file anyone can edit — its paths are never trusted ────────────
+def _write_record(name_stem: str, body: dict) -> str:
+    os.makedirs(sm.meshes_dir(), exist_ok=True)
+    path = os.path.join(sm.meshes_dir(), f"{name_stem}.json")
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(body, fh)
+    return path
+
+
+def test_delete_never_removes_a_json_outside_the_meshes_dir(tmp_path):
+    """delete() called os.remove(rec.path()) BEFORE any check, so a tampered record
+    whose id carries '..' removed whatever `<id>.json` resolved to."""
+    rec = sm.SavedMesh(id=os.path.join("..", "..", "victim"), label="evil")
+    victim = os.path.normpath(rec.path())
+    assert os.path.dirname(victim) != os.path.normpath(sm.meshes_dir())
+    os.makedirs(os.path.dirname(victim), exist_ok=True)
+    with open(victim, "w", encoding="utf-8") as fh:
+        fh.write("{}")
+    assert sm.delete(rec) is False               # refused, and says so
+    assert os.path.exists(victim), "delete() removed a file outside <state>/meshes"
+
+
+def test_a_record_whose_id_disagrees_with_its_file_is_unreadable_not_loaded(tmp_path):
+    good = _write_record("20260101-000000-aaaaaa",
+                         {"schema": 1, "id": "20260101-000000-aaaaaa", "label": "ok"})
+    evil = _write_record("20260101-000000-bbbbbb",
+                         {"schema": 1, "id": "../../victim", "label": "evil"})
+    recs, unreadable = sm.scan()
+    assert [r.id for r in recs] == ["20260101-000000-aaaaaa"]
+    assert unreadable == [evil]                   # surfaced as a deletable row
+    assert sm.find("../../victim") is None
+    with pytest.raises(ValueError):
+        sm.load(evil)
+    assert sm.load(good).label == "ok"
+    # ...and the unreadable row's delete (by path) removes exactly that file
+    sm.delete_path(evil)
+    assert not os.path.exists(evil) and os.path.exists(good)
+
+
+@pytest.mark.parametrize("bad", ["ABSOLUTE", os.path.join("..", "outside-secrets.json"),
+                                 os.path.join("sub", "..", "..", "outside-secrets.json")])
+def test_a_credential_copy_pointer_cannot_leave_the_meshes_dir(tmp_path, bad):
+    body = json.dumps({"hugmesh-pki": {"casdoor-superadmin":
+                                       {"password": "OUTSIDE-VALUE"}}})
+    os.makedirs(sm.meshes_dir(), exist_ok=True)
+    if bad == "ABSOLUTE":
+        bad = str(tmp_path / "outside-secrets.json")
+    outside = os.path.normpath(os.path.join(sm.meshes_dir(), bad))   # where it POINTS
+    os.makedirs(os.path.dirname(outside), exist_ok=True)
+    with open(outside, "w", encoding="utf-8") as fh:
+        fh.write(body)
+    assert os.path.commonpath([outside, sm.meshes_dir()]) != sm.meshes_dir()
+    rec = sm.SavedMesh(id="20260101-000000-cccccc", label="t", credentials={
+        "e2e_file": {"copied": True, "copy": bad},
+        "secrets_json": {"copied": True, "copy": bad}})
+    # read side: nothing is read from outside
+    env = sm.restore_env(rec)
+    assert "E2E_CREDENTIALS_FILE" not in env and "E2E_SUPERADMIN_PASSWORD" not in env
+    assert sm._saved_superadmin_password(rec) == ""
+    # the declared copy reads as MISSING, so restore_plan BLOCKS (fail closed)
+    assert rec.has_credential_copies()
+    assert not any(os.path.isfile(p) and
+                   os.path.commonpath([p, sm.meshes_dir()]) != sm.meshes_dir()
+                   for p in rec.credential_copies())
+    assert all(not os.path.isfile(p) for p in rec.credential_copies())
+    # write side: nothing is copied into the generator checkout
+    e2e_t = tmp_path / "gen" / ".e2e-credentials"
+    sec_t = tmp_path / "gen" / "keys-out" / "vault" / "secrets.json"
+    assert sm.put_copies_back(rec, e2e_target=str(e2e_t), secrets_target=str(sec_t)) == []
+    assert not e2e_t.exists() and not sec_t.exists()
+
+
+def test_a_legitimate_relative_copy_pointer_still_resolves(tmp_path):
+    rec = sm.SavedMesh(id="20260101-000000-dddddd", label="t", credentials={
+        "e2e_file": {"copied": True, "copy": "20260101-000000-dddddd/e2e-credentials"}})
+    os.makedirs(rec.copy_dir())
+    with open(os.path.join(rec.copy_dir(), "e2e-credentials"), "w") as fh:
+        fh.write("x")
+    assert rec.credential_copies() == [
+        os.path.join(sm.meshes_dir(), "20260101-000000-dddddd", "e2e-credentials")]
+    assert sm.restore_env(rec)["E2E_CREDENTIALS_FILE"] == rec.credential_copies()[0]
+
+
+def test_put_copies_back_never_creates_the_target_wider_than_0600(tmp_path):
+    """copyfile() then chmod() created a NEW target at 0666 & ~umask until the chmod
+    (0644 under umask 022). The new file must be 0600 from its first byte: written
+    through a 0600 temp file that is os.replace'd into place."""
+    import stat
+    rec = sm.SavedMesh(id="20260101-000000-eeeeee", label="t", credentials={
+        "e2e_file": {"copied": True, "copy": "20260101-000000-eeeeee/e2e-credentials"}})
+    os.makedirs(rec.copy_dir())
+    with open(os.path.join(rec.copy_dir(), "e2e-credentials"), "w") as fh:
+        fh.write("secret-line\n")
+    target = tmp_path / "gen" / ".e2e-credentials"
+    modes = []
+    real_replace = os.replace
+
+    def spying_replace(src, dst, *a, **k):
+        modes.append(stat.S_IMODE(os.stat(src).st_mode))     # the mode it lands with
+        return real_replace(src, dst, *a, **k)
+
+    opened = []
+    real_open = os.open
+
+    def spying_open(path, flags, mode=0o777, *a, **k):
+        if str(path).endswith(".tmp"):
+            opened.append(mode)                              # the mode it is CREATED with
+        return real_open(path, flags, mode, *a, **k)
+
+    old_umask = os.umask(0o022)
+    try:
+        orig = sm.os.replace
+        orig_open = sm.os.open
+        sm.os.replace = spying_replace
+        sm.os.open = spying_open
+        try:
+            got = sm.put_copies_back(rec, e2e_target=str(target),
+                                     secrets_target=str(tmp_path / "s.json"))
+        finally:
+            sm.os.replace = orig
+            sm.os.open = orig_open
+    finally:
+        os.umask(old_umask)
+    assert got == [".e2e-credentials"]
+    assert opened == [0o600], opened                 # created 0600, not chmod'd afterwards
+    assert modes == [0o600], modes                   # 0600 BEFORE it became the target
+    assert stat.S_IMODE(os.stat(target).st_mode) == 0o600
+    assert target.read_text() == "secret-line\n"
+    assert [p for p in os.listdir(target.parent) if p != ".e2e-credentials"] == []  # no tmp left
+
+
+# ── #361: "docker did not answer" is UNKNOWN, never "gone" ───────────────────────────
+_TWO_VOLS = {"included": False, "inventory": [
+    {"name": "hugmesh-local_casdoor-pg", "short": "casdoor-pg"},
+    {"name": "hugmesh-local_cassandra", "short": "cassandra"}]}
+
+
+def _two_vol_record():
+    return sm.SavedMesh(id="20260101-000000-abcabc", label="t", volumes=dict(_TWO_VOLS))
+
+
+def _assert_unknown(st, rec):
+    assert st["volumes_present"] is None and st["volumes_missing"] == ()
+    assert st["images_present"] is None and st["mesh_running"] is None
+    plan = sm.restore_plan(rec, **st)
+    assert plan.mode == sm.MODE_UNKNOWN
+    assert plan.volumes_text == "unknown" and "gone" not in plan.volumes_text
+    assert "did not answer" in plan.sentence
+    assert not plan.can_start() and not plan.can_reseed()
+
+
+def test_a_docker_that_exits_nonzero_reads_as_unknown_not_gone(tmp_path, monkeypatch):
+    """REAL _run + REAL vaults.list_volumes against a fake `docker` on PATH that exits 1
+    ('Cannot connect to the Docker daemon') — the measured #361 shape: it used to give
+    volumes_present=False, mesh_running=False -> RESEED / 'gone (cleaned)'."""
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    fake = bindir / "docker"
+    fake.write_text("#!/bin/sh\necho 'Cannot connect to the Docker daemon' >&2\nexit 1\n")
+    fake.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bindir}{os.pathsep}{os.environ.get('PATH', '')}")
+    monkeypatch.setattr(sm, "_git", lambda *a, **k: "")
+    rec = _two_vol_record()
+    _assert_unknown(sm.probe_state(rec), rec)
+
+
+def test_a_docker_that_hangs_past_the_timeout_reads_as_unknown(tmp_path, monkeypatch):
+    def hang(*a, **k):
+        raise subprocess.TimeoutExpired(a[0] if a else "docker", 15)
+    monkeypatch.setattr(subprocess, "run", hang)
+    monkeypatch.setattr(sm, "_git", lambda *a, **k: "")
+    rec = _two_vol_record()
+    _assert_unknown(sm.probe_state(rec), rec)
+
+
+def test_a_docker_that_answers_empty_is_still_a_definite_no(seams, tmp_path):
+    """The other side of the tri-state: an ANSWERING docker with no volumes is 'gone',
+    with nothing running is False — only a non-answer is None."""
+    sm.vaults  # noqa: B018 - the seams fixture fakes list_volumes
+    rec = _two_vol_record()
+    from hugmesh_studio.core import vaults as v
+    import pytest as _pt
+    with _pt.MonkeyPatch.context() as mp:
+        mp.setattr(v, "list_volumes", lambda project=v.DEFAULT_PROJECT, **k: [])
+        st = sm.probe_state(rec)
+    assert st["volumes_present"] is False and st["images_present"] is False
+    assert st["mesh_running"] is False
+    assert sm.restore_plan(rec, **st).mode == sm.MODE_RESEED
+
+
+@pytest.mark.parametrize("facts", [
+    {"volumes_present": True, "images_present": True, "mesh_running": None},
+    {"volumes_present": None, "images_present": True, "mesh_running": False},
+    {"volumes_present": True, "images_present": None, "mesh_running": False},
+])
+def test_restore_plan_refuses_to_decide_over_any_unanswered_fact(facts):
+    plan = sm.restore_plan(_two_vol_record(), **facts)
+    assert plan.mode == sm.MODE_UNKNOWN
+    assert not plan.can_start() and not plan.can_reseed()
+
+
+def test_a_running_mesh_still_blocks_even_when_other_facts_are_unknown():
+    """A TRUE fact is not weakened by an unanswered one: 'running' wins."""
+    plan = sm.restore_plan(_two_vol_record(), volumes_present=None, images_present=None,
+                           mesh_running=True)
+    assert plan.mode == sm.MODE_BLOCKED

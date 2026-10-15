@@ -492,8 +492,328 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # too, so the debian placement is a choice of ONE job, not a constraint. The
 # ungated SET pin is unchanged at 22. This file conflicts on nearly every merge;
 # if it conflicts here, RE-MEASURE on the merged tree per the doctrine above
-# rather than taking 169 or the other side's number.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-169}"
+# rather than taking 169, 170, 171 or any one side's number.
+#
+# 170 (this branch) and 171 (main) -> RE-MEASURED on 2026-09-17 while merging
+# origin/main into iss/366-fe-gateway-cluster-route-table-404s-five-bff-pat. Both
+# sides moved the baseline for DIFFERENT suites and neither number is true of the
+# merged tree: main reached 171 by gating tests/scripts/test-kind-halt.sh (#356)
+# AND tests/scripts/test-eso-remoteref-brand.sh (#285), this branch reached 170 by
+# gating tests/scripts/test-fe-bff-route-lane-parity.sh (#366, decision 40 = B on
+# #347). The merged tree has all three, so — as every reconciliation below did —
+# the number was taken by RUNNING this file on the MERGED tree and reading the
+# line it prints, not by adding 1 to either side. Every note either side of this
+# one is kept: they are complementary records, none supersedes another.
+# THE MEASUREMENT on the merged tree, taken by running this file:
+#     172 of 194 suites are named by a pull_request-triggered workflow
+# The ungated SET pin is unchanged at 22.
+#
+# 169 -> 170 on 2026-09-17: tests/scripts/test-fe-bff-route-lane-parity.sh joined
+# the gate with operator decision 40 (hugmesh-generator#347 answers comment;
+# tracked on hugmesh-generator#366). It reads BOTH fe route tables — the compose
+# one (tests/stack/gateway-routes/fe/application-routes.yml) and the cluster one
+# (specs/cluster/apps/20-gateway-fe.yaml) — simulates Spring Cloud Gateway's
+# first-match-wins ordering over each, and asserts the five #366 paths resolve to
+# the SAME BFF on both. Two of the five have no handler anywhere and 404 by
+# ACCEPTED decision, so the guard also has to stop a well-meaning revert.
+# MEASURED by RUNNING this file both ways on the same tree, not assumed:
+#     170 of 192 suites are named by a pull_request-triggered workflow   (with it)
+#     169 of 191 suites are named by a pull_request-triggered workflow   (without)
+# — "without" meaning the suite file deleted AND both its wirings removed, so the
+# denominator moves too, exactly like the 164 -> 165 entry above. Named in
+# shell-suites.yml's DEBIAN job (python:3.12-slim) because it needs PyYAML, which
+# only the debian and extras jobs install; the alpine job has no yaml module and
+# the suite would die on the import rather than skip. The ungated SET pin is
+# unchanged at 22 in both measurements. RUN on this host after the landing pass
+# added nine asserted matcher cases: 19 passed / 0 failed rc=0 with six negative
+# controls 6 caught / 0 survived, and against the PRE-CHANGE compose table
+# (origin/main's copy dropped in on disk) it prints 14 passed / 5 failed rc=1,
+# one failure per #366 path.
+# ADDENDUM 2026-09-23 (the note above is kept verbatim, as every note is): its
+# "two of the five have no handler anywhere and 404 by ACCEPTED decision" was
+# true when written and is not any more — hugmesh-user-bff-api#20 (dc34c8b,
+# landed 2026-09-18) added the /bff/register/{google,discord} handlers, and the
+# parity suite now ASSERTS has_handler=True for all five (hugmesh-generator#568).
+# The suite count is unchanged: no suite was added or removed by that change.
+# ADDENDUM 2026-09-23, second: the same suite has owned decision 60 since PR #570
+# (2026-09-18) — it also asserts APP_BFF_EXCHANGE_CACHE_TTL_MS == "0" for
+# admin-bff-api and mod-bff-api on both lanes (tests/stack/compose.local.yaml +
+# specs/cluster/manifests/{admin,mod}-bff-api/). Anyone reading the description above as the suite's whole
+# scope and "simplifying" it back to route tables would delete decision 60's only
+# guard. Suite count unchanged.
+#
+# 170 -> RE-MEASURED on 2026-09-17 while merging origin/main into
+# iss/285-vault-brand-remoteref. BOTH sides of this merge said 170 and NEITHER is
+# true of the merged tree: main reached 170 by gating tests/scripts/test-kind-halt.sh
+# (#356), this branch reached 170 by gating tests/scripts/test-eso-remoteref-brand.sh
+# (#285, decision 38 = B on #347). The merged tree has BOTH suites, so, as every
+# reconciliation above did, the number below was taken by RUNNING this file on the
+# merged tree and reading the line it prints. The two notes either side of this one
+# are kept as a union: complementary records, neither one superseding the other.
+# NOTE on placement: test-eso-remoteref-brand.sh is gated in the GitHub `extras` job
+# rather than `guards`, because it renders what ArgoCD renders and needs kubectl +
+# PyYAML, which only that job installs and preflights. It is NOT in
+# PREMERGE_UNGATED: it is offline, touches no cluster, and runs in ~12s.
+# THE MEASUREMENT on the merged tree, taken by running this file:
+#     171 of 193 suites are named by a pull_request-triggered workflow
+# so the baseline below is 171, not either side's 170. The ungated SET pin is
+# unchanged at 22.
+# 169 -> 170 / denominator 192 (unchanged -> 192) on iss/356-kind-lane-halt, which
+# adds ONE suite and gates it: tests/scripts/test-kind-halt.sh, the offline guard
+# over `make kind-halt` / `make kind-resume` (the kind lane's non-destructive stop).
+# MEASURED, not incremented — this is the number this file printed when run against
+# that tree:
+#     170 of 192 suites are named by a pull_request-triggered workflow
+# It is deliberately NOT in PREMERGE_UNGATED: the suite is offline, stubs kind,
+# docker and kubectl on PATH, touches no cluster and runs in a few seconds, so it
+# has no reason to sit outside the gate. Recording a false exemption here is how
+# rot has stayed hidden for weeks before.
+
+
+# 169 -> 170 on 2026-09-17: tests/scripts/test-eso-remoteref-brand.sh joined the
+# gate with the ExternalSecret remoteRef brand rule (hugmesh-generator#285,
+# decision 38 = B on #347). MEASURED by RUNNING this file on the tree with the
+# suite wired and unwired, not assumed: unwired it printed "all 192 suites are
+# invoked ... (0 allowlisted)" and the gated count 169; wired it printed
+# "pre-merge suite coverage rose to 170, baseline still says 169". The ungated
+# SET pin is unchanged at 22.
+# 169 -> 170 on 2026-09-17: tests/scripts/test-backing-service-endpoints-closure.sh
+# joined the gate. It is the manifest-side guard for operator DECISION 34a/34b — the
+# one that goes RED when the per-namespace backing-service-endpoints fan-out is
+# reverted to the single hugmesh-backend object the operator DECLINED. It was added
+# because an adversarial review measured five manifest mutations surviving every
+# suite the shipping PR cited as verification. MEASURED, not assumed: with the suite
+# named in shell-suites.yml's DEBIAN job this file printed
+# "170 of 192 suites are named by a pull_request-triggered workflow" and with the
+# name removed it printed 169, so the raise is this one suite and nothing else. The
+# ungated SET pin is unchanged — the suite landed INSIDE the gate, so PREMERGE_UNGATED
+# gains no entry.
+#
+# 172 (main) and 170 (this branch) -> RE-MEASURED on 2026-09-17 while merging
+# origin/main into iss/decision34-backing-service-endpoints. This file conflicts on
+# nearly every merge and BOTH sides' numbers were true only of their own tree: main
+# reached 172 by gating test-kind-halt.sh (#356), test-eso-remoteref-brand.sh (#285)
+# and test-fe-bff-route-lane-parity.sh (#366); this branch reached 170 by gating
+# test-backing-service-endpoints-closure.sh (#486). The merged tree has all four, so
+# — as every reconciliation above did — the number below was taken by RUNNING this
+# file on the MERGED tree and reading the line it prints, never by adding 1 to either
+# side. Every note either side of this one is kept: they are complementary records,
+# none supersedes another.
+# THE MEASUREMENT on the merged tree, taken by running this file:
+#     173 of 195 suites are named by a pull_request-triggered workflow
+# The ungated SET pin is unchanged at 22.
+#
+# 173 -> 174 on 2026-09-18: tests/scripts/test-no-literal-vault-brand-prose.sh
+# joined the gate (wired into shell-suites.yml's alpine job), guarding
+# specs/cluster prose against re-drifting to the literal default-brand Vault
+# path `secret/hugmesh/...` (hugmesh-generator#490). MEASURED by RUNNING this
+# file on the tree with the new suite wired, not assumed:
+#     174 of 196 suites are named by a pull_request-triggered workflow
+#
+# 173 -> 174 on 2026-09-18: tests/scripts/test-stack-clone-credential.sh (#535)
+# landed on disk in the same commit that wires it into shell-suites.yml's alpine
+# job, so the denominator moves too (195 -> 196, tracking check 1's new-file
+# count) and the gated count moves with it, not independently — MEASURED by
+# running this file on the merged tree before and after the wiring line landed,
+# not computed:
+#     173 of 196 suites are named by a pull_request-triggered workflow   (suite on
+#                                                                         disk, not
+#                                                                         yet wired)
+#     174 of 196 suites are named by a pull_request-triggered workflow   (wired)
+# The ungated SET pin is unchanged at 22 — the new suite was never in it.
+#
+# 174 (#490) and 174 (#535) -> RE-MEASURED on 2026-09-18 while merging origin/main
+# into land/490-vault-prose. Same shape as the 172/170 reconciliation above: both
+# notes above reached 174 independently and only of their own tree, each gating a
+# DIFFERENT new suite (test-no-literal-vault-brand-prose.sh here,
+# test-stack-clone-credential.sh from #535 on main) — the merged tree gates BOTH, so
+# the true number is not 174, it is whatever running this file on the merged tree
+# prints. The number below was taken that way, never by adding 1 to either side.
+# THE MEASUREMENT on the merged tree, taken by running this file (GUARD_PREMERGE=0
+# to see the raw count without the assignment below tripping int() on a stale
+# value):
+#     175 of 197 suites are named by a pull_request-triggered workflow
+# The ungated SET pin is unchanged at 22 — neither new suite was ever in it.
+#
+# 175 -> 176 on 2026-09-18: tests/scripts/test-deeplink-remote-coverage.sh
+# joined the gate (wired into shell-suites.yml's debian job and .gitlab-ci.yml's
+# lint:deeplink-remote-coverage), guarding the SPA deep-link fallback route's
+# coverage of every in-shell `*-ui` remote — derived from each fe route table's
+# own routes, never hardcoded — against hugmesh-generator#381 (the /admin, /mod,
+# /user gap) regressing, or the next remote repeating it. MEASURED by RUNNING
+# this file on the tree with the new suite wired, not assumed (GUARD_PREMERGE=0):
+#     176 of 198 suites are named by a pull_request-triggered workflow
+# The ungated SET pin is unchanged at 22 — the new suite was never in it.
+#
+# 176 -> 177 on 2026-09-23: tests/scripts/test-tor-node-contract.sh (hugmesh-generator
+# #583, decision 70 = B on #347) landed on disk in the same commit that wires it into
+# shell-suites.yml's alpine job (beside the other builder --print-plan suites), so the
+# denominator moves too (198 -> 199). MEASURED by RUNNING this file on the tree with the
+# suite wired (GUARD_PREMERGE=0), not computed:
+#     177 of 199 suites are named by a pull_request-triggered workflow
+# The ungated SET pin is unchanged at 22 — the new suite was never in it.
+#
+# 177 -> 178 on 2026-09-23 (RE-MEASURED on the MERGE of tor/compose-e2e-20260923,
+# hugmesh-generator PR #598, with origin/main b5901697 — which already carried the
+# 177 above): tests/stack/test-tor-flip-wiring.sh (#576/#581/#586) joined the gate in
+# shell-suites.yml's debian job, and tests/stack/test-tor-onion-mechanism.sh (#585)
+# landed on disk OUTSIDE it (recorded in PREMERGE_UNGATED below), so the denominator
+# moves by two (199 -> 201). MEASURED by RUNNING this file on that merged tree, not
+# computed:
+#     178 of 201 suites are named by a pull_request-triggered workflow
+# The ungated SET pin moves 22 -> 23 (the mechanism wrapper).
+#
+# 178 -> 179 on 2026-09-23 (RE-MEASURED on the MERGE of tor/saved-mesh-bridge-20260923,
+# hugmesh-generator PR #600, with origin/main f3963e86 — which already carried the 178
+# above): tests/scripts/test-studio-tor-domain-pins.sh (#591) joined the gate, named in
+# .github/workflows/studio-tests.yml's pytest job (a pull_request workflow), so the
+# denominator moves by one (201 -> 202). MEASURED by RUNNING this file on that merged
+# tree (GUARD_PREMERGE=0), not computed:
+#     179 of 202 suites are named by a pull_request-triggered workflow
+# The ungated SET pin is unchanged at 23 — the new suite was never in it.
+#
+# (kind-tor, recorded as 176 -> 177 on its own branch before the merge below)
+# tests/scripts/test-kind-tor.sh joined the gate (wired into shell-suites.yml's extras job, which carries helm + make, and .gitlab-ci.yml's
+# lint:kind-tor), pinning the kind lane's .onion front door — scripts/kind-tor.sh's
+# `HiddenServicePort 443 127.0.0.1:8443`, its read-modify-write helm-parameter patch
+# and the fe-gateway Ingress that patch renders (hugmesh-generator#577, decision
+# 67 = B). MEASURED by RUNNING this file on the tree with the new suite wired, not
+# assumed (GUARD_PREMERGE=0):
+#     177 of 199 suites are named by a pull_request-triggered workflow
+# The ungated SET pin is unchanged at 22 — the new suite was never in it.
+#
+# 179 -> 180 on 2026-09-23 (RE-MEASURED on the MERGE of iss/577-kind-tor-host-onion,
+# hugmesh-generator PR #613, with origin/main 2e7d089d — which already carried the 179
+# above from #600; #613 had independently written 179 against f3963e86):
+# tests/scripts/test-kind-tor.sh is the one new gated suite, so the denominator moves
+# 202 -> 203. MEASURED by RUNNING this file on that merged tree (GUARD_PREMERGE=0), not
+# computed:
+#     180 of 203 suites are named by a pull_request-triggered workflow
+# The ungated SET pin is unchanged at 23 — the new suite was never in it.
+#
+# 180 -> 182 on 2026-09-24 (iss/614-node-onion-ingress, on origin/main e6838857 — which
+# already carried the 180 above): two new suites, both wired into shell-suites.yml's
+# extras job (helm + kubectl): tests/scripts/test-tor-onion-ingress.sh (#614 — a
+# hardware node's .onion admitted as an fe-gateway Ingress host, rendered with a real
+# `helm template`) and tests/scripts/test-optional-netpol-autosync.sh (#617 — no
+# optional-service NetworkPolicy served from git by an Application every build keeps,
+# via `kubectl kustomize`). The denominator moves 203 -> 205. MEASURED by RUNNING this
+# file on that tree (GUARD_PREMERGE=0), not computed:
+#     182 of 205 suites are named by a pull_request-triggered workflow
+# The ungated SET pin is unchanged at 23 — neither new suite was ever in it.
+# 192 -> 194 (denominator 215 -> 218, ungated SET 23 -> 24) on 2026-09-30 for
+# hugmesh-generator#659 (iss/659-x86-builder-resume-static-restore, on origin/main
+# 5c5ae084 — which already carried the 192 above): three new suites landed on
+# disk in the same commit that wires two of them. tests/scripts/
+# test-builder-resume-safety.sh (the --resume owner gate, seed choice, static
+# restore, link test, stale-mount refusal and umount_chroot, executed against
+# fixtures and stubs, with a mutation battery) and tests/scripts/
+# test-makefile-reown-skips-sysroot.sh (the Makefile's chown-artifacts never
+# descends into a build system) joined the gate in shell-suites.yml's alpine job
+# and .gitlab-ci.yml's orphan-guards-verify (which gained xz for the .tar.xz seed
+# fixtures). tests/scripts/test-builder-unmount-real.sh (the same unmount against
+# REAL stacked binds in a user+mount namespace) is ungated with its reason in
+# PREMERGE_UNGATED below and runs from `make builder-unmount-real-check`.
+# MEASURED by RUNNING this file on that tree (GUARD_PREMERGE=0), not computed:
+#     194 of 218 suites are named by a pull_request-triggered workflow
+#     PASS the ungated SET matches its pin exactly (24 suite(s))
+#
+# Gated count unchanged, denominator +1 and ungated SET 24 -> 25, on 2026-10-14 for
+# #693: every signed-in call on kind answered 500 because the BFF manifests set only CASDOOR_ISSUER_URI and
+# the key fetch went to the public issuer host, which does not resolve in-cluster.
+# tests/scripts/test-bff-jwks-in-cluster.sh pins the in-cluster CASDOOR_JWKS_URI, its
+# Service closure and the NetworkPolicy admission offline. It is NOT yet named by
+# shell-suites.yml — the lane that wrote it could not edit .github — so it lands in
+# PREMERGE_UNGATED below with that reason (the set pin moves 24 -> 25) and is run
+# post-merge by .gitlab-ci.yml's lint:bff-jwks-in-cluster. MEASURED by RUNNING this
+# file on this branch merged with origin/main c0c46601:
+#     196 of 221 suites are named by a pull_request-triggered workflow
+#     PASS the ungated SET matches its pin exactly (25 suite(s))
+# When the shell-suites.yml line lands: delete that entry and raise the baseline by one.
+
+# 192 -> 193 (denominator 215 -> 216) on 2026-09-30 for #663: the kind sign-in
+# answered 500 because the BFF autoscalers' maxReplicas (6) times the unconfigured
+# R2DBC pool (10) exceeded the app role's CONNECTION LIMIT (20).
+# tests/scripts/test-db-connection-budget.sh pins that inequality offline over
+# specs/cluster/manifests and joined shell-suites.yml's debian job (PyYAML).
+# MEASURED by RUNNING this file on the tree, not computed:
+#     suite added and wired                193 of 216
+# The ungated SET pin is unchanged at 23: the new suite was never in it.
+#
+# 194 / 193 -> 195 (denominator 219) on 2026-10-07: RE-MEASURED on the MERGE of
+# iss/659-x86-builder-resume-static-restore with origin/main f4a6a899, which carried
+# the 193 above from #663 while the branch carried the 194 above from #659 (both
+# written against 192 on 5c5ae084). The three suites are disjoint, so the gated count
+# is 192 + 2 + 1 and the denominator 215 + 3 + 1. MEASURED by RUNNING this file on
+# that merged tree (GUARD_PREMERGE=0), not computed:
+#     195 of 219 suites are named by a pull_request-triggered workflow
+#     PASS the ungated SET matches its pin exactly (24 suite(s))
+#
+# 195 -> 196 (denominator 219 -> 220) on 2026-10-07: re-measured on the merge of this
+# branch with origin/main e14a94a7, which gained tests/scripts/test-edge-ai-ollama-pin.sh
+# (gated, baseline 193 -> 194 on main) after the 195 above was measured. MEASURED by
+# RUNNING this file on that merged tree (GUARD_PREMERGE=0), not computed:
+#     196 of 220 suites are named by a pull_request-triggered workflow
+#     PASS the ungated SET matches its pin exactly (24 suite(s))
+#
+# 196 -> 197 (denominator 220 -> 221) on 2026-10-14: re-measured on the LANDING merge
+# of iss/582-per-domain-tor with origin/main c0c46601 (#708 landed after the branch's
+# last merge). This value line CONFLICTED: main said 196 of 220 (the #659 / #663 /
+# edge-ai-ollama-pin steps above, ungated SET 24) and the branch said 195 of 218
+# (its own 193 -> 194 -> 195 steps for tests/scripts/test-gateway-vanity-domains.sh,
+# written below, ungated SET 23). Main's block and its 24-entry PREMERGE_UNGATED are
+# kept; the branch adds exactly one gated suite, tests/scripts/
+# test-gateway-vanity-domains.sh (shell-suites.yml's extras job, helm). MEASURED by
+# RUNNING this file on the merged tree (GUARD_PREMERGE=0), not computed:
+#     197 of 221 suites are named by a pull_request-triggered workflow
+#     PASS the ungated SET matches its pin exactly (24 suite(s))
+#
+# 197 -> 198 (denominator 221 -> 222) on 2026-10-14 for #629 (iss/629-tor-reconcile-
+# apply-export-report-onions, from origin/main 702b590d): one new suite,
+# tests/scripts/test-tor-export-sync.sh (the signed Tor export consumer + onion report),
+# landed on disk in the same commit that wires it into shell-suites.yml's alpine job
+# (beside tests/scripts/test-tor-node-contract.sh, which pins its wiring). MEASURED by
+# RUNNING this file on the tree with the suite wired (GUARD_PREMERGE=0), not computed:
+#     198 of 222 suites are named by a pull_request-triggered workflow
+#     PASS the ungated SET matches its pin exactly (24 suite(s))
+PREMERGE_BASELINE="${GUARD_PREMERGE:-198}"
+
+# 182 -> 192 (denominator 205 -> 215) on 2026-09-30 for #385: the census gained a
+# THIRD spelling, bare `tests/*.sh` at depth 1, and the ten suites it exposed were
+# wired into shell-suites.yml's alpine job. MEASURED by RUNNING this file on the
+# tree, not computed, at each step:
+#     census widened, ten suites unwired   182 of 215   (+ checks 3 and 7 red,
+#                                                        naming all ten)
+#     ten suites wired                     192 of 215
+# The ungated SET pin is unchanged at 23: none of the ten is in PREMERGE_UNGATED.
+# tests/e2e-extra-personas.sh is NOT counted: it is a sourced data library named
+# in NOT_SUITES, verified to be sourced.
+#
+# 193 -> 194 (denominator 216 -> 217) on 2026-10-07 for #582 (iss/582-per-domain-tor,
+# merged onto origin/main f4a6a899, which carried the 193 above for #663; this branch
+# had earlier written the same 192 -> 193 step for its own suite against 20178822,
+# before #663 landed on main, so the two met in a merge conflict on this line and
+# the branch's step is re-measured here on top of main's): one new suite, wired into
+# shell-suites.yml's extras job (helm): tests/scripts/test-gateway-vanity-domains.sh
+# — the fe-gateway's vanity-subdomain route and Ingress hosts per brand domain,
+# rendered with a real `helm template`. MEASURED by RUNNING this file on the merged
+# tree (GUARD_PREMERGE=0), not computed:
+#     194 of 217 suites are named by a pull_request-triggered workflow
+# The ungated SET pin is unchanged at 23 — the new suite was never in it.
+#
+# 194 -> 195 (denominator 217 -> 218) on 2026-10-07, the merge of origin/main
+# e14a94a7 into iss/582-per-domain-tor. Main and this branch had EACH raised the value
+# line above from 193 to 194, for a different new suite, so git merged the identical
+# one-line edit with no conflict and the file said 194 for a tree that now holds two
+# new suites: main's tests/scripts/test-edge-ai-ollama-pin.sh and this branch's
+# tests/scripts/test-gateway-vanity-domains.sh. Each side measured green alone
+# (194 of 217); the merged tree printed
+#     FAIL pre-merge suite coverage rose to 195, baseline still says 194
+# MEASURED by RUNNING this file on the merged tree (GUARD_PREMERGE=0), not computed:
+#     195 of 218 suites are named by a pull_request-triggered workflow
+# The ungated SET pin is unchanged at 23 — neither suite was ever in it. A merge that
+# lands another suite after this one must re-measure again: a silent clean merge of
+# this line is exactly how the number went stale.
 
 # 164 -> 165 on 2026-09-16: tests/scripts/test-argocd-serverside-diff.sh joined the
 # gate with the harbor Server-Side Diff annotation (hugmesh-generator#354). MEASURED
@@ -617,9 +937,59 @@ PREMERGE_BASELINE="${GUARD_PREMERGE:-169}"
 # node_modules and a chromium no shell-suites image carries.
 PREMERGE_UNGATED=(
   tests/casdoor/test-jwt-custom-token.sh
+  # NOT an exemption, a wiring gap: this suite is offline (bash + python3 + PyYAML)
+  # and WOULD run in the shell-suites image, but wiring it into
+  # .github/workflows/shell-suites.yml is an edit the author of this suite was not
+  # permitted to make. It is gated post-merge today by .gitlab-ci.yml's
+  # desktop-governance-verify. TO CLOSE THIS: add the path to the SUITES list in
+  # shell-suites.yml (with py3-yaml in that job's apk set), delete this entry and
+  # raise PREMERGE_BASELINE by one to the number this file then prints.
+  tests/desktop-governance/test-governance-flags-visible.sh
+  # NOT a claim that it cannot gate: it needs only bash + python3 + openssl, the
+  # tool set its three siblings in tests/desktop-governance/ already run under in
+  # shell-suites.yml. It is listed solely because the change that added it could
+  # not edit .github/workflows/shell-suites.yml. It IS run post-merge, by
+  # .gitlab-ci.yml's desktop-governance-verify. WIRE IT into that SUITES list, then
+  # delete this entry and raise PREMERGE_BASELINE by one.
+  tests/desktop-governance/test-sso-token-producer.sh
   tests/device-registry/test-layer-a-headscale-acl.sh
   tests/egress-vpn/test-secret-contract.sh
+  # Offline, bash + python3 only, 48 passed / 0 failed on 2026-10-14 (#654 D12:
+  # the driver refuses `commit` for a Tor address; its three-mutation battery is
+  # inside). It belongs in shell-suites.yml's ALPINE job beside
+  # tests/go-live/test-go-live-driver.sh, and .gitlab-ci.yml's
+  # orphan-guards-verify already runs it post-merge. Listed here, not gated,
+  # only because the lane that added it may not edit .github/: the operator adds
+  # the one line there, raises PREMERGE_BASELINE by one and drops this entry.
+  tests/go-live/test-onion-refuse.sh
   tests/pentest/nuclei/test-templates.sh
+  # NOT UNGATEABLE, JUST NOT GATED YET: python3 + bash over synthetic fixture logs, no
+  # network, no root, no docker -- it would run in any shell-suites image. It sits
+  # here only because naming it in shell-suites.yml is an edit under .github/, which
+  # the change that added it was not allowed to make. THE FOLLOW-UP IS TO ADD IT TO
+  # THAT WORKFLOW'S SUITES LIST, DELETE THIS ENTRY AND RAISE PREMERGE_BASELINE BY ONE. It is
+  # run today by `make binpkg-reuse-report-check`.
+  tests/scripts/test-binpkg-reuse-report.sh
+  # Needs `unshare -Urm` (a private user+mount namespace) to stack REAL bind
+  # mounts under a scratch build system and drive the x86 builder's own
+  # umount_chroot, stale-mount listing and printed umount commands against the
+  # kernel, through eight spellings of the build system's path (#659). Docker's
+  # default seccomp profile blocks those namespaces, so in every shell-suites
+  # image it exits 2 SKIPPED-LOUDLY having run ZERO assertions — MEASURED in
+  # alpine:3 with that job's apk set before it was listed here. Gating it would
+  # raise the coverage number by one and gate nothing. `make
+  # builder-unmount-real-check` runs it on a developer host (16 passed there,
+  # 2026-09-30); the same code paths are proven against a fixture table,
+  # pre-merge, by tests/scripts/test-builder-resume-safety.sh.
+  tests/scripts/test-builder-unmount-real.sh
+  # NOT YET IN THE PULL_REQUEST GATE, and that is the only reason it is here: it is
+  # offline, PyYAML-only, ~12 s, and belongs beside test-db-connection-budget.sh in
+  # shell-suites.yml's debian job. The lane that wrote it (hugmesh-generator#693,
+  # 2026-10-07) was forbidden to edit anything under .github, so until that one
+  # line lands it runs post-merge in .gitlab-ci.yml's lint:bff-jwks-in-cluster and
+  # locally under `make e2e-ungated`. When the line lands: delete this entry and
+  # raise PREMERGE_BASELINE 196 -> 197 (check 7 will say so).
+  tests/scripts/test-bff-jwks-in-cluster.sh
   tests/scripts/test-e2e-cli-lane.sh
   tests/scripts/test-e2e-coverage-matrix.sh
   tests/scripts/test-e2e-env-interface-dimensions.sh
@@ -655,15 +1025,43 @@ PREMERGE_UNGATED=(
   # five reds has a control that plants the fix and requires it to go green
   # (A4 NC10e, B2 NC21, B3 NC22, C5b NC23, C7 NC14).
   tests/scripts/test-selected-services-only.sh
-  # Needs the hugmesh-admin-bff-api checkout for its fifth surface (the
-  # controller's OptionalServiceRegistry). It reports INCOMPLETE and FAILS without
-  # it rather than checking four surfaces of five, so a hosted runner that cannot
-  # clone the org-private repo would go red for a missing clone, not a defect.
-  # Gated post-merge by .gitlab-ci.yml's lint:optional-service-slug-closure.
+  # RED ON MAIN on real cross-repo defects (re-measured 2026-09-23, #584):
+  # meshbridge is in the generator's CRD enum + seed CRs while the controller's
+  # OptionalServiceRegistry keeps it NOT_TOGGLEABLE for a reason (NOT_IN_CRD_ENUM)
+  # that has been false since 2026-08-26, and character-forge's selfHeal flag is
+  # stale — both filed as hugmesh-admin-bff-api#106; control 20 plants that fix and
+  # goes green. The text that stood here until 2026-09-23 gave only the checkout
+  # reason and HID a dead parser: the gate had exited 3 INCOMPLETE on every run
+  # since admin-bff b8ed324 widened the Java Entry record from 3 to 5 fields, 23
+  # minutes after the checker landed, and nothing moved its regex with it. That
+  # parser is now pinned by a fixture self-test (section P) that needs no checkout.
+  # It STILL needs the hugmesh-admin-bff-api checkout for its fifth surface, which a
+  # hosted pre-merge runner cannot clone. Its only automated runner is
+  # .gitlab-ci.yml's lint:optional-service-slug-closure — nothing on the GitHub side
+  # runs it; `make e2e-ungated` runs it locally. Leave it listed until #106 lands.
   tests/scripts/test-optional-service-slug-closure.sh
+  # Lands outside the pull_request gate ONLY because wiring it there means an edit
+  # under .github/workflows/shell-suites.yml, which the change that added it was
+  # not permitted to make (operator action, 2026-10-14). It is NOT an exemption on
+  # the merits: both suites are offline (python3 + openssl + bash; the netpol one also
+  # takes kubectl when present). They were MEASURED only on a developer host, NOT in a
+  # shell-suites image, and are run post-merge by .gitlab-ci.yml's lint:pg-tls-preflight
+  # and lint:netpol-egress-scope. Wire both into shell-suites.yml's DEBIAN job, measure
+  # them there, and DELETE both entries (PREMERGE_BASELINE then moves 198 -> 200). Added
+  # ungated: denominator +2 and the ungated SET +2, baseline unchanged at 198
+  # (RE-MEASURED on this branch merged with origin/main 9b1b733c, GUARD_PREMERGE=0: this
+  # file prints "198 of 228" and "(30 suite(s))").
+  tests/scripts/test-netpol-egress-scope.sh
+  tests/scripts/test-pg-tls-preflight.sh
   tests/scripts/test-service-env-contract.sh
   tests/stack/test-gateway-auth-flag-parity.sh
   tests/stack/test-m2-bootstrap.sh
+  # Needs a host tor binary and the PUBLIC Tor network for minutes (it mints a real
+  # v3 onion and fetches it back over Tor); no shell-suites image carries tor.
+  # Without them it exits 2 SKIPPED-LOUDLY, never 0. Run it with
+  # `make stack-tor-mechanism-check`. Its own exit-code contract IS gated: T14 of
+  # tests/stack/test-tor-flip-wiring.sh drives it against stub harnesses (#585).
+  tests/stack/test-tor-onion-mechanism.sh
   tests/stack/test-web-locales-wiring.sh
 )
 if [ -n "${GUARD_PREMERGE_UNGATED+x}" ]; then UNGATED_TEXT="${GUARD_PREMERGE_UNGATED}"
@@ -745,15 +1143,59 @@ def bad(m): print("  FAIL " + m); F[0] += 1
 # would slip through again, so the rule to keep is "add the spelling here the day
 # someone introduces it", and the negative control (j) below is what proves this
 # walker actually reaches the second one.
+#
+# THE THIRD SPELLING (#385): a suite sitting DIRECTLY in tests/ with a bare name
+# (tests/posix-sh-no-arrays.sh, tests/build-image-idp.sh ...). Ten of them matched
+# neither rule, so they were outside check 7's numerator AND denominator and ran in
+# no CI job; seven were reachable only through `make matrix-check`, which no CI file
+# invokes. Depth is what identifies them — every file at tests/*.sh is a suite
+# EXCEPT the named, verified non-suites in NOT_SUITES below.
+#
+# NOT_SUITES is a NAMED exemption, not a filter: each entry must be a sourced
+# library (nothing executes it as a test) and is verified to still be sourced by
+# something, so a stale entry — or a real suite renamed into it — cannot hide.
+NOT_SUITES = {
+    # Data library: defines the e2e persona list that seed-e2e.sh and
+    # bootstrap-kind.sh `source`. It runs no assertion.
+    "tests/e2e-extra-personas.sh",
+}
 suites = []
 for root, dirs, files in os.walk(os.path.join(repo, "tests")):
     dirs[:] = [d for d in dirs if d not in (".git", "node_modules")]
     for fn in files:
         if not fn.endswith(".sh"):
             continue
-        if fn.startswith("test-") or fn.endswith("_test.sh"):
-            suites.append(os.path.relpath(os.path.join(root, fn), repo))
+        rel = os.path.relpath(os.path.join(root, fn), repo)
+        if rel in NOT_SUITES:
+            continue
+        top_level = os.path.dirname(rel) == "tests"
+        if fn.startswith("test-") or fn.endswith("_test.sh") or top_level:
+            suites.append(rel)
 suites.sort()
+
+import re as _re
+for _ns in sorted(NOT_SUITES):
+    _base = os.path.basename(_ns)
+    _sourced = False
+    for _r, _d, _f in os.walk(repo):
+        _d[:] = [d for d in _d if d not in (".git", "node_modules", ".stack-src")]
+        for _fn in _f:
+            if not _fn.endswith((".sh", ".bash", "Makefile")) and _fn != "Makefile":
+                continue
+            try:
+                _txt = open(os.path.join(_r, _fn), errors="replace").read()
+            except OSError:
+                continue
+            if _re.search(r"^\s*(\.|source)\s+[^#\n]*" + _re.escape(_base), _txt, _re.M):
+                _sourced = True
+                break
+        if _sourced:
+            break
+    if not os.path.isfile(os.path.join(repo, _ns)):
+        pass    # nothing on disk to hide; a stale entry is inert, not a hole
+    elif not _sourced:
+        bad("NOT_SUITES exempts %s as a sourced library, but nothing sources it — it is "
+            "either dead or a real suite hiding behind an exemption" % _ns)
 
 if not suites:
     bad("found ZERO test-*.sh / *_test.sh suites under tests/ — this guard would be vacuous")
@@ -761,9 +1203,12 @@ if not suites:
     print("== guard integrity: %d passed, %d failed ==" % (P[0], F[0]))
     sys.exit(1)
 _dash  = sum(1 for s in suites if os.path.basename(s).startswith("test-"))
-_under = len(suites) - _dash
-ok("enumerated %d suites under tests/ (%d test-*.sh + %d *_test.sh)"
-   % (len(suites), _dash, _under))
+_top   = sum(1 for s in suites if os.path.dirname(s) == "tests"
+             and not os.path.basename(s).startswith("test-")
+             and not os.path.basename(s).endswith("_test.sh"))
+_under = len(suites) - _dash - _top
+ok("enumerated %d suites under tests/ (%d test-*.sh + %d *_test.sh + %d bare tests/*.sh)"
+   % (len(suites), _dash, _under, _top))
 
 # ── "what is the last thing this script actually runs?" ──────────────────────
 # Read BACKWARD from EOF. A forward heredoc-state machine is the obvious design
@@ -1509,6 +1954,34 @@ echo "== ${P} passed, ${F} failed =="
   printf 'echo orphan\nexit 0\n' > "${NEG}/tree/tests/probe/orphan_test.sh"
   neg_case "an orphaned suite using the *_test.sh convention" \
            "tests/probe/orphan_test.sh"
+
+  # (j2) THE THIRD SPELLING (#385): a suite directly in tests/ with a bare name.
+  #      Until 2026-09-30 neither rule matched `tests/<name>.sh`, so ten suites sat
+  #      outside check 3 and check 7 entirely. Reverting the census to its two-rule
+  #      form makes this case stop biting. Counter-free body, for control (j)'s reason.
+  build_tree 'P=0; F=0
+ok(){ echo "  PASS $*"; P=$((P+1)); }
+bad(){ echo "  FAIL $*"; F=$((F+1)); }
+ok "nothing wrong"
+echo "== ${P} passed, ${F} failed =="
+[ "${F}" -eq 0 ]'
+  printf 'echo orphan\nexit 0\n' > "${NEG}/tree/tests/orphan-top.sh"
+  neg_case "an orphaned suite sitting directly in tests/ with a bare name" \
+           "tests/orphan-top.sh"
+
+  # (j3) THE EXEMPTION MUST NOT BE A HIDING PLACE. tests/e2e-extra-personas.sh is
+  #      exempt from the census only because it is a SOURCED library. Plant a file
+  #      of that name that nothing sources and the census must refuse the
+  #      exemption rather than quietly drop an unwired file out of every check.
+  build_tree 'P=0; F=0
+ok(){ echo "  PASS $*"; P=$((P+1)); }
+bad(){ echo "  FAIL $*"; F=$((F+1)); }
+ok "nothing wrong"
+echo "== ${P} passed, ${F} failed =="
+[ "${F}" -eq 0 ]'
+  printf 'echo not-a-library\nexit 0\n' > "${NEG}/tree/tests/e2e-extra-personas.sh"
+  neg_case "a NOT_SUITES exemption for a file nothing sources" \
+           "nothing sources it"
 
   # (k) THE ONE-FOR-ONE SWAP — the hole check 7's CARDINALITY pin cannot see, and
   #     the reason 7b exists. Reproduced against the real repo on 2026-08-26:

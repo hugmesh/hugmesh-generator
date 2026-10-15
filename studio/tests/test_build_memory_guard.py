@@ -36,7 +36,7 @@ def cfg_for(tmp_path, **kw):
 
 
 def pin_meminfo(monkeypatch, reading):
-    # both seams: the process snapshot (jobs default + cap) and the per-call
+    # both override points: the process snapshot (jobs default + cap) and the per-call
     # dispatch-time read (low-memory warnings) see the same pinned host
     monkeypatch.setattr(hr, "_meminfo_cached", lambda: dict(reading))
     monkeypatch.setattr(hr, "_meminfo_fresh", lambda: dict(reading))

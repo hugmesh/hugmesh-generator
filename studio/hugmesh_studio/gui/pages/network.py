@@ -109,7 +109,7 @@ from ._widgets import _file_picker, _row, collapsible
 #     strongest "off" the flag can express and the box's claim stays true.
 #   * --no-aide (:486 WANT_AIDE=false, consumed as a plain bool at :4786/:5139) and
 #     --no-edge-ai (:932, the only way to suppress the edge_ai ROLE's auto-selection) are
-#     REAL subtraction, so for those two "definitely off" is load-bearing on every build.
+#     REAL subtraction, so for those two "definitely off" matters on every build.
 #
 # The one thing --no-* cannot do is remove a slug a brand.conf put directly into
 # OPTIONAL_SERVICES; only EXCLUDE_SERVICES (applied last, :1234-1246) does that. The
@@ -463,7 +463,7 @@ def _client_class_role(role: str, platform: str) -> bool:
 #:
 #: This was a byte-identical copy of config's own lookup until 2026-08-26. Three pages
 #: had grown one (here, build.py, and role.py via the underscore import), which is one
-#: implementation too many for a rule every emission-neutral hide depends on: each hide
+#: implementation too many for a rule every hide that leaves the output unchanged depends on: each hide
 #: added on this page resets its field to THIS value, so a page whose idea of "default"
 #: drifts from the dataclass's silently starts emitting on a hidden control. The public
 #: name landed in core.config for exactly that reason; the alias keeps the ~20 call
@@ -561,7 +561,7 @@ class NetworkPage(QtWidgets.QWizardPage):
         super().__init__()
         self.wiz = wiz
         # Set by initializePage; read by validatePage to keep the UNAFFILIATED hide
-        # emission-neutral. Seeded here so a collect that somehow precedes a visit cannot
+        # leaves the output unchanged. Seeded here so a collect that somehow precedes a visit cannot
         # AttributeError inside a Qt callback (which under PyQt6 is a qFatal, not a
         # traceback).
         self._services_hidden = False
@@ -953,7 +953,7 @@ class NetworkPage(QtWidgets.QWizardPage):
         self.edge_ai = QtWidgets.QCheckBox()
         # ASK 1, verbatim: "leave optional services and edge ai unchecked instead of half
         # checked for default no". Two-state, default UNCHECKED — and unchecked here is the
-        # load-bearing kind: --no-edge-ai at build-x86-host-stage4.sh:1003 is the ONLY way
+        # kind that matters: --no-edge-ai at build-x86-host-stage4.sh:1003 is the ONLY way
         # to suppress the edge_ai ROLE's automatic selection of the service.
         self.edge_ai.setToolTip(_OFF_TIP)
         self.services_table.setItemWidget(self.edge_ai_item, _SVC_COL_ON, self.edge_ai)
@@ -1545,7 +1545,7 @@ class NetworkPage(QtWidgets.QWizardPage):
         # pre-ticked default set — "the box beats the brand profile, because a box that a
         # profile can silently contradict is the ambiguity the whole redo was asked to
         # remove". A hidden box has an answer too, and its answer is none. Absent a
-        # profile the added tokens are provably inert (measured, node role):
+        # profile the added tokens are provably ineffective (measured, node role):
         #     --no-tor --no-character-studio --no-character-forge --no-edge-ai-tts
         #     -> akkoma tuwunel phpbb, byte-identical to emitting none of them
         # `--no-edge-ai` is untouched by any of this: the edge-AI widgets are not rows of
@@ -1868,10 +1868,10 @@ class NetworkPage(QtWidgets.QWizardPage):
             c.superdomain = self.superdomain.text().strip()
         # ── the identity rows, collected ONLY while their axis has them on screen ──
         # THE HOUSE RULE, both halves. initializePage hides a row it does not apply to,
-        # and a hidden QLineEdit KEEPS its text — so a scope-blind collect here would let
+        # and a hidden QLineEdit KEEPS its text — so a collect that ignores scope here would let
         # a brand typed while the role was standalone-thick ride a later switch to
         # standalone-unaffiliated straight into to_cli_args(), which raises ValueError on
-        # it. The reset arm is what makes the hide emission-neutral in the OTHER
+        # it. The reset arm is what makes the hide leave the output unchanged in the OTHER
         # direction too: the field goes back to its ImageConfig dataclass default, read
         # from the dataclass rather than restated as a literal (_field_default — the same
         # lookup clear_unsupported uses), so hiding a control can neither add nor remove
@@ -1910,9 +1910,9 @@ class NetworkPage(QtWidgets.QWizardPage):
         #     flip the device to x86 on RolePage      -> cluster_domain = hugmesh.net
         #     flip back to rpi5                       -> STILL hugmesh.net, widget blank
         # i.e. the clear REMOVED an argv token from an image the operator never touched,
-        # which is precisely what the emission-neutrality rule forbids.
+        # which is precisely what the unchanged-output rule forbids.
         #
-        # Dropping it is emission-neutral for the hidden image too: `_x86_args` gates the
+        # Dropping it leaves the output unchanged for the hidden image too: `_x86_args` gates the
         # whole trio behind its own `mode in ("cloud", "mesh")` test, so an x86 standalone
         # emits none of them whatever the field holds. The clear bought nothing there and
         # cost the ARM lane its value. This is the same REDUNDANT treatment role.py gives
@@ -1996,7 +1996,7 @@ class NetworkPage(QtWidgets.QWizardPage):
             # had already taken tor's row off screen. The hide's clear above unticked that
             # box with all the others, so widget state and emission still agree.
             # Restricted to the FLAG channel on purpose — `offered` starts life as
-            # bool(channel), so a catalogue slug can never be un-offered, and a row with no
+            # bool(channel), so a catalogue slug can never be dropped from the offer, and a row with no
             # channel has no flag to emit in the first place.
             answered = bool(offered.get(slug)) or (hidden and channel == "flag")
             if not answered:
@@ -2051,7 +2051,7 @@ class NetworkPage(QtWidgets.QWizardPage):
         # tests/build-matrix/flag-coverage.sh would need two "no longer a GUI knob"
         # allowlist entries if it went). It is now reachable only from a brand profile
         # (-C) or extra flags. NOT reset here: a value loaded from a saved config or set
-        # through those channels must survive a trip through this page, which a blind
+        # through those channels must survive a trip through this page, which an unconditional
         # `c.exclude_services = []` would have silently blanked on every Next.
         #
         # `enable_games` is NOT collected here — `games` is one of the service rows above

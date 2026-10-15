@@ -291,3 +291,92 @@ def test_image_catalog_grammar_covers_role_choices():
             assert entry["image_class"] in ("desktop", "node")
             assert entry["image_class"] == image_class(mode, entry["role"])
             assert entry["platforms"], f"{entry['role']} has no platforms"
+
+
+# ── #580: the tor package is predicted from the NODE-level channels only ─────────────
+# The builders bake net-vpn/tor from two places: the image's own --optional-services
+# slug (x86 + rpi5, `_opt_selected tor`) and x86's --with-tor, which folds into the
+# same list on a NODE role. The preview used to read neither the flag nor only the
+# node: it missed every x86 --with-tor image and counted a DOMAIN row's `tor`, which
+# no builder reads. Each case below is one side of that line.
+def _tor_in(cfg) -> bool:
+    return "net-vpn/tor" in pc.adhoc_atoms(cfg)
+
+
+def test_x86_node_with_tor_flag_predicts_the_tor_package():
+    cfg = ImageConfig(mode="mesh", role="backend", platform="x86",
+                      optional_services=[], tor_onion_service=True)
+    assert "--with-tor" in cfg.to_cli_args()        # the builder is told
+    assert _tor_in(cfg)                              # ...and the preview says so
+
+
+def test_x86_node_with_tor_on_string_predicts_the_tor_package():
+    cfg = ImageConfig(mode="mesh", role="backend", platform="x86",
+                      tor_onion_service="on")
+    assert _tor_in(cfg)
+
+
+def test_x86_no_tor_is_not_counted_as_tor():
+    # tri-state: "off" is `--no-tor`; bool("off") is True, which is the trap.
+    cfg = ImageConfig(mode="mesh", role="backend", platform="x86",
+                      tor_onion_service="off")
+    assert "--no-tor" in cfg.to_cli_args()
+    assert not _tor_in(cfg)
+
+
+def test_rpi5_node_tor_slug_predicts_the_tor_package():
+    cfg = ImageConfig(mode="mesh", role="backend", platform="rpi5",
+                      optional_services=["tor"])
+    assert _tor_in(cfg)
+
+
+def test_x86_tor_slug_predicts_the_tor_package():
+    cfg = ImageConfig(mode="mesh", role="backend", platform="x86",
+                      optional_services=["akkoma", "tor"])
+    assert _tor_in(cfg)
+
+
+def test_domain_row_tor_without_a_node_selection_predicts_nothing():
+    # The #580 addendum: a loaded config can carry `tor` on a DOMAIN row. Since #582
+    # (decision 68 = A) that legacy slot MIGRATES at load to the domain's own Tor
+    # front door (Domain.tor) — a per-domain onion served by the node's tor, which
+    # the node still has to be selected for — so it is still no reason for the
+    # preview to show net-vpn/tor on an image that does not select tor itself.
+    cfg = ImageConfig.from_dict({
+        "mode": "mesh", "role": "backend", "platform": "x86",
+        "domains": [{"name": "acme.example", "optional_services": ["tor", "tuwunel"]}]})
+    assert cfg.domains[0].tor is True                    # the slot really is loaded
+    assert cfg.domains[0].optional_services == ["tuwunel"]
+    assert not _tor_in(cfg)
+
+
+def test_neither_channel_predicts_nothing():
+    for plat in ("x86", "rpi5"):
+        cfg = ImageConfig(mode="mesh", role="backend", platform=plat)
+        assert not _tor_in(cfg), plat
+
+
+def test_client_role_with_tor_flag_predicts_nothing():
+    # build-x86-host-stage4.sh resets WANT_TOR on a CLIENT role (it warns and bakes
+    # nothing), so the flag alone on a desktop image is not a tor image.
+    cfg = ImageConfig(mode="cloud", role="laptop", platform="x86",
+                      tor_onion_service=True)
+    assert not _tor_in(cfg)
+
+
+def test_rpi5_ignores_the_x86_only_flag():
+    # tor_onion_service is x86-only (PLATFORM_FIELD_SUPPORT); rpi5 has no --with-tor.
+    cfg = ImageConfig(mode="mesh", role="backend", platform="rpi5",
+                      tor_onion_service=True)
+    assert not _tor_in(cfg)
+
+
+@pytest.mark.parametrize("role,platform", [("rpi5-desktop", "rpi5"), ("laptop", "x86")])
+def test_client_role_with_a_tor_slug_predicts_nothing(role, platform):
+    # Both builders gate net-vpn/tor on _tor_node_selected (! ROLE_CLIENT &&
+    # _opt_selected tor, #583): a `tor` slug on a desktop image is dropped with a
+    # warning, so the preview must not list the package for it either.
+    cfg = ImageConfig(mode="mesh", role=role, platform=platform,
+                      optional_services=["akkoma", "tor"])
+    assert image_class(cfg.mode, cfg.role) == "desktop"
+    assert not _tor_in(cfg)

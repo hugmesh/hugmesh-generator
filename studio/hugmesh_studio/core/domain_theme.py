@@ -91,7 +91,7 @@ def resolve_token(explicit: str = "", *, vault_path: str = TOKEN_VAULT_PATH,
     ordered chain rather than a single lookup. ``vaults.vault_capability`` is explicit
     that Vault is a DevOps/Kubernetes-lane service: a docker-compose mesh has no vault
     container at all. Making Vault the only source would therefore ship a theme control
-    that is permanently dead on the lane the operator actually runs — the inert-control
+    that is permanently dead on the lane the operator actually runs — the do-nothing-control
     trap this codebase has hit repeatedly, and the one that module's own docstring warns
     about.
 
