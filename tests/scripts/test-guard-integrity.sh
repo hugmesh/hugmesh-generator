@@ -963,6 +963,13 @@ PREMERGE_UNGATED=(
   # the one line there, raises PREMERGE_BASELINE by one and drops this entry.
   tests/go-live/test-onion-refuse.sh
   tests/pentest/nuclei/test-templates.sh
+  # NOT UNGATEABLE, JUST NOT GATED YET: python3 + bash over synthetic fixture logs, no
+  # network, no root, no docker -- it would run in any shell-suites image. It sits
+  # here only because naming it in shell-suites.yml is an edit under .github/, which
+  # the change that added it was not allowed to make. THE FOLLOW-UP IS TO ADD IT TO
+  # THAT WORKFLOW'S SUITES LIST, DELETE THIS ENTRY AND RAISE PREMERGE_BASELINE BY ONE. It is
+  # run today by `make binpkg-reuse-report-check`.
+  tests/scripts/test-binpkg-reuse-report.sh
   # Needs `unshare -Urm` (a private user+mount namespace) to stack REAL bind
   # mounts under a scratch build system and drive the x86 builder's own
   # umount_chroot, stale-mount listing and printed umount commands against the
