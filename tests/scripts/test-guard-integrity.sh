@@ -984,6 +984,13 @@ PREMERGE_UNGATED=(
   # THAT WORKFLOW'S SUITES LIST, DELETE THIS ENTRY AND RAISE PREMERGE_BASELINE BY ONE. It is
   # run today by `make binpkg-reuse-report-check`.
   tests/scripts/test-binpkg-reuse-report.sh
+  # NOT an exemption, a wiring gap: the lane that added this suite (#509) may not
+  # edit .github/. It runs every stage4 builder with --print-plan and needs only
+  # bash, sed, paste and timeout, but is UNMEASURED in the shell-suites images
+  # (ALPINE/python:3.12-slim), so check that before gating it. The operator adds the
+  # one line to shell-suites.yml, raises PREMERGE_BASELINE by one and drops this
+  # entry. .gitlab-ci.yml's lint:domain-idp-flag runs it post-merge meanwhile.
+  tests/scripts/test-domain-idp-flag.sh
   # Needs `unshare -Urm` (a private user+mount namespace) to stack REAL bind
   # mounts under a scratch build system and drive the x86 builder's own
   # umount_chroot, stale-mount listing and printed umount commands against the

@@ -1958,6 +1958,26 @@ lint:patch-stack-src:
   script:
     - bash tests/stack/test-patch-stack-src.sh
 
+# Image-CLI per-domain IdP flag (#509, child of #47). Runs every stage4 builder
+# (found by glob) with --print-plan, which executes the real argument loop and
+# validation and stops before any build step: --domain-idp <domain>=own|superdomain
+# is accepted and threaded into PLAN_DOMAIN_IDP, every malformed value is refused,
+# =superdomain changes no byte of the plan, and a builder or a new eleventh builder
+# that lacks the flag turns it red. No root, no network, no docker.
+lint:domain-idp-flag:
+  stage: lint
+  image: python:3-slim
+  tags: [hugmesh-x86]
+  script:
+    - bash tests/scripts/test-domain-idp-flag.sh
+  rules:
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+    - changes:
+        - build-*-stage4.sh
+        - scripts/_domain-idp-lib.sh
+        - tests/scripts/test-domain-idp-flag.sh
+        - studio/hugmesh_studio/core/config.py
+
 # HTTPS front door wiring (tests/stack/test-tls-front.sh): compose service /
 # nginx terminator / Makefile stack-certs cross-consistency (ports + mount
 # paths DERIVED, not assumed), the SNAP_BFF_URL same-origin mixed-content
