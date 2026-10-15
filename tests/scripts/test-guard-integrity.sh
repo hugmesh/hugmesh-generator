@@ -950,6 +950,16 @@ PREMERGE_BASELINE="${GUARD_PREMERGE:-198}"
 # job's SUITES list. Nothing about the other eight changed; they still need a
 # node_modules and a chromium no shell-suites image carries.
 PREMERGE_UNGATED=(
+  # Lands outside the pull_request gate ONLY because wiring it there means an edit under
+  # .github/workflows/shell-suites.yml, which the change that added it (#368) was not
+  # permitted to make. It is NOT an exemption on the merits: it needs bash, python3 and
+  # ssh-keygen, no root and no network, and runs the real docker/build-image.sh against
+  # fake builders. It was MEASURED only on a developer host, NOT in a shell-suites image
+  # (ssh-keygen may be absent from the python:3.12-slim job). It also runs inside
+  # `make matrix-check` as a non-gating smoke and as `make build-image-dial-identity-check`.
+  # Wire it into shell-suites.yml, measure it there, DELETE this entry and raise
+  # PREMERGE_BASELINE by one.
+  tests/build-image-dial-identity.sh
   tests/casdoor/test-jwt-custom-token.sh
   # NOT an exemption, a wiring gap: this suite is offline (bash + python3 + PyYAML)
   # and WOULD run in the shell-suites image, but wiring it into

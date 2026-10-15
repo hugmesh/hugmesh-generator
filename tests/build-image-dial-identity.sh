@@ -12,6 +12,11 @@
 #      VAULT_REF stays null (no invented Vault path).
 #   3  The body carries no k8sSecretName key.
 #   4  With SSH_KEYS_ALLOWED=false neither value is reported (no dial key, no row).
+#   5  The worker reports NO device host key today (hostKeyPub / hostKeyFp null): the
+#      BFF's host_key_* columns are NOT NULL, so no row is seeded end to end until a
+#      host-identity channel exists (hugmesh-admin-bff-api#53). docs/CLIENT-IMAGES.md
+#      says so; this check keeps that sentence true, and goes red the day the worker
+#      starts sending a host key, so the doc and this check are updated together.
 #
 # No root, no network, no writes outside mktemp. Needs python3 and ssh-keygen.
 # Usage: tests/build-image-dial-identity.sh
@@ -125,6 +130,8 @@ if run_worker derived true; then
   check derived "$work/derived.body" deviceId '"dev-abc12345de67"'
   check derived "$work/derived.body" vaultRef 'null'
   check derived "$work/derived.body" k8sSecretName '<absent>'
+  check derived "$work/derived.body" hostKeyPub 'null'
+  check derived "$work/derived.body" hostKeyFp 'null'
 fi
 
 # 4: no dial key requested -> neither value reported
