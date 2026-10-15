@@ -959,6 +959,9 @@ class GoLiveOrgExportPage(QtWidgets.QWizardPage):
         p = self.plan
         if p is None or p.blocked or (self.worker and self.worker.isRunning()):
             return
+        if self.result is not None:         # the plan is spent: plan again to run again
+            self._say("This plan was applied. Plan again to run again.")
+            return
         if self.confirm.text().strip().lower() != p.config.org.lower():
             self._say("Type the org name to arm Apply (letter case does not matter).")   # inline, never modal
             self.apply_btn.setEnabled(False)

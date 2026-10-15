@@ -278,6 +278,45 @@ def _plant(src, files):
     _git(src, "update-ref", "refs/remotes/origin/main", "HEAD")
 
 
+@pytest.mark.parametrize("rel, content", [
+    (".pypirc", "[pypi]\nusername = u\n"),
+    ("deploy/.pypirc", "[pypi]\n"),
+    (".git-credentials", "https://u:p@host.example\n"),
+    (".htpasswd", "u:$apr1$x\n"),
+    ("web/.htpasswd", "u:$apr1$x\n"),
+    (".yarnrc.yml", "nodeLinker: node-modules\n"),
+    (".docker/config.json", "{}\n"),
+    ("ci/.docker/config.json", "{}\n"),
+    ("infra/terraform.tfstate", "{}\n"),
+    ("infra/terraform.tfstate.backup", "{}\n"),
+    ("infra/prod.tfvars", "x = 1\n"),
+    ("keys/signing.asc", "-----BEGIN PGP " + "PRIVATE KEY BLOCK-----\n"),
+    ("keys/empty.asc", ""),
+    ("keys/AuthKey_ABC.p8", "x\n"),
+])
+def test_each_secret_shaped_name_is_dropped_and_named_in_the_plan(world, rel, content):
+    cfg, runner = world["cfg"], world["runner"]
+    _plant(os.path.join(world["src"], "hugmesh-parent"),
+           {rel: content, "keep/config.json": "{}\n"})
+    p = oe.plan(cfg, runner, stamp="20260101T000000Z", probe=False)
+    rp = next(r for r in p.repos if r.source == "hugmesh-parent")
+    assert not os.path.exists(os.path.join(rp.workdir, rel)), rel
+    assert any(e.startswith(rel + ": ") for e in rp.excluded), (rel, rp.excluded)
+    # a config.json anywhere but under .docker/ is ordinary configuration
+    assert os.path.isfile(os.path.join(rp.workdir, "keep", "config.json"))
+    assert not rp.blocked
+
+
+def test_a_pgp_public_key_file_is_kept_and_the_rest_of_the_asc_family_is_not(tmp_path):
+    """The generator ships the distribution's release key as a .asc its build scripts
+    read: dropping it by name would leave the exported tree unable to build."""
+    (tmp_path / "release.asc").write_text("\n-----BEGIN PGP PUBLIC KEY BLOCK-----\n\nabc\n")
+    (tmp_path / "secret.asc").write_text("-----BEGIN PGP " + "PRIVATE KEY BLOCK-----\n")
+    assert oe._excluded_reason("release.asc", str(tmp_path)) == ""
+    assert "not a PGP public key" in oe._excluded_reason("secret.asc", str(tmp_path))
+    assert oe._excluded_reason("absent.asc", str(tmp_path)).startswith("unreadable *.asc")
+
+
 def test_an_npmrc_is_dropped_by_content_and_env_examples_stay(world):
     """A token-free .npmrc is build configuration a Dockerfile COPYs; a login is not."""
     cfg, runner = world["cfg"], world["runner"]
@@ -354,6 +393,41 @@ def test_a_rename_that_is_not_a_repository_name_is_a_problem_and_touches_nothing
     assert any("repos must be an object" in pr for pr in cfg.problems())
     assert (victim / "precious.txt").read_text() == "keep\n"
     assert not os.path.exists(os.path.join(world["gen"], "out", "org-export"))
+
+
+@pytest.mark.parametrize("rename_map, extra, fragment", [
+    # two sources renamed to ONE target: the second snapshot would replace the first
+    # work folder and only the second repository would ever be exported
+    ({"repos": {"hugmesh-actions": "dup", "hugmesh-commons": "dup"}}, [], "dup"),
+    # the same target spelled in another case: GitHub names are case-insensitive
+    ({"repos": {"hugmesh-actions": "dup", "hugmesh-commons": "DUP"}}, [], "dup"),
+    # a rename onto the name another repository already gets by the default rule
+    ({"repos": {"hugmesh-actions": "example-parent"}}, [], "example-parent"),
+    # an extra repository whose own name equals a branded target
+    ({}, ["example-parent"], "example-parent"),
+    # a rename onto the generated site repository's name
+    ({"repos": {"hugmesh-commons": "mesh.example.github.io"}}, [], "mesh.example.github.io"),
+])
+def test_two_repositories_that_would_share_one_target_are_refused_before_anything_is_written(
+        world, rename_map, extra, fragment):
+    """Without this the second snapshot replaced the first work folder and Apply
+    created ONE repository holding only the second tree, reporting the first as
+    never exported at all."""
+    cfg, runner = world["cfg"], world["runner"]
+    cfg.rename_map = rename_map
+    cfg.extra_repos = extra
+    problems = [pr for pr in cfg.problems() if "same target" in pr]
+    assert problems and fragment in problems[0], cfg.problems()
+    with pytest.raises(ValueError, match="same target"):
+        oe.plan(cfg, runner, probe=False)
+    assert not os.path.exists(os.path.join(world["gen"], "out", "org-export"))
+    assert runner.gh_calls() == []
+
+
+def test_distinct_targets_are_not_a_collision(world):
+    cfg = world["cfg"]
+    cfg.rename_map = {"repos": {"hugmesh-actions": "one", "hugmesh-commons": "two"}}
+    assert cfg.problems() == []
 
 
 @pytest.mark.parametrize("bad, fragment", [
@@ -640,6 +714,28 @@ def test_other_banned_markers_are_recognised():
     assert not any(rx.search("generated with `--enable-games`") for _l, rx in oe.BANNED_MARKERS)
 
 
+def test_the_other_named_key_formats_are_recognised_and_a_pgp_private_block_is_not():
+    def hit(text):
+        return [lbl for lbl, rx in oe.BANNED_MARKERS if rx.search(text)]
+    assert hit("k=" + "AKIA" + "ABCDEFGHIJKLMNOP") == ["AWS access key"]
+    assert hit("t=" + "github_pat_" + "A1b2C3d4E5f6G7h8I9j0K1") == ["GitHub fine-grained token"]
+    assert hit("t=" + "xoxb" + "-1234567890-abcdefghij") == ["Slack token"]
+    # the one key format the scan does not know, as the docs say
+    assert hit("-----BEGIN PGP " + "PRIVATE KEY BLOCK-----\n\nlQOYBF\n") == []
+
+
+@pytest.mark.parametrize("prefix", ["ghp", "gho", "ghu", "ghs", "ghr"])
+@pytest.mark.parametrize("length, refused", [(35, False), (36, True), (37, True),
+                                             (40, True)])
+def test_a_github_token_of_36_or_more_characters_is_a_banned_marker(prefix, length, refused):
+    """The refusal covers every token prefix at the length GitHub issues today (36)
+    and at longer ones; a 35-character string is not a token."""
+    text = "export TOKEN=" + prefix + "_" + "a1B2" * 10
+    token = text.split("=", 1)[1][: len(prefix) + 1 + length]
+    hits = [lbl for lbl, rx in oe.BANNED_MARKERS if rx.search("x " + token + "\n")]
+    assert hits == (["GitHub token"] if refused else []), (token, hits)
+
+
 # ── apply ───────────────────────────────────────────────────────────────────────────
 def test_apply_pushes_one_fresh_commit_per_repository_never_force(world):
     cfg, runner = world["cfg"], world["runner"]
@@ -779,11 +875,9 @@ def test_an_existing_different_repository_is_refused_unless_update_via_branch(wo
 
 
 def test_a_repository_whose_content_is_on_another_branch_is_refused_too(world):
-    """Measured before the fix: apply asked the remote for ``refs/heads/main`` ONLY, so
-    a repository whose content lives on ``master`` looked empty — apply pushed a new
-    ``main`` into it with the default ``update: refuse`` and reported the action as
-    'update (empty repository)', on a repository the plan's own probe had just called
-    non-empty (skeptic, round 1, blocker 2)."""
+    """Apply lists every branch of the target, not only ``main``: a repository whose
+    content lives on ``master`` is non-empty, so with the default ``update: refuse``
+    apply refuses it and never pushes a new ``main`` into it."""
     cfg, runner = world["cfg"], world["runner"]
     bare = _bare(world, "example-parent")
     os.makedirs(os.path.dirname(bare))
@@ -824,10 +918,9 @@ def test_a_repository_gh_calls_non_empty_with_no_branch_at_all_is_refused(world)
     """The other half of the non-main refusal: ``gh repo view`` says ``isEmpty: false``
     while ``git ls-remote --heads`` lists no branch (the repository holds tags only).
     The fake gh derives isEmpty from refs/heads, so it cannot answer this way; a
-    wrapping runner answers the view itself and lets every other call through. Before
-    this test, dropping gh's answer (``elif branches:``) left the suite green and apply
-    pushed a new main into a repository gh had just called non-empty (skeptic, round 2,
-    mutation M-E)."""
+    wrapping runner answers the view itself and lets every other call through. Apply
+    must go by gh's answer as well as by the branch list, so it never pushes a new
+    main into a repository gh called non-empty."""
     cfg, runner = world["cfg"], world["runner"]
     bare = _bare(world, "example-parent")
     os.makedirs(os.path.dirname(bare))
@@ -929,12 +1022,56 @@ def test_site_repo_lists_every_exported_repository_and_its_workflows_parse(world
     assert "actions/deploy-pages@v4" in pages and "pages: write" in pages
     index = open(os.path.join(site.workdir, "index.html"), encoding="utf-8").read()
     assert "repos.json" in index and "exampleorg" in index
+    # the page is served under /<domain>.github.io/ (a project site), so it must read
+    # the list by a relative path, never from the host's root
+    assert "fetch('repos.json')" in index and "fetch('/" not in index
+    assert 'href="/' not in index and 'src="/' not in index
     # every exported repository is reachable from the site's list, by name
     for r in p.repos:
         assert r.target in names
 
 
 # ── the text both faces show, and the CLI ───────────────────────────────────────────
+def test_planning_reads_the_local_checkouts_and_never_fetches_or_pulls_them(world):
+    """A snapshot is of the default branch as the checkout has it on this machine
+    (origin/HEAD, else origin/main, else HEAD); update the checkouts first to export
+    newer work. Plan makes no git fetch, pull or clone, and talks to no remote."""
+    cfg, runner = world["cfg"], world["runner"]
+    oe.plan(cfg, runner, stamp="20260101T000000Z")
+    git_verbs = {c[1] for c in runner.calls if c[:1] == ["git"] and len(c) > 1}
+    assert git_verbs, "the plan ran no git at all"
+    assert not git_verbs & {"fetch", "pull", "clone", "push", "remote", "ls-remote"}, git_verbs
+    assert all(c[:3] == ["gh", "repo", "view"] for c in runner.calls if c[:1] == ["gh"])
+
+
+def test_a_plan_made_without_looking_at_github_says_not_looked_at(world):
+    """--no-probe never asks GitHub, so it must not print that a repository 'exists':
+    every row, the site's included, says it was not looked at, in the plan text and
+    the plan file, and no gh call is made."""
+    cfg, runner = world["cfg"], world["runner"]
+    p = oe.plan(cfg, runner, stamp="20260101T000000Z", probe=False)
+    assert runner.gh_calls() == []
+    assert [r.action for r in (*p.repos, p.site)] == ["not looked at"] * 4
+    text = "\n".join(oe.plan_lines(p))
+    assert text.count("not looked at") >= 4 and "exists (compared at apply)" not in text
+    saved = json.load(open(os.path.join(p.out_dir, "org-export-plan.json")))
+    assert {r["action"] for r in saved["repos"]} == {"not looked at"}
+    # a probe that gets no answer (no gh, no login) has not looked either
+    class NoGh(RecordingRunner):
+        def run(self, argv, **kw):
+            if argv[:1] == ["gh"]:
+                return oe.RunResult(127, b"", b"gh: command not found")
+            return super().run(argv, **kw)
+    blind = NoGh(runner.fake_bin, runner.gh_root, runner.gh_log)
+    q = oe.plan(cfg, blind, stamp="20260101T000000Z")
+    assert {r.action for r in q.repos} == {"not looked at"}
+    assert all(any("did not answer" in n for n in r.notes) for r in q.repos)
+    # ... and a probe that sees an existing repository still says so
+    oe.apply(oe.plan(cfg, runner, stamp="20260101T000000Z"), runner)
+    seen = oe.plan(cfg, runner, stamp="20260202T000000Z")
+    assert {r.action for r in seen.repos} == {"exists (compared at apply)"}
+
+
 def test_plan_lines_name_every_target_and_what_is_not_renamed(world):
     p = oe.plan(world["cfg"], world["runner"], stamp="20260101T000000Z", probe=False)
     lines = oe.plan_lines(p)
@@ -971,10 +1108,9 @@ def test_plan_lines_name_every_target_and_what_is_not_renamed(world):
 
 def test_a_candidate_from_a_generic_config_file_keeps_the_files_rules(world, tmp_path):
     """The GUI/TUI 'Add config file' door: a generic export config's skip_repos,
-    include_generator, rename_map, visibility and update used to be dropped on the
-    way to the candidate, so both faces planned the DEFAULTS of such a file
-    (correctness skeptic B4). The candidate now carries the loaded config and
-    ``to_config`` starts from it; what a face passes explicitly still wins."""
+    include_generator, rename_map, visibility and update reach the plan: the
+    candidate carries the loaded config and ``to_config`` starts from it, so both
+    faces plan what the file says; what a face passes explicitly still wins."""
     cfg = world["cfg"]
     cfg.visibility = "public"
     cfg.update = oe.UPDATE_BRANCH
@@ -1003,8 +1139,7 @@ def test_a_candidate_from_a_generic_config_file_keeps_the_files_rules(world, tmp
 
 
 def test_the_forbidden_flag_guard_fires_on_every_spelling(world):
-    """``_run_checked`` is the ONE door every git/gh call takes at apply; a mutation
-    that dropped its check survived the suite (correctness skeptic C2). Pinned: a
+    """``_run_checked`` is the ONE door every git/gh call takes at apply. A
     force, a mirror, a delete, a prune and a ``+ref`` force-spelling all raise
     before the runner is reached, and the recorded call list stays empty."""
     runner = world["runner"]
@@ -1038,8 +1173,8 @@ def test_the_site_title_is_html_escaped_and_a_bad_inline_regex_is_a_problem(worl
 def test_the_generators_own_tree_exports_clean_with_the_documented_exclusions():
     """The generator is exported by default, and its own tree carries two test
     fixtures the banned-marker scan refuses (a fake AWS key, a fake fine-grained
-    token). Without a way to drop them every GUI/TUI plan for a real domain was
-    'refused: banned marker' (correctness skeptic B4). The ready-made exclusion
+    token). Without a way to drop them every GUI/TUI plan for a real domain would be
+    'refused: banned marker'. The ready-made exclusion
     map fixtures/org_export/generator-rename-map.json, which docs/GOLIVE-ORG-EXPORT.md
     points at, must keep this checkout's tree exportable — and this test is what
     goes red when a new fixture with a marker lands. Scans HEAD of this checkout
@@ -1054,6 +1189,7 @@ def test_the_generators_own_tree_exports_clean_with_the_documented_exclusions():
     runner = oe.SubprocessRunner()
     bare = oe._prepare_repo(runner, oe.GENERATOR_REPO, cfg, rules, out, [])
     assert bare.banned == ["tests/cloud-deploy/test-cloud-deploy-driver.sh: AWS access key",
+                           "tests/scripts/test-stack-clone-credential.sh: GitHub token",
                            "tests/scripts/test-stack-clone-credential.sh: GitHub fine-grained token"], \
         ("the generator's own banned markers changed: update generator-rename-map.json, "
          "docs/GOLIVE-ORG-EXPORT.md and this list", bare.banned)
@@ -1173,10 +1309,9 @@ def test_candidates_from_the_fixture_mesh_config_and_a_saved_mesh_record(tmp_pat
 
 
 def test_the_own_domains_selected_services_reach_its_repository_set(world, tmp_path, monkeypatch):
-    """Measured before the fix: every door built the OWN domain's candidate with no
-    services, so the repositories its selected services add (the phpbb profile's
-    hugmesh-forum-api in the test world) were never planned for it — while an added
-    row with the same services got them (skeptic, round 1, mutation M16 survived)."""
+    """The OWN domain's candidate carries its selected services at every door, so the
+    repositories they add (the phpbb profile's hugmesh-forum-api in the test world)
+    are planned for it exactly as for an added row with the same services."""
     from hugmesh_studio.core import saved_meshes
     gen = world["gen"]
     own_row = {"name": "mesh.example", "title": "", "idp": "superdomain",
@@ -1232,10 +1367,9 @@ def test_the_mesh_wide_services_step_reaches_the_own_domains_export(world, tmp_p
     """The most ordinary local mesh: the org typed on the own row, the services picked
     on the mesh-wide Services step. That per-row selection is recorded and NOT
     enforced (core/local_mesh_domains: the compose profiles come from ``services``),
-    so the own row says [] while the mesh builds hugmesh-forum-api. Measured before
-    the fix (integration skeptic, rounds 2 and 0): the own candidate carried no
-    service and the export left the forum api out. Now the record's ``services`` is
-    read too, narrowed to the domain catalogue, and unioned with the row's own."""
+    so the own row says [] while the mesh builds hugmesh-forum-api. The record's
+    ``services`` is therefore read too, narrowed to the domain catalogue and unioned
+    with the row's own, so the export includes the forum api."""
     from hugmesh_studio.core import saved_meshes
     gen = world["gen"]
 
@@ -1286,17 +1420,16 @@ def test_the_mesh_wide_services_step_reaches_the_own_domains_export(world, tmp_p
 
 def test_the_terminal_line_parses_back_to_the_exact_config_the_face_planned(
         world, tmp_path, monkeypatch):
-    """Measured before the fix (correctness skeptic, round 0, blocker 1): the GUI and
-    the TUI handed a file over as --config only for a GENERIC export config; a saved
-    mesh or an image config became ``--domain D --org O``, so the line planned
-    without the domain's selected services — one repository fewer than the step —
-    and with --apply exported that smaller set, exit 0, no warning. Now every
-    candidate's file travels as --config and every picker that differs from the
-    file is a flag: the line's parse IS the face's config, field for field."""
+    """The GUI and the TUI hand EVERY candidate's file over as --config (a saved mesh
+    or an image config as well as a generic export config), because a line spelling
+    only ``--domain D --org O`` would plan without the domain's selected services —
+    one repository fewer than the step — and with --apply export that smaller set.
+    Every picker that differs from the file is a flag: the line's parse IS the
+    face's config, field for field."""
     monkeypatch.setenv("HUGMESH_STUDIO_STATE_DIR", str(tmp_path / "state"))
     saved_mesh_naming_the_org(world, services=["phpbb"])
     (c,) = oe.saved_mesh_candidates()
-    assert c.config is None                       # not a generic config: the old gap
+    assert c.config is None                       # a saved mesh, not a generic config
     # the ordinary case: the record as it is, the GUI's default pickers
     cfg = c.to_config(out_dir=str(tmp_path / "out"))
     line = oe.cli_command(cfg, "PLAN", config_path=c.path)
@@ -1349,7 +1482,7 @@ def test_the_terminal_line_parses_back_to_the_exact_config_the_face_planned(
 def test_a_services_value_that_is_not_a_list_is_no_selection_not_five_letters(tmp_path):
     """A hand-edited record can hold ``"optional_services": "phpbb"``; read raw and
     listed, that is ``['p', 'h', 'p', 'b', 'b']`` — five services the catalogue never
-    heard of (skeptic, round 2). Only a list of strings counts, on the own row, on an
+    heard of. Only a list of strings counts, on the own row, on an
     added row and on an ImageConfig's ``cluster_domain_services`` alike."""
     rec = {"id": "m1", "label": "edited", "generator_dir": "/gen",
            "config": {"cluster_domain": "mesh.example",
@@ -1444,10 +1577,9 @@ def test_local_mesh_record_carries_the_org_and_the_own_row_when_it_has_one():
 
 def test_a_saved_mesh_reopened_through_the_bootstrap_loader_keeps_every_org():
     """The Studio re-opens a saved mesh through ``LocalMeshBootstrapConfig.from_dict``
-    (pages/localmesh._load_saved), then saves it again from the form. Measured
-    before the fix: from_dict dropped ``github_org`` from every row, the form showed
-    no org, and the next save wrote the record back WITHOUT it — the export
-    candidate vanished after one re-open (both skeptics, round 0)."""
+    (pages/localmesh._load_saved), then saves it again from the form. from_dict keeps
+    ``github_org`` on every row, so the form shows each org and the next save writes
+    the record back WITH it: the export candidate survives a re-open."""
     rows = [Domain(name="mesh.example", github_org="exampleorg"),
             Domain(name="chat.mesh.example", github_org="otherorg", tor=True),
             Domain(name="plain.mesh.example")]
@@ -1478,7 +1610,7 @@ def test_a_saved_mesh_reopened_through_the_bootstrap_loader_keeps_every_org():
     assert "github_org" not in dict(LocalMeshBootstrapConfig.from_dict(bad).domains[0])
 
 
-# ── the round-1 skeptic findings: what the scan, the commit and the config read ─────
+# ── what the scan, the commit and the config read ────────────────────────────────────
 def _plant_bytes(src, files):
     """Like _plant, but the values are BYTES (a latin-1 file, a binary file)."""
     for rel, data in files.items():

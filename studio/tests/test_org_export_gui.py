@@ -294,10 +294,10 @@ def test_the_local_mesh_route_keeps_the_own_rows_org_through_next(wiz, qapp):
     """Generate a new mesh -> Domains step: an org typed on the OWN row (row 0)
     survives Next WITHOUT the cell ever losing focus. The Next shortcut and a
     programmatic ``next()`` do not move focus, so ``editingFinished`` never fires;
-    measured before the fix ``_commit_domains`` rebuilt row 0 from the STATE that
-    only that signal writes: 'exampleorg' in the cell, '' after Next, and the
-    bring-up recorded no org for the mesh's own domain (correctness skeptic B3).
-    The cell is the carrier; the state is read only when there is no own row."""
+    ``_commit_domains`` therefore rebuilds row 0 from the CELL, not from the state
+    that only that signal writes: 'exampleorg' typed in the cell is still there
+    after Next and the bring-up records it for the mesh's own domain. The cell is
+    the carrier; the state is read only when there is no own row."""
     ctl = _local_mesh_domains_step(wiz)
     md = ctl.mesh_domains
     own = md.own_name
@@ -333,9 +333,8 @@ def test_the_local_mesh_route_keeps_the_own_rows_org_through_next(wiz, qapp):
 
 def test_the_local_mesh_route_refuses_a_bad_slug_on_next_never_a_modal(wiz, qapp):
     """The image flow refuses a non-slug org inline on Next (DomainsPage.validatePage);
-    the local-mesh route ran only the name checks and ACCEPTED 'bad-' into the state
-    and the saved record (correctness skeptic B2). Both faces now refuse with the
-    same sentence, inline, and the bad value never reaches the record."""
+    the local-mesh route refuses it with the same sentence, inline, and the bad
+    value never reaches the state or the saved record."""
     ctl = _local_mesh_domains_step(wiz)
     own = ctl.mesh_domains.own_name
     ctl.domains_table._add("chat.example", "Chat", github_org="bad-")
@@ -371,9 +370,8 @@ def test_the_local_mesh_route_refuses_a_bad_slug_on_next_never_a_modal(wiz, qapp
 def test_a_reopened_saved_mesh_shows_every_org_and_records_them_again(wiz, qapp):
     """A saved mesh naming orgs is re-opened the way the Studio does it
     (``_load_saved`` -> ``from_dict`` -> ``apply_bootstrap``): every cell shows its
-    org, and the next Next + record still carry them. Red on the unfixed head: the
-    loader dropped the key, the cells were empty, and the re-saved record named no
-    org and no own row (both skeptics, round 0)."""
+    org, and the next Next + record still carry them: the loader keeps the key, so
+    the cells are filled and the re-saved record names every org and the own row."""
     from hugmesh_studio.core import saved_meshes
     from hugmesh_studio.core.local_mesh_bootstrap import LocalMeshBootstrapConfig
     from hugmesh_studio.core.local_mesh_domains import bootstrap_domain_records
@@ -514,9 +512,8 @@ def test_plan_then_typed_org_arms_apply_and_the_run_goes_through_the_runner(
 
 def test_the_own_domains_selected_services_reach_the_steps_plan(golive, world, qapp, tmp_path):
     """The saved mesh's own domain selects phpbb: the step's plan must list the
-    repository that profile adds (hugmesh-forum-api). Measured before the fix: the
-    candidate door dropped the own row's services, so the table showed the default
-    set only (skeptic, round 1, blocker 1 / mutation M16)."""
+    repository that profile adds (hugmesh-forum-api): the candidate carries the own
+    row's services, so the table is not the default set only."""
     saved_mesh_naming_the_org(world, services=["phpbb"])
     golive.export_runner = world["runner"]
     golive.export_remote_base = f"file://{world['gh_root']}/"
@@ -540,8 +537,8 @@ def test_the_own_domains_selected_services_reach_the_steps_plan(golive, world, q
 
 def test_the_mesh_wide_services_step_reaches_the_steps_plan(golive, world, qapp, tmp_path):
     """The own row names only the org; phpbb was picked on the mesh-wide Services
-    step (what the mesh actually runs). Measured before the fix: the step planned the
-    own domain without hugmesh-forum-api (integration skeptic, blocker B1)."""
+    step (what the mesh actually runs): the step plans the own domain WITH
+    hugmesh-forum-api."""
     saved_mesh_naming_the_org(world, mesh_services=["phpbb"])
     golive.export_runner = world["runner"]
     golive.export_remote_base = f"file://{world['gh_root']}/"
@@ -562,9 +559,9 @@ def test_the_terminal_line_plans_the_same_repositories_as_the_steps_table(
         golive, world, qapp, tmp_path, monkeypatch, capsys):
     """The Terminal field's claim — 'The same export from a terminal' — run back
     through the REAL CLI (app.main: the Studio parser, run_cli, the real runner over
-    the fake gh) and compared with the table. Measured before the fix: the field
-    spelled ``--domain --org`` for a saved mesh, so the line planned 6 repositories
-    where the table showed 7 (correctness skeptic, round 0, blocker 1)."""
+    the fake gh) and compared with the table: for a saved mesh the line must plan
+    the same 7 repositories as the table, not the 6 that ``--domain --org`` alone
+    would."""
     import re
     import shlex
     from hugmesh_studio import app as app_mod
@@ -616,11 +613,10 @@ def test_the_terminal_line_plans_the_same_repositories_as_the_steps_table(
 
 def test_a_typed_source_folder_and_every_picker_reach_the_terminal_line_at_once(
         golive, world, tmp_path):
-    """Only the rename-map field used to re-spell the Terminal line: a Source folder
-    typed over a saved mesh's, or a flipped picker, showed up in it only after Plan
-    (and never, under --config, before this round). The two folders refresh on
-    every text change — no editingFinished is emitted here, as none is when a value
-    is set without a focus move (the e2e driver's setText found the line stale)."""
+    """A Source folder typed over a saved mesh's, or a flipped picker, re-spells the
+    Terminal line at once, before any Plan. The two folders refresh on every text
+    change — no editingFinished is emitted here, as none is when a value is set
+    without a focus move."""
     saved_mesh_naming_the_org(world)
     _at_generate(golive)
     golive.next()
@@ -681,12 +677,12 @@ def test_a_config_file_can_be_added_as_a_source(golive, world, tmp_path):
 
 def test_a_config_files_rules_reach_the_plan_and_the_rename_map_field_works(
         golive, world, qapp, tmp_path):
-    """The config-file door kept only domain/org/source: a file saying
-    include_generator:false, skip_repos, an exclude rule, public, update:branch was
-    planned with the DEFAULTS (correctness skeptic B4). Now: the pickers are seeded
-    from the file, the plan honours every rule, the Terminal line hands the file
-    over as --config, and a 'Rename map' field (the CLI's --rename-map) merges extra
-    rules — the way to drop a file a 'refused: banned marker' row points at."""
+    """The config-file door takes a file whole: one saying include_generator:false,
+    skip_repos, an exclude rule, public, update:branch is planned as it says. The
+    pickers are seeded from the file, the plan honours every rule, the Terminal line
+    hands the file over as --config, and a 'Rename map' field (the CLI's
+    --rename-map) merges extra rules — the way to drop a file a 'refused: banned
+    marker' row points at."""
     import json
     cfg = world["cfg"]
     cfg.visibility = "public"
@@ -746,8 +742,7 @@ def test_a_config_files_rules_reach_the_plan_and_the_rename_map_field_works(
     # viewport, wide enough for a path, on the first screen at the smallest size
     page.rename_map.setText(str(rm))
     page.rename_map.editingFinished.emit()
-    # ... and fixing the field clears the stale red line a failed Plan left (it used
-    # to stay until the next Plan: correctness skeptic, round 1, concern 1)
+    # ... and fixing the field clears the red line a failed Plan left, at once
     assert "nope.json" not in page.status.text(), page.status.text()
     golive.resize(820, 640)
     _settle(qapp, 10)
@@ -831,10 +826,10 @@ def _created(world) -> list[str]:
 
 def test_flipping_the_visibility_picker_after_plan_disarms_apply_and_creates_nothing(
         golive, world, qapp, tmp_path):
-    """The defect the correctness skeptic reproduced: Plan as public, flip the picker
-    back to private, type the org, click Apply -> `gh repo create --public` ran under a
-    screen that read private. The plan on screen is dropped by the change, so there is
-    nothing to apply until a fresh Plan."""
+    """Plan as public, flip the picker back to private, type the org, click Apply:
+    `gh repo create --public` must not run under a screen that reads private. The
+    plan on screen is dropped by the change, so there is nothing to apply until a
+    fresh Plan."""
     page = _planned_page(golive, world, qapp, tmp_path, visibility="public")
     assert "--public" in page.plan_text.toPlainText() or page.plan.config.visibility == "public"
     page.visibility.setCurrentText("private")
@@ -956,7 +951,7 @@ def test_no_modal_dialogs_in_the_new_page_logic():
     assert "QMessageBox" not in src and ".exec(" not in src
 
 
-# ── the round-1 skeptic findings ─────────────────────────────────────────────────────
+# ── the typed name belongs to one plan ───────────────────────────────────────────────
 def test_a_name_typed_for_a_private_plan_does_not_arm_a_later_public_plan(
         golive, world, qapp, tmp_path):
     """The typed org name armed ANY later plan: plan private, type the name, flip to
@@ -973,6 +968,34 @@ def test_a_name_typed_for_a_private_plan_does_not_arm_a_later_public_plan(
     page.confirm.setText("exampleorg")
     assert page.apply_btn.isEnabled()
     assert _created(world) == []
+
+
+def test_one_apply_per_plan_retyping_the_name_after_an_apply_does_not_arm_it_again(
+        golive, world, qapp, tmp_path):
+    """After an Apply the plan is spent: the name can be retyped (or edited and
+    typed back) and Apply must stay off, and a direct call must not push a second
+    time. To run again the person plans again."""
+    page = _planned_page(golive, world, qapp, tmp_path)
+    page.apply_btn.click()
+    _wait_worker(page, qapp)
+    assert page.result is not None and page.result.failures == []
+    pushes = [c for c in world["runner"].calls if c[:2] == ["git", "push"]]
+    assert pushes, "the first apply pushed nothing"
+    for typed in ("", "exampleorg", "ExampleOrg"):
+        page.confirm.setText(typed)
+        assert not page.apply_btn.isEnabled(), f"re-armed by typing {typed!r}"
+    first_worker = page.worker
+    page._apply()                                   # what a stray click would call
+    _wait_worker(page, qapp)
+    assert page.worker is first_worker, "a second apply started a worker"
+    assert [c for c in world["runner"].calls if c[:2] == ["git", "push"]] == pushes
+    # planning again is the way to run again, and it needs the name typed again
+    page.plan_btn.click()
+    _wait_worker(page, qapp)
+    assert page.plan is not None and page.result is None
+    assert not page.apply_btn.isEnabled()
+    page.confirm.setText("exampleorg")
+    assert page.apply_btn.isEnabled()
 
 
 def test_a_name_typed_while_a_plan_runs_does_not_arm_the_plan_that_arrives(

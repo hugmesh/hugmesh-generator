@@ -87,7 +87,7 @@ Feature: The Studio exports a domain's repositories to its GitHub org
     When I walk the Go-Live wizard to the export step for a saved mesh naming the org "exampleorg" and apply it with the name typed
     Then every planned repository and the site hold exactly one commit on main in the stand-in GitHub
     And every snapshot commit is authored as the person running the export
-    And the result column reports create for every row and Apply is disarmed again
+    And the result column reports create for every row and Apply stays disarmed when the name is typed again
     And git was never asked to force, mirror, delete or prune
     And the Studio grab is a non-empty PNG
 
@@ -246,3 +246,31 @@ Feature: The Studio exports a domain's repositories to its GitHub org
       | brand             | 123                  |
       | include_generator | text:no              |
       | skip_repos        | text:hugmesh-parent  |
+
+  # ── two repositories sent to one target are refused ───────────────────────
+  # Both snapshots would be written to one folder and only the second repository
+  # would ever be exported, with nothing said.
+  @interface:studio
+  Scenario: two repositories renamed to one target are refused inline and nothing is exported @interface:studio
+    When I walk the Go-Live wizard to the export step and point the Rename map field at a file sending "hugmesh-actions" and "hugmesh-commons" to the one name "dup" and press Plan
+    Then the export step refuses the plan inline saying two repositories share the target "dup"
+    And nothing was created in the stand-in GitHub, no gh call was made and no repository folder was written
+    And no dialog opened in the org-export walk
+    And the Studio grab is a non-empty PNG
+
+  # ── login files and private keys by name ──────────────────────────────────
+  @interface:studio
+  Scenario: a login file, a docker login file and a private PGP key are not published and a public PGP key is @interface:studio
+    When I walk the Go-Live wizard to the export step with a login file, a private PGP key file and a public PGP key file planted in "hugmesh-parent", apply it with the name typed, and read what was published
+    Then the plan lists the login file, the docker login file and the private PGP key file as excluded for "hugmesh-parent" and lists neither the public PGP key file nor the other config.json
+    And the exported "example-parent" holds the public PGP key file and the other config.json and none of the dropped files
+    And no dialog opened in the org-export walk
+    And the Studio grab is a non-empty PNG
+
+  # ── a plan that never asked GitHub says so ────────────────────────────────
+  @interface:studio
+  Scenario: a plan made from a terminal with --no-probe says not looked at and calls no gh @interface:studio
+    When I walk the Go-Live wizard to the export step for a saved mesh naming the org "exampleorg", plan it from a terminal with --no-probe and read what it printed
+    Then the terminal plan exited 0 with "not looked at" on every repository row and the site row and made no gh call
+    And no dialog opened in the org-export walk
+    And the Studio grab is a non-empty PNG

@@ -48,7 +48,8 @@ interface Facts {
   applyEnabledBeforeTyping?: boolean; applyEnabledWrongName?: boolean; applyEnabledTyped?: boolean;
   applyEnabledUntyped?: boolean; applyStatus?: string; resultAfter?: boolean;
   resultRows?: { target: string; action: string; branch: string; commit: string; skipped: string }[] | null;
-  tableResults?: string[]; applyEnabledAfter?: boolean;
+  tableResults?: string[]; applyEnabledAfter?: boolean; applyEnabledAfterRetype?: boolean[];
+  cliNoProbe?: { rc: number; stdout: string; stderrTail: string; ghCalls: string[] };
   ghCalls?: string[]; gitCalls?: string[]; bareRepos?: Record<string, BareRepo>;
   renameMapField?: { text: string; visible: boolean; width: number };
   ownServices?: string[]; meshServices?: string[]; gitCallsAtWalkStart?: number;
@@ -272,6 +273,29 @@ When('I walk the Go-Live wizard to the export step and point the Rename map fiel
     drive(world, ['--scenario', 'export', '--action', 'plan', '--rename-map', 'bad-target']);
   });
 
+When('I walk the Go-Live wizard to the export step and point the Rename map field at a file sending {string} and {string} to the one name {string} and press Plan',
+  async ({ world }, a: string, b: string, to: string) => {
+    expect([a, b, to]).toEqual(['hugmesh-actions', 'hugmesh-commons', 'dup']);
+    drive(world, ['--scenario', 'export', '--action', 'plan', '--rename-map', 'shared-target']);
+  });
+
+When('I walk the Go-Live wizard to the export step with a login file, a private PGP key file and a public PGP key file planted in {string}, apply it with the name typed, and read what was published',
+  async ({ world }, repo: string) => {
+    expect(repo).toBe('hugmesh-parent');
+    drive(world, ['--scenario', 'export', '--action', 'apply',
+      '--plant-file', repo + ':.pypirc=[pypi]\\nusername = u\\n',
+      '--plant-file', repo + ':deploy/.docker/config.json={}\\n',
+      '--plant-file', repo + ':keys/private.asc=-----BEGIN PGP ' + 'PRIVATE KEY BLOCK-----\\n',
+      '--plant-file', repo + ':keys/public.asc=-----BEGIN PGP PUBLIC KEY BLOCK-----\\n\\nabc\\n',
+      '--plant-file', repo + ':deploy/config.json={}\\n']);
+  });
+
+When('I walk the Go-Live wizard to the export step for a saved mesh naming the org {string}, plan it from a terminal with --no-probe and read what it printed',
+  async ({ world }, org: string) => {
+    expect(org).toBe('exampleorg');
+    drive(world, ['--scenario', 'export', '--action', 'plan', '--cli-no-probe']);
+  });
+
 // ── opt-in ───────────────────────────────────────────────────────────────────
 
 Then('the Go-Live wizard goes from Generate straight to Verify and the export step does not apply',
@@ -424,12 +448,15 @@ Then('every snapshot commit is authored as the person running the export', async
   }
 });
 
-Then('the result column reports create for every row and Apply is disarmed again', async ({ world }) => {
-  const f = facts(world);
-  for (const cell of f.tableResults ?? []) expect(cell.split(/\s+/)[0]).toBe('create');
-  expect((f.tableResults ?? []).length).toBe((f.planRows ?? []).length);
-  expect(f.applyEnabledAfter, 'Apply re-armed after a run').toBe(false);
-});
+Then('the result column reports create for every row and Apply stays disarmed when the name is typed again',
+  async ({ world }) => {
+    const f = facts(world);
+    for (const cell of f.tableResults ?? []) expect(cell.split(/\s+/)[0]).toBe('create');
+    expect((f.tableResults ?? []).length).toBe((f.planRows ?? []).length);
+    expect(f.applyEnabledAfter, 'Apply re-armed after a run').toBe(false);
+    // one apply per plan: cleared, typed, and typed in another letter case
+    expect(f.applyEnabledAfterRetype, 'Apply armed again for the plan just applied').toEqual([false, false, false]);
+  });
 
 Then('git was never asked to force, mirror, delete or prune', async ({ world }) => {
   // only the wizard's own calls: the fixture's set-up (planting a tracked file with
@@ -464,8 +491,8 @@ Then('the plan lists {string} for the own domain\'s selected service and marks i
 // The step's 'Terminal' field claims to be the same export from a terminal. The
 // driver ran the PLAN form of that line (its words, the driver's interpreter for the
 // bare python3) over the same stand-in GitHub; what the CLI printed is compared with
-// the page's table. Before this round the line spelled --domain/--org for a saved
-// mesh and planned one repository fewer than the table (the selected service's).
+// the page's table. For a saved mesh the line must plan the selected service's
+// repository too, as the table does (--domain/--org alone would plan one fewer).
 Then('the terminal line the export step shows plans the same repositories as its table',
   async ({ world }) => {
     const f = facts(world);
@@ -766,3 +793,51 @@ Then('the folder the rename pointed at still holds only its untouched file', asy
   expect(f.sentinel, 'the file in the folder the rename pointed at').toBe('keep\n');
   expect(f.escapeFolder).toEqual(['precious.txt']);
 });
+
+// ── two repositories sent to one target ──────────────────────────────────────
+
+Then('the export step refuses the plan inline saying two repositories share the target {string}',
+  async ({ world }, target: string) => {
+    const f = facts(world);
+    expect(f.planFailed, 'the plan ran although two repositories share one target').toBe(true);
+    expect(f.planStatus).toContain('same target');
+    expect(f.planStatus).toContain(`'${target}'`);
+  });
+
+// ── secret-shaped names ──────────────────────────────────────────────────────
+
+Then('the plan lists the login file, the docker login file and the private PGP key file as excluded for {string} and lists neither the public PGP key file nor the other config.json',
+  async ({ world }, repo: string) => {
+    const row = planRows(world).find((r) => r.source === repo) as PlanRow;
+    expect(row, `${repo} is not on the plan`).toBeDefined();
+    const names = row.excluded.map((e) => e.split(': ')[0]);
+    for (const gone of ['.pypirc', 'deploy/.docker/config.json', 'keys/private.asc']) {
+      expect(names, `${gone} must be excluded`).toContain(gone);
+    }
+    for (const kept of ['keys/public.asc', 'deploy/config.json']) {
+      expect(names, `${kept} must not be excluded`).not.toContain(kept);
+    }
+  });
+
+Then('the exported {string} holds the public PGP key file and the other config.json and none of the dropped files',
+  async ({ world }, name: string) => {
+    const files = facts(world).bareRepos?.[name]?.files ?? [];
+    for (const kept of ['keys/public.asc', 'deploy/config.json']) expect(files).toContain(kept);
+    for (const gone of ['.pypirc', 'deploy/.docker/config.json', 'keys/private.asc']) {
+      expect(files, `${gone} was published`).not.toContain(gone);
+    }
+  });
+
+// ── a plan that never asked GitHub ───────────────────────────────────────────
+
+Then('the terminal plan exited 0 with {string} on every repository row and the site row and made no gh call',
+  async ({ world }, words: string) => {
+    const c = facts(world).cliNoProbe;
+    expect(c, 'the driver did not run the terminal plan').toBeDefined();
+    expect(c?.rc, c?.stderrTail).toBe(0);
+    const rows = (c?.stdout ?? '').split('\n').filter((l) => /^\S+\s+exampleorg\/\S+\s/.test(l));
+    expect(rows.length, 'plan rows in the terminal output').toBe(4);
+    for (const row of rows) expect(row, 'a row that claims to know').toContain(words);
+    expect(c?.stdout).not.toContain('exists (compared at apply)');
+    expect(c?.ghCalls, 'gh was called by a --no-probe plan').toEqual([]);
+  });

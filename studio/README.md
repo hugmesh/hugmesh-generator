@@ -355,7 +355,9 @@ exactly that (`tests/fixtures/org_export/generator-rename-map.json`). Every kept
 scanned for a banned marker as bytes (a latin-1 or binary file is not skipped), the commit is
 checked to hold every file the plan counted, and a config file's values are type-checked
 (exit 2 naming the key). Snapshot commits are authored as the person running the export
-(their git identity) unless the config names an author.
+(their git identity) unless the config names an author. Plan reads each checkout as it
+is on this machine (it never fetches or pulls) and prints `not looked at` for a target it
+did not ask GitHub about; a plan is applied once.
 
 ```sh
 python -m hugmesh_studio --org-export PLAN  --domain mesh.example --org exampleorg --source-dir ~/src

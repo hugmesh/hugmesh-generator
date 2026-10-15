@@ -61,9 +61,20 @@ mesh on this machine names an org, or when you add a config file on the step its
    (`hugmesh-build-config`, `hugmesh-parent`, `hugmesh-commons`, `hugmesh-auth-core`)
    and the generator itself, both of which the config can drop;
 2. snapshots each repository's **default branch** (`origin/HEAD`, else `origin/main`,
-   else `HEAD`) with `git archive` — no history — into `<out>/work/<new name>/`;
+   else `HEAD`) with `git archive` — no history — into `<out>/work/<new name>/`. It
+   reads the checkout as it is on this machine and **never fetches or pulls it**:
+   update your checkouts first if the export should hold newer work;
 3. drops `CLAUDE.md`, `.claude/`, `.stack-src`, `node_modules`, build output and
-   secret-shaped files (`*.pem`, `*.key`, `.env`, `id_rsa*`, …) and lists each one.
+   secret-shaped files and lists each one. The names dropped are `*.pem`, `*.key`,
+   `*.p12`, `*.pfx`, `*.jks`, `*.keystore`, `*.p8`, `.env` and `.env.*`, `id_rsa*`,
+   `id_ed25519*`, `id_ecdsa*`, `.netrc`, `.pypirc`, `.git-credentials`, `.htpasswd`,
+   `.yarnrc.yml`, `*.secret`, `*credentials*.json`, `*.kubeconfig`, `*.tfstate`,
+   `*.tfstate.backup`, `*.tfvars` and `.docker/config.json` (only at that path: a
+   `config.json` anywhere else is ordinary configuration). `*.asc` is decided by its
+   first line: a PGP public key block stays (the generator's build scripts read the
+   distribution's release key from one), any other `.asc` is dropped. The list is
+   names only — a secret kept in a file with an ordinary name is found, if at all, by
+   the banned-marker scan below.
    Two names are decided by content: an `.npmrc` is dropped only when it holds a
    login (`_authToken`, `_auth=`, `_password`, or a user part written into a URL such
    as `registry=https://user:token@host/` or `proxy=http://user:pass@host:3128`), so a
@@ -76,8 +87,13 @@ mesh on this machine names an org, or when you add a config file on the step its
    dropped `.npmrc` then breaks: the plan lists the drop, not the dangling `COPY`;
 4. **refuses** a repository, naming the file, when a banned marker is found in what
    would be published: a co-author trailer, a tool footer, an assistant session link,
-   an API key, a private-key header followed by its key body (the bare header strings
-   a compiled program such as an engine's `.wasm` carries are not a key), a URL with a literal password of 16 or more
+   an API key (a GitHub token of 36 or more characters after its `ghp_` / `gho_` /
+   `ghu_` / `ghs_` / `ghr_` prefix, a `github_pat_` token, an AWS access key, a Slack
+   token), a PEM private-key header followed by a key body (the tests cover `BEGIN RSA
+   PRIVATE KEY` and `BEGIN OPENSSH PRIVATE KEY`; the bare header strings a compiled
+   program such as an engine's `.wasm` carries are not a key, and other key formats,
+   such as a PGP `PRIVATE KEY BLOCK`, are not recognised by this rule), a URL with a
+   literal password of 16 or more
    characters (`https://user:<long secret>@host`; placeholders such as
    `user:$(PASSWORD)@host` and short test logins are left alone, because the
    platform's own manifests are full of them). EVERY kept file is scanned as bytes:
@@ -94,7 +110,17 @@ mesh on this machine names an org, or when you add a config file on the step its
 6. generates the site repository `<domain>.github.io` (below);
 7. writes `<out>/org-export-plan.txt` and `.json` and shows the table: source,
    target `<org>/<name>`, create / update / exists / refused, kind, files, how many
-   files were rewritten, how many excluded.
+   files were rewritten, how many excluded. The action column comes from asking `gh`
+   whether each target exists. A plan made with `--no-probe`, or one where `gh` gave
+   no answer (not installed, not signed in, no network), prints **`not looked at`**
+   for that row: it has not checked, so it says neither `create` nor `exists`, and
+   apply looks at the repository itself.
+
+Two repositories that would be exported to the **same** target name (two entries of the
+rename map's `repos` table with one value, an `extra_repos` name equal to a branded
+target such as `example-parent`, or a name equal to the site repository's) are refused
+as a problem before anything is written; GitHub names are not case-sensitive, so
+`dup` and `DUP` count as one.
 
 Deliberately **not** renamed, and said so in every plan: Java packages and Maven
 groupIds (`net.hugmesh`), Angular package scopes (`@hugmesh/*`), Kubernetes label
@@ -133,8 +159,9 @@ at when the marker is an example token in a test script. A glob written
 
 The generator is exported by default (`include_generator`), and its own tree holds two
 test fixtures the banned-marker scan refuses — correctly, they look exactly like
-secrets: a fake AWS key in `tests/cloud-deploy/test-cloud-deploy-driver.sh` and a fake
-fine-grained token in `tests/scripts/test-stack-clone-credential.sh`. Without an
+secrets: a fake AWS key in `tests/cloud-deploy/test-cloud-deploy-driver.sh` and, in
+`tests/scripts/test-stack-clone-credential.sh`, a fake fine-grained token and a fake
+`gho_` token. Without an
 exclusion every plan that includes the generator is `refused: banned marker` for it.
 The ready-made map `studio/tests/fixtures/org_export/generator-rename-map.json` drops
 exactly those two files:
@@ -192,6 +219,12 @@ repositories, made public): type it again for each plan. The text-mode step does
 same: `apply <org>` carries the name in the command. In the
 text-mode step it is `apply <org>`.
 From a terminal it is `--org-export APPLY --apply`.
+
+A plan is applied **once**. In the GUI Apply stays off after a run, and retyping the
+name does not arm it again; in the text-mode step a second `apply <org>` on the same
+plan answers `this plan was applied; plan again (p) to run again`. To run again, plan
+again (which also asks for the name again). A re-run of the same export is safe and
+reports `unchanged` for every repository whose `main` already holds the snapshot.
 
 For every repository that is not blocked, apply:
 
@@ -314,6 +347,11 @@ start nothing.
 
 * The first real run needs `gh auth login` with an account that can create
   repositories in the organisation, and the organisation's settings must allow it.
+  Creating a repository goes through `gh`, but the snapshot is pushed with a plain
+  `git push` over https, which needs a credential helper: run `gh auth setup-git`
+  once (it adds gh as git's credential helper for github.com in your global git
+  config), or put the helper line `credential.helper = !gh auth git-credential` in
+  your git config yourself.
 * Repository secrets on `<domain>.github.io`: `EXPORT_READ_TOKEN` (reads the private
   exported repositories), `PACKAGES_READ_TOKEN` (a classic token with
   `read:packages`; Maven reads the exported library chain from the org's package
@@ -322,3 +360,9 @@ start nothing.
 * Publish the exported Java library chain from the new organisation (each library's
   `release.yml`) before the site's build job can verify the Java apps.
 * Enable Pages on the site repository (Settings -> Pages -> Source: GitHub Actions).
+  GitHub serves an **organisation** Pages site only from a repository named exactly
+  `<org>.github.io`; `<domain>.github.io` is any other name, so it is served as a
+  **project** site under the organisation's path
+  (`https://<org>.github.io/<domain>.github.io/`), not at the domain's own name. The
+  generated page reads `repos.json` by a relative path, so it works from that
+  sub-path.

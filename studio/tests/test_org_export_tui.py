@@ -196,6 +196,30 @@ def test_export_plans_through_the_runner_and_applies_only_on_the_typed_org(world
     assert "visibility must be one of" in j.status
 
 
+def test_one_apply_per_plan_a_second_apply_is_refused_until_the_person_plans_again(world):
+    """The GUI turns Apply off after a run and a re-typed name does not arm it again;
+    the text-mode front end behaves the same: `apply ORG` on a plan that was already
+    applied is refused, and `p` (plan again) is the way to run again."""
+    saved_mesh_naming_the_org(world)
+    j, screen = _golive_at_plan(world)
+    j.feed("x")
+    j.feed("p")
+    j.feed("apply exampleorg")
+    assert j.status.startswith("applied: 7 done"), j.status
+    first = screen.export_result
+    pushes = [c for c in world["runner"].calls if c[:2] == ["git", "push"]]
+    assert pushes
+    j.feed("apply exampleorg")
+    assert j.status == "this plan was applied; plan again (p) to run again", j.status
+    assert screen.export_result is first
+    assert [c for c in world["runner"].calls if c[:2] == ["git", "push"]] == pushes
+    j.feed("p")
+    assert screen.export_result is None
+    j.feed("apply exampleorg")
+    assert j.status.startswith("applied: 7 done"), j.status
+    assert screen.export_result is not first
+
+
 def test_the_own_domains_selected_services_reach_the_tui_plan(world):
     """The text-mode twin of the GUI test: the own domain's phpbb selection puts
     hugmesh-forum-api on the plan (as 'missing source' in the test world)."""
@@ -226,9 +250,9 @@ def test_the_mesh_wide_services_step_reaches_the_tui_plan(world):
 
 
 def test_the_tui_terminal_line_hands_the_saved_mesh_over_and_parses_back_to_its_plan(world):
-    """'The same from a terminal:' used to spell ``--domain --org`` for a saved mesh
-    (the file travelled as --config only for a generic export config), so the line
-    planned without the own domain's services (correctness skeptic, blocker 1)."""
+    """'The same from a terminal:' hands a saved mesh over as ``--config FILE`` (not
+    only a generic export config), so the line plans with the own domain's services
+    and parses back to the plan the screen shows."""
     saved_mesh_naming_the_org(world, services=["phpbb"])
     j, screen = _golive_at_plan(world)
     j.feed("x")
@@ -270,9 +294,8 @@ def test_a_config_file_can_be_added_with_c(world, tmp_path):
 
 
 def test_a_config_files_rules_reach_the_tui_plan_and_r_merges_a_rename_map(world, tmp_path):
-    """The TUI's `c FILE` door kept only domain/org/source, so `p` planned a generic
-    config file's DEFAULTS (correctness skeptic B4). Now the file's own visibility
-    and update seed `v`/`u`, `p` honours include_generator / skip_repos / exclude,
+    """The TUI's `c FILE` door takes a generic config file whole: the file's own
+    visibility and update seed `v`/`u`, `p` honours include_generator / skip_repos / exclude,
     the terminal line hands the file over as --config, and `r FILE` merges an extra
     rename map (`r -` drops it) — the TUI's spelling of the GUI's Rename map field."""
     import json
@@ -382,7 +405,7 @@ def test_the_gui_step_and_the_tui_stage_show_the_same_plan_text(world, tmp_path)
 
 def test_a_config_file_with_a_wrongly_typed_value_is_refused_by_c_and_apply_needs_the_name_typed(
         world, tmp_path):
-    """The round-1 skeptic's file shapes: a number for the brand, "no" for a switch,
+    """Config files of the wrong shape: a number for the brand, "no" for a switch,
     a string for a list. `c FILE` says so in the status line and adds nothing; and
     `apply ORG` takes the name as part of the command every time, so a name typed
     for one plan cannot arm another."""

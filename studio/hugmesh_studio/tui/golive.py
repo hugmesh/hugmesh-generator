@@ -352,6 +352,9 @@ class GoLiveScreen:
             if p.blocked:
                 j.status = "the plan is blocked; nothing is applied until every repository is clean"
                 return
+            if self.export_result is not None:            # the GUI's one apply per plan
+                j.status = "this plan was applied; plan again (p) to run again"
+                return
             self.export_result = org_export.apply(
                 p, self.export_runner or org_export.SubprocessRunner())
             j.status = (f"applied: {len(self.export_result.repos) - len(self.export_result.failures)}"

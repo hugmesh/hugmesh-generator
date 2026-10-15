@@ -509,10 +509,10 @@ def test_manifest_v2_carries_cluster_domain_services_when_picked(monkeypatch, tm
 # ── the per-domain GitHub org (the Go-Live export step) on the v2 envelope ─────────
 def test_manifest_v2_carries_the_github_org_exactly_as_the_v1_shim(monkeypatch, tmp_path):
     """The v1 shim (config.mesh_manifest) learnt ``domains[].github_org`` and
-    ``cluster_domain_github_org``; manifest_v2 builds its rows by hand and had not —
-    so the one manifest a fleet build writes up front dropped both (integration
-    skeptic, round 0). Pinned: with an org set, the v2 domain rows equal the shim's
-    byte for byte and the top-level key is on both; without one, neither key appears."""
+    ``cluster_domain_github_org``; manifest_v2 builds its rows by hand and carries
+    both too, so the one manifest a fleet build writes up front keeps them. With an
+    org set, the v2 domain rows equal the shim's byte for byte and the top-level key
+    is on both; without one, neither key appears."""
     _install_fake_builddriver(monkeypatch)
     _install_fake_genkeys(monkeypatch)
     wl = _worklist(tmp_path)

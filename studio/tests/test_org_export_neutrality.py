@@ -179,7 +179,7 @@ def test_the_checker_catches_a_planted_name_in_a_copy_of_an_owned_file(tmp_path)
 
 def test_the_guard_itself_spells_only_the_assembled_stem():
     """The built-in list is the one assembled stem: any longer private spelling written
-    out here would be the leak the guard exists to stop (skeptic, round 1)."""
+    out here would be the leak the guard exists to stop."""
     assert tuple(FORBIDDEN[:1]) == (_A,)
     with open(os.path.abspath(__file__), encoding="utf-8") as fh:
         me = fh.read().lower()

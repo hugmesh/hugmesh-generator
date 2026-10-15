@@ -444,6 +444,14 @@ def scenario_export(args, app, result: dict, scratch: str, bindir: str, git_log:
             json.dump({"repos": {"hugmesh-commons": "../../escape"}}, fh)
         page.rename_map.setText(rm)
         page.rename_map.editingFinished.emit()
+    if args.rename_map == "shared-target":
+        # two repositories sent to ONE target: the second snapshot would replace the
+        # first folder and only one of them would ever be exported
+        rm = os.path.join(scratch, "shared-target.json")
+        with open(rm, "w", encoding="utf-8") as fh:
+            json.dump({"repos": {"hugmesh-actions": "dup", "hugmesh-commons": "dup"}}, fh)
+        page.rename_map.setText(rm)
+        page.rename_map.editingFinished.emit()
     if args.rename_map == "exclusions":
         rm = os.path.join(scratch, "exclusions.json")
         with open(rm, "w", encoding="utf-8") as fh:
@@ -614,6 +622,14 @@ def scenario_export(args, app, result: dict, scratch: str, bindir: str, git_log:
         result["tableResults"] = [page.table.item(r, 7).text() if page.table.item(r, 7) else ""
                                   for r in range(page.table.rowCount())]
         result["applyEnabledAfter"] = page.apply_btn.isEnabled()
+        # one apply per plan: the name typed again (and in another case) must not
+        # arm the plan that was just applied
+        retyped = []
+        for text in ("", plan.config.org, plan.config.org.swapcase()):
+            page.confirm.setText(text)
+            app.processEvents()
+            retyped.append(page.apply_btn.isEnabled())
+        result["applyEnabledAfterRetype"] = retyped
     result["ghCalls"] = _lines(os.environ["FAKE_GH_LOG"])
     result["gitCalls"] = _lines(git_log)
     bare = {}
@@ -646,6 +662,22 @@ def scenario_export(args, app, result: dict, scratch: str, bindir: str, git_log:
         result["preexisting"]["shaAfter"] = fixture_git(
             preexisting_bare, "rev-parse", result["preexisting"]["branch"])
     result["dialogsOpen"] = _dialogs(app, wiz)
+    if args.cli_no_probe:
+        cfg_path = os.path.join(scratch, "cli-no-probe.json")
+        data = world["cfg"].to_dict()
+        data["out_dir"] = os.path.join(scratch, "cli-no-probe-out")
+        with open(cfg_path, "w", encoding="utf-8") as fh:
+            json.dump(data, fh)
+        gh_before = len(_lines(os.environ["FAKE_GH_LOG"]))
+        proc = subprocess.run([sys.executable, "-m", "hugmesh_studio", "--generator-dir",
+                               args.generator_dir, "--config", cfg_path, "--org-export",
+                               "PLAN", "--no-probe"],
+                              cwd=os.path.join(args.generator_dir, "studio"),
+                              capture_output=True, text=True, timeout=300,
+                              env=dict(os.environ), check=False)
+        result["cliNoProbe"] = {"rc": proc.returncode, "stdout": proc.stdout,
+                                "stderrTail": proc.stderr[-1500:],
+                                "ghCalls": _lines(os.environ["FAKE_GH_LOG"])[gh_before:]}
     if args.terminal_line:
         # last, so every log read above is the WIZARD's own doing
         result["terminalPlan"] = _run_terminal_line(result["terminalLineBeforePlan"],
@@ -708,11 +740,16 @@ def main(argv: "list[str]") -> int:
                          "and run it through the CLI too")
     ap.add_argument("--plant-marker", default="",
                     help="export: commit a fake token into this source repository first")
-    ap.add_argument("--rename-map", choices=("none", "exclusions", "bad-target"),
+    ap.add_argument("--rename-map", choices=("none", "exclusions", "bad-target",
+                                             "shared-target"),
                     default="none",
                     help="export: point the Rename map field at a file excluding the "
-                         "planted path, or one renaming hugmesh-commons to a path "
-                         "that leaves the work folder")
+                         "planted path, one renaming hugmesh-commons to a path "
+                         "that leaves the work folder, or one renaming two "
+                         "repositories to the same target")
+    ap.add_argument("--cli-no-probe", action="store_true",
+                    help="export: after the walk, run the CLI's PLAN with --no-probe "
+                         "over the world's config and report what it printed")
     ap.add_argument("--plant-file", action="append", default=[], metavar="REPO:PATH=CONTENT",
                     help="export: commit this file into a source repository first "
                          "(backslash escapes in CONTENT are decoded); repeatable")

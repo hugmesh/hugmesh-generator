@@ -40,7 +40,8 @@ EXCLUDES ``CLAUDE.md``, any ``.claude/`` directory, ``.stack-src``, ``node_modul
 build output, worktree files and secret-shaped files (:data:`EXCLUDED_DIRS`,
 :data:`EXCLUDED_NAMES`, :data:`SECRET_GLOBS`), and the export REFUSES a repository —
 naming the file — when a banned marker (:data:`BANNED_MARKERS`: a co-author trailer,
-a tool footer, an assistant session link, an API key, a private-key header) is found
+a tool footer, an assistant session link, an API key, a PEM private-key header
+followed by a key body) is found
 in what would be published.
 
 THE RENAME MAP lives in one place (:func:`rename_rules`): repository names follow
@@ -100,7 +101,7 @@ __all__ = [
     "SubprocessRunner", "RunResult", "ExportCandidate",
     "BUILD_LIBRARY_REPOS", "GENERATOR_REPO", "SITE_REPO_SUFFIX",
     "VISIBILITY_CHOICES", "UPDATE_REFUSE", "UPDATE_BRANCH", "NOT_RENAMED",
-    "EXCLUDED_DIRS", "EXCLUDED_NAMES", "SECRET_GLOBS", "BANNED_MARKERS",
+    "EXCLUDED_DIRS", "EXCLUDED_NAMES", "SECRET_GLOBS", "SECRET_PATHS", "BANNED_MARKERS",
     "brand_from_org", "repo_target_name", "rename_rules", "rewrite_text",
     "domain_repo_names", "load_config", "load_rename_map", "candidates_from_file",
     "saved_mesh_candidates", "plan", "apply", "plan_lines", "result_lines",
@@ -130,7 +131,18 @@ EXCLUDED_NAMES = frozenset({"CLAUDE.md", ".e2e-credentials"})
 #: Secret-shaped file names (fnmatch on the base name) dropped from a snapshot.
 SECRET_GLOBS = ("*.pem", "*.key", "*.p12", "*.pfx", "*.jks", "*.keystore", ".env",
                 ".env.*", "id_rsa*", "id_ed25519*", "id_ecdsa*", ".netrc",
-                "*.secret", "*credentials*.json", "*.kubeconfig")
+                "*.secret", "*credentials*.json", "*.kubeconfig",
+                # package-index and registry logins, web-server password files, a
+                # signing key (.p8) and infrastructure state/variables
+                ".pypirc", ".git-credentials", ".htpasswd", ".yarnrc.yml", "*.p8",
+                "*.tfstate", "*.tfstate.backup", "*.tfvars")
+#: Secret files that are only secret at a PATH (a ``config.json`` is not one anywhere
+#: else): matched against the end of the repository-relative path.
+SECRET_PATHS = (".docker/config.json",)
+#: ``*.asc`` is an armored PGP file: a private key must not be published, a PUBLIC key
+#: (the generator ships the distribution's release key, which its build scripts read)
+#: must be, or the exported tree cannot build. Decided by the first line.
+_PUBLIC_ASC_HEADER = "-----BEGIN PGP PUBLIC KEY BLOCK-----"
 #: ``.env.*`` files that only SHOW the variable names (never values) and are kept.
 ENV_TEMPLATE_NAMES = frozenset({".env.example", ".env.sample", ".env.template"})
 #: An ``.npmrc`` is dropped only when it holds a login. A token-free one
@@ -152,7 +164,9 @@ BANNED_MARKERS = (
     ("tool footer", re.compile(re.escape(_TOOL_FOOTER) + r" \[")),
     ("robot footer", re.compile("\U0001F916")),
     ("assistant session link", re.compile(re.escape(_SESSION_URL), re.IGNORECASE)),
-    ("GitHub token", re.compile(r"\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{36}\b")),
+    # 36 or MORE characters: the length of a token is GitHub's to change, and a longer
+    # one must not slip past a rule that wanted exactly 36
+    ("GitHub token", re.compile(r"\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{36,}")),
     ("GitHub fine-grained token", re.compile(r"\bgithub_pat_[A-Za-z0-9_]{22,}\b")),
     ("AWS access key", re.compile(r"\bAKIA[0-9A-Z]{16}\b")),
     ("Slack token", re.compile(r"\bxox[baprs]-[A-Za-z0-9-]{10,}\b")),
@@ -317,6 +331,8 @@ class ExportConfig:
         out.extend(repo_rename_problems(rmap.get("repos")))
         if not self.remote_base.endswith("/"):
             out.append("remote_base must end with '/'")
+        if not out:
+            out.extend(target_collision_problems(self))
         return out
 
     def to_dict(self) -> dict:
@@ -406,6 +422,26 @@ def repo_rename_problems(repos) -> list[str]:
             for src, dst in repos.items()
             if not (isinstance(src, str) and isinstance(dst, str)
                     and _REPO_RE.match(src) and _REPO_RE.match(dst))]
+
+
+def target_collision_problems(cfg: ExportConfig) -> list[str]:
+    """Problem lines for repositories that would be exported to ONE target name (and
+    for one that would take the site repository's name). Each snapshot is a folder
+    named after its target, so two sources sharing a target would silently replace
+    each other: only the last would be exported, with exit 0. GitHub names are not
+    case-sensitive, so the comparison is not either."""
+    try:
+        names, _notes = domain_repo_names(cfg)
+    except (OSError, ValueError):
+        return []              # a set that cannot be read is reported where it is read
+    by_target: dict[str, list[str]] = {}
+    for name in names:
+        by_target.setdefault(repo_target_name(name, cfg).lower(), []).append(name)
+    by_target.setdefault(cfg.site_repo.lower(), []).append(f"the site repository {cfg.site_repo}")
+    return [f"{' and '.join(sources)} would be exported to the same target {target!r}; "
+            "give one of them another name in the rename map's repos table "
+            "(or drop it with skip_repos)"
+            for target, sources in by_target.items() if len(sources) > 1]
 
 
 _GENERIC_KEYS = set(ExportConfig.__dataclass_fields__)
@@ -817,7 +853,12 @@ class RepoPlan:
         return self.action.startswith("refused") or self.action.startswith("missing")
 
 
+#: What an unprobed plan says of a target: the run never asked GitHub, so it neither
+#: claims the repository exists nor that it does not (apply looks at it for real).
+NOT_LOOKED_AT = "not looked at"
+
 ACTIONS = ("create", "update (empty repository)", "exists (compared at apply)",
+           NOT_LOOKED_AT,
            "update via branch", "unchanged", "refused: banned marker",
            "refused: existing non-empty repository", "missing source")
 
@@ -912,6 +953,19 @@ def _excluded_reason(rel: str, workdir: str = "") -> str:
         except OSError:
             return "unreadable .npmrc (could hold a login)"
         return "npm login in .npmrc" if _NPMRC_LOGIN_RE.search(text) else ""
+    for g in SECRET_PATHS:
+        if rel == g or rel.endswith("/" + g):
+            return f"secret-shaped path ({g})"
+    if fnmatch.fnmatch(base, "*.asc"):
+        # fail closed: only a file that SAYS it is a public key is kept
+        try:
+            with open(os.path.join(workdir, rel), "rb") as fh:
+                first = fh.read(256).decode("utf-8", "replace").lstrip().splitlines()[:1]
+        except OSError:
+            return "unreadable *.asc (could be a private key)"
+        if not first or first[0].strip() != _PUBLIC_ASC_HEADER:
+            return "secret-shaped name (*.asc that is not a PGP public key)"
+        return ""
     for g in SECRET_GLOBS:
         if fnmatch.fnmatch(base, g):
             return f"secret-shaped name ({g})"
@@ -1109,10 +1163,12 @@ def _probe(runner: Runner, rp: RepoPlan, cfg: ExportConfig) -> None:
                     "name,isEmpty,visibility"], timeout=60)
     if r.returncode != 0:
         err = r.err.strip().lower()
-        if "could not resolve" in err or "not found" in err or "404" in err:
+        # only GitHub's own two spellings of 'no such repository': a bare "not found"
+        # also reads "gh: command not found", which is no answer about the repository
+        if "could not resolve to a repository" in err or "http 404" in err:
             rp.action = "create"
             return
-        rp.action = "exists (compared at apply)"
+        rp.action = NOT_LOOKED_AT
         rp.notes.append(f"gh repo view did not answer ({r.err.strip()[:120] or 'no gh'}): "
                         "apply decides create/update from the repository itself")
         return
@@ -1157,13 +1213,13 @@ def plan(cfg: ExportConfig, runner: Runner | None = None, *, probe: bool = True,
             if probe:
                 _probe(runner, rp, cfg)
             else:
-                rp.action = "exists (compared at apply)"
+                rp.action = NOT_LOOKED_AT
         repos.append(rp)
     site = _prepare_site(cfg, repos, out_dir, stamp)
     if probe:
         _probe(runner, site, cfg)
     else:
-        site.action = "exists (compared at apply)"
+        site.action = NOT_LOOKED_AT
     p = Plan(config=cfg, repos=repos, site=site,
              rename_rules=[f"{rx.pattern!s} -> {rep}  ({note})" for rx, rep, note in rules],
              not_renamed=list(NOT_RENAMED), notes=notes, out_dir=out_dir, stamp=stamp)
