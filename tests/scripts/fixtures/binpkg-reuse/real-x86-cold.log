@@ -1,0 +1,8 @@
+REAL-SHAPE EXCERPT for tests/scripts/test-binpkg-reuse-report.sh: header, group banner and the five system-group Emerging lines copied verbatim from the real x86 build.log (a native chroot build: no merge carries a root tail). Not a cold/warm pair.
+==== snap-build-x86 (snap-build-x86) start 20260924T063651Z brand=hugmesh role=pki env=test ====
+==> Emerge group: system
+>>> Emerging (1 of 5) virtual/libpcre2-internals-10.47::gentoo
+>>> Emerging (2 of 5) dev-lang/swig-4.3.1::gentoo
+>>> Emerging (3 of 5) sys-libs/libsepol-3.11::gentoo
+>>> Emerging (4 of 5) sys-libs/libselinux-3.11-r1::gentoo
+>>> Emerging (5 of 5) sys-apps/portage-3.0.82.2::gentoo

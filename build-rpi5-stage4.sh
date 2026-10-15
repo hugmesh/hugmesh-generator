@@ -51,6 +51,8 @@ source "${SCRIPT_DIR}/scripts/_download-lib.sh"
 # the build host's libcrypt provably supports it, SHA-512 crypt ($6$) fallback.
 # shellcheck source=scripts/_passhash-lib.sh
 source "${SCRIPT_DIR}/scripts/_passhash-lib.sh"
+# shellcheck source=scripts/_domain-idp-lib.sh
+source "${SCRIPT_DIR}/scripts/_domain-idp-lib.sh"
 # THE role vocabulary (scripts/_roles-lib.sh) — the SAME declaration the x86, jetson
 # and Studio channels read. rpi5 already spelled the node roles long; what it gains
 # here is accepting `be`/`fe` (the Studio persisted `be/rpi5` and `fe/rpi5` entry ids,
@@ -81,6 +83,17 @@ source "${SCRIPT_DIR}/scripts/_binpkg-pool-lib.sh"
 # docs/SHARED-BINPKG.md.
 # shellcheck source=scripts/_shared-assets-lib.sh
 source "${SCRIPT_DIR}/scripts/_shared-assets-lib.sh"
+# Mounts left under the build system by a crashed run are listed and refused
+# before rm -rf can go through them (#659). This builder shares only THAT part
+# of the resume library with the x86 builder: its static-library restore and
+# link test do not apply here, because the aarch64 cross-compiler links
+# against its own built-in sysroot (/usr/aarch64-unknown-linux-gnu, measured
+# with `aarch64-unknown-linux-gnu-gcc -print-sysroot` on the host and in the
+# builder image), never against ${SYSROOT}, whose stripped *.a files are
+# therefore never on the link path; and its image is filled from a tarball
+# forced to --owner=0 --group=0, so a user-owned sysroot cannot leak into it.
+# shellcheck source=scripts/_builder-resume-lib.sh
+source "${SCRIPT_DIR}/scripts/_builder-resume-lib.sh"
 # Signed-kernel artifact cache (G4): a cross-compiled kernel + module tree + DTBs is
 # reusable across images of the SAME board when board + kernel version + kernel config
 # + SIGNING KEY FINGERPRINT all match. See scripts/_kernel-cache-lib.sh.
@@ -935,6 +948,14 @@ OPTIONS
                DNS app is pruned. ACME is ADDITIVE to the internal cluster CA.
                Prints a LOUD announced banner before building.
 
+  Per-domain identity provider (issue #47)
+    --domain-idp DOMAIN=own|superdomain
+        Repeatable. Which Casdoor serves DOMAIN's sign-in: own = a dedicated
+        instance, superdomain = the mesh's (the default; bakes nothing). Only
+        `own` is recorded, as DOMAIN=own in /etc/hugmesh/domain-idp. DOMAIN
+        must be a lowercase DNS name and cannot be --cluster-domain. See
+        docs/DOMAIN-IDP.md.
+
   General
     --print-plan
         Resolve + validate all flags, print the build plan (PLAN_KEY=VALUE
@@ -1098,6 +1119,7 @@ while [[ $# -gt 0 ]]; do
         --env)                ENV="$2";                shift 2 ;;
         --cluster-domain|--domain) CLUSTER_DOMAIN="$2"; shift 2 ;;
         --superdomain) SUPERDOMAIN="$2"; shift 2 ;;
+        --domain-idp) domain_idp_add "${2:-}"; shift 2 ;;   # repeatable <domain>=own|superdomain (#509)
         --release-state)      RELEASE_STATE="$2";      shift 2 ;;
         --brand)              BRAND="$2";              shift 2 ;;
         --brand-title)        BRAND_TITLE="$2";        shift 2 ;;
@@ -1199,6 +1221,13 @@ done
 # arg parse, so every downstream word-split (`for s in ${OPTIONAL_SERVICES}`,
 # `case " ${OPTIONAL_SERVICES} "`) sees clean slugs. Mirrors EXCLUDE_SERVICES.
 OPTIONAL_SERVICES="${OPTIONAL_SERVICES//,/ }"
+
+# A list of ONLY explicit-deselect tokens ("-anubis") is a veto, not a selection: it
+# keeps the built-in default instead of replacing it (hugmesh-generator#384). Runs
+# AFTER the comma normalisation (so "-anubis,-foo" is seen as tokens) and BEFORE the
+# `all` expansion below (a list holding `all` is not negative-only, so that arm is
+# untouched). The rule lives in scripts/_optional-services-lib.sh, once, for both builders.
+_opt_negative_only_keeps_defaults
 
 # FULL-SET sentinel: OPTIONAL_SERVICES=all (or --all-services, which sets the same
 # token) expands to EVERY user-level slug. Done HERE — after arg parse, before the
@@ -1504,6 +1533,9 @@ _require_match "--org"           "${ORG}"            "${_RE_ORG}"
 _require_match "--cluster-domain" "${CLUSTER_DOMAIN}" "${_RE_DNS}"
 # Orchestration superdomain: DNS-validated like --cluster-domain, only when set.
 [ -n "${SUPERDOMAIN}" ] && _require_match "--superdomain" "${SUPERDOMAIN}" "${_RE_DNS}"
+# --domain-idp (#509): vocabulary + DNS shape were checked as each flag was read; this is
+# the cross-check against --cluster-domain.
+domain_idp_check "${CLUSTER_DOMAIN}" ""
 _require_match "--games-domain"  "${GAMES_DOMAIN}"   "${_RE_DNS}"
 _require_match "--hostname"      "${HOSTNAME}"       "${_RE_DNS}"
 _require_match "--user"          "${DEFAULT_USER}"   "${_RE_USER}"
@@ -2641,6 +2673,7 @@ if ${PRINT_PLAN}; then
     _plan BRAND              "${BRAND}"
     _plan CLUSTER_DOMAIN     "${CLUSTER_DOMAIN}"
     _plan SUPERDOMAIN        "${SUPERDOMAIN}"
+    domain_idp_plan_line   # PLAN_DOMAIN_IDP=<own domains>; prints nothing when none (#509)
     _plan HOSTNAME           "${HOSTNAME}"
     _plan K8S                "$(${ROLE_CLIENT} && echo none || { [ "${ROLE}" = "pki" ] && echo control-plane || echo worker; })"
     _plan OPTIONAL_SERVICES  "$(${ROLE_CLIENT} && echo "n/a (role=desktop; no cluster GitOps tree baked)" || echo "${OPTIONAL_SERVICES:-none}")"
@@ -3200,6 +3233,20 @@ info "stage3 seed verified: ${STAGE3_LOCAL}"
 
 banner "Extracting stage3 into sysroot"
 
+# NEVER touch a sysroot that still has mounts under it, on EITHER branch: the
+# disk-initramfs step below binds host /proc, /sys and /dev under it, and a
+# build killed in that step leaves them attached — the non-resume `rm -rf`
+# would then delete straight through host /dev. Same check and the same
+# refusal as the x86 builder (#659): the listing comes from the kernel's own
+# mount table (symlinks resolved, escapes undone), and the refusal prints every
+# mount as the umount command that removes it, once per stacked layer.
+if [ -d "${SYSROOT}" ]; then
+    _stale_mounts="$(hmr_stale_mounts "${SYSROOT}")"
+    if [ -n "${_stale_mounts}" ]; then
+        hmr_stale_mount_refuse "${SYSROOT}" "${_stale_mounts}"
+        exit 1
+    fi
+fi
 if [ -f "${SYSROOT}/etc/gentoo-release" ] && ${RESUME}; then
     info "Sysroot already populated and --resume set, skipping extraction"
 else
@@ -3664,6 +3711,14 @@ cp "${SHARED_SPECS}/usr/sbin/hugmesh-tor-reconcile"   "${SYSROOT}/usr/sbin/hugme
 # Its ingress half (#614): admits the exported onions as fe-gateway Ingress hosts from a
 # control-plane node; run by the same cron drop-in (*/5), inert without a hostname.
 cp "${SHARED_SPECS}/usr/sbin/hugmesh-tor-ingress-admit" "${SYSROOT}/usr/sbin/hugmesh-tor-ingress-admit"; chmod +x "${SYSROOT}/usr/sbin/hugmesh-tor-ingress-admit"
+# Its export half (#629, the node side of hugmesh-admin-bff-api#108): fetches admin-bff's
+# SIGNED per-node Tor export over the node's mTLS identity, verifies it against the baked
+# key-USB public half (tor-verify.sh sources the SAME registry-verify.sh baked above),
+# applies the managed upstream / domain-list files atomically, re-runs the reconcile, and
+# reports the exported onions back. Run every minute by the same cron drop-in, so it is
+# inert unless tor is selected; a node without node.env does nothing.
+cp "${SHARED_SPECS}/usr/sbin/hugmesh-tor-export-sync" "${SYSROOT}/usr/sbin/hugmesh-tor-export-sync"; chmod +x "${SYSROOT}/usr/sbin/hugmesh-tor-export-sync"
+cp "${SHARED_SPECS}/usr/lib/hugmesh/tor-verify.sh"    "${SYSROOT}/usr/lib/hugmesh/tor-verify.sh"
 cp "${SHARED_SPECS}/etc/init.d/hugmesh-tor-reconcile" "${SYSROOT}/etc/init.d/hugmesh-tor-reconcile"; chmod +x "${SYSROOT}/etc/init.d/hugmesh-tor-reconcile"
 cp "${SHARED_SPECS}/etc/cron.d/hugmesh-tor-reconcile"  "${SYSROOT}/etc/hugmesh/registry/cron-tor-reconcile"
 
@@ -3698,6 +3753,8 @@ if [ -n "${SUPERDOMAIN}" ]; then
     echo "${SUPERDOMAIN}" > "${SYSROOT}/etc/hugmesh/superdomain"
     info "Baked orchestration superdomain -> /etc/hugmesh/superdomain (${SUPERDOMAIN})"
 fi
+# Per-domain IdP choice (#509): /etc/hugmesh/domain-idp, own domains only; absent otherwise.
+domain_idp_bake "${SYSROOT}/etc/hugmesh"
 # Runtime ENV marker (test|prod). Read by bootstrap/provision; also documents
 # the image's posture. test => LAN wildcard DNS authoritative; prod => public.
 echo "${ENV}"            > "${SYSROOT}/etc/hugmesh/env"

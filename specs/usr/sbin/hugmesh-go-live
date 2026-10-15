@@ -32,7 +32,9 @@
 #   commit --provider ID   the TERMINAL action: after a confirmation gate, WRITE
 #                          /etc/hugmesh/go-live (and, with --persist-public,
 #                          release-state=public). Requires -y/--yes on a
-#                          non-interactive shell (fail-safe).
+#                          non-interactive shell (fail-safe). REFUSED for a
+#                          provider whose mechanism is the onion: a Tor address
+#                          needs no public flip (see refuse_onion_commit).
 #   rollback               DELETE the marker (and, with --revert-release-state,
 #                          set release-state=internal). Re-closes within 60s.
 #
@@ -235,9 +237,10 @@ cmd_plan() {
     # want — the exact footgun the hidden service avoids. See instructions.txt.
     if [ "$(glp_mechanism "${provider}")" = "onion" ]; then
         echo "NEXT: the .onion is LIVE whenever the node's tor service is running (built"
-        echo "  with --with-tor) — see onion.txt / instructions.txt. NO public flip is"
-        echo "  needed: the host stays INTERNAL and stays reachable over Tor. Only run"
-        echo "  'commit' if you ALSO want a clearnet edge live alongside the onion."
+        echo "  with --with-tor) — see onion.txt / instructions.txt. A Tor address needs"
+        echo "  no public flip: the host stays INTERNAL and stays reachable over Tor, and"
+        echo "  'commit' is refused for ${provider}. To ALSO serve a clearnet edge, plan"
+        echo "  a public provider and commit that one."
     else
         echo "NEXT: apply the edge (records/creds above), verify propagation, THEN run:"
         echo "  hugmesh-go-live commit --provider ${provider}   # trips /etc/hugmesh/go-live"
@@ -257,12 +260,27 @@ confirm() {
     case "${ans}" in y|Y|yes|YES) return 0 ;; *) return 1 ;; esac
 }
 
+# ── The onion refusal (hugmesh-generator#654, D12) ───────────────────────────────
+# An onion is served OUTBOUND by the node's own Tor daemon and is reachable with the
+# firewall CLOSED. The marker's one effect is that hugmesh-firewall-reconcile opens
+# public 80/443 — the exact thing a Tor-only operator chose not to have. The plan
+# text used to merely warn about this; nothing enforced it, so a front-end (or a
+# person copying the generic NEXT line) could trip the public flip for a .onion.
+# The refusal lives HERE, in the shared driver, so every front-end inherits it.
+refuse_onion_commit() {
+    local provider="$1"
+    [ "$(glp_mechanism "${provider}")" = "onion" ] || return 0
+    echo "A Tor address needs no public flip." >&2
+    die "commit refused for '${provider}': its .onion is reachable with the host INTERNAL, and the marker would only open public ports 80 and 443. Nothing changed (posture still $(effective_posture)). To ALSO serve a clearnet edge, plan a public provider and commit that one."
+}
+
 # ── Sub: commit (TERMINAL — writes the marker; the ONLY thing that flips live) ───
 cmd_commit() {
     local provider="$1"
     load_context; load_registry
     [ -n "${provider}" ] || die "commit: --provider is required"
     glp_known "${provider}" || die "commit: unknown provider '${provider}'"
+    refuse_onion_commit "${provider}"
 
     echo "About to GO LIVE for domain '${GL_DOMAIN:-<unset>}' via provider '${provider}'."
     echo "  -> writes ${GO_LIVE_MARKER} (host flips to PUBLIC within 60s via firewall-reconcile)"
@@ -339,7 +357,8 @@ USAGE:
   hugmesh-go-live rollback [--revert-release-state] [-y|--yes]
 
 DEFAULT is a dry-run: 'plan' emits artifacts and NEVER changes posture.
-Only 'commit' writes /etc/hugmesh/go-live (after a confirmation gate).
+Only 'commit' writes /etc/hugmesh/go-live (after a confirmation gate), and it
+is refused for a Tor address (tor-onion): a Tor address needs no public flip.
 See docs/GO-LIVE-WIZARD.md.
 EOF
 }

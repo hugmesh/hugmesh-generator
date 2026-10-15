@@ -136,7 +136,7 @@ spec:
             # image-builder-registry ExternalSecret (manifests/external-secrets/
             # image-builder-externalsecrets.yaml): a dockerconfigjson with write_registry scope
             # for registry.hugmesh.net, sourced from Vault secret/<brand>/harbor-robots (push_name/push_secret) via the harbor-provision Job.
-            # NEVER in git. Mirrors the #110 service-catalog-builder-registry contract.
+            # NEVER in git. Same Vault source + auth shape as the service-catalog-registry-credentials Secret (which carries it as an Opaque `config.json`; this one stays a dockerconfigjson).
             secretName: image-builder-registry
             items:
               - key: .dockerconfigjson
