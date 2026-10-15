@@ -19,13 +19,13 @@ Options/Driver):
     creds_file, out_dir, keys_dir). ``to_cli_args()`` marshals them into the driver's
     flags in the driver's pinned order (--provider --image --domain --region
     --creds-file --out-dir --keys-dir), so the argv reads identically across every
-    face. ``creds_file`` is a PATH (0600, operator custody) — the path rides argv,
+    face. ``creds_file`` is a PATH (0600, kept by the operator) — the path rides argv,
     the contents never do. ``creds`` is pasted credential CONTENT held ONLY
     transiently for the life of a run (never in ``to_cli_args()``, never on argv,
     never persisted) — a run stages it into a 0600 ``--creds-file`` tempfile and
-    shreds it in ``finally``, exactly the phone-wizard auth-key custody.
+    shreds it in ``finally``, exactly how the phone wizard handles its auth key.
   - ``CloudDeploy`` — resolves the driver path (honouring the SNAP_CLOUD_DEPLOY_CMD
-    env seam the ncurses + the deploy tests use), gates ``available()`` on the script
+    env override point the ncurses + the deploy tests use), gates ``available()`` on the script
     being executable, parses the driver's ``list`` TAB table for the provider picker
     (``providers()`` — THE parseable registry API), renders a PURE text ``preview()``
     (command + knobs + BLOCKERS tail; no subprocess, no files — the live plan pane),
@@ -41,7 +41,7 @@ the emitted apply.sh/destroy.sh mutate anything, and both re-confirm themselves.
 
 This module imports only os/shutil/subprocess/tempfile/threading/shlex/dataclasses —
 NO Qt — so it runs in the Qt-free/system-python environment CI uses, and is unit-
-testable against a stub driver through the env seam.
+testable against a stub driver through the env override point.
 """
 from __future__ import annotations
 
@@ -54,7 +54,7 @@ import threading
 from collections.abc import Callable
 from dataclasses import dataclass
 
-# The env seam the ncurses deploy_screen honours and the deploy tests override:
+# The env override point the ncurses deploy_screen honours and the deploy tests override:
 # SNAP_CLOUD_DEPLOY_CMD wins over the in-repo specs/usr/sbin/hugmesh-cloud-deploy.
 ENV_DRIVER = "SNAP_CLOUD_DEPLOY_CMD"
 DRIVER_REL = ("specs", "usr", "sbin", "hugmesh-cloud-deploy")
@@ -63,7 +63,7 @@ DRIVER_REL = ("specs", "usr", "sbin", "hugmesh-cloud-deploy")
 # list is the registry table, plan renders files into --out-dir (offline), status
 # only reads emitted state hints. apply ALSO streams — but only behind the page's
 # explicit ack checkbox, and the driver still owns its own confirmation (fail-closed
-# without a TTY; CD_ASSUME_YES is the driver's TEST-ONLY seam, never set here).
+# without a TTY; CD_ASSUME_YES is the driver's TEST-ONLY override point, never set here).
 STREAM_VERBS = ("list", "plan", "status")
 # The two mutating verbs whose driver-side confirmation REQUIRES a real TTY.
 MUTATING_VERBS = ("apply", "destroy")
@@ -165,7 +165,7 @@ class CloudDeploy:
     # ── driver location ──────────────────────────────────────────────────────────
     @property
     def driver_path(self) -> str:
-        """The resolved driver: ``$SNAP_CLOUD_DEPLOY_CMD`` (test seam) wins over the
+        """The resolved driver: ``$SNAP_CLOUD_DEPLOY_CMD`` (test override point) wins over the
         in-repo ``specs/usr/sbin/hugmesh-cloud-deploy`` — the exact resolution
         the ncurses deploy_screen uses."""
         return os.environ.get(ENV_DRIVER) or os.path.join(self.generator_dir, *DRIVER_REL)
@@ -254,7 +254,7 @@ class CloudDeploy:
                     if mode & 0o077:
                         problems.append(
                             f"creds file {cf} is group/world-readable "
-                            f"({mode:03o}) — chmod 600 it (credential custody)")
+                            f"({mode:03o}) — chmod 600 it so only you can read it")
                 except OSError:
                     pass
         dom = o.domain.strip()
@@ -316,7 +316,7 @@ class CloudDeploy:
     @staticmethod
     def _stage_creds(secret: str) -> str:
         """Write pasted creds to a fresh 0600 temp file and return its path (for
-        ``--creds-file``). No trailing newline (byte-exact custody, the phone
+        ``--creds-file``). No trailing newline (kept byte-exact, the phone
         _stage_authkey contract). The caller shreds it in ``finally``."""
         fd, path = tempfile.mkstemp(prefix=".cloud-deploy-creds-")
         try:
@@ -481,12 +481,23 @@ def main(argv: list[str] | None = None) -> int:
                          "contents stay in your custody)")
     ap.add_argument("--out-dir", default="", help="where plan renders its artifacts")
     ap.add_argument("--keys-dir", default="")
+    # IdP passthrough (I7): the menu, the Makefile deploy-* delegates and
+    # CloudDeployOptions.to_cli_args() all thread these; the driver owns the value
+    # validation (casdoor|entra|aws|oidc, https:// shapes), so they pass through.
+    ap.add_argument("--idp", default="",
+                    help="identity provider: casdoor (built-in default, adds nothing) "
+                         "| entra | aws | oidc (external: needs --idp-issuer)")
+    ap.add_argument("--idp-issuer", default="", help="external IdP issuer URL (https://)")
+    ap.add_argument("--idp-client-id", default="", help="optional IdP client id")
+    ap.add_argument("--idp-jwks", default="", help="optional IdP JWKS URL override")
     ap.add_argument("--generator-dir", default=_REPO_ROOT)
     ns = ap.parse_args(argv)
 
     opts = CloudDeployOptions(
         provider=ns.provider, image=ns.image, domain=ns.domain, region=ns.region,
-        creds_file=ns.creds_file, out_dir=ns.out_dir, keys_dir=ns.keys_dir)
+        creds_file=ns.creds_file, out_dir=ns.out_dir, keys_dir=ns.keys_dir,
+        idp=ns.idp, idp_issuer=ns.idp_issuer, idp_client_id=ns.idp_client_id,
+        idp_jwks=ns.idp_jwks)
     cd = CloudDeploy(ns.generator_dir, opts)
 
     if ns.verb == "preview":

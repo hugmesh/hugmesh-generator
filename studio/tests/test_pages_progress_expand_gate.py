@@ -47,7 +47,7 @@ from hugmesh_studio.gui.pages import progress as progress_mod           # noqa: 
 STUDIO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 GENERATOR_DIR = os.path.dirname(STUDIO_ROOT)
 
-# ── the coalescing seam, in ONE place ────────────────────────────────────────────────
+# ── the coalescing override point, in ONE place ────────────────────────────────────────────────
 # ProgressPage._on_line is now the worker's ENQUEUE-ONLY slot: it banks the line and the
 # ~20 Hz _drain_lines() runs the parse/render/append pipeline for the whole batch (see
 # tests/test_progress_log_coalescing.py for the contract, and the coalescing note in

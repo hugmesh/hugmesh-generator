@@ -78,6 +78,11 @@ files_read_usr_files(hugmesh_policy_sync_t)
 logging_send_syslog_msg(hugmesh_policy_sync_t)
 
 ########################################
+# NOT GRANTED YET: restarting headscale. Under policy.mode:file the agent's apply leg
+# runs `rc-service headscale restart` (policy.hujson is read at startup only), which
+# needs a transition to the init domain. Nothing here allows it; add it with the rest of
+# the AVC pass. Moot once policy.mode:database lands (hugmesh-generator#634).
+#
 # NO net_admin, NO storage, NO setenforce, NO write outside /etc/headscale +
 # the registry cache reads. The headscale socket reload + the exact policy
 # directory type are the two items to confirm/narrow in the AVC pass.

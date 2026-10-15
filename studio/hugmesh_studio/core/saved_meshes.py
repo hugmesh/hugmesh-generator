@@ -149,6 +149,42 @@ def _now() -> str:
     return datetime.now().astimezone().isoformat(timespec="seconds")
 
 
+def _safe_id(rec_id: str) -> bool:
+    """A record id that can only name a file DIRECTLY inside ``meshes_dir()``: non-empty,
+    no separator, not ``.``/``..``. (The minted shape is :func:`new_id`'s; hand-written
+    ids in old records are tolerated so long as they cannot walk.)"""
+    return (isinstance(rec_id, str) and rec_id not in ("", ".", "..")
+            and "/" not in rec_id and "\\" not in rec_id and os.sep not in rec_id
+            and "\0" not in rec_id)
+
+
+def _inside_meshes(path: str) -> bool:
+    base = os.path.normpath(meshes_dir())
+    try:
+        return os.path.commonpath([base, os.path.normpath(path)]) == base \
+            and os.path.normpath(path) != base
+    except ValueError:                           # e.g. different drives
+        return False
+
+
+def _copy_path(entry) -> str | None:
+    """The absolute path of a record's credential copy, or ``None`` when the pointer is
+    not a plain path INSIDE ``meshes_dir()``.
+
+    A record is JSON on a disk anyone can write to; ``os.path.join(meshes_dir(), x)``
+    discards ``meshes_dir()`` when ``x`` is absolute and walks out with ``..`` (#363),
+    which let a record point a restore's seeder at, or copy into the generator checkout,
+    any readable file. Every read and write of a copy goes through here.
+    """
+    if not isinstance(entry, dict):
+        return None
+    rel = str(entry.get("copy") or "")
+    if not rel or os.path.isabs(rel) or "\0" in rel:
+        return None
+    path = os.path.normpath(os.path.join(meshes_dir(), rel))
+    return path if _inside_meshes(path) else None
+
+
 # ── the record ─────────────────────────────────────────────────────────────────
 @dataclass
 class SavedMesh:
@@ -271,7 +307,11 @@ class SavedMesh:
         for key in ("e2e_file", "secrets_json"):
             entry = self.credentials.get(key) or {}
             if isinstance(entry, dict) and entry.get("copied") and entry.get("copy"):
-                out.append(os.path.join(meshes_dir(), str(entry["copy"])))
+                # An out-of-tree pointer is REPORTED as a copy that is not there (a path
+                # that can never be a file), so the plan BLOCKS — it never reads it
+                # (#363). Fail closed, not silently "no copies declared".
+                out.append(_copy_path(entry) or os.path.join(
+                    meshes_dir(), ".refused-pointer-" + os.path.basename(str(entry["copy"]))))
         return out
 
     def has_credential_copies(self) -> bool:
@@ -325,7 +365,16 @@ def save(rec: SavedMesh) -> str:
 def load(path: str) -> SavedMesh:
     """Load one record; raises OSError/ValueError on a missing/corrupt file."""
     with open(path, encoding="utf-8") as fh:
-        return SavedMesh.from_dict(json.load(fh))
+        rec = SavedMesh.from_dict(json.load(fh))
+    # The id names the side dir and is joined into paths (path(), copy_dir(), delete()):
+    # a record whose id is not safe, or disagrees with the file it came from, is
+    # tampered or mis-copied. Refuse it here so scan() surfaces it as an `unreadable`
+    # row (deletable BY PATH) instead of handing out a record that can walk (#363).
+    stem = os.path.basename(path)
+    stem = stem[:-5] if stem.endswith(".json") else stem
+    if not _safe_id(rec.id) or rec.id != stem:
+        raise ValueError(f"saved-mesh record id {rec.id!r} does not match its file")
+    return rec
 
 
 def scan() -> tuple[list[SavedMesh], list[str]]:
@@ -358,6 +407,33 @@ def find(mesh_id: str) -> SavedMesh | None:
     return None
 
 
+def latest_for_checkout(generator_dir: str,
+                        hostname: str | None = None) -> SavedMesh | None:
+    """The most recently SAVED record that describes the mesh this checkout drives
+    (:meth:`SavedMesh.same_checkout` — same generator dir, same host), or None.
+
+    "Most recent" is ``updated`` (a re-save moves a record forward), falling back to
+    ``created`` and then the sortable id. Pure file reads, no docker — the one reader
+    the node-image flows use to learn what a saved local mesh RAN (its domain, its
+    services and therefore whether it ran Tor, #579). ``hostname`` defaults to this
+    host; pass ``""`` to match any host."""
+    host = socket.gethostname() if hostname is None else hostname
+    mine = [r for r in scan()[0] if r.same_checkout(generator_dir, host)]
+    if not mine:
+        return None
+    return max(mine, key=lambda r: (_stamp(r.updated) or _stamp(r.created), r.id))
+
+
+def _stamp(value: str) -> float:
+    """An ISO-8601 record timestamp as epoch seconds (0.0 when unparseable). Parsed
+    rather than string-compared: ``_now()`` writes the LOCAL offset, so two records
+    either side of a DST change would otherwise sort by their text."""
+    try:
+        return datetime.fromisoformat(str(value)).timestamp()
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def _is_record_copy_dir(path: str, rec_id: str) -> bool:
     """Safety shape-check for ANY rmtree: True only when ``path`` matches the
     ``<state>/meshes/<id>`` footprint :meth:`SavedMesh.copy_dir` mints — the
@@ -380,6 +456,13 @@ def delete(rec: SavedMesh, *, remove_copies: bool = True) -> bool:
     nothing under the generator tree. The running mesh is untouched by design; the
     UI says so where the operator presses it.
     """
+    # The record FILE is checked like the side dir is: an id that walks ('../../x')
+    # made rec.path() resolve outside <state>/meshes and os.remove() deleted it (#363).
+    # Refuse, and say so — the caller's tampered record is surfaced as unreadable by
+    # scan() and removed by path (delete_path), which is itself pinned to meshes_dir().
+    if not (_safe_id(rec.id) and os.path.dirname(os.path.normpath(rec.path()))
+            == os.path.normpath(meshes_dir())):
+        return False
     try:
         os.remove(rec.path())
     except OSError:
@@ -407,7 +490,7 @@ def delete_path(path: str) -> None:
 # ── small blocking helpers (docker / git / hashing) ────────────────────────────
 def _run(args: list[str], *, cwd: str | None = None,
          timeout: int = _CMD_TIMEOUT) -> tuple[int, str]:
-    """One subprocess call. Never raises — a missing binary or a wedged daemon is
+    """One subprocess call. Never raises — a missing binary or a hung daemon is
     an honest "unknown", not a traceback out of a worker thread."""
     try:
         r = subprocess.run(args, cwd=cwd, capture_output=True, text=True,
@@ -727,25 +810,35 @@ def _credential_pointers(rec: SavedMesh, boot, *, copy: bool) -> dict:
 
 
 # ── live state (BLOCKING) + the PURE plan over it ──────────────────────────────
-def _compose_running(project: str) -> bool:
+def _compose_running(project: str) -> bool | None:
     """Is anything of this compose project RUNNING now? ``docker ps`` without
     ``-a`` on purpose: a halted mesh still owns its (stopped) containers, and a
-    stopped container must not read as "a mesh is up"."""
+    stopped container must not read as "a mesh is up".
+
+    Tri-state (#361): ``None`` = docker did not answer (non-zero exit, hang past the
+    timeout, binary missing). A dead daemon is NOT "nothing is running" — the caller
+    would then offer a restore over a mesh that may be up."""
     rc, out = _run(["docker", "ps", "--filter",
                     f"label=com.docker.compose.project={project}", "-q"],
                    timeout=15)
-    return rc == 0 and bool(out.strip())
+    if rc != 0:
+        return None
+    return bool(out.strip())
 
 
-def _images_present(project: str) -> bool:
+def _images_present(project: str) -> bool | None:
     """The SAME set :meth:`.LocalStackNode.cold_build_expected` reads, so this
     module's "images are present" can never disagree with the page's own
-    cold-build warning."""
+    cold-build warning. ``None`` = docker did not answer (see
+    :func:`_compose_running`)."""
+    missing = False
     for svc in PRIVATE_ARTIFACT_SERVICES:
         rc, out = _run(["docker", "images", "-q", f"{project}-{svc}"], timeout=15)
-        if rc != 0 or not out.strip():
-            return False
-    return True
+        if rc != 0:
+            return None
+        if not out.strip():
+            missing = True
+    return not missing
 
 
 def probe_state(rec: SavedMesh, *, project: str = "") -> dict:
@@ -757,13 +850,21 @@ def probe_state(rec: SavedMesh, *, project: str = "") -> dict:
     """
     proj = project or str((rec.lanes or {}).get("compose_project")
                           or vaults.DEFAULT_PROJECT)
-    try:
-        live = {v.name for v in vaults.list_volumes(proj)}
-    except Exception:
-        live = set()
     want = rec.volume_names()
-    present = [n for n in want if n in live]
-    missing = [n for n in want if n not in live]
+    try:
+        live = {v.name for v in vaults.list_volumes(proj, strict=True)}
+    except Exception:
+        # docker did not answer (a failed/hung `docker volume ls`, or anything raised):
+        # the volumes are UNKNOWN. Reporting them all missing ("gone (cleaned)") is the
+        # #361 fail-open — a claim about the operator's data nothing established.
+        live = None
+    unanswered: list[str] = []
+    if live is None:
+        unanswered.append("volumes")
+        present, missing = [], []
+    else:
+        present = [n for n in want if n in live]
+        missing = [n for n in want if n not in live]
 
     e2e = (rec.credentials or {}).get("e2e_file") or {}
     saved_sha = str(e2e.get("sha256") or "")
@@ -784,15 +885,24 @@ def probe_state(rec: SavedMesh, *, project: str = "") -> dict:
         if head_now and row.get("head") and head_now != row.get("head"):
             drift.append(f"{row.get('name')} (HEAD moved)")
 
+    images_now = _images_present(proj or _COMPOSE_PROJECT)
+    running_now = _compose_running(proj)
+    if images_now is None:
+        unanswered.append("images")
+    if running_now is None:
+        unanswered.append("containers")
+
     return {
         # a record with NO inventory is a cold restore, never an unknown one:
         # the probe DID answer, and "unknown" is reserved for "not asked yet"
-        "volumes_present": bool(want) and not missing,
+        "volumes_present": None if live is None else (bool(want) and not missing),
         "volumes_seen": len(present),
         "volumes_missing": tuple(missing),
-        "images_present": _images_present(proj or _COMPOSE_PROJECT),
+        "images_present": images_now,
         "creds_match": creds_match,
-        "mesh_running": _compose_running(proj),
+        "mesh_running": running_now,
+        # which facts docker did not answer (#361) — empty when it answered them all
+        "unanswered": tuple(unanswered),
         "source_ok": source_ok,
         "source_drift": tuple(drift),
         "copies_missing": tuple(p for p in rec.credential_copies()
@@ -826,12 +936,13 @@ class RestorePlan:
 
 
 def restore_plan(rec: SavedMesh, *, volumes_present: bool | None = None,
-                 images_present: bool = False, creds_match: bool = False,
-                 mesh_running: bool = False, source_ok: bool = True,
+                 images_present: bool | None = False, creds_match: bool = False,
+                 mesh_running: bool | None = False, source_ok: bool = True,
                  copies_missing: tuple[str, ...] = (),
                  source_drift: tuple[str, ...] = (),
                  volumes_missing: tuple[str, ...] = (),
-                 volumes_seen: int = 0) -> RestorePlan:
+                 volumes_seen: int = 0,
+                 unanswered: tuple[str, ...] = ()) -> RestorePlan:
     """PURE given probe results (:func:`probe_state` gathers them).
 
     Three cases, and the tri-state that is not a case:
@@ -848,7 +959,10 @@ def restore_plan(rec: SavedMesh, *, volumes_present: bool | None = None,
     3. SOURCE MOVED / different HEAD -> still allowed, with the drift named: the
        images are rebuilt from the tree as it is NOW.
 
-    ``volumes_present=None`` is UNKNOWN and renders as unknown. A tri-state matters
+    ``volumes_present`` / ``images_present`` / ``mesh_running`` are each tri-state
+    (#361): ``None`` = docker did not answer. Any ``None`` makes the plan
+    ``MODE_UNKNOWN`` (never a Start or a Restore), except that a mesh KNOWN to be
+    running still blocks. ``volumes_present=None`` is UNKNOWN and renders as unknown. A tri-state matters
     here for the same reason it does on the page: telling an operator their volumes
     are gone because a probe has not answered yet is a claim about their data that
     nothing established.
@@ -886,6 +1000,14 @@ def restore_plan(rec: SavedMesh, *, volumes_present: bool | None = None,
         warn.append("source drift: " + ", ".join(source_drift)
                     + " — images are rebuilt from the tree as it is now")
 
+    if unanswered or mesh_running is None or images_present is None:
+        return RestorePlan(
+            MODE_UNKNOWN,
+            "Docker did not answer"
+            + (f" ({', '.join(unanswered)})" if unanswered else "")
+            + ", so what is on this machine cannot be told right now — neither "
+              "Start nor Restore is offered until it does.",
+            tuple(warn), vol_text)
     if volumes_present is None:
         return RestorePlan(MODE_UNKNOWN, "Checking what is on this machine…",
                            tuple(warn), vol_text)
@@ -947,8 +1069,9 @@ def restore_env(rec: SavedMesh) -> dict[str, str]:
     """
     env: dict[str, str] = {}
     e2e = (rec.credentials or {}).get("e2e_file") or {}
-    if e2e.get("copied") and e2e.get("copy"):
-        env["E2E_CREDENTIALS_FILE"] = os.path.join(meshes_dir(), str(e2e["copy"]))
+    e2e_copy = _copy_path(e2e) if e2e.get("copied") else None
+    if e2e_copy:
+        env["E2E_CREDENTIALS_FILE"] = e2e_copy
     user = str((rec.credentials or {}).get("superadmin_username") or "")
     if user:
         env["CASDOOR_SUPERADMIN_USERNAME"] = user
@@ -963,9 +1086,9 @@ def _saved_superadmin_password(rec: SavedMesh) -> str:
     never out of the record, which has never held it. Returns "" when no copy was
     made, which is exactly the case whose consequence the plan already states."""
     entry = (rec.credentials or {}).get("secrets_json") or {}
-    if not (entry.get("copied") and entry.get("copy")):
+    path = _copy_path(entry) if entry.get("copied") else None
+    if not path:
         return ""
-    path = os.path.join(meshes_dir(), str(entry["copy"]))
     brand = str((rec.config or {}).get("brand") or "hugmesh")
     try:
         with open(path, encoding="utf-8") as fh:
@@ -974,6 +1097,35 @@ def _saved_superadmin_password(rec: SavedMesh) -> str:
         return str(sa.get("password") or "")
     except (OSError, ValueError, AttributeError):
         return ""
+
+
+def _write_private_copy(src: str, target: str) -> bool:
+    """Copy ``src`` to ``target`` so the new file is 0600 from its FIRST byte: written
+    through an ``O_EXCL`` 0600 temp file in the target's own dir, then ``os.replace``d.
+    ``copyfile`` + ``chmod`` created a fresh target at ``0666 & ~umask`` (0644 under
+    umask 022) until the chmod (#363); ``tests/stack/e2e-password.sh`` does it this way."""
+    tmp = f"{target}.{os.getpid()}.tmp"
+    try:
+        os.makedirs(os.path.dirname(target), exist_ok=True)
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        try:
+            with os.fdopen(fd, "wb") as out, open(src, "rb") as inp:
+                shutil.copyfileobj(inp, out)
+        except BaseException:
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+            raise
+        os.chmod(tmp, 0o600)            # an O_CREAT mode is masked by umask; pin it
+        os.replace(tmp, target)
+        return True
+    except OSError:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        return False
 
 
 def put_copies_back(rec: SavedMesh, *, e2e_target: str, secrets_target: str,
@@ -992,20 +1144,13 @@ def put_copies_back(rec: SavedMesh, *, e2e_target: str, secrets_target: str,
     restored: list[str] = []
     for key, target in (("e2e_file", e2e_target), ("secrets_json", secrets_target)):
         entry = (rec.credentials or {}).get(key) or {}
-        if not (entry.get("copied") and entry.get("copy")):
-            continue
-        src = os.path.join(meshes_dir(), str(entry["copy"]))
-        if not os.path.isfile(src):
+        src = _copy_path(entry) if entry.get("copied") else None
+        if not src or not os.path.isfile(src):
             continue
         if only_if_changed and _sha256(target) == _sha256(src):
             continue
-        try:
-            os.makedirs(os.path.dirname(target), exist_ok=True)
-            shutil.copyfile(src, target)
-            os.chmod(target, 0o600)
+        if _write_private_copy(src, target):
             restored.append(os.path.basename(target))
-        except OSError:
-            continue
     return restored
 
 

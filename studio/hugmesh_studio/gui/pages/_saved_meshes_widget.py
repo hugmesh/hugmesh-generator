@@ -264,10 +264,15 @@ class SavedMeshesWidget(QtWidgets.QWidget):
                 kw = {k: probe[k] for k in (
                     "volumes_present", "images_present", "creds_match",
                     "mesh_running", "source_ok", "copies_missing", "source_drift",
-                    "volumes_missing", "volumes_seen") if k in probe}
+                    "volumes_missing", "volumes_seen", "unanswered") if k in probe}
                 # the page's own answer counts too: a mesh it knows is up blocks
-                # a Start even if the docker probe has not caught up
-                kw["mesh_running"] = bool(kw.get("mesh_running")) or self._mesh_up is True
+                # a Start even if the docker probe has not caught up. A probe that
+                # could not answer (None, #361) stays None — `bool(None)` here read
+                # as "nothing running" and offered Restore over a mesh that may be up;
+                # the page's own `_mesh_up` False is no better evidence (its status()
+                # also reports running=False when docker raises).
+                if self._mesh_up is True:
+                    kw["mesh_running"] = True
                 r.plan = sm.restore_plan(r.rec, **kw)
             elif probe:
                 r.plan = sm.RestorePlan(

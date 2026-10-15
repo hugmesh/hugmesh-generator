@@ -1,0 +1,3 @@
+t+1s pods=69 notReady/Running=2
+t+11s pods=69 notReady/Running=2
+t+21s pods=69 notReady/Running=0

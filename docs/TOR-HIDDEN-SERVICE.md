@@ -10,42 +10,353 @@ Browser — **no public IP, no dynamic DNS, no Cloudflare**. This is INBOUND rea
 `tor` is a **node-scoped, DEFAULT-OFF** optional service (`scope: node` in
 [`specs/cluster/optional-services.yaml`](../specs/cluster/optional-services.yaml)). It is
 **not** a cluster Application — it owns no `apps[]`, gateway host, or route-access rows.
-Selection drives two NODE-level gates (identical in spirit to egress-vpn):
+Selection drives two NODE-level gates in both image builders (identical in spirit to
+egress-vpn), and both gates call one predicate, `_tor_node_selected` = *tor selected
+**and** a cluster-node role*:
 
-| When `tor` is …      | net-vpn/tor package | `tor` + `hugmesh-tor-reconcile` services | `tor-onion-marked` NetworkPolicy |
+| When `tor` is …      | net-vpn/tor package | `tor` + `hugmesh-tor-reconcile` services | `tor-onion-marked` NetworkPolicy (`apps/08b-networkpolicy-tor.yaml`) |
 |----------------------|---------------------|---------------------------------------------|----------------------------------|
-| **selected**         | added to the image  | linked into the default runlevel            | kept                             |
-| **not selected** (default) | absent        | not linked (daemon simply absent)           | pruned by `gate_optional_services` |
+| **selected** on a cluster-node role | added to the image | **both** linked into the default runlevel | its Application is baked (MANUAL sync) |
+| **not selected** (default) | absent        | neither linked (daemon simply absent)       | its Application is pruned by `gate_optional_services`, so the cluster never gets it |
+| selected on a CLIENT / standalone / unaffiliated desktop | absent | neither linked | n/a (no cluster tree) — the selection is **dropped with a warning** right after the role is resolved |
+
+Both builders' `--print-plan` states the outcome as `PLAN_TOR_ONION` — `off`, or
+`on packages=net-vpn/tor services=tor hugmesh-tor-reconcile` — computed from the same
+predicate and arrays the gates use. The package and service lists must equal the tor
+entry's `nodePackages` / `nodeServices`; `tests/scripts/test-tor-node-contract.sh`
+enforces that.
 
 It reuses the **distro** Tor daemon (`net-vpn/tor` → `/etc/init.d/tor`, runs as the
 `tor:tor` user). We do **not** ship a bespoke Tor runner; we own only the managed
 `torrc` and the onion-key custody, via a small reconcile agent.
 
+**Two owners, one daemon (decision 70 = B on hugmesh-generator#347).** OpenRC supervises
+the daemon through the linked `tor` service. `hugmesh-tor-reconcile` is an OpenRC oneshot
+ordered `before tor`, plus a cron drop-in with an `@reboot` entry (after a 90 s delay) and a
+daily one. It never execs tor itself, and it converges whatever state it finds:
+
+| tor is …                       | cron, or `/usr/sbin/hugmesh-tor-reconcile` run directly | the OpenRC service — at boot, or `rc-service hugmesh-tor-reconcile restart` (`RC_SVCNAME=hugmesh-tor-reconcile`) |
+|--------------------------------|--------------------|-----------------------------------------------------|
+| running, torrc unchanged        | nothing | nothing |
+| running, torrc changed          | `rc-service tor reload` (SIGHUP; falls back to `kill -HUP` on `/run/tor/tor.pid`) | the same reload |
+| crashed (OpenRC status 32)      | `rc-service tor restart` | nothing — left to the cron |
+| stopped                         | `rc-service tor start` | nothing — OpenRC starts tor right after the oneshot |
+
+**Why the boot oneshot never starts tor.** The oneshot is `before tor`, so OpenRC
+records tor as `iafter hugmesh-tor-reconcile`. A `rc-service tor start` from inside the
+oneshot's `start()` would make that child `openrc-run` wait on the oneshot's own
+exclusive lock. It would print "waiting for hugmesh-tor-reconcile" until the 60 s
+`WAIT_TIMEOUT` and only then start tor, on every boot. (This comes from reading the
+OpenRC source, `librc-depend.c` and `openrc-run.c`. It has not been seen on a guest.)
+The start would also be redundant, because `tor` is linked into the runlevel. So at boot:
+
+1. The oneshot writes the directories and the verified torrc. It exports any hostname
+   that is already minted, which is every boot after the first.
+2. OpenRC starts tor, reading that torrc. This is the only daemon.
+3. The cron's `@reboot` run (no `RC_SVCNAME`) finds tor running and the torrc
+   unchanged, waits for the first-boot keypair and exports it.
+
+The daily run re-asserts all of this. It also starts a tor that an admin stopped by hand,
+so to keep tor down, deselect it or remove the cron drop-in. A healthy tor is never
+restarted. The candidate torrc is verified with `tor --verify-config -f <candidate>`
+**before** it replaces `/etc/tor/torrc`, and it is installed (mode 0644, so tor can
+re-read it as `tor:tor` on SIGHUP) only when it differs. A config that fails verification
+never touches the running one, and no candidate file is left in `/etc/tor`.
+
+**Where the agent is baked.** Every rpi5 image, and every x86 image **except
+`--unaffiliated`** (the x86 bake sits inside the `if ! ${UNAFFILIATED}` platform block).
+It is inert unless the gates above link it.
+
 ## Onion-key custody (OFF-GIT — the whole point)
 
 The v3 onion keypair (`hs_ed25519_secret_key` + `hostname`) is **minted in-situ on first
-boot** by `/usr/sbin/hugmesh-tor-reconcile` and persisted under
-`/var/lib/tor/hugmesh-onion` (`0700` dir / `0600` keys, owned by `tor:tor`). It is
-**never** baked into the image, **never** committed to git, and **never** materialised as
-a K8s Secret. Because the key persists across reboots, the `.onion` address is **stable**;
-because it never leaves the node, the private key is bound to the node that minted it.
+boot** by the distro Tor daemon, into the `HiddenServiceDir` the reconcile agent
+prepares: `/var/lib/tor/hugmesh-onion` for the mesh's primary onion, and
+`/var/lib/tor/hugmesh-onion.d/<slug>` for each Tor domain (`0700` dir / `0600` keys,
+owned by `tor:tor`). It is **never** baked into the image, **never** committed to git,
+and **never** materialised as a K8s Secret. Because the key persists across reboots, the
+`.onion` address is **stable**; because it never leaves the node, the private key is
+bound to the node that minted it.
 
-The reconcile agent (an OpenRC oneshot ordered `before tor`, plus a 24h cron) is
-idempotent: it writes the managed `/etc/tor/torrc`, restarts `tor` (which mints/refreshes
-the keypair), and exports the `.onion` hostname to `/var/lib/hugmesh/tor/hostname` for
-admin/cluster consumption (the only artefact that leaves the node).
+The agent exports each `.onion` hostname — the only artefacts that leave the node — to
+`/var/lib/hugmesh/tor/hostname` (primary) and `/var/lib/hugmesh/tor/<slug>.hostname`
+(each Tor domain). Today the one reader on the node is the Go-Live `tor-onion` plan
+(`specs/usr/lib/hugmesh/go-live-providers.sh`); an admin-bff status endpoint that reads
+them is tracked separately.
 
 ## Routing
 
-The hidden service maps `:443` → the **node-local fe-gateway ingress**. A HOST-level Tor
-daemon cannot resolve cluster DNS, so the default upstream is `127.0.0.1:8443`; override
-per node by writing one `host:port` line to `/etc/hugmesh/tor/upstream`.
+Every onion publishes `HiddenServicePort 443` → an upstream, i.e. **HTTPS on the onion's
+:443**, answered by the node's `hostNetwork` ingress edge. No onion SAN is minted anywhere,
+so the certificate never carries the `.onion` name and Tor Browser shows a certificate
+warning once per visitor. The Tor circuit itself is end-to-end encrypted, and the `.onion`
+address authenticates the service. (The **compose** lane's onion is different; see
+`tests/stack/tor/`. It is not what a node publishes.)
+
+A HOST-level Tor daemon cannot resolve cluster DNS, so the default upstream is
+**`127.0.0.1:443`**. That is correct only on the one node that runs the ingress edge, and
+which node that is depends on the image's `RELEASE_STATE` (baked at
+`/etc/hugmesh/release-state`):
+
+| RELEASE_STATE | the `:443` listener | where the default upstream is right |
+|---|---|---|
+| `internal` (the **default**) | the builders prune `apps/10-ingress-nginx.yaml`; `ingress-nginx-internal` ([`apps/11-ingress-nginx-internal.yaml`](../specs/cluster/apps/11-ingress-nginx-internal.yaml)) runs `hostNetwork` on the `hugmesh.net/pki` node | the **pki** node (and omnibus) |
+| `public` | `ingress-nginx` ([`apps/10-ingress-nginx.yaml`](../specs/cluster/apps/10-ingress-nginx.yaml)) runs `hostNetwork` on the `hugmesh.net/backend` node | the **backend** node (and omnibus) |
+
+Every other node binds nothing on :443. Point it at the edge node by writing one
+`host:port` line to `/etc/hugmesh/tor/upstream`. Leading and trailing whitespace is
+trimmed. Anything that is not a plain `host:port` is refused and the default kept,
+including a value with whitespace inside it, because the value is written verbatim into
+the torrc. A host tor fronting a **kind** node uses kind's port map, `127.0.0.1:8443`
+([`kind-local.yaml`](../specs/cluster/bootstrap/kind-local/kind-local.yaml)).
+At runtime the file is written for you from admin-bff: `PUT /bff/admin/tor/nodes/<fp>/upstream`
+(SUPERADMIN) lands on the node through the signed export that
+[`hugmesh-tor-export-sync`](#the-signed-export-hugmesh-tor-export-sync) applies within one
+minute (below). Until the first such write the file is **unmanaged**: whatever the bake or
+a person put there stays.
+
+### Ingress admission: the onion must be an Ingress host (hugmesh-generator#614)
+
+The fe-gateway Ingress admits the cluster domain (`host: <domain>`,
+`extraHosts: ["*.<domain>"]` in [`apps/20-gateway-fe.yaml`](../specs/cluster/apps/20-gateway-fe.yaml)),
+and both ingress controllers run with `defaultBackend` disabled. A request whose Host/SNI
+is `<x>.onion` and that no Ingress rule names is answered by ingress-nginx's default
+server: a **404** with its default certificate, never the gateway.
+
+On a hardware node **`/usr/sbin/hugmesh-tor-ingress-admit`** closes that gap (kind's
+equivalent is `make kind-tor`). It runs from the tor cron drop-in every 5 minutes:
+
+1. It reads the onions this node exports: `/var/lib/hugmesh/tor/hostname` and every
+   `/var/lib/hugmesh/tor/<slug>.hostname`. Anything that is not a v3 name
+   (`^[a-z2-7]{56}\.onion$`) is refused.
+2. It writes them onto the fe-gateway ArgoCD Application as helm parameters
+   `ingress.onionHosts[0..n]`. The Application's name comes from the baked
+   `apps/20-gateway-fe.yaml`, because a non-default brand renames it `<brand>-gateway-fe`.
+   Every other parameter is kept as it is. Onions that other nodes admitted are kept. The
+   ones this node admitted before and no longer exports are withdrawn; its record is
+   `/var/lib/hugmesh/tor-ingress/admitted`. It patches only when the set changes, and it
+   puts the read `resourceVersion` in the patch, so a concurrent writer gets a conflict
+   instead of losing an entry.
+3. ArgoCD re-renders the gateway chart. `ingress.onionHosts` adds one rule per onion to
+   the **same** Ingress, with the same backend as the cluster host. So the release state's
+   ingress class (`nginx-internal` under `internal`) and the Anubis PoW gate apply to the
+   onion exactly as they do to the clearnet name. There is no TLS entry for the onion,
+   because no onion SAN exists; the edge's default certificate answers, and Tor Browser
+   shows one warning.
+
+With no exported onion, a node that admitted onions before withdraws them, and a node
+that never did makes no write at all. `hugmesh-tor-ingress-admit status` prints each
+exported onion and whether the live Application admits it. The log is
+`/var/log/hugmesh-tor-ingress-admit.log`.
+
+**Where it can run.** The patch needs `/etc/kubernetes/admin.conf`, which kubeadm writes
+only on **control-plane** nodes:
+
+| RELEASE_STATE | the edge | where to select tor |
+|---|---|---|
+| `internal` (default) | `ingress-nginx-internal` on the **pki** node, a control plane | pki (or omnibus). The onion is minted and admitted on the same node. |
+| `public` | `ingress-nginx` on the **backend** node, a worker with no `admin.conf` | the **pki** node, with `/etc/hugmesh/tor/upstream` set to `<backend-ip>:443`. The onion is minted and admitted on pki. |
+
+A tor selected on a worker cannot admit its own onions. The agent logs that and does
+nothing. A transport for a worker's onions belongs to hugmesh/hugmesh-admin-bff-api#108.
+
+**Durability.** A device applies its baked Application set and has no recursing root
+(`specs/cluster/bootstrap/bootstrap.sh`), so nothing re-asserts the Application object and
+the runtime parameters stay. An operator re-provision (`KEYS` + `.provision-force`) or
+`HUGMESH_GITOPS_ROOT_RECURSE=1` may drop them (a client-side `kubectl apply` of the baked
+Application, which carries no parameters, leaves them alone); either way the next cron
+run puts them back.
+
+**Orphaned onions.** Only the node that admitted an onion withdraws it. If that node is
+rebuilt with a new onion key or retired, its old onion stays an Ingress host: a harmless
+Host rule that points at the gateway, which no Tor client can reach any more. Remove it by
+hand from the fe-gateway Application's `ingress.onionHosts[i]` parameters.
+
+**What admission does not do.** It does not map the onion Host to a domain. The gateway
+does that (hugmesh/hugmesh-gateway#38, landed): until something registers the onion in its
+`APP_TENANCY_HOSTS_FILE`, the gateway serves an onion as the **default** domain. The
+primary onion therefore reaches the default domain's login page. A per-domain onion
+reaches the gateway too, but it serves its own domain only once its
+`<onion>=<slug>` line is written; that writer is hugmesh-generator#582.
+
+**Verified offline, not live.** `tests/scripts/test-tor-onion-ingress.sh` renders the
+chart as ArgoCD does (`helm template` with the helm parameters). With the hostname file
+present, the Ingress admits the onion; without it, the Ingress admits no `.onion` host.
+The onion rule routes path `/` (Prefix) with the cluster host's exact backend. It
+also drives the agent's `apply` and its real `status` (what the QEMU live leg grades on)
+against a stub `kubectl` that, like the real one, refuses a patch without
+`--type merge`. No booted node has run it yet: the
+live proof is a pki node built `--with-tor`, where Tor Browser at `https://<onion>/`
+shows the certificate warning and then the login page.
+
+### Per-domain onions (decision 68 = A)
+
+`tor` is the one per-domain infra slug: each non-comment line of
+`/etc/hugmesh/tor/domains` names a domain slug (`[a-z0-9][a-z0-9-]{0,62}`; whitespace
+around it is trimmed, and a line with whitespace or a dot inside is refused), and each gets
+its **own** `HiddenService` stanza fronting the **same** upstream; the gateway tells the
+domains apart by the onion `Host` header. The primary onion does not depend on the file.
+Removing a slug drops its stanza and its exported hostname but **never** its keypair, so
+re-adding it brings back the same address. Nothing in the image build writes
+`/etc/hugmesh/tor/domains` yet: the Studio records which domains are Tor domains
+(`domains[].tor`, below), and the builder or provisioning step that turns that into this
+file is still open (hugmesh-generator#582). At **runtime** the file has a writer:
+admin-bff's `tor-onion` domain capability, applied on the node by
+[`hugmesh-tor-export-sync`](#the-signed-export-hugmesh-tor-export-sync) once a SUPERADMIN
+has written the `' global'` row (until then the list is unmanaged and a baked list stays).
+
+**Where a Tor domain is chosen (hugmesh-generator#582).** In the Studio's *Domain
+services* step, every domain except the mesh's own has a **Tor front door** row, scope
+*onion (per domain)* — GUI (a checkbox in its own small table, laid out above the services
+catalogue, right under the domain navigation, so a short viewport cannot push it below the
+fold — measured, hugmesh-generator#647) and TUI (command `t`, the same order). It writes
+`Domain.tor`; the mesh manifest carries it as `domains[].tor: true`
+(both the v1 shim and the v2 envelope; the key is omitted when false, so older manifests
+keep their bytes). A legacy `tor` in a domain's `optional_services` — a slot no builder ever
+read — moves to `tor: true` when a config loads. The node must still **run** Tor (the
+node-scoped `tor` selection, mesh-wide or per worklist node); the row says so when it is off.
+
+**What a tick does depends on the route, and the row says which.** Only one route acts on
+it today:
+
+| Route | What a ticked Tor front door does | Row says |
+|---|---|---|
+| Local docker mesh | With Tor on, `make stack-up` mints one onion for the domain and registers it with the gateway (the compose section below). | *On this local docker mesh the choice takes effect…* |
+| Node images (mesh mode) | The mesh manifest carries `domains[].tor`. **No builder or provisioning script reads a manifest's `domains`**, so nothing writes `/etc/hugmesh/tor/domains` on a node from it. | *RECORDED, NOT YET BUILT INTO A NODE…* |
+| Mesh desktop client image | Nothing: a client serves no domain and cloud mode writes no manifest. | *RECORDED ONLY…* |
+| Fleet build | Kept with the fleet's session; no builder reads it. | *RECORDED ONLY…* |
+
+The sentences are `core/domain_services.TOR_REACH`; the node-image one is pinned against the
+builders (`test_no_builder_writes_a_nodes_tor_domains_file_yet`), so it fails the day a
+builder starts writing the file and the wording has to change with it.
+
+**What the Studio and a node have to agree on** — one spelling everywhere:
+
+| | Rule | Owner |
+|---|---|---|
+| **key directory name (slug)** | `core.own_casdoor.slug(name)`: lowercase, every run of non-`[a-z0-9]` becomes `-`, trimmed; e.g. `shop.example` → `shop-example`. A name whose slug exceeds 63 characters gets **no** onion (never truncated, which could put two domains on one key); the row says so. Two names that slug alike (`a-b.example`, `a.b.example`) share one key directory, so only the **first in table order** gets an onion, and the second one's row names the clash. | `core/domain_services.onion_slug`, `tor_slug_clash` |
+| **tenant** | The gateway tenancy key the onion `Host` maps to: the slug when the domain runs its **own** Casdoor (the value its `APP_TENANCY_HOSTS` entry already has), else `default`. A domain on the superdomain's sign-in has no issuer of its own, so a slug tenant would make the gateway refuse every signed-in user on its onion; its onion is a separate **address** serving the default brand, and a separate **login** needs sign-in *own*. | `core/domain_services.onion_tenant` |
+| **node input** | `/etc/hugmesh/tor/domains`: one slug per line, the format above. **Open: nothing writes it from `domains[].tor`.** A builder or the provisioning step has to turn each `domains[]` entry with `tor: true` into one line, using the slug rule in the first row. The **runtime** writer exists: `hugmesh-tor-export-sync` applies admin-bff's signed export (hugmesh/hugmesh-admin-bff-api#112, hugmesh-generator#629) — `domainsManaged=true` replaces the file with exactly the exported slugs (an empty list is an empty file), `false` leaves a baked list in force. | builder / provisioning (open, #582); runtime: `hugmesh-tor-export-sync` |
+| **gateway host map** | `APP_TENANCY_HOSTS_FILE`: `<primary onion>=default` first, then one `<onion>=<tenant>` per Tor domain, written temp-then-rename in the same directory (the hugmesh-gateway#39 writer contract). Only v3 onion names are written. | compose: `hugmesh-tor` (below). Hardware node: **open** — no writer yet; it must read the node's own `/var/lib/hugmesh/tor/*.hostname` files, never the admin-bff onion report (that report is unauthenticated telemetry, per the correction on #582). |
+
+**Go-Live.** `tor-onion` still needs no domain. When one is given and it is not the node's
+cluster domain, the Studio's plan — the same lines on the GUI's Generate step and the TUI's
+go-live screen (`core/golive_domains.plan_rows`) — adds a row for it: that domain's own onion
+when the node exports one under the domain's key directory name, or that it has none here.
+The driver's preflight names a domain with no front door too. Both are said only on a host
+that knows its cluster domain.
 
 A secondary, **opt-in** capability (`hugmesh.net/tor-onion=true` label +
 `tor-onion-marked` NetworkPolicy) lets a pod egress through the node Tor SOCKS proxy. It
 is **inert by default** and additionally requires binding `SocksPort` to the pod network
 (a deliberate future enablement) — see the header of
-[`manifests/networkpolicy/tor-onion-marked.yaml`](../specs/cluster/manifests/networkpolicy/tor-onion-marked.yaml).
+[`manifests/networkpolicy-tor/tor-onion-marked.yaml`](../specs/cluster/manifests/networkpolicy-tor/tor-onion-marked.yaml).
+The policy has its own Application,
+[`apps/08b-networkpolicy-tor.yaml`](../specs/cluster/apps/08b-networkpolicy-tor.yaml). It
+syncs manually, because this is an egress-axis policy, and the build removes it when tor
+is not selected. It used to sit in the auto-synced `manifests/networkpolicy`, where git
+main shipped it to every cluster whatever the image selected (hugmesh-generator#617).
+`tests/scripts/test-optional-netpol-autosync.sh` fails if an optional service's
+NetworkPolicy is served from git by an Application every build keeps. It runs the real
+build prune and compares the git render with the baked one, and it renders the directory
+08b's own `spec.source.path` names.
+
+Two consequences of the manual sync: on a tor build the `networkpolicy-tor` Application
+shows OutOfSync until someone syncs it (the 08a precedent). And a tracking cluster that
+already carries `tor-onion-marked` from the old auto-synced path loses it at the next
+08-networkpolicy prune, and gets it back only when 08b is synced by hand. The policy is
+inert either way.
+
+## The signed export: `hugmesh-tor-export-sync`
+
+The node half of hugmesh/hugmesh-admin-bff-api#108 (hugmesh-generator#629).
+[`specs/usr/sbin/hugmesh-tor-export-sync`](../specs/usr/sbin/hugmesh-tor-export-sync) is a
+sibling of the reconcile, baked next to it (every rpi5 image; every x86 image except
+`--unaffiliated`) and run **every minute** by the same cron drop-in,
+`/etc/cron.d/hugmesh-tor-reconcile`, so it exists exactly when `tor` is selected. It is the
+runtime writer of `/etc/hugmesh/tor/upstream` and `/etc/hugmesh/tor/domains`, and the
+sender of the onion report the operator console shows. No new transport: both calls use
+the node's `/etc/hugmesh/registry/node.env` (`MACHINE_KEY_FP`, `BFF_EXPORT_URL`,
+`BFF_CLIENT_CERT`, `BFF_CLIENT_KEY`, `BFF_CA`) exactly as `hugmesh-vpn-reconcile` and
+`hugmesh-device-enrollment-report` do.
+
+**1. Fetch and apply.** `GET <BFF>/bff/admin/tor/export?node=<MACHINE_KEY_FP>` over the
+node's mTLS identity (the fingerprint is URL-encoded; a raw `+` would read as a space). The
+answer is `{body, contentHash, signature, publicKey, signed}` with
+`body = {node, generation, upstreamManaged, upstream, domainsManaged, domains[]}`. The
+signature is a detached Ed25519 over canonical line bytes, not over JSON:
+
+```
+v1-tor
+node=<fp>
+generation=<long>
+upstream-managed=<true|false>
+upstream=<host:port or empty>
+domains-managed=<true|false>
+domain=<slug>        (one line per slug, sorted)
+```
+
+[`specs/usr/lib/hugmesh/tor-verify.sh`](../specs/usr/lib/hugmesh/tor-verify.sh) recomputes
+those bytes and verifies them with the **same** `verify_sig` / `check_monotonic` as the
+device-registry and node-storage consumers (it sources `registry-verify.sh`), against the
+baked key-USB public half `/etc/hugmesh/registry/registry-pub.ed25519`. The rules, in order:
+
+| Rule | What the agent does |
+|---|---|
+| **Verify first.** `signed=false`, a signature that does not verify, or a `generation` not **strictly above** the last applied one | changes nothing, keeps the last-good files, logs why |
+| `body.node` is not this node's `MACHINE_KEY_FP` (the export for an unknown fingerprint is an empty signed body with nothing managed) | refused after verifying; nothing changes |
+| `upstreamManaged=false` | `/etc/hugmesh/tor/upstream` left alone (the bake or a person wrote it) |
+| `upstreamManaged=true`, `upstream=""` | the file is **removed**; the agent default `127.0.0.1:443` applies |
+| `upstreamManaged=true`, `upstream=X` | the file holds `X` as its one line |
+| `domainsManaged=false` | `/etc/hugmesh/tor/domains` left alone (a baked list stays in force) |
+| `domainsManaged=true` | the file holds exactly `domains`, one slug per line; an empty list is an **empty file**, which withdraws every per-domain onion (the primary is unaffected) |
+| a value the reconcile would ignore (not `host:port`; not `[a-z0-9][a-z0-9-]{0,62}`) | the whole export is refused before anything is written (admin-bff checks the same patterns; this is depth) |
+| every write | atomic: a temp file in the **same** directory, then a rename over the target; a crash between the two leaves the old file |
+| the last-applied generation | advances only after **every** write succeeded, so a partly applied export is retried next cycle (idempotent) |
+| after a write | `hugmesh-tor-reconcile` is run in the same pass: it re-renders the torrc, reloads a running tor, and mints and exports any new per-domain onion |
+
+**2. Report.** After **every** pass — applied, unchanged, or refused — the agent sends
+`POST <BFF>/bff/internal/tor/onions` with
+`{"machineKeyFp": fp, "primary": <content of /var/lib/hugmesh/tor/hostname, omitted before tor has minted it>, "domains": {"<slug>": <content of /var/lib/hugmesh/tor/<slug>.hostname>}}`.
+Each report replaces the node's previous one, so a withdrawn slug drops out of
+`GET /bff/admin/tor/nodes`. Only a v3 onion (`[a-z2-7]{56}.onion`) under a valid slug is
+reported (a stray file is logged and skipped so it cannot get the whole report refused), at
+most 64 domains. A 422 or any other non-2xx answer is logged with admin-bff's message and
+never aborts the agent. **The credential:** admin-bff gates `/bff/internal/**` on
+`ROLE_SERVICE`, which a node satisfies with the in-cluster `X-Internal-Token` header. The
+agent reads it from the file node.env names in `BFF_INTERNAL_TOKEN_FILE` (default
+`/etc/hugmesh/registry/internal-token`; sent through a 0600 header file, never on the
+command line). Without that file the report is still sent and the log says that an armed
+admin-bff answers 401. **Open:** nothing bakes that file onto a node today
+(`provision.sh` writes node.env without it), which is the same gap the enrollment
+self-report has.
+
+**Recovery after a reseed.** The export generation is the node's `config_generation` plus
+the highest `tor-onion` capability generation; both restart low after a rebuilt or reseeded
+admin-bff database, so the strict rule would then refuse every export. A person runs, on the
+node, `hugmesh-tor-export-sync --reset-generation`: it forgets the stored last-applied
+generation (`/var/lib/hugmesh/tor-export/last-good-generation`) and nothing else; the next
+export is accepted once it **verifies**, whatever its generation. A lower generation is never
+accepted silently. Everything else about the agent is fail-soft like its sibling: a missing
+input, an unreachable BFF or a refused export keeps the files and exits 0.
+
+**What is proven offline.** `tests/scripts/test-tor-export-sync.sh` drives the real agent
+against a sandbox root with curl stubbed and the export signed by a throwaway Ed25519 key
+whose public half is baked into the sandbox: the canonical bytes against a reference string,
+accept / replay / rollback / tampered / unsigned / foreign key / foreign node / unknown
+fingerprint, the four managed combinations plus the empty upstream and the empty list, the
+rename that never happens, the report body in every shape, the token header, a 422, the
+reseed reset, and the real `hugmesh-tor-reconcile` rendering a stanza for a domain the sync
+wrote. `tests/scripts/test-tor-node-contract.sh` section E pins the cron entry, both
+builders' bake lines (executed) and that both agents share one spelling of each validator.
+
+**Awaiting a live run** (a booted tor node against a running admin-bff; none has run):
+the live check of #629 — `PUT /bff/admin/tor/nodes/<fp>/upstream`, and within one minute
+`/etc/hugmesh/tor/upstream` holds the value; grant `tor-onion` for one brand plus the
+`' global'` row, and `/var/lib/hugmesh/tor/<brand>.hostname` appears; `GET /bff/admin/tor/nodes`
+lists both onions; set the global row to `granted=false`, and within one cycle the domains
+file is empty and the brand onion's export disappears. Also the report itself reaching an
+**armed** admin-bff, which needs the internal token file above.
 
 ## SELinux
 
@@ -53,8 +364,8 @@ is **inert by default** and additionally requires binding `SocksPort` to the pod
 **upstream** `sec-policy/selinux-tor` module — the Tor daemon runs confined as `tor_t`
 with its keypair under `tor_var_lib_t`. The hugmesh reconcile agent has its own
 authored module ([`specs/selinux/hugmesh_tor.te`](../specs/selinux/hugmesh_tor.te) /
-`.fc`) granting only what it needs (write `torrc`, manage the Tor state dirs, restart the
-service). Like the other node modules it is authored-but-not-yet-compiled — see
+`.fc`) granting only what it needs (write `torrc`, manage the Tor state dirs, start /
+reload the service). Like the other node modules it is authored-but-not-yet-compiled — see
 `docs/selinux-module-loading.md`.
 
 ## Enable / disable
@@ -62,8 +373,250 @@ service). Like the other node modules it is authored-but-not-yet-compiled — se
 - **x86 builder / Studio / build-menu:** `--with-tor` (or the "Tor v3 onion" toggle).
 - **rpi5 builder / any node:** add `tor` to `OPTIONAL_SERVICES` (or `brand.conf`).
 - **Disable (default):** omit it; `--exclude-services tor` force-removes it.
-- **Node-scoped:** no effect on CLIENT/standalone desktop roles (the builders guard on
-  `!ROLE_CLIENT`; an accidental `--with-tor` there is a logged no-op).
+- **Node-scoped:** no effect on CLIENT/standalone/unaffiliated desktop roles. Both builders
+  drop the selection with a warning once the role is known (`--with-tor`,
+  `--optional-services tor` and `brand.conf` alike), and every tor gate calls
+  `_tor_node_selected`, which also requires a cluster-node role. Before
+  hugmesh-generator#583 the x86 check ran before the role was resolved and never fired,
+  so `--with-tor --role desktop` emerged `net-vpn/tor` on a desktop.
+
+## What is verified, and what is not
+
+- **Offline (runs pre-merge):** `tests/scripts/test-tor-node-contract.sh` — the reconcile
+  agent's convergence against stubbed `rc-service` / pidfile states, both builders'
+  `PLAN_TOR_ONION` across node and client roles, the real rpi5 package resolver and the
+  real x86 gate lines executed in a sandbox, the registry ↔ builder ↔ agent agreement,
+  the Go-Live card's :443/https text, and the `tests/qemu/assertions.sh` tor block against
+  fixture root filesystems.
+- **Offline (runs pre-merge):** `tests/scripts/test-tor-onion-ingress.sh` — the onion's
+  Ingress admission (#614), described above; `tests/scripts/test-optional-netpol-autosync.sh`
+  — where the tor NetworkPolicy ships (#617); `tests/scripts/test-tor-export-sync.sh` — the
+  signed-export consumer and the onion report (#629), described above.
+- **Not yet exercised:** a booted QEMU or hardware node built with tor. The
+  `tests/qemu/assertions.sh` tor block (both services linked, `/usr/bin/tor` present,
+  exactly one tor process, a v3 hostname exported) has never run against a real guest,
+  and the QEMU lane has no tor pass-through yet. The same goes for the boot order (the
+  oneshot leaves the start to OpenRC, and the `@reboot` cron exports the first-boot
+  hostname) and for the Ingress admission above: on a live control-plane guest the tor
+  block also asks `hugmesh-tor-ingress-admit status` whether every exported onion is an
+  Ingress host. The same goes for `hugmesh-tor-export-sync` against a live admin-bff (the
+  live checks listed in its section).
+
+## The local docker mesh (`make stack-up TOR=1`)
+
+The compose stack has its own, single-container analogue of the node service
+(`tests/stack/tor/`, compose profile `tor`). Everything below is compose-lane only (the kind
+lane's door is `make kind-tor`, below). It serves the mesh's own onion plus **one more per Tor
+domain** (#582, decision 68 = A).
+
+| Piece | What it is |
+|---|---|
+| `hugmesh-tor` | Serves the v3 onion. **`:443` → `hugmesh-https-front:8443`** (the stack's TLS front, `TOR_ONION_TLS_UPSTREAM`) and **`:80` → `hugmesh-fe-gateway:8080`** (`TOR_ONION_UPSTREAM`). Key in the `tor-onion-keys` volume, so the address survives `make stack-halt` and restarts; `make stack-down` drops the volume and the next up mints a **new** onion. |
+| `hugmesh-tor-client` | A Tor SOCKS5 client on **`127.0.0.1:${TOR_SOCKS_HOST_PORT:-9050}`** (loopback only — never an open proxy for the LAN). The e2e lane's browser dials the onion through it. |
+| `tests/stack/tor-onion/hostname` | The **public** hostname, copied out for the Studio and `make stack-onion`. Removed when `hugmesh-tor` starts and again when it stops or dies (#581), so it exists only while that onion is being served. |
+| `TOR_ONION_DOMAINS` | `"<slug>=<tenant> ..."` — one more `HiddenService` per entry, fronting the **same** two upstreams. Readout `tests/stack/tor-onion/<slug>.hostname`, same lifecycle as `hostname`. A malformed entry is refused and logged. The Studio passes it from the Tor front door rows, and only for a `TOR=1` mesh that has a Tor domain; `BRAND_B=1 TOR=1` adds `brandb=brandb` itself. |
+| `tests/stack/compose.tor-domains.yaml` | The overlay that makes the list work, loaded by `make stack-up` **only** when a `TOR=1` stack has a Tor domain. It gives `hugmesh-tor` the key volume `tor-onion-domain-keys` (`/var/lib/tor/hugmesh-onion.d/<slug>`) and the volume `tor-tenancy-map` (`/tenancy`), and gives the **fe-gateway** the same volume read-only plus `APP_TENANCY_HOSTS_FILE=/tenancy/onion-hosts.map`. `compose.local.yaml` is unchanged, so a stack with no Tor domain — `TOR=1` or not — has the containers, environment and volumes it had before. `make stack-down` and `stack-clean` always load it, so a per-domain key is dropped with every other volume. |
+| host map | `hugmesh-tor` writes `/tenancy/onion-hosts.map` **before** it publishes `hostname`: the mesh's onion as `default`, each domain's onion as its tenant. It writes it only where `/tenancy` is mounted, which is only under the overlay. From then on the gateway **refuses** any `.onion` Host the map does not name (hugmesh-gateway#39), picking a new map up within 5 seconds. Removed on start, stop and crash, like the readouts. |
+
+```sh
+make stack-up TOR=1          # + ANUBIS=1: the onion's :80 goes through the PoW gate
+make stack-onion             # https://<56 chars>.onion/  (refuses a stale or malformed readout)
+make stack-seed
+make stack-e2e-tor           # the @via:onion sign-in, THROUGH Tor (tests/e2e/run.sh --via onion)
+make stack-tor-mechanism-check   # host-tor mechanism proof: no docker, needs the public Tor network
+```
+
+**Why `:443`, and why https.** The door is `https://<onion>/`, served by the TLS front.
+The reasons were measured (hugmesh-generator#628, live onion, 2026-09-24):
+
+- **A secure context.** Chromium does not treat a `.onion` origin as trustworthy. Over
+  `http://<onion>/`, `window.isSecureContext` is `false`, the shell's
+  `Cross-Origin-Opener-Policy` is ignored ("the URL's origin was untrustworthy"), and any
+  `Secure` cookie the page is sent is dropped.
+- **Parity with the node.** A baked node publishes its onion on `:443` too (the node
+  contract above), so the compose lane, the kind lane and a device are entered the same
+  way.
+- **The session cookie.** user-bff marks `bff_session` `Secure` by default
+  (`APP_SESSION_COOKIE_SECURE`, default `true` in its `application.yml`). The compose
+  stack sets it `false` (`compose.local.yaml`, `hugmesh-user-bff-api`), which is the only
+  reason a sign-in over `http://<onion>/` works locally: `POST http://<onion>/bff/login`
+  answered `Set-Cookie: bff_session=…; HTTPOnly; SameSite=Lax` with no `Secure`. A mesh
+  with the production default would lose the session on the http door.
+- **The Anubis gate.** With `ANUBIS=1 TOR=1` the http door is the proof-of-work gate,
+  whose cookies needed their own fix to work there (#627, below).
+
+**CSP `upgrade-insecure-requests` is not a reason.** Earlier versions of this page said
+the gateway's CSP upgrades every subresource of a page entered over http, so the SPA
+could not boot over `http://<onion>/`. On the live stack that is false. The SPA documents
+(`/`, `/login`) carry host-shell nginx's nonce CSP, which has no
+`upgrade-insecure-requests`, on both onion ports, and the gateway passes that header
+through. The gateway's own CSP does end in `upgrade-insecure-requests` (hugmesh-gateway
+`SecurityConfig`), but it appears only on responses the gateway generates itself, such as
+the anonymous `401` for `/user` or `/social/matrix`. Those never govern the document. In
+Chromium through the SOCKS client, `http://<onion>/` booted the SPA to `/login` with no
+request upgraded to https. The 2026-09-23 measurement that suggested otherwise used a
+test server that put the gateway's CSP on the document itself.
+
+**HSTS on the http door.** `http://<onion>/` does send `Strict-Transport-Security`
+(host-shell nginx adds it `always`, and nothing strips it on `:80`; the TLS front strips
+it on `:443`). Chromium ignores HSTS received over plain http (RFC 6797 §8.1), so a second
+http visit stays http. Tor Browser's handling of it is unmeasured.
+
+The TLS front's certificate is the stack's own (minted for the cluster domain), so Tor
+Browser warns once. Whether Tor Browser, which treats `.onion` as a secure context, behaves
+differently on the http port is unmeasured.
+
+**What the onion Host resolves to.** On a `TOR=1` stack with **no** Tor domain nothing
+changed: the gateway has no host map, so the mesh's onion (like any unmapped Host) is served
+as the default brand. On a `TOR=1` stack **with** a Tor domain the fe-gateway reads the host
+map above (hugmesh-gateway#38, landed in #39): the mesh's onion serves the default brand, a
+Tor domain's onion serves its tenant, and an onion the map does not name is refused with
+`403 X-Route-Denied` (an anonymous request to a protected path may get 401 or a login redirect
+first). Only the fe-gateway takes the map: both onion ports reach it, `:443` through
+`hugmesh-https-front`, which forwards the `Host`. A gateway image older than #39 ignores
+`APP_TENANCY_HOSTS_FILE`, and every onion then serves the default brand, as before.
+
+The Studio's pod view shows one extra row per Tor domain under the `hugmesh-tor` container,
+each naming that domain's own login URL, `https://<its onion>/login`. A fe-gateway replica
+added from the pod view is created with the overlay too, so it has the same map.
+
+```sh
+make stack-up TOR=1 BRAND_B=1 && make stack-seed
+ls tests/stack/tor-onion/                        # hostname  brandb.hostname
+curl --socks5-hostname 127.0.0.1:9050 -k https://$(cat tests/stack/tor-onion/brandb.hostname)/login
+bash tests/stack/tor-domains-live-check.sh       # the whole proof, row by row (it changes nothing)
+```
+
+`tests/stack/tor-domains-live-check.sh` is the live proof in one run: the readouts, the map as
+the gateway reads it, each onion's login page through Tor, an unregistered onion `Host` refused,
+the default persona good on the mesh's onion and refused on brand B's, and brand B's persona
+signing in on brand B's onion. If brand B's own sign-in also fails on its HTTPS door it reports
+`BLOCKED` (the brand's sign-in is broken on that stack), not an onion failure. Its grading is
+pinned offline against a stub gateway (`test_the_live_check_*`); the run itself needs the stack.
+
+**An unproven premise, read before trusting a red.** Brand B's persona signing in at all has
+never been run on this stack: no other scenario signs `e2e-tenant2-user` in anywhere. user-bff
+has **one** login base (`APP_BFF_OIDC_LOGIN_BASE`, `tests/stack/compose.local.yaml`, one Casdoor)
+and that persona lives only in the brand-B Casdoor (`seed-e2e.sh` leg 1b). If that is the whole
+story, the persona cannot sign in on **any** door, brand B's https door included, until a mesh
+gives user-bff a per-tenant login base. The live-check script's row B reports `BLOCKED` for this
+(it tries the https door as a control). The Gherkin scenario has no such control: its sign-in
+step fails with a message that names this before it blames the onion, and the failing run
+attaches a screenshot. Treat a red there as this finding first, an onion finding second.
+
+**The Gherkin lane.** `make stack-e2e-tor-domains` runs `tests/e2e/run.sh --bdd --env docker
+--via onion-domains`: the browser, through Tor, on
+`tests/e2e/features/platform/tor-onion-domains.feature`. The default persona signs in on the
+mesh's own onion and that session is refused on brand B's onion (403 `X-Route-Denied`); brand
+B's persona (`e2e-tenant2-user`, seeded into brand B's Casdoor by `make stack-seed` under
+`BRAND_B=1`) signs in on brand B's onion, and every request the brand-B browser made stayed on
+that onion. `run.sh` resolves the domains' onions from the `<slug>.hostname` readouts
+(`SNAP_ONION_DOMAIN_URLS`) beside the mesh's own. The scenario carries its own tag
+(`@via:onion-domains`), so `make stack-e2e-tor` on a stack with no Tor domain never collects it —
+a skip fails an onion lane — and outside any onion lane it skips naming the command. The steps
+are held to the mesh onion lane's rule (only the proxied browser context, audited by the HAR;
+`tests/stack/test-tor-flip-wiring.sh`).
+
+**Not yet run live** (no compose mesh on 2026-09-23/24 or 09-30): two onions minted; brand B's
+onion serves brand B's login and a brand-B persona signs in there; the mesh's onion still
+serves the default brand; an unregistered onion `Host` is refused; `make stack-down` then
+`make stack-up TOR=1 BRAND_B=1` mints a **new** brand-B onion; the Gherkin lane above. The
+offline pins are `studio/tests/test_domain_services_tor.py` (the entrypoint executed against
+a stub tor, the overlay and Makefile wiring, what the Studio passes, and `run.sh --via
+onion-domains` against stub readouts), `test_domain_services_tor_page.py` (the GUI and TUI
+row) and `test_domain_services_tor_journey.py` (both faces walked from the first screen to
+the effect), all run pre-merge by `tests/scripts/test-studio-tor-domain-pins.sh`.
+
+**Known residuals.** With `ANUBIS=1 TOR=1` only the onion's `:80` is PoW-gated; `:443` reaches the
+TLS front, which forwards to the fe-gateway directly (#586). tor resolves both upstream hostnames
+once, when it parses its torrc, so recreating `hugmesh-fe-gateway` or `hugmesh-https-front` with a
+new container IP needs `hugmesh-tor` recreated too.
+
+**The Anubis cookie on the http door (#627).** Anubis sets its cookies
+`Secure; SameSite=None` by default. On `http://<onion>/` Chromium drops them, returns to
+`pass-challenge` without them, and Anubis answers `500` ("Oh noes!"; its log says "user
+has cookies disabled"), so the gate could not be passed. `make stack-up ANUBIS=1 TOR=1`
+therefore exports `ANUBIS_COOKIE_SECURE='false'` (Makefile `STACK_TOR_ENV`), which
+`hugmesh-anubis` reads as `COOKIE_SECURE`. The cookies lose `Secure` and SameSite drops
+from `None` to `Lax`. Every other bring-up keeps Anubis's default, and a caller's own
+`ANUBIS_COOKIE_SECURE` wins. The localhost door (`:8923`) works either way, because
+Chromium treats localhost as secure. Not yet exercised through the real onion. The live
+check is Chromium via the SOCKS client on `http://<onion>/` ending on the HugMesh
+`/login` page rather than "Oh noes!", on a stack brought up with this change. Tor Browser
+is a person's check.
+
+The contract is gated offline by `tests/stack/test-tor-flip-wiring.sh` (16 checks, each with a
+mutant that must turn it red).
+
+## Kind lane — a host tor fronting the kind node (`make kind-tor`)
+
+Operator decision 67 = B (hugmesh-generator#577, 2026-09-23): the kind lane gets a Tor
+door. The kind node is the stock `kindest/node` image, not a baked stage4 node, so
+nothing inside it runs Tor. Instead [`scripts/kind-tor.sh`](../scripts/kind-tor.sh) runs
+the distro `tor` binary **on the host, as you** — no sudo, no system service, no
+`/etc/tor`, no `User` directive — with a private `DataDirectory` and `HiddenServiceDir`
+under the gitignored `tests/stack/.run/kind-tor/`:
+
+| torrc line | what it reaches |
+|---|---|
+| `HiddenServicePort 443 127.0.0.1:8443` | the kind node's TLS door — `kind-local.yaml` maps ingress-nginx-internal's `:443` to host `:8443`. Same shape as the node contract above. |
+| `HiddenServicePort 80 127.0.0.1:8080` | the plain door; kind's fe-gateway Ingress carries `force-ssl-redirect`, so `http://<onion>/` answers `308` to `https://<onion>/`. |
+| `SocksPort 127.0.0.1:9052` | the client side for `curl` and the e2e browser. Not 9050, which a system tor or the compose lane's tor client may hold; `KIND_TOR_SOCKS_PORT` overrides, and a busy port is refused rather than shared. |
+
+**Admitting the onion.** ingress-nginx answers a `Host: <onion>` request from its default
+server (404) unless an Ingress rule names that host. `make kind-tor` appends ONE helm
+parameter, `ingress.extraHosts[N]=<onion>`, to the ArgoCD Application
+`hugmesh-gateway-fe` — N being the length of the `extraHosts` list the Application's own
+values carry, so `*.hugmesh.net` is kept. The patch is **read-modify-write**:
+`bootstrap-kind.sh` merge-patches `spec.source.helm.parameters`, which REPLACES the list
+wholesale, so a literal list here would silently drop `ingress.className=nginx-internal`,
+`force-ssl-redirect` and `MFA=1`'s `mfa.enabled`. Consequence the other way round: a
+`make kind-up` re-run drops the onion rule — `make kind-tor` again restores it, and
+`make kind-tor-status` says when it is missing.
+
+**Custody.** The onion keys stay in `tests/stack/.run/kind-tor/hs/` (gitignored, `0700`)
+and survive `make kind-tor-down`, so the address is stable across restarts; delete that
+directory to mint a new one. `make kind-tor-status` and `scripts/kind-tor.sh onion`
+answer only while **this** tor is alive: its pidfile names a running process whose command
+line carries this torrc. A defunct (zombie) tor counts as stopped, and a leftover `hostname`
+file is not a live door.
+
+**Certificate.** The kind Ingress has no TLS block, so `:443` presents ingress-nginx's
+default certificate, not one for the onion. Tor Browser shows a certificate warning on
+`https://<onion>/`; the e2e run uses `ignoreHTTPSErrors`. The onion address itself
+authenticates the service, so this is a warning about the name, not about the channel.
+
+**Which domain answers.** hugmesh-gateway#38 (PR #39, merged) makes an unmapped `.onion`
+fail CLOSED, but only once onion tenancy is configured: `APP_TENANCY_HOSTS_FILE` is set, or
+`APP_TENANCY_HOSTS` maps a named onion. The kind lane sets neither, so the gateway still
+maps the kind onion to its default domain (`DomainRegistry.domainForHost`), and that is why
+it serves the primary domain. When hugmesh-generator#582's host-map writer sets that file
+on kind, the kind onion needs its own `<onion>=default` line, or every request to it gets
+a 403.
+
+```bash
+make kind-up && make kind-images   # the kind lane itself (unchanged)
+make kind-tor                      # host tor + Ingress rule; waits until the onion answers
+curl --socks5-hostname 127.0.0.1:9052 -k -I https://$(bash scripts/kind-tor.sh onion)/
+make kind-e2e-tor                  # @env:kind @via:onion — tests/e2e/features/platform/tor-onion-kind.feature
+make kind-tor-down                 # stop tor, drop the Ingress rule (keys kept)
+make kind-tor-check                # OFFLINE guard: tests/scripts/test-kind-tor.sh
+```
+
+`make kind-e2e-tor` is `tests/e2e/run.sh --bdd --env kind --via onion`. It reads the onion
+and the SOCKS port from the LIVE kind tor (`kind-tor.sh onion` / `socks`) and exports them
+as `SNAP_ONION_BASE_URL` and `SNAP_PROXY`. It runs ONLY `@via:onion and @env:kind`
+scenarios, and it FAILS unless at least one passed and none skipped. The steps
+(`tests/e2e/steps/kind-onion.steps.ts`) build their own proxied browser context with
+`onionContext()` from `specs/helpers.ts`, the same seam the compose lane's onion scenario
+uses, and never touch the unproxied `page` fixture. They check that `http://<onion>/`
+redirects to `https://<onion>/`, sign a persona in, read `/bff/session` over the onion,
+and fail on any request, in the page listener or in the HAR, that went to a host other
+than the onion. The `@env:kind` base URL stays the local kind door
+(`https://hugmesh.net:8443`), because the availability probe in `world.ts` is an
+unproxied Node request and could never reach an onion. The scenario has a 10-minute
+budget, with up to 12 retries for first contact, because a cold onion descriptor took
+118 s to publish on this host.
 
 ## Related
 

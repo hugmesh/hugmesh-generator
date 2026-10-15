@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  The frozen application's files: every file under the PyInstaller onedir output
+  (hugmesh-studio.exe and the whole _internal tree, roughly 800 files and 120 MB).
+
+  THIS FILE IS HAND-WRITTEN AND SHORT ON PURPOSE. The workflow used to generate it with
+  `wix harvest files ...`, and no release of the wix tool has that command (4.0.0,
+  4.0.6, 5.0.0, 5.0.2, 6.0.0, 6.0.2 and 7.0.0 were checked: "WIX0118: Additional
+  argument 'harvest' was unexpected", or simply absent from the tool's command list).
+  WiX's own build-time harvest is the <Files> element below: at `wix build` it expands
+  the pattern into one component per file and one Directory per sub-folder, with
+  stable GUIDs. So there is still no hand-kept component list to go stale at the next
+  PySide6 bump, and nothing generated to commit or regenerate.
+
+  AppDir is where the onedir sits. The default is the layout the workflow and
+  build-msi-wine.sh both produce when run from studio/: dist/hugmesh-studio, which is
+  two folders up from this file. A relative path here is resolved against THIS FILE's
+  folder (not the working directory), so pass an absolute AppDir if the tree is elsewhere:
+
+      wix build ... -define AppDir=C:\path\to\dist\hugmesh-studio ...
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <?ifndef AppDir?>
+  <?define AppDir="..\..\dist\hugmesh-studio"?>
+  <?endif?>
+
+  <Fragment>
+    <ComponentGroup Id="AppFiles" Directory="INSTALLFOLDER">
+      <Files Include="$(AppDir)\**" />
+    </ComponentGroup>
+  </Fragment>
+</Wix>
