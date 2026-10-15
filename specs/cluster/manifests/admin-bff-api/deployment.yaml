@@ -102,10 +102,21 @@ spec:
               # ${SSL_KEY_STORE_PASSWORD:} -> "" (empty), which cannot open the PKCS12
               # keystore. Plain application.properties loads UNCONDITIONALLY from the
               # additional location, with no profile needed.
+              #
+              # BOTH DIRECTIONS NEED A PASSWORD. The `server.ssl.*` keys configure the
+              # INBOUND listener only. The OUTBOUND client (OutboundMtlsClient, and the
+              # auth-core client the username gate rides) binds `hugmesh.mtls.client.*`,
+              # whose application.yml defaults are ${SSL_KEY_STORE_PASSWORD:} /
+              # ${SSL_TRUST_STORE_PASSWORD:} — env nothing sets in this pod — so with
+              # HUGMESH_MTLS_CLIENT_ENABLED on they would resolve to "" and the client
+              # keystore could not be opened. Same override path as user-bff-api; pinned
+              # by tests/scripts/test-outbound-mtls-client.sh.
               umask 077
               cat > /stores/application.properties <<EOF
               server.ssl.key-store-password=${P}
               server.ssl.trust-store-password=${P}
+              hugmesh.mtls.client.key-store-password=${P}
+              hugmesh.mtls.client.trust-store-password=${P}
               EOF
               echo "keystore + truststore + application.properties built"
           volumeMounts:
@@ -195,6 +206,17 @@ spec:
             - { name: SSL_TRUST_STORE_TYPE, value: "PKCS12" }
             # Load the in-pod-generated store passwords (application.properties).
             - { name: SPRING_CONFIG_ADDITIONAL_LOCATION, value: "file:/stores/" }
+            # ── API-to-API mTLS (CLIENT side) ─────────────────────────────────
+            # The other half of the pair above (hugmesh-generator#376, box 3). The
+            # username gate's peer, hugmesh-federation-api, serves TLS with
+            # client-auth=need, so without a client certificate the handshake is
+            # refused before any credential is read. The /stores mount used by the
+            # server side serves this direction too; the passwords reach
+            # hugmesh.mtls.client.* through the init container's application.properties.
+            # Only https:// peers engage it (an SslContext on a reactor-netty client is
+            # ignored for http://). tests/scripts/test-outbound-mtls-client.sh fails the
+            # build if this gate is on without those passwords.
+            - { name: HUGMESH_MTLS_CLIENT_ENABLED, value: "true" }
             # SessionExchangeConfig's self-loopback target. Left unset it falls back to
             # SessionExchangeConfig.DEFAULT_SELF_HOST, a PRE-REBRAND constant naming the
             # old brand's service AND namespace (not quoted verbatim here: the namespace
@@ -472,6 +494,34 @@ spec:
             # and same https:// client-auth=need scheme as user-bff/mod-bff use.
             - name: FEDERATION_USERNAME_GATE_BASE_URL
               value: "https://hugmesh-federation-api.hugmesh-backend.svc.cluster.local:8080"
+            # FEDERATION_USERNAME_GATE_ENABLED is deliberately NOT set: the gate stays
+            # OFF (hugmesh-generator#376). Setting it true is the LAST box, after the
+            # auth-core build that sends a bearer is published and admin-bff pins it,
+            # and after the Casdoor application below is a member of the `service` role.
+            # tests/scripts/test-outbound-mtls-client.sh fails the build if the flag is
+            # true without the three credentials below and the mTLS client gate above.
+            #
+            # Casdoor client-credentials for the service bearer. The auth-core username
+            # gate reads federation.username-gate.service-bearer.* and falls back to
+            # app.casdoor.platform.*; the other hugmesh-admin-bff-api clients that mint a
+            # service token read app.casdoor.platform.* directly, so ONE block feeds all
+            # of them (each stays behind its own OFF flag).
+            # Decision 2026-10-15 on #376: the application is app-admin-bff, its own
+            # application with its own secret (ExternalSecret admin-bff-casdoor-client,
+            # external-secrets/secretstore.yaml; no value in git). The Secret refs are
+            # `optional: true`, like the other credential refs in this file: an unseeded
+            # path leaves the env empty (gate off, so nothing reads it) instead of wedging
+            # the pod in CreateContainerConfigError. A WRONG Secret name or key is caught
+            # by tests/scripts/test-outbound-mtls-client.sh, which checks these refs
+            # against the ExternalSecret that creates them.
+            - name: APP_CASDOOR_PLATFORM_BASE_URL
+              value: "http://casdoor.hugmesh-pki.svc.cluster.local:8000"
+            - name: APP_CASDOOR_PLATFORM_CLIENT_ID
+              valueFrom:
+                secretKeyRef: { name: admin-bff-casdoor-client, key: clientId, optional: true }
+            - name: APP_CASDOOR_PLATFORM_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef: { name: admin-bff-casdoor-client, key: clientSecret, optional: true }
             - name: APPSTORE_FEDERATION_BASE_URL
               value: "https://hugmesh-federation-api.hugmesh-backend.svc.cluster.local:8080"
             # app.appstore.scaffold.headscale-url — the mesh-join endpoint a scaffolded
@@ -573,6 +623,13 @@ spec:
             # Neither finding affects the base-url values pinned here: every correct
             # https:// address for these Services hits the same wall, and dropping to
             # plaintext would be a decision nobody has made.
+            # UPDATE 2026-10-15 (hugmesh-generator#376): HUGMESH_MTLS_CLIENT_ENABLED is now
+            # true above, and both effector clients are built on that connector. The
+            # FEDERATION handshake wall above is therefore expected to be gone, so that
+            # leg should now reach the peer and answer for its bearer (APPSTORE_FEDERATION_
+            # AUTH_TOKEN, optional below) instead of failing before one is sent. NOT
+            # measured on a live cluster. The ARGOCD leg still presents a self-signed
+            # leaf that the cluster-CA-only truststore does not hold (#62 stays open).
             # The tokens are wired as secretKeyRefs with `optional: true` and ONLY that:
             # a non-optional secretKeyRef naming a Secret that does not exist wedges this
             # very pod in CreateContainerConfigError, which would reproduce the exact hang

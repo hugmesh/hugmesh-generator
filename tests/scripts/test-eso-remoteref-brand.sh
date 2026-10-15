@@ -92,16 +92,16 @@ BUILDERS=(
 
 # app|git tree it serves|expected ExternalSecret key count|expects a harbor env
 APPS=(
-  "specs/cluster/apps/04-external-secrets-config.yaml|specs/cluster/manifests/external-secrets|123|no"
+  "specs/cluster/apps/04-external-secrets-config.yaml|specs/cluster/manifests/external-secrets|124|no"
   "specs/cluster/apps/12-cloudflared.yaml|specs/cluster/manifests/cloudflared|1|no"
   "specs/cluster/apps/03b-harbor-provision.yaml|specs/cluster/manifests/harbor|0|yes"
 )
 
 # THE EXPECTED CENSUS. Recomputed below from the tree, never taken on faith; the
 # numbers are here so a change that moves one of them has to say so in a diff.
-EXP_TOTAL=145      # every "key: hugmesh/" literal under specs/cluster
-EXP_LIVE=143       # ... minus the 2 commented-out examples in velero-externalsecrets.yaml
-EXP_SERVED=123     # ... carried by apps/04 (files listed in its kustomization resources)
+EXP_TOTAL=146      # every "key: hugmesh/" literal under specs/cluster
+EXP_LIVE=144       # ... minus the 2 commented-out examples in velero-externalsecrets.yaml
+EXP_SERVED=124     # ... carried by apps/04 (files listed in its kustomization resources)
 EXP_CLOUDFLARED=1  # ... carried by apps/12
 EXP_CASDOOR=3      # ... per-DOMAIN, patched by apps/05b's ApplicationSet (slug, not brand)
 EXP_UNSERVED=16    # ... in files NOT listed in resources: azure-intune 3 (commented out,
