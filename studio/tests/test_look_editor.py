@@ -64,6 +64,28 @@ def test_a_design_edit_lands_in_the_record_and_emits_changed(qapp):
     assert ed.model.get("preset") == ""
 
 
+def test_the_path_rule_touches_only_each_rows_direct_children_and_still_disables_the_inside(qapp):
+    """set_path used to call setEnabled on EVERY descendant of a row, including a combo
+    box's own popup and a line edit's inner widgets that Qt re-creates when a style
+    changes; a stale one segfaulted the process now and then (seen as a crash in
+    QWidget::setEnabled in tests/test_domain_services_selection_column.py). It now
+    touches the row's direct children only, and a disabled parent disables what is inside
+    it. (Mutation: put the recursive walk back and the source scan goes red.)"""
+    import inspect
+    src = inspect.getsource(LookEditor.set_path)
+    assert "FindDirectChildrenOnly" in src
+    ed = LookEditor(brand_look.Look({}, base={}), path="kind")
+    ed.show()
+    for field, control in ed.controls.items():
+        assert not control.isEnabled(), field
+        for child in control.findChildren(QtWidgets.QWidget):
+            assert not child.isEnabled(), (field, type(child).__name__)
+        assert ed.source_labels[field].isEnabled(), field
+    ed.set_path("docker")
+    for field, control in ed.controls.items():
+        assert control.isEnabled(), field
+
+
 def test_a_box_left_with_the_value_it_already_holds_is_not_an_edit(qapp):
     """Leaving a box unchanged emits nothing (the guard in LookEditor._write; with the
     guard replaced by 'always' every tab through the form announced an edit and

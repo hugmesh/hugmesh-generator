@@ -449,8 +449,9 @@ class BrandSession:
         a design edit is checked against every brand's finished stylesheet (the
         superbrand's look plus the brand's own overrides) as the rows stand NOW, read at
         each edit, not only against the superbrand's own budget."""
+        host = self.host                 # the closure holds the host, never the session
         self.look.dependents = lambda: {
-            brand_model.brand_id(d): dict(d.look or {}) for d in self.host.rows()}
+            brand_model.brand_id(d): dict(d.look or {}) for d in host.rows()}
         self.look.identity_allowed = not self.unaffiliated
         self.look.identity_reason = UNAFFILIATED_REASON if self.unaffiliated else ""
 
