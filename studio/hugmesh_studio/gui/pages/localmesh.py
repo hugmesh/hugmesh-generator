@@ -1580,8 +1580,8 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         self.copy_onion_btn = QtWidgets.QPushButton("Copy .onion address")
         self.copy_onion_btn.setToolTip(
             "Copy the local mesh's minted Tor .onion address to the clipboard (open "
-            "it in Tor Browser — a normal browser cannot reach a .onion). Enabled "
-            "only after a TOR=1 bring-up has published the address.")
+            "it in Tor Browser — a normal browser cannot reach a .onion). Before "
+            "tor has published an address, clicking explains how to get one.")
         self.copy_onion_btn.clicked.connect(self._copy_onion)
         brow.addWidget(self.copy_onion_btn)
         self.creds_btn = QtWidgets.QPushButton("Sign-in credentials")
@@ -3999,8 +3999,8 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         if not url:
             QtWidgets.QMessageBox.information(
                 self, "No .onion yet",
-                "No Tor .onion has been published. Bring the mesh up with "
-                "'Expose the mesh as a Tor v3 .onion' ticked (TOR=1) and wait ~30s "
+                "No Tor .onion has been published. On the Services step, tick "
+                "\"On\" for the \"tor\" row, bring the mesh up, and wait ~30s "
                 "for tor to publish the address.")
             return
         QtWidgets.QApplication.clipboard().setText(url)

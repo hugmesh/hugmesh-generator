@@ -341,7 +341,8 @@ all ten builders carry the wiring. Studio side:
 
 ## The host-side BDEPEND pool (arm cross builds; PR #72 §4)
 
-Cross builds merge every BDEPEND **"to /"** (the builder container's own root) under
+Cross builds merge every BDEPEND **"to /"** (the builder container's own root; in a build
+log such a merge prints no root tail at all, only a target merge prints ` for <sysroot>/`) under
 the crossdev wrapper's `--root-deps=rdeps`. The wave-1 measurement (#46) found 33–49
 such amd64 host tools source-compiled *per arm image*, because the container's
 default `PKGDIR` dies with the container. These host tools are **executed by the
@@ -579,6 +580,13 @@ builders' `--print-plan` report `PLAN_KERNEL_CACHE=<root>|off`.
 
 ## Honest limits (owed proof)
 
+- **Measurement plan and instrument now exist; the number does not.** The protocol
+  (legs A-E: same-board rerun, cross-role, cross-board isolation, correctness of the
+  reused image, x86) is [`BINPKG-MEASUREMENT-PLAN.md`](BINPKG-MEASUREMENT-PLAN.md), and
+  `scripts/binpkg-reuse-report.py` turns two build logs into the compile-once reuse rate
+  and speedup (`make binpkg-reuse-report`). It is tested only on synthetic fixture logs and short excerpts of real ones, never on a real cold/warm pair.
+  The same page records what the fingerprint guard does NOT prove, including that no
+  builder salts a target pool with the gcc/glibc identity the library header names.
 - The compile-once **speedup and end-to-end correctness are UNPROVEN** in this change,
   because the sandbox cannot run a real cross-build. Every change here rests on static
   review, `bash -n`, the build-matrix parity and flag-coverage gates, and hermetic
@@ -617,7 +625,7 @@ builders' `--print-plan` report `PLAN_KERNEL_CACHE=<root>|off`.
   make.conf wiring, target isolation) are proven hermetically in
   `tests/scripts/test-host-bdep-pool.sh`. That a real second arm build installs its
   33–49 host bdeps as `[binary]` is owed from the next fleet build's emerge logs (the
-  same "to /" batch wave 1 counted). The other seven cross builders carry no leg yet;
+  same batch of tail-less `>>> Emerging` lines wave 1 counted). The other seven cross builders carry no leg yet;
   wiring them is the same four hunks. Portage's concurrent index handling under
   `binpkg-multi-instance` has not been exercised by a real concurrent fleet build here.
 - **Signed-kernel cache (G4): what is NOT done and NOT proven.**
