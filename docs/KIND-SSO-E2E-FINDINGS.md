@@ -40,7 +40,7 @@ the local fix.
 > are fixed on `main` (1 for kind only, 16 in the admin-bff source with the image
 > rebuild unverified). Open: 17, 20 (harness: specs 19, 20 and 23 still call
 > Playwright's built-in `request` fixture, only spec 29 uses `apiContext`), 25, 26,
-> and **27 (#693, `GET /bff/session` answers 500 on kind)**. Item 24 is fixed in
+> and the live proof of **27** (#693, `GET /bff/session` answered 500 on kind; fixed on `main` by pull requests #709 and #736, merged 2026-10-14, not yet run on a cluster). Item 24 is fixed in
 > the gateway source. This tree-and-guards re-measurement supersedes the 2026-10-07
 > status note that stood here (it listed only 17, 25 and 26 as open, before item 27
 > was found); the `#NNN` numbers in the table are not reliable pull request numbers
@@ -319,20 +319,17 @@ and 23 still use the built-in `request` fixture), 25 and 26. A guard run today
 agrees with the notes on 25: `tests/scripts/test-outbound-mtls-client.sh` passes
 14 of 14 with `EXEMPT_HTTP_TLS` still naming the four exempt call sites.
 
-### 27. The BFFs cannot validate a Casdoor JWT on kind (hugmesh-generator#693)
+### 27. The BFFs could not validate a Casdoor JWT on kind (hugmesh-generator#693)
 
-**OPEN on main.** `POST /bff/login` mints the cookie (spec 27 stays green), but the
-first call that validates a token, `GET /bff/session`, answers 500: the ten
+**FIXED on main (pull requests #709 and #736, merged 2026-10-14; #693 closed), live proof not run.** `POST /bff/login` minted the cookie (spec 27 stayed green), but the
+first call that validates a token, `GET /bff/session`, answered 500: the ten
 kustomize-managed JWT-validating manifests set only `CASDOOR_ISSUER_URI`
-(`https://id.hugmesh.net`), the signing-key fetch goes to that name, and it does
+(`https://id.hugmesh.net`), the signing-key fetch went to that name, and it did
 not resolve inside the cluster. The gateway chart already sets `CASDOOR_JWKS_URI`
 to the in-cluster Service. The fix is the manifests plus three NetworkPolicies
 that admit the pods the hugmesh-pki tier policy did not
 (`manifests/networkpolicy/casdoor-jwks-ingress.yaml`), guarded offline by
-`tests/scripts/test-bff-jwks-in-cluster.sh` (25 negative controls). It is in
-draft pull request #709, which conflicts with current main only in
-`tests/scripts/test-guard-integrity.sh` (the suite census, re-checked with
-`git merge-tree` on 2026-10-14). Draft pull request #736 is the same change
-merged with main and has no conflict; merge one of them, not both. The live proof (`make kind-tor`, then
+`tests/scripts/test-bff-jwks-in-cluster.sh` (25 negative controls). Pull requests #709
+and #736 (the same change, merged with main) both merged on 2026-10-14. The live proof (`make kind-tor`, then
 `make kind-e2e-tor`, on a fresh bootstrap) has not been run. Until it has, the
 spec 27 PASS above proves less than "login works".
