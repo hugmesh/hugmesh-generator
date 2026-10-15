@@ -678,7 +678,16 @@ class LookEditor(QtWidgets.QWidget):
         for field, control in self.controls.items():
             row = control.parentWidget()
             if row is not None:
-                for w in row.findChildren(QtWidgets.QWidget):
+                # DIRECT children only: the control, its buttons and the 'Use the
+                # superbrand's value' button. A disabled parent disables everything
+                # inside it, and walking every descendant reached a control's own
+                # internal widgets (a combo box's popup, a line edit's clear button),
+                # which Qt re-creates when a style changes: calling setEnabled on a
+                # stale one crashed the process now and then (segfault in QWidget::
+                # setEnabled, seen in a style-switching test).
+                for w in row.findChildren(
+                        QtWidgets.QWidget,
+                        options=QtCore.Qt.FindChildOption.FindDirectChildrenOnly):
                     if w is not self.source_labels[field]:
                         w.setEnabled(own_look_shows)
         self._refresh_sources()
