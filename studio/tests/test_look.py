@@ -119,20 +119,34 @@ def test_a_missing_style_fails_when_the_run_requires_it_and_skips_when_optional(
     assert missing_style_action("Fusion", ["Windows"], required=("Fusion",)) == "fail"
 
 
+def _outcome_of_looking(qapp, style: str) -> tuple:
+    """Run ``looking(qapp, style, None)`` and say what happened: ``("fail", msg)``,
+    ``("skip", msg)`` or ``("ran", "")`` when the body was reached. pytest's Failed and
+    Skipped are BaseExceptions, and ``pytest.raises(one)`` does not catch the other, so a
+    check on one outcome alone would pass (or report SKIPPED) when the code swaps them."""
+    try:
+        with looking(qapp, style, None):
+            return ("ran", "")
+    except pytest.fail.Exception as exc:
+        return ("fail", str(exc))
+    except pytest.skip.Exception as exc:
+        return ("skip", str(exc))
+
+
 def test_looking_fails_for_a_required_missing_style_and_skips_an_optional_one(
         qapp, monkeypatch):
     """The context manager itself (not only the helper it asks): a style this host does
     not have is a FAILURE where the run requires it, and a skip with the reason where it
-    does not. Nothing is measured either way, so the application's style is untouched."""
+    does not. Nothing is measured either way, so the application's style is untouched.
+    Each case asserts WHICH outcome came back, so turning the required-missing ``fail``
+    into a ``skip`` (the bug this guards) makes this test red, not skipped."""
     before = qapp.style().objectName()
     monkeypatch.setenv(REQUIRE_STYLES_ENV, "NoSuchStyle")
-    with pytest.raises(pytest.fail.Exception, match="NoSuchStyle"):
-        with looking(qapp, "NoSuchStyle", None):
-            pytest.fail("the body must not run")
+    kind, msg = _outcome_of_looking(qapp, "NoSuchStyle")
+    assert kind == "fail" and "NoSuchStyle" in msg, (kind, msg)
     monkeypatch.setenv(REQUIRE_STYLES_ENV, "Fusion")
-    with pytest.raises(pytest.skip.Exception, match="optional"):
-        with looking(qapp, "NoSuchStyle", None):
-            pytest.fail("the body must not run")
+    kind, msg = _outcome_of_looking(qapp, "NoSuchStyle")
+    assert kind == "skip" and "optional" in msg, (kind, msg)
     assert qapp.style().objectName() == before
 
 
