@@ -790,6 +790,19 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # tests/scripts/run-ungated-lane.sh's header counts (32 of 32, 8 of 32) were taken from
 # its E2E_UNGATED_DRY_RUN=1 output for both sets. The "stays 21/22" lines in the entries
 # above are history and are left as written.
+#
+# 198 -> 198 (denominator +1, ungated SET +1) on 2026-10-14 for #698 (Local AI without
+# Claude): tests/scripts/test-local-ai-no-claude.sh landed on disk and in .gitlab-ci.yml's
+# orphan-guards-verify job, but NOT in shell-suites.yml: the change that added it was
+# not permitted to edit .github, so the suite is recorded in PREMERGE_UNGATED below as a
+# wiring gap (the same shape as the two tests/desktop-governance entries there) and the
+# gated count does not move. Re-measured on 2026-10-15 on the merge of
+# feat/local-ai-dock-and-cli with origin/main a73be8ce (GUARD_PREMERGE=0), by RUNNING
+# this file, not computed:
+#     198 of 233 suites are named by a pull_request-triggered workflow
+#     PASS the ungated SET matches its pin exactly (35 suite(s))
+# tests/scripts/run-ungated-lane.sh's header counts (35 of 35, 8 of 35) were taken from
+# its E2E_UNGATED_DRY_RUN=1 output for both sets.
 PREMERGE_BASELINE="${GUARD_PREMERGE:-198}"
 
 # 182 -> 192 (denominator 205 -> 215) on 2026-09-30 for #385: the census gained a
@@ -1055,6 +1068,14 @@ PREMERGE_UNGATED=(
   tests/scripts/test-optional-services-cutover-matrix.sh
   tests/scripts/test-federation-module-slugs.sh
   tests/scripts/test-liquibase-grant-roles.sh
+  # NOT an exemption, a wiring gap: offline, bash + python3 + git only (it builds a
+  # PATH with no claude binary and runs scripts/local-ai.sh under it), so it WOULD run
+  # in the shell-suites debian job. It is listed solely because the change that added
+  # it (#698, the Local AI dock and CLI) was not permitted to edit
+  # .github/workflows/shell-suites.yml. It IS run post-merge, by .gitlab-ci.yml's
+  # orphan-guards-verify. TO CLOSE THIS: add the path to that job's SUITES list, delete
+  # this entry and raise PREMERGE_BASELINE by one to the number this file then prints.
+  tests/scripts/test-local-ai-no-claude.sh
   # RED ON MAIN, and the reds are real defects rather than suite bugs: a jetson
   # builder that bakes the cluster tree without resolving the gate at all, two
   # selection-rendered artefacts the boot path still sources from git, a git

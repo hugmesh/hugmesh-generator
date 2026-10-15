@@ -3609,6 +3609,7 @@ orphan-guards-verify:
         tests/scripts/test-installer-ui-node-default.sh
         tests/scripts/test-intltool-preseed.sh
         tests/scripts/test-kernel-artifact-cache.sh
+        tests/scripts/test-local-ai-no-claude.sh
         tests/scripts/test-makefile-reown-skips-sysroot.sh
         tests/scripts/test-optional-netpol-autosync.sh
         tests/scripts/test-passhash-lib.sh
