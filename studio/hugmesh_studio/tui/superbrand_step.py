@@ -238,7 +238,7 @@ class BootstrapHost(BrandHost):
 
     def write_superbrand(self, sb: brand_model.Superbrand) -> None:
         rec = brand_model.BrandRecord(superbrand=sb, brands=self.rows())
-        brand_model.apply_record_to_bootstrap(rec, self.cfg)
+        brand_model.apply_record_to_bootstrap(rec, self.cfg, typed_flags=False)
 
     def _live_rows(self) -> list[Domain]:
         if self.state is not None:

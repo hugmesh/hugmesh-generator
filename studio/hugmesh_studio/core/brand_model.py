@@ -535,7 +535,7 @@ _SECRET_KEY = re.compile(r"(token|secret|passw|passphrase|private[_-]?key|authke
 _ID_WORDS = re.compile(r"[a-z0-9]+(-[a-z0-9]+)+\Z")
 
 
-def _looks_like_secret(value: str, *, is_id: bool = False) -> str:
+def _looks_like_secret(value: str, *, is_id: bool = False, is_design: bool = False) -> str:
     v = value.strip()
     if _PEM.search(v):
         return "a PEM block"
@@ -545,6 +545,12 @@ def _looks_like_secret(value: str, *, is_id: bool = False) -> str:
     if m:
         return f"a token-shaped value ({m.group(1)[:6]}…)"
     if is_id and _ID_WORDS.fullmatch(v):
+        return ""
+    # A stored design's name is bounded by its own rule (the Studio writes
+    # copied_from.design from a validated slug); a legal 40-character one holds
+    # letters and digits and would otherwise read as an opaque token. The prefix
+    # patterns above still refuse a real token under that key.
+    if is_design and _DESIGN_NAME_RE.fullmatch(v):
         return ""
     if (_OPAQUE.fullmatch(v) and re.search(r"[A-Za-z]", v) and re.search(r"[0-9]", v)
             and not v.endswith(".onion") and "://" not in v and not v.startswith("/")):
@@ -557,7 +563,7 @@ def secret_problems(obj: Any, where: str = "record") -> list[str]:
     dicts and lists; a dataclass row is walked through asdict."""
     problems: list[str] = []
 
-    def walk(o: Any, path: str, is_id: bool = False) -> None:
+    def walk(o: Any, path: str, is_id: bool = False, is_design: bool = False) -> None:
         if hasattr(o, "__dataclass_fields__"):
             o = asdict(o)
         if isinstance(o, dict):
@@ -567,12 +573,13 @@ def secret_problems(obj: Any, where: str = "record") -> list[str]:
                         and not str(k).endswith("_file")):
                     problems.append(f"{p}: a value under a key that names a secret")
                     continue
-                walk(v, p, str(k) == "id")
+                walk(v, p, str(k) == "id",
+                     str(k) == "design" and path.endswith("copied_from"))
         elif isinstance(o, (list, tuple)):
             for i, v in enumerate(o):
                 walk(v, f"{path}[{i}]")
         elif isinstance(o, str):
-            why = _looks_like_secret(o, is_id=is_id)
+            why = _looks_like_secret(o, is_id=is_id, is_design=is_design)
             if why:
                 problems.append(f"{path}: {why}")
 
@@ -812,14 +819,26 @@ def record_from_bootstrap(cfg) -> BrandRecord:
     return BrandRecord(superbrand=sb, brands=rows)
 
 
-def apply_record_to_bootstrap(record: BrandRecord, cfg) -> None:
+#: ``--brand``'s default on the bootstrap (local_mesh_bootstrap.DEFAULT_BRAND, which
+#: imports this module and so cannot be imported here; a test pins the two together).
+#: A cfg that still carries it was not told a brand, so the record's id is no contradiction.
+_BOOTSTRAP_DEFAULT_BRAND = "hugmesh"
+
+
+def apply_record_to_bootstrap(record: BrandRecord, cfg, *,
+                              typed_flags: bool = True) -> None:
     """Write the record onto a bootstrap config, in place (``up --record``): the
     superbrand's id and public name onto ``brand``/``cluster_domain``, the block onto
     ``superbrand``, the brands onto ``domains`` and ``own_idp_domains``, and the
     superbrand's Tor way (``ways.tor``, set_ways' one field) onto ``with_tor``, so the
     mesh show-record describes is the mesh that starts. A flag that says the opposite
     (``--with-tor`` or a ``--services`` selection) is a contradiction, not an
-    override: ValueError, and nothing is applied. Everything that is not the record's
+    override: ValueError, and nothing is applied; the same for a ``--brand`` that
+    names another superbrand and for ``--own-casdoor-domain`` names that are not
+    exactly the record's own-sign-in brands. ``typed_flags=False`` is for the
+    Studio's own screens, whose configuration is the person's working copy and not
+    a command line: there the record replaces the brand and the own-sign-in set,
+    which is what the screen is for. Everything that is not the record's
     to say (env, source, the auth key) is left as the caller set it."""
     sb = record.superbrand
     if "tor" in (sb.ways or {}):
@@ -833,8 +852,6 @@ def apply_record_to_bootstrap(record: BrandRecord, cfg) -> None:
             raise ValueError("the brand record says this mesh has no Tor address, but "
                              "--with-tor was given: change the record's way (set_ways) "
                              "or drop the flag")
-        if cfg.services is None:
-            cfg.with_tor = want
     # The public name is the other thing a flag and a record can both say. A flag that
     # names a DIFFERENT domain is a contradiction, refused like the Tor one: letting the
     # record win silently started a production plan on a name the person never typed.
@@ -843,6 +860,35 @@ def apply_record_to_bootstrap(record: BrandRecord, cfg) -> None:
         raise ValueError(
             f"the brand record names the public domain {sb.public_name}, but "
             f"--cluster-domain {typed} was given: change the record or the flag, not both")
+    # The brand id and the own-sign-in set are the same kind of thing: a flag that
+    # names another one is a contradiction, never a silent loser. A different brand id
+    # changes the Vault path (secret/<brand>); a different own-sign-in set changes
+    # which brands get a sign-in of their own and on which port.
+    typed_brand = (cfg.brand or "").strip()
+    if (typed_flags and sb.id and typed_brand
+            and typed_brand not in (_BOOTSTRAP_DEFAULT_BRAND, sb.id.strip())):
+        raise ValueError(
+            f"the brand record names the superbrand {sb.id}, but --brand {typed_brand} "
+            "was given: change the record or the flag, not both")
+    record_own = [d.name.strip() for d in record.brands
+                  if d.idp == DOMAIN_IDP_OWN and (d.name or "").strip()]
+    typed_own = [n.strip() for n in (cfg.own_idp_domains or ()) if n.strip()]
+    if typed_flags and typed_own and set(typed_own) != set(record_own):
+        extra = sorted(set(typed_own) - set(record_own))
+        missing = sorted(set(record_own) - set(typed_own))
+        parts = []
+        if extra:
+            parts.append("--own-casdoor-domain names " + ", ".join(extra)
+                         + ", which the record does not give its own sign-in")
+        if missing:
+            parts.append("the record gives its own sign-in to " + ", ".join(missing)
+                         + ", which no --own-casdoor-domain names")
+        raise ValueError("the brand record and the flags disagree on which brands have "
+                         "their own sign-in (" + "; ".join(parts) + "): change the "
+                         "record or the flags, not both")
+    # Every refusal is above this line: past it the config is written.
+    if "tor" in (sb.ways or {}) and cfg.services is None:
+        cfg.with_tor = bool(sb.ways["tor"])
     if sb.id:
         cfg.brand = sb.id
     if sb.public_name:
@@ -1080,7 +1126,13 @@ def save_record(record: BrandRecord, path: str | None = None, *,
 
 def load_record(path: str | None = None) -> BrandRecord:
     with open(path or record_path(), encoding="utf-8") as fh:
-        return BrandRecord.from_dict(json.load(fh))
+        raw = json.load(fh)
+    try:
+        return BrandRecord.from_dict(raw)
+    except (TypeError, AttributeError) as exc:
+        # a hand-edited file with a list where a block belongs: the callers refuse a
+        # ValueError with a sentence, and would print a traceback for anything else
+        raise ValueError(f"the brand record is not shaped like one ({exc})") from exc
 
 
 # ── the superbrand store (D5) ────────────────────────────────────────────────────────

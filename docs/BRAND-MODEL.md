@@ -188,7 +188,8 @@ to the real Makefile, so it flips the day the hold lands.
 - **The Docker mesh**: `python3 -m hugmesh_studio.core.local_mesh_bootstrap up --record FILE`
   starts a mesh from a record (the record decides the brand, the public name, the brands and their
   sign-ins, and whether the mesh starts with Tor on; every other flag still
-  applies), and `show-record --record FILE` prints
+  applies, but a `--brand`, `--cluster-domain`, `--own-casdoor-domain` or `--with-tor`
+  that says something else is refused, not overridden), and `show-record --record FILE` prints
   every brand's effective look with the source of each value and the effect of each
   way on each path, in the words above, from a fresh process. Without a record file
   both read the flags, in the order given: two own sign-ins named `zed` then `alpha`
