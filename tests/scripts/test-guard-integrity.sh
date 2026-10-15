@@ -984,6 +984,17 @@ PREMERGE_UNGATED=(
   # THAT WORKFLOW'S SUITES LIST, DELETE THIS ENTRY AND RAISE PREMERGE_BASELINE BY ONE. It is
   # run today by `make binpkg-reuse-report-check`.
   tests/scripts/test-binpkg-reuse-report.sh
+  # NOT YET IN THE PULL_REQUEST GATE, and that is the only reason it is here: it is
+  # offline, bash + python3 only, and belongs in shell-suites.yml beside
+  # test-lsm-posture-honesty.sh (same job). It is gated post-merge by .gitlab-ci.yml's
+  # lint:btf-pahole-pairing. The lane that wrote it (hugmesh-generator#760) was
+  # forbidden to edit anything under .github, so: add the path to that SUITES list,
+  # delete this entry and raise PREMERGE_BASELINE by one to the number check 7 prints.
+  tests/scripts/test-btf-pahole-pairing.sh
+  # CANNOT gate: it needs a kernel SOURCE tree plus gcc, flex, bison and pahole, none
+  # of which a shell-suites image carries, and it exits 2 (never a silent pass) when
+  # given no tree. Run it with `make btf-kconfig-resolve-check KERNEL_TREE=<tree>`.
+  tests/scripts/test-btf-kconfig-resolve.sh
   # NOT an exemption, a wiring gap: offline, python3 + os.walk over the checkout,
   # no network, no root. It sits here only because naming it in shell-suites.yml is
   # an edit under .github/, which the change that added it (the group-call SFU design

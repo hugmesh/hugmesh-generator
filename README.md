@@ -452,12 +452,21 @@ none), and compose green is not evidence for the cluster._
   fleet posture:** all 10 boards build `CONFIG_SECURITY_LOCKDOWN_LSM` (+ `_EARLY`),
   list `lockdown` first in `CONFIG_LSM`/`lsm=` and pass `lockdown=integrity`; the
   lint pins that for every board, not only agreement between fragment and cmdline.
-  What remains: **bpf-LSM can register but not enforce:** attaching a
-  `BPF_PROG_TYPE_LSM` program needs BTF, which both arch fragments deliberately omit
-  (it forces `CONFIG_DEBUG_INFO` and needs `dev-util/pahole` in the kernel-build
-  toolchain) — it arrives with the same pahole-gated follow-up as cilium CO-RE, and
-  the ARM boards also need `CONFIG_BPF_LSM` plus its deps before `bpf` may return to
-  their `lsm=`. The ARM lockdown change is **proven only by a Kconfig resolve and the
+  **bpf-LSM attach prerequisites (x86 + rpi5):** attaching a `BPF_PROG_TYPE_LSM`
+  program needs BTF, so both fragments now carry the BTF block
+  (`CONFIG_DEBUG_INFO_BTF`, `_BTF_MODULES`, the DWARF choice) and `dev-util/pahole`
+  is provided where each kernel is linked (x86: package list plus the chroot top-up;
+  rpi5: `Dockerfile.build`, since that kernel is cross-linked on the builder host).
+  Both builders fail the build if `olddefconfig` drops BTF,
+  `tests/scripts/test-btf-pahole-pairing.sh` pins the pairing, and
+  `tests/scripts/test-btf-kconfig-resolve.sh <kernel-tree>` shows the x86 symbols
+  survive a real Kconfig resolve. BTF and struct layout randomisation are mutually
+  exclusive in Kconfig (`DEBUG_INFO_BTF` depends on it being off); it is off today.
+  What remains: a **booted-image proof** that a bpf-LSM program really attaches (the
+  build proves the kernel config, not a boot, and the rpi5 resolve is only enforced by
+  its builder guard on the real tree), and the ARM boards, which also need
+  `CONFIG_BPF_LSM` plus its deps before `bpf` may return to their `lsm=`. The ARM
+  lockdown change is **proven only by a Kconfig resolve and the
   offline lint, not by a boot:** an image build plus the in-guest
   `/sys/kernel/security/lockdown` assertion on real boards (or `launch-arm.sh`)
   is still owed.
@@ -1276,7 +1285,7 @@ provisioning engine, the backup engine, and the `cluster/` GitOps payload).
 |---|---|
 | `specs-rpi5/portage/*` | RPi5 portage config (make.conf, packages, profile, keywords, USE) |
 | `specs-rpi5/kernel/hardened-k8s.config` | RPi kernel fragment (hardened + k8s + USB/VFAT + virtio); **reference** for the arch-neutral k8s netfilter/NAT/eBPF symbols both arches share |
-| `specs-x86/kernel/hardened-k8s.config` | amd64 kernel fragment (hardened + k8s). **Boot-critical:** carries the full netfilter/NAT/eBPF surface k8s Service networking needs — xtables match/target layer, `NF_NAT_MASQUERADE`, nft `NAT/MASQ/CT`, IPv6 nf tables, `IP_NF_MANGLE` (was a truncated copy that left ClusterIP/kube-proxy/MASQUERADE/dual-stack/NetworkPolicy dead). A **fail-closed build guard** in `build-x86-host-stage4.sh` (mirrored in `build-rpi5-stage4.sh`) asserts the load-bearing subset survives `make olddefconfig`; `tests/scripts/test-x86-kernel-net-symbols.sh` (CI `lint:x86-kernel-net-symbols`) keeps the fragment from re-truncating. eBPF CO-RE (BTF) is a separate pahole-gated follow-up — see the BTF note in the fragment. |
+| `specs-x86/kernel/hardened-k8s.config` | amd64 kernel fragment (hardened + k8s). **Boot-critical:** carries the full netfilter/NAT/eBPF surface k8s Service networking needs — xtables match/target layer, `NF_NAT_MASQUERADE`, nft `NAT/MASQ/CT`, IPv6 nf tables, `IP_NF_MANGLE` (was a truncated copy that left ClusterIP/kube-proxy/MASQUERADE/dual-stack/NetworkPolicy dead). A **fail-closed build guard** in `build-x86-host-stage4.sh` (mirrored in `build-rpi5-stage4.sh`) asserts the load-bearing subset survives `make olddefconfig`; `tests/scripts/test-x86-kernel-net-symbols.sh` (CI `lint:x86-kernel-net-symbols`) keeps the fragment from re-truncating. BTF (bpf-LSM attach, eBPF CO-RE) is built too, paired with `dev-util/pahole` — see the BTF note in the fragment. |
 | `specs-rpi5/boot/{config.txt.tmpl,cmdline.txt}` | RPi firmware boot config + kernel command line |
 | `specs-rpi5/etc/fstab` | RPi filesystem table (mounts the `/boot` firmware partition) |
 | `specs-rpi5/installer/install.sh` | SD/NVMe installer (ships in the RPi5 ISO) |
