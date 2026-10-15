@@ -695,6 +695,10 @@ if [ "${GEN_DEVICE_SSH}" = true ]; then
     # install_authorized_keys ssh/<name>.authorized_keys convention. PUBLIC only.
     printf '%s\n' "${DIAL_PUB}" > "${OUT_DIR}/ssh/${DIAL_USER}.authorized_keys"
     chmod 0644 "${OUT_DIR}/ssh/${DIAL_USER}.authorized_keys" 2>/dev/null || true
+    # Name the dial account for provision.sh's provision_dial_user (it creates it); the
+    # default bff-dial needs no marker but a --dial-user override does. Not secret.
+    printf '%s\n' "${DIAL_USER}" > "${OUT_DIR}/ssh/dial_user"
+    chmod 0644 "${OUT_DIR}/ssh/dial_user" 2>/dev/null || true
     # The dial PUBLIC key never belongs in the Vault-seed dir's pub sibling being
     # mistaken for the image-baked one; keep the .pub next to the private key for
     # the ingest step but DO NOT leave it where the image bake globs ssh/host/.
