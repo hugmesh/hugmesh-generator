@@ -186,6 +186,19 @@ DOCUMENTED_EXCLUSIONS = {
     ("hugmesh-fe-gateway", "/bff/wiki/superadmin/**",           "ROLE_SUPERADMIN"),
 }
 
+# ALLOW rows OUTSIDE the two blanket prefixes that DELIBERATELY end up at
+# mfa_required=true, each by a ROW-SCOPED UPDATE naming its full identity. Operator
+# decision 2026-10-15 (hugmesh-tube-ui#19 / hugmesh-wiki-ui#25): the tube ADMIN write
+# surfaces — the use-access overlay (grant/timeout/ban/revoke) and the storage
+# budget — sit behind the MFA floor. `/**` and not `/*`: the DELETE revoke lives at
+# /access/{type}/{user}, two segments below, which a single-segment `*` would miss.
+# Anything else flipped outside the prefixes is OVERREACH. Cross-checked against the
+# seed's UPDATE and the runbook's `gate:allow-floor` table, in both directions.
+DELIBERATE_ALLOW_MFA = {
+    ("hugmesh-fe-gateway", "/bff/tube/admin/access/**",         "ROLE_ADMIN"),
+    ("hugmesh-fe-gateway", "/bff/tube/admin/storage-budget/**", "ROLE_ADMIN"),
+}
+
 # PER-DOMAIN MFA SCOPE (issue #47 × casdoor-choice). url_patterns an operator has
 # listed in the UPDATE's per-domain arm — the seed-side convergence list for
 # per-domain TIGHTENING rows (a domain-scoped sibling row outside the two blanket
@@ -382,10 +395,41 @@ for t in rs_targets:
 emit("MFA_ROW_SEED_DECLARED",
      "yes" if rs_targets == [ROW_SEED_TARGET] else "no")
 
+# ── the ROW-SCOPED ALLOW seed (operator decision 2026-10-15, tube step-up) ────
+# The third kind of `SET mfa_required = true`: ALLOW rows OUTSIDE the two blanket
+# prefixes that must nonetheless carry the floor — the two tube ADMIN write
+# surfaces. Whole-statement shape, with every target captured, so it cannot widen:
+# gateway = '..' AND url_pattern IN ('..', '..') AND role = '..' AND allow = true.
+# A dropped predicate, an `OR`, or a LIKE stops matching and lands in
+# MFA_WRITE_UNEXPECTED. Declared in DELIBERATE_ALLOW_MFA (below, with the deny
+# set) and cross-checked against the runbook's `gate:allow-floor` table.
+ALLOWSEED_RE = re.compile(
+    r"^UPDATE\s+" + TBL + r"\s+SET\s+mfa_required\s*=\s*true\s+"
+    r"WHERE\s+gateway\s*=\s*'([^']*)'\s+"
+    r"AND\s+url_pattern\s+IN\s*\(\s*((?:'[^']*'\s*,\s*)*'[^']*')\s*\)\s+"
+    r"AND\s+role\s*=\s*'([^']*)'\s+"
+    r"AND\s+allow\s*=\s*true"
+    r"(?P<idem>\s+AND\s+mfa_required\s+IS\s+DISTINCT\s+FROM\s+true)?$", re.I)
+allowseeds = [s for s in mfa_writes if ALLOWSEED_RE.match(flat(s))]
+emit("MFA_ALLOW_ROW_SEEDS", len(allowseeds))
+as_targets = []
+for _s in allowseeds:
+    _m = ALLOWSEED_RE.match(flat(_s))
+    for _p in re.findall(r"'([^']*)'", _m.group(2)):
+        as_targets.append((_m.group(1), _p, _m.group(3)))
+as_targets.sort()
+emit("MFA_ALLOW_ROW_SEED_IDEMPOTENT",
+     "yes" if allowseeds and all(ALLOWSEED_RE.match(flat(x)).group("idem") for x in allowseeds)
+     else "no")
+for t in as_targets:
+    emit("MFA_ALLOW_ROW_SEED_TARGET", "%s %s %s" % t)
+emit("MFA_ALLOW_ROW_SEED_DECLARED", "yes" if as_targets == sorted(DELIBERATE_ALLOW_MFA) else "no")
+
 mfa_ups = [s for s in mfa_writes
            if re.match(r'^\s*(?:WITH\s+.*?\)\s*)?UPDATE\b', s, re.I | re.S)
            and re.search(r"mfa_required\s*=\s*true", s, re.I)
-           and not ROWSEED_RE.match(flat(s))]
+           and not ROWSEED_RE.match(flat(s))
+           and not ALLOWSEED_RE.match(flat(s))]
 emit("MFA_UPDATES", len(mfa_ups))
 
 # The ONE other write this file is allowed to contain: the in-place-upgrade NULL
@@ -398,7 +442,8 @@ BACKFILL_RE = re.compile(
     re.I)
 backfills = [s for s in mfa_writes if BACKFILL_RE.match(flat(s))]
 emit("MFA_NULL_BACKFILLS", len(backfills))
-known = {id(s) for s in mfa_ups} | {id(s) for s in backfills} | {id(s) for s in rowseeds}
+known = ({id(s) for s in mfa_ups} | {id(s) for s in backfills} | {id(s) for s in rowseeds}
+         | {id(s) for s in allowseeds})
 unexpected = [s for s in mfa_writes if id(s) not in known]
 emit("MFA_WRITE_UNEXPECTED", len(unexpected))
 for s in unexpected:
@@ -407,6 +452,7 @@ for s in unexpected:
 pos = {id(s): i for i, s in enumerate(dml)}
 mfa_idx = pos[id(mfa_ups[0])] if len(mfa_ups) == 1 else -1
 rowseed_idx = pos[id(rowseeds[0])] if len(rowseeds) == 1 else -1
+allowseed_idx = pos[id(allowseeds[0])] if len(allowseeds) == 1 else -1
 # ORDER of the row-scoped seed relative to the blanket flip. The VALUE does not
 # depend on it (the two statements touch disjoint rows: allow=false vs allow=true),
 # but docs/MFA-ROLLOUT.md's `expect=identical-to-seed` block compares against the
@@ -416,6 +462,10 @@ if rowseed_idx >= 0 and mfa_idx >= 0:
     emit("MFA_ROW_SEED_BEFORE_FLIP", "yes" if rowseed_idx < mfa_idx else "no")
 else:
     emit("MFA_ROW_SEED_BEFORE_FLIP", "n/a")
+if allowseed_idx >= 0 and mfa_idx >= 0:
+    emit("MFA_ALLOW_ROW_SEED_BEFORE_FLIP", "yes" if allowseed_idx < mfa_idx else "no")
+else:
+    emit("MFA_ALLOW_ROW_SEED_BEFORE_FLIP", "n/a")
 if backfills and mfa_idx >= 0:
     emit("MFA_BACKFILL_BEFORE_FLIP",
          "yes" if max(pos[id(b)] for b in backfills) < mfa_idx else "no")
@@ -677,6 +727,8 @@ emit("SIM_ROWS", len(final))
 emit("SIM_MFA_CHANGES_1", first[mfa_idx] if mfa_idx >= 0 and first[mfa_idx] is not None else -1)
 emit("SIM_ROWSEED_CHANGES_1",
      first[rowseed_idx] if rowseed_idx >= 0 and first[rowseed_idx] is not None else -1)
+emit("SIM_ALLOWSEED_CHANGES_1",
+     first[allowseed_idx] if allowseed_idx >= 0 and first[allowseed_idx] is not None else -1)
 
 # Re-apply the WHOLE file a second time: a fresh initdb and an in-place re-apply
 # must converge to the identical state, and the mfa UPDATE must be a true no-op.
@@ -687,6 +739,8 @@ emit("SIM_REAPPLY_STABLE", "yes" if before == after else "no")
 emit("SIM_MFA_CHANGES_2", second[mfa_idx] if mfa_idx >= 0 and second[mfa_idx] is not None else -1)
 emit("SIM_ROWSEED_CHANGES_2",
      second[rowseed_idx] if rowseed_idx >= 0 and second[rowseed_idx] is not None else -1)
+emit("SIM_ALLOWSEED_CHANGES_2",
+     second[allowseed_idx] if allowseed_idx >= 0 and second[allowseed_idx] is not None else -1)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # PER-DOMAIN MFA SCOPE, proven BEHAVIOURALLY on the replayed database (issue #47
@@ -786,7 +840,11 @@ for g, p, r in flipped:
 def under(pat):
     return any(pat == pre or pat.startswith(pre + "/") for pre in PREFIXES)
 
-over = [t for t in flipped if not under(t[1])]
+over = [t for t in flipped if not under(t[1]) and t not in DELIBERATE_ALLOW_MFA]
+_allow_missing = sorted(t for t in DELIBERATE_ALLOW_MFA if t not in set(flipped))
+emit("ALLOW_DECLARED_MISSING", len(_allow_missing))
+for g, p, r in _allow_missing:
+    emit("ALLOW_DECLARED_MISSING_ROW", "%s %s %s" % (g, p, r))
 emit("OVERREACH", len(over))
 for g, p, r in over:
     emit("OVERREACH_ROW", "%s %s %s" % (g, p, r))
@@ -997,7 +1055,7 @@ if len(sys.argv) > 2 and os.path.isfile(sys.argv[2]):
     # directions. That closes what the 2026-09-17 lane left open and recorded on
     # hugmesh-generator#485: the prose said "the 10 rows ... and nothing else" while
     # ELEVEN rows carried the floor, and no gate could see the sentence.
-    want_flipped = {(g, p, r) for (g, p, r, a, m) in rows if m and a}
+    want_flipped = {(g, p, r) for (g, p, r, a, m) in rows if m and a and under(p)}
     want_adminish = {(g, p, r) for (g, p, r, m) in adm}
     # every row that ends up carrying the privileged step-up floor, allow-blind —
     # the set isMfaRequiredSurface() actually reads (see the D8 note above).
@@ -1294,6 +1352,33 @@ if len(sys.argv) > 2 and os.path.isfile(sys.argv[2]):
             dm.group(1), re.M))
         doc_deny_missing = sorted(DELIBERATE_DENY_MFA - listed_deny)
         doc_deny_extra = sorted(listed_deny - DELIBERATE_DENY_MFA)
+# ── the runbook's ALLOW-FLOOR table, cross-checked against DELIBERATE_ALLOW_MFA ───
+# The two tube rows are ALLOW rows outside the blanket prefixes, so neither the
+# `verify` block (prefix-scoped) nor §1.2's flip table lists them. They get their
+# own `<!-- gate:allow-floor -->` table, read back in both directions, so the seed
+# and the operator-facing record cannot move apart.
+doc_allow_missing, doc_allow_extra, doc_allow_absent = [], [], []
+if len(sys.argv) > 2 and os.path.isfile(sys.argv[2]):
+    am = re.search(r'<!--\s*gate:allow-floor\s*-->\s*((?:[ \t]*\|.*\n)+)', doctext)
+    if not am:
+        doc_allow_absent.append(
+            "the runbook has no '<!-- gate:allow-floor -->' table any more — the allow rows "
+            "outside the blanket prefixes that carry the step-up floor are undocumented")
+    else:
+        listed_allow = set(re.findall(
+            r'^\s*\|\s*`([^`]+)`\s*\|\s*`([^`]+)`\s*\|\s*`([^`]+)`\s*\|',
+            am.group(1), re.M))
+        doc_allow_missing = sorted(DELIBERATE_ALLOW_MFA - listed_allow)
+        doc_allow_extra = sorted(listed_allow - DELIBERATE_ALLOW_MFA)
+emit("DOC_ALLOW_ABSENT", len(doc_allow_absent))
+for b in doc_allow_absent:
+    emit("DOC_ALLOW_ABSENT_ROW", b)
+emit("DOC_ALLOW_MISSING", len(doc_allow_missing))
+for g_, p_, r_ in doc_allow_missing:
+    emit("DOC_ALLOW_MISSING_ROW", "%s %s %s" % (g_, p_, r_))
+emit("DOC_ALLOW_EXTRA", len(doc_allow_extra))
+for g_, p_, r_ in doc_allow_extra:
+    emit("DOC_ALLOW_EXTRA_ROW", "%s %s %s" % (g_, p_, r_))
 emit("DOC_DENY_ABSENT", len(doc_deny_absent))
 for b in doc_deny_absent:
     emit("DOC_DENY_ABSENT_ROW", b)
@@ -1858,9 +1943,32 @@ if [ "${HAVE_UPDATE}" = "1" ]; then
   && ok "the deny rows carrying mfa_required=true are EXACTLY the declared set ($(g DENY_TRUE) row(s): $(sed -n 's/^DENY_TRUE_ROW //p' "${W}/real.out" | tr '\n' ';')). This is not cosmetic: isMfaRequiredSurface() is allow-blind and role-blind, so a deny row at the longest matching pattern DECIDES the privileged step-up floor for its whole subtree — an undeclared true silently raises a floor, and a declared one gone missing silently drops it" \
   || bad "the deny rows at mfa_required=true are not the declared set — undeclared: $(sed -n 's/^DENY_TRUE_UNDECLARED_ROW //p' "${W}/real.out" | tr '\n' ';') / declared-but-absent: $(sed -n 's/^DENY_DECLARED_MISSING_ROW //p' "${W}/real.out" | tr '\n' ';'). A deny row wins the longest match, and isMfaRequiredSurface() ignores allow and role, so each of these moves the privileged floor for a whole subtree. Add it to DELIBERATE_DENY_MFA with the decision that authorised it, or take the true off the row"
 
-[ "$(( $(g SIM_MFA_CHANGES_1) + $(g SIM_ROWSEED_CHANGES_1) ))" = "$(g FLIPPED)" ] \
-  && ok "the two authorised writers account for EVERY true row on the first apply: the blanket flip changed $(g SIM_MFA_CHANGES_1) and the row-scoped seed changed $(g SIM_ROWSEED_CHANGES_1), summing to the $(g FLIPPED) that end up true — no third statement contributes" \
-  || bad "the blanket flip changed $(g SIM_MFA_CHANGES_1) rows and the row-scoped seed $(g SIM_ROWSEED_CHANGES_1), but $(g FLIPPED) end up true — another statement is also writing the column"
+[ "$(( $(g SIM_MFA_CHANGES_1) + $(g SIM_ROWSEED_CHANGES_1) + $(g SIM_ALLOWSEED_CHANGES_1) ))" = "$(g FLIPPED)" ] \
+  && ok "the three authorised writers account for EVERY true row on the first apply: the blanket flip changed $(g SIM_MFA_CHANGES_1), the deny row-scoped seed $(g SIM_ROWSEED_CHANGES_1) and the allow row-scoped seed $(g SIM_ALLOWSEED_CHANGES_1), summing to the $(g FLIPPED) that end up true — no fourth statement contributes" \
+  || bad "the blanket flip changed $(g SIM_MFA_CHANGES_1) rows, the deny row-scoped seed $(g SIM_ROWSEED_CHANGES_1) and the allow row-scoped seed $(g SIM_ALLOWSEED_CHANGES_1), but $(g FLIPPED) end up true — another statement is also writing the column"
+
+[ "$(g MFA_ALLOW_ROW_SEEDS)" = "1" ] && [ "$(g MFA_ALLOW_ROW_SEED_DECLARED)" = "yes" ] \
+  && ok "exactly one ROW-SCOPED ALLOW seed, and it names exactly the declared tube rows ($(sed -n 's/^MFA_ALLOW_ROW_SEED_TARGET //p' "${W}/real.out" | tr '\n' ';')) — these are ALLOW rows outside the two blanket prefixes, so only a statement naming each full identity can floor them" \
+  || bad "the allow row-scoped mfa seed is wrong: MFA_ALLOW_ROW_SEEDS=$(g MFA_ALLOW_ROW_SEEDS) declared=$(g MFA_ALLOW_ROW_SEED_DECLARED). Expected exactly one whole-statement 'UPDATE gateway_route_access SET mfa_required = true WHERE gateway=… AND url_pattern IN (…) AND role=… AND allow = true AND mfa_required IS DISTINCT FROM true' naming exactly DELIBERATE_ALLOW_MFA (tube /bff/tube/admin/access/** and /bff/tube/admin/storage-budget/**, ROLE_ADMIN)"
+
+[ "$(g MFA_ALLOW_ROW_SEED_IDEMPOTENT)" = "yes" ] \
+  && ok "…and the allow seed carries 'mfa_required IS DISTINCT FROM true', so an in-place re-apply does not rewrite the rows" \
+  || bad "the allow row-scoped seed lacks 'AND mfa_required IS DISTINCT FROM true' — every in-place re-apply rewrites those rows"
+
+[ "$(g SIM_ALLOWSEED_CHANGES_1)" = "2" ] && [ "$(g SIM_ALLOWSEED_CHANGES_2)" = "0" ] \
+  && ok "the allow seed flips exactly the 2 declared tube rows on the first apply and 0 on the re-apply" \
+  || bad "the allow seed changed $(g SIM_ALLOWSEED_CHANGES_1) row(s) on the first apply (want 2) and $(g SIM_ALLOWSEED_CHANGES_2) on the second (want 0): 0 on the first means it matches nothing (a row it names is absent), and >2 means it is a blanket"
+
+[ "$(g ALLOW_DECLARED_MISSING)" = "0" ] \
+  && ok "every declared allow row (DELIBERATE_ALLOW_MFA) exists in the seed and ends up mfa_required=true" \
+  || bad "declared allow row(s) absent or not floored: $(sed -n 's/^ALLOW_DECLARED_MISSING_ROW //p' "${W}/real.out" | tr '\n' ';')"
+
+case "$(g MFA_ALLOW_ROW_SEED_BEFORE_FLIP)" in
+  yes|n/a)
+    ok "the allow row-scoped seed runs BEFORE the blanket flip, so the blanket flip stays the LAST 'SET mfa_required = true' statement the runbook's 'identical-to-seed' block quotes" ;;
+  *)
+    bad "the allow row-scoped seed runs AFTER the blanket flip: the runbook's expect=identical-to-seed comparison picks the LAST such statement and would start quoting the wrong one" ;;
+esac
 
 [ "$(g SIM_ROWSEED_CHANGES_1)" = "1" ] \
   && ok "the row-scoped seed changes exactly ONE row on the first apply — it is a row-scoped write in effect, not just in spelling" \
@@ -2056,6 +2164,10 @@ fi
 [ "$(g DOC_DENY_ABSENT)" = "0" ] && [ "$(g DOC_DENY_MISSING)" = "0" ] && [ "$(g DOC_DENY_EXTRA)" = "0" ] \
   && ok "runbook §5's deny-floor table names exactly the $(g DENY_TRUE) deny row(s) that carry the privileged step-up floor — the rows the §5 'verify' query cannot show, because it is scoped to the flip's own allow = true predicate" \
   || bad "the runbook's deny-floor record has DRIFTED from DELIBERATE_DENY_MFA: absent=$(sed -n 's/^DOC_DENY_ABSENT_ROW //p' "${W}/real.out" | tr '\n' ';') missing=$(sed -n 's/^DOC_DENY_MISSING_ROW //p' "${W}/real.out" | tr '\n' ';') extra=$(sed -n 's/^DOC_DENY_EXTRA_ROW //p' "${W}/real.out" | tr '\n' ';') — a deny row at mfa_required=true decides the floor for a whole subtree and §5's verify query cannot show it, so an operator who cannot read it in the table cannot audit it at all"
+
+[ "$(g DOC_ALLOW_ABSENT)" = "0" ] && [ "$(g DOC_ALLOW_MISSING)" = "0" ] && [ "$(g DOC_ALLOW_EXTRA)" = "0" ] \
+  && ok "runbook §3's allow-floor table names exactly the declared allow rows outside the blanket prefixes that carry the step-up floor (the tube admin surfaces) — the rows neither the 'verify' query nor the §1.2 flip table can show" \
+  || bad "the runbook's allow-floor record has DRIFTED from DELIBERATE_ALLOW_MFA: absent=$(sed -n 's/^DOC_ALLOW_ABSENT_ROW //p' "${W}/real.out" | tr '\n' ';') missing=$(sed -n 's/^DOC_ALLOW_MISSING_ROW //p' "${W}/real.out" | tr '\n' ';') extra=$(sed -n 's/^DOC_ALLOW_EXTRA_ROW //p' "${W}/real.out" | tr '\n' ';') — a row floored by the seed but absent from the table is a privileged surface an operator cannot find"
 
 [ "$(g STALE_EXCLUSIONS)" = "0" ] \
   && ok "no stale entry in the documented-exclusion list — every listed surface still exists and is still un-flipped" \
@@ -2548,7 +2660,9 @@ PY
 # silently passing, which is the only reason it was caught rather than rotting.
 FLIP='UPDATE\s+gateway_route_access\s+SET\s+mfa_required\s*=\s*true\s+WHERE\s+allow\s*=\s*true[^;]*;'
 # The row-scoped seed, addressed the same unambiguous way.
-ROWSEED='UPDATE\s+gateway_route_access\s+SET\s+mfa_required\s*=\s*true\s+WHERE\s+gateway\s*=[^;]*;'
+ROWSEED='UPDATE\s+gateway_route_access\s+SET\s+mfa_required\s*=\s*true\s+WHERE\s+gateway\s*=[^;]*allow\s*=\s*false[^;]*;'
+# The ALLOW row-scoped seed (tube admin rows), addressed the same unambiguous way.
+ALLOWSEED='UPDATE\s+gateway_route_access\s+SET\s+mfa_required\s*=\s*true\s+WHERE\s+gateway\s*=[^;]*url_pattern\s+IN[^;]*;'
 
 nc "mfa_required UPDATE removed entirely" MFA_UPDATES 1 \
    "s = s.replace(one(r'${FLIP}'), '', 1)"
@@ -2688,6 +2802,40 @@ nc "'IS DISTINCT FROM true' dropped from the ROW-SCOPED seed" SIM_ROWSEED_CHANGE
 new = up.replace("\n   AND mfa_required IS DISTINCT FROM true;", ";", 1)
 assert new != up, "the idempotence arm was not found inside the row-scoped seed"
 s = s.replace(up, new, 1)'
+
+# ── tube step-up (2026-10-15): the allow row-scoped seed, proven to bite ─────────
+nc "the allow row-scoped seed deleted (the tube admin rows are left un-floored, the declared set goes unmet)" ALLOW_DECLARED_MISSING 0 \
+   "s = s.replace(one(r'${ALLOWSEED}'), '', 1)"
+
+nc "the allow row-scoped seed deleted (seen by the single-writer count)" MFA_ALLOW_ROW_SEEDS 1 \
+   "s = s.replace(one(r'${ALLOWSEED}'), '', 1)"
+
+nc "the allow row-scoped seed widened to a LIKE blanket over every /bff/tube/ row (a floor over surfaces nobody authorised)" MFA_ALLOW_ROW_SEED_DECLARED yes \
+   "up = one(r'${ALLOWSEED}')"'
+new = re.sub(r"url_pattern\s+IN\s*\([^)]*\)", "url_pattern LIKE %s" % repr("/bff/tube/%"), up, count=1)
+assert new != up, "the IN list was not found in the allow seed"
+s = s.replace(up, new, 1)'
+
+nc "the allow row-scoped seed also flips a third, undeclared row (overreach outside the prefixes)" OVERREACH 0 \
+   "up = one(r'${ALLOWSEED}')"'
+new = up.replace("\x27/bff/tube/admin/storage-budget/**\x27", "\x27/bff/tube/admin/storage-budget/**\x27, \x27/bff/forum/admin/**\x27", 1)
+assert new != up, "the second pattern was not found in the allow seed"
+s = s.replace(up, new, 1)'
+
+nc "'IS DISTINCT FROM true' dropped from the ALLOW row-scoped seed" SIM_ALLOWSEED_CHANGES_2 0 \
+   "up = one(r'${ALLOWSEED}')"'
+new = up.replace("\n   AND mfa_required IS DISTINCT FROM true;", ";", 1)
+assert new != up, "the idempotence arm was not found inside the allow seed"
+s = s.replace(up, new, 1)'
+
+nc "the allow row-scoped seed moved AFTER the blanket flip (the runbook would quote the wrong statement)" MFA_ALLOW_ROW_SEED_BEFORE_FLIP yes \
+   "up = one(r'${ALLOWSEED}')"'
+s = s.replace(up, "", 1) + "\n" + up + "\n"'
+
+nc "one tube admin row loses its INSERT (the allow seed then matches one row, not two)" SIM_ALLOWSEED_CHANGES_1 2 \
+   'row = "  (\x27hugmesh-fe-gateway\x27,  \x27/bff/tube/admin/storage-budget/**\x27,  \x27ROLE_ADMIN\x27,   true),"
+anchor(row)
+s = re.sub(r"^" + re.escape(row) + r".*$\n", "", s, count=1, flags=re.M)'
 
 nc "a DOMAIN-SCOPED row appended to the seed (the two behavioural models are domain-blind and would answer for a row the gateway skips)" \
    DOMAIN_SCOPED_SEED_ROWS 0 \

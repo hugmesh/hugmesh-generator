@@ -1096,6 +1096,25 @@ INSERT INTO gateway_route_access (gateway, url_pattern, role, allow) VALUES
   -- tube-bff are the domain enforcement; the gateway only checks role.
   ('hugmesh-fe-gateway',  '/bff/tube/**',          'ROLE_TUBE',    true),  -- tube BFF (tube-access floor)
   ('hugmesh-be-gateway',  '/tube/content/**',       'ROLE_TUBE',    true),  -- tube media serving (signed URL)
+  -- Tube ADMIN write surfaces (tube-bff TubeAccessController + TubeStorageBudgetController,
+  -- both under /bff/tube/admin/**, hasAnyRole('ADMIN','SUPERADMIN') in tube-bff's own
+  -- SecurityConfig). Governed here at ROLE_ADMIN so a plain ROLE_TUBE holder -- who passes
+  -- the /bff/tube/** floor above -- is refused AT THE DOOR (403 + X-Route-Denied) instead of
+  -- one layer down in tube-bff. Both carry mfa_required=true, seeded by the ROW-SCOPED
+  -- UPDATE below the INSERT (these rows are outside the two blanket prefixes).
+  -- ⚠ HONEST SCOPE. ROLE_ADMIN and ROLE_SUPERADMIN return from GatewayRouteAccessFilter
+  -- BEFORE decide() is consulted, so for the callers tube-bff actually admits these rows
+  -- bite ONLY through the PRIVILEGED floor (app.mfa.enforce-privileged-floor), which reads
+  -- isMfaRequiredSurface(). app.mfa.enabled alone gates nothing for an admin here. Both
+  -- flags stay OFF on every cluster (docs/MFA-ROLLOUT.md); on a mesh with the floor ON, an
+  -- admin without a fresh second factor gets 403 + X-Step-Up-Required (hugmesh-gateway),
+  -- which hugmesh-tube-ui turns into the inline MFA challenge.
+  -- `/**` (not `/*`) on purpose: AntPathMatcher's `*` is ONE segment, so `/access/*` would
+  -- miss the DELETE revoke at /access/{type}/{user} and let it fall back to the ungated
+  -- /bff/tube/** floor. `/storage-budget/**` also matches the bare path and fails closed on
+  -- any sub-path or trailing-slash spelling.
+  ('hugmesh-fe-gateway',  '/bff/tube/admin/access/**',          'ROLE_ADMIN',   true),  -- tube use-access overlay (grant/timeout/ban/revoke)
+  ('hugmesh-fe-gateway',  '/bff/tube/admin/storage-budget/**',  'ROLE_ADMIN',   true),  -- tube per-user storage budget
   -- ── Wiki / Owncast / Tube UI MOUNT rows (pre-existing gap, filled here) ─────
   -- The wiki-ui/owncast-ui/tube-ui repos' own Dockerfiles document the intended
   -- gateway gate ("Serves on :8080 to MATCH the federation-api <slug> module
@@ -1417,6 +1436,23 @@ UPDATE gateway_route_access
    AND url_pattern = '/bff/superadmin/games-services/**'
    AND role = 'ROLE_SUPERADMIN'
    AND allow = false
+   AND mfa_required IS DISTINCT FROM true;
+
+-- ROW-SCOPED mfa_required SEED — the two tube ADMIN write surfaces (operator decision
+-- 2026-10-15, hugmesh-tube-ui#19 / hugmesh-wiki-ui#25: the GATEWAY sends X-Step-Up-Required).
+-- Same mechanics as the games-services deny row above: an UPDATE naming the FULL row
+-- identity (gateway + url_pattern + role + allow), run BEFORE the blanket flip so the
+-- blanket stays the LAST `SET mfa_required = true` in the file (the runbook's
+-- expect=identical-to-seed block reads that one), IS DISTINCT FROM so a re-apply is a
+-- no-op. These are ALLOW rows OUTSIDE the two blanket prefixes, so
+-- tests/scripts/test-mfa-required-rules.sh declares them in DELIBERATE_ALLOW_MFA and
+-- reports any other flipped row outside the prefixes as OVERREACH.
+UPDATE gateway_route_access
+   SET mfa_required = true
+ WHERE gateway = 'hugmesh-fe-gateway'
+   AND url_pattern IN ('/bff/tube/admin/access/**', '/bff/tube/admin/storage-budget/**')
+   AND role = 'ROLE_ADMIN'
+   AND allow = true
    AND mfa_required IS DISTINCT FROM true;
 
 UPDATE gateway_route_access
