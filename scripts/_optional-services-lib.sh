@@ -906,3 +906,34 @@ _opt_negative_tokens() {
     done
     printf '%s' "${out}"
 }
+
+# _OPT_BUILTIN_DEFAULT_SERVICES — the selection a build gets when NO --optional-services
+# is given. It MUST equal the literal both builders carry on their
+# `OPTIONAL_SERVICES="${OPTIONAL_SERVICES:-...}"` line (tests/stack/
+# test-optional-services-exclude.sh asserts that), because the function below
+# restores it.
+_OPT_BUILTIN_DEFAULT_SERVICES="akkoma tuwunel phpbb"
+
+# _opt_negative_only_keeps_defaults — a list made ONLY of explicit-deselect tokens
+# ("-anubis", "no-anubis") keeps the built-in default selection.
+#
+# WHY (2026-10-15, operator decision B on hugmesh-generator#384/#444). --optional-services
+# REPLACES the built-in default, so `--optional-services "-anubis"` — which is all a
+# caller that never touched the service picker can say to force the public PoW shield
+# off — used to ship an image with NO akkoma/tuwunel/phpbb either: a list holding only a
+# negative token is not a selection, it is a veto, and the veto must not delete the
+# defaults as a side effect. Mutates OPTIONAL_SERVICES in place; a no-op for an empty
+# list (the EXPLICIT-none spelling stays none) and for any list that carries at least
+# one positive token (an allow-list, or the `all` sentinel, which the expansion handles).
+_opt_negative_only_keeps_defaults() {
+    local s
+    [ -n "${OPTIONAL_SERVICES//[[:space:]]/}" ] || return 0
+    for s in ${OPTIONAL_SERVICES}; do
+        case "${s}" in
+            -?*|no-?*) ;;
+            *) return 0 ;;
+        esac
+    done
+    OPTIONAL_SERVICES="${_OPT_BUILTIN_DEFAULT_SERVICES}$(_opt_negative_tokens)"
+    info "OPTIONAL_SERVICES: only deselect tokens given, kept the built-in default selection: ${OPTIONAL_SERVICES}"
+}

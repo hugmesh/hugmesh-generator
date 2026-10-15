@@ -53,6 +53,12 @@ OUT_DIR="${REPO_DIR}/keys-out/vault"
 # ── brand.conf (built-in defaults < brand.conf < env) ───────────────
 BRAND="${BRAND:-hugmesh}"
 CLUSTER_DOMAIN="${CLUSTER_DOMAIN:-hugmesh.net}"
+# VAULT_ADDR NEVER REACHES THE ClusterSecretStore, ON PURPOSE (issue #531, decision
+# 88 = B): VAULT_ADDR only steers the WRITE side (this script). The reader's
+# spec.provider.vault.server in secretstore.yaml is pinned to the in-cluster
+# https://vault.vault.svc.cluster.local:8200 and an external Vault is not a supported
+# topology, so pointing VAULT_ADDR elsewhere writes secrets the cluster will not read.
+# tests/scripts/test-eso-provider-refs.sh pins that literal and this paragraph.
 # THE MOUNT IS STILL WRITER-SIDE ONLY; THE BASE PATH IS NOT ANY MORE.
 # (issue #285; decision 22 on #347, operator 2026-09-16 "A: drop both controls";
 #  decision 38 = B on #347, operator 2026-09-17 "the reader follows the writer"):
