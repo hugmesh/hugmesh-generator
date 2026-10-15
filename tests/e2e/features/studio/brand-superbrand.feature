@@ -48,12 +48,12 @@ Feature: The Docker route's brand drop-down and design step agree in both faces
   Scenario: the window's drop-down starts on ‘Create a new superbrand’, an existing profile skips the design, and a design reaches the bring-up @interface:studio
     When I run the shell command "set -o pipefail; cd studio && HUGMESH_STUDIO_NO_ELEVATION=1 QT_QPA_PLATFORM=offscreen ${SNAP_STUDIO_PYTHON:-python3} -m pytest -q --color=no -p no:cacheprovider tests/test_brand_docker_route.py 2>&1 | tail -1 | sed 's/^/ /'"
     Then the command succeeded
-    And the command output contains " 23 passed in "
+    And the command output contains " 25 passed in "
 
   Scenario: the text screens offer the same drop-down with one command and print a command that carries the record @interface:studio
     When I run the shell command "set -o pipefail; cd studio && HUGMESH_STUDIO_NO_ELEVATION=1 QT_QPA_PLATFORM=offscreen ${SNAP_STUDIO_PYTHON:-python3} -m pytest -q --color=no -p no:cacheprovider tests/test_brand_docker_route_text.py 2>&1 | tail -1 | sed 's/^/ /'"
     Then the command succeeded
-    And the command output contains " 13 passed in "
+    And the command output contains " 15 passed in "
 
   Scenario: the step is drawn whole at 1040x780 and 736x736, under two styles, at 8 and 9 pt, with a long design name @interface:studio
     When I run the shell command "set -o pipefail; cd studio && HUGMESH_STUDIO_NO_ELEVATION=1 QT_QPA_PLATFORM=offscreen ${SNAP_STUDIO_PYTHON:-python3} -m pytest -q --color=no -p no:cacheprovider tests/test_brand_docker_route_look.py -k 'the_docker_route_brand_step_is_drawn_whole_in_a_fresh_interpreter' 2>&1 | tail -1 | sed 's/^/ /'"
