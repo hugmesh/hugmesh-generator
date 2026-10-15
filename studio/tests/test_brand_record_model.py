@@ -418,7 +418,7 @@ def test_effective_look_names_the_source_of_each_value():
     assert bm.effective_look(rec)["primary"] == ("#112233", plain_words.LOOK_SOURCE["default"])
 
 
-def test_look_problems_refuse_unknown_keys_and_values():
+def test_the_look_problems_refuse_unknown_keys_and_values():
     assert bm.look_problems({"primary": "#112233", "style": "glass"}, "x") == []
     bad = bm.look_problems({"colour": "#1", "primary": "red", "preset": "nope",
                             "mode": "dim", "font": "Comic", "style": "wobbly",

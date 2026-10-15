@@ -326,11 +326,6 @@ class BrandSession:
         self.sb: brand_model.Superbrand = rec.superbrand
         self.copied_from: dict[str, str] = dict(rec.copied_from)
         self.look: brand_look.Look = host.look(self.sb)
-        # a brand's stylesheet is the superbrand's look plus its own overrides, so a
-        # design edit is checked against every brand's finished sheet as the rows stand
-        # NOW (read at each edit), not only against the superbrand's own budget
-        self.look.dependents = lambda: {
-            brand_model.brand_id(d): dict(d.look or {}) for d in host.rows()}
         self._allow_look_identity()
         #: the open design: True while the design step is the thing on screen
         self.designing = False
@@ -449,7 +444,13 @@ class BrandSession:
         return look
 
     def _allow_look_identity(self) -> None:
-        """An unaffiliated image keeps the look and loses the desktop logo (D20)."""
+        """Wire a look model to this session (every look the session makes goes through
+        here): an unaffiliated image keeps the look and loses the desktop logo (D20), and
+        a design edit is checked against every brand's finished stylesheet (the
+        superbrand's look plus the brand's own overrides) as the rows stand NOW, read at
+        each edit, not only against the superbrand's own budget."""
+        self.look.dependents = lambda: {
+            brand_model.brand_id(d): dict(d.look or {}) for d in self.host.rows()}
         self.look.identity_allowed = not self.unaffiliated
         self.look.identity_reason = UNAFFILIATED_REASON if self.unaffiliated else ""
 

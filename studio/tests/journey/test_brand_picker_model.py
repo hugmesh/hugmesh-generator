@@ -297,3 +297,27 @@ def test_the_summary_says_where_each_setting_lives():
     assert brand_step.WAYS_BUTTON == "Set up ways to reach this brand"
     assert [t for _n, t in brand_step.SECTIONS] == [
         "Identity", "Look", "Services", "Ways to reach it"]
+
+
+# ── a design edit is checked against every brand's finished stylesheet ───────────────
+def test_a_superbrand_edit_that_would_push_a_brand_over_budget_is_refused_by_name(
+        gen, monkeypatch):
+    """The session wires its look to the brands' rows, and re-wires every fresh look it
+    makes (Create and a copied design replace the look model), so the check survives a
+    pick. (Mutation: build the fresh look without the wiring.) Qt-free."""
+    from hugmesh_studio.core import brand_look as bl
+    from test_look_model import png_bytes
+    from hugmesh_studio.core import brand_images
+    bg = brand_images.reencode(png_bytes(40, 40, noise=True), "background").data_uri()
+    logo = brand_images.reencode(png_bytes(16, 16, noise=True), "logo").data_uri()
+    shop = Domain(name="shop.mesh.example", look={"login_bg_image": bg})
+    cfg = _mesh_cfg()
+    cfg.domains = [shop]
+    s = _session(gen, cfg)
+    s.choose(CREATE_KEY)                       # replaces the look model
+    both = len(bl.look_css({"login_bg_image": bg, "logo_image": logo}).encode())
+    monkeypatch.setattr(bl, "LOOK_CSS_BUDGET", both - 1)
+    out = s.look.try_set("logo_image", logo)
+    assert not out.ok and "brand shop-mesh-example" in out.text, out.text
+    shop.look = {}                             # the rows are read at each edit
+    assert s.look.try_set("logo_image", logo).ok
