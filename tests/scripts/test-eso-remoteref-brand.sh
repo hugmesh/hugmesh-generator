@@ -2,7 +2,7 @@
 # test-eso-remoteref-brand.sh — the Vault BASE SEGMENT that ESO reads must follow
 # BRAND, on the path ArgoCD actually serves, and the in-cluster writer must move
 # with it. Issue #285; decision 38 = B on hugmesh-generator#347 ("Template the
-# brand into all 143 ExternalSecret remoteRef keys. The reader follows the writer,
+# brand into all 145 ExternalSecret remoteRef keys. The reader follows the writer,
 # so a non-hugmesh BRAND works end to end.").
 #
 # --- THE MECHANISM, AND THE DEFECT THAT ALMOST SHIPPED INSTEAD ----------------
@@ -92,16 +92,16 @@ BUILDERS=(
 
 # app|git tree it serves|expected ExternalSecret key count|expects a harbor env
 APPS=(
-  "specs/cluster/apps/04-external-secrets-config.yaml|specs/cluster/manifests/external-secrets|121|no"
+  "specs/cluster/apps/04-external-secrets-config.yaml|specs/cluster/manifests/external-secrets|123|no"
   "specs/cluster/apps/12-cloudflared.yaml|specs/cluster/manifests/cloudflared|1|no"
   "specs/cluster/apps/03b-harbor-provision.yaml|specs/cluster/manifests/harbor|0|yes"
 )
 
 # THE EXPECTED CENSUS. Recomputed below from the tree, never taken on faith; the
 # numbers are here so a change that moves one of them has to say so in a diff.
-EXP_TOTAL=143      # every "key: hugmesh/" literal under specs/cluster
-EXP_LIVE=141       # ... minus the 2 commented-out examples in velero-externalsecrets.yaml
-EXP_SERVED=121     # ... carried by apps/04 (files listed in its kustomization resources)
+EXP_TOTAL=145      # every "key: hugmesh/" literal under specs/cluster
+EXP_LIVE=143       # ... minus the 2 commented-out examples in velero-externalsecrets.yaml
+EXP_SERVED=123     # ... carried by apps/04 (files listed in its kustomization resources)
 EXP_CLOUDFLARED=1  # ... carried by apps/12
 EXP_CASDOOR=3      # ... per-DOMAIN, patched by apps/05b's ApplicationSet (slug, not brand)
 EXP_UNSERVED=16    # ... in files NOT listed in resources: azure-intune 3 (commented out,

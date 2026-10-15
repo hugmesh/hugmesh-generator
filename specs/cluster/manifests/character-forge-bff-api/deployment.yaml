@@ -109,6 +109,11 @@ spec:
             - { name: SPRING_CONFIG_ADDITIONAL_LOCATION, value: "file:/stores/" }
             # OAuth2 resource server: validate the cluster Casdoor JWT itself.
             - { name: CASDOOR_ISSUER_URI, value: "https://id.hugmesh.net" }
+            # Key fetch stays IN-CLUSTER: the public issuer host need not resolve
+            # here (on kind it does not: hugmesh-generator#693). The issuer URI above
+            # stays the `iss` claim only. Same value as the gateway chart's
+            # casdoor.jwksUri; pinned by tests/scripts/test-bff-jwks-in-cluster.sh.
+            - { name: CASDOOR_JWKS_URI, value: "http://casdoor.hugmesh-pki.svc.cluster.local:8000/.well-known/jwks" }
             # NO downstream homeserver leg (unlike forum-bff's phpBB extension):
             # the character-forge datastore below is this BFF's only dependency.
             # Datastore: the character_forge_character table. The app's
