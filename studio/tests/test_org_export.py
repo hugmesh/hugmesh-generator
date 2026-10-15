@@ -49,6 +49,7 @@ from _org_export_helpers import (  # noqa: E402
 # the banned markers are spelled from parts here too: this file is part of the
 # generator's own exported tree
 CO_AUTHOR = "Co-Authored" + "-By"
+PEM_HEADER = "-----BEGIN " + "RSA PRIVATE KEY-----"
 
 
 @pytest.fixture
@@ -692,7 +693,7 @@ def test_a_planted_banned_marker_refuses_that_repository_and_names_the_file(worl
 
 def test_other_banned_markers_are_recognised():
     found = {label for label, rx in oe.BANNED_MARKERS
-             if rx.search("x\n-----BEGIN RSA PRIVATE KEY-----\nabc\n")}
+             if rx.search("x\n" + PEM_HEADER + "\nabc\n")}
     assert found == {"private key header"}
     # the bare header strings inside a compiled program (an engine's .wasm string table:
     # header, NUL, footer, NUL ...) are not a key; the body is what makes it one
@@ -704,7 +705,7 @@ def test_other_banned_markers_are_recognised():
     old_rule = re.compile(r"^-----BEGIN (?:RSA |EC |DSA |OPENSSH |PGP |ENCRYPTED )?PRIVATE "
                           r"KEY-----\s*$", re.MULTILINE)
     assert old_rule.search("x\n" + wasm_like.replace("\0", ""))      # the old rule did match
-    assert any(rx.search("-----BEGIN OPENSSH PRIVATE KEY-----\r\nb3BlbnNzaC1rZXk=\n")
+    assert any(rx.search("-----BEGIN " + "OPENSSH PRIVATE KEY-----\r\nb3BlbnNzaC1rZXk=\n")
                for _l, rx in oe.BANNED_MARKERS)
     # a quoted MENTION of the header (a scanner's own pattern) is not a key
     assert not any(rx.search('pat="-----BEGIN PRIVATE KEY-----"') for _l, rx in oe.BANNED_MARKERS)
@@ -1171,9 +1172,8 @@ def test_the_site_title_is_html_escaped_and_a_bad_inline_regex_is_a_problem(worl
 
 
 def test_the_generators_own_tree_exports_clean_with_the_documented_exclusions():
-    """The generator is exported by default, and its own tree carries two test
-    fixtures the banned-marker scan refuses (a fake AWS key, a fake fine-grained
-    token). Without a way to drop them every GUI/TUI plan for a real domain would be
+    """The generator is exported by default, and its own tree carries test
+    fixtures the banned-marker scan refuses (a fake AWS key, fake tokens, fake PEM keys). Without a way to drop them every GUI/TUI plan for a real domain would be
     'refused: banned marker'. The ready-made exclusion
     map fixtures/org_export/generator-rename-map.json, which docs/GOLIVE-ORG-EXPORT.md
     points at, must keep this checkout's tree exportable — and this test is what
@@ -1188,7 +1188,12 @@ def test_the_generators_own_tree_exports_clean_with_the_documented_exclusions():
     rules = oe.rename_rules(cfg, [oe.GENERATOR_REPO])
     runner = oe.SubprocessRunner()
     bare = oe._prepare_repo(runner, oe.GENERATOR_REPO, cfg, rules, out, [])
-    assert bare.banned == ["tests/cloud-deploy/test-cloud-deploy-driver.sh: AWS access key",
+    assert bare.banned == ["scripts/secret-scan.sh: private key header",
+                           "studio/tests/test_pages_vault.py: private key header",
+                           "studio/tests/test_secret_files.py: private key header",
+                           "studio/tests/test_secret_files_gui.py: private key header",
+                           "tests/cloud-deploy/test-cloud-deploy-driver.sh: AWS access key",
+                           "tests/scripts/test-publish-images.sh: private key header",
                            "tests/scripts/test-stack-clone-credential.sh: GitHub token",
                            "tests/scripts/test-stack-clone-credential.sh: GitHub fine-grained token"], \
         ("the generator's own banned markers changed: update generator-rename-map.json, "
@@ -1197,10 +1202,13 @@ def test_the_generators_own_tree_exports_clean_with_the_documented_exclusions():
         {}, oe.load_rename_map(os.path.join(FIXTURES, "generator-rename-map.json")))
     clean = oe._prepare_repo(runner, oe.GENERATOR_REPO, cfg, rules, out, [])
     assert clean.banned == [] and not clean.blocked, clean.banned
-    assert sum("excluded by the rename map" in x for x in clean.excluded) == 2
+    assert sum("excluded by the rename map" in x for x in clean.excluded) == 7
     doc = open(os.path.join(gen, "docs", "GOLIVE-ORG-EXPORT.md"), encoding="utf-8").read()
     for rel in ("tests/cloud-deploy/test-cloud-deploy-driver.sh",
-                "tests/scripts/test-stack-clone-credential.sh", "generator-rename-map.json"):
+                "tests/scripts/test-stack-clone-credential.sh", "scripts/secret-scan.sh",
+                "tests/scripts/test-publish-images.sh", "studio/tests/test_pages_vault.py",
+                "studio/tests/test_secret_files.py", "studio/tests/test_secret_files_gui.py",
+                "generator-rename-map.json"):
         assert rel in doc, f"docs/GOLIVE-ORG-EXPORT.md does not name {rel}"
     shutil.rmtree(out, ignore_errors=True)
 
@@ -1659,6 +1667,118 @@ def test_a_clean_non_utf8_or_binary_file_is_published_byte_for_byte_and_noted(wo
     # blocked repositories)
     assert any("data.bin" in ln and "not rewritten" in ln for ln in oe.plan_lines(p)), \
         oe.plan_lines(p)
+
+
+# ── a key in the shapes the platform's own files give it ────────────────────────────
+_KEY_BODY = "MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC7"
+_KEY_SHAPES = {
+    "yaml-block": "data:\n  tls.key: |\n    " + PEM_HEADER + "\n    " + _KEY_BODY + "\n",
+    "quoted-real-newline": 'key: "' + PEM_HEADER + "\n" + _KEY_BODY + '"\n',
+    "json-escaped-newline": '{"private_key": "' + PEM_HEADER + "\\n" + _KEY_BODY + '\\n"}\n',
+    "json-escaped-crlf": '{"private_key": "' + PEM_HEADER + "\\r\\n" + _KEY_BODY + '"}\n',
+    "env-one-line": "SIGNING_KEY=" + PEM_HEADER + "\\n" + _KEY_BODY + "\\n\n",
+    "env-escaped-blank-line": "K=" + PEM_HEADER + "\\n\\n" + _KEY_BODY + "\n",
+    "column-zero": PEM_HEADER + "\n" + _KEY_BODY + "\n",
+    "crlf-file": "x\r\n" + PEM_HEADER + "\r\n" + _KEY_BODY + "\r\n",
+}
+
+
+@pytest.mark.parametrize("shape", sorted(_KEY_SHAPES))
+def test_a_private_key_is_found_wherever_it_is_written(tmp_path, shape):
+    """The rule used to need the header at the start of a line with a real newline
+    after it, so a key in an indented YAML block, a quoted value, a service-account
+    JSON file or a one-line env value (the shapes Kubernetes, Helm and cloud files
+    give a key) was published."""
+    f = tmp_path / "file.txt"
+    f.write_text(_KEY_SHAPES[shape], encoding="utf-8")
+    labels, _text, _clean = oe._scan_file(str(f))
+    assert labels == ["private key header"], (shape, labels)
+
+
+@pytest.mark.parametrize("text", [
+    "pat = \"" + PEM_HEADER + "\"\n",                       # a quoted mention of the header
+    "  " + PEM_HEADER + "\n  -----END RSA PRIVATE KEY-----\n",   # header and footer only
+    PEM_HEADER + "\\n-----END RSA PRIVATE KEY-----\\n",        # the same, escaped
+    "see " + PEM_HEADER + " in the docs\n",                  # prose
+])
+def test_a_private_key_header_with_no_key_body_is_still_not_a_key(tmp_path, text):
+    f = tmp_path / "file.txt"
+    f.write_text(text, encoding="utf-8")
+    assert oe._scan_file(str(f))[0] == []
+
+
+def test_a_key_in_an_indented_yaml_file_refuses_the_repository(world):
+    cfg, runner = world["cfg"], world["runner"]
+    _plant(os.path.join(world["src"], "hugmesh-commons"),
+           {"deploy/secret.yaml": _KEY_SHAPES["yaml-block"]})
+    p = oe.plan(cfg, runner, stamp="20260101T000000Z", probe=False)
+    rp = next(r for r in p.repos if r.source == "hugmesh-commons")
+    assert rp.action == "refused: banned marker"
+    assert rp.banned == ["deploy/secret.yaml: private key header"]
+
+
+# ── the secret scan comes before the rename map's skip rule ─────────────────────────
+@pytest.mark.parametrize("marker", [
+    pytest.param("ghp_" + "B" * 36, id="token"),
+    pytest.param(_KEY_SHAPES["column-zero"], id="private-key"),
+])
+def test_a_file_the_rename_map_leaves_alone_is_still_scanned_for_secrets(world, marker):
+    """skip_rewrite says 'do not rewrite this file's contents', never 'do not look at
+    it': with the skip check run first, a token in a skipped file was published."""
+    cfg, runner = world["cfg"], world["runner"]
+    cfg.rename_map = {"skip_rewrite": ["docs/*.md", "hugmesh-commons:vendored/*"]}
+    _plant(os.path.join(world["src"], "hugmesh-commons"),
+           {"vendored/notes.txt": "hugmesh-parent\n" + marker + "\n",
+            "docs/a.md": "ok\n"})
+    p = oe.plan(cfg, runner, stamp="20260101T000000Z", probe=False)
+    rp = next(r for r in p.repos if r.source == "hugmesh-commons")
+    assert rp.action == "refused: banned marker", (rp.action, rp.banned)
+    assert [b.split(": ")[0] for b in rp.banned] == ["vendored/notes.txt"]
+    # and the skip rule still does what it says: the file's tokens are left as written
+    assert "vendored/notes.txt" not in rp.rewrites
+    assert "BLOCKED" in "\n".join(oe.plan_lines(p))
+    res = oe.apply(p, runner)
+    assert not os.path.isdir(_bare(world, "example-commons")), "a refused repository was pushed"
+    assert next(r for r in res.repos if r.target.endswith("example-commons")).skipped
+
+
+# ── an Angular repository gets the Angular build ────────────────────────────────────
+def test_an_angular_repository_is_detected_and_gets_the_angular_build(world, tmp_path):
+    """Kind detection and the site matrix row for the other half of the org's
+    repositories: an angular.json (and no pom) is 'angular', and the generated
+    repos.json and matrix row carry build == 'angular', which selects the npm steps."""
+    import subprocess
+    from _org_export_helpers import make_source_repo
+    make_source_repo(world["src"], "hugmesh-user-ui")
+    cfg = world["cfg"]
+    cfg.extra_repos = ["hugmesh-user-ui"]
+    p = oe.plan(cfg, world["runner"], stamp="20260101T000000Z", probe=False)
+    by = {r.source: r for r in p.repos}
+    assert by["hugmesh-user-ui"].target == "example-user-ui"
+    assert by["hugmesh-user-ui"].kind == "angular"
+    assert by["hugmesh-user-ui"].maven_settings == "" and by["hugmesh-user-ui"].has_mvnw is False
+    assert by["hugmesh-parent"].kind.startswith("java")
+    rows = {r["name"]: r for r in json.load(
+        open(os.path.join(p.site.workdir, "repos.json")))["repos"]}
+    assert rows["example-user-ui"]["build"] == "angular", rows
+    assert rows["example-parent"]["build"] == "java", rows
+    # the matrix the workflow builds from that file keeps the word, and only the npm
+    # steps are switched on by it
+    step = _site_step(p.site.workdir, "repos", step_id="list")
+    gh_out = tmp_path / "gh-output.txt"
+    gh_out.write_text("")
+    res = subprocess.run(["bash", "-c", step["run"]], cwd=p.site.workdir,
+                         capture_output=True, text=True,
+                         env={"PATH": os.environ["PATH"], "GITHUB_OUTPUT": str(gh_out)})
+    assert res.returncode == 0, res.stdout + res.stderr
+    outputs = dict(ln.split("=", 1) for ln in gh_out.read_text().splitlines() if "=" in ln)
+    matrix = {r["name"]: r for r in json.loads(outputs["matrix"])["include"]}
+    assert matrix["example-user-ui"]["build"] == "angular", matrix
+    assert matrix["example-user-ui"]["settings"] == "" and matrix["example-user-ui"]["mvnw"] is False
+    doc = yaml.safe_load(open(os.path.join(p.site.workdir, ".github/workflows/build-all.yml"),
+                              encoding="utf-8"))
+    ifs = [st.get("if", "") for st in doc["jobs"]["build"]["steps"]]
+    assert sum("matrix.build == 'angular'" in i for i in ifs) >= 3, ifs
 
 
 def test_a_compiled_program_holding_pem_header_strings_is_not_refused(tmp_path):

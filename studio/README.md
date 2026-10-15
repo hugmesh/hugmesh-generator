@@ -350,7 +350,7 @@ force-pushed or deleted, and an existing repository that already holds something
 `main` or on any other branch — is refused unless *update via branch* is chosen. The
 step can be pointed at a config file (its rules are taken whole), and a **Rename map**
 field (`r FILE` in the TUI, `--rename-map` in the CLI) merges extra rules — the way to drop
-a file a `refused: banned marker` row names; the generator's own two test fixtures need
+a file a `refused: banned marker` row names; the generator's own test fixtures need
 exactly that (`tests/fixtures/org_export/generator-rename-map.json`). Every kept file is
 scanned for a banned marker as bytes (a latin-1 or binary file is not skipped), the commit is
 checked to hold every file the plan counted, and a config file's values are type-checked

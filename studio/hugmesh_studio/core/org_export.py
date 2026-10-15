@@ -176,12 +176,15 @@ BANNED_MARKERS = (
     # those would refuse the platform's own manifests
     ("URL with a literal password", re.compile(
         r"://[^/\s:@]+:(?![$<{(%\s])[^\s/@$:]{16,}@")),
-    # a header line FOLLOWED BY a base64 body: the bytes of a compiled program (an
-    # engine's .wasm holds the bare PEM header strings, each followed by a NUL, in its
-    # string table) are not a key, and refusing them refused a real repository
+    # a header FOLLOWED BY a base64 body: the bytes of a compiled program (an engine's
+    # .wasm holds the bare PEM header strings, each followed by a NUL, in its string
+    # table) are not a key, and refusing them refused a real repository. NOT anchored to
+    # the start of a line and the line break may be the two characters backslash-n: a key
+    # in a YAML block (indented), in a quoted value, or in a service-account JSON file or
+    # a one-line env value (every newline escaped) is still a key
     ("private key header", re.compile(
-        r"^-----BEGIN (?:RSA |EC |DSA |OPENSSH |PGP |ENCRYPTED )?PRIVATE KEY-----[ \t]*\r?\n\s*"
-        r"(?=[A-Za-z0-9+/])", re.MULTILINE)),
+        r"-----BEGIN (?:RSA |EC |DSA |OPENSSH |PGP |ENCRYPTED )?PRIVATE KEY-----[ \t]*"
+        r"(?:\r?\n|\\(?:r\\)?n)(?:\s|\\[rn])*(?=[A-Za-z0-9+/])")),
 )
 
 #: What the default rename map deliberately leaves alone (shown in every plan).

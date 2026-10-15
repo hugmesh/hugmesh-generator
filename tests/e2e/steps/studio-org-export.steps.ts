@@ -180,6 +180,14 @@ When('I walk the Go-Live wizard to the export step for a saved mesh whose Servic
       '--terminal-line']);
   });
 
+When('I walk the Go-Live wizard to the export step for a saved mesh whose own domain selects {string} with {string} an Angular application, apply it with the name typed, and read the published site list',
+  async ({ world }, services: string, repo: string) => {
+    drive(world, ['--scenario', 'export', '--action', 'apply', '--own-services', services,
+      '--angular-repo', repo,
+      '--read-file', 'mesh.example.github.io:repos.json',
+      '--read-file', 'mesh.example.github.io:.github/workflows/build-all.yml']);
+  });
+
 When('I walk the Go-Live wizard to the export step with {string} already holding content on its {string} branch in the stand-in GitHub, and apply it with the name typed',
   async ({ world }, target: string, branch: string) => {
     drive(world, ['--scenario', 'export', '--action', 'apply', '--preexisting', `${target}:${branch}`]);
@@ -623,6 +631,29 @@ Then('the published site list records {string} for {string} and no settings file
     expect(by[withFile]?.settings).toBe(settings);
     expect(by[without]?.build, `${without} is a Java repository`).toBe('java');
     expect(by[without]?.settings, `${without} must carry no settings file`).toBe('');
+  });
+
+// ── the Angular build: the other half of the org's repositories ──────────────
+
+Then('the published site list records the {string} build for {string} and the {string} build for {string}, and the build workflow switches the npm steps on for it',
+  async ({ world }, ngBuild: string, ngRepo: string, javaBuild: string, javaRepo: string) => {
+    const f = facts(world);
+    const raw = (f.bareFiles ?? {})['mesh.example.github.io:repos.json'];
+    expect(raw, 'repos.json is not on main of the stand-in site repository').toBeTruthy();
+    const rows = (JSON.parse(raw as string).repos ?? []) as { name: string; settings: string; mvnw: boolean; build: string }[];
+    const by = Object.fromEntries(rows.map((r) => [r.name, r]));
+    expect(by[ngRepo]?.build, `${ngRepo} is an Angular application`).toBe(ngBuild);
+    expect(by[ngRepo]?.settings, 'an Angular build has no Maven settings file').toBe('');
+    expect(by[javaRepo]?.build, `${javaRepo} is a Java repository`).toBe(javaBuild);
+    // what the exported Angular repository holds is what the npm steps run on
+    expect(f.bareRepos?.[ngRepo]?.files, `${ngRepo} on the stand-in GitHub`).toEqual(
+      expect.arrayContaining(['angular.json', 'package.json']));
+    expect(f.bareRepos?.[ngRepo]?.files).not.toContain('pom.xml');
+    const wf = (f.bareFiles ?? {})['mesh.example.github.io:.github/workflows/build-all.yml'] as string;
+    expect(wf, 'build-all.yml is not on main of the stand-in site repository').toBeTruthy();
+    expect(wf).toContain("matrix.build == 'angular'");
+    expect(wf).toContain('npm ci');
+    expect(wf).toContain('npm run build');
   });
 
 // ── the Maven wrapper: not every Java repository ships ./mvnw ────────────────

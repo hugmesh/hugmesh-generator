@@ -114,6 +114,18 @@ Feature: The Studio exports a domain's repositories to its GitHub org
     And no dialog opened in the org-export walk
     And the Studio grab is a non-empty PNG
 
+  # ── the Angular build: kind detection for the other half of the org ───────
+  # The domain's selected service names a repository; here its checkout is an
+  # Angular application (an angular.json, no pom). The site list must record the
+  # npm build for it, which is what switches the workflow's npm steps on, and the
+  # Java repositories beside it must keep theirs.
+  @interface:studio
+  Scenario: the published site list gives an Angular repository the npm build @interface:studio
+    When I walk the Go-Live wizard to the export step for a saved mesh whose own domain selects "phpbb" with "hugmesh-forum-api" an Angular application, apply it with the name typed, and read the published site list
+    Then the published site list records the "angular" build for "example-forum-api" and the "java" build for "example-parent", and the build workflow switches the npm steps on for it
+    And no dialog opened in the org-export walk
+    And the Studio grab is a non-empty PNG
+
   # ── an existing repository with content on another branch is refused ──────
   @interface:studio
   Scenario: an existing repository holding content on another branch is refused by Apply and left untouched @interface:studio

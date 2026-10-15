@@ -90,7 +90,10 @@ mesh on this machine names an org, or when you add a config file on the step its
    an API key (a GitHub token of 36 or more characters after its `ghp_` / `gho_` /
    `ghu_` / `ghs_` / `ghr_` prefix, a `github_pat_` token, an AWS access key, a Slack
    token), a PEM private-key header followed by a key body (the tests cover `BEGIN RSA
-   PRIVATE KEY` and `BEGIN OPENSSH PRIVATE KEY`; the bare header strings a compiled
+   PRIVATE KEY` and `BEGIN OPENSSH PRIVATE KEY`; the header may sit anywhere in a line,
+   so an indented YAML block or a quoted value is found, and the line break after it
+   may be the two characters backslash and `n`, which is how a service-account JSON
+   file or a one-line environment value spells a key; the bare header strings a compiled
    program such as an engine's `.wasm` carries are not a key, and other key formats,
    such as a PGP `PRIVATE KEY BLOCK`, are not recognised by this rule), a URL with a
    literal password of 16 or more
@@ -150,25 +153,38 @@ text-mode step (`r -` drops it) merge a JSON file over the defaults — and over
 ```
 
 `repos` overrides a target name; `tokens` are extra regex rewrites run after the
-defaults; `skip_rewrite` globs name files whose contents are left alone; `exclude`
+defaults; `skip_rewrite` globs name files whose contents are left alone (they are still
+scanned for banned markers; only `exclude` keeps a file out of the scan); `exclude`
 globs drop files from the snapshot altogether — what a banned-marker refusal points
 at when the marker is an example token in a test script. A glob written
 `<repo>:<glob>` applies to one source repository; a bare glob to every one.
 
-### The generator's own tree needs two exclusions
+### The generator's own tree needs a few exclusions
 
-The generator is exported by default (`include_generator`), and its own tree holds two
-test fixtures the banned-marker scan refuses — correctly, they look exactly like
-secrets: a fake AWS key in `tests/cloud-deploy/test-cloud-deploy-driver.sh` and, in
-`tests/scripts/test-stack-clone-credential.sh`, a fake fine-grained token and a fake
-`gho_` token. Without an
-exclusion every plan that includes the generator is `refused: banned marker` for it.
-The ready-made map `studio/tests/fixtures/org_export/generator-rename-map.json` drops
-exactly those two files:
+The generator is exported by default (`include_generator`), and its own tree holds
+test fixtures and scanner self-tests the banned-marker scan refuses — correctly, they
+look exactly like secrets: a fake AWS key in `tests/cloud-deploy/test-cloud-deploy-driver.sh`;
+a fake fine-grained token and a fake `gho_` token in
+`tests/scripts/test-stack-clone-credential.sh`; and fake PEM keys (a header and a
+base64-looking body) in `scripts/secret-scan.sh` (its own self-test),
+`tests/scripts/test-publish-images.sh`, `studio/tests/test_pages_vault.py`,
+`studio/tests/test_secret_files.py` and `studio/tests/test_secret_files_gui.py`. The
+key rule found the last five once it stopped needing the header at the start of a line
+and a real line break after it. Without an exclusion every plan that includes the
+generator is `refused: banned marker` for it. The ready-made map
+`studio/tests/fixtures/org_export/generator-rename-map.json` drops exactly those
+files (the exported generator therefore lacks `scripts/secret-scan.sh` and those
+tests; spell the fake key from two string pieces in the source if you want them
+exported):
 
 ```json
 { "exclude": [ "hugmesh-generator:tests/cloud-deploy/test-cloud-deploy-driver.sh",
-               "hugmesh-generator:tests/scripts/test-stack-clone-credential.sh" ] }
+               "hugmesh-generator:tests/scripts/test-stack-clone-credential.sh",
+               "hugmesh-generator:scripts/secret-scan.sh",
+               "hugmesh-generator:tests/scripts/test-publish-images.sh",
+               "hugmesh-generator:studio/tests/test_pages_vault.py",
+               "hugmesh-generator:studio/tests/test_secret_files.py",
+               "hugmesh-generator:studio/tests/test_secret_files_gui.py" ] }
 ```
 
 Point the Rename map field (GUI), `r FILE` (TUI) or `--rename-map` (CLI) at it, or

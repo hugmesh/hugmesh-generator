@@ -412,6 +412,16 @@ def scenario_export(args, app, result: dict, scratch: str, bindir: str, git_log:
         with open(gcfg, "w", encoding="utf-8") as fh:
             fh.write("[core]\n\texcludesFile = %s\n" % excl)
         os.environ["GIT_CONFIG_GLOBAL"] = gcfg
+    if args.angular_repo:
+        # the named source repository is an Angular application (an angular.json and a
+        # package.json, no pom): the site list must give it the npm build, not Maven's
+        from _org_export_helpers import make_source_repo
+        os.makedirs(os.path.join(scratch, "angular-fixture"))
+        built = make_source_repo(os.path.join(scratch, "angular-fixture"), "hugmesh-user-ui")
+        dest = os.path.join(world["src"], args.angular_repo)
+        if os.path.exists(dest):
+            _fail(2, "--angular-repo %s already exists in the world" % args.angular_repo)
+        shutil.move(built, dest)
     saved_mesh_naming_the_org(world, label="e2e mesh",
                               services=[s for s in args.own_services.split(",") if s],
                               mesh_services=[s for s in args.mesh_services.split(",") if s])
@@ -759,6 +769,9 @@ def main(argv: "list[str]") -> int:
     ap.add_argument("--own-services", default="",
                     help="export: comma-separated optional services selected on the "
                          "saved mesh's own domain ROW")
+    ap.add_argument("--angular-repo", default="", metavar="REPO",
+                    help="export: make this source repository an Angular application "
+                         "(angular.json + package.json) instead of leaving it absent")
     ap.add_argument("--mesh-services", default="",
                     help="export: comma-separated services picked on the saved mesh's "
                          "mesh-wide Services step (what the mesh runs)")
