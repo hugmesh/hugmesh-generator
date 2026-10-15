@@ -557,3 +557,190 @@ def test_the_consent_prompt_opens_with_the_tick_boxs_words(wiz):
     assert f"{gui_lc.CONSENT_SHORT} {gui_lc.CONSENT_REST}" == (
         "I understand: k8s will stop to proceed — the local Kubernetes (DevOps) stack "
         "must come down before these node images are configured and built.")
+
+
+# ── #654 / decisions D8 and D9 / decision 71 = A: the superbrand and the brand screens ─
+# The window's drop-down, design step and four tabs, and the text screens' lists and
+# sections, are ONE model (tui/superbrand_step.BrandSession, tui/brand_step); these pin
+# the two faces id for id so a control that exists on one face cannot be missing on the
+# other, and a word cannot be spelt twice.
+def _brand_gen(tmp_path):
+    (tmp_path / "brands").mkdir(exist_ok=True)
+    (tmp_path / "brands" / "example.conf").write_text("BRAND=example\n")
+    return str(tmp_path)
+
+
+def _mesh_image_wiz(tmp_path, **cfg_kw):
+    from types import SimpleNamespace
+    cfg = ImageConfig()
+    cfg.mode = "mesh"
+    cfg.domains = [Domain(name="shop.example", title="Shop")]
+    for k, v in cfg_kw.items():
+        setattr(cfg, k, v)
+    return SimpleNamespace(cfg=cfg, generator_dir=_brand_gen(tmp_path))
+
+
+def test_the_superbrand_drop_down_lists_the_same_items_in_the_same_order_on_both_faces(
+        qapp, tmp_path):
+    from hugmesh_studio.gui.pages.brand_picker import BrandPicker
+    from hugmesh_studio.tui import superbrand_step as sbs
+    w = _mesh_image_wiz(tmp_path)
+    session = sbs.session_for(w, "image", w.cfg, w.generator_dir)
+    picker = BrandPicker(session)
+    j = journey.Journey(w.generator_dir)
+    j.cfg.mode = "mesh"
+    j.goto("branding")
+    j.feed("s")
+    shown = [ln.strip().lstrip("*").strip() for ln in j.lines() if ln.strip()[:2].lstrip("*")[:1].isdigit()
+             and ". " in ln]
+    shown = [ln.split(". ", 1)[1] for ln in shown]
+    assert shown[:len(picker.item_labels())] == picker.item_labels()
+    assert picker.item_labels()[0] == sbs.CREATE_LABEL == "Create a new superbrand"
+    assert [picker.combo.itemData(i) for i in range(picker.combo.count())] == [
+        c.key for c in session.choices()]
+    # the same default on both: nothing chosen yet means Create
+    assert picker.current_key() == sbs.CREATE_KEY and "*1. Create" in "\n".join(j.lines())
+
+
+def test_the_design_step_offers_the_same_identity_fields_as_the_text_commands(qapp, tmp_path):
+    from hugmesh_studio.gui.pages.superbrand import SuperbrandStep
+    from hugmesh_studio.tui import superbrand_step as sbs
+    w = _mesh_image_wiz(tmp_path)
+    step = SuperbrandStep(sbs.session_for(w, "image", w.cfg, w.generator_dir),
+                          look_in_step=False)
+    assert tuple(step.fields) == sbs.IDENTITY_FIELDS
+    j = journey.Journey(w.generator_dir)
+    j.cfg.mode = "mesh"
+    j.goto("branding")
+    text = "\n".join(_feed_all(j, "s"))
+    for field, label in sbs.IDENTITY_LABELS.items():
+        assert label in text, f"the text screen has no {label!r} row"
+    # a GUI box's label is the text screen's label, word for word
+    for field, label in sbs.IDENTITY_LABELS.items():
+        row = step.fields[field].parentWidget()
+        assert any(lab.text() == label for lab in row.findChildren(QtWidgets.QLabel))
+    # the Look is the look editor on one face and the look screen on the other; the
+    # one-to-one pin of their controls is tests/test_look_text.py
+    from hugmesh_studio.core import brand_model
+    assert "look" in text and tuple(brand_model.LOOK_KEYS)
+
+
+def _feed_all(j, *lines):
+    for ln in lines:
+        j.feed(ln)
+    return j.lines()
+
+
+def test_the_four_tabs_and_the_four_text_sections_are_the_same_four_in_the_same_order(
+        qapp, tmp_path):
+    from hugmesh_studio.gui.pages.brand_screen import TAB_TITLES
+    from hugmesh_studio.gui.pages import domain_services as gui_ds
+    from hugmesh_studio.tui import brand_step
+    assert TAB_TITLES == tuple(t for _n, t in brand_step.SECTIONS) == (
+        "Identity", "Look", "Services", "Ways to reach it")
+    w = _mesh_image_wiz(tmp_path)
+    page = gui_ds.DomainServicesPage(w)
+    page.initializePage()
+    assert [page.brand_tabs.tabText(i) for i in range(4)] == list(TAB_TITLES)
+    # both faces open on Services, the step every older flow walked
+    assert page.brand_tabs.currentIndex() == brand_step.SECTION_SERVICES - 1
+    j = journey.Journey(w.generator_dir)
+    j.cfg.mode = "mesh"
+    j.cfg.domains = list(w.cfg.domains)
+    j.goto("domain_services")
+    top = "\n".join(j.lines())
+    assert "*3. Services" in top
+    for n, title in brand_step.SECTIONS:
+        assert f"{n}. {title}" in top.replace("*", "")
+
+
+def test_every_setting_has_one_editing_home_and_both_faces_say_where(qapp, tmp_path):
+    """The Identity mirror and the Ways summary say where each is changed in the SAME
+    words on both faces (the sentences are brand_step's, not spelt twice)."""
+    from hugmesh_studio.gui.pages import domain_services as gui_ds
+    from hugmesh_studio.tui import brand_step
+    w = _mesh_image_wiz(tmp_path)
+    page = gui_ds.DomainServicesPage(w)
+    page.initializePage()
+    page._step(1)                                   # shop.example
+    tabs = page.brand_tabs
+    j = journey.Journey(w.generator_dir)
+    j.cfg.mode = "mesh"
+    j.cfg.domains = list(w.cfg.domains)
+    j.goto("domain_services")
+    j.feed("n")
+    j.feed("open 1")
+    identity = "\n".join(j.lines())
+    assert tabs.identity_home.text() == brand_step.IDENTITY_HOME
+    assert brand_step.IDENTITY_HOME in identity
+    j.feed("open 4")
+    ways = "\n".join(j.lines())
+    assert brand_step.WAYS_HOME in ways and tabs.ways_note.text() == brand_step.WAYS_HOME
+    assert tabs.ways_btn.text() == brand_step.WAYS_BUTTON
+    # the same nine effect sentences, from one table
+    import html
+    for _way, _value, _path, effect in brand_step.brand_view(
+            page._brand_session(), "shop.example").ways():
+        assert effect in ways and html.escape(effect) in tabs.ways_text.text()
+
+
+def test_the_brands_summary_is_one_sentence_on_both_faces(qapp, tmp_path):
+    from hugmesh_studio.gui.pages import domains as gui_dom
+    from hugmesh_studio.tui import domains_step as tui_dom
+    w = _mesh_image_wiz(tmp_path)
+    w.cfg.domains = [Domain(name="shop.example", title="Shop", tor=True,
+                            look={"primary": "#aa0000"})]
+    from types import SimpleNamespace
+    w2 = SimpleNamespace(cfg=w.cfg, generator_dir=w.generator_dir,
+                         currentIdChanged=SimpleNamespace(connect=lambda *_: None),
+                         currentPage=lambda: None)
+    table = gui_dom.DomainsPage(w2)
+    table.initializePage()
+    gui = dict(table.brand_summaries())
+    j = journey.Journey(w.generator_dir)
+    j.cfg = w.cfg
+    j.goto("domains")
+    text = "\n".join(tui_dom.DomainsScreen().lines(j))
+    for name, line in gui.items():
+        assert line in text, f"the text table lacks the window's summary of {name}"
+
+
+def test_the_fleet_window_and_its_text_twin_offer_the_same_superbrand_step(qapp, monkeypatch):
+    from hugmesh_studio.core import build_driver
+    from hugmesh_studio.gui.pages import fleet as gui_fleet
+    from hugmesh_studio.tui import superbrand_step as sbs
+    from hugmesh_studio.tui.fleet import FleetScreen
+    monkeypatch.setattr(build_driver, "detect",
+                        lambda builder_image="hugmesh-builder": HOST)
+    page = gui_fleet.FleetPage(GENERATOR_DIR)
+    j = journey.Journey(GENERATOR_DIR)
+    j.goto("fleet")
+    j.feed("brand")
+    text = "\n".join(j.lines())
+    page._goto(gui_fleet.STEP_SHARED)
+    labels = page.brand_picker.item_labels()
+    assert labels[0] == sbs.CREATE_LABEL and f"*1. {sbs.CREATE_LABEL}" in text
+    for label in labels:
+        assert label in text
+    assert tuple(page.superbrand_step.fields) == sbs.IDENTITY_FIELDS
+    # the window has a step for it and the text screen reaches it by one command
+    assert gui_fleet._STEP_TITLES[gui_fleet.STEP_BRAND] == "Superbrand"
+    assert isinstance(j.screen(), FleetScreen) and j.screen().stage == "brand"
+    page.deleteLater()
+
+
+def test_the_unaffiliated_reason_is_one_sentence_on_both_faces(qapp, tmp_path):
+    from hugmesh_studio.gui.pages.brand_picker import BrandPicker
+    from hugmesh_studio.gui.pages.superbrand import SuperbrandStep
+    from hugmesh_studio.tui import superbrand_step as sbs
+    w = _mesh_image_wiz(tmp_path, unaffiliated=True)
+    session = sbs.session_for(w, "image", w.cfg, w.generator_dir)
+    picker = BrandPicker(session)
+    step = SuperbrandStep(session, look_in_step=False)
+    j = journey.Journey(w.generator_dir)
+    j.cfg = w.cfg
+    j.goto("branding")
+    text = "\n".join(_feed_all(j, "s"))
+    assert picker.note.text() == step.reason.text() == sbs.UNAFFILIATED_REASON
+    assert sbs.UNAFFILIATED_REASON in text
+    assert picker.combo.count() == 0 and sbs.CREATE_LABEL not in text

@@ -63,6 +63,7 @@ from __future__ import annotations
 
 from ..qt import QtWidgets
 from ..choice_cards import ChoiceCard, ChoiceCardGroup
+from ...tui.superbrand_step import session_for
 from ...core.branding_themes import theme_set_problem
 from ...core.config import (
     UNAFFILIATED_ROLE, branding_allowed, image_class, unaffiliated_image,
@@ -72,6 +73,7 @@ from ._gating import (
 )
 from ._logintheme import LoginThemeGroup
 from ._scroll import scrollable
+from .superbrand import SuperbrandStep
 from ._themecards import (
     NO_THEME, CustomAssetsSwatch, ThemeCardGroup, ThemeStripSwatch,
 )
@@ -180,6 +182,18 @@ class BrandingPage(QtWidgets.QWizardPage):
         # as in the branded images").
         self.unaffiliated_note = _note(_UNAFFILIATED_NOTE)
         lay.addWidget(self.unaffiliated_note)
+        # THE SUPERBRAND DROP-DOWN AND ITS DESIGN STEP (#654, D8) — at the top of the
+        # page, in mesh mode, where the mesh's governing brand is chosen. Its Look is
+        # the "Web login theme" section further down (one editor, one home), which this
+        # page keeps under that title; the step points there.
+        #
+        # MADE ON THE FIRST MESH VISIT, not here: off a mesh the page has no superbrand
+        # (a standalone image has no brands), and a page that always owned the step's
+        # editable boxes would break "no editable widget but the two channels that may
+        # take free text" (tests/test_branding_page_gui.py) for every image that can
+        # never use them.
+        self.superbrand: SuperbrandStep | None = None
+        self._page_layout = lay
         # every branding widget lives in one container so the role-class / platform
         # grey can disable the whole surface at once. The UNAFFILIATED axis is no
         # longer part of that grey: it hides the two identity widgets (_gate_identity)
@@ -294,6 +308,15 @@ class BrandingPage(QtWidgets.QWizardPage):
         # by default in desktop flows; initializePage expands it in mesh, where it
         # is the reason the page is shown at all.
         self.login_theme = LoginThemeGroup()
+        # The section's content: the compact group every host has always had, and — in
+        # mesh, where the superbrand step is shown — the full look editor that replaces
+        # it on screen (a hidden group is still loaded and committed, so a saved
+        # configuration and every older caller read and write exactly what they did).
+        self.login_host = QtWidgets.QWidget()
+        host_lay = QtWidgets.QVBoxLayout(self.login_host)
+        host_lay.setContentsMargins(0, 0, 0, 0)
+        host_lay.addWidget(self.login_theme)
+        self._look_host_lay = host_lay
         # "Web login theme" (2026-08-26), superseding #50 item 2's plain "Themes".
         # #50 renamed it to "Themes" when this page had ONE theme surface; it now has
         # two, and the DESKTOP one sits under a "Desktop theme" header while the thing
@@ -301,13 +324,58 @@ class BrandingPage(QtWidgets.QWizardPage):
         # menu for adding the themes" was pointed at the wrong plane. Still a
         # LABEL-ONLY change: the persisted login_* config keys keep their names, so old
         # sessions load unchanged.
-        self.login_collapsible = collapsible("Web login theme", self.login_theme,
+        self.login_collapsible = collapsible("Web login theme", self.login_host,
                                              expanded=False)
         lay.addWidget(self.login_collapsible)
         lay.addStretch(1)
 
         self.rb_preset.toggled.connect(self._mode_toggled)
         self.rb_preset.setChecked(True)   # default channel: premade theme
+
+    def _ensure_superbrand(self) -> SuperbrandStep:
+        if self.superbrand is None:
+            self.superbrand = SuperbrandStep(route="image", look_in_step=False)
+            self.superbrand.changed.connect(self._superbrand_changed)
+            # right under the unaffiliated note: the top of the page
+            self._page_layout.insertWidget(1, self.superbrand)
+        return self.superbrand
+
+    def _superbrand_changed(self) -> None:
+        """The design step edited the superbrand's look through the config: the compact
+        group (hidden in mesh, but committed on Next) must read the same values, or its
+        commit would write the old ones back over the edit."""
+        try:
+            self.login_theme.load(self.wiz.cfg)
+        except Exception:       # pragma: no cover - defensive, PyQt6 qFatal guard
+            import sys, traceback
+            print("branding: swallowed exception in _superbrand_changed", file=sys.stderr)
+            traceback.print_exc(file=sys.stderr)
+
+    def _show_superbrand(self, c, mesh: bool) -> None:
+        """The superbrand step on a mesh: the drop-down at the top and the design's
+        look in the Web login theme section, in place of the compact group."""
+        if not mesh:
+            if self.superbrand is not None:
+                self.superbrand.setVisible(False)
+            self._set_full_look(False)
+            return
+        step = self._ensure_superbrand()
+        step.setVisible(True)
+        session = session_for(self.wiz, "image", c, getattr(self.wiz, "generator_dir", "") or "")
+        step.set_session(session)
+        editor = step.ensure_look_editor()
+        if editor is not None and editor.parentWidget() is not self.login_host:
+            self._look_host_lay.addWidget(editor)
+        self._set_full_look(True)
+
+    def _set_full_look(self, on: bool) -> None:
+        editor = self.superbrand.look_editor if self.superbrand is not None else None
+        self.login_theme.setVisible(not on)
+        if editor is not None:
+            editor.setVisible(on)
+            sess = self.superbrand.session if self.superbrand is not None else None
+            editable = bool(sess is not None and (sess.designing or sess.unaffiliated))
+            editor.setEnabled(editable)
 
     # ── either/or plumbing ──────────────────────────────────────────────────────
     def _mode_toggled(self, *_):
@@ -476,6 +544,7 @@ class BrandingPage(QtWidgets.QWizardPage):
         self.desktop_hdr.setText(_DESKTOP_HDR_MESH if mesh else _DESKTOP_HDR)
         self.setSubTitle(_SUBTITLE_MESH if mesh else _SUBTITLE_IMAGE)
         self.login_theme.load(c)
+        self._show_superbrand(c, mesh)
         self.login_collapsible.setVisible(mesh)
         self.login_collapsible.set_default_expanded(mesh)
 
@@ -518,6 +587,13 @@ class BrandingPage(QtWidgets.QWizardPage):
         # clears below may touch it (an unaffiliated IMAGE can ride a mesh whose
         # login page is themed — different scopes).
         self.login_theme.commit(c)
+        # the design step writes after it: the superbrand block (id, title, public name)
+        # onto the config and the record file the mesh is described by. A refusal is
+        # shown inline by the step and never blocks Next (a page that refused its own
+        # Next would strand a person who cannot see why — the build refuses downstream).
+        if c.mode == "mesh" and self.superbrand is not None \
+                and self.superbrand.session is not None:
+            self.superbrand.commit(save=False)
         # The blank-EVERYTHING arm for the unaffiliated role is gone (decision
         # 2026-08-26): the look is legal on this image now, and blanking it here would
         # silently delete the very theme the operator just picked. What replaces it is

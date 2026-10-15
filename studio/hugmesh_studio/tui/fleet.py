@@ -10,6 +10,10 @@ objects:
   ``set rpi_roles pki backend``), validated by ``FleetConfig.validate`` — the same
   fail-closed allowlist the GUI's preview uses. One generic surface instead of the
   GUI's five grouped panes: the knobs ARE the field names build-all-roles.sh documents;
+* SUPERBRAND — the same drop-down and design as the window's Superbrand step
+  (``tui/superbrand_step.SuperbrandScreen``, #654 D8): ``brand`` on the options opens it,
+  ``Create a new superbrand`` is the first item, and a design written here is the same
+  record the image route writes;
 * DOMAINS — row 1 is the fleet's own domain (the ``cluster_domain`` knob, else the
   builders' default: ``core.fleet.seed_fleet_domains``, the GUI's call), added rows via
   ``a NAME``; leaving it goes through ``core.fleet.commit_fleet_domains`` (the GUI's
@@ -40,6 +44,7 @@ from ..core.config import Domain
 from ..core.platform_info import HostInfo
 from . import model
 from .domain_services_step import DomainServicesScreen
+from .superbrand_step import SuperbrandScreen, session_for
 
 __all__ = ["FleetScreen", "FLEET_KNOBS", "PREVIEW_HOST"]
 
@@ -59,7 +64,9 @@ _FALSE = ("0", "off", "no", "false", "n", "-")
 
 
 class FleetScreen:
-    """``options`` -> ``domains`` -> ``services`` -> ``review``."""
+    """``options`` -> ``domains`` -> ``services`` -> ``review``, with the superbrand's
+    drop-down and design one command (``brand``) away from the options, the way the
+    window puts them on a step between Shared options and Domains."""
 
     slug = "fleet"
     title = "Fleet build"
@@ -72,7 +79,14 @@ class FleetScreen:
             cfg_of=lambda j: self.state(j),
             on_continue=lambda j: self._goto(j, "review"),
             on_back=lambda j: self._goto(j, "domains"),
-            lane_note=FLEET_LANE_NOTE)
+            lane_note=FLEET_LANE_NOTE,
+            brand_session_of=self.brand_session, route="fleet")
+        #: the superbrand step (#654, D8): the same drop-down and design as the window's
+        #: Superbrand step, over the same session
+        self.brand = SuperbrandScreen(
+            session_of=self.brand_session, route="fleet",
+            on_continue=lambda j: self._goto(j, "options"),
+            on_back=lambda j: self._goto(j, "options"))
 
     # ── state (on the journey, never in j.cfg — a fleet is not an ImageConfig) ────
     @staticmethod
@@ -91,6 +105,11 @@ class FleetScreen:
             j.fleet_domains = st
         return st
 
+    def brand_session(self, j):
+        """This fleet's superbrand session: the options' Cluster domain and brand
+        profile and the Domains steps' state, behind the model every route shares."""
+        return session_for(j, "fleet", (self.options(j), self.state(j)), j.generator_dir)
+
     def config(self, j) -> FleetConfig:
         """The FleetConfig the review gates and previews: the knobs + the rows, built
         through the same ``fleet_domain_fields`` the GUI's collect() uses."""
@@ -100,6 +119,8 @@ class FleetScreen:
         return FleetConfig(**kw)
 
     def _goto(self, j, stage: str) -> None:
+        if stage == "brand":
+            self.brand.enter(j)
         if stage == "domains":
             seed_fleet_domains(self.state(j), self.options(j).cluster_domain)
         if stage == "services":
@@ -113,6 +134,8 @@ class FleetScreen:
     def prompt(self, j) -> str:
         if self.stage == "services":
             return self.services.prompt(j)
+        if self.stage == "brand":
+            return self.brand.prompt(j)
         return f"fleet-{self.stage}> "
 
     def lines(self, j) -> list[str]:
@@ -135,12 +158,15 @@ class FleetScreen:
                        "pki/backend/frontend + x86 pki/backend/frontend/backend-gpu)")
         out += ["", "knobs: " + " ".join(FLEET_KNOBS), "",
                 "commands: set NAME VALUE (on/off for switches; - resets) · "
-                "Enter=continue to Domains"]
+                "brand=choose or design the superbrand · Enter=continue to Domains"]
         return out
 
     def _feed_options(self, j, line: str) -> None:
         if line == "":
             self._goto(j, "domains")
+            return
+        if line.lower() == "brand":
+            self._goto(j, "brand")
             return
         verb, _, rest = line.partition(" ")
         name, _, value = rest.strip().partition(" ")
@@ -171,6 +197,13 @@ class FleetScreen:
             j.status = f"refused: {e}"
             return
         j.status = f"{name} -> {getattr(cfg, name)}"
+
+    # ── the superbrand (the window's Superbrand step) ───────────────────────────
+    def _lines_brand(self, j) -> list[str]:
+        return self.brand.lines(j)
+
+    def _feed_brand(self, j, line: str) -> None:
+        self.brand.feed(j, line)
 
     # ── domains ─────────────────────────────────────────────────────────────────
     def table(self, j) -> tuple[list[str], list[list[str]]]:

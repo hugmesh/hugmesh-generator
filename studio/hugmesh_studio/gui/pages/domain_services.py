@@ -137,6 +137,8 @@ from types import SimpleNamespace
 from ..qt import Qt, QtCore, QtWidgets
 from ..styles import MUTED, WARN, muted
 from ._scroll import scrollable
+from .brand_screen import BrandSettingsTabs
+from ...tui.brand_step import brand_view
 from ...core.domain_services import (
     DOMAIN_CATALOGUE, ENFORCEMENT_NOTE, OTHER_SCOPE_HEADERS, PER_DOMAIN_INFRA,
     SCOPE_BINDS, SCOPE_DOMAIN, SCOPE_IMAGE, SCOPE_LABELS, SCOPE_NODE, SCOPE_ONION,
@@ -298,6 +300,22 @@ class _TableFitKeeper(QtCore.QObject):
             pass
 
 
+def _layout_widgets(layout, start: int = 0) -> list:
+    """Every widget in ``layout`` from item ``start`` on, nested layouts included, in
+    layout order (the services tab's content: see ``BrandSettingsTabs``)."""
+    out = []
+    for i in range(start, layout.count()):
+        item = layout.itemAt(i)
+        w = item.widget()
+        if w is not None:
+            out.append(w)
+            continue
+        inner = item.layout()
+        if inner is not None:
+            out += _layout_widgets(inner)
+    return out
+
+
 def _offerable(slug: str) -> bool:
     """Whether ``slug`` may become a per-domain CHECKBOX on this page: a domain-scoped
     catalogue slug, or one of the per-domain infra slugs (``tor`` alone — decision 68
@@ -362,6 +380,18 @@ class DomainServicesBody:
         step.addWidget(self.next_btn)
         step.addStretch(1)
         lay.addLayout(step)
+
+        # ── BRAND SETTINGS: the four tabs (#654, D9) ─────────────────────────────────
+        # Identity | Look | Services | Ways to reach it. The tab bar and the three other
+        # tabs' pages sit HERE, in this layout; everything the body has always drawn
+        # below this point IS the Services tab (it stays in this layout, under this
+        # parent, in this order — #647's looks pin all three) and is the tab that is
+        # open when the step opens, so the page a person has always walked is the page
+        # they see. A host with no brand record on offer (``_brand_session`` is None)
+        # draws no tab bar: just the services body, exactly as before.
+        self.brand_tabs = BrandSettingsTabs(route=self._brand_route())
+        self.brand_tabs.mount(lay)
+        _services_from = lay.count()
 
         # ── the domain's FRONT DOOR (#582, decision 68 = A) ────────────────────────
         # Its own table, not a group in the services table below: that table IS the
@@ -505,6 +535,8 @@ class DomainServicesBody:
         self.remaining.setWordWrap(True)
         lay.addWidget(self.remaining)
         lay.addStretch(1)
+        self.brand_tabs.adopt_services(_layout_widgets(lay, _services_from))
+        self.brand_tabs.set_active(False)
 
     # ── host hooks ────────────────────────────────────────────────────────────────
     def _set_titles(self, title: str, subtitle: str) -> None:
@@ -520,6 +552,16 @@ class DomainServicesBody:
         """The worklist rows the host is carrying, or () — the per-node half of the
         state column."""
         return ()
+
+    def _brand_session(self):
+        """The superbrand session of this host (``tui.superbrand_step.BrandSession``),
+        or None when the host offers no brand record: the four tabs then stay hidden."""
+        return None
+
+    def _brand_route(self) -> str:
+        """Which start path this host is on ("image", "docker" or "fleet"): the look
+        editor draws a brand's own look enabled only where something can show it."""
+        return "image"
 
     # ── flow ──────────────────────────────────────────────────────────────────────
     def _load(self, cfg, names, own_name: str = "") -> None:
@@ -609,6 +651,7 @@ class DomainServicesBody:
             self.remaining.setText("")
             self.prev_btn.setEnabled(False)
             self.next_btn.setEnabled(False)
+            self.brand_tabs.set_active(False)
             fit_table(self.table)
             fit_table(self.front_door_table)
             return
@@ -628,6 +671,7 @@ class DomainServicesBody:
         self.next_btn.setEnabled(self._index < total - 1)
         self._rebuild(name)
         self._rebuild_other_scopes()
+        self._refresh_brand_tabs(name)
         left = [n for n in self._names if n not in self._reviewed]
         if left:
             self.remaining.setText(
@@ -640,6 +684,36 @@ class DomainServicesBody:
             self.remaining.setText(
                 f"All {total} domain{'s' if total != 1 else ''} configured.")
             self.remaining.setStyleSheet(f"color: {MUTED};")
+
+    def _refresh_brand_tabs(self, name: str) -> None:
+        """Point the four tabs at the domain on screen (the mesh's own domain is the
+        superbrand's row). Never raises: a slot must not take the Studio down."""
+        try:
+            session = self._brand_session()
+            self.brand_tabs.set_active(session is not None)
+            if session is None:
+                self.brand_tabs.set_view(None)
+                return
+            self.brand_tabs.set_view(brand_view(
+                session, name, own=bool(name) and name == self._own_name))
+        except Exception:                       # noqa: BLE001 — PyQt6 qFatal guard
+            import sys
+            import traceback
+            print("domain_services: swallowed exception in _refresh_brand_tabs",
+                  file=sys.stderr)
+            traceback.print_exc(file=sys.stderr)
+
+    def commit_brand(self, *, save: bool = False) -> list[str]:
+        """Write what the Brand settings tabs changed (a brand's look is written as it
+        is edited; the superbrand block and the record file here). Returns the problems,
+        which the host shows; recording never refuses (see ``_record``)."""
+        session = self._brand_session()
+        if session is None:
+            return []
+        try:
+            return session.commit(save=save)
+        except Exception:                       # noqa: BLE001
+            return []
 
     def _rebuild(self, name: str) -> None:
         """Rebuild the checkbox table for ``name``. Cheap (8 rows plus any carried-over
@@ -906,6 +980,16 @@ class DomainServicesPage(QtWidgets.QWizardPage, DomainServicesBody):
     def _scope_cfg(self):
         return self.wiz.cfg
 
+    def _brand_session(self):
+        """The image route's superbrand session — on a mesh only (a standalone image
+        has no brands to configure per domain)."""
+        from ...tui.superbrand_step import session_for
+        cfg = self.wiz.cfg
+        if getattr(cfg, "mode", "") != "mesh":
+            return None
+        return session_for(self.wiz, "image", cfg,
+                           getattr(self.wiz, "generator_dir", "") or "")
+
     def _entries(self):
         """The worklist rows this wizard is carrying, or () — the per-node half of the
         state column. Tolerant on purpose: pages are constructed before WorklistPage has
@@ -948,6 +1032,7 @@ class DomainServicesPage(QtWidgets.QWizardPage, DomainServicesBody):
         """Record (see ``DomainServicesBody._record``); always True — the refusal
         belongs at the build/mesh-start screens, where it can be acted on."""
         self._record(self.wiz.cfg)
+        self.commit_brand(save=True)
         return True
 
     def cleanupPage(self):
@@ -976,10 +1061,14 @@ class DomainServicesWidget(QtWidgets.QWidget, DomainServicesBody):
     sentence saying what this lane does with the selection."""
 
     def __init__(self, scope_cfg=None, entries=None, lane_note: str = "",
-                 parent=None):
+                 brand_session=None, route: str = "docker", parent=None):
         super().__init__(parent)
         self._scope_cfg_fn = scope_cfg
         self._entries_fn = entries
+        #: ``brand_session`` is a callable returning the host's superbrand session (or
+        #: None); ``route`` names its start path. A host with neither shows no tabs.
+        self._brand_session_fn = brand_session
+        self._route = route
         lay = QtWidgets.QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         self.title_label = QtWidgets.QLabel("")
@@ -1005,6 +1094,22 @@ class DomainServicesWidget(QtWidgets.QWidget, DomainServicesBody):
     def _entries(self):
         return list(self._entries_fn() or ()) if self._entries_fn else []
 
+    def _brand_session(self):
+        return self._brand_session_fn() if self._brand_session_fn else None
+
+    def _brand_route(self) -> str:
+        return self._route
+
+    def set_brand_session(self, brand_session, route: str | None = None) -> None:
+        """Give a host that built this widget without one (the Docker route's step) its
+        superbrand session after the fact, and re-draw the tabs for the domain on screen."""
+        self._brand_session_fn = brand_session
+        if route:
+            self._route = route
+            self.brand_tabs.route = route
+        if self._names:
+            self._show()
+
     def load(self, cfg) -> None:
         """Enter the walk for ``cfg`` (its named rows, in table order). A state that
         names its own domain as a REAL row (``LocalMeshDomains.own_name``) gets the
@@ -1015,6 +1120,7 @@ class DomainServicesWidget(QtWidgets.QWidget, DomainServicesBody):
     def record(self, cfg) -> None:
         """Write the working selections and the reviewed marker onto ``cfg``."""
         self._record(cfg)
+        self.commit_brand()
 
     def reload(self, cfg) -> None:
         """Drop every working answer and re-enter the walk from ``cfg``.

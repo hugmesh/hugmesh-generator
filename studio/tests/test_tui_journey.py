@@ -465,3 +465,78 @@ def test_unknown_input_gets_an_inline_message_never_a_crash():
     j.feed("banana")
     assert "unrecognised" in j.status
     assert j.slug == "welcome" and not j.done
+
+
+# ── #654 / D8, D9: the superbrand step and the Brand settings sections ───────────────
+def _mesh_journey(tmp_path) -> journey.Journey:
+    (tmp_path / "brands").mkdir(exist_ok=True)
+    j = journey.Journey(str(tmp_path))
+    j.cfg.mode = "mesh"
+    return j
+
+
+def test_the_branding_step_opens_the_superbrand_step_and_comes_back_to_branding(tmp_path):
+    j = _mesh_journey(tmp_path)
+    j.goto("branding")
+    j.feed("s")
+    assert j.screen().slug == "superbrand" and j.overlay is not None
+    assert "*1. Create a new superbrand" in "\n".join(j.lines())
+    j.feed("")                                # Enter: nothing changed, back to Branding
+    assert j.overlay is None and j.slug == "branding"
+    j.feed("s")
+    j.feed("q")                               # q is BACK here, not quit-the-journey
+    assert j.overlay is None and j.slug == "branding" and not j.done
+
+
+def test_the_superbrand_step_is_not_offered_off_a_mesh(tmp_path):
+    j = _mesh_journey(tmp_path)
+    j.cfg.mode = "standalone"
+    j.goto("branding")
+    assert "Superbrand" not in "\n".join(j.lines())
+    j.feed("s")                               # not a command here: it just continues
+    assert j.overlay is None
+
+
+def test_a_walk_through_the_superbrand_step_leaves_it_in_the_configuration(tmp_path):
+    j = _mesh_journey(tmp_path)
+    j.goto("branding")
+    for line in ("s", "id acme", "title Acme Mesh", "public mesh.example", ""):
+        j.feed(line)
+    assert (j.cfg.brand, j.cfg.brand_title, j.cfg.cluster_domain) == (
+        "acme", "Acme Mesh", "mesh.example")
+    assert j.slug == "branding"
+
+
+def test_the_domain_services_step_carries_the_brand_sections_on_a_mesh(tmp_path):
+    j = _mesh_journey(tmp_path)
+    j.goto("domain_services")
+    top = "\n".join(j.lines())
+    assert "Brand settings:" in top and "*3. Services" in top
+    j.feed("open 4")
+    assert "Ways to reach it" in "\n".join(j.lines())
+    j.feed("open 3")
+    assert "Tor front door" in "\n".join(j.lines())
+
+
+def test_the_fleet_text_twin_reaches_the_superbrand_step_and_keeps_its_old_flow(tmp_path):
+    j = _mesh_journey(tmp_path)
+    j.goto("fleet")
+    j.feed("brand")
+    assert j.screen().stage == "brand"
+    j.feed("")
+    assert j.screen().stage == "options"
+    j.feed("")                                # Enter on the options is still Domains
+    assert j.screen().stage == "domains"
+    j.feed("b")
+    assert j.screen().stage == "options"
+
+
+def test_no_text_screen_of_the_brand_steps_asks_a_modal_question():
+    """The text screens never block on a dialog; a question is a line on the screen and
+    the answer the next line typed."""
+    import re
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    for name in ("superbrand_step.py", "brand_step.py"):
+        with open(os.path.join(root, "hugmesh_studio", "tui", name), encoding="utf-8") as fh:
+            code = fh.read()
+        assert not re.search(r"\binput\(|QMessageBox|exec\(", code), name

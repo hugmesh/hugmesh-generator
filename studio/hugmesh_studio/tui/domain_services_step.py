@@ -62,7 +62,7 @@ from ..core.domain_services import (
     implicit_own_domain, normalise_slugs, other_scope_rows, record_reviewed,
     reviewed_names, tor_row_state,
 )
-from . import model
+from . import brand_step, model
 
 __all__ = ["DomainServicesScreen", "service_table", "other_scope_table",
            "scope_legend", "front_door_table", "TOR_COMMAND", "SELECTION_HEADER"]
@@ -178,8 +178,17 @@ class DomainServicesScreen:
     title = "Domain services"
 
     def __init__(self, cfg_of=None, on_continue=None, on_back=None,
-                 lane_note: str = ""):
+                 lane_note: str = "", brand_session_of=None, route: str = "image"):
         self.index = 0
+        #: the Brand settings sections (#654, D9). ``brand_session_of(j)`` gives the
+        #: superbrand session of this host, or None when the host has none: then the
+        #: screen is exactly what it was. ``section`` is the numbered section on
+        #: screen; Services (3) is the one the step opens on, so every command that
+        #: worked before still does.
+        self._brand_session_of = brand_session_of
+        self.route = route
+        self.section = brand_step.SECTION_SERVICES
+        self._look_text = None
         self._cfg_of = cfg_of
         self._on_continue = on_continue
         self._on_back = on_back
@@ -192,6 +201,15 @@ class DomainServicesScreen:
         return self._cfg_of(j) if self._cfg_of else j.cfg
 
     def _continue(self, j) -> None:
+        # leaving the step is where the brand record is written (an untouched session
+        # writes nothing): the section on screen may hold an uncommitted look first
+        view = self._brand(j) if self.domains(j) else None
+        if view is not None:
+            if self.section == brand_step.SECTION_LOOK:
+                view.commit_look()
+            problems = view.session.commit(save=True)
+            if problems:
+                j.status = problems[0]
         if self._on_continue:
             self._on_continue(j)
         else:
@@ -214,6 +232,7 @@ class DomainServicesScreen:
         done = reviewed_names(self.cfg(j))
         pending = [i for i, d in enumerate(doms) if d.name not in done]
         self.index = pending[0] if pending else 0
+        self.section = brand_step.SECTION_SERVICES
         self._mark(j)
 
     def _mark(self, j) -> None:
@@ -225,6 +244,51 @@ class DomainServicesScreen:
             return
         cfg = self.cfg(j)
         record_reviewed(cfg, reviewed_names(cfg) | {d.name})
+
+    # ── the Brand settings sections (#654, D9) ───────────────────────────────────
+    def _brand(self, j):
+        """The BrandView of the domain on screen, or None when this host has no
+        superbrand session (the screen is then exactly what it was)."""
+        if self._brand_session_of is None:
+            return None
+        session = self._brand_session_of(j)
+        d = self.current(j)
+        if session is None or d is None:
+            return None
+        return brand_step.brand_view(session, d.name, own=d.name == _own_name(self.cfg(j)))
+
+    def _section_lines(self, j, view) -> list[str]:
+        """Sections 1, 2 and 4 as text (3 is the services screen below)."""
+        n = self.section
+        if n == 1:
+            out = brand_step.identity_lines(view)
+        elif n == brand_step.SECTION_LOOK:
+            out = brand_step.look_section_lines(view, self.route)
+            if self._look_editable(view):
+                out = ["2. Look — " + view.label(), ""] + self._look(view).lines()
+        else:
+            out = brand_step.ways_lines(view)
+        return out
+
+    def _look_editable(self, view) -> bool:
+        return (view.look_model() is not None
+                and self.route in brand_step.brand_look.PATHS_WITH_OWN_LOOK)
+
+    def _look(self, view):
+        from .themes import LookText
+        m = view.look_model()
+        if self._look_text is None or self._look_text.model is not m:
+            self._look_text = LookText(m, path=self.route)
+        return self._look_text
+
+    def _open_section(self, j, view, n: int) -> None:
+        if n not in dict(brand_step.SECTIONS):
+            j.status = f"no such section: {n} (1 to 4)"
+            return
+        if self.section == brand_step.SECTION_LOOK:
+            view.commit_look()
+        self.section = n
+        self._look_text = None
 
     # ── rendering ───────────────────────────────────────────────────────────────
     def lines(self, j) -> list[str]:
@@ -238,6 +302,18 @@ class DomainServicesScreen:
         own = " (this mesh's own domain)" if d.name == _own_name(cfg) else ""
         is_own = bool(own)
         out = [f"{d.name}{own} — domain {self.index + 1} of {len(doms)}", ""]
+        view = self._brand(j)
+        if view is not None:
+            out += ["Brand settings: " + "   ".join(brand_step.section_menu(self.section)),
+                    "  (type ‘open N’ to switch section; n and p move between brands)", ""]
+            if self.section != brand_step.SECTION_SERVICES:
+                out += self._section_lines(j, view)
+                out += ["", "commands: open N=another section · n=next brand · "
+                        "p=previous brand"
+                        + (" · look commands as listed" if self.section == 2
+                           and self._look_editable(view) else "")
+                        + " · Enter=continue"]
+                return out
         # The front door FIRST, right under the domain line — the GUI page's order
         # (its front-door table sits above the long services catalogue so a short
         # viewport cannot push it below the fold, #647), kept alike here by decision
@@ -313,9 +389,35 @@ class DomainServicesScreen:
         if not doms:
             self._continue(j)
             return
+        view = self._brand(j)
+        if view is not None:
+            word, _, arg = verb.partition(" ")
+            names = {"identity": 1, "look": 2, "services": 3, "ways": 4}
+            if word == "open" and arg.strip().isdigit():
+                self._open_section(j, view, int(arg))
+                return
+            if word in names and not arg:
+                self._open_section(j, view, names[word])
+                return
+            if self.section == brand_step.SECTION_LOOK and verb not in ("n", "p"):
+                if self._look_editable(view):
+                    self._look(view).feed(line)
+                    view.commit_look()
+                else:
+                    j.status = ("This brand's own look is shown on the Docker mesh "
+                                "only; it is not editable on this route.")
+                return
+            if self.section != brand_step.SECTION_SERVICES and verb not in ("n", "p"):
+                j.status = ("Nothing to change in this section here — see the line "
+                            "under it for where it is changed.")
+                return
         if verb in ("n", "p"):
+            if view is not None and self.section == brand_step.SECTION_LOOK:
+                view.commit_look()
             self.index = max(0, min(len(doms) - 1,
                                     self.index + (1 if verb == "n" else -1)))
+            self.section = brand_step.SECTION_SERVICES
+            self._look_text = None
             self._mark(j)
             return
         d = self.current(j)
