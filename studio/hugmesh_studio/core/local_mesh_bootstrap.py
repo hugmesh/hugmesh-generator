@@ -798,10 +798,15 @@ class LocalMeshBootstrap:
         # (gen-keystores.sh:45-53 refuses to source brands/<brand>.conf). A brand with no
         # .conf is NOT blocked — the tool accepts it and exits 0 (see warnings()).
         brand = self.cfg.brand.strip()
+        if brand and self.cfg.brand != brand:
+            # the check below runs on the stripped text, but every consumer reads the
+            # raw one: a trailing newline reached the Vault path and the profile name
+            problems.append(f"Brand {self.cfg.brand!r} has a space or a line break at "
+                            "an end; remove it.")
         if not brand:
             problems.append("Brand must not be empty — it is the secret/<BRAND>/ Vault "
                             "base path segment.")
-        elif not _BRAND_DNS_LABEL.match(brand):
+        elif not _BRAND_DNS_LABEL.fullmatch(brand):
             problems.append(f"Brand '{brand}' is not a DNS label [a-z0-9-] — "
                             f"gen-keystores.sh refuses to source brands/{brand}.conf.")
         # SOURCE axis — BLOCK only where compose will certainly hard-error.
@@ -879,7 +884,7 @@ class LocalMeshBootstrap:
         # silent drop is the exact failure mode this axis exists to kill.
         for name in self.cfg.own_idp_domains:
             if not name.strip() or not all(
-                    _BRAND_DNS_LABEL.match(lbl)
+                    _BRAND_DNS_LABEL.fullmatch(lbl)
                     for lbl in name.strip().lower().split(".")):
                 problems.append(
                     f"own-Casdoor domain '{name}' is not a DNS name (dot-"
@@ -946,7 +951,7 @@ class LocalMeshBootstrap:
         of the build contexts compose will eventually ask for."""
         out: list[str] = []
         brand = self.cfg.brand.strip()
-        if brand and _BRAND_DNS_LABEL.match(brand) and not self.brand_has_conf():
+        if brand and _BRAND_DNS_LABEL.fullmatch(brand) and not self.brand_has_conf():
             if brand != DEFAULT_BRAND:
                 out.append(
                     f"No brands/{brand}.conf profile — gen-cluster-secrets.sh runs fine "

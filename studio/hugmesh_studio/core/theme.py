@@ -86,7 +86,9 @@ _NEUTRALS: dict[str, str] = {
     "--sd-mid-rgb": "58,58,58",
 }
 
-HEX_RE = re.compile(r"^#[0-9A-Fa-f]{6}$")
+# \Z, not $: with $ a colour followed by a newline still matches, and the newline would
+# reach a stylesheet (every caller uses .match)
+HEX_RE = re.compile(r"^#[0-9A-Fa-f]{6}\Z")
 
 
 # ── colour maths (pure) ─────────────────────────────────────────────────────────────

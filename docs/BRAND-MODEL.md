@@ -96,8 +96,8 @@ frozen. It is checked once against the strictest rule in use — a DNS label of 
 superbrand's own id, the name of an existing `brands/*.conf` profile, a name ending
 in `-pki` (another brand's PKI namespace), or already taken by another brand.
 
-**What the Docker start now refuses that it accepted before.** `hugmesh-mesh-bootstrap
-up` and the Studio's Docker route run these rules (with the 63-character DNS label
+**What the Docker start now refuses that it accepted before.** `python3 -m
+hugmesh_studio.core.local_mesh_bootstrap up` and the Studio's Docker route run these rules (with the 63-character DNS label
 instead of 59, and no title rule) on any mesh that carries a superbrand block or a
 domain row. A mesh that started on the old main with one of these now stops with the
 reason, and these are deliberate: a superbrand id that ends in `-pki` (it would be
@@ -185,8 +185,8 @@ to the real Makefile, so it flips the day the hold lands.
   the internal root name its `superdomain`, `brands` its `domains`. Both manifest
   writers (`ImageConfig.mesh_manifest` and `WorklistDriver.manifest_v2`) call the
   same two functions, so they cannot disagree.
-- **The Docker mesh**: `hugmesh-mesh-bootstrap up --record FILE` starts a mesh from
-  a record (the record decides the brand, the public name, the brands and their
+- **The Docker mesh**: `python3 -m hugmesh_studio.core.local_mesh_bootstrap up --record FILE`
+  starts a mesh from a record (the record decides the brand, the public name, the brands and their
   sign-ins, and whether the mesh starts with Tor on; every other flag still
   applies), and `show-record --record FILE` prints
   every brand's effective look with the source of each value and the effect of each
@@ -198,7 +198,17 @@ to the real Makefile, so it flips the day the hold lands.
   bootstrap's 63-character label: a title is written into no sourced file on this
   path, so a mesh that started before the record existed — a brand titled "Bob's
   Shop", a 61-character brand — still starts. The record file and the generated
-  profile keep the strict rule at their own write.
+  profile keep the strict rule at their own write. The window and the text screens
+  follow the same split: the design of a superbrand on the Docker route is checked the
+  way the start checks it, so a brand row titled "Bob's Shop" never blocks it; when the
+  record FILE is then refused, the page says "The brand record file was not written"
+  and that the mesh itself still starts (in the window, under the drop-down and on the
+  plan; in the text screens, on the status line).
+  A **test mesh has no public name**: a record saved from a test design carries no
+  public name and no central sign-in address (the start derives both), so it cannot
+  start a production plan on the placeholder apex. A record's public name that differs
+  from an explicit `--cluster-domain` is a contradiction, refused like a Tor
+  disagreement.
 - **The image builders**: a generated shell profile
   (`python3 -m hugmesh_studio.core.brand_model profile --record FILE --out PROFILE`).
   Every value is single-quoted and limited to letters, digits, space and
@@ -232,13 +242,11 @@ each dropped a key it did not know. They are listed by name in
 back (image config, local mesh, saved mesh, image config again, fleet), then deletes a
 key at each site in turn and shows the round trip go red.
 
-Two sites are **not converted** and are named in `brand_model.COPY_SITES_STILL_DROPPING`:
-the window's Domains table (`gui/pages/domains.py`, `DomainsTableBody.rows`, which the
-Docker mesh page's `_commit_domains` also uses) rebuilds every row from its cells, so a
-Next through either table erases a brand's `id`, `look`, `ways` and `issuer_port`
-today. Those files belong to the brands-table lane of the same design; until it
-lands, a record edited through the window keeps those keys only on the paths listed
-above.
+The window's Domains table (`gui/pages/domains.py`, `DomainsTableBody.rows`, which the
+Docker mesh page's `_commit_domains` also uses) has no cell for a brand's `id`, `look`,
+`ways`, `issuer_port` or Tor choice, so it carries each of those by name from the
+config's row. A Next through the table keeps them; `test_a_next_through_the_table_keeps_each_brands_id_look_ways_and_port`
+shows it red when the table builds a row from its cells alone.
 
 ## The unaffiliated rule
 

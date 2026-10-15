@@ -100,15 +100,21 @@ def sync_brand_session(session: BrandSession, cfg: LocalMeshBootstrapConfig, *,
     session was made — before the person ticked Tor or typed the domain — must not be the
     one saved. Both faces call this before they commit (one implementation).
 
-    The sign-in address is DERIVED (the test mesh's localhost address, a production mesh's
-    ``https://id.<public name>``) unless a saved mesh carried one of its own
-    (``explicit_signin``, which is kept as the session has it). Derived means re-derived
-    every time: the first commit writes the derived value back onto the carrier, so
+    The sign-in address is DERIVED (a production mesh's ``https://id.<public name>``; a
+    test mesh's is the start path's own localhost address and is not stored) unless a
+    saved mesh carried one of its own (``explicit_signin``, which is kept as the session
+    has it). Derived means re-derived every time: the first commit writes the derived value back onto the carrier, so
     ``the key is there`` says nothing about who chose it."""
-    keep = {"public_name": cfg.resolved_domain(),
+    # A test mesh has NO public name: the apex ``resolved_domain()`` falls back to is
+    # the brand's placeholder, and writing it into the record made a record saved from a
+    # test design look like a production mesh on that placeholder (it beat an explicit
+    # --cluster-domain and satisfied "prod requires a public cluster domain"). So the
+    # name and the address derived from it are kept only once a real name is typed.
+    own = (cfg.cluster_domain or "").strip() if cfg.is_prod() else ""
+    keep = {"public_name": own,
             "ways": {**(session.sb.ways or {}), "tor": bool(cfg.effective_with_tor())}}
     if not explicit_signin:
-        keep["central_signin"] = cfg.issuer()
+        keep["central_signin"] = cfg.issuer() if own else ""
     session.sb = dataclasses.replace(session.sb, **keep)
 
 

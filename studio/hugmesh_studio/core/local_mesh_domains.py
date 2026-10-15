@@ -136,7 +136,7 @@ def added_row_problems(names, own_name: str) -> list[str]:
         name = (raw or "").strip()
         if not name:
             continue
-        if not DOMAIN_NAME_RE.match(name):
+        if not DOMAIN_NAME_RE.fullmatch(name):
             problems.append(f"not a domain name: {name!r} (lowercase dotted "
                             "hostname, e.g. chat.example.org)")
         elif own and name == own:
@@ -348,7 +348,7 @@ def _import_problem(row) -> str:
     change nobody asked for. Only a hand-edited record can carry either problem — the
     local-mesh Domains step refuses both when the row is typed."""
     name = (getattr(row, "name", "") or "").strip()
-    if not DOMAIN_NAME_RE.match(name):
+    if not DOMAIN_NAME_RE.fullmatch(name):
         return "not a domain name"
     idp = getattr(row, "idp", "") or DOMAIN_IDP_SUPERDOMAIN
     if idp not in DOMAIN_IDP_CHOICES:

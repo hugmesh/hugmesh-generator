@@ -585,6 +585,7 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         #: a central sign-in address a SAVED MESH carried (a choice, kept); every other
         #: address is derived from the environment and the domain and re-derived
         self._brand_explicit_signin = ""
+        self._brand_file_note = ""       # why the last record-file save was refused ("" = none)
         # THE CONTROLLER HANDLE. Every local-mesh step page (LocalMeshChoicePage and
         # the _LocalMeshStep subclasses at the bottom of this module) finds this page
         # here, and only at initializePage time — so the wizard may construct the steps
@@ -2198,9 +2199,19 @@ class LocalMeshPage(QtWidgets.QWizardPage):
             return True
         try:
             self._brand_sync_in()
-            self.superbrand_design.commit(save=True)
+            problems = self.superbrand_design.commit(save=True)
             self.brand.currentTextChanged.emit(self._brand_boot.brand)
             self._brand_ok()
+            # The design's own note sits under the drop-down, on a step the person has
+            # just left. A refusal is also said on the plan they read before starting
+            # (and here, for when they come back), so a record file that was not
+            # written is never silent.
+            sentence = ((self.superbrand_design.session.message or problems[0])
+                        if problems else "")
+            self._brand_file_note = sentence
+            if sentence:
+                self.brand_error.setText(sentence)
+                self.brand_error.setVisible(True)
         except Exception:                       # noqa: BLE001
             self._brand_swallow("leave_brand")
         return True
@@ -2966,7 +2977,11 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         # rebuilds only when the map differs.
         self._refresh_code_folders()
         self._refresh_brand_note()
-        self.plan_view.setPlainText(self.boot.plan())
+        plan = self.boot.plan()
+        note = getattr(self, "_brand_file_note", "")
+        if note:
+            plan += f"\n\nBRAND RECORD: {note}\n"
+        self.plan_view.setPlainText(plan)
         self._sync_boot_gate()
 
     def _probe_mesh_state(self):

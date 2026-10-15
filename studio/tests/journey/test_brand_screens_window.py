@@ -302,7 +302,7 @@ def test_a_host_with_no_session_has_no_summary(qapp, gen):
 
 def test_a_next_through_the_table_keeps_each_brands_id_look_ways_and_port(qapp, gen):
     """The table rebuilt a row from its cells and erased what it has no cell for
-    (brand_model.COPY_SITES_STILL_DROPPING). Red when rows() builds only from cells."""
+    (the table's rows() builds a row from its cells alone). Red when rows() builds only from cells."""
     kept = Domain(name="shop.example", title="Shop", id="shop-example",
                   look={"primary": "#aa0000"}, ways={"internal_name": "shop.acme.internal"},
                   issuer_port=8002, idp=DOMAIN_IDP_OWN, optional_services=["akkoma"], tor=True)
