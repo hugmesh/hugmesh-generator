@@ -150,6 +150,36 @@ Given('a scratch brand record whose brands both carry the reserved id {string}',
     writeRecord(world, rec);
   });
 
+Given('a scratch brand record {string} whose brands {string} and {string} both have their own sign-in',
+  async ({ world }, superbrand: string, a: string, b: string) => {
+    expect(superbrand).toBe('acme');
+    expect([a, b]).toEqual(['shop', 'club']);
+    const rec = acmeRecord('Acme Mesh');
+    rec.brands = [
+      { name: 'shop.mesh.example', title: 'Shop', idp: 'own', tor: true,
+        look: { primary: '#aa0000' }, images: [], optional_services: [] },
+      { name: 'club.mesh.example', title: 'Club', idp: 'own', tor: false,
+        images: [], optional_services: [] },
+    ] as typeof rec.brands;
+    writeRecord(world, rec);
+  });
+
+/** A record the Studio's own save would never write: one part is the wrong kind of value. */
+Given('a scratch brand record {string} edited so that {string} is {string}',
+  async ({ world }, superbrand: string, part: string, wrong: string) => {
+    expect(superbrand).toBe('acme');
+    const rec = acmeRecord('Acme Mesh') as Record<string, any>;
+    const value = { 'a list': ['x'], 'an object': { a: 1 }, 'a number': 5 }[wrong];
+    expect(value, `no wrong value called ${wrong}`).toBeDefined();
+    if (part === "a brand's name") rec.brands[0].name = value;
+    else if (part === 'the brands') rec.brands = value;
+    else if (part === 'a brand row') rec.brands[1] = value;
+    else if (part === 'the superbrand') rec.superbrand = value;
+    else if (part === "the superbrand's id") rec.superbrand.id = value;
+    else throw new Error(`no part called ${part}`);
+    writeRecord(world, rec);
+  });
+
 // ── When ───────────────────────────────────────────────────────────────────────
 
 /** The own sign-ins the two-port scenarios name, in the order they are given. */
@@ -201,6 +231,13 @@ When('I ask the Docker mesh plan for the own sign-in {string} on the command lin
   async ({ world }, name: string) => {
     studio(world, 'local_mesh_bootstrap', ['plan', '--record', world.get<string>(REC_KEY),
       '--own-casdoor-domain', name, '--generator-dir', REPO_ROOT]);
+  });
+
+When('I ask the Docker mesh plan for the own sign-ins {string} on the command line against the brand record',
+  async ({ world }, names: string) => {
+    const argv = ['plan', '--record', world.get<string>(REC_KEY), '--generator-dir', REPO_ROOT];
+    for (const n of names.split(',')) argv.push('--own-casdoor-domain', n);
+    studio(world, 'local_mesh_bootstrap', argv);
   });
 
 When('I write the builder profile from the brand record in a fresh Studio process', async ({ world }) => {
@@ -298,6 +335,12 @@ Then('the record output and the plan give the same sign-in port to each own sign
   });
 
 // ── Then: the production hold, measured against the Makefile ───────────────────
+
+Then('the plan says no {string}', async ({ world }, needle: string) => {
+  const t = world.get<CliTranscript>(CLI_KEY);
+  expect(`${t.stdout}\n${t.stderr}`, `\`${t.command}\` printed ${JSON.stringify(needle)}`)
+    .not.toContain(needle);
+});
 
 Then('the plan says the Tor address is held until Go live exactly when the Makefile reads TOR_HOLD', async ({ world }) => {
   // the Makefile is the authority: a word-match on the knob (the Studio's own

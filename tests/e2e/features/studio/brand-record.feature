@@ -82,6 +82,49 @@ Feature: One brand record drives every brand's look and ways on every start path
     Then the command failed
     And the command output contains "which no --own-casdoor-domain names"
 
+  # The bootstrap's own default brand is "hugmesh". A person who TYPES it against a record
+  # for another superbrand asked for the Vault path secret/hugmesh, so it is refused; a
+  # leading space is not the record's id either.
+  Scenario: a typed default brand name or a brand with a stray space is refused, not replaced
+    When I ask the Docker mesh plan for the brand "hugmesh" on the command line against the brand record
+    Then the command failed
+    And the command output contains "the brand record names the superbrand acme, but --brand hugmesh was given"
+    When I ask the Docker mesh plan for the brand " acme" on the command line against the brand record
+    Then the command failed
+    And the command output contains "but --brand  acme was given"
+
+  # Which own sign-ins a mesh has, and in what order, decides which brand gets the host
+  # port 8001, 8002 and so on. A typed list that is only part of the record's, or the
+  # same names in another order, is a different mesh and is refused.
+  Scenario: a typed own sign-in list that is part of the record's, or in another order, is refused
+    Given a scratch brand record "acme" whose brands "shop" and "club" both have their own sign-in
+    When I ask the Docker mesh plan for the own sign-ins "shop.mesh.example" on the command line against the brand record
+    Then the command failed
+    And the command output contains "the record gives its own sign-in to club.mesh.example, which no --own-casdoor-domain names"
+    When I ask the Docker mesh plan for the own sign-ins "club.mesh.example,shop.mesh.example" on the command line against the brand record
+    Then the command failed
+    And the command output contains "in a different order"
+    When I ask the Docker mesh plan for the own sign-ins "shop.mesh.example,club.mesh.example" on the command line against the brand record
+    Then the command succeeded
+    And the command output contains "shop.mesh.example: host port 8001"
+
+  # A record edited by hand into the wrong shape is a sentence, never a Python traceback
+  # and never a record that quietly lost its brands.
+  Scenario Outline: a hand-edited record of the wrong shape is refused with a sentence
+    Given a scratch brand record "acme" edited so that "<part>" is "<wrong>"
+    When I print the Docker mesh plan from the brand record in a fresh Studio process
+    Then the command failed
+    And the command output contains "<sentence>"
+    And the plan says no "Traceback"
+
+    Examples:
+      | part                | wrong        | sentence                           |
+      | a brand's name      | a list       | brands[0].name must be text        |
+      | the brands          | an object    | brands must be a list              |
+      | a brand row         | a number     | brands[1] must be an object        |
+      | the superbrand      | a list       | superbrand must be an object       |
+      | the superbrand's id | a number     | superbrand.id must be text         |
+
   # show-record exists to say what the running mesh does. The stack node publishes
   # each own sign-in on a port by its position in the GIVEN list, so the record must
   # list them in that order too: zed then alpha is 8001 then 8002 in both verbs.
