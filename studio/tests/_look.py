@@ -55,6 +55,35 @@ LOOK_IDS = ["fusion-default", "breeze-default", "fusion-8pt", "breeze-8pt"]
 DEFAULT_WINDOW = (736, 736)
 
 
+#: Which Qt styles MUST be there for the look tests to count. Fusion ships inside Qt
+#: itself, so a Qt build without it is broken. Breeze is a KDE plugin the PySide6 /
+#: PyQt wheels do NOT carry: a host without it cannot look under it, and a default
+#: that failed there would turn every such runner red. A runner that does have
+#: Breeze (or any other style named in LOOK_CASES) says so in this variable, as a
+#: comma-separated list, and then a missing style FAILS instead of skipping.
+REQUIRE_STYLES_ENV = "HUGMESH_LOOK_REQUIRE_STYLES"
+DEFAULT_REQUIRED_STYLES = "Fusion"
+
+
+def required_styles() -> set:
+    """The lower-cased style names this run must have (see :data:`REQUIRE_STYLES_ENV`)."""
+    raw = os.environ.get(REQUIRE_STYLES_ENV)
+    if raw is None or not raw.strip():
+        raw = DEFAULT_REQUIRED_STYLES
+    return {p.strip().lower() for p in raw.split(",") if p.strip()}
+
+
+def missing_style_action(style: str, installed, required=None) -> str:
+    """``"ok"`` when ``style`` is installed; otherwise ``"fail"`` if this run requires
+    it and ``"skip"`` if it is an optional one. The names compare case-insensitively
+    (Qt reports ``Breeze``, a test may say ``breeze``)."""
+    have = {str(k).lower() for k in installed}
+    if style.lower() in have:
+        return "ok"
+    req = required_styles() if required is None else {r.lower() for r in required}
+    return "fail" if style.lower() in req else "skip"
+
+
 @contextlib.contextmanager
 def looking(qapp, style: str, pt: float | None):
     """Set the style and font BEFORE a wizard is built, and restore both after.
@@ -63,8 +92,15 @@ def looking(qapp, style: str, pt: float | None):
     re-polishes live widgets but their size hints were already computed under the
     old one. Tests therefore build their own wizard inside this context rather than
     use a file-level fixture."""
-    if style not in QtWidgets.QStyleFactory.keys():
-        pytest.skip(f"Qt style {style!r} is not installed here")
+    action = missing_style_action(style, QtWidgets.QStyleFactory.keys())
+    if action == "fail":
+        pytest.fail(f"the {style!r} Qt style is required here "
+                    f"({REQUIRE_STYLES_ENV}={os.environ.get(REQUIRE_STYLES_ENV, '')!r}, "
+                    f"default {DEFAULT_REQUIRED_STYLES!r}) but only "
+                    f"{sorted(QtWidgets.QStyleFactory.keys())} are installed")
+    if action == "skip":
+        pytest.skip(f"Qt style {style!r} is not installed here and is optional "
+                    f"(set {REQUIRE_STYLES_ENV}={style} to make that a failure)")
     old_style = qapp.style().objectName()
     old_font = QtGui.QFont(qapp.font())
     try:
