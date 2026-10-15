@@ -1579,10 +1579,10 @@ else
   for t in kind git jq openssl base64; do
     printf '#!/usr/bin/env bash\nexit 0\n' > "${DN}/bin/${t}"; chmod +x "${DN}/bin/${t}"
   done
-  # curl FAILS: a run that gets past the preflight goes on to fetch the ArgoCD
+  # curl FAILS (exit 7, distinct from the preflight's exit 1): a run that gets past the preflight goes on to fetch the ArgoCD
   # manifest, and this suite is offline — it must die there, after the node
   # labelling the cases below look for, not reach the network.
-  printf '#!/usr/bin/env bash\nexit 1\n' > "${DN}/bin/curl"; chmod +x "${DN}/bin/curl"
+  printf '#!/usr/bin/env bash\nexit 7\n' > "${DN}/bin/curl"; chmod +x "${DN}/bin/curl"
   cat > "${DN}/bin/kubectl" <<'DNSKUBECTL'
 #!/usr/bin/env bash
 echo "kubectl $*" >> "${STUB_DNS_DIR}/kubectl.log"
