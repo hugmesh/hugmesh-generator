@@ -27,10 +27,10 @@ THE COPY SITES. A Domain field used to have about ten places that copied rows by
 literal key list, and each dropped a key it did not know. They are listed by name in
 :data:`COPY_SITES`; every one now copies by the field list (``config.DOMAIN_FIELDS``),
 and studio/tests/test_brand_record_copy_sites.py drives one row through all of them and
-back, then deletes a key at each site in turn and shows the round trip go red. Two
-sites are NOT converted and are named in :data:`COPY_SITES_STILL_DROPPING`: the
-window's Domains table rebuilds every row from its cells, so a Next through it erases
-a brand's id, look, ways and sign-in port today. They belong to the brands-table lane.
+back, then deletes a key at each site in turn and shows the round trip go red. The
+window's Domains table and the Docker page's Next through it carry every field that has
+no cell of its own (id, look, ways, sign-in port, Tor) by name from the config's row,
+and test_a_next_through_the_table_keeps_each_brands_id_look_ways_and_port pins it.
 
 Qt-free; the screens and the text front end call this, never the other way round.
 """
@@ -50,11 +50,12 @@ from .config import (DOMAIN_FIELDS, DOMAIN_IDP_OWN, DOMAIN_IDP_SUPERDOMAIN, Doma
                      domain_rows_to_dict, manifest_domain_rows)
 from .domain_services import tor_domain_entries
 from .state_paths import state_dir
-from .validate import IdentityValidationError, validate_brand_title
+from .validate import (IdentityValidationError, validate_brand_title, validate_domain_name,
+                       validate_org)
 
 __all__ = [
     "SCHEMA", "RECORD_FILENAME", "DESIGNS_SUBDIR", "DESIGN_KEYS", "LOOK_KEYS",
-    "BRAND_ID_MAX", "DOCKER_LABEL_MAX", "COPY_SITES", "COPY_SITES_STILL_DROPPING",
+    "BRAND_ID_MAX", "DOCKER_LABEL_MAX", "COPY_SITES",
     "Superbrand", "BrandRecord", "RecordRefused", "ProfileRefused",
     "brand_id", "brand_id_problem", "stored_id_problem", "profile_names",
     "look_problems", "secret_problems",
@@ -94,21 +95,12 @@ COPY_SITES: tuple[str, ...] = (
     "fleet.fleet_domains_from_config",
 )
 
-#: Copy sites that STILL rebuild a row from a literal key list and so drop ``id``,
-#: ``look``, ``ways`` and ``issuer_port`` (the window's Domains table; the Docker
-#: mesh page commits through the same ``rows()``). Named here so the claim above is
-#: exact; converting them is the brands-table lane's (it owns gui/pages/domains.py).
-COPY_SITES_STILL_DROPPING: tuple[str, ...] = (
-    "gui.pages.domains.DomainsTableBody.rows",
-    "gui.pages.localmesh.LocalMeshPage._commit_domains",
-)
-
 # ── the id rule (D4) ─────────────────────────────────────────────────────────────────
 #: The strictest rule in use: a DNS label of at most 59 characters, starting and ending
 #: alphanumeric (the registry's DomainSlug rule; hugmesh-tor-reconcile allows 63 and the
 #: issuer sanitiser is unbounded — the record uses the tightest so every consumer
 #: accepts the one text).
-BRAND_ID_RE = re.compile(r"^[a-z0-9]([a-z0-9-]{0,57}[a-z0-9])?$")
+BRAND_ID_RE = re.compile(r"^[a-z0-9]([a-z0-9-]{0,57}[a-z0-9])?\Z")
 BRAND_ID_MAX = 59
 #: The Docker start's own limit: a plain DNS label (local_mesh_bootstrap's
 #: _BRAND_DNS_LABEL and domain_services.onion_slug both allow 63). A mesh that
@@ -121,7 +113,7 @@ RESERVED_IDS: tuple[str, ...] = ("default", "domains")
 
 
 def _label_re(max_len: int) -> "re.Pattern[str]":
-    return re.compile(r"^[a-z0-9]([a-z0-9-]{0,%d}[a-z0-9])?$" % (max_len - 2))
+    return re.compile(r"^[a-z0-9]([a-z0-9-]{0,%d}[a-z0-9])?\Z" % (max_len - 2))
 
 
 def brand_id(row) -> str:
@@ -173,10 +165,12 @@ def brand_id_problem(candidate: str, *, superbrand_id: str = "", taken=(),
     each with its reason. ``taken`` are the other brands' ids; ``profiles`` the
     brands/*.conf names (:func:`profile_names`); ``max_len`` the label length the
     caller's consumers accept (the record's 59, or the Docker start's 63)."""
-    cid = (candidate or "").strip()
-    if not cid:
+    cid = candidate or ""
+    if not cid.strip():
         return "a brand needs an id (the default is made from its public name)"
-    if not _label_re(max_len).match(cid):
+    if cid != cid.strip():
+        return f"‘{cid.strip()}’ has a space or a line break at an end; remove it"
+    if not _label_re(max_len).fullmatch(cid):
         return (f"‘{cid}’ is not a DNS label of at most {max_len} characters that starts "
                 "and ends with a letter or digit (lowercase letters, digits and dashes only)")
     if cid in RESERVED_IDS:
@@ -246,7 +240,9 @@ class Superbrand:
                     raise ValueError(f"superbrand.{k} must be an object, got {v!r}")
                 v = dict(v)
             else:
-                v = "" if v is None else str(v)
+                # stripped: a file edited by hand can end a value with a newline, and
+                # the profile (a shell file) must never carry one
+                v = "" if v is None else str(v).strip()
             kw[k] = v
         # a block written with separate login_style/login_decor keys (an early shape
         # of this record) folds them into the look; the look's own value wins
@@ -333,7 +329,7 @@ class BrandRecord:
 
 
 # ── the look (D6, D7) ────────────────────────────────────────────────────────────────
-_HEX = re.compile(r"^#[0-9A-Fa-f]{6}$")
+_HEX = re.compile(r"^#[0-9A-Fa-f]{6}\Z")
 
 
 def look_problems(look: dict[str, Any], where: str) -> list[str]:
@@ -354,7 +350,7 @@ def look_problems(look: dict[str, Any], where: str) -> list[str]:
             continue
         if not v:
             continue
-        if k in ("primary", "secondary") and not _HEX.match(v):
+        if k in ("primary", "secondary") and not _HEX.fullmatch(v):
             problems.append(f"{where}: look.{k} must be #RRGGBB, got ‘{v}’")
         elif k == "preset":
             try:
@@ -393,9 +389,9 @@ def effective_look(record: BrandRecord, row=None) -> dict[str, tuple[str, str]]:
 
 
 # ── the ways to reach a brand (D10) ──────────────────────────────────────────────────
-_PROVIDER_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,39}$")
+_PROVIDER_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,39}\Z")
 _DNS_NAME_RE = re.compile(
-    r"^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$")
+    r"^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+\Z")
 
 
 def default_internal_name(record: BrandRecord, row) -> str:
@@ -422,7 +418,7 @@ def ways_problems(ways: dict[str, Any], where: str, *, internal_root: str = "",
         problems.append(f"{where}: ways.tor must be yes or no (true/false)")
     name = ways.get("internal_name")
     if name is not None:
-        if not isinstance(name, str) or not _DNS_NAME_RE.match(name):
+        if not isinstance(name, str) or not _DNS_NAME_RE.fullmatch(name):
             problems.append(f"{where}: internal name must be a lowercase dotted "
                             f"hostname, got {name!r}")
         elif internal_root and not name.endswith("." + internal_root):
@@ -437,7 +433,7 @@ def ways_problems(ways: dict[str, Any], where: str, *, internal_root: str = "",
                 if k not in ("provider", "inputs", "token_file"):
                     problems.append(f"{where}: unknown public field ‘{k}’")
             prov = pub.get("provider", "")
-            if not isinstance(prov, str) or (prov and not _PROVIDER_RE.match(prov)):
+            if not isinstance(prov, str) or (prov and not _PROVIDER_RE.fullmatch(prov)):
                 problems.append(f"{where}: provider must be a short lowercase slug, "
                                 f"got {prov!r}")
             inputs = pub.get("inputs", {})
@@ -526,7 +522,7 @@ _TOKEN = re.compile(
     r")")
 #: A long opaque string (≥40 chars of letters, digits and base64 punctuation, holding
 #: both letters and digits) is a token shape too — except a Tor address, a URL or a path.
-_OPAQUE = re.compile(r"^[A-Za-z0-9+/_=-]{40,}$")
+_OPAQUE = re.compile(r"^[A-Za-z0-9+/_=-]{40,}\Z")
 #: A KEY that says it holds a secret refuses any value at all; ``*_file`` keys are
 #: POINTERS (the record stores where a token lives, never the token).
 _SECRET_KEY = re.compile(r"(token|secret|passw|passphrase|private[_-]?key|authkey|"
@@ -542,7 +538,7 @@ def _looks_like_secret(value: str) -> str:
     m = _TOKEN.search(v)
     if m:
         return f"a token-shaped value ({m.group(1)[:6]}…)"
-    if (_OPAQUE.match(v) and re.search(r"[A-Za-z]", v) and re.search(r"[0-9]", v)
+    if (_OPAQUE.fullmatch(v) and re.search(r"[A-Za-z]", v) and re.search(r"[0-9]", v)
             and not v.endswith(".onion") and "://" not in v and not v.startswith("/")):
         return "a long opaque value (token-shaped)"
     return ""
@@ -595,6 +591,14 @@ def record_problems(record: BrandRecord, *, unaffiliated: bool = False,
     problems: list[str] = []
     max_len = DOCKER_LABEL_MAX if docker_start else BRAND_ID_MAX
     sid = sb.id.strip()
+    # Text a person typed or a hand-edited file carries with a newline or a space at
+    # an end is refused on EVERY path: the checks below strip first, and the generated
+    # profile and the manifest do not.
+    for fname in ("id", "title", "org", "public_name", "internal_root", "central_signin"):
+        val = getattr(sb, fname)
+        if val != val.strip():
+            problems.append(f"superbrand: {fname} has a space or a line break at an "
+                            "end; remove it")
     if sid:
         # No profile list for the superbrand's own id: the superbrand is usually the
         # very brands/<id>.conf profile a builder sources, so "names a profile" is
@@ -609,12 +613,28 @@ def record_problems(record: BrandRecord, *, unaffiliated: bool = False,
             validate_brand_title(sb.title)
         except IdentityValidationError as e:
             problems.append(f"superbrand: {e}")
+    if not docker_start:
+        # The record file and the generated builder profile are where these reach a
+        # sourced file, so the strict identity rules (the same ones the image
+        # configuration applies) and the profile's character set run at THAT write.
+        for fname, check in (("org", validate_org), ("public_name", validate_domain_name),
+                             ("internal_root", validate_domain_name)):
+            val = getattr(sb, fname).strip()
+            if val:
+                try:
+                    check(val)
+                except IdentityValidationError as e:
+                    problems.append(f"superbrand: {e}")
+        problems += [f"superbrand: {p}" for p in _profile_value_problems(record)]
     problems += look_problems(sb.look, "superbrand")
     problems += ways_problems(sb.ways, "superbrand",
                               internal_root=sb.effective_internal_root(), superbrand=True)
     seen: list[str] = []
     for d in record.brands:
         bid = brand_id(d)
+        if d.id != d.id.strip():
+            problems.append(f"brand {d.name or bid}: its stored id has a space or a line "
+                            "break at an end; remove it")
         p = brand_id_problem(bid, superbrand_id=sid, taken=seen, profiles=profiles,
                              max_len=max_len)
         if p:
@@ -807,6 +827,14 @@ def apply_record_to_bootstrap(record: BrandRecord, cfg) -> None:
                              "or drop the flag")
         if cfg.services is None:
             cfg.with_tor = want
+    # The public name is the other thing a flag and a record can both say. A flag that
+    # names a DIFFERENT domain is a contradiction, refused like the Tor one: letting the
+    # record win silently started a production plan on a name the person never typed.
+    typed = (cfg.cluster_domain or "").strip()
+    if typed and sb.public_name and typed != sb.public_name.strip():
+        raise ValueError(
+            f"the brand record names the public domain {sb.public_name}, but "
+            f"--cluster-domain {typed} was given: change the record or the flag, not both")
     if sb.id:
         cfg.brand = sb.id
     if sb.public_name:
@@ -912,9 +940,9 @@ def _append_ways(lines: list[str], effects) -> None:
 #: punctuation marks that mean nothing to a shell inside single quotes AND nothing to
 #: sed (= carries the slug=tenant pairs of TOR_BRANDS). Everything else — quotes, $, backticks, backslash, braces, ;|&<>*?!# — is
 #: refused, so a title like $(touch x) never reaches a file a builder sources.
-PROFILE_SAFE_RE = re.compile(r"^[A-Za-z0-9 ._:/@+,=-]*$")
+PROFILE_SAFE_RE = re.compile(r"^[A-Za-z0-9 ._:/@+,=-]*\Z")
 #: A profile line as the strict re-parser accepts it: KEY='safe value'. Nothing else.
-PROFILE_LINE_RE = re.compile(r"^([A-Z][A-Z0-9_]*)='([A-Za-z0-9 ._:/@+,=-]*)'$")
+PROFILE_LINE_RE = re.compile(r"^([A-Z][A-Z0-9_]*)='([A-Za-z0-9 ._:/@+,=-]*)'\Z")
 PROFILE_HEADER = "# GENERATED by HugMesh Studio from the brand record (core/brand_model.py)."
 
 
@@ -939,17 +967,23 @@ def _profile_values(record: BrandRecord) -> dict[str, str]:
     }
 
 
+def _profile_value_problems(record: BrandRecord) -> list[str]:
+    """Every profile value that holds a character the generated profile may not carry,
+    one sentence each. The one rule :func:`builder_profile` refuses on and
+    :func:`record_problems` reports, so ``validate`` and ``profile`` cannot disagree."""
+    return [f"{k}: ‘{v}’ holds a character a generated profile may not "
+            "carry (letters, digits, space and . _ : / @ + , = - only)"
+            for k, v in _profile_values(record).items()
+            if not PROFILE_SAFE_RE.fullmatch(v)]
+
+
 def builder_profile(record: BrandRecord) -> str:
     """The shell profile the image builders source, generated from the record: every
     value single-quoted and limited to PROFILE_SAFE_RE, or :class:`ProfileRefused`
     naming each value that is not (and then NO file is written by any caller).
     Round-trips through :func:`parse_builder_profile` by construction."""
-    problems: list[str] = []
+    problems = _profile_value_problems(record)
     vals = _profile_values(record)
-    for k, v in vals.items():
-        if not PROFILE_SAFE_RE.match(v):
-            problems.append(f"{k}: ‘{v}’ holds a character a generated profile may not "
-                            "carry (letters, digits, space and . _ : / @ + , = - only)")
     if problems:
         raise ProfileRefused(problems)
     lines = [PROFILE_HEADER,
@@ -969,7 +1003,7 @@ def parse_builder_profile(text: str) -> dict[str, str]:
         line = raw.strip()
         if not line or line.startswith("#"):
             continue
-        m = PROFILE_LINE_RE.match(line)
+        m = PROFILE_LINE_RE.fullmatch(line)
         if not m:
             raise ValueError(f"line {n} is not KEY='safe value': {raw!r}")
         if m.group(1) in out:
@@ -1042,7 +1076,7 @@ def load_record(path: str | None = None) -> BrandRecord:
 
 
 # ── the superbrand store (D5) ────────────────────────────────────────────────────────
-_DESIGN_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,39}$")
+_DESIGN_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,39}\Z")
 
 
 def designs_dir() -> str:
@@ -1050,7 +1084,7 @@ def designs_dir() -> str:
 
 
 def _design_path(name: str) -> str:
-    if not _DESIGN_NAME_RE.match(name or ""):
+    if not _DESIGN_NAME_RE.fullmatch(name or ""):
         raise ValueError(f"a design name is a short lowercase slug, got {name!r}")
     return os.path.join(designs_dir(), f"{name}.json")
 
@@ -1098,7 +1132,7 @@ def choose_design(record: BrandRecord, name: str, date: str) -> None:
     """COPY a stored design into the record (D5): the record then holds its own copy
     and notes where it came from; editing the stored design later changes no existing
     mesh. ``date`` (YYYY-MM-DD) is the caller's input, never read from a clock here."""
-    if not re.match(r"^\d{4}-\d{2}-\d{2}$", date or ""):
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", date or ""):
         raise ValueError(f"the copy date must be YYYY-MM-DD, got {date!r}")
     design = _design_block(load_design(name))
     # Only the keys the design FILE carries replace the record's: a design saved with
@@ -1153,16 +1187,22 @@ def main(argv: list[str] | None = None) -> int:
     # — and nor does a value outside the profile's character set. Every reason is
     # printed, both kinds, then nothing is written.
     text = ""
-    try:
-        text = builder_profile(rec)
-    except ProfileRefused as e:
-        problems += e.problems
+    if not problems:           # record_problems already says every profile reason
+        try:
+            text = builder_profile(rec)
+        except ProfileRefused as e:
+            problems += e.problems
     if problems:
         for pr in problems:
             print(f"[refused] {pr}", file=sys.stderr)
         print("[refused] no profile written", file=sys.stderr)
         return 1
-    parse_builder_profile(text)            # the strict re-read, before any write
+    try:
+        parse_builder_profile(text)        # the strict re-read, before any write
+    except ValueError as e:
+        print(f"[refused] the profile does not re-read cleanly: {e}", file=sys.stderr)
+        print("[refused] no profile written", file=sys.stderr)
+        return 1
     if args.out:
         with open(args.out, "w", encoding="utf-8") as fh:
             fh.write(text)

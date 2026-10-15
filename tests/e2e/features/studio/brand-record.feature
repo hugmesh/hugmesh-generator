@@ -2,8 +2,8 @@
 # (hugmesh-generator#654, decisions D2, D5 and D10).
 #
 # WHAT IS DRIVEN: the Studio's Qt-free command line, in a FRESH python process each
-# time — the verbs the Makefile and the text screens are meant to call (nothing in the
-# Makefile or the screens calls them yet; the lanes that own those files add the calls):
+# time — the verbs the Docker route's text screens print in their plan command (the
+# Makefile has no RECORD knob yet, so a person runs them by hand):
 #   python3 -m hugmesh_studio.core.local_mesh_bootstrap show-record --record FILE
 #   python3 -m hugmesh_studio.core.local_mesh_bootstrap plan        --record FILE
 #   python3 -m hugmesh_studio.core.brand_model          profile     --record FILE

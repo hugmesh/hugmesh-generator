@@ -281,6 +281,7 @@ class SuperbrandStep(QtWidgets.QWidget):
             return []
         problems = self.session.commit(save=save)
         self.note.setStyleSheet("color: #b00020;")
-        self.note.setText(problems[0] if problems else "")
+        # the session's own sentence: it names which side refused (the mesh or the file)
+        self.note.setText((self.session.message or problems[0]) if problems else "")
         self.note.setVisible(bool(problems))
         return problems

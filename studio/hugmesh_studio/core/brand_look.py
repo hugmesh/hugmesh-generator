@@ -229,7 +229,7 @@ def check_value(field: str, value: Any) -> str:
     text = value if isinstance(value, bool) else ("" if value is None else str(value)).strip()
     if isinstance(text, bool) or text == "":
         return ""
-    if field in HEX_FIELDS and not theme.HEX_RE.match(text):
+    if field in HEX_FIELDS and not theme.HEX_RE.fullmatch(text):
         return f"“{text}” is not #RRGGBB — {field} not changed"
     if field == "mode" and text not in theme_presets.MODES:
         return f"mode must be one of {', '.join(theme_presets.MODES)}, not “{text}”"
@@ -325,7 +325,7 @@ _DATA_URI_RE = re.compile(r"^data:image/(png|jpeg);base64,([A-Za-z0-9+/]+={0,2})
 def _check_picture_uri(field: str, uri: str) -> None:
     """A picture value must be a data: URI holding bytes the re-encoder accepts (a URI
     typed into a record by hand is not trusted)."""
-    m = _DATA_URI_RE.match(uri)
+    m = _DATA_URI_RE.fullmatch(uri)
     if not m:
         raise LookError(f"{field} must be a data: PNG or JPEG made by the Studio's "
                         f"re-encoder, not {uri[:40]!r}")
@@ -382,7 +382,7 @@ def look_css(look: Mapping[str, Any], *, enforce_budget: bool = True) -> str:
     any invalid value and :class:`LookBudgetError` past :data:`LOOK_CSS_BUDGET`."""
     eff = effective_look(look)
     for field in ("primary", "secondary", "header_bg", "footer_bg"):
-        if eff[field] and not theme.HEX_RE.match(eff[field]):
+        if eff[field] and not theme.HEX_RE.fullmatch(eff[field]):
             raise LookError(f"{field} must be #RRGGBB, got {eff[field]!r}")
     if eff["mode"] not in theme_presets.MODES:
         raise LookError(f"mode must be one of {', '.join(theme_presets.MODES)}, "
@@ -560,7 +560,7 @@ def write_look_files(superbrand: Mapping[str, Any] | None,
     ``brands`` has its folder removed (when it holds only look files), so a dropped brand
     cannot keep serving a look."""
     for bid in brands:
-        if bid == _SUPERBRAND_DIR or not _ID_RE.match(bid):
+        if bid == _SUPERBRAND_DIR or not _ID_RE.fullmatch(bid):
             raise LookError(
                 f"brand id {bid!r} cannot name a look folder: ids are 1-59 lowercase "
                 f"letters, digits and hyphens, start and end alphanumeric, and "

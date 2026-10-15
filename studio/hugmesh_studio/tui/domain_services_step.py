@@ -210,7 +210,7 @@ class DomainServicesScreen:
                 view.commit_look()
             problems = view.session.commit(save=True)
             if problems:
-                j.status = problems[0]
+                j.status = view.session.message or problems[0]
         if self._on_continue:
             self._on_continue(j)
         else:

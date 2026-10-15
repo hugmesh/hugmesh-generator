@@ -416,10 +416,11 @@ def test_the_key_script_parses_superdomain_and_reads_brand(tmp_path):
     assert "--superdomain)" in text and 'EFFECTIVE_SUPERDOMAIN="${SUPERDOMAIN:-${BRAND:-hugmesh}.internal}"' in text
 
 
-def test_profile_verb_prints_every_reason_of_both_kinds(tmp_path, capsys):
-    """The refusal lists the record's problems AND the profile writer's, together (a
-    mutation that kept only one kind used to survive): an id the record refuses, and an
-    organisation the record accepts but a generated profile may not carry."""
+def test_validate_and_profile_print_the_same_reasons_of_every_kind(tmp_path, capsys):
+    """``validate`` and ``profile`` cannot disagree: a record one accepts the other
+    accepts, and each lists EVERY reason (the record's id and identity rules, and the
+    profile's character set) before writing nothing. An id the record refuses, an
+    organisation the identity rule refuses and a profile may not carry."""
     bad = tmp_path / "both.json"
     bad.write_text(json.dumps({
         "schema": 1,
@@ -427,10 +428,23 @@ def test_profile_verb_prints_every_reason_of_both_kinds(tmp_path, capsys):
         "brands": [{"name": "x.example", "id": "default"}]}))
     assert bm.main(["validate", "--record", str(bad)]) == 1
     validate_out = capsys.readouterr().out
-    assert "reserved" in validate_out and "Acme" not in validate_out  # validate: record kind only
+    assert "reserved" in validate_out and "invalid org" in validate_out, validate_out
+    assert "ORG" in validate_out and "generated profile" in validate_out, validate_out
     assert bm.main(["profile", "--record", str(bad), "--out", str(tmp_path / "p")]) == 1
     err = capsys.readouterr().err
-    assert "reserved" in err, err                        # the record's reason
-    assert "ORG" in err and "Acme & Co" in err, err      # the profile writer's reason
-    assert err.count("[refused]") == 3, err              # both reasons and the closing line
+    assert "reserved" in err and "invalid org" in err, err
+    assert "ORG" in err and "Acme & Co" in err, err
+    assert err.count("[refused]") == 4, err              # three reasons and the closing line
+    assert not (tmp_path / "p").exists()
+
+
+def test_a_title_the_profile_cannot_carry_is_refused_by_validate_too(tmp_path, capsys):
+    """The title rule lets a hash sign through, the profile's character set does not;
+    ``validate`` used to say ok and ``profile`` then refused. Now both refuse."""
+    rec = tmp_path / "t.json"
+    rec.write_text(json.dumps({"schema": 1, "superbrand": {"id": "acme", "title": "Acme #1"}}))
+    assert bm.main(["validate", "--record", str(rec)]) == 1
+    out = capsys.readouterr().out
+    assert "BRAND_TITLE" in out and "Acme #1" in out, out
+    assert bm.main(["profile", "--record", str(rec), "--out", str(tmp_path / "p")]) == 1
     assert not (tmp_path / "p").exists()

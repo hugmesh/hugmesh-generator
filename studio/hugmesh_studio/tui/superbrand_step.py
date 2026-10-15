@@ -99,6 +99,10 @@ class BrandHost:
 
     route = ""
     generator_dir = ""
+    #: True when the route's mesh START accepts more than the record FILE does (the
+    #: Docker mesh: no title rule, 63-character labels). The session then checks the
+    #: design the way the start does and leaves the strict rules to the file's own write.
+    docker_start = False
 
     def unaffiliated(self) -> bool:
         return False
@@ -124,6 +128,11 @@ class BrandHost:
     def profile_chosen(self, name: str) -> None:
         """An existing brands/<name>.conf was chosen: the route may point its profile
         field at it."""
+
+    def profile_dropped(self) -> None:
+        """A new design or a saved one was chosen instead: a profile file chosen
+        earlier no longer describes the mesh, and a builder reading it beside the
+        design would take its identity from the wrong place."""
 
     def base_ca(self, name: str) -> str | None:
         """The certificate authority recorded for brand ``name`` (its file's name, "" =
@@ -162,6 +171,16 @@ class ImageHost(BrandHost):
         brand_model.apply_record_to_image_config(
             brand_model.BrandRecord(superbrand=sb, brands=[]), self.cfg)
         self.cfg.domains, self.cfg.additional_domains = keep_rows, keep_flag
+        # A blank title or organisation reaching here was left blank by a PICK (the
+        # session fills a blank with the configuration's own value until the person
+        # picks; after a pick the blank is the answer). apply_ leaves a field the
+        # record does not carry alone, which kept an abandoned design's title and
+        # organisation under the pick, and the builder takes a flag over a profile.
+        shipped = ImageConfig()
+        if not sb.title:
+            self.cfg.brand_title = shipped.brand_title
+        if not sb.org:
+            self.cfg.org = shipped.org
 
     def _live_rows(self) -> list[Domain]:
         return list(self.cfg.domains or [])
@@ -192,6 +211,9 @@ class ImageHost(BrandHost):
         if self.generator_dir and os.path.isfile(path):
             self.cfg.brand_profile = path
 
+    def profile_dropped(self) -> None:
+        self.cfg.brand_profile = ""
+
 
 class BootstrapHost(BrandHost):
     """The Docker route's ``LocalMeshBootstrapConfig`` for the superbrand block, and —
@@ -202,6 +224,7 @@ class BootstrapHost(BrandHost):
     configuration's own recorded ones."""
 
     route = "docker"
+    docker_start = True
 
     def __init__(self, cfg, generator_dir: str = "", state=None):
         self.cfg = cfg
@@ -300,6 +323,9 @@ class FleetHost(BrandHost):
         path = os.path.join(self.generator_dir, "brands", f"{name}.conf")
         if self.generator_dir and os.path.isfile(path):
             self.options.brand_profile = path
+
+    def profile_dropped(self) -> None:
+        self.options.brand_profile = ""
 
 
 # ── the session ──────────────────────────────────────────────────────────────────────
@@ -401,6 +427,7 @@ class BrandSession:
                 central_signin=self.sb.central_signin, ways=dict(self.sb.ways))
             self.copied_from = {}
             self.look = self._fresh_look()
+            self.host.profile_dropped()
             self.designing = True
         elif kind == "design":
             name = key.split(":", 1)[1]
@@ -411,6 +438,7 @@ class BrandSession:
                 return self._say(f"The design ‘{name}’ cannot be used: {exc}")
             self.sb, self.copied_from = rec.superbrand, dict(rec.copied_from)
             self.look = self._fresh_look()
+            self.host.profile_dropped()
             self.designing = False
         elif kind == "profile":
             name = key.split(":", 1)[1]
@@ -542,8 +570,11 @@ class BrandSession:
     def problems(self) -> list[str]:
         """Everything that stops the record being saved ([] = it can). Never raises."""
         rec = self.record()
+        # The Docker route checks what the Docker start checks (docker_start): a brand
+        # row titled "Bob's Shop" starts a mesh, so it must not stop the design of the
+        # superbrand either. The strict rules run where the record FILE is written.
         out = brand_model.record_problems(
-            rec, unaffiliated=self.unaffiliated,
+            rec, unaffiliated=self.unaffiliated, docker_start=self.host.docker_start,
             profiles=brand_model.profile_names(self.host.generator_dir)
             if self.host.generator_dir else ())
         out += brand_model.secret_problems(rec.to_dict(), "record")
@@ -576,7 +607,11 @@ class BrandSession:
                     profiles=brand_model.profile_names(self.host.generator_dir)
                     if self.host.generator_dir else ())
             except brand_model.RecordRefused as exc:
-                self._say(str(exc))
+                # say WHICH side refused: the mesh itself took the design, the file did not
+                self._say(
+                    "The brand record file was not written: " + str(exc.problems[0])
+                    + (". The mesh itself still starts; the file is what the builders "
+                       "and the record commands read." if self.host.docker_start else ""))
                 return list(exc.problems)
         return []
 

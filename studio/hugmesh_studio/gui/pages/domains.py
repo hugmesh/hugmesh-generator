@@ -586,7 +586,7 @@ class DomainsTableBody:
         # Every OTHER field of a brand row (its id, look, ways and sign-in port: the
         # brand record, #654) has no cell here and is carried BY NAME from the config's
         # row, by the field list — the table used to rebuild a row from its cells and a
-        # Next through it erased them (brand_model.COPY_SITES_STILL_DROPPING).
+        # Next through it erased them.
         recorded_row = {(getattr(d, "name", "") or "").strip(): d
                         for d in (getattr(cfg, "domains", None) or [])
                         if (getattr(d, "name", "") or "").strip()}
