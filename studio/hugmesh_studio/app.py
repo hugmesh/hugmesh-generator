@@ -205,7 +205,19 @@ def main(argv=None) -> int:
     ap.add_argument("--json", action="store_true",
                     help="with --scan-hardware/--list-sessions/--show-session/"
                          "--session-artifacts/--local-ai-status: machine-readable JSON on stdout.")
+    # ── the Go-Live "Export to GitHub org" step, from a terminal (Qt-free) ──────
+    # --org-export PLAN|APPLY with --domain/--org or --config, --rename-map, --out;
+    # APPLY refuses without --apply. The engine is core/org_export.py.
+    from .core.org_export import add_cli_arguments as _add_org_export_args
+    _add_org_export_args(ap)
     args = ap.parse_args(argv)
+
+    if args.org_export:
+        # Qt-free path: the same plan()/apply() the GUI step and the TUI step call,
+        # printed as the same text. Runs only git and gh (through the engine's one
+        # runner), never a Qt binding.
+        from .core.org_export import run_cli as _run_org_export
+        return _run_org_export(args, args.generator_dir)
 
     if args.login_agent:
         # Qt-free path: the loopback login agent is stdlib-only and blocks in

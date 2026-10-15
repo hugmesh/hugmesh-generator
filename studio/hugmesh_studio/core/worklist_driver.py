@@ -297,7 +297,11 @@ class WorklistDriver:
                             if d.idp != DOMAIN_IDP_SUPERDOMAIN else {}),
                          # per-domain Tor front door (#582): OMIT-WHEN-FALSE, exactly
                          # as the v1 shim emits it.
-                         **({"tor": True} if getattr(d, "tor", False) else {})}
+                         **({"tor": True} if getattr(d, "tor", False) else {}),
+                         # the GitHub org the domain exports to (the Go-Live export
+                         # step): OMIT-WHEN-EMPTY, exactly as the v1 shim emits it.
+                         **({"github_org": d.github_org}
+                            if (getattr(d, "github_org", "") or "").strip() else {})}
                         for d in base.domains],
             # per-user `roles` (issue #228) is OMIT-WHEN-SINGLE too (User.to_dict), so
             # v2 and the v1 shim emit the same user rows byte for byte.
@@ -307,6 +311,9 @@ class WorklistDriver:
             # as the v1 shim (config.mesh_manifest) emits it.
             **({"cluster_domain_services": list(base.cluster_domain_services)}
                if base.cluster_domain_services else {}),
+            # the own domain's export org: OMIT-WHEN-EMPTY, exactly as the v1 shim.
+            **({"cluster_domain_github_org": base.cluster_domain_github_org.strip()}
+               if (getattr(base, "cluster_domain_github_org", "") or "").strip() else {}),
         }
 
     def manifest_users(self) -> list[User]:
