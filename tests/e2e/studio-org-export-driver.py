@@ -72,6 +72,7 @@ writes is under --scratch; the generator checkout under test is only read.
 from __future__ import annotations
 
 import argparse
+import codecs
 import json
 import os
 import shutil
@@ -371,6 +372,22 @@ def scenario_export(args, app, result: dict, scratch: str, bindir: str, git_log:
             "target": "%s/%s" % (OWN_ORG_DEFAULT, target), "branch": branch,
             "refsBefore": _refs(fixture_git, preexisting_bare),
             "shaBefore": fixture_git(preexisting_bare, "rev-parse", branch)}
+    for spec in args.plant_file:
+        # REPO:PATH=CONTENT (escapes decoded): a file committed into a source repository
+        where, _, content = spec.partition("=")
+        repo, _, rel = where.partition(":")
+        src = os.path.join(world["src"], repo)
+        if not (repo and rel and os.path.isdir(src)):
+            _fail(2, "--plant-file %r names no source repository" % spec)
+        full = os.path.join(src, rel)
+        os.makedirs(os.path.dirname(full), exist_ok=True)
+        with open(full, "w", encoding="utf-8") as fh:
+            fh.write(codecs.decode(content, "unicode_escape"))
+        fixture_git(src, "add", "-A", "-f")
+        fixture_git(src, "-c", "commit.gpgsign=false", "commit", "-q", "-m", "plant a file")
+        if os.path.exists(os.path.join(src, ".git", "refs", "remotes", "origin", "main")):
+            # a checkout with an origin exports origin/main, not the local branch
+            fixture_git(src, "update-ref", "refs/remotes/origin/main", "HEAD")
     saved_mesh_naming_the_org(world, label="e2e mesh",
                               services=[s for s in args.own_services.split(",") if s],
                               mesh_services=[s for s in args.mesh_services.split(",") if s])
@@ -391,6 +408,18 @@ def scenario_export(args, app, result: dict, scratch: str, bindir: str, git_log:
                    "candidates": [page.source.itemText(i) for i in range(page.source.count())],
                    "sourceFolder": page.source_dir.text(), "worldSrc": world["src"]})
     page.out_dir.setText(os.path.join(scratch, "out"))
+    sentinel = os.path.join(scratch, "escape", "precious.txt")
+    if args.rename_map == "bad-target":
+        # a rename that would send a repository's folder OUT of the work directory
+        # (<scratch>/out/work/../../escape): the sentinel is what it would destroy
+        os.makedirs(os.path.dirname(sentinel))
+        with open(sentinel, "w", encoding="utf-8") as fh:
+            fh.write("keep\n")
+        rm = os.path.join(scratch, "bad-target.json")
+        with open(rm, "w", encoding="utf-8") as fh:
+            json.dump({"repos": {"hugmesh-commons": "../../escape"}}, fh)
+        page.rename_map.setText(rm)
+        page.rename_map.editingFinished.emit()
     if args.rename_map == "exclusions":
         rm = os.path.join(scratch, "exclusions.json")
         with open(rm, "w", encoding="utf-8") as fh:
@@ -412,6 +441,15 @@ def scenario_export(args, app, result: dict, scratch: str, bindir: str, git_log:
     result["planFailed"] = plan is None
     result["terminalLineAfterPlan"] = page.cmd.text()
     if plan is None:
+        org_dir = os.path.join(world["gh_root"], OWN_ORG_DEFAULT)
+        result["ghCalls"] = _lines(os.environ["FAKE_GH_LOG"])
+        result["bareReposAfterPlan"] = sorted(os.listdir(org_dir)) if os.path.isdir(org_dir) else []
+        result["workFolders"] = sorted(os.listdir(os.path.join(scratch, "out", "work"))) \
+            if os.path.isdir(os.path.join(scratch, "out", "work")) else []
+        result["sentinel"] = (open(sentinel, encoding="utf-8").read()
+                              if os.path.isfile(sentinel) else None)
+        result["escapeFolder"] = sorted(os.listdir(os.path.dirname(sentinel))) \
+            if os.path.isdir(os.path.dirname(sentinel)) else None
         result["dialogsOpen"] = _dialogs(app, wiz)
         if args.grab:
             _grab(wiz, args.grab, result, "golive")
@@ -419,7 +457,8 @@ def scenario_export(args, app, result: dict, scratch: str, bindir: str, git_log:
     rows = [*plan.repos, plan.site]
     result["planRows"] = [{"source": r.source, "target": r.target_full, "action": r.action,
                            "blocked": r.blocked, "banned": list(r.banned),
-                           "excluded": list(r.excluded), "files": r.files,
+                           "excluded": list(r.excluded), "notes": list(r.notes),
+                           "files": r.files,
                            "ref": r.ref, "commit": r.source_commit} for r in rows]
     result["planBlocked"] = [r.source for r in plan.blocked]
     result["tableActions"] = [page.table.item(r, 2).text() for r in range(page.table.rowCount())]
@@ -477,7 +516,22 @@ def scenario_export(args, app, result: dict, scratch: str, bindir: str, git_log:
             except AssertionError:
                 log = []
             bare[target] = {"commits": len(log), "log": log}
+            try:
+                bare[target]["files"] = fixture_git(
+                    os.path.join(org_dir, name), "ls-tree", "-r", "--name-only",
+                    "main").splitlines()
+            except AssertionError:
+                bare[target]["files"] = []
     result["bareRepos"] = bare
+    # file contents read straight out of the stand-in GitHub's main (TARGET:PATH)
+    result["bareFiles"] = {}
+    for spec in args.read_file:
+        target, _, rel = spec.partition(":")
+        try:
+            result["bareFiles"][spec] = fixture_git(
+                os.path.join(org_dir, target + ".git"), "show", "main:" + rel)
+        except AssertionError:
+            result["bareFiles"][spec] = None
     if preexisting_bare:
         result["preexisting"]["refsAfter"] = _refs(fixture_git, preexisting_bare)
         result["preexisting"]["shaAfter"] = fixture_git(
@@ -533,9 +587,17 @@ def main(argv: "list[str]") -> int:
     ap.add_argument("--action", choices=("plan", "apply-untyped", "apply"), default="plan")
     ap.add_argument("--plant-marker", default="",
                     help="export: commit a fake token into this source repository first")
-    ap.add_argument("--rename-map", choices=("none", "exclusions"), default="none",
+    ap.add_argument("--rename-map", choices=("none", "exclusions", "bad-target"),
+                    default="none",
                     help="export: point the Rename map field at a file excluding the "
-                         "planted path")
+                         "planted path, or one renaming hugmesh-commons to a path "
+                         "that leaves the work folder")
+    ap.add_argument("--plant-file", action="append", default=[], metavar="REPO:PATH=CONTENT",
+                    help="export: commit this file into a source repository first "
+                         "(backslash escapes in CONTENT are decoded); repeatable")
+    ap.add_argument("--read-file", action="append", default=[], metavar="TARGET:PATH",
+                    help="export: after the walk, read PATH from main of the stand-in "
+                         "GitHub's TARGET repository; repeatable")
     ap.add_argument("--own-services", default="",
                     help="export: comma-separated optional services selected on the "
                          "saved mesh's own domain ROW")

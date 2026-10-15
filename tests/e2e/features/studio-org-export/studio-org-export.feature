@@ -133,3 +133,36 @@ Feature: The Studio exports a domain's repositories to its GitHub org
     When I walk the Go-Live wizard to the export step with a fake token planted in "hugmesh-commons", exclude it through the Rename map field, and press Plan
     Then the plan is clean, "tests/fake-token.sh" is listed as excluded for "hugmesh-commons", and Apply arms with the name typed
     And the Studio grab is a non-empty PNG
+
+  # ── the Maven settings file each Java repository's build uses ─────────────
+  # The repository-root settings.xml is the GitLab registry file and cannot work
+  # from GitHub; only the CI settings file under .github reads the GitHub Packages
+  # login. The choice is recorded per repository in the site's repos.json, which
+  # is what the generated build workflow reads.
+  @interface:studio
+  Scenario: the published site list carries each Java repository's Maven settings file @interface:studio
+    When I walk the Go-Live wizard to the export step for a saved mesh naming the org "exampleorg", apply it with the name typed, and read the published site list
+    Then the published site list records ".github/maven-ci-settings.xml" for "example-parent" and no settings file for "example-commons"
+    And the plan notes that "example-commons" has only the GitLab registry file
+    And the exported "example-parent" holds ".github/maven-ci-settings.xml" and the exported "example-commons" holds no CI settings file
+    And no dialog opened in the org-export walk
+    And the Studio grab is a non-empty PNG
+
+  # ── an .npmrc is dropped when it holds a login, kept when it does not ─────
+  @interface:studio
+  Scenario: an .npmrc holding a login placeholder is dropped and a token-free one is published @interface:studio
+    When I walk the Go-Live wizard to the export step with a token-free ".npmrc" and a placeholder-login "web/.npmrc" planted in "hugmesh-parent", apply it with the name typed, and read the published ".npmrc"
+    Then the plan lists "web/.npmrc" as excluded for "hugmesh-parent" because of an npm login and does not list ".npmrc"
+    And the exported "example-parent" holds ".npmrc" with the text "legacy-peer-deps=true" and no "web/.npmrc"
+    And no dialog opened in the org-export walk
+    And the Studio grab is a non-empty PNG
+
+  # ── a rename that would leave the work folder is refused inline ───────────
+  @interface:studio
+  Scenario: a rename map sending a repository outside the work folder is refused inline and touches nothing @interface:studio
+    When I walk the Go-Live wizard to the export step and point the Rename map field at a file renaming "hugmesh-commons" to "../../escape" and press Plan
+    Then the export step refuses the plan inline naming the bad repository rename
+    And nothing was created in the stand-in GitHub, no gh call was made and no repository folder was written
+    And the folder the rename pointed at still holds only its untouched file
+    And no dialog opened in the org-export walk
+    And the Studio grab is a non-empty PNG

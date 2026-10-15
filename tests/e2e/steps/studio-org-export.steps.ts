@@ -29,10 +29,10 @@ const STUDIO_KEY = 'studio.grab';          // shared with common.steps.ts, on pu
 const FACTS_KEY = 'studio.orgexport';
 
 interface PlanRow {
-  source: string; target: string; action: string; blocked: boolean; banned: string[];
+  notes: string[]; source: string; target: string; action: string; blocked: boolean; banned: string[];
   excluded: string[]; files: number; ref: string; commit: string;
 }
-interface BareRepo { commits: number; log: string[] }
+interface BareRepo { commits: number; log: string[]; files: string[] }
 interface Reopen {
   rows: { name: string; org: string; own: boolean }[]; ownCell: string; stateOwnOrg: string;
   nextAccepted: boolean; recordRowsAfterNext: { name: string; org: string | null }[];
@@ -55,6 +55,8 @@ interface Facts {
   terminalLineBeforePlan?: string; terminalLineAfterPlan?: string;
   terminalPlan?: { interpreter: string; argv: string[]; rc: number; seconds: number;
     targets: string[]; stdoutTail: string; stderrTail: string; ghCalls: string[] };
+  bareFiles?: Record<string, string | null>;
+  workFolders?: string[]; sentinel?: string | null; escapeFolder?: string[] | null;
   preexisting?: { target: string; branch: string; refsBefore: string[]; shaBefore: string;
     refsAfter?: string[]; shaAfter?: string };
   // domains-org
@@ -175,6 +177,30 @@ When('I walk the Go-Live wizard to the export step with a fake token planted in 
   async ({ world }, repo: string) => {
     drive(world, ['--scenario', 'export', '--action', 'plan', '--plant-marker', repo,
       '--rename-map', 'exclusions']);
+  });
+
+When('I walk the Go-Live wizard to the export step for a saved mesh naming the org {string}, apply it with the name typed, and read the published site list',
+  async ({ world }, org: string) => {
+    expect(org).toBe('exampleorg');
+    drive(world, ['--scenario', 'export', '--action', 'apply',
+      '--read-file', 'mesh.example.github.io:repos.json']);
+  });
+
+When('I walk the Go-Live wizard to the export step with a token-free {string} and a placeholder-login {string} planted in {string}, apply it with the name typed, and read the published {string}',
+  async ({ world }, plain: string, tokened: string, repo: string, read: string) => {
+    expect(plain).toBe('.npmrc');
+    expect(read).toBe('.npmrc');
+    drive(world, ['--scenario', 'export', '--action', 'apply',
+      '--plant-file', repo + ':' + plain + '=legacy-peer-deps=true\\n',
+      '--plant-file', repo + ':' + tokened + '=//registry.example/:_authToken=${NPM_TOKEN}\\n',
+      '--read-file', 'example-parent:.npmrc']);
+  });
+
+When('I walk the Go-Live wizard to the export step and point the Rename map field at a file renaming {string} to {string} and press Plan',
+  async ({ world }, repo: string, to: string) => {
+    expect(repo).toBe('hugmesh-commons');
+    expect(to).toBe('../../escape');
+    drive(world, ['--scenario', 'export', '--action', 'plan', '--rename-map', 'bad-target']);
   });
 
 // ── opt-in ───────────────────────────────────────────────────────────────────
@@ -472,3 +498,76 @@ Then('the plan is clean, {string} is listed as excluded for {string}, and Apply 
     expect(f.applyEnabledTyped, 'Apply did not arm on the clean plan').toBe(true);
     expect(f.bareReposAfterPlan).toEqual([]);
   });
+
+// ── the Maven settings choice ────────────────────────────────────────────────
+
+Then('the published site list records {string} for {string} and no settings file for {string}',
+  async ({ world }, settings: string, withFile: string, without: string) => {
+    const f = facts(world);
+    const raw = (f.bareFiles ?? {})['mesh.example.github.io:repos.json'];
+    expect(raw, 'repos.json is not on main of the stand-in site repository').toBeTruthy();
+    const rows = (JSON.parse(raw as string).repos ?? []) as { name: string; settings: string; build: string }[];
+    const by = Object.fromEntries(rows.map((r) => [r.name, r]));
+    expect(by[withFile]?.build, `${withFile} is a Java repository`).toBe('java');
+    expect(by[withFile]?.settings).toBe(settings);
+    expect(by[without]?.build, `${without} is a Java repository`).toBe('java');
+    expect(by[without]?.settings, `${without} must carry no settings file`).toBe('');
+  });
+
+Then('the plan notes that {string} has only the GitLab registry file', async ({ world }, target: string) => {
+  const rows = planRows(world);
+  const row = rows.find((r) => r.target === `exampleorg/${target}`) as PlanRow;
+  expect(row, `${target} is not on the plan`).toBeDefined();
+  expect(row.notes.join(' | ')).toContain('GitLab registry file');
+});
+
+Then('the exported {string} holds {string} and the exported {string} holds no CI settings file',
+  async ({ world }, withName: string, file: string, withoutName: string) => {
+    const f = facts(world);
+    expect(f.bareRepos?.[withName]?.files, `${withName} on the stand-in GitHub`).toContain(file);
+    const other = f.bareRepos?.[withoutName]?.files ?? [];
+    expect(other.length, `${withoutName} has no files on the stand-in GitHub`).toBeGreaterThan(0);
+    expect(other).not.toContain(file);
+  });
+
+// ── the .npmrc rule ──────────────────────────────────────────────────────────
+
+Then('the plan lists {string} as excluded for {string} because of an npm login and does not list {string}',
+  async ({ world }, rel: string, repo: string, kept: string) => {
+    const row = planRows(world).find((r) => r.source === repo) as PlanRow;
+    expect(row, `${repo} is not on the plan`).toBeDefined();
+    expect(row.excluded).toContain(`${rel}: npm login in .npmrc`);
+    expect(row.excluded.filter((e) => e.startsWith(`${kept}:`)), `${kept} must not be excluded`).toEqual([]);
+  });
+
+Then('the exported {string} holds {string} with the text {string} and no {string}',
+  async ({ world }, name: string, file: string, text: string, gone: string) => {
+    const f = facts(world);
+    const files = f.bareRepos?.[name]?.files ?? [];
+    expect(files).toContain(file);
+    expect(files, `${gone} was published`).not.toContain(gone);
+    expect((f.bareFiles ?? {})[`${name}:${file}`]).toBe(text);
+  });
+
+// ── a rename that leaves the work folder ─────────────────────────────────────
+
+Then('the export step refuses the plan inline naming the bad repository rename', async ({ world }) => {
+  const f = facts(world);
+  expect(f.planFailed, 'the plan ran with a rename that leaves the work folder').toBe(true);
+  expect(f.planStatus).toContain('bad repository rename');
+  expect(f.planStatus).toContain('../../escape');
+});
+
+Then('nothing was created in the stand-in GitHub, no gh call was made and no repository folder was written',
+  async ({ world }) => {
+    const f = facts(world);
+    expect(f.bareReposAfterPlan, 'repositories under the org').toEqual([]);
+    expect(f.ghCalls, 'gh was called although the plan was refused').toEqual([]);
+    expect(f.workFolders, 'repository folders written under the work directory').toEqual([]);
+  });
+
+Then('the folder the rename pointed at still holds only its untouched file', async ({ world }) => {
+  const f = facts(world);
+  expect(f.sentinel, 'the file in the folder the rename pointed at').toBe('keep\n');
+  expect(f.escapeFolder).toEqual(['precious.txt']);
+});

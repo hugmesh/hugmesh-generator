@@ -306,6 +306,37 @@ def test_an_npmrc_is_dropped_by_content_and_env_examples_stay(world):
     assert not rp.blocked
 
 
+def test_an_unreadable_npmrc_is_dropped_and_named_as_such_never_published(world, monkeypatch):
+    """Fail closed: an .npmrc the export cannot read might hold a login, so it is
+    left out and the plan says why (a readable token-free one stays: see above)."""
+    import builtins
+    cfg, runner = world["cfg"], world["runner"]
+    _plant(os.path.join(world["src"], "hugmesh-parent"), {
+        "legacy-peer-deps.txt": "x\n", "web/.npmrc": "legacy-peer-deps=true\n"})
+    real_open = builtins.open
+
+    def refusing_open(file, mode="r", *a, **kw):
+        if str(file).endswith("/web/.npmrc"):
+            raise PermissionError(13, "Permission denied", str(file))
+        return real_open(file, mode, *a, **kw)
+
+    monkeypatch.setattr(builtins, "open", refusing_open)
+    try:
+        p = oe.plan(cfg, runner, stamp="20260101T000000Z", probe=False)
+    finally:
+        monkeypatch.undo()
+    rp = next(r for r in p.repos if r.source == "hugmesh-parent")
+    assert "web/.npmrc: unreadable .npmrc (could hold a login)" in rp.excluded, rp.excluded
+    assert not os.path.exists(os.path.join(rp.workdir, "web", ".npmrc"))
+    plan_file = json.load(open(os.path.join(p.out_dir, "org-export-plan.json")))
+    named = [e for r in plan_file["repos"] for e in r["excluded"]]
+    assert "web/.npmrc: unreadable .npmrc (could hold a login)" in named, "the plan must say it"
+    # the check itself, with no plan around it
+    d = os.path.join(os.path.dirname(rp.workdir), "unreadable-probe")
+    os.makedirs(os.path.join(d, ".npmrc"))               # a directory cannot be read as a file
+    assert oe._excluded_reason(".npmrc", d) == "unreadable .npmrc (could hold a login)"
+
+
 def test_a_rename_that_is_not_a_repository_name_is_a_problem_and_touches_nothing(
         world, tmp_path):
     cfg, runner = world["cfg"], world["runner"]
@@ -323,6 +354,26 @@ def test_a_rename_that_is_not_a_repository_name_is_a_problem_and_touches_nothing
     assert any("repos must be an object" in pr for pr in cfg.problems())
     assert (victim / "precious.txt").read_text() == "keep\n"
     assert not os.path.exists(os.path.join(world["gen"], "out", "org-export"))
+
+
+@pytest.mark.parametrize("bad, fragment", [
+    (["hugmesh-commons"], "rename_map must be an object"),
+    ("hugmesh-commons", "rename_map must be an object"),
+    (7, "rename_map must be an object"),
+    ({"tokens": {"pattern": "a", "replace": "b"}}, "tokens must be a list"),
+    ({"tokens": 3}, "tokens must be a list"),
+    ({"tokens": ["a"]}, "every token rule needs pattern and replace"),
+])
+def test_a_rename_map_of_the_wrong_shape_is_a_problem_line_not_a_traceback(
+        world, bad, fragment):
+    """A hand-edited inline map: problems() must answer with lines (the pages and
+    the CLI print them), never raise AttributeError / TypeError out of the check."""
+    cfg = world["cfg"]
+    cfg.rename_map = bad
+    lines = cfg.problems()
+    assert any(fragment in ln for ln in lines), lines
+    with pytest.raises(ValueError, match=re.escape(fragment)):
+        oe.plan(cfg, world["runner"], probe=False)
 
 
 def test_a_config_file_with_a_bad_inline_rename_is_refused_at_load(world, tmp_path):
@@ -375,6 +426,9 @@ def _maven_step_script(site_workdir):
     (".github/maven-ci-settings.xml", "tok", 0, "-B -s .github/maven-ci-settings.xml verify"),
     (".github/maven-ci-settings.xml", "", 1, None),     # fails early and says why
     ("", "", 0, "-B verify"),                             # no settings file: plain verify
+    # a root settings.xml that is not the GitLab one needs no read token: the empty-token
+    # stop belongs to the CI settings file alone
+    ("settings.xml", "", 0, "-B -s settings.xml verify"),
 ])
 def test_the_generated_maven_step_runs_the_recorded_settings_and_needs_the_token(
         world, tmp_path, settings, token, want_rc, want_args):
@@ -398,6 +452,50 @@ def test_the_generated_maven_step_runs_the_recorded_settings_and_needs_the_token
         assert (work / "ran.txt").read_text().strip() == f"mvnw {want_args}"
     else:
         assert "PACKAGES_READ_TOKEN" in res.stdout and not (work / "ran.txt").exists()
+
+
+def _site_step(site_workdir, job, step_id=None, name_prefix=None):
+    doc = yaml.safe_load(open(os.path.join(site_workdir, ".github/workflows/build-all.yml"),
+                              encoding="utf-8"))
+    return next(st for st in doc["jobs"][job]["steps"]
+                if (step_id and st.get("id") == step_id)
+                or (name_prefix and st.get("name", "").startswith(name_prefix)))
+
+
+def test_the_matrix_the_repos_job_builds_carries_each_repositorys_settings_file_to_maven(
+        world, tmp_path):
+    """The hand-off repos.json -> `repos` job (jq) -> matrix row -> Maven step: the
+    parent (which has the CI settings file) must reach mvnw with -s, and the commons
+    library (which has only the GitLab file) must reach it with none."""
+    import subprocess
+    p = oe.plan(world["cfg"], world["runner"], stamp="20260101T000000Z", probe=False)
+    step = _site_step(p.site.workdir, "repos", step_id="list")
+    gh_out = tmp_path / "gh-output.txt"
+    gh_out.write_text("")
+    res = subprocess.run(["bash", "-c", step["run"]], cwd=p.site.workdir,
+                         capture_output=True, text=True,
+                         env={"PATH": os.environ["PATH"], "GITHUB_OUTPUT": str(gh_out)})
+    assert res.returncode == 0, res.stdout + res.stderr
+    outputs = dict(ln.split("=", 1) for ln in gh_out.read_text().splitlines() if "=" in ln)
+    rows = {r["name"]: r for r in json.loads(outputs["matrix"])["include"]}
+    assert set(rows) == {r.target for r in p.repos}, rows
+    assert rows["example-parent"]["settings"] == ".github/maven-ci-settings.xml", rows
+    assert rows["example-commons"]["settings"] == "", rows
+    assert rows["example-parent"]["build"] == "java", rows
+    script, _env = _maven_step_script(p.site.workdir)
+    for name, want in (("example-parent", "-B -s .github/maven-ci-settings.xml verify"),
+                       ("example-commons", "-B verify")):
+        work = tmp_path / f"mvn-{name}"
+        work.mkdir()
+        mvnw = work / "mvnw"
+        mvnw.write_text('#!/bin/sh\necho "mvnw $*" > ran.txt\n')
+        mvnw.chmod(0o755)
+        done = subprocess.run(
+            ["bash", "-c", script], cwd=work, capture_output=True, text=True,
+            env={"PATH": os.environ["PATH"], "MAVEN_SETTINGS": rows[name]["settings"],
+                 "UPSTREAM_PACKAGES_TOKEN": "tok", "UPSTREAM_PACKAGES_ACTOR": "someone"})
+        assert done.returncode == 0, done.stdout + done.stderr
+        assert (work / "ran.txt").read_text().strip() == f"mvnw {want}", name
 
 
 def test_a_root_settings_file_that_is_not_the_gitlab_one_is_used_when_no_ci_file(tmp_path):

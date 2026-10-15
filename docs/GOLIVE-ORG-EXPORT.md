@@ -67,7 +67,11 @@ mesh on this machine names an org, or when you add a config file on the step its
    Two names are decided by content: an `.npmrc` is dropped only when it holds a
    login (`_authToken`, `_auth=`, `_password`), so a token-free one such as
    `legacy-peer-deps=true`, which a Dockerfile may `COPY`, stays; and `.env.example`,
-   `.env.sample` and `.env.template` stay (every other `.env.*` is dropped);
+   `.env.sample` and `.env.template` stay (every other `.env.*` is dropped). An
+   `.npmrc` that holds only a placeholder such as `${NPM_TOKEN}` still counts as a
+   login and is dropped, and one the export cannot read is dropped too, named in the
+   plan as `unreadable .npmrc (could hold a login)`. A Dockerfile that `COPY`s a
+   dropped `.npmrc` then breaks: the plan lists the drop, not the dangling `COPY`;
 4. **refuses** a repository, naming the file, when a banned marker is found in what
    would be published: a co-author trailer, a tool footer, an assistant session link,
    an API key, a private-key header;
@@ -200,12 +204,15 @@ Both workflows run on `${{ fromJSON(vars.RUNS_ON || '"ubuntu-latest"') }}`, the 
 the org's release workflows do. The org holds no composite GitHub Actions
 (`hugmesh-actions` is a Java service; no `action.yml` or `workflow_call` exists on any
 default branch), so the build steps are spelled inline, following the repositories'
-`release.yml` files (only three repositories have a `ci.yml`, and the Java one runs on
-a self-hosted runner with GitLab secrets). The repository-root `settings.xml` of a Java
-repository is the GitLab registry file and cannot work from GitHub, so it is never
-passed: the export records in `repos.json` which settings file each repository has
-(`.github/maven-ci-settings.xml`, or none) and the plan notes a Java repository that
-has neither. Third-party actions are pinned at the same level the existing
+`release.yml` files. For a Java repository the build passes the settings file that can
+work from GitHub: `.github/maven-ci-settings.xml` when the repository has one; else
+the repository-root `settings.xml` when it is not the GitLab registry file (the GitLab
+one reads `CI_API_V4_URL` and cannot work from GitHub); else none. The export records
+the choice per repository in `repos.json` (`.github/maven-ci-settings.xml`,
+`settings.xml`, or empty), and the plan notes a repository whose only settings file is
+the GitLab one, because its private parent POMs will not resolve; a Java repository
+with no settings file at all gets no note. Only the CI settings file needs the read
+token: the build stops early, naming `PACKAGES_READ_TOKEN`, when it is empty. Third-party actions are pinned at the same level the existing
 workflows pin them (`@v4`, `@v5`).
 
 ## 5. From a terminal

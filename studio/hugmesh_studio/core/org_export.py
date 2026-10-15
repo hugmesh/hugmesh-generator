@@ -292,7 +292,18 @@ class ExportConfig:
                 out.append(f"not a repository name: {name!r}")
         # an inline rename map is checked here as load_rename_map checks a file, so
         # a bad regex is a problem line, never a traceback at plan time
-        for rule in (self.rename_map or {}).get("tokens") or []:
+        rmap = self.rename_map
+        if rmap in (None, {}):
+            rmap = {}
+        elif not isinstance(rmap, dict):
+            out.append("rename_map must be an object with repos / tokens / skip_rewrite "
+                       f"/ exclude, got {type(rmap).__name__}")
+            rmap = {}
+        tokens = rmap.get("tokens") or []
+        if not isinstance(tokens, list):
+            out.append("rename_map: tokens must be a list of {pattern, replace} rules")
+            tokens = []
+        for rule in tokens:
             if not isinstance(rule, dict) or "pattern" not in rule or "replace" not in rule:
                 out.append("rename_map: every token rule needs pattern and replace")
                 continue
@@ -300,7 +311,7 @@ class ExportConfig:
                 re.compile(str(rule["pattern"]))
             except re.error as exc:
                 out.append(f"rename_map: bad regex {rule['pattern']!r}: {exc}")
-        out.extend(repo_rename_problems((self.rename_map or {}).get("repos")))
+        out.extend(repo_rename_problems(rmap.get("repos")))
         if not self.remote_base.endswith("/"):
             out.append("remote_base must end with '/'")
         return out
