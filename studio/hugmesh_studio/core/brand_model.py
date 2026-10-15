@@ -529,7 +529,13 @@ _SECRET_KEY = re.compile(r"(token|secret|passw|passphrase|private[_-]?key|authke
                          r"api[_-]?key)", re.I)
 
 
-def _looks_like_secret(value: str) -> str:
+#: A legal brand id made of words ("shop-for-the-mesh-community-2026") is long, mixes
+#: letters and digits and is not a token; a bare run of lowercase letters and digits with
+#: no dash still is judged by the opaque rule.
+_ID_WORDS = re.compile(r"[a-z0-9]+(-[a-z0-9]+)+\Z")
+
+
+def _looks_like_secret(value: str, *, is_id: bool = False) -> str:
     v = value.strip()
     if _PEM.search(v):
         return "a PEM block"
@@ -538,6 +544,8 @@ def _looks_like_secret(value: str) -> str:
     m = _TOKEN.search(v)
     if m:
         return f"a token-shaped value ({m.group(1)[:6]}…)"
+    if is_id and _ID_WORDS.fullmatch(v):
+        return ""
     if (_OPAQUE.fullmatch(v) and re.search(r"[A-Za-z]", v) and re.search(r"[0-9]", v)
             and not v.endswith(".onion") and "://" not in v and not v.startswith("/")):
         return "a long opaque value (token-shaped)"
@@ -549,7 +557,7 @@ def secret_problems(obj: Any, where: str = "record") -> list[str]:
     dicts and lists; a dataclass row is walked through asdict."""
     problems: list[str] = []
 
-    def walk(o: Any, path: str) -> None:
+    def walk(o: Any, path: str, is_id: bool = False) -> None:
         if hasattr(o, "__dataclass_fields__"):
             o = asdict(o)
         if isinstance(o, dict):
@@ -559,12 +567,12 @@ def secret_problems(obj: Any, where: str = "record") -> list[str]:
                         and not str(k).endswith("_file")):
                     problems.append(f"{p}: a value under a key that names a secret")
                     continue
-                walk(v, p)
+                walk(v, p, str(k) == "id")
         elif isinstance(o, (list, tuple)):
             for i, v in enumerate(o):
                 walk(v, f"{path}[{i}]")
         elif isinstance(o, str):
-            why = _looks_like_secret(o)
+            why = _looks_like_secret(o, is_id=is_id)
             if why:
                 problems.append(f"{path}: {why}")
 

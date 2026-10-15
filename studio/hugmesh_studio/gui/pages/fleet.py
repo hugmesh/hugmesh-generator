@@ -426,7 +426,7 @@ class FleetPage(QtWidgets.QWidget):
         nl = QtWidgets.QVBoxLayout(node_svcs)
         # A QCheckBox cannot wrap: its minimum width IS its text, and this one's was 765 px
         # in a 722 px viewport — the whole window scrolled 103 px sideways on every step
-        # (measured 2026-10-01, and again here at 760x700). The box keeps its short name;
+        # (measured at 760x700). The box keeps its short name;
         # the long explanation is a wrapped line under it.
         self.with_tor = QtWidgets.QCheckBox(
             "Tor v3 onion on every cluster-node image (WITH_TOR=1)")
