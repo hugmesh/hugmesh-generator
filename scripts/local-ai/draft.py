@@ -191,7 +191,7 @@ def run_plain(a, issue):
         set_status(a.out, f"no-ollama {exc}")
         return 2
     try:
-        models = [m.get("name") for m in lai._get_json(None, "/api/tags", 5).get("models", [])]
+        models = lai._model_names(lai._get_json(None, "/api/tags", 5))
     except Exception:
         set_status(a.out, f"no-ollama nothing answers on {base}; run scripts/local-ai.sh up")
         return 2

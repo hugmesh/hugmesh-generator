@@ -442,6 +442,12 @@ def main(argv=None) -> int:
                 print(f"error: {snap.problem} {snap.fix} (see {snap.doc})", file=sys.stderr)
                 return 1
             return 0
+        if not args.local_ai_prompt.strip():
+            # Same answer as ``local_ai_status prompt`` and the dock: an empty question is
+            # not sent. Exit 2 is "bad input", the code the other flags use for it.
+            print('usage: python -m hugmesh_studio --local-ai-prompt "question"',
+                  file=sys.stderr)
+            return 2
         try:
             lai.send_prompt(args.local_ai_prompt,
                             on_chunk=lambda c: (sys.stdout.write(c), sys.stdout.flush()))

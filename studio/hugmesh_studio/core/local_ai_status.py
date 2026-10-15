@@ -629,6 +629,22 @@ def _down_message(env: dict | None) -> str:
             f"(see {DOC}).")
 
 
+def _context_size(env: dict) -> int:
+    """``$LOCAL_AI_CTX`` as a whole number of tokens, else the default.
+
+    Read here and not at the call site because the value is typed by a person
+    (``16k`` is a natural thing to type) and a bare ``int()`` turned it into a traceback.
+    """
+    raw = (env.get(CTX_ENV) or "").strip()
+    if not raw:
+        return DEFAULT_CTX
+    if raw.isdigit() and int(raw) > 0:
+        return int(raw)
+    raise LocalAIError(f"{CTX_ENV} is {raw!r}; it must be a whole number of tokens "
+                       f"greater than 0, such as {DEFAULT_CTX}. Unset it to use the default "
+                       f"(see {DOC}).")
+
+
 def send_prompt(text: str, model: str | None = None, *, env: dict | None = None,
                 timeout: float = 120.0, total_timeout: float = 900.0,
                 on_chunk: Callable[[str], None] | None = None,
@@ -644,10 +660,11 @@ def send_prompt(text: str, model: str | None = None, *, env: dict | None = None,
     off: the person asked a question, not for the model's notes.
 
     :raises LocalAIError: with a sentence that says what to do (down, no such model,
-        refused host, timeout). :raises NotLoopback: for a non-loopback ``OLLAMA_HOST``.
+        refused host, timeout, a ``LOCAL_AI_CTX`` that is not a number). :raises NotLoopback: for a non-loopback ``OLLAMA_HOST``.
     """
     env = os.environ if env is None else env
     url = base_url(env)                                     # the loopback rule, first
+    num_ctx = _context_size(env)                            # a bad value is a sentence, not a traceback
     if not model:
         try:
             pulled = _model_names(_get_json(env, "/api/tags", 5))
@@ -656,7 +673,7 @@ def send_prompt(text: str, model: str | None = None, *, env: dict | None = None,
         model = pick_model(env, pulled)
     messages = ([{"role": "system", "content": system}] if system else []) \
         + list(history or []) + [{"role": "user", "content": text}]
-    opts = {"num_ctx": int(env.get(CTX_ENV) or DEFAULT_CTX), "temperature": 0.2}
+    opts = {"num_ctx": num_ctx, "temperature": 0.2}
     opts.update(options or {})
     body = json.dumps({"model": model, "messages": messages, "stream": True,
                        "think": False, "options": opts}).encode()
@@ -732,9 +749,9 @@ def start_assistant(generator_dir: str, *, env: dict | None = None,
     """Start the loopback Ollama and the queue worker, detached, and return at once.
 
     Runs ``scripts/local-ai.sh start``. The caller does not wait: the snapshot shows the
-    server come up. MERGE POINT: the local-agent card (hugmesh-generator#695) adds a
-    terminal launcher for an interactive agent chat; when that lands it owns "open a
-    chat window" and this keeps only the server-and-worker half.
+    server come up. This is the server-and-worker half only: the local-agent card
+    (hugmesh-generator#695, merged as PR 749, ``core/local_agent.py``) owns "open an
+    agent chat in a terminal".
     """
     env = dict(os.environ if env is None else env)
     script = os.path.join(generator_dir, "scripts", "local-ai.sh")

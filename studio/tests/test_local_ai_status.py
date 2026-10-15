@@ -346,6 +346,31 @@ def test_send_prompt_streams_and_returns_the_whole_answer(fake, env):
     assert body["options"]["num_ctx"] == lai.DEFAULT_CTX
 
 
+@pytest.mark.parametrize("bad", ["16k", "big", "1.5", "0", "-4096"])
+def test_a_bad_local_ai_ctx_is_a_sentence_not_a_traceback(fake, env, bad):
+    # LOCAL_AI_CTX is read outside any handler: "16k" used to leave as a raw ValueError,
+    # so --local-ai-prompt printed a traceback and chat_loop died on the first question.
+    env["LOCAL_AI_CTX"] = bad
+    with pytest.raises(lai.LocalAIError) as err:
+        lai.send_prompt("hi", "qwen3:8b", env=env)
+    assert "LOCAL_AI_CTX" in str(err.value) and bad in str(err.value)
+    assert not [r for r in fake.requests if r[1] == "/api/chat"]       # nothing was sent
+
+
+def test_a_good_local_ai_ctx_reaches_the_request(fake, env):
+    env["LOCAL_AI_CTX"] = " 8192 "
+    lai.send_prompt("hi", "qwen3:8b", env=env)
+    body = [r[2] for r in fake.requests if r[1] == "/api/chat"][0]
+    assert body["options"]["num_ctx"] == 8192
+
+
+def test_chat_loop_survives_a_bad_local_ai_ctx(fake, env):
+    env["LOCAL_AI_CTX"] = "16k"
+    out = io.StringIO()
+    rc = lai.chat_loop(io.StringIO("first\nsecond\n/quit\n"), out, env=env, model="qwen3:8b")
+    assert rc == 0 and out.getvalue().count("LOCAL_AI_CTX") == 2        # told twice, never died
+
+
 def test_send_prompt_picks_a_model_when_none_is_named(fake, env):
     fake.models = [{"name": "other-embed"}, {"name": "qwen3:8b"}]
     lai.send_prompt("hi", None, env=env)

@@ -189,7 +189,12 @@ class H(http.server.BaseHTTPRequestHandler):
         self.wfile.write(body)
     def do_GET(self):
         with open(os.path.join(LOG, "gets.log"), "a") as fh: fh.write(self.path + "\n")
-        if self.path == "/api/tags": self._send(json.dumps({"models": [{"name": "qwen3:8b"}]}).encode())
+        if self.path == "/api/tags":
+            try: tags = open(os.path.join(LOG, "tags")).read().strip()
+            except OSError: tags = "good"
+            # "odd" is a reply that is JSON but not a list of models; "none" is no models
+            body = {"good": {"models": [{"name": "qwen3:8b"}]}, "odd": {"models": 5}, "none": {"models": []}}
+            self._send(json.dumps(body.get(tags, body["good"])).encode())
         elif self.path == "/api/ps": self._send(json.dumps({"models": [{"name": "qwen3:8b"}]}).encode())
         else: self.send_error(404)
     def do_POST(self):
@@ -853,6 +858,17 @@ if kill -0 "${unrelated}" 2>/dev/null && has "${out}" 'no worker is running'; th
     ok "stop leaves an unrelated process alone when its pid is in worker.pid"
 else bad "stop signalled or mis-reported an unrelated pid: ${out}"; fi
 kill "${unrelated}" 2>/dev/null
+
+echo "-- 8) a model list that is odd reads as 'no model pulled', not as 'nothing answering' --"
+for tags in odd none; do
+    echo "${tags}" >"${LOG}/tags"
+    rm -rf "${LA_STATE}"
+    PATHV="${P_NO}" la bash "${GEN}/scripts/local-ai.sh" draft hugmesh-fixture 1 >/dev/null 2>&1
+    has "$(cat "${LA_STATE}/drafts/hugmesh-fixture-1/STATUS" 2>/dev/null)" '^no-model qwen3:8b is not pulled; run: ollama pull qwen3:8b' \
+        && ok "draft with a '${tags}' /api/tags reply stops with no-model and the pull command" \
+        || bad "draft with a '${tags}' /api/tags reply: $(cat "${LA_STATE}/drafts/hugmesh-fixture-1/STATUS" 2>/dev/null)"
+done
+rm -f "${LOG}/tags"
 
 echo
 echo "== ${pass} passed, ${fail} failed =="

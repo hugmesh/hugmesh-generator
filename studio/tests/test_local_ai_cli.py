@@ -107,6 +107,24 @@ def test_prompt_exits_non_zero_with_a_sentence_when_ollama_is_down(env, capsys):
     assert rc == 1 and out == "" and err.startswith("error: Ollama is not answering")
 
 
+def test_prompt_with_a_bad_local_ai_ctx_is_one_sentence_and_exit_one(fake, env, capsys):
+    env.setenv("OLLAMA_HOST", fake.host)
+    env.setenv("LOCAL_AI_CTX", "16k")
+    rc, out, err = cli(["--local-ai-prompt", "hi"], capsys)
+    assert rc == 1 and out == "" and err.startswith("error: ") and "LOCAL_AI_CTX" in err
+    assert "Traceback" not in err and err.count("\n") == 1
+
+
+@pytest.mark.parametrize("blank", ["", "   ", "\n\t "])
+def test_a_blank_prompt_is_usage_and_exit_two_and_asks_nothing(fake, env, capsys, blank):
+    # The module's own ``prompt`` command and the dock both refuse an empty question;
+    # the flag used to send it to the model and exit 0.
+    env.setenv("OLLAMA_HOST", fake.host)
+    rc, out, err = cli(["--local-ai-prompt", blank], capsys)
+    assert rc == 2 and out == "" and err.startswith("usage:") and "--local-ai-prompt" in err
+    assert not [r for r in fake.requests if r[1] == "/api/chat"]
+
+
 def test_prompt_refuses_a_non_loopback_host(env, capsys):
     env.setenv("OLLAMA_HOST", "203.0.113.9:11434")
     rc, out, err = cli(["--local-ai-prompt", "hi"], capsys)

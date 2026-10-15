@@ -481,6 +481,9 @@ Settings: `LOCAL_AI_MODEL` (default `qwen3:8b`), `OLLAMA_HOST` (**loopback only*
 other value is refused before a connection is tried, and system proxy settings are
 ignored), `HUGMESH_REPOS_ROOT`, `LOCAL_AI_ORG` (default `hugmesh`), `TODO_TIMEOUT`
 (seconds a draft may take, default 1500), `LOCAL_AI_INTERVAL` (watch refresh).
+`LOCAL_AI_CTX` sets the context size, in tokens, that the Studio dock and
+`--local-ai-prompt` ask the model for: a whole number greater than 0. Anything else
+(`16k`, `0`) is refused with one sentence naming the variable, and nothing is sent.
 
 What is deliberately **not** here: the prototype's limit-watcher (it reads another
 program's session files) and the CI-sweep triage. The dashboard shows local work only.
