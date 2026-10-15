@@ -138,5 +138,107 @@ ENV=test; OPTIONAL_SERVICES="akkoma tuwunel phpbb"; _test="$(_opt_anubis_install
     && ok "the decision is ENV-CONDITIONAL (prod=>true, test=>false, same selection)" \
     || bad "decision is not ENV-conditional (prod=${_prod} test=${_test} for the same selection)"
 
+# ── 6) the BOT POLICY is mounted and named by POLICY_FNAME (hugmesh-fe-gateway#4) ──
+# Setting POLICY_FNAME REPLACES Anubis's built-in policy, so the file has to be
+# there, parse, and be reachable at the path the env names. This leg reads the
+# manifests (PyYAML) and proves the WIRING; it does not run Anubis, so it cannot say
+# that Anubis accepts the policy. Pinned below: the file is, byte for byte, the
+# upstream default policy of the pinned tag, so introducing the ConfigMap changes no
+# rule; the next change that edits a rule updates the sha on purpose.
+ANUBIS_DIR="${ANUBIS_DIR:-${REPO}/specs/cluster/manifests/anubis}"
+POLICY_SRC_TAG="v1.25.0"
+POLICY_SRC_SHA256="51189000be995b59fb1354acd94c826bdb0d76743ed06f18c2a3811fb7f62855"
+POLICY_SRC_URL="https://github.com/TecharoHQ/anubis/blob/${POLICY_SRC_TAG}/data/botPolicies.yaml"
+policy_wiring() {
+    python3 - "${ANUBIS_DIR}" "${POLICY_SRC_TAG}" "${POLICY_SRC_SHA256}" <<'PY'
+import hashlib, os, sys
+import yaml
+d, tag, sha = sys.argv[1:4]
+fails = []
+def bad(m): fails.append(m)
+kust = yaml.safe_load(open(os.path.join(d, "kustomization.yaml")))
+dep = [x for x in yaml.safe_load_all(open(os.path.join(d, "deployment.yaml")))
+       if x and x.get("kind") == "Deployment"][0]
+spec = dep["spec"]["template"]["spec"]
+ctr = [c for c in spec["containers"] if c["name"] == "anubis"][0]
+env = {e["name"]: e.get("value") for e in ctr.get("env", [])}
+fname = env.get("POLICY_FNAME")
+if not fname:
+    bad("the anubis container sets no POLICY_FNAME")
+else:
+    mdir, base = os.path.dirname(fname), os.path.basename(fname)
+    mounts = [m for m in (ctr.get("volumeMounts") or []) if m.get("mountPath") == mdir]
+    if not mounts:
+        bad("no volumeMount at %s, the directory POLICY_FNAME=%s lives in" % (mdir, fname))
+    else:
+        m = mounts[0]
+        if m.get("readOnly") is not True:
+            bad("the policy mount is not readOnly: true")
+        if m.get("subPath"):
+            bad("the policy mount uses subPath, which never sees a policy edit")
+        vols = [v for v in (spec.get("volumes") or []) if v["name"] == m["name"]]
+        if not vols or "configMap" not in vols[0]:
+            bad("volume %r is not a configMap volume" % m["name"])
+        else:
+            cm = vols[0]["configMap"]["name"]
+            gens = [g for g in kust.get("configMapGenerator", []) if g.get("name") == cm]
+            if not gens:
+                bad("no configMapGenerator named %r in kustomization.yaml" % cm)
+            else:
+                files = [str(f).split("=")[0] if "=" in str(f) else os.path.basename(str(f))
+                         for f in gens[0].get("files", [])]
+                if base not in files:
+                    bad("the ConfigMap %r has no key %r (has %r)" % (cm, base, files))
+                src = os.path.join(d, base)
+                if not os.path.isfile(src):
+                    bad("%s is named by the generator but absent" % src)
+                else:
+                    raw = open(src, "rb").read()
+                    pol = yaml.safe_load(raw)
+                    if not isinstance(pol, dict) or not isinstance(pol.get("bots"), list) or not pol["bots"]:
+                        bad("the policy has no non-empty bots list")
+                    if not isinstance(pol, dict) or not pol.get("thresholds"):
+                        bad("the policy has no thresholds")
+                    if hashlib.sha256(raw).hexdigest() != sha:
+                        bad("the policy is not the pinned upstream %s default (sha256 differs); if a rule was changed on purpose, update POLICY_SRC_SHA256 in this suite and say so" % tag)
+if ctr["securityContext"].get("readOnlyRootFilesystem") is not True:
+    bad("readOnlyRootFilesystem is no longer true on the anubis container")
+tags = [i.get("newTag") for i in kust.get("images", []) if i.get("name") == "ghcr.io/techarohq/anubis"]
+if tags != [tag]:
+    bad("the image pin is %r but the policy was taken from %s: re-sync botPolicies.yaml from the new tag, then update POLICY_SRC_TAG and POLICY_SRC_SHA256" % (tags, tag))
+for f in fails:
+    print(f)
+sys.exit(1 if fails else 0)
+PY
+}
+echo "-- (6) bot policy ConfigMap: mount + POLICY_FNAME + parseable policy (source ${POLICY_SRC_URL}) --"
+if command -v python3 >/dev/null 2>&1 && python3 -c 'import yaml' 2>/dev/null; then
+    out="$(policy_wiring 2>&1)" && ok "POLICY_FNAME -> read-only configMap dir mount -> generated ConfigMap key; policy parses and is the pinned ${POLICY_SRC_TAG} default" \
+                               || bad "bot policy wiring: ${out}"
+else
+    bad "bot policy leg needs python3 + PyYAML (the CI images carry both)"
+fi
+# The render leg needs kubectl; absent, it is reported as SKIPPED (not as a pass)
+# and the static leg above still gates.
+if command -v kubectl >/dev/null 2>&1; then
+    rendered="$(kubectl kustomize "${ANUBIS_DIR}" 2>&1)" || { bad "kubectl kustomize failed: ${rendered}"; rendered=""; }
+    if [ -n "${rendered}" ]; then
+        printf '%s' "${rendered}" | python3 -c '
+import sys, yaml
+docs = [d for d in yaml.safe_load_all(sys.stdin) if d]
+cms = [d for d in docs if d["kind"] == "ConfigMap"]
+dep = [d for d in docs if d["kind"] == "Deployment"][0]
+vol = [v for v in dep["spec"]["template"]["spec"]["volumes"] if v["name"] == "policy"][0]["configMap"]["name"]
+ok = (len(cms) == 1 and cms[0]["metadata"]["name"] == vol
+      and cms[0]["metadata"]["name"].startswith("hugmesh-anubis-policy-")
+      and "botPolicies.yaml" in cms[0]["data"])
+sys.exit(0 if ok else 1)' \
+            && ok "kubectl kustomize renders the ConfigMap with a content-hash name and points the Deployment volume at it" \
+            || bad "rendered ConfigMap/volume mismatch (the Deployment would mount a ConfigMap that does not exist)"
+    fi
+else
+    echo "  SKIPPED kubectl absent: the render leg of (6) did not run (not a pass)"
+fi
+
 echo "== RESULT: ${P} passed, ${F} failed =="
 [ "${F}" -eq 0 ]

@@ -51,6 +51,8 @@ source "${SCRIPT_DIR}/scripts/_download-lib.sh"
 # the build host's libcrypt provably supports it, SHA-512 crypt ($6$) fallback.
 # shellcheck source=scripts/_passhash-lib.sh
 source "${SCRIPT_DIR}/scripts/_passhash-lib.sh"
+# shellcheck source=scripts/_domain-idp-lib.sh
+source "${SCRIPT_DIR}/scripts/_domain-idp-lib.sh"
 # THE role vocabulary (scripts/_roles-lib.sh) — the SAME declaration the x86, jetson
 # and Studio channels read. rpi5 already spelled the node roles long; what it gains
 # here is accepting `be`/`fe` (the Studio persisted `be/rpi5` and `fe/rpi5` entry ids,
@@ -946,6 +948,14 @@ OPTIONS
                DNS app is pruned. ACME is ADDITIVE to the internal cluster CA.
                Prints a LOUD announced banner before building.
 
+  Per-domain identity provider (issue #47)
+    --domain-idp DOMAIN=own|superdomain
+        Repeatable. Which Casdoor serves DOMAIN's sign-in: own = a dedicated
+        instance, superdomain = the mesh's (the default; bakes nothing). Only
+        `own` is recorded, as DOMAIN=own in /etc/hugmesh/domain-idp. DOMAIN
+        must be a lowercase DNS name and cannot be --cluster-domain. See
+        docs/DOMAIN-IDP.md.
+
   General
     --print-plan
         Resolve + validate all flags, print the build plan (PLAN_KEY=VALUE
@@ -1109,6 +1119,7 @@ while [[ $# -gt 0 ]]; do
         --env)                ENV="$2";                shift 2 ;;
         --cluster-domain|--domain) CLUSTER_DOMAIN="$2"; shift 2 ;;
         --superdomain) SUPERDOMAIN="$2"; shift 2 ;;
+        --domain-idp) domain_idp_add "${2:-}"; shift 2 ;;   # repeatable <domain>=own|superdomain (#509)
         --release-state)      RELEASE_STATE="$2";      shift 2 ;;
         --brand)              BRAND="$2";              shift 2 ;;
         --brand-title)        BRAND_TITLE="$2";        shift 2 ;;
@@ -1522,6 +1533,9 @@ _require_match "--org"           "${ORG}"            "${_RE_ORG}"
 _require_match "--cluster-domain" "${CLUSTER_DOMAIN}" "${_RE_DNS}"
 # Orchestration superdomain: DNS-validated like --cluster-domain, only when set.
 [ -n "${SUPERDOMAIN}" ] && _require_match "--superdomain" "${SUPERDOMAIN}" "${_RE_DNS}"
+# --domain-idp (#509): vocabulary + DNS shape were checked as each flag was read; this is
+# the cross-check against --cluster-domain.
+domain_idp_check "${CLUSTER_DOMAIN}" ""
 _require_match "--games-domain"  "${GAMES_DOMAIN}"   "${_RE_DNS}"
 _require_match "--hostname"      "${HOSTNAME}"       "${_RE_DNS}"
 _require_match "--user"          "${DEFAULT_USER}"   "${_RE_USER}"
@@ -2659,6 +2673,7 @@ if ${PRINT_PLAN}; then
     _plan BRAND              "${BRAND}"
     _plan CLUSTER_DOMAIN     "${CLUSTER_DOMAIN}"
     _plan SUPERDOMAIN        "${SUPERDOMAIN}"
+    domain_idp_plan_line   # PLAN_DOMAIN_IDP=<own domains>; prints nothing when none (#509)
     _plan HOSTNAME           "${HOSTNAME}"
     _plan K8S                "$(${ROLE_CLIENT} && echo none || { [ "${ROLE}" = "pki" ] && echo control-plane || echo worker; })"
     _plan OPTIONAL_SERVICES  "$(${ROLE_CLIENT} && echo "n/a (role=desktop; no cluster GitOps tree baked)" || echo "${OPTIONAL_SERVICES:-none}")"
@@ -3738,6 +3753,8 @@ if [ -n "${SUPERDOMAIN}" ]; then
     echo "${SUPERDOMAIN}" > "${SYSROOT}/etc/hugmesh/superdomain"
     info "Baked orchestration superdomain -> /etc/hugmesh/superdomain (${SUPERDOMAIN})"
 fi
+# Per-domain IdP choice (#509): /etc/hugmesh/domain-idp, own domains only; absent otherwise.
+domain_idp_bake "${SYSROOT}/etc/hugmesh"
 # Runtime ENV marker (test|prod). Read by bootstrap/provision; also documents
 # the image's posture. test => LAN wildcard DNS authoritative; prod => public.
 echo "${ENV}"            > "${SYSROOT}/etc/hugmesh/env"
