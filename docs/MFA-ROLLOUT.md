@@ -1039,6 +1039,14 @@ closed-by-default for an unknown gateway name), but **the second-factor requirem
 silently disappears for the duration of the outage**. Accept it or change it in
 `hugmesh-gateway`; it cannot be fixed from this repo.
 
+(That paragraph predates decision 56, which gave the fallback floor a declared set of
+`mfa_required` rows; `hugmesh-gateway`'s `CanonicalSeed` is the authority on which.) The
+two tube ADMIN rows of §3 step 4 are **not** in that baked floor at all: `CanonicalSeed`
+carries no tube row at all (a grep for `tube` over it finds nothing, the `/bff/tube/**`
+floor included), so during the same outage `/bff/tube/**` is ungoverned at the gateway
+(NO_RULE, forwarded on the coarse authenticated floor), and tube-bff's own role gates are
+the only wall. Closing that is a `hugmesh-gateway` change, not part of this one.
+
 ---
 
 ## 6. Rollback
