@@ -38,8 +38,13 @@ data:
                 - id: {{ .id }}
                   uri: {{ .uri }}
                   predicates:
+                    {{- /* A route marked `vanity: true` also matches `*.<domain>` for
+                           every entry of .Values.vanityDomains (#582) — Spring Cloud
+                           Gateway's Host predicate takes a comma-separated pattern
+                           list. Nothing is appended for an unmarked route or an empty
+                           list, so every existing render is byte-identical. */}}
                     {{- if .host }}
-                    - Host={{ .host }}
+                    - Host={{ .host }}{{ if .vanity }}{{ range $.Values.vanityDomains }},*.{{ . }}{{ end }}{{ end }}
                     {{- end }}
                     {{- if .path }}
                     - Path={{ .path }}

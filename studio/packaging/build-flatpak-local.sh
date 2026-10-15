@@ -12,7 +12,8 @@
 #      workflow runs);
 #   3. builds org.hugmesh.ImageStudio from flatpak/org.hugmesh.ImageStudio.yml;
 #   4. exports hugmesh-studio-<version>-<arch>.flatpak and its .sha256 (same names and
-#      same flatpak build-bundle call as the release workflow);
+#      same flatpak build-bundle call as the release workflow, except that the bundle is
+#      written as <name>.partial and renamed when whole);
 #   5. installs that bundle into the private directory and runs it:
 #        --print-specs must print JSON (the release workflow's smoke test), and Qt must
 #        start on its offscreen platform with the PySide6 bindings and the package's data

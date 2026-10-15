@@ -1,0 +1,437 @@
+#!/usr/bin/env python3
+# hugmesh-sso-token (TEMPLATE) -> /etc/hugmesh/desktop-governance/hugmesh-sso-token
+#
+# The SSO token PRODUCER for governed client desktops (FD-07 increment 2, the
+# half the consumers were always waiting for). It obtains the logged-in user's
+# OIDC access token from the per-domain Casdoor and drops it at the one place the
+# existing consumer chain reads:
+#
+#   producer (this file)  ->  ${XDG_RUNTIME_DIR}/hugmesh/oidc-token.src   (0600)
+#   oidc-token-deposit.sh ->  ${XDG_RUNTIME_DIR}/hugmesh/oidc-token       (0600)
+#   bearer-forward.sh     ->  Flatpak per-user Authorization header
+#   desktop-sudo-mapper   ->  verifies the SAME file against the issuer JWKS
+#                             (root, 60s) and converges the desktop-sudo group
+#
+# The producer is NOT a trust anchor. It never decides who may sudo: the mapper
+# re-verifies signature, iss, aud, exp and name==local user on every run. All this
+# file owns is getting a token to the drop, safely, and taking it away again.
+#
+# HOW IT AUTHENTICATES: RFC 8628 Device Authorization Grant against the
+# `hugmesh-desktop` PUBLIC client. That is the grant the client is already seeded
+# with (specs/cluster/manifests/casdoor/init-job.yaml reconcile_desktop_client:
+# authorization_code + refresh_token + device_code). It is deliberately NOT the
+# resource-owner password grant: the client is seeded `enablePassword: False`
+# with no `password` grant ("NO password / client_credentials for a public
+# client"), and a PAM module that forwarded the typed password to the IdP would
+# also have to assume local password == IdP password. Changing either is a
+# security decision for the operator, not something to do silently here. The
+# user approves on any browser (the code + URL are shown in the session); the
+# desktop never sees their IdP credentials.
+#
+# SUBCOMMANDS
+#   login [--if-needed] [--ui auto|tty|gui|none]
+#         run the device flow and write the token drop. --if-needed is a no-op
+#         when a still-valid token for this user is already there (a greeter or
+#         PAM stage that dropped one first is honoured, never overwritten).
+#   refresh [--force]
+#         exchange the refresh token for a new access token when the current one
+#         expires within 5 minutes. An IdP `invalid_grant` (revoked / expired
+#         refresh) CLEARS everything: revocation fails closed. A transient
+#         network error keeps what is there (the mapper's own exp check governs).
+#   clear   remove the access-token drop and the refresh token (logout).
+#   status  print user / expiry / seconds left. NEVER prints a token.
+#   --pam   pam_exec entry: dispatches on $PAM_TYPE. close_session => clear
+#           (the runtime dir may already be gone: best effort, exit 0).
+#           open_session / anything else => no-op. Never blocks a login.
+#
+# GOVERNED-GATED / SHIPS-DARK: on an image with no rendered desktop-sudo mapper
+# and no bearer-forward.sh every subcommand except `clear` does nothing and
+# exits 0. Same existence test as oidc-token-deposit.sh.
+#
+# SAFETY: the drop directory is created 0700 and the files 0600 BEFORE any bytes
+# land, written to a temp name in the same directory and renamed into place
+# (a reader never sees a half-written token), and opened O_NOFOLLOW. The token is
+# never printed, never logged, never exported, never put on a command line. All
+# network traffic is https to the per-domain issuer (plain http only behind the
+# HSP_INSECURE_TEST seam, absent in production). The refresh token lives ONLY in
+# the per-user runtime dir (tmpfs): it does not outlive the login session.
+#
+# @@CLUSTER_DOMAIN@@ is substituted at FIRST BOOT (session-install.sh /
+# provision_desktop_governance()) with the node's own domain; the issuer is the
+# per-domain Casdoor at id.<domain>, the same one the mapper verifies against.
+#
+# HSP_* environment overrides exist so tests/desktop-governance/
+# test-sso-token-producer.sh can drive the REAL code against a local fake issuer
+# with no root and no network. Absent in production.
+#
+# Exit codes: 0 ok / nothing to do, 1 failed (no token written), 2 usage.
+
+import base64
+import json
+import os
+import pwd
+import shutil
+import subprocess
+import sys
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+
+ISSUER = "https://id.@@CLUSTER_DOMAIN@@"
+CLIENT_ID = "hugmesh-desktop"
+SCOPE = "openid profile"
+DEVICE_GRANT = "urn:ietf:params:oauth:grant-type:device_code"
+GOV_DIR = "/etc/hugmesh/desktop-governance"
+# The ONLY test seam gate: every HSP_* override below is ignored unless this is
+# set, so a user's environment cannot redirect the issuer or the gate on a real
+# image (and the issuer is verified by the mapper regardless).
+INSECURE_TEST = os.environ.get("HSP_INSECURE_TEST", "") == "1"
+if INSECURE_TEST:
+    ISSUER = os.environ.get("HSP_ISSUER", ISSUER)
+    GOV_DIR = os.environ.get("HSP_GOV_DIR", GOV_DIR)
+TIMEOUT = 15            # seconds per request
+MIN_INTERVAL = 1        # never poll faster than this, whatever the IdP says
+MAX_WAIT = 900          # hard ceiling on one login, whatever expires_in says
+SLOW_DOWN_STEP = 5      # RFC 8628 3.5
+REFRESH_WINDOW = 300    # refresh when < 5 min of life is left
+MAX_BODY = 256 * 1024
+# Test seam: scale every poll sleep (a slow_down still lengthens it 6x vs 1x).
+SLEEP_SCALE = float(os.environ.get("HSP_POLL_SCALE", "1")) if INSECURE_TEST else 1.0
+
+
+def SLEEP(seconds):
+    time.sleep(seconds * SLEEP_SCALE)
+
+
+def log(msg):
+    print("hugmesh-sso-token: %s" % msg, file=sys.stderr, flush=True)
+
+
+# ── paths ────────────────────────────────────────────────────────────────────
+def runtime_dir():
+    return os.environ.get("XDG_RUNTIME_DIR") or "/run/user/%d" % os.getuid()
+
+
+def drop_dir():
+    return os.path.join(runtime_dir(), "hugmesh")
+
+
+def src_path():
+    return os.path.join(drop_dir(), "oidc-token.src")
+
+
+def refresh_path():
+    return os.path.join(drop_dir(), "oidc-refresh")
+
+
+def is_governed():
+    # EXISTENCE, not permission: the mapper is 0700 root:root, so -x/-r would read
+    # a governed image as ungoverned for every human user.
+    return (os.path.exists(os.path.join(GOV_DIR, "desktop-sudo-mapper"))
+            or os.path.exists(os.path.join(GOV_DIR, "bearer-forward.sh")))
+
+
+def local_user():
+    try:
+        return pwd.getpwuid(os.getuid()).pw_name
+    except KeyError:
+        return os.environ.get("USER", "")
+
+
+# ── the drop (0700 dir, 0600 file, atomic, no symlinks) ──────────────────────
+def write_secret(path, data):
+    d = os.path.dirname(path)
+    old = os.umask(0o077)
+    try:
+        os.makedirs(d, mode=0o700, exist_ok=True)
+        os.chmod(d, 0o700)
+        tmp = "%s.%d.tmp" % (path, os.getpid())
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        try:
+            with os.fdopen(fd, "w") as f:
+                f.write(data)
+        except BaseException:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            raise
+        os.replace(tmp, path)
+    finally:
+        os.umask(old)
+
+
+def read_secret(path):
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+    except OSError:
+        return ""
+    try:
+        return os.read(fd, MAX_BODY).decode("ascii", "replace").strip()
+    except OSError:
+        return ""
+    finally:
+        os.close(fd)
+
+
+def remove(path):
+    try:
+        os.unlink(path)
+    except OSError:
+        pass
+
+
+def clear_all():
+    remove(src_path())
+    remove(refresh_path())
+
+
+# ── JWT peek (NOT verification: the mapper is the authority) ─────────────────
+def jwt_claims(token):
+    try:
+        parts = token.split(".")
+        if len(parts) != 3:
+            return None
+        seg = parts[1].encode("ascii")
+        claims = json.loads(base64.urlsafe_b64decode(seg + b"=" * (-len(seg) % 4)))
+        return claims if isinstance(claims, dict) else None
+    except (ValueError, UnicodeError):
+        return None
+
+
+def seconds_left(token):
+    c = jwt_claims(token)
+    exp = c.get("exp") if c else None
+    if not isinstance(exp, (int, float)):
+        return None
+    return exp - time.time()
+
+
+def token_fit_for(token, user):
+    """Cheap early refusal so an obviously wrong token never reaches the drop.
+    Not a security check; the mapper re-verifies everything."""
+    c = jwt_claims(token)
+    if c is None:
+        return False, "not a JWT"
+    if c.get("name") != user:
+        return False, "token is for %r, not the local user %r" % (c.get("name"), user)
+    left = seconds_left(token)
+    if left is None or left <= 0:
+        return False, "token already expired"
+    return True, "ok"
+
+
+# ── HTTP ─────────────────────────────────────────────────────────────────────
+def require_https(url):
+    if url.startswith("https://") or (INSECURE_TEST and url.startswith("http://")):
+        return url
+    raise ValueError("refusing non-https url %r" % url)
+
+
+def post_form(url, fields):
+    """POST form fields; return (http_status, parsed-json-or-{}). A 4xx body is
+    returned, not raised: RFC 8628 reports authorization_pending as an error
+    response, and some IdPs answer 200 with an `error` member instead."""
+    require_https(url)
+    body = urllib.parse.urlencode(fields).encode("ascii")
+    req = urllib.request.Request(url, data=body, headers={
+        "Content-Type": "application/x-www-form-urlencoded", "Accept": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:
+            status, raw = resp.status, resp.read(MAX_BODY)
+    except urllib.error.HTTPError as e:
+        status, raw = e.code, e.read(MAX_BODY)
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        data = {}
+    return status, data if isinstance(data, dict) else {}
+
+
+def get_json(url):
+    require_https(url)
+    with urllib.request.urlopen(url, timeout=TIMEOUT) as resp:
+        data = json.loads(resp.read(MAX_BODY))
+    return data if isinstance(data, dict) else {}
+
+
+def endpoints():
+    """(device_authorization_endpoint, token_endpoint) from OIDC discovery, with
+    Casdoor's documented paths as the fallback when discovery omits them."""
+    disc = {}
+    try:
+        disc = get_json(ISSUER + "/.well-known/openid-configuration")
+    except Exception as e:  # network/TLS/parse: fall back to the fixed paths
+        log("discovery failed (%s); using Casdoor default paths" % e)
+    dev = disc.get("device_authorization_endpoint") or ISSUER + "/api/device-auth"
+    tok = disc.get("token_endpoint") or ISSUER + "/api/login/oauth/access_token"
+    return dev, tok
+
+
+# ── prompting the human (code + URL only; never a secret) ────────────────────
+def show_code(ui, uri, complete, code):
+    msg = "Sign in to HugMesh: open %s and enter code %s" % (uri, code)
+    if ui == "none":
+        return False
+    shown = False
+    if ui in ("auto", "tty") and sys.stderr.isatty():
+        print("\n  %s\n" % msg, file=sys.stderr, flush=True)
+        shown = True
+    has_display = bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
+    if ui in ("auto", "gui") and has_display:
+        shown = gui_notice(msg, complete or uri) or shown
+    if not shown:
+        log(msg)   # last resort: stderr, which the autostart wrapper discards
+    return shown
+
+
+def gui_notice(msg, link):
+    for argv in (["zenity", "--info", "--no-wrap", "--title=HugMesh sign-in", "--text=" + msg],
+                 ["yad", "--title=HugMesh sign-in", "--text=" + msg, "--button=OK:0"],
+                 ["notify-send", "-u", "critical", "HugMesh sign-in", msg]):
+        if shutil.which(argv[0]):
+            try:
+                # Detached: the dialog must not block the poll loop.
+                subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                 stderr=subprocess.DEVNULL, start_new_session=True)
+                return True
+            except OSError:
+                continue
+    return False
+
+
+# ── subcommands ──────────────────────────────────────────────────────────────
+def cmd_login(if_needed, ui):
+    user = local_user()
+    if if_needed:
+        have = read_secret(src_path()) or os.environ.get("HUGMESH_OIDC_ACCESS_TOKEN", "")
+        ok, _ = token_fit_for(have, user) if have else (False, "")
+        left = seconds_left(have) if ok else None
+        if ok and left is not None and left > REFRESH_WINDOW:
+            return 0
+    dev_ep, tok_ep = endpoints()
+    status, d = post_form(dev_ep, {"client_id": CLIENT_ID, "scope": SCOPE})
+    code, dcode = d.get("user_code"), d.get("device_code")
+    uri = d.get("verification_uri") or d.get("verification_url")
+    if status != 200 or not (code and dcode and uri):
+        log("device authorization refused (HTTP %s, %s)" % (status, d.get("error", "no code")))
+        return 1
+    show_code(ui, uri, d.get("verification_uri_complete"), code)
+    interval = max(MIN_INTERVAL, int(d.get("interval") or 5))
+    life = d.get("expires_in")
+    wait = min(MAX_WAIT, int(life) if isinstance(life, (int, float)) and life > 0 else MAX_WAIT)
+    deadline = time.monotonic() + wait
+    while time.monotonic() < deadline:
+        SLEEP(interval)
+        status, t = post_form(tok_ep, {"grant_type": DEVICE_GRANT, "device_code": dcode,
+                                       "client_id": CLIENT_ID})
+        err = t.get("error")
+        if err == "authorization_pending":
+            continue
+        if err == "slow_down":
+            interval += SLOW_DOWN_STEP
+            continue
+        if err:   # access_denied, expired_token, invalid_grant, ...
+            log("sign-in not completed (%s)" % err)
+            return 1
+        access = t.get("access_token")
+        if status == 200 and isinstance(access, str) and access:
+            return store(access, t.get("refresh_token"), user)
+        log("token endpoint answered HTTP %s without a token" % status)
+        return 1
+    log("sign-in timed out")
+    return 1
+
+
+def store(access, refresh, user):
+    ok, why = token_fit_for(access, user)
+    if not ok:
+        log("not storing the token: %s" % why)
+        return 1
+    write_secret(src_path(), access)
+    if isinstance(refresh, str) and refresh:
+        write_secret(refresh_path(), refresh)
+    else:
+        remove(refresh_path())
+    return 0
+
+
+def cmd_refresh(force):
+    user = local_user()
+    current = read_secret(src_path())
+    left = seconds_left(current) if current else None
+    if not force and left is not None and left > REFRESH_WINDOW:
+        return 0
+    refresh = read_secret(refresh_path())
+    if not refresh:
+        return 1
+    _, tok_ep = endpoints()
+    try:
+        status, t = post_form(tok_ep, {"grant_type": "refresh_token", "refresh_token": refresh,
+                                       "client_id": CLIENT_ID})
+    except Exception as e:   # transient: keep what is there, the mapper checks exp
+        log("refresh failed (%s); keeping the current token" % e)
+        return 1
+    err = t.get("error")
+    if err in ("invalid_grant", "invalid_token", "unauthorized_client", "access_denied"):
+        log("refresh refused (%s): token revoked at the IdP, clearing" % err)
+        clear_all()
+        return 1
+    access = t.get("access_token")
+    if err or status != 200 or not isinstance(access, str) or not access:
+        log("refresh answered HTTP %s %s; keeping the current token" % (status, err or ""))
+        return 1
+    return store(access, t.get("refresh_token") or refresh, user)
+
+
+def cmd_status():
+    token = read_secret(src_path())
+    if not token:
+        print("no token")
+        return 1
+    c = jwt_claims(token) or {}
+    left = seconds_left(token)
+    print("user=%s seconds_left=%s" % (c.get("name"), "?" if left is None else int(left)))
+    return 0 if left is not None and left > 0 else 1
+
+
+def main(argv):
+    if argv[:1] == ["--pam"]:
+        # Never block or fail a PAM stack.
+        if os.environ.get("PAM_TYPE") == "close_session":
+            try:
+                clear_all()
+            except Exception:
+                pass
+        return 0
+    if not argv or argv[0] in ("-h", "--help"):
+        print("usage: hugmesh-sso-token login [--if-needed] [--ui auto|tty|gui|none] | refresh [--force] | clear | status | --pam", file=sys.stderr)
+        return 2
+    cmd, rest = argv[0], argv[1:]
+    if cmd == "clear":              # always honoured, even when ungoverned
+        clear_all()
+        return 0
+    if not is_governed():           # ships-dark: do nothing
+        return 0
+    ui = "auto"
+    if "--ui" in rest:
+        i = rest.index("--ui")
+        ui = rest[i + 1] if i + 1 < len(rest) else ""
+        if ui not in ("auto", "tty", "gui", "none"):
+            return 2
+    try:
+        if cmd == "login":
+            return cmd_login("--if-needed" in rest, ui)
+        if cmd == "refresh":
+            return cmd_refresh("--force" in rest)
+        if cmd == "status":
+            return cmd_status()
+    except (OSError, ValueError, urllib.error.URLError) as e:
+        log("failed: %s" % e)
+        return 1
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

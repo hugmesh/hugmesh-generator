@@ -329,7 +329,7 @@ cmd_up() {
 kind onion door is UP
   onion:  ${onion}
   socks:  socks5://127.0.0.1:${SOCKS_PORT}
-  try:    curl --socks5-hostname 127.0.0.1:${SOCKS_PORT} -k -I https://${onion}/
+  try:    curl --socks5-hostname 127.0.0.1:${SOCKS_PORT} -sk -D - -o /dev/null https://${onion}/
   e2e:    make kind-e2e-tor
   stop:   make kind-tor-down
 EOF

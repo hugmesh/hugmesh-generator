@@ -152,6 +152,8 @@ from .domain_services import DomainServicesWidget
 from .domains import DomainsTableWidget
 from ._mesh_monitor_widget import MeshMonitorProbe, MeshMonitorWidget, MeshScaleWorker
 from ._add_user_dialog import AddUserDialog
+from ._local_agent_widget import LocalAgentWidget, context_from_page
+from ._code_folders_widget import CodeFoldersWidget
 from ._saved_meshes_widget import SavedMeshProbe, SavedMeshesWidget
 from ._logintheme import LoginThemeGroup
 from ._scroll import scrollable
@@ -1220,6 +1222,12 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         why.setStyleSheet("color: gray;")
         sl.addWidget(why)
         lay.addWidget(src_box)
+        # CODE FOLDERS (#689): the git checkout behind every app of every domain, with
+        # a button to open it. It reads the cards above, so it sits on this step in
+        # BOTH frames (the stepped wizard claims the whole "source" section; the
+        # single-page dialog keeps it) with no section claim of its own.
+        self.code_folders = CodeFoldersWidget(self.generator_dir)
+        lay.addWidget(self.code_folders)
         lay.addStretch(1)
         return w
 
@@ -1572,8 +1580,8 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         self.copy_onion_btn = QtWidgets.QPushButton("Copy .onion address")
         self.copy_onion_btn.setToolTip(
             "Copy the local mesh's minted Tor .onion address to the clipboard (open "
-            "it in Tor Browser — a normal browser cannot reach a .onion). Enabled "
-            "only after a TOR=1 bring-up has published the address.")
+            "it in Tor Browser — a normal browser cannot reach a .onion). Before "
+            "tor has published an address, clicking explains how to get one.")
         self.copy_onion_btn.clicked.connect(self._copy_onion)
         brow.addWidget(self.copy_onion_btn)
         self.creds_btn = QtWidgets.QPushButton("Sign-in credentials")
@@ -1778,6 +1786,20 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         # No trailing addStretch: a FlowLayout has no stretch concept, and a
         # spacer item would be wrapped as if it were another button.
         lay.addWidget(brow_box)
+        # LOCAL AI AGENT (#695). The Docker mesh and the kind DevOps lane end on this one
+        # page, so one card serves both (its Lane drop-down only changes the brief). It
+        # reads the source choice and domains at press time through the context callable;
+        # the one hook is completeChanged, which fires at every verb start and end, so the
+        # card's Lane follows the lane whose verb just ran (Start DevOps lane -> kind).
+        self.local_agent = LocalAgentWidget(
+            self.generator_dir, context=lambda: context_from_page(self))
+        lay.addWidget(self.local_agent)
+        self.completeChanged.connect(self.local_agent.refresh_apps)
+        # The source cards too: the stepped wizard re-shows the card after the Repo
+        # source step, but the single-page frame has no step change, so a changed
+        # source choice there would keep listing the other tree's apps until Re-check.
+        self.src_existing.toggled.connect(lambda _on: self.local_agent.refresh_apps())
+        self.src_dir.textChanged.connect(lambda _t: self.local_agent.refresh_apps())
 
         # ── RUNNING-MESH MONITOR (operator ask, 2026-09-01): every pod and container
         # of BOTH lanes, its addresses, and an Open button only where the browser may
@@ -2330,6 +2352,10 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         self._tick.stop()          # unconditionally: an idle page must own no clock
         self._settle_run(ok)
         self._refresh_status()
+        try:
+            self._refresh_code_folders()    # the verb may have created the checkouts
+        except Exception:                   # noqa: BLE001 — never skip the re-read below
+            pass
         # A verb is the one thing that CHANGES whether a mesh is up (start, stop,
         # clean), so re-read the real state rather than inferring it from the
         # verb's exit code — a partially-failed bring-up leaves containers behind
@@ -2636,6 +2662,15 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         self._selected, self._selected_stage = -1, None
 
     # ── BOOTSTRAP handlers ───────────────────────────────────────────────────────
+    def _refresh_code_folders(self):
+        """Re-read the Code folders block from the current source choice and Domains
+        table. Called from _refresh_plan AND when a verb finishes: 'Generate & start'
+        runs make stack-clone, which creates the very folders this block reported as
+        'not downloaded yet', and no form control changes when it does."""
+        self.code_folders.refresh(self.boot.cfg.source_mode, self.boot.cfg.source_dir,
+                                  self.mesh_domains.domains,
+                                  own_name=self._own_domain_name())
+
     def _refresh_plan(self):
         if getattr(self, "_applying_bootstrap", False):
             return                      # apply_bootstrap refreshes once at its end
@@ -2669,6 +2704,10 @@ class LocalMeshPage(QtWidgets.QWizardPage):
                 self.src_coverage.setText(f"{total} of {total} build contexts found.")
         else:
             self.src_coverage.setText("")
+        # The code-folder rows follow the same source choice and the Domains table
+        # (every path that changes either already lands here). Cheap: the widget
+        # rebuilds only when the map differs.
+        self._refresh_code_folders()
         self.brand_note.setText(
             "" if self.boot.brand_has_conf() or not self.brand.currentText().strip()
             else f"No brands/{self.brand.currentText().strip()}.conf — runs with "
@@ -3960,8 +3999,8 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         if not url:
             QtWidgets.QMessageBox.information(
                 self, "No .onion yet",
-                "No Tor .onion has been published. Bring the mesh up with "
-                "'Expose the mesh as a Tor v3 .onion' ticked (TOR=1) and wait ~30s "
+                "No Tor .onion has been published. On the Services step, tick "
+                "\"On\" for the \"tor\" row, bring the mesh up, and wait ~30s "
                 "for tor to publish the address.")
             return
         QtWidgets.QApplication.clipboard().setText(url)
@@ -4174,11 +4213,16 @@ class LocalMeshDomainServicesPage(_LocalMeshStep):
 
     SECTION = "domain_services"
     TITLE = "Domain services"
-    SUBTITLE = ("Which optional services each domain provides, one domain per page — "
-                "this mesh's own domain first. The ‘not domain-scoped’ table below "
-                "lists the choices that bind the whole mesh instead; on this route "
-                "they are made on the ‘Services’ step two steps on, so its state "
-                "column is empty here.")
+    # Two lines at the wizard's default size: the subtitle area holds no more, and the
+    # longer sentence this replaced was cut off mid-way (#647, looked at). Short enough
+    # to stay two lines at a 13.5 pt face too (what a forced font DPI of 144 gives a
+    # 9 pt face; measured at the 736 px wide window an 800x800 screen clamps the wizard
+    # to, where the earlier 177-character sentence wrapped to three). The rest of what
+    # it said is on the page itself (the lane note above the tables, and the ‘not
+    # domain-scoped’ table's own heading).
+    SUBTITLE = ("Each domain's optional services, one domain per page, this mesh's own "
+                "first. Choices that bind the whole mesh are on the ‘Services’ step, "
+                "two steps on.")
 
     def initializePage(self):
         super().initializePage()
