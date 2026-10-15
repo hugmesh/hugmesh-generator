@@ -29,8 +29,10 @@ that.** Seeding the `mfa_required` rules (below) is inert until *you* flip a fla
 > and the cluster still ships `false` deliberately.
 >
 > **Re-measured 2026-10-14 on `main` (c0c46601).** Nothing code-side is left to land:
-> the chart block, the rendered env, the `mfa_required` rows (10 flipped + 1 deny row
-> carrying the floor) and the posture gates are all present and green. What is left
+> the chart block, the rendered env, the `mfa_required` rows (14 flipped + 1 deny row
+> carrying the floor; `main` at that commit had 10 + 1, and the four per-service
+> console rows of decision 80b are what take it to 14 + 1) and the posture gates are
+> all present and green. What is left
 > is the operator's live flip, and **§9 is the checklist for it, with the exact
 > commands.** Two things in the older text were wrong and are corrected below rather
 > than left to mislead: the flip changes **three** gate suites, not one (§3 steps 6
@@ -1311,7 +1313,7 @@ domain, and never `localhost`), `true` on the third, and `0` from the grep (the 
 guard's banner, §4.3 — absence is only meaningful if that image carries the guard; the
 trailing `|| true` is there because `grep -c` exits 1 when the count is 0).
 
-**C3. The seeded rules are what §1.2 says** — 10 flipped, 11 carrying the floor. Run
+**C3. The seeded rules are what §1.2 says** — 14 flipped, 15 carrying the floor. Run
 the two runbook blocks, unmodified, against the route-access database
 (`deploy/route-access-db`, namespace `hugmesh-pki`, database and owner role
 `gateway`, password from the pod's own `POSTGRES_PASSWORD`, per
@@ -1325,7 +1327,7 @@ $ for b in verify floor; do
   done
 ```
 
-Expect `(10 rows)` for `verify`, all `mfa_required = t`, and `(11 rows)` for `floor`
+Expect `(14 rows)` for `verify`, all `mfa_required = t`, and `(15 rows)` for `floor`
 (the extra one is the `allow = f` games-services row, §3 step 4). If the cluster was
 upgraded in place and these come back short, re-apply `20-schema.sql` (§3 step 4);
 do **not** hand-edit rows (§5).
@@ -1551,7 +1553,7 @@ read from the manifests only.
 
 ### Phase F — after each flip
 
-Re-run phase B, the C3 `floor` block (still `(11 rows)` — a flip must not move data),
+Re-run phase B, the C3 `floor` block (still `(15 rows)` — a flip must not move data),
 and the C5/C5b/C6 queries. Watch the four gateways' logs for a burst of `403` /
 `X-Route-Denied` from principals you did not expect; each is either an operator who
 missed C6 or a caller the §2.4 census did not know about.

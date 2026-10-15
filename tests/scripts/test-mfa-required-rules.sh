@@ -1285,6 +1285,44 @@ if len(sys.argv) > 2 and os.path.isfile(sys.argv[2]):
 # ... and nothing else" with eleven rows carrying the floor and no gate able to see
 # the sentence. Prose that contradicts the seed is exactly the failure this file
 # exists to make impossible.
+# ── the runbook's quoted ROW COUNTS, read back against the replayed seed ─────────
+# The `verify` / `floor` blocks above are RUN, but the sentences that quote what they
+# return ("(14 rows)", "14 flipped, 15 carrying the floor") sit in §9 and the header,
+# away from the marker, and were pure prose. Decision 80b took the flip from 10 rows to
+# 14 (floor 11 -> 15) and §9 C3 / phase F / the 2026-10-14 header kept saying 10 and 11,
+# so an operator running the checklist's own C3 would see `(14 rows)` against a promise
+# of `(10 rows)` and read a correct cluster as a failed seed. Each claim below must be
+# PRESENT (a vanished sentence is reported, not skipped) and equal the measured count.
+doc_cnt_bad = []
+if len(sys.argv) > 2 and os.path.isfile(sys.argv[2]):
+    _dt = open(sys.argv[2], encoding="utf-8").read()
+    _nflip, _nfloor = len(want_flipped), len(want_floor)
+    _claims = [
+        ("header: '<N> flipped + <M> deny row'",
+         r"`mfa_required`\s+rows\s+\((\d+)\s+flipped\s+\+\s+(\d+)\s+deny\s+rows?",
+         (_nflip, _nfloor - _nflip)),
+        ("§9 C3: '<N> flipped, <M> carrying the floor'",
+         r"seeded rules are what §1\.2 says\*\*\s+—\s+(\d+)\s+flipped,\s+(\d+)\s+carrying the floor",
+         (_nflip, _nfloor)),
+        ("§9 C3: 'Expect (<N> rows) for verify ... (<M> rows) for floor'",
+         r"Expect\s+`\((\d+) rows\)`\s+for\s+`verify`[\s\S]{0,120}?`\((\d+) rows\)`\s+for\s+`floor`",
+         (_nflip, _nfloor)),
+        ("phase F: 'floor block (still (<M> rows)'",
+         r"C3 `floor` block \(still `\((\d+) rows\)`",
+         (_nfloor,)),
+    ]
+    for _what, _rx, _want in _claims:
+        _m = re.search(_rx, _dt)
+        if not _m:
+            doc_cnt_bad.append("%s: the sentence is GONE or reworded, so its count is no longer checked" % _what)
+            continue
+        _got = tuple(int(x) for x in _m.groups())
+        if _got != _want:
+            doc_cnt_bad.append("%s says %s but the replayed seed measures %s" % (_what, _got, _want))
+emit("DOC_COUNT_BAD", len(doc_cnt_bad))
+for b in doc_cnt_bad:
+    emit("DOC_COUNT_BAD_ROW", b)
+
 doc_deny_missing, doc_deny_extra = [], []
 doc_deny_absent = []
 if len(sys.argv) > 2 and os.path.isfile(sys.argv[2]):
@@ -2221,6 +2259,10 @@ esac
   && ok "every marked runbook query returns exactly what the prose around it promises (a previous revision told operators that LIKE '/bff/%admin%' 'also returns the six rows that are false by design' — run for real it returns THREE of the six, because the other three have no 'admin' substring in url_pattern)" \
   || bad "$(g DOC_SQL_BAD) runbook SQL block(s) do not do what the prose says: $(sed -n 's/^DOC_SQL_BAD_ROW //p' "${W}/real.out" | tr '\n' ';')"
 
+[ "$(g DOC_COUNT_BAD)" = "0" ] \
+  && ok "every row count the runbook quotes for the verify and floor queries (header, §9 C3, phase F) equals what the replayed seed measures" \
+  || bad "the runbook quotes row counts the seed does not produce: $(sed -n 's/^DOC_COUNT_BAD_ROW //p' "${W}/real.out" | tr '\n' ';') — an operator running the §9 checklist would read a correct cluster as a failed seed"
+
 
 # ── §9 operator checklist: the census block, the helper, and the posture-suite list ──
 # docs/MFA-ROLLOUT.md §9 is what the operator runs on a real cluster. Three things in it
@@ -2901,6 +2943,26 @@ nd "the runbook's rollback block loses the per-service arms (it would leave the 
    'a = "\n       OR url_pattern LIKE %s OR url_pattern LIKE %s" % (repr("/bff/%/admin/%"), repr("/bff/%/superadmin/%"))
 anchor(a)
 s = s.replace(a, "", 1)'
+
+# The row counts the runbook QUOTES for verify / floor (header, §9 C3, phase F) are read
+# back against the replayed seed. Each control reverts one of them to its pre-80b value
+# (10 / 11) or deletes the sentence: both must move DOC_COUNT_BAD.
+nd "the §9 C3 expectation reverts to (10 rows) for verify (a correct cluster would read as a failed seed)" DOC_COUNT_BAD 0 \
+   'a = "Expect `(14 rows)` for `verify`"
+anchor(a)
+s = s.replace(a, "Expect `(10 rows)` for `verify`", 1)'
+nd "the phase F floor count reverts to (11 rows)" DOC_COUNT_BAD 0 \
+   'a = "block (still `(15 rows)`"
+anchor(a)
+s = s.replace(a, "block (still `(11 rows)`", 1)'
+nd "the header's flipped + deny count reverts to 10 + 1" DOC_COUNT_BAD 0 \
+   'a = "(14 flipped + 1 deny row"
+anchor(a)
+s = s.replace(a, "(10 flipped + 1 deny row", 1)'
+nd "the §9 C3 sentence is reworded so its counts are no longer read (a vanished claim is reported, not skipped)" DOC_COUNT_BAD 0 \
+   'a = "seeded rules are what §1.2 says** — 14 flipped, 15 carrying the floor."
+anchor(a)
+s = s.replace(a, "seeded rules are what section 1.2 says** — see below.", 1)'
 
 # ── the §9 census query, proven to bite (it runs against a fixture schema) ────
 # Each mutation is a way the census could quietly report an operator as covered when
