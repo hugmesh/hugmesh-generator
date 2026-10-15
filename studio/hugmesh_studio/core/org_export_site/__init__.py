@@ -23,16 +23,18 @@ the export then reports as `unchanged`.
   organisation (name, what it was exported from, how it builds, visibility).
 * `index.html` renders that list; the `Deploy Pages` workflow publishes it.
 * `.github/workflows/build-all.yml` checks out every listed repository and runs
-  what its own CI runs (Maven `verify` for Java, `npm ci` / `npm run build` /
-  `npm test` for Angular), one job per repository, on `vars.RUNS_ON` or
-  `ubuntu-latest`.
+  what the repository's release workflow and package files call for (Maven
+  `verify` with the GitHub Packages settings file for Java, `npm ci` /
+  `npm run build` / `npm test` for Angular), one job per repository, on
+  `vars.RUNS_ON` or `ubuntu-latest`.
 
 ## Secrets and variables this repository reads
 
 | Name | Kind | Why |
 | --- | --- | --- |
 | `EXPORT_READ_TOKEN` | secret | reads the private exported repositories in `build-all.yml`; without it only this repository is readable |
-| `PACKAGES_READ_TOKEN` | secret | lets Maven resolve the exported library chain from this organisation's package registry |
+| `PACKAGES_READ_TOKEN` | secret | a classic token with `read:packages`: lets Maven resolve the exported library chain from this organisation's package registry (GitHub's own job token cannot read another repository's package). The Java jobs fail early and say so when it is missing |
+| `PACKAGES_READ_ACTOR` | secret | the user name that goes with that token (optional; the workflow's actor is used when unset) |
 | `RUNS_ON` | variable | a JSON runner spec for a self-hosted runner (optional) |
 
 ## Regenerating
@@ -104,12 +106,19 @@ BUILD_ALL_YML = r"""# Build every repository exported for {{DOMAIN}} into the {{
 # actions/checkout (a token input for private repositories — set the
 # EXPORT_READ_TOKEN secret to a token that can read every exported repository;
 # without it the job's own GITHUB_TOKEN is used, which reads only this repository),
-# then built the way the repository's own CI builds it:
-#   java    -> ./mvnw -B -s settings.xml verify   (settings.xml when the repo has one)
+# then built from what the repository ships:
+#   java    -> ./mvnw -B -s .github/maven-ci-settings.xml verify
+#              (repos.json says which settings file a repository has; the
+#              repository-root settings.xml is the GitLab registry file and is not
+#              passed. The settings file reads UPSTREAM_PACKAGES_ACTOR and
+#              UPSTREAM_PACKAGES_TOKEN, set below from PACKAGES_READ_ACTOR /
+#              PACKAGES_READ_TOKEN. The private library chain only resolves once the
+#              exported libraries' own release workflows have published to this
+#              organisation's registry.)
 #   angular -> npm ci, npm run build, npm test    (Karma on ChromeHeadlessCI)
 #   none    -> nothing to build here (its own CI, if any, is the gate)
-# The commands are the ones the repositories' ci.yml / release.yml files run; the
-# org holds no composite actions to call instead.
+# This follows the repositories' release.yml and package files; the org holds no
+# composite actions to call instead.
 #
 # RUNS_ON is the repository variable the org's workflows use for a self-hosted
 # runner (a JSON runner spec); unset, every job runs on ubuntu-latest.
@@ -176,14 +185,20 @@ jobs:
         if: matrix.build == 'java'
         working-directory: src
         env:
-          # the library chain (build-config, parent, commons, auth-core) resolves
-          # from this org's package registry once its release workflows have run
-          GITHUB_ACTOR: ${{ github.actor }}
-          GITHUB_TOKEN: ${{ secrets.PACKAGES_READ_TOKEN || secrets.GITHUB_TOKEN }}
+          # the names .github/maven-ci-settings.xml reads. No fall-back to the job
+          # token: it cannot read another repository's package, and an empty token
+          # would only fail later as an unresolvable parent POM
+          UPSTREAM_PACKAGES_ACTOR: ${{ secrets.PACKAGES_READ_ACTOR || github.actor }}
+          UPSTREAM_PACKAGES_TOKEN: ${{ secrets.PACKAGES_READ_TOKEN }}
+          MAVEN_SETTINGS: ${{ matrix.settings }}
         run: |
           set -eu
-          if [ -f settings.xml ]; then
-            ./mvnw -B -s settings.xml verify
+          if [ -n "${MAVEN_SETTINGS}" ]; then
+            if [ "${MAVEN_SETTINGS}" = ".github/maven-ci-settings.xml" ] && [ -z "${UPSTREAM_PACKAGES_TOKEN}" ]; then
+              echo "::error::secret PACKAGES_READ_TOKEN is not set: Maven cannot read the private libraries from this organisation's package registry"
+              exit 1
+            fi
+            ./mvnw -B -s "${MAVEN_SETTINGS}" verify
           else
             ./mvnw -B verify
           fi

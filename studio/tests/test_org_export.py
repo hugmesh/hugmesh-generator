@@ -267,6 +267,150 @@ def test_snapshot_excludes_assistant_files_build_output_and_secrets(world):
     assert os.path.isfile(os.path.join(rp.workdir, "docs", "kept.md"))
 
 
+def _plant(src, files):
+    for rel, text in files.items():
+        full = os.path.join(src, rel)
+        os.makedirs(os.path.dirname(full) or src, exist_ok=True)
+        with open(full, "w", encoding="utf-8") as fh:
+            fh.write(text)
+    _git(src, "add", "-A", "-f")
+    _git(src, "-c", "commit.gpgsign=false", "commit", "-q", "-m", "plant")
+    _git(src, "update-ref", "refs/remotes/origin/main", "HEAD")
+
+
+def test_an_npmrc_is_dropped_by_content_and_env_examples_stay(world):
+    """A token-free .npmrc is build configuration a Dockerfile COPYs; a login is not."""
+    cfg, runner = world["cfg"], world["runner"]
+    _plant(os.path.join(world["src"], "hugmesh-parent"), {
+        ".npmrc": "legacy-peer-deps=true\n",
+        "tokened/.npmrc": "//registry.example/:_authToken=${NPM_TOKEN}\n",
+        "basic/.npmrc": "//registry.example/:_password=abc\n",
+        "plain/.npmrc": "_auth=abc\n",
+        ".env.example": "API_URL=\n",
+        ".env.sample": "API_URL=\n",
+        ".env.template": "API_URL=\n",
+        ".env.local": "API_URL=secret\n",
+        ".env.production": "API_URL=secret\n",
+        "Dockerfile.test": "COPY package*.json .npmrc ./\n"})
+    p = oe.plan(cfg, runner, stamp="20260101T000000Z", probe=False)
+    rp = next(r for r in p.repos if r.source == "hugmesh-parent")
+    for kept in (".npmrc", ".env.example", ".env.sample", ".env.template"):
+        assert os.path.isfile(os.path.join(rp.workdir, kept)), kept
+        assert not any(e.startswith(kept + ":") for e in rp.excluded), rp.excluded
+    assert open(os.path.join(rp.workdir, ".npmrc")).read() == "legacy-peer-deps=true\n"
+    for gone in ("tokened/.npmrc", "basic/.npmrc", "plain/.npmrc", ".env.local",
+                 ".env.production"):
+        assert not os.path.exists(os.path.join(rp.workdir, gone)), gone
+        assert any(e.startswith(gone + ":") for e in rp.excluded), (gone, rp.excluded)
+    assert "tokened/.npmrc: npm login in .npmrc" in rp.excluded
+    assert not rp.blocked
+
+
+def test_a_rename_that_is_not_a_repository_name_is_a_problem_and_touches_nothing(
+        world, tmp_path):
+    cfg, runner = world["cfg"], world["runner"]
+    victim = tmp_path / "VICTIM"
+    victim.mkdir()
+    (victim / "precious.txt").write_text("keep\n")
+    for bad in ("../../VICTIM", "../x", "a/b", "..", ".hidden", "x y", ""):
+        cfg.rename_map = {"repos": {"hugmesh-commons": bad}}
+        assert any("bad repository rename" in pr for pr in cfg.problems()), bad
+        with pytest.raises(ValueError, match="bad repository rename"):
+            oe.plan(cfg, runner, probe=False)
+    cfg.rename_map = {"repos": {"../src": "ok"}}
+    assert any("bad repository rename" in pr for pr in cfg.problems())
+    cfg.rename_map = {"repos": ["hugmesh-commons"]}
+    assert any("repos must be an object" in pr for pr in cfg.problems())
+    assert (victim / "precious.txt").read_text() == "keep\n"
+    assert not os.path.exists(os.path.join(world["gen"], "out", "org-export"))
+
+
+def test_a_config_file_with_a_bad_inline_rename_is_refused_at_load(world, tmp_path):
+    path = tmp_path / "export.json"
+    path.write_text(json.dumps({"org": "exampleorg", "domain": "mesh.example",
+                                "rename_map": {"repos": {"hugmesh-commons": "../../VICTIM"}}}))
+    with pytest.raises(ValueError, match="bad repository rename"):
+        oe.load_config(str(path), world["gen"])
+
+
+def test_the_work_directory_guard_stops_a_target_that_escapes_even_if_problems_is_bypassed(
+        world, tmp_path):
+    victim = tmp_path / "VICTIM"
+    victim.mkdir()
+    (victim / "precious.txt").write_text("keep\n")
+    cfg = world["cfg"]
+    cfg.rename_map = {"repos": {"hugmesh-commons": "../../VICTIM"}}
+    out_dir = str(tmp_path / "guard-out")
+    os.makedirs(out_dir)
+    with pytest.raises(ValueError, match="not a repository name"):
+        oe._prepare_repo(world["runner"], "hugmesh-commons", cfg, [], out_dir, [])
+    assert (victim / "precious.txt").read_text() == "keep\n"
+
+
+def test_each_java_repository_records_the_settings_file_a_github_build_can_use(world):
+    """The repository-root settings.xml of the fixtures is the GitLab registry file;
+    only the file under .github reads the GitHub Packages login."""
+    p = oe.plan(world["cfg"], world["runner"], stamp="20260101T000000Z", probe=False)
+    by = {r.source: r for r in p.repos}
+    assert by["hugmesh-parent"].maven_settings == ".github/maven-ci-settings.xml"
+    assert by["hugmesh-commons"].maven_settings == ""
+    assert any("GitLab registry file" in n for n in by["hugmesh-commons"].notes)
+    rows = {r["source"]: r for r in json.load(
+        open(os.path.join(p.site.workdir, "repos.json")))["repos"]}
+    assert rows["hugmesh-parent"]["settings"] == ".github/maven-ci-settings.xml"
+    assert rows["hugmesh-commons"]["settings"] == ""
+    assert not any("CI_API_V4_URL" in open(os.path.join(p.site.workdir, f), encoding="utf-8").read()
+                   for f in (".github/workflows/build-all.yml", "repos.json"))
+
+
+def _maven_step_script(site_workdir):
+    doc = yaml.safe_load(open(os.path.join(site_workdir, ".github/workflows/build-all.yml"),
+                              encoding="utf-8"))
+    step = next(st for st in doc["jobs"]["build"]["steps"]
+                if st.get("name", "").startswith("Maven verify"))
+    return step["run"], step["env"]
+
+
+@pytest.mark.parametrize("settings, token, want_rc, want_args", [
+    (".github/maven-ci-settings.xml", "tok", 0, "-B -s .github/maven-ci-settings.xml verify"),
+    (".github/maven-ci-settings.xml", "", 1, None),     # fails early and says why
+    ("", "", 0, "-B verify"),                             # no settings file: plain verify
+])
+def test_the_generated_maven_step_runs_the_recorded_settings_and_needs_the_token(
+        world, tmp_path, settings, token, want_rc, want_args):
+    """The step's own shell, run against a stub mvnw: what it passes is what the
+    plan recorded, and the CI settings file never runs without a read token."""
+    import subprocess
+    p = oe.plan(world["cfg"], world["runner"], stamp="20260101T000000Z", probe=False)
+    script, env = _maven_step_script(p.site.workdir)
+    assert set(env) == {"UPSTREAM_PACKAGES_ACTOR", "UPSTREAM_PACKAGES_TOKEN", "MAVEN_SETTINGS"}
+    work = tmp_path / "mvn-step"
+    work.mkdir()
+    mvnw = work / "mvnw"
+    mvnw.write_text('#!/bin/sh\necho "mvnw $*" > ran.txt\n')
+    mvnw.chmod(0o755)
+    res = subprocess.run(["bash", "-c", script], cwd=work, capture_output=True, text=True,
+                         env={"PATH": os.environ["PATH"], "MAVEN_SETTINGS": settings,
+                              "UPSTREAM_PACKAGES_TOKEN": token,
+                              "UPSTREAM_PACKAGES_ACTOR": "someone"})
+    assert res.returncode == want_rc, res.stdout + res.stderr
+    if want_args:
+        assert (work / "ran.txt").read_text().strip() == f"mvnw {want_args}"
+    else:
+        assert "PACKAGES_READ_TOKEN" in res.stdout and not (work / "ran.txt").exists()
+
+
+def test_a_root_settings_file_that_is_not_the_gitlab_one_is_used_when_no_ci_file(tmp_path):
+    wd = tmp_path / "wd"
+    wd.mkdir()
+    assert oe._maven_settings(str(wd)) == ("", "")
+    (wd / "settings.xml").write_text("<settings/>\n")
+    assert oe._maven_settings(str(wd)) == ("settings.xml", "")
+    (wd / ".github").mkdir()
+    (wd / ".github" / "maven-ci-settings.xml").write_text("<settings/>\n")
+    assert oe._maven_settings(str(wd)) == (".github/maven-ci-settings.xml", "")
+
+
 def test_a_planted_banned_marker_refuses_that_repository_and_names_the_file(world):
     cfg, runner = world["cfg"], world["runner"]
     src = os.path.join(world["src"], "hugmesh-commons")
@@ -575,7 +719,13 @@ def test_site_repo_lists_every_exported_repository_and_its_workflows_parse(world
     assert "repository: exampleorg/${{ matrix.name }}" in build
     assert "secrets.EXPORT_READ_TOKEN" in build
     assert "repos.json" in build                                # the list is read, not inlined
-    assert "./mvnw -B -s settings.xml verify" in build
+    # the repository-root settings.xml is the GitLab registry file: never passed
+    assert '-s "${MAVEN_SETTINGS}"' in build and "-s settings.xml" not in build
+    assert "UPSTREAM_PACKAGES_ACTOR: ${{ secrets.PACKAGES_READ_ACTOR || github.actor }}" in build
+    assert "UPSTREAM_PACKAGES_TOKEN: ${{ secrets.PACKAGES_READ_TOKEN }}" in build
+    assert "MAVEN_SETTINGS: ${{ matrix.settings }}" in build
+    assert "secrets.GITHUB_TOKEN" not in build     # the job token cannot read a sibling's package
+    assert "ci.yml" not in build
     assert "npm ci" in build and "npm run build" in build and "npm test" in build
     assert "uses: actions/checkout@v4" in build                 # the org's own pin level
     pages = open(os.path.join(site.workdir, ".github/workflows/pages.yml"),

@@ -60,13 +60,15 @@ THE SITE REPOSITORY ``<domain>.github.io`` is generated from the templates under
 ``org_export_site/``: a small static page listing the exported repositories from a
 generated ``repos.json``, a workflow that clones every exported repository (one
 matrix job each, a token input for private ones) and runs what each repository's own
-CI runs — ``./mvnw -B -s settings.xml verify`` for a Java repository, ``npm ci``,
-``npm run build`` and ``npm test`` (Karma, ChromeHeadlessCI) for an Angular one — on
-``vars.RUNS_ON`` the way the org's workflows do, and a Pages workflow that publishes
-the site. NOTE: the org holds no composite GitHub Actions (``hugmesh-actions`` is a
-Java service, and no ``action.yml`` or ``workflow_call`` exists on any default
-branch), so the build steps are spelled inline, taken from the repositories' own
-``ci.yml`` files.
+CI runs — ``./mvnw -B -s .github/maven-ci-settings.xml verify`` for a Java repository
+(that file reads the package-registry login from ``UPSTREAM_PACKAGES_ACTOR`` and
+``UPSTREAM_PACKAGES_TOKEN``; the repository-root ``settings.xml`` is the GitLab
+registry file and cannot work from GitHub), ``npm ci``, ``npm run build`` and
+``npm test`` (Karma, ChromeHeadlessCI) for an Angular one — on ``vars.RUNS_ON`` the
+way the org's workflows do, and a Pages workflow that publishes the site. NOTE: the
+org holds no composite GitHub Actions (``hugmesh-actions`` is a Java service, and no
+``action.yml`` or ``workflow_call`` exists on any default branch), so the build
+steps are spelled inline, following the repositories' own ``release.yml`` files.
 
 NEVER: a force push, a delete, a mirror, or a push into an existing non-empty
 repository — whatever branch its content lives on (apply lists EVERY head and reads
@@ -127,8 +129,13 @@ EXCLUDED_DIRS = frozenset({".claude", ".stack-src", "node_modules", "target", "d
 EXCLUDED_NAMES = frozenset({"CLAUDE.md", ".e2e-credentials"})
 #: Secret-shaped file names (fnmatch on the base name) dropped from a snapshot.
 SECRET_GLOBS = ("*.pem", "*.key", "*.p12", "*.pfx", "*.jks", "*.keystore", ".env",
-                ".env.*", "id_rsa*", "id_ed25519*", "id_ecdsa*", ".npmrc", ".netrc",
+                ".env.*", "id_rsa*", "id_ed25519*", "id_ecdsa*", ".netrc",
                 "*.secret", "*credentials*.json", "*.kubeconfig")
+#: ``.env.*`` files that only SHOW the variable names (never values) and are kept.
+ENV_TEMPLATE_NAMES = frozenset({".env.example", ".env.sample", ".env.template"})
+#: An ``.npmrc`` is dropped only when it holds a login. A token-free one
+#: (``legacy-peer-deps=true``) is build configuration that a Dockerfile may COPY.
+_NPMRC_LOGIN_RE = re.compile(r"_authToken|_auth\s*=|_password|:_auth\b", re.IGNORECASE)
 
 # The banned markers are spelled from PARTS so this module's own source (which is
 # part of the generator's exported tree) never carries one.
@@ -293,12 +300,27 @@ class ExportConfig:
                 re.compile(str(rule["pattern"]))
             except re.error as exc:
                 out.append(f"rename_map: bad regex {rule['pattern']!r}: {exc}")
+        out.extend(repo_rename_problems((self.rename_map or {}).get("repos")))
         if not self.remote_base.endswith("/"):
             out.append("remote_base must end with '/'")
         return out
 
     def to_dict(self) -> dict:
         return asdict(self)
+
+
+def repo_rename_problems(repos) -> list[str]:
+    """Problem lines for a ``repos`` rename table. A target becomes a folder under
+    the work directory and a ``gh repo create`` argument, so BOTH sides must be
+    plain repository names: a ``../x`` would otherwise reach ``shutil.rmtree``."""
+    if repos in (None, {}):
+        return []
+    if not isinstance(repos, dict):
+        return ["rename_map: repos must be an object of source -> target names"]
+    return [f"rename_map: bad repository rename {src!r} -> {dst!r}"
+            for src, dst in repos.items()
+            if not (isinstance(src, str) and isinstance(dst, str)
+                    and _REPO_RE.match(src) and _REPO_RE.match(dst))]
 
 
 _GENERIC_KEYS = set(ExportConfig.__dataclass_fields__)
@@ -539,6 +561,9 @@ def load_config(path: str, generator_dir: str = "", domain: str = "",
             raise ValueError(f"{path}: unknown keys {', '.join(unknown)}")
         kw = {k: v for k, v in data.items() if k in _GENERIC_KEYS}
         if isinstance(kw.get("rename_map"), dict):
+            bad = repo_rename_problems(kw["rename_map"].get("repos"))
+            if bad:
+                raise ValueError(f"{path}: {'; '.join(bad)}")
             kw["rename_map"] = merge_rename_maps({}, kw["rename_map"])
         cfg = ExportConfig(**kw)
         if domain:
@@ -665,6 +690,7 @@ class RepoPlan:
     visibility: str
     action: str                       # see ACTIONS
     kind: str = "other"               # java | java+settings | angular | site | other
+    maven_settings: str = ""          # the -s file a Java build passes ("" = none)
     source_path: str = ""
     ref: str = ""
     source_commit: str = ""
@@ -721,7 +747,9 @@ def _is_text(path: str) -> bool:
     return b"\0" not in head
 
 
-def _excluded_reason(rel: str) -> str:
+def _excluded_reason(rel: str, workdir: str = "") -> str:
+    """Why ``rel`` is dropped from a snapshot, or "". Most secret-shaped files go by
+    NAME; ``.npmrc`` goes by CONTENT (needs ``workdir`` to read it)."""
     parts = rel.split("/")
     for p in parts[:-1]:
         if p in EXCLUDED_DIRS:
@@ -731,6 +759,15 @@ def _excluded_reason(rel: str) -> str:
         return f"directory {base}/"
     if base in EXCLUDED_NAMES:
         return "excluded file name"
+    if base in ENV_TEMPLATE_NAMES:
+        return ""
+    if base == ".npmrc":
+        try:
+            with open(os.path.join(workdir, rel), "rb") as fh:
+                text = fh.read(1 << 20).decode("utf-8", "replace")
+        except OSError:
+            return "unreadable .npmrc (could hold a login)"
+        return "npm login in .npmrc" if _NPMRC_LOGIN_RE.search(text) else ""
     for g in SECRET_GLOBS:
         if fnmatch.fnmatch(base, g):
             return f"secret-shaped name ({g})"
@@ -790,6 +827,12 @@ def _snapshot(runner: Runner, path: str, ref: str, workdir: str) -> list[str]:
 def _prepare_repo(runner: Runner, name: str, cfg: ExportConfig, rules, out_dir: str,
                   skip_globs) -> RepoPlan:
     target = repo_target_name(name, cfg)
+    # the target names a folder that _snapshot empties and a repository gh creates,
+    # so it must be a plain name that stays under <out>/work, whatever fed it
+    workdir = os.path.join(out_dir, "work", target)
+    if not _REPO_RE.match(target) or os.path.dirname(os.path.realpath(workdir)) \
+            != os.path.realpath(os.path.join(out_dir, "work")):
+        raise ValueError(f"not a repository name: {target!r} (from {name!r})")
     rp = RepoPlan(source=name, target=target, org=cfg.org.strip(),
                   visibility=cfg.visibility, action="")
     rp.source_path = _source_path(name, cfg)
@@ -804,12 +847,12 @@ def _prepare_repo(runner: Runner, name: str, cfg: ExportConfig, rules, out_dir: 
         rp.action = "missing source"
         rp.notes.append(f"{rp.source_path}: no origin/HEAD, origin/main or HEAD to export")
         return rp
-    rp.workdir = os.path.join(out_dir, "work", target)
+    rp.workdir = workdir
     files = _snapshot(runner, rp.source_path, rp.ref, rp.workdir)
     exclude_globs = list(cfg.rename_map.get("exclude") or [])
     kept: list[str] = []
     for rel in files:
-        why = _excluded_reason(rel)
+        why = _excluded_reason(rel, rp.workdir)
         if not why and _glob_matches(rel, name, exclude_globs):
             why = "excluded by the rename map"
         if why:
@@ -833,7 +876,10 @@ def _prepare_repo(runner: Runner, name: str, cfg: ExportConfig, rules, out_dir: 
             except OSError:
                 pass
     rp.files = len(kept)
+    settings_note = ""
     rp.kind = _kind(rp.workdir)
+    if rp.kind.startswith("java"):
+        rp.maven_settings, settings_note = _maven_settings(rp.workdir)
     for rel in kept:
         full = os.path.join(rp.workdir, rel)
         if not _is_text(full):
@@ -858,6 +904,8 @@ def _prepare_repo(runner: Runner, name: str, cfg: ExportConfig, rules, out_dir: 
         rp.notes.append("remove the marker from the source repository, or drop the "
                         "file from the snapshot with the rename map's exclude list "
                         f"(\"{name}:<path>\") — the export never publishes it")
+    if settings_note:
+        rp.notes.append(settings_note)
     return rp
 
 
@@ -868,6 +916,33 @@ def _kind(workdir: str) -> str:
     if os.path.isfile(os.path.join(workdir, "angular.json")):
         return "angular"
     return "other"
+
+
+#: The settings file that resolves the org's private libraries from GitHub Packages.
+CI_SETTINGS = ".github/maven-ci-settings.xml"
+
+
+def _maven_settings(workdir: str) -> tuple[str, str]:
+    """``(file, note)``: the Maven settings a GitHub build of this repository passes.
+    The repository-root ``settings.xml`` is normally the GitLab group-registry file
+    (it reads ``CI_API_V4_URL``), which cannot work from GitHub — so the CI settings
+    file wins, a root file is used only when it is not the GitLab one, and otherwise
+    the build passes none (and the plan says so)."""
+    if os.path.isfile(os.path.join(workdir, CI_SETTINGS)):
+        return CI_SETTINGS, ""
+    root = os.path.join(workdir, "settings.xml")
+    if not os.path.isfile(root):
+        return "", ""
+    try:
+        with open(root, encoding="utf-8", errors="replace") as fh:
+            gitlab = "CI_API_V4_URL" in fh.read()
+    except OSError:
+        gitlab = True
+    if gitlab:
+        return "", ("settings.xml is the GitLab registry file and there is no "
+                    f"{CI_SETTINGS}: the generated build runs Maven without -s, "
+                    "so private parent POMs will not resolve from GitHub")
+    return "settings.xml", ""
 
 
 def _probe(runner: Runner, rp: RepoPlan, cfg: ExportConfig) -> None:
@@ -964,7 +1039,7 @@ def _prepare_site(cfg: ExportConfig, repos: list[RepoPlan], out_dir: str,
     os.makedirs(os.path.join(site.workdir, ".github", "workflows"))
     exported = [r for r in repos if not r.blocked]
     rows = [{"name": r.target, "source": r.source, "build": _build_word(r.kind),
-             "settings": r.kind == "java+settings", "visibility": r.visibility,
+             "settings": r.maven_settings, "visibility": r.visibility,
              "url": f"https://github.com/{r.org}/{r.target}"} for r in exported]
     # NO run stamp anywhere in the site's content: the same inputs must give the
     # same tree, so a re-run reports the site `unchanged` like every other repository

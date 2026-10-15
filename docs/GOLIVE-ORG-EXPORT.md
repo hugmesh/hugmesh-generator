@@ -63,7 +63,11 @@ mesh on this machine names an org, or when you add a config file on the step its
 2. snapshots each repository's **default branch** (`origin/HEAD`, else `origin/main`,
    else `HEAD`) with `git archive` — no history — into `<out>/work/<new name>/`;
 3. drops `CLAUDE.md`, `.claude/`, `.stack-src`, `node_modules`, build output and
-   secret-shaped files (`*.pem`, `*.key`, `.env`, `id_rsa*`, …) and lists each one;
+   secret-shaped files (`*.pem`, `*.key`, `.env`, `id_rsa*`, …) and lists each one.
+   Two names are decided by content: an `.npmrc` is dropped only when it holds a
+   login (`_authToken`, `_auth=`, `_password`), so a token-free one such as
+   `legacy-peer-deps=true`, which a Dockerfile may `COPY`, stays; and `.env.example`,
+   `.env.sample` and `.env.template` stay (every other `.env.*` is dropped);
 4. **refuses** a repository, naming the file, when a banned marker is found in what
    would be published: a co-author trailer, a tool footer, an assistant session link,
    an API key, a private-key header;
@@ -189,14 +193,19 @@ export creates a small new repository:
 | --- | --- |
 | `repos.json` | every exported repository: name, source, build kind (`java` / `angular` / `none`), visibility, URL |
 | `index.html` | a page listing them, read from `repos.json` |
-| `.github/workflows/build-all.yml` | one matrix job per repository: `actions/checkout` of `<org>/<name>` (the `EXPORT_READ_TOKEN` secret for private repositories), then what the repository's own CI runs — `./mvnw -B -s settings.xml verify` for Java, `npm ci` / `npm run build` / `npm test` (Karma, ChromeHeadlessCI) for Angular |
+| `.github/workflows/build-all.yml` | one matrix job per repository: `actions/checkout` of `<org>/<name>` (the `EXPORT_READ_TOKEN` secret for private repositories), then, for Java, `./mvnw -B -s .github/maven-ci-settings.xml verify` with the package-registry login in `UPSTREAM_PACKAGES_ACTOR` / `UPSTREAM_PACKAGES_TOKEN` (from the `PACKAGES_READ_ACTOR` / `PACKAGES_READ_TOKEN` secrets), and for Angular `npm ci` / `npm run build` / `npm test` (Karma, ChromeHeadlessCI) |
 | `.github/workflows/pages.yml` | publishes the site with GitHub Pages (`configure-pages` / `upload-pages-artifact` / `deploy-pages`) |
 
 Both workflows run on `${{ fromJSON(vars.RUNS_ON || '"ubuntu-latest"') }}`, the way
 the org's release workflows do. The org holds no composite GitHub Actions
 (`hugmesh-actions` is a Java service; no `action.yml` or `workflow_call` exists on any
-default branch), so the build steps are spelled inline, taken from the repositories'
-own `ci.yml` files. Third-party actions are pinned at the same level the existing
+default branch), so the build steps are spelled inline, following the repositories'
+`release.yml` files (only three repositories have a `ci.yml`, and the Java one runs on
+a self-hosted runner with GitLab secrets). The repository-root `settings.xml` of a Java
+repository is the GitLab registry file and cannot work from GitHub, so it is never
+passed: the export records in `repos.json` which settings file each repository has
+(`.github/maven-ci-settings.xml`, or none) and the plan notes a Java repository that
+has neither. Third-party actions are pinned at the same level the existing
 workflows pin them (`@v4`, `@v5`).
 
 ## 5. From a terminal
@@ -267,8 +276,10 @@ start nothing.
 * The first real run needs `gh auth login` with an account that can create
   repositories in the organisation, and the organisation's settings must allow it.
 * Repository secrets on `<domain>.github.io`: `EXPORT_READ_TOKEN` (reads the private
-  exported repositories), `PACKAGES_READ_TOKEN` (Maven reads the exported library
-  chain from the org's package registry) and, if wanted, the `RUNS_ON` variable.
+  exported repositories), `PACKAGES_READ_TOKEN` (a classic token with
+  `read:packages`; Maven reads the exported library chain from the org's package
+  registry, and the Java jobs stop with a clear message when it is missing),
+  `PACKAGES_READ_ACTOR` (its user name, optional) and, if wanted, the `RUNS_ON` variable.
 * Publish the exported Java library chain from the new organisation (each library's
   `release.yml`) before the site's build job can verify the Java apps.
 * Enable Pages on the site repository (Settings -> Pages -> Source: GitHub Actions).
