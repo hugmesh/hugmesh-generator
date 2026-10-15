@@ -61,7 +61,12 @@ function list(csv: string): string[] {
 function mirrorRows(): SeedRow[] {
   return ROUTE_ACCESS.map((r) => ({
     gateway: r.gateway, urlPattern: r.urlPattern, role: r.role,
-    allow: r.allow, origin: 'tests/e2e/specs/rbac-route-access.ts',
+    allow: r.allow,
+    // The generated oracle's EXPECTED_COLUMNS is (gateway, url_pattern, role,
+    // allow) only — mfa_required is not modelled in this mirror at all (see
+    // gen-route-access-oracle.py's own docstring). false here, always; nothing
+    // in THIS file's scenarios reads mfaRequired off a mirror row.
+    mfaRequired: false, origin: 'tests/e2e/specs/rbac-route-access.ts',
   }));
 }
 
@@ -128,6 +133,21 @@ Then('the deny came from an explicit deny row', async ({ world }) => {
 Then('the deciding url pattern is {string}', async ({ world }, pattern: string) => {
   const v = world.get<SeedVerdict>('verdict');
   expect(v.pattern, `at ${world.get<string>('verdictAt')}`).toBe(pattern);
+});
+
+// ── decision 56 — the declared MFA-required set (hugmesh-generator#347,
+// 2026-09-18) ─────────────────────────────────────────────────────────────
+
+Then('the deciding rule requires MFA', async ({ world }) => {
+  const v = world.get<SeedVerdict>('verdict');
+  expect(v.mfaRequired, `at ${world.get<string>('verdictAt')} (winning pattern ${v.pattern})`)
+    .toBe(true);
+});
+
+Then('the deciding rule does not require MFA', async ({ world }) => {
+  const v = world.get<SeedVerdict>('verdict');
+  expect(v.mfaRequired, `at ${world.get<string>('verdictAt')} (winning pattern ${v.pattern})`)
+    .toBe(false);
 });
 
 // ── seed shape ───────────────────────────────────────────────────────────────

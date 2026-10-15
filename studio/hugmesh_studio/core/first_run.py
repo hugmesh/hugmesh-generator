@@ -74,7 +74,7 @@ def _say(msg: str) -> None:
 
 def bin_dir() -> str:
     """The per-user executables dir (XDG: ``~/.local/bin``); no sudo, ever.
-    ``$HUGMESH_BIN_DIR`` overrides it — the test seam, same shape as
+    ``$HUGMESH_BIN_DIR`` overrides it — the test override point, same shape as
     ``$HUGMESH_STUDIO_STATE_DIR``."""
     return os.environ.get("HUGMESH_BIN_DIR") or os.path.join(
         os.path.expanduser("~"), ".local", "bin")

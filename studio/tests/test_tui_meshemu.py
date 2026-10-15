@@ -228,3 +228,47 @@ def test_main_meshemu_unknown_session_exits_2(gen, capsys):
                       inp=io.StringIO(""), out=io.StringIO())
     assert rc == 2
     assert "no artifact session" in capsys.readouterr().err
+
+
+# ── #637: a refused session prints the refusal, never the argv the GUI refuses ──────
+from _session_records import write_build_record  # noqa: E402
+
+
+def test_a_refused_session_shows_no_start_hint(gen):
+    write_build_record(SESSION, domains=("a.example", "b.example"),
+                       reviewed=("hugmesh.net", "a.example"))
+    j = _at_table(gen)
+    text = "\n".join(j.lines())
+    assert "! refused" in text and "b.example" in text
+    j.feed("1")                              # a device's detail
+    detail = "\n".join(j.lines())
+    assert "! refused: " in detail and "b.example" in detail
+    import shlex
+    from hugmesh_studio.core import emulation as _emu
+    screen = j._screens["meshemu"]
+    eplan, label = screen._eplan, screen._detail.label
+    for argv in (_emu.start_device_argv(eplan, label), _emu.run_argv(eplan)):
+        assert shlex.join(argv) not in detail, "a start argv was handed over anyway"
+    assert "start the WHOLE mesh with:" not in detail
+    assert "stop everything with:" in detail  # stopping boots nothing: kept
+
+
+def test_an_unrecorded_session_keeps_its_start_hints(gen):
+    j = _at_table(gen)
+    assert "! refused" not in "\n".join(j.lines())
+    j.feed("1")
+    assert "start the WHOLE mesh with:" in "\n".join(j.lines())
+
+
+def test_a_parseable_but_malformed_record_does_not_take_the_screen_down(gen):
+    """A hand-edited record whose config is not a worklist (post-merge review of
+    PR #644): the gate's guard answers "nothing to say" and the screen renders its
+    start hint as for an unrecorded session, instead of the screen dying on the
+    record read."""
+    from hugmesh_studio.core import build_sessions
+    os.makedirs(build_sessions.sessions_dir(), exist_ok=True)
+    with open(os.path.join(build_sessions.sessions_dir(), SESSION + ".json"), "w",
+              encoding="utf-8") as fh:
+        json.dump({"id": SESSION, "config": None}, fh)
+    j = _at_table(gen)
+    assert "! refused" not in "\n".join(j.lines())

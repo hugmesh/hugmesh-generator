@@ -142,7 +142,7 @@ build-orangepi-zero3-stage4.sh:1545), and rpi5/x86 default to 1 but take an over
    drift. Verified against a real per-package log written by the operator's own build,
    ``wl-pki.x86/sysroot/var/log/portage/build/net-libs:nghttp2-1.68.0:20260730-043807.log``
    (613 lines), which carries the full ladder plus ``>>> Done.`` — and NOT the scheduler's
-   ``>>> Completed (N of M)``. That asymmetry is load-bearing: ``>>> Done.`` is written
+   ``>>> Completed (N of M)``. That asymmetry is relied on: ``>>> Done.`` is written
    before portage merges the package into the ROOT, so nothing on the poll path may
    settle a row. Only the stream's ``Completed (N of M)`` line reaches 100%.
 
@@ -658,7 +658,7 @@ class EmergePackageParser:
         self._explicit_log: set[str] = set()              # atoms portage named a log for
         self._await_fail_log: PackageProgress | None = None
         self._await_fail_budget = 0
-        # ── parallel-emerge state (all inert on a serial build) ──────────────────────
+        # ── parallel-emerge state (all unused on a serial build) ──────────────────────
         self._sched = SchedulerState()
         self._parallel = False                            # sticky; see _note_parallel
         self._tails: dict[str, _Tail] = {}                # atom -> incremental read cursor

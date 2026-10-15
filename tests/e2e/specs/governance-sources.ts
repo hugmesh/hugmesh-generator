@@ -130,6 +130,10 @@ export interface SeedRow {
   role: string;
   /** false = an EXPLICIT DENY row (deny-wins in GatewayRouteAccessService). */
   allow: boolean;
+  /** D8 second-factor gate, narrowed by decision 56 (hugmesh-generator#347,
+   *  2026-09-18) on the in-image floor. See sqlSeedRows()/canonicalSeedRows()
+   *  for how each source computes it. */
+  mfaRequired: boolean;
   /** Where the row came from, for a failure message that names a file. */
   origin: string;
 }
@@ -147,9 +151,40 @@ export const SQL_SEED_PATH =
   'specs/cluster/manifests/route-access/initdb/20-schema.sql';
 
 /**
+ * The blanket mfa_required flip in {@link SQL_SEED_PATH} (the `UPDATE
+ * gateway_route_access SET mfa_required = true WHERE allow AND (url_pattern =
+ * '/bff/admin' OR LIKE '/bff/admin/%' OR = '/bff/superadmin' OR LIKE
+ * '/bff/superadmin/%')` statement, right after the decision-28 row-scoped one).
+ * Mirrors that WHERE clause; the SQL side is pinned directly by
+ * tests/scripts/test-mfa-required-rules.sh, so a drift between the two shows up
+ * as THIS module's own rows disagreeing with a hand check of the SQL, not as a
+ * silent gap here.
+ */
+function sqlBlanketMfaRequired(row: { allow: boolean; urlPattern: string }): boolean {
+  if (!row.allow) return false;
+  const p = row.urlPattern;
+  return p === '/bff/admin' || p.startsWith('/bff/admin/')
+      || p === '/bff/superadmin' || p.startsWith('/bff/superadmin/');
+}
+
+/**
+ * The ROW-SCOPED mfa_required flip decision 28 (=D, hugmesh-generator#347,
+ * 2026-09-17) added — the one deny row the blanket flip above does not reach
+ * (allow=false is outside its `WHERE allow` clause).
+ */
+function sqlRowScopedMfaRequired(row: { gateway: string; urlPattern: string; role: string; allow: boolean }): boolean {
+  return row.gateway === 'hugmesh-fe-gateway' && !row.allow
+      && row.urlPattern === '/bff/superadmin/games-services/**' && row.role === 'ROLE_SUPERADMIN';
+}
+
+/**
  * The cluster Postgres seed — the rows a deployed gateway actually loads.
  * Parsed from the `INSERT INTO gateway_route_access (…) VALUES` tuples, over
  * COMMENT-STRIPPED SQL so a commented-out row can never be counted.
+ * `mfaRequired` is derived from the two flip UPDATEs, not read off a 5th tuple
+ * value — the file's own comments explain why mfa_required is never a 5th
+ * value (uq_route_access_row, ON CONFLICT DO NOTHING, and every static row
+ * parser in this repo stopping at `,true|false)`).
  */
 export function sqlSeedRows(): SeedRow[] {
   const raw = fs.readFileSync(path.join(REPO_ROOT, SQL_SEED_PATH), 'utf8');
@@ -158,10 +193,11 @@ export function sqlSeedRows(): SeedRow[] {
   const tuple = /\(\s*'([^']+)'\s*,\s*'([^']+)'\s*,\s*'([^']+)'\s*,\s*(true|false)\s*\)/g;
   for (const m of sql.matchAll(tuple)) {
     if (!m[1].endsWith('-gateway')) continue;      // not a route-access tuple
-    rows.push({
+    const row = {
       gateway: m[1], urlPattern: m[2], role: m[3],
       allow: m[4] === 'true', origin: SQL_SEED_PATH,
-    });
+    };
+    rows.push({ ...row, mfaRequired: sqlBlanketMfaRequired(row) || sqlRowScopedMfaRequired(row) });
   }
   return rows;
 }
@@ -173,6 +209,18 @@ export const CANONICAL_SEED_REL =
  * The in-image fail-closed floor baked into every gateway
  * (hugmesh-gateway CanonicalSeed.java). Returns null when that sibling repo is
  * not checked out — the caller must SKIP with `siblingSkipReason`, never pass.
+ *
+ * `mfaRequired` (decision 56, hugmesh-generator#347, 2026-09-18): `r()` no
+ * longer hard-codes mfaRequired=false for every row — it looks each row's id
+ * up in the `MFA_REQUIRED_FALLBACK_ROWS` constant. That constant's entries are
+ * NOT plain string literals (`"seed:" + BE + ":/bff/superadmin/**:ROLE_SUPERADMIN"`,
+ * concatenating the SAME gateway constants this parser already resolves), so
+ * this reads the constant's own source block and keys it by
+ * `<gatewayConstName>:<pattern>:<role>` — the raw constant name (e.g. `BE`),
+ * not its resolved value, which is exactly what appears literally in the Java
+ * text and needs no string-concatenation evaluation. FAILS LOUD (throws)
+ * rather than silently reading zero entries if the block cannot be found, so a
+ * reshaped constant is a red test, not a quietly-vacuous one.
  */
 export function canonicalSeedRows(): SeedRow[] | null {
   const raw = siblingFile('hugmesh-gateway', CANONICAL_SEED_REL);
@@ -182,6 +230,22 @@ export function canonicalSeedRows(): SeedRow[] | null {
   for (const m of java.matchAll(/static final String (\w+)\s*=\s*"([^"]+)"/g)) {
     consts[m[1]] = m[2];
   }
+  const declBlockStart = java.indexOf('MFA_REQUIRED_FALLBACK_ROWS');
+  if (declBlockStart < 0) {
+    throw new Error(`${CANONICAL_SEED_REL}: MFA_REQUIRED_FALLBACK_ROWS not found — `
+      + 'decision 56 renamed or removed the declared-set constant; update this parser.');
+  }
+  const declBlockEnd = java.indexOf(';', declBlockStart);
+  const declBlock = java.slice(declBlockStart, declBlockEnd < 0 ? undefined : declBlockEnd);
+  const declared = new Set<string>();
+  // "seed:" + BE + ":/bff/superadmin/**:ROLE_SUPERADMIN" -> key "BE:/bff/superadmin/**:ROLE_SUPERADMIN"
+  for (const m of declBlock.matchAll(/(\w+)\s*\+\s*"(:[^"]+)"/g)) {
+    declared.add(`${m[1]}${m[2]}`);
+  }
+  if (declared.size === 0) {
+    throw new Error(`${CANONICAL_SEED_REL}: MFA_REQUIRED_FALLBACK_ROWS parsed to zero entries — `
+      + 'the "CONST" + ":pattern:role" shape changed; update this parser rather than silently modelling D8 everywhere.');
+  }
   const rows: SeedRow[] = [];
   // r(FE, "/admin/**", "ROLE_ADMIN")  → allow;  deny(FE, …) → explicit deny.
   for (const m of java.matchAll(/\b(r|deny)\(\s*(\w+)\s*,\s*"([^"]*)"\s*,\s*"([^"]+)"\s*\)/g)) {
@@ -190,6 +254,10 @@ export function canonicalSeedRows(): SeedRow[] | null {
     rows.push({
       gateway, urlPattern: m[3], role: m[4],
       allow: m[1] === 'r', origin: `hugmesh-gateway/${CANONICAL_SEED_REL}`,
+      // deny() rows are never in the declared set (it is an allow-row-only gate
+      // — see the constant's own doc comment) but check by the SAME key shape
+      // regardless, so a future deny entry would be caught rather than assumed.
+      mfaRequired: declared.has(`${m[2]}:${m[3]}:${m[4]}`),
     });
   }
   return rows;
@@ -233,26 +301,34 @@ export interface SeedVerdict {
   explicitDeny: boolean;
   /** The winning (longest) pattern, or null when nothing matched. */
   pattern: string | null;
+  /** True iff ANY row at the winning pattern carries mfaRequired — mirrors
+   *  GatewayRouteAccessService.isMfaRequiredSurface(), which is allow-BLIND and
+   *  role-BLIND (`if (r.mfaRequired()) return true;`, no allow/role test). NOT
+   *  the same predicate `decision` uses; a path can be ALLOW here and still
+   *  mfaRequired true from an unrelated row at the same longest pattern. */
+  mfaRequired: boolean;
 }
 
 /** Decide `path` for `roles` over `rows`, using the deployed gateway's rules. */
 export function seedDecide(rows: SeedRow[], gateway: string, p: string, roles: string[]): SeedVerdict {
   const here = rows.filter((r) => r.gateway === gateway && antMatch(r.urlPattern, p));
-  if (here.length === 0) return { decision: 'NO_RULE', explicitDeny: false, pattern: null };
+  if (here.length === 0) return { decision: 'NO_RULE', explicitDeny: false, pattern: null, mfaRequired: false };
   let bestLen = -1;
   for (const r of here) bestLen = Math.max(bestLen, r.urlPattern.length);
   const winners = here.filter((r) => r.urlPattern.length === bestLen);
   const pattern = winners[0].urlPattern;
   let allowed = false;
   let explicitDeny = false;
+  let mfaRequired = false;
   for (const r of winners) {
+    if (r.mfaRequired) mfaRequired = true;
     const role = canonicalRole(r.role);
     if (role === 'ROLE_ANONYMOUS') { allowed = true; continue; }
     if (!roles.includes(role)) continue;
     if (r.allow) allowed = true; else explicitDeny = true;
   }
-  if (explicitDeny) return { decision: 'DENY', explicitDeny: true, pattern };
-  return { decision: allowed ? 'ALLOW' : 'DENY', explicitDeny: false, pattern };
+  if (explicitDeny) return { decision: 'DENY', explicitDeny: true, pattern, mfaRequired };
+  return { decision: allowed ? 'ALLOW' : 'DENY', explicitDeny: false, pattern, mfaRequired };
 }
 
 // ── admin-ui: the routed set and the menu model ──────────────────────────────

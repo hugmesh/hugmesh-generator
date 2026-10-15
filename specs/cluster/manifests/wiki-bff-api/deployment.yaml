@@ -104,8 +104,15 @@ spec:
             - { name: SPRING_CONFIG_ADDITIONAL_LOCATION, value: "file:/stores/" }
             # OAuth2 resource server: validate the cluster Casdoor JWT itself.
             - { name: CASDOOR_ISSUER_URI, value: "https://id.hugmesh.net" }
-            # APP_TENANCY_ISSUERS is deliberately NOT set here. Do not "fix" this by
-            # adding it — doing so silently hides every existing wiki page and ACL.
+            # Key fetch stays IN-CLUSTER: the public issuer host need not resolve
+            # here (on kind it does not: hugmesh-generator#693). The issuer URI above
+            # stays the `iss` claim only. Same value as the gateway chart's
+            # casdoor.jwksUri; pinned by tests/scripts/test-bff-jwks-in-cluster.sh.
+            - { name: CASDOOR_JWKS_URI, value: "http://casdoor.hugmesh-pki.svc.cluster.local:8000/.well-known/jwks" }
+            # APP_TENANCY_ISSUERS is deliberately NOT set here — RATIFIED, not an
+            # oversight to "finish" (DECISION 30, operator, 2026-09-17,
+            # hugmesh-generator#347: app.tenancy.issuers stays opt-in, never
+            # defaulted). Do not "fix" this by adding it alone — see below.
             # Unset, commons' DomainRegistry seeds the back-compat single-issuer entry
             # {CASDOOR_ISSUER_URI -> "default"}, so domainOf() == "default" — which is
             # exactly what the existing rows are stamped with (wiki_page /
@@ -118,8 +125,44 @@ spec:
             # multi-issuer decoder never activates: no 401, no error — the rows just
             # vanish. Later writes then stamp NEW rows "<brand>", so rolling back leaves
             # split-brain data.
-            # Multi-brand for wiki therefore REQUIRES a data migration re-stamping the
-            # existing domain='default' rows first. Config alone is not enough.
+            #
+            # Multi-brand for wiki is a CONFIG-ONLY cut-over — setting
+            # APP_TENANCY_ISSUERS to a single pair performs it by itself.
+            # RestampTargetEnvironmentPostProcessor (hugmesh-wiki-bff-api#19) derives
+            # the 007 Liquibase re-stamp target from this same variable and publishes
+            # it before Liquibase binds parameters, so every existing domain='default'
+            # row is re-stamped during the SAME boot that sets the variable — before
+            # the app serves its first request under the new brand. There is no
+            # window and nothing else to sequence. Pre-flight first (see that repo's
+            # 007 changelog header):
+            #   SELECT domain, count(*) FROM wiki_page GROUP BY domain;
+            # exactly one row reading "default" is the safe state to cut over from.
+            #
+            # ⚠️ ONE-WAY DOOR, undocumented until now: once that armed boot has run,
+            # APP_TENANCY_ISSUERS becomes load-bearing for STARTUP, not just for
+            # domainOf(). Liquibase substitutes the changelog parameter into the 007
+            # <sql> BEFORE checksumming, so the armed run's recorded checksum embeds
+            # the brand. A later boot that publishes no parameter — the variable
+            # removed, or grown to a second brand; exactly what an ArgoCD revert of
+            # THIS file, or `selfHeal` undoing a manual `kubectl set env`, does — computes
+            # a different checksum and the boot REFUSES with ValidationFailedException
+            # on the 007 changelog. Nothing is migrated and nothing is lost, but
+            # nothing starts either (measured directly against Liquibase in
+            # DerivedTargetRerunTest; no pod has been booted through this, so treat
+            # "refuses to start" as the fact and any particular kubectl-visible
+            # symptom as unverified).
+            #
+            # THE PERMANENT FIX (DECISION 31, operator, 2026-09-17,
+            # hugmesh-generator#347 — CONFIRMED and PERMANENT, not a workaround):
+            # once the armed boot has succeeded, ALSO set
+            # SPRING_LIQUIBASE_PARAMETERS_WIKI_RESTAMP_TARGET_DOMAIN=<brand> here and
+            # NEVER remove it. The pin is an OVERRIDE, not a cross-check —
+            # RestampTargetEnvironmentPostProcessor early-returns on any non-blank
+            # explicit value — so if the two variables ever disagree (both arrive
+            # together from this one file under ArgoCD), the boot does NOT refuse:
+            # it silently re-stamps every "default" row to whichever brand the PIN
+            # names, with only an INFO line naming the mismatch. Keep both variables
+            # in lockstep, always as a pair, in the same change.
             # ── Content datastore (wiki_page / wiki_attachment / wiki_audit_log) ─
             # The app's application.yml defaults spring.r2dbc + spring.liquibase to
             # a literal `hugmesh-pg` host that does NOT exist; OVERRIDE both here
@@ -129,6 +172,24 @@ spec:
             # `wikibff_app` (DML only), created by wiki-bff-db's initdb/10-roles.sh.
             # Password from its OWN ESO Secret wiki-bff-db-app-auth (the SAME the DB
             # pod's WIKIBFF_APP_PASSWORD mounts).
+            # R2DBC POOL SIZE (hugmesh-generator#663: the kind sign-in answered 500).
+            # The app role below is created with CONNECTION LIMIT 20 (initdb/10-roles.sh)
+            # and the database runs with max_connections=60. With NO pool setting the
+            # Spring Boot / r2dbc-pool default of 10 connections per replica applies, so
+            # the autoscaler's maxReplicas of 6 asked for 6 x 10 = 60 against a limit of
+            # 20: the first two pods took the whole budget and every pod that came later
+            # failed every query ("Failed to obtain R2DBC Connection"; Postgres says
+            # FATAL: too many connections for role). Sized so the limit also holds during
+            # a rolling update at the top of the band: (6 replicas + 2 surge pods, the
+            # default maxSurge of 25 %) x 2 = 16 <= 20. initial-size 1: a pod needs one
+            # connection to start and opens the second only under load. initial-size must
+            # not exceed max-size (r2dbc-pool refuses to build the pool).
+            # tests/scripts/test-db-connection-budget.sh pins this for every Deployment
+            # that has a database role.
+            - name: SPRING_R2DBC_POOL_INITIAL_SIZE
+              value: "1"
+            - name: SPRING_R2DBC_POOL_MAX_SIZE
+              value: "2"
             - name: SPRING_R2DBC_URL
               value: "r2dbc:postgresql://wiki-bff-db.hugmesh-backend.svc.cluster.local:5432/wikibff"
             - name: SPRING_R2DBC_USERNAME

@@ -2,40 +2,40 @@
 
 The image-build worker (`docker/build-image.sh`) reports exactly ONE **terminal**
 result to `INGEST_URL` (`send_ingest`, the `COMPLETED`/`FAILED`/`ERROR` contract).
-That leaves a real build's web progress bar frozen at the orchestrator's initial
-frame until the build finishes. This adds an **optional, non-terminal** progress
-producer that fills the gap without touching the terminal contract.
+Until the build ends, the web progress bar of a real build sits frozen at the
+orchestrator's first frame. An **optional, non-terminal** progress producer fills that
+gap and leaves the terminal contract alone.
 
 ## Worker side (this repo)
 
 - **`PROGRESS_URL`** (optional env). When set, `forward_and_wait` tees the builder's
-  **stdout** through `docker/progress-tap.py` (a FIFO the parent pins at both ends;
-  the builder stays the single tracked `$child_pid`, so its real exit code and
-  SIGTERM forwarding are byte-for-byte unchanged, and its stderr streams direct).
-  The tap re-emits every stdout line to the Job log verbatim AND POSTs throttled
-  phase→percent frames to `PROGRESS_URL`. Tunables: `PROGRESS_MIN_INTERVAL`
-  (seconds between on-percent frames, default 1) and `PROGRESS_CURL_TIMEOUT`
-  (per-POST curl `--max-time`, default 2).
-- **Unset (today's Job) → byte-identical to before.** The whole tap branch is gated
-  on `[ -n "$PROGRESS_URL" ]`; `PROGRESS_URL` is `${PROGRESS_URL:-}` (set -u safe),
-  is NOT in the required-env loop, and touches neither `send_ingest`, the terminal
-  `COMPLETED` path, nor `resolve_build_target()`.
-- **Parsing is reused, not reimplemented.** `progress-tap.py` imports the SAME
-  `hugmesh_studio.core.progress_parse.ProgressParser` (+ `progress-tables.json`)
-  that drives the Studio GUI, via `PYTHONPATH=<generator>/studio`. Percent is `null`
-  (indeterminate) until the first `==> ` banner, then a monotonic, never-backwards
-  `(phase_index + emerge_fraction)/phase_count` capped at 99 (100/terminal stays the
-  BFF's job — the tap never calls `finalize()`).
-- **Best-effort, never fatal.** Each POST is a fire-and-forget `curl --max-time`
-  the read loop never waits on; at most one is in flight (a still-running one is
-  skipped, lossy by design); all parse/POST errors are swallowed and the loop exits
-  only at stdin EOF; if `python3`/mkfifo are unavailable the code falls back to
-  today's exact `"$@" &; wait` path (and the wrapper's `|| cat` still drains+echoes
-  the stream). A slow/hung/erroring endpoint degrades only the progress bar.
+  **stdout** through `docker/progress-tap.py` (a FIFO the parent pins at both ends).
+  The builder stays the single tracked `$child_pid`, so its exit code and SIGTERM
+  forwarding are byte-for-byte unchanged, and its stderr streams direct. The tap
+  re-emits every stdout line to the Job log verbatim AND POSTs throttled
+  phase→percent frames to `PROGRESS_URL`. Tunables: `PROGRESS_MIN_INTERVAL` (seconds
+  between on-percent frames, default 1) and `PROGRESS_CURL_TIMEOUT` (per-POST curl
+  `--max-time`, default 2).
+- **Unset (today's Job): byte-identical to before.** The whole tap branch is gated on
+  `[ -n "$PROGRESS_URL" ]`. `PROGRESS_URL` is `${PROGRESS_URL:-}` (set -u safe), is NOT
+  in the required-env loop, and does not touch `send_ingest`, the terminal `COMPLETED`
+  path or `resolve_build_target()`.
+- **Parsing is reused, not rewritten.** `progress-tap.py` imports the SAME
+  `hugmesh_studio.core.progress_parse.ProgressParser` (and `progress-tables.json`)
+  that drives the Studio GUI, through `PYTHONPATH=<generator>/studio`. Percent is `null`
+  (indeterminate) until the first `==> ` banner. After that it is a monotonic,
+  never-backwards `(phase_index + emerge_fraction)/phase_count`, capped at 99. The BFF
+  owns 100 and the terminal state; the tap never calls `finalize()`.
+- **Best-effort, never fatal.** Each POST is a fire-and-forget `curl --max-time` that
+  the read loop never waits on. At most one is in flight (a still-running one is
+  skipped; loss is by design). The tap swallows all parse and POST errors and exits
+  only at stdin EOF. If `python3` or mkfifo is missing, the code falls back to
+  today's exact `"$@" &; wait` path (and the wrapper's `|| cat` still drains and echoes
+  the stream). A slow, hung or failing endpoint degrades only the progress bar.
 
-Payload (`ImageBuildProgressRequest`), `Content-Type: application/json`, header
-`X-Internal-Token` only when the token is set (same discipline as ingest — no keys,
-paths, or Vault refs, ever):
+Payload (`ImageBuildProgressRequest`), `Content-Type: application/json`. The
+`X-Internal-Token` header is sent only when the token is set (same rule as ingest).
+The payload never carries keys, paths or Vault refs:
 
 ```json
 { "buildId": "…", "percent": 0, "phaseIndex": 0, "phaseCount": 17,
@@ -51,30 +51,26 @@ deadlock, verbatim Job-log echo, and exit-code preservation).
 
 ## admin-bff-api companion (spec only — NOT changed here)
 
-A sibling session owns admin-bff-api; apply there:
+This repo does not change admin-bff-api. The heading dates from when this was a spec: the other half has since landed on admin-bff-api `main`.
 
-1. **Job env** (`jobs/image-gen-job.yaml`, `ImageBuildOrchestrator`) — add ONE var,
-   templated per-build the same way `INGEST_URL`/`IMAGE_SPEC_JSON` already are:
+1. **Job env.** `src/main/resources/jobs/image-gen-job.yaml` sets `PROGRESS_URL` to
+   `https://hugmesh-admin-bff-api.hugmesh-backend.svc.cluster.local:8443/bff/internal/image-builds/${BUILD_ID}/progress`,
+   next to `INGEST_URL`. The same optional `INTERNAL_TOKEN` secretKeyRef
+   (`image-gen-internal-token`, `optional: true`) serves both. Omit `PROGRESS_URL` and
+   the worker is byte-identical to before.
 
-   ```yaml
-   - name: PROGRESS_URL
-     value: "<same scheme+host as INGEST_URL>/bff/internal/image-builds/{BUILD_ID}/progress"
-   ```
+2. **Endpoint.** `POST /bff/internal/image-builds/{id}/progress`
+   (`ImageBuildIngestController.progress`). It sits
+   on the same internal boundary as ingest (mTLS is the primary check; the
+   `X-Internal-Token` filter is secondary, and its Secret is optional) and takes
+   the `ImageBuildProgressRequest` above. `percent` must be null or 0 to 99. The
+   endpoint never changes `image_build.status`. `COMPLETED`, `FAILED` and `ERROR`
+   stay with the terminal ingest. It turns the frame into an SSE event with
+   `done=false` on the stream the admin UI already reads
+   (`GET /bff/admin/image-builds/{id}/events`). A null percent becomes `0`. The
+   message reads `phase i/N: label`. An unknown or reaped build is a no-op.
 
-   Built from the identical internal base the orchestrator renders `INGEST_URL`
-   from, with `image_build.id` substituted into the path. Reuse the SAME optional
-   `INTERNAL_TOKEN` secretKeyRef (`optional: true`) already mounted for ingest — no
-   new secret. Setting `PROGRESS_URL` is what turns the producer on; omit it and the
-   worker is byte-identical to today.
-
-2. **Endpoint** `POST /bff/internal/image-builds/{id}/progress` (the non-terminal
-   endpoint added in admin-bff-api #206). Accept the `ImageBuildProgressRequest`
-   above; header `X-Internal-Token` when present (mTLS is the primary boundary, token
-   absence is not fatal — mirrors ingest). Validate `buildId == {id}`; treat as
-   **non-terminal** (never mutate `image_build.status` — `COMPLETED`/`FAILED`/`ERROR`
-   remain owned by the terminal ingest); store latest and, as defense-in-depth,
-   ignore any backwards/non-monotonic percent; then re-emit on the SSE stream the
-   admin UI already consumes (`GET /bff/admin/image-builds/{id}/events`) so the web
-   progress bar advances through the real phase percents. 2xx quickly and cheaply —
-   worker-side it is best-effort and bounded by `curl --max-time`, so a slow or
-   erroring endpoint degrades only the progress bar, never the build.
+Not done there, so do not rely on it: the endpoint does not compare `buildId` in
+the body to `{id}`, does not store the latest frame, and does not drop a
+percent that goes backwards. The worker's own monotonic parser is the only guard
+against backwards percents.

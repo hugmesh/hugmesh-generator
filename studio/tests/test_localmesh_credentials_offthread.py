@@ -78,7 +78,7 @@ class _Stack:
 
 @pytest.fixture
 def page(qapp, monkeypatch, tmp_path):
-    """A LocalMeshPage whose stack is faked at the seam credentials_truth documents.
+    """A LocalMeshPage whose stack is faked at the override point credentials_truth documents.
     The minted bundle is a tmp file (never the operator's keys-out/), and its
     superadmin is a fixture pair."""
     stack = _Stack(tmp_path)

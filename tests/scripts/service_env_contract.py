@@ -345,6 +345,13 @@ class CasdoorSource:
 IMAGE_PREFIX = "hugmesh/"
 #: every Spring service in this fleet keeps its packaged config here
 APPLICATION_YML = "src/main/resources/application.yml"
+#: first-party Spring services that are NOT `*-bff-api` but ship the same packaged-default
+#: hazard and must be checked the same way (hugmesh-generator#410: `hugmesh/actions`, the
+#: Deployment `hugmesh-api`, was invisible to this gate for as long as the filter demanded
+#: "-bff-api"). Deliberately a NAMED list, not `startswith(IMAGE_PREFIX)`: that also pulls
+#: in every static/UI image, none of which has an application.yml, and turns the whole
+#: gate INCOMPLETE.
+EXTRA_SPRING_IMAGES = frozenset({"hugmesh/actions"})
 
 
 class ServiceContainer:
@@ -386,7 +393,9 @@ def first_party_bff_containers(cluster: Path) -> list[ServiceContainer]:
                 continue
             for cont in doc["spec"]["template"]["spec"].get("containers") or []:
                 image = cont.get("image", "")
-                if image.startswith(IMAGE_PREFIX) and "-bff-api" in image:
+                if image.startswith(IMAGE_PREFIX) and (
+                    "-bff-api" in image or image.split(":")[0] in EXTRA_SPRING_IMAGES
+                ):
                     out.append(ServiceContainer(path, doc["metadata"]["name"], cont))
     return out
 
@@ -417,14 +426,71 @@ def resolve_service_src(repo_root: Path, explicit: str | None, repos: set[str]) 
     )
 
 
-def check_derived(svc: ServiceContainer, src_root: Path, facts: ClusterFacts) -> None:
+def _overrides_with_something(svc: ServiceContainer, name: str) -> bool:
+    """True if `name` in the Deployment's env map actually SUPPLIES a value.
+
+    hugmesh-generator#411: `check_derived` used to test only whether the NAME was
+    present in the container's env map — `set(hit.names) & set(svc.env)` — so a
+    Deployment that set the key to the empty string ("") counted as an override
+    exactly like a real address, and the pod started with an unusable value
+    while this gate said PASS. A `fromSecret` reference has no literal `value`
+    to inspect here (its content is Vault/ESO's business, decided at apply
+    time, not this static check's), so it is presumed a real override — this
+    rule is only about a Deployment that TELLS a pod an empty string directly.
+    """
+    entry = svc.env.get(name)
+    if entry is None:
+        return False
+    if "secret" in entry:
+        return True
+    return str(entry.get("value") or "").strip() != ""
+
+
+def allowed_external(svc: ServiceContainer, hit, allow: list[dict], used: set[int]) -> bool:
+    """True if `hit` is a written-down, deliberately external integration.
+
+    hugmesh-generator#410: R3 (foreign-domain) cannot tell a stale pre-rebrand host from a
+    service whose whole purpose is to call a third party (hugmesh-actions -> the real GitHub
+    API). The exemption is per (repo, property, exact packaged default) and only for
+    `foreign-domain`: change the default, or point a different property at a foreign host,
+    and the gate goes red again. R1/R2 (dangling namespaces) can never be allowlisted.
+    """
+    if hit.rule != "foreign-domain":
+        return False
+    for i, entry in enumerate(allow):
+        if (entry.get("repo"), entry.get("property"), entry.get("default")) == (svc.repo, hit.prop, hit.default):
+            used.add(i)
+            return True
+    return False
+
+
+def check_derived(svc: ServiceContainer, src_root: Path, facts: ClusterFacts,
+                  allow: list[dict] | None = None, used: set[int] | None = None) -> None:
     """[env-derived] + [env-startup] — the service's OWN config states the contract."""
     app_yml = src_root / svc.repo / APPLICATION_YML
     hits = stale_defaults(app_yml, facts)
     covered = 0
     for hit in hits:
-        if set(hit.names) & set(svc.env):
+        if allowed_external(svc, hit, allow or [], used if used is not None else set()):
             covered += 1
+            ok("env-derived", f"{svc.label}: {hit.prop} = {hit.default!r} is a declared external integration")
+            continue
+        present = [n for n in hit.names if n in svc.env]
+        if any(_overrides_with_something(svc, n) for n in present):
+            covered += 1
+            continue
+        if present:
+            # The name IS set, but to nothing usable — worse than the default
+            # it silently replaces (a malformed/empty value at call time rather
+            # than an NXDOMAIN with a name in it), and NOT the same finding as
+            # "unset", so it gets its own message rather than being folded into
+            # the "none of … is set" case below.
+            fail(
+                "env-derived",
+                f"{svc.label}: {'/'.join(present)} is set to an EMPTY value, which does NOT "
+                f"override {svc.repo}'s packaged default for {hit.prop} = {hit.default!r} — "
+                f"{hit.detail}",
+            )
             continue
         fail(
             "env-derived",
@@ -611,6 +677,20 @@ def check_emitted_values(cluster: Path, facts: ClusterFacts) -> None:
         ok("stale-ref", f"all {scanned} emitted env values name namespaces/domains this cluster has")
 
 
+def check_external_allowlist(allow: list[dict], used: set[int]) -> None:
+    """The allowlist is itself gated: every entry needs a reason and must still match a hit."""
+    for i, entry in enumerate(allow):
+        where = f"externalIntegrations[{i}] ({entry.get('repo')}/{entry.get('property')})"
+        missing = [k for k in ("repo", "property", "default", "reason") if not str(entry.get(k) or "").strip()]
+        if missing:
+            fail("external-allowlist", f"{where} is missing {', '.join(missing)}")
+        elif i not in used:
+            fail(
+                "external-allowlist",
+                f"{where} matches no stale default any more — a stale exemption is itself drift; remove it",
+            )
+
+
 def check_coverage(cluster: Path, contract: dict, containers: list[ServiceContainer]) -> None:
     """Every first-party *-bff-api Deployment must be classified by the contract.
 
@@ -683,8 +763,11 @@ def main(argv: list[str]) -> int:
         casdoor = CasdoorSource(cluster, source["initJob"], source["initData"])
         check_org_agreement(casdoor)
         eso = load_external_secrets(cluster / contract["externalSecretsDir"])
+        allow = contract.get("externalIntegrations") or []
+        used: set[int] = set()
         for svc_container in containers:
-            check_derived(svc_container, src_root, facts)
+            check_derived(svc_container, src_root, facts, allow, used)
+        check_external_allowlist(allow, used)
         for svc in contract.get("services") or []:
             check_service(cluster, casdoor, svc, eso)
         check_emitted_values(cluster, facts)

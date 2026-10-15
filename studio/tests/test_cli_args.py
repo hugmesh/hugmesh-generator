@@ -126,18 +126,25 @@ def test_mode_skipped_pages_match_the_page_catalog():
     # point of the image — so it skips only the choices, never the tables.
     # "vault" (the mesh secrets store, #224) is the same shape as "idp": a cluster-
     # NODE first-boot concern, so both non-node modes skip it statically.
+    # "domain_services" (#495, the per-domain Services step) rides with "domains": a
+    # standalone build has no admin plane at all, so it skips the table AND the step
+    # that configures each of that table's rows. Cloud keeps BOTH — its --domains tie
+    # is the point of the image, and the domain it carries is exactly the one whose
+    # services the operator must answer for.
     assert MODE_SKIPPED_PAGES["standalone"] == ("idp", "worklist", "keyzip",
                                                 "domains_choice", "domains",
+                                                "domain_services",
                                                 "users_choice", "users", "vault")
     assert MODE_SKIPPED_PAGES["cloud"] == ("idp", "worklist",
                                            "domains_choice", "users_choice", "vault")
-    for slug in ("domains", "users"):
+    for slug in ("domains", "domain_services", "users"):
         assert slug not in MODE_SKIPPED_PAGES["cloud"], (
             f"cloud must keep its {slug} table — the FD-08 --domains/--person-role tie "
             "is what the client image is built around")
     # ...and mesh sees BOTH choice screens (its tables are gated behind them at RUNTIME,
     # by DomainsPage/UsersPage.applies_to, not by this static map).
-    for slug in ("domains_choice", "users_choice", "domains", "users"):
+    for slug in ("domains_choice", "users_choice", "domains", "domain_services",
+                 "users"):
         assert slug not in MODE_SKIPPED_PAGES["mesh"]
     assert "idp" in MODE_SKIPPED_PAGES["cloud"]
     assert "idp" not in MODE_SKIPPED_PAGES["mesh"]
@@ -283,7 +290,7 @@ def test_x86_unaffiliated_look_fields_are_allowed_and_emitted(field, value, flag
 
 
 def test_x86_unaffiliated_look_and_identity_split_covers_every_branding_field():
-    """Anti-rot guard. THEME_FIELDS is exactly the ten-field family the old single
+    """Anti-staleness guard. THEME_FIELDS is exactly the ten-field family the old single
     "branding assets" conflict lumped together (theme/branding_dir/wallpaper/
     grub_background/grub_theme/login_background/brand_logo/accent_color/color_scheme/
     brand_locked). Every one of them must still be CLASSIFIED by the split — identity
@@ -1159,7 +1166,7 @@ def test_cluster_identity_applies_is_platform_asymmetric():
     The three asserts below are exactly those two builders' truth plus the control case.
     Each is cross-checked against the ARGV so the predicate cannot drift away from what
     to_cli_args() actually emits — which is the only property a hide-gate may key on
-    (hiding is paired with an emission-neutral clear)."""
+    (hiding is paired with a clear that leaves the output unchanged)."""
     x86_standalone = ImageConfig(mode="standalone", role="standalone-thick", platform="x86",
                                  cluster_domain="acme.example")
     rpi5_standalone = ImageConfig(mode="standalone", role="generic", platform="rpi5",
@@ -1723,6 +1730,11 @@ def test_non_argv_fields_set():
     # login_header_*/login_footer_*/login_bg_effect (the Themes editor's web-chrome
     # half, #50 item 2) joined the login_* family: same SNAP_THEME_CSS channel
     # (literal --sd-header-*/--sd-footer-*/--sd-bg-effect tokens), never argv.
+    # domain_services_reviewed (#495) is the newest, and is the same shape as
+    # additional_domains: pure WIZARD-FLOW state — WHICH domains have been through
+    # their per-domain Services page — read by the build/mesh-start gate and by
+    # nothing else. It reaches no builder AND no manifest (both emitters filter it),
+    # so a manifest is byte-identical whether or not the page was walked.
     assert set(NON_ARGV_FIELDS) == {
         "headscale_url", "pentest", "hw_profile",
         "login_primary_color", "login_secondary_color", "login_font",
@@ -1733,7 +1745,8 @@ def test_non_argv_fields_set():
         "login_footer_hidden", "login_footer_size", "login_footer_bg",
         "login_footer_text",
         "login_bg_effect",
-        "additional_domains", "configure_users", "qemu_device_tests"}
+        "additional_domains", "configure_users", "qemu_device_tests",
+        "domain_services_reviewed"}
     # no flow flag may reach ANY builder argv, on any platform, in any mode
     for mode, role in (("mesh", "omnibus"), ("cloud", "desktop")):
         cfg = ImageConfig(mode=mode, role=role, platform="x86",

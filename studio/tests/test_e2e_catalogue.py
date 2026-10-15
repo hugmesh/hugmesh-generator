@@ -435,7 +435,7 @@ def test_the_named_zero_coverage_services_are_reported_uncovered():
 
 
 def test_a_declarative_route_table_is_not_coverage():
-    """THE PHANTOM-COVERAGE CASE, and it is live in this checkout, not invented.
+    """THE COVERAGE-THAT-DOES-NOT-EXIST CASE, and it is live in this checkout, not invented.
 
     tests/e2e/specs/rbac-route-access.seed.ts is a TABLE of every gateway route in the
     platform -- including the routes of services no spec ever visits -- and it is
@@ -549,7 +549,7 @@ def test_coverage_tokens_break_on_UNDERSCORE_which_is_the_whole_point():
 
     `_` is a word char, so \\b does not break on it; it is not alnum, so _token_re's
     lookarounds do. That single character is the ENTIRE difference between the two
-    forms, and it is load-bearing: the suite reaches the forum and the games realm
+    forms, and it is relied on: the suite reaches the forum and the games realm
     through SCREAMING_SNAKE role constants. Measured 2026-08-26 — swapping _token_re
     to \\b takes phpbb from 2 files to 0 (UNCOVERED) and games from 11 to 10."""
     sources = {"a.spec.ts": "roles: ['ROLE_FORUM', 'ROLE_GAMES_ADMIN'],\n"}
@@ -597,13 +597,38 @@ def test_the_alias_map_is_what_makes_the_matrix_and_forum_specs_count():
 
 
 def test_the_alias_map_does_not_rescue_a_service_with_no_specs():
-    """The other direction: tube/tor/edge-ai-tts/media-poisoner are searched under
-    EVERY spelling the suite might use (peertube, onion, piper/tts, poisoner/cloak)
-    and still match nothing. Their zero-coverage verdict is stronger for it."""
+    """The other direction: tube/edge-ai-tts/media-poisoner are searched under
+    EVERY spelling the suite might use (peertube, piper/tts, poisoner/cloak) and
+    still match nothing. Their zero-coverage verdict is stronger for it. (tor left
+    this list on 2026-09-23 — see the next test.)"""
     cov = {c.slug: c for c in service_coverage(GENERATOR_DIR)}
-    for slug in ("tube", "tor", "edge-ai-tts", "media-poisoner"):
+    for slug in ("tube", "edge-ai-tts", "media-poisoner"):
         assert len(ec.SPEC_TOKENS[slug]) > 1, f"{slug} lost its aliases"
         assert cov[slug].covered is False, f"{slug} looks covered"
+
+
+def test_tor_is_covered_by_the_onion_front_door_and_nothing_else():
+    """hugmesh-generator#576. tor is reached ONLY as `onion`, and only by the code
+    that drives the stack's Tor front door: specs/helpers.ts onionFrontDoor() /
+    onionContext() (a browser context proxied through hugmesh-tor-client), used by
+    features/platform/tor-onion-front-door.feature. Pinned EXACTLY, both ways:
+    dropping the `onion` alias must uncover it (the slug `tor` itself matches no
+    driving code), and a second file claiming it would be a phantom worth reading."""
+    cov = {c.slug: c for c in service_coverage(GENERATOR_DIR)}
+    assert cov["tor"].covered is True
+    assert cov["tor"].spec_files == ("helpers.ts",), cov["tor"].spec_files
+    assert "onion" in ec.SPEC_TOKENS["tor"]
+    helpers = open(os.path.join(GENERATOR_DIR, "tests", "e2e", "specs", "helpers.ts"),
+                   encoding="utf-8").read()
+    assert "export async function onionContext(" in helpers
+    feature = os.path.join(GENERATOR_DIR, "tests", "e2e", "features", "platform",
+                           "tor-onion-front-door.feature")
+    with open(feature, encoding="utf-8") as fh:
+        text = fh.read()
+    assert "@via:onion" in text and "@env:docker" in text
+    steps = open(os.path.join(GENERATOR_DIR, "tests", "e2e", "steps", "tor-onion.steps.ts"),
+                 encoding="utf-8").read()
+    assert "onionContext(" in steps  # the scenario drives the helper that earns the verdict
 
 
 def test_a_kind_lane_service_is_unreachable_not_uncovered():
@@ -978,7 +1003,7 @@ def test_index_gherkin_walks_subdirectories(tmp_path):
 
 
 def test_spec_personas_ignores_a_persona_named_only_in_a_comment():
-    """HOUSE RULE, and it is load-bearing here: a persona a spec only MENTIONS is not
+    """HOUSE RULE, and it is relied on here: a persona a spec only MENTIONS is not
     a persona it drives, and `phpbb`-in-a-comment already inverted this exact class of
     check four times in this repo."""
     roster = Roster(users=[SeededUser(username=u, roles=(), password="x")
@@ -1007,7 +1032,7 @@ def test_a_persona_handle_does_not_match_inside_a_longer_one():
 def test_safe_spec_args_refuses_anything_a_shell_could_read_as_more_than_a_path():
     """E2E_SPECS is expanded inside a /bin/sh recipe, so a value is an unquoted shell
     word. Rejects are RETURNED, never dropped — a surface that silently discards half
-    a selection and runs anyway is the vacuity the tree exists to prevent."""
+    a selection and runs anyway is the checked-nothing pass the tree exists to prevent."""
     ok, bad = ec.safe_spec_args([
         "01-frontpage.spec.ts",                 # bare: prefixed
         "specs/04-five-users.spec.ts",          # already prefixed

@@ -162,13 +162,70 @@ spec:
             # path and timestamps, which differ between all four, cannot be mistaken for
             # one. An entry whose binary is absent is a FAILURE, not a skip.
             #
-            # ⚠ CROSS-REPO TODO (admin-bff wave): WorkloadConsoleProperties must match
-            # the WHOLE argv — `String.join(" ", command)` against this set — not
-            # command.get(0). Until it does, only the bare (argument-safe) names are
-            # reachable. Entries must never contain a comma: this env binds as a
+            #
+            # `df` IS PINNED TO `df -h` (#545, split from #492). It is on this list for
+            # "how full is the disk", and `df -h` with no operand answers exactly that.
+            # Bare `df` licenses three things that question does not need, MEASURED on
+            # coreutils 9.11:
+            #   * `df --output=source,target <path>` is a MOUNT-TOPOLOGY and
+            #     PATH-EXISTENCE oracle over the whole container filesystem —
+            #     `df --output=source,target /var/run/secrets/workload-console-read/token`
+            #     prints the backing device and mount point; the same argv on a path that
+            #     does not exist prints `df: <path>: No such file or directory`.
+            #   * `df --sync` forces a NODE-WIDE `sync(2)` — a side effect, from a console
+            #     whose whole contract is read-only.
+            #   * the remaining `--output` fields turn one command into a per-path
+            #     filesystem report the console never asked for.
+            # None of that is a property-P violation and the guard does not claim it is:
+            # bare `df` PASSES exec_argv_property.py (it leaks no file bytes, no
+            # environment, executes nothing and writes nothing). This is a CAPABILITY
+            # decision — how much a read-only console should be able to ask — decided the
+            # same way `ps -e` and `date -u` were, and it narrows nothing the property
+            # already covers.
+            # The cost is stated plainly: against the shipped first-token matcher a pinned
+            # entry was fail-closed, so until the whole-argv matcher landed (#114, see MATCHER
+            # below) `df` was refused OUTRIGHT rather than narrowed. That interim cost,
+            # also accepted for `ps` and `date`, is now gone: `df -h` is reachable.
+            #
+            # `stat` IS PINNED TO `stat -t` (decision 63, #545, operator 2026-09-18).
+            # #545 itself could not defend a pinned form and left the box unticked: EVERY
+            # USEFUL form of `stat` takes a CALLER-CHOSEN PATH (`stat <path>`), and an
+            # exact whole-argv entry cannot express "any path" — so bare `stat -t` (no
+            # operand) is, today, exactly as inert as `ps -e`/`date -u` already are: it is
+            # FAIL-CLOSED against the shipped first-token matcher (see the CROSS-REPO TODO
+            # below), so no live invocation of `stat` in any shape is reachable until that
+            # matcher lands. What the pin buys NOW is the CAPABILITY DECISION itself,
+            # recorded in the shape the future whole-argv matcher will honour: `-t`
+            # (terse, FILE-status form) rather than `-f`/`--file-system`, which prints the
+            # same moving free-block counters `df` does (the reason `df` itself was pinned
+            # to `-h` in #545/#551) — so the pinned form can never become a second
+            # mount-topology oracle once paths are reachable again. `stat --file-system`
+            # and `stat -f` are the two rejected shapes; tests/workload-console proves
+            # that the value below carries exactly `stat -t` and NEITHER rejected shape
+            # (a mutated-copy negative control), and separately proves the shipped
+            # first-token matcher REFUSES `stat --file-system` and `stat -f` against this
+            # exact config (the property test additionally confirms `-t` carries no
+            # path-valued, environment-dumping or program-running documentation, same as
+            # every other pinned entry). None of this is a property-P violation on EITHER
+            # rejected shape — bare `stat --file-system` with no operand leaks nothing
+            # either — so, like `df`, this is a CAPABILITY decision, not a property
+            # finding.
+            #
+            # `uptime` — noted, no action (#545). `uptime -r` was measured to move between
+            # two identical probes (`260061.540000` -> `260061.550000`), like every other
+            # command that reports global state. It counts only UP, so it cannot produce
+            # the residual false-positive shape #493 repaired, and it reads no path.
+            # Listed here for completeness of the capability review only.
+            #
+            # MATCHER (hugmesh-admin-bff-api#114, merged): WorkloadConsoleProperties honours
+            # both forms this list is written in. A BARE NAME (one token: `ls`, `free`,
+            # `uptime`, `id`, `uname`) licenses that command with ANY arguments, head
+            # matched exactly. A PINNED ARGV (several tokens: `df -h`, `stat -t`,
+            # `ps -e`, `date -u`) licenses exactly that whole argv — no longer argv, no
+            # bare head. Entries must never contain a comma: this env binds as a
             # comma-delimited List<String>.
             - name: WORKLOAD_CONSOLE_EXEC_READONLY
-              value: "ls,df,free,uptime,id,uname,stat,ps -e,date -u"
+              value: "ls,df -h,free,uptime,id,uname,stat -t,ps -e,date -u"
             # Grant lease TTL + expiry-sweep cadence — the application.yml defaults,
             # emitted explicitly so the operator knobs are visible in the pod spec.
             - { name: WORKLOAD_CONSOLE_GRANT_TTL_HOURS,        value: "24" }

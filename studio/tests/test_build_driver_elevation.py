@@ -212,7 +212,7 @@ def test_generated_helper_opts_into_the_dialog_explicitly(monkeypatch, tmp_path)
 
 
 # ── NEVER ELEVATE: the refusal, before subprocess is touched ─────────────────────────
-# The 2026-09-04 wedge at the driver: a GUI-launched native build dispatched under
+# The 2026-09-04 hang at the driver: a GUI-launched native build dispatched under
 # pytest used to Popen `sudo -A bash ./build-x86-host-stage4.sh` for real, with the Qt
 # askpass as SUDO_ASKPASS; under QT_QPA_PLATFORM=offscreen the dialog was invisible and
 # the root-owned sudo waited forever (60 found, some two days old). The driver now
@@ -254,7 +254,7 @@ def test_under_pytest_pkexec_is_refused_too(monkeypatch, tmp_path):
 
 
 def test_under_pytest_the_kill_tree_is_refused_too(monkeypatch, tmp_path):
-    """cancel() elevates through the same prefix — a `sudo -A kill` would wedge on the
+    """cancel() elevates through the same prefix — a `sudo -A kill` would hang on the
     same askpass. Refused the same way."""
     _force_sudo_a(monkeypatch, askpass="/run/ap.sh")
     _run_must_not_be_reached(monkeypatch)
@@ -391,3 +391,20 @@ def test_docker_backend_never_gets_an_elevation_warning(monkeypatch, tmp_path):
     d = BuildDriver(str(tmp_path), host(is_root=False), graphical=True)
     assert not [w for w in d.preflight_warnings(_cfg(tmp_path, "x86", "pki"), "docker")
                 if "authentication prompt" in w]
+
+
+# ── #304 item 2: a NON-pytest headless driver must set the knob ────────────────────────
+def test_headless_harnesses_and_docs_carry_the_no_elevation_requirement():
+    """A GUI-launched build's askpass helper passes --askpass-gui by design, so nothing
+    but HUGMESH_STUDIO_NO_ELEVATION protects a non-pytest harness that walks the real
+    wizard offscreen. Pin that the one in-tree headless harness exports it (subprocess
+    env AND its in-process legs) and that the headless docs state the requirement."""
+    import pathlib
+    repo = pathlib.Path(__file__).resolve().parents[2]
+    harness = (repo / "scripts" / "render-all-images.py").read_text(encoding="utf-8")
+    assert harness.count("HUGMESH_STUDIO_NO_ELEVATION") >= 2, (
+        "render-all-images.py must set HUGMESH_STUDIO_NO_ELEVATION for its subprocess "
+        "env and its in-process legs")
+    readme = (repo / "studio" / "README.md").read_text(encoding="utf-8")
+    i = readme.index("HUGMESH_STUDIO_NO_ELEVATION")
+    assert "offscreen" in readme[max(0, i - 300):i + 600]

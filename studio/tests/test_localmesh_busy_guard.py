@@ -118,7 +118,7 @@ def test_an_unnamed_holder_still_produces_a_sentence():
 
 
 def test_an_idle_page_is_not_refused():
-    # VACUITY GUARD. If the refusal branch were taken unconditionally, every test
+    # CHECKED-NOTHING PASS GUARD. If the refusal branch were taken unconditionally, every test
     # above would pass while the page never launched anything again. An idle stub
     # must get PAST the guard — proven by _running flipping true before the method
     # runs on into the Qt work this stand-in deliberately cannot serve.

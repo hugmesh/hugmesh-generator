@@ -21,10 +21,14 @@ def _isolated_state_dir(tmp_path, monkeypatch):
     monkeypatch.setenv("HUGMESH_STUDIO_STATE_DIR", str(tmp_path / "state"))
 
 
+_REAL_IDENTITY = lc.local_mesh_identity     # the real reader, before it is canned
+
+
 @pytest.fixture(autouse=True)
 def _canned_local_mesh(monkeypatch):
+    # (domain, users, with_tor) — the canned mesh ran no Tor.
     monkeypatch.setattr(lc, "local_mesh_identity",
-                        lambda _gd: (CANNED_DOMAIN, list(CANNED_USERS)))
+                        lambda _gd: (CANNED_DOMAIN, list(CANNED_USERS), False))
 
 
 def _at_gate() -> journey.Journey:
@@ -106,6 +110,24 @@ def test_a_repeat_gate_pass_never_duplicates_the_imported_rows():
     assert sorted(names) == ["alice", "bob", "superadmin"]
 
 
+def test_the_import_replaces_an_earlier_flows_accounts():
+    """#707: accounts an earlier flow of the session left on cfg.users are not part
+    of the saved mesh. Before, they stayed next to the imported ones."""
+    from hugmesh_studio.core.config import User
+    j = _at_gate()
+    j.cfg.users = [User(username="dave", domain="x.example", roles=["user"])]
+    j.feed("y")
+    assert sorted(u.username for u in j.cfg.users) == ["alice", "bob", "superadmin"]
+
+
+def test_a_mesh_with_no_accounts_leaves_none():
+    from hugmesh_studio.core.config import User
+    j = journey.Journey(".")
+    j.cfg.users = [User(username="dave", domain="x.example", roles=["user"])]
+    lc.apply_gate(j, "mesh.example.org", [])
+    assert j.cfg.users == [] and j.cfg.configure_users is False
+
+
 def test_consent_is_asked_afresh_on_every_entry():
     j = _at_gate()
     j.feed("y")
@@ -150,3 +172,214 @@ def test_any_other_mode_commit_lifts_the_restriction():
     text = "\n".join(j.lines())
     assert "Abbreviated flow" not in text
     assert "chromebook" in text                     # the full catalog is back
+
+
+# ── #579: a saved mesh that ran Tor reaches the node images (TUI face) ─────────────
+import os  # noqa: E402
+import socket  # noqa: E402
+
+from hugmesh_studio.core import package_catalog as pc  # noqa: E402
+from hugmesh_studio.core import saved_meshes as sm  # noqa: E402
+from hugmesh_studio.core.local_mesh_bootstrap import LocalMeshBootstrapConfig  # noqa: E402
+from hugmesh_studio.core.worklist import WorklistConfig, WorklistEntry  # noqa: E402
+
+_GEN = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+
+def _save(tmp_path, services, with_tor=False):
+    cfg = LocalMeshBootstrapConfig(env="prod", cluster_domain="saved.example.org",
+                                   out_dir=str(tmp_path / "keys"), services=services,
+                                   with_tor=with_tor)
+    rec = sm.SavedMesh(id=sm.new_id(), label="tor-mesh", generator_dir=_GEN,
+                       hostname=socket.gethostname(), config=cfg.to_dict())
+    assert sm.save(rec)
+
+
+def test_real_reader_reads_tor_and_domain_from_the_saved_record(tmp_path):
+    _save(tmp_path, ("tuwunel", "tor"))
+    ident = _REAL_IDENTITY(_GEN)
+    assert ident.domain == "saved.example.org"
+    assert ident.with_tor is True
+    assert "tor-mesh" in ident.source
+
+
+def test_real_reader_follows_the_services_tuple_not_the_legacy_flag(tmp_path):
+    _save(tmp_path, ("tuwunel",), with_tor=True)
+    assert _REAL_IDENTITY(_GEN).with_tor is False
+
+
+def test_real_reader_ignores_another_checkouts_record(tmp_path):
+    _save(tmp_path, ("tor",))
+    other = tmp_path / "other-checkout"
+    other.mkdir()
+    ident = _REAL_IDENTITY(str(other))
+    assert ident.with_tor is False and ident.source == ""
+
+
+def test_tui_gate_bridges_a_tor_mesh_into_x86_and_rpi5_node_argv(tmp_path, monkeypatch):
+    _save(tmp_path, ("tuwunel", "tor"))
+    monkeypatch.setattr(lc, "local_mesh_identity", _REAL_IDENTITY)
+    j = journey.Journey(_GEN)
+    j.feed("")
+    j.feed("2")
+    assert j.slug == "localcloud"
+    text = "\n".join(j.lines())
+    assert "Tor onion: on" in text and "cannot carry Tor: jetson" in text
+    j.feed("y")
+    assert j.cfg.tor_onion_service is True
+    wl = WorklistConfig(base=j.cfg, entries=[
+        WorklistEntry(role="backend", platform="x86"),
+        WorklistEntry(role="backend", platform="rpi5")])
+    got = {e.id: c for e, c in wl.materialize()}
+    x86, rpi = got["backend.x86"], got["backend.rpi5"]
+    assert "--with-tor" in x86.to_cli_args()
+    argv = rpi.to_cli_args()
+    svcs = argv[argv.index("--optional-services") + 1].split()
+    assert "tor" in svcs and {"akkoma", "tuwunel", "phpbb"} <= set(svcs)
+    assert "net-vpn/tor" in pc.adhoc_atoms(x86)
+    assert "net-vpn/tor" in pc.adhoc_atoms(rpi)
+
+
+def test_apply_gate_without_tor_leaves_tor_alone():
+    j = journey.Journey(".")
+    j.cfg.tor_onion_service = "off"
+    lc.apply_gate(j, "mesh.example.org", [])
+    assert j.cfg.tor_onion_service == "off"
+
+
+def test_real_reader_falls_back_on_a_malformed_newest_record(tmp_path):
+    # A record from_dict cannot read (services must be a sequence) must not raise out
+    # of the TUI's gate: the defaults come back and no source is claimed.
+    rec = sm.SavedMesh(id=sm.new_id(), label="broken", generator_dir=_GEN,
+                       hostname=socket.gethostname(),
+                       config={"env": "prod", "cluster_domain": "bad.example.org",
+                               "services": 42})
+    assert sm.save(rec)
+    ident = _REAL_IDENTITY(_GEN)
+    assert ident.source == "" and ident.with_tor is False
+    assert ident.domain != "bad.example.org"
+
+
+# ── #636: a local mesh generated with N domains imports ALL of them (TUI face) ───────
+from hugmesh_studio.core.config import DOMAIN_IDP_OWN  # noqa: E402
+
+
+def _save_n_domains(tmp_path):
+    cfg = LocalMeshBootstrapConfig(
+        env="prod", cluster_domain="saved.example.org", out_dir=str(tmp_path / "keys"),
+        domains=({"name": "a.example", "title": "Alpha", "idp": "superdomain",
+                  "optional_services": ["phpbb"]},
+                 {"name": "b.example", "title": "Beta", "idp": DOMAIN_IDP_OWN,
+                  "optional_services": []}),
+        own_idp_domains=("b.example",),
+        domain_services_reviewed=("a.example",))
+    rec = sm.SavedMesh(id=sm.new_id(), label="three-domains", generator_dir=_GEN,
+                       hostname=socket.gethostname(), config=cfg.to_dict())
+    assert sm.save(rec)
+
+
+def test_tui_gate_imports_every_domain_of_the_saved_mesh(tmp_path, monkeypatch):
+    _save_n_domains(tmp_path)
+    monkeypatch.setattr(lc, "local_mesh_identity", _REAL_IDENTITY)
+    j = journey.Journey(_GEN)
+    j.feed("")
+    j.feed("2")
+    assert j.slug == "localcloud"
+    text = "\n".join(j.lines())
+    assert "domains: a.example — superdomain sign-in; services: phpbb" in text
+    assert "b.example — own Casdoor; services: cluster default " \
+        "(services not confirmed yet)" in text
+    j.feed("y")
+    assert j.cfg.cluster_domain == "saved.example.org"
+    assert [d.name for d in j.cfg.domains] == ["a.example", "b.example"]
+    assert j.cfg.own_idp_domains() == ("b.example",)
+    assert j.cfg.domains[0].optional_services == ["phpbb"]
+    assert j.cfg.additional_domains is True
+    assert j.cfg.domain_services_reviewed == ["a.example"]
+
+
+def test_tui_apply_gate_without_domains_imports_the_apex_only():
+    j = journey.Journey(".")
+    lc.apply_gate(j, "mesh.example.org", [])
+    assert j.cfg.domains == [] and j.cfg.additional_domains is False
+
+
+# ── post-merge review of PR #644 (decision 71 = A): the import REPLACES what an earlier
+# flow left, and says which saved rows it will not take — on this face too ─────────────
+from hugmesh_studio.core.config import Domain  # noqa: E402
+
+
+def _walk_to_build(j):
+    """From the consented gate (the idp step) to the Build screen, taking every default
+    and offering the worklist's first row."""
+    assert j.slug == "idp"
+    j.feed("")                                      # idp -> worklist
+    assert j.slug == "worklist"
+    j.feed("1")                                     # offer the first row ...
+    for _ in range(40):
+        if j.slug == "build" or j.done:
+            break
+        if j.slug == "domain_services":
+            # Enter would finish the step on its first domain; "n" shows the next one,
+            # and a domain is recorded as walked when it is shown.
+            for _ in range(len(j.cfg.domains) + 1):
+                j.feed("n")
+        j.feed("")                                  # ... and take every default after it
+    assert j.slug == "build", f"the walk stopped on {j.slug!r}"
+
+
+def test_tui_journey_builds_exactly_the_saved_meshs_domains(tmp_path, monkeypatch):
+    """A plain "Mesh node" walk of the same session left a hand-added row in the one
+    ImageConfig the Journey keeps. The saved mesh's record is the whole domain set of
+    the nodes that JOIN it, so the Build screen — and the manifest the nodes get — must
+    carry its two rows and not that third one."""
+    _save_n_domains(tmp_path)
+    monkeypatch.setattr(lc, "local_mesh_identity", _REAL_IDENTITY)
+    j = journey.Journey(_GEN)
+    j.cfg.domains = [Domain(name="x.example", title="X")]
+    j.cfg.additional_domains = True
+    j.feed("")                                      # welcome -> mode
+    j.feed("2")                                     # Create nodes for local cloud
+    j.feed("y")                                     # the consent
+    assert [d.name for d in j.cfg.domains] == ["a.example", "b.example"]
+    _walk_to_build(j)
+    assert [d.name for d in j.cfg.domains] == ["a.example", "b.example"]
+    text = "\n".join(j.lines())
+    assert "domains   2 (own Casdoor: b.example)" in text
+    assert "x.example" not in text
+    assert [d["name"] for d in j.cfg.mesh_manifest()["domains"]] == \
+        ["a.example", "b.example"]
+    assert "will refuse" not in text                # the walk recorded every domain
+
+
+def _save_hand_edited(tmp_path):
+    cfg = LocalMeshBootstrapConfig(
+        env="prod", cluster_domain="saved.example.org", out_dir=str(tmp_path / "keys"),
+        domains=({"name": "Bad.Example", "title": "", "idp": "superdomain",
+                  "optional_services": []},
+                 {"name": "c.example", "title": "", "idp": "nonsense",
+                  "optional_services": []},
+                 {"name": "b.example", "title": "Beta", "idp": DOMAIN_IDP_OWN,
+                  "optional_services": []}),
+        own_idp_domains=("b.example",))
+    rec = sm.SavedMesh(id=sm.new_id(), label="hand-edited", generator_dir=_GEN,
+                       hostname=socket.gethostname(), config=cfg.to_dict())
+    assert sm.save(rec)
+
+
+def test_tui_gate_says_which_saved_rows_it_will_not_import(tmp_path, monkeypatch):
+    """A record edited by hand: a row whose name is no lowercase hostname, or whose
+    sign-in the configuration does not know, is not imported — and the page the
+    operator reads BEFORE consenting says so by name, instead of listing it."""
+    _save_hand_edited(tmp_path)
+    monkeypatch.setattr(lc, "local_mesh_identity", _REAL_IDENTITY)
+    j = journey.Journey(_GEN)
+    j.feed("")
+    j.feed("2")
+    text = "\n".join(j.lines())
+    assert "Bad.Example — NOT imported: not a domain name" in text
+    assert ("c.example — NOT imported: sign-in 'nonsense' is not one of "
+            "superdomain, own") in text
+    assert "b.example — own Casdoor" in text
+    j.feed("y")
+    assert [d.name for d in j.cfg.domains] == ["b.example"]
