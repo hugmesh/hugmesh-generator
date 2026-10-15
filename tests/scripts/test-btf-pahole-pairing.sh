@@ -5,7 +5,7 @@
 # WHY. The bpf LSM can be compiled in and named in CONFIG_LSM and still not enforce:
 # attaching a BPF_PROG_TYPE_LSM program needs BTF. CONFIG_DEBUG_INFO_BTF has a
 # dependency chain that fails SILENTLY at `make olddefconfig` (no warning, the symbol
-# just is not set): DEBUG_INFO must be on (a DWARF choice selected),
+# just is not set): DEBUG_INFO must be on (a DWARF choice, which needs DEBUG_KERNEL),
 # pahole must be installed when Kconfig runs, and struct layout randomisation must be
 # off. Half of that chain living in a fragment and the other half in a package list
 # is how it drifts, so this pins the whole chain for the two boards that ship bpf:
@@ -43,8 +43,9 @@ def code(text):
 def has(ctext, action, sym):
     return bool(re.search(r"^%s\s+%s\s*$" % (action, re.escape(sym)), ctext, re.M))
 
-# The whole chain, in the words of scripts/config. All three or none.
-BLOCK = [("enable", "CONFIG_DEBUG_INFO_DWARF_TOOLCHAIN_DEFAULT"),
+# The whole chain, in the words of scripts/config. All four or none.
+BLOCK = [("enable", "CONFIG_DEBUG_KERNEL"),
+         ("enable", "CONFIG_DEBUG_INFO_DWARF_TOOLCHAIN_DEFAULT"),
          ("enable", "CONFIG_DEBUG_INFO_BTF"),
          ("enable", "CONFIG_DEBUG_INFO_BTF_MODULES")]
 # BTF depends on struct randomisation being off.
@@ -110,7 +111,7 @@ for board, frag, builder, where in BOARDS:
         bad("%s: part of the BTF block is present without CONFIG_DEBUG_INFO_BTF: %s"
             % (board, ", ".join(s for _a, s in present)))
     elif btf_on:
-        ok("%s: fragment carries the whole BTF chain (DWARF choice, BTF, BTF_MODULES)" % board)
+        ok("%s: fragment carries the whole BTF chain (DEBUG_KERNEL, DWARF choice, BTF, BTF_MODULES)" % board)
     else:
         ok("%s: fragment carries no BTF" % board)
 

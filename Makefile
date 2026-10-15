@@ -2708,8 +2708,8 @@ binpkg-reuse-report-check: ## test the compile-once measurement harness against 
 	bash tests/scripts/test-binpkg-reuse-report.sh
 
 # btf-kconfig-resolve-check: resolve the x86 kernel fragment against a REAL kernel source tree and read BTF back
-# out of .config (needs gcc, make, flex, bison, pahole; exits 2 rather than skipping when KERNEL_TREE is not a tree).
-KERNEL_TREE ?= /usr/src/linux
+# out of .config (needs gcc, make, flex, bison, pahole; exits 2 rather than skipping when KERNEL_TREE is empty, not a tree, or already configured in place).
+KERNEL_TREE ?=
 .PHONY: btf-kconfig-resolve-check
-btf-kconfig-resolve-check: ## resolve the x86 kernel fragment against a real kernel tree (KERNEL_TREE=/usr/src/linux) and prove BTF survives olddefconfig
+btf-kconfig-resolve-check: ## resolve the x86 kernel fragment against a real kernel tree (KERNEL_TREE=<clean tree>) and prove BTF survives olddefconfig
 	bash tests/scripts/test-btf-kconfig-resolve.sh "$(KERNEL_TREE)"

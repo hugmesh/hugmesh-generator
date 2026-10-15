@@ -126,11 +126,11 @@ grep -q "^enable CONFIG_CRYPTO_AES_NI_INTEL\$" "${X86_FRAG}" \
 btf=0
 for f in "${X86_FRAG}" "${PI_FRAG}"; do
     n=0
-    for s in CONFIG_DEBUG_INFO_DWARF_TOOLCHAIN_DEFAULT CONFIG_DEBUG_INFO_BTF CONFIG_DEBUG_INFO_BTF_MODULES; do
+    for s in CONFIG_DEBUG_KERNEL CONFIG_DEBUG_INFO_DWARF_TOOLCHAIN_DEFAULT CONFIG_DEBUG_INFO_BTF CONFIG_DEBUG_INFO_BTF_MODULES; do
         grep -qE "^enable ${s}\$" "${f}" && n=$((n+1))
     done
-    { [ "${n}" -eq 0 ] || [ "${n}" -eq 3 ]; } \
-        || { bad "partial BTF block in ${f}: ${n} of 3 lines (DWARF choice, BTF, BTF_MODULES)"; btf=$((btf+1)); }
+    { [ "${n}" -eq 0 ] || [ "${n}" -eq 4 ]; } \
+        || { bad "partial BTF block in ${f}: ${n} of 4 lines (DEBUG_KERNEL, DWARF choice, BTF, BTF_MODULES)"; btf=$((btf+1)); }
 done
 [ "${btf}" -eq 0 ] && ok "the BTF block is complete or absent in both fragments"
 

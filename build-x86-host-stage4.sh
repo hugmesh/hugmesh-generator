@@ -6457,10 +6457,10 @@ if [ ! -e /usr/src/linux/Makefile ]; then
 fi
 # dev-util/pahole must exist BEFORE make defconfig below: Kconfig reads its version
 # while it resolves, and CONFIG_DEBUG_INFO_BTF (the hardened-k8s.config BTF block)
-# is dropped by olddefconfig when it is missing. Same guarded top-up as above; the
+# is dropped by olddefconfig when it is missing. Same guarded top-up as above, with
+# no group banner of its own (the banner set is pinned by tests/build-matrix/check.sh); the
 # BTF assert after olddefconfig is what fails the build if this did not take.
 if ! command -v pahole >/dev/null 2>&1; then
-    echo "==> Emerge group: dependencies"
     emerge --noreplace --quiet-build dev-util/pahole \
         || emerge --quiet-build dev-util/pahole
 fi

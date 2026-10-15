@@ -971,8 +971,8 @@ PREMERGE_UNGATED=(
   # run today by `make binpkg-reuse-report-check`.
   tests/scripts/test-binpkg-reuse-report.sh
   # NOT YET IN THE PULL_REQUEST GATE, and that is the only reason it is here: it is
-  # offline, bash + python3 only, and belongs in shell-suites.yml's debian job beside
-  # test-lsm-posture-honesty.sh. It is gated post-merge by .gitlab-ci.yml's
+  # offline, bash + python3 only, and belongs in shell-suites.yml beside
+  # test-lsm-posture-honesty.sh (same job). It is gated post-merge by .gitlab-ci.yml's
   # lint:btf-pahole-pairing. The lane that wrote it (hugmesh-generator#760) was
   # forbidden to edit anything under .github, so: add the path to that SUITES list,
   # delete this entry and raise PREMERGE_BASELINE by one to the number check 7 prints.

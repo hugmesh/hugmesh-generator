@@ -40,6 +40,10 @@ if [ -z "${TREE}" ] || [ ! -f "${TREE}/scripts/config" ] || [ ! -f "${TREE}/Make
     exit 2
 fi
 FRAG="${REPO}/specs-x86/kernel/hardened-k8s.config"
+if [ -e "${TREE}/.config" ] || [ -d "${TREE}/include/config" ]; then
+    echo "  FAIL ${TREE} is not a clean source tree (has .config or include/config): Kbuild refuses an O= build against it; pass a tree that was never configured in place"
+    exit 2
+fi
 for t in gcc make flex bison pahole; do
     command -v "${t}" >/dev/null 2>&1 || { echo "  FAIL ${t} not installed (Kconfig needs it to resolve)"; exit 2; }
 done
