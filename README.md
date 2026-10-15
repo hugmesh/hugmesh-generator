@@ -541,13 +541,6 @@ none), and compose green is not evidence for the cluster._
   and the tier-egress default-deny NetworkPolicies are manual-sync with an overlay
   whose `resources: []` renders **zero objects** by design, needing per-namespace
   staged enablement with the devops namespace last (ArgoCD self-wedge risk).
-- **🔭 x86 auto-update poller is not baked.** `build-frite-stage4.sh` copies
-  `hugmesh-update` + its init script and adds it to both SVCS arrays;
-  `build-x86-host-stage4.sh` does neither, so `provision_update` falls to the else
-  branch and only writes `/etc/hugmesh/cron-update.staged` with a warning. Until
-  that protected edit lands, no x86 host and no x86 client image (laptop /
-  chromebook / desktop) can auto-update even if a superadmin flips `enabled: true`
-  — the per-node update schedule itself is shipped and ArgoCD-synced.
 - **🔭 Real cross-build proof for the shared binpkg pools** — the mechanism and
   the fingerprint guard are shipped; the compile-once speedup is unmeasured.
 
