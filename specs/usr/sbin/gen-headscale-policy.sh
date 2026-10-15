@@ -31,11 +31,13 @@
 #      (${CACHE_DIR}/applied-policy-hash), so a failed apply is retried on the
 #      next tick instead of being forgotten because the file is already on disk.
 #   7. a policy headscale does not load (it never answers after the restart, even
-#      after a second restart) is NEVER rolled back to the previous file as it was:
+#      after a second restart) is not rolled back to the previous file as it was:
 #      that file still grants every edge the export has since REVOKED, and the cursor
 #      has already advanced so the same generation is never fetched again. The
 #      fallback is the previous policy narrowed to the ssh edges the rejected policy
-#      still carries (a revocation is therefore never undone by a failed apply), the
+#      still carries (a refusal at startup no longer puts a revoked edge back; a restart
+#      command that fails outright cannot change what is running, so that case only
+#      alarms and retries), the
 #      rejected policy is kept as pending and retried a bounded number of ticks, and
 #      an ALARM (${CACHE_DIR}/apply-failed + a daemon.crit log line) stays raised
 #      until a policy that matches the export is actually loaded.
