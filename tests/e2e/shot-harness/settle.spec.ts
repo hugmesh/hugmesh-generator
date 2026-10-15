@@ -221,3 +221,33 @@ test('fonts and finite animations are still waited for everywhere while the canv
   expect(await page.evaluate(() => getComputedStyle(document.getElementById('box')!).opacity)).toBe('1');
   await resumeFrozenAnimations(page);
 });
+
+// ── a failed settle puts the page back the way it found it ───────────────────
+
+/** An infinite animation on top of a page whose settle is about to fail. */
+async function addInfiniteLoop(page: import('@playwright/test').Page): Promise<void> {
+  await page.evaluate(() => {
+    const el = document.createElement('div');
+    el.style.cssText = 'position:absolute;left:300px;top:250px;width:20px;height:20px;background:#c33';
+    document.body.appendChild(el);
+    el.animate([{ transform: 'translateX(0)' }, { transform: 'translateX(20px)' }], { duration: 700, iterations: Infinity });
+  });
+}
+const infiniteState = (page: import('@playwright/test').Page) => page.evaluate(
+  () => document.getAnimations().find((a) => a.effect?.getTiming?.().iterations === Infinity)?.playState,
+);
+
+test('a settle that throws (refused mask, or never stable) un-pauses the infinite animation it froze', async ({ page }) => {
+  // capture.spec.ts calls waitForSettle OUTSIDE the try/finally that resumes, so
+  // on a failed row this is the only thing that lets the page animate again.
+  await page.setContent(LIVE_CANVAS_HTML());
+  await addInfiniteLoop(page);
+  await expect(waitForSettle(page, 'refused-mask', { ...BUDGET, mask: ['body', 'html'] })).rejects.toThrow(/more than 50%/);
+  expect(await infiniteState(page)).toBe('running');
+
+  await page.goto('about:blank');   // a new window: the fixture's top-level `const ctx` cannot be declared twice in one
+  await page.setContent(LIVE_CANVAS_HTML());
+  await addInfiniteLoop(page);
+  await expect(waitForSettle(page, 'never-stable', BUDGET)).rejects.toThrow(NEVER);
+  expect(await infiniteState(page)).toBe('running');
+});

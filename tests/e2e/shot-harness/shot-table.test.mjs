@@ -3,6 +3,7 @@
 // (npm run shots:validate-unit)
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { loadTable, validate, MASK_SELECTORS } from './shot-table.mjs';
 
 const CANVAS = '[data-testid="cf-engine-canvas"]';
@@ -57,4 +58,15 @@ test('an empty or non-array mask, an unknown settle key and a non-object settle 
 
 test('a duplicated mask selector is rejected', () => {
   assert.match(problems({ mask: [CANVAS, CANVAS] }).join('\n'), /twice/);
+});
+
+// The one line that carries `settle.mask` from a row into the live driver. It
+// cannot run offline (capture.spec.ts needs a mesh), so it is pinned by its
+// source: without this, `waitForSettle(page, name, {})` leaves every offline
+// check green while the Character Forge row fails with "never matched" again.
+test('capture.spec.ts hands the row\'s settle.mask to waitForSettle', () => {
+  const src = readFileSync(new URL('./capture.spec.ts', import.meta.url), 'utf8')
+    .replace(/\/\*[\s\S]*?\*\//g, '')   // a comment must not be able to satisfy the pin
+    .replace(/\/\/.*$/gm, '');
+  assert.match(src, /waitForSettle\(\s*page\s*,\s*name\s*,\s*\{\s*mask:\s*row\.settle\?\.mask\s*\}\s*\)/);
 });
