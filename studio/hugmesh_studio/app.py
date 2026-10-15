@@ -14,6 +14,10 @@
   python -m hugmesh_studio --session-artifacts ID [--json]
   python -m hugmesh_studio --delete-session ID --yes [--delete-artifacts]
       # headless: the wizard Sessions page's build-session history (core/build_sessions)
+  python -m hugmesh_studio --local-ai-status [--json]
+  python -m hugmesh_studio --local-ai-prompt "question"
+      # headless: what the local model is doing (the Studio window's Local AI bar, as text),
+      # and one question to it; both exit non-zero with a plain sentence when Ollama is down
   python -m hugmesh_studio --generator-dir /path/to/hugmesh-generator
   python -m hugmesh_studio --remember-roles-for-passwordless-login
       # OPT-IN, default OFF: KeyZipPage imports also mirror human-loginable KEYS
@@ -189,9 +193,18 @@ def main(argv=None) -> int:
                          "by environment and interface, with the index verified "
                          "against the disk BOTH ways. Accepts a run dir or a "
                          "report dir containing bdd-steps/.")
+    ap.add_argument("--local-ai-status", action="store_true",
+                    help="headless: what the local AI is doing - the Ollama server, the model "
+                         "loaded, the queue, the drafts and the Studio's running builds (the "
+                         "Studio window's Local AI bar as text). Exits 1 with the problem and "
+                         "its fix when Ollama is not installed, not answering or has no model. "
+                         "With --json: the same snapshot as JSON.")
+    ap.add_argument("--local-ai-prompt", metavar="TEXT", default=None,
+                    help="headless: ask the local model one question (loopback Ollama only) and "
+                         "print the answer; exits 1 with a plain sentence when Ollama is down.")
     ap.add_argument("--json", action="store_true",
                     help="with --scan-hardware/--list-sessions/--show-session/"
-                         "--session-artifacts: machine-readable JSON on stdout.")
+                         "--session-artifacts/--local-ai-status: machine-readable JSON on stdout.")
     # ── the Go-Live "Export to GitHub org" step, from a terminal (Qt-free) ──────
     # --org-export PLAN|APPLY with --domain/--org or --config, --rename-map, --out;
     # APPLY refuses without --apply. The engine is core/org_export.py.
@@ -426,6 +439,34 @@ def main(argv=None) -> int:
         s = hw_scan.scan()
         print(json.dumps(hw_scan.to_dict(s), sort_keys=True) if args.json
               else hw_scan.format_table(s))
+        return 0
+
+    if args.local_ai_status or args.local_ai_prompt is not None:
+        # Qt-free path: the same snapshot and the same loopback-only prompt the Studio
+        # window's Local AI bar and the terminal UI use (core/local_ai_status.py).
+        import json
+        from .core import local_ai_status as lai
+        if args.local_ai_status:
+            snap = lai.read_snapshot()
+            print(json.dumps(snap.to_dict(), sort_keys=True) if args.json
+                  else lai.format_status(snap))
+            if not snap.ok:
+                print(f"error: {snap.problem} {snap.fix} (see {snap.doc})", file=sys.stderr)
+                return 1
+            return 0
+        if not args.local_ai_prompt.strip():
+            # Same answer as ``local_ai_status prompt`` and the dock: an empty question is
+            # not sent. Exit 2 is "bad input", the code the other flags use for it.
+            print('usage: python -m hugmesh_studio --local-ai-prompt "question"',
+                  file=sys.stderr)
+            return 2
+        try:
+            lai.send_prompt(args.local_ai_prompt,
+                            on_chunk=lambda c: (sys.stdout.write(c), sys.stdout.flush()))
+        except lai.LocalAIError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+        print()
         return 0
 
     if args.list_sessions or args.show_session or args.session_artifacts \

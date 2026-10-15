@@ -408,6 +408,68 @@ def _inert_entry_probes(request, monkeypatch):
                         lambda self: mesh_node.MeshStatus(False, why), raising=True)
 
 
+#: The door of the Ollama that runs on a developer's own machine. No test may knock on it.
+_HOST_OLLAMA = "127.0.0.1:11434"
+
+
+@pytest.fixture(autouse=True)
+def _inert_local_ai(request, monkeypatch, tmp_path):
+    """Keep every test away from the host's own local AI: its Ollama and its state folder.
+
+    Every ``StudioShell.open_window`` mounts the Local AI dock, which polls
+    ``core.local_ai_status.read_snapshot`` from the moment the window shows: one HTTP
+    request to the Ollama on 127.0.0.1:11434 and a read of the operator's real
+    ``~/.local/state/hugmesh/local-ai`` (queue, drafts, the worker's heartbeat). Twenty-odd
+    files open a window for reasons that have nothing to do with the dock, and the dock's
+    own suite is the only one that stubs it. On a box where Ollama is up the summary says
+    "ready, qwen3:8b loaded" and on a box where it is down it says "not answering"; a test
+    that read either would pass on one machine and fail on the next, and every poll was a
+    real request to a real server the operator may be using.
+
+    Three things, all default and all overridable per test:
+
+    * ``$HUGMESH_LOCAL_AI_DIR`` points at an empty folder under ``tmp_path``, so no test
+      reads or writes the operator's queue (a test's own ``monkeypatch.setenv`` runs
+      later and wins).
+    * ``$OLLAMA_HOST`` is ``127.0.0.1:1``: loopback, so the loopback rule still passes,
+      and nothing listens there, so a probe answers "down" at once instead of asking the
+      host's server. A test that wants a server starts a fake on a free loopback port
+      and sets the variable itself.
+    * ``core.local_ai_status._opener`` — the one place every request leaves the module —
+      is wrapped: a request to 127.0.0.1:11434 is refused on the spot and recorded, and
+      the test in whose window it fell FAILS at teardown, even when the code under test
+      swallowed the refusal on a worker thread (the dock's poll does, by design). A test
+      that must talk to the real server opts out with ``pytest.mark.real_local_ai``.
+    """
+    if request.node.get_closest_marker("real_local_ai"):
+        yield []
+        return
+    from hugmesh_studio.core import local_ai_status as lai
+    monkeypatch.setenv(lai.STATE_ENV, str(tmp_path / "local-ai-state"))
+    monkeypatch.setenv(lai.HOST_ENV, "127.0.0.1:1")
+    real_opener = lai._opener
+    reached = []
+
+    def guarded_opener():
+        opener = real_opener()
+        real_open = opener.open
+
+        def open_(url, *a, **kw):
+            full = getattr(url, "full_url", None) or str(url)
+            if _HOST_OLLAMA in full:
+                reached.append(full)
+                raise AssertionError(
+                    f"a test reached the host's own Ollama at {full} "
+                    "(tests/conftest.py: _inert_local_ai; mark it real_local_ai if that is meant)")
+            return real_open(url, *a, **kw)
+        opener.open = open_
+        return opener
+    monkeypatch.setattr(lai, "_opener", guarded_opener)
+    yield reached                       # a test that proves the refusal clears its own record
+    assert not reached, (f"{request.node.nodeid} reached the host's own Ollama: {reached[:3]} "
+                         "(tests/conftest.py: _inert_local_ai)")
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # NEVER ELEVATE: a spy on the real subprocess.Popen that fails any test which starts
 # sudo / pkexec / doas / su — the control that proves this guard sees real cases, for the 2026-09-04 hang.

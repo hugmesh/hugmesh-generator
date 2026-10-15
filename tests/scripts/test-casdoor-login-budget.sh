@@ -27,6 +27,14 @@
 # is spent against one shared account by every Job here and by the pod backoff.
 # The measured spend on that run was 104 attempts across 111 logins.
 #
+# hugmesh-generator#402 is the same defect WITHOUT a sibling: casdoor-games-init and
+# casdoor-domain-init are the only Job on their admin Secret, so there is nothing
+# to order, but each is backoffLimit 6 with two wrong-password attempts per run.
+# When the Vault password has drifted neither value logs in, the pod backoff alone
+# walks the account into the throttle, and every later run blames the Vault value
+# for an account that is merely banned. So the retry-budget half below applies to
+# EVERY init Job, and the replay in layer 3 runs the pod backoff itself.
+#
 # WHAT IS CHECKED, in four layers:
 #
 #   1. THE DEPLOYMENT. Over every manifests/casdoor*/ directory: the Jobs that
@@ -106,7 +114,8 @@ CASDOOR_DEFAULT_PW="123"
 stage_tree() { # <dest>
     rm -rf "$1"
     mkdir -p "$1/manifests"
-    cp -r "${CLUSTER}/manifests/casdoor" "${CLUSTER}/manifests/casdoor-games" "$1/manifests/"
+    cp -r "${CLUSTER}/manifests/casdoor" "${CLUSTER}/manifests/casdoor-games" \
+          "${CLUSTER}/manifests/casdoor-domain" "$1/manifests/"
 }
 
 # Runs the deployment contract over a tree. Output -> ${WORK}/hooks.out.
@@ -223,6 +232,44 @@ s = s.replace("    LOCKOUT_EXIT = 75\n", "", 1)
 open(p, 'w').write(s)
 PY
 
+# #402: the same retry-budget controls, aimed at the two init Jobs that have no
+# sibling. Before the budget half of the contract was widened these passed.
+for REL in manifests/casdoor-games/init-job.yaml manifests/casdoor-domain/init-job.yaml; do
+    JOBDIR="$(basename "$(dirname "${REL}")")"
+
+    control "${JOBDIR}: the podFailurePolicy is deleted (the pod backoff replays the ban)" "${REL}" <<'PY'
+import re, sys
+p = sys.argv[1]
+s = open(p).read()
+s = re.sub(r"\n  podFailurePolicy:\n(?:    .*\n|      .*\n|        .*\n)+", "\n", s, count=1)
+open(p, 'w').write(s)
+PY
+
+    control "${JOBDIR}: the FailJob exit code drifts away from the script's" "${REL}" <<'PY'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+s = s.replace("values: [75]", "values: [42]", 1)
+open(p, 'w').write(s)
+PY
+
+    control "${JOBDIR}: restartPolicy goes back to OnFailure" "${REL}" <<'PY'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+s = s.replace("      restartPolicy: Never\n", "      restartPolicy: OnFailure\n", 1)
+open(p, 'w').write(s)
+PY
+
+    control "${JOBDIR}: the script stops defining a lockout exit status" "${REL}" <<'PY'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+s = s.replace("    LOCKOUT_EXIT = 75\n", "", 1)
+open(p, 'w').write(s)
+PY
+done
+
 echo
 echo "== 2. the bring-up: one Job, a wait longer than the ban, evidence on failure =="
 
@@ -337,11 +384,11 @@ PY
 echo
 echo "== 3. the behaviour: the real reconcile.py against casdoor's own throttle =="
 
-stub_up() { # <mode> <initial-admin-password> <lockout-after>
+stub_up() { # <mode> <initial-admin-password> <lockout-after> [ban-after-ok]
     stub_down
     rm -f "${WORK}/port" "${WORK}/journal"
     STUB_MODE="$1" STUB_ADMIN_PASSWORD="$2" STUB_ADMIN_USER=admin \
-        STUB_LOCKOUT_AFTER="$3" \
+        STUB_LOCKOUT_AFTER="$3" STUB_BAN_AFTER_OK="${4:--1}" \
         STUB_PORT_FILE="${WORK}/port" STUB_JOURNAL="${WORK}/journal" \
         python3 "${STUB}" >"${WORK}/stub.log" 2>&1 &
     STUB_PID=$!
@@ -360,12 +407,13 @@ stub_down() {
 }
 
 SCRIPT=""; SECRETS=""; SEED=""
-stage_fixture() { # <cluster-root> <workdir>
+stage_fixture() { # <cluster-root> <workdir> [configmap, default casdoor-init-script]
+    local cm="${3:-casdoor-init-script}"
     SCRIPT=""; SECRETS=""; SEED=""
-    eval "$(python3 "${CONTRACT}" fixture "$1" "$2" casdoor-init-script "${PROVISIONED_PW}" \
+    eval "$(python3 "${CONTRACT}" fixture "$1" "$2" "${cm}" "${PROVISIONED_PW}" \
             2>"${WORK}/fixture.err")"
     [ -n "${SCRIPT}" ] && [ -f "${SCRIPT}" ] && return 0
-    bad "casdoor-init-script could not be staged for execution: $(tail -1 "${WORK}/fixture.err")"
+    bad "${cm} could not be staged for execution: $(tail -1 "${WORK}/fixture.err")"
     return 1
 }
 
@@ -477,6 +525,99 @@ if [ -n "${SCRIPT}" ] && stub_up ok "${PROVISIONED_PW}" 99; then
         || bad "(3d) the run ends on a '$(last_login)' login, leaving casdoor's wrong-attempt counter loaded on every re-sync"
 fi
 
+# (3e) #402: the two init Jobs with NO sibling, and the pod backoff itself.
+#      The stage-3 scenarios above are the systems script's; these run the SAME
+#      shapes through casdoor-games-init and casdoor-domain-init, and then replay
+#      the Job's pod backoff (1 + backoffLimit runs) against a password that has
+#      DRIFTED, i.e. neither the provisioned value nor casdoor's default logs in.
+#      The Job's podFailurePolicy ends it on exit 75; the replay below applies
+#      that same rule, and the contract in layer 1 pins the rule to the manifest.
+#      Those two Jobs say "reconcile the Vault value" where the systems one says
+#      "reconcile secret/", hence the per-script misdirection text.
+BACKOFF_LIMIT=6
+DRIFTED_AFTER=3          # wrong attempts that trip the stub's throttle
+
+# Replays the pod backoff the way the Job controller would: run until a run exits
+# 0, or exits 75 (the podFailurePolicy FailJob rule), or 1 + backoffLimit runs
+# have happened. Sets REPLAY_RUNS and REPLAY_RC; the stub journal holds the spend.
+replay_backoff() {
+    REPLAY_RUNS=0; REPLAY_RC=""
+    local run
+    for run in $(seq 1 $((BACKOFF_LIMIT + 1))); do
+        run_script
+        REPLAY_RUNS=${run}; REPLAY_RC=${RC}
+        [ "${RC}" -eq 0 ] && break
+        [ "${RC}" -eq 75 ] && break
+    done
+}
+
+lone_job_scenarios() { # <configmap> <label> <misdirection> <cluster-root> <workdir>
+    local cm="$1" lbl="$2" mis="$3" root="$4" wd="$5"
+    stage_fixture "${root}" "${wd}" "${cm}" || return 0
+
+    if stub_up lockout "${CASDOOR_DEFAULT_PW}" 0; then
+        run_script
+        [ "${RC}" -eq 75 ] \
+            && ok "(3e ${lbl}) an account that is already banned -> exit 75, the status its podFailurePolicy stops on" \
+            || bad "(3e ${lbl}) already-banned account exited ${RC}, expected 75"
+        [ "$(logins any)" -eq 1 ] \
+            && ok "(3e ${lbl}) made exactly ONE login attempt against a banned account" \
+            || bad "(3e ${lbl}) made $(logins any) login attempts against a banned account; one is all that can be learned"
+        grep -aq "too many times" "${WORK}/out" \
+            && ok "(3e ${lbl}) the failure quotes casdoor's own throttle text" \
+            || bad "(3e ${lbl}) the output never mentions the throttle: $(grep -am1 FAIL "${WORK}/out")"
+        grep -aq "${mis}" "${WORK}/out" \
+            && bad "(3e ${lbl}) tells the operator to reconcile the Vault value for an account that is merely banned" \
+            || ok "(3e ${lbl}) does NOT tell the operator to reconcile a Vault value that may be correct"
+    fi
+
+    if stub_up ok "${CASDOOR_DEFAULT_PW}" 99; then
+        run_script
+        [ "${RC}" -eq 0 ] \
+            && ok "(3e ${lbl}) a fresh instance still converges (the takeover works)" \
+            || bad "(3e ${lbl}) exit ${RC} on a healthy fresh instance: $(grep -am1 FAIL "${WORK}/out")"
+        [ "$(logins wrong)" -le 2 ] \
+            && ok "(3e ${lbl}) fresh spend is $(logins wrong) wrong attempt(s), within the 2 per run the Job's comment states" \
+            || bad "(3e ${lbl}) fresh spend is $(logins wrong) wrong attempts, more than 2 per run"
+        [ "$(last_login)" = "ok" ] \
+            && ok "(3e ${lbl}) and the run ends on a SUCCESSFUL login, which clears casdoor's counter" \
+            || bad "(3e ${lbl}) the run ends on a '$(last_login)' login"
+    fi
+
+    # A ban that lands MID-RUN: the provisioned password logs in, then something
+    # else bans the account before the proof that casdoor's default no longer
+    # works. The run must stop at the login that discovered the ban: another
+    # attempt against a banned account learns nothing and keeps it hot.
+    if stub_up lockout "${PROVISIONED_PW}" 99 1; then
+        run_script
+        [ "${RC}" -eq 75 ] \
+            && ok "(3e ${lbl}) a ban that lands mid-run -> exit 75" \
+            || bad "(3e ${lbl}) a ban that lands mid-run exited ${RC}, expected 75"
+        [ "$(logins any)" -eq 2 ] \
+            && ok "(3e ${lbl}) and it stopped at the login that found the ban (2 logins, no third into the ban)" \
+            || bad "(3e ${lbl}) made $(logins any) logins; expected 2 (the success, then the one that found the ban)"
+    fi
+
+    # Drift: Vault's password is neither of the two this script knows. ONE stub
+    # process serves every run, so the throttle's counter carries across the pod
+    # backoff exactly as casdoor's does.
+    if stub_up lockout "a-password-the-script-has-never-been-given" "${DRIFTED_AFTER}"; then
+        replay_backoff
+        [ "${REPLAY_RC}" -eq 75 ] \
+            && ok "(3e ${lbl}) a drifted password ends in exit 75 after ${REPLAY_RUNS} run(s), which the podFailurePolicy turns into FailJob" \
+            || bad "(3e ${lbl}) a drifted password never reached exit 75: ${REPLAY_RUNS} run(s), last exit ${REPLAY_RC}"
+        [ "$(logins locked)" -ge 1 ] \
+            && ok "(3e ${lbl}) the drifted scenario really reached the throttle (not vacuous)" \
+            || bad "(3e ${lbl}) the drifted scenario never reached the throttle"
+        [ "${REPLAY_RUNS}" -lt $((BACKOFF_LIMIT + 1)) ] \
+            && ok "(3e ${lbl}) the pod backoff stopped at run ${REPLAY_RUNS} of $((BACKOFF_LIMIT + 1)) allowed ($(logins any) logins in all)" \
+            || bad "(3e ${lbl}) the pod backoff ran all $((BACKOFF_LIMIT + 1)) runs ($(logins any) logins) into the ban"
+    fi
+}
+
+lone_job_scenarios casdoor-games-init-script  games  "reconcile the Vault value" "${CLUSTER}" "${WORK}/fx-games"
+lone_job_scenarios casdoor-domain-init-script domain "reconcile the Vault value" "${CLUSTER}" "${WORK}/fx-domain"
+
 echo
 echo "== 4. negative controls — layer 3 must catch the bug it exists for =="
 
@@ -534,6 +675,66 @@ then
         fi
     fi
 fi
+
+# (4c/4d) #402: the same two controls, aimed at the lone init Jobs, scored by the
+#      pod-backoff replay. Pre-fix, the script never exits 75, so the replay must
+#      run every one of its 1 + backoffLimit runs; that is what proves (3e) can
+#      tell the difference rather than passing on a stub that happens to stop.
+for LONE in "casdoor-games casdoor-games-init-script" "casdoor-domain casdoor-domain-init-script"; do
+    set -- ${LONE}
+    DIR="$1"; CM="$2"
+    CTL3="${WORK}/nc-${DIR}-prefix"
+    stage_tree "${CTL3}"
+    if mutate "${DIR}: pre-fix try_login discards casdoor's message" "${CTL3}/manifests/${DIR}/init-job.yaml" <<'PY'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+s = s.replace('''        if LOCKED_OUT:
+            return False
+        cj.clear()''', '''        cj.clear()''', 1)
+s = s.replace('''        except CasdoorError as e:
+            if LOCKOUT_MARKER in getattr(e, "msg", ""):
+                LOCKED_OUT.append(e.msg)
+            return False
+        return require_admin_session()''', '''        except CasdoorError:
+            return False
+        return require_admin_session()''', 1)
+open(p, 'w').write(s)
+PY
+    then
+        if stage_fixture "${CTL3}" "${WORK}/fx-${DIR}-prefix" "${CM}" \
+           && stub_up lockout "a-password-the-script-has-never-been-given" "${DRIFTED_AFTER}"; then
+            replay_backoff
+            if [ "${REPLAY_RC}" -ne 75 ] && [ "${REPLAY_RUNS}" -eq $((BACKOFF_LIMIT + 1)) ]; then
+                ok "(4c) control [${DIR}: pre-fix try_login]: caught — the regressed copy replays all ${REPLAY_RUNS} runs ($(logins any) logins) into the ban and never exits 75"
+            else
+                bad "(4c) control [${DIR}: pre-fix try_login]: SURVIVED — ${REPLAY_RUNS} run(s), last exit ${REPLAY_RC}; (3e) would not have caught #402"
+            fi
+        fi
+    fi
+
+    CTL4="${WORK}/nc-${DIR}-marker"
+    stage_tree "${CTL4}"
+    if mutate "${DIR}: LOCKOUT_MARKER no longer matches casdoor's text" "${CTL4}/manifests/${DIR}/init-job.yaml" <<'PY'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+s = s.replace('    LOCKOUT_MARKER = "too many times"',
+              '    LOCKOUT_MARKER = "a phrase casdoor never sends"', 1)
+open(p, 'w').write(s)
+PY
+    then
+        if stage_fixture "${CTL4}" "${WORK}/fx-${DIR}-marker" "${CM}" \
+           && stub_up lockout "a-password-the-script-has-never-been-given" "${DRIFTED_AFTER}"; then
+            replay_backoff
+            if [ "${REPLAY_RC}" -ne 75 ]; then
+                ok "(4d) control [${DIR}: blinded marker]: caught — no exit 75 after ${REPLAY_RUNS} run(s), so the marker really is matched against the text casdoor sends"
+            else
+                bad "(4d) control [${DIR}: blinded marker]: SURVIVED — still exited 75 with a marker casdoor never sends"
+            fi
+        fi
+    fi
+done
 stub_down
 
 echo

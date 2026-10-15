@@ -772,6 +772,29 @@ def test_the_page_names_a_saved_row_the_import_will_not_take(wiz, monkeypatch, t
     type(wiz.cfg).from_dict(wiz.cfg.to_dict())       # a kept bad sign-in raises here
 
 
+def test_a_hand_edited_row_name_and_sign_in_are_escaped_in_the_summary(
+        wiz, monkeypatch, tmp_path):
+    """The summary is RichText and the "NOT imported" lines carry two strings nobody
+    validated: the row's name and its sign-in, both from a record a person can edit by
+    hand. Neither may ever be drawn as markup (the escape sits on the whole line, so
+    this pins both fields and the em dash text around them)."""
+    _save_named(tmp_path, "markup",
+                domains=({"name": "<b>x</b>.example", "title": "", "idp": "superdomain",
+                          "optional_services": []},
+                         {"name": "c.example", "title": "", "idp": "<i>y</i>&",
+                          "optional_services": []}),
+                own_idp_domains=())
+    _real_reader(monkeypatch)
+    pick_mode(wiz, "localcloud")
+    page = advance_to(wiz, wizard_mod.LocalCloudNodesPage)
+    text = page.summary.text()
+    assert "NOT imported" in text, "fixture: the rows must reach the summary"
+    assert "&lt;b&gt;x&lt;/b&gt;.example" in text
+    assert "<b>x</b>" not in text
+    assert "&lt;i&gt;y&lt;/i&gt;&amp;" in text
+    assert "<i>" not in text
+
+
 def test_a_forgotten_domains_table_writes_nothing_until_it_is_entered_again(
         wiz, monkeypatch, tmp_path):
     """collect_all() re-runs every visited page's validatePage. After the import told
