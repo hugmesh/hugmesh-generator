@@ -596,8 +596,11 @@ def record_problems(record: BrandRecord, *, unaffiliated: bool = False,
     max_len = DOCKER_LABEL_MAX if docker_start else BRAND_ID_MAX
     sid = sb.id.strip()
     if sid:
-        p = brand_id_problem(sid, profiles=(), max_len=max_len)
-        if p and not p.startswith(f"‘{sid}’ names an existing"):
+        # No profile list for the superbrand's own id: the superbrand is usually the
+        # very brands/<id>.conf profile a builder sources, so "names a profile" is
+        # the rule for BRANDS, not for it. Every other id rule applies to it.
+        p = brand_id_problem(sid, max_len=max_len)
+        if p:
             problems.append(f"superbrand: {p}")
     else:
         problems.append("superbrand: a superbrand needs an id")
@@ -744,7 +747,9 @@ def record_from_bootstrap(cfg) -> BrandRecord:
     sb = Superbrand.from_dict({**block, "id": cfg.brand, "public_name": own})
     if not sb.central_signin:
         sb.central_signin = cfg.issuer()
-    own_idp = {n.strip() for n in (getattr(cfg, "own_idp_domains", None) or ())}
+    own_idp_list = [n.strip() for n in (getattr(cfg, "own_idp_domains", None) or ())
+                    if n.strip()]
+    own_idp = set(own_idp_list)
     rows: list[Domain] = []
     for rec in (getattr(cfg, "domains", None) or ()):
         name = (rec.get("name") or "").strip()
@@ -752,16 +757,27 @@ def record_from_bootstrap(cfg) -> BrandRecord:
             continue
         row = ImageConfig._domain_from_dict(dict(rec))
         # the tenant the stack REGISTERS is what own_idp_domains says (the compose
-        # lane consumes that list), whatever the recorded row's idp says
+        # lane consumes that list), whatever the recorded row's idp says: a name in
+        # the list signs in on its own, a name outside it signs in through the
+        # superbrand even when its row says otherwise
         if name in own_idp:
             row.idp = DOMAIN_IDP_OWN
+        elif row.idp == DOMAIN_IDP_OWN:
+            row.idp = DOMAIN_IDP_SUPERDOMAIN
+            row.issuer_port = 0          # a brand through the superbrand takes no port
         rows.append(row)
-    # in the GIVEN order, never sorted: the stack node and the plan publish each
-    # own sign-in on own_casdoor.port_for(<position in this list>), and show-record
-    # must print the port the running mesh uses for that name
-    for name in (n.strip() for n in (getattr(cfg, "own_idp_domains", None) or ())):
-        if name and name != own and not any(r.name == name for r in rows):
+    for name in own_idp_list:
+        if name != own and not any(r.name == name for r in rows):
             rows.append(Domain(name=name, idp=DOMAIN_IDP_OWN))
+    # The stack node and the plan publish each own sign-in on
+    # own_casdoor.port_for(<position in own_idp_domains>), so the own-sign-in rows
+    # follow THAT order (never sorted, never the recorded order); the rows that are
+    # not an own sign-in keep their places between them.
+    place = {n: i for i, n in reversed(list(enumerate(own_idp_list)))}
+    slots = [i for i, r in enumerate(rows) if r.idp == DOMAIN_IDP_OWN]
+    for i, r in zip(slots, sorted((rows[i] for i in slots),
+                                  key=lambda r: place.get(r.name, len(place)))):
+        rows[i] = r
     tor_on = bool(cfg.effective_with_tor())
     if "tor" not in (sb.ways or {}):
         sb.ways = {**sb.ways, "tor": tor_on}
@@ -1085,10 +1101,15 @@ def choose_design(record: BrandRecord, name: str, date: str) -> None:
     if not re.match(r"^\d{4}-\d{2}-\d{2}$", date or ""):
         raise ValueError(f"the copy date must be YYYY-MM-DD, got {date!r}")
     design = _design_block(load_design(name))
+    # Only the keys the design FILE carries replace the record's: a design saved with
+    # a look and nothing else must leave the record's title and organisation alone.
+    with open(_design_path(name), encoding="utf-8") as fh:
+        raw = json.load(fh)
+    carried = set(design) | {k for k in DESIGN_KEYS if isinstance(raw, dict) and k in raw}
     # a NEW block built by value: the mesh's own fields from the record, the
-    # design's three (DESIGN_KEYS) from the store — a design file carrying an id or a
-    # public name (an older store) never renames the mesh
-    kept = {k: v for k, v in record.superbrand.to_dict().items() if k not in DESIGN_KEYS}
+    # design's keys from the store — a design file carrying an id or a public name
+    # (an older store) never renames the mesh
+    kept = {k: v for k, v in record.superbrand.to_dict().items() if k not in carried}
     record.superbrand = Superbrand.from_dict({**kept, **design})
     record.copied_from = {"design": name, "date": date}
 

@@ -414,3 +414,23 @@ def test_the_key_script_parses_superdomain_and_reads_brand(tmp_path):
     """The flag and the env knob the driver now passes are the script's own."""
     text = open(os.path.join(GENERATOR_DIR, wd.GENKEYS_SCRIPT), encoding="utf-8").read()
     assert "--superdomain)" in text and 'EFFECTIVE_SUPERDOMAIN="${SUPERDOMAIN:-${BRAND:-hugmesh}.internal}"' in text
+
+
+def test_profile_verb_prints_every_reason_of_both_kinds(tmp_path, capsys):
+    """The refusal lists the record's problems AND the profile writer's, together (a
+    mutation that kept only one kind used to survive): an id the record refuses, and an
+    organisation the record accepts but a generated profile may not carry."""
+    bad = tmp_path / "both.json"
+    bad.write_text(json.dumps({
+        "schema": 1,
+        "superbrand": {"id": "acme", "org": "Acme & Co"},
+        "brands": [{"name": "x.example", "id": "default"}]}))
+    assert bm.main(["validate", "--record", str(bad)]) == 1
+    validate_out = capsys.readouterr().out
+    assert "reserved" in validate_out and "Acme" not in validate_out  # validate: record kind only
+    assert bm.main(["profile", "--record", str(bad), "--out", str(tmp_path / "p")]) == 1
+    err = capsys.readouterr().err
+    assert "reserved" in err, err                        # the record's reason
+    assert "ORG" in err and "Acme & Co" in err, err      # the profile writer's reason
+    assert err.count("[refused]") == 3, err              # both reasons and the closing line
+    assert not (tmp_path / "p").exists()

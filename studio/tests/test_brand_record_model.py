@@ -576,3 +576,71 @@ def test_bootstrap_config_and_record_convert_both_ways():
     # the record of a pre-#654 config is the plain default superbrand, no brands
     plain = bm.record_from_bootstrap(LocalMeshBootstrapConfig())
     assert plain.superbrand.id == "hugmesh" and plain.brands == []
+
+
+# ── round 2 findings: what the Docker start reads is the record's own-sign-in list ──
+def _own_cfg(rows, own_idp):
+    return LocalMeshBootstrapConfig(
+        brand="acme", cluster_domain="mesh.example", own_idp_domains=tuple(own_idp),
+        domains=tuple({"name": n, "title": "", "idp": idp, "optional_services": []}
+                      for n, idp in rows))
+
+
+def test_own_idp_domains_wins_over_what_a_recorded_row_says_about_sign_in():
+    """The compose lane registers a sign-in for exactly the names in own_idp_domains.
+    A row that says 'own' for a name that is not in the list therefore signs in
+    through the superbrand on the running mesh, and must not take a port in
+    show-record (it used to, and shifted every later brand's port)."""
+    cfg = _own_cfg([("ghost.mesh.example", DOMAIN_IDP_OWN),
+                    ("real.mesh.example", "superdomain")], ["real.mesh.example"])
+    rec = bm.record_from_bootstrap(cfg)
+    by_name = {d.name: d for d in rec.brands}
+    assert by_name["ghost.mesh.example"].idp == "superdomain"
+    assert by_name["real.mesh.example"].idp == DOMAIN_IDP_OWN
+    assert bm.issuer_ports(rec) == {"real.mesh.example": 8001}
+
+
+def test_own_sign_in_rows_follow_the_own_idp_domains_order_not_the_recorded_order():
+    """Recorded rows alpha, zed; own_idp_domains (zed, alpha): the plan and the stack
+    node give zed the first port, so the record must list zed first or show-record
+    prints alpha on 8001."""
+    cfg = _own_cfg([("alpha.mesh.example", DOMAIN_IDP_OWN),
+                    ("mid.mesh.example", "superdomain"),
+                    ("zed.mesh.example", DOMAIN_IDP_OWN)],
+                   ["zed.mesh.example", "alpha.mesh.example"])
+    rec = bm.record_from_bootstrap(cfg)
+    assert [d.name for d in rec.brands if d.idp == DOMAIN_IDP_OWN] == [
+        "zed.mesh.example", "alpha.mesh.example"]
+    assert bm.issuer_ports(rec) == {"zed.mesh.example": 8001, "alpha.mesh.example": 8002}
+    # a row that is not an own sign-in keeps its place between them
+    assert [d.name for d in rec.brands][1] == "mid.mesh.example"
+
+
+def test_choosing_a_design_that_has_only_a_look_keeps_the_title_and_organisation(
+        tmp_path, monkeypatch):
+    """A design file carries only the keys it was saved with. Copying one that has a
+    look and nothing else must not blank the record's title and organisation."""
+    monkeypatch.setenv("HUGMESH_STUDIO_STATE_DIR", str(tmp_path / "state"))
+    bm.save_design("only-look", bm.Superbrand(look={"primary": "#112233"}))
+    rec = bm.BrandRecord(superbrand=bm.Superbrand(id="acme", title="Acme Mesh", org="example",
+                                                  public_name="mesh.example",
+                                                  look={"primary": "#ffffff"}))
+    bm.choose_design(rec, "only-look", "2026-10-14")
+    assert rec.superbrand.look == {"primary": "#112233"}
+    assert (rec.superbrand.title, rec.superbrand.org) == ("Acme Mesh", "example")
+    # a design that DOES carry a title still replaces it
+    bm.save_design("with-title", bm.Superbrand(title="Other Title", look={"primary": "#000000"}))
+    bm.choose_design(rec, "with-title", "2026-10-14")
+    assert rec.superbrand.title == "Other Title" and rec.superbrand.org == "example"
+
+
+def test_a_superbrand_id_may_name_a_profile_but_not_be_reserved_or_end_in_pki():
+    """record_problems checks the superbrand id with no profile list on purpose: the
+    superbrand IS usually the profile brands/<id>.conf names (the dead 'names an
+    existing' branch is gone). Every other id rule still applies to it."""
+    rec = bm.BrandRecord(superbrand=bm.Superbrand(id="hugmesh", public_name="m.example"))
+    assert bm.record_problems(rec, profiles=("hugmesh",)) == []
+    for bad in ("default", "domains", "acme-pki"):
+        rec.superbrand.id = bad
+        probs = bm.record_problems(rec, profiles=(bad,))
+        assert len(probs) == 1 and probs[0].startswith("superbrand: "), (bad, probs)
