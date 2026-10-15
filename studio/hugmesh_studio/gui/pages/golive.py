@@ -691,6 +691,18 @@ class GoLiveOrgExportPage(QtWidgets.QWizardPage):
         self.plan = None
         self.result = None
         self.worker = None
+        # every picker that changes the plan re-spells the Terminal line at once, so
+        # what a person copies before Plan is what Plan would run (the rename-map
+        # field used to be the only one wired, and a typed Source folder went stale).
+        # The two folders go on textChanged, not editingFinished: nothing validates
+        # them here, and a value set without a focus change (a driver, a paste) must
+        # reach the line too — the e2e walk caught a stale line that way. The
+        # rename-map field stays on editingFinished: it reads the file and would
+        # otherwise say "cannot be read" on every half-typed character.
+        self.visibility.currentIndexChanged.connect(self._refresh_cmd)
+        self.update_mode.currentIndexChanged.connect(self._refresh_cmd)
+        self.source_dir.textChanged.connect(self._refresh_cmd)
+        self.out_dir.textChanged.connect(self._refresh_cmd)
 
     # ── the step applies only when some domain names an org ───────────────────────
     def applies(self) -> bool:
@@ -776,11 +788,14 @@ class GoLiveOrgExportPage(QtWidgets.QWizardPage):
         if c is None:
             return None
         src = self.source_dir.text().strip()
+        # an empty Source folder is the clone root (.stack-src), as the field's
+        # placeholder says — also for a saved mesh that recorded a folder and had
+        # it cleared here; 'existing' with no folder would plan every source missing
         cfg = c.to_config(
             visibility=self.visibility.currentText(),
             update=self.update_mode.currentData() or org_export.UPDATE_REFUSE,
             out_dir=self.out_dir.text().strip(),
-            source_mode="existing" if src else (c.source_mode or "clone"),
+            source_mode="existing" if src else "clone",
             source_dir=src, generator_dir=c.generator_dir or self.wiz.generator_dir)
         rm = self.rename_map.text().strip()
         if rm:
@@ -794,8 +809,10 @@ class GoLiveOrgExportPage(QtWidgets.QWizardPage):
         c = self.current_candidate()
         return org_export.cli_command(
             cfg, verb,
-            # a generic config file is handed over as --config, so its rules travel
-            config_path=c.path if (c is not None and c.config is not None) else "",
+            # EVERY candidate's file is handed over as --config: a saved mesh's or an
+            # image config's selected services live only there, and a line spelling
+            # just --domain/--org planned (and with --apply exported) fewer repositories
+            config_path=c.path if c is not None else "",
             rename_map_path=self.rename_map.text().strip())
 
     def _refresh_cmd(self):
@@ -892,7 +909,7 @@ class GoLiveOrgExportPage(QtWidgets.QWizardPage):
         if p is None or p.blocked or (self.worker and self.worker.isRunning()):
             return
         if self.confirm.text().strip().lower() != p.config.org.lower():
-            self._say("Type the org name exactly to arm Apply.")   # inline, never modal
+            self._say("Type the org name to arm Apply (letter case does not matter).")   # inline, never modal
             self.apply_btn.setEnabled(False)
             return
         self._say("")

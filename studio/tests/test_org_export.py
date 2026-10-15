@@ -44,7 +44,7 @@ from hugmesh_studio.core.local_mesh_bootstrap import LocalMeshBootstrapConfig
 
 from _org_export_helpers import (  # noqa: E402
     FIXTURES, RUNNER_IDENTITY, RecordingRunner, bare as _bare, bare_log as _bare_log,
-    git as _git, make_world)
+    git as _git, make_world, parse_terminal_line, saved_mesh_naming_the_org)
 
 # the banned markers are spelled from parts here too: this file is part of the
 # generator's own exported tree
@@ -608,12 +608,19 @@ def test_plan_lines_name_every_target_and_what_is_not_renamed(world):
         assert f"  {r.source}: {r.ref} @ {r.source_commit[:12]}" in lines
     assert any(ln.startswith("Snapshot commits authored as:") for ln in lines)
     # handed over with a config file: --config carries the file's rules, --domain
-    # picks the row; a rename map travels too
-    cmd = oe.cli_command(world["cfg"], "PLAN", config_path="/x/export.json",
+    # picks the row; a rename map travels too; nothing the file already says is
+    # repeated (the out folder is the file's own here)
+    cfg_path = world["tmp"] / "export.json"
+    cfg_path.write_text(json.dumps(world["cfg"].to_dict()))
+    cmd = oe.cli_command(world["cfg"], "PLAN", config_path=str(cfg_path),
                          rename_map_path="/x/map.json")
-    assert cmd == ("python3 -m hugmesh_studio --org-export PLAN --config /x/export.json "
-                   "--domain mesh.example --rename-map /x/map.json --out "
-                   + shlex.quote(world["cfg"].out_dir))
+    assert cmd == (f"python3 -m hugmesh_studio --org-export PLAN --config {cfg_path} "
+                   "--domain mesh.example --rename-map /x/map.json")
+    # a file that cannot be read now: every value is spelled out, so the line stays
+    # exact rather than silently falling back to the defaults
+    cmd = oe.cli_command(world["cfg"], "PLAN", config_path="/x/missing.json")
+    for flag in ("--source-dir", "--out", "--remote-base"):
+        assert flag in cmd, (flag, cmd)
 
 
 def test_a_candidate_from_a_generic_config_file_keeps_the_files_rules(world, tmp_path):
@@ -837,6 +844,124 @@ def test_the_own_domains_selected_services_reach_its_repository_set(world, tmp_p
     # without the selection the forum api is NOT in the set: the assertion above bites
     cfg.optional_services = []
     assert "hugmesh-forum-api" not in oe.domain_repo_names(cfg)[0]
+
+
+def test_the_mesh_wide_services_step_reaches_the_own_domains_export(world, tmp_path, monkeypatch):
+    """The most ordinary local mesh: the org typed on the own row, the services picked
+    on the mesh-wide Services step. That per-row selection is recorded and NOT
+    enforced (core/local_mesh_domains: the compose profiles come from ``services``),
+    so the own row says [] while the mesh builds hugmesh-forum-api. Measured before
+    the fix (integration skeptic, rounds 2 and 0): the own candidate carried no
+    service and the export left the forum api out. Now the record's ``services`` is
+    read too, narrowed to the domain catalogue, and unioned with the row's own."""
+    from hugmesh_studio.core import saved_meshes
+    gen = world["gen"]
+
+    def record(services, row_services=()):
+        cfg = LocalMeshBootstrapConfig(
+            cluster_domain="mesh.example", source_mode="existing", source_dir=world["src"],
+            services=services,
+            domains=lmd.bootstrap_domain_records(
+                [Domain(name="mesh.example", github_org="exampleorg",
+                        optional_services=list(row_services)),
+                 Domain(name="chat.mesh.example", github_org="otherorg")], "mesh.example"))
+        return {"id": "m1", "label": "my mesh", "generator_dir": gen, "config": cfg.to_dict()}
+
+    rec = record(("phpbb", "argocd", "metrics-server"))
+    assert rec["config"]["domains"][0]["optional_services"] == []      # the row is empty
+    assert rec["config"]["services"] == ["phpbb", "argocd", "metrics-server"]
+    path = tmp_path / "rec.json"
+    path.write_text(json.dumps(rec))
+    own, added = oe.candidates_from_file(str(path))
+    assert (own.domain, own.optional_services) == ("mesh.example", ["phpbb"])   # infra slugs own no repo
+    assert (added.domain, added.optional_services) == ("chat.mesh.example", [])  # the own domain's only
+    assert "hugmesh-forum-api" in oe.domain_repo_names(own.to_config())[0]
+    assert "hugmesh-forum-api" not in oe.domain_repo_names(added.to_config())[0]
+    # the same record through the Studio state dir (what the Go-Live step scans) ...
+    monkeypatch.setenv("HUGMESH_STUDIO_STATE_DIR", str(tmp_path / "state"))
+    sm = saved_meshes.SavedMesh(id="20260101-000000-abcd", label="my mesh", generator_dir=gen)
+    sm.config = dict(rec["config"])
+    saved_meshes.save(sm)
+    assert [(c.domain, c.optional_services) for c in oe.saved_mesh_candidates()] == \
+        [("mesh.example", ["phpbb"]), ("chat.mesh.example", [])]
+    # ... and through the CLI's door
+    assert oe.load_config(str(path), domain="mesh.example").optional_services == ["phpbb"]
+    # the union: the row's own selection first, the mesh-wide extras after, no repeats
+    rec2 = record(("phpbb", "akkoma"), row_services=["akkoma", "games"])
+    path2 = tmp_path / "rec2.json"
+    path2.write_text(json.dumps(rec2))
+    assert oe.candidates_from_file(str(path2))[0].optional_services == ["akkoma", "games", "phpbb"]
+    # services=None (no picker used) and a junk value are "nothing" — the old reading
+    rec3 = record(None)
+    assert rec3["config"]["services"] is None
+    path3 = tmp_path / "rec3.json"
+    path3.write_text(json.dumps(rec3))
+    assert oe.candidates_from_file(str(path3))[0].optional_services == []
+    rec3["config"]["services"] = "phpbb"
+    path3.write_text(json.dumps(rec3))
+    assert oe.candidates_from_file(str(path3))[0].optional_services == []
+
+
+def test_the_terminal_line_parses_back_to_the_exact_config_the_face_planned(
+        world, tmp_path, monkeypatch):
+    """Measured before the fix (correctness skeptic, round 0, blocker 1): the GUI and
+    the TUI handed a file over as --config only for a GENERIC export config; a saved
+    mesh or an image config became ``--domain D --org O``, so the line planned
+    without the domain's selected services — one repository fewer than the step —
+    and with --apply exported that smaller set, exit 0, no warning. Now every
+    candidate's file travels as --config and every picker that differs from the
+    file is a flag: the line's parse IS the face's config, field for field."""
+    monkeypatch.setenv("HUGMESH_STUDIO_STATE_DIR", str(tmp_path / "state"))
+    saved_mesh_naming_the_org(world, services=["phpbb"])
+    (c,) = oe.saved_mesh_candidates()
+    assert c.config is None                       # not a generic config: the old gap
+    # the ordinary case: the record as it is, the GUI's default pickers
+    cfg = c.to_config(out_dir=str(tmp_path / "out"))
+    line = oe.cli_command(cfg, "PLAN", config_path=c.path)
+    assert f"--config {c.path} --domain mesh.example" in line and "--org " not in line
+    back = parse_terminal_line(line, world["gen"])
+    assert back == cfg
+    assert oe.domain_repo_names(back) == oe.domain_repo_names(cfg)
+    assert "hugmesh-forum-api" in oe.domain_repo_names(back)[0]
+    # ... and WITHOUT the file the same export loses the service: the equality bites
+    bare = parse_terminal_line(oe.cli_command(cfg, "PLAN"), world["gen"])
+    assert bare != cfg and "hugmesh-forum-api" not in oe.domain_repo_names(bare)[0]
+    # every picker changed over the file reaches the line and parses back
+    rm = tmp_path / "extra.json"
+    rm.write_text(json.dumps({"exclude": ["hugmesh-parent:LICENSE"]}))
+    other_src = tmp_path / "other-src"
+    other_src.mkdir()
+    cfg2 = c.to_config(out_dir=str(tmp_path / "out2"), visibility="public",
+                       update=oe.UPDATE_BRANCH, source_mode="existing",
+                       source_dir=str(other_src), brand="otherbrand",
+                       remote_base=f"file://{world['gh_root']}/")
+    cfg2.rename_map = oe.merge_rename_maps(cfg2.rename_map or {}, oe.load_rename_map(str(rm)))
+    plan_line = oe.cli_command(cfg2, "PLAN", config_path=c.path, rename_map_path=str(rm))
+    apply_line = oe.cli_command(cfg2, "APPLY", config_path=c.path, rename_map_path=str(rm))
+    for flag in (f"--source-dir {other_src} --source-mode existing", f"--rename-map {rm}",
+                 f"--out {tmp_path / 'out2'}", "--visibility public", "--update branch",
+                 "--brand otherbrand", f"--remote-base file://{world['gh_root']}/"):
+        assert flag in plan_line, (flag, plan_line)
+    # the apply form is the plan form with the verb swapped and the flag appended
+    assert apply_line == plan_line.replace("--org-export PLAN", "--org-export APPLY", 1) + " --apply"
+    assert parse_terminal_line(apply_line, world["gen"]) == cfg2
+    # a cleared Source folder means the clone root: the file's folder is dropped, as the GUI does
+    cfg3 = c.to_config(source_mode="clone", source_dir="")
+    line3 = oe.cli_command(cfg3, "PLAN", config_path=c.path)
+    assert "--source-mode clone" in line3 and "--source-dir" not in line3
+    assert parse_terminal_line(line3, world["gen"]) == cfg3
+    # the reverse flips over a generic file: it says public/branch, the pickers say private/refuse
+    gen_cfg = world["cfg"]
+    gen_cfg.visibility, gen_cfg.update = "public", oe.UPDATE_BRANCH
+    gpath = tmp_path / "export.json"
+    gpath.write_text(json.dumps(gen_cfg.to_dict()))
+    (g,) = oe.candidates_from_file(str(gpath), world["gen"])
+    cfg4 = g.to_config(visibility="private", update=oe.UPDATE_REFUSE)
+    line4 = oe.cli_command(cfg4, "PLAN", config_path=g.path)
+    assert "--visibility private" in line4 and "--update refuse" in line4
+    assert parse_terminal_line(line4, world["gen"]) == cfg4
+    # --update-via-branch keeps working, and the two spellings agree
+    assert parse_terminal_line(line4 + " --update-via-branch", world["gen"]).update == oe.UPDATE_BRANCH
 
 
 def test_a_services_value_that_is_not_a_list_is_no_selection_not_five_letters(tmp_path):

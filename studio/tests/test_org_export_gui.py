@@ -41,7 +41,8 @@ from hugmesh_studio.gui.qt import QtWidgets                             # noqa: 
 
 from _helpers import (                                                  # noqa: E402
     added_row, advance_to, check_worklist_rows, enable_additional_domains, pick_mode)
-from _org_export_helpers import bare_log, make_world, saved_mesh_naming_the_org  # noqa: E402
+from _org_export_helpers import (  # noqa: E402
+    bare_log, make_world, parse_terminal_line, saved_mesh_naming_the_org)
 
 STUDIO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 GENERATOR_DIR = os.path.dirname(STUDIO_ROOT)
@@ -533,6 +534,111 @@ def test_the_own_domains_selected_services_reach_the_steps_plan(golive, world, q
     assert forum.action == "missing source"
     page.confirm.setText("exampleorg")
     assert not page.apply_btn.isEnabled()
+
+
+def test_the_mesh_wide_services_step_reaches_the_steps_plan(golive, world, qapp, tmp_path):
+    """The own row names only the org; phpbb was picked on the mesh-wide Services
+    step (what the mesh actually runs). Measured before the fix: the step planned the
+    own domain without hugmesh-forum-api (integration skeptic, blocker B1)."""
+    saved_mesh_naming_the_org(world, mesh_services=["phpbb"])
+    golive.export_runner = world["runner"]
+    golive.export_remote_base = f"file://{world['gh_root']}/"
+    _at_generate(golive)
+    golive.next()
+    page = golive.currentPage()
+    assert isinstance(page, golive_mod.GoLiveOrgExportPage)
+    assert page.export_config().optional_services == ["phpbb"]
+    page.out_dir.setText(str(tmp_path / "out"))
+    page.plan_btn.click()
+    _wait_worker(page, qapp)
+    assert page.plan is not None, page.status.text()
+    targets = [page.table.item(r, 1).text() for r in range(page.table.rowCount())]
+    assert "exampleorg/example-forum-api" in targets, targets
+
+
+def test_the_terminal_line_plans_the_same_repositories_as_the_steps_table(
+        golive, world, qapp, tmp_path, monkeypatch, capsys):
+    """The Terminal field's claim — 'The same export from a terminal' — run back
+    through the REAL CLI (app.main: the Studio parser, run_cli, the real runner over
+    the fake gh) and compared with the table. Measured before the fix: the field
+    spelled ``--domain --org`` for a saved mesh, so the line planned 6 repositories
+    where the table showed 7 (correctness skeptic, round 0, blocker 1)."""
+    import re
+    import shlex
+    from hugmesh_studio import app as app_mod
+    monkeypatch.setenv("PATH", world["runner"].fake_bin + os.pathsep + os.environ["PATH"])
+    monkeypatch.setenv("FAKE_GH_ROOT", world["gh_root"])
+    monkeypatch.setenv("FAKE_GH_LOG", world["runner"].gh_log)
+    saved_mesh_naming_the_org(world, services=["phpbb"])
+    golive.export_runner = world["runner"]
+    golive.export_remote_base = f"file://{world['gh_root']}/"
+    _at_generate(golive)
+    golive.next()
+    page = golive.currentPage()
+    page.out_dir.setText(str(tmp_path / "out"))     # no editingFinished: the line is live
+    before = page.cmd.text()
+    assert before.startswith("python3 -m hugmesh_studio --org-export PLAN --config "), before
+    assert f"--out {tmp_path / 'out'}" in before
+    assert parse_terminal_line(before, GENERATOR_DIR) == page.export_config()
+    page.plan_btn.click()
+    _wait_worker(page, qapp)
+    assert page.plan is not None, page.status.text()
+    table = [page.table.item(r, 1).text() for r in range(page.table.rowCount())]
+    assert "exampleorg/example-forum-api" in table
+    # the apply form: the same words with the verb swapped and the flag appended
+    assert page.cmd.text() == before.replace("--org-export PLAN", "--org-export APPLY", 1) + " --apply"
+    # the PLAN line, run as a person would paste it (the parser is app.main's own)
+    words = shlex.split(before)
+    assert words[:3] == ["python3", "-m", "hugmesh_studio"]
+    rc = app_mod.main(words[3:])
+    out = capsys.readouterr().out
+    assert rc == (1 if page.plan.blocked else 0), out
+    cli_targets = re.findall(r"^\S+\s+(exampleorg/\S+)\s", out, re.M)
+    assert cli_targets == table, (cli_targets, table)
+    assert not os.path.isdir(os.path.join(world["gh_root"], "exampleorg"))   # a plan: nothing created
+    # the field itself is drawn where a person can copy it (#647): scrolled into
+    # view at the wizard's smallest size, inside the viewport, wide enough for a path
+    golive.resize(820, 640)
+    page._content_scroll.ensureWidgetVisible(page.cmd)
+    _settle(qapp, 10)
+    viewport = page._content_scroll.viewport()
+    assert page.cmd.isVisible()
+    top = page.cmd.mapTo(viewport, page.cmd.rect().topLeft())
+    bottom = page.cmd.mapTo(viewport, page.cmd.rect().bottomRight())
+    assert 0 <= top.y() and bottom.y() <= viewport.height(), (top, bottom, viewport.height())
+    assert 0 <= top.x() and bottom.x() <= viewport.width(), (top, bottom, viewport.width())
+    assert page.cmd.width() >= 300, page.cmd.width()
+    assert page.cmd.text().startswith("python3 -m hugmesh_studio --org-export APPLY --config ")
+    _shot(golive, "golive-org-export-terminal-line.png", tmp_path)
+
+
+def test_a_typed_source_folder_and_every_picker_reach_the_terminal_line_at_once(
+        golive, world, tmp_path):
+    """Only the rename-map field used to re-spell the Terminal line: a Source folder
+    typed over a saved mesh's, or a flipped picker, showed up in it only after Plan
+    (and never, under --config, before this round). The two folders refresh on
+    every text change — no editingFinished is emitted here, as none is when a value
+    is set without a focus move (the e2e driver's setText found the line stale)."""
+    saved_mesh_naming_the_org(world)
+    _at_generate(golive)
+    golive.next()
+    page = golive.currentPage()
+    assert "--source-dir" not in page.cmd.text()          # the record's own folder: nothing to add
+    other = tmp_path / "elsewhere"
+    other.mkdir()
+    page.source_dir.setText(str(other))
+    assert f"--source-dir {other} --source-mode existing" in page.cmd.text()
+    page.source_dir.setText("")
+    # an empty folder is the clone root, as the field's placeholder says
+    assert "--source-mode clone" in page.cmd.text() and "--source-dir" not in page.cmd.text()
+    assert page.export_config().source_mode == "clone"
+    page.visibility.setCurrentText("public")
+    assert "--visibility public" in page.cmd.text()
+    page.update_mode.setCurrentIndex(page.update_mode.findData(oe.UPDATE_BRANCH))
+    assert "--update branch" in page.cmd.text()
+    page.out_dir.setText(str(tmp_path / "o"))
+    assert f"--out {tmp_path / 'o'}" in page.cmd.text()
+    assert parse_terminal_line(page.cmd.text(), GENERATOR_DIR) == page.export_config()
 
 
 def test_apply_without_the_typed_name_is_refused_inline(golive, world, qapp, tmp_path):

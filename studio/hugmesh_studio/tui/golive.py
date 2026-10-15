@@ -220,8 +220,9 @@ class GoLiveScreen:
         c = self._picked_candidate(j)
         return org_export.cli_command(
             cfg, verb,
-            # a generic config file is handed over as --config, so its rules travel
-            config_path=c.path if (c is not None and c.config is not None) else "",
+            # EVERY candidate's file is handed over as --config (the GUI page's rule):
+            # a saved mesh's selected services live only in its record
+            config_path=c.path if c is not None else "",
             rename_map_path=self.export_rename_map)
 
     def export_plan_lines(self) -> list[str]:
@@ -345,7 +346,7 @@ class GoLiveScreen:
                 j.status = "plan first (p)"
                 return
             if not arg or arg.lower() != p.config.org.lower():
-                j.status = "type the org name exactly: apply ORG"    # the GUI's arming rule
+                j.status = "type the org name: apply ORG (letter case does not matter)"  # the GUI's arming rule
                 return
             if p.blocked:
                 j.status = "the plan is blocked; nothing is applied until every repository is clean"

@@ -12,7 +12,10 @@
 #   * Apply leaves exactly one fresh commit per repository plus the site, authored
 #     as the person running it, and git is never asked to force, mirror or delete;
 #   * the repositories planned for a domain include what its selected optional
-#     services add, for the mesh's own domain too;
+#     services add, for the mesh's own domain too — whether the service was picked
+#     on its own row or on the mesh-wide Services step (what the mesh actually runs);
+#   * the Terminal line the step shows is the SAME export: run from a terminal it
+#     plans exactly the repositories the step's table lists;
 #   * an existing repository that already holds something is refused and left
 #     untouched — whatever branch its content is on, main or not.
 #
@@ -66,6 +69,7 @@ Feature: The Studio exports a domain's repositories to its GitHub org
     And the stand-in GitHub holds no repository and every gh call during the plan was a repo view
     And git was not asked to push anything during the plan
     And Apply is disarmed until the org name is typed, in any letter case
+    And the terminal line the export step shows plans the same repositories as its table
     And the Studio grab is a non-empty PNG
     And the evidence manifest holds a "widget-grab" artefact for this scenario
 
@@ -93,6 +97,20 @@ Feature: The Studio exports a domain's repositories to its GitHub org
     When I walk the Go-Live wizard to the export step for a saved mesh whose own domain selects "phpbb" and press Plan
     Then the plan lists "exampleorg/example-forum-api" for the own domain's selected service and marks it "missing source"
     And the stand-in GitHub holds no repository and every gh call during the plan was a repo view
+    And the terminal line the export step shows plans the same repositories as its table
+    And no dialog opened in the org-export walk
+    And the Studio grab is a non-empty PNG
+
+  # ── ... and so does a service picked on the mesh-wide Services step ────────
+  # The per-row selection is recorded, not enforced: the compose profiles the mesh
+  # runs come from the Services step. The ordinary local mesh types the org on the
+  # own row and picks its services there, so that list must reach the export too.
+  @interface:studio
+  Scenario: a service picked on the mesh-wide Services step puts its repository on the own domain's plan @interface:studio
+    When I walk the Go-Live wizard to the export step for a saved mesh whose Services step picked "phpbb" and press Plan
+    Then the plan lists "exampleorg/example-forum-api" for the own domain's selected service and marks it "missing source"
+    And the stand-in GitHub holds no repository and every gh call during the plan was a repo view
+    And the terminal line the export step shows plans the same repositories as its table
     And no dialog opened in the org-export walk
     And the Studio grab is a non-empty PNG
 

@@ -21,7 +21,8 @@ from hugmesh_studio.core.golive_domains import NO_EXPORT_DOMAINS_NOTE
 from hugmesh_studio.core.local_mesh_domains import bootstrap_domain_records
 from hugmesh_studio.tui import domains_step, journey, localmesh
 
-from _org_export_helpers import bare_log, make_world, saved_mesh_naming_the_org
+from _org_export_helpers import (
+    bare_log, make_world, parse_terminal_line, saved_mesh_naming_the_org)
 
 STUDIO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 GENERATOR_DIR = os.path.dirname(STUDIO_ROOT)
@@ -179,7 +180,7 @@ def test_export_plans_through_the_runner_and_applies_only_on_the_typed_org(world
     assert "exampleorg/example-actions" in text and "mesh.example.github.io" in text
     assert not os.path.isdir(os.path.join(world["gh_root"], "exampleorg"))
     j.feed("apply nope")
-    assert "type the org name exactly" in j.status
+    assert "type the org name" in j.status and "letter case does not matter" in j.status
     assert not os.path.isdir(os.path.join(world["gh_root"], "exampleorg"))
     j.feed("apply ExampleOrg")
     assert j.status.startswith("applied: 7 done, 0 skipped"), j.status
@@ -210,6 +211,47 @@ def test_the_own_domains_selected_services_reach_the_tui_plan(world):
     assert forum.action == "missing source"
     j.feed("apply exampleorg")
     assert not os.path.isdir(os.path.join(world["gh_root"], "exampleorg"))
+
+
+def test_the_mesh_wide_services_step_reaches_the_tui_plan(world):
+    """The text-mode twin of the GUI test: phpbb picked on the mesh-wide Services
+    step, the own row naming only the org, puts hugmesh-forum-api on the plan."""
+    saved_mesh_naming_the_org(world, mesh_services=["phpbb"])
+    j, screen = _golive_at_plan(world)
+    j.feed("x")
+    j.feed("p")
+    assert screen.export_plan is not None, j.status
+    assert screen.export_plan.config.optional_services == ["phpbb"]
+    assert "exampleorg/example-forum-api" in "\n".join(j.lines())
+
+
+def test_the_tui_terminal_line_hands_the_saved_mesh_over_and_parses_back_to_its_plan(world):
+    """'The same from a terminal:' used to spell ``--domain --org`` for a saved mesh
+    (the file travelled as --config only for a generic export config), so the line
+    planned without the own domain's services (correctness skeptic, blocker 1)."""
+    saved_mesh_naming_the_org(world, services=["phpbb"])
+    j, screen = _golive_at_plan(world)
+    j.feed("x")
+    (c,) = screen.export_candidates(j)
+    assert c.config is None
+    lines = [ln.strip() for ln in j.lines()]
+    at = lines.index("The same from a terminal:")
+    line = lines[at + 1]
+    assert f"--config {c.path} --domain mesh.example" in line and "--org " not in line
+    assert f"--remote-base file://{world['gh_root']}/" in line     # the stand-in's, not the default
+    assert parse_terminal_line(line, GENERATOR_DIR) == screen.export_config(j)
+    j.feed("p")
+    assert screen.export_plan is not None, j.status
+    back = parse_terminal_line(line, GENERATOR_DIR)
+    assert back == screen.export_plan.config
+    assert "hugmesh-forum-api" in oe.domain_repo_names(back)[0]
+    # the `v`/`u` choices reach the line as flags, and only where they differ from the record
+    j.feed("v public")
+    j.feed("u branch")
+    lines = [ln.strip() for ln in j.lines()]
+    line = lines[lines.index("The same from a terminal:") + 1]
+    assert "--visibility public" in line and "--update branch" in line
+    assert parse_terminal_line(line, GENERATOR_DIR) == screen.export_config(j)
 
 
 def test_a_config_file_can_be_added_with_c(world, tmp_path):

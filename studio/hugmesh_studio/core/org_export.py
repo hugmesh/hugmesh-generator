@@ -91,7 +91,7 @@ import subprocess
 import tarfile
 from dataclasses import asdict, dataclass, field
 
-from .config import Domain, github_org_problem
+from .config import OPTIONAL_SERVICES_CHOICES, Domain, github_org_problem
 
 __all__ = [
     "ExportConfig", "RepoPlan", "Plan", "RepoResult", "Result", "Runner",
@@ -395,11 +395,14 @@ def _candidates_from_rows(rows, own_name: str, own_org: str, *, own_services=(),
                           source_mode: str, source_dir: str, generator_dir: str,
                           where: str, path: str) -> list[ExportCandidate]:
     """The own domain first (when it names an org), then every row that does. The
-    own domain's selected services come from its OWN ROW when the rows carry one (a
-    saved-mesh record lists the own domain among ``domains[]``), else from
-    ``own_services`` (an ImageConfig keeps them as ``cluster_domain_services``) — they
-    used to be dropped here, so the one domain most worth exporting was planned
-    without the repositories its services add."""
+    own domain's selected services are the UNION of its own row's selection (a
+    saved-mesh record lists the own domain among ``domains[]``) and ``own_services``
+    (an ImageConfig keeps them as ``cluster_domain_services``; a local-mesh record
+    keeps what the mesh actually runs in its mesh-wide ``services``). A union, not
+    a preference: the row is what the person recorded for the domain, the mesh-wide
+    list is what the mesh builds, and the export must cover both — the one domain
+    most worth exporting used to be planned without the repositories its services
+    add, first because the row was dropped, then because only the row was read."""
     out: list[ExportCandidate] = []
     seen: set[str] = set()
     own = (own_name or "").strip()
@@ -407,7 +410,8 @@ def _candidates_from_rows(rows, own_name: str, own_org: str, *, own_services=(),
         services = _slugs(own_services)
         for row in rows or ():
             if str(_get(row, "name", "") or "").strip() == own:
-                services = _slugs(_get(row, "optional_services", [])) or services
+                recorded = _slugs(_get(row, "optional_services", []))
+                services = recorded + [s for s in services if s not in recorded]
         out.append(ExportCandidate(own, own_org.strip(), services, source_mode, source_dir,
                                    generator_dir, where, path))
         seen.add(own)
@@ -438,6 +442,17 @@ def _slugs(value) -> list[str]:
     return [s for s in value if isinstance(s, str)]
 
 
+def _mesh_wide_optional_services(record_config: dict) -> list[str]:
+    """What a local-mesh record's Services step actually runs, narrowed to the
+    domain catalogue. ``services`` (``LocalMeshBootstrapConfig.services``) is the
+    list the compose profiles are switched on from — the per-row selection is
+    recorded, not enforced (core/local_mesh_domains) — so the own domain's export
+    must read it; infra slugs in it (argocd, metrics-server, ...) own no
+    repository and are dropped here."""
+    return [s for s in _slugs(record_config.get("services"))
+            if s in OPTIONAL_SERVICES_CHOICES]
+
+
 def candidates_from_file(path: str, generator_dir: str = "") -> list[ExportCandidate]:
     """The domains-with-an-org a JSON file carries. Three shapes are read:
 
@@ -466,6 +481,7 @@ def candidates_from_file(path: str, generator_dir: str = "") -> list[ExportCandi
                 own_org = str(row.get("github_org") or "")
         return _candidates_from_rows(
             c.get("domains") or (), own, own_org,
+            own_services=_mesh_wide_optional_services(c),
             source_mode=str(c.get("source_mode") or "clone"),
             source_dir=str(c.get("source_dir") or ""),
             generator_dir=str(data.get("generator_dir") or generator_dir or ""),
@@ -500,6 +516,7 @@ def saved_mesh_candidates(generator_dir: str = "") -> list[ExportCandidate]:
                 own_org = str(row.get("github_org") or "")
         out.extend(_candidates_from_rows(
             c.get("domains") or (), own, own_org,
+            own_services=_mesh_wide_optional_services(c),
             source_mode=str(c.get("source_mode") or "clone"),
             source_dir=str(c.get("source_dir") or ""),
             generator_dir=rec.generator_dir or generator_dir,
@@ -1254,23 +1271,49 @@ def result_lines(res: Result) -> list[str]:
 
 def cli_command(cfg: ExportConfig, verb: str = "PLAN", config_path: str = "",
                 rename_map_path: str = "") -> str:
-    """The exact terminal command for this export (what the GUI and TUI hand over)."""
+    """The exact terminal command for this export (what the GUI and TUI hand over):
+    :func:`config_from_args` of its parse is ``cfg`` again, which a test pins.
+
+    ``config_path`` is the file the candidate came from — a saved-mesh record, an
+    image config or a generic export config — and is ALWAYS handed over as
+    ``--config FILE --domain D``: the domain's selected services, a file's
+    ``skip_repos`` and the rest live only there, so a line spelling just
+    ``--domain D --org O`` planned a smaller repository set than the step did
+    (and, with ``--apply``, exported it, exit 0, no warning). Every picker the
+    face lets a person change over the file (source folder, visibility, existing
+    repositories, plan folder, brand, remote base) is then emitted as a flag ONLY
+    where it differs from what the file alone would give, so the line stays short
+    for the ordinary case and exact for every other."""
     argv = ["python3", "-m", "hugmesh_studio", "--org-export", verb]
+    base: ExportConfig | None = None
     if config_path:
         # --domain picks the row when the file carries several; harmless otherwise
         argv += ["--config", config_path, "--domain", cfg.domain]
+        try:
+            base = load_config(config_path, generator_dir=cfg.generator_dir, domain=cfg.domain)
+        except (OSError, ValueError):
+            base = None                       # unreadable now: spell every value out
     else:
         argv += ["--domain", cfg.domain, "--org", cfg.org]
+    if base is None:
+        base = ExportConfig(domain=cfg.domain, org=cfg.org, generator_dir=cfg.generator_dir)
+    if (cfg.source_dir or "") != (base.source_dir or "") or cfg.source_mode != base.source_mode:
         if cfg.source_dir:
             argv += ["--source-dir", cfg.source_dir, "--source-mode", cfg.source_mode]
+        else:
+            argv += ["--source-mode", cfg.source_mode]   # clone: the file's folder is dropped
     if rename_map_path:
         argv += ["--rename-map", rename_map_path]
-    if cfg.out_dir:
+    if cfg.out_dir and cfg.out_dir != base.out_dir:
         argv += ["--out", cfg.out_dir]
-    if cfg.visibility != "private":
+    if cfg.visibility != base.visibility:
         argv += ["--visibility", cfg.visibility]
-    if cfg.update == UPDATE_BRANCH:
-        argv += ["--update-via-branch"]
+    if cfg.update != base.update:
+        argv += ["--update", cfg.update]
+    if cfg.brand and cfg.brand != base.brand:
+        argv += ["--brand", cfg.brand]
+    if cfg.remote_base != base.remote_base:
+        argv += ["--remote-base", cfg.remote_base]
     if verb == "APPLY":
         argv += ["--apply"]
     return " ".join(shlex.quote(a) for a in argv)
@@ -1300,6 +1343,11 @@ def add_cli_arguments(ap) -> None:
     ap.add_argument("--update-via-branch", action="store_true",
                     help="with --org-export: push an existing non-empty repository to "
                          "export/<stamp> instead of refusing it")
+    # the explicit spelling of the same choice, so a terminal line can say 'refuse'
+    # over a config file that says 'branch' (the store_true flag cannot)
+    ap.add_argument("--update", choices=list(UPDATE_CHOICES), default=None,
+                    help="with --org-export: what to do with an existing non-empty "
+                         "repository: refuse (default) or branch (= --update-via-branch)")
     ap.add_argument("--source-dir", default="",
                     help="with --org-export: the folder holding the hugmesh-* checkouts")
     ap.add_argument("--source-mode", choices=["existing", "clone"], default=None,
@@ -1313,41 +1361,53 @@ def add_cli_arguments(ap) -> None:
                     help="with --org-export PLAN: do not ask gh whether targets exist")
 
 
+def config_from_args(args, generator_dir: str) -> ExportConfig:
+    """The :class:`ExportConfig` a parsed ``--org-export`` command line describes:
+    the file (``--config``, any of the three shapes) or ``--domain``/``--org``, then
+    every flag over it. Kept apart from :func:`run_cli` so a test can prove that
+    :func:`cli_command`'s line parses back to the very config the face planned,
+    without running git. Raises ValueError on bad input (the CLI prints it, exit 2)."""
+    if args.config:
+        cfg = load_config(args.config, generator_dir=generator_dir,
+                          domain=args.domain, org=args.org)
+    else:
+        if not (args.domain and args.org):
+            raise ValueError("--org-export needs --config FILE, or --domain and --org")
+        cfg = ExportConfig(domain=args.domain, org=args.org, generator_dir=generator_dir)
+    if args.rename_map:
+        cfg.rename_map = merge_rename_maps(cfg.rename_map or {},
+                                           load_rename_map(args.rename_map))
+    if args.out:
+        cfg.out_dir = args.out
+    if args.visibility:
+        cfg.visibility = args.visibility
+    if getattr(args, "update", None):
+        cfg.update = args.update
+    if args.update_via_branch:
+        cfg.update = UPDATE_BRANCH
+    if args.source_dir:
+        cfg.source_dir = args.source_dir
+        cfg.source_mode = args.source_mode or "existing"
+    elif args.source_mode:
+        cfg.source_mode = args.source_mode
+        if args.source_mode == "clone":
+            cfg.source_dir = ""           # clone reads .stack-src; a file's folder is moot
+    if args.brand:
+        cfg.brand = args.brand
+    if args.remote_base:
+        cfg.remote_base = args.remote_base
+    if not cfg.generator_dir:
+        cfg.generator_dir = generator_dir
+    return cfg
+
+
 def run_cli(args, generator_dir: str, out=print, err=None) -> int:
     """``--org-export PLAN|APPLY``. Exit 0 on a clean plan / apply, 1 when the plan
     is blocked or a repository was skipped, 2 on bad input."""
     import sys
     err = err or (lambda m: print(m, file=sys.stderr))
     try:
-        if args.config:
-            cfg = load_config(args.config, generator_dir=generator_dir,
-                              domain=args.domain, org=args.org)
-        else:
-            if not (args.domain and args.org):
-                err("error: --org-export needs --config FILE, or --domain and --org")
-                return 2
-            cfg = ExportConfig(domain=args.domain, org=args.org,
-                               generator_dir=generator_dir)
-        if args.rename_map:
-            cfg.rename_map = merge_rename_maps(cfg.rename_map or {},
-                                               load_rename_map(args.rename_map))
-        if args.out:
-            cfg.out_dir = args.out
-        if args.visibility:
-            cfg.visibility = args.visibility
-        if args.update_via_branch:
-            cfg.update = UPDATE_BRANCH
-        if args.source_dir:
-            cfg.source_dir = args.source_dir
-            cfg.source_mode = args.source_mode or "existing"
-        elif args.source_mode:
-            cfg.source_mode = args.source_mode
-        if args.brand:
-            cfg.brand = args.brand
-        if args.remote_base:
-            cfg.remote_base = args.remote_base
-        if not cfg.generator_dir:
-            cfg.generator_dir = generator_dir
+        cfg = config_from_args(args, generator_dir)
         problems = cfg.problems()
         if problems:
             for pr in problems:

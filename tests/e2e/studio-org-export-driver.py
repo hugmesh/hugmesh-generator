@@ -31,10 +31,14 @@ THE SCENARIOS (``--scenario``)
                fake fine-grained token into that source repository;
                ``--rename-map exclusions`` points the page's Rename map field at a
                file excluding that planted path; ``--own-services phpbb`` puts that
-               selection on the saved mesh's own domain (its profile's repository
-               must then be on the plan); ``--preexisting TARGET:BRANCH`` plants
-               somebody else's commit on BRANCH of the stand-in's TARGET repository
-               before the walk (apply must refuse it and leave it untouched).
+               selection on the saved mesh's own domain ROW and ``--mesh-services
+               phpbb`` on the mesh-wide Services step (what the mesh actually runs;
+               either way its profile's repository must then be on the plan);
+               ``--preexisting TARGET:BRANCH`` plants somebody else's commit on
+               BRANCH of the stand-in's TARGET repository before the walk (apply
+               must refuse it and leave it untouched); ``--terminal-line`` RUNS
+               the Terminal line the step showed before Plan, as a person would
+               paste it, and reports the repositories that line plans.
 
 WHAT IS REAL AND WHAT IS A STAND-IN
   real      : StudioWizard and GoLiveWizard, every page in between, the Domains
@@ -368,8 +372,10 @@ def scenario_export(args, app, result: dict, scratch: str, bindir: str, git_log:
             "refsBefore": _refs(fixture_git, preexisting_bare),
             "shaBefore": fixture_git(preexisting_bare, "rev-parse", branch)}
     saved_mesh_naming_the_org(world, label="e2e mesh",
-                              services=[s for s in args.own_services.split(",") if s])
+                              services=[s for s in args.own_services.split(",") if s],
+                              mesh_services=[s for s in args.mesh_services.split(",") if s])
     result["ownServices"] = [s for s in args.own_services.split(",") if s]
+    result["meshServices"] = [s for s in args.mesh_services.split(",") if s]
     # the git shim logged the set-up above too: the walk's own calls start here
     result["gitCallsAtWalkStart"] = len(_lines(git_log))
     wiz = gl.GoLiveWizard(args.generator_dir)
@@ -396,11 +402,15 @@ def scenario_export(args, app, result: dict, scratch: str, bindir: str, git_log:
                                     "visible": page.rename_map.isVisible(),
                                     "width": page.rename_map.width()}
     gh_calls_before = len(_lines(os.environ["FAKE_GH_LOG"]))
+    # the Terminal line as shown BEFORE Plan (the PLAN form; after Plan it is the
+    # APPLY form): what a person would copy to run the same export themselves
+    result["terminalLineBeforePlan"] = page.cmd.text()
     page.plan_btn.click()
     _wait_worker(page, app)
     plan = page.plan
     result["planStatus"] = page.status.text()
     result["planFailed"] = plan is None
+    result["terminalLineAfterPlan"] = page.cmd.text()
     if plan is None:
         result["dialogsOpen"] = _dialogs(app, wiz)
         if args.grab:
@@ -473,8 +483,38 @@ def scenario_export(args, app, result: dict, scratch: str, bindir: str, git_log:
         result["preexisting"]["shaAfter"] = fixture_git(
             preexisting_bare, "rev-parse", result["preexisting"]["branch"])
     result["dialogsOpen"] = _dialogs(app, wiz)
+    if args.terminal_line:
+        # last, so every log read above is the WIZARD's own doing
+        result["terminalPlan"] = _run_terminal_line(result["terminalLineBeforePlan"],
+                                                    args.generator_dir)
     if args.grab:
         _grab(wiz, args.grab, result, "golive")
+
+
+def _run_terminal_line(line: str, generator_dir: str) -> dict:
+    """Run the PLAN line the export step showed, as a person would paste it: the same
+    words, with the interpreter this driver runs under in place of the bare
+    ``python3`` (so the environment that has the Studio is the one that runs it),
+    from studio/ so ``-m hugmesh_studio`` resolves. PATH still leads with the fake
+    gh and the git shim. Reports the CLI's exit code and the targets of the plan
+    table it printed — read off its stdout, never off the wizard."""
+    import re
+    import shlex
+    words = shlex.split(line)
+    if words[:3] != ["python3", "-m", "hugmesh_studio"]:
+        _fail(4, "the Terminal line does not start with python3 -m hugmesh_studio: %r" % line)
+    gh_before = len(_lines(os.environ["FAKE_GH_LOG"]))
+    t0 = time.monotonic()
+    proc = subprocess.run([sys.executable, "-m", "hugmesh_studio", *words[3:]],
+                          cwd=os.path.join(generator_dir, "studio"), capture_output=True,
+                          text=True, timeout=300, env=dict(os.environ), check=False)
+    # a plan-table row is "<source>  <org>/<name>  <action> ..." (plan_lines); nothing
+    # else the CLI prints has a slash in its second word at column zero
+    targets = re.findall(r"^\S+\s+(\S+/\S+)\s", proc.stdout, re.M)
+    return {"interpreter": sys.executable, "argv": words[3:], "rc": proc.returncode,
+            "seconds": round(time.monotonic() - t0, 1), "targets": targets,
+            "stdoutTail": proc.stdout[-1500:], "stderrTail": proc.stderr[-1500:],
+            "ghCalls": _lines(os.environ["FAKE_GH_LOG"])[gh_before:]}
 
 
 def _refs(fixture_git, bare: str) -> list:
@@ -498,7 +538,13 @@ def main(argv: "list[str]") -> int:
                          "planted path")
     ap.add_argument("--own-services", default="",
                     help="export: comma-separated optional services selected on the "
-                         "saved mesh's own domain")
+                         "saved mesh's own domain ROW")
+    ap.add_argument("--mesh-services", default="",
+                    help="export: comma-separated services picked on the saved mesh's "
+                         "mesh-wide Services step (what the mesh runs)")
+    ap.add_argument("--terminal-line", action="store_true",
+                    help="export: run the Terminal line the step showed (PLAN form) and "
+                         "report the repositories it plans")
     ap.add_argument("--preexisting", default="",
                     help="export: TARGET[:BRANCH] — plant somebody else's commit on that "
                          "branch (default master) of the stand-in's TARGET before the walk")

@@ -51,7 +51,10 @@ interface Facts {
   tableResults?: string[]; applyEnabledAfter?: boolean;
   ghCalls?: string[]; gitCalls?: string[]; bareRepos?: Record<string, BareRepo>;
   renameMapField?: { text: string; visible: boolean; width: number };
-  ownServices?: string[]; gitCallsAtWalkStart?: number;
+  ownServices?: string[]; meshServices?: string[]; gitCallsAtWalkStart?: number;
+  terminalLineBeforePlan?: string; terminalLineAfterPlan?: string;
+  terminalPlan?: { interpreter: string; argv: string[]; rc: number; seconds: number;
+    targets: string[]; stdoutTail: string; stderrTail: string; ghCalls: string[] };
   preexisting?: { target: string; branch: string; refsBefore: string[]; shaBefore: string;
     refsAfter?: string[]; shaAfter?: string };
   // domains-org
@@ -131,7 +134,7 @@ When('I type the GitHub org {string} on the own row of the local-mesh Domains st
 When('I walk the Go-Live wizard to the export step for a saved mesh naming the org {string} and press Plan',
   async ({ world }, org: string) => {
     expect(org, 'the stand-in saved mesh names exampleorg').toBe('exampleorg');
-    drive(world, ['--scenario', 'export', '--action', 'plan']);
+    drive(world, ['--scenario', 'export', '--action', 'plan', '--terminal-line']);
   });
 
 When('I walk the Go-Live wizard to the export step for a saved mesh naming the org {string} and press Apply without typing the name',
@@ -148,7 +151,14 @@ When('I walk the Go-Live wizard to the export step for a saved mesh naming the o
 
 When('I walk the Go-Live wizard to the export step for a saved mesh whose own domain selects {string} and press Plan',
   async ({ world }, services: string) => {
-    drive(world, ['--scenario', 'export', '--action', 'plan', '--own-services', services]);
+    drive(world, ['--scenario', 'export', '--action', 'plan', '--own-services', services,
+      '--terminal-line']);
+  });
+
+When('I walk the Go-Live wizard to the export step for a saved mesh whose Services step picked {string} and press Plan',
+  async ({ world }, services: string) => {
+    drive(world, ['--scenario', 'export', '--action', 'plan', '--mesh-services', services,
+      '--terminal-line']);
   });
 
 When('I walk the Go-Live wizard to the export step with {string} already holding content on its {string} branch in the stand-in GitHub, and apply it with the name typed',
@@ -339,7 +349,9 @@ Then('the plan lists {string} for the own domain\'s selected service and marks i
   async ({ world }, target: string, action: string) => {
     const f = facts(world);
     const rows = planRows(world);
-    expect(f.ownServices, 'the saved mesh selects a service on its own domain').not.toEqual([]);
+    // on the own ROW, or on the mesh-wide Services step: both are the own domain's
+    expect([...(f.ownServices ?? []), ...(f.meshServices ?? [])],
+      'the saved mesh selects a service for its own domain').not.toEqual([]);
     const row = rows.find((r) => r.target === target);
     expect(row, `${target} is not on the plan; targets: ${rows.map((r) => r.target).join(', ')}`)
       .toBeDefined();
@@ -347,6 +359,31 @@ Then('the plan lists {string} for the own domain\'s selected service and marks i
     expect((f.tableActions ?? [])[rows.indexOf(row as PlanRow)], 'the table shows it').toBe(action);
     if ((row as PlanRow).blocked) {
       expect(f.applyEnabledTyped, 'Apply armed on a blocked plan').toBe(false);
+    }
+  });
+
+// ── the Terminal line IS the same export ─────────────────────────────────────
+// The step's 'Terminal' field claims to be the same export from a terminal. The
+// driver ran the PLAN form of that line (its words, the driver's interpreter for the
+// bare python3) over the same stand-in GitHub; what the CLI printed is compared with
+// the page's table. Before this round the line spelled --domain/--org for a saved
+// mesh and planned one repository fewer than the table (the selected service's).
+Then('the terminal line the export step shows plans the same repositories as its table',
+  async ({ world }) => {
+    const f = facts(world);
+    const rows = planRows(world);
+    expect(f.terminalLineBeforePlan, 'the Terminal line before Plan')
+      .toMatch(/^python3 -m hugmesh_studio --org-export PLAN --config \S+ --domain \S+/);
+    expect(f.terminalLineAfterPlan, 'after Plan the line is the apply form: the verb swapped, --apply appended')
+      .toBe(`${(f.terminalLineBeforePlan ?? '').replace('--org-export PLAN', '--org-export APPLY')} --apply`);
+    const t = f.terminalPlan;
+    expect(t, 'the driver did not run the Terminal line').toBeDefined();
+    const blocked = (f.planBlocked ?? []).length > 0;
+    expect(t?.rc, `the Terminal line exited ${t?.rc}; stderr: ${t?.stderrTail}`).toBe(blocked ? 1 : 0);
+    expect(t?.targets, `the repositories the Terminal line plans; stdout: ${t?.stdoutTail}`)
+      .toEqual(rows.map((r) => r.target));
+    for (const c of t?.ghCalls ?? []) {
+      expect(c, 'the Terminal line in PLAN mode asked gh for more than a view').toMatch(/^repo view /);
     }
   });
 

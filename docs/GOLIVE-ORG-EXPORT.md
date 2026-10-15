@@ -55,7 +55,9 @@ mesh on this machine names an org, or when you add a config file on the step its
 1. computes the repository set of the domain — the same map the Repo-source step's
    *Code folders* block shows (`core/code_folders.py`): every first-party compose
    build context the mesh builds (the platform apps), plus what the domain's selected
-   optional services add, minus stock images; then the Java build chain
+   optional services add — for the mesh's own domain that is its row's selection AND
+   the mesh-wide *Services* step's list, because the per-row selection is recorded and
+   the Services step is what the mesh actually runs — minus stock images; then the Java build chain
    (`hugmesh-build-config`, `hugmesh-parent`, `hugmesh-commons`, `hugmesh-auth-core`)
    and the generator itself, both of which the config can drop;
 2. snapshots each repository's **default branch** (`origin/HEAD`, else `origin/main`,
@@ -134,8 +136,20 @@ The GUI step's **Config file -> Add** and the TUI's `c FILE` accept an export co
 image config or a saved-mesh record. A generic export config is taken WHOLE: its
 `skip_repos`, `include_generator`, `include_build_libraries`, `extra_repos`, `brand`,
 `rename_map`, `out_dir`, `visibility` and `update` all reach the plan (the visibility and
-existing-repository pickers are seeded from it and stay editable), and the step's
-*Terminal* line hands the same file over as `--config FILE --domain <domain>`.
+existing-repository pickers are seeded from it and stay editable).
+
+### The *Terminal* line
+
+The step's *Terminal* field (the TUI's "The same from a terminal:" line) is the same
+export as a command: EVERY candidate's file — a saved-mesh record, an image config or an
+export config — is handed over as `--config FILE --domain <domain>`, because the
+domain's selected services and a file's rules live only there (a line spelling just
+`--domain D --org O` plans without them). Every picker you change over the file (source
+folder, visibility, existing repositories, plan folder, rename map) is added as a flag
+only where it differs from what the file alone would give, so the line parses back to
+exactly the configuration the step plans — a test pins that field for field, and an
+end-to-end scenario runs the line and compares its repositories with the table. Before
+Plan the field shows the PLAN form; after Plan the same words plus `--apply`.
 
 ## 3. Apply
 
@@ -192,7 +206,9 @@ workflows pin them (`@v4`, `@v5`).
 python -m hugmesh_studio --org-export PLAN --domain mesh.example --org exampleorg \
     --source-dir ~/src --out /tmp/export-mesh.example
 
-# plan from a config file (an export config, an image config or a saved-mesh record)
+# plan from a config file (an export config, an image config or a saved-mesh record);
+# any flag overrides the file: --source-dir/--source-mode, --out, --visibility,
+# --update refuse|branch (= --update-via-branch), --brand, --remote-base
 python -m hugmesh_studio --org-export PLAN --config export.json --rename-map extra.json
 
 # apply: the explicit flag is the confirmation; without it APPLY prints the plan and refuses

@@ -192,13 +192,16 @@ def bare_log(world, target: str, ref: str = "main") -> list[str]:
     return git(bare(world, target), "log", "--format=%H %an <%ae>", ref).splitlines()
 
 
-def saved_mesh_naming_the_org(world, label: str = "exported mesh", services=()) -> str:
+def saved_mesh_naming_the_org(world, label: str = "exported mesh", services=(),
+                              mesh_services=()) -> str:
     """A saved-mesh record in the (isolated) Studio state dir whose own domain names
-    the org (and selects ``services``) and whose source is the world's checkouts —
-    what the Go-Live step finds. The record's config is an ordinary
-    LocalMeshBootstrapConfig.to_dict(); the two repositories the test world does not
-    hold are skipped through the record's generic twin, written next to it for the
-    step's 'config file' door."""
+    the org (and selects ``services`` on its own ROW) and whose source is the world's
+    checkouts — what the Go-Live step finds. ``mesh_services`` is the mesh-wide
+    Services step's list (``LocalMeshBootstrapConfig.services``, what the mesh
+    actually runs); left empty it stays ``None``, the untouched record's shape. The
+    record's config is an ordinary LocalMeshBootstrapConfig.to_dict(); the two
+    repositories the test world does not hold are skipped through the record's
+    generic twin, written next to it for the step's 'config file' door."""
     from hugmesh_studio.core import saved_meshes
     from hugmesh_studio.core.config import Domain
     from hugmesh_studio.core.local_mesh_bootstrap import LocalMeshBootstrapConfig
@@ -207,8 +210,31 @@ def saved_mesh_naming_the_org(world, label: str = "exported mesh", services=()) 
                                  generator_dir=world["gen"])
     rec.config = LocalMeshBootstrapConfig(
         cluster_domain="mesh.example", source_mode="existing", source_dir=world["src"],
+        services=tuple(mesh_services) if mesh_services else None,
         domains=bootstrap_domain_records(
             [Domain(name="mesh.example", github_org="exampleorg",
                     optional_services=list(services))], "mesh.example")
     ).to_dict()
     return saved_meshes.save(rec)
+
+
+def studio_parser():
+    """The Studio parser's shape for the ``--org-export`` family: the two pre-existing
+    arguments the CLI reuses (app.py's ``--generator-dir`` and ``--config``) plus
+    ``add_cli_arguments`` — so a test can parse a Terminal line without ``main()``."""
+    import argparse
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--generator-dir", default="")
+    ap.add_argument("--config", default="")
+    oe.add_cli_arguments(ap)
+    return ap
+
+
+def parse_terminal_line(line: str, generator_dir: str) -> "oe.ExportConfig":
+    """``config_from_args`` of a Terminal line the GUI and the TUI show (``python3 -m
+    hugmesh_studio ...``): the config the CLI would plan from that line."""
+    import shlex
+    words = shlex.split(line)
+    assert words[:3] == ["python3", "-m", "hugmesh_studio"], words
+    args = studio_parser().parse_args(words[3:])
+    return oe.config_from_args(args, args.generator_dir or generator_dir)
