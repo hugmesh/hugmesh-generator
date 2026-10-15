@@ -377,6 +377,14 @@ ${MUT_LIB}
 sub("tests/e2e/features/platform/tor-onion-front-door.feature", "@env:docker @via:onion @service:login", "@env:docker @service:login")
 PY
 
+# The per-domain lane (#582, `make stack-e2e-tor-domains`) is counted on its own:
+# untagging ITS one feature must go red even though the mesh-onion lane's scenario
+# is still there, and the other way round (N46 above).
+control N46b-domains-feature-untagged T15-onion-steps-proxied <<PY
+${MUT_LIB}
+sub("tests/e2e/features/platform/tor-onion-domains.feature", "@env:docker @via:onion-domains @service:login", "@env:docker @service:login")
+PY
+
 control N47-kind-scenarios-in-the-compose-lane T12-e2e-lane <<PY
 ${MUT_LIB}
 sub("tests/e2e/run.sh", "then TAGS='@via:onion and @env:docker'; else", "then TAGS='@via:onion'; else")
