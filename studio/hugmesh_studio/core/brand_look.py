@@ -851,10 +851,15 @@ class Look:
     def _dependents_problem(self) -> str:
         """Design mode: the sentence for the first brand whose finished stylesheet (the
         superbrand's look as it now is, plus that brand's own overrides) would pass the
-        budget; "" when none does or this is not the superbrand's look."""
+        budget, or for the ConfigMap those sheets and this one share (the kind cluster
+        carries every look in one); "" when none does or this is not the superbrand's
+        look. Override mode never asks: a brand's edit cannot see its siblings, so the
+        ConfigMap total is checked for a superbrand edit only (and where ``others`` is
+        filled by a host)."""
         if self.mode != "design" or self.dependents is None:
             return ""
         mine = self.effective()
+        sheets: dict[str, str] = {}
         for bid, own in self.dependents().items():
             try:
                 css = look_css(effective_look(mine, own or {}), enforce_budget=False)
@@ -866,6 +871,12 @@ class Look:
                         f"bytes (it starts from this look and adds its own); the budget "
                         f"is {LOOK_CSS_BUDGET:,}. Choose a smaller picture here, or "
                         f"remove a picture {bid} adds itself.")
+            sheets[bid] = css
+        if sheets:
+            sheets["the superbrand"] = look_css(mine, enforce_budget=False)
+            ok, why = fits_configmap(sheets)
+            if not ok:
+                return why
         return ""
 
     def choose_preset(self, preset_id: str) -> Outcome:

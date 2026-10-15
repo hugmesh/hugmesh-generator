@@ -21,8 +21,8 @@ Semantics mirrored from the GUI editor:
 """
 from __future__ import annotations
 
-from ..core import (brand_images, brand_look, fonts as _fonts, login_preview, plain_words,
-                    theme, theme_presets)
+from ..core import (brand_images, brand_look, brand_model, fonts as _fonts, login_preview,
+                    plain_words, theme, theme_presets)
 from ..core.branding_themes import PREMADE_THEMES, THEME_SPECS
 
 __all__ = ["ThemesScreen", "EFFECT_LABELS", "VANTA_DEPENDENCY_NOTE", "chrome_summary"]
@@ -175,7 +175,12 @@ class ThemesScreen:
         if verb.lower() in _CFG_LOOK_VERBS:
             # The font and the board are the cfg's own fields; the Look screen
             # edits them through the same checked verbs the window's LookEditor uses.
-            j.status = LookText(brand_look.CfgLook(cfg)).feed(line)
+            look = brand_look.CfgLook(cfg)
+            # an uploaded font is part of every brand's inherited sheet: the same check
+            # against the brands' finished stylesheets the window's editor makes
+            look.dependents = lambda: {brand_model.brand_id(d): dict(d.look or {})
+                                       for d in (cfg.domains or [])}
+            j.status = LookText(look).feed(line)
             return
         handler = {
             "1": self._set_primary, "2": self._set_secondary,
