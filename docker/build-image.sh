@@ -59,8 +59,9 @@
 #   entirely out of this script's hands), body = JSON matching
 #   ImageBuildIngestRequest exactly: status (COMPLETED|FAILED|ERROR, required),
 #   imageRef, keysRef, deviceId, machineKeyFp, hostname, dialUser, hostKeyPub,
-#   hostKeyFp, dialPubFp, vaultRef, k8sSecretName, message, error (all optional,
-#   null when not applicable). imageRef/keysRef MUST be paths relative to the
+#   hostKeyFp, dialPubFp, vaultRef, message, error (all optional, null when not
+#   applicable; k8sSecretName is no longer sent — the BFF derives the per-device
+#   Secret name itself and ignores the field). imageRef/keysRef MUST be paths relative to the
 #   artifacts root, of the exact shape "build-${BUILD_ID}/<name>" — never
 #   absolute, never containing "..".
 #
@@ -451,6 +452,12 @@ JOBS="${JOBS:-$(nproc 2>/dev/null || echo 2)}"
 # ── ingest report state (single terminal call — see send_ingest) ────────────
 IMAGE_REF=""
 KEYS_REF=""
+# DEVICE_ID / VAULT_REF are minted by the BFF and handed to the Job in its env; the
+# dial-key seed reports them back verbatim (the BFF seeds a device_ssh_dial row only
+# when both equal what it passed). Captured BEFORE the report vars are reset, so the
+# env values are not clobbered.
+JOB_DEVICE_ID="${DEVICE_ID:-}"
+JOB_VAULT_REF="${VAULT_REF:-}"
 DEVICE_ID=""
 MACHINE_KEY_FP=""
 HOSTNAME_OUT=""
@@ -460,7 +467,6 @@ HOST_KEY_FP=""
 DIAL_PUB_FP=""
 DIAL_PUB_KEY=""
 VAULT_REF=""
-K8S_SECRET_NAME=""
 MESSAGE_OUT=""
 ERROR_OUT=""
 INGEST_SENT=0
@@ -516,7 +522,7 @@ send_ingest() {
   STATUS="$status" IMAGE_REF="$IMAGE_REF" KEYS_REF="$KEYS_REF" DEVICE_ID="$DEVICE_ID" \
   MACHINE_KEY_FP="$MACHINE_KEY_FP" HOSTNAME_OUT="$HOSTNAME_OUT" DIAL_USER_OUT="$DIAL_USER_OUT" \
   HOST_KEY_PUB="$HOST_KEY_PUB" HOST_KEY_FP="$HOST_KEY_FP" DIAL_PUB_FP="$DIAL_PUB_FP" \
-  VAULT_REF="$VAULT_REF" K8S_SECRET_NAME="$K8S_SECRET_NAME" MESSAGE_OUT="$MESSAGE_OUT" \
+  VAULT_REF="$VAULT_REF" MESSAGE_OUT="$MESSAGE_OUT" \
   ERROR_OUT="$ERROR_OUT" python3 - "$body_file" <<'PY'
 import json, os, sys
 
@@ -536,7 +542,6 @@ body = {
     "hostKeyFp": g("HOST_KEY_FP"),
     "dialPubFp": g("DIAL_PUB_FP"),
     "vaultRef": g("VAULT_REF"),
-    "k8sSecretName": g("K8S_SECRET_NAME"),
     "message": g("MESSAGE_OUT"),
     "error": g("ERROR_OUT"),
 }
@@ -1619,19 +1624,18 @@ seed_dial_key() {
   DIAL_PUB_FP="$(ssh-keygen -lf "$pub_tmp" | awk '{print $2}')"
   DIAL_PUB_KEY="$derived_pub"
   DIAL_USER_OUT="$DIAL_USER_DEFAULT"
-  DEVICE_ID="dev-$(printf '%s' "$BUILD_ID" | tr 'A-Z' 'a-z' | tr -cd 'a-z0-9' | cut -c1-12)"
-  # VAULT_REF is intentionally left unset (-> null in the ingest body) here.
-  # This script has no real, authoritative source for where the dial key
-  # actually lives in Vault: DIAL_SECRET_DIR is a plain k8s secret VOLUME
-  # MOUNT, not a Vault client, and this worker never talks to Vault directly
-  # or receives a Vault path from the Job env. An earlier string-formatting
-  # guess here (secret/${DOMAIN}/device/${DEVICE_ID}/ssh/dial_private_key)
-  # was just that — a plausible-looking fabrication with no real backing —
-  # and reporting it as vaultRef could mislead an operator or the BFF into
-  # treating it as authoritative. An honest "we don't know" (null) is
-  # strictly better. If a real, already-known Vault path or secret-name ever
-  # becomes available to this script (e.g. passed through as a Job env var
-  # by admin-bff-api, not derived by guesswork here), wire it in here instead.
+  # DEVICE_ID and VAULT_REF come from the Job env (minted by the BFF, which seeds a
+  # dial row only when the reported values equal what it passed) and are reported
+  # back verbatim. The derivation below is only the fallback for a Job that did not
+  # pass DEVICE_ID; it is the same rule the BFF mints with. VAULT_REF has no
+  # fallback: this script is not a Vault client and has no authoritative path of
+  # its own, so an unset VAULT_REF stays null in the ingest body.
+  if [ -n "$JOB_DEVICE_ID" ]; then
+    DEVICE_ID="$JOB_DEVICE_ID"
+  else
+    DEVICE_ID="dev-$(printf '%s' "$BUILD_ID" | tr 'A-Z' 'a-z' | tr -cd 'a-z0-9' | cut -c1-12)"
+  fi
+  VAULT_REF="$JOB_VAULT_REF"
   rm -f "$pub_tmp"
   log "dial key present: device_id=${DEVICE_ID} dial_user=${DIAL_USER_OUT} dial_pub_fp=${DIAL_PUB_FP} (private key read only, never copied out of ${DIAL_SECRET_DIR})"
 }
