@@ -790,6 +790,19 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # tests/scripts/run-ungated-lane.sh's header counts (32 of 32, 8 of 32) were taken from
 # its E2E_UNGATED_DRY_RUN=1 output for both sets. The "stays 21/22" lines in the entries
 # above are history and are left as written.
+#
+# 198 -> 198 (denominator +1, ungated SET +1) on 2026-10-14 for #698 (Local AI without
+# Claude): tests/scripts/test-local-ai-no-claude.sh landed on disk and in .gitlab-ci.yml's
+# orphan-guards-verify job, but NOT in shell-suites.yml: the change that added it was
+# not permitted to edit .github, so the suite is recorded in PREMERGE_UNGATED below as a
+# wiring gap (the same shape as the two tests/desktop-governance entries there) and the
+# gated count does not move. Re-measured on 2026-10-15 on the merge of
+# feat/local-ai-dock-and-cli with origin/main a73be8ce (GUARD_PREMERGE=0), by RUNNING
+# this file, not computed:
+#     198 of 233 suites are named by a pull_request-triggered workflow
+#     PASS the ungated SET matches its pin exactly (35 suite(s))
+# tests/scripts/run-ungated-lane.sh's header counts (35 of 35, 8 of 35) were taken from
+# its E2E_UNGATED_DRY_RUN=1 output for both sets.
 PREMERGE_BASELINE="${GUARD_PREMERGE:-198}"
 
 # 182 -> 192 (denominator 205 -> 215) on 2026-09-30 for #385: the census gained a
@@ -950,6 +963,16 @@ PREMERGE_BASELINE="${GUARD_PREMERGE:-198}"
 # job's SUITES list. Nothing about the other eight changed; they still need a
 # node_modules and a chromium no shell-suites image carries.
 PREMERGE_UNGATED=(
+  # Lands outside the pull_request gate ONLY because wiring it there means an edit under
+  # .github/workflows/shell-suites.yml, which the change that added it (#368) was not
+  # permitted to make. It is NOT an exemption on the merits: it needs bash, python3 and
+  # ssh-keygen, no root and no network, and runs the real docker/build-image.sh against
+  # fake builders. It was MEASURED only on a developer host, NOT in a shell-suites image
+  # (ssh-keygen may be absent from the python:3.12-slim job). It also runs inside
+  # `make matrix-check` as a non-gating smoke and as `make build-image-dial-identity-check`.
+  # Wire it into shell-suites.yml, measure it there, DELETE this entry and raise
+  # PREMERGE_BASELINE by one.
+  tests/build-image-dial-identity.sh
   tests/casdoor/test-jwt-custom-token.sh
   # NOT an exemption, a wiring gap: this suite is offline (bash + python3 + PyYAML)
   # and WOULD run in the shell-suites image, but wiring it into
@@ -984,6 +1007,17 @@ PREMERGE_UNGATED=(
   # THAT WORKFLOW'S SUITES LIST, DELETE THIS ENTRY AND RAISE PREMERGE_BASELINE BY ONE. It is
   # run today by `make binpkg-reuse-report-check`.
   tests/scripts/test-binpkg-reuse-report.sh
+  # NOT YET IN THE PULL_REQUEST GATE, and that is the only reason it is here: it is
+  # offline, bash + python3 only, and belongs in shell-suites.yml beside
+  # test-lsm-posture-honesty.sh (same job). It is gated post-merge by .gitlab-ci.yml's
+  # lint:btf-pahole-pairing. The lane that wrote it (hugmesh-generator#760) was
+  # forbidden to edit anything under .github, so: add the path to that SUITES list,
+  # delete this entry and raise PREMERGE_BASELINE by one to the number check 7 prints.
+  tests/scripts/test-btf-pahole-pairing.sh
+  # CANNOT gate: it needs a kernel SOURCE tree plus gcc, flex, bison and pahole, none
+  # of which a shell-suites image carries, and it exits 2 (never a silent pass) when
+  # given no tree. Run it with `make btf-kconfig-resolve-check KERNEL_TREE=<tree>`.
+  tests/scripts/test-btf-kconfig-resolve.sh
   # NOT an exemption, a wiring gap: the lane that added this suite (#509) may not
   # edit .github/. It runs every stage4 builder with --print-plan and needs only
   # bash, sed, paste and timeout, but is UNMEASURED in the shell-suites images
@@ -1034,6 +1068,14 @@ PREMERGE_UNGATED=(
   tests/scripts/test-optional-services-cutover-matrix.sh
   tests/scripts/test-federation-module-slugs.sh
   tests/scripts/test-liquibase-grant-roles.sh
+  # NOT an exemption, a wiring gap: offline, bash + python3 + git only (it builds a
+  # PATH with no claude binary and runs scripts/local-ai.sh under it), so it WOULD run
+  # in the shell-suites debian job. It is listed solely because the change that added
+  # it (#698, the Local AI dock and CLI) was not permitted to edit
+  # .github/workflows/shell-suites.yml. It IS run post-merge, by .gitlab-ci.yml's
+  # orphan-guards-verify. TO CLOSE THIS: add the path to that job's SUITES list, delete
+  # this entry and raise PREMERGE_BASELINE by one to the number this file then prints.
+  tests/scripts/test-local-ai-no-claude.sh
   # RED ON MAIN, and the reds are real defects rather than suite bugs: a jetson
   # builder that bakes the cluster tree without resolving the gate at all, two
   # selection-rendered artefacts the boot path still sources from git, a git

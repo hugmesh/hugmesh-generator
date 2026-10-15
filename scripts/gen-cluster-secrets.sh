@@ -1114,6 +1114,14 @@ data = {
         "user-bff-oidc": {
             "client-secret": app_secrets["user-bff"],
         },
+        # admin-bff's OWN Casdoor client-credentials pair (app-admin-bff), carved out
+        # of the casdoor-apps doc exactly like harbor-casdoor above. Mirrors the
+        # admin-bff-casdoor-client ExternalSecret in secretstore.yaml (APP_CASDOOR_
+        # PLATFORM_CLIENT_ID / _CLIENT_SECRET on the admin-bff Deployment).
+        "admin-bff-casdoor-client": {
+            "clientId": "app-admin-bff",
+            "clientSecret": app_secrets["admin-bff"],
+        },
         # bff-internal-token: shared back-channel auth token (INTERNAL_TOKEN).
         # Mounted in BOTH hugmesh-backend (user-bff) and hugmesh-frontend
         # (fe-gateway); the frontend entry is added below.

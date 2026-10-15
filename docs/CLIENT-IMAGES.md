@@ -261,7 +261,12 @@ What each flag needs before it does anything:
    `vault_ref` and `k8s_secret_name` (pointers, never key bytes),
    `seeded_by_build_id`, `generation`, and `status` in `PENDING | ACTIVE |
    REVOKED`. Rows are not written by hand: an image build seeds one as `PENDING`
-   when its ingest reports the device's host key and dial public-key fingerprint,
+   when its ingest reports the device's host key and dial public-key fingerprint
+   (the image-gen worker takes `DEVICE_ID` and `VAULT_REF` from the Job env and
+   reports them back verbatim, and sends no `k8sSecretName`; it sends **no host
+   key** today, `hostKeyPub`/`hostKeyFp` are null, because no channel carries a
+   per-device host private key into a build, so no build seeds a row yet:
+   hugmesh-admin-bff-api#53),
    and a **SUPERADMIN** activates it with a step-up
    (`POST /bff/superadmin/desktop/dials/{deviceId}/activate`; `422` for an
    unpinned row or a `root`/blank dial user). Activation answers `503` while the

@@ -2223,8 +2223,8 @@ lint:media-poisoner-tls:
 # kube-proxy/MASQUERADE/dual-stack/NetworkPolicy DEAD on x86 nodes. This offline lint
 # asserts (1) the x86 fragment carries every required arch-neutral net/cgroup/overlay/
 # bpf symbol as =y (the SAME load-bearing set the build guard greps post-olddefconfig),
-# (2) no ARM/Pi-only symbol leaked in, (3) BTF stays OUT of both fragments (a separate
-# pahole-gated follow-up), and (4) both builders' fail-closed guards reference the
+# (2) no ARM/Pi-only symbol leaked in, (3) the BTF block in both fragments is complete or
+# absent as a whole, and (4) both builders' fail-closed guards reference the
 # load-bearing net subset. A re-truncation of the fragment, or a build guard that stops
 # asserting the net symbols, FAILS here. Cheap; no privileged runner needed.
 lint:x86-kernel-net-symbols:
@@ -2255,6 +2255,16 @@ lint:lsm-posture-honesty:
   tags: [hugmesh-x86]
   script:
     - bash tests/scripts/test-lsm-posture-honesty.sh
+
+# BTF <-> pahole pairing. bpf-LSM can be registered yet unable to attach without BTF, and
+# CONFIG_DEBUG_INFO_BTF is dropped silently by olddefconfig when its chain breaks. Pure
+# static analysis: fragment, package list, Dockerfile.build and the builders' guards agree.
+lint:btf-pahole-pairing:
+  stage: lint
+  image: python:3-slim
+  tags: [hugmesh-x86]
+  script:
+    - bash tests/scripts/test-btf-pahole-pairing.sh
 
 # Shell-injection remediation regression suite. Runs the fail-closed identity /
 # path / manifest validators added by the shell-injection hardening (build-x86 /
@@ -3599,6 +3609,7 @@ orphan-guards-verify:
         tests/scripts/test-installer-ui-node-default.sh
         tests/scripts/test-intltool-preseed.sh
         tests/scripts/test-kernel-artifact-cache.sh
+        tests/scripts/test-local-ai-no-claude.sh
         tests/scripts/test-makefile-reown-skips-sysroot.sh
         tests/scripts/test-optional-netpol-autosync.sh
         tests/scripts/test-passhash-lib.sh
