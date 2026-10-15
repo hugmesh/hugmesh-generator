@@ -26,11 +26,19 @@ keep the next gap of that kind from waiting for a release to be seen:
     somebody already uses, and names the one broken-helper state that otherwise shows
     up only as an opaque bwrap error;
   * run against a scripted fake ``flatpak``, the script sends EVERY call to the private
-    directory and never to ``--system``, grants the Builder that directory and keeps its
-    state where a long checkout path cannot break it, builds with the release workflow's
-    flags, runs both validators, checks the bundle against its own checksum, and refuses
+    directory and never to ``--system``, grants the Builder that directory (and the host
+    wrapper that pins it) and keeps its state where a long checkout path cannot break it,
+    runs the same flatpak-builder flags, validators, build-bundle call, file names and
+    bundle install and run as the release workflow's flatpak job (read back from the
+    workflow, not from copies here), stops at a failed build or export without leaving an
+    old bundle that looks new, checks the bundle against its own checksum, and refuses
     what each of its three smoke tests must refuse. (A mutation battery showed all of
-    that could be lost with the static checks alone still green.)
+    that could be lost with the static checks alone still green.) The same fake answers a
+    flatpak call that does not name ``--user`` with a failure, so a call that loses it
+    fails the run, and a static reading of the whole script holds every installation call
+    to the same rule on the lines the run never reaches; a second run takes the re-run
+    branches, smoke test 2's python is run against a stub Qt, and a canary in the fake
+    HOME shows the script writes nothing outside its two directories.
 
 Qt-free and offline: it reads files and runs the script against fakes only, and never
 starts the real flatpak.
@@ -388,6 +396,38 @@ def test_runtime_branch_matches_what_the_release_workflow_installs():
             f"installs {sorted(set(branches))}: the job would stop at a missing runtime")
 
 
+def _workflow_flatpak_lines() -> list[str]:
+    """The commands of the release workflow's ``flatpak`` job, one per entry: backslash
+    continuations joined, YAML and shell comments dropped, ``${VERSION}`` kept as written.
+    Fails when the job or the commands this file compares are not found, so a renamed job
+    cannot turn the comparison into one against nothing."""
+    text = _read(RELEASE_WORKFLOW)
+    match = re.search(r"(?ms)^  flatpak:\n(.*?)(?=^  \S|\Z)", text)
+    assert match, "the release workflow no longer has a job called flatpak"
+    kept = [ln.strip() for ln in match.group(1).splitlines()
+            if ln.strip() and not ln.strip().startswith("#")]
+    joined = re.sub(r"\\\n\s*", " ", "\n".join(kept))
+    lines = [ln for ln in joined.splitlines()
+             if ln.split(" ", 1)[0] in {"flatpak", "flatpak-builder", "desktop-file-validate",
+                                         "appstreamcli", "sha256sum"}]
+    assert any(ln.startswith("flatpak-builder ") for ln in lines), lines
+    return lines
+
+
+def _package_version() -> str:
+    return re.search(r'(?m)^__version__ = "([^"]+)"',
+                     _read(os.path.join(STUDIO_ROOT, "hugmesh_studio", "__init__.py"))).group(1)
+
+
+def _words_of(line: str) -> list[str]:
+    """A workflow command's words up to its first pipe or redirection."""
+    words = shlex.split(line)
+    for index, word in enumerate(words):
+        if word in {"|", ">", ">>"}:
+            return words[:index]
+    return words
+
+
 # ---------------------------------------------------------------------------------------
 # The local build script
 # ---------------------------------------------------------------------------------------
@@ -437,7 +477,11 @@ def test_build_script_is_executable_here_and_in_git():
 #: second missed the two --command= forms above, the third a process substitution: three
 #: mutation batteries put sudo behind each and every one survived.)
 _FORBIDDEN = {"sudo", "doas", "pkexec", "run0", "su", "apt", "apt-get", "dpkg", "dnf", "yum",
-              "pacman", "zypper", "emerge", "brew", "nix-env", "snap"}
+              "pacman", "zypper", "emerge", "brew", "nix-env", "snap",
+              # Found by a mutation round: these installed software, or entered another
+              # namespace, and the test only failed because the tool happened to be absent
+              # from the test's PATH. A language's package manager is a package manager.
+              "apk", "pip", "pip3", "pipx", "conda", "cargo", "gem", "npm", "nsenter"}
 #: After these the command position is still open: the next word is run, not consumed.
 _PREFIXES = {"exec", "command", "builtin", "env", "nohup", "xargs", "time", "nice", "ionice",
              "timeout", "setsid", "stdbuf", "chroot", "flatpak-spawn", "coproc", "busybox",
@@ -937,6 +981,17 @@ def test_build_script_never_runs_sudo_or_a_package_manager():
     ("tee >(cat)>/dev/null; true", []),
     ("busybox ash -c 'sudo -n true'", ["sudo"]),
     ("ash -c 'sudo -n true'", ["sudo"]),
+    # A language's package manager, and nsenter (a mutation round put each after the last
+    # step: the suite failed only because the tool was not on the test's PATH).
+    ("pip install requests", ["pip"]),
+    ("pip3 install --user requests", ["pip3"]),
+    ("env PIP_NO_INPUT=1 pipx install x", ["pipx"]),
+    ("npm install -g x", ["npm"]),
+    ("cargo install x", ["cargo"]),
+    ("apk add flatpak-builder", ["apk"]),
+    ("nsenter -t 1 -m -u -i -n sudo -n true", ["nsenter"]),
+    ("python3 -m pip --version", []),
+    ("echo 'pip install is not run here'", []),
     # Outside the scanner, pinned so nobody mistakes it for more than it is: a program
     # named through a variable (invisible to any static reading), a command run on
     # another machine, a program in another language, an alias, and a wrapper it does
@@ -948,6 +1003,17 @@ def test_build_script_never_runs_sudo_or_a_package_manager():
     ("alias s='sudo -n true'; s", []),
     ("taskset -c 0 sudo -n true", []),
     ("script -qc 'sudo -n true' /dev/null", []),
+    # Nor does it read what a command DOES to files: a deletion of the real flatpak
+    # directory and a write to a shell startup file are plain commands. The scripted run
+    # covers them instead, by planting a canary in the fake HOME and checking afterwards
+    # that nothing there changed (``_home_untouched``): only on the path the run takes.
+    # unshare -r only maps the caller to a root inside a new user namespace: it grants
+    # nothing, so it is a prefix to read through (the command after it is judged), not a
+    # forbidden word of its own. A skeptic listed it as "not caught"; what follows it is.
+    ("unshare -r true", []),
+    ("unshare -r sudo -n true", ["sudo"]),
+    ("rm -rf \"$HOME/.local/share/flatpak\"", []),
+    ("echo 'export PATH=x' >> \"$HOME/.bashrc\"", []),
 ], ids=["plain", "after-and", "probe", "substitution", "substitution-after-and",
         "exec-prefix", "in-string", "in-comment", "in-message", "argument-on-continuation",
         "command-on-continuation", "in-heredoc", "trailing-comment",
@@ -979,8 +1045,12 @@ def test_build_script_never_runs_sudo_or_a_package_manager():
         "output-substitution-then-redirect", "two-substitutions-then-semicolon",
         "adjacent-substitutions-then-semicolon", "substitution-then-benign",
         "output-substitution-benign", "busybox-ash-c", "ash-c",
+        "pip", "pip3", "pipx-behind-env", "npm", "cargo", "apk", "nsenter",
+        "python-m-pip-version", "pip-in-message",
         "outside-variable", "outside-ssh", "outside-awk", "outside-perl",
-        "outside-alias", "outside-unknown-wrapper", "outside-script-command"])
+        "outside-alias", "outside-unknown-wrapper", "outside-script-command",
+        "unshare-alone-is-not-forbidden", "unshare-then-sudo-is-read",
+        "outside-rm-real-flatpak-dir", "outside-write-to-shell-rc"])
 def test_the_forbidden_command_scanner_sees_what_it_must(snippet, expected):
     """The scanner is what the test above stands on, so it is pinned in both directions:
     what it reads, and what is outside it (the ``outside-*`` cases expect nothing, and
@@ -1020,6 +1090,96 @@ def test_build_script_never_names_the_system_installation():
 ], ids=["system", "installation", "user", "comment", "message"])
 def test_the_system_installation_scanner_sees_what_it_must(snippet, expected):
     assert [token for _line, token in _system_installation_in(snippet)] == expected
+
+
+#: The flatpak subcommands that read or change an installation. Without --user they act on
+#: the SYSTEM installation (install, run) or look through every installation (info, list,
+#: remotes), whatever FLATPAK_USER_DIR says; the script's re-run logic depends on that: on a
+#: host with a system-wide flathub, a `flatpak remotes` without --user would see it, skip
+#: the private remote-add, and fail late. ``build-bundle`` is not here: it reads a
+#: repository directory and no installation. A subcommand not listed is not checked.
+_INSTALLATION_SUBCOMMANDS = (
+    "install", "uninstall", "update", "remote-add", "remote-delete", "remote-modify",
+    "remote-ls", "remote-info", "remotes", "info", "list", "run", "repair", "override",
+    "mask", "pin", "make-current", "history", "search", "ps", "kill", "config")
+_FLATPAK_CALL = re.compile(
+    r"(?<![\w./$-])flatpak\s+((?:-\S+\s+)*)(" + "|".join(sorted(_INSTALLATION_SUBCOMMANDS, key=len,
+                                                                reverse=True))
+    + r")(?![\w-])([^;&|)\n]*)")
+
+
+def _flatpak_calls_in(text: str) -> list[tuple[int, str, bool]]:
+    """Every ``flatpak <installation subcommand> ...`` outside a comment, as (line,
+    subcommand, whether --user comes among its options). The options are the words before
+    the first operand: for ``run`` that is the app id, so the flatpak-builder's own --user
+    after it does not count for flatpak. A call is read up to the next ``;`` ``&`` ``|``
+    ``)`` or line end, backslash continuations joined; a call hidden in a variable or an
+    array (``"${builder[@]}" ...``) is not seen here: the scripted run covers those."""
+    found: list[tuple[int, str, bool]] = []
+    logical, start = "", 0
+    for number, line in enumerate(text.splitlines(), 1):
+        if not logical:
+            start = number
+        if line.rstrip().endswith("\\"):
+            logical += line.rstrip()[:-1] + " "
+            continue
+        logical += line
+        stripped = logical.strip()
+        logical = ""
+        if not stripped or stripped.startswith("#"):
+            continue
+        for match in _FLATPAK_CALL.finditer(stripped):
+            words = match.group(1).split() + match.group(3).split()
+            user = False
+            for word in words:
+                if word == "--user":
+                    user = True
+                    break
+                if not word.startswith("-"):
+                    break
+            found.append((start, match.group(2), user))
+    return found
+
+
+def test_every_flatpak_call_in_the_build_script_names_the_private_user_installation():
+    """The scripted-fake test below sees the calls the script makes on the path that run
+    takes; this reads every line, including the ones that path never reaches (the
+    validator that falls back to the Builder's copy, the re-run's uninstall). A mutation
+    round removed --user from five calls one at a time and the suite stayed green."""
+    calls = _flatpak_calls_in(_read(SCRIPT))
+    seen = {sub for _line, sub, _user in calls}
+    assert {"remotes", "remote-add", "info", "install", "uninstall", "run"} <= seen, (
+        f"the reading found only {sorted(seen)}: the pattern no longer matches the script")
+    bare = [f"flatpak {sub} (line {line})" for line, sub, user in calls if not user]
+    assert not bare, ("these calls do not name --user, so they act on the system installation "
+                      "or on every installation: " + ", ".join(bare))
+
+
+@pytest.mark.parametrize("snippet, expected", [
+    ("flatpak install --user -y flathub org.foo.Bar", [("install", True)]),
+    ("flatpak install -y flathub org.foo.Bar", [("install", False)]),
+    ("flatpak remotes --columns=name", [("remotes", False)]),
+    ("remotes=\"$(flatpak remotes --user --columns=name)\"", [("remotes", True)]),
+    ("if flatpak info \"$app_id\" >/dev/null 2>&1; then", [("info", False)]),
+    ("flatpak list >/dev/null", [("list", False)]),
+    ("flatpak run --user \\\n   --command=x app", [("run", True)]),
+    ("flatpak run --command=flatpak-builder org.flatpak.Builder --user", [("run", False)]),
+    ("flatpak uninstall -y --noninteractive org.foo.Bar", [("uninstall", False)]),
+    ("flatpak --user install -y flathub org.foo.Bar", [("install", True)]),
+    ("flatpak --version", []),
+    ("flatpak --default-arch", []),
+    ("flatpak build-bundle repo out.flatpak org.foo.Bar", []),
+    ("# flatpak install -y flathub org.foo.Bar", []),
+    ("die 'the flatpak program is not installed'", []),
+    ("die 'it needs the flatpak session helper'", []),
+    ("flatpak info --user a && flatpak info b", [("info", True), ("info", False)]),
+    ("x=\"$(flatpak info --user --show-commit \"$app_id\")\"", [("info", True)]),
+], ids=["user", "no-user", "remotes-no-user", "remotes-in-substitution", "info-no-user",
+        "list-no-user", "continuation", "builders-own-user-flag-does-not-count",
+        "uninstall-no-user", "global-option-before-subcommand", "version", "default-arch",
+        "build-bundle", "comment", "message", "message-session", "two-calls", "show-commit"])
+def test_the_user_installation_reading_sees_what_it_must(snippet, expected):
+    assert [(sub, user) for _line, sub, user in _flatpak_calls_in(snippet)] == expected
 
 
 def _run_script(tmp_path, *args, extra_env=None, path=None):
@@ -1076,6 +1236,77 @@ def test_script_refuses_to_use_the_users_own_flatpak_directory(tmp_path, where):
     assert "private directory" in result.stderr, result.stderr
     assert not log.exists() or not log.read_text().strip(), (
         f"flatpak was called before the refusal: {log.read_text()!r}")
+
+
+def _refused_without_a_flatpak_call(result, log):
+    assert result.returncode == 1, (result.returncode, result.stderr)
+    assert "private directory" in result.stderr, result.stderr
+    assert not log.exists() or not log.read_text().strip(), (
+        f"flatpak was called before the refusal: {log.read_text()!r}")
+
+
+@needs_bash
+@pytest.mark.parametrize("spelling", ["dotdot", "symlink"])
+def test_the_refusal_sees_through_a_path_spelled_another_way(tmp_path, spelling):
+    """The guard compares normalised paths. A ``..`` or a symlink must not get round it.
+
+    Without the normalisation the literal text of these paths differs from the protected
+    directory's, so a plain string comparison lets them through to flatpak.
+    """
+    home = tmp_path / "home"
+    (home / ".local" / "share" / "flatpak").mkdir(parents=True)
+    if spelling == "dotdot":
+        given = home / "x" / ".." / ".local" / "share" / "flatpak"
+    else:
+        given = home / "alias"
+        given.symlink_to(home / ".local" / "share" / "flatpak")
+    fake_bin, log = _fake_flatpak(tmp_path)
+    result = _run_script(
+        tmp_path, path=fake_bin + os.pathsep + os.environ["PATH"],
+        extra_env={"HUGMESH_STUDIO_FLATPAK_USER_DIR": str(given)})
+    _refused_without_a_flatpak_call(result, log)
+
+
+@needs_bash
+@pytest.mark.parametrize("spelling", ["dotdot", "symlink"])
+def test_the_output_directory_inside_the_private_one_is_refused_in_any_spelling(
+        tmp_path, spelling):
+    """Same for the build output: spelled to look elsewhere, it still sits in the private dir."""
+    private = tmp_path / "private"
+    private.mkdir()
+    if spelling == "dotdot":
+        out = tmp_path / "elsewhere" / ".." / "private" / "out"
+    else:
+        alias = tmp_path / "alias"
+        alias.symlink_to(private)
+        out = alias / "out"
+    fake_bin, log = _fake_flatpak(tmp_path)
+    result = _run_script(
+        tmp_path, path=fake_bin + os.pathsep + os.environ["PATH"],
+        extra_env={"HUGMESH_STUDIO_FLATPAK_USER_DIR": str(private),
+                   "HUGMESH_STUDIO_FLATPAK_OUT": str(out)})
+    assert result.returncode == 1, (result.returncode, result.stderr)
+    assert "private flatpak directory" in result.stderr, result.stderr
+    assert not log.exists() or not log.read_text().strip()
+
+
+@needs_bash
+@pytest.mark.parametrize("where", ["flatpak", "flatpak/private", "."],
+                         ids=["same", "inside", "contains"])
+def test_script_refuses_the_flatpak_directory_under_a_custom_xdg_data_home(tmp_path, where):
+    """XDG_DATA_HOME moves where flatpak keeps the user installation, away from
+    $HOME/.local/share/flatpak; the guard must follow it, or a user with a non-default
+    data home would get the toolchain installed into their own flatpak directory."""
+    data_home = tmp_path / "elsewhere" / "data"
+    data_home = type(tmp_path)(os.path.realpath(data_home))
+    fake_bin, log = _fake_flatpak(tmp_path)
+    result = _run_script(
+        tmp_path, path=fake_bin + os.pathsep + os.environ["PATH"],
+        extra_env={"XDG_DATA_HOME": str(data_home),
+                   "HUGMESH_STUDIO_FLATPAK_USER_DIR": str(data_home / where)})
+    _refused_without_a_flatpak_call(result, log)
+    assert str(data_home / "flatpak") in result.stderr, (
+        "the refusal does not name the XDG_DATA_HOME flatpak directory: " + result.stderr)
 
 
 @needs_bash
@@ -1152,18 +1383,32 @@ def test_script_without_flatpak_says_so_and_stops(tmp_path):
     assert "flatpak program is not installed" in result.stderr, result.stderr
 
 
-def _scripted_flatpak(tmp_path):
+def _scripted_flatpak(tmp_path, validators=True):
     """A ``flatpak`` that answers like a machine with nothing installed yet, plus both
-    validators; every call is logged as ``tool<TAB>FLATPAK_USER_DIR<TAB>arguments`` (the
-    -c script of smoke test 3 spans lines; ``_calls`` joins them back into one call).
+    validators (unless ``validators`` is false); every call is logged as
+    ``tool<TAB>FLATPAK_USER_DIR<TAB>arguments`` (the -c script of smoke test 3 spans
+    lines; ``_calls`` joins them back into one call).
 
     Nothing is installed until the bundle is: ``info`` fails before that, so the script
-    has to install the toolchain and must not uninstall an app that is not there. What
+    has to install the toolchain and must not uninstall an app that is not there. After
+    the bundle is installed a second run sees everything installed and flathub added:
+    the branches a re-run takes (no remote-add, no toolchain install, an uninstall of
+    the old app first) are reached by running the script twice in one directory.
+
+    Every call that reads or changes an installation must carry ``--user`` among the
+    options before its first operand; one that does not is logged as a ``violation`` and
+    answered with exit 99, and ``_scripted_run`` fails the test on any violation. (A
+    mutation round removed --user from five calls one at a time with the suite green:
+    the fake used to answer them all alike.) The Qt check is RUN, not answered: the
+    script's own python is executed against a stub ``hugmesh_studio`` package (see
+    ``_qt_stub``). ``df`` answers ``FAKE_DF_GIB`` GiB free when that is set. What
     the three smoke tests see is set per run: ``FAKE_FLATPAK_SPECS`` is what
     ``--print-specs`` prints (empty: nothing at all), ``FAKE_FLATPAK_QT`` what the Qt
     check prints, ``FAKE_FLATPAK_FILES`` names one file the sandbox shell does not find
     (``none``: it finds nothing; empty: it finds all of them), and ``FAKE_FLATPAK_EXPORT``
-    set to ``none`` makes the bundle install export no launcher.
+    set to ``none`` makes the bundle install export no launcher. ``FAKE_FLATPAK_BUILD_EXIT``
+    and ``FAKE_FLATPAK_BUNDLE_EXIT`` are the exit status of the flatpak-builder run and of
+    ``build-bundle`` (both succeed unless set).
 
     Smoke test 3 is not answered, it is RUN: the script's own ``-c`` body is executed by
     the host's ``sh`` against a stand-in ``/app`` under the private directory that holds
@@ -1179,12 +1424,20 @@ def _scripted_flatpak(tmp_path):
         f"printf 'flatpak\\t%s\\t%s\\n' \"${{FLATPAK_USER_DIR-unset}}\" \"$*\" >> \"{log}\"\n"
         "installed=\"${FLATPAK_USER_DIR-/nonexistent}/.fake-installed\"\n"
         "case \"$1\" in\n"
+        "    install|uninstall|update|remote-*|remotes|info|list|run|repair|override|mask|pin|history|search|ps|kill|config)\n"
+        "        ( shift; for a in \"$@\"; do case \"$a\" in --user) exit 0 ;; -*) ;; *) exit 1 ;; esac; done; exit 1 ) || {\n"
+        f"            printf 'violation\\t-\\tflatpak %s\\n' \"$*\" >> \"{log}\"; exit 99; }} ;;\n"
+        "esac\n"
+        "case \"$1\" in\n"
         "    --default-arch) echo x86_64 ;;\n"
         "    --version) echo 'Flatpak 0.0-fake' ;;\n"
+        "    remotes) [ ! -e \"$installed\" ] || echo flathub ;;\n"
         "    info)\n"
         "        [ -e \"$installed\" ] || exit 1\n"
         "        case \"$*\" in *--show-commit*) echo 0123abcd ;; esac ;;\n"
-        "    build-bundle) : > \"$3\" ;;\n"          # an empty bundle is enough to reach the install step
+        "    build-bundle)\n"                         # not empty: a checksum of nothing must not pass for this one
+        "        [ \"${FAKE_FLATPAK_BUNDLE_EXIT-0}\" = 0 ] || exit \"$FAKE_FLATPAK_BUNDLE_EXIT\"\n"
+        "        printf 'fake flatpak bundle %s\\n' \"$$\" > \"$3\" ;;\n"
         "    install)\n"
         "        case \"$*\" in *--bundle*)\n"
         f"            mkdir -p \"$FLATPAK_USER_DIR/exports/share/applications\"\n"
@@ -1194,10 +1447,12 @@ def _scripted_flatpak(tmp_path):
         "        esac ;;\n"
         "    run)\n"
         "        case \"$*\" in\n"
+        "            *' --command=flatpak-builder '*) exit \"${FAKE_FLATPAK_BUILD_EXIT-0}\" ;;\n"
         "            *' --print-specs')\n"
         "                [ -z \"${FAKE_FLATPAK_SPECS-}\" ] || printf '%s\\n' \"$FAKE_FLATPAK_SPECS\" ;;\n"
         "            *' --command=python3 '*)\n"
-        "                [ -z \"${FAKE_FLATPAK_QT-}\" ] || printf '%s\\n' \"$FAKE_FLATPAK_QT\" ;;\n"
+        "                if [ \"${FAKE_FLATPAK_QT+set}\" = set ]; then printf '%s\\n' \"$FAKE_FLATPAK_QT\"\n"
+        "                else cd \"$FAKE_QT_PYTHONPATH\" && \"$FAKE_QT_PYTHON\" -; fi ;;\n"
         "            *' --command=sh '*)\n"
         "                while [ \"$#\" -gt 0 ] && [ \"$1\" != -c ]; do shift; done\n"
         "                body=\"$2\"; shift 3\n"            # -c, the body, the `_` that is $0 in it
@@ -1211,9 +1466,15 @@ def _scripted_flatpak(tmp_path):
         "        esac ;;\n"
         "esac\n"
         "exit 0\n")
-    for tool in ("desktop-file-validate", "appstreamcli"):
+    for tool in ("desktop-file-validate", "appstreamcli") if validators else ():
         (bin_dir / tool).write_text(
             f"#!/bin/sh\nprintf '{tool}\\t-\\t%s\\n' \"$*\" >> \"{log}\"\nexit 0\n")
+    real_df = shutil.which("df") or "/usr/bin/df"
+    (bin_dir / "df").write_text(
+        "#!/bin/sh\n"
+        "if [ -z \"${FAKE_DF_GIB-}\" ]; then exec " + shlex.quote(real_df) + " \"$@\"; fi\n"
+        "echo 'Filesystem 1024-blocks Used Available Capacity Mounted on'\n"
+        "echo \"fake 0 0 $((FAKE_DF_GIB * 1048576)) 0% /\"\n")
     for program in bin_dir.iterdir():
         program.chmod(0o755)
     return str(bin_dir), log
@@ -1226,23 +1487,139 @@ def _calls(log) -> list[tuple[str, str, str]]:
     if log.exists():
         for line in log.read_text().splitlines():
             if line.count("\t") >= 2 and line.split("\t", 1)[0] in (
-                    "flatpak", "desktop-file-validate", "appstreamcli"):
+                    "flatpak", "desktop-file-validate", "appstreamcli", "violation"):
                 calls.append(line.split("\t", 2))
             elif calls:
                 calls[-1][2] += " " + line.strip()
     return [tuple(call) for call in calls]
 
 
-#: What a working sandbox answers the three smoke tests with.
+#: What a working sandbox answers smoke tests 1 and 3 with. Smoke test 2 is not answered:
+#: the script's own python runs against ``_qt_stub``.
 _SMOKE_OK = {"FAKE_FLATPAK_SPECS": '{"os": "linux"}',
-             "FAKE_FLATPAK_QT": "qt-ok binding=PySide6 qt=0.0 platform=offscreen (fake)",
              "FAKE_FLATPAK_FILES": ""}
 
+#: Stands in for ``hugmesh_studio.gui.qt`` in the sandbox. The script's smoke test 2 is
+#: python that imports it, checks the binding, the platform and a rendered grab, and
+#: looks for the package's data files; the answers come from the environment.
+_QT_STUB = '''\
+import os
+BINDING = os.environ.get("FAKE_QT_BINDING", "PySide6")
 
-def _scripted_run(tmp_path, **answers):
+
+class _Shot:
+    def __init__(self, width, height):
+        self._size = (width, height)
+
+    def isNull(self):
+        return os.environ.get("FAKE_QT_GRAB_NULL") == "1"
+
+    def width(self):
+        return self._size[0]
+
+    def height(self):
+        return self._size[1]
+
+
+class QtCore:
+    @staticmethod
+    def qVersion():
+        return "0.0-stub"
+
+
+class QtWidgets:
+    class QApplication:
+        def __init__(self, argv):
+            pass
+
+        def platformName(self):
+            return os.environ.get("FAKE_QT_PLATFORM", "offscreen")
+
+    class QLabel:
+        def __init__(self, text):
+            self._size = (0, 0)
+
+        def resize(self, width, height):
+            self._size = (width, height)
+
+        def show(self):
+            pass
+
+        def grab(self):
+            return _Shot(*self._size)
+'''
+
+
+def _smoke_2_data_files() -> list[str]:
+    """The package data files smoke test 2 looks for, read from the script's own list."""
+    match = re.search(r"expected = \[(.*?)\]", _read(SCRIPT), re.DOTALL)
+    assert match, "build-flatpak-local.sh no longer lists the package data files it checks"
+    return re.findall(r'"([^"]+)"', match.group(1))
+
+
+def _qt_stub(tmp_path, missing=None, html=True):
+    """A ``hugmesh_studio`` package holding ``_QT_STUB`` and the data files smoke test 2
+    looks for (all but ``missing``; one assets/*.html unless ``html`` is false)."""
+    root = tmp_path / "qtstub"
+    package = root / "hugmesh_studio"
+    (package / "gui").mkdir(parents=True, exist_ok=True)
+    (package / "__init__.py").write_text("", encoding="utf-8")
+    (package / "gui" / "__init__.py").write_text("", encoding="utf-8")
+    (package / "gui" / "qt.py").write_text(_QT_STUB, encoding="utf-8")
+    (package / "assets").mkdir(exist_ok=True)
+    for rel in _smoke_2_data_files():
+        if rel != missing:
+            (package / rel).parent.mkdir(parents=True, exist_ok=True)
+            (package / rel).write_text("", encoding="utf-8")
+    if html:
+        (package / "assets" / "index.html").write_text("<html></html>", encoding="utf-8")
+    return str(root)
+
+
+def _path_without(tmp_path, names):
+    """A PATH holding every program the ordinary one does, except ``names``."""
+    farm = tmp_path / "pathfarm"
+    farm.mkdir(exist_ok=True)
+    for directory in os.environ["PATH"].split(os.pathsep):
+        try:
+            entries = list(os.scandir(directory))
+        except OSError:
+            continue
+        for entry in entries:
+            if entry.name in names or (farm / entry.name).is_symlink():
+                continue
+            try:
+                (farm / entry.name).symlink_to(entry.path)
+            except OSError:
+                pass
+    return str(farm)
+
+
+#: What a fake HOME holds before the script runs and must hold, unchanged, after it: a
+#: file in the place the user's own flatpak data lives.
+_CANARY = os.path.join(".local", "share", "flatpak", "canary")
+
+
+def _home_untouched(tmp_path):
+    home = tmp_path / "home"
+    found = sorted(os.path.relpath(os.path.join(d, f), home)
+                   for d, _dirs, files in os.walk(home) for f in files)
+    assert found == [_CANARY], (
+        f"the script changed the user's home directory; it holds {found}, expected only {_CANARY}")
+    assert (home / _CANARY).read_text(encoding="utf-8") == "mine", "the canary file was rewritten"
+
+
+def _scripted_run(tmp_path, *, qt_missing=None, qt_html=True, validators=True, **answers):
     """The whole script against the scripted flatpak, with the smoke tests answered as
-    ``_SMOKE_OK`` unless ``answers`` says otherwise; returns (result, calls, private, out)."""
-    fake_bin, log = _scripted_flatpak(tmp_path)
+    ``_SMOKE_OK`` unless ``answers`` says otherwise (a value of None removes the setting);
+    returns (result, calls, private, out). The fake HOME holds a canary where the user's
+    own flatpak data lives, and the run fails if that changed or if a flatpak call
+    reached an installation without --user. Run twice in one ``tmp_path`` it is a re-run."""
+    fake_bin, log = _scripted_flatpak(tmp_path, validators=validators)
+    home = tmp_path / "home"
+    if not (home / _CANARY).exists():
+        (home / _CANARY).parent.mkdir(parents=True, exist_ok=True)
+        (home / _CANARY).write_text("mine", encoding="utf-8")
     private = os.path.realpath(str(tmp_path / "private"))
     out = os.path.realpath(str(tmp_path / "out"))
     run_dir = tmp_path / "run"
@@ -1252,9 +1629,20 @@ def _scripted_run(tmp_path, **answers):
            "HUGMESH_STUDIO_FLATPAK_MIN_FREE_GIB": "0",
            "XDG_RUNTIME_DIR": str(run_dir),
            "DBUS_SESSION_BUS_ADDRESS": "unix:path=" + str(tmp_path / "no-such-bus"),
+           "FAKE_QT_PYTHONPATH": _qt_stub(tmp_path, missing=qt_missing, html=qt_html),
+           "FAKE_QT_PYTHON": sys.executable,
            **_SMOKE_OK, **answers}
-    result = _run_script(tmp_path, path=fake_bin + os.pathsep + os.environ["PATH"], extra_env=env)
-    return result, _calls(log), private, out
+    env = {key: value for key, value in env.items() if value is not None}
+    path = fake_bin + os.pathsep + (os.environ["PATH"] if validators
+                                    else _path_without(tmp_path, {"desktop-file-validate",
+                                                                  "appstreamcli"}))
+    result = _run_script(tmp_path, path=path, extra_env=env)
+    calls = _calls(log)
+    violations = [args for tool, _seen, args in calls if tool == "violation"]
+    assert not violations, ("a flatpak call reached an installation without --user: "
+                            + "; ".join(violations))
+    _home_untouched(tmp_path)
+    return result, calls, private, out
 
 
 @needs_bash
@@ -1296,7 +1684,11 @@ def test_script_sends_every_flatpak_call_to_the_private_directory(tmp_path):
         # FLATPAK_BINARY names the host-side wrapper checked at the end of this test:
         # without it the Builder's host commands start from the host environment and
         # look for the runtime in the user's own flatpak directory.
-        for grant in ("--user", f"--filesystem={private}", f"--env=FLATPAK_USER_DIR={private}",
+        # The output directory is a second grant: the Builder's working directory, repo and
+        # build directory all live under it, and the sandbox cannot see an arbitrary path.
+        assert out != private and not out.startswith(private + os.sep)
+        for grant in ("--user", f"--filesystem={private}", f"--filesystem={out}",
+                      f"--env=FLATPAK_USER_DIR={private}",
                       f"--env=FLATPAK_BINARY={work}/bin/flatpak-private", f"--cwd={work}"):
             assert grant in words, f"the Builder ran without {grant}: {words}"
     build = next(w for w in builder if "--command=flatpak-builder" in w)
@@ -1313,8 +1705,13 @@ def test_script_sends_every_flatpak_call_to_the_private_directory(tmp_path):
     bundle = os.path.join(out, f"hugmesh-studio-{studio_version}-x86_64.flatpak")
     assert f"build-bundle {work}/repo {bundle}.partial {APP_ID}" in args, args
     assert os.path.isfile(bundle) and os.path.isfile(bundle + ".sha256")
+    assert not os.path.exists(bundle + ".partial"), (
+        "the bundle was copied, not renamed, from its .partial name: a copy that is cut "
+        "short leaves the .partial behind and one that is not leaves two bundles")
     with open(bundle, "rb") as handle:
-        digest = hashlib.sha256(handle.read()).hexdigest()
+        content = handle.read()
+    assert content, "the fake wrote an empty bundle: a hard-coded empty-file checksum would pass"
+    digest = hashlib.sha256(content).hexdigest()
     assert _read(bundle + ".sha256").split() == [digest, os.path.basename(bundle)], (
         "the .sha256 file does not name the bundle's own checksum in sha256sum's format")
     assert f"{os.path.basename(bundle)}: OK" in result.stdout, (
@@ -1347,6 +1744,8 @@ def test_script_sends_every_flatpak_call_to_the_private_directory(tmp_path):
     pytest.param(" ", "printed only blank lines", id="blank"),
     pytest.param("not json", "is not JSON", id="not-json"),
     pytest.param("[]", "not a non-empty JSON object", id="not-an-object"),
+    pytest.param("[1]", "not a non-empty JSON object", id="a-list-with-content"),
+    pytest.param("{}", "not a non-empty JSON object", id="empty-object"),
 ])
 def test_smoke_test_1_refuses_an_empty_or_wrong_print_specs(tmp_path, answer, message):
     """An installed bundle whose --print-specs prints nothing is incomplete, not built."""
@@ -1355,6 +1754,101 @@ def test_smoke_test_1_refuses_an_empty_or_wrong_print_specs(tmp_path, answer, me
     assert message in result.stderr, result.stderr
     assert "Smoke test 1 of 3" in result.stderr, result.stderr
     assert not [a for _t, _s, a in calls if "--command=python3" in a], "smoke test 2 ran anyway"
+
+
+@needs_bash
+def test_script_runs_the_same_commands_as_the_release_workflows_flatpak_job(tmp_path):
+    """The point of the script is that a green local build predicts the release job, so
+    the commands the script runs are read back against the workflow's, not against copies
+    kept in this file: the flatpak-builder flags and positional arguments, both
+    validators, the build-bundle call and the bundle and checksum names, and the install
+    and run of the bundle. What is DELIBERATELY different (the script's --user on the run,
+    --bundle on the install, a .partial name the bundle is renamed from, absolute paths)
+    is spelled out below; anything else that differs fails."""
+    result, calls, _private, out = _scripted_run(tmp_path)
+    assert result.returncode == 0, result.stderr
+    args = [a for tool, _seen, a in calls if tool == "flatpak"]
+    lines = _workflow_flatpak_lines()
+    version = _package_version()
+    name = f"hugmesh-studio-{version}-x86_64.flatpak"      # the fake flatpak's arch
+
+    def workflow_one(predicate, what):
+        found = [ln for ln in lines if predicate(ln)]
+        assert len(found) == 1, f"expected one {what} in the workflow's flatpak job, found {found}"
+        return found[0]
+
+    # flatpak-builder: the same flags, the same directories by name, the same manifest.
+    builder_words = _words_of(workflow_one(lambda ln: ln.startswith("flatpak-builder "), "build"))
+    script_build = next(shlex.split(a) for a in args if "--command=flatpak-builder" in a)
+    script_tail = script_build[script_build.index("org.flatpak.Builder") + 1:]
+
+    def flags(words):
+        return sorted(w for w in words if w.startswith("--") and not w.startswith("--repo="))
+    assert flags(script_tail) == flags(builder_words), (
+        f"flatpak-builder flags differ: script {flags(script_tail)}, workflow {flags(builder_words)}")
+    repo_of = lambda words: [os.path.basename(w[len("--repo="):]) for w in words if w.startswith("--repo=")]
+    assert repo_of(script_tail) == repo_of(builder_words) == ["repo"], (script_tail, builder_words)
+    assert [os.path.basename(w) for w in script_tail[-2:]] == builder_words[-2:] == [
+        "build-dir", os.path.basename(MANIFEST)], (script_tail, builder_words)
+
+    # The two validators: the same program, options and file names.
+    from_workflow = [" ".join(_words_of(ln)) for ln in lines
+                     if ln.split(" ", 1)[0] in {"desktop-file-validate", "appstreamcli"}]
+    from_script = [tool + " " + " ".join(os.path.basename(w) for w in a.split())
+                   for tool, _seen, a in calls if tool in {"desktop-file-validate", "appstreamcli"}]
+    assert len(from_workflow) == 2, from_workflow
+    assert sorted(from_script) == sorted(from_workflow), (from_script, from_workflow)
+
+    # build-bundle and the names it produces.
+    bundle_words = _words_of(workflow_one(lambda ln: ln.startswith("flatpak build-bundle "), "export"))
+    script_bundle = next(shlex.split(a) for a in args if a.startswith("build-bundle "))
+    assert bundle_words[3].replace("${VERSION}", version) == name, bundle_words
+    assert os.path.basename(script_bundle[1]) == bundle_words[2] == "repo", (script_bundle, bundle_words)
+    assert os.path.basename(script_bundle[2]) == name + ".partial", script_bundle
+    assert script_bundle[3] == bundle_words[4] == APP_ID, (script_bundle, bundle_words)
+    checksum = workflow_one(lambda ln: ln.startswith("sha256sum "), "checksum")
+    assert checksum.replace("${VERSION}", version).endswith(f'tee "{name}.sha256"'), checksum
+    assert os.path.isfile(os.path.join(out, name + ".sha256")), "the script wrote no .sha256 of that name"
+
+    # Install and run of the bundle (the workflow's smoke test).
+    install = _words_of(workflow_one(lambda ln: ln.startswith("flatpak install ") and ".flatpak" in ln,
+                                     "bundle install"))
+    script_install = next(shlex.split(a) for a in args if a.startswith("install ") and "--bundle" in a)
+    assert install[0] == "flatpak" and install[1] == "install"
+    assert [w for w in script_install[1:-1] if w != "--bundle"] == install[2:-1], (script_install, install)
+    assert install[-1].replace("${VERSION}", version) == name == os.path.basename(script_install[-1])
+    run_words = _words_of(workflow_one(lambda ln: ln.startswith("flatpak run "), "smoke test"))
+    script_run = next(shlex.split(a) for a in args if a.endswith(" --print-specs"))
+    assert [w for w in script_run if w != "--user"] == run_words[1:], (script_run, run_words)
+
+
+@needs_bash
+def test_a_failed_build_stops_the_script_before_it_exports_anything(tmp_path):
+    """flatpak-builder's output goes through ``tee``; without pipefail its failure would
+    vanish behind tee's exit status, and --force-clean empties only the build directory,
+    so ``build-bundle`` would export the repository of the PREVIOUS build and the script
+    would report a fresh, verified bundle."""
+    result, calls, _private, out = _scripted_run(tmp_path, FAKE_FLATPAK_BUILD_EXIT="1")
+    assert result.returncode == 1, result.stderr
+    assert "FAILED during: Building" in result.stderr, result.stderr
+    names = [a.split()[0] for tool, _s, a in calls if tool == "flatpak"]
+    assert "build-bundle" not in names and "install" not in names[names.index("run"):], names
+    assert not [f for f in os.listdir(out) if f.endswith((".flatpak", ".sha256", ".partial"))]
+
+
+@needs_bash
+def test_a_failed_export_leaves_no_old_bundle_to_be_mistaken_for_the_new_one(tmp_path):
+    """A bundle from an earlier run is removed before the new one is exported: if
+    build-bundle then fails, nothing named like a finished build is left in the output."""
+    out = tmp_path / "out"
+    out.mkdir()
+    bundle = f"hugmesh-studio-{_package_version()}-x86_64.flatpak"
+    for name in (bundle, bundle + ".sha256"):
+        (out / name).write_text("from an earlier run")
+    result, _calls, _private, _out = _scripted_run(tmp_path, FAKE_FLATPAK_BUNDLE_EXIT="1")
+    assert result.returncode == 1, result.stderr
+    assert "FAILED during: Exporting" in result.stderr, result.stderr
+    assert not [f for f in os.listdir(out) if f.endswith((".flatpak", ".sha256"))], os.listdir(out)
 
 
 @needs_bash
@@ -1369,6 +1863,122 @@ def test_smoke_test_2_refuses_a_qt_that_did_not_report_qt_ok(tmp_path, answer):
     assert "did not report qt-ok" in result.stderr, result.stderr
     assert "Smoke test 2 of 3" in result.stderr, result.stderr
     assert not [a for _t, _s, a in calls if "--command=sh" in a], "smoke test 3 ran anyway"
+
+
+@needs_bash
+@pytest.mark.parametrize("answers, qt_missing, qt_html, message", [
+    pytest.param({"FAKE_QT_BINDING": "PyQt6"}, None, True, "binding=PyQt6", id="wrong-binding"),
+    pytest.param({"FAKE_QT_PLATFORM": "xcb"}, None, True, "platform=xcb", id="wrong-platform"),
+    pytest.param({"FAKE_QT_GRAB_NULL": "1"}, None, True, "grab_null=True", id="nothing-rendered"),
+    pytest.param({}, "core/_roles-lib.sh", True,
+                 "package data missing from the install: ['core/_roles-lib.sh']", id="data-file"),
+    pytest.param({}, None, False, "package data missing from the install: assets/*.html",
+                 id="no-html-asset"),
+])
+def test_smoke_test_2_python_refuses_what_it_checks_itself(tmp_path, answers, qt_missing,
+                                                           qt_html, message):
+    """Smoke test 2's python runs here against a stub Qt. The shell's ``qt-ok`` guard is
+    a second line behind it and would also stop a wrong binding, so the message the
+    PYTHON gives is what is asserted: remove the check in the python and the shell guard
+    still stops the run, but not with this message (and a wrong platform, an empty
+    grab or a missing data file would then pass the shell guard unnoticed)."""
+    result, calls, _private, _out = _scripted_run(tmp_path, qt_missing=qt_missing,
+                                                  qt_html=qt_html, **answers)
+    assert result.returncode == 1, (result.returncode, result.stderr)
+    assert message in result.stderr, result.stderr
+    assert "Smoke test 2 of 3" in result.stderr, result.stderr
+    assert not [a for _t, _s, a in calls if "--command=sh" in a], "smoke test 3 ran anyway"
+
+
+@needs_bash
+def test_smoke_test_2_python_passes_on_a_sandbox_that_is_right(tmp_path):
+    """The positive control for the refusals above."""
+    result, _calls, _private, _out = _scripted_run(tmp_path)
+    assert result.returncode == 0, result.stderr
+    assert "qt-ok binding=PySide6 qt=0.0-stub platform=offscreen grab=120x40 html_assets=1" in result.stdout
+
+
+def test_the_package_data_smoke_test_2_looks_for_is_in_the_package():
+    """The list is the script's own; the stub above holds whatever it names, so this is
+    what ties it to the real package (a file renamed or dropped from the source tree
+    would otherwise be looked for in the sandbox for ever)."""
+    listed = _smoke_2_data_files()
+    assert len(listed) >= 3, listed
+    for rel in listed:
+        assert os.path.isfile(os.path.join(STUDIO_ROOT, "hugmesh_studio", rel)), (
+            f"smoke test 2 looks for {rel}, which hugmesh_studio does not hold")
+    assert [f for f in os.listdir(os.path.join(STUDIO_ROOT, "hugmesh_studio", "assets"))
+            if f.endswith(".html")], "smoke test 2 wants one assets/*.html and there is none"
+
+
+@needs_bash
+def test_a_second_run_takes_the_re_run_path(tmp_path):
+    """Run twice in one directory: nothing is added or installed again (flathub and the
+    three refs are there), and the app installed by the first run is uninstalled, with
+    --user, before the new bundle goes in; an install over the top would keep the old
+    commit's files."""
+    first, _calls_1, _private, _out = _scripted_run(tmp_path)
+    assert first.returncode == 0, first.stderr
+    (tmp_path / "scripted-calls.log").write_text("", encoding="utf-8")
+    second, calls, _private, _out = _scripted_run(tmp_path)
+    assert second.returncode == 0, second.stderr
+    assert "already installed in the private directory" in second.stdout, second.stdout
+    args = [a for tool, _s, a in calls if tool == "flatpak"]
+    assert not [a for a in args if a.startswith("remote-add")], args
+    assert [a for a in args if a.startswith("install")] == [
+        a for a in args if a.startswith("install") and "--bundle" in a], args
+    uninstall = f"uninstall --user -y --noninteractive {APP_ID}"
+    assert args.count(uninstall) == 1, args
+    bundle = next(a for a in args if a.startswith("install") and "--bundle" in a)
+    assert args.index(uninstall) < args.index(bundle), args
+
+
+@needs_bash
+def test_the_validators_fall_back_to_the_builders_copy_in_the_private_directory(tmp_path):
+    """On a host without desktop-file-validate or appstreamcli the script runs the copies
+    inside org.flatpak.Builder, which must be the private installation's (--user) with the
+    private directory granted; the fallback is a line the other runs never reach."""
+    result, calls, private, _out = _scripted_run(tmp_path, validators=False)
+    assert result.returncode == 0, result.stderr
+    assert "is not installed here; using the copy inside org.flatpak.Builder" in result.stdout
+    runs = {}
+    for tool, seen, args in calls:
+        words = shlex.split(args) if tool == "flatpak" else []
+        for name in ("desktop-file-validate", "appstreamcli"):
+            if f"--command={name}" in words:
+                runs[name] = (seen, words)
+    assert set(runs) == {"desktop-file-validate", "appstreamcli"}, calls
+    for name, (seen, words) in runs.items():
+        assert seen == private, (name, seen)
+        assert words[0] == "run" and "--user" in words, (name, words)
+        assert f"--filesystem={private}" in words and f"--env=FLATPAK_USER_DIR={private}" in words
+        assert words[words.index("org.flatpak.Builder") + 1:][-1].endswith(
+            (".desktop", ".metainfo.xml")), (name, words)
+    assert "--no-net" in runs["appstreamcli"][1], runs["appstreamcli"]
+
+
+@needs_bash
+def test_a_first_run_with_too_little_room_stops_before_it_installs(tmp_path):
+    """The first run wants 14 GiB (runtimes 9.5, build state 1.9, bundle 0.2 and room to
+    spare) and says so under its own step before any download."""
+    result, calls, _private, _out = _scripted_run(
+        tmp_path, FAKE_DF_GIB="5", HUGMESH_STUDIO_FLATPAK_MIN_FREE_GIB=None)
+    assert result.returncode == 1, result.stderr
+    assert "only 5 GiB free" in result.stderr and "wants 14 GiB" in result.stderr, result.stderr
+    assert "FAILED during: Checking free space" in result.stderr, result.stderr
+    assert not [a for _t, _s, a in calls if a.startswith("install")], "it installed anyway"
+
+
+@needs_bash
+def test_a_re_run_wants_only_what_the_build_itself_needs(tmp_path):
+    """Once the runtimes are there a run needs 4 GiB: 5 GiB free is enough, 3 is not."""
+    first, *_ = _scripted_run(tmp_path)
+    assert first.returncode == 0, first.stderr
+    enough, *_ = _scripted_run(tmp_path, FAKE_DF_GIB="5", HUGMESH_STUDIO_FLATPAK_MIN_FREE_GIB=None)
+    assert enough.returncode == 0, enough.stderr
+    short, *_ = _scripted_run(tmp_path, FAKE_DF_GIB="3", HUGMESH_STUDIO_FLATPAK_MIN_FREE_GIB=None)
+    assert short.returncode == 1, short.stderr
+    assert "only 3 GiB free" in short.stderr and "wants 4 GiB" in short.stderr, short.stderr
 
 
 @needs_bash

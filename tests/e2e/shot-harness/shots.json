@@ -2080,7 +2080,8 @@
       "do": [
         { "action": "expect", "testid": "header-controls" }
       ],
-      "note": "Plan step 15. Settles on the host shell, so the shot lands whatever the Forge prints — today 'Engine failed to start'."
+      "settle": { "mask": ["[data-testid=\"cf-engine-canvas\"]"] },
+      "note": "Plan step 15. Settles on the host shell, so the shot lands whatever the Forge prints — today 'Engine failed to start'. #563: the Forge's engine canvas is a live region the settle step cannot freeze, so only that canvas is masked out of the settle frame comparison; the rest of the view must still settle."
     },
     {
       "persona": "games-member",

@@ -517,6 +517,40 @@ expect_catch "a Deployment re-pins replicas the HPA owns" "[hpa-replicas]" '
   grep -q "^  replicas: 1$" "$T/manifests/admin-bff-api/deployment.yaml"
 '
 
+# ── (11b) THE CHAT3D GAMES ORIGIN (hugmesh-generator#470) ────────────────────
+# The matrix-ui Deployment states HUG_GAMES_URL, and it must be the host the be
+# gateway routes to the games portal. Two defects, one control each, plus a control
+# that the check does not bite a profile that does not install games.
+expect_catch "matrix-ui HUG_GAMES_URL env deleted while games is installed" "[games-origin]" '
+  sed -i "/name: HUG_GAMES_URL/d" "$T/manifests/social-ui/deployment.yaml"
+  ! grep -qE "^[[:space:]]*- \{ name: HUG_GAMES_URL" "$T/manifests/social-ui/deployment.yaml"
+'
+expect_catch "HUG_GAMES_URL names a different host than the gateway games route" "[games-origin]" '
+  sed -i "s#value: \"https://games.hugmesh.net\" }#value: \"https://games.elsewhere.example\" }#" \
+      "$T/manifests/social-ui/deployment.yaml"
+  grep -q "games.elsewhere.example" "$T/manifests/social-ui/deployment.yaml"
+'
+# The gateway host moved but the manifest literal did not (a repo-tree edit of one
+# side only; this checks the tree, not what a builder bakes or what ArgoCD serves).
+expect_catch "gateway games host rewritten while the matrix-ui literal is left behind" "[games-origin]" '
+  sed -i "s#games\\.hugmesh\\.net#games.acme.example#g" "$T/apps/20-gateway-be.yaml"
+  grep -q "host: games.acme.example" "$T/apps/20-gateway-be.yaml"
+'
+# NOT vacuous the other way: a profile with no games Application is not asked for
+# an origin. Stage it, drop 50-games.yaml and the env, and require a clean verdict.
+{
+  T="${WORK}/tree"; rm -rf "${T}"; cp -r "${REPO}/specs/cluster" "${T}"
+  rm -f "${T}/apps/50-games.yaml"
+  sed -i "/name: HUG_GAMES_URL/d" "${T}/manifests/social-ui/deployment.yaml"
+  out="$(HUGMESH_DOCS_DIR="${HUGMESH_DOCS_DIR}" HUGMESH_TEMPLATES_DIR="${HUGMESH_TEMPLATES_DIR}" python3 "${CHECKER}" "${T}" 2>&1 || true)"
+  if grep -qF "  PASS [games-origin]" <<<"${out}" && ! grep -qF "  FAIL [games-origin]" <<<"${out}"; then
+    neg_ok "no games Application and no env -> [games-origin] passes (not asked for an origin)"
+  else
+    neg_bad "a profile without games was asked for a games origin (or the check vanished):"
+    grep -F "[games-origin]" <<<"${out}" | sed 's/^/        /'
+  fi
+}
+
 # ── (12) THE SUPERADMIN SERVICE CATALOG CHAIN ────────────────────────────────
 # (12a) THE SHIPPED DEFECT, re-injected: the console's Service deleted. Before this
 #       PR the ROUTE_SERVICE_ALLOW set exempted exactly this Service ("rendered by
@@ -627,9 +661,9 @@ SCPY
 #       would stay green here — that is the whole difference between a guard and a
 #       restatement of a literal.
 expect_catch "kaniko template renames its Secret (nothing else changes)" "[build-template-secret]" '
-  sed -i "s/^            secretName: service-catalog-builder-registry$/            secretName: service-catalog-builder-registry-RENAMED/" \
+  sed -i "s/^            secretName: service-catalog-registry-credentials$/            secretName: service-catalog-registry-credentials-RENAMED/" \
       "$T/manifests/service-catalog-builder/kaniko-build-job.template.yaml"
-  grep -q "secretName: service-catalog-builder-registry-RENAMED" \
+  grep -q "secretName: service-catalog-registry-credentials-RENAMED" \
       "$T/manifests/service-catalog-builder/kaniko-build-job.template.yaml"
 '
 # (14b) the other direction — THE SHIPPED DEFECT re-injected: no ExternalSecret, the
@@ -640,10 +674,10 @@ expect_catch "the builder push ExternalSecret removed (template mount left dangl
 import sys
 p=sys.argv[1]+"/manifests/external-secrets/service-catalog-builder-externalsecrets.yaml"
 s=open(p,encoding="utf-8").read()
-old="    name: service-catalog-builder-registry\n    creationPolicy: Owner"
+old="    name: service-catalog-registry-credentials\n    creationPolicy: Owner"
 assert s.count(old)==1, "ES target anchor matched %d times, not 1" % s.count(old)
-s=s.replace(old,"    name: service-catalog-builder-registry-X\n    creationPolicy: Owner",1)
-s=s.replace("  name: service-catalog-builder-registry\n","  name: service-catalog-builder-registry-X\n",1)
+s=s.replace(old,"    name: service-catalog-registry-credentials-X\n    creationPolicy: Owner",1)
+s=s.replace("  name: service-catalog-registry-credentials\n","  name: service-catalog-registry-credentials-X\n",1)
 open(p,"w",encoding="utf-8").write(s)
 SCPY
 '
@@ -789,7 +823,7 @@ expect_catch "push credential marked optional:true AND its ExternalSecret remove
 import sys, os
 p=sys.argv[1]+"/manifests/service-catalog-builder/kaniko-build-job.template.yaml"
 s=open(p,encoding="utf-8").read()
-old="            secretName: service-catalog-builder-registry\n"
+old="            secretName: service-catalog-registry-credentials\n"
 assert s.count(old)==1, "secretName anchor matched %d times, not 1" % s.count(old)
 open(p,"w",encoding="utf-8").write(s.replace(old, old+"            optional: true\n",1))
 os.remove(sys.argv[1]+"/manifests/external-secrets/service-catalog-builder-externalsecrets.yaml")
@@ -806,9 +840,9 @@ p=sys.argv[1]+"/manifests/service-catalog-builder/kaniko-build-job.template.yaml
 s=open(p,encoding="utf-8").read()
 vol="""        - name: docker-config
           secret:
-            secretName: service-catalog-builder-registry
+            secretName: service-catalog-registry-credentials
             items:
-              - key: .dockerconfigjson
+              - key: config.json
                 path: config.json
 """
 mnt="""            - name: docker-config

@@ -44,8 +44,8 @@ STUDIO_ROOT = os.path.dirname(HERE)
 #: The test files that carry ``test_look_*`` tests. A new look test in another file
 #: must be added here, or it would never run anywhere (test_every_look_test_is_run
 #: below fails when a file carries one that is not listed).
-LOOK_FILES = ("test_localcloud_nodes.py", "test_pages_qemu.py",
-              "test_pages_mesh_emulation.py")
+LOOK_FILES = ("test_anubis_tristate_page.py", "test_localcloud_nodes.py",
+              "test_pages_qemu.py", "test_pages_mesh_emulation.py")
 
 
 _PASSED_CASE = re.compile(r"\[([A-Za-z]+)-(?:default|\d+(?:\.\d+)?pt)\]\s+PASSED")

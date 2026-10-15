@@ -571,6 +571,115 @@ BUILTIN_DEFAULT_SERVICES = ("akkoma", "tuwunel", "phpbb")
 USER_LEVEL_SERVICES = ("akkoma", "tuwunel", "phpbb", "games", "owncast", "tube",
                        "character-studio", "character-forge")
 
+# The anubis (public proof-of-work gate) row is a TRI-STATE, not a tick (issue #384):
+#   ""    -> the build's own ENV policy decides (prod on, test off); emits nothing
+#   "on"  -> force ON  — the `anubis` slug in --optional-services
+#   "off" -> force OFF — the `-anubis` token in --optional-services (NEVER
+#            --exclude-services: both builders refuse that spelling for it, because
+#            subtraction cannot beat the ENV default)
+ANUBIS_SLUG = "anubis"
+ANUBIS_OFF_TOKEN = "-anubis"
+ANUBIS_CHOICES = ("", "on", "off")
+# The words BOTH faces show for those three values (the GUI combo's items, the TUI's
+# state column), kept beside the values so the two cannot spell them differently.
+ANUBIS_LABELS = {"": "Default", "on": "Force on", "off": "Force off"}
+
+
+def anubis_locked(optional_services) -> bool:
+    """Is the anubis choice locked at Default by a whole-set selection?
+
+    ``--optional-services ""`` (no services at all) and ``--all-services`` each REPLACE
+    the slug list the choice rides in, so on both faces the row is decided by the preset
+    and reads Default until the operator goes back to picking services one by one."""
+    svcs = [str(s) for s in (optional_services or [])]
+    return SERVICES_NONE in svcs or SERVICES_ALL in svcs
+
+
+def anubis_shown(cfg) -> str:
+    """The value ("", "on" or "off") a face should SHOW for ``cfg``: the field itself,
+    else what a pre-tri-state picker spelling already says (the ``anubis`` slug is Force
+    on, ``-anubis`` / ``no-anubis`` is Force off). ``_services_args`` lets the field beat
+    a contradicting spelling, so the field is read first."""
+    mode = ImageConfig._anubis_mode(getattr(cfg, "anubis", ""))
+    if mode:
+        return mode
+    svcs = [str(x) for x in (getattr(cfg, "optional_services", None) or [])]
+    if ANUBIS_OFF_TOKEN in svcs or "no-anubis" in svcs:
+        return "off"
+    return "on" if ANUBIS_SLUG in svcs else ""
+
+
+def client_class_role(role: str, platform: str) -> bool:
+    """True when ``role`` builds a CLIENT-class (desktop) image on ``platform`` — the
+    class whose builder accepts ``--optional-services`` but bakes no cluster GitOps tree
+    (build-x86 skips the specs/cluster copy for ROLE_CLIENT; build-rpi5's plan echoes
+    'n/a (role=desktop; no cluster GitOps tree baked)').
+
+    * x86 — every role NOT in X86_NODE_ROLES (laptop/chromebook/desktop and all the
+      standalone-* desktops);
+    * rpi5 — ONLY builder ``--role desktop`` (Studio id rpi5-desktop, RPI5_ROLE_MAP);
+      generic/pki/backend/frontend are cluster-node class, and standalone 'generic'
+      DOES bake the tree (G16), so it must NOT count as client.
+
+    Qt-free so the GUI Network page and the TUI Network step share ONE answer."""
+    p = platform or "x86"
+    if p == "rpi5":
+        return RPI5_ROLE_MAP.get(role, role) == "desktop"
+    if p == "x86":
+        return role not in X86_NODE_ROLES
+    return False
+
+
+def services_picker_hidden(cfg) -> bool:
+    """True when the Network page hides the whole cluster-services picker — and with it
+    the anubis row — for ``cfg``: an unaffiliated image (no HugMesh plane at all) or a
+    standalone CLIENT-class desktop (no cluster tree is baked, so a selection would be
+    accepted and ignored). Standalone rpi5 'generic' is cluster-node class and is NOT
+    hidden: its builder bakes the tree, so the row applies there on both faces."""
+    platform = getattr(cfg, "platform", "") or "x86"
+    return bool(
+        getattr(cfg, "role", "") == UNAFFILIATED_ROLE
+        or getattr(cfg, "unaffiliated", False)
+        or (getattr(cfg, "mode", "") == "standalone"
+            and platform in PLATFORM_FIELD_SUPPORT.get("optional_services", (platform,))
+            and client_class_role(getattr(cfg, "role", ""), platform)))
+
+
+def with_service_slug(services, slug: str) -> list[str]:
+    """``services`` (an ImageConfig.optional_services value) with ``slug`` ADDED —
+    additively, the way a per-node infra toggle means it.
+
+    ``--optional-services`` is an ALLOW-LIST that REPLACES the builder's own default
+    (the builders' OPTIONAL_SERVICES default line), so a bare append is
+    only right when the list already names services. The three other shapes each
+    used to lose something without a word:
+
+    * ``[]`` (emit nothing, the builder default applies) -> ``["tor"]`` emitted
+      ``--optional-services tor`` and silently DROPPED akkoma/tuwunel/phpbb from the
+      node. It becomes the builder default plus the slug.
+    * ``[SERVICES_NONE]`` (the explicit "no optional services") -> ``["none", "tor"]``
+      emitted the literal slug ``none``. It becomes just the slug.
+    * ``[SERVICES_ALL, ...]`` -> ``--all-services`` expands to the USER-LEVEL set only,
+      which by construction excludes every infra slug, so the slug was dropped. It
+      becomes the user-level set spelled out, plus whatever else was listed, plus the
+      slug (both builders' own all-expansion keeps nothing beyond the user-level set).
+    """
+    svcs = [str(s) for s in (services or [])]
+    if slug in svcs:
+        return svcs
+    if svcs == [SERVICES_NONE]:
+        base: list[str] = []
+    elif SERVICES_ALL in svcs:
+        base = list(USER_LEVEL_SERVICES) + [
+            s for s in svcs if s not in (SERVICES_ALL, SERVICES_NONE)
+            and s not in USER_LEVEL_SERVICES]
+    elif not svcs:
+        base = list(BUILTIN_DEFAULT_SERVICES)
+    else:
+        base = svcs
+    return [*base, slug]
+
+
 # One line per service saying what ENABLING it does — the operator's "redo entire
 # services section" was in large part "these are eight slugs and I cannot tell what any
 # of them is". Keyed by the slug the builders parse, so the label and the emitted token
@@ -608,8 +717,9 @@ SERVICE_DESCRIPTIONS: dict[str, str] = {
     # (ImageConfig().env == "test"). Saying it "stays off on a test build" would be
     # false for the one action this row exists to perform.
     "anubis": "Anti-scraper proof-of-work gate in front of the public web routes. "
-              "Ticking it installs it on any build; left alone a prod build turns "
-              "it on by itself anyway and only a test build leaves it off.",
+              "Force on installs it on any build; Default leaves it to the build "
+              "(a prod build turns it on by itself, a test build leaves it off); "
+              "Force off keeps it out of a prod build.",
 }
 
 # Presentation grouping for the services surface: (group title, (slug, ...)). Ordered —
@@ -1205,6 +1315,7 @@ _FIELD_PLATFORMS: dict[str, tuple[str, ...]] = {
     "tor_onion_service": _X86, "character_studio": _X86_RPI5,
     "character_forge": _X86_RPI5,
     "optional_services": _X86_RPI5, "exclude_services": _X86_RPI5, "enable_games": _X86_RPI5,
+    "anubis": _X86_RPI5,
     # managed backing services (I8/M2) — the two node builders parse --managed-service;
     # a mesh-node cluster concern, so scoped to the only builders that bake a cluster tree.
     "managed_services": _X86_RPI5,
@@ -2765,6 +2876,31 @@ class Domain:
     # saved config/manifest == superdomain (_domain_from_dict normalizes), and
     # both manifest emitters OMIT the default so pre-#47 bytes never change.
     idp: str = DOMAIN_IDP_SUPERDOMAIN
+    # Does this domain get its OWN Tor v3 onion (hugmesh-generator#582, operator
+    # decision 68 = A on #347)? ``tor`` is the ONE infra slug that became per-domain:
+    # a Tor domain is its own HiddenService stanza fronting the SAME gateway, and the
+    # gateway tells the domains apart by the onion Host (hugmesh-gateway#38's host
+    # map). It needs Tor on the node / mesh (the node-plane ``tor`` selection) to do
+    # anything — see core/domain_services.tor_front_door_state. Manifest emission is
+    # OMIT-WHEN-FALSE, like ``idp``, so every pre-#582 manifest keeps its bytes. A
+    # legacy ``"tor"`` in ``optional_services`` (the pre-#227 freeform cell, a slot no
+    # builder ever read) MOVES here at load — the ``games`` precedent.
+    tor: bool = False
+
+
+def domain_rows_to_dict(domains) -> list[dict[str, Any]]:
+    """The SAVED shape of a list of domain rows (a config file, a session record):
+    every field, except ``tor`` when it is false (#582). A row that is not a Tor domain
+    is written exactly as it was before ``Domain.tor`` existed; loading treats an
+    absent key as false. A row that is already a plain dict is passed through the same
+    filter."""
+    out: list[dict[str, Any]] = []
+    for d in domains or []:
+        row = dict(d) if isinstance(d, dict) else asdict(d)
+        if not row.get("tor"):
+            row.pop("tor", None)
+        out.append(row)
+    return out
 
 
 @dataclass
@@ -3030,6 +3166,10 @@ class ImageConfig:
     # ── cluster optional services + games (node-scoped) ──
     optional_services: list[str] = field(default_factory=list)  # --optional-services slugs (+ none/all sentinels)
     exclude_services: list[str] = field(default_factory=list)   # --exclude-services subtractive list (applied last)
+    # Tri-state for the public PoW gate, "" / "on" / "off" (ANUBIS_CHOICES, issue #384).
+    # "" = the build's ENV policy (prod on / test off); "on"/"off" force it, and are
+    # folded into --optional-services by _services_args (never --exclude-services).
+    anubis: str = ""
     enable_games: bool = False         # --enable-games (Game Studio + games.<domain>)
     # ── managed backing services (I8/M2; x86 + rpi5 node builders) ──
     # Map backing-service id -> operator-supplied HOSTED endpoint. The EMPTY default
@@ -3174,6 +3314,9 @@ class ImageConfig:
         # users: the User wire shape (issue #228 — `roles` OMIT-WHEN-SINGLE), not the
         # raw asdict, so a one-role account keeps its pre-#228 bytes.
         d["users"] = [u.to_dict() if isinstance(u, User) else u for u in self.users]
+        # domains: per-domain ``tor`` (#582) is OMIT-WHEN-FALSE here too, so a saved
+        # config or session record with no Tor domain keeps its pre-#582 bytes.
+        d["domains"] = domain_rows_to_dict(self.domains)
         if not include_secrets:
             for k in SECRET_FIELDS:
                 d[k] = ""
@@ -3200,6 +3343,26 @@ class ImageConfig:
                 f"domain {kw.get('name', '')!r}: idp must be one of "
                 f"{'|'.join(DOMAIN_IDP_CHOICES)}, got {v!r}")
         kw["idp"] = v
+        # per-domain Tor front door (#582). A real bool, or the two hand-written
+        # spellings; junk fails loudly at load (the idp rule), never coerced.
+        t = kw.get("tor", False)
+        if isinstance(t, str) and t.strip().lower() in ("true", "false", ""):
+            t = t.strip().lower() == "true"
+        if t is None:
+            t = False
+        if not isinstance(t, bool):
+            raise ValueError(
+                f"domain {kw.get('name', '')!r}: tor must be true or false, got {t!r}")
+        # MIGRATION: a legacy per-domain ``tor`` slug (pre-#227 freeform cell, kept as
+        # a carried-over slug since) did nothing — the manifest carried it and no
+        # builder read it (#580 addendum). Decision 68 made per-domain Tor a real
+        # mechanism, so the intent moves onto the field that drives it, and the slug
+        # leaves the allow-list rather than rendering a second, dead "tor" row.
+        svcs = kw.get("optional_services")
+        if isinstance(svcs, (list, tuple)) and "tor" in svcs:
+            t = True
+            kw["optional_services"] = [x for x in svcs if x != "tor"]
+        kw["tor"] = t
         return Domain(**kw)
 
     @staticmethod
@@ -3245,6 +3408,11 @@ class ImageConfig:
             if k in d:
                 v = cls._tri_explicit(d[k], k)
                 d[k] = "" if v is None else v
+        # anubis tri-state (#384): the three spellings plus the bool a checkbox-era
+        # hand-written config would use; junk fails closed AT LOAD, because a typo that
+        # silently meant "default" would ship a public PoW gate the operator said to turn off.
+        if "anubis" in d:
+            d["anubis"] = cls._anubis_mode(d["anubis"])
         # base CA certificates (#335): tolerate `null` / a hand-edited scalar the same
         # way "domains": null is tolerated above — treat it as ABSENT (the native
         # empty default) rather than constructing a config whose list field holds a
@@ -3775,22 +3943,61 @@ class ImageConfig:
         lvl = clamp_compress_level(self.compress_level)
         return [] if lvl == COMPRESS_LEVEL_DEFAULT else ["--compress-level", str(lvl)]
 
+    @staticmethod
+    def _anubis_mode(value) -> str:
+        """Normalize the anubis tri-state to "", "on" or "off". Accepts the bools a
+        hand-written config may carry (True -> "on", False/None -> ""); anything else
+        is rejected fail-closed rather than read as "default"."""
+        if value is True:
+            return "on"
+        if value is False or value is None:
+            return ""
+        v = str(value).strip().lower()
+        if v in ANUBIS_CHOICES:
+            return v
+        raise ValueError(f"anubis must be one of '', 'on', 'off' (got {value!r})")
+
     def _services_args(self) -> list[str]:
         """--optional-services allow-list (with the explicit-none / --all-services
         sentinels, G13/G14) + the subtractive --exclude-services list. Shared by x86 +
-        rpi5, the only builders that parse them."""
+        rpi5, the only builders that parse them.
+
+        The anubis tri-state (``self.anubis``, #384) is folded in here, because it has
+        no flag of its own: "on" adds the slug, "off" adds the ``-anubis`` token, "" adds
+        nothing (so an untouched config emits the argv it always did). A force-off beside
+        an EMPTY list relies on the builders' rule that a list of only deselect tokens
+        keeps the built-in default; beside the EXPLICIT-none sentinel it cannot, so the
+        default slugs are subtracted with --exclude-services instead."""
         a: list[str] = []
         svcs = list(self.optional_services or [])
+        excl = list(self.exclude_services or [])
+        mode = self._anubis_mode(self.anubis)
+        if mode == "on":
+            svcs = [s for s in svcs if s not in (ANUBIS_OFF_TOKEN, "no-anubis")]
+            if SERVICES_ALL in svcs:
+                # the builders' `all` expansion keeps deselect tokens but DROPS a
+                # positive slug, so spell the set out (with_service_slug does).
+                svcs = [s for s in svcs if s != ANUBIS_SLUG]
+            svcs = with_service_slug(svcs, ANUBIS_SLUG)
+        elif mode == "off":
+            svcs = [s for s in svcs if s != ANUBIS_SLUG]
+            if svcs == [SERVICES_NONE]:
+                # none + veto: a lone veto would give the defaults back, so say "none"
+                # the other way — keep the veto and subtract the default slugs.
+                svcs = [ANUBIS_OFF_TOKEN]
+                excl += [s for s in BUILTIN_DEFAULT_SERVICES if s not in excl]
+            elif not any(s in (ANUBIS_OFF_TOKEN, "no-anubis") for s in svcs):
+                svcs.append(ANUBIS_OFF_TOKEN)
         if svcs == [SERVICES_NONE]:
             a += ["--optional-services", ""]           # EXPLICIT none (suppress the builder default)
-        elif svcs == [SERVICES_ALL] or SERVICES_ALL in svcs:
+        elif SERVICES_ALL in svcs and mode != "off":
             a += ["--all-services"]                    # full user-level set
         elif svcs:
             # SPACE-separated: the builders word-split OPTIONAL_SERVICES on IFS
             # whitespace (it stays ONE argv element — shlex.quote on print).
             a += ["--optional-services", " ".join(svcs)]
-        if self.exclude_services:
-            a += ["--exclude-services", " ".join(self.exclude_services)]
+        if excl:
+            a += ["--exclude-services", " ".join(excl)]
         return a
 
     def _managed_services_args(self) -> list[str]:
@@ -4661,8 +4868,11 @@ class ImageConfig:
             "brand": self.brand, "brand_title": self.brand_title, "org": self.org,
             "cluster_domain": self.cluster_domain,
             "superdomain": self.effective_superdomain(),
+            # per-domain ``tor`` (#582) is OMIT-WHEN-FALSE the same way: a domain
+            # without its own onion emits no key, so pre-#582 bytes never change.
             "domains": [{k: v for k, v in asdict(d).items()
-                         if not (k == "idp" and v == DOMAIN_IDP_SUPERDOMAIN)}
+                         if not (k == "idp" and v == DOMAIN_IDP_SUPERDOMAIN)
+                         and not (k == "tor" and not v)}
                         for d in self.domains],
             # per-user ``roles`` (issue #228) is OMIT-WHEN-SINGLE the same way (User.to_dict):
             # ``role`` stays the primary every consumer reads; a multi-role account adds

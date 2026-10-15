@@ -68,6 +68,52 @@ mesh node** from the system tray.
   - cold-aware timeouts (a first build compiles ~28 images and is never killed at minute 30);
   - an **Open web UI** shortcut to the running stack's front door.
 
+### Local mesh: code folders (on the Repo source step)
+
+Under the Repo source cards, a **Code folders** block lists every domain from the
+Domains step and, under each, the apps that domain runs: the platform apps (one set
+of images serves every domain) plus the optional services chosen for it on the
+Domain services step, marked `[<slug>]`. Each row names the git checkout compose
+builds that app from and has an **Open folder** button; every domain has **Open
+all**; the block has **Open source root**. The folder is the one the build reads —
+`<source dir>/hugmesh-<name>` with *Build from a source tree I already have*,
+`./.stack-src/hugmesh-<name>` with *Download the source* (or, if you exported
+`STACK_SRC` before starting the Studio, that folder — the Makefile keeps it and so
+does the block) — parsed from the
+`context:` values of `tests/stack/compose.local.yaml` and the files it includes
+(`core/code_folders.py`), so the rows cannot drift from what `docker compose build`
+resolves. The source directory is read exactly as the build reads it, so `~` is not
+expanded (type the full path) and the block names the same folder the coverage line
+above it counts. The block re-reads the disk when a run finishes, so folders the
+Studio just cloned become openable without touching a control (the end-to-end
+scenario below finishes a run the way *Generate & start* does and reads the rows
+after it, so removing that re-read turns it red). A folder that is not
+there yet is a disabled button with the reason beside it ("not downloaded yet…",
+"no hugmesh-<name> checkout in …"); a service that runs a stock image (Akkoma,
+tuwunel, the databases) gets a note instead of a row. In *Download the source* mode
+the block says that `make stack-clone` git-resets the checkouts under `.stack-src`
+(only ones holding local commits are kept), and that the other mode never touches
+yours.
+
+Opening (`core/open_path.py`) uses `xdg-open`/`gio` on Linux, `explorer.exe` via
+`wslpath` on WSL2, `os.startfile` on Windows and `open` on macOS, with Qt's desktop
+fallback last. Only an opener that exits 0 counts as confirmed. One that is still
+running after 3 seconds (usually the file manager itself) is reported as *asked,
+not confirmed*, in amber, with the path to copy. **Open all** shares one 3-second
+waiting budget across all of a domain's folders (a click runs on the window's own
+thread, so 25 folders must not mean 25 waits); folders handed over after the budget
+is spent are reported as unconfirmed. When nothing can be confirmed the block says
+so inline and offers the path to copy. No dialogs.
+
+The end-to-end scenarios for this block are
+`tests/e2e/features/studio-code-folders/studio-code-folders.feature` (steps in
+`tests/e2e/steps/studio-code-folders.steps.ts`), driven by
+`tests/e2e/studio-code-folders-driver.py` (the real wizard, offscreen, with a
+stand-in `xdg-open` on PATH that logs what it is handed). Run them with
+`cd tests/e2e && SNAP_STUDIO_PYTHON=<python with PySide6 or PyQt6> npx bddgen test &&
+QT_QPA_PLATFORM=offscreen npx playwright test --project=bdd -g "git checkout behind every app"`.
+They need no mesh and start nothing.
+
 ## Run
 
 ```sh
@@ -158,6 +204,55 @@ do must be a documented command; repo-root `make` fronts: `scan-hardware`,
   Deletion keeps the GUI's three-way guard. No `--yes` is refused (exit 2). An in-progress
   build is never deleted (exit 1). The artifact tree goes only on an explicit
   `--delete-artifacts` (core checks the workdir's shape first).
+
+## Local mesh: work on it with a local AI agent (issue #695)
+
+On the **Bring-up** page of the local-mesh path (where both the Docker mesh and the
+kind DevOps lane end) the card **Work on this mesh with a local AI agent** starts a coding
+agent on a model that runs on this PC, in a copy of one app's repository. It does what
+[docs/LOCAL-AI-ASSISTANT.md](../docs/LOCAL-AI-ASSISTANT.md) tells a person to do by hand:
+
+- The card names, in plain words, the first thing that is missing: Ollama not installed,
+  the server not answering on `127.0.0.1:11434`, no pulled model with the **tools**
+  capability, the agent command (`claude`, `opencode`, `codex`) not installed, or the
+  chosen app's folder not being a git repository. **Start local agent chat** stays
+  disabled, with the reason as its tooltip, until nothing is missing. **Re-check** reads the
+  machine again (read-only: `GET /api/tags`, `POST /api/show`, never a generation);
+  **Copy command** is always available. Nothing starts without a press. No dialogs.
+- **Lane** follows the lane whose verb last ran on the page (Start DevOps lane sets it to
+  the kind cluster, Generate & start to the Docker mesh) and only changes what the brief
+  says about rebuilding a service; a lane you pick by hand stays until the next verb. The
+  **App** list follows the Repo source choice, in the stepped wizard and the single-page
+  frame alike.
+- A press makes `<state dir>/agent-work/<mesh>/<repo>` with `git clone --no-hardlinks`,
+  `git remote remove origin` and `git switch -c lm/<timestamp>` from the app's folder
+  (`./.stack-src/hugmesh-<name>`, or your own tree), writes the brief beside it, and opens a
+  terminal (xfce4-terminal, konsole, kitty, gnome-terminal, alacritty, foot, xterm) running
+  `ollama launch <agent> --model <model>` there. A copy is reused only when it has no
+  uncommitted work, no remote and was cloned from the folder's current commit; otherwise a
+  numbered one is made and nothing is deleted. Uncommitted edits in the real folder are not
+  in the copy, and the card says so.
+- The model is `hugmesh-agent` when pulled, else the first model the doc names that is
+  pulled with tools (`qwen3:8b` first), else the first with tools. Cloud models are never
+  offered.
+- The launch environment is an allowlist (`PATH`, `HOME`, `USER`, `LANG`, `LC_*`, `TERM`, the
+  display variables, `XDG_*`, `DBUS_SESSION_BUS_ADDRESS`, and `OLLAMA_HOST` only when it
+  points at this machine), applied inside the window with `env -i` under
+  `bash --noprofile --norc`, so `GH_TOKEN`, `GITHUB_TOKEN`, registry and cloud tokens,
+  `SSH_AUTH_SOCK` and `ARGOCD_*` never reach the agent. No auto-approve flag is ever passed
+  (`-y`, `--yes`, `--experimental-yolo`, ...). A keyring that answers on the desktop session
+  bus is still reachable, which is why the agent's commands are for you to read and approve.
+- When no terminal takes the request (no desktop, WSL2 without WSLg, nothing installed, every
+  terminal refused) the card shows the exact lines to run yourself. After a Start the copy
+  already exists, so those lines are only `cd <copy>` and the launch line; **Copy command**,
+  which can be pressed before any copy exists, also has the clone, remote-removal and branch
+  lines first. Every line is chained to the one before with `&&`, so a failed clone or a
+  missing copy stops the rest instead of running them in whatever folder your shell is in.
+  Native Windows and macOS do not open a window; run the Studio inside WSL2 or
+  follow the doc by hand.
+
+Code: `core/local_agent.py` (Qt-free) and `gui/pages/_local_agent_widget.py`; tests:
+`tests/test_local_agent.py`, `tests/test_local_agent_gui.py`.
 
 ## Memory guard (2026-07-15 host-freeze incident)
 
