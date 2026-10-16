@@ -264,8 +264,10 @@ def test_the_brands_table_shows_one_read_only_summary_line_per_brand_on_a_mesh(q
                                        look={"primary": "#aa0000"}),
                                 Domain(name="blog.example")])
     page.initializePage()
-    assert page.table.columnCount() == dom_mod._COL_CA + 1, \
-        "the table's columns are an interface: the summary is NOT a seventh one"
+    # the table's columns are an interface: the summary is NOT an extra one (the last
+    # column is the GitHub org of the Go-Live export step)
+    assert page.table.columnCount() == dom_mod._COL_ORG + 1, \
+        "the brand summary must not add a column to the table"
     lines = dict(page.brand_summaries())
     assert lines["shop.example"] == (
         "signs in through the superbrand; 1 look setting of its own; reached by Tor")
