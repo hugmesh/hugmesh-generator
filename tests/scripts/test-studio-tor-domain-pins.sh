@@ -58,6 +58,9 @@ echo "== Studio Tor / per-domain pytest pins (#591) =="
 # ── the file set: explicit names + the two per-domain families ─────────────────
 NAMED=(
   tests/test_local_mesh_tor.py
+  # #588: keys-provision imports the KEYS stick's certs/ for every manifest (the client
+  # stick's CA import, EXECUTED out of provision.sh)
+  tests/test_keys_provision_certs.py
   tests/test_package_catalog.py
   tests/test_localcloud_nodes.py
   tests/test_tui_localcloud.py
@@ -73,7 +76,12 @@ NAMED=(
   tests/test_fleet_domains.py
   tests/test_golive_domains.py
   tests/test_client_ca_inheritance.py
+  tests/test_domains_row_checks_saved_door.py
   tests/test_services_section.py
+  # the post-merge review of #645: what a person SEES in the fleet window (#647/#656)
+  tests/test_fleet_window_layout.py
+  # ... and on the Go-Live wizard (Inputs picker, Generate pane) and the cloud Domains step
+  tests/test_domain_surfaces_layout.py
 )
 FAMILIES=(
   "tests/test_domain_services*.py"
