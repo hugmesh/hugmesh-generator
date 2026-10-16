@@ -7,6 +7,7 @@ resources:
   - superadmin-ui-ingress.yaml   # cross-namespace: the tailnet superadmin-gateway (hugmesh-pki) -> the Service Catalog console pod in hugmesh-frontend, which the hugmesh-frontend tier from-set does not cover
   - homeserver-isolation.yaml
   - gateway-crossns-ingress.yaml   # cross-namespace gateway hops the tier/per-pod policies miss: superadmin-gateway (hugmesh-pki) -> admin-bff-api + federation-api, and fe-gateway -> the homeserver mTLS proxies :4443 (found by [gateway-netpol])
+  - casdoor-jwks-ingress.yaml   # JWT validators outside hugmesh-backend -> casdoor :8000 for the in-cluster JWKS fetch: fe-gateway (hugmesh-frontend), owncast-bff, tube-bff (hugmesh-generator#693; pinned by test-bff-jwks-in-cluster.sh)
   - homeserver-egress.yaml   # default-deny egress on akkoma/tuwunel: DNS + akkoma-db + egress-proxy only (domain-lock/no-federation backstop)
   - egress-vpn-interaction.yaml   # per-service opt-in (hugmesh.net/vpn-egress=true) direct egress for the node split-tunnel; PRUNED when egress-vpn is not selected (default-off)
   # tor-onion-marked.yaml is NOT here (hugmesh-generator#617). This app auto-syncs git

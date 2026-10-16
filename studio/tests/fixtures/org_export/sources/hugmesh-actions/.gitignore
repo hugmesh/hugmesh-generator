@@ -1,0 +1,40 @@
+HELP.md
+target/
+!.mvn/wrapper/maven-wrapper.jar
+!**/src/main/**/target/
+!**/src/test/**/target/
+
+### STS ###
+.apt_generated
+.classpath
+.factorypath
+.project
+.settings
+.springBeans
+.sts4-cache
+
+### IntelliJ IDEA ###
+.idea
+*.iws
+*.iml
+*.ipr
+
+### NetBeans ###
+/nbproject/private/
+/nbbuild/
+/dist/
+/nbdist/
+/.nb-gradle/
+build/
+!**/src/main/**/build/
+!**/src/test/**/build/
+
+### VS Code ###
+.vscode/
+
+### e2e run-state credentials ###
+# Written by `make stack-seed` (hugmesh-generator's e2e_password_ensure());
+# this repo only reads it (see e2e/features/steps/helpers/e2e-credentials.ts).
+# Gitignored here even though this repo never writes it — see the org e2e
+# password contract, Rule 3.
+.e2e-credentials

@@ -43,7 +43,7 @@ from ..core.local_mesh_domains import (DOMAIN_NAME_RE, LOCAL_MESH_REMEDY,
                                        own_idp_names)
 from . import model
 from .domain_services_step import DomainServicesScreen
-from .domains_step import IDP_LABELS, OWN_IDP
+from .domains_step import IDP_LABELS, OWN_IDP, set_github_org
 
 __all__ = ["LocalMeshScreen", "LOCALMESH_CHOICES", "LOCALMESH_DEFAULT_CHOICE",
            "LANE_NOTE", "bootstrap_command"]
@@ -191,12 +191,13 @@ class LocalMeshScreen:
         md = self.state(j)
         rows = []
         for i, d in enumerate(md.domains, 1):
+            org = getattr(d, "github_org", "") or "none"
             if i == 1:
                 rows.append(["1 (own)", d.name or "(type it: p NAME)", d.title or "-",
-                             OWN_IDP])
+                             OWN_IDP, org])
             else:
-                rows.append([str(i), d.name, d.title or "-", IDP_LABELS[d.idp]])
-        return ["#", "domain", "title", "sign-in"], rows
+                rows.append([str(i), d.name, d.title or "-", IDP_LABELS[d.idp], org])
+        return ["#", "domain", "title", "sign-in", "github org"], rows
 
     def _lines_domains(self, j) -> list[str]:
         env = "prod" if self.prod else "test"
@@ -211,8 +212,12 @@ class LocalMeshScreen:
                 "(fixed), on a prod mesh the public apex you type with p NAME. It is "
                 "always served and cannot be removed.",
                 "commands: a NAME=add a domain · d NUMBER=delete · s NUMBER=toggle its "
-                "sign-in (Superdomain Casdoor <-> Own Casdoor) · p NAME=prod mesh with "
-                "this public apex · p -=back to a test mesh · Enter=continue"]
+                "sign-in (Superdomain Casdoor <-> Own Casdoor) · o NUMBER ORG|-=set "
+                "its GitHub org (row 1 too) · p NAME=prod mesh with this public apex · "
+                "p -=back to a test mesh · Enter=continue",
+                "'GitHub org' = the organisation this domain's repositories are "
+                "exported to by the Go-Live ‘Export to GitHub org’ step. An org slug "
+                "only, never a token; none = the default, the step does not apply."]
         return out
 
     def _row(self, j, arg: str) -> int | None:
@@ -265,6 +270,21 @@ class LocalMeshScreen:
                 d.idp = (DOMAIN_IDP_OWN if d.idp == DOMAIN_IDP_SUPERDOMAIN
                          else DOMAIN_IDP_SUPERDOMAIN)
                 j.status = f"{d.name}: sign-in -> {IDP_LABELS[d.idp]}"
+            return
+        if verb == "o":
+            # the GitHub org (the Go-Live export step) — row 1 INCLUDED: the own
+            # domain is a real Domain row on this route, and the one most worth
+            # exporting; bootstrap_domain_records records it with the mesh.
+            which, _, org = arg.partition(" ")
+            try:
+                n = int(which.strip())
+            except ValueError:
+                n = 0
+            if not 1 <= n <= len(md.domains):
+                j.status = f"no such domain row: {which.strip()!r}"
+                return
+            d = md.domains[n - 1]
+            j.status = set_github_org((d, "github_org", d.name or "row 1"), org.strip())
             return
         if verb == "p":
             if arg == "-":

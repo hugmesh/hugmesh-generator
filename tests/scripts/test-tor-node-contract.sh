@@ -217,7 +217,10 @@ hasnt "$(rc_log)" "restart" && hasnt "$(rc_log)" "tor start" \
 # A4 — reload refused by OpenRC: fall back to SIGHUP on the pidfile's pid.
 fresh_root a4; echo 0 > "${STATE_DIR}/status"; echo 1 > "${STATE_DIR}/reload"
 HUP_MARK="${WORK}/a4.hup"
-bash -c 'trap "echo got > '"${HUP_MARK}"'; exit 0" HUP; while :; do sleep 0.1; done' &
+# env --default-signal=HUP: a suite started under `nohup`, or from a detached/backgrounded
+# harness, inherits SIGHUP as IGNORED, and bash cannot trap a signal that was ignored on
+# entry -- so the stand-in daemon below would never see the agent's HUP and A4 failed.
+env --default-signal=HUP bash -c 'trap "echo got > '"${HUP_MARK}"'; exit 0" HUP; while :; do sleep 0.1; done' &
 HUP_PID=$!
 mkdir -p "${R}/run/tor"; echo "${HUP_PID}" > "${R}/run/tor/tor.pid"
 run_agent
@@ -402,6 +405,58 @@ leg "rpi5 frontend --optional-services tor" "${WANT_ON}" build-rpi5-stage4.sh --
 leg "rpi5 pki (tor not selected)"           "off"        build-rpi5-stage4.sh --role pki
 leg "rpi5 CLIENT desktop --optional-services tor" "off"  build-rpi5-stage4.sh --role desktop --optional-services tor
 has "${LEG_OUT}" "tor selected on CLIENT role 'desktop' — dropped" && ok "B rpi5 CLIENT desktop: the drop is warned" || bad "B rpi5 CLIENT desktop: no drop warning"
+
+# ── hugmesh-generator#615: the SAME dead-CLIENT-check shape, for the four cluster-only
+# services whose refusals sat before the role case (edge-ai, character-studio,
+# character-forge, edge-ai-tts). Per CLIENT role and per flag: the drop is WARNED, and
+# the NODE role still keeps the slug (the refusal is not over-broad).
+for role in desktop laptop standalone-unaffiliated; do
+    for pair in "edge-ai:--with-edge-ai" "character-studio:--with-character-studio" \
+                "character-forge:--with-character-forge" "edge-ai-tts:--with-edge-ai-tts"; do
+        slug="${pair%%:*}"; flag="${pair#*:}"
+        out="$(plan build-x86-host-stage4.sh --role "${role}" "${flag}")"
+        has "${out}" "${slug} selected on CLIENT role '${role}' — dropped" \
+            && ok "B615 x86 CLIENT ${role} ${flag}: the drop is WARNED" \
+            || bad "B615 x86 CLIENT ${role} ${flag}: no drop warning — the client refusal is dead again"
+    done
+done
+out="$(plan build-x86-host-stage4.sh --role backend --standalone --with-edge-ai --with-character-studio --with-character-forge --with-edge-ai-tts)"
+for slug in edge-ai character-studio character-forge edge-ai-tts; do
+    has "${out}" "${slug} selected on CLIENT role 'backend' — dropped" \
+        && ok "B615 x86 backend --standalone --with-${slug}: the drop is WARNED (after the STANDALONE fold)" \
+        || bad "B615 x86 backend --standalone --with-${slug}: dropped SILENTLY — the refusal runs before the STANDALONE fold"
+done
+out="$(plan build-x86-host-stage4.sh --role laptop --optional-services edge-ai-tts,character-forge)"
+has "${out}" "edge-ai-tts selected on CLIENT role 'laptop' — dropped" && has "${out}" "character-forge selected on CLIENT role 'laptop' — dropped" \
+    && ok "B615 x86 CLIENT laptop --optional-services: the drop is WARNED however the slug arrived" \
+    || bad "B615 x86 CLIENT laptop --optional-services: not warned"
+out="$(plan build-x86-host-stage4.sh --role backend --with-edge-ai --with-character-studio --with-character-forge --with-edge-ai-tts)"
+hasnt "${out}" "on CLIENT role" && [ "$(plan_val "${out}" OPTIONAL_SERVICES)" = "akkoma tuwunel phpbb edge-ai character-studio character-forge edge-ai-tts" ] \
+    && ok "B615 x86 NODE backend keeps all four (no CLIENT warning, plan lists them)" \
+    || bad "B615 x86 NODE backend: a node role lost a cluster service or was warned as CLIENT"
+# edge-ai-analysis is the fifth cluster-only slug: --with-edge-ai-analysis folds BOTH
+# edge-ai and edge-ai-analysis, so on a CLIENT role it used to warn for edge-ai only
+# and leave edge-ai-analysis selected, silently, for the gate's dependsOn guard.
+for role in desktop laptop standalone-unaffiliated; do
+    out="$(plan build-x86-host-stage4.sh --role "${role}" --with-edge-ai-analysis)"
+    has "${out}" "edge-ai-analysis selected on CLIENT role '${role}' — dropped" \
+        && has "${out}" "edge-ai selected on CLIENT role '${role}' — dropped" \
+        && ok "B615 x86 CLIENT ${role} --with-edge-ai-analysis: BOTH folded slugs are WARNED" \
+        || bad "B615 x86 CLIENT ${role} --with-edge-ai-analysis: edge-ai-analysis (or edge-ai) dropped silently"
+done
+out="$(plan build-x86-host-stage4.sh --role backend --standalone --with-edge-ai-analysis)"
+has "${out}" "edge-ai-analysis selected on CLIENT role 'backend' — dropped" \
+    && ok "B615 x86 backend --standalone --with-edge-ai-analysis: the drop is WARNED" \
+    || bad "B615 x86 backend --standalone --with-edge-ai-analysis: dropped SILENTLY"
+out="$(plan build-x86-host-stage4.sh --role backend --with-edge-ai-analysis)"
+hasnt "${out}" "on CLIENT role" && [ "$(plan_val "${out}" OPTIONAL_SERVICES)" = "akkoma tuwunel phpbb edge-ai edge-ai-analysis" ] \
+    && ok "B615 x86 NODE backend --with-edge-ai-analysis keeps edge-ai + edge-ai-analysis (no CLIENT warning)" \
+    || bad "B615 x86 NODE backend --with-edge-ai-analysis: lost a slug or was warned as CLIENT"
+# the refusal must run AFTER the role case and the STANDALONE fold
+x86_cs_ln="$(grep -n -F 'for _cs_slug in edge-ai edge-ai-analysis character-studio character-forge edge-ai-tts; do' "${X86}" | head -1 | cut -d: -f1)"
+[ -n "${x86_cs_ln}" ] && [ "${x86_cs_ln}" -gt "$(grep -n -E '^if [$][{]STANDALONE[}]; then$' "${X86}" | head -1 | cut -d: -f1)" ] \
+    && ok "B615 x86: the cluster-service CLIENT drop (line ${x86_cs_ln}) is after the STANDALONE fold" \
+    || bad "B615 x86: cluster-service CLIENT drop at '${x86_cs_ln}' is not after the STANDALONE fold"
 
 # ── the builders' own tor definitions, loaded as bash would read them ──
 tor_defs() {  # BUILDER -> the three definition lines (arrays + predicate), column 0
@@ -641,6 +696,53 @@ fx live-notadmitted pki "${LIVE_OK[@]}" adminconf notadmitted; o="$(run_fx live 
 has_v "${o}" FAIL "is NOT an fe-gateway Ingress host" && ok "D live: control plane + NOT admitted -> FAIL (the 404 at the edge)" || { bad "D live not-admitted not caught"; echo "${o}" | sed 's/^/      | /'; }
 fx live-unknown pki "${LIVE_OK[@]}" adminconf unknown; o="$(run_fx live 0)"
 has_v "${o}" SKIP "admission unknown" && hasnt "${o}" "every exported onion is an fe-gateway Ingress host" && ok "D live: Application unreadable -> SKIP, not PASS" || { bad "D live unknown"; echo "${o}" | sed 's/^/      | /'; }
+
+# ═══════════ E. the export half (#629): wiring + the shared validators (static) ═══════════
+# The fetch/verify/apply/report BEHAVIOUR is driven in tests/scripts/test-tor-export-sync.sh;
+# this section pins what makes it RUN on a node: the cron entry, both builders' bake lines
+# (executed), and that the sync refuses exactly the values the reconcile ignores.
+echo "== E. hugmesh-tor-export-sync wiring + shared validators =="
+SYNC="${REPO}/specs/usr/sbin/hugmesh-tor-export-sync"
+TVLIB="${REPO}/specs/usr/lib/hugmesh/tor-verify.sh"
+[ -f "${SYNC}" ] && [ -f "${TVLIB}" ] && ok "E the sync agent and tor-verify.sh exist" || bad "E missing ${SYNC} or ${TVLIB}"
+sline="$(printf '%s\n' "${cron_code}" | grep -aE '[[:space:]]root[[:space:]]+/usr/sbin/hugmesh-tor-export-sync([[:space:]]|$)' || true)"
+[ "$(printf '%s' "${sline}" | grep -ac .)" -eq 1 ] && ok "E cron.d: exactly one entry runs the export sync as root" || bad "E cron.d: sync entries: '${sline}'"
+[ "$(awk '{print $1" "$2" "$3" "$4" "$5}' <<<"${sline}")" = '* * * * *' ] \
+    && ok "E cron.d: the export sync runs every minute (the egress-VPN 60 s convergence floor; 'within one cron cycle' in #629)" \
+    || bad "E cron.d: sync cadence '$(awk '{print $1" "$2" "$3" "$4" "$5}' <<<"${sline}")' is not every minute"
+printf '%s\n' "${sline}" | grep -F 'RC_SVCNAME' >/dev/null && bad "E cron.d: the sync entry sets RC_SVCNAME" || ok "E cron.d: the sync entry does not pose as the boot oneshot"
+for B in "${X86}" "${RPI5}"; do
+    bn="$(basename "${B}")"
+    cps="$(grep -av -E '^[[:space:]]*#' "${B}" | grep -aE '^[[:space:]]*cp "\$\{SHARED_SPECS\}/(usr/sbin|usr/lib/hugmesh|etc/init.d|etc/cron.d)/(hugmesh-tor-|tor-verify)')"
+    SB="${WORK}/bake-e-${bn}"; rm -rf "${SB}"; mkdir -p "${SB}/usr/sbin" "${SB}/usr/lib/hugmesh" "${SB}/etc/init.d" "${SB}/etc/hugmesh/registry"
+    ( SHARED_SPECS="${REPO}/specs"; SYSROOT="${SB}"; eval "${cps}" ) >/dev/null 2>&1
+    if [ -x "${SB}/usr/sbin/hugmesh-tor-export-sync" ] && cmp -s "${SB}/usr/sbin/hugmesh-tor-export-sync" "${SYNC}" \
+       && [ -f "${SB}/usr/lib/hugmesh/tor-verify.sh" ] && cmp -s "${SB}/usr/lib/hugmesh/tor-verify.sh" "${TVLIB}" \
+       && [ -x "${SB}/usr/sbin/hugmesh-tor-reconcile" ]; then
+        ok "E ${bn}: its tor bake lines, executed, put an executable sync agent + tor-verify.sh next to the reconcile"
+    else
+        bad "E ${bn}: executed tor bake lines did not bake /usr/sbin/hugmesh-tor-export-sync (+x) and /usr/lib/hugmesh/tor-verify.sh"; printf '%s\n' "${cps}" | sed 's/^/      | /'
+    fi
+    # tor-verify.sh sources registry-verify.sh: the bake must put both in the same dir
+    grep -aE '^[[:space:]]*cp "\$\{SHARED_SPECS\}/usr/lib/hugmesh/registry-verify.sh"[[:space:]]+"\$\{SYSROOT\}/usr/lib/hugmesh/registry-verify.sh"' "${B}" >/dev/null \
+        && ok "E ${bn}: registry-verify.sh is baked to the same /usr/lib/hugmesh (tor-verify.sh sources it)" || bad "E ${bn}: registry-verify.sh bake line not found"
+done
+# the sync refuses exactly what the reconcile ignores: one spelling of each validator
+rec_up="$(grep -aE '^_UPSTREAM_RE=' "${AGENT}")"; syn_up="$(grep -aE '^_UPSTREAM_RE=' "${SYNC}")"
+[ -n "${rec_up}" ] && [ "${rec_up}" = "${syn_up}" ] && ok "E _UPSTREAM_RE is byte-identical in the reconcile and the sync" || bad "E _UPSTREAM_RE differs: reconcile '${rec_up}' sync '${syn_up}'"
+rec_slug="$(grep -aoE '\^\[a-z0-9\]\[a-z0-9-\]\{0,62\}\$' "${AGENT}" | head -1)"
+syn_slug="$(sed -n 's/^_SLUG_RE=.\(.*\).$/\1/p' "${SYNC}")"
+[ -n "${rec_slug}" ] && [ "${rec_slug}" = "${syn_slug}" ] && ok "E the slug pattern is the same in both agents (${syn_slug})" || bad "E slug pattern differs: reconcile '${rec_slug}' sync '${syn_slug}'"
+[ "$(sed -n 's/^_ONION_RE=.\(.*\).$/\1/p' "${SYNC}")" = '^[a-z2-7]{56}\.onion$' ] && ok "E the sync reports only v3 onions (admin-bff's TorOnionRules spelling)" || bad "E _ONION_RE drifted"
+# the sync writes the two files the reconcile reads, by the same paths
+grep -aF 'UPSTREAM_FILE="/etc/hugmesh/tor/upstream"' "${AGENT}" >/dev/null && grep -aF 'UPSTREAM_FILE="${TOR_ETC}/upstream"' "${SYNC}" >/dev/null && grep -aF 'TOR_ETC="${R}/etc/hugmesh/tor"' "${SYNC}" >/dev/null \
+    && grep -aF 'DOMAINS_FILE="/etc/hugmesh/tor/domains"' "${AGENT}" >/dev/null && grep -aF 'DOMAINS_FILE="${TOR_ETC}/domains"' "${SYNC}" >/dev/null \
+    && ok "E both agents name /etc/hugmesh/tor/upstream and /etc/hugmesh/tor/domains" || bad "E the two agents disagree on the file paths"
+grep -aF 'EXPORT_DIR="/var/lib/hugmesh/tor"' "${AGENT}" >/dev/null && grep -aF 'EXPORT_DIR="${R}/var/lib/hugmesh/tor"' "${SYNC}" >/dev/null \
+    && ok "E the sync reports from the directory the reconcile exports to (/var/lib/hugmesh/tor)" || bad "E export dir disagreement"
+grep -aF 'tor_canonical_bytes' "${TVLIB}" >/dev/null && grep -aF '"v1-tor\n"' "${TVLIB}" >/dev/null && grep -aF 'registry-verify.sh' "${TVLIB}" >/dev/null \
+    && ok "E tor-verify.sh spells v1-tor and layers on registry-verify.sh (one crypto path for every consumer)" || bad "E tor-verify.sh shape"
+grep -aE '[|][[:space:]]*grep[[:space:]]+-[a-zA-Z]*q' "${SYNC}" "${TVLIB}" "${REPO}/tests/scripts/test-tor-export-sync.sh" >/dev/null && bad "E a quiet grep fed by a pipe under pipefail (a found match can report failure)" || ok "E no quiet grep fed by a pipe in the sync, the lib or its suite"
 
 echo
 echo "== RESULT: ${P} passed, ${F} failed =="

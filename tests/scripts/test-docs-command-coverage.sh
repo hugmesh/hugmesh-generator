@@ -149,6 +149,22 @@ coverage_findings() {
     done <<< "${commands}"
 }
 
+# ── the Makefile help rule (decision 106 = B on #49) ─────────────────────────
+# `make help` is documentation for make targets: a target is DOCUMENTED when its
+# rule line carries a `## ` help line that `make help` actually prints. help's own
+# grep is  ^[a-zA-Z0-9_.+-]+:.*?##   so the rule here is the same shape: every
+# column-0 rule line naming a plain target (letters, digits, _ . + -) must carry
+# `## `. Pattern rules (`rpi-%:`), dot-targets (.PHONY, .DEFAULT_GOAL), variable
+# assignments (`X := y`, `X ?= y`) and recipe lines are not targets in this sense.
+# makefile_help_findings <repo-root> -> one finding per line; empty = clean.
+makefile_help_findings() {
+    local repo="$1" mf="$1/Makefile" n
+    [ -f "${mf}" ] || { echo "Makefile is missing — the help rule cannot be evaluated"; return; }
+    n="$(grep -cE '^[a-zA-Z0-9_][a-zA-Z0-9_.+-]*:([^=:]|$)' "${mf}" || true)"
+    [ "${n:-0}" -gt 0 ] || { echo "Makefile has no target lines — the help rule cannot be evaluated"; return; }
+    awk '/^[a-zA-Z0-9_][a-zA-Z0-9_.+-]*:([^=:]|$)/ && $0 !~ /## / { t=$0; sub(/:.*$/, "", t); printf "Makefile:%d target %s has no `## ` help line, so `make help` does not list it\n", NR, t }' "${mf}"
+}
+
 # ── the real repo ─────────────────────────────────────────────────────────────
 echo "== docs command coverage: ${GEN} =="
 n_cmd="$(git -C "${GEN}" ls-files -s -- scripts | awk '{ n=split($4, s, "/"); b=s[n]; if (b ~ /^_.*-lib\.sh$/) next; if ($1=="100755" || b ~ /\.(sh|py|ps1|js)$/) c++ } END { print c+0 }')"
@@ -163,6 +179,14 @@ if [ -z "${findings}" ]; then
     ok "every command under scripts/ is named in docs/ or a README, or reached through a documented make front, or an honest allowlist entry"
 else
     while IFS= read -r line; do bad "${line}"; done <<< "${findings}"
+fi
+
+mk_findings="$(makefile_help_findings "${GEN}")"
+n_tg="$(grep -cE '^[a-zA-Z0-9_][a-zA-Z0-9_.+-]*:([^=:]|$)' "${GEN}/Makefile" || true)"
+if [ -z "${mk_findings}" ]; then
+    ok "every plain Makefile target (${n_tg}) carries a '## ' help line that make help lists (decision 106)"
+else
+    while IFS= read -r line; do bad "${line}"; done <<< "${mk_findings}"
 fi
 
 # ── negative controls over synthetic repos ────────────────────────────────────
@@ -269,6 +293,32 @@ control "c10: extensionless executable scripts/tool" "${R}" "" "scripts/tool is 
 # (c11) an empty corpus is a finding, not a pass
 R="${TMP}/repo-c11"; mkdir -p "${R}/scripts"; git -C "${R}" init -q; addf "${R}" scripts/foo.sh '#!/bin/sh' x
 control "c11: no docs at all is a finding, never a vacuous pass" "${R}" "" "docs corpus is EMPTY"
+
+# (h1..h5) the Makefile help rule
+mkhelp() { # <name> <Makefile content> -> path of a repo holding only that Makefile
+    local r="${TMP}/repo-$1"; mkdir -p "${r}"; printf '%b' "$2" > "${r}/Makefile"; printf '%s' "${r}"
+}
+mkcontrol() { # <label> <repo> <expect: clean|finding-substring>
+    local out; out="$(makefile_help_findings "$2")"
+    if [ "$3" = clean ]; then
+        if [ -z "${out}" ]; then ok "$1: clean, as it should be"; else bad "$1: unexpected finding: $(printf '%s' "${out}" | tr '\n' '|' | cut -c1-200)"; fi
+    elif printf '%s\n' "${out}" | grep -F -- "$3" >/dev/null; then ok "$1: caught — '$(printf '%s\n' "${out}" | grep -F -- "$3" | head -1 | cut -c1-100)'"
+    else bad "$1: NOT caught (expected '$3'): $(printf '%s' "${out}" | tr '\n' '|' | cut -c1-200)"; fi
+}
+R="$(mkhelp h1 'help: ## list\n\t@echo h\nfoo:\n\t@echo foo\n')"
+mkcontrol "h1: a target without a help line" "${R}" "target foo has no"
+R="$(mkhelp h2 'help: ## list\n\t@echo h\nfoo: dep ## do foo\n\t@echo foo\nbar-x.y+z: ## do bar\n\t@echo bar\n')"
+mkcontrol "h2: targets with prerequisites and a help line" "${R}" clean
+R="$(mkhelp h3 '.PHONY: help foo\n.DEFAULT_GOAL := help\nX := a:b\nY ?= c\nZ:=1\nhelp: ## list\n\t@echo "bar: not a target"\n\tcheck: a recipe line that looks like a rule\nrpi-%: ## pattern rule\n\t@echo p\n')"
+mkcontrol "h3: .PHONY, assignments, recipe lines and pattern rules are not targets" "${R}" clean
+R="$(mkhelp h4 'help: ## list\nfoo:\n\t@echo "## not a help line, a recipe"\n')"
+mkcontrol "h4: a '##' inside the recipe does not count as the target's help line" "${R}" "target foo has no"
+R="$(mkhelp h4b 'help: ## list\nfoo-bar.baz+x:\n\t@echo x\n')"
+mkcontrol "h4b: a target with - . + in its name is still a target" "${R}" "target foo-bar.baz+x has no"
+R="${TMP}/repo-h5"; mkdir -p "${R}"
+mkcontrol "h5: a missing Makefile is a finding, never a vacuous pass" "${R}" "Makefile is missing"
+R="$(mkhelp h6 '# only comments\nX := 1\n')"
+mkcontrol "h6: a Makefile with no targets is a finding, never a vacuous pass" "${R}" "no target lines"
 
 echo
 echo "== docs command coverage: ${pass} passed, ${fail} failed =="
