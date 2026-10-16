@@ -1092,6 +1092,10 @@ PY
 OC_ENTRY='  - { name: owncast/owncast, newName: owncast/owncast, newTag: 0.3.0, digest: sha256:0f35b568b1098d2badbde2dbf3c73a902009c95eb687c647edea04d6da079a78 }
 '
 oc_drop_entry() { imgswap manifests/owncast/kustomization.yaml "${OC_ENTRY}" ""; }
+# Dropping the owncast entry also leaves the deployment's bare owncast/owncast
+# unrewritten, which (20) already refuses; a control that drops it must therefore
+# want its OWN finding line, or it would pass for that other reason.
+ipw() { printf '%-24s %s' '[image-pin]' "$1"; }
 # (21a) THE REPORTED EXPLOIT 1: a floating non-latest tag in a raw workload.
 for tag in stable edge mainline develop STABLE nightly 1.2-stable 6.6-24.04_edge; do
 expect_catch "raw workload image owncast/owncast:${tag} with the images: entry removed" "[image-pin]" "
@@ -1137,7 +1141,7 @@ OC_JSONPATCH='patches:
         path: /spec/template/spec/containers/0/image
         value: owncast/owncast:develop
 '
-expect_catch "inline JSON6902 patch replaces the owncast image with :develop" "[image-pin]" '
+expect_catch "inline JSON6902 patch replaces the owncast image with :develop" "$(ipw "manifests/owncast/kustomization.yaml (patch): image 'owncast/owncast:develop'")" '
   oc_drop_entry
   printf "%s" "${OC_JSONPATCH}" >> "$T/manifests/owncast/kustomization.yaml"
 '
@@ -1155,7 +1159,7 @@ expect_catch "JSON6902 copy onto an image path (unreadable value, fail closed)" 
   printf "patches:\n  - target: {kind: Deployment, name: hugmesh-owncast}\n    patch: |-\n      - op: copy\n        from: /metadata/annotations/img\n        path: /spec/template/spec/containers/0/image\n" >> "$T/manifests/owncast/kustomization.yaml"
 '
 # (21j) an inline strategic-merge patch (patchesStrategicMerge string form).
-expect_catch "inline patchesStrategicMerge sets owncast/owncast:edge" "[image-pin]" '
+expect_catch "inline patchesStrategicMerge sets owncast/owncast:edge" "$(ipw "manifests/owncast/kustomization.yaml (patch): image 'owncast/owncast:edge'")" '
   oc_drop_entry
   printf "patchesStrategicMerge:\n  - |-\n    apiVersion: apps/v1\n    kind: Deployment\n    metadata: {name: hugmesh-owncast}\n    spec:\n      template:\n        spec:\n          containers:\n            - {name: owncast, image: \"owncast/owncast:edge\"}\n" >> "$T/manifests/owncast/kustomization.yaml"
 '
@@ -1164,8 +1168,8 @@ expect_catch "patch by path to a file that is not there (fail closed)" "[image-p
   printf "patches:\n  - target: {kind: Deployment, name: hugmesh-owncast}\n    path: no-such-patch.yaml\n" >> "$T/manifests/owncast/kustomization.yaml"
 '
 # (21l) replacements that write an image field: fail closed.
-expect_catch "replacements: target fieldPath names the container image (fail closed)" "[image-pin]" '
-  printf "replacements:\n  - source: {kind: ConfigMap, name: x, fieldPath: data.img}\n    targets:\n      - select: {kind: Deployment}\n        fieldPaths: [spec.template.spec.containers.[name=owncast].image]\n" >> "$T/manifests/owncast/kustomization.yaml"
+expect_catch "replacements: target fieldPath names the container image (fail closed)" "$(ipw "manifests/owncast/kustomization.yaml: a \`replacements:\` entry writes an image field")" '
+  printf "replacements:\n  - source: {kind: ConfigMap, name: x, fieldPath: data.img}\n    targets:\n      - select: {kind: Deployment}\n        fieldPaths:\n          - \"spec.template.spec.containers.[name=owncast].image\"\n" >> "$T/manifests/owncast/kustomization.yaml"
 '
 # (21m) a transformer plugin (an ImageTagTransformer config, say): fail closed.
 expect_catch "kustomization uses transformers: (unreadable output, fail closed)" "[image-pin]" '
