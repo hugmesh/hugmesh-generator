@@ -1,0 +1,499 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <!-- Spring Boot 4.0.7 — the Boot-4 org baseline (matches hugmesh-gateway:
+       "Spring Boot 4.0 / Spring Cloud 2025.1"; proven WebFlux + Casdoor reactive JWT
+       resource server + GraalVM native on Java 25). This is the 2.x line; the 1.0.0
+       (Spring Boot 3.5.5) line stays untouched for the already-merged BFFs. -->
+  <parent>
+    <groupId>org.springframework.boot</groupId>
+    <artifactId>spring-boot-starter-parent</artifactId>
+    <version>4.0.7</version>
+    <relativePath/>
+  </parent>
+
+  <groupId>net.hugmesh</groupId>
+  <artifactId>hugmesh-parent</artifactId>
+  <version>2.8.0</version>
+  <packaging>pom</packaging>
+  <name>hugmesh-parent</name>
+  <description>HugMesh ecosystem metapom (2.7.0 / Boot-4 line): consolidates the
+    Spring Boot 4.0.7 / Spring Cloud 2025.1 / Java 25 reactive BFF baseline (WebFlux +
+    Casdoor OAuth2 resource server + R2DBC/Liquibase + SpringDoc), shared
+    dependencyManagement, pluginManagement, and GitLab Maven publishing.</description>
+
+  <properties>
+    <java.version>25</java.version>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
+
+    <!-- Shared, hugmesh-pinned versions. -->
+    <hugmesh-commons.version>2.1.0</hugmesh-commons.version>
+    <!-- Spring Cloud release train for Boot 4.0.x (matches hugmesh-gateway). -->
+    <spring-cloud.version>2025.1.2</spring-cloud.version>
+    <!-- SpringDoc: Boot-4 / Spring Framework 7 compatible line (3.x). -->
+    <springdoc.version>3.0.3</springdoc.version>
+    <!-- Resilience4j: the Boot-4 starter line. resilience4j-spring-boot4 (2.4.0)
+         replaces the old resilience4j-spring-boot3 starter and provides the
+         @CircuitBreaker / @RateLimiter annotation aspects on Spring Framework 7. -->
+    <resilience4j.version>2.4.0</resilience4j.version>
+    <aws.sdk.version>2.28.3</aws.sdk.version>
+
+    <!-- ===== Static-analysis enforcement (shared, INHERITED) ===================
+         These wire the org's secure/clean-Java + reactive-readability conventions
+         (PMD A/B, Checkstyle F/G/H, SpotBugs+FindSecBugs D/E) into every Java
+         child build. The CURATED rulesets live in the hugmesh-build-config jar
+         (resource-only); each plugin declares that jar in its OWN <dependencies>
+         and reads the ruleset off the plugin classpath (PMD via /hugmesh/*.xml,
+         Checkstyle/SpotBugs via hugmesh/*.xml) — see <build><plugins> below.
+
+         ALL THREE analysers are in FAIL MODE: PMD and Checkstyle via
+         failOnViolation=true, SpotBugs via spotbugs:check + failOnError=true
+         (failOnViolation is NOT a parameter of the spotbugs:check goal — see the
+         SpotBugs plugin block below).
+         NOTE: "fleet verified clean before each flip" holds for PMD and
+         Checkstyle only. It was never true for SpotBugs: that gate was
+         inadvertently fail-OPEN from 7d22f1a (PR #6) onward, so no SpotBugs flip
+         was ever actually gated on a clean fleet. Closing it surfaces real
+         pre-existing violations — see the PR that introduced this comment for the
+         per-repo counts and the required sequencing.
+         Use ${hugmesh.analysis.skip} as an escape hatch for fast inner-loop
+         builds. -->
+    <hugmesh-build-config.version>0.5.0</hugmesh-build-config.version>
+    <maven-pmd-plugin.version>3.28.0</maven-pmd-plugin.version>
+    <maven-checkstyle-plugin.version>3.6.0</maven-checkstyle-plugin.version>
+    <!-- Pin Checkstyle itself to a current 10.x (the plugin 3.6.0 default is the
+         older 9.3); 10.x is the Java 21+ bytecode-aware line and has all the
+         checks we use (VisibilityModifier/FinalClass/HideUtilityClassConstructor/
+         MutableException/LambdaBodyLength). -->
+    <checkstyle.version>10.21.4</checkstyle.version>
+    <spotbugs-maven-plugin.version>4.9.8.2</spotbugs-maven-plugin.version>
+    <findsecbugs-plugin.version>1.14.0</findsecbugs-plugin.version>
+
+    <!-- Master off-switch for ALL three analysers (e.g. a fast inner-loop build:
+         `-Dhugmesh.analysis.skip=true`). Default false = always run in CI. -->
+    <hugmesh.analysis.skip>false</hugmesh.analysis.skip>
+  </properties>
+
+  <dependencyManagement>
+    <dependencies>
+      <!-- Spring Cloud release train (Gateway, Circuit Breaker / Resilience4j,
+           etc.) for the Boot-4 baseline. Imported BOM so children declare cloud
+           starters without a version. -->
+      <dependency>
+        <groupId>org.springframework.cloud</groupId>
+        <artifactId>spring-cloud-dependencies</artifactId>
+        <version>${spring-cloud.version}</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
+
+      <!-- The hugmesh-commons shareable security/config/web library. Children
+           add it as a plain compile dependency without a <version> (managed here). -->
+      <dependency>
+        <!-- net.hugmesh: the org-wide Java/Maven coordinate (hugmesh.net
+             reversed). hugmesh-commons moved first (fc6e559); the rest of the
+             fleet — including this metapom's own groupId — followed. This managed
+             entry is what every child resolves through, so it must always name the
+             same coordinate the artifact actually publishes under. -->
+        <groupId>net.hugmesh</groupId>
+        <artifactId>hugmesh-commons</artifactId>
+        <version>${hugmesh-commons.version}</version>
+      </dependency>
+
+      <!-- The shared static-analysis ruleset jar (resource-only): carries the
+           curated PMD/Checkstyle/SpotBugs rulesets. It is NOT a child compile
+           dependency — it is added to each analysis PLUGIN's <dependencies> in
+           <build><plugins> below so each plugin reads /hugmesh/*.xml (PMD) or
+           hugmesh/*.xml (Checkstyle/SpotBugs) off its plugin classpath.
+           Managed here so that plugin reference can omit the <version>. -->
+      <dependency>
+        <groupId>net.hugmesh</groupId>
+        <artifactId>hugmesh-build-config</artifactId>
+        <version>${hugmesh-build-config.version}</version>
+      </dependency>
+
+      <!-- AWS SDK v2 BOM — federation-api uses the synchronous S3Client; managed
+           here so children that need S3 inherit the version. -->
+      <dependency>
+        <groupId>software.amazon.awssdk</groupId>
+        <artifactId>bom</artifactId>
+        <version>${aws.sdk.version}</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
+
+      <!-- Resilience4j — circuit breakers on flaky write paths (federation override
+           apply/clear, admin effectors). Boot-4 starter line (2.4.0). -->
+      <dependency>
+        <groupId>io.github.resilience4j</groupId>
+        <artifactId>resilience4j-spring-boot4</artifactId>
+        <version>${resilience4j.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>io.github.resilience4j</groupId>
+        <artifactId>resilience4j-reactor</artifactId>
+        <version>${resilience4j.version}</version>
+      </dependency>
+
+      <!-- SpringDoc OpenAPI (WebFlux UI) — Boot-4 / Spring Framework 7 line;
+           managed so children declare it without a version. -->
+      <dependency>
+        <groupId>org.springdoc</groupId>
+        <artifactId>springdoc-openapi-starter-webflux-ui</artifactId>
+        <version>${springdoc.version}</version>
+      </dependency>
+
+      <!-- Testcontainers BOM — Postgres/JUnit-Jupiter/R2DBC containers for the
+           full-stack integration slices. Imported so the testcontainers deps
+           below (and any child-specific ones) resolve without per-artifact
+           versions. -->
+      <dependency>
+        <groupId>org.testcontainers</groupId>
+        <artifactId>testcontainers-bom</artifactId>
+        <version>2.0.5</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
+
+      <!-- H2 PINS (override Boot 4's managed versions). Boot 4.0.x manages
+           io.r2dbc:r2dbc-h2 1.1.0 / com.h2database:h2 2.4.240, whose combination
+           regressed parameter binding for the H2 @DataR2dbcTest slices. Pinning
+           back to r2dbc-h2 1.0.0.RELEASE / H2 2.3.232 keeps the H2-backed reactive
+           data-slice tests green across all consumers. -->
+      <dependency>
+        <groupId>io.r2dbc</groupId>
+        <artifactId>r2dbc-h2</artifactId>
+        <version>1.0.0.RELEASE</version>
+      </dependency>
+      <dependency>
+        <groupId>com.h2database</groupId>
+        <artifactId>h2</artifactId>
+        <version>2.3.232</version>
+      </dependency>
+    </dependencies>
+  </dependencyManagement>
+
+  <!-- COMMON DIRECT DEPENDENCIES — every reactive BFF in the org declares these,
+       so they are inherited rather than repeated. Repo-specific deps (kafka, sshj,
+       cassandra, icu4j, webauthn, s3, …) stay in the child poms. -->
+  <dependencies>
+    <!-- Core reactive stack. -->
+    <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-webflux</artifactId></dependency>
+    <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-actuator</artifactId></dependency>
+    <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-security</artifactId></dependency>
+    <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-oauth2-resource-server</artifactId></dependency>
+    <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-validation</artifactId></dependency>
+
+    <!-- AspectJ weaver — universal AOP enabler, kept here so ANY child that
+         declares resilience4j (@CircuitBreaker / @RateLimiter / @Retry, managed
+         above) gets a WORKING breaker. The breaker is applied by a Spring AOP
+         @Aspect that resilience4j registers ONLY under its AspectJOnClasspathCondition
+         (it checks for org.aspectj.lang.ProceedingJoinPoint), and Boot's
+         AopAutoConfiguration enables AspectJ auto-proxy only when AspectJ is present.
+         resilience4j-spring-boot4 does NOT pull AspectJ transitively, and Boot 4
+         REMOVED the spring-boot-starter-aop convenience starter — so without this,
+         every @CircuitBreaker is a SILENT no-op (it silently regressed across the
+         fleet during the Boot-4 migration: admin-bff/federation/forum-bff/mod-bff
+         all had inert breakers + dead fail-closed/open fallbacks). Declaring it
+         centrally guarantees every current+future child is covered. Harmless for a
+         child with no @Aspect beans (nothing to weave). Version BOM-managed. -->
+    <dependency><groupId>org.aspectj</groupId><artifactId>aspectjweaver</artifactId></dependency>
+
+    <!-- Data access: R2DBC for runtime reads/writes; Liquibase (over JDBC) owns
+         schema migrations. -->
+    <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-data-r2dbc</artifactId></dependency>
+    <dependency><groupId>org.postgresql</groupId><artifactId>r2dbc-postgresql</artifactId><scope>runtime</scope></dependency>
+    <dependency><groupId>org.liquibase</groupId><artifactId>liquibase-core</artifactId></dependency>
+    <!-- Boot 4 split LiquibaseAutoConfiguration out of the core autoconfigure
+         umbrella into its own module. WITHOUT spring-boot-liquibase on the
+         classpath the auto-config never registers and migrations silently never
+         run. Every consumer uses Liquibase, so it belongs in the shared baseline
+         (runtime scope: needed at runtime, not for compilation). -->
+    <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-liquibase</artifactId><scope>runtime</scope></dependency>
+    <dependency><groupId>org.springframework</groupId><artifactId>spring-jdbc</artifactId></dependency>
+    <dependency><groupId>org.postgresql</groupId><artifactId>postgresql</artifactId><scope>runtime</scope></dependency>
+
+    <!-- OpenAPI 3 spec + Swagger UI (WebFlux variant). -->
+    <dependency>
+      <groupId>org.springdoc</groupId>
+      <artifactId>springdoc-openapi-starter-webflux-ui</artifactId>
+    </dependency>
+
+    <!-- test -->
+    <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-test</artifactId><scope>test</scope></dependency>
+    <dependency><groupId>io.projectreactor</groupId><artifactId>reactor-test</artifactId><scope>test</scope></dependency>
+    <dependency><groupId>org.springframework.security</groupId><artifactId>spring-security-test</artifactId><scope>test</scope></dependency>
+    <dependency><groupId>io.r2dbc</groupId><artifactId>r2dbc-h2</artifactId><scope>test</scope></dependency>
+    <dependency><groupId>com.h2database</groupId><artifactId>h2</artifactId><scope>test</scope></dependency>
+    <!-- Boot 4 split the test-slice auto-configuration out of the umbrella
+         spring-boot-test-autoconfigure into per-module artifacts. The reactive BFF
+         baseline needs the WebFlux + WebTestClient slice (@WebFluxTest /
+         @AutoConfigureWebTestClient) and the R2DBC data slice (@DataR2dbcTest).
+         spring-boot-webflux-test transitively brings spring-boot-webtestclient. -->
+    <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-webflux-test</artifactId><scope>test</scope></dependency>
+    <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-data-r2dbc-test</artifactId><scope>test</scope></dependency>
+
+    <!-- Testcontainers — real Postgres for the full-stack integration slices.
+         spring-boot-testcontainers wires @ServiceConnection / @Testcontainers
+         support into the Boot test context; the postgresql / junit-jupiter /
+         r2dbc modules supply the container + R2DBC connection factory. Versions
+         from the Testcontainers BOM (junit-jupiter pulls JUnit 5 from the Boot
+         BOM). Inherited so every consumer gets identical integration-test infra. -->
+    <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-testcontainers</artifactId><scope>test</scope></dependency>
+    <dependency><groupId>org.testcontainers</groupId><artifactId>testcontainers-postgresql</artifactId><scope>test</scope></dependency>
+    <dependency><groupId>org.testcontainers</groupId><artifactId>testcontainers-junit-jupiter</artifactId><scope>test</scope></dependency>
+    <dependency><groupId>org.testcontainers</groupId><artifactId>testcontainers-r2dbc</artifactId><scope>test</scope></dependency>
+  </dependencies>
+
+  <build>
+    <pluginManagement>
+      <plugins>
+        <plugin>
+          <groupId>org.apache.maven.plugins</groupId>
+          <artifactId>maven-compiler-plugin</artifactId>
+        </plugin>
+        <!-- Byte Buddy (via Mockito) only officially supports up to JDK 23; this
+             flag lets it run on newer JDKs (build hosts run Temurin 25, matching
+             the java.version=25 target above). A no-op on JDK <=23. -->
+        <plugin>
+          <groupId>org.apache.maven.plugins</groupId>
+          <artifactId>maven-surefire-plugin</artifactId>
+          <configuration>
+            <argLine>-Dnet.bytebuddy.experimental=true</argLine>
+          </configuration>
+        </plugin>
+        <plugin>
+          <groupId>org.springframework.boot</groupId>
+          <artifactId>spring-boot-maven-plugin</artifactId>
+        </plugin>
+        <plugin>
+          <groupId>org.graalvm.buildtools</groupId>
+          <artifactId>native-maven-plugin</artifactId>
+        </plugin>
+      </plugins>
+    </pluginManagement>
+
+    <!-- ===================================================================
+         INHERITED static-analysis plugins (the durable, org-wide enforcement).
+
+         These live in <build><plugins> (NOT just pluginManagement) so they bind
+         to `verify` and RUN AUTOMATICALLY in every Java child without the child
+         declaring anything. On THIS pom-packaging parent they are a no-op: PMD,
+         Checkstyle and SpotBugs all skip a project with no main sources / pom
+         packaging, so `mvn -N verify`/`install` here stays clean.
+
+         PMD, Checkstyle, and SpotBugs are all in FAIL MODE. "Fleet verified
+         clean before each flip" holds for PMD and Checkstyle only — see the
+         properties block above for why it was never true of SpotBugs.
+         SpotBugs EI_EXPOSE_REP2 is suppressed for the Spring constructor-
+         injection FP via build-config 0.4.0, which matches the CLASS-NAME
+         SUFFIX (*Service/*Controller/...). The 0.3.0 filter matched LAYER
+         PACKAGE names and therefore almost never fired against this fleet's
+         FEATURE-package layout; 0.4.0 is what actually makes that
+         suppression take effect.
+
+         Each plugin pulls the CURATED ruleset from the hugmesh-build-config
+         jar declared in its OWN <dependencies>, and references it as a CLASSPATH
+         resource (PMD uses a leading-slash path `/hugmesh/...`; Checkstyle and
+         SpotBugs use the bare `hugmesh/...` configLocation/filter path) — that
+         is how a separate repo can see a ruleset that physically lives in another
+         artifact, since the plugin reads it off its own plugin classloader.
+         =================================================================== -->
+    <plugins>
+
+      <!-- PMD — conventions A (FinalFieldCouldBeStatic) + B (ImmutableField).
+           FAIL MODE: pmd:check fails the build on any violation.
+           Fleet was verified clean (all 11 Java repos pass pmd:check) before
+           this flip. -->
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-pmd-plugin</artifactId>
+        <version>${maven-pmd-plugin.version}</version>
+        <configuration>
+          <skip>${hugmesh.analysis.skip}</skip>
+          <!-- FAIL MODE: violations fail the build. -->
+          <failOnViolation>true</failOnViolation>
+          <printFailingErrors>true</printFailingErrors>
+          <linkXRef>false</linkXRef>
+          <targetJdk>${java.version}</targetJdk>
+          <rulesets>
+            <ruleset>/hugmesh/pmd-ruleset.xml</ruleset>
+          </rulesets>
+        </configuration>
+        <dependencies>
+          <!-- Resolve /hugmesh/pmd-ruleset.xml off the plugin classpath from
+               this jar (maven-pmd-plugin uses a leading-slash classpath path, the
+               same form as the bundled /category/java/*.xml rulesets). -->
+          <dependency>
+            <groupId>net.hugmesh</groupId>
+            <artifactId>hugmesh-build-config</artifactId>
+            <version>${hugmesh-build-config.version}</version>
+          </dependency>
+        </dependencies>
+        <executions>
+          <execution>
+            <id>pmd-analysis</id>
+            <phase>verify</phase>
+            <goals>
+              <!-- `check` = analyse + fail on violations (fail mode). -->
+              <goal>check</goal>
+            </goals>
+          </execution>
+        </executions>
+      </plugin>
+
+      <!-- Checkstyle — conventions F (VisibilityModifier), G (FinalClass /
+           HideUtilityClassConstructor / MutableException), H (LambdaBodyLength).
+           FAIL MODE: checkstyle:check, failOnViolation=true, severity=error in
+           build-config. Fleet verified clean before this flip. -->
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-checkstyle-plugin</artifactId>
+        <version>${maven-checkstyle-plugin.version}</version>
+        <configuration>
+          <skip>${hugmesh.analysis.skip}</skip>
+          <configLocation>hugmesh/checkstyle.xml</configLocation>
+          <includeTestSourceDirectory>false</includeTestSourceDirectory>
+          <!-- FAIL MODE: violations fail the build. -->
+          <failOnViolation>true</failOnViolation>
+          <failsOnError>false</failsOnError>
+          <linkXRef>false</linkXRef>
+        </configuration>
+        <dependencies>
+          <!-- Resolve hugmesh/checkstyle.xml from the build-config jar... -->
+          <dependency>
+            <groupId>net.hugmesh</groupId>
+            <artifactId>hugmesh-build-config</artifactId>
+            <version>${hugmesh-build-config.version}</version>
+          </dependency>
+          <!-- ...and run on a current Checkstyle (10.x) rather than the plugin's
+               older bundled default, for Java 21+ source support. -->
+          <dependency>
+            <groupId>com.puppycrawl.tools</groupId>
+            <artifactId>checkstyle</artifactId>
+            <version>${checkstyle.version}</version>
+          </dependency>
+        </dependencies>
+        <executions>
+          <execution>
+            <id>checkstyle-analysis</id>
+            <phase>verify</phase>
+            <goals>
+              <!-- `check` = analyse + fail on violations (fail mode). -->
+              <goal>check</goal>
+            </goals>
+          </execution>
+        </executions>
+      </plugin>
+
+      <!-- SpotBugs + FindSecBugs — conventions D (EI_EXPOSE_REP* / MS_EXPOSE_REP /
+           MS_MUTABLE_*) + E (MS_SHOULD_BE_FINAL).
+           FAIL MODE: spotbugs:check, failOnError=true (see the <configuration>
+           note below for why that — not failOnViolation — is the real switch).
+           The INCLUDE filter narrows to exactly the D/E patterns; the EXCLUDE
+           filter covers the entity/test/Spring-injection baseline.
+
+           SCOPE NOTE: through build-config 0.3.0 the INCLUDE filter listed only
+           the core-SpotBugs D/E pattern names, and since FindSecBugs 1.14.0's 144
+           patterns (SQL_INJECTION_*, COMMAND_INJECTION, HARD_CODE_PASSWORD, ...)
+           share NONE of the EI_EXPOSE_REP*/MS_* names, the FindSecBugs plugin
+           contributed zero findings — the gate enforced defensive-copy/mutable-
+           static conventions only, NOT security scanning. build-config 0.4.0
+           (this bump) RE-SCOPES the include filter to admit the 137 FindSecBugs
+           patterns that were empirically measured to fire zero findings fleet-wide
+           (SQLi, path-traversal, hard-coded secrets, weak crypto, XXE, unsafe
+           deserialization, SSRF, ...), so the gate now DOES enforce those security
+           conventions on all future code — at zero cost today because the fleet is
+           currently clean on them. The 7 patterns that DO fire (SPRING_ENDPOINT,
+           CRLF_INJECTION_LOGS, IMPROPER_UNICODE + 4 triaged-FP) remain excluded on
+           purpose; admitting them is tracked separately in hugmesh-build-config.
+
+           EI_EXPOSE_REP2 is suppressed for Spring constructor injection via the
+           build-config exclude filter. Through 0.3.0 that filter matched on
+           LAYER package names (.controller/.service/.repository/...) while this
+           fleet's BFFs use FEATURE packages (adminbff.announcement.
+           AnnouncementService), so it did not fire — which is what made the
+           violation counts large. build-config 0.4.0 matches the class-name
+           suffix instead, and guards the suppression so that genuinely mutable
+           state (byte[]/char[] key material, List/Map/Set/Collection/Date) is
+           still REPORTED even inside a *Service. -->
+      <plugin>
+        <groupId>com.github.spotbugs</groupId>
+        <artifactId>spotbugs-maven-plugin</artifactId>
+        <version>${spotbugs-maven-plugin.version}</version>
+        <configuration>
+          <skip>${hugmesh.analysis.skip}</skip>
+          <!-- FAIL MODE: violations fail the build.
+               NOTE: `failOnError` is the ONLY fail switch the spotbugs:check goal
+               has, and it gates BOTH real bug findings AND SpotBugs-internal
+               analysis errors together — the goal's own failure message is
+               "failed with <N> bugs and <M> errors". The two are NOT separable
+               on this goal, so the previous intent ("fail on violations but never
+               on an internal error") is not expressible here. We accept the
+               internal-error case as a build failure: a SpotBugs error means the
+               analysis did NOT run to completion, so reporting green would be a
+               false pass on a gate that never actually ran.
+               `check` does NOT have a `failOnViolation` parameter (it belongs to
+               maven-pmd-plugin / maven-checkstyle-plugin). Passing it here is
+               silently ignored except for a "[WARNING] Parameter 'failOnViolation'
+               is unknown" line — which is exactly how this gate sat fail-OPEN
+               from 7d22f1a (PR #6) until now. Do not re-add it. -->
+          <failOnError>true</failOnError>
+          <!-- Deeper analysis = better D/E detection; low/medium effort misses
+               some rep-exposure. -->
+          <effort>Max</effort>
+          <threshold>Low</threshold>
+          <includeFilterFile>hugmesh/spotbugs-include.xml</includeFilterFile>
+          <excludeFilterFile>hugmesh/spotbugs-exclude.xml</excludeFilterFile>
+          <plugins>
+            <!-- FindSecBugs adds the security-flavoured rep-exposure detectors
+                 (keys/tokens/byte[]) under the same EI_EXPOSE_REP*/MS_* names. -->
+            <plugin>
+              <groupId>com.h3xstream.findsecbugs</groupId>
+              <artifactId>findsecbugs-plugin</artifactId>
+              <version>${findsecbugs-plugin.version}</version>
+            </plugin>
+          </plugins>
+        </configuration>
+        <dependencies>
+          <!-- The include/exclude filter files live in the build-config jar; the
+               spotbugs plugin reads them off its plugin classpath. -->
+          <dependency>
+            <groupId>net.hugmesh</groupId>
+            <artifactId>hugmesh-build-config</artifactId>
+            <version>${hugmesh-build-config.version}</version>
+          </dependency>
+        </dependencies>
+        <executions>
+          <execution>
+            <id>spotbugs-analysis</id>
+            <phase>verify</phase>
+            <goals>
+              <!-- `check` = analyse + fail on violations (fail mode). -->
+              <goal>check</goal>
+            </goals>
+          </execution>
+        </executions>
+      </plugin>
+
+    </plugins>
+  </build>
+
+  <!-- Publish to the GitLab project's Maven Package Registry. CI_API_V4_URL /
+       CI_PROJECT_ID are provided by GitLab CI; the CI_JOB_TOKEN credential lives
+       in settings.xml (consumed by `mvnw deploy -s settings.xml`), never here. -->
+  <distributionManagement>
+    <repository>
+      <id>gitlab-maven</id>
+      <url>${env.CI_API_V4_URL}/projects/${env.CI_PROJECT_ID}/packages/maven</url>
+    </repository>
+    <snapshotRepository>
+      <id>gitlab-maven</id>
+      <url>${env.CI_API_V4_URL}/projects/${env.CI_PROJECT_ID}/packages/maven</url>
+    </snapshotRepository>
+  </distributionManagement>
+</project>

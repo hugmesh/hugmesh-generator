@@ -1,0 +1,154 @@
+# Manual release: build/test hugmesh-commons and publish it to GitHub Packages (Maven
+# registry). This repo had NO GitHub workflow at all until 2026-09-17 — hugmesh/hugmesh-commons#4
+# — which made it the hard stop in the net.hugmesh publish chain: nothing downstream of it
+# could be published because nothing could publish IT.
+#
+# workflow_dispatch ONLY — intentionally never runs on push/tag. Publish-on-merge
+# republishes whatever version pom.xml happens to hold over an already-published, immutable
+# coordinate; that is what forced hugmesh-auth-core's 2.4.2 re-pin.
+#
+# LINK 3 OF 4. The chain is
+#   hugmesh-build-config 0.5.0 -> hugmesh-parent 2.8.0 -> hugmesh-commons 2.1.0
+#     -> hugmesh-auth-core 2.5.1
+# and hugmesh-auth-core/.github/workflows/release-chain.yml fires all four in that order
+# from a single trigger. Operator decision 27 (hugmesh-generator#347, 2026-09-17):
+# "B for the mechanism, A prepared" — source-building stays the mechanism, this path is
+# real but unfired. See RELEASING.md here and hugmesh-auth-core/RELEASING.md sections 3.2/6.
+name: Release
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build-and-publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          # 25 — hugmesh-parent's <java.version>, which this artifact compiles against.
+          java-version: "25"
+          cache: maven
+          # setup-java's generated ~/.m2/settings.xml is NOT what authenticates this build:
+          # both mvn calls below pass `-s .github/maven-ci-settings.xml`, and `-s` REPLACES
+          # the user settings file. The servers that matter live in that file.
+          server-id: github
+          server-username: GITHUB_ACTOR
+          server-password: GITHUB_TOKEN
+
+      # PREFLIGHT - CROSS-REPO PACKAGE READ. This step exists to stop ONE specific
+      # misdiagnosis, and that is worth a whole step.
+      #
+      # The maven steps below resolve net.hugmesh artifacts published from OTHER
+      # repositories. secrets.GITHUB_TOKEN is scoped to THIS repository, and GitHub does not
+      # hand it cross-repository package access automatically: the build must present a
+      # token carrying read:packages, which is the PACKAGES_READ_TOKEN secret (a classic
+      # PAT with read:packages; decision 90a = B). If it is not set, maven fails with
+      #     Could not resolve net.hugmesh:hugmesh-parent:pom:2.8.0
+      # which is the SAME string this repo's RELEASING.md and the comments below teach a
+      # reader to interpret as "the upstream is not published yet". A reader who believes
+      # that goes and re-publishes an upstream that is already there, and hits the same wall.
+      #
+      # So: probe the registries first, with the exact credential maven is about to use, and
+      # name the failure correctly. A 200 proves this runner can READ that upstream's Maven
+      # registry. It does NOT prove the exact version pinned in pom.xml exists - maven says
+      # that, accurately, one step later.
+      #
+      # NOT VERIFIED. No Actions job in this org has ever started (billing; RELEASING.md
+      # 6.1), so this preflight has never run either.
+      - name: Preflight - cross-repo package read
+        env:
+          UPSTREAM_PACKAGES_ACTOR: ${{ secrets.PACKAGES_READ_ACTOR || github.actor }}
+          UPSTREAM_PACKAGES_TOKEN: ${{ secrets.PACKAGES_READ_TOKEN || secrets.GITHUB_TOKEN }}
+          HAS_PACKAGES_READ_TOKEN: ${{ secrets.PACKAGES_READ_TOKEN != '' }}
+        run: |
+          set -uo pipefail
+          if [ "${HAS_PACKAGES_READ_TOKEN}" = "true" ]; then
+            echo "read credential: secrets.PACKAGES_READ_TOKEN (operator-held PAT)"
+          else
+            echo "read credential: the automatic secrets.GITHUB_TOKEN (PACKAGES_READ_TOKEN is not set)."
+            echo "That token is scoped to THIS repository and may not read the upstream packages."
+            echo "Set the PACKAGES_READ_TOKEN secret (classic PAT, read:packages). If the probe"
+            echo "below fails, it says so explicitly. RELEASING.md 6.2."
+          fi
+          rc=0
+          for upstream in hugmesh-build-config hugmesh-parent; do
+            url="https://maven.pkg.github.com/hugmesh/${upstream}/net/hugmesh/${upstream}/maven-metadata.xml"
+            code=$(curl -sS -o /dev/null -w '%{http_code}' -u "${UPSTREAM_PACKAGES_ACTOR}:${UPSTREAM_PACKAGES_TOKEN}" "${url}" || echo 000)
+            case "${code}" in
+              200)
+                echo "  readable    hugmesh/${upstream}"
+                ;;
+              401|403)
+                echo "::error::CANNOT AUTHENTICATE to hugmesh/${upstream} (HTTP ${code}). This is NOT 'the upstream is unpublished'. This runner's credential cannot read that repository's Maven registry. Fix: set the PACKAGES_READ_TOKEN repo secret (classic PAT, read:packages), or share the org secret of that name with this repository. See RELEASING.md 6.2."
+                rc=1
+                ;;
+              404)
+                echo "::error::NOT READABLE at hugmesh/${upstream} (HTTP 404). TWO causes look identical here, so do not guess: (a) nothing is published to that registry yet - publish that link first, chain order is build-config, parent, commons, auth-core; or (b) it IS published and this credential cannot see it, because GitHub masks an unauthorised read of a private package as 404. Look at the package page before re-publishing anything. See RELEASING.md 6.2."
+                rc=1
+                ;;
+              *)
+                echo "::error::unexpected HTTP ${code} from hugmesh/${upstream}. Not classified - do not assume 'unpublished'."
+                rc=1
+                ;;
+            esac
+          done
+          exit ${rc}
+
+      # -s .github/maven-ci-settings.xml is required. The effective repository list of
+      # this project is Maven Central alone, and net.hugmesh:hugmesh-parent:2.8.0 (this
+      # pom's own <parent>) and net.hugmesh:hugmesh-build-config:0.5.0 (the analysers'
+      # ruleset jar, on the PMD/Checkstyle/SpotBugs PLUGIN classpaths) are both 404 there.
+      # A <repositories> block in pom.xml is NOT the alternative: maven.pkg.github.com
+      # answers 401 to an unauthenticated GET, so that would break every developer build and
+      # hugmesh-generator/tests/stack/m2-bootstrap.sh.
+      #
+      # Testcontainers note: PostgresTestSupport starts a real Postgres, and ubuntu-latest
+      # runners ship a working Docker daemon, so `verify` runs the full suite here.
+      - name: Build and test
+        run: ./mvnw -B -ntp -s .github/maven-ci-settings.xml verify
+        env:
+          GITHUB_ACTOR: ${{ github.actor }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Cross-repo READS use their own credential - see the settings file header
+          # and RELEASING.md 6.2. Falls back to GITHUB_TOKEN when PACKAGES_READ_TOKEN is
+          # unset; the preflight step above reports that case.
+          UPSTREAM_PACKAGES_ACTOR: ${{ secrets.PACKAGES_READ_ACTOR || github.actor }}
+          UPSTREAM_PACKAGES_TOKEN: ${{ secrets.PACKAGES_READ_TOKEN || secrets.GITHUB_TOKEN }}
+
+      # TWO ARTIFACTS COME OUT OF THIS STEP, and the second one is easy to lose.
+      # pom.xml binds maven-jar-plugin's `test-jar` goal (execution `shared-test-base`), so
+      # `deploy` uploads hugmesh-commons-2.1.0.jar AND hugmesh-commons-2.1.0-tests.jar.
+      # hugmesh-auth-core's test scope compiles against
+      # net.hugmesh:hugmesh-commons:2.1.0:tests (PostgresTestSupport), so a publish without
+      # the classifier breaks the NEXT link of the chain, and breaks it at test-compile
+      # where it reads like an auth-core problem.
+      #
+      # `-DskipTests` is correct and `-Dmaven.test.skip=true` is NOT: skipTests skips test
+      # EXECUTION and still compiles src/test, which is what the test-jar packages;
+      # maven.test.skip skips compilation too and would publish an EMPTY tests classifier.
+      # ReleasePublishGuardTest fails the build if that flag ever appears here.
+      #
+      # -DaltDeploymentRepository overrides hugmesh-parent's inherited
+      # distributionManagement, whose URL is the literal, uninterpolated
+      # ${env.CI_API_V4_URL}/projects/${env.CI_PROJECT_ID}/packages/maven anywhere outside
+      # GitLab CI — wrong registry AND a server id ('gitlab-maven') nothing has credentials
+      # for.
+      - name: Publish jar and tests classifier to GitHub Packages
+        run: ./mvnw -B -ntp -s .github/maven-ci-settings.xml deploy -DskipTests -DaltDeploymentRepository=github::default::https://maven.pkg.github.com/${{ github.repository }}
+        env:
+          GITHUB_ACTOR: ${{ github.actor }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Cross-repo READS use their own credential - see the settings file header
+          # and RELEASING.md 6.2. Falls back to GITHUB_TOKEN when PACKAGES_READ_TOKEN is
+          # unset; the preflight step above reports that case.
+          UPSTREAM_PACKAGES_ACTOR: ${{ secrets.PACKAGES_READ_ACTOR || github.actor }}
+          UPSTREAM_PACKAGES_TOKEN: ${{ secrets.PACKAGES_READ_TOKEN || secrets.GITHUB_TOKEN }}

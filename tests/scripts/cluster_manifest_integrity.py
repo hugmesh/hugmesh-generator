@@ -1186,6 +1186,72 @@ def check_hpa_replicas(root):
            "%d HPA-scaled Deployment(s) leave spec.replicas to the autoscaler" % checked)
 
 
+def check_games_origin(root):
+    """The matrix-ui Deployment must STATE the chat3d games origin, and it must be
+    the host the gateway really routes to the games portal (hugmesh-generator#470).
+
+    chat3d-bridge.ts reads `__HUG_GAMES_URL__` and otherwise silently falls back to
+    its built-in default, so nothing in the cluster manifests said which origin the
+    deployed matrix remote iframes. The manifest now declares it as the env
+    `HUG_GAMES_URL` on hugmesh-matrix-ui. Two defects are checked, as a PAIR:
+    the env is absent, or it names a host other than the be-gateway `games` route's
+    `host:` (so an edit of one without the other in the repo tree is caught).
+
+    Conditioned on apps/50-games.yaml, the file the builders' optional-service gate
+    `rm -f`s when games is not selected: with no games Application there is no
+    games origin to state. Once games IS present, a missing Deployment or route is
+    a FAILURE, never a pass over an empty set.
+
+    This proves only that the repo-tree manifest declares the origin consistently.
+    It does not prove the browser receives it (that needs an image-side consumer),
+    and it cannot see a build-time rewrite: the stage4 builders rewrite the gateway
+    route for a custom GAMES_DOMAIN in the baked tree, while ArgoCD serves this
+    Deployment from git, so the live env is not moved by that rewrite.
+    """
+    check = "[games-origin]"
+    if not os.path.isfile(os.path.join(root, "apps", "50-games.yaml")):
+        ok(check, "apps/50-games.yaml absent: this profile does not install games, "
+                  "no games origin required")
+        return
+    hosts = sorted({(r or {}).get("host") for routes in _gateways(root).values()
+                    for r in routes if (r or {}).get("id") == "games"
+                    and (r or {}).get("host")})
+    if len(hosts) != 1:
+        fail(check, "apps/50-games.yaml is present but the gateway Applications carry "
+                    "%d distinct host(s) for a route with id `games` (%s); the games "
+                    "origin cannot be checked against anything" % (len(hosts), hosts))
+        return
+    route_host = hosts[0]
+    found = []
+    for path in yaml_files(root):
+        for doc in docs_of(path):
+            meta = doc.get("metadata") or {}
+            if doc.get("kind") == "Deployment" and meta.get("name") == "hugmesh-matrix-ui":
+                found.append((path, doc))
+    if len(found) != 1:
+        fail(check, "apps/50-games.yaml is present but %d Deployment(s) named "
+                    "hugmesh-matrix-ui were found (want exactly 1)" % len(found))
+        return
+    path, doc = found[0]
+    rel = os.path.relpath(path, root)
+    containers = (((doc.get("spec") or {}).get("template") or {}).get("spec") or {}).get("containers") or []
+    values = [e.get("value") for c in containers for e in (c.get("env") or [])
+              if isinstance(e, dict) and e.get("name") == "HUG_GAMES_URL"]
+    if not values:
+        fail(check, "%s: hugmesh-matrix-ui carries no HUG_GAMES_URL env while "
+                    "apps/50-games.yaml installs games, so the chat3d games origin is "
+                    "left to the app's built-in default instead of stated here" % rel)
+        return
+    want = "https://%s" % route_host
+    for v in values:
+        if v != want:
+            fail(check, "%s: HUG_GAMES_URL=%r but the be-gateway `games` route serves "
+                        "host %r (want exactly %r)" % (rel, v, route_host, want))
+            return
+    ok(check, "hugmesh-matrix-ui HUG_GAMES_URL == https://%s, the be-gateway games "
+              "route host" % route_host)
+
+
 def _hpa_min(root, key):
     for path in yaml_files(root):
         for doc in docs_of(path):
@@ -2671,6 +2737,7 @@ def main():
     check_embedded_json(root)
     check_velero_backups(root)
     check_hpa_replicas(root)
+    check_games_origin(root)
     check_federation_remotes(root)
     check_remote_strip_prefix(root)
     check_remote_route_targets(root)

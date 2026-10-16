@@ -46,7 +46,7 @@ from typing import NamedTuple
 
 from . import own_casdoor, theme
 from .config import IDP_CHOICES, IDP_LABELS, _IDP_CLIENT_ID_RE, _IDP_URL_RE, \
-    idp_effective_jwks
+    github_org_problem, idp_effective_jwks
 from .local_mesh import ENV_AUTHKEY, LocalMeshConfig, LocalMeshNode
 from .local_services import (
     FEDERATION_DISABLE_ENV, FEDERATION_ENABLE_ENV, PROFILE_AKKOMA, PROFILE_ANUBIS,
@@ -177,6 +177,12 @@ def _domain_record(x: dict) -> dict:
     # ``true`` counts — a hand-edited "yes" must not mint an onion.
     if x.get("tor") is True:
         rec["tor"] = True
+    # the GitHub org the domain exports to (the Go-Live export step): OMIT-WHEN-EMPTY,
+    # and only a slug the Domains step itself would accept — a re-opened record used
+    # to lose this key here, and the next save wrote it away for good.
+    org = str(x.get("github_org") or "").strip()
+    if org and not github_org_problem(org):
+        rec["github_org"] = org
     return rec
 
 

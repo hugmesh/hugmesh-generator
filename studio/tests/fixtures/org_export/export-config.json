@@ -1,0 +1,21 @@
+{
+  "domain": "mesh.example",
+  "org": "exampleorg",
+  "brand": "",
+  "visibility": "private",
+  "update": "refuse",
+  "source_mode": "existing",
+  "source_dir": "/home/someone/src",
+  "optional_services": [],
+  "extra_repos": [],
+  "skip_repos": [],
+  "include_generator": true,
+  "include_build_libraries": true,
+  "rename_map": {
+    "repos": {},
+    "tokens": [],
+    "skip_rewrite": [],
+    "exclude": []
+  },
+  "out_dir": ""
+}

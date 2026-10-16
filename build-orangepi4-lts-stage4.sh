@@ -154,6 +154,8 @@ source "${SCRIPT_DIR}/scripts/_download-lib.sh"
 # the build host's libcrypt provably supports it, SHA-512 crypt ($6$) fallback.
 # shellcheck source=scripts/_passhash-lib.sh
 source "${SCRIPT_DIR}/scripts/_passhash-lib.sh"
+# shellcheck source=scripts/_domain-idp-lib.sh
+source "${SCRIPT_DIR}/scripts/_domain-idp-lib.sh"
 # THE role vocabulary (scripts/_roles-lib.sh). This board has NO role axis — --role
 # is a hostname/marker validated by a slug regex only — so the lib is sourced for one
 # thing: hugmesh_role_reject_node_role, which refuses a token that NAMES a cluster
@@ -457,6 +459,10 @@ OPTIONS
 
   Branding / env / system  (same knobs as the other builders)
     --brand / --brand-title / --org / --cluster-domain / --env test|prod
+    --domain-idp DOMAIN=own|superdomain   (repeatable) Casdoor for DOMAIN's sign-in:
+        own = a dedicated instance, superdomain = the mesh's (default; bakes
+        nothing). Only `own` is baked: /etc/hugmesh/domain-idp. DOMAIN must be
+        a lowercase DNS name and not --cluster-domain. See docs/DOMAIN-IDP.md.
     -H hostname / -T timezone / -u user
     (--user-password / --root-password are DEPRECATED no-ops: no password is
      baked in; keyless boot mints a random one-time password + locks root)
@@ -607,6 +613,7 @@ while [[ $# -gt 0 ]]; do
         --env)                ENV="$2";                   shift 2 ;;
         --cluster-domain|--domain) CLUSTER_DOMAIN="$2";   shift 2 ;;
         --superdomain) SUPERDOMAIN="$2"; shift 2 ;;
+        --domain-idp) domain_idp_add "${2:-}"; shift 2 ;;   # repeatable <domain>=own|superdomain (#509)
         --brand)              BRAND="$2";                 shift 2 ;;
         --brand-title)        BRAND_TITLE="$2";           shift 2 ;;
         --org)                ORG="$2";                   shift 2 ;;
@@ -782,6 +789,9 @@ _require_match "--brand"          "${BRAND}"          "${_RE_SLUG}"
 _require_match "--org"            "${ORG}"            "${_RE_ORG}"
 _require_match "--cluster-domain" "${CLUSTER_DOMAIN}" "${_RE_DNS}"
 [ -n "${SUPERDOMAIN}" ] && _require_match "--superdomain" "${SUPERDOMAIN}" "${_RE_DNS}"
+# --domain-idp (#509): vocabulary + DNS shape were checked as each flag was read; this is
+# the cross-check against --cluster-domain.
+domain_idp_check "${CLUSTER_DOMAIN}" ""
 _require_match "--hostname"       "${HOSTNAME}"       "${_RE_DNS}"
 _require_match "--user"           "${DEFAULT_USER}"   "${_RE_USER}"
 _require_match "--brand-title"    "${BRAND_TITLE}"    "${_RE_TITLE}"
@@ -1123,6 +1133,7 @@ if ${PRINT_PLAN}; then
     _plan BRAND              "${BRAND}"
     _plan CLUSTER_DOMAIN     "${CLUSTER_DOMAIN}"
     _plan SUPERDOMAIN        "${SUPERDOMAIN}"
+    domain_idp_plan_line   # PLAN_DOMAIN_IDP=<own domains>; prints nothing when none (#509)
     _plan HOSTNAME           "${HOSTNAME}"
     _plan OPTIONAL_SERVICES  "none"   # lean desktop client: no baked cluster tree
     _plan MESH               "$(${SKIP_MESH} && echo skip || echo "headscale=${HEADSCALE_VERSION},tailscale=$(${SKIP_TAILSCALE} && echo skip || echo "${TAILSCALE_VERSION}")")"
@@ -1740,6 +1751,8 @@ if [ -n "${SUPERDOMAIN}" ]; then
     echo "${SUPERDOMAIN}" > "${SYSROOT}/etc/hugmesh/superdomain"
     info "Baked orchestration superdomain -> /etc/hugmesh/superdomain (${SUPERDOMAIN})"
 fi
+# Per-domain IdP choice (#509): /etc/hugmesh/domain-idp, own domains only; absent otherwise.
+domain_idp_bake "${SYSROOT}/etc/hugmesh"
 echo "${ENV}"            > "${SYSROOT}/etc/hugmesh/env"
 echo "orangepi4-lts:${OPI4LTS_BOARD}" > "${SYSROOT}/etc/hugmesh/board"
 if [ -n "${HEADSCALE_URL:-}" ]; then

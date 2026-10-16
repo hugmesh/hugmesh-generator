@@ -217,7 +217,10 @@ hasnt "$(rc_log)" "restart" && hasnt "$(rc_log)" "tor start" \
 # A4 — reload refused by OpenRC: fall back to SIGHUP on the pidfile's pid.
 fresh_root a4; echo 0 > "${STATE_DIR}/status"; echo 1 > "${STATE_DIR}/reload"
 HUP_MARK="${WORK}/a4.hup"
-bash -c 'trap "echo got > '"${HUP_MARK}"'; exit 0" HUP; while :; do sleep 0.1; done' &
+# env --default-signal=HUP: a suite started under `nohup`, or from a detached/backgrounded
+# harness, inherits SIGHUP as IGNORED, and bash cannot trap a signal that was ignored on
+# entry -- so the stand-in daemon below would never see the agent's HUP and A4 failed.
+env --default-signal=HUP bash -c 'trap "echo got > '"${HUP_MARK}"'; exit 0" HUP; while :; do sleep 0.1; done' &
 HUP_PID=$!
 mkdir -p "${R}/run/tor"; echo "${HUP_PID}" > "${R}/run/tor/tor.pid"
 run_agent
@@ -402,6 +405,58 @@ leg "rpi5 frontend --optional-services tor" "${WANT_ON}" build-rpi5-stage4.sh --
 leg "rpi5 pki (tor not selected)"           "off"        build-rpi5-stage4.sh --role pki
 leg "rpi5 CLIENT desktop --optional-services tor" "off"  build-rpi5-stage4.sh --role desktop --optional-services tor
 has "${LEG_OUT}" "tor selected on CLIENT role 'desktop' — dropped" && ok "B rpi5 CLIENT desktop: the drop is warned" || bad "B rpi5 CLIENT desktop: no drop warning"
+
+# ── hugmesh-generator#615: the SAME dead-CLIENT-check shape, for the four cluster-only
+# services whose refusals sat before the role case (edge-ai, character-studio,
+# character-forge, edge-ai-tts). Per CLIENT role and per flag: the drop is WARNED, and
+# the NODE role still keeps the slug (the refusal is not over-broad).
+for role in desktop laptop standalone-unaffiliated; do
+    for pair in "edge-ai:--with-edge-ai" "character-studio:--with-character-studio" \
+                "character-forge:--with-character-forge" "edge-ai-tts:--with-edge-ai-tts"; do
+        slug="${pair%%:*}"; flag="${pair#*:}"
+        out="$(plan build-x86-host-stage4.sh --role "${role}" "${flag}")"
+        has "${out}" "${slug} selected on CLIENT role '${role}' — dropped" \
+            && ok "B615 x86 CLIENT ${role} ${flag}: the drop is WARNED" \
+            || bad "B615 x86 CLIENT ${role} ${flag}: no drop warning — the client refusal is dead again"
+    done
+done
+out="$(plan build-x86-host-stage4.sh --role backend --standalone --with-edge-ai --with-character-studio --with-character-forge --with-edge-ai-tts)"
+for slug in edge-ai character-studio character-forge edge-ai-tts; do
+    has "${out}" "${slug} selected on CLIENT role 'backend' — dropped" \
+        && ok "B615 x86 backend --standalone --with-${slug}: the drop is WARNED (after the STANDALONE fold)" \
+        || bad "B615 x86 backend --standalone --with-${slug}: dropped SILENTLY — the refusal runs before the STANDALONE fold"
+done
+out="$(plan build-x86-host-stage4.sh --role laptop --optional-services edge-ai-tts,character-forge)"
+has "${out}" "edge-ai-tts selected on CLIENT role 'laptop' — dropped" && has "${out}" "character-forge selected on CLIENT role 'laptop' — dropped" \
+    && ok "B615 x86 CLIENT laptop --optional-services: the drop is WARNED however the slug arrived" \
+    || bad "B615 x86 CLIENT laptop --optional-services: not warned"
+out="$(plan build-x86-host-stage4.sh --role backend --with-edge-ai --with-character-studio --with-character-forge --with-edge-ai-tts)"
+hasnt "${out}" "on CLIENT role" && [ "$(plan_val "${out}" OPTIONAL_SERVICES)" = "akkoma tuwunel phpbb edge-ai character-studio character-forge edge-ai-tts" ] \
+    && ok "B615 x86 NODE backend keeps all four (no CLIENT warning, plan lists them)" \
+    || bad "B615 x86 NODE backend: a node role lost a cluster service or was warned as CLIENT"
+# edge-ai-analysis is the fifth cluster-only slug: --with-edge-ai-analysis folds BOTH
+# edge-ai and edge-ai-analysis, so on a CLIENT role it used to warn for edge-ai only
+# and leave edge-ai-analysis selected, silently, for the gate's dependsOn guard.
+for role in desktop laptop standalone-unaffiliated; do
+    out="$(plan build-x86-host-stage4.sh --role "${role}" --with-edge-ai-analysis)"
+    has "${out}" "edge-ai-analysis selected on CLIENT role '${role}' — dropped" \
+        && has "${out}" "edge-ai selected on CLIENT role '${role}' — dropped" \
+        && ok "B615 x86 CLIENT ${role} --with-edge-ai-analysis: BOTH folded slugs are WARNED" \
+        || bad "B615 x86 CLIENT ${role} --with-edge-ai-analysis: edge-ai-analysis (or edge-ai) dropped silently"
+done
+out="$(plan build-x86-host-stage4.sh --role backend --standalone --with-edge-ai-analysis)"
+has "${out}" "edge-ai-analysis selected on CLIENT role 'backend' — dropped" \
+    && ok "B615 x86 backend --standalone --with-edge-ai-analysis: the drop is WARNED" \
+    || bad "B615 x86 backend --standalone --with-edge-ai-analysis: dropped SILENTLY"
+out="$(plan build-x86-host-stage4.sh --role backend --with-edge-ai-analysis)"
+hasnt "${out}" "on CLIENT role" && [ "$(plan_val "${out}" OPTIONAL_SERVICES)" = "akkoma tuwunel phpbb edge-ai edge-ai-analysis" ] \
+    && ok "B615 x86 NODE backend --with-edge-ai-analysis keeps edge-ai + edge-ai-analysis (no CLIENT warning)" \
+    || bad "B615 x86 NODE backend --with-edge-ai-analysis: lost a slug or was warned as CLIENT"
+# the refusal must run AFTER the role case and the STANDALONE fold
+x86_cs_ln="$(grep -n -F 'for _cs_slug in edge-ai edge-ai-analysis character-studio character-forge edge-ai-tts; do' "${X86}" | head -1 | cut -d: -f1)"
+[ -n "${x86_cs_ln}" ] && [ "${x86_cs_ln}" -gt "$(grep -n -E '^if [$][{]STANDALONE[}]; then$' "${X86}" | head -1 | cut -d: -f1)" ] \
+    && ok "B615 x86: the cluster-service CLIENT drop (line ${x86_cs_ln}) is after the STANDALONE fold" \
+    || bad "B615 x86: cluster-service CLIENT drop at '${x86_cs_ln}' is not after the STANDALONE fold"
 
 # ── the builders' own tor definitions, loaded as bash would read them ──
 tor_defs() {  # BUILDER -> the three definition lines (arrays + predicate), column 0
