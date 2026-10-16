@@ -228,8 +228,12 @@ def test_toggling_a_row_changes_exactly_that_row_and_nothing_else(wiz):
     the one that carries the fix — before it, unticking `phpbb` left the forum running."""
     mesh(wiz)
     net = advance_to(wiz, wizard_mod.NetworkPage)
-    offered = [s for s, item in net._svc_items.items() if not item.isHidden()]
+    # The anubis row is a three-valued combo, not a tick (#384): it has no box to toggle,
+    # and test_anubis_tristate_page.py drives it through all three values.
+    offered = [s for s, item in net._svc_items.items()
+               if not item.isHidden() and s in net.service_boxes]
     assert offered, "no service rows offered on an x86 mesh node — test would be vacuous"
+    assert "anubis" not in net.service_boxes and not net._svc_items["anubis"].isHidden()
 
     def collect():
         page = wiz.currentPage()
@@ -521,6 +525,17 @@ def test_regrouping_a_row_cannot_change_what_it_emits(wiz):
     assert wiz.cfg.tor_onion_service not in (False, "off", "")
     args = wiz.cfg.to_cli_args()
     assert "--with-tor" in args and "--no-tor" not in args
+    # ...and anubis, the other row the regrouping moved, drives its THREE arms through the
+    # same slug channel (#384): Default emits no anubis token, Force on the slug, Force off
+    # the veto — never --exclude-services, which both builders refuse for it.
+    back_to(wiz, wizard_mod.NetworkPage)
+    for index, want in ((0, []), (1, ["anubis"]), (2, ["-anubis"])):
+        net.anubis_mode.setCurrentIndex(index)
+        net.validatePage()
+        argv = wiz.cfg.to_cli_args()
+        val = argv[argv.index("--optional-services") + 1].split()
+        assert [t for t in val if "anubis" in t] == want, (index, val)
+        assert "--exclude-services" not in argv
 
 
 def test_builtin_default_services_match_both_builders():
@@ -700,7 +715,11 @@ def test_the_whole_set_preset_locks_the_rows_it_decides_and_leaves_the_rest_live
         f"decided={decided} discarded={discarded} left_alone={left_alone} — this test "
         "needs all three kinds of row on screen to be about anything")
     assert "tor" in left_alone                       # x86's --with-tor: a real choice
-    assert set(discarded) == {"egress-vpn", "workloadConsole", "anubis"}, discarded
+    assert set(discarded) == {"egress-vpn", "workloadConsole"}, discarded
+    # anubis is the third infra slug-channel row, but a three-valued combo (#384) and so
+    # not in service_boxes: the same lock, read off the combo — Default and greyed.
+    assert not net._svc_items["anubis"].isHidden()
+    assert net.anubis_mode.currentIndex() == 0 and not net.anubis_mode.isEnabled()
     # …and no --no-<x> for a service the preset bakes: the builder has no false arm for
     # those flags, so emitting one would be a claim the build cannot honour. Nor any
     # infra slug: the sentinel is the whole list, so one beside it would be dead argv.

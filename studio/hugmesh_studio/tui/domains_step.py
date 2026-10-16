@@ -41,7 +41,7 @@ import re
 
 from ..core.config import (
     CLIENT_CA_INHERITANCE_NOTE, DOMAIN_IDP_CHOICES, DOMAIN_IDP_OWN,
-    DOMAIN_IDP_SUPERDOMAIN, Domain,
+    DOMAIN_IDP_SUPERDOMAIN, Domain, github_org_problem,
 )
 from ..core.local_mesh_domains import added_row_problems
 from ..core.domain_services import (implicit_own_domain, reviewed_names,
@@ -77,7 +77,9 @@ def domain_table(cfg, with_own: bool = False) -> tuple[list[str], list[list[str]
     mesh = cfg.mode == "mesh"
     headers = ["#", "domain", "title", "optional services", "applies to"]
     if mesh:
-        headers += ["sign-in", "base CA"]
+        # 'github org' (the Go-Live export step) is a mesh column like the two
+        # before it: a cloud client exports no repositories.
+        headers += ["sign-in", "base CA", "github org"]
     domain_ca = getattr(cfg, "domain_ca", None) or {}
     rows: list[list[str]] = []
     own = implicit_own_domain(cfg) if with_own else ""
@@ -85,7 +87,8 @@ def domain_table(cfg, with_own: bool = False) -> tuple[list[str], list[list[str]
         rows.append(["own", own, getattr(cfg, "brand_title", "") or "-",
                      services_summary(getattr(cfg, "cluster_domain_services", None),
                                       own in reviewed_names(cfg)),
-                     OWN_APPLIES, OWN_IDP, OWN_CA])
+                     OWN_APPLIES, OWN_IDP, OWN_CA,
+                     getattr(cfg, "cluster_domain_github_org", "") or "none"])
     for i, d in enumerate(cfg.domains, 1):
         row = [str(i), d.name, d.title or "-",
                ", ".join(d.optional_services) or "-",
@@ -94,8 +97,25 @@ def domain_table(cfg, with_own: bool = False) -> tuple[list[str], list[list[str]
             row.append(IDP_LABELS[d.idp])
             chosen = domain_ca.get(d.name, "")
             row.append(os.path.basename(chosen) if chosen else "none")
+            row.append(getattr(d, "github_org", "") or "none")
         rows.append(row)
     return headers, rows
+
+
+def set_github_org(target, arg: str) -> str:
+    """Apply ``o``'s operand to ``target`` (a Domain row, or the config for the own
+    row — whichever object carries the org attribute named by ``attr``): ``-``
+    clears, a slug is stored lower-cased, anything else is refused with
+    ``config.github_org_problem``'s sentence. Returns the status line."""
+    obj, attr, label = target
+    if arg == "-":
+        setattr(obj, attr, "")
+        return f"{label}: GitHub org -> none (not exported)"
+    problem = github_org_problem(arg)
+    if problem or not arg:
+        return problem or "o needs an org slug (or - to clear)"
+    setattr(obj, attr, arg.strip().lower())
+    return f"{label}: GitHub org -> {arg.strip().lower()}"
 
 
 class DomainsScreen:
@@ -127,6 +147,7 @@ class DomainsScreen:
             commands.append("s NUMBER=toggle its sign-in "
                             "(Superdomain Casdoor <-> Own Casdoor)")
             commands.append("b NUMBER CERT|-=set its base CA")
+            commands.append("o NUMBER|own ORG|-=set its GitHub org")
         commands.append("Enter=continue")
         out.append("commands: " + " · ".join(commands))
         if cfg.mode == "mesh":
@@ -134,6 +155,10 @@ class DomainsScreen:
                        "Superdomain (its users sign in via the mesh's central "
                        "Casdoor — the default) or Own (this domain runs its "
                        "own Casdoor instance).")
+            out.append("'GitHub org' = the organisation this domain's repositories "
+                       "are exported to by the Go-Live ‘Export to GitHub org’ step "
+                       "(python -m hugmesh_studio.tui --go-live). An org slug only, "
+                       "never a token; none = the default, the step does not apply.")
             certs = getattr(cfg, "base_ca_certs", None) or []
             if certs:
                 out.append("'Base CA' = which certificate authority this domain "
@@ -200,7 +225,32 @@ class DomainsScreen:
         if verb == "b" and cfg.mode == "mesh":
             self._feed_base_ca(j, arg)
             return
+        if verb == "o" and cfg.mode == "mesh":
+            self._feed_org(j, arg)
+            return
         j.status = f"unrecognised command: {line!r}"
+
+    @staticmethod
+    def _feed_org(j, arg: str) -> None:
+        """'o DOMAIN-NUMBER|own ORG|-' — the per-domain GitHub org (the Go-Live export
+        step). ``own`` addresses the mesh's own domain, whose org lives on
+        ``cfg.cluster_domain_github_org`` (the GUI's editable cell on row 0)."""
+        cfg = j.cfg
+        which, _, org = arg.partition(" ")
+        which, org = which.strip(), org.strip()
+        if which == "own":
+            if not implicit_own_domain(cfg):
+                j.status = "no own domain row here"
+                return
+            j.status = set_github_org(
+                (cfg, "cluster_domain_github_org", implicit_own_domain(cfg)), org)
+            return
+        row = _index(which, len(cfg.domains))
+        if row is None:
+            j.status = f"no such domain row: {which!r}"
+            return
+        d = cfg.domains[row]
+        j.status = set_github_org((d, "github_org", d.name), org)
 
     @staticmethod
     def _feed_base_ca(j, arg: str) -> None:

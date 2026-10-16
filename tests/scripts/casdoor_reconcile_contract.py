@@ -757,10 +757,11 @@ def check_hooks(cluster):
                        f"are at {sorted(set(others.values()))}")
 
         # ── the owner's own retry budget ─────────────────────────────────────
-        # Only demanded where a takeover actually races a sibling: that is the
-        # measured defect, and the count above is what decides it.
-        if len(members) == 1:
-            continue
+        # Demanded of EVERY owner, whether or not it has a sibling: the pod
+        # backoff alone replays a ban (1 + backoffLimit runs x two wrong
+        # attempts), so a lone init Job on a drifted password can lock its own
+        # admin (hugmesh-generator#402). The sibling count only decides the
+        # ordering half above.
         src = scripts[sorted(owner_cms)[0]]
         exit_code = _const(src, "LOCKOUT_EXIT")
         marker = _const(src, "LOCKOUT_MARKER")

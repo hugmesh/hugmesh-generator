@@ -1222,6 +1222,13 @@ done
 # `case " ${OPTIONAL_SERVICES} "`) sees clean slugs. Mirrors EXCLUDE_SERVICES.
 OPTIONAL_SERVICES="${OPTIONAL_SERVICES//,/ }"
 
+# A list of ONLY explicit-deselect tokens ("-anubis") is a veto, not a selection: it
+# keeps the built-in default instead of replacing it (hugmesh-generator#384). Runs
+# AFTER the comma normalisation (so "-anubis,-foo" is seen as tokens) and BEFORE the
+# `all` expansion below (a list holding `all` is not negative-only, so that arm is
+# untouched). The rule lives in scripts/_optional-services-lib.sh, once, for both builders.
+_opt_negative_only_keeps_defaults
+
 # FULL-SET sentinel: OPTIONAL_SERVICES=all (or --all-services, which sets the same
 # token) expands to EVERY user-level slug. Done HERE — after arg parse, before the
 # games opt-in fold and BEFORE EXCLUDE_SERVICES subtracts — so `all` is just a
@@ -4523,6 +4530,14 @@ else
                 *) err "CONFIG_LSM names '${_l}', which this guard cannot verify — add its enabling CONFIG_* symbol to the case above"; exit 1 ;;
             esac
             grep -q "^${_sym}=y$" .config || { err "CONFIG_LSM names '${_l}' but ${_sym} is not =y after olddefconfig — the kernel would SILENTLY DROP it from the LSM stack"; exit 1; }
+        done
+        # BTF is what lets a BPF_PROG_TYPE_LSM program attach to the bpf LSM that
+        # CONFIG_LSM names. olddefconfig drops CONFIG_DEBUG_INFO_BTF silently when
+        # dev-util/pahole is missing on the BUILD HOST (Dockerfile.build installs it
+        # in its final stage; a stale builder image lacks it) or when a struct
+        # randomisation choice is on, so assert it survived.
+        for must in CONFIG_DEBUG_INFO_BTF CONFIG_DEBUG_INFO_BTF_MODULES; do
+            grep -q "^${must}=y$" .config || { err "${must} not enabled after olddefconfig — dev-util/pahole missing on the build host (rebuild the builder image) or struct layout randomisation is on (BTF depends on it being off); a BPF_PROG_TYPE_LSM program could not attach"; exit 1; }
         done
         # LUKS2/dm-crypt (hardened-k8s.config enables this unconditionally, for
         # BOTH the existing attached-disk data-partition use case and the

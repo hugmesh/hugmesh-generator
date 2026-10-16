@@ -175,7 +175,7 @@ for you. Every other harness must set it itself (`scripts/render-all-images.py` 
 The build-matrix harness (`make matrix-check` at the repo root) drives this headless path.
 It proves the GUI channel agrees with the CLI/make/menu/job channels on every matrix cell.
 
-Two more **Qt-free** headless faces ride the same flag channel (#49: everything the GUI can
+Three more **Qt-free** headless faces ride the same flag channel (#49: everything the GUI can
 do must be a documented command; repo-root `make` fronts: `scan-hardware`,
 `sessions-list/-show/-artifacts/-delete`):
 
@@ -204,6 +204,22 @@ do must be a documented command; repo-root `make` fronts: `scan-hardware`,
   Deletion keeps the GUI's three-way guard. No `--yes` is refused (exit 2). An in-progress
   build is never deleted (exit 1). The artifact tree goes only on an explicit
   `--delete-artifacts` (core checks the workdir's shape first).
+
+- **Local AI** — the Local AI bar along the bottom of every Studio window, as text
+  (`core/local_ai_status.py`: the Ollama server and model loaded, the queue and drafts
+  that `scripts/local-ai.sh` keeps, the Studio's own running builds). Loopback only; no
+  hosted service, no account, no key:
+
+  ```sh
+  python -m hugmesh_studio --local-ai-status          # the one-line summary, then the work list
+  python -m hugmesh_studio --local-ai-status --json   # the same snapshot, stable schema
+  python -m hugmesh_studio --local-ai-prompt "what does a git worktree do?"   # one question, one answer
+  ```
+
+  Both exit non-zero with a plain sentence on stderr (what is wrong, the fix, the doc)
+  when Ollama is not installed, not answering, or has no model pulled. The command that
+  starts and feeds it is `scripts/local-ai.sh` (see `docs/LOCAL-AI-ASSISTANT.md`,
+  section 11).
 
 ## Local mesh: work on it with a local AI agent (issue #695)
 
@@ -333,6 +349,55 @@ emerge --ask dev-python/urwid
 
 (everywhere else: `pip install urwid`.)
 
+**Local AI in the terminal UI.** The bottom row of every screen is the Local AI status
+line (it reads the worker's `status.json`, never the network, so redrawing it is free).
+In the urwid face press **F2**, and in either face type `local-ai`, to open the Local AI
+screen over the screen you are on: a live status, the work list (queued, running and
+finished drafts), and a prompt line — anything you type there that is not `start`, `r`,
+`clear` or `q` is sent to the local model; `q` returns to the screen you left. Both work
+on every screen, the previous-builds list included (`q` returns to the list), and on the
+Local AI screen itself they re-read the state instead of opening a second screen.
+
+### Go-Live: export a domain's repositories to a GitHub org (optional step)
+
+Every domain row (the Domains step, both faces) has a **GitHub org** cell: an org slug,
+never a token. When some domain names one, the Go-Live wizard gains a step **Export to
+GitHub org** (`python -m hugmesh_studio --go-live`; `x` on the TUI's go-live plan screen)
+that copies the domain's repositories — the Code-folders map's apps plus the Java build
+chain and the generator — into that organisation as fresh single-commit snapshots,
+renamed `hugmesh-<name> -> <brand>-<name>` (`exampleorg -> example`), with the org path
+segments and repository names rewritten inside files (Java packages, Maven groupIds,
+Angular scopes and label keys are deliberately left alone), and creates a
+`<domain>.github.io` site repository whose workflows clone every exported repository and
+run what each one's own CI runs. Plan is the default and touches nothing; Apply needs the
+org name typed (GUI/TUI, letter case does not matter) or `--apply` (CLI); nothing is ever
+force-pushed or deleted, and an existing repository that already holds something — on
+`main` or on any other branch — is refused unless *update via branch* is chosen. The
+step can be pointed at a config file (its rules are taken whole), and a **Rename map**
+field (`r FILE` in the TUI, `--rename-map` in the CLI) merges extra rules — the way to drop
+a file a `refused: banned marker` row names; the generator's own two test fixtures need
+exactly that (`tests/fixtures/org_export/generator-rename-map.json`). Every kept file is
+scanned for a banned marker as bytes (a latin-1 or binary file is not skipped), the commit is
+checked to hold every file the plan counted, and a config file's values are type-checked
+(exit 2 naming the key). Snapshot commits are authored as the person running the export
+(their git identity) unless the config names an author. Plan reads each checkout as it
+is on this machine (it never fetches or pulls) and prints `not looked at` for a target it
+did not ask GitHub about; a plan is applied once.
+
+```sh
+python -m hugmesh_studio --org-export PLAN  --domain mesh.example --org exampleorg --source-dir ~/src
+python -m hugmesh_studio --org-export PLAN  --config export.json --rename-map extra.json --out /tmp/export
+python -m hugmesh_studio --org-export APPLY --config export.json --apply
+```
+
+The engine is `core/org_export.py` (Qt-free; every git/gh call through one injected runner,
+so `tests/test_org_export.py` proves it against bare repositories and a fake `gh`). The
+end-to-end scenarios are `tests/e2e/features/studio-org-export/studio-org-export.feature`,
+driven by `tests/e2e/studio-org-export-driver.py` (the real wizards offscreen over the same
+stand-ins; run as the Code folders ones above, with `-g "exports a domain's repositories"`). The
+full flow, the rename map's format and what a person still has to set up are in
+[docs/GOLIVE-ORG-EXPORT.md](../docs/GOLIVE-ORG-EXPORT.md).
+
 ## Package a Windows .exe
 
 The PyInstaller spec is committed at `packaging/hugmesh-studio.spec`; the MSI, the Flatpak
@@ -343,8 +408,9 @@ and the local build commands are in [docs/STUDIO-INSTALLERS.md](../docs/STUDIO-I
 ```
 hugmesh_studio/
   core/        config (flag mapping) · build_driver (native/docker) · hw_scan ·
-               profiles · keyzip · mesh_node · platform_info     <- headless, unit-testable
-  gui/         qt shim (PySide6|PyQt6) · wizard (pages) · tray
+               profiles · keyzip · mesh_node · platform_info ·
+               local_ai_status (Local AI snapshot + prompt)      <- headless, unit-testable
+  gui/         qt shim (PySide6|PyQt6) · wizard (pages) · tray · Local AI bar (_local_ai_dock)
   tui/         terminal UI (urwid, OPTIONAL — degrades to plain prompts)  <- headless, unit-testable
   app.py       entry point
 packaging/     PyInstaller spec, WiX (MSI) and Flatpak files

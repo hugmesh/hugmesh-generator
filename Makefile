@@ -2681,6 +2681,14 @@ e2e-ungated: ## MANUAL ONLY: run ALL the PREMERGE_UNGATED suites (24 of 24 by de
 builder-unmount-real-check: ## OPT-IN, needs unshare -Urm (a developer host, not a CI container): the builder's unmount and stale-mount refusal against real stacked binds, through awkward path spellings
 	bash tests/scripts/test-builder-unmount-real.sh
 
+# build-image-dial-identity-check: the image-gen worker (docker/build-image.sh) run end to end
+# against fake builders and a capturing curl; asserts the ingest body reports the DEVICE_ID /
+# VAULT_REF the BFF handed the Job, sends no k8sSecretName and no host key
+# (hugmesh-generator#368). No root, no network, no docker.
+.PHONY: build-image-dial-identity-check
+build-image-dial-identity-check: ## The image-gen worker's ingest body carries the BFF-minted DEVICE_ID / VAULT_REF and no k8sSecretName (offline, no root)
+	bash tests/build-image-dial-identity.sh
+
 # binpkg-reuse-report: the compile-once measurement. Reads TWO builder logs (a COLD
 # run from an empty pool, a WARM run of the same board+role after it) and prints how
 # many packages portage compiled versus merged from the shared binpkg pool, plus the
@@ -2706,3 +2714,10 @@ binpkg-reuse-report: ## compile-once speedup from two build logs (COLD=<log> WAR
 .PHONY: binpkg-reuse-report-check
 binpkg-reuse-report-check: ## test the compile-once measurement harness against synthetic fixture logs and real-log excerpts
 	bash tests/scripts/test-binpkg-reuse-report.sh
+
+# btf-kconfig-resolve-check: resolve the x86 kernel fragment against a REAL kernel source tree and read BTF back
+# out of .config (needs gcc, make, flex, bison, pahole; exits 2 rather than skipping when KERNEL_TREE is empty, not a tree, or already configured in place).
+KERNEL_TREE ?=
+.PHONY: btf-kconfig-resolve-check
+btf-kconfig-resolve-check: ## resolve the x86 kernel fragment against a real kernel tree (KERNEL_TREE=<clean tree>) and prove BTF survives olddefconfig
+	bash tests/scripts/test-btf-kconfig-resolve.sh "$(KERNEL_TREE)"

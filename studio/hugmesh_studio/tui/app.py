@@ -128,9 +128,9 @@ def main(argv=None, *, inp=None, out=None) -> int:
     if args.sessions:
         if rich:
             from . import urwid_ui
-            return urwid_ui.run_sessions_review()
+            return urwid_ui.run_sessions_review(args.generator_dir)
         from . import plain
-        return plain.run_sessions_review(inp=inp, out=out)
+        return plain.run_sessions_review(inp=inp, out=out, generator_dir=args.generator_dir)
 
     start = "fleet" if args.fleet else ("golive" if args.go_live else None)
     if rich:
