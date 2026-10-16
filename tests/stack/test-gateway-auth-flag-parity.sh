@@ -83,6 +83,10 @@ GWY="${GW}/src/main/resources/application.yml"
 # KEYS alone, a fixture that moves BOTH lanes back to 5000 passes 12/0 — perfect
 # parity and a 5-second window, i.e. decision 7 silently undone. So the VALUE is
 # asserted separately further down; control 5 is that mutation.
+# THE BFFs' OWN MIRROR OF THIS CACHE (APP_BFF_EXCHANGE_CACHE_TTL_MS on admin-bff-api
+# and mod-bff-api, decision 60 / hugmesh-generator#569) is NOT under this file: it
+# is pinned to "0" on both lanes by tests/scripts/test-fe-bff-route-lane-parity.sh,
+# which needs no gateway checkout and is pre-merge gated on both CI hosts.
 KEYS=(HUGMESH_GATEWAY_BFF_EXCHANGE_ENABLED APP_BFF_SESSION_ENABLED HUGMESH_GATEWAY_BFF_EXCHANGE_CACHE_TTL_MS)
 ROLES=("fe:hugmesh-fe-gateway:20-gateway-fe.yaml" "be:hugmesh-be-gateway:20-gateway-be.yaml")
 

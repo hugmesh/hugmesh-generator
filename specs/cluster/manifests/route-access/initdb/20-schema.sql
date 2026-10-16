@@ -1198,28 +1198,27 @@ ON CONFLICT (gateway, url_pattern, role, COALESCE(casdoor_user, ''), COALESCE(NU
 -- an UNGOVERNED path returns false from isMfaRequiredSurface() and the floor had
 -- nothing at the public door to attach to before.
 --
--- ⚠ NOT IN SCOPE — stated out loud, because "the whole admin surface" would be a
--- FALSE claim. SIX other admin-ish `/bff/` allow rows are deliberately left
+-- DECISION 80b = B (hugmesh-generator#329, answered 2026-09-23) WIDENED THAT
+-- SCOPE by a second SHAPE: every allow row of the form `/bff/<service>/admin/…`
+-- or `/bff/<service>/superadmin/…` — the per-service admin CONSOLE seams that live
+-- behind their OWN service-BFF prefix — now carries the floor too, via
+-- `LIKE '/bff/%/admin/%'` and `LIKE '/bff/%/superadmin/%'`. That is 4 more rows
+-- (fe-gateway /bff/forum/admin/**, /bff/wiki/admin/**, /bff/wiki/superadmin/**,
+-- /bff/owncast/admin/**), 14 in all. The operator chose this deliberately over
+-- the narrower superadmin-only match, knowing it is the larger-lockout-risk
+-- option: it enlarges the step-7 lockout blast radius in docs/MFA-ROLLOUT.md.
+-- `%` in LIKE spans any characters, `/` included, so the shape also reaches a
+-- deeper `/bff/a/b/admin/…` row added LATER — which is the intent (a future
+-- per-service console row cannot silently re-open the hole), and the gate below
+-- pins it. Neither new arm can match the two original prefixes (they need a
+-- segment BETWEEN `/bff/` and `/admin/`), so the two shapes are disjoint.
+--
+-- ⚠ STILL NOT IN SCOPE — stated out loud, because "the whole admin surface" would
+-- be a FALSE claim. THREE other admin-ish `/bff/` allow rows are deliberately left
 -- mfa_required=false. tests/scripts/test-mfa-required-rules.sh enumerates admin-ish
 -- surfaces INDEPENDENTLY of this predicate (path segment `admin`/`superadmin`, OR a
 -- ROLE_SUPERADMIN/*_ADMIN role) and cross-checks them against exactly this list, so
--- a SEVENTH one cannot appear unnoticed and a stale entry here fails the gate too:
---   hugmesh-fe-gateway  /bff/forum/admin/**    ROLE_ADMIN
---   hugmesh-fe-gateway  /bff/wiki/admin/**     ROLE_ADMIN
---   hugmesh-fe-gateway  /bff/owncast/admin/**  ROLE_ADMIN
---   hugmesh-fe-gateway  /bff/wiki/superadmin/**  ROLE_SUPERADMIN
---       Per-service admin CONSOLE seams that live behind their OWN service-BFF
---       prefix, not under /bff/admin or /bff/superadmin. Covering them needs a
---       different predicate SHAPE (e.g. LIKE '/bff/%/admin/%' plus
---       LIKE '/bff/%/superadmin/%'), which is a NEW scope decision. The wiki
---       superadmin row (added for #329) is the FIRST per-service *superadmin*
---       seam, so it widens that same gap rather than opening a new one: it is
---       excluded here for the identical reason, NOT because superadmin surfaces
---       are exempt. ⚠ #244 IS NOW DECIDED (ACCEPT) — but only for the PLATFORM
---       prefix /bff/superadmin/**, which this UPDATE already reaches. Flipping
---       the PER-SERVICE seams listed here still needs the different predicate
---       SHAPE and is still an open operator decision; #244's answer must not be
---       read as covering them.
+-- a FOURTH one cannot appear unnoticed and a stale entry here fails the gate too:
 --   hugmesh-fe-gateway  /bff/mod/**            ROLE_ADMIN
 --       A MODERATION surface. ROLE_ADMIN is paired on it only as a superset of
 --       ROLE_MOD, so gating it would gate moderation, not administration.
@@ -1321,8 +1320,8 @@ ON CONFLICT (gateway, url_pattern, role, COALESCE(casdoor_user, ''), COALESCE(NU
 -- and an UNSCOPED row domain-applies to every domain. Three consequences,
 -- mirrored in the runbook's §1.2a per-domain scope table:
 --   * The blanket above is DOMAIN-BLIND exactly like it is gateway-blind: a
---     domain-scoped allow row under the two prefixes is flipped together with
---     its unscoped siblings. Deliberately so, twice over. (1) A scoped
+--     domain-scoped allow row under the blanket scope (the two prefixes or the
+--     per-service shape) is flipped together with its unscoped siblings. Deliberately so, twice over. (1) A scoped
 --     mfa_required=false row under the prefixes is a PHANTOM EXEMPTION — the
 --     unscoped canonical row still applies to that domain and still pulls the
 --     MFA floor up, so the false row exempts nothing; leaving it false would
@@ -1424,8 +1423,10 @@ UPDATE gateway_route_access
  WHERE allow = true
    AND (url_pattern = '/bff/admin'
      OR url_pattern LIKE '/bff/admin/%'
+     OR url_pattern LIKE '/bff/%/admin/%'
      OR url_pattern = '/bff/superadmin'
      OR url_pattern LIKE '/bff/superadmin/%'
+     OR url_pattern LIKE '/bff/%/superadmin/%'
      OR (COALESCE(NULLIF(lower(trim(domain)), 'default'), '') <> ''
          AND url_pattern IN ('')))
    AND mfa_required IS DISTINCT FROM true;

@@ -302,7 +302,7 @@ def test_provider_config_window_keeps_finish_because_its_finish_does_work(qapp):
         review = win.review_page
         assert review.nextId() == -1                    # it IS the final page
         assert review.buttonText(FINISH) != EXIT_BUTTON_TEXT
-        # and it is really the commit seam: the caller only reads these on Accepted
+        # and it is really the commit point: the caller only reads these on Accepted
         assert hasattr(win, "result_values")
     finally:
         win.close()

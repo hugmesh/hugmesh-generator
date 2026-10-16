@@ -69,7 +69,7 @@ def _pick_localmesh(mode_page):
     """Tick ModePage's "Local Docker mesh" card the way test_local_mesh.py does.
 
     By PROPERTY, not by index: ModePage.modes is deliberately reordered (item (e)
-    of this file's own contract), so an index would rot the moment the journey
+    of this file's own contract), so an index would go stale the moment the journey
     order changes again."""
     for b in mode_page.group.buttons():
         if b.property("mode") == "localmesh":

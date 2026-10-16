@@ -19,13 +19,15 @@
 # /proc/cmdline for the word "lockdown" — the image's claim about itself) could
 # see it, because both graded the string rather than the kernel.
 #
-# The three properties below make that unshippable without a build:
+# The properties below make that unshippable without a build:
 #   1) every name in a fragment's CONFIG_LSM has its enabling CONFIG_* symbol
 #      set IN THAT SAME FRAGMENT;
 #   2) the board's boot cmdline asks for exactly what its fragment builds — in
 #      both directions, for lsm= and for lockdown=;
 #   3) each builder's guard is fail-closed AND derives its required symbols from
-#      CONFIG_LSM, so a name added later cannot outlive its module.
+#      CONFIG_LSM, so a name added later cannot outlive its module;
+#   4) lockdown is a FLEET posture: all 10 boards build it, list it first in
+#      CONFIG_LSM and lsm=, and pass lockdown=integrity (1-3 alone pass "neither").
 # Plus two guards on the surrounding plumbing: the x86 grub cmdline (a build INPUT
 # with a silent `${VAR:-short}` degradation path) and the QEMU launchers, which
 # boot with -kernel/-append and so can grade their own literal instead of the image.
@@ -297,6 +299,67 @@ elif "cmdline.base" not in atext or "LSM_APPEND" not in atext:
     bad("tests/qemu/launch-arm.sh does not derive its security posture from the board's cmdline.base")
 else:
     ok("launch-arm.sh derives each board's posture from its own cmdline.base")
+
+print()
+print("-- 6) lockdown is a FLEET posture: all 10 boards build it AND ask for it --")
+# Properties 1-2 only require the fragment and the cmdline to AGREE, so "neither"
+# passes them. That is exactly how 8 of 10 boards sat without lockdown for months
+# while the lint stayed green: lockdown was a 2-of-10 posture and nothing said so.
+# This pins the stronger claim. A board that drops lockdown must now be a decision
+# that edits this lint, not a silent disagreement-free omission.
+import glob
+listed = {frag for _b, frag, _c, _k, _bl in BOARDS}
+on_disk = {os.path.relpath(g, repo) for g in glob.glob(os.path.join(repo, "specs-*", "kernel", "hardened-*.config"))}
+unlisted = sorted(on_disk - listed)
+if unlisted:
+    bad("hardened kernel fragments not covered by BOARDS (a new board escapes every property above): %s"
+        % ", ".join(unlisted))
+else:
+    ok("every specs-*/kernel/hardened-*.config on disk (%d) is a board this lint grades" % len(on_disk))
+for board, frag, cmdf, kind, builder in BOARDS:
+    ftext, ctext = read(frag), read(cmdf)
+    if ftext is None or ctext is None:
+        bad("%s: cannot grade fleet lockdown (missing %s)" % (board, frag if ftext is None else cmdf)); continue
+    problems = []
+    for sym in ("CONFIG_SECURITY_LOCKDOWN_LSM", "CONFIG_SECURITY_LOCKDOWN_LSM_EARLY"):
+        if not frag_enables(ftext, sym):
+            problems.append("%s not enabled in %s" % (sym, os.path.basename(frag)))
+    names = (frag_lsm(ftext) or "").split(",")
+    if names[0] != "lockdown":
+        problems.append('CONFIG_LSM="%s" does not start with lockdown (it must run before every other LSM)'
+                        % (frag_lsm(ftext) or ""))
+    cmd = cmdline_of(ctext, kind) or ""
+    if (token(cmd, "lsm") or "").split(",")[0] != "lockdown":
+        problems.append("%s lsm=%s does not start with lockdown" % (cmdf, token(cmd, "lsm")))
+    if token(cmd, "lockdown") != "integrity":
+        problems.append("%s passes lockdown=%s, expected integrity" % (cmdf, token(cmd, "lockdown")))
+    if problems:
+        bad("%s: not in the fleet lockdown posture: %s" % (board, "; ".join(problems)))
+    else:
+        ok("%s: lockdown built, first in CONFIG_LSM and lsm=, and lockdown=integrity requested" % board)
+# bpf is the OTHER half of the old 2-of-10 split and is deliberately NOT a fleet
+# claim: the ARM boards still name no `bpf` because they build no CONFIG_BPF_LSM,
+# and property 1 already fails the build if one names it without the symbol. State
+# the current truth here so promoting it is a visible edit, not drift.
+arm_with_bpf = [b for b, frag, *_ in BOARDS
+                if b not in ("x86", "rpi5") and "bpf" in (frag_lsm(read(frag) or "") or "").split(",")]
+if arm_with_bpf:
+    bad("ARM boards name bpf in CONFIG_LSM: %s — update this lint and the roadmap together once "
+        "CONFIG_BPF_LSM + BTF are really built there" % ", ".join(arm_with_bpf))
+else:
+    ok("no ARM board names bpf in CONFIG_LSM (CONFIG_BPF_LSM + BTF are x86/rpi5-only)")
+# A bpf LSM that is named but cannot take a BPF_PROG_TYPE_LSM program (no BTF) is the
+# registered-but-not-enforcing state this lint exists to keep from shipping quietly.
+# The pairing with pahole itself is tests/scripts/test-btf-pahole-pairing.sh.
+for board, frag, *_ in BOARDS:
+    ftext = read(frag) or ""
+    if "bpf" not in (frag_lsm(ftext) or "").split(","):
+        continue
+    if frag_enables(ftext, "CONFIG_DEBUG_INFO_BTF"):
+        ok("%s: names bpf and builds CONFIG_DEBUG_INFO_BTF, so a BPF_PROG_TYPE_LSM program can attach" % board)
+    else:
+        bad("%s: names bpf in CONFIG_LSM but %s does not build CONFIG_DEBUG_INFO_BTF — the bpf LSM "
+            "would register but could not enforce" % (board, os.path.basename(frag)))
 
 print()
 print("== %d passed, %d failed ==" % (P[0], F[0]))

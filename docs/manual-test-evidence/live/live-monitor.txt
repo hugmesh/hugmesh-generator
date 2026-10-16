@@ -1,0 +1,118 @@
+taken_at=09:41:32
+compose lane: running=True error=''
+kind lane: running=True error=''
+errors=()
+units by lane: {'compose': 43, 'kind': 69}
+lane | ns | name | state | scale kind | scale name | replicas_now | external
+compose | hugmesh-local | hugmesh-local-admin-bff-db-1 | ok | compose-service | admin-bff-db | 1 | 
+compose | hugmesh-local | hugmesh-local-admin-bff-db-init-1 | completed | compose-service | admin-bff-db-init | 0 | 
+compose | hugmesh-local | hugmesh-local-casdoor-1 | ok | compose-service | casdoor | 1 | 0.0.0.0:8000->8000
+compose | hugmesh-local | hugmesh-local-casdoor-db-1 | ok | compose-service | casdoor-db | 1 | 
+compose | hugmesh-local | hugmesh-local-cassandra-1 | ok | compose-service | cassandra | 1 | 
+compose | hugmesh-local | hugmesh-local-cassandra-init-1 | completed | compose-service | cassandra-init | 0 | 
+compose | hugmesh-local | hugmesh-local-character-forge-bff-db-1 | ok | compose-service | character-forge-bff-db | 1 | 
+compose | hugmesh-local | hugmesh-local-federation-db-1 | ok | compose-service | federation-db | 1 | 
+compose | hugmesh-local | hugmesh-local-forum-bff-db-1 | ok | compose-service | forum-bff-db | 1 | 
+compose | hugmesh-local | hugmesh-local-hugmesh-admin-bff-api-1 | ok | compose-service | hugmesh-admin-bff-api | 1 | 
+compose | hugmesh-local | hugmesh-local-hugmesh-admin-ui-1 | ok | compose-service | hugmesh-admin-ui | 1 | 
+compose | hugmesh-local | hugmesh-local-hugmesh-api-1 | ok | compose-service | hugmesh-api | 1 | 
+compose | hugmesh-local | hugmesh-local-hugmesh-api-docs-1 | ok | compose-service | hugmesh-api-docs | 1 | 
+compose | hugmesh-local | hugmesh-local-hugmesh-be-gateway-1 | ok | compose-service | hugmesh-be-gateway | 1 | 
+compose | hugmesh-local | hugmesh-local-hugmesh-character-forge-bff-api-1 | ok | compose-service | hugmesh-character-forge-bff-api | 1 | 
+compose | hugmesh-local | hugmesh-local-hugmesh-character-forge-ui-1 | ok | compose-service | hugmesh-character-forge-ui | 1 | 
+compose | hugmesh-local | hugmesh-local-hugmesh-character-studio-ui-1 | ok | compose-service | hugmesh-character-studio-ui | 1 | 
+compose | hugmesh-local | hugmesh-local-hugmesh-fe-gateway-1 | ok | compose-service | hugmesh-fe-gateway | 1 | 0.0.0.0:8088->8080
+compose | hugmesh-local | hugmesh-local-hugmesh-federation-api-1 | ok | compose-service | hugmesh-federation-api | 1 | 
+compose | hugmesh-local | hugmesh-local-hugmesh-forum-bff-api-1 | ok | compose-service | hugmesh-forum-bff-api | 1 | 
+compose | hugmesh-local | hugmesh-local-hugmesh-forum-ui-1 | ok | compose-service | hugmesh-forum-ui | 1 | 
+compose | hugmesh-local | hugmesh-local-hugmesh-host-shell-1 | ok | compose-service | hugmesh-host-shell | 1 | 
+compose | hugmesh-local | hugmesh-local-hugmesh-https-front-1 | ok | compose-service | hugmesh-https-front | 1 | 0.0.0.0:8488->8443
+compose | hugmesh-local | hugmesh-local-hugmesh-login-ui-1 | ok | compose-service | hugmesh-login-ui | 1 | 
+compose | hugmesh-local | hugmesh-local-hugmesh-mastodon-ui-1 | ok | compose-service | hugmesh-mastodon-ui | 1 | 
+compose | hugmesh-local | hugmesh-local-hugmesh-matrix-ui-1 | ok | compose-service | hugmesh-matrix-ui | 1 | 
+compose | hugmesh-local | hugmesh-local-hugmesh-mod-bff-api-1 | ok | compose-service | hugmesh-mod-bff-api | 1 | 
+compose | hugmesh-local | hugmesh-local-hugmesh-mod-ui-1 | ok | compose-service | hugmesh-mod-ui | 1 | 
+compose | hugmesh-local | hugmesh-local-hugmesh-owncast-bff-api-1 | ok | compose-service | hugmesh-owncast-bff-api | 1 | 
+compose | hugmesh-local | hugmesh-local-hugmesh-owncast-ui-1 | ok | compose-service | hugmesh-owncast-ui | 1 | 
+compose | hugmesh-local | hugmesh-local-hugmesh-pki-gateway-1 | ok | compose-service | hugmesh-pki-gateway | 1 | 
+compose | hugmesh-local | hugmesh-local-hugmesh-remote-fragment-1 | ok | compose-service | hugmesh-remote-fragment | 1 | 
+compose | hugmesh-local | hugmesh-local-hugmesh-remote-fragment-web-1 | ok | compose-service | hugmesh-remote-fragment-web | 1 | 
+compose | hugmesh-local | hugmesh-local-hugmesh-tube-bff-api-1 | ok | compose-service | hugmesh-tube-bff-api | 1 | 
+compose | hugmesh-local | hugmesh-local-hugmesh-tube-ui-1 | ok | compose-service | hugmesh-tube-ui | 1 | 
+compose | hugmesh-local | hugmesh-local-hugmesh-user-bff-api-1 | ok | compose-service | hugmesh-user-bff-api | 1 | 
+compose | hugmesh-local | hugmesh-local-hugmesh-user-ui-1 | ok | compose-service | hugmesh-user-ui | 1 | 
+compose | hugmesh-local | hugmesh-local-hugmesh-wiki-bff-api-1 | ok | compose-service | hugmesh-wiki-bff-api | 1 | 
+compose | hugmesh-local | hugmesh-local-hugmesh-wiki-ui-1 | ok | compose-service | hugmesh-wiki-ui | 1 | 
+compose | hugmesh-local | hugmesh-local-owncast-bff-db-1 | ok | compose-service | owncast-bff-db | 1 | 
+compose | hugmesh-local | hugmesh-local-route-access-db-1 | ok | compose-service | route-access-db | 1 | 
+compose | hugmesh-local | hugmesh-local-tube-bff-db-1 | ok | compose-service | tube-bff-db | 1 | 
+compose | hugmesh-local | hugmesh-local-wiki-bff-db-1 | ok | compose-service | wiki-bff-db | 1 | 
+kind | devops | argocd-application-controller-0 | ok | statefulset | argocd-application-controller | 1 | 
+kind | devops | argocd-applicationset-controller-5677b594db-4st8p | ok | deployment | argocd-applicationset-controller | 1 | 
+kind | devops | argocd-dex-server-86564d4465-n8h72 | ok | deployment | argocd-dex-server | 1 | 
+kind | devops | argocd-notifications-controller-55c9b59bbb-w9q49 | ok | deployment | argocd-notifications-controller | 1 | 
+kind | devops | argocd-redis-75bdc8b4b4-jmt57 | ok | deployment | argocd-redis | 1 | 
+kind | devops | argocd-repo-server-74f89497c4-6mxvw | ok | deployment | argocd-repo-server | 1 | 
+kind | devops | argocd-server-54bf8f7497-bzb7v | ok | deployment | argocd-server | 1 | 
+kind | devops | gitops-repo-server-dbc6b6574-8d2qv | ok | deployment | gitops-repo-server | 1 | 
+kind | devops | local-path-provisioner-gglxd | ok |  |  | - | 
+kind | external-secrets | external-secrets-58654746b4-stjtw | ok | deployment | external-secrets | 1 | 
+kind | external-secrets | external-secrets-cert-controller-85fd79c645-6ddb2 | ok | deployment | external-secrets-cert-controller | 1 | 
+kind | external-secrets | external-secrets-webhook-674d7d48ff-p4qhn | ok | deployment | external-secrets-webhook | 1 | 
+kind | hugmesh-backend | admin-bff-db-5499685d85-jm75p | ok | deployment | admin-bff-db | 1 | 
+kind | hugmesh-backend | federation-db-86d8b756d5-vjbnb | ok | deployment | federation-db | 1 | 
+kind | hugmesh-backend | hugmesh-admin-bff-api-59cd6874f-57jqh | ok | deployment | hugmesh-admin-bff-api | 6 | 
+kind | hugmesh-backend | hugmesh-admin-bff-api-59cd6874f-5tjq7 | ok | deployment | hugmesh-admin-bff-api | 6 | 
+kind | hugmesh-backend | hugmesh-admin-bff-api-59cd6874f-ctvfk | ok | deployment | hugmesh-admin-bff-api | 6 | 
+kind | hugmesh-backend | hugmesh-admin-bff-api-59cd6874f-d6q7p | ok | deployment | hugmesh-admin-bff-api | 6 | 
+kind | hugmesh-backend | hugmesh-admin-bff-api-59cd6874f-m2tnn | ok | deployment | hugmesh-admin-bff-api | 6 | 
+kind | hugmesh-backend | hugmesh-admin-bff-api-59cd6874f-wwwzn | ok | deployment | hugmesh-admin-bff-api | 6 | 
+kind | hugmesh-backend | hugmesh-federation-api-7ff8c5f7c8-x4j9j | ok | deployment | hugmesh-federation-api | 1 | 
+kind | hugmesh-backend | hugmesh-user-bff-api-6d8d75b6b8-4wmj7 | ok | deployment | hugmesh-user-bff-api | 6 | 
+kind | hugmesh-backend | hugmesh-user-bff-api-6d8d75b6b8-6t746 | ok | deployment | hugmesh-user-bff-api | 6 | 
+kind | hugmesh-backend | hugmesh-user-bff-api-6d8d75b6b8-jm9kj | ok | deployment | hugmesh-user-bff-api | 6 | 
+kind | hugmesh-backend | hugmesh-user-bff-api-6d8d75b6b8-nvmbn | ok | deployment | hugmesh-user-bff-api | 6 | 
+kind | hugmesh-backend | hugmesh-user-bff-api-6d8d75b6b8-p2jbx | ok | deployment | hugmesh-user-bff-api | 6 | 
+kind | hugmesh-backend | hugmesh-user-bff-api-6d8d75b6b8-r8vpp | ok | deployment | hugmesh-user-bff-api | 6 | 
+kind | hugmesh-backend | user-bff-db-57b78d868b-cxk4f | ok | deployment | user-bff-db | 1 | 
+kind | hugmesh-frontend | hugmesh-admin-ui-c85b9f859-kvkp7 | ok | deployment | hugmesh-admin-ui | 2 | 
+kind | hugmesh-frontend | hugmesh-admin-ui-c85b9f859-qm7n6 | ok | deployment | hugmesh-admin-ui | 2 | 
+kind | hugmesh-frontend | hugmesh-fe-gateway-b44759c54-vj6wk | ok | deployment | hugmesh-fe-gateway | 1 | hugmesh.net/ (ingress hugmesh-fe-gateway); *.hugmesh.net/ (ingress hugmesh-fe-gateway); qzxygh7z2pqt3yoma3gud3745lyrsy7bgwx776fscdeppqk4a2jyyqqd.onion/ (ingress hugmesh-fe-gateway)
+kind | hugmesh-frontend | hugmesh-host-shell-649c85759c-nxcwf | ok | deployment | hugmesh-host-shell | 2 | 
+kind | hugmesh-frontend | hugmesh-host-shell-649c85759c-r2dp4 | ok | deployment | hugmesh-host-shell | 2 | 
+kind | hugmesh-frontend | hugmesh-login-ui-6794cb7bf6-gppnh | ok | deployment | hugmesh-login-ui | 2 | 
+kind | hugmesh-frontend | hugmesh-login-ui-6794cb7bf6-vvhzl | ok | deployment | hugmesh-login-ui | 2 | 
+kind | hugmesh-frontend | hugmesh-mastodon-ui-6b8b8f8869-9h759 | ok | deployment | hugmesh-mastodon-ui | 2 | 
+kind | hugmesh-frontend | hugmesh-mastodon-ui-6b8b8f8869-jwttk | ok | deployment | hugmesh-mastodon-ui | 2 | 
+kind | hugmesh-frontend | hugmesh-matrix-ui-5964fdcc8d-g4fvj | ok | deployment | hugmesh-matrix-ui | 2 | 
+kind | hugmesh-frontend | hugmesh-matrix-ui-5964fdcc8d-mz72t | ok | deployment | hugmesh-matrix-ui | 2 | 
+kind | hugmesh-frontend | hugmesh-user-ui-7584b85d86-b867g | ok | deployment | hugmesh-user-ui | 2 | 
+kind | hugmesh-frontend | hugmesh-user-ui-7584b85d86-rlmqs | ok | deployment | hugmesh-user-ui | 2 | 
+kind | hugmesh-pki | casdoor-54777d6b7b-bl8rc | ok | deployment | casdoor | 1 | 
+kind | hugmesh-pki | casdoor-pg-dc9cf6f4c-jj4dm | ok | deployment | casdoor-pg | 1 | 
+kind | hugmesh-pki | cassandra-0 | ok | statefulset | cassandra | 1 | 
+kind | hugmesh-pki | harbor-core-57cb4f5f4-45vjg | ok | deployment | harbor-core | 1 | registry.hugmesh.net/api/ (ingress harbor-ingress); registry.hugmesh.net/service/ (ingress harbor-ingress); registry.hugmesh.net/v2/ (ingress harbor-ingress); registry.hugmesh.net/c/ (ingress harbor-ingress)
+kind | hugmesh-pki | harbor-database-0 | ok | statefulset | harbor-database | 1 | 
+kind | hugmesh-pki | harbor-jobservice-6986698c57-g6fvh | ok | deployment | harbor-jobservice | 1 | 
+kind | hugmesh-pki | harbor-portal-75dd4987d-22nmh | ok | deployment | harbor-portal | 1 | registry.hugmesh.net/ (ingress harbor-ingress)
+kind | hugmesh-pki | harbor-redis-0 | ok | statefulset | harbor-redis | 1 | 
+kind | hugmesh-pki | harbor-registry-55cc68fd-hg4tr | ok | deployment | harbor-registry | 1 | 
+kind | hugmesh-pki | route-access-db-7c4d686cb7-llv52 | ok | deployment | route-access-db | 1 | 
+kind | ingress-nginx-internal | ingress-nginx-internal-controller-2bbvm | ok |  |  | - | 
+kind | keda | keda-admission-webhooks-84db864bbb-26f4g | ok | deployment | keda-admission-webhooks | 1 | 
+kind | keda | keda-operator-7f74dd8db7-spndv | ok | deployment | keda-operator | 1 | 
+kind | keda | keda-operator-metrics-apiserver-c5f86b684-l4ptw | ok | deployment | keda-operator-metrics-apiserver | 1 | 
+kind | kube-system | coredns-7db6d8ff4d-nsmml | ok | deployment | coredns | 2 | 
+kind | kube-system | coredns-7db6d8ff4d-tnt6z | ok | deployment | coredns | 2 | 
+kind | kube-system | etcd-hugmesh-local-control-plane | ok |  |  | - | 
+kind | kube-system | kindnet-7q75v | ok |  |  | - | 
+kind | kube-system | kube-apiserver-hugmesh-local-control-plane | ok |  |  | - | 127.0.0.1:39047->6443 (Kubernetes API)
+kind | kube-system | kube-controller-manager-hugmesh-local-control-plane | ok |  |  | - | 
+kind | kube-system | kube-proxy-lkhhx | ok |  |  | - | 
+kind | kube-system | kube-scheduler-hugmesh-local-control-plane | ok |  |  | - | 
+kind | kube-system | metrics-server-5b67dbc954-mfcqc | ok | deployment | metrics-server | 1 | 
+kind | kyverno | kyverno-admission-controller-8d8f7f7bc-q8nnx | ok | deployment | kyverno-admission-controller | 1 | 
+kind | kyverno | kyverno-background-controller-588cd47b55-wmz8s | ok | deployment | kyverno-background-controller | 1 | 
+kind | kyverno | kyverno-cleanup-update-requests-29846440-x94wq | completed |  |  | - | 
+kind | local-path-storage | local-path-provisioner-988d74bc-swxjg | ok | deployment | local-path-provisioner | 1 | 
+kind | vault | vault-0 | ok | statefulset | vault | 1 | 

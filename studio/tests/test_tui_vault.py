@@ -3,7 +3,7 @@ of gui/pages/vault.py.
 
 Qt-free. Pins: the step is in the mesh walk (after system) and absent from the
 standalone/cloud walks; every edit goes through config.vault_field_error and a
-refusal is an inline status with state unchanged (never a silently-inert command);
+refusal is an inline status with state unchanged (never a silently ineffective command);
 clearing the internal address clears everything that hangs off it; Enter keeps the
 values and continues; the walk ends in a config the CLI emits the flags from.
 
@@ -13,7 +13,8 @@ faces cannot drift into accepting different things. The GUI picks a certificate 
 a file dialog and this one takes a typed path; that is the only difference, and it
 is why this file drives ca_cert_error with real fixture PEMs.
 """
-from ca_fixtures import CA_ALT, CA_ROOT
+import pytest
+from ca_fixtures import CA_ALT, CA_ROOT, HAVE_CRYPTOGRAPHY
 from hugmesh_studio.core.config import (
     MODE_SKIPPED_PAGES, VAULT_FIELDS, ImageConfig, vault_field_error)
 from hugmesh_studio.core.worklist import load_any
@@ -87,7 +88,7 @@ def test_the_removed_path_commands_are_gone_from_the_vocabulary_and_the_screen()
     choice -- the mount is pinned by the shipped ClusterSecretStore and the
     ExternalSecrets read the literal hugmesh/<service> -- so 'm' and 'p' were
     removed with the fields and the two builder flags.
-    A dropped command must be UNRECOGNISED, never silently inert — the TUI's own
+    A dropped command must be UNRECOGNISED, never silently ineffective — the TUI's own
     rule — and the screen must say why rather than going quiet about it."""
     j = _to_vault()
     j.feed(f"a {ADDR}")
@@ -224,6 +225,8 @@ def test_the_external_address_reaches_every_node_argv(tmp_path):
 
 
 # ── the base CA list (#335): typed paths, the same predicate as the GUI picker ──────
+@pytest.mark.skipif(not HAVE_CRYPTOGRAPHY,
+                    reason="subject/expiry need python-cryptography (optional dependency)")
 def test_adding_a_certificate_records_it_and_reports_subject_and_expiry():
     j = _to_vault()
     j.feed(f"c {CA_ROOT}")

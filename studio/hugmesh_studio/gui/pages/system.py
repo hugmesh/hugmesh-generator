@@ -343,7 +343,7 @@ class SystemPage(QtWidgets.QWizardPage):
         # strand its "Default user" caption — network.py's orphan-caption rule, stated
         # on the egress section there ("_row()'s 'Egress VPN' caption … is not a gate
         # member"); named rather than cited by line, because a line range in another
-        # module rots on that module's next edit.
+        # module goes stale on that module's next edit.
         self.user_row = _row("Default user", self.user)
         lay.addWidget(self.user_row)
         # The default-account twin of hostname_note: shown only where the worklist's

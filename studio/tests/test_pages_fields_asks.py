@@ -29,7 +29,7 @@ One module per ask, in the operator's own words:
   to continue the build and go back to the main menu." ProgressPage DISPATCHES ON
   ARRIVAL, so every walk onto it here goes through ``_install_inert_build_driver`` —
   the walk that did not (2026-09-04) launched a real ``sudo -A bash
-  ./build-x86-host-stage4.sh`` per run and left 60 root-owned launchers wedged on an
+  ./build-x86-host-stage4.sh`` per run and left 60 root-owned launchers hung on an
   offscreen askpass dialog. The unstubbed arrival is now pinned to be REFUSED.
 
 Every gate here has a MUTATION proof recorded in the lane report: reverting the gating
@@ -121,7 +121,7 @@ def visited_slugs(wiz):
 def _install_inert_build_driver(monkeypatch):
     """Arriving at ProgressPage dispatches the committed worklist through the REAL
     WorklistDriver -> BuildDriver -> `sudo -A bash ./build-x86-host-stage4.sh` (this
-    file's pinned host is non-root, native). Replace the per-image driver with an inert
+    file's pinned host is non-root, native). Replace the per-image driver with a do-nothing
     one that records what it was asked to build, and the mesh node-key generator's
     Popen with a no-op, so a walk onto the page proves DISPATCH without a process.
     Same shape as tests/test_pages_progress.py::_install_fake_builddriver."""
@@ -285,10 +285,20 @@ def test_ask8_mesh_skips_domains_and_users_without_the_opt_in(wiz):
 
 def test_ask19_default_domains_choice_lands_on_the_users_choice(wiz):
     """ASK 19, verbatim: "On the default (internal only) go straight to the USERS
-    button-choice screen." One Next from the domains choice, no table in between."""
+    button-choice screen." No Domains TABLE in between — but since #494 (operator
+    report 2026-09-23, issue #589) the mesh's OWN domain has a services page like every
+    other domain, and that ONE page sits between the choice and the users choice: it
+    is the own domain's, it names it, and it is the only page before the users
+    choice."""
     mesh_flow(wiz)
     dc = advance_to(wiz, wizard_mod.DomainsChoicePage)
     assert dc._buttons["internal"].isChecked()
+    wiz.next()
+    own = wiz.currentPage()
+    assert isinstance(own, wizard_mod.DomainServicesPage), (
+        f"landed on {type(own).__name__}, not the own domain's services page")
+    assert own.current_domain() == wiz.cfg.cluster_domain
+    assert "1 of 1" in own.subTitle()                       # no other domain: no table
     wiz.next()
     assert isinstance(wiz.currentPage(), wizard_mod.UsersChoicePage), (
         f"landed on {type(wiz.currentPage()).__name__}, not the users choice screen")
@@ -378,6 +388,10 @@ def test_ask8_deselecting_clears_what_was_entered(wiz):
     dc = back_to(wiz, wizard_mod.DomainsChoicePage)
     dc._buttons["internal"].setChecked(True)
     wiz.next()                                                # domains table now skipped
+    own = wiz.currentPage()                                   # …the own domain's page stays (#494)
+    assert isinstance(own, wizard_mod.DomainServicesPage)
+    assert own.current_domain() == wiz.cfg.cluster_domain and "1 of 1" in own.subTitle()
+    wiz.next()
     uc = wiz.currentPage()
     assert isinstance(uc, wizard_mod.UsersChoicePage)
     uc._buttons["generated"].setChecked(True)
@@ -566,7 +580,7 @@ def test_ask9_a_desktop_asks_for_the_account_exactly_once(wiz):
         "the account question vanished entirely instead of moving")
     assert home.local_user_note.isVisibleTo(home), (
         "HomePage must SAY that this account is also the image's default user")
-    # emission-neutral: the hidden row emits nothing, and the surviving one does emit
+    # leaves the output unchanged: the hidden row emits nothing, and the surviving one does emit
     got = pairs(c.to_cli_args())
     assert ("--hostname", derive_hostname(c)) in got
     assert "--user" not in c.to_cli_args()
@@ -1259,7 +1273,7 @@ def test_ask21_encrypt_root_always_is_keyed_on_the_real_emission_table(wiz):
     for plat in sorted(supported | {"jetson"}):
         cfg = ImageConfig(mode="standalone", platform=plat)
         assert encrypt_root_always(cfg) is (plat in supported), plat
-    # the jetson exclusion is load-bearing, not cosmetic
+    # the jetson exclusion is relied on, not cosmetic
     with pytest.raises(ValueError):
         ImageConfig(mode="standalone", role="full", platform="jetson",
                     encrypt_root=True).to_cli_args()
@@ -1317,7 +1331,7 @@ def test_loaded_mesh_config_keeps_both_new_gates_coherent(wiz):
 #    — AND THE BUTTON ITSELF must state which users get generated and where the
 #    credentials will be found when it is done"
 #
-# The load-bearing half is the CARD TEXT, and it is only worth anything if it is TRUE.
+# The half that matters is the CARD TEXT, and it is only worth anything if it is TRUE.
 # These read the claim off the real key channel (scripts/gen-provision-keys.sh, via
 # core.worklist_driver.key_profile) rather than trusting the sentence.
 # ══════════════════════════════════════════════════════════════════════════════════
@@ -1375,7 +1389,7 @@ def test_ask20_generated_card_is_recomputed_every_visit(wiz):
 
 
 def test_ask20_generated_card_names_the_folder_the_keys_are_actually_written_to(wiz):
-    """ASK 20's ONE load-bearing requirement — "where the credentials will be found" —
+    """ASK 20's ONE requirement that matters — "where the credentials will be found" —
     was wrong. The card printed ``<out>/keys-<id>``; on the GUI path ProgressPage always
     hands the driver ``workdir=<out>/sessions/<session id>/``, and _generate_keys joins
     ``keys-<id>`` onto THAT. So the operator was sent to a folder that never exists.
@@ -1520,7 +1534,7 @@ def test_ask21_standalone_is_cleared_when_the_role_moves_out_of_scope(qapp):
     """The ``and scope_allows("standalone", c)`` conjunct in RolePage.validatePage,
     which nothing covered — the mutation removing it survived the whole suite.
 
-    It is load-bearing because ``gate_widgets_role_class(hide=True)`` only sets
+    It is relied on because ``gate_widgets_role_class(hide=True)`` only sets
     visibility: a box ticked on an in-scope role stays TICKED when the operator moves
     to a role the field is out of scope for. Without the conjunct that stale tick is
     committed, and --standalone reaches a builder that rejects it. standalone-thick/x86
@@ -1659,7 +1673,7 @@ def test_ask22_launch_is_never_dynamically_skipped(wiz):
 
 def test_ask22_continue_advances_to_the_run(wiz, qapp, monkeypatch, tmp_path):
     """"an option to continue the build" — the card is what advances to the page that
-    actually runs it. The page dispatches on arrival, so the driver is INERT here (see
+    actually runs it. The page dispatches on arrival, so the driver does nothing here (see
     _install_inert_build_driver) and the dispatch is asserted through it: before
     2026-09-04 this test walked onto the page unstubbed and started a real
     `sudo -A bash ./build-x86-host-stage4.sh` every run."""
@@ -1677,7 +1691,7 @@ def test_ask22_continue_advances_to_the_run(wiz, qapp, monkeypatch, tmp_path):
 
 
 def test_ask22_an_unstubbed_arrival_is_refused_not_elevated(wiz, qapp, monkeypatch, tmp_path):
-    """The 2026-09-04 wedge, end to end through the REAL page and the REAL driver, with
+    """The 2026-09-04 hang, end to end through the REAL page and the REAL driver, with
     nothing stubbed on the dispatch path: arriving at ProgressPage under pytest must
     surface core.build_driver.ElevationRefused in the log pane and end the run — never
     Popen a `sudo -A` (tests/conftest.py's spy would error this test if it did).
@@ -1697,8 +1711,19 @@ def test_ask22_an_unstubbed_arrival_is_refused_not_elevated(wiz, qapp, monkeypat
     _settle_run(qapp, page)
     log = page.log.toPlainText()
     assert "refusing to spawn sudo" in log and "pytest is running this process" in log, log
-    assert "build run aborted before completion" in log            # the worker's own line
+    # the DRIVER now owns the refusal (#374): it fails that one image and the run ends
+    # through the normal path, so the worker's catch-all line is no longer the witness
+    assert "worklist finished (summary exit 1)" in log
     assert page.isComplete()                                       # the run ENDED
+    # #374: a refusal is a FAILED image, not a 'running' one recorded as the operator's
+    # 'stopped': the row reaches a terminal state, nothing stays registered, and the
+    # session history says failed.
+    assert [r.status for r in page.driver.results] == ["failed"]
+    assert page.driver.results[0].exit_code == 1
+    assert page.driver._drivers == {}
+    assert all(r.terminal for r in page._rows)                     # not stuck on the running glyph
+    from hugmesh_studio.core import build_sessions as _bs
+    assert [s.status for s in _bs.load_all()] == ["failed"]
     assert not (tmp_path / "out" / "sessions").exists() or not any(
         p.name.startswith("wl-") for s in (tmp_path / "out" / "sessions").iterdir()
         for p in s.iterdir()), "a build tree was created — something ran"

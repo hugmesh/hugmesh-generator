@@ -241,13 +241,17 @@ gate_optional_services() {
                 rm -rf "${tree}/manifests/egress-vpn"
                 ;;
             tor)
-                # NODE service (DISTRO tor daemon + a reconcile agent), not a cluster
-                # Application. Prune the per-service NetworkPolicy interaction (file +
-                # kustomization line) so no tor-onion label is ever honoured; the
-                # net-vpn/tor package omission + the service-link SKIP are handled OUTSIDE
-                # this loop (they touch the rootfs, not the GitOps tree).
-                rm -f "${tree}/manifests/networkpolicy/tor-onion-marked.yaml"
-                _opt_drop_kustomize_line "${tree}/manifests/networkpolicy/kustomization.yaml" tor-onion-marked.yaml
+                # NODE service (DISTRO tor daemon + a reconcile agent). Its one cluster
+                # artefact is the NetworkPolicy interaction, served by its OWN Application
+                # (apps/08b-networkpolicy-tor.yaml -> manifests/networkpolicy-tor). The
+                # device applies its BAKED apps/*.yaml (bootstrap.sh), so removing the
+                # Application file is what keeps the policy off a cluster built without
+                # tor (hugmesh-generator#617: while the policy sat in the auto-synced
+                # manifests/networkpolicy, this prune edited a tree ArgoCD never read).
+                # The net-vpn/tor package omission + the service-link SKIP are handled
+                # OUTSIDE this loop (they touch the rootfs, not the GitOps tree).
+                rm -f "${apps}/08b-networkpolicy-tor.yaml"
+                rm -rf "${tree}/manifests/networkpolicy-tor"
                 ;;
             workloadConsole)
                 # The WORKLOAD CONSOLE is RBAC + route-access + an admin-bff deployment
@@ -901,4 +905,35 @@ _opt_negative_tokens() {
         esac
     done
     printf '%s' "${out}"
+}
+
+# _OPT_BUILTIN_DEFAULT_SERVICES — the selection a build gets when NO --optional-services
+# is given. It MUST equal the literal both builders carry on their
+# `OPTIONAL_SERVICES="${OPTIONAL_SERVICES:-...}"` line (tests/stack/
+# test-optional-services-exclude.sh asserts that), because the function below
+# restores it.
+_OPT_BUILTIN_DEFAULT_SERVICES="akkoma tuwunel phpbb"
+
+# _opt_negative_only_keeps_defaults — a list made ONLY of explicit-deselect tokens
+# ("-anubis", "no-anubis") keeps the built-in default selection.
+#
+# WHY (2026-10-15, operator decision B on hugmesh-generator#384/#444). --optional-services
+# REPLACES the built-in default, so `--optional-services "-anubis"` — which is all a
+# caller that never touched the service picker can say to force the public PoW shield
+# off — used to ship an image with NO akkoma/tuwunel/phpbb either: a list holding only a
+# negative token is not a selection, it is a veto, and the veto must not delete the
+# defaults as a side effect. Mutates OPTIONAL_SERVICES in place; a no-op for an empty
+# list (the EXPLICIT-none spelling stays none) and for any list that carries at least
+# one positive token (an allow-list, or the `all` sentinel, which the expansion handles).
+_opt_negative_only_keeps_defaults() {
+    local s
+    [ -n "${OPTIONAL_SERVICES//[[:space:]]/}" ] || return 0
+    for s in ${OPTIONAL_SERVICES}; do
+        case "${s}" in
+            -?*|no-?*) ;;
+            *) return 0 ;;
+        esac
+    done
+    OPTIONAL_SERVICES="${_OPT_BUILTIN_DEFAULT_SERVICES}$(_opt_negative_tokens)"
+    info "OPTIONAL_SERVICES: only deselect tokens given, kept the built-in default selection: ${OPTIONAL_SERVICES}"
 }

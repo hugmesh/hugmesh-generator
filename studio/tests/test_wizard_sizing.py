@@ -86,7 +86,7 @@ def test_medium_size_prefers_the_readable_size_on_a_big_screen():
 
 
 def test_medium_size_clamps_below_the_preferred_on_a_small_screen():
-    """Non-vacuity for the clamp: a small screen must actually shrink the window (the
+    """Real-cases check for the clamp: a small screen must actually shrink the window (the
     old code hardcoded 1040x780 regardless and overflowed the display)."""
     small = medium_size(QtCore.QRect(0, 0, 800, 800))
     assert small.width() < 1040 and small.height() < 780

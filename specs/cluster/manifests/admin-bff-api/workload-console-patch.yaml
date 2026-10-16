@@ -183,9 +183,9 @@ spec:
             # same way `ps -e` and `date -u` were, and it narrows nothing the property
             # already covers.
             # The cost is stated plainly: against the shipped first-token matcher a pinned
-            # entry is fail-closed, so until the whole-argv matcher lands (the CROSS-REPO
-            # TODO below) `df` is refused OUTRIGHT rather than narrowed. That is the same
-            # interim cost already accepted for `ps` and `date`, and it errs closed.
+            # entry was fail-closed, so until the whole-argv matcher landed (#114, see MATCHER
+            # below) `df` was refused OUTRIGHT rather than narrowed. That interim cost,
+            # also accepted for `ps` and `date`, is now gone: `df -h` is reachable.
             #
             # `stat` IS PINNED TO `stat -t` (decision 63, #545, operator 2026-09-18).
             # #545 itself could not defend a pinned form and left the box unticked: EVERY
@@ -217,10 +217,12 @@ spec:
             # the residual false-positive shape #493 repaired, and it reads no path.
             # Listed here for completeness of the capability review only.
             #
-            # ⚠ CROSS-REPO TODO (admin-bff wave): WorkloadConsoleProperties must match
-            # the WHOLE argv — `String.join(" ", command)` against this set — not
-            # command.get(0). Until it does, only the bare (argument-safe) names are
-            # reachable. Entries must never contain a comma: this env binds as a
+            # MATCHER (hugmesh-admin-bff-api#114, merged): WorkloadConsoleProperties honours
+            # both forms this list is written in. A BARE NAME (one token: `ls`, `free`,
+            # `uptime`, `id`, `uname`) licenses that command with ANY arguments, head
+            # matched exactly. A PINNED ARGV (several tokens: `df -h`, `stat -t`,
+            # `ps -e`, `date -u`) licenses exactly that whole argv — no longer argv, no
+            # bare head. Entries must never contain a comma: this env binds as a
             # comma-delimited List<String>.
             - name: WORKLOAD_CONSOLE_EXEC_READONLY
               value: "ls,df -h,free,uptime,id,uname,stat -t,ps -e,date -u"

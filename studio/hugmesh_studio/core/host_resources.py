@@ -78,7 +78,7 @@ def _meminfo_cached() -> dict[str, int]:
 
 
 def _meminfo_fresh() -> dict[str, int]:
-    """A FRESH /proc/meminfo read for every call — the dispatch-time seam for
+    """A FRESH /proc/meminfo read for every call — the dispatch-time override point for
     :func:`low_memory_warnings` (and the tests' monkeypatch point). Never cached:
     the 2026-07-15 incident signature is memory filling up DURING a session
     (browser + IDE + another build), so a warning computed from a launch-time

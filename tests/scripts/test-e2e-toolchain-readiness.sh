@@ -46,7 +46,39 @@
 #   E. If THIS checkout has a tests/e2e/node_modules, the real probe must agree
 #      with it: a stale toolchain on this box is exactly the defect above and is a
 #      FAILURE here, naming the fix. With no install it SKIPS LOUDLY (counted, never
-#      a pass) — the pre-merge images carry no node_modules.
+#      a pass) — the alpine and debian pre-merge images carry no node_modules. The
+#      NODE job does (hugmesh-generator#413 npm-ci's tests/e2e for the enumeration
+#      suite) and has no browsers, and cannot have any: see the one exemption below.
+#      E2E_READINESS_EXPECT_NO_BROWSERS=1 — the ONE named exemption, set by exactly
+#      one caller, the node job of .github/workflows/shell-suites.yml. That job runs
+#      node:24-alpine (musl); MEASURED 2026-09-30, Playwright 1.61.1 there downloads
+#      a 646 MB ubuntu24.04 GLIBC fallback build in 12 s, THIS probe calls it READY
+#      (revision dirs, INSTALLATION_COMPLETE, an exec bit — as it
+#      then was; it has since learned to RUN `--version`, B2h-B2j, and that
+#      same install now reports "cannot execute", which this exemption does NOT waive: E1k), neither chrome nor chrome-headless-shell can execute on musl, and
+#      leg G's five real launches then all FAIL with `spawn ... ENOENT`: installing
+#      the browsers there trades one red for five. So the job DECLARES the absence.
+#      It is NOT a skip of leg E. Set to exactly "1", the real probe still runs and
+#      the leg passes only if (a) every finding is one of the three "this pinned
+#      browser is simply not there" lines — chromium, chromium-headless-shell, and
+#      playwright-core's own executablePath() — and both browsers are among them,
+#      and (b) therefore the whole INSTALL half (lock vs package.json, npm's hidden
+#      lock, every package on disk, every declared dep resolving) is clean. The
+#      browser half is then SKIPPED by name, counted, never a pass. Everything else
+#      stays RED with the variable set: a stale package, lock drift, a marker-only
+#      dir, an incomplete install, a live or dangling alias, a half-installed pair,
+#      a probe that could not run (exit 2). A probe that says READY while the
+#      variable is set also FAILS ("the declaration went stale; delete it"), so the
+#      exemption cannot outlive its reason. Unset, or any other value (0, true,
+#      empty), the leg is exactly what it was: an installed-but-broken or
+#      browserless toolchain on a developer box is a FAILURE. The probe itself is
+#      untouched, so no e2e make target can be talked into READY by it.
+#   E1. The exemption's own negative controls (leg E1 below): the REAL probe is run
+#      on planted fixtures — absent / present / broken / incomplete / aliased /
+#      half-installed / package missing / lock drift / cannot-run — and graded by
+#      grade_probe, the SAME function leg E calls (never a second copy of the rule),
+#      once per value of the variable, so deleting or loosening any clause of the
+#      rule turns one of them red.
 #   F. The eight Gherkin guards under tests/scripts/test-e2e-*.sh run the probe as
 #      their preflight (not a private `[ -d node_modules/playwright-bdd ]`), NO
 #      guard defaults PLAYWRIGHT_BROWSERS_PATH — every probe sees the ambient
@@ -195,9 +227,11 @@ mk_browsers() { # DIR [revision]
   local rev="${2:-9999}"
   mkdir -p "$1/chromium-${rev}/chrome-linux64" "$1/chromium_headless_shell-${rev}/chrome-headless-shell-linux64"
   : > "$1/chromium-${rev}/INSTALLATION_COMPLETE"
-  : > "$1/chromium-${rev}/chrome-linux64/chrome"
   : > "$1/chromium_headless_shell-${rev}/INSTALLATION_COMPLETE"
-  : > "$1/chromium_headless_shell-${rev}/chrome-headless-shell-linux64/chrome-headless-shell"
+  # the probe RUNS `<binary> --version` (a glibc build on musl has every bit set
+  # and still cannot execute), so the stubs are real scripts that answer it.
+  printf '#!/bin/sh\necho "Chromium stub %s"\n' "${rev}" > "$1/chromium-${rev}/chrome-linux64/chrome"
+  printf '#!/bin/sh\necho "Chromium stub %s"\n' "${rev}" > "$1/chromium_headless_shell-${rev}/chrome-headless-shell-linux64/chrome-headless-shell"
   # the probe demands an EXECUTABLE regular file under each revision dir (a
   # marker-only dir is the fail-open the skeptic proved 2026-08-27), so the
   # stub binaries carry the bit a real install has.
@@ -220,6 +254,47 @@ probe() {
   env -u PLAYWRIGHT_BROWSERS_PATH -u E2E_DIR -u XDG_CACHE_HOME -u INIT_CWD "$@" bash "${PROBE}" >"${o}" 2>"${e}"
   RC=$?
   OUT="$(cat "${o}")"; ERR="$(cat "${e}")"
+}
+
+# grade_probe RC TEXT EXPECT_NO_BROWSERS -> sets GRADE and GRADE_WHY (leg E, and its controls in E1)
+#
+# The ONLY place the E2E_READINESS_EXPECT_NO_BROWSERS exemption is decided. A pure
+# function of its three arguments, so leg E grades the REAL probe with it and leg E1
+# grades planted fixtures with the very same code: a control that carried its own
+# copy of the rule would prove nothing.
+#   ready            probe exited 0 and nothing was declared (leg E's normal pass)
+#   stale-exemption  probe exited 0 but the declaration says there are no browsers
+#   exempt           the declaration is exactly "1", the probe exited 1, EVERY finding
+#                    is one of the three "this pinned browser is simply not there"
+#                    lines, and both browsers are among them. GRADE_WHY = those lines.
+#   stale            everything else — a failed toolchain, with or without a
+#                    declaration. With a declaration of "1", GRADE_WHY = the findings
+#                    that are NOT waivable.
+# The three patterns are anchored to the probe's own wording for an ABSENT browser.
+# They deliberately do NOT match the shapes that name something which IS on the box
+# and wrong — "is incomplete" (marker missing), "is broken" (marker over an emptied
+# dir), "ALIASED", and the dangling-symlink spelling "is a symlink to X, which does
+# not exist" — so an installed-but-broken browser stays RED with the variable set. If
+# the probe's wording ever drifts, a line stops matching and becomes unwaivable: the
+# rule fails CLOSED.
+ABSENT_CHROMIUM_RE='^  - chromium r[0-9]+ \([^)]*\) is not installed: [^ ]+ does not exist$'
+ABSENT_SHELL_RE='^  - chromium-headless-shell r[0-9]+ \([^)]*\) is not installed: [^ ]+ does not exist$'
+ABSENT_EXE_RE='^  - playwright-core says chromium lives at [^ ]+ and it does not exist$'
+grade_probe() { # RC TEXT EXPECT_NO_BROWSERS
+  local rc="$1" text="$2" expect="$3" problems waived other
+  GRADE="stale"; GRADE_WHY=""
+  if [ "${rc}" = "0" ]; then
+    if [ "${expect}" = "1" ]; then GRADE="stale-exemption"; else GRADE="ready"; fi
+    return 0
+  fi
+  { [ "${expect}" = "1" ] && [ "${rc}" = "1" ]; } || return 0
+  problems="$(printf '%s\n' "${text}" | grep -E '^  - ' || true)"
+  waived="$(printf '%s\n' "${problems}" | grep -E -e "${ABSENT_CHROMIUM_RE}" -e "${ABSENT_SHELL_RE}" -e "${ABSENT_EXE_RE}" || true)"
+  other="$(printf '%s\n' "${problems}" | grep -v -E -e "${ABSENT_CHROMIUM_RE}" -e "${ABSENT_SHELL_RE}" -e "${ABSENT_EXE_RE}" | grep -v '^$' || true)"
+  if [ -n "${other}" ]; then GRADE_WHY="${other}"; return 0; fi
+  printf '%s\n' "${waived}" | grep -E "${ABSENT_CHROMIUM_RE}" >/dev/null || return 0
+  printf '%s\n' "${waived}" | grep -E "${ABSENT_SHELL_RE}" >/dev/null || return 0
+  GRADE="exempt"; GRADE_WHY="${waived}"
 }
 
 echo "== e2e toolchain readiness: the probe bites, and every e2e target runs it =="
@@ -312,6 +387,35 @@ mv "${B}/chromium_headless_shell-9999" "${b2g_store}/chromium_headless_shell-999
 ln -s "${b2g_store}/chromium_headless_shell-9999" "${B}/chromium_headless_shell-9999"
 probe E2E_DIR="${T}" PLAYWRIGHT_BROWSERS_PATH="${B}"
 eq "${RC}" "0" "B2g a symlink to the SAME revision (a relocated cache) is READY"
+
+# B2h. THE 2026-09-30 SHAPE (#682): files, marker and exec bit all present, binary
+# cannot run. A shebang naming an interpreter that does not exist fails exactly the
+# way a glibc ELF fails on musl: the kernel cannot find the interpreter, spawn says
+# ENOENT. (An EMPTY +x file is NOT a control: execvp hands it to /bin/sh and it
+# exits 0.)
+fresh b2h; printf '#!/nonexistent/ld-linux-x86-64.so.2\n' > "${B}/chromium_headless_shell-9999/chrome-headless-shell-linux64/chrome-headless-shell"
+chmod +x "${B}/chromium_headless_shell-9999/chrome-headless-shell-linux64/chrome-headless-shell"
+probe E2E_DIR="${T}" PLAYWRIGHT_BROWSERS_PATH="${B}"
+eq "${RC}" "1" "B2h headless-shell binary has the exec bit but cannot be spawned (interpreter missing, the glibc-on-musl shape): exit 1"
+has "chromium-headless-shell r9999 cannot execute" "${ERR}" "B2h the finding is its own named problem"
+has "chrome-headless-shell-linux64/chrome-headless-shell" "${ERR}" "B2h names the binary that does not run"
+has "could not be spawned (ENOENT)" "${ERR}" "B2h says how it failed (the spawn error code, not the static hint)"
+hasnt "chromium r9999 cannot execute" "${ERR}" "B2h the runnable chromium beside it is NOT blamed"
+hasnt "toolchain: READY" "${ERR}" "B2h nothing claims READY"
+
+fresh b2i; printf '#!/nonexistent/ld-linux-x86-64.so.2\n' > "${B}/chromium-9999/chrome-linux64/chrome"
+chmod +x "${B}/chromium-9999/chrome-linux64/chrome"
+probe E2E_DIR="${T}" PLAYWRIGHT_BROWSERS_PATH="${B}"
+eq "${RC}" "1" "B2i headed chromium binary cannot be spawned: exit 1"
+has "chromium r9999 cannot execute" "${ERR}" "B2i named as its own problem"
+hasnt "chromium-headless-shell r9999 cannot execute" "${ERR}" "B2i the runnable headless shell beside it is NOT blamed"
+
+# B2j. it spawns but dies (missing shared library: the loader exits 127).
+fresh b2j; printf '#!/bin/sh\necho "error while loading shared libraries: libnss3.so" >&2\nexit 127\n' > "${B}/chromium-9999/chrome-linux64/chrome"
+chmod +x "${B}/chromium-9999/chrome-linux64/chrome"
+probe E2E_DIR="${T}" PLAYWRIGHT_BROWSERS_PATH="${B}"
+eq "${RC}" "1" "B2j a binary that spawns and exits 127 on --version: exit 1"
+has "exited 127: error while loading shared libraries" "${ERR}" "B2j quotes the first stderr line"
 
 # B3. package.json bumped, lock not regenerated: the DRIFT class, different fix.
 fresh b3; sed -i 's/"pngjs": "\^7.0.0"/"pngjs": "^8.0.0"/' "${T}/package.json"
@@ -587,17 +691,120 @@ if [ "${RC}" -ne 0 ] && [ "$(probe_calls)" = "2" ]; then _ok "playwright-deps: i
 echo
 echo "-- E) the REAL probe against THIS checkout's install --"
 REAL_PROBE_RC="no-install"
+# The one named exemption (see the header): read ONCE, here, and handed to
+# grade_probe, which honours exactly the value 1.
+EXPECT_NO_BROWSERS="${E2E_READINESS_EXPECT_NO_BROWSERS-}"
 if [ ! -d "${REAL_DIR}/node_modules" ]; then
-  _skip "no ${REAL_DIR}/node_modules — the real-tree leg asserted nothing (the pre-merge images carry no install; run 'make playwright-deps' on a box to exercise it)"
+  _skip "no ${REAL_DIR}/node_modules — the real-tree leg asserted nothing (no install on this box; run 'make playwright-deps' to exercise it)"
 else
   out="$(E2E_DIR="${REAL_DIR}" bash "${PROBE}" 2>&1)"; rc=$?
   REAL_PROBE_RC="${rc}"
-  if [ "${rc}" -eq 0 ]; then
-    _ok "the real probe agrees with the real install: $(printf '%s' "${out}" | head -c 200)"
-  else
-    _bad "THE e2e TOOLCHAIN ON THIS BOX IS STALE (probe rc=${rc}) — every e2e target would have stopped here, which is the point:"$'\n'"$(printf '%s\n' "${out}" | sed 's/^/         /')"
-  fi
+  grade_probe "${rc}" "${out}" "${EXPECT_NO_BROWSERS}"
+  case "${GRADE}" in
+    ready)
+      _ok "the real probe agrees with the real install: $(printf '%s' "${out}" | head -c 200)" ;;
+    exempt)
+      REAL_PROBE_RC="${rc}: browsers declared absent by E2E_READINESS_EXPECT_NO_BROWSERS=1"
+      _ok "E the INSTALL half of the real probe is clean on this checkout (lock vs package.json, npm's hidden lock, every package on disk, every declared dep resolving) — its only findings are the pinned browsers being absent"
+      _skip "E the BROWSER half was NOT asserted: E2E_READINESS_EXPECT_NO_BROWSERS=1 declares this environment browserless (node:24-alpine cannot run the only build Playwright downloads for it; see the node job in .github/workflows/shell-suites.yml). Waived, and nothing else:"$'\n'"$(printf '%s\n' "${GRADE_WHY}" | sed 's/^/         /')" ;;
+    stale-exemption)
+      _bad "E2E_READINESS_EXPECT_NO_BROWSERS=1 is set but the real probe says READY — the pinned browsers ARE installed, so the declaration is stale. Delete it (the node job's env: block) so this leg asserts the browsers and leg G launches them:"$'\n'"$(printf '%s\n' "${out}" | sed 's/^/         /')" ;;
+    *)
+      hint=""
+      if [ -n "${EXPECT_NO_BROWSERS}" ] && [ "${EXPECT_NO_BROWSERS}" != "1" ]; then
+        hint=$'\n'"         (E2E_READINESS_EXPECT_NO_BROWSERS='${EXPECT_NO_BROWSERS}' is set, but only the exact value 1 is honoured)"
+      elif [ -n "${GRADE_WHY}" ]; then
+        hint=$'\n'"         (E2E_READINESS_EXPECT_NO_BROWSERS=1 waives ONLY an absent browser; these findings are something else:"$'\n'"$(printf '%s\n' "${GRADE_WHY}" | sed 's/^/           /'))"
+      fi
+      _bad "THE e2e TOOLCHAIN ON THIS BOX IS STALE (probe rc=${rc}) — every e2e target would have stopped here, which is the point:"$'\n'"$(printf '%s\n' "${out}" | sed 's/^/         /')${hint}" ;;
+  esac
 fi
+
+echo
+echo "-- E1) the exemption's own negative controls: the REAL probe on planted fixtures, graded by leg E's OWN grade_probe --"
+# E2E_READINESS_EXPECT_NO_BROWSERS waives exactly one shape — a clean install whose
+# pinned browsers are ALL absent — and only when its value is exactly "1". Every case
+# below runs the real probe on a planted tree and grades it with grade_probe, the
+# function leg E itself calls, once per value of the variable that matters. Delete or
+# loosen any clause of the rule and one of these goes red.
+grade_is() { # EXPECT_NO_BROWSERS WANT LABEL — grade the LAST probe run (RC / ERR)
+  grade_probe "${RC}" "${ERR}" "$1"
+  eq "${GRADE}" "$2" "$3"
+}
+
+# the one waivable shape: a clean install, BOTH pinned browsers absent
+fresh e1a; rm -rf "${B}/chromium-9999" "${B}/chromium_headless_shell-9999"
+probe E2E_DIR="${T}" PLAYWRIGHT_BROWSERS_PATH="${B}"
+eq "${RC}" "1" "E1a clean install with every pinned browser absent: the PROBE itself still exits 1 (the waiver is the grader's, never the probe's)"
+eq "$(printf '%s\n' "${ERR}" | grep -c -e '^  - ')" "3" "E1a exactly three findings: chromium, chromium-headless-shell, and playwright-core's own executablePath()"
+E1A_ERR="${ERR}"
+grade_is 1 exempt "E1a E2E_READINESS_EXPECT_NO_BROWSERS=1: EXEMPT — the one shape it waives"
+grade_is "" stale "E1a variable UNSET: stale — a developer box with no browsers stays RED"
+grade_is 0 stale "E1a value 0: stale (only the exact value 1 is honoured)"
+grade_is true stale "E1a value 'true': stale (a stray spelling waives nothing)"
+
+# a READY toolchain: normal pass, and a declaration that no longer has a reason fails
+fresh e1b
+probe E2E_DIR="${T}" PLAYWRIGHT_BROWSERS_PATH="${B}"
+eq "${RC}" "0" "E1b consistent tree with both browsers present: the probe says READY"
+grade_is "" ready "E1b variable unset: ready (leg E's ordinary pass)"
+grade_is 1 stale-exemption "E1b the variable says browserless but the browsers ARE there: the declaration is STALE and FAILS"
+
+# installed-but-broken stays RED with the variable set, even BESIDE absent siblings
+fresh e1c; rm -rf "${B}/chromium-9999" "${B}/chromium_headless_shell-9999/chrome-headless-shell-linux64"
+probe E2E_DIR="${T}" PLAYWRIGHT_BROWSERS_PATH="${B}"
+has "NO executable file" "${ERR}" "E1c fixture: headless-shell dir holds ONLY its marker, chromium absent"
+grade_is 1 stale "E1c a marker-only browser dir beside an absent chromium: stale (installed-but-broken is not 'absent')"
+
+fresh e1d; rm -rf "${B}/chromium-9999"; rm -f "${B}/chromium_headless_shell-9999/INSTALLATION_COMPLETE"
+probe E2E_DIR="${T}" PLAYWRIGHT_BROWSERS_PATH="${B}"
+has "incomplete" "${ERR}" "E1d fixture: headless shell has no INSTALLATION_COMPLETE, chromium absent"
+grade_is 1 stale "E1d an interrupted install (marker missing) beside an absent chromium: stale"
+
+fresh e1e; rm -rf "${B}/chromium-9999" "${B}/chromium_headless_shell-9999"; ln -s "${TMP}/e1e/nowhere-9999" "${B}/chromium_headless_shell-9999"
+probe E2E_DIR="${T}" PLAYWRIGHT_BROWSERS_PATH="${B}"
+has "is a symlink to ${TMP}/e1e/nowhere-9999, which does not exist" "${ERR}" "E1e fixture: the headless-shell dir is a DANGLING symlink"
+grade_is 1 stale "E1e a dangling symlink alias is not 'absent' (someone planted it): stale"
+
+fresh e1f; mk_browsers "${B}" 1234; rm -rf "${B}/chromium-9999" "${B}/chromium_headless_shell-9999"
+ln -s "${B}/chromium_headless_shell-1234" "${B}/chromium_headless_shell-9999"
+probe E2E_DIR="${T}" PLAYWRIGHT_BROWSERS_PATH="${B}"
+has "ALIASED" "${ERR}" "E1f fixture: the headless-shell dir is a LIVE alias to another revision"
+grade_is 1 stale "E1f a live alias to a different revision: stale"
+
+# a binary that is there and cannot run is installed-but-broken, never 'absent'
+fresh e1k; rm -rf "${B}/chromium-9999"; printf '#!/nonexistent/ld\n' > "${B}/chromium_headless_shell-9999/chrome-headless-shell-linux64/chrome-headless-shell"
+chmod +x "${B}/chromium_headless_shell-9999/chrome-headless-shell-linux64/chrome-headless-shell"
+probe E2E_DIR="${T}" PLAYWRIGHT_BROWSERS_PATH="${B}"
+has "cannot execute" "${ERR}" "E1k fixture: headless shell present but unrunnable, chromium absent"
+grade_is 1 stale "E1k an unrunnable browser beside an absent chromium: stale (the musl glibc-fallback shape is not 'absent')"
+
+# a half-installed pair is not a browserless box
+fresh e1g; rm -rf "${B}/chromium_headless_shell-9999"
+probe E2E_DIR="${T}" PLAYWRIGHT_BROWSERS_PATH="${B}"
+eq "${RC}" "1" "E1g fixture: chromium present, headless shell absent: the probe exits 1"
+grade_is 1 stale "E1g only ONE of the two pinned browsers is absent (a partial install): stale"
+
+# the INSTALL half is never waived
+fresh e1h; rm -rf "${B}/chromium-9999" "${B}/chromium_headless_shell-9999" "${T}/node_modules/playwright-bdd"
+probe E2E_DIR="${T}" PLAYWRIGHT_BROWSERS_PATH="${B}"
+has "gone from disk" "${ERR}" "E1h fixture: a package is gone from node_modules, both browsers absent"
+grade_is 1 stale "E1h a missing package beside the absent browsers: stale (the exemption waives browsers, never the install)"
+
+fresh e1i; rm -rf "${B}/chromium-9999" "${B}/chromium_headless_shell-9999"; sed -i 's/"pngjs": "\^7.0.0"/"pngjs": "^8.0.0"/' "${T}/package.json"
+probe E2E_DIR="${T}" PLAYWRIGHT_BROWSERS_PATH="${B}"
+has "DISAGREE" "${ERR}" "E1i fixture: package.json bumped without the lock, both browsers absent"
+grade_is 1 stale "E1i lock drift beside the absent browsers: stale"
+
+# a probe that could not run is never a waiver
+probe E2E_DIR="${TMP}/does-not-exist" PLAYWRIGHT_BROWSERS_PATH="${TMP}"
+eq "${RC}" "2" "E1j fixture: E2E_DIR that does not exist: the probe exits 2"
+grade_is 1 stale "E1j a probe that could not run (exit 2) is never waived"
+# ... and the exit-code clause stands on its own: a real exit 2 prints no problem lines,
+# so the case above would be rejected for want of them even without it. Feed it an exit
+# code other than 1 WITH the absent-only text of E1a, which only that clause refuses.
+grade_probe 2 "${E1A_ERR}" 1
+eq "${GRADE}" "stale" "E1j an exit code other than 1 is never waived, even over text that lists only absent browsers"
 
 echo
 echo "-- F) the Gherkin guards run the probe as THEIR preflight, with the CALLER'S browsers path --"
@@ -811,9 +1018,11 @@ echo "-- G) each browser guard's OWN preflight block is complete, and launches -
 #      resolution the lane gets. ~0.8s per guard, measured. Gated on leg E
 #      because against an install the probe already calls stale, every slice
 #      would fail for the reason leg E just named and the cascade would say
-#      nothing new; it SKIPS (counted, never a pass) instead. The pre-merge
-#      images carry no node_modules, so there the completeness half still runs
-#      and only the launches skip.
+#      nothing new; it SKIPS (counted, never a pass) instead. The pre-merge jobs
+#      carry no browsers (alpine/debian: no node_modules at all; node: an install
+#      declared browserless by E2E_READINESS_EXPECT_NO_BROWSERS, because its musl
+#      image cannot run the glibc build Playwright would fetch), and there the
+#      completeness half still runs and only the launches skip.
 # The lane config is REPO code, not part of an install, so it is read from the
 # repo even when E2E_REAL_DIR points leg G's RUN at another installed tree.
 LANE_CFG="${REPO}/tests/e2e/playwright.config.ts"

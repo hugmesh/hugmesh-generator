@@ -16,7 +16,7 @@ everything the class changes:
     ABSENT from the page (the driver refuses them fail-closed);
   - the XR-chat toggle: the URL is emitted ONLY while the checkbox is on.
 
-Everything is HERMETIC (stub driver through the SNAP_PHONE_WIZARD env seam — the
+Everything is HERMETIC (stub driver through the SNAP_PHONE_WIZARD env override point — the
 test_phone_wizard.py pattern); the GUI runs on Qt's offscreen platform.
 """
 import os
@@ -47,7 +47,7 @@ GENERATOR_DIR = os.path.dirname(STUDIO_ROOT)
 
 def _install_quest_tsv(tmp_path, tsv):
     """Drop a quest-devices.tsv next to the already-installed stub driver (the
-    class-scoped catalog seam: same dirname as SNAP_PHONE_WIZARD)."""
+    class-scoped catalog override point: same dirname as SNAP_PHONE_WIZARD)."""
     (tmp_path / "quest-devices.tsv").write_text(tsv)
 
 

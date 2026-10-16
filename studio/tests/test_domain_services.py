@@ -10,7 +10,7 @@ THIS FILE HAS NO QT IMPORT, and that is the point rather than a convenience. The
 pre-merge CI job (`.github/workflows/studio-tests.yml`) installs **no Qt binding** on
 purpose, and a `pytest.importorskip("hugmesh_studio.gui.qt")` anywhere in a module
 skips the WHOLE module — so a gate tested only inside a GUI file is a gate the
-pre-merge job never runs. `core/domain_services.py` exists as a Qt-free seam precisely
+pre-merge job never runs. `core/domain_services.py` exists as a Qt-free override point precisely
 so the refusal can be driven with a bare `ImageConfig`; these tests are what cash that
 in. The GUI surfaces live in tests/test_domain_services_page.py (the step) and
 tests/test_domain_services_scope.py (the scope column), both of which DO skip without
@@ -20,6 +20,7 @@ What is pinned here: the gate itself, the remedy each call site shows, the marke
 fail-closed loading and its absence from both manifests, the domain catalogue and its
 scopes, and the catalogue-order normalisation that keeps the manifest byte-stable.
 """
+import json
 import os
 
 import pytest
@@ -47,13 +48,20 @@ def _mesh(**kw):
     return ImageConfig(**kw)
 
 
-# ── the seam ──────────────────────────────────────────────
+# ── the override point ──────────────────────────────────────────────
 def test_gate_passes_when_there_are_no_domains():
-    assert ds.gate_reason(_mesh()) == ""
+    # No table rows AND no own domain to ask about...
+    assert ds.gate_reason(_mesh(cluster_domain="")) == ""
+    # ...or the own domain's page already walked (#631: the own domain is gated on the
+    # build like a row — see the "own domain" section below).
+    cfg = _mesh()
+    ds.record_reviewed(cfg, [cfg.cluster_domain])
+    assert ds.gate_reason(cfg) == ""
 
 
 def test_gate_names_every_unconfigured_domain():
     cfg = _mesh(domains=[Domain(name="a.example"), Domain(name="b.example")])
+    ds.record_reviewed(cfg, [cfg.cluster_domain])      # the rows are the subject here
     msg = ds.gate_reason(cfg)
     assert "a.example" in msg and "b.example" in msg
     assert "2 domains" in msg
@@ -104,7 +112,7 @@ def test_an_empty_selection_is_a_real_answer_once_the_domain_is_configured():
     answer, and the reason emptiness could not double as "never configured"."""
     cfg = _mesh(domains=[Domain(name="a.example", optional_services=[])])
     assert ds.gate_reason(cfg) != ""
-    ds.record_reviewed(cfg, ["a.example"])
+    ds.record_reviewed(cfg, [cfg.cluster_domain, "a.example"])
     assert ds.gate_reason(cfg) == ""
     assert cfg.domains[0].optional_services == []
 
@@ -135,9 +143,9 @@ def test_the_marker_never_reaches_either_mesh_manifest():
 
 def test_the_marker_round_trips_through_a_saved_config():
     cfg = _mesh(domains=[Domain(name="a.example")])
-    ds.record_reviewed(cfg, ["a.example"])
+    ds.record_reviewed(cfg, [cfg.cluster_domain, "a.example"])
     again = ImageConfig.from_dict(cfg.to_dict())
-    assert again.domain_services_reviewed == ["a.example"]
+    assert again.domain_services_reviewed == [cfg.cluster_domain, "a.example"]
     assert ds.gate_reason(again) == ""
 
 
@@ -296,6 +304,107 @@ def test_the_restart_remedy_names_redo_not_a_step_that_flow_lacks():
     assert "Back to the main menu" not in msg
 
 
+# ── #631 section 1: the mesh's OWN domain is gated on the build, like a row ─────────
+# After #595 the own domain (cfg.cluster_domain) has a services page on every mesh flow,
+# but the gate read the table rows only, so the page was enforced by being unavoidable
+# on a FRESH walk — and a config LOADED on the Sessions screen that never opened it
+# still built. These pin the gate on the build door, and the two doors it deliberately
+# stays off (mesh start: a dead end on the local-docker route; restart: history).
+def test_the_build_gate_names_the_own_domain_when_its_page_was_never_walked():
+    """#589's suggested test: default card + build -> the ACTION_IMAGE_BUILD reason
+    names the primary domain when its services were never confirmed."""
+    cfg = _mesh()                                 # the default card: no table rows
+    assert cfg.domains == [] and cfg.cluster_domain == "hugmesh.net"
+    msg = ds.gate_reason(cfg, ds.ACTION_IMAGE_BUILD)
+    assert "hugmesh.net" in msg and "1 domain has" in msg
+    assert ds.ACTION_REMEDY[ds.ACTION_IMAGE_BUILD] in msg
+    ds.record_reviewed(cfg, [cfg.cluster_domain])
+    assert ds.gate_reason(cfg, ds.ACTION_IMAGE_BUILD) == ""
+
+
+def test_the_own_domain_is_named_first_then_the_rows_in_table_order():
+    cfg = _mesh(domains=[Domain(name="b.example"), Domain(name="a.example")])
+    assert ds.unconfigured_domains(cfg, include_own=True) == [
+        "hugmesh.net", "b.example", "a.example"]
+    assert "3 domains" in ds.gate_reason(cfg)
+
+
+def test_a_rows_only_walk_still_refuses_the_build_for_the_own_domain():
+    """The #495-to-#595 shape: every table row walked, the own domain never (it had no
+    page yet). Loaded and sent to the build, it is refused BY NAME — and only for the
+    own domain."""
+    cfg = _mesh(domains=[Domain(name="a.example")])
+    ds.record_reviewed(cfg, ["a.example"])
+    assert ds.unconfigured_domains(cfg, include_own=True) == ["hugmesh.net"]
+    msg = ds.gate_reason(cfg, ds.ACTION_IMAGE_BUILD)
+    assert "1 domain has no recorded service configuration — hugmesh.net." in msg
+
+
+def test_the_own_domain_is_not_gated_on_the_docker_mesh_start():
+    """"Mesh node" then Back into "Local Docker mesh" leaves mode == "mesh" with the
+    default cluster domain and no walk; that route cannot show the image flow's
+    own-domain page, and the image flow's own domain does not reach a docker mesh. A
+    refusal there would be a dead end — so ACTION_MESH_START stays rows-only."""
+    cfg = _mesh()
+    assert ds.gate_reason(cfg, ds.ACTION_MESH_START) == ""
+    assert ds.ACTION_MESH_START not in ds.OWN_DOMAIN_GATED_ACTIONS
+    cfg.domains = [Domain(name="a.example")]
+    msg = ds.gate_reason(cfg, ds.ACTION_MESH_START)
+    assert "a.example" in msg and "hugmesh.net" not in msg
+
+
+def test_the_restart_gate_keeps_its_rows_only_rule_for_history():
+    """The migration rule for configs recorded before #595: a restart re-dispatches a
+    RECORDED config, and one recorded in the #495-to-#595 window carries row markers
+    and no own marker. Refusing it would punish history — the rule restart_gate_reason
+    exists for. The build of the same config IS refused (it goes back through the
+    wizard, whose walk records the own domain)."""
+    cfg = _mesh(domains=[Domain(name="a.example")])
+    ds.record_reviewed(cfg, ["a.example"])
+    assert ds.restart_gate_reason(cfg) == ""
+    assert ds.ACTION_BUILD_RESTART not in ds.OWN_DOMAIN_GATED_ACTIONS
+    assert "hugmesh.net" in ds.gate_reason(cfg, ds.ACTION_IMAGE_BUILD)
+
+
+def test_the_own_domain_gate_is_mesh_only():
+    """implicit_own_domain is "" off the mesh route: a cloud client's cluster domain is
+    a REAL row 0, a cloud node and standalone have no domain plane at all."""
+    for cfg in (ImageConfig(mode="standalone"),
+                ImageConfig(mode="cloud", role="desktop"),
+                ImageConfig(mode="cloud", role="omnibus")):
+        assert cfg.cluster_domain == "hugmesh.net"
+        assert ds.gate_reason(cfg, ds.ACTION_IMAGE_BUILD) == "", cfg.mode
+
+
+def test_a_row_named_after_the_cluster_domain_is_asked_once():
+    cfg = _mesh(domains=[Domain(name="hugmesh.net")])
+    assert ds.unconfigured_domains(cfg, include_own=True) == ["hugmesh.net"]
+    assert "1 domain has" in ds.gate_reason(cfg)
+
+
+def test_a_walked_own_domain_does_not_survive_a_cluster_domain_rename():
+    """The marker is a NAME. Walking hugmesh.net says nothing about acme.org."""
+    cfg = _mesh()
+    ds.record_reviewed(cfg, [cfg.cluster_domain])
+    cfg.cluster_domain = "acme.org"
+    assert "acme.org" in ds.gate_reason(cfg)
+    ds.record_reviewed(cfg, ds.reviewed_names(cfg))      # a page write prunes it
+    assert cfg.domain_services_reviewed == []
+
+
+def test_the_own_domain_gate_is_a_pure_read_and_emission_neutral():
+    """The gate adds no row and writes nothing: an untouched default-card flow emits
+    the same argv and the same manifest whether or not the gate has run, and still no
+    --domains and no manifest domains entry (the ASK-8 emission guard)."""
+    cfg = _mesh()
+    argv, manifest, saved = (cfg.to_cli_args(), cfg.mesh_manifest(), cfg.to_dict())
+    assert ds.gate_reason(cfg) != ""
+    assert (cfg.to_cli_args(), cfg.mesh_manifest(), cfg.to_dict()) == (
+        argv, manifest, saved)
+    assert "--domains" not in argv and manifest["domains"] == []
+    assert cfg.domains == [] and cfg.domain_services_reviewed == []
+
+
 # ── one wording, one source of truth ─────────────────────────────────────────────
 def test_services_summary_tells_the_three_states_apart():
     assert ds.services_summary([], False) == "not configured yet"
@@ -316,22 +425,25 @@ def test_domain_summary_is_services_summary_for_a_domain():
     assert ds.domain_summary(Domain(name="a.example"), cfg) == "cluster default"
 
 
-# ── whitespace cannot wedge the gate ─────────────────────────────────────────────
+# ── whitespace cannot hang the gate ─────────────────────────────────────────────
 def test_a_padded_name_can_still_satisfy_the_gate():
     """record_reviewed stored d.name RAW while unconfigured_domains compared the
     STRIPPED name, so a hand-edited config carrying ' a.example ' could never satisfy
     the gate — a permanently unbuildable configuration with no way out."""
     cfg = _mesh(domains=[Domain(name=" a.example ")])
-    ds.record_reviewed(cfg, [" a.example "])
-    assert cfg.domain_services_reviewed == ["a.example"]
+    ds.record_reviewed(cfg, [" a.example ", " " + cfg.cluster_domain + " "])
+    # the own domain first (the walk order), both stripped
+    assert cfg.domain_services_reviewed == [cfg.cluster_domain, "a.example"]
     assert ds.gate_reason(cfg) == ""
 
 
 def test_a_padded_marker_loaded_from_disk_is_honoured():
     cfg = ImageConfig.from_dict({"mode": "mesh",
                                  "domains": [{"name": "a.example"}],
-                                 "domain_services_reviewed": [" a.example "]})
-    assert ds.reviewed_names(cfg) == {"a.example"}
+                                 "domain_services_reviewed": [" a.example ",
+                                                              " hugmesh.net "]})
+    assert cfg.cluster_domain == "hugmesh.net"
+    assert ds.reviewed_names(cfg) == {"a.example", "hugmesh.net"}
     assert ds.gate_reason(cfg) == ""
 
 
@@ -426,3 +538,79 @@ def test_no_domain_catalogue_slug_leaks_into_the_not_domain_scoped_table():
     listed = {r[0] for r in ds.other_scope_rows(ImageConfig())}
     for slug in OPTIONAL_SERVICES_CHOICES:
         assert slug not in listed
+
+
+# ── #637: booting a PREVIOUS session's images (Mesh emulation / QEMU tests) ──────────
+from _session_records import write_build_record  # noqa: E402
+
+
+@pytest.fixture
+def _state(tmp_path, monkeypatch):
+    monkeypatch.setenv("HUGMESH_STUDIO_STATE_DIR", str(tmp_path / "state"))
+
+
+def test_a_session_with_an_unwalked_row_is_refused_by_name(_state):
+    write_build_record("20260901-000000-aaaaaa", domains=("a.example", "b.example"),
+                       reviewed=("hugmesh.net", "a.example"))
+    msg = ds.session_boot_gate_reason("20260901-000000-aaaaaa")
+    assert "b.example" in msg and "Cannot boot this build session's images" in msg
+    assert ds.ACTION_REMEDY[ds.ACTION_EMULATE] in msg
+    assert "Redo" in msg
+
+
+def test_a_fully_walked_session_boots(_state):
+    write_build_record("s1", domains=("a.example",),
+                       reviewed=("hugmesh.net", "a.example"))
+    assert ds.session_boot_gate_reason("s1") == ""
+
+
+def test_the_session_gate_is_narrow_like_the_restart(_state):
+    """No record, or a record from before #495 (no marker at all): not refused —
+    those images are on disk and nobody could have answered the question then."""
+    assert ds.session_boot_gate_reason("no-such-session") == ""
+    assert ds.session_boot_gate_reason("") == ""
+    write_build_record("old", domains=("a.example",), reviewed=())
+    assert ds.session_boot_gate_reason("old") == ""
+
+
+def test_the_session_gate_never_asks_about_the_own_domain(_state):
+    """A session recorded before #631 walked its rows and never had the own domain
+    gated — emulating its images must not be refused over it."""
+    write_build_record("s2", domains=("a.example",), reviewed=("a.example",))
+    assert ds.session_boot_gate_reason("s2") == ""
+    assert ds.ACTION_EMULATE not in ds.OWN_DOMAIN_GATED_ACTIONS
+
+
+def test_an_unreadable_record_is_a_record_with_nothing_to_say(_state, tmp_path):
+    from hugmesh_studio.core import build_sessions
+    import os as _os
+    _os.makedirs(build_sessions.sessions_dir(), exist_ok=True)
+    with open(_os.path.join(build_sessions.sessions_dir(), "junk.json"), "w") as fh:
+        fh.write("{not json")
+    assert ds.session_boot_gate_reason("junk") == ""
+
+
+@pytest.mark.parametrize("config", [
+    None, "oops", [1, 2],
+    {"schema": "hugmesh-worklist/v1", "base": "oops", "entries": []},
+    {"schema": "hugmesh-worklist/v1", "entries": [],
+     "base": {"mode": "mesh", "domains": [{"name": "a.example", "idp": "weird"}],
+              "domain_services_reviewed": ["x"]}},
+], ids=["config-null", "config-string", "config-list", "base-string", "idp-weird"])
+def test_a_parseable_but_malformed_record_is_a_record_with_nothing_to_say(_state,
+                                                                          config):
+    """STRICTER than the unreadable-record test above, which ``build_sessions.find``
+    already answers (it swallows a file that is not JSON): a record that PARSES but
+    whose config is not a worklist — a hand-edited file, or one from a future schema
+    — reaches ``rec.worklist()``, which raises. That is what the gate's own guard is
+    for: no record we can read is a record with nothing to say, never a crash that
+    (through a Qt slot) takes the whole Studio down. Test-red proof: with the
+    try/except in ``session_boot_gate_reason`` removed these five raise."""
+    from hugmesh_studio.core import build_sessions
+    import os as _os
+    _os.makedirs(build_sessions.sessions_dir(), exist_ok=True)
+    with open(_os.path.join(build_sessions.sessions_dir(), "m.json"), "w",
+              encoding="utf-8") as fh:
+        json.dump({"id": "m", "config": config}, fh)
+    assert build_sessions.find("m") is not None, "fixture: find() must return the record"
+    assert ds.session_boot_gate_reason("m") == ""

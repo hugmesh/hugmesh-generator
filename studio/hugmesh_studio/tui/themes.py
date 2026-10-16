@@ -15,7 +15,7 @@ Semantics mirrored from the GUI editor:
 * header/footer existence, size (CHROME_SIZES), background, content;
 * the background effect: gradient/none selectable, the VANTA rows LISTED but
   refused with the dependency named (:data:`VANTA_DEPENDENCY_NOTE`) — an option
-  that silently does nothing is the inert-control trap, and the theme MODEL
+  that silently does nothing is the do-nothing-control trap, and the theme MODEL
   already persists vanta values for configs written elsewhere;
 * malformed input fails closed with an inline message — no edit ever raises.
 """
