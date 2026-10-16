@@ -38,7 +38,7 @@ from __future__ import annotations
 import os
 import re
 import shlex
-from dataclasses import asdict, dataclass, field, fields
+from dataclasses import MISSING, asdict, dataclass, field, fields
 from typing import Any, ClassVar
 
 from . import build_driver
@@ -54,6 +54,20 @@ FLEET_SCRIPT = "scripts/build-all-roles.sh"
 # argv — allow only slug-shaped tokens (matches every real role id incl. be+gpu),
 # fail-closed like ImageConfig.validate_identity().
 _ROLE_TOKEN_RE = re.compile(r"[A-Za-z0-9_+.-]+\Z")
+
+#: ``-j`` on both faces: the GUI's spin box range and what ``validate`` accepts from
+#: the TUI's ``set jobs N`` (which used to take 0 and -5 straight into the command).
+JOBS_RANGE: tuple[int, int] = (1, 128)
+
+#: What WITH_TOR does per builder — the note under the GUI's Tor checkbox and the
+#: line the TUI's options screen prints for the ``with_tor`` knob (both faces, one
+#: string; parity-pinned). It is NOT on the checkbox itself: a QCheckBox never
+#: wraps, and this sentence on it made the fleet window 825 px wide at its 760 px
+#: default (the post-merge review of #645).
+WITH_TOR_NOTE = (
+    "Sent per builder through the channel it parses — x86 --with-tor, rpi5 ‘tor’ "
+    "folded into --optional-services. Client roles never carry it; build-all-roles.sh "
+    "refuses (exit 2, before any build) where a builder cannot bake it exactly.")
 
 #: The builders' own cluster domain when no ``--cluster-domain`` is passed (x86 and
 #: rpi5 ``CLUSTER_DOMAIN=`` default; ImageConfig carries the same literal). A fleet
@@ -138,7 +152,11 @@ def commit_fleet_domains(state: FleetDomains, added) -> list[str]:
 def fleet_domain_fields(state: FleetDomains) -> dict[str, Any]:
     """The FleetConfig fields the steps' state becomes — COPIES (the config is recorded
     with the session while the state keeps being edited after a Back). Both faces
-    build their FleetConfig through this, so they record identical rows."""
+    build their FleetConfig through this, so they record the same domains, in the same
+    order, with the same services and reviewed markers. (One difference is left, and
+    is the one the text-mode ``a NAME`` always had: the GUI's table fills an empty
+    title with the domain's name, ``a NAME`` leaves it empty — as the local-mesh
+    route's does. A fleet build reads names only, so nothing built changes.)"""
     return {
         "domains": [Domain(**asdict(d)) for d in state.domains],
         "domain_services_reviewed": list(state.domain_services_reviewed),
@@ -258,15 +276,102 @@ class FleetConfig:
     def from_dict(cls, d: dict[str, Any]) -> "FleetConfig":
         # fields(), not __dataclass_fields__: the latter also lists the ``mode``
         # ClassVar, which is not an __init__ argument.
-        known = {f.name for f in fields(cls)}
+        if not isinstance(d, dict):
+            raise IdentityValidationError(
+                f"fleet record must be a JSON object, not {type(d).__name__}")
+        known = {f.name: f for f in fields(cls)}
         kw = {k: v for k, v in d.items() if k in known}
+        # A DAMAGED record (hand-edited JSON) is refused HERE with the field named, as
+        # IdentityValidationError — the exception the loaders already show inline. It
+        # used to pass through and surface later, inside the RESTART slot, where PyQt6
+        # aborts the Studio on an unhandled exception: a TypeError from a Qt setter
+        # (``"jobs": "8"`` into QSpinBox.setValue, ``"cluster_domain": 5`` or
+        # ``"x86_roles": ["pki"]`` into QLineEdit.setText), a TypeError from
+        # dataclasses.asdict or an AttributeError in the gate (a row that is not a
+        # domain), or a ValueError from the row builder (an ``idp`` typo).
+        # Every SCALAR field is checked against the type of its declared default:
+        # False -> a bool, "" -> text, 8 -> a whole number (not a bool, which is an
+        # int to Python). A missing key keeps the default (a pre-#645 record has none
+        # of the domains keys); null is a hand edit on a scalar and is refused.
+        for name, value in kw.items():
+            f = known[name]
+            if f.default is MISSING:                 # the list fields, checked below
+                continue
+            want = type(f.default)
+            ok = (isinstance(value, want) and not (want is int and isinstance(value, bool)))
+            if not ok:
+                kind = {bool: "true or false", str: "text",
+                        int: "a whole number"}.get(want, want.__name__)
+                raise IdentityValidationError(
+                    f"fleet record: {name} must be {kind}, not {type(value).__name__}")
+        # ``jobs`` is a whole number AND inside JOBS_RANGE, here as well as in
+        # validate(): a saved 0, -1 or 999 used to be clamped by the GUI's spin box
+        # without a word (the record said one -j, the RESTART built another, and the
+        # Review pane said Preflight OK), and 2**31 or more made QSpinBox.setValue
+        # raise OverflowError — an ArithmeticError, which no (ValueError, TypeError)
+        # guard around the RESTART slot catches — and PyQt6 aborted the Studio.
+        if "jobs" in kw and not JOBS_RANGE[0] <= kw["jobs"] <= JOBS_RANGE[1]:
+            raise IdentityValidationError(
+                f"fleet record: jobs must be a whole number from {JOBS_RANGE[0]} to "
+                f"{JOBS_RANGE[1]}, not {kw['jobs']!r}")
         # REHYDRATE the rows. asdict() -> JSON -> back yields plain dicts, and the
         # gate reads ``getattr(d, "name", "")`` — "" on a dict — so an un-rehydrated
         # record would pass the gate on every RESTART/REDO however unwalked it was.
-        kw["domains"] = [ImageConfig._domain_from_dict(x) if isinstance(x, dict) else x
-                         for x in (kw.get("domains") or [])]
-        kw["domain_services_reviewed"] = [
-            str(n) for n in (kw.get("domain_services_reviewed") or [])]
+        # Only an ABSENT key or null is an empty list (what an old serialiser wrote);
+        # "" or 0 in either place is a hand edit and is refused like any other text.
+        raw_rows = kw.get("domains")
+        raw_marks = kw.get("domain_services_reviewed")
+        raw_rows = [] if raw_rows is None else raw_rows
+        raw_marks = [] if raw_marks is None else raw_marks
+        for label, value in (("domains", raw_rows),
+                             ("domain_services_reviewed", raw_marks)):
+            if not isinstance(value, list):
+                raise IdentityValidationError(
+                    f"fleet record: {label} must be a list, not {type(value).__name__}")
+        rows = []
+        for i, x in enumerate(raw_rows):
+            if isinstance(x, dict):
+                try:
+                    x = ImageConfig._domain_from_dict(x)
+                except (ValueError, TypeError) as e:
+                    # the row builder's own refusal (an ``idp`` outside its choices,
+                    # a nested field of the wrong shape): the same inline path, the
+                    # row numbered so the operator finds it in the JSON
+                    raise IdentityValidationError(
+                        f"fleet record: domains[{i}] is not a valid domain row ({e})") from e
+            if not isinstance(x, Domain):
+                raise IdentityValidationError(
+                    f"fleet record: domains[{i}] must be a domain row (an object), "
+                    f"not {type(x).__name__}")
+            for fld in ("name", "title"):
+                if not isinstance(getattr(x, fld), str):
+                    raise IdentityValidationError(
+                        f"fleet record: domains[{i}].{fld} must be text, "
+                        f"not {type(getattr(x, fld)).__name__}")
+            # The row's two list fields are iterated by the Domain services step (its
+            # ``load`` and the state line): an int there passed the row builder and
+            # the name check, Review showed a preflight refusal, and ONE Back click
+            # raised TypeError ("'int' object is not iterable") from inside the Back
+            # button's slot; a plain string ("akkoma") was iterated as letters.
+            for fld in ("images", "optional_services"):
+                v = getattr(x, fld)
+                if not isinstance(v, list) or not all(isinstance(s, str) for s in v):
+                    bad = v if not isinstance(v, list) else next(
+                        s for s in v if not isinstance(s, str))
+                    raise IdentityValidationError(
+                        f"fleet record: domains[{i}].{fld} must be a list of text, "
+                        f"not {type(bad).__name__}")
+            rows.append(x)
+        kw["domains"] = rows
+        for j, n in enumerate(raw_marks):
+            # a marker is a domain name the step was walked for; a dict or a number
+            # here is a hand edit, named like every other one (str() of it matched
+            # no domain, so it was harmless, but silently so)
+            if not isinstance(n, str):
+                raise IdentityValidationError(
+                    f"fleet record: domain_services_reviewed[{j}] must be text, "
+                    f"not {type(n).__name__}")
+        kw["domain_services_reviewed"] = list(raw_marks)
         return cls(**kw)
 
     def _services_words(self) -> str:
@@ -290,6 +395,25 @@ class FleetConfig:
                 if not _ROLE_TOKEN_RE.match(tok):
                     raise IdentityValidationError(
                         f"invalid {name} token: {tok!r} — rejected by the fleet allowlist")
+        # extra_flags is shlex-split into argv by to_cli_args: an unbalanced quote (a
+        # plain apostrophe in a note, an unterminated "...) raised ValueError from
+        # shlex there, which the TUI's review did not catch — the whole text-mode fleet
+        # flow died on it. Refuse it HERE, at the one validation seam both faces call
+        # (the TUI on every `set`, the GUI's preview and preflight), with the reason.
+        if self.extra_flags:
+            try:
+                shlex.split(self.extra_flags)
+            except ValueError as e:
+                raise IdentityValidationError(
+                    f"extra_flags cannot be split into arguments ({e}) — balance the "
+                    "quotes, e.g. --note \"it's\"") from e
+        # -j: the GUI's spin box already stops at JOBS_RANGE; the TUI's `set jobs N`
+        # took any int (0, -5) straight into the command until this check.
+        if (isinstance(self.jobs, bool) or not isinstance(self.jobs, int)
+                or not JOBS_RANGE[0] <= self.jobs <= JOBS_RANGE[1]):
+            raise IdentityValidationError(
+                f"jobs must be a whole number from {JOBS_RANGE[0]} to {JOBS_RANGE[1]}, "
+                f"not {self.jobs!r}")
 
     # ---- the canonical env-knob + argv translation ---------------------------
     def to_env(self) -> dict[str, str]:
