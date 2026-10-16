@@ -382,6 +382,43 @@ provision_users() {
     fi
 }
 
+# ── BFF dial account (hugmesh-generator#367) ────────────────────────────────────
+# gen-provision-keys.sh stages the BFF dial PUBLIC key at ssh/<dial_user>.authorized_keys
+# (default dial user bff-dial; a non-default name is recorded in ssh/dial_user). Nothing
+# else creates that account, and install_authorized_keys returns silently for a user that
+# does not exist, so without this step sshd (PasswordAuthentication no) refuses the dial.
+# The account is created UNPRIVILEGED: no supplementary groups (so not wheel), no sudoers.d
+# entry, a '*' password field (no password can ever match; key login only). Which commands a dial user may run through sudo
+# is an operator decision that is NOT taken here, so this grants none.
+DIAL_USER_DEFAULT="bff-dial"
+provision_dial_user() {
+    local user="${DIAL_USER_DEFAULT}" marker="${BASE}/ssh/dial_user" named
+    if [ -f "${marker}" ]; then
+        named="$(tr -d ' \t\r\n' < "${marker}")"
+        [ -n "${named}" ] && user="${named}"
+    fi
+    if [ "${user}" = "root" ] || ! [[ "${user}" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]]; then
+        warn "dial user '${user}' is not a valid unprivileged account name — not creating it"
+        return 0
+    fi
+    [ -f "${BASE}/ssh/${user}.authorized_keys" ] || return 0   # dial not staged on this KEYS media
+
+    if id "${user}" >/dev/null 2>&1; then
+        if [ "$(id -u "${user}" 2>/dev/null)" = "0" ]; then
+            warn "dial user '${user}' has uid 0 — refusing to install the BFF dial key for it"
+            return 0
+        fi
+        log "Dial user ${user} already exists"
+    else
+        useradd -m -s /bin/bash -c "HugMesh BFF dial (no sudo)" "${user}" \
+            && log "Created dial user ${user}" \
+            || { warn "useradd ${user} failed"; return 0; }
+        usermod -p '*' "${user}" >/dev/null 2>&1 \
+            || warn "could not set a non-login password field for ${user}"
+    fi
+    install_authorized_keys "${user}" /dev/null 0
+}
+
 # ── superadmin DEVICE password (FD-04 / FD-06 superadmin client variant) ────────
 # A superadmin CLIENT device (built with `--person-role superadmin`) bakes the marker
 # /etc/hugmesh/device-password-required. Here we set that device's interactive
@@ -3241,6 +3278,7 @@ main() {
     provision_hosts      # peers reachable by IP before mesh/k8s join
     provision_binhost    # binary OS updates over the VPN
     provision_users
+    provision_dial_user         # BFF SSH dial account (unprivileged, no sudo) — the staged ssh/<dial_user>.authorized_keys has no owner without it
     provision_device_password   # superadmin client variant: set device password from KEYS hash
     provision_network
     provision_files

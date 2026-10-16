@@ -1,0 +1,248 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+	xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+	<modelVersion>4.0.0</modelVersion>
+	<parent>
+		<groupId>org.springframework.boot</groupId>
+		<artifactId>spring-boot-starter-parent</artifactId>
+		<!-- 4.0.7 brings this service onto the fleet's Boot-4 baseline (the fleet
+		     runs Spring Boot 4.0.7 via hugmesh-parent 2.0.0; this service tracks
+		     the same Boot version directly). Boot 4 = Spring Framework 7 + Spring
+		     Security 7 + the Jackson-3 WebFlux codec; the resilience4j + springdoc
+		     deps below are bumped to their Boot-4-compatible lines accordingly. -->
+		<version>4.0.7</version>
+		<relativePath/>
+	</parent>
+
+	<groupId>net.hugmesh</groupId>
+	<artifactId>hugmesh-actions</artifactId>
+	<version>0.0.1-SNAPSHOT</version>
+	<name>hugmesh-actions</name>
+	<description>HugMesh platform-wide scheduled actions (cross-stack role sync, audit log, …)</description>
+
+	<properties>
+		<java.version>25</java.version>
+	</properties>
+
+	<dependencies>
+		<!-- Reactive web client + scheduling — the actions service polls
+		     Casdoor admin APIs on a timer; everything reactive so a
+		     long-running tick doesn't block the scheduler thread. -->
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-webflux</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-actuator</artifactId>
+		</dependency>
+		<!-- Prometheus metrics on /actuator/prometheus — every sync tick
+		     emits gauges + counters for grants applied / removed /
+		     skipped. -->
+		<dependency>
+			<groupId>io.micrometer</groupId>
+			<artifactId>micrometer-registry-prometheus</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-validation</artifactId>
+		</dependency>
+		<!-- Security + OAuth2 resource server. Wires the @PreAuthorize
+		     gates on the registration endpoints + restricts /actuator
+		     to ROLE_GAME-MASTER. Same Casdoor authority shape the BFF
+		     and the gateways consume. -->
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-security</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-oauth2-resource-server</artifactId>
+		</dependency>
+		<!-- SpringDoc — generates the OpenAPI 3 spec at /v3/api-docs and
+		     serves Swagger-UI at /swagger-ui.html. This is the source the
+		     platform's ng-openapi-gen typed-clients, the admin
+		     api-docs/SwaggerUI federated module, and the docs pipeline all
+		     consume. webflux-ui variant matches the reactive stack (the
+		     servlet variant would drag in spring-webmvc and break the
+		     non-blocking model). Version pinned to the SpringDoc 3.0.x line,
+		     which targets Spring Boot 4 / Spring Framework 7 (the 2.7.x line is
+		     Spring Boot 3.5.x). -->
+		<dependency>
+			<groupId>org.springdoc</groupId>
+			<artifactId>springdoc-openapi-starter-webflux-ui</artifactId>
+			<version>3.0.3</version>
+		</dependency>
+		<!-- AspectJ weaver — REQUIRED for resilience4j's @CircuitBreaker to take effect.
+		     The breaker is applied by a Spring AOP @Aspect (CircuitBreakerAspect), which
+		     resilience4j's auto-config only registers under its AspectJOnClasspathCondition;
+		     and Spring Boot's AopAutoConfiguration only enables AspectJ auto-proxy when
+		     AspectJ is on the classpath. resilience4j-spring-boot4 does NOT pull it
+		     transitively, and Boot 4 REMOVED the old spring-boot-starter-aop convenience
+		     starter (404 on Maven Central) — so aspectjweaver is declared directly here
+		     (version BOM-managed). Without it every @CircuitBreaker annotation (incl. the
+		     fail-closed/fail-open fallbacks on the Casdoor/federation/admin-bff/github call
+		     sites) is a SILENT no-op. Guarded by CircuitBreakerWiringTest. -->
+		<dependency>
+			<groupId>org.aspectj</groupId>
+			<artifactId>aspectjweaver</artifactId>
+		</dependency>
+		<!-- Resilience4j circuit breaker — wraps the per-Casdoor-call
+		     side-effect so a slow Casdoor doesn't pile up sync work.
+		     The -spring-boot4 starter (2.4.0) is the Boot-4-compatible line;
+		     -spring-boot3 (2.2.0) targets Spring Boot 3 auto-configuration. -->
+		<dependency>
+			<groupId>io.github.resilience4j</groupId>
+			<artifactId>resilience4j-spring-boot4</artifactId>
+			<version>2.4.0</version>
+		</dependency>
+		<dependency>
+			<groupId>io.github.resilience4j</groupId>
+			<artifactId>resilience4j-reactor</artifactId>
+			<version>2.4.0</version>
+		</dependency>
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-test</artifactId>
+			<scope>test</scope>
+		</dependency>
+		<!-- WebFlux test slice (@WebFluxTest + WebTestClient autoconfig). Under
+		     Boot 4 the per-technology test slices were split out of
+		     spring-boot-starter-test into their own starters, so the WebFlux slice
+		     is declared explicitly; @WebFluxTest also moved package to
+		     org.springframework.boot.webflux.test.autoconfigure. -->
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-webflux-test</artifactId>
+			<scope>test</scope>
+		</dependency>
+		<dependency>
+			<groupId>io.projectreactor</groupId>
+			<artifactId>reactor-test</artifactId>
+			<scope>test</scope>
+		</dependency>
+		<!-- Spring Security test support — SecurityMockServerConfigurers
+		     .mockJwt() seeds a synthetic Casdoor JWT so the SecurityConfig
+		     path-matcher + authority-converter rules can be asserted with
+		     WebTestClient (no live Casdoor / JWKS needed). -->
+		<dependency>
+			<groupId>org.springframework.security</groupId>
+			<artifactId>spring-security-test</artifactId>
+			<scope>test</scope>
+		</dependency>
+		<!-- Boot-4 security test AUTO-CONFIG bridge. Under Boot 4 the test
+		     auto-configuration was modularised: SecurityWebTestClientAutoConfiguration
+		     (which applies springSecurity() to the @WebFluxTest-autoconfigured
+		     WebTestClient so SecurityMockServerConfigurers.mockJwt() is honored) lives
+		     here, NOT in spring-boot-starter-test anymore. Without it the slice tests'
+		     mockJwt() silently no-ops and every authenticated request 401s. It registers
+		     itself into the @AutoConfigureWebTestClient slice via that slice's imports. -->
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-security-test</artifactId>
+			<scope>test</scope>
+		</dependency>
+
+		<!-- hugmesh-commons — the shared, canonical Casdoor JWT authorities converter
+		     (CasdoorAuthorities), issuer->domain registry (DomainRegistry) and role
+		     helpers (Roles) the rest of the fleet (federation-api, admin-bff, user-bff)
+		     already consumes. Adopting it here retires this service's local COPIES of
+		     those three classes (config.CasdoorAuthorities, security.DomainRegistry,
+		     security.Roles — each explicitly documented as "COPIED from
+		     hugmesh-gateway" / "MIRROR of the gateway's registry") so a future
+		     platform-wide authority-shape change can no longer drift between the
+		     gateway/BFFs and this copy (the "converter-drift risk" the README's
+		     Remaining-follow-up section named).
+
+		     Depends on the artifact DIRECTLY (pinned <version>, not parent-managed):
+		     this service deliberately does NOT adopt hugmesh-parent as its Maven
+		     <parent> (kept on spring-boot-starter-parent:4.0.7 directly, unchanged) —
+		     a live trial showed the metapom's shared <dependencies> block forces
+		     spring-boot-starter-data-r2dbc / r2dbc-postgresql / postgresql /
+		     liquibase-core / spring-jdbc onto every child, which for this service (which
+		     is, per HugMeshActionsApplication's own javadoc, "INTENTIONALLY
+		     stateless... No local DB") auto-configures an R2DBC ConnectionFactory bean
+		     with no spring.r2dbc.* configured — the app would fail to START in
+		     production (not merely fail a test; this service has no @SpringBootTest to
+		     catch it). 2.0.0 is the REAL published commons coordinate (see
+		     user-bff-api's pom.xml comment on the same point); hugmesh-parent's own
+		     dependencyManagement entry for it is also 2.0.0 despite the metapom's OWN
+		     version being 2.7.0. The <exclusions> strip exactly those DB artifacts (which
+		     commons carries transitively via its own hugmesh-parent ancestry) — every
+		     other commons transitive (security / oauth2-resource-server / validation /
+		     springdoc) is a dependency this service already declares explicitly above at
+		     the same Boot-4-BOM-managed version, so leaving those unexcluded is a no-op
+		     dedupe, not a footprint change. -->
+		<dependency>
+			<groupId>net.hugmesh</groupId>
+			<artifactId>hugmesh-commons</artifactId>
+			<version>2.1.0</version>
+			<exclusions>
+				<exclusion>
+					<groupId>org.springframework.boot</groupId>
+					<artifactId>spring-boot-starter-data-r2dbc</artifactId>
+				</exclusion>
+				<exclusion>
+					<groupId>org.postgresql</groupId>
+					<artifactId>r2dbc-postgresql</artifactId>
+				</exclusion>
+				<exclusion>
+					<groupId>org.postgresql</groupId>
+					<artifactId>postgresql</artifactId>
+				</exclusion>
+				<exclusion>
+					<groupId>org.liquibase</groupId>
+					<artifactId>liquibase-core</artifactId>
+				</exclusion>
+				<exclusion>
+					<groupId>org.springframework.boot</groupId>
+					<artifactId>spring-boot-liquibase</artifactId>
+				</exclusion>
+				<exclusion>
+					<groupId>org.springframework</groupId>
+					<artifactId>spring-jdbc</artifactId>
+				</exclusion>
+			</exclusions>
+		</dependency>
+	</dependencies>
+
+	<build>
+		<plugins>
+			<!-- GraalVM native-image build tooling. The version + the
+			     process-aot / add-reachability-metadata executions are
+			     contributed by the spring-boot-starter-parent `native`
+			     profile's pluginManagement (id=native); declaring the
+			     plugin here activates those bindings when the build runs
+			     with `-Pnative`. Mirrors hugmesh-gateway/pom.xml. -->
+			<plugin>
+				<groupId>org.graalvm.buildtools</groupId>
+				<artifactId>native-maven-plugin</artifactId>
+			</plugin>
+			<plugin>
+				<groupId>org.springframework.boot</groupId>
+				<artifactId>spring-boot-maven-plugin</artifactId>
+			</plugin>
+		</plugins>
+	</build>
+
+	<profiles>
+		<!-- Native build: `./mvnw -Pnative native:compile` produces a
+		     GraalVM binary. The `native` profile itself (process-aot +
+		     reachability metadata) is defined by spring-boot-starter-parent;
+		     this thin local profile only mirrors the gateway so the same
+		     `-Pnative` invocation works across the platform and gives a
+		     home for any future actions-specific native config. -->
+		<profile>
+			<id>native</id>
+			<build>
+				<plugins>
+					<plugin>
+						<groupId>org.graalvm.buildtools</groupId>
+						<artifactId>native-maven-plugin</artifactId>
+					</plugin>
+				</plugins>
+			</build>
+		</profile>
+	</profiles>
+</project>

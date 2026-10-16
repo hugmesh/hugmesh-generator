@@ -20,7 +20,12 @@ WHAT IS "BAKED" ON THE DEVICE, measured on the builders rather than assumed:
   node's primary onion and one exported onion per Tor domain slug (decision 68 = A;
   hugmesh-tor-reconcile writes them, the go-live registry's ``tor-onion`` emitter reads
   the same files into ``domain-onions.txt``). A slug is NOT a DNS name, so it is shown
-  as the slug the node exports, never matched to a domain by guesswork.
+  as the slug the node exports, never matched to a domain by guesswork. ONE domain is
+  matched by name — the domain THIS run covers, when the mechanism is onion (#582):
+  its key directory name is a rule (``core.domain_services.onion_slug``, the name the
+  Studio gives the directory when the domain's ‘Tor front door’ is ticked), so
+  ``GoLiveDriver.domain_onion`` can say which onion is that domain's, or that it has
+  none here.
 
 Every path has an env seam (the driver's own ``GOLIVE_CLUSTER_DOMAIN_FILE`` and the
 registry's ``GL_ONION_EXPORT_DIR``, plus ``GOLIVE_DOMAINS_FILE``) so tests and a
@@ -34,7 +39,15 @@ import re
 __all__ = [
     "CLUSTER_DOMAIN_FILE", "DOMAINS_FILE", "ONION_EXPORT_DIR", "NO_EXTRA_DOMAINS_NOTE",
     "baked_domains", "onion_exports", "exposure_rows", "exposure_lines", "plan_rows",
+    "export_candidates", "export_step_applies", "NO_EXPORT_DOMAINS_NOTE",
 ]
+
+#: Said where the "Export to GitHub org" step would be, when no domain names an org
+#: — the step is then not shown at all (GUI) / not offered (TUI).
+NO_EXPORT_DOMAINS_NOTE = (
+    "No domain on this machine names a GitHub org, so there is nothing to export. "
+    "Give a domain one on the Studio's Domains step (the ‘GitHub org’ cell) of a "
+    "local mesh and save that mesh, or point the step at a config file.")
 
 CLUSTER_DOMAIN_FILE = "/etc/hugmesh/cluster-domain"
 DOMAINS_FILE = "/etc/hugmesh/domains"
@@ -103,7 +116,8 @@ def onion_exports(export_dir: str | None = None) -> tuple[str, list[tuple[str, s
 
 def exposure_rows(domains, chosen: str, provider_id: str, mechanism: str,
                   model_label: str, onion: str = "",
-                  domain_onions=()) -> list[tuple[str, str]]:
+                  domain_onions=(), chosen_onion: str | None = None
+                  ) -> list[tuple[str, str]]:
     """``[(what, how it is reached), ...]`` — the plan for EVERY domain on the device,
     not only the one this run covers.
 
@@ -113,7 +127,11 @@ def exposure_rows(domains, chosen: str, provider_id: str, mechanism: str,
     * with the onion mechanism no clearnet domain is exposed at all (the .onion is the
       endpoint, the driver needs no domain for it);
     * the node's onions are listed whatever the mechanism — they are live with the
-      firewall CLOSED, so they are exposure the operator already has."""
+      firewall CLOSED, so they are exposure the operator already has;
+    * ``chosen_onion`` (#582 — onion ACCEPTS a domain): the onion of the domain THIS
+      run covers, "" when that domain has none on this node, or None (the default)
+      when there is nothing to say — no row is added, and every row above reads
+      exactly as it did before."""
     rows: list[tuple[str, str]] = []
     primary = domains[0] if domains else ""
     for name in domains:
@@ -137,6 +155,14 @@ def exposure_rows(domains, chosen: str, provider_id: str, mechanism: str,
         rows.append(("Tor: this node's onion",
                      "not minted on this host — read /var/lib/hugmesh/tor/hostname on "
                      "the node (built with --with-tor)"))
+    if chosen_onion is not None and chosen:
+        rows.append((
+            f"Tor: {chosen} (this run's domain)",
+            f"https://{chosen_onion}/ — this domain's own onion, the same gateway"
+            if chosen_onion else
+            "no onion of its own on this node — tick its ‘Tor front door’ in the "
+            "Studio's Domain services step; the node's onion opens the cluster "
+            "domain"))
     for slug, addr in domain_onions:
         rows.append((f"Tor: domain slug '{slug}'",
                      f"https://{addr}/ — its own onion, the same gateway"))
@@ -151,6 +177,36 @@ def exposure_lines(rows) -> list[str]:
     return [f"{w.ljust(width)}  {h}" for w, h in rows]
 
 
+def export_candidates(generator_dir: str = "", config_files=()) -> list:
+    """The domains that name a GitHub org — the ONE discovery both Go-Live faces
+    make for the optional "Export to GitHub org" step: every saved mesh on this
+    machine (``core.org_export.saved_mesh_candidates``, read raw off the records)
+    plus whatever config files the person pointed the step at. A file that cannot be
+    read is skipped here; the faces show the problem when they add it."""
+    from .org_export import candidates_from_file, saved_mesh_candidates    # lazy
+    out = saved_mesh_candidates(generator_dir)
+    for path in config_files or ():
+        try:
+            out.extend(candidates_from_file(path, generator_dir))
+        except (OSError, ValueError):
+            continue
+    return out
+
+
+def export_step_applies(candidates) -> bool:
+    """Whether the export step is shown at all: only when some domain has an org.
+    Every existing flow has none, and sees no new step."""
+    return bool(candidates)
+
+
+def norm_domain(name) -> str:
+    """A domain spelled for comparison: surrounding whitespace dropped, lower case, and
+    no trailing root dot (``Example.ORG.`` and ``example.org`` are one DNS name). The ONE
+    spelling both :func:`plan_rows` and ``GoLiveDriver.preflight`` compare a typed
+    domain by, so they cannot disagree about whether it is the node's own."""
+    return (name or "").strip().lower().rstrip(".")
+
+
 def plan_rows(driver, opts) -> list[tuple[str, str]]:
     """:func:`exposure_rows` for a live ``GoLiveDriver`` + ``GoLiveOptions`` — the ONE
     call both faces make, so the GUI's Generate step and the TUI's go-live screen
@@ -160,7 +216,15 @@ def plan_rows(driver, opts) -> list[tuple[str, str]]:
     mechanism = p.mechanism if p else ""
     label = f"{p.model} ({p.mechanism})" if p else "(no provider picked)"
     domains = baked_domains(driver.autofill_domain())
-    chosen = (opts.domain or "").strip().lower() or (domains[0] if domains else "")
+    chosen = norm_domain(opts.domain) or (domains[0] if domains else "")
     onion, per = onion_exports()
+    # #582: with the onion mechanism a domain names WHICH onion. Said for a domain
+    # other than the cluster domain, and only when this host knows its cluster domain
+    # (elsewhere the typed one may be the node's own, which the node's onion opens).
+    primary = norm_domain(driver.autofill_domain())
+    chosen_onion = None
+    lookup = getattr(driver, "domain_onion", None)
+    if mechanism == "onion" and primary and chosen and chosen != primary and lookup:
+        chosen_onion = str(lookup(chosen) or "")
     return exposure_rows(domains, chosen, p.id if p else "?", mechanism, label,
-                         onion, per)
+                         onion, per, chosen_onion=chosen_onion)

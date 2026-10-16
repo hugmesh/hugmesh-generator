@@ -36,7 +36,7 @@ JSON=0
 GENERATE=""          # "" = decided by lane; 1/0 = forced
 FEATURES=()
 PW_ARGS=()
-VIA="${E2E_VIA:-}"   # "" = the mesh's own door; onion = through Tor (see --via)
+VIA="${E2E_VIA:-}"   # "" = the mesh's own door; onion / onion-domains = through Tor (see --via)
 IMAGE="${PW_IMAGE:-hugmeshgames-e2e:latest}"
 
 # ── the docker mesh's host door: ONE knob, the same one the TypeScript reads ──
@@ -111,6 +111,18 @@ Front door (how the browser reaches the mesh)
                            onion:  SNAP_ONION_BASE_URL, else `scripts/kind-tor.sh
                                    onion` (which refuses a leftover hostname)
                            proxy:  SNAP_PROXY, else `scripts/kind-tor.sh socks`
+  --via onion-domains      the docker stack's PER-DOMAIN .onions (hugmesh-generator
+                           #582: a Tor domain has an onion of its own, in front of
+                           the same gateway), THROUGH TOR. Runs ONLY the
+                           @via:onion-domains @env:docker scenarios (implies --bdd
+                           --env docker). Everything --via onion resolves is
+                           resolved the same way (the mesh's own onion, the proxy),
+                           plus the domains' onions:
+                             start: make stack-up TOR=1 BRAND_B=1  (then: make stack-seed)
+                           onions: SNAP_ONION_DOMAIN_URLS ("<slug>=https://<onion> ..."),
+                                   else every <slug>.hostname beside the hostname file
+                                   (default tests/stack/tor-onion/<slug>.hostname)
+                           (E2E_VIA=onion-domains is the same switch)
 
 Modes
   --gen                    compile the features and stop
@@ -227,9 +239,21 @@ done
 #  * A missing or malformed onion is a hard stop for a RUN (exit 2, naming what
 #    to start). --list / --gen / --print-command execute nothing, so they do not
 #    demand one.
+#  * `--via onion-domains` (hugmesh-generator#582) is the same door-keeping for the
+#    stack's PER-DOMAIN onions: a Tor domain is its own HiddenService in front of
+#    the same gateway, told apart by the onion Host. It resolves everything
+#    `--via onion` resolves (the scenarios sign in on the mesh's own onion too, to
+#    show its session is refused on a domain's), plus one https://<onion> per
+#    domain from the `<slug>.hostname` readouts hugmesh-tor publishes beside the
+#    primary's (SNAP_ONION_DOMAIN_URLS, "<slug>=<url> ..."). It runs ONLY the
+#    @via:onion-domains @env:docker scenarios, so `make stack-e2e-tor` on a stack
+#    with no Tor domain never collects them (a skip would fail that lane), and a
+#    RUN with no per-domain readout is a hard stop naming `make stack-up TOR=1
+#    BRAND_B=1`. Docker only: the kind lane has no per-domain onion.
 ONION_BASE_URL=""
 ONION_PROXY=""
 ONION_NOTE=""
+ONION_DOMAIN_URLS=""
 onion_from_file() {
   local f raw base
   f="$1"
@@ -242,15 +266,20 @@ onion_from_file() {
 }
 if [ -n "${VIA}" ]; then
   case "${VIA}" in
-    onion) ;;
-    *) die "unknown --via ${VIA}. Legal front doors: onion (omit --via for the mesh's own door)." ;;
+    onion|onion-domains) ;;
+    *) die "unknown --via ${VIA}. Legal front doors: onion, onion-domains (omit --via for the mesh's own door)." ;;
   esac
   if [ -z "${ENV_ID}" ]; then ENV_ID=docker; fi
+  if [ "${VIA}" = "onion-domains" ] && [ "${ENV_ID}" != "docker" ]; then
+    die "--via onion-domains is the DOCKER stack's per-domain onions (make stack-up TOR=1 BRAND_B=1); --env ${ENV_ID} has none."
+  fi
   if [ "${ENV_ID}" != "docker" ] && [ "${ENV_ID}" != "kind" ]; then
     die "--via onion is the DOCKER stack's door (make stack-up TOR=1) or the KIND lane's (make kind-tor); --env ${ENV_ID} has no Tor front door."
   fi
   LANE=bdd
-  if [ "${ENV_ID}" = "kind" ]; then
+  if [ "${VIA}" = "onion-domains" ]; then
+    if [ -z "${TAGS}" ]; then TAGS='@via:onion-domains and @env:docker'; else TAGS="(${TAGS}) and @via:onion-domains and @env:docker"; fi
+  elif [ "${ENV_ID}" = "kind" ]; then
     if [ -z "${TAGS}" ]; then TAGS='@via:onion and @env:kind'; else TAGS="(${TAGS}) and @via:onion and @env:kind"; fi
   else
   if [ -z "${TAGS}" ]; then TAGS='@via:onion and @env:docker'; else TAGS="(${TAGS}) and @via:onion and @env:docker"; fi
@@ -296,6 +325,40 @@ if [ -n "${VIA}" ]; then
     if [ -z "$(docker ps -q --filter label=com.docker.compose.service=hugmesh-tor --filter status=running 2>/dev/null)" ]; then
       die "--via onion: ${ONION_FILE} names ${ONION_BASE_URL} but no hugmesh-tor container is running — a stale readout. Start it: make stack-up TOR=1"
     fi
+  fi
+  # The per-domain onions (--via onion-domains, #582): one `<slug>=https://<onion>`
+  # per readout hugmesh-tor published beside the primary's — <slug>.hostname, the
+  # slug in the node contract's shape ([a-z0-9][a-z0-9-]{0,62}; anything else is
+  # not a readout of ours) and the same v3 test as the primary. A caller's
+  # SNAP_ONION_DOMAIN_URLS wins, and is held to the same shape. The readouts share
+  # the primary's lifecycle and container, so the stale check above covers them.
+  if [ "${VIA}" = "onion-domains" ]; then
+    ONION_DOMAIN_DIR="$(dirname "${ONION_FILE}")"
+    if [ -n "${SNAP_ONION_DOMAIN_URLS:-}" ]; then
+      ONION_DOMAIN_URLS="${SNAP_ONION_DOMAIN_URLS}"
+    else
+      for f in "${ONION_DOMAIN_DIR}"/*.hostname; do
+        [ -e "${f}" ] || continue
+        slug="$(basename "${f}" .hostname)"
+        case "${slug}" in ''|[!a-z0-9]*|*[!a-z0-9-]*) continue ;; esac
+        [ "${#slug}" -le 63 ] || continue
+        if durl="$(onion_from_file "${f}")"; then
+          ONION_DOMAIN_URLS="${ONION_DOMAIN_URLS:+${ONION_DOMAIN_URLS} }${slug}=${durl}"
+        fi
+      done
+    fi
+    for ent in ${ONION_DOMAIN_URLS}; do
+      dslug="${ent%%=*}"; durl="${ent#*=}"
+      case "${dslug}" in ''|[!a-z0-9]*|*[!a-z0-9-]*) die "SNAP_ONION_DOMAIN_URLS entry '${ent}' is not <slug>=<url> with a [a-z0-9][a-z0-9-]* slug" ;; esac
+      case "${durl}" in
+        https://*.onion) ;;
+        *) die "SNAP_ONION_DOMAIN_URLS entry '${ent}' is not <slug>=https://<v3>.onion — a domain's onion is entered on its :443 door for the same reasons as the mesh's (docs/TOR-HIDDEN-SERVICE.md \"Why :443\")." ;;
+      esac
+    done
+    if [ "${MODE}" = "run" ] && [ -z "${ONION_DOMAIN_URLS}" ]; then
+      die "--via onion-domains: no per-domain onion is published under ${ONION_DOMAIN_DIR} (<slug>.hostname) — start a stack that has a Tor domain: make stack-up TOR=1 BRAND_B=1 (then: make stack-seed)"
+    fi
+    export SNAP_ONION_DOMAIN_URLS="${ONION_DOMAIN_URLS}"
   fi
   export SNAP_ONION_BASE_URL="${ONION_BASE_URL}"
   export SNAP_PROXY="${ONION_PROXY}"
@@ -385,6 +448,7 @@ if [ "${MODE}" = "print" ]; then
     printf 'ONION_BASE_URL\t%s\n' "${ONION_BASE_URL}"
     printf 'PROXY\t%s\n' "${ONION_PROXY}"
     printf 'ONION_NOTE\t%s\n' "${ONION_NOTE}"
+    printf 'ONION_DOMAIN_URLS\t%s\n' "${ONION_DOMAIN_URLS}"
     for a in "${SELECTED[@]+"${SELECTED[@]}"}"; do printf 'FEATURE\t%s\n' "${a}"; done
     for a in "${GEN_ARGV[@]}"; do printf 'GENARGV\t%s\n' "${a}"; done
     for a in "${PW_ARGV[@]}"; do printf 'ARGV\t%s\n' "${a}"; done

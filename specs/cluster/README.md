@@ -5,20 +5,17 @@ sits **behind hugmesh.net** via the per-namespace Spring Cloud Gateways.
 
 ## What the device syncs
 
-**Read this before changing anything in `apps/`.** This section replaces the
-claim that used to sit here — "the single source of truth ArgoCD syncs from" —
-which was **false for `apps/`** until 2026-08-26, and false in the direction that
-mattered.
+**Read this before changing anything in `apps/`.** An older version of this page called
+`apps/` "the single source of truth ArgoCD syncs from". That was **false** until
+2026-08-26, and it was false in the direction that mattered.
 
-`bootstrap/bootstrap.sh` used to apply exactly one Application,
-`app-of-apps.yaml`, whose source is `repoURL: …/hugmesh-generator.git`,
-`targetRevision: main`, `path: specs/cluster/apps`, `directory.recurse: true`.
-So ArgoCD instantiated **`specs/cluster/apps` as it exists on GitHub `main`** and
-never read the baked tree at all. Every build-time gate that edits `apps/` —
-`gate_optional_services()` and `gate_env_apps()` in `build-rpi5-stage4.sh` /
-`build-x86-host-stage4.sh` — was therefore **inert on a real device**: an image
-built with `--optional-services akkoma` still received tuwunel, phpbb, games,
-owncast and tube.
+`bootstrap/bootstrap.sh` used to apply one Application, `app-of-apps.yaml`, whose source
+is `repoURL: …/hugmesh-generator.git`, `targetRevision: main`, `path: specs/cluster/apps`,
+`directory.recurse: true`. ArgoCD instantiated **`specs/cluster/apps` as it exists on
+GitHub `main`** and never read the baked tree. Every build-time gate that edits `apps/`
+(`gate_optional_services()` and `gate_env_apps()` in `build-rpi5-stage4.sh` /
+`build-x86-host-stage4.sh`) was therefore **inert on a real device**: an image built with
+`--optional-services akkoma` still received tuwunel, phpbb, games, owncast and tube.
 
 What is true now, and exactly how far it goes:
 
@@ -28,43 +25,40 @@ What is true now, and exactly how far it goes:
 | `manifests/<dir>/**` (each Application's **content**) | still the **git repo**, fetched by ArgoCD from each Application's own `repoURL`/`path` | **no** — a baked edit under `manifests/` (installed-services ConfigMap, `seed-optionalservices.yaml`, route-access SQL) still does **not** reach the cluster |
 | `charts/`, `namespaces/`, `manifests/local-path` | applied directly by `bootstrap.sh` from the baked tree | n/a |
 
-Closing the second row needs a **pruned source**, not another apply: an
-in-cluster read-only git server over the baked tree, the shape
-`bootstrap/kind-local/gitops-repo-server.yaml` already implements for kind. That
-is deliberately **not** done here — on a device it adds a network dependency
+Closing the second row needs a **pruned source**, not another apply: an in-cluster
+read-only git server over the baked tree, the shape
+`bootstrap/kind-local/gitops-repo-server.yaml` already implements for kind. That is
+deliberately **not** done here. On a device it adds a network dependency
 (`apk add git-daemon` at pod start) to an offline-first mesh.
 
-Consequences of applying `apps/` directly, taken deliberately:
+Applying `apps/` directly has these consequences, accepted on purpose:
 
-* **No app-of-apps prune.** A file removed in a later image is not retro-deleted
-  from a running cluster. Within one image the baked tree is immutable, so there
-  is nothing to prune; across images the operator re-provisions.
-* **No app-of-apps selfHeal of the Application objects.** Every child Application
-  keeps its own `syncPolicy.automated {prune, selfHeal}`, so all **workloads**
-  still self-heal; only the Application object stops being re-asserted.
-  **The re-assert path is OPERATOR-INITIATED, not automatic** — corrected
-  2026-08-26 after review; the sentence that used to sit here ("`bootstrap.sh` is
-  idempotent and `keys-provision` re-runs it") described a loop that does not
-  exist. `bootstrap.sh` is idempotent, but its **only** caller in this tree is
-  `provision_hugmesh()` in `specs/etc/keys-provision/provision.sh`, and
-  `keys-provision`'s `main()` short-circuits on the `/var/lib/keys-provision/done`
-  marker: after first boot it re-runs **only** with the KEYS USB inserted **and**
-  `.provision-force` on that media (or `KEYS_FORCE=1`). There is no timer, no
-  periodic unit, and no boot-time re-run. **Residual exposure, stated plainly:**
-  an Application OBJECT deleted or edited on a live cluster (`kubectl delete
-  application akkoma`, a hand-edit of its spec) **stays that way** until an
-  operator re-provisions from the KEYS USB. The workloads under a *surviving*
-  Application still self-heal; a *deleted* Application does not come back. If
-  continuous re-assert is wanted, the cheap shape is an OpenRC oneshot/timer that
-  re-runs `bootstrap.sh` — deliberately **not** done here, and a separate unit.
-* **No cross-Application sync-wave ordering** (ArgoCD enforces waves only among
-  children of a common parent). Every hook Job here is idempotent/retrying, so
-  the set converges in a few reconcile loops — the same trade
-  `bootstrap/kind-local/bootstrap-kind.sh` documents for its curated subset.
-* The root's `ignoreDifferences` keystone (the admin-bff
-  `OptionalServiceReconciler`'s single-writer claim on the `optional-services`
-  ApplicationSet element list) becomes **moot** rather than lost: with no root
-  selfHealing `apps/13a-optional-services.yaml`, nothing reverts the runtime write.
+* **No app-of-apps prune.** A file removed in a later image is not deleted from a running
+  cluster. Within one image the baked tree is immutable, so there is nothing to prune.
+  Across images the operator re-provisions.
+* **No app-of-apps selfHeal of the Application objects.** Every child Application keeps
+  its own `syncPolicy.automated {prune, selfHeal}`, so all **workloads** still self-heal.
+  Only the Application object is no longer re-asserted. **Re-asserting is
+  OPERATOR-INITIATED, not automatic.** `bootstrap.sh` is idempotent, but its **only**
+  caller in this tree is `provision_hugmesh()` in `specs/etc/keys-provision/provision.sh`,
+  and `keys-provision`'s `main()` short-circuits on the `/var/lib/keys-provision/done`
+  marker. After first boot it re-runs **only** with the KEYS USB inserted **and**
+  `.provision-force` on that media (or `KEYS_FORCE=1`). There is no timer, no periodic
+  unit and no boot-time re-run. **Residual exposure:** an Application OBJECT deleted or
+  edited on a live cluster (`kubectl delete application akkoma`, a hand-edit of its spec)
+  **stays that way** until an operator re-provisions from the KEYS USB. The workloads
+  under a *surviving* Application still self-heal. A *deleted* Application does not come
+  back. If continuous re-assert is wanted, the cheap shape is an OpenRC oneshot or timer
+  that re-runs `bootstrap.sh`. That is deliberately **not** done here and would be a
+  separate unit.
+* **No cross-Application sync-wave ordering.** ArgoCD enforces waves only among children
+  of a common parent. Every hook Job here is idempotent and retrying, so the set
+  converges in a few reconcile loops. `bootstrap/kind-local/bootstrap-kind.sh` makes the
+  same trade for its curated subset.
+* The root's `ignoreDifferences` keystone (the admin-bff `OptionalServiceReconciler`'s
+  single-writer claim on the `optional-services` ApplicationSet element list) becomes
+  **moot** rather than lost. With no root selfHealing `apps/13a-optional-services.yaml`,
+  nothing reverts the runtime write.
 
 `HUGMESH_GITOPS_ROOT_RECURSE=1` restores the old repo-recursing root for a
 cluster that genuinely wants to track a git branch. It prints, out loud, that it
@@ -110,7 +104,10 @@ merely **adds** Cloudflare/ACME on top.
 | `hugmesh-backend` | backend Pis | `hugmesh-be-gateway` (`api.` / `matrix.` / `mastodon.`) | tuwunel (Matrix), Akkoma (fediverse), Spring APIs (incl. `hugmesh-federation-api` module-federation registry at `/api/federation/**`), DBs |
 | `hugmesh-frontend` | frontend Pis | `hugmesh-fe-gateway` (`hugmesh.net`) | hugmesh.net Angular host + social-ui micro-frontends + remote-fragment fleet (DB-hosted federation fragment bundles at `/_fragments/**`) |
 | `hugmesh-games` | x86_64 GPU worker | (internal) | hugmesh.games (Mesa/Vulkan via `/dev/dri`) |
-| `argocd` | x86_64 worker | (internal) | ArgoCD GitOps engine |
+| `devops` | x86_64 worker | (internal) | ArgoCD GitOps engine (`ARGOCD_NS` defaults to `devops`; `bootstrap.sh` pins every ArgoCD workload to amd64) |
+
+Optional services create further namespaces, for example `hugmesh-forum`,
+`hugmesh-inference`, `hugmesh-owncast` and `hugmesh-tube`.
 
 The Kubernetes control plane is the **pki Pi**; the x86_64 host joins as a GPU
 worker and is where ArgoCD + games are scheduled (via node labels).
@@ -172,6 +169,36 @@ Spring Cloud Gateway matches routes **first-in-declared-order**, so ordering in
    vanity host with no special path resolves to the profile instead of the front
    page.
 
+### More than one brand domain (`vanityDomains`, hugmesh-generator#582)
+
+The route's own `host` and the `extraHosts` entry are the **cluster domain's** wildcard.
+A mesh that serves further brand domains lists them in the gateway chart's
+`vanityDomains` (a helm parameter list on the fe-gateway Application,
+`vanityDomains[0]=brandb.example`, …). For each entry the chart does both halves at once:
+
+- the `vanity-subdomain` route (the one marked `vanity: true`) also matches
+  `Host=*.<domain>` — one comma-separated predicate, the cluster domain's wildcard first,
+  so precedence above is unchanged;
+- the Ingress admits `*.<domain>` with the same backend as the cluster domain (the PoW
+  shield included).
+
+A brand domain that is a **subdomain** of the cluster domain needs an entry too:
+`*.hugmesh.net` matches one label, so `alice.shop.hugmesh.net` is not covered by it.
+
+What this does **not** do, said plainly:
+
+- **Nothing writes `vanityDomains` yet.** It is never set in git, and no builder or
+  reconciler reads the mesh manifest's `domains[]` into it. Until one does, the list is
+  empty and every render is byte-identical to before.
+- It does not admit the brand domain's **apex** (`brandb.example` itself) — that is the
+  brand's front page, not a vanity subdomain.
+- The **wildcard DNS** and the **cloudflared** rule are still the cluster domain's only
+  (`manifests/lan-dns`, `manifests/cloudflared`): a brand domain needs its own entries
+  there before a request can arrive at the Ingress at all.
+
+`tests/scripts/test-gateway-vanity-domains.sh` renders the chart both ways with a real
+`helm template` and removes each half in a staged copy to prove its checks notice.
+
 **Username extraction:** the gateway does **not** parse the username. It preserves
 the `Host` header and `SetPath`s to `/api/federation/vanity` (no `{username}`),
 and federation-api's `VanityController.resolveByHost` takes the **first DNS label**
@@ -186,15 +213,15 @@ chain and 401 the anonymous request, so the wildcard route targets
 
 ### Cross-service flow: PUBLISH → RESOLVE → SERVE
 
-This generator pass wires the **RESOLVE + routing** half. The full lifecycle and
-its honest deferrals:
+The generator wires the **RESOLVE + routing** half; the other stages live in the
+repos named below. Status on origin/main, 2026-10-07:
 
 | Stage | What happens | Status |
 |---|---|---|
 | **Opt-in / source of truth** | A user sets `user_profile.visibility=public` + `vanity_subdomain_enabled=true` in **user-bff-api**. These two flags are the upstream gate that *governs whether the profile is published public*. | Exists (user-bff-api). |
-| **PUBLISH** | On that save, user-bff-api must (1) publish the profile-fragment bundle and (2) upsert a **federation_modules** row `slug=profile-<username>, kind=fragment, owner_user_id=<username>, visibility=public, content_hash=…` in federation-api. The federation manifest + the vanity resolve read **only** from `federation_modules`. | **DEFERRED.** `ProfileService.save` persists the flags but makes **no** federation call; `FederationApiClient.PUT /api/federation/bundles/{slug}` writes only a `user_modules` row, not a `federation_modules` row (that registration is currently ROLE_ADMIN via `ModuleRegistryController`). Recommended follow-up: an **owner-scoped self-publish** endpoint in federation (e.g. owner-gated `PUT /api/federation/vanity/{username}`) rather than widening admin CRUD. Documented in the federation-api README. |
+| **PUBLISH** | On that save, user-bff-api publishes through federation-api: `ProfileService.save` calls `PUT /api/federation/vanity/{username}` when `visibility=public` and `vanity_subdomain_enabled=true`, and `DELETE /api/federation/vanity/{username}` otherwise. Federation-api owns the owner-scoped `federation_modules` row (`slug=profile-<username>`, `kind=fragment`, `visibility=public`). The sync is best-effort: a federation-api failure does not fail the profile save. | **Implemented** (user-bff-api `ProfileService`, federation-api `VanityController`). |
 | **RESOLVE** | fe-gateway `Host=*.<domain>` route → federation-api `GET /api/federation/vanity` returns the public fragment descriptor (`slug`, `remoteEntryUrl`, `exposedModule`, `contentHash`, the `/_fragments/<slug>/<hash>/` static path) iff `visibility=public` (+ enabled + circuit closed); else 404. **Public-only is double-enforced** (DB finder filters `visibility=public`, and the service re-asserts), so an internal/disabled/kill-switched fragment can never leak. | **Implemented this pass** (federation-api PR) + the routing here. |
-| **SERVE** | The `hugmesh-remote-fragment` fleet (apps/41-remote-fragment.yaml) already syncs every `kind=fragment` module in the manifest to `/_fragments/<slug>/<contentHash>/` and nginx-serves it; the fe-gateway already routes `/_fragments/**`. So the fragment bytes are served **once its `federation_modules` row exists** (i.e. once PUBLISH runs). | Substrate **exists**; the vanity **host shell page** (the Angular shell that `loadRemoteModule`s the fragment's `remoteEntry.json` and renders the profile under the bare vanity host) is a **frontend follow-up**, not built this pass. |
+| **SERVE** | The `hugmesh-remote-fragment` fleet (apps/41-remote-fragment.yaml) already syncs every `kind=fragment` module in the manifest to `/_fragments/<slug>/<contentHash>/` and nginx-serves it; the fe-gateway already routes `/_fragments/**`. So the fragment bytes are served once its `federation_modules` row exists (once PUBLISH runs). | Substrate **exists**. The vanity **host shell page** (the Angular shell that `loadRemoteModule`s the fragment's `remoteEntry.json` and renders the profile under the bare vanity host) is a **frontend follow-up**: a search of `hugmesh-host-shell` on origin/main for "vanity" finds nothing. |
 
 ### Gate: source of truth
 
@@ -205,21 +232,16 @@ its honest deferrals:
   when `federation_modules.visibility='public'` (never internal). Both gates must
   agree; federation is public-only by construction.
 
-### Honest cross-service deferral — shared gateway `PUBLIC_PATHS` (a THIRD repo)
+### Shared gateway `PUBLIC_PATHS` (a THIRD repo) — done
 
-The shared gateway image (`hugmesh-gateway` repo) ends every security chain
-with `anyExchange().authenticated()` and permits only a hardcoded `PUBLIC_PATHS`
-allowlist (`/api/auth`, `/api/registration`, `/api/login`, the
-login/registration/banned remotes). `/api/federation/vanity/**` is **not** in it,
-so the fe-gateway pod would itself **401** the anonymous vanity request before
-proxying. **To make the public vanity host actually reachable,
-`/api/federation/vanity/**` (or a `Host=*.<domain>` public rule) must be added to
-the gateway `PUBLIC_PATHS` in the `hugmesh-gateway` repo** — out of scope for
-this generator/federation-api pass, documented as a deferral here, inline in
-`apps/20-gateway-fe.yaml`, and in the federation-api README. The generator side
-(wildcard DNS already in place, fe-gateway ingress wildcard host, the ordered
-`Host=*.<domain>` route to federation-api, the cloudflared wildcard rule) is
-complete and renders clean.
+The shared gateway image (`hugmesh-gateway` repo) ends every security chain with
+`anyExchange().authenticated()` and permits only a hardcoded `PUBLIC_PATHS`
+allowlist. That allowlist now includes `/api/federation/vanity` and
+`/api/federation/vanity/**` (`SecurityConfig`), and `CanonicalSeed` carries
+matching `PUBLIC` rows, so the fe-gateway no longer 401s an anonymous vanity
+request before it proxies. The generator side (wildcard DNS, fe-gateway ingress
+wildcard host, the ordered `Host=*.<domain>` route to federation-api, the cloudflared
+wildcard rule) renders clean.
 
 ## AI-cloak / media poisoning (`manifests/media-poisoner`, OPTIONAL x86/GPU)
 
@@ -261,12 +283,12 @@ Dockerfile) ships under `manifests/media-poisoner/worker/`.
 
 ```
 cluster/
-├── app-of-apps.yaml        root ArgoCD Application (recurses apps/)
+├── app-of-apps.yaml        repo-recursing root Application (used only with HUGMESH_GITOPS_ROOT_RECURSE=1)
 ├── apps/                   one ArgoCD Application per workload
 ├── charts/hugmesh-gateway/   the gateway Helm chart (pki/be/fe)
 ├── manifests/              in-repo kustomize manifests (casdoor, apis, frontend, social-ui, games, media-poisoner)
 ├── namespaces/namespaces.yaml
-└── bootstrap/bootstrap.sh  installs ArgoCD + applies the root app
+└── bootstrap/bootstrap.sh  installs ArgoCD + applies the baked apps/ set one file at a time
 ```
 
 ## Bootstrapping
@@ -306,6 +328,9 @@ ClusterSecretStore **`hugmesh-vault`** (provider `vault`, token auth from the
 | `harbor-robots` (`push_name`/`push_secret`) | `image-builder-registry` (`.dockerconfigjson`, **push**) | `hugmesh-image-builds` (opt-in) |
 | `casdoor-apps` (`fragment-sync`) | `fragment-sync-casdoor` (`clientId`=`app-fragment-sync`/`clientSecret`) | `hugmesh-frontend` |
 
+The table shows the first set only: `manifests/external-secrets/` holds many more
+(108 `ExternalSecret` objects on origin/main, 2026-10-07).
+
 The same materialized Secrets are also written to the KEYS stick at
 `vault/secrets.json` (with `vault/token` for online sync), so `keys-provision`
 can create them offline — **Vault first, USB fallback** — when Vault is
@@ -340,19 +365,21 @@ unchanged.
   (`push_name`/`push_secret`). ESO materializes it as the `image-builder-registry`
   `.dockerconfigjson` the Kaniko Job mounts. It is distinct from the pull-scoped
   robot account above so the runtime pull secret can never push.
-- Casdoor uses an `emptyDir` and the all-in-one image — switch to a PVC + an
-  external DB, and seed the Google provider (`casdoor-google` Secret) + the
-  gateway OAuth2 client.
+- Casdoor runs on the external `casdoor-pg` Postgres (`manifests/casdoor/pg.yaml`) with
+  `casbin/casdoor:3.80.0`; its init Job seeds the OAuth2 apps and the Google provider
+  from the `casdoor-google` Secret.
 - Cassandra references an upstream chart; Akkoma + tuwunel are raw manifests
-  (no official charts) — pin image tags and supply DB/secret values.
+  (no official charts). tuwunel is pinned (`v1.7.0`); Akkoma still uses
+  `git.akkoma.dev/akkomagang/akkoma:stable`, marked "pin a real tag" in
+  `manifests/akkoma/akkoma.yaml`.
 - `hugmesh-federation-api` (the module-federation registry / manifest + bundles API
   upstream of `admin-bff` and the `remote-fragment` sync fleet) stores fragment
   bundle bytes on a **filesystem RWO PVC** (`federation-bundles`, 5Gi), so it runs
   **single-replica** with `strategy: Recreate`. PRODUCTION: set
   `APP_BUNDLES_STORAGE=s3` + the `APP_BUNDLES_S3_*` env (MinIO/S3) and drop the PVC
   to run multi-replica; the `remote-fragment` fleet is already the scalable serving
-  layer. Its DB (`federation-db`, Postgres in `hugmesh-backend`) uses the same
-  DEV placeholder password as `route-access-db` — move it to a Vault/ESO
-  `federation-db-auth` Secret + `secretKeyRef` for production.
+  layer. Its DB (`federation-db`, Postgres in `hugmesh-backend`) takes its owner
+  password from the ESO Secret `federation-db-auth` (Vault `secret/<brand>/federation-db`)
+  and runs the app as the least-privilege `federation_app` role.
 - Secrets are never committed here — they flow from Vault via ESO (or the USB
   KEYS fallback); see **Secrets (Vault + USB)** above.

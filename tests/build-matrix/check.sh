@@ -1039,7 +1039,7 @@ run_threading_checks() {
 # Expectation grammar: 'token'  must appear in the printed command
 #                      '!token' must NOT appear in the printed command
 #                      'PLAN:pat' / 'PLAN:!pat'  must (not) match the plan output
-GUITHR_EXPECTED=73   # fail-closed: keep in sync with the guithr call list below
+GUITHR_EXPECTED=76   # fail-closed: keep in sync with the guithr call list below
                      # (68 on main, plus the 5 gDW* desktop-weight precedence/
                      # agreement probes from the desktop-axis-honesty branch)
                      # (66 before that — incl. the 2 orangepizero2w + 2
@@ -1183,6 +1183,20 @@ run_gui_threading_checks() {
     guithr g13-explicit-none-services \
         '{"platform":"x86","role":"backend","mode":"mesh","env":"test","optional_services":["none"]}' \
         "--optional-services ''" 'PLAN:^PLAN_OPTIONAL_SERVICES=none$'
+    # #384 anubis tri-state: the Studio's own --print-command, then the real builder's
+    # --print-plan, so the token is proved to be READ by the builder, not just emitted.
+    guithr g384-anubis-force-off \
+        '{"platform":"x86","role":"backend","mode":"mesh","env":"prod","anubis":"off"}' \
+        '--optional-services -anubis' '!--exclude-services' \
+        'PLAN:^PLAN_OPTIONAL_SERVICES=akkoma tuwunel phpbb -anubis$'
+    guithr g384-anubis-force-off-with-none \
+        '{"platform":"x86","role":"backend","mode":"mesh","env":"prod","anubis":"off","optional_services":["none"]}' \
+        '--optional-services -anubis' "--exclude-services 'akkoma tuwunel phpbb'" \
+        'PLAN:^PLAN_OPTIONAL_SERVICES=-anubis$'
+    guithr g384-anubis-force-on \
+        '{"platform":"x86","role":"backend","mode":"mesh","env":"test","anubis":"on"}' \
+        "--optional-services 'akkoma tuwunel phpbb anubis'" \
+        'PLAN:^PLAN_OPTIONAL_SERVICES=akkoma tuwunel phpbb anubis$'
     guithr g14-all-services \
         '{"platform":"x86","role":"backend","mode":"mesh","env":"test","optional_services":["all"]}' \
         '--all-services' 'PLAN:^PLAN_OPTIONAL_SERVICES=.*akkoma'
@@ -2441,6 +2455,7 @@ run_nongating_smokes() {
                 "image-spec-guards:${REPO_DIR}/tests/build-image-spec-guards.sh" \
                 "image-tor-onion:${REPO_DIR}/tests/build-image-tor-onion.sh" \
                 "image-idp:${REPO_DIR}/tests/build-image-idp.sh" \
+                "image-dial-identity:${REPO_DIR}/tests/build-image-dial-identity.sh" \
                 "idp-builder-functions:${REPO_DIR}/tests/scripts/test-idp-builder-functions.sh" \
                 "qemu-matrix-assertions:${REPO_DIR}/tests/qemu/assertions_test.sh" \
                 "qemu-avc-workout:${REPO_DIR}/tests/qemu/avc-workout_test.sh" \
@@ -2457,6 +2472,8 @@ run_nongating_smokes() {
                 "installer-ui-node-default:${REPO_DIR}/tests/scripts/test-installer-ui-node-default.sh" \
                 "host-selinux-tools:${REPO_DIR}/tests/scripts/test-host-selinux-tools.sh" \
                 "builder-log-paths:${REPO_DIR}/tests/scripts/test-builder-log-paths.sh" \
+                "builder-resume-safety:${REPO_DIR}/tests/scripts/test-builder-resume-safety.sh" \
+                "makefile-reown-skips-sysroot:${REPO_DIR}/tests/scripts/test-makefile-reown-skips-sysroot.sh" \
                 "dracut-cross-lib:${REPO_DIR}/tests/scripts/test-dracut-cross-lib.sh" \
                 "host-mutation-guard:${REPO_DIR}/tests/scripts/test-host-mutation-guard.sh" \
                 "sharedbinpkg-prebuild-target:${TEST_DIR}/prebuild-smoke.sh" \

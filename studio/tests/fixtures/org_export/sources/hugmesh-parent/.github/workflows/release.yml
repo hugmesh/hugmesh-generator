@@ -1,0 +1,118 @@
+# Manual release: publish the net.hugmesh:hugmesh-parent metapom to GitHub Packages.
+#
+# workflow_dispatch ONLY. Switching this to `push: tags: ['v*']` would republish whatever
+# version pom.xml happens to hold over an already-published, immutable coordinate — the
+# failure mode that forced hugmesh-auth-core's 2.4.2 re-pin. Keep it manual.
+#
+# LINK 2 OF 4. The chain is
+#   hugmesh-build-config 0.5.0 -> hugmesh-parent 2.8.0 -> hugmesh-commons 2.1.0
+#     -> hugmesh-auth-core 2.5.1
+# and hugmesh-auth-core/.github/workflows/release-chain.yml fires all four in that order
+# from a single trigger. Running THIS workflow before hugmesh-build-config 0.5.0 is
+# published fails at `verify`, on the analysers' ruleset jar, not at deploy.
+# See RELEASING.md in this repo and hugmesh-auth-core/RELEASING.md sections 3.2 and 6.
+name: Release
+
+on:
+  workflow_dispatch:
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          # 25, matching this metapom's own <java.version>. It was pinned to 21 until
+          # 2026-09-17 on the reasoning that pom packaging does not compile; that is true of
+          # this project's (absent) sources but not of the toolchain the bound analyser
+          # plugins load, and a metapom that publishes a Java 25 baseline from a Java 21
+          # runner is a discrepancy nobody had verified either way. Aligned rather than
+          # left as an open question.
+          java-version: '25'
+          # setup-java's generated ~/.m2/settings.xml is NOT what authenticates this build:
+          # every mvn call below passes `-s .github/maven-ci-settings.xml`, and `-s`
+          # replaces the user settings file. The servers that matter live in that file.
+          server-id: github
+          server-username: GITHUB_ACTOR
+          server-password: GITHUB_TOKEN
+
+      # PREFLIGHT - CROSS-REPO PACKAGE READ. This step exists to stop ONE specific
+      # misdiagnosis, and that is worth a whole step.
+      #
+      # The maven steps below resolve net.hugmesh artifacts published from OTHER
+      # repositories. secrets.GITHUB_TOKEN is scoped to THIS repository, and GitHub does not
+      # hand it cross-repository package access automatically: the build must present a
+      # token carrying read:packages, which is the PACKAGES_READ_TOKEN secret (a classic
+      # PAT with read:packages; decision 90a = B). If it is not set, maven fails with
+      #     Could not resolve net.hugmesh:hugmesh-parent:pom:2.8.0
+      # which is the SAME string this repo's RELEASING.md and the comments below teach a
+      # reader to interpret as "the upstream is not published yet". A reader who believes
+      # that goes and re-publishes an upstream that is already there, and hits the same wall.
+      #
+      # So: probe the registries first, with the exact credential maven is about to use, and
+      # name the failure correctly. A 200 proves this runner can READ that upstream's Maven
+      # registry. It does NOT prove the exact version pinned in pom.xml exists - maven says
+      # that, accurately, one step later.
+      #
+      # NOT VERIFIED. No Actions job in this org has ever started (billing; RELEASING.md
+      # 6.1), so this preflight has never run either.
+      - name: Preflight - cross-repo package read
+        env:
+          UPSTREAM_PACKAGES_ACTOR: ${{ secrets.PACKAGES_READ_ACTOR || github.actor }}
+          UPSTREAM_PACKAGES_TOKEN: ${{ secrets.PACKAGES_READ_TOKEN || secrets.GITHUB_TOKEN }}
+          HAS_PACKAGES_READ_TOKEN: ${{ secrets.PACKAGES_READ_TOKEN != '' }}
+        run: |
+          set -uo pipefail
+          if [ "${HAS_PACKAGES_READ_TOKEN}" = "true" ]; then
+            echo "read credential: secrets.PACKAGES_READ_TOKEN (operator-held PAT)"
+          else
+            echo "read credential: the automatic secrets.GITHUB_TOKEN (PACKAGES_READ_TOKEN is not set)."
+            echo "That token is scoped to THIS repository and may not read the upstream packages."
+            echo "Set the PACKAGES_READ_TOKEN secret (classic PAT, read:packages). If the probe"
+            echo "below fails, it says so explicitly. RELEASING.md 6.2."
+          fi
+          rc=0
+          for upstream in hugmesh-build-config; do
+            url="https://maven.pkg.github.com/hugmesh/${upstream}/net/hugmesh/${upstream}/maven-metadata.xml"
+            code=$(curl -sS -o /dev/null -w '%{http_code}' -u "${UPSTREAM_PACKAGES_ACTOR}:${UPSTREAM_PACKAGES_TOKEN}" "${url}" || echo 000)
+            case "${code}" in
+              200)
+                echo "  readable    hugmesh/${upstream}"
+                ;;
+              401|403)
+                echo "::error::CANNOT AUTHENTICATE to hugmesh/${upstream} (HTTP ${code}). This is NOT 'the upstream is unpublished'. This runner's credential cannot read that repository's Maven registry. Fix: set the PACKAGES_READ_TOKEN repo secret (classic PAT, read:packages), or share the org secret of that name with this repository. See RELEASING.md 6.2."
+                rc=1
+                ;;
+              404)
+                echo "::error::NOT READABLE at hugmesh/${upstream} (HTTP 404). TWO causes look identical here, so do not guess: (a) nothing is published to that registry yet - publish that link first, chain order is build-config, parent, commons, auth-core; or (b) it IS published and this credential cannot see it, because GitHub masks an unauthorised read of a private package as 404. Look at the package page before re-publishing anything. See RELEASING.md 6.2."
+                rc=1
+                ;;
+              *)
+                echo "::error::unexpected HTTP ${code} from hugmesh/${upstream}. Not classified - do not assume 'unpublished'."
+                rc=1
+                ;;
+            esac
+          done
+          exit ${rc}
+
+      # -s .github/maven-ci-settings.xml is LOAD-BEARING: it is the only place
+      # net.hugmesh:hugmesh-build-config:0.5.0 can be resolved from. It is not a project
+      # dependency — it sits on the PMD/Checkstyle/SpotBugs PLUGIN classpaths, whose
+      # executions are bound to `verify`, which runs before deploy even for pom packaging.
+      # Deliberately not a <repositories> block in pom.xml: maven.pkg.github.com answers 401
+      # to an unauthenticated GET, and this pom is the parent of the whole fleet.
+      - name: Publish to GitHub Packages
+        run: ./mvnw -B -ntp -s .github/maven-ci-settings.xml deploy -DaltDeploymentRepository=github::default::https://maven.pkg.github.com/${{ github.repository }}
+        env:
+          GITHUB_ACTOR: ${{ github.actor }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Cross-repo READS use their own credential - see the settings file header
+          # and RELEASING.md 6.2. Falls back to GITHUB_TOKEN when PACKAGES_READ_TOKEN is
+          # unset; the preflight step above reports that case.
+          UPSTREAM_PACKAGES_ACTOR: ${{ secrets.PACKAGES_READ_ACTOR || github.actor }}
+          UPSTREAM_PACKAGES_TOKEN: ${{ secrets.PACKAGES_READ_TOKEN || secrets.GITHUB_TOKEN }}

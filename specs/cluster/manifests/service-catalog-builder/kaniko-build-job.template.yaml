@@ -92,7 +92,7 @@ spec:
             limits:   { cpu: "2",    memory: "4Gi" }
           volumeMounts:
             # Registry push credentials (the in-cluster Harbor registry pull/push secret,
-            # ESO-materialized into the build namespace as a dockerconfigjson). Read-only.
+            # ESO-materialized into the build namespace as an Opaque config.json). Read-only.
             - name: docker-config
               mountPath: /kaniko/.docker
               readOnly: true
@@ -103,11 +103,19 @@ spec:
             - name: workspace
               mountPath: /workspace
       volumes:
+        # THE RUNTIME NAME, reconciled 2026-10-14. This file is documentation of the
+        # contract; the Job the BFF creates comes from KanikoBuildLauncher's own
+        # classpath copy (hugmesh-admin-bff-api src/main/resources/kaniko/
+        # service-catalog-build-job.template.yaml), which mounts exactly this Secret
+        # and key. Created by external-secrets/service-catalog-builder-externalsecrets.yaml
+        # as an OPAQUE Secret (a dockerconfigjson Secret cannot carry `config.json`).
+        # tests/scripts/test-appstore-effector-flags.sh fails if the two templates
+        # stop agreeing.
         - name: docker-config
           secret:
-            secretName: service-catalog-builder-registry
+            secretName: service-catalog-registry-credentials
             items:
-              - key: .dockerconfigjson
+              - key: config.json
                 path: config.json
         - name: kaniko-workdir
           emptyDir: {}

@@ -28,6 +28,7 @@ from __future__ import annotations
 import getpass
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import threading
@@ -245,10 +246,19 @@ class WorklistDriver:
             owner = pwd.getpwuid(os.stat(probe).st_uid).pw_name if pwd else str(os.stat(probe).st_uid)
         except (KeyError, OSError):
             owner = str(os.stat(probe).st_uid)
+        # The remedy prunes any directory named `sysroot`: a build system that a
+        # person chowns to themselves produces, on the next --resume, an image
+        # whose every directory is theirs and whose sshd and tor refuse to start
+        # (hugmesh-generator#659). Same shape as the Makefile's chown-artifacts.
+        user = getpass.getuser()
+        # Quoted: a path with a space in it would otherwise be two arguments to find.
         return [f"Output directory is not writable: {probe} is owned by '{owner}' and "
-                f"this Studio runs as '{getpass.getuser()}'. A native (sudo) build "
+                f"this Studio runs as '{user}'. A native (sudo) build "
                 f"leaves root-owned dirs behind; fix with: "
-                f"sudo chown -R {getpass.getuser()} {probe}"]
+                f"sudo find {shlex.quote(probe)} -type d -name sysroot -prune -o -exec chown -h {shlex.quote(user)} {{}} + "
+                f"(not 'chown -R' over the whole directory: the build system "
+                f"snap-build-*/sysroot under it must stay root's, or a later "
+                f"--resume builds a broken image)"]
 
     def preflight_warnings(self) -> list[str]:
         """Aggregate ADVISORY warnings (see BuildDriver.preflight_warnings) — the
@@ -284,7 +294,14 @@ class WorklistDriver:
                          "optional_services": list(d.optional_services),
                          "images": list(d.images),
                          **({"idp": d.idp}
-                            if d.idp != DOMAIN_IDP_SUPERDOMAIN else {})}
+                            if d.idp != DOMAIN_IDP_SUPERDOMAIN else {}),
+                         # per-domain Tor front door (#582): OMIT-WHEN-FALSE, exactly
+                         # as the v1 shim emits it.
+                         **({"tor": True} if getattr(d, "tor", False) else {}),
+                         # the GitHub org the domain exports to (the Go-Live export
+                         # step): OMIT-WHEN-EMPTY, exactly as the v1 shim emits it.
+                         **({"github_org": d.github_org}
+                            if (getattr(d, "github_org", "") or "").strip() else {})}
                         for d in base.domains],
             # per-user `roles` (issue #228) is OMIT-WHEN-SINGLE too (User.to_dict), so
             # v2 and the v1 shim emit the same user rows byte for byte.
@@ -294,6 +311,9 @@ class WorklistDriver:
             # as the v1 shim (config.mesh_manifest) emits it.
             **({"cluster_domain_services": list(base.cluster_domain_services)}
                if base.cluster_domain_services else {}),
+            # the own domain's export org: OMIT-WHEN-EMPTY, exactly as the v1 shim.
+            **({"cluster_domain_github_org": base.cluster_domain_github_org.strip()}
+               if (getattr(base, "cluster_domain_github_org", "") or "").strip() else {}),
         }
 
     def manifest_users(self) -> list[User]:

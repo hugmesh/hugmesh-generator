@@ -418,6 +418,16 @@ class LocalCloudNodesPage(QtWidgets.QWizardPage):
             if forget is not None:
                 forget()
 
+    def _forget_users_page(self) -> None:
+        """Tell the Users table its rows were replaced under it (see ``validatePage``).
+        Looked up by slug like ``_forget_domain_pages``, so a wizard without the page
+        (a test wizard, a future route) is not a crash."""
+        ids = getattr(self.wiz, "_page_ids", None) or {}
+        page = self.wiz.page(ids["users"]) if "users" in ids else None
+        forget = getattr(page, "forget_rows", None)
+        if forget is not None:
+            forget()
+
     # ---- wizard-flow contract (mirrors the other ModePage side-flow pages) -------
     def applies_to(self, cfg) -> bool:  # noqa: ARG002 — the hook's fixed signature
         # A WIZARD-transient choice, deliberately absent from cfg (ModePage keeps
@@ -524,7 +534,13 @@ class LocalCloudNodesPage(QtWidgets.QWizardPage):
             if self._with_tor:
                 cfg.tor_onion_service = True
             superdomain = cfg.effective_superdomain()
-            existing = {(u.username, u.domain) for u in cfg.users}
+            # The saved mesh's accounts REPLACE ``cfg.users`` (like the domains above):
+            # accounts an earlier flow of this Studio session left behind belong to
+            # that flow, and would be built into these node images pinned to a domain
+            # the manifest no longer carries (#707). A saved mesh with no accounts
+            # therefore leaves none, which is also the truth.
+            imported: list[User] = []
+            taken: set[tuple[str, str]] = set()
             for username, roles in self._users:
                 # ``roles`` is one role name or the list of them (issue #228 — the
                 # canned fixtures and any older caller still hand in a bare string).
@@ -533,8 +549,15 @@ class LocalCloudNodesPage(QtWidgets.QWizardPage):
                 # UsersPage locks their row there); everyone else lands on the
                 # imported apex the local mesh served them on.
                 dom = superdomain if "superadmin" in roles else cfg.cluster_domain
-                if (username, dom) not in existing:
-                    cfg.users.append(User(username=username, domain=dom, roles=roles))
+                if (username, dom) not in taken:
+                    taken.add((username, dom))
+                    imported.append(User(username=username, domain=dom, roles=roles))
+            cfg.users = imported
+            # Same shape of problem as the domain rows: the rows were replaced on the
+            # SAME configuration object, so the Users table (a working copy keyed to
+            # the object) cannot see it and would write its stale rows back over the
+            # import. It forgets them and writes nothing until entered again.
+            self._forget_users_page()
             # make the Users TABLE reachable so the imported accounts are visible
             # and editable (users_choice pre-selects the table card from this).
             cfg.configure_users = bool(cfg.users)
