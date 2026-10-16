@@ -34,9 +34,10 @@ org dependencies. When the version is not bumped on an API change
    - `hugmesh-commons` is `2.1.0`. That is also what `hugmesh-parent`'s
      `<hugmesh-commons.version>` and the `commons:2.1.0:tests` pins in
      `hugmesh-user-bff-api` and `hugmesh-mod-bff-api` name, so commons is covered.
-   - `hugmesh-auth-core` is `2.5.1` (parent `2.8.0`). `hugmesh-admin-bff-api` and
-     `hugmesh-user-bff-api` both pin `2.5.1`, so auth-core is covered too. A future pin
-     that names any other coordinate is not installed from source.
+   - `hugmesh-auth-core` is `2.5.1` (parent `2.8.0`). Of the default dependents, only
+     `hugmesh-admin-bff-api` and `hugmesh-user-bff-api` depend on it, and both pin `2.5.1`,
+     so auth-core is covered too. A pin other than `2.5.1` or the parent line `2.8.0`
+     would not be installed from source.
 2. Runs each dependent's `mvn -o test` against those freshly built libs.
 3. Prints a PASS/FAIL table. It exits non-zero if any repo is red against current lib source.
 
