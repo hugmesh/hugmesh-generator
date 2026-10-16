@@ -373,6 +373,17 @@ from. Re-run `make stack-seed`, which reconciles, or start the other run with
 `E2E_PASSWORD_KEEP=1`. The Studio's **Add user** and saved-mesh **restore** pass
 `E2E_PASSWORD_KEEP=1` themselves: adding one account does not re-password the others.
 
+Once its Casdoor leg is verified (and again when it finishes), `make stack-seed`
+writes a **seed stamp** beside the file, `.e2e-credentials.seeded` (mode 600): the
+sha256 of the credentials file the identities now hold, a time and a stage, never a
+password. It is valid only while that sha256 still matches the file. The Studio
+reads it in two places. Its credentials check counts a terminal seed as a completed
+seed, so it no longer warns that sign-in will 401. A saved mesh's warm **Start** lets
+the record's saved copy follow a file that a completed seed reconciled the kept
+volumes to. Without a matching stamp (another lane rotated the file, or the seed died
+before its Casdoor leg), the warm start still puts the saved copy back. A seed run
+with an explicit `E2E_PASSWORD` that the file does not hold removes the stamp.
+
 It provisions (reusing `tests/qemu/seed-accounts.sh --roles` + its
 Casdoor apply hook — the same machinery the cluster/pentest seeds use):
 

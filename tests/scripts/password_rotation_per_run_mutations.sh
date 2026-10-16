@@ -96,6 +96,20 @@ mutate "M15 Matrix reconcile never retries with the UIAA session" "${SE}" \
 mutate "M16 Matrix reconcile reports success without proving the new value logs in" "${SE}" \
   $'    if [ -n "$(matrix_login_token "${u}" "${E2E_PASSWORD}")" ]; then\n      log "matrix user ${u}: password reconciled' \
   $'    if true; then\n      log "matrix user ${u}: password reconciled'
+mutate "M19 leg 2 never reads E2E_PASSWORD_PREVIOUS from the file (env only)" "${SE}" \
+  'E2E_PASSWORD_PREVIOUS="${E2E_PASSWORD_PREVIOUS:-$(e2e_password_read E2E_PASSWORD_PREVIOUS)}"' \
+  'E2E_PASSWORD_PREVIOUS="${E2E_PASSWORD_PREVIOUS:-}"'
+mutate "M20 leg 2's PREVIOUS resolution line deleted outright" "${SE}" \
+  $'E2E_PASSWORD_PREVIOUS="${E2E_PASSWORD_PREVIOUS:-$(e2e_password_read E2E_PASSWORD_PREVIOUS)}"\n' ''
+mutate "M21 no seed stamp after the identity leg (a SEED_CASDOOR_ONLY seed never stamps)" "${SE}" \
+  $'e2e_password_stamp_seeded identities \\\n' $'true \\\n'
+mutate "M22 no seed stamp at DONE" "${SE}" \
+  $'e2e_password_stamp_seeded complete \\\n' $'true \\\n'
+mutate "M23 the stamp vouches for the file even when this seed's password is not the file's" "${LIB}" \
+  'if [ -z "${E2E_PASSWORD:-}" ] || [ "${file_val}" != "${E2E_PASSWORD}" ]; then' 'if false; then'
+mutate "M24 the stamp hashes nothing useful" "${LIB}" \
+  $'    sha="$(sha256sum < "${E2E_CREDENTIALS_FILE}" | cut -d\' \' -f1)"' \
+  $'    sha="$(printf x | sha256sum | cut -d\' \' -f1)"'
 mutate "M17 Studio compose Add user rotates every persona" "${LM}" \
   $',\n               "E2E_PASSWORD_KEEP": "1"}' '}'
 mutate "M18 Studio saved-mesh restore rotates the record's password" "${SM}" \

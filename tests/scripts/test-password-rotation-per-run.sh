@@ -27,8 +27,16 @@
 #   6. RECONCILE, NOT ONLY CREATE: seed-e2e.sh leg 2's Matrix reconcile, run
 #      against a stub homeserver, moves a user off a previous run's password,
 #      leaves a current one alone, and FAILS loudly on a password it does not know.
+#      Including the path a real seed takes: E2E_PASSWORD_PREVIOUS absent from the
+#      env, read from the FILE by seed-e2e.sh's own resolution line, starting from
+#      a pre-rotation file that has no PREVIOUS key at all.
 #   7. THE STUDIO KEEPS: compose "Add user" and saved-mesh restore pass
 #      E2E_PASSWORD_KEEP=1, so adding one account cannot re-password every other.
+#   8. THE SEED STAMP: seed-e2e.sh stamps (sha256 of the file, never a value) the
+#      file its identity leg reconciled to, and removes the stamp when it seeded
+#      a password the file does not hold. The Studio's warm start and credentials
+#      check read it (studio/tests/test_local_mesh_bootstrap_config_roundtrip.py,
+#      test_credentials_truth.py).
 #
 # Proven to bite: tests/scripts/password_rotation_per_run_mutations.sh reverts each
 # production line and demands RED.
@@ -310,6 +318,49 @@ if run_matrix 2 "{\"e2e-mod\":\"${OLDPW}\",\"e2e-user\":\"${NEWPW}\"}" "${OLDPW}
 else
   ok "a password change that did not persist FAILS (proved by logging in, not by the 200)"
 fi
+# THE PATH A REAL SEED TAKES. e2e_password_start_run writes the superseded values
+# to the FILE and exports only E2E_PASSWORD, so leg 2 learns them from ONE line of
+# seed-e2e.sh (E2E_PASSWORD_PREVIOUS="${E2E_PASSWORD_PREVIOUS:-$(e2e_password_read
+# ...)}"). Every case above hands PREVIOUS in through the env and never runs that
+# line. Here: a pre-rotation operator file (E2E_PASSWORD only, no PREVIOUS key —
+# every file written before this change), the REAL run start under set -euo
+# pipefail, then that REAL line lifted out of seed-e2e.sh, then the reconcile —
+# PREVIOUS absent from the env throughout.
+grep -E '^E2E_PASSWORD_PREVIOUS=' "${REPO}/tests/stack/seed-e2e.sh" > "${WORK}/leg2prev.sh"
+if [ -s "${WORK}/leg2prev.sh" ]; then
+  ok "extracted leg 2's E2E_PASSWORD_PREVIOUS resolution line from seed-e2e.sh"
+else
+  bad "seed-e2e.sh has no top-level E2E_PASSWORD_PREVIOUS= line — leg 2 never learns the superseded values a run start keeps only in the file"
+fi
+CF="${WORK}/c-leg2"
+printf 'E2E_PASSWORD=%s\n' "${OLDPW}" > "${CF}"; chmod 600 "${CF}"
+printf '{"e2e-mod":"%s","e2e-user":"%s"}' "${OLDPW}" "${OLDPW}" > "${WORK}/musers.json"; rm -f "${WORK}/mport"
+python3 "${WORK}/mstub.py" "${WORK}/musers.json" "${WORK}/mport" 0 & STUB_PID=$!
+for _ in $(seq 1 50); do [ -s "${WORK}/mport" ] && break; sleep 0.1; done
+clean_env SYNAPSE_URL="http://127.0.0.1:$(cat "${WORK}/mport" 2>/dev/null)" \
+    E2E_CREDENTIALS_FILE="${CF}" bash -c '
+  set -euo pipefail
+  log() { echo "[seed-e2e] $*"; }
+  die() { echo "seed-e2e.sh: UNMET DEPENDENCY: $*" >&2; exit 2; }
+  . "$1"
+  e2e_password_start_run || die "run start failed on a file with no PREVIOUS key"
+  [ -z "${E2E_PASSWORD_PREVIOUS+x}" ] || { echo "PREVIOUS leaked into the env" >&2; exit 7; }
+  . "$2"
+  . "$3"
+  matrix_reconcile_password e2e-mod
+  matrix_reconcile_password e2e-user' _ "${LIB}" "${WORK}/leg2prev.sh" "${WORK}/mfuncs.sh" \
+  > "${WORK}/mout" 2>&1
+rc=$?
+kill "${STUB_PID}" 2>/dev/null; wait "${STUB_PID}" 2>/dev/null; STUB_PID=""
+NOWPW="$(keyof "${CF}" E2E_PASSWORD)"
+if [ "${rc}" -eq 0 ] && is32 "${NOWPW}" && [ "${NOWPW}" != "${OLDPW}" ] \
+   && [ "$(jq -r '."e2e-mod"' "${WORK}/musers.json")" = "${NOWPW}" ] \
+   && [ "$(jq -r '."e2e-user"' "${WORK}/musers.json")" = "${NOWPW}" ]; then
+  ok "leg 2 reads E2E_PASSWORD_PREVIOUS from the FILE (absent from the env) and moves both users off a pre-rotation value"
+else
+  bad "leg 2 with PREVIOUS only in the file did not reconcile (rc=${rc}): $(tail -n2 "${WORK}/mout")"
+fi
+
 # ...and leg 2 actually CALLS it for both users before it logs in with the new value.
 awk '/^matrix_register e2e-user$/{r=NR} /^matrix_reconcile_password e2e-mod$/{m=NR}
      /^matrix_reconcile_password e2e-user$/{u=NR} /^MOD_TOK=/{t=NR}
@@ -344,6 +395,37 @@ for n in ast.walk(fn):
         sys.exit(0)
 sys.exit(1)
 PY
+
+# ── 8. the seed stamp: which file the identity store was reconciled to ───────
+echo "-- 8) seed-e2e.sh stamps the file its identity leg reconciled to --"
+SEF="${REPO}/tests/stack/seed-e2e.sh"
+awk '/^log "leg 1 OK: /{l=NR} /^e2e_password_stamp_seeded identities/{s=NR}
+     /^if \[ "\$\{SEED_CASDOOR_ONLY\}" = "1" \]; then$/{c=NR}
+     /^e2e_password_stamp_seeded complete/{d=NR} /^log "DONE\. /{e=NR}
+     END{exit !(l && s && c && d && e && s>l && s<c && d>c && d<e)}' "${SEF}" \
+  && ok "the stamp is written once leg 1 is verified (before the SEED_CASDOOR_ONLY exit) and again at DONE" \
+  || bad "seed-e2e.sh does not stamp after leg 1 OK and before DONE — the Studio cannot tell a completed terminal seed from a rotation that never seeded"
+C8="${WORK}/c8"
+clean_env E2E_CREDENTIALS_FILE="${C8}" bash -c 'set -euo pipefail; . "$1"
+  e2e_password_start_run; e2e_password_stamp_seeded identities' _ "${LIB}" 2>"${WORK}/c8.err" \
+  || bad "run start + stamp failed: $(head -c 200 "${WORK}/c8.err")"
+ST="${C8}.seeded"
+if [ -f "${ST}" ] && [ "$(keyof "${ST}" E2E_SEEDED_SHA256)" = "$(sha256sum < "${C8}" | cut -d' ' -f1)" ]; then
+  ok "the stamp holds the sha256 of the credentials file the seed reconciled to"
+else
+  bad "no stamp, or its E2E_SEEDED_SHA256 is not the credentials file's sha256"
+fi
+[ -f "${ST}" ] && [ "$(stat -c '%a' "${ST}")" = "600" ] && ok "the stamp is mode 600" \
+  || bad "the stamp is missing or not mode 600"
+[ "$(keyof "${ST}" E2E_SEEDED_STAGE)" = "identities" ] && [[ "$(keyof "${ST}" E2E_SEEDED_AT)" =~ ^[0-9]+$ ]] \
+  && ok "the stamp records its stage and an epoch" || bad "the stamp lacks E2E_SEEDED_STAGE/E2E_SEEDED_AT"
+! grep -F "$(keyof "${C8}" E2E_PASSWORD)" "${ST}" >/dev/null && ok "the stamp never holds the password" \
+  || bad "the stamp holds the password value"
+# a seed whose password is NOT the file's (explicit override) must not vouch for the file
+clean_env E2E_CREDENTIALS_FILE="${C8}" E2E_PASSWORD=operator-override-value bash -c \
+  '. "$1"; e2e_password_stamp_seeded complete' _ "${LIB}" 2>/dev/null
+[ ! -e "${ST}" ] && ok "a seed with a password the file does not hold REMOVES the stamp" \
+  || bad "a seed with an explicit E2E_PASSWORD left a stamp vouching for the file"
 
 echo
 echo "== ${P} passed, ${F} failed =="

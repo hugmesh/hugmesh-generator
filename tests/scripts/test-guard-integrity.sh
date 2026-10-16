@@ -1098,7 +1098,7 @@ PREMERGE_UNGATED=(
   # the shell-suites alpine or debian job. It is listed solely because the change that
   # added it (the per-run e2e password rotation, 2026-10-15) was not permitted to edit
   # .github/workflows/shell-suites.yml. It IS run post-merge, by .gitlab-ci.yml's
-  # lint:password-rotation-per-run, with its 18-mutation battery. TO CLOSE THIS: add
+  # lint:password-rotation-per-run, with its mutation battery. TO CLOSE THIS: add
   # the path to a shell-suites job, delete this entry and raise PREMERGE_BASELINE by
   # one to the number this file then prints.
   tests/scripts/test-password-rotation-per-run.sh

@@ -327,6 +327,51 @@ e2e_password_start_run() {
   export E2E_PASSWORD
 }
 
+# THE SEED STAMP — "a seed reconciled the identity store to THIS file".
+#
+# The run start rewrites the file BEFORE seeding, so the file alone cannot say
+# whether the identities hold its value: a seed that died after the rotation leaves
+# them on the previous one. Only the compose seeder (tests/stack/seed-e2e.sh) calls
+# this, and only once its identity leg is VERIFIED (and again when the whole seed
+# completes). It writes ${E2E_CREDENTIALS_FILE}.seeded (mode 600, KEY=value):
+#
+#   E2E_SEEDED_SHA256  sha256 of the credentials file the identities now match
+#   E2E_SEEDED_AT      epoch seconds the stage completed
+#   E2E_SEEDED_STAGE   identities | complete
+#
+# A hash of the FILE, never of a password, and never a value. Readers (the Studio's
+# saved-mesh warm start and its credentials check, studio/hugmesh_studio/core/
+# credentials_truth.py seed_stamp) trust the stamp only while the sha256 still
+# equals the file on disk: any later rewrite (another lane's run start, a
+# saved-mesh put-back) silently invalidates it.
+#
+# When the value this process seeded is NOT the file's (an explicit E2E_PASSWORD
+# override, or another lane rotated the file mid-seed) the stamp is REMOVED instead:
+# a stale stamp vouching for the file would be the exact lie it exists to prevent.
+e2e_password_seed_stamp_path() { printf '%s' "${E2E_CREDENTIALS_FILE}.seeded"; }
+e2e_password_stamp_seeded() {  # <stage>
+  local stage="${1:-complete}" stamp file_val sha
+  stamp="$(e2e_password_seed_stamp_path)"
+  file_val="$(e2e_password_read E2E_PASSWORD 2>/dev/null)" || file_val=""
+  if [ -z "${E2E_PASSWORD:-}" ] || [ "${file_val}" != "${E2E_PASSWORD}" ]; then
+    rm -f "${stamp}" 2>/dev/null || true
+    echo "e2e-password.sh: seed stamp NOT written — this seed's password is not the one in ${E2E_CREDENTIALS_FILE} (explicit E2E_PASSWORD, or the file was rotated since)" >&2
+    return 0
+  fi
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha="$(sha256sum < "${E2E_CREDENTIALS_FILE}" | cut -d' ' -f1)"
+  else
+    sha="$(openssl dgst -sha256 -r < "${E2E_CREDENTIALS_FILE}" | cut -d' ' -f1)"
+  fi
+  if [ "${#sha}" -ne 64 ]; then
+    rm -f "${stamp}" 2>/dev/null || true
+    echo "e2e-password.sh: seed stamp NOT written — could not hash ${E2E_CREDENTIALS_FILE}" >&2
+    return 1
+  fi
+  E2E_CREDENTIALS_FILE="${stamp}" e2e_password_write \
+    E2E_SEEDED_SHA256 "${sha}" E2E_SEEDED_AT "$(date +%s)" E2E_SEEDED_STAGE "${stage}"
+}
+
 # Executed directly (not sourced): resolve and print E2E_PASSWORD, nothing else
 # on stdout. Sourcing this file never does this — it only defines the functions
 # above, so a sourcing caller controls exactly when generation happens.

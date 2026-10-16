@@ -483,6 +483,14 @@ for persona in e2e-user e2e-mod e2e-admin "${SUPERADMIN_PERSONA}" e2e-banned \
     || die "persona ${persona} did not land in Casdoor ${CASDOOR_URL} (apply hook incomplete)"
 done
 log "leg 1 OK: standard persona set verified in Casdoor"
+# SEED STAMP (e2e-password.sh, e2e_password_stamp_seeded): Casdoor now holds THIS
+# file's value. Written here, not only at the end, because this is the point the
+# identities that sign in were reconciled; a later leg failing does not undo it.
+# The Studio's saved-mesh warm start reads it so it never puts an OLDER saved copy
+# back over the file a completed seed reconciled the kept volumes to (every
+# persona would 401), and its credentials check reads it as a completed seed.
+e2e_password_stamp_seeded identities \
+  || warn "could not write the seed stamp beside ${E2E_CREDENTIALS_FILE} (the Studio will call this seed unverified)"
 
 # ── LEG 1c: registration stage 2 (OPT-IN) ────────────────────────────────────
 # Seeding a Casdoor identity is only STAGE 1. Until stage 2 (`POST
@@ -1043,6 +1051,8 @@ end
 RUBY
 log "leg 3 OK: follow + pending moderation-queue item verified"
 
+e2e_password_stamp_seeded complete \
+  || warn "could not write the seed stamp beside ${E2E_CREDENTIALS_FILE}"
 log "DONE. Seeded against ${FRONT_DOOR} / ${CASDOOR_URL} / ${SYNAPSE_URL} / ${MASTODON_URL}"
 log "JWT pre-mint cache (for SNAP_PREMINT_DIR): ${SEED_WORKDIR}/jwt-cache"
 log "Re-run any time — every leg is idempotent."
