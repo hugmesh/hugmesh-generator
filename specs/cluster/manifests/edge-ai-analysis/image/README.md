@@ -9,7 +9,7 @@ and `../configmap.yaml` for the verdict schema.
 ## Endpoints
 - `POST /v1/analyze/image/classify` — NSFW/abuse/policy classification (llava vision)
 - `POST /v1/analyze/image/hash` — perceptual hashes (pHash/aHash/dHash; CPU only)
-- `POST /v1/analyze/content/moderate` — classify + hash → `allow|flag|reject` (**fail-closed**: an upstream error always gives `reject`; a policy hit gives `ANALYSIS_MODERATE_ACTION`, default `reject`)
+- `POST /v1/analyze/content/moderate` — classify + hash → `allow|flag|reject` (**fail-closed**: an HTTP or connection error from the edge-AI upstream gives `reject`; a policy hit gives `ANALYSIS_MODERATE_ACTION`, default `reject`)
 - `POST /v1/analyze/log/summarize` — log/anomaly triage (llama reasoning)
 - `GET /healthz` (liveness) · `GET /readyz` (ready iff the edge-AI upstream answers)
 
