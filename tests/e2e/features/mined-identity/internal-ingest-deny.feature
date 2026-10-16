@@ -59,8 +59,8 @@ Feature: The service-only internal ingest surfaces are explicitly denied at the 
   # ── the two onboarding legs the registration cutover is growing ────────────
   # hugmesh-admin-bff-api#84 adds POST /bff/internal/accounts/{id}/restart-onboarding
   # (the reset user-bff's register legs cannot perform today) and #85 adds
-  # POST /bff/internal/usage (decision 55 = yes, PR #104 verified, merge refused
-  # by the permission layer on 2026-09-18). Both are ROLE_SERVICE surfaces with
+  # POST /bff/internal/usage (decision 55 = yes, landed by
+  # hugmesh-admin-bff-api PR #104 on 2026-09-23). Both are ROLE_SERVICE surfaces with
   # no persona caller. The contract a persona-driven suite owns is that neither
   # is reachable from the front door: the explicit /bff/internal/** deny row
   # decides for them the moment they exist, because it is a pattern, not a

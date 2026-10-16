@@ -48,7 +48,7 @@ Feature: The cookie-only session hydrate path stays reachable
   # defaulted to 5 s — five seconds in which a session this hydrate path just
   # revoked (POST /bff/sessionOut) or a ban just curtailed keeps swapping. #569
   # pins it to "0" on both lanes; tests/scripts/test-fe-bff-route-lane-parity.sh
-  # guards the value with a five-mutation battery. This row reads the SAME
+  # guards the value with a mutation battery. This row reads the SAME
   # committed artefacts so the contract is visible here, under its issue, and
   # the live consequence — a revoked session is 401 on the very next request —
   # is sign-out-ends-session.feature.
