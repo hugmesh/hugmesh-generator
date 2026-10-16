@@ -21,9 +21,15 @@
 #      of Layer-B's cursor so the two layers reconcile at different cadences).
 #   5. render /etc/headscale/policy.hujson from policy.hujson.tmpl by walking
 #      .body.operators[] with jq into the ssh[] edges + the dynamic dst tagOwners.
-#   6. on a CONTENT CHANGE (hash differs) run `headscale policy set -f` (REQUIRED
-#      because headscale runs policy mode:file — DB is not the source in file
-#      mode) and force the server-assigned tags via hugmesh-headscale-forcetags.
+#   6. on a CONTENT CHANGE (hash differs) run `headscale policy set -f` and force
+#      the server-assigned tags via hugmesh-headscale-forcetags. Under policy
+#      mode:file (what the fleet ships) `policy set` is REFUSED by headscale
+#      ("update is disabled for modes other than 'database'") and the policy is
+#      read at STARTUP only, so on that refusal the script RESTARTS headscale
+#      (same fix as provision.sh, commit e1743555) and waits for it to answer
+#      before forcing tags. A policy is "applied" only once a marker says so
+#      (${CACHE_DIR}/applied-policy-hash), so a failed apply is retried on the
+#      next tick instead of being forgotten because the file is already on disk.
 #
 # THE FOUR FIXES (vs main's forgeable policy):
 #   [FIX-SERVERTAG]   dst tags (tag:dev_<fp>, tag:dom_<domain>, tag:mesh_<id>,
@@ -69,6 +75,14 @@ LAST_GOOD="${CACHE_DIR}/last-good-generation"
 POLICY_OUT="/etc/headscale/policy.hujson"
 POLICY_TMPL="/etc/headscale/policy.hujson.tmpl"
 FORCETAGS="/usr/sbin/hugmesh-headscale-forcetags"
+# Hash of the policy the RUNNING headscale is known to have loaded. Written only
+# after `policy set` or a restart succeeded; apply is skipped only when this
+# matches, never merely because the rendered file is already on disk.
+APPLIED_MARK="${CACHE_DIR}/applied-policy-hash"
+# After a restart, wait up to HS_READY_TRIES x HS_READY_SLEEP seconds for the
+# headscale socket to answer before forcing tags (or declaring the policy bad).
+HS_READY_TRIES="${HS_READY_TRIES:-20}"
+HS_READY_SLEEP="${HS_READY_SLEEP:-1}"
 
 # Baked per-node privileged SSH local account (the Tailscale-SSH `users` value —
 # the LOCAL unix account a session opens AS, NOT the Casdoor operator). Source of
@@ -279,28 +293,69 @@ commit_cache() {
 }
 
 # ── (6) Apply on content change + force server-assigned tags ──────────────────
-apply_policy() {
-    local rendered="$1"
-    local cur_hash new_hash
-    new_hash="$(sha256sum "${rendered}" 2>/dev/null | awk '{print $1}')"
-    [ -f "${POLICY_OUT}" ] && cur_hash="$(sha256sum "${POLICY_OUT}" 2>/dev/null | awk '{print $1}')" || cur_hash=""
-    if [ -n "${new_hash}" ] && [ "${new_hash}" = "${cur_hash}" ]; then
-        log "rendered policy unchanged (hash ${new_hash:0:12}) — no re-apply"
-        return 0
-    fi
-    # Install the new policy atomically.
-    local tmp="${POLICY_OUT}.tmp.$$"
-    cp -f "${rendered}" "${tmp}" 2>/dev/null || { warn "policy stage failed — keeping current"; return 1; }
-    chown headscale:headscale "${tmp}" 2>/dev/null || true
-    chmod 0644 "${tmp}" 2>/dev/null || true
-    mv -f "${tmp}" "${POLICY_OUT}" 2>/dev/null || { warn "policy install failed — keeping current"; rm -f "${tmp}"; return 1; }
+policy_hash() { sha256sum "$1" 2>/dev/null | awk '{print $1}'; }
 
-    # REQUIRED re-apply: headscale policy mode:file is NOT hot-reloaded.
-    if have headscale && headscale policy set -f "${POLICY_OUT}" 2>/dev/null; then
-        log "APPLIED Layer-A policy (hash ${new_hash:0:12}) via headscale policy set -f"
+# Block until the headscale socket answers (it does not right after a restart).
+headscale_ready() {
+    local i
+    for ((i = 0; i < HS_READY_TRIES; i++)); do
+        headscale nodes list >/dev/null 2>&1 && return 0
+        sleep "${HS_READY_SLEEP}"
+    done
+    return 1
+}
+
+# Restart headscale so a policy.mode:file policy is re-read. rc-service is the
+# OpenRC entry point provision.sh uses for the same job.
+restart_headscale() {
+    have rc-service && rc-service headscale restart >/dev/null 2>&1
+}
+
+# Make the RUNNING headscale serve POLICY_OUT. Returns 0 once it does (marker
+# written), 1 when it does not (marker NOT written, so the next tick retries).
+#   $1 = "fresh" for a policy installed this tick, whose rejection is rolled back
+#        to $2 (the previous file, may be empty); anything else = a retry.
+activate_policy() {
+    local mode="$1" prev="${2:-}" hash set_err set_rc=0
+    hash="$(policy_hash "${POLICY_OUT}")"
+    if have headscale; then
+        # stderr is CAPTURED: it was discarded here, which is why a mode:file refusal
+        # looked like success. Under mode:file this fails every time, by design.
+        set_err="$(headscale policy set -f "${POLICY_OUT}" 2>&1)" || set_rc=$?
     else
-        warn "headscale policy set failed (check hujson / mode:file / socket) — file written, server may run stale until next apply"
+        set_err="headscale binary not found"; set_rc=127
     fi
+    if [ "${set_rc}" -eq 0 ]; then
+        log "APPLIED Layer-A policy (hash ${hash:0:12}) via headscale policy set -f"
+    else
+        warn "headscale policy set failed for ${POLICY_OUT}: ${set_err:-<no output>}"
+        # policy.mode=file reads the file at STARTUP only (specs/etc/headscale/
+        # config.yaml), so the running server still serves the old policy. Restart.
+        if ! restart_headscale; then
+            warn "headscale restart FAILED — the running server still serves the policy it read at startup (Layer-A revocations are NOT propagating); will retry next tick"
+            return 1
+        fi
+        if headscale_ready; then
+            log "headscale restarted to load ${POLICY_OUT} (hash ${hash:0:12}; policy.mode=file reloads at startup)"
+        elif [ "${mode}" = "fresh" ] && [ -n "${prev}" ] && [ -f "${prev}" ]; then
+            # The restart ran but headscale never came back: it rejected the new policy
+            # at startup. Putting the previous file back and restarting again keeps the
+            # control plane up on the last known-good policy rather than down.
+            warn "headscale did not answer after loading hash ${hash:0:12} — rolling back to the previous policy"
+            cp -f "${prev}" "${POLICY_OUT}" 2>/dev/null || true
+            if restart_headscale && headscale_ready; then
+                printf '%s\n' "$(policy_hash "${POLICY_OUT}")" > "${APPLIED_MARK}" 2>/dev/null || true
+                warn "rolled back to the previous policy; the rejected policy is dropped until the next export generation"
+            else
+                warn "rollback restart FAILED — headscale is DOWN; will retry next tick"
+            fi
+            return 1
+        else
+            warn "headscale did not answer after restart — will retry next tick"
+            return 1
+        fi
+    fi
+    printf '%s\n' "${hash}" > "${APPLIED_MARK}" 2>/dev/null || warn "could not write ${APPLIED_MARK}"
 
     # Force the server-assigned tags so freshly-approved nodes get
     # tag:dev_<fp>/tag:dom_<domain>/tag:mesh_<id> that the ssh edges name as dst.
@@ -312,9 +367,49 @@ apply_policy() {
     return 0
 }
 
+apply_policy() {
+    local rendered="$1"
+    local cur_hash new_hash applied=""
+    new_hash="$(policy_hash "${rendered}")"
+    [ -f "${POLICY_OUT}" ] && cur_hash="$(policy_hash "${POLICY_OUT}")" || cur_hash=""
+    [ -f "${APPLIED_MARK}" ] && applied="$(head -1 "${APPLIED_MARK}" 2>/dev/null)"
+    if [ -n "${new_hash}" ] && [ "${new_hash}" = "${cur_hash}" ] && [ "${new_hash}" = "${applied}" ]; then
+        log "rendered policy unchanged and already applied (hash ${new_hash:0:12}) — no re-apply"
+        return 0
+    fi
+    # Keep the file being replaced so a policy headscale rejects at startup can be rolled back.
+    local prev=""
+    if [ -f "${POLICY_OUT}" ] && [ "${new_hash}" != "${cur_hash}" ]; then
+        prev="${POLICY_OUT}.prev"
+        cp -f "${POLICY_OUT}" "${prev}" 2>/dev/null || prev=""
+    fi
+    # Install the new policy atomically.
+    local tmp="${POLICY_OUT}.tmp.$$"
+    cp -f "${rendered}" "${tmp}" 2>/dev/null || { warn "policy stage failed — keeping current"; return 1; }
+    chown headscale:headscale "${tmp}" 2>/dev/null || true
+    chmod 0644 "${tmp}" 2>/dev/null || true
+    mv -f "${tmp}" "${POLICY_OUT}" 2>/dev/null || { warn "policy install failed — keeping current"; rm -f "${tmp}"; return 1; }
+
+    activate_policy fresh "${prev}" || true
+    return 0
+}
+
+# A policy that is on disk but not marked applied (a restart that failed on an
+# earlier tick). The fetch path below cannot retry it: the export cursor already
+# advanced, so the same generation is refused as a rollback. Retry it directly.
+retry_pending() {
+    [ -f "${POLICY_OUT}" ] || return 0
+    local applied=""
+    [ -f "${APPLIED_MARK}" ] && applied="$(head -1 "${APPLIED_MARK}" 2>/dev/null)"
+    [ "$(policy_hash "${POLICY_OUT}")" = "${applied}" ] && return 0
+    log "policy on disk is not marked applied — retrying activation"
+    activate_policy retry "" || true
+}
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 main() {
     _init || exit 0   # fail-closed: any unmet precondition keeps the current policy
+    retry_pending
     local fetched; fetched="$(mktemp 2>/dev/null)" || { warn "mktemp failed — keeping current policy"; exit 0; }
     local rendered; rendered="$(mktemp 2>/dev/null)" || { rm -f "${fetched}"; warn "mktemp failed — keeping current policy"; exit 0; }
     trap 'rm -f "${fetched}" "${rendered}" 2>/dev/null || true' EXIT

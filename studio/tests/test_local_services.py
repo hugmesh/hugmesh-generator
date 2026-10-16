@@ -343,7 +343,7 @@ def test_federation_env_is_empty_for_untouched_and_for_the_shipped_selection():
 def test_profile_flags_read_only_the_profile_half():
     # Derived from the catalogue, so it covers every profile slug rather than a
     # hardcoded pair — `phpbb` and `akkoma` joined `social`/`tor` with
-    # compose.alt-social.yaml, and a hardcoded set silently rots when one is added.
+    # compose.alt-social.yaml, and a hardcoded set silently goes stale when one is added.
     all_off = {s.profile: False for s in ls.LOCAL_SERVICES if s.is_profile()}
     assert set(all_off) == {ls.PROFILE_SOCIAL, ls.PROFILE_TOR, ls.PROFILE_PHPBB,
                             ls.PROFILE_AKKOMA, ls.PROFILE_ANUBIS,
@@ -396,7 +396,7 @@ def test_kind_rows_are_neither_compose_nor_federation():
     assert ls.federation_selection(sel) == ("wiki",)
     # …and BECAUSE both back-ends drop them, a selection containing one must be
     # refused rather than accepted-and-ignored. `== []` here was the assertion that
-    # blessed the inert checkbox: it certified "this selection is fine" for a
+    # blessed the checkbox that did nothing: it certified "this selection is fine" for a
     # selection every consumer then threw away.
     problems = ls.validate_selection(sel)
     assert len(problems) == 2

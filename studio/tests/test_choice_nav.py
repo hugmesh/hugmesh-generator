@@ -104,7 +104,7 @@ def test_a_programmatic_selection_never_navigates(wiz):
 
 
 def test_a_click_on_a_page_that_is_not_showing_never_navigates(wiz):
-    """A constructed-but-not-current page (tests, a stale window) must be inert."""
+    """A constructed-but-not-current page (tests, a stale window) must do nothing."""
     page = _page(wiz, "ModePage")
     assert wiz.currentPage() is not page
     here = wiz.currentId()

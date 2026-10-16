@@ -76,7 +76,10 @@ _MECH_INPUTS = {
 }
 
 # Mechanisms that need NO public domain (the endpoint is not a DNS name). For these
-# the driver's --domain is purely cosmetic, so the front-end must not demand it.
+# the front-end must not DEMAND one. Onion still ACCEPTS a domain since #582
+# (decision 68 = A): a Tor domain has its own onion, so a domain given with the onion
+# mechanism names WHICH onion — GoLiveDriver.domain_onion answers it, preflight says
+# when the domain has none, and core.golive_domains.plan_rows shows it on both faces.
 _NO_DOMAIN_MECHANISMS = frozenset({"onion"})
 
 # Terminal emulators the commit/rollback can run in, most-specific first; each
@@ -194,7 +197,7 @@ class GoLiveDriver:
     def _driver_env(self) -> dict[str, str]:
         """Environment for every driver invocation: point GL_PROVIDERS_LIB at the
         in-repo registry (so the dev Studio finds it without the /usr/lib bake),
-        unless the caller already set it (test seam). Deliberately never sets
+        unless the caller already set it (test override point). Deliberately never sets
         GL_ASSUME_YES — that would bypass the commit gate."""
         env = dict(os.environ)
         if "GL_PROVIDERS_LIB" not in env and os.path.exists(self.registry_path):
@@ -211,6 +214,27 @@ class GoLiveDriver:
                 return "".join(f.read().split())
         except OSError:
             return ""
+
+    def tor_domain_onions(self) -> dict[str, str]:
+        """``{key directory name: "<hash>.onion"}`` — the per-domain onions this node
+        exports (#582). ONE reader for the export directory: the go-live plan's own
+        (``core.golive_domains.onion_exports`` — ``$GL_ONION_EXPORT_DIR``, only
+        well-formed names and v3 addresses). {} when none."""
+        from .golive_domains import onion_exports       # lazy: it has no need of us
+        return dict(onion_exports()[1])
+
+    def domain_onion(self, domain: str) -> str:
+        """The onion a Go-Live for ``domain`` exposes over Tor: that domain's OWN onion
+        when it is a Tor domain here, else "" — the primary onion serves the node's
+        own (cluster) domain and needs no lookup.
+
+        A domain is matched to its export by the key directory name the Studio gave it
+        when its ‘Tor front door’ was ticked (``core.domain_services.onion_slug``) —
+        a rule, not a guess: docs/TOR-HIDDEN-SERVICE.md spells it, and it is the only
+        name under which a node is ever told to mint that domain's onion."""
+        from .domain_services import onion_slug
+        slug = onion_slug((domain or "").strip())
+        return self.tor_domain_onions().get(slug, "") if slug else ""
 
     # ---- provider registry (via the driver's `list` — the source of truth) ----
     def providers(self) -> list[GoLiveProvider]:
@@ -413,6 +437,27 @@ class GoLiveDriver:
                     problems.append("DDNS subdomain must be a single lowercase DNS label "
                                     "([a-z0-9-], 1-63 chars, no dots) — the driver rejects "
                                     "anything else (root-cron injection guard).")
+            if p.mechanism == "onion" and opts.domain:
+                # #582: onion ACCEPTS a domain. The node's own domain is the primary
+                # onion; any other must be a Tor domain on this node, or the plan
+                # would list no onion for it.
+                # Said only when this host KNOWS its own domain: on a host with no
+                # baked cluster domain the typed one may well be the node's own.
+                # Compared the way plan_rows compares (golive_domains.norm_domain), so
+                # ‘Example.ORG’, ‘example.org.’ and ‘ example.org’ are the node's own
+                # domain here too, not a Tor domain with no front door.
+                from .golive_domains import norm_domain     # lazy, like tor_domain_onions
+                own = self.autofill_domain()
+                if (own and norm_domain(opts.domain) != norm_domain(own)
+                        and not self.domain_onion(opts.domain)):
+                    served = ", ".join(sorted(self.tor_domain_onions())) or "none"
+                    problems.append(
+                        f"{opts.domain} has no Tor front door on this node — the "
+                        "onion plan lists the primary onion"
+                        + (f" ({own})" if own else "")
+                        + f" and the Tor domains exported here ({served}). Give the "
+                        "domain its ‘Tor front door’ in the Studio's Domain services "
+                        "step, or clear the domain.")
             if p.mechanism == "files" and not (opts.ingress_ip or opts.tunnel_cname):
                 problems.append(f"Provider '{p.id}': no ingress IP / tunnel CNAME — emitted "
                                 "records will be PLACEHOLDERS (re-run with --ingress-ip or "

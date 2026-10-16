@@ -50,6 +50,13 @@ on:
       # reads the same file. A drift there lands ONLY in the Makefile, so without
       # this path the gate would not run on the change it exists to catch.
       - 'Makefile'
+      # hugmesh-generator#591: the named-file pin suite below, and the scripts its
+      # fleet pins run (test_fleet_tor.py executes the REAL build-all-roles.sh
+      # against stub builders and reads the rpi5 builder's default service line).
+      - 'tests/scripts/test-studio-tor-domain-pins.sh'
+      - 'scripts/build-all-roles.sh'
+      - 'scripts/_roles-lib.sh'
+      - 'build-rpi5-stage4.sh'
   workflow_dispatch: {}
 
 permissions:
@@ -81,7 +88,14 @@ jobs:
         # NO Qt binding is installed on purpose. The GUI tests are excluded below, and
         # importing a real Qt in a headless container is what makes the full suite
         # abort rather than fail — see the exclusion list.
-        run: python -m pip install --upgrade pip pytest PyYAML jsonschema
+        #
+        # cryptography IS installed on purpose, although it is an optional runtime
+        # dependency of the Studio: core/config.py reads a certificate's subject and
+        # expiry only when it is importable, and without it says "install
+        # python-cryptography to show subject and expiry". tests/test_tui_vault.py
+        # pins the cryptography-backed message, so a runner without it fails that test
+        # on every run (run 37682050311) while a box that has it passes.
+        run: python -m pip install --upgrade pip pytest PyYAML jsonschema cryptography
 
       - name: Run the Qt-free suite
         working-directory: studio
@@ -123,6 +137,22 @@ jobs:
             --ignore=tests/test_theme_editor_gui.py \
             --ignore=tests/test_use_flag_filter.py \
             $deselect
+
+      # hugmesh-generator#591: the Tor / per-domain pins as ONE named suite, so the
+      # guard over the guards counts it as gated (check 7) and a renamed pin file
+      # turns it RED instead of silently leaving the set. This job installs no Qt
+      # binding, so HUGMESH_PINS_ALLOW_NO_QT=1 lets the Qt-free half gate here and
+      # the wrapper PRINTS how many GUI pins skipped; on a box with the Studio venv
+      # the same command runs all of them and refuses any skip. MEASURED 2026-09-23
+      # on a Qt-free venv (pytest + PyYAML + jsonschema only, this job's install
+      # line; python 3.14 there, 3.12 here): 231 passed, 7 skipped (the seven
+      # Qt-bound modules), rc=0; with the Studio venv (PyQt6): 379 passed,
+      # 0 skipped, rc=0.
+      - name: Tor / per-domain pins (the named-file suite)
+        env:
+          HUGMESH_STUDIO_PYTHON: python
+          HUGMESH_PINS_ALLOW_NO_QT: '1'
+        run: bash tests/scripts/test-studio-tor-domain-pins.sh
 
       - name: Report the known failures
         working-directory: studio

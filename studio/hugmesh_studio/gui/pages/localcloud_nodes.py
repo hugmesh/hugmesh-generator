@@ -33,6 +33,7 @@ pages, a narrowed worklist, and the identity already filled in.
 from __future__ import annotations
 
 import functools
+import html
 import threading
 
 from .. import console
@@ -44,7 +45,12 @@ from ...core.config import (
     MODE_DEFAULT_ROLE, ROLE_CHOICES, User, enter_mesh_defaults, image_class,
     normalize_user_roles,
 )
-from ...core.local_mesh_bootstrap import LocalMeshBootstrap
+from ...core.local_mesh_bootstrap import (
+    LocalMeshBootstrap, LocalMeshIdentity, localcloud_tor_note, saved_mesh_source,
+)
+from ...core.local_mesh_domains import (
+    apply_imported_domains, imported_domains_lines, imported_mesh_domains,
+)
 from ...core.seeded_credentials import load_roster
 
 # The abbreviated worklist (issue #50): ONLY the laptop and the cluster-node image
@@ -54,6 +60,11 @@ from ...core.seeded_credentials import load_roster
 LOCALCLOUD_ALLOWED_ROLES = tuple(
     role for role, _platforms, _label in ROLE_CHOICES["mesh"]
     if role == "laptop" or image_class("mesh", role) == "node")
+# ...and the platforms those rows come on — what the Tor note (#579) splits into
+# "carries the onion" / "cannot", derived the same way, never listed.
+LOCALCLOUD_PLATFORMS = tuple(dict.fromkeys(
+    plat for role, platforms, _label in ROLE_CHOICES["mesh"]
+    if role in LOCALCLOUD_ALLOWED_ROLES for plat in platforms))
 
 # Casdoor role grants -> ImageConfig User.roles (issue #228: EVERY mapped grant is
 # carried, not the top of a ladder — a persona holding ROLE_ADMIN and ROLE_GAMES
@@ -71,24 +82,55 @@ _CASDOOR_ROLE_MAP = (
 )
 
 
+#: The consent line, in two halves (#661): the tick-box carries the short first
+#: half (a QCheckBox cannot wrap), the word-wrapped label beside it the rest. The
+#: TUI's prompt (tui/localcloud.py) opens with the same first half.
+CONSENT_SHORT = "I understand: k8s will stop to proceed"
+CONSENT_REST = ("— the local Kubernetes (DevOps) stack must come down before these "
+                "node images are configured and built.")
+
+
+class _ConsentText(QtWidgets.QLabel):
+    """The wrapped half of the consent line: a click on it ticks the box it belongs
+    to, so the sentence behaves as one control although only its head is the box."""
+
+    def __init__(self, text: str, box: QtWidgets.QCheckBox, parent=None):
+        super().__init__(text, parent)
+        self._box = box
+        self.setWordWrap(True)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+
+    def mousePressEvent(self, event):  # noqa: N802 — Qt override
+        try:
+            if event.button() == Qt.MouseButton.LeftButton and self._box.isEnabled():
+                self._box.toggle()
+        except Exception:                    # noqa: BLE001 — never crash on a click
+            pass
+        super().mousePressEvent(event)
+
+
 def _person_roles(roles) -> list[str]:
     return normalize_user_roles(
         [person for granted, person in _CASDOOR_ROLE_MAP if granted in roles])
 
 
-def local_mesh_identity(generator_dir: str) -> tuple[str, list[tuple[str, list[str]]]]:
-    """The local mesh's importable identity: ``(apex domain, [(username, roles)...])``.
+def local_mesh_identity(generator_dir: str) -> LocalMeshIdentity:
+    """The local mesh's importable identity: ``(apex domain, [(username, roles)...],
+    with_tor, source, mesh_domains)`` — a :class:`LocalMeshIdentity`.
 
     READ-ONLY and offline (plain file reads, no docker/compose probe — this runs in
-    ``initializePage`` and must never stall the GUI): the apex comes from the
-    bootstrap config's resolution (the brand default unless the operator set one),
-    the accounts from the two channels the Studio itself provisioned — the minted
-    superadmin in the runtime secrets bundle (``keys-out/vault/secrets.json``) and
-    the seeder's persona roster. Users created interactively AFTER go-live live in
-    the running mesh's identity tier; they cannot be enumerated from disk and do
-    not need to be — building node images for the same domain leaves them valid.
-    Passwords are never read into the config (User rows carry no secret)."""
-    boot = LocalMeshBootstrap(generator_dir)
+    ``initializePage`` and must never stall the GUI). The mesh's CONFIG comes from the newest saved-mesh record
+    for this checkout (``LocalMeshBootstrap.for_checkout``), so the apex and whether
+    the mesh ran the Tor onion (``effective_with_tor()`` — the services row whenever
+    there is a selection) are what that mesh actually SAVED, not a default config's
+    brand domain with Tor off (#579). No record: the defaults, and ``source`` is "".
+    A record is the mesh as saved, not a probe of what is running (#309). The
+    accounts come from the two channels the Studio itself provisioned — the minted
+    superadmin in the runtime secrets bundle and the seeder's persona roster. Users
+    created after go-live live in the running mesh's identity tier; they cannot be
+    enumerated from disk and do not need to be. Passwords are never read into the
+    config (User rows carry no secret)."""
+    boot, rec = LocalMeshBootstrap.for_checkout(generator_dir)
     domain = boot.cfg.resolved_domain()
     users: list[tuple[str, list[str]]] = []
     creds = boot.superadmin_login()
@@ -100,7 +142,13 @@ def local_mesh_identity(generator_dir: str) -> tuple[str, list[tuple[str, list[s
         if u.username not in seen:
             seen.add(u.username)
             users.append((u.username, _person_roles(u.roles)))
-    return domain, users
+    # #636: EVERY domain the saved mesh carries, not just the apex — the rows its
+    # Domains step recorded (title, sign-in, per-domain services) and which of them
+    # its Domain services step walked. None for a one-domain / pre-#494 record.
+    return LocalMeshIdentity(domain, users, bool(boot.cfg.effective_with_tor()),
+                             saved_mesh_source(rec),
+                             imported_mesh_domains(boot.cfg) if rec is not None
+                             else None)
 
 
 def local_k8s_running(generator_dir: str) -> bool:
@@ -117,7 +165,7 @@ def local_k8s_teardown(generator_dir: str, on_line=None,
                        cancel=None) -> tuple[bool, str]:
     """`make kind-down` — delete the local Kubernetes cluster. Destructive for the
     DevOps lane ONLY: the docker mesh and every one of its volumes are untouched.
-    Same single-symbol seam as ``local_k8s_running``; streams and cancels because it
+    Same single-symbol override point as ``local_k8s_running``; streams and cancels because it
     is always run off the GUI thread (see LocalCloudNodesPage._stop_k8s)."""
     return LocalMeshBootstrap(generator_dir)._stack_node().devops_down(
         on_line=on_line, cancel=cancel)
@@ -152,6 +200,9 @@ class LocalCloudNodesPage(QtWidgets.QWizardPage):
         self._imported = False       # one-shot import latch (see validatePage)
         self._domain = ""
         self._users: list[tuple[str, list[str]]] = []
+        self._with_tor = False       # the imported mesh ran the Tor onion (#579)
+        self._source = ""            # which saved record the import read ("" = none)
+        self._mesh_domains = None    # the saved mesh's domain rows (#636), or None
         self.worker: _MeshWorker | None = None
         self._k8s_probe: _K8sGateProbe | None = None
         self._running = False        # a `make kind-down` is in flight
@@ -184,15 +235,32 @@ class LocalCloudNodesPage(QtWidgets.QWizardPage):
         self.summary.setTextFormat(Qt.TextFormat.RichText)
         lay.addWidget(self.summary)
 
+        # The Tor carry-over (#579), INLINE — never a modal (a modal in page logic
+        # hangs headless tests). Hidden unless the imported mesh ran Tor; says what
+        # the images will carry and names the platforms that cannot carry it.
+        self.tor_note = QtWidgets.QLabel("")
+        self.tor_note.setWordWrap(True)
+        self.tor_note.setVisible(False)
+        lay.addWidget(self.tor_note)
+
         # ── the k8s gate — INLINE and modeless (no QMessageBox/exec in page logic:
         # a modal here hangs headless tests; the checkbox + isComplete() is the
         # same gate, visible, and Next stays disabled until it is ticked). ──
-        self.confirm = QtWidgets.QCheckBox(
-            "I understand: k8s will stop to proceed — the local Kubernetes "
-            "(DevOps) stack must come down before these node images are "
-            "configured and built.")
+        # A SHORT box plus a word-wrapped sentence beside it (#661). QCheckBox never
+        # wraps its text: with the whole sentence on the box the page's minimum width
+        # was 804 px inside the 736 px window, and every line on the page — this one,
+        # the accounts line, the intro paragraph — was cut off at the right edge with
+        # no sideways scroll. The label is the rest of the sentence and clicking it
+        # ticks the box, so the whole line is still the one control.
+        self.confirm = QtWidgets.QCheckBox(CONSENT_SHORT)
         self.confirm.toggled.connect(self._on_confirm_toggled)
-        lay.addWidget(self.confirm)
+        self.confirm_text = _ConsentText(CONSENT_REST, self.confirm)
+        consent = QtWidgets.QWidget()
+        crow = QtWidgets.QHBoxLayout(consent)
+        crow.setContentsMargins(0, 0, 0, 0)
+        crow.addWidget(self.confirm, 0, Qt.AlignmentFlag.AlignTop)
+        crow.addWidget(self.confirm_text, 1)
+        lay.addWidget(consent)
 
         # The consent ARMS the destructive verb; it never performs it on its own —
         # nothing on this page deletes a cluster without a press. `make kind-down`
@@ -337,6 +405,29 @@ class LocalCloudNodesPage(QtWidgets.QWizardPage):
         self._sync_gate()
         self._start_k8s_probe()
 
+    def _forget_domain_pages(self) -> None:
+        """Tell the Domains table and the Domain services walk that their rows were
+        replaced under them (see ``validatePage``). By slug through the wizard's page
+        registry, so a flow built without one of the pages (a test wizard, a future
+        route) is not a crash; the pages' own methods say what forgetting means."""
+        ids = getattr(self.wiz, "_page_ids", None) or {}
+        for slug, method in (("domains", "forget_rows"),
+                             ("domain_services", "forget_answers")):
+            page = self.wiz.page(ids[slug]) if slug in ids else None
+            forget = getattr(page, method, None)
+            if forget is not None:
+                forget()
+
+    def _forget_users_page(self) -> None:
+        """Tell the Users table its rows were replaced under it (see ``validatePage``).
+        Looked up by slug like ``_forget_domain_pages``, so a wizard without the page
+        (a test wizard, a future route) is not a crash."""
+        ids = getattr(self.wiz, "_page_ids", None) or {}
+        page = self.wiz.page(ids["users"]) if "users" in ids else None
+        forget = getattr(page, "forget_rows", None)
+        if forget is not None:
+            forget()
+
     # ---- wizard-flow contract (mirrors the other ModePage side-flow pages) -------
     def applies_to(self, cfg) -> bool:  # noqa: ARG002 — the hook's fixed signature
         # A WIZARD-transient choice, deliberately absent from cfg (ModePage keeps
@@ -357,7 +448,11 @@ class LocalCloudNodesPage(QtWidgets.QWizardPage):
         # asked afresh each time the operator routes through it.
         self._imported = False
         self.confirm.setChecked(False)
-        self._domain, self._users = local_mesh_identity(self.wiz.generator_dir)
+        # LocalMeshIdentity(*...) so a canned 3-tuple (with_tor, no source) loads too.
+        ident = LocalMeshIdentity(*local_mesh_identity(self.wiz.generator_dir))
+        self._domain, self._users = ident.domain, list(ident.users)
+        self._with_tor, self._source = bool(ident.with_tor), str(ident.source or "")
+        self._mesh_domains = ident.mesh_domains
         # Re-establish the k8s truth too — unless a teardown is still streaming
         # (the operator can walk Back and forward while `make kind-down` runs, and
         # that run, not a fresh probe, owns the gate until it finishes).
@@ -368,12 +463,23 @@ class LocalCloudNodesPage(QtWidgets.QWizardPage):
         listed = ", ".join(
             f"{name} ({roles if isinstance(roles, str) else ', '.join(roles)})"
             for name, roles in self._users)
+        # RichText: every imported string is escaped (a record label is operator text).
         self.summary.setText(
-            f"<b>Imported from the local mesh:</b><br>"
-            f"apex domain <b>{self._domain or '(brand default)'}</b>"
-            + (f"<br>accounts: {listed}" if listed
+            "<b>Imported from the local mesh:</b><br>"
+            + (f"from the {html.escape(self._source)}<br>" if self._source
+               else "no saved mesh for this checkout — the defaults below<br>")
+            + f"apex domain <b>{html.escape(self._domain or '(brand default)')}</b>"
+            + (f"<br>accounts: {html.escape(listed)}" if listed
                else "<br>accounts: none found on disk (unseeded or "
-                    "terminal-managed mesh)"))
+                    "terminal-managed mesh)")
+            + f"<br>Tor onion: <b>{'on' if self._with_tor else 'off'}</b>"
+            + "".join(f"<br>{'domains: ' if i == 0 else '&nbsp;' * 9}"
+                      f"{html.escape(line)}"
+                      for i, line in enumerate(
+                          imported_domains_lines(self._mesh_domains))))
+        self.tor_note.setText(localcloud_tor_note(LOCALCLOUD_PLATFORMS)
+                              if self._with_tor else "")
+        self.tor_note.setVisible(self._with_tor)
 
     def validatePage(self) -> bool:
         if not self.isComplete():
@@ -405,8 +511,36 @@ class LocalCloudNodesPage(QtWidgets.QWizardPage):
             self._imported = True
             if self._domain:
                 cfg.cluster_domain = self._domain
+            # EVERY DOMAIN, not just the apex (#636) — after cluster_domain, which is
+            # how the import tells the mesh's own row from the added ones. Shared with
+            # the TUI (core.local_mesh_domains.apply_imported_domains), so the two faces
+            # cannot import a different set of domains.
+            apply_imported_domains(cfg, self._mesh_domains)
+            # The rows were just REPLACED on the SAME configuration object, which the
+            # two image-flow pages that hold a working copy of them cannot see: their
+            # identity check only notices a NEW object (Load config, Redo). A Domains
+            # table filled earlier in this Studio session, or a Domain services walk
+            # made then, would otherwise be written back over the import on the way
+            # to the build screen (post-merge review of PR #644).
+            self._forget_domain_pages()
+            # THE SAVED-MESH -> NODE-IMAGE BRIDGE (#579): a mesh that ran Tor builds
+            # node images that carry it. Set on the BASE, as the mesh-wide default the
+            # Network step owns (it shows there ticked, and can be unticked) — the
+            # worklist rows do not exist yet at this point. materialize() emits it
+            # through each platform's real channel: x86 --with-tor, rpi5 the `tor`
+            # node slug (worklist._apply_infra_services), nothing where no builder
+            # can bake it. Only ever turns it ON: a mesh without Tor leaves the
+            # operator's own choice alone.
+            if self._with_tor:
+                cfg.tor_onion_service = True
             superdomain = cfg.effective_superdomain()
-            existing = {(u.username, u.domain) for u in cfg.users}
+            # The saved mesh's accounts REPLACE ``cfg.users`` (like the domains above):
+            # accounts an earlier flow of this Studio session left behind belong to
+            # that flow, and would be built into these node images pinned to a domain
+            # the manifest no longer carries (#707). A saved mesh with no accounts
+            # therefore leaves none, which is also the truth.
+            imported: list[User] = []
+            taken: set[tuple[str, str]] = set()
             for username, roles in self._users:
                 # ``roles`` is one role name or the list of them (issue #228 — the
                 # canned fixtures and any older caller still hand in a bare string).
@@ -415,8 +549,15 @@ class LocalCloudNodesPage(QtWidgets.QWizardPage):
                 # UsersPage locks their row there); everyone else lands on the
                 # imported apex the local mesh served them on.
                 dom = superdomain if "superadmin" in roles else cfg.cluster_domain
-                if (username, dom) not in existing:
-                    cfg.users.append(User(username=username, domain=dom, roles=roles))
+                if (username, dom) not in taken:
+                    taken.add((username, dom))
+                    imported.append(User(username=username, domain=dom, roles=roles))
+            cfg.users = imported
+            # Same shape of problem as the domain rows: the rows were replaced on the
+            # SAME configuration object, so the Users table (a working copy keyed to
+            # the object) cannot see it and would write its stale rows back over the
+            # import. It forgets them and writes nothing until entered again.
+            self._forget_users_page()
             # make the Users TABLE reachable so the imported accounts are visible
             # and editable (users_choice pre-selects the table card from this).
             cfg.configure_users = bool(cfg.users)

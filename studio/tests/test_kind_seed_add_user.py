@@ -26,7 +26,7 @@ THE THREE THINGS THAT MUST NOT BE GOT WRONG, each pinned below:
    adding one user. The value comes from the cluster's own ``test-seed-passwords``
    Secret, else the run-state file, else the verb refuses.
 
-Everything runs against a fake at the module's three seams (``runner`` / ``doors`` /
+Everything runs against a fake at the module's three override points (``runner`` / ``doors`` /
 ``identities``). NOTHING here touches a cluster: the operator's kind lane may not be
 seeded into, so the live add is deliberately unexercised and this file is the whole
 proof that exists.
@@ -52,7 +52,7 @@ def _b64(s):
 
 
 class _Fake:
-    """A fake kind lane at ``kind_seed``'s subprocess seam.
+    """A fake kind lane at ``kind_seed``'s subprocess override point.
 
     Scripted per command shape, and every call is recorded so a test can assert what
     was NOT run (there is no `kubectl port-forward` in here, deliberately: if the verb
@@ -194,7 +194,7 @@ def test_without_the_admin_password_it_refuses_instead_of_applying_blind(tmp_pat
     f = _Fake(admin_pw=None)
     out = _add(tmp_path, f)
     assert out.ok is False and out.stage == kind_seed.STAGE_ADMIN
-    assert "HTTP 200" in out.message          # names WHY a blind apply is dangerous
+    assert "HTTP 200" in out.message          # names WHY applying without checking is dangerous
     assert not any(c[1].endswith("apply-systems-roles.sh")
                    for c in f.calls if c[0] == "bash")
 

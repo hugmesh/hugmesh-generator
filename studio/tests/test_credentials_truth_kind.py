@@ -33,7 +33,7 @@ WHAT THESE TESTS PIN.
   so an unguarded probe hangs the GUI's worker thread.
 
 Pure-core: no Qt, no cluster. The cluster is a fake at ``node._probe``, which is the
-same seam the compose path's tests use.
+same override point the compose path's tests use.
 """
 from __future__ import annotations
 
@@ -422,7 +422,7 @@ def test_no_password_ever_reaches_a_kind_headline_or_detail(tmp_path):
 # ── the wiring ────────────────────────────────────────────────────────────────────
 
 def test_probe_credentials_reads_the_kind_store_when_that_is_the_lane(tmp_path):
-    """The end-to-end seam: compose down + a kind control-plane container means the
+    """The end-to-end override point: compose down + a kind control-plane container means the
     kind lane, and the kind lane now gets ASKED."""
     (tmp_path / ".e2e-credentials").write_text(f"E2E_PASSWORD={FIXTURE_PW}\n")
 

@@ -182,7 +182,7 @@ def test_block_tier_matches_rpi5_role_client_for_every_role():
     class_axis_violated(), which ignores the mode axis BY CONSTRUCTION, so this test cannot
     observe one — mutation-verified: re-adding modes=(standalone, cloud) to FIELD_SCOPE
     ["standalone"] leaves this file at 10 passed. What the sweep does buy is that the BLOCK
-    tier can never GROW a mode term without going RED.
+    tier can never GROW a mode term without failing.
 
     The predicate a mode narrowing actually damages is field_in_scope() — the wizard's gate,
     which hides the checkbox and (home.py:363, the sole writer of cfg.standalone) force-

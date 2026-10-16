@@ -73,18 +73,33 @@
 # SECOND SOURCE, and the reason derivation matters: the template this repo ships
 # (specs/cluster/manifests/service-catalog-builder/) is NOT the one the runtime
 # instantiates. KanikoBuildLauncher loads its own CLASSPATH copy from the
-# admin-BFF jar (resources/kaniko/service-catalog-build-job.template.yaml), and
-# as of 2026-08-26 the two DISAGREE on both the Secret name and its key:
+# admin-BFF jar (resources/kaniko/service-catalog-build-job.template.yaml). As of
+# 2026-08-26 the two DISAGREED on both the Secret name and its key:
 #
 #     this repo : service-catalog-builder-registry     key .dockerconfigjson
 #     runtime   : service-catalog-registry-credentials key config.json
 #
-# Either mismatch reproduces the wedge on its own (a missing name and a missing
-# `items` key both leave the pod in ContainerCreating). So when the sibling
-# admin-BFF checkout is readable this suite derives from BOTH templates and
-# requires BOTH contracts to be satisfied before the builder may be enabled; when
-# it is not readable it says so LOUDLY and names what it could not check, rather
-# than quietly asserting half the requirement.
+# Reconciled 2026-10-14: this repo's template and its ExternalSecret now carry the
+# RUNTIME name and key (the Secret is Opaque, because a dockerconfigjson Secret
+# cannot carry `config.json`). Either mismatch reproduces the wedge on its own (a
+# missing name and a missing `items` key both leave the pod in ContainerCreating),
+# so this suite now (a) requires the two templates to AGREE whenever the sibling
+# admin-BFF checkout is readable, and (b) requires every derived contract to be
+# satisfied in APPSTORE_BUILDER_NAMESPACE EVEN WHILE THE FLAG IS FALSE: a guard
+# that only fires after the flip is a guard that fires after the wedge. CI has no
+# sibling checkout, which is exactly why this repo's template has to carry the
+# runtime name itself rather than be checked against it.
+#
+# THE TWO BEARER TOKENS (APPSTORE_ARGOCD_AUTH_TOKEN / APPSTORE_FEDERATION_AUTH_TOKEN)
+# must be wired as `optional: true` secretKeyRefs to a Secret an applied manifest
+# creates in the admin-BFF's own namespace. Operator-seeded, so the Secret is absent
+# until seeded; non-optional would wedge the BFF pod itself.
+#
+# THE RUNTIME TEMPLATE'S OTHER WALLS (serviceAccountName with no ServiceAccount;
+# a `restricted` namespace and a pod spec with no seccompProfile /
+# allowPrivilegeEscalation / capabilities.drop) are checked too: NOTE while the
+# builder flag is false, FAIL if it is flipped. They live in the admin-BFF template
+# and cannot be fixed from this repo.
 #
 # WHAT THIS SUITE PROVES:      the three flags are set to the intended values; the
 #   build namespace the builder flag names is really created; the push-credential
@@ -252,16 +267,42 @@ if os.path.isfile(BFF_TMPL):
         ok("derived push credential from the RUNTIME template %s: Secret %r, "
            "required keys %s" % (BFF_TMPL, cb[0], sorted(cb[1]) or "(whole secret)"))
         if c is not None and (cb[0] != c[0] or cb[1] != c[1]):
-            note("the two templates DISAGREE (%r keys %s  vs  %r keys %s). "
-                 "KanikoBuildLauncher loads the RUNTIME one, so satisfying only this "
-                 "repo's name still wedges the build pod. Both contracts are required "
-                 "below before the builder may be enabled."
-                 % (c[0], sorted(c[1]), cb[0], sorted(cb[1])))
+            bad("the two Kaniko templates DISAGREE (%r keys %s  vs  %r keys %s). "
+                "KanikoBuildLauncher loads the RUNTIME one, so a Secret satisfying only "
+                "this repo's template still wedges the build pod. Move this repo's "
+                "template (and its ExternalSecret) to the runtime name and key."
+                % (c[0], sorted(c[1]), cb[0], sorted(cb[1])))
+        elif c is not None:
+            ok("this repo's template and the runtime template agree on the push "
+               "credential: Secret %r, keys %s" % (cb[0], sorted(cb[1])))
 else:
     note("UNCHECKED: the admin-BFF runtime Kaniko template is not readable at %s "
          "(sibling checkout absent). The runtime Secret contract could NOT be "
          "verified from here — only this repo's template was used. Set "
          "APPSTORE_BFF_TMPL to point at it." % BFF_TMPL)
+
+# THE PINNED RUNTIME CONTRACT. CI has no sibling admin-BFF checkout, so without a
+# literal the reconciliation above is only ever checked on a workstation. This is a
+# deliberate restatement of what KanikoBuildLauncher's classpath template asks for
+# (hugmesh-admin-bff-api src/main/resources/kaniko/service-catalog-build-job.template.yaml
+# volume registry-credentials), and it is cross-checked against that file whenever it
+# is readable, so it cannot rot silently in either direction.
+RUNTIME_SECRET, RUNTIME_KEYS = "service-catalog-registry-credentials", {"config.json"}
+if c is not None:
+    if (c[0], c[1]) == (RUNTIME_SECRET, RUNTIME_KEYS):
+        ok("this repo's template carries the pinned runtime push-credential contract "
+           "(Secret %r, keys %s)" % (RUNTIME_SECRET, sorted(RUNTIME_KEYS)))
+    else:
+        bad("this repo's template asks for Secret %r keys %s, not the runtime "
+            "contract %r keys %s that KanikoBuildLauncher's template mounts"
+            % (c[0], sorted(c[1]), RUNTIME_SECRET, sorted(RUNTIME_KEYS)))
+if os.path.isfile(BFF_TMPL) and contracts:
+    cb_ = contracts[-1]
+    if cb_[3] == "admin-BFF runtime template" and (cb_[0], cb_[1]) != (RUNTIME_SECRET, RUNTIME_KEYS):
+        bad("the admin-BFF runtime template now asks for Secret %r keys %s; the pinned "
+            "contract in this suite (%r keys %s) is stale - update it together with "
+            "the generator template and the ExternalSecret"
+            % (cb_[0], sorted(cb_[1]), RUNTIME_SECRET, sorted(RUNTIME_KEYS)))
 
 # ── 3. the mount really is non-optional — the PREMISE of the wedge ───────────
 # If someone sets `optional: true` the pod starts with no credential and the push
@@ -468,30 +509,34 @@ else:
 # ── 7. THE COUPLING GUARD ─────────────────────────────────────────────────────
 # The Kaniko Job is created INTO APPSTORE_BUILDER_NAMESPACE, and a pod can only
 # mount a Secret from its own namespace. So the requirement is the TUPLE.
+#
+# CHECKED WHETHER OR NOT THE FLAG IS ON. The first cut only failed after the flip,
+# which is after the wedge: with the flag false a missing credential read as an
+# "ABSENT" suffix on a passing line. The credential is the PRECONDITION of the flag,
+# so it is asserted always; the flag only changes how the message reads.
 required = [(n, k, label) for (n, k, _o, label) in contracts]
 
 def elsewhere(name):
     other = sorted(ns for (ns, nm) in on_disk if nm == name)
     return ", ".join("%s" % (ns,) for ns in other) if other else ""
 
-if builder_on and bns is None:
-    bad("APPSTORE_BUILDER_ENABLED=true but APPSTORE_BUILDER_NAMESPACE is not set in "
-        "the deployment, so the namespace the push credential must live in cannot "
-        "be determined from here and the coupling check below would be vacuous. "
-        "Pin the namespace explicitly.")
-elif builder_on:
+state = ("APPSTORE_BUILDER_ENABLED=true" if builder_on
+         else "APPSTORE_BUILDER_ENABLED=false (the credential must land BEFORE the flag may flip)")
+if bns is None:
+    bad("APPSTORE_BUILDER_NAMESPACE is not set in the deployment, so the namespace "
+        "the push credential must live in cannot be determined from here and the "
+        "coupling check below would be vacuous. Pin the namespace explicitly.")
+else:
     for name, keys, label in required:
         have = created.get((bns, name))
         if have is None:
             other = elsewhere(name)
-            bad("APPSTORE_BUILDER_ENABLED=true but NO APPLIED manifest under "
-                "specs/cluster creates the Secret %r IN NAMESPACE %s, which %s "
-                "requires. This is the WEDGE: the Kaniko build pod mounts it "
-                "non-optionally and a pod can only mount a Secret from its own "
-                "namespace, so a build will sit in ContainerCreating for 1800s "
-                "instead of failing.%s Land the ExternalSecret first (unit D1), "
-                "then flip the flag."
-                % (name, bns, label,
+            bad("%s but NO APPLIED manifest under specs/cluster creates the Secret %r "
+                "IN NAMESPACE %s, which %s requires. This is the WEDGE: the Kaniko "
+                "build pod mounts it non-optionally and a pod can only mount a Secret "
+                "from its own namespace, so a build will sit in ContainerCreating for "
+                "1800s instead of failing.%s"
+                % (state, name, bns, label,
                    (" A Secret of that name IS declared in namespace(s) [%s] — "
                     "copying image-builder-externalsecrets.yaml and leaving its "
                     "`namespace: hugmesh-image-builds` in place is exactly this "
@@ -501,58 +546,122 @@ elif builder_on:
             continue
         missing = {k for k in keys if k not in have} if "*" not in have else set()
         if missing:
-            bad("APPSTORE_BUILDER_ENABLED=true and Secret %r exists in namespace %s, "
-                "but it does not produce the key(s) %s that %s mounts via `items`. A "
-                "missing `items` key wedges the pod in ContainerCreating exactly like "
-                "a missing Secret does — the kubelet cannot populate the volume."
-                % (name, bns, sorted(missing), label))
+            bad("%s and Secret %r exists in namespace %s, but it does not produce the "
+                "key(s) %s that %s mounts via `items`. A missing `items` key wedges "
+                "the pod in ContainerCreating exactly like a missing Secret does — "
+                "the kubelet cannot populate the volume."
+                % (state, name, bns, sorted(missing), label))
         else:
-            ok("builder enabled AND its push credential %r (keys %s, %s) is created "
-               "by an applied manifest in namespace %s"
-               % (name, sorted(keys) or "(whole secret)", label, bns))
-else:
-    # Not a skip: the guard ran, the premise is simply not met yet. Name exactly
-    # what must land before the flag may flip so this is actionable from the log.
-    ok("APPSTORE_BUILDER_ENABLED is false — DOCKERFILE/ZIP stay 400-guarded (the "
-       "SAFE state). Coupling guard is ARMED: flipping it true requires, in "
-       "namespace %s, " % bns
-       + "; ".join("Secret %r with key(s) %s (%s)"
-                   % (n, sorted(k) or "(whole secret)", label)
-                   for n, k, label in required)
-       + " — " + ", ".join("%r: %s" % (n, "PRESENT" if (bns, n) in created else
-                                       ("ABSENT here (declared in [%s])" % elsewhere(n)
-                                        if elsewhere(n) else "ABSENT"))
-                           for n, _k, _l in required))
+            ok("push credential %r (keys %s, %s) is created by an applied manifest in "
+               "namespace %s%s"
+               % (name, sorted(keys) or "(whole secret)", label, bns,
+                  "" if builder_on else "; builder flag is false, so DOCKERFILE/ZIP "
+                  "stay 400-guarded (the SAFE state)"))
 
-# ── 8. no appstore token may be a secretKeyRef to a Secret nothing creates ────
-# The same hang, one layer up and aimed at the admin-BFF pod itself: a
-# non-optional secretKeyRef naming a Secret that does not exist leaves THIS
-# deployment in CreateContainerConfigError. Both appstore bearer tokens are
-# currently unset (empty default -> a real call that 401s, which is LOUD); this
-# assertion is what stops a follow-up from "fixing" that with a dangling ref.
-# Namespace-keyed for the same reason as above: the admin-BFF pod can only read a
-# Secret in its OWN namespace.
+# ── 7b. the runtime template's OTHER walls (admin-BFF repo; not fixable here) ──
+# Only derivable when the sibling checkout is readable. NOTE while the flag is
+# false (the safe state), FAIL once someone flips it, because a Job that needs a
+# ServiceAccount that does not exist, or a pod the namespace's PodSecurity level
+# rejects, is the same silent-hang class as the missing Secret.
+def runtime_walls(path):
+    d = yaml.safe_load(open(path))
+    pod = d["spec"]["template"]["spec"]
+    out = []
+    sa = pod.get("serviceAccountName")
+    if sa and (bns, sa) not in sas_applied:
+        out.append("serviceAccountName %r, but no applied manifest creates a "
+                   "ServiceAccount of that name in namespace %s (the Job controller "
+                   "cannot create the pod: FailedCreate, no build ever starts)"
+                   % (sa, bns))
+    psa = psa_level.get(bns)
+    if psa == "restricted":
+        psc = pod.get("securityContext") or {}
+        for ct in pod.get("containers", []):
+            csc = ct.get("securityContext") or {}
+            prob = []
+            if csc.get("allowPrivilegeEscalation") is not False:
+                prob.append("allowPrivilegeEscalation is not false")
+            if "ALL" not in ((csc.get("capabilities") or {}).get("drop") or []):
+                prob.append("capabilities.drop does not include ALL")
+            if (psc.get("seccompProfile") or csc.get("seccompProfile") or {}).get("type") not in (
+                    "RuntimeDefault", "Localhost"):
+                prob.append("no seccompProfile RuntimeDefault/Localhost")
+            if prob:
+                out.append("container %r would be REJECTED by namespace %s's "
+                           "pod-security.kubernetes.io/enforce=restricted: %s"
+                           % (ct.get("name"), bns, "; ".join(prob)))
+    return out
+
+sas_applied, psa_level = set(), {}
+for path, ds in parsed.items():
+    if is_template(path) or path not in applied:
+        continue
+    for d in ds:
+        meta = d.get("metadata") or {}
+        if d.get("kind") == "ServiceAccount":
+            sas_applied.add((meta.get("namespace") or applied.get(path), meta.get("name")))
+        elif d.get("kind") == "Namespace":
+            psa_level[meta.get("name")] = (meta.get("labels") or {}).get(
+                "pod-security.kubernetes.io/enforce")
+
+if os.path.isfile(BFF_TMPL) and bns is not None:
+    walls = runtime_walls(BFF_TMPL)
+    if not walls:
+        ok("runtime template: its ServiceAccount exists and its pod spec satisfies "
+           "the build namespace's PodSecurity level")
+    for w in walls:
+        if builder_on:
+            bad("APPSTORE_BUILDER_ENABLED=true but the runtime template has a wall "
+                "nothing in this repo clears: %s" % w)
+        else:
+            note("BEFORE THE BUILDER FLAG MAY FLIP, runtime template: %s" % w)
+else:
+    note("UNCHECKED: the runtime template's ServiceAccount / PodSecurity walls (sibling "
+         "admin-BFF checkout not readable)")
+
+# ── 8. the two appstore bearer tokens ─────────────────────────────────────────
+# The same hang as the push credential, one layer up and aimed at the admin-BFF pod
+# itself: a NON-optional secretKeyRef naming a Secret that does not exist leaves THIS
+# deployment in CreateContainerConfigError. The tokens are operator-seeded (ArgoCD
+# mints one, Casdoor signs the other; the generator can mint neither), so the Secret
+# is ABSENT on every fresh cluster and the ref MUST be `optional: true`. And each ref
+# must name a Secret an applied manifest creates, in the admin-BFF's OWN namespace
+# (a secretKeyRef cannot cross namespaces), under the key the ExternalSecret produces
+# — otherwise seeding the Vault path would still never reach the pod.
 for name in ("APPSTORE_ARGOCD_AUTH_TOKEN", "APPSTORE_FEDERATION_AUTH_TOKEN"):
     e = env.get(name)
     if e is None:
-        note("%s is not set — the leg makes a real call with an empty Bearer and "
-             "gets 401 until a token is provisioned. LOUD, not a hang." % name)
+        bad("%s is not set in the deployment: the leg has no source for its bearer "
+            "token at all (the BFF default is empty). Wire it as an optional "
+            "secretKeyRef to an ExternalSecret-created Secret in %s." % (name, bff_ns))
         continue
     ref = ((e.get("valueFrom") or {}).get("secretKeyRef") or {})
     if not ref:
-        ok("%s is set inline (no dangling secretKeyRef)" % name)
-    elif ref.get("optional") is True:
-        ok("%s secretKeyRef is optional — a missing Secret cannot wedge the pod" % name)
-    elif (bff_ns, ref.get("name")) in created:
-        ok("%s secretKeyRef -> Secret %r in %s, which an applied manifest creates"
-           % (name, ref.get("name"), bff_ns))
-    else:
-        other = elsewhere(ref.get("name"))
-        bad("%s is a NON-optional secretKeyRef to Secret %r, which no applied "
-            "manifest under specs/cluster creates in the admin-BFF's own namespace "
-            "(%s)%s — the admin-BFF pod would wedge in CreateContainerConfigError"
-            % (name, ref.get("name"), bff_ns,
+        if "value" in e and str(e["value"]).strip():
+            bad("%s is set to an INLINE literal — a bearer token must never be in git"
+                % name)
+        else:
+            bad("%s has no secretKeyRef (and no value): nothing sources it" % name)
+        continue
+    rname, rkey = ref.get("name"), ref.get("key")
+    if ref.get("optional") is not True:
+        bad("%s is a secretKeyRef to %r WITHOUT `optional: true`. The Secret is "
+            "operator-seeded and absent until seeded, so the admin-BFF pod would "
+            "wedge in CreateContainerConfigError on every cluster that has not "
+            "seeded it." % (name, rname))
+    have = created.get((bff_ns, rname))
+    if have is None:
+        other = elsewhere(rname)
+        bad("%s -> Secret %r, which no applied manifest under specs/cluster creates "
+            "in the admin-BFF's own namespace (%s)%s — nothing can ever populate it"
+            % (name, rname, bff_ns,
                " (it is declared in [%s])" % other if other else ""))
+    elif "*" not in have and rkey not in have:
+        bad("%s -> Secret %r key %r, but the ExternalSecret produces only %s"
+            % (name, rname, rkey, sorted(have)))
+    elif ref.get("optional") is True:
+        ok("%s -> optional secretKeyRef %s/%s key %r, created by an applied manifest"
+           % (name, bff_ns, rname, rkey))
 
 print()
 print("  %d passed, %d failed" % (P, F))

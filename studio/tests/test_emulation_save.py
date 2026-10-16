@@ -1,7 +1,7 @@
 """Hermetic tests for core/emulation_save.py — the whole-mesh save orchestrator.
 
 Nothing here starts docker, qemu or ssh: the single-device saver is a SPY injected
-through the module's process seam (``run=``), free space comes through the injected
+through the module's process override point (``run=``), free space comes through the injected
 ``disk_usage``, and the device registry — when a test needs one — is fabricated in
 tmp_path exactly the way docker-entrypoint.sh writes it. What is asserted is the
 orchestration itself, the parts that would otherwise only be discovered in front of
@@ -248,7 +248,7 @@ def test_missing_keys_payload_is_a_warning_not_a_failed_save(tmp_path):
     assert "no KEYS payload" in manifest["devices"][0]["keys_error"]
 
 
-# ── duck-typed input (the mesh_emulation planner seam) ───────────────────────────
+# ── duck-typed input (the mesh_emulation planner override point) ───────────────────────────
 
 def test_items_may_be_labels_dicts_or_planner_rows(tmp_path):
     work = str(tmp_path / "work")

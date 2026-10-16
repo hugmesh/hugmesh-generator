@@ -23,7 +23,7 @@ The per-package log shapes fed to :meth:`poll` are taken from a real one the ope
 build wrote: ``wl-pki.x86/sysroot/var/log/portage/build/net-libs:nghttp2-1.68.0:20260730-\
 043807.log`` (613 lines) — elog header, then the full ebuild ladder, then ``>>> Done.``,
 with ``checking ...`` configure probes in between. The ``>>> Done.``/``Completed (N of M)``
-asymmetry is the load-bearing one and has its own test.
+asymmetry is the one that matters and has its own test.
 """
 import os
 import subprocess
@@ -479,7 +479,7 @@ def test_poll_is_a_no_op_without_a_log_root(tmp_path):
 def test_poll_is_a_no_op_on_a_serial_stream(tmp_path):
     """A serial build's ladder and tool lines are already in the stream and already
     credited; polling it would duplicate work on a path proven to work. This is what makes
-    the change inert for x86/rpi5 at their default --jobs 1."""
+    the change a no-op for x86/rpi5 at their default --jobs 1."""
     root = tmp_path / "build"
     root.mkdir()
     p = ep.EmergePackageParser(str(root))
@@ -656,7 +656,7 @@ def test_real_parallel_rpi5_transcript_replays_every_package():
     assert s.inflight == ()               # every package the stream opened, it also closed
     assert len(s.load_avg) == 3
     # this build ran --jobs=1 (build-rpi5-stage4.sh:3754 default), so despite 1752 Jobs
-    # lines it must NOT be reported as parallel — and poll() must stay inert on it.
+    # lines it must NOT be reported as parallel — and poll() must keep doing nothing on it.
     assert p.parallel() is False
     assert p.poll(now=1.0) == []
 

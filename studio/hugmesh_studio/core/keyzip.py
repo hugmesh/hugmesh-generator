@@ -30,10 +30,10 @@ MAX_FILES = 5000
 
 #: The one environment override the whole Studio state family honours
 #: (``core.instance.state_dir``, ``core.build_sessions``, ``core.crashlog``). The
-#: key-zip host dirs were the ONE member of that family with no seam at all: they
+#: key-zip host dirs were the ONE member of that family with no override point at all: they
 #: were hard-coded to ``os.path.expanduser("~")``, so nothing — no test, no second
 #: profile, no sandbox — could point them anywhere else. Since :func:`extract`
-#: *recursively deletes* its staging dir before unpacking, "no seam" meant the
+#: *recursively deletes* its staging dir before unpacking, "no override point" meant the
 #: studio test suite wiped the operator's real ``~/.hugmesh/keyzip`` (staged
 #: Secure-Boot signing material and the offline vault bundle) on every run, green.
 STATE_DIR_ENV = "HUGMESH_STUDIO_STATE_DIR"
@@ -176,9 +176,16 @@ def _claim_staging(path: str) -> None:
     :data:`STAGING_MARKER`, or IS the app's own :func:`staging_dir` (adopted once, so
     installs that staged a key-zip before the marker existed keep working). Anything
     else raises ``ValueError`` before a single file is removed.
+
+    A path that exists but is not a plain directory (a regular file, or a symlink,
+    even one pointing at a directory) is refused too: ``rmtree`` cannot clear a
+    symlink, so it would silently leave a previous zip's files in place, and extraction
+    would then write through the link into whatever it names.
     """
     if not path or not path.strip():
         raise ValueError("key-zip staging dir must be a real path, not empty")
+    if os.path.lexists(path) and (os.path.islink(path) or not os.path.isdir(path)):
+        raise ValueError(f"key-zip staging path is not a directory: {path}")
     if os.path.isdir(path) and os.listdir(path):
         owned = os.path.exists(os.path.join(path, STAGING_MARKER))
         canonical = os.path.abspath(path) == os.path.abspath(staging_dir())

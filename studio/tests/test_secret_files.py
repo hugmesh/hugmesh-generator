@@ -227,7 +227,7 @@ def test_run_ignores_vault_on_origin_mismatch_and_on_empty_field(tmp_path):
 
 def test_headless_process_with_empty_vault_is_byte_identical(tmp_path):
     """The CLI/golden channel guarantee: no vault entries -> command() and run()
-    behave exactly as before (the swap layer is inert)."""
+    behave exactly as before (the swap layer does nothing)."""
     gen = _stub_generator(tmp_path)
     p = _key_file(tmp_path)
     cfg = _x86_cfg(tmp_path, gen, secureboot_key=p)

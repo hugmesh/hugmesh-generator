@@ -1023,7 +1023,7 @@ def gather_kind_identities(node, generator_dir: str, cluster: str,
          screen. Its value is compared here and dropped; only the boolean leaves.
 
     ``node`` is duck-typed on ``_probe(cmd, timeout)`` exactly as the compose path
-    is, so a test hands in a fake cluster at this one seam."""
+    is, so a test hands in a fake cluster at this one override point."""
     def run(cmd: list[str], timeout: int) -> tuple[int, str]:
         return _probe_safe(node, cmd, timeout)
 
@@ -1145,7 +1145,7 @@ def probe_credentials(generator_dir: str, env: Mapping[str, str] | None, node, b
 
     ``node`` is a LocalStackNode (``status()``, ``_probe()``, ``seeded_user()``);
     ``boot`` a LocalMeshBootstrap (``secrets_json``, ``superadmin_login()``). Both
-    are duck-typed so a test can hand in a fake at exactly this seam."""
+    are duck-typed so a test can hand in a fake at exactly this override point."""
     checked_at = time.strftime("%Y-%m-%d %H:%M:%S")
     creds = credentials_file(generator_dir, env)
     env_password = bool((env if env is not None else os.environ).get(SHARED_PASSWORD_ENV))

@@ -82,6 +82,19 @@ echo "-- PLAN (dry-run; posture is NOT touched) --"
 drv "${plan_args[@]}"
 echo
 
+# A Tor address needs no public flip (the driver refuses `commit` for it, #654 D12):
+# the .onion is reachable with the host INTERNAL, and the marker would only open
+# public 80/443. So the flip is not offered after a Tor plan. The mechanism comes
+# from the driver's own list (column 2), the same data source as the provider ids —
+# this front-end still carries no registry knowledge of its own.
+mech="$(drv list | awk -v id="${provider}" 'NR>1 && $1==id {print $2}')"
+if [ "${mech}" = "onion" ]; then
+    echo "A Tor address needs no public flip."
+    echo "The .onion above is reachable with the host INTERNAL; 'commit' is refused for ${provider}."
+    echo "To ALSO serve a clearnet edge, run this wizard again with a public provider."
+    exit 0
+fi
+
 echo "Review the artifacts + deep-links above and apply them at your edge/registrar."
 read -r -p "Trip GO-LIVE now (writes /etc/hugmesh/go-live)? [y/N] " golive
 case "${golive}" in
