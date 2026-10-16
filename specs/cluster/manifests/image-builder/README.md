@@ -10,7 +10,8 @@ GitLab's own bundled registry no longer serves this hostname.
 
 It is **modeled 1:1 on the [#110](../service-catalog-builder/) Service-Catalog Kaniko
 builder**: the same rootless `gcr.io/kaniko-project/executor` floor, the same security
-posture, the same `dockerconfigjson` push-secret contract. It is **generalized** to build
+posture, and a push credential from the same Vault source (a `dockerconfigjson` here, an
+Opaque `config.json` there). It is **generalized** to build
 any app repo's Dockerfile, not only Service-Catalog DOCKERFILE/ZIP sources.
 
 ## What ships here

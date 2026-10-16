@@ -29,14 +29,14 @@ org dependencies. When the version is not bumped on an API change
    `<parent>` version** (deduped). Dependents resolve the libs at whatever coordinate
    their pom names. A coordinate the script does not install is still read from the
    cached or registry jar, and then the tool *reproduces* drift instead of detecting it.
-   State on 2026-10-07 (`origin/main`):
+   State on 2026-10-15 (`origin/main`):
    - `hugmesh-parent` is `2.8.0`.
    - `hugmesh-commons` is `2.1.0`. That is also what `hugmesh-parent`'s
      `<hugmesh-commons.version>` and the `commons:2.1.0:tests` pins in
      `hugmesh-user-bff-api` and `hugmesh-mod-bff-api` name, so commons is covered.
-   - `hugmesh-auth-core` is `2.5.1` (parent `2.8.0`). But `hugmesh-admin-bff-api` pins
-     `2.5.0` and `hugmesh-user-bff-api` pins `2.4.2`. Neither is installed from source,
-     so those two dependents are not tested against current auth-core source.
+   - `hugmesh-auth-core` is `2.5.1` (parent `2.8.0`). `hugmesh-admin-bff-api` and
+     `hugmesh-user-bff-api` both pin `2.5.1`, so auth-core is covered too. A future pin
+     that names any other coordinate is not installed from source.
 2. Runs each dependent's `mvn -o test` against those freshly built libs.
 3. Prints a PASS/FAIL table. It exits non-zero if any repo is red against current lib source.
 
