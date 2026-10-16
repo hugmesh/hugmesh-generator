@@ -2426,3 +2426,125 @@ def test_a_plain_java_repository_gets_the_java_build_and_its_matrix_row(world, t
     # the other three kinds map to their own words and anything else to none
     assert [oe._build_word(k) for k in ("java", "java+settings", "angular", "other")] == \
         ["java", "java", "angular", "none"]
+
+
+# ── round 2: every spelling a commit publishes is scanned, at plan AND at apply ──────
+_AWS_KEY = "AKIA" + "IOSFODNN7EXAMPLE"
+_SLACK = "xoxb" + "-1234567890-abcdefghij"
+_FINE = "github_pat_" + "B" * 30
+_ROBOT = "\U0001F916"
+
+
+def _plant_tree(src, files, links=None):
+    """Plant ``files`` (bytes) and ``links`` (name -> target) in a source repository."""
+    for rel, target in (links or {}).items():
+        full = os.path.join(src, rel)
+        os.makedirs(os.path.dirname(full) or src, exist_ok=True)
+        os.symlink(target, full)
+    _plant_bytes(src, files)
+
+
+_PIPELINE_SPELLINGS = [
+    # a key glued to a word character on either side (the old `\b` rules missed them)
+    ("aws-after-underscore", {"cfg.txt": ("SECRET_" + _AWS_KEY + "\n").encode()}, None),
+    ("aws-after-digit", {"cfg.txt": ("1" + _AWS_KEY + "\n").encode()}, None),
+    ("aws-before-letters", {"cfg.txt": (_AWS_KEY + "id\n").encode()}, None),
+    ("aws-after-utf8-letter", {"cfg.txt": ("café" + _AWS_KEY).encode()}, None),
+    ("aws-before-utf8-letter", {"cfg.txt": (_AWS_KEY + "é").encode()}, None),
+    ("slack-after-underscore", {"cfg.txt": ("TOKEN_" + _SLACK + "\n").encode()}, None),
+    ("slack-after-utf8-letter", {"cfg.txt": ("é" + _SLACK).encode()}, None),
+    ("slack-before-utf8-letter", {"cfg.txt": (_SLACK + "é").encode()}, None),
+    ("fine-grained-before-utf8-letter", {"cfg.txt": (_FINE + "é").encode()}, None),
+    ("fine-grained-after-digit", {"cfg.txt": ("1" + _FINE).encode()}, None),
+    # the robot footer outside UTF-8, and a token in EBCDIC
+    ("robot-utf16-bom", {"n.txt": ("(" + _ROBOT + " done)").encode("utf-16")}, None),
+    ("robot-utf16-le-bare", {"n.txt": _ROBOT.encode("utf-16-le")}, None),
+    ("robot-utf16-be-odd-offset", {"n.txt": b"x" + _ROBOT.encode("utf-16-be")}, None),
+    ("robot-utf32-le-bare", {"n.txt": _ROBOT.encode("utf-32-le")}, None),
+    ("robot-utf32-be", {"n.txt": ("ok " + _ROBOT).encode("utf-32-be")}, None),
+    ("ebcdic-github-token", {"n.txt": _GH_TOKEN.decode().encode("cp037")}, None),
+    ("ebcdic-aws-key", {"n.txt": ("key=" + _AWS_KEY).encode("cp037")}, None),
+    # a link's TARGET is its content in git; names are published too
+    ("link-target", {"ok.txt": b"x"}, {"link": _GH_TOKEN.decode()}),
+    ("link-name-in-folder", {"ok.txt": b"x"}, {"d/" + _AWS_KEY: "../ok.txt"}),
+    ("file-name", {_GH_TOKEN.decode() + ".txt": b"x"}, None),
+    ("folder-name", {"keys/" + _SLACK + "/x.txt": b"x"}, None),
+]
+
+
+@pytest.mark.parametrize("name,files,links", _PIPELINE_SPELLINGS,
+                         ids=[n for n, _f, _l in _PIPELINE_SPELLINGS])
+def test_a_marker_in_any_published_spelling_refuses_and_is_not_pushed(world, name, files,
+                                                                        links):
+    """Through the real plan() and apply() with real git: each spelling was PUBLISHED
+    (pushed to main of the remote) with banned=[] before this round."""
+    cfg, runner = world["cfg"], world["runner"]
+    _plant_tree(os.path.join(world["src"], "hugmesh-commons"), files, links)
+    p = oe.plan(cfg, runner, stamp="20260101T000000Z", probe=False)
+    rp = next(r for r in p.repos if r.source == "hugmesh-commons")
+    assert rp.action == "refused: banned marker" and rp.banned, (name, rp.banned)
+    res = oe.apply(p, runner)
+    assert not os.path.isdir(_bare(world, "example-commons")), f"{name} was pushed"
+    assert next(r for r in res.repos if r.target.endswith("example-commons")).skipped
+
+
+def test_apply_rescans_the_commit_and_refuses_what_changed_after_the_plan(world):
+    """The work folder is an ordinary folder: a token written into it between plan()
+    and apply() (same file count) was pushed. apply scans the commit it built."""
+    cfg, runner = world["cfg"], world["runner"]
+    p = oe.plan(cfg, runner, stamp="20260101T000000Z", probe=False)
+    rp = next(r for r in p.repos if r.source == "hugmesh-commons")
+    assert rp.banned == []
+    with open(os.path.join(rp.workdir, "README.md"), "a", encoding="utf-8") as fh:
+        fh.write("\n" + _GH_TOKEN.decode() + "\n")
+    res = oe.apply(p, runner)
+    got = next(r for r in res.repos if r.target.endswith("example-commons"))
+    assert "README.md: GitHub token" in got.skipped and "nothing is pushed" in got.skipped
+    assert not os.path.isdir(_bare(world, "example-commons"))
+    # the other repositories of the same plan still go out
+    assert [r.target for r in res.repos if not r.skipped] == [
+        "exampleorg/example-actions", "exampleorg/example-parent",
+        "exampleorg/mesh.example.github.io"]
+
+
+def test_the_commit_scan_fails_closed_on_a_member_it_cannot_read():
+    """A tar member that is neither a file, a link nor a folder is a finding."""
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w") as tf:
+        ti = tarfile.TarInfo("a.txt")
+        ti.size = 2
+        tf.addfile(ti, io.BytesIO(b"hi"))
+        hard = tarfile.TarInfo("b.txt")
+        hard.type, hard.linkname = tarfile.LNKTYPE, "a.txt"
+        tf.addfile(hard)
+        big = tarfile.TarInfo("big.bin")
+        big.size = 3
+        tf.addfile(big, io.BytesIO(b"abc"))
+    found = oe._scan_tar(buf.getvalue())
+    assert found == ["b.txt: not a file or a link, so not scanned for secrets"]
+
+
+def test_a_link_goes_through_the_exclusion_rules(world):
+    """A link was never listed as a snapshot member, so a link named like a secret
+    (``.env``, ``id_rsa``) was kept whatever it pointed at."""
+    cfg, runner = world["cfg"], world["runner"]
+    _plant_tree(os.path.join(world["src"], "hugmesh-commons"), {"ok.txt": b"x"},
+                {"id_rsa": "ok.txt", "conf/.env": "../ok.txt"})
+    p = oe.plan(cfg, runner, stamp="20260101T000000Z", probe=False)
+    rp = next(r for r in p.repos if r.source == "hugmesh-commons")
+    assert {e.split(":", 1)[0] for e in rp.excluded} >= {"id_rsa", "conf/.env"}
+    assert not os.path.lexists(os.path.join(rp.workdir, "id_rsa"))
+
+
+def test_the_widened_token_rules_do_not_fire_on_lookalikes():
+    """No boundary, but still a prefix plus a length floor."""
+    def hit(text):
+        return [lbl for lbl, rx in oe.BANNED_MARKERS if rx.search(text)]
+    assert hit("AKIA" + "SHORT1234") == []                 # 9 after the prefix, not 16
+    assert hit("AKIA" + "abcdefghijklmnop") == []          # lower case is not a key id
+    assert hit("xoxb" + "-short") == []
+    assert hit("github_pat_" + "short") == []
+    # cp037 runs the token rules only: a cp037 view of these bytes spells a URL with
+    # a password, which is not a finding there
+    assert oe._scan_bytes(("https://u:" + "p" * 20 + "@h").encode("cp037") + b"\xff")[0] \
+        == []

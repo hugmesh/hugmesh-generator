@@ -171,15 +171,16 @@ BANNED_MARKERS = (
     ("robot footer", re.compile("\U0001F916")),
     ("assistant session link", re.compile(re.escape(_SESSION_URL), re.IGNORECASE)),
     # 36 or MORE characters: the length of a token is GitHub's to change, and a longer
-    # one must not slip past a rule that wanted exactly 36. No boundary BEFORE the prefix:
-    # `\b` failed after an accented letter, an underscore or a digit, so a token glued
-    # to one was published, and nothing but a token spells `ghp_` plus 36 letters
+    # one must not slip past a rule that wanted exactly 36. The four token rules carry
+    # NO word boundary on either side: `\b` failed next to an accented letter, an
+    # underscore, a digit or a letter (`SECRET_AKIA...`, `AKIA...id`, `TOKEN_xoxb-...`),
+    # so a token glued to one was published. A prefix plus the length floor is the rule.
     ("GitHub token", re.compile(
         r"(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{36,}")),
     ("GitHub fine-grained token", re.compile(
-        r"github_pat_[A-Za-z0-9_]{22,}\b")),
-    ("AWS access key", re.compile(r"\bAKIA[0-9A-Z]{16}\b")),
-    ("Slack token", re.compile(r"\bxox[baprs]-[A-Za-z0-9-]{10,}\b")),
+        r"github_pat_[A-Za-z0-9_]{22,}")),
+    ("AWS access key", re.compile(r"AKIA[0-9A-Z]{16}")),
+    ("Slack token", re.compile(r"xox[baprs]-[A-Za-z0-9-]{10,}")),
     # a password written into a URL, but only a LITERAL one of 16+ characters: the
     # repositories are full of `user:$(PASSWORD)@host`, `user:${VAR}@host` and
     # `gateway:gateway@host` (placeholders and test logins), and a rule that refused
@@ -933,6 +934,11 @@ def _scan_file(path: str) -> tuple[list[str], str, bool]:
             data = fh.read()
     except OSError:
         return ["unreadable, so not scanned for secrets"], "", False
+    return _scan_bytes(data)
+
+
+def _scan_bytes(data: bytes) -> tuple[list[str], str, bool]:
+    """:func:`_scan_file` for bytes already read."""
     try:
         text, clean = data.decode("utf-8"), b"\0" not in data
     except UnicodeDecodeError:
@@ -940,8 +946,82 @@ def _scan_file(path: str) -> tuple[list[str], str, bool]:
     views = [text]
     if b"\0" in data:
         views.append(data.replace(b"\0", b"").decode("utf-8", "replace"))
-    labels = [label for label, rx in BANNED_MARKERS if any(rx.search(v) for v in views)]
+    labels = _marker_labels(views)
+    if not clean:
+        # what the two views above cannot see: the robot footer in UTF-16 / UTF-32
+        # (searched as BYTES, so no alignment or stray byte hides it) and the tokens
+        # in an EBCDIC (cp037) file. Only the token rules run over the cp037 view: it
+        # maps every byte to a character, and the looser rules would fire on binaries
+        if "robot footer" not in labels and any(b in data for b in _ROBOT_WIDE):
+            labels.append("robot footer")
+        ebcdic = data.decode("cp037")
+        labels += [label for label, rx in BANNED_MARKERS
+                   if label in _TOKEN_LABELS and label not in labels and rx.search(ebcdic)]
     return labels, text, clean
+
+
+#: The robot footer as UTF-16 and UTF-32 (both byte orders) spell it.
+_ROBOT_WIDE = tuple("\U0001F916".encode(c)
+                    for c in ("utf-16-le", "utf-16-be", "utf-32-le", "utf-32-be"))
+#: The rules a cp037 (EBCDIC) view is searched with: prefix + length, nothing loose.
+_TOKEN_LABELS = frozenset({"GitHub token", "GitHub fine-grained token", "AWS access key",
+                           "Slack token"})
+
+
+def _marker_labels(views: list[str]) -> list[str]:
+    return [label for label, rx in BANNED_MARKERS if any(rx.search(v) for v in views)]
+
+
+def _scan_entries(workdir: str) -> list[str]:
+    """``"<path>: <label>"`` for every banned marker in what a commit of ``workdir``
+    publishes: every PATH (a file or folder name is published too), every link's
+    TARGET (git stores it as the link's content), and every file's bytes. The plan
+    runs it, and apply runs it again on the folder it is about to commit."""
+    found: list[str] = []
+    for rel in _tree_entries(workdir):
+        full = os.path.join(workdir, rel)
+        labels = _marker_labels([rel])
+        if os.path.islink(full):
+            try:
+                target = os.readlink(full)
+            except OSError:
+                labels.append("unreadable link, so not scanned for secrets")
+            else:
+                labels += [lb for lb in _marker_labels([target]) if lb not in labels]
+        else:
+            labels += [lb for lb in _scan_file(full)[0] if lb not in labels]
+        found += [f"{rel}: {label}" for label in labels]
+    return found
+
+
+def _scan_tar(blob: bytes) -> list[str]:
+    """:func:`_scan_entries` over a tar of a commit (``git archive``): the scan of
+    exactly what is pushed. A member that is neither a file, a link nor a folder is
+    a finding, not a skip."""
+    found: list[str] = []
+    with tarfile.open(fileobj=io.BytesIO(blob), mode="r:") as tf:
+        for member in tf.getmembers():
+            if member.isdir():
+                labels = _marker_labels([member.name])
+            elif member.issym():
+                labels = _marker_labels([member.name])
+                labels += [lb for lb in _marker_labels([member.linkname])
+                           if lb not in labels]
+            elif member.isfile():
+                labels = _marker_labels([member.name])
+                if member.size > SCAN_LIMIT:
+                    body = ["too large to scan for secrets"]
+                else:
+                    fh = tf.extractfile(member)
+                    body = (_scan_bytes(fh.read())[0] if fh is not None
+                            else ["unreadable, so not scanned for secrets"])
+                labels += [lb for lb in body if lb not in labels]
+            elif member.type == tarfile.XGLTYPE or member.name == "pax_global_header":
+                continue                   # git archive's commit-id header, not content
+            else:
+                labels = ["not a file or a link, so not scanned for secrets"]
+            found += [f"{member.name}: {label}" for label in labels]
+    return found
 
 
 def _tree_entries(workdir: str) -> list[str]:
@@ -1042,7 +1122,9 @@ def _snapshot(runner: Runner, path: str, ref: str, workdir: str) -> list[str]:
                 # a link that points outside the tree, or a name the filter
                 # refuses: left out of the snapshot rather than written anywhere
                 continue
-            if member.isfile():
+            # a link is published too (its target is its content): it goes through
+            # the exclusion rules and the scan like a file
+            if member.isfile() or member.issym():
                 files.append(member.name)
     return sorted(files)
 
@@ -1130,15 +1212,19 @@ def _prepare_repo(runner: Runner, name: str, cfg: ExportConfig, rules, out_dir: 
     unrewritten: list[str] = []
     for rel in kept:
         full = os.path.join(rp.workdir, rel)
-        if os.path.islink(full):
-            continue                       # a link has no content of its own to scan
-        # EVERY kept file is scanned, as bytes: a file that is not UTF-8, or holds a
-        # NUL, was once skipped here and a token in it was published
-        labels, text, clean_utf8 = _scan_file(full)
-        for label in labels:
-            rp.banned.append(f"{rel}: {label}")
-        if _glob_matches(rel, name, skip_globs):
-            continue
+        if os.path.islink(full) or _glob_matches(rel, name, skip_globs):
+            continue                       # a link's target is published as it is
+        try:
+            if os.path.getsize(full) > SCAN_LIMIT:
+                continue                   # the scan below refuses it as too large
+            with open(full, "rb") as fh:
+                data = fh.read()
+        except OSError:
+            continue                       # the scan below reports it as unreadable
+        try:
+            text, clean_utf8 = data.decode("utf-8"), b"\0" not in data
+        except UnicodeDecodeError:
+            text, clean_utf8 = data.decode("utf-8", "replace"), False
         new, n = rewrite_text(text, rules)
         if not n:
             continue
@@ -1154,6 +1240,11 @@ def _prepare_repo(runner: Runner, name: str, cfg: ExportConfig, rules, out_dir: 
         shown = ", ".join(unrewritten[:5]) + (" ..." if len(unrewritten) > 5 else "")
         rp.notes.append(f"{len(unrewritten)} file(s) name a renamed token but are not UTF-8 "
                         f"text, so they were published byte for byte, not rewritten: {shown}")
+    # EVERYTHING the commit will hold is scanned AFTER the rewrites, as it will be
+    # published: every path, every link target and every file's bytes (a file that is
+    # not UTF-8, or holds a NUL, a link, and a file name were each once skipped here
+    # and a token in them was published)
+    rp.banned = _scan_entries(rp.workdir)
     # what is counted is what the commit must hold (apply checks it): files and links
     rp.files = len(_tree_entries(rp.workdir))
     if rp.banned:
@@ -1425,6 +1516,19 @@ def _commit_snapshot(runner, calls, rp: RepoPlan, cfg: ExportConfig, stamp: str,
         raise RuntimeError(f"the snapshot commit of {rp.target_full} holds {held} files "
                            f"but the plan counted {want}: files were left out of (or "
                            "added to) the commit, nothing is pushed")
+    # the plan's scan saw the FOLDER; the folder can change between plan and apply
+    # (it is an ordinary directory under the out folder), so the scan runs again on
+    # what the commit holds, and a marker in it refuses the push
+    archive = _run_checked(runner, calls, ["git", "archive", "--format=tar", "HEAD"],
+                           cwd=wd, timeout=1800)
+    if archive.returncode != 0:
+        raise RuntimeError(f"git archive HEAD failed in {wd}: {archive.err.strip()}: "
+                           "the commit could not be scanned, nothing is pushed")
+    found = _scan_tar(archive.stdout)
+    if found:
+        shown = "; ".join(found[:5]) + (" ..." if len(found) > 5 else "")
+        raise RuntimeError(f"the snapshot commit of {rp.target_full} holds a banned "
+                           f"marker the plan did not show ({shown}): nothing is pushed")
     commit = _run_checked(runner, calls, ["git", "rev-parse", "HEAD"], cwd=wd).text.strip()
     tree = _run_checked(runner, calls, ["git", "rev-parse", "HEAD^{tree}"],
                         cwd=wd).text.strip()
