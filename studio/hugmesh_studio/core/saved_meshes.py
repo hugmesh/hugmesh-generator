@@ -1063,7 +1063,8 @@ def restore_env(rec: SavedMesh) -> dict[str, str]:
 
     Env only — never argv, never a log line. ``E2E_CREDENTIALS_FILE`` points the
     seeder at the saved copy (so the same password file is used instead of a fresh
-    mint), and the superadmin username/password ride the two names ``seed-e2e.sh``
+    mint), ``E2E_PASSWORD_KEEP=1`` stops the seed's run start from rotating it, and
+    the superadmin username/password ride the two names ``seed-e2e.sh``
     resolves. Returns only the username when nothing was copied: the caller then
     seeds with what is on disk and the plan already said what that means.
     """
@@ -1072,6 +1073,10 @@ def restore_env(rec: SavedMesh) -> dict[str, str]:
     e2e_copy = _copy_path(e2e) if e2e.get("copied") else None
     if e2e_copy:
         env["E2E_CREDENTIALS_FILE"] = e2e_copy
+        # `make stack-seed` STARTS a run and would otherwise mint a NEW shared
+        # password into this very copy (tests/stack/e2e-password.sh,
+        # e2e_password_start_run) — a restore promises the record's password.
+        env["E2E_PASSWORD_KEEP"] = "1"
     user = str((rec.credentials or {}).get("superadmin_username") or "")
     if user:
         env["CASDOOR_SUPERADMIN_USERNAME"] = user

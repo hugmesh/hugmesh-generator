@@ -343,7 +343,33 @@ make stack-up SOCIAL=1 && make stack-seed SOCIAL=1   # + Matrix/Mastodon fixture
 ```
 
 (equivalently `SEED_CASDOOR_ONLY=1 tests/stack/seed-e2e.sh` / `tests/stack/seed-e2e.sh`
-directly). It provisions (reusing `tests/qemu/seed-accounts.sh --roles` + its
+directly).
+
+**Every `make stack-seed` starts a new run with a NEW e2e password.** The shared
+persona password is a 32-character CSPRNG value minted at the start of each run
+(`tests/stack/e2e-password.sh`, `e2e_password_start_run`) and written, mode 600,
+to `${E2E_CREDENTIALS_FILE:-.e2e-credentials}` at the repo root. Everything later
+in that run (`make stack-e2e`, `tests/e2e/run.sh`, the Playwright helpers) reads
+that file and never mints. The seeder then **reconciles** every stored identity to
+the new value: Casdoor personas through the apply hook's set-password, and the
+tuwunel `e2e-mod`/`e2e-user` users (SOCIAL=1) by changing their own password from
+one of the superseded values the file keeps in `E2E_PASSWORD_PREVIOUS`. A
+persisted volume therefore does not 401 after a rotation. The run boundary is one
+process per lane: `make stack-seed` (compose), `make kind-up` (kind), and
+`make e2e` (QEMU, run mode only). Sub-seeders and consumers never rotate.
+
+```bash
+E2E_PASSWORD_KEEP=1 make stack-seed      # debugging: keep the file's current value
+E2E_PASSWORD='…' make stack-seed         # explicit override: kept, never written to the file
+```
+
+All lanes share the one file, so a run started in one lane (`make kind-up`,
+`make e2e`) re-passwords the file that a still-running compose mesh was seeded
+from. Re-run `make stack-seed`, which reconciles, or start the other run with
+`E2E_PASSWORD_KEEP=1`. The Studio's **Add user** and saved-mesh **restore** pass
+`E2E_PASSWORD_KEEP=1` themselves: adding one account does not re-password the others.
+
+It provisions (reusing `tests/qemu/seed-accounts.sh --roles` + its
 Casdoor apply hook — the same machinery the cluster/pentest seeds use):
 
 1. **The `app-user-bff` OAuth2 client** (`ensure_app()`): a confidential client
@@ -513,8 +539,9 @@ paths, not a 404).
   not optional: it creates the `app-user-bff` OAuth2 client + the org/roles +
   e2e personas, and once it has run, **real browser SSO login works end-to-end**
   (`/login` with an e2e persona, e.g. `e2e-admin` — see "Seeding the e2e
-  fixtures" above). **The password is generated fresh per run, never a fixed
-  literal**: `make stack-seed`'s banner prints the actual value, it's readable
+  fixtures" above). **The password is minted fresh at every `make stack-seed`
+  (the run start), never a fixed literal**: `make stack-seed` keeps it out of its
+  output (the Studio persists that output). It is readable
   afterward from the run-state file (`${E2E_CREDENTIALS_FILE:-.e2e-credentials}`
   at the repo root), and the Studio's local-mesh page shows it in a copyable
   credentials table (or "not seeded yet" if that run hasn't happened). Before

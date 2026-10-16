@@ -73,15 +73,17 @@
 #   MATRIX_SERVER_NAME    default localhost    (must match up-real.sh / the
 #                                           tuwunel service's TUWUNEL_SERVER_NAME)
 #   MASTODON_URL          default http://localhost:3000
-#   E2E_PASSWORD          GENERATED per run when unset (per-user E2E_<UPPER>_
+#   E2E_PASSWORD          ROTATED on every run when unset (per-user E2E_<UPPER>_
 #                                           PASSWORD still wins — the seed-accounts.sh
 #                                           convention). See tests/stack/e2e-password.sh:
-#                                           a fresh CSPRNG value is minted the first time
-#                                           any process in this run needs one, persisted to
+#                                           this script STARTS the compose run, so it mints
+#                                           a fresh CSPRNG value every time, persists it to
 #                                           ${E2E_CREDENTIALS_FILE:-<repo-root>/.e2e-credentials},
-#                                           and every other seeder in the same run (tests/
-#                                           qemu/seed-accounts.sh, bootstrap-kind.sh) loads
-#                                           that same file instead of re-deriving. The
+#                                           and every later process of the run (run.sh, the
+#                                           Playwright helpers) loads that same file. Set
+#                                           E2E_PASSWORD (kept, never written) or
+#                                           E2E_PASSWORD_KEEP=1 (reuse the file) to keep
+#                                           the previous value. The
 #                                           literal "e2e-pass" no longer exists as a default
 #                                           anywhere — printed by `make stack-seed` at the
 #                                           end of a run so it reaches the operator.
@@ -148,15 +150,18 @@ log()  { echo "[seed-e2e] $*"; }
 warn() { echo "[seed-e2e] WARN: $*" >&2; }
 die()  { echo "${PROG}: UNMET DEPENDENCY: $*" >&2; exit 2; }
 
-# GENERATE-never-require (see e2e-password.sh's header): resolves an explicit
-# override, else the run-state credentials file, else mints + persists a fresh
-# CSPRNG value — this is very likely the FIRST process in a compose run to need
-# one, so it is usually the one doing the persisting. seed-accounts.sh below
-# inherits it via the explicit E2E_PASSWORD="${E2E_PASSWORD}" on its invocation.
+# THIS IS WHERE A COMPOSE RUN STARTS (see e2e-password.sh, "WHERE A RUN
+# STARTS"): every `make stack-seed` mints a NEW password, persists it and
+# exports it — unless $E2E_PASSWORD is set (override, kept) or
+# E2E_PASSWORD_KEEP=1 (reuse the file's value). seed-accounts.sh below inherits
+# it via the explicit E2E_PASSWORD="${E2E_PASSWORD}" on its invocation, and the
+# legs below RECONCILE every stored identity to it (leg 1: Casdoor set-password
+# in the apply hook; leg 2: the tuwunel users change their own password from
+# E2E_PASSWORD_PREVIOUS), so a persisted volume does not 401 after rotation.
 # The literal "e2e-pass" no longer exists as a default anywhere in this chain.
 # shellcheck source=./e2e-password.sh
 . "${HERE}/e2e-password.sh"
-e2e_password_ensure || die "could not resolve/generate E2E_PASSWORD (see tests/stack/e2e-password.sh)"
+e2e_password_start_run || die "could not start this run's E2E_PASSWORD (see tests/stack/e2e-password.sh)"
 
 # ── Preflight: tools + the running stack, each named on failure ──────────────
 command -v curl   >/dev/null 2>&1 || die "curl is required"
@@ -872,13 +877,69 @@ matrix_token() { # <user>
     || die "Matrix login failed for $1 (password mismatch? re-run with the E2E_PASSWORD the user was registered with)"
 }
 
+matrix_login_token() { # <user> <password> -> access token on stdout, or empty
+  curl -s "${SYNAPSE_URL}/_matrix/client/v3/login" -X POST \
+    -H 'content-type: application/json' \
+    -d "$(jq -nc --arg u "$1" --arg p "$2" \
+          '{type:"m.login.password",identifier:{type:"m.id.user",user:$u},password:$p}')" \
+    2>/dev/null | jq -r '.access_token // empty' 2>/dev/null || true
+}
+
+# RECONCILE, NOT ONLY CREATE. matrix_register() treats M_USER_IN_USE as "present"
+# and never touches the stored password, so on a persisted tuwunel volume a user
+# keeps the password of the run that first registered it. Since every
+# `make stack-seed` now STARTS a run with a NEW E2E_PASSWORD (e2e-password.sh),
+# that user would 401 at matrix_token() on the very next seed. The compose
+# tuwunel has no admin account (grant_admin_to_first_user=false) and no admin
+# reset path, so the user changes its OWN password: log in with one of the
+# superseded values the rotation kept (E2E_PASSWORD_PREVIOUS, newest first), POST
+# /account/password with UIAA m.login.password proving that old value, then PROVE
+# the change by logging in with this run's value. A user that answers to none of
+# them is a hard, named failure — never a silent "present".
+matrix_reconcile_password() { # <user>
+  local u="$1" old tok body first session code n=0
+  if [ -n "$(matrix_login_token "${u}" "${E2E_PASSWORD}")" ]; then
+    log "matrix user ${u}: password is this run's"
+    return 0
+  fi
+  for old in ${E2E_PASSWORD_PREVIOUS//,/ }; do
+    n=$((n + 1))
+    tok="$(matrix_login_token "${u}" "${old}")"
+    [ -n "${tok}" ] || continue
+    body="$(jq -nc --arg u "${u}" --arg o "${old}" --arg n "${E2E_PASSWORD}" \
+      '{new_password:$n,logout_devices:false,auth:{type:"m.login.password",identifier:{type:"m.id.user",user:$u},password:$o}}')"
+    first="$(curl -s -w '\n%{http_code}' "${SYNAPSE_URL}/_matrix/client/v3/account/password" -X POST \
+      -H "authorization: Bearer ${tok}" -H 'content-type: application/json' -d "${body}" || true)"
+    code="${first##*$'\n'}"
+    if [ "${code}" = "401" ]; then
+      # A server that wants the UIAA session echoed back first: retry with it.
+      session="$(printf '%s' "${first%$'\n'*}" | jq -r '.session // empty' 2>/dev/null || true)"
+      if [ -n "${session}" ]; then
+        body="$(printf '%s' "${body}" | jq -c --arg s "${session}" '.auth.session = $s')"
+        code="$(curl -s -o /dev/null -w '%{http_code}' "${SYNAPSE_URL}/_matrix/client/v3/account/password" -X POST \
+          -H "authorization: Bearer ${tok}" -H 'content-type: application/json' -d "${body}" || echo 000)"
+      fi
+    fi
+    if [ -n "$(matrix_login_token "${u}" "${E2E_PASSWORD}")" ]; then
+      log "matrix user ${u}: password reconciled to this run's value (it held the value from ${n} run(s) ago)"
+      return 0
+    fi
+    die "matrix user ${u}: logged in with a previous run's password, but changing it to this run's answered HTTP ${code} and this run's value still does not log in"
+  done
+  die "matrix user ${u} exists on ${SYNAPSE_URL} but logs in with neither this run's E2E_PASSWORD nor any of the ${n} previous value(s) kept in E2E_PASSWORD_PREVIOUS (${E2E_CREDENTIALS_FILE}). The tuwunel volume was seeded by a run this file no longer remembers. Re-run with E2E_PASSWORD=<the value it was seeded with>, or recreate the tuwunel volume."
+}
+
 matrix_room_by_alias() { # <alias-localpart> -> room_id or empty
   curl -s "${SYNAPSE_URL}/_matrix/client/v3/directory/room/%23$1%3A${MATRIX_SERVER_NAME}" \
     | jq -r '.room_id // empty'
 }
 
+# The superseded values the run start kept (env wins, for a hand-driven repair).
+E2E_PASSWORD_PREVIOUS="${E2E_PASSWORD_PREVIOUS:-$(e2e_password_read E2E_PASSWORD_PREVIOUS)}"
 matrix_register e2e-mod
 matrix_register e2e-user
+matrix_reconcile_password e2e-mod
+matrix_reconcile_password e2e-user
 MOD_TOK="$(matrix_token e2e-mod)"
 USER_TOK="$(matrix_token e2e-user)"
 

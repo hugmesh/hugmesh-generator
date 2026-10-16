@@ -3487,6 +3487,25 @@ lint:seed-password-reconcile:
   script:
     - bash tests/scripts/test-seed-password-reconcile.sh
     - bash tests/scripts/seed_password_reconcile_mutations.sh
+
+# The e2e password ROTATES per run (2026-10-15): the contract said "random per
+# run", but nothing ever started a new value — the operator's credentials file
+# was dated 2026-08-27 and served every run since. The suite pins the run
+# boundary (seed-e2e.sh / bootstrap-kind.sh / run-qemu-e2e.sh mint; sub-seeders
+# and consumers only read), one value per run, the KEEP/override opt-outs, the
+# 32-char generator, the Matrix leg-2 reconcile against a stub homeserver, and
+# the Studio keep-paths. Temp credentials files only; no stack, no network
+# egress. The battery reverts each production line 18 ways and demands RED.
+lint:password-rotation-per-run:
+  stage: lint
+  image: alpine:3
+  tags: [hugmesh-x86]
+  before_script:
+    - apk add --no-cache bash coreutils curl jq openssl python3 findutils
+    - for t in bash curl jq openssl python3; do command -v "$t" >/dev/null || { echo "TOOLCHAIN MISSING:$t"; exit 1; }; done
+  script:
+    - bash tests/scripts/test-password-rotation-per-run.sh
+    - bash tests/scripts/password_rotation_per_run_mutations.sh
 # ── Guards that nothing ran, now run ─────────────────────────────────────────
 # THE ORPHAN SWEEP. Forty-one tests/**/test-*.sh suites existed on main that no
 # pipeline job and no make target invoked. They were not drafts: they carry the

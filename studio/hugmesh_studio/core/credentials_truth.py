@@ -35,10 +35,13 @@ the GUI can render. Its halves are deliberately separate:
     thread; it never raises, and every gather failure downgrades ONE fact to
     unknown rather than failing the whole answer.
 
-HOW A SEED IS CORROBORATED. tests/stack/e2e-password.sh's ``e2e_password_ensure``
-REUSES the file's value whenever the file exists and only generates when it is
-absent, and the seeder's apply hook reconciles every stored password to the value
-it resolved (seed-accounts.sh "rotated N password(s) reconciled"). So the
+HOW A SEED IS CORROBORATED. Every `make stack-seed` STARTS a run: tests/stack/
+e2e-password.sh's ``e2e_password_start_run`` writes a NEW value to the file before
+seeding (unless E2E_PASSWORD is set or E2E_PASSWORD_KEEP=1, which reuse it — the
+Studio's Add user and saved-mesh restore pass KEEP), and the seeder's apply hook
+reconciles every stored password to that value (seed-accounts.sh "rotated N
+password(s) reconciled"). A seed that dies after the rotation leaves the file
+NEWER than the last completed seed — the stale shape below. So the
 identities in a Casdoor volume hold the file's value exactly when a seed
 COMPLETED after the file was last written — and that completion is what the
 Studio's own run log records (``<state>/logs/<stamp>-Bootstrapping-ok.log`` and
