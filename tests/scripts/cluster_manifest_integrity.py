@@ -2732,9 +2732,9 @@ def check_workload_service_accounts(root):
 # `kind: Component` carrying `newTag: latest`; and a JSON6902 patch replacing
 # /spec/template/spec/containers/0/image with `owncast/owncast:develop`. The root
 # cause is that an image ref can be SET in many places and the check read two of
-# them. So every place this tree sets an image is read, the places that cannot be
-# read statically fail CLOSED, and the same rule (one function, _judge_ref) is
-# applied to every ref found:
+# them. So each place listed below is read, the listed places that cannot be read
+# statically fail CLOSED, and the same rule (one function, _judge_ref) is applied
+# to every ref found there:
 #
 #   WHERE an image is set, and how each is read:
 #     - `images:` entries of every kustomize doc of kind Kustomization OR Component;
@@ -2754,8 +2754,8 @@ def check_workload_service_accounts(root):
 #   THE RULE (_judge_ref, on the ref the cluster would pull):
 #     a) never `latest` (any case), never untagged and undigested (an implicit
 #        :latest), and a digest must be `sha256:` + 64 lowercase hex;
-#     b) a THIRD-PARTY ref (anything not under registry.hugmesh.net or the bare
-#        `hugmesh/` org) without a digest must carry a version-shaped tag with no
+#     b) a THIRD-PARTY ref (any host but registry.hugmesh.net; a bare `hugmesh/x`
+#        counts, since unrewritten it pulls from Docker Hub) without a digest must carry a version-shaped tag with no
 #        channel word in it: `stable`, `edge`, `develop`, `mainline`, `_edge`,
 #        `nightly`, ... are refused;
 #     c) a THIRD-PARTY ref without a digest is refused unless its exact name:tag is
@@ -2777,6 +2777,9 @@ def check_workload_service_accounts(root):
 #   the form the cluster receives, so a spelling the static reader missed still
 #   fails. A directory that does not render fails. Without kubectl (the python:3-slim
 #   CI image) the cross-check does not run and the PASS line says so.
+#
+#   ALSO REFUSED: an extensionless `Kustomization` file and a remote (URL / git)
+#   resources/components/bases entry, neither of which the static reader can read.
 #
 # NOT CLOSED, stated rather than skipped: FIRST-PARTY images are tracked by the
 # moving `main` tag (the image-builder pushes an immutable short-SHA / release tag
@@ -2872,10 +2875,11 @@ def _split_image_ref(ref):
 
 
 def _is_first_party(name):
+    """Only the platform's own registry host. A BARE `hugmesh/x` that nothing rewrites
+    pulls from Docker Hub's `hugmesh` namespace, which this repo does not control, so
+    it is judged as third-party (a rewritten one is governed by its `images:` entry)."""
     parts = name.split("/")
-    if len(parts) > 1 and ("." in parts[0] or ":" in parts[0] or parts[0] == "localhost"):
-        return parts[0] == _FIRST_PARTY_HOST
-    return parts[0] == "hugmesh"
+    return len(parts) > 1 and parts[0] == _FIRST_PARTY_HOST
 
 
 def _floating_tag(tag):
@@ -2936,10 +2940,16 @@ def _helm_image_ref(d):
     return ref
 
 
+_IMAGE_REFS_MAX_DEPTH = 64
+
+
 def _image_refs(node, depth=0):
     """Every image ref set under `node`: any `image:` key (string, or a helm-style
-    {registry, repository, tag, digest} map), recursing into YAML embedded in strings."""
-    if depth > 8:
+    {registry, repository, tag, digest} map), recursing into YAML embedded in strings.
+    Nesting past _IMAGE_REFS_MAX_DEPTH is a finding, not a silent stop."""
+    if depth > _IMAGE_REFS_MAX_DEPTH:
+        fail("[image-pin]", "a document nests deeper than %d levels; the image refs below "
+             "that depth cannot be checked" % _IMAGE_REFS_MAX_DEPTH)
         return
     if isinstance(node, dict):
         # A document that is not a Kubernetes object (no apiVersion) with a top-level
@@ -3129,6 +3139,13 @@ def check_image_pins(root):
     entry_names = defaultdict(set)      # dir of a kustomize doc -> names its images: rewrite
     kdocs = []                          # (dir, rel, doc)
     entry_gap_refs = set()              # name:tag an IMAGE_DIGEST_KNOWN_GAPS entry renders
+    # kustomize also loads a kustomization from an extensionless file named
+    # `Kustomization`, which yaml_files() never yields: refuse it rather than not read it.
+    for dirpath, _dirs, filenames in os.walk(root):
+        if "Kustomization" in filenames:
+            fail("[image-pin]", "%s: a kustomization in an extensionless `Kustomization` file "
+                 "is not read by this gate; rename it kustomization.yaml"
+                 % os.path.relpath(os.path.join(dirpath, "Kustomization"), root))
     for path in yaml_files(root):
         for doc in docs_of(path):
             if doc.get("kind") not in _KUSTOMIZE_KINDS:
@@ -3137,6 +3154,13 @@ def check_image_pins(root):
             d = os.path.dirname(path)
             kdocs.append((d, rel, doc))
             dname = os.path.basename(d)
+            for key in ("resources", "components", "bases"):
+                for r in doc.get(key) or []:
+                    if isinstance(r, str) and ("://" in r or "?ref=" in r or r.startswith(
+                            ("github.com/", "gitlab.com/", "bitbucket.org/", "git@"))):
+                        fail("[image-pin]", "%s: `%s:` pulls in the REMOTE %r; the images it "
+                             "sets cannot be read here (and a ?ref= branch moves). Vendor it "
+                             "into the tree." % (rel, key, r))
             for key in _UNREADABLE_KUSTOMIZE_KEYS:
                 if doc.get(key):
                     fail("[image-pin]", "%s: uses `%s:`, whose output (including any image it "

@@ -1081,7 +1081,7 @@ assert n > 0, "no kustomization with images: found"
 PY
 '
 
-# ── (21) IMAGE PINS, round 2: every place an image can be SET is read ─────────
+# ── (21) IMAGE PINS, round 2: each place the checker lists as setting an image ──
 # A review got a mutable image past (20) three ways, each rendering a floating tag
 # with the gate green: a raw `image: owncast/owncast:stable`, a `kind: Component`
 # carrying `newTag: latest`, and a JSON6902 patch setting `owncast/owncast:develop`.
@@ -1204,6 +1204,39 @@ expect_catch "foreign kustomization includes owncast/deployment.yaml without rew
 #       digest and the RAW_DIGEST_KNOWN_GAPS entry must be reported stale.
 expect_catch "a RAW_DIGEST_KNOWN_GAPS entry nothing relies on any more is reported stale" "[image-pin]" '
   imgswap manifests/media-poisoner/deployment.yaml "image: busybox:1.37" "image: busybox:1.37@sha256:bdf57e528e45e4433820e045b29b4597825a1c9e38353532d90a01445013f82e"
+'
+
+# (21t) kustomize also reads an extensionless `Kustomization` file: refused, not skipped.
+expect_catch "extensionless Kustomization file (unread by the static reader, fail closed)" "$(ipw "manifests/owncast/Kustomization: a kustomization in an extensionless")" '
+  printf "apiVersion: kustomize.config.k8s.io/v1beta1\nkind: Kustomization\nimages:\n  - {name: owncast/owncast, newTag: latest}\n" > "$T/manifests/owncast/Kustomization"
+'
+# (21u) a remote resource pulls images in from outside the tree (and ?ref= moves).
+expect_catch "remote git resource with ?ref=main (fail closed)" "$(ipw "manifests/owncast/kustomization.yaml: \`resources:\` pulls in the REMOTE")" '
+  imgswap manifests/owncast/kustomization.yaml "  - deployment.yaml
+" "  - deployment.yaml
+  - github.com/example/deploy//owncast?ref=main
+"
+'
+# (21v) a bare hugmesh/ entry with no newName pulls from Docker Hub: third-party rules.
+expect_catch "bare hugmesh/owncast-ui entry with no newName and a floating tag" "$(ipw "manifests/owncast/kustomization.yaml: image hugmesh/owncast-ui (third-party) has tag 'edge'")" '
+  imgswap manifests/owncast/kustomization.yaml "{ name: hugmesh/owncast-ui, newName: registry.hugmesh.net/hugmesh/hugmesh-owncast-ui, newTag: main }" "{ name: hugmesh/owncast-ui, newTag: edge }"
+'
+# (21w) an unrewritten bare hugmesh/ ref in a workload, same reason.
+expect_catch "unrewritten bare hugmesh/ workload image on :edge" "$(ipw "manifests/owncast/deployment.yaml: image 'hugmesh/owncast-ui-extra:edge'")" '
+  imgswap manifests/owncast/deployment.yaml "image: hugmesh/owncast-ui
+" "image: hugmesh/owncast-ui-extra:edge
+"
+'
+# (21x) nesting past the walker depth is a finding, not a silent stop.
+expect_catch "image nested deeper than the walker reads (fail closed)" "$(ipw "a document nests deeper than")" '
+  python3 - "$T/manifests/owncast/deep.yaml" <<"PY"
+import sys, yaml
+node = {"image": "owncast/owncast:latest"}
+for i in range(70):
+    node = {"k%d" % i: node}
+node.update({"apiVersion": "v1", "kind": "ConfigMap", "metadata": {"name": "deep"}})
+open(sys.argv[1], "w").write(yaml.safe_dump(node))
+PY
 '
 
 # (21-render) the kubectl render cross-check catches the three reported exploits ON
