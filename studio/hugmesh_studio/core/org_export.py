@@ -1527,9 +1527,19 @@ def _commit_snapshot(runner, calls, rp: RepoPlan, cfg: ExportConfig, stamp: str,
         r = _run_checked(runner, calls, argv, cwd=wd, env=env, stage="add" in argv)
         if r.returncode != 0:
             raise RuntimeError(f"{shlex.join(argv)} failed in {wd}: {r.err.strip()}")
+    # the commit is pinned by its sha NOW, before anything reads it: every check below
+    # and the push read that sha, never HEAD. The folder is an ordinary directory, so a
+    # writer to it can move HEAD between this scan and the push; a push of HEAD would
+    # then send a commit nobody scanned while the result file named this one
+    pinned = _run_checked(runner, calls, ["git", "rev-parse", "--verify", "-q",
+                                          "HEAD^{commit}"], cwd=wd)
+    commit = pinned.text.strip()
+    if pinned.returncode != 0 or not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", commit):
+        raise RuntimeError(f"the snapshot commit of {rp.target_full} could not be named "
+                           f"({pinned.err.strip()[:160]}): nothing is pushed")
     # the commit must hold every file the plan counted: a count that differs is
     # reported, never pushed, and never compared as an 'unchanged' tree
-    listed = _run_checked(runner, calls, ["git", "ls-tree", "-r", "-z", "--name-only", "HEAD"],
+    listed = _run_checked(runner, calls, ["git", "ls-tree", "-r", "-z", "--name-only", commit],
                           cwd=wd)
     held = len([n for n in listed.stdout.split(b"\0") if n])
     # against the PLAN's count, not a fresh walk of the folder: a folder that changed
@@ -1546,7 +1556,7 @@ def _commit_snapshot(runner, calls, rp: RepoPlan, cfg: ExportConfig, stamp: str,
     # the commit's OWN objects, the bytes a push sends, and any finding refuses it.
     # The repository was made by `git init` above, so every object in it is this commit's.
     listing = _run_checked(runner, calls, ["git", "ls-tree", "-r", "-z", "--full-tree",
-                                           "HEAD"], cwd=wd)
+                                           commit], cwd=wd)
     objs = _run_checked(runner, calls, ["git", "cat-file", "--batch-all-objects", "--batch"],
                         cwd=wd, timeout=1800)
     if listing.returncode != 0 or objs.returncode != 0:
@@ -1558,8 +1568,7 @@ def _commit_snapshot(runner, calls, rp: RepoPlan, cfg: ExportConfig, stamp: str,
         shown = "; ".join(found[:5]) + (" ..." if len(found) > 5 else "")
         raise RuntimeError(f"the snapshot commit of {rp.target_full} holds a banned "
                            f"marker the plan did not show ({shown}): nothing is pushed")
-    commit = _run_checked(runner, calls, ["git", "rev-parse", "HEAD"], cwd=wd).text.strip()
-    tree = _run_checked(runner, calls, ["git", "rev-parse", "HEAD^{tree}"],
+    tree = _run_checked(runner, calls, ["git", "rev-parse", f"{commit}^{{tree}}"],
                         cwd=wd).text.strip()
     return commit, tree
 
@@ -1639,11 +1648,25 @@ def _push_one(runner, calls, rp: RepoPlan, cfg: ExportConfig, stamp: str,
         res.branch = "main"
         if res.action not in ("create",):
             res.action = "update (empty repository)"
+    # the SCANNED commit by its sha, never HEAD (see _commit_snapshot)
     push = _run_checked(runner, calls, ["git", "push", "-q", url,
-                                        f"HEAD:refs/heads/{res.branch}"],
+                                        f"{res.commit}:refs/heads/{res.branch}"],
                         cwd=rp.workdir, env=_git_env(cfg, stamp), timeout=1800)
     if push.returncode != 0:
         res.skipped = f"git push failed: {push.err.strip()[:200]}"
+        return res
+    # read the branch back: the result file names a commit, and it must be the one the
+    # remote now holds. Anything else (another value, no answer) is reported as a
+    # failure, never as a pushed repository
+    back = _run_checked(runner, calls, ["git", "ls-remote", url, f"refs/heads/{res.branch}"],
+                        cwd=rp.workdir, env=_git_env(cfg, stamp), timeout=120)
+    held = [ln.split("\t", 1)[0] for ln in back.text.splitlines()
+            if ln.endswith(f"\trefs/heads/{res.branch}")]
+    if back.returncode != 0 or held != [res.commit]:
+        res.skipped = (f"after the push, {res.branch} on the remote is "
+                       f"{held[0] if held else 'unreadable'}, not the scanned commit "
+                       f"{res.commit}: the remote may hold content this export did not "
+                       "scan, check it by hand")
     return res
 
 

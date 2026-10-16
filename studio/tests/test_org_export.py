@@ -776,7 +776,7 @@ def test_apply_pushes_one_fresh_commit_per_repository_never_force(world):
         assert "--mirror" not in joined
         assert "--delete" not in joined and " -f " not in f" {joined} "
         if call[:2] == ["git", "push"]:
-            assert call[-1].startswith("HEAD:refs/heads/")
+            assert re.fullmatch(r"[0-9a-f]{40}:refs/heads/main", call[-1]), call
     # gh was the fake, called only for view/create
     verbs = {" ".join(c.split()[:2]) for c in runner.gh_calls()}
     assert verbs == {"repo view", "repo create"}
@@ -2582,3 +2582,107 @@ def test_the_widened_token_rules_do_not_fire_on_lookalikes():
     # a password, which is not a finding there
     assert oe._scan_bytes(("https://u:" + "p" * 20 + "@h").encode("cp037") + b"\xff")[0] \
         == []
+
+
+# ── the push sends the SCANNED commit ───────────────────────────────────────────────
+def _move_head_with_a_token(workdir):
+    """What a writer to the work folder can do at any moment: commit a token on top
+    of the snapshot, moving HEAD."""
+    with open(os.path.join(workdir, "README.md"), "ab") as fh:
+        fh.write(b"\n" + _GH_TOKEN + b"\n")
+    _git(workdir, "add", "README.md")
+    _git(workdir, "commit", "-q", "-m", "swap")
+    return _git(workdir, "rev-parse", "HEAD")
+
+
+def _hooked(runner, when, action):
+    """Run ``action`` once, just before the first runner call ``when(argv, kw)`` matches."""
+    orig, fired = runner.run, []
+
+    def run(argv, **kw):
+        if not fired and when(list(argv), kw):
+            fired.append(action(list(argv), kw))
+        return orig(argv, **kw)
+    runner.run = run
+    return fired
+
+
+def _in(wd):
+    return lambda kw: bool(kw.get("cwd")) and os.path.samefile(kw["cwd"], wd)
+
+
+@pytest.mark.parametrize("point", [
+    # after the scan, before the push: the reported exploit
+    lambda a, kw, rp: a[:3] == ["gh", "repo", "view"] and a[3] == rp.target_full,
+    lambda a, kw, rp: a[:3] == ["git", "ls-remote", "--heads"] and _in(rp.workdir)(kw),
+    # after the scan, while the snapshot's tree is being named
+    lambda a, kw, rp: a[:2] == ["git", "rev-parse"] and a[-1].endswith("^{tree}")
+    and _in(rp.workdir)(kw),
+    # inside the scan itself: the moved commit's objects are on disk by then
+    lambda a, kw, rp: a[:3] == ["git", "cat-file", "--batch-all-objects"]
+    and _in(rp.workdir)(kw),
+], ids=["gh-repo-view", "ls-remote-heads", "rev-parse-tree", "cat-file-scan"])
+def test_head_moved_after_the_snapshot_commit_never_reaches_the_remote(world, point):
+    """The push used to send HEAD as it stood at push time: a commit added to the work
+    folder after the scan (the folder is an ordinary directory) was PUBLISHED with no
+    skip reason, and the result file named the scanned commit while the remote held
+    the other one. The push now sends the scanned sha, and the result names what the
+    remote holds; a move seen by the scan itself refuses the repository instead."""
+    cfg, runner = world["cfg"], world["runner"]
+    p = oe.plan(cfg, runner, stamp="20260101T000000Z", probe=False)
+    rp = next(r for r in p.repos if r.source == "hugmesh-commons")
+    fired = _hooked(runner, lambda a, kw: point(a, kw, rp),
+                    lambda a, kw: _move_head_with_a_token(rp.workdir))
+    res = oe.apply(p, runner)
+    assert fired, "the hook never ran: the test proves nothing"
+    r = next(x for x in res.repos if x.target == rp.target_full)
+    bare = _bare(world, "example-commons")
+    if not os.path.isdir(bare):
+        # refused before anything was created or pushed
+        assert r.skipped and "banned marker" in r.skipped, r.skipped
+        return
+    remote = _git(bare, "rev-parse", "main")
+    assert remote != fired[0], "the unscanned commit was pushed"
+    assert _GH_TOKEN.decode() not in _git(bare, "show", "main:README.md")
+    assert _GH_TOKEN.decode() not in _git(bare, "log", "--all", "-p", "--format=%H")
+    assert r.commit == remote and not r.skipped, (r.commit, remote, r.skipped)
+    push = [c for c in res.calls if c[:2] == ["git", "push"] and "example-commons" in c[3]]
+    assert push and push[0][-1] == f"{r.commit}:refs/heads/main", push
+
+
+def test_a_remote_branch_that_is_not_the_scanned_commit_after_the_push_is_a_failure(world):
+    """The branch is read back after the push: when the remote holds anything but the
+    scanned commit, the repository is reported as skipped, never as pushed."""
+    cfg, runner = world["cfg"], world["runner"]
+    p = oe.plan(cfg, runner, stamp="20260101T000000Z", probe=False)
+    rp = next(r for r in p.repos if r.source == "hugmesh-commons")
+    bare = _bare(world, "example-commons")
+
+    def overwrite(argv, kw):
+        other = _move_head_with_a_token(rp.workdir)
+        _git(rp.workdir, "push", "-q", bare, "+HEAD:refs/heads/main")
+        return other
+    fired = _hooked(runner, lambda a: a[:2] == ["git", "ls-remote"] and "--heads" not in a
+                    and "example-commons" in a[2], overwrite)
+    res = oe.apply(p, runner)
+    assert fired
+    r = next(x for x in res.repos if x.target == rp.target_full)
+    assert r in res.failures
+    assert "not the scanned commit" in r.skipped and fired[0] in r.skipped, r.skipped
+
+
+def test_an_unreadable_remote_branch_after_the_push_is_a_failure(world):
+    cfg, runner = world["cfg"], world["runner"]
+    p = oe.plan(cfg, runner, stamp="20260101T000000Z", probe=False)
+    rp = next(r for r in p.repos if r.source == "hugmesh-commons")
+    orig = runner.run
+
+    def run(argv, **kw):
+        if argv[:2] == ["git", "ls-remote"] and "--heads" not in argv \
+                and "example-commons" in argv[2]:
+            return oe.RunResult(128, b"", b"fatal: could not read from remote")
+        return orig(argv, **kw)
+    runner.run = run
+    res = oe.apply(p, runner)
+    r = next(x for x in res.repos if x.target == rp.target_full)
+    assert r in res.failures and "unreadable" in r.skipped, r.skipped
