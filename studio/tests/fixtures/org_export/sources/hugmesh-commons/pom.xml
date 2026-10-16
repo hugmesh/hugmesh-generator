@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <parent>
+    <groupId>net.hugmesh</groupId>
+    <artifactId>hugmesh-parent</artifactId>
+    <version>2.8.0</version>
+    <relativePath/>
+  </parent>
+
+  <!-- OWN groupId, declared EXPLICITLY rather than inherited from the parent.
+       Keep this line even though the parent now shares the same groupId: an
+       inherited coordinate is exactly how this artifact silently shipped under the
+       parent's old legacy groupId while the Java package inside the jar had
+       ALREADY been moved to net.hugmesh.commons (commit 463c12c, "domain move to
+       .net"), leaving the rename half-applied along the Maven axis — 9 of 11
+       consuming services declared net.hugmesh:hugmesh-commons:2.1.0, a coordinate
+       NOTHING published, so their builds failed to resolve it (hugmesh-gateway
+       included, which is how a header fix ended up blocked on a groupId).
+       Declaring it explicitly makes the published coordinate independent of
+       whatever the parent's groupId happens to be. -->
+  <groupId>net.hugmesh</groupId>
+  <artifactId>hugmesh-commons</artifactId>
+  <version>2.1.0</version>
+  <packaging>jar</packaging>
+  <name>hugmesh-commons</name>
+  <description>Shared, canonical HugMesh security/tenancy/config/web building blocks
+    (Casdoor JWT authorities, issuer-&gt;domain registry, role + tenant helpers, the
+    config-gated multi-issuer resource-server wiring, the BFF ApiException) — lifted
+    verbatim from the per-repo copies with every security behaviour preserved.</description>
+
+  <!-- A LIBRARY, not a Spring Boot application: disable the spring-boot repackage goal
+       (no executable jar / main class) so `install` produces a plain reusable jar. -->
+  <build>
+    <plugins>
+      <plugin>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-maven-plugin</artifactId>
+        <configuration>
+          <skip>true</skip>
+        </configuration>
+      </plugin>
+
+      <!-- Publish a TEST-JAR alongside the main jar so every consumer can depend on
+           `net.hugmesh:hugmesh-commons:2.1.0:tests` (test scope) and reuse
+           ONE shared Testcontainers-Postgres base (PostgresTestSupport) instead of
+           re-copying it per repo. -->
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-jar-plugin</artifactId>
+        <executions>
+          <execution>
+            <id>shared-test-base</id>
+            <goals>
+              <goal>test-jar</goal>
+            </goals>
+          </execution>
+        </executions>
+      </plugin>
+    </plugins>
+  </build>
+
+  <!-- All compile dependencies (webflux, security, oauth2-resource-server,
+       spring-boot autoconfigure for @ConditionalOnExpression, reactor) and the test
+       stack are inherited from hugmesh-parent's common <dependencies>. No
+       repo-specific dependencies here — this is the shared core. -->
+</project>

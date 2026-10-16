@@ -15,8 +15,9 @@
 #     poller is the runtime gate); enabled is read RAW (no // true / // false).
 #   * the hugmesh-update-policy ConfigMap is DEFAULT-OFF (enabled:false) and lives
 #     under the binhost ArgoCD app's synced path (a superadmin sets enabled:true).
-#   * PROTECTED x86 builder: report whether it bakes the poller (it must NOT be
-#     edited here; we ASSERT the deferred state so the gap is tracked, not silent).
+#   * x86 builder: copies the poller + OpenRC service inside the ! UNAFFILIATED
+#     platform-tools block and links hugmesh-update into BOTH SVCS arrays (client
+#     affiliated arm, cluster-node array gated on ${UNAFFILIATED}).
 set -uo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -100,20 +101,67 @@ fi
 has 'path: specs/cluster/manifests/binhost' "${REPO}/specs/cluster/apps/02-binhost.yaml" \
     && ok "ConfigMap is under the binhost ArgoCD app's synced path (auto-deployed)" || bad "ConfigMap not in a synced path"
 
-# ── PROTECTED x86 builder: assert the DEFERRED state (tracked, not silent) ──────
-# We may NOT edit build-x86-host-stage4.sh. Document the gap as a test so the
-# follow-up is tracked: the x86 builder runs provision.sh (=> provision_update runs),
-# but does NOT yet bake the poller binary, so x86 currently STAGES the cron + warns.
-if has 'usr/local/sbin/hugmesh-backup' "${X86}"; then
-  ok "x86 (protected): runs the shared provision.sh + backup engine (so provision_update WILL run)"
-fi
-if has 'usr/local/sbin/hugmesh-update' "${X86}"; then
-  ok "x86 (protected): ALSO bakes the poller plumbing (protected follow-up landed)"
+# ── x86 host + client builder: bake + runlevel link in BOTH SVCS arrays ─────────
+# build-x86-host-stage4.sh used to bake neither, so provision_update took its
+# "poller not baked" branch and only staged /etc/hugmesh/cron-update.staged. The
+# poller + OpenRC service are platform machinery (they read /etc/hugmesh), so they
+# are baked INSIDE the `! UNAFFILIATED` block and both runlevel links are gated the
+# same way (a link to an unbaked init script would dangle). Structural check, not
+# a bare grep: the copy must sit between the `if ! ${UNAFFILIATED}; then` that opens
+# the platform-tools block and the `fi   # ! UNAFFILIATED (...backup...)` that closes
+# it; the client link must be in the affiliated arm of the client SVCS assignment;
+# the host link must be gated on ${UNAFFILIATED}.
+has 'usr/local/sbin/hugmesh-backup' "${X86}" \
+    && ok "x86: runs the shared provision.sh + backup engine (so provision_update WILL run)" \
+    || bad "x86: backup engine anchor missing (test anchor drifted)"
+if command -v python3 >/dev/null 2>&1; then
+  _x86out="$(python3 - "${X86}" <<'PY'
+import re, sys
+L = open(sys.argv[1]).read().split("\n")
+def idx(pred, start=0):
+    for n in range(start, len(L)):
+        if pred(L[n]): return n
+    return -1
+def check(label, cond):
+    print(("  PASS " if cond else "  FAIL ") + label)
+    return 0 if cond else 1
+bad = 0
+bk = idx(lambda l: "usr/local/sbin/hugmesh-backup" in l and l.startswith("cp "))
+end = idx(lambda l: l.startswith("fi") and "! UNAFFILIATED" in l and "backup" in l, bk)
+op = max((n for n in range(bk) if L[n].startswith("if ! ${UNAFFILIATED}; then")), default=-1)
+bad += check("x86: located the platform-tools block (opens before the backup copy, closes after it)", 0 <= op < bk < end)
+blk = L[op:end+1] if end > 0 else []
+cp_poller = [l for l in blk if l.startswith("cp ") and "/usr/local/sbin/hugmesh-update" in l and "${SYSROOT}/usr/local/sbin/hugmesh-update" in l and "chmod +x" in l]
+cp_init   = [l for l in blk if l.startswith("cp ") and "/etc/init.d/hugmesh-update" in l and "${SYSROOT}/etc/init.d/hugmesh-update" in l and "chmod +x" in l]
+bad += check("x86: copies + chmods the poller inside the ! UNAFFILIATED block", len(cp_poller) == 1)
+bad += check("x86: copies + chmods the OpenRC service inside the ! UNAFFILIATED block", len(cp_init) == 1)
+# Client array: the SVCS assignment in the `else` of `if ${UNAFFILIATED}` must be followed
+# (before the closing fi) by the update link.
+cl = idx(lambda l: re.match(r"^\s+SVCS=\(.*keys-provision auditd local dbus elogind display-manager\)", l))
+bad += check("x86 client: located the affiliated client SVCS array", cl > 0)
+arm = L[cl+1:cl+4] if cl > 0 else []
+fi_n = next((n for n, l in enumerate(arm) if re.match(r"^    fi\s*$", l)), -1)
+bad += check("x86 client: hugmesh-update linked in the affiliated arm (before the closing fi)",
+             any(re.match(r"^\s+SVCS\+=\(hugmesh-update\)\s*$", l) for l in (arm[:fi_n] if fi_n >= 0 else [])))
+un = idx(lambda l: re.match(r"^\s+SVCS=\(.*growroot auditd local dbus elogind display-manager\)", l))
+bad += check("x86 client: the UNAFFILIATED client array exists and does NOT carry it",
+             un > 0 and "hugmesh-update" not in L[un] and not re.match(r"^\s+SVCS\+=\(hugmesh-update\)", L[un+1]))
+ho = idx(lambda l: re.match(r"^    SVCS=\(.*hugmesh-go-live-reconcile containerd kubelet auditd local\)", l))
+bad += check("x86 host: located the cluster-node SVCS array", ho > 0)
+hn = L[ho+1:ho+6] if ho > 0 else []
+bad += check("x86 host: hugmesh-update linked, gated on ${UNAFFILIATED} (no dangling link)",
+             any(re.match(r"^\s+\$\{UNAFFILIATED\} \|\| SVCS\+=\(hugmesh-update\)\s*$", l) for l in hn))
+sys.exit(1 if bad else 0)
+PY
+)"
+  _x86rc=$?
+  printf '%s\n' "${_x86out}"
+  P=$((P + $(printf '%s\n' "${_x86out}" | grep -c '^  PASS ')))
+  F=$((F + $(printf '%s\n' "${_x86out}" | grep -c '^  FAIL ')))
+  [ "${_x86rc}" -eq 0 ] || [ "${F}" -gt 0 ] || bad "x86 structural check exited ${_x86rc} without reporting a failure"
 else
-  echo "  NOTE x86 (protected) does NOT yet bake /usr/local/sbin/hugmesh-update;"
-  echo "       provision_update STAGES /etc/hugmesh/cron-update.staged + warns."
-  echo "       Deferred protected edit: cp the poller + service + add to both SVCS arrays."
-  ok "x86 deferred state is the EXPECTED/known gap (provision_update stages, not silent)"
+  has 'usr/local/sbin/hugmesh-update' "${X86}" && has 'etc/init.d/hugmesh-update' "${X86}" \
+      && ok "x86 bakes the poller + service (grep; python3 absent)" || bad "x86 does not bake the poller"
 fi
 
 echo "== RESULT: ${P} passed, ${F} failed =="

@@ -80,6 +80,13 @@
 # onion is unaffected by the file. Removing a slug from the file drops its stanza and
 # its exported hostname but NEVER its keypair, so re-adding it restores the same
 # address.
+# WHO WRITES THE TWO INPUT FILES. The image bake or a person may seed them; at runtime
+# the sibling /usr/sbin/hugmesh-tor-export-sync (hugmesh-generator#629, every minute from
+# the same cron drop-in) writes them from admin-bff's SIGNED per-node export — verified
+# against the baked key-USB public half BEFORE anything is written, one managed flag per
+# file, atomic temp-then-rename — and then runs this agent so the torrc follows in the
+# same pass. The _UPSTREAM_RE and slug pattern below are the contract both agents share
+# (the sync refuses a value this agent would ignore); the contract test pins them equal.
 #
 # ONION-KEY CUSTODY (OFF-GIT, the whole point): every v3 keypair
 # (hs_ed25519_secret_key + hostname) lives under /var/lib/tor — node-local runtime

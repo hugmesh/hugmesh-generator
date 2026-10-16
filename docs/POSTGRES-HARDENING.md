@@ -204,9 +204,11 @@ Applied via each DB Deployment's `POSTGRES_*` env + container `args` and the
   (cert present but unused).
 - **In-cluster TLS — gated, ships dark (`PG_TLS_ENABLED`, default `false`).** DB
   Services are ClusterIP-only and confined by SELinux MCS levels + NetworkPolicy.
-  Wire encryption between an app and its DB is **wired but inert**: each of the six
-  DB pods (admin-bff-db, mod-bff-db, user-bff-db, federation-db, forum-bff-db,
-  route-access-db) mounts its Vault-PKI server cert read-only at `/etc/postgres-tls`
+  Wire encryption between an app and its DB is **wired but inert**: each of the NINE
+  dedicated DB pods (admin-bff-db, mod-bff-db, user-bff-db, federation-db,
+  forum-bff-db, route-access-db, plus wiki-bff-db, mesh-bff-db and
+  character-forge-bff-db, which this text predates; re-measured 2026-10-14, all nine
+  still `PG_TLS_ENABLED: "false"`) mounts its Vault-PKI server cert read-only at `/etc/postgres-tls`
   AND boots through a small init wrapper `entrypoint/pg-tls-entrypoint.sh`
   (a SEPARATE ConfigMap, not in the initdb dir) that mirrors the egress-proxy
   entrypoint idiom:
@@ -225,7 +227,11 @@ Applied via each DB Deployment's `POSTGRES_*` env + container `args` and the
   `"true"` in the DB Deployment (config-only — no new cert plumbing) ONLY after the
   Vault-PKI server-cert ESO Secret `<db>-mtls` is provisioned/materialized per DB.
   Until then it stays off; the DBs are single-node, same-namespace, and already
-  MCS+NetworkPolicy-confined, so the default-off posture is safe. **Out of scope**
+  MCS+NetworkPolicy-confined, so the default-off posture is safe. **The per-DB
+  procedure, the order, the preflight (`scripts/pg-tls-preflight.sh`, which refuses
+  the flip while `<db>-mtls` is missing or unusable) and the rollback are in
+  `docs/DB-HARDENING-RUNBOOK.md`.** The flip is a git change and a Recreate rollout:
+  with the Secret absent it takes the DB down, because the volume is `optional: true`. **Out of scope**
   (no dark-TLS cert mounted — would need new ESO certs first): casdoor/casdoor-games
   Postgres, akkoma-db, the phpBB forum Postgres, observability Postgres.
 

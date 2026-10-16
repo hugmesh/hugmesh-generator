@@ -78,7 +78,8 @@ import os
 from ..qt import Qt, QtWidgets
 from ..styles import WARN, muted
 from ...core.config import (CLIENT_CA_INHERITANCE_NOTE, DOMAIN_IDP_OWN,
-                            DOMAIN_IDP_SUPERDOMAIN, Domain, image_class,
+                            DOMAIN_IDP_SUPERDOMAIN, GITHUB_ORG_RE, Domain,
+                            github_org_problem, image_class,
                             superadmin_plane_applies)
 from ...core.domain_services import (implicit_own_domain, normalise_slugs,
                                      reviewed_names, services_summary, split_services)
@@ -90,6 +91,21 @@ _COL_IDP = 4
 # The per-domain base-CA column (issue #335) is APPENDED for the same reason — every
 # earlier index, _COL_IDP included, keeps the position its tests already pin.
 _COL_CA = 5
+# The per-domain GitHub org column (the Go-Live "Export to GitHub org" step) is
+# APPENDED for the same reason. It is a STORE cell (the row's ``Domain.github_org``),
+# editable on the own row too: the own domain is the one most worth exporting, and
+# both hosts have a field for it (ImageConfig.cluster_domain_github_org / the
+# local-mesh own Domain row).
+_COL_ORG = 6
+#: The org cell's placeholder — says what the field is, never a real org. Short on
+#: purpose: the cell is narrow at the table's default width and a longer text was
+#: drawn elided ("none (not export…"); the tooltip carries the explanation.
+_ORG_PLACEHOLDER = "none"
+_ORG_TIP = ("The GitHub organisation this domain's repositories are exported to by "
+            "the Go-Live wizard's ‘Export to GitHub org’ step. An org SLUG only "
+            "(letters, digits, single hyphens, at most 39) — never a token: the "
+            "export signs in with your own `gh auth login` when it runs. Empty = "
+            "this domain takes no part in that step, which is the default.")
 #: The combo's "this domain names no base CA" row. Its DATA is the empty string, which
 #: is what ``cfg.domain_ca`` stores for "absent" — so the default row and a missing
 #: key are the same fact, and an untouched table writes an empty dict.
@@ -168,6 +184,29 @@ class _BaseCaCombo(QtWidgets.QComboBox):
     def selected_ca(self) -> str:
         """The chosen certificate PATH, or "" for None."""
         return self.currentData() or ""
+
+
+class _OrgCell(QtWidgets.QLineEdit):
+    """Per-row GitHub org cell: the row's ``Domain.github_org``. A validator keeps
+    the typed text to GitHub's slug alphabet (a trailing hyphen is an in-progress
+    state the validator allows, ``github_org_problem`` refuses it on Next); tests
+    read/write the value through :meth:`selected_org` / ``setText``."""
+
+    def __init__(self, selected: str = ""):
+        super().__init__()
+        self.setPlaceholderText(_ORG_PLACEHOLDER)
+        self.setToolTip(_ORG_TIP)
+        self.setClearButtonEnabled(True)
+        self.setMaxLength(39)
+        from ..qt import QtCore, QtGui
+        self.setValidator(QtGui.QRegularExpressionValidator(
+            QtCore.QRegularExpression(r"[A-Za-z0-9-]{0,39}"), self))
+        self.setText((selected or "").strip())
+
+    def selected_org(self) -> str:
+        """The typed org slug, trimmed and lower-cased (GitHub logins are
+        case-insensitive; one spelling keeps the rename map and the plan stable)."""
+        return self.text().strip().lower()
 
 
 class _AppliesToButton(QtWidgets.QToolButton):
@@ -298,10 +337,11 @@ class DomainsTableBody:
         # the choice is made on the 'Domain services' step, one page per domain, which
         # is the step the build/mesh-start gate requires. 'Applies to' fills Domain.images
         # (mesh only; hidden in cloud where the single image attaches implicitly).
-        self.table = QtWidgets.QTableWidget(0, 6)
+        self.table = QtWidgets.QTableWidget(0, 7)
         self.table.setHorizontalHeaderLabels(
             ["Domain", "Title", "Optional services", "Applies to", "Sign-in",
-             "Base CA"])
+             "Base CA", "GitHub org"])
+        self.table.horizontalHeaderItem(_COL_ORG).setToolTip(_ORG_TIP)
         title_hdr = self.table.horizontalHeaderItem(_COL_TITLE)
         title_hdr.setToolTip(
             "This domain's display name. Written to the mesh manifest "
@@ -338,6 +378,15 @@ class DomainsTableBody:
             "the PEM files on the Secrets store step (later in this wizard); until "
             "you have, every row here offers only ‘None’.")
         self.table.horizontalHeader().setStretchLastSection(True)
+        # SEVEN columns have to fit the wizard's default width (measured: a 679 px
+        # table viewport). At Qt's 100 px default each, the appended GitHub org
+        # column started at 600 and ended at 700 — drawn, but only reachable by a
+        # horizontal scroll nobody makes (#647: a control a person cannot see is not
+        # there). Titles are short, so Title gives up 20 px and the stretched last
+        # section (the org cell) takes what is left — at least Qt's 100 px section
+        # minimum, room for "exampleorg" to show whole (a 39-char slug scrolls inside
+        # the line edit). Title is 70 px so 570 + 100 fits with a few pixels spare.
+        self.table.setColumnWidth(_COL_TITLE, 70)
         # A host with no worklist (the local docker mesh) hides Applies-to; one with
         # no Secrets-store step hides Base CA — the column would offer one answer
         # ("None") and name a step the route does not have.
@@ -384,7 +433,7 @@ class DomainsTableBody:
         return reviewed_names(self._cfg())
 
     def _add(self, name="", title="", services="", images=None,
-             idp=DOMAIN_IDP_SUPERDOMAIN, base_ca=""):
+             idp=DOMAIN_IDP_SUPERDOMAIN, base_ca="", github_org=""):
         r = self.table.rowCount()
         self.table.insertRow(r)
         self.table.setItem(r, _COL_NAME, QtWidgets.QTableWidgetItem(name))
@@ -396,10 +445,61 @@ class DomainsTableBody:
                                  _AppliesToButton(self._entries(), images or []))
         self.table.setCellWidget(r, _COL_IDP, _IdpCombo(idp))
         self.table.setCellWidget(r, _COL_CA, _BaseCaCombo(self._certs(), base_ca))
+        self._set_org_cell(r, github_org)
+
+    def _set_org_cell(self, r: int, github_org: str = "") -> None:
+        cell = _OrgCell(github_org)
+        cell.editingFinished.connect(self._on_org_edited)
+        self.table.setCellWidget(r, _COL_ORG, cell)
+
+    def _on_org_edited(self) -> None:
+        """An org cell lost focus: say INLINE (never a modal) when it is not a slug,
+        and clear the note once it is. The authoritative refusal is on Next
+        (``org_problems``); this is the same sentence, earlier."""
+        problems = self.org_problems()
+        self.row_note.setText("\n".join(problems))
+        self.row_note.setVisible(bool(problems))
+        # the own row's org is written through to a host whose own row IS a Domain
+        # row (the local-mesh state); the image flow has no such row and its page
+        # writes cfg.cluster_domain_github_org on Next instead
+        cfg = self._cfg()
+        own = self.own_row_name()
+        row = cfg.by_name(own) if (cfg is not None and own
+                                   and hasattr(cfg, "by_name")) else None
+        if row is not None and not github_org_problem(self.own_row_github_org()):
+            row.github_org = self.own_row_github_org()
+
+    def row_github_org(self, r: int) -> str:
+        cell = self.table.cellWidget(r, _COL_ORG)
+        return cell.selected_org() if isinstance(cell, _OrgCell) else ""
+
+    def own_row_github_org(self) -> str:
+        """The own row's typed org slug ("" when none, or no own row)."""
+        for r in range(self.table.rowCount()):
+            if self.is_own_row(r):
+                return self.row_github_org(r)
+        return ""
+
+    def org_problems(self) -> list[str]:
+        """Why the typed org cells cannot be recorded, one line per bad row; [] when
+        every cell is empty or a slug. The words are ``config.github_org_problem``'s
+        — the same sentence the TUI's ``o`` command and the config loader use."""
+        out: list[str] = []
+        for r in range(self.table.rowCount()):
+            cell = self.table.cellWidget(r, _COL_ORG)
+            if not isinstance(cell, _OrgCell):
+                continue
+            problem = github_org_problem(cell.text())
+            if problem:
+                item = self.table.item(r, _COL_NAME)
+                name = item.text().strip() if item else ""
+                out.append(f"row {r} ({name or 'unnamed'}): {problem}")
+        return out
 
     def _add_own(self, name: str, title: str = "", services=None,
-                 reviewed: bool = False) -> None:
-        """Insert the mesh's OWN domain as display-only row 0 (see the class doc)."""
+                 reviewed: bool = False, github_org: str = "") -> None:
+        """Insert the mesh's OWN domain as display-only row 0 (see the class doc).
+        Its GitHub org cell is the one EDITABLE cell: the own domain's export org."""
         self.table.insertRow(0)
         item = QtWidgets.QTableWidgetItem(name)
         item.setData(Qt.ItemDataRole.UserRole, _OWN_ROW)
@@ -419,6 +519,7 @@ class DomainsTableBody:
             lab.setStyleSheet(muted())
             lab.setToolTip(_OWN_TIP)
             self.table.setCellWidget(0, col, lab)
+        self._set_org_cell(0, github_org)
 
     def is_own_row(self, r: int) -> bool:
         item = self.table.item(r, _COL_NAME)
@@ -511,6 +612,12 @@ class DomainsTableBody:
         recorded = {(getattr(d, "name", "") or "").strip(): list(d.optional_services)
                     for d in (getattr(cfg, "domains", None) or [])
                     if (getattr(d, "name", "") or "").strip()}
+        # The Tor front door (#582) is written by the services step too, and has no
+        # cell here at all — so it is carried BY NAME exactly like the services, or a
+        # Next through this table would silently drop every domain's onion.
+        recorded_tor = {(getattr(d, "name", "") or "").strip(): bool(getattr(d, "tor", False))
+                        for d in (getattr(cfg, "domains", None) or [])
+                        if (getattr(d, "name", "") or "").strip()}
         out: list[Domain] = []
         base_ca: dict[str, str] = {}
         for r in range(self.table.rowCount()):
@@ -535,7 +642,9 @@ class DomainsTableBody:
             if ca:
                 base_ca[name] = ca
             out.append(Domain(name=name, title=title or name,
-                              optional_services=services, images=images, idp=idp))
+                              optional_services=services, images=images, idp=idp,
+                              tor=recorded_tor.get(name, False),
+                              github_org=self.row_github_org(r)))
         return out, base_ca
 
 
@@ -688,6 +797,9 @@ class DomainsPage(QtWidgets.QWizardPage, DomainsTableBody):
         # provisions no domains). A hidden combo still collects its untouched "None",
         # which is the absent-key default — leaves the output unchanged either way.
         self.table.setColumnHidden(_COL_CA, c.mode != "mesh")
+        # the export org is a MESH concept too (a cloud client exports no repositories),
+        # so it hides in cloud like Sign-in; a hidden cell still collects its "".
+        self.table.setColumnHidden(_COL_ORG, c.mode != "mesh")
         self.client_ca_note.setVisible(c.mode == "cloud")
         # Row 0 is derived state, so it is re-derived on EVERY forward entry, not
         # only when the table is empty (#494 fix round): a same-object Back (no
@@ -705,10 +817,12 @@ class DomainsPage(QtWidgets.QWizardPage, DomainsTableBody):
             own = implicit_own_domain(c)
             if own:
                 self._add_own(own, c.brand_title, c.cluster_domain_services,
-                              reviewed=(own in reviewed_names(c)))
+                              reviewed=(own in reviewed_names(c)),
+                              github_org=c.cluster_domain_github_org)
             for d in c.domains:
                 self._add(d.name, d.title, list(d.optional_services), d.images,
-                          d.idp, (c.domain_ca or {}).get(d.name, ""))
+                          d.idp, (c.domain_ca or {}).get(d.name, ""),
+                          github_org=d.github_org)
             # default prefill (spec 4): seed row 0 with the cluster domain so a fresh
             # cloud superadmin starts from a valid PRIMARY domain (table position =
             # first --domains element). Scoped to CLOUD: in mesh the own domain is the
@@ -738,6 +852,9 @@ class DomainsPage(QtWidgets.QWizardPage, DomainsTableBody):
         Only row 0 is touched (it carries no operator input — every cell is a
         fact); the ADDED rows, and so every in-progress edit, are left alone."""
         own = implicit_own_domain(c)
+        # the own row's org cell is operator input (the one editable cell on it):
+        # carried across the redraw rather than reset to the config's last write
+        typed_org = self.own_row_github_org()
         for r in range(self.table.rowCount() - 1, -1, -1):
             if self.is_own_row(r):
                 self.table.removeRow(r)
@@ -746,7 +863,8 @@ class DomainsPage(QtWidgets.QWizardPage, DomainsTableBody):
         # drawing the own row too would list the same domain twice (PR #595 skeptics).
         if own and not self._added_row_named(own):
             self._add_own(own, c.brand_title, c.cluster_domain_services,
-                          reviewed=(own in reviewed_names(c)))
+                          reviewed=(own in reviewed_names(c)),
+                          github_org=typed_org or c.cluster_domain_github_org)
 
     def forget_rows(self) -> None:
         """Drop the table: the configuration's domain rows were REPLACED under this
@@ -796,8 +914,20 @@ class DomainsPage(QtWidgets.QWizardPage, DomainsTableBody):
         ``domains`` row, so an untouched mesh flow still emits none."""
         if self.wiz.cfg is not self._cfg_seen:
             return True                     # no table for THIS config yet: write nothing
+        # A GitHub org that is not a slug is refused HERE, inline (never a modal):
+        # the config loader fails loudly on one, so writing it would save a config
+        # that cannot be opened again. The rows are left as typed.
+        problems = self.org_problems()
+        self.row_note.setText("\n".join(problems))
+        self.row_note.setVisible(bool(problems))
+        if problems:
+            return False
         out, base_ca = self.rows()
         self.wiz.cfg.domains = out
+        # the own domain's export org — the one editable cell of row 0 (hidden in
+        # cloud, where the cell is untouched and collects "")
+        if not self.table.isColumnHidden(_COL_ORG):
+            self.wiz.cfg.cluster_domain_github_org = self.own_row_github_org()
         # REBUILT from the table, never merged into what was there: a renamed or
         # deleted domain must not leave a stranded entry, and an untouched table
         # (every picker on None) leaves the empty dict the native default already is —
@@ -859,10 +989,12 @@ class DomainsTableWidget(QtWidgets.QWidget, DomainsTableBody):
                    and (domains[0].name or "").strip() == own_name else None)
         if own_row is not None:
             self._add_own(own_name, own_row.title or own_title, own_row.optional_services,
-                          reviewed=(own_name in done))
+                          reviewed=(own_name in done),
+                          github_org=getattr(own_row, "github_org", ""))
         else:
             self._add_own(own_name, own_title, None, reviewed=(own_name in done))
         for d in domains:
             if d is own_row:
                 continue
-            self._add(d.name, d.title, list(d.optional_services), [], d.idp)
+            self._add(d.name, d.title, list(d.optional_services), [], d.idp,
+                      github_org=getattr(d, "github_org", ""))

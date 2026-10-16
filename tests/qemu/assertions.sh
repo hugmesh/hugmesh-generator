@@ -604,11 +604,13 @@ done
 check "every LSM the cmdline requests is initialized (asked:${_lsm_req:-<none>} live:${_lsm_live:-<none>})" \
     '[ -n "${_lsm_req}" ] && [ -n "${_lsm_live}" ] && [ -z "${_lsm_missing}" ]'
 # Lockdown (integrity or higher) prevents /dev/mem writes, unsigned module loading,
-# kprobe redirection. It is requested by x86 + rpi5 only: the 8 ARM board images
-# ship no lockdown= in cmdline.base and no CONFIG_SECURITY_LOCKDOWN_LSM in their
-# fragments, so asserting it unconditionally would only ever grade the harness's
-# own -append literal. Assert it where the image ASKS for it, from the kernel's
-# report — never from the cmdline word, which is the claim under test.
+# kprobe redirection. Every board image now requests it (x86, rpi5 and the 8 ARM
+# boards all carry lockdown=integrity and build CONFIG_SECURITY_LOCKDOWN_LSM; the
+# fleet property is pinned by tests/scripts/test-lsm-posture-honesty.sh). The branch
+# stays conditional on the cmdline so a harness that boots a kernel WITHOUT the token
+# cannot be graded against a literal it made up. Assert it where the image ASKS for
+# it, from the kernel's report — never from the cmdline word, which is the claim
+# under test.
 _lockdown_req="$(tr ' ' '\n' < /proc/cmdline 2>/dev/null | sed -n 's/^lockdown=//p')"
 if [ -n "${_lockdown_req}" ]; then
     # securityfs marks the active level in brackets ("none [integrity] confidentiality");
@@ -620,7 +622,7 @@ if [ -n "${_lockdown_req}" ]; then
 else
     # skip(), not ok(): a check that does not apply to this node is not evidence that the
     # node is healthy. Counting it as a PASS inflated every ARM-board row.
-    skip "kernel lockdown — this image requests none; lockdown is x86 + rpi5 only"
+    skip "kernel lockdown — this boot requested none (every shipped board image asks for lockdown=integrity; the fleet lint fails the build if one stops)"
 fi
 # ── PRECONDITION FOR EVERY SELINUX ASSERTION BELOW ─────────────────────────
 # AN UNLABELLED ROOTFS PASSES ALL ~10 SELINUX CHECKS BELOW. That is not a

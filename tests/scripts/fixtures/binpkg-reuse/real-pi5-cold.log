@@ -1,0 +1,28 @@
+REAL-SHAPE EXCERPT for tests/scripts/test-binpkg-reuse-report.sh: header, plan, group and Emerging lines copied verbatim from a real Pi builder log (build-pki.rpi5.log, session 20260924-060521-e5443c), 22 of its 238 Emerging lines, first of each group. Not a cold/warm pair of a real build.
+==== pki.rpi5 (wl-pki.rpi5) start 20260924T135936Z brand=hugmesh role=pki env=test ====
+==> Emerge plan: system total=137 binary=0 ebuild=137
+[0;36m[1m==> Emerge group: system[0m
+>>> Emerging (1 of 137) dev-libs/xxhash-0.8.3-r2::gentoo for /out/wl-pki.rpi5/sysroot/
+>>> Emerging (2 of 137) dev-lang/python-exec-conf-2.4.6::gentoo
+>>> Emerging (3 of 137) net-libs/libnfnetlink-1.0.2::gentoo for /out/wl-pki.rpi5/sysroot/
+>>> Emerging (4 of 137) net-misc/ethertypes-0::gentoo for /out/wl-pki.rpi5/sysroot/
+>>> Emerging (5 of 137) sys-apps/diffutils-3.12::gentoo for /out/wl-pki.rpi5/sysroot/
+>>> Emerging (6 of 137) virtual/acl-2.4.0::gentoo
+>>> Emerging (7 of 137) dev-lang/python-exec-2.4.10::gentoo for /out/wl-pki.rpi5/sysroot/
+>>> Emerging (8 of 137) sys-libs/libseccomp-2.6.1::gentoo
+>>> Emerging (9 of 137) sys-libs/timezone-data-2026d::gentoo for /out/wl-pki.rpi5/sysroot/
+>>> Emerging (10 of 137) sys-libs/readline-8.3_p6::gentoo for /out/wl-pki.rpi5/sysroot/
+>>> Emerging (11 of 137) sys-apps/attr-2.6.0::gentoo for /out/wl-pki.rpi5/sysroot/
+>>> Emerging (12 of 137) app-arch/xz-utils-5.8.4::gentoo for /out/wl-pki.rpi5/sysroot/
+>>> Emerging (13 of 137) net-libs/nghttp2-1.69.0::gentoo
+>>> Emerging (14 of 137) net-libs/nghttp3-1.17.0::gentoo
+==> Emerge plan: image total=162 binary=0 ebuild=162
+[0;36m[1m==> Emerge group: image[0m
+>>> Emerging (1 of 162) net-wireless/wireless-regdb-20260903::gentoo for /out/wl-pki.rpi5/sysroot/
+>>> Emerging (2 of 162) dev-libs/lzo-2.10::gentoo for /out/wl-pki.rpi5/sysroot/
+>>> Emerging (3 of 162) app-crypt/argon2-20190702-r1::gentoo for /out/wl-pki.rpi5/sysroot/
+>>> Emerging (4 of 162) dev-libs/oniguruma-6.9.10::gentoo for /out/wl-pki.rpi5/sysroot/
+>>> Emerging (5 of 162) net-dialup/ppp-scripts-0::gentoo for /out/wl-pki.rpi5/sysroot/
+>>> Emerging (6 of 162) sys-apps/hwdata-0.401::gentoo for /out/wl-pki.rpi5/sysroot/
+>>> Emerging (7 of 162) dev-lang/go-bootstrap-1.24.6::gentoo
+>>> Emerging (8 of 162) sys-boot/raspberrypi-firmware-1.20260907::gentoo for /out/wl-pki.rpi5/sysroot/
