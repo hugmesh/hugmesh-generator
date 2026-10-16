@@ -212,6 +212,7 @@ trap 'rm -rf "${APPLY_ROOT}" 2>/dev/null; rm -f "${EXPORT}" "${RENDERED}" 2>/dev
 # in ${STUB}: mode_db (policy set succeeds), restart_fail (rc-service exits 1),
 # reject (headscale does not come back up when its policy file contains REJECTME),
 # slow_restarts (holds N: the first N restarts do not come up in time, restart N+1 does).
+REAL_MV="$(command -v mv)"
 apply_new_case() {
     CASE="${APPLY_ROOT}/$1"; STUB="${CASE}/bin"; mkdir -p "${STUB}" "${CASE}/cache" "${CASE}/etc"
     : > "${CASE}/calls"
@@ -242,6 +243,13 @@ else
 fi
 exit 0
 STUBEOF
+    # install_fail: the final mv of a policy into place fails (disk full / read-only
+    # /etc/headscale), whoever runs the test (a chmod would not stop root).
+    cat > "${STUB}/mv" <<STUBEOF
+#!/bin/bash
+if [ -e "${STUB}/install_fail" ]; then for a in "\$@"; do last="\$a"; done; [ "\$last" = "${CASE}/etc/policy.hujson" ] && exit 1; fi
+exec ${REAL_MV} "\$@"
+STUBEOF
     printf '#!/bin/bash\necho forcetags >> "%s/calls"\n' "${CASE}" > "${STUB}/forcetags"
     printf '#!/bin/bash\nexit 0\n' > "${STUB}/logger"
     chmod +x "${STUB}"/*
@@ -257,6 +265,7 @@ apply_run() {
       APPLIED_MARK="${CASE}/cache/applied-policy-hash"; FORCETAGS="${STUB}/forcetags"
       ALARM_MARK="${CASE}/cache/apply-failed"; PENDING_POLICY="${CASE}/cache/pending-policy.hujson"
       PENDING_TRIES="${CASE}/cache/pending-tries"
+      EXPORT_JSON="${CASE}/cache/export.json"; LAST_GOOD="${CASE}/cache/last-good-generation"
       HS_READY_TRIES=3; HS_READY_SLEEP=0
       "$@" ) >> "${CASE}/out" 2>&1
 }
@@ -444,13 +453,99 @@ apply_run apply_policy "${CASE}/new.hujson"
 serves "${CASE}/etc/policy.hujson" tag:mesh_east-01 && serves "${CASE}/etc/policy.hujson" tag:dev_alice && ! serves "${CASE}/etc/policy.hujson" tag:dev_bob \
     && ok "fallback = previous minus revoked edges, superadmin mesh edge retained" || bad "fallback lost the superadmin edge or kept a revoked one"
 
-echo "-- Scenario: the narrowing cannot be computed -> previous policy runs, and the alarm says so --"
-apply_new_case unnarrowable; : > "${STUB}/reject"
-printf '%s\n' '{"acls":[],"note":"OLD", this is not json' > "${CASE}/etc/policy.hujson"
-mkpol REJECTME "${E_SUP}" > "${CASE}/new.hujson"
+echo "-- Scenario: the previous policy cannot be narrowed -> it is NOT restored (fail closed) --"
+revocation_case unnarrowable REJECTME "${E_SUP}" "${E_ALICE}"; : > "${STUB}/reject"
+printf 'this is not json\n' >> "${CASE}/etc/policy.hujson"     # OLD (sup+alice+bob) plus trailing garbage
 apply_run apply_policy "${CASE}/new.hujson"
-grep -F OLD "${CASE}/etc/policy.hujson" >/dev/null && [ -e "${STUB}/up" ] && grep -F UNNARROWED "${CASE}/cache/apply-failed" >/dev/null \
-    && ok "an unparseable previous policy still keeps headscale up, with an UNNARROWED alarm" || bad "unparseable previous policy mishandled"
+grep -F dev_bob "${CASE}/etc/policy.hujson" >/dev/null \
+    && bad "EXPLOIT: a previous policy that could not be narrowed was restored with bob's revoked edge" \
+    || ok "a previous policy that cannot be narrowed is not restored, so bob's revoked edge is not put back"
+grep -F REJECTME "${CASE}/etc/policy.hujson" >/dev/null && grep -F 'NOT restored' "${CASE}/cache/apply-failed" >/dev/null \
+    && ok "the refused policy stays on disk and the alarm says the previous policy was not restored" \
+    || bad "no fail-closed alarm for an unnarrowable previous policy"
+cmp -s "${CASE}/cache/pending-policy.hujson" "${CASE}/new.hujson" \
+    && ok "the refused policy is kept as pending" || bad "the refused policy was not kept as pending"
+for _t in 1 2 3 4 5 6; do apply_run retry_pending; done
+r_now="$(n_calls 'restart headscale restart')"; apply_run retry_pending; apply_run retry_pending
+[ "$(n_calls 'restart headscale restart')" = "${r_now}" ] \
+    && ok "the refused policy left on disk is retried a bounded number of ticks, not restarted every tick (restarts: ${r_now})" \
+    || bad "a refused policy left on disk restarts headscale every tick (restarts $(n_calls 'restart headscale restart'), was ${r_now})"
+[ -s "${CASE}/cache/apply-failed" ] && ! grep -F dev_bob "${CASE}/etc/policy.hujson" >/dev/null \
+    && ok "the alarm stays raised and bob stays off through the retries" || bad "alarm cleared, or bob back, during the retries"
+
+echo "-- Scenario: the narrowing needs no temp file (TMPDIR unusable) --"
+revocation_case revoke_no_tmpdir REJECTME "${E_SUP}" "${E_ALICE}"; : > "${STUB}/reject"
+TMPDIR=/nonexistent apply_run apply_policy "${CASE}/new.hujson"
+serves "${CASE}/etc/policy.hujson" tag:dev_bob \
+    && bad "EXPLOIT: with TMPDIR unusable the previous policy ran UNNARROWED and bob was served" \
+    || ok "with TMPDIR unusable bob's revoked edge is still removed"
+serves "${CASE}/etc/policy.hujson" tag:dev_alice && [ -e "${STUB}/up" ] && [ -s "${CASE}/cache/apply-failed" ] \
+    && ok "alice is still served, headscale is up, and the alarm is raised" || bad "the TMPDIR-unusable fallback lost alice, left headscale down, or raised no alarm"
+rm -f "${STUB}/reject"; TMPDIR=/nonexistent apply_run retry_pending
+cmp -s "${CASE}/etc/policy.hujson" "${CASE}/new.hujson" && [ ! -e "${CASE}/cache/apply-failed" ] \
+    && ok "with TMPDIR unusable the pending policy is still retried and loads" \
+    || bad "with TMPDIR unusable retry_pending never retried the pending policy"
+
+echo "-- Scenario: the refused policy does not parse -> the fallback keeps only break-glass --"
+revocation_case rejected_garbage REJECTME "${E_SUP}" "${E_ALICE}"; : > "${STUB}/reject"
+printf '%s\n' '{"acls":[],"note":"REJECTME", not json' > "${CASE}/new.hujson"
+apply_run apply_policy "${CASE}/new.hujson"
+serves "${CASE}/etc/policy.hujson" tag:mesh_east-01 && ! serves "${CASE}/etc/policy.hujson" tag:dev_alice && ! serves "${CASE}/etc/policy.hujson" tag:dev_bob \
+    && ok "an unparseable refused policy leaves only the superadmin edge running" \
+    || bad "an unparseable refused policy kept a non-break-glass edge, or lost the superadmin edge"
+
+echo "-- Scenario: the fallback comes up only on a LATER tick -> the alarm is NOT cleared --"
+revocation_case revoke_fallback_late REJECTME "${E_SUP}" "${E_ALICE}"; : > "${STUB}/reject"; echo 4 > "${STUB}/slow_restarts"
+apply_run apply_policy "${CASE}/new.hujson"
+[ ! -e "${STUB}/up" ] && [ -s "${CASE}/cache/apply-failed" ] && ok "tick 1: the fallback did not start in time, alarm raised" || bad "tick 1 did not reproduce a down fallback"
+apply_run retry_pending
+[ -e "${STUB}/up" ] && ! serves "${CASE}/etc/policy.hujson" tag:dev_bob \
+    && ok "tick 2: the fallback is up and bob is not served" || bad "tick 2: the fallback did not come up, or serves bob"
+[ -s "${CASE}/cache/apply-failed" ] && cmp -s "${CASE}/cache/pending-policy.hujson" "${CASE}/new.hujson" \
+    && ok "loading the FALLBACK keeps the alarm and the pending policy (the exported policy was never loaded)" \
+    || bad "EXPLOIT: the alarm was cleared and the pending policy dropped when only the fallback loaded"
+grep -F 'alarm cleared' "${CASE}/out" >/dev/null \
+    && bad "the log claims the exported policy was applied when only the fallback loaded" \
+    || ok "the log does not claim the exported policy was applied"
+rm -f "${STUB}/reject"; apply_run retry_pending
+cmp -s "${CASE}/etc/policy.hujson" "${CASE}/new.hujson" && [ ! -e "${CASE}/cache/apply-failed" ] && [ ! -e "${CASE}/cache/pending-policy.hujson" ] \
+    && ok "tick 3: the pending policy loads and only then is the alarm cleared" || bad "tick 3: the pending policy did not load or the alarm was not cleared"
+
+echo "-- Scenario: a newer refused generation supersedes a pending one -> neither revoked edge comes back --"
+revocation_case revoke_twice REJECTME "${E_SUP}" "${E_ALICE}"; : > "${STUB}/reject"; echo 4 > "${STUB}/slow_restarts"
+apply_run apply_policy "${CASE}/new.hujson"; apply_run retry_pending
+mkpol REJECTME2 "${E_SUP}" > "${CASE}/gen3.hujson"     # REJECTME2 also contains REJECTME: refused too
+apply_run apply_policy "${CASE}/gen3.hujson"
+for _t in 1 2 3 4; do apply_run retry_pending; done
+! serves "${CASE}/etc/policy.hujson" tag:dev_bob && ! serves "${CASE}/etc/policy.hujson" tag:dev_alice && serves "${CASE}/etc/policy.hujson" tag:mesh_east-01 \
+    && ok "after a superseding refused generation neither bob nor alice is served (the stale pending policy is never re-installed)" \
+    || bad "EXPLOIT: a stale pending policy came back over a newer generation"
+cmp -s "${CASE}/cache/pending-policy.hujson" "${CASE}/gen3.hujson" && [ -s "${CASE}/cache/apply-failed" ] \
+    && ok "the pending policy is the newer generation and the alarm stays" || bad "the pending policy is not the newer generation, or the alarm was cleared"
+
+echo "-- Scenario: the policy cannot be installed into /etc/headscale -> alarm, pending, cursor held --"
+revocation_case install_fails GOOD "${E_SUP}" "${E_ALICE}"; : > "${STUB}/install_fail"
+hash_of "${CASE}/etc/policy.hujson" > "${CASE}/cache/applied-policy-hash"   # OLD is what runs
+printf '5\n' > "${CASE}/cache/last-good-generation"; printf '{}\n' > "${CASE}/export6.json"
+apply_run install_generation "${CASE}/export6.json" "${CASE}/new.hujson" 6
+[ -s "${CASE}/cache/apply-failed" ] \
+    && ok "a failed install raises the alarm (the running policy still has bob)" \
+    || bad "EXPLOIT: a failed install of a revoking policy raised no alarm"
+cmp -s "${CASE}/cache/pending-policy.hujson" "${CASE}/new.hujson" \
+    && ok "the policy that could not be installed is kept as pending" || bad "the policy that could not be installed was dropped"
+[ "$(cat "${CASE}/cache/last-good-generation")" = 5 ] \
+    && ok "the export cursor is NOT advanced past a generation whose policy was not installed" \
+    || bad "EXPLOIT: the cursor advanced past a generation whose policy was never installed"
+for _t in 1 2 3 4 5; do apply_run retry_pending; done
+[ -s "${CASE}/cache/apply-failed" ] && [ -f "${CASE}/cache/pending-policy.hujson" ] \
+    && ok "a lasting install failure keeps the alarm and the pending policy through 5 ticks" || bad "a lasting install failure dropped the alarm or pending policy"
+rm -f "${STUB}/install_fail"; apply_run retry_pending
+cmp -s "${CASE}/etc/policy.hujson" "${CASE}/new.hujson" && ! serves "${CASE}/etc/policy.hujson" tag:dev_bob && [ ! -e "${CASE}/cache/apply-failed" ] \
+    && ok "once /etc/headscale is writable again the pending policy is installed, bob is revoked, the alarm clears" \
+    || bad "the pending policy was not installed after the install failure ended (install failures must not burn the retry cap)"
+apply_run install_generation "${CASE}/export6.json" "${CASE}/new.hujson" 6
+[ "$(cat "${CASE}/cache/last-good-generation")" = 6 ] \
+    && ok "the cursor advances once the generation's policy is installed" || bad "the cursor did not advance after a successful install"
 
 echo "-- Scenario: the restart command itself fails on a revocation -> alarm, then cleared when the retry lands --"
 revocation_case revoke_restart_fails GOOD "${E_SUP}" "${E_ALICE}"; : > "${STUB}/restart_fail"
