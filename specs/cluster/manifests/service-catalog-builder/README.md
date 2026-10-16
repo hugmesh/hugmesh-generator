@@ -51,23 +51,38 @@ admin-bff, default false; `APPSTORE_BUILDER_ENABLED` is `false` in
 provisioned. The ArgoCD leg has its own flag, `app.appstore.effector.enabled` (default
 false; the same deployment sets `APPSTORE_EFFECTOR_ENABLED` to `true`). The namespace and
 NetworkPolicy are inert until a build lands there. Registry push creds
-(`service-catalog-builder-registry`, `dockerconfigjson`) are ESO-materialized into the
-build namespace — **never in git**.
+(`service-catalog-registry-credentials`, Opaque, key `config.json`) are ESO-materialized
+into the build namespace — **never in git**
+(`external-secrets/service-catalog-builder-externalsecrets.yaml`). The name and key are the
+RUNTIME ones: `KanikoBuildLauncher` loads its own classpath template from the admin-bff jar,
+and that is the Job that mounts the Secret.
+
+## Known gaps before the builder flag may flip
+
+`APPSTORE_BUILDER_ENABLED` stays `false`. Creating the push credential is necessary, not
+sufficient. Read off the admin-bff runtime template (hugmesh-admin-bff-api
+`src/main/resources/kaniko/service-catalog-build-job.template.yaml`) and this tree, and not
+provable from here without a cluster:
+
+1. `serviceAccountName: service-catalog-builder` — no manifest creates that ServiceAccount in
+   `hugmesh-service-catalog-builds`, so the Job controller cannot create the pod.
+2. The namespace enforces `pod-security.kubernetes.io/enforce: restricted`, and the runtime pod
+   spec sets no `seccompProfile`, no `allowPrivilegeEscalation: false` and no
+   `capabilities.drop: [ALL]`; admission should reject it.
+3. The admin-bff pod runs as ServiceAccount `backups-effector`; the RBAC bound to it
+   (`manifests/admin-bff-platform-capability-rbac`) is read-only probes and carries no
+   rule on `jobs` in this namespace.
+
+`tests/scripts/test-appstore-effector-flags.sh` reports 1 and 2 as NOTEs while the flag is
+`false` and fails on them if it is flipped. Fixes for 1 and 2 are in the admin-bff template.
 
 ## The admin-bff side
 
 `KanikoBuildLauncher` exists on admin-bff `main`. It renders the Job, creates it in
 `app.appstore.builder.namespace` (default `hugmesh-service-catalog-builds`), waits up to
 30 minutes for it to end, and returns the pushed image. `AddServiceEffector` then creates
-the ArgoCD Application. The two sides share the namespace. They share neither the
-registry secret nor one Job template:
-
-- This directory's copy mounts secret `service-catalog-builder-registry`, key
-  `.dockerconfigjson`. The ESO ExternalSecret here creates it.
-- admin-bff's copy mounts secret `service-catalog-registry-credentials`, key
-  `config.json`, and has the extra `${DEST_IMAGE_MOVING}` placeholder. Nothing under
-  `specs/` creates that secret. The mount is not `optional`, so enabling the builder
-  without it leaves the build pod in `ContainerCreating`.
-- The runtime name is the one that must exist, in `hugmesh-service-catalog-builds`.
-  The admin-bff deployment keeps `APPSTORE_BUILDER_ENABLED` at `false` for this reason
-  (`README.md`, root; guard: `tests/scripts/test-appstore-effector-flags.sh`).
+the ArgoCD Application. Both Job template copies mount the same secret,
+`service-catalog-registry-credentials`, key `config.json`, and the ESO ExternalSecret
+creates it in `hugmesh-service-catalog-builds`. The mount is not `optional`, so the build
+pod stays in `ContainerCreating` until that Secret exists. admin-bff's copy also binds the
+extra `${DEST_IMAGE_MOVING}` placeholder.

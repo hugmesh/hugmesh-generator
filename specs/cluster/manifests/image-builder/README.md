@@ -100,7 +100,8 @@ from the `image-builder-registry` ExternalSecret
   `harbor-registry` **pull**-scoped robot imagePullSecret (formerly `gitlab-registry`), so
   the runtime pull credential can never push.
 
-This mirrors the #110 `service-catalog-builder-registry` contract.
+It has the same Vault source and auth shape as `service-catalog-registry-credentials`,
+which carries it as an Opaque `config.json`; this one stays a `dockerconfigjson`.
 
 ## Live validation pending
 

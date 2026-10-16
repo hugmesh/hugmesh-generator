@@ -56,6 +56,7 @@ from .config import (
     resolve_installer_ui_default,
     resolve_platform_defaults,
     strip_platform_unsupported,
+    with_service_slug,
 )
 
 WORKLIST_SCHEMA = "hugmesh-worklist/v1"
@@ -88,41 +89,6 @@ WORKLIST_INFRA_SERVICES = ("tor", "egress-vpn")
 # node slug instead; every other platform expresses neither, so the selection is
 # dropped there rather than emitted as a flag the builder would ignore.
 _TOR_WITH_FLAG_PLATFORMS = ("x86",)
-
-
-def with_service_slug(services, slug: str) -> list[str]:
-    """``services`` (an ImageConfig.optional_services value) with ``slug`` ADDED —
-    additively, the way a per-node infra toggle means it.
-
-    ``--optional-services`` is an ALLOW-LIST that REPLACES the builder's own default
-    (build-rpi5-stage4.sh:262 / build-x86-host-stage4.sh:196), so a bare append is
-    only right when the list already names services. The three other shapes each
-    used to lose something without a word:
-
-    * ``[]`` (emit nothing, the builder default applies) -> ``["tor"]`` emitted
-      ``--optional-services tor`` and silently DROPPED akkoma/tuwunel/phpbb from the
-      node. It becomes the builder default plus the slug.
-    * ``[SERVICES_NONE]`` (the explicit "no optional services") -> ``["none", "tor"]``
-      emitted the literal slug ``none``. It becomes just the slug.
-    * ``[SERVICES_ALL, ...]`` -> ``--all-services`` expands to the USER-LEVEL set only,
-      which by construction excludes every infra slug, so the slug was dropped. It
-      becomes the user-level set spelled out, plus whatever else was listed, plus the
-      slug (both builders' own all-expansion keeps nothing beyond the user-level set).
-    """
-    svcs = [str(s) for s in (services or [])]
-    if slug in svcs:
-        return svcs
-    if svcs == [SERVICES_NONE]:
-        base: list[str] = []
-    elif SERVICES_ALL in svcs:
-        base = list(USER_LEVEL_SERVICES) + [
-            s for s in svcs if s not in (SERVICES_ALL, SERVICES_NONE)
-            and s not in USER_LEVEL_SERVICES]
-    elif not svcs:
-        base = list(BUILTIN_DEFAULT_SERVICES)
-    else:
-        base = svcs
-    return [*base, slug]
 
 
 def resolve_encrypt_root(entry: "WorklistEntry", base_encrypt_root: bool) -> bool:

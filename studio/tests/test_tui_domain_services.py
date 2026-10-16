@@ -165,7 +165,7 @@ def test_a_carried_over_slug_is_listed_and_kept():
     headers, rows = domain_services_step.service_table(j.cfg.domains[0])
     slugs = [r[headers.index("service")] for r in rows]
     assert slugs[-1] == "tor"
-    assert rows[-1][headers.index("on")] == "on"
+    assert rows[-1][headers.index("selection")] == "on"
     note = rows[-1][headers.index("what it does for this domain")]
     assert ds.CARRIED_OVER_NOTE in note
     # ...and the slug's OWN description survives beside it. Every infra slug HAS a

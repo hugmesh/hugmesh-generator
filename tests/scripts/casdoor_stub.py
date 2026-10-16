@@ -56,6 +56,9 @@ Modes (STUB_MODE), each a shape observed or reasoned about on the live cluster:
                 sends the operator to rotate a Vault secret that was correct.
                 STUB_LOCKOUT_AFTER=0 models arriving at an account a SIBLING Job
                 has already banned, which is what actually happened.
+                STUB_BAN_AFTER_OK=N models a sibling banning the account in the
+                MIDDLE of a run: the first N successful logins succeed and every
+                login after them is refused with the throttle text.
   adduser-droppw
                 like `ok`, except /api/add-user answers "Affected" while the
                 body's password field never lands in the credential store — a
@@ -155,6 +158,10 @@ LOCKOUT_MSG = ("You have entered the wrong password or code too many times, "
 # the whole failure; 0 models an account a sibling Job banned before this script
 # ever got a turn.
 LOCKOUT_AFTER = int(os.environ.get("STUB_LOCKOUT_AFTER", "1"))
+# lockout mode only: ban the account once this many logins have SUCCEEDED (-1 =
+# never), i.e. something else spent the budget between two logins of one run.
+BAN_AFTER_OK = int(os.environ.get("STUB_BAN_AFTER_OK", "-1"))
+_oks = [0]           # successful admin logins so far
 
 # object/check_password_complexity.go:104-124 + controllers/user.go:629-633 —
 # casdoor REFUSES a set-password whose new value already hashes to the stored one.
@@ -284,13 +291,15 @@ class Handler(BaseHTTPRequestHandler):
         with _lock:
             correct = (body.get("username") == ADMIN_USER
                        and body.get("password") == _password)
-            if MODE == "lockout" and _wrong[0] >= LOCKOUT_AFTER:
+            if MODE == "lockout" and (_wrong[0] >= LOCKOUT_AFTER
+                                      or 0 <= BAN_AFTER_OK <= _oks[0]):
                 # The counter is consulted BEFORE the credential, exactly like a
                 # ban: once it is tripped the right password is refused too, and
                 # that is the whole point of this mode.
                 result = "locked"
             elif correct:
                 _counter[0] += 1
+                _oks[0] += 1
                 token = f"stub-session-{_counter[0]}"
                 _sessions.add(token)
                 result = "ok"

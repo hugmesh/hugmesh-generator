@@ -102,6 +102,8 @@ violations=()
 n_store_builders=0
 n_gate_on=0
 n_client_pw=0
+v5=()
+n_gate_wired=0
 
 # RULE 1, isolated between sentinels so the sabotage control at the bottom can
 # blank it and prove the negative controls really are exercising it. The
@@ -116,6 +118,142 @@ rule1() { # <svc> <client-key-pw> <client-trust-pw>
   [ -n "$3" ] || violations+=("$1: HUGMESH_MTLS_CLIENT_ENABLED=true but ${CLIENT_TRUST_PW} is never written — outbound TLS falls back to the JDK default trust, which has no cluster CA")
 }
 # <<< RULE1
+
+# ── RULE 5 — the username gate may not be wired, or armed, without its credential
+#    and its transport.   (hugmesh-generator#376)
+#
+# federation-api authenticates /api/federation/username/** only as an OAuth2 resource
+# server and serves TLS with client-auth=need. A caller that points the gate at it
+# therefore needs two things in ITS OWN manifest, or every availability check fails
+# closed (and FEDERATION_USERNAME_GATE_ENABLED=true would refuse every
+# provider-derived username):
+#   (a) the Casdoor client-credentials trio the auth-core client reads, either
+#       APP_CASDOOR_PLATFORM_{BASE_URL,CLIENT_ID,CLIENT_SECRET} or
+#       FEDERATION_USERNAME_GATE_SERVICE_BEARER_{CASDOOR_BASE_URL,CLIENT_ID,CLIENT_SECRET};
+#       the id and secret must be secretKeyRefs (never a literal), and each ref must
+#       name a Secret that an ExternalSecret in the kustomized external-secrets tree
+#       really creates, with that key, in the manifest's own namespace;
+#   (b) HUGMESH_MTLS_CLIENT_ENABLED=true (rule 1 then demands the store passwords).
+# It applies to any manifest that sets FEDERATION_USERNAME_GATE_BASE_URL or switches
+# FEDERATION_USERNAME_GATE_ENABLED on — NOT only to a manifest with the flag on, because
+# the flag ships OFF and a rule that only watched the flag would never fire.
+#
+# The flag itself is deliberately not asserted off: flipping it is the last step of
+# #376 and a legitimate later change, which this rule then lets through only if the
+# wiring above is present.
+#
+# For admin-bff-api only, the credential is also pinned to the application the
+# operator chose on 2026-10-15 (its OWN application, app-admin-bff, with its own
+# secret): the ExternalSecret must template clientId app-admin-bff and read property
+# admin-bff of the casdoor-apps Vault path, not another application's pair.
+# >>> RULE5
+env_region() { # <file> <ENV_NAME> -> the env entry, comments dropped, on one line
+  awk -v n="$2" '
+    function flush() { if (inr) { print buf; inr = 0; buf = "" } }
+    /^[[:space:]]*#/ { next }
+    {
+      if ($0 ~ ("name:[[:space:]]*" n "([^A-Za-z0-9_]|$)")) {
+        flush(); inr = 1; buf = $0
+        if ($0 ~ /^[[:space:]]*-[[:space:]]*\{.*\}[[:space:]]*$/) flush()
+        next
+      }
+      if (inr) { if ($0 ~ /^[[:space:]]*-[[:space:]]/) flush(); else buf = buf " " $0 }
+    }
+    END { flush() }' "$1"
+}
+
+secret_ref() { # <file> <ENV_NAME> -> "<secret> <key>" of its secretKeyRef, else empty
+  env_region "$1" "$2" | sed -nE 's/.*secretKeyRef:[[:space:]]*\{?[[:space:]]*name:[[:space:]]*([^ ,}]+)[[:space:]]*,?[[:space:]]*key:[[:space:]]*([^ ,}]+).*/\1 \2/p' | head -1
+}
+
+# The ExternalSecret that creates Secret <name> in <ns> holding <key>.
+# Prints: <file>|<template clientId>|<remoteRef property>|<remoteRef key>
+es_for() { # <external-secrets dir> <name> <ns> <key>
+  local ef
+  for ef in "$1"/*.yaml; do
+    [ -f "${ef}" ] || continue
+    awk -v name="$2" -v ns="$3" -v key="$4" -v file="${ef}" '
+      function val(s) { sub(/^[^:]*:[[:space:]]*/, "", s); gsub(/["'"'"' ]/, "", s); return s }
+      function reset() { kind = ""; mname = ""; mns = ""; tname = ""; haskey = 0; sect = ""; ts = 0; cid = ""; prop = ""; rkey = "" }
+      function fin() {
+        if (kind == "ExternalSecret" && haskey && ((tname != "" ? tname : mname) == name) && (ns == "" || mns == ns)) {
+          print file "|" cid "|" prop "|" rkey; found = 1
+        }
+        reset()
+      }
+      BEGIN { reset() }
+      /^---[[:space:]]*$/ { fin(); next }
+      /^[[:space:]]*#/ { next }
+      /^kind:[[:space:]]*ExternalSecret[[:space:]]*$/ { kind = "ExternalSecret"; next }
+      /^metadata:/ { sect = "metadata"; next }
+      /^spec:/ { sect = "spec"; ts = 0; next }
+      sect == "metadata" && /^  name:/ { mname = val($0); next }
+      sect == "metadata" && /^  namespace:/ { mns = val($0); next }
+      sect == "spec" && /^  target:/ { ts = 1; next }
+      sect == "spec" && /^  [A-Za-z]/ { ts = 0 }
+      ts && /^    name:/ { tname = val($0); next }
+      ts && $0 ~ ("^[[:space:]]+" key ":[[:space:]]") { haskey = 1 }
+      $0 ~ ("secretKey:[[:space:]]*" key "([^A-Za-z0-9_]|$)") { haskey = 1 }
+      $0 ~ /^[[:space:]]+clientId:/ { cid = val($0) }
+      $0 ~ /^[[:space:]]+property:/ { prop = val($0) }
+      $0 ~ /^[[:space:]]+key:[[:space:]]/ { rkey = val($0) }
+      END { fin() }' "${ef}"
+  done
+}
+
+rule5() { # <manifest> <label>
+  local f="$1" svc="$2" fam id sec trio ns ref rname rkeyname es esf listed base
+  local ESDIR="${DIR}/external-secrets"
+  # the transport
+  if ! grep -qE 'HUGMESH_MTLS_CLIENT_ENABLED[",}[:space:]].*value:[[:space:]]*"?true"?' "${f}" \
+     && ! grep -A2 -E 'name:[[:space:]]*HUGMESH_MTLS_CLIENT_ENABLED[[:space:]]*$' "${f}" 2>/dev/null \
+          | grep -E 'value:[[:space:]]*"?true"?' >/dev/null; then
+    v5+=("${svc}: wires the federation username gate but HUGMESH_MTLS_CLIENT_ENABLED is not true — federation-api serves client-auth=need, so the handshake is refused before any credential is read")
+  fi
+  # the credential: one complete family
+  fam=""
+  if [ -n "$(env_region "${f}" APP_CASDOOR_PLATFORM_BASE_URL)" ] \
+     && [ -n "$(env_region "${f}" APP_CASDOOR_PLATFORM_CLIENT_ID)" ] \
+     && [ -n "$(env_region "${f}" APP_CASDOOR_PLATFORM_CLIENT_SECRET)" ]; then
+    fam="APP_CASDOOR_PLATFORM"; trio="APP_CASDOOR_PLATFORM_CLIENT_ID APP_CASDOOR_PLATFORM_CLIENT_SECRET"
+  elif [ -n "$(env_region "${f}" FEDERATION_USERNAME_GATE_SERVICE_BEARER_CASDOOR_BASE_URL)" ] \
+     && [ -n "$(env_region "${f}" FEDERATION_USERNAME_GATE_SERVICE_BEARER_CLIENT_ID)" ] \
+     && [ -n "$(env_region "${f}" FEDERATION_USERNAME_GATE_SERVICE_BEARER_CLIENT_SECRET)" ]; then
+    fam="FEDERATION_USERNAME_GATE_SERVICE_BEARER"; trio="FEDERATION_USERNAME_GATE_SERVICE_BEARER_CLIENT_ID FEDERATION_USERNAME_GATE_SERVICE_BEARER_CLIENT_SECRET"
+  fi
+  if [ -z "${fam}" ]; then
+    v5+=("${svc}: wires the federation username gate but supplies no complete Casdoor credential trio (APP_CASDOOR_PLATFORM_{BASE_URL,CLIENT_ID,CLIENT_SECRET} or FEDERATION_USERNAME_GATE_SERVICE_BEARER_{CASDOOR_BASE_URL,CLIENT_ID,CLIENT_SECRET}) — federation-api accepts only a bearer, so every check fails closed")
+    return 0
+  fi
+  base="$(dirname "${f}")"
+  ns="$(sed -nE 's/^namespace:[[:space:]]*"?([A-Za-z0-9._-]+)"?[[:space:]]*$/\1/p' "${base}/kustomization.yaml" 2>/dev/null | head -1)"
+  for id in ${trio}; do
+    ref="$(secret_ref "${f}" "${id}")"
+    if [ -z "${ref}" ]; then
+      v5+=("${svc}: ${id} is not a secretKeyRef — a client credential must never be a literal in the manifest")
+      continue
+    fi
+    rname="${ref% *}"; rkeyname="${ref#* }"
+    es="$(es_for "${ESDIR}" "${rname}" "${ns}" "${rkeyname}" | head -1)"
+    if [ -z "${es}" ]; then
+      v5+=("${svc}: ${id} reads Secret ${rname} key ${rkeyname}${ns:+ in ${ns}}, but no ExternalSecret under external-secrets/ creates that Secret with that key — the env would stay empty")
+      continue
+    fi
+    esf="${es%%|*}"
+    listed="$(basename "${esf}")"
+    grep -qE "^[[:space:]]*-[[:space:]]+${listed}([[:space:]]|\$)" "${ESDIR}/kustomization.yaml" 2>/dev/null \
+      || v5+=("${svc}: ${id} is backed by an ExternalSecret in ${listed}, which external-secrets/kustomization.yaml does not list — it is never rendered, so the Secret never exists")
+    # the operator's decision for admin-bff-api: its own application and its own secret
+    if [ "$(basename "${base}")" = admin-bff-api ] && [ "${id##*_}" = SECRET ]; then
+      IFS='|' read -r _ cid prop rkey <<<"${es}"
+      [ "${cid}" = "app-admin-bff" ] \
+        || v5+=("${svc}: Secret ${rname} templates clientId '${cid}', not app-admin-bff — admin-bff holds the service role as its OWN application (decision 2026-10-15 on #376)")
+      [ "${prop}" = "admin-bff" ] && [ "${rkey#*/}" = "casdoor-apps" ] \
+        || v5+=("${svc}: Secret ${rname} reads '${rkey}' property '${prop}', not the admin-bff property of casdoor-apps — that is another application's secret")
+    fi
+  done
+}
+# <<< RULE5
 
 # ONE pattern, not two. An earlier draft globbed `*/deployment.yaml` AND `*/*.yaml`,
 # so every deployment was scanned twice and every count was silently doubled —
@@ -166,12 +304,31 @@ for f in "${DIR}"/*/*.yaml; do
       || violations+=("${svc}: writes client store passwords but never builds a PKCS12 (no 'openssl pkcs12 -export') — password for stores that do not exist")
   fi
 done
+
+# RULE 5 — applies to a manifest that wires the username gate, not only one that arms it.
+for f in "${DIR}"/*/*.yaml; do
+  [ -f "${f}" ] || continue
+  svc="$(basename "$(dirname "${f}")")/$(basename "${f}")"
+  if grep -qE 'FEDERATION_USERNAME_GATE_BASE_URL' "${f}" \
+     || grep -qE 'FEDERATION_USERNAME_GATE_ENABLED[",}[:space:]].*value:[[:space:]]*"?true"?' "${f}" \
+     || grep -A2 -E 'name:[[:space:]]*FEDERATION_USERNAME_GATE_ENABLED[[:space:]]*$' "${f}" 2>/dev/null \
+          | grep -E 'value:[[:space:]]*"?true"?' >/dev/null; then
+    n_gate_wired=$((n_gate_wired+1))
+    rule5 "${f}" "${svc}"
+  fi
+done
 shopt -u nullglob
 
 if [ "${#violations[@]}" -eq 0 ]; then
   ok "every gate-on manifest supplies both client store passwords, matching the server ones"
 else
   for v in "${violations[@]}"; do bad "${v}"; done
+fi
+
+if [ "${#v5[@]}" -eq 0 ]; then
+  ok "every manifest that wires the federation username gate carries its credential (backed by an ExternalSecret) and the mTLS client gate"
+else
+  for v in "${v5[@]}"; do bad "${v}"; done
 fi
 
 # ── RULE 4 — nothing may address a TLS-serving peer over http://.
@@ -297,6 +454,15 @@ if [ "${CHILD}" = no ]; then
     bad "anti-rot: NO manifest switches HUGMESH_MTLS_CLIENT_ENABLED on — rule 1 is unexercised and this guard proves nothing"
   fi
 
+  # RULE 5 floor. The flag ships OFF, so this counts manifests that WIRE the gate, and
+  # names admin-bff-api explicitly: a count alone would stay >=1 if the wiring moved.
+  if [ "${n_gate_wired}" -ge 1 ] && [ -f "${DIR}/admin-bff-api/deployment.yaml" ] \
+     && grep -q 'FEDERATION_USERNAME_GATE_BASE_URL' "${DIR}/admin-bff-api/deployment.yaml"; then
+    ok "anti-rot: ${n_gate_wired} manifest(s) wire the federation username gate, admin-bff-api among them, so rule 5 has something to bite"
+  else
+    bad "anti-rot: admin-bff-api no longer wires FEDERATION_USERNAME_GATE_BASE_URL (or none does) — rule 5 is unexercised and proves nothing"
+  fi
+
   if [ "${n_client_pw}" -ge 4 ]; then
     ok "anti-rot: ${n_client_pw} manifest(s) write client store passwords (>=4 — the services whose apps declare the hugmesh.mtls.client prefix)"
   else
@@ -319,7 +485,7 @@ case "$(realpath "${T}")" in
   /tmp/*|/var/tmp/*|"${TMPDIR:-/nonexistent}"*) : ;;
   *) echo "FATAL: refusing to write controls outside a temp dir: ${T}" >&2; exit 1 ;;
 esac
-cleanup() { case "$(realpath "${T}" 2>/dev/null)" in /tmp/*|/var/tmp/*) rm -rf "${T}" ;; esac; }
+cleanup() { case "$(realpath "${T}" 2>/dev/null)" in /tmp/*|/var/tmp/*|"${TMPDIR:-/nonexistent}"/*) rm -rf "${T}" ;; esac; }
 trap cleanup EXIT
 
 # Synthesise a manifest with the REAL shipped shape — the store-building block,
@@ -411,6 +577,109 @@ probe "${T}/b4/svc/deployment.yaml" off both no
 probe "${T}/g4/svc/deployment.yaml" off both yes
 pair "client passwords without any PKCS12 being built" "${T}/b4" "${T}/g4"
 
+# 5. RULE 5 — the username gate wired without its credential or transport. The probe
+#    is a whole manifest TREE (deployment + kustomization + external-secrets), because
+#    the rule cross-checks the deployment's secretKeyRefs against an ExternalSecret.
+probe5() { # <root> <variant> -- variants below
+  local root="$1" v="$2" d="$1/admin-bff-api" e="$1/external-secrets"
+  local sname=admin-bff-casdoor-client skey=clientSecret cprop=admin-bff cid=app-admin-bff listed=secretstore.yaml
+  case "${v}" in
+    badref)   sname=wrong-secret-name ;;
+    badkey)   skey=client_secret_typo ;;
+    otherapp) cprop=signup-gate; cid=app-signup-gate ;;
+    unlisted) listed=other.yaml ;;
+  esac
+  mkdir -p "${d}" "${e}"
+  {
+    echo 'apiVersion: apps/v1'
+    echo 'kind: Deployment'
+    echo 'spec:'
+    echo '  template:'
+    echo '    spec:'
+    echo '      initContainers:'
+    echo '        - name: build-keystore'
+    echo '          args:'
+    echo '            - |'
+    echo '              P="$(openssl rand -base64 24 | tr -d x | cut -c1-24)"'
+    echo '              openssl pkcs12 -export -inkey /pki/tls.key -in /pki/tls.crt \\'
+    echo '                -out /stores/keystore.p12 -passout "pass:${P}"'
+    echo '              cat > /stores/application.properties <<EOF'
+    echo '              server.ssl.key-store-password=${P}'
+    echo '              server.ssl.trust-store-password=${P}'
+    echo '              hugmesh.mtls.client.key-store-password=${P}'
+    echo '              hugmesh.mtls.client.trust-store-password=${P}'
+    echo '              EOF'
+    echo '      containers:'
+    echo '        - name: probe'
+    echo '          env:'
+    echo '            - name: FEDERATION_USERNAME_GATE_BASE_URL'
+    echo '              value: "https://hugmesh-federation-api.hugmesh-backend.svc.cluster.local:8080"'
+    [ "${v}" = flagon ] && echo '            - { name: FEDERATION_USERNAME_GATE_ENABLED, value: "true" }'
+    [ "${v}" = nomtls ] || echo '            - { name: HUGMESH_MTLS_CLIENT_ENABLED, value: "true" }'
+    if [ "${v}" != nocreds ] && [ "${v}" != flagon ]; then
+      echo '            - name: APP_CASDOOR_PLATFORM_BASE_URL'
+      echo '              value: "http://casdoor.hugmesh-pki.svc.cluster.local:8000"'
+      echo '            - name: APP_CASDOOR_PLATFORM_CLIENT_ID'
+      echo '              valueFrom:'
+      echo "                secretKeyRef: { name: ${sname}, key: clientId, optional: true }"
+      if [ "${v}" = literal ]; then
+        echo '            - name: APP_CASDOOR_PLATFORM_CLIENT_SECRET'
+        echo '              value: "hunter2"'
+      elif [ "${v}" != nosecret ]; then
+        echo '            - name: APP_CASDOOR_PLATFORM_CLIENT_SECRET'
+        echo '              valueFrom:'
+        echo "                secretKeyRef: { name: ${sname}, key: ${skey}, optional: true }"
+      fi
+    fi
+    echo '            - { name: SPRING_CONFIG_ADDITIONAL_LOCATION, value: "file:/stores/" }'
+  } > "${d}/deployment.yaml"
+  printf 'namespace: hugmesh-backend\nresources:\n  - deployment.yaml\n' > "${d}/kustomization.yaml"
+  printf 'resources:\n  - %s\n' "${listed}" > "${e}/kustomization.yaml"
+  cat > "${e}/secretstore.yaml" <<YAML
+# a comment that mentions secretKey: clientSecret must not count
+apiVersion: external-secrets.io/v1beta1
+kind: ExternalSecret
+metadata:
+  name: some-other-secret
+  namespace: hugmesh-backend
+spec:
+  target:
+    name: some-other-secret
+  data:
+    - secretKey: clientSecret
+      remoteRef: { key: hugmesh/x, property: y }
+---
+apiVersion: external-secrets.io/v1beta1
+kind: ExternalSecret
+metadata:
+  name: admin-bff-casdoor-client
+  namespace: hugmesh-backend
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    name: hugmesh-vault
+    kind: ClusterSecretStore
+  target:
+    name: admin-bff-casdoor-client
+    creationPolicy: Owner
+    template:
+      data:
+        clientId: "${cid}"
+        clientSecret: "{{ .clientSecret }}"
+  data:
+    - secretKey: clientSecret
+      remoteRef:
+        key: hugmesh/casdoor-apps
+        property: ${cprop}
+YAML
+}
+for v in good nomtls nocreds nosecret literal badref badkey otherapp unlisted flagon; do
+  probe5 "${T}/r5-${v}" "${v}"
+done
+for v in nomtls nocreds nosecret literal badref badkey otherapp unlisted flagon; do
+  pair "rule 5, ${v}" "${T}/r5-${v}" "${T}/r5-good"
+done
+
 # 5. THE SABOTAGE CONTROL. Strip rule 1 out of a copy of this very file and
 #    require that the pair which depends on it then STOPS failing. If the controls
 #    still pass without the logic they exercise, they are theatre — the state
@@ -445,6 +714,20 @@ if [ "${sab_ready}" = yes ]; then
   else
     bad "sabotage control: the defective probe still 'fails' with rule 1 blanked — the controls are measuring something else"
   fi
+fi
+
+# 6. THE SAME SABOTAGE CONTROL FOR RULE 5. Blank rule5() in a copy and require that the
+#    probe it exists to catch is then NOT caught — with the mutation proven to have landed.
+SAB5="${T}/sabotage5.sh"
+sed '/^# >>> RULE5$/,/^# <<< RULE5$/c\
+rule5() { :; }' "${BASH_SOURCE[0]}" > "${SAB5}"
+if [ ! -s "${SAB5}" ] || cmp -s "${SAB5}" "${BASH_SOURCE[0]}" || ! bash -n "${SAB5}" 2>/dev/null \
+   || ! grep -q '^rule5() { :; }$' "${SAB5}"; then
+  bad "sabotage control (rule 5): the sabotaged copy is empty, unchanged, invalid or not blanked — this control proves NOTHING"
+elif MTLS_MANIFEST_DIR="${T}/r5-nocreds" bash "${SAB5}" --scan-only >/dev/null 2>&1; then
+  ok "sabotage control (rule 5): with rule 5 blanked, the credential-less probe is NO LONGER caught — so its controls exercise it"
+else
+  bad "sabotage control (rule 5): the credential-less probe still 'fails' with rule 5 blanked — the controls are measuring something else"
 fi
 
 echo

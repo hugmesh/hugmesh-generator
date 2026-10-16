@@ -251,6 +251,20 @@ torrc="$2"
 hs="$(awk '$1=="HiddenServiceDir"{print $2}' "${torrc}")"
 pidf="$(awk '$1=="PidFile"{print $2}' "${torrc}")"
 [ -s "${hs}/hostname" ] || printf '%s\n' "${KT_ONION}" > "${hs}/hostname"
+# KT_ZOMBIE=1: the process tor's pidfile names is a CHILD whose parent never
+# wait()s, so once it is SIGTERMed it stays defunct. That is what an orphaned tor
+# becomes in a container whose PID 1 does not reap (a CI job container runs
+# `tail -f /dev/null`); on a real host init reaps it, which is why only CI saw it.
+if [ -n "${KT_ZOMBIE:-}" ]; then
+  nohup python3 -c '
+import os, subprocess, sys, time
+c = subprocess.Popen(["python3", "-c", "import time; time.sleep(600)", "kind-tor-stub", sys.argv[1]])
+open(sys.argv[2], "w").write("%d\n" % c.pid)
+open(sys.argv[3], "a").write("%d\n%d\n" % (c.pid, os.getpid()))
+time.sleep(600)' "${torrc}" "${pidf}" "${KT_FIX}/stub-pids" >/dev/null 2>&1 &
+  for _ in $(seq 1 50); do [ -s "${pidf}" ] && break; sleep 0.1; done
+  exit 0
+fi
 # A long-lived process whose cmdline names the torrc, as a real daemonised tor's does.
 nohup python3 -c 'import time; time.sleep(600)' kind-tor-stub "${torrc}" >/dev/null 2>&1 &
 echo $! > "${pidf}"
@@ -271,6 +285,8 @@ EOF
 chmod +x "${STUB}"/*
 export KT_CALLS="${CALLS}" KT_FIX="${FIX}" KT_ONION="${ONION_A}"
 SPATH="${STUB}:${PATH}"
+# alive <pid> — running, not defunct (`kill -0` is true of a zombie too).
+alive() { kill -0 "$1" 2>/dev/null && ! grep -q '^State:[[:space:]]*Z' "/proc/$1/status" 2>/dev/null; }
 reap_stubs() { local p; [ -f "${FIX}/stub-pids" ] && for p in $(cat "${FIX}/stub-pids"); do STUB_PIDS="${STUB_PIDS} ${p}"; done; }
 
 echo "== E. --dry-run touches nothing =="
@@ -388,6 +404,9 @@ SP="$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); pri
 RUN=(env PATH="${SPATH}" KIND_TOR_STATE_DIR="${ST}" KIND_TOR_SOCKS_PORT="${SP}" KIND_TOR_WAIT=5 TOR_BIN="${STUB}/tor")
 "${RUN[@]}" bash "${SCRIPT}" up > "${WORK}/up1.out" 2>&1; urc=$?; reap_stubs
 [ "${urc}" = 0 ] && ok "up rc=0 against the stubs" || bad "up rc=${urc}: $(tail -c 400 "${WORK}/up1.out")"
+# A HEAD (-I) reaches the gateway's 401, not the SPA shell the readiness probe GETs (#658): the hint must be a GET.
+TRYLINE="$(grep -a 'try:.*curl' "${WORK}/up1.out" | head -1)"
+if [ -n "${TRYLINE}" ] && ! grep -aE -e ' -[A-Za-z]*I' -e ' --head( |$)' >/dev/null <<<"${TRYLINE}"; then ok "the printed 'try:' hint is a GET (no curl -I / --head, alone or in a combined flag)"; else bad "the printed 'try:' hint is missing or is a HEAD request: $(grep -a 'try:' "${WORK}/up1.out" | head -2 | tr '\n' ';')"; fi
 grep -aF "tor -f ${ST}/torrc" "${CALLS}" >/dev/null && ok "tor launched as 'tor -f <state>/torrc'" || bad "tor was not launched with the state torrc: $(grep -a '^tor' "${CALLS}" | tr '\n' ';')"
 grep -axF "HiddenServicePort 443 127.0.0.1:8443" "${ST}/torrc" >/dev/null && ok "the WRITTEN torrc publishes 443 -> 127.0.0.1:8443" || bad "the written torrc lacks 'HiddenServicePort 443 127.0.0.1:8443'"
 if grep -a '^kubectl' "${CALLS}" | grep -av -- '--context kind-hugmesh-local' >/dev/null; then
@@ -456,7 +475,7 @@ print(sum(1 for p in ps if p["name"].startswith("ingress.extraHosts[")))' "${FIX
 pid="$(cat "${ST}/tor.pid" 2>/dev/null || true)"
 "${RUN[@]}" bash "${SCRIPT}" down > "${WORK}/down.out" 2>&1; drc=$?
 [ "${drc}" = 0 ] && ok "down rc=0" || bad "down rc=${drc}: $(tail -c 300 "${WORK}/down.out")"
-if [ -n "${pid}" ] && kill -0 "${pid}" 2>/dev/null; then bad "down left tor (pid ${pid}) running"; else ok "down stopped the tor it started"; fi
+if [ -n "${pid}" ] && alive "${pid}"; then bad "down left tor (pid ${pid}) running"; else ok "down stopped the tor it started"; fi
 [ -s "${ST}/hs/hostname" ] && ok "down KEEPS the onion keys dir (stable address)" || bad "down removed the hostname/keys"
 cmp -s <(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["spec"]["source"]["helm"]["parameters"])' "${FIX}/app.json") \
        <(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["spec"]["source"]["helm"]["parameters"])' "${FIX}/app.orig.json") \
@@ -469,6 +488,23 @@ echo "$$" > "${ST}/tor.pid"
 "${RUN[@]}" bash "${SCRIPT}" onion >/dev/null 2>&1 && bad "onion trusted a pidfile naming a live process that is not the kind tor" \
   || ok "onion refuses a pidfile whose live process does not run this torrc"
 rm -f "${ST}/tor.pid"
+
+# A tor that dies on SIGTERM but is never reaped by its parent is a ZOMBIE, and
+# `kill -0` still succeeds on a zombie. `down` must treat it as stopped, not wait
+# out its 10 s budget and die "did not exit on SIGTERM" (run 37682082806).
+STZ="${WORK}/state-zombie"; : > "${CALLS}"; cp "${FIX}/app.orig.json" "${FIX}/app.json"
+env PATH="${SPATH}" KT_ZOMBIE=1 KIND_TOR_STATE_DIR="${STZ}" KIND_TOR_SOCKS_PORT="${SP}" KIND_TOR_WAIT=5 TOR_BIN="${STUB}/tor" \
+  bash "${SCRIPT}" up > "${WORK}/up-z.out" 2>&1; zurc=$?; reap_stubs
+zpid="$(cat "${STZ}/tor.pid" 2>/dev/null || true)"
+[ "${zurc}" = 0 ] && [ -n "${zpid}" ] && alive "${zpid}" && ok "zombie case: up started a stub tor whose parent never waits" \
+  || bad "zombie case: up rc=${zurc}, pid '${zpid}': $(tail -c 300 "${WORK}/up-z.out")"
+env PATH="${SPATH}" KIND_TOR_STATE_DIR="${STZ}" bash "${SCRIPT}" down > "${WORK}/down-z.out" 2>&1; zdrc=$?
+[ "${zdrc}" = 0 ] && ok "down rc=0 when the SIGTERMed tor stays defunct" || bad "down rc=${zdrc} on a defunct tor: $(tail -c 300 "${WORK}/down-z.out")"
+if [ -n "${zpid}" ] && kill -0 "${zpid}" 2>/dev/null && ! alive "${zpid}"; then
+  ok "zombie case is real: the tor is defunct (kill -0 still succeeds on it)"
+else
+  bad "zombie case is vacuous: pid '${zpid}' was reaped or never signalled"
+fi
 
 # THE TWO READINESS GATES OF `up`. (1) The door is probed only after the Ingress
 # SERVES the onion rule — before that ingress-nginx answers the onion Host from

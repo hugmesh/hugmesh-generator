@@ -23,7 +23,7 @@ _GEN = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 # glib[introspection] chain does not cross-compile (the real build died in glib's
 # in-source gobject-introspection bootstrap), so the atom was removed behind a
 # paper-trail comment and tests/requested-atoms-resolvable.sh pins the exclusion.
-_RAW_TOTALS = {"x86": 150, "rpi5": 73, "jetson": 66, "frite": 52,
+_RAW_TOTALS = {"x86": 151, "rpi5": 73, "jetson": 66, "frite": 52,
                "orangepi5": 53, "orangepizero2": 32, "orangepizero2w": 32}
 
 _CONFIGS = [
@@ -337,12 +337,16 @@ def test_x86_tor_slug_predicts_the_tor_package():
 
 
 def test_domain_row_tor_without_a_node_selection_predicts_nothing():
-    # The #580 addendum: a loaded config can carry `tor` on a DOMAIN row. The mesh
-    # manifest keeps it, no builder reads it for tor, so the preview must not show it.
+    # The #580 addendum: a loaded config can carry `tor` on a DOMAIN row. Since #582
+    # (decision 68 = A) that legacy slot MIGRATES at load to the domain's own Tor
+    # front door (Domain.tor) — a per-domain onion served by the node's tor, which
+    # the node still has to be selected for — so it is still no reason for the
+    # preview to show net-vpn/tor on an image that does not select tor itself.
     cfg = ImageConfig.from_dict({
         "mode": "mesh", "role": "backend", "platform": "x86",
         "domains": [{"name": "acme.example", "optional_services": ["tor", "tuwunel"]}]})
-    assert "tor" in cfg.domains[0].optional_services     # the slot really is loaded
+    assert cfg.domains[0].tor is True                    # the slot really is loaded
+    assert cfg.domains[0].optional_services == ["tuwunel"]
     assert not _tor_in(cfg)
 
 

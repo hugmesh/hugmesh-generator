@@ -99,6 +99,8 @@ def test_page_slugs_map_to_the_right_pages(wiz):
               "provider": golive_mod.GoLiveProviderPage,
               "inputs": golive_mod.GoLiveInputsPage,
               "generate": golive_mod.GoLiveGeneratePage,
+              # the optional export step (skipped unless a domain names a GitHub org)
+              "org-export": golive_mod.GoLiveOrgExportPage,
               "verify": golive_mod.GoLiveVerifyPage,
               "flip": golive_mod.GoLiveFlipPage}
     assert set(expect) == set(GOLIVE_PAGE_SLUGS)
