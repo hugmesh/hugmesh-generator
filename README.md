@@ -522,7 +522,11 @@ none), and compose green is not evidence for the cluster._
   export generation): the fallback is the previous policy minus every ssh edge the
   refused one revokes, the refused policy is retried on up to three later ticks, and
   an alarm (`/var/lib/hugmesh/headscale-policy/apply-failed` plus a `daemon.crit`
-  line) stays raised until the exported policy is loaded. `tests/device-registry/test-layer-a-headscale-acl.sh` runs against the
+  line) stays raised until the exported policy, or a newer generation, is loaded
+  (loading the fallback does not clear it). When the previous policy cannot be
+  narrowed it is not restored at all, and a policy that cannot be written into
+  `/etc/headscale` is alarmed, kept pending, and holds the export cursor so the same
+  generation is installed again. `tests/device-registry/test-layer-a-headscale-acl.sh` runs against the
   `net/hugmesh` BFF tree; its two policy-mode checks stay red against a `database` BFF
   until #634 lands, by design.
 - **🔭 Live in-cluster image build. (needs a live cluster)** The Kaniko manifests,
