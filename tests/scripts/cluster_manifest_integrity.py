@@ -15,6 +15,7 @@ Deliberately dependency-light: PyYAML + bash only, so it runs in the
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -2714,7 +2715,7 @@ def check_workload_service_accounts(root):
               "; ".join(sorted(set(unenforceable))) or "none"))
 
 
-# ── 13) image pins: no floating tag, and a THIRD-PARTY image is pinned by digest ──
+# ── 13) image pins: no :latest, no untagged, no floating channel tag; THIRD-PARTY by digest ──
 # WHY. specs/cluster/manifests/owncast/kustomization.yaml shipped
 # `newTag: latest` for the upstream owncast/owncast image. Rendered with
 # `kubectl kustomize` that is `image: owncast/owncast:latest`: every pod restart (or
@@ -2722,36 +2723,73 @@ def check_workload_service_accounts(root):
 # running service is neither reproducible nor reviewable, and a compromised or
 # careless upstream push reaches the cluster with no commit in this repo. The
 # tube-media sidecar's nginx was the same shape one step milder (`1.27-alpine`: a
-# mutable minor tag, no digest). This gate read none of it: nothing above looks at
-# a kustomization's `images:` list at all.
+# mutable minor tag, no digest). This gate read none of it.
 #
-# THE RULES (each is enforced below, and each has a negative control):
-#   a) a kustomize `images:` entry never resolves to `latest`, an empty tag, or no
-#      tag at all (an untagged ref IS an implicit :latest). Tree-wide, any registry.
-#      The comparison is case-insensitive (`Latest`), and a non-string newTag is
-#      refused outright: YAML reads `newTag: 1.30` as the float 1.3 and the cluster
-#      would pull a different image from the one written.
-#   b) a workload container `image:` that is spelled with `:latest`, or with no tag
-#      and no digest, is refused UNLESS the same directory's kustomization rewrites
-#      that name (the bare `hugmesh/<app>` and `owncast/owncast` placeholders are
-#      rewritten, which is exactly why (a) has to look at the rewrite).
-#   c) a `digest:` must be `sha256:` + 64 lowercase hex and not a single repeated
-#      character (a placeholder such as sha256:000...0 pins nothing).
-#   d) a THIRD-PARTY entry (anything not under registry.hugmesh.net or the bare
-#      `hugmesh/` org) must carry such a digest and a version-shaped tag
-#      (`1.27-alpine`, `v0.15.0`, never `stable`/`main`/`edge`). The tag stays as the
-#      human-readable name; kustomize renders `name:tag@sha256:...` and the digest
-#      is what the runtime resolves.
+# The first version of this check read only a Kustomization's `images:` list and a
+# workload's literal `image:`, and only refused `latest` and untagged refs on the
+# workload side. A review got a mutable image past it three ways, each rendering a
+# floating tag with the gate green: a raw `image: owncast/owncast:stable`; a
+# `kind: Component` carrying `newTag: latest`; and a JSON6902 patch replacing
+# /spec/template/spec/containers/0/image with `owncast/owncast:develop`. The root
+# cause is that an image ref can be SET in many places and the check read two of
+# them. So every place this tree sets an image is read, the places that cannot be
+# read statically fail CLOSED, and the same rule (one function, _judge_ref) is
+# applied to every ref found:
+#
+#   WHERE an image is set, and how each is read:
+#     - `images:` entries of every kustomize doc of kind Kustomization OR Component;
+#     - every `image:` key anywhere in a non-kustomization manifest (containers,
+#       initContainers, helm values `image: {registry, repository, tag, digest}`),
+#       including YAML embedded in a string (a ConfigMap's helper-pod template, an
+#       Argo `helm.values: |` block);
+#     - `patches:` / `patchesStrategicMerge:` / `patchesJson6902:` of a Kustomization or
+#       Component, inline or by file: a JSON6902 op whose path ends in `/image` is
+#       judged by its value, an op that adds a whole container is walked, and a
+#       `copy`/`move` onto an image path (value taken from elsewhere) fails closed;
+#     - an Argo Application's `kustomize.images` overrides and `kustomize.patches`;
+#     - fail CLOSED (refused outright, the check cannot see the result): a
+#       `replacements:` target whose fieldPath names an image, a kustomization using
+#       `transformers:` / `generators:` / `helmCharts:`, an image ref containing a
+#       `$(VAR)` substitution, and a patch file that is missing or does not parse.
+#   THE RULE (_judge_ref, on the ref the cluster would pull):
+#     a) never `latest` (any case), never untagged and undigested (an implicit
+#        :latest), and a digest must be `sha256:` + 64 lowercase hex;
+#     b) a THIRD-PARTY ref (anything not under registry.hugmesh.net or the bare
+#        `hugmesh/` org) without a digest must carry a version-shaped tag with no
+#        channel word in it: `stable`, `edge`, `develop`, `mainline`, `_edge`,
+#        `nightly`, ... are refused;
+#     c) a THIRD-PARTY ref without a digest is refused unless its exact name:tag is
+#        listed in RAW_DIGEST_KNOWN_GAPS (a ratchet: a new image, or a changed tag on
+#        an old one, must carry a digest);
+#     d) a kustomize `images:` entry keeps its stricter rules: a non-string newTag
+#        is refused (YAML reads 1.30 as 1.3), a repeated-character placeholder digest
+#        is refused, and a third-party entry needs a version tag AND a digest unless
+#        listed in IMAGE_DIGEST_KNOWN_GAPS.
+#   A raw or patched ref is exempt from (a)-(c) only when an `images:` entry of the
+#   kustomization in its own directory (or a Component that kustomization includes)
+#   rewrites that exact name, and no kustomization in another directory includes the
+#   same file without rewriting it; that entry is then judged by (d) instead. A
+#   literal `:latest` gets no exemption.
+#
+#   RENDER CROSS-CHECK. When kubectl is on PATH (and HUGMESH_IMAGE_PIN_RENDER is not
+#   0), every Kustomization directory is rendered with `kubectl kustomize` and every
+#   image in the output is judged by the same _judge_ref, with no exemptions: that is
+#   the form the cluster receives, so a spelling the static reader missed still
+#   fails. A directory that does not render fails. Without kubectl (the python:3-slim
+#   CI image) the cross-check does not run and the PASS line says so.
 #
 # NOT CLOSED, stated rather than skipped: FIRST-PARTY images are tracked by the
 # moving `main` tag (the image-builder pushes an immutable short-SHA / release tag
-# next to it from the same build; the kustomizations deliberately follow the moving
-# one in dev). This check does NOT reject `main` on a first-party image and does not
-# claim to; pinning them needs a release step that writes the immutable tag or
-# digest back, which does not exist yet. Third-party images that predate rule (d)
-# are listed in IMAGE_DIGEST_KNOWN_GAPS below with their real reason; a ratchet, not
-# an approval: a NEW undigested third-party image fails, and an entry that has since
-# gained a digest fails as stale so the list cannot outlive the gap.
+# next to it from the same build; the kustomizations follow the moving one). This
+# check refuses `latest` and untagged first-party refs and NOTHING else on them:
+# pinning them needs a release step that writes the immutable tag or digest back,
+# which does not exist yet. A version tag on a RAW_DIGEST_KNOWN_GAPS image
+# (`postgres:16-alpine`, `hashicorp/vault:1.18`) still moves on upstream patch
+# releases. Images a third-party helm chart defaults internally are not visible
+# here; only the values this tree sets are. Third-party images that predate rule (d)
+# are listed in IMAGE_DIGEST_KNOWN_GAPS below with their real reason. Every list
+# below is a ratchet, not an approval: an entry that no longer matches anything, or
+# has since gained a digest, fails as stale so a list cannot outlive its gap.
 IMAGE_DIGEST_KNOWN_GAPS = {
     # "<manifest dir>:<effective image name>": reason
     "coturn:coturn/coturn": "pinned by version tag (4.6.2), digest not yet recorded",
@@ -2765,9 +2803,60 @@ IMAGE_DIGEST_KNOWN_GAPS = {
         "tag and has not been taught about a digest yet",
 }
 
+# Third-party refs written outside a kustomize `images:` entry (a workload, a helm
+# values block, an embedded pod template) by a version tag and no digest, as shipped
+# when this ratchet was introduced. Exact `name:tag`; a different tag on the same
+# image is a NEW ref and must carry a digest.
+RAW_DIGEST_KNOWN_GAPS = {
+    "alpine:3.20",
+    "bitnamilegacy/kafka:3.7.1-debian-12-r9",
+    "bitnamilegacy/kubectl:1.28.5",
+    "busybox:1.37",
+    "casbin/casdoor:3.80.0",
+    "clickhouse/clickhouse-server:25.3-alpine",
+    "cloudflare/cloudflared:2024.10.0",
+    "codeberg.org/forgejo/forgejo:9.0.3",
+    "docker.io/bitnamilegacy/cassandra:5.0.5",
+    "docker.io/bitnamilegacy/kubectl:1.30",
+    "docker.io/bitnamilegacy/kubectl:1.31",
+    "gcr.io/kaniko-project/executor:v1.23.2",
+    "ghcr.io/matrix-construct/tuwunel:v1.7.0",
+    "hashicorp/vault:1.18",
+    "hashicorp/vault:1.21.4",
+    "nginxinc/nginx-unprivileged:1.27-alpine",
+    "otel/opentelemetry-collector-contrib:0.153.0",
+    "postgres:16-alpine",
+    "python:3.12-alpine",
+    "rancher/local-path-provisioner:v0.0.30",
+    "registry.k8s.io/coredns/coredns:v1.11.3",
+    "registry.k8s.io/kubectl:v1.31.3",
+    "uptrace/uptrace:2.0.3",
+    "velero/velero-plugin-for-aws:v1.14.1",
+    "velero/velero:v1.18.1",
+}
+
+# Third-party refs whose tag is a floating channel name and which could not be pinned
+# when this ratchet was introduced. Exact `name:tag` -> reason.
+FLOATING_TAG_KNOWN_GAPS = {
+    "git.akkoma.dev/akkomagang/akkoma:stable":
+        "the akkoma registry host did not resolve from the machine that introduced this "
+        "check, so neither a release tag nor a digest could be verified; the manifests "
+        "already carry a `pin a real tag` marker. Resolve the digest (crane digest "
+        "git.akkoma.dev/akkomagang/akkoma:<release>), pin it in akkoma.yaml, "
+        "admin-sync-job.yaml and the test-runner manifest, and delete this entry",
+}
+
 _DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 _VERSION_TAG_RE = re.compile(r"^v?[0-9][A-Za-z0-9._+-]*$")
+# A channel word anywhere in the tag, delimited by a non-alphanumeric or the tag's
+# ends: `6.6-24.04_edge`, `1.2-stable`, `3-develop`. `rc1` / `alpine` do not match.
+_FLOATING_WORD_RE = re.compile(
+    r"(?:^|[^a-z0-9])(latest|stable|edge|beta|alpha|candidate|nightly|dev|devel|develop|"
+    r"main|master|mainline|rolling|testing|unstable|current|next|canary|snapshot|head|"
+    r"trunk|preview|experimental|lts)(?:[^a-z0-9]|$)", re.I)
 _FIRST_PARTY_HOST = "registry.hugmesh.net"
+_KUSTOMIZE_KINDS = ("Kustomization", "Component")
+_UNREADABLE_KUSTOMIZE_KEYS = ("transformers", "generators", "helmCharts", "helmGlobals")
 
 
 def _split_image_ref(ref):
@@ -2789,19 +2878,246 @@ def _is_first_party(name):
     return parts[0] == "hugmesh"
 
 
-def _container_images(node):
-    """Every `image:` string under a containers/initContainers/ephemeralContainers list."""
+def _floating_tag(tag):
+    return not _VERSION_TAG_RE.match(tag) or bool(_FLOATING_WORD_RE.search(tag))
+
+
+def _is_placeholder_ref(ref):
+    return "{{" in ref or "REPLACE_WITH_" in ref
+
+
+def _judge_ref(ref, used):
+    """None if `ref` may be pulled as written, else the reason it may not.
+
+    `used` collects the RAW_DIGEST/FLOATING_TAG gap keys this ref relied on, so an
+    entry nothing relies on any more can be reported stale."""
+    ref = ref.strip()
+    if "$(" in ref or "${" in ref:
+        return "contains a variable substitution, so the pulled ref cannot be read here"
+    name, tag, digest = _split_image_ref(ref)
+    if tag.lower() == "latest":
+        return "uses the mutable :latest tag"
+    if digest:
+        if not _DIGEST_RE.match(digest):
+            return "has digest %r, which is not sha256:<64 lowercase hex>" % digest
+        return None
+    if not tag:
+        return "has no tag and no digest (an implicit :latest)"
+    if _is_first_party(name):
+        return None
+    key = "%s:%s" % (name, tag)
+    if key in FLOATING_TAG_KNOWN_GAPS:
+        used.add(key)
+        return None
+    if _floating_tag(tag):
+        return ("is third-party with tag %r, a floating channel name or not a version: "
+                "stable/edge/develop/mainline-style tags move under the cluster" % tag)
+    if key in RAW_DIGEST_KNOWN_GAPS:
+        used.add(key)
+        return None
+    return ("is third-party, pinned by tag %r only with no digest: a tag is mutable. "
+            "Append @sha256:<64 hex> resolved from the registry" % tag)
+
+
+def _helm_image_ref(d):
+    repo = d.get("repository")
+    if not isinstance(repo, str) or not repo:
+        return None
+    reg = d.get("registry")
+    ref = "%s/%s" % (reg, repo) if isinstance(reg, str) and reg else repo
+    tag = d.get("tag")
+    digest = d.get("digest")
+    if tag is None and not digest:
+        return None  # the chart's own default tag applies; not set by this tree
+    if tag is not None:
+        ref += ":%s" % tag
+    if isinstance(digest, str) and digest:
+        ref += "@%s" % digest
+    return ref
+
+
+def _image_refs(node, depth=0):
+    """Every image ref set under `node`: any `image:` key (string, or a helm-style
+    {registry, repository, tag, digest} map), recursing into YAML embedded in strings."""
+    if depth > 8:
+        return
     if isinstance(node, dict):
+        # A document that is not a Kubernetes object (no apiVersion) with a top-level
+        # string `image:` is a descriptor naming a repository (catalog/*.example.yaml),
+        # not something a kubelet pulls. Its nested keys are still walked.
+        descriptor = depth == 0 and "apiVersion" not in node
         for key, val in node.items():
-            if key in ("containers", "initContainers", "ephemeralContainers") \
-                    and isinstance(val, list):
-                for c in val:
-                    if isinstance(c, dict) and isinstance(c.get("image"), str):
-                        yield c["image"]
-            yield from _container_images(val)
+            if key == "image" and descriptor and isinstance(val, str):
+                continue
+            if key == "image":
+                if isinstance(val, str):
+                    yield val
+                    continue
+                if isinstance(val, dict):
+                    ref = _helm_image_ref(val)
+                    if ref is not None:
+                        yield ref
+            yield from _image_refs(val, depth + 1)
     elif isinstance(node, list):
         for item in node:
-            yield from _container_images(item)
+            yield from _image_refs(item, depth + 1)
+    elif isinstance(node, str) and "\n" in node and "image" in node:
+        try:
+            for sub in yaml.safe_load_all(node):
+                if isinstance(sub, (dict, list)):
+                    yield from _image_refs(sub, depth + 1)
+        except Exception:
+            pass  # a script or prose that happens to say "image"; not YAML
+
+
+def _load_all(path):
+    """Every document of a file, lists included (a JSON6902 patch file is a list)."""
+    return [d for d in yaml.safe_load_all(open(path, encoding="utf-8")) if d is not None]
+
+
+def _patch_objects(doc, d, where):
+    """Yield the parsed objects of every patch a kustomize doc applies; refuse what cannot be read."""
+    for key in ("patches", "patchesJson6902", "patchesStrategicMerge"):
+        items = doc.get(key) or []
+        if not isinstance(items, list):
+            fail("[image-pin]", "%s: `%s:` is not a list" % (where, key))
+            continue
+        for item in items:
+            texts = []
+            if isinstance(item, str):
+                p = os.path.join(d, item)
+                if "\n" not in item and os.path.isfile(p):
+                    texts.append(("file " + item, None, p))
+                else:
+                    texts.append(("inline", item, None))
+            elif isinstance(item, dict):
+                if isinstance(item.get("patch"), str):
+                    texts.append(("inline", item["patch"], None))
+                if isinstance(item.get("path"), str):
+                    texts.append(("file " + item["path"], None, os.path.join(d, item["path"])))
+                if not texts:
+                    fail("[image-pin]", "%s: a `%s:` entry has neither patch nor path: %r"
+                         % (where, key, item))
+            for label, text, path in texts:
+                try:
+                    objs = ([o for o in yaml.safe_load_all(text) if o is not None]
+                            if path is None else _load_all(path))
+                except Exception as exc:
+                    fail("[image-pin]", "%s: %s patch (%s) cannot be read (%s), so the image "
+                         "it may set cannot be checked" % (where, key, label, exc))
+                    continue
+                for o in objs:
+                    yield o
+
+
+def _patch_image_refs(obj, where):
+    """Image refs a parsed patch sets. A JSON6902 op list is read op by op."""
+    if isinstance(obj, list) and all(isinstance(o, dict) and "op" in o for o in obj):
+        for op in obj:
+            path = str(op.get("path", ""))
+            last = path.rstrip("/").rsplit("/", 1)[-1]
+            kind = str(op.get("op", "")).lower()
+            if kind in ("copy", "move"):
+                if "image" in path.lower() or "image" in str(op.get("from", "")).lower() \
+                        or last in ("containers", "initContainers", "ephemeralContainers") \
+                        or last.isdigit() or last == "-":
+                    fail("[image-pin]", "%s: a JSON6902 `%s` onto %s takes its value from "
+                         "elsewhere in the object, so the image it sets cannot be checked"
+                         % (where, kind, path))
+                continue
+            if kind not in ("add", "replace"):
+                continue
+            val = op.get("value")
+            if last == "image":
+                if isinstance(val, str):
+                    yield val
+                elif isinstance(val, dict) and _helm_image_ref(val) is not None:
+                    yield _helm_image_ref(val)
+                else:
+                    fail("[image-pin]", "%s: a JSON6902 `%s` of %s sets %r, not an image "
+                         "string" % (where, kind, path, val))
+            else:
+                yield from _image_refs(val, 1)  # a patch value, never a descriptor
+    else:
+        yield from _image_refs(obj, 1)
+
+
+def _replacement_targets_image(item):
+    for t in item.get("targets") or []:
+        if not isinstance(t, dict):
+            continue
+        paths = t.get("fieldPaths") or []
+        if isinstance(t.get("fieldPath"), str):
+            paths = list(paths) + [t["fieldPath"]]
+        if any("image" in str(fp).lower() for fp in paths):
+            return True
+    return False
+
+
+def _check_replacements(doc, d, where):
+    for item in doc.get("replacements") or []:
+        reps = [item]
+        if isinstance(item, dict) and isinstance(item.get("path"), str):
+            try:
+                reps = []
+                for o in _load_all(os.path.join(d, item["path"])):
+                    reps.extend(o if isinstance(o, list) else [o])
+            except Exception as exc:
+                fail("[image-pin]", "%s: replacements file %s cannot be read (%s), so the "
+                     "image it may set cannot be checked" % (where, item["path"], exc))
+                continue
+        for r in reps:
+            if isinstance(r, dict) and _replacement_targets_image(r):
+                fail("[image-pin]", "%s: a `replacements:` entry writes an image field (%r); "
+                     "the value comes from another object at build time and cannot be "
+                     "checked here. Set the image with an `images:` entry instead." % (where, r))
+
+
+def _argo_kustomize_blocks(node, depth=0):
+    if depth > 12:
+        return
+    if isinstance(node, dict):
+        for key, val in node.items():
+            if key == "kustomize" and isinstance(val, dict):
+                yield val
+            yield from _argo_kustomize_blocks(val, depth + 1)
+    elif isinstance(node, list):
+        for item in node:
+            yield from _argo_kustomize_blocks(item, depth + 1)
+
+
+def _render_refs(root):
+    """(refs-by-dir, reason-not-run). Renders every Kustomization directory with kubectl."""
+    if os.environ.get("HUGMESH_IMAGE_PIN_RENDER", "1") == "0":
+        return None, "HUGMESH_IMAGE_PIN_RENDER=0"
+    kubectl = shutil.which("kubectl")
+    if not kubectl:
+        return None, "kubectl not on PATH"
+    dirs = set()
+    for path in yaml_files(root):
+        if os.path.basename(path) in ("kustomization.yaml", "kustomization.yml") and not any(
+                doc.get("kind") == "Component" for doc in docs_of(path)):
+            dirs.add(os.path.dirname(path))
+    out = {}
+    for d in sorted(dirs):
+        try:
+            r = subprocess.run([kubectl, "kustomize", d], capture_output=True, text=True,
+                               timeout=120)
+        except Exception as exc:
+            fail("[image-pin]", "%s: `kubectl kustomize` did not run (%s)"
+                 % (os.path.relpath(d, root), exc))
+            continue
+        if r.returncode != 0:
+            fail("[image-pin]", "%s: `kubectl kustomize` failed, so what it ships cannot be "
+                 "checked: %s" % (os.path.relpath(d, root),
+                                  (r.stderr.strip().splitlines() or ["?"])[-1]))
+            continue
+        refs = []
+        for doc in yaml.safe_load_all(r.stdout):
+            if isinstance(doc, (dict, list)):
+                refs.extend(_image_refs(doc))
+        out[d] = refs
+    return out, None
 
 
 def check_image_pins(root):
@@ -2809,15 +3125,23 @@ def check_image_pins(root):
     entries = 0
     third_party = 0
     stale = []
-    rewritten_by_dir = {}
+    used = set()
+    entry_names = defaultdict(set)      # dir of a kustomize doc -> names its images: rewrite
+    kdocs = []                          # (dir, rel, doc)
+    entry_gap_refs = set()              # name:tag an IMAGE_DIGEST_KNOWN_GAPS entry renders
     for path in yaml_files(root):
         for doc in docs_of(path):
-            if doc.get("kind") != "Kustomization":
+            if doc.get("kind") not in _KUSTOMIZE_KINDS:
                 continue
             rel = os.path.relpath(path, root)
             d = os.path.dirname(path)
+            kdocs.append((d, rel, doc))
             dname = os.path.basename(d)
-            names = rewritten_by_dir.setdefault(d, set())
+            for key in _UNREADABLE_KUSTOMIZE_KEYS:
+                if doc.get(key):
+                    fail("[image-pin]", "%s: uses `%s:`, whose output (including any image it "
+                         "sets) this check cannot read. Express it as resources, patches or "
+                         "an `images:` entry." % (rel, key))
             imgs = doc.get("images") or []
             if not isinstance(imgs, list):
                 fail("[image-pin]", "%s: `images:` is not a list" % rel)
@@ -2828,7 +3152,7 @@ def check_image_pins(root):
                     continue
                 entries += 1
                 name = str(e["name"])
-                names.add(name)
+                entry_names[d].add(name)
                 eff = str(e.get("newName") or name)
                 raw_tag = e.get("newTag")
                 digest = e.get("digest")
@@ -2861,7 +3185,7 @@ def check_image_pins(root):
                     continue
                 third_party += 1
                 gap = "%s:%s" % (dname, eff)
-                if not tag or not _VERSION_TAG_RE.match(tag):
+                if not tag or _floating_tag(tag):
                     fail("[image-pin]",
                          "%s (third-party) has tag %r, which is not a version (e.g. 1.27-alpine, "
                          "v0.15.0): a floating name such as stable/main/edge moves under the "
@@ -2870,7 +3194,7 @@ def check_image_pins(root):
                     if gap in IMAGE_DIGEST_KNOWN_GAPS:
                         stale.append(gap)
                 elif gap in IMAGE_DIGEST_KNOWN_GAPS:
-                    pass
+                    entry_gap_refs.add("%s:%s" % (eff, tag))
                 else:
                     fail("[image-pin]",
                          "%s (third-party) is pinned by tag %r only: a tag is mutable, so the "
@@ -2882,40 +3206,112 @@ def check_image_pins(root):
              "IMAGE_DIGEST_KNOWN_GAPS lists %s but it now carries a digest: remove the entry so "
              "the allowlist cannot outlive the gap." % gap)
     for gap in sorted(IMAGE_DIGEST_KNOWN_GAPS):
-        d, _, n = gap.partition(":")
-        live = False
-        for path in yaml_files(root):
-            if os.path.basename(os.path.dirname(path)) != d:
-                continue
-            for doc in docs_of(path):
-                if doc.get("kind") == "Kustomization" and any(
-                        isinstance(e, dict) and str(e.get("newName") or e.get("name")) == n
-                        for e in doc.get("images") or []):
-                    live = True
+        gd, _, n = gap.partition(":")
+        live = any(os.path.basename(d) == gd and any(
+            isinstance(e, dict) and str(e.get("newName") or e.get("name")) == n
+            for e in doc.get("images") or []) for d, _rel, doc in kdocs)
         if not live:
             fail("[image-pin]",
                  "IMAGE_DIGEST_KNOWN_GAPS lists %s but no kustomization carries it: the entry "
                  "names nothing, remove or correct it." % gap)
 
+    # Which names a kustomization directory rewrites (its own entries plus those of every
+    # Component it includes), and which files a kustomization in ANOTHER directory pulls in
+    # by path (the rewrite in the file's own directory does not apply there).
+    rewrites = defaultdict(set)
+    foreign_includers = defaultdict(list)   # abs file -> [dir of including kustomization]
+    for d, rel, doc in kdocs:
+        if doc.get("kind") != "Kustomization":
+            continue
+        rewrites[d] |= entry_names[d]
+        for c in doc.get("components") or []:
+            if isinstance(c, str):
+                rewrites[d] |= entry_names[os.path.normpath(os.path.join(d, c))]
+        for r in doc.get("resources") or []:
+            if not isinstance(r, str):
+                continue
+            p = os.path.normpath(os.path.join(d, r))
+            if os.path.isfile(p) and os.path.dirname(p) != d:
+                foreign_includers[p].append(d)
+
+    def exempt(name, own_dir, file_path):
+        if name not in rewrites.get(own_dir, set()):
+            return False
+        return all(name in rewrites.get(k, set()) for k in foreign_includers.get(file_path, []))
+
+    def judge_all(refs, where, own_dir, file_path, exemptible=True, rendered=False):
+        n = 0
+        for ref in refs:
+            if not isinstance(ref, str):
+                fail("[image-pin]", "%s: image %r is not a string" % (where, ref))
+                continue
+            if _is_placeholder_ref(ref):
+                continue
+            n += 1
+            name, tag, _dg = _split_image_ref(ref.strip())
+            # A literal :latest is refused even behind a rewrite: the tag is what a
+            # reader of the file trusts, and the rewrite is one edit from vanishing.
+            if exemptible and tag.lower() != "latest" and exempt(name, own_dir, file_path):
+                continue
+            if rendered and ref.strip() in entry_gap_refs:
+                continue  # the `images:` entry that renders it was judged by rule (d)
+            why = _judge_ref(ref, used)
+            if why:
+                fail("[image-pin]", "%s: image %r %s." % (where, ref, why))
+        return n
+
+    # Patches and replacements of every Kustomization / Component.
+    patched = 0
+    for d, rel, doc in kdocs:
+        is_comp = doc.get("kind") == "Component"
+        for obj in _patch_objects(doc, d, rel):
+            # The images transformer runs after a Kustomization's own patches, so a
+            # patched name its own `images:` rewrites is governed by that entry. A
+            # Component's patches get no such credit.
+            patched += judge_all(list(_patch_image_refs(obj, rel)), "%s (patch)" % rel,
+                                 d, None, exemptible=not is_comp)
+        _check_replacements(doc, d, rel)
+
     raw = 0
     for path in yaml_files(root):
         if os.path.basename(path) in ("kustomization.yaml", "kustomization.yml"):
             continue
-        rewritten = rewritten_by_dir.get(os.path.dirname(path), set())
+        rel = os.path.relpath(path, root)
+        d = os.path.dirname(path)
         for doc in docs_of(path):
-            for ref in _container_images(doc):
-                if "{{" in ref or "REPLACE_WITH_" in ref:
-                    continue
-                name, tag, digest = _split_image_ref(ref)
-                raw += 1
-                rel = os.path.relpath(path, root)
-                if tag.lower() == "latest" and not digest:
-                    fail("[image-pin]", "%s: container image %r uses the mutable :latest tag."
-                         % (rel, ref))
-                elif not tag and not digest and name not in rewritten:
-                    fail("[image-pin]",
-                         "%s: container image %r has no tag and no digest (an implicit :latest) "
-                         "and no kustomization in that directory rewrites it." % (rel, ref))
+            if doc.get("kind") in _KUSTOMIZE_KINDS:
+                continue
+            raw += judge_all(list(_image_refs(doc)), rel, d, os.path.normpath(path))
+            # An Argo Application's own kustomize overrides.
+            for blk in _argo_kustomize_blocks(doc):
+                for s in blk.get("images") or []:
+                    new = str(s).split("=", 1)[-1]
+                    raw += judge_all([new], "%s (kustomize.images override %r)" % (rel, s),
+                                     d, None, exemptible=False)
+                for obj in _patch_objects(blk, d, "%s (kustomize override)" % rel):
+                    raw += judge_all(list(_patch_image_refs(obj, rel)),
+                                     "%s (kustomize.patches override)" % rel, d, None,
+                                     exemptible=False)
+
+    rendered, not_run = _render_refs(root)
+    render_note = "render cross-check NOT run (%s)" % not_run
+    if rendered is not None:
+        n_ref = 0
+        for d, refs in sorted(rendered.items()):
+            n_ref += judge_all(refs, "%s (rendered by kubectl kustomize)"
+                               % os.path.relpath(d, root), d, None, exemptible=False,
+                               rendered=True)
+        render_note = ("render cross-check ran: %d kustomization dir(s) rendered with kubectl, "
+                       "%d rendered image ref(s) judged with no rewrite exemption"
+                       % (len(rendered), n_ref))
+
+    for key in sorted(set(RAW_DIGEST_KNOWN_GAPS) - used):
+        fail("[image-pin]", "RAW_DIGEST_KNOWN_GAPS lists %s but no undigested ref relies on it "
+             "any more: remove the entry so the ratchet cannot outlive the gap." % key)
+    for key in sorted(set(FLOATING_TAG_KNOWN_GAPS) - used):
+        fail("[image-pin]", "FLOATING_TAG_KNOWN_GAPS lists %s but no ref relies on it any "
+             "more: remove the entry." % key)
+
     if not entries or not third_party or not raw:
         fail("[image-pin]",
              "vacuous: saw %d kustomize image entr(ies), %d third-party, %d workload image(s). "
@@ -2923,12 +3319,17 @@ def check_image_pins(root):
              % (entries, third_party, raw))
     elif len(failures) == failed_before:
         ok("[image-pin]",
-           "%d kustomize image entr(ies) and %d workload image(s) carry no floating tag; %d "
-           "third-party image(s) are version-tagged and %d of them digest-pinned; %d are "
-           "recorded undigested in IMAGE_DIGEST_KNOWN_GAPS; first-party images follow the "
-           "moving `main` tag by design and are NOT checked for a digest"
-           % (entries, raw, third_party,
-              third_party - len(IMAGE_DIGEST_KNOWN_GAPS), len(IMAGE_DIGEST_KNOWN_GAPS)))
+           "%d kustomize image entr(ies) (Kustomization + Component), %d workload/values "
+           "image ref(s) and %d patch image ref(s): none is :latest or untagged; no "
+           "third-party ref carries a floating channel tag except %d recorded in "
+           "FLOATING_TAG_KNOWN_GAPS; third-party refs carry a digest except %d version-tagged "
+           "kustomize entr(ies) in IMAGE_DIGEST_KNOWN_GAPS and %d version-tagged ref(s) in "
+           "RAW_DIGEST_KNOWN_GAPS (such a tag still moves on upstream patch releases); "
+           "FIRST-PARTY images follow the moving `main` tag and are NOT checked beyond "
+           ":latest/untagged; images a third-party helm chart defaults internally are not "
+           "visible; %s"
+           % (entries, raw, patched, len(FLOATING_TAG_KNOWN_GAPS),
+              len(IMAGE_DIGEST_KNOWN_GAPS), len(RAW_DIGEST_KNOWN_GAPS), render_note))
 
 
 def main():

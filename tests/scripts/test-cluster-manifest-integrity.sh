@@ -184,6 +184,10 @@ fi
 # corresponding check to bite. Without these the whole gate could be a no-op.
 echo
 echo "-- negative controls: each injected defect must be caught --"
+# [image-pin]'s kubectl render cross-check is switched off for the controls: each
+# control must be caught by the STATIC reader alone (CI has no kubectl), and a
+# render per control would add minutes. (21-render) tests the render path itself.
+export HUGMESH_IMAGE_PIN_RENDER=0
 NEG_P=0; NEG_F=0
 neg_ok(){ echo "  PASS negative control: $*"; NEG_P=$((NEG_P+1)); }
 neg_bad(){ echo "  FAIL negative control: $*"; NEG_F=$((NEG_F+1)); }
@@ -1075,6 +1079,163 @@ for dp, _d, fns in os.walk(sys.argv[1]):
 assert n > 0, "no kustomization with images: found"
 PY
 '
+
+# ── (21) IMAGE PINS, round 2: every place an image can be SET is read ─────────
+# A review got a mutable image past (20) three ways, each rendering a floating tag
+# with the gate green: a raw `image: owncast/owncast:stable`, a `kind: Component`
+# carrying `newTag: latest`, and a JSON6902 patch setting `owncast/owncast:develop`.
+# The negative controls run with HUGMESH_IMAGE_PIN_RENDER=0 (exported above), so each
+# one proves the STATIC reader alone catches it (the python:3-slim CI image has no
+# kubectl); (21-render) below proves the kubectl render cross-check catches the
+# same three on its own.
+OC_ENTRY='  - { name: owncast/owncast, newName: owncast/owncast, newTag: 0.3.0, digest: sha256:0f35b568b1098d2badbde2dbf3c73a902009c95eb687c647edea04d6da079a78 }
+'
+oc_drop_entry() { imgswap manifests/owncast/kustomization.yaml "${OC_ENTRY}" ""; }
+# (21a) THE REPORTED EXPLOIT 1: a floating non-latest tag in a raw workload.
+for tag in stable edge mainline develop STABLE nightly 1.2-stable 6.6-24.04_edge; do
+expect_catch "raw workload image owncast/owncast:${tag} with the images: entry removed" "[image-pin]" "
+  oc_drop_entry
+  imgswap manifests/owncast/deployment.yaml '          image: owncast/owncast
+' '          image: owncast/owncast:${tag}
+'
+"
+done
+# (21b) raw :latest in any case, with a digest too (the tag is what a reader trusts).
+expect_catch "raw workload image owncast/owncast:Latest@digest" "[image-pin]" '
+  oc_drop_entry
+  imgswap manifests/owncast/deployment.yaml "          image: owncast/owncast
+" "          image: owncast/owncast:Latest@sha256:0f35b568b1098d2badbde2dbf3c73a902009c95eb687c647edea04d6da079a78
+"
+'
+# (21c) the digest ratchet: a NEW third-party ref with a version tag and no digest.
+expect_catch "raw workload image owncast/owncast:0.3.0 (version tag, no digest, not in the ratchet)" "[image-pin]" '
+  oc_drop_entry
+  imgswap manifests/owncast/deployment.yaml "          image: owncast/owncast
+" "          image: owncast/owncast:0.3.0
+"
+'
+# (21d) the shipped squid channel tag with its digest removed.
+expect_catch "egress-proxy squid channel tag _edge without its digest" "[image-pin]" '
+  imgswap manifests/egress-proxy/egress-proxy.yaml "6.6-24.04_edge@sha256:8a3baed477e2c282ab8aa5edad442f69873246964f225c5c2ae8364b6610963c" "6.6-24.04_edge"
+'
+# (21e) THE REPORTED EXPLOIT 2: a kustomize Component carrying newTag: latest.
+expect_catch "kind: Component images: entry newTag: latest, pulled in via components:" "[image-pin]" '
+  oc_drop_entry
+  imgswap manifests/owncast/deployment.yaml "          image: owncast/owncast
+" "          image: owncast/owncast:0.3.0
+"
+  mkdir "$T/manifests/owncast/pin"
+  printf "apiVersion: kustomize.config.k8s.io/v1alpha1\nkind: Component\nimages:\n  - {name: owncast/owncast, newName: owncast/owncast, newTag: latest}\n" > "$T/manifests/owncast/pin/kustomization.yaml"
+  printf "components:\n  - pin\n" >> "$T/manifests/owncast/kustomization.yaml"
+'
+# (21f) THE REPORTED EXPLOIT 3: an inline JSON6902 patch replacing the image.
+OC_JSONPATCH='patches:
+  - target: {kind: Deployment, name: hugmesh-owncast}
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/image
+        value: owncast/owncast:develop
+'
+expect_catch "inline JSON6902 patch replaces the owncast image with :develop" "[image-pin]" '
+  oc_drop_entry
+  printf "%s" "${OC_JSONPATCH}" >> "$T/manifests/owncast/kustomization.yaml"
+'
+# (21g) the same op from a patch FILE (a JSON6902 file is a YAML list, not a doc).
+expect_catch "JSON6902 patch file sets owncast/owncast:latest" "[image-pin]" '
+  printf -- "- op: replace\n  path: /spec/template/spec/containers/0/image\n  value: owncast/owncast:latest\n" > "$T/manifests/owncast/img-patch.yaml"
+  printf "patches:\n  - target: {kind: Deployment, name: hugmesh-owncast}\n    path: img-patch.yaml\n" >> "$T/manifests/owncast/kustomization.yaml"
+'
+# (21h) a JSON6902 op that ADDS a whole container carrying a mutable image.
+expect_catch "JSON6902 add of a whole sidecar container on :latest" "[image-pin]" '
+  printf "patches:\n  - target: {kind: Deployment, name: hugmesh-owncast}\n    patch: |-\n      - op: add\n        path: /spec/template/spec/containers/-\n        value: {name: side, image: \"busybox:latest\"}\n" >> "$T/manifests/owncast/kustomization.yaml"
+'
+# (21i) a copy/move onto an image path takes its value from elsewhere: fail closed.
+expect_catch "JSON6902 copy onto an image path (unreadable value, fail closed)" "[image-pin]" '
+  printf "patches:\n  - target: {kind: Deployment, name: hugmesh-owncast}\n    patch: |-\n      - op: copy\n        from: /metadata/annotations/img\n        path: /spec/template/spec/containers/0/image\n" >> "$T/manifests/owncast/kustomization.yaml"
+'
+# (21j) an inline strategic-merge patch (patchesStrategicMerge string form).
+expect_catch "inline patchesStrategicMerge sets owncast/owncast:edge" "[image-pin]" '
+  oc_drop_entry
+  printf "patchesStrategicMerge:\n  - |-\n    apiVersion: apps/v1\n    kind: Deployment\n    metadata: {name: hugmesh-owncast}\n    spec:\n      template:\n        spec:\n          containers:\n            - {name: owncast, image: \"owncast/owncast:edge\"}\n" >> "$T/manifests/owncast/kustomization.yaml"
+'
+# (21k) a patch file that does not exist cannot be checked: fail closed.
+expect_catch "patch by path to a file that is not there (fail closed)" "[image-pin]" '
+  printf "patches:\n  - target: {kind: Deployment, name: hugmesh-owncast}\n    path: no-such-patch.yaml\n" >> "$T/manifests/owncast/kustomization.yaml"
+'
+# (21l) replacements that write an image field: fail closed.
+expect_catch "replacements: target fieldPath names the container image (fail closed)" "[image-pin]" '
+  printf "replacements:\n  - source: {kind: ConfigMap, name: x, fieldPath: data.img}\n    targets:\n      - select: {kind: Deployment}\n        fieldPaths: [spec.template.spec.containers.[name=owncast].image]\n" >> "$T/manifests/owncast/kustomization.yaml"
+'
+# (21m) a transformer plugin (an ImageTagTransformer config, say): fail closed.
+expect_catch "kustomization uses transformers: (unreadable output, fail closed)" "[image-pin]" '
+  printf "transformers:\n  - tag.yaml\n" >> "$T/manifests/owncast/kustomization.yaml"
+'
+# (21n) an Argo Application kustomize.images override.
+expect_catch "Argo Application kustomize.images override to :latest" "[image-pin]" '
+  imgswap apps/12-cloudflared.yaml "    kustomize:
+" "    kustomize:
+      images: [\"owncast/owncast=owncast/owncast:latest\"]
+"
+'
+# (21o) a helm values image tag (the velero chart values).
+expect_catch "helm values image tag set to latest (velero)" "[image-pin]" '
+  imgswap apps/55-velero.yaml "          tag: v1.18.1" "          tag: latest"
+'
+# (21p) YAML embedded in a ConfigMap string: the local-path helper pod template.
+expect_catch "local-path helper-pod template back to an untagged busybox" "[image-pin]" '
+  imgswap manifests/local-path/local-path.yaml "image: busybox:1.37@sha256:bdf57e528e45e4433820e045b29b4597825a1c9e38353532d90a01445013f82e" "image: busybox"
+'
+# (21q) a variable substitution in an image cannot be read: fail closed.
+expect_catch "image ref built from a \$(VAR) substitution" "[image-pin]" '
+  imgswap manifests/media-poisoner/deployment.yaml "image: busybox:1.37" "image: busybox:\$(TAG)"
+'
+# (21r) another directory includes the owncast Deployment by file without the
+#       rewrite: the untagged owncast/owncast reaches a render unrewritten.
+expect_catch "foreign kustomization includes owncast/deployment.yaml without rewriting it" "[image-pin]" '
+  mkdir "$T/manifests/owncast-copy"
+  printf "apiVersion: kustomize.config.k8s.io/v1beta1\nkind: Kustomization\nresources:\n  - ../owncast/deployment.yaml\n" > "$T/manifests/owncast-copy/kustomization.yaml"
+'
+# (21s) the raw ratchet cannot outlive its gap: busybox:1.37 has one user; give it a
+#       digest and the RAW_DIGEST_KNOWN_GAPS entry must be reported stale.
+expect_catch "a RAW_DIGEST_KNOWN_GAPS entry nothing relies on any more is reported stale" "[image-pin]" '
+  imgswap manifests/media-poisoner/deployment.yaml "image: busybox:1.37" "image: busybox:1.37@sha256:bdf57e528e45e4433820e045b29b4597825a1c9e38353532d90a01445013f82e"
+'
+
+# (21-render) the kubectl render cross-check catches the three reported exploits ON
+# ITS OWN: the staged tree is rendered and judged without the static reader.
+render_catch() {  # <label> <injection>
+  local label="$1" inject="$2" T="${WORK}/tree"
+  rm -rf "${T}"; cp -r "${REPO}/specs/cluster" "${T}"
+  ( T="${T}"; eval "${inject}" ) || { neg_bad "${label} (injection failed)"; return; }
+  local out
+  if out="$(HUGMESH_IMAGE_PIN_RENDER=1 python3 - "$(dirname "${CHECKER}")" "${T}" <<"PY" 2>&1
+import sys
+sys.path.insert(0, sys.argv[1])
+import cluster_manifest_integrity as m
+rendered, why = m._render_refs(sys.argv[2])
+assert rendered is not None, "render did not run: %s" % why
+bad = sorted({r for refs in rendered.values() for r in refs
+              if r.startswith("owncast/owncast") and m._judge_ref(r, set())})
+assert bad, "no mutable owncast ref in the render"
+print(" ".join(bad))
+PY
+)"; then neg_ok "${label} -> render cross-check caught ${out}"
+  else neg_bad "${label} NOT caught by the render cross-check: ${out}"; fi
+}
+if command -v kubectl >/dev/null 2>&1; then
+  render_catch "render: raw owncast/owncast:stable" '
+    oc_drop_entry; imgswap manifests/owncast/deployment.yaml "          image: owncast/owncast
+" "          image: owncast/owncast:stable
+"'
+  render_catch "render: Component newTag latest" '
+    oc_drop_entry; mkdir "$T/manifests/owncast/pin"
+    printf "apiVersion: kustomize.config.k8s.io/v1alpha1\nkind: Component\nimages:\n  - {name: owncast/owncast, newName: owncast/owncast, newTag: latest}\n" > "$T/manifests/owncast/pin/kustomization.yaml"
+    printf "components:\n  - pin\n" >> "$T/manifests/owncast/kustomization.yaml"'
+  render_catch "render: JSON6902 patch :develop" '
+    oc_drop_entry; printf "%s" "${OC_JSONPATCH}" >> "$T/manifests/owncast/kustomization.yaml"'
+else
+  echo "  NOTE (21-render) NOT run: kubectl is not on PATH, so the render cross-check is untested here"
+fi
 
 echo
 echo "== negative controls: ${NEG_P} passed, ${NEG_F} failed =="
