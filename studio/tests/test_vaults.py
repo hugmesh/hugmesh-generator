@@ -14,7 +14,7 @@ The assertions worth having here are about the two ways this feature could hurt 
    SELECTED row.
 2. LYING ABOUT VAULT. Vault is a cluster-lane service, absent from the docker mesh.
    Reporting "0 entries" would read as "vault is running and empty" and invite an
-   operator to add an entry that goes nowhere — the inert-control trap this codebase has
+   operator to add an entry that goes nowhere — the do-nothing-control trap this codebase has
    hit repeatedly. It must report unavailable WITH the remedy.
 
 Everything is driven through a fake `_run`, so the suite never needs docker and never
@@ -77,6 +77,15 @@ class TestVolumeEnumeration:
     def test_empty_when_docker_fails_rather_than_raising(self, monkeypatch):
         monkeypatch.setattr(vaults, "_run", FakeRun({"volume ls": (1, "", "boom")}))
         assert vaults.list_volumes() == []
+
+    def test_strict_raises_instead_of_reporting_none_when_docker_fails(self, monkeypatch):
+        """#361: a failed `docker volume ls` is UNKNOWN, not EMPTY — a caller that makes a
+        claim about the operator's data asks for strict and gets an exception."""
+        monkeypatch.setattr(vaults, "_run", FakeRun({"volume ls": (1, "", "boom")}))
+        with pytest.raises(vaults.DockerDidNotAnswer):
+            vaults.list_volumes(strict=True)
+        monkeypatch.setattr(vaults, "_run", FakeRun({"volume ls": (0, "", "")}))
+        assert vaults.list_volumes(strict=True) == []      # an ANSWERED empty is still []
 
 
 class TestSizeParsing:

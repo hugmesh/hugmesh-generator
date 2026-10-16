@@ -19,11 +19,13 @@ The doc set for the image/infra layer. State key used throughout:
 - [`BUILD-MATRIX.md`](BUILD-MATRIX.md) — the canonical platform×role×env build matrix, the four build channels (CLI / make / ncurses menu / Studio GUI), the **all-options-in-all-menus** rule + the `make matrix-check` harness (✅).
 - [`IMAGE-INVENTORY.md`](IMAGE-INVENTORY.md) — generated full cross-product of every advertised image × every build channel (125 distinct images, 62 with a channel gap); regenerate with `scripts/emit-image-inventory.py`, gated by `make inventory-check` — do not hand-edit.
 - [`SHARED-BINPKG.md`](SHARED-BINPKG.md) — the shared per-arch binpkg pools, stage3 seed cache and fleet distfiles, plus the CHOST/`-mcpu` pool-fingerprint guard (✅ mechanism + guard shipped; ⚠️ the compile-once speedup itself is still owed a real cross-build to prove).
+- [`BINPKG-MEASUREMENT-PLAN.md`](BINPKG-MEASUREMENT-PLAN.md) — the protocol and the log-reading instrument (`make binpkg-reuse-report`) for the compile-once binpkg speedup that `SHARED-BINPKG.md` lists as unproven, plus what the fingerprint guard does and does not prove (✅ harness, tested on synthetic logs and real-log excerpts; ⚠️ no real measurement yet — operator-only).
 - [`PYTHON-TARGETS-SEED-DRIFT.md`](PYTHON-TARGETS-SEED-DRIFT.md) — why `PYTHON_TARGETS`/`PYTHON_SINGLE_TARGET` are **derived from the stage3 seed** and never hardcoded: portage's make.conf-replaces vs package.use-adds semantics, the two mirror-image fleet failures a frozen `python3_NN` caused (2026-07-16 autounmask wall, 2026-07-29 `dev-python` slot conflict), and what the guard now asserts. **Read this before touching a `python3_NN` literal anywhere.**
 - [`PLATFORM-BUILD-UNIFORMITY.md`](PLATFORM-BUILD-UNIFORMITY.md) — the measured survey of how the eight platforms' build structures diverge: per-platform stage ladders, the three emerge-invocation shapes, the emerge-group taxonomy, what per-package data reaches the stream vs only a log (and where the cross builds destroy it), 24 classified divergences + a proposed canonical ladder (🔭 survey; no behaviour change).
 - [`STUDIO-WIZARD-FLOW.md`](STUDIO-WIZARD-FLOW.md) — the Studio image-build wizard's **4-choice → 7-step** flow (mesh node / local Docker mesh / mesh client / standalone), per-path page map, and the ncurses/CLI/web-UI **parity TODO** (✅ GUI; 🔭 other channels).
 - [`RESERVED-PREFIXES.md`](RESERVED-PREFIXES.md) — reserved `ROLE_`/`DOMAIN_` and route first-segment prefixes.
 - [`GO-LIVE-WIZARD.md`](GO-LIVE-WIZARD.md) — superadmin go-live wizard (bring-your-own-domain / cloudflare-tunnel / DuckDNS-DDNS / tailscale-funnel / router-portforward providers), CLI + ncurses + Studio front-ends (✅ v1 consolidated).
+- [`GOLIVE-ORG-EXPORT.md`](GOLIVE-ORG-EXPORT.md) — the Go-Live wizard's opt-in **Export to GitHub org** step: a per-domain *GitHub org* cell on the Domains step (GUI and text mode), a dry-run plan of the domain's repositories as single-commit snapshots renamed `hugmesh-*` -> `<brand>-*` plus a generated `<domain>.github.io` site repository whose workflows clone and build them all; apply only on the typed org name, never a force or a delete; the engine is `core/org_export.py` with a `--org-export` CLI; placeholder names only (`mesh.example`, `exampleorg`) (✅).
 - [`SUPERADMIN-MESH-CLIENT.md`](SUPERADMIN-MESH-CLIENT.md) — how a platform superadmin joins the tailnet mesh and reaches nodes over SSH.
 - [`IMAGE-GEN-PROGRESS.md`](IMAGE-GEN-PROGRESS.md) — the image-build worker's optional non-terminal `PROGRESS_URL` side channel (fills the web progress bar between the start frame and the terminal `COMPLETED`/`FAILED`/`ERROR` result).
 - [`PACKAGE-FLAG-BADGES.md`](PACKAGE-FLAG-BADGES.md) — ground truth for the Studio's per-package flag display: every USE-flag state portage can render (re-derived from portage 3.0.81.2's own formatter), which of the four columns (USE_EXPAND / USE / KEYWORDS / LICENSE) each channel can actually source, the 100%-coverage **offline** hover-doc sources, and the badge colour+emoji mapping (🔭 semantics only — no feature code).
@@ -63,7 +65,9 @@ The doc set for the image/infra layer. State key used throughout:
 - [`NODE-STORAGE.md`](NODE-STORAGE.md) — attach + register node-pinned storage.
 - [`GAMES-APPSTORE.md`](GAMES-APPSTORE.md) — per-domain FOSS game-server catalog + instance lifecycle.
 - [`EDGE-AI.md`](EDGE-AI.md) — GPU inference node serving an OpenAI-compatible model API to the mesh (DEFAULT-OFF, GPU-gated).
+- [`LOCAL-AI-ASSISTANT.md`](LOCAL-AI-ASSISTANT.md) — set up Ollama on your own PC from the CLI, choose a local coding model for an 8 GB GPU, run a code assistant on a scratch copy of the mesh code (`scripts/local-ai-bench.sh` measures the models on your machine), and run it all without Claude: `scripts/local-ai.sh` (queue, worker, drafts, chat, watch), the Studio's Local AI bar on every page, the text UI's F2 screen, and `--local-ai-status` / `--local-ai-prompt` on the command line.
 - [`COTURN.md`](COTURN.md) — TURN/STUN relay for Matrix (tuwunel) audio/video (DEFAULT-OFF, runtime-only slug).
+- [`GROUP-CALL-SFU.md`](GROUP-CALL-SFU.md) — MatrixRTC group calls on a LiveKit SFU (🔭 design + staged plan; client half dark in matrix-ui, server half not built).
 - [`TOR-HIDDEN-SERVICE.md`](TOR-HIDDEN-SERVICE.md) — Tor v3 hidden-service (onion) gateway exposure (DEFAULT-OFF).
 - [`CLOUD-BACKUPS.md`](CLOUD-BACKUPS.md) — generator-side leg of per-domain + total-cloud encrypted backups.
 
@@ -85,7 +89,7 @@ The doc set for the image/infra layer. State key used throughout:
 
 - [`TEST-ARCHITECTURE.md`](TEST-ARCHITECTURE.md) — test layering.
 - [`FINAL-E2E-SWEEP-MATRIX.md`](FINAL-E2E-SWEEP-MATRIX.md) — end-to-end sweep matrix.
-- [`KIND-SSO-E2E-FINDINGS.md`](KIND-SSO-E2E-FINDINGS.md) — 2026-08-05: the first real `KIND_PROFILE=sso` cluster run of the native-login e2e spec. The harness reached Casdoor and minted a session; 16 fresh-cluster blockers surfaced downstream (incl. no gateway can ever become Ready in k8s, and Casdoor's admin account still on its default password) — the current substance of the SSO kind-cluster e2e roadmap item.
+- [`KIND-SSO-E2E-FINDINGS.md`](KIND-SSO-E2E-FINDINGS.md) — 2026-08-05: the first real `KIND_PROFILE=sso` cluster run of the native-login e2e spec, and the 16 fresh-cluster blockers it surfaced; re-measured 2026-10-14 (blockers 1-16 fixed on `main`, #693 closed 2026-10-14) — the current substance of the SSO kind-cluster e2e roadmap item.
 
 ## Specifications
 

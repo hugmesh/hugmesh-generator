@@ -11,7 +11,7 @@ config seeds the widgets back.
 the copy could claim: the EXTERNAL address (a real flag, a real baked key, no reader
 — test_vault_config.py owns the builder half) and the BASE CA CERTIFICATE list
 (recorded only, emitting nothing anywhere). The certificate picker is the page's one
-dialog: it is driven here through the module-level ``pick_ca_certificates`` seam, and
+dialog: it is driven here through the module-level ``pick_ca_certificates`` override point, and
 a test asserts it is reachable from nothing but the explicit Add click.
 """
 import os
@@ -45,7 +45,7 @@ _NEXT = QtWidgets.QWizard.WizardButton.NextButton
 
 
 def _picks(*paths):
-    """A stand-in for the file dialog seam: returns exactly these paths, once."""
+    """A stand-in for the file dialog override point: returns exactly these paths, once."""
     return lambda *a, **k: (list(paths), "")
 
 
@@ -284,7 +284,7 @@ def test_a_loaded_config_seeds_the_widgets_back(wiz):
 def test_a_worklist_no_builder_of_which_parses_the_flag_greys_the_group(wiz):
     """Only jetson rows: no builder in the flow takes --vault-*, so the surface greys
     with the reason and a stale value is cleared rather than stranded (the per-entry
-    strip would drop it anyway — emission-neutral, but now visibly so)."""
+    strip would drop it anyway — leaves the output unchanged, but now visibly so)."""
     wiz.cfg.vault_addr = ADDR
     page = _mesh_vault(wiz, "edge-ai.jetson")
     assert not page.box.isEnabled()
@@ -358,6 +358,8 @@ def test_the_certificate_list_starts_empty_and_commits_nothing(wiz):
     assert wiz.cfg.to_cli_args() == before
 
 
+@pytest.mark.skipif(not HAVE_CRYPTOGRAPHY,
+                    reason="subject/expiry need python-cryptography (optional dependency)")
 def test_adding_a_pem_records_its_path_and_shows_subject_and_expiry(wiz, monkeypatch):
     page = _mesh_vault(wiz)
     monkeypatch.setattr(vault_mod, "pick_ca_certificates", _picks(CA_ROOT))
@@ -559,8 +561,8 @@ def test_the_ca_copy_says_recorded_not_consumed(wiz):
 
 # ── the one dialog on the page ───────────────────────────────────────────────────────
 def test_the_certificate_dialog_is_a_module_seam_reached_only_from_the_add_click():
-    """A modal is legal here ONLY as an explicit click handler behind a seam tests can
-    patch. Pin both halves: the seam exists at module level, and the ONE call site is
+    """A modal is legal here ONLY as an explicit click handler behind a override point tests can
+    patch. Pin both halves: the override point exists at module level, and the ONE call site is
     inside _add_certificates — nothing validatePage / isComplete / initializePage can
     reach, which is what a headless run would hang on."""
     src = open(vault_mod.__file__, encoding="utf-8").read()

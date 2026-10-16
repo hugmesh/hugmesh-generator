@@ -241,7 +241,7 @@ class UsersPage(QtWidgets.QWizardPage):
     def applies_to(self, cfg) -> bool:
         """Dynamic-skip predicate (wizard.nextId): a cloud NODE image emits no
         --person-role/--domains and writes no manifest, so the users table contributes
-        nothing and is skipped (emission-neutral).
+        nothing and is skipped (leaves the output unchanged).
 
         ASK 8 made the mesh arm conditional; ASK 20 gave it its OWN condition. The gate
         is no longer the domains opt-in (``superadmin_plane_applies``) but
@@ -280,7 +280,18 @@ class UsersPage(QtWidgets.QWizardPage):
                         self._apply_role_lock(dom, role_cell)
         self._update_warning()
 
+    def forget_rows(self) -> None:
+        """Drop the table: ``cfg.users`` was REPLACED under this page on the SAME
+        object (the "Create nodes for local cloud" import, #707), which the identity
+        check in ``initializePage`` cannot see. Until the page is entered again it
+        writes nothing (``validatePage``) — ``collect_all()`` re-runs every visited
+        page's validatePage, and an emptied table must not erase the import."""
+        self.table.setRowCount(0)
+        self._cfg_seen = None
+
     def validatePage(self):
+        if self.wiz.cfg is not self._cfg_seen:
+            return True                     # no table for THIS config yet: write nothing
         out = []
         for r in range(self.table.rowCount()):
             username = self.table.item(r, _COL_USER).text().strip() if self.table.item(r, _COL_USER) else ""

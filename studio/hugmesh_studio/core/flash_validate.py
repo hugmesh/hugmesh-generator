@@ -124,7 +124,7 @@ def uncompressed_size(path: str) -> int:
             fields = line.split("\t")
             if fields and fields[0] == "totals" and len(fields) > 4:
                 # xz prints a ZEROED totals row and exits 1 on a truncated/non-xz
-                # file, so a digits check is load-bearing, not belt-and-braces —
+                # file, so a digits check is relied on, not belt-and-braces —
                 # exactly the trap flash-disk.sh documents at its own ART_SIZE.
                 return int(fields[4]) if fields[4].isdigit() else 0
         return 0

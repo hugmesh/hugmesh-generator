@@ -27,7 +27,7 @@ from hugmesh_studio.gui.pages.progress import _display_safe         # noqa: E402
 STUDIO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 GENERATOR_DIR = os.path.dirname(STUDIO_ROOT)
 
-# ── the coalescing seam, in ONE place ────────────────────────────────────────────────
+# ── the coalescing override point, in ONE place ────────────────────────────────────────────────
 # ProgressPage._on_line is now the worker's ENQUEUE-ONLY slot: it banks the line and the
 # ~20 Hz _drain_lines() runs the parse/render/append pipeline for the whole batch (see
 # tests/test_progress_log_coalescing.py for the contract, and the coalescing note in
@@ -685,7 +685,7 @@ def test_next_failure_cycles_across_failed_images(monkeypatch, qapp, wiz, tmp_pa
 
 def test_pre_banner_failure_reds_job_with_no_failed_child_stage(wiz):
     """#339 honesty: a build that dies before any banner (broken docker) has NO running
-    stage, so no child stage is faked-failed — the JOB itself goes red and its drill-down
+    stage, so no child stage is faked-failed — the JOB itself fails and its drill-down
     is the raw log where the error actually is; the failure is still navigable."""
     page = _progress_page(wiz)
     page._reset()
@@ -761,7 +761,7 @@ def test_low_memory_warning_logged_but_dispatch_proceeds(monkeypatch, qapp, wiz,
     """A memory-tight host at dispatch WARNS (leading log lines, incident wording) but
     the worker still starts and the run completes — a warning is never a block.
 
-    Deliberately the exact incident shape: only the DISPATCH-TIME seam (_meminfo_fresh)
+    Deliberately the exact incident shape: only the DISPATCH-TIME override point (_meminfo_fresh)
     reads tight, while the process-launch snapshot (_meminfo_cached, conftest-pinned)
     still says healthy — a Studio launched on a healthy host that got tight while the
     user configured must warn anyway."""

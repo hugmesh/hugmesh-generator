@@ -37,9 +37,13 @@ from typing import Any
 from . import roles
 
 from .config import (
+    BUILTIN_DEFAULT_SERVICES,
     INFRA_SERVICES_CHOICES,
     OPTIONAL_SERVICES_BY_PLATFORM,
     PERSON_ROLE_CHOICES,
+    SERVICES_ALL,
+    SERVICES_NONE,
+    USER_LEVEL_SERVICES,
     ImageConfig,
     SECRET_FIELDS,
     User,
@@ -52,6 +56,7 @@ from .config import (
     resolve_installer_ui_default,
     resolve_platform_defaults,
     strip_platform_unsupported,
+    with_service_slug,
 )
 
 WORKLIST_SCHEMA = "hugmesh-worklist/v1"
@@ -485,7 +490,7 @@ class WorklistConfig:
         #     (docs/TOR-HIDDEN-SERVICE.md / EGRESS-VPN.md), ADDITIVE to the mesh-wide
         #     Network-page default already on the base. Emitted via the mechanism THIS
         #     platform's builder actually accepts, so a per-node selection is a REAL
-        #     flag, never a silent no-op (the dead-default class this file guards):
+        #     flag, never a silent no-op (the silently-does-nothing default this file guards against):
         #       - x86 tor  -> --with-tor            (tor_onion_service; the x86-only field)
         #       - rpi5 tor / rpi5 egress-vpn -> --optional-services <slug> (node services)
         #     BEFORE step 5 so strip_platform_unsupported is the safety net; a service the
@@ -520,18 +525,38 @@ class WorklistConfig:
     def _apply_infra_services(self, cfg: ImageConfig, entry: WorklistEntry) -> None:
         """Fold the entry's per-node infra services onto ``cfg`` via each platform's
         real builder mechanism (see step 4b). Unknown / platform-inexpressible slugs
-        are dropped — a per-node toggle never becomes a flag the builder ignores."""
+        are dropped — a per-node toggle never becomes a flag the builder ignores.
+
+        The MESH-WIDE Tor default (``base.tor_onion_service``, the Network page's
+        x86 flag — and what LocalCloudNodesPage imports from a saved mesh that ran
+        TOR=1, #579) is folded here too, for the platforms that carry tor as a SLUG
+        rather than a flag. Without it an rpi5 node lost the mesh-wide onion
+        silently: the base platform is forced x86, so the flag rode the deepcopy and
+        step 5's ``strip_platform_unsupported`` then cleared the x86-only field on
+        the rpi5 entry, emitting nothing.
+
+        The fold reaches NODE-class rows only. The onion is a cluster-node service:
+        both stage4 builders drop a tor selection on a CLIENT role
+        (``_tor_node_selected`` — #583), so folding the mesh-wide default into an
+        rpi5-desktop row would emit ``--optional-services ... tor`` for an image that
+        bakes nothing, and before #599 it baked net-vpn/tor + a linked reconcile agent
+        into a person's desktop. A per-node selection the operator made on the row
+        itself is left as it was (main's behaviour); only the IMPLICIT fold is gated."""
         plat_optional = OPTIONAL_SERVICES_BY_PLATFORM.get(entry.platform, ())
-        for svc in entry.infra_services:
+        wanted = list(entry.infra_services)
+        if (ImageConfig._tri(cfg.tor_onion_service) == "on"
+                and entry.platform not in _TOR_WITH_FLAG_PLATFORMS
+                and image_class(cfg.mode, entry.role) == "node"
+                and "tor" not in wanted):
+            wanted.append("tor")                           # mesh-wide onion -> slug nodes
+        for svc in wanted:
             if svc not in WORKLIST_INFRA_SERVICES:
                 continue                                   # not a per-node infra slug
             if svc == "tor" and entry.platform in _TOR_WITH_FLAG_PLATFORMS:
                 cfg.tor_onion_service = True               # x86: the dedicated --with-tor
             elif svc in INFRA_SERVICES_CHOICES and svc in plat_optional:
-                # rpi5: a real --optional-services node service. Append (dedup); the
-                # sentinel forms (none/all) are never per-node, so a plain slug is safe.
-                if svc not in cfg.optional_services:
-                    cfg.optional_services = [*cfg.optional_services, svc]
+                # rpi5 (and x86 egress-vpn): a real --optional-services node service.
+                cfg.optional_services = with_service_slug(cfg.optional_services, svc)
             # else: this platform's builder expresses neither -> drop (no dead flag).
 
     def _resolve_encrypt_root(self, entry: WorklistEntry) -> bool:

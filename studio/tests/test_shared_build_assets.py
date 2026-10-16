@@ -101,7 +101,7 @@ def test_explicit_root_overrides_the_derivation():
 
 
 def test_shared_leg_precedes_config_args_so_extra_flags_stay_last():
-    """Ordering is load-bearing, not cosmetic. `extra_flags` is the operator's raw
+    """Ordering is relied on, not cosmetic. `extra_flags` is the operator's raw
     escape hatch and cfg.to_cli_args() emits it LAST; the builders parse argv
     last-flag-wins, so a hand-typed `--no-shared-assets` in extra_flags must still be
     able to override the driver's own `--shared-assets`. Emitting the driver leg AFTER

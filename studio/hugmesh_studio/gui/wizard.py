@@ -32,8 +32,9 @@ from .pages import (
 # entries — that registry is one module per slug — they are the expansion of ONE slug,
 # and _LOCALMESH_STEPS below is the only place their order is declared.
 from .pages.localmesh import (
-    LocalMeshEnvPage, LocalMeshIdpPage, LocalMeshJoinPage, LocalMeshOverlayPage,
-    LocalMeshReviewPage, LocalMeshServicesPage, LocalMeshSourcePage)
+    LocalMeshDomainServicesPage, LocalMeshDomainsPage, LocalMeshEnvPage,
+    LocalMeshIdpPage, LocalMeshJoinPage, LocalMeshOverlayPage, LocalMeshReviewPage,
+    LocalMeshServicesPage, LocalMeshSourcePage)
 from .pages.localmesh_choice import LocalMeshChoicePage
 # re-exported for golive.py (and any other page set) — the helpers moved to
 # gui/pages/_widgets.py with the page split, but this module stays their
@@ -51,15 +52,16 @@ __all__ = [
     "UsersChoicePage", "UsersPage",
     "SystemPage", "VaultPage", "HomePage", "BuildPage", "LaunchPage", "ProgressPage",
     "LocalMeshChoicePage", "LocalMeshJoinPage", "LocalMeshEnvPage",
+    "LocalMeshDomainsPage", "LocalMeshDomainServicesPage",
     "LocalMeshSourcePage", "LocalMeshServicesPage", "LocalMeshIdpPage",
     "LocalMeshOverlayPage", "LocalMeshReviewPage",
 ]
 
 # ── the "localmesh" slot's expansion (issue #334) ────────────────────────────────
 # WIZARD_PAGE_SLUGS is one slug per PAGE MODULE and is the contract MODE_SKIPPED_PAGES
-# is keyed against (core/config.py). The local-mesh branch is now nine pages built from
+# is keyed against (core/config.py). The local-mesh branch is now eleven pages built from
 # two modules, so its slot expands HERE, in display order, instead of growing the core
-# registry with eight slugs no mode's skip tuple would ever name.
+# registry with ten slugs no mode's skip tuple would ever name.
 #
 # That is not a shortcut around MODE_SKIPPED_PAGES — it is the same contract
 # "localmesh" itself has always had. Running a docker mesh is not an image mode, so no
@@ -70,8 +72,9 @@ __all__ = [
 # the same rule at worst.
 #
 # ORDER IS THE FLOW. nextId()'s skip walk is positional, so this tuple IS the journey:
-# the choice screen, then the join branch (terminal), then the seven bring-up steps in
-# the order the surface has always had its sections. LocalMeshPage sits LAST — it is the
+# the choice screen, then the join branch (terminal), then the nine bring-up steps in
+# the order the surface has always had its sections (Domains and Domain services —
+# issue #494 — sit right after Env & brand, before anything that reads them). LocalMeshPage sits LAST — it is the
 # bring-up-and-monitor step AND the controller that owns every widget on the branch
 # (see pages/localmesh.py), which is why the steps look it up lazily rather than being
 # handed it at construction.
@@ -79,6 +82,8 @@ _LOCALMESH_STEPS = (
     ("localmesh_choice", LocalMeshChoicePage),
     ("localmesh_join", LocalMeshJoinPage),
     ("localmesh_env", LocalMeshEnvPage),
+    ("localmesh_domains", LocalMeshDomainsPage),
+    ("localmesh_domain_services", LocalMeshDomainServicesPage),
     ("localmesh_source", LocalMeshSourcePage),
     ("localmesh_services", LocalMeshServicesPage),
     ("localmesh_idp", LocalMeshIdpPage),
@@ -128,7 +133,7 @@ def centred_top_left(frame, avail) -> "QtCore.QPoint":
     a test that drives this arithmetic over screens the host does not have can actually
     fail when the centring is wrong, so the arithmetic lives here in the open.
 
-    The move() that consumes this is still load-bearing beyond the centring itself: it
+    The move() that consumes this is still relied on beyond the centring itself: it
     sets Qt's explicit-position flag, which is what stops adjustPosition re-centring the
     window over a position the user dragged it to (see showEvent)."""
     fg = QtCore.QRect(frame)
@@ -345,7 +350,7 @@ class StudioWizard(QtWidgets.QWizard):
 
     def _dynamically_skipped(self, nid, terminal) -> bool:
         """True when page ``nid`` is a non-terminal page whose ``applies_to(cfg)`` reports
-        it contributes nothing for the committed config (emission-neutral skip)."""
+        it contributes nothing for the committed config (skip that leaves the output unchanged)."""
         if nid < 0 or nid in terminal:
             return False
         page = self.page(nid)

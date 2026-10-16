@@ -1,0 +1,16 @@
+# issue:   #336
+# label:   studio-pytest
+# cwd:     studio
+# command: QT_QPA_PLATFORM=offscreen HUGMESH_STUDIO_NO_ELEVATION=1 /tmp/claude-0/-home-user-hugmesh-generator/8813b170-78cf-5b4f-94b2-85042c956c3e/scratchpad/venv6/bin/python -m pytest -p no:cacheprovider -q --timeout=900 tests/test_localmesh_monitor.py tests/test_pages_mesh_emulation.py tests/test_pages_qemu.py tests/test_mesh_emulation.py tests/test_mesh_monitor.py
+# started: 2026-09-30T13:17:20Z
+# host:    Linux 6.18.44-fc-v50 x86_64, no docker daemon, no KVM, no tor, no kind/kubectl (Claude Code cloud container)
+# commit:  2017882
+-----
+........................................................................ [ 26%]
+........................................................................ [ 52%]
+........................................................s............... [ 78%]
+............................................................             [100%]
+275 passed, 1 skipped in 68.36s (0:01:08)
+-----
+# exit code: 0
+# finished: 2026-09-30T13:18:29Z
