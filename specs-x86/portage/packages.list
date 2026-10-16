@@ -6,6 +6,9 @@
 
 # ── Kernel & firmware & bootloader & initramfs ─────────────────────
 sys-kernel/gentoo-sources
+# pahole: the kernel link needs it for CONFIG_DEBUG_INFO_BTF (hardened-k8s.config BTF
+# block); it must be installed before Kconfig resolves. Also guarded in the builder.
+dev-util/pahole
 sys-kernel/linux-firmware
 sys-firmware/intel-microcode
 sys-kernel/dracut
