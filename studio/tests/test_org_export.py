@@ -2508,21 +2508,54 @@ def test_apply_rescans_the_commit_and_refuses_what_changed_after_the_plan(world)
         "exampleorg/mesh.example.github.io"]
 
 
-def test_the_commit_scan_fails_closed_on_a_member_it_cannot_read():
-    """A tar member that is neither a file, a link nor a folder is a finding."""
-    buf = io.BytesIO()
-    with tarfile.open(fileobj=buf, mode="w") as tf:
-        ti = tarfile.TarInfo("a.txt")
-        ti.size = 2
-        tf.addfile(ti, io.BytesIO(b"hi"))
-        hard = tarfile.TarInfo("b.txt")
-        hard.type, hard.linkname = tarfile.LNKTYPE, "a.txt"
-        tf.addfile(hard)
-        big = tarfile.TarInfo("big.bin")
-        big.size = 3
-        tf.addfile(big, io.BytesIO(b"abc"))
-    found = oe._scan_tar(buf.getvalue())
-    assert found == ["b.txt: not a file or a link, so not scanned for secrets"]
+def test_the_commit_scan_fails_closed_on_an_entry_it_cannot_read():
+    """An entry that is not a file or a link (a submodule), or whose object is
+    missing, is a finding; a link's object is its target and is scanned."""
+    entries = [("100644", "a" * 40, "a.txt"), ("160000", "b" * 40, "sub"),
+               ("100644", "c" * 40, "gone.txt"), ("120000", "d" * 40, "link")]
+    objects = {"a" * 40: b"hi", "b" * 40: b"", "d" * 40: _GH_TOKEN}
+    assert oe._scan_objects(entries, objects) == [
+        "sub: not a file or a link (mode 160000), so not scanned for secrets",
+        "gone.txt: object not readable, so not scanned for secrets",
+        "link: GitHub token"]
+
+
+def test_apply_scans_the_objects_an_export_ignore_hides_from_git_archive(world):
+    """A token added after the plan to a path the work folder's .gitattributes marks
+    export-ignore (count kept equal) was invisible to a scan of `git archive` but is
+    in the commit the push sends."""
+    cfg, runner = world["cfg"], world["runner"]
+    p = oe.plan(cfg, runner, stamp="20260101T000000Z", probe=False)
+    rp = next(r for r in p.repos if r.source == "hugmesh-commons")
+    wd = rp.workdir
+    assert not os.path.exists(os.path.join(wd, ".gitattributes"))
+    victim = next(e for e in oe._tree_entries(wd)
+                  if e != "README.md" and not os.path.islink(os.path.join(wd, e)))
+    os.unlink(os.path.join(wd, victim))            # the new .gitattributes takes its count
+    with open(os.path.join(wd, "README.md"), "a", encoding="utf-8") as fh:
+        fh.write("\n" + _GH_TOKEN.decode() + "\n")
+    with open(os.path.join(wd, ".gitattributes"), "w", encoding="utf-8") as fh:
+        fh.write("README.md export-ignore\n")
+    res = oe.apply(p, runner)
+    got = next(r for r in res.repos if r.target.endswith("example-commons"))
+    assert "README.md: GitHub token" in got.skipped, got.skipped
+    assert not os.path.isdir(_bare(world, "example-commons"))
+
+
+def test_a_working_tree_encoding_cannot_hide_a_marker_from_the_published_blob(world):
+    """The source's .gitattributes says n.txt is UTF-7 in the work tree: git archive
+    (the snapshot) gives ASCII `+2D3dFg-`, which the plan's folder scan cannot read
+    as the robot footer, while `git add` converts it back and the BLOB holds it."""
+    cfg, runner = world["cfg"], world["runner"]
+    src = os.path.join(world["src"], "hugmesh-commons")
+    with open(os.path.join(src, ".gitattributes"), "a", encoding="utf-8") as fh:
+        fh.write("\nn.txt working-tree-encoding=UTF-7\n")
+    _plant_bytes(src, {"n.txt": ("ok " + _ROBOT + "\n").encode("utf-7")})
+    p = oe.plan(cfg, runner, stamp="20260101T000000Z", probe=False)
+    res = oe.apply(p, runner)
+    got = next(r for r in res.repos if r.target.endswith("example-commons"))
+    assert "n.txt: robot footer" in got.skipped, (got.action, got.skipped)
+    assert not os.path.isdir(_bare(world, "example-commons"))
 
 
 def test_a_link_goes_through_the_exclusion_rules(world):

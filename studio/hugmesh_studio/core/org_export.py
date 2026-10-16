@@ -994,34 +994,57 @@ def _scan_entries(workdir: str) -> list[str]:
     return found
 
 
-def _scan_tar(blob: bytes) -> list[str]:
-    """:func:`_scan_entries` over a tar of a commit (``git archive``): the scan of
-    exactly what is pushed. A member that is neither a file, a link nor a folder is
-    a finding, not a skip."""
+def _scan_objects(entries: list[tuple[str, str, str]], objects: dict[str, bytes]) -> list[str]:
+    """:func:`_scan_entries` over a COMMIT: ``entries`` are ``(mode, sha, path)`` from
+    ``git ls-tree -r``, ``objects`` the raw object bytes by sha. The objects are what a
+    push sends, so no attribute (``export-ignore``, ``working-tree-encoding``, a
+    filter) stands between the scan and the published bytes. An entry that is not a
+    file or a link, or whose object is missing, is a finding, not a skip."""
     found: list[str] = []
-    with tarfile.open(fileobj=io.BytesIO(blob), mode="r:") as tf:
-        for member in tf.getmembers():
-            if member.isdir():
-                labels = _marker_labels([member.name])
-            elif member.issym():
-                labels = _marker_labels([member.name])
-                labels += [lb for lb in _marker_labels([member.linkname])
-                           if lb not in labels]
-            elif member.isfile():
-                labels = _marker_labels([member.name])
-                if member.size > SCAN_LIMIT:
-                    body = ["too large to scan for secrets"]
-                else:
-                    fh = tf.extractfile(member)
-                    body = (_scan_bytes(fh.read())[0] if fh is not None
-                            else ["unreadable, so not scanned for secrets"])
-                labels += [lb for lb in body if lb not in labels]
-            elif member.type == tarfile.XGLTYPE or member.name == "pax_global_header":
-                continue                   # git archive's commit-id header, not content
-            else:
-                labels = ["not a file or a link, so not scanned for secrets"]
-            found += [f"{member.name}: {label}" for label in labels]
+    for mode, sha, path in entries:
+        labels = _marker_labels([path])
+        data = objects.get(sha)
+        if mode not in ("100644", "100755", "120000"):
+            labels.append(f"not a file or a link (mode {mode}), so not scanned for secrets")
+        elif data is None:
+            labels.append("object not readable, so not scanned for secrets")
+        elif mode == "120000":
+            target = data.decode("utf-8", "replace")
+            labels += [lb for lb in _marker_labels([target]) if lb not in labels]
+        elif len(data) > SCAN_LIMIT:
+            labels.append("too large to scan for secrets")
+        else:
+            labels += [lb for lb in _scan_bytes(data)[0] if lb not in labels]
+        found += [f"{path}: {label}" for label in labels]
     return found
+
+
+def _parse_ls_tree(raw: bytes) -> list[tuple[str, str, str]]:
+    """``(mode, sha, path)`` per record of ``git ls-tree -r -z``."""
+    out: list[tuple[str, str, str]] = []
+    for rec in raw.split(b"\0"):
+        if not rec:
+            continue
+        meta, _tab, path = rec.partition(b"\t")
+        mode, _type, sha = meta.decode("ascii", "replace").split(" ", 2)
+        out.append((mode, sha, path.decode("utf-8", "surrogateescape")))
+    return out
+
+
+def _parse_cat_file_batch(raw: bytes) -> dict[str, bytes]:
+    """``sha -> bytes`` from ``git cat-file --batch`` output."""
+    objects: dict[str, bytes] = {}
+    pos = 0
+    while pos < len(raw):
+        nl = raw.index(b"\n", pos)
+        head = raw[pos:nl].decode("ascii", "replace").split(" ")
+        if len(head) != 3:                 # "<sha> missing" and the like
+            pos = nl + 1
+            continue
+        size = int(head[2])
+        objects[head[0]] = raw[nl + 1: nl + 1 + size]
+        pos = nl + 1 + size + 1
+    return objects
 
 
 def _tree_entries(workdir: str) -> list[str]:
@@ -1517,14 +1540,20 @@ def _commit_snapshot(runner, calls, rp: RepoPlan, cfg: ExportConfig, stamp: str,
                            f"but the plan counted {want}: files were left out of (or "
                            "added to) the commit, nothing is pushed")
     # the plan's scan saw the FOLDER; the folder can change between plan and apply
-    # (it is an ordinary directory under the out folder), so the scan runs again on
-    # what the commit holds, and a marker in it refuses the push
-    archive = _run_checked(runner, calls, ["git", "archive", "--format=tar", "HEAD"],
-                           cwd=wd, timeout=1800)
-    if archive.returncode != 0:
-        raise RuntimeError(f"git archive HEAD failed in {wd}: {archive.err.strip()}: "
-                           "the commit could not be scanned, nothing is pushed")
-    found = _scan_tar(archive.stdout)
+    # (it is an ordinary directory under the out folder), and git's attributes can
+    # make the committed bytes differ from it (a working-tree-encoding converts on
+    # add, an export-ignore hides a path from git archive). So the scan runs again on
+    # the commit's OWN objects, the bytes a push sends, and any finding refuses it.
+    # The repository was made by `git init` above, so every object in it is this commit's.
+    listing = _run_checked(runner, calls, ["git", "ls-tree", "-r", "-z", "--full-tree",
+                                           "HEAD"], cwd=wd)
+    objs = _run_checked(runner, calls, ["git", "cat-file", "--batch-all-objects", "--batch"],
+                        cwd=wd, timeout=1800)
+    if listing.returncode != 0 or objs.returncode != 0:
+        raise RuntimeError(f"reading the snapshot commit of {rp.target_full} failed "
+                           f"({(listing.err or objs.err).strip()[:160]}): it could not be "
+                           "scanned, nothing is pushed")
+    found = _scan_objects(_parse_ls_tree(listing.stdout), _parse_cat_file_batch(objs.stdout))
     if found:
         shown = "; ".join(found[:5]) + (" ..." if len(found) > 5 else "")
         raise RuntimeError(f"the snapshot commit of {rp.target_full} holds a banned "
