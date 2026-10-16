@@ -81,6 +81,7 @@ from ...core.config import (CLIENT_CA_INHERITANCE_NOTE, DOMAIN_IDP_OWN,
                             DOMAIN_IDP_SUPERDOMAIN, GITHUB_ORG_RE, Domain,
                             github_org_problem, image_class,
                             superadmin_plane_applies)
+from ...core.local_mesh_domains import added_row_problems
 from ...core.domain_services import (implicit_own_domain, normalise_slugs,
                                      reviewed_names, services_summary, split_services)
 
@@ -715,6 +716,13 @@ class DomainsPage(QtWidgets.QWizardPage, DomainsTableBody):
         self.client_ca_note.setVisible(False)
         lay.addWidget(self.client_ca_note)
         self._init_table(lay)
+        # #631 section 2: why Next refused — rows that cannot be a domain. Inline and
+        # red, never a modal (a modal in validatePage hangs every headless walk).
+        self.row_note = QtWidgets.QLabel("")
+        self.row_note.setWordWrap(True)
+        self.row_note.setStyleSheet("color: #c62828;")
+        self.row_note.setVisible(False)
+        lay.addWidget(self.row_note)
         # STEP 6 surfacing: each domain gets a default admin whose credentials are
         # generated + presented at provisioning — not entered or stored here.
         self.admin_note = QtWidgets.QLabel(
@@ -946,7 +954,19 @@ class DomainsPage(QtWidgets.QWizardPage, DomainsTableBody):
         # be displaying the pre-step text if the operator navigates back here without
         # a page change firing.
         self._refresh_services_cells()
-        return True
+        # #631 section 2: the rows are RECORDED either way (above), so a Back keeps
+        # what was typed; what is refused is LEAVING the step with a row that cannot be
+        # a domain — the three cases the local-mesh Domains step and the TUI already
+        # refuse, in the same words (``added_row_problems``). The own domain is the
+        # display-only row 0 of a mesh table; a cloud table has none (its row 0 IS the
+        # primary ``--domains`` element, so it may carry the cluster domain's name).
+        # ``collect_all()`` ignores this return value, so the re-runs cannot be blocked.
+        problems = added_row_problems([d.name for d in out], self.own_row_name())
+        self.row_note.setText(
+            "\n".join(problems + ["Fix or remove these rows to continue."])
+            if problems else "")
+        self.row_note.setVisible(bool(problems))
+        return not problems
 
 
 class DomainsTableWidget(QtWidgets.QWidget, DomainsTableBody):

@@ -637,20 +637,21 @@ def test_the_working_selection_is_re_seeded_from_cfg_on_every_entry(wiz):
 # and _start_saved, on the SAME page, from the SAME wiz.cfg, onto the SAME compose
 # project, was not — so issue #495's "the docker/local mesh start" was satisfied by
 # one button and bypassed by the one next to it.
-def _saved_record():
+def _saved_record(**over):
     from types import SimpleNamespace
     from hugmesh_studio.core.local_mesh_bootstrap import LocalMeshBootstrapConfig
     return SimpleNamespace(id="rec-1", label="my-mesh", form={},
-                           config=LocalMeshBootstrapConfig().to_dict())
+                           config=LocalMeshBootstrapConfig(**over).to_dict())
 
 
 @pytest.mark.parametrize("mode", ["start", "restore"])
 def test_the_saved_mesh_start_is_gated_too(local_mesh_page, monkeypatch, mode):
+    # THE RECORD's domains are what runs (#631 section 3): the image flow's table in
+    # wiz.cfg no longer refuses a saved mesh (test_domains_row_checks_saved_door.py)
     page = local_mesh_page
-    page.wiz.cfg.domains = [Domain(name="unconfigured.example")]
     started = []
     monkeypatch.setattr(page, "_launch", lambda *a, **k: started.append(a))
-    page._start_saved(_saved_record(), mode)
+    page._start_saved(_saved_record(own_idp_domains=("unconfigured.example",)), mode)
     assert started == [], \
         "Saved meshes -> Start must not bring a docker mesh up with an unconfigured domain"
     assert "unconfigured.example" in page.status.text()
@@ -682,12 +683,11 @@ def test_the_saved_mesh_gate_refuses_before_it_rewrites_the_form(local_mesh_page
     """_start_saved applies the record to the bootstrap form on its way to launching.
     A refused click must not do that half of the work."""
     page = local_mesh_page
-    page.wiz.cfg.domains = [Domain(name="unconfigured.example")]
     applied = []
     monkeypatch.setattr(page, "apply_bootstrap",
                         lambda *a, **k: applied.append(a) or [])
     monkeypatch.setattr(page, "_launch", lambda *a, **k: None)
-    page._start_saved(_saved_record(), "start")
+    page._start_saved(_saved_record(own_idp_domains=("unconfigured.example",)), "start")
     assert applied == []
 
 
