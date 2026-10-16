@@ -15,8 +15,8 @@
 # credential through tests/stack/e2e-password.sh's e2e_password_ensure(), pointed
 # at its OWN scratch dir via E2E_CREDENTIALS_FILE — never the operator's real
 # .e2e-credentials — sourced, not executed; and the false docstring is corrected.
-# That is PR #573, OPEN on origin/main 9f4d6d30 as of 2026-09-23, so the two
-# scenarios that assert the fixed contract are @fixme until it merges.
+# That landed as PR #573 (merged 2026-09-23); the two scenarios below pin the
+# fixed contract so a regression of either half turns red.
 #
 # WHY THE GUARD IS NOT RUN FROM INSIDE A SCENARIO: it regenerates .features-gen/
 # in the tree it runs in and then runs the media/games lane through playwright
@@ -39,7 +39,7 @@ Feature: the media/games offline guard survives a compose stack that happens to 
   # stack does (e2e_password_ensure), scoped to its own file, never the
   # operator's. Absent both, a live door turns every promoted scenario into the
   # credentials throw #562 reproduced.
-  @issue:generator-562 @fixme
+  @issue:generator-562
   Scenario: the guard self-seeds a run-local credential instead of throwing when the door answers
     When I run the shell command "grep -c 'e2e_password_ensure' tests/scripts/test-e2e-func-media-games.sh"
     Then the command succeeded
@@ -49,8 +49,10 @@ Feature: the media/games offline guard survives a compose stack that happens to 
   # The false claim goes, or becomes true. #562's own scope bullet: "the
   # docstring's 'offline by construction' claim needs to either become true or be
   # corrected to state the real precondition". With decision 64 it is corrected.
-  @issue:generator-562 @fixme
+  # The phrase itself survives inside the correction note (which names the old
+  # claim as FALSE), so the pin is the ORIGINAL sentence, as e42fcf3d wrote it.
+  @issue:generator-562
   Scenario: the guard no longer claims to be offline by construction
-    When I run the shell command "grep -c 'offline by construction' tests/scripts/test-e2e-func-media-games.sh"
+    When I run the shell command "grep -c 'offline by construction, so a red' tests/scripts/test-e2e-func-media-games.sh"
     Then the command failed
     And the command exit code was 1

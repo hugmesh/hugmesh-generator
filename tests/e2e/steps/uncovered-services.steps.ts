@@ -43,7 +43,6 @@ import { Then, requireDimension } from './world';
 import { shellRoster } from './dimensions';
 import { SYSTEMS_SEED_USERS } from '../specs/rbac-roles';
 import { runCli, cliVerdict, type CliTranscript } from './runners';
-import { siblingFile, siblingSkipReason } from '../specs/governance-sources';
 
 /** Repo root — steps/ is tests/e2e/steps, so three levels up. */
 const REPO_ROOT = path.resolve(__dirname, '..', '..', '..');
@@ -512,9 +511,9 @@ Then(
 // ═════════════════════════════════════════════════════════════════════════════
 // BDD coverage round 2026-09-23 (services lane) — the steps the @issue:-tagged
 // scenarios under features/uncovered-services/ need and no shared step offers.
-// Each is a THEN over evidence a previous step already captured (a CLI
-// transcript, a served page, a committed artefact, a sibling checkout's source)
-// so the Gherkin stays declarative and the failure message names the file.
+// Each is a THEN over a CLI transcript a previous step captured, a committed
+// artefact, or a live-cluster read, so the Gherkin stays declarative and the
+// failure message names the file.
 // ═════════════════════════════════════════════════════════════════════════════
 
 /** The transcript key `common.steps.ts` stores `I run the shell command` under. */
@@ -533,54 +532,6 @@ Then('the command output does not contain {string}', async ({ world }, needle: s
     `\`${t.command}\` (${cliVerdict(t)}) output CONTAINED ${JSON.stringify(needle)}, which it must not`,
   ).not.toContain(needle);
 });
-
-/**
- * A rendered attribute on a test-id'd element. The host shell's launcher cards
- * carry their state as `data-state` (enabled | role | registration | absent),
- * and a card that LOOKS clickable while its API refuses the persona is the
- * exact card/API mismatch generator#310 records — so the state is asserted as
- * an attribute value, never inferred from styling.
- */
-Then('the element with test id {string} carries the attribute {string} equal to {string}',
-  async ({ page }, testId: string, attr: string, expected: string) => {
-    await expect(page.getByTestId(testId)).toHaveAttribute(attr, expected);
-  });
-
-// ── the admin-bff OpenAPI document (a SIBLING checkout, read-only) ───────────
-//
-// generator#300 step 10 / #302 step 10: the admin console fetches
-// GET /bff/games-services/catalog and no controller maps it, so the "Offered
-// servers" list stays empty. No seeded persona holds ROLE_GAMES_SERVICES, so the
-// gate cannot be walked through the BFF; the committed OpenAPI document that
-// admin-bff's OpenApiSpecDumpTest keeps in sync with the live handlers IS the
-// authoritative offline oracle for "does the endpoint exist". Sibling resolution
-// (SNAP_REPO_ROOT, or the directory holding hugmesh-generator) and the loud skip
-// reason are governance-sources.ts's, shared with the mined-governance features.
-
-const ADMIN_BFF_OPENAPI_REL = 'src/main/resources/openapi/openapi.json';
-
-Then('the admin-bff OpenAPI document declares the path {string}',
-  async ({ $testInfo }, wanted: string) => {
-    const src = siblingFile('hugmesh-admin-bff-api', ADMIN_BFF_OPENAPI_REL);
-    if (src === null) { $testInfo.skip(true, siblingSkipReason('hugmesh-admin-bff-api')); return; }
-    let doc: { paths?: Record<string, unknown> };
-    try {
-      doc = JSON.parse(src) as { paths?: Record<string, unknown> };
-    } catch (e) {
-      throw new Error(`hugmesh-admin-bff-api ${ADMIN_BFF_OPENAPI_REL} is not JSON: ${(e as Error).message}`);
-    }
-    const paths = Object.keys(doc.paths ?? {});
-    expect(paths.length, `${ADMIN_BFF_OPENAPI_REL} declares no paths at all`).toBeGreaterThan(0);
-    const neighbours = paths.filter((p) => p.startsWith(wanted.split('/').slice(0, 3).join('/'))).sort();
-    expect(
-      paths,
-      `admin-bff's committed OpenAPI document (${ADMIN_BFF_OPENAPI_REL}, kept in step with the `
-      + `live handlers by OpenApiSpecDumpTest) does NOT declare ${wanted}. The console fetches it `
-      + `(hugmesh-admin-ui bff.service.ts) and swallows the 404, so the offered-catalog list and `
-      + `the "Game server" select render empty. Paths under the same prefix today: `
-      + `${JSON.stringify(neighbours)}`,
-    ).toContain(wanted);
-  });
 
 // ── optional-service selection: the five cardinalities (generator#496) ───────
 //
