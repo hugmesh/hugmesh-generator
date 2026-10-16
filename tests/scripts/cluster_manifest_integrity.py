@@ -344,6 +344,70 @@ def check_route_services(root):
         ok("[route-service]", "all %d in-cluster gateway route targets resolve to a real Service" % total)
 
 
+# ── 4b) a gateway-to-gateway relay MUST preserve the original Host ───────────
+# hugmesh-generator#622. The be gateway's `headscale-forward` route relays
+# Host=scale.<domain> to the pki gateway, whose own `headscale` route (and the
+# SecurityConfig host gate in front of it) match on that same Host. Spring Cloud
+# Gateway sends the UPSTREAM URI's host unless the route carries the
+# PreserveHostHeader filter, so without it the pki gateway sees
+# hugmesh-pki-gateway.hugmesh-pki.svc.cluster.local, no route matches, and headscale
+# is unreachable through the only external path. Nothing else sets the filter, so
+# nothing else would notice. The rule is stated generally: any HOST-predicated route
+# whose target is itself a gateway Service must preserve the Host. The brand twin
+# (templates/apps/20-gateway-be.yaml.hbs) is checked as text, because
+# `{{BRAND}}` is not valid YAML.
+GATEWAY_URI_RE = re.compile(r"^https?://[a-z0-9{}.-]*-gateway\.[a-z0-9{}.-]+")
+def _brand_relay_preserves_host(text):
+    """Line scan of the .hbs twin (not YAML): the `headscale-forward` route block, ended
+    by the next `- id:` at the same indent, must list `- PreserveHostHeader`. Line-based
+    on purpose: a nested-quantifier regex over this text backtracks catastrophically on
+    the very miss it exists to report."""
+    lines = text.split("\n")
+    for n, ln in enumerate(lines):
+        m = re.match(r"^(\s*)- id: headscale-forward\s*$", ln)
+        if not m:
+            continue
+        indent = len(m.group(1))
+        for nxt in lines[n + 1:]:
+            if nxt.lstrip().startswith("- id: ") and len(nxt) - len(nxt.lstrip()) <= indent:
+                break
+            if nxt.strip() == "- PreserveHostHeader":
+                return True
+        return False
+    return False
+
+
+def check_gateway_relay_host(root):
+    relays = 0
+    bad = 0
+    for gw, routes in sorted(_gateways(root).items()):
+        for r in routes:
+            r = r or {}
+            if not r.get("host") or not GATEWAY_URI_RE.match(r.get("uri") or ""):
+                continue
+            relays += 1
+            if "PreserveHostHeader" not in [str(f).split("=")[0] for f in (r.get("filters") or [])]:
+                bad += 1
+                fail("[relay-host]",
+                     "gateway %s route %r relays Host=%s to another gateway (%s) without the "
+                     "PreserveHostHeader filter, so the upstream gateway sees its own Service DNS "
+                     "name and its host-predicated routes can never match"
+                     % (gw, r.get("id"), r.get("host"), r.get("uri")))
+    if not relays:
+        fail("[relay-host]", "found no host-predicated gateway-to-gateway route at all; the "
+             "be gateway headscale-forward relay is gone or this check went vacuous")
+        return
+    tpl_dir = os.environ.get("HUGMESH_TEMPLATES_DIR") or os.path.join(root, "..", "..", "templates")
+    tpl = os.path.join(tpl_dir, "apps", "20-gateway-be.yaml.hbs")
+    if os.path.isfile(tpl):
+        if not _brand_relay_preserves_host(text_of(tpl)):
+            bad += 1
+            fail("[relay-host]", "templates/apps/20-gateway-be.yaml.hbs headscale-forward route has "
+                 "no PreserveHostHeader filter (the brand twin drifted from specs/cluster)")
+    if not bad:
+        ok("[relay-host]", "all %d host-predicated gateway-to-gateway relays preserve the Host header" % relays)
+
+
 # ── 5) route-access seed rows -> real gateway ids ────────────────────────────
 def sql_without_comments(text):
     """The SQL with its `--` line comments removed, single-quoted literals respected.
@@ -1120,6 +1184,72 @@ def check_hpa_replicas(root):
     elif checked:
         ok("[hpa-replicas]",
            "%d HPA-scaled Deployment(s) leave spec.replicas to the autoscaler" % checked)
+
+
+def check_games_origin(root):
+    """The matrix-ui Deployment must STATE the chat3d games origin, and it must be
+    the host the gateway really routes to the games portal (hugmesh-generator#470).
+
+    chat3d-bridge.ts reads `__HUG_GAMES_URL__` and otherwise silently falls back to
+    its built-in default, so nothing in the cluster manifests said which origin the
+    deployed matrix remote iframes. The manifest now declares it as the env
+    `HUG_GAMES_URL` on hugmesh-matrix-ui. Two defects are checked, as a PAIR:
+    the env is absent, or it names a host other than the be-gateway `games` route's
+    `host:` (so an edit of one without the other in the repo tree is caught).
+
+    Conditioned on apps/50-games.yaml, the file the builders' optional-service gate
+    `rm -f`s when games is not selected: with no games Application there is no
+    games origin to state. Once games IS present, a missing Deployment or route is
+    a FAILURE, never a pass over an empty set.
+
+    This proves only that the repo-tree manifest declares the origin consistently.
+    It does not prove the browser receives it (that needs an image-side consumer),
+    and it cannot see a build-time rewrite: the stage4 builders rewrite the gateway
+    route for a custom GAMES_DOMAIN in the baked tree, while ArgoCD serves this
+    Deployment from git, so the live env is not moved by that rewrite.
+    """
+    check = "[games-origin]"
+    if not os.path.isfile(os.path.join(root, "apps", "50-games.yaml")):
+        ok(check, "apps/50-games.yaml absent: this profile does not install games, "
+                  "no games origin required")
+        return
+    hosts = sorted({(r or {}).get("host") for routes in _gateways(root).values()
+                    for r in routes if (r or {}).get("id") == "games"
+                    and (r or {}).get("host")})
+    if len(hosts) != 1:
+        fail(check, "apps/50-games.yaml is present but the gateway Applications carry "
+                    "%d distinct host(s) for a route with id `games` (%s); the games "
+                    "origin cannot be checked against anything" % (len(hosts), hosts))
+        return
+    route_host = hosts[0]
+    found = []
+    for path in yaml_files(root):
+        for doc in docs_of(path):
+            meta = doc.get("metadata") or {}
+            if doc.get("kind") == "Deployment" and meta.get("name") == "hugmesh-matrix-ui":
+                found.append((path, doc))
+    if len(found) != 1:
+        fail(check, "apps/50-games.yaml is present but %d Deployment(s) named "
+                    "hugmesh-matrix-ui were found (want exactly 1)" % len(found))
+        return
+    path, doc = found[0]
+    rel = os.path.relpath(path, root)
+    containers = (((doc.get("spec") or {}).get("template") or {}).get("spec") or {}).get("containers") or []
+    values = [e.get("value") for c in containers for e in (c.get("env") or [])
+              if isinstance(e, dict) and e.get("name") == "HUG_GAMES_URL"]
+    if not values:
+        fail(check, "%s: hugmesh-matrix-ui carries no HUG_GAMES_URL env while "
+                    "apps/50-games.yaml installs games, so the chat3d games origin is "
+                    "left to the app's built-in default instead of stated here" % rel)
+        return
+    want = "https://%s" % route_host
+    for v in values:
+        if v != want:
+            fail(check, "%s: HUG_GAMES_URL=%r but the be-gateway `games` route serves "
+                        "host %r (want exactly %r)" % (rel, v, route_host, want))
+            return
+    ok(check, "hugmesh-matrix-ui HUG_GAMES_URL == https://%s, the be-gateway games "
+              "route host" % route_host)
 
 
 def _hpa_min(root, key):
@@ -2595,6 +2725,7 @@ def main():
     check_yaml(root)
     check_namespaces(root)
     check_route_services(root)
+    check_gateway_relay_host(root)
     check_route_access(root)
     check_route_access_no_bare_wildcard(root)
     check_pki_roles(root)
@@ -2606,6 +2737,7 @@ def main():
     check_embedded_json(root)
     check_velero_backups(root)
     check_hpa_replicas(root)
+    check_games_origin(root)
     check_federation_remotes(root)
     check_remote_strip_prefix(root)
     check_remote_route_targets(root)

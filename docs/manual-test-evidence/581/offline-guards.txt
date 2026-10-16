@@ -1,0 +1,20 @@
+# issue:   #581
+# label:   offline-guards
+# cwd:     /home/user/hugmesh-generator
+# command: bash tests/stack/test-tor-onion-mechanism.sh 2>&1 | tail -15; bash tests/scripts/test-studio-tor-domain-pins.sh 2>&1 | tail -8
+# started: 2026-09-30T13:33:03Z
+# host:    Linux 6.18.44-fc-v50 x86_64, no docker daemon, no KVM, no tor, no kind/kubectl (Claude Code cloud container)
+# commit:  2017882
+-----
+SKIPPED-LOUDLY: opt-in only: it needs the PUBLIC Tor network and several minutes. Run: make stack-tor-mechanism-check (or HUGMESH_TOR_E2E=1 bash tests/stack/test-tor-onion-mechanism.sh) — the Tor onion mechanism was verified NOTHING (exit 2, never 0)
+    | ........................................................................ [ 54%]
+    | ........................................................................ [ 67%]
+    | ........................................................................ [ 81%]
+    | ........................................................................ [ 95%]
+    | ..........................                                               [100%]
+    | 530 passed in 280.19s (0:04:40)
+  PASS pytest exited 0 (530 passed, 0 skipped)
+== studio tor/domain pins: 6 passed, 0 failed ==
+-----
+# exit code: 0
+# finished: 2026-09-30T13:37:45Z

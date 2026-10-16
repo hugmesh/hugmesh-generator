@@ -11,18 +11,42 @@ the native leg and ``docker -e`` on the docker leg (the G2 HEADSCALE_URL channel
 generalized); ``run()``/``cancel()``/streaming are inherited from BuildDriver.
 Per-role KEYS folder generation (gen-provision-keys.sh) is the script's own
 default behaviour — SKIP_KEYS=1 is the opt-out knob, fielded below.
+
+DOMAINS (#587). A fleet builds a mesh's node images, and the operator's rule is "a
+service page per domain you make, that you have to go through before building" — so a
+fleet run now carries the SAME domain rows and the SAME per-domain services gate as
+every other build route (``core.domain_services.gate_reason``, called from
+:meth:`FleetDriver.preflight`, so both the GUI's "Build fleet now" and a RESTART from
+the previous-builds manager refuse before ``build-all-roles.sh`` is ever spawned, and
+name every domain that was never walked). Row 0 is the fleet's OWN domain — the
+``--cluster-domain`` it passes, or the builders' default — and has a services page
+too (operator decision 69 = A).
+
+What the rows DO NOT do, measured on the builders rather than assumed: they reach no
+builder. ``FleetConfig.to_env`` / ``to_cli_args`` emit nothing for them, on purpose —
+the pass-through tail goes to EVERY builder of the run, node roles ignore
+``--domains`` (build-x86-host-stage4.sh warns "--person-role/--domains are ignored for
+non-client role"), and the unaffiliated desktop that ``X86_STANDALONE=1`` adds REFUSES
+it outright (``--unaffiliated conflicts with --person-role/--domains``, exit 1). And
+``build-all-roles.sh`` writes no mesh manifest, so cluster provisioning does not see a
+fleet's rows either. They are RECORDED with the fleet's session record
+(``to_dict``), gated, and said to be exactly that on both faces
+(:data:`FLEET_LANE_NOTE`).
 """
 from __future__ import annotations
 
 import os
 import re
 import shlex
-from dataclasses import asdict, dataclass, field  # noqa: F401  (field: dataclass idiom parity)
-from typing import Any
+from dataclasses import MISSING, asdict, dataclass, field, fields
+from typing import Any, ClassVar
 
 from . import build_driver
 from .build_driver import BuildDriver
-from .config import IdentityValidationError, validate_domain_name
+from .config import (Domain, IdentityValidationError, ImageConfig,
+                     domain_rows_to_dict, validate_domain_name)
+from .domain_services import gate_reason
+from .local_mesh_domains import LocalMeshDomains
 
 FLEET_SCRIPT = "scripts/build-all-roles.sh"
 
@@ -30,6 +54,131 @@ FLEET_SCRIPT = "scripts/build-all-roles.sh"
 # argv — allow only slug-shaped tokens (matches every real role id incl. be+gpu),
 # fail-closed like ImageConfig.validate_identity().
 _ROLE_TOKEN_RE = re.compile(r"[A-Za-z0-9_+.-]+\Z")
+
+#: ``-j`` on both faces: the GUI's spin box range and what ``validate`` accepts from
+#: the TUI's ``set jobs N`` (which used to take 0 and -5 straight into the command).
+JOBS_RANGE: tuple[int, int] = (1, 128)
+
+#: What WITH_TOR does per builder — the note under the GUI's Tor checkbox and the
+#: line the TUI's options screen prints for the ``with_tor`` knob (both faces, one
+#: string; parity-pinned). It is NOT on the checkbox itself: a QCheckBox never
+#: wraps, and this sentence on it made the fleet window 825 px wide at its 760 px
+#: default (the post-merge review of #645).
+WITH_TOR_NOTE = (
+    "Sent per builder through the channel it parses — x86 --with-tor, rpi5 ‘tor’ "
+    "folded into --optional-services. Client roles never carry it; build-all-roles.sh "
+    "refuses (exit 2, before any build) where a builder cannot bake it exactly.")
+
+#: The builders' own cluster domain when no ``--cluster-domain`` is passed (x86 and
+#: rpi5 ``CLUSTER_DOMAIN=`` default; ImageConfig carries the same literal). A fleet
+#: whose Cluster domain field is empty builds for THIS domain, so it is row 0.
+#: studio/tests/test_fleet_domains.py pins it against both builders.
+FLEET_DEFAULT_DOMAIN: str = ImageConfig.__dataclass_fields__["cluster_domain"].default
+
+#: What the fleet's gate refusal says was refused (``gate_reason``'s ``action``).
+ACTION_FLEET_BUILD = "build this fleet"
+
+#: The fleet's remedy: this route has its OWN Domains / Domain services steps, so the
+#: image flow's sentence ("walk to the Domain services step of the image flow") would
+#: send the operator to a screen this window does not have.
+FLEET_REMEDY = (
+    "Go back to this fleet's ‘Domains’ and ‘Domain services’ steps — every domain "
+    "there has its own service page, and opening it is what records it — or remove "
+    "the domain from the Domains table.")
+
+#: The one sentence the fleet's services step adds (both faces; parity-pinned): what
+#: this route does with the selection, which is less than the image flow does.
+FLEET_LANE_NOTE = (
+    "ON A FLEET BUILD: the domains and their per-domain services are recorded with "
+    "this fleet's session and required before it builds — they reach NO builder "
+    "(node images take no --domains, the unaffiliated desktop refuses it, and "
+    "build-all-roles.sh writes no mesh manifest). The node services a fleet DOES bake "
+    "— the Tor onion (WITH_TOR) and the optional-service list — are set on the "
+    "‘Shared options’ step.")
+
+
+def fleet_own_domain(cluster_domain: str) -> str:
+    """Row 0's name: the ``--cluster-domain`` the fleet passes, else the builders'
+    default (what the images are really built for)."""
+    return (cluster_domain or "").strip() or FLEET_DEFAULT_DOMAIN
+
+
+class FleetDomains(LocalMeshDomains):
+    """The fleet's domain rows + the gate's bookkeeping, while the steps edit them —
+    the local-mesh route's state object, re-used as is (``mode`` = "mesh" so
+    ``domain_services.gate_applies`` bites; row 0 is a REAL row named ``own_name``).
+    A distinct name only so a reader of either route knows which one it is."""
+
+
+def seed_fleet_domains(state: FleetDomains, cluster_domain: str) -> None:
+    """Enter the Domains step: row 0 becomes the fleet's own domain. First visit seeds
+    it; a later visit after the Cluster domain changed RENAMES row 0 (keeping every
+    added row) and prunes the stale reviewed marker — a renamed domain is one nobody
+    has walked under that name. Both faces call this."""
+    from .domain_services import record_reviewed
+    own = fleet_own_domain(cluster_domain)
+    if not state.domains:
+        state.domains = [Domain(name=own, title="")]
+    elif state.own_name != own:
+        row = state.by_name(state.own_name)
+        if row is not None and row is state.domains[0]:
+            row.name = own
+        else:
+            state.domains.insert(0, Domain(name=own, title=""))
+    state.own_name = own
+    record_reviewed(state, state.domain_services_reviewed)
+
+
+def commit_fleet_domains(state: FleetDomains, added) -> list[str]:
+    """Leave the Domains step: ``added`` (the table's ADDED rows, row 0 excluded)
+    become the state's rows after the own row, which keeps its recorded services;
+    reviewed markers are pruned to rows that still exist. Returns why the added rows
+    cannot be recorded ([] when they can) — the local-mesh route's words
+    (``added_row_problems``: not a domain name / the own domain again / a duplicate).
+    The rows are recorded EITHER WAY, so a Back keeps what was typed; the refusal is
+    the caller's (on Next, inline). Both faces call this."""
+    from .domain_services import record_reviewed
+    from .local_mesh_domains import added_row_problems
+    own = state.own_name
+    prev = state.by_name(own) if own else None
+    own_row = Domain(name=own, title="",
+                     optional_services=list(prev.optional_services) if prev else [])
+    added = [d for d in added if (d.name or "").strip()]
+    state.domains = [own_row] + added
+    record_reviewed(state, state.domain_services_reviewed)
+    return added_row_problems([d.name for d in added], own)
+
+
+def fleet_domain_fields(state: FleetDomains) -> dict[str, Any]:
+    """The FleetConfig fields the steps' state becomes — COPIES (the config is recorded
+    with the session while the state keeps being edited after a Back). Both faces
+    build their FleetConfig through this, so they record the same domains, in the same
+    order, with the same services and reviewed markers. (One difference is left, and
+    is the one the text-mode ``a NAME`` always had: the GUI's table fills an empty
+    title with the domain's name, ``a NAME`` leaves it empty — as the local-mesh
+    route's does. A fleet build reads names only, so nothing built changes.)"""
+    return {
+        "domains": [Domain(**asdict(d)) for d in state.domains],
+        "domain_services_reviewed": list(state.domain_services_reviewed),
+    }
+
+
+def fleet_gate_reason(cfg: "FleetConfig") -> str:
+    """The per-domain services gate for a fleet ("" = may build): the shared seam
+    with this route's action and remedy. ``FleetDriver.preflight`` and the TUI's
+    review both call exactly this."""
+    return gate_reason(cfg, ACTION_FLEET_BUILD, remedy=FLEET_REMEDY)
+
+
+def fleet_domains_from_config(cfg: "FleetConfig") -> FleetDomains:
+    """The step state a recorded FleetConfig carries (RESTART / REDO): its rows, row 0
+    first, and its reviewed markers as recorded — never "every row", so a record whose
+    walk was incomplete is still refused."""
+    rows = [Domain(**asdict(d)) for d in cfg.domains]
+    own = (rows[0].name or "").strip() if rows else ""
+    return FleetDomains(domains=rows,
+                        domain_services_reviewed=list(cfg.domain_services_reviewed),
+                        own_name=own)
 
 
 @dataclass
@@ -87,6 +236,24 @@ class FleetConfig:
     pentest_env: str = ""              # PENTEST_ENV compose|local|cluster
     pentest_scan: str = ""             # PENTEST_SCAN baseline|full
     pentest_pipeline: str = ""         # PENTEST_PIPELINE main|games
+    # ── node services (#579) ──
+    # WITH_TOR=1: every CLUSTER-NODE image of the run carries the Tor v3 onion
+    # (net-vpn/tor + hugmesh-tor-reconcile). The script emits it per builder through
+    # the channel that builder parses — x86 --with-tor, rpi5 'tor' folded into its
+    # --optional-services — and nowhere a builder cannot bake it; it REFUSES (exit 2,
+    # before any build) where it cannot be honoured exactly. Not an extra_flags
+    # string: a pass-through --with-tor would reach builders that have no such flag.
+    with_tor: bool = False             # WITH_TOR=1
+    optional_services: str = ""        # OPTIONAL_SERVICES="akkoma tuwunel ..." (both node
+                                       # builders' env knob; the rpi5 tor fold's base)
+    # ── domains (#587) — RECORDED + GATED, never emitted (see the module doc) ──
+    # Row 0 is the fleet's own domain; ``domain_services_reviewed`` is the gate's
+    # bookkeeping (the names whose services page was walked). ``mode`` is a CLASS
+    # constant, not a field: ``domain_services.gate_applies`` reads it, and "mesh" is
+    # the honest answer — a fleet builds a mesh's nodes.
+    domains: list[Domain] = field(default_factory=list)
+    domain_services_reviewed: list[str] = field(default_factory=list)
+    mode: ClassVar[str] = "mesh"
     # ── brand mesh (the same env channel BuildDriver forwards for G2) ──
     headscale_url: str = ""            # HEADSCALE_URL baked by the x86/rpi5/frite builders
     # ── pass-through builder args (forwarded to EVERY per-role builder) ──
@@ -99,24 +266,154 @@ class FleetConfig:
 
     # ---- (de)serialization (no SECRET fields in a fleet config) --------------
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        d = asdict(self)
+        # per-domain ``tor`` (#582) is OMIT-WHEN-FALSE, exactly as ImageConfig.to_dict
+        # writes it: a fleet record with no Tor domain keeps the bytes it had before.
+        d["domains"] = domain_rows_to_dict(self.domains)
+        return d
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "FleetConfig":
-        known = set(cls.__dataclass_fields__)  # type: ignore[attr-defined]
-        return cls(**{k: v for k, v in d.items() if k in known})
+        # fields(), not __dataclass_fields__: the latter also lists the ``mode``
+        # ClassVar, which is not an __init__ argument.
+        if not isinstance(d, dict):
+            raise IdentityValidationError(
+                f"fleet record must be a JSON object, not {type(d).__name__}")
+        known = {f.name: f for f in fields(cls)}
+        kw = {k: v for k, v in d.items() if k in known}
+        # A DAMAGED record (hand-edited JSON) is refused HERE with the field named, as
+        # IdentityValidationError — the exception the loaders already show inline. It
+        # used to pass through and surface later, inside the RESTART slot, where PyQt6
+        # aborts the Studio on an unhandled exception: a TypeError from a Qt setter
+        # (``"jobs": "8"`` into QSpinBox.setValue, ``"cluster_domain": 5`` or
+        # ``"x86_roles": ["pki"]`` into QLineEdit.setText), a TypeError from
+        # dataclasses.asdict or an AttributeError in the gate (a row that is not a
+        # domain), or a ValueError from the row builder (an ``idp`` typo).
+        # Every SCALAR field is checked against the type of its declared default:
+        # False -> a bool, "" -> text, 8 -> a whole number (not a bool, which is an
+        # int to Python). A missing key keeps the default (a pre-#645 record has none
+        # of the domains keys); null is a hand edit on a scalar and is refused.
+        for name, value in kw.items():
+            f = known[name]
+            if f.default is MISSING:                 # the list fields, checked below
+                continue
+            want = type(f.default)
+            ok = (isinstance(value, want) and not (want is int and isinstance(value, bool)))
+            if not ok:
+                kind = {bool: "true or false", str: "text",
+                        int: "a whole number"}.get(want, want.__name__)
+                raise IdentityValidationError(
+                    f"fleet record: {name} must be {kind}, not {type(value).__name__}")
+        # ``jobs`` is a whole number AND inside JOBS_RANGE, here as well as in
+        # validate(): a saved 0, -1 or 999 used to be clamped by the GUI's spin box
+        # without a word (the record said one -j, the RESTART built another, and the
+        # Review pane said Preflight OK), and 2**31 or more made QSpinBox.setValue
+        # raise OverflowError — an ArithmeticError, which no (ValueError, TypeError)
+        # guard around the RESTART slot catches — and PyQt6 aborted the Studio.
+        if "jobs" in kw and not JOBS_RANGE[0] <= kw["jobs"] <= JOBS_RANGE[1]:
+            raise IdentityValidationError(
+                f"fleet record: jobs must be a whole number from {JOBS_RANGE[0]} to "
+                f"{JOBS_RANGE[1]}, not {kw['jobs']!r}")
+        # REHYDRATE the rows. asdict() -> JSON -> back yields plain dicts, and the
+        # gate reads ``getattr(d, "name", "")`` — "" on a dict — so an un-rehydrated
+        # record would pass the gate on every RESTART/REDO however unwalked it was.
+        # Only an ABSENT key or null is an empty list (what an old serialiser wrote);
+        # "" or 0 in either place is a hand edit and is refused like any other text.
+        raw_rows = kw.get("domains")
+        raw_marks = kw.get("domain_services_reviewed")
+        raw_rows = [] if raw_rows is None else raw_rows
+        raw_marks = [] if raw_marks is None else raw_marks
+        for label, value in (("domains", raw_rows),
+                             ("domain_services_reviewed", raw_marks)):
+            if not isinstance(value, list):
+                raise IdentityValidationError(
+                    f"fleet record: {label} must be a list, not {type(value).__name__}")
+        rows = []
+        for i, x in enumerate(raw_rows):
+            if isinstance(x, dict):
+                try:
+                    x = ImageConfig._domain_from_dict(x)
+                except (ValueError, TypeError) as e:
+                    # the row builder's own refusal (an ``idp`` outside its choices,
+                    # a nested field of the wrong shape): the same inline path, the
+                    # row numbered so the operator finds it in the JSON
+                    raise IdentityValidationError(
+                        f"fleet record: domains[{i}] is not a valid domain row ({e})") from e
+            if not isinstance(x, Domain):
+                raise IdentityValidationError(
+                    f"fleet record: domains[{i}] must be a domain row (an object), "
+                    f"not {type(x).__name__}")
+            for fld in ("name", "title"):
+                if not isinstance(getattr(x, fld), str):
+                    raise IdentityValidationError(
+                        f"fleet record: domains[{i}].{fld} must be text, "
+                        f"not {type(getattr(x, fld)).__name__}")
+            # The row's two list fields are iterated by the Domain services step (its
+            # ``load`` and the state line): an int there passed the row builder and
+            # the name check, Review showed a preflight refusal, and ONE Back click
+            # raised TypeError ("'int' object is not iterable") from inside the Back
+            # button's slot; a plain string ("akkoma") was iterated as letters.
+            for fld in ("images", "optional_services"):
+                v = getattr(x, fld)
+                if not isinstance(v, list) or not all(isinstance(s, str) for s in v):
+                    bad = v if not isinstance(v, list) else next(
+                        s for s in v if not isinstance(s, str))
+                    raise IdentityValidationError(
+                        f"fleet record: domains[{i}].{fld} must be a list of text, "
+                        f"not {type(bad).__name__}")
+            rows.append(x)
+        kw["domains"] = rows
+        for j, n in enumerate(raw_marks):
+            # a marker is a domain name the step was walked for; a dict or a number
+            # here is a hand edit, named like every other one (str() of it matched
+            # no domain, so it was harmless, but silently so)
+            if not isinstance(n, str):
+                raise IdentityValidationError(
+                    f"fleet record: domain_services_reviewed[{j}] must be text, "
+                    f"not {type(n).__name__}")
+        kw["domain_services_reviewed"] = list(raw_marks)
+        return cls(**kw)
+
+    def _services_words(self) -> str:
+        """``optional_services`` as the builders read it: commas tolerated as
+        separators (both node builders normalise ``,`` to a space), whitespace
+        collapsed."""
+        return " ".join(self.optional_services.replace(",", " ").split())
 
     # ---- validation (fail-closed, mirrors ImageConfig.validate_identity) -----
     def validate(self) -> None:
         if self.cluster_domain:
             validate_domain_name(self.cluster_domain)
+        for d in self.domains:
+            if (d.name or "").strip():
+                validate_domain_name(d.name.strip())
         for name, roleset in (("x86_roles", self.x86_roles),
                               ("rpi_roles", self.rpi_roles),
-                              ("jetson_roles", self.jetson_roles)):
+                              ("jetson_roles", self.jetson_roles),
+                              ("optional_services", self._services_words())):
             for tok in roleset.split():
                 if not _ROLE_TOKEN_RE.match(tok):
                     raise IdentityValidationError(
                         f"invalid {name} token: {tok!r} — rejected by the fleet allowlist")
+        # extra_flags is shlex-split into argv by to_cli_args: an unbalanced quote (a
+        # plain apostrophe in a note, an unterminated "...) raised ValueError from
+        # shlex there, which the TUI's review did not catch — the whole text-mode fleet
+        # flow died on it. Refuse it HERE, at the one validation seam both faces call
+        # (the TUI on every `set`, the GUI's preview and preflight), with the reason.
+        if self.extra_flags:
+            try:
+                shlex.split(self.extra_flags)
+            except ValueError as e:
+                raise IdentityValidationError(
+                    f"extra_flags cannot be split into arguments ({e}) — balance the "
+                    "quotes, e.g. --note \"it's\"") from e
+        # -j: the GUI's spin box already stops at JOBS_RANGE; the TUI's `set jobs N`
+        # took any int (0, -5) straight into the command until this check.
+        if (isinstance(self.jobs, bool) or not isinstance(self.jobs, int)
+                or not JOBS_RANGE[0] <= self.jobs <= JOBS_RANGE[1]):
+            raise IdentityValidationError(
+                f"jobs must be a whole number from {JOBS_RANGE[0]} to {JOBS_RANGE[1]}, "
+                f"not {self.jobs!r}")
 
     # ---- the canonical env-knob + argv translation ---------------------------
     def to_env(self) -> dict[str, str]:
@@ -145,6 +442,7 @@ class FleetConfig:
             ("ORANGEPI4LTS_ONLY", self.orangepi4lts_only),
             ("SKIP_KEYS", self.skip_keys),
             ("PENTEST", self.pentest), ("PENTEST_ONLY", self.pentest_only),
+            ("WITH_TOR", self.with_tor),
         ):
             if val:
                 env[var] = "1"
@@ -165,6 +463,7 @@ class FleetConfig:
             ("PENTEST_ENV", self.pentest_env), ("PENTEST_SCAN", self.pentest_scan),
             ("PENTEST_PIPELINE", self.pentest_pipeline),
             ("HEADSCALE_URL", self.headscale_url),
+            ("OPTIONAL_SERVICES", self._services_words()),
         ):
             if val:
                 env[var] = val
@@ -248,4 +547,11 @@ class FleetDriver(BuildDriver):
             cfg.validate()
         except IdentityValidationError as e:
             problems.append(str(e))
+        # THE PER-DOMAIN SERVICES GATE (#587) — the same seam every other build route
+        # calls. Here, so "Build fleet now" (FleetPage._start refuses on any preflight
+        # problem, inline) and a previous-builds RESTART both refuse BEFORE
+        # build-all-roles.sh is spawned, naming each unwalked domain.
+        reason = fleet_gate_reason(cfg)
+        if reason:
+            problems.append(reason)
         return problems

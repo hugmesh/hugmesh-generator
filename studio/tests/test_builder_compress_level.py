@@ -50,7 +50,7 @@ def test_every_builder_parses_compress_level():
 
 
 def test_every_builder_defaults_to_studios_default_level():
-    """The load-bearing half of "emit nothing at the default"."""
+    """The half that matters of "emit nothing at the default"."""
     for platform, text in _TEXT.items():
         m = re.search(r"^COMPRESS_LEVEL=(\d)\b", text, re.M)
         assert m, f"{BUILDER_SCRIPTS[platform]} declares no COMPRESS_LEVEL default"
@@ -72,7 +72,7 @@ def test_every_builder_validates_the_level_it_accepts():
 
 
 def test_no_hardcoded_xz_9_survives_on_the_compress_path():
-    """A single leftover literal makes the knob inert on that artifact."""
+    """A single leftover literal makes the knob ineffective on that artifact."""
     for platform, text in _TEXT.items():
         assert "xz -T0 -9" not in text, (
             f"{BUILDER_SCRIPTS[platform]} still hardcodes `xz -T0 -9` — the "

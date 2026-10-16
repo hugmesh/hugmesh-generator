@@ -2,8 +2,10 @@ import { test, expect } from '@playwright/test';
 import { tags } from './report-tags';
 import {
   swarm, loadToken, premintReady, runConcurrently, swarmTargetsForMod,
-  assertControlAtLayers, expectObservedWithin, type LayerExpectation,
+  assertControlAtLayers, expectObservedWithin, assertDisabledHasHelptext,
+  type LayerExpectation,
 } from './swarm-driver';
+import { onboard, SHELL_AFTER_PROVISION_MS } from './helpers';
 
 // 24 — SCALED-CONCURRENT FINAL E2E SWEEP.
 //
@@ -216,16 +218,44 @@ test.describe('final sweep: scaled-concurrent population', () => {
   });
 });
 
-// (E) DISABLED-UI-HELPTEXT — a representative live-UI scenario. Kept a clearly
-// marked PENDING stub until the role-conditional UI lands (same honesty as spec
-// 18): the host shell does not yet render role-disabled controls with helptext.
-// When it does, drive a ROLE_USER session to the admin entry-point and assert the
-// disabled control carries helptext (assertDisabledHasHelptext in swarm-driver.ts).
+// (E) DISABLED-UI-HELPTEXT — LIVE. The stub that sat here waited on "the host
+// shell rendering role-disabled controls with helptext". It does now, just not
+// as a `nav-admin` menubar item: MenuComponent HIDES its admin entry for a
+// non-admin. The greyed-and-explained surface is the `/home` launcher grid
+// (hugmesh-host-shell HomeServicesComponent), where every card renders for every
+// signed-in principal with a `data-state`, and a gated one is a
+// <span aria-disabled="true" aria-describedby="<id>-card-help"> plus a
+// `card-<id>-help` reason.
+//
+// `card-admin` is the right control for this scenario because it is a CORE card
+// (no install-state slug), so it can never resolve to `absent` — unlike spec 18's
+// `card-games`, this runs for real on the DEFAULT lane. The admin row is the
+// positive control: without it a shell that greyed the card for EVERYONE would
+// pass. Not gated on LIVE_GATEWAY: it drives the shell through onboard(), like
+// spec 18's LIVE describe, not the pre-minted-JWT gateway probes above.
 test.describe('final sweep: disabled UI carries helptext (live UI)', () => {
-  test.skip('a ROLE_USER sees the admin control DISABLED with an explaining helptext', async () => {
-    // TODO(Phase8): when the host shell renders role-disabled controls, log in as
-    // a swarm user and: await assertDisabledHasHelptext(page, 'nav-admin').
-    // The framework primitive already exists; this activates when the UI does.
-    expect(true).toBe(true);
-  });
+  const ADMIN_CARD = [
+    { username: 'e2e-user', role: 'ROLE_USER', state: 'role' },
+    { username: 'e2e-admin', role: 'ROLE_ADMIN', state: 'enabled' },
+  ] as const;
+
+  for (const c of ADMIN_CARD) {
+    test(`(E) ${c.role} sees the admin launcher card ${c.state === 'role' ? 'DISABLED with an explaining helptext' : 'ENABLED'} `
+      + tags({ role: c.role, layer: 'ui' }), async ({ page }) => {
+      await onboard(page, c.username);
+      await page.goto('/home');
+      const card = page.getByTestId('card-admin');
+      await expect(card, 'card-admin is a CORE card: it renders for every signed-in principal')
+        .toBeAttached({ timeout: SHELL_AFTER_PROVISION_MS });
+      await expect(card).toHaveAttribute('data-state', c.state);
+
+      if (c.state === 'role') {
+        await assertDisabledHasHelptext(page, 'card-admin');
+        await expect(page.getByTestId('card-admin-help')).toHaveText(/administrator/i);
+      } else {
+        await expect(card).toHaveAttribute('href', /\/admin$/);
+        await expect(page.getByTestId('card-admin-help')).toHaveCount(0);
+      }
+    });
+  }
 });

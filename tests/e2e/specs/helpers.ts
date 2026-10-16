@@ -1,6 +1,6 @@
 import { Page, expect, request } from '@playwright/test';
 import type { Locator } from '@playwright/test';
-import type { APIRequestContext, APIResponse } from '@playwright/test';
+import type { APIRequestContext, APIResponse, Browser, BrowserContext } from '@playwright/test';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { SUPERADMIN_USERNAME, SYSTEMS_SEED_USERS, passwordFor, loginPassword } from './rbac-roles';
@@ -101,11 +101,133 @@ export function resolveForNode(
  * cannot resolve. See docs/KIND-SSO-E2E-FINDINGS.md item 20.
  */
 export async function apiContext(baseUrl: string | undefined): Promise<APIRequestContext> {
+  // A --via onion run (tests/e2e/run.sh exports SNAP_PROXY) proves "reached OVER
+  // TOR". A standalone Node context has no proxy and would quietly talk to the
+  // local door around Tor, and the scenario's request audit (page listener + HAR)
+  // cannot see it. So it is refused, loudly, rather than proxied on an unmeasured
+  // path: the measured Node-side route is the proxied context's own page.request.
+  if (process.env.SNAP_PROXY) {
+    throw new Error(
+      `apiContext('${baseUrl ?? ''}') bypasses Tor — under --via onion (SNAP_PROXY=`
+      + `${process.env.SNAP_PROXY}) use page.request inside onionContext() instead`,
+    );
+  }
   const t = resolveForNode(baseUrl ?? '');
   return request.newContext({
     baseURL: t.url || baseUrl,
     ignoreHTTPSErrors: true,
     ...(Object.keys(t.headers).length ? { extraHTTPHeaders: t.headers } : {}),
+  });
+}
+
+// ── the Tor front door (make stack-up TOR=1; run.sh --via onion) ─────────────
+/**
+ * Where `tests/e2e/run.sh --via onion` pointed this run: the docker stack's v3
+ * .onion (https — see below) and the SOCKS5 proxy that reaches it.
+ * `null` when the run was not pointed at an onion, which is how a @via:onion
+ * scenario knows to SKIP with a reason in an ordinary lane instead of failing.
+ *
+ * HTTPS, never http, and it throws rather than "fixing" an http URL: https is
+ * the door a person is told to use, a secure context (Chromium does not treat an
+ * http .onion as one) and the node's :443 (docs/TOR-HIDDEN-SERVICE.md "Why
+ * :443"). Not because of CSP upgrade-insecure-requests: the SPA document never
+ * carries it (measured live 2026-09-24, #628). The onion's :443 is the stack's
+ * TLS front.
+ */
+export interface OnionFrontDoor {
+  /** https://<56 base32 chars>.onion — no trailing slash. */
+  baseUrl: string;
+  /** The onion hostname every request of the scenario must carry. */
+  host: string;
+  /** socks5://host:port — a .onion resolves only inside Tor. */
+  proxy: string;
+}
+
+const V3_ONION_HOST = /^[a-z2-7]{56}\.onion$/;
+
+export function onionFrontDoor(env: NodeJS.ProcessEnv = process.env): OnionFrontDoor | null {
+  const raw = (env.SNAP_ONION_BASE_URL || '').replace(/\/+$/, '');
+  const proxy = env.SNAP_PROXY || '';
+  if (!raw && !proxy) return null;
+  if (!raw || !proxy) {
+    throw new Error(
+      `half a Tor front door: SNAP_ONION_BASE_URL='${raw}' SNAP_PROXY='${proxy}'. `
+      + 'tests/e2e/run.sh --via onion sets both; setting one alone would send the '
+      + 'browser to the onion without Tor, or through Tor to nowhere.',
+    );
+  }
+  const u = new URL(raw);
+  if (u.protocol !== 'https:' || !V3_ONION_HOST.test(u.hostname) || u.port !== '') {
+    throw new Error(`SNAP_ONION_BASE_URL='${raw}' is not https://<v3>.onion (no port)`);
+  }
+  if (!/^socks5:\/\/[^/\s]+:\d+$/.test(proxy)) {
+    throw new Error(`SNAP_PROXY='${proxy}' is not socks5://host:port`);
+  }
+  return { baseUrl: raw, host: u.hostname, proxy };
+}
+
+/**
+ * The stack's PER-DOMAIN onion doors (hugmesh-generator#582): `{ slug: door }` from
+ * SNAP_ONION_DOMAIN_URLS ("<slug>=https://<onion> ..."), which tests/e2e/run.sh
+ * --via onion-domains sets from the `<slug>.hostname` readouts hugmesh-tor publishes
+ * beside the primary's. Each door carries the SAME proxy as the mesh's own onion —
+ * one tor-client, one SOCKS port — and is held to the same https://<v3>.onion rule.
+ * `{}` when the variable is unset (not that lane); a malformed entry throws, never
+ * silently drops: a door that is not there must read as absent, not as passed.
+ */
+export function domainOnionDoors(env: NodeJS.ProcessEnv = process.env): Record<string, OnionFrontDoor> {
+  const raw = (env.SNAP_ONION_DOMAIN_URLS || '').trim();
+  if (!raw) return {};
+  const proxy = env.SNAP_PROXY || '';
+  if (!/^socks5:\/\/[^/\s]+:\d+$/.test(proxy)) {
+    throw new Error(
+      `SNAP_ONION_DOMAIN_URLS is set but SNAP_PROXY='${proxy}' is not socks5://host:port — `
+      + 'tests/e2e/run.sh --via onion-domains sets both.',
+    );
+  }
+  const doors: Record<string, OnionFrontDoor> = {};
+  for (const entry of raw.split(/\s+/)) {
+    const eq = entry.indexOf('=');
+    const slug = eq > 0 ? entry.slice(0, eq) : '';
+    const url = eq > 0 ? entry.slice(eq + 1).replace(/\/+$/, '') : '';
+    if (!/^[a-z0-9][a-z0-9-]{0,62}$/.test(slug)) {
+      throw new Error(`SNAP_ONION_DOMAIN_URLS entry '${entry}' has no <slug>=<url> shape`);
+    }
+    let u: URL;
+    try { u = new URL(url); } catch { throw new Error(`SNAP_ONION_DOMAIN_URLS entry '${entry}' is not a URL`); }
+    if (u.protocol !== 'https:' || !V3_ONION_HOST.test(u.hostname) || u.port !== '') {
+      throw new Error(`SNAP_ONION_DOMAIN_URLS entry '${entry}' is not <slug>=https://<v3>.onion (no port)`);
+    }
+    doors[slug] = { baseUrl: url, host: u.hostname, proxy };
+  }
+  return doors;
+}
+
+/**
+ * A browser context that reaches the mesh ONLY through Tor: `baseURL` is the
+ * onion, so every relative `page.goto('/login')` in the shared helpers (onboard(),
+ * registerOnly()) follows it unchanged, and `page.request` inherits the proxy
+ * (measured: a Node-side request through the context resolved the .onion inside
+ * Tor and came back 200). `<-loopback>` sends loopback THROUGH the proxy too, so
+ * an absolute http(s)://localhost:8488/... link baked into a UI cannot quietly
+ * succeed around Tor. Measured 2026-09-23 over a live onion: with it, goto
+ * http://127.0.0.1:<port>/ and http://localhost:<port>/ both died
+ * net::ERR_SOCKS_CONNECTION_FAILED while the onion answered 200. Playwright 1.61
+ * already adds the token by default (the same run without it behaved
+ * identically); it is spelled out so the property does not hang on a default.
+ */
+export async function onionContext(
+  browser: Browser,
+  door: OnionFrontDoor,
+  harPath?: string,
+): Promise<BrowserContext> {
+  return browser.newContext({
+    baseURL: door.baseUrl,
+    proxy: { server: door.proxy, bypass: '<-loopback>' },
+    // The onion's :443 is the stack's TLS front, whose cert is minted per machine
+    // for the cluster domain — it can never name a .onion.
+    ignoreHTTPSErrors: true,
+    ...(harPath ? { recordHar: { path: harPath, content: 'omit' as const } } : {}),
   });
 }
 

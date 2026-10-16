@@ -201,7 +201,7 @@ def running_builds() -> list:
     tray and the list can never tell different stories.
 
     ``is_active`` is the honesty gate: a record left at "running" by a SIGKILL'd Studio
-    is stale, not running, and never appears here as a phantom the operator can click.
+    is stale, not running, and never appears here as a clickable entry for a run that no longer exists.
     Records from ANOTHER host stay listed (we cannot probe them, so we do not claim
     they died) — selecting one still opens a window that says what it truthfully can.
     """

@@ -171,6 +171,12 @@ class StudioShell(QtCore.QObject):
             wiz.finished.connect(lambda _code=0, w=wiz: self._on_window_closed(w))
         except Exception:                        # pragma: no cover - defence in depth
             _log_swallowed("StudioShell.open_window(connect)")
+        # the Local AI bar along the bottom of every page; never allowed to stop a window opening
+        try:
+            from ._local_ai_dock import mount_dock
+            mount_dock(wiz, self.generator_dir)
+        except Exception:
+            _log_swallowed("StudioShell.open_window(local-ai dock)")
         wiz.show()
         wiz.raise_()
         return wiz
@@ -448,7 +454,7 @@ class StudioShell(QtCore.QObject):
 
     def handle_command(self, command: str):
         """Execute one command from a later launch. Unknown commands are IGNORED, not
-        guessed at — a future Studio talking to an older one must be inert, never
+        guessed at — a future Studio talking to an older one must do nothing, never
         surprising."""
         if command == instance.CMD_NEW_WINDOW:
             return self.open_window()

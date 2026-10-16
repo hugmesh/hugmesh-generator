@@ -23,6 +23,16 @@ config that never met this column round-trips byte-identically.
 Title/optional-services/applies-to editing is not ported yet (honest note);
 add/remove, the Sign-in toggle and the base-CA choice are, so both per-domain
 choices are real TUI surfaces.
+
+THE OWN ROW (#494; #589, operator decision 69 = A). In mesh mode the table opens with
+the mesh's OWN domain (``core.domain_services.implicit_own_domain`` — the cluster
+domain) as a display-only first row, exactly as the GUI table's row 0: numbered
+``own`` rather than 1 so every add/delete/sign-in/base-CA command keeps addressing
+the ``cfg.domains`` rows it always did, never removable, its Applies-to / Sign-in /
+Base CA the facts they are for the apex (the same words as ``gui/pages/domains.py``,
+parity-pinned), and its services the summary of what the Domain services step
+recorded into ``cfg.cluster_domain_services``. It is NOT a ``cfg.domains`` row, so an
+untouched flow still emits no ``--domains`` and no manifest ``domains`` entry.
 """
 from __future__ import annotations
 
@@ -30,11 +40,22 @@ import os
 import re
 
 from ..core.config import (
-    DOMAIN_IDP_CHOICES, DOMAIN_IDP_OWN, DOMAIN_IDP_SUPERDOMAIN, Domain,
+    CLIENT_CA_INHERITANCE_NOTE, DOMAIN_IDP_CHOICES, DOMAIN_IDP_OWN,
+    DOMAIN_IDP_SUPERDOMAIN, Domain, github_org_problem,
 )
+from ..core.local_mesh_domains import added_row_problems
+from ..core.domain_services import (implicit_own_domain, reviewed_names,
+                                    services_summary)
 from . import model
 
-__all__ = ["DomainsScreen", "IDP_LABELS", "domain_table"]
+__all__ = ["DomainsScreen", "IDP_LABELS", "domain_table", "OWN_APPLIES", "OWN_IDP",
+           "OWN_CA"]
+
+#: What the own row's three per-domain columns READ AS — the GUI table's
+#: ``_OWN_APPLIES`` / ``_OWN_IDP`` / ``_OWN_CA`` word for word (parity-pinned).
+OWN_APPLIES = "All images (this mesh's own domain)"
+OWN_IDP = "Superdomain Casdoor (the mesh's central one)"
+OWN_CA = "Mesh default"
 
 #: schema value -> the label the GUI combo shows (parity-pinned).
 IDP_LABELS = {
@@ -47,15 +68,27 @@ IDP_LABELS = {
 _NAME_RE = re.compile(r"^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$")
 
 
-def domain_table(cfg) -> tuple[list[str], list[list[str]]]:
+def domain_table(cfg, with_own: bool = False) -> tuple[list[str], list[list[str]]]:
     """(headers, rows) for the domains table. The Sign-in column appears ONLY
-    in mesh mode — the GUI hides it in cloud for the same reason."""
+    in mesh mode — the GUI hides it in cloud for the same reason. ``with_own``
+    prepends the mesh's own domain as the display-only ``own`` row (see the module
+    doc); off by default so row ``i`` stays ``cfg.domains[i]`` for every caller that
+    indexes the rows."""
     mesh = cfg.mode == "mesh"
     headers = ["#", "domain", "title", "optional services", "applies to"]
     if mesh:
-        headers += ["sign-in", "base CA"]
+        # 'github org' (the Go-Live export step) is a mesh column like the two
+        # before it: a cloud client exports no repositories.
+        headers += ["sign-in", "base CA", "github org"]
     domain_ca = getattr(cfg, "domain_ca", None) or {}
     rows: list[list[str]] = []
+    own = implicit_own_domain(cfg) if with_own else ""
+    if own:
+        rows.append(["own", own, getattr(cfg, "brand_title", "") or "-",
+                     services_summary(getattr(cfg, "cluster_domain_services", None),
+                                      own in reviewed_names(cfg)),
+                     OWN_APPLIES, OWN_IDP, OWN_CA,
+                     getattr(cfg, "cluster_domain_github_org", "") or "none"])
     for i, d in enumerate(cfg.domains, 1):
         row = [str(i), d.name, d.title or "-",
                ", ".join(d.optional_services) or "-",
@@ -64,8 +97,25 @@ def domain_table(cfg) -> tuple[list[str], list[list[str]]]:
             row.append(IDP_LABELS[d.idp])
             chosen = domain_ca.get(d.name, "")
             row.append(os.path.basename(chosen) if chosen else "none")
+            row.append(getattr(d, "github_org", "") or "none")
         rows.append(row)
     return headers, rows
+
+
+def set_github_org(target, arg: str) -> str:
+    """Apply ``o``'s operand to ``target`` (a Domain row, or the config for the own
+    row — whichever object carries the org attribute named by ``attr``): ``-``
+    clears, a slug is stored lower-cased, anything else is refused with
+    ``config.github_org_problem``'s sentence. Returns the status line."""
+    obj, attr, label = target
+    if arg == "-":
+        setattr(obj, attr, "")
+        return f"{label}: GitHub org -> none (not exported)"
+    problem = github_org_problem(arg)
+    if problem or not arg:
+        return problem or "o needs an org slug (or - to clear)"
+    setattr(obj, attr, arg.strip().lower())
+    return f"{label}: GitHub org -> {arg.strip().lower()}"
 
 
 class DomainsScreen:
@@ -82,17 +132,22 @@ class DomainsScreen:
         out = ["The go-live domains this mesh serves to browsers."
                if cfg.mode == "mesh" else
                "The domains this client image is tied to.", ""]
-        if cfg.domains:
-            headers, rows = domain_table(cfg)
+        headers, rows = domain_table(cfg, with_own=True)
+        if rows:
             out += model.format_table(headers, rows)
-        else:
+        if not cfg.domains:
             out.append("(no additional domains yet)")
+        if implicit_own_domain(cfg):
+            out.append("Row 'own' is this mesh's OWN domain (the cluster domain): "
+                       "always served, never removable, its services picked on the "
+                       "next step like every other domain's.")
         out.append("")
         commands = ["a NAME=add a domain", "d NUMBER=delete"]
         if cfg.mode == "mesh":
             commands.append("s NUMBER=toggle its sign-in "
                             "(Superdomain Casdoor <-> Own Casdoor)")
             commands.append("b NUMBER CERT|-=set its base CA")
+            commands.append("o NUMBER|own ORG|-=set its GitHub org")
         commands.append("Enter=continue")
         out.append("commands: " + " · ".join(commands))
         if cfg.mode == "mesh":
@@ -100,6 +155,10 @@ class DomainsScreen:
                        "Superdomain (its users sign in via the mesh's central "
                        "Casdoor — the default) or Own (this domain runs its "
                        "own Casdoor instance).")
+            out.append("'GitHub org' = the organisation this domain's repositories "
+                       "are exported to by the Go-Live ‘Export to GitHub org’ step "
+                       "(python -m hugmesh_studio.tui --go-live). An org slug only, "
+                       "never a token; none = the default, the step does not apply.")
             certs = getattr(cfg, "base_ca_certs", None) or []
             if certs:
                 out.append("'Base CA' = which certificate authority this domain "
@@ -112,6 +171,9 @@ class DomainsScreen:
                            "chains to. Recorded only. No certificates yet: add them "
                            "on the Secrets store step (its 'c' command), then come "
                            "back — this step runs before that one.")
+        elif cfg.mode == "cloud":
+            # #588: the GUI's cloud-arm note, the SAME string (parity-pinned).
+            out.append(CLIENT_CA_INHERITANCE_NOTE)
         out.append("Title/optional-services/applies-to editing is not yet "
                    "ported to the TUI — edit those columns in the GUI.")
         return out
@@ -133,6 +195,10 @@ class DomainsScreen:
                 return
             if any(d.name == arg for d in cfg.domains):
                 j.status = f"already listed: {arg}"
+                return
+            own = implicit_own_domain(cfg)
+            if own and arg == own:                     # #631 section 2: the GUI's row-0 rule
+                j.status = added_row_problems([arg], own)[0]
                 return
             cfg.domains.append(Domain(name=arg))       # idp defaults superdomain
             return
@@ -159,7 +225,32 @@ class DomainsScreen:
         if verb == "b" and cfg.mode == "mesh":
             self._feed_base_ca(j, arg)
             return
+        if verb == "o" and cfg.mode == "mesh":
+            self._feed_org(j, arg)
+            return
         j.status = f"unrecognised command: {line!r}"
+
+    @staticmethod
+    def _feed_org(j, arg: str) -> None:
+        """'o DOMAIN-NUMBER|own ORG|-' — the per-domain GitHub org (the Go-Live export
+        step). ``own`` addresses the mesh's own domain, whose org lives on
+        ``cfg.cluster_domain_github_org`` (the GUI's editable cell on row 0)."""
+        cfg = j.cfg
+        which, _, org = arg.partition(" ")
+        which, org = which.strip(), org.strip()
+        if which == "own":
+            if not implicit_own_domain(cfg):
+                j.status = "no own domain row here"
+                return
+            j.status = set_github_org(
+                (cfg, "cluster_domain_github_org", implicit_own_domain(cfg)), org)
+            return
+        row = _index(which, len(cfg.domains))
+        if row is None:
+            j.status = f"no such domain row: {which!r}"
+            return
+        d = cfg.domains[row]
+        j.status = set_github_org((d, "github_org", d.name), org)
 
     @staticmethod
     def _feed_base_ca(j, arg: str) -> None:

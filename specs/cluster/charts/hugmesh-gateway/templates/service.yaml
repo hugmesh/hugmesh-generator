@@ -65,6 +65,43 @@ spec:
                 port:
                   number: {{ $bePort }}
     {{- end }}
+    {{- /* Vanity subdomains of each extra brand domain (hugmesh-generator#582): the
+           Ingress half of .Values.vanityDomains. The route half is the Host predicate
+           of every `vanity: true` route (templates/configmap.yaml); without this rule
+           ingress-nginx never hands `<username>.<domain>` to the gateway. Same backend
+           as `host`. Empty => nothing renders. */}}
+    {{- range .Values.vanityDomains }}
+    - host: {{ printf "*.%s" . | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ $beName }}
+                port:
+                  number: {{ $bePort }}
+    {{- end }}
+    {{- /* Tor .onion hosts (hugmesh-generator#614): written at runtime by the node's
+           hugmesh-tor-ingress-admit as helm parameters, never committed. Without a
+           rule for the onion Host, ingress-nginx answers the Tor client from its
+           default server (404, fake certificate) and the gateway is never reached.
+           Same backend as `host` (Anubis when the PoW shield is up). No TLS entry:
+           no onion SAN exists, so the controller's default certificate answers and
+           Tor Browser shows one certificate warning — the onion address itself
+           authenticates the service. */}}
+    {{- range .Values.ingress.onionHosts }}
+    - host: {{ . | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ $beName }}
+                port:
+                  number: {{ $bePort }}
+    {{- end }}
   {{- if .Values.ingress.tls }}
   tls:
     - hosts: [{{ .Values.ingress.host | quote }}]

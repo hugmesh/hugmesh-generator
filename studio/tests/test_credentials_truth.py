@@ -6,7 +6,7 @@ into the mesh that is running — with no evidence that anything had been seeded
 the file's value matched the identities, or that the superadmin it named was the one
 the Studio minted. ``assess()`` is the whole state machine and is PURE, so every state
 below is driven with plain facts and no docker; ``probe_credentials()`` is the blocking
-gatherer, exercised here only through fakes at its documented seam.
+gatherer, exercised here only through fakes at its documented override point.
 
 Two rules are pinned hard: UNKNOWN is never rendered as absent (a probe that could not
 run is not a "no"), and no password ever reaches ``headline`` or ``detail`` (they go
@@ -418,7 +418,7 @@ def test_credentials_file_honours_the_env_override_and_absence(tmp_path):
     assert ct.read_values(str(tmp_path / "nowhere"), {}) == {}
 
 
-# ── the gatherer at its seam ──────────────────────────────────────────────────────
+# ── the gatherer at its override point ──────────────────────────────────────────────────────
 
 class _Node:
     """A LocalStackNode stand-in: docker answers are scripted per command."""
@@ -597,3 +597,95 @@ def test_last_seed_ok_counts_a_saved_mesh_restore_but_not_a_warm_start(tmp_path)
         (d / name).write_text("")
     when = ct.last_seed_ok(str(d))
     assert when == time.mktime(time.strptime("20260905-143708", "%Y%m%d-%H%M%S"))
+
+
+# ── the seed stamp: a TERMINAL `make stack-seed` is a completed seed too ────────────
+# Every `make stack-seed` rotates .e2e-credentials at its run start and reconciles
+# every identity to the new value. Before the stamp, the only completed-seed record
+# was this Studio's own run log, so a terminal seed after a Studio bring-up read as
+# "the file was rewritten AFTER the last completed seed" -> SEEDED_SUSPECT / "sign-in
+# will 401 until it is re-seeded" — the opposite of the truth. The stamp is written
+# by the REAL shell writer here, so the format contract between the two is pinned.
+
+_E2E_LIB = os.path.join(os.path.dirname(STUDIO_ROOT), "tests", "stack", "e2e-password.sh")
+ROTATED_PW = "rotated-pw-4Kd8sLq1"
+
+
+def _shell_stamp(cred_path: str, password: str, stage: str = "identities"):
+    env = {k: v for k, v in os.environ.items() if not k.startswith("E2E_PASSWORD")}
+    env.update(E2E_CREDENTIALS_FILE=cred_path, E2E_PASSWORD=password)
+    r = subprocess.run(["bash", "-c", 'set -euo pipefail; . "$1"; e2e_password_stamp_seeded "$2"',
+                        "_", _E2E_LIB, stage], env=env, capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    return r
+
+
+def _terminal_seed_after_a_studio_seed(tmp_path):
+    """Studio bring-up recorded at T0; then a terminal seed ROTATED the file (T0+1h)
+    and completed (stamp)."""
+    logs = _logs(tmp_path, time.strftime("%Y%m%d-%H%M%S", time.localtime(T0)))
+    creds = _file(tmp_path, mtime=T0 + HOUR, content="E2E_PASSWORD=" + ROTATED_PW + "\n"
+                  "E2E_PASSWORD_PREVIOUS=" + FIXTURE_PW + "\n")
+    _shell_stamp(creds.path, ROTATED_PW)
+    return logs, creds
+
+
+def test_a_terminal_seed_stamp_makes_a_rotated_file_seeded_not_suspect(tmp_path):
+    logs, creds = _terminal_seed_after_a_studio_seed(tmp_path)
+    assert os.path.isfile(ct.seed_stamp_path(creds.path))
+    assert ct.seed_stamp(creds.path) is not None
+    t = ct.probe_credentials(str(tmp_path), {}, _Node(users=("e2e-admin",)),
+                             _Boot(tmp_path), operator_user="mesh-operator",
+                             logs_dir=logs)
+    assert t.state == ct.STATE_SEEDED, (t.headline, t.detail)
+    assert "401" not in t.headline + t.detail
+    for pw in (ROTATED_PW, FIXTURE_PW):
+        assert pw not in t.headline + t.detail
+
+
+def test_a_terminal_seed_stamp_clears_the_halted_401_warning(tmp_path):
+    logs, _ = _terminal_seed_after_a_studio_seed(tmp_path)
+    t = ct.probe_credentials(str(tmp_path), {}, _Node(running=False),
+                             _Boot(tmp_path), operator_user="mesh-operator",
+                             logs_dir=logs)
+    assert t.state == ct.STATE_HALTED and t.marker == ct.HALTED, (t.headline, t.detail)
+    assert "401" not in t.headline
+    assert "still valid for the next start" in t.headline
+
+
+def test_a_stamp_for_an_older_file_vouches_for_nothing(tmp_path):
+    """A rotation AFTER the stamped seed (another lane's run start, a seed that died
+    before its identity leg) leaves the identities on the stamped value: the
+    stale/401 warning is TRUE then and must stay."""
+    logs, creds = _terminal_seed_after_a_studio_seed(tmp_path)
+    with open(creds.path, "w") as fh:
+        fh.write("E2E_PASSWORD=rotated-again-0000000000\n")
+    os.utime(creds.path, (T0 + 2 * HOUR, T0 + 2 * HOUR))
+    assert ct.seed_stamp(creds.path) is None
+    t = ct.probe_credentials(str(tmp_path), {}, _Node(users=("e2e-admin",)),
+                             _Boot(tmp_path), operator_user="mesh-operator",
+                             logs_dir=logs)
+    assert t.state == ct.STATE_SEEDED_SUSPECT, (t.headline, t.detail)
+
+
+def test_the_stamp_writer_refuses_to_vouch_for_a_password_the_file_does_not_hold(tmp_path):
+    """An explicit E2E_PASSWORD override seeds a value the file does not hold: the
+    writer must REMOVE any stamp rather than vouch for the file."""
+    p = tmp_path / ".e2e-credentials"
+    p.write_text("E2E_PASSWORD=" + FIXTURE_PW + "\n")
+    _shell_stamp(str(p), FIXTURE_PW)
+    assert ct.seed_stamp(str(p)) is not None
+    _shell_stamp(str(p), "an-operator-override-value")
+    assert not os.path.exists(ct.seed_stamp_path(str(p)))
+    assert ct.seed_stamp(str(p)) is None
+
+
+def test_the_stamp_holds_a_hash_never_a_value_and_is_0600(tmp_path):
+    p = tmp_path / ".e2e-credentials"
+    p.write_text("E2E_PASSWORD=" + FIXTURE_PW + "\n")
+    _shell_stamp(str(p), FIXTURE_PW)
+    stamp = ct.seed_stamp_path(str(p))
+    body = open(stamp).read()
+    assert FIXTURE_PW not in body
+    assert f"E2E_SEEDED_SHA256={ct.file_sha256(str(p))}" in body
+    assert oct(os.stat(stamp).st_mode & 0o777) == "0o600"

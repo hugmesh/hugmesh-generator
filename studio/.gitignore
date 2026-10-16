@@ -2,7 +2,11 @@ __pycache__/
 *.pyc
 build/
 dist/
+# PyInstaller writes a throwaway <name>.spec next to wherever it is run, so *.spec is
+# ignored. The ONE spec we keep is hand-written and must be tracked: without the
+# negation below the Windows installer job pointed at a file no checkout contained.
 *.spec
+!packaging/hugmesh-studio.spec
 .venv/
 # The bootstrap venv the Windows .bat and scripts/studio-launch.sh build (the plain
 # .venv/ glob above does not match this name).

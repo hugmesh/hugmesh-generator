@@ -1,0 +1,34 @@
+# hugmesh-parent — publish the metapom to the GitLab Maven Package Registry.
+#
+# The parent is packaging=pom, so there is nothing to compile or test; the pipeline
+# only deploys the POM artifact on the default branch / on a tag. Consumers (the BFF
+# child poms) resolve it from the registry, or from the local ~/.m2 in dev.
+
+stages:
+  - build
+  - deploy
+
+variables:
+  MAVEN_OPTS: "-Dmaven.repo.local=$CI_PROJECT_DIR/.m2/repository"
+  MAVEN_CLI_OPTS: "-B -ntp -s settings.xml"
+
+cache:
+  key: "$CI_COMMIT_REF_SLUG"
+  paths:
+    - .m2/repository
+
+validate:pom:
+  stage: build
+  image: eclipse-temurin:25-jdk
+  script:
+    - ./mvnw $MAVEN_CLI_OPTS validate
+
+deploy:maven:
+  stage: deploy
+  image: eclipse-temurin:25-jdk
+  rules:
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+    - if: '$CI_COMMIT_TAG'
+  script:
+    # CI_JOB_TOKEN (read-only, job-scoped) is read from settings.xml's Job-Token header.
+    - ./mvnw $MAVEN_CLI_OPTS deploy

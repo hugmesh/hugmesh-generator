@@ -13,7 +13,7 @@ on the GUI thread, before the page had painted:
                                                               (local_stack_node.py:690, :697)
       - ``e2e_seeded()``                                     — urlopen(timeout=5)
 
-A wedged or merely busy docker daemon blocks each of those for its FULL timeout, so simply
+A hung or merely busy docker daemon blocks each of those for its FULL timeout, so simply
 arriving at the page could freeze the window for ~95 seconds with nothing on screen. The
 verbs on this page were always off-thread (_MeshWorker); it was the page-entry probes that
 were not. ``_probe_mesh_state``/_StatusProbe already established the right shape for

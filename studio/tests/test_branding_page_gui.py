@@ -381,7 +381,7 @@ def test_the_page_applies_to_an_unaffiliated_desktop(qapp, cfg_fn):
 def test_the_page_still_skips_an_unaffiliated_image_with_no_desktop_half(qapp):
     """Mutation guard: the skip did not become "never skip". An unaffiliated image on a
     builder that parses no --theme has nothing to offer, so the page still disappears —
-    and that stays emission-neutral through RolePage's clear at role-commit time."""
+    and that still leaves the output unchanged through RolePage's clear at role-commit time."""
     page, cfg = _page_for(_composable_unaff(role="rpi5-desktop", platform="rpi5"))
     assert page.applies_to(cfg) is False
 
@@ -535,7 +535,7 @@ def test_web_login_theme_shown_only_in_mesh(qapp, mode, role, shown):
 
 
 def test_web_login_theme_still_round_trips_through_a_stray_visit(qapp):
-    """Hiding it is emission-neutral BECAUSE the commit stays unconditional: the fields
+    """Hiding it leaves the output unchanged BECAUSE the commit stays unconditional: the fields
     are NON_ARGV (config.py:755-766), and a mesh config that walks this page in another
     mode must come out the other side unharmed."""
     cfg = ImageConfig(mode="standalone", role="standalone-thick", platform="x86",

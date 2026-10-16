@@ -26,6 +26,8 @@ source "${SCRIPT_DIR}/scripts/_download-lib.sh"
 # the build host's libcrypt provably supports it, SHA-512 crypt ($6$) fallback.
 # shellcheck source=scripts/_passhash-lib.sh
 source "${SCRIPT_DIR}/scripts/_passhash-lib.sh"
+# shellcheck source=scripts/_domain-idp-lib.sh
+source "${SCRIPT_DIR}/scripts/_domain-idp-lib.sh"
 # THE role vocabulary — canonical tokens, the permanent input aliases, the hostname
 # defaults and the keys profiles, declared ONCE for every builder and for the Studio.
 # See scripts/_roles-lib.sh for why the long spelling won and why `+`/`_` are gone.
@@ -48,6 +50,12 @@ source "${SCRIPT_DIR}/scripts/_binpkg-pool-lib.sh"
 # scripts/_shared-assets-lib.sh and docs/SHARED-BINPKG.md.
 # shellcheck source=scripts/_shared-assets-lib.sh
 source "${SCRIPT_DIR}/scripts/_shared-assets-lib.sh"
+# What a --resume must check before it reuses a build system (ownership, the
+# seed it came from, its stripped static libraries, a link test) and how mounts
+# under the build system are listed and cleared (#659). Shared with the rpi5
+# builder. See scripts/_builder-resume-lib.sh.
+# shellcheck source=scripts/_builder-resume-lib.sh
+source "${SCRIPT_DIR}/scripts/_builder-resume-lib.sh"
 # Signed-kernel artifact cache (G4): a kernel+modules+initramfs+UKI set is reusable
 # across images of the SAME board when board+kernel version+config digest+SIGNING KEY
 # FINGERPRINT all match. The key fingerprint is in the cache key so a re-keyed fleet
@@ -658,6 +666,10 @@ build-x86-host-stage4.sh — hardened Gentoo amd64 k8s/GPU worker image.
                             (default user). Baked to /etc/hugmesh/identity-role.
   --domains LIST            CLIENT only — domain tie (space/comma separated; first =
                             primary). Baked to /etc/hugmesh/domains + filename tag.
+  --domain-idp D=own|superdomain  (repeatable) Casdoor for domain D: own = a dedicated
+                            instance, superdomain = the mesh's (default; bakes nothing).
+                            Only `own` is baked: /etc/hugmesh/domain-idp. D must be in
+                            --domains when given. See docs/DOMAIN-IDP.md.
   --desktop WEIGHT          CLIENT only — thin (LXDE/openbox, default) | full (XFCE+).
   -H, --hostname NAME       Hostname. Default: derived from --role.
   -T, --timezone ZONE       Timezone. Default: ${TIMEZONE}
@@ -828,7 +840,13 @@ build-x86-host-stage4.sh — hardened Gentoo amd64 k8s/GPU worker image.
       --no-live-iso         Skip the live ISO (clean disable; no installer ISO implied).
       --installer-iso       Also build a stage4 + install-x86.sh data ISO.
       --no-tar              Don't emit the mounted-filesystem tarball (.fs.tar.xz).
-      --resume              Reuse an existing sysroot.
+      --resume              Reuse an existing sysroot. Refused, in one sentence,
+                            when that sysroot is not root's, when its stripped
+                            static libraries cannot be restored from the seed
+                            it came from, when that cached seed no longer
+                            verifies against its signed DIGESTS, or when it
+                            cannot link a C program; then rebuild without
+                            --resume (#659).
       --print-plan          Resolve + validate all flags, print the build plan
                             (PLAN_KEY=VALUE lines) and exit 0 — no root, no
                             writes, no network. Secrets print as REDACTED.
@@ -1067,6 +1085,7 @@ while [[ $# -gt 0 ]]; do
         --release-tag) RELEASE_TAG="$2"; shift 2 ;;
         --cluster-domain|--domain) CLUSTER_DOMAIN="$2"; shift 2 ;;
         --superdomain) SUPERDOMAIN="$2"; shift 2 ;;
+        --domain-idp) domain_idp_add "${2:-}"; shift 2 ;;   # repeatable <domain>=own|superdomain (#509)
         --release-state)      RELEASE_STATE="$2";      shift 2 ;;
         --brand) BRAND="$2"; shift 2 ;;
         --brand-title) BRAND_TITLE="$2"; shift 2 ;;
@@ -1263,6 +1282,13 @@ done
 # `case " ${OPTIONAL_SERVICES} "` folds) sees clean slugs. Mirrors DOMAINS.
 OPTIONAL_SERVICES="${OPTIONAL_SERVICES//,/ }"
 
+# A list of ONLY explicit-deselect tokens ("-anubis") is a veto, not a selection: it
+# keeps the built-in default instead of replacing it (hugmesh-generator#384). Runs
+# AFTER the comma normalisation (so "-anubis,-foo" is seen as tokens) and BEFORE the
+# `all` expansion below (a list holding `all` is not negative-only, so that arm is
+# untouched). The rule lives in scripts/_optional-services-lib.sh, once, for both builders.
+_opt_negative_only_keeps_defaults
+
 # FULL-SET sentinel: OPTIONAL_SERVICES=all (or --all-services, which sets the same
 # token) expands to EVERY user-level slug. Done HERE — after arg parse, before the
 # games/edge-ai/tor/character-studio opt-in folds and BEFORE EXCLUDE_SERVICES
@@ -1304,10 +1330,10 @@ fi
 EDGE_AI_WANT=false
 ${EDGE_AI} && [ "${WANT_EDGE_AI}" != "false" ] && EDGE_AI_WANT=true
 [ "${WANT_EDGE_AI}" = "true" ] && EDGE_AI_WANT=true
-if ${EDGE_AI_WANT} && ${ROLE_CLIENT}; then
-    warn "--with-edge-ai on a CLIENT/standalone role has no effect (no cluster tree); the edge-ai service is a k8s NODE service."
-    EDGE_AI_WANT=false
-fi
+# NOTE (hugmesh-generator#615): the CLIENT refusal for this service is NOT here. It
+# used to sit at this line and read ROLE_CLIENT's early `false` default for every
+# role, so it never fired. It lives after the STANDALONE fold, with the tor drop
+# ("Cluster-only optional services: CLIENT roles never carry them").
 if ${EDGE_AI_WANT}; then
     case " ${OPTIONAL_SERVICES} " in
         *" edge-ai "*) ;;
@@ -1315,15 +1341,15 @@ if ${EDGE_AI_WANT}; then
     esac
 fi
 
-# Tor NODE service selection: --with-tor folds 'tor' onto any k8s role (idempotent).
-# Never auto-selected — purely opt-in via --with-tor / OPTIONAL_SERVICES. A
-# CLIENT/standalone desktop is not a cluster member, so it is a no-op there (and the
-# SVCS/PKGS gate below also guards on !ROLE_CLIENT).
+# Tor NODE service selection: --with-tor folds 'tor' into OPTIONAL_SERVICES
+# (idempotent). Never auto-selected — purely opt-in via --with-tor / OPTIONAL_SERVICES /
+# brand.conf. The fold stays HERE (before the EXCLUDE_SERVICES leg, so
+# --exclude-services tor still wins). It does NOT decide the CLIENT case: ROLE_CLIENT
+# is resolved by the role case block further down, so a check here would read its
+# `false` default for every role — it did, and `--with-tor --role desktop` emerged
+# net-vpn/tor on a desktop (hugmesh-generator#583 item 6). The CLIENT strip lives
+# right after the STANDALONE fold ("Tor NODE service: CLIENT roles never carry it").
 WANT_TOR="${WANT_TOR:-}"
-if [ "${WANT_TOR}" = "true" ] && ${ROLE_CLIENT}; then
-    warn "--with-tor on a CLIENT/standalone role has no effect (no cluster tree); the Tor onion service is a k8s NODE service."
-    WANT_TOR=false
-fi
 if [ "${WANT_TOR}" = "true" ]; then
     case " ${OPTIONAL_SERVICES} " in
         *" tor "*) ;;
@@ -1336,10 +1362,10 @@ fi
 # CLIENT/standalone desktop is not a cluster member, so it is a no-op there (the
 # gate prunes the slug anyway when the cluster tree is absent).
 WANT_CHARACTER_STUDIO="${WANT_CHARACTER_STUDIO:-}"
-if [ "${WANT_CHARACTER_STUDIO}" = "true" ] && ${ROLE_CLIENT}; then
-    warn "--with-character-studio on a CLIENT/standalone role has no effect (no cluster tree); Character Studio is a frontend cluster service."
-    WANT_CHARACTER_STUDIO=false
-fi
+# NOTE (hugmesh-generator#615): the CLIENT refusal for this service is NOT here. It
+# used to sit at this line and read ROLE_CLIENT's early `false` default for every
+# role, so it never fired. It lives after the STANDALONE fold, with the tor drop
+# ("Cluster-only optional services: CLIENT roles never carry them").
 if [ "${WANT_CHARACTER_STUDIO}" = "true" ]; then
     case " ${OPTIONAL_SERVICES} " in
         *" character-studio "*) ;;
@@ -1352,10 +1378,10 @@ fi
 # CLIENT/standalone desktop is not a cluster member, so it is a no-op there (the
 # gate prunes the slug anyway when the cluster tree is absent).
 WANT_CHARACTER_FORGE="${WANT_CHARACTER_FORGE:-}"
-if [ "${WANT_CHARACTER_FORGE}" = "true" ] && ${ROLE_CLIENT}; then
-    warn "--with-character-forge on a CLIENT/standalone role has no effect (no cluster tree); Character Forge is a cluster service."
-    WANT_CHARACTER_FORGE=false
-fi
+# NOTE (hugmesh-generator#615): the CLIENT refusal for this service is NOT here. It
+# used to sit at this line and read ROLE_CLIENT's early `false` default for every
+# role, so it never fired. It lives after the STANDALONE fold, with the tor drop
+# ("Cluster-only optional services: CLIENT roles never carry them").
 if [ "${WANT_CHARACTER_FORGE}" = "true" ]; then
     case " ${OPTIONAL_SERVICES} " in
         *" character-forge "*) ;;
@@ -1391,10 +1417,10 @@ fi
 # not a cluster member, so it is a no-op there (the gate prunes the slug anyway when
 # the cluster tree is absent).
 WANT_EDGE_AI_TTS="${WANT_EDGE_AI_TTS:-}"
-if [ "${WANT_EDGE_AI_TTS}" = "true" ] && ${ROLE_CLIENT}; then
-    warn "--with-edge-ai-tts on a CLIENT/standalone role has no effect (no cluster tree); edge-ai-tts is a cluster inference service."
-    WANT_EDGE_AI_TTS=false
-fi
+# NOTE (hugmesh-generator#615): the CLIENT refusal for this service is NOT here. It
+# used to sit at this line and read ROLE_CLIENT's early `false` default for every
+# role, so it never fired. It lives after the STANDALONE fold, with the tor drop
+# ("Cluster-only optional services: CLIENT roles never carry them").
 if [ "${WANT_EDGE_AI_TTS}" = "true" ]; then
     case " ${OPTIONAL_SERVICES} " in
         *" edge-ai-tts "*) ;;
@@ -1631,6 +1657,22 @@ case "${ROLE}" in
         exit 1 ;;
 esac
 
+# ── Tor NODE service: the ONE predicate (hugmesh-generator#583) ───────────────────
+# The onion is a k8s NODE service fronting the cluster's fe-gateway; a CLIENT /
+# standalone / unaffiliated desktop has no cluster to front. _tor_node_selected is the
+# single predicate every tor gate below (SVCS, PKGS, PLAN_TOR_ONION) calls; it reads
+# ROLE_CLIENT at CALL time, so it is right however late ROLE_CLIENT settles. The
+# CLIENT selection itself is dropped (with a warning) after the STANDALONE fold below
+# — the last place ROLE_CLIENT changes (`--role backend --standalone` turns a node
+# role into a client there).
+# TOR_NODE_PACKAGES / TOR_NODE_SERVICES must equal the tor entry's nodePackages /
+# nodeServices in specs/cluster/optional-services.yaml (pinned by
+# tests/scripts/test-tor-node-contract.sh). Decision 70 = B on #347: the DISTRO tor
+# service is linked TOO, and hugmesh-tor-reconcile converges it idempotently.
+TOR_NODE_PACKAGES=(net-vpn/tor)
+TOR_NODE_SERVICES=(tor hugmesh-tor-reconcile)
+_tor_node_selected() { ! ${ROLE_CLIENT} && _opt_selected tor; }
+
 # ── UNAFFILIATED plain desktop (composable: --unaffiliated onto any client/
 # standalone role, or the standalone-unaffiliated role arm above). Runs BEFORE
 # the STANDALONE fold so the STANDALONE=true it forces is folded normally.
@@ -1695,6 +1737,7 @@ if ${UNAFFILIATED}; then
     [ "${MESH_FORCED}" = on ] && { err "--unaffiliated conflicts with --with-tailscale (the tailnet is HugMesh platform machinery)"; exit 1; }
     [ "${SSO_FORCED}" = on ] && { err "--unaffiliated conflicts with --with-sso (Casdoor SSO is HugMesh platform machinery)"; exit 1; }
     { [ -n "${PERSON_ROLE}" ] || [ -n "${DOMAINS}" ]; } && { err "--unaffiliated conflicts with --person-role/--domains (person-device identity is platform machinery)"; exit 1; }
+    [ -z "${DOMAIN_IDP_SPECS}" ] || { err "--unaffiliated conflicts with --domain-idp (an unaffiliated desktop has no identity provider to choose)"; exit 1; }
     BUNDLE_SOURCE=false
     # Neutral identity: every downstream sink (GRUB titles, ISO volids, UKI name,
     # installer text, artifact filenames, hostname) derives from BRAND/BRAND_TITLE,
@@ -1734,6 +1777,42 @@ if ${STANDALONE}; then
     [ -z "${LOCAL_USER}" ] && LOCAL_USER="${DEFAULT_USER}"
     info "STANDALONE desktop: no mesh / no SSO / no k8s; local user '${LOCAL_USER}'; LUKS FDE on install; media-data auto-detect=${MEDIA_DATA}"
 fi
+
+# ── Tor NODE service: CLIENT roles never carry it (hugmesh-generator#583) ─────────
+# ROLE_CLIENT is FINAL only from here: the role case block sets it for the desktop
+# roles, and the UNAFFILIATED -> STANDALONE folds above set it for everything else
+# (`--role backend --standalone`). So this is the ONE place a CLIENT tor selection —
+# however it arrived: --with-tor, --optional-services tor, or brand.conf — is
+# dropped, with a warning, so PLAN_OPTIONAL_SERVICES and every later gate see the
+# truth. (The check used to sit before the role case and read ROLE_CLIENT's `false`
+# default for every role: `--with-tor --role desktop` emerged net-vpn/tor.)
+if ${ROLE_CLIENT} && _opt_selected tor; then
+    warn "tor selected on CLIENT role '${ROLE}' — dropped: the Tor onion service is a k8s NODE service (no cluster to front on a desktop); nothing Tor-related is baked."
+    _tor_kept=""
+    for _tor_s in ${OPTIONAL_SERVICES}; do [ "${_tor_s}" = tor ] || _tor_kept="${_tor_kept} ${_tor_s}"; done
+    OPTIONAL_SERVICES="${_tor_kept# }"
+    unset _tor_kept _tor_s
+fi
+
+# ── Cluster-only optional services: CLIENT roles never carry them (#615) ──────────
+# edge-ai, edge-ai-analysis, character-studio, character-forge and edge-ai-tts are k8s NODE services
+# (a cluster tree to bake into); a CLIENT / standalone / unaffiliated desktop has no
+# cluster tree. Same shape as the tor drop above and for the same reason: the folds
+# above run BEFORE the role case, and the refusals that used to sit beside them read
+# ROLE_CLIENT's early `false` default, so they never fired -- the user was never told
+# the flag did nothing, and the slug rode in OPTIONAL_SERVICES to every later reader.
+# ROLE_CLIENT is FINAL here, so the drop (however the slug arrived: --with-*,
+# --optional-services or brand.conf) is warned and applied once, for every role.
+for _cs_slug in edge-ai edge-ai-analysis character-studio character-forge edge-ai-tts; do
+    if ${ROLE_CLIENT} && _opt_selected "${_cs_slug}"; then
+        warn "${_cs_slug} selected on CLIENT role '${ROLE}' — dropped: it is a k8s NODE service (no cluster tree on a desktop); nothing ${_cs_slug}-related is baked."
+        _cs_kept=""
+        for _cs_s in ${OPTIONAL_SERVICES}; do [ "${_cs_s}" = "${_cs_slug}" ] || _cs_kept="${_cs_kept} ${_cs_s}"; done
+        OPTIONAL_SERVICES="${_cs_kept# }"
+        unset _cs_kept _cs_s
+    fi
+done
+unset _cs_slug
 
 # ── Boot-chain identifiers (volids / CDLABEL / UKI name / installer cmdline key /
 # partition labels / Secure-Boot cert identity + enrollment-cert dirs).
@@ -2162,6 +2241,9 @@ if [ -n "${DOMAINS}" ]; then
     for _d in ${DOMAINS//,/ }; do _validate_dnsname "--domains element" "${_d}"; done
     unset _d
 fi
+# --domain-idp (#509): vocabulary + DNS shape were checked as each flag was read; this is
+# the cross-check against --cluster-domain and the --domains list.
+domain_idp_check "${CLUSTER_DOMAIN}" "${DOMAINS}"
 # Accent is written as ACCENT_COLOR="..." into brand.conf — which the applier reads with
 # its STRICT KEY=VALUE parser, never by dot-sourcing (specs/usr/sbin/hugmesh-branding:83).
 # Gate it with the same #RRGGBB shape the applier's _norm_accent enforces (empty = default
@@ -2482,8 +2564,13 @@ if ${PRINT_PLAN}; then
     _plan BRAND              "${BRAND}"
     _plan CLUSTER_DOMAIN     "${CLUSTER_DOMAIN}"
     _plan SUPERDOMAIN        "${SUPERDOMAIN}"
+    domain_idp_plan_line   # PLAN_DOMAIN_IDP=<own domains>; prints nothing when none (#509)
     _plan HOSTNAME           "${HOSTNAME:-${BRAND}-host}"
     _plan OPTIONAL_SERVICES  "$(${ROLE_CLIENT} && echo none || echo "${OPTIONAL_SERVICES:-none}")"
+    # Additive PLAN_ key (grep -qx consumers unaffected): what the tor NODE gates below
+    # will do, from the SAME predicate + arrays they call — `off`, or the packages and
+    # runlevel services a tor-selected node image carries.
+    _plan TOR_ONION          "$(_tor_node_selected && echo "on packages=${TOR_NODE_PACKAGES[*]} services=${TOR_NODE_SERVICES[*]}" || echo off)"
     _plan MESH               "$(${SKIP_MESH} && echo skip || echo "headscale=${HEADSCALE_VERSION},tailscale=$(${SKIP_TAILSCALE} && echo skip || echo "${TAILSCALE_VERSION}")")"
     _plan SSO                "$(${SKIP_SSO} && echo off || echo casdoor-oidc)"
     _plan IDP                "${IDP}"
@@ -3653,7 +3740,42 @@ acquire_build_lock() {
 # ── 3. Extract ─────────────────────────────────────────────────────
 banner "Extracting stage3 into sysroot"
 acquire_build_lock
+# NEVER touch a sysroot that still has mounts under it — on EITHER branch. A
+# live (or crashed) build leaves /proc,/sys,/dev RBINDS, the SHARED portage
+# scratch and the distfiles cache attached: rm -rf (non-resume) would delete
+# straight through them, and a --resume used to STACK its own binds on top of
+# them (three distfiles-ro binds were found under one sysroot on 2026-09-30,
+# #659). The flock above excludes a LIVE same-BUILD_ROOT build; this catches a
+# crashed one (flock died with it, mounts did not). Captured into a variable,
+# never piped into `grep -q`: under this script's pipefail, grep -q exiting at the
+# first match can SIGPIPE the producer on a mount-heavy host, turning the pipeline
+# status non-zero — the guard silently NOT firing with mounts present. The
+# listing is read from the kernel's own table and compared against the path the
+# kernel uses (symlinks resolved, escapes undone: scripts/_builder-resume-lib.sh),
+# so a work directory reached through a symlink, a relative --work-dir, or a name
+# with a space or an umlaut is checked the same as any other, and a table that
+# cannot be read stops the build instead of reading as "nothing mounted". The
+# refusal prints every mount as the umount command that removes it, deepest
+# first, once per stacked layer (`umount -R <sysroot>` named a directory that is
+# not itself a mount point and did nothing).
+if [ -d "${SYSROOT}" ]; then
+    _stale_mounts="$(hmr_stale_mounts "${SYSROOT}")"
+    if [ -n "${_stale_mounts}" ]; then
+        hmr_stale_mount_refuse "${SYSROOT}" "${_stale_mounts}"
+        exit 1
+    fi
+fi
 if [ -f "${SYSROOT}/etc/gentoo-release" ] && ${RESUME}; then
+    # A build system is only reusable when it is still ROOT'S. After a native
+    # build through `make`, chown-artifacts used to hand the whole work
+    # directory to the invoking user, sysroot included; a build resumed from
+    # that tree finished green and wrote an image whose every directory was
+    # uid 1002 (sshd, systemd-tmpfiles, snort and tor all refused to start,
+    # #659). This is the FIRST thing that looks at the sysroot on the resume
+    # path: no mount, emerge or write has happened yet. Restoring ownership is
+    # not an option (see the lib: a stage3 ships 24 non-root entries, a built
+    # image many more, and portage records no owner) — refuse, in one sentence.
+    hmr_owner_gate "${SYSROOT}" || exit 1
     info "Sysroot populated and --resume — skipping extraction"
 else
     # A non-resume build must start from a CLEAN sysroot. Extracting stage3 OVER a
@@ -3662,29 +3784,18 @@ else
     # slots surviving + libselinux[python] conflicts). Wipe first so the extract
     # is pristine. (Warm reuse is the explicit --resume path above.)
     if [ -f "${SYSROOT}/etc/gentoo-release" ]; then
-        # NEVER rm -rf a sysroot that still has mounts under it: a live (or
-        # crashed) build leaves /proc,/sys,/dev RBINDS and the SHARED portage
-        # scratch attached, and rm -rf would delete straight through them.
-        # The flock above excludes a LIVE same-BUILD_ROOT build; this catches a
-        # crashed one (flock died with it, mounts did not).
-        # Captured into a variable, NOT `findmnt | grep -q`: under this script's
-        # pipefail, grep -q exiting at the first match can SIGPIPE findmnt on a
-        # mount-heavy host (>64K of table after the match), turning the pipeline
-        # status non-zero — i.e. the guard silently NOT firing with mounts
-        # present, the one direction this check must never fail in.
-        _stale_mounts="$(findmnt -rn -o TARGET 2>/dev/null | grep "^${SYSROOT}/" || true)"
-        if [ -n "${_stale_mounts}" ]; then
-            err "mounts are still attached under ${SYSROOT} (a crashed build?):"
-            printf '%s\n' "${_stale_mounts}" | head -5 >&2
-            err "rm -rf would delete THROUGH those binds (host /dev, the shared portage"
-            err "scratch). Unmount first:  umount -R '${SYSROOT}'  — then re-run."
-            exit 1
-        fi
         warn "Non-resume build over a populated sysroot — wiping for a clean stage3 extract"
         rm -rf "${SYSROOT}"; mkdir -p "${SYSROOT}"
     fi
     tar -C "${SYSROOT}" --xattrs-include='*.*' -xpf "${STAGE3_LOCAL}" 2>/dev/null || \
         tar -C "${SYSROOT}" -xpf "${STAGE3_LOCAL}"
+    # Record which seed this build system came from, BESIDE the sysroot (the
+    # clean step and the image never see it). A later --resume restores the
+    # stripped static libraries from THIS seed, not from whatever seed is
+    # newest that day (binutils moved 2.46.1 -> 2.47 between two seeds a week
+    # apart while glibc and gcc did not; a restore from the wrong one is the
+    # silent variant of the same failure).
+    hmr_seed_marker_write "${BUILD_ROOT}" "${STAGE3_LOCAL}" || true
 fi
 
 # Portage pkg_postinst calls sudo internally (as the portage build user); stage3
@@ -4017,7 +4128,15 @@ cp "${SHARED_SPECS}/etc/headscale/policy.bootstrap.hujson" "${SYSROOT}/etc/heads
 cp "${SHARED_SPECS}/etc/keys-provision/provision.sh"  "${SYSROOT}/usr/sbin/keys-provision"; chmod +x "${SYSROOT}/usr/sbin/keys-provision"
 mkdir -p "${SYSROOT}/usr/local/sbin"
 cp "${SHARED_SPECS}/usr/local/sbin/hugmesh-backup"  "${SYSROOT}/usr/local/sbin/hugmesh-backup"; chmod +x "${SYSROOT}/usr/local/sbin/hugmesh-backup"
-fi   # ! UNAFFILIATED (headscale/keys-provision/backup platform tools)
+# Opt-in host-binary auto-update (binpkg deltas from the tailnet binhost): the SAME poller
+# + boot oneshot build-rpi5-stage4.sh and build-frite-stage4.sh bake. Without this
+# provision_update() takes its "poller not baked" branch and only stages
+# /etc/hugmesh/cron-update.staged. Plumbing only: the poller is DEFAULT-OFF and does
+# nothing until a superadmin sets enabled:true. Platform machinery (reads /etc/hugmesh),
+# so it stays inside this ! UNAFFILIATED block; the runlevel links below are gated alike.
+cp "${SHARED_SPECS}/usr/local/sbin/hugmesh-update"  "${SYSROOT}/usr/local/sbin/hugmesh-update"; chmod +x "${SYSROOT}/usr/local/sbin/hugmesh-update"
+cp "${SHARED_SPECS}/etc/init.d/hugmesh-update"      "${SYSROOT}/etc/init.d/hugmesh-update";      chmod +x "${SYSROOT}/etc/init.d/hugmesh-update"
+fi   # ! UNAFFILIATED (headscale/keys-provision/backup/update platform tools)
 # UNAFFILIATED keeps only growroot (first-boot .img root expansion — generic).
 if ${UNAFFILIATED}; then _base_svcs="growroot"; else _base_svcs="containerd kubelet headscale tailscaled keys-provision growroot"; fi
 for svc in ${_base_svcs}; do
@@ -4102,11 +4221,24 @@ cp "${SHARED_SPECS}/etc/cron.d/hugmesh-domain-reconcile"    "${SYSROOT}/etc/hugm
 
 # ── Tor v3 onion (hidden) service (#tor) — DEFAULT-OFF NODE service ──────────────
 # Bake the onion-service reconcile agent + its OpenRC oneshot + the 24h cron into every
-# host image (INERT until enabled). The DISTRO Tor daemon (net-vpn/tor → /etc/init.d/tor
-# + /etc/tor/torrc) is installed + linked ONLY when 'tor' is selected (the SVCS/PKGS
-# gates below); this agent (ordered `before tor`) writes the managed torrc and mints +
-# persists the v3 onion keypair OFF-GIT under /var/lib/tor/hugmesh-onion on first boot.
+# x86 image EXCEPT --unaffiliated (this whole block is inside `if ! ${UNAFFILIATED}`),
+# INERT until enabled. The DISTRO Tor daemon (net-vpn/tor → /etc/init.d/tor +
+# /etc/tor/torrc) is installed, and BOTH it and this agent are linked, ONLY when
+# _tor_node_selected (tor selected on a cluster-node role — the SVCS/PKGS gates below);
+# this agent (ordered `before tor`) writes the managed torrc and mints + persists the
+# v3 onion keypair OFF-GIT under /var/lib/tor/hugmesh-onion on first boot.
 cp "${SHARED_SPECS}/usr/sbin/hugmesh-tor-reconcile"        "${SYSROOT}/usr/sbin/hugmesh-tor-reconcile";        chmod +x "${SYSROOT}/usr/sbin/hugmesh-tor-reconcile"
+# Its ingress half (#614): admits the exported onions as fe-gateway Ingress hosts from a
+# control-plane node; run by the same cron drop-in (*/5), inert without a hostname.
+cp "${SHARED_SPECS}/usr/sbin/hugmesh-tor-ingress-admit"    "${SYSROOT}/usr/sbin/hugmesh-tor-ingress-admit";    chmod +x "${SYSROOT}/usr/sbin/hugmesh-tor-ingress-admit"
+# Its export half (#629, the node side of hugmesh-admin-bff-api#108): fetches admin-bff's
+# SIGNED per-node Tor export over the node's mTLS identity, verifies it against the baked
+# key-USB public half (tor-verify.sh sources the SAME registry-verify.sh baked above),
+# applies the managed upstream / domain-list files atomically, re-runs the reconcile, and
+# reports the exported onions back. Run every minute by the same cron drop-in, so it is
+# inert unless tor is selected; a node without node.env does nothing.
+cp "${SHARED_SPECS}/usr/sbin/hugmesh-tor-export-sync"      "${SYSROOT}/usr/sbin/hugmesh-tor-export-sync";      chmod +x "${SYSROOT}/usr/sbin/hugmesh-tor-export-sync"
+cp "${SHARED_SPECS}/usr/lib/hugmesh/tor-verify.sh"         "${SYSROOT}/usr/lib/hugmesh/tor-verify.sh"
 cp "${SHARED_SPECS}/etc/init.d/hugmesh-tor-reconcile"      "${SYSROOT}/etc/init.d/hugmesh-tor-reconcile";      chmod +x "${SYSROOT}/etc/init.d/hugmesh-tor-reconcile"
 cp "${SHARED_SPECS}/etc/cron.d/hugmesh-tor-reconcile"      "${SYSROOT}/etc/hugmesh/registry/cron-tor-reconcile"
 mkdir -p "${SYSROOT}/usr/share/hugmesh/generator/scripts" "${SYSROOT}/usr/share/hugmesh/generator/templates"
@@ -4717,6 +4849,8 @@ if [ -n "${SUPERDOMAIN}" ]; then
     echo "${SUPERDOMAIN}" > "${SYSROOT}${_sd_etc}/superdomain"
     info "Baked orchestration superdomain -> ${_sd_etc}/superdomain (${SUPERDOMAIN})"
 fi
+# Per-domain IdP choice (#509): /etc/hugmesh/domain-idp, own domains only; absent otherwise.
+domain_idp_bake "${SYSROOT}/etc/hugmesh"
 if ${UNAFFILIATED}; then
     info "Unaffiliated desktop: no marker tree, no cluster payload, no identity tie."
 elif ${ROLE_CLIENT}; then
@@ -4797,6 +4931,8 @@ if ${ROLE_CLIENT}; then
         SVCS=(sshd NetworkManager cronie haveged growroot auditd local dbus elogind display-manager)
     else
         SVCS=(sshd NetworkManager cronie haveged growroot keys-provision auditd local dbus elogind display-manager)
+        # Opt-in auto-update oneshot (client array): plumbing, default-off poller.
+        SVCS+=(hugmesh-update)
     fi
     # gui-libs/display-manager-init's /etc/init.d/display-manager reads this to decide
     # WHICH DM to launch; lightdm ships no OpenRC service. Without it the service falls
@@ -4851,6 +4987,9 @@ else
     # nftables backstop (hugmesh-firewall-reconcile) owns the host firewall
     # (tests/qemu/assertions.sh keys its firewalld gate on exactly this).
     SVCS=(sshd NetworkManager cronie haveged growroot keys-provision hugmesh-firewall-reconcile hugmesh-coturn-firewall hugmesh-go-live-reconcile containerd kubelet auditd local)
+    # Opt-in auto-update oneshot (host array): plumbing, default-off poller. Gated like
+    # the bake: an --unaffiliated image carries no poller, so a link would dangle.
+    ${UNAFFILIATED} || SVCS+=(hugmesh-update)
     ${ROLE_HEADSCALE} && SVCS+=(headscale)
 fi
 ${SKIP_MESH} || ${SKIP_TAILSCALE} || SVCS+=(tailscaled)
@@ -4954,22 +5093,25 @@ if ! ${ROLE_CLIENT} && _opt_selected domain-registry-bridge; then
     fi
 fi
 
-# Tor v3 onion (hidden) service (DEFAULT-OFF optional service): link ONLY the hugmesh
-# reconcile agent into the default runlevel when 'tor' is selected AND this is a k8s node
-# (a CLIENT desktop is not a cluster member) — mirroring egress-vpn, which links only its
-# reconcile agent, not the daemon. The DISTRO `tor` service is NOT linked here: the
-# reconcile agent OWNS tor's lifecycle (writes the managed torrc, mints the v3 onion
-# keypair OFF-GIT under /var/lib/tor/hugmesh-onion, then `rc-service tor restart`),
-# avoiding any double-start. The 24h refresh cron (staged at
+# Tor v3 onion (hidden) service (DEFAULT-OFF optional service): when _tor_node_selected
+# (tor selected AND a k8s node — a CLIENT desktop is not a cluster member), link BOTH
+# TOR_NODE_SERVICES into the default runlevel: the DISTRO `tor` service (OpenRC
+# supervises the daemon) and hugmesh-tor-reconcile (decision 70 = B on #347). The
+# reconcile agent is ordered `before tor`, owns only the managed torrc + the off-git
+# onion keypairs, and converges an ALREADY-RUNNING tor idempotently (reload on a torrc
+# change, nothing otherwise). As the boot oneshot it never starts tor (OpenRC does,
+# right after it — a nested start would stall the boot on the oneshot's lock); only
+# its cron (@reboot + 24h) starts a stopped one — so the two owners never produce a
+# second daemon. The 24h refresh cron (staged at
 # /etc/hugmesh/registry/cron-tor-reconcile) is installed alongside. Unselected =>
-# reconcile not linked + net-vpn/tor absent => ZERO execution.
-if ! ${ROLE_CLIENT} && _opt_selected tor; then
-    SVCS+=(hugmesh-tor-reconcile)
+# neither linked + net-vpn/tor absent => ZERO execution.
+if _tor_node_selected; then
+    SVCS+=("${TOR_NODE_SERVICES[@]}")
     if [ -f "${SYSROOT}/etc/hugmesh/registry/cron-tor-reconcile" ]; then
         mkdir -p "${SYSROOT}/etc/cron.d"
         cp -f "${SYSROOT}/etc/hugmesh/registry/cron-tor-reconcile" \
               "${SYSROOT}/etc/cron.d/hugmesh-tor-reconcile"
-        info "OPTIONAL_SERVICES: tor selected — linked hugmesh-tor-reconcile + 24h cron (reconcile agent owns the tor daemon; v3 onion keypair off-git, minted first-boot)"
+        info "OPTIONAL_SERVICES: tor selected — linked ${TOR_NODE_SERVICES[*]} + @reboot/24h cron (reconcile converges the running daemon; v3 onion keypair off-git, minted first-boot)"
     fi
 fi
 for s in "${SVCS[@]}"; do ln -sf "/etc/init.d/${s}" "${SYSROOT}/etc/runlevels/default/${s}" 2>/dev/null || true; done
@@ -4988,24 +5130,40 @@ ${ROLE_HEADSCALE} || rm -f "${SYSROOT}/etc/runlevels/default/headscale"
 # nothing extra is enabled when they stay off.
 harden_radios "${SYSROOT}"
 
-# ── 4b. Toolchain static restore (source-compiling roles) ──────────
-# §8 (clean) strips *.a + crt*.o from usr/lib{,64} to shrink the IMAGE, but the
-# sysroot is SHARED across roles (same BUILD_SUBDIR) and §3 skips re-extracting
-# stage3 on --resume. So once any prior role's clean has stripped the toolchain
-# statics, a source-compiling role (GPU: llvm/mesa) hits `ld: cannot find -lgcc`
-# (then missing crt*.o / libc_nonshared.a) during emerge. Idempotently restore
-# the compiler+glibc statics from the seed tarball before emerge — additive only,
-# a cheap no-op when they're already present. Only GPU roles compile from source;
-# binpkg-only roles (pki/backend/frontend) never link a toolchain and don't need these.
-if ${GPU} && [ -z "$(find "${SYSROOT}/usr/lib/gcc" -name libgcc.a -print -quit 2>/dev/null)" ]; then
-    banner "Restoring toolchain static libs from seed (GPU source-compile)"
-    _statics_list="$(mktemp)"
-    tar tJf "${STAGE3_LOCAL}" 2>/dev/null | grep -E '\.a$|/[^/]*crt[^/]*\.o$' > "${_statics_list}" || true
-    if [ -s "${_statics_list}" ]; then
-        tar xJf "${STAGE3_LOCAL}" -C "${SYSROOT}" -T "${_statics_list}" 2>/dev/null || true
-        info "Restored $(wc -l < "${_statics_list}") toolchain static archives/crt objects from $(basename "${STAGE3_LOCAL}")"
+# ── 4b. Toolchain static restore (every role) ──────────────────────
+# §8 (clean) strips *.a from usr/lib{,64} to shrink the IMAGE, but the sysroot
+# is SHARED across roles (same BUILD_SUBDIR) and §3 skips re-extracting stage3
+# on --resume. So once any prior build's clean has stripped the toolchain
+# statics, ANY package that has to compile hits `C compiler cannot create
+# executables` / `cannot find -lpthread` / `cannot find /usr/lib64/
+# libc_nonshared.a` during emerge. This used to run only for GPU roles ("binpkg-
+# only roles never link a toolchain") — true only while every package a role
+# needs exists prebuilt at the version the tree wants; six days after a pki
+# build three packages had moved and pki had to compile (#659). Now: whenever
+# the statics are missing, for every role, and from the seed this build system
+# was extracted from (the marker beside the sysroot, or the cached seed whose
+# glibc/gcc/binutils match the sysroot's package database), or a plain refusal.
+# That seed is VERIFIED again before root extracts a byte of it, unless it is
+# the current seed sa_seed_acquire verified minutes ago in this run: the seed
+# cache is a directory the Makefile hands to the invoking user, and "verified
+# when it was fetched" is not "verified now" (the same rule the current seed is
+# held to on every run). Additive only; a cheap no-op when the files are
+# present (every fresh extract).
+if hmr_statics_missing "${SYSROOT}"; then
+    banner "Restoring toolchain static libs from the seed this build system came from"
+    _hmr_listing="$(mktemp)"
+    if ! _hmr_seed="$(hmr_seed_for_resume "${BUILD_ROOT}" "${SYSROOT}" "${STAGE3_LOCAL}" "${_hmr_listing}")"; then
+        rm -f "${_hmr_listing}"
+        exit 1
     fi
-    rm -f "${_statics_list}"
+    hmr_seed_verify "${_hmr_seed}" "${STAGE3_LOCAL}" "${STAGE3_URL}" || { rm -f "${_hmr_listing}"; exit 1; }
+    hmr_statics_restore "${SYSROOT}" "${_hmr_seed}" "${_hmr_listing}" || { rm -f "${_hmr_listing}"; exit 1; }
+    rm -f "${_hmr_listing}"
+    # Record the seed the restore came from whenever the marker does not already
+    # say so: a pre-marker build system (extracted before the marker existed) has
+    # its seed established by the version match, and a marker naming a seed that
+    # has since left the cache is corrected instead of retried on every resume.
+    [ "$(hmr_seed_marker_read "${BUILD_ROOT}")" = "$(basename "${_hmr_seed}")" ] || hmr_seed_marker_write "${BUILD_ROOT}" "${_hmr_seed}" || true
 fi
 # ── configure_root_login <sysroot> ────────────────────────────────────────────
 # Root SSH login is DISABLED BY DEFAULT (hardened posture). Write an AUTHORITATIVE
@@ -5174,13 +5332,42 @@ mount_chroot() {
     fi
 }
 umount_chroot() {
-    ${PORTAGE_SCRATCH_MOUNTED:-false} && umount -l "${SYSROOT}/var/tmp/portage" 2>/dev/null || true
-    ${HOST_REPO_MOUNTED:-false} && umount -l "${SYSROOT}/var/db/repos/gentoo" 2>/dev/null || true
-    ${X86_POOL_MOUNTED:-false} && umount -l "${SYSROOT}/var/cache/binpkgs" 2>/dev/null || true
+    # Detach exactly what mount_chroot attached in THIS run — each flag below is
+    # set by the matching mount above — and nothing else: a mount somebody else
+    # made under the sysroot is theirs, and the stale-mount refusal at the
+    # Extract phase names it before the next build. The distfiles-ro bind was
+    # MISSING from this list until #659: every build (failed or successful)
+    # left one behind per mount_chroot call, stacked on the previous run's.
+    # Each flag is reset after its umount so a second mount_chroot/umount_chroot
+    # pair (the live-ISO dracut step) starts from a clean slate. hmr_umount_own
+    # peels ONE layer (ours) whatever the mount table says (the umount never
+    # waits for a count, so a path spelled differently from the kernel's — a
+    # symlink, a space, an umlaut, a relative --work-dir — is unmounted like any
+    # other), then counts layers before and after and warns when the count did
+    # not go down (`umount -l ... || true` alone is silent).
+    if ${DISTFILES_MOUNTED:-false}; then
+        hmr_umount_own "${SYSROOT}/var/cache/distfiles-ro" || true; DISTFILES_MOUNTED=false
+    fi
+    if ${PORTAGE_SCRATCH_MOUNTED:-false}; then
+        hmr_umount_own "${SYSROOT}/var/tmp/portage" || true; PORTAGE_SCRATCH_MOUNTED=false
+    fi
+    if ${HOST_REPO_MOUNTED:-false}; then
+        hmr_umount_own "${SYSROOT}/var/db/repos/gentoo" || true; HOST_REPO_MOUNTED=false
+    fi
+    if ${X86_POOL_MOUNTED:-false}; then
+        hmr_umount_own "${SYSROOT}/var/cache/binpkgs" || true; X86_POOL_MOUNTED=false
+    fi
     for m in run dev sys proc; do umount -lR "${SYSROOT}/$m" 2>/dev/null || true; done
 }
 trap umount_chroot EXIT
 mount_chroot
+# A resumed build system must be able to LINK before anything is emerged: the
+# static restore above (4b) is the fix, this is the proof, in seconds instead
+# of three packages failing with compiler errors minutes in (#659). Runs inside
+# the chroot with the mounts up; one sentence and exit 1 when it cannot.
+if ${RESUME}; then
+    hmr_link_check_chroot "${SYSROOT}" || exit 1
+fi
 
 # Base package set; the vendor-agnostic GPU stack (Mesa/Vulkan/libva) is appended
 # ONLY for GPU roles (backend-gpu / omnibus) so pki/backend/frontend images stay slim.
@@ -5261,10 +5448,11 @@ if ${ROLE_CLIENT} && [ -n "${EGRESS_VPN_FILE}" ]; then
 fi
 # Tor NODE service (DEFAULT-OFF optional service): the v3 onion daemon (net-vpn/tor,
 # which ships /etc/init.d/tor + /etc/tor/torrc + the tor:tor user). Only added when
-# 'tor' is selected (parity with the egress-vpn package gate); otherwise the image does
+# _tor_node_selected — tor selected on a cluster-node role, the SAME predicate as the
+# SVCS gate (a CLIENT image never carries it, #583 item 6); otherwise the image does
 # not carry it. net-vpn/tor inherits USE=selinux from a SELinux node profile, giving the
 # upstream tor_t confinement the reconcile agent's hugmesh_tor.te references.
-_opt_selected tor && PKGS="${PKGS} net-vpn/tor" && info "Tor NODE service: net-vpn/tor for the v3 hidden service (fe-gateway onion; keypair off-git, minted first-boot)"
+_tor_node_selected && PKGS="${PKGS} ${TOR_NODE_PACKAGES[*]}" && info "Tor NODE service: ${TOR_NODE_PACKAGES[*]} for the v3 hidden service (fe-gateway onion; keypair off-git, minted first-boot)"
 # Network/host security stack: Squid+Privoxy (desktops), Snort (all), AIDE (opt-in).
 # WANT_PROXY_STACK was resolved at the SVCS step above.
 ${WANT_PROXY_STACK} && PKGS="${PKGS} net-proxy/squid net-proxy/privoxy" && info "Proxy stack: Squid + Privoxy (Firefox wired to 127.0.0.1:8118 -> :3128)"
@@ -6308,6 +6496,15 @@ if [ ! -e /usr/src/linux/Makefile ]; then
     emerge --noreplace --quiet-build sys-kernel/gentoo-sources \
         || emerge --quiet-build sys-kernel/gentoo-sources
 fi
+# dev-util/pahole must exist BEFORE make defconfig below: Kconfig reads its version
+# while it resolves, and CONFIG_DEBUG_INFO_BTF (the hardened-k8s.config BTF block)
+# is dropped by olddefconfig when it is missing. Same guarded top-up as above, with
+# no group banner of its own (the banner set is pinned by tests/build-matrix/check.sh); the
+# BTF assert after olddefconfig is what fails the build if this did not take.
+if ! command -v pahole >/dev/null 2>&1; then
+    emerge --noreplace --quiet-build dev-util/pahole \
+        || emerge --quiet-build dev-util/pahole
+fi
 eselect kernel set 1 || true
 if [ ! -e /usr/src/linux/Makefile ]; then
     echo "[build-x86] ERROR: /usr/src/linux is not set up (sys-kernel/gentoo-sources missing)"; exit 1
@@ -6441,6 +6638,13 @@ for _l in \$(sed -n 's/^CONFIG_LSM="\(.*\)"\$/\1/p' .config | tr ',' ' '); do
         *) echo "[build-x86] ERROR: CONFIG_LSM names '\${_l}', which this guard cannot verify — add its enabling CONFIG_* symbol to the case above"; exit 1 ;;
     esac
     grep -q "^\${_sym}=y\$" .config || { echo "[build-x86] ERROR: CONFIG_LSM names '\${_l}' but \${_sym} is not =y after olddefconfig — the kernel would SILENTLY DROP it from the LSM stack"; exit 1; }
+done
+# BTF is what lets a BPF_PROG_TYPE_LSM program attach to the bpf LSM that CONFIG_LSM
+# names. olddefconfig drops CONFIG_DEBUG_INFO_BTF silently when dev-util/pahole is
+# missing at configure time or when a struct-randomisation choice is on, so assert it
+# survived rather than ship a kernel whose bpf LSM registers but cannot enforce.
+for must in CONFIG_DEBUG_INFO_BTF CONFIG_DEBUG_INFO_BTF_MODULES; do
+    grep -q "^\${must}=y\$" .config || { echo "[build-x86] ERROR: \${must} not enabled after olddefconfig — dev-util/pahole missing at configure time, or struct layout randomisation is on (BTF depends on it being off); a BPF_PROG_TYPE_LSM program could not attach"; exit 1; }
 done
 make -j${JOBS} bzImage modules
 make modules_install
@@ -6636,7 +6840,11 @@ umount_chroot; trap - EXIT
 if mountpoint -q "${SYSROOT}/var/cache/binpkgs" 2>/dev/null; then
     err "${SYSROOT}/var/cache/binpkgs is STILL a mountpoint after umount_chroot —"
     err "refusing to touch it: it is the SHARED binpkg pool every amd64 image"
-    err "reuses (${X86_POOL_DIR:-<unset>}). Unmount first:  umount -R '${SYSROOT}'  — then re-run."
+    err "reuses (${X86_POOL_DIR:-<unset>}). Unmount what is still attached (as root, top to"
+    err "bottom; every mount under the build system is listed), then re-run:"
+    _still_mounted="$(hmr_stale_mounts "${SYSROOT}" 2>/dev/null || true)"
+    [ -n "${_still_mounted}" ] || _still_mounted="$(hmr_canon "${SYSROOT}/var/cache/binpkgs")"
+    hmr_stale_mount_hint "${_still_mounted}" "    " >&2
     exit 1
 fi
 # --cached carve-out (shared-binpkg): a CACHED image PROMISES an embedded binpkg
