@@ -43,7 +43,8 @@ from typing import Any, ClassVar
 
 from . import build_driver
 from .build_driver import BuildDriver
-from .config import Domain, IdentityValidationError, ImageConfig, validate_domain_name
+from .config import (Domain, IdentityValidationError, ImageConfig,
+                     domain_rows_to_dict, validate_domain_name)
 from .domain_services import gate_reason
 from .local_mesh_domains import LocalMeshDomains
 
@@ -247,7 +248,11 @@ class FleetConfig:
 
     # ---- (de)serialization (no SECRET fields in a fleet config) --------------
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        d = asdict(self)
+        # per-domain ``tor`` (#582) is OMIT-WHEN-FALSE, exactly as ImageConfig.to_dict
+        # writes it: a fleet record with no Tor domain keeps the bytes it had before.
+        d["domains"] = domain_rows_to_dict(self.domains)
+        return d
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "FleetConfig":

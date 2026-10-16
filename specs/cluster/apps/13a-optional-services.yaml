@@ -1,7 +1,8 @@
 # Optional-services ApplicationSet (Phase 6 runtime add/remove) — turns the
-# OPTIONAL user-level services (akkoma/tuwunel/phpbb/games/owncast/tube) from
-# hardcoded apps/30-*/50-*/52-*/53-* Applications into ONE list whose membership is
-# the install-state. Modelled on apps/13-service-catalog.yaml (the ApplicationSet
+# OPTIONAL services (the elements below: akkoma, tuwunel, phpbb, games, owncast, tube,
+# character-studio, character-forge, anubis, coturn, meshbridge and the three edge-ai
+# slugs) from hardcoded apps/30-*/50-*/52-*/53-*/54-*/55-* Applications into ONE list
+# whose membership is the install-state. Modelled on apps/13-service-catalog.yaml (the ApplicationSet
 # pattern already proven here).
 #
 # WHY: build-time `rm -f` of a baked Application only stops the bootstrap seed;
@@ -21,8 +22,13 @@
 # ⚠ COEXISTENCE: while the legacy hardcoded apps/30-akkoma.yaml etc. still exist,
 # this ApplicationSet would create a DUPLICATE-named Application. It is therefore
 # scaffolded with a DISTINCT name suffix and DISABLED-by-default membership note;
-# the cut-over (delete the 4 hardcoded apps, let this own them) is a follow-up
-# documented in docs/OPTIONAL-SERVICES.md "Runtime add/remove". Until cut-over,
+# the cut-over is a follow-up. It is NOT "delete the hardcoded apps": one element covers
+# ONE manifest directory (phpbb, games and character-forge own several Applications),
+# the generated name differs from the owner's, and the owners that carry a sync-wave
+# annotation lose it (the template has none). Neither the owners nor the template carry a
+# finalizer: that is not a difference but a gap, set out in section 10.3 with the derived
+# per-slug matrix and the order for a running cluster, derived from this file by
+# tests/scripts/test-optional-services-cutover-matrix.sh. Until cut-over,
 # keep every element installed:"false" so it creates nothing and cannot collide.
 apiVersion: argoproj.io/v1alpha1
 kind: ApplicationSet

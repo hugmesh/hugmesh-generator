@@ -98,10 +98,43 @@ inert on an ungoverned image, or with no resolvable domain.
 
 | template | rendered to | purpose |
 |----------|-------------|---------|
-| `discover/oidc-token-deposit.sh.tmpl` | `/etc/hugmesh/desktop-governance/oidc-token-deposit.sh` | **Seam #1.** Deposits the validated OIDC access token at `${XDG_RUNTIME_DIR}/hugmesh/oidc-token` (umask 077, pre-created 0600, never world-readable, never exported/logged). `--clear`/logout removes it. Token source: `HUGMESH_OIDC_ACCESS_TOKEN` (greeter/PAM-surfaced) or a user-private greeter drop; no source ⇒ empty store (fail closed). |
+| `discover/oidc-token-deposit.sh.tmpl` | `/etc/hugmesh/desktop-governance/oidc-token-deposit.sh` | **Seam #1.** Deposits the validated OIDC access token at `${XDG_RUNTIME_DIR}/hugmesh/oidc-token` (umask 077, pre-created 0600, never world-readable, never exported/logged). `--clear`/logout removes it. Token source: `HUGMESH_OIDC_ACCESS_TOKEN` (greeter/PAM-surfaced) or the user-private drop `oidc-token.src`, which `sso/hugmesh-sso-token` writes; no source ⇒ empty store (fail closed). `--clear` (session start) removes only the deposit, so a drop made before the session survives; `--clear-all` (logout) also removes the drop and the producer's refresh token. |
+| `sso/hugmesh-sso-token.py.tmpl` | `/etc/hugmesh/desktop-governance/hugmesh-sso-token` | **The token producer** (FD-07 increment 2). RFC 8628 device-authorization flow against the `hugmesh-desktop` public client (the grant it is already seeded with; NOT the password grant, which the client does not have): shows a code + URL, polls, and writes the access token to the `oidc-token.src` drop (0600 in a 0700 dir, atomic, no symlink follow). `login [--if-needed]`, `refresh`, `clear`, `status`, `--pam` (pam_exec: `close_session` clears, everything else is a no-op that cannot fail a login). Run by the session-start wrapper before the deposit. It is not a trust anchor: the mapper re-verifies the token on every run. Rendered by `session-install.sh`. |
 | `autostart/hugmesh-desktop-sso.desktop.tmpl` | `/etc/xdg/autostart/hugmesh-desktop-sso.desktop` | **Seam #2.** XDG autostart (no `OnlyShowIn` ⇒ honored by BOTH lxsession/LXDE and xfce4-session/XFCE) → the session-start wrapper. |
 | `autostart/hugmesh-desktop-sso-start.sh.tmpl` | `/etc/hugmesh/desktop-governance/hugmesh-desktop-sso-start.sh` | Session-start wrapper: governed-gated; clears stale token/header first, installs an **LXDE/XFCE `~/.bash_logout` clear** (the merged bearer-forward's `plasma-workspace/shutdown/` hook is **Plasma-only and never fires on this image**), then chains deposit → bearer-forward once per login. |
-| `autostart/session-install.sh.tmpl` | run as the KEYS `run[]` hook | Self-contained deployment glue (the no-`provision.sh`-edit vector): renders the three templates above with the SAME `@@CLUSTER_DOMAIN@@` substitution + fail-closed `[a-z0-9.-]` hostname validation + sed-escape as `provision.sh`, and publishes the `.desktop`. Idempotent, governed-gated, invalid-domain-refusing. |
+| `autostart/session-install.sh.tmpl` | run as the KEYS `run[]` hook | Self-contained deployment glue (the no-`provision.sh`-edit vector): renders the templates above (producer, deposit, wrapper, autostart) with the SAME `@@CLUSTER_DOMAIN@@` substitution + fail-closed `[a-z0-9.-]` hostname validation + sed-escape as `provision.sh`, and publishes the `.desktop`. Idempotent, governed-gated, invalid-domain-refusing. |
+
+### Token producer: contract, PAM hook, what is not proven
+
+Contract with the consumers (pinned by `tests/desktop-governance/test-sso-token-producer.sh`,
+which runs the REAL deposit and the REAL mapper on the producer's output): the
+producer writes the raw access token (JWT-Custom RS256, `name` = the local
+username, `aud` `hugmesh-desktop`, `roles` with `desktop-sudo`) to
+`${XDG_RUNTIME_DIR}/hugmesh/oidc-token.src`. It refuses to store a token whose
+`name` is not the local user or that is already expired, but it is not the
+authority: the mapper re-verifies signature, `iss`, `aud`, `exp` and identity.
+
+Optional PAM hook, NOT wired by anything in this repo (a change to a live
+`/etc/pam.d` stack is for the image builder and needs a boot to prove). The
+useful stage is logout, because the graphical session is not a login shell and
+`~/.bash_logout` need not run:
+
+    session optional pam_exec.so quiet seteuid /etc/hugmesh/desktop-governance/hugmesh-sso-token --pam
+
+`close_session` clears the drop and the refresh token (closing one of a user's
+several sessions revokes sudo for all of them until the next sign-in: fail
+closed). `open_session` is a no-op. The device flow itself cannot run inside
+`pam_exec`, which has no conversation, so sign-in happens in the user session via
+the autostart wrapper, with a `zenity`/`yad`/`notify-send` prompt when a display
+exists. A greeter or PAM stage that drops a valid token first is honoured
+(`login --if-needed`).
+
+NOT proven: that a live Casdoor serves `/api/device-auth` and the device-code
+grant the way the fake issuer does (discovery is tried first, Casdoor's fixed
+paths are the fallback); the lightdm greeter or any image boot; the prompt on a
+real desktop. A password-based PAM module (disk/login password verified at the IdP)
+would need the `hugmesh-desktop` client to gain the password grant and local
+password == IdP password; that is a security decision, deliberately not made here.
 
 ### Session-start delivery (run[] hook)
 

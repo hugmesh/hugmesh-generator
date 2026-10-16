@@ -40,6 +40,21 @@ const SETTLING = new Set(['expect', 'expectAttached', 'expectHidden']);
  */
 const FIRST_OK = new Set([undefined, true]);
 
+/**
+ * Live regions a row may ask waitForSettle() to mask out of its frame
+ * comparison (row field `settle.mask`, #563). A CLOSED registry on purpose:
+ * the UIs live in other repos, so this file cannot grep them, and an open
+ * "any selector" field would let a row mask whatever makes it fail. Each entry
+ * names the selector and the UI source that ships it; add one only after
+ * reading that source, and cite where. A selector that is not here is a
+ * validation error, so a typo'd or invented selector fails offline instead of
+ * silently masking nothing on a live run.
+ */
+export const MASK_SELECTORS = new Map([
+  ['[data-testid="cf-engine-canvas"]',
+    'hugmesh-character-forge-bff-api frontend/src/app/character-forge/panels/engine-canvas.component.html (the Godot engine <canvas>)'],
+]);
+
 export function loadTable(file = TABLE_PATH) {
   const raw = fs.readFileSync(file, 'utf8');
   return JSON.parse(raw);
@@ -100,6 +115,33 @@ export function validate(table) {
     if (!(r.do ?? []).some((a) => SETTLING.has(a.action))) {
       problems.push(`${at}: needs at least one expect/expectAttached/expectHidden action naming a data-testid `
         + `that is on the screen being captured — otherwise the shot can land before the screen renders.`);
+    }
+
+    // `settle.mask`: live regions excluded from the frame comparison. Never a
+    // blanket opt-out — see settle.ts "MASKED LIVE REGIONS".
+    if (r.settle !== undefined) {
+      const st = r.settle;
+      if (st === null || typeof st !== 'object' || Array.isArray(st)) {
+        problems.push(`${at}: 'settle' must be an object like {"mask": ["<selector>"]}`);
+      } else {
+        for (const k of Object.keys(st)) {
+          if (k !== 'mask') problems.push(`${at}: unknown settle field '${k}' (allowed: mask)`);
+        }
+        if (!Array.isArray(st.mask) || st.mask.length === 0) {
+          problems.push(`${at}: settle.mask must be a non-empty array of selectors — omit 'settle' to compare the whole view`);
+        } else {
+          const dup = new Set();
+          for (const sel of st.mask) {
+            if (typeof sel !== 'string' || !MASK_SELECTORS.has(sel)) {
+              problems.push(`${at}: settle.mask selector ${JSON.stringify(sel)} is not one any UI ships `
+                + `(known: ${[...MASK_SELECTORS.keys()].join(', ')}) — add it to MASK_SELECTORS in shot-table.mjs only after reading the UI source`);
+            } else if (dup.has(sel)) {
+              problems.push(`${at}: settle.mask lists ${sel} twice`);
+            }
+            dup.add(sel);
+          }
+        }
+      }
     }
 
     for (const [j, a] of (r.do ?? []).entries()) {
