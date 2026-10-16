@@ -94,7 +94,7 @@ There are exactly two real sources:
     so they exist only for failures, and they live under the gitignored per-run
     test-results/ tree.
 
-THE SEAM FOR THE GHERKIN TRACK. A concurrent track is adding playwright-bdd .feature
+THE HAND-OFF POINT FOR THE GHERKIN TRACK. A concurrent track is adding playwright-bdd .feature
 files, which will give each step its own name and (eventually) its own shot.
 :class:`Screenshot` therefore already carries ``step`` and ``persona`` fields that are
 EMPTY TODAY and a ``linkage`` field naming how the link was made, so per-step data
@@ -163,7 +163,7 @@ LINK_FILENAME_PREFIX = "filename-prefix"  # only the leading NN- matched the spe
 LINK_NONE = "unlinked"               # a shot whose NN- matches no spec file at all.
 
 # What kind of node a leaf is. KIND_SCENARIO is unused today and deliberately so:
-# it is the seam the playwright-bdd track lands on.
+# it is the hand-off point the playwright-bdd track lands on.
 KIND_SPEC = "spec"
 KIND_SCENARIO = "scenario"
 
@@ -229,7 +229,7 @@ class Screenshot:
     from_last_run: bool = False
     #: EMPTY TODAY, both of them. helpers.ts shot() takes a caller-chosen name and
     #: records neither the step nor the persona (it has personaOf() and does not use
-    #: it). These fields are the seam the Gherkin track fills; nothing may infer them.
+    #: it). These fields are the hand-off point the Gherkin track fills; nothing may infer them.
     step: str = ""
     persona: str = ""
 
@@ -434,7 +434,7 @@ def _walk_suites(suite: dict, ancestors: tuple[str, ...]):
 def parse_playwright_json(payload: dict, ran: bool) -> list[E2ETest]:
     """Turn Playwright's JSON reporter payload into leaves.
 
-    ``ran`` is the load-bearing argument. ``--list`` emits the SAME schema as a real
+    ``ran`` is the argument that matters. ``--list`` emits the SAME schema as a real
     run but with empty ``results`` and ``"status": "skipped"`` on every test, meaning
     "not run". With ``ran=False`` every leaf is :data:`STATUS_NOT_RUN` and no status
     is read from the payload at all; with ``ran=True`` the LAST result wins (retries
@@ -501,7 +501,7 @@ def list_specs(generator_dir: str, timeout: int = LIST_TIMEOUT_SEC,
     the stack down (verified 2026-08-26, rc=0, 221 specs) because ``--list`` compiles
     the specs and walks the registry without launching a browser.
 
-    ``runner`` is the subprocess seam so parse-level tests can drive recorded JSON.
+    ``runner`` is the subprocess override point so parse-level tests can drive recorded JSON.
     """
     e2e_dir = os.path.join(generator_dir, E2E_DIR)
     listing = SpecListing(command=LIST_ARGV, cwd=e2e_dir)
@@ -715,9 +715,12 @@ def load_last_run(generator_dir: str, directory: str = "") -> LastRun:
 # above are what actually happens, and there is a test pinning them.
 #
 # The map cuts the other way too, and that is the half worth keeping in mind: `tube`,
-# `tor`, `edge-ai-tts` and `media-poisoner` are searched under EVERY spelling the
-# suite might use (peertube, onion, piper/tts, poisoner/cloak) and still match
-# nothing. Their zero-coverage verdict is stronger for it, not weaker.
+# `edge-ai-tts` and `media-poisoner` are searched under EVERY spelling the suite
+# might use (peertube, piper/tts, poisoner/cloak) and still match nothing. Their
+# zero-coverage verdict is stronger for it, not weaker. `tor` was in that list until
+# 2026-09-23 (hugmesh-generator#576): it is now reached as `onion` by specs/helpers.ts's
+# Tor front door (onionFrontDoor/onionContext — a proxied browser context), which the
+# @via:onion Gherkin scenario drives through the real Tor network.
 SPEC_TOKENS: dict[str, tuple[str, ...]] = {
     "tuwunel": ("tuwunel", "matrix"),          # the specs say "matrix" throughout
     "akkoma": ("akkoma", "mastodon", "pleroma"),  # local social tier is Mastodon
@@ -787,7 +790,7 @@ def _spec_sources(generator_dir: str) -> dict[str, str]:
 
     Comment stripping is NOT done here — it is done in :func:`service_coverage`, over
     whatever sources it was handed. Stripping at the read site left the injectable
-    ``sources`` seam un-stripped, so a caller (a test, the eventual GUI) passing its
+    ``sources`` override point un-stripped, so a caller (a test, the eventual GUI) passing its
     own text would silently get the raw-grep behaviour this module exists to avoid.
     """
     d = os.path.join(generator_dir, SPECS_DIR)
@@ -849,7 +852,7 @@ def _token_re(token: str) -> re.Pattern:
 # (*.spec.ts) or if it touches page/request/context or calls test()/expect(). MEASURED
 # effect on this checkout -- kept: helpers.ts, federation.ts, swarm-driver.ts (the
 # three the design paragraph above is about); dropped: rbac-route-access.seed.ts,
-# rbac-route-access.ts, rbac-roles.ts, report-tags.ts, totp.ts. The four phantoms go
+# rbac-route-access.ts, rbac-roles.ts, report-tags.ts, totp.ts. The four files that do not exist go
 # back to UNCOVERED and no real coverage verdict flips: tuwunel 20 -> 18 files,
 # akkoma 20 -> 18, games 12 -> 9, phpbb 3 -> 1, character-forge 2 -> 1, all still
 # covered. Only the EVIDENCE shrinks, and it shrinks to evidence that runs.
@@ -887,8 +890,8 @@ def service_coverage(generator_dir: str,
 
     Measured over the specs in this checkout, comments stripped and declarative
     tables excluded (see :func:`is_runnable_source`): wiki, owncast, tube,
-    character-studio, tor, anubis, edge-ai-tts, media-poisoner and egress-vpn match
-    NOTHING. The five covered are tuwunel (18 files), akkoma (18), games (9),
+    character-studio, anubis, edge-ai-tts, media-poisoner and egress-vpn match
+    NOTHING (tor did too until the onion front door landed, hugmesh-generator#576). The five covered are tuwunel (18 files), akkoma (18), games (9),
     phpbb (1) and character-forge (1). The numbers move when the suite does -- they
     are re-measured, and pinned as INEQUALITIES where the exact count is not the
     point; the covered/uncovered VERDICTS are what the tests pin exactly.
@@ -897,7 +900,7 @@ def service_coverage(generator_dir: str,
     # Strip HERE, not at the read site, so every source of text goes through it.
     stripped = {fn: _strip_ts_comments(text) for fn, text in raw.items()}
     # ...and drop the tables for the same reason, in the same place, so the
-    # injectable `sources` seam gets both filters or neither.
+    # injectable `sources` override point gets both filters or neither.
     src = {fn: text for fn, text in stripped.items() if is_runnable_source(fn, text)}
     out: list[ServiceCoverage] = []
     for svc in local_services.LOCAL_SERVICES:
@@ -920,11 +923,94 @@ def uncovered_services(coverage: Sequence[ServiceCoverage]) -> tuple[ServiceCove
     return tuple(c for c in coverage if c.needs_a_test)
 
 
+# ── doors a service has on a lane OTHER than the compose specs ──────────────────
+#
+# service_coverage() reads tests/e2e/specs/*.ts, the compose lane's specs, and is
+# right to: a Gherkin .feature is not a spec file and must not flip that verdict.
+# A service can ALSO have a door on another lane that the compose verdict never
+# mentions. `tor` is the case: the kind lane publishes its front door as a v3 onion
+# (`make kind-tor`, hugmesh-generator#577, decision 67 = B) and
+# features/platform/tor-onion-kind.feature drives a persona through it. That is
+# true whether or not tor is covered on the compose lane (it became covered when
+# #576's onion helpers landed), so the e2e tree lists every LaneDoor in its OWN
+# group, independent of the coverage verdict, and repeats the line under the
+# service's NO COVERAGE / unreachable row when it has one. Each line is CHECKED
+# against the tree — a door whose feature file is gone, or lost the tags that
+# select it, says so instead of vouching for a scenario that no longer exists.
+
+@dataclass(frozen=True)
+class LaneDoor:
+    """One lane's own way in to a service, and the scenario that drives it."""
+    slug: str
+    lane: str
+    bring_up: str
+    run: str
+    #: Repo-relative .feature path.
+    feature: str
+    #: Tags the feature must carry for `run` to select it.
+    tags: tuple[str, ...]
+
+
+LANE_DOORS: tuple[LaneDoor, ...] = (
+    LaneDoor(slug="tor", lane="kind",
+             bring_up="make kind-up && make kind-images && make kind-tor",
+             run="make kind-e2e-tor",
+             feature="tests/e2e/features/platform/tor-onion-kind.feature",
+             tags=("@env:kind", "@via:onion")),
+)
+
+
+def _feature_tags(text: str) -> set[str]:
+    """Every @tag on a Gherkin TAG line (comments and step text are not tags)."""
+    tags: set[str] = set()
+    for raw in text.splitlines():
+        line = raw.split(" #", 1)[0].strip()
+        if line.startswith("@"):
+            tags.update(t for t in line.split() if t.startswith("@"))
+    return tags
+
+
+def _door_line(generator_dir: str, door: LaneDoor) -> str:
+    """One plain line for ``door``, verified against the checkout at ``generator_dir``."""
+    path = os.path.join(generator_dir, door.feature)
+    try:
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            tags = _feature_tags(fh.read())
+    except OSError:
+        tags = None
+    name = os.path.basename(door.feature)
+    if tags is None:
+        return (f"{door.lane}: a door is declared ({door.bring_up}) but "
+                f"{door.feature} is MISSING — nothing drives it.")
+    if not set(door.tags) <= tags:
+        missing = " ".join(t for t in door.tags if t not in tags)
+        return (f"{door.lane}: {name} lost its {missing} tag(s), so "
+                f"`{door.run}` selects nothing — nothing drives this door.")
+    return (f"{door.lane}: {name} drives this service through the "
+            f"{door.lane} lane's own door. Bring it up with "
+            f"`{door.bring_up}`, run it with `{door.run}` — only that live run "
+            f"proves the door. It is a .feature, so it is not counted in the "
+            f"compose-lane spec coverage.")
+
+
+def lane_door_lines(generator_dir: str, slug: str) -> tuple[str, ...]:
+    """One plain line per lane door of service ``slug`` (the e2e tree's service rows)."""
+    return tuple(_door_line(generator_dir, d) for d in LANE_DOORS if d.slug == slug)
+
+
+def lane_door_lines_for_lane(generator_dir: str, lane: str) -> tuple[str, ...]:
+    """The same lines, keyed the other way: every service door ON environment ``lane``
+    (the GUI e2e page's and the TUI e2e screen's per-environment plan — one telling,
+    authored here, for both faces)."""
+    return tuple(f"{d.slug} — {_door_line(generator_dir, d)}"
+                 for d in LANE_DOORS if d.lane == lane)
+
+
 # ── personas the seeder deliberately leaves gated ───────────────────────────────
 
 @dataclass(frozen=True)
 class GatedPersona:
-    """A persona whose UN-ONBOARDED state is load-bearing. Marked so nobody fixes it."""
+    """A persona whose UN-ONBOARDED state is relied on. Marked so nobody fixes it."""
     username: str
     reason: str
     source: str = GATED_SCRIPT
@@ -1192,7 +1278,7 @@ def safe_spec_args(paths: Sequence[str]) -> tuple[tuple[str, ...], tuple[str, ..
     """``(accepted, rejected)`` — de-duplicated, sorted, and shell-safe.
 
     Rejects are RETURNED, not dropped: a surface that silently discards half a
-    selection and then runs is the vacuity this whole unit exists to prevent.
+    selection and then runs is the checked-nothing pass this whole unit exists to prevent.
     """
     ok: list[str] = []
     bad: list[str] = []

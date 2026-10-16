@@ -21,6 +21,14 @@ qemu_tests + qemu_devices + mesh_emulation + emulation_save — so the TUI canno
 print a spelling the GUI, the Makefile and the CLI do not also run. The pin for
 that is a test comparing this module's hint to ``emulation.run_argv`` itself.
 
+THE BUILD-FIRST ARM (#638, decision 71 = A) is the one thing here that is not a
+hint: from the session picker, :data:`BUILD_FIRST_KEY` opens the GUI page's second
+radio — "Build new images first, then run these tests" — which asks WHICH image
+build (the three image modes, the one this Studio session is already carrying
+preselected and named as such) and continues into that build's configuration
+through the journey's one mode commit. Still nothing spawns: the walk ends on the
+Build screen, which sends the operator to the GUI for the build itself.
+
 VERDICTS ARE NOT GRADED HERE. ``emulation.status()`` is the single grader:
 PASS / FAIL / ERROR come from the runner, and it synthesizes the three that
 exist because a table can lie by omission — SUSPECT (a PASS that recorded zero
@@ -34,12 +42,56 @@ import shlex
 
 from ..core import emulation as emu
 from ..core import qemu_devices, qemu_tests
+from ..core.domain_services import session_boot_gate_reason
 from . import model
 
 __all__ = ["QemuScreen", "COMPLETE_BADGE", "MAKE_TARGET", "VERDICT_LEGEND",
+           "BUILD_FIRST_KEY", "IMAGE_MODE_IDS", "image_mode_choices",
+           "build_first_lines",
            "session_badge", "session_lines", "default_session_index", "plan_for",
            "planned_table", "run_hint_lines", "run_completed", "results_table",
            "legend_lines", "row_detail_lines"]
+
+#: The key that opens the "Build new images first, then run these tests" arm from
+#: the session picker — the TUI twin of the GUI QEMU page's second radio (#638,
+#: decision 71 = A). NOT "q" (the journey-wide BACK key) and not a digit (a digit
+#: picks a session), for the same reason the e2e screen's device-lane door is "d".
+BUILD_FIRST_KEY = "b"
+
+#: The three IMAGE modes that arm can build, in the GUI picker's order (the order of
+#: ``gui/pages/qemu.py``'s ``build_mode_radios``): a mesh node, a mesh desktop client,
+#: a standalone desktop. Titles come from the journey's own menu (``MODE_CHOICES``),
+#: so the two faces name the three builds the same way — parity-pinned against the
+#: GUI's ``IMAGE_MODE_TITLES``.
+IMAGE_MODE_IDS = ("mesh", "cloud", "standalone")
+
+
+def image_mode_choices() -> tuple[tuple[str, str], ...]:
+    """``(mode id, title)`` for the three image builds, in :data:`IMAGE_MODE_IDS`
+    order — the TUI's twin of the GUI picker's radios."""
+    from .journey import MODE_CHOICES      # lazy: journey builds this screen
+    titles = {mid: title for mid, title, _desc in MODE_CHOICES}
+    return tuple((mid, titles[mid]) for mid in IMAGE_MODE_IDS)
+
+
+def build_first_lines(inherited_mode: str) -> list[str]:
+    """The build sub-state: the three builds, the inherited one marked, and the same
+    sentence the GUI shows under its picker (``emulation.build_first_mode_note``) —
+    the route here passes no Mode screen, so the preselected mode is whatever this
+    Studio session was already carrying and the screen has to say so."""
+    choices = image_mode_choices()
+    titles = dict(choices)
+    inherited_title = titles.get(inherited_mode, inherited_mode)
+    out = ["Build new images first, then run these tests — which image build?",
+           "(the walk ahead configures that build and ends on its Build screen; "
+           "the device tests are armed to run when the build finishes)", ""]
+    for i, (mid, title) in enumerate(choices, 1):
+        marker = "*" if mid == inherited_mode else " "
+        out.append(f" {marker}{i:2d}. {title}")
+    out += ["", emu.build_first_mode_note(inherited_title, inherited_title), "",
+            "(a NUMBER picks · Enter = the preselected one · q = back to the "
+            "session list)"]
+    return out
 
 #: Badge for a session whose build produced every image it intended. The PARTIAL
 #: spelling is the session's OWN (``BuildSession.completeness_badge``), so the two
@@ -113,12 +165,24 @@ def planned_table(plan: emu.EmulationPlan) -> tuple[list[str], list[list[str]]]:
     return headers, rows
 
 
-def run_hint_lines(plan: emu.EmulationPlan) -> list[str]:
+def refused_boot_lines(boot_refusal: str) -> list[str]:
+    """What a boot hint becomes when the session is REFUSED (#637): the refusal
+    itself, never a command to paste — handing over the argv the GUI refuses to run
+    would make this face the way around that gate."""
+    return ["! refused — this session's images are not booted from here:",
+            "  " + boot_refusal]
+
+
+def run_hint_lines(plan: emu.EmulationPlan, boot_refusal: str = "") -> list[str]:
     """The copy-ready whole-matrix run, plus the same lane's make-target spelling.
 
     The argv is ``emulation.run_argv`` VERBATIM — this module builds no command of
     its own, which is what keeps the printed hint and the GUI's spawn identical.
+    ``boot_refusal`` (``core.domain_services.session_boot_gate_reason``, #637)
+    replaces both with the refusal.
     """
+    if boot_refusal:
+        return refused_boot_lines(boot_refusal)
     return [
         f"run the whole TEST matrix for {plan.session_name} — boot every row, "
         "assert, power off (paste into a shell; this screen spawns nothing):",
@@ -190,7 +254,7 @@ def legend_lines(st: emu.MeshStatus) -> list[str]:
 
 
 def row_detail_lines(plan: emu.EmulationPlan, st: emu.MeshStatus,
-                     label: str) -> list[str]:
+                     label: str, boot_refusal: str = "") -> list[str]:
     """One row's verdict WITH its reason, plus the two per-row copy-ready argv."""
     row = st.row(label)
     planned = plan.row(label)
@@ -207,6 +271,8 @@ def row_detail_lines(plan: emu.EmulationPlan, st: emu.MeshStatus,
         lines.append(f"registry  container {dev.container or '-'} · booted "
                      f"{dev.started_at or '-'} · ssh port "
                      f"{dev.ssh_host_port or 'not published'}")
+    if boot_refusal:                  # #637: both per-row hints BOOT the row
+        return lines + [""] + refused_boot_lines(boot_refusal)
     lines += [
         "",
         "boot JUST this row and keep it up (artifacts and work dir pinned; "
@@ -229,16 +295,18 @@ class QemuScreen:
     wants_q = True                       # q navigates BACK through the sub-states
 
     def __init__(self):
-        self._sub = "pick"               # pick | rows | detail
+        self._sub = "pick"               # pick | build | rows | detail
         self._sessions: list = []
         self._default = -1
         self._plan: emu.EmulationPlan | None = None
         self._detail = ""                # the label whose detail is open
+        self._refusal = ""               # #637: the picked session's boot refusal
 
     def enter(self, j) -> None:
         self._sub = "pick"
         self._plan = None
         self._detail = ""
+        self._refusal = ""
         # only sessions that hold bootable images: an empty session cannot be
         # tested and is not offered (the mesh-emulation picker's rule).
         self._sessions = qemu_tests.discover_sessions(j.generator_dir,
@@ -250,27 +318,33 @@ class QemuScreen:
         return emu.status(self._plan, run_completed=run_completed(self._plan))
 
     def lines(self, j) -> list[str]:  # noqa: ARG002 — screen-protocol signature
+        if self._sub == "build":
+            return build_first_lines(j.cfg.mode)
         if self._sub == "pick":
             out = ["Boot a prior build session's images as emulated devices and "
                    "assert they provisioned correctly — pick the session.", ""]
             if not self._sessions:
                 out.append("  (no build session holds bootable images yet — "
-                           "build a mesh first)")
+                           f"build new images first: {BUILD_FIRST_KEY})")
             out += session_lines(self._sessions, self._default)
+            out += ["", f"  {BUILD_FIRST_KEY} = build new images first, then run "
+                        "these tests (the GUI page's second arm: it asks which "
+                        "image build and continues into its configuration)"]
             out += ["", "(a NUMBER picks · Enter = the default, the newest "
-                        "COMPLETE session · q = back to the menu)"]
+                        f"COMPLETE session · {BUILD_FIRST_KEY} = build first · "
+                        "q = back to the menu)"]
             return out
         plan = self._plan
         assert plan is not None
         st = self._status()
         if self._sub == "detail" and self._detail:
-            return row_detail_lines(plan, st, self._detail) + \
+            return row_detail_lines(plan, st, self._detail, self._refusal) + \
                 ["", "(r = refresh · q = back to the row list)"]
         out = [f"session {plan.session_name} — {len(plan.rows)} planned "
                f"device(s); work dir {plan.work_dir}", ""]
         headers, rows = planned_table(plan)
         out += model.format_table(headers, rows)
-        out += [""] + run_hint_lines(plan)
+        out += [""] + run_hint_lines(plan, self._refusal)
         out += ["", f"verdicts — {st.summary()}"]
         headers, rows = results_table(st)
         out += model.format_table(headers, rows)
@@ -284,15 +358,41 @@ class QemuScreen:
 
     def feed(self, j, line: str) -> None:
         low = line.lower()
+        if self._sub == "build":
+            # The build-first arm (#638): commit the picked image mode through the
+            # journey's ONE mode commit (Journey.commit_mode — the TUI twin of
+            # commit_image_mode, which the GUI arm calls) and walk on into that
+            # build's chain, exactly as the GUI's Next does. The device tests are
+            # armed first, as the GUI page seeds cfg.qemu_device_tests from its radio.
+            if low in ("q", "quit", "exit"):
+                self._sub = "pick"
+                return
+            choices = image_mode_choices()
+            if line == "":
+                mid = j.cfg.mode if j.cfg.mode in IMAGE_MODE_IDS else IMAGE_MODE_IDS[-1]
+            else:
+                index = _index(line, len(choices))
+                if index is None:
+                    j.status = (f"a NUMBER picks a build (1-{len(choices)}), Enter "
+                                "takes the preselected one, q goes back.")
+                    return
+                mid = choices[index][0]
+            j.cfg.qemu_device_tests = True
+            j.commit_mode(mid)
+            return
         if self._sub == "pick":
             if low in ("q", "quit", "exit"):
                 j.goto("mode")
+                return
+            if low == BUILD_FIRST_KEY:
+                self._sub = "build"
                 return
             if line == "":
                 index = self._default
                 if index < 0:
                     j.status = ("no build session holds bootable images yet — "
-                                "build one first (q = back to the menu)")
+                                f"build one first ({BUILD_FIRST_KEY} = build new "
+                                "images first from here, q = back to the menu)")
                     return
             else:
                 index = _index(line, len(self._sessions))
@@ -300,6 +400,8 @@ class QemuScreen:
                     j.status = f"no such session: {line!r}"
                     return
             self._plan = plan_for(j.generator_dir, self._sessions[index])
+            # the SAME seam the GUI's QEMU page reads (#637)
+            self._refusal = session_boot_gate_reason(self._sessions[index].name)
             self._sub = "rows"
             return
         if self._sub == "detail":

@@ -40,10 +40,10 @@
 # the DEBIAN job (joining test-e2e-shell-nav-entry.sh there) and the EIGHTH in
 # this file — COUNTED 2026-09-17, by JOB and never by line number, because a line
 # number inside this very header shifts the moment anyone edits this very header:
-#     alpine  enumeration-without-credentials, persona-catalogue
+#     alpine  persona-catalogue
 #     debian  shell-nav-entry, spec-symbol-resolution   <- this one
-#     node    coverage-matrix-harness, docker-base-url-parity, reporter-shape,
-#             toolchain-readiness
+#     node    coverage-matrix-harness, docker-base-url-parity,
+#             enumeration-without-credentials, reporter-shape, toolchain-readiness
 # all eight in pull_request-triggered jobs. Recount with
 # `grep -c '^ *tests/scripts/test-e2e-' .github/workflows/shell-suites.yml`
 # (anchored: an unanchored grep also matches these prose lines and answers 11).
@@ -157,7 +157,11 @@
 #       checking four surfaces of five and calling that a pass — so listing it here
 #       would just paint the PR gate red for a missing clone rather than a real
 #       defect. It IS gated post-merge by .gitlab-ci.yml's
-#       lint:optional-service-slug-closure, which clones it sparsely.
+#       lint:optional-service-slug-closure, which clones it sparsely. It is ALSO red
+#       on main today on two real controller facts (hugmesh-admin-bff-api#106,
+#       re-measured 2026-09-23 by #584, which fixed the checker's stale regex that had
+#       made it compare nothing since 2026-08-26), so it stays out of this workflow
+#       for both reasons until #106 lands.
 #   * tests/scripts/test-selected-services-only.sh
 #       RED ON MAIN ON PURPOSE, and therefore NOT listed above: a red suite in this
 #       workflow blocks every pull request in the repo. It pins the whole
@@ -252,11 +256,23 @@ jobs:
   alpine:
     name: shell suites (alpine)
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    # 40, not 25 (GEN-5). This job runs 133 suites serially and none is dominant
+    # (the slowest is ~3 min), so it cannot be split by moving one or two. MEASURED:
+    # 15 min 44 s in run 37682082806 (main) and 21 min 21 s in run 37691286476 (the PR
+    # that split the debian job), the same suites on the same image, so runner speed
+    # alone moves it by 5+ minutes and 25 left under 4 minutes of margin.
+    timeout-minutes: 40
     container:
       image: alpine:3
     steps:
-      - run: apk add --no-cache attr bash coreutils curl e2fsprogs-extra flock gawk git helm jq make mtools nodejs openjdk17-jre-headless openjdk21-jre-headless openssh-keygen openssl py3-yaml python3 tar util-linux xz
+      # git-daemon: on Alpine `git-http-backend` (the CGI that tests/scripts/
+      # test-stack-clone-credential.sh stands its real smart-HTTP-over-TLS fixture
+      # server on) ships in the SEPARATE `git-daemon` package, not in `git`
+      # (`apk info -W /usr/libexec/git-core/git-http-backend` -> git-daemon).
+      # MEASURED 2026-09-30 in this image WITHOUT it: that suite exits 2
+      # "SKIPPED-LOUDLY: /usr/libexec/git-core/git-http-backend is absent ... This
+      # guard checked NOTHING", which this job's runner rightly counts as a failure.
+      - run: apk add --no-cache attr bash coreutils curl e2fsprogs-extra flock gawk git git-daemon helm jq make mtools nodejs openjdk17-jre-headless openjdk21-jre-headless openssh-keygen openssl py3-yaml python3 tar util-linux xz
       - uses: actions/checkout@v4
       - name: trust the workspace
         # Container jobs run as root against a checkout git considers foreign, so
@@ -279,8 +295,13 @@ jobs:
           # exiting 0, so it cannot go quietly inert — but a missing package here
           # would still cost the whole job that suite, so name it at the door.
           for b in bash jq openssl python3 git make flock gawk mcopy minfo mformat sfdisk cmp; do command -v "$b" >/dev/null 2>&1 || missing="$missing $b"; done
+          # git-http-backend lives in git's exec-path, not on PATH, so it cannot join the
+          # `command -v` list above. tests/scripts/test-stack-clone-credential.sh looks for
+          # it at exactly this path and exits 2 (a failure here) when it is absent; its
+          # package is git-daemon, which the install step names.
+          [ -x "$(git --exec-path)/git-http-backend" ] || missing="$missing git-http-backend(apk:git-daemon)"
           [ -z "$missing" ] || { echo "::error::preflight: missing$missing — suites would silently skip"; exit 1; }
-          echo "preflight ok: bash jq openssl python3 git make flock gawk mcopy minfo mformat sfdisk cmp"
+          echo "preflight ok: bash jq openssl python3 git make flock gawk mcopy minfo mformat sfdisk cmp git-http-backend"
       - name: run suites
         shell: bash
         run: |
@@ -295,11 +316,41 @@ jobs:
           # devices_test.sh, save_test.sh, mesh-cluster_test.sh, avc-workout_test.sh)
           # remain ungated — they were NOT measured in this image and are not being
           # claimed as covered here.
+          # tests/*.sh at depth 1 (#385): ten suites that ran in no CI job. MEASURED,
+          # 2026-09-30, in alpine:3 with EXACTLY this job's apk set (checkout copied
+          # in, `git init`ed): all ten rc=0 (140/0, ALL PASS, PASS, PASS, PASS, PASS,
+          # 24/0, 88/0, ALL PASS (27), 25/0). build-arm-payload-gates.sh prints 140
+          # passed here vs 146 on a Gentoo host: its section C execution tier needs
+          # portage and prints "NOTE ... execution tier SKIPPED" otherwise, so CI gets
+          # its static tier only — the other nine are identical on both.
+          # tests/scripts/test-builder-resume-safety.sh and tests/scripts/
+          # test-makefile-reown-skips-sysroot.sh (hugmesh-generator#659): the x86
+          # builder's --resume checks (owner gate, seed choice, static restore, link
+          # test, stale-mount refusal and umount_chroot, run through a symlink, a
+          # space, an umlaut and a relative path against a fixture mount table) and
+          # the Makefile's post-build reown, executed against fixtures and stubs with
+          # a mutation battery (the first suite re-runs itself against 28 mutated
+          # copies of the library, which is why it takes a minute and a half).
+          # MEASURED, 2026-10-07, in alpine:3 with EXACTLY this job's apk set, as
+          # root (checkout copied in; busybox sed, grep and find): 128 passed / 0
+          # failed in 98 s (the one `unshare -Ur` leg SKIPs here — user namespaces
+          # are blocked in a container — and its stat-shim twin covers the pass
+          # path) and 9 / 0. Their sibling
+          # tests/scripts/test-builder-unmount-real.sh needs `unshare -Urm` and exits
+          # 2 SKIPPED-LOUDLY in this image (measured the same way), so it is NOT
+          # listed: see PREMERGE_UNGATED and `make builder-unmount-real-check`.
           SUITES="
             tests/api/test-bff-admin.sh
             tests/auto-update/test-provision-update.sh
             tests/auto-update/test-update-poller.sh
             tests/boot/test-kubelet-join-bootstrap.sh
+            tests/build-arm-payload-gates.sh
+            tests/build-image-idp.sh
+            tests/build-image-progress.sh
+            tests/build-image-spec-guards.sh
+            tests/build-image-spec-parity.sh
+            tests/build-image-tor-onion.sh
+            tests/build-package-completeness.sh
             tests/cloud-deploy/test-cloud-deploy-driver.sh
             tests/cluster/test-bootstrap-applies-baked-apps.sh
             tests/desktop-governance/test-desktop-sudo-mapper.sh
@@ -320,6 +371,7 @@ jobs:
             tests/keystores/test-keystores-external-ca.sh
             tests/keystores/test-keystores.sh
             tests/menu/build_menu_cmd_test.sh
+            tests/no-openrc-virtual-shadow.sh
             tests/node-storage/test-bake-coverage.sh
             tests/node-storage/test-degrade.sh
             tests/node-storage/test-pool-entrypoint.sh
@@ -327,6 +379,7 @@ jobs:
             tests/pentest/test-dast-honesty.sh
             tests/phone/test-make-phone-face.sh
             tests/phone/test-mdm-providers.sh
+            tests/posix-sh-no-arrays.sh
             tests/qemu/loop_preflight_test.sh
             tests/qemu/stage4_rootfs_test.sh
             tests/qemu/kernel_extract_test.sh
@@ -339,11 +392,13 @@ jobs:
             tests/qemu/save_test.sh
             tests/qemu/verdict_test.sh
             tests/qemu/qemu-e2e-lane_test.sh
+            tests/requested-atoms-resolvable.sh
             tests/scripts/test-anubis-env-gate.sh
             tests/scripts/test-arm-ro-distdir.sh
             tests/scripts/test-binpkg-pool-fingerprint.sh
             tests/scripts/test-brand-path-validation.sh
             tests/scripts/test-builder-log-paths.sh
+            tests/scripts/test-builder-resume-safety.sh
             tests/scripts/test-calamares-boost-seed.sh
             tests/scripts/test-casdoor-domains-appset.sh
             tests/scripts/test-casdoor-init-honesty.sh
@@ -353,9 +408,9 @@ jobs:
             tests/scripts/test-container-image-tags.sh
             tests/scripts/test-download-verify.sh
             tests/scripts/test-dracut-cross-lib.sh
-            tests/scripts/test-e2e-enumeration-without-credentials.sh
             tests/scripts/test-e2e-persona-catalogue.sh
             tests/scripts/test-edge-ai-cuda-host-compiler.sh
+            tests/scripts/test-edge-ai-ollama-pin.sh
             tests/scripts/test-fetch-retry-hardening.sh
             tests/scripts/test-frite-builder-input-validation.sh
             tests/scripts/test-github-auth-lib.sh
@@ -378,6 +433,7 @@ jobs:
             tests/scripts/test-kind-profile-app-closure.sh
             tests/scripts/test-kind-profile-route-closure.sh
             tests/scripts/test-lsm-posture-honesty.sh
+            tests/scripts/test-makefile-reown-skips-sysroot.sh
             tests/scripts/test-no-duplicate-env.sh
             tests/scripts/test-no-literal-vault-brand-prose.sh
             tests/scripts/test-nullmailer-cross-postinst.sh
@@ -405,6 +461,8 @@ jobs:
             tests/scripts/test-sunshine-fence.sh
             tests/scripts/test-superadmin-bff-reachability.sh
             tests/scripts/test-tools-path-lib.sh
+            tests/scripts/test-tor-export-sync.sh
+            tests/scripts/test-tor-node-contract.sh
             tests/scripts/test-x86-fetchcommand-bound.sh
             tests/scripts/test-x86-identity-injection.sh
             tests/scripts/test-x86-kernel-net-symbols.sh
@@ -451,9 +509,71 @@ jobs:
           exit $rc
 
   debian:
-    name: shell suites (debian/python)
+    name: shell suites (debian/python${{ matrix.part }})
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    # SPLIT 2026-10-07 (GEN-5). One job ran all 44 suites serially and finished run
+    # 37682082806 in 24 min 34 s against a 25-minute timeout; two suites were 16 of
+    # those minutes (test-tor-flip-wiring.sh 9m04s, test-cluster-manifest-integrity.sh
+    # 7m34s). The matrix runs them as their own legs, in parallel, on the SAME image
+    # and the SAME install/preflight/runner steps, so no suite is dropped and none
+    # runs in two legs. The first leg keeps the original check name,
+    # "shell suites (debian/python)", so a branch-protection rule that requires it
+    # still matches. fail-fast is off so one red leg does not cancel the others and
+    # hide a second failure.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - part: ''
+            suites: |
+              tests/auto-update/test-builder-opt-in.sh
+              tests/egress-vpn/test-vpn-reconcile-verify.sh
+              tests/keystores/test-keystores-multidomain.sh
+              tests/managed-services/test-managed-services-gate.sh
+              tests/node-storage/test-appset.sh
+              tests/node-storage/test-node-agent.sh
+              tests/platform-capability-rbac/test-argocd-route-honesty.sh
+              tests/platform-capability-rbac/test-probe-rbac-namespaces.sh
+              tests/phone/test-phone-wizard.sh
+              tests/scripts/test-appstore-effector-flags.sh
+              tests/scripts/test-argocd-serverside-diff.sh
+              tests/scripts/test-backing-service-endpoints-closure.sh
+              tests/scripts/test-casdoor-login-budget.sh
+              tests/scripts/test-cassandra-cluster-wiring.sh
+              tests/scripts/test-client-connect-routes.sh
+              tests/scripts/test-db-connection-budget.sh
+              tests/scripts/test-deeplink-remote-coverage.sh
+              tests/scripts/test-e2e-shell-nav-entry.sh
+              tests/scripts/test-e2e-spec-symbol-resolution.sh
+              tests/scripts/test-eso-provider-refs.sh
+              tests/scripts/test-eso-seed-contract.sh
+              tests/scripts/test-fe-bff-route-lane-parity.sh
+              tests/scripts/test-first-run-lib.sh
+              tests/scripts/test-fragment-route-target.sh
+              tests/scripts/test-gitlab-ci-wellformed.sh
+              tests/scripts/test-headscale-oidc-secret-staging.sh
+              tests/scripts/test-mfa-raw-jwt-posture.sh
+              tests/scripts/test-mfa-required-rules.sh
+              tests/scripts/test-passhash-lib.sh
+              tests/scripts/test-pki-role-san-coverage.sh
+              tests/scripts/test-provision-keys-escrow-guard.sh
+              tests/scripts/test-python-targets-seed.sh
+              tests/scripts/test-run-ungated-lane.sh
+              tests/scripts/test-url-embedded-credentials.sh
+              tests/scripts/test-docs-command-coverage.sh
+              tests/scripts/test-x86-artifact-integrity.sh
+              tests/stack/test-anubis-flip-wiring.sh
+              tests/stack/test-mfa-flip-wiring.sh
+              tests/stack/test-patch-stack-src.sh
+              tests/workload-console/test-console-posture-and-inventory.sh
+              tests/workload-console/test-workload-console.sh
+          - part: ', cluster-manifest'
+            suites: |
+              tests/scripts/test-cluster-manifest-integrity.sh
+          - part: ', tor-flip'
+            suites: |
+              tests/stack/test-tor-flip-wiring.sh
     container:
       image: python:3.12-slim
     steps:
@@ -483,50 +603,11 @@ jobs:
           python3 -c "import yaml" || { echo "::error::pyyaml missing — yaml suites would skip"; exit 1; }
       - name: run suites
         shell: bash
+        env:
+          # The leg's own suite list (matrix.suites above), passed through env so it is
+          # never interpolated into the script text.
+          SUITES: ${{ matrix.suites }}
         run: |
-          SUITES="
-            tests/auto-update/test-builder-opt-in.sh
-            tests/egress-vpn/test-vpn-reconcile-verify.sh
-            tests/keystores/test-keystores-multidomain.sh
-            tests/managed-services/test-managed-services-gate.sh
-            tests/node-storage/test-appset.sh
-            tests/node-storage/test-node-agent.sh
-            tests/platform-capability-rbac/test-argocd-route-honesty.sh
-            tests/platform-capability-rbac/test-probe-rbac-namespaces.sh
-            tests/phone/test-phone-wizard.sh
-            tests/scripts/test-appstore-effector-flags.sh
-            tests/scripts/test-argocd-serverside-diff.sh
-            tests/scripts/test-backing-service-endpoints-closure.sh
-            tests/scripts/test-casdoor-login-budget.sh
-            tests/scripts/test-cassandra-cluster-wiring.sh
-            tests/scripts/test-client-connect-routes.sh
-            tests/scripts/test-cluster-manifest-integrity.sh
-            tests/scripts/test-deeplink-remote-coverage.sh
-            tests/scripts/test-e2e-shell-nav-entry.sh
-            tests/scripts/test-e2e-spec-symbol-resolution.sh
-            tests/scripts/test-eso-provider-refs.sh
-            tests/scripts/test-eso-seed-contract.sh
-            tests/scripts/test-fe-bff-route-lane-parity.sh
-            tests/scripts/test-first-run-lib.sh
-            tests/scripts/test-fragment-route-target.sh
-            tests/scripts/test-gitlab-ci-wellformed.sh
-            tests/scripts/test-headscale-oidc-secret-staging.sh
-            tests/scripts/test-mfa-raw-jwt-posture.sh
-            tests/scripts/test-mfa-required-rules.sh
-            tests/scripts/test-passhash-lib.sh
-            tests/scripts/test-pki-role-san-coverage.sh
-            tests/scripts/test-provision-keys-escrow-guard.sh
-            tests/scripts/test-python-targets-seed.sh
-            tests/scripts/test-run-ungated-lane.sh
-            tests/scripts/test-url-embedded-credentials.sh
-            tests/scripts/test-docs-command-coverage.sh
-            tests/scripts/test-x86-artifact-integrity.sh
-            tests/stack/test-anubis-flip-wiring.sh
-            tests/stack/test-mfa-flip-wiring.sh
-            tests/stack/test-patch-stack-src.sh
-            tests/workload-console/test-console-posture-and-inventory.sh
-            tests/workload-console/test-workload-console.sh
-          "
           # Accumulate. A bare `for t in ...; do bash "$t"; done` exits with the LAST
           # suite's status and silently forgives every earlier one — that is defect
           # shape (3) in tests/scripts/test-guard-integrity.sh's own taxonomy.
@@ -555,6 +636,8 @@ jobs:
             ran=$((ran+1))
           done
           echo "── ran $ran suite(s) ──"
+          # A leg whose list came out empty would run nothing and go green.
+          [ "$ran" -gt 0 ] || { echo "::error::this matrix leg ran 0 suites"; rc=1; }
           [ -z "$failed" ] || { echo "::error::failed:$failed"; }
           exit $rc
 
@@ -564,6 +647,36 @@ jobs:
     timeout-minutes: 25
     container:
       image: node:24-alpine
+    env:
+      # test-e2e-enumeration-without-credentials.sh section 3 (hugmesh-generator#413,
+      # decision 93 = B): the only leg that really IMPORTS the e2e specs, so it needs
+      # an installed tests/e2e. It lives HERE and not in the alpine job because this
+      # job already has node and already runs an npm ci. REQUIRE turns its SKIP into
+      # a failure, so the leg can no longer degrade into the green-but-asserting-
+      # nothing state it sat in for weeks.
+      E2E_NODE_MODULES: ${{ github.workspace }}/tests/e2e/node_modules
+      E2E_REQUIRE_ENUMERATION: "1"
+      # test-e2e-toolchain-readiness.sh leg E drives the REAL probe
+      # (tests/e2e/check-toolchain.sh) against this checkout's tests/e2e install. This
+      # job has one since the tests/e2e npm ci step below, and it has NO browsers: a
+      # declaration, not an omission, because installing them cannot work. MEASURED
+      # 2026-09-30 in node:24-alpine with this lock: Playwright 1.61.1 prints "BEWARE:
+      # your OS is not officially supported ... downloading fallback build for
+      # ubuntu24.04-x64" and fetches 646 MB of GLIBC binaries (12 s); the probe then
+      # says READY, because it checks the revision dirs, the INSTALLATION_COMPLETE
+      # marker and an exec bit and never runs the binary; and neither chrome nor
+      # chrome-headless-shell can execute on musl (`not found`: there is no
+      # /lib64/ld-linux-x86-64.so.2). Leg G then launches the five guards' own
+      # preflights and all five die with `spawn .../chrome-headless-shell ENOENT`: the
+      # install would trade one red for five, at 646 MB per run.
+      # E2E_READINESS_EXPECT_NO_BROWSERS=1 makes leg E accept exactly "every pinned
+      # browser is ABSENT and nothing else is wrong": the install half of the probe
+      # must still be clean, a partial/broken/aliased browser still fails, a probe
+      # that cannot run still fails, and if a browser is ever PRESENT while this is
+      # set the leg fails telling you to delete this line. Only the exact value "1" is
+      # honoured, only by that suite, and nothing outside this job sets it, so a
+      # developer box with an installed-but-broken toolchain stays red.
+      E2E_READINESS_EXPECT_NO_BROWSERS: "1"
     steps:
       # make: test-e2e-toolchain-readiness.sh renders and DRIVES the repo Makefile
       # (legs C/D) — node:24-alpine ships no make, and without it the suite exits 2
@@ -593,6 +706,9 @@ jobs:
         # suite that rendered nothing.
         run: |
           npm ci --prefix scripts/tooling
+          # tests/e2e's own deps (Playwright's CLI, no browser download) for the
+          # enumeration suite's real leg — see the job-level env above.
+          npm ci --prefix tests/e2e
           git config --global user.email ci@hugmesh.invalid
           git config --global user.name  "hugmesh ci"
       - name: preflight
@@ -605,6 +721,7 @@ jobs:
           missing=""
           for b in bash jq openssl python3 git node make ssh-keygen; do command -v "$b" >/dev/null 2>&1 || missing="$missing $b"; done
           [ -z "$missing" ] || { echo "::error::preflight: missing$missing — suites would silently skip"; exit 1; }
+          [ -x tests/e2e/node_modules/.bin/playwright ] || { echo "::error::tests/e2e/node_modules/.bin/playwright absent — the enumeration suite's real leg would have nothing to run"; exit 1; }
           [ -d scripts/tooling/node_modules/handlebars ] || { echo "::error::handlebars absent — the drift gate would render nothing"; exit 1; }
           # PCRE grep. tests/menu/ncurses_charset_test.sh proves the menu's non-UTF-8
           # transliteration leaves NO byte above 0x7F, and the only assertion that can
@@ -627,6 +744,7 @@ jobs:
             tests/menu/ncurses_charset_test.sh
             tests/scripts/test-e2e-coverage-matrix-harness.sh
             tests/scripts/test-e2e-docker-base-url-parity.sh
+            tests/scripts/test-e2e-enumeration-without-credentials.sh
             tests/scripts/test-e2e-reporter-shape.sh
             tests/scripts/test-e2e-toolchain-readiness.sh
           "
@@ -693,6 +811,18 @@ jobs:
           # same reason: it renders the baked ArgoCD Application against the git
           # manifests through real kustomize, and it exits 2 rather than reporting a
           # pass when kubectl/kustomize or PyYAML is absent.
+          # test-kind-tor.sh (hugmesh-generator#577) is here for helm + make: it
+          # renders the fe-gateway chart with the kind onion's extraHost parameter
+          # and reads `make -n` for its targets, and exits 2 without helm.
+          # test-tor-onion-ingress.sh (hugmesh-generator#614) is here for helm: it
+          # renders the fe-gateway chart with the node agent's ingress.onionHosts
+          # parameters exactly as ArgoCD does, and FAILS (never skips) without helm.
+          # test-optional-netpol-autosync.sh (#617) is here for kubectl kustomize: it
+          # renders every git-served overlay the build's prune touched, and FAILS
+          # without kubectl.
+          # test-gateway-vanity-domains.sh (hugmesh-generator#582) is here for helm:
+          # it renders the fe-gateway chart with `vanityDomains[i]` parameters exactly
+          # as ArgoCD does, and FAILS (never skips) without helm.
           missing=""
           for b in bash jq openssl python3 git helm kubectl checkpolicy make; do command -v "$b" >/dev/null 2>&1 || missing="$missing $b"; done
           [ -z "$missing" ] || { echo "::error::preflight: missing$missing — suites would silently skip"; exit 1; }
@@ -707,6 +837,10 @@ jobs:
             tests/stack/test-gateway-mfa-env.sh
             tests/stack/test-mdm-manifests-render.sh
             tests/scripts/test-eso-remoteref-brand.sh
+            tests/scripts/test-kind-tor.sh
+            tests/scripts/test-tor-onion-ingress.sh
+            tests/scripts/test-optional-netpol-autosync.sh
+            tests/scripts/test-gateway-vanity-domains.sh
           "
           rc=0; failed=""; ran=0
           for t in $SUITES; do

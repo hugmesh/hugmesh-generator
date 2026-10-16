@@ -40,7 +40,7 @@ from hugmesh_studio.gui.pages import progress as progress_mod      # noqa: E402
 STUDIO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 GENERATOR_DIR = os.path.dirname(STUDIO_ROOT)
 
-# ── the coalescing seam, in ONE place ────────────────────────────────────────────────
+# ── the coalescing override point, in ONE place ────────────────────────────────────────────────
 # ProgressPage._on_line is now the worker's ENQUEUE-ONLY slot: it banks the line and the
 # ~20 Hz _drain_lines() runs the parse/render/append pipeline for the whole batch (see
 # tests/test_progress_log_coalescing.py for the contract, and the coalescing note in
@@ -235,7 +235,7 @@ def test_the_gui_module_imports_no_network_machinery_at_all():
 
 
 def test_every_tooltip_states_the_no_fetch_guarantee_next_to_its_urls(fake_repo):
-    """The operator must be able to see, in the hover itself, that the link is inert."""
+    """The operator must be able to see, in the hover itself, that the link does nothing."""
     row = pf.parse_resolver_line(
         f'[ebuild  N     ] {TALLOC}  USE="python -compat"')
     cells = fb.resolver_cells(row, fake_repo)

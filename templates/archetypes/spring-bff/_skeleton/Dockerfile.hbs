@@ -21,6 +21,8 @@ WORKDIR /work
 # holds hugmesh-parent).
 ARG CI_API_V4_URL
 ARG GITLAB_GROUP_ID
+# GitHub Packages login name for the packages_read_token secret (a name, not a credential).
+ARG UPSTREAM_PACKAGES_ACTOR
 ENV CI_API_V4_URL=${CI_API_V4_URL} \
     GITLAB_GROUP_ID=${GITLAB_GROUP_ID}
 
@@ -29,12 +31,25 @@ COPY . .
 # Resolve + build. CI_JOB_TOKEN is read from a BuildKit secret file and exported
 # only for the lifetime of this RUN (so it is never persisted). `-s settings.xml`
 # points Maven at the gitlab-maven registry for the private parent artifact.
+#
+# TWO REGISTRY CONTRACTS, SELECTED BY WHICH SECRET IS MOUNTED (same shape as the BFF repos):
+#   * No packages_read_token secret (GitLab CI, local compose lane): `-s settings.xml`, as before.
+#   * packages_read_token present (GitHub release workflow): `-s .github/maven-ci-settings.xml`
+#     against GitHub Packages, with that read:packages token as a BuildKit secret.
+# `sh -euc`, NOT `-euxc`: xtrace would print the exported token into the BuildKit log.
 RUN --mount=type=secret,id=ci_job_token \
-    sh -euxc '\
+    --mount=type=secret,id=packages_read_token \
+    sh -euc '\
       if [ -f /run/secrets/ci_job_token ]; then \
         export CI_JOB_TOKEN="$(cat /run/secrets/ci_job_token)"; \
       fi; \
-      mvn -B -s settings.xml package -DskipTests'
+      if [ -f /run/secrets/packages_read_token ]; then \
+        export UPSTREAM_PACKAGES_TOKEN="$(cat /run/secrets/packages_read_token)"; \
+        export UPSTREAM_PACKAGES_ACTOR="${UPSTREAM_PACKAGES_ACTOR:-hugmesh}"; \
+        mvn -B -s .github/maven-ci-settings.xml package -DskipTests; \
+      else \
+        mvn -B -s settings.xml package -DskipTests; \
+      fi'
 
 FROM eclipse-temurin:25-jre
 # curl is required by the compose HEALTHCHECK convention (actuator health);

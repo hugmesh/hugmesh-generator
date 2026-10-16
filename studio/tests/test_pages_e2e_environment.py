@@ -62,7 +62,7 @@ def test_chooser_defaults_to_todays_behaviour(localmesh_page):
 
 
 def test_selecting_an_environment_reaches_the_plan(localmesh_page):
-    """THE LOAD-BEARING PATH: chooser -> plan -> the env the runner is spawned
+    """THE PATH THAT MATTERS: chooser -> plan -> the env the runner is spawned
     with. Broken deliberately by the guard battery's M1."""
     combo = localmesh_page.e2e_env_combo
     for env_id in env_mod.environment_ids():
@@ -278,7 +278,7 @@ def test_no_modal_in_page_logic(rel):
                 if isinstance(inner, ast.Call) and isinstance(inner.func, ast.Attribute):
                     banned_handlers.add(inner.func.attr)
 
-    # ANTI-VACUITY. The evidence dialog is KNOWN to wire state-change signals
+    # REAL-CASES CHECK. The evidence dialog is KNOWN to wire state-change signals
     # (currentIndexChanged, itemSelectionChanged, itemClicked). If the detector
     # ever finds none there, it has broken and this test would be passing while
     # checking nothing. localmesh.py is not asserted this way because its handler

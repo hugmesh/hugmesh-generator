@@ -20,17 +20,21 @@
 # TO ENABLE (deliberate, staged, operator-driven — DO NOT until the gate below is met):
 #   GATE: live cluster validated.
 #   1. On the live cluster, dry-run / trace the egress allow-set for ONE namespace.
-#   2. Uncomment ONLY that namespace's policy into manifests/networkpolicy-egress
-#      (see its kustomization.yaml header) — NEVER all namespaces at once.
+#   2. Carve ONLY that namespace's policy into manifests/networkpolicy-egress with
+#      scripts/netpol-egress-scope.py and list it in that kustomization.yaml (its header
+#      says why a `../networkpolicy/...` line cannot work) — NEVER all namespaces at once.
 #   3. `argocd app sync networkpolicy-egress` (MANUAL — there is no auto-sync here),
 #      then smoke-test that namespace: DNS resolves, every gateway hop works, each
 #      BFF reaches its DB, ESO reaches Vault, and (for devops LAST) ArgoCD still
 #      self-reconciles and reaches the git repo.
 #   4. Repeat per namespace. Leave `devops` for LAST (ArgoCD self-wedge risk).
 #
-# ROLLBACK: re-comment the namespace in the overlay kustomization and manual-sync (or
-# `kubectl delete networkpolicy tier-egress -n <ns>`). Egress policies are independent
+# ROLLBACK: `kubectl delete networkpolicy tier-egress -n <ns>` frees egress at once; then
+# remove the carved file from the overlay kustomization, merge, and manual-sync WITH
+# prune (this app has no `prune` sync option and no `automated:` block, so a plain sync
+# of the shortened list leaves the policy in the cluster). Egress policies are independent
 # of the ingress axis, so removing them fully restores egress connectivity.
+# docs/DB-HARDENING-RUNBOOK.md part C has the commands.
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:

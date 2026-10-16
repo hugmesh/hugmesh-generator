@@ -951,7 +951,7 @@ def test_home_provisioning_greyed_for_x86_mesh_node(wiz):
     assert not any(a.startswith("--home-") for a in c.to_cli_args())
 
 
-# ---- dynamic page-skip (nextId applies_to) — emission-neutral -----------------------
+# ---- dynamic page-skip (nextId applies_to) — leaves the output unchanged -----------------------
 
 def test_superadmin_plane_predicate():
     """The dynamic-skip predicate: mesh applies only when the operator opted into

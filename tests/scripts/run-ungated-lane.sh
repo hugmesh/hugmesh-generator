@@ -20,7 +20,7 @@
 # re-learning about. If the array cannot be parsed, this script FAILS (exit 1)
 # rather than running a guessed subset.
 #
-#   E2E_UNGATED_SET=all   (DEFAULT)  every PREMERGE_UNGATED entry — 22 of 22
+#   E2E_UNGATED_SET=all   (DEFAULT)  every PREMERGE_UNGATED entry — 35 of 35
 #                                    today; the runner prints the live count
 #                                    every run and hardcodes no number. Operator
 #                                    decision 32c on #347, 2026-09-17: the
@@ -32,7 +32,7 @@
 #                                    DEFAULT COSTS, below.
 #   E2E_UNGATED_SET=e2e              only the tests/scripts/test-e2e-*.sh
 #                                    entries — the browser/Qt family #246 was
-#                                    written about, 8 of 22 today. This is the
+#                                    written about, 8 of 35 today. This is the
 #                                    old default and is now an explicit opt-in.
 #   E2E_UNGATED_DRY_RUN=1            print the selection and whether a real run
 #                                    would be allowed beside whatever is up, then
@@ -166,6 +166,8 @@
 # resolve exactly as they do in the operator's own tree:
 #     tests/scripts/test-selected-services-only.sh         rc=1  58 passed, 5 failed
 #     tests/scripts/test-optional-service-slug-closure.sh  rc=1  the admin-bff registry parsed ZERO entries
+#         (that was the checker's own stale regex, fixed by #584 on 2026-09-23; it is
+#         still rc=1, now on two real controller facts filed as hugmesh-admin-bff-api#106)
 #     tests/scripts/test-liquibase-grant-roles.sh          rc=1  2 of its own negative controls got rc=0 where they demand 3
 #     tests/egress-vpn/test-secret-contract.sh             rc=1  52 passed, 1 failed (UN-ASSERTED contract copy)
 #     tests/scripts/test-eso-target-collisions.sh          rc=1  cassandra 12.3.11 will not render, so the inventory is empty

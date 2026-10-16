@@ -4,7 +4,7 @@ Hermetic: no docker, no qemu, no ssh. The facade composes the existing cores, so
 these tests fabricate exactly what those cores read — a session dir of artifact
 names, a device registry and result JSONs in the REAL formats the harness writes
 (field-for-field copies of out/qemu-runs shapes, stamps included) — and
-monkeypatch the two probe seams (`_runner_devices`, `_docker_running_names`)
+monkeypatch the two probe override points (`_runner_devices`, `_docker_running_names`)
 that would otherwise shell out.
 
 The cross-check block at the bottom greps the shell runner's own text (the same

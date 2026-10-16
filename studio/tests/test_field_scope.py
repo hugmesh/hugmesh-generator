@@ -12,7 +12,7 @@ reading exactly the mapping it always did. These tests pin that "exactly":
   * every role-class/mode narrowing declared today restates a rule some EXISTING predicate
     already enforces — asserted against that predicate over the full mode x role space, so
     the table and the predicate cannot drift apart. FIELD_SCOPE is documentation-of-record
-    at this step; it becomes load-bearing when the gating consumers move onto it.
+    at this step; it becomes relied on when the gating consumers move onto it.
 
 Pure-core: no Qt import — runs in the headless suite.
 """
@@ -257,7 +257,7 @@ def test_standalone_class_gate_matches_the_builders_that_have_a_role_class():
     point it is and force-cleared the value.
 
     Derived from the builder scripts, not asserted as a literal: a builder that grows or
-    loses a role-class concept turns this RED instead of letting the tuple rot."""
+    loses a role-class concept makes this fail instead of letting the tuple go stale."""
     derived = tuple(p for p in _FIELD_PLATFORMS["standalone"] if _builder_has_role_class(p))
     assert derived == _STANDALONE_CLASS_GATED_PLATFORMS, (
         f"builders with a ROLE_CLIENT concept are {derived}, but --standalone's class rule "

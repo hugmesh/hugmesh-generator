@@ -1,0 +1,6 @@
+cancel logged: True
+This ERASES /dev/sdb — SanDisk Ultra, 16.0 GiB, usb.
+Everything on that device is overwritten. It cannot be undone.
+
+Image:  gentoo-x86-amd64-standalone-thick-prod-TEST.img.xz
+        (compressed — decompressed straight onto the disk, so the written size is larger than the file)

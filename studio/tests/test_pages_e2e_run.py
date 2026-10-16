@@ -153,7 +153,7 @@ def test_the_chooser_defaults_to_todays_behaviour(page):
 
 
 def test_selecting_an_environment_reaches_the_plan(page):
-    """THE LOAD-BEARING PATH: chooser -> plan -> the env a runner is spawned with."""
+    """THE PATH THAT MATTERS: chooser -> plan -> the env a runner is spawned with."""
     for env_id in env_mod.environment_ids():
         page.env_combo.setCurrentIndex(page.env_combo.findData(env_id))
         assert page.environment() == env_id

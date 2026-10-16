@@ -1,0 +1,6 @@
+t+40s notFullyReady=10
+t+55s notFullyReady=2
+t+70s notFullyReady=2
+t+85s notFullyReady=1
+t+101s notFullyReady=1
+t+116s notFullyReady=0

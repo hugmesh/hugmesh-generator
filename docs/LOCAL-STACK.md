@@ -116,10 +116,11 @@ vendored):
 1. Clones the four library repos at **pinned commits** (the repos carry no git
    tags; each SHA's `pom.xml` is exactly the version the services require — today
    `hugmesh-build-config` **0.5.0**, `hugmesh-parent` **2.8.0**,
-   `hugmesh-commons` **2.1.0**, and **two** `hugmesh-auth-core` pins — **2.4.2**
-   for user-bff main and **2.5.0** for admin-bff main, by design: the two
-   consumers are on separate release cadences, so a cold build needs both jars
-   in the local registry; ⚠️ auth-core has been re-cut four times under a
+   `hugmesh-commons` **2.1.0**, and **three** `hugmesh-auth-core` pins — **2.5.1**
+   (the one coordinate the org release chain publishes; both BFFs move to it) plus
+   **2.4.2** (user-bff) and **2.5.0** (admin-bff), kept until both consumers' mains
+   name 2.5.1: the consumers are on separate release cadences, so a cold build
+   against an older consumer pom needs its jar in the local registry; ⚠️ auth-core has been re-cut four times under a
    released coordinate — 2.4.0 → 2.4.1 → 2.4.2 → 2.5.0 — so re-check
    [`tests/stack/m2-bootstrap.sh`](../tests/stack/m2-bootstrap.sh), which is the
    authoritative pin, rather than this sentence)
@@ -430,9 +431,12 @@ compose-DNS translation of the `routes:` in each `apps/20-gateway-*.yaml`.
 `tests/scripts/test-fe-bff-route-lane-parity.sh` is the offline guard that keeps
 the fe pair honest for the `/bff/**` surface: it simulates Spring Cloud Gateway's
 first-match-wins ordering over BOTH tables and fails if the same path resolves to
-a different BFF on each.
+a different BFF on each. The same guard also pins decision 60
+(`APP_BFF_EXCHANGE_CACHE_TTL_MS: "0"` for admin-bff-api and mod-bff-api on both
+lanes; the gateway's own mirror of that cache is
+`tests/stack/test-gateway-auth-flag-parity.sh`'s).
 
-### Two `/bff/register/*` paths 404 on compose ON PURPOSE (read before filing a bug)
+### All five `/bff/{me,provision,register}/*` paths now resolve to user-bff (updated 2026-09-18)
 
 Until 2026-09-17 the two fe route tables disagreed about five `/bff` paths: the
 cluster sent them to **user-bff** (via `/bff/register/**`, `/bff/me/**`,
@@ -442,43 +446,53 @@ compose had no entry for any of them and let all five fall through to its own
 saw the cluster's 404s (hugmesh-generator#366).
 
 Operator decision 40 (hugmesh-generator#347) aligned compose onto the cluster —
-**all five, both lanes identical** — and accepted the cost explicitly:
+**all five, both lanes identical**. Two of the five, the `/bff/register/*`
+pair, initially had no user-bff handler and 404'd on BOTH lanes; that gap
+closed on 2026-09-18 (hugmesh/hugmesh-user-bff-api#20, commit `dc34c8b`) and
+this table was stale about it until this edit (flagged on hugmesh-generator#347
+2026-09-18T07:21Z):
 
 | path | before (compose) | after (compose + cluster) | served? |
 |---|---|---|---|
 | `GET /bff/me/namespaces` | admin-bff | **user-bff** | yes |
 | `POST /bff/provision/matrix` | admin-bff | **user-bff** | yes |
 | `POST /bff/provision/mastodon` | admin-bff | **user-bff** | yes |
-| `POST /bff/register/google` | admin-bff | **user-bff** | **NO — 404** |
-| `POST /bff/register/discord` | admin-bff | **user-bff** | **NO — 404** |
+| `POST /bff/register/google` | admin-bff | **user-bff** | yes (since #20) |
+| `POST /bff/register/discord` | admin-bff | **user-bff** | yes (since #20) |
 
-user-bff serves the first three (`LegacyPathParityController`,
-hugmesh/hugmesh-user-bff-api#15 @ `c3d24c4`). It has **no handler** for the last
-two — `SsoAuthController` maps the exact path `/bff/register` only — so from that
-commit they **404 on the compose lane too**, exactly as they already did on a
-cluster. The fix is the user-bff handlers
-(**hugmesh/hugmesh-user-bff-api#13**), *not* re-pointing the two routes back at
-admin-bff; the guard above goes red on that revert.
+user-bff serves all five via `LegacyPathParityController`
+(hugmesh/hugmesh-user-bff-api#15 @ `c3d24c4` for the first three;
+hugmesh/hugmesh-user-bff-api#20 @ `dc34c8b` added the last two).
+`SsoAuthController` still maps the exact path `/bff/register` only, which does
+not collide with either. `tests/scripts/test-fe-bff-route-lane-parity.sh`'s
+FIVE table asserts `has_handler=True` for every path, so that table going
+stale or `False` turns the run red rather than only printing. That guard reads
+only this repo's route tables, never user-bff's source, so a **genuine** handler
+removal in hugmesh-user-bff-api is caught over there — by its
+`LegacyPathParityRegisterTest` and `SecurityConfigSsoPathRulesTest` — not by
+this guard.
 
-What you will actually notice on a local stack:
+What you will actually notice on a local stack: nothing different from the
+first three — all five now behave the same way (seeded `ROLE_USER` in the
+gateway's `CanonicalSeed`, so an unauthenticated `POST` is refused before it
+reaches any BFF; a signed-in caller reaches a real handler on both register
+paths, not a 404).
 
-- **Nothing, for an anonymous caller.** `/bff/register/**` is seeded `ROLE_USER`
-  in the gateway's `CanonicalSeed`, so an unauthenticated `POST` through the
-  front door was already refused before it reached any BFF.
-- **404 instead of a real answer for a signed-in caller** hitting
-  `/bff/register/google` or `/bff/register/discord` through the front door.
-  Nothing in this repo does: `tests/qemu/seed-accounts.sh` calls
-  `POST ${BFF}/bff/register/google` **directly at admin-bff on `127.0.0.1:8403`,
-  with no gateway in the path**, so it is unaffected and keeps working.
-  `/bff/register/discord` has no hand-written caller at all.
-- **A stale `./.stack-src` breaks the other three.** Compose builds user-bff from
-  `${STACK_SRC:-./.stack-src}/hugmesh-user-bff-api`, so a checkout pinned before
-  `c3d24c4` has no `LegacyPathParityController` and `/bff/me/namespaces` and both
-  `/bff/provision/*` will 404 as well — admin-bff no longer catches them. Symptom:
-  empty namespace grants in admin-ui and a silent provision failure on every
-  sign-in (login-ui swallows it). Re-run `scripts/clone-all-repos.sh`
-  (`make stack-up` does) so `.stack-src` fast-forwards to `main`, then rebuild the
-  `hugmesh-user-bff-api` image.
+- **The QEMU seeder never goes through the front door.** `tests/qemu/seed-accounts.sh`
+  calls `POST ${BFF}/bff/register/google` **directly at admin-bff on
+  `127.0.0.1:8403`, with no gateway in the path**, so neither fe route table
+  affects it; it was unaffected while the two paths 404'd and is unaffected now.
+- **A stale `./.stack-src` breaks some or all five, depending how stale.** Compose
+  builds user-bff from `${STACK_SRC:-./.stack-src}/hugmesh-user-bff-api`. A
+  checkout pinned **before `c3d24c4`** has no `LegacyPathParityController` at
+  all — `/bff/me/namespaces` and both `/bff/provision/*` 404 too, and
+  admin-bff no longer catches them (empty namespace grants in admin-ui, a
+  silent provision failure on every sign-in that login-ui swallows). A
+  checkout pinned **between `c3d24c4` and `dc34c8b`** has the controller but
+  not yet the two register handlers — only `/bff/register/google` and
+  `/bff/register/discord` 404, the other three work. Re-run
+  `scripts/clone-all-repos.sh` (`make stack-up` does) so `.stack-src`
+  fast-forwards to `main`, then rebuild the `hugmesh-user-bff-api` image.
 - **The mock lane is untouched, because it runs no gateway at all.**
   `tests/stack/up.sh` starts `mock-bff.mjs` plus the mock Matrix/Mastodon/UI
   servers as bare node processes ("this never runs a real Spring BFF/gateway"),

@@ -171,7 +171,13 @@ Applied via each DB Deployment's `POSTGRES_*` env + container `args` and the
 - **No superuser for app roles** — every login role is
   `NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT`.
 - **Per-role connection limits** — `CONNECTION LIMIT` per role (gateways 5,
-  writers/apps 10–20) and a server cap (`max_connections` 50–60).
+  writers/apps 10–20) and a server cap (`max_connections` 50–60). The limit of 20
+  on a BFF's app role is a budget for EVERY pod that connects as that role: each
+  BFF Deployment sets `SPRING_R2DBC_POOL_INITIAL_SIZE=1` and
+  `SPRING_R2DBC_POOL_MAX_SIZE=2`, so that (the autoscaler's `maxReplicas` plus the
+  pods a rolling update adds) x pool stays within it (hugmesh-generator#663: with
+  the unset default of 10 per pod, six pods asked for 60 and the sign-in answered
+  500). `tests/scripts/test-db-connection-budget.sh` fails when it does not.
 - **Timeouts** — per-DB `statement_timeout=30s`,
   `idle_in_transaction_session_timeout=60s`, `lock_timeout=10s` so a stuck client
   can't pin a connection or hold locks.
@@ -198,9 +204,11 @@ Applied via each DB Deployment's `POSTGRES_*` env + container `args` and the
   (cert present but unused).
 - **In-cluster TLS — gated, ships dark (`PG_TLS_ENABLED`, default `false`).** DB
   Services are ClusterIP-only and confined by SELinux MCS levels + NetworkPolicy.
-  Wire encryption between an app and its DB is **wired but inert**: each of the six
-  DB pods (admin-bff-db, mod-bff-db, user-bff-db, federation-db, forum-bff-db,
-  route-access-db) mounts its Vault-PKI server cert read-only at `/etc/postgres-tls`
+  Wire encryption between an app and its DB is **wired but inert**: each of the NINE
+  dedicated DB pods (admin-bff-db, mod-bff-db, user-bff-db, federation-db,
+  forum-bff-db, route-access-db, plus wiki-bff-db, mesh-bff-db and
+  character-forge-bff-db, which this text predates; re-measured 2026-10-14, all nine
+  still `PG_TLS_ENABLED: "false"`) mounts its Vault-PKI server cert read-only at `/etc/postgres-tls`
   AND boots through a small init wrapper `entrypoint/pg-tls-entrypoint.sh`
   (a SEPARATE ConfigMap, not in the initdb dir) that mirrors the egress-proxy
   entrypoint idiom:
@@ -219,7 +227,11 @@ Applied via each DB Deployment's `POSTGRES_*` env + container `args` and the
   `"true"` in the DB Deployment (config-only — no new cert plumbing) ONLY after the
   Vault-PKI server-cert ESO Secret `<db>-mtls` is provisioned/materialized per DB.
   Until then it stays off; the DBs are single-node, same-namespace, and already
-  MCS+NetworkPolicy-confined, so the default-off posture is safe. **Out of scope**
+  MCS+NetworkPolicy-confined, so the default-off posture is safe. **The per-DB
+  procedure, the order, the preflight (`scripts/pg-tls-preflight.sh`, which refuses
+  the flip while `<db>-mtls` is missing or unusable) and the rollback are in
+  `docs/DB-HARDENING-RUNBOOK.md`.** The flip is a git change and a Recreate rollout:
+  with the Secret absent it takes the DB down, because the volume is `optional: true`. **Out of scope**
   (no dark-TLS cert mounted — would need new ESO certs first): casdoor/casdoor-games
   Postgres, akkoma-db, the phpBB forum Postgres, observability Postgres.
 
