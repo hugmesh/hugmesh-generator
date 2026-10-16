@@ -193,9 +193,12 @@ always permits direct relay egress.
   CA, swapping `coturn-tls` for an ACME cert.
 - **Cloud `LoadBalancer` exposure.** Documented in §5, not shipped: nothing to
   test it against.
-- **Group-call SFU (future).** coturn is a 1:1/mesh relay only. Scalable **group**
-  calls (MatrixRTC / Element Call) need a separate **SFU** (LiveKit / sfu-to-sfu).
-  That would be a new optional service, not this one.
+- **Group-call SFU (designed, not built).** coturn is a 1:1/mesh relay only.
+  Scalable **group** calls (MatrixRTC) need a separate **SFU** (LiveKit, decision
+  102a). That is a new optional service, not this one. The client half is merged
+  and dark in `hugmesh-matrix-ui`. The server half, its port plan next to this
+  relay and how LiveKit can reuse this relay are in
+  [`GROUP-CALL-SFU.md`](GROUP-CALL-SFU.md).
 - **Matrix-UI ICE change.** The `hugmesh-matrix-ui` graceful degradation
   (`voip/turnServer` empty/404 → `iceServers: []`) is the existing behaviour. Any
   explicit UI fetch wiring is a separate PR in that repo.

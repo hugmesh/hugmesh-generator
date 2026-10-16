@@ -1,0 +1,20 @@
+{
+  "mode": "mesh",
+  "brand": "example",
+  "brand_title": "Example Mesh",
+  "org": "exampleorg",
+  "cluster_domain": "mesh.example",
+  "cluster_domain_github_org": "exampleorg",
+  "additional_domains": true,
+  "domains": [
+    {
+      "name": "chat.mesh.example",
+      "title": "Chat",
+      "images": [],
+      "optional_services": ["tuwunel"],
+      "idp": "own"
+    }
+  ],
+  "domain_services_reviewed": ["mesh.example", "chat.mesh.example"],
+  "users": []
+}

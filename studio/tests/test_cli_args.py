@@ -1873,6 +1873,9 @@ _FIELD_PROBE = {
     "vault_external_addr": {"vault_addr": "https://vault.example:8200",
                             "vault_external_addr": "https://vault.example.net:8200"},
     "optional_services": {"optional_services": ["akkoma"]},
+    # the anubis tri-state (#384) has no flag of its own: it rides --optional-services
+    # as the `-anubis` token, so the probe needs only the force-off to show a difference.
+    "anubis": {"anubis": "off"},
     "exclude_services": {"exclude_services": ["games"]},
     "enable_games": {"enable_games": True},
     # managed backing services (I8/M2): the EMPTY default emits nothing (byte-identity),

@@ -1,0 +1,5 @@
+{
+  "name": "hugmesh-user-ui",
+  "version": "0.0.0",
+  "scripts": { "build": "ng build" }
+}

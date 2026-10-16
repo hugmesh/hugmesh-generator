@@ -116,7 +116,7 @@ from .. import console
 from ..choice_cards import ChoiceCard, ChoiceCardGroup
 from ..flow_layout import flow_box
 from ...core import saved_meshes, vaults
-from ...core.config import IDP_CHOICES, IDP_LABELS, idp_effective_jwks
+from ...core.config import IDP_CHOICES, IDP_LABELS, github_org_problem, idp_effective_jwks
 from ...core.config import DOMAIN_IDP_OWN, DOMAIN_IDP_SUPERDOMAIN, Domain
 from ...core.domain_services import ACTION_MESH_START, gate_reason, record_reviewed
 from ...core.local_mesh_domains import (
@@ -152,6 +152,7 @@ from .domain_services import DomainServicesWidget
 from .domains import DomainsTableWidget
 from ._mesh_monitor_widget import MeshMonitorProbe, MeshMonitorWidget, MeshScaleWorker
 from ._add_user_dialog import AddUserDialog
+from ._local_agent_widget import LocalAgentWidget, context_from_page
 from ._code_folders_widget import CodeFoldersWidget
 from ._saved_meshes_widget import SavedMeshProbe, SavedMeshesWidget
 from ._logintheme import LoginThemeGroup
@@ -1135,13 +1136,32 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         else:
             own = md.own_name or own
         prev = md.by_name(md.own_name) if md.own_name else None
+        # The own row's org comes from its CELL, like every added row's: the state
+        # is written only by the cell's focus-loss slot, and the Next shortcut or a
+        # programmatic next() never moves focus. The state is read only when the
+        # table has no own row to read. A non-slug stays out of the state (the
+        # refusal below names it); the cell keeps it for the operator to fix.
+        table = self.domains_table
+        if any(table.is_own_row(r) for r in range(table.table.rowCount())):
+            own_org = table.own_row_github_org()
+            if github_org_problem(own_org):
+                own_org = ""
+        else:
+            own_org = getattr(prev, "github_org", "") if prev else ""
         own_row = Domain(name=own, title="", idp=DOMAIN_IDP_SUPERDOMAIN,
-                         optional_services=list(prev.optional_services) if prev else [])
+                         optional_services=list(prev.optional_services) if prev else [],
+                         github_org=own_org)
+        for d in added:
+            if github_org_problem(getattr(d, "github_org", "")):
+                d.github_org = ""
         md.domains = [own_row] + added
         md.own_name = own
         record_reviewed(md, md.domain_services_reviewed)
         blank = prod and not own
-        problems = self._domain_row_problems()
+        # a GitHub org that is not a slug is refused here, inline, with the sentence
+        # the image flow's DomainsPage.validatePage uses — it used to be accepted on
+        # this route and reach the saved record
+        problems = table.org_problems() + self._domain_row_problems()
         lines = list(problems)
         if blank:
             lines.append(
@@ -1579,8 +1599,8 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         self.copy_onion_btn = QtWidgets.QPushButton("Copy .onion address")
         self.copy_onion_btn.setToolTip(
             "Copy the local mesh's minted Tor .onion address to the clipboard (open "
-            "it in Tor Browser — a normal browser cannot reach a .onion). Enabled "
-            "only after a TOR=1 bring-up has published the address.")
+            "it in Tor Browser — a normal browser cannot reach a .onion). Before "
+            "tor has published an address, clicking explains how to get one.")
         self.copy_onion_btn.clicked.connect(self._copy_onion)
         brow.addWidget(self.copy_onion_btn)
         self.creds_btn = QtWidgets.QPushButton("Sign-in credentials")
@@ -1785,6 +1805,20 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         # No trailing addStretch: a FlowLayout has no stretch concept, and a
         # spacer item would be wrapped as if it were another button.
         lay.addWidget(brow_box)
+        # LOCAL AI AGENT (#695). The Docker mesh and the kind DevOps lane end on this one
+        # page, so one card serves both (its Lane drop-down only changes the brief). It
+        # reads the source choice and domains at press time through the context callable;
+        # the one hook is completeChanged, which fires at every verb start and end, so the
+        # card's Lane follows the lane whose verb just ran (Start DevOps lane -> kind).
+        self.local_agent = LocalAgentWidget(
+            self.generator_dir, context=lambda: context_from_page(self))
+        lay.addWidget(self.local_agent)
+        self.completeChanged.connect(self.local_agent.refresh_apps)
+        # The source cards too: the stepped wizard re-shows the card after the Repo
+        # source step, but the single-page frame has no step change, so a changed
+        # source choice there would keep listing the other tree's apps until Re-check.
+        self.src_existing.toggled.connect(lambda _on: self.local_agent.refresh_apps())
+        self.src_dir.textChanged.connect(lambda _t: self.local_agent.refresh_apps())
 
         # ── RUNNING-MESH MONITOR (operator ask, 2026-09-01): every pod and container
         # of BOTH lanes, its addresses, and an Open button only where the browser may
@@ -3984,8 +4018,8 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         if not url:
             QtWidgets.QMessageBox.information(
                 self, "No .onion yet",
-                "No Tor .onion has been published. Bring the mesh up with "
-                "'Expose the mesh as a Tor v3 .onion' ticked (TOR=1) and wait ~30s "
+                "No Tor .onion has been published. On the Services step, tick "
+                "\"On\" for the \"tor\" row, bring the mesh up, and wait ~30s "
                 "for tor to publish the address.")
             return
         QtWidgets.QApplication.clipboard().setText(url)

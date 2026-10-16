@@ -46,6 +46,37 @@ data:
     # empty database — public knowledge, hence a bootstrap value and not a secret.
     CASDOOR_BOOTSTRAP_PASSWORD = "123"
 
+    # ── casdoor's OWN sign-in throttle ───────────────────────────────────────
+    # After a handful of wrong passwords casdoor BANS the account for a fixed
+    # window and then refuses EVERY login, the correct password included,
+    # answering with this text (i18n/locales/*/data.json, key check."You have
+    # entered the wrong password or code too many times, please wait for %d
+    # minutes and try again"). The refusal has exactly the SHAPE of a wrong
+    # password: HTTP 200 + {"status":"error"}.
+    #
+    # WHY THIS JOB NEEDS IT (hugmesh-generator#402). Each run spends up to two
+    # wrong-password attempts (the provisioned value, then casdoor's default)
+    # and the Job is backoffLimit 6, so one pod could issue up to fourteen. When
+    # the Vault password has DRIFTED (rotated after the IdP was provisioned)
+    # neither value logs in, repeated runs trip the throttle, and every run
+    # after that is told "reconcile the Vault value" about an account that is
+    # merely banned. The Job's podFailurePolicy turns LOCKOUT_EXIT into a stop instead
+    # of a replay.
+    #
+    # The %d makes the whole sentence unmatchable, and it is translated, so match
+    # the invariant fragment of the English text only, and treat the
+    # classification as a HINT that adds honesty, never as a gate: an
+    # unrecognised refusal still fails the Job exactly as before.
+    LOCKOUT_MARKER = "too many times"
+    # casdoor's message, once the throttle has refused a login. Its presence also
+    # LATCHES: try_login() makes no further attempt in this process.
+    LOCKED_OUT = []
+    # A DISTINCT exit status for "locked out", so the Job can be failed WITHOUT
+    # the pod backoff replaying the attempts. The Job spec below turns this exact
+    # number into a podFailurePolicy FailJob rule; tests/scripts/
+    # test-casdoor-login-budget.sh asserts the two still agree.
+    LOCKOUT_EXIT = 75
+
     # Steps that failed. A non-empty list makes the Job exit non-zero; the "done"
     # line is only ever printed when it is empty.
     FAILURES = []
@@ -58,7 +89,18 @@ data:
     opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cj))
 
     class CasdoorError(RuntimeError):
-        """A Casdoor call that did not report success."""
+        """A Casdoor call that did not report success.
+
+        `msg` is casdoor's OWN envelope message, kept alongside the rendered
+        string so a caller can CLASSIFY a refusal instead of re-parsing prose
+        this script composed itself. The sign-in throttle is why that matters:
+        it is indistinguishable from a wrong password unless the message is
+        read. Defaults to "" so the transport-level raises below stay one-liners
+        and no caller has to guard for a missing attribute."""
+
+        def __init__(self, rendered, msg=""):
+            super().__init__(rendered)
+            self.msg = msg
 
     def call(path, payload=None, method="GET", form=None):
         """The ONE way this script talks to Casdoor. Nothing may bypass it: a
@@ -91,7 +133,8 @@ data:
         if not isinstance(resp, dict):
             raise CasdoorError(f"{method} {path}: unexpected response shape") from None
         if resp.get("status") != "ok":
-            raise CasdoorError(f"{method} {path}: {resp.get('msg') or resp}") from None
+            raise CasdoorError(f"{method} {path}: {resp.get('msg') or resp}",
+                               msg=str(resp.get("msg") or "")) from None
         return resp
 
     def probe(path):
@@ -124,14 +167,27 @@ data:
 
     def try_login(password):
         """Attempt an admin login with `password`; True only with a usable session.
-        Built-in app/org host the admin. Never logs or returns the password."""
+        Built-in app/org host the admin. Never logs or returns the password.
+
+        TWO THINGS BEYOND THE LOGIN. It CLASSIFIES the refusal: casdoor's
+        sign-in throttle refuses a correct password with the same HTTP 200 +
+        {"status":"error"} a wrong one gets, so the envelope message is the only
+        thing that tells them apart, and it is recorded in LOCKED_OUT. And once
+        that has happened it makes NO further attempt at all: while the ban
+        holds no password logs in, so another attempt cannot learn anything and
+        can only keep the account hot. That is this script's wrong-attempt
+        budget, enforced here rather than asserted in a comment."""
+        if LOCKED_OUT:
+            return False
         cj.clear()
         body = {"application": "app-built-in", "organization": "built-in",
                 "username": ADMIN_USER, "password": password, "type": "login",
                 "autoSignin": True}
         try:
             call("/api/login", body, "POST")
-        except CasdoorError:
+        except CasdoorError as e:
+            if LOCKOUT_MARKER in getattr(e, "msg", ""):
+                LOCKED_OUT.append(e.msg)
             return False
         return require_admin_session()
 
@@ -149,7 +205,7 @@ data:
             return False
         if try_login(ADMIN_PASS):
             print("  admin password: already the provisioned value (no change)")
-        elif try_login(CASDOOR_BOOTSTRAP_PASSWORD):
+        elif not LOCKED_OUT and try_login(CASDOOR_BOOTSTRAP_PASSWORD):
             print("  admin password: still the casdoor bootstrap default — applying "
                   "the provisioned value")
             try:
@@ -165,6 +221,16 @@ data:
                      "does not log in — the admin credential is NOT what Vault holds")
                 return False
             print("  admin password: applied and verified by re-login")
+        elif LOCKED_OUT:
+            # NOT a wrong password. While the ban holds casdoor refuses the
+            # CORRECT password too, so nothing observable from here says whether
+            # the Vault value is right. Say what casdoor actually said.
+            fail("casdoor is refusing EVERY admin login: its sign-in throttle has "
+                 f"banned the account ({LOCKED_OUT[0]!r}). This is NOT evidence of "
+                 "a wrong password, because the correct one is refused too while the "
+                 "ban holds; wait for the ban to expire before concluding anything "
+                 "about the Vault value")
+            return False
         else:
             fail("admin login failed with BOTH the provisioned password and the "
                  "casdoor bootstrap default — reconcile the Vault value with the "
@@ -175,6 +241,12 @@ data:
                  "games admin")
             return False
         if not try_login(ADMIN_PASS):
+            if LOCKED_OUT:
+                fail("casdoor's sign-in throttle banned the admin account between "
+                     "applying the provisioned password and proving the bootstrap "
+                     f"default no longer works ({LOCKED_OUT[0]!r}). Re-run once the "
+                     "ban expires")
+                return False
             fail("lost the admin session after the default-password check")
             return False
         return True
@@ -323,6 +395,15 @@ data:
     if not reconcile_admin_password():
         for f in FAILURES:
             print(f"  - {f}")
+        if LOCKED_OUT:
+            # A DISTINCT exit status, because this failure must NOT be retried:
+            # restartPolicy Never + the podFailurePolicy FailJob rule on this exact
+            # number (see the Job below) end the Job here instead of replaying the
+            # login into a ban that only time can clear.
+            print("casdoor-games-init: FAILED — casdoor's sign-in throttle is refusing every "
+                  "admin login; retrying now would only keep the account banned "
+                  f"(exit {LOCKOUT_EXIT})")
+            raise SystemExit(LOCKOUT_EXIT)
         raise SystemExit("casdoor-games-init: FAILED — no usable Casdoor admin session")
     step("seed", ensure_seed)
     step(APP_NAME, reconcile_app)
@@ -347,11 +428,25 @@ metadata:
 spec:
   backoffLimit: 6
   ttlSecondsAfterFinished: 600
+  # THE POD BACKOFF IS ALSO A LOGIN BUDGET (hugmesh-generator#402). reconcile.py
+  # makes at most two wrong-password attempts per run, but 1 + backoffLimit runs
+  # of it is up to fourteen, enough to ban the account on a drifted password and
+  # then keep it banned. reconcile.py exits 75 and ONLY 75 for "casdoor's throttle
+  # is refusing every login"; this rule ends the Job on that status instead of
+  # replaying it. podFailurePolicy requires restartPolicy: Never. Asserted by
+  # tests/scripts/test-casdoor-login-budget.sh.
+  podFailurePolicy:
+    rules:
+      - action: FailJob
+        onExitCodes:
+          containerName: reconcile
+          operator: In
+          values: [75]
   template:
     metadata:
       labels: { app: casdoor-games-init }
     spec:
-      restartPolicy: OnFailure
+      restartPolicy: Never
       nodeSelector:
         hugmesh.net/games: "true"
       securityContext:

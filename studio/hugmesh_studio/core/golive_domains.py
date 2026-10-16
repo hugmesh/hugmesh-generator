@@ -41,7 +41,15 @@ __all__ = [
     "ONION_HOSTNAME_ENV", "baked_domains", "onion_export_scan", "onion_export_state",
     "onion_exports",
     "onion_override_problem", "exposure_rows", "exposure_lines", "plan_rows",
+    "export_candidates", "export_step_applies", "NO_EXPORT_DOMAINS_NOTE",
 ]
+
+#: Said where the "Export to GitHub org" step would be, when no domain names an org
+#: — the step is then not shown at all (GUI) / not offered (TUI).
+NO_EXPORT_DOMAINS_NOTE = (
+    "No domain on this machine names a GitHub org, so there is nothing to export. "
+    "Give a domain one on the Studio's Domains step (the ‘GitHub org’ cell) of a "
+    "local mesh and save that mesh, or point the step at a config file.")
 
 CLUSTER_DOMAIN_FILE = "/etc/hugmesh/cluster-domain"
 DOMAINS_FILE = "/etc/hugmesh/domains"
@@ -353,6 +361,28 @@ def exposure_lines(rows) -> list[str]:
         return ["(no domain known yet — type one on the Inputs step)"]
     width = max(len(w) for w, _ in rows)
     return [f"{w.ljust(width)}  {h}" for w, h in rows]
+
+
+def export_candidates(generator_dir: str = "", config_files=()) -> list:
+    """The domains that name a GitHub org — the ONE discovery both Go-Live faces
+    make for the optional "Export to GitHub org" step: every saved mesh on this
+    machine (``core.org_export.saved_mesh_candidates``, read raw off the records)
+    plus whatever config files the person pointed the step at. A file that cannot be
+    read is skipped here; the faces show the problem when they add it."""
+    from .org_export import candidates_from_file, saved_mesh_candidates    # lazy
+    out = saved_mesh_candidates(generator_dir)
+    for path in config_files or ():
+        try:
+            out.extend(candidates_from_file(path, generator_dir))
+        except (OSError, ValueError):
+            continue
+    return out
+
+
+def export_step_applies(candidates) -> bool:
+    """Whether the export step is shown at all: only when some domain has an org.
+    Every existing flow has none, and sees no new step."""
+    return bool(candidates)
 
 
 def norm_domain(name) -> str:

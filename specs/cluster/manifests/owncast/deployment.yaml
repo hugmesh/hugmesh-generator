@@ -48,8 +48,8 @@ spec:
           ports:
             - { name: bff-http, containerPort: 8080, protocol: TCP }
           env:
-            # Systems-realm Casdoor (NOT casdoor-games): JWKS auto-discovered via
-            # CASDOOR_ISSUER_URI + /.well-known/openid-configuration.
+            # Systems-realm Casdoor (NOT casdoor-games): the signing keys come from
+            # CASDOOR_JWKS_URI below; this value is the `iss` claim only.
             # WAS http://casdoor.hugmesh-casdoor.svc.cluster.local:8000, which is
             # wrong twice over: there has never been a `hugmesh-casdoor` namespace
             # (casdoor runs in hugmesh-pki), and issuer-uri is not just a discovery
@@ -58,6 +58,12 @@ spec:
             # `origin = "https://id.hugmesh.net"`, so that IS the iss every token
             # carries. Same value every other first-party BFF uses.
             - { name: CASDOOR_ISSUER_URI, value: "https://id.hugmesh.net" }
+            # Key fetch stays IN-CLUSTER: the public issuer host need not resolve
+            # here (on kind it does not: hugmesh-generator#693). Same value as the
+            # gateway chart's casdoor.jwksUri. This pod lives OUTSIDE hugmesh-backend,
+            # so networkpolicy/casdoor-jwks-ingress.yaml admits it to casdoor:8000;
+            # pinned by tests/scripts/test-bff-jwks-in-cluster.sh.
+            - { name: CASDOOR_JWKS_URI, value: "http://casdoor.hugmesh-pki.svc.cluster.local:8000/.well-known/jwks" }
             - { name: SPRING_R2DBC_URL,
                 value: "r2dbc:postgresql://hugmesh-owncast-db.hugmesh-owncast.svc.cluster.local:5432/owncast_bff" }
             # Liquibase's JDBC handle, used once at startup. Its packaged default is

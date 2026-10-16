@@ -718,6 +718,19 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 #     194 of 218 suites are named by a pull_request-triggered workflow
 #     PASS the ungated SET matches its pin exactly (24 suite(s))
 #
+# Gated count unchanged, denominator +1 and ungated SET 24 -> 25, on 2026-10-14 for
+# #693: every signed-in call on kind answered 500 because the BFF manifests set only CASDOOR_ISSUER_URI and
+# the key fetch went to the public issuer host, which does not resolve in-cluster.
+# tests/scripts/test-bff-jwks-in-cluster.sh pins the in-cluster CASDOOR_JWKS_URI, its
+# Service closure and the NetworkPolicy admission offline. It is NOT yet named by
+# shell-suites.yml — the lane that wrote it could not edit .github — so it lands in
+# PREMERGE_UNGATED below with that reason (the set pin moves 24 -> 25) and is run
+# post-merge by .gitlab-ci.yml's lint:bff-jwks-in-cluster. MEASURED by RUNNING this
+# file on this branch merged with origin/main c0c46601:
+#     196 of 221 suites are named by a pull_request-triggered workflow
+#     PASS the ungated SET matches its pin exactly (25 suite(s))
+# When the shell-suites.yml line lands: delete that entry and raise the baseline by one.
+
 # 192 -> 193 (denominator 215 -> 216) on 2026-09-30 for #663: the kind sign-in
 # answered 500 because the BFF autoscalers' maxReplicas (6) times the unconfigured
 # R2DBC pool (10) exceeded the app role's CONNECTION LIMIT (20).
@@ -754,7 +767,43 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # RUNNING this file on the merged tree (GUARD_PREMERGE=0), not computed:
 #     197 of 221 suites are named by a pull_request-triggered workflow
 #     PASS the ungated SET matches its pin exactly (24 suite(s))
-PREMERGE_BASELINE="${GUARD_PREMERGE:-197}"
+#
+# 197 -> 198 (denominator 221 -> 222) on 2026-10-14 for #629 (iss/629-tor-reconcile-
+# apply-export-report-onions, from origin/main 702b590d): one new suite,
+# tests/scripts/test-tor-export-sync.sh (the signed Tor export consumer + onion report),
+# landed on disk in the same commit that wires it into shell-suites.yml's alpine job
+# (beside tests/scripts/test-tor-node-contract.sh, which pins its wiring). MEASURED by
+# RUNNING this file on the tree with the suite wired (GUARD_PREMERGE=0), not computed:
+#     198 of 222 suites are named by a pull_request-triggered workflow
+#     PASS the ungated SET matches its pin exactly (24 suite(s))
+# 198 of 224 -> 198 of 225 and ungated SET 26 -> 27 on 2026-10-14 for the 13a cut-over
+# matrix (origin/main e3e95369 measures 224 / 26 when run; the 222 / 24 above is the figure
+# at #629's own merge): tests/scripts/test-optional-services-cutover-matrix.sh
+# is a new suite that is NOT named by a pull_request workflow (it is wired post-merge by .gitlab-ci.yml and
+# recorded in PREMERGE_UNGATED above), so the denominator rose and the gated count did
+# not. MEASURED by RUNNING this file on the merge with e3e95369 (GUARD_PREMERGE=0), not computed:
+#     198 of 225 suites are named by a pull_request-triggered workflow
+#     PASS the ungated SET matches its pin exactly (27 suite(s))
+# Re-measured on the merge with origin/main fc498f8a (GUARD_PREMERGE=0), after other suites
+# landed on main: 198 of 230 suites are named by a pull_request-triggered workflow, and
+# the ungated SET matches its pin exactly (32 suite(s)). The baseline 198 is unchanged.
+# tests/scripts/run-ungated-lane.sh's header counts (32 of 32, 8 of 32) were taken from
+# its E2E_UNGATED_DRY_RUN=1 output for both sets. The "stays 21/22" lines in the entries
+# above are history and are left as written.
+#
+# 198 -> 198 (denominator +1, ungated SET +1) on 2026-10-14 for #698 (Local AI without
+# Claude): tests/scripts/test-local-ai-no-claude.sh landed on disk and in .gitlab-ci.yml's
+# orphan-guards-verify job, but NOT in shell-suites.yml: the change that added it was
+# not permitted to edit .github, so the suite is recorded in PREMERGE_UNGATED below as a
+# wiring gap (the same shape as the two tests/desktop-governance entries there) and the
+# gated count does not move. Re-measured on 2026-10-15 on the merge of
+# feat/local-ai-dock-and-cli with origin/main a73be8ce (GUARD_PREMERGE=0), by RUNNING
+# this file, not computed:
+#     198 of 233 suites are named by a pull_request-triggered workflow
+#     PASS the ungated SET matches its pin exactly (35 suite(s))
+# tests/scripts/run-ungated-lane.sh's header counts (35 of 35, 8 of 35) were taken from
+# its E2E_UNGATED_DRY_RUN=1 output for both sets.
+PREMERGE_BASELINE="${GUARD_PREMERGE:-198}"
 
 # 182 -> 192 (denominator 205 -> 215) on 2026-09-30 for #385: the census gained a
 # THIRD spelling, bare `tests/*.sh` at depth 1, and the ten suites it exposed were
@@ -914,10 +963,76 @@ PREMERGE_BASELINE="${GUARD_PREMERGE:-197}"
 # job's SUITES list. Nothing about the other eight changed; they still need a
 # node_modules and a chromium no shell-suites image carries.
 PREMERGE_UNGATED=(
+  # Lands outside the pull_request gate ONLY because wiring it there means an edit under
+  # .github/workflows/shell-suites.yml, which the change that added it (#368) was not
+  # permitted to make. It is NOT an exemption on the merits: it needs bash, python3 and
+  # ssh-keygen, no root and no network, and runs the real docker/build-image.sh against
+  # fake builders. It was MEASURED only on a developer host, NOT in a shell-suites image
+  # (ssh-keygen may be absent from the python:3.12-slim job). It also runs inside
+  # `make matrix-check` as a non-gating smoke and as `make build-image-dial-identity-check`.
+  # Wire it into shell-suites.yml, measure it there, DELETE this entry and raise
+  # PREMERGE_BASELINE by one.
+  tests/build-image-dial-identity.sh
   tests/casdoor/test-jwt-custom-token.sh
+  # NOT an exemption, a wiring gap: this suite is offline (bash + python3 + PyYAML)
+  # and WOULD run in the shell-suites image, but wiring it into
+  # .github/workflows/shell-suites.yml is an edit the author of this suite was not
+  # permitted to make. It is gated post-merge today by .gitlab-ci.yml's
+  # desktop-governance-verify. TO CLOSE THIS: add the path to the SUITES list in
+  # shell-suites.yml (with py3-yaml in that job's apk set), delete this entry and
+  # raise PREMERGE_BASELINE by one to the number this file then prints.
+  tests/desktop-governance/test-governance-flags-visible.sh
+  # NOT a claim that it cannot gate: it needs only bash + python3 + openssl, the
+  # tool set its three siblings in tests/desktop-governance/ already run under in
+  # shell-suites.yml. It is listed solely because the change that added it could
+  # not edit .github/workflows/shell-suites.yml. It IS run post-merge, by
+  # .gitlab-ci.yml's desktop-governance-verify. WIRE IT into that SUITES list, then
+  # delete this entry and raise PREMERGE_BASELINE by one.
+  tests/desktop-governance/test-sso-token-producer.sh
   tests/device-registry/test-layer-a-headscale-acl.sh
   tests/egress-vpn/test-secret-contract.sh
+  # Offline, bash + python3 only, 48 passed / 0 failed on 2026-10-14 (#654 D12:
+  # the driver refuses `commit` for a Tor address; its three-mutation battery is
+  # inside). It belongs in shell-suites.yml's ALPINE job beside
+  # tests/go-live/test-go-live-driver.sh, and .gitlab-ci.yml's
+  # orphan-guards-verify already runs it post-merge. Listed here, not gated,
+  # only because the lane that added it may not edit .github/: the operator adds
+  # the one line there, raises PREMERGE_BASELINE by one and drops this entry.
+  tests/go-live/test-onion-refuse.sh
   tests/pentest/nuclei/test-templates.sh
+  # NOT UNGATEABLE, JUST NOT GATED YET: python3 + bash over synthetic fixture logs, no
+  # network, no root, no docker -- it would run in any shell-suites image. It sits
+  # here only because naming it in shell-suites.yml is an edit under .github/, which
+  # the change that added it was not allowed to make. THE FOLLOW-UP IS TO ADD IT TO
+  # THAT WORKFLOW'S SUITES LIST, DELETE THIS ENTRY AND RAISE PREMERGE_BASELINE BY ONE. It is
+  # run today by `make binpkg-reuse-report-check`.
+  tests/scripts/test-binpkg-reuse-report.sh
+  # NOT YET IN THE PULL_REQUEST GATE, and that is the only reason it is here: it is
+  # offline, bash + python3 only, and belongs in shell-suites.yml beside
+  # test-lsm-posture-honesty.sh (same job). It is gated post-merge by .gitlab-ci.yml's
+  # lint:btf-pahole-pairing. The lane that wrote it (hugmesh-generator#760) was
+  # forbidden to edit anything under .github, so: add the path to that SUITES list,
+  # delete this entry and raise PREMERGE_BASELINE by one to the number check 7 prints.
+  tests/scripts/test-btf-pahole-pairing.sh
+  # CANNOT gate: it needs a kernel SOURCE tree plus gcc, flex, bison and pahole, none
+  # of which a shell-suites image carries, and it exits 2 (never a silent pass) when
+  # given no tree. Run it with `make btf-kconfig-resolve-check KERNEL_TREE=<tree>`.
+  tests/scripts/test-btf-kconfig-resolve.sh
+  # NOT an exemption, a wiring gap: offline, python3 + os.walk over the checkout,
+  # no network, no root. It sits here only because naming it in shell-suites.yml is
+  # an edit under .github/, which the change that added it (the group-call SFU design
+  # page, #734) was not allowed to make. Run post-merge by .gitlab-ci.yml's
+  # lint:group-call-sfu-doc-honesty. Measured only on a developer host, not in a
+  # shell-suites image: check that before gating it. The operator adds the line to
+  # shell-suites.yml, raises PREMERGE_BASELINE by one and drops this entry.
+  tests/scripts/test-group-call-sfu-doc-honesty.sh
+  # NOT an exemption, a wiring gap: the lane that added this suite (#509) may not
+  # edit .github/. It runs every stage4 builder with --print-plan and needs only
+  # bash, sed, paste and timeout, but is UNMEASURED in the shell-suites images
+  # (ALPINE/python:3.12-slim), so check that before gating it. The operator adds the
+  # one line to shell-suites.yml, raises PREMERGE_BASELINE by one and drops this
+  # entry. .gitlab-ci.yml's lint:domain-idp-flag runs it post-merge meanwhile.
+  tests/scripts/test-domain-idp-flag.sh
   # Needs `unshare -Urm` (a private user+mount namespace) to stack REAL bind
   # mounts under a scratch build system and drive the x86 builder's own
   # umount_chroot, stale-mount listing and printed umount commands against the
@@ -930,6 +1045,14 @@ PREMERGE_UNGATED=(
   # 2026-09-30); the same code paths are proven against a fixture table,
   # pre-merge, by tests/scripts/test-builder-resume-safety.sh.
   tests/scripts/test-builder-unmount-real.sh
+  # NOT YET IN THE PULL_REQUEST GATE, and that is the only reason it is here: it is
+  # offline, PyYAML-only, ~12 s, and belongs beside test-db-connection-budget.sh in
+  # shell-suites.yml's debian job. The lane that wrote it (hugmesh-generator#693,
+  # 2026-10-07) was forbidden to edit anything under .github, so until that one
+  # line lands it runs post-merge in .gitlab-ci.yml's lint:bff-jwks-in-cluster and
+  # locally under `make e2e-ungated`. When the line lands: delete this entry and
+  # raise PREMERGE_BASELINE 196 -> 197 (check 7 will say so).
+  tests/scripts/test-bff-jwks-in-cluster.sh
   tests/scripts/test-e2e-cli-lane.sh
   tests/scripts/test-e2e-coverage-matrix.sh
   tests/scripts/test-e2e-env-interface-dimensions.sh
@@ -946,8 +1069,21 @@ PREMERGE_UNGATED=(
   # kind cluster up but no metrics-server synced it goes RED with 2 failures.
   # See the "NOT LISTED HERE" entry in .github/workflows/shell-suites.yml.
   tests/scripts/test-kind-metrics-api.sh
+  # Pure offline derivation (python3 + PyYAML + bash), wired post-merge by .gitlab-ci.yml's
+  # lint:optional-services-cutover-matrix. It is NOT in the pull_request gate only because
+  # adding it to .github/workflows/shell-suites.yml is an edit that PR did not make; gate it
+  # there (the job image needs PyYAML) and delete this entry.
+  tests/scripts/test-optional-services-cutover-matrix.sh
   tests/scripts/test-federation-module-slugs.sh
   tests/scripts/test-liquibase-grant-roles.sh
+  # NOT an exemption, a wiring gap: offline, bash + python3 + git only (it builds a
+  # PATH with no claude binary and runs scripts/local-ai.sh under it), so it WOULD run
+  # in the shell-suites debian job. It is listed solely because the change that added
+  # it (#698, the Local AI dock and CLI) was not permitted to edit
+  # .github/workflows/shell-suites.yml. It IS run post-merge, by .gitlab-ci.yml's
+  # orphan-guards-verify. TO CLOSE THIS: add the path to that job's SUITES list, delete
+  # this entry and raise PREMERGE_BASELINE by one to the number this file then prints.
+  tests/scripts/test-local-ai-no-claude.sh
   # RED ON MAIN, and the reds are real defects rather than suite bugs: a jetson
   # builder that bakes the cluster tree without resolving the gate at all, two
   # selection-rendered artefacts the boot path still sources from git, a git
@@ -980,7 +1116,28 @@ PREMERGE_UNGATED=(
   # .gitlab-ci.yml's lint:optional-service-slug-closure — nothing on the GitHub side
   # runs it; `make e2e-ungated` runs it locally. Leave it listed until #106 lands.
   tests/scripts/test-optional-service-slug-closure.sh
+  # Lands outside the pull_request gate ONLY because wiring it there means an edit
+  # under .github/workflows/shell-suites.yml, which the change that added it was
+  # not permitted to make (operator action, 2026-10-14). It is NOT an exemption on
+  # the merits: both suites are offline (python3 + openssl + bash; the netpol one also
+  # takes kubectl when present). They were MEASURED only on a developer host, NOT in a
+  # shell-suites image, and are run post-merge by .gitlab-ci.yml's lint:pg-tls-preflight
+  # and lint:netpol-egress-scope. Wire both into shell-suites.yml's DEBIAN job, measure
+  # them there, and DELETE both entries (PREMERGE_BASELINE then moves 198 -> 200). Added
+  # ungated: denominator +2 and the ungated SET +2, baseline unchanged at 198
+  # (RE-MEASURED on this branch merged with origin/main 9b1b733c, GUARD_PREMERGE=0: this
+  # file prints "198 of 228" and "(30 suite(s))").
+  tests/scripts/test-netpol-egress-scope.sh
+  tests/scripts/test-pg-tls-preflight.sh
   tests/scripts/test-service-env-contract.sh
+  # Lands outside the pull_request gate for the reason given above
+  # tests/scripts/test-netpol-egress-scope.sh and tests/scripts/test-pg-tls-preflight.sh:
+  # wiring it there is an edit under .github/workflows/shell-suites.yml, which the
+  # change that added it was not permitted to make. It is offline (python3 with PyYAML
+  # and tomllib, bash; kubectl optional) and is run post-merge by .gitlab-ci.yml's
+  # lint:tuwunel-instance-block-sync. Wire it into shell-suites.yml and DELETE this
+  # entry (PREMERGE_BASELINE then moves 198 -> 199).
+  tests/scripts/test-tuwunel-instance-block-sync.sh
   tests/stack/test-gateway-auth-flag-parity.sh
   tests/stack/test-m2-bootstrap.sh
   # Needs a host tor binary and the PUBLIC Tor network for minutes (it mints a real

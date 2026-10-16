@@ -109,7 +109,11 @@ trimmed. Anything that is not a plain `host:port` is refused and the default kep
 including a value with whitespace inside it, because the value is written verbatim into
 the torrc. A host tor fronting a **kind** node uses kind's port map, `127.0.0.1:8443`
 ([`kind-local.yaml`](../specs/cluster/bootstrap/kind-local/kind-local.yaml)).
-Today nothing writes `/etc/hugmesh/tor/upstream` for you (hugmesh/hugmesh-admin-bff-api#108).
+At runtime the file is written for you from admin-bff: `PUT /bff/admin/tor/nodes/<fp>/upstream`
+(SUPERADMIN) lands on the node through the signed export that
+[`hugmesh-tor-export-sync`](#the-signed-export-hugmesh-tor-export-sync) applies within one
+minute (below). Until the first such write the file is **unmanaged**: whatever the bake or
+a person put there stays.
 
 ### Ingress admission: the onion must be an Ingress host (hugmesh-generator#614)
 
@@ -196,7 +200,10 @@ Removing a slug drops its stanza and its exported hostname but **never** its key
 re-adding it brings back the same address. Nothing in the image build writes
 `/etc/hugmesh/tor/domains` yet: the Studio records which domains are Tor domains
 (`domains[].tor`, below), and the builder or provisioning step that turns that into this
-file is still open (hugmesh-generator#582).
+file is still open (hugmesh-generator#582). At **runtime** the file has a writer:
+admin-bff's `tor-onion` domain capability, applied on the node by
+[`hugmesh-tor-export-sync`](#the-signed-export-hugmesh-tor-export-sync) once a SUPERADMIN
+has written the `' global'` row (until then the list is unmanaged and a baked list stays).
 
 **Where a Tor domain is chosen (hugmesh-generator#582).** In the Studio's *Domain
 services* step, every domain except the mesh's own has a **Tor front door** row, scope
@@ -229,7 +236,7 @@ builder starts writing the file and the wording has to change with it.
 |---|---|---|
 | **key directory name (slug)** | `core.own_casdoor.slug(name)`: lowercase, every run of non-`[a-z0-9]` becomes `-`, trimmed; e.g. `shop.example` → `shop-example`. A name whose slug exceeds 63 characters gets **no** onion (never truncated, which could put two domains on one key); the row says so. Two names that slug alike (`a-b.example`, `a.b.example`) share one key directory, so only the **first in table order** gets an onion, and the second one's row names the clash. | `core/domain_services.onion_slug`, `tor_slug_clash` |
 | **tenant** | The gateway tenancy key the onion `Host` maps to: the slug when the domain runs its **own** Casdoor (the value its `APP_TENANCY_HOSTS` entry already has), else `default`. A domain on the superdomain's sign-in has no issuer of its own, so a slug tenant would make the gateway refuse every signed-in user on its onion; its onion is a separate **address** serving the default brand, and a separate **login** needs sign-in *own*. | `core/domain_services.onion_tenant` |
-| **node input** | `/etc/hugmesh/tor/domains`: one slug per line, the format above. **Open: nothing writes it from `domains[].tor`.** A builder or the provisioning step has to turn each `domains[]` entry with `tor: true` into one line, using the slug rule in the first row. The runtime writer is the admin-bff export the node agent will apply (hugmesh/hugmesh-admin-bff-api#112, hugmesh-generator#629); a list it does not manage stays as baked. | builder / provisioning (open, #582) |
+| **node input** | `/etc/hugmesh/tor/domains`: one slug per line, the format above. **Open: nothing writes it from `domains[].tor`.** A builder or the provisioning step has to turn each `domains[]` entry with `tor: true` into one line, using the slug rule in the first row. The **runtime** writer exists: `hugmesh-tor-export-sync` applies admin-bff's signed export (hugmesh/hugmesh-admin-bff-api#112, hugmesh-generator#629) — `domainsManaged=true` replaces the file with exactly the exported slugs (an empty list is an empty file), `false` leaves a baked list in force. | builder / provisioning (open, #582); runtime: `hugmesh-tor-export-sync` |
 | **gateway host map** | `APP_TENANCY_HOSTS_FILE`: `<primary onion>=default` first, then one `<onion>=<tenant>` per Tor domain, written temp-then-rename in the same directory (the hugmesh-gateway#39 writer contract). Only v3 onion names are written. | compose: `hugmesh-tor` (below). Hardware node: **open** — no writer yet; it must read the node's own `/var/lib/hugmesh/tor/*.hostname` files, never the admin-bff onion report (that report is unauthenticated telemetry, per the correction on #582). |
 
 **Go-Live.** `tor-onion` still needs no domain. When one is given and it is not the node's
@@ -259,6 +266,97 @@ shows OutOfSync until someone syncs it (the 08a precedent). And a tracking clust
 already carries `tor-onion-marked` from the old auto-synced path loses it at the next
 08-networkpolicy prune, and gets it back only when 08b is synced by hand. The policy is
 inert either way.
+
+## The signed export: `hugmesh-tor-export-sync`
+
+The node half of hugmesh/hugmesh-admin-bff-api#108 (hugmesh-generator#629).
+[`specs/usr/sbin/hugmesh-tor-export-sync`](../specs/usr/sbin/hugmesh-tor-export-sync) is a
+sibling of the reconcile, baked next to it (every rpi5 image; every x86 image except
+`--unaffiliated`) and run **every minute** by the same cron drop-in,
+`/etc/cron.d/hugmesh-tor-reconcile`, so it exists exactly when `tor` is selected. It is the
+runtime writer of `/etc/hugmesh/tor/upstream` and `/etc/hugmesh/tor/domains`, and the
+sender of the onion report the operator console shows. No new transport: both calls use
+the node's `/etc/hugmesh/registry/node.env` (`MACHINE_KEY_FP`, `BFF_EXPORT_URL`,
+`BFF_CLIENT_CERT`, `BFF_CLIENT_KEY`, `BFF_CA`) exactly as `hugmesh-vpn-reconcile` and
+`hugmesh-device-enrollment-report` do.
+
+**1. Fetch and apply.** `GET <BFF>/bff/admin/tor/export?node=<MACHINE_KEY_FP>` over the
+node's mTLS identity (the fingerprint is URL-encoded; a raw `+` would read as a space). The
+answer is `{body, contentHash, signature, publicKey, signed}` with
+`body = {node, generation, upstreamManaged, upstream, domainsManaged, domains[]}`. The
+signature is a detached Ed25519 over canonical line bytes, not over JSON:
+
+```
+v1-tor
+node=<fp>
+generation=<long>
+upstream-managed=<true|false>
+upstream=<host:port or empty>
+domains-managed=<true|false>
+domain=<slug>        (one line per slug, sorted)
+```
+
+[`specs/usr/lib/hugmesh/tor-verify.sh`](../specs/usr/lib/hugmesh/tor-verify.sh) recomputes
+those bytes and verifies them with the **same** `verify_sig` / `check_monotonic` as the
+device-registry and node-storage consumers (it sources `registry-verify.sh`), against the
+baked key-USB public half `/etc/hugmesh/registry/registry-pub.ed25519`. The rules, in order:
+
+| Rule | What the agent does |
+|---|---|
+| **Verify first.** `signed=false`, a signature that does not verify, or a `generation` not **strictly above** the last applied one | changes nothing, keeps the last-good files, logs why |
+| `body.node` is not this node's `MACHINE_KEY_FP` (the export for an unknown fingerprint is an empty signed body with nothing managed) | refused after verifying; nothing changes |
+| `upstreamManaged=false` | `/etc/hugmesh/tor/upstream` left alone (the bake or a person wrote it) |
+| `upstreamManaged=true`, `upstream=""` | the file is **removed**; the agent default `127.0.0.1:443` applies |
+| `upstreamManaged=true`, `upstream=X` | the file holds `X` as its one line |
+| `domainsManaged=false` | `/etc/hugmesh/tor/domains` left alone (a baked list stays in force) |
+| `domainsManaged=true` | the file holds exactly `domains`, one slug per line; an empty list is an **empty file**, which withdraws every per-domain onion (the primary is unaffected) |
+| a value the reconcile would ignore (not `host:port`; not `[a-z0-9][a-z0-9-]{0,62}`) | the whole export is refused before anything is written (admin-bff checks the same patterns; this is depth) |
+| every write | atomic: a temp file in the **same** directory, then a rename over the target; a crash between the two leaves the old file |
+| the last-applied generation | advances only after **every** write succeeded, so a partly applied export is retried next cycle (idempotent) |
+| after a write | `hugmesh-tor-reconcile` is run in the same pass: it re-renders the torrc, reloads a running tor, and mints and exports any new per-domain onion |
+
+**2. Report.** After **every** pass — applied, unchanged, or refused — the agent sends
+`POST <BFF>/bff/internal/tor/onions` with
+`{"machineKeyFp": fp, "primary": <content of /var/lib/hugmesh/tor/hostname, omitted before tor has minted it>, "domains": {"<slug>": <content of /var/lib/hugmesh/tor/<slug>.hostname>}}`.
+Each report replaces the node's previous one, so a withdrawn slug drops out of
+`GET /bff/admin/tor/nodes`. Only a v3 onion (`[a-z2-7]{56}.onion`) under a valid slug is
+reported (a stray file is logged and skipped so it cannot get the whole report refused), at
+most 64 domains. A 422 or any other non-2xx answer is logged with admin-bff's message and
+never aborts the agent. **The credential:** admin-bff gates `/bff/internal/**` on
+`ROLE_SERVICE`, which a node satisfies with the in-cluster `X-Internal-Token` header. The
+agent reads it from the file node.env names in `BFF_INTERNAL_TOKEN_FILE` (default
+`/etc/hugmesh/registry/internal-token`; sent through a 0600 header file, never on the
+command line). Without that file the report is still sent and the log says that an armed
+admin-bff answers 401. **Open:** nothing bakes that file onto a node today
+(`provision.sh` writes node.env without it), which is the same gap the enrollment
+self-report has.
+
+**Recovery after a reseed.** The export generation is the node's `config_generation` plus
+the highest `tor-onion` capability generation; both restart low after a rebuilt or reseeded
+admin-bff database, so the strict rule would then refuse every export. A person runs, on the
+node, `hugmesh-tor-export-sync --reset-generation`: it forgets the stored last-applied
+generation (`/var/lib/hugmesh/tor-export/last-good-generation`) and nothing else; the next
+export is accepted once it **verifies**, whatever its generation. A lower generation is never
+accepted silently. Everything else about the agent is fail-soft like its sibling: a missing
+input, an unreachable BFF or a refused export keeps the files and exits 0.
+
+**What is proven offline.** `tests/scripts/test-tor-export-sync.sh` drives the real agent
+against a sandbox root with curl stubbed and the export signed by a throwaway Ed25519 key
+whose public half is baked into the sandbox: the canonical bytes against a reference string,
+accept / replay / rollback / tampered / unsigned / foreign key / foreign node / unknown
+fingerprint, the four managed combinations plus the empty upstream and the empty list, the
+rename that never happens, the report body in every shape, the token header, a 422, the
+reseed reset, and the real `hugmesh-tor-reconcile` rendering a stanza for a domain the sync
+wrote. `tests/scripts/test-tor-node-contract.sh` section E pins the cron entry, both
+builders' bake lines (executed) and that both agents share one spelling of each validator.
+
+**Awaiting a live run** (a booted tor node against a running admin-bff; none has run):
+the live check of #629 — `PUT /bff/admin/tor/nodes/<fp>/upstream`, and within one minute
+`/etc/hugmesh/tor/upstream` holds the value; grant `tor-onion` for one brand plus the
+`' global'` row, and `/var/lib/hugmesh/tor/<brand>.hostname` appears; `GET /bff/admin/tor/nodes`
+lists both onions; set the global row to `granted=false`, and within one cycle the domains
+file is empty and the brand onion's export disappears. Also the report itself reaching an
+**armed** admin-bff, which needs the internal token file above.
 
 ## SELinux
 
@@ -292,7 +390,8 @@ reload the service). Like the other node modules it is authored-but-not-yet-comp
   fixture root filesystems.
 - **Offline (runs pre-merge):** `tests/scripts/test-tor-onion-ingress.sh` — the onion's
   Ingress admission (#614), described above; `tests/scripts/test-optional-netpol-autosync.sh`
-  — where the tor NetworkPolicy ships (#617).
+  — where the tor NetworkPolicy ships (#617); `tests/scripts/test-tor-export-sync.sh` — the
+  signed-export consumer and the onion report (#629), described above.
 - **Not yet exercised:** a booted QEMU or hardware node built with tor. The
   `tests/qemu/assertions.sh` tor block (both services linked, `/usr/bin/tor` present,
   exactly one tor process, a v3 hostname exported) has never run against a real guest,
@@ -300,7 +399,8 @@ reload the service). Like the other node modules it is authored-but-not-yet-comp
   oneshot leaves the start to OpenRC, and the `@reboot` cron exports the first-boot
   hostname) and for the Ingress admission above: on a live control-plane guest the tor
   block also asks `hugmesh-tor-ingress-admit status` whether every exported onion is an
-  Ingress host.
+  Ingress host. The same goes for `hugmesh-tor-export-sync` against a live admin-bff (the
+  live checks listed in its section).
 
 ## The local docker mesh (`make stack-up TOR=1`)
 
@@ -497,7 +597,7 @@ a 403.
 ```bash
 make kind-up && make kind-images   # the kind lane itself (unchanged)
 make kind-tor                      # host tor + Ingress rule; waits until the onion answers
-curl --socks5-hostname 127.0.0.1:9052 -k -I https://$(bash scripts/kind-tor.sh onion)/
+curl --socks5-hostname 127.0.0.1:9052 -sk -D - -o /dev/null https://$(bash scripts/kind-tor.sh onion)/
 make kind-e2e-tor                  # @env:kind @via:onion — tests/e2e/features/platform/tor-onion-kind.feature
 make kind-tor-down                 # stop tor, drop the Ingress rule (keys kept)
 make kind-tor-check                # OFFLINE guard: tests/scripts/test-kind-tor.sh

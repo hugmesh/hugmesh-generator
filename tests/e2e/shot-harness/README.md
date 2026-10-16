@@ -64,6 +64,16 @@ cd tests/e2e && npm run shots:validate
 | `route` | door-relative, e.g. `/user/profile` — the door comes from `--door`, never from this file |
 | `do[]` | `goto` · `click` · `fill` · `press` · `expect` · `expectAttached` · `expectHidden` |
 | `first` | optional, on a testid action, **only `true`**: act on the *first* match when the UI renders that testid once per list row (admin-ui's `gs-suspend` inside `*ngFor`). Without it a second match is a strict-mode failure, on purpose — the plan must say it accepts "whichever row is first" |
+| `settle` | optional, `{"mask": ["<selector>", …]}`: live regions (a `<canvas>` or `requestAnimationFrame` loop, which the settle step cannot freeze) to paint over in the two frames `waitForSettle()` compares. Selectors come from the closed `MASK_SELECTORS` list in `shot-table.mjs`, each naming the UI source that ships it; anything else fails `validate` |
+
+**A `settle.mask` is not an opt-out.** Fonts and finite animations are still waited
+for across the whole page, every pixel *outside* the masked boxes must still hold
+still for two frames 300ms apart, a selector that matches nothing masks nothing, and
+a mask covering more than half the viewport is refused. Only the comparison is
+masked: the PNG still contains the live region as it happened to be painted. To add a
+selector, read the UI source for it, then add it to `MASK_SELECTORS` with the file
+that ships it. Offline pins: `npm run shots:settle-unit` (browser, no stack) and
+`npm run shots:validate-unit` (no browser).
 
 **Every row must end up waiting for something** — at least one
 `expect`/`expectAttached`/`expectHidden` naming a `data-testid` on the screen you
@@ -124,6 +134,8 @@ indistinguishable from evidence to everyone who did not run the harness. So:
 |---|---|
 | `shots.json` | the shot table — the only file a plan author edits |
 | `shot-table.mjs` | offline validator / `list` / `paths` / `needs-auth` |
+| `settle.ts` / `settle.spec.ts` | the settle step and its offline pin (`npm run shots:settle-unit`) |
+| `shot-table.test.mjs` | offline pin for the `settle.mask` validation (`npm run shots:validate-unit`) |
 | `shots.sh` | the one command: preflight, credential read, run |
 | `capture.spec.ts` | the driver; reuses `specs/helpers.ts` `onboard()`/`shot()` |
 | `evidence.mjs` | the is-this-really-evidence check; runs offline on any PNG |
