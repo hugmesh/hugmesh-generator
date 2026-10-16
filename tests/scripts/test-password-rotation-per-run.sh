@@ -104,7 +104,7 @@ nuniq="$(printf '%s\n' "${GEN}" | sort -u | grep -c .)"
 GBODY="$(awk '/^e2e_password_generate\(\)/,/^}/' "${LIB}" | grep -v '^[[:space:]]*#')"
 if printf '%s' "${GBODY}" | grep -F 'openssl rand' >/dev/null \
    && printf '%s' "${GBODY}" | grep -F '/dev/urandom' >/dev/null \
-   && ! printf '%s' "${GBODY}" | grep -E '\$RANDOM|\$\$|\bdate\b|\$BASHPID' >/dev/null; then
+   && ! printf '%s' "${GBODY}" | grep -E '\$RANDOM|\$\$|(^|[^a-z_])date([^a-z_]|$)|\$BASHPID' >/dev/null; then
   ok "the generator draws only from openssl rand / /dev/urandom"
 else
   bad "the generator draws from something other than openssl rand / /dev/urandom"

@@ -49,6 +49,8 @@
 # whose password you want to keep. An explicit $E2E_PASSWORD also keeps (and is
 # never written to the file). The Studio's "Add user" and its saved-mesh restore
 # pass E2E_PASSWORD_KEEP=1: adding one account must not re-password every other.
+# (`make e2e` runs the QEMU lane via plain `sudo`, which resets the environment:
+# the opt-outs reach it only from a root shell, `sudo -E`, or `docker run -e`.)
 #
 # ONE FILE, EVERY LANE. The default file belongs to the most recent run start in
 # ANY lane: `make kind-up` or `make e2e` re-passwords the file a running compose

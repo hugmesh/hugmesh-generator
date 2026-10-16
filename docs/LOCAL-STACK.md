@@ -363,6 +363,10 @@ E2E_PASSWORD_KEEP=1 make stack-seed      # debugging: keep the file's current va
 E2E_PASSWORD='…' make stack-seed         # explicit override: kept, never written to the file
 ```
 
+`make e2e` runs the QEMU lane through plain `sudo`, which resets the environment,
+so `E2E_PASSWORD_KEEP` / `E2E_PASSWORD` reach that lane only from a root shell or
+through `sudo -E` / the containerized route (`docker run -e E2E_PASSWORD_KEEP=1 …`).
+
 All lanes share the one file, so a run started in one lane (`make kind-up`,
 `make e2e`) re-passwords the file that a still-running compose mesh was seeded
 from. Re-run `make stack-seed`, which reconciles, or start the other run with
