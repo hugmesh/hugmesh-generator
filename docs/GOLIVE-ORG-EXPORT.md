@@ -254,7 +254,12 @@ For every repository that is not blocked, apply:
   BEFORE creating anything: every repository is reported skipped with git's own
   "Author identity unknown" reason and the organisation is left untouched;
 * pushes it to `main` with a plain `git push` — **never** `--force`, never a delete,
-  never a mirror;
+  never a mirror. The commit is named by its sha as soon as it is made, and the
+  file count, the scan of the commit's objects, the tree and the push all use that
+  sha, never `HEAD`: the work folder is an ordinary directory, and a commit added to
+  it after the scan is not what gets pushed. After the push the branch is read back
+  with `git ls-remote`; a branch that holds anything but that sha, or cannot be read,
+  is reported as skipped (the remote may then already hold it: check by hand);
 * on an existing non-empty repository: reports **unchanged** when `main` already
   holds exactly the snapshot tree, otherwise **refuses** — also when the content lives
   on another branch (`master`, say) and there is no `main` at all: apply lists every

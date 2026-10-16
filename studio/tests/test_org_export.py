@@ -2662,7 +2662,7 @@ def test_a_remote_branch_that_is_not_the_scanned_commit_after_the_push_is_a_fail
         other = _move_head_with_a_token(rp.workdir)
         _git(rp.workdir, "push", "-q", bare, "+HEAD:refs/heads/main")
         return other
-    fired = _hooked(runner, lambda a: a[:2] == ["git", "ls-remote"] and "--heads" not in a
+    fired = _hooked(runner, lambda a, kw: a[:2] == ["git", "ls-remote"] and "--heads" not in a
                     and "example-commons" in a[2], overwrite)
     res = oe.apply(p, runner)
     assert fired
@@ -2686,3 +2686,23 @@ def test_an_unreadable_remote_branch_after_the_push_is_a_failure(world):
     res = oe.apply(p, runner)
     r = next(x for x in res.repos if x.target == rp.target_full)
     assert r in res.failures and "unreadable" in r.skipped, r.skipped
+
+
+def test_a_second_run_compares_the_scanned_tree_even_when_head_moves(world):
+    """The tree that decides 'unchanged' is the scanned commit's, not HEAD's: a commit
+    added while the tree is being named neither turns a matching remote into a
+    refusal nor reaches it."""
+    cfg, runner = world["cfg"], world["runner"]
+    assert oe.apply(oe.plan(cfg, runner, stamp="20260101T000000Z"), runner).failures == []
+    bare = _bare(world, "example-commons")
+    before = _git(bare, "rev-parse", "main")
+    p = oe.plan(cfg, runner, stamp="20260202T000000Z")
+    rp = next(r for r in p.repos if r.source == "hugmesh-commons")
+    fired = _hooked(runner, lambda a, kw: a[:2] == ["git", "rev-parse"]
+                    and a[-1].endswith("^{tree}") and _in(rp.workdir)(kw),
+                    lambda a, kw: _move_head_with_a_token(rp.workdir))
+    res = oe.apply(p, runner)
+    assert fired
+    r = next(x for x in res.repos if x.target == rp.target_full)
+    assert r.action == "unchanged" and not r.skipped, (r.action, r.skipped)
+    assert _git(bare, "rev-parse", "main") == before
