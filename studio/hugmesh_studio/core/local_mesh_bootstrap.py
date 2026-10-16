@@ -1353,7 +1353,11 @@ class LocalMeshBootstrap:
         record AND the record kept a copy, the copy is put back first — without
         that the next seed from this page mints a second password and every persona
         401s (seed-e2e.sh leg 1c, exit 3). No copy -> the current file is used and
-        the log says so."""
+        the log says so. EXCEPT when a completed seed reconciled these volumes to
+        the file now on disk (its seed stamp still matches it — a terminal `make
+        stack-seed` since the save rotates the file and re-passwords every live
+        identity): then the copy is the stale one, and the record follows the file
+        (:func:`.saved_meshes.follow_reseeded_credentials`) instead."""
         log: list[str] = []
 
         def _note(line: str) -> None:
@@ -1378,6 +1382,15 @@ class LocalMeshBootstrap:
             _note(f"[saved-mesh] refused — {plan.sentence} Nothing was started.")
             return False, log
         if rec.has_credential_copies():
+            # A completed seed since the save (it rotated the file and reconciled
+            # these very volumes to it) makes the record follow the file; only a
+            # file nothing seeded is replaced by the saved copy.
+            if saved_meshes.follow_reseeded_credentials(
+                    rec, e2e_target=self.e2e_credentials_path()):
+                _note("[creds] a completed seed reconciled this mesh's volumes to "
+                      f"the current {os.path.basename(self.e2e_credentials_path())} "
+                      "(seed stamp) — the record's saved copy now follows it "
+                      "instead of being put back over it (values never logged)")
             self._put_saved_credentials_back(rec, _note)
         else:
             _note("[creds] no credential copy in this record — the current "

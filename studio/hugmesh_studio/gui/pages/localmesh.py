@@ -3957,7 +3957,11 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         self._added_user_specs = [s for s in self._added_user_specs
                                   if s.split(":", 1)[0] != uname]
         self._added_user_specs.append(spec)
-        env = {"EXTRA_ROLE_USERS": " ".join(self._added_user_specs)}
+        # E2E_PASSWORD_KEEP=1: `make stack-seed` STARTS a run and would mint a new
+        # shared password (tests/stack/e2e-password.sh) — re-passwording every
+        # persona already on this mesh just to add one account. Keep the run's.
+        env = {"EXTRA_ROLE_USERS": " ".join(self._added_user_specs),
+               "E2E_PASSWORD_KEEP": "1"}
         if password:
             env[pw_env] = password          # env-only — never argv, never logged
         stack = self.boot._stack_node()

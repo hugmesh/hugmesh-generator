@@ -803,6 +803,15 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 #     PASS the ungated SET matches its pin exactly (35 suite(s))
 # tests/scripts/run-ungated-lane.sh's header counts (35 of 35, 8 of 35) were taken from
 # its E2E_UNGATED_DRY_RUN=1 output for both sets.
+#
+# 198 -> 198 (denominator 237 -> 238, ungated SET 39 -> 40) on 2026-10-15 for the
+# per-run e2e password rotation: tests/scripts/test-password-rotation-per-run.sh landed
+# on disk and in .gitlab-ci.yml's lint:password-rotation-per-run, but NOT in
+# shell-suites.yml (that change was not permitted to edit .github), so it is recorded in
+# PREMERGE_UNGATED below as a wiring gap and the gated count does not move. MEASURED by
+# RUNNING this file on that branch (origin/main 298e5a72), not computed:
+#     198 of 238 suites are named by a pull_request-triggered workflow
+#     PASS the ungated SET matches its pin exactly (40 suite(s))
 PREMERGE_BASELINE="${GUARD_PREMERGE:-198}"
 
 # 182 -> 192 (denominator 205 -> 215) on 2026-09-30 for #385: the census gained a
@@ -1084,6 +1093,15 @@ PREMERGE_UNGATED=(
   # orphan-guards-verify. TO CLOSE THIS: add the path to that job's SUITES list, delete
   # this entry and raise PREMERGE_BASELINE by one to the number this file then prints.
   tests/scripts/test-local-ai-no-claude.sh
+  # NOT an exemption, a wiring gap: offline, bash + python3 + curl + jq + openssl
+  # (temp credentials files and a stub homeserver on 127.0.0.1), so it WOULD run in
+  # the shell-suites alpine or debian job. It is listed solely because the change that
+  # added it (the per-run e2e password rotation, 2026-10-15) was not permitted to edit
+  # .github/workflows/shell-suites.yml. It IS run post-merge, by .gitlab-ci.yml's
+  # lint:password-rotation-per-run, with its mutation battery. TO CLOSE THIS: add
+  # the path to a shell-suites job, delete this entry and raise PREMERGE_BASELINE by
+  # one to the number this file then prints.
+  tests/scripts/test-password-rotation-per-run.sh
   # RED ON MAIN, and the reds are real defects rather than suite bugs: a jetson
   # builder that bakes the cluster tree without resolving the gate at all, two
   # selection-rendered artefacts the boot path still sources from git, a git

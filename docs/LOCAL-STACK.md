@@ -354,7 +354,48 @@ make stack-up SOCIAL=1 && make stack-seed SOCIAL=1   # + Matrix/Mastodon fixture
 ```
 
 (equivalently `SEED_CASDOOR_ONLY=1 tests/stack/seed-e2e.sh` / `tests/stack/seed-e2e.sh`
-directly). It provisions (reusing `tests/qemu/seed-accounts.sh --roles` + its
+directly).
+
+**Every `make stack-seed` starts a new run with a NEW e2e password.** The shared
+persona password is a 32-character CSPRNG value minted at the start of each run
+(`tests/stack/e2e-password.sh`, `e2e_password_start_run`) and written, mode 600,
+to `${E2E_CREDENTIALS_FILE:-.e2e-credentials}` at the repo root. Everything later
+in that run (`make stack-e2e`, `tests/e2e/run.sh`, the Playwright helpers) reads
+that file and never mints. The seeder then **reconciles** every stored identity to
+the new value: Casdoor personas through the apply hook's set-password, and the
+tuwunel `e2e-mod`/`e2e-user` users (SOCIAL=1) by changing their own password from
+one of the superseded values the file keeps in `E2E_PASSWORD_PREVIOUS`. A
+persisted volume therefore does not 401 after a rotation. The run boundary is one
+process per lane: `make stack-seed` (compose), `make kind-up` (kind), and
+`make e2e` (QEMU, run mode only). Sub-seeders and consumers never rotate.
+
+```bash
+E2E_PASSWORD_KEEP=1 make stack-seed      # debugging: keep the file's current value
+E2E_PASSWORD='…' make stack-seed         # explicit override: kept, never written to the file
+```
+
+`make e2e` runs the QEMU lane through plain `sudo`, which resets the environment,
+so `E2E_PASSWORD_KEEP` / `E2E_PASSWORD` reach that lane only from a root shell or
+through `sudo -E` / the containerized route (`docker run -e E2E_PASSWORD_KEEP=1 …`).
+
+All lanes share the one file, so a run started in one lane (`make kind-up`,
+`make e2e`) re-passwords the file that a still-running compose mesh was seeded
+from. Re-run `make stack-seed`, which reconciles, or start the other run with
+`E2E_PASSWORD_KEEP=1`. The Studio's **Add user** and saved-mesh **restore** pass
+`E2E_PASSWORD_KEEP=1` themselves: adding one account does not re-password the others.
+
+Once its Casdoor leg is verified (and again when it finishes), `make stack-seed`
+writes a **seed stamp** beside the file, `.e2e-credentials.seeded` (mode 600): the
+sha256 of the credentials file the identities now hold, a time and a stage, never a
+password. It is valid only while that sha256 still matches the file. The Studio
+reads it in two places. Its credentials check counts a terminal seed as a completed
+seed, so it no longer warns that sign-in will 401. A saved mesh's warm **Start** lets
+the record's saved copy follow a file that a completed seed reconciled the kept
+volumes to. Without a matching stamp (another lane rotated the file, or the seed died
+before its Casdoor leg), the warm start still puts the saved copy back. A seed run
+with an explicit `E2E_PASSWORD` that the file does not hold removes the stamp.
+
+It provisions (reusing `tests/qemu/seed-accounts.sh --roles` + its
 Casdoor apply hook — the same machinery the cluster/pentest seeds use):
 
 1. **The `app-user-bff` OAuth2 client** (`ensure_app()`): a confidential client
@@ -527,10 +568,11 @@ paths, not a 404).
   It creates the `app-user-bff` OAuth2 client + the org/roles +
   e2e personas, and once it has run, **real browser SSO login works end-to-end**
   (`/login` with an e2e persona, e.g. `e2e-admin`; see "Seeding the e2e
-  fixtures" above). **The password is generated fresh per run, never a fixed
-  literal**: `make stack-seed` does not print it (the Studio persists that
-  output). Read it from the run-state file (`${E2E_CREDENTIALS_FILE:-.e2e-credentials}`
-  at the repo root); the Studio's local-mesh page also shows it in a copyable
+  fixtures" above). **The password is minted fresh at every `make stack-seed`
+  (the run start), never a fixed literal**: `make stack-seed` does not print it
+  (the Studio persists that output). Read it from the run-state file
+  (`${E2E_CREDENTIALS_FILE:-.e2e-credentials}` at the repo root); the Studio's
+  local-mesh page also shows it in a copyable
   credentials table (or "not seeded yet" if that run hasn't happened). Before
   seeding, and for the Casdoor **apps/users** this
   stack still doesn't provision (the federation manifest's fragment-sync client,
