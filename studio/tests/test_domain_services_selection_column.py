@@ -215,16 +215,22 @@ def _local_mesh(qapp, monkeypatch):
 
 
 def _fleet(qapp, monkeypatch):
-    """The fleet's Domain services step, in the fleet page at its default size."""
+    """The fleet's Domain services step, in the fleet's real host window
+    (``FleetWindow``, 760x700 by default) — as the two wizard hosts are measured in
+    their real windows. A bare ``FleetPage`` has no default size: shown on its own it
+    took its natural 533x533 at 13.5 pt, where the front-door table's 482 px of
+    columns did not fit, an inner horizontal scrollbar covered the last row and the
+    height pins failed on a window nobody opens."""
     from hugmesh_studio.core.fleet import FleetDriver
     from hugmesh_studio.gui.pages import fleet as fleet_mod
     monkeypatch.setattr("hugmesh_studio.core.build_driver.detect",
                         lambda builder_image="hugmesh-builder": HOST)
-    p = fleet_mod.FleetPage(GENERATOR_DIR)
+    win = fleet_mod.FleetWindow(GENERATOR_DIR)
+    p = win.page
     p.driver = FleetDriver(GENERATOR_DIR, HOST)
     p.driver._image_present = lambda: True
     p.driver.run = lambda *a, **k: 0
-    p.show()
+    win.show()
     p.cluster_domain.setText("mesh.example")
     while p.stack.currentIndex() < fleet_mod.STEP_DOMAINS:
         p.next_btn.click()
@@ -232,7 +238,7 @@ def _fleet(qapp, monkeypatch):
     p.next_btn.click()
     assert p.stack.currentIndex() == fleet_mod.STEP_DOMAIN_SERVICES
     p.domain_services._step(1)
-    return p.domain_services, p
+    return p.domain_services, win
 
 
 _HOSTS = {"image-flow": _image_flow, "local-docker-mesh": _local_mesh, "fleet": _fleet}
@@ -772,13 +778,10 @@ def test_the_front_door_and_its_state_line_are_above_the_fold_on_every_host(
     enough for its lines; ``_prose_is_readable``).
 
     A host's window takes a size no smaller than its own floor, and the fold is then
-    measured at the size it really took: the two wizard hosts scroll, so their floor
-    is small and every size here is reached; the fleet's window is floored by the
-    largest of ALL its stacked steps (its first step is 635 px tall and its third
-    807 px wide at 9 pt — measured the same on origin/main, where that is a
-    pre-existing fleet-window matter, not this step's: this step's own floor is
-    68x68 since it scrolls), so at the laptop and 640-logical sizes it stays at that
-    floor, and what is asserted is that the clamp IS the window's own minimum."""
+    measured at the size it really took: every host scrolls (the fleet window's steps
+    each sit in their own scroll area since the post-merge fix of #645, so its floor
+    is the step title plus the Back / Next row, no longer its tallest and widest
+    step), and what is asserted is that any clamp IS the window's own minimum."""
     body, window = styled_host
     _front_door_above_the_fold(body, qapp, f"as built, {window.width()}x{window.height()}")
     for label, _screen in _SIZES:

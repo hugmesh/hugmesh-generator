@@ -33,7 +33,7 @@ UI. You only need it for the `/admin/routes` panel below.
 
 Narrow test personas (`e2e-admin` (admin, user),
 `e2e-mod` (mod), `e2e-matrix` (matrix, user), `e2e-mastodon` (mastodon, user),
-`e2e-user` (user)) share one e2e password. It is generated per run, printed at the end of `make stack-seed` and kept in the gitignored `.e2e-credentials` file.
+`e2e-user` (user)) share one e2e password. Every `make stack-seed` starts a new run and mints a new one (unless `E2E_PASSWORD_KEEP=1` or an explicit `E2E_PASSWORD` is set). It is kept in the gitignored `.e2e-credentials` file and every existing persona is reconciled to it. See "Seeding the e2e fixtures" in [LOCAL-STACK.md](LOCAL-STACK.md).
 
 ### Granting a role
 
