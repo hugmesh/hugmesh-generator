@@ -288,7 +288,7 @@ class WorklistDriver:
             # The header and the rows come from the SAME two functions the v1 shim
             # (config.mesh_manifest) calls (#654, D5): the header is a projection of
             # the record's superbrand block, and the rows carry every Domain field by
-            # the field list — idp OMIT-WHEN-DEFAULT (#47), tor/look/ways/issuer_port
+            # the field list — idp OMIT-WHEN-DEFAULT (#47), tor/look/ways/issuer_port/github_org
             # OMIT-WHEN-EMPTY — so the two emitters cannot disagree and a field added
             # to Domain reaches this envelope without a change here. (Until #654 this
             # spelled its own four-key row and would have dropped any new field.)
@@ -304,6 +304,9 @@ class WorklistDriver:
             # as the v1 shim (config.mesh_manifest) emits it.
             **({"cluster_domain_services": list(base.cluster_domain_services)}
                if base.cluster_domain_services else {}),
+            # the own domain's export org: OMIT-WHEN-EMPTY, exactly as the v1 shim.
+            **({"cluster_domain_github_org": base.cluster_domain_github_org.strip()}
+               if (getattr(base, "cluster_domain_github_org", "") or "").strip() else {}),
         }
 
     def manifest_users(self) -> list[User]:

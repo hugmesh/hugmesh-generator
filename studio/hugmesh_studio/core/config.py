@@ -2862,6 +2862,32 @@ DOMAIN_IDP_SUPERDOMAIN = "superdomain"
 DOMAIN_IDP_OWN = "own"
 DOMAIN_IDP_CHOICES = (DOMAIN_IDP_SUPERDOMAIN, DOMAIN_IDP_OWN)
 
+# A GitHub organisation SLUG (the per-domain ``Domain.github_org`` field, read by the
+# Go-Live "Export to GitHub org" step): letters, digits and single hyphens, no leading
+# or trailing hyphen, at most 39 characters — GitHub's own login rule. The slug is the
+# ONLY thing ever stored: the export signs in with the person's own ``gh`` login at
+# run time (a pointer, never a token copy).
+GITHUB_ORG_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}$")
+
+
+def github_org_problem(slug) -> str:
+    """Why ``slug`` cannot be a GitHub organisation; "" when it can. Empty is fine:
+    no org is the default, and every config written before the field existed
+    carries exactly that."""
+    if slug is None:
+        return ""
+    if not isinstance(slug, str):
+        return f"GitHub org must be text, got {slug!r}"
+    s = slug.strip()
+    if not s:
+        return ""
+    if len(s) > 39:
+        return f"GitHub org {s!r} is longer than 39 characters"
+    if not GITHUB_ORG_RE.match(s):
+        return (f"not a GitHub org slug: {s!r} (letters, digits and single hyphens, "
+                "no leading or trailing hyphen)")
+    return ""
+
 
 #: The default brand id of a public name (hugmesh-generator#654, D4): the DNS name with
 #: every run of non-[a-z0-9] turned into one dash ("acme.example" -> "acme-example") —
@@ -2926,6 +2952,13 @@ class Domain:
     # reordering a brand must not move another brand's issuer. 0 = not allocated
     # (a brand that signs in through the superbrand, or a pre-#654 row).
     issuer_port: int = 0
+    # The GitHub organisation this domain's repositories are EXPORTED to by the
+    # Go-Live "Export to GitHub org" step (core/org_export.py): an org SLUG
+    # (``GITHUB_ORG_RE``), never a token. "" — the default, and every config from
+    # before the field existed — means the step does not apply to this domain at
+    # all. OMIT-WHEN-EMPTY on every saved shape, like ``tor``, so an untouched
+    # config, record and manifest keep their bytes.
+    github_org: str = ""
 
 
 #: Every field a brand row carries, in declaration order — THE key list every copy
@@ -2935,21 +2968,23 @@ DOMAIN_FIELDS: tuple[str, ...] = tuple(Domain.__dataclass_fields__)
 
 #: Row keys left out of every SAVED shape when they are empty/false/zero, so a row
 #: that does not use them is written exactly as before the field existed.
-DOMAIN_OMIT_WHEN_EMPTY: tuple[str, ...] = ("id", "tor", "look", "ways", "issuer_port")
+DOMAIN_OMIT_WHEN_EMPTY: tuple[str, ...] = ("id", "tor", "look", "ways", "issuer_port", "github_org")
 
 
 def domain_rows_to_dict(domains) -> list[dict[str, Any]]:
     """The SAVED shape of a list of domain rows (a config file, a session record, the
     brand record): every field, except the ``DOMAIN_OMIT_WHEN_EMPTY`` ones when they
     say nothing (``tor`` false since #582; ``look``/``ways`` empty and ``issuer_port``
-    0 since #654). A row that uses none of them is written exactly as it was before
+    0 since #654; ``github_org`` empty). A row that uses none of them is written exactly as it was before
     they existed; loading treats an absent key as the empty default. A row that is
     already a plain dict is passed through the same filter."""
     out: list[dict[str, Any]] = []
     for d in domains or []:
         row = dict(d) if isinstance(d, dict) else asdict(d)
         for k in DOMAIN_OMIT_WHEN_EMPTY:
-            if not row.get(k):
+            v = row.get(k)
+            # an org of only spaces says nothing either (the export step strips it)
+            if not (v.strip() if isinstance(v, str) and k == "github_org" else v):
                 row.pop(k, None)
         out.append(row)
     return out
@@ -3180,6 +3215,12 @@ class ImageConfig:
     # pre-existing manifest byte-identical. Mesh mode only; cloud prefills its
     # cluster domain as a real row 0 and standalone has no domains.
     cluster_domain_services: list[str] = field(default_factory=list)
+    # The GitHub org the MESH'S OWN domain exports to (``Domain.github_org`` for the
+    # implicit own domain — the ``cluster_domain_services`` precedent: a separate
+    # field, not a ``domains`` row, so the ASK-8 guard holds). "" = the own domain
+    # takes no part in the Go-Live export step; OMIT-WHEN-EMPTY in to_dict and the
+    # manifest, so every pre-existing config and manifest keeps its bytes.
+    cluster_domain_github_org: str = ""
     # ── hardware ──
     gpu_driver: str = "auto"           # auto|nvidia|amd-free|amd-pro|intel|none
     nvidia_cuda: bool = False          # --nvidia-cuda (CUDA bake for GPU/edge-AI images; x86)
@@ -3443,6 +3484,10 @@ class ImageConfig:
         # domains: per-domain ``tor`` (#582) is OMIT-WHEN-FALSE here too, so a saved
         # config or session record with no Tor domain keeps its pre-#582 bytes.
         d["domains"] = domain_rows_to_dict(self.domains)
+        # the own domain's GitHub org is OMIT-WHEN-EMPTY (its domains[] twin is), so
+        # a config that never met the field keeps its bytes
+        if not (d.get("cluster_domain_github_org") or "").strip():
+            d.pop("cluster_domain_github_org", None)
         if not include_secrets:
             for k in SECRET_FIELDS:
                 d[k] = ""
@@ -3511,6 +3556,16 @@ class ImageConfig:
                 f"domain {kw.get('name', '')!r}: issuer_port must be a port number, "
                 f"got {port!r}")
         kw["issuer_port"] = port
+        # per-domain GitHub org (the Go-Live export step): absent / null / "" is "no
+        # org" — every pre-existing config; anything else must be an org slug, and
+        # junk fails loudly at load like idp and tor do, never silently kept as a
+        # name the export would then try to create a repository under.
+        org = kw.get("github_org")
+        org = "" if org is None else org
+        problem = github_org_problem(org)
+        if problem:
+            raise ValueError(f"domain {kw.get('name', '')!r}: {problem}")
+        kw["github_org"] = org.strip()
         return Domain(**kw)
 
     @staticmethod
@@ -3589,6 +3644,15 @@ class ImageConfig:
                 d["cluster_domain_services"] = [x for x in v if isinstance(x, str)]
             else:
                 d.pop("cluster_domain_services")
+        # The own domain's GitHub org: the per-domain rule (_domain_from_dict) —
+        # absent / null is "", junk fails loudly rather than naming an org to export to.
+        if "cluster_domain_github_org" in d:
+            v = d["cluster_domain_github_org"]
+            v = "" if v is None else v
+            problem = github_org_problem(v)
+            if problem:
+                raise ValueError(f"cluster_domain_github_org: {problem}")
+            d["cluster_domain_github_org"] = v.strip()
         # MIGRATE the pre-2026-08-26 spelling of the post-build device-test opt-in.
         # from_dict filters unknown keys, so without this a config saved under the old
         # name would load with the opt-in silently OFF — the `games` precedent above:
@@ -5027,7 +5091,8 @@ class ImageConfig:
             **brand_header_fields(self.brand, self.brand_title, self.org,
                                   self.cluster_domain, self.effective_superdomain(),
                                   self.login_style, self.login_decor),
-            # per-domain ``tor`` (#582), ``look``/``ways``/``issuer_port`` (#654) are
+            # per-domain ``tor`` (#582), ``look``/``ways``/``issuer_port`` (#654) and
+            # ``github_org`` (the export step) are
             # OMIT-WHEN-EMPTY the same way: a domain that uses none emits no key, so
             # pre-#582 bytes never change. ONE row writer for both emitters.
             "domains": manifest_domain_rows(self.domains),
@@ -5039,6 +5104,9 @@ class ImageConfig:
             # a manifest whose own domain takes the cluster-wide set keeps its bytes.
             **({"cluster_domain_services": list(self.cluster_domain_services)}
                if self.cluster_domain_services else {}),
+            # the own domain's export org (the Go-Live export step) — OMIT-WHEN-EMPTY
+            **({"cluster_domain_github_org": self.cluster_domain_github_org.strip()}
+               if (self.cluster_domain_github_org or "").strip() else {}),
         }
 
     def write_mesh_manifest(self, output_dir: str) -> str:

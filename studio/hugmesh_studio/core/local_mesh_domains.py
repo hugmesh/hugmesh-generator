@@ -156,7 +156,10 @@ def _default_shaped(d: Domain) -> bool:
     write it anyway)."""
     return (not (d.title or "").strip()
             and getattr(d, "idp", DOMAIN_IDP_SUPERDOMAIN) == DOMAIN_IDP_SUPERDOMAIN
-            and not normalise_slugs(d.optional_services))
+            and not normalise_slugs(d.optional_services)
+            # an export org on the own row IS something to record: the Go-Live
+            # export step reads it off the saved-mesh record
+            and not (getattr(d, "github_org", "") or "").strip())
 
 
 def bootstrap_domain_records(domains, own_name: str) -> tuple[dict, ...]:
@@ -193,6 +196,11 @@ def bootstrap_domain_records(domains, own_name: str) -> tuple[dict, ...]:
         # The mesh's own row never has one: its front door is the primary onion.
         if name == own:
             rec.pop("tor", None)
+        # the GitHub org this domain exports to (the Go-Live export step) travels by the
+        # field list too, OMIT-WHEN-EMPTY, and is recorded for the own row as well: the
+        # mesh's own domain is the one most worth exporting
+        if "github_org" in rec:
+            rec["github_org"] = str(rec["github_org"]).strip()
         out.append(rec)
     return tuple(out)
 
@@ -290,6 +298,9 @@ def record_walk(cfg, md: "LocalMeshDomains", names) -> None:
         # the walk's Tor front door (#582) travels with its ticks; OMIT-WHEN-FALSE.
         tor = bool(form_row is not None and getattr(form_row, "tor", False)
                    and name != (md.own_name or "").strip())
+        # the export org travels with the walk the same way (OMIT-WHEN-EMPTY)
+        org = ((getattr(form_row, "github_org", "") or "").strip()
+               if form_row is not None else "")
         row = by_name.get(name)
         if row is None:
             # COPY SITE (brand_model.COPY_SITES): a new row starts from the form row's
@@ -309,6 +320,10 @@ def record_walk(cfg, md: "LocalMeshDomains", names) -> None:
             row["tor"] = True
         else:
             row.pop("tor", None)
+        if org:
+            row["github_org"] = org
+        else:
+            row.pop("github_org", None)
         if name not in marks:
             marks.append(name)
     cfg.domains = tuple(rows)
@@ -425,6 +440,7 @@ def apply_imported_domains(cfg, md: "LocalMeshDomains | None") -> list[str]:
         dom.idp = getattr(row, "idp", "") or DOMAIN_IDP_SUPERDOMAIN
         dom.optional_services = list(picked)
         dom.tor = bool(getattr(row, "tor", False))
+        dom.github_org = (getattr(row, "github_org", "") or "").strip()
         rows.append(dom)
     cfg.domains = rows                      # replaced, never merged (see above)
     cfg.additional_domains = bool(rows)
@@ -461,5 +477,9 @@ def imported_domains_lines(md: "LocalMeshDomains | None") -> list[str]:
         # the domain's own Tor front door (#582) — said only when it has one, so a
         # mesh without Tor domains reads exactly as before
         door = "; its own Tor front door" if getattr(row, "tor", False) else ""
-        out.append(f"{name} — {signin}; services: {svc}{state}{door}")
+        # the export org — said only when the row names one, so a mesh with no
+        # exported domain reads exactly as before
+        org = (getattr(row, "github_org", "") or "").strip()
+        exported = f"; exports to GitHub org {org}" if org else ""
+        out.append(f"{name} — {signin}; services: {svc}{state}{door}{exported}")
     return out

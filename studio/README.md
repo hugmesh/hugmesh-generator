@@ -358,6 +358,46 @@ finished drafts), and a prompt line — anything you type there that is not `sta
 on every screen, the previous-builds list included (`q` returns to the list), and on the
 Local AI screen itself they re-read the state instead of opening a second screen.
 
+### Go-Live: export a domain's repositories to a GitHub org (optional step)
+
+Every domain row (the Domains step, both faces) has a **GitHub org** cell: an org slug,
+never a token. When some domain names one, the Go-Live wizard gains a step **Export to
+GitHub org** (`python -m hugmesh_studio --go-live`; `x` on the TUI's go-live plan screen)
+that copies the domain's repositories — the Code-folders map's apps plus the Java build
+chain and the generator — into that organisation as fresh single-commit snapshots,
+renamed `hugmesh-<name> -> <brand>-<name>` (`exampleorg -> example`), with the org path
+segments and repository names rewritten inside files (Java packages, Maven groupIds,
+Angular scopes and label keys are deliberately left alone), and creates a
+`<domain>.github.io` site repository whose workflows clone every exported repository and
+run what each one's own CI runs. Plan is the default and touches nothing; Apply needs the
+org name typed (GUI/TUI, letter case does not matter) or `--apply` (CLI); nothing is ever
+force-pushed or deleted, and an existing repository that already holds something — on
+`main` or on any other branch — is refused unless *update via branch* is chosen. The
+step can be pointed at a config file (its rules are taken whole), and a **Rename map**
+field (`r FILE` in the TUI, `--rename-map` in the CLI) merges extra rules — the way to drop
+a file a `refused: banned marker` row names; the generator's own two test fixtures need
+exactly that (`tests/fixtures/org_export/generator-rename-map.json`). Every kept file is
+scanned for a banned marker as bytes (a latin-1 or binary file is not skipped), the commit is
+checked to hold every file the plan counted, and a config file's values are type-checked
+(exit 2 naming the key). Snapshot commits are authored as the person running the export
+(their git identity) unless the config names an author. Plan reads each checkout as it
+is on this machine (it never fetches or pulls) and prints `not looked at` for a target it
+did not ask GitHub about; a plan is applied once.
+
+```sh
+python -m hugmesh_studio --org-export PLAN  --domain mesh.example --org exampleorg --source-dir ~/src
+python -m hugmesh_studio --org-export PLAN  --config export.json --rename-map extra.json --out /tmp/export
+python -m hugmesh_studio --org-export APPLY --config export.json --apply
+```
+
+The engine is `core/org_export.py` (Qt-free; every git/gh call through one injected runner,
+so `tests/test_org_export.py` proves it against bare repositories and a fake `gh`). The
+end-to-end scenarios are `tests/e2e/features/studio-org-export/studio-org-export.feature`,
+driven by `tests/e2e/studio-org-export-driver.py` (the real wizards offscreen over the same
+stand-ins; run as the Code folders ones above, with `-g "exports a domain's repositories"`). The
+full flow, the rename map's format and what a person still has to set up are in
+[docs/GOLIVE-ORG-EXPORT.md](../docs/GOLIVE-ORG-EXPORT.md).
+
 ## Package a Windows .exe
 
 The PyInstaller spec is committed at `packaging/hugmesh-studio.spec`; the MSI, the Flatpak

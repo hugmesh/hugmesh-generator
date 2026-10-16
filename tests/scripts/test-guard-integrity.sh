@@ -1018,6 +1018,14 @@ PREMERGE_UNGATED=(
   # of which a shell-suites image carries, and it exits 2 (never a silent pass) when
   # given no tree. Run it with `make btf-kconfig-resolve-check KERNEL_TREE=<tree>`.
   tests/scripts/test-btf-kconfig-resolve.sh
+  # NOT an exemption, a wiring gap: offline, python3 + os.walk over the checkout,
+  # no network, no root. It sits here only because naming it in shell-suites.yml is
+  # an edit under .github/, which the change that added it (the group-call SFU design
+  # page, #734) was not allowed to make. Run post-merge by .gitlab-ci.yml's
+  # lint:group-call-sfu-doc-honesty. Measured only on a developer host, not in a
+  # shell-suites image: check that before gating it. The operator adds the line to
+  # shell-suites.yml, raises PREMERGE_BASELINE by one and drops this entry.
+  tests/scripts/test-group-call-sfu-doc-honesty.sh
   # NOT an exemption, a wiring gap: the lane that added this suite (#509) may not
   # edit .github/. It runs every stage4 builder with --print-plan and needs only
   # bash, sed, paste and timeout, but is UNMEASURED in the shell-suites images
