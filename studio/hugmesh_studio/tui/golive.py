@@ -22,15 +22,19 @@ them. The screen says so and hands over the command.
 """
 from __future__ import annotations
 
-from ..core.golive_domains import (NO_EXTRA_DOMAINS_NOTE, baked_domains,
-                                   exposure_lines, plan_rows)
+from ..core import org_export
+from ..core.golive_domains import (NO_EXPORT_DOMAINS_NOTE, NO_EXTRA_DOMAINS_NOTE,
+                                   baked_domains, export_candidates,
+                                   export_step_applies, exposure_lines, plan_rows)
 from ..core.golive_driver import GoLiveDriver, GoLiveOptions, _NO_DOMAIN_MECHANISMS
 
 __all__ = ["GoLiveScreen"]
 
 
 class GoLiveScreen:
-    """``provider`` -> ``domain`` -> ``plan``."""
+    """``provider`` -> ``domain`` -> ``plan`` (-> ``export``, offered only when a domain
+    names a GitHub org — the GUI's optional "Export to GitHub org" step, same engine,
+    same plan text)."""
 
     slug = "golive"
     title = "Go-Live"
@@ -40,6 +44,17 @@ class GoLiveScreen:
         self.stage = "provider"
         self.driver: GoLiveDriver | None = None
         self.opts = GoLiveOptions()
+        # the export step's state: config files added with `c FILE`, the picked
+        # candidate, the last plan / result; and the two test seams the GUI has too
+        self.export_config_files: list[str] = []
+        self.export_pick = 0
+        self.export_plan = None
+        self.export_result = None
+        self.export_runner = None
+        self.export_remote_base = ""
+        self.export_visibility = "private"
+        self.export_update = org_export.UPDATE_REFUSE
+        self.export_rename_map = ""            # `r FILE`: the CLI's --rename-map
 
     def _driver(self, j) -> GoLiveDriver:
         if self.driver is None:
@@ -149,8 +164,13 @@ class GoLiveScreen:
                 "/usr/sbin/hugmesh-go-live):",
                 "  " + d.command_string("plan", self.opts),
                 "On the device, the terminal menu hugmesh-go-live-menu runs it too. "
-                "The flip (commit) runs only on a real TTY there, by design.",
-                "", "commands: b=back to the domain · Enter=back to the providers"]
+                "The flip (commit) runs only on a real TTY there, by design."]
+        commands = ["b=back to the domain", "Enter=back to the providers"]
+        cands = self.export_candidates(j)
+        if export_step_applies(cands):
+            commands.append(f"x=export to a GitHub org ({len(cands)} domain"
+                            f"{'s' if len(cands) != 1 else ''} name one)")
+        out += ["", "commands: " + " · ".join(commands)]
         return out
 
     def _feed_plan(self, j, line: str) -> None:
@@ -159,5 +179,193 @@ class GoLiveScreen:
             return
         if line == "":
             self.stage = "provider"
+            return
+        if line.lower() == "x":
+            if not export_step_applies(self.export_candidates(j)):
+                j.status = NO_EXPORT_DOMAINS_NOTE
+                return
+            self.stage = "export"
+            return
+        j.status = f"unrecognised command: {line!r}"
+
+    # ── export to a GitHub org (the GUI's optional step; same engine, same text) ──
+    def export_candidates(self, j) -> list:
+        """The domains that name an org — ``golive_domains.export_candidates``, the
+        GUI page's exact call (saved meshes on this machine + added config files)."""
+        return export_candidates(j.generator_dir, self.export_config_files)
+
+    def export_config(self, j) -> "org_export.ExportConfig | None":
+        """The config `p` plans: the picked candidate's (a generic config file's own
+        rules included), the `v`/`u` choices over it, and the `r FILE` rename map
+        merged over its own. Raises ValueError/OSError for a rename map that cannot
+        be read; the callers put that in the status line."""
+        cands = self.export_candidates(j)
+        if not cands:
+            return None
+        c = cands[min(self.export_pick, len(cands) - 1)]
+        cfg = c.to_config(visibility=self.export_visibility, update=self.export_update,
+                          generator_dir=c.generator_dir or j.generator_dir)
+        if self.export_rename_map:
+            cfg.rename_map = org_export.merge_rename_maps(
+                cfg.rename_map or {}, org_export.load_rename_map(self.export_rename_map))
+        if self.export_remote_base:
+            cfg.remote_base = self.export_remote_base
+        return cfg
+
+    def _picked_candidate(self, j):
+        cands = self.export_candidates(j)
+        return cands[min(self.export_pick, len(cands) - 1)] if cands else None
+
+    def _cli_command(self, j, cfg, verb: str) -> str:
+        c = self._picked_candidate(j)
+        return org_export.cli_command(
+            cfg, verb,
+            # EVERY candidate's file is handed over as --config (the GUI page's rule):
+            # a saved mesh's selected services live only in its record
+            config_path=c.path if c is not None else "",
+            rename_map_path=self.export_rename_map)
+
+    def export_plan_lines(self) -> list[str]:
+        """``org_export.plan_lines`` of the last plan — the GUI step's plan text."""
+        return org_export.plan_lines(self.export_plan) if self.export_plan else []
+
+    def _lines_export(self, j) -> list[str]:
+        cands = self.export_candidates(j)
+        out = ["Export a domain's repositories to its GitHub organisation: fresh "
+               "single-commit snapshots, renamed for the org, plus a <domain>.github.io "
+               "site that builds them all. Plan touches nothing; apply needs the org "
+               "name typed. Every git/gh call runs as you (your gh login).", ""]
+        if not cands:
+            return out + [NO_EXPORT_DOMAINS_NOTE, "", "commands: c FILE=add a config "
+                          "file · b=back"]
+        for i, c in enumerate(cands, 1):
+            cur = "  <- picked" if i - 1 == min(self.export_pick, len(cands) - 1) else ""
+            out.append(f"  {i}. {c.label()}{cur}")
+        out.append(f"  visibility of created repositories: {self.export_visibility}; "
+                   f"existing non-empty repositories: "
+                   f"{'pushed to export/<stamp>' if self.export_update == org_export.UPDATE_BRANCH else 'refused unless unchanged'}")
+        out.append(f"  rename map: {self.export_rename_map or '(none: the defaults)'}")
+        if self.export_plan is not None:
+            out += ["", *self.export_plan_lines()]
+        if self.export_result is not None:
+            out += ["", *org_export.result_lines(self.export_result)]
+        try:
+            cfg = self.export_config(j)
+        except (OSError, ValueError) as exc:
+            cfg = None
+            out += ["", f"rename map {self.export_rename_map}: {exc}"]
+        if cfg is not None:
+            out += ["", "The same from a terminal:", "  " + self._cli_command(j, cfg, "PLAN")]
+        out += ["", "commands: NUMBER=pick · c FILE=add a config file · r FILE|-=rename "
+                "map (exclude a refused file, extra rules) · v private|public|"
+                "internal=visibility · u refuse|branch=existing repositories · p=plan "
+                "(dry run) · apply ORG=apply (type the org name) · b=back"]
+        return out
+
+    def _feed_export(self, j, line: str) -> None:
+        cands = self.export_candidates(j)
+        if line.lower() == "b":
+            self.stage = "plan"
+            return
+        verb, _, arg = line.partition(" ")
+        verb, arg = verb.lower(), arg.strip()
+        if verb == "c" and arg:
+            try:
+                found = org_export.candidates_from_file(arg, j.generator_dir)
+            except (OSError, ValueError) as exc:
+                # the engine's own messages already start with the path: say it once
+                j.status = str(exc) if str(exc).startswith(arg) else f"{arg}: {exc}"
+                return
+            if not found:
+                j.status = f"{arg}: no domain in it names a GitHub org"
+                return
+            if arg not in self.export_config_files:
+                self.export_config_files.append(arg)
+            self.export_pick = len(self.export_candidates(j)) - 1
+            self.export_plan = self.export_result = None
+            # a generic config file's own choices seed `v` and `u`, so `p` plans what
+            # the file describes (the GUI pickers do the same)
+            if found[0].config is not None:
+                self.export_visibility = found[0].config.visibility
+                self.export_update = found[0].config.update
+            return
+        if verb == "r":
+            if not arg:
+                j.status = "r needs a rename-map FILE, or - to drop it"
+                return
+            if arg == "-":
+                self.export_rename_map = ""
+            else:
+                try:
+                    org_export.load_rename_map(arg)
+                except (OSError, ValueError) as exc:
+                    j.status = f"{arg}: {exc}"
+                    return
+                self.export_rename_map = arg
+            self.export_plan = self.export_result = None
+            return
+        if verb == "v":
+            if arg not in org_export.VISIBILITY_CHOICES:
+                j.status = f"visibility must be one of {', '.join(org_export.VISIBILITY_CHOICES)}"
+                return
+            self.export_visibility = arg
+            self.export_plan = self.export_result = None
+            return
+        if verb == "u":
+            if arg not in org_export.UPDATE_CHOICES:
+                j.status = f"u needs one of {', '.join(org_export.UPDATE_CHOICES)}"
+                return
+            self.export_update = arg
+            self.export_plan = self.export_result = None
+            return
+        if verb == "p":
+            try:
+                cfg = self.export_config(j)
+            except (OSError, ValueError) as exc:          # the rename-map file
+                j.status = f"{self.export_rename_map}: {exc}"
+                return
+            if cfg is None:
+                j.status = NO_EXPORT_DOMAINS_NOTE
+                return
+            problems = cfg.problems()
+            if problems:
+                j.status = "; ".join(problems)
+                return
+            try:
+                self.export_plan = org_export.plan(
+                    cfg, self.export_runner or org_export.SubprocessRunner())
+            except (ValueError, OSError, RuntimeError) as exc:
+                j.status = f"plan failed: {exc}"
+                return
+            self.export_result = None
+            j.status = ("plan blocked — see BLOCKED above" if self.export_plan.blocked
+                        else "planned; nothing created or pushed. apply ORG to apply.")
+            return
+        if verb == "apply":
+            p = self.export_plan
+            if p is None:
+                j.status = "plan first (p)"
+                return
+            if not arg or arg.lower() != p.config.org.lower():
+                j.status = "type the org name: apply ORG (letter case does not matter)"  # the GUI's arming rule
+                return
+            if p.blocked:
+                j.status = "the plan is blocked; nothing is applied until every repository is clean"
+                return
+            if self.export_result is not None:            # the GUI's one apply per plan
+                j.status = "this plan was applied; plan again (p) to run again"
+                return
+            self.export_result = org_export.apply(
+                p, self.export_runner or org_export.SubprocessRunner())
+            j.status = (f"applied: {len(self.export_result.repos) - len(self.export_result.failures)}"
+                        f" done, {len(self.export_result.failures)} skipped")
+            return
+        try:
+            n = int(line)
+        except ValueError:
+            n = 0
+        if 1 <= n <= len(cands):
+            self.export_pick = n - 1
+            self.export_plan = self.export_result = None
             return
         j.status = f"unrecognised command: {line!r}"

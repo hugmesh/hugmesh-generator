@@ -32,9 +32,9 @@ from dataclasses import fields
 
 from ..core.config import IdentityValidationError
 from ..core.domain_services import normalise_slugs, record_reviewed, reviewed_names
-from ..core.fleet import (FLEET_LANE_NOTE, FleetConfig, FleetDomains, FleetDriver,
-                          commit_fleet_domains, fleet_domain_fields, fleet_gate_reason,
-                          seed_fleet_domains)
+from ..core.fleet import (FLEET_LANE_NOTE, WITH_TOR_NOTE, FleetConfig, FleetDomains,
+                          FleetDriver, commit_fleet_domains, fleet_domain_fields,
+                          fleet_gate_reason, seed_fleet_domains)
 from ..core.local_mesh_domains import DOMAIN_NAME_RE
 from ..core.config import Domain
 from ..core.platform_info import HostInfo
@@ -134,6 +134,8 @@ class FleetScreen:
             out.append("(every knob at its default — the default fleet: rpi5 "
                        "pki/backend/frontend + x86 pki/backend/frontend/backend-gpu)")
         out += ["", "knobs: " + " ".join(FLEET_KNOBS), "",
+                # the GUI's note under its Tor checkbox — the same words here
+                "with_tor: " + WITH_TOR_NOTE, "",
                 "commands: set NAME VALUE (on/off for switches; - resets) · "
                 "Enter=continue to Domains"]
         return out

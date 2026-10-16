@@ -38,15 +38,18 @@ from .. import choice_nav
 from ._scroll import scrollable
 from ..wizard import _file_picker, _row
 from ._widgets import label_finish_as_exit
-from ...core.golive_domains import (NO_EXTRA_DOMAINS_NOTE, baked_domains,
-                                    exposure_lines, plan_rows)
+from ...core.golive_domains import (NO_EXPORT_DOMAINS_NOTE, NO_EXTRA_DOMAINS_NOTE,
+                                    baked_domains, export_candidates,
+                                    export_step_applies, exposure_lines, plan_rows)
 from ...core.golive_driver import GoLiveDriver, GoLiveOptions, _NO_DOMAIN_MECHANISMS
+from ...core import org_export
 from ...core.progress_parse import ProgressParser, track_phases
 
 # exactly one page per slug, same order — mirrors WIZARD_PAGE_SLUGS' role for the
-# build wizard (tests pin each slug to its page class)
+# build wizard (tests pin each slug to its page class). "org-export" is the optional
+# step: GoLiveWizard.nextId skips it unless some domain names a GitHub org.
 GOLIVE_PAGE_SLUGS = ("preflight", "exposure", "provider", "inputs",
-                     "generate", "verify", "flip")
+                     "generate", "org-export", "verify", "flip")
 
 # labels/blurbs for the exposure-model radios; the model LIST itself comes from
 # the driver's provider registry (mechanism -> model), so a registry-only provider
@@ -258,6 +261,10 @@ class GoLiveInputsPage(QtWidgets.QWizardPage):
             "The domains baked on this device: /etc/hugmesh/cluster-domain first, then "
             "/etc/hugmesh/domains. Each Go-Live run exposes ONE of them.")
         self.domain_pick.currentIndexChanged.connect(self._picked)
+        # ``activated`` too: after typing another domain below, picking the entry the
+        # combo ALREADY shows changes no index, so currentIndexChanged alone did
+        # nothing and the field kept the typed text (the post-merge review of #645).
+        self.domain_pick.activated.connect(self._picked)
         lay.addWidget(_row("Baked domains", self.domain_pick))
         self.domain_list_note = QtWidgets.QLabel("")
         self.domain_list_note.setWordWrap(True)
@@ -409,6 +416,54 @@ class GoLiveInputsPage(QtWidgets.QWizardPage):
         return True
 
 
+#: The exposure pane fits its wrapped rows up to this height, then scrolls (and still
+#: takes its share of any extra window height). A fixed 180 px box (the first post-merge
+#: fix) cut the sixth row of a six-row plan at Fusion 9 pt behind a scrollbar.
+EXPOSURE_PANE_MAX_PX = 320
+#: ...and never shrinks below this many lines, so a one-row plan is still a pane.
+EXPOSURE_PANE_MIN_LINES = 3
+
+
+class _FittingPane(QtWidgets.QPlainTextEdit):
+    """A read-only prose pane whose MINIMUM height follows its wrapped content: every
+    row is read whole at the wizard's default size, up to :data:`EXPOSURE_PANE_MAX_PX`.
+
+    The wrap depends on the width, so the fit is redone on every resize. It is
+    measured on a clone of the document laid out at the width the pane has WITHOUT a
+    vertical scrollbar — never on the live layout, whose wrap moves with that
+    scrollbar (it appears, the viewport narrows, more lines wrap, more height is
+    needed, it disappears: a fit read off the live layout oscillates on that edge,
+    and read during a resize it is simply stale). The measure depends on the width
+    alone, so setting the minimum height from it cannot feed back into it."""
+
+    def setPlainText(self, text):
+        super().setPlainText(text)
+        self.fit_to_content()
+
+    def resizeEvent(self, ev):
+        super().resizeEvent(ev)
+        self.fit_to_content()
+
+    def content_height(self) -> int:
+        """Pixels the wrapped text needs at the current width (no scrollbar), frame
+        included; never less than :data:`EXPOSURE_PANE_MIN_LINES` lines."""
+        src = self.document()
+        probe = src.clone()
+        try:
+            probe.setDefaultFont(self.font())
+            probe.setDocumentMargin(src.documentMargin())
+            probe.setTextWidth(max(1, self.width() - 2 * self.frameWidth()))
+            text_px = probe.size().height()
+        finally:
+            probe.deleteLater()
+        floor = (EXPOSURE_PANE_MIN_LINES * self.fontMetrics().lineSpacing()
+                 + 2 * src.documentMargin())
+        return int(max(text_px, floor) + 2 * self.frameWidth() + 2)
+
+    def fit_to_content(self):
+        self.setMinimumHeight(min(self.content_height(), EXPOSURE_PANE_MAX_PX))
+
+
 class GoLiveGeneratePage(QtWidgets.QWizardPage):
     def __init__(self, wiz):
         super().__init__()
@@ -426,10 +481,17 @@ class GoLiveGeneratePage(QtWidgets.QWizardPage):
         # PER DOMAIN (#587): what EVERY domain on the device gets — this run's, the
         # ones that need a run of their own, and the node's onions.
         lay.addWidget(QtWidgets.QLabel("Per-domain exposure (this device):"))
-        self.exposure = console.attach(QtWidgets.QPlainTextEdit())
+        self.exposure = console.attach(_FittingPane())
         self.exposure.setReadOnly(True)
-        self.exposure.setMaximumHeight(120)
-        lay.addWidget(self.exposure)
+        # PROSE rows (each one's "how" is a sentence; the unreadable-export row carries
+        # its remedy), not column-aligned build output: wrap at the widget's width so
+        # the end of a row is read without scrolling sideways (the post-merge review
+        # of #645 saw every onion row cut at the right edge). The box's height follows
+        # its rows (a fixed 180 px cut the sixth row of a six-row plan behind a
+        # scrollbar at 9 pt), and it grows with the window (the same stretch as the
+        # run log) instead of stopping at a fixed maximum.
+        self.exposure.setLineWrapMode(QtWidgets.QPlainTextEdit.LineWrapMode.WidgetWidth)
+        lay.addWidget(self.exposure, 1)
         self.preview_btn = QtWidgets.QPushButton("Refresh preview")
         self.generate_btn = QtWidgets.QPushButton("Generate artifacts now")
         self.open_btn = QtWidgets.QPushButton("Open artifacts folder")
@@ -538,6 +600,483 @@ class GoLiveGeneratePage(QtWidgets.QWizardPage):
     def _open_folder(self):
         out = self.wiz.opts.out_dir or self.wiz.driver.default_out_dir
         QtGui.QDesktopServices.openUrl(QtCore.QUrl.fromLocalFile(out))
+
+
+class _ExportWorker(QtCore.QThread):
+    """Runs org_export.plan / apply off the GUI thread (git archive of thirty
+    repositories and pushes take minutes). ``done`` carries ("ok", value) or
+    ("error", message); ``progress`` one line per repository as apply finishes it."""
+    progress = Signal(object)
+    done = Signal(object)
+
+    def __init__(self, fn):
+        super().__init__()
+        self._fn = fn
+
+    def run(self):
+        try:
+            self.done.emit(("ok", self._fn(lambda r: self.progress.emit(r))))
+        except Exception as exc:                 # noqa: BLE001 — reported inline
+            self.done.emit(("error", f"{type(exc).__name__}: {exc}"))
+
+
+# the plan table's columns (tests pin the header words)
+EXPORT_COLUMNS = ("Source", "Target", "Action", "Kind", "Files", "Rewritten",
+                  "Excluded", "Result")
+_UPDATE_LABELS = (
+    (org_export.UPDATE_REFUSE, "Refuse an existing non-empty repository"),
+    (org_export.UPDATE_BRANCH, "Push an existing repository to export/<stamp> instead"),
+)
+
+
+class GoLiveOrgExportPage(QtWidgets.QWizardPage):
+    """The optional step: export a domain's repositories to its GitHub org.
+
+    Shown only when some domain names an org (``applies``; the wizard's nextId skips
+    it otherwise, so every existing flow is unchanged). Plan is the default and
+    touches no repository; Apply is armed only by TYPING the org name (inline, never
+    a modal) and runs on a worker. The plan text is ``org_export.plan_lines`` — the
+    same lines the TUI step and the CLI print."""
+
+    def __init__(self, wiz):
+        super().__init__()
+        self.wiz = wiz
+        self.setTitle("Export to GitHub org")
+        self.setSubTitle("Copy this domain's repositories into its GitHub organisation as "
+                         "fresh single-commit snapshots, renamed for the org, plus a "
+                         "<domain>.github.io site that builds them all. Plan first; "
+                         "Apply only after typing the org name.")
+        # a scroll area, never clipping: the table and the plan text grow with the
+        # repository count, and the window's smallest size must still show every
+        # control (the buttons and the confirmation sit ABOVE the table for that).
+        lay = scrollable(self)
+        self.intro = QtWidgets.QLabel(
+            "Every git and gh call runs as YOU (your `gh auth login` and git credential "
+            "helper): no token is stored or passed. Nothing is force-pushed, deleted or "
+            "mirrored; an existing non-empty repository is refused unless it already "
+            "holds the same tree, or you choose the export/<stamp> branch below.")
+        self.intro.setWordWrap(True)
+        self.intro.setStyleSheet("color: gray;")
+        lay.addWidget(self.intro)
+        self.source = QtWidgets.QComboBox()
+        self.source.setToolTip("The domains that name a GitHub org: from the saved "
+                               "meshes on this machine, and from config files you add.")
+        self.source.currentIndexChanged.connect(self._source_picked)
+        lay.addWidget(_row("Domain -> org", self.source))
+        self.config_path = QtWidgets.QLineEdit()
+        self.config_path.setPlaceholderText(
+            "an export config, image config or saved-mesh JSON with a GitHub org")
+        pick = _file_picker(self, self.config_path, "Config file")
+        self.add_btn = add = QtWidgets.QPushButton("Add")
+        add.clicked.connect(self._add_config)
+        w = QtWidgets.QWidget(); h = QtWidgets.QHBoxLayout(w); h.setContentsMargins(0, 0, 0, 0)
+        h.addWidget(self.config_path, 1); h.addWidget(pick); h.addWidget(add)
+        lay.addWidget(_row("Config file", w))
+        self.visibility = QtWidgets.QComboBox()
+        self.visibility.addItems(list(org_export.VISIBILITY_CHOICES))
+        self.visibility.setToolTip("Visibility of the repositories the export CREATES "
+                                   "(private by default); existing ones are never changed.")
+        self.update_mode = QtWidgets.QComboBox()
+        for value, label in _UPDATE_LABELS:
+            self.update_mode.addItem(label, value)
+        w = QtWidgets.QWidget(); h = QtWidgets.QHBoxLayout(w); h.setContentsMargins(0, 0, 0, 0)
+        h.addWidget(self.visibility); h.addWidget(self.update_mode, 1)
+        lay.addWidget(_row("Visibility / existing", w))
+        self.source_dir = QtWidgets.QLineEdit()
+        self.source_dir.setPlaceholderText("folder holding the hugmesh-* checkouts "
+                                           "(empty = the mesh's clone root, .stack-src)")
+        lay.addWidget(_row("Source folder", self.source_dir))
+        self.out_dir = QtWidgets.QLineEdit()
+        self.out_dir.setPlaceholderText("where the plan, work trees and result go "
+                                        "(default <generator>/out/org-export/<domain>)")
+        lay.addWidget(_row("Plan / work folder", self.out_dir))
+        # extra rename rules and exclusions (the CLI's --rename-map): the way to drop
+        # a file a banned-marker refusal points at without a terminal
+        self.rename_map = QtWidgets.QLineEdit()
+        self.rename_map.setPlaceholderText(
+            "optional: a rename-map JSON (repos, tokens, skip_rewrite, exclude) merged "
+            "over the defaults")
+        self.rename_map.setToolTip(
+            "Extra rename rules merged over the defaults, the CLI's --rename-map. Its "
+            "'exclude' globs drop files from the snapshot — what a 'refused: banned "
+            "marker' row points at (\"<repo>:<path>\").")
+        self.rename_map.editingFinished.connect(self._refresh_cmd)
+        pick = _file_picker(self, self.rename_map, "Rename map", "JSON (*.json);;All files (*)")
+        w = QtWidgets.QWidget(); h = QtWidgets.QHBoxLayout(w); h.setContentsMargins(0, 0, 0, 0)
+        h.addWidget(self.rename_map, 1); h.addWidget(pick)
+        lay.addWidget(_row("Rename map", w))
+        # the verbs: Plan always; Apply armed by the typed org name AND a clean plan
+        self.plan_btn = QtWidgets.QPushButton("Plan (dry run — touches nothing)")
+        self.plan_btn.clicked.connect(self._plan)
+        self.confirm = QtWidgets.QLineEdit()
+        self.confirm.setPlaceholderText("type the org name to arm Apply")
+        self.confirm.textChanged.connect(self._armed)
+        self.apply_btn = QtWidgets.QPushButton("Apply — create and push")
+        self.apply_btn.setEnabled(False)
+        self.apply_btn.clicked.connect(self._apply)
+        bl = QtWidgets.QHBoxLayout()
+        bl.addWidget(self.plan_btn); bl.addWidget(self.confirm, 1); bl.addWidget(self.apply_btn)
+        lay.addLayout(bl)
+        # INLINE status — never a message box (the headless-test rule, build.py:359)
+        self.status = QtWidgets.QLabel("")
+        self.status.setWordWrap(True)
+        self.status.setStyleSheet("color: #c62828;")
+        self.status.setVisible(False)
+        lay.addWidget(self.status)
+        prow = QtWidgets.QHBoxLayout()
+        self.progress_bar = QtWidgets.QProgressBar()
+        self.progress_bar.setVisible(False)
+        prow.addWidget(self.progress_bar, 1)
+        self.progress_label = QtWidgets.QLabel("")
+        self.progress_label.setVisible(False)
+        prow.addWidget(self.progress_label)
+        lay.addLayout(prow)
+        self.table = QtWidgets.QTableWidget(0, len(EXPORT_COLUMNS))
+        self.table.setHorizontalHeaderLabels(list(EXPORT_COLUMNS))
+        self.table.horizontalHeader().setStretchLastSection(True)
+        self.table.setEditTriggers(QtWidgets.QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.table.setMinimumHeight(140)
+        lay.addWidget(self.table)
+        lay.addWidget(QtWidgets.QLabel("Plan (the same text the terminal step prints):"))
+        self.plan_text = console.attach(QtWidgets.QPlainTextEdit())
+        self.plan_text.setReadOnly(True)
+        self.plan_text.setMinimumHeight(120)
+        lay.addWidget(self.plan_text)
+        self.cmd = QtWidgets.QLineEdit()
+        self.cmd.setReadOnly(True)
+        self.cmd.setToolTip("The same export from a terminal.")
+        lay.addWidget(_row("Terminal", self.cmd))
+        self.candidates: list = []
+        self.plan = None
+        self.result = None
+        self.worker = None
+        self._applying = None
+        self._planning = False
+        # every picker that changes the plan re-spells the Terminal line at once, so
+        # what a person copies before Plan is what Plan would run (the rename-map
+        # field used to be the only one wired, and a typed Source folder went stale).
+        # The two folders go on textChanged, not editingFinished: nothing validates
+        # them here, and a value set without a focus change (a driver, a paste) must
+        # reach the line too — the e2e walk caught a stale line that way. The
+        # rename-map field stays on editingFinished: it reads the file and would
+        # otherwise say "cannot be read" on every half-typed character.
+        #
+        # They also DROP the plan on screen: Apply runs the plan it was armed by, not
+        # whatever the pickers read now, so a plan made as public and then flipped
+        # to private must not stay armed (it would create public repositories under
+        # a screen that says private). Changing any picker means plan again.
+        self.visibility.currentIndexChanged.connect(self._inputs_changed)
+        self.update_mode.currentIndexChanged.connect(self._inputs_changed)
+        self.source_dir.textChanged.connect(self._inputs_changed)
+        self.out_dir.textChanged.connect(self._inputs_changed)
+        self.rename_map.textChanged.connect(self._drop_plan)
+        self.source.currentIndexChanged.connect(self._inputs_changed)
+        self._pickers = (self.source, self.visibility, self.update_mode, self.source_dir,
+                         self.out_dir, self.rename_map)
+        self._plan_stale = False   # set by a dropped plan while a Plan runs: its result is for old inputs
+
+    # ── the step applies only when some domain names an org ───────────────────────
+    def applies(self) -> bool:
+        return export_step_applies(self._candidates())
+
+    def _candidates(self) -> list:
+        return export_candidates(self.wiz.generator_dir, self.wiz.export_config_files)
+
+    def initializePage(self):
+        self._say("")                    # BEFORE the refresh: it may have something to say
+        self.plan, self.result = None, None
+        self.table.setRowCount(0)
+        self.plan_text.setPlainText("")
+        self.confirm.clear()
+        self.apply_btn.setEnabled(False)
+        self.progress_bar.setVisible(False)
+        self.progress_label.setVisible(False)
+        self._refresh_candidates()
+
+    def _drop_plan(self, *_args) -> None:
+        """Forget the plan on screen and disarm Apply (the TUI's ``export_plan = None``).
+        A Plan still running when a picker changes is for the OLD inputs: its result
+        is discarded when it arrives (``_plan_stale``). While an Apply runs the
+        pickers are locked (see ``_apply``), so nothing can drop its plan."""
+        had_plan = self.plan is not None
+        if self._planning:                 # between Plan's click and its result being delivered
+            self._plan_stale = True
+        self.plan, self.result = None, None
+        # a typed name arms the plan it was typed for, not whichever plan comes next:
+        # without this a name typed under a private plan armed a later PUBLIC one
+        self.confirm.clear()
+        self.apply_btn.setEnabled(False)
+        self.table.setRowCount(0)
+        self.plan_text.setPlainText("")
+        if had_plan:
+            self._say("")                  # the blocked / skipped note was about that plan
+
+    def _inputs_changed(self, *_args) -> None:
+        self._drop_plan()
+        self._refresh_cmd()                # the Terminal line is the PLAN line again
+
+    def _refresh_candidates(self):
+        self.candidates = self._candidates()
+        self._drop_plan()                  # the combo's signals are blocked below
+        self.source.blockSignals(True)
+        self.source.clear()
+        for i, c in enumerate(self.candidates):
+            self.source.addItem(c.label(), i)
+        self.source.blockSignals(False)
+        if self.candidates:
+            self.source.setCurrentIndex(0)
+            self._source_picked(0)
+        else:
+            self._say(NO_EXPORT_DOMAINS_NOTE)
+
+    def _source_picked(self, idx: int) -> None:
+        try:
+            c = self.candidates[idx] if 0 <= idx < len(self.candidates) else None
+            if c is not None:
+                self.source_dir.setText(c.source_dir if c.source_mode == "existing" else "")
+                # a generic config file's own choices seed the pickers, so the plan
+                # made here is the plan the file describes (the pickers stay editable)
+                if c.config is not None:
+                    self.visibility.setCurrentText(c.config.visibility)
+                    at = self.update_mode.findData(c.config.update)
+                    if at >= 0:
+                        self.update_mode.setCurrentIndex(at)
+                    self.out_dir.setText(c.config.out_dir)
+                self._refresh_cmd()
+        except Exception:                      # noqa: BLE001 — PyQt6 qFatals on a slot raise
+            pass
+
+    def _add_config(self):
+        path = self.config_path.text().strip()
+        if not path:
+            return
+        try:
+            cands = org_export.candidates_from_file(path, self.wiz.generator_dir)
+        except (OSError, ValueError) as exc:
+            # the engine's own messages already start with the path: say it once
+            self._say(str(exc) if str(exc).startswith(path) else f"{path}: {exc}")
+            return
+        if not cands:
+            self._say(f"{path}: no domain in it names a GitHub org")
+            return
+        if path not in self.wiz.export_config_files:
+            self.wiz.export_config_files.append(path)
+        self._refresh_candidates()
+        self.source.setCurrentIndex(self.source.count() - 1)
+        self._say("")
+
+    def _say(self, text: str) -> None:
+        self.status.setText(text)
+        self.status.setVisible(bool(text))
+
+    # ── config -> plan -> apply ────────────────────────────────────────────────────
+    def current_candidate(self):
+        idx = self.source.currentIndex()
+        return self.candidates[idx] if 0 <= idx < len(self.candidates) else None
+
+    def export_config(self) -> org_export.ExportConfig | None:
+        """The config a Plan here runs: the candidate's (a generic config file's own
+        rules included), the pickers over it, and the rename-map file merged over
+        its rename map. Raises ValueError/OSError for a rename map that cannot be
+        read; the callers say so inline."""
+        c = self.current_candidate()
+        if c is None:
+            return None
+        src = self.source_dir.text().strip()
+        # an empty Source folder is the clone root (.stack-src), as the field's
+        # placeholder says — also for a saved mesh that recorded a folder and had
+        # it cleared here; 'existing' with no folder would plan every source missing
+        cfg = c.to_config(
+            visibility=self.visibility.currentText(),
+            update=self.update_mode.currentData() or org_export.UPDATE_REFUSE,
+            out_dir=self.out_dir.text().strip(),
+            source_mode="existing" if src else "clone",
+            source_dir=src, generator_dir=c.generator_dir or self.wiz.generator_dir)
+        rm = self.rename_map.text().strip()
+        if rm:
+            cfg.rename_map = org_export.merge_rename_maps(cfg.rename_map or {},
+                                                          org_export.load_rename_map(rm))
+        if self.wiz.export_remote_base:
+            cfg.remote_base = self.wiz.export_remote_base
+        return cfg
+
+    def _cli_command(self, cfg, verb: str) -> str:
+        c = self.current_candidate()
+        return org_export.cli_command(
+            cfg, verb,
+            # EVERY candidate's file is handed over as --config: a saved mesh's or an
+            # image config's selected services live only there, and a line spelling
+            # just --domain/--org planned (and with --apply exported) fewer repositories
+            config_path=c.path if c is not None else "",
+            rename_map_path=self.rename_map.text().strip())
+
+    def _refresh_cmd(self):
+        try:
+            cfg = self.export_config()
+        except (OSError, ValueError) as exc:
+            self._say(f"{self.rename_map.text().strip()}: {exc}")
+            self._rename_map_said = True
+            self.cmd.setText("")
+            return
+        if getattr(self, "_rename_map_said", False):
+            self._say("")                     # the file reads now: the stale line goes
+            self._rename_map_said = False
+        self.cmd.setText(self._cli_command(cfg, "PLAN") if cfg else "")
+
+    def _runner(self):
+        return self.wiz.export_runner or org_export.SubprocessRunner()
+
+    def _plan(self):
+        if self.worker and self.worker.isRunning():
+            return
+        try:
+            cfg = self.export_config()
+            problems = cfg.problems() if cfg is not None else []
+        except (OSError, ValueError) as exc:               # the rename-map file
+            self._say(f"{self.rename_map.text().strip()}: {exc}")
+            self._rename_map_said = True       # so a fixed field clears this line too
+            return
+        except Exception as exc:               # noqa: BLE001 — PyQt6 aborts the whole
+            # process on an exception that leaves a slot; say it inline instead
+            self._say(f"The export settings could not be read: {exc}")
+            return
+        if cfg is None:
+            self._say(NO_EXPORT_DOMAINS_NOTE)
+            return
+        if problems:
+            self._say("\n".join(problems))
+            return
+        self._say("")
+        self.confirm.clear()               # a name typed for an earlier plan arms nothing
+        self.plan, self.result = None, None
+        self._plan_stale = False
+        self._planning = True
+        self.apply_btn.setEnabled(False)
+        self.plan_btn.setEnabled(False)
+        self.progress_bar.setRange(0, 0)
+        self.progress_bar.setVisible(True)
+        self.progress_label.setText("planning…")
+        self.progress_label.setVisible(True)
+        runner = self._runner()
+        self.worker = _ExportWorker(lambda _progress: org_export.plan(cfg, runner))
+        self.worker.done.connect(self._planned)
+        self.worker.start()
+
+    def _planned(self, outcome):
+        kind, value = outcome
+        self._planning = False
+        self.plan_btn.setEnabled(True)
+        self.progress_bar.setVisible(False)
+        self.progress_label.setVisible(False)
+        if self._plan_stale:
+            # a picker changed while this ran: it planned inputs the screen no longer
+            # shows, and arming Apply from it would export what nobody is looking at
+            self._say("An input changed while the plan was running: plan again.")
+            return
+        if kind != "ok":
+            self._say(f"Plan failed: {value}")
+            return
+        self.plan = value
+        # whatever was typed while the plan ran was typed before the plan could be read
+        self.confirm.clear()
+        self._fill_table(self.plan)
+        self.plan_text.setPlainText("\n".join(org_export.plan_lines(self.plan)))
+        self.cmd.setText(self._cli_command(self.plan.config, "APPLY"))
+        if self.plan.blocked:
+            self._say("The plan is blocked (see the table): nothing is applied until every "
+                      "repository is clean.")
+        self._armed(self.confirm.text())
+
+    def _fill_table(self, p):
+        rows = [*p.repos, p.site]
+        self.table.setRowCount(len(rows))
+        for r, rp in enumerate(rows):
+            cells = (rp.source or "(generated)", rp.target_full, rp.action, rp.kind,
+                     str(rp.files), str(len(rp.rewrites)), str(len(rp.excluded)), "")
+            for c, text in enumerate(cells):
+                item = QtWidgets.QTableWidgetItem(text)
+                if c == 2 and rp.blocked:
+                    item.setForeground(QtGui.QColor("#c62828"))
+                    item.setToolTip("\n".join([*rp.banned, *rp.notes]))
+                self.table.setItem(r, c, item)
+        # Sized from EVERY row's text, not resizeColumnsToContents(): that measures
+        # only the rows inside the viewport, so with a 140 px table the last rows
+        # (the site repository, the longest name) were elided once scrolled into view.
+        fm = self.table.fontMetrics()
+        for c in range(len(EXPORT_COLUMNS) - 1):            # the last one stretches
+            texts = [EXPORT_COLUMNS[c]] + [self.table.item(r, c).text()
+                                           for r in range(self.table.rowCount())]
+            self.table.setColumnWidth(c, max(fm.horizontalAdvance(t) for t in texts) + 16)
+
+    def _armed(self, text):
+        p = self.plan
+        ok = (p is not None and not p.blocked and self.result is None
+              and bool(text.strip()) and text.strip().lower() == p.config.org.lower())
+        self.apply_btn.setEnabled(ok)
+
+    def _apply(self):
+        p = self.plan
+        if p is None or p.blocked or (self.worker and self.worker.isRunning()):
+            return
+        if self.result is not None:         # the plan is spent: plan again to run again
+            self._say("This plan was applied. Plan again to run again.")
+            return
+        if self.confirm.text().strip().lower() != p.config.org.lower():
+            self._say("Type the org name to arm Apply (letter case does not matter).")   # inline, never modal
+            self.apply_btn.setEnabled(False)
+            return
+        self._say("")
+        self.apply_btn.setEnabled(False)
+        self.plan_btn.setEnabled(False)
+        self._set_inputs_enabled(False)    # what is applied is the plan above: no picker moves now
+        self._applying = p
+        total = len(p.repos) + 1
+        self.progress_bar.setRange(0, total)
+        self.progress_bar.setValue(0)
+        self.progress_bar.setVisible(True)
+        self.progress_label.setText(f"0 / {total}")
+        self.progress_label.setVisible(True)
+        runner = self._runner()
+        self.worker = _ExportWorker(lambda progress: org_export.apply(p, runner,
+                                                                       progress=progress))
+        self.worker.progress.connect(self._repo_done)
+        self.worker.done.connect(self._applied)
+        self.worker.start()
+
+    def _repo_done(self, res):
+        try:
+            for r in range(self.table.rowCount()):
+                if self.table.item(r, 1) and self.table.item(r, 1).text() == res.target:
+                    text = res.action + (f" — SKIPPED: {res.skipped}" if res.skipped
+                                         else f"  {res.branch} {res.commit[:12]}")
+                    self.table.setItem(r, 7, QtWidgets.QTableWidgetItem(text))
+            self.progress_bar.setValue(self.progress_bar.value() + 1)
+            self.progress_label.setText(
+                f"{self.progress_bar.value()} / {self.progress_bar.maximum()}")
+        except Exception:                      # noqa: BLE001 — never raise in a slot
+            pass
+
+    def _set_inputs_enabled(self, on: bool) -> None:
+        for w in (*self._pickers, self.config_path, self.add_btn):
+            w.setEnabled(on)
+
+    def _applied(self, outcome):
+        kind, value = outcome
+        p, self._applying = self._applying, None
+        self.plan_btn.setEnabled(True)
+        self._set_inputs_enabled(True)
+        if kind != "ok" or p is None:
+            self._say(f"Apply failed: {value}")
+            return
+        self.result = value
+        self.plan_text.setPlainText("\n".join([*org_export.plan_lines(p), "",
+                                               *org_export.result_lines(value)]))
+        self.progress_label.setText("done" if not value.failures
+                                    else f"done, {len(value.failures)} skipped")
+        if value.failures:
+            self._say("Some repositories were skipped — see the Result column and "
+                      f"{value.result_path}.")
+        self.apply_btn.setEnabled(False)       # one apply per plan: re-plan to run again
 
 
 class GoLiveVerifyPage(QtWidgets.QWizardPage):
@@ -720,14 +1259,20 @@ class GoLiveWizard(QtWidgets.QWizard):
         self.model = ""             # chosen exposure model (mechanism -> model)
         self.token_secret = ""      # masked provider token — staged per run, never saved
         self.verify_ok = False
+        # the optional "Export to GitHub org" step: config files the person added on
+        # it (candidates beyond the saved meshes), and two test seams — a runner that
+        # stands in for git/gh, and a remote prefix other than github.com
+        self.export_config_files: list[str] = []
+        self.export_runner = None
+        self.export_remote_base = ""
         self.setWindowTitle("HugMesh Go-Live Wizard")
         self.setWindowIcon(brand_icon())
         self.setWizardStyle(QtWidgets.QWizard.WizardStyle.ModernStyle)
         self.resize(820, 640)
         self._pages = [
             GoLivePreflightPage(self), GoLiveExposurePage(self), GoLiveProviderPage(self),
-            GoLiveInputsPage(self), GoLiveGeneratePage(self), GoLiveVerifyPage(self),
-            GoLiveFlipPage(self),
+            GoLiveInputsPage(self), GoLiveGeneratePage(self), GoLiveOrgExportPage(self),
+            GoLiveVerifyPage(self), GoLiveFlipPage(self),
         ]
         assert len(self._pages) == len(GOLIVE_PAGE_SLUGS), (
             f"go-live pages ({len(self._pages)}) drifted from "
@@ -735,3 +1280,17 @@ class GoLiveWizard(QtWidgets.QWizard):
         for p in self._pages:
             self.addPage(p)
         self._page_ids = dict(zip(GOLIVE_PAGE_SLUGS, self.pageIds()))
+
+    def nextId(self):
+        """The default order, except that the export step is SKIPPED when no domain
+        names a GitHub org — so a flow with none sees exactly the pages it always
+        did (the build wizard's applies_to idiom, for one page)."""
+        nid = super().nextId()
+        export_id = self._page_ids.get("org-export")
+        if nid == export_id and export_id is not None:
+            page = self.page(export_id)
+            if not page.applies():
+                ids = list(self.pageIds())
+                i = ids.index(export_id)
+                return ids[i + 1] if i + 1 < len(ids) else -1
+        return nid

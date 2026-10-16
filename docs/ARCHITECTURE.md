@@ -93,7 +93,7 @@ flowchart TD
         KINDE2E["kind SSO e2e: harness shipped, blockers 1-16 and the JWKS fix (#693) merged, live proof not run"]
         MFAFLIP["MFA: the live-cluster operator flip (MFA-ROLLOUT.md)"]
         ENFORCE["SELinux enforcing (nodes boot permissive)"]
-        SFU["Group-call SFU — does not exist"]
+        SFU["Group-call SFU: client half dark, server half not built"]
         NOTIFY["Notifications: external channels"]
     end
 
@@ -530,8 +530,10 @@ implementation on `main`.
   (no runlevel, `SELINUX_ENFORCE_GATE="no"`). The `.te` rules are still tagged
   `INFERRED-WIDE` and can only be narrowed against AVC logs from a real protected
   build + boot. See [`selinux-module-loading.md`](selinux-module-loading.md).
-- **🔭 Group-call SFU** — coturn is a 1:1/mesh relay only; MatrixRTC / Element
-  Call / LiveKit-class group calling does not exist in any form.
+- **🔭 Group-call SFU** — coturn is a 1:1/mesh relay only. The MatrixRTC client
+  half is merged and dark in `hugmesh-matrix-ui` (`__HUG_MATRIX_RTC__`, default
+  off); the server half (LiveKit, lk-jwt-service, tuwunel `livekit_url`) is
+  designed but not built. See [`GROUP-CALL-SFU.md`](GROUP-CALL-SFU.md).
 - **🚧 Desktop-governance SSO token producer** (FD-07 increment 2): code and
   unit tests landed; unproven on a live Casdoor and on an image; the
   lightdm-greeter / password-grant PAM login is not built.
