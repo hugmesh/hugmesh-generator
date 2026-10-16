@@ -108,7 +108,17 @@ function pageReport(world: { get<T>(k: string): T }): Required<Pick<PageReport, 
       + `--- driver stderr ---\n${g.transcript.stderr.slice(0, 2000)}`,
     );
   }
-  return { ...doc, texts: doc.texts ?? [], controls: doc.controls ?? [] };
+  // FAIL CLOSED on an empty report. studio-driver.py empties texts/controls when
+  // its page report throws (and says so only on stderr); an empty list would let
+  // every 'does not say' assertion pass having read nothing.
+  if (!doc.texts?.length || !doc.controls?.length) {
+    throw new Error(
+      `the Studio driver grabbed page '${doc.page}' but reported no texts or no controls, `
+      + `so nothing can be asserted about what the page says\n`
+      + `--- driver stderr ---\n${g.transcript.stderr.slice(0, 2000)}`,
+    );
+  }
+  return { ...doc, texts: doc.texts, controls: doc.controls };
 }
 
 /** Visible controls whose text matches `name` — exact first, then substring. */

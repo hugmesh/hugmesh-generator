@@ -42,6 +42,9 @@ Feature: A domain's service configuration is a required step before an image bui
     And the Studio control "Back to the main menu" is enabled
     And the evidence manifest holds a "widget-grab" artefact for this scenario
 
+  # The image build also gates the mesh's implicit OWN domain (cluster_domain,
+  # #631: OWN_DOMAIN_GATED_ACTIONS in core/domain_services.py), so every fixture
+  # below that expects a domain to pass marks mesh.hugmesh.test reviewed too.
   @interface:studio @issue:generator-494
   Scenario: walking the domain's services page is what unlocks the build @interface:studio
     Given a Studio config JSON fixture:
@@ -49,7 +52,7 @@ Feature: A domain's service configuration is a required step before an image bui
       {"mode": "mesh", "role": "backend", "platform": "x86",
        "cluster_domain": "mesh.hugmesh.test", "additional_domains": true,
        "domains": [{"name": "acme.example", "title": "Acme"}],
-       "domain_services_reviewed": ["acme.example"]}
+       "domain_services_reviewed": ["mesh.hugmesh.test", "acme.example"]}
       """
     When I grab the Studio wizard page "launch" with that config fixture
     Then the Studio grab shows the wizard page "launch"
@@ -68,7 +71,7 @@ Feature: A domain's service configuration is a required step before an image bui
        "cluster_domain": "mesh.hugmesh.test", "additional_domains": true,
        "domains": [{"name": "acme.example", "title": "Acme"},
                    {"name": "beta.example", "title": "Beta"}],
-       "domain_services_reviewed": ["beta.example"]}
+       "domain_services_reviewed": ["mesh.hugmesh.test", "beta.example"]}
       """
     When I ask the Studio gate seam whether that config fixture may "<action>"
     Then the command succeeded
@@ -89,7 +92,7 @@ Feature: A domain's service configuration is a required step before an image bui
        "cluster_domain": "mesh.hugmesh.test", "additional_domains": true,
        "domains": [{"name": "acme.example", "title": "Acme"},
                    {"name": "beta.example", "title": "Beta"}],
-       "domain_services_reviewed": ["acme.example", "beta.example"]}
+       "domain_services_reviewed": ["mesh.hugmesh.test", "acme.example", "beta.example"]}
       """
     When I ask the Studio gate seam whether that config fixture may "<action>"
     Then the command succeeded
