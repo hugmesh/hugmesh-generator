@@ -9,18 +9,18 @@
 #
 # THE 401 RULE, stated once (the plan's own words): an anonymous denial is 401
 # with `www-authenticate: Bearer`, from the gateway's coarse
-# anyExchange().authenticated() floor (SecurityConfig.java:357) — never 403. A
-# 403 to a caller that presented nothing means something AUTHENTICATED the
-# request, and a 403 carrying X-Route-Denied means the route-access table was
-# consulted for an anonymous caller, which GatewayRouteAccessFilter.java:73
-# says never happens ("Anonymous requests forward untouched — SecurityConfig
-# already decided"). Both are the finding this feature exists to catch, so the
+# anyExchange().authenticated() floor (hugmesh-gateway SecurityConfig.java) —
+# never 403. A 403 to a caller that presented nothing means something
+# AUTHENTICATED the request, and a 403 carrying X-Route-Denied means the
+# route-access table was consulted for an anonymous caller, which hugmesh-gateway
+# GatewayRouteAccessFilter.java says never happens ("Anonymous requests forward
+# without a route-access decision"). Both are the finding this feature exists to catch, so the
 # header's ABSENCE is asserted, not just the status.
 #
 # The public floor is the CONTROL: without the 200s below, every 401 above could
 # be a dead front door rather than a wall. `/bff/login` is the ONLY anonymous
 # door into authentication and is deliberately not probed here — a wrong-password
-# POST spends one of Casdoor's five sign-in strikes on whatever account it names.
+# POST counts toward Casdoor's sign-in lockout for whatever account it names.
 @service:gateway @layer:gateway @env:docker
 Feature: The anonymous 401 wall at the public front door
 
@@ -72,7 +72,7 @@ Feature: The anonymous 401 wall at the public front door
       | /bff/public/theme/x               | login   |
       | /bff/public/appeal-contact/anything | login |
 
-  # The credential and registration doors are exact PUBLIC paths for POST alone;
+  # The credential doors (/bff/login, /bff/password-reset/{request,confirm}) are EXACT PUBLIC paths;
   # an anonymous POST to a sibling, or to the stage-2 completion, is walled (N9,
   # N10, N16). Self-registration is closed BY DESIGN — the gateway floor is the
   # only thing keeping it closed, so this row is the sharpest one in the file.

@@ -860,6 +860,12 @@ Then('the response status is not {int}', async ({ world }, unwanted: number) => 
   expect(r.status(), responseLabel(world)).not.toBe(unwanted);
 });
 
+Then('the response body does not contain {string}', async ({ world }, needle: string) => {
+  const body = world.get<string>('responseBody');
+  expect(body.includes(needle), `${responseLabel(world)} must not contain ${JSON.stringify(needle)}`)
+    .toBe(false);
+});
+
 Then('the response status is a 2xx', async ({ world }) => {
   const r = world.get<APIResponse>('response');
   expect(r.status() >= 200 && r.status() < 300, responseLabel(world)).toBe(true);
