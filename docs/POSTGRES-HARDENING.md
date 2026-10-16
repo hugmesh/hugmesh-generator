@@ -228,10 +228,11 @@ through `initdb/00-hardening.sql`:
   Services are ClusterIP-only and confined by SELinux MCS levels and NetworkPolicy.
   Wire encryption between an app and its DB is **wired but inert**. Each of the nine
   DB pods (admin-bff-db, mod-bff-db, user-bff-db, federation-db, forum-bff-db,
-  route-access-db, mesh-bff-db, wiki-bff-db, character-forge-bff-db) mounts its
-  Vault-PKI server cert read-only at `/etc/postgres-tls` AND boots through a small
-  init wrapper, `entrypoint/pg-tls-entrypoint.sh` (a SEPARATE ConfigMap, not in the
-  initdb dir), which follows the egress-proxy entrypoint idiom:
+  route-access-db, mesh-bff-db, wiki-bff-db, character-forge-bff-db; all nine still
+  `PG_TLS_ENABLED: "false"`) mounts its Vault-PKI server cert read-only at
+  `/etc/postgres-tls` AND boots through a small init wrapper,
+  `entrypoint/pg-tls-entrypoint.sh` (a SEPARATE ConfigMap, not in the initdb dir),
+  which follows the egress-proxy entrypoint idiom:
   - `PG_TLS_ENABLED=false` (DEFAULT): the wrapper runs Postgres with the SAME static
     server args as before, with **no `-c ssl=on`**. The cert is unused and the wire
     path is **byte-identical** to the pre-TLS deployment.
@@ -247,7 +248,11 @@ through `initdb/00-hardening.sql`:
   `"true"` in the DB Deployment (config-only, no new cert plumbing) ONLY after the
   Vault-PKI server-cert ESO Secret `<db>-mtls` is provisioned and materialized for
   that DB. Until then it stays off. The DBs are single-node, same-namespace and
-  already MCS + NetworkPolicy confined, so the default-off posture is safe.
+  already MCS + NetworkPolicy confined, so the default-off posture is safe. **The
+  per-DB procedure, the order, the preflight (`scripts/pg-tls-preflight.sh`, which
+  refuses the flip while `<db>-mtls` is missing or unusable) and the rollback are in
+  `docs/DB-HARDENING-RUNBOOK.md`.** The flip is a git change and a Recreate rollout:
+  with the Secret absent it takes the DB down, because the volume is `optional: true`.
   **Out of scope** (no dark-TLS cert mounted; they would need new ESO certs first):
   casdoor, casdoor-games and casdoor-domain Postgres, akkoma-db, the phpBB forum
   Postgres, the Headwind Postgres, observability Postgres.

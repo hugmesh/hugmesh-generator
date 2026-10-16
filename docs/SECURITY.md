@@ -7,14 +7,26 @@ still the target.
 
 ## 1. LSM — SELinux on every image
 
-All ten stage4 images (the three RPi 5 role images `pki`/`backend`/`frontend`,
-the x86_64 `host`, Frite, Jetson and the Orange Pi family) build from the
-`hardened/selinux` profile (`specs-*/portage/profile/parent`) with SELinux as the
-LSM. The kernel `CONFIG_LSM` is `lockdown,yama,selinux,bpf` on x86 and RPi 5
-(`specs-x86/kernel/hardened-k8s.config`, `specs-rpi5/kernel/hardened-k8s.config`;
-the x86 cmdline carries `lsm=lockdown,yama,selinux,bpf`) and `yama,selinux` on the
-Frite, Jetson and Orange Pi kernels. AppArmor is disabled
-(`disable CONFIG_SECURITY_APPARMOR` in the x86 and RPi 5 fragments).
+All ten stage4 builders (RPi 5, which makes the three role images
+`pki`/`backend`/`frontend`, the x86_64 `host`, Frite, Jetson and the six Orange Pi
+boards) build from the `hardened/selinux` profile (`specs-*/portage/profile/parent`)
+with SELinux as the LSM. AppArmor is disabled (`disable CONFIG_SECURITY_APPARMOR` in
+the x86 and RPi 5 fragments). The stack is per arch and is what the kernel actually runs
+(`tests/scripts/test-lsm-posture-honesty.sh` fails the build if an image advertises
+a name its kernel did not compile in):
+
+| Boards | `CONFIG_LSM` / `lsm=` | `lockdown=` |
+|---|---|---|
+| x86, rpi5 | `lockdown,yama,selinux,bpf` | `integrity` |
+| the 8 ARM boards (La Frite, Jetson, Orange Pi Zero 2 / Zero 2W / Zero 3 / 3 LTS / 4 LTS / 5) | `lockdown,yama,selinux` | `integrity` |
+
+`bpf` is registered only on x86 and rpi5. Both fragments now ask for the BTF a
+`BPF_PROG_TYPE_LSM` program needs to attach. Only the x86 configuration has been resolved
+against a real kernel tree (rpi5 is enforced by its builder guard at build time), and no
+image has been built or booted with it, so that an attach really succeeds is not yet
+proven (see the README roadmap). Lockdown selects
+`CONFIG_MODULE_SIG`, so modules built with the kernel are signed and an unsigned
+out-of-tree `.ko` is refused at runtime on every board.
 
 - **Pi (cross-built):** SELinux policy packages' `pkg_postinst` runs the *target*
   `semodule`, which can't execute under aarch64 cross-emerge — so `keys-provision`

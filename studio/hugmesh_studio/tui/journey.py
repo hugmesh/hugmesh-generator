@@ -48,6 +48,7 @@ from ..core.worklist import (
     WorklistConfig, WorklistEntry, derived_hostname, duplicate_hostnames, entry_id,
     resolve_hostname,
 )
+from .local_ai import OPEN_COMMAND as _LOCAL_AI_COMMAND, LocalAIScreen as _LocalAIScreen
 
 __all__ = [
     "PAGE_ORDER", "SIDE_FLOW_SLUGS", "WELCOME_CHOICES", "WELCOME_TARGET",
@@ -182,7 +183,6 @@ _SIDE_FLOW_STUB = {
 _PENDING_STEPS = {
     "idp": "Identity provider",
     "hardware": "Hardware",
-    "network": "Network",
     "keyzip": "Admin key-zip",
     "home": "Home",
     "launch": "Launch",
@@ -985,6 +985,7 @@ class Journey:
         from .localcloud import LocalCloudScreen
         from .localmesh import LocalMeshScreen
         from .meshemu import MeshEmuScreen
+        from .network_step import NetworkScreen
         from .qemu import QemuScreen
         self.generator_dir = generator_dir
         self.cfg = cfg or ImageConfig()
@@ -1006,7 +1007,7 @@ class Journey:
                       "Add more domains beyond the internal Tailscale root "
                       "domain (public go-live domains this mesh serves)?",
                       "additional_domains"),
-            DomainsScreen(), DomainServicesScreen(),
+            NetworkScreen(), DomainsScreen(), DomainServicesScreen(),
             YesNoStep("users_choice", "User accounts",
                       "Configure user accounts for this mesh now?",
                       "configure_users"),
@@ -1060,6 +1061,18 @@ class Journey:
         self.effect = None
         line = line.strip()
         screen = self.screen()
+        if line.lower() == _LOCAL_AI_COMMAND:
+            # global, like q: the Local AI screen opens over whatever screen this is, and
+            # q returns to exactly it (an overlay that was open stays open underneath).
+            # On the Local AI screen itself it is a re-read: never a second screen, and
+            # never the word "local-ai" sent to the model as a question.
+            if isinstance(screen, _LocalAIScreen):
+                screen.reopen()
+                return
+            ai = _LocalAIScreen(generator_dir=self.generator_dir)
+            ai._under = self.overlay
+            self.open_overlay(ai)
+            return
         if line.lower() in ("q", "quit", "exit") and not getattr(
                 screen, "wants_q", False):
             self.done = True

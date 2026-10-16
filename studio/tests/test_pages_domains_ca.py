@@ -86,7 +86,9 @@ def _mesh_domains(wiz, certs=()):
 def test_the_column_is_appended_after_sign_in(wiz):
     dom = _mesh_domains(wiz, [CA_ROOT])
     assert _COL_CA == _COL_IDP + 1
-    assert dom.table.columnCount() == _COL_CA + 1
+    # appended after Sign-in; the GitHub org column (the Go-Live export step) sits
+    # after THIS one, so the table has at least these columns
+    assert dom.table.columnCount() >= _COL_CA + 1
     assert dom.table.horizontalHeaderItem(_COL_CA).text() == "Base CA"
     assert not dom.table.isColumnHidden(_COL_CA)                  # mesh: visible
 

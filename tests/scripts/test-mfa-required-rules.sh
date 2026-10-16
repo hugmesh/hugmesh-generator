@@ -163,6 +163,14 @@ import os, re, sqlite3, sys
 # The two prefixes the operator authorised. Blanket WITHIN them, and nothing else:
 # see 20-schema.sql's "NOT IN SCOPE" list and docs/MFA-ROLLOUT.md §1.2a.
 PREFIXES = ("/bff/admin", "/bff/superadmin")
+# ...plus the PER-SERVICE console shape added by operator decision 80b = B
+# (hugmesh-generator#329): `LIKE '/bff/%/admin/%'` / `LIKE '/bff/%/superadmin/%'`.
+# `%` spans ANY characters, `/` included, so these are `.*` and not `[^/]+` -- the
+# model must accept exactly what the SQL accepts, no more and no less. The two
+# shapes are disjoint from PREFIXES (they need a segment BETWEEN `/bff/` and
+# `/admin/`), so a row can never be "under" both.
+PER_SERVICE_SHAPES = (re.compile(r"^/bff/.*/admin/.*$", re.S),
+                      re.compile(r"^/bff/.*/superadmin/.*$", re.S))
 
 # Admin-ish /bff/ surfaces DELIBERATELY outside that scope. Every entry is named
 # and justified in the SQL header + the runbook. This list exists so the coverage
@@ -170,20 +178,17 @@ PREFIXES = ("/bff/admin", "/bff/superadmin")
 # own prefixes: a NEW admin-ish surface that is neither flipped nor listed here
 # FAILS the gate instead of being defined away, and a listed row that no longer
 # exists (or is now flipped) fails too, so the list cannot rot into a rubber stamp.
+#
+# Decision 80b = B (hugmesh-generator#329, 2026-09-23) REMOVED four entries -- the
+# forum, wiki-admin, wiki-superadmin and owncast console seams -- because the
+# UPDATE now carries the per-service shape and flips them. They must stay OUT of
+# this set: a row that is flipped AND listed here fails the STALE_EXCLUSIONS check,
+# which is what makes the list impossible to leave behind. What remains is what the
+# path predicate genuinely cannot (or must not) express.
 DOCUMENTED_EXCLUSIONS = {
     ("hugmesh-be-gateway", "/bff/games-services/instances/**", "ROLE_GAMES_SERVICES_ADMIN"),
     ("hugmesh-be-gateway", "/bff/image-builds/arch/**",        "ROLE_SUPERADMIN"),
-    ("hugmesh-fe-gateway", "/bff/forum/admin/**",              "ROLE_ADMIN"),
     ("hugmesh-fe-gateway", "/bff/mod/**",                      "ROLE_ADMIN"),
-    ("hugmesh-fe-gateway", "/bff/owncast/admin/**",            "ROLE_ADMIN"),
-    ("hugmesh-fe-gateway", "/bff/wiki/admin/**",               "ROLE_ADMIN"),
-    # FIRST per-service *superadmin* seam (#329). Same reason as its
-    # /bff/wiki/admin/** sibling directly above: it lives behind the wiki-bff's
-    # own service prefix, not under the two authorised blanket prefixes, so the
-    # UPDATE cannot reach it without a new predicate SHAPE. Listed -- not
-    # flipped -- deliberately: flipping the per-service seams is the open
-    # operator decision, and this gate must keep saying so out loud.
-    ("hugmesh-fe-gateway", "/bff/wiki/superadmin/**",           "ROLE_SUPERADMIN"),
 }
 
 # PER-DOMAIN MFA SCOPE (issue #47 × casdoor-choice). url_patterns an operator has
@@ -733,7 +738,7 @@ try:
             "SELECT count(*) FROM gateway_route_access").fetchone()[0] == n0 + 1
         # (iv) a per-domain TIGHTENING row outside the blanket prefixes
         con.execute("INSERT INTO gateway_route_access (gateway, url_pattern, role, allow, domain, mfa_required) VALUES "
-                    "('hugmesh-fe-gateway', '/bff/wiki/admin/**', 'ROLE_ADMIN', true, 'brand-x.example', true)\n" + onconf_clause)
+                    "('hugmesh-fe-gateway', '/bff/mod/**', 'ROLE_ADMIN', true, 'brand-x.example', true)\n" + onconf_clause)
         # now RE-APPLY the whole file's DML with the per-domain rows in place
         for s in dml:
             try:
@@ -745,10 +750,10 @@ try:
                           "WHERE domain = 'brand-x.example' AND url_pattern = '/bff/admin/phone-fleet/**'").fetchall()
         pd["blanket_scoped"] = len(got) == 1 and bool(got[0][0])
         got = con.execute("SELECT mfa_required FROM gateway_route_access "
-                          "WHERE domain = 'brand-x.example' AND url_pattern = '/bff/wiki/admin/**'").fetchall()
+                          "WHERE domain = 'brand-x.example' AND url_pattern = '/bff/mod/**'").fetchall()
         pd["tighten_kept"] = len(got) == 1 and bool(got[0][0])
         got = con.execute("SELECT mfa_required FROM gateway_route_access "
-                          "WHERE domain IS NULL AND url_pattern = '/bff/wiki/admin/**'").fetchall()
+                          "WHERE domain IS NULL AND url_pattern = '/bff/mod/**' AND role = 'ROLE_ADMIN'").fetchall()
         pd["tighten_scoped_only"] = len(got) == 1 and not got[0][0]
     except Exception as e:                                      # noqa: BLE001
         pd_err.append(str(e))
@@ -784,7 +789,8 @@ for g, p, r in flipped:
     emit("FLIP", "%s %s %s" % (g, p, r))
 
 def under(pat):
-    return any(pat == pre or pat.startswith(pre + "/") for pre in PREFIXES)
+    return (any(pat == pre or pat.startswith(pre + "/") for pre in PREFIXES)
+            or any(rx.match(pat) for rx in PER_SERVICE_SHAPES))
 
 over = [t for t in flipped if not under(t[1])]
 emit("OVERREACH", len(over))
@@ -1005,6 +1011,12 @@ if len(sys.argv) > 2 and os.path.isfile(sys.argv[2]):
     for name, expect, block in DOC_RE.findall(doctext):
         doc_names.append(name)
         body = dedent(block).strip()
+        # Optional 3rd argv: a directory to drop each block's body into, so the shell
+        # side can compare scripts/mfa-runbook-sql.sh (what an operator actually runs)
+        # against the very text this checker parsed and executed.
+        if len(sys.argv) > 3 and os.path.isdir(sys.argv[3]):
+            with open(os.path.join(sys.argv[3], name + ".sql"), "w", encoding="utf-8") as _bf:
+                _bf.write(body + "\n")
         try:
             if expect == "identical-to-seed":
                 if body.strip() != raw_flip.strip():
@@ -1035,6 +1047,160 @@ if len(sys.argv) > 2 and os.path.isfile(sys.argv[2]):
                         "missing=%s unexpected=%s"
                         % (name, len(got), len(want), expect,
                            sorted(want - got)[:4], sorted(got - want)[:4]))
+            elif expect == "mfa-census":
+                # The runbook's §9 privileged-operator census (admin-bff database,
+                # NOT the route-access database every other block runs against), so
+                # it gets its own throwaway engine with a fixture schema that mirrors
+                # hugmesh-admin-bff-api changelogs 004-account.xml (account: id,
+                # roles CSV) and 151-mfa-factors.xml (mfa_factor: owner_subject,
+                # type TOTP|WEBAUTHN, enabled). Each fixture row is a way an operator
+                # could be WRONGLY classified: a role that merely CONTAINS "admin"
+                # (a substring match would pull it in), a CSV with spaces, a TOTP
+                # still mid-enrol (enabled=false), a WEBAUTHN-only operator (the §2.2
+                # hazard), a non-privileged user, and a factor owned by someone else.
+                import sqlite3 as _sq
+                ce = _sq.connect(":memory:")
+                ce.executescript("""
+                    CREATE TABLE account (id TEXT PRIMARY KEY, roles TEXT NOT NULL DEFAULT 'user');
+                    CREATE TABLE mfa_factor (id TEXT PRIMARY KEY, owner_subject TEXT NOT NULL,
+                                             type TEXT NOT NULL, enabled BOOLEAN NOT NULL DEFAULT 0);
+                    INSERT INTO account VALUES
+                      ('casdoor:root',        'user,superadmin'),
+                      ('casdoor:adm-none',    'user,admin'),
+                      ('casdoor:adm-webauthn','user,admin'),
+                      ('casdoor:gm-midenrol', 'user,game-master'),
+                      ('casdoor:gm-both',     'game-master'),
+                      ('casdoor:sa-spaces',   'user, admin'),
+                      ('casdoor:plain-mod',   'user,mod'),
+                      ('casdoor:trap',        'user,administrator,superadministrator');
+                    INSERT INTO mfa_factor VALUES
+                      ('1','casdoor:root',        'TOTP',     1),
+                      ('2','casdoor:adm-webauthn','WEBAUTHN', 1),
+                      ('3','casdoor:gm-midenrol', 'TOTP',     0),
+                      ('4','casdoor:gm-both',     'TOTP',     1),
+                      ('5','casdoor:gm-both',     'WEBAUTHN', 1),
+                      ('6','casdoor:plain-mod',   'TOTP',     1),
+                      ('7','someone-else',        'TOTP',     1);
+                """)
+                got_c = [(r[0], r[1], bool(r[2]), bool(r[3])) for r in
+                         ce.execute(body.rstrip().rstrip(";")).fetchall()]
+                want_c = [
+                    ("casdoor:adm-none",     "user,admin",       False, False),
+                    ("casdoor:adm-webauthn", "user,admin",       False, True),
+                    ("casdoor:gm-midenrol",  "user,game-master", False, False),
+                    ("casdoor:sa-spaces",    "user, admin",      False, False),
+                    ("casdoor:gm-both",      "game-master",      True,  True),
+                    ("casdoor:root",         "user,superadmin",  True,  False),
+                ]
+                # ORDER matters: the runbook promises un-enrolled operators sort first.
+                if got_c != want_c:
+                    doc_bad.append("%s: census returned %r, expected %r (privileged accounts only, "
+                                   "TOTP-less first, a mid-enrol or WebAuthn-only operator must NOT "
+                                   "read as covered)" % (name, got_c, want_c))
+            elif expect == "mfa-fleet-census":
+                # §9 phase C5b: the PURE fleet owners (fleet_admin and none of the three
+                # roles that short-circuit in the gateway), the one population that
+                # mfa.enabled alone gates. Same admin-bff fixture shape as the census above
+                # plus fleet_entitlement (changelog 306: subject PK, active, expires_at).
+                # Each row is a way an owner could be WRONGLY classified: a fleet owner who
+                # is ALSO admin / game-master / superadmin (short-circuits, not gated at
+                # step 6), the LIKE wildcard '_' (fleet-admin / fleetXadmin must not match
+                # fleet_admin), a SUBSTRING role (fleet_administrator), a spaced CSV, an
+                # entitlement that is inactive, expired, absent, or open-ended, a TOTP still
+                # mid-enrol, a WEBAUTHN-only owner, and a factor owned by someone else.
+                import sqlite3 as _sq
+                fe = _sq.connect(":memory:")
+                fe.executescript("""
+                    CREATE TABLE account (id TEXT PRIMARY KEY, roles TEXT NOT NULL DEFAULT 'user');
+                    CREATE TABLE mfa_factor (id TEXT PRIMARY KEY, owner_subject TEXT NOT NULL,
+                                             type TEXT NOT NULL, enabled BOOLEAN NOT NULL DEFAULT 0);
+                    CREATE TABLE fleet_entitlement (subject TEXT PRIMARY KEY,
+                                             active BOOLEAN NOT NULL DEFAULT 1, seats INT,
+                                             expires_at TIMESTAMP, updated_at TIMESTAMP);
+                    INSERT INTO account VALUES
+                      ('casdoor:f-bare',      'user,fleet_admin'),
+                      ('casdoor:f-totp',      'user,fleet_admin'),
+                      ('casdoor:f-webauthn',  'fleet_admin'),
+                      ('casdoor:f-midenrol',  'user, fleet_admin'),
+                      ('casdoor:f-inactive',  'user,fleet_admin'),
+                      ('casdoor:f-expired',   'user,fleet_admin'),
+                      ('casdoor:f-noent',     'user,fleet_admin'),
+                      ('casdoor:f-and-admin', 'user,fleet_admin,admin'),
+                      ('casdoor:f-and-gm',    'user,fleet_admin,game-master'),
+                      ('casdoor:f-and-super', 'fleet_admin,superadmin'),
+                      ('casdoor:dash',        'user,fleet-admin'),
+                      ('casdoor:wild',        'user,fleetXadmin'),
+                      ('casdoor:substr',      'user,fleet_administrator'),
+                      ('casdoor:plain',       'user,mod');
+                    INSERT INTO mfa_factor VALUES
+                      ('1','casdoor:f-totp',     'TOTP',     1),
+                      ('2','casdoor:f-webauthn', 'WEBAUTHN', 1),
+                      ('3','casdoor:f-midenrol', 'TOTP',     0),
+                      ('4','casdoor:f-bare',     'WEBAUTHN', 0),
+                      ('5','someone-else',       'TOTP',     1);
+                    INSERT INTO fleet_entitlement VALUES
+                      ('casdoor:f-bare',     1, 3,    NULL,                  '2026-01-01 00:00:00'),
+                      ('casdoor:f-totp',     1, NULL, '2999-01-01 00:00:00', '2026-01-01 00:00:00'),
+                      ('casdoor:f-webauthn', 1, NULL, '2999-01-01 00:00:00', '2026-01-01 00:00:00'),
+                      ('casdoor:f-midenrol', 1, NULL, NULL,                  '2026-01-01 00:00:00'),
+                      ('casdoor:f-inactive', 0, NULL, NULL,                  '2026-01-01 00:00:00'),
+                      ('casdoor:f-expired',  1, NULL, '2000-01-01 00:00:00', '2026-01-01 00:00:00'),
+                      ('casdoor:f-and-admin',1, NULL, NULL,                  '2026-01-01 00:00:00');
+                """)
+                got_f = [(r[0], bool(r[2]), bool(r[3]), bool(r[4])) for r in
+                         fe.execute(body.rstrip().rstrip(";")).fetchall()]
+                want_f = [
+                    # un-enrolled first (totp False), entitled before un-entitled, then id
+                    ("casdoor:f-bare",     False, False, True),
+                    ("casdoor:f-midenrol", False, False, True),
+                    ("casdoor:f-webauthn", False, True,  True),
+                    ("casdoor:f-expired",  False, False, False),
+                    ("casdoor:f-inactive", False, False, False),
+                    ("casdoor:f-noent",    False, False, False),
+                    ("casdoor:f-totp",     True,  False, True),
+                ]
+                if got_f != want_f:
+                    doc_bad.append("%s: fleet census returned %r, expected %r (pure fleet_admin only: "
+                                   "admin / game-master / superadmin co-holders, the '_' wildcard and a "
+                                   "substring role must NOT match; inactive and expired entitlements "
+                                   "must read entitled=false; a mid-enrol TOTP must not read as enrolled)"
+                                   % (name, got_f, want_f))
+            elif expect == "casdoor-token-census":
+                # §9 phase C4 / §2.4: the Casdoor `token` table, shaped as casbin/casdoor
+                # v3.80.0 (the tag the cluster pins) defines it. object/token_oauth.go
+                # GetClientCredentialsToken stores User = application.Name (a placeholder
+                # user, Type "application") and GrantType = "client_credentials"; rows
+                # from before the grant_type column existed carry only the placeholder
+                # user. The previous census keyed on an EMPTY user, which no
+                # client_credentials row has, so it could never report a machine token.
+                import sqlite3 as _sq
+                te = _sq.connect(":memory:")
+                te.executescript("""
+                    CREATE TABLE token (owner TEXT, name TEXT, created_time TEXT,
+                                        application TEXT, organization TEXT, "user" TEXT,
+                                        grant_type TEXT);
+                    INSERT INTO token VALUES
+                      ('admin','t1','2026-08-01T10:00:00Z','app-user-bff',     'hugmesh','alice',            'password'),
+                      ('admin','t2','2026-08-02T10:00:00Z','app-user-bff',     'hugmesh','bob',              ''),
+                      ('admin','t3','2026-08-03T10:00:00Z','app-user-bff',     'hugmesh','app-user-bff',     'client_credentials'),
+                      ('admin','t4','2026-08-04T10:00:00Z','app-user-bff',     'hugmesh','app-user-bff',     'client_credentials'),
+                      ('admin','t5','2026-08-05T10:00:00Z','app-fragment-sync','hugmesh','app-fragment-sync',''),
+                      ('admin','t6','2026-08-06T10:00:00Z','app-signup-gate',  'hugmesh','',                 'client_credentials'),
+                      ('admin','t7','2026-08-07T10:00:00Z','app-built-in',     'built-in','admin',           'authorization_code'),
+                      ('admin','t8','2026-08-08T10:00:00Z','app-built-in',     'built-in','admin',           'authorization_code');
+                """)
+                got_t = [tuple(r) for r in te.execute(body.rstrip().rstrip(";")).fetchall()]
+                want_t = [
+                    ("app-fragment-sync", "machine",    1, "2026-08-05T10:00:00Z"),  # user = app name, no grant_type (legacy row)
+                    ("app-signup-gate",   "machine",    1, "2026-08-06T10:00:00Z"),  # grant_type only, empty user
+                    ("app-user-bff",      "machine",    2, "2026-08-04T10:00:00Z"),  # both markers
+                    ("app-built-in",      "user-bound", 2, "2026-08-08T10:00:00Z"),
+                    ("app-user-bff",      "user-bound", 2, "2026-08-02T10:00:00Z"),  # same app also mints user tokens
+                ]
+                if got_t != want_t:
+                    doc_bad.append("%s: casdoor token census returned %r, expected %r (a client_credentials "
+                                   "token has user = its application name and grant_type = client_credentials; "
+                                   "an EMPTY user is not how a machine token looks)" % (name, got_t, want_t))
             elif expect == "per-domain-tightening":
                 # The runbook's per-domain tightening EXAMPLE, executed for real:
                 # its INSERT must land beside the unscoped canonical row, survive
@@ -1053,10 +1219,10 @@ if len(sys.argv) > 2 and os.path.isfile(sys.argv[2]):
                                 raise
                     scoped = con.execute(
                         "SELECT mfa_required FROM gateway_route_access "
-                        "WHERE domain = 'brand-x.example' AND url_pattern = '/bff/wiki/admin/**'").fetchall()
+                        "WHERE domain = 'brand-x.example' AND url_pattern = '/bff/mod/**'").fetchall()
                     unscoped = con.execute(
                         "SELECT mfa_required FROM gateway_route_access "
-                        "WHERE domain IS NULL AND url_pattern = '/bff/wiki/admin/**'").fetchall()
+                        "WHERE domain IS NULL AND url_pattern = '/bff/mod/**' AND role = 'ROLE_ADMIN'").fetchall()
                 finally:
                     con.execute("ROLLBACK TO docsql")
                     con.execute("RELEASE docsql")
@@ -1119,6 +1285,44 @@ if len(sys.argv) > 2 and os.path.isfile(sys.argv[2]):
 # ... and nothing else" with eleven rows carrying the floor and no gate able to see
 # the sentence. Prose that contradicts the seed is exactly the failure this file
 # exists to make impossible.
+# ── the runbook's quoted ROW COUNTS, read back against the replayed seed ─────────
+# The `verify` / `floor` blocks above are RUN, but the sentences that quote what they
+# return ("(14 rows)", "14 flipped, 15 carrying the floor") sit in §9 and the header,
+# away from the marker, and were pure prose. Decision 80b took the flip from 10 rows to
+# 14 (floor 11 -> 15) and §9 C3 / phase F / the 2026-10-14 header kept saying 10 and 11,
+# so an operator running the checklist's own C3 would see `(14 rows)` against a promise
+# of `(10 rows)` and read a correct cluster as a failed seed. Each claim below must be
+# PRESENT (a vanished sentence is reported, not skipped) and equal the measured count.
+doc_cnt_bad = []
+if len(sys.argv) > 2 and os.path.isfile(sys.argv[2]):
+    _dt = open(sys.argv[2], encoding="utf-8").read()
+    _nflip, _nfloor = len(want_flipped), len(want_floor)
+    _claims = [
+        ("header: '<N> flipped + <M> deny row'",
+         r"`mfa_required`\s+rows\s+\((\d+)\s+flipped\s+\+\s+(\d+)\s+deny\s+rows?",
+         (_nflip, _nfloor - _nflip)),
+        ("§9 C3: '<N> flipped, <M> carrying the floor'",
+         r"seeded rules are what §1\.2 says\*\*\s+—\s+(\d+)\s+flipped,\s+(\d+)\s+carrying the floor",
+         (_nflip, _nfloor)),
+        ("§9 C3: 'Expect (<N> rows) for verify ... (<M> rows) for floor'",
+         r"Expect\s+`\((\d+) rows\)`\s+for\s+`verify`[\s\S]{0,120}?`\((\d+) rows\)`\s+for\s+`floor`",
+         (_nflip, _nfloor)),
+        ("phase F: 'floor block (still (<M> rows)'",
+         r"C3 `floor` block \(still `\((\d+) rows\)`",
+         (_nfloor,)),
+    ]
+    for _what, _rx, _want in _claims:
+        _m = re.search(_rx, _dt)
+        if not _m:
+            doc_cnt_bad.append("%s: the sentence is GONE or reworded, so its count is no longer checked" % _what)
+            continue
+        _got = tuple(int(x) for x in _m.groups())
+        if _got != _want:
+            doc_cnt_bad.append("%s says %s but the replayed seed measures %s" % (_what, _got, _want))
+emit("DOC_COUNT_BAD", len(doc_cnt_bad))
+for b in doc_cnt_bad:
+    emit("DOC_COUNT_BAD_ROW", b)
+
 doc_deny_missing, doc_deny_extra = [], []
 doc_deny_absent = []
 if len(sys.argv) > 2 and os.path.isfile(sys.argv[2]):
@@ -1557,7 +1761,7 @@ PY
 # ─────────────────────────────────────────────────────────────────────────────
 echo ""
 echo "── 1) mfa_required rules in the canonical seed ──"
-python3 "${W}/check.py" "${SQL}" "${DOC}" > "${W}/real.out" 2>"${W}/real.err" \
+mkdir -p "${W}/docsql" && python3 "${W}/check.py" "${SQL}" "${DOC}" "${W}/docsql" > "${W}/real.out" 2>"${W}/real.err" \
   || { echo "  FAIL checker crashed:"; cat "${W}/real.err"; exit 1; }
 g() { sed -n "s/^$1 //p" "${W}/real.out" | head -1; }
 
@@ -1653,9 +1857,9 @@ fi
   || bad "$(g ALTER_SHAPE_MISMATCH) column(s) end up shaped differently on a fresh initdb vs an in-place upgrade: $(sed -n 's/^ALTER_SHAPE_MISMATCH_ROW //p' "${W}/real.out" | tr '\n' ';') $(sed -n 's/^ALTER_UNKNOWN_ACTION //p' "${W}/real.out" | tr '\n' ';')"
 
 if [ "${HAVE_UPDATE}" = "1" ]; then
-[ "$(g FLIPPED)" -ge 10 ] \
+[ "$(g FLIPPED)" -ge 15 ] \
   && ok "AFTER the whole file runs, $(g FLIPPED) rows carry mfa_required=true: $(sed -n 's/^FLIP //p' "${W}/real.out" | tr '\n' ';' )" \
-  || bad "after the whole file runs only $(g FLIPPED) rows carry mfa_required=true — expected at least the 10 rows under /bff/admin/** + /bff/superadmin/**"
+  || bad "after the whole file runs only $(g FLIPPED) rows carry mfa_required=true — expected at least the 15 rows (10 under /bff/admin/** + /bff/superadmin/**, 4 per-service admin consoles, and the 1 deliberate deny row)"
 
 # ── #244 ACCEPT: the superadmin platform console at the PUBLIC browser door ────
 # Behavioural, replayed over the FINAL rows, not a grep of the INSERT. The row is
@@ -2055,6 +2259,274 @@ esac
   && ok "every marked runbook query returns exactly what the prose around it promises (a previous revision told operators that LIKE '/bff/%admin%' 'also returns the six rows that are false by design' — run for real it returns THREE of the six, because the other three have no 'admin' substring in url_pattern)" \
   || bad "$(g DOC_SQL_BAD) runbook SQL block(s) do not do what the prose says: $(sed -n 's/^DOC_SQL_BAD_ROW //p' "${W}/real.out" | tr '\n' ';')"
 
+[ "$(g DOC_COUNT_BAD)" = "0" ] \
+  && ok "every row count the runbook quotes for the verify and floor queries (header, §9 C3, phase F) equals what the replayed seed measures" \
+  || bad "the runbook quotes row counts the seed does not produce: $(sed -n 's/^DOC_COUNT_BAD_ROW //p' "${W}/real.out" | tr '\n' ';') — an operator running the §9 checklist would read a correct cluster as a failed seed"
+
+
+# ── §9 operator checklist: the census block, the helper, and the posture-suite list ──
+# docs/MFA-ROLLOUT.md §9 is what the operator runs on a real cluster. Three things in it
+# are checkable here without one, and each had no gate before:
+#   (1) the `census` query (privileged accounts vs enabled TOTP factors) — executed above
+#       against a fixture schema (expect=mfa-census); here we only require it to EXIST,
+#       because a deleted census silently takes §9 phase C5 back to "go and look";
+#   (2) scripts/mfa-runbook-sql.sh, the thing an operator pipes the runbook's SQL through,
+#       must print every marked block BYTE-FOR-BYTE as this gate parsed it — otherwise the
+#       "executed by the gate" claim stops transferring to the cluster;
+#   (3) §3 steps 6/7 and §9 must name EVERY suite that pins the cluster-OFF posture. The
+#       2026-10-14 measurement found the runbook naming one of the three that go red when
+#       the chart default flips; this makes the list a checked fact, and the discovery
+#       below catches a FOURTH such suite being added without the runbook learning of it.
+case ",$(g DOC_SQL_NAMES)," in
+  *,census,*) ok "the runbook still carries the §9 'census' query (expect=mfa-census) — privileged accounts vs ENABLED TOTP factors, run for real against a fixture schema" ;;
+  *) bad "the runbook's 'census' query is GONE (names: $(g DOC_SQL_NAMES)) — §9 phase C5 has no command for 'every privileged operator has a working second factor'" ;;
+esac
+
+HELPER="${REPO}/scripts/mfa-runbook-sql.sh"
+if [ ! -f "${HELPER}" ]; then
+  bad "scripts/mfa-runbook-sql.sh is missing — §9 tells the operator to pipe the runbook's SQL through it"
+else
+  list_got="$(bash "${HELPER}" --list 2>/dev/null | paste -sd, -)"
+  [ "${list_got}" = "$(g DOC_SQL_NAMES)" ] \
+    && ok "scripts/mfa-runbook-sql.sh --list names exactly the blocks this gate executes (${list_got})" \
+    || bad "scripts/mfa-runbook-sql.sh --list says '${list_got}' but the gate executes '$(g DOC_SQL_NAMES)'"
+  helper_bad=""; helper_n=0
+  for f in "${W}/docsql/"*.sql; do
+    n="$(basename "${f}" .sql)"; helper_n=$((helper_n+1))
+    bash "${HELPER}" "${n}" 2>/dev/null | cmp -s - "${f}" || helper_bad="${helper_bad} ${n}"
+  done
+  [ "${helper_n}" = "$(g DOC_SQL_BLOCKS)" ] \
+    && ok "the gate dumped all ${helper_n} runbook SQL block bodies for the byte comparison" \
+    || bad "the gate dumped ${helper_n} block bodies but the runbook marks $(g DOC_SQL_BLOCKS) — the byte comparison below is not covering every block"
+  [ -z "${helper_bad}" ] \
+    && ok "scripts/mfa-runbook-sql.sh prints every marked block byte-for-byte as the gate parsed and executed it" \
+    || bad "scripts/mfa-runbook-sql.sh output differs from the gate's parse for:${helper_bad} — an operator would run text the gate never proved"
+  hn_out="$(bash "${HELPER}" no-such-block 2>/dev/null)"; hn_rc=$?
+  [ "${hn_rc}" -ne 0 ] && [ -z "${hn_out}" ] \
+    && ok "the helper fails closed on an unknown block name (rc=${hn_rc}, nothing on stdout, so a pipe into psql runs nothing)" \
+    || bad "the helper answered an unknown block name with rc=${hn_rc} and stdout '${hn_out}' — a pipe into psql would run it"
+  he_out="$(bash "${HELPER}" 2>/dev/null)"; he_rc=$?
+  [ "${he_rc}" -ne 0 ] && [ -z "${he_out}" ] \
+    && ok "the helper fails closed on no argument (rc=${he_rc})" \
+    || bad "the helper accepted no argument (rc=${he_rc}, stdout '${he_out}')"
+fi
+
+# The suites that hard-code the cluster-OFF posture. Declared by hand AND re-discovered
+# from the tree: a test script that mentions `mfa.enabled` and the shared gateway chart is
+# presumed to pin it. NOT_POSTURE_SUITES records the reviewed exceptions, with the reason.
+POSTURE_SUITES="tests/stack/test-gateway-mfa-env.sh tests/scripts/test-mfa-required-rules.sh tests/stack/test-mfa-flip-wiring.sh"
+# test-kind-tor.sh only builds a fixture whose helm parameters include mfa.enabled; it asserts nothing about the chart default.
+NOT_POSTURE_SUITES="tests/scripts/test-kind-tor.sh"
+posture_discovered() { # <repo-root> -> relative paths of suites that look like posture pins
+  ( cd "$1" && grep -rlE 'mfa\.enabled' tests --include='test-*.sh' 2>/dev/null \
+      | while read -r f; do grep -qE 'charts/hugmesh-gateway|hugmesh-gateway/values\.yaml' "$f" && echo "$f"; done ) | sort
+}
+posture_undeclared() { # <repo-root> -> discovered suites that are neither declared nor reviewed-exempt
+  local f; for f in $(posture_discovered "$1"); do
+    case " ${POSTURE_SUITES} ${NOT_POSTURE_SUITES} " in *" ${f} "*) ;; *) echo "${f}" ;; esac
+  done
+}
+posture_missing_files() { local f; for f in ${POSTURE_SUITES}; do [ -f "$1/${f}" ] || echo "${f}"; done; }
+posture_doc_gaps() { # <doc> -> "<where>:<suite basename>" for each declared suite the runbook fails to name
+  local doc="$1" f b s6 s9
+  s6="$(sed -n '/^6\. \*\*Turn on/,/^### 3\.1/p' "${doc}")"
+  s9="$(sed -n '/^## 9\. /,$p' "${doc}")"
+  for f in ${POSTURE_SUITES}; do
+    b="$(basename "${f}")"
+    # a TABLE ROW (the lockstep tables), not just the name somewhere in the range: prose
+    # that mentions a suite does not tell the flip commit what to move in it
+    printf '%s' "${s6}" | grep -E '^[[:space:]]*\|.*'"${b//./\\.}" >/dev/null || echo "step6/7:${b}"
+    printf '%s' "${s9}" | grep -F "${b}" >/dev/null || echo "section9:${b}"
+  done
+}
+miss="$(posture_missing_files "${REPO}")"
+[ -z "${miss}" ] \
+  && ok "every declared posture suite exists ($(echo ${POSTURE_SUITES} | wc -w) suites)" \
+  || bad "declared posture suite(s) missing from the tree: ${miss}"
+und="$(posture_undeclared "${REPO}")"
+[ -z "${und}" ] \
+  && ok "no OTHER test suite looks like a cluster-posture pin (found by scanning tests/ for mfa.enabled + the shared gateway chart)" \
+  || bad "suite(s) that look like cluster-posture pins are not in this gate's POSTURE_SUITES list, so the runbook cannot be naming them: ${und}"
+gaps="$(posture_doc_gaps "${DOC}")"
+[ -z "${gaps}" ] \
+  && ok "runbook §3 steps 6-7 and §9 name every posture suite a cluster flip has to move" \
+  || bad "the runbook does not name posture suite(s) a flip turns red: $(echo ${gaps})"
+
+
+# ── §9 structure the first review found wrong: the census blocks exist, the break-glass
+#    cannot commit before it is read, and nothing assumes the opt-in root Application ──
+case ",$(g DOC_SQL_NAMES)," in
+  *,fleet-census,*) ok "the runbook still carries the §9 'fleet-census' query (expect=mfa-fleet-census) — the pure fleet owners step 6 alone gates" ;;
+  *) bad "the runbook's 'fleet-census' query is GONE (names: $(g DOC_SQL_NAMES)) — §9 C5b, the only pre-flight for the population step 6 changes, has no command" ;;
+esac
+case ",$(g DOC_SQL_NAMES)," in
+  *,casdoor-machine-census,*) ok "the runbook still carries the 'casdoor-machine-census' query (expect=casdoor-token-census)" ;;
+  *) bad "the runbook's 'casdoor-machine-census' query is GONE (names: $(g DOC_SQL_NAMES)) — §2.4/C4 has no empirical machine-token check" ;;
+esac
+cat > "${W}/s9pins.py" <<'PY'
+import re, sys
+doc = open(sys.argv[1], encoding="utf-8").read()
+a = doc.find("\n## 9. ")
+if a < 0:
+    print("NO_SECTION_9"); sys.exit(0)
+s9 = doc[a:]
+bad = []
+fences = re.findall(r"```[a-z]*\n(.*?)```", s9, re.S)
+deletes = [f for f in fences if re.search(r"\bDELETE\s+FROM\b", f)]
+if not deletes:
+    bad.append("no fenced DELETE block in section 9 (the break-glass is gone)")
+# the read step the dry run is compared against: a SELECT-only block counting the three tables
+if not [f for f in fences if re.search(r"\bSELECT\b", f) and "mfa_recovery_code" in f and "webauthn_credential" in f and not re.search(r"\bDELETE\b", f)]:
+    bad.append("no SELECT-only section 9 block counts the break-glass rows (the G1 look-first step is gone)")
+for f in deletes:
+    if re.search(r"\bSELECT\b", f):
+        bad.append("a section 9 block both SELECTs and DELETEs in one input (a piped heredoc cannot be read before it commits)")
+    if re.search(r"\bCOMMIT\s*;", f):
+        bad.append("a section 9 DELETE block ships ending in COMMIT (the shipped form must be the ROLLBACK dry run)")
+    if not re.search(r"\bROLLBACK\s*;", f):
+        bad.append("a section 9 DELETE block has no ROLLBACK (the shipped form must be the dry run)")
+# the opt-in root: every command that patches hugmesh-root says so, the read is tolerant of its absence
+for ln in s9.split("\n"):
+    if re.search(r"(patch|get)\s+app(lication)?\s+hugmesh-root\b", ln) and "root only" not in ln and "--ignore-not-found" not in ln:
+        bad.append("section 9 command on hugmesh-root without 'root only' / --ignore-not-found: " + ln.strip()[:90])
+if "HUGMESH_GITOPS_ROOT_RECURSE" not in s9:
+    bad.append("section 9 never says the recursing root is opt-in (HUGMESH_GITOPS_ROOT_RECURSE)")
+if not re.search(r"get application hugmesh-root --ignore-not-found", s9):
+    bad.append("section 9 phase B does not detect whether hugmesh-root exists")
+print("\n".join(bad) if bad else "OK")
+PY
+s9_gaps() { python3 "${W}/s9pins.py" "$1"; }
+r9="$(s9_gaps "${DOC}")"
+[ "${r9}" = "OK" ] \
+  && ok "§9: the break-glass DELETE ships as a ROLLBACK dry run in its own block (no SELECT beside it), and every hugmesh-root command is marked root-only or tolerant of its absence" \
+  || bad "§9 structure: ${r9}"
+# the premise those pins rest on, read from the manifests rather than assumed
+grep -qi 'OPT-IN' "${REPO}/specs/cluster/app-of-apps.yaml" \
+  && grep -q 'HUGMESH_GITOPS_ROOT_RECURSE:-0' "${REPO}/specs/cluster/bootstrap/bootstrap.sh" \
+  && ok "premise of the root-only wording: app-of-apps.yaml is still the OPT-IN root and bootstrap.sh still applies it only under HUGMESH_GITOPS_ROOT_RECURSE=1" \
+  || bad "the recursing root is no longer opt-in (app-of-apps.yaml / bootstrap.sh changed): §3 step 7, §6 and §9 phases B, E-bypass and G say a default cluster has no hugmesh-root"
+
+# ── …and each of those proven to bite on a corrupted copy ────────────────────
+echo ""
+echo "── 2c) negative controls (§9 checklist) ──"
+nc9="${W}/nc9"; rm -rf "${nc9}"; mkdir -p "${nc9}/tests/stack"
+# (a) the runbook stops naming one posture suite in steps 6-7
+python3 - "${DOC}" "${nc9}/doc-noname.md" <<'PY'
+import sys
+s = open(sys.argv[1], encoding="utf-8").read()
+a = s.index("6. **Turn on `APP_MFA_ENABLED`")
+b = s.index("### 3.1 ")
+seg = s[a:b]
+assert "test-mfa-flip-wiring.sh" in seg
+open(sys.argv[2], "w", encoding="utf-8").write(s[:a] + seg.replace("test-mfa-flip-wiring.sh", "the-third-suite") + s[b:])
+PY
+g1="$(posture_doc_gaps "${nc9}/doc-noname.md")"
+case "${g1}" in *"step6/7:test-mfa-flip-wiring.sh"*) ok "negative control: runbook step 6-7 text no longer naming test-mfa-flip-wiring.sh -> reported (${g1})" ;;
+  *) bad "negative control: dropping a suite name from steps 6-7 was NOT reported (got '${g1}') — the doc pin is vacuous" ;; esac
+# (b) §9 stops naming one
+python3 - "${DOC}" "${nc9}/doc-no9.md" <<'PY'
+import sys
+s = open(sys.argv[1], encoding="utf-8").read()
+a = s.index("## 9. ")
+seg = s[a:]
+assert "test-gateway-mfa-env.sh" in seg
+open(sys.argv[2], "w", encoding="utf-8").write(s[:a] + seg.replace("test-gateway-mfa-env.sh", "the-first-suite"))
+PY
+g2="$(posture_doc_gaps "${nc9}/doc-no9.md")"
+case "${g2}" in *"section9:test-gateway-mfa-env.sh"*) ok "negative control: §9 no longer naming test-gateway-mfa-env.sh -> reported (${g2})" ;;
+  *) bad "negative control: dropping a suite name from §9 was NOT reported (got '${g2}')" ;; esac
+# (c) a FOURTH suite that pins the chart default appears
+printf '#!/usr/bin/env bash\ngrep -q "enabled: false" specs/cluster/charts/hugmesh-gateway/values.yaml # mfa.enabled pin\n' > "${nc9}/tests/stack/test-new-posture-pin.sh"
+u3="$(posture_undeclared "${nc9}")"
+[ "${u3}" = "tests/stack/test-new-posture-pin.sh" ] \
+  && ok "negative control: a new suite pinning mfa.enabled against the shared chart -> reported as undeclared (${u3})" \
+  || bad "negative control: a new posture-pinning suite was NOT discovered (got '${u3}') — the discovery is vacuous"
+# (d) the discovery does not cry wolf on a suite that only MENTIONS mfa.enabled
+printf '#!/usr/bin/env bash\necho "mfa.enabled is documented elsewhere"\n' > "${nc9}/tests/stack/test-unrelated.sh"
+u4="$(posture_undeclared "${nc9}")"
+[ "${u4}" = "tests/stack/test-new-posture-pin.sh" ] \
+  && ok "negative control (other direction): a suite that merely mentions mfa.enabled, with no gateway chart, stays silent" \
+  || bad "negative control (other direction): discovery flagged '${u4}' — it cries wolf on an unrelated suite"
+# (e) the declared suites disappear
+m5="$(posture_missing_files "${nc9}" | wc -l)"
+[ "${m5}" = "3" ] \
+  && ok "negative control: a tree carrying none of the declared posture suites -> all 3 reported missing" \
+  || bad "negative control: posture_missing_files reported ${m5} of 3 on an empty tree"
+# (f) the helper against a runbook with a DUPLICATED block name, with no blocks, and unreadable
+python3 - "${DOC}" "${nc9}/doc-dup.md" <<'PY'
+import re, sys
+s = open(sys.argv[1], encoding="utf-8").read()
+m = re.search(r'<!--\s*gate:doc-sql\s+name=floor\s+expect=every-floor-row\s*-->', s)
+assert m
+dup = s[:m.start()] + s[m.start():m.end()].replace("name=floor", "name=verify") + s[m.end():]
+open(sys.argv[2], "w", encoding="utf-8").write(dup)
+PY
+d_out="$(MFA_RUNBOOK="${nc9}/doc-dup.md" bash "${HELPER}" verify 2>/dev/null)"; d_rc=$?
+[ "${d_rc}" -ne 0 ] && [ -z "${d_out}" ] \
+  && ok "negative control: the helper refuses a runbook with two blocks of the same name (rc=${d_rc}, stdout empty)" \
+  || bad "negative control: the helper ran an AMBIGUOUS block (rc=${d_rc}, stdout $(printf '%s' "${d_out}" | wc -c) bytes)"
+printf '# no blocks here\n' > "${nc9}/doc-empty.md"
+e_out="$(MFA_RUNBOOK="${nc9}/doc-empty.md" bash "${HELPER}" floor 2>/dev/null)"; e_rc=$?
+[ "${e_rc}" -ne 0 ] && [ -z "${e_out}" ] \
+  && ok "negative control: the helper refuses a runbook with no marked blocks (rc=${e_rc})" \
+  || bad "negative control: the helper answered a block-less runbook (rc=${e_rc}, stdout '${e_out}')"
+u_out="$(MFA_RUNBOOK="${nc9}/does-not-exist.md" bash "${HELPER}" floor 2>/dev/null)"; u_rc=$?
+[ "${u_rc}" -ne 0 ] && [ -z "${u_out}" ] \
+  && ok "negative control: the helper refuses an unreadable runbook (rc=${u_rc})" \
+  || bad "negative control: the helper answered an unreadable runbook (rc=${u_rc})"
+# (g) the byte comparison itself bites: a runbook whose block was edited prints different text than the gate's dump
+python3 - "${DOC}" "${nc9}/doc-edited.md" <<'PY'
+import sys
+s = open(sys.argv[1], encoding="utf-8").read()
+a = "    WHERE mfa_required = true\n    ORDER BY allow, 1, 2, 3;"
+assert s.count(a) == 1
+open(sys.argv[2], "w", encoding="utf-8").write(s.replace(a, "    WHERE mfa_required = true\n    ORDER BY allow, 1, 2, 4;", 1))
+PY
+MFA_RUNBOOK="${nc9}/doc-edited.md" bash "${HELPER}" floor 2>/dev/null | cmp -s - "${W}/docsql/floor.sql" \
+  && bad "negative control: an EDITED runbook block still compared byte-identical to the gate's dump — the comparison is vacuous" \
+  || ok "negative control: an edited runbook block no longer matches the gate's dump byte-for-byte"
+
+# (h) the suite named only in prose, not in the lockstep table row
+python3 - "${DOC}" "${nc9}/doc-prose.md" <<'PY'
+import sys
+s = open(sys.argv[1], encoding="utf-8").read()
+row = "   | `tests/stack/test-mfa-flip-wiring.sh` |"
+assert s.count(row) == 1
+open(sys.argv[2], "w", encoding="utf-8").write(s.replace(row, "   - `tests/stack/test-mfa-flip-wiring.sh` -", 1))
+PY
+g8="$(posture_doc_gaps "${nc9}/doc-prose.md")"
+case "${g8}" in *"step6/7:test-mfa-flip-wiring.sh"*) ok "negative control: a suite named in step 6 prose but no longer in the lockstep table row -> reported (${g8})" ;;
+  *) bad "negative control: moving a suite out of the lockstep table was NOT reported (got '${g8}') — the doc pin accepts a name anywhere" ;; esac
+# (i) the break-glass: SELECT folded back into the delete input, and the dry run turned into a commit
+python3 - "${DOC}" "${nc9}/doc-bg1.md" "${nc9}/doc-bg2.md" "${nc9}/doc-bg3.md" "${nc9}/doc-root1.md" "${nc9}/doc-root2.md" "${nc9}/doc-root3.md" <<'PY'
+import sys
+s = open(sys.argv[1], encoding="utf-8").read()
+def put(path, text):
+    open(path, "w", encoding="utf-8").write(text)
+a = "BEGIN;\nDELETE FROM mfa_recovery_code"
+assert s.count(a) == 1
+put(sys.argv[2], s.replace(a, "BEGIN;\nSELECT count(*) FROM mfa_factor;\nDELETE FROM mfa_recovery_code", 1))
+b = "DELETE FROM mfa_factor          WHERE owner_subject = '<owner_subject>';\nROLLBACK;"
+assert s.count(b) == 1
+put(sys.argv[3], s.replace(b, b.replace("ROLLBACK;", "COMMIT;"), 1))
+put(sys.argv[4], s.replace(b, b.replace("\nROLLBACK;", ""), 1))
+r = "patch app hugmesh-root          --type merge -p '{\"spec\":{\"syncPolicy\":{\"automated\":null}}}'   # root only (phase B printed specs/cluster/apps)\n$ $KC -n devops patch app hugmesh-gateway-fe"
+assert s.count(r) == 2
+put(sys.argv[5], s.replace(r, r.replace("   # root only (phase B printed specs/cluster/apps)", ""), 1))
+r2 = "get application hugmesh-root --ignore-not-found"
+assert s.count(r2) == 1
+put(sys.argv[6], s.replace(r2, "get app hugmesh-root hugmesh-gateway-fe", 1))
+i = s.index("\n## 9. ")
+put(sys.argv[7], s[:i] + s[i:].replace("HUGMESH_GITOPS_ROOT_RECURSE", "THE_ROOT_FLAG"))
+PY
+for pair in "bg1:SELECTs and DELETEs in one input" "bg2:ending in COMMIT" "bg3:has no ROLLBACK" "root1:without 'root only'" "root2:does not detect whether hugmesh-root exists" "root3:never says the recursing root is opt-in"; do
+  k="${pair%%:*}"; want="${pair#*:}"
+  f="${nc9}/doc-${k}.md"; [ -f "${f}" ] || f="${nc9}/doc-$(echo "${k}" | sed 's/bg/bg/').md"
+  out="$(s9_gaps "${f}")"
+  case "${out}" in *"${want}"*) ok "negative control (§9 ${k}): reported (${want})" ;;
+    *) bad "negative control (§9 ${k}): NOT reported (got '${out}')" ;; esac
+done
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 3) negative controls — each check must BITE on a corrupted copy
 # ─────────────────────────────────────────────────────────────────────────────
@@ -2307,11 +2779,36 @@ nc "an admin-ish /bff/ surface added but neither flipped nor documented" ADMINIS
     repr("hugmesh-fe-gateway"), repr("/bff/mod/**"), repr("ROLE_MOD"))
 anchor(mod)
 s = s.replace(mod, mod + "\n  (%s, %s, %s, true)," % (
+    repr("hugmesh-fe-gateway"), repr("/bff/tube/ops/**"), repr("ROLE_ADMIN")), 1)'
+
+# Decision 80b = B (hugmesh-generator#329): the per-service console shape. Each arm
+# is proven to bite on its own, so dropping either one (or widening it into a
+# second blanket) is a red build and not a silent narrowing of the MFA scope.
+nc "the per-service ADMIN arm (LIKE '/bff/%/admin/%') dropped from the flip -- the forum/wiki/owncast admin consoles lose the floor" PREFIX_UNFLIPPED 0 \
+   'a = "     OR url_pattern LIKE %s\n" % repr("/bff/%/admin/%")
+anchor(a)
+s = s.replace(a, "", 1)'
+
+nc "the per-service SUPERADMIN arm (LIKE '/bff/%/superadmin/%') dropped from the flip -- the wiki superadmin console loses the floor" PREFIX_UNFLIPPED 0 \
+   'a = "     OR url_pattern LIKE %s\n" % repr("/bff/%/superadmin/%")
+anchor(a)
+s = s.replace(a, "", 1)'
+
+nc "the per-service admin arm widened to every /bff/ path (a second blanket)" OVERREACH 0 \
+   'a = "url_pattern LIKE %s" % repr("/bff/%/admin/%")
+anchor(a)
+s = s.replace(a, "url_pattern LIKE %s" % repr("/bff/%"), 1)'
+
+nc "a NEW per-service console row added later is flipped by the shape, with no edit to the UPDATE" FLIPPED 15 \
+   'mod = "  (%s,  %s,           %s,       true)," % (
+    repr("hugmesh-fe-gateway"), repr("/bff/mod/**"), repr("ROLE_MOD"))
+anchor(mod)
+s = s.replace(mod, mod + "\n  (%s, %s, %s, true)," % (
     repr("hugmesh-fe-gateway"), repr("/bff/tube/admin/**"), repr("ROLE_ADMIN")), 1)'
 
 nc "a documented exclusion that no longer exists (the list rots)" STALE_EXCLUSIONS 0 \
-   'anchor("'"'"'/bff/wiki/admin/**'"'"'")
-s = re.sub(r"^.*%s.*$\n" % re.escape("'"'"'/bff/wiki/admin/**'"'"'"), "", s, flags=re.M)'
+   'anchor("'"'"'/bff/image-builds/arch/**'"'"'")
+s = re.sub(r"^.*%s.*$\n" % re.escape("'"'"'/bff/image-builds/arch/**'"'"'"), "", s, flags=re.M)'
 
 # ── per-domain MFA scope (issue #47), proven to bite ──────────────────────────
 nc "the domain key devolves to the lexical COALESCE(domain, ...) — alias rows duplicate again" DOMAIN_ALIAS_COLLAPSED yes \
@@ -2337,7 +2834,7 @@ s = s.replace(arm, ")", 1)'
 nc "a surface listed in the per-domain arm without documenting it (scope widened on the sly)" DOMAIN_ARM_UNDOCUMENTED 0 \
    'a = "AND url_pattern IN (%s)))" % repr("")
 anchor(a)
-s = s.replace(a, "AND url_pattern IN (%s, %s)))" % (repr(""), repr("/bff/wiki/admin/**")), 1)'
+s = s.replace(a, "AND url_pattern IN (%s, %s)))" % (repr(""), repr("/bff/mod/**")), 1)'
 
 nc "the DROP INDEX upgrade step removed (an upgraded cluster keeps the OLD lexical key and the re-applied INSERT aborts)" UQ_UPGRADE_ORDER yes \
    'a = "DROP INDEX IF EXISTS uq_route_access_row;\n"
@@ -2410,8 +2907,8 @@ s = s.replace(a, "      AND url_pattern LIKE %s" % repr("/bff/%admin%"), 1)'
 # control fails LOUDLY (its own precondition check) rather than silently proving
 # nothing.
 nd "the runbook's verification query silently widened to every row" DOC_SQL_BAD 0 \
-   'a = "    WHERE allow = true\n      AND (url_pattern LIKE %s\n        OR url_pattern LIKE %s)" % (
-    repr("/bff/admin%"), repr("/bff/superadmin%"))
+   'a = "    WHERE allow = true\n      AND (url_pattern LIKE %s\n        OR url_pattern LIKE %s\n        OR url_pattern LIKE %s\n        OR url_pattern LIKE %s)" % (
+    repr("/bff/admin%"), repr("/bff/superadmin%"), repr("/bff/%/admin/%"), repr("/bff/%/superadmin/%"))
 anchor(a)
 s = s.replace(a, "    WHERE 1 = 1", 1)'
 
@@ -2428,11 +2925,118 @@ s = s.replace(a, "    WHERE 1 = 1", 1)'
 # runbook's own query disagree with its own prose, and the one a future editor
 # "tidying" the clause away would actually make.
 nd "the runbook's verification query drops ONLY its allow = true clause (the deny row surfaces as an un-flipped row and reads as a failed rollout)" DOC_SQL_BAD 0 \
-   'a = "    WHERE allow = true\n      AND (url_pattern LIKE %s\n        OR url_pattern LIKE %s)" % (
-    repr("/bff/admin%"), repr("/bff/superadmin%"))
+   'a = "    WHERE allow = true\n      AND (url_pattern LIKE %s\n        OR url_pattern LIKE %s\n        OR url_pattern LIKE %s\n        OR url_pattern LIKE %s)" % (
+    repr("/bff/admin%"), repr("/bff/superadmin%"), repr("/bff/%/admin/%"), repr("/bff/%/superadmin/%"))
 anchor(a)
-s = s.replace(a, "    WHERE (url_pattern LIKE %s\n        OR url_pattern LIKE %s)" % (
-    repr("/bff/admin%"), repr("/bff/superadmin%")), 1)'
+s = s.replace(a, "    WHERE (url_pattern LIKE %s\n        OR url_pattern LIKE %s\n        OR url_pattern LIKE %s\n        OR url_pattern LIKE %s)" % (
+    repr("/bff/admin%"), repr("/bff/superadmin%"), repr("/bff/%/admin/%"), repr("/bff/%/superadmin/%")), 1)'
+
+# Decision 80b: the runbook's verify query must carry the per-service arms too, or
+# it reports 10 of the 14 flipped rows and an operator reads the four consoles as
+# un-gated. Dropping them must move DOC_SQL_BAD.
+nd "the runbook's verification query loses the per-service console arms (it would show 10 of the 14 rows and hide the four consoles)" DOC_SQL_BAD 0 \
+   'a = "\n        OR url_pattern LIKE %s\n        OR url_pattern LIKE %s)\n    ORDER BY 1, 2, 3;" % (repr("/bff/%/admin/%"), repr("/bff/%/superadmin/%"))
+anchor(a)
+s = s.replace(a, ")\n    ORDER BY 1, 2, 3;", 1)'
+
+nd "the runbook's rollback block loses the per-service arms (it would leave the four consoles at mfa_required=true)" DOC_SQL_BAD 0 \
+   'a = "\n       OR url_pattern LIKE %s OR url_pattern LIKE %s" % (repr("/bff/%/admin/%"), repr("/bff/%/superadmin/%"))
+anchor(a)
+s = s.replace(a, "", 1)'
+
+# The row counts the runbook QUOTES for verify / floor (header, §9 C3, phase F) are read
+# back against the replayed seed. Each control reverts one of them to its pre-80b value
+# (10 / 11) or deletes the sentence: both must move DOC_COUNT_BAD.
+nd "the §9 C3 expectation reverts to (10 rows) for verify (a correct cluster would read as a failed seed)" DOC_COUNT_BAD 0 \
+   'a = "Expect `(14 rows)` for `verify`"
+anchor(a)
+s = s.replace(a, "Expect `(10 rows)` for `verify`", 1)'
+nd "the phase F floor count reverts to (11 rows)" DOC_COUNT_BAD 0 \
+   'a = "block (still `(15 rows)`"
+anchor(a)
+s = s.replace(a, "block (still `(11 rows)`", 1)'
+nd "the header's flipped + deny count reverts to 10 + 1" DOC_COUNT_BAD 0 \
+   'a = "(14 flipped + 1 deny row"
+anchor(a)
+s = s.replace(a, "(10 flipped + 1 deny row", 1)'
+nd "the §9 C3 sentence is reworded so its counts are no longer read (a vanished claim is reported, not skipped)" DOC_COUNT_BAD 0 \
+   'a = "seeded rules are what §1.2 says** — 14 flipped, 15 carrying the floor."
+anchor(a)
+s = s.replace(a, "seeded rules are what section 1.2 says** — see below.", 1)'
+
+# ── the §9 census query, proven to bite (it runs against a fixture schema) ────
+# Each mutation is a way the census could quietly report an operator as covered when
+# they are not. The first is the one that matters most: a TOTP row that is still
+# mid-enrol (enabled = false) must not read as an enrolled factor.
+nd "the census stops requiring the factor to be ENABLED (a mid-enrol TOTP reads as a working second factor)" DOC_SQL_BAD 0 \
+   'a = "AND f.enabled AND f.type = %s)     AS totp," % repr("TOTP")
+anchor(a, 2)   # the census, then the fleet census; replace(..., 1) mutates the first
+s = s.replace(a, "AND f.type = %s)     AS totp," % repr("TOTP"), 1)'
+nd "the census matches the role by SUBSTRING (administrator / superadministrator read as privileged)" DOC_SQL_BAD 0 \
+   'a = repr("%,admin,%")
+anchor(a, 2)
+s = s.replace(a, repr("%admin%"), 1)'
+nd "the census counts a WEBAUTHN factor as TOTP (the WebAuthn-only recovery-code lockout of section 2.2 reads as covered)" DOC_SQL_BAD 0 \
+   'a = "AND f.enabled AND f.type = %s)     AS totp," % repr("TOTP")
+anchor(a, 2)
+s = s.replace(a, "AND f.enabled AND f.type IN (%s, %s))     AS totp," % (repr("TOTP"), repr("WEBAUTHN")), 1)'
+nd "the census drops game-master from the privileged set (the floor's third role)" DOC_SQL_BAD 0 \
+   'a = "\n    OR %s || replace(a.roles, %s, %s) || %s LIKE %s" % (repr(","), repr(" "), repr(""), repr(","), repr("%,game-master,%"))
+anchor(a)
+s = s.replace(a, "", 1)'
+
+# ── the FLEET census (C5b) and the Casdoor machine-token census (C4), proven to bite ──
+# These two blocks are the ones the first review found missing or vacuous, so every
+# clause of each is broken in turn. The fleet block is the LAST of the census-shaped
+# blocks in the runbook, so its mutators edit the LAST hit of an anchor.
+LAST_HELPER='def _last(a, b, n=None):
+    global s
+    if n is not None:
+        anchor(a, n)
+    i = s.rindex(a)
+    s = s[:i] + b + s[i+len(a):]
+'
+ndl() { nd "$1" "$2" "$3" "${LAST_HELPER}
+$4"; }
+ndl "the fleet census stops requiring the TOTP factor to be ENABLED (a mid-enrol TOTP reads as enrolled)" DOC_SQL_BAD 0 \
+   'a = "AND f.enabled AND f.type = \x27TOTP\x27)     AS totp,"
+_last(a, "AND f.type = \x27TOTP\x27)     AS totp,", 2)'
+ndl "the fleet census counts an INACTIVE entitlement as entitled" DOC_SQL_BAD 0 \
+   'a = "WHERE e.subject = a.id AND e.active\n"
+_last(a, "WHERE e.subject = a.id\n", 1)'
+ndl "the fleet census ignores entitlement EXPIRY" DOC_SQL_BAD 0 \
+   'a = "\n                  AND (e.expires_at IS NULL OR e.expires_at > CURRENT_TIMESTAMP))"
+_last(a, ")", 1)'
+ndl "the fleet census stops excluding admin / game-master / superadmin co-holders (they short-circuit, so step 6 does not gate them)" DOC_SQL_BAD 0 \
+   'a = "   AND NOT (    "
+i = s.rindex(a)
+k = s.index("\n ORDER BY 3, 5 DESC, 1;", i)
+s = s[:i] + s[k:]'
+ndl "the fleet census loses its LIKE escape, so the _ in fleet_admin becomes a wildcard (fleet-admin / fleetXadmin match)" DOC_SQL_BAD 0 \
+   'a = "LIKE \x27%,fleet\\_admin,%\x27 ESCAPE \x27\\\x27"
+_last(a, "LIKE \x27%,fleet_admin,%\x27", 1)'
+ndl "the fleet census matches fleet_admin by SUBSTRING (fleet_administrator reads as a fleet owner)" DOC_SQL_BAD 0 \
+   'a = "LIKE \x27%,fleet\\_admin,%\x27"
+_last(a, "LIKE \x27%fleet\\_admin%\x27", 1)'
+ndl "the fleet census loses its ordering (un-enrolled and entitled owners no longer sort first)" DOC_SQL_BAD 0 \
+   'a = " ORDER BY 3, 5 DESC, 1;"
+_last(a, " ORDER BY 1;", 1)'
+nd "the Casdoor census goes back to keying a machine token on an EMPTY user (the vacuous form it shipped with)" DOC_SQL_BAD 0 \
+   'a = "CASE WHEN grant_type = \x27client_credentials\x27 OR \"user\" = application\n            THEN \x27machine\x27"
+anchor(a)
+s = s.replace(a, "CASE WHEN COALESCE(\"user\", \x27\x27) = \x27\x27\n            THEN \x27machine\x27", 1)'
+nd "the Casdoor census stops reading the grant_type column (a client_credentials token with an empty user is missed)" DOC_SQL_BAD 0 \
+   'a = "grant_type = \x27client_credentials\x27 OR "
+anchor(a)
+s = s.replace(a, "", 1)'
+nd "the Casdoor census stops reading the user = application placeholder (a row from before grant_type existed is missed)" DOC_SQL_BAD 0 \
+   'a = " OR \"user\" = application"
+anchor(a)
+s = s.replace(a, "", 1)'
+nd "the Casdoor census stops grouping by kind (a service that mints BOTH user and machine tokens collapses to one row)" DOC_SQL_BAD 0 \
+   'a = "GROUP BY 1, 2\n ORDER BY 2, 1;"
+anchor(a)
+s = s.replace(a, "GROUP BY 1\n ORDER BY 1;", 1)'
 
 # ── the FLOOR query and the deny-floor table (hugmesh-generator#485) ────────────
 # §5 now carries a second marked query, scoped to the FLOOR rather than to the flip,

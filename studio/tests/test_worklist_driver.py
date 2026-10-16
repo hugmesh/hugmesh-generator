@@ -419,6 +419,28 @@ def test_preflight_flags_unwritable_output_dir(tmp_path, monkeypatch):
     assert len(hits) == 1, f"expected exactly one writability problem, got {problems}"
     assert str(out / "sessions") in hits[0]      # names the ancestor actually at fault
     assert "chown" in hits[0]                    # and the remedy
+    # The remedy must never be `chown -R <probe>`: followed on <out>, that hands
+    # the build system (<out>/snap-build-*/sysroot) to the user and the next
+    # --resume builds an image whose every directory is theirs (hugmesh-generator#659).
+    assert "chown -R" not in hits[0].split("(not 'chown -R'")[0]
+    assert "-name sysroot -prune" in hits[0]
+    assert "chown -h" in hits[0]
+
+
+def test_preflight_remedy_quotes_an_output_dir_with_a_space(tmp_path, monkeypatch):
+    # The remedy is a command to paste: a path with a space in it must reach `find`
+    # as ONE argument, or the person is told to chown two other directories.
+    out = tmp_path / "my builds" / "out"
+    (out / "sessions").mkdir(parents=True)
+    workdir = out / "sessions" / "20260930-090000-abcdef"
+    real_access = os.access
+    monkeypatch.setattr(
+        wd.os, "access",
+        lambda p, m: False if os.path.abspath(p) == str(out / "sessions") else real_access(p, m))
+    drv = WorklistDriver(str(tmp_path), _worklist(tmp_path), host=host(), workdir=str(workdir))
+    hits = [p for p in drv.preflight() if "not writable" in p]
+    assert len(hits) == 1
+    assert f"sudo find '{out / 'sessions'}' -type d -name sysroot -prune" in hits[0]
 
 
 def test_preflight_silent_when_output_dir_writable(tmp_path):
@@ -482,3 +504,30 @@ def test_manifest_v2_carries_cluster_domain_services_when_picked(monkeypatch, tm
     # the v1 shim and the v2 envelope agree
     for _entry, cfg in drv.materialize():
         assert cfg.mesh_manifest()["cluster_domain_services"] == ["games", "akkoma"]
+
+
+# ── the per-domain GitHub org (the Go-Live export step) on the v2 envelope ─────────
+def test_manifest_v2_carries_the_github_org_exactly_as_the_v1_shim(monkeypatch, tmp_path):
+    """The v1 shim (config.mesh_manifest) learnt ``domains[].github_org`` and
+    ``cluster_domain_github_org``; manifest_v2 builds its rows by hand and carries
+    both too, so the one manifest a fleet build writes up front keeps them. With an
+    org set, the v2 domain rows equal the shim's byte for byte and the top-level key
+    is on both; without one, neither key appears."""
+    _install_fake_builddriver(monkeypatch)
+    _install_fake_genkeys(monkeypatch)
+    wl = _worklist(tmp_path)
+    drv = WorklistDriver(str(tmp_path), wl, host=host())
+    plain = drv.manifest_v2()
+    assert "cluster_domain_github_org" not in plain
+    assert all("github_org" not in row for row in plain["domains"])
+    wl.base.cluster_domain_github_org = "exampleorg"
+    wl.base.domains[1].github_org = "otherorg"
+    m = drv.manifest_v2()
+    assert m["cluster_domain_github_org"] == "exampleorg"
+    assert [row.get("github_org") for row in m["domains"]] == [None, "otherorg"]
+    v1 = wl.base.mesh_manifest()
+    assert m["domains"] == v1["domains"]
+    assert m["cluster_domain_github_org"] == v1["cluster_domain_github_org"]
+    written = json.loads(open(drv.write_manifest_v2()).read())
+    assert written["domains"] == v1["domains"]
+    assert written["cluster_domain_github_org"] == "exampleorg"

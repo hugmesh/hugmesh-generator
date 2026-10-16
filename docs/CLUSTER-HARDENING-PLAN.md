@@ -386,7 +386,8 @@ against the running image** (`kubectl exec -- id`) before you apply.
 ## H. Cassandra auth + TLS — enable order (DARK overlay, flip live)
 
 Status in one line: authentication (Stage 1) is **live**. TLS (Stage 2) is still
-**authored dark** and needs the live flip below.
+**authored dark** and needs the live flip below; `docs/DB-HARDENING-RUNBOOK.md` part B
+says what is and is not in the tree for it.
 
 ### Stage 1 — authentication
 
@@ -440,7 +441,9 @@ an operator runs the steps below. The overlay's `kustomization.yaml` lists
    `require_client_auth` optional, so a client that is not yet on TLS is not severed
    at once. Flip the consumers (`CASSANDRA_SSL=true` plus truststore;
    `CASSANDRA_TLS_ENABLED=true` on the bootstrap Job), confirm, then tighten to
-   required.
+   required. (Unverified: `require_client_auth` is mutual TLS, and whether plaintext
+   clients are still accepted is the separate `optional` flag in
+   `client_encryption_options`; see `DB-HARDENING-RUNBOOK.md` B.3.)
 
 **Rollback:** revert the values merge on `apps/00-cassandra.yaml` (back to plaintext)
 and re-point `apps/00a-cassandra-hardening.yaml` at the empty overlay. The overlay
