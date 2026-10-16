@@ -1768,7 +1768,8 @@ def test_snapshot_keeps_a_link_that_points_inside_the_tree(tmp_path):
     files = oe._snapshot(_tar_runner([("real.txt", "file", b"hi"), ("d", "dir", None),
                                       ("d/link", "sym", "../real.txt")]),
                          str(tmp_path), "HEAD", str(tmp_path / "w"))
-    assert files == ["real.txt"]
+    # the link is a member too: it goes through the exclusion rules and the scan
+    assert files == ["d/link", "real.txt"]
     assert os.path.islink(tmp_path / "w" / "d" / "link")
 
 
