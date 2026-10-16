@@ -56,9 +56,9 @@ Feature: The service-only internal ingest surfaces are explicitly denied at the 
     And the route-access seed decides "DENY" for a principal holding only "ROLE_USER" at "/bff/internal/accounts"
     And the route-access seed decides "DENY" for a principal holding only "ROLE_ADMIN" at "/bff/internal/accounts"
 
-  # ── the two onboarding legs the registration cutover is growing ────────────
-  # hugmesh-admin-bff-api#84 adds POST /bff/internal/accounts/{id}/restart-onboarding
-  # (the reset user-bff's register legs cannot perform today) and #85 adds
+  # ── the two internal onboarding legs of the registration cutover ──────────
+  # hugmesh-admin-bff-api#84 asks for POST /bff/internal/accounts/{id}/restart-onboarding
+  # (the reset user-bff's register legs could not perform on 2026-09-23) and #85 adds
   # POST /bff/internal/usage (decision 55 = yes, landed by
   # hugmesh-admin-bff-api PR #104 on 2026-09-23). Both are ROLE_SERVICE surfaces with
   # no persona caller. The contract a persona-driven suite owns is that neither

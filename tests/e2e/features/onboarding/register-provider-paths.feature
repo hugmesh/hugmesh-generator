@@ -193,12 +193,13 @@ Feature: The realigned legacy user paths are served by user-bff through the fron
   # ── decision 57: re-registering an already-complete account answers 409 ────
   # admin-bff's handlers reset registrationComplete (AccountStore.restartOnboarding)
   # and send the user back through stage 2; user-bff has no internal endpoint for
-  # that reset (hugmesh-admin-bff-api#84, still open) and REFUSES instead of
-  # minting a session whose registrationComplete:true would skip onboarding. It
-  # ships as 503 on origin/main 666ab2f. Operator decision 57 (hugmesh-generator
-  # #347, answers of 2026-09-18) chose 409 over the recommended 503; a user-bff
-  # lane is landing that change. @fixme until it is on user-bff origin/main;
-  # the assertion is the decided contract, never today's 503.
+  # that reset (hugmesh-admin-bff-api#84, open as of 2026-10-15) and REFUSES
+  # instead of minting a session whose registrationComplete:true would skip
+  # onboarding. It shipped as 503 on user-bff origin/main 666ab2f (2026-09-23).
+  # Operator decision 57 (hugmesh-generator #347, answers of 2026-09-18) chose
+  # 409 over the recommended 503; LegacyPathParityController on user-bff
+  # origin/main db4c60c (read 2026-10-15) documents the 409. @fixme until a live
+  # run shows these rows green; the assertion is the decided contract.
   @issue:user-bff-api-19 @fixme @role:e2e-user
   Scenario Outline: re-registering an already-complete <provider> account is a 409 conflict, not a 503 @role:e2e-user @service:login @layer:bff
     Given I hold an API session as the persona for this scenario
@@ -213,7 +214,9 @@ Feature: The realigned legacy user paths are served by user-bff through the fron
       | discord  | bdd-complete-discord          |
 
   # ── hugmesh-user-bff-api#14: the residual resolver key-miss ─────────────────
-  # CanonicalIdentityResolver.resolveOwnAccount still keys a bff_ session off
+  # (Written 2026-09-23; #14 has been CLOSED since, and these rows have never
+  # run, so what follows is the 2026-09-23 reading, not a fresh measurement.)
+  # CanonicalIdentityResolver.resolveOwnAccount keyed a bff_ session off
   # SUBJECT_CLAIMS, so a google:/discord: account with a BLANK persisted localpart
   # gets 401 "no registered account for this token's OWN identity" where a
   # casdoor: account gets 409 "no persisted homeserver localpart yet". Both are
@@ -237,7 +240,7 @@ Feature: The realigned legacy user paths are served by user-bff through the fron
       | google   |
       | discord  |
 
-  # ── the internal legs the registration cutover is growing ──────────────────
+  # ── the internal legs of the registration cutover ──────────────────────────
   # hugmesh-admin-bff-api#84 (POST /bff/internal/accounts/{id}/restart-onboarding)
   # and #85 (POST /bff/internal/usage, decision 55 = yes) are ROLE_SERVICE +
   # InternalTokenWebFilter surfaces with no persona caller by design. What a
