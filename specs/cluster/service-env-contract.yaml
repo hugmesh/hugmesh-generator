@@ -179,6 +179,13 @@ services:
 # check a complete statement — a new BFF Deployment must be classified before it
 # can merge — and records who owns no IdP contract.
 noAgreementRules:
+  - name: hugmesh-api
+    manifest: manifests/hugmesh-apis/deployment.yaml
+    reason: >-
+      hugmesh-actions (image hugmesh/actions, NOT a *-bff-api). Holds no IdP/Vault agreement
+      rule of its own; it is listed so the derived check reads its application.yml
+      (hugmesh-generator#410 - it was invisible to this gate while the container filter
+      demanded "-bff-api").
   - name: hugmesh-forum-bff-api
     manifest: manifests/forum-bff-api/deployment.yaml
     reason: >-
@@ -205,3 +212,18 @@ noAgreementRules:
   - name: hugmesh-tube
     manifest: manifests/tube/deployment.yaml
     reason: "Optional-service BFF in front of the tube stack, same multi-container shape as owncast."
+
+# Deliberately EXTERNAL integrations: a packaged default that points at a third party's
+# real host on purpose. R3 (foreign-domain) otherwise reads any host outside the domains
+# this cluster serves as a stale pre-rebrand leftover. This is NOT a blanket exemption:
+# an entry matches ONE (repo, property, exact default), covers foreign-domain only (a
+# dangling namespace can never be allowlisted here), needs a reason, and FAILS THE GATE
+# once it no longer matches anything (a stale exemption is drift). R3 itself stays strict.
+externalIntegrations:
+  - repo: hugmesh-actions
+    property: app.github.base-url
+    default: "https://api.github.com"
+    reason: >-
+      The service exists to call the real GitHub REST API (registration github-org-admin
+      evaluation); GITHUB_API_BASE_URL is only an override for GitHub Enterprise or a test
+      double. api.github.com is correct, not a leftover.

@@ -10,7 +10,7 @@ What makes it honest, pinned here:
   * the three mock panes SAY they are mocks, in-pane;
   * the sample content is deterministic neutral demo text (theme diffs stay theme
     diffs) with no real names/domains;
-  * the page is inert (no scripts) and self-contained (one file:// artifact — the
+  * the page is static (no scripts) and self-contained (one file:// artifact — the
     open path is the fragile part, so there is exactly one thing to open);
   * the asset-intact guard mirrors the login one: a snapshot that lost its marker
     raises instead of silently previewing an unthemed page.

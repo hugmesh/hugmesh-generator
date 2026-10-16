@@ -9,16 +9,23 @@
 # MEASURED (2026-09-17, comment-stripped, both files parsed, with the gateway
 # sibling at hugmesh-gateway main @ 13f1651d PLUS the #244 fe row this change
 # lands, against generator main AFTER decision 28 landed (4764ab4f); the BEFORE
-# numbers in brackets are that same tree without the #244 row):
-#   * the in-image floor carries 70 rows [69] over THREE gateway names (pki/be/
-#     fe). The cluster seed carries 155 over FOUR — the superadmin gateway's 9
+# numbers in brackets are that same tree without the #244 row), then RE-MEASURED
+# for decision 80a = B (hugmesh-generator#329; hugmesh-gateway#40, merge f0faca1,
+# which adds the three wiki rows to CanonicalSeed.fe()). The 80a figures are
+# marked [80a] and were measured by the lane that landed #40 (a port of the step
+# at mined-governance.steps.ts, which reproduced 34/66 on the base):
+#   * the in-image floor carries 72 rows [80a; 70 before it, 69 before #244] over
+#     THREE gateway names (pki/be/fe; pki 3, be 32, fe 37). The cluster seed
+#     carries 155 over FOUR as of 2026-09-17 — the superadmin gateway's 9
 #     rows have no in-image counterpart at all.
 #   * at the fe gateway the cluster seed governs 66 distinct url patterns (it was
-#     61 when this file was written and rows have landed since); 34 of them [36]
-#     have NO matching pattern in the in-image floor. That list still includes the
-#     ENTIRE moderator plane (/mod/**, /bff/mod/**), the user plane
-#     (/bff/user/**), forum, wiki, owncast and tube. TWO patterns LEFT the list in
-#     this change — /bff/superadmin/** and, because the floor's new `**` covers a
+#     61 when this file was written and rows have landed since); 31 of them [80a;
+#     34 before it, 36 before #244] have NO matching pattern in the in-image floor.
+#     That list still includes the ENTIRE moderator plane (/mod/**, /bff/mod/**),
+#     the user plane (/bff/user/**), forum, owncast and tube. THREE patterns LEFT
+#     the list in 80a — /bff/wiki/**, /bff/wiki/admin/** and
+#     /bff/wiki/superadmin/** — and TWO left it in the #244 change before that:
+#     /bff/superadmin/** and, because the floor's new `**` covers a
 #     representative path under it, /bff/superadmin/games-services/** (put back in
 #     the cluster seed by decision 28, landed the same day). See the scenarios.
 #   * so on the fallback, an authenticated ROLE_USER at /bff/mod/ban resolves
@@ -27,8 +34,8 @@
 #     layer down, with no X-Route-Denied header and nothing in the gateway log.
 #
 # THIS IS THE SAME DEFECT CLASS THE DENY ROWS WERE ADDED TO FIX, still open on
-# 30 more patterns (34 ungoverned, minus the 4 the divergence Outline below
-# names; it was 36 before the #244 row). The positive scenarios
+# 27 more patterns (31 ungoverned, minus the 4 the divergence Outline below
+# names; it was 30 before decision 80a and 34 before the #244 row). The positive scenarios
 # below assert the measured divergence so it is visible in the feature text; the
 # parity property itself is written out and PENDING with the count.
 #
@@ -256,7 +263,38 @@ Feature: The in-image fail-closed floor is measured against the cluster seed
     When the "hugmesh-fe-gateway" gateway decides "/bff/superadmin/games-services/catalog" from the in-image floor
     Then the deciding rule requires MFA
 
+  # DECISION 80b = B (hugmesh-generator#329) -- the wiki admin-console rows carry
+  # the step-up floor on BOTH sources. The cluster seed gets it from the
+  # per-service arms of the blanket flip in 20-schema.sql
+  # (LIKE '/bff/%/admin/%' / LIKE '/bff/%/superadmin/%'); the in-image floor gets
+  # it from the two wiki console rows in MFA_REQUIRED_FALLBACK_ROWS
+  # (hugmesh-gateway#40, decision 80a/80b). /bff/wiki/** itself stays false on
+  # both. forum and owncast are cluster-seed-only: fe() carries no row for them
+  # (it has none at all), so the cluster seed's flip of /bff/forum/admin/** and
+  # /bff/owncast/admin/** has no in-image twin to assert here.
+  Scenario Outline: the wiki <surface> requires MFA on both sources @layer:gateway
+    Given a principal holding only the role "<granted>"
+    When the "hugmesh-fe-gateway" gateway decides "<path>" from the cluster seed
+    Then the deciding rule requires MFA
+    When the "hugmesh-fe-gateway" gateway decides "<path>" from the in-image floor
+    Then the deciding rule requires MFA
+
+    Examples:
+      | surface            | granted         | path                       |
+      | admin console      | ROLE_ADMIN      | /bff/wiki/admin/settings   |
+      | superadmin console | ROLE_SUPERADMIN | /bff/wiki/superadmin/users |
+
+  # The negative control for the same decision: the wiki PLATFORM row is not a
+  # console and is not flipped on either source, so a future "flip everything
+  # under /bff/wiki" widening cannot pass unnoticed.
+  Scenario: the wiki content floor does NOT require MFA on either source @layer:gateway
+    Given a principal holding only the role "ROLE_WIKI"
+    When the "hugmesh-fe-gateway" gateway decides "/bff/wiki/pages" from the cluster seed
+    Then the deciding rule does not require MFA
+    When the "hugmesh-fe-gateway" gateway decides "/bff/wiki/pages" from the in-image floor
+    Then the deciding rule does not require MFA
+
   # KNOWN-OPEN. The property CanonicalSeed's javadoc claims for itself.
   Scenario: the fallback floor governs every surface the cluster seed governs @layer:gateway
-    Given this scenario is PENDING because "34 of the 66 url patterns the cluster seed governs at hugmesh-fe-gateway have NO matching row in the in-image CanonicalSeed floor, so on the datastore-unreachable fallback they resolve NO_RULE and FORWARD on the coarse authenticated() floor. Among them: /mod/**, /bff/mod/**, /bff/user/**, /bff/forum/**, /bff/wiki/**, /bff/wiki/superadmin/**, /bff/mesh/**, /bff/owncast/**, /bff/tube/**, /wiki/**, /owncast/**, /tube/**, /user/**, /api-docs/**, /_fragments/**, /character-studio/**, /oauth/**, /social/forum/**, the whole /_matrix/** homeserver surface (including the four r0/v3 login+register rows), /api/v1/**, /api/v2/** and both /bff/password-reset rows. This is the same hole the three /bff/*/internal/** deny rows were added to close, still open on the rest of the surface. Re-measured 2026-09-17 against generator main AFTER decision 28 landed (4764ab4f), with the #244 gateway row in place: 36 -> 34. TWO patterns left the list and they are the only two this property has EVER recovered: /bff/superadmin/** (decision 41, the row this change adds) and /bff/superadmin/games-services/** (decision 28 put it back in the cluster seed the same day; the floor has no row of its own for it, but its new /bff/superadmin/** covers a representative path under it, which is what this property measures). It was 31 of 61 when this was written and 35 of 65 on 2026-09-10."
+    Given this scenario is PENDING because "31 of the 66 url patterns the cluster seed governs at hugmesh-fe-gateway have NO matching row in the in-image CanonicalSeed floor, so on the datastore-unreachable fallback they resolve NO_RULE and FORWARD on the coarse authenticated() floor. Among them: /mod/**, /bff/mod/**, /bff/user/**, /bff/forum/**, /bff/mesh/**, /bff/owncast/**, /bff/tube/**, /wiki/**, /owncast/**, /tube/**, /user/**, /api-docs/**, /_fragments/**, /character-studio/**, /oauth/**, /social/forum/**, the whole /_matrix/** homeserver surface (including the four r0/v3 login+register rows), /api/v1/**, /api/v2/** and both /bff/password-reset rows. This is the same hole the three /bff/*/internal/** deny rows were added to close, still open on the rest of the surface. Re-measured for decision 80a (hugmesh-gateway#40 added all three wiki rows to CanonicalSeed.fe()): 34 -> 31. THREE patterns LEFT the list: /bff/wiki/**, /bff/wiki/admin/** and /bff/wiki/superadmin/**. Before that, re-measured 2026-09-17 against generator main AFTER decision 28 landed (4764ab4f), with the #244 gateway row in place: 36 -> 34, when /bff/superadmin/** (decision 41) and /bff/superadmin/games-services/** (decision 28, covered by the floor's /bff/superadmin/**) left the list. It was 31 of 61 when this was written and 35 of 65 on 2026-09-10."
     Then every url pattern the cluster seed governs at gateway "hugmesh-fe-gateway" is also governed by the in-image floor

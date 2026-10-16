@@ -55,7 +55,7 @@ HOW FAR EACH FIELD REACHES, stated because the copy used to overstate them.
   whole of it. Emitting a flag no builder parses is the failure this repo is named
   for; saying so plainly is the alternative it chose.
 
-What it does NOT do, on purpose: the Vault TOKEN and unseal key are custody material.
+What it does NOT do, on purpose: the Vault TOKEN and unseal key are secrets the operator keeps themselves.
 They ride the KEYS stick (``vault/token``, ``vault/unseal-key``) and are never a
 wizard field, never a flag and never a byte of any image.
 
@@ -72,7 +72,7 @@ Validation is the ONE shared predicate ``config.vault_field_error`` — the same
 modal: a message box in validatePage hangs headless tests, and the repo forbids it).
 
 THE ONE DIALOG on this page is the certificate file picker. It sits behind the
-module-level ``pick_ca_certificates`` seam so tests drive the add path without a real
+module-level ``pick_ca_certificates`` override point so tests drive the add path without a real
 dialog, and it is reachable ONLY from the explicit "Add certificate…" click — never
 from validatePage, isComplete, initializePage or any signal those fire. A refused PEM
 is an inline sentence under the list, for exactly the same reason.
@@ -93,7 +93,7 @@ from ._gating import gate_widgets_role_class, out_of_scope_note_flow, scope_allo
 from ._scroll import scrollable
 from ._widgets import _row
 
-#: The certificate file picker, as a MODULE-LEVEL SEAM. Tests monkeypatch it to drive
+#: The certificate file picker, as a MODULE-LEVEL OVERRIDE POINT. Tests monkeypatch it to drive
 #: the add-a-certificate path with no real dialog; production keeps Qt's own. It is
 #: called from ONE place — the "Add certificate…" click handler — and from nowhere
 #: that page validation can reach.
@@ -335,7 +335,7 @@ class VaultPage(QtWidgets.QWizardPage):
         self.ca_list.addItem(item)
 
     def _add_certificates(self):
-        """The explicit click handler — the ONLY caller of the dialog seam. A file
+        """The explicit click handler — the ONLY caller of the dialog override point. A file
         that is not a PEM certificate is refused with its reason INLINE (never a
         message box: the repo forbids one anywhere page validation can reach), and a
         cancelled dialog changes nothing and says nothing."""
@@ -431,7 +431,7 @@ class VaultPage(QtWidgets.QWizardPage):
             c.vault_external_addr = ""
         if not self.box.isEnabled():
             # greyed = no consumer in this flow: clear rather than strand a value
-            # the per-entry strip would drop anyway (emission-neutral)
+            # the per-entry strip would drop anyway (leaves the output unchanged)
             c.vault_addr = c.vault_external_addr = ""
         # ── the certificate list, and the per-domain choices that point into it.
         # The list is NOT scope-gated (no flag on any platform), so it is committed

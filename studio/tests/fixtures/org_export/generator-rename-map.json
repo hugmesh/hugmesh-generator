@@ -1,0 +1,6 @@
+{
+  "exclude": [
+    "hugmesh-generator:tests/cloud-deploy/test-cloud-deploy-driver.sh",
+    "hugmesh-generator:tests/scripts/test-stack-clone-credential.sh"
+  ]
+}

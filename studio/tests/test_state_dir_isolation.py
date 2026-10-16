@@ -265,18 +265,18 @@ def test_a_real_suite_run_writes_nothing_into_a_sandboxed_home(tmp_path):
 # PREVENTION above, DETECTION below. The two halves came from separate branches
 # and were nearly landed as rival copies of this file; they are not rivals.
 #
-#   above  — the seam (core/state_paths), the autouse fixture that redirects every
+#   above  — the override point (core/state_paths), the autouse fixture that redirects every
 #            test, and state_dir()'s refusal of the home fallback under pytest.
 #            These stop the write from happening.
 #   below  — an inventory of the REAL ~/.hugmesh taken before and after, keyed on
-#            (mtime_ns, ctime_ns, size). ctime is the load-bearing part: userspace
+#            (mtime_ns, ctime_ns, size). ctime is the part that matters: userspace
 #            cannot forge it with os.utime, so an in-place rewrite of
 #            build-status.json is caught even when name and size are unchanged.
 #
 # Keeping both is the point. Prevention that is bypassed leaves no trace, and a
 # detector alone lets the pollution happen and only then complains. The detector
 # is what catches the day someone adds a state accessor that does not go through
-# the seam.
+# the override point.
 # ─────────────────────────────────────────────────────────────────────────────
 
 _TESTS_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -357,7 +357,10 @@ def test_home_is_redirected_before_test_modules_are_imported():
 def test_the_import_time_keyzip_staging_binding_is_isolated():
     """The exact expression tests/test_pages_identity.py evaluates at import."""
     staging = os.path.join(os.path.expanduser("~"), ".hugmesh", "keyzip")
-    assert not staging.startswith(os.path.join(_login_home(), ".hugmesh")), staging
+    # compare whole path components: a bare prefix match also fires for a sibling such as
+    # ``~/.hugmesh-wt/...`` (a fake HOME under a TMPDIR whose name merely starts with it)
+    real = os.path.join(_login_home(), ".hugmesh")
+    assert not (staging == real or staging.startswith(real + os.sep)), staging
 
 
 # ── (c) the leak guard, mutation-tested in three directions ──────────────────────
@@ -387,7 +390,7 @@ def _inner_run(tmp_path, body, *, isolated=True, name="canary"):
 
     ``isolated=False`` strips the isolation out of the copy — the positive control that
     proves the generated test really does write, so a green ``isolated=True`` run is a
-    fact about the fix and not about an inert canary.
+    fact about the fix and not about a canary that detects nothing.
     """
     home = tmp_path / name / "home"
     home.mkdir(parents=True)
@@ -418,7 +421,7 @@ def _inner_run(tmp_path, body, *, isolated=True, name="canary"):
         # refuses the ~/.hugmesh fallback outright while pytest is running, which is
         # the PREVENTION half of this file — and it is strong enough that stripping
         # the conftest isolation is no longer sufficient to make the canary write.
-        # Without this the control writes nothing, correctly declares itself inert,
+        # Without this the control writes nothing, correctly declares itself ineffective,
         # and the detection half below can never be shown to bite.
         #
         # ALLOW_HOME_ENV is state_paths' own documented escape hatch for exactly this

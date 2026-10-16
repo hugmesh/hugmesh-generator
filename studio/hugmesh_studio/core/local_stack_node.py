@@ -27,6 +27,7 @@ from dataclasses import dataclass
 
 from . import devops_tools, e2e_catalogue, own_casdoor, proc_group, proc_text
 from . import resource_limits, stack_limits
+from .domain_services import TOR_SLUG_RE as _TOR_SLUG_RE_SHARED
 from .local_services import (KIND_ADDONS_ENV, KIND_ADDONS_NONE, federation_env,
                              kind_addon_default_selection, kind_addon_env,
                              validate_kind_addons)
@@ -37,6 +38,48 @@ _COMPOSE_FILE = os.path.join("tests", "stack", "compose.local.yaml")
 # (PUBLIC — never the key) for the host/GUI to read. Bind-mounted from ./tor-onion
 # in the compose file; written ~30s after `make stack-up TOR=1`.
 _TOR_ONION_HOSTNAME_FILE = os.path.join("tests", "stack", "tor-onion", "hostname")
+#: The compose overlay a TOR=1 stack with Tor domains is brought up with (#582; the
+#: Makefile's STACK_TOR_DOMAINS_COMPOSE — a test pins the two spellings together).
+_TOR_DOMAINS_COMPOSE_FILE = os.path.join("tests", "stack", "compose.tor-domains.yaml")
+#: The compose service that mints and publishes the onion (compose.local.yaml).
+_TOR_SERVICE = "hugmesh-tor"
+#: How far a hostname copy may PRE-date the container's recorded StartedAt and still
+#: count as this container's. The entrypoint's `cp` runs a few ms after its process
+#: starts, and docker records StartedAt once runc returns — so on a restart with the
+#: key already in the volume the copy can land fractionally BEFORE the stamp. Two
+#: seconds covers that race; a copy from a PREVIOUS container is older by at least a
+#: whole `stack-down`/`stack-up` (tens of seconds), which is what the check exists
+#: to refuse (#581).
+_ONION_START_SKEW_S = 2.0
+#: The node contract's per-domain slug (#599) — THE one spelling, core.domain_services'
+#: (a second compile here drifted from it once; a test pins the two names to one
+#: object) — and a v3 onion hostname (56 base32 characters). A per-domain readout is
+#: read out of a root-owned shared directory, so both are checked before anything
+#: hands it out.
+_TOR_SLUG_RE = _TOR_SLUG_RE_SHARED
+_ONION_V3_RE = re.compile(r"^[a-z2-7]{56}\.onion$")
+_DOCKER_TIME_RE = re.compile(
+    r"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d+))?(Z|[+-]\d{2}:\d{2})$")
+
+
+def _parse_docker_time(value: str) -> float | None:
+    """docker's RFC 3339 ``State.StartedAt`` (nanoseconds, ``Z`` or an offset) as
+    epoch seconds, or None. Parsed by hand because the fraction carries NINE digits,
+    which ``datetime.fromisoformat`` does not accept on every Python this runs on;
+    docker's zero value (``0001-01-01T00:00:00Z``, never started) is None too."""
+    from datetime import datetime
+    m = _DOCKER_TIME_RE.match((value or "").strip())
+    if not m:
+        return None
+    base, frac, tz = m.groups()
+    tz = "+00:00" if tz == "Z" else tz
+    try:
+        ts = datetime.fromisoformat(base + tz).timestamp()
+    except ValueError:
+        return None
+    if ts <= 0:
+        return None
+    return ts + (float("0." + frac) if frac else 0.0)
 
 # ── cold-build preflight wiring (mirrors the Makefile's m2 knobs) ──────────────
 # `make stack-m2-bootstrap` (tests/stack/m2-bootstrap.sh) builds the org-private
@@ -67,6 +110,13 @@ _M2_PROBE_TIMEOUT_S = 3.0
 # <project>-<service>. These four services resolve PRIVATE maven artifacts at
 # image-build time — a cold build of any of them needs the m2 registry.
 _COMPOSE_PROJECT = "hugmesh-local"
+#: `docker ps` filters that select the RUNNING hugmesh-tor container of the stack — by
+#: compose LABEL (project + service), never by container name.
+_TOR_PS_FILTERS = (
+    "--filter", f"label=com.docker.compose.project={_COMPOSE_PROJECT}",
+    "--filter", f"label=com.docker.compose.service={_TOR_SERVICE}",
+    "--filter", "status=running",
+)
 PRIVATE_ARTIFACT_SERVICES = (
     "hugmesh-admin-bff-api",
     "hugmesh-user-bff-api",
@@ -163,7 +213,8 @@ class LocalStackNode:
                  idp_issuer: str = "", idp_client_id: str = "", idp_jwks: str = "",
                  services=None,
                  own_idp_domains: tuple[str, ...] = (),
-                 kind_addons=None):
+                 kind_addons=None,
+                 tor_domains=()):
         self.generator_dir = os.path.abspath(generator_dir)
         self.compose_file = os.path.join(self.generator_dir, _COMPOSE_FILE)
         self.env = env
@@ -248,7 +299,7 @@ class LocalStackNode:
         # default) sets NOTHING: the stack env stays byte-identical to before these
         # params existed. An EXTERNAL provider exports the provider-neutral
         # OIDC_ISSUER / OIDC_CLIENT_ID / OIDC_JWKS_URI vars for `make stack-*`,
-        # and the Makefile CONSUMES all three (the Lane-B seam, landed): they map
+        # and the Makefile CONSUMES all three (the Lane-B env-var contract, landed): they map
         # onto CASDOOR_ISSUER_URI / CASDOOR_APP_CLIENT_ID / CASDOOR_JWKS_URI, so
         # gateway + BFF token VALIDATION runs against the external issuer/JWKS.
         # The coupled legs (native login, MFA step-up, role claims) stay
@@ -288,6 +339,13 @@ class LocalStackNode:
         # ports 8001+), flips OWN_CASDOOR=1 (the Makefile's `own-casdoor`
         # profile) and exports the multi-issuer APP_TENANCY_* registry.
         self.own_idp_domains = tuple(own_idp_domains or ())
+        # The domains with their OWN Tor front door (#582, decision 68 = A):
+        # ``((name, slug, tenant), ...)`` from core.domain_services.tor_domain_entries.
+        # Passed to `make stack-up` as TOR_ONION_DOMAINS="<slug>=<tenant> ..." ONLY on
+        # a TOR=1 stack — the tor entrypoint mints one onion per slug and registers
+        # each in the gateway's host map (hugmesh-gateway#38). Empty (the default, and
+        # every caller from before this existed) passes nothing new.
+        self.tor_domains = tuple(tuple(e) for e in (tor_domains or ()))
 
     @property
     def web_url(self) -> str:
@@ -323,10 +381,181 @@ class LocalStackNode:
         except OSError:
             return ""
 
-    def onion_url(self) -> str:
-        """``http://<onion>/`` for the published onion, or "" when none yet."""
+    def _tor_started_at(self) -> float | None:
+        """Epoch seconds the RUNNING ``hugmesh-tor`` container of this compose project
+        started, or None — not running, docker absent/unreachable, or unparseable.
+
+        By compose LABEL (project + service), never by container name: the name is
+        compose's to choose, the labels are the contract (mesh_monitor and
+        saved_meshes filter the same way). Blocking — two docker calls, 5 s each at
+        most — so an off-GUI-thread caller is the norm (the monitor, capture,
+        ``_await_onion``); the one GUI-thread caller is the Copy .onion button."""
+        if not shutil.which("docker"):
+            return None
+        try:
+            r = subprocess.run(
+                ["docker", "ps", "-q", "--no-trunc", *_TOR_PS_FILTERS],
+                capture_output=True, text=True, timeout=5)
+            ids = r.stdout.split() if r.returncode == 0 else []
+            if not ids:
+                return None
+            r = subprocess.run(
+                ["docker", "inspect", "-f", "{{.State.Running}} {{.State.StartedAt}}",
+                 ids[0]], capture_output=True, text=True, timeout=5)
+        except (OSError, subprocess.SubprocessError):
+            return None
+        running, _, started = r.stdout.strip().partition(" ")
+        if r.returncode != 0 or running != "true":
+            return None
+        return _parse_docker_time(started)
+
+    def _running_tor_has_domains(self) -> bool:
+        """Whether the RUNNING ``hugmesh-tor`` container of this compose project was
+        started with a non-empty ``TOR_ONION_DOMAINS`` — i.e. the stack really is a
+        TOR=1 stack with Tor domains, whoever brought it up (the Studio, or a person at
+        the command line with ``make stack-up TOR=1 BRAND_B=1``). False when it cannot
+        be told: no docker, no such container, an unreadable answer. Blocking (two
+        docker calls, 5 s each at most), like :meth:`_tor_started_at`; never raises."""
+        if not shutil.which("docker"):
+            return False
+        try:
+            r = subprocess.run(["docker", "ps", "-q", "--no-trunc", *_TOR_PS_FILTERS],
+                               capture_output=True, text=True, timeout=5)
+            ids = r.stdout.split() if r.returncode == 0 else []
+            if not ids:
+                return False
+            r = subprocess.run(
+                ["docker", "inspect", "-f",
+                 "{{range .Config.Env}}{{println .}}{{end}}", ids[0]],
+                capture_output=True, text=True, timeout=5)
+        except (OSError, subprocess.SubprocessError):
+            return False
+        if r.returncode != 0:
+            return False
+        for line in r.stdout.splitlines():
+            key, sep, value = line.partition("=")
+            if sep and key == "TOR_ONION_DOMAINS" and value.strip():
+                return True
+        return False
+
+    @property
+    def tor_domains_overlay(self) -> str:
+        """The compose overlay this node's stack is brought up with when it is a TOR=1
+        stack with Tor domains (the Makefile's STACK_TOR_DOMAINS_FLAGS), else "". A
+        command that creates containers for this stack outside `make stack-up` (the
+        monitor's scale) must load it too, or a new fe-gateway replica would come up
+        without the onion host map and serve every onion as the default brand.
+
+        A node object the Studio built for ITS OWN start knows (``with_tor`` and
+        ``tor_domains``). A bare ``LocalStackNode(generator_dir)`` — the QEMU and mesh
+        emulation pod views build one — and a stack a person started at the command
+        line know nothing, so for them the running tor container is asked: if it
+        carries ``TOR_ONION_DOMAINS`` the stack has the overlay, whoever started it."""
+        path = os.path.join(self.generator_dir, _TOR_DOMAINS_COMPOSE_FILE)
+        if self.with_tor and self.tor_domains:
+            return path
+        if self._running_tor_has_domains():
+            return path
+        return ""
+
+    def onion_url(self, domain: str = "") -> str:
+        """``https://<onion>/`` for the onion the RUNNING tor container published, or
+        "" when there is none to hand out. With ``domain`` — a Tor domain's name
+        ("shop.example") or its key directory name ("shop-example") — that DOMAIN's
+        own onion instead (#582 — :meth:`onion_urls`, same freshness rule); without,
+        the mesh's primary onion, which serves the mesh's own domain.
+
+        HTTPS, like ``make stack-onion``: the compose onion publishes ``:443`` to the
+        TLS front (tests/stack/tor/entrypoint.sh, #598) — a secure context, a Secure
+        session cookie on a production-configured mesh, and the node agent's own port
+        (docs/TOR-HIDDEN-SERVICE.md "Why :443"; the older "an http page cannot boot the
+        app" reason was false, #628). The monitor's door, the Copy .onion
+        button and a saved record's ``doors.onion`` all hand out this one string.
+
+        The hostname file is a bind-mount copy that OUTLIVES the key it names (#581):
+        ``make stack-down``/``stack-clean`` run ``down -v``, which drops the
+        ``tor-onion-keys`` volume — the next TOR=1 up mints a NEW onion — but never
+        touches ``tests/stack/tor-onion/hostname`` (root-owned, gitignored). Read
+        bare, it announced a dead address to the monitor, the Copy button, a saved
+        record's ``doors.onion`` and ``_await_onion`` (which returned the PREVIOUS
+        mesh's onion on its first poll after a re-create). So the file counts only
+        when a ``hugmesh-tor`` container is running AND the copy was written by it:
+        mtime no older than that container's StartedAt (minus
+        :data:`_ONION_START_SKEW_S`). The entrypoint copies without ``-p`` on every
+        start, so a live container always refreshes the mtime.
+        ``onion_hostname()`` stays the raw, probe-free file read."""
+        if domain:
+            return self.onion_url_for(domain)
         h = self.onion_hostname()
-        return f"http://{h}/" if h else ""
+        if not h:
+            return ""
+        started = self._tor_started_at()
+        if started is None:
+            return ""                     # nothing running can be serving that key
+        try:
+            written = os.stat(os.path.join(self.generator_dir,
+                                           _TOR_ONION_HOSTNAME_FILE)).st_mtime
+        except OSError:
+            return ""
+        if written + _ONION_START_SKEW_S < started:
+            return ""                     # a previous container's copy — stale
+        return f"https://{h}/"
+
+    def onion_urls(self) -> dict[str, str]:
+        """``{slug: "https://<onion>/"}`` for every PER-DOMAIN onion (#582) the RUNNING
+        tor container published — ``tests/stack/tor-onion/<slug>.hostname``, one per
+        ``TOR_ONION_DOMAINS`` entry — or ``{}``.
+
+        The SAME freshness rule as :meth:`onion_url` (#581, per-domain half): a file
+        counts only when a ``hugmesh-tor`` container is running AND the copy is no
+        older than that container's StartedAt. ONE container probe for all of them. A
+        file whose slug the node contract would refuse, or whose content is not a v3
+        onion, is not an onion and is skipped — the directory is root-owned and
+        shared, so it is read as data, never trusted."""
+        out_dir = os.path.dirname(os.path.join(self.generator_dir,
+                                               _TOR_ONION_HOSTNAME_FILE))
+        try:
+            names = sorted(os.listdir(out_dir))
+        except OSError:
+            return {}
+        candidates: dict[str, str] = {}
+        for fn in names:
+            if not fn.endswith(".hostname"):
+                continue
+            slug = fn[:-len(".hostname")]
+            if not _TOR_SLUG_RE.match(slug):
+                continue
+            candidates[slug] = os.path.join(out_dir, fn)
+        if not candidates:
+            return {}
+        started = self._tor_started_at()
+        if started is None:
+            return {}                     # nothing running can be serving those keys
+        out: dict[str, str] = {}
+        for slug, path in candidates.items():
+            try:
+                with open(path, encoding="utf-8") as f:
+                    h = "".join(f.read().split())
+                written = os.stat(path).st_mtime
+            except OSError:
+                continue
+            if not _ONION_V3_RE.match(h) or written + _ONION_START_SKEW_S < started:
+                continue                  # not an onion, or a previous container's copy
+            out[slug] = f"https://{h}/"
+        return out
+
+    def onion_url_for(self, domain: str) -> str:
+        """One Tor domain's own onion, or "" — the per-domain twin of
+        :meth:`onion_url`, whose primary onion serves the mesh's own domain.
+        ``domain`` is the domain's name or its key directory name: the readouts are
+        keyed by the key directory name, ``core.domain_services.onion_slug`` of the
+        name (which leaves a key directory name as it is)."""
+        key = (domain or "").strip()
+        if not key:
+            return ""
+        from .domain_services import onion_slug
+        urls = self.onion_urls()
+        return urls.get(key) or urls.get(onion_slug(key), "")
 
     def available(self) -> tuple[bool, str]:
         if not shutil.which("make"):
@@ -577,6 +806,19 @@ class LocalStackNode:
         # TOR=1 in the operator's shell can't silently flip it, exactly like SOCIAL —
         # and `$(strip $(TOR))` empty leaves the unprofiled env byte-identical.
         env["TOR"] = "1" if self.with_tor else ""
+        # The per-domain onions (#582): passed only for a TOR=1 stack that HAS Tor
+        # domains. In every other case the variable is REMOVED rather than set empty:
+        # an inherited TOR_ONION_DOMAINS must not mint onions this mesh never chose
+        # (the SOCIAL/TOR rule), and a mesh with no Tor domain — TOR=1 or not — keeps
+        # exactly the env it had before this existed.
+        tor_doms = ""
+        if self.with_tor and self.tor_domains:
+            from .domain_services import tor_onion_domains_env
+            tor_doms = tor_onion_domains_env(self.tor_domains)
+        if tor_doms:
+            env["TOR_ONION_DOMAINS"] = tor_doms
+        else:
+            env.pop("TOR_ONION_DOMAINS", None)
         # Set explicitly ("" = off) for the same reason as SOCIAL/TOR: an
         # inherited PHPBB=1/AKKOMA=1 in the operator's shell must not silently
         # flip a stack the picker said nothing about.
@@ -681,7 +923,7 @@ class LocalStackNode:
 
         # External IdP (I6.6): exported ONLY for an external provider WITH an issuer,
         # so the casdoor default (and a half-configured external) leaves the env
-        # byte-identical. Consumed by the Makefile's OIDC seam (landed): the vars
+        # byte-identical. Consumed by the Makefile's OIDC env-var contract (landed): the vars
         # map onto CASDOOR_ISSUER_URI / CASDOOR_APP_CLIENT_ID / CASDOOR_JWKS_URI
         # for gateway + BFF token validation (documented in __init__). Values are
         # public endpoints/identifiers — never secrets.
@@ -698,7 +940,7 @@ class LocalStackNode:
         # about; empty leaves the Makefile's `$(strip …)` profile arm off and
         # everything else untouched (byte-identical default,
         # test_domain_idp_schema.py pins it). Non-empty: export the gateways'
-        # multi-issuer registry (the BRAND_B=1 seam, scaled per domain — the
+        # multi-issuer registry (the BRAND_B=1 env-var contract, scaled per domain — the
         # central issuer stays tenant `default`) and write the compose overlay
         # the Makefile wildcard-includes. The write is best-effort like
         # .theme.css (never block a bring-up from here); a failed write leaves
@@ -1361,7 +1603,7 @@ class LocalStackNode:
         """Does this mesh's kind cluster exist RIGHT NOW? Read-only (`kind get
         clusters`, the same question devops_repo_access() already asks) so a caller
         can tell "the lane is already down" from "it has to come down first" without
-        firing the destructive verb blind.
+        firing the destructive verb without checking first.
 
         False whenever the answer cannot be established — kind not installed, the
         probe failing — because a cluster this lane created cannot exist without the
