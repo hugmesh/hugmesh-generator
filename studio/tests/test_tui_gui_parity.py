@@ -411,6 +411,28 @@ def test_the_fleet_steps_are_the_same_objects_on_both_faces(qapp, monkeypatch):
     page.deleteLater()
 
 
+def test_the_fleet_tor_note_is_one_string_on_both_faces(qapp, monkeypatch):
+    """What WITH_TOR does per builder is said ONCE (core.fleet.WITH_TOR_NOTE): the
+    wrapped note under the GUI's Tor checkbox (and its tooltip) and the line the TUI's
+    options stage prints for the ``with_tor`` knob. The sentence left the checkbox
+    itself in the post-merge review of #645 — a QCheckBox never wraps, and it had made
+    every fleet step 825 px wide — so this is where a GUI-only or TUI-only rewording
+    would show."""
+    from hugmesh_studio.core import build_driver
+    from hugmesh_studio.core.fleet import WITH_TOR_NOTE
+    from hugmesh_studio.gui.pages import fleet as gui_fleet
+    monkeypatch.setattr(build_driver, "detect",
+                        lambda builder_image="hugmesh-builder": HOST)
+    page = gui_fleet.FleetPage(GENERATOR_DIR)
+    assert page.with_tor_note.text() == WITH_TOR_NOTE == page.with_tor.toolTip()
+    assert page.with_tor_note.wordWrap()
+    j = journey.Journey(GENERATOR_DIR)
+    j.goto("fleet")
+    assert "with_tor: " + WITH_TOR_NOTE in j.lines()
+    assert "x86 --with-tor" in WITH_TOR_NOTE and "--optional-services" in WITH_TOR_NOTE
+    page.deleteLater()
+
+
 def test_go_live_offers_and_plans_the_same_domains_on_both_faces(qapp, tmp_path,
                                                                   monkeypatch):
     from hugmesh_studio.core.golive_domains import exposure_lines, plan_rows

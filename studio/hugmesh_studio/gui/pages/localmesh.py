@@ -3139,18 +3139,17 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         form's markers for the record's names ONLY while the form holds this very
         record (``Load into the form`` sets ``_loaded_record_id``) — that is the
         remedy the refusal names: load it, walk the named domains, start it again.
-        A draft's walk of some other mesh's rows never counts. The image flow's
-        half (``wiz.cfg`` — a superadmin Domains table loaded on the Sessions
-        screen) is gated exactly as ``_bootstrap_up`` gates it."""
+        A draft's walk of some other mesh's rows never counts. Neither does the
+        image flow's table (``wiz.cfg`` — a superadmin Domains table loaded on the
+        Sessions screen): the record's config is what runs, so rows of an unrelated
+        image-flow draft must not refuse it (#631 section 3). ``_bootstrap_up``,
+        which starts the FORM's config, still gates that table."""
         md = domains_from_bootstrap(cfg)
-        if md is not None:
-            extra = self._saved_walk_extras(rec, md)
-            md.domain_services_reviewed = list(md.domain_services_reviewed) + extra
-            refusal = gate_reason(md, ACTION_MESH_START, remedy=SAVED_MESH_REMEDY)
-            if refusal:
-                return refusal
-        wcfg = getattr(getattr(self, "wiz", None), "cfg", None)
-        return "" if wcfg is None else gate_reason(wcfg, ACTION_MESH_START)
+        if md is None:
+            return ""
+        extra = self._saved_walk_extras(rec, md)
+        md.domain_services_reviewed = list(md.domain_services_reviewed) + extra
+        return gate_reason(md, ACTION_MESH_START, remedy=SAVED_MESH_REMEDY)
 
     def _saved_walk_extras(self, rec, md: LocalMeshDomains | None) -> list[str]:
         """The record's domains (``md`` — ``domains_from_bootstrap`` of its config)

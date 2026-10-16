@@ -30,6 +30,20 @@ byte-for-byte unchanged, so identical choices necessarily produce an identical
 FleetConfig and identical build-all-roles.sh argv on both backends (the page's
 whole emission contract; tests pin it against pre-refactor goldens).
 
+WHAT A PERSON SEES (#647 / #656, the post-merge review of #645): EACH STEP SCROLLS
+ON ITS OWN — every step page sits in its own ``QScrollArea`` inside the stack, and
+the step title and the Back / Next row live OUTSIDE the stack, so they are on screen
+whatever the step's height. Before this, ``FleetWindow`` wrapped the WHOLE page in
+one scroll area, and a QStackedWidget's size hints are the maximum over ALL its
+pages: the Platforms step (twenty checkboxes) set the height of every step and the
+Shared options step's widest checkbox set the width of every step. Measured at the
+window's own default 760x700 on 2026-09-30: the Domains step's table was stretched
+to 770 px so its ‘Add domain’ / ‘Remove selected’ buttons sat 200 px below the
+viewport, the inline refusal under it was never in view, every step scrolled 103 px
+sideways and cut its help text mid-word, and the Back / Next row was off screen on
+every step. ``studio/tests/test_fleet_window_layout.py`` pins the geometry at that
+size under several Qt styles and at 8 pt.
+
 DOMAINS (#587): the two steps after Shared options are the image flow's own surfaces,
 re-hosted exactly as the generate-a-new-local-mesh route hosts them — the shared
 Domains table (``DomainsTableWidget``; row 0 is the fleet's own domain, taken from the
@@ -65,13 +79,14 @@ from ...core.config import (
     ORANGEPIZERO2_FLAVORS, ORANGEPIZERO2W_FLAVORS, ORANGEPIZERO3_FLAVORS, ORANGEPI3LTS_FLAVORS,
     ORANGEPI4LTS_FLAVORS,
     RPI_BOARDS,
+    IdentityValidationError,
 )
-from ...core.fleet import (FLEET_LANE_NOTE, FleetConfig, FleetDomains, FleetDriver,
-                           commit_fleet_domains, fleet_domain_fields,
-                           fleet_domains_from_config, seed_fleet_domains)
+from ...core.fleet import (FLEET_LANE_NOTE, JOBS_RANGE, WITH_TOR_NOTE, FleetConfig,
+                           FleetDomains, FleetDriver, commit_fleet_domains,
+                           fleet_domain_fields, fleet_domains_from_config,
+                           seed_fleet_domains)
 from ...core import plain_words
 from ...tui.superbrand_step import session_for
-from ._scroll import scrollable
 from ._widgets import _file_picker, _row
 from .brand_picker import BrandPicker
 from .domain_services import DomainServicesWidget
@@ -169,6 +184,18 @@ def _default_combo(choices, tooltip=""):
     return c
 
 
+def _scrolled(page: QtWidgets.QWidget) -> QtWidgets.QScrollArea:
+    """One step page in its own scroll area (see the module doc: a step's height and
+    width are then its own, not the tallest and widest step's). ``widgetResizable``
+    so a short step fills the viewport — the Domains table takes the spare height
+    and its buttons sit at the bottom edge, in view — while a tall step scrolls."""
+    sa = QtWidgets.QScrollArea()
+    sa.setWidgetResizable(True)
+    sa.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
+    sa.setWidget(page)
+    return sa
+
+
 class FleetPage(QtWidgets.QWidget):
     """Widget collecting one FleetConfig; host it in FleetWindow or any container.
 
@@ -224,6 +251,8 @@ class FleetPage(QtWidgets.QWidget):
         self.step_title = QtWidgets.QLabel()
         f = self.step_title.font(); f.setBold(True); self.step_title.setFont(f)
         outer.addWidget(self.step_title)
+        # The stack holds one QScrollArea PER STEP (``_scrolled``); ``self.stack.widget(i)``
+        # is that scroll area and ``self.step_page(i)`` the step's own page.
         self.stack = QtWidgets.QStackedWidget()
         outer.addWidget(self.stack, 1)
 
@@ -276,7 +305,7 @@ class FleetPage(QtWidgets.QWidget):
         pl.addWidget(self.pentest); pl.addWidget(self.pentest_only)
         l1.addWidget(pt_grp)
         l1.addStretch(1)
-        self.stack.addWidget(p1)
+        self.stack.addWidget(_scrolled(p1))
 
         # ── step 2: ROLES & BOARDS — per-platform detail, VISIBILITY-only gating ──
         # A deselected platform's group is hidden, never cleared: a hidden stale
@@ -374,7 +403,7 @@ class FleetPage(QtWidgets.QWidget):
         ptl.addWidget(_row("Pen-test pipeline", self.pentest_pipeline))
         l2.addWidget(self.pentest_group)
         l2.addStretch(1)
-        self.stack.addWidget(p2)
+        self.stack.addWidget(_scrolled(p2))
 
         # ── step 3: SHARED OPTIONS — the fleet-wide pass-through ──
         p3 = QtWidgets.QWidget(); l3 = QtWidgets.QVBoxLayout(p3)
@@ -411,7 +440,8 @@ class FleetPage(QtWidgets.QWidget):
         # already said "Output directory" in its own file-dialog caption one line
         # up and "Output dir" on the row — the same field, two names.
         sl.addWidget(_row("Output directory", od))
-        self.jobs = QtWidgets.QSpinBox(); self.jobs.setRange(1, 128); self.jobs.setValue(8)
+        # the same range FleetConfig.validate enforces for the TUI's `set jobs N`
+        self.jobs = QtWidgets.QSpinBox(); self.jobs.setRange(*JOBS_RANGE); self.jobs.setValue(8)
         sl.addWidget(_row("Jobs", self.jobs))
         self.backend = QtWidgets.QComboBox(); self.backend.addItems(["auto", "native", "docker"])
         sl.addWidget(_row("Backend", self.backend))
@@ -424,32 +454,35 @@ class FleetPage(QtWidgets.QWidget):
         # fleet session silently rebuilt WITHOUT Tor (apply() had nowhere to put it).
         node_svcs = QtWidgets.QGroupBox("Node services (every cluster-node image of the run)")
         nl = QtWidgets.QVBoxLayout(node_svcs)
-        # A QCheckBox cannot wrap: its minimum width IS its text, and this one's was 765 px
-        # in a 722 px viewport — the whole window scrolled 103 px sideways on every step
-        # (measured at 760x700). The box keeps its short name;
-        # the long explanation is a wrapped line under it.
+        # ONE line on the checkbox (a QCheckBox never wraps; the long form used to make
+        # every step 825 px wide) — the per-builder channel is the wrapped note under
+        # it (core.fleet.WITH_TOR_NOTE; the TUI's options screen prints the same words).
         self.with_tor = QtWidgets.QCheckBox(
             "Tor v3 onion on every cluster-node image (WITH_TOR=1)")
+        self.with_tor.setToolTip(WITH_TOR_NOTE)
         nl.addWidget(self.with_tor)
-        self.with_tor_note = QtWidgets.QLabel(
-            "x86 gets --with-tor and rpi5 gets 'tor' folded into --optional-services; "
-            "client roles never carry it.")
+        self.with_tor_note = QtWidgets.QLabel(WITH_TOR_NOTE)
         self.with_tor_note.setWordWrap(True)
         self.with_tor_note.setStyleSheet("color: gray;")
         nl.addWidget(self.with_tor_note)
         self.optional_services = QtWidgets.QLineEdit()
+        # short enough to be whole in the field at the window's default size (the
+        # long form was elided at its right edge); the rest is the tooltip
         self.optional_services.setPlaceholderText(
-            "OPTIONAL_SERVICES env for both node builders, space-separated "
-            "(empty = each builder's default)")
+            "OPTIONAL_SERVICES for both node builders (empty = each builder's default)")
+        self.optional_services.setToolTip(
+            "OPTIONAL_SERVICES env for both node builders, space-separated; empty keeps "
+            "each builder's own default")
         nl.addWidget(_row("Optional services", self.optional_services))
         l3.addWidget(node_svcs)
         l3.addStretch(1)
-        self.stack.addWidget(p3)
+        self.stack.addWidget(_scrolled(p3))
 
         # ── step 4: SUPERBRAND — the design the drop-down's ‘Create a new superbrand’ opens ──
-        # SCROLLS like every tall step of this window: the look editor is long, and at
-        # the window's 760x700 a plain layout clipped it (#647, looked at).
-        p_brand = QtWidgets.QWidget(); lb = scrollable(p_brand)
+        # SCROLLS like every step of this window (``_scrolled`` below, not a second
+        # ``scrollable`` inside the page): the look editor is long, and at the window's
+        # 760x700 a plain layout clipped it (#647, looked at).
+        p_brand = QtWidgets.QWidget(); lb = QtWidgets.QVBoxLayout(p_brand)
         self.brand_help = QtWidgets.QLabel(
             "The superbrand is the mesh's one governing brand: its name, its look and "
             "how it is reached are what every brand under it starts from. Choose it "
@@ -461,17 +494,17 @@ class FleetPage(QtWidgets.QWidget):
         self.superbrand_step = SuperbrandStep(route="fleet", with_picker=False)
         lb.addWidget(self.superbrand_step)
         lb.addStretch(1)
-        self.stack.addWidget(p_brand)
+        self.stack.addWidget(_scrolled(p_brand))
         self.brand_picker.designing_changed.connect(self.superbrand_step.refresh)
         self.superbrand_step.picker.designing_changed.connect(self.brand_picker.refresh)
 
         # ── step 5: DOMAINS — the shared table, row 0 = this fleet's own domain ──
         p_dom = QtWidgets.QWidget(); ld = QtWidgets.QVBoxLayout(p_dom)
         self.domains_help = QtWidgets.QLabel(
-            "Every domain this fleet's mesh serves. Row 0 is its OWN domain — the "
-            "Cluster domain from the previous step, or the builders' default when that "
-            "is empty — and cannot be removed. Add every OTHER domain below. Each one "
-            "gets its own page on the next step, and the build refuses while any "
+            "Every domain this fleet's mesh serves. The first row is its OWN domain — "
+            "the Cluster domain from the previous step, or the builders' default when "
+            "that is empty — and cannot be removed. Add every OTHER domain below. Each "
+            "one gets its own page on the next step, and the build refuses while any "
             "domain here has never been through it, naming the domain.")
         self.domains_help.setWordWrap(True)
         self.domains_help.setStyleSheet("color: gray;")
@@ -487,7 +520,7 @@ class FleetPage(QtWidgets.QWidget):
         self.domains_note.setStyleSheet("color: #c62828;")
         self.domains_note.setVisible(False)
         ld.addWidget(self.domains_note)
-        self.stack.addWidget(p_dom)
+        self.stack.addWidget(_scrolled(p_dom))
 
         # ── step 6: DOMAIN SERVICES — one page per domain, own domain first ──
         # SCROLLS, like the image flow's page and the local docker mesh's step (#647,
@@ -496,12 +529,15 @@ class FleetPage(QtWidgets.QWidget):
         # plain layout the services table kept its minimum height while the widgets
         # under it were laid out over its lower rows (measured under Fusion, Breeze
         # and Oxygen: the front-door row painted across the third service group).
-        p_svc = QtWidgets.QWidget(); lsv = scrollable(p_svc)
+        # The scrolling is ``_scrolled`` below, the same as every other step: a second
+        # scroll area inside the page (``scrollable(p_svc)``) nested two scroll areas
+        # and test_fleet_window_layout refuses it.
+        p_svc = QtWidgets.QWidget(); lsv = QtWidgets.QVBoxLayout(p_svc)
         self.domain_services = DomainServicesWidget(
             scope_cfg=None, entries=None, lane_note=FLEET_LANE_NOTE,
             brand_session=lambda: self._brand_session(), route="fleet")
         lsv.addWidget(self.domain_services)
-        self.stack.addWidget(p_svc)
+        self.stack.addWidget(_scrolled(p_svc))
 
         # ── step 7: REVIEW — the exact command (unchanged emission) + preflight ──
         p4 = QtWidgets.QWidget(); l4 = QtWidgets.QVBoxLayout(p4)
@@ -513,8 +549,12 @@ class FleetPage(QtWidgets.QWidget):
         pb_row = QtWidgets.QHBoxLayout(); pb_row.addWidget(self.preview_btn); pb_row.addStretch(1)
         l4.addLayout(pb_row)
         self.problems = console.attach(QtWidgets.QPlainTextEdit()); self.problems.setReadOnly(True)
+        # The preflight pane holds PROSE (the per-domain refusal and its remedy are one
+        # sentence each), not column-aligned build output: wrap it, so the remedy is
+        # read without scrolling sideways. The command pane above keeps NoWrap.
+        self.problems.setLineWrapMode(QtWidgets.QPlainTextEdit.LineWrapMode.WidgetWidth)
         l4.addWidget(self.problems, 1)
-        self.stack.addWidget(p4)
+        self.stack.addWidget(_scrolled(p4))
 
         # ── step 8: RUN — live progress + Stop ──
         p5 = QtWidgets.QWidget(); l5 = QtWidgets.QVBoxLayout(p5)
@@ -527,9 +567,9 @@ class FleetPage(QtWidgets.QWidget):
         # and every appended block stays in the QTextDocument forever otherwise.
         self.log.setMaximumBlockCount(_LOG_MAX_BLOCKS)
         l5.addWidget(self.log, 1)
-        self.stack.addWidget(p5)
+        self.stack.addWidget(_scrolled(p5))
 
-        # ── Back / Next navigation row ──
+        # ── Back / Next navigation row — OUTSIDE the steps' scroll areas, always in view ──
         nav = QtWidgets.QHBoxLayout()
         self.back_btn = QtWidgets.QPushButton("Back")
         self.back_btn.clicked.connect(self._back)
@@ -680,13 +720,57 @@ class FleetPage(QtWidgets.QWidget):
         """RESTART/REDO entry: load a fleet session's recorded config back into the
         widgets and land on the Review step. ``pin=True`` (RESTART) reuses the SAME
         record id/workdir — new_fleet_session archives the prior outcome into
-        ``history``; ``pin=False`` (REDO) mints a fresh record at Review."""
-        self.apply(FleetConfig.from_dict(s.config))
-        self.backend.setCurrentText(s.backend or "auto")
+        ``history``; ``pin=False`` (REDO) mints a fresh record at Review.
+
+        A DAMAGED record (hand-edited JSON that ``FleetConfig.from_dict`` refuses) is
+        shown INLINE on the Review step — the preflight pane names the field — and
+        nothing is applied or pinned: the window keeps what it had and ‘Build fleet
+        now’ builds that, never the damaged record. This runs inside the Sessions
+        page's RESTART / REDO slot, where an exception would abort the Studio.
+
+        ``from_dict`` names the field for every damaged shape it knows (a scalar of
+        the wrong type or out of range, a row that is not a domain, an ``idp`` typo, a
+        row list field that is not a list of text). The record's own ``backend`` (the
+        same JSON file, left uncoerced by ``BuildSession.from_dict``) is checked here
+        BEFORE anything is applied, so a refusal never leaves half a record in the
+        widgets. A ValueError, TypeError or OverflowError that still reaches here — a
+        shape no check names yet, or a Qt setter in ``apply`` refusing a value (a
+        number past the C int QSpinBox.setValue takes raises OverflowError, an
+        ArithmeticError that the earlier two did not cover) — is shown through the
+        same pane and the record is not pinned, so no record can abort the Studio
+        from this slot; the lenient path is never widened."""
+        try:
+            raw = getattr(s, "backend", None)
+            backend = "auto" if raw in (None, "") else raw
+            if not isinstance(backend, str):
+                raise IdentityValidationError(
+                    f"fleet record: backend must be text, not {type(backend).__name__}")
+            cfg = FleetConfig.from_dict(s.config)
+            self.apply(cfg)
+        except (IdentityValidationError, ValueError, TypeError, OverflowError) as e:
+            self.pending_session_id = None
+            self._goto(STEP_REVIEW)
+            self.problems.setPlainText(
+                f"Cannot restart fleet record {getattr(s, 'id', '?')}: {e}\n"
+                "Its saved config is damaged. Fix the record's JSON under the Studio "
+                "state directory, or start this fleet again from the first step. "
+                "Nothing from that record was applied: the steps, the command below "
+                "and ‘Build fleet now’ keep the configuration this window already "
+                "showed, not the record you clicked.")
+            return
+        self.backend.setCurrentText(backend)
         self.pending_session_id = s.id if pin else None
         self._goto(STEP_REVIEW)
 
     # ---- step navigation ------------------------------------------------------
+    def step_scroll(self, i: int) -> QtWidgets.QScrollArea:
+        """Step ``i``'s own scroll area (what ``self.stack.widget(i)`` is)."""
+        return self.stack.widget(i)
+
+    def step_page(self, i: int) -> QtWidgets.QWidget:
+        """Step ``i``'s page — the widget holding its controls."""
+        return self.step_scroll(i).widget()
+
     def _goto(self, i: int) -> None:
         self.stack.setCurrentIndex(i)
         self.step_title.setText(f"Step {i + 1} of {len(_STEP_TITLES)} — {_STEP_TITLES[i]}")
@@ -733,6 +817,17 @@ class FleetPage(QtWidgets.QWidget):
             "\n".join(problems + ["Fix or remove these rows to continue."])
             if problems else "")
         self.domains_note.setVisible(bool(problems))
+        if problems:
+            # The note sits under the table; a refusal nobody can see is a modal's
+            # worst property without the modal. Bring it into the step's viewport —
+            # AFTER the layout pass the setVisible above only POSTED has placed the
+            # label. Measured on a 700x330 window (the step scrolls there): scrolling
+            # on the stale geometry left the note cut at the viewport's bottom edge;
+            # delivering the pending LayoutRequest first puts it whole in view. At the
+            # window's default size the step does not scroll and this is a no-op.
+            QtCore.QCoreApplication.sendPostedEvents(
+                None, QtCore.QEvent.Type.LayoutRequest)
+            self.step_scroll(STEP_DOMAINS).ensureWidgetVisible(self.domains_note)
         return not problems
 
     def _leave(self, i: int) -> bool:
@@ -947,10 +1042,11 @@ class FleetWindow(QtWidgets.QDialog):
         self.setWindowTitle("HugMesh fleet build (build-all-roles)")
         self.setWindowIcon(brand_icon())
         lay = QtWidgets.QVBoxLayout(self)
-        scroll = QtWidgets.QScrollArea(); scroll.setWidgetResizable(True)
+        # No scroll area around the WHOLE page any more: each step scrolls on its own
+        # inside FleetPage, so the step title and the Back / Next row are always on
+        # screen (the module doc's "what a person sees").
         self.page = FleetPage(generator_dir)
-        scroll.setWidget(self.page)
-        lay.addWidget(scroll)
+        lay.addWidget(self.page)
         self.resize(760, 700)
 
     def closeEvent(self, e):

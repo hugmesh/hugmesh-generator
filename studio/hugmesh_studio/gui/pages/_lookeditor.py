@@ -273,8 +273,9 @@ class LookEditor(QtWidgets.QWidget):
         self.font_file = self._path_edit(
             "font_file", "Upload font", v, caption="Font file",
             file_filter="Fonts (*.woff2 *.woff *.ttf *.otf)", on_change=self._font_changed)
-        self.font_file.setPlaceholderText(
-            "optional .woff2/.woff/.ttf/.otf — embedded; licence and source are required")
+        # Short enough to be whole in the Fleet window's field (test_fleet_window_layout
+        # measures every placeholder); the licence and source rows say they are required.
+        self.font_file.setPlaceholderText("optional .woff2/.woff/.ttf/.otf file")
         self.font_note = ElidedLabel()
         self.font_note.setVisible(False)
         v.addWidget(self.font_note)

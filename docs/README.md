@@ -1,34 +1,35 @@
 # hugmesh-generator docs index
 
-The doc set for the image/infra layer. State key used throughout:
+The docs for the image/infra layer. State key used throughout:
 **✅ shipped** (on `main`) · **🚧 in-flight** (open branch/PR) · **🔭 planned**
-(design only). New operators start with [`RUNNING.md`](RUNNING.md), then read
+(design only). New operators: start with [`RUNNING.md`](RUNNING.md), then read
 [`ARCHITECTURE.md`](ARCHITECTURE.md).
 
 ## Operating & building
 
 - [`RUNNING.md`](RUNNING.md) — end-to-end runbook (clone → build → keys → flash → provision → cluster).
-- [`SERVE-YOUR-MESH.md`](SERVE-YOUR-MESH.md) — the end-to-end path from nothing to a reachable login page: generate a whole platform, serve it **locally**, then optionally expose it **publicly** over a Tor `.onion`, a Dynamic-DNS host, or a tunnel.
-- [`NIXOS-STEAMOS.md`](NIXOS-STEAMOS.md) — launching the Studio wizard + ncurses menu on NixOS / SteamOS (Steam Deck) / Arch / Debian / Fedora: the additive Nix flake (`flake.nix`/`shell.nix`) + the portable POSIX launcher (`scripts/studio-launch.sh`) for hosts without `python3`/`make`/FHS (✅).
+- [`SERVE-YOUR-MESH.md`](SERVE-YOUR-MESH.md) — from nothing to a reachable login page: generate a whole platform, serve it **locally**, then optionally expose it **publicly** over a Tor `.onion`, a Dynamic-DNS host, or a tunnel.
+- [`FIRST-RUN.md`](FIRST-RUN.md) — the one-time, advisory bootstrap of the first Studio or CLI run: per-user `~/.local/bin` links, a `properties.json`, and a doctor pass (✅).
+- [`NIXOS-STEAMOS.md`](NIXOS-STEAMOS.md) — the Studio wizard and ncurses menu on NixOS / SteamOS (Steam Deck) / Arch / Debian / Fedora: the additive Nix flake (`flake.nix`/`shell.nix`) and the portable bash launcher (`scripts/studio-launch.sh`), for hosts without `python3`/`make`/FHS (✅).
 - [`LOCAL-TESTING.md`](LOCAL-TESTING.md) — LAN `.test` fleet testing.
 - [`STUDIO-INSTALLERS.md`](STUDIO-INSTALLERS.md) — the Studio's **Windows MSI** and **Linux Flatpak**: what they package, what they still need from the host, and how a release is cut (✅).
-- [`RESOURCE-LIMITS.md`](RESOURCE-LIMITS.md) — capping the **CPU / memory / GPU** that builds, the local stack, emulated meshes and kind nodes may use, so the machine stays usable while HugMesh runs (✅).
+- [`RESOURCE-LIMITS.md`](RESOURCE-LIMITS.md) — cap the **CPU / memory / GPU** that builds, the local stack, emulated meshes and kind nodes may use, so the machine stays usable (✅).
 - [`LOCAL-STACK.md`](LOCAL-STACK.md) — `make stack-up` local-dev compose stack (opt-in upstream tuwunel/Mastodon for dev only).
-- [`ADMIN-CONSOLES.md`](ADMIN-CONSOLES.md) — **every admin/moderation console: URL, the role that opens it, and its HONEST state** (probed live). Which panels are dark and why; what Matrix/Mastodon/forum administration can and cannot do on this mesh; how to sign in with an account that holds the roles.
+- [`ADMIN-CONSOLES.md`](ADMIN-CONSOLES.md) — **every admin/moderation console: URL, the role that opens it, and its HONEST state** (probed live). It says which panels are dark and why, what Matrix/Mastodon/forum administration can and cannot do on this mesh, and how to sign in with an account that holds the roles.
 - [`DEVOPS.md`](DEVOPS.md) — GitLab CI, runner, binhost, build distribution.
 - [`BUILD-MATRIX.md`](BUILD-MATRIX.md) — the canonical platform×role×env build matrix, the four build channels (CLI / make / ncurses menu / Studio GUI), the **all-options-in-all-menus** rule + the `make matrix-check` harness (✅).
-- [`IMAGE-INVENTORY.md`](IMAGE-INVENTORY.md) — generated full cross-product of every advertised image × every build channel (125 distinct images, 62 with a channel gap); regenerate with `scripts/emit-image-inventory.py`, gated by `make inventory-check` — do not hand-edit.
+- [`IMAGE-INVENTORY.md`](IMAGE-INVENTORY.md) — generated full cross-product of every advertised image × every build channel (131 distinct images, 68 with a channel gap); regenerate with `scripts/emit-image-inventory.py`, gated by `make inventory-check` — do not hand-edit.
 - [`SHARED-BINPKG.md`](SHARED-BINPKG.md) — the shared per-arch binpkg pools, stage3 seed cache and fleet distfiles, plus the CHOST/`-mcpu` pool-fingerprint guard (✅ mechanism + guard shipped; ⚠️ the compile-once speedup itself is still owed a real cross-build to prove).
 - [`BINPKG-MEASUREMENT-PLAN.md`](BINPKG-MEASUREMENT-PLAN.md) — the protocol and the log-reading instrument (`make binpkg-reuse-report`) for the compile-once binpkg speedup that `SHARED-BINPKG.md` lists as unproven, plus what the fingerprint guard does and does not prove (✅ harness, tested on synthetic logs and real-log excerpts; ⚠️ no real measurement yet — operator-only).
-- [`PYTHON-TARGETS-SEED-DRIFT.md`](PYTHON-TARGETS-SEED-DRIFT.md) — why `PYTHON_TARGETS`/`PYTHON_SINGLE_TARGET` are **derived from the stage3 seed** and never hardcoded: portage's make.conf-replaces vs package.use-adds semantics, the two mirror-image fleet failures a frozen `python3_NN` caused (2026-07-16 autounmask wall, 2026-07-29 `dev-python` slot conflict), and what the guard now asserts. **Read this before touching a `python3_NN` literal anywhere.**
-- [`PLATFORM-BUILD-UNIFORMITY.md`](PLATFORM-BUILD-UNIFORMITY.md) — the measured survey of how the eight platforms' build structures diverge: per-platform stage ladders, the three emerge-invocation shapes, the emerge-group taxonomy, what per-package data reaches the stream vs only a log (and where the cross builds destroy it), 24 classified divergences + a proposed canonical ladder (🔭 survey; no behaviour change).
+- [`PYTHON-TARGETS-SEED-DRIFT.md`](PYTHON-TARGETS-SEED-DRIFT.md) — why `PYTHON_TARGETS`/`PYTHON_SINGLE_TARGET` are **derived from the stage3 seed** and never hardcoded. It covers portage's make.conf-replaces vs package.use-adds semantics, the two mirror-image fleet failures a frozen `python3_NN` caused (2026-07-16 autounmask wall, 2026-07-29 `dev-python` slot conflict), and what the guard now asserts. **Read this before touching a `python3_NN` literal anywhere.**
+- [`PLATFORM-BUILD-UNIFORMITY.md`](PLATFORM-BUILD-UNIFORMITY.md) — a measured survey of how the platforms' build structures diverge (measured on eight builders; the canonical ladder now spans ten). It covers per-platform stage ladders, the three emerge-invocation shapes, the emerge-group taxonomy, what per-package data reaches the stream vs only a log (and where the cross builds destroy it), 24 classified divergences, and a proposed canonical ladder (🔭 survey; no behaviour change).
 - [`STUDIO-WIZARD-FLOW.md`](STUDIO-WIZARD-FLOW.md) — the Studio image-build wizard's **4-choice → 7-step** flow (mesh node / local Docker mesh / mesh client / standalone), per-path page map, and the ncurses/CLI/web-UI **parity TODO** (✅ GUI; 🔭 other channels).
 - [`RESERVED-PREFIXES.md`](RESERVED-PREFIXES.md) — reserved `ROLE_`/`DOMAIN_` and route first-segment prefixes.
-- [`GO-LIVE-WIZARD.md`](GO-LIVE-WIZARD.md) — superadmin go-live wizard (bring-your-own-domain / cloudflare-tunnel / DuckDNS-DDNS / tailscale-funnel / router-portforward providers), CLI + ncurses + Studio front-ends (✅ v1 consolidated).
+- [`GO-LIVE-WIZARD.md`](GO-LIVE-WIZARD.md) — superadmin go-live wizard (bring-your-own-domain / cloudflare-tunnel / DuckDNS-DDNS / tailscale-funnel / router-portforward / tor-onion providers), CLI + ncurses + Studio front-ends (✅ v1 consolidated).
 - [`GOLIVE-ORG-EXPORT.md`](GOLIVE-ORG-EXPORT.md) — the Go-Live wizard's opt-in **Export to GitHub org** step: a per-domain *GitHub org* cell on the Domains step (GUI and text mode), a dry-run plan of the domain's repositories as single-commit snapshots renamed `hugmesh-*` -> `<brand>-*` plus a generated `<domain>.github.io` site repository whose workflows clone and build them all; apply only on the typed org name, never a force or a delete; the engine is `core/org_export.py` with a `--org-export` CLI; placeholder names only (`mesh.example`, `exampleorg`) (✅).
 - [`SUPERADMIN-MESH-CLIENT.md`](SUPERADMIN-MESH-CLIENT.md) — how a platform superadmin joins the tailnet mesh and reaches nodes over SSH.
-- [`IMAGE-GEN-PROGRESS.md`](IMAGE-GEN-PROGRESS.md) — the image-build worker's optional non-terminal `PROGRESS_URL` side channel (fills the web progress bar between the start frame and the terminal `COMPLETED`/`FAILED`/`ERROR` result).
-- [`PACKAGE-FLAG-BADGES.md`](PACKAGE-FLAG-BADGES.md) — ground truth for the Studio's per-package flag display: every USE-flag state portage can render (re-derived from portage 3.0.81.2's own formatter), which of the four columns (USE_EXPAND / USE / KEYWORDS / LICENSE) each channel can actually source, the 100%-coverage **offline** hover-doc sources, and the badge colour+emoji mapping (🔭 semantics only — no feature code).
+- [`IMAGE-GEN-PROGRESS.md`](IMAGE-GEN-PROGRESS.md) — the image-build worker's optional non-terminal `PROGRESS_URL` side channel. It fills the web progress bar between the start frame and the terminal `COMPLETED`/`FAILED`/`ERROR` result.
+- [`PACKAGE-FLAG-BADGES.md`](PACKAGE-FLAG-BADGES.md) — ground truth for the Studio's per-package flag display: every USE-flag state portage can render (re-derived from portage 3.0.81.2's own formatter), which of the four columns (USE_EXPAND / USE / KEYWORDS / LICENSE) each channel can source, the 100%-coverage **offline** hover-doc sources, and the badge colour+emoji mapping (🔭 semantics only; no feature code).
 
 ## Architecture
 
@@ -36,10 +37,10 @@ The doc set for the image/infra layer. State key used throughout:
 - [`ROUTE-ACCESS.md`](ROUTE-ACCESS.md) — `gateway_route_access` model (incl. 🔭 MFA-required fail-closed gating).
 - [`HEAVY-TIER.md`](HEAVY-TIER.md) — heavy datastores (Kafka/ClickHouse/Uptrace) on the x86 worker.
 - [`MESH-TEMPLATING.md`](MESH-TEMPLATING.md) — multi-tenant mesh repo-templating: Handlebars render engine, guardrails, archetype rendering, and cross-mesh foreign-base ingestion (Phases 1–7, ✅ merged).
-- [`BRANDING.md`](BRANDING.md) — what a tenant's rendered generator copy rebrands (and never touches); also the render engine's `renames[]` pilot, since this file itself gets re-filed as `docs/BRANDING-<org-slug>.md` per tenant.
+- [`BRANDING.md`](BRANDING.md) — what a tenant's rendered generator copy rebrands (and never touches), plus the render engine's `renames[]` pilot. This file itself is re-filed as `docs/BRANDING-<org-slug>.md` per tenant.
 - [`BRAND-MODEL.md`](BRAND-MODEL.md) — the brand model: one **superbrand** governing its brands. The seven words every screen uses (guarded against the Studio's word table by `studio/tests/test_brand_record_words.py`), the one brand record file, the id rule, inherit-then-override looks, the ways to reach a brand and what each start path does with them (🚧 Studio: the Docker route; the builders and the kind scripts read the record in later work).
 - [`LOGIN-THEME.md`](LOGIN-THEME.md) — `scripts/tooling/derive-theme.py`: render the login-ui `snap-theme.css` (or its `login-theme` ConfigMap) from brand colours / fonts / presets at render time, through the same `compose_login_css()` the Studio and the mesh-bootstrap CLI use.
-- [`FEDERATION-EXAMPLES.md`](FEDERATION-EXAMPLES.md) — the runtime side of native-federation: how a host shell discovers and mounts remotes, walked through via the four runnable archetype example codebases (companion to `MESH-TEMPLATING.md`, which covers the render side).
+- [`FEDERATION-EXAMPLES.md`](FEDERATION-EXAMPLES.md) — the runtime side of native-federation: how a host shell discovers and mounts remotes, walked through with the four runnable archetype example codebases. It pairs with `MESH-TEMPLATING.md`, which covers the render side.
 - [`PHASE5-DECISIONS.md`](PHASE5-DECISIONS.md) — Phase 5 detail: the first tailnet-internal publish of rendered tenant repos to Forgejo, signed provenance, domain-reconcile writeback.
 
 ## Security & hardening
@@ -61,7 +62,7 @@ The doc set for the image/infra layer. State key used throughout:
 - [`XR-CHAT.md`](XR-CHAT.md) — "Shadows of the Net" XR chat room + the Character Forge (3D) multi-app slug (DEFAULT-OFF; WebXR/Quest + desktop face-tracking architecture, coturn dependency note).
 - [`MESHTASTIC-BRIDGE.md`](MESHTASTIC-BRIDGE.md) — Meshtastic LoRa mesh ↔ Matrix bridge, a DEFAULT-OFF runtime-only optional service (Matrix appservice + LoRa radio transports over USB-serial / TCP / MQTT).
 - [`LORAWAN-MESH-SYNC.md`](LORAWAN-MESH-SYNC.md) — companion to `MESHTASTIC-BRIDGE.md`, covering the *other* LoRa technology: LoRaWAN WAN reach + near-mesh sync (🔭 design-only, phase 1 of 4 — nothing implemented yet).
-- [`MESH-VISIBILITY.md`](MESH-VISIBILITY.md) — the `friends` decision: why a mesh device's `visibility=friends` setting behaves as `private` today (the platform has no friendship graph to enforce it against), and what has to be decided before it can ship.
+- [`MESH-VISIBILITY.md`](MESH-VISIBILITY.md) — the `friends` decision: why a mesh device's `visibility=friends` setting behaves as `private` today (the platform has no friendship graph to enforce it against), and what must be decided before it can ship.
 - [`EGRESS-VPN.md`](EGRESS-VPN.md) — outgoing public egress via operator `.conf`.
 - [`NODE-STORAGE.md`](NODE-STORAGE.md) — attach + register node-pinned storage.
 - [`GAMES-APPSTORE.md`](GAMES-APPSTORE.md) — per-domain FOSS game-server catalog + instance lifecycle.
@@ -74,11 +75,11 @@ The doc set for the image/infra layer. State key used throughout:
 
 ## Cloud deploy & external services
 
-- [`CLOUD-DEPLOY.md`](CLOUD-DEPLOY.md) — publish an already-built, cloud-packaged x86 image to AWS/Azure/OpenShift/any qcow2 host via offline-rendered plans, fronted by the Studio DeployPage / ncurses `deploy_screen` / `make deploy-*` (🚧 in-flight — every face reports "driver not found" honestly until the driver lane merges).
+- [`CLOUD-DEPLOY.md`](CLOUD-DEPLOY.md) — publish an already-built, cloud-packaged x86 image to AWS/Azure/OpenShift/any qcow2 host via offline-rendered plans, fronted by the Studio DeployPage / ncurses `deploy_screen` / `make deploy-*` (🚧 in-flight; the shared driver `specs/usr/sbin/hugmesh-cloud-deploy` and its provider registry are in the tree).
 - [`CLOUD-IMAGE-PACKAGING.md`](CLOUD-IMAGE-PACKAGING.md) — `scripts/cloud-package.sh`: re-packages a built x86 raw `.img` as qcow2 / fixed VHD / checksummed raw for KubeVirt, Azure and AWS import. A standalone post-build operator step, not a build-matrix axis.
-- [`PUBLISH-IMAGES.md`](PUBLISH-IMAGES.md) — `scripts/publish-images.sh`: exports one build session's shareable artifacts into a flat publish tree (`SHA256SUMS`, versioned `publish-manifest.json`, optional Ed25519 signature); structurally incapable of shipping key material, and refuses the whole export on the first poisoned candidate.
-- [`IDENTITY-PROVIDERS.md`](IDENTITY-PROVIDERS.md) — point a node at the built-in Casdoor IdP (default) or an external OIDC provider (Azure Entra ID, AWS Cognito, generic OIDC) for token validation; offered from the Studio wizard, local-mesh bootstrap, ncurses, and the cloud-deploy flow.
-- [`MANAGED-SERVICES.md`](MANAGED-SERVICES.md) — point an in-mesh backing service (a datastore/infra the mesh normally self-hosts) at a hosted cloud equivalent (AWS/Azure) instead, on a generated node image; strictly additive and opt-in, self-hosted stays byte-identical the default.
+- [`PUBLISH-IMAGES.md`](PUBLISH-IMAGES.md) — `scripts/publish-images.sh`: exports one build session's shareable artifacts into a flat publish tree (`SHA256SUMS`, versioned `publish-manifest.json`, optional Ed25519 signature). It cannot ship key material, and it refuses the whole export on the first poisoned candidate.
+- [`IDENTITY-PROVIDERS.md`](IDENTITY-PROVIDERS.md) — point a node at the built-in Casdoor IdP (default) or an external OIDC provider (Azure Entra ID, AWS Cognito, generic OIDC) for token validation. Offered from the Studio wizard, local-mesh bootstrap, ncurses, and the cloud-deploy flow.
+- [`MANAGED-SERVICES.md`](MANAGED-SERVICES.md) — point an in-mesh backing service (a datastore the mesh normally self-hosts) at a hosted cloud equivalent (AWS/Azure) on a generated node image. Strictly additive and opt-in: self-hosted stays the byte-identical default.
 
 ## Client images
 

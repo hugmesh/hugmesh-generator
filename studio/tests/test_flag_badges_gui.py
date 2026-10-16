@@ -1169,6 +1169,33 @@ def test_plan_badges_say_they_are_a_prediction(wiz):
     assert any("plan preview" in t for t in tips), "no plan caveat on a plan-derived badge"
 
 
+def test_a_binary_plan_row_is_indexed_as_binary_and_says_so(wiz):
+    """Issue #46: the plan wire says which rows merge from the binpkg pool
+    (``via=binary``). The index must keep that kind, and the hover must say it."""
+    page = _page(wiz)
+    row = page._rows[0]
+    row.flag_join.feed_plan_line(
+        f'{PLAN_PFX}world 1/2 dev-libs/lzo-2.10 via=binary USE="static-libs"')
+    row.flag_join.feed_plan_line(
+        f'{PLAN_PFX}world 2/2 sys-libs/talloc-2.4.4 via=ebuild USE="python"')
+    rr_bin = row.flag_join._resolver.row_for("dev-libs/lzo-2.10")
+    rr_src = row.flag_join._resolver.row_for("sys-libs/talloc-2.4.4")
+    assert rr_bin is not None and rr_bin.type == "binary"
+    assert rr_src is not None and rr_src.type == "ebuild"
+    tips_bin = [b.tooltip for b in row.flag_join.cells_if_changed("dev-libs/lzo-2.10")["USE"].badges]
+    tips_src = [b.tooltip for b in row.flag_join.cells_if_changed("sys-libs/talloc-2.4.4")["USE"].badges]
+    assert all("binpkg pool" in t for t in tips_bin), tips_bin
+    assert not any("binpkg pool" in t for t in tips_src), tips_src
+
+
+def test_a_plan_row_without_via_stays_an_ebuild_row(wiz):
+    """A pre-#46 log carries no ``via=``: it must replay as before, not be guessed."""
+    page = _page(wiz)
+    row = page._rows[0]
+    row.flag_join.feed_plan_line(f'{PLAN_PFX}world 1/1 dev-libs/lzo-2.10 USE="static-libs"')
+    assert row.flag_join._resolver.row_for("dev-libs/lzo-2.10").type == "ebuild"
+
+
 def test_a_real_resolver_row_supersedes_the_plan_and_drops_the_caveat(wiz):
     """Otherwise a confirmed merge-list display would keep carrying a
     'this is only a prediction' note forever."""
