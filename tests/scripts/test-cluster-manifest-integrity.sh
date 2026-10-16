@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # test-cluster-manifest-integrity.sh — static referential-integrity gate over
-# specs/cluster. Pure PyYAML + bash; no cluster, no kubectl, no network.
+# specs/cluster. Pure PyYAML + bash; no cluster, no network. kubectl is optional:
+# when it is on PATH, [image-pin] also renders every kustomization (see (21)).
 #
 # WHY THIS EXISTS. Three PRs landing into the same slug area in the same week
 # (#451 mesh-bff, #456 character-forge, the rebrand) produced a class of defect
