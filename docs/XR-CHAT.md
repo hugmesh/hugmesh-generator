@@ -97,7 +97,7 @@ peer for pose, blendshape and speaking data). ICE uses the homeserver's existing
   operator work (see COTURN.md §5, "Public reachability").
 
 The room's `maxParticipants` caps the mesh (2..16, default 8; a mesh warning at ≥8). This repo
-ships no SFU (§6).
+ships no SFU yet (§6).
 
 ## 4. WebXR entry paths
 
@@ -136,7 +136,9 @@ official export templates. `godot --headless` import and validation run only in 
 ## 6. Future work (documented, NOT built)
 
 - **LiveKit / MatrixRTC SFU** as an optional service. It would replace the full-mesh cap for
-  larger rooms. It is a reserved future slot, NOT scheduled, and this repo has no such service.
+  larger rooms. The technology is chosen and the work is scheduled for launch (decisions 102a
+  and 102b, hugmesh-admin-bff-api#98), but this repo has no such service yet: the design and
+  staged plan are in [`GROUP-CALL-SFU.md`](GROUP-CALL-SFU.md).
   `hugmesh-matrix-ui` carries a client path behind a dark MatrixRTC flag (default off). Above
   `maxParticipants` it asks the homeserver for a LiveKit focus and moves voice onto it if one is
   advertised. Without a focus the mesh cap stands.
