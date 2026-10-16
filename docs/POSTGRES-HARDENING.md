@@ -215,7 +215,9 @@ through `initdb/00-hardening.sql`:
   auto-sync.) They are ingress-only, so a missed allow restores connectivity on
   removal. A separate, dark `manifests/networkpolicy/db-egress.yaml` locks DNS-only
   egress on the six Postgres pods that `tier-egress.yaml` excludes. It is enabled
-  only through the manual `apps/08a-networkpolicy-egress.yaml` overlay.
+  only through the manual `apps/08a-networkpolicy-egress.yaml` overlay, carved per
+  namespace with `scripts/netpol-egress-scope.py <namespace> --with-db-egress`
+  (`docs/DB-HARDENING-RUNBOOK.md` part C).
 - **Per-DB Vault-PKI server certs** (✅ DONE, ships dark, ADR-32) — each dedicated
   Postgres DB gets a Vault-PKI server cert on disk through the existing Vault-PKI +
   ESO pattern. `pki-externalsecrets.yaml` issues a per-DB `VaultDynamicSecret`

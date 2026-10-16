@@ -373,9 +373,11 @@ The mesh is no longer flat for SSH or node-to-node traffic. Only pod and Cluster
 traffic is open between nodes, as below.
 
 Every node joins one tailnet via headscale (control server on the pki/omnibus
-node). The mesh is governed by a **default-deny, tag-based ACL** loaded with
-`policy.mode: file` (`specs/etc/headscale/config.yaml`) and `headscale policy set`
-(run by `provision_headscale`).
+node). The mesh is governed by a **default-deny, tag-based ACL** under
+`policy.mode: file` (`specs/etc/headscale/config.yaml`), where headscale reads the
+policy file at startup. `provision_headscale` (and later `gen-headscale-policy.sh`)
+tries `headscale policy set`; when headscale refuses it in file mode, they restart
+headscale so the rewritten file is the one in force.
 
 - **Membership tag.** Nodes self-apply `tag:hugmesh` (+ a per-role
   `tag:pki`/`tag:be`/`tag:fe`/`tag:host`) at join through `tailscale up

@@ -48,7 +48,11 @@ exist but ship dark (`docs/CLUSTER-HARDENING-PLAN.md` §B).
      - akkoma-db: DNS only.
 
      The homeservers get **no direct internet egress**. All outbound federation
-     goes through the proxy.
+     goes through the proxy. One exception: when the default-off egress-vpn
+     service is selected and an assignment labels akkoma or tuwunel
+     `hugmesh.net/vpn-egress=true`, `manifests/networkpolicy/egress-vpn-interaction.yaml`
+     adds a direct internet allow for that pod, so its egress no longer has to
+     pass the proxy allowlist.
    - `manifests/egress-proxy/` is a squid forward proxy. Its allowlist is the seam
      the domain-lock reconcile loop fills (`domainlock-allowlist` ConfigMap).
    - Nothing else can enforce **tuwunel/Matrix** non-federation. tuwunel/Conduit

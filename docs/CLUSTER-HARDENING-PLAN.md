@@ -258,7 +258,10 @@ against the running image** (`kubectl exec -- id`) before you apply.
   **MANUAL-sync** app `apps/08a-networkpolicy-egress.yaml` over the isolated overlay
   `specs/cluster/manifests/networkpolicy-egress/`, whose `resources: []` renders zero
   objects. **Gate: live cluster validated.** Enable one namespace at a time (devops
-  and ArgoCD LAST), following the staging steps in the 08a app header.
+  and ArgoCD LAST): carve that namespace into the overlay with
+  `scripts/netpol-egress-scope.py <namespace>`, list the generated file under the
+  overlay's `resources:`, merge, then manual-sync 08a. The order, smoke tests and
+  rollback are in `docs/DB-HARDENING-RUNBOOK.md` part C.
 - **kube-apiserver carve-out (kind + Calico live-verify fix):** the apiserver allow is
   **TCP/6443 to the NODE network CIDRs** (RFC1918 `10/8` + `172.16/12` + `192.168/16`
   + tailnet `100.64.0.0/10`), **not** the `10.96.0.1/32` ClusterIP `:443`. kube-proxy
@@ -276,8 +279,8 @@ against the running image** (`kubectl exec -- id`) before you apply.
 - **Per-DB egress lock (ships dark):** `manifests/networkpolicy/db-egress.yaml`
   gives the six Postgres pods that `tier-egress.yaml` excludes (`admin-bff-db`,
   `mod-bff-db`, `user-bff-db`, `federation-db`, `forum-bff-db`, `route-access-db`) a
-  DNS-only egress policy. It is enabled the same way, through the commented
-  resource line in the manual overlay. **Open gap:** `cassandra` is excluded from
+  DNS-only egress policy. It is enabled the same way, carved per namespace with
+  `scripts/netpol-egress-scope.py <namespace> --with-db-egress` (backend and pki). **Open gap:** `cassandra` is excluded from
   tier-egress too, and no other policy covers it, so its egress stays default-allow.
   It gossips and its pod spec is rendered by the bitnami chart, so its real allow-set
   cannot be derived from this tree. Close it only after reading the rendered
@@ -486,8 +489,8 @@ workout and record that here. Measured against this tree on 2026-09-09 (and rech
    tailscaled AVC.
 
 3. **`rc-update add tailscaled default` does exist**, in `provision_tailscale()` in
-   `specs/etc/keys-provision/provision.sh` (line 879 at this check; the matching
-   `rc-update del tailscaled default` is at line 873). It is *manifest-driven, at
+   `specs/etc/keys-provision/provision.sh`, a few lines after the matching
+   `rc-update del tailscaled default`. It is *manifest-driven, at
    first boot*, and not baked at build time. The function reads `.tailscale.enabled`
    and adds the service to the default runlevel when true, or removes it when false.
    No builder links it. The grep that reads as "no image ever enables it" was run
@@ -499,15 +502,14 @@ role spec. Every harness payload sets `enabled: false`, so provisioning unschedu
 it and the workout never probes it. This is consistent end to end.
 
 **One genuine loose end, filed as #343 (open, NOT fixed here).**
-`tests/qemu/assertions.sh` (the `tailscaled` block near line 344) grades
+`tests/qemu/assertions.sh` (the `tailscaled` block) grades
 "`/usr/sbin/tailscaled` installed but not in the default runlevel" as a defect, and is
 deliberately manifest-blind for tailscaled (it reads the KEYS manifest only for
 `.headscale.enabled` and the SELinux mode). That is exactly the state
 `provision_tailscale()` produces on any image built *with* the mesh client whose
 manifest sets `enabled: false`, which is every harness payload. Confirming whether it
 fires needs a live QEMU boot, which that run's brief forbade outright (a standing
-rule, not a RAM verdict: 13-17 GiB stayed available throughout). Two stale builder
-abort messages point the same way and should be corrected with it:
-`build-x86-host-stage4.sh` (the `tailscale fetch failed` error, line 6108 at this
-check) and `build-frite-stage4.sh` (line 1946) both say "tailscaled is enabled in the
-runlevel", which no builder does.
+rule, not a RAM verdict: 13-17 GiB stayed available throughout). Stale builder abort
+messages point the same way and should be corrected with it: the `tailscale fetch
+failed` error in `build-x86-host-stage4.sh` and in the Frite, Jetson and Orange Pi
+builders says "tailscaled is enabled in the runlevel", which no builder does.
