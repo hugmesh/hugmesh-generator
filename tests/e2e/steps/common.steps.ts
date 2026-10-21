@@ -86,7 +86,9 @@ Given('I have registered but not completed onboarding as the persona for this sc
 //   write a request   I request {string}                      (bodiless, any verb)
 //                     I submit a POST to {string} with body:   (doc-string JSON)
 //                     the API client GETs {string}             (mined-identity.steps.ts)
-//                     the API client POSTs {string} with body {string}   (inline JSON)
+//                     the API client POSTs {string} with body {string}   (inline JSON;
+//                       mined-identity.steps.ts owns it: a second definition here
+//                       makes bddgen fail with "Multiple definitions matched")
 //   assert on it      the response status is {int}             (mined-identity.steps.ts)
 //                     the response status is not {int}
 //                     the response body contains {string}
@@ -175,26 +177,6 @@ When('I submit a POST to {string} with body:', async ({ baseURL, world }, target
   const r = await api.post(target, { data, headers: await defensiveCsrf(api) });
   await recordHttpResponse(world, `POST ${target}`, r);
 });
-
-/**
- * The inline-JSON POST twin of mined-identity.steps.ts's
- * 'the API client GETs {string}'. Like that step it REQUIRES an API client a
- * Given already established (world['api']) — "the API client" names a client
- * the scenario holds, so a missing one fails naming the missing Given rather
- * than silently opening an anonymous context and passing a 401 off as a
- * refusal. Use 'I submit a POST to … with body:' for the lazy/anonymous shape.
- *
- * Spell the JSON single-quoted so its own double quotes need no escaping —
- * cucumber's {string} accepts either quote:
- *   When the API client POSTs "/bff/mod/ban" with body '{"platform":"profile","target":"e2e-suspended"}'
- */
-When('the API client POSTs {string} with body {string}',
-  async ({ world }, target: string, body: string) => {
-    const api = world.get<APIRequestContext>('api');
-    const data = parseJsonArgument(`'the API client POSTs "${target}" with body …' argument`, body);
-    const r = await api.post(target, { data, headers: await defensiveCsrf(api) });
-    await recordHttpResponse(world, `POST ${target}`, r);
-  });
 
 /** The substring twin of mined-identity.steps.ts's exact-match response steps —
  *  for an error body where the exact JSON shape is not what the scenario is
@@ -513,21 +495,6 @@ Then('the command output contains {string}', async ({ world }, needle: string) =
     `${t.stdout}\n${t.stderr}`,
     `\`${t.command}\` (${cliVerdict(t)}) output did not contain ${JSON.stringify(needle)}`,
   ).toContain(needle);
-});
-
-/**
- * The negation — for "the seeder does not print the password", "the halt
- * status does not say halted". Reads stdout AND stderr like its positive twin,
- * so a secret that leaked to stderr is still a leak. An EMPTY transcript
- * satisfies this vacuously, which is why it should follow 'the command
- * succeeded' or a positive 'contains' in the same scenario.
- */
-Then('the command output does not contain {string}', async ({ world }, needle: string) => {
-  const t = world.get<CliTranscript>(CLI_KEY);
-  expect(
-    `${t.stdout}\n${t.stderr}`,
-    `\`${t.command}\` (${cliVerdict(t)}) output CONTAINED ${JSON.stringify(needle)}, which it must not`,
-  ).not.toContain(needle);
 });
 
 Then('the command output is valid JSON', async ({ world }) => {
