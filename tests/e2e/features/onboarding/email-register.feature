@@ -19,28 +19,41 @@
 # rows were replaced by the refusal below. Reopening registration to anonymous
 # callers needs a proof-of-email-ownership step in user-bff first; see the
 # decision record's "Reopening" section.
-@service:login @layer:bff @env:docker
+#
+# @env:docker sits on the live scenario only, NOT on the Feature line: a
+# Feature-level @env:docker is inherited by every row, so the two offline
+# routing rows below were skipped whenever no docker stack answered — which is
+# every run of `make stack-e2e-bdd-check` — and the cluster row's false
+# assertion stayed hidden from 2026-09-23 to 2026-10-21.
+@service:login @layer:bff
 Feature: Email self-registration stays closed to anonymous callers at the front door
 
   # The door answers first: 401 from the authenticated() floor (measured as 401
   # through https://localhost:8488 on 2026-09-23). The body names an address
   # nobody invited, so a regression that opened the door cannot mint a session
   # for a real invite while this row is failing.
-  @issue:gateway-29
+  @issue:gateway-29 @env:docker
   Scenario: an anonymous POST /bff/register is refused at the door @service:login @layer:gateway
     Given I hold an anonymous API client
     When the API client POSTs "/bff/register" with body "{\"email\":\"never-invited-bdd@example.test\"}"
     Then the response status is 401
     And the API client holds no cookie named "bff_session"
 
-  # The offline control: BOTH fe route tables send the exact path to user-bff,
+  # The offline control: BOTH fe route tables send /bff/register to user-bff,
   # so a signed-in caller (the decided audience) lands on the handler, not on
-  # admin-bff's /bff/** catch-all.
+  # admin-bff's /bff/** catch-all. The two tables declare it differently: compose
+  # lists the EXACT path in user-bff's Path= list; the cluster table declares the
+  # SUBTREE /bff/register/** (route hugmesh-user-bff-api-register), which also
+  # claims the bare /bff/register under Spring's Ant matching. The routes-to step
+  # compares DECLARED patterns literally, so each row names the pattern its table
+  # actually declares, and the claims-before step then proves that the bare path
+  # is claimed ahead of the admin-bff catch-all on that table.
   @harness @issue:gateway-29
   Scenario Outline: /bff/register is routed to user-bff on the <table> table @service:login @layer:gateway
-    Then the "<table>" fe gateway routes "/bff/register" to the "hugmesh-user-bff-api" upstream
+    Then the "<table>" fe gateway routes "<declared>" to the "hugmesh-user-bff-api" upstream
+    And the "<table>" fe gateway claims "/bff/register" before the "hugmesh-admin-bff-api" catch-all
 
     Examples:
-      | table   |
-      | compose |
-      | cluster |
+      | table   | declared          |
+      | compose | /bff/register     |
+      | cluster | /bff/register/**  |
