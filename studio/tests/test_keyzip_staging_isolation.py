@@ -347,3 +347,59 @@ def test_the_sweep_matcher_flags_a_hand_rolled_home_path(tmp_path):
     scanned, sites = _hugmesh_home_sites(str(pkg))
     assert scanned == 2
     assert [(rel, n) for rel, n, _l in sites] == [("core/bad.py", 2)]
+
+
+def test_extract_refuses_a_dangling_symlink_as_the_staging_path(tmp_path):
+    """A symlink whose target does not exist is refused with the module's own message
+    and is left in place (lexists is true even though isdir is false)."""
+    zp = tmp_path / "z.zip"
+    _make_zip(zp, {"keys/ca.crt": "dummy-ca"})
+    dangling = tmp_path / "dangling"
+    os.symlink(str(tmp_path / "nowhere"), str(dangling))
+    with pytest.raises(ValueError, match="not a directory"):
+        keyzip.extract(str(zp), str(dangling))
+    assert os.path.islink(str(dangling))
+
+
+# Multi-line spellings: the line-based sweep above cannot see a join split across lines
+# (``expanduser("~"),\n ".hugmesh"``) or a ``Path.home() / ".hugmesh"`` spelling, so this
+# one matches on comment-stripped whole-file source with \s.
+_HOME_PATH_SPELLINGS = (
+    re.compile(r'expanduser\(\s*["\']~["\']\s*\)\s*,\s*["\']\.hugmesh["\']'),
+    re.compile(r'expanduser\(\s*["\']~/\.hugmesh'),
+    re.compile(r'Path\.home\(\)\s*/\s*["\']\.hugmesh["\']'),
+)
+
+
+def _home_path_spelling_sites(src: str) -> int:
+    code = "\n".join(l.split("#", 1)[0] for l in src.splitlines())
+    return sum(len(rx.findall(code)) for rx in _HOME_PATH_SPELLINGS)
+
+
+def test_the_home_path_spelling_matcher_sees_every_spelling_it_claims_to():
+    """Vacuity guard for the sweep below: each spelling is detected, a comment is not."""
+    assert _home_path_spelling_sites('os.path.join(os.path.expanduser("~"), ".hugmesh", "x")') == 1
+    assert _home_path_spelling_sites('os.path.join(os.path.expanduser("~"),\n    ".hugmesh")') == 1
+    assert _home_path_spelling_sites('os.path.expanduser("~/.hugmesh/keyzip")') == 1
+    assert _home_path_spelling_sites('Path.home() / ".hugmesh" / "keyzip"') == 1
+    assert _home_path_spelling_sites('# os.path.join(os.path.expanduser("~"), ".hugmesh")') == 0
+    assert _home_path_spelling_sites('os.path.expanduser("~/.config")') == 0
+
+
+def test_no_module_hand_rolls_a_multiline_or_pathlib_hugmesh_home_path():
+    pkg = os.path.join(STUDIO_ROOT, "hugmesh_studio")
+    scanned, found, offenders = 0, {}, []
+    for root, _dirs, files in os.walk(pkg):
+        for f in sorted(files):
+            if not f.endswith(".py"):
+                continue
+            scanned += 1
+            rel = os.path.relpath(os.path.join(root, f), pkg).replace(os.sep, "/")
+            with open(os.path.join(root, f), encoding="utf-8") as fh:
+                n = _home_path_spelling_sites(fh.read())
+            if n:
+                found[rel] = n
+                if rel not in _SEAM_OWNERS:
+                    offenders.append(f"{rel} ({n})")
+    assert scanned >= 100, f"only scanned {scanned} modules: the sweep is not reaching the package"
+    assert not offenders, "hand-rolled ~/.hugmesh path outside a seam: " + ", ".join(offenders)
