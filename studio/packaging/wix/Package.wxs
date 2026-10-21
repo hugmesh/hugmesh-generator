@@ -2,13 +2,18 @@
 <!--
   WiX v6 source for the HugMesh Image Studio MSI.
 
-  Built as:
-      wix build -arch x64 -define Version=$VERSION -define SourceDir=<pyinstaller onedir> \
-                -out hugmesh-studio-$VERSION-x64.msi Package.wxs Files.wxs
+  Built as (variables are all required except AppDir):
+      wix build -arch x64 -define Version=$VERSION -define IconFile=<.ico> \
+                -define LicenseFile=<.rtf> [-define AppDir=<pyinstaller onedir>] \
+                -ext WixToolset.UI.wixext -out hugmesh-studio-$VERSION-x64.msi \
+                Package.wxs Files.wxs
+  The UI extension must be installed first (`wix extension add`) at the SAME version
+  as the wix tool; build-msi-wine.sh does both, pinned, and is the tested recipe.
 
-  Files.wxs is HARVESTED, not hand-written: a PyInstaller onedir output is ~2000
-  files across a deep tree, and any hand-maintained component list would be stale by
-  the next PySide6 bump. The workflow generates it with `wix harvest`.
+  The component list is not written down anywhere: Files.wxs harvests the PyInstaller
+  onedir at build time with WiX's own <Files> element. A hand-maintained list would be
+  stale by the next PySide6 bump, with a silent failure mode (a missing DLL only shows
+  up when someone launches the app).
 
   PER-USER INSTALL. InstallFolder sits under LocalAppDataFolder and the package is
   marked perUser, so installing needs no administrator rights and shows no UAC

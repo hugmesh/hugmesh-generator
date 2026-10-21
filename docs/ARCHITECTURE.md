@@ -73,7 +73,7 @@ flowchart TD
     PKIGW --> PKI
 
     subgraph SSO["SSO / native login — shipped, lit by default"]
-        AUTHCORE["auth-core: account/session/MFA + custody seams (2.4.2 / 2.5.0)"]
+        AUTHCORE["auth-core: account/session/MFA + custody seams (2.5.1; 2.4.2 / 2.5.0 until consumers bump)"]
         GWEXCH["gateway bff_-exchange filter"]
         LOGINOIDC["login-ui native login form -> POST /bff/login"]
         UBRELOC["user-bff native login + server-side Casdoor exchange"]
@@ -90,10 +90,10 @@ flowchart TD
     end
 
     subgraph ROADMAP["Roadmap — genuinely NOT done"]
-        KINDE2E["kind SSO e2e: harness shipped, NOT green (16 cluster blockers)"]
+        KINDE2E["kind SSO e2e: harness shipped, blockers 1-16 and the JWKS fix (#693) merged, live proof not run"]
         MFAFLIP["MFA: the live-cluster operator flip (MFA-ROLLOUT.md)"]
         ENFORCE["SELinux enforcing (nodes boot permissive)"]
-        SFU["Group-call SFU — does not exist"]
+        SFU["Group-call SFU: client half dark, server half not built"]
         NOTIFY["Notifications: external channels"]
     end
 
@@ -310,10 +310,14 @@ since shipped.
 - a cross-repo **NetworkPolicy egress peer** user-bff → admin-bff internal `:8080`
   (manifests/generator).
 - **SSO end-to-end live e2e** — kind + Playwright, proving the browser holds only `bff_`.
-  **Update (2026-08-05):** the harness now exists (`KIND_PROFILE=sso`, `make
-  kind-images|kind-up|kind-e2e|kind-down`) and reached a real Casdoor login, but
-  the run is **not green** — it fails on 16 enumerated fresh-cluster payload
-  blockers, of which 5–16 are still unfixed. See
+  **Update (2026-10-14):** the harness exists (`KIND_PROFILE=sso`, `make
+  kind-images|kind-up|kind-e2e|kind-down`) and reached a real Casdoor login. The
+  16 fresh-cluster payload blockers it found on 2026-08-05 are fixed on `main`
+  (re-measured against the tree and the offline guards, not a cluster). The next
+  one, `GET /bff/session` 500ing on kind because the BFF manifests set no
+  in-cluster `CASDOOR_JWKS_URI` (#693), is fixed on `main` (pull requests #709
+  and #736, merged 2026-10-14, pinned by `tests/scripts/test-bff-jwks-in-cluster.sh`);
+  the live proof on a cluster has not been run. See
   [`KIND-SSO-E2E-FINDINGS.md`](KIND-SSO-E2E-FINDINGS.md).
 
 ## GitOps
@@ -466,9 +470,12 @@ are complete on `main`; each entry names what lights it and what caveat survives
   remote-install over the device-SSH-license transport; client side in
   `specs/etc/hugmesh/desktop-governance/`, server side a controller set in
   `hugmesh-admin-bff-api`. Dark behind `app.desktop.registry.enabled=false` /
-  `app.desktop.remote-install.enabled=false`. ⚠️ The SSO greeter/PAM **token
-  producer** is still deferred, so the deposit path has no producer even once the
-  flags flip. See [`CLIENT-IMAGES.md`](CLIENT-IMAGES.md) §7.
+  `app.desktop.remote-install.enabled=false`. ⚠️ The SSO token **producer**
+  (`hugmesh-sso-token`, RFC 8628 device flow) is written and unit-tested but has
+  never run against a live Casdoor or on an image, so the sudo leg is inert in
+  practice even once the flags flip. The go-live preconditions (security
+  re-review, `device_ssh_dial` rows, dial-key mount) are in
+  [`CLIENT-IMAGES.md`](CLIENT-IMAGES.md) §7.
 - **✅ Encrypted versioned backups** — Velero server + node-agent (Kopia) as
   `apps/55-velero.yaml` and the BSL + ESO credentials + least-privilege RBAC +
   status-sweep CronJob as `apps/56-velero-config.yaml`; per-domain + superadmin,
@@ -499,22 +506,20 @@ are complete on `main`; each entry names what lights it and what caveat survives
 What is genuinely **not done**. Nothing here has a working default-off
 implementation on `main`.
 
-- **🚧 kind-cluster SSO e2e — harness shipped, proof NOT achieved.**
+- **🚧 kind-cluster SSO e2e — harness shipped, payload blockers and the JWKS fix merged, live proof not run.**
   `KIND_PROFILE=sso` + `make kind-images|kind-up|kind-e2e|kind-down` stand up a
-  real cluster, and the chain now reaches Casdoor and mints a session against a
-  real IdP — but the e2e is **not green**. It fails on 16 enumerated fresh-cluster
-  blockers, because the GitOps payload had never been run end to end and every
-  workaround lived in `tests/stack/compose.local.yaml` instead of `specs/cluster`.
-  Fixed in-repo: the `cluster-ca` / Vault KV mount / node-label items plus
-  `fix/cluster-secret-contract-drift` and `fix/pki-role-san-namespace`. **Not
-  fixed (5–16):** Cassandra credentials + keyspace bootstrap, gateway probes
-  hitting a role-gated actuator path (no gateway can become Ready in k8s), Casdoor
-  never importing `init_data.json` (the IdP keeps the well-known default admin
-  password), `casdoor-init` never checking API responses, `CASDOOR_ORG` /
-  client-id / redirect-uri / namespace pre-rebrand defaults across the BFFs, a
-  hard-required `SVC_PASSWORD` nothing provides, and an admin-bff Liquibase
-  `GRANT` to a role no initdb creates. See
-  [`KIND-SSO-E2E-FINDINGS.md`](KIND-SSO-E2E-FINDINGS.md).
+  real cluster, and the chain reaches Casdoor and mints a session against a real
+  IdP. The 16 fresh-cluster blockers of the first run are fixed on `main` (item 1
+  for kind only; item 16 in the admin-bff source, image rebuild unverified), as
+  re-measured on 2026-10-14 against the tree, not a cluster. The BFFs
+  used to fetch Casdoor's signing keys from a public host that does not resolve
+  in-cluster, so `GET /bff/session` answered 500 (#693); that is fixed on `main`
+  (pull requests #709 and #736 merged 2026-10-14, #693 closed, the in-cluster
+  `CASDOOR_JWKS_URI` pinned by `tests/scripts/test-bff-jwks-in-cluster.sh`).
+  **Open:** the live proof (the guard reads manifests, not a cluster);
+  the Harbor pull path is never exercised on kind (finding 17); findings 20, 25
+  and 26. The last recorded green run (2026-08-06) covers the cookie mint only.
+  See [`KIND-SSO-E2E-FINDINGS.md`](KIND-SSO-E2E-FINDINGS.md).
 - **🔭 The live MFA operator flip** — verify every privileged principal can
   produce a fresh `mfa_satisfied` stamp, then flip `mfa.enabled` → `true`, then
   (separately: `enforce-privileged-floor` is **not** a sub-flag of `enabled`)
@@ -525,9 +530,13 @@ implementation on `main`.
   (no runlevel, `SELINUX_ENFORCE_GATE="no"`). The `.te` rules are still tagged
   `INFERRED-WIDE` and can only be narrowed against AVC logs from a real protected
   build + boot. See [`selinux-module-loading.md`](selinux-module-loading.md).
-- **🔭 Group-call SFU** — coturn is a 1:1/mesh relay only; MatrixRTC / Element
-  Call / LiveKit-class group calling does not exist in any form.
-- **🔭 Desktop-governance SSO greeter / PAM token producer** (FD-07 increment 2).
+- **🔭 Group-call SFU** — coturn is a 1:1/mesh relay only. The MatrixRTC client
+  half is merged and dark in `hugmesh-matrix-ui` (`__HUG_MATRIX_RTC__`, default
+  off); the server half (LiveKit, lk-jwt-service, tuwunel `livekit_url`) is
+  designed but not built. See [`GROUP-CALL-SFU.md`](GROUP-CALL-SFU.md).
+- **🚧 Desktop-governance SSO token producer** (FD-07 increment 2): code and
+  unit tests landed; unproven on a live Casdoor and on an image; the
+  lightdm-greeter / password-grant PAM login is not built.
 - **🚧 MDM phones (GrapheneOS on Pixel)** — the fourth onboarding form: `scripts/phone-wizard.sh` flashes signature-verified GrapheneOS, enrolls the handset into the Tailscale root domain (headscale tailnet, ADR-14 register-and-approve), escrows a separately-encrypted enterprise profile, and emits a `phone-ingest/v2` device-registry record; Azure Intune is a co-equal provider alongside Headwind. Real pre-deploy gaps remain — see [`MDM.md`](MDM.md) "Deferred".
 - **🚧 Notifications external channels** — Matrix DM + Akkoma feed + phpBB + email
   adapters on top of the shipped in-app MVP; mod-bff `notify_channels` directive.

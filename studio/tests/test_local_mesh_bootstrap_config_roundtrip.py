@@ -1,7 +1,7 @@
 """LocalMeshBootstrapConfig.to_dict/from_dict + LocalMeshBootstrap.restore /
 start_saved — the core half of the saved-mesh lane (ask C, 2026-09-01).
 
-No Qt, no docker: every subprocess seam is monkeypatched on the bootstrap or the
+No Qt, no docker: every subprocess override point is monkeypatched on the bootstrap or the
 stack node, exactly as test_local_mesh_bringup.py's ``_happy_boot`` does.
 """
 from __future__ import annotations
@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import subprocess
 
 import pytest
 
@@ -31,7 +32,11 @@ def _full_cfg(**over) -> LocalMeshBootstrapConfig:
         source_dir="/src", web_locales=("de", "fr"), login_theme_css=":root{}",
         idp="oidc", idp_issuer="https://id.example.org", idp_client_id="cid",
         idp_jwks="https://id.example.org/jwks", own_idp_domains=("a.org",),
-        kind_addons=("metrics-server",))
+        kind_addons=("metrics-server",),
+        # #494: the recorded domain rows — a tuple of JSON objects, the one field
+        # whose items are not scalars, so "every field round-trips" has to carry one
+        domains=({"name": "a.org", "title": "A", "idp": "own",
+                  "optional_services": ["games"]},))
     base.update(over)
     return LocalMeshBootstrapConfig(**base)
 
@@ -218,6 +223,105 @@ def test_start_saved_puts_a_changed_credentials_file_back_first(monkeypatch, tmp
     assert e2e.read_text() == "E2E_PASSWORD=from-the-copy\n"
 
 
+# ── rotate, seed, warm start: the record must FOLLOW a completed seed ─────────────
+# Every `make stack-seed` STARTS a run: it rotates .e2e-credentials and reconciles
+# every live identity to the new value (tests/stack/e2e-password.sh). Run from a
+# terminal against a mesh brought back from a record, it left the file newer than
+# the record's copy; the next warm start saw "file differs from the copy", put the
+# OLD copy back over it, and every persona 401'd against the reseeded volumes.
+# These drive the REAL shell run start and the REAL seed-stamp writer.
+_E2E_LIB = os.path.join(GENERATOR_DIR, "tests", "stack", "e2e-password.sh")
+
+
+def _sh(cred, script: str):
+    """Run e2e-password.sh functions against a TEMP credentials file (never the
+    checkout's own), with a clean e2e environment. Output never carries a value."""
+    env = {k: v for k, v in os.environ.items() if not k.startswith("E2E_PASSWORD")}
+    env["E2E_CREDENTIALS_FILE"] = str(cred)
+    r = subprocess.run(["bash", "-c", 'set -euo pipefail; . "$1"; ' + script, "_", _E2E_LIB],
+                       env=env, capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+
+
+def _warm_record_saved_from(boot, e2e):
+    """A record saved while ``e2e`` held its current value, copy included."""
+    rec = _record(boot, copied=True)
+    copy = rec.credential_copies()[0]
+    with open(e2e, "rb") as src, open(copy, "wb") as dst:
+        dst.write(src.read())
+    rec.credentials["e2e_file"].update(path=str(e2e), sha256=sm._sha256(str(e2e)))
+    assert sm.save(rec)
+    return rec, copy
+
+
+def test_warm_start_after_a_terminal_rotate_and_seed_keeps_the_reseeded_password(
+        monkeypatch, tmp_path):
+    boot, calls = _boot(monkeypatch, tmp_path)
+    e2e = tmp_path / ".e2e-credentials"
+    monkeypatch.setattr(boot, "e2e_credentials_path", lambda: str(e2e))
+    _sh(e2e, "e2e_password_start_run")                  # the run the record was saved in
+    rec, copy = _warm_record_saved_from(boot, e2e)
+    saved = e2e.read_bytes()
+    # a terminal `make stack-seed`: rotate at the run start, reconcile, stamp
+    _sh(e2e, "e2e_password_start_run; e2e_password_stamp_seeded identities")
+    reseeded = e2e.read_bytes()
+    assert reseeded != saved
+
+    ok, log = boot.start_saved(rec, on_line=lambda _l: None)
+    assert ok and calls["start"] == 1
+    # the volumes hold the reseeded value, so the file must too (else: 401s)
+    assert e2e.read_bytes() == reseeded, \
+        "the warm start put the OLD saved copy back over a file a completed seed " \
+        "reconciled the volumes to — every persona would 401"
+    # ...and the record follows it, on disk too, so the NEXT start is a no-op
+    with open(copy, "rb") as fh:
+        assert fh.read() == reseeded
+    assert oct(os.stat(copy).st_mode & 0o777) == "0o600"
+    again = sm.load(rec.path())
+    assert again.credentials["e2e_file"]["sha256"] == sm._sha256(str(e2e))
+    assert any("now follows it" in l for l in log)
+    assert not any("put the saved credential file(s) back" in l and "e2e" in l
+                   for l in log)
+    for value in (saved, reseeded):
+        for line in value.decode().splitlines():
+            v = line.partition("=")[2]
+            assert not any(v and v in l for l in log), "a password reached a log line"
+
+
+def test_warm_start_still_puts_the_copy_back_when_no_seed_completed(monkeypatch,
+                                                                    tmp_path):
+    """A rotation with no completed seed (another lane's run start, a seed that died
+    before its identity leg): the volumes still hold the copy's value, so the copy
+    goes back — the guard this lane always had."""
+    boot, calls = _boot(monkeypatch, tmp_path)
+    e2e = tmp_path / ".e2e-credentials"
+    monkeypatch.setattr(boot, "e2e_credentials_path", lambda: str(e2e))
+    _sh(e2e, "e2e_password_start_run")
+    rec, copy = _warm_record_saved_from(boot, e2e)
+    saved = e2e.read_bytes()
+    _sh(e2e, "e2e_password_start_run")                  # rotated, never seeded
+    ok, _log = boot.start_saved(rec, on_line=lambda _l: None)
+    assert ok and e2e.read_bytes() == saved
+
+
+def test_warm_start_puts_the_copy_back_when_the_file_rotated_after_the_stamped_seed(
+        monkeypatch, tmp_path):
+    """A stamp vouches for the file it hashed, not for whatever is there later. Here
+    the stamped seed ran with the SAVED value (the file still matched the record),
+    then another lane rotated the file: the volumes hold the saved value."""
+    boot, calls = _boot(monkeypatch, tmp_path)
+    e2e = tmp_path / ".e2e-credentials"
+    monkeypatch.setattr(boot, "e2e_credentials_path", lambda: str(e2e))
+    _sh(e2e, "e2e_password_start_run; e2e_password_stamp_seeded complete")
+    rec, copy = _warm_record_saved_from(boot, e2e)
+    saved = e2e.read_bytes()
+    _sh(e2e, "e2e_password_start_run")                  # e.g. `make kind-up`
+    ok, _log = boot.start_saved(rec, on_line=lambda _l: None)
+    assert ok and e2e.read_bytes() == saved
+    with open(copy, "rb") as fh:
+        assert fh.read() == saved
+
+
 def test_start_saved_refuses_when_the_volumes_are_gone_at_execution_time(monkeypatch,
                                                                          tmp_path):
     """The row's plan is decided at PROBE time (page entry, a _mesh_up flip) and can
@@ -269,6 +373,51 @@ def test_a_probe_that_cannot_answer_refuses_rather_than_starting(monkeypatch, tm
     assert not ok and calls["start"] == 0 and calls["seed"] == []
 
 
+@pytest.mark.parametrize("unanswered", [
+    {"mesh_running": None},                                   # docker ps failed
+    {"volumes_present": None, "volumes_missing": (),
+     "unanswered": ("volumes",)},                             # docker volume ls failed
+    {"images_present": None},                                 # docker images failed
+    {"volumes_present": None, "volumes_missing": (), "images_present": None,
+     "mesh_running": None,
+     "unanswered": ("volumes", "images", "containers")},      # docker down altogether
+])
+def test_a_docker_that_did_not_answer_refuses_both_verbs(monkeypatch, tmp_path, unanswered):
+    """#361: probe_state now reports None for a fact docker could not answer, and
+    _live_plan must treat ANY None as refuse. Before, the failure read as 'volumes gone,
+    nothing running' -> a RESEED plan -> `make stack-up` + `stack-seed` ran over the live
+    mesh with this record's credentials once docker answered again."""
+    boot, calls = _boot(monkeypatch, tmp_path)
+    calls["facts"].update(unanswered)
+    rec = _record(boot)
+    ok, log = boot.start_saved(rec, on_line=lambda _l: None)
+    assert not ok and calls["start"] == 0
+    assert any("refused" in l for l in log), log
+    ok, log = boot.restore(rec, on_line=lambda _l: None)
+    assert not ok and calls["start"] == 0 and calls["seed"] == [], (calls, log)
+    assert any("refused" in l and "did not answer" in l for l in log), log
+    assert not any(SA_VALUE in l for l in log)
+
+
+def test_the_cli_restore_stops_at_a_plan_docker_could_not_establish(monkeypatch, tmp_path,
+                                                                      capsys):
+    """`mesh-restore` prints the plan and used to fall through to restore() for anything
+    but BLOCKED — including a plan built from a docker that did not answer (#361)."""
+    boot, calls = _boot(monkeypatch, tmp_path)
+    calls["facts"].update(mesh_running=None, unanswered=("containers",))
+    rec = _record(boot)
+    monkeypatch.setattr(sm, "find", lambda mesh_id: rec)
+    for verb in ("restore", "start_saved"):
+        monkeypatch.setattr(LocalMeshBootstrap, verb,
+                            lambda *a, **k: pytest.fail("the CLI went on to " + verb))
+    from hugmesh_studio.core import local_mesh_bootstrap as lmb
+    rc = lmb.main(["mesh-restore", rec.id, "--generator-dir", GENERATOR_DIR,
+                   "--out", str(tmp_path / "keys")])
+    out = capsys.readouterr().out
+    assert rc == 1 and "Docker did not answer" in out, out
+    assert calls["start"] == 0 and calls["seed"] == []
+
+
 def test_down_log_says_volumes_are_kept(monkeypatch, tmp_path):
     from hugmesh_studio.core.local_stack_node import StackStatus
     from hugmesh_studio.core.mesh_node import MeshNode
@@ -280,3 +429,101 @@ def test_down_log_says_volumes_are_kept(monkeypatch, tmp_path):
         out_dir=str(tmp_path))).down()
     line = next(l for l in log if l.startswith("[stack-down]"))
     assert "kept its volumes" in line and "dropped" not in line
+
+
+# ── #579: a saved record's Tor selection is what a start/restore brings up ──────────
+# ONE authority per profile: with a services TUPLE the picker's rows decide the tor
+# profile and the legacy boolean is normalised to agree at from_dict, so a record can
+# no longer say "with_tor=True" over a mesh that starts no hugmesh-tor (or the
+# reverse). And both bring-up paths of a saved mesh — the warm start and the cold
+# restore — build their stack node from the RECORD through one seam (for_record).
+_ONION = "https://txljwl7mdg7t3wmqdci77ttof5ikxeqg2epmfadzfxlzxvjgtx5k4fad.onion/"
+
+
+@pytest.mark.parametrize("given,want_tor", [
+    ({"with_tor": True}, True),                                  # CLI record: flag rules
+    ({"with_tor": False, "services": ["tor"]}, True),            # the row rules...
+    ({"with_tor": True, "services": ["tuwunel"]}, False),        # ...both ways
+    ({"with_tor": True, "services": []}, False),                 # explicit none
+])
+def test_from_dict_normalises_the_tor_flag_to_the_services_row(given, want_tor):
+    cfg = LocalMeshBootstrapConfig.from_dict(given)
+    assert cfg.with_tor is want_tor
+    assert cfg.effective_with_tor() is want_tor
+    tor_env = LocalMeshBootstrap(GENERATOR_DIR, cfg)._stack_node()._build_env()["TOR"]
+    assert tor_env == ("1" if want_tor else "")
+
+
+def test_from_dict_normalises_social_the_same_way():
+    assert LocalMeshBootstrapConfig.from_dict(
+        {"social": False, "services": ["tuwunel"]}).social is True
+    assert LocalMeshBootstrapConfig.from_dict(
+        {"social": True, "services": ["tor"]}).social is False
+    assert LocalMeshBootstrapConfig.from_dict({"social": True}).social is True
+
+
+def _tor_record_boot(monkeypatch, tmp_path, services, with_tor=False):
+    cfg = LocalMeshBootstrapConfig(out_dir=str(tmp_path / "keys"),
+                                   superadmin_username="sa", services=services,
+                                   with_tor=with_tor)
+    rec = sm.SavedMesh(id=sm.new_id(), label="saved-tor", generator_dir=GENERATOR_DIR)
+    rec.config = cfg.to_dict()
+    rec.credentials = {"superadmin_username": "sa",
+                       "e2e_file": {"copied": False, "copy": ""},
+                       "secrets_json": {"copied": False, "copy": ""}}
+    boot = LocalMeshBootstrap.for_record(GENERATOR_DIR, rec)
+    os.makedirs(boot.vault_dir)
+    with open(boot.secrets_json, "w") as fh:
+        json.dump({"hugmesh-pki": {"casdoor-superadmin": {
+            "username": "sa", "password": SA_VALUE}}}, fh)
+    monkeypatch.setattr(boot, "guard_host_local", lambda: (True, ""))
+    monkeypatch.setattr(boot, "validate", lambda: [])
+    monkeypatch.setattr(boot, "preflight", lambda: [])
+    monkeypatch.setattr(boot, "generate_creds",
+                        lambda: pytest.fail("generate_creds must never run here"))
+    monkeypatch.setattr(sm, "probe_state", lambda rec, project="": dict(_LIVE_OK))
+    seen = {"tor": []}
+
+    def fake_start(self, on_line=None, cancel=None):
+        seen["tor"].append(self._build_env()["TOR"])   # what `make stack-up` would get
+        return True, "up"
+    monkeypatch.setattr(LocalStackNode, "start", fake_start)
+    monkeypatch.setattr(LocalStackNode, "seed",
+                        lambda self, extra_env=None, timeout=600, on_line=None,
+                        cancel=None: (True, "seeded"))
+    monkeypatch.setattr(LocalStackNode, "onion_url", lambda self: _ONION)
+    return boot, rec, seen
+
+
+def test_start_saved_of_a_tor_record_brings_up_the_tor_profile(monkeypatch, tmp_path):
+    boot, rec, seen = _tor_record_boot(monkeypatch, tmp_path, ("tor",))
+    ok, log = boot.start_saved(rec, on_line=lambda _l: None)
+    assert ok, log
+    assert seen["tor"] == ["1"]
+
+
+def test_restore_of_a_tor_record_brings_up_the_tor_profile(monkeypatch, tmp_path):
+    boot, rec, seen = _tor_record_boot(monkeypatch, tmp_path, ("tor",))
+    streamed = []
+    ok, log = boot.restore(rec, on_line=streamed.append)
+    assert ok, log
+    assert seen["tor"] == ["1"]
+    assert any("onion published" in l for l in streamed)
+
+
+def test_a_record_whose_flag_disagrees_with_its_row_starts_no_tor(monkeypatch, tmp_path):
+    boot, rec, seen = _tor_record_boot(monkeypatch, tmp_path, ("tuwunel",),
+                                       with_tor=True)
+    assert boot.cfg.with_tor is False                  # normalised at load
+    ok, log = boot.start_saved(rec, on_line=lambda _l: None)
+    assert ok, log
+    assert seen["tor"] == [""]
+
+
+def test_for_record_carries_the_auth_key_the_record_never_stores(tmp_path):
+    rec = sm.SavedMesh(id=sm.new_id(), config=LocalMeshBootstrapConfig(
+        env="prod", services=("tor",)).to_dict())
+    rec.config["auth_key"] = ""                        # what capture() writes
+    boot = LocalMeshBootstrap.for_record(GENERATOR_DIR, rec, auth_key="tskey-9")
+    assert boot.cfg.auth_key == "tskey-9" and boot.cfg.effective_with_tor() is True
+    assert LocalMeshBootstrap.for_record(GENERATOR_DIR, rec).cfg.auth_key == ""

@@ -1,34 +1,30 @@
 # kind-local — local kind bring-up (Vault + PKI + Casdoor + Harbor, + SSO slice)
 
-> **`KIND_PROFILE=sso`** extends the core slice below with the **native-login
-> path** — Cassandra, the route-access seed DB, the fe-gateway chart (Ingress
-> re-classed to `nginx-internal`), admin-bff + user-bff (+ their Postgres), the
-> Angular host shell, the login/social UI remotes, the **`/user/**` self-service
-> remote** (profile, preferences, password change) and **federation-api + its
-> Postgres** (the vanity/public-profile publish target a profile save calls) —
-> then seeds Vault KV
-> (`scripts/gen-cluster-secrets.sh` ONLINE mode through a `kubectl exec` shim
-> into `vault-0`, so no host `vault` CLI is needed) and the deterministic e2e
-> identity catalogue (`tests/qemu/seed-accounts.sh --roles` applied over a
-> Casdoor port-forward). First-party images are **built locally and
-> `kind load`ed** under the exact refs the manifests render
-> (`registry.hugmesh.net/hugmesh/<repo>:main`, gateway `:dev`) — the
+> **`KIND_PROFILE=sso`** extends the core slice below with the **native-login path**:
+> Cassandra, the route-access seed DB, the fe-gateway chart (Ingress re-classed to
+> `nginx-internal`), admin-bff and user-bff (with their Postgres), the Angular host
+> shell, the login and social UI remotes, the **`/user/**` self-service remote**
+> (profile, preferences, password change), and **federation-api with its Postgres**
+> (the vanity/public-profile publish target a profile save calls). It then seeds Vault
+> KV (`scripts/gen-cluster-secrets.sh` in ONLINE mode, through a `kubectl exec` shim into
+> `vault-0`, so no host `vault` CLI is needed) and the deterministic e2e identity
+> catalogue (`tests/qemu/seed-accounts.sh --roles`, applied over a Casdoor port-forward).
+> First-party images are **built locally and `kind load`ed** under the exact refs the
+> manifests render (`registry.hugmesh.net/hugmesh/<repo>:main`, gateway `:dev`). The
 > in-cluster Harbor is empty on a fresh cluster and is not used.
 >
-> **What this profile does NOT deploy, said plainly.** It is a slice, not a small
-> production cluster. The fe-gateway's route table is applied WHOLE, so roughly a
-> dozen routes point at tiers this profile never brings up — be-gateway, Matrix
-> (tuwunel), Mastodon (akkoma), the mod/forum/wiki/mesh/character-forge tiers and
-> their UIs, api-docs and remote-fragment. Those paths answer **503 behind a live
-> route**, which looks nothing like "not installed". The full, current inventory
-> with a reason per entry is the `EXEMPT` table in
-> `tests/scripts/kind_route_closure.py`, and
-> `tests/scripts/test-kind-profile-route-closure.sh` fails the build if a routed
-> Service is undeployed and *unexplained* — which is how `/user/**` was routed into
-> the void on every kind cluster until 2026-08-26 while `/bff/user/**` answered
-> `curl` perfectly.
+> **What this profile does NOT deploy.** It is a slice, not a small production cluster.
+> The fe-gateway's route table is applied WHOLE, so roughly a dozen routes point at
+> tiers this profile never brings up: be-gateway, Matrix (tuwunel), Mastodon (akkoma),
+> the mod/forum/wiki/mesh/character-forge tiers and their UIs, api-docs and
+> remote-fragment. Those paths answer **503 behind a live route**, which looks nothing
+> like "not installed". The `EXEMPT` table in `tests/scripts/kind_route_closure.py` is the
+> current inventory, with a reason per entry.
+> `tests/scripts/test-kind-profile-route-closure.sh` fails the build if a routed Service
+> is undeployed and *unexplained*. That is how `/user/**` sat routed into the void on
+> every kind cluster until 2026-08-26 while `/bff/user/**` answered `curl` perfectly.
 >
-> Driven end-to-end from the repo root:
+> Driven end to end from the repo root:
 >
 > ```sh
 > make kind-up       # bootstrap-kind.sh KIND_PROFILE=sso (idempotent — an
@@ -41,26 +37,23 @@
 > make kind-doctor   # CAN this cluster run the mesh? egress, images, pods, ArgoCD
 > ```
 >
-> `make kind-doctor` is the standing "is this thing actually alive" check, and
-> the reason it exists is worth a sentence. On 2026-09-10 this lane sat dead for
-> two days while every surface a person would look at reported health: `kind get
-> clusters` listed the cluster, `kubectl get nodes` said Ready, and nineteen pods
-> were in `ImagePullBackOff` past thirteen thousand attempts. Two independent
-> causes — the host had lost every docker netfilter table (so nothing could leave
-> the bridge, while docker's embedded resolver kept answering and made every
-> error read like DNS), and `make kind-images` had never run, so not one
-> first-party image existed in the node. `kind-doctor` tests raw TCP rather than
-> resolution, and compares every image a pod references against what the node
-> actually holds. It reports and exits non-zero; it never repairs. `make kind-up`
-> runs the same check at the end of bring-up in report-only mode — a fresh
-> cluster legitimately has no first-party image yet, because the documented order
-> above is `kind-up` THEN `kind-images`.
+> `make kind-doctor` is the standing "is this cluster alive" check. It exists because on
+> 2026-09-10 this lane sat dead for two days while every surface a person would look at
+> reported health: `kind get clusters` listed the cluster, `kubectl get nodes` said
+> Ready, and nineteen pods were in `ImagePullBackOff` past thirteen thousand attempts.
+> There were two independent causes. The host had lost every docker netfilter table, so
+> nothing could leave the bridge while docker's embedded resolver kept answering, which
+> made every error read like DNS. And `make kind-images` had never run, so no
+> first-party image existed in the node. `kind-doctor` tests raw TCP rather than name
+> resolution, and compares every image a pod references against what the node holds. It
+> reports and exits non-zero. It never repairs. `make kind-up` runs the same check at the
+> end of bring-up in report-only mode, because a fresh cluster has no first-party image
+> yet: the documented order is `kind-up` THEN `kind-images`.
 >
-> `make kind-e2e` maps `hugmesh.net -> 127.0.0.1` with a Chromium
-> host-resolver rule (no `/etc/hosts`, no sudo) and rides the
-> `kind-local.yaml` 443→8443 host port map into the internal ingress. This is
-> the kind-cluster leg of the SSO e2e roadmap item — the same proof
-> `tests/e2e/specs/27-native-login.spec.ts` runs against the compose stack.
+> `make kind-e2e` maps `hugmesh.net -> 127.0.0.1` with a Chromium host-resolver rule (no
+> `/etc/hosts`, no sudo) and rides the `kind-local.yaml` 443→8443 host port map into the
+> internal ingress. It is the kind-cluster leg of the SSO e2e roadmap item, the same
+> proof `tests/e2e/specs/27-native-login.spec.ts` runs against the compose stack.
 
 A reusable, local, single-node [kind](https://kind.sigs.k8s.io/) cluster that
 brings up a **curated slice** of the HugMesh GitOps tree so you can
@@ -78,13 +71,15 @@ rediscover by trial and error) — see "Known bugs fixed here" below.
 ## Why a curated subset, not the real bring-up
 
 `specs/cluster/bootstrap/bootstrap.sh` installs ArgoCD and then applies the
-root `specs/cluster/app-of-apps.yaml`, which syncs **all 96** files under
-`specs/cluster/apps/*.yaml` (91 `Application` + 5 `ApplicationSet` objects,
-counted 2026-08-26) — the entire platform (GitLab, Cassandra, all 4 gateways,
+**baked** `apps/` set one file at a time: all **100** files under
+`specs/cluster/apps/*.yaml` (95 `Application` + 5 `ApplicationSet` objects,
+counted 2026-10-07) — the entire platform (GitLab, Cassandra, all 4 gateways,
 Matrix/tuwunel, Mastodon/Akkoma, games, media-poisoner, analytics,
-observability, …). That's correct for a real deployment but deliberately too
-much for validating one change: it's slow, heavy, and syncs dozens of
-Applications that a Vault/PKI/Casdoor/Harbor change never touches.
+observability, …). (With `HUGMESH_GITOPS_ROOT_RECURSE=1` it applies the
+repo-recursing root `app-of-apps.yaml` instead; see `specs/cluster/README.md`.)
+That's correct for a real deployment but deliberately too much for validating one
+change: it's slow, heavy, and syncs dozens of Applications that a
+Vault/PKI/Casdoor/Harbor change never touches.
 
 > That count said **81** here and in `bootstrap-kind.sh` until 2026-08-26, and
 > had been wrong long enough that nobody re-derived it. Read it as a magnitude,
@@ -165,11 +160,25 @@ Plus the two things that aren't ArgoCD `Application`s at all:
 `specs/cluster/manifests/local-path` (the `hugmesh-local` StorageClass,
 `kubectl apply -k`).
 
-### Explicitly excluded
+### Added by `KIND_PROFILE=sso` (what `make kind-up` runs)
+
+`make kind-up` passes `KIND_PROFILE=sso`; a bare `bootstrap-kind.sh` defaults to
+`core`. `sso` applies the core set above plus the `SSO_APPS` list in
+`bootstrap-kind.sh`: `00-cassandra`, `00b-cassandra-init`, `06-route-access-db`,
+`20-gateway-fe`, `30-admin-bff-db`, `31-admin-bff-api`, `34-user-bff-db`,
+`37-user-bff-api`, `40-frontend`, `45-social-ui`, `47-user-ui`, `28-federation-db`,
+`29-federation-api`, `15-kyverno`, `14-workload-console-rbac` and
+`05b-casdoor-domains`. It also creates the empty namespaces those Applications
+target (`hugmesh-forum`, `hugmesh-games`, `hugmesh-owncast`, `hugmesh-tube`,
+`hugmesh-image-builds`, `observability`, `velero` and others) so their
+ExternalSecrets and RoleBindings can land.
+
+### Explicitly excluded (from the `core` profile; `sso` adds back what is listed above)
 
 Everything else under `specs/cluster/apps/*.yaml` — most notably:
-`00-cassandra.yaml`, `03-gitlab.yaml`, both gateway apps
-(`20-gateway-be/fe/pki.yaml`, `22-gateway-superadmin.yaml`), `30-tuwunel.yaml`
+`00-cassandra.yaml` (`sso` adds it), `03-gitlab.yaml`, the gateway apps
+(`20-gateway-be/fe/pki.yaml`, `22-gateway-superadmin.yaml`; `sso` adds only
+`20-gateway-fe`), `30-tuwunel.yaml`
 (Matrix), `30-akkoma.yaml` (Mastodon), `50-games.yaml` / `06-casdoor-games.yaml`
 (the entirely separate games realm), `51-media-poisoner.yaml`, the analytics/
 observability/velero stack, `10-ingress-nginx.yaml` (public ingress), and
@@ -197,8 +206,8 @@ real hardware) — none of these were exercised before:
    reads a fine-grained read-only PAT from the offline KEYS USB
    (`KEYS/gitops/repo-token`, same custody as `vault/token`), exports it as
    `ARGOCD_REPO_TOKEN`, and `bootstrap.sh` creates the
-   `hugmesh-generator-repo` repository Secret **before** applying the
-   app-of-apps (failing closed with a clear error if no token is available).
+   `hugmesh-generator-repo` repository Secret **before** applying any
+   Application (failing closed with a clear error if no token is available).
    For a local kind cluster there is no KEYS USB — and no token is needed
    either: the **tokenless local sync path** (see "Repo access" below) mounts
    this checkout read-only into the kind node and serves it to ArgoCD from an
@@ -247,39 +256,15 @@ script picks up the #2 fix before it merges to `main`.
 > carried two "ANALOGY" exemptions for `00b-cassandra-init`'s references to it.
 > Modelling them retired both.
 
-The Harbor registry migration lived on branch `feat/harbor-registry-migration`
-(draft PR #254) — `main` had no Harbor manifests at all. This script fetched
-Harbor's two `Application` objects straight from that branch
-(`git show <branch>:specs/cluster/apps/03a-harbor.yaml` /
-`03b-harbor-provision.yaml`) rather than from the local `main` checkout:
-
-- **`03a-harbor.yaml`** sources a Helm chart (`helm.goharbor.io`), not a git
-  path in this repo — applied as-is, no `targetRevision` rewrite needed.
-- **`03b-harbor-provision.yaml`** sources a git path
-  (`specs/cluster/manifests/harbor`) that only existed on the migration branch,
-  so its `targetRevision: main` was rewritten to
-  `targetRevision: feat/harbor-registry-migration` before applying, so
-  ArgoCD's own controller fetched the *correct* manifest content live from
-  that branch.
-
-Every other curated Application (Vault, ESO, Casdoor, ingress-nginx-internal)
-already exists on `main` unmodified and is applied straight from `main` — no
-override.
-
-**Known gap, by design:** the migration branch *also* adds a
-`harbor-externalsecrets.yaml` (the `harbor-mtls` cert) under
-`specs/cluster/manifests/external-secrets/`, and adds a `harbor` PKI role to
-`manifests/vault-pki/pki-init-configmap.yaml`. Neither of those is overridden
-here — `apps/04-external-secrets-config.yaml` and `apps/06-vault-pki.yaml` are
-applied straight from `main`, which does **not** yet include the Harbor
-additions. That means Harbor's own TLS secret and PKI issuing role won't
-exist after this script runs, so Harbor's `Application` may sit at
-`Progressing`/`Missing` rather than fully `Healthy`. **That's expected** —
-the full end-to-end Harbor validation (once the migration branch's ESO/PKI
-config additions are also in the loop) is a separate next step; this script's
-job is just to get the cluster + curated apps up and confirm they apply
-cleanly. Once #254 merges to `main`, drop `HARBOR_BRANCH` (or set it to
-`main`) and everything converges from one place.
+The migration lived on branch `feat/harbor-registry-migration` (draft PR #254), and
+`main` had no Harbor manifests. The script fetched Harbor's two `Application` objects
+from that branch with `git show <branch>:<path>`. `03a-harbor.yaml` sources a Helm chart
+(`helm.goharbor.io`) and was applied as-is. `03b-harbor-provision.yaml` sources a git
+path (`specs/cluster/manifests/harbor`) that existed only on the branch, so its
+`targetRevision: main` was rewritten to the branch before applying. The migration's ESO
+and PKI additions (`harbor-externalsecrets.yaml`, the `harbor` PKI role) were not
+overridden, so Harbor's `Application` could sit at `Progressing`/`Missing`. That was
+expected until #254 merged.
 
 ## Usage
 
@@ -293,6 +278,7 @@ Env overrides (all optional):
 | Var | Default | Purpose |
 |---|---|---|
 | `KIND_CLUSTER_NAME` | `hugmesh-local` | kind cluster name |
+| `KIND_PROFILE` | `core` for a bare script run; `make kind-up` passes `sso` | `core` = the Vault/PKI/Casdoor/Harbor slice; `sso` = core plus the native-login slice (see "Added by `KIND_PROFILE=sso`") |
 | `HUGMESH_GITOPS_REPO` | `https://github.com/hugmesh/hugmesh-generator.git` | repoURL rewritten into every non-Harbor Application (fork support, mirrors `bootstrap.sh`). **Left at the default with no token, it is replaced by the tokenless local sync URL** (see "Repo access" below). |
 | `HUGMESH_GITOPS_REV` | `main` (`HEAD` on the local sync path) | targetRevision rewritten into every non-Harbor Application. On the tokenless local sync path an unset value defaults to `HEAD` — the branch this checkout has checked out — so ArgoCD syncs what you are actually running. |
 | `HARBOR_BRANCH` | `main` | Per-file **branch pin** for `03a-harbor.yaml` + `03b-harbor-provision.yaml`. Both merged, so the default equals the revision everything else is read at and the pin is INERT: the files come from this checkout's working tree like every other `CORE_APPS` entry. Set it to an unmerged branch and those two go back to the `git show <branch>:<path>` path (`app_pin()`), which is why the machinery is kept. |
@@ -300,6 +286,7 @@ Env overrides (all optional):
 | `KIND_ADDONS` | `metrics-server` | Infra add-on **selection** — comma- or space-separated slugs from the table in "The curation is deliberate" above, or the literal `none`. ⚠ An **empty** value — or one that is nothing but separators (`"   "`, a tab, a bare `,`) — means UNSET and falls back to the default; `none` is the only spelling for "no add-ons" (empty is what `make` and an empty picker produce by accident, and turning metrics-server off must not be reachable by accident). An unknown slug is refused loudly, like `MFA`. |
 | `KIND_ADDONS_PRINT` | *(unset)* | Read-only: `1` resolves the add-on selection, prints it, and exits **without doing any bring-up work** (it says so). Exists so `tests/scripts/test-kind-addon-channel.sh` measures the real parse instead of a copy of it. |
 | `SKIP_EGRESS_PREFLIGHT` | `0` | set `1` to skip the raw-TCP egress preflight that runs right after the cluster is created. That preflight aborts bring-up when the node cannot open a TCP connection to any of the registries this lane pulls from (resolved on the HOST) or to a public anycast address — the 2026-09-10 failure, where a host that had lost docker's netfilter rules ran this lane for two days with no outbound connectivity at all. **Legitimate reasons to set it:** an air-gapped host with every image already side-loaded, or a network that blocks the probe destinations while registry pulls succeed. The failure text names this variable, so you do not have to find it here first. |
+| `SKIP_NODE_DNS_PREFLIGHT` | `0` | set `1` to skip the in-node DNS preflight that runs right after the egress preflight. That preflight runs `getent hosts <name>` **inside** the kind node (`docker exec <cluster>-control-plane`), so it uses the node's own resolver, and aborts the bring-up with exit 1 when the name does not resolve, naming the name and the nameserver lines read from the node's `/etc/resolv.conf` (hugmesh-generator#510: on 2026-09-09 the node's resolver timed out and every pull behind it failed). It is the complement of the raw-TCP egress preflight, which deliberately avoids names. Using this variable prints a warning banner on stderr every run. **Legitimate reason to set it:** an air-gapped host with every image already side-loaded. Tunables: `NODE_DNS_PROBE_NAME` (default `quay.io`), `NODE_DNS_PROBE_ATTEMPTS` (default `3`), `NODE_DNS_PROBE_SLEEP` seconds between attempts (default `2`). |
 | `SKIP_VAULT_BOOTSTRAP` | `0` | set `1` to stop after applying the curated Applications, before the Vault init/unseal/PKI step |
 | `KIND_KV_RESEED` | `0` | `KIND_PROFILE=sso` only. Set `1` to re-mint **every** cluster secret even though Vault KV is already seeded. **DESTRUCTIVE**: existing Postgres/Cassandra volumes keep the old passwords and will reject the new ones — correct only against a fresh cluster or wiped PVCs. |
 | `MFA` | *(unset — off)* | `KIND_PROFILE=sso` only (`make kind-up MFA=1`); refuses `core` loudly. The MFA operational flip (issue #47): appends a `mfa.enabled=true` **helm parameter** to every gateway Application this bootstrap applies, so the kind cluster runs live route-level MFA enforcement while the committed chart/apps stay default-OFF. Flips **only** `app.mfa.enabled` — the privileged floor is not reachable from here. Accepts `1/true/on`; anything else but `0/false/off/empty` fails closed. See `docs/MFA-ROLLOUT.md` §8; wiring gated by `tests/stack/test-mfa-flip-wiring.sh`. |
@@ -370,23 +357,21 @@ unchanged content), detects an already-initialized Vault instead of re-running
 `KIND_PROFILE=sso` — **keeps an already-seeded Vault KV** instead of re-minting
 it (`seed-vault-kv.sh`).
 
-> **That last clause used to be missing, and its absence made the whole claim
-> false.** The KV step ran `scripts/gen-cluster-secrets.sh` with no already-done
-> guard, and that script mints *every* password unconditionally
-> (`openssl rand`) and `vault kv put`s it. The Postgres instances behind those
-> passwords never re-read them — `initdb` only runs on an empty `PGDATA` — so a
-> second `make kind-up` rotated Vault, ESO re-materialized the k8s Secrets, and
-> the BFFs crash-looped on credentials their databases had never seen:
-> `FATAL: password authentication failed for user "userbff"`. Hit live. The
-> "idempotent" step wedged the cluster it claimed to converge.
+> **That last clause used to be missing, and without it the claim was false.** The KV
+> step ran `scripts/gen-cluster-secrets.sh` with no already-done guard. That script mints
+> *every* password unconditionally (`openssl rand`) and `vault kv put`s it. The Postgres
+> instances behind those passwords never re-read them (`initdb` only runs on an empty
+> `PGDATA`), so a second `make kind-up` rotated Vault, ESO re-materialized the k8s
+> Secrets, and the BFFs crash-looped on credentials their databases had never seen:
+> `FATAL: password authentication failed for user "userbff"`. Hit live.
 >
-> `seed-vault-kv.sh` now probes six sentinel KV paths (`casdoor`,
-> `casdoor-apps`, `admin-bff-db`, `user-bff-db`, `route-access-db`,
-> `cassandra-admin`) first: all populated ⇒ skip; none populated ⇒ seed; a
-> *partial* set ⇒ hard failure with both remedies spelled out, because that is
-> an interrupted first run where either choice is silently wrong. Set
-> `KIND_KV_RESEED=1` to re-mint deliberately — **destructive**, correct only
-> against a fresh cluster or wiped PVCs.
+> `seed-vault-kv.sh` now probes seven sentinel KV paths (`casdoor`, `casdoor-apps`,
+> `admin-bff-db`, `user-bff-db`, `route-access-db`, `cassandra-admin`,
+> `cassandra-app-creds`) first. All populated: skip. None populated: seed. A *partial*
+> set: hard failure with both remedies spelled out, because that is an interrupted first
+> run where either choice is silently wrong. Set `KIND_KV_RESEED=1` to re-mint
+> deliberately. That is **destructive** and correct only against a fresh cluster or wiped
+> PVCs.
 
 The identity seed is likewise **verified, not assumed**: after
 `apply-systems-roles.sh` runs, `verify-seeded-identities.sh` re-authenticates
@@ -417,7 +402,7 @@ hook could therefore run the entire seed anonymously — empty cookie jar, every
    would otherwise claim to be *the* cluster default).
 4. Install ArgoCD into namespace `devops`, pinned to
    `kubernetes.io/arch=amd64` — reusing `../bootstrap.sh`'s exact
-   install/re-namespace/pin logic (NOT its root app-of-apps step).
+   install/re-namespace/pin logic (NOT its Application-apply step).
 5. Give ArgoCD repo access ("Repo access" above): register the
    `ARGOCD_REPO_TOKEN` credential if the operator exported one, otherwise
    deploy the in-cluster read-only `git daemon` and rewrite every
@@ -464,6 +449,18 @@ curl -k --resolve scale.hugmesh.net:8443:127.0.0.1  https://scale.hugmesh.net:84
 
 (`--resolve` only affects that one `curl` invocation — no system-wide DNS/hosts
 change required.)
+
+## Reaching the kind lane over Tor (`make kind-tor`)
+
+`make kind-tor` (after `make kind-up`) runs a host tor as you — no sudo — that
+publishes this node's `:8443`/`:8080` host ports as a v3 onion and admits that onion on
+the fe-gateway Ingress with one appended `ingress.extraHosts[N]` helm parameter.
+`make kind-e2e-tor` drives a persona through it; `make kind-tor-down` stops it (the
+onion keys are kept under the gitignored `tests/stack/.run/kind-tor/`). Re-running
+`make kind-up` rewrites the gateway's helm parameters and drops the onion rule, so run
+`make kind-tor` again afterwards (`make kind-tor-status` says when it is missing). Full
+notes, including the certificate and the default-domain fallback:
+[docs/TOR-HIDDEN-SERVICE.md](../../../../docs/TOR-HIDDEN-SERVICE.md#kind-lane--a-host-tor-fronting-the-kind-node-make-kind-tor).
 
 ## Tear down
 

@@ -13,7 +13,7 @@ page grows its own copy of them.
 The widget itself performs no I/O and starts no thread. It renders a
 ``core.mesh_monitor.MonitorSnapshot`` and emits what the operator pressed.
 
-TWO RENDERING RULES that a timed repaint makes load-bearing:
+TWO RENDERING RULES that a timed repaint makes essential:
 
 * Cells are written with ``set_cell`` (``_emulation_common``), which REUSES the item, so
   a 10 s repaint keeps the selection and the scroll anchor under the cursor. Rows are
@@ -32,7 +32,7 @@ page has always mounted — same header tuple, same column indices, same signals
 Replicas column and no per-row scale widget. The Replicas column is appended LAST rather
 than inserted, so ``_MON_COL_OPEN`` and its neighbours keep their values for every caller
 and every test. ``localmesh.py`` needed no change for any of this, and
-``test_localmesh_monitor`` PINS that: flip the default and it goes red.
+``test_localmesh_monitor`` PINS that: flip the default and it fails.
 
 The one thing a non-scaling mount did gain is ``scale_status`` — an empty, hidden
 QLabel that carries INLINE refusals (the no-modals rule). It exists on both mounts
@@ -650,11 +650,11 @@ class MeshMonitorProbe(QtCore.QThread):
     Until then the drift the duplication invites is PINNED rather than hoped about:
     ``test_localmesh_monitor.test_the_two_monitor_probes_have_not_drifted`` compares
     the two classes' constructor signature, signal and both run() paths, so a change to
-    one that the other does not get goes red.
+    one that the other does not get fails.
 
     The shape is identical on purpose — ``mesh_monitor.snapshot()`` is `kind get
     clusters` + ONE `kubectl get … -A -o json` + `docker inspect` + `docker compose
-    ps`, each bounded and together up to ~25 s on a wedged daemon, so it is never
+    ps`, each bounded and together up to ~25 s on a hung daemon, so it is never
     called inline.
 
     Never raises: snapshot() already folds every failure into LaneState.error, and an
@@ -684,7 +684,7 @@ class MeshScaleWorker(QtCore.QThread):
 
     `docker compose up --scale` pulls and starts containers; `kubectl scale` waits on
     the API server. Neither belongs on the thread that has to keep repainting the table
-    that shows the result, and a wedged daemon would freeze the window for the whole
+    that shows the result, and a hung daemon would freeze the window for the whole
     ceiling (``SCALE_TIMEOUT_S``).
     """
     done = Signal(bool, str)

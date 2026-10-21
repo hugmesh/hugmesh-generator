@@ -357,7 +357,7 @@ hugmesh_role_shadow_tokens() {
 # for the roles that shadow nothing, so it is safe to apply to EVERY role-scoped
 # candidate list — and it must be applied to every one of them, because dropping it
 # from any single consumer restores the wrong-image pick there alone.
-# Deliberately NOT applied to the role-BLIND fallbacks (`any image for this
+# Deliberately NOT applied to the fallbacks that ignore the role (`any image for this
 # platform`): those have already given up on the role and must keep returning
 # something.
 hugmesh_role_shadow_filter() {

@@ -8,4 +8,5 @@ resources:
   - deployment.yaml
 
 images:
-  - { name: ollama/ollama, newName: ollama/ollama, newTag: latest }
+  # Same tag as deployment.yaml's image (the test-edge-ai-ollama-pin.sh guard fails when they differ).
+  - { name: ollama/ollama, newName: ollama/ollama, newTag: 0.40.0 }

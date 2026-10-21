@@ -2,7 +2,7 @@
 Qt-free core it fronts (core/phone_wizard.py).
 
 Everything here is HERMETIC: the driver is a STUB shell script pointed at through the
-SNAP_PHONE_WIZARD env seam (the exact pattern tests/menu/build_menu_cmd_test.sh uses
+SNAP_PHONE_WIZARD env override point (the exact pattern tests/menu/build_menu_cmd_test.sh uses
 for _phone_run) — no real adb/fastboot/flash/docker ever runs, and no terminal
 emulator is ever launched. The core assertions prove the contract that matters most:
 the auth key NEVER lands on argv, rides a 0600 --authkey-file, and is shredded after
@@ -55,7 +55,7 @@ exit "${PHONE_STUB_RC:-0}"
 
 
 def _install_stub(tmp_path, monkeypatch, tsv=None):
-    """Write the stub driver + wire the SNAP_PHONE_WIZARD / PHONE_STUB_OUT seams; when
+    """Write the stub driver + wire the SNAP_PHONE_WIZARD / PHONE_STUB_OUT override points; when
     ``tsv`` is given, drop a phone-devices.tsv next to the stub (the catalog source).
     Returns the out-dir the stub writes its captures into."""
     stub = tmp_path / "stub-phone-wizard.sh"
@@ -154,7 +154,7 @@ def test_device_catalog_parses_tabs_and_skips_comments_and_blanks(tmp_path, monk
 
 
 def test_device_catalog_reads_the_real_shipped_catalog():
-    # against the real scripts/phone-devices.tsv (no env seam): a non-empty, well-
+    # against the real scripts/phone-devices.tsv (no env override point): a non-empty, well-
     # formed catalog with the known Pixel codenames present.
     rows = PhoneWizard(GENERATOR_DIR).device_catalog()
     cats = dict(rows)

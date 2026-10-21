@@ -63,6 +63,29 @@ def enable_additional_domains(wiz):
     return page
 
 
+def added_row(dom, i):
+    """Table row index of the i-th ADDED domain on a Domains table host.
+
+    Since #494 a mesh table opens with the mesh's OWN domain as a display-only row 0
+    (``DomainsTableBody.is_own_row``), so "the first domain I added" is no longer row
+    0 there. Cloud tables have no own row (row 0 is a real prefilled row), so this
+    is a plain index on them."""
+    n = -1
+    for r in range(dom.table.rowCount()):
+        if dom.is_own_row(r):
+            continue
+        n += 1
+        if n == i:
+            return r
+    raise AssertionError(f"no added row {i} (rowCount={dom.table.rowCount()})")
+
+
+def added_names(dom, col=0):
+    """The text in column ``col`` of every ADDED row (never the own row)."""
+    return [dom.table.item(r, col).text() for r in range(dom.table.rowCount())
+            if not dom.is_own_row(r)]
+
+
 def enable_configure_users(wiz):
     """Ask 20: pick "Name superusers and domain users myself" on the USERS CHOICE
     screen — the only thing that makes the mesh Users TABLE reachable

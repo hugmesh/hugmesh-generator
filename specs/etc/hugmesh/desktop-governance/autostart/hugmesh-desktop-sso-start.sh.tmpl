@@ -3,7 +3,9 @@
 #   -> /etc/hugmesh/desktop-governance/hugmesh-desktop-sso-start.sh
 #
 # GEN-SSO session-start wrapper, exec'd once per login by the XDG autostart entry
-# (../autostart/hugmesh-desktop-sso.desktop). It chains the two GEN-SSO seams:
+# (../autostart/hugmesh-desktop-sso.desktop). It chains the GEN-SSO seams:
+#   0. PRODUCE the token (hugmesh-sso-token login --if-needed: RFC 8628 device
+#      flow, skipped when a greeter/PAM stage already dropped a valid one)
 #   1. deposit the SSO access token (oidc-token-deposit.sh) into ${XDG_RUNTIME_DIR}
 #   2. forward it as a per-user Flatpak bearer (bearer-forward.sh) to the registry
 # so Plasma/GNOME-Software/Discover sees the admin-curated store as the user.
@@ -27,6 +29,7 @@ set -uo pipefail
 GOV_DIR="/etc/hugmesh/desktop-governance"
 DEPOSIT="${GOV_DIR}/oidc-token-deposit.sh"
 FORWARD="${GOV_DIR}/bearer-forward.sh"
+PRODUCER="${GOV_DIR}/hugmesh-sso-token"
 
 # is_governed(): identical signal to oidc-token-deposit.sh / provision.sh.
 # EXISTENCE, not permission — the wrapper runs as the session user and the mapper
@@ -60,14 +63,21 @@ install_bash_logout_clear() {
     fi
     {
         printf '\n%s\n' "${marker}"
-        printf '[ -x "%s" ] && "%s" --clear >/dev/null 2>&1 || true\n' "${DEPOSIT}" "${DEPOSIT}"
+        printf '[ -x "%s" ] && "%s" --clear-all >/dev/null 2>&1 || true\n' "${DEPOSIT}" "${DEPOSIT}"
         printf '[ -x "%s" ] && "%s" --clear >/dev/null 2>&1 || true\n' "${FORWARD}" "${FORWARD}"
     } >> "${rc}" 2>/dev/null || true
     chmod 0644 "${rc}" 2>/dev/null || true
 }
 install_bash_logout_clear
 
-# 3. Deposit this session's token, then forward it as the per-user bearer.
+# 3. Produce this session's token (device flow; may wait for the user to approve
+#    on another device, up to the code's expiry). A failure or a dismissed prompt
+#    leaves NO token, which is the fail-closed state: empty store, no sudo.
+if [ -x "${PRODUCER}" ]; then
+    "${PRODUCER}" login --if-needed >/dev/null 2>&1 || true
+fi
+
+#    Deposit this session's token, then forward it as the per-user bearer.
 if [ -x "${DEPOSIT}" ]; then
     "${DEPOSIT}" >/dev/null 2>&1 || true
 fi

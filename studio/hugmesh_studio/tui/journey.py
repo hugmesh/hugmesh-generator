@@ -32,6 +32,7 @@ canonical order end to end, finishing with a saveable config.
 """
 from __future__ import annotations
 
+import copy
 import os
 
 from ..core.config import (
@@ -40,11 +41,14 @@ from ..core.config import (
     ImageConfig, ca_cert_error, derive_hostname, describe_ca_cert,
     enter_mesh_defaults, vault_field_error,
 )
+from ..core.domain_services import (ACTION_IMAGE_BUILD, gate_reason,
+                                    services_page_applies)
 from ..core.validate import validate_domain_name
 from ..core.worklist import (
     WorklistConfig, WorklistEntry, derived_hostname, duplicate_hostnames, entry_id,
     resolve_hostname,
 )
+from .local_ai import OPEN_COMMAND as _LOCAL_AI_COMMAND, LocalAIScreen as _LocalAIScreen
 
 __all__ = [
     "PAGE_ORDER", "SIDE_FLOW_SLUGS", "WELCOME_CHOICES", "WELCOME_TARGET",
@@ -168,8 +172,9 @@ PENDING_NOTE = ("this step is not yet ported to the TUI — configure it in the 
 #: DEPLOY) are both hosted here and only the MDM/cloud drivers remain stubbed.
 #: "e2e" (:mod:`.e2e`) is hosted for the same reason: the GUI grew a real page, so a
 #: stub here would be the TUI breaking a promise the menu makes on both faces.
+# "localmesh" is HOSTED since #494 (tui/localmesh.py: its choice screen and its
+# Domains / Domain services steps; the rest of the route is still GUI-only, #519).
 _SIDE_FLOW_STUB = {
-    "localmesh": "Local Docker mesh",
     "phone": "MDM phone",
     "quest": "MDM Quest headset",
     "deploy": "Cloud deploy",
@@ -178,7 +183,6 @@ _SIDE_FLOW_STUB = {
 _PENDING_STEPS = {
     "idp": "Identity provider",
     "hardware": "Hardware",
-    "network": "Network",
     "keyzip": "Admin key-zip",
     "home": "Home",
     "launch": "Launch",
@@ -316,7 +320,7 @@ class PendingStep:
 class IdpScreen:
     """The mesh-node identity-provider step — Casdoor is pickable; the external
     providers need issuer/client-id plumbing the TUI has not ported, so they are
-    LISTED but refused with the reason (the inert-control rule, not a dead end)."""
+    LISTED but refused with the reason (the do-nothing-control rule, not a dead end)."""
 
     slug = "idp"
     title = "Identity provider (mesh nodes)"
@@ -348,7 +352,7 @@ class IdpScreen:
             return
         idp = IDP_CHOICES[idx]
         if idp != "casdoor":
-            # honest refusal, state unchanged — never a silently-inert pick
+            # honest refusal, state unchanged — never a silently ineffective pick
             j.status = (f"{IDP_LABELS[idp]} needs issuer/client-id entry that is "
                         "not yet ported to the TUI — configure it in the GUI "
                         f"(kept: {IDP_LABELS[j.cfg.idp]}).")
@@ -377,7 +381,7 @@ class VaultScreen:
     (``config.vault_field_error``), so what this face accepts is exactly what the
     argv accepts, and the SAME base CA list (``cfg.base_ca_certs``) through the same
     ``config.ca_cert_error``. Every edit is validated BEFORE it is committed and a
-    refusal is an inline status line (never a dead end, never a silently-inert
+    refusal is an inline status line (never a dead end, never a silently ineffective
     command); clearing the internal address clears the external address with it — the
     byte-identity rule the GUI's validatePage applies. Dropping a certificate clears
     every domain that pointed at it, exactly as the GUI does. Enter keeps the current
@@ -633,8 +637,12 @@ class WorklistScreen:
             if not self._checked:
                 j.status = "pick at least one row first (a NUMBER toggles)"
                 return
-            # a row staying checked KEEPS the per-image hostname the System step
-            # gave it (issue #229) — the GUI WorklistPage's keep.hostname rule.
+            # a row staying checked KEEPS everything it carries (#383): the System
+            # step's hostname (issue #229), and board / flavor / desktop / encrypt_root
+            # / package deltas / infra_services / the desktop person — the GUI
+            # WorklistPage's keep-prior-state rule. Copying the loaded entry whole
+            # (rather than naming three fields) means a field added to WorklistEntry
+            # later cannot be silently dropped by a pass through this screen.
             prior = ({e.id: e for e in j.worklist.entries}
                      if j.worklist is not None else {})
             entries = []
@@ -642,9 +650,8 @@ class WorklistScreen:
                 if i not in self._checked:
                     continue
                 keep = prior.get(entry_id(role, platform))
-                entries.append(WorklistEntry(
-                    role=role, platform=platform,
-                    hostname=keep.hostname if keep else ""))
+                entries.append(copy.deepcopy(keep) if keep is not None
+                               else WorklistEntry(role=role, platform=platform))
             j.worklist = WorklistConfig(base=j.cfg, entries=entries)
             j.advance()
             return
@@ -901,6 +908,21 @@ class BuildScreen:
             out.append(f"  users     {len(cfg.users)}")
         themed = "customized" if cfg.login_theme_css() else "shipped defaults"
         out.append(f"  themes    {themed}")
+        if getattr(cfg, "qemu_device_tests", False):
+            # armed by the QEMU screen's build-first arm (#638) — the GUI's Build
+            # screen shows the same fact as its "after the build, run the QEMU
+            # emulated-device tests" checkbox.
+            out.append("  after the build  the QEMU emulated-device tests run")
+        # THE BUILD GATE, said here too (#495, own domain since #631): the TUI does not
+        # dispatch, but the GUI build this screen sends the operator to runs the SAME
+        # seam (gui/pages/launch.py) and will refuse. Saying so now is the difference
+        # between a saved config that builds and one that bounces off the build screen.
+        refusal = gate_reason(cfg, ACTION_IMAGE_BUILD)
+        if refusal:
+            out.append("")
+            out.append("! the GUI build will refuse this configuration: " + refusal)
+            out.append("  Walk the ‘Domain services’ step here (it gives every domain "
+                       "its own page) before saving.")
         out.append("")
         out.append("The TUI does not run builds yet — save this configuration "
                    "and build it in the GUI (python -m hugmesh_studio) or "
@@ -958,8 +980,12 @@ class Journey:
         from .domain_services_step import DomainServicesScreen
         from .domains_step import DomainsScreen
         from .e2e import E2EScreen
+        from .fleet import FleetScreen
+        from .golive import GoLiveScreen
         from .localcloud import LocalCloudScreen
+        from .localmesh import LocalMeshScreen
         from .meshemu import MeshEmuScreen
+        from .network_step import NetworkScreen
         from .qemu import QemuScreen
         self.generator_dir = generator_dir
         self.cfg = cfg or ImageConfig()
@@ -974,20 +1000,27 @@ class Journey:
         self.effect: str | None = None   # "sessions" -> the face runs its review
         self.overlay = None              # e.g. the Themes screen (a screen object)
         screens = [
-            WelcomeScreen(), ModeScreen(),
+            WelcomeScreen(), ModeScreen(), LocalMeshScreen(),
             LocalCloudScreen(), E2EScreen(), QemuScreen(), MeshEmuScreen(),
             IdpScreen(), RoleScreen(), WorklistScreen(),
             YesNoStep("domains_choice", "Domains",
                       "Add more domains beyond the internal Tailscale root "
                       "domain (public go-live domains this mesh serves)?",
                       "additional_domains"),
-            DomainsScreen(), DomainServicesScreen(),
+            NetworkScreen(), DomainsScreen(), DomainServicesScreen(),
             YesNoStep("users_choice", "User accounts",
                       "Configure user accounts for this mesh now?",
                       "configure_users"),
             UsersScreen(), SystemScreen(), BrandingScreen(), VaultScreen(), BuildScreen(),
         ]
         self._screens = {s.slug: s for s in screens}
+        # The two EXPERT entry points (#587, decision 71 = A): the GUI reaches its
+        # fleet window from the Sessions screen / `hugmesh_studio --fleet` and Go-Live
+        # from the tray / `--go-live` — never from a mode card or the positional walk
+        # — so these are registered, entered only by `tui --fleet` / `--go-live`
+        # (app.py), and in neither PAGE_ORDER nor SIDE_FLOW_SLUGS.
+        for extra in (FleetScreen(), GoLiveScreen()):
+            self._screens[extra.slug] = extra
         for slug, title in _SIDE_FLOW_STUB.items():
             self._screens[slug] = PendingSideFlow(slug, title)
         for slug, title in _PENDING_STEPS.items():
@@ -1028,6 +1061,18 @@ class Journey:
         self.effect = None
         line = line.strip()
         screen = self.screen()
+        if line.lower() == _LOCAL_AI_COMMAND:
+            # global, like q: the Local AI screen opens over whatever screen this is, and
+            # q returns to exactly it (an overlay that was open stays open underneath).
+            # On the Local AI screen itself it is a re-read: never a second screen, and
+            # never the word "local-ai" sent to the model as a question.
+            if isinstance(screen, _LocalAIScreen):
+                screen.reopen()
+                return
+            ai = _LocalAIScreen(generator_dir=self.generator_dir)
+            ai._under = self.overlay
+            self.open_overlay(ai)
+            return
         if line.lower() in ("q", "quit", "exit") and not getattr(
                 screen, "wants_q", False):
             self.done = True
@@ -1065,15 +1110,15 @@ class Journey:
                 continue
             if slug in MODE_SKIPPED_PAGES.get(cfg.mode, ()):
                 continue
-            if slug in ("domains", "domain_services") and cfg.mode == "mesh" \
+            if slug == "domains" and cfg.mode == "mesh" \
                     and not cfg.additional_domains:
                 continue
-            # #495: nothing to ask when no domain is named, and skipping is safe
-            # because the gate has nothing to refuse either (the GUI page's
-            # applies_to says the same thing in the same words).
-            if slug == "domain_services" and not [
-                    d for d in (cfg.domains or [])
-                    if (getattr(d, "name", "") or "").strip()]:
+            # #495/#494: the per-domain services step is walked exactly when the
+            # GUI page's applies_to says so — the SAME core predicate, so a mesh's
+            # OWN domain gets its page on the default path here too (#589, decision
+            # 69), and a flow that names no domain skips it (nothing to record,
+            # nothing for the gate to refuse).
+            if slug == "domain_services" and not services_page_applies(cfg):
                 continue
             if slug == "users" and cfg.mode == "mesh" \
                     and not cfg.configure_users:
@@ -1089,7 +1134,7 @@ class Journey:
         # "qemu" is in SIDE_FLOW_SLUGS but is no longer a mode-menu id, so this
         # comprehension only ever CLEARS qemu_selected. The single writer that can
         # RAISE it is E2EScreen's device-lane door (the GUI twin: E2EPage._sync_arm).
-        # Its MEMBERSHIP is still load-bearing and must not be tidied away with the
+        # Its MEMBERSHIP is still relied on and must not be tidied away with the
         # dead comparison: it is what keeps _advance's positional walk off the qemu
         # screen and what lets goto("qemu") resolve. Pinned by
         # test_tui_journey::test_qemu_stays_a_side_flow_slug_even_though_its_card_went.

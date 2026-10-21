@@ -35,14 +35,20 @@ the GUI can render. Its halves are deliberately separate:
     thread; it never raises, and every gather failure downgrades ONE fact to
     unknown rather than failing the whole answer.
 
-HOW A SEED IS CORROBORATED. tests/stack/e2e-password.sh's ``e2e_password_ensure``
-REUSES the file's value whenever the file exists and only generates when it is
-absent, and the seeder's apply hook reconciles every stored password to the value
-it resolved (seed-accounts.sh "rotated N password(s) reconciled"). So the
+HOW A SEED IS CORROBORATED. Every `make stack-seed` STARTS a run: tests/stack/
+e2e-password.sh's ``e2e_password_start_run`` writes a NEW value to the file before
+seeding (unless E2E_PASSWORD is set or E2E_PASSWORD_KEEP=1, which reuse it — the
+Studio's Add user and saved-mesh restore pass KEEP), and the seeder's apply hook
+reconciles every stored password to that value (seed-accounts.sh "rotated N
+password(s) reconciled"). A seed that dies after the rotation leaves the file
+NEWER than the last completed seed — the stale shape below. So the
 identities in a Casdoor volume hold the file's value exactly when a seed
 COMPLETED after the file was last written — and that completion is what the
 Studio's own run log records (``<state>/logs/<stamp>-Bootstrapping-ok.log`` and
-``…-Adding-user-<name>-ok.log``; both verbs run `make stack-seed`). Mtime order
+``…-Adding-user-<name>-ok.log``; both verbs run `make stack-seed`) — and, for a
+seed run from a TERMINAL, the seed stamp seed-e2e.sh writes beside the credentials
+file once its identity leg is verified (``<file>.seeded``: the file's sha256 + a
+time; :func:`seed_stamp`, trusted only while the sha256 still matches). Mtime order
 between the file and the volume proves NOTHING on its own: a second-generation
 mesh (volume recreated, file reused) is valid with an OLDER file, and a file
 regenerated after a seed is stale with a NEWER one. The stale shape seed-e2e.sh
@@ -91,6 +97,7 @@ only the dialog renders those. Nothing here writes anything anywhere.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -397,6 +404,65 @@ def read_values(generator_dir: str | None,
         return {}
 
 
+# ── the seed stamp (tests/stack/e2e-password.sh, e2e_password_stamp_seeded) ────────
+
+#: Suffix of the stamp file the compose seeder writes beside the credentials file.
+SEED_STAMP_SUFFIX = ".seeded"
+
+
+def seed_stamp_path(cred_path: str) -> str:
+    return f"{cred_path}{SEED_STAMP_SUFFIX}" if cred_path else ""
+
+
+def file_sha256(path: str) -> str:
+    """Hex sha256 of a file, "" when it cannot be read (the fingerprint the stamp
+    and the saved-mesh records both use)."""
+    h = hashlib.sha256()
+    try:
+        with open(path, "rb") as fh:
+            for chunk in iter(lambda: fh.read(65536), b""):
+                h.update(chunk)
+    except OSError:
+        return ""
+    return h.hexdigest()
+
+
+def seed_stamp(cred_path: str) -> float | None:
+    """When did a seed last reconcile the identity store to THIS credentials file
+    — or None when nothing vouches for the file as it is now.
+
+    seed-e2e.sh writes ``<file>.seeded`` once its identity leg is verified, holding
+    the sha256 of the credentials file it reconciled to. It is trusted ONLY while
+    that sha256 still equals the file on disk: any rewrite since (another lane's
+    run start, a saved-mesh put-back of a different copy, a hand edit) and the
+    stamp vouches for nothing. This is the record a TERMINAL ``make stack-seed``
+    leaves — the Studio's own run log only covers the seeds it launched. Never
+    raises; the stamp holds a hash and a time, never a value."""
+    stamp = seed_stamp_path(cred_path)
+    if not stamp:
+        return None
+    try:
+        with open(stamp, encoding="utf-8") as fh:
+            kv = _parse_kv(fh.readlines())
+    except (OSError, UnicodeDecodeError):
+        return None
+    want = kv.get("E2E_SEEDED_SHA256", "").lower()
+    if len(want) != 64 or file_sha256(cred_path) != want:
+        return None
+    try:
+        at = float(kv.get("E2E_SEEDED_AT", ""))
+    except ValueError:
+        return None
+    # The stamp's clock is whole seconds and the file's mtime is not; with the
+    # fingerprint matching, the identities hold exactly this file's value, so the
+    # seed counts as no older than the file it reconciled to.
+    try:
+        at = max(at, float(os.stat(cred_path).st_mtime))
+    except OSError:
+        pass
+    return at
+
+
 # ── small pure helpers ────────────────────────────────────────────────────────────
 
 def fmt_time(epoch: float | None) -> str:
@@ -584,7 +650,8 @@ def assess(*, mesh_running: bool | None, volumes_present: bool | None,
       creds            the run-state credentials file (names + mtime, no values)
       casdoor_created  the identity volume's CreatedAt (epoch)
       secrets_mtime    keys-out/vault/secrets.json's mtime (the last MINT)
-      last_seed_ok     when a seeding verb last COMPLETED (this Studio's record)
+      last_seed_ok     when a seed last COMPLETED: this Studio's run log, or the
+                       seed stamp beside the credentials file (seed_stamp)
       lane             "compose" | "kind" | ""
       env_password     E2E_PASSWORD is set in the seeder's env (file not needed)
       kind             what the RUNNING kind Casdoor holds (#539), or None when
@@ -644,10 +711,12 @@ def assess(*, mesh_running: bool | None, volumes_present: bool | None,
                  if creds.exists else
                  (f"Credentials file: none at {creds.path}." if creds.path
                   else "Credentials file: no path."))
-    seed_line = (f"Last completed seed recorded by this Studio: {seeded_at}."
+    seed_line = (f"Last completed seed on record: {seeded_at}."
                  if seeded_at else
-                 "No completed seed is recorded by this Studio (a terminal "
-                 "`make stack-seed` leaves no record here).")
+                 "No completed seed is on record: neither this Studio's run log nor "
+                 "a seed stamp that still matches the credentials file (a terminal "
+                 "`make stack-seed` writes one beside it once its identity leg is "
+                 "verified).")
 
     # (g) A file that exists but cannot be read is the most actionable state there
     # is, whatever the mesh is doing — and nothing below could compare values or
@@ -1023,7 +1092,7 @@ def gather_kind_identities(node, generator_dir: str, cluster: str,
          screen. Its value is compared here and dropped; only the boolean leaves.
 
     ``node`` is duck-typed on ``_probe(cmd, timeout)`` exactly as the compose path
-    is, so a test hands in a fake cluster at this one seam."""
+    is, so a test hands in a fake cluster at this one override point."""
     def run(cmd: list[str], timeout: int) -> tuple[int, str]:
         return _probe_safe(node, cmd, timeout)
 
@@ -1145,7 +1214,7 @@ def probe_credentials(generator_dir: str, env: Mapping[str, str] | None, node, b
 
     ``node`` is a LocalStackNode (``status()``, ``_probe()``, ``seeded_user()``);
     ``boot`` a LocalMeshBootstrap (``secrets_json``, ``superadmin_login()``). Both
-    are duck-typed so a test can hand in a fake at exactly this seam."""
+    are duck-typed so a test can hand in a fake at exactly this override point."""
     checked_at = time.strftime("%Y-%m-%d %H:%M:%S")
     creds = credentials_file(generator_dir, env)
     env_password = bool((env if env is not None else os.environ).get(SHARED_PASSWORD_ENV))
@@ -1238,8 +1307,13 @@ def probe_credentials(generator_dir: str, env: Mapping[str, str] | None, node, b
     except Exception:
         superadmin = ("", "")
 
-    # 6. the last COMPLETED seed this Studio recorded
+    # 6. the last COMPLETED seed: this Studio's own run log, or the seed stamp a
+    #    terminal `make stack-seed` leaves beside the credentials file (trusted only
+    #    while its fingerprint still matches the file on disk — see seed_stamp)
     seed_ok = last_seed_ok(logs_dir if logs_dir is not None else _default_logs_dir())
+    stamped = seed_stamp(creds.path) if creds.readable else None
+    if stamped is not None and (seed_ok is None or stamped > seed_ok):
+        seed_ok = stamped
 
     lane = LANE_COMPOSE if mesh_running else (LANE_KIND if kind_up else LANE_COMPOSE)
     return assess(mesh_running=mesh_running, volumes_present=volumes_present,

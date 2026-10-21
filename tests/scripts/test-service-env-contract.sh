@@ -421,6 +421,57 @@ inject_new_bff_no_source() { inject_new_bff "$1" "$2"; rm -rf "$2/hugmesh-newthi
 expect_catch_fn "a new BFF whose source is absent must be INCOMPLETE, not green" \
   "INCOMPLETE [env-derived]" inject_new_bff_no_source
 
+# (15c) hugmesh-generator#410: hugmesh-actions (Deployment hugmesh-api, image
+#       hugmesh/actions -- NOT a *-bff-api) must be inside the gate, and the external-
+#       integration allowlist must be a NARROW exemption, not a hole. Each control below
+#       plants one defect; all must bite.
+contract_edit() {   # $1 = staged specs/cluster, $2 = python snippet over `c` (the parsed contract)
+  python3 - "$1/service-env-contract.yaml" "$2" <<'PY'
+import sys, yaml
+path, snippet = sys.argv[1], sys.argv[2]
+c = yaml.safe_load(open(path, encoding="utf-8"))
+before = yaml.safe_dump(c)
+exec(snippet)
+assert yaml.safe_dump(c) != before, "injection changed nothing"
+yaml.safe_dump(c, open(path, "w", encoding="utf-8"), sort_keys=False)
+PY
+}
+inject_actions_new_stale_default() {   # a NEW dangling-namespace default in hugmesh-actions
+  python3 - "$2/hugmesh-actions/src/main/resources/application.yml" <<'PY'
+import sys
+p = sys.argv[1]
+s = open(p, encoding="utf-8").read()
+s += "\nplanted:\n  peer:\n    base-url: \"${PLANTED_PEER_URL:http://peer.snapdragon-backend.svc.cluster.local:8080}\"\n"
+open(p, "w", encoding="utf-8").write(s)
+PY
+}
+expect_catch_fn "hugmesh-actions (image hugmesh/actions) is inside the derived gate" \
+  "[env-derived] hugmesh-api/api: none of PLANTED_PEER_URL is set" inject_actions_new_stale_default
+inject_actions_default_moved() {   # the packaged default changes: the exemption must NOT follow it
+  sed -i 's#https://api.github.com}#https://api.stale-github.example.com}#' "$2/hugmesh-actions/src/main/resources/application.yml" \
+    && grep -q 'stale-github.example.com' "$2/hugmesh-actions/src/main/resources/application.yml"
+}
+expect_catch_fn "an allowlisted property whose default moves to another foreign host is caught again" \
+  "[env-derived] hugmesh-api/api: none of GITHUB_API_BASE_URL is set" inject_actions_default_moved
+inject_allowlist_stale() { contract_edit "$1" 'c["externalIntegrations"][0]["property"] = "app.github.no-such-key"'; }
+expect_catch_fn "a stale externalIntegrations entry is itself a failure" \
+  "[external-allowlist]" inject_allowlist_stale
+inject_allowlist_no_reason() { contract_edit "$1" 'c["externalIntegrations"][0]["reason"] = ""'; }
+expect_catch_fn "an externalIntegrations entry without a reason is refused" \
+  "[external-allowlist]" inject_allowlist_no_reason
+inject_allowlist_removed() { contract_edit "$1" 'c["externalIntegrations"] = []'; }
+expect_catch_fn "without the allowlist entry R3 still flags hugmesh-actions (R3 not narrowed)" \
+  "[env-derived] hugmesh-api/api: none of GITHUB_API_BASE_URL is set" inject_allowlist_removed
+inject_allowlist_covers_namespace() {   # allowlisting must never excuse a dangling namespace
+  inject_actions_new_stale_default "$1" "$2"
+  contract_edit "$1" 'c["externalIntegrations"].append({"repo": "hugmesh-actions", "property": "planted.peer.base-url", "default": "http://peer.snapdragon-backend.svc.cluster.local:8080", "reason": "x"})'
+}
+expect_catch_fn "the allowlist cannot excuse a dangling-namespace default" \
+  "[env-derived] hugmesh-api/api: none of PLANTED_PEER_URL is set" inject_allowlist_covers_namespace
+inject_actions_unclassified() { contract_edit "$1" 'c["noAgreementRules"] = [r for r in c["noAgreementRules"] if r["name"] != "hugmesh-api"]'; }
+expect_catch_fn "hugmesh-api (hugmesh-actions) not classified in the contract is caught" \
+  "[coverage] first-party BFF Deployment(s) not classified" inject_actions_unclassified
+
 # (16) THE GUARD'S OWN HONESTY, part 1. If casdoor-init is refactored into a shape the
 #      extractor cannot read, the checker must ABORT (rc 2), not report agreement with
 #      a value it never actually read.
