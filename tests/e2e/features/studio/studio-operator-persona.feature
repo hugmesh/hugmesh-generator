@@ -158,9 +158,17 @@ Feature: The Studio operator persona — the plan's CLI-only checks, executed
   # stdout is the password channel, consumed verbatim by sudo: a supplied
   # password is the ONLY bytes on it, and nothing reaches stderr (a GUI-launched
   # native build folds stderr into the build log).
+  #
+  # These two scenarios test the helper when elevation is ALLOWED. Automation
+  # (and the documented Studio test environment) exports
+  # HUGMESH_STUDIO_NO_ELEVATION=1 for the whole sweep, and under it the helper
+  # refuses every source by design. So each command drops that variable for its
+  # own process only, the same way studio/tests/conftest.py does for the pytest
+  # askpass tests. Nothing here can reach sudo: the command IS the askpass
+  # helper, --askpass-no-gui never opens a dialog, and NC12 has no terminal.
   @interface:cli @issue:generator-303
   Scenario: step 23 — a supplied password is the only thing on stdout, and nothing is on stderr @interface:cli
-    When I run the shell command "HUGMESH_STUDIO_SUDO_PASSWORD='probe123' PYTHONPATH=studio python3 -m hugmesh_studio --askpass-no-gui"
+    When I run the shell command "env -u HUGMESH_STUDIO_NO_ELEVATION HUGMESH_STUDIO_SUDO_PASSWORD='probe123' PYTHONPATH=studio python3 -m hugmesh_studio --askpass-no-gui"
     Then the command succeeded
     And the command stdout is exactly the line "probe123"
     And the command stderr is empty
@@ -170,10 +178,20 @@ Feature: The Studio operator persona — the plan's CLI-only checks, executed
   # stdout, one sentence on stderr.
   @interface:cli @issue:generator-303
   Scenario: NC12 — elevation aborts when no password source answers @interface:cli
-    When I run the shell command "env -u HUGMESH_STUDIO_SUDO_PASSWORD -u HUGMESH_STUDIO_ASKPASS_COMMAND PYTHONPATH=studio python3 -m hugmesh_studio --askpass-no-gui </dev/null"
+    When I run the shell command "env -u HUGMESH_STUDIO_NO_ELEVATION -u HUGMESH_STUDIO_SUDO_PASSWORD -u HUGMESH_STUDIO_ASKPASS_COMMAND PYTHONPATH=studio python3 -m hugmesh_studio --askpass-no-gui </dev/null"
     Then the command exit code was 1
     And the command stdout is empty
     And the command stderr is exactly the line "hugmesh-studio askpass: no password provided (elevation cancelled)"
+
+  # The other side of the same switch: with HUGMESH_STUDIO_NO_ELEVATION set, even
+  # a supplied password is refused, so a test sweep can never hand sudo a password.
+  @interface:cli @issue:generator-303
+  Scenario: NC12 control — HUGMESH_STUDIO_NO_ELEVATION refuses even a supplied password @interface:cli
+    When I run the shell command "HUGMESH_STUDIO_NO_ELEVATION=1 HUGMESH_STUDIO_SUDO_PASSWORD='probe123' PYTHONPATH=studio python3 -m hugmesh_studio --askpass-no-gui </dev/null"
+    Then the command exit code was 1
+    And the command stdout is empty
+    And the command output contains "HUGMESH_STUDIO_NO_ELEVATION is set"
+    And the command output does not contain "probe123"
 
   # ── NC3: a standalone-unaffiliated image may not carry a brand ─────────────
   @interface:cli @issue:generator-303
