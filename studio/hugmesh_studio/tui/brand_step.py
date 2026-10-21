@@ -17,7 +17,13 @@ what each section does about it:
   (``brand_model.STORED_ID_MUST_MATCH``) — it is shown, made from the public name.
 * LOOK is edited here (the look screen over an override-mode ``brand_look.Look``) and
   nowhere else. Where nothing can show a brand's own look (every route but the Docker
-  mesh, D18) the section says so and shows the inherited values.
+  mesh, D18) the section says so and shows the inherited values. THE MESH'S OWN ROW
+  (row 0) edits the superbrand's look itself, in design mode (2026-10-21, the
+  operator: "the theme selection should be there instead of where it is now"): this is
+  the ONLY place a theme is chosen. The old mesh-wide theme panels (the Docker route's
+  "Themes" group, the Branding page's "Web login theme" and the TUI's "t. Themes") are
+  gone; a saved configuration's ``login_*`` values still load, because the look model
+  reads them.
 * SERVICES is the existing screen, untouched, and stays what is on screen when the step
   opens, so every command that worked before still does.
 * WAYS is a read-only summary with one button in the window; the Go-Live wizard
@@ -25,7 +31,8 @@ what each section does about it:
   ``brand_model.set_ways``.
 
 THE SUPERBRAND'S OWN ROW (the mesh's own domain) gets the same screen, labelled as the
-superbrand: its identity and look are read-only mirrors of the superbrand step.
+superbrand: its identity is a read-only mirror of the superbrand step, and its look is
+the superbrand's own look, edited here.
 
 Qt-free, like everything in this package; the window's tabs call the same functions.
 """
@@ -48,7 +55,12 @@ SECTION_SERVICES = 3
 #: Where each read-only mirror says the setting is changed.
 IDENTITY_HOME = "change it in the brands table (the Domains step)"
 SUPERBRAND_HOME = "change it in the superbrand step"
-LOOK_HOME = "change it in the superbrand step"
+LOOK_HOME = ("this is the mesh's own look: every domain starts from it, and this tab is "
+             "the one place it is chosen")
+#: Where the superbrand step points for the look (it no longer edits it).
+LOOK_POINTER = ("the look (colours, font, shape, pictures, header and footer) is set on "
+                "the ‘Look’ tab of this mesh's own domain, on the ‘Domain services’ "
+                "step")
 WAYS_BUTTON = "Set up ways to reach this brand"
 WAYS_HOME = ("the Go-Live wizard is where these are chosen: run it with the "
              "--go-live option, or press ‘" + WAYS_BUTTON + "’ in the window")
@@ -107,12 +119,14 @@ class BrandView:
 
     # ── 2. Look ───────────────────────────────────────────────────────────────────
     def look_model(self) -> brand_look.Look | None:
-        """The brand's override model (None for the superbrand's own row: its look is
-        the superbrand step's). One model per brand for the session, so the window and
-        the text screen edit the same object."""
-        if self.own:
-            return None
+        """The brand's override model; for the superbrand's own row, the superbrand's
+        look itself (design mode — the session's own model, which the route binds to
+        wherever it keeps the look: the image config's ``login_*`` fields, the Docker
+        mesh's record and stylesheet). One model per brand for the session, so the
+        window and the text screen edit the same object."""
         s = self.session
+        if self.own:
+            return s.look
         cache = s.__dict__.setdefault("_brand_looks", {})
         have = cache.get(self.name)
         base = s.look.effective()
@@ -128,9 +142,18 @@ class BrandView:
         return have
 
     def commit_look(self) -> None:
-        """Write the brand's overrides to its row (only what the record holds)."""
+        """Write the brand's overrides to its row (only what the record holds). For the
+        superbrand's own row the edit is already in the session's look model (the route
+        reads it from there); the session is marked changed when the look the record
+        holds differs from the one last written, so leaving the step saves it."""
         m = self.look_model()
-        if m is None or self.row is None:
+        if m is None:
+            return
+        if self.own:
+            if self.session.record_look() != dict(self.session.sb.look or {}):
+                self.session.touched = True
+            return
+        if self.row is None:
             return
         own = {k: v for k, v in m.record().items()
                if v != "" and k in brand_model.LOOK_KEYS}
@@ -147,11 +170,10 @@ class BrandView:
 
     def look_lines(self, route: str) -> list[str]:
         if self.own:
-            eff = brand_model.effective_look(
-                brand_model.BrandRecord(superbrand=self.session.record().superbrand))
-            out = ["The superbrand's own look — every brand starts from it.", ""]
-            for k, (v, _src) in eff.items():
-                out.append(f"   {k:<12}{v or '(shipped)'}")
+            eff = self.session.look.effective()
+            out = ["The mesh's own look — every domain starts from it.", ""]
+            for k in brand_model.LOOK_KEYS:
+                out.append(f"   {k:<12}{eff.get(k) or '(shipped)'}")
             out += ["", LOOK_HOME]
             return out
         out = []

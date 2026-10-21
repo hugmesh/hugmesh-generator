@@ -120,12 +120,14 @@ from ..qt import Qt, QtCore, QtGui, QtWidgets, Signal
 from .. import console
 from ..choice_cards import ChoiceCard, ChoiceCardGroup
 from ..flow_layout import flow_box
-from ...core import plain_words, saved_meshes, vaults
+from ...core import brand_look, plain_words, saved_meshes, vaults
 from ...core.config import IDP_CHOICES, IDP_LABELS, github_org_problem, idp_effective_jwks
-from ...core.config import DOMAIN_IDP_OWN, DOMAIN_IDP_SUPERDOMAIN, Domain
+from ...core.config import (DOMAIN_IDP_OWN, DOMAIN_IDP_SUPERDOMAIN,
+                            OPTIONAL_SERVICES_CHOICES, Domain)
 from ...core.domain_services import ACTION_MESH_START, gate_reason, record_reviewed
 from ...core.local_mesh_domains import (
-    DOMAIN_NAME_RE, LOCAL_MESH_REMEDY, SAVED_MESH_REMEDY, LocalMeshDomains,
+    DOCKER_SERVICES_NOTE, DOMAIN_NAME_RE, LOCAL_MESH_REMEDY, SAVED_MESH_REMEDY,
+    LocalMeshDomains,
     added_row_problems, bootstrap_domain_records, domains_from_bootstrap,
     own_idp_names, record_walk, reviewed_record_names)
 from ...core.e2e_catalogue import Catalogue, load_catalogue
@@ -143,7 +145,8 @@ from ...core.local_stack_node import (
 from ...core import mesh_monitor
 from ...core.local_services import (
     KIND_ADDONS, UNAVAILABLE_LOCALLY, by_slug as local_service, default_selection,
-    describe as local_describe, kind_addon_slugs, local_groups, local_slugs)
+    describe as local_describe, domain_local_slugs, kind_addon_slugs, local_groups,
+    local_slugs, mesh_plane_slugs)
 from ...core.progress_parse import ProgressParser
 from ...core import credentials_truth
 from ...core import kind_seed
@@ -161,7 +164,6 @@ from ._add_user_dialog import AddUserDialog
 from ._local_agent_widget import LocalAgentWidget, context_from_page
 from ._code_folders_widget import CodeFoldersWidget
 from ._saved_meshes_widget import SavedMeshProbe, SavedMeshesWidget
-from ._logintheme import LoginThemeGroup
 from ._scroll import scrollable
 from ._widgets import _row, collapsible, label_finish_as_exit, own_probe, probe_running
 from .brand_picker import BrandPicker
@@ -243,10 +245,13 @@ def _grey_note(text: str) -> "QtWidgets.QLabel":
     return lbl
 
 
-#: What LoginThemeGroup.load() reads when a saved-mesh record carries no theme
-#: inputs: the shipped brand. Keys are ImageConfig's login_* names (the group's
-#: own load/commit contract) — ALL seventeen that commit() writes, because
-#: apply_bootstrap filters the record's form against this dict. Listing only
+#: What a saved-mesh record's theme ``form`` holds when it carries no theme inputs:
+#: the shipped brand. Keys are ImageConfig's login_* names (the old Themes group's
+#: load/commit contract, kept so every saved record still loads) — ALL seventeen,
+#: because apply_bootstrap filters the record's form against this dict. Since
+#: 2026-10-21 the form ALSO carries ``look`` (the mesh's whole look, as the brand
+#: record writes it: shape, decoration and pictures included) and the Themes group is
+#: gone: the look is chosen on the Look tab of the mesh's own domain. Listing only
 #: the eight colour/font keys silently threw away the nine web-chrome inputs on
 #: every Load/Restore (header hidden, header/footer colours, background effect),
 #: derived a different login page, and then reported "every field applied".
@@ -262,6 +267,27 @@ _THEME_FORM_DEFAULTS = {
     "login_footer_bg": "", "login_footer_text": "",
     "login_bg_effect": "",
 }
+
+
+def _migrated_services(cfg: LocalMeshBootstrapConfig) -> LocalMeshBootstrapConfig:
+    """A copy of ``cfg`` whose domain services are on its domain rows: the domain
+    slugs of ``services`` move into the rows (``_migrate_domain_services``, the loader's
+    own migration), and a record with no selection but the legacy ``social`` flag (a
+    CLI-made record) gives Matrix to the mesh's own domain the same way. Mesh-plane
+    slugs and ``services is None`` ("no picker was used") are kept as they are."""
+    out = dataclasses.replace(cfg, domains=tuple(dict(r) for r in (cfg.domains or ())))
+    if out.services is None and out.social:
+        out.services = ("tuwunel",)
+        out._migrate_domain_services()
+        out.services = None if not out.services else out.services
+    else:
+        out._migrate_domain_services()
+    return out
+
+
+#: The Docker route's mesh-wide services step, renamed when the "Local services" pick
+#: was retired (2026-10-21): what is left on it is the mesh's own infrastructure.
+MESH_INFRA_TITLE = "The mesh's own infrastructure (chosen once for the whole mesh)"
 
 
 _IDP_JWKS_HINTS = {
@@ -1077,8 +1103,9 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         lay.addWidget(self.superbrand_design)
         self.brand_effect_note = QtWidgets.QLabel(
             "What this saves: the design goes into the mesh's brand record and the plan on "
-            "the review step. This Docker mesh still takes its web login look from the ‘Web login "
-            "theme’ on the Services step until the start path reads the record.")
+            "the review step. Its look is chosen on the ‘Look’ tab of this mesh's own "
+            "domain (the ‘Domain services’ step), and that look is what this Docker "
+            "mesh's sign-in page shows.")
         self.brand_effect_note.setObjectName("brand_effect_note")
         self.brand_effect_note.setWordWrap(True)
         self.brand_effect_note.setStyleSheet("color: gray;")
@@ -1132,10 +1159,10 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         # says so rather than leaving the column looking broken.
         self.domain_services = DomainServicesWidget(
             scope_cfg=None, entries=None,
-            lane_note=("ON THIS LOCAL DOCKER MESH: the per-domain selection is "
-                       "recorded with the mesh (and shown in the plan) — it is NOT "
-                       "what decides which compose profiles come up; the mesh-wide "
-                       "‘Services’ step two steps on is."))
+            lane_note=DOCKER_SERVICES_NOTE,
+            # each domain's Brand settings tabs (Identity, Look, Services, Ways) over
+            # this route's superbrand session; row 0's Look tab is the mesh's own look
+            brand_session=self.brand_session, route="docker")
         lay.addWidget(self.domain_services)
         return w
 
@@ -1344,8 +1371,19 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         # and a choice-card group would state a mutual exclusion that does not exist.
         # The catalogue, the grouping, the descriptions and the shipped defaults all
         # come from core (local_services / config) — this loop builds widgets only.
-        svc_box = QtWidgets.QGroupBox("Services to run on this local mesh")
+        # THE MESH'S OWN INFRASTRUCTURE, NOT "LOCAL SERVICES" (2026-10-21). The
+        # operator: "The local services option doesn't make any sense, we should be
+        # using the per domain services configuration so please remove it." A
+        # domain's services (Matrix, the forums, the games, video, the character
+        # tools) are chosen on that domain's own page (the Domain services step) and
+        # the mesh runs every one any domain chose (LocalMeshBootstrapConfig.
+        # effective_services). What is left here is chosen ONCE for the whole mesh:
+        # Tor, Anubis, the wiki, the AI services and the egress VPN
+        # (local_services.mesh_plane_slugs), plus the read-only DevOps-lane rows.
+        svc_box = QtWidgets.QGroupBox(MESH_INFRA_TITLE)
+        svc_box.setObjectName("mesh_infra_box")
         svl = QtWidgets.QVBoxLayout(svc_box)
+        svl.addWidget(_grey_note(DOCKER_SERVICES_NOTE))
         svl.addWidget(_grey_note(
             "Two mechanisms you can tick, one list. COMPOSE PROFILE rows start or "
             "stop containers, so they take effect at bring-up and changing one later "
@@ -1385,7 +1423,12 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         self._svc_items: dict[str, QtWidgets.QTreeWidgetItem] = {}
         # The VPN conf backing the egress-vpn checkbox ("" = none picked yet).
         self._egress_vpn_conf = ""
-        for _title, _slugs in local_groups():
+        _per_domain = set(domain_local_slugs()) | set(OPTIONAL_SERVICES_CHOICES)
+        for _title, _all_slugs in local_groups():
+            # a slug a DOMAIN chooses is never a row here (it is on the domain's page)
+            _slugs = tuple(x for x in _all_slugs if x not in _per_domain)
+            if not _slugs:
+                continue
             gitem = QtWidgets.QTreeWidgetItem(self.services_table)
             gitem.setText(_LS_COL_NAME, _title)
             _gf = gitem.font(_LS_COL_NAME)
@@ -1449,7 +1492,9 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         # Aliases of the very same widget — never a second checkbox that could disagree
         # with its row, which is exactly the "one service, two spellings" bug the node
         # wizard's services table was rebuilt to kill.
-        self.social = self.service_boxes["tuwunel"]
+        # ``social`` (the Matrix profile) is no longer a box on this page: Matrix is a
+        # domain's service now, and the profile comes up when any domain chose it
+        # (``domain_social``). ``with_tor`` stays: Tor is the mesh's own.
         self.with_tor = self.service_boxes["tor"]
         # egress-vpn status line: which conf backs the checkbox, or why it was
         # unchecked. Inline, never a message box (no-modal rule).
@@ -1474,15 +1519,11 @@ class LocalMeshPage(QtWidgets.QWizardPage):
             "login-ui image build fails loudly.")
         lay.addWidget(_row("Web login languages", self.web_locales))
 
-        # Web login THEME — the same shared group BrandingPage hosts (one
-        # implementation, two frames): this flow is terminal at this page, so
-        # BrandingPage is unreachable from it. Collapsed: a from-scratch bring-up
-        # usually starts with the shipped brand.
-        self.login_theme = LoginThemeGroup()
-        # "Themes", not "Web login theme" (#50 item 2): label-only rename — the
-        # persisted login_* config keys keep their names so old sessions load.
-        lay.addWidget(collapsible("Themes (colours, fonts + web chrome)",
-                                  self.login_theme, expanded=False))
+        # NO THEME PANEL HERE ANY MORE (2026-10-21, the operator: "the theme selection
+        # should be there instead of where it is now" — in each domain's section). The
+        # look is edited on the Look tab of the mesh's own domain (row 0) on the
+        # Domain services step, over the superbrand session's look model; the start
+        # reads its stylesheet from there (``look_css_and_error``).
         return w
 
     def _build_idp_section(self) -> QtWidgets.QWidget:
@@ -1959,10 +2000,9 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         for _svc_box in self.service_boxes.values():
             _svc_box.toggled.connect(self._refresh_plan)
         self.web_locales.textChanged.connect(self._refresh_plan)
-        self.login_theme.primary.textChanged.connect(self._refresh_plan)
-        self.login_theme.secondary.textChanged.connect(self._refresh_plan)
-        self.login_theme.font_preset.currentIndexChanged.connect(self._refresh_plan)
-        self.login_theme.font_file.textChanged.connect(self._refresh_plan)
+        # a look edit on a domain's Look tab (row 0's is the mesh's own look): written
+        # onto the carrier like a design edit, then the plan follows
+        self.domain_services.brand_tabs.look_changed.connect(self._look_tab_changed)
         self.idp.currentIndexChanged.connect(self._refresh_plan)
         self.idp_issuer.textChanged.connect(self._refresh_plan)
         self.idp_client_id.textChanged.connect(self._refresh_plan)
@@ -2088,8 +2128,17 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         # BEFORE its `clicked` handler could open the conf dialog. The pending
         # conf-less moment is covered by bootstrap.validate()'s blocking problem
         # (shown in the plan) and _enforce_egress_conf at the real exits.
+        # The MESH-PLANE slugs only: a domain's services are on its rows now
+        # (effective_services is the union), so this never names one.
         return tuple(s for s in local_slugs()
-                     if self.service_boxes[s].isChecked())
+                     if s in self.service_boxes and self.service_boxes[s].isChecked())
+
+    def domain_social(self) -> bool:
+        """Whether any domain of this mesh chose Matrix (``tuwunel``), the service
+        behind the ``social`` compose profile. Matrix is a domain's service since the
+        "Local services" pick was retired; the mesh runs it when any domain chose it."""
+        return any("tuwunel" in (d.optional_services or ())
+                   for d in (self.mesh_domains.domains or ()))
 
     # ── the superbrand drop-down and its design (#654, D8) ───────────────────────
     def _brand_sync_in(self) -> None:
@@ -2284,9 +2333,11 @@ class LocalMeshPage(QtWidgets.QWizardPage):
             env=("prod" if self.env_prod.isChecked() else "test"),
             superadmin_username=self.superadmin.text().strip() or "superadmin",
             # social/with_tor stay because they are what LocalStackNode turns into
-            # SOCIAL=/TOR=; they read the SAME two widgets the services table hosts,
-            # so they can never disagree with the selection below.
-            social=self.social.isChecked(),
+            # SOCIAL=/TOR= on a record with no selection. ``with_tor`` reads the Tor box
+            # the infrastructure table hosts; ``social`` says whether any DOMAIN chose
+            # Matrix (the per-domain choice is what runs, effective_services), so
+            # neither can disagree with what the mesh starts.
+            social=self.domain_social(),
             with_tor=self.with_tor.isChecked(),
             services=self.collect_services(),
             egress_vpn_conf=self._egress_vpn_conf,
@@ -2300,10 +2351,11 @@ class LocalMeshPage(QtWidgets.QWizardPage):
             source_mode=("existing" if self.src_existing.isChecked() else "clone"),
             source_dir=self.src_dir.text().strip(),
             web_locales=_parse_web_locales(self.web_locales.text()),
-            # "" on invalid input, with the reason in error_text() — the verb
-            # handlers refuse to launch on it, so a typo can never silently ship
+            # The mesh's own look (row 0's Look tab, the superbrand's look model):
+            # "" on an invalid look, with the reason in look_css_and_error() — the
+            # verb handlers refuse to launch on it, so a typo can never silently ship
             # an unthemed stack the operator believed was themed.
-            login_theme_css=self.login_theme.compose_css(),
+            login_theme_css=self.look_css_and_error()[0],
             # I6.6 identity provider — casdoor default carries EMPTY endpoint
             # fields (byte-identical env); validate() fail-closes the combinations.
             idp=self.selected_idp(),
@@ -2332,13 +2384,89 @@ class LocalMeshPage(QtWidgets.QWizardPage):
             domain_services_reviewed=reviewed_record_names(self.mesh_domains, records),
         )
 
+    # ── the mesh's own look (row 0's Look tab) ──────────────────────────────────────
+    def brand_session(self):
+        """The superbrand session of this route (``tui.superbrand_step.session_for``):
+        the same object the drop-down, the design and every domain's tabs drive. None
+        only if it cannot be made, which no slot may raise over."""
+        try:
+            return session_for(self, "docker", (self._brand_boot, self.mesh_domains),
+                               self.generator_dir)
+        except Exception:                       # noqa: BLE001 — called from slots
+            return None
+
+    def mesh_look(self):
+        """The mesh's own look model (``brand_look.Look``, design mode): what row 0's
+        Look tab edits and what the start turns into the sign-in page's stylesheet."""
+        s = self.brand_session()
+        return s.look if s is not None else None
+
+    def look_css_and_error(self) -> tuple[str, str]:
+        """``(stylesheet, why it cannot be made)``. The stylesheet is "" when the look
+        deviates from nothing (the shipped page) or cannot be made; the reason is ""
+        unless it cannot. Never raises."""
+        look = self.mesh_look()
+        if look is None:
+            return "", ""
+        try:
+            needs = look.requirements()
+            if needs:
+                return "", needs[0]
+            return look.css(), ""
+        except brand_look.LookError as exc:
+            return "", str(exc)
+        except Exception as exc:                # noqa: BLE001
+            return "", f"the look could not be turned into a stylesheet: {exc}"
+
+    def _look_tab_changed(self) -> None:
+        """A Look tab edit: the same write a design edit makes (the session commits
+        its superbrand block onto the carrier), then the plan. Never raises."""
+        try:
+            if self.superbrand_design.session is not self.brand_session():
+                self.mount_brand()
+            self._brand_changed()
+            self._refresh_plan()
+        except Exception:                       # noqa: BLE001 — a slot must not raise
+            self._brand_swallow("_look_tab_changed")
+
     def theme_form(self) -> dict:
-        """The Themes group's INPUTS (colours, preset, mode, font, chrome) — what a
-        saved-mesh record needs to re-populate widgets whose config field is
-        DERIVED: ``login_theme_css`` is their output and is not invertible."""
-        ns = types.SimpleNamespace()
-        self.login_theme.commit(ns)
-        return dict(vars(ns))
+        """The look's INPUTS — what a saved-mesh record needs to re-populate the look
+        whose config field is DERIVED (``login_theme_css`` is its output and is not
+        invertible): the seventeen ``login_*`` values every older record carries, plus
+        ``look``, the whole look as the brand record writes it."""
+        look = self.mesh_look()
+        eff = look.effective() if look is not None else brand_look.effective_look({})
+        form = {attr: eff[f] for f, attr in brand_look.CFG_FIELDS.items()
+                if attr in _THEME_FORM_DEFAULTS}
+        if look is not None:
+            form["look"] = dict(look.record())
+        return form
+
+    def _apply_look_form(self, cfg: LocalMeshBootstrapConfig, form: dict | None,
+                         missing: list[str]) -> None:
+        """Put a saved record's look into the session's look model. A form with
+        ``look`` gives the whole look; an older form's ``login_*`` inputs are laid over
+        the superbrand block's own look; no form but a stylesheet cannot be inverted,
+        so the look stays as the record's superbrand block says and the field is
+        reported."""
+        look_in = None
+        if form and isinstance(form.get("look"), dict):
+            look_in = dict(form["look"])
+        elif form:
+            ns = dict(_THEME_FORM_DEFAULTS)
+            ns.update({k: v for k, v in form.items() if k in ns})
+            from_form = brand_look.look_from_cfg(types.SimpleNamespace(**ns))
+            look_in = dict((cfg.superbrand or {}).get("look") or {})
+            look_in.update({f: from_form[f] for f, attr in brand_look.CFG_FIELDS.items()
+                            if attr in _THEME_FORM_DEFAULTS})
+        elif cfg.login_theme_css.strip():
+            missing.append("login_theme_css")
+        s = self.brand_session()
+        if look_in is None or s is None:
+            return
+        s.look.own = brand_look.normalise(look_in)
+        s.look.armed = None
+        s.touched = True
 
     def apply_bootstrap(self, cfg: LocalMeshBootstrapConfig,
                         form: dict | None = None) -> list[str]:
@@ -2368,9 +2496,15 @@ class LocalMeshPage(QtWidgets.QWizardPage):
                     and not os.path.isdir(cfg.source_dir)):
                 missing.append("source_dir")
             self.superadmin.setText(cfg.superadmin_username or "superadmin")
-            # The two legacy booleans first (a CLI-made record with no picker),
-            # then the explicit selection — which is authoritative — wins.
-            self.social.setChecked(bool(cfg.social))
+            # A record's DOMAIN services belong on its domain rows (the retired
+            # "Local services" pick, 2026-10-21): a selection that still names them in
+            # ``services``, and a CLI-made record's legacy Matrix flag, move onto the
+            # rows here exactly as LocalMeshBootstrapConfig.from_dict moves a saved
+            # one — so the mesh starts what the record started, said once. Done on a
+            # COPY: the caller's record object is not this page's to change.
+            cfg = _migrated_services(cfg)
+            # The legacy Tor boolean first (a CLI-made record with no picker), then the
+            # explicit selection — which is authoritative — wins.
             self.with_tor.setChecked(bool(cfg.with_tor))
             if cfg.services is None:
                 missing.append("services")
@@ -2398,15 +2532,11 @@ class LocalMeshPage(QtWidgets.QWizardPage):
                         f"{os.path.basename(cfg.egress_vpn_conf)} ({kind}).")
                 self.egress_note.setVisible(True)
             self.web_locales.setText(", ".join(cfg.web_locales))
-            # THEME: the record's `form` carries the group's inputs; without them a
-            # non-empty derived css cannot be reproduced, so the group is reset to
-            # the shipped brand and the field is reported rather than half-applied.
-            theme_ns = dict(_THEME_FORM_DEFAULTS)
-            if form:
-                theme_ns.update({k: v for k, v in form.items() if k in theme_ns})
-            elif cfg.login_theme_css.strip():
-                missing.append("login_theme_css")
-            self.login_theme.load(types.SimpleNamespace(**theme_ns))
+            # THE LOOK: the record's `form` carries its inputs; without them a
+            # non-empty derived css cannot be reproduced, so the look stays what the
+            # record's superbrand block says and the field is reported rather than
+            # half-applied.
+            self._apply_look_form(cfg, form, missing)
             idx = self.idp.findData(cfg.idp if cfg.idp in IDP_CHOICES else "casdoor")
             self.idp.setCurrentIndex(max(0, idx))
             self.idp_issuer.setText(cfg.idp_issuer)
@@ -3220,9 +3350,11 @@ class LocalMeshPage(QtWidgets.QWizardPage):
             self.status.setText(refusal)
             return
         self.boot = LocalMeshBootstrap(self.generator_dir, self.collect_bootstrap())
-        if self.login_theme.error_text():
+        look_error = self.look_css_and_error()[1]
+        if look_error:
             self.status.setText(
-                "Cannot start: themes: " + self.login_theme.error_text())
+                "Cannot start: the look (the ‘Look’ tab of this mesh's own domain): "
+                + look_error)
             return
         problems = self.boot.validate()
         if problems:
@@ -3607,8 +3739,8 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         "source_dir": "source tree (the recorded directory no longer exists)",
         "egress_vpn_conf": "egress VPN config (the file moved or is invalid — the "
                            "egress-vpn row was unticked)",
-        "login_theme_css": "theme (the record carries only the derived CSS — the "
-                           "Themes group was reset to the shipped brand)",
+        "login_theme_css": "look (the record carries only the derived stylesheet — "
+                           "the look stays what the record's brand says)",
         "out_dir": "out_dir (this page has no control for it)",
         "node_name": "node_name (this page has no control for it)",
     }
@@ -3679,9 +3811,10 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         # from the form: a prod restore needs the auth key the operator typed.
         cfg.auth_key = self.boot_auth_key.text().strip()
         self.boot = LocalMeshBootstrap(self.generator_dir, cfg)
-        if self.login_theme.error_text():
-            self.status.setText("Cannot start the saved mesh: themes: "
-                                + self.login_theme.error_text())
+        look_error = self.look_css_and_error()[1]
+        if look_error:
+            self.status.setText("Cannot start the saved mesh: the look (the ‘Look’ "
+                                "tab of this mesh's own domain): " + look_error)
             return
         problems = self.boot.validate()
         if problems:
@@ -4535,9 +4668,8 @@ class LocalMeshDomainServicesPage(_LocalMeshStep):
     # to, where the earlier 177-character sentence wrapped to three). The rest of what
     # it said is on the page itself (the lane note above the tables, and the ‘not
     # domain-scoped’ table's own heading).
-    SUBTITLE = ("Each domain's optional services, one domain per page, this mesh's own "
-                "first. Choices that bind the whole mesh are on the ‘Services’ step, "
-                "two steps on.")
+    SUBTITLE = ("Each domain's settings and services, one domain per page, this "
+                "mesh's own first. What you tick here is what the mesh runs.")
 
     def initializePage(self):
         super().initializePage()
@@ -4569,11 +4701,15 @@ class LocalMeshSourcePage(_LocalMeshStep):
 
 
 class LocalMeshServicesPage(_LocalMeshStep):
+    """The mesh's own infrastructure (Tor, Anubis, the wiki, the AI services, the egress
+    VPN) and its web login languages. The mesh-wide "Local services" pick that used to
+    be this step was retired on 2026-10-21: a domain's services are chosen on its own
+    page, and the look of every domain on its page's Look tab."""
     SECTION = "services"
-    TITLE = "Services"
-    SUBTITLE = ("Which services this mesh runs, and how its web login looks. A row "
-                "the local docker stack has no mechanism for is greyed with the "
-                "reason instead of offered as a toggle that would change nothing.")
+    TITLE = "Mesh infrastructure"
+    SUBTITLE = ("What runs once for the whole mesh: Tor, Anubis, the wiki, the AI "
+                "services and the egress VPN. Each domain's own services are on its "
+                "page.")
 
 
 class LocalMeshIdpPage(_LocalMeshStep):

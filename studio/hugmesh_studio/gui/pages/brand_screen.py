@@ -14,8 +14,9 @@ EACH SETTING HAS EXACTLY ONE EDITING HOME (the rule the screen is built on):
 * Look is edited here: a :class:`~._lookeditor.LookEditor` over the brand's override model
   (every setting says 'inherited from the superbrand' or 'this brand's own'; 'Use the
   superbrand's value' is an inline second click). On every route but the Docker mesh the
-  editor draws disabled with the reason (D18). The superbrand's own row shows its look
-  read-only: it is edited on the superbrand step.
+  editor draws disabled with the reason (D18). The mesh's own row (row 0) edits the
+  superbrand's look itself, in design mode, on every route: this tab is the ONE place a
+  theme is chosen (2026-10-21; the old mesh-wide theme panels are gone).
 * Services is the existing services body, unchanged, and the tab the screen opens on.
 * Ways to reach it is a read-only summary and ONE button, 'Set up ways to reach this
   brand'; the Go-Live wizard is where a way is chosen (``brand_model.set_ways``).
@@ -47,6 +48,12 @@ TAB_TITLES = tuple(t for _n, t in brand_step.SECTIONS)
 _MUTED = "color: gray;"
 
 
+def own_look_note() -> str:
+    """The Look tab's line on the mesh's own row (brand_step.LOOK_HOME as a sentence)."""
+    home = brand_step.LOOK_HOME
+    return home[:1].upper() + home[1:] + "."
+
+
 def _wrapped(text: str = "", *, name: str = "", muted: bool = False) -> QtWidgets.QLabel:
     lab = QtWidgets.QLabel(text)
     lab.setWordWrap(True)
@@ -66,6 +73,8 @@ class BrandSettingsTabs(QtCore.QObject):
     #: the 'Set up ways to reach this brand' click, with the brand's name
     ways_requested = Signal(str)
     currentChanged = Signal(int)
+    #: a look edit was written (the host refreshes what reads the look: the plan)
+    look_changed = Signal()
 
     def __init__(self, route: str = "image", parent=None):
         super().__init__(parent)
@@ -260,17 +269,20 @@ class BrandSettingsTabs(QtCore.QObject):
                 self.look_editor.setVisible(False)
             return
         model = v.look_model()
-        if model is None:                       # the superbrand's own row
-            self.look_note.setText(brand_step.LOOK_HOME)
-            self.look_summary.setText("\n".join(v.look_lines(self.route)[:-2]))
-            self.look_summary.setVisible(True)
+        if model is None:
+            self.look_note.setText("")
+            self.look_summary.setVisible(False)
             if self.look_editor is not None:
                 self.look_editor.setVisible(False)
             return
-        self.look_note.setText(
-            f"Every setting starts from the {plain_words.term('superbrand')}'s. Change one "
-            f"to make it this brand's own; ‘Use the {plain_words.term('superbrand')}'s "
-            "value’ gives it back.")
+        if v.own:
+            # the mesh's own row: the superbrand's look itself, in design mode
+            self.look_note.setText(own_look_note())
+        else:
+            self.look_note.setText(
+                f"Every setting starts from the {plain_words.term('superbrand')}'s. Change "
+                f"one to make it this brand's own; ‘Use the "
+                f"{plain_words.term('superbrand')}'s value’ gives it back.")
         self.look_summary.setVisible(False)
         if self.look_editor is None:
             self.look_editor = LookEditor(model, path=self.route)
@@ -279,6 +291,10 @@ class BrandSettingsTabs(QtCore.QObject):
         else:
             self.look_editor.set_path(self.route)
             self.look_editor.set_model(model)
+        # an unaffiliated image keeps its look and loses the desktop logo (D20): the
+        # session wires that onto its own look model, and the editor draws it
+        self.look_editor.set_identity_allowed(
+            getattr(model, "identity_allowed", True), getattr(model, "identity_reason", ""))
         self.look_editor.setVisible(True)
         self._refresh_record_note()
 
@@ -287,6 +303,7 @@ class BrandSettingsTabs(QtCore.QObject):
             if self.view is not None:
                 self.view.commit_look()
             self._refresh_record_note()
+            self.look_changed.emit()
         except Exception:                       # noqa: BLE001
             import sys
             import traceback

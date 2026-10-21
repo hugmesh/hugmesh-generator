@@ -3,14 +3,14 @@
 The invariants that make the feature real rather than decorative:
   1. The token board consumes core/theme.py derive() — the swatches show the hexes
      that SHIP, with live-measured AA ratios (no second implementation to drift).
-  2. BrandingPage in MESH mode: the desktop half greys, the login half stays live
-     (greying it would gate the knob off on the only plane that renders it — the
-     reason mesh stopped skipping this page).
-  3. commit is UNCONDITIONAL: the unaffiliated-role / role-class clears may not
-     touch login_* (mesh-plane data, image-scope clears).
-  4. LocalMeshPage: collect_bootstrap() carries the derived css (the silently-does-nothing-default
-     class guard), and a typo'd colour REFUSES the verb instead of silently
-     shipping an unthemed stack.
+  2. BrandingPage in MESH mode: the desktop half greys, and the web login look is
+     NOT here any more (2026-10-21): one line points at the Look tab of the mesh's
+     own domain, which is where it is chosen.
+  3. the unaffiliated-role / role-class clears may not touch login_* (mesh-plane
+     data, image-scope clears).
+  4. LocalMeshPage: collect_bootstrap() carries the css derived from the mesh's own
+     look (row 0's Look tab — the silently-does-nothing-default class guard), and a
+     typo'd colour REFUSES the verb instead of silently shipping an unthemed stack.
   5. Slots never raise: garbage input -> error note, not a PyQt6 abort.
 """
 import os
@@ -221,8 +221,9 @@ def test_mesh_branding_page_greys_desktop_half_but_login_half_stays_live(qapp):
     page = wizard_mod.BrandingPage(SimpleNamespace(cfg=cfg, generator_dir=GENERATOR_DIR))
     page.initializePage()
     assert not page.form.isEnabled()            # desktop half: greyed (spec 2)
-    assert page.login_theme.isEnabled()         # web half: live — the mesh serves it
-    assert page.login_collapsible.is_expanded() # and it IS the page in mesh
+    # web half: no longer here — the page says where it is chosen
+    assert not hasattr(page, "login_theme")
+    assert page.look_pointer.isVisibleTo(page) and "Look" in page.look_pointer.text()
 
 
 def test_login_fields_survive_the_unaffiliated_and_mesh_clears(qapp):
@@ -230,9 +231,10 @@ def test_login_fields_survive_the_unaffiliated_and_mesh_clears(qapp):
                 ImageConfig(mode="standalone", role="unaffiliated", platform="x86")):
         page = wizard_mod.BrandingPage(
             SimpleNamespace(cfg=cfg, generator_dir=GENERATOR_DIR))
+        # what row 0's Look tab writes (CfgLook writes through to these fields)
+        cfg.login_primary_color = "#336699"
+        cfg.login_secondary_color = "#996633"
         page.initializePage()
-        page.login_theme.primary.setText("#336699")
-        page.login_theme.secondary.setText("#996633")
         assert page.validatePage()
         assert cfg.login_primary_color == "#336699", cfg.role
         assert cfg.login_secondary_color == "#996633", cfg.role
@@ -249,16 +251,17 @@ def _mesh_page(qapp):
 
 def test_collect_bootstrap_carries_the_derived_theme_css(qapp):
     page = _mesh_page(qapp)
-    page.login_theme.primary.setText("#e91e63")
+    page.mesh_look().set("primary", "#e91e63")      # row 0's Look tab edits this model
     boot_cfg = page.collect_bootstrap()
     assert boot_cfg.login_theme_css == theme.compose_login_css("#e91e63")
-    page.login_theme.primary.setText("")
+    page.mesh_look().set("primary", "")
     assert page.collect_bootstrap().login_theme_css == ""
 
 
 def test_bootstrap_up_refuses_on_a_typoed_colour_instead_of_silently_unthemed(qapp):
     page = _mesh_page(qapp)
-    page.login_theme.primary.setText("#33669")     # one digit short
+    page.mesh_look().set("primary", "#33669")      # one digit short (the raw verb)
     page._bootstrap_up()
-    assert "themes" in page.status.text()          # the renamed surface (#50 item 2)
+    assert "the look" in page.status.text()        # names where it is fixed
+    assert "Look" in page.status.text()
     assert not page._running                       # nothing launched

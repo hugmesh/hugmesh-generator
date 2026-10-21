@@ -68,11 +68,13 @@ def _image_route_bytes() -> bytes:
     for f, v in IDENTITY.items():
         st.fields[f].setText(v)
         st.fields[f].editingFinished.emit()
-    st.look_editor.primary.setText(COLOUR)
-    st.look_editor.primary.editingFinished.emit()
     assert branding.validatePage()
     services = ds_mod.DomainServicesPage(wiz)
     services.initializePage()
+    # the mesh's own look: row 0's Look tab (2026-10-21)
+    services.brand_tabs.open_tab("Look")
+    services.brand_tabs.look_editor.primary.setText(COLOUR)
+    services.brand_tabs.look_editor.primary.editingFinished.emit()
     assert services.validatePage()
     return _record_bytes()
 
@@ -101,13 +103,17 @@ def _fleet_window_bytes(page) -> bytes:
     for f, v in IDENTITY.items():
         step.fields[f].setText(v)
         step.fields[f].editingFinished.emit()
-    step.look_editor.primary.setText(COLOUR)
-    step.look_editor.primary.editingFinished.emit()
+    assert step.look_editor is None                      # the look is row 0's tab
     page.next_btn.click()                                  # -> Domains
     assert page.stack.currentIndex() == fleet_mod.STEP_DOMAINS
     assert page.cluster_domain.text() == "mesh.example"
     page.next_btn.click()                                  # -> Brand settings (services)
     assert page.stack.currentIndex() == fleet_mod.STEP_DOMAIN_SERVICES
+    tabs = page.domain_services.brand_tabs
+    assert tabs.view is not None and tabs.view.own        # row 0: the mesh's own domain
+    tabs.open_tab("Look")
+    tabs.look_editor.primary.setText(COLOUR)
+    tabs.look_editor.primary.editingFinished.emit()
     page.next_btn.click()                                  # -> Review: the record is written
     assert page.stack.currentIndex() == fleet_mod.STEP_REVIEW
     return _record_bytes()
@@ -123,14 +129,15 @@ def _fleet_text_bytes() -> bytes:
     cmd = {"id": "id", "title": "title", "org": "org", "public_name": "public"}
     for f, v in IDENTITY.items():
         j.feed(f"{cmd[f]} {v}")
-    j.feed("look")
-    j.feed(f"1 {COLOUR}")
-    j.feed("back")
     j.feed("")                                             # commit; back on the options
     assert fs.stage == "options" and fs.options(j).cluster_domain == "mesh.example"
     j.feed("")                                             # -> Domains
     j.feed("")                                             # -> Brand settings
     assert fs.stage == "services"
+    # the mesh's own look: section 2 of its own domain (2026-10-21)
+    j.feed("look")
+    j.feed(f"1 {COLOUR}")
+    j.feed("services")
     j.feed("")                                             # -> Review: the record is written
     assert fs.stage == "review"
     return _record_bytes()

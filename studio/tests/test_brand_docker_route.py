@@ -151,13 +151,31 @@ def test_a_designed_superbrand_reaches_the_bootstrap_configuration(ctl):
     assert "acme" not in cfg.cluster_domain          # the public name is not invented
 
 
+def _own_look_tab(ctl):
+    """Row 0's Look tab on the Domain services step: since 2026-10-21 the ONE place
+    the mesh's look is chosen (the design only points there)."""
+    ctl._seed_domains()
+    ctl.domain_services.load(ctl.mesh_domains)
+    tabs = ctl.domain_services.brand_tabs
+    tabs.open_tab("Look")
+    return tabs
+
+
 def test_a_design_survives_the_look_being_edited(ctl):
     step = ctl.superbrand_design
     _type(step, "id", "acme")
-    ed = step.look_editor
+    # the design draws no look editor: it points at row 0's Look tab
+    assert step.look_editor is None
+    assert "Look" in step.look_pointer.text()
+    ed = _own_look_tab(ctl).look_editor
+    assert ed is not None and ed.model is ctl.mesh_look()
     ed.primary.setText("#336699")
     ed.primary.editingFinished.emit()
-    assert ctl.collect_bootstrap().superbrand["look"]["primary"] == "#336699"
+    cfg = ctl.collect_bootstrap()
+    assert cfg.superbrand["look"]["primary"] == "#336699"
+    assert cfg.brand == "acme"                       # the design survived the edit
+    # and it is what the sign-in page will show: the stylesheet comes from that look
+    assert "#336699" in cfg.login_theme_css.lower()
 
 
 def test_a_refused_id_is_said_inline_and_changes_nothing(ctl):

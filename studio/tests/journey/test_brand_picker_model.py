@@ -292,7 +292,9 @@ def test_a_brand_row_edit_reaches_the_live_row_and_nothing_else(gen):
 def test_the_summary_says_where_each_setting_lives():
     from hugmesh_studio.tui import brand_step
     assert "Domains step" in brand_step.IDENTITY_HOME
-    assert "superbrand step" in brand_step.LOOK_HOME
+    # the mesh's own look is chosen on its own domain's Look tab (2026-10-21)
+    assert "one place it is chosen" in brand_step.LOOK_HOME
+    assert "Look" in brand_step.LOOK_POINTER and "own domain" in brand_step.LOOK_POINTER
     assert "Go-Live wizard" in brand_step.WAYS_HOME
     assert brand_step.WAYS_BUTTON == "Set up ways to reach this brand"
     assert [t for _n, t in brand_step.SECTIONS] == [

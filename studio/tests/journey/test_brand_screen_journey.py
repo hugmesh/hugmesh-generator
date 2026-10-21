@@ -114,10 +114,19 @@ class WindowFace:
         assert self.step.note.isHidden(), self.step.note.text()
 
     def superbrand_look(self, primary, font):
-        ed = self.step.look_editor
+        # the mesh's own look is chosen on row 0's Look tab (2026-10-21); the design
+        # step draws no editor of its own any more
+        assert self.step.look_editor is None
+        self.widget.load(self.state)
+        self.open_brand("mesh.example")
+        tabs = self.widget.brand_tabs
+        tabs.open_tab("Look")
+        ed = tabs.look_editor
+        assert ed.model is self.session.look and ed.model.mode == "design"
         ed.primary.setText(primary)
         ed.primary.editingFinished.emit()
         ed.font.setCurrentIndex(ed.font.findData(font))
+        tabs.open_tab("Services")
 
     def add_brands(self, *rows):
         self.state.domains += [Domain(name=n, title=t) for n, t in rows]
@@ -186,10 +195,16 @@ class TextFace:
             assert self.j.status in ("", None), self.j.status
 
     def superbrand_look(self, primary, font):
+        # section 2 of the mesh's own domain (2026-10-21); the superbrand screen says
+        # where the look went
         self.sb.feed(self.j, "look")
-        self.sb.feed(self.j, f"1 {primary}")
-        self.sb.feed(self.j, f"font {font}")
-        self.sb.feed(self.j, "back")
+        assert "not chosen here" in self.j.status
+        self.ds.enter(self.j)
+        self.open_brand("mesh.example")
+        self.ds.feed(self.j, "look")
+        self.ds.feed(self.j, f"1 {primary}")
+        self.ds.feed(self.j, f"font {font}")
+        self.ds.feed(self.j, "services")
 
     def add_brands(self, *rows):
         self.state.domains += [Domain(name=n, title=t) for n, t in rows]

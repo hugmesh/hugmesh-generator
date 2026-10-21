@@ -9,17 +9,11 @@
   and the eight custom fields are an exclusive either/or so the two branding
   channels can never fight.
 * The WEB LOGIN THEME (colours/fonts for the login page the MESH serves to
-  browsers): NON-argv mesh-plane fields (config NON_ARGV_FIELDS), deliberately
-  OUTSIDE the desktop gating — mesh mode visits this page exactly FOR this half,
-  and greying it there would gate the knob off on the only plane that renders it.
-  SHOWN ONLY IN MESH since 2026-08-26: a standalone/cloud desktop serves no
-  login-ui (the page's own applies_to docstring already conceded this), so the
-  section themed nothing there while still persisting its login_* keys into that
-  image's saved config. The COMMIT stays unconditional, so a mesh config survives a
-  stray visit unharmed. It is also retitled "Web login theme": the DESKTOP cards
-  live under a "Desktop theme" header while the thing literally titled "Themes" was
-  the web one, which is the ambiguity behind the operator's "the menu for adding the
-  themes".
+  browsers) is NOT on this page any more (2026-10-21, the operator: "the theme
+  selection should be there instead of where it is now" — in each domain's section).
+  It is chosen on the Look tab of the mesh's own domain on the Domain services step,
+  over the same ``login_*`` config fields (``brand_look.CfgLook``), so a saved
+  configuration still loads; on a mesh this page carries one line saying where.
 
 IDENTITY vs LOOK on an UNAFFILIATED image (operator decision, 2026-08-26). This page
 used to delete itself wholesale for ``standalone-unaffiliated`` / the composable
@@ -61,9 +55,12 @@ light and a dark, a purple, and a grey theme selectable". What changed and why:
 """
 from __future__ import annotations
 
+import html
+
 from ..qt import QtWidgets
 from ..choice_cards import ChoiceCard, ChoiceCardGroup
 from ...core import plain_words
+from ...tui.brand_step import LOOK_POINTER
 from ...tui.superbrand_step import session_for
 from ...core.branding_themes import theme_set_problem
 from ...core.config import (
@@ -72,7 +69,6 @@ from ...core.config import (
 from ._gating import (
     clear_unsupported, gate_widgets_role_class, platform_supports, unsupported_note,
 )
-from ._logintheme import LoginThemeGroup
 from ._scroll import scrollable
 from .superbrand import SuperbrandStep
 from ._themecards import (
@@ -303,31 +299,18 @@ class BrandingPage(QtWidgets.QWizardPage):
         form_lay.addWidget(self.locked)
         lay.addWidget(self.form)
 
-        # WEB login theme — OUTSIDE self.form on purpose: the desktop gating
-        # (role-class / platform / unaffiliated) must never grey it, because it
-        # themes the login page the MESH serves, not the desktop image. Collapsed
-        # by default in desktop flows; initializePage expands it in mesh, where it
-        # is the reason the page is shown at all.
-        self.login_theme = LoginThemeGroup()
-        # The section's content: the compact group every host has always had, and — in
-        # mesh, where the superbrand step is shown — the full look editor that replaces
-        # it on screen (a hidden group is still loaded and committed, so a saved
-        # configuration and every older caller read and write exactly what they did).
-        self.login_host = QtWidgets.QWidget()
-        host_lay = QtWidgets.QVBoxLayout(self.login_host)
-        host_lay.setContentsMargins(0, 0, 0, 0)
-        host_lay.addWidget(self.login_theme)
-        self._look_host_lay = host_lay
-        # "Web login theme" (2026-08-26), superseding #50 item 2's plain "Themes".
-        # #50 renamed it to "Themes" when this page had ONE theme surface; it now has
-        # two, and the DESKTOP one sits under a "Desktop theme" header while the thing
-        # literally titled "Themes" was the web one — so an operator asking for "the
-        # menu for adding the themes" was pointed at the wrong plane. Still a
-        # LABEL-ONLY change: the persisted login_* config keys keep their names, so old
-        # sessions load unchanged.
-        self.login_collapsible = collapsible("Web login theme", self.login_host,
-                                             expanded=False)
-        lay.addWidget(self.login_collapsible)
+        # NO WEB LOGIN THEME SECTION HERE ANY MORE (2026-10-21, the operator: "the theme
+        # selection should be there instead of where it is now" — in each domain's
+        # section). The mesh's web sign-in look is chosen on the Look tab of the mesh's
+        # own domain (row 0) on the Domain services step, over the same model this page
+        # used to host (``brand_look.CfgLook``: the config's login_* fields, so a saved
+        # configuration loads exactly as before). On a mesh this page says where.
+        self.look_pointer = QtWidgets.QLabel(
+            "<b>Web sign-in look</b> — " + html.escape(LOOK_POINTER) + ".")
+        self.look_pointer.setObjectName("branding_look_pointer")
+        self.look_pointer.setWordWrap(True)
+        self.look_pointer.setVisible(False)
+        lay.addWidget(self.look_pointer)
         lay.addStretch(1)
 
         self.rb_preset.toggled.connect(self._mode_toggled)
@@ -337,47 +320,21 @@ class BrandingPage(QtWidgets.QWizardPage):
         if self.superbrand is None:
             self.superbrand = SuperbrandStep(route="image", look_in_step=False)
             self.superbrand.setAccessibleName(plain_words.term("superbrand").capitalize())
-            self.superbrand.changed.connect(self._superbrand_changed)
             # right under the unaffiliated note: the top of the page
             self._page_layout.insertWidget(1, self.superbrand)
         return self.superbrand
 
-    def _superbrand_changed(self) -> None:
-        """The design step edited the superbrand's look through the config: the compact
-        group (hidden in mesh, but committed on Next) must read the same values, or its
-        commit would write the old ones back over the edit."""
-        try:
-            self.login_theme.load(self.wiz.cfg)
-        except Exception:       # pragma: no cover - defensive, PyQt6 qFatal guard
-            import sys, traceback
-            print("branding: swallowed exception in _superbrand_changed", file=sys.stderr)
-            traceback.print_exc(file=sys.stderr)
-
     def _show_superbrand(self, c, mesh: bool) -> None:
-        """The superbrand step on a mesh: the drop-down at the top and the design's
-        look in the Web login theme section, in place of the compact group."""
+        """The superbrand step on a mesh: the drop-down at the top. Its look is not
+        edited here (the Look tab of the mesh's own domain is the one place)."""
         if not mesh:
             if self.superbrand is not None:
                 self.superbrand.setVisible(False)
-            self._set_full_look(False)
             return
         step = self._ensure_superbrand()
         step.setVisible(True)
         session = session_for(self.wiz, "image", c, getattr(self.wiz, "generator_dir", "") or "")
         step.set_session(session)
-        editor = step.ensure_look_editor()
-        if editor is not None and editor.parentWidget() is not self.login_host:
-            self._look_host_lay.addWidget(editor)
-        self._set_full_look(True)
-
-    def _set_full_look(self, on: bool) -> None:
-        editor = self.superbrand.look_editor if self.superbrand is not None else None
-        self.login_theme.setVisible(not on)
-        if editor is not None:
-            editor.setVisible(on)
-            sess = self.superbrand.session if self.superbrand is not None else None
-            editable = bool(sess is not None and (sess.designing or sess.unaffiliated))
-            editor.setEnabled(editable)
 
     # ── either/or plumbing ──────────────────────────────────────────────────────
     def _mode_toggled(self, *_):
@@ -545,10 +502,8 @@ class BrandingPage(QtWidgets.QWizardPage):
         mesh = c.mode == "mesh"
         self.desktop_hdr.setText(_DESKTOP_HDR_MESH if mesh else _DESKTOP_HDR)
         self.setSubTitle(_SUBTITLE_MESH if mesh else _SUBTITLE_IMAGE)
-        self.login_theme.load(c)
         self._show_superbrand(c, mesh)
-        self.login_collapsible.setVisible(mesh)
-        self.login_collapsible.set_default_expanded(mesh)
+        self.look_pointer.setVisible(mesh)
 
     def _gate_identity(self, unaffiliated: bool) -> None:
         """Hide/show the two IDENTITY widgets — the brand logo picker and the branding
@@ -584,12 +539,12 @@ class BrandingPage(QtWidgets.QWizardPage):
 
     def validatePage(self):
         c = self.wiz.cfg
-        # web login theme commits FIRST and UNCONDITIONALLY: it is mesh-plane data,
-        # so neither the unaffiliated role nor the desktop role-class/platform
-        # clears below may touch it (an unaffiliated IMAGE can ride a mesh whose
+        # The web login look is no longer committed here: it is written to the config
+        # as it is edited, on the Look tab of the mesh's own domain (CfgLook). It is
+        # mesh-plane data, so neither the unaffiliated role nor the desktop role-class/
+        # platform clears below touch it (an unaffiliated IMAGE can ride a mesh whose
         # login page is themed — different scopes).
-        self.login_theme.commit(c)
-        # the design step writes after it: the superbrand block (id, title, public name)
+        # the design step writes: the superbrand block (id, title, public name)
         # onto the config and the record file the mesh is described by. A refusal is
         # shown inline by the step and never blocks Next (a page that refused its own
         # Next would strand a person who cannot see why — the build refuses downstream).

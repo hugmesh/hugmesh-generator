@@ -95,9 +95,16 @@ class WindowFace:
         return refusals
 
     def colour(self, hexvalue):
-        ed = self.page.superbrand.look_editor
+        # the look is chosen on the Look tab of the mesh's own domain (2026-10-21)
+        ds = wizard_mod.DomainServicesPage(self.wiz)
+        ds.initializePage()
+        ds.brand_tabs.open_tab("Look")
+        ed = ds.brand_tabs.look_editor
+        assert ed is not None and ed.isEnabled()
         ed.primary.setText(hexvalue)
         ed.primary.editingFinished.emit()
+        # being on the domain's page records it as walked (the text face's rule too)
+        ds._record(self.wiz.cfg)
 
     def next(self):
         assert self.page.validatePage()
@@ -141,9 +148,15 @@ class TextFace:
         return refusals
 
     def colour(self, hexvalue):
+        # section 2 (Look) of the mesh's own domain on the Domain services step
+        # (2026-10-21); the superbrand screen only says where it went
         self.j.feed("look")
-        self.j.feed(f"1 {hexvalue}")
-        self.j.feed("back")
+        assert "not chosen here" in self.j.status
+        ds = self.j.screen_for("domain_services")
+        ds.enter(self.j)
+        ds.feed(self.j, "look")
+        ds.feed(self.j, f"1 {hexvalue}")
+        ds.feed(self.j, "services")
 
     def next(self):
         self.j.feed("")                      # commit and close the screen

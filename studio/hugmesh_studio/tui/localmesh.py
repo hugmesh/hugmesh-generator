@@ -49,7 +49,8 @@ from ..core.config import DOMAIN_IDP_OWN, DOMAIN_IDP_SUPERDOMAIN, Domain
 from ..core.domain_services import (ACTION_MESH_START, gate_reason, normalise_slugs,
                                     record_reviewed)
 from ..core.local_mesh_bootstrap import LocalMeshBootstrapConfig
-from ..core.local_mesh_domains import (DOMAIN_NAME_RE, LOCAL_MESH_REMEDY,
+from ..core.local_mesh_domains import (DOCKER_SERVICES_NOTE, DOMAIN_NAME_RE,
+                                       LOCAL_MESH_REMEDY,
                                        LocalMeshDomains, bootstrap_domain_records,
                                        own_idp_names)
 from . import model
@@ -70,9 +71,7 @@ LOCALMESH_DEFAULT_CHOICE = "join"
 
 #: The one sentence the services step adds on this lane — the GUI widget's
 #: ``lane_note`` says the same thing.
-LANE_NOTE = ("ON THIS LOCAL DOCKER MESH: the per-domain selection is recorded with the "
-             "mesh (and shown in the plan) — it is NOT what decides which compose "
-             "profiles come up; the mesh-wide ‘Services’ step (in the GUI) is.")
+LANE_NOTE = DOCKER_SERVICES_NOTE
 
 # the domains_step shape: a lowercase dotted hostname — ONE regex, shared with the
 # GUI's local-mesh Domains step (core/local_mesh_domains.DOMAIN_NAME_RE).
@@ -472,7 +471,7 @@ class LocalMeshScreen:
                     "commands: b=back to the Domain services step · Enter=back to "
                     "the menu of choices"]
         out = ["Domains and their services are configured.", ""]
-        headers = ["domain", "sign-in", "services (recorded, not enforced)"]
+        headers = ["domain", "sign-in", "services (what this mesh runs)"]
         rows = [[d.name, IDP_LABELS.get(d.idp, d.idp),
                  ", ".join(normalise_slugs(d.optional_services)) or "cluster default"]
                 for d in md.domains]
@@ -482,7 +481,8 @@ class LocalMeshScreen:
         if record:
             out += [f"  record saved: {record}"]
         out += ["",
-                "The rest of this route — repo source, services, identity provider, "
+                "The rest of this route — repo source, the mesh's own "
+                "infrastructure, identity provider, "
                 "overlay and the bring-up itself — is not yet ported to the TUI "
                 "(issue #519): finish it in the GUI (python -m hugmesh_studio), or "
                 "preview the bring-up headlessly with:",

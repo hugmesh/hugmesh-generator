@@ -272,8 +272,11 @@ class DomainServicesScreen:
         return out
 
     def _look_editable(self, view) -> bool:
+        """A brand's own look shows on the Docker mesh only (D18); the mesh's OWN look
+        (row 0, the superbrand's) shows on every route and is chosen only here."""
         return (view.look_model() is not None
-                and self.route in brand_step.brand_look.PATHS_WITH_OWN_LOOK)
+                and (view.own
+                     or self.route in brand_step.brand_look.PATHS_WITH_OWN_LOOK))
 
     def _look(self, view):
         from .themes import LookText
