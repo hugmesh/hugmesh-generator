@@ -1779,6 +1779,12 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         self.saved_meshes.start_requested.connect(self._start_saved)
         self.saved_meshes.load_requested.connect(self._load_saved)
         self.saved_meshes.probe_needed.connect(self._probe_saved)
+        # THE CURRENT MESH (operator, 2026-10-21: "Saved meshes screen does not give
+        # anywhere to save the mesh we just started working on"): the strip at the top
+        # of the list reads this page's form, and its Save / Overwrite run through
+        # _save_current — no running mesh needed.
+        self.saved_meshes.current_provider = self._current_mesh_config
+        self.saved_meshes.save_requested.connect(self._on_save_requested)
         lay.addWidget(self.saved_section)
         return w
 
@@ -1973,25 +1979,21 @@ class LocalMeshPage(QtWidgets.QWizardPage):
             "you how to start it rather than showing an empty list.")
         self.vaults_btn.clicked.connect(self._open_vaults)
         brow.addWidget(self.vaults_btn)
-        # ── save the RUNNING mesh (ask C) ─────────────────────────────────────
-        # Gated by _sync_saved_gate (this page's own `_mesh_up`, never a monitor
-        # snapshot): a record of a mesh that is not running would describe
-        # nothing. The copy-credentials box is OFF by default — the operator's
-        # own wording was "credential pointers" — and the consequence of leaving
-        # it off is stated in the table's "Restores as" column, not hidden.
-        self.save_mesh_btn = QtWidgets.QPushButton("Save this mesh")
+        # ── save the CURRENT mesh (ask C; 2026-10-21) ─────────────────────────
+        # Gated by _sync_saved_gate: only a running VERB greys it — a record is the
+        # configuration being worked on, running or not (the operator found nowhere
+        # to save a mesh they had just started on). The same save sits at the top of
+        # the Saved meshes list, with Save as / Overwrite. The copy-credentials box is
+        # OFF by default — the operator's own wording was "credential pointers" —
+        # and only offered while a mesh is up; the consequence of leaving it off is
+        # stated in the table's "Restores as" column, not hidden.
+        self.save_mesh_btn = QtWidgets.QPushButton("Save current mesh")
         self.save_mesh_btn.clicked.connect(self._save_mesh)
         brow.addWidget(self.save_mesh_btn)
         self.save_copy_creds = QtWidgets.QCheckBox(
             "Also copy its credential files into the record")
         self.save_copy_creds.setChecked(False)
-        self.save_copy_creds.setToolTip(
-            "OFF (default): the record keeps only POINTERS to .e2e-credentials and "
-            "keys-out/vault/secrets.json (paths, hashes, mtimes) — no password ever "
-            "enters the record. ON: both files are ALSO copied into the record's "
-            "own folder under the Studio state dir at 0600, which is what brings "
-            "the SAME accounts and passwords back after 'Stop && clean Docker' "
-            "(the next 'Generate && start' re-mints them otherwise).")
+        self.save_copy_creds.setToolTip(self._COPY_CREDS_TIP)
         brow.addWidget(self.save_copy_creds)
         # ── the DEVOPS lane (Kubernetes) ────────────────────────────────────
         # ArgoCD + the workload console are k8s CONTROLLERS — no compose profile
@@ -2985,7 +2987,7 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         # in two suites that never asked for a monitor.
         self._monitor_stale = True
         # …and the SAVED-MESH table with it. _sync_saved_gate (from
-        # _set_verbs_enabled above) re-gates the 'Save this mesh' button, but the
+        # _set_verbs_enabled above) re-gates the 'Save current mesh' button, but the
         # table's own rows are read from things a verb changes and it does not
         # touch: 'Clean mesh' drops the data volumes a record's Start needs,
         # 'Restore (reseed)' rewrites the credentials file a record hashed, and a
@@ -3329,6 +3331,10 @@ class LocalMeshPage(QtWidgets.QWizardPage):
             plan += f"\n\nBRAND RECORD: {note}\n"
         self.plan_view.setPlainText(plan)
         self._sync_boot_gate()
+        # the Saved meshes strip shows the mesh being worked on: keep it in step
+        saved = getattr(self, "saved_meshes", None)
+        if saved is not None:
+            saved.update_current()
 
     def _probe_mesh_state(self):
         """Kick off the off-thread stack probe (see _StatusProbe). Re-entrant-safe:
@@ -3843,42 +3849,62 @@ class LocalMeshPage(QtWidgets.QWizardPage):
 
     # ── saved meshes (ask C): save / probe / start / load ─────────────────────
     def _sync_saved_gate(self):
-        """The ONE writer for 'Save this mesh' and the saved-meshes table's gate,
-        driven by this page's own tri-state ``_mesh_up`` — deliberately NOT by any
-        monitor snapshot (that would couple two lanes for one boolean). Called
-        from the tail of _set_verbs_enabled, which owns the greyed-with-a-reason
-        idiom, and once at construction."""
+        """The ONE writer for 'Save current mesh' (the Actions row), its copy box and
+        the saved-meshes table's gate. Saving no longer waits for a RUNNING mesh
+        (operator, 2026-10-21: "Saved meshes screen does not give anywhere to save the
+        mesh we just started working on"): a record is the configuration being worked
+        on, so only a running VERB greys it. The copy box still needs a mesh that is
+        up — the credential files on disk belong to whatever mesh last ran, and copying
+        them into a record of a mesh that never ran would promise passwords it never
+        had. Driven by this page's own tri-state ``_mesh_up`` — deliberately NOT by
+        any monitor snapshot. Called from the tail of _set_verbs_enabled and once at
+        construction."""
         up = self._mesh_up
         idle = not self._running
-        on = idle and up is True
-        self.save_mesh_btn.setEnabled(on)
-        self.save_copy_creds.setEnabled(on)
+        self.save_mesh_btn.setEnabled(idle)
+        self.save_copy_creds.setEnabled(idle and up is True)
         if not idle:
             tip = "Disabled while a verb is running — wait for it to finish, or Cancel."
-        elif up is None:
-            tip = "Checking whether a local mesh is running…"
-        elif up is False:
-            tip = ("Disabled — no local mesh is running; there is nothing to save. "
-                   "(Checked on entry; re-checked after every verb.)")
         else:
-            tip = ("Record the RUNNING mesh so it can be started or restored from "
-                   "the 'Saved meshes' table instead of generated from scratch: "
-                   "THIS PAGE'S configuration (the only knob a running mesh can be "
-                   "read back for is its env, which is cross-checked and reported "
-                   "when it disagrees), the env it exports, the overlay text, the "
-                   "per-repo source HEADs, the doors, the superadmin/operator "
-                   "usernames and the accounts this Studio added (names and roles), "
-                   "credential POINTERS (paths, hashes — never a password) and an "
-                   "INVENTORY of its data volumes. The volumes' contents are NOT "
+            tip = ("Record the mesh being worked on — THIS PAGE'S configuration, every "
+                   "domain's look, sign-in, services and VPN/egress choices included — "
+                   "so it can be loaded, started or restored from the 'Saved meshes' "
+                   "list instead of set up from scratch. It does not need the mesh to "
+                   "be running. When one is up, its env is cross-checked and a "
+                   "disagreement is reported; the env it exports, the overlay text, the "
+                   "per-repo source HEADs, the doors, the superadmin/operator usernames "
+                   "and the accounts this Studio added (names and roles), credential "
+                   "POINTERS (paths, hashes — never a password) and an INVENTORY of its "
+                   "data volumes are recorded too. The volumes' contents are NOT "
                    "saved: multi-GB, a consistent copy needs the stack halted, "
                    "'Stop mesh' keeps them anyway, and casdoor-pg is an identity "
-                   "database. Runs off-thread; the mesh is not touched.")
+                   "database. Runs off-thread; nothing is started or stopped.\n\n"
+                   "The NAME comes from the 'Save as' box in 'Saved meshes and the "
+                   "plan' (the review step), or is derived when that box is blank; the "
+                   "status line says which name was used.")
         self.save_mesh_btn.setToolTip(tip)
+        if not idle:
+            copy_tip = tip
+        elif up is True:
+            copy_tip = self._COPY_CREDS_TIP
+        else:
+            copy_tip = ("Only while a local mesh is running: the credential files on "
+                        "disk belong to whatever mesh last ran, so a record of a mesh "
+                        "that is not up keeps POINTERS to them, never copies.")
+        self.save_copy_creds.setToolTip(copy_tip)
         self.saved_meshes.set_context(mesh_up=up, busy=not idle)
         if idle and up is not None and up != self._saved_last_up:
             # a verb changed what is on disk — re-check every row's plan
             self._saved_last_up = up
             self._probe_saved(self.saved_meshes.records())
+
+    _COPY_CREDS_TIP = (
+        "OFF (default): the record keeps only POINTERS to .e2e-credentials and "
+        "keys-out/vault/secrets.json (paths, hashes, mtimes) — no password ever "
+        "enters the record. ON: both files are ALSO copied into the record's "
+        "own folder under the Studio state dir at 0600, which is what brings "
+        "the SAME accounts and passwords back after 'Stop && clean Docker' "
+        "(the next 'Generate && start' re-mints them otherwise).")
 
     def _probe_saved(self, records):
         """Kick off the off-thread per-record probe (docker volumes/images/ps + a
@@ -3905,43 +3931,125 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         if pending:
             self._probe_saved(pending)
 
+    def _current_mesh_config(self) -> dict:
+        """The Saved meshes strip's view of the mesh being worked on: this page's
+        form, as a record would store it (auth key blanked)."""
+        return saved_meshes.config_for_record(self.collect_bootstrap())
+
+    def _kind_lane_running(self) -> bool | None:
+        """The DevOps (kind) lane's tri-state as the monitor last read it — recorded in
+        a saved mesh, never probed for it (None = not read yet)."""
+        snap = getattr(self, "_monitor", None)
+        kind = getattr(snap, "kind", None) if snap is not None else None
+        running = getattr(kind, "running", None)
+        return None if running is None else bool(running)
+
     def _save_mesh(self):
-        """Record the running mesh — through _launch, so it inherits the busy
-        guard, the staged view, the run log and the buttons' re-arm. The capture
-        is docker + git + two sha256s and runs on the worker; nothing here touches
-        the mesh. No credential VALUE reaches a log line: the worker prints the
-        record id and path, and whether files were copied or only pointed at."""
-        if self._mesh_up is not True:
-            self._refuse("Nothing to save: no local mesh is running "
-                                "(checked on entry and after every verb).")
+        """The Actions row's 'Save current mesh': a NEW record of the mesh being worked
+        on, named from the Saved meshes 'Save as' box (derived when blank). The copy
+        box applies only while a mesh is up (see _sync_saved_gate)."""
+        label = self.saved_meshes.name_edit.text().strip()
+        if label and saved_meshes.label_owner(label, self.saved_meshes.records()):
+            self._refuse(f"A saved mesh is already called ‘{label}’ — pick "
+                         "another name in the Saved meshes 'Save as' box, or "
+                         "overwrite that record from the Saved meshes list.")
             return
-        boot = self.boot
+        typed = bool(label)
+        if not label:
+            label = saved_meshes.unique_label(
+                saved_meshes.derived_label_of(self._current_mesh_config()),
+                self.saved_meshes.records())
+        copy = bool(self.save_copy_creds.isChecked() and self._mesh_up is True)
+        # This button sits on the bring-up step, where the Saved meshes list and its
+        # Save as box cannot be seen: say in the run log where the name came from.
+        self._note(f"[mesh-save] the record is named ‘{label}’ — "
+                   + ("typed in the 'Save as' box under 'Saved meshes and the plan'"
+                      if typed else
+                      "derived, because the 'Save as' box under 'Saved meshes and the "
+                      "plan' is blank")
+                   + "; it can be renamed there with Overwrite selected.")
+        self._save_current(None, label, copy=copy)
+
+    def _on_save_requested(self, target, label: str):
+        """The Saved meshes strip asked: a new record (target None) or an overwrite of
+        ``target`` (already confirmed there by its second click). Pointers only —
+        the copy box lives with the Actions row and is not visible from this list."""
+        self._save_current(target, label, copy=False)
+
+    def _save_current(self, target, label: str, *, copy: bool = False):
+        """Record the mesh being worked on — through _launch, so it inherits the busy
+        guard, the staged view, the run log and the buttons' re-arm. The capture is
+        docker + git + two sha256s and runs on the worker; nothing here touches the
+        mesh, and nothing needs to be running. No credential VALUE reaches a log line:
+        the worker prints the record id and path, and whether files were copied or
+        only pointed at.
+
+        ``target`` is a record to OVERWRITE (its id, place and created stamp are kept;
+        credential copies it kept are removed when this save keeps pointers only), or
+        None for a new record. The configuration is read from the form NOW, not from
+        whatever the last plan refresh left in ``self.boot``."""
+        if self._running:
+            self._refuse(f"Still running: {self._running_label or 'a verb'}. "
+                         "Wait for it to finish, or Cancel.")
+            return
+        try:
+            cfg = self.collect_bootstrap()
+        except Exception as e:                       # noqa: BLE001 — say it, inline
+            self._refuse(f"Cannot save: the form could not be read ({e}).")
+            return
+        boot = self.boot = LocalMeshBootstrap(self.generator_dir, cfg)
         node = boot._stack_node()
         gen = self.generator_dir
-        copy = self.save_copy_creds.isChecked()
         users = list(self._added_user_specs)
         form = self.theme_form()
+        kind_up = self._kind_lane_running()
+        mesh_up = self._mesh_up
+        # A configuration that will not start yet is still worth keeping (that is
+        # the point of saving a mesh being worked on) — the problems are SAID with
+        # the save, never a reason to refuse it.
+        try:
+            problems = list(boot.validate())
+        except Exception as e:                       # noqa: BLE001 — a note only
+            problems = [f"could not be checked ({type(e).__name__}: {e})"]
+        theme_err = self.login_theme.error_text()
+        if theme_err:
+            problems.append("themes: " + theme_err)
 
         # filled by the worker, read by _on_saved_captured on the GUI thread (the
         # done signal is what orders the two) — the disagreement belongs ON SCREEN,
         # under the table, not only in the run log the operator has to scroll back.
-        outcome: dict = {}
+        outcome: dict = {"problems": problems}
 
         def capture(on_line, cancel):
-            rec = saved_meshes.capture(gen, boot.cfg, node, boot,
-                                       copy_credentials=copy, extra_users=users,
-                                       form=form)
+            rec = saved_meshes.capture(gen, cfg, node, boot,
+                                       label=label, copy_credentials=copy,
+                                       extra_users=users, form=form,
+                                       overwrite=target, kind_running=kind_up)
             path = saved_meshes.save(rec)
             if not path:
                 on_line("[mesh-save] FAILED: the record could not be written under "
                         f"{saved_meshes.meshes_dir()} (is the Studio state dir "
-                        "writable?). The mesh is untouched.")
+                        "writable?). Nothing else was touched.")
                 return False, []
-            on_line(f"[mesh-save] saved '{rec.label}' as {rec.id} -> {path}")
+            dropped = (saved_meshes.drop_unreferenced_copies(rec)
+                       if target is not None else False)
+            outcome["id"], outcome["label"] = rec.id, rec.label
+            verb = "overwrote" if target is not None else "saved"
+            on_line(f"[mesh-save] {verb} '{rec.label}' as {rec.id} -> {path}")
+            if dropped:
+                on_line("[mesh-save] the credential copies the replaced record kept "
+                        "were removed — this record keeps pointers only")
+            running = [n for n, up in (("Docker mesh", mesh_up is True),
+                                       ("DevOps lane", kind_up is True)) if up]
+            on_line("[mesh-save] running at save time: "
+                    + (", ".join(running) if running else
+                       "nothing — the record is the configuration as worked on"))
             on_line(f"[mesh-save] {rec.volume_count()} data volume(s) inventoried, "
                     "not copied; credential files "
                     + ("copied into the record's folder at 0600" if copy else
                        "recorded as pointers only (paths, hashes, mtimes)"))
+            on_line(f"[mesh-save] {len(rec.domain_lines()) or 1} domain(s) recorded "
+                    "with their look, sign-in, services and VPN/egress choices")
             # The record is built from THIS PAGE's configuration; the one knob that
             # can be read back off a running mesh is its env. When the two disagree
             # the record does not describe the mesh that is up, and a restore from
@@ -3958,7 +4066,10 @@ class LocalMeshPage(QtWidgets.QWizardPage):
             return True, []
 
         before = self.worker
-        self._note("[mesh-save] recording the running mesh …")
+        self._note("[mesh-save] recording the mesh being worked on …"
+                   if target is None else
+                   f"[mesh-save] overwriting '{target.label or target.id}' with the "
+                   "mesh being worked on …")
         self._launch("Saving mesh", capture, stream=True, cancellable=False, verb="")
         if self.worker is not None and self.worker is not before:
             # after _verb_done (connected first): the table re-scans the disk
@@ -3966,10 +4077,24 @@ class LocalMeshPage(QtWidgets.QWizardPage):
                 lambda ok, out=outcome: self._on_saved_captured(ok, out))
 
     def _on_saved_captured(self, _ok: bool, outcome: dict | None = None):
+        outcome = outcome or {}
+        if outcome.get("id"):
+            self.saved_meshes.mark_current(str(outcome["id"]))
+            self.saved_meshes.name_edit.clear()
         self.saved_meshes.refresh()
-        warning = str((outcome or {}).get("warning") or "")
+        notes: list[str] = []
+        if outcome.get("id"):
+            notes.append(f"Saved ‘{outcome.get('label') or outcome['id']}’.")
+
+            problems = [str(p) for p in (outcome.get("problems") or [])]
+            if problems:
+                notes.append("It will not start until this is fixed: "
+                             + "; ".join(problems))
+        warning = str(outcome.get("warning") or "")
         if warning:
-            self.saved_meshes.set_note(warning)
+            notes.append(warning)
+        if notes:
+            self.saved_meshes.set_note(" ".join(notes))
 
     _NOT_APPLIED_WHY = {
         "auth_key": "auth key (never stored — re-enter it for a prod mesh)",
@@ -4000,6 +4125,8 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         # services step from here on counts for this record's Start (the saved-mesh
         # refusal's remedy — _saved_domain_services_refusal)
         self._loaded_record_id = rec.id
+        # the strip at the top of the list now compares the form against THIS record
+        self.saved_meshes.mark_current(rec.id)
         self.saved_meshes.set_note(self._not_applied_text(rec, missing))
 
     def _start_saved(self, rec, mode: str):
@@ -4043,6 +4170,7 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         extras = self._saved_walk_extras(rec, domains_from_bootstrap(cfg))
         healed = self._heal_saved_record(rec, cfg, extras) if extras else ""
         missing = self.apply_bootstrap(cfg, form=rec.form)
+        self.saved_meshes.mark_current(rec.id)
         self.saved_meshes.set_note(self._not_applied_text(rec, missing) + healed)
         # The RECORD's config is what runs — never the form's re-collection,
         # which would turn a CLI-made record's services=None (profile defaults)
