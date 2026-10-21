@@ -11,11 +11,12 @@ them would misreport one of them (see core/vaults.py for the split):
   where the mesh's durable state lives — every BFF's postgres, cassandra, the uploads —
   so the tab shows size and WHO HOLDS each volume, and the delete is deliberately hard
   to fire by accident.
-* VAULT ENTRIES come from a cluster-lane service. On the docker mesh there is no vault
-  container at all, so the tab renders the honest blocker + remedy instead of an empty
-  table. An empty table would read as "vault is running and has nothing in it", inviting
-  an operator to add an entry that goes nowhere — the do-nothing-control trap this codebase
-  keeps hitting.
+* VAULT ENTRIES come from a cluster-lane service: vault-0 on the kind (DevOps) lane,
+  read through `kubectl exec` (core/vaults.py picks the route). When it cannot be read —
+  lane not up, lane halted, Vault sealed, no token — the tab renders the exact reason +
+  remedy instead of an empty table. An empty table would read as "vault is running and
+  has nothing in it", inviting an operator to add an entry that goes nowhere — the
+  do-nothing-control trap this codebase keeps hitting.
 
 TWO RULES INHERITED FROM EARLIER BUGS IN THIS TREE, both relied on:
 
@@ -46,7 +47,7 @@ class _VaultsProbe(QtCore.QThread):
     probes would double the hung-daemon exposure for no benefit. Never raises — an
     exception escaping run() would leave the dialog stuck on 'Loading…' forever."""
 
-    result = Signal(object)          # (volumes, vault_cap, docker_cap)
+    result = Signal(object)          # (volumes, (vault_entries, vault_cap), docker_cap)
 
     def __init__(self, project: str, parent=None):
         super().__init__(parent)
@@ -56,16 +57,24 @@ class _VaultsProbe(QtCore.QThread):
         try:
             docker_cap = vaults.docker_available()
             vols = vaults.list_volumes(self._project) if docker_cap.available else []
-            self.result.emit((vols, vaults.vault_capability(self._project), docker_cap))
+            # The vault listing is a kubectl exec per folder — it runs HERE, never on the
+            # GUI thread. Only entries + capability cross back: the route (which holds
+            # the token) stays on this thread.
+            route = vaults.vault_route(self._project)
+            listing = vaults.list_entries(route=route)
+            self.result.emit((vols, listing, docker_cap))
         except Exception as e:                       # noqa: BLE001 — never kill the dialog
-            self.result.emit(([], vaults.Capability(False, f"{type(e).__name__}: {e}"),
-                              vaults.Capability(False, "probe failed")))
+            self.result.emit(([], ([], vaults.Capability(
+                False, f"The vault probe failed: {type(e).__name__}: {e}",
+                "Press Refresh; if it repeats, the Studio log has the traceback.")),
+                vaults.Capability(False, "probe failed")))
 
 
 def _blocker_label(cap: vaults.Capability) -> QtWidgets.QLabel:
     """The honest 'why not, and what to do' row. Selectable so the remedy's commands can
     be copied straight out, matching the device-table gate."""
     lab = QtWidgets.QLabel(f"{cap.detail}\n\n{cap.remedy}".strip())
+    lab.setObjectName("vaultBlocker")
     lab.setWordWrap(True)
     lab.setTextInteractionFlags(QtCore.Qt.TextInteractionFlag.TextSelectableByMouse)
     lab.setStyleSheet("color: #a05000;")
@@ -79,6 +88,7 @@ class VaultsDialog(QtWidgets.QDialog):
         super().__init__(parent)
         self._project = project
         self._volumes: list[vaults.ManagedVolume] = []
+        self.vault_entries: list[vaults.VaultEntry] = []
         self.setWindowTitle("Vaults & managed volumes")
         self.resize(820, 520)
 
@@ -153,7 +163,7 @@ class VaultsDialog(QtWidgets.QDialog):
         probe.start()
 
     def _on_probe(self, payload) -> None:
-        volumes, vault_cap, docker_cap = payload
+        volumes, (vault_entries, vault_cap), docker_cap = payload
         self.refresh_btn.setEnabled(True)
         self._volumes = list(volumes)
         if not docker_cap.available:
@@ -165,7 +175,7 @@ class VaultsDialog(QtWidgets.QDialog):
                 f"{len(self._volumes)} volume(s) in project '{self._project}' · "
                 f"{held} in use · {vaults.ManagedVolume('', '', '', size_bytes=total).human_size()} total")
         self._repopulate()
-        self._render_vault(vault_cap)
+        self._render_vault(vault_entries, vault_cap)
 
     # ---- volumes ------------------------------------------------------------------
     def _repopulate(self) -> None:
@@ -219,28 +229,41 @@ class VaultsDialog(QtWidgets.QDialog):
         self.refresh()
 
     # ---- vault --------------------------------------------------------------------
-    def _render_vault(self, cap: vaults.Capability) -> None:
+    def _render_vault(self, entries, cap: vaults.Capability) -> None:
+        """Render what the probe already fetched. NOTHING here may block: the listing
+        is a kubectl exec per folder and used to run right here, on the GUI thread."""
         while self.vault_layout.count():
             item = self.vault_layout.takeAt(0)
             w = item.widget()
             if w is not None:
                 w.setParent(None)
+        self.vault_entries = list(entries)
         if not cap.available:
             # NOT an empty table — see the module docstring.
+            head = QtWidgets.QLabel("Vault entries cannot be shown:")
+            head.setStyleSheet("font-weight: bold;")
+            self.vault_layout.addWidget(head)
             self.vault_layout.addWidget(_blocker_label(cap))
             self.vault_layout.addStretch(1)
             return
-        entries, list_cap = vaults.list_entries()
-        if not list_cap.available:
-            self.vault_layout.addWidget(_blocker_label(list_cap))
+        if entries:
+            summary = (f"{len(entries)} entry path(s) — {cap.detail}. Values are never "
+                       f"listed here.")
+        else:
+            summary = (f"Vault is running and has NO entries under {vaults.KV_MOUNT}/ — "
+                       f"{cap.detail}.")
+        lab = QtWidgets.QLabel(summary)
+        lab.setObjectName("vaultSummary")
+        lab.setWordWrap(True)
+        lab.setTextInteractionFlags(QtCore.Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.vault_layout.addWidget(lab)
+        if not entries:
             self.vault_layout.addStretch(1)
             return
         lst = QtWidgets.QListWidget()
+        lst.setObjectName("vaultEntries")
         for e in entries:
             lst.addItem(e.path)
-        self.vault_layout.addWidget(QtWidgets.QLabel(
-            f"{len(entries)} entry path(s). Values are never listed — open one to read "
-            f"a key."))
         self.vault_layout.addWidget(lst, 1)
 
     # ---- lifecycle ----------------------------------------------------------------
