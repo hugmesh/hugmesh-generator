@@ -114,10 +114,19 @@ class WindowFace:
         assert self.step.note.isHidden(), self.step.note.text()
 
     def superbrand_look(self, primary, font):
-        ed = self.step.look_editor
+        # the mesh's own look is chosen on row 0's Look tab (2026-10-21); the design
+        # step draws no editor of its own any more
+        assert self.step.look_editor is None
+        self.widget.load(self.state)
+        self.open_brand("mesh.example")
+        tabs = self.widget.brand_tabs
+        tabs.open_tab("Look")
+        ed = tabs.look_editor
+        assert ed.model is self.session.look and ed.model.mode == "design"
         ed.primary.setText(primary)
         ed.primary.editingFinished.emit()
         ed.font.setCurrentIndex(ed.font.findData(font))
+        tabs.open_tab("Services")
 
     def add_brands(self, *rows):
         self.state.domains += [Domain(name=n, title=t) for n, t in rows]
@@ -147,11 +156,12 @@ class WindowFace:
         asked = []
         tabs.ways_requested.connect(asked.append)
         tabs.ways_btn.click()
-        # nothing on the tab can be typed in: every widget is a label or the one button
+        # the internal and public names are the wizard's: the only controls on this tab
+        # are the domain's own Tor, VPN and egress (2026-10-21), all inside one box
         editable = [w for w in tabs.ways_page.findChildren(QtWidgets.QWidget)
                     if isinstance(w, (QtWidgets.QLineEdit, QtWidgets.QComboBox,
                                       QtWidgets.QCheckBox))]
-        assert editable == []
+        assert editable and all(tabs.reach_box.isAncestorOf(w) for w in editable)
         return tabs.ways_text.text(), asked
 
     def look_tab(self):
@@ -186,10 +196,16 @@ class TextFace:
             assert self.j.status in ("", None), self.j.status
 
     def superbrand_look(self, primary, font):
+        # section 2 of the mesh's own domain (2026-10-21); the superbrand screen says
+        # where the look went
         self.sb.feed(self.j, "look")
-        self.sb.feed(self.j, f"1 {primary}")
-        self.sb.feed(self.j, f"font {font}")
-        self.sb.feed(self.j, "back")
+        assert "not chosen here" in self.j.status
+        self.ds.enter(self.j)
+        self.open_brand("mesh.example")
+        self.ds.feed(self.j, "look")
+        self.ds.feed(self.j, f"1 {primary}")
+        self.ds.feed(self.j, f"font {font}")
+        self.ds.feed(self.j, "services")
 
     def add_brands(self, *rows):
         self.state.domains += [Domain(name=n, title=t) for n, t in rows]
@@ -215,8 +231,10 @@ class TextFace:
     def ways(self):
         self.ds.feed(self.j, "open 4")
         text = "\n".join(self.ds.lines(self.j))
-        self.ds.feed(self.j, "tor on")            # nothing to edit here
-        assert "Nothing to change" in self.j.status
+        # the names are the wizard's: a name typed here is not a command of this
+        # section (its commands are the domain's own Tor, VPN and egress)
+        self.ds.feed(self.j, "internal shop.acme.internal")
+        assert self.j.status.startswith("commands: tor")
         return text, ["shop.example"]
 
     def look_tab(self):

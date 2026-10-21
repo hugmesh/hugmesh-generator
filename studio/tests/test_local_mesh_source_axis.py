@@ -76,8 +76,11 @@ def test_collect_bootstrap_drops_no_operator_visible_field(qapp_localmesh_page):
     page = qapp_localmesh_page
     page.env_prod.setChecked(True)
     page.superadmin.setText("boss")
-    page.social.setChecked(True)
     page.with_tor.setChecked(True)
+    # Matrix (the `social` profile) is a domain's service now: the mesh's own domain
+    # chooses it on its page, and `social` says that some domain did
+    page._seed_domains()
+    page.mesh_domains.domains[0].optional_services = ["tuwunel"]
     page.boot_domain.setText("acme.example")
     page.boot_auth_key.setText("tskey-x")
     page.boot_login_server.setText("https://hs.acme.example")

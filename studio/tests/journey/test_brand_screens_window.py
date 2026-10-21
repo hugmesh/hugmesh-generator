@@ -134,7 +134,13 @@ def test_an_unaffiliated_image_hides_the_identity_and_says_why_inline(qapp, gen)
                                  with_picker=False)
     fleet_style.show()
     assert not fleet_style.reason.isHidden() and fleet_style.reason.text() == UNAFFILIATED_REASON
-    ed = st.ensure_look_editor()
+    # the look is still the person's: it is chosen on row 0's Look tab, which draws the
+    # desktop logo row off with the reason (identity refused, look allowed — D20)
+    page = ds_mod.DomainServicesPage(w)
+    page.initializePage()
+    page.brand_tabs.open_tab("Look")
+    ed = page.brand_tabs.look_editor
+    assert ed is not None and ed.isEnabled()
     assert ed.model.identity_allowed is False and ed.identity_note.text()
 
 
@@ -160,14 +166,18 @@ def test_an_existing_choice_summary_is_a_two_column_table_not_spaces(qapp, gen):
 def test_the_pictures_the_record_cannot_hold_are_said_in_the_step(qapp, gen, tmp_path):
     from test_look_model import png_bytes
     w = _wiz(gen)
-    s = session_for(w, "image", w.cfg, gen)
-    st = SuperbrandStep(s)
-    st.show()
+    # the look moved to row 0's Look tab (2026-10-21): the sentence is said there
+    page = ds_mod.DomainServicesPage(w)
+    page.initializePage()
+    page.show()
+    tabs = page.brand_tabs
+    tabs.open_tab("Look")
     logo = tmp_path / "logo.png"
     logo.write_bytes(png_bytes(48, 48, opaque=True))
-    st.look_editor.picture_paths["logo_image"].setText(str(logo))
-    assert not st.record_note.isHidden()
-    assert "logo" in st.record_note.text() and "Not saved in the brand record" in st.record_note.text()
+    tabs.look_editor.picture_paths["logo_image"].setText(str(logo))
+    note = tabs.look_record_note
+    assert not note.isHidden()
+    assert "logo" in note.text() and "Not saved in the brand record" in note.text()
 
 
 # ── the Branding page (the image route's host) ───────────────────────────────────────
@@ -177,11 +187,11 @@ def test_the_branding_page_hosts_the_drop_down_in_mesh_and_the_look_in_its_secti
     page.initializePage()
     assert not page.superbrand.isHidden()
     assert page.superbrand.picker.item_labels()[0] == CREATE_LABEL
-    # one editor, one home: the look is in the existing section, the compact group is
-    # hidden but still loaded and committed
-    assert page.login_collapsible.title() == "Web login theme"
-    assert page.superbrand.look_editor.parentWidget() is page.login_host
-    assert page.login_theme.isHidden() and page.login_theme.isEnabled()
+    # one editor, one home: the look is on row 0's Look tab of the Domain services
+    # step (2026-10-21); this page and the design only point there
+    assert page.superbrand.look_editor is None
+    assert not page.look_pointer.isHidden() and "Look" in page.look_pointer.text()
+    assert not hasattr(page, "login_theme") and not hasattr(page, "login_collapsible")
 
 
 def test_a_colour_set_in_the_look_editor_survives_the_pages_next(qapp, gen):
@@ -190,8 +200,11 @@ def test_a_colour_set_in_the_look_editor_survives_the_pages_next(qapp, gen):
     w = _wiz(gen)
     page = wizard_mod.BrandingPage(w)
     page.initializePage()
-    page.superbrand.look_editor.primary.setText("#336699")
-    page.superbrand.look_editor.primary.editingFinished.emit()
+    ds = ds_mod.DomainServicesPage(w)
+    ds.initializePage()
+    ds.brand_tabs.open_tab("Look")
+    ds.brand_tabs.look_editor.primary.setText("#336699")
+    ds.brand_tabs.look_editor.primary.editingFinished.emit()
     assert w.cfg.login_primary_color == "#336699"
     assert page.validatePage()
     assert w.cfg.login_primary_color == "#336699"
@@ -203,13 +216,13 @@ def test_outside_a_mesh_the_page_is_what_it_was_and_owns_no_superbrand_boxes(qap
     page = wizard_mod.BrandingPage(_wiz(gen, cfg))
     page.initializePage()
     assert page.superbrand is None, "a standalone image has no brands: nothing is built"
-    assert page.login_collapsible.isHidden()
+    assert page.look_pointer.isHidden()
     cfg.mode = "mesh"
     page.initializePage()
     assert not page.superbrand.isHidden()
     cfg.mode = "standalone"
     page.initializePage()
-    assert page.superbrand.isHidden() and not page.login_theme.isHidden()
+    assert page.superbrand.isHidden() and page.look_pointer.isHidden()
 
 
 def test_next_on_the_branding_page_writes_the_design_to_the_configuration(qapp, gen):
@@ -406,8 +419,14 @@ def test_the_own_domain_is_labelled_the_superbrand_and_points_at_its_step(qapp, 
     w, page = _page(gen)
     tabs = page.brand_tabs
     assert tabs.view.own and tabs.identity_home.text() == brand_step.SUPERBRAND_HOME
-    assert tabs.look_editor is None or tabs.look_editor.isHidden()
-    assert tabs.look_note.text() == brand_step.LOOK_HOME
+    # its look is the mesh's own, chosen HERE (2026-10-21): a design-mode editor over
+    # the session's look model, enabled on every route
+    tabs.open_tab("Look")
+    ed = tabs.look_editor
+    assert ed is not None and not ed.isHidden() and ed.isEnabled()
+    assert ed.model is session_for(w, "image", w.cfg, gen).look
+    assert ed.model.mode == "design"
+    assert tabs.look_note.text().lower().startswith(brand_step.LOOK_HOME[:30].lower())
 
 
 def test_the_ways_tab_is_read_only_with_one_button_that_asks_for_the_wizard(qapp, gen):

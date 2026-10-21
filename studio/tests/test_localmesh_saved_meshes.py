@@ -23,6 +23,7 @@ pytest.importorskip("hugmesh_studio.gui.qt",
 from hugmesh_studio.core import local_mesh_bootstrap as lmb          # noqa: E402
 from hugmesh_studio.core import saved_meshes as sm                   # noqa: E402
 from hugmesh_studio.core import vaults                               # noqa: E402
+from hugmesh_studio.core.domain_services import normalise_slugs     # noqa: E402
 from hugmesh_studio.core.local_services import local_slugs           # noqa: E402
 from hugmesh_studio.core.mesh_node import MeshNode, MeshStatus       # noqa: E402
 from hugmesh_studio.gui.pages import localmesh as localmesh_mod      # noqa: E402
@@ -159,10 +160,11 @@ def _select(page, row=0):
 def test_apply_bootstrap_round_trips_collect_bootstrap(qapp, page, tmp_path):
     """THE fidelity test: every page-owned field non-default, including the
     None-vs-() distinction for services/kind_addons."""
-    page.login_theme.primary.setText("#123456")
-    page.login_theme.secondary.setText("#654321")
-    css = page.login_theme.compose_css()
-    assert css and not page.login_theme.error_text()
+    look = page.mesh_look()                     # row 0's Look tab edits this model
+    look.set("primary", "#123456")
+    look.set("secondary", "#654321")
+    css, err = page.look_css_and_error()
+    assert css and not err
     form = page.theme_form()
     svcs = tuple(s for s in local_slugs() if s != "egress-vpn")
     cfg = lmb.LocalMeshBootstrapConfig(
@@ -173,11 +175,23 @@ def test_apply_bootstrap_round_trips_collect_bootstrap(qapp, page, tmp_path):
         login_theme_css=css, idp="oidc", idp_issuer="https://id.example.org",
         idp_client_id="cid", idp_jwks="https://id.example.org/jwks",
         kind_addons=())
-    # scramble the theme first so the round-trip has to restore it
-    page.login_theme.primary.setText("")
+    # scramble the look first so the round-trip has to restore it (the brand is
+    # changed by the record, so the session — and its look — is a new one anyway)
+    look.set("primary", "")
     missing = page.apply_bootstrap(cfg, form=form)
     assert missing == ["auth_key"]
-    assert page.collect_bootstrap() == cfg
+    # The record's DOMAIN services land on the mesh's own domain row (the retired
+    # "Local services" pick, 2026-10-21) — exactly what the loader's own migration
+    # makes of the same record — and the mesh still runs every one of them.
+    want = lmb.LocalMeshBootstrapConfig.from_dict(cfg.to_dict())
+    # (the Domain services step keeps a row's slugs in CATALOGUE order, never the
+    # order a selection listed them in — core/domain_services.normalise_slugs)
+    want.domains = tuple(dict(r, optional_services=normalise_slugs(
+        r.get("optional_services"))) for r in want.domains)
+    got = page.collect_bootstrap()
+    assert got == want
+    assert set(got.effective_services()) == set(svcs)
+    assert got.login_theme_css == css
     # …and the other direction of the two tuple fields
     cfg2 = lmb.LocalMeshBootstrapConfig(services=(), kind_addons=("metrics-server",))
     page.apply_bootstrap(cfg2, form={})
@@ -194,25 +208,45 @@ def test_apply_bootstrap_restores_the_web_chrome_the_record_carries(qapp, page):
     DIFFERENT login page, and _not_applied_text still said "every field applied".
     This test sets two chrome inputs, scrambles them, and requires the record
     to bring them — and the identical derived css — back."""
-    g = page.login_theme
-    g.primary.setText("#123456")
-    g.secondary.setText("#654321")
-    g.set_chrome("header_hidden", True)
-    g.set_chrome("footer_bg", "#101010")
-    css = g.compose_css()
-    assert css and not g.error_text()
+    g = page.mesh_look()                        # row 0's Look tab edits this model
+    g.set("primary", "#123456")
+    g.set("secondary", "#654321")
+    g.set("header_hidden", True)
+    g.set("footer_bg", "#101010")
+    css, err = page.look_css_and_error()
+    assert css and not err
     form = page.theme_form()
     assert form["login_header_hidden"] is True and form["login_footer_bg"] == "#101010"
     cfg = lmb.LocalMeshBootstrapConfig(login_theme_css=css)
     # scramble the chrome so the round-trip has to restore it — and prove the
     # scramble changed the derived css, or the equality below proves nothing
-    g.set_chrome("header_hidden", False)
-    g.set_chrome("footer_bg", "")
-    assert g.compose_css() != css
+    g.set("header_hidden", False)
+    g.set("footer_bg", "")
+    assert page.look_css_and_error()[0] != css
     missing = page.apply_bootstrap(cfg, form=form)
     assert "login_theme_css" not in missing
-    assert g.chrome["header_hidden"] is True
-    assert g.chrome["footer_bg"] == "#101010"
+    eff = page.mesh_look().effective()
+    assert eff["header_hidden"] is True
+    assert eff["footer_bg"] == "#101010"
+    assert page.collect_bootstrap().login_theme_css == css
+
+
+def test_an_older_record_form_without_look_still_loads_its_login_inputs(qapp, page):
+    """A record saved before the Themes group was retired carries ONLY the seventeen
+    login_* inputs (no ``look`` key). They still load — into the mesh's own look, which
+    row 0's Look tab now edits — and derive the same stylesheet."""
+    g = page.mesh_look()
+    g.set("primary", "#123456")
+    g.set("footer_bg", "#101010")
+    css = page.look_css_and_error()[0]
+    old_form = {k: v for k, v in page.theme_form().items() if k != "look"}
+    assert set(old_form) == set(localmesh_mod._THEME_FORM_DEFAULTS)
+    g.set("primary", "")
+    g.set("footer_bg", "")
+    missing = page.apply_bootstrap(lmb.LocalMeshBootstrapConfig(login_theme_css=css),
+                                   form=old_form)
+    assert "login_theme_css" not in missing
+    assert page.mesh_look().effective()["primary"] == "#123456"
     assert page.collect_bootstrap().login_theme_css == css
 
 

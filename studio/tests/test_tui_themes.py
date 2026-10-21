@@ -17,12 +17,14 @@ def _isolated_state_dir(tmp_path, monkeypatch):
 
 
 def _at_themes() -> journey.Journey:
-    """A journey standing on the Themes screen (standalone flow -> branding -> t)."""
+    """A journey standing on the Themes screen, opened over the branding step. The
+    journey no longer offers ``t`` there (2026-10-21: the look is chosen in each
+    domain's section 2, Look); the screen itself is unchanged and is opened directly."""
     j = journey.Journey(".")
     for line in ("", "", "", ""):        # welcome, mode, role, hardware
         j.feed(line)
     assert j.slug == "branding"
-    j.feed("t")
+    j.open_overlay(themes.ThemesScreen())
     assert j.overlay is not None
     return j
 
@@ -34,12 +36,17 @@ def test_the_surface_is_titled_themes():
     assert j.lines()[0] == "Themes"
 
 
-def test_branding_step_offers_the_themes_screen_not_a_popup():
+def test_branding_step_no_longer_offers_themes_and_says_where_the_look_is():
+    """The operator: "the theme selection should be there instead of where it is now"
+    — in each domain's section. The branding step says so, and ``t`` opens nothing."""
     j = journey.Journey(".")
     for line in ("", "", "", ""):
         j.feed(line)
     text = "\n".join(j.lines())
-    assert "Themes" in text and "t opens the Themes screen" in text
+    assert "t opens the Themes screen" not in text and "t. Themes" not in text
+    assert "section 2 (Look)" in text
+    j.feed("t")
+    assert j.overlay is None
 
 
 def test_persisted_keys_stay_login_star():

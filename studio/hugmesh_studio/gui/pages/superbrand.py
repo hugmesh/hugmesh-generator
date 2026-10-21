@@ -7,9 +7,12 @@ look model. The image route's Branding page hosts it, the Fleet window hosts it 
 Superbrand step, and the Docker route's Environment-and-brand step mounts it beside the
 picker.
 
-ONE EDITING HOME PER SETTING. The superbrand's identity and its default look are edited
-HERE and nowhere else: the Network step's brand rows and the Domain services step's
-Identity and Look tabs show them read-only and say so.
+ONE EDITING HOME PER SETTING. The superbrand's identity is edited HERE and nowhere
+else: the Network step's brand rows and the Domain services step's Identity tab show it
+read-only and say so. Its LOOK moved (2026-10-21, the operator: "the theme selection
+should be there instead of where it is now"): it is edited on the Look tab of the mesh's
+own domain (row 0) on the Domain services step, on every route, and this step only
+points there (``look_in_step`` is False by default; a host may still pass True).
 
 WHAT THE RECORD CANNOT HOLD YET is a label under the look (``BrandSession.
 not_in_record_sentence``), not a silent omission.
@@ -23,8 +26,11 @@ No modal anywhere. Every refusal is ``note``; slots never raise.
 """
 from __future__ import annotations
 
+import html
+
 from ..qt import QtWidgets, Signal
 from ...core import plain_words
+from ...tui.brand_step import LOOK_POINTER
 from ...tui.superbrand_step import (BrandSession, IDENTITY_FIELDS, IDENTITY_LABELS,
                                     UNAFFILIATED_REASON)
 from ._lookeditor import LookEditor
@@ -54,11 +60,11 @@ class SuperbrandStep(QtWidgets.QWidget):
     changed = Signal()
 
     def __init__(self, session: BrandSession | None = None, *, route: str = "image",
-                 look_in_step: bool = True, with_picker: bool = True, parent=None):
+                 look_in_step: bool = False, with_picker: bool = True, parent=None):
         super().__init__(parent)
         self.route = route
-        #: False when the host mounts the look editor itself (the Branding page keeps it
-        #: in its existing "Web login theme" section; this step then points there)
+        #: False (the default): the look is edited on the Look tab of the mesh's own
+        #: domain, and this step points there; True keeps an editor in this step
         self.look_in_step = look_in_step
         self.session: BrandSession | None = None
         self._loading = False
@@ -132,8 +138,7 @@ class SuperbrandStep(QtWidgets.QWidget):
         self.look_editor: LookEditor | None = None
         self._look_layout = ll
         self.look_pointer = QtWidgets.QLabel(
-            "<b>2. Look</b> — colours, font, shape, decoration and pictures are set in "
-            "the ‘Web login theme’ section below.")
+            "<b>2. Look</b> — " + html.escape(LOOK_POINTER) + ".")
         self.look_pointer.setWordWrap(True)
         self.look_pointer.setObjectName("superbrand_look_pointer")
         self.record_note = QtWidgets.QLabel("")
@@ -197,7 +202,8 @@ class SuperbrandStep(QtWidgets.QWidget):
 
     def _mount_look(self) -> None:
         s = self.session
-        if s is None:
+        if s is None or not self.look_in_step:
+            # the look is edited on the mesh's own domain's Look tab; nothing to mount
             return
         self.ensure_look_editor()
         if self.look_editor.model is not s.look:

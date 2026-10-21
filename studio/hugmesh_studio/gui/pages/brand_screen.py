@@ -9,16 +9,26 @@ that are not the services table show.
 
 EACH SETTING HAS EXACTLY ONE EDITING HOME (the rule the screen is built on):
 
-* Identity is a read-only mirror of the Domains table, which keeps a brand's public name,
-  title, sign-in, images and certificate authority; it says where each is changed.
+* Identity mirrors the Domains table (public name, title, images, certificate
+  authority — changed there) and EDITS the domain's sign-in (2026-10-21, the operator:
+  "Make sure the identity provider step is also added per domain"): through the mesh's
+  sign-in (inherited), its own Casdoor, or its own Azure Entra ID / AWS Cognito / OIDC
+  provider with a sign-in address, client id and key address, written by
+  ``config.set_domain_signin`` (the one writer) with every refusal inline. The mesh's
+  own row shows the mesh's sign-in, which is the default every domain inherits and is
+  chosen on the Identity provider step.
 * Look is edited here: a :class:`~._lookeditor.LookEditor` over the brand's override model
   (every setting says 'inherited from the superbrand' or 'this brand's own'; 'Use the
   superbrand's value' is an inline second click). On every route but the Docker mesh the
-  editor draws disabled with the reason (D18). The superbrand's own row shows its look
-  read-only: it is edited on the superbrand step.
+  editor draws disabled with the reason (D18). The mesh's own row (row 0) edits the
+  superbrand's look itself, in design mode, on every route: this tab is the ONE place a
+  theme is chosen (2026-10-21; the old mesh-wide theme panels are gone).
 * Services is the existing services body, unchanged, and the tab the screen opens on.
-* Ways to reach it is a read-only summary and ONE button, 'Set up ways to reach this
-  brand'; the Go-Live wizard is where a way is chosen (``brand_model.set_ways``).
+* Ways to reach it EDITS the domain's Tor address (its own onion — the same choice as
+  the Services tab's front door, kept in step with it), its VPN membership and its
+  egress (inherit / on / off; inherit / an egress VPN with an optional provider file /
+  direct), through ``brand_model.set_ways``, and says what each route does with them.
+  The internal and public names stay with the Go-Live wizard: one button opens it.
 
 LAYOUT. This is a tab BAR with the four tabs' content in the body's own layout, not a
 QTabWidget: the services body (two checkbox tables, their state line, the honesty banner,
@@ -36,15 +46,22 @@ from __future__ import annotations
 import html
 
 from ..qt import QtCore, QtWidgets, Signal
-from ...core import plain_words
+from ...core import domain_reach, plain_words
 from ...tui import brand_step
 from ._lookeditor import LookEditor
+from ._widgets import collapsible
 
 __all__ = ["BrandSettingsTabs", "TAB_TITLES"]
 
 TAB_TITLES = tuple(t for _n, t in brand_step.SECTIONS)
 (TAB_IDENTITY, TAB_LOOK, TAB_SERVICES, TAB_WAYS) = range(4)
 _MUTED = "color: gray;"
+
+
+def own_look_note() -> str:
+    """The Look tab's line on the mesh's own row (brand_step.LOOK_HOME as a sentence)."""
+    home = brand_step.LOOK_HOME
+    return home[:1].upper() + home[1:] + "."
 
 
 def _wrapped(text: str = "", *, name: str = "", muted: bool = False) -> QtWidgets.QLabel:
@@ -66,6 +83,13 @@ class BrandSettingsTabs(QtCore.QObject):
     #: the 'Set up ways to reach this brand' click, with the brand's name
     ways_requested = Signal(str)
     currentChanged = Signal(int)
+    #: a look edit was written (the host refreshes what reads the look: the plan)
+    look_changed = Signal()
+    #: the domain's sign-in or reach was written (the host refreshes its mirrors)
+    row_changed = Signal()
+    #: the Ways tab's Tor tick was clicked: the host's front door owns the working
+    #: value (the Services tab's row), so it applies it and calls show_tor back
+    tor_changed = Signal(bool)
 
     def __init__(self, route: str = "image", parent=None):
         super().__init__(parent)
@@ -95,6 +119,49 @@ class BrandSettingsTabs(QtCore.QObject):
         self.identity_home = _wrapped("", name="brand_identity_home", muted=True)
         il.addWidget(self.identity_home)
         self._identity_rows: list[QtWidgets.QWidget] = []
+        self._loading = False
+        # ── the domain's sign-in: the per-domain identity provider ──────────────────
+        self.signin_box = QtWidgets.QGroupBox("How this domain's people sign in")
+        self.signin_box.setObjectName("brand_signin_box")
+        sl = QtWidgets.QVBoxLayout(self.signin_box)
+        self.signin_now = _wrapped("", name="brand_signin_now")
+        sl.addWidget(self.signin_now)
+        self.signin_choice = QtWidgets.QComboBox()
+        self.signin_choice.setObjectName("brand_signin_choice")
+        for key, label in brand_step.SIGNIN_CHOICES:
+            self.signin_choice.addItem(label, key)
+        self.signin_choice.setMinimumHeight(26)
+        self.signin_choice.activated.connect(self._signin_choice_clicked)
+        sl.addWidget(self.signin_choice)
+        self.signin_fields = QtWidgets.QWidget()
+        self.signin_fields.setObjectName("brand_signin_fields")
+        sf = QtWidgets.QFormLayout(self.signin_fields)
+        sf.setContentsMargins(0, 0, 0, 0)
+        self.signin_issuer = QtWidgets.QLineEdit()
+        self.signin_issuer.setObjectName("brand_signin_address")
+        self.signin_issuer.setPlaceholderText("https://… (the provider's sign-in address)")
+        self.signin_client = QtWidgets.QLineEdit()
+        self.signin_client.setObjectName("brand_signin_client")
+        self.signin_client.setPlaceholderText("the provider's client id (public, never a secret)")
+        self.signin_keys = QtWidgets.QLineEdit()
+        self.signin_keys.setObjectName("brand_signin_keys")
+        self.signin_keys.setPlaceholderText("empty: derived from the sign-in address")
+        sf.addRow("Sign-in address", self.signin_issuer)
+        sf.addRow("Client id", self.signin_client)
+        sf.addRow("Key address", self.signin_keys)
+        sl.addWidget(self.signin_fields)
+        self.signin_apply = QtWidgets.QPushButton("Use this sign-in")
+        self.signin_apply.setObjectName("brand_signin_apply")
+        self.signin_apply.setMinimumHeight(28)
+        self.signin_apply.clicked.connect(self._signin_apply_clicked)
+        row_apply = QtWidgets.QHBoxLayout()
+        row_apply.setContentsMargins(0, 0, 0, 0)
+        row_apply.addWidget(self.signin_apply)
+        row_apply.addStretch(1)
+        sl.addLayout(row_apply)
+        self.signin_note = _wrapped("", name="brand_signin_note")
+        sl.addWidget(self.signin_note)
+        il.addWidget(self.signin_box)
 
         # ── Look: the override editor, or a read-only summary ───────────────────────
         self.look_page = QtWidgets.QWidget()
@@ -117,8 +184,53 @@ class BrandSettingsTabs(QtCore.QObject):
         self.ways_page.setObjectName("brand_tab_ways")
         wl = QtWidgets.QVBoxLayout(self.ways_page)
         wl.setContentsMargins(6, 6, 6, 6)
+        # ── Tor, VPN and egress: chosen here, per domain ────────────────────────────
+        self.reach_box = QtWidgets.QGroupBox("Tor, VPN and egress for this domain")
+        self.reach_box.setObjectName("brand_reach_box")
+        rl = QtWidgets.QFormLayout(self.reach_box)
+        self.tor_box = QtWidgets.QCheckBox("Its own Tor address (an onion of its own)")
+        self.tor_box.setObjectName("brand_ways_tor")
+        self.tor_box.clicked.connect(self._tor_clicked)
+        rl.addRow("Tor", self.tor_box)
+        self.tailnet_combo = QtWidgets.QComboBox()
+        self.tailnet_combo.setObjectName("brand_ways_vpn")
+        for key, label in brand_step.TAILNET_CHOICES:
+            self.tailnet_combo.addItem(label, key)
+        self.tailnet_combo.setMinimumHeight(26)
+        self.tailnet_combo.activated.connect(self._tailnet_clicked)
+        rl.addRow("VPN", self.tailnet_combo)
+        self.egress_combo = QtWidgets.QComboBox()
+        self.egress_combo.setObjectName("brand_ways_egress")
+        for key, label in brand_step.EGRESS_CHOICES:
+            self.egress_combo.addItem(label, key)
+        self.egress_combo.setMinimumHeight(26)
+        self.egress_combo.activated.connect(self._egress_clicked)
+        rl.addRow("Egress", self.egress_combo)
+        conf_row = QtWidgets.QWidget()
+        cr = QtWidgets.QHBoxLayout(conf_row)
+        cr.setContentsMargins(0, 0, 0, 0)
+        self.egress_conf = QtWidgets.QLineEdit()
+        self.egress_conf.setObjectName("brand_ways_egress_conf")
+        # typed, never a file dialog (no modal on this screen): an absolute path to a
+        # WireGuard .conf or OpenVPN .ovpn, checked as a real file when the mesh starts
+        self.egress_conf.setPlaceholderText(
+            "/absolute/path/provider.conf — empty: the mesh's own provider file")
+        self.egress_conf.editingFinished.connect(self._egress_conf_done)
+        cr.addWidget(self.egress_conf, 1)
+        self.egress_conf_row = conf_row
+        rl.addRow("Provider file", conf_row)
+        self.reach_words = _wrapped("", name="brand_reach_words")
+        rl.addRow(self.reach_words)
+        self.reach_note = _wrapped("", name="brand_reach_note")
+        rl.addRow(self.reach_note)
+        wl.addWidget(self.reach_box)
         self.ways_text = _wrapped("", name="brand_ways_text")
-        wl.addWidget(self.ways_text)
+        # The per-path table (every way on every start path) is long: folded by default
+        # so the tab stays as tall as its controls; one click shows it.
+        self.ways_more = collapsible("What each start path does with these ways",
+                                     self.ways_text, expanded=False)
+        self.ways_more.setObjectName("brand_ways_more")
+        wl.addWidget(self.ways_more)
         self.ways_btn = QtWidgets.QPushButton(brand_step.WAYS_BUTTON)
         self.ways_btn.setObjectName("brand_ways_button")
         self.ways_btn.setMinimumHeight(28)
@@ -218,8 +330,10 @@ class BrandSettingsTabs(QtCore.QObject):
         self.view = view
         try:
             self._fill_identity()
+            self._fill_signin()
             self._fill_look()
             self._fill_ways()
+            self._fill_reach()
         except Exception:                       # noqa: BLE001 — PyQt6 qFatal guard
             import sys
             import traceback
@@ -260,25 +374,35 @@ class BrandSettingsTabs(QtCore.QObject):
                 self.look_editor.setVisible(False)
             return
         model = v.look_model()
-        if model is None:                       # the superbrand's own row
-            self.look_note.setText(brand_step.LOOK_HOME)
-            self.look_summary.setText("\n".join(v.look_lines(self.route)[:-2]))
-            self.look_summary.setVisible(True)
+        if model is None:
+            self.look_note.setText("")
+            self.look_summary.setVisible(False)
             if self.look_editor is not None:
                 self.look_editor.setVisible(False)
             return
-        self.look_note.setText(
-            f"Every setting starts from the {plain_words.term('superbrand')}'s. Change one "
-            f"to make it this brand's own; ‘Use the {plain_words.term('superbrand')}'s "
-            "value’ gives it back.")
+        if v.own:
+            # the mesh's own row: the superbrand's look itself, in design mode
+            self.look_note.setText(own_look_note())
+        else:
+            self.look_note.setText(
+                f"Every setting starts from the {plain_words.term('superbrand')}'s. Change "
+                f"one to make it this brand's own; ‘Use the "
+                f"{plain_words.term('superbrand')}'s value’ gives it back.")
         self.look_summary.setVisible(False)
         if self.look_editor is None:
             self.look_editor = LookEditor(model, path=self.route)
+            # the editor scrolls inside itself: give it room for the colours and the
+            # font at once, or the tab shows a 300 px slot over blank space (looked at)
+            self.look_editor.setMinimumHeight(520)
             self.look_editor.changed.connect(self._look_changed)
             self._look_layout.insertWidget(self._look_layout.count() - 1, self.look_editor)
         else:
             self.look_editor.set_path(self.route)
             self.look_editor.set_model(model)
+        # an unaffiliated image keeps its look and loses the desktop logo (D20): the
+        # session wires that onto its own look model, and the editor draws it
+        self.look_editor.set_identity_allowed(
+            getattr(model, "identity_allowed", True), getattr(model, "identity_reason", ""))
         self.look_editor.setVisible(True)
         self._refresh_record_note()
 
@@ -287,6 +411,7 @@ class BrandSettingsTabs(QtCore.QObject):
             if self.view is not None:
                 self.view.commit_look()
             self._refresh_record_note()
+            self.look_changed.emit()
         except Exception:                       # noqa: BLE001
             import sys
             import traceback
@@ -321,6 +446,189 @@ class BrandSettingsTabs(QtCore.QObject):
         self.ways_text.setText("<br>".join(lines))
         self.ways_btn.setVisible(True)
         self.ways_note.setText(brand_step.WAYS_HOME)
+
+    # ── the domain's sign-in ──────────────────────────────────────────────────────
+    def _fill_signin(self, note: str = "", error: bool = False) -> None:
+        v = self.view
+        self._loading = True
+        try:
+            if v is None:
+                self.signin_box.setVisible(False)
+                return
+            self.signin_box.setVisible(True)
+            self.signin_now.setText("Now: " + v.signin_words())
+            own = v.own
+            for w in (self.signin_choice, self.signin_apply):
+                w.setVisible(not own)
+            if own:
+                self.signin_fields.setVisible(False)
+                self.signin_note.setStyleSheet(_MUTED)
+                self.signin_note.setText(
+                    brand_step.SIGNIN_MESH_HOME[:1].upper()
+                    + brand_step.SIGNIN_MESH_HOME[1:] + ".")
+                return
+            choice = v.signin_choice()
+            self.signin_choice.setCurrentIndex(max(0, self.signin_choice.findData(choice)))
+            vals = v.signin_values()
+            self.signin_issuer.setText(vals["issuer"])
+            self.signin_client.setText(vals["client_id"])
+            self.signin_keys.setText(vals["jwks"])
+            self._show_signin_fields()
+            self.signin_note.setStyleSheet("color: #b00020;" if error else _MUTED)
+            self.signin_note.setText(note)
+        finally:
+            self._loading = False
+
+    def _show_signin_fields(self) -> None:
+        ext = self.signin_choice.currentData() in brand_step.SIGNIN_EXTERNAL
+        self.signin_fields.setVisible(ext)
+        self.signin_apply.setVisible(ext and not (self.view is not None and self.view.own))
+
+    def _signin_choice_clicked(self, *_args) -> None:
+        """A person picked a sign-in. Through the mesh and its own Casdoor need nothing
+        more and are written at once; an external provider waits for its values and
+        the ‘Use this sign-in’ click. Never raises."""
+        try:
+            if self._loading or self.view is None:
+                return
+            self._show_signin_fields()
+            choice = self.signin_choice.currentData()
+            if choice in brand_step.SIGNIN_EXTERNAL:
+                self.signin_note.setStyleSheet(_MUTED)
+                self.signin_note.setText(
+                    "Fill in the sign-in address and the client id, then press "
+                    "‘Use this sign-in’. Nothing has changed yet.")
+                return
+            self._apply_signin(choice)
+        except Exception:                       # noqa: BLE001
+            self._swallow("_signin_choice_clicked")
+
+    def _signin_apply_clicked(self, *_args) -> None:
+        try:
+            if self.view is not None:
+                self._apply_signin(self.signin_choice.currentData())
+        except Exception:                       # noqa: BLE001
+            self._swallow("_signin_apply_clicked")
+
+    def _apply_signin(self, choice: str) -> None:
+        v = self.view
+        problems = v.set_signin(choice, self.signin_issuer.text(),
+                                self.signin_client.text(), self.signin_keys.text())
+        if problems:
+            # nothing was written: the row keeps what it had, the controls keep what
+            # was typed so it can be fixed, and the sentence says why
+            self.signin_note.setStyleSheet("color: #b00020;")
+            self.signin_note.setText("Not changed: " + problems[0])
+            return
+        self._fill_identity()
+        self._fill_signin("Saved: " + v.signin_words())
+        self.row_changed.emit()
+
+    # ── Tor, VPN and egress ───────────────────────────────────────────────────────
+    def _fill_reach(self, note: str = "", error: bool = False) -> None:
+        v = self.view
+        self._loading = True
+        try:
+            if v is None:
+                self.reach_box.setVisible(False)
+                return
+            self.reach_box.setVisible(True)
+            own = v.own
+            for w in (self.tailnet_combo, self.egress_combo, self.egress_conf):
+                w.setEnabled(not own)
+            self.tor_box.setEnabled(not own)
+            words = v.reach_lines()
+            self.reach_words.setText(
+                f"VPN: {words.get(domain_reach.WAY_TAILNET, '')}\n"
+                f"Egress: {words.get(domain_reach.WAY_EGRESS, '')}")
+            if own:
+                self.tor_box.setChecked(False)
+                self.tor_box.setText("The mesh's own Tor address (its onion)")
+                self.tailnet_combo.setCurrentIndex(0)
+                self.egress_combo.setCurrentIndex(0)
+                self.egress_conf.setText("")
+                self.egress_conf_row.setEnabled(False)
+                self.reach_note.setStyleSheet(_MUTED)
+                self.reach_note.setText(brand_step.OWN_REACH_HOME[:1].upper()
+                                        + brand_step.OWN_REACH_HOME[1:] + ".")
+                return
+            self.tor_box.setText("Its own Tor address (an onion of its own)")
+            self.tor_box.setChecked(v.tor_on())
+            self.tailnet_combo.setCurrentIndex(
+                max(0, self.tailnet_combo.findData(v.tailnet_choice())))
+            mode, conf = v.egress_choice()
+            self.egress_combo.setCurrentIndex(max(0, self.egress_combo.findData(mode)))
+            self.egress_conf.setText(conf)
+            self.egress_conf_row.setEnabled(mode == domain_reach.EGRESS_VPN)
+            self.reach_note.setStyleSheet("color: #b00020;" if error else _MUTED)
+            self.reach_note.setText(note or brand_step.REACH_RECORDED_ONLY)
+        finally:
+            self._loading = False
+
+    def show_tor(self, available: bool, on: bool) -> None:
+        """The host's front door says what the domain's Tor choice is now."""
+        self._loading = True
+        try:
+            if self.view is not None and not self.view.own:
+                self.tor_box.setEnabled(bool(available))
+                self.tor_box.setChecked(bool(on))
+        finally:
+            self._loading = False
+
+    def _reach_done(self, problems: list[str]) -> None:
+        if problems:
+            self._fill_reach("Not changed: " + problems[0], error=True)
+            return
+        self._fill_reach()
+        self._fill_ways()
+        self.row_changed.emit()
+
+    def _tor_clicked(self, checked: bool) -> None:
+        try:
+            if self._loading or self.view is None or self.view.own:
+                return
+            self.tor_changed.emit(bool(checked))
+            self._fill_ways()
+        except Exception:                       # noqa: BLE001
+            self._swallow("_tor_clicked")
+
+    def _tailnet_clicked(self, *_args) -> None:
+        try:
+            if self._loading or self.view is None:
+                return
+            self._reach_done(self.view.set_tailnet(self.tailnet_combo.currentData()))
+        except Exception:                       # noqa: BLE001
+            self._swallow("_tailnet_clicked")
+
+    def _egress_clicked(self, *_args) -> None:
+        try:
+            if self._loading or self.view is None:
+                return
+            mode = self.egress_combo.currentData()
+            self.egress_conf_row.setEnabled(mode == domain_reach.EGRESS_VPN)
+            self._reach_done(self.view.set_egress(
+                mode, self.egress_conf.text() if mode == domain_reach.EGRESS_VPN else ""))
+        except Exception:                       # noqa: BLE001
+            self._swallow("_egress_clicked")
+
+    def _egress_conf_done(self) -> None:
+        try:
+            if (self._loading or self.view is None
+                    or self.egress_combo.currentData() != domain_reach.EGRESS_VPN):
+                return
+            if self.egress_conf.text().strip() == self.view.egress_choice()[1]:
+                return                           # tabbing through is not an edit
+            self._reach_done(self.view.set_egress(domain_reach.EGRESS_VPN,
+                                                  self.egress_conf.text()))
+        except Exception:                       # noqa: BLE001
+            self._swallow("_egress_conf_done")
+
+    @staticmethod
+    def _swallow(where: str) -> None:
+        import sys
+        import traceback
+        print(f"brand_screen: swallowed exception in {where}", file=sys.stderr)
+        traceback.print_exc(file=sys.stderr)
 
     def _ways_clicked(self, *_args) -> None:
         try:

@@ -82,7 +82,7 @@ from ..styles import WARN, muted
 from ...core import plain_words
 from ...core.config import (CLIENT_CA_INHERITANCE_NOTE, DOMAIN_FIELDS, DOMAIN_IDP_OWN,
                             DOMAIN_IDP_SUPERDOMAIN, GITHUB_ORG_RE, Domain,
-                            github_org_problem, image_class,
+                            github_org_problem, image_class, set_domain_signin,
                             superadmin_plane_applies)
 from ...core.local_mesh_domains import added_row_problems
 from ...core.domain_services import (implicit_own_domain, normalise_slugs,
@@ -137,8 +137,9 @@ _IDP_ITEMS = (
      "Sign-in via the mesh's central Casdoor on the superdomain — today's "
      "behavior, nothing extra to run."),
     (DOMAIN_IDP_OWN, "Own Casdoor",
-     "This domain runs its OWN Casdoor instance, provisioned just for it "
-     "(its users sign in against that instance, not the mesh's central one)."),
+     "This domain has its OWN sign-in: by default a Casdoor instance provisioned "
+     "just for it; its own Azure Entra ID, AWS Cognito or OIDC provider instead is "
+     "chosen on the domain's Identity tab (Domain services step)."),
 )
 
 
@@ -634,6 +635,21 @@ class DomainsTableBody:
             dom = by_name.get(name)
             if dom is not None:
                 cell.set_slugs(dom.optional_services, reviewed=(name in done))
+                # the sign-in too: the Domain services step's Identity tab writes it
+                # (own provider included), and a stale cell would flip it back on Next
+                combo = self.table.cellWidget(r, _COL_IDP)
+                if isinstance(combo, _IdpCombo):
+                    want = combo.findData(dom.idp or DOMAIN_IDP_SUPERDOMAIN)
+                    if want >= 0 and want != combo.currentIndex():
+                        combo.blockSignals(True)
+                        combo.setCurrentIndex(want)
+                        combo.blockSignals(False)
+                    # an own row on Entra must not read as "Own Casdoor" in the table
+                    prov = str((getattr(dom, "idp_settings", None) or {}).get(
+                        "provider") or "")
+                    combo.setToolTip(
+                        f"Its own provider ({prov}), chosen on its Identity tab"
+                        if prov and prov != "casdoor" else "")
             elif self.is_own_row(r):
                 cell.set_slugs(getattr(cfg, "cluster_domain_services", None),
                                reviewed=(name in done))
@@ -724,6 +740,11 @@ class DomainsTableBody:
             if kept is not None:
                 for f in _ROW_FIELDS_NO_CELL:
                     setattr(row, f, copy.deepcopy(getattr(kept, f)))
+                if (kept.idp or DOMAIN_IDP_SUPERDOMAIN) != idp:
+                    # the cell flipped the sign-in: the one writer clears what the old
+                    # choice carried (an own provider's settings, its Casdoor port), so
+                    # a superdomain row never keeps settings it would never read
+                    set_domain_signin(row, idp)
             out.append(row)
         return out, base_ca
 

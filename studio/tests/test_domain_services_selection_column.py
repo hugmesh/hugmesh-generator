@@ -659,7 +659,7 @@ def test_the_wizard_steps_subtitle_is_whole(look, qapp, monkeypatch, tmp_path):
     qt = _qt()
     saved = _apply_look(qapp, look)
     try:
-        for name, must_say in (("local-docker-mesh", "two steps on"),
+        for name, must_say in (("local-docker-mesh", "what the mesh runs"),
                                ("image-flow", "every domain gets its own")):
             _body, window = _build_host(name, qapp, monkeypatch, tmp_path)
             try:

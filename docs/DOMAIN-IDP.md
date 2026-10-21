@@ -12,6 +12,12 @@ Two DIFFERENT "idp" axes exist. Do not mix them up:
 
 ## A domain's own EXTERNAL provider (`Domain.idp_settings`, 2026-10-21)
 
+In the Studio this is chosen on the domain's **Identity** tab (Domain services step,
+section 1 of the text screen: `signin mesh|casdoor|entra|aws|oidc ...`), on every route
+that has a domains table; the Domains table's Sign-in cell still flips `superdomain` /
+`own`, and both write through `config.set_domain_signin`. The mesh-level IdP step is the
+default every `superdomain` domain inherits.
+
 An `own` domain can sign in through its own external provider instead of its own
 Casdoor. The row keeps `idp: own` and adds
 `idp_settings: {provider, issuer, client_id, jwks}`, with the provider being Entra,

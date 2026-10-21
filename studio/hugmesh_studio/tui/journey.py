@@ -330,7 +330,9 @@ class IdpScreen:
         return None
 
     def lines(self, j: "Journey") -> list[str]:
-        out = ["Which identity provider will this mesh's nodes trust?", ""]
+        out = ["Which identity provider will this mesh's nodes trust?",
+               "(This is the default every domain inherits; a domain can choose its "
+               "own in section 1, Identity, of the Domain services step.)", ""]
         for i, idp in enumerate(IDP_CHOICES, 1):
             marker = "*" if j.cfg.idp == idp else " "
             out.append(f" {marker}{i}. {IDP_LABELS[idp]}")
@@ -853,14 +855,18 @@ class UsersScreen:
 
 
 class BrandingScreen:
-    """Branding assets are pending; the THEMES surface (#63) is real — a screen,
-    not a popup (TUI-appropriate), opened with ``t`` — and so is the SUPERBRAND step
-    (#654, D8): the drop-down with ``Create a new superbrand`` first and the design,
-    opened with ``s`` and offered where the window's Branding page offers it (a mesh;
-    on an unaffiliated image it says why there is nothing to choose)."""
+    """Branding assets are pending; the SUPERBRAND step (#654, D8) is real: the
+    drop-down with ``Create a new superbrand`` first and the design, opened with ``s``
+    and offered where the window's Branding page offers it (a mesh; on an unaffiliated
+    image it says why there is nothing to choose).
+
+    The THEMES entry (``t``) is gone (2026-10-21, the operator: "the theme selection
+    should be there instead of where it is now"): a domain's look is chosen in section
+    2 (Look) of that domain's Brand settings on the Domain services step, and the mesh's
+    own look in its own domain's section 2 — the window's Look tab, the same model."""
 
     slug = "branding"
-    title = "Branding & Themes"
+    title = "Branding"
 
     def enter(self, j: "Journey") -> None:  # noqa: ARG002
         return None
@@ -878,10 +884,12 @@ class BrandingScreen:
             out += [f"  s. {sb.capitalize()} — which {sb} governs this mesh: "
                     f"‘Create a new {sb}’, or one you made before; design it",
                     ""]
-        out += ["  t. Themes — edit the web login theme (colours, header/footer, "
-                "background effect)",
-                "", "(Enter continues; t opens the Themes screen"
-                + ("; s the Superbrand step)" if self._superbrand_offered(j) else ")")]
+        out += ["  The web sign-in look (themes, colours, header/footer) is chosen per "
+                "domain: section 2 (Look) of each domain's Brand settings on the Domain "
+                "services step; the mesh's own look is its own domain's.",
+                "", "(Enter continues"
+                + ("; s opens the Superbrand step)" if self._superbrand_offered(j)
+                   else ")")]
         return out
 
     def prompt(self, j: "Journey") -> str:  # noqa: ARG002
@@ -889,10 +897,6 @@ class BrandingScreen:
 
     def feed(self, j: "Journey", line: str) -> None:
         verb = line.strip().lower()
-        if verb == "t":
-            from .themes import ThemesScreen
-            j.open_overlay(ThemesScreen())
-            return
         if verb == "s" and self._superbrand_offered(j):
             from .superbrand_step import SuperbrandScreen
             screen = SuperbrandScreen()

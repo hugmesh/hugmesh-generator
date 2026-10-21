@@ -140,6 +140,12 @@ class BrandHost:
         and the fleet have no Secrets-store step)."""
         return None
 
+    def mesh(self):
+        """The mesh's own configuration as the per-domain resolvers read it (its
+        ``idp*`` sign-in, its VPN and egress): what a domain that inherits gets. None
+        when the route has none."""
+        return None
+
     # the rows, as fresh Domain objects (a snapshot the record can hold)
     def rows(self) -> list[Domain]:
         return [Domain(**dataclasses.asdict(d)) for d in self._live_rows()]
@@ -184,6 +190,9 @@ class ImageHost(BrandHost):
 
     def _live_rows(self) -> list[Domain]:
         return list(self.cfg.domains or [])
+
+    def mesh(self):
+        return self.cfg
 
     def base_ca(self, name: str) -> str | None:
         return os.path.basename((getattr(self.cfg, "domain_ca", None) or {}).get(
@@ -230,6 +239,15 @@ class BootstrapHost(BrandHost):
         self.cfg = cfg
         self.generator_dir = generator_dir
         self.state = state
+        #: the page that owns the mesh's own sign-in, VPN and egress controls may set
+        #: this to a callable returning the configuration those controls say NOW (the
+        #: carrier holds only the brand); without it the carrier is read
+        self.mesh_of = None
+
+    def mesh(self):
+        if callable(self.mesh_of):
+            return self.mesh_of()
+        return self.cfg
 
     def read(self) -> brand_model.BrandRecord:
         rec = brand_model.record_from_bootstrap(self.cfg)
@@ -318,6 +336,9 @@ class FleetHost(BrandHost):
 
     def look(self, sb: brand_model.Superbrand) -> brand_look.Look:
         return brand_look.Look(sb.look)
+
+    def mesh(self):
+        return self.options
 
     def profile_chosen(self, name: str) -> None:
         path = os.path.join(self.generator_dir, "brands", f"{name}.conf")
@@ -676,6 +697,13 @@ _LOOK_NAMES = {"logo_image": "logo", "login_bg_image": "login background",
                "color_scheme": "colour scheme"}
 
 
+def _look_pointer() -> str:
+    """Where the look is chosen (brand_step owns the sentence; imported late, because
+    brand_step imports this module)."""
+    from .brand_step import LOOK_POINTER
+    return LOOK_POINTER
+
+
 def session_for(owner, route: str, source, generator_dir: str = "", **kw) -> BrandSession:
     """The session a face works with, kept on ``owner`` (the wizard, the journey, a page)
     so every step of one run shares it. ``source`` is the route's configuration: the
@@ -711,9 +739,11 @@ def session_for(owner, route: str, source, generator_dir: str = "", **kw) -> Bra
 # ── the text screen ──────────────────────────────────────────────────────────────────
 class SuperbrandScreen:
     """The superbrand step as text: the drop-down, the read-only summary with ``change``,
-    and the design with its numbered sections (1 Identity, 2 Look). The look is the look
-    screen (``tui/themes.LookText``) over the session's look model — the same checked
-    verbs the window's editor calls."""
+    and the design's identity. The LOOK is not edited here any more (2026-10-21, the
+    window's design step points the same way): it is section 2 (Look) of the mesh's own
+    domain on the Domain services step — the look screen (``tui/themes.LookText``) over
+    this session's look model, the same checked verbs the window's Look tab calls.
+    ``look`` here says where it went."""
 
     slug = "superbrand"
     title = "Superbrand"
@@ -749,13 +779,10 @@ class SuperbrandScreen:
     # ── rendering ─────────────────────────────────────────────────────────────────
     def lines(self, j) -> list[str]:
         s = self.session(j)
-        if self.sub == "look":
-            return (["The superbrand's look (type 'back' to return):", ""]
-                    + self._look(j).lines())
         if s.unaffiliated:
             return [UNAFFILIATED_REASON, "",
-                    "  look         set the look (colours, font, shape, pictures)", "",
-                    "commands: look · Enter=continue · "
+                    "  The look is still yours: " + _look_pointer() + ".", "",
+                    "commands: Enter=continue · "
                     + ("b=back" if self._on_back else "q=back")]
         out = ["Which superbrand governs this mesh?  (a NUMBER picks)", ""]
         cur = s.choice
@@ -770,7 +797,7 @@ class SuperbrandScreen:
         if s.message:
             out += ["", s.message]
         out += ["", "commands: NUMBER=choose · "
-                + ("id|title|org|public|root VALUE · look · keep NAME · "
+                + ("id|title|org|public|root VALUE · keep NAME · "
                    if s.designing else "change · ")
                 + "Enter=continue · " + ("b=back" if self._on_back else "q=back")]
         return out
@@ -783,19 +810,18 @@ class SuperbrandScreen:
             out.append(f"   {cmd:<8}{IDENTITY_LABELS[f]:<22}"
                        f"{ident[f] or '(not set — the shipped value is kept)'}")
         out.append("")
-        out.append("2. Look — colours, font, shape, decoration, pictures (type 'look')")
+        out.append("2. Look — " + _look_pointer())
         eff = s.look.effective()
-        out.append("   " + ", ".join(f"{k} {eff[k]}" for k in ("preset", "primary",
-                                                               "secondary", "font",
-                                                               "style", "decor")
-                                     if eff.get(k)) or "   the shipped page")
+        out.append("   now: " + (", ".join(f"{k} {eff[k]}" for k in (
+            "preset", "primary", "secondary", "font", "style", "decor")
+            if eff.get(k)) or "the shipped page"))
         sentence = s.not_in_record_sentence()
         if sentence:
             out += ["", sentence]
         return out
 
     def prompt(self, j) -> str:  # noqa: ARG002
-        return "superbrand-look> " if self.sub == "look" else "superbrand> "
+        return "superbrand> "
 
     # ── input ─────────────────────────────────────────────────────────────────────
     def feed(self, j, line: str) -> None:
@@ -803,13 +829,9 @@ class SuperbrandScreen:
         line = line.strip()
         verb, _, arg = line.partition(" ")
         verb = verb.lower()
-        if self.sub == "look":
-            if verb in ("back", "b", "q"):
-                self.sub = "main"
-                s.touched = True
-                return
-            self._look(j).feed(line)
-            s.touched = True
+        if verb == "look":
+            # the look moved to the mesh's own domain's section 2 (one editing home)
+            j.status = "The look is not chosen here any more: " + _look_pointer() + "."
             return
         if line == "":
             problems = s.commit()
@@ -824,17 +846,11 @@ class SuperbrandScreen:
         if verb in ("q", "b"):
             self._finish(j)
             return
-        if s.unaffiliated and verb == "look":
-            self.sub = "look"                    # the look is the person's (D20)
-            return
         if s.unaffiliated:
             j.status = UNAFFILIATED_REASON
             return
         if verb == "change":
             s.change()
-        elif verb == "look":
-            s.designing = True
-            self.sub = "look"
         elif verb in ("id", "title", "org", "public", "root"):
             f = {"public": "public_name", "root": "internal_root"}.get(verb, verb)
             j.status = s.set_identity(f, arg)

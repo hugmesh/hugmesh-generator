@@ -343,8 +343,12 @@ def test_localmesh_domain_steps_are_hosted_on_both_faces(wiz):
     assert isinstance(screen, tui_lm.LocalMeshScreen)
     assert not isinstance(screen, journey.PendingSideFlow)
     lm = wiz.page(wiz._page_ids["localmesh"])
+    # since 2026-10-21 the per-domain choice IS what the Docker mesh runs: both faces
+    # say so in the model's one sentence, and neither says the old, false one
+    from hugmesh_studio.core.local_mesh_domains import DOCKER_SERVICES_NOTE
     for note in (lm.domain_services.lane_note.text(), tui_lm.LANE_NOTE):
-        assert "NOT what decides which compose profiles come up" in note
+        assert note == DOCKER_SERVICES_NOTE
+        assert "NOT what decides which compose profiles come up" not in note
 
 
 def test_the_own_row_reads_the_same_on_both_faces():

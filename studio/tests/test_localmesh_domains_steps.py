@@ -249,7 +249,9 @@ def test_the_services_stepper_walks_every_domain_own_domain_first(wiz):
     assert sorted(w._boxes) == sorted(OPTIONAL_SERVICES_CHOICES)
     assert "NOT YET ENFORCED AT THE CLUSTER" in w.enforcement.text()
     assert w.lane_note.isVisibleTo(w)
-    assert "NOT what decides" in w.lane_note.text()
+    # 2026-10-21: the per-domain choice IS what the Docker mesh runs, and it says so
+    assert "what you tick here runs" in w.lane_note.text()
+    assert "NOT what decides" not in w.lane_note.text()
 
 
 # ── 5. the gate, on both doors ─────────────────────────────────────────────────────
