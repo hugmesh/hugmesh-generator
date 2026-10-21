@@ -15,13 +15,31 @@
 # dispatch-only and exists so nobody accidentally pushes an image; a tag that a human
 # deliberately created and pushed IS the explicit decision that convention protects,
 # so honouring it here does not weaken it.
+#
+# BETA SCHEME (org-wide, 2026-10-21). __version__ is MAJOR.MINOR.PATCH-beta.N. Only a
+# run on a `studio-v<version>` tag ref publishes (a tag push, or a dispatch ON the tag
+# with "publish" ticked, which is the re-run path). A dispatch on main builds both
+# installers and stops there. Any other ref is refused by the version job. A release
+# whose version has a "-" is marked pre-release and is never made "latest", and an
+# existing release is never overwritten.
+#
+# RUNNER. The version and publish jobs run on the self-hosted runner ONLY when the
+# repository variable RUNS_ON_PUBLISH is set (a JSON array such as
+# ["self-hosted","Linux","X64"]) AND the run is not a pull request AND the ref is main
+# or a studio-v* tag; otherwise they run on ubuntu-latest. Deleting RUNS_ON_PUBLISH is
+# the off switch. This workflow has no pull_request trigger and must never get one.
+# The msi job needs Windows and stays on windows-latest. The flatpak job stays on
+# ubuntu-latest: it installs its tooling with `sudo apt-get`, and the local runner is a
+# Gentoo host with neither apt nor a passwordless sudo (and no flatpak-builder).
+# None of this protects a PUBLIC repository from a fork's pull request, which runs the
+# fork's own workflow file; only the runner group's settings can do that.
 name: Studio release (MSI + Flatpak)
 
 on:
   workflow_dispatch:
     inputs:
       publish:
-        description: 'Create a GitHub Release from the built installers'
+        description: 'Create the GitHub Release (only when run on a studio-v* tag; on main this builds and stops)'
         type: boolean
         default: false
   push:
@@ -38,10 +56,11 @@ concurrency:
 
 jobs:
   version:
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(github.event_name != 'pull_request' && github.event_name != 'pull_request_target' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v') || startsWith(github.ref, 'refs/tags/studio-v')) && vars.RUNS_ON_PUBLISH || '"ubuntu-latest"') }}
     timeout-minutes: 5
     outputs:
       version: ${{ steps.read.outputs.version }}
+      msi_version: ${{ steps.read.outputs.msi_version }}
     steps:
       - uses: actions/checkout@v4
 
@@ -49,10 +68,32 @@ jobs:
         name: Read the version from the source of truth
         # __init__.py's __version__ is the ONE version. The installer filenames, the
         # About box and the release tag all derive from it, so they cannot disagree.
+        #
+        # msi_version is the MSI's numeric ProductVersion (0.3.0-beta.1 -> 0.3.1). An MSI
+        # cannot carry "-beta.N"; packaging/wix/msi_version.py explains the mapping and
+        # build-msi-wine.sh calls the same script. It also refuses any version the
+        # mapping does not know (a -SNAPSHOT, an -rc), so this step fails first.
         run: |
           version=$(python3 -c "import re,pathlib; print(re.search(r'__version__ = \"([^\"]+)\"', pathlib.Path('studio/hugmesh_studio/__init__.py').read_text()).group(1))")
+          case "$version" in
+            *-SNAPSHOT*) echo "::error::__version__ $version is a SNAPSHOT; nothing published may carry one"; exit 1 ;;
+          esac
+          msi_version=$(python3 studio/packaging/wix/msi_version.py "$version")
           echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "Studio version: $version"
+          echo "msi_version=$msi_version" >> "$GITHUB_OUTPUT"
+          echo "Studio version: $version (MSI ProductVersion $msi_version)"
+
+      - name: Refuse any ref other than main or a studio-v* tag
+        # The beta scheme's trigger split: a tag publishes, main only builds, and
+        # nothing else runs at all (a feature branch would otherwise build installers
+        # that look like release candidates, on whatever runner it asked for).
+        env:
+          REF: ${{ github.ref }}
+        run: |
+          case "$REF" in
+            refs/heads/main|refs/tags/studio-v*) echo "ref $REF accepted" ;;
+            *) echo "::error::studio-release runs only on main or on a studio-v* tag, not on $REF"; exit 1 ;;
+          esac
 
       - name: Tag must match the version it claims to release
         if: startsWith(github.ref, 'refs/tags/studio-v')
@@ -69,6 +110,8 @@ jobs:
     timeout-minutes: 45
     env:
       VERSION: ${{ needs.version.outputs.version }}
+      # The numeric ProductVersion for `-define Version=`; the file name keeps VERSION.
+      MSI_VERSION: ${{ needs.version.outputs.msi_version }}
     steps:
       - uses: actions/checkout@v4
 
@@ -156,7 +199,7 @@ jobs:
         run: |
           $appDir = (Resolve-Path dist/hugmesh-studio).Path
           wix build -arch x64 `
-            -define Version=$env:VERSION `
+            -define Version=$env:MSI_VERSION `
             -define IconFile=build/icons/hugmesh-studio.ico `
             -define LicenseFile=build/License.rtf `
             -define AppDir=$appDir `
@@ -187,6 +230,7 @@ jobs:
 
   flatpak:
     needs: version
+    # Hosted on purpose: `sudo apt-get` below cannot run on the Gentoo self-hosted runner.
     runs-on: ubuntu-latest
     timeout-minutes: 60
     env:
@@ -264,8 +308,10 @@ jobs:
 
   publish:
     needs: [version, msi, flatpak]
-    if: ${{ inputs.publish || startsWith(github.ref, 'refs/tags/studio-v') }}
-    runs-on: ubuntu-latest
+    # Only a studio-v* tag ref publishes: the tag push itself, or a dispatch ON that tag
+    # with "publish" ticked (the re-run path). A dispatch on main never does, ticked or not.
+    if: ${{ startsWith(github.ref, 'refs/tags/studio-v') && (github.event_name == 'push' || inputs.publish) }}
+    runs-on: ${{ fromJSON(github.event_name != 'pull_request' && github.event_name != 'pull_request_target' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v') || startsWith(github.ref, 'refs/tags/studio-v')) && vars.RUNS_ON_PUBLISH || '"ubuntu-latest"') }}
     timeout-minutes: 15
     # contents: write lives ONLY on this job. The build jobs above stay read-only, so
     # a compromised build step cannot create a release.
@@ -274,13 +320,30 @@ jobs:
     env:
       VERSION: ${{ needs.version.outputs.version }}
     steps:
+      - name: Never overwrite a published release
+        # A published beta is an immutable coordinate. A re-run on a tag whose release
+        # already exists stops here, green, and changes nothing.
+        id: exists
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "studio-v$VERSION" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "::notice::release studio-v$VERSION already exists; nothing is published or changed"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - uses: actions/checkout@v4
+        if: steps.exists.outputs.skip != 'true'
 
       - uses: actions/download-artifact@v4
+        if: steps.exists.outputs.skip != 'true'
         with:
           path: artifacts
 
       - name: Collect the installers
+        if: steps.exists.outputs.skip != 'true'
         run: |
           mkdir -p release
           find artifacts -type f \( -name '*.msi' -o -name '*.flatpak' \) -exec cp {} release/ \;
@@ -290,6 +353,7 @@ jobs:
           cat SHA256SUMS
 
       - name: Generate releases.json for the documentation site
+        if: steps.exists.outputs.skip != 'true'
         # Emitted as a release asset AND printed to the job summary. It is not pushed
         # to hugmesh/hugmesh.github.io from here: GITHUB_TOKEN cannot reach another
         # repository, and adding a cross-repo PAT for a once-per-release file would be
@@ -343,11 +407,15 @@ jobs:
           PY
 
       - name: Publish the release
+        if: steps.exists.outputs.skip != 'true'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: studio-v${{ env.VERSION }}
           name: HugMesh Image Studio ${{ env.VERSION }}
           draft: false
+          # Beta scheme: any version with a "-" is a pre-release and never "latest".
+          prerelease: ${{ contains(env.VERSION, '-') }}
+          make_latest: ${{ contains(env.VERSION, '-') && 'false' || 'true' }}
           files: |
             release/*.msi
             release/*.flatpak
@@ -372,6 +440,7 @@ jobs:
             `releases.json` is attached for the documentation site's Downloads page.
 
       - name: Summarise
+        if: steps.exists.outputs.skip != 'true'
         run: |
           {
             echo '## Studio '"$VERSION"' published'
