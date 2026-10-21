@@ -162,7 +162,8 @@ class _DockerSuperbrandScreen(SuperbrandScreen):
 
 
 class LocalMeshScreen:
-    """The side-flow: ``choice`` -> ``domains`` -> ``services`` -> ``review``."""
+    """The side-flow: ``choice`` -> ``domains`` -> ``services`` -> ``review``, and from
+    the review ``f`` -> ``folders`` (the per-domain code copies, tui/code_folders_step)."""
 
     slug = "localmesh"
     title = "Local Docker mesh"

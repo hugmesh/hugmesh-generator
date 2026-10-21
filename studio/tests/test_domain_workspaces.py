@@ -319,6 +319,30 @@ def test_a_link_to_a_marked_copy_is_never_extra(gen, src, state, tmp_path):
     assert target in plan.domains[0].foreign
 
 
+def test_a_marker_is_never_read_through_a_link(gen, src, state, tmp_path):
+    _made(gen, src, state, [Domain(name="p.example")], "p.example")
+    real = os.path.join(state, "domain-code", MESH, "p.example", "hugmesh-gateway.p.example")
+    assert dw.read_marker(real) is not None
+    link = tmp_path / "link-to-copy"
+    os.symlink(real, link)
+    assert dw.read_marker(str(link)) is None
+
+
+def test_a_copy_whose_git_folder_is_a_link_is_not_ours(gen, src, state, tmp_path):
+    """A real folder whose ``.git`` points at a marked copy's git folder elsewhere:
+    removing it as 'extra' would trust a marker that lives outside it."""
+    _made(gen, src, state, [Domain(name="live.example", optional_services=["owncast"])],
+          "live.example")
+    folder = os.path.join(state, "domain-code", MESH, "live.example")
+    copy = os.path.join(folder, "hugmesh-owncast-ui.live.example")
+    stash = tmp_path / "stash-git"
+    shutil.move(os.path.join(copy, ".git"), stash)
+    os.symlink(stash, os.path.join(copy, ".git"))
+    plan = _plan(gen, src, state, [Domain(name="live.example")])
+    assert copy not in {x.path for x in plan.domains[0].extras}
+    assert copy in plan.domains[0].foreign
+
+
 def test_the_folder_of_a_domain_that_left_the_mesh_is_listed_as_extra(gen, src, state):
     _made(gen, src, state, [Domain(name="gone.example")], "gone.example")
     plan = _plan(gen, src, state, [Domain(name="kept.example")])
