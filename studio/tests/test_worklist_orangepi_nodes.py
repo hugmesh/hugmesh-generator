@@ -176,3 +176,15 @@ def test_render_png(wiz, tmp_path):
     path2 = os.path.join(out_dir, "worklist-orangepi-nodes-ram-refusal.png")
     assert wiz.grab().save(path2)
     assert page.ram_error.isVisible()
+
+
+def test_required_trio_never_checks_experimental_orange_pi_rows(wiz):
+    page = _worklist(wiz)
+    for item in page.rows.values():
+        item.setCheckState(0, Qt.CheckState.Unchecked)
+    page.trio_btn.click()
+    checked = {rid for rid, it in page.rows.items()
+               if it.checkState(0) == Qt.CheckState.Checked}
+    assert {"pki.x86", "backend.x86", "frontend.x86",
+            "pki.rpi5", "backend.rpi5", "frontend.rpi5"} <= checked
+    assert not {r for r in checked if r.endswith((".orangepi5", ".orangepi4-lts"))}, checked

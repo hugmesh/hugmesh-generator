@@ -722,6 +722,13 @@ class WorklistPage(QtWidgets.QWizardPage):
                 continue
             if arch and self._item_arch.get(id(item), "") != arch:
                 continue
+            # EXPERIMENTAL boards (the Orange Pi node rows — no Orange Pi has booted an
+            # image from this repo) are opt-in row by row, never part of the one-click
+            # "required trio".
+            _role, platform = self._id_axes[rid]
+            if self._catalog.device(
+                    device_catalog.default_device_for_platform(platform)).status == "experimental":
+                continue
             item.setCheckState(_COL_CHECK, Qt.CheckState.Checked)
         self.tree.blockSignals(False)
         for rid in self.rows:
