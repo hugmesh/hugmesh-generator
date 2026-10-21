@@ -2122,7 +2122,7 @@ endif
 stack-seed: ## seed Casdoor identity (org+roles+app-user-bff+personas) for real SSO login; SOCIAL=1 also seeds Matrix/Mastodon
 	@echo "==> Seeding the running stack (Casdoor$(if $(strip $(SOCIAL)), + social,) tier)"
 	$(if $(strip $(SOCIAL)),,SEED_CASDOOR_ONLY=1 )$(if $(strip $(BRAND_B)),CASDOOR_BRAND_B_URL='$(BRANDB_CASDOOR)' )bash tests/stack/seed-e2e.sh
-	@echo "==> Seeded. Real SSO web login: open http://localhost:$(PUBLIC_HOST_PORT)/login and sign in with an e2e persona (e.g. e2e-admin); the shared password is in .e2e-credentials at the repo root (not printed here: this output is persisted by the Studio run log)."
+	@echo "==> Seeded. Real SSO web login: open http://localhost:$(PUBLIC_HOST_PORT)/login and sign in with an e2e persona (e.g. e2e-admin); the shared password is in .e2e-credentials at the repo root (minted NEW by every stack-seed; E2E_PASSWORD_KEEP=1 keeps the previous one) (not printed here: this output is persisted by the Studio run log)."
 	$(STACK_SEED_STAGE2_NOTE)
 
 stack-halt: ## stop the local stack but KEEP its data (identity, rooms, accounts, DBs)

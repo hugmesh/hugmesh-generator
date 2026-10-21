@@ -419,10 +419,13 @@ def test_restore_env_carries_the_saved_credentials_file_path(seams, tmp_path):
     assert env["E2E_CREDENTIALS_FILE"] == rec.credential_copies()[0]
     assert env["CASDOOR_SUPERADMIN_USERNAME"] == "sa"
     assert env["E2E_SUPERADMIN_PASSWORD"] == SA_VALUE     # read from the COPY
+    # the seed's run start must NOT rotate the record's password (e2e-password.sh)
+    assert env["E2E_PASSWORD_KEEP"] == "1"
     # pointers-only record: nothing to point at, no password to bridge
     plain = _capture(_gen(tmp_path / "b"))
     env2 = sm.restore_env(plain)
     assert "E2E_CREDENTIALS_FILE" not in env2 and "E2E_SUPERADMIN_PASSWORD" not in env2
+    assert "E2E_PASSWORD_KEEP" not in env2    # nothing saved to keep: a fresh run
     assert env2["CASDOOR_SUPERADMIN_USERNAME"] == "sa"
 
 

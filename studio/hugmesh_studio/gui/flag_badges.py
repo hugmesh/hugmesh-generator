@@ -108,6 +108,10 @@ PLAN_NOTE = (
     "merge prints no merge-list display at all, docs/EMERGE-PLAN-PREVIEW.md). It is "
     "what portage INTENDED to merge; a later real merge-list display supersedes it")
 
+#: Added after PLAN_NOTE when the plan row is ``via=binary``: this package is merged
+#: from the shared binpkg pool, not compiled (issue #46).
+PLAN_BINARY_NOTE = "merged from the binpkg pool (a binary package), not compiled"
+
 
 def _append_note(tip_source: object, note: str) -> object:
     """Add ``note`` to a badge tooltip, preserving laziness.
@@ -622,7 +626,11 @@ class ImageFlagJoin:
         # required: without it the resolver parser finds no flag GROUP, returns a row
         # with groups=() and the USE cell comes out empty, which looks exactly like
         # "this package has no flags" rather than a bug.
-        row = pf.parse_resolver_line(f'[ebuild  N     ] {pl.atom} USE="{pl.use}"')
+        # The row KIND is portage's own (issue #46): a plan row the builder marked
+        # ``via=binary`` is rebuilt as ``[binary …]``, never as ``[ebuild …]``, so the
+        # index can tell a package merged from the binpkg pool from one compiled.
+        kind = "binary" if pl.via == "binary" else "ebuild"
+        row = pf.parse_resolver_line(f'[{kind}  N     ] {pl.atom} USE="{pl.use}"')
         if row is None or not (row.cat and row.pkg):
             return None
         self._resolver.add(row)
@@ -699,6 +707,8 @@ class ImageFlagJoin:
             rc = resolver_cells(rr, self.descriptions)
             if atom in self._plan_atoms or rr.cpv in self._plan_atoms:
                 rc = _annotate_cells(rc, PLAN_NOTE)
+                if rr.type == "binary":
+                    rc = _annotate_cells(rc, PLAN_BINARY_NOTE)
             cells.update(rc)
         elif vdb is not None:
             cells.update(vdb_use_cells(vdb, self.descriptions))
