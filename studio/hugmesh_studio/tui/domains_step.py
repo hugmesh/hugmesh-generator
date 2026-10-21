@@ -42,7 +42,7 @@ import re
 from ..core import plain_words
 from ..core.config import (
     CLIENT_CA_INHERITANCE_NOTE, DOMAIN_IDP_CHOICES, DOMAIN_IDP_OWN,
-    DOMAIN_IDP_SUPERDOMAIN, Domain, github_org_problem,
+    DOMAIN_IDP_SUPERDOMAIN, Domain, github_org_problem, set_domain_signin,
 )
 from ..core.local_mesh_domains import added_row_problems
 from ..core.domain_services import (implicit_own_domain, reviewed_names,
@@ -243,8 +243,12 @@ class DomainsScreen:
             flipped = (DOMAIN_IDP_OWN if d.idp == DOMAIN_IDP_SUPERDOMAIN
                        else DOMAIN_IDP_SUPERDOMAIN)
             assert flipped in DOMAIN_IDP_CHOICES
-            d.idp = flipped
-            j.status = f"{d.name}: sign-in -> {IDP_LABELS[d.idp]}"
+            # through the one writer: an own provider's settings and its Casdoor port
+            # go with the flip; the provider itself is chosen in the Domain services
+            # step's section 1 (Identity)
+            problems = set_domain_signin(d, flipped, mesh=cfg)
+            j.status = (problems[0] if problems
+                        else f"{d.name}: sign-in -> {IDP_LABELS[d.idp]}")
             return
         if verb == "b" and cfg.mode == "mesh":
             self._feed_base_ca(j, arg)

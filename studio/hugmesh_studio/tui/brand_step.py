@@ -38,13 +38,18 @@ Qt-free, like everything in this package; the window's tabs call the same functi
 """
 from __future__ import annotations
 
-from ..core import brand_look, brand_model, plain_words
-from ..core.config import DOMAIN_IDP_OWN, DOMAIN_IDP_SUPERDOMAIN
+from ..core import brand_look, brand_model, domain_reach, plain_words
+from ..core.config import (DOMAIN_IDP_OWN, DOMAIN_IDP_SUPERDOMAIN, SIGNIN_FROM_MESH,
+                           SIGNIN_SOURCE_WORDS, Domain, effective_signin,
+                           set_domain_signin)
 from .superbrand_step import BrandSession
 
 __all__ = ["SECTIONS", "SECTION_LOOK", "SECTION_SERVICES", "BrandView", "brand_view",
            "section_menu", "identity_lines", "ways_lines", "summary_line",
-           "IDENTITY_HOME", "WAYS_BUTTON", "LOOK_HOME"]
+           "IDENTITY_HOME", "WAYS_BUTTON", "LOOK_HOME", "LOOK_POINTER",
+           "SIGNIN_CHOICES", "SIGNIN_EXTERNAL", "SIGNIN_MESH_HOME", "PROVIDER_WORDS",
+           "TAILNET_CHOICES", "EGRESS_CHOICES", "REACH_RECORDED_ONLY", "OWN_REACH_HOME",
+           "feed_identity", "feed_ways"]
 
 #: (number, title) — the window's four tabs, in the window's order.
 SECTIONS: tuple[tuple[int, str], ...] = (
@@ -62,8 +67,49 @@ LOOK_POINTER = ("the look (colours, font, shape, pictures, header and footer) is
                 "the ‘Look’ tab of this mesh's own domain, on the ‘Domain services’ "
                 "step")
 WAYS_BUTTON = "Set up ways to reach this brand"
-WAYS_HOME = ("the Go-Live wizard is where these are chosen: run it with the "
-             "--go-live option, or press ‘" + WAYS_BUTTON + "’ in the window")
+
+# ── per-domain sign-in (2026-10-21, the operator: "Make sure the identity provider
+# step is also added per domain") ─────────────────────────────────────────────────────
+#: (key, the words a screen shows) — how ONE domain's people sign in. "mesh" is the
+#: inherited default (the row's ``superdomain``); the rest are ``own``: its own Casdoor,
+#: or its own external provider (core.config.set_domain_signin is the one writer).
+SIGNIN_CHOICES: tuple[tuple[str, str], ...] = (
+    ("mesh", "Through the mesh's sign-in (inherited)"),
+    ("casdoor", "Its own Casdoor"),
+    ("entra", "Its own Azure Entra ID"),
+    ("aws", "Its own AWS Cognito"),
+    ("oidc", "Its own other OIDC provider"),
+)
+SIGNIN_EXTERNAL = ("entra", "aws", "oidc")
+PROVIDER_WORDS = {"casdoor": "Casdoor", "entra": "Azure Entra ID", "aws": "AWS Cognito",
+                  "oidc": "an OIDC provider"}
+#: Where the mesh's own sign-in (what every 'through the mesh' domain inherits) is set.
+SIGNIN_MESH_HOME = ("the mesh's own sign-in is the default every domain inherits; it is "
+                    "chosen on the ‘Identity provider’ step")
+
+# ── per-domain reach (VPN and egress; Tor is the row's own onion) ───────────────────
+TAILNET_CHOICES: tuple[tuple[str, str], ...] = (
+    (domain_reach.REACH_INHERIT, "The mesh's choice (inherited)"),
+    ("on", "On the mesh's VPN"),
+    ("off", "Not on the mesh's VPN"),
+)
+EGRESS_CHOICES: tuple[tuple[str, str], ...] = (
+    (domain_reach.REACH_INHERIT, "The mesh's choice (inherited)"),
+    (domain_reach.EGRESS_VPN, "Through an egress VPN"),
+    (domain_reach.EGRESS_DIRECT, "Direct (no egress VPN)"),
+)
+#: What every route does with a domain's own VPN and egress today (plain_words.
+#: WAY_EFFECT says it per path): recorded with the domain, applied by no route yet.
+REACH_RECORDED_ONLY = ("Recorded with this domain; no start path applies a domain's own "
+                       "VPN or egress yet — the mesh's own values are what runs.")
+#: The mesh's own row: its VPN and egress ARE the mesh's.
+OWN_REACH_HOME = ("this is the mesh's own domain: its VPN is the mesh's (on in "
+                  "production), its egress is the mesh's egress VPN (the Mesh "
+                  "infrastructure step, or the image's egress setting) and its onion is "
+                  "the mesh's own Tor address")
+WAYS_HOME = ("the internal name and the public name are chosen in the Go-Live wizard: "
+             "run it with the --go-live option, or press ‘" + WAYS_BUTTON + "’ in the "
+             "window (Tor, VPN and egress are chosen above, per domain)")
 
 
 class BrandView:
@@ -103,6 +149,7 @@ class BrandView:
         idp = plain_words.SIGN_IN.get(
             r.idp if r.idp in (DOMAIN_IDP_OWN, DOMAIN_IDP_SUPERDOMAIN)
             else DOMAIN_IDP_SUPERDOMAIN, "")
+        idp = f"{idp}: {self.signin_words()}"
         rows = [("Public name", r.name or "(not set)"),
                 ("Title", r.title or "(not set)"),
                 ("Id", self.brand_id),
@@ -116,6 +163,139 @@ class BrandView:
 
     def identity_home(self) -> str:
         return SUPERBRAND_HOME if self.own else IDENTITY_HOME
+
+    # ── 1b. Sign-in: per domain ───────────────────────────────────────────────────
+    def mesh(self):
+        """The mesh's own configuration (what a 'through the mesh' domain inherits),
+        as the host knows it — or None."""
+        try:
+            return self.session.host.mesh()
+        except Exception:                       # noqa: BLE001 — screens never raise
+            return None
+
+    def _others(self) -> list:
+        row = self.row
+        return [d for d in self.session.host._live_rows() if d is not row]
+
+    def signin_choice(self) -> str:
+        """The SIGNIN_CHOICES key the row says now ("mesh" for the own row)."""
+        r = self.row
+        if self.own or r is None or (r.idp or "") != DOMAIN_IDP_OWN:
+            return "mesh"
+        prov = str((r.idp_settings or {}).get("provider") or "casdoor")
+        return prov if prov in SIGNIN_EXTERNAL else "casdoor"
+
+    def signin_values(self) -> dict[str, str]:
+        """The row's own provider values: sign-in address, client id, key address."""
+        r = self.row
+        st = dict((r.idp_settings or {}) if r is not None else {})
+        return {k: str(st.get(k) or "") for k in ("issuer", "client_id", "jwks")}
+
+    def set_signin(self, choice: str, issuer: str = "", client_id: str = "",
+                   jwks: str = "") -> list[str]:
+        """Write this domain's sign-in through ``set_domain_signin`` (the one writer).
+        Returns the problems; nothing is written while there is one. The mesh's own row
+        has no sign-in of its own to write: it IS the mesh's."""
+        if self.own:
+            return [SIGNIN_MESH_HOME[:1].upper() + SIGNIN_MESH_HOME[1:]]
+        r = self.row
+        if r is None:
+            return [f"no domain named {self.name} on this screen"]
+        keys = dict(SIGNIN_CHOICES)
+        if choice not in keys:
+            return [f"‘{choice}’ is not a sign-in choice "
+                    f"({', '.join(k for k, _l in SIGNIN_CHOICES)})"]
+        idp = DOMAIN_IDP_SUPERDOMAIN if choice == "mesh" else DOMAIN_IDP_OWN
+        provider = choice if choice in SIGNIN_EXTERNAL else ""
+        ext = choice in SIGNIN_EXTERNAL
+        problems = set_domain_signin(
+            r, idp, provider=provider, issuer=issuer.strip() if ext else "",
+            client_id=client_id.strip() if ext else "", jwks=jwks.strip() if ext else "",
+            mesh=self.mesh(), others=self._others())
+        if not problems:
+            self.session.touched = True
+        return [_plain_signin(p) for p in problems]
+
+    def signin_words(self) -> str:
+        """One plain line: how this domain's people sign in now, and where that comes
+        from (inherited from the mesh, or its own)."""
+        row = Domain(name=self.name, idp=DOMAIN_IDP_SUPERDOMAIN) if self.own else self.row
+        if row is None:
+            return ""
+        eff = effective_signin(row, self.mesh())
+        what = PROVIDER_WORDS.get(eff.provider, eff.provider)
+        if eff.source == SIGNIN_FROM_MESH and eff.provider == "casdoor":
+            what = "the mesh's central Casdoor"
+        at = f" at {eff.issuer}" if eff.issuer else ""
+        return f"{what}{at} — {SIGNIN_SOURCE_WORDS[eff.source]}"
+
+    # ── 4b. Ways: Tor, VPN and egress, per domain ─────────────────────────────────
+    def _set_ways(self, **kw) -> list[str]:
+        """Write this brand's ways through ``brand_model.set_ways`` (the one writer)
+        on the record, then put the result on the live row. [] = written."""
+        if self.own:
+            return [OWN_REACH_HOME[:1].upper() + OWN_REACH_HOME[1:]]
+        r = self.row
+        if r is None:
+            return [f"no domain named {self.name} on this screen"]
+        rec = self.session.record()
+        bid = brand_model.brand_id(r)
+        problems = brand_model.set_ways(rec, bid, **kw)
+        if problems:
+            return problems
+        new = rec.brand(bid)
+        self.session.host.update_row(self.name, ways=dict(new.ways or {}),
+                                     tor=bool(new.tor))
+        self.session.touched = True
+        return []
+
+    def tor_on(self) -> bool:
+        r = self.row
+        return bool(getattr(r, "tor", False)) if (r is not None and not self.own) else False
+
+    def set_tor(self, on: bool) -> list[str]:
+        return self._set_ways(tor=bool(on))
+
+    def tailnet_choice(self) -> str:
+        r = self.row
+        v = ((r.ways or {}).get(domain_reach.WAY_TAILNET)
+             if (r is not None and not self.own) else None)
+        if isinstance(v, bool):
+            return "on" if v else "off"
+        return domain_reach.REACH_INHERIT
+
+    def set_tailnet(self, choice: str) -> list[str]:
+        val = {"on": True, "off": False,
+               domain_reach.REACH_INHERIT: domain_reach.REACH_INHERIT}.get(choice)
+        if val is None:
+            return [f"‘{choice}’ is not a VPN choice (inherit, on, off)"]
+        return self._set_ways(tailnet=val)
+
+    def egress_choice(self) -> tuple[str, str]:
+        """(inherit | vpn | direct, the provider file this domain names or "")."""
+        r = self.row
+        v = ((r.ways or {}).get(domain_reach.WAY_EGRESS)
+             if (r is not None and not self.own) else None)
+        if isinstance(v, dict) and v.get("mode") in domain_reach.EGRESS_MODES:
+            return v["mode"], str(v.get("conf") or "")
+        return domain_reach.REACH_INHERIT, ""
+
+    def set_egress(self, choice: str, conf: str = "") -> list[str]:
+        if choice == domain_reach.REACH_INHERIT:
+            return self._set_ways(egress=domain_reach.REACH_INHERIT)
+        if choice not in domain_reach.EGRESS_MODES:
+            return [f"‘{choice}’ is not an egress choice (inherit, vpn, direct)"]
+        block = {"mode": choice}
+        if choice == domain_reach.EGRESS_VPN and conf.strip():
+            block["conf"] = conf.strip()
+        return self._set_ways(egress=block)
+
+    def reach_lines(self) -> dict[str, str]:
+        """{'tailnet': line, 'egress': line} in the model's words."""
+        row = Domain(name=self.name) if self.own else self.row
+        if row is None:
+            return {}
+        return domain_reach.reach_words(row, self.mesh())
 
     # ── 2. Look ───────────────────────────────────────────────────────────────────
     def look_model(self) -> brand_look.Look | None:
@@ -229,16 +409,69 @@ def section_menu(current: int) -> list[str]:
     return ["  ".join(f"{'*' if n == current else ' '}{n}. {t}" for n, t in SECTIONS)]
 
 
+def _plain_signin(sentence: str) -> str:
+    """A model sentence in the words screens use ('sign-in address', never the word
+    plain_words forbids on screens)."""
+    return (sentence.replace("issuer URL", "sign-in address")
+            .replace("issuer", "sign-in address").replace("Issuer", "Sign-in address"))
+
+
 def identity_lines(view: BrandView) -> list[str]:
     out = [f"1. Identity — {view.label()}", ""]
     for k, v in view.identity():
         out.append(f"   {k:<14}{v}")
-    out += ["", view.identity_home()]
+    out += ["", view.identity_home(), ""]
+    out.append(f"   Sign-in now   {view.signin_words()}")
+    if view.own:
+        out += ["", SIGNIN_MESH_HOME]
+        return out
+    vals = view.signin_values()
+    out.append("   choices       " + ", ".join(k for k, _l in SIGNIN_CHOICES)
+               + f" (now: {view.signin_choice()})")
+    if view.signin_choice() in SIGNIN_EXTERNAL:
+        out.append(f"   sign-in address  {vals['issuer'] or '(not set)'}")
+        out.append(f"   client id        {vals['client_id'] or '(not set)'}")
+        out.append(f"   key address      {vals['jwks'] or '(derived from the sign-in address)'}")
+    out += ["", "commands: signin mesh | signin casdoor | "
+                "signin entra|aws|oidc ADDRESS CLIENT-ID [KEY-ADDRESS]"]
     return out
+
+
+def feed_identity(view: BrandView, line: str) -> str:
+    """One command of section 1 (the window's sign-in controls, as text). Returns the
+    status sentence; nothing is written when it names a problem."""
+    words = line.split()
+    if not words or words[0].lower() != "signin":
+        return ("commands: signin mesh | signin casdoor | "
+                "signin entra|aws|oidc ADDRESS CLIENT-ID [KEY-ADDRESS]")
+    if len(words) < 2:
+        return "signin needs a choice: " + ", ".join(k for k, _l in SIGNIN_CHOICES)
+    choice = words[1].lower()
+    rest = words[2:]
+    issuer = rest[0] if len(rest) > 0 else ""
+    client = rest[1] if len(rest) > 1 else ""
+    jwks = rest[2] if len(rest) > 2 else ""
+    problems = view.set_signin(choice, issuer, client, jwks)
+    if problems:
+        return "Not changed: " + problems[0]
+    return f"{view.name}: sign-in -> {view.signin_words()}"
 
 
 def ways_lines(view: BrandView) -> list[str]:
     out = [f"4. Ways to reach it — {view.label()}", ""]
+    if view.own:
+        out += ["   " + OWN_REACH_HOME[:1].upper() + OWN_REACH_HOME[1:] + ".", ""]
+    else:
+        words = view.reach_lines()
+        mode, conf = view.egress_choice()
+        out += [f"   Tor address   {'on — its own onion' if view.tor_on() else 'off'}",
+                f"   VPN           {view.tailnet_choice()}: "
+                f"{words.get(domain_reach.WAY_TAILNET, '')}",
+                f"   egress        {mode}{(' ' + conf) if conf else ''}: "
+                f"{words.get(domain_reach.WAY_EGRESS, '')}",
+                "", "   " + REACH_RECORDED_ONLY, "",
+                "commands: tor on|off · vpn inherit|on|off · "
+                "egress inherit|direct|vpn [PROVIDER-FILE]", ""]
     last = ""
     for way, value, path, effect in view.ways():
         if way != last:
@@ -247,6 +480,29 @@ def ways_lines(view: BrandView) -> list[str]:
         out.append(f"      {path}: {effect}")
     out += ["", WAYS_HOME]
     return out
+
+
+def feed_ways(view: BrandView, line: str) -> str:
+    """One command of section 4 (the window's Ways controls, as text)."""
+    words = line.split(None, 2)
+    verb = words[0].lower() if words else ""
+    arg = words[1].lower() if len(words) > 1 else ""
+    if verb == "tor" and arg in ("on", "off"):
+        problems = view.set_tor(arg == "on")
+    elif verb == "vpn" and arg:
+        problems = view.set_tailnet(arg)
+    elif verb == "egress" and arg:
+        conf = words[2] if len(words) > 2 else ""
+        problems = view.set_egress(arg, conf)
+    else:
+        return ("commands: tor on|off · vpn inherit|on|off · "
+                "egress inherit|direct|vpn [PROVIDER-FILE]")
+    if problems:
+        return "Not changed: " + problems[0]
+    w = view.reach_lines()
+    return (f"{view.name}: Tor {'on' if view.tor_on() else 'off'}; VPN "
+            f"{w.get(domain_reach.WAY_TAILNET, '')}; egress "
+            f"{w.get(domain_reach.WAY_EGRESS, '')}")
 
 
 def look_section_lines(view: BrandView, route: str) -> list[str]:

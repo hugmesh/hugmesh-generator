@@ -394,6 +394,11 @@ class DomainServicesBody:
         self.brand_tabs.mount(lay)
         self.brand_tabs.bar.setToolTip(
             f"The settings of one brand under the {plain_words.term('superbrand')}")
+        # The Ways tab's Tor tick and the Services tab's front door are ONE choice: the
+        # working value lives here (``_tor``, recorded onto ``Domain.tor`` by _record),
+        # and each control shows what the other set.
+        self.brand_tabs.tor_changed.connect(self._on_tabs_tor)
+        self.brand_tabs.row_changed.connect(self._on_tabs_row_changed)
         _services_from = lay.count()
 
         # ── the domain's FRONT DOOR (#582, decision 68 = A) ────────────────────────
@@ -699,6 +704,7 @@ class DomainServicesBody:
                 return
             self.brand_tabs.set_view(brand_view(
                 session, name, own=bool(name) and name == self._own_name))
+            self.brand_tabs.show_tor(name in self._tor, bool(self._tor.get(name, False)))
         except Exception:                       # noqa: BLE001 — PyQt6 qFatal guard
             import sys
             import traceback
@@ -785,8 +791,39 @@ class DomainServicesBody:
         self.front_door_table.setItemWidget(item, _COL_ON, box)
         self._tor_box = box
 
-    def _on_tor_toggled(self, _checked: bool) -> None:
-        """Repaint the inline state. Guarded: PyQt6 qFatals on a slot exception."""
+    def _on_tor_toggled(self, checked: bool) -> None:
+        """Repaint the inline state, and the Ways tab's tick (the same choice).
+        Guarded: PyQt6 qFatals on a slot exception."""
+        try:
+            name = self.current_domain()
+            if name in self._tor:
+                self._tor[name] = bool(checked)
+            self._paint_tor_note()
+            self.brand_tabs.show_tor(name in self._tor, bool(checked))
+        except Exception:                      # noqa: BLE001
+            pass
+
+    def _on_tabs_tor(self, on: bool) -> None:
+        """The Ways tab's Tor tick: the same working value as the front door, which
+        repaints its own state line; the row's ``tor`` follows at once so the Ways tab's
+        summary says it too (``_record`` writes the same value again)."""
+        try:
+            name = self.current_domain()
+            if name not in self._tor:
+                return
+            self._tor[name] = bool(on)
+            if self._tor_box is not None:
+                self._tor_box.setChecked(bool(on))
+            view = self.brand_tabs.view
+            if view is not None and not view.own:
+                view.set_tor(bool(on))
+            self._paint_tor_note()
+        except Exception:                      # noqa: BLE001
+            pass
+
+    def _on_tabs_row_changed(self) -> None:
+        """A sign-in or reach change on the tabs: the front door's line names which
+        login the domain's onion opens, so it is repainted."""
         try:
             self._paint_tor_note()
         except Exception:                      # noqa: BLE001

@@ -77,10 +77,10 @@ class IdpPage(QtWidgets.QWizardPage):
         self.wiz = wiz
         self.setTitle("Identity provider")
         self.setSubTitle(
-            "Which identity provider will this mesh's services trust? Casdoor "
-            "(built-in) is the native default and needs nothing from you. An "
-            "external provider re-points token validation at your issuer — read "
-            "the limits note below before choosing one.")
+            "Which identity provider will this mesh's services trust? This is the "
+            "DEFAULT every domain inherits; a domain can choose its own on its "
+            "Identity tab (Domain services step). Casdoor (built-in) needs nothing "
+            "from you — read the limits note below before choosing another.")
         # four cards + the endpoints box + the limits note: scroll, never clip
         lay = scrollable(self)
 

@@ -156,11 +156,12 @@ class WindowFace:
         asked = []
         tabs.ways_requested.connect(asked.append)
         tabs.ways_btn.click()
-        # nothing on the tab can be typed in: every widget is a label or the one button
+        # the internal and public names are the wizard's: the only controls on this tab
+        # are the domain's own Tor, VPN and egress (2026-10-21), all inside one box
         editable = [w for w in tabs.ways_page.findChildren(QtWidgets.QWidget)
                     if isinstance(w, (QtWidgets.QLineEdit, QtWidgets.QComboBox,
                                       QtWidgets.QCheckBox))]
-        assert editable == []
+        assert editable and all(tabs.reach_box.isAncestorOf(w) for w in editable)
         return tabs.ways_text.text(), asked
 
     def look_tab(self):
@@ -230,8 +231,10 @@ class TextFace:
     def ways(self):
         self.ds.feed(self.j, "open 4")
         text = "\n".join(self.ds.lines(self.j))
-        self.ds.feed(self.j, "tor on")            # nothing to edit here
-        assert "Nothing to change" in self.j.status
+        # the names are the wizard's: a name typed here is not a command of this
+        # section (its commands are the domain's own Tor, VPN and egress)
+        self.ds.feed(self.j, "internal shop.acme.internal")
+        assert self.j.status.startswith("commands: tor")
         return text, ["shop.example"]
 
     def look_tab(self):

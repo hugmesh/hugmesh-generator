@@ -2390,10 +2390,28 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         the same object the drop-down, the design and every domain's tabs drive. None
         only if it cannot be made, which no slot may raise over."""
         try:
-            return session_for(self, "docker", (self._brand_boot, self.mesh_domains),
-                               self.generator_dir)
+            s = session_for(self, "docker", (self._brand_boot, self.mesh_domains),
+                            self.generator_dir)
+            # what a domain that inherits reads: this page's own sign-in, environment
+            # and egress controls as they stand NOW (the carrier holds only the brand)
+            s.host.mesh_of = self._mesh_now
+            return s
         except Exception:                       # noqa: BLE001 — called from slots
             return None
+
+    def _mesh_now(self) -> LocalMeshBootstrapConfig:
+        """The mesh-wide values the per-domain tabs inherit from — sign-in, environment,
+        the mesh's own infrastructure and its egress file — read off this page's
+        controls without the rest of ``collect_bootstrap``."""
+        idp = self.selected_idp()
+        ext = idp != "casdoor"
+        return LocalMeshBootstrapConfig(
+            env=("prod" if self.env_prod.isChecked() else "test"),
+            services=self.collect_services(), egress_vpn_conf=self._egress_vpn_conf,
+            cluster_domain=self.boot_domain.text().strip(), idp=idp,
+            idp_issuer=self.idp_issuer.text().strip() if ext else "",
+            idp_client_id=self.idp_client_id.text().strip() if ext else "",
+            idp_jwks=self.idp_jwks.text().strip() if ext else "")
 
     def mesh_look(self):
         """The mesh's own look model (``brand_look.Look``, design mode): what row 0's
@@ -4715,9 +4733,9 @@ class LocalMeshServicesPage(_LocalMeshStep):
 class LocalMeshIdpPage(_LocalMeshStep):
     SECTION = "idp"
     TITLE = "Identity provider"
-    SUBTITLE = ("Who signs users in. Casdoor is built in and needs nothing; an "
-                "external OIDC provider is threaded into the stack env, and the note "
-                "on this step says exactly how far that goes on a local stack.")
+    SUBTITLE = ("Who signs users in: the default every domain inherits (a domain can "
+                "choose its own on its Identity tab). Casdoor is built in and needs "
+                "nothing; the note says how far another provider goes locally.")
 
 
 class LocalMeshOverlayPage(_LocalMeshStep):

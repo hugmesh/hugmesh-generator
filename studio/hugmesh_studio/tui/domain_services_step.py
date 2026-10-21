@@ -319,6 +319,10 @@ class DomainServicesScreen:
                         "p=previous brand"
                         + (" · look commands as listed" if self.section == 2
                            and self._look_editable(view) else "")
+                        + (" · signin … as listed" if self.section == 1
+                           and not view.own else "")
+                        + (" · tor/vpn/egress … as listed" if self.section == 4
+                           and not view.own else "")
                         + " · Enter=continue"]
                 return out
         # The front door FIRST, right under the domain line — the GUI page's order
@@ -413,6 +417,14 @@ class DomainServicesScreen:
                 else:
                     j.status = ("This brand's own look is shown on the Docker mesh "
                                 "only; it is not editable on this route.")
+                return
+            if self.section == 1 and verb not in ("n", "p"):
+                # the domain's own sign-in (the window's Identity tab controls)
+                j.status = brand_step.feed_identity(view, line)
+                return
+            if self.section == 4 and verb not in ("n", "p"):
+                # its Tor address, VPN and egress (the window's Ways tab controls)
+                j.status = brand_step.feed_ways(view, line)
                 return
             if self.section != brand_step.SECTION_SERVICES and verb not in ("n", "p"):
                 j.status = ("Nothing to change in this section here — see the line "

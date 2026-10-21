@@ -45,7 +45,8 @@ import dataclasses
 import shlex
 
 from ..core import brand_model, plain_words
-from ..core.config import DOMAIN_IDP_OWN, DOMAIN_IDP_SUPERDOMAIN, Domain
+from ..core.config import (DOMAIN_IDP_OWN, DOMAIN_IDP_SUPERDOMAIN, Domain,
+                           set_domain_signin)
 from ..core.domain_services import (ACTION_MESH_START, gate_reason, normalise_slugs,
                                     record_reviewed)
 from ..core.local_mesh_bootstrap import LocalMeshBootstrapConfig
@@ -412,9 +413,13 @@ class LocalMeshScreen:
             row = self._row(j, arg)
             if row is not None:
                 d = md.domains[row]
-                d.idp = (DOMAIN_IDP_OWN if d.idp == DOMAIN_IDP_SUPERDOMAIN
-                         else DOMAIN_IDP_SUPERDOMAIN)
-                j.status = f"{d.name}: sign-in -> {IDP_LABELS[d.idp]}"
+                # through the one writer (core.config.set_domain_signin): it clears an
+                # own provider's settings and its Casdoor port when the row flips
+                problems = set_domain_signin(
+                    d, DOMAIN_IDP_OWN if d.idp == DOMAIN_IDP_SUPERDOMAIN
+                    else DOMAIN_IDP_SUPERDOMAIN)
+                j.status = (problems[0] if problems
+                            else f"{d.name}: sign-in -> {IDP_LABELS[d.idp]}")
             return
         if verb == "o":
             # the GitHub org (the Go-Live export step) — row 1 INCLUDED: the own

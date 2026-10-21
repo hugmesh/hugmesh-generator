@@ -140,6 +140,12 @@ class BrandHost:
         and the fleet have no Secrets-store step)."""
         return None
 
+    def mesh(self):
+        """The mesh's own configuration as the per-domain resolvers read it (its
+        ``idp*`` sign-in, its VPN and egress): what a domain that inherits gets. None
+        when the route has none."""
+        return None
+
     # the rows, as fresh Domain objects (a snapshot the record can hold)
     def rows(self) -> list[Domain]:
         return [Domain(**dataclasses.asdict(d)) for d in self._live_rows()]
@@ -184,6 +190,9 @@ class ImageHost(BrandHost):
 
     def _live_rows(self) -> list[Domain]:
         return list(self.cfg.domains or [])
+
+    def mesh(self):
+        return self.cfg
 
     def base_ca(self, name: str) -> str | None:
         return os.path.basename((getattr(self.cfg, "domain_ca", None) or {}).get(
@@ -230,6 +239,15 @@ class BootstrapHost(BrandHost):
         self.cfg = cfg
         self.generator_dir = generator_dir
         self.state = state
+        #: the page that owns the mesh's own sign-in, VPN and egress controls may set
+        #: this to a callable returning the configuration those controls say NOW (the
+        #: carrier holds only the brand); without it the carrier is read
+        self.mesh_of = None
+
+    def mesh(self):
+        if callable(self.mesh_of):
+            return self.mesh_of()
+        return self.cfg
 
     def read(self) -> brand_model.BrandRecord:
         rec = brand_model.record_from_bootstrap(self.cfg)
@@ -318,6 +336,9 @@ class FleetHost(BrandHost):
 
     def look(self, sb: brand_model.Superbrand) -> brand_look.Look:
         return brand_look.Look(sb.look)
+
+    def mesh(self):
+        return self.options
 
     def profile_chosen(self, name: str) -> None:
         path = os.path.join(self.generator_dir, "brands", f"{name}.conf")

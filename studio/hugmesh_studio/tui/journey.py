@@ -330,7 +330,9 @@ class IdpScreen:
         return None
 
     def lines(self, j: "Journey") -> list[str]:
-        out = ["Which identity provider will this mesh's nodes trust?", ""]
+        out = ["Which identity provider will this mesh's nodes trust?",
+               "(This is the default every domain inherits; a domain can choose its "
+               "own in section 1, Identity, of the Domain services step.)", ""]
         for i, idp in enumerate(IDP_CHOICES, 1):
             marker = "*" if j.cfg.idp == idp else " "
             out.append(f" {marker}{i}. {IDP_LABELS[idp]}")

@@ -69,9 +69,17 @@ def test_the_drop_down_lists_create_first_selected_and_numbers_every_item(gen):
 def test_a_walk_designs_the_superbrand_and_continuing_writes_cfg_and_record(gen):
     j = _journey(gen)
     j.goto("branding")
-    _feed(j, "s", "id acme", "title Acme Mesh", "org example", "public mesh.example",
-          "look", "1 #336699", "font", "back")
+    _feed(j, "s", "id acme", "title Acme Mesh", "org example", "public mesh.example")
     assert j.status == "" or "unrecognised" not in j.status
+    # the look moved to section 2 of the mesh's own domain (2026-10-21): the superbrand
+    # screen says so instead of opening a look screen of its own
+    _feed(j, "look")
+    assert "not chosen here" in j.status and "Look" in j.status
+    ds = j.screen_for("domain_services")
+    ds.enter(j)
+    for line in ("look", "1 #336699", "services"):
+        ds.feed(j, line)
+    j.status = ""
     _feed(j, "")                             # Enter: continue, commit
     assert (j.cfg.brand, j.cfg.brand_title, j.cfg.cluster_domain) == (
         "acme", "Acme Mesh", "mesh.example")
@@ -149,7 +157,7 @@ def test_every_existing_services_command_still_works_with_the_sections_on_screen
     assert sc.current(j).tor is True
 
 
-def test_identity_is_a_read_only_mirror_that_says_where_it_is_changed(gen):
+def test_identity_mirrors_the_row_and_edits_only_the_sign_in(gen):
     j, sc = _services_screen(gen)
     sc.feed(j, "n")
     sc.feed(j, "open 1")
@@ -158,8 +166,19 @@ def test_identity_is_a_read_only_mirror_that_says_where_it_is_changed(gen):
     assert "Id            shop-example" in text
     assert brand_step.IDENTITY_HOME in text
     sc.feed(j, "title Other")
-    assert "Nothing to change" in j.status
+    assert "signin" in j.status                  # the title is the Domains table's
     assert sc.current(j).title == "Shop"
+    # the domain's own sign-in IS chosen here (the per-domain identity provider)
+    sc.feed(j, "signin aws http://not-tls client-1")
+    assert j.status.startswith("Not changed") and "https://" in j.status
+    assert sc.current(j).idp == "superdomain"     # nothing was written
+    sc.feed(j, "signin aws https://cognito-idp.eu-west-1.amazonaws.com/pool client-1")
+    assert "AWS Cognito" in j.status, j.status
+    d = sc.current(j)
+    assert d.idp == "own" and d.idp_settings["provider"] == "aws"
+    assert "issuer" not in _text(sc, j).lower().replace("idp_", "")
+    sc.feed(j, "signin mesh")
+    assert sc.current(j).idp == "superdomain" and sc.current(j).idp_settings == {}
     sc.feed(j, "n")
     sc.feed(j, "open 1")
     assert "has its own sign-in" in _text(sc, j)
@@ -172,17 +191,27 @@ def test_the_superbrands_own_row_is_labelled_and_points_at_its_step(gen):
     assert "(the superbrand)" in text and brand_step.SUPERBRAND_HOME in text
 
 
-def test_the_ways_section_is_read_only_and_names_the_wizard(gen):
+def test_the_ways_section_edits_tor_vpn_and_egress_and_names_the_wizard(gen):
     j, sc = _services_screen(gen)
     sc.feed(j, "n")
     sc.feed(j, "open 4")
     text = _text(sc, j)
     assert "internal name: shop-example." in text
     assert "Docker mesh:" in text and "kind cluster:" in text and "node image:" in text
-    assert brand_step.WAYS_HOME in text
+    assert brand_step.WAYS_HOME in text and brand_step.REACH_RECORDED_ONLY in text
     sc.feed(j, "tor on")
-    assert "Nothing to change" in j.status
-    assert sc.current(j).tor is False
+    assert sc.current(j).tor is True
+    sc.feed(j, "vpn off")
+    assert sc.current(j).ways["tailnet"] is False
+    sc.feed(j, "egress vpn relative.conf")
+    assert j.status.startswith("Not changed") and "absolute" in j.status
+    assert "egress" not in sc.current(j).ways
+    sc.feed(j, "egress vpn /etc/wireguard/provider.conf")
+    assert sc.current(j).ways["egress"] == {"mode": "vpn",
+                                            "conf": "/etc/wireguard/provider.conf"}
+    sc.feed(j, "vpn inherit")
+    sc.feed(j, "egress inherit")
+    assert "tailnet" not in sc.current(j).ways and "egress" not in sc.current(j).ways
 
 
 def test_the_look_section_edits_a_brand_on_the_docker_mesh_and_gives_it_back(gen):
