@@ -111,7 +111,10 @@ mesh on this machine names an org, or when you add a config file on the step its
    one that is not valid UTF-8 is scanned with replacement characters, one with NUL
    bytes is scanned a second time with the NULs removed (UTF-16 text), and one that
    cannot be read or is over 128 MiB is itself a finding, so nothing is skipped
-   silently. A file that is not UTF-8 text is published byte for byte, never rewritten;
+   silently. File and folder names and link targets get the same byte checks (git
+   publishes them as bytes too: a token spelled in cp037 or the robot footer in UTF-16
+   in a name refuses the repository like the same bytes in a file). A file that is not
+   UTF-8 text is published byte for byte, never rewritten;
    the plan says so when such a file names a renamed token;
 5. renames: `hugmesh-<name>` becomes `<brand>-<name>` (`exampleorg -> example`, so
    `hugmesh-gateway -> example-gateway`); inside files the org path segment
@@ -257,9 +260,19 @@ For every repository that is not blocked, apply:
   never a mirror. The commit is named by its sha as soon as it is made, and the
   file count, the scan of the commit's objects, the tree and the push all use that
   sha, never `HEAD`: the work folder is an ordinary directory, and a commit added to
-  it after the scan is not what gets pushed. The push sends that one refspec with
-  `--no-follow-tags` and `--no-verify`, so a tag or a pre-push hook added to the work
-  folder's own git config after the scan sends nothing with it. Every ref of the
+  it after the scan is not what gets pushed. The scan reads the commit's own objects
+  with git's object replacement off, checks every object against its name (the hash
+  of its bytes), and walks them from that sha: the commit itself, every tree and
+  every file and link. A commit with a parent is refused. Those objects, and only
+  those, are then copied into a fresh bare repository next to the work folders (a
+  `.push-*` folder under the plan folder, removed after each repository), and
+  `git rev-list --objects` of the sha there must list exactly the scanned set. Every
+  network call (`ls-remote`, `fetch`, `push`, the read-back) runs in that
+  repository, so the work folder's own git config (`url.*.insteadOf`, a credential
+  helper, hooks), its `refs/replace` entries and its grafts never reach the push. The
+  push sends that one refspec with
+  `--no-follow-tags` and `--no-verify`, so no tag or pre-push hook rides along with
+  it. Every ref of the
   remote is listed right before the push and read back with `git ls-remote` after it;
   a branch that holds anything but that sha, a branch that cannot be read, or any
   other ref that changed in between is reported as skipped (the remote may then
