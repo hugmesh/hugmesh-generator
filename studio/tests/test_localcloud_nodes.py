@@ -628,8 +628,15 @@ def test_a_one_domain_mesh_imports_no_rows(wiz, monkeypatch, tmp_path):
     _save_record(tmp_path, services=("tuwunel",))
     _real_reader(monkeypatch)
     page = _confirm_and_enter_mesh_chain(wiz)
-    assert page._mesh_domains is None
+    # Since per-domain services became the one source (2026-10-21), a one-domain
+    # record's mesh-wide app service moves onto its OWN domain row when it is read
+    # (local_mesh_bootstrap._migrate_domain_services), so the import now carries that
+    # one row. It is still not a table row: no added domains, and the own row's
+    # services land on the image flow's own domain.
+    assert page._mesh_domains is not None
+    assert [d.name for d in page._mesh_domains.domains] == ["saved.example.org"]
     assert wiz.cfg.domains == [] and wiz.cfg.additional_domains is False
+    assert list(wiz.cfg.cluster_domain_services) == ["tuwunel"]
 
 
 # ---- post-merge review of PR #644: the import must win over what an earlier flow of
