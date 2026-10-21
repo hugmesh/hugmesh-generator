@@ -393,4 +393,20 @@ def start_assistant(generator_dir: str, mode: str, *, environ=None, extra_env=No
                 False, f"The Docker Ollama was started but did not answer on "
                        f"{endpoint(DOCKER, env)} within {int(ready_timeout)} seconds "
                        f"(see: docker logs {CONTAINER}).", f"docker logs {CONTAINER}")
-    return lai.start_assistant(generator_dir, env=env)
+    res = lai.start_assistant(generator_dir, env=env)
+    if mode == DOCKER and not res.ok:
+        # the "run it yourself" line must name the Docker instance, not the system one
+        res = lai.StartResult(res.ok, res.message.replace(
+            lai.commands(generator_dir)["start"],
+            lai.commands(generator_dir, endpoint(DOCKER, env))["start"]),
+            lai.commands(generator_dir, endpoint(DOCKER, env))["start"])
+    return res
+
+
+def commands_for(generator_dir: str, mode: Optional[str] = None, environ=None) -> dict:
+    """``local_ai_status.commands`` for the instance ``mode`` names (the saved choice
+    when None): in Docker mode each command carries that instance's OLLAMA_HOST."""
+    from . import local_ai_status as lai
+    mode = current_mode() if mode is None else mode
+    host = endpoint(DOCKER, environ) if mode == DOCKER else ""
+    return lai.commands(generator_dir, host)

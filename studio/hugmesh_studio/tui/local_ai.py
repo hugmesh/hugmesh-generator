@@ -96,7 +96,7 @@ class LocalAIScreen:
     def lines(self, j) -> list[str]:  # noqa: ARG002
         snap = self.snapshot
         out = lai.format_status(snap).split("\n") if snap is not None else ["(no snapshot)"]
-        cmds = lai.commands(self.generator_dir)
+        cmds = odk.commands_for(self.generator_dir)
         out += ["", odk.describe(odk.current_mode())]
         out += ["", "Run it yourself:  " + cmds["todo"], "                  " + cmds["chat"], ""]
         if self.transcript:

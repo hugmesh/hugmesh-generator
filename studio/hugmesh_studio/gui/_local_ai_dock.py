@@ -362,10 +362,8 @@ class LocalWorkWindow(QtWidgets.QWidget):
         self.commands.setWordWrap(True)
         self.commands.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         self.commands.setStyleSheet(styles.muted())
-        cmds = lai.commands(generator_dir)
-        self.commands.setText(
-            "Run it yourself in a terminal:  " + cmds["start"] + "   |   queue issues and watch:  "
-            + cmds["todo"] + "   |   chat:  " + cmds["chat"])
+        self._generator_dir = generator_dir
+        self._set_commands()
         lay.addWidget(self.commands)
 
         self._timer = QtCore.QTimer(self)
@@ -404,8 +402,20 @@ class LocalWorkWindow(QtWidgets.QWidget):
         if not self._drain.isActive():
             self._drain.start()
 
+    def _set_commands(self) -> None:
+        """The run-it-yourself line, for the Ollama the assistant uses NOW (Docker mode
+        puts that instance's OLLAMA_HOST in front of each command)."""
+        try:
+            cmds = odk.commands_for(self._generator_dir)
+        except Exception:                        # noqa: BLE001 — a label never raises
+            cmds = lai.commands(self._generator_dir)
+        self.commands.setText(
+            "Run it yourself in a terminal:  " + cmds["start"] + "   |   queue issues and watch:  "
+            + cmds["todo"] + "   |   chat:  " + cmds["chat"])
+
     def show_snapshot(self, snap) -> None:
         """Render a snapshot now (the dock hands over the one it already has)."""
+        self._set_commands()
         self.snapshot = snap
         self.summary.setText(snap.summary)
         if snap.problem:
@@ -1602,7 +1612,8 @@ class LocalAIDock(QtWidgets.QFrame):
             else:
                 # Could not start it from here: open the work window, which shows the
                 # exact command to run yourself.
-                cmd = res.command if res is not None else lai.commands(self.generator_dir)["start"]
+                cmd = (res.command if res is not None
+                       else odk.commands_for(self.generator_dir, self.ollama_mode)["start"])
                 why = res.message if res is not None else str(error)
                 self._say(f"{why} Run it yourself: {cmd}", 60, warn=True)
                 self.show_current_work()

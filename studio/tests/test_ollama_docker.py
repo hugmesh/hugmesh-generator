@@ -532,3 +532,33 @@ def test_the_panel_start_button_gives_the_worker_the_chosen_instance_and_the_con
     finally:
         dock.close()
         dock.deleteLater()
+
+
+def test_the_run_it_yourself_lines_name_the_chosen_instance(qapp, monkeypatch, tmp_path):
+    """Dock skeptic 2: in Docker mode the printed commands pointed at the system Ollama;
+    run in a terminal, `local-ai.sh start` would then move the worker OFF the Docker
+    instance while the panel still said Docker. Each face prints the chosen one."""
+    from hugmesh_studio.gui import _local_ai_dock as dock_mod
+    from hugmesh_studio.tui import local_ai as tui_local_ai
+    monkeypatch.setenv("HUGMESH_STUDIO_STATE_DIR", str(tmp_path / "studio"))
+    monkeypatch.setenv(odk.PORT_ENV, "12997")
+    monkeypatch.delenv("OLLAMA_HOST", raising=False)
+    script = os.path.join(GENERATOR_DIR, "scripts", "local-ai.sh")
+    odk.set_mode(odk.DOCKER)
+    assert odk.commands_for(GENERATOR_DIR)["start"] == (
+        f"OLLAMA_HOST=127.0.0.1:12997 {script} start")
+    screen = tui_local_ai.LocalAIScreen(generator_dir=GENERATOR_DIR,
+                                        snapshot_fn=lambda: lai.Snapshot(taken=0.0))
+    text = "\n".join(screen.lines(None))
+    assert f"OLLAMA_HOST=127.0.0.1:12997 {script} todo" in text, text
+    win = dock_mod.LocalWorkWindow(GENERATOR_DIR, snapshot_fn=lambda: lai.Snapshot(taken=0.0),
+                                   auto_poll=False)
+    try:
+        assert f"OLLAMA_HOST=127.0.0.1:12997 {script} start" in win.commands.text()
+        odk.set_mode(odk.SYSTEM)
+        win.show_snapshot(lai.Snapshot(taken=0.0))
+        assert "OLLAMA_HOST=" not in win.commands.text()
+        assert f"{script} start" in win.commands.text()
+    finally:
+        win.close()
+    assert "OLLAMA_HOST=" not in "\n".join(screen.lines(None))
