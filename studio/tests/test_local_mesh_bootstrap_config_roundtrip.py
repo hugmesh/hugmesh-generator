@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import subprocess
 
 import pytest
 
@@ -220,6 +221,105 @@ def test_start_saved_puts_a_changed_credentials_file_back_first(monkeypatch, tmp
     ok, log = boot.start_saved(rec, on_line=lambda _l: None)
     assert ok and calls["start"] == 1
     assert e2e.read_text() == "E2E_PASSWORD=from-the-copy\n"
+
+
+# ── rotate, seed, warm start: the record must FOLLOW a completed seed ─────────────
+# Every `make stack-seed` STARTS a run: it rotates .e2e-credentials and reconciles
+# every live identity to the new value (tests/stack/e2e-password.sh). Run from a
+# terminal against a mesh brought back from a record, it left the file newer than
+# the record's copy; the next warm start saw "file differs from the copy", put the
+# OLD copy back over it, and every persona 401'd against the reseeded volumes.
+# These drive the REAL shell run start and the REAL seed-stamp writer.
+_E2E_LIB = os.path.join(GENERATOR_DIR, "tests", "stack", "e2e-password.sh")
+
+
+def _sh(cred, script: str):
+    """Run e2e-password.sh functions against a TEMP credentials file (never the
+    checkout's own), with a clean e2e environment. Output never carries a value."""
+    env = {k: v for k, v in os.environ.items() if not k.startswith("E2E_PASSWORD")}
+    env["E2E_CREDENTIALS_FILE"] = str(cred)
+    r = subprocess.run(["bash", "-c", 'set -euo pipefail; . "$1"; ' + script, "_", _E2E_LIB],
+                       env=env, capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+
+
+def _warm_record_saved_from(boot, e2e):
+    """A record saved while ``e2e`` held its current value, copy included."""
+    rec = _record(boot, copied=True)
+    copy = rec.credential_copies()[0]
+    with open(e2e, "rb") as src, open(copy, "wb") as dst:
+        dst.write(src.read())
+    rec.credentials["e2e_file"].update(path=str(e2e), sha256=sm._sha256(str(e2e)))
+    assert sm.save(rec)
+    return rec, copy
+
+
+def test_warm_start_after_a_terminal_rotate_and_seed_keeps_the_reseeded_password(
+        monkeypatch, tmp_path):
+    boot, calls = _boot(monkeypatch, tmp_path)
+    e2e = tmp_path / ".e2e-credentials"
+    monkeypatch.setattr(boot, "e2e_credentials_path", lambda: str(e2e))
+    _sh(e2e, "e2e_password_start_run")                  # the run the record was saved in
+    rec, copy = _warm_record_saved_from(boot, e2e)
+    saved = e2e.read_bytes()
+    # a terminal `make stack-seed`: rotate at the run start, reconcile, stamp
+    _sh(e2e, "e2e_password_start_run; e2e_password_stamp_seeded identities")
+    reseeded = e2e.read_bytes()
+    assert reseeded != saved
+
+    ok, log = boot.start_saved(rec, on_line=lambda _l: None)
+    assert ok and calls["start"] == 1
+    # the volumes hold the reseeded value, so the file must too (else: 401s)
+    assert e2e.read_bytes() == reseeded, \
+        "the warm start put the OLD saved copy back over a file a completed seed " \
+        "reconciled the volumes to — every persona would 401"
+    # ...and the record follows it, on disk too, so the NEXT start is a no-op
+    with open(copy, "rb") as fh:
+        assert fh.read() == reseeded
+    assert oct(os.stat(copy).st_mode & 0o777) == "0o600"
+    again = sm.load(rec.path())
+    assert again.credentials["e2e_file"]["sha256"] == sm._sha256(str(e2e))
+    assert any("now follows it" in l for l in log)
+    assert not any("put the saved credential file(s) back" in l and "e2e" in l
+                   for l in log)
+    for value in (saved, reseeded):
+        for line in value.decode().splitlines():
+            v = line.partition("=")[2]
+            assert not any(v and v in l for l in log), "a password reached a log line"
+
+
+def test_warm_start_still_puts_the_copy_back_when_no_seed_completed(monkeypatch,
+                                                                    tmp_path):
+    """A rotation with no completed seed (another lane's run start, a seed that died
+    before its identity leg): the volumes still hold the copy's value, so the copy
+    goes back — the guard this lane always had."""
+    boot, calls = _boot(monkeypatch, tmp_path)
+    e2e = tmp_path / ".e2e-credentials"
+    monkeypatch.setattr(boot, "e2e_credentials_path", lambda: str(e2e))
+    _sh(e2e, "e2e_password_start_run")
+    rec, copy = _warm_record_saved_from(boot, e2e)
+    saved = e2e.read_bytes()
+    _sh(e2e, "e2e_password_start_run")                  # rotated, never seeded
+    ok, _log = boot.start_saved(rec, on_line=lambda _l: None)
+    assert ok and e2e.read_bytes() == saved
+
+
+def test_warm_start_puts_the_copy_back_when_the_file_rotated_after_the_stamped_seed(
+        monkeypatch, tmp_path):
+    """A stamp vouches for the file it hashed, not for whatever is there later. Here
+    the stamped seed ran with the SAVED value (the file still matched the record),
+    then another lane rotated the file: the volumes hold the saved value."""
+    boot, calls = _boot(monkeypatch, tmp_path)
+    e2e = tmp_path / ".e2e-credentials"
+    monkeypatch.setattr(boot, "e2e_credentials_path", lambda: str(e2e))
+    _sh(e2e, "e2e_password_start_run; e2e_password_stamp_seeded complete")
+    rec, copy = _warm_record_saved_from(boot, e2e)
+    saved = e2e.read_bytes()
+    _sh(e2e, "e2e_password_start_run")                  # e.g. `make kind-up`
+    ok, _log = boot.start_saved(rec, on_line=lambda _l: None)
+    assert ok and e2e.read_bytes() == saved
+    with open(copy, "rb") as fh:
+        assert fh.read() == saved
 
 
 def test_start_saved_refuses_when_the_volumes_are_gone_at_execution_time(monkeypatch,
