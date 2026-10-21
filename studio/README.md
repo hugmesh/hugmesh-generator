@@ -84,9 +84,15 @@ Actions-row button saves the same way; its credential-copy box is offered only w
 mesh is running. A record saved before the mesh's first bring-up restores through
 **Load into the form** and **Generate && start**; its Restore refuses before any
 preflight. Records live in `<Studio state dir>/meshes/<id>.json`
-(`python3 -m hugmesh_studio.core.saved_meshes list|show|delete`). The node-image flow
-("Create nodes for local cloud") imports the newest record for the checkout, with every
-domain's settings.
+(`python3 -m hugmesh_studio.core.saved_meshes list|show|delete`). A record saved while
+neither the Docker mesh nor the DevOps lane was up is a **draft** ("never ran"). The
+node-image flow ("Create nodes for local cloud", GUI and terminal) imports the newest
+record for the checkout whose mesh **ran**, with every domain's settings; a newer draft
+never replaces it. Its **Import from saved mesh** list (a number in the terminal) picks
+any other record of the checkout, a draft included, and the summary then says NEVER
+RAN. From the command line, `local_mesh_bootstrap mesh-save` saves with nothing running
+too (a draft), refuses `--copy-credentials` then and a name another record has, and
+`--overwrite ID` replaces a record the way Overwrite selected does.
 
 ### Local mesh: code folders (on the Repo source step)
 
