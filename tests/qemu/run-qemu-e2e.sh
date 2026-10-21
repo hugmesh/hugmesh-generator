@@ -396,6 +396,18 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# THIS IS WHERE A QEMU RUN STARTS (tests/stack/e2e-password.sh, "WHERE A RUN
+# STARTS"): mint this run's shared e2e password ONCE, here, and EXPORT it — the
+# three seed-accounts.sh calls below and the Playwright run in [4/5] are separate
+# processes and must all inherit this one value (seed-accounts.sh only resolves,
+# never rotates). Not reached by --list or --dry-run, which exit above: neither
+# seeds anything. $E2E_PASSWORD (kept) and E2E_PASSWORD_KEEP=1 (reuse the file)
+# opt out. Running as root, the rewrite keeps the file's existing owner.
+# shellcheck source=../stack/e2e-password.sh
+. "${SCRIPT_DIR}/../stack/e2e-password.sh"
+e2e_password_start_run \
+    || die "could not start this run's E2E_PASSWORD (see tests/stack/e2e-password.sh)"
+
 # ── [1/5] Generate login key + KEYS seed, boot the VM(s) ───────────
 step "[1/5] Generating login SSH key + KEYS seed payload"
 ssh-keygen -t ed25519 -N '' -C qemu-e2e -f "${SSHKEY}" >/dev/null

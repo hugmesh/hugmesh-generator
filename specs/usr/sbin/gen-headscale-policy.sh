@@ -30,6 +30,22 @@
 #      before forcing tags. A policy is "applied" only once a marker says so
 #      (${CACHE_DIR}/applied-policy-hash), so a failed apply is retried on the
 #      next tick instead of being forgotten because the file is already on disk.
+#   7. a policy headscale does not load (it never answers after the restart, even
+#      after a second restart) is not rolled back to the previous file as it was:
+#      that file still grants every edge the export has since REVOKED, and the cursor
+#      has already advanced so the same generation is never fetched again. The
+#      fallback is the previous policy narrowed to the ssh edges the rejected policy
+#      still carries, computed without temp files. When even that cannot be computed
+#      the previous policy is NOT restored: the refused one stays and headscale stays
+#      down (fail closed). A restart command that fails outright cannot change what is
+#      running, so that case only alarms and retries. The rejected policy is kept as
+#      pending and retried a bounded number of ticks, and an ALARM
+#      (${CACHE_DIR}/apply-failed + a daemon.crit log line) is raised. Loading the
+#      FALLBACK on a later tick does not clear it; loading the pending policy, or a
+#      newer generation that replaces it, does.
+#   8. a policy that cannot be written into /etc/headscale (disk full, read-only)
+#      raises the same alarm, is kept pending, and does NOT advance the export
+#      cursor, so the same generation is installed again on the next tick.
 #
 # THE FOUR FIXES (vs main's forgeable policy):
 #   [FIX-SERVERTAG]   dst tags (tag:dev_<fp>, tag:dom_<domain>, tag:mesh_<id>,
@@ -83,6 +99,21 @@ APPLIED_MARK="${CACHE_DIR}/applied-policy-hash"
 # headscale socket to answer before forcing tags (or declaring the policy bad).
 HS_READY_TRIES="${HS_READY_TRIES:-20}"
 HS_READY_SLEEP="${HS_READY_SLEEP:-1}"
+# A start that is merely late must not be mistaken for a rejected policy: restart up
+# to this many times, waiting a full ready window after each, before concluding
+# headscale will not load the file.
+HS_APPLY_ATTEMPTS="${HS_APPLY_ATTEMPTS:-2}"
+# A policy headscale would not load is retried on this many LATER ticks (each retry
+# restarts headscale), then left alone so a genuinely bad policy cannot flap the
+# control plane every minute. The alarm stays raised either way.
+HS_PENDING_RETRIES="${HS_PENDING_RETRIES:-3}"
+# Raised while the policy the export asks for is NOT what headscale serves (apply
+# failed, restart failed, or the policy was rejected and a fallback is running).
+# Body is key=value lines; removed only when the wanted policy is loaded.
+ALARM_MARK="${CACHE_DIR}/apply-failed"
+# The rendered policy headscale refused to load, and how many retry ticks it has had.
+PENDING_POLICY="${CACHE_DIR}/pending-policy.hujson"
+PENDING_TRIES="${CACHE_DIR}/pending-tries"
 
 # Baked per-node privileged SSH local account (the Tailscale-SSH `users` value —
 # the LOCAL unix account a session opens AS, NOT the Casdoor operator). Source of
@@ -278,14 +309,21 @@ dev_tag_for_fp() {
     echo "dev_${h}"
 }
 
-# ── (4) Atomic cache swap + last-good bump (Layer-A's own cursor) ─────────────
+# ── (4) Atomic cache swap, and last-good bump (Layer-A's own cursor) ──────────
 commit_cache() {
-    local newjson="$1" newgen="$2"
+    local newjson="$1"
     local tmp="${EXPORT_JSON}.tmp.$$"
     cp -f "${newjson}" "${tmp}" 2>/dev/null || { warn "cache stage failed"; return 1; }
     chmod 0600 "${tmp}" 2>/dev/null || true
     have sync && sync 2>/dev/null || true
     mv -f "${tmp}" "${EXPORT_JSON}" 2>/dev/null || { warn "cache rename failed"; rm -f "${tmp}"; return 1; }
+    return 0
+}
+
+# Advance Layer-A's cursor. Called only after the policy rendered from generation
+# <newgen> is installed in /etc/headscale.
+bump_cursor() {
+    local newgen="$1"
     local lgt="${LAST_GOOD}.tmp.$$"
     printf '%s\n' "${newgen}" > "${lgt}" 2>/dev/null && mv -f "${lgt}" "${LAST_GOOD}" 2>/dev/null || { rm -f "${lgt}"; warn "last-good bump failed"; }
     chmod 0600 "${LAST_GOOD}" 2>/dev/null || true
@@ -311,12 +349,102 @@ restart_headscale() {
     have rc-service && rc-service headscale restart >/dev/null 2>&1
 }
 
-# Make the RUNNING headscale serve POLICY_OUT. Returns 0 once it does (marker
-# written), 1 when it does not (marker NOT written, so the next tick retries).
-#   $1 = "fresh" for a policy installed this tick, whose rejection is rolled back
-#        to $2 (the previous file, may be empty); anything else = a retry.
+# Restart headscale and wait for it to answer. Returns 0 once it does, 2 when the
+# restart command itself fails (nothing was reloaded), 1 when it was restarted but
+# never answered. A slow start gets HS_APPLY_ATTEMPTS full windows before it counts
+# as 1, so a policy is not declared rejected because headscale was merely late.
+restart_and_wait() {
+    local i
+    for ((i = 1; i <= HS_APPLY_ATTEMPTS; i++)); do
+        restart_headscale || return 2
+        headscale_ready && return 0
+        warn "headscale did not answer within ${HS_READY_TRIES}x${HS_READY_SLEEP}s of restart attempt ${i}/${HS_APPLY_ATTEMPTS}"
+    done
+    return 1
+}
+
+# ALARM: a failed or late apply must be loud and stay loud. The previous behaviour
+# was one warn line and silence, while the running headscale kept granting edges the
+# export had already revoked.
+raise_alarm() {
+    local since
+    since="$(sed -n 's/^since=//p' "${ALARM_MARK}" 2>/dev/null | head -1)"
+    [ -n "${since}" ] || since="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+    local wanted="${POLICY_OUT}"
+    [ -f "${PENDING_POLICY}" ] && wanted="${PENDING_POLICY}"
+    printf 'since=%s\nwanted_policy=%s\nreason=%s\n' "${since}" "$(policy_hash "${wanted}" | cut -c1-12)" "$*" \
+        > "${ALARM_MARK}" 2>/dev/null || true
+    log "ALARM: Layer-A policy NOT applied as exported: $*"
+    have logger && logger -p daemon.crit -t "${LOG_TAG}" -- "ALARM: Layer-A policy not applied as exported: $*" 2>/dev/null || true
+}
+
+# The wanted policy is loaded: drop the alarm and any pending rejected policy.
+clear_alarm() {
+    [ -e "${ALARM_MARK}" ] && log "Layer-A policy now applied as exported — alarm cleared"
+    rm -f "${ALARM_MARK}" "${PENDING_POLICY}" "${PENDING_TRIES}" 2>/dev/null || true
+}
+
+# Keep a rejected policy for retry. A different policy starts a fresh retry count; the
+# same one being retried keeps its count so the cap holds.
+save_pending() {
+    if [ ! -f "${PENDING_POLICY}" ] || [ "$(policy_hash "${PENDING_POLICY}")" != "$(policy_hash "$1")" ]; then
+        cp -f "$1" "${PENDING_POLICY}" 2>/dev/null || true
+        printf '0\n' > "${PENDING_TRIES}" 2>/dev/null || true
+    fi
+}
+
+# revocation_safe_fallback <prev> <rejected> <out>: the policy to run while the
+# rejected one cannot be loaded. It is <prev> with every ssh edge the rejected policy
+# no longer carries REMOVED, so a revocation survives a failed apply (the old rollback
+# restored <prev> verbatim and with it every revoked edge). Edges that are in both are
+# kept, and so is the always-on tag:superadmin break-glass edge. When nothing was
+# revoked <prev> is copied byte for byte. A rejected policy that does not parse keeps
+# NO edge but break-glass. Uses no temp file (jq reads both policies through pipes),
+# so a full or missing TMPDIR cannot turn the narrowing off. Returns 1, writing
+# NOTHING, when <prev> itself cannot be narrowed: the caller must then not run <prev>.
+revocation_safe_fallback() {
+    local prev="$1" rejected="$2" out="$3" before after
+    rm -f "${out}" 2>/dev/null
+    have jq || return 1
+    before="$(sed -e 's#//.*$##' "${prev}" 2>/dev/null \
+        | jq '(.ssh // []) | if type == "array" then length else error("ssh is not a list") end' 2>/dev/null)" || before=""
+    case "${before}" in ''|*[!0-9]*) return 1 ;; esac
+    sed -e 's#//.*$##' "${rejected}" 2>/dev/null | jq -e 'type == "object"' >/dev/null 2>&1 \
+        || warn "the refused policy does not parse — the fallback keeps only the tag:superadmin ssh edge"
+    if ! sed -e 's#//.*$##' "${prev}" 2>/dev/null | jq \
+            --slurpfile k <(sed -e 's#//.*$##' "${rejected}" 2>/dev/null \
+                | jq -c '(.ssh // []) | if type == "array" then . else [] end' 2>/dev/null) '
+            ($k[0] // []) as $keep
+            | if has("ssh") then
+                .ssh |= map(. as $e | select($e.src == ["tag:superadmin"] or any($keep[]; . == $e)))
+              else . end' > "${out}" 2>/dev/null; then
+        rm -f "${out}" 2>/dev/null; return 1
+    fi
+    after="$(jq '(.ssh // []) | length' "${out}" 2>/dev/null)" || after=""
+    case "${after}" in ''|*[!0-9]*) rm -f "${out}" 2>/dev/null; return 1 ;; esac
+    if [ "${after}" = "${before}" ]; then
+        cp -f "${prev}" "${out}" 2>/dev/null || { rm -f "${out}" 2>/dev/null; return 1; }   # nothing revoked: previous policy, untouched
+    else
+        log "fallback policy drops $((before - after)) ssh edge(s) the rejected policy had revoked"
+    fi
+    return 0
+}
+
+# The policy the export asks for is loaded only when the file headscale now serves IS
+# that policy. While a refused policy is pending, the file loaded may be the fallback
+# built from it, and loading the fallback must not clear the alarm.
+wanted_is_loaded() {
+    [ ! -f "${PENDING_POLICY}" ] || [ "$(policy_hash "${PENDING_POLICY}")" = "$(policy_hash "${POLICY_OUT}")" ]
+}
+
+# Make the RUNNING headscale serve POLICY_OUT. Returns 0 once it serves the policy the
+# export asks for (marker written, alarm cleared), 1 otherwise (the alarm is raised).
+#   $1 = fresh (POLICY_OUT was just installed from the export) or retry (a later tick
+#        re-activating what is on disk, which may be a fallback)
+#   $2 = the file POLICY_OUT replaced, if any (may be empty): when headscale will not
+#        load POLICY_OUT it is the base of the fallback policy.
 activate_policy() {
-    local mode="$1" prev="${2:-}" hash set_err set_rc=0
+    local mode="$1" prev="${2:-}" hash set_err set_rc=0 rc=0
     hash="$(policy_hash "${POLICY_OUT}")"
     if have headscale; then
         # stderr is CAPTURED: it was discarded here, which is why a mode:file refusal
@@ -331,31 +459,56 @@ activate_policy() {
         warn "headscale policy set failed for ${POLICY_OUT}: ${set_err:-<no output>}"
         # policy.mode=file reads the file at STARTUP only (specs/etc/headscale/
         # config.yaml), so the running server still serves the old policy. Restart.
-        if ! restart_headscale; then
+        restart_and_wait || rc=$?
+        if [ "${rc}" -eq 2 ]; then
             warn "headscale restart FAILED — the running server still serves the policy it read at startup (Layer-A revocations are NOT propagating); will retry next tick"
+            raise_alarm "headscale restart failed; the running policy predates ${hash:0:12} and any revocation in it is NOT in force"
             return 1
-        fi
-        if headscale_ready; then
+        elif [ "${rc}" -eq 0 ]; then
             log "headscale restarted to load ${POLICY_OUT} (hash ${hash:0:12}; policy.mode=file reloads at startup)"
-        elif [ "${mode}" = "fresh" ] && [ -n "${prev}" ] && [ -f "${prev}" ]; then
-            # The restart ran but headscale never came back: it rejected the new policy
-            # at startup. Putting the previous file back and restarting again keeps the
-            # control plane up on the last known-good policy rather than down.
-            warn "headscale did not answer after loading hash ${hash:0:12} — rolling back to the previous policy"
-            cp -f "${prev}" "${POLICY_OUT}" 2>/dev/null || true
-            if restart_headscale && headscale_ready; then
+        elif [ -n "${prev}" ] && [ -f "${prev}" ]; then
+            # Restarted, still silent after every attempt: headscale rejected the new
+            # policy at startup. Keep the control plane up, but NOT on the previous
+            # file as it was: it still grants whatever the export has since revoked.
+            warn "headscale did not answer after loading hash ${hash:0:12} — falling back to the previous policy minus every ssh edge the new one revokes"
+            # On a retry tick POLICY_OUT may already be the fallback: it must never
+            # replace the policy the export asked for as the pending one.
+            if [ "${mode}" = fresh ] || [ ! -f "${PENDING_POLICY}" ]; then
+                save_pending "${POLICY_OUT}"
+            fi
+            if ! revocation_safe_fallback "${prev}" "${POLICY_OUT}" "${POLICY_OUT}.fallback" \
+                || ! mv -f "${POLICY_OUT}.fallback" "${POLICY_OUT}" 2>/dev/null; then
+                rm -f "${POLICY_OUT}.fallback" 2>/dev/null
+                # FAIL CLOSED: the previous policy is NOT restored, because it may still
+                # carry edges the refused policy revokes. The refused policy stays on
+                # disk and headscale stays down until a policy loads.
+                raise_alarm "headscale would not load ${hash:0:12} and no revocation-safe fallback could be built from the previous policy; the previous policy was NOT restored and headscale is DOWN"
+                return 1
+            fi
+            if restart_and_wait; then
                 printf '%s\n' "$(policy_hash "${POLICY_OUT}")" > "${APPLIED_MARK}" 2>/dev/null || true
-                warn "rolled back to the previous policy; the rejected policy is dropped until the next export generation"
+                raise_alarm "headscale would not load ${hash:0:12}; running the previous policy minus revoked edges, retrying it for ${HS_PENDING_RETRIES} more tick(s)"
             else
-                warn "rollback restart FAILED — headscale is DOWN; will retry next tick"
+                warn "fallback restart FAILED — headscale is DOWN; will retry next tick"
+                raise_alarm "headscale would not load ${hash:0:12} and the fallback policy did not start either: headscale is DOWN"
             fi
             return 1
         else
             warn "headscale did not answer after restart — will retry next tick"
+            raise_alarm "headscale did not answer after loading ${hash:0:12}; no previous policy to fall back to"
             return 1
         fi
     fi
     printf '%s\n' "${hash}" > "${APPLIED_MARK}" 2>/dev/null || warn "could not write ${APPLIED_MARK}"
+    local loaded_wanted=0
+    if wanted_is_loaded; then
+        clear_alarm
+    else
+        # A retry tick brought up the FALLBACK (it had not started on the earlier
+        # tick). That is not the exported policy: keep it pending and keep the alarm.
+        loaded_wanted=1
+        raise_alarm "headscale is running the fallback ${hash:0:12}, not the exported policy $(policy_hash "${PENDING_POLICY}" | cut -c1-12), which it refused; retrying it"
+    fi
 
     # Force the server-assigned tags so freshly-approved nodes get
     # tag:dev_<fp>/tag:dom_<domain>/tag:mesh_<id> that the ssh edges name as dst.
@@ -364,9 +517,13 @@ activate_policy() {
     else
         warn "hugmesh-headscale-forcetags missing — server-forced dst tags NOT applied; generated ssh edges will not match until it runs"
     fi
-    return 0
+    return "${loaded_wanted}"
 }
 
+# apply_policy <rendered>: install <rendered> as POLICY_OUT and activate it. Returns 0
+# once it is installed (activation is tracked by the applied marker, the pending policy
+# and the alarm), 1 when it could NOT be installed: main then does not advance the
+# export cursor, so the same generation is fetched and installed again next tick.
 apply_policy() {
     local rendered="$1"
     local cur_hash new_hash applied=""
@@ -375,43 +532,110 @@ apply_policy() {
     [ -f "${APPLIED_MARK}" ] && applied="$(head -1 "${APPLIED_MARK}" 2>/dev/null)"
     if [ -n "${new_hash}" ] && [ "${new_hash}" = "${cur_hash}" ] && [ "${new_hash}" = "${applied}" ]; then
         log "rendered policy unchanged and already applied (hash ${new_hash:0:12}) — no re-apply"
+        clear_alarm   # the export now asks for exactly what is running: nothing is pending any more
         return 0
+    fi
+    # A newer policy than the pending one is now the one the export asks for: the old
+    # pending policy must never be re-installed over it.
+    if [ -f "${PENDING_POLICY}" ] && [ "$(policy_hash "${PENDING_POLICY}")" != "${new_hash}" ]; then
+        rm -f "${PENDING_POLICY}" "${PENDING_TRIES}" 2>/dev/null
     fi
     # Keep the file being replaced so a policy headscale rejects at startup can be rolled back.
     local prev=""
     if [ -f "${POLICY_OUT}" ] && [ "${new_hash}" != "${cur_hash}" ]; then
         prev="${POLICY_OUT}.prev"
         cp -f "${POLICY_OUT}" "${prev}" 2>/dev/null || prev=""
+    elif [ -f "${POLICY_OUT}.prev" ]; then
+        prev="${POLICY_OUT}.prev"   # re-activating what is already on disk: same fallback base as the first try
     fi
-    # Install the new policy atomically.
+    # Install the new policy atomically. A failure here (disk full, read-only or
+    # unwritable /etc/headscale) leaves the previous policy running, so it is alarmed
+    # and kept pending like a refused policy, and the caller holds the cursor.
     local tmp="${POLICY_OUT}.tmp.$$"
-    cp -f "${rendered}" "${tmp}" 2>/dev/null || { warn "policy stage failed — keeping current"; return 1; }
+    if ! cp -f "${rendered}" "${tmp}" 2>/dev/null; then
+        rm -f "${tmp}" 2>/dev/null
+        warn "policy stage failed — the previous policy keeps running"
+        save_pending "${rendered}"
+        raise_alarm "could not stage ${new_hash:0:12} into $(dirname "${POLICY_OUT}"); the running policy predates it and any revocation in it is NOT in force"
+        return 1
+    fi
     chown headscale:headscale "${tmp}" 2>/dev/null || true
     chmod 0644 "${tmp}" 2>/dev/null || true
-    mv -f "${tmp}" "${POLICY_OUT}" 2>/dev/null || { warn "policy install failed — keeping current"; rm -f "${tmp}"; return 1; }
+    if ! mv -f "${tmp}" "${POLICY_OUT}" 2>/dev/null; then
+        rm -f "${tmp}" 2>/dev/null
+        warn "policy install failed — the previous policy keeps running"
+        save_pending "${rendered}"
+        raise_alarm "could not install ${new_hash:0:12} as ${POLICY_OUT}; the running policy predates it and any revocation in it is NOT in force"
+        return 1
+    fi
 
     activate_policy fresh "${prev}" || true
     return 0
+}
+
+# install_generation <export> <rendered> <generation>: cache the export (force-tags
+# reads it), apply the rendered policy, and bump Layer-A's cursor only once that policy
+# is installed. A policy that could not be written to /etc/headscale leaves the cursor
+# where it was, so the same generation is fetched and installed again next tick even
+# when no state file (alarm, pending policy) could be written either.
+install_generation() {
+    commit_cache "$1" || true
+    if apply_policy "$2"; then
+        bump_cursor "$3"
+        return 0
+    fi
+    warn "policy for generation $3 not installed — export cursor NOT advanced, it is fetched again next tick"
+    return 1
 }
 
 # A policy that is on disk but not marked applied (a restart that failed on an
 # earlier tick). The fetch path below cannot retry it: the export cursor already
 # advanced, so the same generation is refused as a rollback. Retry it directly.
 retry_pending() {
-    [ -f "${POLICY_OUT}" ] || return 0
-    local applied=""
+    local applied="" tries=0
     [ -f "${APPLIED_MARK}" ] && applied="$(head -1 "${APPLIED_MARK}" 2>/dev/null)"
-    [ "$(policy_hash "${POLICY_OUT}")" = "${applied}" ] && return 0
-    log "policy on disk is not marked applied — retrying activation"
-    activate_policy retry "" || true
+    [ -f "${PENDING_TRIES}" ] && tries="$(head -1 "${PENDING_TRIES}" 2>/dev/null)"
+    case "${tries}" in ''|*[!0-9]*) tries=0 ;; esac
+    if [ -f "${POLICY_OUT}" ] && [ "$(policy_hash "${POLICY_OUT}")" != "${applied}" ]; then
+        # The refused policy itself is on disk (no fallback could be built): every
+        # retry restarts headscale on it, so it shares the pending retry cap.
+        if wanted_is_loaded && [ -f "${PENDING_POLICY}" ]; then
+            if [ "${tries}" -ge "${HS_PENDING_RETRIES}" ]; then
+                warn "the policy headscale refused was retried ${tries} time(s); not retrying it again until a new export generation replaces it — the ALARM stays raised"
+                return 0
+            fi
+            printf '%s\n' "$((tries + 1))" > "${PENDING_TRIES}" 2>/dev/null || true
+        fi
+        log "policy on disk is not marked applied — retrying activation"
+        local base=""
+        [ -f "${POLICY_OUT}.prev" ] && base="${POLICY_OUT}.prev"
+        activate_policy retry "${base}" || true
+        return 0
+    fi
+    # What is on disk IS what runs, but the export asked for another policy: headscale
+    # refused it, or it could not be installed. Offer it again (the cause may have been
+    # transient); the alarm stays raised until it loads.
+    [ -f "${PENDING_POLICY}" ] || return 0
+    if [ "${tries}" -ge "${HS_PENDING_RETRIES}" ]; then
+        warn "the policy headscale refused was retried ${tries} time(s); not retrying it again until a new export generation replaces it — the ALARM stays raised"
+        return 0
+    fi
+    log "retrying the pending policy (retry $((tries + 1))/${HS_PENDING_RETRIES})"
+    # apply_policy only reads its argument, so the pending file is passed as it is (no
+    # temp copy that a full TMPDIR could silently skip). A retry that cannot even be
+    # installed restarted nothing and does not count against the cap.
+    if apply_policy "${PENDING_POLICY}" && [ -f "${PENDING_POLICY}" ]; then
+        printf '%s\n' "$((tries + 1))" > "${PENDING_TRIES}" 2>/dev/null || true
+    fi
+    return 0
 }
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 main() {
     _init || exit 0   # fail-closed: any unmet precondition keeps the current policy
     retry_pending
-    local fetched; fetched="$(mktemp 2>/dev/null)" || { warn "mktemp failed — keeping current policy"; exit 0; }
-    local rendered; rendered="$(mktemp 2>/dev/null)" || { rm -f "${fetched}"; warn "mktemp failed — keeping current policy"; exit 0; }
+    local fetched; fetched="$(mktemp 2>/dev/null)" || { raise_alarm "mktemp failed: no export can be fetched, so no revocation is propagating"; exit 0; }
+    local rendered; rendered="$(mktemp 2>/dev/null)" || { rm -f "${fetched}"; raise_alarm "mktemp failed: no export can be fetched, so no revocation is propagating"; exit 0; }
     trap 'rm -f "${fetched}" "${rendered}" 2>/dev/null || true' EXIT
 
     if ! fetch_export "${fetched}"; then
@@ -445,9 +669,7 @@ main() {
         fi
     fi
 
-    # Accept: bump Layer-A's cursor, then apply on content change.
-    commit_cache "${fetched}" "${gen}" || true
-    apply_policy "${rendered}"
+    install_generation "${fetched}" "${rendered}" "${gen}" || true
     exit 0
 }
 
