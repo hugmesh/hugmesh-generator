@@ -257,9 +257,13 @@ For every repository that is not blocked, apply:
   never a mirror. The commit is named by its sha as soon as it is made, and the
   file count, the scan of the commit's objects, the tree and the push all use that
   sha, never `HEAD`: the work folder is an ordinary directory, and a commit added to
-  it after the scan is not what gets pushed. After the push the branch is read back
-  with `git ls-remote`; a branch that holds anything but that sha, or cannot be read,
-  is reported as skipped (the remote may then already hold it: check by hand);
+  it after the scan is not what gets pushed. The push sends that one refspec with
+  `--no-follow-tags` and `--no-verify`, so a tag or a pre-push hook added to the work
+  folder's own git config after the scan sends nothing with it. Every ref of the
+  remote is listed right before the push and read back with `git ls-remote` after it;
+  a branch that holds anything but that sha, a branch that cannot be read, or any
+  other ref that changed in between is reported as skipped (the remote may then
+  already hold it: check by hand);
 * on an existing non-empty repository: reports **unchanged** when `main` already
   holds exactly the snapshot tree, otherwise **refuses** — also when the content lives
   on another branch (`master`, say) and there is no `main` at all: apply lists every

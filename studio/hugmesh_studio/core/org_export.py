@@ -1648,26 +1648,58 @@ def _push_one(runner, calls, rp: RepoPlan, cfg: ExportConfig, stamp: str,
         res.branch = "main"
         if res.action not in ("create",):
             res.action = "update (empty repository)"
-    # the SCANNED commit by its sha, never HEAD (see _commit_snapshot)
-    push = _run_checked(runner, calls, ["git", "push", "-q", url,
-                                        f"{res.commit}:refs/heads/{res.branch}"],
+    # every ref the remote holds right before the push, so the read-back below can tell
+    # what the push changed. No answer: nothing is pushed
+    before = _run_checked(runner, calls, ["git", "ls-remote", url],
+                          cwd=rp.workdir, env=_git_env(cfg, stamp), timeout=120)
+    if before.returncode != 0:
+        res.skipped = f"git ls-remote failed: {before.err.strip()[:160]}"
+        return res
+    # the SCANNED commit by its sha, never HEAD (see _commit_snapshot), and nothing
+    # else: --no-follow-tags because the work folder's own config can turn on
+    # push.followTags and a tag object made after the scan would ride along (its
+    # message is never scanned); --no-verify because a pre-push hook there is not ours
+    push = _run_checked(runner, calls, ["git", "push", "-q", "--no-follow-tags", "--no-verify",
+                                        url, f"{res.commit}:refs/heads/{res.branch}"],
                         cwd=rp.workdir, env=_git_env(cfg, stamp), timeout=1800)
     if push.returncode != 0:
         res.skipped = f"git push failed: {push.err.strip()[:200]}"
         return res
-    # read the branch back: the result file names a commit, and it must be the one the
-    # remote now holds. Anything else (another value, no answer) is reported as a
-    # failure, never as a pushed repository
-    back = _run_checked(runner, calls, ["git", "ls-remote", url, f"refs/heads/{res.branch}"],
+    # read every ref back: the result file names a commit, and it must be the one the
+    # remote's branch now holds; and the push may have changed nothing else (no new
+    # tag, no other branch). Anything else, or no answer, is reported as a failure,
+    # never as a pushed repository
+    back = _run_checked(runner, calls, ["git", "ls-remote", url],
                         cwd=rp.workdir, env=_git_env(cfg, stamp), timeout=120)
-    held = [ln.split("\t", 1)[0] for ln in back.text.splitlines()
-            if ln.endswith(f"\trefs/heads/{res.branch}")]
-    if back.returncode != 0 or held != [res.commit]:
+    ref = f"refs/heads/{res.branch}"
+    was, now = _ls_remote_refs(before.text), _ls_remote_refs(back.text)
+    held = now.get(ref, "")
+    if back.returncode != 0 or held != res.commit:
         res.skipped = (f"after the push, {res.branch} on the remote is "
-                       f"{held[0] if held else 'unreadable'}, not the scanned commit "
+                       f"{held or 'unreadable'}, not the scanned commit "
                        f"{res.commit}: the remote may hold content this export did not "
                        "scan, check it by hand")
+        return res
+    # the remote's HEAD may now name the new branch; any other ref must be untouched
+    extra = sorted(r for r in set(was) | set(now)
+                   if r != ref and was.get(r) != now.get(r)
+                   and not (r == "HEAD" and now.get(r) == res.commit))
+    if extra:
+        shown = ", ".join(extra[:5]) + (" ..." if len(extra) > 5 else "")
+        res.skipped = (f"after the push, the remote also changed {shown}, which this "
+                       "export did not push: the remote may hold content this export did "
+                       "not scan, check it by hand")
     return res
+
+
+def _ls_remote_refs(text: str) -> dict[str, str]:
+    """``git ls-remote`` output as {ref: sha}."""
+    out: dict[str, str] = {}
+    for ln in text.splitlines():
+        sha, sep, name = ln.partition("\t")
+        if sep:
+            out[name.strip()] = sha.strip()
+    return out
 
 
 def apply(p: Plan, runner: Runner | None = None, *, progress=None) -> Result:

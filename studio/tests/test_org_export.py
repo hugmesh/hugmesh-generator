@@ -34,6 +34,7 @@ import os
 import re
 import shlex
 import shutil
+import subprocess
 import sys
 import tarfile
 
@@ -2607,6 +2608,18 @@ def _hooked(runner, when, action):
     return fired
 
 
+def _after_the_push(target):
+    """A hook condition: the first ``git ls-remote`` of ``target`` after its push."""
+    seen = []
+
+    def when(a, kw):
+        if a[:2] == ["git", "push"] and target in a[-2]:
+            seen.append(True)
+            return False
+        return bool(seen) and a[:2] == ["git", "ls-remote"] and target in a[-1]
+    return when
+
+
 def _in(wd):
     return lambda kw: bool(kw.get("cwd")) and os.path.samefile(kw["cwd"], wd)
 
@@ -2646,7 +2659,7 @@ def test_head_moved_after_the_snapshot_commit_never_reaches_the_remote(world, po
     assert _GH_TOKEN.decode() not in _git(bare, "show", "main:README.md")
     assert _GH_TOKEN.decode() not in _git(bare, "log", "--all", "-p", "--format=%H")
     assert r.commit == remote and not r.skipped, (r.commit, remote, r.skipped)
-    push = [c for c in res.calls if c[:2] == ["git", "push"] and "example-commons" in c[3]]
+    push = [c for c in res.calls if c[:2] == ["git", "push"] and "example-commons" in c[-2]]
     assert push and push[0][-1] == f"{r.commit}:refs/heads/main", push
 
 
@@ -2662,8 +2675,7 @@ def test_a_remote_branch_that_is_not_the_scanned_commit_after_the_push_is_a_fail
         other = _move_head_with_a_token(rp.workdir)
         _git(rp.workdir, "push", "-q", bare, "+HEAD:refs/heads/main")
         return other
-    fired = _hooked(runner, lambda a, kw: a[:2] == ["git", "ls-remote"] and "--heads" not in a
-                    and "example-commons" in a[2], overwrite)
+    fired = _hooked(runner, _after_the_push("example-commons"), overwrite)
     res = oe.apply(p, runner)
     assert fired
     r = next(x for x in res.repos if x.target == rp.target_full)
@@ -2675,17 +2687,36 @@ def test_an_unreadable_remote_branch_after_the_push_is_a_failure(world):
     cfg, runner = world["cfg"], world["runner"]
     p = oe.plan(cfg, runner, stamp="20260101T000000Z", probe=False)
     rp = next(r for r in p.repos if r.source == "hugmesh-commons")
-    orig = runner.run
+    orig, after = runner.run, _after_the_push("example-commons")
 
     def run(argv, **kw):
-        if argv[:2] == ["git", "ls-remote"] and "--heads" not in argv \
-                and "example-commons" in argv[2]:
+        if after(list(argv), kw):
             return oe.RunResult(128, b"", b"fatal: could not read from remote")
         return orig(argv, **kw)
     runner.run = run
     res = oe.apply(p, runner)
     r = next(x for x in res.repos if x.target == rp.target_full)
     assert r in res.failures and "unreadable" in r.skipped, r.skipped
+
+
+def test_an_unreadable_remote_before_the_push_pushes_nothing(world):
+    """The refs are listed right before the push so the read-back can tell what the
+    push changed; when that listing fails, nothing is pushed."""
+    cfg, runner = world["cfg"], world["runner"]
+    p = oe.plan(cfg, runner, stamp="20260101T000000Z", probe=False)
+    rp = next(r for r in p.repos if r.source == "hugmesh-commons")
+    orig = runner.run
+
+    def run(argv, **kw):
+        if argv[:2] == ["git", "ls-remote"] and "--heads" not in argv \
+                and "example-commons" in argv[-1]:
+            return oe.RunResult(128, b"", b"fatal: could not read from remote")
+        return orig(argv, **kw)
+    runner.run = run
+    res = oe.apply(p, runner)
+    r = next(x for x in res.repos if x.target == rp.target_full)
+    assert r in res.failures and "git ls-remote failed" in r.skipped, r.skipped
+    assert not [c for c in res.calls if c[:2] == ["git", "push"] and "example-commons" in c[-2]]
 
 
 def test_a_second_run_compares_the_scanned_tree_even_when_head_moves(world):
@@ -2706,3 +2737,67 @@ def test_a_second_run_compares_the_scanned_tree_even_when_head_moves(world):
     r = next(x for x in res.repos if x.target == rp.target_full)
     assert r.action == "unchanged" and not r.skipped, (r.action, r.skipped)
     assert _git(bare, "rev-parse", "main") == before
+
+
+# ── the push sends the scanned commit and NOTHING else ─────────────────────────────
+def _tag_with_a_token(workdir, *, follow=True, hook=False):
+    """What a writer to the work folder can do after the scan: an annotated tag on the
+    scanned commit whose message is a token, push.followTags turned on in the folder's
+    own config, and a pre-push hook that would publish that tag."""
+    if follow:
+        _git(workdir, "config", "push.followTags", "true")
+    _git(workdir, "-c", "user.name=x", "-c", "user.email=x@example.invalid",
+         "tag", "-a", "v0", "-m", _GH_TOKEN.decode(), "HEAD")
+    if hook:
+        hooks = os.path.join(workdir, ".git", "evil-hooks")
+        os.makedirs(hooks, exist_ok=True)
+        path = os.path.join(hooks, "pre-push")
+        with open(path, "w") as fh:
+            fh.write('#!/bin/sh\ngit push -q "$2" refs/tags/v0:refs/tags/v0\n')
+        os.chmod(path, 0o755)
+        _git(workdir, "config", "core.hooksPath", hooks)
+    return True
+
+
+@pytest.mark.parametrize("follow,hook", [(True, False), (False, True), (True, True)],
+                         ids=["push.followTags", "pre-push-hook", "both"])
+def test_a_tag_made_after_the_scan_never_reaches_the_remote(world, follow, hook):
+    """The push sends one refspec, the scanned sha, and nothing rides along with it:
+    a tag object made after the scan (its message is never scanned) is not followed
+    by the folder's push.followTags, and a pre-push hook the folder names does not run."""
+    cfg, runner = world["cfg"], world["runner"]
+    p = oe.plan(cfg, runner, stamp="20260101T000000Z", probe=False)
+    rp = next(r for r in p.repos if r.source == "hugmesh-commons")
+    fired = _hooked(runner, lambda a, kw: a[:3] == ["gh", "repo", "view"]
+                    and a[3] == rp.target_full,
+                    lambda a, kw: _tag_with_a_token(rp.workdir, follow=follow, hook=hook))
+    res = oe.apply(p, runner)
+    assert fired, "the hook never ran: the test proves nothing"
+    r = next(x for x in res.repos if x.target == rp.target_full)
+    bare = _bare(world, "example-commons")
+    assert _git(bare, "for-each-ref", "refs/tags") == ""
+    objs = subprocess.run(["git", "-C", bare, "cat-file", "--batch-all-objects", "--batch"],
+                          capture_output=True).stdout
+    assert _GH_TOKEN not in objs
+    assert r.commit == _git(bare, "rev-parse", "main") and not r.skipped, r.skipped
+
+
+def test_a_ref_the_push_did_not_send_is_a_failure(world):
+    """Whatever else changes on the remote between the listing before the push and the
+    read-back (a tag here) is reported as a failure, never as a pushed repository."""
+    cfg, runner = world["cfg"], world["runner"]
+    p = oe.plan(cfg, runner, stamp="20260101T000000Z", probe=False)
+    rp = next(r for r in p.repos if r.source == "hugmesh-commons")
+    bare = _bare(world, "example-commons")
+
+    def sneak(argv, kw):
+        _tag_with_a_token(rp.workdir, follow=False)
+        _git(rp.workdir, "push", "-q", bare, "refs/tags/v0:refs/tags/v0")
+        return True
+    fired = _hooked(runner, lambda a, kw: a[:2] == ["git", "push"]
+                    and "example-commons" in a[-2], sneak)
+    res = oe.apply(p, runner)
+    assert fired
+    r = next(x for x in res.repos if x.target == rp.target_full)
+    assert r in res.failures
+    assert "also changed refs/tags/v0" in r.skipped, r.skipped
