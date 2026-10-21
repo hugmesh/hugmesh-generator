@@ -132,7 +132,16 @@ def _shot(widget, name):
         return ""
     os.makedirs(SHOTS, exist_ok=True)
     path = os.path.join(SHOTS, name)
+    # a rebuilt row is shown by a QUEUED call (QLayout::addChildWidget), so let the
+    # loop run first, and size the block to what it asks for so the picture has no
+    # stretched gaps
+    _settle()
+    want = widget.heightForWidth(736) if widget.hasHeightForWidth() else -1
+    widget.resize(736, max(want, widget.minimumSizeHint().height(), 300))
+    _settle()
     assert widget.grab().save(path)
+    widget.resize(736, 900)
+    _settle()
     return path
 
 

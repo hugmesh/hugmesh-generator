@@ -535,12 +535,24 @@ class CodeFoldersWidget(QtWidgets.QGroupBox):
         if self.busy():
             return False
         job = own_probe(self, "_job", _CopyJob(fn))
-        job.progress.connect(lambda line: self._say(str(line), "unverified"))
-        job.result.connect(done)
+        # BOUND METHODS, not lambdas: a bound method of this widget carries the
+        # widget's thread, so both signals are queued onto the window's thread and
+        # no label is ever touched from the worker.
+        self._job_done = done
+        job.progress.connect(self._on_job_progress)
+        job.result.connect(self._on_job_result)
         self._say(working, "unverified")
         job.start()
         self._sync_busy()
         return True
+
+    def _on_job_progress(self, line) -> None:
+        self._say(str(line), "unverified")
+
+    def _on_job_result(self, value) -> None:
+        done, self._job_done = getattr(self, "_job_done", None), None
+        if done is not None:
+            done(value)
 
     def _say(self, text: str, state: str) -> None:
         self.result_note.setStyleSheet(f"color: {self._COLOUR[state]};")
