@@ -602,7 +602,7 @@ fi
 # names a cluster NODE role (or an alias of one) is a mistake, not a marker: it asks
 # for an image this board does not build. Custom markers stay available via
 # --hostname. See scripts/_roles-lib.sh.
-hugmesh_role_reject_node_role "${ROLE}" || exit 1
+hugmesh_role_reject_node_role "${ROLE}" frite || exit 1
 if [ -z "${HOSTNAME}" ]; then
     HOSTNAME="$(hugmesh_role_hostname frite "${ROLE}" "${BRAND}")"
 fi

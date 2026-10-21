@@ -776,7 +776,7 @@ _require_match "--role"           "${ROLE}"           "${_RE_SLUG}"
 # names a cluster NODE role (or an alias of one) is a mistake, not a marker: it asks
 # for an image this board does not build. Custom markers stay available via
 # --hostname. See scripts/_roles-lib.sh.
-hugmesh_role_reject_node_role "${ROLE}" || exit 1
+hugmesh_role_reject_node_role "${ROLE}" orangepizero3 || exit 1
 
 
 BUILD_ROOT="${WORK_DIR}/${BUILD_SUBDIR}"
