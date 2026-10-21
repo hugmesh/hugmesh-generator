@@ -55,7 +55,8 @@ where Enter and ``b`` go. Same catalogue, same recording, same gate.
 from __future__ import annotations
 
 from ..core.domain_services import (
-    DOMAIN_CATALOGUE, ENFORCEMENT_NOTE, OTHER_SCOPE_HEADERS, SCOPE_BINDS,
+    DOCKER_SERVICES_HELP, DOMAIN_CATALOGUE, ENFORCEMENT_NOTE, OTHER_SCOPE_HEADERS,
+    SCOPE_BINDS, route_shows_enforcement_note, scope_where,
     SCOPE_DOMAIN, SCOPE_IMAGE, SCOPE_LABELS, SCOPE_NODE, SCOPE_ONION, SCOPE_WHERE,
     TOR_OWN_DOMAIN_NOTE, TOR_ROW_DESC, TOR_ROW_LABEL,
     carried_over_slugs, describe, describe_carried_over, domain_names_for_services,
@@ -157,18 +158,20 @@ def _offered(domain) -> list[str]:
         getattr(domain, "optional_services", None))
 
 
-def other_scope_table(cfg, entries=()) -> tuple[list[str], list[list[str]]]:
+def other_scope_table(cfg, entries=(), route: str = "image"
+                      ) -> tuple[list[str], list[list[str]]]:
     """(headers, rows) for the choices this step SHOWS but does not own (#497) — the
     GUI page's read-only table, same data, same source."""
     return (list(OTHER_SCOPE_HEADERS),
             [[slug, SCOPE_LABELS[scope], where, state or "off"]
-             for slug, scope, where, state in other_scope_rows(cfg, entries)])
+             for slug, scope, where, state in other_scope_rows(cfg, entries,
+                                                               route=route)])
 
 
-def scope_legend() -> list[str]:
+def scope_legend(route: str = "image") -> list[str]:
     """One line per scope: where it is chosen, and what it binds. Built from core so a
     wording change cannot leave a stale sentence behind on either face."""
-    return [f"{SCOPE_LABELS[k]}: set {SCOPE_WHERE[k]}, binds {SCOPE_BINDS[k]}"
+    return [f"{SCOPE_LABELS[k]}: set {scope_where(k, route)}, binds {SCOPE_BINDS[k]}"
             for k in (SCOPE_DOMAIN, SCOPE_ONION, SCOPE_IMAGE, SCOPE_NODE)]
 
 
@@ -338,10 +341,13 @@ class DomainServicesScreen:
         out.append(f"{TOR_ROW_LABEL}: "
                    + tor_row_state(d, scope_cfg, self._entries(j), _own_name(cfg),
                                    walked=cfg, domains=doms))
-        out += ["", ENFORCEMENT_NOTE, ""]
+        out.append("")
+        if route_shows_enforcement_note(self.route):
+            out += [ENFORCEMENT_NOTE, ""]
         if self.lane_note:
             out += [self.lane_note, ""]
-        out += ["The services THIS domain provides. They ride the mesh manifest as "
+        out += [DOCKER_SERVICES_HELP if not route_shows_enforcement_note(self.route) else
+                "The services THIS domain provides. They ride the mesh manifest as "
                 "per-domain provisioning input; they do not change which services the "
                 "image bakes.",
                 ""]
@@ -370,10 +376,10 @@ class DomainServicesScreen:
                    "domain):")
         # the mesh-wide state column reads an ImageConfig; a host walking something
         # else (the local docker mesh) has none, and the column reads "off".
-        headers, rows = other_scope_table(scope_cfg, self._entries(j))
+        headers, rows = other_scope_table(scope_cfg, self._entries(j), route=self.route)
         out += model.format_table(headers, rows)
         out.append("")
-        out += scope_legend()
+        out += scope_legend(self.route)
         return out
 
     @staticmethod

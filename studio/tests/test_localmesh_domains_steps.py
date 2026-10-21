@@ -245,9 +245,16 @@ def test_the_services_stepper_walks_every_domain_own_domain_first(wiz):
     assert w.current_domain() == "team.example"
     assert "3 of 3" in w.subtitle_label.text()
     assert w.unconfigured() == []
-    # the same catalogue and the same honesty line as the image flow's page
+    # the same catalogue as the image flow's page; the CLUSTER's "not yet enforced"
+    # banner is not said here, because this route runs what is ticked
     assert sorted(w._boxes) == sorted(OPTIONAL_SERVICES_CHOICES)
-    assert "NOT YET ENFORCED AT THE CLUSTER" in w.enforcement.text()
+    assert w.enforcement.isHidden()
+    assert "On this local Docker mesh they run" in w.help.text()
+    wheres = [w.other_table.topLevelItem(i).text(2)
+              for i in range(w.other_table.topLevelItemCount())]
+    assert wheres and all("Mesh infrastructure" in t for t in wheres), wheres
+    assert "Mesh infrastructure" in w.legend.text()
+    assert "Network & services" not in w.legend.text()
     assert w.lane_note.isVisibleTo(w)
     # 2026-10-21: the per-domain choice IS what the Docker mesh runs, and it says so
     assert "what you tick here runs" in w.lane_note.text()

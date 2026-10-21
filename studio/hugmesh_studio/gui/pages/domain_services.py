@@ -141,7 +141,8 @@ from .brand_screen import BrandSettingsTabs
 from ...core import plain_words
 from ...tui.brand_step import brand_view
 from ...core.domain_services import (
-    DOMAIN_CATALOGUE, ENFORCEMENT_NOTE, OTHER_SCOPE_HEADERS, PER_DOMAIN_INFRA,
+    DOCKER_SERVICES_HELP, DOMAIN_CATALOGUE, ENFORCEMENT_NOTE, OTHER_SCOPE_HEADERS,
+    PER_DOMAIN_INFRA, route_shows_enforcement_note, scope_where,
     SCOPE_BINDS, SCOPE_DOMAIN, SCOPE_IMAGE, SCOPE_LABELS, SCOPE_NODE, SCOPE_ONION,
     SCOPE_WHERE, TOR_OWN_DOMAIN_NOTE, TOR_ROW_DESC, TOR_ROW_LABEL,
     carried_over_slugs, describe, describe_carried_over, domain_names_for_services,
@@ -165,13 +166,13 @@ _HEADERS = ("Selection", "Service", "Scope", "", "What it does for this domain")
 _EXTRA_NOTE = "  (kept from your config)"
 
 
-def _scope_legend() -> str:
+def _scope_legend(route: str = "image") -> str:
     """The three scopes, each with where it is chosen and what it binds (#497).
 
     Built from ``core.domain_services`` rather than retyped, so a scope whose wording
     changes there cannot leave a stale sentence behind on this page."""
     return "  ·  ".join(
-        f"{SCOPE_LABELS[k]}: set {SCOPE_WHERE[k]}, binds {SCOPE_BINDS[k]}"
+        f"{SCOPE_LABELS[k]}: set {scope_where(k, route)}, binds {SCOPE_BINDS[k]}"
         for k in (SCOPE_DOMAIN, SCOPE_ONION, SCOPE_IMAGE, SCOPE_NODE))
 
 
@@ -875,8 +876,9 @@ class DomainServicesBody:
         operator may have changed since this page was last painted."""
         self.other_table.clear()
         self._other_rows = {}
-        for slug, scope, where, state in other_scope_rows(self._scope_cfg(),
-                                                          self._entries()):
+        for slug, scope, where, state in other_scope_rows(
+                self._scope_cfg(), self._entries(),
+                route=getattr(self, "_route", "image")):
             item = QtWidgets.QTreeWidgetItem(self.other_table)
             # NOT CHECKABLE, explicitly. A QTreeWidgetItem carries ItemIsUserCheckable
             # by default and renders no box only because nobody set a check state —
@@ -1123,6 +1125,13 @@ class DomainServicesWidget(QtWidgets.QWidget, DomainServicesBody):
         if lane_note:
             self.lane_note.setText(lane_note)
             self.lane_note.setVisible(True)
+        # The local Docker mesh runs what is ticked here: the cluster's "not yet
+        # enforced" banner and the image flow's help line would contradict the lane
+        # note right under them (domain-ui skeptic 3).
+        if not route_shows_enforcement_note(route):
+            self.enforcement.setVisible(False)
+            self.help.setText(DOCKER_SERVICES_HELP)
+            self.legend.setText(_scope_legend(route))
 
     def _set_titles(self, title: str, subtitle: str) -> None:
         self.title_label.setText(title)
