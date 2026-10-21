@@ -479,3 +479,56 @@ def test_the_agent_card_in_the_panel_probes_and_plans_with_the_chosen_instance(
     finally:
         dock.close()
         dock.deleteLater()
+
+
+@pytest.mark.parametrize("mode", [odk.SYSTEM, odk.DOCKER])
+def test_the_panel_start_button_gives_the_worker_the_chosen_instance_and_the_context(
+        qapp, mode, monkeypatch, tmp_path):
+    """The inert-toggle proof for 'Start local assistant' (dock skeptic 2, 2026-10-21):
+    the button is how the queue worker gets its OLLAMA_HOST and its project context, so
+    a click in each mode must hand the worker start the chosen instance's address, the
+    context file (with where the local sources are) and the checkouts folder. Docker
+    mode also starts the container on that address first; system mode never does."""
+    from hugmesh_studio.gui import _local_ai_dock as dock_mod
+    monkeypatch.setenv("HUGMESH_STUDIO_STATE_DIR", str(tmp_path / "studio"))
+    monkeypatch.setenv("HUGMESH_LOCAL_AI_DIR", str(tmp_path / "local-ai"))
+    monkeypatch.setenv(odk.PORT_ENV, "12998")
+    monkeypatch.delenv("OLLAMA_HOST", raising=False)
+    calls = []
+    monkeypatch.setattr(odk, "start", lambda runner=None, **k: calls.append(
+        ("container", k["environ"]["OLLAMA_HOST"])) or odk.StartOutcome(True, "ok", ["docker"]))
+    monkeypatch.setattr(odk, "wait_ready", lambda env, t: calls.append(
+        ("ready", env["OLLAMA_HOST"])) or True)
+    monkeypatch.setattr(lai, "start_assistant", lambda gen, env=None, spawn=None: calls.append(
+        ("worker", dict(env or {}))) or lai.StartResult(True, "started", "cmd"))
+    monkeypatch.setattr(odk, "state", lambda runner=None: odk.DockerState(True))
+    monkeypatch.setattr(odk, "detect_gpu", lambda runner=None, **k: odk.GpuChoice(
+        "cpu", (), odk.IMAGE, "cpu"))
+    odk.set_mode(mode)
+    dock = dock_mod.LocalAIDock(GENERATOR_DIR, auto_poll=False, expanded=True,
+                                snapshot_fn=lambda: lai.Snapshot(taken=0.0), agent_card=False)
+    dock.show()
+    try:
+        assert dock.start_btn.isVisible() and dock.start_btn.isEnabled()
+        dock.start_btn.click()
+        end = time.monotonic() + 15
+        while not [c for c in calls if c[0] == "worker"] and time.monotonic() < end:
+            qapp.processEvents()
+            time.sleep(0.02)
+        workers = [c[1] for c in calls if c[0] == "worker"]
+        assert len(workers) == 1, calls
+        env = workers[0]
+        if mode == odk.DOCKER:
+            assert ("container", "127.0.0.1:12998") in calls, calls
+            assert env.get("OLLAMA_HOST") == "127.0.0.1:12998"
+        else:
+            assert not [c for c in calls if c[0] in ("container", "ready")], calls
+            assert not env.get("OLLAMA_HOST"), env.get("OLLAMA_HOST")
+        ctx = env.get("HUGMESH_AGENT_CONTEXT", "")
+        assert ctx and os.path.isfile(ctx), env
+        with open(ctx, encoding="utf-8") as fh:
+            assert "Where the local sources are" in fh.read()
+        assert env.get("HUGMESH_REPOS_ROOT"), env
+    finally:
+        dock.close()
+        dock.deleteLater()
