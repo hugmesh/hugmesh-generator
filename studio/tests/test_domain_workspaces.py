@@ -85,13 +85,14 @@ class FakeGit:
     goes red here, not only against the real git."""
 
     def __init__(self, dirty=None, unpushed=None, fail="", stashed=None, ignored=None,
-                 worktrees=None):
+                 worktrees=None, hidden=None):
         self.calls = []
         self.dirty = dirty or {}
         self.unpushed = unpushed or {}
         self.stashed = stashed or {}
         self.ignored = ignored or {}
         self.worktrees = worktrees or {}
+        self.hidden = hidden or {}
         self.fail = fail
 
     def __call__(self, argv, cwd):
@@ -114,6 +115,8 @@ class FakeGit:
         if argv[:2] == ["worktree", "list"]:
             n = 1 + self.worktrees.get(cwd, 0)
             return 0, "\n".join(f"worktree /w{i}\nHEAD abc\n" for i in range(n))
+        if argv[:2] == ["ls-files", "-v"]:
+            return 0, "\n".join(["H README"] + ["S skipped"] * self.hidden.get(cwd, 0))
         return 0, ""
 
 
@@ -504,6 +507,8 @@ def test_remove_keeps_a_copy_with_edits_or_commits_of_its_own(gen, src, state):
     ("stashed", "1 stashed change"),
     ("ignored", "1 ignored file or folder (such as a .env or build output)"),
     ("worktrees", "1 other working tree made from it"),
+    ("hidden", "1 file git is told not to check for changes (skip-worktree or "
+               "assume-unchanged)"),
 ])
 def test_remove_keeps_a_copy_with_any_other_kind_of_work(gen, src, state, kind, words):
     """The skeptic's case (2026-10-21): work on ANOTHER branch, in the stash or in an
@@ -531,7 +536,7 @@ def test_a_plain_copy_says_so_in_words_that_name_every_check(gen, src, state):
                           "of its own")
 
 
-@pytest.mark.parametrize("sub", ["status", "rev-list", "stash", "worktree"])
+@pytest.mark.parametrize("sub", ["status", "rev-list", "stash", "worktree", "ls-files"])
 def test_a_check_that_cannot_run_keeps_the_copy(gen, src, state, sub):
     _made(gen, src, state, [Domain(name="live.example", optional_services=["owncast"])],
           "live.example")
@@ -639,6 +644,10 @@ def test_with_the_real_git_a_copy_is_a_named_clone_and_local_commits_keep_it(
     ("stash", "holds 1 stashed change — it will be kept"),
     ("ignored-file", "1 ignored file or folder"),
     ("linked-worktree", "1 other working tree made from it"),
+    # skeptic 2 (2026-10-21, probe_loss2.py): work git status does not show by default
+    ("untracked-hidden-by-config", "holds 1 changed file — it will be kept"),
+    ("skip-worktree", "1 file git is told not to check for changes"),
+    ("assume-unchanged", "1 file git is told not to check for changes"),
     ("plain", ""),
 ])
 def test_with_the_real_git_every_kind_of_local_work_keeps_a_copy(
@@ -689,6 +698,14 @@ def test_with_the_real_git_every_kind_of_local_work_keeps_a_copy(
             fh.write("SECRET=precious")
     elif scenario == "linked-worktree":
         git("-C", dest, "worktree", "add", "-q", "--detach", str(tmp_path / "linked"))
+    elif scenario == "untracked-hidden-by-config":
+        git("-C", dest, "config", "status.showUntrackedFiles", "no")
+        with open(os.path.join(dest, "MY_NEW_WORK.py"), "w") as fh:
+            fh.write("precious")
+    elif scenario in ("skip-worktree", "assume-unchanged"):
+        git("-C", dest, "update-index", f"--{scenario}", "README")
+        with open(os.path.join(dest, "README"), "a") as fh:
+            fh.write("precious edit")
     # the checked-out branch itself is clean in every scenario
     assert subprocess.run(["git", "-C", dest, "status", "--porcelain"],
                           capture_output=True, text=True).stdout == ""

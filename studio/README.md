@@ -172,8 +172,10 @@ files of its own", or "holds 1 stashed change — it will be kept"). The second 
 re-reads the disk and removes only the folders that the first click listed, that are
 still extra and still a plain copy; **Keep them** cancels. A copy is always kept when it
 has changed, untracked or ignored files (a `.env`, build output), commits on ANY of its
-branches or tags that no remote has, stashed changes, or another working tree made from
-it. Not seen: a commit no branch, tag or stash points to any more (only git's reflog
+branches or tags that no remote has, stashed changes, another working tree made from
+it, or files git was told not to check for changes (skip-worktree, assume-unchanged). The
+untracked-file check overrides `status.showUntrackedFiles`, so a new file is seen even
+when the copy's or the person's git config hides untracked files. Not seen: a commit no branch, tag or stash points to any more (only git's reflog
 has it). A folder the Studio did not make is listed as "left alone" and never offered.
 
 The copies folder is named for the mesh's own domain, and every test mesh has the same

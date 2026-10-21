@@ -556,11 +556,16 @@ class ExtraStatus:
     ignored: int = 0
     #: other working trees (``git worktree add``) that live on this copy's ``.git``
     worktrees: int = 0
+    #: tracked files git was told NOT to check for changes (``update-index
+    #: --skip-worktree`` / ``--assume-unchanged``): an edit to one is invisible to
+    #: ``git status``, so the copy cannot be shown to be plain
+    hidden: int = 0
 
     @property
     def safe_to_remove(self) -> bool:
         return (not self.error and self.dirty == 0 and self.unpushed == 0
-                and self.stashed == 0 and self.ignored == 0 and self.worktrees == 0)
+                and self.stashed == 0 and self.ignored == 0 and self.worktrees == 0
+                and self.hidden == 0)
 
     def words(self) -> str:
         if self.error:
@@ -583,6 +588,10 @@ class ExtraStatus:
             if self.worktrees:
                 bits.append(n(self.worktrees, "other working tree", "other working trees")
                             + " made from it")
+            if self.hidden:
+                bits.append(n(self.hidden, "file", "files")
+                            + " git is told not to check for changes (skip-worktree or "
+                            "assume-unchanged)")
             return "holds " + ", ".join(bits) + " — it will be kept"
         return "a plain copy: no edits, commits, stashes or ignored files of its own"
 
@@ -595,9 +604,15 @@ def extra_status(path: str, runner: Optional[GitRunner] = None) -> ExtraStatus:
     --remotes`` without ``refs/stash``, not only HEAD), stash entries, and linked
     working trees. What it cannot see: a commit that NO ref points to any more (made on
     a detached HEAD and then left; only the reflog has it) — git warns about that when
-    it happens."""
+    it happens. Files git was told not to check (skip-worktree, assume-unchanged) keep
+    the copy too, since an edit to one cannot be seen."""
     run = runner or _run_git
-    code, porcelain = run(["status", "--porcelain", "--ignored"], path)
+    # ``--untracked-files=normal`` and ``--ignore-submodules=none`` on the command line
+    # beat every config level: with ``status.showUntrackedFiles=no`` (the copy's own
+    # config, or the person's global one) a brand-new file is otherwise invisible and
+    # the copy would read "a plain copy" and be removed with it.
+    code, porcelain = run(["status", "--porcelain", "--ignored", "--untracked-files=normal",
+                           "--ignore-submodules=none"], path)
     if code != 0:
         return ExtraStatus(path, 0, 0, "git status failed")
     lines = [ln for ln in porcelain.splitlines() if ln.strip()]
@@ -618,8 +633,16 @@ def extra_status(path: str, runner: Optional[GitRunner] = None) -> ExtraStatus:
                            stashed=stashed, ignored=ignored)
     worktrees = max(0, len([ln for ln in trees.splitlines()
                             if ln.startswith("worktree ")]) - 1)
+    # ``ls-files -v`` tags a skip-worktree file ``S`` and an assume-unchanged one with a
+    # lower-case letter; ``git status`` never reports an edit to either.
+    code, listing = run(["ls-files", "-v"], path)
+    if code != 0:
+        return ExtraStatus(path, dirty, unpushed, "git ls-files failed", stashed=stashed,
+                           ignored=ignored, worktrees=worktrees)
+    hidden = len([ln for ln in listing.splitlines()
+                  if ln[:1] == "S" or (ln[:1].isalpha() and ln[:1].islower())])
     return ExtraStatus(path, dirty, unpushed, stashed=stashed, ignored=ignored,
-                       worktrees=worktrees)
+                       worktrees=worktrees, hidden=hidden)
 
 
 @dataclass(frozen=True)
