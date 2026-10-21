@@ -392,3 +392,19 @@ def test_a_record_that_never_chose_does_not_claim_an_unsaved_form(qapp, page):
     assert sm.save(cli)
     w = _entered(qapp, page)
     assert w.current_title.text() == "Current mesh — not saved yet"
+
+
+@pytest.mark.parametrize("kind", [True, False, None])
+def test_the_save_records_what_the_monitor_last_read_of_the_kind_lane(qapp, page, kind,
+                                                                      monkeypatch):
+    """Saved-meshes skeptic 2 (R5): the GUI save hands the monitor's reading of the
+    DevOps (kind) lane to the record — True, False, or None while not read yet — and
+    never a constant, so a save made while the kind lane runs is not filed as a draft."""
+    w = _entered(qapp, page)
+    monkeypatch.setattr(page, "_kind_lane_running", lambda: kind)
+    w.name_edit.setText(f"kind-{kind}")
+    w.save_btn.click()
+    _settle(qapp, page)
+    rec = next(r for r in sm.scan()[0] if r.label == f"kind-{kind}")
+    assert rec.last_seen["kind_running"] is kind
+    assert rec.ran_when_saved() is bool(kind)
