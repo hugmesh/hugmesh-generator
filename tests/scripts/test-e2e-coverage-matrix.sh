@@ -665,12 +665,13 @@ restore_all
 
 # ── M6: somebody hand-edits an outcome in a GENERATED feature ───────────────
 cat > "${WORK}/m6.py" <<'PY'
-import sys
+import re, sys
 p = sys.argv[1]; s = open(p).read()
-old = "| admin@hugmesh.net            | wiki.administer | admitted |"
-new = "| admin@hugmesh.net            | wiki.administer | refused  |"
-if old not in s: sys.exit('anchor row not found')
-open(p, 'w').write(s.replace(old, new, 1))
+# Whitespace-tolerant: the emitter pads every column to its widest cell, so a
+# longer function id added anywhere in the wiki catalogue re-aligns this row.
+row = re.compile(r"(\|\s*admin@hugmesh\.net\s*\|\s*wiki\.administer\s*\|\s*)admitted(\s*\|)")
+if not row.search(s): sys.exit('anchor row not found')
+open(p, 'w').write(row.sub(lambda m: m.group(1) + 'refused ' + m.group(2), s, count=1))
 PY
 if mutate tests/e2e/features/coverage/access-matrix-wiki.feature "${WORK}/m6.py"; then
   emit_and_diff m6 || true
