@@ -510,6 +510,42 @@ else
   sed 's/^/        /' <<<"${OUT}" | tail -10
 fi
 
+# (18) A LINKED GIT WORKTREE finds the sibling clones beside its MAIN checkout — and a
+#      COPY of a worktree does not. Before this, the checker looked only at the
+#      worktree's own parent (wherever `git worktree add` put it), so every gate that
+#      runs the checker went INCOMPLETE in a worktree although the operator's sibling
+#      clones were right there. Hermetic: git's worktree metadata is laid out by hand
+#      (the checker reads it without running git), the "siblings" are the staged
+#      pristine sources, SERVICE_SRC_ROOT is UNSET for both runs. The copy has the
+#      same `.git` file but the admin dir's back-pointer names the REAL worktree, so
+#      it must stay INCOMPLETE: inheriting the sibling tree through a copied `.git`
+#      file is how a "sources missing" control would silently go green.
+echo "-- worktree: siblings beside the MAIN checkout are found; a copied worktree's are not --"
+WT_ORG="${WORK}/wt-org"; WT_MAIN="${WT_ORG}/hugmesh-generator"
+WT="${WORK}/elsewhere/wt-one"; WT_COPY="${WORK}/elsewhere/wt-copy"
+rm -rf "${WT_ORG}" "${WORK}/elsewhere"
+cp -r "${WORK}/src-pristine" "${WT_ORG}"
+mkdir -p "${WT_MAIN}/.git/worktrees/wt-one" "${WT}/tests/scripts"
+printf '%s\n' "${WT}/.git" >"${WT_MAIN}/.git/worktrees/wt-one/gitdir"
+printf '../..\n' >"${WT_MAIN}/.git/worktrees/wt-one/commondir"
+printf 'gitdir: %s\n' "${WT_MAIN}/.git/worktrees/wt-one" >"${WT}/.git"
+cp "$(dirname "${CHECKER}")"/*.py "${WT}/tests/scripts/"
+cp -r "${WT}" "${WT_COPY}"
+OUT="$(env -u SERVICE_SRC_ROOT python3 "${WT}/tests/scripts/$(basename "${CHECKER}")" "${REPO}/specs/cluster" 2>&1)"; WRC=$?
+if [ "${WRC}" -eq 0 ] && grep -qF -- "--   service sources: ${WT_ORG} (" <<<"${OUT}"; then
+  neg_ok "a linked worktree resolves the sibling clones beside its main checkout (rc 0)"
+else
+  neg_bad "a linked worktree did NOT resolve the siblings beside its main checkout (rc=${WRC})"
+  sed 's/^/        /' <<<"${OUT}" | tail -10
+fi
+OUT="$(env -u SERVICE_SRC_ROOT python3 "${WT_COPY}/tests/scripts/$(basename "${CHECKER}")" "${REPO}/specs/cluster" 2>&1)"; WRC=$?
+if [ "${WRC}" -eq 3 ] && grep -q "INCOMPLETE" <<<"${OUT}"; then
+  neg_ok "a COPY of a worktree (back-pointer names another path) stays INCOMPLETE (rc 3)"
+else
+  neg_bad "a COPY of a worktree inherited the main checkout's siblings (rc=${WRC})"
+  sed 's/^/        /' <<<"${OUT}" | tail -10
+fi
+
 echo
 echo "== negative controls: ${NEG_P} passed, ${NEG_F} failed =="
 if [ "${NEG_F}" -ne 0 ]; then
