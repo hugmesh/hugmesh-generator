@@ -42,6 +42,7 @@ import { expect } from '@playwright/test';
 import { Then, requireDimension } from './world';
 import { shellRoster } from './dimensions';
 import { SYSTEMS_SEED_USERS } from '../specs/rbac-roles';
+import { runCli, cliVerdict, type CliTranscript } from './runners';
 
 /** Repo root — steps/ is tests/e2e/steps, so three levels up. */
 const REPO_ROOT = path.resolve(__dirname, '..', '..', '..');
@@ -506,3 +507,160 @@ Then(
     ).not.toHaveLength(0);
   },
 );
+
+// ═════════════════════════════════════════════════════════════════════════════
+// BDD coverage round 2026-09-23 (services lane) — the steps the @issue:-tagged
+// scenarios under features/uncovered-services/ need and no shared step offers.
+// Each is a THEN over a CLI transcript a previous step captured, a committed
+// artefact, or a live-cluster read, so the Gherkin stays declarative and the
+// failure message names the file.
+// ═════════════════════════════════════════════════════════════════════════════
+
+// ── optional-service selection: the five cardinalities (generator#496) ───────
+//
+// #496 counts five different sizes for one supposedly 1:1 slug set. Three of
+// them live in THIS repo and are compared here by SET, not by count — a count
+// can agree while the members differ. The ConfigMap is asserted one way only
+// (every 13a element has a boolean): its extra keys are deliberate toggles for
+// things that are not optional services and #496 leaves "name each difference"
+// as an alternative to reconciling, so a strict equality there would invent a
+// decision. The admin-bff Java registry (the fifth cardinality) is cross-repo.
+
+const APPSET_13A_YAML = 'specs/cluster/apps/13a-optional-services.yaml';
+const OPT_CRD_YAML = 'specs/cluster/manifests/optional-services-operator/crd-optionalservice.yaml';
+const OPT_SEED_YAML = 'specs/cluster/manifests/optional-services-operator/seed-optionalservices.yaml';
+const INSTALLED_SERVICES_CM_YAML = 'specs/cluster/manifests/policy/installed-services-configmap.yaml';
+
+/** `- { slug: akkoma, path: …, installed: "false" }` rows of the 13a list generator. */
+function appset13aElements(): Array<{ slug: string; path: string; installed: string }> {
+  const out: Array<{ slug: string; path: string; installed: string }> = [];
+  for (const line of readRepoFile(APPSET_13A_YAML).split('\n')) {
+    const m = /^\s*-\s*\{\s*slug:\s*([a-z0-9-]+)\s*,\s*path:\s*([^,\s]+)\s*,.*installed:\s*"(true|false)"/.exec(line);
+    if (m) out.push({ slug: m[1], path: m[2], installed: m[3] });
+  }
+  return out;
+}
+
+/** The `spec.slug` enum of the OptionalService CRD (comment lines inside it skipped). */
+function crdSlugEnum(): string[] {
+  const text = readRepoFile(OPT_CRD_YAML);
+  const start = text.indexOf('slug:');
+  const enumAt = text.indexOf('enum:', start);
+  if (start < 0 || enumAt < 0) throw new Error(`${OPT_CRD_YAML}: no spec.slug enum found`);
+  const out: string[] = [];
+  for (const line of text.slice(enumAt + 'enum:'.length).split('\n')) {
+    const s = line.trim();
+    if (!s) continue;
+    if (s.startsWith('#')) continue;
+    const m = /^-\s*([a-z0-9-]+)$/.exec(s);
+    if (!m) break;
+    out.push(m[1]);
+  }
+  return out;
+}
+
+/** `metadata.name` of every `kind: OptionalService` CR in the seed. */
+function seedCrNames(): string[] {
+  const out: string[] = [];
+  const docs = readRepoFile(OPT_SEED_YAML).split(/^---\s*$/m);
+  for (const d of docs) {
+    if (!/kind:\s*OptionalService\b/.test(d)) continue;
+    const m = /metadata:\s*\n\s+name:\s*([a-z0-9-]+)/.exec(d);
+    if (m) out.push(m[1]);
+  }
+  return out;
+}
+
+/** The per-slug booleans of the installed-services ConfigMap `data:` block. */
+function installedServicesBooleans(): Record<string, string> {
+  const out: Record<string, string> = {};
+  let inData = false;
+  for (const line of readRepoFile(INSTALLED_SERVICES_CM_YAML).split('\n')) {
+    if (/^data:\s*$/.test(line)) { inData = true; continue; }
+    if (!inData) continue;
+    const m = /^  ([a-z0-9-]+):\s*"(true|false)"/.exec(line);
+    if (m) out[m[1]] = m[2];
+  }
+  return out;
+}
+
+const sortedUnique = (xs: string[]) => [...new Set(xs)].sort();
+
+Then('the optional-service slug sets agree across the 13a ApplicationSet, the CRD enum and the seed CRs',
+  async ({}) => {
+    const appset = sortedUnique(appset13aElements().map((e) => e.slug));
+    const crd = sortedUnique(crdSlugEnum());
+    const seed = sortedUnique(seedCrNames());
+    expect(appset.length, `${APPSET_13A_YAML} lists no elements`).toBeGreaterThan(0);
+    expect(crd, `CRD enum (${OPT_CRD_YAML}) vs 13a elements (${APPSET_13A_YAML})`).toEqual(appset);
+    expect(seed, `seed CRs (${OPT_SEED_YAML}) vs 13a elements (${APPSET_13A_YAML})`).toEqual(appset);
+  });
+
+Then('every 13a optional-service element has an installed-services ConfigMap boolean',
+  async ({}) => {
+    const booleans = installedServicesBooleans();
+    const missing = appset13aElements().map((e) => e.slug).filter((s) => !(s in booleans));
+    expect(
+      missing,
+      `13a elements with NO installed-services boolean (${INSTALLED_SERVICES_CM_YAML}) — `
+      + `a slug the renderer cannot flip: ${JSON.stringify(missing)}`,
+    ).toEqual([]);
+  });
+
+// ── optional-service selection on a LIVE cluster (generator#496 "Done when") ─
+//
+// The build-time selection is rendered into the installed-services ConfigMap
+// (the only artefact of the selection that reaches the cluster today). The
+// contract #496 asks for is that a service rendered `"false"` has NO ArgoCD
+// Application — and the hardcoded per-service Applications (apps/30-akkoma.yaml
+// …) are matched by their SOURCE PATH, not by name, because the §10 cut-over
+// that #496 records as never having happened is exactly a name that differs
+// (`akkoma` vs the ApplicationSet's `optional-akkoma`) over the same manifests.
+
+const KIND_CONTEXT = process.env.SNAP_KUBE_CONTEXT ?? 'kind-hugmesh-local';
+
+function kubectlJson(args: string[]): { transcript: CliTranscript; json: any | null } {
+  const transcript = runCli(['kubectl', '--context', KIND_CONTEXT, ...args, '-o', 'json'], { timeoutMs: 60_000 });
+  let json: any | null = null;
+  if (transcript.exitCode === 0) {
+    try { json = JSON.parse(transcript.stdout); } catch { json = null; }
+  }
+  return { transcript, json };
+}
+
+Then('every optional service the installed-services ConfigMap marks false has no ArgoCD Application on the cluster',
+  async ({ $testInfo }) => {
+    const cm = kubectlJson(['get', 'configmap', 'installed-services', '-n', 'hugmesh-policy']);
+    if (cm.transcript.spawnError) {
+      $testInfo.skip(true, `kubectl is not on PATH (${cm.transcript.spawnError}); this @env:kind scenario reads the live cluster through it.`);
+      return;
+    }
+    expect(
+      cm.json,
+      `kubectl --context ${KIND_CONTEXT} get configmap installed-services -n hugmesh-policy: `
+      + `${cliVerdict(cm.transcript)}\n${cm.transcript.stderr}`,
+    ).not.toBeNull();
+    const data: Record<string, string> = cm.json.data ?? {};
+    const deselected = Object.entries(data).filter(([, v]) => v === 'false').map(([k]) => k);
+    const pathsOf = new Map(appset13aElements().map((e) => [e.slug, e.path]));
+    const apps = kubectlJson(['get', 'applications.argoproj.io', '-A']);
+    expect(apps.json, `kubectl get applications.argoproj.io -A: ${cliVerdict(apps.transcript)}\n${apps.transcript.stderr}`).not.toBeNull();
+    const items: any[] = apps.json.items ?? [];
+    const offenders: string[] = [];
+    for (const slug of deselected) {
+      const srcPath = pathsOf.get(slug);
+      for (const app of items) {
+        const name: string = app.metadata?.name ?? '';
+        const sources: any[] = [app.spec?.source, ...(app.spec?.sources ?? [])].filter(Boolean);
+        const byPath = srcPath ? sources.some((s) => s.path === srcPath) : false;
+        const byName = name === `optional-${slug}` || name === slug;
+        if (byPath || byName) offenders.push(`${slug} -> Application ${app.metadata?.namespace}/${name}`);
+      }
+    }
+    expect(
+      offenders,
+      `installed-services marks these slugs "false" yet an ArgoCD Application still exists for them — `
+      + `the build-time selection did not reach the cluster (generator#496): ${JSON.stringify(offenders)}. `
+      + `Deselected: ${JSON.stringify(deselected)}`,
+    ).toEqual([]);
+  });
