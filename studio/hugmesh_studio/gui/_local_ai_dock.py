@@ -814,6 +814,7 @@ class LocalAIDock(QtWidgets.QFrame):
         self.build_log.setAccessibleName("Last lines of the picked build's log")
         self.build_log.setPlaceholderText("Pick a running build above to follow its log here.")
         self._tail_key = None                    # (path, size, mtime) last shown
+        self._tail_pick = None                   # the row whose log is shown
         self.builds_split = QtWidgets.QSplitter(Qt.Orientation.Horizontal)
         self.builds_split.setChildrenCollapsible(False)
         left = QtWidgets.QWidget()
@@ -1100,6 +1101,21 @@ class LocalAIDock(QtWidgets.QFrame):
     def _fill_builds(self, builds, mesh_running: bool, mesh_label: str) -> None:
         keep = self.builds_tree.currentItem().data(0, Qt.ItemDataRole.UserRole) \
             if self.builds_tree.currentItem() else None
+        # rebuilt in silence: the pick is re-read ONCE at the end (_on_build_picked), so
+        # the clear in between is not taken for "nothing picked"
+        self.builds_tree.blockSignals(True)
+        try:
+            self._fill_builds_rows(builds, mesh_running, mesh_label, keep)
+        finally:
+            self.builds_tree.blockSignals(False)
+        self.builds_note.setText(
+            "" if self.builds_tree.topLevelItemCount() else
+            "Nothing is building. An image build started from any Studio window, and a "
+            "local-mesh verb, are listed here while they run; closing a window or this "
+            "panel never stops one.")
+        self._on_build_picked()
+
+    def _fill_builds_rows(self, builds, mesh_running: bool, mesh_label: str, keep) -> None:
         self.builds_tree.clear()
         pick = None
         if mesh_running:
@@ -1122,17 +1138,18 @@ class LocalAIDock(QtWidgets.QFrame):
             pick = self.builds_tree.topLevelItem(0)
         if pick is not None:
             self.builds_tree.setCurrentItem(pick)
-        self.builds_note.setText(
-            "" if self.builds_tree.topLevelItemCount() else
-            "Nothing is building. An image build started from any Studio window, and a "
-            "local-mesh verb, are listed here while they run; closing a window or this "
-            "panel never stops one.")
-        self._sync_builds_buttons()
 
     def _on_build_picked(self) -> None:
+        """Another row was picked. The list is rebuilt every second while the tab is on
+        screen, which re-picks the same row: that is not a new pick, and the log is
+        re-read only when its file changed (refresh_activity -> refresh_build_tail)."""
         self._sync_builds_buttons()
-        self._tail_key = None
-        self.refresh_build_tail()
+        item = self.builds_tree.currentItem()
+        key = item.data(0, Qt.ItemDataRole.UserRole) if item is not None else None
+        if key != self._tail_pick:
+            self._tail_pick = key
+            self._tail_key = None
+            self.refresh_build_tail()
 
     def _picked_build_log(self) -> "tuple[str, str]":
         """``(log path, words for the title)`` of the picked row; path "" = nothing to
