@@ -80,17 +80,28 @@ def _window_walk(qapp, monkeypatch, state):
         for field, value in DESIGN.items():
             step.fields[field].setText(value)
             step.fields[field].editingFinished.emit()
-        ed = step.look_editor
-        ed.primary.setText(COLOUR)
-        ed.primary.editingFinished.emit()
+        # the design has no look of its own any more (2026-10-21): the mesh's look is
+        # chosen on row 0's Look tab of the Domain services step, walked below
+        assert step.look_editor is None
+        themed = False
         for _ in range(14):
             if isinstance(wiz.currentPage(), lm_mod.LocalMeshReviewPage):
                 break
+            if (isinstance(wiz.currentPage(), lm_mod.LocalMeshDomainServicesPage)
+                    and not themed):
+                tabs = ctl.domain_services.brand_tabs
+                assert tabs.view is not None and tabs.view.own
+                tabs.open_tab("Look")
+                tabs.look_editor.primary.setText(COLOUR)
+                tabs.look_editor.primary.editingFinished.emit()
+                tabs.open_tab("Services")
+                themed = True
             before = wiz.currentId()
             wiz.next()
             assert wiz.currentId() != before, \
                 f"stuck on {type(wiz.currentPage()).__name__}"
         assert isinstance(wiz.currentPage(), lm_mod.LocalMeshReviewPage)
+        assert themed, "the walk never reached row 0's Look tab"
         cfg = ctl.collect_bootstrap()
         plan = ctl.plan_view.toPlainText()
         with open(brand_model.record_path(), "rb") as fh:
@@ -114,11 +125,12 @@ def _text_walk(monkeypatch, state):
     assert "*1. Create a new superbrand" in "\n".join(j.lines())
     for cmd, value in DESIGN.items():
         j.feed(f"{cmd} {value}")
-    j.feed("look")
-    j.feed(f"1 {COLOUR}")
-    j.feed("back")
     j.feed("")                                        # leave the design
     j.feed("")                                        # domains -> services
+    # the mesh's look: section 2 of its own domain, the first page (2026-10-21)
+    j.feed("look")
+    j.feed(f"1 {COLOUR}")
+    j.feed("services")
     j.feed("")                                        # services -> review
     assert lm.stage == "review", "\n".join(j.lines())
     with open(brand_model.record_path(), "rb") as fh:

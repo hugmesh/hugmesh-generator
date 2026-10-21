@@ -32,10 +32,15 @@ mesh node** from the system tray.
     nvidia-free / nvidia / amd-free / amd-pro / intel-free / intel-pro / none, or auto);
   - the **test|prod `--env` picker** on the Build page;
   - branding (boot screen, login, wallpaper, accent);
-  - the **web login theme**: primary and secondary colours, with every other token derived
-    at guaranteed WCAG-AA legibility; 7 system font stacks, or an uploaded face with its
+  - the **web login theme**, chosen per domain on the **Look** tab of each domain's Brand
+    settings (the Domain services step; row 0 is the mesh's own look and the only place it
+    is chosen): presets, primary and secondary colours with every other token derived at
+    guaranteed WCAG-AA legibility; 7 system font stacks, or an uploaded face with its
     licence and sha256 recorded; a live token board and a real-browser preview of the
     captured login page. It applies at container start, with no rebuild;
+  - **per-domain sign-in, Tor, VPN and egress** on the same tabs (Identity, Ways to reach
+    it): a domain signs in through the mesh, its own Casdoor, or its own Entra / Cognito /
+    OIDC provider; it can have its own onion, and records its own VPN and egress choice;
   - Wi-Fi/BT, **kernel built-in vs modules**, egress VPN, home mode + eCryptfs, installer
     front-ends, cached/uncached;
   - the **cluster optional-services catalog** (+ games), client **desktop weight + Steam
@@ -331,8 +336,10 @@ NO_TUI=1 python -m hugmesh_studio.tui              # the same, by environment
 
 The journey mirrors the GUI's flow. `hugmesh_studio/tui/journey.py` consumes
 `config.WIZARD_PAGE_SLUGS`, so both faces share one page order. It has the two-card welcome
-screen and the journey-ordered mode menu; the Themes screen (web login theme: colours,
-header/footer, background effect); the create-nodes-for-local-cloud abbreviated wizard (k8s
+screen and the journey-ordered mode menu; each domain's Brand settings sections on the
+Domain services step (1 Identity with its own sign-in, 2 Look — the theme, row 0's being the
+mesh's own — 3 Services, 4 Ways to reach it with Tor, VPN and egress); the
+create-nodes-for-local-cloud abbreviated wizard (k8s
 gate, identity import, laptop/node-only worklist); the whole-mesh emulation per-device status
 list (ssh and web access as copy-ready command hints); and the per-domain Sign-in choice on
 the domains step. Steps not ported yet say so and keep the config's defaults. The walk ends

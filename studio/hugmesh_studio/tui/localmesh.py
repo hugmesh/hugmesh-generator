@@ -177,7 +177,10 @@ class LocalMeshScreen:
             cfg_of=lambda j: self.state(j),
             on_continue=lambda j: self._goto(j, "review"),
             on_back=lambda j: self._goto(j, "domains"),
-            lane_note=LANE_NOTE)
+            lane_note=LANE_NOTE,
+            # each domain's four Brand settings sections, as the window's tabs: row 0's
+            # Look is the mesh's own look (the one place it is chosen on this route)
+            brand_session_of=self.brand_session, route="docker")
 
     # ── state ──────────────────────────────────────────────────────────────────
     @staticmethod
