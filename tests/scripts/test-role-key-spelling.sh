@@ -139,22 +139,28 @@ subset_of() {  # subset_of <label> <superset> <candidate set>
 mapfile -t BUILDERS < <(cd "${GEN}" && git ls-files 'build-*-stage4.sh' | sort)
 [ "${#BUILDERS[@]}" -gt 0 ] || guard_require_capability "git ls-files found no build-*-stage4.sh — every builder check below would be vacuous"
 ROLE_AXIS=(build-x86-host-stage4.sh build-rpi5-stage4.sh build-jetson-stage4.sh)
-FREE_SLUG=(build-frite-stage4.sh build-orangepi5-stage4.sh build-orangepi4-lts-stage4.sh
+# NODE-AXIS: a desktop builder whose --role is a free marker EXCEPT for the cluster
+# node roles in its platform set (scripts/_roles-lib.sh HUGMESH_ROLES_ORANGEPI5 /
+# HUGMESH_ROLES_ORANGEPI4LTS), which it builds. Checked by behaviour in A3c.
+NODE_AXIS=(build-orangepi5-stage4.sh:orangepi5 build-orangepi4-lts-stage4.sh:orangepi4-lts)
+FREE_SLUG=(build-frite-stage4.sh
            build-orangepi-zero2-stage4.sh build-orangepi-zero2w-stage4.sh
            build-orangepi-zero3-stage4.sh build-orangepi3-lts-stage4.sh)
+NODE_AXIS_FILES=()
+for _na in "${NODE_AXIS[@]}"; do NODE_AXIS_FILES+=("${_na%%:*}"); done
 unclassified=""
 for b in "${BUILDERS[@]}"; do
-    case " ${ROLE_AXIS[*]} ${FREE_SLUG[*]} " in
+    case " ${ROLE_AXIS[*]} ${NODE_AXIS_FILES[*]} ${FREE_SLUG[*]} " in
         *" ${b} "*) ;;
         *) unclassified="${unclassified} ${b}" ;;
     esac
 done
 if [ -z "${unclassified// /}" ]; then
-    ok "every builder on disk is classified (${#ROLE_AXIS[@]} role-axis, ${#FREE_SLUG[@]} free-slug)"
+    ok "every builder on disk is classified (${#ROLE_AXIS[@]} role-axis, ${#NODE_AXIS[@]} node-axis, ${#FREE_SLUG[@]} free-slug)"
 else
-    bad "UNCLASSIFIED builder(s):${unclassified} — a new builder must be declared here as role-axis or free-slug, or nothing below checks its role vocabulary at all"
+    bad "UNCLASSIFIED builder(s):${unclassified} — a new builder must be declared here as role-axis, node-axis or free-slug, or nothing below checks its role vocabulary at all"
 fi
-for b in "${ROLE_AXIS[@]}" "${FREE_SLUG[@]}"; do
+for b in "${ROLE_AXIS[@]}" "${NODE_AXIS_FILES[@]}" "${FREE_SLUG[@]}"; do
     [ -f "${GEN}/${b}" ] || bad "${b} is classified here but does not exist — the classification is stale"
 done
 
@@ -194,6 +200,44 @@ for b in "${FREE_SLUG[@]}"; do
     else
         bad "${b} rejects its OWN default role — the node-role refusal is over-broad"
     fi
+done
+
+# A3c) the NODE-AXIS boards build EXACTLY the node roles in their platform set and
+#      refuse every other node role, while their desktop default and a free marker
+#      still work. By behaviour (--print-plan), for the same reason as A3.
+for pair in "${NODE_AXIS[@]}"; do
+    b="${pair%%:*}"; plat="${pair##*:}"
+    if grep -q "hugmesh_role_board_node_role ${plat} " "${GEN}/${b}"; then
+        ok "${b} resolves --role through hugmesh_role_board_node_role (${plat})"
+    else
+        bad "${b} does not call hugmesh_role_board_node_role ${plat} — its node roles are validated by a private table, or not at all"
+    fi
+    _set="$(hugmesh_role_platform_set "${plat}")"
+    for r in ${HUGMESH_ROLES_NODE}; do
+        case " ${_set} " in
+            *" ${r} "*)
+                if timeout 120 bash "${GEN}/${b}" --print-plan --role "${r}" --ram-gb 8 >"${TMPDIR:-/tmp}/rks-node.out" 2>&1 \
+                   && grep -qx "PLAN_ROLE=${r}" "${TMPDIR:-/tmp}/rks-node.out"; then
+                    ok "${b} builds its node role '${r}'"
+                else
+                    bad "${b} does not build '${r}', which HUGMESH_ROLES for ${plat} lists"
+                fi ;;
+            *)
+                if timeout 120 bash "${GEN}/${b}" --print-plan --role "${r}" --ram-gb 8 >/dev/null 2>&1; then
+                    bad "${b} ACCEPTED '--role ${r}', which is not in its node set (${_set})"
+                else
+                    ok "${b} refuses node role '${r}' (not in ${plat}'s set)"
+                fi ;;
+        esac
+    done
+    for r in desktop matrixmarker; do
+        if timeout 120 bash "${GEN}/${b}" --print-plan --role "${r}" >"${TMPDIR:-/tmp}/rks-node.out" 2>&1 \
+           && grep -qx "PLAN_ROLE=${r}" "${TMPDIR:-/tmp}/rks-node.out" && ! grep -q '^PLAN_K8S=' "${TMPDIR:-/tmp}/rks-node.out"; then
+            ok "${b} keeps '--role ${r}' a desktop marker (no node keys in its plan)"
+        else
+            bad "${b} no longer treats '--role ${r}' as a desktop marker"
+        fi
+    done
 done
 
 # A4) each role-axis builder's CASE ARMS are exactly its platform's canonical set.
