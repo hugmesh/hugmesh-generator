@@ -58,6 +58,27 @@ def qapp():
             or QtWidgets.QApplication(["hugmesh-studio-tests"]))
 
 
+def _quiet_probe(monkeypatch, volumes=(), listing=None):
+    """Make the dialog's REAL background probe harmless: it runs the moment the dialog
+    is built, and must never reach docker, kubectl or a cluster from a test."""
+    monkeypatch.setattr(vaults, "list_volumes", lambda *a, **k: list(volumes))
+    monkeypatch.setattr(vaults, "docker_available", lambda: Capability(True))
+    cap = Capability(False, "no vault", "start the lane")
+    monkeypatch.setattr(vaults, "vault_route",
+                        lambda *a, **k: vaults.VaultRoute("", cap))
+    monkeypatch.setattr(vaults, "list_entries",
+                        lambda *a, **k: listing if listing is not None else ([], cap))
+
+
+def _settle(qapp, d):
+    """Let the construction-time probe finish and deliver, so it cannot overwrite the
+    state a test then renders by hand."""
+    probe = getattr(d, "_probe", None)
+    if probe is not None:
+        probe.wait(5000)
+    qapp.processEvents()
+
+
 def vol(short="admin-bff-pg", in_use=(), size=1024):
     return ManagedVolume(name=f"hugmesh-local_{short}", short=short,
                          mountpoint=f"/var/lib/docker/volumes/{short}/_data",
@@ -177,12 +198,10 @@ class TestDialogDeleteArming:
     """The inline confirm, which replaces a nested modal (that would hang headless)."""
 
     def _dialog(self, qapp, monkeypatch, volumes):
-        monkeypatch.setattr(vaults, "list_volumes", lambda *a, **k: volumes)
-        monkeypatch.setattr(vaults, "docker_available", lambda: Capability(True))
-        monkeypatch.setattr(vaults, "vault_capability",
-                            lambda *a, **k: Capability(False, "no vault", "start the lane"))
+        _quiet_probe(monkeypatch, volumes)
         d = VaultsDialog(project="hugmesh-local")
-        d._on_probe((volumes, Capability(False, "no vault", "start the lane"),
+        _settle(qapp, d)
+        d._on_probe((volumes, ([], Capability(False, "no vault", "start the lane")),
                      Capability(True)))
         return d
 
@@ -281,14 +300,328 @@ class TestGetEntry:
 
     def test_an_unavailable_vault_short_circuits_without_running_anything(self, monkeypatch):
         # The docker-lane case: no vault container. It must not shell out and must hand
-        # back vault_capability's own remedy rather than a bare failure.
-        monkeypatch.setattr(vaults, "vault_capability",
-                            lambda project=vaults.DEFAULT_PROJECT:
-                            vaults.Capability(False, detail="Vault is not running on this mesh.",
-                                              remedy="Start the DevOps lane."))
+        # back the route's own remedy rather than a bare failure.
+        monkeypatch.setattr(vaults, "vault_route",
+                            lambda project=vaults.DEFAULT_PROJECT: vaults.VaultRoute(
+                                "", vaults.Capability(
+                                    False, detail="Vault is not running on this mesh.",
+                                    remedy="Start the DevOps lane.")))
         fake = FakeRun({})
         monkeypatch.setattr(vaults, "_run", fake)
         value, cap = vaults.get_entry("secret/hugmesh/studio", "admin_token")
         assert value is None
         assert fake.calls == []
         assert "not running" in cap.detail
+
+
+# ── the kind lane's Vault (2026-10-21: "the vaults can never be viewed") ─────────────
+#
+# Before this, vault_capability only asked `docker ps` and $VAULT_ADDR, so with the kind
+# lane up — the only place Vault runs — the tab still said "not running on this mesh",
+# and even past that every read ran a host `vault` binary this host does not have.
+# These tests drive the kind route from RECORDED kubectl answers (tests/fixtures/
+# vaults_kind/README.md says which were recorded live and which are hand-built).
+
+import base64  # noqa: E402
+import pathlib  # noqa: E402
+
+_FX = pathlib.Path(__file__).parent / "fixtures" / "vaults_kind"
+_TOKEN = "hvs.FIXTURE-not-a-real-token"
+
+
+def _fx(name: str) -> str:
+    return (_FX / name).read_text()
+
+
+def _kind_table(*, lane_up=True, replicas="1", halt=None, pod=None, pod_err="",
+                secret_rc=0, sts_err="", kv=None):
+    """argv-fragment -> (rc, stdout, stderr). Order matters: FakeRun takes the first
+    fragment found, so the specific kv-list paths come before the shorter ones."""
+    t: dict[str, tuple[int, str, str]] = {}
+    for frag, ans in (kv or {}).items():
+        t[frag] = ans
+    t["label=com.docker.compose.project"] = (0, "", "")          # no compose vault
+    t["name=^hugmesh-local-control-plane$"] = (
+        0, "hugmesh-local-control-plane\n" if lane_up else "", "")
+    t["get statefulset vault"] = (1, "", sts_err) if sts_err else (0, replicas, "")
+    t["get configmap hugmesh-kind-halt"] = (
+        (0, halt, "") if halt is not None
+        else (1, "", 'Error from server (NotFound): configmaps "hugmesh-kind-halt" not found'))
+    if pod is not None:
+        t["get pod vault-0"] = (0, pod, "")
+    else:
+        t["get pod vault-0"] = (1, "", pod_err or _fx("pod-vault-0-notfound.stderr"))
+    t["get secret vault-bootstrap"] = (
+        (0, base64.b64encode(_TOKEN.encode()).decode(), "") if secret_rc == 0
+        else (1, "", 'Error from server (Forbidden): secrets "vault-bootstrap" is forbidden'))
+    return t
+
+
+@pytest.fixture
+def kind_env(monkeypatch):
+    for v in ("VAULT_ADDR", "VAULT_TOKEN", "KIND_CLUSTER_NAME"):
+        monkeypatch.delenv(v, raising=False)
+    monkeypatch.setattr(vaults, "_kubectl_path", lambda: "/fake/kubectl")
+
+    def install(**kw):
+        fake = FakeRun(_kind_table(**kw))
+        monkeypatch.setattr(vaults, "_run", fake)
+        return fake
+    return install
+
+
+def _secret_reads(fake):
+    return [c for c in fake.calls if "secret" in c and "vault-bootstrap" in c]
+
+
+class TestKindLaneVault:
+    def test_a_HALTED_lane_says_halted_since_when_and_how_to_resume(self, kind_env):
+        """The live state on 2026-10-21: lane up, kind-halt.sh had scaled vault to 0."""
+        fake = kind_env(replicas=_fx("sts-replicas-halted.txt"),
+                        halt=_fx("halt-record-completed.json"))
+        cap = vaults.vault_capability()
+        assert cap.available is False
+        assert "HALTED" in cap.detail and "2026-10-21T09:22:04Z" in cap.detail
+        assert "vault-0 does not exist" in cap.detail
+        assert "Resume DevOps lane" in cap.remedy and "kind-resume" in cap.remedy
+        assert not _secret_reads(fake), "a halted lane must not have its token read"
+
+    def test_an_interrupted_halt_is_named_as_interrupted(self, kind_env):
+        kind_env(replicas="0", halt='{"completed": false, "halted_at": "2026-10-21T01:00:00Z"}')
+        cap = vaults.vault_capability()
+        assert "interrupted" in cap.detail
+
+    def test_scaled_to_zero_without_a_halt_record_says_NOT_by_the_halt(self, kind_env):
+        kind_env(replicas="0", halt=None)
+        cap = vaults.vault_capability()
+        assert cap.available is False
+        assert "NOT by the halt control" in cap.detail
+
+    def test_lane_not_up_says_so_with_the_start_remedy(self, kind_env):
+        fake = kind_env(lane_up=False)
+        cap = vaults.vault_capability()
+        assert cap.available is False
+        assert "not up" in cap.detail and "hugmesh-local-control-plane" in cap.detail
+        assert "Start DevOps lane" in cap.remedy
+        assert not any("/fake/kubectl" in c for c in fake.calls), \
+            "with no cluster there is nothing for kubectl to ask"
+
+    def test_KIND_CLUSTER_NAME_override_is_the_cluster_asked_about(self, kind_env, monkeypatch):
+        monkeypatch.setenv("KIND_CLUSTER_NAME", "other")
+        fake = kind_env(lane_up=False)
+        vaults.vault_capability()
+        assert any("name=^other-control-plane$" in " ".join(c) for c in fake.calls)
+
+    def test_a_dead_api_server_is_not_reported_as_no_vault(self, kind_env):
+        kind_env(sts_err="Unable to connect to the server: dial tcp 127.0.0.1:41721: "
+                         "connect: connection refused")
+        cap = vaults.vault_capability()
+        assert "did not answer" in cap.detail and "connection refused" in cap.detail
+
+    def test_vault_not_deployed(self, kind_env):
+        kind_env(sts_err='Error from server (NotFound): statefulsets.apps "vault" not found')
+        cap = vaults.vault_capability()
+        assert "not deployed" in cap.detail
+        assert "application vault" in cap.remedy
+
+    def test_a_SEALED_vault_says_sealed_and_never_reads_the_token(self, kind_env):
+        fake = kind_env(pod=_fx("pod-vault-0-sealed.json"))
+        cap = vaults.vault_capability()
+        assert cap.available is False
+        assert "sealed" in cap.detail
+        assert "vault-unseal" in cap.remedy
+        assert not _secret_reads(fake)
+
+    def test_a_crash_looping_vault_names_the_reason(self, kind_env):
+        kind_env(pod=_fx("pod-vault-0-crashloop.json"))
+        cap = vaults.vault_capability()
+        assert "CrashLoopBackOff" in cap.detail
+
+    def test_an_unreadable_token_secret_names_the_secret_and_not_its_bytes(self, kind_env):
+        kind_env(pod=_fx("pod-vault-0-ready.json"), secret_rc=1)
+        cap = vaults.vault_capability()
+        assert cap.available is False
+        assert "vault/vault-bootstrap" in cap.detail and "Forbidden" in cap.detail
+
+    def test_every_cluster_call_is_a_read(self, kind_env):
+        """Never write to the cluster while probing: get only (exec is the listing)."""
+        fake = kind_env(pod=_fx("pod-vault-0-ready.json"))
+        vaults.vault_capability()
+        verbs = [c[c.index("-n") + 2] for c in fake.calls if c[0] == "/fake/kubectl"]
+        assert verbs and set(verbs) == {"get"}, verbs
+        assert all("--context" in c and "kind-hugmesh-local" in c
+                   for c in fake.calls if c[0] == "/fake/kubectl")
+
+
+def _ready_with_kv(kind_env, kv):
+    return kind_env(pod=_fx("pod-vault-0-ready.json"), kv=kv)
+
+
+_KV_TREE = {
+    "kv list -format=json secret/hugmesh/db": (0, _fx("kv-list-secret-hugmesh-db.json"), ""),
+    "kv list -format=json secret/hugmesh": (0, _fx("kv-list-secret-hugmesh.json"), ""),
+    "kv list -format=json secret": (0, _fx("kv-list-secret.json"), ""),
+}
+
+
+class TestKindLaneListing:
+    def test_a_running_lane_LISTS_its_entries_recursively(self, kind_env):
+        """THE regression: with vault-0 up and unsealed the tab must show entries."""
+        _ready_with_kv(kind_env, _KV_TREE)
+        entries, cap = vaults.list_entries()
+        assert cap.available is True, cap
+        assert [e.path for e in entries] == [
+            "secret/hugmesh/casdoor", "secret/hugmesh/db/admin-bff",
+            "secret/hugmesh/db/forum-bff", "secret/hugmesh/matrix"]
+        assert "vault-0 on kind-hugmesh-local" in cap.detail
+
+    def test_listing_goes_through_kubectl_exec_into_vault_0_not_a_host_vault(self, kind_env):
+        fake = _ready_with_kv(kind_env, _KV_TREE)
+        vaults.list_entries()
+        execs = [c for c in fake.calls if "exec" in c]
+        assert execs, "the kind route must exec into vault-0"
+        for c in execs:
+            assert c[:4] == ["/fake/kubectl", "--context", "kind-hugmesh-local", "-n"]
+            assert ["exec", "-i", "vault-0", "-c", "vault"] == c[5:10]
+        assert not any(c[0] == "vault" for c in fake.calls), "no host vault CLI on kind"
+
+    def test_the_TOKEN_never_appears_in_any_argv(self, kind_env):
+        """argv is world-readable via /proc; the earlier exec pattern put
+        VAULT_TOKEN=<token> right in kubectl's argv."""
+        fake = _ready_with_kv(kind_env, {**_KV_TREE, "kv get": (0, "v\n", ""),
+                                         "kv put": (0, "", "")})
+        vaults.list_entries()
+        vaults.get_entry("secret/hugmesh/casdoor", "admin_password_plain")
+        vaults.put_entry("secret/hugmesh/studio", "k", "the-written-value")
+        assert fake.calls
+        for c in fake.calls:
+            assert not any(_TOKEN in a for a in c), f"token leaked into argv: {c}"
+            assert not any("the-written-value" in a for a in c)
+
+    def test_token_is_the_first_stdin_line_and_a_written_value_follows_it(self, kind_env):
+        fake = _ready_with_kv(kind_env, {"kv put": (0, "", "")})
+        vaults.put_entry("secret/hugmesh/studio", "k", "the-written-value")
+        assert fake.last_stdin == _TOKEN + "\n" + "the-written-value"
+        put = next(c for c in fake.calls if "put" in c)
+        assert put[-3:] == ["put", "secret/hugmesh/studio", "k=-"]
+
+    def test_the_in_pod_shell_never_interpolates_the_path(self, kind_env):
+        """The path rides as a positional ("$@"), so a hostile path cannot run shell."""
+        fake = _ready_with_kv(kind_env, {"kv list": (0, "[]", "")})
+        vaults.list_entries(path="x;rm -rf ~")
+        ex = next(c for c in fake.calls if "exec" in c)
+        sh = ex[ex.index("-c", 10) + 1]
+        assert sh == vaults._EXEC_SH and "$@" in sh and "secret" not in sh
+        assert ex[-1] == "secret/x;rm -rf ~"
+
+    def test_an_EMPTY_vault_is_available_with_no_entries_not_an_error(self, kind_env):
+        """vault 1.21.4 with -format=json: rc 2, `{}` on stdout, nothing on stderr."""
+        _ready_with_kv(kind_env, {"kv list": (2, _fx("kv-list-empty-json.stdout"), "")})
+        entries, cap = vaults.list_entries()
+        assert entries == [] and cap.available is True
+
+    def test_an_empty_vault_in_table_format_is_also_empty(self, kind_env):
+        _ready_with_kv(kind_env, {"kv list": (2, "", _fx("kv-list-empty.stderr"))})
+        entries, cap = vaults.list_entries()
+        assert entries == [] and cap.available is True
+
+    def test_a_rejected_token_names_the_http_code_and_reason(self, kind_env):
+        _ready_with_kv(kind_env, {"kv list": (2, "", _fx("kv-list-403.stderr"))})
+        entries, cap = vaults.list_entries()
+        assert cap.available is False
+        assert "HTTP 403" in cap.detail and "invalid token" in cap.detail
+
+    def test_a_failed_root_listing_is_a_reason_not_an_empty_list(self, kind_env):
+        _ready_with_kv(kind_env, {"kv list": (2, "", "Error listing secret/metadata: "
+                                                    "permission denied")})
+        entries, cap = vaults.list_entries()
+        assert entries == [] and cap.available is False
+        assert "permission denied" in cap.detail
+
+    def test_a_runaway_tree_stops_and_SAYS_it_stopped(self, kind_env, monkeypatch):
+        monkeypatch.setattr(vaults, "MAX_LIST_CALLS", 2)
+        _ready_with_kv(kind_env, {"kv list": (0, '["a/", "b/", "leaf"]', "")})
+        entries, cap = vaults.list_entries()
+        assert cap.available is True
+        assert "NOT everything was listed" in cap.detail
+
+    def test_get_entry_reads_through_the_same_kind_route(self, kind_env):
+        fake = _ready_with_kv(kind_env, {"kv get": (0, "the-value\n", "")})
+        value, cap = vaults.get_entry("secret/hugmesh/casdoor", "admin_password_plain")
+        assert value == "the-value" and cap.available
+        g = next(c for c in fake.calls if "get" in c and "exec" in c)
+        assert g[-3:] == ["get", "-field=admin_password_plain", "secret/hugmesh/casdoor"]
+
+
+class TestDialogShowsKindVault:
+    """The dialog half: entries fetched OFF the GUI thread, rendered as a visible list;
+    a blocked vault rendered as a visible, readable reason."""
+
+    def test_render_never_lists_on_the_gui_thread(self, qapp, monkeypatch):
+        _quiet_probe(monkeypatch)
+        d = VaultsDialog(project="hugmesh-local")
+        _settle(qapp, d)
+
+        def boom(*a, **k):
+            raise AssertionError("list_entries ran on the GUI thread")
+        monkeypatch.setattr(vaults, "list_entries", boom)
+        monkeypatch.setattr(vaults, "vault_route", boom)
+        entries = [vaults.VaultEntry("secret/hugmesh/casdoor"),
+                   vaults.VaultEntry("secret/hugmesh/matrix")]
+        d._on_probe(([], (entries, Capability(True, "vault-0 on kind-hugmesh-local")),
+                     Capability(True)))
+        lst = d.vault_page.findChild(QtWidgets.QListWidget, "vaultEntries")
+        assert lst is not None
+        assert [lst.item(i).text() for i in range(lst.count())] == [
+            "secret/hugmesh/casdoor", "secret/hugmesh/matrix"]
+
+    def test_the_probe_carries_the_entries_it_listed(self, qapp, monkeypatch):
+        """_VaultsProbe.run() is where the listing happens — run it synchronously."""
+        from hugmesh_studio.gui.vaults_dialog import _VaultsProbe
+        entries = [vaults.VaultEntry("secret/hugmesh/casdoor")]
+        _quiet_probe(monkeypatch, listing=(entries, Capability(True, "ok")))
+        probe = _VaultsProbe("hugmesh-local")
+        got = []
+        probe.result.connect(got.append)
+        probe.run()
+        vols, (ents, cap), _docker = got[0]
+        assert ents == entries and cap.available
+
+    def test_entries_list_is_visible_enabled_and_a_sane_size(self, qapp, monkeypatch):
+        _quiet_probe(monkeypatch)
+        d = VaultsDialog(project="hugmesh-local")
+        _settle(qapp, d)
+        entries = [vaults.VaultEntry(f"secret/hugmesh/e{i}") for i in range(5)]
+        d._on_probe(([], (entries, Capability(True, "vault-0 on kind-hugmesh-local")),
+                     Capability(True)))
+        d.show()
+        d.tabs.setCurrentWidget(d.vault_page)
+        qapp.processEvents()
+        lst = d.vault_page.findChild(QtWidgets.QListWidget, "vaultEntries")
+        summary = d.vault_page.findChild(QtWidgets.QLabel, "vaultSummary")
+        try:
+            for w in (lst, summary):
+                assert w.isVisible() and w.isEnabled()
+                assert w.width() >= 300, w.width()
+            assert lst.height() >= 150, lst.height()
+            assert "5 entry path(s)" in summary.text()
+        finally:
+            d.close()
+
+    def test_blocked_vault_reason_is_visible_and_readable(self, qapp, monkeypatch):
+        _quiet_probe(monkeypatch)
+        d = VaultsDialog(project="hugmesh-local")
+        _settle(qapp, d)
+        cap = Capability(False, "Vault is not running: the DevOps lane is HALTED",
+                         "Press 'Resume DevOps lane'")
+        d._on_probe(([], ([], cap), Capability(True)))
+        d.show()
+        d.tabs.setCurrentWidget(d.vault_page)
+        qapp.processEvents()
+        lab = d.vault_page.findChild(QtWidgets.QLabel, "vaultBlocker")
+        try:
+            assert lab.isVisible() and lab.width() >= 300 and lab.height() >= 30
+            assert "HALTED" in lab.text() and "Resume DevOps lane" in lab.text()
+            assert not d.vault_page.findChildren(QtWidgets.QListWidget)
+        finally:
+            d.close()
