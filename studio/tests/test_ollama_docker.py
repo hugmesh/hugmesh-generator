@@ -415,6 +415,30 @@ def test_the_text_ui_prompt_follows_the_saved_choice(two_servers, monkeypatch, t
     assert "ollama docker, or ollama system" in screen.message
 
 
+def test_a_question_that_starts_with_the_word_ollama_reaches_the_model(
+        two_servers, monkeypatch, tmp_path):
+    """Only ``ollama`` / ``ollama docker`` / ``ollama system`` (and a one-word typo,
+    which gets the hint) are the mode command; a sentence that begins with the word
+    is a question and goes to the model, like every other non-command line."""
+    from hugmesh_studio.tui import local_ai as tui_local_ai
+    system, docker = two_servers
+    monkeypatch.setenv("HUGMESH_STUDIO_STATE_DIR", str(tmp_path / "studio"))
+    host = tui_local_ai.Standalone(GENERATOR_DIR)
+    screen = host.open()
+    host.feed("ollama system")
+    before = odk.current_mode()
+    host.feed("ollama keeps crashing, what should I check?")
+    assert "you: ollama keeps crashing, what should I check?" in screen.transcript, (
+        screen.transcript, screen.message)
+    assert "ai:  from-system" in screen.transcript
+    assert "ollama docker, or ollama system" not in screen.message
+    assert odk.current_mode() == before
+    asked = [r for r in system.requests if r[1] == "/api/chat"]
+    assert asked, system.requests
+    host.feed("ollama")
+    assert "ollama docker, or ollama system" in screen.message
+
+
 @pytest.fixture(scope="module")
 def qapp():
     from hugmesh_studio.gui.qt import QtWidgets

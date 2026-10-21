@@ -121,8 +121,13 @@ class LocalAIScreen:
             self.history.clear()
             self.transcript.clear()
             return
-        if low.startswith("ollama"):
-            words = low.split()
+        words = low.split()
+        # The mode command is the bare word ``ollama`` or ``ollama <one plain word>``
+        # (docker / system; anything else gets the hint). A sentence that merely
+        # STARTS with the word ("ollama keeps crashing, what should I check?") is a
+        # question for the model, as every non-command line always was.
+        if words and words[0] == "ollama" and (
+                len(words) == 1 or (len(words) == 2 and words[1].isalpha())):
             want = words[1] if len(words) == 2 else ""
             if want not in odk.MODES:
                 self.message = "Say: ollama docker, or ollama system."
