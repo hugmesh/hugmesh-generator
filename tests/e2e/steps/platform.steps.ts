@@ -64,11 +64,15 @@ function stripYamlComments(src: string): string {
   return src.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
 }
 
-/** The kustomization's `resources:` list, in order — the files ArgoCD applies. */
+/** The kustomization's `resources:` list, in order — the files ArgoCD applies.
+ *  A list entry may carry a trailing `# comment` (the casdoor kustomization
+ *  annotates most of its Jobs that way), so the pattern allows one after the
+ *  file name; without that, every commented entry is silently dropped and the
+ *  Jobs it names are never read. */
 function kustomizeResources(dir: string): string[] {
   const kust = stripYamlComments(fs.readFileSync(path.join(dir, 'kustomization.yaml'), 'utf8'));
   const out: string[] = [];
-  for (const m of kust.matchAll(/^\s*-\s*(\S+\.ya?ml)\s*$/gm)) out.push(m[1]);
+  for (const m of kust.matchAll(/^\s*-\s*(\S+\.ya?ml)\s*(?:#.*)?$/gm)) out.push(m[1]);
   expect(out.length, `${dir}/kustomization.yaml lists no resources — the reader is broken`)
     .toBeGreaterThan(0);
   return out;
