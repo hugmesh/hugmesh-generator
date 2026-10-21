@@ -127,7 +127,8 @@ def overlay_path(generator_dir: str) -> str:
     return os.path.join(generator_dir, OVERLAY_RELPATH)
 
 
-def tenancy_env(names, base_issuer: str, ports=None, ids=None) -> dict[str, str]:
+def tenancy_env(names, base_issuer: str, ports=None, ids=None,
+                external=()) -> dict[str, str]:
     """The gateways' opt-in multi-issuer registry for the own-idp domains: the
     central issuer stays tenant `default`, each own domain maps its derived
     issuer AND its Host to its slug (STACK_BRAND_B_ENV's shape, scaled per
@@ -135,15 +136,23 @@ def tenancy_env(names, base_issuer: str, ports=None, ids=None) -> dict[str, str]
     stays byte-identical — the same emit-nothing-by-default rule every other
     stack knob follows. ``ports`` (name -> port, :func:`ports_for`) overrides the
     table-position ports; None keeps them. ``ids`` (name -> stored brand id,
-    :func:`brand_id_for`) names the tenant keys; None derives them as before."""
+    :func:`brand_id_for`) names the tenant keys; None derives them as before.
+
+    ``external`` (2026-10-21): ``((name, issuer, brand id), ...)`` for the domains
+    that sign in through their OWN external provider (config.has_external_signin) —
+    no Casdoor is stood up for them; their provider's issuer is one more pair in the
+    same registry (one issuer, one brand), and their Host maps to their brand id.
+    Empty (every caller before) changes nothing."""
     names = tuple(names)
-    if not names:
+    external = tuple(tuple(e) for e in (external or ()))
+    if not names and not external:
         return {}
     ports = dict(ports or {})
     issuers = [f"{base_issuer}=default"] + [
         f"{issuer_for(n, i, ports.get(n), brand_id_for(n, ids))}={brand_id_for(n, ids)}"
-        for i, n in enumerate(names)]
-    hosts = [f"{n}={brand_id_for(n, ids)}" for n in names]
+        for i, n in enumerate(names)] + [f"{iss}={bid}" for _n, iss, bid in external]
+    hosts = ([f"{n}={brand_id_for(n, ids)}" for n in names]
+             + [f"{n}={bid}" for n, _iss, bid in external])
     return {"APP_TENANCY_ISSUERS": ",".join(issuers),
             "APP_TENANCY_HOSTS": ",".join(hosts)}
 

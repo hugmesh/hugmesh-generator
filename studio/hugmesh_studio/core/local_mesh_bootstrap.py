@@ -783,7 +783,33 @@ class LocalMeshBootstrap:
                               idp_jwks=self.cfg.effective_idp_jwks(),
                               own_idp_domains=self.cfg.own_idp_domains,
                               kind_addons=self.cfg.kind_addons,
-                              tor_domains=self.tor_domains())
+                              tor_domains=self.tor_domains(),
+                              external_idp_domains=self.external_idp_domains())
+
+    def external_idp_domains(self) -> list[tuple[str, str, str]]:
+        """``[(name, issuer, brand id), ...]`` — the recorded domains that sign in
+        through their OWN external provider (config.has_external_signin), in record
+        order: what LocalStackNode adds to the gateways' APP_TENANCY_* registry (one
+        issuer, one brand; no Casdoor is stood up). The mesh's own domain never (it
+        signs in through the mesh), nor a row whose block does not pass
+        ``domain_signin_problems`` (validate() names it), nor a second row on an issuer
+        already taken."""
+        own = (self.cfg.cluster_domain or "").strip() or self.cfg.resolved_domain()
+        rows = [r for r in self.cfg.domains if isinstance(r, dict)]
+        out: list[tuple[str, str, str]] = []
+        seen: set[str] = set()
+        for r in rows:
+            name = str(r.get("name") or "").strip()
+            if not name or name == own or not has_external_signin(r):
+                continue
+            if domain_signin_problems(r, self.cfg, rows):
+                continue
+            s = effective_signin(r, self.cfg)
+            if s.issuer in seen:
+                continue
+            seen.add(s.issuer)
+            out.append((name, s.issuer, brand_model.brand_id(r)))
+        return out
 
     def tor_domains(self) -> list[tuple[str, str, str]]:
         """``[(name, slug, tenant), ...]`` — the recorded domains with their OWN Tor
@@ -795,7 +821,8 @@ class LocalMeshBootstrap:
         # brand only when it is in ``own_idp_domains`` (the list own_casdoor turns
         # into APP_TENANCY_HOSTS), whatever the recorded row's ``idp`` says — the
         # host map must never name a tenant the gateway has no issuer for.
-        own_idp = {n.strip() for n in self.cfg.own_idp_domains}
+        own_idp = ({n.strip() for n in self.cfg.own_idp_domains}
+                   | {n for n, _i, _b in self.external_idp_domains()})
         rows = [dict(r, idp=("own" if (r.get("name") or "").strip() in own_idp
                              else "superdomain"))
                 for r in self.cfg.domains]
@@ -1091,16 +1118,19 @@ class LocalMeshBootstrap:
                     f"(missing: {', '.join(missing[:4])}"
                     + (", …" if len(missing) > 4 else "") + ").")
         # a domain with its own EXTERNAL provider (config.has_external_signin): the
-        # compose lane registers own CASDOORS only (own_casdoor.tenancy_env), so on
-        # this mesh the domain has no sign-in of its own — said, never implied.
-        for r in self.cfg.domains:
-            if isinstance(r, dict) and has_external_signin(r):
-                s = effective_signin(r, self.cfg)
-                out.append(
-                    f"{(r.get('name') or '').strip()} signs in through its own "
-                    f"{IDP_LABELS.get(s.provider, s.provider)}: this local Docker mesh "
-                    "does not register a domain's own external provider yet, so here it "
-                    "is reached through the mesh's sign-in (recorded for the cluster).")
+        # stack trusts that provider's tokens for that domain only (one more pair in
+        # APP_TENANCY_*), and that is ALL it does — the honest limits of
+        # docs/IDENTITY-PROVIDERS.md, said here rather than implied.
+        for name, _iss, _bid in self.external_idp_domains():
+            r = next(x for x in self.cfg.domains
+                     if isinstance(x, dict) and str(x.get("name") or "").strip() == name)
+            s = effective_signin(r, self.cfg)
+            out.append(
+                f"{name} signs in through its own "
+                f"{IDP_LABELS.get(s.provider, s.provider)}: this mesh accepts that "
+                "provider's sign-ins for this domain only. The native login page, MFA "
+                "step-up and role claims still need Casdoor (docs/IDENTITY-PROVIDERS.md), "
+                "so sign in through the provider's own page.")
         return out
 
     def preflight(self) -> list[str]:
@@ -1253,15 +1283,25 @@ class LocalMeshBootstrap:
                 if stored_ports.get(name) and stored_ports[name] != own_casdoor.port_for(i):
                     lines.append(f"               (the brand record stores sign-in port "
                                  f"{stored_ports[name]}; this mesh does not read it yet)")
+        # Domains with their OWN external provider (2026-10-21): one more issuer=brand
+        # pair each in the same registry; no Casdoor. Empty renders nothing.
+        ext = self.external_idp_domains()
+        if ext:
+            lines.append("          -> domains with their own external sign-in (no "
+                         "Casdoor; the gateways")
+            lines.append("             accept that provider's tokens for that domain "
+                         "only):")
+            for name, iss, bid in ext:
+                lines.append(f"             * {name}: issuer {iss} = tenant `{bid}`")
         # The DOMAINS the Studio's Domains step recorded (#494). Empty (the default,
-        # and every flow that never opened the step) renders NOTHING. Per-domain
-        # services are shown as what they are on this lane: recorded, not what picks
-        # the compose profiles — that is the Services step, printed below.
+        # and every flow that never opened the step) renders NOTHING. Since 2026-10-21
+        # the per-domain services RUN on this lane: the mesh starts their union with
+        # its own infrastructure, printed under SERVICES below.
         if c.domains:
             lines.append("          -> domains recorded with this mesh (per-domain "
-                         "services are RECORDED, not enforced:")
-            lines.append("             the compose profiles come from the Services "
-                         "step below):")
+                         "services RUN: the mesh")
+            lines.append("             starts every one any domain chose — see "
+                         "SERVICES below):")
             for row in c.domains:
                 svcs = ", ".join(row.get("optional_services") or []) or "cluster default"
                 title = row.get("title") or ""

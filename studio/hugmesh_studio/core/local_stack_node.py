@@ -214,7 +214,8 @@ class LocalStackNode:
                  services=None,
                  own_idp_domains: tuple[str, ...] = (),
                  kind_addons=None,
-                 tor_domains=()):
+                 tor_domains=(),
+                 external_idp_domains=()):
         self.generator_dir = os.path.abspath(generator_dir)
         self.compose_file = os.path.join(self.generator_dir, _COMPOSE_FILE)
         self.env = env
@@ -339,6 +340,12 @@ class LocalStackNode:
         # ports 8001+), flips OWN_CASDOOR=1 (the Makefile's `own-casdoor`
         # profile) and exports the multi-issuer APP_TENANCY_* registry.
         self.own_idp_domains = tuple(own_idp_domains or ())
+        # Domains that sign in through their OWN external provider (2026-10-21,
+        # config.has_external_signin): ``((name, issuer, brand id), ...)``. No Casdoor
+        # and no overlay for them: each is one more issuer=brand pair (and Host=brand)
+        # in the same APP_TENANCY_* registry the own Casdoors use. Empty (the default,
+        # every caller before) threads nothing new.
+        self.external_idp_domains = tuple(tuple(e) for e in (external_idp_domains or ()))
         # The domains with their OWN Tor front door (#582, decision 68 = A):
         # ``((name, slug, tenant), ...)`` from core.domain_services.tor_domain_entries.
         # Passed to `make stack-up` as TOR_ONION_DOMAINS="<slug>=<tenant> ..." ONLY on
@@ -947,9 +954,11 @@ class LocalStackNode:
         # the wildcard -f empty and the stack comes up single-Casdoor, honest
         # in `docker compose ps` rather than half-wired.
         env["OWN_CASDOOR"] = "1" if self.own_idp_domains else ""
-        if self.own_idp_domains:
+        if self.own_idp_domains or self.external_idp_domains:
             env.update(own_casdoor.tenancy_env(
-                self.own_idp_domains, self._central_issuer()))
+                self.own_idp_domains, self._central_issuer(),
+                external=self.external_idp_domains))
+        if self.own_idp_domains:
             try:
                 if write_overlays:
                     path = own_casdoor.overlay_path(self.generator_dir)

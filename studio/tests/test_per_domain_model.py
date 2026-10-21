@@ -178,6 +178,39 @@ def test_a_domain_with_its_own_external_provider_gets_no_casdoor_anywhere():
                 if "ext.mesh.example" in p]
 
 
+def test_an_external_domain_is_one_more_issuer_pair_on_the_docker_mesh():
+    rows = ({"name": "shop.mesh.example", "title": "", "idp": "own",
+             "optional_services": [], "idp_settings": dict(EXT), "tor": True},
+            {"name": "cas.mesh.example", "title": "", "idp": "own",
+             "optional_services": []})
+    boot = LocalMeshBootstrap(GENERATOR_DIR, LocalMeshBootstrapConfig(
+        brand="acme", cluster_domain=OWN, domains=rows, with_tor=True,
+        own_idp_domains=("cas.mesh.example",)))
+    assert boot.external_idp_domains() == [
+        ("shop.mesh.example", EXT["issuer"], "shop-mesh-example")]
+    env = boot._stack_node()._build_env(write_overlays=False)
+    assert env["APP_TENANCY_ISSUERS"].split(",")[-1] == (
+        "https://id.shop.example=shop-mesh-example")
+    assert "shop.mesh.example=shop-mesh-example" in env["APP_TENANCY_HOSTS"].split(",")
+    # its onion opens its own sign-in, because the gateway now has its issuer
+    assert ("shop.mesh.example", "shop-mesh-example", "shop-mesh-example") in \
+        boot.tor_domains()
+    assert "issuer https://id.shop.example" in boot.plan()
+    assert any("shop.mesh.example signs in through its own" in w for w in boot.warnings())
+    # ONLY an external domain: still no Casdoor, still the registry
+    only = LocalMeshBootstrap(GENERATOR_DIR, LocalMeshBootstrapConfig(
+        brand="acme", cluster_domain=OWN, domains=rows[:1]))
+    env = only._stack_node()._build_env(write_overlays=False)
+    assert env["OWN_CASDOOR"] == ""
+    assert env["APP_TENANCY_ISSUERS"] == (
+        "http://localhost:8000=default,https://id.shop.example=shop-mesh-example")
+    # a row whose block is refused is never registered
+    bad = dict(rows[0], idp_settings={"provider": "oidc", "issuer": "http://x",
+                                      "client_id": "a"})
+    assert LocalMeshBootstrap(GENERATOR_DIR, LocalMeshBootstrapConfig(
+        cluster_domain=OWN, domains=(bad,))).external_idp_domains() == []
+
+
 def test_the_bootstrap_validate_names_a_bad_recorded_block():
     rows = ({"name": "ext.mesh.example", "title": "", "idp": "own",
              "optional_services": [], "idp_settings": {"provider": "oidc",
