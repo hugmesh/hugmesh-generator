@@ -137,8 +137,9 @@ _IDP_ITEMS = (
      "Sign-in via the mesh's central Casdoor on the superdomain — today's "
      "behavior, nothing extra to run."),
     (DOMAIN_IDP_OWN, "Own Casdoor",
-     "This domain runs its OWN Casdoor instance, provisioned just for it "
-     "(its users sign in against that instance, not the mesh's central one)."),
+     "This domain has its OWN sign-in: by default a Casdoor instance provisioned "
+     "just for it; its own Azure Entra ID, AWS Cognito or OIDC provider instead is "
+     "chosen on the domain's Identity tab (Domain services step)."),
 )
 
 
@@ -643,6 +644,12 @@ class DomainsTableBody:
                         combo.blockSignals(True)
                         combo.setCurrentIndex(want)
                         combo.blockSignals(False)
+                    # an own row on Entra must not read as "Own Casdoor" in the table
+                    prov = str((getattr(dom, "idp_settings", None) or {}).get(
+                        "provider") or "")
+                    combo.setToolTip(
+                        f"Its own provider ({prov}), chosen on its Identity tab"
+                        if prov and prov != "casdoor" else "")
             elif self.is_own_row(r):
                 cell.set_slugs(getattr(cfg, "cluster_domain_services", None),
                                reviewed=(name in done))

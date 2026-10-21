@@ -1126,9 +1126,10 @@ class LocalMeshPage(QtWidgets.QWizardPage):
             "(fixed — a test mesh publishes nothing), on a prod mesh the public apex, "
             "typed here (it is what the minted issuer and superadmin align with; the "
             "Mesh overlay step shows it read-only). Add every OTHER domain this mesh "
-            "serves below. ‘Sign-in’ = which Casdoor serves that domain: Superdomain "
-            "(the mesh's central one) or Own (a Casdoor instance of its own is brought "
-            "up beside the central one — host ports 8001, 8002, … in row order). "
+            "serves below. ‘Sign-in’ = Superdomain (the mesh's central sign-in) or Own "
+            "(its own: by default a Casdoor of its own beside the central one — host "
+            "ports 8001, 8002, … in row order — or its own Entra, Cognito or OIDC "
+            "provider, chosen on the domain's Identity tab on the next step). "
             "‘Optional services’ is READ-ONLY here: every domain — this row 0 "
             "included — gets its own page on the ‘Domain services’ step that follows, "
             "and a mesh start refuses while any domain here has never been through "
@@ -4645,7 +4646,7 @@ class LocalMeshDomainsPage(_LocalMeshStep):
     SUBTITLE = ("Every domain this mesh serves, its own domain first. Each one gets "
                 "its own service page on the next step, and the mesh will not start "
                 "while any domain here has never been through it. A row whose sign-in "
-                "is ‘Own’ brings up a Casdoor of its own beside the central one.")
+                "is ‘Own’ gets its own (its Identity tab, next step, says which).")
 
     def initializePage(self):
         super().initializePage()
