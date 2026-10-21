@@ -1063,7 +1063,8 @@ def restore_env(rec: SavedMesh) -> dict[str, str]:
 
     Env only — never argv, never a log line. ``E2E_CREDENTIALS_FILE`` points the
     seeder at the saved copy (so the same password file is used instead of a fresh
-    mint), and the superadmin username/password ride the two names ``seed-e2e.sh``
+    mint), ``E2E_PASSWORD_KEEP=1`` stops the seed's run start from rotating it, and
+    the superadmin username/password ride the two names ``seed-e2e.sh``
     resolves. Returns only the username when nothing was copied: the caller then
     seeds with what is on disk and the plan already said what that means.
     """
@@ -1072,6 +1073,10 @@ def restore_env(rec: SavedMesh) -> dict[str, str]:
     e2e_copy = _copy_path(e2e) if e2e.get("copied") else None
     if e2e_copy:
         env["E2E_CREDENTIALS_FILE"] = e2e_copy
+        # `make stack-seed` STARTS a run and would otherwise mint a NEW shared
+        # password into this very copy (tests/stack/e2e-password.sh,
+        # e2e_password_start_run) — a restore promises the record's password.
+        env["E2E_PASSWORD_KEEP"] = "1"
     user = str((rec.credentials or {}).get("superadmin_username") or "")
     if user:
         env["CASDOOR_SUPERADMIN_USERNAME"] = user
@@ -1152,6 +1157,45 @@ def put_copies_back(rec: SavedMesh, *, e2e_target: str, secrets_target: str,
         if _write_private_copy(src, target):
             restored.append(os.path.basename(target))
     return restored
+
+
+def follow_reseeded_credentials(rec: SavedMesh, *, e2e_target: str) -> bool:
+    """Make the record's saved ``.e2e-credentials`` copy FOLLOW the file on disk when
+    a completed seed reconciled the kept volumes to that file. Returns True when it
+    did (the caller's :func:`put_copies_back` then finds nothing to put back).
+
+    Why this exists: every `make stack-seed` STARTS a run and rotates the shared
+    password (tests/stack/e2e-password.sh), then reconciles every live identity to
+    the new value. Run against a mesh brought back from a record (a terminal
+    `make stack-seed`, or the page's own Bootstrapping), it leaves the file NEWER
+    than the record's copy while the volumes hold the file's value. The warm start
+    used to treat "file differs from the copy" as "the file was clobbered" and put
+    the OLD copy back — and every persona 401'd. A rotation with NO completed seed
+    (another lane's run start, a seed that died before its identity leg) still gets
+    the copy put back: there the volumes really do hold the copy's value.
+
+    The evidence is the seed stamp seed-e2e.sh writes beside the file once its
+    identity leg is verified (:func:`.credentials_truth.seed_stamp`): honoured only
+    while its sha256 equals the file on disk now. Only the e2e file follows;
+    ``secrets.json`` is never rewritten by a seed. Values are never logged."""
+    from .credentials_truth import seed_stamp
+    entry = (rec.credentials or {}).get("e2e_file") or {}
+    copy = _copy_path(entry) if entry.get("copied") else None
+    if not copy or not os.path.isfile(copy) or not os.path.isfile(e2e_target):
+        return False
+    live = _sha256(e2e_target)
+    if not live or live == _sha256(copy):
+        return False
+    if seed_stamp(e2e_target) is None:
+        return False
+    if not _write_private_copy(e2e_target, copy):
+        return False
+    entry = dict(entry)
+    entry["sha256"] = live
+    entry["mtime"] = _mtime(e2e_target)
+    rec.credentials["e2e_file"] = entry
+    save(rec)
+    return True
 
 
 # ── Qt-free CLI face ───────────────────────────────────────────────────────────
