@@ -49,7 +49,8 @@ __all__ = [
     "CONTAINER", "VOLUME", "DEFAULT_PORT", "SYSTEM_PORT", "LABEL",
     "GpuChoice", "DockerState", "StartOutcome",
     "current_mode", "set_mode", "docker_port", "endpoint", "assistant_env",
-    "detect_gpu", "run_argv", "port_problem", "state", "start", "stop", "wait_ready",
+    "detect_gpu", "run_argv", "bound_port", "port_problem", "state", "start", "stop",
+    "wait_ready",
     "pull_command", "describe", "adjust_snapshot",
 ]
 
@@ -217,6 +218,19 @@ def state(runner: Optional[Runner] = None) -> DockerState:
                        words[1] if len(words) > 1 else "")
 
 
+def bound_port(runner: Optional[Runner] = None) -> Optional[int]:
+    """The host port the existing container publishes 11434 on, or None when that
+    cannot be read (no container, an old docker, a container made by hand)."""
+    run = runner or _run
+    rc, out = run(["docker", "inspect", "--format",
+                   '{{range (index .HostConfig.PortBindings "11434/tcp")}}{{.HostPort}} {{end}}',
+                   CONTAINER], 15.0)
+    if rc != 0:
+        return None
+    words = out.split()
+    return int(words[0]) if words and words[0].isdigit() else None
+
+
 def port_problem(port: int, ours_running: bool, *, connect=None) -> str:
     """A sentence when ``port`` cannot be ours, else "". Something answering on the
     port while our container is NOT running is somebody else's server."""
@@ -257,6 +271,21 @@ def start(runner: Optional[Runner] = None, *, gpu: Optional[GpuChoice] = None,
     if not st.docker_ok:
         return StartOutcome(False, f"Docker is not answering ({st.error}). Start Docker, "
                                    "or switch back to the system Ollama.")
+    moved = ""
+    if st.exists:
+        # A container made while another port was set keeps that port for life: a plain
+        # `docker start` would bring it back on the OLD port while everything here talks
+        # to the new one. Make it again (the models are in the volume, not in it).
+        was = bound_port(run)
+        if was is not None and was != port:
+            rc, out = run(["docker", "rm", "-f", CONTAINER], 60.0)
+            if rc != 0:
+                last = (out.strip().splitlines() or ["(no output)"])[-1]
+                return StartOutcome(False, f"The Docker Ollama is on port {was}, not {port}, "
+                                           f"and could not be removed to move it: {last}",
+                                    ["docker", "rm", "-f", CONTAINER])
+            moved = f" (moved from port {was}; its models stay in the {VOLUME} volume)"
+            st = DockerState(True)
     if st.running:
         return StartOutcome(True, f"The Docker Ollama is already running on 127.0.0.1:{port}.")
     clash = port_problem(port, False, connect=connect)
@@ -271,7 +300,7 @@ def start(runner: Optional[Runner] = None, *, gpu: Optional[GpuChoice] = None,
     if rc != 0:
         last = (out.strip().splitlines() or ["(no output)"])[-1]
         return StartOutcome(False, f"docker could not start the Ollama container: {last}", argv)
-    return StartOutcome(True, f"Started the Docker Ollama on 127.0.0.1:{port}.", argv)
+    return StartOutcome(True, f"Started the Docker Ollama on 127.0.0.1:{port}{moved}.", argv)
 
 
 def stop(runner: Optional[Runner] = None) -> StartOutcome:

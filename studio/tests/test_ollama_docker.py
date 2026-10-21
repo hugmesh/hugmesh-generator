@@ -40,6 +40,7 @@ class Docker:
         self.up, self.exists, self.running = up, exists, running
         self.runtimes, self.run_rc, self.run_out = runtimes, run_rc, run_out
         self.calls = []
+        self.port = None                         # the host port the container publishes
 
     def __call__(self, argv, timeout):
         argv = list(argv)
@@ -54,11 +55,18 @@ class Docker:
         if verb == "inspect":
             if not self.exists:
                 return 1, "Error: No such object: hugmesh-studio-ollama"
+            if "PortBindings" in argv[3]:
+                return 0, f"{self.port or ''} \n"
             return 0, f"{'true' if self.running else 'false'} {odk.IMAGE}\n"
         if verb == "run":
             if self.run_rc == 0:
                 self.exists = self.running = True
+                self.port = int(argv[argv.index("-p") + 1].split(":")[1])
             return self.run_rc, self.run_out
+        if verb == "rm":
+            self.exists = self.running = False
+            self.port = None
+            return 0, odk.CONTAINER
         if verb == "start":
             self.running = True
             return 0, odk.CONTAINER
@@ -139,6 +147,32 @@ def test_start_creates_a_missing_container_then_starts_a_stopped_one_and_leaves_
     res = odk.start(docker, gpu=gpu, environ={}, connect=nothing_listens)
     assert res.ok and "already running" in res.message
     assert not [c for c in docker.calls[before:] if c[1] in ("run", "start")]
+
+
+def test_a_changed_port_setting_makes_the_container_again_on_the_new_port():
+    """A container keeps the port it was made with: after the port setting changed, a
+    plain `docker start` would bring it back on the OLD port while everything here talks
+    to the new one. Start makes it again (the models live in the volume)."""
+    docker = Docker()
+    gpu = odk.GpuChoice("cpu", (), odk.IMAGE, "")
+    assert odk.start(docker, gpu=gpu, environ={}, connect=nothing_listens).ok
+    assert docker.port == odk.DEFAULT_PORT and odk.bound_port(docker) == odk.DEFAULT_PORT
+    for running in (False, True):                # stopped since, or still running
+        docker.running = running
+        moved = {odk.PORT_ENV: "11500"} if not running else {odk.PORT_ENV: "11501"}
+        before = len(docker.calls)
+        res = odk.start(docker, gpu=gpu, environ=moved, connect=nothing_listens)
+        new = docker.calls[before:]
+        assert res.ok and "moved from port" in res.message, res.message
+        assert ["docker", "rm", "-f", odk.CONTAINER] in new
+        assert new[-1][:2] == ["docker", "run"] and docker.port == int(moved[odk.PORT_ENV])
+        assert ["docker", "start", odk.CONTAINER] not in new
+    # the same port again: no remake
+    docker.running = False
+    before = len(docker.calls)
+    res = odk.start(docker, gpu=gpu, environ={odk.PORT_ENV: "11501"}, connect=nothing_listens)
+    assert res.ok and docker.calls[-1] == ["docker", "start", odk.CONTAINER]
+    assert not [c for c in docker.calls[before:] if c[1] == "rm"]
 
 
 def test_start_refuses_when_docker_is_down_or_the_port_is_someone_elses():

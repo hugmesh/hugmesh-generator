@@ -64,12 +64,19 @@ __all__ = ["LocalAIDock", "LocalWorkWindow", "PanelWindow", "mount_dock", "dock_
            "TABS"]
 
 POLL_MS = 5000
+#: How many lines of a running image build's log the Image builds tab shows.
+BUILD_TAIL_LINES = 400
+_TAIL_BYTES = 64 * 1024
 DRAIN_MS = 120
 #: Height of the dock when expanded, capped so the page above stays usable. The panel
 #: shows tabs of real content now, so it may take a little more than the prompt bar did;
 #: the full-size view is the popped-out window.
 EXPANDED_PX = 280
 EXPANDED_FRACTION = 0.38
+#: While the local-mesh Bring-up step is on screen the page itself holds only a note
+#: (its actions, table and log are in the panel), so the panel may take this share of
+#: the window instead. The page's title, note and the wizard's buttons keep the rest.
+TALL_FRACTION = 0.62
 MIN_CLICK_PX = 28
 _SETTINGS = assistant_settings.FILE_NAME
 #: The panel's tabs, in order: (key, label).
@@ -82,11 +89,15 @@ def _log_swallowed(where: str) -> None:
     traceback.print_exc(file=sys.stderr)
 
 
-def dock_height_for(window_height: int, expanded: bool, bar_px: int) -> int:
+def dock_height_for(window_height: int, expanded: bool, bar_px: int,
+                    tall: bool = False) -> int:
     """How tall the dock may be in a window of ``window_height`` — a pure function so
-    the cap is testable for window sizes this host does not have."""
+    the cap is testable for window sizes this host does not have. ``tall``: the page
+    above has nothing but a note to show (the Bring-up step)."""
     if not expanded:
         return bar_px
+    if tall:
+        return max(bar_px + 76, int(window_height * TALL_FRACTION))
     return max(bar_px + 76, min(EXPANDED_PX, int(window_height * EXPANDED_FRACTION)))
 
 
@@ -563,6 +574,7 @@ class LocalAIDock(QtWidgets.QFrame):
         self.docker_state = None
         self.gpu = None
         self.expanded = load_expanded() if expanded is None else bool(expanded)
+        self.tall = False
         self._history: list = []
         # Counts the times Clear was pressed. Every request remembers the number it started
         # under; what comes back from an older one (late words, its finished answer, its
@@ -774,8 +786,8 @@ class LocalAIDock(QtWidgets.QFrame):
         self.builds_tree.setRootIsDecorated(False)
         self.builds_tree.setUniformRowHeights(True)
         self.builds_tree.setMinimumHeight(60)
-        self.builds_tree.setColumnWidth(0, 380)
-        self.builds_tree.currentItemChanged.connect(lambda *_: self._sync_builds_buttons())
+        self.builds_tree.setColumnWidth(0, 210)        # the tree shares the tab with the log
+        self.builds_tree.currentItemChanged.connect(lambda *_: self._on_build_picked())
         brow = QtWidgets.QHBoxLayout()
         self.build_show_btn = _styled_button("Show this build",
                                              "Bring the window that is running it to the front")
@@ -785,8 +797,40 @@ class LocalAIDock(QtWidgets.QFrame):
         self.builds_note.setStyleSheet(styles.muted())
         brow.addWidget(self.build_show_btn)
         brow.addWidget(self.builds_note, 1)
-        bl.addWidget(self.builds_tree, 1)
-        bl.addLayout(brow)
+        # THE RUNNING BUILD ITSELF, at the bottom of the window: the last lines of the
+        # picked build's log, read from its build.log once a second while this tab is
+        # on screen. The full view (stages, packages, flash) stays in the build's own
+        # window ("Show this build"); this is the live tail, never a second runner.
+        self.build_log_title = QtWidgets.QLabel("")
+        self.build_log_title.setWordWrap(True)
+        self.build_log_title.setStyleSheet(styles.muted())
+        self.build_log_title.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.build_log = QtWidgets.QPlainTextEdit()
+        self.build_log.setReadOnly(True)
+        self.build_log.setLineWrapMode(QtWidgets.QPlainTextEdit.LineWrapMode.NoWrap)
+        self.build_log.setMaximumBlockCount(BUILD_TAIL_LINES)
+        self.build_log.setMinimumHeight(60)
+        self.build_log.setAccessibleName("Last lines of the picked build's log")
+        self.build_log.setPlaceholderText("Pick a running build above to follow its log here.")
+        self._tail_key = None                    # (path, size, mtime) last shown
+        self.builds_split = QtWidgets.QSplitter(Qt.Orientation.Horizontal)
+        self.builds_split.setChildrenCollapsible(False)
+        left = QtWidgets.QWidget()
+        ll = QtWidgets.QVBoxLayout(left)
+        ll.setContentsMargins(0, 0, 0, 0)
+        ll.addWidget(self.builds_tree, 1)
+        ll.addLayout(brow)
+        right = QtWidgets.QWidget()
+        rl = QtWidgets.QVBoxLayout(right)
+        rl.setContentsMargins(0, 0, 0, 0)
+        rl.addWidget(self.build_log_title)
+        rl.addWidget(self.build_log, 1)
+        self.builds_split.addWidget(left)
+        self.builds_split.addWidget(right)
+        self.builds_split.setStretchFactor(0, 2)
+        self.builds_split.setStretchFactor(1, 3)
+        bl.addWidget(self.builds_split, 1)
         self._add_tab("builds", builds)
 
         last = str(assistant_settings.get("tab", "assistant") or "assistant")
@@ -868,7 +912,15 @@ class LocalAIDock(QtWidgets.QFrame):
 
     def preferred_height(self, window_height: int) -> int:
         return dock_height_for(window_height, self.expanded and not self.popped,
-                               self.bar_height())
+                               self.bar_height(), self.tall)
+
+    def set_tall(self, on: bool) -> None:
+        """Let the panel take most of the window (the Bring-up step is on screen) or go
+        back to its usual cap."""
+        if bool(on) == self.tall:
+            return
+        self.tall = bool(on)
+        self.layout_changed.emit()
 
     # ---- expand / collapse ----------------------------------------------------------
     def _chevron_clicked(self) -> None:
@@ -995,7 +1047,7 @@ class LocalAIDock(QtWidgets.QFrame):
             if w is not None:
                 ph.setVisible(False)
         try:
-            page.attach_dock(self.show_tab)
+            page.attach_dock(self.show_tab, self.set_tall)
             page.completeChanged.connect(self._on_mesh_changed)
         except Exception:
             _log_swallowed("LocalAIDock.attach_mesh_page")
@@ -1038,6 +1090,8 @@ class LocalAIDock(QtWidgets.QFrame):
             if self.current_tab() == "builds" or self.builds_tree.topLevelItemCount() != (
                     len(builds) + (1 if mesh_running else 0)):
                 self._fill_builds(builds, mesh_running, mesh_label)
+            if self.current_tab() == "builds":
+                self.refresh_build_tail()
         except RuntimeError:                     # a widget deleted under us at teardown
             pass
         except Exception:
@@ -1074,6 +1128,69 @@ class LocalAIDock(QtWidgets.QFrame):
             "local-mesh verb, are listed here while they run; closing a window or this "
             "panel never stops one.")
         self._sync_builds_buttons()
+
+    def _on_build_picked(self) -> None:
+        self._sync_builds_buttons()
+        self._tail_key = None
+        self.refresh_build_tail()
+
+    def _picked_build_log(self) -> "tuple[str, str]":
+        """``(log path, words for the title)`` of the picked row; path "" = nothing to
+        follow, and the words say why."""
+        item = self.builds_tree.currentItem()
+        key = str(item.data(0, Qt.ItemDataRole.UserRole) or "") if item is not None else ""
+        if not key:
+            return "", ""
+        if key == "mesh:":
+            return "", ("The local mesh's own run log is on the Mesh run tab "
+                        "(\u201cShow this build\u201d opens it).")
+        from . import build_supervisor
+        b = build_supervisor.supervisor().find(key[len("build:"):])
+        if b is None:
+            return "", "That build is no longer running."
+        path = getattr(b, "log_path", "") or (
+            os.path.join(b.workdir, "build.log") if getattr(b, "workdir", "") else "")
+        if not path:
+            return "", f"{b.label}: this build has no log file to follow."
+        return path, f"{b.label} \u2014 last lines of {path}"
+
+    def refresh_build_tail(self) -> None:
+        """Show the last lines of the picked build's log. Reads at most 64 KB from the
+        end of the file, and only when its size or time changed."""
+        try:
+            path, words = self._picked_build_log()
+            self.build_log_title.setText(words)
+            if not path:
+                if self._tail_key is not None or self.build_log.toPlainText():
+                    self.build_log.clear()
+                self._tail_key = None
+                return
+            try:
+                st = os.stat(path)
+            except OSError:
+                self.build_log_title.setText(words + " (not written yet)")
+                self.build_log.clear()
+                self._tail_key = None
+                return
+            key = (path, st.st_size, st.st_mtime_ns)
+            if key == self._tail_key:
+                return
+            self._tail_key = key
+            with open(path, "rb") as fh:
+                fh.seek(max(0, st.st_size - _TAIL_BYTES))
+                data = fh.read(_TAIL_BYTES)
+            lines = data.decode("utf-8", "replace").splitlines()
+            if st.st_size > _TAIL_BYTES and lines:
+                lines = lines[1:]                # the first one was cut in the middle
+            bar = self.build_log.verticalScrollBar()
+            at_end, was = bar.value() >= bar.maximum() - 2, bar.value()
+            self.build_log.setPlainText("\n".join(lines[-BUILD_TAIL_LINES:]))
+            # follow the end unless the person scrolled up to read something
+            bar.setValue(bar.maximum() if at_end else min(was, bar.maximum()))
+        except RuntimeError:                     # a widget deleted under us at teardown
+            pass
+        except Exception:
+            _log_swallowed("LocalAIDock.refresh_build_tail")
 
     def _sync_builds_buttons(self) -> None:
         item = self.builds_tree.currentItem()
@@ -1326,15 +1443,14 @@ class LocalAIDock(QtWidgets.QFrame):
     def _worker_env(self, ctx) -> dict:
         """What the queue worker is started with beyond the Ollama address: the checkouts
         folder (draft.sh's HUGMESH_REPOS_ROOT) and the project-context file its agents
-        read (HUGMESH_AGENT_CONTEXT, written fresh here). Runs on the start thread."""
+        read (HUGMESH_AGENT_CONTEXT, written fresh here with this mesh's domains, and
+        written again by draft.sh before each agent). The same core call the shell's
+        `local-ai.sh start` makes when the text UI or a terminal starts the worker.
+        Runs on the start thread."""
         env = self._env()
-        root = actx.checkouts_dir(self.generator_dir, env)
-        text = actx.context_for(self.generator_dir, source_mode=ctx.source_mode,
-                                source_dir=ctx.source_dir, rows=ctx.domain_rows,
-                                mesh=ctx.mesh, ollama=odk.describe(self.ollama_mode),
-                                environ=env)
-        path = actx.write_context(os.path.join(lai.state_dir(env), actx.CONTEXT_NAME), text)
-        return {actx.REPOS_ROOT_ENV: root, actx.CONTEXT_ENV: path}
+        return actx.worker_env(self.generator_dir, ollama=odk.describe(self.ollama_mode),
+                               source_mode=ctx.source_mode, source_dir=ctx.source_dir,
+                               rows=ctx.domain_rows, mesh=ctx.mesh, environ=env)
 
     def _default_start_now(self):
         """The default start when no ``start_fn`` was injected: built at press time by

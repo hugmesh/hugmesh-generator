@@ -24,7 +24,9 @@ and the Studio agree on where a repository is.
 """
 from __future__ import annotations
 
+import json
 import os
+import sys
 import time
 from dataclasses import dataclass
 from typing import Iterable, Optional, Sequence
@@ -33,13 +35,20 @@ from . import assistant_settings
 
 __all__ = ["CONTEXT_NAME", "CONTEXT_ENV", "REPOS_ROOT_ENV", "Checkout", "DomainSources",
            "default_checkouts_dir", "checkouts_dir", "list_checkouts", "role_of",
-           "domain_sources", "render_context", "write_context", "context_for"]
+           "domain_sources", "render_context", "write_context", "context_for",
+           "INPUTS_NAME", "row_record", "write_inputs", "read_inputs", "context_from_inputs",
+           "worker_env", "refresh"]
 
 CONTEXT_NAME = "HUGMESH-CONTEXT.md"
 #: Handed to the queue worker so its agents read the same file (draft.sh passes it on).
 CONTEXT_ENV = "HUGMESH_AGENT_CONTEXT"
 #: draft.sh's name for the checkouts folder.
 REPOS_ROOT_ENV = "HUGMESH_REPOS_ROOT"
+#: Beside the context file: what it was written FROM (the mesh, its domains, the source
+#: choice), so the queue worker can write it again, fresh, before every agent it starts.
+INPUTS_NAME = "HUGMESH-CONTEXT.inputs.json"
+#: The row keys the code-folder map reads (code_folders._field).
+_ROW_KEYS = ("name", "optional_services", "idp", "idp_settings")
 _MAX_CHECKOUTS = 150
 _MAX_FOLDERS_PER_DOMAIN = 60
 
@@ -232,3 +241,135 @@ def context_for(generator_dir: str, *, source_mode: str = "clone", source_dir: s
                           checkouts=list_checkouts(root), domains=doms,
                           source_root=src_root, source_problem=problem, mesh=mesh,
                           ollama=ollama)
+
+
+# ── the queue worker's half ─────────────────────────────────────────────────────────
+# The Studio writes the context when it starts the worker; the worker's agents start
+# later, one per queued job. So the inputs are written beside the context, and
+# scripts/local-ai/draft.sh asks `python3 -m hugmesh_studio.core.agent_context refresh`
+# to write the file again right before each agent: the checkouts and code folders it
+# lists are then the ones on disk at that moment. The Studio, the text UI and
+# `scripts/local-ai.sh start` all go through worker_env, so every worker has a context.
+def row_record(row) -> dict:
+    """The part of a Domain row (or saved-record dict) the code-folder map reads, as
+    plain JSON values."""
+    out = {}
+    for key in _ROW_KEYS:
+        val = row.get(key) if isinstance(row, dict) else getattr(row, key, None)
+        if isinstance(val, (tuple, set, frozenset)):
+            val = list(val)
+        if val is not None:
+            out[key] = val
+    return out
+
+
+def _inputs_path(context_path: str) -> str:
+    return os.path.join(os.path.dirname(os.path.abspath(context_path)), INPUTS_NAME)
+
+
+def write_inputs(context_path: str, *, source_mode: str = "clone", source_dir: str = "",
+                 rows: Iterable = (), mesh: str = "", ollama: str = "") -> str:
+    data = {"source_mode": source_mode or "clone", "source_dir": source_dir or "",
+            "rows": [row_record(r) for r in rows], "mesh": mesh or "",
+            "ollama": ollama or ""}
+    return write_context(_inputs_path(context_path), json.dumps(data, indent=1, default=str))
+
+
+def read_inputs(context_path: str) -> dict:
+    """The saved inputs, or {} when there are none or they cannot be read."""
+    try:
+        with open(_inputs_path(context_path), encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def context_from_inputs(generator_dir: str, inputs: dict, environ=None,
+                        settings: Optional[dict] = None) -> str:
+    rows = [r for r in (inputs.get("rows") or ()) if isinstance(r, dict)]
+    return context_for(generator_dir, source_mode=str(inputs.get("source_mode") or "clone"),
+                       source_dir=str(inputs.get("source_dir") or ""), rows=rows,
+                       mesh=str(inputs.get("mesh") or ""),
+                       ollama=str(inputs.get("ollama") or ""), environ=environ,
+                       settings=settings)
+
+
+def worker_env(generator_dir: str, *, ollama: str = "", source_mode: str = "clone",
+               source_dir: str = "", rows: Iterable = (), mesh: str = "",
+               environ=None, settings: Optional[dict] = None) -> dict:
+    """Write the context (and its inputs) into the local-AI state folder and return
+    what the queue worker must be started with: ``HUGMESH_REPOS_ROOT`` (the checkouts
+    folder) and ``HUGMESH_AGENT_CONTEXT`` (the file). Reads the disk: call it off the
+    window thread."""
+    from . import local_ai_status as lai
+    environ = os.environ if environ is None else environ
+    rows = list(rows)
+    root = checkouts_dir(generator_dir, environ, settings)
+    path = os.path.join(lai.state_dir(dict(environ)), CONTEXT_NAME)
+    write_context(path, context_for(generator_dir, source_mode=source_mode,
+                                    source_dir=source_dir, rows=rows, mesh=mesh,
+                                    ollama=ollama, environ=environ, settings=settings))
+    write_inputs(path, source_mode=source_mode, source_dir=source_dir, rows=rows,
+                 mesh=mesh, ollama=ollama)
+    return {REPOS_ROOT_ENV: root, CONTEXT_ENV: path}
+
+
+def refresh(generator_dir: str, context_path: str, environ=None,
+            settings: Optional[dict] = None) -> str:
+    """Write ``context_path`` again from its saved inputs (none saved = no domains)."""
+    return write_context(context_path, context_from_inputs(
+        generator_dir, read_inputs(context_path), environ, settings))
+
+
+def _shell_root(generator_dir: str) -> "tuple[str, Optional[dict]]":
+    """The checkouts folder for a worker started from the shell, and the settings to
+    render with. An exported ``HUGMESH_REPOS_ROOT`` wins there (draft.sh has always
+    read it); otherwise the Studio setting, else the generator's parent folder."""
+    exported = (os.environ.get(REPOS_ROOT_ENV) or "").strip()
+    if exported:
+        root = os.path.abspath(os.path.expanduser(exported))
+        return root, {"checkouts_dir": root}
+    return checkouts_dir(generator_dir, os.environ), None
+
+
+def _main(argv) -> int:
+    """For scripts/local-ai.sh and draft.sh:
+
+    * ``env``  — the worker's two variables as NAME=value lines. Writes the context
+      (no domains: the shell knows no mesh) unless the caller already passed
+      ``HUGMESH_AGENT_CONTEXT`` (the Studio wrote it, with the mesh's domains).
+    * ``root`` — the checkouts folder only (nothing is written).
+    * ``refresh PATH`` — write PATH again from its saved inputs, fresh from the disk.
+    """
+    gen = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__)))))
+    if argv == ["root"]:
+        print(_shell_root(gen)[0])
+        return 0
+    if argv == ["env"]:
+        root, settings = _shell_root(gen)
+        given = (os.environ.get(CONTEXT_ENV) or "").strip()
+        if given:
+            out = {REPOS_ROOT_ENV: root, CONTEXT_ENV: given}
+        else:
+            from . import local_ai_status as lai
+            try:
+                host, port = lai.ollama_host(dict(os.environ))
+                words = f"The local model is served by the Ollama at {host}:{port}."
+            except Exception:                    # noqa: BLE001 — words only
+                words = ""
+            out = worker_env(gen, ollama=words, environ=os.environ, settings=settings)
+        for key, val in out.items():
+            print(f"{key}={val}")
+        return 0
+    if argv[:1] == ["refresh"] and len(argv) == 2:
+        refresh(gen, argv[1], os.environ, _shell_root(gen)[1])
+        return 0
+    print("usage: python3 -m hugmesh_studio.core.agent_context env | root | refresh PATH",
+          file=sys.stderr)
+    return 2
+
+
+if __name__ == "__main__":                        # pragma: no cover — exercised by draft.sh
+    raise SystemExit(_main(sys.argv[1:]))

@@ -168,3 +168,87 @@ def test_the_queue_workers_agents_get_the_same_context(tmp_path):
     src = open(os.path.join(GENERATOR_DIR, "scripts", "local-ai", "draft.py"),
                encoding="utf-8").read()
     assert src.count("agent_context() + BRIEF") == 2, "an agent mode starts without context"
+
+
+# ── the queue worker gets a context however it was started, fresh for each agent ──────
+# (skeptic concerns 2026-10-21: the text UI and `local-ai.sh start` gave the worker no
+# context, and queue agents read the file written when the worker started.)
+def test_worker_env_writes_the_context_and_its_inputs_into_the_state_folder(
+        checkouts, tmp_path, monkeypatch):
+    state = tmp_path / "la-state"
+    rows = [Domain(name="alpha.mesh.example", optional_services=["phpbb"])]
+    env = actx.worker_env(GENERATOR_DIR, ollama="In use: docker", source_mode="existing",
+                          source_dir=checkouts, rows=rows, mesh="alpha.mesh.example",
+                          environ={"HUGMESH_LOCAL_AI_DIR": str(state)},
+                          settings={"checkouts_dir": checkouts})
+    path = str(state / actx.CONTEXT_NAME)
+    assert env == {actx.REPOS_ROOT_ENV: checkouts, actx.CONTEXT_ENV: path}
+    text = open(path, encoding="utf-8").read()
+    assert "Domain `alpha.mesh.example`" in text and "In use: docker" in text
+    saved = actx.read_inputs(path)
+    assert len(saved["rows"]) == 1
+    assert saved["rows"][0]["name"] == "alpha.mesh.example"
+    assert saved["rows"][0]["optional_services"] == ["phpbb"]
+    assert saved["source_mode"] == "existing" and saved["mesh"] == "alpha.mesh.example"
+
+
+def test_refresh_writes_the_context_again_from_the_disk_as_it_is_now(
+        checkouts, tmp_path, monkeypatch):
+    state = tmp_path / "la-state"
+    rows = [Domain(name="alpha.mesh.example", optional_services=["phpbb"])]
+    env = actx.worker_env(GENERATOR_DIR, source_mode="existing", source_dir=checkouts,
+                          rows=rows, mesh="alpha.mesh.example",
+                          environ={"HUGMESH_LOCAL_AI_DIR": str(state)},
+                          settings={"checkouts_dir": checkouts})
+    path = env[actx.CONTEXT_ENV]
+    assert "hugmesh-media-ui" not in open(path, encoding="utf-8").read()
+    _git_repo(tmp_path / "src" / "hugmesh-media-ui")       # cloned after the worker started
+    actx.refresh(GENERATOR_DIR, path, {}, {"checkouts_dir": checkouts})
+    text = open(path, encoding="utf-8").read()
+    assert "`hugmesh-media-ui`" in text, "the agent would read the stale list"
+    assert "Domain `alpha.mesh.example`" in text, "the mesh's domains were lost on refresh"
+
+
+def _cli(args, env):
+    return subprocess.run([sys.executable, "-m", "hugmesh_studio.core.agent_context", *args],
+                          cwd=STUDIO_ROOT, env=env, capture_output=True, text=True, timeout=60)
+
+
+def test_the_shell_start_writes_a_context_and_keeps_one_the_studio_passed(tmp_path, checkouts):
+    state = tmp_path / "la-state"
+    base = dict(os.environ, HUGMESH_LOCAL_AI_DIR=str(state), PYTHONPATH=STUDIO_ROOT)
+    base.pop(actx.CONTEXT_ENV, None)
+    base[actx.REPOS_ROOT_ENV] = checkouts
+    out = _cli(["env"], base)
+    assert out.returncode == 0, out.stderr
+    pairs = dict(line.split("=", 1) for line in out.stdout.splitlines())
+    path = str(state / actx.CONTEXT_NAME)
+    assert pairs == {actx.REPOS_ROOT_ENV: checkouts, actx.CONTEXT_ENV: path}
+    text = open(path, encoding="utf-8").read()
+    assert f"The person's checkouts: `{checkouts}`" in text and "hugmesh-user-ui" in text
+    assert _cli(["root"], base).stdout.strip() == checkouts
+    # the Studio already wrote one (with its domains): the shell keeps that file
+    given = tmp_path / "studio-wrote.md"
+    given.write_text("# from the Studio\n")
+    out = _cli(["env"], dict(base, **{actx.CONTEXT_ENV: str(given)}))
+    assert f"{actx.CONTEXT_ENV}={given}" in out.stdout
+    assert given.read_text() == "# from the Studio\n"
+    out = _cli(["refresh", path], base)
+    assert out.returncode == 0, out.stderr
+    assert _cli(["nonsense"], base).returncode == 2
+
+
+def test_every_start_path_reaches_the_worker_with_a_context():
+    """The Studio passes its own; `local-ai.sh start` (what the text UI runs too) writes
+    one when none was passed; draft.sh writes it again before each agent."""
+    lib = open(os.path.join(GENERATOR_DIR, "scripts", "local-ai", "_local-ai-lib.sh"),
+               encoding="utf-8").read()
+    sh = open(os.path.join(GENERATOR_DIR, "scripts", "local-ai.sh"), encoding="utf-8").read()
+    draft = open(os.path.join(GENERATOR_DIR, "scripts", "local-ai", "draft.sh"),
+                 encoding="utf-8").read()
+    assert "hugmesh_studio.core.agent_context" in lib
+    worker = sh[sh.index("cmd_worker() {"):sh.index("cmd_stop() {")]
+    assert worker.index("la_worker_env") < worker.index('"$HERE/local-ai/worker.sh" >>'), \
+        "the detached worker starts before its context is exported"
+    assert 'la_ctx refresh "$HUGMESH_AGENT_CONTEXT"' in draft
+    assert draft.index("la_ctx refresh") < draft.index('python3 "$HERE/draft.py"')

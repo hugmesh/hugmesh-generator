@@ -471,3 +471,226 @@ def test_the_panel_looks_right_collapsed_open_on_every_tab_and_popped_out(shell,
     shot(wiz, f"popped-out-studio-window-{tag}")
     win.close()
     settle(qapp)
+
+
+# ── a refused press says why where the person is looking (skeptic blocker 2026-10-21) ──
+# The status line lives on the Mesh run tab; the buttons that write to it live on the
+# Local mesh tab, on step pages and on the Running mesh tab. A press that starts nothing
+# must still change what is on screen: its reason is copied above the Actions buttons,
+# and when that copy is not on screen either, the panel opens on the status line.
+def _visible_text_in(wiz, text):
+    """Labels in the window that are ON SCREEN and show ``text`` (the person sees it)."""
+    hits = []
+    for lbl in wiz.findChildren(QtWidgets.QLabel):
+        if text in lbl.text() and lbl.isVisible() and lbl.height() > 0:
+            hits.append(lbl)
+    return hits
+
+
+def _launches(monkeypatch, ctl):
+    launched = []
+    monkeypatch.setattr(ctl, "_launch", lambda label, *a, **k: launched.append(label))
+    return launched
+
+
+def test_generate_on_another_page_arms_first_and_then_says_why_it_cannot_start(
+        shell, qapp, monkeypatch):
+    wiz = open_at(shell, qapp)
+    dock, ctl = wiz.local_ai_dock, wiz.localmesh_page
+    launched = _launches(monkeypatch, ctl)
+    monkeypatch.setattr(ctl, "_domain_row_problems",
+                        lambda: ["row 2: 'bad domain' is not a domain name"])
+    dock.show_tab("mesh")
+    settle(qapp)
+    assert not isinstance(wiz.currentPage(), (lm.LocalMeshPage, lm._LocalMeshStep))
+    # first press on the Welcome page: armed, nothing started, and it says so HERE
+    ctl.boot_start_btn.click()
+    settle(qapp)
+    assert launched == []
+    assert ctl.boot_start_btn.text() == "Press again to start"
+    assert dock.current_tab() == "mesh", "the panel jumped away from the button"
+    assert ctl.action_status.isVisible() and "Press it again" in ctl.action_status.text()
+    assert _visible_text_in(wiz, "Press it again"), "the reason is not on screen"
+    r = rect_in(wiz, ctl.action_status)
+    assert wiz.rect().contains(r) and r.height() >= 14, r
+    shot(wiz, "refused-armed-on-welcome")
+    # second press: the gate runs, refuses, and the refusal is next to the button
+    ctl.boot_start_btn.click()
+    settle(qapp)
+    assert launched == []
+    assert ctl.boot_start_btn.text() == "Generate && start"
+    assert "bad domain" in ctl.status.text()
+    assert ctl.action_status.isVisible() and "bad domain" in ctl.action_status.text()
+    assert _visible_text_in(wiz, "bad domain"), "a refused Generate & start is invisible"
+    shot(wiz, "refused-generate-on-welcome")
+
+
+def test_on_the_bringup_step_one_press_runs_the_gate_and_its_refusal_is_on_screen(
+        shell, qapp, monkeypatch):
+    wiz = open_at(shell, qapp)
+    dock = wiz.local_ai_dock
+    ctl = to_bringup(wiz, qapp)
+    launched = _launches(monkeypatch, ctl)
+    monkeypatch.setattr(ctl, "_domain_row_problems",
+                        lambda: ["row 2: 'bad domain' is not a domain name"])
+    assert dock.current_tab() == "mesh"
+    ctl.boot_start_btn.click()
+    settle(qapp)
+    assert launched == [] and ctl.boot_start_btn.text() == "Generate && start"
+    assert _visible_text_in(wiz, "bad domain")
+    # a press that passes the gate still starts on the first click on this step
+    monkeypatch.setattr(ctl, "_domain_row_problems", lambda: [])
+    monkeypatch.setattr(ctl, "_domain_services_refusal", lambda: "")
+    monkeypatch.setattr(lm.LocalMeshBootstrap, "validate", lambda self: [])
+    ctl.boot_start_btn.click()
+    settle(qapp)
+    assert launched == ["Bootstrapping"], launched
+
+
+@pytest.mark.parametrize("where", ["collapsed", "popped", "other-tab"])
+def test_a_refusal_from_outside_the_actions_opens_the_panel_on_its_reason(
+        shell, qapp, monkeypatch, where):
+    wiz = open_at(shell, qapp)
+    dock, ctl = wiz.local_ai_dock, wiz.localmesh_page
+    launched = _launches(monkeypatch, ctl)
+    if where == "collapsed":
+        dock.set_expanded(False)
+    elif where == "popped":
+        dock.show_tab("assistant")
+        dock.pop_out().hide()                 # popped, and its window behind/closed
+        dock.popped = True
+    else:
+        dock.show_tab("pods")
+    settle(qapp)
+    # a saved mesh's Start (review step) over a live mesh: refused, no verb
+    ctl._mesh_up = True
+    ctl._start_saved(None, "start")
+    settle(qapp)
+    assert launched == []
+    assert "stop it first" in ctl.status.text()
+    assert dock.current_tab() == "run"
+    assert ctl.status.isVisible(), f"refusal not on screen ({where})"
+    if where == "popped":
+        assert dock.panel_window.isVisible()
+    else:
+        assert dock.expanded
+    assert _visible_text_in(wiz if where != "popped" else dock.panel_window, "stop it first")
+    if where == "collapsed":
+        shot(wiz, "refused-saved-start-opens-panel")
+
+
+def test_a_pod_rows_refused_open_is_shown(shell, qapp):
+    wiz = open_at(shell, qapp)
+    dock, ctl = wiz.local_ai_dock, wiz.localmesh_page
+    dock.show_tab("pods")
+    settle(qapp)
+    ctl._open_door("javascript:alert(1)")
+    settle(qapp)
+    assert ctl.status.text().startswith("Not opened:")
+    assert ctl.status.isVisible() and dock.current_tab() == "run"
+
+
+def test_without_a_panel_the_status_line_stays_on_the_page_and_has_no_copy(qapp):
+    dlg = lm.LocalMeshDialog(GENERATOR_DIR)
+    try:
+        dlg.show()
+        settle(qapp)
+        page = dlg.page
+        page._mesh_up = True
+        page._start_saved(None, "start")
+        settle(qapp)
+        assert page.status.isVisible() and "stop it first" in page.status.text()
+        assert page.action_status.isHidden(), "the copy doubled the line on a panel-less page"
+        # and no second press is asked for there
+        assert page.boot_start_btn.text() == "Generate && start"
+    finally:
+        dlg.close()
+        dlg.deleteLater()
+
+
+# ── the Bring-up step gives the panel the room ─────────────────────────────────────────
+def test_the_bringup_step_lets_the_panel_take_most_of_the_window(shell, qapp):
+    wiz = open_at(shell, qapp)
+    dock = wiz.local_ai_dock
+    dock.set_expanded(True)
+    settle(qapp)
+    usual = dock.height()
+    assert usual <= dock_mod.EXPANDED_PX
+    ctl = to_bringup(wiz, qapp)
+    settle(qapp)
+    assert dock.tall and dock.height() > usual + 100, (usual, dock.height())
+    assert "panel" in wiz.currentPage().subTitle() and "below" not in wiz.currentPage().subTitle()
+    # the page above still shows its note and the wizard's buttons
+    for w in (ctl.dock_note_btn, wiz.button(QtWidgets.QWizard.WizardButton.BackButton)):
+        r = rect_in(wiz, w)
+        assert w.isVisible() and wiz.rect().contains(r) and r.bottom() < dock.y(), (w, r)
+    shot(wiz, "bringup-step-panel-tall")
+    wiz.back()
+    settle(qapp)
+    assert not dock.tall and dock.height() == usual
+
+
+@pytest.mark.parametrize("h", [552, 780, 1080])
+def test_the_tall_height_leaves_the_page_its_room(h):
+    bar = 35
+    assert dock_mod.dock_height_for(h, True, bar, tall=True) > dock_mod.dock_height_for(h, True, bar)
+    assert h - dock_mod.dock_height_for(h, True, bar, tall=True) >= 200
+    assert dock_mod.dock_height_for(h, False, bar, tall=True) == bar
+
+
+# ── the running build itself, at the bottom ──────────────────────────────────────────
+def test_the_builds_tab_follows_the_picked_builds_log(shell, qapp, tmp_path):
+    wiz = open_at(shell, qapp)
+    dock = wiz.local_ai_dock
+
+    class Worker:
+        def isRunning(self):
+            return True
+
+    log = tmp_path / "build.log"
+    log.write_text("".join(f"emerge line {i}\n" for i in range(1, 2001)))
+    sup = build_supervisor.supervisor()
+    run = sup.adopt(session_id="20261021-tail", label="x86 desktop image", worker=Worker(),
+                    driver=None, window=wiz, workdir=str(tmp_path), log_path=str(log))
+    try:
+        dock.show_tab("builds")
+        dock.refresh_activity()
+        settle(qapp)
+        text = dock.build_log.toPlainText()
+        assert "emerge line 2000" in text and "emerge line 1500" not in text
+        assert len(text.splitlines()) <= dock_mod.BUILD_TAIL_LINES
+        assert str(log) in dock.build_log_title.text()
+        with log.open("a") as fh:
+            fh.write(">>> Completed (1 of 1) www-client/firefox\n")
+        dock.refresh_activity()                       # what the 1 s timer does
+        assert dock.build_log.toPlainText().endswith("www-client/firefox")
+        assert dock.build_log.isVisible()
+        r = rect_in(wiz, dock.build_log)
+        assert wiz.rect().contains(r) and r.height() >= 60 and r.width() >= 200, r
+        shot(wiz, "builds-tab-live-log")
+    finally:
+        run.finished = True
+        sup.release(run)
+    dock.refresh_activity()
+    assert dock.build_log.toPlainText() == ""
+
+
+def test_a_build_with_no_log_path_falls_back_to_its_workdir_log(shell, qapp, tmp_path):
+    wiz = open_at(shell, qapp)
+    dock = wiz.local_ai_dock
+
+    class Worker:
+        def isRunning(self):
+            return True
+
+    (tmp_path / "build.log").write_text("from the workdir\n")
+    sup = build_supervisor.supervisor()
+    run = sup.adopt(session_id="20261021-wd", label="pi image", worker=Worker(),
+                    driver=None, window=wiz, workdir=str(tmp_path))
+    try:
+        dock.show_tab("builds")
+        dock.refresh_activity()
+        assert "from the workdir" in dock.build_log.toPlainText()
+    finally:
+        run.finished = True
+        sup.release(run)

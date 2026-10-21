@@ -242,6 +242,41 @@ def _grey_note(text: str) -> "QtWidgets.QLabel":
     return lbl
 
 
+class _StatusLine(QtWidgets.QLabel):
+    """The page's one status line, which can also be shown in a second place.
+
+    With the bottom panel, the status line sits on the panel's Mesh run tab while the
+    buttons that write to it sit on the Local mesh tab, so a refused press would say
+    why on a tab nobody is looking at. Every text this line gets is copied to its
+    mirrors (the line just above the Actions buttons), so the reason is written next
+    to the button that was pressed. A mirror shows itself only while the panel holds
+    the actions and there is something to say; see LocalMeshPage._sync_action_status.
+    """
+
+    def __init__(self, text: str = ""):
+        super().__init__(text)
+        self._mirrors: list = []
+        self.on_text = None                       # the page's hook, called after each set
+
+    def add_mirror(self, label: "QtWidgets.QLabel") -> None:
+        self._mirrors.append(label)
+        label.setText(self.text())
+
+    def setText(self, text) -> None:              # noqa: N802 (Qt)
+        super().setText(text)
+        for m in self._mirrors:
+            try:
+                m.setText(text)
+            except RuntimeError:                  # a mirror deleted at teardown
+                pass
+        hook = self.on_text
+        if hook is not None:
+            try:
+                hook()
+            except Exception:                     # noqa: BLE001 — a status line never raises
+                pass
+
+
 #: What LoginThemeGroup.load() reads when a saved-mesh record carries no theme
 #: inputs: the shipped brand. Keys are ImageConfig's login_* names (the group's
 #: own load/commit contract) — ALL seventeen that commit() writes, because
@@ -558,6 +593,14 @@ class _BrandId(QtCore.QObject):
 
 
 class LocalMeshPage(QtWidgets.QWizardPage):
+    #: The subtitle once the bottom panel holds the actions, the stages and the table.
+    DOCKED_SUBTITLE = (
+        "Everything is chosen. Press 'Generate & start' on the panel's Local mesh tab "
+        "(at the bottom of this window) to mint the credentials and bring the mesh up "
+        "on THIS machine; the panel's Mesh run and Running mesh tabs report what "
+        "happens. This is the end of this path: Exit closes the Studio; the mesh keeps "
+        "running in Docker.")
+
     def __init__(self, wiz):
         super().__init__()
         self.wiz = wiz
@@ -606,6 +649,9 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         self._added_user_specs: list[str] = []
         self._running = False
         self._running_label = ""
+        # Generate && start pressed from a page outside the local-mesh steps (the panel
+        # makes the button reachable from every page): the first press only arms it.
+        self._start_armed = 0
         # apply_bootstrap() in flight: _refresh_plan returns early so the plan
         # preview re-renders ONCE at the end, not once per setter (ask C).
         self._applying_bootstrap = False
@@ -671,9 +717,13 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         self.run_view = QtWidgets.QWidget()
         run_lay = QtWidgets.QVBoxLayout(self.run_view)
         run_lay.setContentsMargins(0, 0, 0, 0)
-        self.status = QtWidgets.QLabel("")
+        self.status = _StatusLine("")
         self.status.setWordWrap(True)
         run_lay.addWidget(self.status)
+        # its copy above the Actions buttons (built earlier, in the bring-up section)
+        if getattr(self, "action_status", None) is not None:
+            self.status.add_mirror(self.action_status)
+        self.status.on_text = self._sync_action_status
 
         # ── STAGED VIEW: stage tree above, the SAME single log below ─────────────────
         # The flat scrolling log this replaces was the operator's complaint: an hour-long
@@ -934,11 +984,50 @@ class LocalMeshPage(QtWidgets.QWizardPage):
             except Exception:                    # noqa: BLE001 — a panel must not break the page
                 pass
 
-    def attach_dock(self, reveal) -> None:
+    def _sync_action_status(self) -> None:
+        """Show the status line's copy above the Actions buttons while the panel holds
+        them and there is something to say; keep it in view in the panel's scroll."""
+        mirror = getattr(self, "action_status", None)
+        if mirror is None:
+            return
+        show = "actions" in self._docked and bool(mirror.text().strip())
+        mirror.setVisible(show)
+        if show and mirror.isVisible():
+            w = mirror.parentWidget()
+            while w is not None and not isinstance(w, QtWidgets.QScrollArea):
+                w = w.parentWidget()
+            if w is not None:
+                w.ensureWidgetVisible(mirror, 0, 0)
+
+    def _refuse(self, text: str) -> None:
+        """Say why a press did nothing, WHERE THE PERSON CAN SEE IT.
+
+        The text goes to the status line (and its copy above the Actions buttons). In a
+        Studio window both of those live in the bottom panel; when neither is on screen
+        (the panel is folded, or the press came from a page or another tab: a saved
+        mesh's Start on the review step, the join step's Start, a pod row's Open), the
+        panel opens on its Mesh run tab, where the status line is. Without a panel
+        (LocalMeshDialog) the status line is on this page and nothing else happens.
+        A verb that STARTS needs none of this: the panel opens on the run by itself."""
+        self.status.setText(text)
+        if "run" not in self._docked:
+            return
+        mirror = getattr(self, "action_status", None)
+        if self.status.isVisible() or (mirror is not None and mirror.isVisible()):
+            return
+        self._reveal_in_dock("run")
+
+    def attach_dock(self, reveal, tall=None) -> None:
         """Called by the bottom panel once it holds this page's parts: ``reveal(tab)``
-        opens it on a tab. Shows the note that says where the parts went."""
+        opens it on a tab, ``tall(on)`` lets it take most of the window while this
+        page (which then has nothing else to show) is on screen. Shows the note that
+        says where the parts went."""
         self._dock_reveal = reveal
+        self._dock_tall = tall
         self.dock_note.setVisible(bool(self._docked))
+        self._sync_action_status()
+        if self._docked and self.subTitle() != self.DOCKED_SUBTITLE:
+            self.setSubTitle(self.DOCKED_SUBTITLE)
         if self._docked and not getattr(self, "_dock_stretch", False):
             # the run view used to take this page's spare height (stretch 1); with it in
             # the panel, a trailing stretch keeps the note at the top instead of floating
@@ -1932,7 +2021,22 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         brow.addWidget(self.add_user_btn)
         # No trailing addStretch: a FlowLayout has no stretch concept, and a
         # spacer item would be wrapped as if it were another button.
-        lay.addWidget(brow_box)
+        # The status line's copy, ABOVE the buttons: in the bottom panel the status line
+        # itself is on the Mesh run tab, so a refused press says why HERE, next to the
+        # button (hidden when there is no panel: the status line is on this page then).
+        self.action_status = QtWidgets.QLabel("")
+        self.action_status.setObjectName("actionStatus")
+        self.action_status.setWordWrap(True)
+        self.action_status.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.action_status.setVisible(False)
+        actions_part = QtWidgets.QWidget()
+        _ap = QtWidgets.QVBoxLayout(actions_part)
+        _ap.setContentsMargins(0, 0, 0, 0)
+        _ap.setSpacing(4)
+        _ap.addWidget(self.action_status)
+        _ap.addWidget(brow_box)
+        lay.addWidget(actions_part)
         # THE BOTTOM PANEL (operator ask 2026-10-21). In a Studio window this Actions box,
         # the running-mesh monitor and the run view are claimed by the panel docked at
         # the bottom of the window (gui/_local_ai_dock.py, take_section(..., dock=True)),
@@ -1941,7 +2045,7 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         # LocalMeshDialog, a bare wizard) keeps all three here, exactly as before.
         # The local AI agent card that used to sit here (#695) moved to that panel too:
         # the operator asked for it out of the build phase.
-        self.actions_box = brow_box
+        self.actions_box = actions_part
         self.dock_note = QtWidgets.QWidget()
         _dn = QtWidgets.QHBoxLayout(self.dock_note)
         _dn.setContentsMargins(0, 0, 0, 0)
@@ -2106,7 +2210,18 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         # then, and _on_monitor_tick reads the TABLE's visibility, not this page's.
         if "monitor" not in self._docked:
             self._monitor_timer.stop()
+        self._set_dock_tall(False)
         super().hideEvent(event)
+
+    def _set_dock_tall(self, on: bool) -> None:
+        """While this page is on screen and the panel holds its parts, the page itself
+        shows only a note, so the panel may take most of the window (no-op otherwise)."""
+        tall = getattr(self, "_dock_tall", None)
+        if tall is not None and self._docked:
+            try:
+                tall(bool(on))
+            except Exception:                    # noqa: BLE001 — a panel must not break the page
+                pass
 
     def _reclaim_sections(self) -> None:
         """Take back what THIS page shows: the bring-up block and the run view.
@@ -2128,6 +2243,7 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         # body would silently lose to this one (later def wins, no error anywhere), so
         # the section reclaim is a call from here rather than its own override.
         self._reclaim_sections()
+        self._set_dock_tall(True)
         # The twin of hideEvent's stop (mesh_emulation.py:500-513 is the in-repo
         # precedent). Nothing else restarts the timer — _on_monitor_toggled only
         # fires on an actual fold change — so without this a revisited page shows a
@@ -2562,7 +2678,7 @@ class LocalMeshPage(QtWidgets.QWizardPage):
             # NOTHING. "I pressed Start and nothing happened" is then the only
             # symptom, with no line in the log and no status text to work from.
             busy = self._running_label or "a previous step"
-            self.status.setText(
+            self._refuse(
                 f"Still running: {busy}. One verb at a time — its output is in the "
                 f"log below. Wait for it to finish"
                 + (", or press Cancel to stop it."
@@ -2574,7 +2690,7 @@ class LocalMeshPage(QtWidgets.QWizardPage):
             # rewrites the compose project or the cluster while a `--scale` / `kubectl
             # scale` is still running races it for the same container set. Said out
             # loud for the same reason the guard above is.
-            self.status.setText(
+            self._refuse(
                 "Still running: a Replicas change in the running-mesh table. One "
                 "action at a time on this mesh — wait for its result on that table's "
                 "status line, then press again.")
@@ -2991,7 +3107,7 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         self.node = LocalMeshNode(self.generator_dir, self.collect())
         ok, why = self.node.available()
         if not ok:
-            self.status.setText(f"Cannot start: {why}")
+            self._refuse(f"Cannot start: {why}")
             return
         self._note("[local-mesh] docker compose up -d …")
         self._launch("Starting the mesh node", self.node.start)
@@ -3250,6 +3366,48 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         return (f" The service configuration walked for {named} could NOT be written "
                 "into the saved record, so the next Start will ask for it again.")
 
+    def _on_flow_page(self) -> bool:
+        """True when the wizard is showing one of the local-mesh steps (or there is no
+        wizard page to ask: the standalone dialog)."""
+        try:
+            page = self.wiz.currentPage()
+        except Exception:                        # noqa: BLE001 — a shim with no pages
+            return True
+        return page is None or isinstance(page, (LocalMeshPage, _LocalMeshStep))
+
+    def _start_confirmed(self) -> bool:
+        """THE SECOND PRESS. With the bottom panel, Generate && start can be pressed on
+        any page, the Welcome page included, before a single local-mesh step was seen;
+        one press would then start a mesh on settings nobody looked at. Off the
+        local-mesh steps the first press only arms the button (its text and the line
+        above it say so) and a second press within 15 seconds starts. No dialog."""
+        if "actions" not in self._docked or self._on_flow_page() or self._start_armed:
+            self._disarm_start()
+            return True
+        self._arm_seq = getattr(self, "_arm_seq", 0) + 1
+        self._start_armed = token = self._arm_seq
+        try:
+            where = self.wiz.currentPage().title() or "this"
+        except Exception:                        # noqa: BLE001
+            where = "this"
+        self.boot_start_btn.setText("Press again to start")
+        self._refuse(
+            f"You are on the ‘{where}’ page, not on the local-mesh steps: Generate & "
+            "start would use the mesh settings exactly as they are now, without your "
+            "review. Press it again within 15 seconds to start anyway, or walk the "
+            "local-mesh steps first.")
+        QtCore.QTimer.singleShot(15000, lambda: self._disarm_start(token))
+        return False
+
+    def _disarm_start(self, token: int = 0) -> None:
+        if not self._start_armed or (token and token != self._start_armed):
+            return
+        self._start_armed = 0
+        try:
+            self.boot_start_btn.setText("Generate && start")
+        except RuntimeError:                     # the page went away first
+            pass
+
     def _bootstrap_up(self):
         # THE PER-DOMAIN SERVICES GATE (#494/#495), on the docker/local-mesh half of
         # the operator's ask ("before building or starting a mesh in docker or nodes").
@@ -3271,23 +3429,25 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         # this is the backstop for any other way they got here (the TUI's words, one
         # helper) — and only then the services gate, which is about the rows that
         # can: fixing a row may change which domains still need their page.
+        if not self._start_confirmed():
+            return
         row_problems = self._domain_row_problems()
         if row_problems:
-            self.status.setText("Cannot start: domains: " + "; ".join(row_problems)
+            self._refuse("Cannot start: domains: " + "; ".join(row_problems)
                                 + " — fix them on the ‘Domains’ step.")
             return
         refusal = self._domain_services_refusal()
         if refusal:
-            self.status.setText(refusal)
+            self._refuse(refusal)
             return
         self.boot = LocalMeshBootstrap(self.generator_dir, self.collect_bootstrap())
         if self.login_theme.error_text():
-            self.status.setText(
+            self._refuse(
                 "Cannot start: themes: " + self.login_theme.error_text())
             return
         problems = self.boot.validate()
         if problems:
-            self.status.setText("Cannot start: " + "; ".join(problems))
+            self._refuse("Cannot start: " + "; ".join(problems))
             return
         for warn in self.boot.warnings():
             self._note(f"WARNING: {warn}")
@@ -3430,7 +3590,7 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         node = self.boot._stack_node()
         need = node.devops_available()
         if not need:
-            self.status.setText("DevOps prerequisites are already installed.")
+            self._refuse("DevOps prerequisites are already installed.")
             return
         self._note("[devops] installing the DevOps lane's prerequisites into "
                    "out/tools/bin (user-local, checksum-verified) …")
@@ -3452,7 +3612,7 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         node = self.boot._stack_node()
         problems = node.devops_available()
         if problems:
-            self.status.setText("Cannot start the DevOps lane: "
+            self._refuse("Cannot start the DevOps lane: "
                                 + "; ".join(problems))
             return
         self._note("[devops] creating the local Kubernetes cluster and "
@@ -3600,7 +3760,7 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         the mesh. No credential VALUE reaches a log line: the worker prints the
         record id and path, and whether files were copied or only pointed at."""
         if self._mesh_up is not True:
-            self.status.setText("Nothing to save: no local mesh is running "
+            self._refuse("Nothing to save: no local mesh is running "
                                 "(checked on entry and after every verb).")
             return
         boot = self.boot
@@ -3700,11 +3860,11 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         mint-and-seed ladder neither walks, and staging against it would render a
         ladder that never completes."""
         if self._running:
-            self.status.setText(f"Still running: {self._running_label or 'a verb'}. "
+            self._refuse(f"Still running: {self._running_label or 'a verb'}. "
                                 "Wait for it to finish, or Cancel.")
             return
         if self._mesh_up is True:
-            self.status.setText("A local mesh is running — stop it first. Starting "
+            self._refuse("A local mesh is running — stop it first. Starting "
                                 "a saved mesh over a live one would bring up a "
                                 "second stack on the same compose project.")
             return
@@ -3723,7 +3883,7 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         cfg = LocalMeshBootstrapConfig.from_dict(rec.config)
         refusal = self._saved_domain_services_refusal(rec, cfg)
         if refusal:
-            self.status.setText(refusal)
+            self._refuse(refusal)
             return
         # The gate passed on the form's walk of some of the record's domains: write
         # that walk INTO the record before the record is applied back over the form
@@ -3741,12 +3901,12 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         cfg.auth_key = self.boot_auth_key.text().strip()
         self.boot = LocalMeshBootstrap(self.generator_dir, cfg)
         if self.login_theme.error_text():
-            self.status.setText("Cannot start the saved mesh: themes: "
+            self._refuse("Cannot start the saved mesh: themes: "
                                 + self.login_theme.error_text())
             return
         problems = self.boot.validate()
         if problems:
-            self.status.setText("Cannot start the saved mesh: " + "; ".join(problems))
+            self._refuse("Cannot start the saved mesh: " + "; ".join(problems))
             return
         boot = self.boot
         label = rec.label or rec.id
@@ -3794,7 +3954,7 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         A probe already in flight is left alone rather than stacking `npx` processes.
         """
         if probe_running(self, "_e2e_cat_probe"):
-            self.status.setText("Still enumerating the e2e suite — one moment.")
+            self._refuse("Still enumerating the e2e suite — one moment.")
             return
         self.status.setText(
             "Enumerating the e2e suite (asking Playwright for the spec list; this "
@@ -3853,7 +4013,7 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         env_id = self.e2e_environment()
         problems = node.e2e_ready(env_id)
         if problems:
-            self.status.setText("Cannot run e2e: " + "; ".join(problems))
+            self._refuse("Cannot run e2e: " + "; ".join(problems))
             self._sync_e2e_gate()
             return
         plan = e2e_environments.plan(env_id)
@@ -3905,7 +4065,7 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         try:
             plan = e2e_environments.plan(env_id)
         except ValueError as exc:
-            self.status.setText(str(exc))
+            self._refuse(str(exc))
             return
         self.status.setText(
             "e2e target: %s — the run will be launched as %s=%s make %s. "
@@ -4181,7 +4341,7 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         third refusal here is belt-and-braces, and the status line says why."""
         why = mesh_monitor.unsafe_door_reason(url)
         if why:
-            self.status.setText(f"Not opened: {why}")
+            self._refuse(f"Not opened: {why}")
             return
         QtGui.QDesktopServices.openUrl(QtCore.QUrl(url))
 
@@ -4398,6 +4558,8 @@ class _LocalMeshStep(QtWidgets.QWizardPage):
     SECTION = ""
     TITLE = ""
     SUBTITLE = ""
+    #: The subtitle once the bottom panel holds the run view ("" = SUBTITLE still true).
+    DOCKED_SUBTITLE = ""
 
     def __init__(self, wiz):
         super().__init__()
@@ -4457,6 +4619,10 @@ class _LocalMeshStep(QtWidgets.QWizardPage):
         if ctl is None:
             return
         ctl.take_section(self.SECTION, self._lay)
+        if self.DOCKED_SUBTITLE:
+            want = self.DOCKED_SUBTITLE if "run" in ctl.docked_parts() else self.SUBTITLE
+            if self.subTitle() != want:        # setting it re-shows the page: only on change
+                self.setSubTitle(want)
 
     def showEvent(self, ev):
         super().showEvent(ev)
@@ -4491,6 +4657,11 @@ class LocalMeshJoinPage(_LocalMeshStep):
                 "tailnet/headscale auth key — no server hardware, no image build. "
                 "This is the end of this path: Exit closes the Studio; the node keeps "
                 "running in Docker.")
+    DOCKED_SUBTITLE = (
+        "Run a HugMesh mesh node on THIS machine in Docker with a tailnet/headscale auth "
+        "key — no server hardware, no image build. Its status line and output are in "
+        "the panel at the bottom of this window (Mesh run tab). Exit closes the Studio; "
+        "the node keeps running in Docker.")
 
     def __init__(self, wiz):
         super().__init__(wiz)
@@ -4516,6 +4687,9 @@ class LocalMeshJoinPage(_LocalMeshStep):
         if ctl is None:
             return
         ctl._refresh_status()
+        # The node's status line and its log are in the bottom panel: open it there.
+        if "run" in ctl.docked_parts():
+            ctl._reveal_in_dock("run")
 
 
 class LocalMeshEnvPage(_LocalMeshStep):
@@ -4680,6 +4854,11 @@ class LocalMeshReviewPage(_LocalMeshStep):
     SUBTITLE = ("What a bring-up will generate and start, and the meshes already "
                 "saved on this machine. The plan itself is read-only; a saved row's "
                 "Start or Restore does run docker, and its output appears below.")
+    DOCKED_SUBTITLE = (
+        "What a bring-up will generate and start, and the meshes already saved on this "
+        "machine. The plan itself is read-only; a saved row's Start or Restore does run "
+        "docker, and its output appears in the panel at the bottom of this window (Mesh "
+        "run tab).")
 
     def _claim(self) -> None:
         # THE RUN SURFACE COMES WITH THE TABLE. The saved-mesh rows are not a preview:
