@@ -249,16 +249,18 @@ else
     bad "'mask changes are necessary' no longer fails fast (rc=${rc})"
 fi
 
-# 6b. USE-only failure => continue (autounmask-continue applies USE mid-merge).
+# 6b. USE text in the KEPT dump only, and a probe that returns no verdict
+#     (stub prints nothing) => continue. Only a probe verdict may stop a build;
+#     the USE verdict itself is pinned by 6e and 6h.
 cat > "${TMP}/kept.log" <<'FIXTURE'
 The following USE changes are necessary to proceed:
 # required by kde-misc/kdeconnect-26.04.3-r3::gentoo
 net-dns/avahi mdnsresponder-compat
 FIXTURE
 if bash -c "set -eo pipefail; source '${TMP}/gate.sh'; hugmesh_payload_plan_gate" >/dev/null 2>&1; then
-    ok "USE-only failure => gate continues (merge can still self-heal)"
+    ok "USE text in the kept dump + no probe verdict => gate continues"
 else
-    bad "USE-only failure wrongly failed fast — regressions of the old green path"
+    bad "the gate failed fast on kept-dump text alone, with no probe verdict"
 fi
 
 # 6b-2. REAL portage shape: a USE-ONLY failure that ALSO carries portage's
@@ -270,8 +272,8 @@ fi
 #       package.mask for >=sys-devel/gettext-0.23 into every role, and the
 #       pre-image gettext downgrade is a TOLERATED failure ("|| echo WARN"), so
 #       the image plan pass can legitimately see a package-masked installed
-#       gettext-0.23.2. The gate must still CONTINUE — the real merge runs
-#       --autounmask-continue=y and applies the USE change.
+#       gettext-0.23.2. The mask block must not be read as a KEYWORD/MASK wall:
+#       with no probe verdict the gate CONTINUES (6e/6h pin the USE verdict).
 #       This is the invariant 6b claims to protect; 6b's bare-USE fixture cannot
 #       see it, because the regression is triggered by the mask text 6b omits.
 cat > "${TMP}/kept.log" <<'FIXTURE'
@@ -391,11 +393,14 @@ else
     bad "the abort lost the lockstep-set guidance — the fix becomes whack-a-mole"
 fi
 
-# 6e. slot conflict + resolver needs only USE changes => continue. A slot
-#     conflict is NOT automatically fatal: --autounmask-continue=y applies USE
-#     changes mid-merge, so a USE-driven conflict can still self-heal. Making
-#     "slot conflict" itself the trigger would have been a fail-CLOSED bug of
-#     the same family, so it is pinned here.
+# 6e. slot conflict + resolver needs USE changes => exit 1. This leg used to
+#     pin "continue", on the belief that --autounmask-continue=y applies USE
+#     changes mid-merge. It does not: EMERGE_DEFAULT_OPTS carries
+#     --binpkg-respect-use=y, and portage then leaves automatic USE changes off
+#     unless --autounmask=y is passed (create_depgraph_params.py). Measured
+#     2026-10-21 by replaying the failed desktop build's sysroot: the merge's
+#     exact options print the wall; adding --autounmask=y prints the USE change.
+#     That build passed this gate on the old belief and died on the same wall.
 cat > "${TMP}/probe-use.txt" <<'PROBE'
 Calculating dependencies  ... done!
 The following USE changes are necessary to proceed:
@@ -403,21 +408,82 @@ The following USE changes are necessary to proceed:
 # required by kde-misc/kdeconnect-26.04.3-r3::gentoo
 >=net-dns/avahi-0.9 mdnsresponder-compat
 PROBE
-if HUGMESH_TEST_EMERGE_OUT="${TMP}/probe-use.txt" \
-   bash -c "set -eo pipefail; source '${TMP}/gate.sh'; hugmesh_payload_plan_gate" >/dev/null 2>&1; then
-    ok "slot conflict + USE-only resolution => gate continues (merge can self-heal)"
+out="$(HUGMESH_TEST_EMERGE_OUT="${TMP}/probe-use.txt" \
+       bash -c "set -eo pipefail; source '${TMP}/gate.sh'; hugmesh_payload_plan_gate" 2>&1)"
+rc=$?
+if [ "${rc}" -eq 1 ] && printf '%s' "${out}" | grep 'needs USE changes' >/dev/null; then
+    ok "slot conflict + USE-needing resolution => exit 1 (the merge cannot apply USE changes)"
 else
-    bad "a USE-healable slot conflict was wrongly aborted — fail-closed regression"
+    bad "slot conflict + USE-needing resolution did NOT fail fast (rc=${rc}) — the merge would die on the same wall after the gate"
+fi
+if printf '%s' "${out}" | grep '>=net-dns/avahi-0.9 mdnsresponder-compat' >/dev/null; then
+    ok "the USE abort surfaces the package.use line to pre-seed"
+else
+    bad "the USE abort did not print the line the operator has to pre-seed"
+fi
+
+# 6h. the 2026-10-21 desktop build, replayed: its kept dump carried the missing-
+#     USE wall (no keyword/mask token), and the probe (the gate's own options,
+#     run in that build's sysroot) printed exactly this. Verbatim.
+cat > "${TMP}/kept.log" <<'FIXTURE'
+Calculating dependencies ... done!
+emerge: there are no ebuilds built with USE flags to satisfy "~dev-qt/qtbase-6.11.2:6[accessibility=,gui,network=,opengl=,sql?,ssl?,vulkan=,wayland=,widgets=]".
+!!! One of the following packages is required to complete your request:
+- dev-qt/qtbase-6.11.2-r2::gentoo (Change USE: -wayland)
+- dev-qt/qtdeclarative-6.11.2-r1::gentoo (Change USE: +wayland)
+(dependency required by "dev-qt/qtdeclarative-6.11.2-r1::gentoo" [ebuild])
+FIXTURE
+cat > "${TMP}/probe-20261021.txt" <<'PROBE'
+Calculating dependencies ... done!
+Dependency resolution took 1.95 s (backtrack: 0/20).
+The following USE changes are necessary to proceed:
+ (see "package.use" in the portage(5) man page for more details)
+# required by dev-qt/qtquicktimeline-6.11.2::gentoo
+# required by dev-qt/qtquick3d-6.11.2::gentoo
+# required by dev-qt/qtmultimedia-6.11.2::gentoo[qml]
+# required by dev-qt/qtspeech-6.11.2::gentoo
+# required by net-im/neochat-26.08.1::gentoo
+# required by net-im/neochat (argument)
+>=dev-qt/qtdeclarative-6.11.2-r1 wayland
+PROBE
+if grep -Eq 'have been masked|keyword changes are necessary|mask changes are necessary' "${TMP}/kept.log"; then
+    bad "the 2026-10-21 kept fixture carries a wall token — 6h would exit on the text path, not the probe"
+else
+    ok "2026-10-21 kept fixture is wall-token-free (it must reach the resolver probe)"
+fi
+out="$(HUGMESH_TEST_EMERGE_OUT="${TMP}/probe-20261021.txt" \
+       bash -c "set -eo pipefail; source '${TMP}/gate.sh'; hugmesh_payload_plan_gate" 2>&1)"
+rc=$?
+if [ "${rc}" -eq 1 ] && printf '%s' "${out}" | grep '>=dev-qt/qtdeclarative-6.11.2-r1 wayland' >/dev/null; then
+    ok "2026-10-21 shape => exit 1 naming '>=dev-qt/qtdeclarative-6.11.2-r1 wayland' (not two more hours to the same wall)"
+else
+    bad "2026-10-21 shape did NOT fail fast with the qtdeclarative line (rc=${rc}) — the gate would again wave a certain failure through"
+fi
+# grep -a on the probe: one NUL byte anywhere in an emerge log makes GNU grep
+# treat it as binary and print "binary file matches" INSTEAD of the lines, so
+# the abort would tell the operator nothing about what to pre-seed.
+printf 'binary noise \000 here\n' >> "${TMP}/probe-20261021.txt"
+out="$(HUGMESH_TEST_EMERGE_OUT="${TMP}/probe-20261021.txt" \
+       bash -c "set -eo pipefail; source '${TMP}/gate.sh'; hugmesh_payload_plan_gate" 2>&1)"
+rc=$?
+if [ "${rc}" -eq 1 ] && printf '%s' "${out}" | grep -a '>=dev-qt/qtdeclarative-6.11.2-r1 wayland' >/dev/null; then
+    ok "a NUL byte in the probe output neither hides the USE verdict nor the line to pre-seed"
+else
+    bad "a NUL byte in the probe output hid the USE verdict or its pre-seed line (rc=${rc}) — a grep without -a"
 fi
 
 # 6f. a STALE probe file from an earlier build must not decide this one. The
 #     x86 builder resumes sysroots, so /tmp survives across runs. Seed a
-#     keyword-flavoured probe, then have the resolver report USE-only: the gate
-#     must CONTINUE, which it can only do if it read back just what THIS
+#     keyword-flavoured probe, then have the resolver report NO needed change:
+#     the gate must CONTINUE, which it can only do if it read back just what THIS
 #     resolution wrote. Mutating the gate's truncating ">" to ">>" flips this
 #     leg red, which is what makes it a control and not decoration.
+cat > "${TMP}/probe-none.txt" <<'PROBE'
+Calculating dependencies  ... done!
+Dependency resolution took 2.10 s (backtrack: 1/20).
+PROBE
 cp "${TMP}/probe-keyword.txt" "${TMP}/probe.log"
-if HUGMESH_TEST_EMERGE_OUT="${TMP}/probe-use.txt" \
+if HUGMESH_TEST_EMERGE_OUT="${TMP}/probe-none.txt" \
    bash -c "set -eo pipefail; source '${TMP}/gate.sh'; hugmesh_payload_plan_gate" >/dev/null 2>&1; then
     ok "a stale probe file from an earlier build does not abort this one"
 else

@@ -151,11 +151,11 @@ vendor's proprietary/closed **compute + Vulkan** stack on top.
 
 | `--gpu-driver` | VIDEO_CARDS | adds |
 |---|---|---|
-| `all-free` *(default)* | amdgpu radeonsi intel iris nouveau | — (any GPU; NVIDIA = nouveau) |
+| `all-free` *(default)* | amdgpu radeonsi radeon intel iris nouveau | — (any GPU; NVIDIA = nouveau) |
 | `nvidia-free` | nouveau | — |
 | `nvidia` | nouveau nvidia | `x11-drivers/nvidia-drivers` (NVIDIA-r2 EULA); nouveau blacklisted; `--nvidia-cuda` adds CUDA |
 | `amd-free` (alias `ati-free`) | amdgpu radeonsi radeon | — |
-| `amd-pro` | amdgpu radeonsi | `amdgpu-pro-vulkan` + `amdgpu-pro-opencl` + AMF (AMD-GPU-PRO-EULA) |
+| `amd-pro` | amdgpu radeonsi radeon | `amdgpu-pro-vulkan` + `amdgpu-pro-opencl` + AMF (AMD-GPU-PRO-EULA) |
 | `intel-free` | intel iris | — |
 | `intel-pro` | intel iris | `intel-compute-runtime` + iHD media driver + `vpl-gpu-rt` |
 | `none` | — | headless |

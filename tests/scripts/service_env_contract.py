@@ -39,7 +39,9 @@ stage printed "[SKIP] … (not checked out)", and this one will not repeat that.
 Usage: service_env_contract.py <specs/cluster dir> [--contract <file>]
                                [--service-src <dir>]
 Service sources are resolved from --service-src, $SERVICE_SRC_ROOT, <repo>/.service-src,
-<repo>/.stack-src, or the checkout's parent directory (sibling clones), in that order.
+<repo>/.stack-src, or the checkout's parent directory (sibling clones), in that order;
+in a linked `git worktree`, last of all the directory beside the MAIN checkout (where
+the sibling clones actually are).
 """
 from __future__ import annotations
 
@@ -400,6 +402,41 @@ def first_party_bff_containers(cluster: Path) -> list[ServiceContainer]:
     return out
 
 
+def _main_checkout_parent(repo_root: Path) -> Path | None:
+    """The directory holding the MAIN checkout, when repo_root is a linked worktree.
+
+    Read from git's own metadata, without running git (the CI image has none):
+    a linked worktree's `.git` is a FILE, `gitdir: <common>/worktrees/<name>`, and
+    that admin dir's `gitdir` file points back at `<worktree>/.git`. The back-pointer
+    is REQUIRED: a COPY of a worktree (a test's staged repo, a tarball) carries the
+    same `.git` file, and must not inherit the operator's sibling tree — that would
+    turn "the sources are missing" green. Anything unexpected -> None (no candidate).
+    """
+    dotgit = repo_root / ".git"
+    try:
+        if not dotgit.is_file():
+            return None
+        first = dotgit.read_text(encoding="utf-8").splitlines()[0].strip()
+        if not first.startswith("gitdir:"):
+            return None
+        admin = Path(first[len("gitdir:"):].strip())
+        if not admin.is_absolute():
+            admin = repo_root / admin
+        admin = admin.resolve()
+        if admin.parent.name != "worktrees":
+            return None
+        back = Path((admin / "gitdir").read_text(encoding="utf-8").strip())
+        if back.resolve() != dotgit.resolve():
+            return None
+        common_rel = (admin / "commondir").read_text(encoding="utf-8").strip()
+        common = (admin / common_rel).resolve()
+    except (OSError, IndexError, UnicodeDecodeError):
+        return None
+    if common.name != ".git" or not common.is_dir():
+        return None  # a bare repository has no main checkout, so no siblings beside one
+    return common.parent.parent
+
+
 def resolve_service_src(repo_root: Path, explicit: str | None, repos: set[str]) -> Path:
     """The tree holding the service checkouts whose application.yml we must read.
 
@@ -411,6 +448,12 @@ def resolve_service_src(repo_root: Path, explicit: str | None, repos: set[str]) 
         if raw:
             candidates.append(Path(raw))
     candidates += [repo_root / ".service-src", repo_root / ".stack-src", repo_root.parent]
+    # A linked `git worktree` lives wherever it was added, so its parent is not where
+    # the sibling clones are: they sit beside the MAIN checkout. Last in line, so the
+    # precedence above is unchanged, and still all-or-nothing like every candidate.
+    main_parent = _main_checkout_parent(repo_root)
+    if main_parent is not None and main_parent != repo_root.parent:
+        candidates.append(main_parent)
     tried: list[str] = []
     for cand in candidates:
         if not cand.is_dir():
