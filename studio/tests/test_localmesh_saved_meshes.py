@@ -1,4 +1,4 @@
-"""The SAVED MESHES table + 'Save this mesh' on the local-mesh page (ask C).
+"""The SAVED MESHES table + the Actions-row 'Save current mesh' (formerly 'Save this mesh') on the local-mesh page (ask C).
 
 Headless (QT_QPA_PLATFORM=offscreen); every docker/git override point is faked the way
 test_localmesh_page_entry_offthread.py fakes them, so nothing here shells out.
