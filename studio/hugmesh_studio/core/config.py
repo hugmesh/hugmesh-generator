@@ -293,14 +293,24 @@ ROLE_CHOICES = {
         # RPI5_ROLE_MAP; there is now one vocabulary (scripts/_roles-lib.sh) and
         # nothing to translate. Every old id still LOADS from a saved session — see
         # WorklistEntry.from_dict / BuildSession.from_dict.
-        ("pki", ("x86", "rpi5"), "PKI node — cluster certificate authority (x86 or Raspberry Pi 4/5)"),
-        ("backend", ("x86", "rpi5"), "Backend node (x86 or Raspberry Pi 4/5)"),
-        ("frontend", ("x86", "rpi5"), "Frontend node (x86 or Raspberry Pi 4/5)"),
+        # The Orange Pi 5 / 5 Plus builds pki/backend/frontend/omnibus and the 4 GB
+        # Orange Pi 4 LTS builds frontend only — both EXPERIMENTAL (no Orange Pi has
+        # booted an image from this repo; hardware validation pending). Installer
+        # flavor only. scripts/_roles-lib.sh HUGMESH_ROLES_ORANGEPI5/_ORANGEPI4LTS.
+        ("pki", ("x86", "rpi5", "orangepi5"),
+         "PKI node — cluster certificate authority (x86, Raspberry Pi 4/5, or Orange Pi 5 — EXPERIMENTAL)"),
+        ("backend", ("x86", "rpi5", "orangepi5"),
+         "Backend node (x86, Raspberry Pi 4/5, or Orange Pi 5 — EXPERIMENTAL)"),
+        ("frontend", ("x86", "rpi5", "orangepi5", "orangepi4-lts"),
+         "Frontend node (x86, Raspberry Pi 4/5, or Orange Pi 5 / 4 LTS — EXPERIMENTAL)"),
         ("backend-gpu", ("x86", "jetson"),
          "Backend + GPU node — a backend worker with a GPU, no inference service "
          "(x86, or Jetson Orin — EXPERIMENTAL)"),
-        ("omnibus", ("x86", "jetson"),
-         "Omnibus — every cluster role on one node (x86, or Jetson Orin — EXPERIMENTAL)"),
+        # omnibus on a Raspberry Pi 4/5 or Orange Pi 5 needs the board's RAM (8 GB+;
+        # ImageConfig.ram_gb -> --ram-gb): one image serves every RAM size it is sold in.
+        ("omnibus", ("x86", "jetson", "rpi5", "orangepi5"),
+         "Omnibus — every cluster role on one node (x86; Raspberry Pi 4/5 or Orange Pi 5 "
+         "with 8 GB+ RAM; Jetson Orin / Orange Pi — EXPERIMENTAL)"),
         # Person-device desktops attachable to the mesh (operator ask 2026-08-14):
         # checking one on the WorklistPage asks for the person's user + role via a
         # popup; the account is provisioned on the internal Tailscale root
@@ -1435,6 +1445,10 @@ _STANDALONE_DESKTOP_ROLES = ("standalone-thin", "standalone-thick", UNAFFILIATED
 # rpi5-desktop / jetson-desktop are the two COMPOSITE ids (a platform mangled into
 # the role string) that survive this change; see RPI5_ROLE_MAP above.
 _ARM_DESKTOP_ROLES = ("rpi5-desktop", "jetson-desktop", "frite", "orangepi5", "orangepi4-lts")
+# The Studio role ids that are cluster NODE roles on the Orange Pi node-axis boards
+# (orangepi5: pki/backend/frontend/omnibus; orangepi4-lts: frontend). Their desktop
+# keeps the board id as its role id ("orangepi5"/"orangepi4-lts"), unchanged.
+_ORANGEPI_NODE_ROLE_IDS = ("pki", "backend", "frontend", "omnibus")
 DESKTOP_ROLES = X86_CLIENT_ROLES + _STANDALONE_DESKTOP_ROLES + _ARM_DESKTOP_ROLES
 # Cluster-node / headless-appliance family (root-encrypted infra). X86_NODE_ROLES already
 # covers pki/backend/frontend/backend-gpu/omnibus/edge-ai (x86 AND rpi5 share
@@ -3007,6 +3021,10 @@ class ImageConfig:
     platform: str = "x86"              # x86 | rpi5 | frite | jetson -> BUILDER_SCRIPTS
     board: str = ""                    # frite: FRITE_BOARDS | jetson: JETSON_BOARDS | rpi5: RPI_BOARDS
     flavor: str = ""                   # frite: live | installer | both
+    # GB of RAM on the Raspberry Pi / Orange Pi board a cluster NODE image is for
+    # (--ram-gb). "" = not stated. REQUIRED for omnibus (8 GB+); for pki/backend/
+    # frontend the builder refuses a value below 4. x86/jetson do not take it.
+    ram_gb: str = ""
     env: str = "test"
     brand: str = "hugmesh"
     brand_title: str = "HugMesh Systems"
@@ -4280,6 +4298,14 @@ class ImageConfig:
             a += ["--luks-pass", self.luks_pass]
         return a
 
+    def _ram_gb_args(self) -> list[str]:
+        """--ram-gb N for a Pi / Orange Pi NODE role, when the RAM was stated. A desktop
+        or the Pi's generic server has no RAM floor, so nothing is emitted for them."""
+        ram = str(self.ram_gb or "").strip()
+        if not ram or image_class(self.mode, self.role) == "desktop" or self.role == "generic":
+            return []
+        return ["--ram-gb", ram]
+
     def _rpi5_args(self) -> list[str]:
         """build-rpi5-stage4.sh — arm64: pki | backend | frontend (cluster nodes)
         or desktop (client; compose with --standalone for FDE, no mesh). --board
@@ -4295,6 +4321,7 @@ class ImageConfig:
         a = ["--role", roles.builder_role(self.role, "rpi5")]
         if self.board:                 # rpi5 | rpi4 | rpi3 ("" = builder default: rpi5)
             a += ["--board", self.board]
+        a += self._ram_gb_args()
         # rpi5-only kernel/board overrides (x86 & the other ARM builders lack these).
         if self.dtb_prefix:
             a += ["--dtb-prefix", self.dtb_prefix]
@@ -4375,6 +4402,20 @@ class ImageConfig:
         shape exactly (this platform has ONE role — a client desktop — like
         Frite), minus Frite's --desktop light|none toggle (this platform has
         no headless variant to gate — see specs-orangepi5/README.md)."""
+        if self.role in _ORANGEPI_NODE_ROLE_IDS:
+            # Cluster NODE role (EXPERIMENTAL): --role + the board's RAM, installer
+            # flavor only (the builder refuses live/both for a node).
+            a = ["--board", self.board or "orange-pi-5-plus", "--flavor", "installer",
+                 "--role", roles.builder_role(self.role, "orangepi5")]
+            a += self._ram_gb_args()
+            if self.dtb:
+                a += ["--dtb", self.dtb]
+            a += self._uboot_args()
+            a += self._arm_common_args()
+            a += self._encrypt_root_args()
+            if self.image_only:
+                a += ["--image-only"]
+            return a
         a: list[str] = ["--board", self.board or "orange-pi-5-plus", "--flavor", self.flavor or "both"]
         if self.dtb:
             a += ["--dtb", self.dtb]
@@ -4457,7 +4498,21 @@ class ImageConfig:
           * SINGLE-BOARD, like the appliances: mainline ships exactly one
             Orange Pi RK3399 DTB and one U-Boot defconfig for the whole
             4/4B/4 LTS family, so a --board axis would be a fake axis.
-        See specs-orangepi4-lts/README.md."""
+        See specs-orangepi4-lts/README.md.
+
+        The ``frontend`` role is its one cluster NODE role (EXPERIMENTAL; 4 GB RAM,
+        16 GB eMMC): --role frontend, installer flavor only."""
+        if self.role in _ORANGEPI_NODE_ROLE_IDS:
+            a = ["--flavor", "installer", "--role", roles.builder_role(self.role, "orangepi4-lts")]
+            a += self._ram_gb_args()
+            if self.dtb:
+                a += ["--dtb", self.dtb]
+            a += self._uboot_args()
+            a += self._arm_common_args()
+            a += self._encrypt_root_args()
+            if self.image_only:
+                a += ["--image-only"]
+            return a
         a: list[str] = ["--flavor", self.flavor or "both"]
         if self.dtb:
             a += ["--dtb", self.dtb]
