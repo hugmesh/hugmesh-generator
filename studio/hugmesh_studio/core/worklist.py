@@ -227,6 +227,11 @@ class WorklistEntry:
     # role-derived name); non-"" = THIS image's -H/--hostname. Timezone and the
     # default account stay mesh-wide on the base — the issue accepts that for both.
     hostname: str = ""
+    # GB of RAM on the Raspberry Pi / Orange Pi board this NODE entry is for
+    # (ImageConfig.ram_gb -> --ram-gb). "" = not stated; REQUIRED for an omnibus
+    # entry on rpi5/orangepi5 (8 GB+). Serialized OMIT-WHEN-EMPTY, so every entry
+    # saved before the field existed keeps its bytes.
+    ram_gb: str = ""
 
     def __post_init__(self) -> None:
         if not self.id:
@@ -267,6 +272,7 @@ class WorklistEntry:
             **({"desktop_user_roles": list(self.desktop_user_roles)}
                if self.desktop_user_roles != [self.desktop_user_role] else {}),
             "hostname": self.hostname,
+            **({"ram_gb": str(self.ram_gb)} if self.ram_gb else {}),
         }
 
     @classmethod
@@ -428,6 +434,7 @@ class WorklistConfig:
         cfg.board = entry.board
         cfg.flavor = entry.flavor
         cfg.desktop = entry.desktop
+        cfg.ram_gb = str(entry.ram_gb or "")
 
         # 1b. Platform-aware default resolution — BEFORE the role-class gating in step 5
         #    (clear_role_class_fields keys image_class() on cfg.role, so a leaked x86

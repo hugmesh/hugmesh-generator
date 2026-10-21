@@ -90,7 +90,18 @@ def _read_lines(path: str) -> list[str]:
         return []
 
 
+# Lists a platform READS FROM ANOTHER platform's specs tree instead of carrying a
+# copy: the Orange Pi node roles install the Raspberry Pi k8s node set
+# (build-orangepi5-stage4.sh / build-orangepi4-lts-stage4.sh read
+# specs-rpi5/portage/packages-k8s.list directly).
+_SHARED_LIST_SOURCE = {
+    ("orangepi5", "packages-k8s"): "rpi5",
+    ("orangepi4-lts", "packages-k8s"): "rpi5",
+}
+
+
 def _list_path(generator_dir: str, platform: str, list_id: str) -> str:
+    platform = _SHARED_LIST_SOURCE.get((platform or "x86", list_id), platform)
     sub = SPECS_SUBDIR.get(platform or "x86", "specs-x86")
     return os.path.join(generator_dir, sub, "portage", f"{list_id}.list")
 
@@ -227,6 +238,8 @@ PLATFORM_LISTS: dict[str, tuple[ListSpec, ...]] = {
         ListSpec("packages", "base", _ALWAYS),
         ListSpec("packages-desktop", "desktop", _is_desktop),
         ListSpec("packages-live", "live", _flavor_live),
+        # cluster NODE roles (EXPERIMENTAL): the Raspberry Pi k8s node set
+        ListSpec("packages-k8s", "k8s", _NODE),
     ),
     "orangepizero2": (
         ListSpec("packages", "base", _ALWAYS),
@@ -244,13 +257,15 @@ PLATFORM_LISTS: dict[str, tuple[ListSpec, ...]] = {
         ListSpec("packages", "base", _ALWAYS),
         ListSpec("packages-live", "live", _flavor_live),
     ),
-    # UNLIKE every other Orange Pi platform here, this one also concatenates
-    # packages-desktop.list unconditionally: it is a light desktop with ONE role
-    # and no headless variant to gate, exactly like orangepi5 above.
+    # UNLIKE the appliance Orange Pi platforms, this one also concatenates
+    # packages-desktop.list for its light desktop (role id "orangepi4-lts", a desktop
+    # role) — but not for its frontend NODE role, exactly like orangepi5 above.
     "orangepi4-lts": (
         ListSpec("packages", "base", _ALWAYS),
-        ListSpec("packages-desktop", "desktop", _ALWAYS),
+        ListSpec("packages-desktop", "desktop", _is_desktop),
         ListSpec("packages-live", "live", _flavor_live),
+        # the frontend cluster NODE role (EXPERIMENTAL): the Raspberry Pi k8s node set
+        ListSpec("packages-k8s", "k8s", _NODE),
     ),
 }
 
