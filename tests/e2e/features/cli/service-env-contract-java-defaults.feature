@@ -18,8 +18,10 @@
 # are never written) and runs the real checker over it. Its assertions name
 # the artefacts a Java-aware checker would report: the stale host it found and
 # the file it found it in. The checker resolves service sources from
-# SERVICE_SRC_ROOT, else the siblings of this repo (CI clones them; a worktree
-# has no siblings, so set SERVICE_SRC_ROOT there).
+# SERVICE_SRC_ROOT, else the siblings of this repo (CI clones them). In a linked
+# `git worktree` the siblings are the ones beside the MAIN checkout, and the
+# checker looks there last; a COPY of a worktree (no back-pointer from git's
+# worktree metadata) gets no such fallback and stays INCOMPLETE.
 @interface:cli @issue:generator-507
 Feature: the service env-contract gate sees a stale Java hardcode hiding behind an empty yaml default
 
@@ -37,8 +39,11 @@ Feature: the service env-contract gate sees a stale Java hardcode hiding behind 
     When I run the shell script:
       """
       set -euo pipefail
-      # Resolve the service sources the way the checker itself does.
-      src="${SERVICE_SRC_ROOT:-$(dirname "$HUGMESH_BDD_REPO_ROOT")}"
+      # Resolve the service sources BY ASKING THE CHECKER, so SERVICE_SRC_ROOT,
+      # .service-src and a worktree's siblings all resolve exactly as it does.
+      src="$( { python3 tests/scripts/service_env_contract.py specs/cluster 2>/dev/null || true; } \
+        | sed -n 's/^  --   service sources: \(.*\) (.*$/\1/p' | head -1)"
+      [ -n "$src" ] && [ -d "$src" ] || { echo "the checker resolved no service-source tree (set SERVICE_SRC_ROOT)"; exit 3; }
       staged="$HUGMESH_BDD_SCRATCH/service-src"
       n=0
       for y in "$src"/hugmesh-*/src/main/resources/application.yml; do
