@@ -57,7 +57,19 @@ __all__ = ["LocalMeshDomains", "bootstrap_domain_records", "own_idp_names",
            "added_row_problems", "domains_from_bootstrap", "reviewed_record_names",
            "record_walk", "imported_mesh_domains", "apply_imported_domains",
            "imported_domains_lines",
-           "DOMAIN_NAME_RE", "LOCAL_MESH_REMEDY", "SAVED_MESH_REMEDY"]
+           "DOMAIN_NAME_RE", "LOCAL_MESH_REMEDY", "SAVED_MESH_REMEDY",
+           "DOCKER_SERVICES_NOTE"]
+
+#: The one sentence a per-domain services step shows on the local Docker mesh route
+#: since the mesh-wide "Local services" pick was retired (2026-10-21). It REPLACES the
+#: older lane note ("…it is NOT what decides which compose profiles come up; the
+#: mesh-wide ‘Services’ step is"), which stopped being true the day per-domain services
+#: became what the mesh runs (``LocalMeshBootstrapConfig.effective_services``).
+DOCKER_SERVICES_NOTE = (
+    "ON THIS LOCAL DOCKER MESH: what you tick here runs. The mesh starts every service "
+    "any of its domains chose (one copy each, shared by the domains that chose it); the "
+    "mesh's own infrastructure (Tor, the egress VPN, Anubis, the AI services, the wiki) "
+    "is chosen once for the whole mesh.")
 
 #: A domain row's name: a lowercase dotted hostname (the TUI Domains steps' shape).
 DOMAIN_NAME_RE = re.compile(

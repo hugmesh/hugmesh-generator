@@ -309,6 +309,8 @@ def test_a_saved_mesh_wide_selection_migrates_into_the_domains():
     assert set(cfg.effective_services()) == before
     assert (cfg.effective_social(), cfg.effective_with_tor(), cfg.effective_games()) == (
         True, True, True)
+    # the legacy mirrors every raw reader still reads agree with what runs
+    assert (cfg.social, cfg.with_tor) == (True, True)
     md = domains_from_bootstrap(cfg)
     assert md.by_name(OWN).optional_services == ["tuwunel", "games"]
     assert OWN in md.domain_services_reviewed
