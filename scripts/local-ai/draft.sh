@@ -96,8 +96,10 @@ if ! git -C "$SRC" worktree add -f --detach "$SCRATCH" "$BASE" >>"$OUT/agent.log
 fi
 note "scratch worktree $SCRATCH at $(git -C "$SCRATCH" rev-parse --short HEAD) ($BASE)"
 
+# HUGMESH_AGENT_CONTEXT: the project-context file the Studio writes when it starts the
+# worker (studio core/agent_context.py); draft.py hands its text to an agent. Empty = none.
 timeout "${TODO_TIMEOUT:-1500}" env -i PATH="$PATH" HOME="$HOME" LANG="${LANG:-C.UTF-8}" TERM=dumb \
-  OLLAMA_HOST="$host" \
+  OLLAMA_HOST="$host" HUGMESH_AGENT_CONTEXT="${HUGMESH_AGENT_CONTEXT:-}" \
   python3 "$HERE/draft.py" --repo "$REPO" --issue "$N" --out "$OUT" --work "$SCRATCH" \
     --model "$LA_MODEL" --agent "$AGENT" --timeout "${TODO_TIMEOUT:-1500}" >>"$OUT/agent.log" 2>&1 </dev/null &
 TPID=$!

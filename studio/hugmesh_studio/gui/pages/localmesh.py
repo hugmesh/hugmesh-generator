@@ -158,7 +158,6 @@ from .domain_services import DomainServicesWidget
 from .domains import DomainsTableWidget
 from ._mesh_monitor_widget import MeshMonitorProbe, MeshMonitorWidget, MeshScaleWorker
 from ._add_user_dialog import AddUserDialog
-from ._local_agent_widget import LocalAgentWidget, context_from_page
 from ._code_folders_widget import CodeFoldersWidget
 from ._saved_meshes_widget import SavedMeshProbe, SavedMeshesWidget
 from ._logintheme import LoginThemeGroup
@@ -571,6 +570,9 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         # steps, and a saved-mesh Start on a flow that never opened the step, keep
         # passing the gate exactly as before).
         self.mesh_domains = LocalMeshDomains()
+        #: The parts the bottom panel (gui/_local_ai_dock.py) holds; see take_section.
+        self._docked: set = set()
+        self._dock_reveal = None
         # THE BRAND CARRIER (#654, D8): the one bootstrap configuration the superbrand
         # session (tui/superbrand_step.py) reads and writes, so the picker, the design
         # and the text screens all drive one model. It holds only what the session owns:
@@ -877,6 +879,10 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         # The monitor adds NO probe here: its first snapshot rides _on_mesh_state's
         # slot, which keeps "entering the page returns immediately" provable.
         self._sync_monitor_gate()
+        # Arriving at the bring-up step opens the bottom panel on the actions, which now
+        # live there (a no-op without a panel).
+        if "actions" in self._docked:
+            self._reveal_in_dock("mesh")
 
     # ── section plumbing ────────────────────────────────────────────────────────
     def _stepped_sections(self) -> set:
@@ -907,7 +913,40 @@ class LocalMeshPage(QtWidgets.QWizardPage):
             if sec is not None and sec.parentWidget() is host:
                 sec.setVisible(False)
 
-    def take_section(self, key: str, layout) -> "QtWidgets.QWidget | None":
+    def _claimable(self, key: str) -> "QtWidgets.QWidget | None":
+        """The widget behind a claim key: a section, or one of the three parts the
+        bottom panel takes ("actions", "monitor", "run")."""
+        parts = {"run": getattr(self, "run_view", None),
+                 "actions": getattr(self, "actions_box", None),
+                 "monitor": getattr(self, "monitor_section", None)}
+        return parts[key] if key in parts else self.sections.get(key)
+
+    def docked_parts(self) -> tuple:
+        """The parts the bottom panel holds (empty without a panel)."""
+        return tuple(self._docked)
+
+    def _reveal_in_dock(self, tab: str) -> None:
+        """Ask the bottom panel to open on ``tab`` (no-op without a panel)."""
+        reveal = getattr(self, "_dock_reveal", None)
+        if reveal is not None:
+            try:
+                reveal(tab)
+            except Exception:                    # noqa: BLE001 — a panel must not break the page
+                pass
+
+    def attach_dock(self, reveal) -> None:
+        """Called by the bottom panel once it holds this page's parts: ``reveal(tab)``
+        opens it on a tab. Shows the note that says where the parts went."""
+        self._dock_reveal = reveal
+        self.dock_note.setVisible(bool(self._docked))
+        if self._docked and not getattr(self, "_dock_stretch", False):
+            # the run view used to take this page's spare height (stretch 1); with it in
+            # the panel, a trailing stretch keeps the note at the top instead of floating
+            # in the middle of an empty page
+            self._body.addStretch(1)
+            self._dock_stretch = True
+
+    def take_section(self, key: str, layout, *, dock: bool = False) -> "QtWidgets.QWidget | None":
         """Move section ``key`` into ``layout`` and return it (None for an unknown key).
 
         Adding a widget to a layout re-parents it, so this IS the move — there is no
@@ -920,11 +959,17 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         page adds one so its content sits at the top), and at the end otherwise (this
         page's own body, where the run view must stay last).
         """
-        w = self.run_view if key == "run" else self.sections.get(key)
+        w = self._claimable(key)
         if w is None:
             return None
         host = layout.parentWidget()
         if host is not None and w.parentWidget() is host:
+            return w
+        # THE BOTTOM PANEL'S CLAIM IS FINAL. Every page that used to claim the run view
+        # (this one, the join step, the review step) still calls take_section on every
+        # show; once the panel holds a part, those calls leave it where it is, or the
+        # panel would lose its log each time a page was shown.
+        if key in self._docked and not dock:
             return w
         idx = layout.count()
         for i in range(layout.count()):
@@ -933,7 +978,9 @@ class LocalMeshPage(QtWidgets.QWizardPage):
                 break
         # stretch 1 for the run view only: the staged tree + log is the one block that
         # should absorb a step page's spare height.
-        layout.insertWidget(idx, w, 1 if key == "run" else 0)
+        layout.insertWidget(idx, w, 1 if key in ("run", "monitor") else 0)
+        if dock:
+            self._docked.add(key)
         # setParent() hides a widget; a section that has been moved must be shown
         # again. The blocks INSIDE it keep their own visibility (prod_group's
         # test/prod toggle, every Collapsible's fold) — those are children, untouched.
@@ -1886,20 +1933,31 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         # No trailing addStretch: a FlowLayout has no stretch concept, and a
         # spacer item would be wrapped as if it were another button.
         lay.addWidget(brow_box)
-        # LOCAL AI AGENT (#695). The Docker mesh and the kind DevOps lane end on this one
-        # page, so one card serves both (its Lane drop-down only changes the brief). It
-        # reads the source choice and domains at press time through the context callable;
-        # the one hook is completeChanged, which fires at every verb start and end, so the
-        # card's Lane follows the lane whose verb just ran (Start DevOps lane -> kind).
-        self.local_agent = LocalAgentWidget(
-            self.generator_dir, context=lambda: context_from_page(self))
-        lay.addWidget(self.local_agent)
-        self.completeChanged.connect(self.local_agent.refresh_apps)
-        # The source cards too: the stepped wizard re-shows the card after the Repo
-        # source step, but the single-page frame has no step change, so a changed
-        # source choice there would keep listing the other tree's apps until Re-check.
-        self.src_existing.toggled.connect(lambda _on: self.local_agent.refresh_apps())
-        self.src_dir.textChanged.connect(lambda _t: self.local_agent.refresh_apps())
+        # THE BOTTOM PANEL (operator ask 2026-10-21). In a Studio window this Actions box,
+        # the running-mesh monitor and the run view are claimed by the panel docked at
+        # the bottom of the window (gui/_local_ai_dock.py, take_section(..., dock=True)),
+        # so they can be opened on ANY page, or in a window of their own, and a verb
+        # keeps running whatever page is on screen. A host with no panel (the standalone
+        # LocalMeshDialog, a bare wizard) keeps all three here, exactly as before.
+        # The local AI agent card that used to sit here (#695) moved to that panel too:
+        # the operator asked for it out of the build phase.
+        self.actions_box = brow_box
+        self.dock_note = QtWidgets.QWidget()
+        _dn = QtWidgets.QHBoxLayout(self.dock_note)
+        _dn.setContentsMargins(0, 0, 0, 0)
+        self.dock_note_label = _grey_note(
+            "The actions, the running mesh (pods and containers) and the run log are in "
+            "the panel at the bottom of this window. It stays there on every page, and "
+            "it can open in a window of its own. A verb you start keeps running whatever "
+            "page you are on.")
+        self.dock_note_btn = QtWidgets.QPushButton("Show the panel")
+        self.dock_note_btn.setToolTip("Open the bottom panel on its Local mesh tab.")
+        self.dock_note_btn.clicked.connect(lambda: self._reveal_in_dock("mesh"))
+        self.dock_note_label.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
+        _dn.addWidget(self.dock_note_label, 1, Qt.AlignmentFlag.AlignTop)
+        _dn.addWidget(self.dock_note_btn, 0, Qt.AlignmentFlag.AlignTop)
+        self.dock_note.setVisible(False)
+        lay.addWidget(self.dock_note)
 
         # ── RUNNING-MESH MONITOR (operator ask, 2026-09-01): every pod and container
         # of BOTH lanes, its addresses, and an Open button only where the browser may
@@ -2044,7 +2102,10 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         # the FOLD STATE survives the visit, so a section the operator left open
         # must get its 10 s refresh back or it freezes on the page-entry read while
         # its own tooltip still promises "refreshed every 10 s".
-        self._monitor_timer.stop()
+        # Not when the bottom panel holds the monitor: it is on screen on every page
+        # then, and _on_monitor_tick reads the TABLE's visibility, not this page's.
+        if "monitor" not in self._docked:
+            self._monitor_timer.stop()
         super().hideEvent(event)
 
     def _reclaim_sections(self) -> None:
@@ -4041,7 +4102,10 @@ class LocalMeshPage(QtWidgets.QWizardPage):
             self._monitor_timer.stop()
 
     def _on_monitor_tick(self):
-        if not (self.isVisible() and self.monitor_section.is_expanded()):
+        # The TABLE must be on screen, wherever it is: on this page (where that means
+        # this page is shown and the section unfolded) or in the bottom panel, which is
+        # on screen while the person is on any other page.
+        if not (self.monitor.isVisible() and self.monitor_section.is_expanded()):
             return
         if self._running:
             self._sync_monitor_gate()           # the note says "paused"

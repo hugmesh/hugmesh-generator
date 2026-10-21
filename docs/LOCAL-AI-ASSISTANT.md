@@ -59,6 +59,14 @@ curl -fsSL https://ollama.com/install.sh -o /tmp/ollama-install.sh && less /tmp/
 docker run -d --gpus=all -v ollama:/root/.ollama -p 127.0.0.1:11434:11434 --name ollama ollama/ollama
 ```
 
+The Studio can run (c) for you instead of using a system Ollama: pick **Ollama in
+Docker** in the Assistant tab of its bottom panel. It runs `ollama/ollama:0.40.0` pinned
+by digest as the container `hugmesh-studio-ollama`, on `127.0.0.1:11435` (so it never
+takes a system Ollama's 11434), keeps models in the volume `hugmesh-studio-ollama-models`
+and passes the GPU through only when Docker can provide one. Pull a model into it with
+`docker exec hugmesh-studio-ollama ollama pull qwen3:8b`. Everything the assistant does
+then talks to that port (`OLLAMA_HOST=127.0.0.1:11435`).
+
 macOS and Windows use the installer from <https://ollama.com/download>.
 
 Check it:
@@ -191,7 +199,7 @@ read all of it.
 
 ### 6.1 Give the assistant a copy, never your working checkout
 
-The Studio can do 6.1 and 6.2 for you: the card *Work on this mesh with a local AI agent* on the local-mesh Bring-up page makes this copy and opens the terminal ([studio/README.md](../studio/README.md)).
+The Studio can do 6.1 and 6.2 for you: the agent launcher in the **Assistant** tab of the Studio panel (the strip along the bottom of every Studio window; it used to be the card *Work on this mesh with a local AI agent* on the local-mesh Bring-up page) makes this copy, writes the brief and a fresh project-context file (`HUGMESH-CONTEXT.md`: the org, the repositories, the Studio and where every local source is) beside it, and opens the terminal ([studio/README.md](../studio/README.md)).
 
 The assistant gets a scratch clone **with no remote**, so nothing it does can be
 pushed, and nothing it breaks touches your real checkout.
@@ -501,9 +509,13 @@ loop), `issues.py` (reads `gh` output: which issues to pick, how to print one) a
 
 ### 11.2 The same status in the Studio
 
-* **Window.** Every Studio page has a **Local AI** bar along the bottom: one line of
+* **Window.** Every Studio page has the Studio panel along the bottom (it also holds
+  the local-mesh actions, the running mesh, the run log and the image builds; see
+  studio/README.md, "The Studio panel"): one line of
   status (`Local AI: ready, qwen3:8b loaded, 2 queued, 1 running`), a chevron that
-  expands it into a prompt line and an answer area (Enter sends, and only sends: the
+  expands it into its tabs, the first of which is a prompt line and an answer area
+  beside the assistant's options — which Ollama it uses (system or the Studio's Docker
+  one), where your checkouts are, and the local AI agent launcher (Enter sends, and only sends: the
   wizard stays on the page you were on, so a question never presses Next or starts a
   build; Escape only cancels the current input or dialog: with text in the prompt it
   clears the prompt and nothing else, and from any other part of the bar (an empty
@@ -521,13 +533,16 @@ loop), `issues.py` (reads `gh` output: which issues to pick, how to print one) a
   than passed off as a finished answer), a **Start local assistant** button (runs `scripts/local-ai.sh start` detached)
   and a **Current work** button that opens a window listing the queue, the drafts with
   their STATUS and a button to open each draft diff, the model loaded and the Studio's
-  own running builds. The bar remembers whether you left it open or closed. Nothing
-  starts until you press a button; the bar never opens a modal dialog.
+  own running builds. The bar remembers whether you left it open or closed, and **Pop
+  out** moves its tabs into a window of their own. Nothing starts until you press a
+  button; the bar never opens a modal dialog.
 * **Text screen.** `python -m hugmesh_studio.tui` shows the same status line as the
   bottom row of every screen (it reads the worker's `status.json` and makes no network
   call, so it costs nothing to redraw). **F2** opens the Local AI screen over the screen
   you are on: a live status, the work list, and a prompt line (anything you type that
-  is not `start`, `r`, `clear` or `q` is sent to the local model); `q` returns to
+  is not `start`, `r`, `clear`, `q` or `ollama docker|system` is sent to the local
+  model; `ollama docker` and `ollama system` switch the Ollama in use, the same saved
+  choice as the Studio panel's); `q` returns to
   exactly where you were. The plain-prompt face (no urwid, or `NO_TUI=1`) prints the
   status line above every prompt and opens the same screen when you type `local-ai`
   (the urwid face accepts that too). The key and the command work on every screen —
