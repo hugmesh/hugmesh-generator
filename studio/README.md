@@ -251,18 +251,26 @@ back**, to return it). Its tabs:
     (empty = the folder that holds this generator checkout, or `$HUGMESH_REPOS_ROOT`).
   - the **local AI agent launcher** described below.
 - **Local mesh** — the local-mesh Actions box (Generate & start, Stop mesh, Check
-  readiness, the DevOps lane, Add user, Save this mesh, …).
+  readiness, the DevOps lane, Add user, Save this mesh, …). The status line is copied
+  just above the buttons, so a press that is refused says why right there. Off the
+  local-mesh steps (the Welcome page, say) the first press of **Generate & start** only
+  arms it ("Press again to start"): the settings have not been reviewed yet.
 - **Running mesh** — every pod and container of both lanes, with addresses, doors and
   replicas. It keeps refreshing on any page while it is on screen.
 - **Mesh run** — the stage tree and log of the local-mesh verb that is running. The panel
   opens on it when a verb starts, wherever you are.
-- **Image builds** — every image build this Studio is running, and the mesh verb;
-  **Show this build** brings its window to the front (the tray's door).
+- **Image builds** — every image build this Studio is running, and the mesh verb; the
+  picked build's log is followed live beside the list (its last 400 lines), and **Show
+  this build** brings its window, with the stages and packages, to the front (the tray's
+  door).
 
 These are the local-mesh page's own widgets, moved into the panel, so a verb keeps
 running and streaming whatever page you are on, with the panel collapsed or popped out.
-The Bring-up step now holds a note saying where they went and a **Show the panel** button,
-and arriving at it opens the panel on its Local mesh tab. The standalone single-page frame
+The Bring-up step now holds a note saying where they went and a **Show the panel** button;
+arriving at it opens the panel on its Local mesh tab, and while it is on screen the panel
+takes most of the window. A refusal from a button outside the Local mesh tab (a saved
+mesh's Start on the review step, the join step's Start, a pod row's Open) opens the panel
+on its Mesh run tab, where the status line is. The standalone single-page frame
 (`LocalMeshDialog`), which has no panel, still shows them on its page.
 
 ## Local mesh: work on it with a local AI agent (issue #695)

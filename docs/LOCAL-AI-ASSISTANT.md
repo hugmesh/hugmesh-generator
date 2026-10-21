@@ -397,6 +397,18 @@ pulled) and prints the problem, the fix and a link to this page. A server that i
 but drops the connection mid-reply, or answers something that is not HTTP, counts as
 not answering: the same sentence, never a traceback, and the worker keeps beating.
 
+**What the worker runs with.** `start` (the Studio panel's and the text screen's
+**Start** run it too) gives the worker two variables: `HUGMESH_REPOS_ROOT`, the folder
+that holds your checkouts, and `HUGMESH_AGENT_CONTEXT`, a project-context file
+(`HUGMESH-CONTEXT.md` in the state directory: the org, the repositories, the Studio and
+where every local source is). The Studio writes that file with the mesh's domains and
+their code folders; started from a terminal, `start` writes it without them. `draft.sh`
+writes it again right before each agent, so the checkouts it lists are the ones on disk
+at that moment. The worker records what it runs with in `worker.env`; when a later
+`start` would use another Ollama address (the Studio's system/Docker switch), another
+context file or another checkouts folder, it restarts the worker (a job in hand goes
+back to the queue) instead of keeping the old one. `todo` never restarts a worker.
+
 **What a draft does.** `todo` asks `gh` (with your own login) for the open issues of
 the repository, drops the ones labelled `manual`, `decision`, `roadmap` or `blocked`
 and the ones with a long description, and queues the smallest as *draft jobs*. A draft
