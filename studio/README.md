@@ -78,7 +78,11 @@ mesh node** from the system tray.
 Under the Repo source cards, a **Code folders** block lists every domain from the
 Domains step and, under each, the apps that domain runs: the platform apps (one set
 of images serves every domain) plus the optional services chosen for it on the
-Domain services step, marked `[<slug>]`. Each row names the git checkout compose
+Domain services step, marked `[<slug>]`. The apps of a per-domain service the domain
+did NOT choose are not listed under it (owncast, tube, the two character apps, and
+the Matrix and Mastodon front ends of tuwunel/akkoma; `code_folders.service_owners`):
+compose still builds them for the whole mesh, and one note under the domain names
+what was left out. Each row names the git checkout compose
 builds that app from and has an **Open folder** button; every domain has **Open
 all**; the block has **Open source root**. The folder is the one the build reads —
 `<source dir>/hugmesh-<name>` with *Build from a source tree I already have*,
@@ -99,6 +103,46 @@ tuwunel, the databases) gets a note instead of a row. In *Download the source* m
 the block says that `make stack-clone` git-resets the checkouts under `.stack-src`
 (only ones holding local commits are kept), and that the other mode never touches
 yours.
+
+**Copies for each domain.** Under each domain's rows, the block gives that domain its
+own folder of git copies (`core/domain_workspaces.py`):
+`<state dir>/domain-code/<mesh>/<domain>/<app>.<domain>/`, one per app the domain has
+(only `hugmesh-<name>` checkouts; the games and Tor folders and stock images get
+none). **Make N copies** runs on a worker thread and `git clone`s each missing app from
+the build checkout above (local, no network, the exact commit the mesh compiles), then
+names the copy for its domain: branch `domain/<domain>`, `.git/description` "<app> for
+the domain <domain>", and `git config hugmesh.domain` / `hugmesh.app` /
+`hugmesh.mesh`. The remote stays `origin` = the build checkout it came from. A marker
+file, `.git/hugmesh-workspace.json`, is written last; only a folder carrying it is ever
+treated as the Studio's. Once a copy exists, its row shows and opens the copy (the
+build folder is in the row's tooltip). The copies do not change what the mesh builds:
+an edit reaches the mesh once it is in the build tree (push it, or pull it there), and
+the block says so.
+
+Domain names become folder names made safe (lower case, only `a-z 0-9 . -`, no `..`,
+no leading dot or dash); two domains that would share a folder are refused. Nothing is
+created or removed through a symbolic link, and no copy is ever made inside a
+`.stack-src`. When a service is un-ticked on a domain, its copies are listed as
+**extra**, and so is the folder of a domain that is not in the mesh. **Remove N extra
+folders…** removes nothing on the first click: it checks each folder (off the window's
+thread) and lists what it holds ("a plain copy: no edits, commits, stashes or ignored
+files of its own", or "holds 1 stashed change — it will be kept"). The second click
+re-reads the disk and removes only the folders that the first click listed, that are
+still extra and still a plain copy; **Keep them** cancels. A copy is always kept when it
+has changed, untracked or ignored files (a `.env`, build output), commits on ANY of its
+branches or tags that no remote has, stashed changes, or another working tree made from
+it. Not seen: a commit no branch, tag or stash points to any more (only git's reflog
+has it). A folder the Studio did not make is listed as "left alone" and never offered.
+
+The copies folder is named for the mesh's own domain, and every test mesh has the same
+one, so meshes share it. A copy this mesh does not need but a **saved** mesh still has
+(same domain, same app) is listed as kept, with that mesh's name, and never offered
+for removal; the saved mesh the form was loaded from does not count. A mesh that was
+never saved cannot be checked, so save a mesh before removing another one's folders.
+
+On the text interface the same screen is `f` on the Local Docker mesh review
+(`m N` / `m all` makes copies, `r N` lists extras, `yes` removes what `r` listed,
+anything else keeps them; `src PATH` copies from your own tree).
 
 Opening (`core/open_path.py`) uses `xdg-open`/`gio` on Linux, `explorer.exe` via
 `wslpath` on WSL2, `os.startfile` on Windows and `open` on macOS, with Qt's desktop

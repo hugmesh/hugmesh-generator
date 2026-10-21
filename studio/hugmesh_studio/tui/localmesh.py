@@ -55,6 +55,7 @@ from ..core.local_mesh_domains import (DOCKER_SERVICES_NOTE, DOMAIN_NAME_RE,
                                        LocalMeshDomains, bootstrap_domain_records,
                                        own_idp_names)
 from . import model
+from .code_folders_step import CodeFoldersScreen
 from .domain_services_step import DomainServicesScreen
 from .domains_step import IDP_LABELS, OWN_IDP, set_github_org
 from .superbrand_step import CREATE_KEY, BrandSession, SuperbrandScreen, session_for
@@ -161,7 +162,8 @@ class _DockerSuperbrandScreen(SuperbrandScreen):
 
 
 class LocalMeshScreen:
-    """The side-flow: ``choice`` -> ``domains`` -> ``services`` -> ``review``."""
+    """The side-flow: ``choice`` -> ``domains`` -> ``services`` -> ``review``, and from
+    the review ``f`` -> ``folders`` (the per-domain code copies, tui/code_folders_step)."""
 
     slug = "localmesh"
     title = "Local Docker mesh"
@@ -181,6 +183,11 @@ class LocalMeshScreen:
             # each domain's four Brand settings sections, as the window's tabs: row 0's
             # Look is the mesh's own look (the one place it is chosen on this route)
             brand_session_of=self.brand_session, route="docker")
+        # the per-domain code copies (2026-10-21): ``f`` on the review screen
+        self.folders = CodeFoldersScreen(
+            rows_of=lambda j: self.state(j).domains,
+            mesh_of=lambda j: self.state(j).own_name,
+            on_back=lambda j: self._goto(j, "review"))
 
     # ── state ──────────────────────────────────────────────────────────────────
     @staticmethod
@@ -285,6 +292,8 @@ class LocalMeshScreen:
     def prompt(self, j) -> str:
         if self.stage == "services":
             return self.services.prompt(j)
+        if self.stage == "folders":
+            return self.folders.prompt(j)
         return f"localmesh-{self.stage}> "
 
     def lines(self, j) -> list[str]:
@@ -466,6 +475,12 @@ class LocalMeshScreen:
     def _feed_services(self, j, line: str) -> None:
         self.services.feed(j, line)
 
+    def _lines_folders(self, j) -> list[str]:
+        return self.folders.lines(j)
+
+    def _feed_folders(self, j, line: str) -> None:
+        self.folders.feed(j, line)
+
     # ── review: the gate, then what the TUI can hand over ───────────────────────
     def refusal(self, j) -> str:
         """The SAME gate both GUI start doors call, with this route's remedy."""
@@ -476,8 +491,8 @@ class LocalMeshScreen:
         refusal = self.refusal(j)
         if refusal:
             return [refusal, "",
-                    "commands: b=back to the Domain services step · Enter=back to "
-                    "the menu of choices"]
+                    "commands: b=back to the Domain services step · f=code copies "
+                    "for each domain · Enter=back to the menu of choices"]
         out = ["Domains and their services are configured.", ""]
         headers = ["domain", "sign-in", "services (what this mesh runs)"]
         rows = [[d.name, IDP_LABELS.get(d.idp, d.idp),
@@ -500,8 +515,8 @@ class LocalMeshScreen:
                 "superbrand's record; the "
                 "per-domain services have no CLI flag — the GUI records them with the "
                 "saved mesh.",
-                "", "commands: b=back to the Domain services step · Enter=back to the "
-                "menu of choices"]
+                "", "commands: b=back to the Domain services step · f=code copies "
+                "for each domain · Enter=back to the menu of choices"]
         return out
 
     def records(self, j) -> tuple[dict, ...]:
@@ -513,6 +528,9 @@ class LocalMeshScreen:
     def _feed_review(self, j, line: str) -> None:
         if line.lower() == "b":
             self._goto(j, "services")
+            return
+        if line.lower() == "f":
+            self.stage = "folders"
             return
         if line == "":
             j.goto("mode")

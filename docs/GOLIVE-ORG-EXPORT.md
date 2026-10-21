@@ -54,8 +54,9 @@ mesh on this machine names an org, or when you add a config file on the step its
 
 1. computes the repository set of the domain — the same map the Repo-source step's
    *Code folders* block shows (`core/code_folders.py`): every first-party compose
-   build context the mesh builds (the platform apps), plus what the domain's selected
-   optional services add — for the mesh's own domain that is its row's selection AND
+   build context the mesh builds (the platform apps) except the apps of a per-domain
+   service the domain did not choose (owncast, tube, the character apps, the Matrix and
+   Mastodon front ends), plus what the domain's selected optional services add — for the mesh's own domain that is its row's selection AND
    the mesh-wide *Services* step's list, because the per-row selection is recorded and
    the Services step is what the mesh actually runs — minus stock images; then the Java build chain
    (`hugmesh-build-config`, `hugmesh-parent`, `hugmesh-commons`, `hugmesh-auth-core`)

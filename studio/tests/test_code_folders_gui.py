@@ -186,8 +186,8 @@ def test_each_open_folder_button_hands_exactly_its_folder_to_the_opener(wiz, src
     block.set_opener(opener)
     enabled = {k for k, b in block.open_buttons.items() if b.isEnabled()}
     own = ctl.mesh_domains.own_name
+    # the own domain chose no owncast, so it has no owncast row (2026-10-21)
     assert enabled == {(own, "hugmesh-gateway"), (own, "hugmesh-admin-ui"),
-                       (own, "hugmesh-owncast-ui"),
                        ("chat.example.org", "hugmesh-gateway"),
                        ("chat.example.org", "hugmesh-admin-ui"),
                        ("chat.example.org", "hugmesh-owncast-ui"),
@@ -283,10 +283,11 @@ def test_open_all_opens_every_existing_folder_of_that_domain_once(wiz, src_tree)
     assert os.path.join(src_tree, "hugmesh-forum-api") in opener.paths
     opener.paths.clear()
     block.open_all_buttons[own].click()
-    assert len(opener.paths) == 3 and os.path.join(src_tree, "hugmesh-forum-api") \
+    assert len(opener.paths) == 2 and os.path.join(src_tree, "hugmesh-forum-api") \
         not in opener.paths
+    assert os.path.join(src_tree, "hugmesh-owncast-ui") not in opener.paths
     assert block.result_note.isVisible()
-    assert "Opened 3 folders" in block.result_note.text()
+    assert "Opened 2 folders" in block.result_note.text()
 
 
 def test_open_all_is_disabled_when_no_folder_of_the_domain_exists(wiz, tmp_path):
@@ -410,7 +411,7 @@ def test_open_all_with_a_file_manager_that_never_exits_waits_once_not_per_folder
     _every_folder_present(tmp_path, ctl, block)
     own = ctl.mesh_domains.own_name
     folders = block.map.domains[0].openable_paths()
-    assert len(folders) >= 20, "this test needs a domain with most of its folders present"
+    assert len(folders) >= 15, "this test needs a domain with most of its folders present"
     host = StillRunningHost(clock)
     block.set_host(host)
     block.open_all_buttons[own].click()
@@ -505,6 +506,14 @@ def _buttons(block):
     out = [("root", block.open_root_btn)]
     out += [((d, "ALL"), b) for d, b in block.open_all_buttons.items()]
     out += list(block.open_buttons.items())
+    # the per-domain copies part (2026-10-21): Make N copies, Open copies folder, and
+    # the two-click removal when a domain has extra copies
+    for tag, buttons in (("MAKE", block.clone_buttons),
+                         ("COPIES", block.open_copies_buttons),
+                         ("REMOVE", block.remove_buttons),
+                         ("KEEP", block.cancel_buttons)):
+        out += [((d, tag), b) for d, b in buttons.items()
+                if tag != "KEEP" or b.isVisibleTo(block)]
     return out
 
 
@@ -566,6 +575,7 @@ def test_every_control_is_drawn_inside_the_block_at_the_window_sizes(wiz, tmp_pa
     assert wiz.size() == QtCore.QSize(*size)
     assert len(block.open_buttons) >= 2 * 6, "two domains, at least six apps each"
     rects = _assert_block_geometry(block, page, size)
+    assert {(long_name, "MAKE"), (long_name, "COPIES")} <= dict(rects).keys()
     # the long domain name is elided in its header, and its Open all is still whole
     header = next(lab for lab in block.findChildren(cfw.ElidedLabel)
                   if lab.full_text() == f"Domain: {long_name}")
@@ -611,3 +621,113 @@ def test_the_rendered_block_is_a_real_picture(wiz, src_tree, tmp_path):
     c = _rect_in(btn, block).center()
     assert img.pixelColor(c.x(), c.y()) != bg or \
         img.pixelColor(c.x() - btn.width() // 2 + 1, c.y()) != bg
+
+
+class _FakeGit:
+    """Makes the folders a clone makes; every copy is clean."""
+
+    def __init__(self):
+        self.clones = []
+
+    def __call__(self, argv, cwd):
+        if argv[0] == "clone":
+            self.clones.append(argv[3])
+            os.makedirs(os.path.join(argv[-1], ".git"))
+        if argv[0] == "rev-list":
+            return 0, "0"
+        return 0, ""
+
+
+def test_the_copies_part_works_in_the_wizard_at_the_smallest_window(wiz, src_tree):
+    """The per-domain copies inside the REAL Repo source step at 736x736: Make copies
+    clones only what the domain has, the rows switch to the copies, and un-ticking a
+    service on the domain arms a two-click removal. Pictures go to
+    $CODE_FOLDERS_SHOTS_DIR when it is set, for a person to look at."""
+    shots = os.environ.get("CODE_FOLDERS_SHOTS_DIR", "")
+    wiz.resize(*SMALLEST)
+    ctl, page = _to_source(wiz, source_dir=src_tree)
+    _settle()
+    block = ctl.code_folders
+    git = _FakeGit()
+    block.git_runner = git
+    make = block.clone_buttons["chat.example.org"]
+    assert make.isVisible() and make.isEnabled() and make.height() >= 20
+    if shots:
+        os.makedirs(shots, exist_ok=True)
+        page._content_scroll.ensureWidgetVisible(make)
+        _settle()
+        assert wiz.grab().save(os.path.join(shots, "wizard-1-make-copies.png"))
+    make.click()
+    assert block.wait_idle()
+    # owncast-ui and forum-api (phpbb) were chosen for chat; only present checkouts
+    assert sorted(os.path.basename(p) for p in git.clones) == [
+        "hugmesh-admin-ui", "hugmesh-forum-api", "hugmesh-gateway", "hugmesh-owncast-ui"]
+    key = ("chat.example.org", "hugmesh-owncast-ui")
+    assert block.row_paths[key].endswith(
+        os.path.join("chat.example.org", "hugmesh-owncast-ui.chat.example.org"))
+    # un-tick owncast on that domain, as the Domain services step would
+    row = ctl.mesh_domains.domains[1]
+    row.optional_services = [s for s in row.optional_services if s != "owncast"]
+    ctl._refresh_code_folders()
+    _settle()
+    rm = block.remove_buttons["chat.example.org"]
+    assert rm.text() == "Remove 1 extra folder…" and rm.isVisible() and rm.isEnabled()
+    rm.click()
+    assert block.wait_idle()                     # the check runs off the window thread
+    _settle()
+    rm = block.remove_buttons["chat.example.org"]
+    assert rm.text() == "Click again to remove 1 folder" and rm.isEnabled()
+    assert block.cancel_buttons["chat.example.org"].isVisible()
+    _assert_block_geometry(block, page, SMALLEST)
+    if shots:
+        page._content_scroll.ensureWidgetVisible(rm)
+        _settle()
+        assert wiz.grab().save(os.path.join(shots, "wizard-2-armed.png"))
+        assert block.grab().save(os.path.join(shots, "wizard-block-armed.png"))
+    extra = os.path.join(block.plan.root, "chat.example.org",
+                         "hugmesh-owncast-ui.chat.example.org")
+    assert os.path.isdir(extra)                  # the first click removed nothing
+    rm.click()
+    assert block.wait_idle()
+    assert not os.path.exists(extra)
+
+
+def test_the_page_keeps_a_saved_meshs_copies_and_not_the_record_it_was_loaded_from(
+        wiz, src_tree):
+    """Meshes with the same own domain share one copies folder: a SAVED mesh that
+    still has owncast on chat.example.org keeps that copy from being offered; the
+    record the page's form was loaded from (``_loaded_record_id``) does not."""
+    import json
+
+    from hugmesh_studio.core import saved_meshes
+    from hugmesh_studio.core.local_mesh_bootstrap import LocalMeshBootstrapConfig
+    wiz.resize(*SMALLEST)
+    ctl, page = _to_source(wiz, source_dir=src_tree)
+    _settle()
+    block = ctl.code_folders
+    block.git_runner = _FakeGit()
+    block.clone_buttons["chat.example.org"].click()
+    assert block.wait_idle()
+    rec = saved_meshes.SavedMesh(
+        id="20261021-130000-abcdef", label="Mesh A",
+        config=LocalMeshBootstrapConfig.from_dict({"domains": [
+            {"name": "chat.example.org", "optional_services": ["owncast", "phpbb"],
+             "idp": "superdomain"}]}).to_dict())
+    os.makedirs(saved_meshes.meshes_dir(), exist_ok=True)
+    with open(rec.path(), "w") as fh:
+        json.dump(rec.to_dict(), fh)
+    row = ctl.mesh_domains.domains[1]
+    row.optional_services = [s for s in row.optional_services if s != "owncast"]
+    ctl._refresh_code_folders()
+    _settle()
+    assert "chat.example.org" not in block.remove_buttons
+    note = block.claimed_labels["chat.example.org"]
+    assert note.isVisible() and note.isEnabled() and note.width() >= 200
+    assert note.text() == ("Kept, the saved mesh ‘Mesh A’ still uses it: "
+                           "hugmesh-owncast-ui.chat.example.org.")
+    _assert_block_geometry(block, page, SMALLEST)
+    ctl._loaded_record_id = rec.id
+    ctl._refresh_code_folders()
+    _settle()
+    rm = block.remove_buttons["chat.example.org"]
+    assert rm.text() == "Remove 1 extra folder…" and rm.isVisible() and rm.isEnabled()
