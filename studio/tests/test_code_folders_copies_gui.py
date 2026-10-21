@@ -386,8 +386,11 @@ def test_another_saved_meshs_domain_is_shown_kept_and_never_offered(block, src):
     assert "live.example" not in block.remove_buttons
     note = block.claimed_labels["live.example"]
     assert note.isVisible() and note.width() >= 200 and note.height() >= 15
-    assert note.text().startswith("Kept, another saved mesh still uses them: ")
-    assert "the saved mesh ‘Mesh A’ still has hugmesh-gateway on live.example" in note.text()
+    assert note.text() == ("Kept, the saved mesh ‘Mesh A’ still uses them: "
+                           "hugmesh-gateway.live.example, "
+                           "hugmesh-owncast-bff-api.live.example, "
+                           "hugmesh-owncast-ui.live.example, "
+                           "hugmesh-user-ui.live.example.")
     shared = [lab for lab in frames[0].findChildren(QtWidgets.QLabel)
               if lab.text() == dw.SHARED_ROOT_NOTE]
     assert len(shared) == 1 and shared[0].isVisible()
@@ -397,3 +400,30 @@ def test_another_saved_meshs_domain_is_shown_kept_and_never_offered(block, src):
                   record_id="20261021-120000-aaaaaa")
     _settle()
     assert block.remove_buttons["live.example"].text() == "Remove 4 extra folders…"
+
+
+def test_buttons_come_back_once_the_worker_has_really_ended(block, src, monkeypatch):
+    """``result`` reaches the window while the worker thread is still winding down, so
+    the buttons its slot rebuilds see "busy". They must be enabled again once the
+    thread has ended, or the second click lands on a disabled button."""
+    import time
+
+    def slow_exit(job):
+        try:
+            value = job._fn(job.progress.emit)
+        except BaseException as exc:               # noqa: BLE001
+            value = exc
+        job.result.emit(value)
+        time.sleep(0.4)                          # the window handles result meanwhile
+
+    monkeypatch.setattr(cfw._CopyJob, "run", slow_exit)
+    block.refresh("existing", src, _rows(), own_name=OWN)
+    block.clone_buttons["live.example"].click()
+    assert block.wait_idle()
+    block.refresh("existing", src, _rows(live_services=()), own_name=OWN)
+    block.remove_buttons["live.example"].click()
+    assert block.wait_idle()
+    _settle()
+    rm = block.remove_buttons["live.example"]
+    assert rm.text() == "Click again to remove 2 folders"
+    assert rm.isEnabled()

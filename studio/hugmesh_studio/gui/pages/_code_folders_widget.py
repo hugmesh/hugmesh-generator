@@ -475,13 +475,18 @@ class CodeFoldersWidget(QtWidgets.QGroupBox):
             note.setWordWrap(True)
             v.addWidget(_grey(note))
         if ws.claimed:
-            names = "; ".join(f"{os.path.basename(x.path)} ({x.why})"
-                              for x in ws.claimed[:4])
-            more = len(ws.claimed) - min(4, len(ws.claimed))
-            note = QtWidgets.QLabel(
-                "Kept, another saved mesh still uses "
-                + ("it" if len(ws.claimed) == 1 else "them") + f": {names}"
-                + (f", +{more} more" if more else "") + ".")
+            # one line per saved mesh: "Kept, the saved mesh ‘A’ still uses them: …"
+            by_why: dict[str, list[str]] = {}
+            for x in ws.claimed:
+                by_why.setdefault(x.why, []).append(os.path.basename(x.path))
+            lines = []
+            for why, names in sorted(by_why.items()):
+                if len(names) != 1:
+                    why = why[: -len(" it")] + " them" if why.endswith(" it") else why
+                shown = ", ".join(names[:6]) + (f", +{len(names) - 6} more"
+                                                if len(names) > 6 else "")
+                lines.append(f"Kept, {why}: {shown}.")
+            note = QtWidgets.QLabel("\n".join(lines))
             note.setWordWrap(True)
             v.addWidget(_grey(note))
             self.claimed_labels[ws.name] = note

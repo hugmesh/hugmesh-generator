@@ -723,8 +723,8 @@ def test_the_page_keeps_a_saved_meshs_copies_and_not_the_record_it_was_loaded_fr
     assert "chat.example.org" not in block.remove_buttons
     note = block.claimed_labels["chat.example.org"]
     assert note.isVisible() and note.isEnabled() and note.width() >= 200
-    assert "the saved mesh ‘Mesh A’ still has hugmesh-owncast-ui on chat.example.org" \
-        in note.text()
+    assert note.text() == ("Kept, the saved mesh ‘Mesh A’ still uses it: "
+                           "hugmesh-owncast-ui.chat.example.org.")
     _assert_block_geometry(block, page, SMALLEST)
     ctl._loaded_record_id = rec.id
     ctl._refresh_code_folders()

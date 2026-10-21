@@ -167,8 +167,8 @@ def test_another_saved_meshs_domain_is_listed_kept_and_cannot_be_armed(at_folder
     del j.localmesh_domains.domains[1]          # this mesh drops live.example
     text = _text(j)
     assert "live.example — not a domain of this mesh" in text
-    assert ("kept hugmesh-owncast-ui.live.example: the saved mesh ‘Mesh A’ still has "
-            "hugmesh-owncast-ui on live.example") in text
+    assert ("kept hugmesh-owncast-ui.live.example: the saved mesh ‘Mesh A’ still uses "
+            "it") in text
     assert "EXTRA" not in text
     assert "a mesh that was never saved cannot be checked" in text
     n = next(i for i, ws in enumerate(screen.folders.plan(j).domains, 1)

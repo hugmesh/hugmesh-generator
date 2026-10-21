@@ -368,8 +368,8 @@ def test_the_folder_of_a_domain_that_left_the_mesh_is_listed_as_extra(gen, src, 
     gone = [d for d in plan.domains if not d.in_mesh]
     assert len(gone) == 1 and gone[0].name == "gone.example"
     assert len(gone[0].extras) == 2
-    assert all("gone.example is not a domain of this mesh, and no saved mesh has "
-               f"{x.app} on it" == x.why for x in gone[0].extras)
+    assert all(x.why == "gone.example is not a domain of this mesh, and no saved mesh "
+               "uses this copy" for x in gone[0].extras)
 
 
 def test_a_departed_folder_lists_a_copy_marked_for_another_domain_as_left_alone(
@@ -419,8 +419,7 @@ def test_a_departed_domain_that_a_saved_mesh_still_has_is_never_extra(gen, src, 
     assert not gone.in_mesh
     assert gone.extras == () and plan.extras() == ()
     assert sorted(x.app for x in gone.claimed) == ["hugmesh-gateway", "hugmesh-user-ui"]
-    assert all(x.why == f"the saved mesh ‘Mesh A’ still has {x.app} on chat.example.org"
-               for x in gone.claimed)
+    assert all(x.why == "the saved mesh ‘Mesh A’ still uses it" for x in gone.claimed)
     # and removal refuses it even when handed the folder directly
     res = dw.remove_extra(gone.claimed[0], plan, FakeGit())
     assert not res.removed and os.path.isdir(gone.claimed[0].path)
@@ -637,7 +636,7 @@ def test_with_the_real_git_a_copy_is_a_named_clone_and_local_commits_keep_it(
 @pytest.mark.parametrize("scenario,words", [
     ("other-branch", "1 commit found nowhere else"),
     ("tag", "1 commit found nowhere else"),
-    ("stash", "1 stashed change"),
+    ("stash", "holds 1 stashed change — it will be kept"),
     ("ignored-file", "1 ignored file or folder"),
     ("linked-worktree", "1 other working tree made from it"),
     ("plain", ""),

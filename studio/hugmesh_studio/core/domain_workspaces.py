@@ -400,8 +400,7 @@ def plan_workspaces(generator_dir: str, source_mode: str, source_dir: str, domai
                     if owner and entry == copy_folder_name(marker["app"], slug):
                         claimed.append(ExtraFolder(
                             path, marker["app"], dom.name,
-                            f"the saved mesh ‘{owner}’ still has {marker['app']} on "
-                            f"{dom.name}"))
+                            f"the saved mesh ‘{owner}’ still uses it"))
                         continue
                 why = ("this domain no longer has " + marker["app"]
                        if marker["app"] not in wanted else
@@ -425,13 +424,12 @@ def plan_workspaces(generator_dir: str, source_mode: str, source_dir: str, domai
                     if owner and sub_entry == copy_folder_name(marker["app"], entry):
                         claimed.append(ExtraFolder(
                             sub, marker["app"], marker["domain"],
-                            f"the saved mesh ‘{owner}’ still has {marker['app']} on "
-                            f"{marker['domain']}"))
+                            f"the saved mesh ‘{owner}’ still uses it"))
                         continue
                     extras.append(ExtraFolder(
                         sub, marker["app"], marker["domain"],
                         f"{marker['domain']} is not a domain of this mesh, and no saved "
-                        f"mesh has {marker['app']} on it"))
+                        "mesh uses this copy"))
                 else:
                     foreign.append(sub)
             if extras or foreign or claimed:
@@ -547,8 +545,9 @@ class ExtraStatus:
     path: str
     #: files with uncommitted changes (tracked, or untracked and not ignored)
     dirty: int
-    #: commits on ANY local branch, tag, the stash or HEAD that no remote of the copy
-    #: has (work that exists nowhere else) — not only the checked-out branch
+    #: commits on ANY local branch, tag or HEAD that no remote of the copy has (work
+    #: that exists nowhere else) — not only the checked-out branch; the stash's own
+    #: commits are left out here and counted as ``stashed``
     unpushed: int
     error: str = ""
     #: entries in ``git stash list``
@@ -592,8 +591,8 @@ def extra_status(path: str, runner: Optional[GitRunner] = None) -> ExtraStatus:
     """What removing ``path`` would lose. Read-only. It looks at EVERYTHING a person can
     leave in a copy that a fresh clone would not bring back: changed and untracked files,
     ignored files (``status --ignored``: a ``.env`` is exactly the precious case),
-    commits on every local branch and tag and the stash that no remote has
-    (``rev-list --all --not --remotes``, not only HEAD), stash entries, and linked
+    commits on every local branch and tag that no remote has (``rev-list --all --not
+    --remotes`` without ``refs/stash``, not only HEAD), stash entries, and linked
     working trees. What it cannot see: a commit that NO ref points to any more (made on
     a detached HEAD and then left; only the reflog has it) — git warns about that when
     it happens."""
@@ -604,7 +603,8 @@ def extra_status(path: str, runner: Optional[GitRunner] = None) -> ExtraStatus:
     lines = [ln for ln in porcelain.splitlines() if ln.strip()]
     ignored = len([ln for ln in lines if ln.startswith("!!")])
     dirty = len(lines) - ignored
-    code, count = run(["rev-list", "--count", "--all", "--not", "--remotes"], path)
+    code, count = run(["rev-list", "--count", "--exclude=refs/stash", "--all", "--not",
+                       "--remotes"], path)
     if code != 0 or not count.strip().isdigit():
         return ExtraStatus(path, dirty, 0, "git rev-list failed", ignored=ignored)
     unpushed = int(count.strip())
