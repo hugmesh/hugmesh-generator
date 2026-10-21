@@ -5702,9 +5702,19 @@ HUGMESH_ALLOW_MISSING_PACKAGES=${ALLOW_MISSING_PACKAGES}
 #     print the exact needed pre-seeds and exit 1 NOW instead of building on.
 #     Session 20260831-183101-a9dc56 continued ~15 minutes past
 #     "Emerge plan: image unavailable" to a certain stage4-incomplete error.
-#   * anything else (USE-only failure etc.) -> loud WARN and continue:
-#     --autounmask-continue=y applies USE changes during the real merge, so a
-#     pretend failure alone does not prove the merge will fail.
+#   * USE wall (the resolver probe below names "USE changes are necessary")
+#     -> ALSO exit 1, printing the package.use lines to pre-seed. The merge
+#     CANNOT apply USE changes: EMERGE_DEFAULT_OPTS carries
+#     --binpkg-respect-use=y, and with that set portage leaves its automatic
+#     changes OFF unless --autounmask=y is given explicitly
+#     (_emerge/create_depgraph_params.py: autounmask_use becomes "n", so
+#     autounmask stays None). --autounmask-continue=y then has nothing to
+#     apply. Measured 2026-10-21 by replaying the failed desktop build's own
+#     sysroot: the merge's exact options print the wall, the same options plus
+#     --autounmask=y print the USE change. That build continued past this gate
+#     on the old "USE changes self-heal" belief and died on the same wall.
+#   * anything else (no verdict, slot conflict with no needed change) -> loud
+#     WARN and continue: the merge decides.
 # --no-emerge-plan, a preview timeout, or an unstaged lib leave no keep-file, so
 # the old behaviour (merge decides) is untouched in every degraded mode.
 # HEREDOC SAFETY: chroot-side expansions below are backslash-escaped; no
@@ -5757,7 +5767,8 @@ hugmesh_payload_plan_gate() {
     # costs. One --pretend --autounmask pass computes the complete change set;
     # if any of it is a keyword or mask change, the merge below is configured to
     # never apply it and is therefore guaranteed to fail, exactly like the
-    # textual wall above. Only USE changes are self-healing (--autounmask-continue=y).
+    # textual wall above. USE changes are NOT self-healing either (see the
+    # header: --autounmask-continue=y is inert under --binpkg-respect-use=y).
     # This runs ONLY on the already-failed path, so it costs one extra resolution
     # in a build that was otherwise heading for a certain 10+ minute dead end;
     # --no-emerge-plan leaves no keep-file and skips the gate entirely.
@@ -5768,7 +5779,7 @@ hugmesh_payload_plan_gate() {
     # whose resolution is fine — the same trap the plan lib clears its own
     # keep-file for.
     echo "[build-x86] payload --pretend failed with no keyword/mask wall in its text."
-    echo "[build-x86] Asking the resolver whether the fix needs keyword/mask changes"
+    echo "[build-x86] Asking the resolver whether the fix needs keyword/mask/USE changes"
     echo "[build-x86] (one --autounmask --pretend pass; the merge below cannot apply those)..."
     # Watchdog: every other resolution in this builder is bounded, and this one
     # must be too — a probe that hangs would hang the whole build, which is worse
@@ -5798,10 +5809,28 @@ hugmesh_payload_plan_gate() {
         echo "[build-x86] widen the spec to the CATEGORY rather than adding that one atom."
         exit 1
     fi
-    echo "[build-x86] WARN: payload --pretend resolution failed, and the resolver needs no"
-    echo "[build-x86]       keyword/mask change — continuing: --autounmask-continue=y applies"
-    echo "[build-x86]       USE changes during the merge below. If it still fails, see its"
-    echo "[build-x86]       AUTOUNMASK-PRETEND dump."
+    # USE wall: equally certain to fail, see the header above. grep -a: an
+    # emerge log can carry a NUL byte, and GNU grep then prints "binary file
+    # matches" instead of the lines, so the operator would not see what to
+    # pre-seed (test-qt6-keyword-preseeds.sh 6h pins the printed line).
+    if grep -aEq 'USE changes are necessary' "\${probe}"; then
+        echo "[build-x86] ERROR: the payload needs USE changes to resolve."
+        echo "[build-x86] The payload merge cannot apply them: --binpkg-respect-use=y (in"
+        echo "[build-x86] EMERGE_DEFAULT_OPTS) turns portage's automatic USE changes off unless"
+        echo "[build-x86] --autounmask=y is given, so --autounmask-continue=y has nothing to apply."
+        echo "[build-x86] Failing fast instead of continuing to a certain stage4-incomplete error."
+        echo "[build-x86] ===== RESOLVER OUTPUT: what the payload needs ====="
+        grep -aE 'USE changes|^# |^>=|^<|^=|Change USE|necessary' "\${probe}" || true
+        echo "[build-x86] ===== END RESOLVER OUTPUT ====="
+        echo "[build-x86] Pre-seed these lines into specs-x86/portage/package.use/ (the file the"
+        echo "[build-x86] role installs: desktop, capable, gpu, ...), then rebuild. Portage names"
+        echo "[build-x86] only the FIRST change it needs, so replay the resolution after pre-seeding"
+        echo "[build-x86] (emerge --pretend inside the kept sysroot) before starting a new build."
+        exit 1
+    fi
+    echo "[build-x86] WARN: payload --pretend resolution failed, and the resolver named no"
+    echo "[build-x86]       keyword, mask or USE change — continuing; the merge below decides."
+    echo "[build-x86]       If it fails, see its AUTOUNMASK-PRETEND dump."
     return 0
 }
 # ── END payload plan fail-fast gate ───────────────────────────────────────────
@@ -5986,10 +6015,14 @@ emerge --update --deep --newuse --keep-going --exclude sys-apps/portage ${EMERGE
 # group banners are: banner() does not exist inside the chroot.
 echo "==> Emerging role payload (stage4, native chroot)"
 # Ensure the stage4 package set is present (deps included).
-# --autounmask-continue auto-applies any required USE-flag change and continues
-# the merge (so a dep needing e.g. a USE flag doesn't ABORT resolution the way a
-# bare emerge does), but --autounmask-keep-keywords / -keep-masks keep keyword &
-# mask decisions EXPLICIT — those are pre-seeded in package.accept_keywords for a
+# --autounmask-continue was meant to auto-apply a required USE-flag change and
+# continue the merge. It does NOT here: EMERGE_DEFAULT_OPTS carries
+# --binpkg-respect-use=y, and with that portage keeps automatic changes OFF
+# unless --autounmask=y is passed (measured 2026-10-21, see the payload plan
+# gate). Every USE a payload package needs must therefore be PRE-SEEDED in
+# specs-x86/portage/package.use, and the gate above fails fast when one is
+# missing. --autounmask-keep-keywords / -keep-masks keep keyword & mask
+# decisions EXPLICIT — those are pre-seeded in package.accept_keywords for a
 # reproducible hardened build rather than silently pulling unstable/masked pkgs.
 # image: \${PKGS} IS the role package set — the image payload itself. NOTE the
 # --pretend AUTOUNMASK-PRETEND diagnostic in the failure branch below gets NO
@@ -6012,11 +6045,13 @@ emerge --update --deep --newuse --keep-going \
     --exclude sys-apps/portage \
     ${EMERGE_EXCLUDE} ${PKGS} 2>&1 | _emerge_notice_sink \
     || { echo "[build-x86] WARN: some stage4 packages failed; review the emerge output"
-         # DIAGNOSTIC: --autounmask-continue is NOT applying needed USE changes in
-         # this chroot, so resolution dies one conflict at a time. A PRETEND
-         # --autounmask pass computes the COMPLETE set of USE changes the payload
-         # needs in one go — dump it so they can all be pre-seeded into the
-         # package.use specs at once instead of whack-a-mole.
+         # DIAGNOSTIC: --autounmask-continue applies nothing here (it is inert
+         # under --binpkg-respect-use=y without an explicit --autounmask=y; see
+         # the payload plan gate). A PRETEND --autounmask pass names the USE or
+         # keyword change the payload needs — dump it so it can be pre-seeded
+         # into the package.use specs. Portage stops at the FIRST wall it can
+         # explain, so a second missing change only shows after the first is
+         # pre-seeded: replay the resolution before starting a new build.
          echo "[build-x86] ===== AUTOUNMASK-PRETEND: full USE/keyword changes the payload needs ====="
          emerge --pretend --autounmask=y --autounmask-write=n --autounmask-backtrack=y \
              --keep-going --exclude sys-apps/portage ${EMERGE_EXCLUDE} ${PKGS} 2>&1 \
