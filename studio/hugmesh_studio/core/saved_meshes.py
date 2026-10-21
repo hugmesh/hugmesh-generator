@@ -1235,28 +1235,42 @@ def restore_plan(rec: SavedMesh, *, volumes_present: bool | None = None,
     if volumes_missing and len(volumes_missing) < n:
         warn.append("only part of the data is still here (missing: "
                     + ", ".join(volumes_missing) + ") — treated as a cold restore")
+    # a record saved before its first bring-up (or while docker did not answer) has
+    # no inventory: its volumes are not "gone", there never were any on record — and
+    # then there is no .onion key to lose either
+    gone = ("the data volumes are gone" if n else
+            "no data volumes were recorded with it (saved before its first bring-up, "
+            "or while docker did not answer)")
+    onion = (" The .onion is not restored (its key volume was removed)." if n else "")
     if copied:
         return RestorePlan(
             MODE_RESEED,
-            "Restore (reseed): the data volumes are gone, so this brings the mesh "
+            f"Restore (reseed): {gone}, so this brings the mesh "
             "up empty and seeds it again from the SAVED credential files — same "
-            "usernames, same passwords, fresh data. The .onion is not restored (its "
-            "key volume was removed).",
+            f"usernames, same passwords, fresh data.{onion}",
             tuple(warn), vol_text)
     if creds_match:
         return RestorePlan(
             MODE_RESEED,
-            "Restore (reseed): the data volumes are gone and no credential files "
+            f"Restore (reseed): {gone} and no credential files "
             "were saved with this record, but the files on disk still match it — "
-            "same usernames, same passwords, fresh data. The .onion is not restored "
-            "(its key volume was removed).",
+            f"same usernames, same passwords, fresh data.{onion}",
+            tuple(warn), vol_text)
+    saved_sha = str(((rec.credentials or {}).get("e2e_file") or {}).get("sha256") or "")
+    if not n and not saved_sha:
+        return RestorePlan(
+            MODE_RESEED,
+            f"Restore (reseed): {gone}, and no credential files existed when it was "
+            "saved — this brings it up empty and seeds it with the credential files "
+            "on disk NOW. With none there it refuses before starting anything; "
+            "'Load into the form' and 'Generate && start' mint them.",
             tuple(warn), vol_text)
     return RestorePlan(
         MODE_RESEED,
-        "Restore (reseed): the data volumes are gone, no credential files were "
+        f"Restore (reseed): {gone}, no credential files were "
         "saved with this record, and the files on disk have changed since — same "
-        "usernames, passwords from the CURRENT files (not this mesh's), fresh data. "
-        "The .onion is not restored (its key volume was removed).",
+        "usernames, passwords from the CURRENT files (not this mesh's), fresh data."
+        f"{onion}",
         tuple(warn), vol_text)
 
 

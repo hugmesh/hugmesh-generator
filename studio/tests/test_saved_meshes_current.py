@@ -236,3 +236,40 @@ def test_a_record_saved_with_nothing_running_does_not_offer_a_warm_start():
     assert plan.mode == sm.MODE_RESEED and not plan.can_start()
     assert json.loads(json.dumps(rec.to_dict()))["config"]["auth_key"] == ""
     assert rec.hostname == socket.gethostname()
+
+
+def test_a_never_run_record_says_what_a_restore_would_do_honestly():
+    rec = _capture(_cfg())
+    assert rec.volume_count() == 0
+    rec.credentials["e2e_file"] = {"path": "/nowhere", "sha256": "", "copied": False}
+    plan = sm.restore_plan(rec, volumes_present=False, images_present=False,
+                           creds_match=False, mesh_running=False)
+    assert "no data volumes were recorded" in plan.sentence
+    assert "no credential files existed when it was saved" in plan.sentence
+    assert "gone" not in plan.sentence and ".onion" not in plan.sentence
+
+
+def test_restoring_a_never_run_record_refuses_before_any_preflight(tmp_path,
+                                                                 monkeypatch):
+    """boot.restore asked for the superadmin password only AFTER _prepare (host
+    preflight and the m2 self-heal: minutes of docker). A record saved before its
+    first bring-up has none, so it now refuses first, from two file reads."""
+    rec = _capture(_cfg())
+    assert sm.save(rec)
+    boot = lmb.LocalMeshBootstrap(GEN, lmb.LocalMeshBootstrapConfig(
+        out_dir=str(tmp_path / "keys-out")))
+    monkeypatch.setattr(lmb.LocalMeshBootstrap, "guard_host_local",
+                        lambda self: (True, ""))
+    monkeypatch.setattr(sm, "probe_state", lambda r, project="": {
+        "volumes_present": False, "images_present": True, "creds_match": False,
+        "mesh_running": False, "source_ok": True, "copies_missing": (),
+        "source_drift": (), "volumes_missing": (), "volumes_seen": 0,
+        "unanswered": ()})
+
+    def no_prepare(self, *a, **k):
+        raise AssertionError("_prepare ran for a restore that cannot seed")
+    monkeypatch.setattr(lmb.LocalMeshBootstrap, "_prepare", no_prepare)
+    ok, log = boot.restore(rec)
+    assert ok is False
+    assert any("no superadmin password is available" in ln for ln in log), log
+    assert any("Generate && start" in ln for ln in log)

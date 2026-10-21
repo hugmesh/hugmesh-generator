@@ -253,6 +253,7 @@ def test_save_then_load_brings_every_domain_setting_back_into_the_form(qapp, pag
     page.apply_bootstrap(lmb.LocalMeshBootstrapConfig(cluster_domain="z.example"))
     assert page.collect_bootstrap().domains != want.domains
     w.refresh()
+    w.mark_current("")            # a later session: nothing ties the form to it yet
     _select(page)
     w.load_btn.click()
     got = page.collect_bootstrap()
@@ -264,6 +265,12 @@ def test_save_then_load_brings_every_domain_setting_back_into_the_form(qapp, pag
     assert got.domain_services_reviewed == want.domain_services_reviewed
     assert w.current_title.text() == \
         "Current mesh — saved as ‘two domains’, no changes since"
+    # the form is now TIED to that record: an edit reads as a change to it, not as
+    # a new unsaved mesh
+    page.env_prod.setChecked(True)
+    page._refresh_plan()
+    assert w.current_title.text().startswith(
+        "Current mesh — changed since it was saved as ‘two domains’")
 
 
 def test_the_list_shows_each_records_domains(qapp, page):
@@ -299,3 +306,21 @@ def test_no_modal_is_opened_by_the_save_controls():
     assert "QMessageBox." not in src and "QMessageBox(" not in src
     assert ".exec(" not in src and "QInputDialog" not in src
     assert QtWidgets is not None
+
+
+def test_a_probe_answer_for_a_record_since_overwritten_is_not_applied(qapp, page):
+    """An overwrite keeps the id. Facts a probe gathered about the OLD record (its
+    volumes, its copies) must not land on the record that replaced it."""
+    rec = _record(label="v1")
+    w = _entered(qapp, page)
+    w.refresh()
+    row = next(r for r in w._rows if r.rec is not None and r.rec.id == rec.id)
+    row.probe = None
+    stale = {"volumes_present": True, "images_present": True, "creds_match": True,
+             "mesh_running": False, "source_ok": True, "copies_missing": (),
+             "source_drift": (), "volumes_missing": (), "volumes_seen": 3,
+             "_updated": "2000-01-01T00:00:00+00:00"}
+    w.apply_probe({rec.id: stale})
+    assert row.probe is None, "an answer about an older version was applied"
+    w.apply_probe({rec.id: dict(stale, _updated=rec.updated)})
+    assert row.probe is not None

@@ -172,6 +172,10 @@ class SavedMeshesWidget(QtWidgets.QWidget):
         self.current_box = QtWidgets.QFrame()
         self.current_box.setObjectName("savedMeshesCurrent")
         self.current_box.setFrameShape(QtWidgets.QFrame.Shape.StyledPanel)
+        # never taller than its contents: spare height belongs to the list below,
+        # not to gaps between the strip's lines
+        self.current_box.setSizePolicy(QtWidgets.QSizePolicy.Policy.Preferred,
+                                       QtWidgets.QSizePolicy.Policy.Maximum)
         cur = QtWidgets.QVBoxLayout(self.current_box)
         cur.setContentsMargins(8, 6, 8, 6)
         self.current_title = QtWidgets.QLabel(_CURRENT_TITLE["unsaved"])

@@ -1776,6 +1776,18 @@ class LocalMeshBootstrap:
         if plan.mode == saved_meshes.MODE_BLOCKED:
             _note(f"[restore] refused — {plan.sentence} Nothing was started or seeded.")
             return False, log
+        # A record saved before its mesh ever ran (the Saved meshes list saves the mesh
+        # being worked on, 2026-10-21) has no minted superadmin anywhere: refuse HERE,
+        # from two file reads, rather than after _prepare's preflight and m2 self-heal
+        # (minutes of docker) only to refuse at the same question below.
+        if not (saved_meshes.restore_env(rec).get(SEED_SUPERADMIN_PASSWORD_ENV)
+                or self.read_superadmin().get("password")):
+            _note("[restore] refused — no superadmin password is available: the "
+                  f"secrets bundle at {self.secrets_json} is not there and this record "
+                  "kept no copy (a mesh saved before its first bring-up has none yet). "
+                  "Load it into the form and use 'Generate && start' to mint one. "
+                  "Nothing was started or seeded.")
+            return False, log
         if not self._prepare(_note, on_line=on_line, cancel=cancel):
             return False, log
 
