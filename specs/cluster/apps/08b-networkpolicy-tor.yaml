@@ -1,0 +1,42 @@
+# The tor optional service's NetworkPolicy interaction (hugmesh-generator#617).
+#
+# The "08b" sibling of apps/08-networkpolicy.yaml. It serves ONE policy,
+# manifests/networkpolicy-tor/tor-onion-marked.yaml: a pod labelled
+# hugmesh.net/tor-onion=true may egress to the node's Tor SOCKS port (9050) and DNS.
+#
+# WHY ITS OWN APPLICATION. The policy used to live in manifests/networkpolicy, which
+# 08-networkpolicy auto-syncs from git main with prune + selfHeal. Git always carried it,
+# so every tracking cluster got it whatever the image selected; the build's tor prune
+# (scripts/_optional-services-lib.sh) edited only the baked copy of that directory, which
+# ArgoCD never reads. A device applies its BAKED apps/*.yaml instead
+# (specs/cluster/bootstrap/bootstrap.sh), so pruning THIS file from a build without tor is
+# the gate that reaches the cluster: no tor selected -> no Application -> no policy.
+# (The HUGMESH_GITOPS_ROOT_RECURSE=1 escape hatch syncs apps/ from git and ignores every
+# build-time prune — this one included; see bootstrap.sh.)
+#
+# WHY NO `automated:` BLOCK. The policy is on the EGRESS axis: a pod it selects loses all
+# egress except DNS + 9050. Egress policies ship dark and are synced by hand after live
+# validation (the apps/08a-networkpolicy-egress.yaml precedent). It is also a
+# forward-hook only: no workload carries the label and the node binds SocksPort to
+# 127.0.0.1, so pods cannot reach the SOCKS port yet. TO ENABLE pod-egress-via-tor:
+# expose SocksPort to the pod network on the node, label the workload, then
+# `argocd app sync networkpolicy-tor` and verify that workload's egress.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: networkpolicy-tor
+  namespace: devops
+  annotations:
+    # Same wave as the parent 08-networkpolicy (the 08 -> 08a follow-on convention).
+    argocd.argoproj.io/sync-wave: "0"
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/hugmesh/hugmesh-generator.git
+    targetRevision: main
+    path: specs/cluster/manifests/networkpolicy-tor
+  destination:
+    server: https://kubernetes.default.svc
+  # NO `syncPolicy.automated:` — MANUAL sync only (see header).
+  syncPolicy:
+    syncOptions: [CreateNamespace=false]

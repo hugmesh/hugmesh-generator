@@ -436,6 +436,13 @@ def _is_flashable_artifact(name: str) -> bool:
             and not _ARTIFACT_BLOB_RE.search(name))
 
 
+def is_flashable_artifact(name: str) -> bool:
+    """Public spelling of the flashable-extension + kernel/initramfs/squashfs blob
+    filter — the same predicate snapshot_artifacts() and find_artifacts() use, so the
+    #415 validator can refuse a file the flasher would never have accepted."""
+    return _is_flashable_artifact(name)
+
+
 def is_compressed_artifact(name: str) -> bool:
     """True for the ``.img.xz`` / ``.iso.xz`` shapes --compress leaves behind.
 
@@ -514,6 +521,39 @@ def pick_artifact(artifacts: tuple[str, ...] | list[str], flavor: str) -> str:
 _ARCH_TOKENS = {"x86": ("x86", "amd64"), "arm64": ("arm64", "aarch64")}
 
 
+def artifact_arch_matches(name: str, arch: str) -> bool:
+    """True when an artifact FILENAME carries this ARCH token.
+
+    The arch half of ``artifact_matches``, on its own, because it is the half the GUI
+    asserts in every argv: flash-disk.sh takes an explicit ``--artifact`` VERBATIM, so
+    a preselected image of the wrong architecture is never caught downstream (#415).
+    ``artifact_matches`` is expressed in terms of this function, so the anchor the
+    flasher globs on and the anchor the GUI defaults on cannot drift apart."""
+    arch_tokens = _ARCH_TOKENS.get((arch or "").lower(), ((arch or "").lower(),))
+    low = os.path.basename(name).lower()
+    return any(f"-{a}-" in low for a in arch_tokens if a)
+
+
+def artifact_matches(name: str, *, role: str, arch: str) -> bool:
+    """True when an artifact FILENAME carries this arch token AND this role token.
+
+    THE name-anchor vocabulary, in one place: the two anchors scripts/flash-disk.sh
+    globs on, with the role spelled through roles.aliases_of so an image built under an
+    older spelling still matches. find_artifacts() filters with it, and the #415
+    validator reports with it — so "would flash-disk.sh find this?" and "does this file
+    belong on that device?" can never drift apart."""
+    role_tokens = {(role or "").lower()}
+    try:
+        role_tokens |= {a.lower() for a in roles.aliases_of(role)}
+    except Exception:
+        pass
+    role_tokens.discard("")
+    low = os.path.basename(name).lower()
+    if not artifact_arch_matches(name, arch):
+        return False
+    return any(f"-{r}-" in low for r in role_tokens)
+
+
 def find_artifacts(work_dir: str, *, role: str, arch: str) -> tuple[str, ...]:
     """Every flashable artifact in ``work_dir`` whose NAME carries this arch token and
     this role token, absolute paths, newest first.
@@ -527,13 +567,6 @@ def find_artifacts(work_dir: str, *, role: str, arch: str) -> tuple[str, ...]:
     tell two same-role worklist entries apart, so what this returns is offered to the
     operator in the flash confirmation BY FILENAME, with the candidate count, and is
     written only if they accept. Returns () when nothing matches — the honest empty."""
-    arch_tokens = _ARCH_TOKENS.get((arch or "").lower(), ((arch or "").lower(),))
-    role_tokens = {(role or "").lower()}
-    try:
-        role_tokens |= {a.lower() for a in roles.aliases_of(role)}
-    except Exception:
-        pass
-    role_tokens.discard("")
     out: list[tuple[str, float]] = []
     try:
         names = os.listdir(work_dir)
@@ -542,10 +575,7 @@ def find_artifacts(work_dir: str, *, role: str, arch: str) -> tuple[str, ...]:
     for name in names:
         if not _is_flashable_artifact(name):
             continue
-        low = name.lower()
-        if not any(f"-{a}-" in low for a in arch_tokens if a):
-            continue
-        if not any(f"-{r}-" in low for r in role_tokens):
+        if not artifact_matches(name, role=role, arch=arch):
             continue
         try:
             out.append((name, os.stat(os.path.join(work_dir, name)).st_mtime))
@@ -560,3 +590,86 @@ def new_artifact(work_dir: str, baseline: dict[str, float]) -> str:
     contract, kept for existing callers/tests; == pick_artifact(new_artifacts(...),
     "auto")."""
     return pick_artifact(new_artifacts(work_dir, baseline), FLAVOR_AUTO)
+
+
+# ── naming an artifact IN THE GUI (#415) ─────────────────────────────────────────────
+# The operator's question is "which FILE goes to this disk", and until #415 the GUI
+# could only answer with an AXIS (auto/img/live/installer) — never a filename. These
+# two helpers are what the image dropdowns and the flash confirmation print, so the
+# name, the flavour and the on-disk size are one string written in ONE place.
+def human_size(n: int) -> str:
+    """``n`` bytes as a short IEC string (``2.7 GiB``); ``""`` for a non-positive n."""
+    if n <= 0:
+        return ""
+    step = float(n)
+    for unit in ("B", "KiB", "MiB", "GiB", "TiB"):
+        if step < 1024.0 or unit == "TiB":
+            return f"{step:.0f} {unit}" if unit == "B" else f"{step:.1f} {unit}"
+        step /= 1024.0
+    return f"{step:.1f} TiB"        # unreachable; kept so every path returns a str
+
+
+def artifact_label(path: str) -> str:
+    """One dropdown line for a built artifact: ``<basename> · <flavour> · <size>``.
+
+    The flavour is :func:`classify_artifact_flavor`, with ``other`` standing in for the
+    unflavoured shapes (rpi5 emits a plain ``.iso``) — those are REACHABLE here because
+    this dropdown names FILES, which is the whole point of #415: the flavour axis alone
+    cannot name a plain ``.iso``, and could not tell two same-flavour files apart.
+    Size is the on-disk file size; a compressed artifact is marked, because what gets
+    WRITTEN is its uncompressed size (flash-disk.sh streams `xz -dc` into dd)."""
+    base = os.path.basename(path)
+    bits = [base, classify_artifact_flavor(base) or "other"]
+    try:
+        size = os.path.getsize(path)
+    except OSError:
+        size = 0
+    if size:
+        bits.append(human_size(size))
+    if is_compressed_artifact(base):
+        bits.append("compressed")
+    return " · ".join(bits)
+
+
+# ── what flash-disk.sh reports WHILE it writes (#415, the progress source) ────────────
+# The GUI's write progress is driven by BYTES, never by a timer. Two lines carry it,
+# and both come out of the real write:
+#
+#   * the DENOMINATOR — ``[disk] Write-bytes: <n>``, emitted by scripts/flash-disk.sh
+#     immediately before dd starts. It is the script's own ART_SIZE: the file size for a
+#     raw .img/.iso, and the UNCOMPRESSED size (``xz --robot --list`` totals field 5) for
+#     a .img.xz/.iso.xz — exactly what ``xz -dc | dd`` puts on the disk. 0 when the size
+#     could not be read, and absent entirely under DL_QUIET.
+#
+#   * the NUMERATOR — GNU dd's own ``status=progress`` updates, which all three write
+#     arms already pass. dd writes them to STDERR as \r-terminated chunks; both routes
+#     reach the GUI (the uncompressed arm redirects 2>&1 inside the script, the others
+#     inherit the script's stderr, which _FlashWorker merges with stderr=STDOUT).
+#     _FlashWorker's Popen is text=True with the default newline=None — universal
+#     newlines — so each \r update arrives as ITS OWN line. Measured, not assumed:
+#     a real `dd if=/dev/zero of=/dev/null bs=1M count=400000 status=progress` through
+#     that exact Popen shape delivered one line per one-second tick.
+#
+# Neither parser matches anything a builder emits, and both are fed only the FLASH
+# worker's output, so no build log line can move the flash bar.
+_WRITE_BYTES_RE = re.compile(r"Write-bytes:\s*(\d+)\s*$")
+_DD_PROGRESS_RE = re.compile(
+    r"(?<![\d.])(\d+)\s+bytes\s+\([^)]*\)\s+copied,\s*[0-9.]+\s*s"
+    r"(?:\s*,\s*(.+?))?\s*$")
+
+
+def parse_write_total(line: str) -> int:
+    """Total bytes flash-disk.sh says it is about to write, or 0 when this is not
+    its ``Write-bytes:`` line (or the size was unreadable, which it reports as 0)."""
+    m = _WRITE_BYTES_RE.search(line)
+    return int(m.group(1)) if m else 0
+
+
+def parse_dd_progress(line: str) -> tuple[int, str]:
+    """``(bytes_written, rate)`` from one GNU dd ``status=progress`` update, else
+    ``(0, "")``. The final ``<n> bytes (…) copied, <t> s, <r> MB/s`` summary matches
+    too, which is what lands the bar on 100% at the end of a write."""
+    m = _DD_PROGRESS_RE.search(line.strip())
+    if not m:
+        return (0, "")
+    return (int(m.group(1)), (m.group(2) or "").strip())

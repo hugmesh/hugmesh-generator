@@ -102,10 +102,21 @@ spec:
               # ${SSL_KEY_STORE_PASSWORD:} -> "" (empty), which cannot open the PKCS12
               # keystore. Plain application.properties loads UNCONDITIONALLY from the
               # additional location, with no profile needed.
+              #
+              # BOTH DIRECTIONS NEED A PASSWORD. The `server.ssl.*` keys configure the
+              # INBOUND listener only. The OUTBOUND client (OutboundMtlsClient, and the
+              # auth-core client the username gate rides) binds `hugmesh.mtls.client.*`,
+              # whose application.yml defaults are ${SSL_KEY_STORE_PASSWORD:} /
+              # ${SSL_TRUST_STORE_PASSWORD:} — env nothing sets in this pod — so with
+              # HUGMESH_MTLS_CLIENT_ENABLED on they would resolve to "" and the client
+              # keystore could not be opened. Same override path as user-bff-api; pinned
+              # by tests/scripts/test-outbound-mtls-client.sh.
               umask 077
               cat > /stores/application.properties <<EOF
               server.ssl.key-store-password=${P}
               server.ssl.trust-store-password=${P}
+              hugmesh.mtls.client.key-store-password=${P}
+              hugmesh.mtls.client.trust-store-password=${P}
               EOF
               echo "keystore + truststore + application.properties built"
           volumeMounts:
@@ -134,6 +145,12 @@ spec:
             # OAuth2 resource server: validate the cluster Casdoor JWT itself.
             - name: CASDOOR_ISSUER_URI
               value: "https://id.hugmesh.net"
+            # Key fetch stays IN-CLUSTER: the public issuer host need not resolve
+            # here (on kind it does not: hugmesh-generator#693). The issuer URI above
+            # stays the `iss` claim only. Same value as the gateway chart's
+            # casdoor.jwksUri; pinned by tests/scripts/test-bff-jwks-in-cluster.sh.
+            - name: CASDOOR_JWKS_URI
+              value: "http://casdoor.hugmesh-pki.svc.cluster.local:8000/.well-known/jwks"
             # ── Casdoor identity contract (must AGREE with casdoor-init) ────────
             # The Casdoor ORGANIZATION every login / admin write resolves against.
             # casdoor-init + init_data.json create org `hugmesh`; this app's
@@ -189,6 +206,17 @@ spec:
             - { name: SSL_TRUST_STORE_TYPE, value: "PKCS12" }
             # Load the in-pod-generated store passwords (application.properties).
             - { name: SPRING_CONFIG_ADDITIONAL_LOCATION, value: "file:/stores/" }
+            # ── API-to-API mTLS (CLIENT side) ─────────────────────────────────
+            # The other half of the pair above (hugmesh-generator#376, box 3). The
+            # username gate's peer, hugmesh-federation-api, serves TLS with
+            # client-auth=need, so without a client certificate the handshake is
+            # refused before any credential is read. The /stores mount used by the
+            # server side serves this direction too; the passwords reach
+            # hugmesh.mtls.client.* through the init container's application.properties.
+            # Only https:// peers engage it (an SslContext on a reactor-netty client is
+            # ignored for http://). tests/scripts/test-outbound-mtls-client.sh fails the
+            # build if this gate is on without those passwords.
+            - { name: HUGMESH_MTLS_CLIENT_ENABLED, value: "true" }
             # SessionExchangeConfig's self-loopback target. Left unset it falls back to
             # SessionExchangeConfig.DEFAULT_SELF_HOST, a PRE-REBRAND constant naming the
             # old brand's service AND namespace (not quoted verbatim here: the namespace
@@ -250,6 +278,24 @@ spec:
             # `adminbff_app` (DML only, no DDL), created by admin-bff-db's
             # initdb/10-roles.sh. Password from its OWN ESO Secret
             # admin-bff-db-app-auth (the SAME the DB pod's ADMINBFF_APP_PASSWORD mounts).
+            # R2DBC POOL SIZE (hugmesh-generator#663: the kind sign-in answered 500).
+            # The app role below is created with CONNECTION LIMIT 20 (initdb/10-roles.sh)
+            # and the database runs with max_connections=60. With NO pool setting the
+            # Spring Boot / r2dbc-pool default of 10 connections per replica applies, so
+            # the autoscaler's maxReplicas of 6 asked for 6 x 10 = 60 against a limit of
+            # 20: the first two pods took the whole budget and every pod that came later
+            # failed every query ("Failed to obtain R2DBC Connection"; Postgres says
+            # FATAL: too many connections for role). Sized so the limit also holds during
+            # a rolling update at the top of the band: (6 replicas + 2 surge pods, the
+            # default maxSurge of 25 %) x 2 = 16 <= 20. initial-size 1: a pod needs one
+            # connection to start and opens the second only under load. initial-size must
+            # not exceed max-size (r2dbc-pool refuses to build the pool).
+            # tests/scripts/test-db-connection-budget.sh pins this for every Deployment
+            # that has a database role.
+            - name: SPRING_R2DBC_POOL_INITIAL_SIZE
+              value: "1"
+            - name: SPRING_R2DBC_POOL_MAX_SIZE
+              value: "2"
             - name: SPRING_R2DBC_URL
               value: "r2dbc:postgresql://admin-bff-db.hugmesh-backend.svc.cluster.local:5432/adminbff"
             - name: SPRING_R2DBC_USERNAME
@@ -364,6 +410,35 @@ spec:
             # tests/egress-vpn/test-secret-contract.sh.
             - { name: EGRESS_VPN_SECRET_DELIVERY_ENABLED, value: "false" }
             - { name: EGRESS_VPN_SECRET_NAMESPACE,        value: "hugmesh-egress-vpn" }
+            # ── Desktop governance: the three SHIPS-DARK device-exec flags ─────
+            # Declared here, all "false", so the lever is VISIBLE and REVIEWABLE.
+            # Before this block no manifest named them, and one of the three
+            # (app.desktop.remote-install.enabled) had no application.yml entry
+            # either, so nothing told an operator the switch existed. `kubectl set
+            # env` is NOT the lever: apps/31-admin-bff-api.yaml is automated
+            # {prune,selfHeal} and reverts it on the next reconcile. The lever is
+            # editing the value below in a reviewed commit.
+            #
+            # DO NOT FLIP THESE AS A BUNDLE, and not before the preconditions in
+            # docs/CLIENT-IMAGES.md section 7 "Go-live preconditions":
+            #  - DEVICE_TERMINAL_DIAL_ENABLED=true wires the host-key-PINNED sshj
+            #    channel factory. It REQUIRES a mandatory security re-review first,
+            #    and it is INERT without ACTIVE device_ssh_dial rows (per-device
+            #    host_key_fp pin, TOFU forbidden; rows are seeded PENDING by an
+            #    image-build ingest and activated by a SUPERADMIN, which itself 503s
+            #    while this flag is false) AND the per-device ESO-synced dial-key
+            #    Secrets mounted under /var/run/secrets/device-ssh-dial. This
+            #    Deployment mounts none, and no manifest in this tree delivers them.
+            #  - DEVICE_TERMINAL_ENABLED=true opens the live WebSocket transport; the
+            #    connect-time license + step-up re-checks run regardless.
+            #  - DESKTOP_REMOTE_INSTALL_ENABLED=true wires the exec client that rides
+            #    the SAME dial factory, so it dials nothing while the dial flag is
+            #    false. Needs an admin-bff image that carries the application.yml
+            #    entry; an older image ignores this env var silently.
+            # Pinned by tests/desktop-governance/test-governance-flags-visible.sh.
+            - { name: DEVICE_TERMINAL_ENABLED,        value: "false" }
+            - { name: DEVICE_TERMINAL_DIAL_ENABLED,   value: "false" }
+            - { name: DESKTOP_REMOTE_INSTALL_ENABLED, value: "false" }
             # ── Node-storage reconciler (the push-with-ack leg) — SHIPS DARK ───
             # NODESTORAGE_RECONCILER_ENABLED gates admin-bff's node-storage push
             # reconciler: the FAST propagation path that pushes the signed
@@ -419,6 +494,34 @@ spec:
             # and same https:// client-auth=need scheme as user-bff/mod-bff use.
             - name: FEDERATION_USERNAME_GATE_BASE_URL
               value: "https://hugmesh-federation-api.hugmesh-backend.svc.cluster.local:8080"
+            # FEDERATION_USERNAME_GATE_ENABLED is deliberately NOT set: the gate stays
+            # OFF (hugmesh-generator#376). Setting it true is the LAST box, after the
+            # auth-core build that sends a bearer is published and admin-bff pins it,
+            # and after the Casdoor application below is a member of the `service` role.
+            # tests/scripts/test-outbound-mtls-client.sh fails the build if the flag is
+            # true without the three credentials below and the mTLS client gate above.
+            #
+            # Casdoor client-credentials for the service bearer. The auth-core username
+            # gate reads federation.username-gate.service-bearer.* and falls back to
+            # app.casdoor.platform.*; the other hugmesh-admin-bff-api clients that mint a
+            # service token read app.casdoor.platform.* directly, so ONE block feeds all
+            # of them (each stays behind its own OFF flag).
+            # Decision 2026-10-15 on #376: the application is app-admin-bff, its own
+            # application with its own secret (ExternalSecret admin-bff-casdoor-client,
+            # external-secrets/secretstore.yaml; no value in git). The Secret refs are
+            # `optional: true`, like the other credential refs in this file: an unseeded
+            # path leaves the env empty (gate off, so nothing reads it) instead of wedging
+            # the pod in CreateContainerConfigError. A WRONG Secret name or key is caught
+            # by tests/scripts/test-outbound-mtls-client.sh, which checks these refs
+            # against the ExternalSecret that creates them.
+            - name: APP_CASDOOR_PLATFORM_BASE_URL
+              value: "http://casdoor.hugmesh-pki.svc.cluster.local:8000"
+            - name: APP_CASDOOR_PLATFORM_CLIENT_ID
+              valueFrom:
+                secretKeyRef: { name: admin-bff-casdoor-client, key: clientId, optional: true }
+            - name: APP_CASDOOR_PLATFORM_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef: { name: admin-bff-casdoor-client, key: clientSecret, optional: true }
             - name: APPSTORE_FEDERATION_BASE_URL
               value: "https://hugmesh-federation-api.hugmesh-backend.svc.cluster.local:8080"
             # app.appstore.scaffold.headscale-url — the mesh-join endpoint a scaffolded
@@ -479,18 +582,59 @@ spec:
             #    RestFederationModuleClient against APPSTORE_FEDERATION_BASE_URL, which
             #    is already pinned above.
             #
-            # KNOWN GAP, deliberately not papered over: neither leg's bearer token has
-            # a source in this tree. APPSTORE_ARGOCD_AUTH_TOKEN and
-            # APPSTORE_FEDERATION_AUTH_TOKEN both default EMPTY in application.yml and
-            # there is no ExternalSecret for either (grep external-secrets/ — argocd
-            # has none; the federation token must be a Casdoor JWT carrying
-            # ROLE_SUPERADMIN). Until they are provisioned these two legs make a REAL
-            # call that comes back 401. That is a LOUD failure surfaced to the caller,
-            # which is why it is acceptable to land ahead of the tokens — unlike the
-            # builder below, whose failure mode is silent. They are NOT wired here as
-            # secretKeyRefs on purpose: a non-optional secretKeyRef naming a Secret
-            # that does not exist wedges this very pod in CreateContainerConfigError,
-            # which would reproduce the exact hang class this unit exists to avoid.
+            # THE TOKEN SOURCE (2026-10-14). APPSTORE_ARGOCD_AUTH_TOKEN and
+            # APPSTORE_FEDERATION_AUTH_TOKEN both default EMPTY in application.yml. They
+            # now have a SOURCE: external-secrets/appstore-effector-externalsecrets.yaml
+            # materializes Secret appstore-effector-tokens in this namespace from
+            # secret/<brand>/appstore-effector-tokens, and the two env entries below read
+            # it as `optional: true` secretKeyRefs. The VALUES are operator-seeded (the
+            # ArgoCD token is minted by ArgoCD, the federation one is a Casdoor JWT
+            # carrying ROLE_SUPERADMIN; the generator can mint neither), so until an
+            # operator writes that Vault path the Secret does not exist and the env vars
+            # are unset - byte-for-byte the previous behaviour (empty Bearer). Until they
+            # are provisioned these two legs make a REAL call that fails LOUDLY —
+            # surfaced to the caller, which is why it is acceptable to land ahead of the
+            # tokens, unlike the builder below whose failure mode is silent.
+            #
+            # CORRECTION, MEASURED 2026-09-17 — this note used to say both legs "come
+            # back 401". NEITHER DOES. Both fail earlier, at the TLS handshake, so the
+            # bearer token is never sent and a 401 is never reached. Do not go hunting
+            # for a token problem when you see these fail; the token gap above is real
+            # but it is the SECOND wall, not the first. Common root cause: both clients
+            # are built as a bare WebClient.builder() with no SSL customisation
+            # (hugmesh-admin-bff-api RestArgoCdClient.java:41 and
+            # RestFederationModuleClient.java:45), so each uses the JDK default
+            # truststore and presents no client certificate. The truststore this pod
+            # builds below holds the cluster CA, but it is bound to server.ssl.* — the
+            # SERVER side (application.yml:1010-1012, via SSL_TRUST_STORE) — and is
+            # never consulted for OUTBOUND calls.
+            #   - ARGOCD: argocd-server presents a SELF-SIGNED leaf (live cluster,
+            #     secret argocd-secret tls.crt: subject=O=Argo CD, issuer=O=Argo CD).
+            #     Measured from inside this pod, curl reports ssl_verify_result=18
+            #     (DEPTH_ZERO_SELF_SIGNED_CERT); a 200 comes back only with -k.
+            #     Expect a PKIX path-building failure. hugmesh/hugmesh-admin-bff-api#62.
+            #   - FEDERATION: the address pinned above is https:// (NOT the http://
+            #     packaged default), and that port does speak TLS with a cluster-CA
+            #     leaf (subject=CN=hugmesh-federation-api…, issuer=CN=hugmesh kind
+            #     local dev CA). Measured from inside this pod: code=000
+            #     ssl_verify_result=19, and code=000 EVEN WITH -k — so the handshake
+            #     fails in both directions and no HTTP status is ever produced.
+            #     hugmesh/hugmesh-admin-bff-api#82.
+            # Neither finding affects the base-url values pinned here: every correct
+            # https:// address for these Services hits the same wall, and dropping to
+            # plaintext would be a decision nobody has made.
+            # UPDATE 2026-10-15 (hugmesh-generator#376): HUGMESH_MTLS_CLIENT_ENABLED is now
+            # true above, and both effector clients are built on that connector. The
+            # FEDERATION handshake wall above is therefore expected to be gone, so that
+            # leg should now reach the peer and answer for its bearer (APPSTORE_FEDERATION_
+            # AUTH_TOKEN, optional below) instead of failing before one is sent. NOT
+            # measured on a live cluster. The ARGOCD leg still presents a self-signed
+            # leaf that the cluster-CA-only truststore does not hold (#62 stays open).
+            # The tokens are wired as secretKeyRefs with `optional: true` and ONLY that:
+            # a non-optional secretKeyRef naming a Secret that does not exist wedges this
+            # very pod in CreateContainerConfigError, which would reproduce the exact hang
+            # class this unit exists to avoid. test-appstore-effector-flags.sh fails if
+            # `optional: true` is dropped.
             #
             # 3) APPSTORE_BUILDER_ENABLED — STAYS FALSE. ORDERING CONSTRAINT.
             #    false → no KanikoBuildLauncher bean (@ConditionalOnProperty) and
@@ -515,6 +659,46 @@ spec:
             - { name: APPSTORE_EFFECTOR_ENABLED,   value: "true" }
             - { name: APPSTORE_FEDERATION_ENABLED, value: "true" }
             - { name: APPSTORE_BUILDER_ENABLED,    value: "false" }
+            # The two effector bearer tokens — see "THE TOKEN SOURCE" above. `optional: true`
+            # is load-bearing: the Secret is operator-seeded and absent until then.
+            - name: APPSTORE_ARGOCD_AUTH_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: appstore-effector-tokens
+                  key: argocd-auth-token
+                  optional: true
+            - name: APPSTORE_FEDERATION_AUTH_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: appstore-effector-tokens
+                  key: federation-auth-token
+                  optional: true
+            # app.appstore.argocd.base-url — the ArgoCD API server the effector in (1)
+            # above actually dials. The packaged default is
+            # `https://argocd-server.argocd.svc.cluster.local` (application.yml:759),
+            # i.e. UPSTREAM ArgoCD's own convention — and this platform has no `argocd`
+            # namespace at all. Both bootstraps install ArgoCD into ${ARGOCD_NS:-devops}
+            # and re-namespace the upstream install.yaml, which hardcodes `argocd`
+            # (bootstrap/bootstrap.sh:11,33; bootstrap/kind-local/bootstrap-kind.sh:53,657),
+            # and every Application in this tree is authored `namespace: devops`.
+            # `argocd` appears in neither namespaces/namespaces.yaml nor either
+            # bootstrap's ensure-namespaces list, so the unset default is NXDOMAIN in
+            # the pod. Measured on the live kind cluster: no `argocd` namespace exists,
+            # and Service argocd-server IS in devops exposing https=443 — so the scheme
+            # and the absent port stay exactly as packaged; ONLY the namespace was wrong.
+            # NOT a dark leg, unlike the two headscale keys above: APPSTORE_EFFECTOR_ENABLED
+            # is "true" here, so RestArgoCdClient is the wired bean and the first
+            # provisioning call dials this address for real.
+            # Same defect and same remedy as APPSTORE_SCAFFOLD_HEADSCALE_URL and
+            # APP_REGISTRY_HEADSCALE_ACL_BASE_URL: a platform-specific address belongs in
+            # the platform's manifest, not baked into a service's packaged default, which
+            # must stay usable against a stock upstream ArgoCD.
+            # THE PROBE'S LEG IS A SEPARATE INSTANCE OF THE SAME MISTAKE AND IS NOT
+            # FIXABLE FROM HERE: Fabric8PlatformCapabilityProbe.ARGOCD_NAMESPACE
+            # (hugmesh-admin-bff-api) is a Java constant still reading "argocd" with no
+            # placeholder, so no env var in this file can reach it — see the DUAL-WRITE
+            # note in manifests/admin-bff-platform-capability-rbac/rbac.yaml.
+            - { name: APPSTORE_ARGOCD_BASE_URL, value: "https://argocd-server.devops.svc.cluster.local" }
             # Where the optional-services reconciler writes its policy objects: the
             # deployed namespace is hugmesh-policy (namespaces/namespaces.yaml).
             - { name: APP_OPTIONAL_SERVICES_RECONCILE_POLICY_NAMESPACE, value: "hugmesh-policy" }
@@ -651,6 +835,20 @@ spec:
             # and forwards the real JWT to federation-api. Fail-open like mod-bff's
             # leg: exchange failure degrades to the pre-fix no-header behaviour.
             - { name: APP_BFF_EXCHANGE_ENABLED, value: "true" }
+            # Positive-swap cache TTL = the suspension-bypass window (a cache hit
+            # skips admin-bff's OWN suspensionGate() re-check on the exchange
+            # above). 0 = cache OFF, every exchange re-consults the gate. Decision
+            # 60 (generator#347, operator 2026-09-18) extended decision 7's "B:
+            # zero window now" (hugmesh-gateway#2; the gateway's own mirror,
+            # HUGMESH_GATEWAY_BFF_EXCHANGE_CACHE_TTL_MS, was pinned in #398/PR#406)
+            # to this service's mirror of the same cache: "extend it: default 0
+            # in both BFFs". The image default is 0 since hugmesh-admin-bff-api
+            # PR #74 (2026-09-18, admin-bff-api#56); image tags older than that
+            # default to 5000 (a 5 s window). This line states the posture
+            # regardless of which image tag is pinned, exactly as #398 did for the
+            # gateway. tests/scripts/test-fe-bff-route-lane-parity.sh asserts BOTH
+            # lanes carry this pin as the string "0".
+            - { name: APP_BFF_EXCHANGE_CACHE_TTL_MS, value: "0" }
             # ── Homeserver account broker (POST /bff/provision/{matrix,mastodon}) ──
             # broker.svc-password is the ONE placeholder in this app's
             # application.yml with NO default — deliberately, so a deployment that

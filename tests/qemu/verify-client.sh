@@ -93,9 +93,28 @@ info "role       : ${ROLE}  person-role=${PERSON_ROLE}  domain=${DOMAIN}"
 info "work/test  : ${WORK_DIR}  ->  ${TEST_DIR}"
 
 # ── Render the synthetic KEYS payload ──────────────────────────────
-rm -rf "${TEST_DIR}"; mkdir -p "${RUN_DIR}" "${KEYS_DIR}"
+rm -rf "${TEST_DIR}"; mkdir -p "${RUN_DIR}" "${KEYS_DIR}" "${KEYS_DIR}/certs"
 ssh-keygen -t ed25519 -N '' -C verify-client -f "${SSHKEY}" >/dev/null
 PUB="$(cat "${SSHKEY}.pub")"
+
+# A client stick carries the mesh CA as certs/cluster-ca.crt (gen-provision-keys.sh
+# tells the operator to copy it there from the pki node) and NO `files` list. The
+# image's keys-provision must import it into the system trust store at first boot —
+# that is what the Studio's cloud Domains step tells the operator happens
+# (CLIENT_CA_INHERITANCE_NOTE, hugmesh-generator#588). Until the post-merge review of
+# #645 the import only ran for a manifest WITH a files list, so a client never trusted
+# the CA on its stick; tests/boot/emulate-firstboot.sh proves the engine in a
+# container, and this is the same proof on the REAL client image: a throwaway CA goes
+# on the stick, the console must show the import's log line, and over SSH the file
+# and the rebuilt trust store are checked.
+CA_FP=""
+if command -v openssl >/dev/null; then
+    openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -days 2 \
+        -subj '/CN=verify-client cluster CA' -keyout "${TEST_DIR}/ca.key" \
+        -out "${KEYS_DIR}/certs/cluster-ca.crt" >/dev/null 2>&1 \
+      && CA_FP="$(openssl x509 -in "${KEYS_DIR}/certs/cluster-ca.crt" -noout -fingerprint -sha256 | cut -d= -f2)"
+fi
+[ -n "${CA_FP}" ] || warn "no openssl — no certs/cluster-ca.crt on the KEYS stick; the certificate-import assertions will FAIL (they are not skipped)"
 
 # superadmin device images require a crypt(3) device-password hash on the KEYS media.
 DEVPW_JSON=""
@@ -121,11 +140,12 @@ cat > "${KEYS_DIR}/provision.json" <<EOF
   "root": { "locked": true }${DEVPW_JSON}
 }
 EOF
-info "KEYS payload: hostname=${HOSTNAME_E2E} user=${SSH_USER} (sudo,nopasswd) + ssh key${DEVPW_JSON:+ + device_password_hash}"
+info "KEYS payload: hostname=${HOSTNAME_E2E} user=${SSH_USER} (sudo,nopasswd) + ssh key${DEVPW_JSON:+ + device_password_hash}${CA_FP:+ + certs/cluster-ca.crt (sha256 ${CA_FP})}"
 
 if ${DRY_RUN}; then
     step "dry-run: KEYS payload rendered at ${KEYS_DIR}; not booting."
     echo "  provision.json:"; sed 's/^/    /' "${KEYS_DIR}/provision.json"
+    echo "  certs/:"; ls -l "${KEYS_DIR}/certs" | sed 's/^/    /'
     echo "  would run: ${LAUNCH_X86} --img ${IMG} --role ${ROLE} --gpu --keys-img <keys.img> --run-dir ${RUN_DIR} --keep"
     exit 0
 fi
@@ -158,6 +178,7 @@ ASSERTS=(
     "sshd up|Starting sshd|service sshd|sshd .* start"
     "tailscaled present|tailscaled"
     "display-manager/lightdm|display-manager|lightdm|Light Display Manager"
+    "KEYS certs imported|Imported certificates from KEYS/certs"
 )
 [ "${PERSON_ROLE}" = "superadmin" ] && [ -n "${DEVPW_JSON}" ] && \
     ASSERTS+=("superadmin device pw|DEVICE password for")
@@ -203,8 +224,29 @@ if ${SSH_OK}; then
     [ "${got_role}" = "${PERSON_ROLE}" ] && info "  ✓ identity-role=${got_role}" || warn "  identity-role='${got_role}' (expected ${PERSON_ROLE})"
     [ -n "${got_dom}" ] && info "  ✓ domain marker='${got_dom}'" || warn "  domains marker empty"
     echo "${got_dm}" | grep -i 'start' >/dev/null && info "  ✓ display-manager: ${got_dm}" || warn "  display-manager status: ${got_dm:-<none>}"
+    # the stick's CA is in the trust store: same certificate under
+    # /usr/local/share/ca-certificates, and update-ca-certificates linked it into
+    # /etc/ssl/certs (a FAIL, not a warn: this is the #588 contract on a real client)
+    got_fp="$(ssh "${SSH_OPTS[@]}" "${SSH_USER}@localhost" \
+        'openssl x509 -in /usr/local/share/ca-certificates/cluster-ca.crt -noout -fingerprint -sha256 2>/dev/null | cut -d= -f2' || true)"
+    # update-ca-certificates links /usr/local/share/ca-certificates/X.crt as
+    # /etc/ssl/certs/X.pem (Gentoo ships Debian's script); "linked" or "" comes back
+    got_link="$(ssh "${SSH_OPTS[@]}" "${SSH_USER}@localhost" \
+        'test -e /etc/ssl/certs/cluster-ca.pem && echo linked' || true)"
+    if [ -n "${CA_FP}" ] && [ "${got_fp}" = "${CA_FP}" ]; then
+        info "  ✓ KEYS/certs/cluster-ca.crt imported (sha256 ${got_fp})"; HIT["KEYS cert file in trust store"]=1
+    else
+        warn "  KEYS/certs/cluster-ca.crt NOT in /usr/local/share/ca-certificates (got '${got_fp:-<none>}', want '${CA_FP:-<none>}')"
+    fi
+    if [ "${got_link}" = "linked" ]; then
+        info "  ✓ update-ca-certificates linked /etc/ssl/certs/cluster-ca.pem"; HIT["KEYS cert linked by update-ca-certificates"]=1
+    else
+        warn "  /etc/ssl/certs/cluster-ca.pem missing — update-ca-certificates did not run or the file was not imported"
+    fi
+    ASSERTS+=("KEYS cert file in trust store|<ssh>" "KEYS cert linked by update-ca-certificates|<ssh>")
 else
     warn "SSH not reachable (known qemu user-net/DHCP limitation on some hosts) — relying on console assertions."
+    warn "  NOT CHECKED over SSH: the stick's CA in /usr/local/share/ca-certificates and its /etc/ssl/certs link (only the console's import log line is asserted)."
 fi
 
 # ── Report ─────────────────────────────────────────────────────────

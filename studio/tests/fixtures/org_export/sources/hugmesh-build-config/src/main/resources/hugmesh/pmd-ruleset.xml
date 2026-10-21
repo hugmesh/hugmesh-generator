@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ruleset name="hugmesh" xmlns="http://pmd.sourceforge.net/ruleset/2.0.0">
+  <description>A stand-in ruleset for the export tests.</description>
+</ruleset>

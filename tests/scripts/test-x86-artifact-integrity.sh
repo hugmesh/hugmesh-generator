@@ -534,8 +534,12 @@ if [ -n "${mp_ln}" ] && [ -n "${wipe_ln}" ] && [ "${mp_ln}" -lt "${wipe_ln}" ]; 
 else
   bad "cleanup can rm -rf through a still-attached scratch bind (mp=${mp_ln:-missing} wipe=${wipe_ln:-missing})"
 fi
-grep -q '_stale_mounts="$(findmnt -rn -o TARGET' "${BUILDER}" \
-  && ok "fresh-start wipe refuses a sysroot with attached mounts (pipefail-safe capture)" \
+# Since #659 the listing comes from scripts/_builder-resume-lib.sh (the kernel's
+# own mount table, symlinks and escapes resolved) instead of `findmnt -rn -o
+# TARGET`; the property pinned is unchanged: captured into a variable, never
+# piped into `grep -q`, and checked before the wipe on both branches.
+grep -q -F '_stale_mounts="$(hmr_stale_mounts "${SYSROOT}")"' "${BUILDER}" \
+  && ok "fresh-start wipe refuses a sysroot with attached mounts (listing captured from hmr_stale_mounts, pipefail-safe)" \
   || bad "the fresh-start rm -rf no longer checks for attached mounts"
 
 echo

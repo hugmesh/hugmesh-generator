@@ -46,7 +46,7 @@
 # satisfies BOTH the chart (cassandra-password) and the bootstrap Job (password).
 #
 # THEN (Stage 1 flip, in order — docs/CLUSTER-HARDENING-PLAN.md §H):
-#   1. Populate Vault: secret/hugmesh/cassandra-admin + .../cassandra-app-creds.
+#   1. Populate Vault: secret/<brand>/cassandra-admin + .../cassandra-app-creds.
 #   2. Apply this overlay's ExternalSecrets so cassandra-admin + cassandra-app-creds
 #      materialize.
 #   3. Merge the values above into apps/00-cassandra.yaml; let the StatefulSet roll
@@ -89,8 +89,12 @@
 #      clientEncryption with require_client_auth defaults to optional, so a
 #      non-TLS/missing-truststore client is not instantly severed — tighten to
 #      required after every client presents the truststore.
+#      UNVERIFIED: require_client_auth is mutual TLS; whether PLAINTEXT clients are
+#      still accepted is the separate `optional` flag in client_encryption_options.
+#      Read it off the rendered chart before this merge (docs/DB-HARDENING-RUNBOOK.md B.3).
 #   8. Flip each consumer to TLS (CASSANDRA_TLS_ENABLED=true + truststore mount;
 #      cqlsh --ssl) and set CASSANDRA_TLS_ENABLED=true on the bootstrap Job.
 #
 # Everything above is INERT until merged. Default apps/00-cassandra.yaml stays
-# AllowAllAuthenticator + plaintext, byte-identical to today.
+# PasswordAuthenticator (see the stage-1 note at the top) + plaintext, byte-identical
+# to today.

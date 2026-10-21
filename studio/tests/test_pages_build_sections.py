@@ -340,7 +340,7 @@ def test_collapsing_every_section_does_not_change_the_emitted_argv(wiz):
     assert collapsed_argv == expanded_argv, (
         "collapsing a section changed the emitted argv — collapse must be "
         "presentation only")
-    # non-vacuity: the argv actually carries the collapsed sections' values
+    # real-cases check: the argv actually carries the collapsed sections' values
     assert "--no-img" in expanded_argv and "--live-iso" in expanded_argv
     assert "--cached" in expanded_argv and "--skip-kernel" in expanded_argv
 
@@ -369,7 +369,7 @@ def test_sb_platform_gate_hides_the_whole_section_not_just_the_box(wiz):
 
 
 def test_sb_section_comes_back_in_scope_on_x86(wiz):
-    """Non-vacuity for the gate test above + collapse-vs-gate disambiguation: on x86
+    """Real-cases check for the gate test above + collapse-vs-gate disambiguation: on x86
     the section shows, and FOLDING it must not read as (or become) the gate — the
     section stays visible and enabled, only its content hides."""
     build = advance_to(wiz, wizard_mod.BuildPage)      # default flow = x86

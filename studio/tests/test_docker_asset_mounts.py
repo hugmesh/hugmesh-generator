@@ -20,7 +20,7 @@ list (build_driver.DOCKER_ASSET_FIELDS, then an inline tuple) and preflight's ex
 check. The SAME four fields were missing from both — which is precisely why the failure was
 silent at every layer. These tests pin both lists to the real path-valued flag surface.
 
-The fix is three layers, and each is load-bearing:
+The fix is three layers, and each is relied on:
   1. preflight        — a host path that does not exist BLOCKS before dispatch;
   2. the docker mount — a host path that DOES exist is bind-mounted :ro and the flag
                         rewritten, so the feature genuinely works under docker;
@@ -63,7 +63,7 @@ def _driver(backend: str = "docker") -> BuildDriver:
 def _inner(cmd: list[str]) -> str:
     """The builder argv, which docker-run carries as ONE `bash -c <string>` element.
 
-    Load-bearing: a naive `assert host_path not in cmd` over the docker argv LIST can never
+    Relied on: a naive `assert host_path not in cmd` over the docker argv LIST can never
     fail — the flag value is inside that joined string, never a standalone element — so it
     would pass whether or not the path was remapped. Assert against this instead."""
     assert cmd[-2] == "-c", "docker command shape changed; this helper is now lying"

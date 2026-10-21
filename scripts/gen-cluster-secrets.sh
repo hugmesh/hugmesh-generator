@@ -53,21 +53,46 @@ OUT_DIR="${REPO_DIR}/keys-out/vault"
 # ── brand.conf (built-in defaults < brand.conf < env) ───────────────
 BRAND="${BRAND:-hugmesh}"
 CLUSTER_DOMAIN="${CLUSTER_DOMAIN:-hugmesh.net}"
-# WRITER SIDE ONLY. The reader is pinned on BOTH halves, and NEITHER is brand-derived
-# (issue #285; decision 22 on #347, operator 2026-09-16 "A: drop both controls"):
-#   * the mount is pinned in specs/cluster/manifests/external-secrets/secretstore.yaml
+# VAULT_ADDR NEVER REACHES THE ClusterSecretStore, ON PURPOSE (issue #531, decision
+# 88 = B): VAULT_ADDR only steers the WRITE side (this script). The reader's
+# spec.provider.vault.server in secretstore.yaml is pinned to the in-cluster
+# https://vault.vault.svc.cluster.local:8200 and an external Vault is not a supported
+# topology, so pointing VAULT_ADDR elsewhere writes secrets the cluster will not read.
+# tests/scripts/test-eso-provider-refs.sh pins that literal and this paragraph.
+# THE MOUNT IS STILL WRITER-SIDE ONLY; THE BASE PATH IS NOT ANY MORE.
+# (issue #285; decision 22 on #347, operator 2026-09-16 "A: drop both controls";
+#  decision 38 = B on #347, operator 2026-09-17 "the reader follows the writer"):
+#   * the MOUNT is pinned in specs/cluster/manifests/external-secrets/secretstore.yaml
 #     (`path: "secret"`, server vault.vault.svc), which apps/04-external-secrets-config
 #     .yaml serves with automated { prune: true, selfHeal: true } — ArgoCD re-applies
 #     it from git on every reconcile, so nothing image-side or kubectl-side re-points it;
-#   * the key prefix the ExternalSecrets read is the LITERAL hugmesh/<service> — see
-#     the measured count below. THIS script, by contrast, writes under ${BRAND}
-#     (BASE= below), so for a brand other than "hugmesh" writer and reader DISAGREE.
-#     That gap pre-dates #285 and closing it is a separate, unmade call.
-# So a NON-DEFAULT VAULT_KV_MOUNT makes this script write where the cluster does not
-# read: 143 remoteRef keys across specs/cluster all live under hugmesh/... at mount
-# "secret". Changing it is option B of #285 (an Application-level kustomize patch on
-# the ClusterSecretStore) and has not been built. The matching image-builder flags
-# --vault-kv-mount / --vault-base-path were removed by decision 22.
+#   * the BASE PATH now FOLLOWS THIS WRITER. The 143 `key: hugmesh/…` literals under
+#     specs/cluster are the DEFAULT RENDER and must stay byte-identical in git, because
+#     ArgoCD fetches those manifests FROM GIT and every mesh gets the same bytes. What
+#     moves is the render: the ClusterSecretStore carries the annotation
+#     platform.hugmesh.net/vault-base, a `replacements` block in that directory's
+#     kustomization.yaml copies it into the first segment of all 121 served remoteRef
+#     keys, apps/04-external-secrets-config.yaml carries a one-line kustomize op that
+#     SETS the annotation, and rebrand_sysroot() in every build-*-stage4.sh rewrites
+#     that one value to <BRAND> — the Application object is applied from the image's
+#     BAKED tree, so it is the only brand-aware thing on ArgoCD's serving path.
+#     apps/12-cloudflared.yaml does the same for its one key, and
+#     apps/03b-harbor-provision.yaml moves the SECOND writer (the in-cluster
+#     harbor-provision Job's VAULT_KV_BASE) with it. Pinned end to end by
+#     tests/scripts/test-eso-remoteref-brand.sh, which renders the baked Application
+#     against the git manifests through real kustomize.
+#     WHAT THIS REPLACED — and the trap to avoid if you re-derive it: a sed over the
+#     baked manifests copy at ${SYSROOT}/var/lib/hugmesh/cluster/manifests is INERT.
+#     bootstrap.sh applies from the baked tree only namespaces/, manifests/local-path
+#     and apps/*.yaml; the manifests those Applications point at come from the git
+#     repoURL. Measured against the live cluster on the build host, 2026-09-17:
+#     external-secrets-config -> repoURL github.com/hugmesh/hugmesh-generator.git @ main,
+#     path specs/cluster/manifests/external-secrets.
+# So a NON-DEFAULT VAULT_KV_MOUNT still makes this script write where the cluster does
+# not read: the MOUNT half is unchanged and remains pinned at "secret" by
+# secretstore.yaml under a prune+selfHeal Application. Decision 38 moved the BASE PATH
+# half only. The matching image-builder flags --vault-kv-mount / --vault-base-path were
+# removed by decision 22.
 VAULT_KV_MOUNT="${VAULT_KV_MOUNT:-secret}"
 if [ -f "${REPO_DIR}/brand.conf" ]; then
     # shellcheck disable=SC1091
@@ -1088,6 +1113,14 @@ data = {
         # in sso-externalsecrets.yaml — k8s key `client-secret`.
         "user-bff-oidc": {
             "client-secret": app_secrets["user-bff"],
+        },
+        # admin-bff's OWN Casdoor client-credentials pair (app-admin-bff), carved out
+        # of the casdoor-apps doc exactly like harbor-casdoor above. Mirrors the
+        # admin-bff-casdoor-client ExternalSecret in secretstore.yaml (APP_CASDOOR_
+        # PLATFORM_CLIENT_ID / _CLIENT_SECRET on the admin-bff Deployment).
+        "admin-bff-casdoor-client": {
+            "clientId": "app-admin-bff",
+            "clientSecret": app_secrets["admin-bff"],
         },
         # bff-internal-token: shared back-channel auth token (INTERNAL_TOKEN).
         # Mounted in BOTH hugmesh-backend (user-bff) and hugmesh-frontend

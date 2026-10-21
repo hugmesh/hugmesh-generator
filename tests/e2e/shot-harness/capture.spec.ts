@@ -43,6 +43,30 @@
  *     gone — is kept by `doorLost` below: a row that finds the browser on its
  *     own error page marks the door lost, and every later row skips with that
  *     reason instead of burning its 120 s timeout.
+ *
+ *  6. A VISIBLE TESTID IS NOT A SETTLED VIEW (#554). The row's last `do[]`
+ *     action only proves the awaited element is in the DOM; it says nothing
+ *     about whether the entry transition has finished fading or the fonts
+ *     have swapped in. waitForSettle() (./settle.ts) sits between that action
+ *     and shot() and blocks until fonts are ready, every FINITE animation has
+ *     finished and two viewport frames are byte-identical — freezing the
+ *     shell's own infinite background animation first so that loop cannot
+ *     keep the comparison from ever converging. A row that never settles
+ *     fails loudly there; it does not shoot anyway. See settle.ts for the
+ *     full reasoning, and settle.spec.ts for the offline pin.
+ *
+ *  7. FULL-HEIGHT BEFORE THE SHOT (operator report, 2026-09-18). shot() takes
+ *     a `fullPage: true` capture, but the host shell's background is a fixed,
+ *     viewport-sized layer — it does not grow with the page. On any row
+ *     taller than the viewport the PNG below the first viewport-height shows
+ *     the bare body colour, not the background ("broken background" in
+ *     captured evidence; invisible live, since the fixed layer follows
+ *     scroll in a real browser). growToFullHeight() (./settle.ts) grows the
+ *     viewport to the document's full scroll height BEFORE waitForSettle()
+ *     runs, so the settle step's own frame-stability check and the shot both
+ *     see the fully-reflowed page; restoreViewport() puts the original size
+ *     back afterwards so later rows are unaffected. See settle.ts and
+ *     fullheight.spec.ts for the offline pin.
  */
 import { test, expect, type Page, type Locator } from '@playwright/test';
 import * as fs from 'node:fs';
@@ -50,6 +74,9 @@ import * as path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { onboard, registerOnly, shot, SHOTS, apiContext, SUPERADMIN_USERNAME } from '../specs/helpers';
 import { loginPassword } from '../specs/rbac-roles';
+import {
+  waitForSettle, resumeFrozenAnimations, growToFullHeight, restoreViewport,
+} from './settle';
 
 interface DoAction {
   action: 'goto' | 'click' | 'fill' | 'press' | 'expect' | 'expectAttached' | 'expectHidden';
@@ -68,6 +95,8 @@ interface ShotRow {
   login?: string;
   route?: string;
   do?: DoAction[];
+  /** Live regions (canvas / rAF loops) excluded from waitForSettle's frame comparison; see shot-table.mjs MASK_SELECTORS. */
+  settle?: { mask: string[] };
   note?: string;
 }
 
@@ -187,7 +216,28 @@ for (const row of ROWS) {
 
       for (const a of row.do ?? []) await runAction(page, a);
 
-      await shot(page, name);                       // specs/helpers.ts shot(): fullPage, into SNAP_SHOTS
+      // Grow the viewport to the document's full scroll height BEFORE
+      // settling, so a fixed 100vh background layer reflows against a
+      // viewport that already covers the whole page (design note 7). Width
+      // is unchanged; the original size is restored in the finally below so
+      // later rows in this run start from the same viewport shots.config.ts
+      // set.
+      const originalViewport = await growToFullHeight(page, name);
+      try {
+        // #554: the row's last action landing does not mean the VIEW has. Wait
+        // for fonts, every finite animation and two identical frames (settle.ts)
+        // before shooting, so a plan image is never a ghosted mid-transition or
+        // half-rendered frame. A row that never settles fails loudly here and
+        // shoots nothing.
+        await waitForSettle(page, name, { mask: row.settle?.mask });
+        try {
+          await shot(page, name);                   // specs/helpers.ts shot(): fullPage, into SNAP_SHOTS
+        } finally {
+          await resumeFrozenAnimations(page);        // let any frozen infinite animation keep looping
+        }
+      } finally {
+        await restoreViewport(page, originalViewport);
+      }
 
       // The evidence guard lives in evidence.mjs so it can be exercised OFFLINE
       // (`node shot-harness/evidence.mjs <file.png>`) — a guard nobody can run

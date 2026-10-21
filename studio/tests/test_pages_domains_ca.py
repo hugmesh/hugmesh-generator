@@ -37,8 +37,10 @@ from hugmesh_studio.gui.pages.domains import (  # noqa: E402
 from hugmesh_studio.gui.pages import vault as vault_mod  # noqa: E402
 from hugmesh_studio.gui.qt import QtWidgets  # noqa: E402
 
-from _helpers import (  # noqa: E402
-    advance_to, check_worklist_rows, enable_additional_domains, pick_mode)
+from _helpers import (
+    added_row,   # noqa: E402
+    advance_to, back_to, check_worklist_rows, enable_additional_domains,
+    pick_mode)
 from ca_fixtures import CA_ALT, CA_ROOT  # noqa: E402
 
 STUDIO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -84,7 +86,9 @@ def _mesh_domains(wiz, certs=()):
 def test_the_column_is_appended_after_sign_in(wiz):
     dom = _mesh_domains(wiz, [CA_ROOT])
     assert _COL_CA == _COL_IDP + 1
-    assert dom.table.columnCount() == _COL_CA + 1
+    # appended after Sign-in; the GitHub org column (the Go-Live export step) sits
+    # after THIS one, so the table has at least these columns
+    assert dom.table.columnCount() >= _COL_CA + 1
     assert dom.table.horizontalHeaderItem(_COL_CA).text() == "Base CA"
     assert not dom.table.isColumnHidden(_COL_CA)                  # mesh: visible
 
@@ -92,7 +96,7 @@ def test_the_column_is_appended_after_sign_in(wiz):
 def test_cloud_hides_the_column_and_collects_no_choice(wiz):
     """A cloud client image provisions no domains, so the base CA is as meaningless
     there as the per-domain Casdoor is — hidden for the same reason, and a hidden
-    combo still collects its untouched 'None' (emission-neutral either way)."""
+    combo still collects its untouched 'None' (leaves the output unchanged either way)."""
     wiz.cfg.base_ca_certs = [CA_ROOT]
     pick_mode(wiz, "cloud")
     dom = advance_to(wiz, wizard_mod.DomainsPage)
@@ -106,7 +110,7 @@ def test_cloud_hides_the_column_and_collects_no_choice(wiz):
 def test_the_picker_offers_the_certificate_list_with_the_path_in_the_data_role(wiz):
     dom = _mesh_domains(wiz, [CA_ROOT, CA_ALT])
     dom._add("acme.example", "Acme")
-    combo = dom.table.cellWidget(0, _COL_CA)
+    combo = dom.table.cellWidget(added_row(dom, 0), _COL_CA)
     assert isinstance(combo, _BaseCaCombo)
     assert [combo.itemData(i) for i in range(combo.count())] == ["", CA_ROOT, CA_ALT]
     assert [combo.itemText(i) for i in range(1, combo.count())] == \
@@ -119,7 +123,7 @@ def test_with_no_certificates_the_cell_says_where_to_add_them(wiz):
     the list really is empty. The cell has to say why rather than look broken."""
     dom = _mesh_domains(wiz)
     dom._add("acme.example", "Acme")
-    combo = dom.table.cellWidget(0, _COL_CA)
+    combo = dom.table.cellWidget(added_row(dom, 0), _COL_CA)
     assert combo.count() == 1
     assert "Secrets store" in combo.itemText(0)
     assert "Secrets store" in dom.table.horizontalHeaderItem(_COL_CA).toolTip()
@@ -141,7 +145,7 @@ def test_choosing_a_ca_persists_to_cfg_domain_ca(wiz):
     dom = _mesh_domains(wiz, [CA_ROOT, CA_ALT])
     dom._add("acme.example", "Acme")
     dom._add("team.acme.example", "Team")
-    combo = dom.table.cellWidget(1, _COL_CA)
+    combo = dom.table.cellWidget(added_row(dom, 1), _COL_CA)
     combo.setCurrentIndex(combo.findData(CA_ALT))
     advance_to(wiz, wizard_mod.UsersChoicePage)
     assert wiz.cfg.domain_ca == {"team.acme.example": CA_ALT}
@@ -155,7 +159,7 @@ def test_a_choice_emits_no_flag_and_reaches_no_manifest(wiz):
     dom = _mesh_domains(wiz, [CA_ROOT])
     dom._add("acme.example", "Acme")
     before = wiz.cfg.to_cli_args()
-    combo = dom.table.cellWidget(0, _COL_CA)
+    combo = dom.table.cellWidget(added_row(dom, 0), _COL_CA)
     combo.setCurrentIndex(combo.findData(CA_ROOT))
     advance_to(wiz, wizard_mod.UsersChoicePage)
     assert wiz.cfg.domain_ca == {"acme.example": CA_ROOT}
@@ -173,7 +177,7 @@ def test_a_loaded_choice_seeds_the_combo_back(wiz):
     c.domain_ca = {"acme.example": CA_ALT}
     wiz.restart()
     dom = advance_to(wiz, wizard_mod.DomainsPage)
-    assert dom.table.cellWidget(0, _COL_CA).selected_ca() == CA_ALT
+    assert dom.table.cellWidget(added_row(dom, 0), _COL_CA).selected_ca() == CA_ALT
     advance_to(wiz, wizard_mod.UsersChoicePage)   # round-trips, never rewritten
     assert c.domain_ca == {"acme.example": CA_ALT}
 
@@ -183,13 +187,15 @@ def test_deleting_a_domain_takes_its_choice_with_it(wiz):
     dom = _mesh_domains(wiz, [CA_ROOT])
     dom._add("acme.example", "Acme")
     dom._add("team.acme.example", "Team")
-    for r in (0, 1):
+    for r in (added_row(dom, 0), added_row(dom, 1)):
         combo = dom.table.cellWidget(r, _COL_CA)
         combo.setCurrentIndex(combo.findData(CA_ROOT))
     advance_to(wiz, wizard_mod.UsersChoicePage)
     assert set(wiz.cfg.domain_ca) == {"acme.example", "team.acme.example"}
-    wiz.back()
-    dom.table.removeRow(1)
+    # back_to, not a single back(): the per-domain Services step (#495) now sits
+    # between Domains and the Users choice, so one back() lands there instead.
+    back_to(wiz, wizard_mod.DomainsPage)
+    dom.table.removeRow(added_row(dom, 1))
     advance_to(wiz, wizard_mod.UsersChoicePage)
     assert wiz.cfg.domain_ca == {"acme.example": CA_ROOT}
     wiz.cfg.validate_identity()
@@ -198,12 +204,12 @@ def test_deleting_a_domain_takes_its_choice_with_it(wiz):
 def test_renaming_a_domain_does_not_leave_the_old_name_behind(wiz):
     dom = _mesh_domains(wiz, [CA_ROOT])
     dom._add("acme.example", "Acme")
-    combo = dom.table.cellWidget(0, _COL_CA)
+    combo = dom.table.cellWidget(added_row(dom, 0), _COL_CA)
     combo.setCurrentIndex(combo.findData(CA_ROOT))
     advance_to(wiz, wizard_mod.UsersChoicePage)
     assert wiz.cfg.domain_ca == {"acme.example": CA_ROOT}
-    wiz.back()
-    dom.table.item(0, 0).setText("renamed.example")
+    back_to(wiz, wizard_mod.DomainsPage)          # see the note above
+    dom.table.item(added_row(dom, 0), 0).setText("renamed.example")
     advance_to(wiz, wizard_mod.UsersChoicePage)
     assert wiz.cfg.domain_ca == {"renamed.example": CA_ROOT}
 
@@ -215,7 +221,7 @@ def test_a_certificate_added_later_shows_up_on_a_back_nav(wiz, monkeypatch):
     the picker now offers it, with the row's previous choice preserved."""
     dom = _mesh_domains(wiz)
     dom._add("acme.example", "Acme")
-    assert dom.table.cellWidget(0, _COL_CA).count() == 1        # None only
+    assert dom.table.cellWidget(added_row(dom, 0), _COL_CA).count() == 1        # None only
     vault = advance_to(wiz, wizard_mod.VaultPage)
     monkeypatch.setattr(vault_mod, "pick_ca_certificates",
                         lambda *a, **k: ([CA_ROOT], ""))
@@ -224,7 +230,7 @@ def test_a_certificate_added_later_shows_up_on_a_back_nav(wiz, monkeypatch):
     assert wiz.cfg.base_ca_certs == [CA_ROOT]
     while wiz.currentId() != wiz._page_ids["domains"]:
         wiz.back()
-    combo = dom.table.cellWidget(0, _COL_CA)
+    combo = dom.table.cellWidget(added_row(dom, 0), _COL_CA)
     assert [combo.itemData(i) for i in range(combo.count())] == ["", CA_ROOT]
     combo.setCurrentIndex(combo.findData(CA_ROOT))
     advance_to(wiz, wizard_mod.UsersChoicePage)
@@ -237,11 +243,11 @@ def test_a_choice_whose_certificate_was_removed_falls_back_to_none(wiz):
     anything other than that page (a hand-edited config, a future caller)."""
     dom = _mesh_domains(wiz, [CA_ROOT])
     dom._add("acme.example", "Acme")
-    combo = dom.table.cellWidget(0, _COL_CA)
+    combo = dom.table.cellWidget(added_row(dom, 0), _COL_CA)
     combo.setCurrentIndex(combo.findData(CA_ROOT))
     wiz.cfg.base_ca_certs = []                       # the certificate is gone
     dom._refresh_base_ca()
-    assert dom.table.cellWidget(0, _COL_CA).selected_ca() == ""
+    assert dom.table.cellWidget(added_row(dom, 0), _COL_CA).selected_ca() == ""
     advance_to(wiz, wizard_mod.UsersChoicePage)
     assert wiz.cfg.domain_ca == {}
     wiz.cfg.validate_identity()

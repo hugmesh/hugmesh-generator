@@ -66,6 +66,8 @@ source "${SCRIPT_DIR}/scripts/_download-lib.sh"
 # the build host's libcrypt provably supports it, SHA-512 crypt ($6$) fallback.
 # shellcheck source=scripts/_passhash-lib.sh
 source "${SCRIPT_DIR}/scripts/_passhash-lib.sh"
+# shellcheck source=scripts/_domain-idp-lib.sh
+source "${SCRIPT_DIR}/scripts/_domain-idp-lib.sh"
 # THE role vocabulary (scripts/_roles-lib.sh). This board has NO role axis — --role
 # is a hostname/marker validated by a slug regex only — so the lib is sourced for one
 # thing: hugmesh_role_reject_node_role, which refuses a token that NAMES a cluster
@@ -97,6 +99,19 @@ source "${SCRIPT_DIR}/scripts/_binpkg-pool-lib.sh"
 # docs/SHARED-BINPKG.md.
 # shellcheck source=scripts/_shared-assets-lib.sh
 source "${SCRIPT_DIR}/scripts/_shared-assets-lib.sh"
+# Mounts left under the build system by a crashed run are listed and refused
+# before the stage3 is extracted over them or a second bind is stacked on them
+# (#659). This cross builder shares only THAT part of the resume library with
+# the x86 builder. Its static-library restore does not apply: no clean step
+# deletes *.a here, and the aarch64 cross toolchain links against its own
+# /usr/aarch64-unknown-linux-gnu (`aarch64-unknown-linux-gnu-gcc -print-sysroot`),
+# never ${SYSROOT}. The owner gate applies to a ROOT build only: a non-root build
+# owns this sysroot by design (the stage3 is extracted with --no-same-owner
+# below), while a root build's user-owned tree would reach the image, because
+# the media this builder makes straight from the sysroot keep its owners (see
+# the resume branch of the Extract phase).
+# shellcheck source=scripts/_builder-resume-lib.sh
+source "${SCRIPT_DIR}/scripts/_builder-resume-lib.sh"
 # Seed-derived PYTHON_TARGETS/PYTHON_SINGLE_TARGET (pt_apply_seed_targets).
 # A frozen python3_NN literal is a BUG — see docs/PYTHON-TARGETS-SEED-DRIFT.md.
 # shellcheck source=scripts/_python-targets-lib.sh
@@ -328,6 +343,10 @@ OPTIONS
 
   Branding / env / system  (same knobs as the other builders)
     --brand / --brand-title / --org / --cluster-domain / --env test|prod
+    --domain-idp DOMAIN=own|superdomain   (repeatable) Casdoor for DOMAIN's sign-in:
+        own = a dedicated instance, superdomain = the mesh's (default; bakes
+        nothing). Only `own` is baked: /etc/hugmesh/domain-idp. DOMAIN must be
+        a lowercase DNS name and not --cluster-domain. See docs/DOMAIN-IDP.md.
     -H hostname / -T timezone / -u user
     (--user-password / --root-password are DEPRECATED no-ops: no password is
      baked in; keyless boot mints a random one-time password + locks root)
@@ -467,6 +486,7 @@ while [[ $# -gt 0 ]]; do
         --env)                ENV="$2";                   shift 2 ;;
         --cluster-domain|--domain) CLUSTER_DOMAIN="$2";   shift 2 ;;
         --superdomain) SUPERDOMAIN="$2"; shift 2 ;;
+        --domain-idp) domain_idp_add "${2:-}"; shift 2 ;;   # repeatable <domain>=own|superdomain (#509)
         --brand)              BRAND="$2";                 shift 2 ;;
         --brand-title)        BRAND_TITLE="$2";           shift 2 ;;
         --org)                ORG="$2";                   shift 2 ;;
@@ -661,6 +681,9 @@ _require_match "--brand"          "${BRAND}"          "${_RE_SLUG}"
 _require_match "--org"            "${ORG}"            "${_RE_ORG}"
 _require_match "--cluster-domain" "${CLUSTER_DOMAIN}" "${_RE_DNS}"
 [ -n "${SUPERDOMAIN}" ] && _require_match "--superdomain" "${SUPERDOMAIN}" "${_RE_DNS}"
+# --domain-idp (#509): vocabulary + DNS shape were checked as each flag was read; this is
+# the cross-check against --cluster-domain.
+domain_idp_check "${CLUSTER_DOMAIN}" ""
 _require_match "--hostname"       "${HOSTNAME}"       "${_RE_DNS}"
 _require_match "--user"           "${DEFAULT_USER}"   "${_RE_USER}"
 _require_match "--brand-title"    "${BRAND_TITLE}"    "${_RE_TITLE}"
@@ -885,7 +908,33 @@ rebrand_sysroot() {
         # still rewritten by that catch-all: unsupported. The sentinels contain neither
         # `hugmesh` nor `hugmesh-`, so the middle rules skip them; the last -e rules
         # restore them verbatim.
+        # VAULT KV BASE — issue #285, decision 38 = B on #347 ("the reader follows
+        # the writer"). An ExternalSecret's remoteRef is `key: <base>/<doc>` and <base>
+        # must equal the segment the WRITER uses (scripts/gen-cluster-secrets.sh writes
+        # under BASE="${BRAND:-hugmesh}"; the in-cluster harbor-provision Job writes
+        # <base>/harbor-robots). MEASURED 2026-09-17, and it is the whole reason this
+        # rule is shaped the way it is: ArgoCD does NOT read the manifests under
+        # ${SYSROOT}/var/lib/hugmesh/cluster/manifests. specs/cluster/apps/04-external-
+        # secrets-config.yaml (and 03b, and 12) are Applications whose source is a git
+        # repoURL + path, and specs/cluster/bootstrap/bootstrap.sh applies from the baked
+        # tree ONLY namespaces/, manifests/local-path and apps/*.yaml. So a sed over the
+        # baked manifests/ subtree is INERT — the live cluster on this build host was read
+        # to confirm it (external-secrets-config: repoURL github.com/hugmesh/hugmesh-
+        # generator.git @ main, path specs/cluster/manifests/external-secrets).
+        # What IS live is apps/*.yaml, so that is where the brand is carried: each of
+        # those three Applications holds a one-line kustomize JSON-6902 op setting the
+        # platform.hugmesh.net/vault-base annotation, a `replacements` block in the
+        # git-served kustomization.yaml copies that annotation into every remoteRef base
+        # (and onto harbor's VAULT_KV_BASE env), and the two rules below are what make
+        # that one value follow BRAND instead of being eaten by the catch-all
+        # `hugmesh -> ORG`. Captured FIRST, restored LAST, so the middle knobs cannot
+        # touch it. The second rule keeps the baked (unserved) annotation defaults in
+        # agreement with what the served render produces. Default brand: the whole
+        # function early-returns, so this is a byte no-op.
+        # Pinned by tests/scripts/test-eso-remoteref-brand.sh.
         sed -i \
+            -e "s|\(~1vault-base, value: \"\)hugmesh\(\"\)|\1@@SDSYSVAULTBASE@@\2|g" \
+            -e "s|\(vault-base: \"\)hugmesh\(\"\)|\1@@SDSYSVAULTBASE@@\2|g" \
             -e "s|^hugmesh\.net/|@@SDSYSKEY@@/|g" \
             -e "s|\([ {(,=\"'\`]\)hugmesh\.net/|\1@@SDSYSKEY@@/|g" \
             -e "s|hugmesh\\\\\.net/|@@SDSYSKEYESC@@/|g" \
@@ -898,6 +947,7 @@ rebrand_sysroot() {
             -e "s|@@SDSYSAPIGRP@@|platform.hugmesh.net|g" \
             -e "s|@@SDSYSKEYESC@@/|hugmesh\\\\.net/|g" \
             -e "s|@@SDSYSKEY@@/|hugmesh.net/|g" \
+            -e "s|@@SDSYSVAULTBASE@@|${_brand}|g" \
             "${f}"
     done < <(find "${SYSROOT}/etc/hugmesh" -type f -print0 2>/dev/null)
 }
@@ -979,6 +1029,7 @@ if ${PRINT_PLAN}; then
     _plan BRAND              "${BRAND}"
     _plan CLUSTER_DOMAIN     "${CLUSTER_DOMAIN}"
     _plan SUPERDOMAIN        "${SUPERDOMAIN}"
+    domain_idp_plan_line   # PLAN_DOMAIN_IDP=<own domains>; prints nothing when none (#509)
     _plan HOSTNAME           "${HOSTNAME}"
     _plan OPTIONAL_SERVICES  "none"   # lean desktop client: no baked cluster tree
     _plan MESH               "$(${SKIP_MESH} && echo skip || echo "headscale=${HEADSCALE_VERSION},tailscale=$(${SKIP_TAILSCALE} && echo skip || echo "${TAILSCALE_VERSION}")")"
@@ -1327,7 +1378,37 @@ fi
 info "stage3 seed verified: ${STAGE3_LOCAL}"
 
 banner "Extracting stage3 into sysroot"
+
+# NEVER touch a sysroot that still has mounts under it, on EITHER branch: the
+# initramfs steps below bind host /proc, /sys and /dev under it for the qemu
+# chroot, and a build killed there leaves them attached (a failed dracut
+# unmounts them itself; a kill does not). A non-resume run would then extract
+# the stage3 OVER those binds — its ./proc, ./sys and ./dev entries land on the
+# HOST's directories — and a --resume run would stack a second bind on each for
+# the next dracut. Same check and the same refusal as the x86 builder (#659):
+# the listing comes from the kernel's own mount table (symlinks resolved,
+# escapes undone), and the refusal prints every mount as the umount command
+# that removes it, once per stacked layer.
+if [ -d "${SYSROOT}" ]; then
+    _stale_mounts="$(hmr_stale_mounts "${SYSROOT}")"
+    if [ -n "${_stale_mounts}" ]; then
+        hmr_stale_mount_refuse "${SYSROOT}" "${_stale_mounts}"
+        exit 1
+    fi
+fi
 if [ -f "${SYSROOT}/etc/gentoo-release" ] && ${RESUME}; then
+    # A ROOT build may only reuse a build system that is still root's: the live and
+    # installer squashfs are made from the sysroot (mksquashfs without -all-root, or
+    # a `tar --numeric-owner` pipe), which keeps its owners,
+    # so a tree that a finished `make` run had handed to the invoking user would
+    # bake that user into the image — on x86 such an image booted with sshd and
+    # tor refusing to start (#659). A non-root build owns its sysroot by design
+    # (the stage3 is extracted with --no-same-owner below) and is exempt. Checked
+    # here, before any write to the tree. This builder extracts the stage3 OVER an
+    # existing tree rather than wiping it, so the remedy is to remove the tree.
+    if [ "$(id -u)" -eq 0 ]; then
+        hmr_owner_gate "${SYSROOT}" "remove ${SYSROOT} (this builder extracts the stage3 over an existing tree; it does not wipe it) and rebuild WITHOUT --resume as root" || exit 1
+    fi
     info "Sysroot already populated and --resume set, skipping extraction"
 else
     TAR_X=(--exclude='./dev/*')
@@ -1579,6 +1660,8 @@ if [ -n "${SUPERDOMAIN}" ]; then
     echo "${SUPERDOMAIN}" > "${SYSROOT}/etc/hugmesh/superdomain"
     info "Baked orchestration superdomain -> /etc/hugmesh/superdomain (${SUPERDOMAIN})"
 fi
+# Per-domain IdP choice (#509): /etc/hugmesh/domain-idp, own domains only; absent otherwise.
+domain_idp_bake "${SYSROOT}/etc/hugmesh"
 echo "${ENV}"            > "${SYSROOT}/etc/hugmesh/env"
 echo "frite:${FRITE_BOARD}" > "${SYSROOT}/etc/hugmesh/board"
 if [ -n "${HEADSCALE_URL:-}" ]; then
@@ -1982,7 +2065,7 @@ else
         for must in CONFIG_SECURITY_SELINUX CONFIG_SECURITY_SELINUX_BOOTPARAM; do
             grep -q "^${must}=y" .config || { err "SELinux kernel option ${must} not enabled after olddefconfig"; exit 1; }
         done
-        grep -q '^CONFIG_LSM="yama,selinux"$' .config || { err "CONFIG_LSM malformed (expected yama,selinux)"; exit 1; }
+        grep -q '^CONFIG_LSM="lockdown,yama,selinux"$' .config || { err "CONFIG_LSM malformed (expected lockdown,yama,selinux); lockdown/SELinux would not activate"; exit 1; }
         # ...and every NAME in that string must have its module COMPILED IN. The
         # string-only assert above is structurally blind to how this actually
         # failed on the fleet: the kernel does not diagnose an LSM name it cannot

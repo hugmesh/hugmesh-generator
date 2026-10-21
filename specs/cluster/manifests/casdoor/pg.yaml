@@ -2,7 +2,7 @@
 # image's bundled DB. Casdoor stores all orgs / roles / users / applications /
 # providers here, so state survives restarts and Casdoor is no longer pinned to
 # the single-pod all-in-one. Credentials come from the ESO-materialized Secret
-# "casdoor-db" (Vault path secret/hugmesh/casdoor-db) — never committed.
+# "casdoor-db" (Vault path secret/<brand>/casdoor-db) — never committed.
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:

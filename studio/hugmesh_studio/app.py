@@ -14,6 +14,10 @@
   python -m hugmesh_studio --session-artifacts ID [--json]
   python -m hugmesh_studio --delete-session ID --yes [--delete-artifacts]
       # headless: the wizard Sessions page's build-session history (core/build_sessions)
+  python -m hugmesh_studio --local-ai-status [--json]
+  python -m hugmesh_studio --local-ai-prompt "question"
+      # headless: what the local model is doing (the Studio window's Local AI bar, as text),
+      # and one question to it; both exit non-zero with a plain sentence when Ollama is down
   python -m hugmesh_studio --generator-dir /path/to/hugmesh-generator
   python -m hugmesh_studio --remember-roles-for-passwordless-login
       # OPT-IN, default OFF: KeyZipPage imports also mirror human-loginable KEYS
@@ -122,7 +126,10 @@ def main(argv=None) -> int:
     ap.add_argument("--askpass-no-gui", action="store_true",
                     help="kept for #221 scripts: identical to --askpass (which never pops "
                          "the dialog either). Uses $HUGMESH_STUDIO_SUDO_PASSWORD, then "
-                         "$HUGMESH_STUDIO_ASKPASS_COMMAND, then a terminal prompt.")
+                         "$HUGMESH_STUDIO_ASKPASS_COMMAND, then a terminal prompt — only "
+                         "when stdin is a TTY: with stdin redirected (`</dev/null`, "
+                         "`<file`, a `while read` loop) it does not prompt on the "
+                         "controlling terminal and fails fast (exit 1).")
     ap.add_argument("--config", help="config JSON (with --print-command/--print-commands/--print-specs)")
     ap.add_argument("--backend", choices=["auto", "native", "docker"], default="auto",
                     help="build backend for --print-command (auto = host default)")
@@ -186,10 +193,31 @@ def main(argv=None) -> int:
                          "by environment and interface, with the index verified "
                          "against the disk BOTH ways. Accepts a run dir or a "
                          "report dir containing bdd-steps/.")
+    ap.add_argument("--local-ai-status", action="store_true",
+                    help="headless: what the local AI is doing - the Ollama server, the model "
+                         "loaded, the queue, the drafts and the Studio's running builds (the "
+                         "Studio window's Local AI bar as text). Exits 1 with the problem and "
+                         "its fix when Ollama is not installed, not answering or has no model. "
+                         "With --json: the same snapshot as JSON.")
+    ap.add_argument("--local-ai-prompt", metavar="TEXT", default=None,
+                    help="headless: ask the local model one question (loopback Ollama only) and "
+                         "print the answer; exits 1 with a plain sentence when Ollama is down.")
     ap.add_argument("--json", action="store_true",
                     help="with --scan-hardware/--list-sessions/--show-session/"
-                         "--session-artifacts: machine-readable JSON on stdout.")
+                         "--session-artifacts/--local-ai-status: machine-readable JSON on stdout.")
+    # ── the Go-Live "Export to GitHub org" step, from a terminal (Qt-free) ──────
+    # --org-export PLAN|APPLY with --domain/--org or --config, --rename-map, --out;
+    # APPLY refuses without --apply. The engine is core/org_export.py.
+    from .core.org_export import add_cli_arguments as _add_org_export_args
+    _add_org_export_args(ap)
     args = ap.parse_args(argv)
+
+    if args.org_export:
+        # Qt-free path: the same plan()/apply() the GUI step and the TUI step call,
+        # printed as the same text. Runs only git and gh (through the engine's one
+        # runner), never a Qt binding.
+        from .core.org_export import run_cli as _run_org_export
+        return _run_org_export(args, args.generator_dir)
 
     if args.login_agent:
         # Qt-free path: the loopback login agent is stdlib-only and blocks in
@@ -413,6 +441,34 @@ def main(argv=None) -> int:
               else hw_scan.format_table(s))
         return 0
 
+    if args.local_ai_status or args.local_ai_prompt is not None:
+        # Qt-free path: the same snapshot and the same loopback-only prompt the Studio
+        # window's Local AI bar and the terminal UI use (core/local_ai_status.py).
+        import json
+        from .core import local_ai_status as lai
+        if args.local_ai_status:
+            snap = lai.read_snapshot()
+            print(json.dumps(snap.to_dict(), sort_keys=True) if args.json
+                  else lai.format_status(snap))
+            if not snap.ok:
+                print(f"error: {snap.problem} {snap.fix} (see {snap.doc})", file=sys.stderr)
+                return 1
+            return 0
+        if not args.local_ai_prompt.strip():
+            # Same answer as ``local_ai_status prompt`` and the dock: an empty question is
+            # not sent. Exit 2 is "bad input", the code the other flags use for it.
+            print('usage: python -m hugmesh_studio --local-ai-prompt "question"',
+                  file=sys.stderr)
+            return 2
+        try:
+            lai.send_prompt(args.local_ai_prompt,
+                            on_chunk=lambda c: (sys.stdout.write(c), sys.stdout.flush()))
+        except lai.LocalAIError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+        print()
+        return 0
+
     if args.list_sessions or args.show_session or args.session_artifacts \
             or args.delete_session:
         # Qt-free path: the build-session history (core/build_sessions.py — the same
@@ -477,7 +533,7 @@ def main(argv=None) -> int:
         # an explicit OPT-IN (--askpass-gui, what the driver's generated helper passes
         # for a GUI-launched build); --askpass / --askpass-no-gui (#221) never pop it,
         # and with no credential source and no TTY on stdin they fail fast rather than
-        # wedge a headless run. Every prompt and diagnostic goes to stderr, never the
+        # hang a headless run. Every prompt and diagnostic goes to stderr, never the
         # password channel.
         from .core.askpass import run_askpass
         return run_askpass(argv, allow_gui=bool(args.askpass_gui and not args.askpass_no_gui))
@@ -597,7 +653,7 @@ def main(argv=None) -> int:
     #
     # Scoped deliberately:
     #   * with a tray, the tray branch above already turned the flag off and the tray
-    #     itself is the reason to stay, so autoquit would be inert anyway;
+    #     itself is the reason to stay, so autoquit would do nothing anyway;
     #   * --go-live/--fleet open a single-purpose window the shell does not track, so
     #     turning the flag off for them would leave an invisible process with nothing
     #     on screen and no way back. Their pre-existing quit-on-close is correct.
