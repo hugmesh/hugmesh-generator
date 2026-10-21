@@ -203,3 +203,43 @@ def test_the_tui_imports_the_mesh_that_ran_and_takes_a_number(ran_then_draft):
     assert "no saved mesh numbered 9" in j.status
     j.feed("y")
     assert j.cfg.cluster_domain == "draft.example"
+
+
+# ── Tor follows the picked record (saved-meshes skeptic 2, 2026-10-21) ────────
+def test_a_re_pick_after_back_does_not_keep_the_first_meshs_tor(wiz, qapp,
+                                                                ran_then_draft):
+    """Next imports the mesh that ran (Tor on); Back; pick the draft (Tor off): the
+    summary says off, so the node images must not carry Tor either. Before the fix
+    the import only ever turned Tor ON, and the first mesh's Tor stuck."""
+    _ran, draft = ran_then_draft
+    page = _gate(wiz, qapp)
+    page.confirm.setChecked(True)
+    wiz.next()
+    qapp.processEvents()
+    assert wiz.cfg.tor_onion_service is True
+    assert wiz.cfg.cluster_domain == "running.example"
+    wiz.back()
+    qapp.processEvents()
+    assert wiz.currentPage() is page
+    page.record_pick.setCurrentIndex(page.record_pick.findData(draft.id))
+    assert "Tor onion: <b>off</b>" in page.summary.text()
+    page.confirm.setChecked(True)
+    wiz.next()
+    qapp.processEvents()
+    assert wiz.cfg.cluster_domain == "draft.example"
+    assert wiz.cfg.tor_onion_service is False
+
+
+def test_tui_a_second_gate_pass_without_tor_clears_only_the_imported_tor():
+    j = journey.Journey(GENERATOR_DIR)
+    j.cfg.tor_onion_service = False
+    tui_lc.apply_gate(j, "running.example", [], with_tor=True)
+    assert j.cfg.tor_onion_service is True
+    tui_lc.apply_gate(j, "draft.example", [], with_tor=False)
+    assert j.cfg.tor_onion_service is False
+    # the operator's own Tor (not set by an import) is still left alone
+    k = journey.Journey(GENERATOR_DIR)
+    k.cfg.tor_onion_service = True
+    tui_lc.apply_gate(k, "running.example", [], with_tor=True)
+    tui_lc.apply_gate(k, "draft.example", [], with_tor=False)
+    assert k.cfg.tor_onion_service is True

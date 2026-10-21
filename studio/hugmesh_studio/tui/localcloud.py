@@ -34,7 +34,8 @@ from ..core.local_mesh_bootstrap import (
     saved_mesh_source,
 )
 from ..core.local_mesh_domains import (
-    apply_imported_domains, imported_domains_lines, imported_mesh_domains,
+    apply_imported_domains, apply_imported_tor, imported_domains_lines,
+    imported_mesh_domains,
 )
 from ..core.seeded_credentials import load_roster
 
@@ -142,10 +143,10 @@ def apply_gate(journey, domain: str, users: list[tuple[str, list[str]]],
     apply_imported_domains(cfg, mesh_domains)
     # THE SAVED-MESH -> NODE-IMAGE BRIDGE (#579), the GUI gate's rule restated: a
     # mesh that ran Tor sets the mesh-wide onion default on the base (the network
-    # step shows it and can clear it); materialize() emits it per platform. Only
-    # ever turns it ON.
-    if with_tor:
-        cfg.tor_onion_service = True
+    # step shows it and can clear it); materialize() emits it per platform. A mesh
+    # without Tor turns off only a Tor an earlier gate pass's import turned on.
+    journey._localcloud_tor_by_import = apply_imported_tor(
+        cfg, with_tor, bool(getattr(journey, "_localcloud_tor_by_import", False)))
     superdomain = cfg.effective_superdomain()
     # The saved mesh's accounts REPLACE ``cfg.users`` (like the domains), the GUI
     # gate's rule restated (#707): accounts an earlier flow of the session left behind

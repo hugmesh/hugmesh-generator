@@ -56,7 +56,7 @@ from .domain_services import normalise_slugs, record_reviewed, reviewed_names
 __all__ = ["LocalMeshDomains", "bootstrap_domain_records", "own_idp_names",
            "added_row_problems", "domains_from_bootstrap", "reviewed_record_names",
            "record_walk", "imported_mesh_domains", "apply_imported_domains",
-           "imported_domains_lines",
+           "apply_imported_tor", "imported_domains_lines",
            "DOMAIN_NAME_RE", "LOCAL_MESH_REMEDY", "SAVED_MESH_REMEDY",
            "DOCKER_SERVICES_NOTE"]
 
@@ -389,6 +389,25 @@ def _import_problem(row) -> str:
     if idp not in DOMAIN_IDP_CHOICES:
         return f"sign-in {idp!r} is not one of {', '.join(DOMAIN_IDP_CHOICES)}"
     return ""
+
+
+def apply_imported_tor(cfg, with_tor: bool, set_by_import: bool) -> bool:
+    """THE SAVED-MESH -> NODE-IMAGE Tor BRIDGE (#579), shared by the GUI gate's
+    validatePage and the TUI's ``apply_gate``. A mesh that ran Tor turns the mesh-wide
+    onion default ON (the Network step shows it ticked and can clear it). A mesh
+    without Tor leaves the operator's own choice alone — EXCEPT a Tor setting that an
+    earlier import on the same gate turned on (``set_by_import``): picking another
+    saved mesh, or the same page re-imported after Back, must not keep the first
+    mesh's Tor while the summary says "Tor onion: off" (saved-meshes skeptic 2,
+    2026-10-21). Returns the new ``set_by_import`` for the caller to keep."""
+    if with_tor:
+        if not cfg.tor_onion_service:
+            cfg.tor_onion_service = True
+            return True
+        return set_by_import
+    if set_by_import:
+        cfg.tor_onion_service = False
+    return False
 
 
 def apply_imported_domains(cfg, md: "LocalMeshDomains | None") -> list[str]:

@@ -51,7 +51,8 @@ from ...core.local_mesh_bootstrap import (
     saved_mesh_source,
 )
 from ...core.local_mesh_domains import (
-    apply_imported_domains, imported_domains_lines, imported_mesh_domains,
+    apply_imported_domains, apply_imported_tor, imported_domains_lines,
+    imported_mesh_domains,
 )
 from ...core.seeded_credentials import load_roster
 
@@ -205,6 +206,7 @@ class LocalCloudNodesPage(QtWidgets.QWizardPage):
         super().__init__()
         self.wiz = wiz
         self._imported = False       # one-shot import latch (see validatePage)
+        self._tor_by_import = False  # Tor is on because an import here turned it on
         self._domain = ""
         self._users: list[tuple[str, list[str]]] = []
         self._with_tor = False       # the imported mesh ran the Tor onion (#579)
@@ -633,10 +635,11 @@ class LocalCloudNodesPage(QtWidgets.QWizardPage):
             # worklist rows do not exist yet at this point. materialize() emits it
             # through each platform's real channel: x86 --with-tor, rpi5 the `tor`
             # node slug (worklist._apply_infra_services), nothing where no builder
-            # can bake it. Only ever turns it ON: a mesh without Tor leaves the
-            # operator's own choice alone.
-            if self._with_tor:
-                cfg.tor_onion_service = True
+            # can bake it. A mesh without Tor leaves the operator's own choice
+            # alone, but turns OFF a Tor an earlier import on this page turned on
+            # (a re-pick after Back), so the images match the summary.
+            self._tor_by_import = apply_imported_tor(cfg, self._with_tor,
+                                                     self._tor_by_import)
             superdomain = cfg.effective_superdomain()
             # The saved mesh's accounts REPLACE ``cfg.users`` (like the domains above):
             # accounts an earlier flow of this Studio session left behind belong to
