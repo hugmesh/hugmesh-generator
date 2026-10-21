@@ -296,8 +296,9 @@ def test_saved_section_is_collapsed_when_there_are_no_records(qapp, page):
     idx = [body.indexOf(page.sections["review"]), body.indexOf(page.sections["bringup"])]
     assert idx[0] >= 0 and idx[1] >= 0 and idx[0] < idx[1]
     assert page.sections["review"].layout().indexOf(page.saved_section) >= 0
-    assert page.sections["bringup"].layout().indexOf(
-        page.boot_start_btn.parentWidget()) >= 0
+    # the Actions part (the flow box plus the status line's copy above it)
+    assert page.sections["bringup"].layout().indexOf(page.actions_box) >= 0
+    assert page.actions_box.isAncestorOf(page.boot_start_btn)
     _settle(qapp, page)
 
 

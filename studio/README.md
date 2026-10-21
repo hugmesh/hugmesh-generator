@@ -210,7 +210,8 @@ do must be a documented command; repo-root `make` fronts: `scan-hardware`,
   build is never deleted (exit 1). The artifact tree goes only on an explicit
   `--delete-artifacts` (core checks the workdir's shape first).
 
-- **Local AI** — the Local AI bar along the bottom of every Studio window, as text
+- **Local AI** — the local-assistant status of the Studio panel along the bottom of every
+  Studio window (see "The Studio panel" below), as text
   (`core/local_ai_status.py`: the Ollama server and model loaded, the queue and drafts
   that `scripts/local-ai.sh` keeps, the Studio's own running builds). Loopback only; no
   hosted service, no account, no key:
@@ -226,12 +227,64 @@ do must be a documented command; repo-root `make` fronts: `scan-hardware`,
   starts and feeds it is `scripts/local-ai.sh` (see `docs/LOCAL-AI-ASSISTANT.md`,
   section 11).
 
+## The Studio panel (bottom of every window)
+
+Every Studio window has one panel docked along its bottom. Collapsed it is one row: the
+local-AI status, what is running ("Mesh: Bootstrapping running · 1 image build running"),
+**Start local assistant**, **Current work** and **Pop out**. The chevron opens it on any
+page; **Pop out** moves it into a window of its own (close that window, or press **Put
+back**, to return it). Its tabs:
+
+- **Assistant** — the prompt line and the answer area, and beside them every option the
+  local assistant has:
+  - **Which Ollama the assistant uses**: the system Ollama (`$OLLAMA_HOST` or
+    `127.0.0.1:11434`), or **Ollama in Docker** — the Studio's own container
+    `hugmesh-studio-ollama`, from `ollama/ollama:0.40.0` pinned by digest, on the
+    loopback-only port `127.0.0.1:11435` (never 11434, so it can run beside a system
+    one; `HUGMESH_OLLAMA_DOCKER_PORT` moves it), models kept in the named volume
+    `hugmesh-studio-ollama-models`, and the GPU passed through only when Docker can
+    provide one (`--gpus all` with the NVIDIA runtime or a CDI spec, the ROCm image on an
+    AMD machine, otherwise CPU, said in words). The line under the choice says which
+    instance is in use and where. The choice is saved, and the text UI's Local AI screen
+    uses the same one (`ollama docker` / `ollama system` there). Every call the assistant
+    makes takes its address from this one choice: the status read, the prompt, Start, the
+    agent launcher's look at the machine and the agent it starts. Nothing starts until you
+    press **Start local assistant** (Docker mode starts the container first and waits for
+    it to answer; the first start downloads about 3.8 GB) or **Start Docker Ollama**.
+    **Stop Docker Ollama** stops the container and keeps the models.
+  - **Where your checkouts are**: the folder that holds your `hugmesh-*` checkouts
+    (empty = the folder that holds this generator checkout, or `$HUGMESH_REPOS_ROOT`).
+  - the **local AI agent launcher** described below.
+- **Local mesh** — the local-mesh Actions box (Generate & start, Stop mesh, Check
+  readiness, the DevOps lane, Add user, Save this mesh, …). The status line is copied
+  just above the buttons, so a press that is refused says why right there. Off the
+  local-mesh steps (the Welcome page, say) the first press of **Generate & start** only
+  arms it ("Press again to start"): the settings have not been reviewed yet.
+- **Running mesh** — every pod and container of both lanes, with addresses, doors and
+  replicas. It keeps refreshing on any page while it is on screen.
+- **Mesh run** — the stage tree and log of the local-mesh verb that is running. The panel
+  opens on it when a verb starts, wherever you are.
+- **Image builds** — every image build this Studio is running, and the mesh verb; the
+  picked build's log is followed live beside the list (its last 400 lines), and **Show
+  this build** brings its window, with the stages and packages, to the front (the tray's
+  door).
+
+These are the local-mesh page's own widgets, moved into the panel, so a verb keeps
+running and streaming whatever page you are on, with the panel collapsed or popped out.
+The Bring-up step now holds a note saying where they went and a **Show the panel** button;
+arriving at it opens the panel on its Local mesh tab, and while it is on screen the panel
+takes most of the window. A refusal from a button outside the Local mesh tab (a saved
+mesh's Start on the review step, the join step's Start, a pod row's Open) opens the panel
+on its Mesh run tab, where the status line is. The standalone single-page frame
+(`LocalMeshDialog`), which has no panel, still shows them on its page.
+
 ## Local mesh: work on it with a local AI agent (issue #695)
 
-On the **Bring-up** page of the local-mesh path (where both the Docker mesh and the
-kind DevOps lane end) the card **Work on this mesh with a local AI agent** starts a coding
-agent on a model that runs on this PC, in a copy of one app's repository. It does what
-[docs/LOCAL-AI-ASSISTANT.md](../docs/LOCAL-AI-ASSISTANT.md) tells a person to do by hand:
+In the **Assistant** tab of the Studio panel (it used to be a card on the Bring-up page of
+the local-mesh path; the operator moved it out of the build phase on 2026-10-21, with every
+option it had) the agent launcher **Start a local AI agent on this mesh's code** starts a
+coding agent on a model that runs on this PC, in a copy of one app's repository. It does
+what [docs/LOCAL-AI-ASSISTANT.md](../docs/LOCAL-AI-ASSISTANT.md) tells a person to do by hand:
 
 - The card names, in plain words, the first thing that is missing: Ollama not installed,
   the server not answering on `127.0.0.1:11434`, no pulled model with the **tools**
@@ -243,8 +296,7 @@ agent on a model that runs on this PC, in a copy of one app's repository. It doe
 - **Lane** follows the lane whose verb last ran on the page (Start DevOps lane sets it to
   the kind cluster, Generate & start to the Docker mesh) and only changes what the brief
   says about rebuilding a service; a lane you pick by hand stays until the next verb. The
-  **App** list follows the Repo source choice, in the stepped wizard and the single-page
-  frame alike.
+  **App** list follows the Repo source choice of the window's local-mesh page.
 - A press makes `<state dir>/agent-work/<mesh>/<repo>` with `git clone --no-hardlinks`,
   `git remote remove origin` and `git switch -c lm/<timestamp>` from the app's folder
   (`./.stack-src/hugmesh-<name>`, or your own tree), writes the brief beside it, and opens a
@@ -253,6 +305,15 @@ agent on a model that runs on this PC, in a copy of one app's repository. It doe
   uncommitted work, no remote and was cloned from the folder's current commit; otherwise a
   numbered one is made and nothing is deleted. Uncommitted edits in the real folder are not
   in the copy, and the card says so.
+- **Project context.** Every start (and every Copy command) writes
+  `HUGMESH-CONTEXT.md` fresh beside the brief (`core/agent_context.py`): what the hugmesh
+  org and each checked-out repository are, what the Studio is and where its parts live,
+  and where the sources are on this machine — the checkouts folder, the generator
+  checkout, the folder the mesh builds from and each domain's code folders. The brief
+  tells the agent to read it first and carries the same text inline. **Start local
+  assistant** writes it too, into the local-AI state folder, and hands the queue worker
+  `HUGMESH_AGENT_CONTEXT` and `HUGMESH_REPOS_ROOT`, so the worker's agents
+  (`AGENT=opencode`, or an explicit agent) start with the same context.
 - The model is `hugmesh-agent` when pulled, else the first model the doc names that is
   pulled with tools (`qwen3:8b` first), else the first with tools. Cloud models are never
   offered.
@@ -417,7 +478,7 @@ hugmesh_studio/
   core/        config (flag mapping) · build_driver (native/docker) · hw_scan ·
                profiles · keyzip · mesh_node · platform_info ·
                local_ai_status (Local AI snapshot + prompt)      <- headless, unit-testable
-  gui/         qt shim (PySide6|PyQt6) · wizard (pages) · tray · Local AI bar (_local_ai_dock)
+  gui/         qt shim (PySide6|PyQt6) · wizard (pages) · tray · the Studio panel (_local_ai_dock)
   tui/         terminal UI (urwid, OPTIONAL — degrades to plain prompts)  <- headless, unit-testable
   app.py       entry point
 packaging/     PyInstaller spec, WiX (MSI) and Flatpak files

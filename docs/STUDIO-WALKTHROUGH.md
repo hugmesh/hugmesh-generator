@@ -162,9 +162,9 @@ The card opens a **Local Docker mesh** screen with two cards, and they are alter
 6. **Identity provider** — collapsed by default. This is the mesh's own sign-in: the default every domain inherits. A domain chooses its own on its Identity tab (its own Casdoor, or its own Azure Entra ID, AWS Cognito or OIDC provider). External OIDC here is validation-only config; the local stack pins its own Casdoor split, and the page says so.
 7. **Mesh overlay** — prod only. The tailnet auth key, an optional headscale URL, and the public domain, shown read-only because the Domains step owns it.
 8. **Saved meshes and the plan.** A read-only plan preview refreshes live from every earlier step, and a mesh-state line reports whether a mesh is already running. The **Saved meshes** table sits here, collapsed. Nothing runs until you press a button on the next step, except a saved row's Start or Restore, which does run docker.
-9. **Bring-up and monitor.** The end of the path: **Exit** closes the Studio and the mesh keeps running in Docker.
+9. **Bring-up and monitor.** The end of the path: **Exit** closes the Studio and the mesh keeps running in Docker. The step itself holds a note and a **Show the panel** button: the actions, the running mesh and the run log live in the **Studio panel** docked at the bottom of the window, and arriving here opens it on its **Local mesh** tab. The panel is there on every page, can be collapsed, or popped out into its own window, and a verb keeps running whatever page you are on.
 
-The bring-up step's action bar wraps and holds more than the bring-up. Its buttons:
+The panel's Local mesh action bar wraps and holds more than the bring-up. Its buttons:
 
 - Generate & start, Stop mesh, Stop & clean Docker…, Cancel.
 - Check readiness (read-only host probes: docker, buildx, disk headroom, maven prerequisites) and Build maven prereqs (m2).
@@ -173,7 +173,7 @@ The bring-up step's action bar wraps and holds more than the bring-up. Its butto
 - Vaults & volumes…, Save this mesh, Add user….
 - A separate Kubernetes lane: Install DevOps prerequisites, Start DevOps lane, its add-on checkboxes, Delete DevOps lane.
 
-Every verb runs on a worker thread. The long ones stream into a stage tree and can be cancelled. The log pane below filters to whichever stage you click. A collapsed section, *Running mesh — pods, addresses and doors*, lists every pod and container of both lanes with its addresses, an Open button only where the browser may safely go, and a Replicas column for scaling.
+Every verb runs on a worker thread. The long ones stream into a stage tree (the panel's **Mesh run** tab, which opens by itself when a verb starts) and can be cancelled. The log pane filters to whichever stage you click. The **Running mesh** tab, *Running mesh — pods, addresses and doors*, lists every pod and container of both lanes with its addresses, an Open button only where the browser may safely go, and a Replicas column for scaling. The **Image builds** tab lists every image build this Studio is running. The **Assistant** tab holds the local assistant and the local AI agent launcher (it used to be a card on this step).
 
 Sensible first run: `test`, the default source mode, Check readiness, then Generate & start.
 

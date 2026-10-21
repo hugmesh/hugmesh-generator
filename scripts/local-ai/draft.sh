@@ -96,8 +96,17 @@ if ! git -C "$SRC" worktree add -f --detach "$SCRATCH" "$BASE" >>"$OUT/agent.log
 fi
 note "scratch worktree $SCRATCH at $(git -C "$SCRATCH" rev-parse --short HEAD) ($BASE)"
 
+# HUGMESH_AGENT_CONTEXT: the project-context file written when the worker started
+# (studio core/agent_context.py: by the Studio with its mesh's domains, or by
+# `local-ai.sh start` without). It is written AGAIN here, right before this agent, from
+# the inputs saved beside it, so the checkouts and code folders it lists are the ones on
+# disk now. A failed refresh keeps the last file. draft.py hands its text to the agent.
+if [ -n "${HUGMESH_AGENT_CONTEXT:-}" ]; then
+  la_ctx refresh "$HUGMESH_AGENT_CONTEXT" >>"$OUT/agent.log" 2>&1 \
+    || note "the project-context file could not be refreshed; the agent gets the last one"
+fi
 timeout "${TODO_TIMEOUT:-1500}" env -i PATH="$PATH" HOME="$HOME" LANG="${LANG:-C.UTF-8}" TERM=dumb \
-  OLLAMA_HOST="$host" \
+  OLLAMA_HOST="$host" HUGMESH_AGENT_CONTEXT="${HUGMESH_AGENT_CONTEXT:-}" \
   python3 "$HERE/draft.py" --repo "$REPO" --issue "$N" --out "$OUT" --work "$SCRATCH" \
     --model "$LA_MODEL" --agent "$AGENT" --timeout "${TODO_TIMEOUT:-1500}" >>"$OUT/agent.log" 2>&1 </dev/null &
 TPID=$!
