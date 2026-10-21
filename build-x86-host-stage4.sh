@@ -410,7 +410,7 @@ PACKAGES_DROP=""
 # FREE drivers (open, no EULA, hardened) are the default. Only NVIDIA has a
 # proprietary DISPLAY driver; AMD/Intel "pro" = the open display driver + the
 # vendor's proprietary/closed compute + Vulkan stack. Values:
-#   all-free    : open Mesa for ALL vendors (amdgpu radeonsi intel iris nouveau) —
+#   all-free    : open Mesa for ALL vendors (amdgpu radeonsi radeon intel iris nouveau) —
 #                 works on any GPU. DEFAULT. (Includes the FREE NVIDIA driver, nouveau.)
 #   nvidia-free : open NVIDIA only (nouveau).
 #   nvidia      : NVIDIA proprietary (x11-drivers/nvidia-drivers, NVIDIA-r2 EULA;
@@ -885,7 +885,7 @@ build-x86-host-stage4.sh — hardened Gentoo amd64 k8s/GPU worker image.
       --gpu-driver VALUE    all-free (DEFAULT — open Mesa for every vendor; any GPU;
                             NVIDIA=nouveau) | nvidia-free (nouveau) | nvidia
                             (proprietary x11-drivers/nvidia-drivers, NVIDIA-r2 EULA,
-                            nouveau blacklisted) | amd-free (amdgpu/radeonsi; alias
+                            nouveau blacklisted) | amd-free (amdgpu/radeonsi/radeon; alias
                             ati-free) | amd-pro (+ AMDGPU-PRO Vulkan/OpenCL, EULA) |
                             intel-free (i915/iris) | intel-pro (+ Intel compute/media
                             stack) | none. Only NVIDIA has a proprietary DISPLAY
@@ -1924,13 +1924,21 @@ fi
 # gpu_video_cards() is THE driver→VIDEO_CARDS matrix: the make.conf render
 # (@@VIDEO_CARDS@@, make.conf.tmpl:68) and the assert below both read it, so the
 # builder cannot hold two opinions about which cards this image has.
+# Every list that carries 'radeonsi' MUST also carry 'radeon': on a client role
+# x11-base/xorg-drivers maps video_cards_radeonsi to x11-drivers/xf86-video-ati
+# (xorg-drivers-21.1-r2.ebuild:81), and xf86-video-ati depends on
+# x11-libs/libdrm[video_cards_radeon]. libdrm inherits THIS list, so without
+# 'radeon' that dependency is unsatisfiable and the whole 'image' emerge stops
+# at "Calculating dependencies" (2026-10-21 standalone-unaffiliated build,
+# --gpu-driver all-free: "missing: grub-install dracut parted jq nmcli Xorg
+# lightdm openbox"). tests/scripts/test-spec-use-parity.sh section 5 pins it.
 gpu_video_cards() { # <gpu-driver> -> the VIDEO_CARDS list for it
     case "$1" in
-        all-free)    echo "amdgpu radeonsi intel iris nouveau" ;;
+        all-free)    echo "amdgpu radeonsi radeon intel iris nouveau" ;;
         nvidia-free) echo "nouveau" ;;
         nvidia)      echo "nouveau nvidia" ;;
         amd-free)    echo "amdgpu radeonsi radeon" ;;
-        amd-pro)     echo "amdgpu radeonsi" ;;
+        amd-pro)     echo "amdgpu radeonsi radeon" ;;
         intel-free)  echo "intel iris" ;;
         intel-pro)   echo "intel iris" ;;
         *)           echo "" ;;                  # 'none' and any non-GPU role
