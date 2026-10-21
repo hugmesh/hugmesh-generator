@@ -4023,9 +4023,10 @@ class LocalMeshPage(QtWidgets.QWizardPage):
             problems = list(boot.validate())
         except Exception as e:                       # noqa: BLE001 — a note only
             problems = [f"could not be checked ({type(e).__name__}: {e})"]
-        theme_err = self.login_theme.error_text()
-        if theme_err:
-            problems.append("themes: " + theme_err)
+        look_err = self.look_css_and_error()[1]
+        if look_err:
+            problems.append("the look (the ‘Look’ tab of this mesh's own domain): "
+                            + look_err)
 
         # filled by the worker, read by _on_saved_captured on the GUI thread (the
         # done signal is what orders the two) — the disagreement belongs ON SCREEN,
