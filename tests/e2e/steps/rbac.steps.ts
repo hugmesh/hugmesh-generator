@@ -855,11 +855,6 @@ When('the API client POSTs {string} with the JSON body {string}',
     await recordResponse(world, `POST ${path}`, await api.post(path, { data }));
   });
 
-Then('the response status is not {int}', async ({ world }, unwanted: number) => {
-  const r = world.get<APIResponse>('response');
-  expect(r.status(), responseLabel(world)).not.toBe(unwanted);
-});
-
 Then('the response body does not contain {string}', async ({ world }, needle: string) => {
   const body = world.get<string>('responseBody');
   expect(body.includes(needle), `${responseLabel(world)} must not contain ${JSON.stringify(needle)}`)
@@ -1027,13 +1022,6 @@ Then('my browser session answers status {int} at {string}',
       },
     ).toBe(status);
   });
-
-Then('the browser holds no cookie named {string}', async ({ context }, name: string) => {
-  await expect.poll(
-    async () => (await context.cookies()).filter((c) => c.name === name).map((c) => c.value).length,
-    { message: `no '${name}' cookie may survive sign-out`, timeout: 10_000, intervals: [250, 500, 1_000] },
-  ).toBe(0);
-});
 
 // ── the moderator's guard rails (generator#294 NC4 / NC5) ───────────────────
 //
