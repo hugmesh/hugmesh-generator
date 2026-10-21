@@ -1,0 +1,8 @@
+{
+ "version": 2,
+ "cluster": "hugmesh-local",
+ "context": "kind-hugmesh-local",
+ "halted_at": "2026-10-21T09:22:04Z",
+ "completed": true,
+ "argocd_ns": "devops"
+}
