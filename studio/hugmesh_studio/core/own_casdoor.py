@@ -35,7 +35,7 @@ from __future__ import annotations
 
 import os
 
-from .config import DOMAIN_IDP_OWN, default_brand_id
+from .config import default_brand_id, runs_own_casdoor
 
 # Base host port of the per-domain sequence (brand A's Casdoor owns :8000; the
 # brand-b proof runs the second instance on :8001).
@@ -50,10 +50,10 @@ OVERLAY_RELPATH = os.path.join("tests", "stack", ".compose.own-domains.yaml")
 
 
 def own_domain_names(domains) -> tuple[str, ...]:
-    """The names of the domains that chose idp='own', in table order (the order
-    the port sequence is allocated from). Accepts config.Domain rows."""
-    return tuple(d.name for d in domains
-                 if getattr(d, "idp", "") == DOMAIN_IDP_OWN and d.name)
+    """The names of the domains that run their OWN Casdoor (idp='own' with no external
+    provider — config.runs_own_casdoor), in table order (the order the port sequence
+    is allocated from). Accepts config.Domain rows."""
+    return tuple(d.name for d in domains if runs_own_casdoor(d) and d.name)
 
 
 def slug(name: str) -> str:

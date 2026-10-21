@@ -52,8 +52,17 @@ FULL_ROW = dict(
     look={"primary": "#112233", "font": "System UI"},
     ways={"internal_name": "shop.acme.internal",
           "public": {"provider": "duckdns", "inputs": {"host": "shop"},
-                     "token_file": "/run/secrets/duckdns"}},
+                     "token_file": "/run/secrets/duckdns"},
+          # per-domain VPN membership and egress (core/domain_reach, 2026-10-21)
+          "tailnet": True,
+          "egress": {"mode": "vpn", "conf": "/etc/hugmesh/egress/shop.conf"}},
     issuer_port=8002,
+    # every field says something, or the battery is blind to it (_differences
+    # compares None == None for a key the row does not carry)
+    github_org="shop-org",
+    # per-domain identity-provider settings (2026-10-21)
+    idp_settings={"provider": "oidc", "issuer": "https://id.shop.example",
+                  "client_id": "shop-app", "jwks": "https://id.shop.example/keys"},
 )
 
 
@@ -266,6 +275,30 @@ MUTATIONS: tuple[tuple[str, str, str, str], ...] = (
 
 def test_battery_names_every_copy_site():
     assert {m[0] for m in MUTATIONS} == set(brand_model.COPY_SITES)
+
+
+def test_every_field_says_something_in_the_full_row():
+    """A field FULL_ROW leaves at its default is invisible to the round trip: a site
+    that dropped it would compare default == default and stay green."""
+    blank = Domain()
+    for k in DOMAIN_FIELDS:
+        assert k in FULL_ROW and FULL_ROW[k] != getattr(blank, k), k
+
+
+#: The same battery for the per-domain sign-in settings (2026-10-21): each site's
+#: mutation re-pointed from ``look`` to ``idp_settings``.
+MUTATIONS_IDP = tuple((site, fname, old, new.replace("'look'", "'idp_settings'")
+                       .replace('"look"', '"idp_settings"'))
+                      for site, fname, old, new in MUTATIONS)
+
+
+@pytest.mark.parametrize("site,fname,old,new", MUTATIONS_IDP,
+                         ids=[m[0] for m in MUTATIONS_IDP])
+def test_deleting_idp_settings_at_each_site_turns_the_round_trip_red(
+        tmp_path, site, fname, old, new):
+    assert "idp_settings" in new and "look" not in new, site
+    test_deleting_a_key_at_each_site_turns_the_round_trip_red(tmp_path, site, fname,
+                                                              old, new)
 
 
 _RUNNER = """

@@ -77,6 +77,8 @@ WAYS: tuple[tuple[str, str], ...] = (
     ("internal_name", "internal name"),
     ("tor", "Tor address"),
     ("public", "public name through a provider"),
+    ("tailnet", "VPN (the mesh's private network)"),
+    ("egress", "outbound traffic (egress)"),
 )
 
 #: (way, path) -> what that path DOES with the recorded choice today (D10). These are
@@ -104,6 +106,25 @@ WAY_EFFECT: dict[tuple[str, str], str] = {
     ("public", "image"):
         "baked into the plan the Go-Live wizard reads on the device; opening public "
         "ports applies to the whole computer",
+    # per-domain VPN membership and egress (core/domain_reach): recorded on every path,
+    # applied on none yet — each mesh joins ONE private network and runs ONE egress
+    ("tailnet", "docker"):
+        "recorded only: this mesh joins its private network as a whole (production "
+        "only); nothing here applies a per-brand choice yet",
+    ("tailnet", "kind"):
+        "recorded only: the cluster joins no private network; nothing here applies "
+        "this yet",
+    ("tailnet", "image"):
+        "recorded only: a node joins its mesh's private network as a whole; no "
+        "builder reads a per-brand choice yet",
+    ("egress", "docker"):
+        "recorded only: this mesh runs one egress for all its brands; nothing here "
+        "applies a per-brand choice yet",
+    ("egress", "kind"):
+        "recorded only: the cluster has no egress VPN; nothing here applies this yet",
+    ("egress", "image"):
+        "recorded only: an image's egress VPN covers the whole computer; no builder "
+        "reads a per-brand choice yet",
 }
 
 #: Words a brand screen never shows (D1). Exported for the screen lanes and their

@@ -44,9 +44,10 @@ import time
 from dataclasses import asdict, dataclass, field, fields
 from typing import NamedTuple
 
-from . import brand_model, own_casdoor, theme
+from . import brand_model, domain_reach, own_casdoor, theme
 from .config import DOMAIN_FIELDS, IDP_CHOICES, IDP_LABELS, _IDP_CLIENT_ID_RE, _IDP_URL_RE, \
-    github_org_problem, idp_effective_jwks
+    domain_signin_problems, effective_signin, github_org_problem, has_external_signin, \
+    idp_effective_jwks
 from .local_mesh import ENV_AUTHKEY, LocalMeshConfig, LocalMeshNode
 from .local_services import (
     FEDERATION_DISABLE_ENV, FEDERATION_ENABLE_ENV, PROFILE_AKKOMA, PROFILE_ANUBIS,
@@ -55,6 +56,7 @@ from .local_services import (
     by_slug as by_local_slug, federation_env, federation_selection,
     federation_slugs, local_slugs, profile_flags, profile_slugs, validate_selection,
     PROFILE_MEDIA_POISONER, KIND_LANE_LABEL, kind_slugs,
+    domain_local_slugs, split_selection,
 )
 from .egress_conf import validate_egress_conf
 from .domain_services import tor_domain_entries
@@ -238,7 +240,12 @@ class LocalMeshBootstrapConfig:
     # the minted .onion address. Mirrors the NODE `tor` optional service, scaled to
     # the local docker mesh; reachability is over Tor, with no public IP/DNS/ports.
     with_tor: bool = False
-    # WHICH individual services the local mesh runs (core/local_services.py's
+    # 2026-10-21: the MESH-PLANE half only (local_services.mesh_plane_slugs — tor,
+    # anubis, wiki, edge-ai-tts, media-poisoner, egress-vpn). The per-domain services
+    # live on the ``domains`` rows and the mesh runs the union
+    # (``effective_services``); a per-domain slug found here still runs (union) and a
+    # saved one migrates into the rows on load (``_migrate_domain_services``).
+    # Before: WHICH individual services the local mesh runs (core/local_services.py's
     # catalogue slugs). Two mechanisms behind one list: the compose-profile slugs
     # (`tuwunel` -> the social profile, `tor`) start/stop containers at bring-up,
     # the federation slugs (wiki/owncast/tube/character-*) flip their
@@ -328,8 +335,9 @@ class LocalMeshBootstrapConfig:
     # byte-identical to a config from before the field existed. ``own_idp_domains``
     # above is what the compose lane CONSUMES (derived from the same rows); this
     # tuple is what the saved-mesh record and the plan carry. The per-domain
-    # ``optional_services`` are recorded and NOT enforced on this lane: the compose
-    # profiles come from ``services`` (the mesh-wide Services step).
+    # ``optional_services`` ARE what this lane runs (2026-10-21): the compose profiles
+    # and federation rows come from their union with the mesh-plane ``services``
+    # (``effective_services``).
     domains: tuple[dict, ...] = ()
     # WHICH of the recorded ``domains`` rows had been through the Studio's Domain
     # services step when this config was collected (#494 fix round). A saved-mesh
@@ -383,20 +391,76 @@ class LocalMeshBootstrapConfig:
         return self.is_prod() and self.effective_with_tor() and not self.tor_release
 
     # ── services selection -> the two back-ends ─────────────────────────────────
+    def domain_services_union(self) -> tuple[str, ...]:
+        """Every local-stack service any recorded domain row chose
+        (``domains[].optional_services``), in catalogue order — the PER-DOMAIN half of
+        what the mesh runs (2026-10-21: per-domain services are the one source of
+        truth; the mesh-wide "Local services" pick is retired). A slug the local stack
+        cannot run is not here (the row still records it for the cluster)."""
+        chosen: set[str] = set()
+        for r in self.domains or ():
+            if isinstance(r, dict):
+                svcs = r.get("optional_services") or ()
+                if isinstance(svcs, (list, tuple)):
+                    chosen.update(str(x) for x in svcs)
+        return tuple(s for s in domain_local_slugs() if s in chosen)
+
+    def mesh_plane_services(self) -> tuple[str, ...]:
+        """The MESH-PLANE half of ``services`` (tor, anubis, wiki, edge-ai-tts,
+        media-poisoner, egress-vpn — local_services.mesh_plane_slugs), plus any slug
+        this catalogue does not know (validate() names it). () when no selection."""
+        return split_selection(self.services)[1]
+
+    def effective_services(self) -> tuple[str, ...] | None:
+        """WHAT THE MESH RUNS: the union of the mesh-plane ``services`` and every
+        recorded domain's own services. ONE function every reader asks (the profile
+        switches below, the federation half, the stack node, the plan), so a domain's
+        choice and the mesh's infrastructure cannot disagree.
+
+        UNION, never subtraction: a domain slug still found in ``services`` (a caller
+        that has not moved to per-domain rows yet — the GUI's old picker, the CLI's
+        ``--services``) still runs. ``from_dict`` MIGRATES a saved one into the rows,
+        so a reloaded record says it once.
+
+        None — "no picker was ever used" — only when ``services`` is None AND no
+        recorded domain chose anything: the legacy ``social``/``with_tor`` flags then
+        rule and nothing federation-shaped is exported, byte-identical to before.
+        With ``services`` None and a domain that chose something, the legacy flags
+        become their slugs (``with_tor`` -> tor, ``social`` -> tuwunel) and join the
+        union. When the rows add nothing new, ``services`` is returned AS GIVEN (same
+        tuple, same order), so every pre-existing config reads exactly as before."""
+        rows = self.domain_services_union()
+        if self.services is None:
+            if not rows:
+                return None
+            base: tuple[str, ...] = ((("tor",) if self.with_tor else ())
+                                     + (("tuwunel",) if self.social else ()))
+        else:
+            base = tuple(self.services)
+        extra = [s for s in rows if s not in base]
+        if not extra and self.services is not None:
+            return self.services
+        chosen = set(base) | set(rows)
+        known = local_slugs()
+        return (tuple(s for s in known if s in chosen)
+                + tuple(dict.fromkeys(s for s in base if s not in known)))
+
     def effective_social(self) -> bool:
         """Whether the `social` compose profile comes up. An explicit services
         selection decides it (the picker's Matrix row IS the social switch — one
         profile, six containers); with no selection the legacy flag still rules, so
         every pre-picker caller behaves exactly as it did."""
-        if self.services is None:
+        sel = self.effective_services()
+        if sel is None:
             return self.social
-        return profile_flags(self.services).get(PROFILE_SOCIAL, False)
+        return profile_flags(sel).get(PROFILE_SOCIAL, False)
 
     def effective_with_tor(self) -> bool:
         """Same rule as effective_social(), for the `tor` profile."""
-        if self.services is None:
+        sel = self.effective_services()
+        if sel is None:
             return self.with_tor
-        return profile_flags(self.services).get(PROFILE_TOR, False)
+        return profile_flags(sel).get(PROFILE_TOR, False)
 
     def effective_phpbb(self) -> bool:
         """Same rule again, for the `phpbb` profile (PHPBB=1 -> STACK_ALT_PROFILE).
@@ -404,56 +468,63 @@ class LocalMeshBootstrapConfig:
         No legacy flag to fall back on: unlike social/tor these slugs never had a
         pre-picker boolean, so with NO selection they are simply off — which keeps a
         pre-picker caller's stack byte-identical to before these profiles existed."""
-        if self.services is None:
+        sel = self.effective_services()
+        if sel is None:
             return False
-        return profile_flags(self.services).get(PROFILE_PHPBB, False)
+        return profile_flags(sel).get(PROFILE_PHPBB, False)
 
     def effective_akkoma(self) -> bool:
         """Same rule, for the `akkoma` profile (AKKOMA=1 -> STACK_ALT_PROFILE)."""
-        if self.services is None:
+        sel = self.effective_services()
+        if sel is None:
             return False
-        return profile_flags(self.services).get(PROFILE_AKKOMA, False)
+        return profile_flags(sel).get(PROFILE_AKKOMA, False)
 
     def effective_games(self) -> bool:
         """Same rule, for the `games` profile (GAMES=1 -> STACK_GAMES_PROFILE).
         No legacy flag, like phpbb/akkoma: with no selection it is simply off."""
-        if self.services is None:
+        sel = self.effective_services()
+        if sel is None:
             return False
-        return profile_flags(self.services).get(PROFILE_GAMES, False)
+        return profile_flags(sel).get(PROFILE_GAMES, False)
 
     def effective_anubis(self) -> bool:
         """Same rule, for the `anubis` profile (ANUBIS=1 -> STACK_ALT_PROFILE)."""
-        if self.services is None:
+        sel = self.effective_services()
+        if sel is None:
             return False
-        return profile_flags(self.services).get(PROFILE_ANUBIS, False)
+        return profile_flags(sel).get(PROFILE_ANUBIS, False)
 
     def effective_tts(self) -> bool:
         """Same rule, for the `edge-ai-tts` profile (TTS=1). Threading this was
         MISSED when the row graduated (2026-08-14): the checkbox existed but
         exported nothing, so a checked box brought up no container."""
-        if self.services is None:
+        sel = self.effective_services()
+        if sel is None:
             return False
-        return profile_flags(self.services).get(PROFILE_EDGE_AI_TTS, False)
+        return profile_flags(sel).get(PROFILE_EDGE_AI_TTS, False)
 
     def effective_poisoner(self) -> bool:
         """Same rule, for the `media-poisoner` profile (POISONER=1) — the AI
         media cloak. Threading this is NOT optional bookkeeping: the exact same
         link was missed for edge-ai-tts above, and the symptom is a checkbox
         that reports success and brings up nothing."""
-        if self.services is None:
+        sel = self.effective_services()
+        if sel is None:
             return False
-        return profile_flags(self.services).get(PROFILE_MEDIA_POISONER, False)
+        return profile_flags(sel).get(PROFILE_MEDIA_POISONER, False)
 
     def effective_egress_vpn(self) -> bool:
         """Same rule, for the `egress-vpn` profile (EGRESS_VPN=1 +
         EGRESS_VPN_CONF=<path> -> STACK_EGRESS_FLAGS)."""
-        if self.services is None:
+        sel = self.effective_services()
+        if sel is None:
             return False
-        return profile_flags(self.services).get(PROFILE_EGRESS_VPN, False)
+        return profile_flags(sel).get(PROFILE_EGRESS_VPN, False)
 
     def federation_services(self) -> tuple[str, ...]:
         """The federation-mechanism half of the selection (catalogue order)."""
-        return federation_selection(self.services)
+        return federation_selection(self.effective_services())
 
     def idp_external(self) -> bool:
         return self.idp != "casdoor"
@@ -549,12 +620,47 @@ class LocalMeshBootstrapConfig:
         # refusing the record would strand an operator's saved mesh over bookkeeping.
         # services=None (CLI-made, "no picker was used") keeps the booleans as the
         # authority, untouched.
-        svc = vals.get("services")
-        if svc is not None:
-            flags = profile_flags(svc)
-            vals["with_tor"] = bool(flags.get(PROFILE_TOR, False))
-            vals["social"] = bool(flags.get(PROFILE_SOCIAL, False))
-        return cls(**vals)
+        cfg = cls(**vals)
+        cfg._migrate_domain_services()
+        if cfg.services is not None:
+            flags = profile_flags(cfg.effective_services())
+            cfg.with_tor = bool(flags.get(PROFILE_TOR, False))
+            cfg.social = bool(flags.get(PROFILE_SOCIAL, False))
+        return cfg
+
+    def _migrate_domain_services(self) -> None:
+        """MIGRATION (2026-10-21, the retired "Local services" pick). A saved
+        ``services`` selection's DOMAIN slugs (the per-domain catalogue) move into
+        every recorded domain row that has no services of its own, and leave
+        ``services``, which keeps the mesh-plane slugs only (a tuple stays a tuple,
+        even an empty one). A record with no rows at all gets ONE row: the mesh's own
+        domain, carrying the selection — what the Domains step records for an own
+        domain that says something — and it is marked as walked, because before this
+        the own domain was the implicit, already-reviewed cluster default and a saved
+        Start never asked about it. Rows that chose their own services keep them. The
+        mesh therefore runs exactly what it ran (``effective_services`` is the union);
+        it is only said once. No domain slug in ``services`` (every record written by
+        a per-domain screen, and every None) changes nothing."""
+        if self.services is None:
+            return
+        dom, rest = split_selection(self.services)
+        if not dom:
+            return
+        rows = [dict(r) for r in self.domains]
+        for r in rows:
+            if str(r.get("name") or "").strip() and not (r.get("optional_services") or []):
+                r["optional_services"] = list(dom)
+        own = (self.cluster_domain or "").strip() or self.resolved_domain()
+        if not any(str(r.get("name") or "").strip() == own for r in rows):
+            # the own domain was implicit (never a row): it gets its row first, as the
+            # Domains step records it, and keeps the walked status it implicitly had
+            rows.insert(0, {"name": own, "title": "", "idp": "superdomain",
+                            "optional_services": list(dom)})
+            if own not in self.domain_services_reviewed:
+                self.domain_services_reviewed = ((own,)
+                                                 + tuple(self.domain_services_reviewed))
+        self.domains = tuple(rows)
+        self.services = tuple(rest)
 
 
 class LocalMeshBootstrap:
@@ -657,7 +763,7 @@ class LocalMeshBootstrap:
         # compose half has already become these two booleans by the time it gets here.
         return LocalStackNode(self.generator_dir, env=self.cfg.env,
                               social=self.cfg.effective_social(), domain=domain,
-                              services=self.cfg.services,
+                              services=self.cfg.effective_services(),
                               source_mode=self.cfg.source_mode,
                               source_dir=self.cfg.source_dir,
                               web_locales=self.cfg.web_locales,
@@ -941,6 +1047,16 @@ class LocalMeshBootstrap:
                     brand_model.secret_problems(
                         {"superbrand": self.cfg.superbrand,
                          "brands": list(self.cfg.domains)}, "record"))
+        # ── per-domain sign-in and egress (2026-10-21): each recorded row's own
+        # provider block follows the mesh-wide rules (config.domain_signin_problems,
+        # the same checks as the idp block above), and a row whose egress names its
+        # own provider file gets the same file check as the mesh's egress-vpn
+        # (domain_reach.egress_conf_problems -> validate_egress_conf). A config with
+        # no such row (every one written before) adds nothing here.
+        rows = [r for r in self.cfg.domains if isinstance(r, dict)]
+        for r in rows:
+            problems.extend(domain_signin_problems(r, self.cfg, rows))
+        problems.extend(domain_reach.egress_conf_problems(rows, self.cfg))
         if self.cfg.is_prod():
             if not self.cfg.cluster_domain.strip():
                 problems.append("prod requires a public cluster domain "
@@ -974,6 +1090,17 @@ class LocalMeshBootstrap:
                     f"builds fine until it reaches a missing one "
                     f"(missing: {', '.join(missing[:4])}"
                     + (", …" if len(missing) > 4 else "") + ").")
+        # a domain with its own EXTERNAL provider (config.has_external_signin): the
+        # compose lane registers own CASDOORS only (own_casdoor.tenancy_env), so on
+        # this mesh the domain has no sign-in of its own — said, never implied.
+        for r in self.cfg.domains:
+            if isinstance(r, dict) and has_external_signin(r):
+                s = effective_signin(r, self.cfg)
+                out.append(
+                    f"{(r.get('name') or '').strip()} signs in through its own "
+                    f"{IDP_LABELS.get(s.provider, s.provider)}: this local Docker mesh "
+                    "does not register a domain's own external provider yet, so here it "
+                    "is reached through the mesh's sign-in (recorded for the cluster).")
         return out
 
     def preflight(self) -> list[str]:
@@ -1153,9 +1280,9 @@ class LocalMeshBootstrap:
         # the one on screen. The third block is marked NOT-RUN rather than checkboxed,
         # which is the same thing the rows themselves say.
         fed = c.federation_services()
-        fed_env = federation_env(c.services)
-        if c.services is not None:
-            chosen = set(c.services)
+        fed_env = federation_env(c.effective_services())
+        if c.effective_services() is not None:
+            chosen = set(c.effective_services())
             lines.append("")
             lines.append("      SERVICES (compose profiles — start/stop containers here):")
             for slug in profile_slugs():

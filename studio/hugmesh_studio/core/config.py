@@ -35,7 +35,7 @@ import re
 import shlex
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, asdict, MISSING
-from typing import Any
+from typing import Any, NamedTuple
 
 import sys
 
@@ -2971,6 +2971,19 @@ class Domain:
     # all. OMIT-WHEN-EMPTY on every saved shape, like ``tor``, so an untouched
     # config, record and manifest keep their bytes.
     github_org: str = ""
+    # This domain's OWN identity-provider settings (2026-10-21, per-domain sign-in):
+    # {"provider", "issuer", "client_id", "jwks"} — the same four values the mesh-wide
+    # provider carries (ImageConfig.idp / idp_issuer / idp_client_id / idp_jwks), and
+    # validated by the same rules (``signin_problems``). EMPTY — the default and every
+    # row written before the field existed — INHERITS: a ``superdomain`` row signs in
+    # through the mesh's central provider, whatever that is, and an ``own`` row runs
+    # its own Casdoor exactly as before. Only an ``own`` row may carry settings, and
+    # only an external provider (entra/aws/oidc) needs them: that brand then trusts its
+    # own external issuer — one more ``<issuer>=<brand id>`` pair in the gateways'
+    # tenancy registry (hugmesh-gateway DomainRegistry: one issuer, one brand) — and
+    # no Casdoor is stood up for it. Written through ONE function,
+    # ``set_domain_signin``; read through ``effective_signin``. OMIT-WHEN-EMPTY.
+    idp_settings: dict[str, Any] = field(default_factory=dict)
 
 
 #: Every field a brand row carries, in declaration order — THE key list every copy
@@ -2980,7 +2993,248 @@ DOMAIN_FIELDS: tuple[str, ...] = tuple(Domain.__dataclass_fields__)
 
 #: Row keys left out of every SAVED shape when they are empty/false/zero, so a row
 #: that does not use them is written exactly as before the field existed.
-DOMAIN_OMIT_WHEN_EMPTY: tuple[str, ...] = ("id", "tor", "look", "ways", "issuer_port", "github_org")
+DOMAIN_OMIT_WHEN_EMPTY: tuple[str, ...] = ("id", "tor", "look", "ways", "issuer_port",
+                                           "github_org", "idp_settings")
+
+
+# ── per-domain identity-provider settings (2026-10-21) ──────────────────────────────
+#: The keys ``Domain.idp_settings`` may hold, in display order.
+DOMAIN_IDP_SETTINGS_KEYS: tuple[str, ...] = ("provider", "issuer", "client_id", "jwks")
+
+#: Where a domain's effective sign-in comes from (``DomainSignIn.source``).
+SIGNIN_FROM_MESH = "mesh"                # superdomain row: the mesh's central provider
+SIGNIN_OWN_CASDOOR = "own-casdoor"       # own row, no settings: its own Casdoor
+SIGNIN_OWN_EXTERNAL = "own-external"     # own row with an external provider
+
+SIGNIN_SOURCE_WORDS = {
+    SIGNIN_FROM_MESH: "inherited from the mesh's sign-in",
+    SIGNIN_OWN_CASDOOR: "this domain's own Casdoor",
+    SIGNIN_OWN_EXTERNAL: "this domain's own external provider",
+}
+
+
+class DomainSignIn(NamedTuple):
+    """A domain's EFFECTIVE sign-in (``effective_signin``). ``issuer`` is "" when the
+    path that starts the mesh derives it (the central Casdoor, or the domain's own
+    Casdoor: core/own_casdoor.issuer_for on the Docker mesh, https://id.<domain> on a
+    cluster); ``jwks`` is the effective JWKS (explicit, else the per-provider
+    derivation ``idp_effective_jwks``)."""
+    where: str          # DOMAIN_IDP_SUPERDOMAIN | DOMAIN_IDP_OWN
+    provider: str       # IDP_CHOICES
+    issuer: str
+    client_id: str
+    jwks: str
+    source: str         # SIGNIN_FROM_MESH | SIGNIN_OWN_CASDOOR | SIGNIN_OWN_EXTERNAL
+
+
+def signin_problems(provider: str, issuer: str = "", client_id: str = "",
+                    jwks: str = "", where: str = "") -> list[str]:
+    """Why one provider block cannot be used ([] when it can) — the mesh-wide rules of
+    ``ImageConfig.validate_identity`` (the same regexes, the same combinations), for a
+    domain's own block: Casdoor carries no external values at all; an external
+    provider needs an https:// issuer and a client id, and a JWKS override must be
+    https:// too. ``where`` prefixes each sentence ("domain shop.example: ")."""
+    p = f"{where}: " if where else ""
+    prov = (provider or "").strip() or "casdoor"
+    issuer, client_id, jwks = ((issuer or "").strip(), (client_id or "").strip(),
+                               (jwks or "").strip())
+    if prov not in IDP_CHOICES:
+        return [f"{p}unknown identity provider {provider!r} (known: "
+                f"{', '.join(IDP_CHOICES)})"]
+    out: list[str] = []
+    if prov == "casdoor":
+        for label, v in (("sign-in address", issuer), ("client id", client_id),
+                         ("key address (JWKS)", jwks)):
+            if v:
+                out.append(f"{p}a {label} is set but the provider is Casdoor, which "
+                           "derives its own; clear it or pick an external provider")
+        return out
+    if not issuer or not _IDP_URL_RE.fullmatch(issuer):
+        out.append(f"{p}{IDP_LABELS.get(prov, prov)} needs an https:// sign-in address "
+                   f"(got {issuer!r}); it is what every sign-in is checked against "
+                   "and must be TLS")
+    if not client_id or not _IDP_CLIENT_ID_RE.fullmatch(client_id):
+        out.append(f"{p}{IDP_LABELS.get(prov, prov)} needs a client id (got "
+                   f"{client_id!r}; letters, digits and . _ : / -, at most 128)")
+    if jwks and not _IDP_URL_RE.fullmatch(jwks):
+        out.append(f"{p}the key address (JWKS) must be an https:// URL (got {jwks!r}); "
+                   "leave it empty to derive the provider's default")
+    return out
+
+
+def idp_settings_shape_problem(settings) -> str:
+    """Why ``settings`` is not a ``Domain.idp_settings`` SHAPE ("" when it is): an
+    object of text values under the four known keys, with a known provider. What the
+    strict loader refuses at load (``ImageConfig._domain_from_dict``); the values
+    themselves are checked by :func:`domain_signin_problems`."""
+    if settings is None:
+        return ""
+    if not isinstance(settings, dict):
+        return f"idp_settings must be an object, got {settings!r}"
+    for k, v in settings.items():
+        if k not in DOMAIN_IDP_SETTINGS_KEYS:
+            return (f"idp_settings has an unknown key {k!r} (known: "
+                    f"{', '.join(DOMAIN_IDP_SETTINGS_KEYS)})")
+        if v is not None and not isinstance(v, str):
+            return f"idp_settings.{k} must be text, got {v!r}"
+    prov = str(settings.get("provider") or "").strip()
+    if prov and prov not in IDP_CHOICES:
+        return (f"idp_settings.provider must be one of {'|'.join(IDP_CHOICES)}, "
+                f"got {prov!r}")
+    return ""
+
+
+def clean_idp_settings(settings) -> dict[str, str]:
+    """The STORED form of a settings block: stripped text, empty values dropped, and
+    a block that says only "casdoor" (the own-Casdoor default) is empty — so a row
+    whose screen merely showed the provider picker keeps its old bytes."""
+    if not isinstance(settings, dict):
+        return {}
+    out = {k: str(settings.get(k) or "").strip() for k in DOMAIN_IDP_SETTINGS_KEYS}
+    out = {k: v for k, v in out.items() if v}
+    if out.get("provider", "casdoor") == "casdoor" and set(out) <= {"provider"}:
+        return {}
+    return out
+
+
+def _row_get(row, key, default=None):
+    if isinstance(row, dict):
+        return row.get(key, default)
+    return getattr(row, key, default)
+
+
+def runs_own_casdoor(row) -> bool:
+    """Whether this domain stands up ITS OWN Casdoor: sign-in ``own`` with no external
+    provider. What every own-Casdoor consumer (the compose overlay, its port sequence,
+    ``ImageConfig.own_idp_domains``) asks instead of ``idp == "own"`` alone, so a
+    domain with its own EXTERNAL provider never gets a Casdoor nobody uses. Accepts a
+    Domain or a recorded row dict."""
+    if (_row_get(row, "idp", "") or "") != DOMAIN_IDP_OWN:
+        return False
+    settings = _row_get(row, "idp_settings") or {}
+    prov = (str(settings.get("provider") or "").strip()
+            if isinstance(settings, dict) else "")
+    return prov in ("", "casdoor")
+
+
+def has_external_signin(row) -> bool:
+    """Whether this domain trusts its OWN external issuer (sign-in ``own`` with an
+    entra/aws/oidc provider)."""
+    return ((_row_get(row, "idp", "") or "") == DOMAIN_IDP_OWN
+            and not runs_own_casdoor(row))
+
+
+def effective_signin(row, mesh=None) -> DomainSignIn:
+    """THE resolver of a domain's sign-in, like ``brand_model.effective_look`` is of
+    its look: a ``superdomain`` row inherits the MESH's provider (``mesh`` is any
+    object with ``idp``/``idp_issuer``/``idp_client_id``/``idp_jwks`` — an ImageConfig
+    or a LocalMeshBootstrapConfig; None = the built-in Casdoor); an ``own`` row with
+    no settings is its own Casdoor; an ``own`` row with an external provider is that
+    provider. An ``own`` row never inherits an external MESH provider: two brands on
+    one issuer cannot be told apart (the gateways' DomainRegistry maps one issuer to
+    one brand), so "its own" always means a different issuer."""
+    where = (_row_get(row, "idp", "") or DOMAIN_IDP_SUPERDOMAIN)
+    if where != DOMAIN_IDP_OWN:
+        prov = (getattr(mesh, "idp", "") or "casdoor") if mesh is not None else "casdoor"
+        if prov == "casdoor":
+            return DomainSignIn(DOMAIN_IDP_SUPERDOMAIN, "casdoor", "", "", "",
+                                SIGNIN_FROM_MESH)
+        iss = (getattr(mesh, "idp_issuer", "") or "").strip()
+        jw = (getattr(mesh, "idp_jwks", "") or "").strip()
+        return DomainSignIn(DOMAIN_IDP_SUPERDOMAIN, prov, iss,
+                            (getattr(mesh, "idp_client_id", "") or "").strip(),
+                            idp_effective_jwks(prov, iss, jw), SIGNIN_FROM_MESH)
+    s = clean_idp_settings(_row_get(row, "idp_settings") or {})
+    prov = s.get("provider", "casdoor")
+    if prov == "casdoor":
+        return DomainSignIn(DOMAIN_IDP_OWN, "casdoor", "", "", "", SIGNIN_OWN_CASDOOR)
+    iss = s.get("issuer", "")
+    return DomainSignIn(DOMAIN_IDP_OWN, prov, iss, s.get("client_id", ""),
+                        idp_effective_jwks(prov, iss, s.get("jwks", "")),
+                        SIGNIN_OWN_EXTERNAL)
+
+
+def domain_signin_problems(row, mesh=None, others=()) -> list[str]:
+    """Why a domain's sign-in cannot be used ([] when it can): its settings block's
+    shape and values (:func:`signin_problems`), settings on a ``superdomain`` row
+    (they would never be read — the row inherits the mesh's), and an external issuer
+    that is the mesh's own or another domain's (``others``: the other rows), because
+    one issuer can only ever be one brand."""
+    name = (_row_get(row, "name", "") or "").strip()
+    where = f"domain {name}" if name else "domain"
+    settings = _row_get(row, "idp_settings") or {}
+    shape = idp_settings_shape_problem(settings)
+    if shape:
+        return [f"{where}: {shape}"]
+    s = clean_idp_settings(settings)
+    idp = _row_get(row, "idp", "") or DOMAIN_IDP_SUPERDOMAIN
+    if idp != DOMAIN_IDP_OWN:
+        return ([f"{where}: it signs in through the mesh, so its own identity-provider "
+                 "settings would never be read; choose sign-in ‘own’ or clear them"]
+                if s else [])
+    out = signin_problems(s.get("provider", ""), s.get("issuer", ""),
+                          s.get("client_id", ""), s.get("jwks", ""), where)
+    if out or not has_external_signin(row):
+        return out
+    iss = s.get("issuer", "").rstrip("/")
+    mesh_iss = ((getattr(mesh, "idp_issuer", "") or "").strip().rstrip("/")
+                if mesh is not None and (getattr(mesh, "idp", "") or "casdoor") != "casdoor"
+                else "")
+    if iss and iss == mesh_iss:
+        out.append(f"{where}: its sign-in address is the mesh's own; a domain with its "
+                   "own sign-in needs an address of its own (one address can only be "
+                   "one brand), or choose sign-in ‘superdomain’")
+    for o in others or ():
+        if o is row:
+            continue
+        oname = (_row_get(o, "name", "") or "").strip()
+        if oname == name or not has_external_signin(o):
+            continue
+        oset = _row_get(o, "idp_settings") or {}
+        oiss = str(oset.get("issuer") or "").strip() if isinstance(oset, dict) else ""
+        if oiss.rstrip("/") == iss:
+            out.append(f"{where}: {oname} already uses the sign-in address {iss}; one "
+                       "address can only be one brand")
+    return out
+
+
+def set_domain_signin(row, idp: str, *, provider: str = "", issuer: str = "",
+                      client_id: str = "", jwks: str = "", mesh=None,
+                      others=()) -> list[str]:
+    """THE ONE WRITER of a domain's sign-in (``idp`` + ``idp_settings``), for every
+    screen: ``idp`` is DOMAIN_IDP_CHOICES; ``provider`` "" or "casdoor" on an ``own``
+    row means its own Casdoor (settings cleared), an external provider stores the
+    block. A ``superdomain`` row's settings are always cleared (it inherits the
+    mesh's). ``others`` are the other rows (an issuer clash is refused). Returns the
+    problems ([] = written); nothing is written when there is one. ``issuer_port`` (an
+    own Casdoor's stored port) is cleared when the row stops running its own Casdoor,
+    so a port is never held by a brand that has none. Accepts a Domain or a recorded
+    row dict."""
+    idp = (idp or "").strip() or DOMAIN_IDP_SUPERDOMAIN
+    if idp not in DOMAIN_IDP_CHOICES:
+        return [f"sign-in must be one of {'|'.join(DOMAIN_IDP_CHOICES)}, got {idp!r}"]
+    block = ({} if idp != DOMAIN_IDP_OWN else clean_idp_settings(
+        {"provider": provider, "issuer": issuer, "client_id": client_id, "jwks": jwks}))
+    probe = Domain(name=str(_row_get(row, "name", "") or ""), idp=idp,
+                   idp_settings=dict(block))
+    problems = domain_signin_problems(probe, mesh, [o for o in (others or ())
+                                                    if o is not row])
+    if problems:
+        return problems
+    if isinstance(row, dict):
+        row["idp"] = idp
+        if block:
+            row["idp_settings"] = dict(block)
+        else:
+            row.pop("idp_settings", None)
+        if not runs_own_casdoor(row):
+            row.pop("issuer_port", None)
+    else:
+        row.idp = idp
+        row.idp_settings = dict(block)
+        if not runs_own_casdoor(row):
+            row.issuer_port = 0
+    return []
 
 
 def domain_rows_to_dict(domains) -> list[dict[str, Any]]:
@@ -3578,6 +3832,15 @@ class ImageConfig:
         if problem:
             raise ValueError(f"domain {kw.get('name', '')!r}: {problem}")
         kw["github_org"] = org.strip()
+        # per-domain identity-provider settings (2026-10-21): absent/null — every
+        # earlier row — is the empty (inherit) default; a wrong SHAPE or an unknown
+        # provider fails loudly at load like idp does; the values (issuer, client id)
+        # are checked by validate_identity, through domain_signin_problems.
+        st = kw.get("idp_settings")
+        problem = idp_settings_shape_problem(st)
+        if problem:
+            raise ValueError(f"domain {kw.get('name', '')!r}: {problem}")
+        kw["idp_settings"] = clean_idp_settings(st or {})
         return Domain(**kw)
 
     @staticmethod
@@ -3895,6 +4158,14 @@ class ImageConfig:
         for d in self.domains:
             if getattr(d, "name", ""):
                 validate_domain_name(d.name)
+        # ── per-domain sign-in (2026-10-21): each own row's provider block follows the
+        # mesh-wide rules below (signin_problems), a superdomain row carries none, and
+        # no two brands share one issuer. Every pre-existing config has no block and
+        # passes untouched.
+        for d in self.domains:
+            problems = domain_signin_problems(d, self, self.domains)
+            if problems:
+                raise IdentityValidationError(problems[0])
         # ── mesh-node identity provider (I6) — fail-closed at the earliest boundary.
         # The values flow into a root-baked idp.conf AND the builders' issuer/JWKS
         # sed rewrite, so both the combination rules and the charset are enforced
@@ -5078,10 +5349,11 @@ class ImageConfig:
 
     def own_idp_domains(self) -> tuple[str, ...]:
         """Names of the domains that chose to HOST THEIR OWN Casdoor (Domain.idp ==
-        "own", issue #47), in Domains-table order — the order the compose lane's
+        "own" with no external provider — ``runs_own_casdoor``; issue #47), in
+        Domains-table order — the order the compose lane's
         port allocation (core/own_casdoor.py: 8001, 8002, …) is derived from, and
         the k8s/ArgoCD lane's input once it lands. Empty on every pre-#47 config."""
-        return tuple(d.name for d in self.domains if d.idp == DOMAIN_IDP_OWN)
+        return tuple(d.name for d in self.domains if runs_own_casdoor(d))
 
     # ---- superadmin mesh manifest -----------------------------------------
     def mesh_manifest(self) -> dict[str, Any]:

@@ -44,8 +44,9 @@ import sys
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
-from . import own_casdoor, plain_words
+from . import domain_reach, own_casdoor, plain_words
 from .config import (DOMAIN_FIELDS, DOMAIN_IDP_OWN, DOMAIN_IDP_SUPERDOMAIN, Domain,
+                     IDP_LABELS, effective_signin, has_external_signin, runs_own_casdoor,
                      ImageConfig, brand_header_fields, default_brand_id,
                      domain_rows_to_dict, manifest_domain_rows)
 from .domain_services import tor_domain_entries
@@ -448,7 +449,12 @@ def ways_problems(ways: dict[str, Any], where: str, *, internal_root: str = "",
     problems: list[str] = []
     if not isinstance(ways, dict):
         return [f"{where}: ways must be an object"]
-    allowed = ("internal_name", "public") + (("tor",) if superbrand else ())
+    # ``tailnet`` and ``egress`` (core/domain_reach) are a BRAND's choices: absent =
+    # inherited from the mesh, whose own values live where they always did (the
+    # image's --egress-vpn, the Docker mesh's egress service and overlay).
+    allowed = ("internal_name", "public") + (("tor",) if superbrand else
+                                             (domain_reach.WAY_TAILNET,
+                                              domain_reach.WAY_EGRESS))
     for k in ways:
         if k not in allowed:
             problems.append(f"{where}: unknown way ‘{k}’ ({', '.join(allowed)})"
@@ -457,6 +463,10 @@ def ways_problems(ways: dict[str, Any], where: str, *, internal_root: str = "",
                                "set_ways"))
     if superbrand and "tor" in ways and not isinstance(ways["tor"], bool):
         problems.append(f"{where}: ways.tor must be yes or no (true/false)")
+    if not superbrand:
+        problems += domain_reach.tailnet_problems(ways.get(domain_reach.WAY_TAILNET),
+                                                  where)
+        problems += domain_reach.egress_problems(ways.get(domain_reach.WAY_EGRESS), where)
     name = ways.get("internal_name")
     if name is not None:
         if not isinstance(name, str) or not _DNS_NAME_RE.fullmatch(name):
@@ -489,13 +499,18 @@ def ways_problems(ways: dict[str, Any], where: str, *, internal_root: str = "",
 
 
 def set_ways(record: BrandRecord, bid: str, *, internal_name: str | None = None,
-             tor: bool | None = None, public: dict[str, Any] | None = None) -> list[str]:
+             tor: bool | None = None, public: dict[str, Any] | None = None,
+             tailnet: "bool | str | None" = None,
+             egress: "dict[str, Any] | str | None" = None) -> list[str]:
     """THE ONE WRITER of how a brand is reached (D10): the Go-Live wizard and the
     mesh page's Tor switch both call this. Writes ``internal_name`` and ``public`` into
     the row's ``ways`` and the Tor choice into the row's ``tor`` field (the field the
     manifest, the Docker mesh and the builders read), or into the superbrand block
-    when ``bid`` is the superbrand's id. Returns the problems ([] = written); nothing
-    is written when there is one."""
+    when ``bid`` is the superbrand's id. ``tailnet`` (True/False) and ``egress``
+    (``{"mode": "vpn"|"direct", "conf": path}``) are a brand's VPN membership and
+    egress (core/domain_reach); ``domain_reach.REACH_INHERIT`` removes either, so the
+    brand inherits the mesh's again; None leaves it. Returns the problems ([] =
+    written); nothing is written when there is one."""
     sb = record.superbrand
     is_sb = (bid or "").strip() == sb.id.strip()
     row = None if is_sb else record.brand(bid)
@@ -508,6 +523,18 @@ def set_ways(record: BrandRecord, bid: str, *, internal_name: str | None = None,
         ways["public"] = dict(public)
     if is_sb and tor is not None:
         ways["tor"] = bool(tor)
+    for key, val in ((domain_reach.WAY_TAILNET, tailnet), (domain_reach.WAY_EGRESS, egress)):
+        if val is None:
+            continue
+        if val == domain_reach.REACH_INHERIT:
+            ways.pop(key, None)
+        elif isinstance(val, dict):
+            clean = {k: (v.strip() if isinstance(v, str) else v) for k, v in val.items()}
+            if clean.get("conf") in ("", None):
+                clean.pop("conf", None)        # no file of its own: the mesh's file
+            ways[key] = clean
+        else:
+            ways[key] = val
     problems = ways_problems(ways, f"brand {bid}",
                              internal_root=sb.effective_internal_root(), superbrand=is_sb)
     problems += secret_problems(ways, f"brand {bid}.ways")
@@ -536,10 +563,21 @@ def way_effects(record: BrandRecord, row=None) -> list[tuple[str, str, str, str]
         tor_on = bool(getattr(row, "tor", False))
     pub = ways.get("public") or {}
     prov = str(pub.get("provider") or "")
+    tail = ways.get(domain_reach.WAY_TAILNET)
+    egr = ways.get(domain_reach.WAY_EGRESS)
+    egr_mode = egr.get("mode") if isinstance(egr, dict) else None
     values = {
         "internal_name": internal,
         "tor": "yes" if tor_on else "no",
         "public": (f"through {prov}" if prov else "none"),
+        # the superbrand's row IS the mesh, whose own values live on its config
+        domain_reach.WAY_TAILNET: ("the mesh's" if row is None else
+                                   ("yes" if tail is True else "no" if tail is False
+                                    else domain_reach.REACH_FROM_MESH)),
+        domain_reach.WAY_EGRESS: ("the mesh's" if row is None else
+                                  {"vpn": "through the egress VPN",
+                                   "direct": "direct"}.get(
+                                      egr_mode, domain_reach.REACH_FROM_MESH)),
     }
     out: list[tuple[str, str, str, str]] = []
     for way, way_label in plain_words.WAYS:
@@ -725,7 +763,7 @@ def issuer_ports(record: BrandRecord, *, brand_b: bool = False) -> dict[str, int
     STORED port when the record has one, else allocated from the sequence (from 8002
     while the test-only BRAND_B knob holds 8001). Writing the result back into the rows
     (``store_issuer_ports``) is what freezes them."""
-    own = [d for d in record.brands if d.idp == DOMAIN_IDP_OWN and (d.name or "").strip()]
+    own = [d for d in record.brands if runs_own_casdoor(d) and (d.name or "").strip()]
     names = [d.name.strip() for d in own]
     stored = {d.name.strip(): int(d.issuer_port or 0) for d in own}
     return own_casdoor.ports_for(names, stored, brand_b=brand_b)
@@ -734,7 +772,7 @@ def issuer_ports(record: BrandRecord, *, brand_b: bool = False) -> dict[str, int
 def store_issuer_ports(record: BrandRecord, *, brand_b: bool = False) -> dict[str, int]:
     ports = issuer_ports(record, brand_b=brand_b)
     for d in record.brands:
-        if d.idp == DOMAIN_IDP_OWN and (d.name or "").strip() in ports:
+        if runs_own_casdoor(d) and (d.name or "").strip() in ports:
             d.issuer_port = ports[d.name.strip()]
     return ports
 
@@ -836,9 +874,13 @@ def record_from_bootstrap(cfg) -> BrandRecord:
         # lane consumes that list), whatever the recorded row's idp says: a name in
         # the list signs in on its own, a name outside it signs in through the
         # superbrand even when its row says otherwise
+        # (a brand with its own EXTERNAL provider runs no Casdoor, so it is never in
+        # that list and keeps its own sign-in: its issuer is its settings' one)
         if name in own_idp:
             row.idp = DOMAIN_IDP_OWN
-        elif row.idp == DOMAIN_IDP_OWN:
+            if has_external_signin(row):
+                row.idp_settings = {}    # the list says it runs its own Casdoor
+        elif runs_own_casdoor(row):
             row.idp = DOMAIN_IDP_SUPERDOMAIN
             row.issuer_port = 0          # a brand through the superbrand takes no port
         rows.append(row)
@@ -850,7 +892,7 @@ def record_from_bootstrap(cfg) -> BrandRecord:
     # follow THAT order (never sorted, never the recorded order); the rows that are
     # not an own sign-in keep their places between them.
     place = {n: i for i, n in reversed(list(enumerate(own_idp_list)))}
-    slots = [i for i, r in enumerate(rows) if r.idp == DOMAIN_IDP_OWN]
+    slots = [i for i, r in enumerate(rows) if runs_own_casdoor(r)]
     for i, r in zip(slots, sorted((rows[i] for i in slots),
                                   key=lambda r: place.get(r.name, len(place)))):
         rows[i] = r
@@ -910,7 +952,7 @@ def apply_record_to_bootstrap(record: BrandRecord, cfg, *,
             f"the brand record names the superbrand {sb.id}, but --brand {typed_brand} "
             "was given: change the record or the flag, not both")
     record_own = list(dict.fromkeys(d.name.strip() for d in record.brands
-                                    if d.idp == DOMAIN_IDP_OWN and (d.name or "").strip()))
+                                    if runs_own_casdoor(d) and (d.name or "").strip()))
     typed_own = list(dict.fromkeys(n.strip() for n in (cfg.own_idp_domains or ())
                                    if n.strip()))
     if typed_flags and typed_own and set(typed_own) == set(record_own) \
@@ -950,7 +992,7 @@ def apply_record_to_bootstrap(record: BrandRecord, cfg, *,
             r.pop("images", None)
     cfg.domains = tuple(rows)
     cfg.own_idp_domains = tuple(d.name.strip() for d in record.brands
-                                if d.idp == DOMAIN_IDP_OWN and (d.name or "").strip())
+                                if runs_own_casdoor(d) and (d.name or "").strip())
 
 
 # ── show-record (D2, D5, D10) ────────────────────────────────────────────────────────
@@ -980,7 +1022,7 @@ def show_record_lines(record: BrandRecord, *, env: str = "test") -> list[str]:
     lines.append("  ways to reach it:")
     _append_ways(lines, way_effects(record))
     own_names = [d.name.strip() for d in record.brands
-                 if d.idp == DOMAIN_IDP_OWN and (d.name or "").strip()]
+                 if runs_own_casdoor(d) and (d.name or "").strip()]
     for d in record.brands:
         bid = brand_id(d)
         lines.append("")
@@ -989,7 +1031,10 @@ def show_record_lines(record: BrandRecord, *, env: str = "test") -> list[str]:
         lines.append(f"  {plain_words.term('sign_in')}: "
                      f"{plain_words.SIGN_IN.get(d.idp, d.idp)}"
                      + (f"; {sign_in_port_sentence(d, own_names)}"
-                        if d.idp == DOMAIN_IDP_OWN else ""))
+                        if runs_own_casdoor(d) else "")
+                     + (f"; through {IDP_LABELS.get(effective_signin(d).provider)} "
+                        f"(sign-in address {effective_signin(d).issuer})"
+                        if has_external_signin(d) else ""))
         lines.append("  look:")
         for k, (v, src) in effective_look(record, d).items():
             lines.append(f"    {k:<10} {v or '(shipped page)':<24} — {src}")

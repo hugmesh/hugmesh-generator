@@ -449,8 +449,8 @@ def test_set_ways_is_the_one_writer_and_writes_the_tor_field(tmp_path):
     # a brand's Tor address is its tor field: a tor key in a brand's ways is a second
     # place saying the same thing, and is refused by name
     assert bm.ways_problems({"tor": True}, "brand x") == [
-        "brand x: unknown way ‘tor’ (internal_name, public); a brand's Tor address is "
-        "its tor field, written by set_ways"]
+        "brand x: unknown way ‘tor’ (internal_name, public, tailnet, egress); a "
+        "brand's Tor address is its tor field, written by set_ways"]
     assert bm.ways_problems({"tor": True}, "superbrand", superbrand=True) == []
     assert bm.ways_problems({"tor": "yes"}, "superbrand", superbrand=True) == [
         "superbrand: ways.tor must be yes or no (true/false)"]

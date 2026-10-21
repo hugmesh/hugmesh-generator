@@ -36,9 +36,11 @@ What the rows turn into on the bring-up (``LocalMeshBootstrapConfig``):
   omitting the mesh's own domain while it is default-shaped, so an untouched flow
   keeps the empty tuple it always had (emission neutrality, pinned by test).
 
-The per-domain optional services are recorded and NOT enforced on this lane: the
-compose profiles come from the mesh-wide Services step (``services=``), exactly as
-the cluster lane's #496 note says for ArgoCD. The page says so in one sentence.
+Since 2026-10-21 the per-domain optional services ARE what this lane runs: the mesh
+starts the UNION of its recorded domains' choices plus its mesh-plane infrastructure
+(``LocalMeshBootstrapConfig.effective_services``); the mesh-wide "Local services" pick
+is retired, and a saved one migrates into the rows on load. (On the cluster lane they
+are still provisioning input only — #496.)
 """
 from __future__ import annotations
 
@@ -46,8 +48,9 @@ import re
 from dataclasses import dataclass, field
 from typing import ClassVar
 
-from .config import (DOMAIN_IDP_CHOICES, DOMAIN_IDP_OWN, DOMAIN_IDP_SUPERDOMAIN, Domain,
-                     domain_from_record_row, domain_rows_to_dict)
+from .config import (DOMAIN_IDP_CHOICES, DOMAIN_IDP_OWN, DOMAIN_IDP_SUPERDOMAIN, IDP_LABELS,
+                     Domain, domain_from_record_row, domain_rows_to_dict, effective_signin,
+                     has_external_signin, runs_own_casdoor)
 from .domain_services import normalise_slugs, record_reviewed, reviewed_names
 
 __all__ = ["LocalMeshDomains", "bootstrap_domain_records", "own_idp_names",
@@ -108,7 +111,8 @@ class LocalMeshDomains:
 
 
 def own_idp_names(domains) -> tuple[str, ...]:
-    """The names whose sign-in is ``own``, in table order, DUPLICATES COLLAPSED to
+    """The names that run their OWN Casdoor (sign-in ``own`` with no external provider,
+    ``config.runs_own_casdoor``), in table order, DUPLICATES COLLAPSED to
     the first occurrence — what ``LocalMeshBootstrapConfig.own_idp_domains`` (and so
     the compose overlay's port sequence) is derived from. The collapse is the CLI's
     ``_parse_own_casdoor_domains`` rule: own_casdoor emits one compose service per
@@ -116,7 +120,7 @@ def own_idp_names(domains) -> tuple[str, ...]:
     out: list[str] = []
     for d in domains:
         name = (d.name or "").strip()
-        if name and getattr(d, "idp", "") == DOMAIN_IDP_OWN and name not in out:
+        if name and runs_own_casdoor(d) and name not in out:
             out.append(name)
     return tuple(out)
 
@@ -310,7 +314,11 @@ def record_walk(cfg, md: "LocalMeshDomains", names) -> None:
             row = domain_rows_to_dict([form_row])[0] if form_row else {}
             row["name"] = name
             row["title"] = (form_row.title or "").strip() if form_row else ""
-            row["idp"] = DOMAIN_IDP_OWN if name in own_idp else DOMAIN_IDP_SUPERDOMAIN
+            row["idp"] = (DOMAIN_IDP_OWN if name in own_idp
+                          or (form_row is not None and has_external_signin(form_row))
+                          else DOMAIN_IDP_SUPERDOMAIN)
+            if row["idp"] != DOMAIN_IDP_OWN:
+                row.pop("idp_settings", None)   # through the superdomain: nothing to keep
             row["optional_services"] = picked
             rows.append(row)
             by_name[name] = row
@@ -469,8 +477,10 @@ def imported_domains_lines(md: "LocalMeshDomains | None") -> list[str]:
         if problem:                  # the import will not take it: say so, never list it
             out.append(f"{name} — NOT imported: {problem}")
             continue
-        signin = ("own Casdoor" if getattr(row, "idp", "") == DOMAIN_IDP_OWN
-                  else "superdomain sign-in")
+        signin = ("own Casdoor" if runs_own_casdoor(row)
+                  else (f"own sign-in through "
+                        f"{IDP_LABELS.get(effective_signin(row).provider, '?')}")
+                  if has_external_signin(row) else "superdomain sign-in")
         slugs = normalise_slugs(row.optional_services)
         svc = ", ".join(slugs) if slugs else "cluster default"
         state = "" if name in marks else " (services not confirmed yet)"
