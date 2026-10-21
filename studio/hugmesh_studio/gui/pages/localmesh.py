@@ -4094,6 +4094,15 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         if outcome.get("id"):
             self.saved_meshes.mark_current(str(outcome["id"]))
             self.saved_meshes.name_edit.clear()
+            # The form now IS this record, as after a Load: its own copies are not
+            # "kept because a saved mesh still uses them" (code-folders skeptic 2 —
+            # a Save used to make the person's own mesh block its own clean-up), and a
+            # Domain services walk from here on counts for this record's Start.
+            self._loaded_record_id = str(outcome["id"])
+            try:
+                self._refresh_code_folders()
+            except Exception:                    # noqa: BLE001 — a slot must not raise
+                pass
         self.saved_meshes.refresh()
         notes: list[str] = []
         if outcome.get("id"):

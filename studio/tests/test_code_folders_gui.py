@@ -731,3 +731,42 @@ def test_the_page_keeps_a_saved_meshs_copies_and_not_the_record_it_was_loaded_fr
     _settle()
     rm = block.remove_buttons["chat.example.org"]
     assert rm.text() == "Remove 1 extra folder…" and rm.isVisible() and rm.isEnabled()
+
+
+def test_after_a_save_the_page_does_not_keep_its_own_copies_for_itself(wiz, src_tree):
+    """Code-folders skeptic 2 (2026-10-21): Save current mesh writes a NEW record and
+    the page did not treat the form as that record, so un-ticking a service then said
+    "Kept, the saved mesh ‘My mesh’ still uses them" about the person's own mesh and
+    never offered the removal. A finished save now makes the form that record, as a
+    Load does."""
+    import json
+
+    from hugmesh_studio.core import saved_meshes
+    from hugmesh_studio.core.local_mesh_bootstrap import LocalMeshBootstrapConfig
+    wiz.resize(*SMALLEST)
+    ctl, page = _to_source(wiz, source_dir=src_tree)
+    _settle()
+    block = ctl.code_folders
+    block.git_runner = _FakeGit()
+    block.clone_buttons["chat.example.org"].click()
+    assert block.wait_idle()
+    # what the save's worker writes: a new record of this very mesh (owncast still on)
+    rec = saved_meshes.SavedMesh(
+        id="20261021-140000-abcdef", label="My mesh",
+        config=LocalMeshBootstrapConfig.from_dict({"domains": [
+            {"name": "chat.example.org", "optional_services": ["owncast", "phpbb"],
+             "idp": "superdomain"}]}).to_dict())
+    os.makedirs(saved_meshes.meshes_dir(), exist_ok=True)
+    with open(rec.path(), "w") as fh:
+        json.dump(rec.to_dict(), fh)
+    ctl._on_saved_captured(True, {"id": rec.id, "label": rec.label, "problems": []})
+    _settle()
+    assert ctl._loaded_record_id == rec.id
+    row = ctl.mesh_domains.domains[1]
+    row.optional_services = [s for s in row.optional_services if s != "owncast"]
+    ctl._refresh_code_folders()
+    _settle()
+    rm = block.remove_buttons["chat.example.org"]
+    assert rm.text() == "Remove 1 extra folder…" and rm.isVisible() and rm.isEnabled()
+    note = block.claimed_labels.get("chat.example.org")
+    assert note is None or not note.isVisible()
