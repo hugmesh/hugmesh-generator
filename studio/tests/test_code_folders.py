@@ -172,11 +172,21 @@ def test_platform_rows_are_exactly_the_builds_own_context_list():
     """THE derivation contract: on the real tree the platform rows of a domain are
     the repo names ``expected_build_contexts`` parses from compose.local.yaml — same
     regex, same file — so no row can name a folder compose would not resolve."""
-    m = cf.code_folder_map(GENERATOR_DIR, "clone", "", [Domain(name="hugmesh.local")])
+    every = list(local_services.domain_local_slugs())
+    m = cf.code_folder_map(GENERATOR_DIR, "clone", "",
+                           [Domain(name="hugmesh.local", optional_services=every)])
     plat = {a.name for a in m.domains[0].apps
             if a.kind == cf.KIND_REPO and cf.REASON_PLATFORM in a.reasons}
     assert plat == set(expected_build_contexts(GENERATOR_DIR))
     assert len(plat) >= 20
+    # a domain that chose nothing has every platform repo EXCEPT the ones that
+    # belong to a per-domain service (operator ask 2026-10-21)
+    bare = cf.code_folder_map(GENERATOR_DIR, "clone", "", [Domain(name="b.example")])
+    bare_plat = {a.name for a in bare.domains[0].apps if a.kind == cf.KIND_REPO}
+    owned = {a.name for a in m.domains[0].apps
+             if any(r.startswith("selected: ") for r in a.reasons)
+             and cf.REASON_PLATFORM in a.reasons}
+    assert owned and bare_plat == plat - owned
     # one folder however many services build from it
     gw = _apps(m, "hugmesh.local")["hugmesh-gateway"]
     assert set(gw.services) == {"hugmesh-pki-gateway", "hugmesh-be-gateway",
@@ -200,7 +210,8 @@ def test_every_catalogue_slug_resolves_on_the_real_tree_never_silently():
 
 # ── clone mode ──────────────────────────────────────────────────────────────────
 def test_clone_mode_roots_at_stack_src_and_marks_what_is_not_downloaded(gen):
-    m = cf.code_folder_map(gen, "clone", "", [Domain(name="hugmesh.local")])
+    m = cf.code_folder_map(gen, "clone", "", [Domain(name="hugmesh.local",
+                                                     optional_services=["character-forge"])])
     assert m.source_mode == "clone"
     assert m.root == os.path.join(gen, ".stack-src")
     assert m.root_exists is True and m.root_reason == ""
@@ -335,13 +346,18 @@ def test_a_typed_tilde_is_not_expanded_so_no_row_points_at_the_real_home(
 def test_a_domain_without_optional_services_runs_only_the_platform_apps(gen):
     m = cf.code_folder_map(gen, "clone", "", [Domain(name="plain.example")])
     apps = _apps(m, "plain.example")
-    assert set(apps) == {"hugmesh-gateway", "hugmesh-admin-bff-api",
-                         "hugmesh-owncast-bff-api", "hugmesh-owncast-ui",
-                         "hugmesh-user-ui", "hugmesh-character-forge-bff-api"}
+    # owncast's and character-forge's always-built apps are NOT this domain's: it
+    # did not choose them (operator ask 2026-10-21), so they get no row
+    assert set(apps) == {"hugmesh-gateway", "hugmesh-admin-bff-api", "hugmesh-user-ui"}
     assert all(a.reasons == (cf.REASON_PLATFORM,) for a in apps.values())
     notes = _notes(m, "plain.example")
-    assert len(notes) == 1 and notes[0].startswith("Also runs 1 stock image")
-    assert "postgres:16-alpine" in notes[0]
+    assert len(notes) == 2
+    assert notes[0] == ("Not chosen for this domain, so no folder: character-forge "
+                        "(character-forge-ui); owncast (owncast-bff-api, owncast-ui). "
+                        "The mesh still builds these apps for the domains that chose "
+                        "them.")
+    assert notes[1].startswith("Also runs 1 stock image")
+    assert "postgres:16-alpine" in notes[1]
 
 
 def test_a_profile_slug_adds_its_build_context_as_a_selected_row(gen):
