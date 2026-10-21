@@ -660,6 +660,17 @@ class LocalMeshBootstrapConfig:
             if own not in self.domain_services_reviewed:
                 self.domain_services_reviewed = ((own,)
                                                  + tuple(self.domain_services_reviewed))
+        # A slug no row carries now (every row already had services of its own) would
+        # silently stop running — services=[tor, tuwunel] with an own row of [phpbb]
+        # lost Matrix (domain-ui skeptic 3). It joins the mesh's own domain row, where
+        # a mesh-wide pick belongs, so the mesh still runs exactly what it ran.
+        covered = {s for r in rows for s in (r.get("optional_services") or [])}
+        orphans = [s for s in dom if s not in covered]
+        if orphans:
+            for r in rows:
+                if str(r.get("name") or "").strip() == own:
+                    r["optional_services"] = list(r.get("optional_services") or []) + orphans
+                    break
         self.domains = tuple(rows)
         self.services = tuple(rest)
 

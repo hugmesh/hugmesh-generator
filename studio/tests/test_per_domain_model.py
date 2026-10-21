@@ -366,6 +366,22 @@ def test_migration_fills_only_the_domains_without_services_of_their_own():
     assert set(cfg.effective_services()) == {"tuwunel", "anubis", "owncast"}
 
 
+def test_a_mesh_wide_slug_no_row_takes_joins_the_own_domain_and_still_runs():
+    """Domain-ui skeptic 3: services=[tor, tuwunel] with an own row that already chose
+    [phpbb] (and no row without services) loaded with Matrix gone — the slug had no
+    row to move into. It joins the own domain's row, so the mesh runs what it ran."""
+    old = {"brand": "acme", "cluster_domain": OWN, "services": ["tor", "tuwunel"],
+           "domains": [{"name": OWN, "optional_services": ["phpbb"]}],
+           "domain_services_reviewed": [OWN]}
+    before = {"tor", "tuwunel", "phpbb"}
+    cfg = LocalMeshBootstrapConfig.from_dict(old)
+    assert cfg.services == ("tor",)
+    assert cfg.domains[0]["optional_services"] == ["phpbb", "tuwunel"]
+    assert set(cfg.effective_services()) == before and cfg.effective_social()
+    again = LocalMeshBootstrapConfig.from_dict(json.loads(json.dumps(cfg.to_dict())))
+    assert again.to_dict() == cfg.to_dict()
+
+
 def test_an_explicit_empty_or_mesh_plane_only_selection_is_not_touched():
     for svc in ([], ["tor", "egress-vpn"]):
         d = LocalMeshBootstrapConfig(services=tuple(svc), with_tor="tor" in svc).to_dict()
