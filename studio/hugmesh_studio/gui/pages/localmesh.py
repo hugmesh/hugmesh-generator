@@ -120,7 +120,7 @@ from ..qt import Qt, QtCore, QtGui, QtWidgets, Signal
 from .. import console
 from ..choice_cards import ChoiceCard, ChoiceCardGroup
 from ..flow_layout import flow_box
-from ...core import plain_words, saved_meshes, vaults
+from ...core import mesh_controls, plain_words, saved_meshes, vaults
 from ...core.config import IDP_CHOICES, IDP_LABELS, github_org_problem, idp_effective_jwks
 from ...core.config import DOMAIN_IDP_OWN, DOMAIN_IDP_SUPERDOMAIN, Domain
 from ...core.domain_services import ACTION_MESH_START, gate_reason, record_reviewed
@@ -156,7 +156,9 @@ from ...core import e2e_environments
 from ._credentials_dialog import CredentialsDialog
 from .domain_services import DomainServicesWidget
 from .domains import DomainsTableWidget
-from ._mesh_monitor_widget import MeshMonitorProbe, MeshMonitorWidget, MeshScaleWorker
+from ._mesh_monitor_widget import (MeshDomainWorker, MeshMonitorProbe,
+                                   MeshMonitorWidget, MeshScaleWorker,
+                                   open_in_tor_browser)
 from ._add_user_dialog import AddUserDialog
 from ._local_agent_widget import LocalAgentWidget, context_from_page
 from ._code_folders_widget import CodeFoldersWidget
@@ -1932,6 +1934,10 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         # bring-up is worse than either.
         self.monitor.halt_requested.connect(self._devops_halt)
         self.monitor.resume_requested.connect(self._devops_resume)
+        # Per-domain Start / Stop / Restart / Logs and every onion's own Open
+        # (2026-10-21). Off-thread and one at a time, like the scale above.
+        self.monitor.domain_action_requested.connect(self._domain_action)
+        self.monitor.onion_open_requested.connect(self._open_onion)
         #: Which row's scale is in flight ("" when none) — what _on_scale_done forgets.
         self._scaling_key = ""
         lay.addWidget(self.monitor_section)
@@ -2507,6 +2513,12 @@ class LocalMeshPage(QtWidgets.QWizardPage):
                 + (", or press Cancel to stop it."
                    if self.cancel_btn.isVisible() else ".")
             )
+            return
+        if probe_running(self, "_domain_worker"):
+            self.status.setText(
+                "Still running: a domain's Start/Stop/Restart in the running-mesh "
+                "table. One action at a time on this mesh — wait for its result on "
+                "that table's status line, then press again.")
             return
         if probe_running(self, "_scale_worker"):
             # The mirror of _scale_monitor's verb guard (issue #341): a verb that
@@ -3992,8 +4004,13 @@ class LocalMeshPage(QtWidgets.QWizardPage):
                 errors=(f"no stack node to ask: {type(e).__name__}: {e}",))
             self._sync_monitor_gate()
             return True
+        # The Studio's own per-domain choices name the domain of rows no label
+        # names (a service only one domain chose); a config that cannot be read
+        # gives empty hints and the rows fall back to their labels.
+        hints = mesh_monitor.domain_hints(getattr(self.boot, "cfg", None))
         probe = own_probe(self, "_monitor_probe",
-                          _MonitorProbe(self.generator_dir, node, parent=self))
+                          _MonitorProbe(self.generator_dir, node, parent=self,
+                                        hints=hints))
         probe.result.connect(self._on_monitor)
         # own_probe connected its release FIRST, so by this slot the attribute is
         # clear and a follow-up read can start.
@@ -4073,6 +4090,11 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         """
         if probe_running(self, "_scale_worker"):
             return
+        if probe_running(self, "_domain_worker"):
+            self.monitor.set_scale_status(
+                "Not scaled: a domain's Start/Stop/Restart is still running — wait "
+                "for its result here, then press Apply again.")
+            return
         if self._running:
             busy = self._running_label or "a previous step"
             self.monitor.set_scale_status(
@@ -4111,6 +4133,54 @@ class LocalMeshPage(QtWidgets.QWizardPage):
             self.monitor.forget_scale_target(key)
         self.monitor.set_scale_busy(False, text)
         self._refresh_monitor("post-scale")
+
+    def _domain_action(self, domain: str, verb: str) -> None:
+        """A press on the monitor's per-domain strip: ONE Start / Stop / Restart /
+        Logs off the GUI thread. Refused, inline, while a page verb or a scale runs —
+        all three act on the same containers."""
+        if probe_running(self, "_domain_worker"):
+            return
+        if self._running:
+            busy = self._running_label or "a previous step"
+            self.monitor.set_scale_status(
+                f"Not run: {busy} is still running. One action at a time on this "
+                f"mesh — wait for it to finish, then press again.")
+            return
+        if probe_running(self, "_scale_worker"):
+            self.monitor.set_scale_status(
+                "Not run: a Replicas change is still running — wait for its result "
+                "here, then press again.")
+            return
+        snap = self._monitor
+        if snap is None:
+            self.monitor.set_scale_status("Nothing has been read yet — press Refresh.")
+            return
+        try:
+            node = self.boot._stack_node()
+        except Exception as e:                  # a bad config, not a crash
+            self.monitor.set_scale_status(f"Cannot run: {type(e).__name__}: {e}")
+            return
+        self.monitor.set_domain_busy(
+            True, f"{mesh_controls.VERB_WORDS.get(verb, verb)} {domain}…")
+        worker = own_probe(self, "_domain_worker",
+                           MeshDomainWorker(self.generator_dir, node, snap.units,
+                                            domain, verb))
+        worker.done.connect(self._on_domain_done)
+        worker.start()
+
+    def _on_domain_done(self, res) -> None:
+        self.monitor.set_domain_busy(False, res.text)
+        if getattr(res, "verb", "") == "logs":
+            self.monitor.show_logs(f"Logs — {getattr(res, 'domain', '')}", res.logs)
+        else:
+            self._refresh_monitor("post-domain-action")
+
+    def _open_onion(self, url: str) -> None:
+        """An onion row's 'Open in Tor Browser'. Never openUrl: a normal browser
+        cannot reach a .onion, and handing one to it leaks the address to a resolver."""
+        why = open_in_tor_browser(url)
+        self.monitor.set_scale_status(f"Not opened: {why}" if why
+                                      else f"Opened {url} in Tor Browser.")
 
     def _open_door(self, url: str):
         """A row's Open button. The URL was gated twice already (core + widget); a

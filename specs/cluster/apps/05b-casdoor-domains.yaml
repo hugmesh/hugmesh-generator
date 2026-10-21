@@ -131,16 +131,28 @@ spec:
                   value: "{{ .slug }}/casdoor"
             # Per-domain MCS categories (docs/SECURITY.md §3 — unique per
             # workload; the element writer allocates them).
+            # hugmesh.net/domain on each POD (the Application above carries it,
+            # but pods never inherit an Application's labels): the Studio's
+            # running-mesh table reads it to label the pod with its domain and
+            # give it that domain's Restart / Logs (core/mesh_monitor.py
+            # DOMAIN_LABEL). A template label outside the selector, so adding it
+            # changes no selector and only rolls the pod once.
             - target: { group: apps, kind: Deployment, name: casdoor-domain }
               patch: |-
                 - op: replace
                   path: /spec/template/spec/securityContext/seLinuxOptions/level
                   value: "{{ .selinuxLevel }}"
+                - op: add
+                  path: /spec/template/metadata/labels/hugmesh.net~1domain
+                  value: "{{ .slug }}"
             - target: { group: apps, kind: Deployment, name: casdoor-domain-pg }
               patch: |-
                 - op: replace
                   path: /spec/template/spec/securityContext/seLinuxOptions/level
                   value: "{{ .selinuxLevelPg }}"
+                - op: add
+                  path: /spec/template/metadata/labels/hugmesh.net~1domain
+                  value: "{{ .slug }}"
             # The published issuer host (ingress.yaml's placeholder).
             - target: { group: networking.k8s.io, kind: Ingress, name: casdoor-domain }
               patch: |-

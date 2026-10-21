@@ -173,7 +173,7 @@ The bring-up step's action bar wraps and holds more than the bring-up. Its butto
 - Vaults & volumes…, Save this mesh, Add user….
 - A separate Kubernetes lane: Install DevOps prerequisites, Start DevOps lane, its add-on checkboxes, Delete DevOps lane.
 
-Every verb runs on a worker thread. The long ones stream into a stage tree and can be cancelled. The log pane below filters to whichever stage you click. A collapsed section, *Running mesh — pods, addresses and doors*, lists every pod and container of both lanes with its addresses, an Open button only where the browser may safely go, and a Replicas column for scaling.
+Every verb runs on a worker thread. The long ones stream into a stage tree and can be cancelled. The log pane below filters to whichever stage you click. A collapsed section, *Running mesh — pods, addresses and doors*, lists every pod and container of both lanes with its addresses, the domain it serves (or *All domains* for shared ones), an Open button only where the browser may safely go, and a Replicas column for scaling. Under the table, a domain picker with **Start**, **Stop**, **Restart** and **Logs** acts on that one domain's containers and pods only (a per-domain own Casdoor and its database, a service only that domain chose); shared rows are never touched from there, and kind pods refuse Start/Stop because ArgoCD self-heal would undo them. **Tor addresses** lists every onion the mesh publishes, each with its own **Open in Tor Browser** and **Copy**, so several Tor domains can be opened at once.
 
 Sensible first run: `test`, the default source mode, Check readiness, then Generate & start.
 
