@@ -1020,7 +1020,7 @@ ifndef NATIVE
 	$(MAKE) ensure-image
 	$(DOCKER_RUN) make orangepi5-$* NATIVE=1 WORK_DIR=/out JOBS=$(JOBS) IMG_FLAGS='$(IMG_FLAGS)' RAM_GB='$(RAM_GB)' $(BRAND_PASS) $(ORANGEPI5_PASS)
 else
-	@$(ORANGEPI5_BUILD) --board $(ORANGEPI5_BOARD) --role $* $(RAM_FLAGS)
+	@$(ORANGEPI5_BUILD) --board $(ORANGEPI5_BOARD) --role $* $(RAM_FLAGS) $(STANDALONE_FLAGS)
 	$(chown-artifacts)
 endif
 
@@ -1104,7 +1104,7 @@ ifndef NATIVE
 	$(MAKE) ensure-image
 	$(DOCKER_RUN) make orangepi4-lts-$* NATIVE=1 WORK_DIR=/out JOBS=$(JOBS) IMG_FLAGS='$(IMG_FLAGS)' RAM_GB='$(RAM_GB)' $(BRAND_PASS) $(ORANGEPI4LTS_PASS)
 else
-	@$(ORANGEPI4LTS_BUILD) --role $* $(RAM_FLAGS)
+	@$(ORANGEPI4LTS_BUILD) --role $* $(RAM_FLAGS) $(STANDALONE_FLAGS)
 	$(chown-artifacts)
 endif
 
