@@ -297,6 +297,19 @@ export const SOCIAL_FUNCTIONS: SocialFunction[] = [
         + 'Matrix" are different claims (native-sign-in.feature makes only the first).',
   },
   {
+    id: 'provision-account', service: 'tuwunel', name: 'provision my Matrix account on the homeserver', arity: 'solo',
+    gate: { kind: 'role', role: 'ROLE_USER', supersets: [] },
+    gateway: 'hugmesh-fe-gateway', probePath: '/bff/provision/matrix',
+    journey: 'tests/e2e/features/rbac/provision-role-gate.feature', pending: null,
+    note: 'POST /bff/provision/matrix — hugmesh-user-bff-api LegacyPathParityController '
+        + '(user-bff-api#19, commit 7ea4f753) since the compose fe table realigned the legacy '
+        + 'user paths onto user-bff. The ROUTE gate is the /bff/provision/** -> ROLE_USER seed '
+        + 'row, which is all this contract row asserts; the BFF then adds its OWN method gate '
+        + "@PreAuthorize(\"hasRole('MATRIX')\") that the seed cannot see. The journey drives that "
+        + 'second gate live for the whole role matrix (a bare member is 403, a ROLE_MATRIX holder '
+        + 'is admitted), so the two gates are asserted by two different artefacts on purpose.',
+  },
+  {
     id: 'federate-remote-join', service: 'tuwunel', name: 'join a room on another server', arity: 'pair',
     gate: { kind: 'role', role: 'ROLE_MATRIX', supersets: ['ROLE_MOD', 'ROLE_ADMIN'] },
     gateway: 'hugmesh-be-gateway', probePath: '/_matrix/client/v3/join/!remote:peer.example',
@@ -471,6 +484,16 @@ export const SOCIAL_FUNCTIONS: SocialFunction[] = [
     journey: 'tests/e2e/features/mastodon/two-party-timeline.feature', pending: null,
     note: 'Same deliberate split as the Matrix shell route: ROLE_USER at the route, ROLE_MASTODON '
         + 'at the backend.',
+  },
+  {
+    id: 'provision-account', service: 'akkoma', name: 'provision my Mastodon account on the homeserver', arity: 'solo',
+    gate: { kind: 'role', role: 'ROLE_USER', supersets: [] },
+    gateway: 'hugmesh-fe-gateway', probePath: '/bff/provision/mastodon',
+    journey: 'tests/e2e/features/rbac/provision-role-gate.feature', pending: null,
+    note: 'POST /bff/provision/mastodon — the Mastodon twin of tuwunel/provision-account '
+        + '(LegacyPathParityController:384, user-bff-api#19). Same shape: the seed gates the '
+        + "ROUTE at ROLE_USER, the BFF gates the METHOD at hasRole('MASTODON'); this row pins the "
+        + 'first, the journey drives the second for every seeded role.',
   },
   {
     id: 'federate-outbound', service: 'akkoma', name: 'have my post reach another instance', arity: 'pair',

@@ -17,7 +17,7 @@
 # Owncast live streaming — the ACCESS MATRIX: every seeded persona against every catalogued
 # function of this service.
 #
-# 31 personas x 4 functions = 124 cells.
+# 32 personas x 4 functions = 128 cells.
 # 2 of 4 function probe paths are DERIVED from a committed artefact;
 # 2 are ASSERTED (no artefact pins them yet) — see the FUNCTIONS entry's
 # `source` field, which the function-catalogue feature pins row by row.
@@ -136,6 +136,10 @@ Feature: Owncast live streaming — every persona against every function
       | e2e-superadmin               | owncast.publish    | refused  | /bff/owncast/**       | extra-personas-sh+ts-catalogue |
       | e2e-superadmin               | owncast.chat       | refused  | /bff/owncast/**       | extra-personas-sh+ts-catalogue |
       | e2e-superadmin               | owncast.administer | refused  | /bff/owncast/admin/** | extra-personas-sh+ts-catalogue |
+      | e2e-suspended                | owncast.watch      | refused  | /owncast/**           | extra-personas-sh              |
+      | e2e-suspended                | owncast.publish    | refused  | /bff/owncast/**       | extra-personas-sh              |
+      | e2e-suspended                | owncast.chat       | refused  | /bff/owncast/**       | extra-personas-sh              |
+      | e2e-suspended                | owncast.administer | refused  | /bff/owncast/admin/** | extra-personas-sh              |
       | e2e-user                     | owncast.watch      | refused  | /owncast/**           | seed-accounts-sh+ts-catalogue  |
       | e2e-user                     | owncast.publish    | refused  | /bff/owncast/**       | seed-accounts-sh+ts-catalogue  |
       | e2e-user                     | owncast.chat       | refused  | /bff/owncast/**       | seed-accounts-sh+ts-catalogue  |

@@ -17,7 +17,7 @@
 # fe/be/pki gateway route-access — the ACCESS MATRIX: every seeded persona against every catalogued
 # function of this service.
 #
-# 31 personas x 6 functions = 186 cells.
+# 32 personas x 6 functions = 192 cells.
 # 6 of 6 function probe paths are DERIVED from a committed artefact;
 # 0 are ASSERTED (no artefact pins them yet) — see the FUNCTIONS entry's
 # `source` field, which the function-catalogue feature pins row by row.
@@ -184,6 +184,12 @@ Feature: fe/be/pki gateway route-access — every persona against every function
       | e2e-superadmin               | gateway.federation-manifest     | refused  | /api/federation/manifest     | extra-personas-sh+ts-catalogue |
       | e2e-superadmin               | gateway.federation-capabilities | admitted | /api/federation/capabilities | extra-personas-sh+ts-catalogue |
       | e2e-superadmin               | gateway.internal-refused        | refused  | /bff/internal/**             | extra-personas-sh+ts-catalogue |
+      | e2e-suspended                | gateway.front-door              | admitted | /                            | extra-personas-sh              |
+      | e2e-suspended                | gateway.host-shell-importmap    | admitted | /importmap.json              | extra-personas-sh              |
+      | e2e-suspended                | gateway.session                 | admitted | /bff/me/**                   | extra-personas-sh              |
+      | e2e-suspended                | gateway.federation-manifest     | admitted | /api/federation/manifest     | extra-personas-sh              |
+      | e2e-suspended                | gateway.federation-capabilities | admitted | /api/federation/capabilities | extra-personas-sh              |
+      | e2e-suspended                | gateway.internal-refused        | refused  | /bff/internal/**             | extra-personas-sh              |
       | e2e-user                     | gateway.front-door              | admitted | /                            | seed-accounts-sh+ts-catalogue  |
       | e2e-user                     | gateway.host-shell-importmap    | admitted | /importmap.json              | seed-accounts-sh+ts-catalogue  |
       | e2e-user                     | gateway.session                 | admitted | /bff/me/**                   | seed-accounts-sh+ts-catalogue  |

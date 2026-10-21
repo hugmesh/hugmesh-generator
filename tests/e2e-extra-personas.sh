@@ -47,9 +47,25 @@ SUPERADMIN_PERSONA="${CASDOOR_SUPERADMIN_USERNAME:-e2e-superadmin}"
 # Against a real Casdoor /bff/login validates an existing account only, so each
 # must be pre-seeded as a bare ROLE_USER or the login 401s at setup and the
 # denial/role assertions never run.
+#
+# e2e-suspended: the ONE persona a scenario may CURTAIL at run time. A
+# "curtailed" account (the state /bff/me/appeal, the host shell's
+# session.curtailed() and the gateway revocation fast-path all read) is an
+# admin-bff access_suspension row for the PROFILE role, written by a moderator
+# banning the account on the `profile` platform — NOT a Casdoor role, so this
+# grammar cannot express it and no seeder sets it. The Gherkin step
+# 'an admin suspends the persona for this scenario' (tests/e2e/steps/common.steps.ts)
+# writes it through the real mod surface, lifts it in After, and REFUSES any
+# handle but this one: suspending e2e-user would poison every concurrent
+# scenario that signs in as e2e-user. Seeded as a plain ROLE_USER so that,
+# between scenarios, it is an ordinary fully-registered member. Deliberately
+# NOT e2e-banned: that handle's "ban" is the ABSENCE of platform roles and spec
+# 28 A5 pins it as bare ROLE_USER with status active; giving it a real
+# suspension would launder away the state spec 28 measures.
 E2E_EXTRA_PERSONAS="\
 ${SUPERADMIN_PERSONA}:ROLE_SUPERADMIN:E2E_SUPERADMIN_PASSWORD \
 e2e-banned:ROLE_USER:E2E_BANNED_PASSWORD \
+e2e-suspended:ROLE_USER:E2E_SUSPENDED_PASSWORD \
 e2e-fleet:ROLE_FLEET_ADMIN,ROLE_USER:E2E_FLEET_PASSWORD \
 admin@hugmesh.net:ROLE_ADMIN,ROLE_USER:E2E_PASSWORD \
 alice@gmail.com:ROLE_USER:E2E_PASSWORD \

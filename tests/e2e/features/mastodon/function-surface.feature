@@ -54,6 +54,7 @@ Feature: Every Mastodon function is gated for every seeded persona as the catalo
       | mod-delete-status    | pair  |
       | mod-ban-account      | pair  |
       | shell-route          | solo  |
+      | provision-account    | solo  |
       | federate-outbound    | pair  |
 
   # The same sweep in ONE scenario, so a run that lost the rows above still

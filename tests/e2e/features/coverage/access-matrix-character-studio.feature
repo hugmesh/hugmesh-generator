@@ -17,7 +17,7 @@
 # Character studio (2D editor) — the ACCESS MATRIX: every seeded persona against every catalogued
 # function of this service.
 #
-# 31 personas x 4 functions = 124 cells.
+# 32 personas x 4 functions = 128 cells.
 # 3 of 4 function probe paths are DERIVED from a committed artefact;
 # 1 are ASSERTED (no artefact pins them yet) — see the FUNCTIONS entry's
 # `source` field, which the function-catalogue feature pins row by row.
@@ -136,6 +136,10 @@ Feature: Character studio (2D editor) — every persona against every function
       | e2e-superadmin               | character-studio.create | refused  | /bff/user/**         | extra-personas-sh+ts-catalogue |
       | e2e-superadmin               | character-studio.save   | refused  | /bff/user/**         | extra-personas-sh+ts-catalogue |
       | e2e-superadmin               | character-studio.export | refused  | /bff/user/**         | extra-personas-sh+ts-catalogue |
+      | e2e-suspended                | character-studio.open   | admitted | /character-studio/** | extra-personas-sh              |
+      | e2e-suspended                | character-studio.create | admitted | /bff/user/**         | extra-personas-sh              |
+      | e2e-suspended                | character-studio.save   | admitted | /bff/user/**         | extra-personas-sh              |
+      | e2e-suspended                | character-studio.export | admitted | /bff/user/**         | extra-personas-sh              |
       | e2e-user                     | character-studio.open   | admitted | /character-studio/** | seed-accounts-sh+ts-catalogue  |
       | e2e-user                     | character-studio.create | admitted | /bff/user/**         | seed-accounts-sh+ts-catalogue  |
       | e2e-user                     | character-studio.save   | admitted | /bff/user/**         | seed-accounts-sh+ts-catalogue  |

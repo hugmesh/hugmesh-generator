@@ -17,7 +17,7 @@
 # Tube (video) — the ACCESS MATRIX: every seeded persona against every catalogued
 # function of this service.
 #
-# 31 personas x 4 functions = 124 cells.
+# 32 personas x 4 functions = 128 cells.
 # 1 of 4 function probe paths are DERIVED from a committed artefact;
 # 3 are ASSERTED (no artefact pins them yet) — see the FUNCTIONS entry's
 # `source` field, which the function-catalogue feature pins row by row.
@@ -136,6 +136,10 @@ Feature: Tube (video) — every persona against every function
       | e2e-superadmin               | tube.list    | refused | /bff/tube/** | extra-personas-sh+ts-catalogue |
       | e2e-superadmin               | tube.publish | refused | /bff/tube/** | extra-personas-sh+ts-catalogue |
       | e2e-superadmin               | tube.delete  | refused | /bff/tube/** | extra-personas-sh+ts-catalogue |
+      | e2e-suspended                | tube.watch   | refused | /tube/**     | extra-personas-sh              |
+      | e2e-suspended                | tube.list    | refused | /bff/tube/** | extra-personas-sh              |
+      | e2e-suspended                | tube.publish | refused | /bff/tube/** | extra-personas-sh              |
+      | e2e-suspended                | tube.delete  | refused | /bff/tube/** | extra-personas-sh              |
       | e2e-user                     | tube.watch   | refused | /tube/**     | seed-accounts-sh+ts-catalogue  |
       | e2e-user                     | tube.list    | refused | /bff/tube/** | seed-accounts-sh+ts-catalogue  |
       | e2e-user                     | tube.publish | refused | /bff/tube/** | seed-accounts-sh+ts-catalogue  |
