@@ -609,8 +609,9 @@ def test_without_a_panel_the_status_line_stays_on_the_page_and_has_no_copy(qapp)
 
 
 # ── the Bring-up step gives the panel the room ─────────────────────────────────────────
-def test_the_bringup_step_lets_the_panel_take_most_of_the_window(shell, qapp):
-    wiz = open_at(shell, qapp)
+@pytest.mark.parametrize("size", [NORMAL, SMALLEST], ids=["1040x780", "942x552"])
+def test_the_bringup_step_lets_the_panel_take_most_of_the_window(shell, qapp, size):
+    wiz = open_at(shell, qapp, size)
     dock = wiz.local_ai_dock
     dock.set_expanded(True)
     settle(qapp)
@@ -624,7 +625,7 @@ def test_the_bringup_step_lets_the_panel_take_most_of_the_window(shell, qapp):
     for w in (ctl.dock_note_btn, wiz.button(QtWidgets.QWizard.WizardButton.BackButton)):
         r = rect_in(wiz, w)
         assert w.isVisible() and wiz.rect().contains(r) and r.bottom() < dock.y(), (w, r)
-    shot(wiz, "bringup-step-panel-tall")
+    shot(wiz, f"bringup-step-panel-tall-{size.width()}x{size.height()}")
     wiz.back()
     settle(qapp)
     assert not dock.tall and dock.height() == usual
@@ -664,10 +665,21 @@ def test_the_builds_tab_follows_the_picked_builds_log(shell, qapp, tmp_path):
             fh.write(">>> Completed (1 of 1) www-client/firefox\n")
         dock.refresh_activity()                       # what the 1 s timer does
         assert dock.build_log.toPlainText().endswith("www-client/firefox")
+        settle(qapp)
+        shot(wiz, "builds-tab-live-log")
+        bar = dock.build_log.verticalScrollBar()
+        assert bar.value() == bar.maximum() > 0, "the newest line is not in view"
+        # scrolled up to read: a new line does not yank the view back down
+        bar.triggerAction(QtWidgets.QAbstractSlider.SliderAction.SliderToMinimum)
+        settle(qapp)
+        with log.open("a") as fh:
+            fh.write("one more line\n")
+        dock.refresh_activity()
+        settle(qapp)
+        assert dock.build_log.toPlainText().endswith("one more line") and bar.value() == 0
         assert dock.build_log.isVisible()
         r = rect_in(wiz, dock.build_log)
         assert wiz.rect().contains(r) and r.height() >= 60 and r.width() >= 200, r
-        shot(wiz, "builds-tab-live-log")
     finally:
         run.finished = True
         sup.release(run)

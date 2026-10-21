@@ -815,6 +815,8 @@ class LocalAIDock(QtWidgets.QFrame):
         self.build_log.setPlaceholderText("Pick a running build above to follow its log here.")
         self._tail_key = None                    # (path, size, mtime) last shown
         self._tail_pick = None                   # the row whose log is shown
+        self._tail_follow = True                 # keep the newest line in view
+        self.build_log.verticalScrollBar().actionTriggered.connect(self._on_tail_scrolled)
         self.builds_split = QtWidgets.QSplitter(Qt.Orientation.Horizontal)
         self.builds_split.setChildrenCollapsible(False)
         left = QtWidgets.QWidget()
@@ -1149,6 +1151,7 @@ class LocalAIDock(QtWidgets.QFrame):
         if key != self._tail_pick:
             self._tail_pick = key
             self._tail_key = None
+            self._tail_follow = True
             self.refresh_build_tail()
 
     def _picked_build_log(self) -> "tuple[str, str]":
@@ -1170,6 +1173,31 @@ class LocalAIDock(QtWidgets.QFrame):
         if not path:
             return "", f"{b.label}: this build has no log file to follow."
         return path, f"{b.label} \u2014 last lines of {path}"
+
+    def _tail_to_end(self) -> None:
+        # QPlainTextEdit lays text out lazily, so the scroll range grows after the set:
+        # move now and once more when the layout has caught up.
+        self.build_log.moveCursor(QtGui.QTextCursor.MoveOperation.End)
+        bar = self.build_log.verticalScrollBar()
+        bar.setValue(bar.maximum())
+
+        def again():
+            try:
+                if self._tail_follow:
+                    bar.setValue(bar.maximum())
+            except RuntimeError:
+                pass
+        QtCore.QTimer.singleShot(0, again)
+
+    def _on_tail_scrolled(self, *_a) -> None:
+        """The person moved the log's scroll bar: follow the end only while it is there."""
+        def look():
+            try:
+                bar = self.build_log.verticalScrollBar()
+                self._tail_follow = bar.value() >= bar.maximum() - 2
+            except RuntimeError:
+                pass
+        QtCore.QTimer.singleShot(0, look)
 
     def refresh_build_tail(self) -> None:
         """Show the last lines of the picked build's log. Reads at most 64 KB from the
@@ -1200,10 +1228,13 @@ class LocalAIDock(QtWidgets.QFrame):
             if st.st_size > _TAIL_BYTES and lines:
                 lines = lines[1:]                # the first one was cut in the middle
             bar = self.build_log.verticalScrollBar()
-            at_end, was = bar.value() >= bar.maximum() - 2, bar.value()
+            was = bar.value()
             self.build_log.setPlainText("\n".join(lines[-BUILD_TAIL_LINES:]))
             # follow the end unless the person scrolled up to read something
-            bar.setValue(bar.maximum() if at_end else min(was, bar.maximum()))
+            if self._tail_follow:
+                self._tail_to_end()
+            else:
+                bar.setValue(min(was, bar.maximum()))
         except RuntimeError:                     # a widget deleted under us at teardown
             pass
         except Exception:
