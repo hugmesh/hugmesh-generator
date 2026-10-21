@@ -17,7 +17,7 @@
 # Games platform — the ACCESS MATRIX: every seeded persona against every catalogued
 # function of this service.
 #
-# 31 personas x 6 functions = 186 cells.
+# 32 personas x 6 functions = 192 cells.
 # 5 of 6 function probe paths are DERIVED from a committed artefact;
 # 1 are ASSERTED (no artefact pins them yet) — see the FUNCTIONS entry's
 # `source` field, which the function-catalogue feature pins row by row.
@@ -184,6 +184,12 @@ Feature: Games platform — every persona against every function
       | e2e-superadmin               | games.server-fleet       | refused  | /games/servers/**        | extra-personas-sh+ts-catalogue |
       | e2e-superadmin               | games.admin-console      | refused  | /games/admin/**          | extra-personas-sh+ts-catalogue |
       | e2e-superadmin               | games.services-runner    | refused  | /admin/games-services/** | extra-personas-sh+ts-catalogue |
+      | e2e-suspended                | games.list               | refused  | (none — default deny)    | extra-personas-sh              |
+      | e2e-suspended                | games.launch             | refused  | (none — default deny)    | extra-personas-sh              |
+      | e2e-suspended                | games.instance-lifecycle | refused  | /games/**                | extra-personas-sh              |
+      | e2e-suspended                | games.server-fleet       | refused  | /games/servers/**        | extra-personas-sh              |
+      | e2e-suspended                | games.admin-console      | refused  | /games/admin/**          | extra-personas-sh              |
+      | e2e-suspended                | games.services-runner    | refused  | /admin/games-services/** | extra-personas-sh              |
       | e2e-user                     | games.list               | refused  | (none — default deny)    | seed-accounts-sh+ts-catalogue  |
       | e2e-user                     | games.launch             | refused  | (none — default deny)    | seed-accounts-sh+ts-catalogue  |
       | e2e-user                     | games.instance-lifecycle | refused  | /games/**                | seed-accounts-sh+ts-catalogue  |
