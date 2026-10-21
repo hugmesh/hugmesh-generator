@@ -1564,7 +1564,7 @@ def test_the_monitor_is_mounted_collapsed_greyed_and_starts_no_shell(wiz):
     page = _page(wiz)
     sec = page.monitor
     assert sec.monitor.scaling is True
-    assert sec.monitor.table.columnCount() == 7
+    assert sec.monitor.table.columnCount() == 8          # + Domain (2026-10-21)
     assert not sec.section.is_expanded()
     assert not sec.monitor.isEnabled()
     assert not sec.timer.isActive()

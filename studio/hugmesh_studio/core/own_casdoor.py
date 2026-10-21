@@ -176,6 +176,10 @@ _SERVICE_TMPL = """\
   casdoor-{slug}-db:
     image: postgres:16-alpine
     profiles: ["{profile}"]
+    # hugmesh.net/domain: the ONE domain this container serves. The Studio's
+    # running-mesh table reads it to label the row and give it that domain's
+    # Start / Stop / Restart / Logs (core/mesh_monitor.DOMAIN_LABEL).
+    labels: {{ "hugmesh.net/domain": "{name}" }}
     environment: {{ POSTGRES_DB: casdoor, POSTGRES_USER: casdoor, POSTGRES_PASSWORD: casdoor }}
     volumes: [casdoor-{slug}-pg:/var/lib/postgresql/data]
     healthcheck: {{ test: ["CMD-SHELL", "pg_isready -U casdoor"], interval: 5s, retries: 20 }}
@@ -185,6 +189,7 @@ _SERVICE_TMPL = """\
   casdoor-{slug}:
     image: casbin/casdoor:latest
     profiles: ["{profile}"]
+    labels: {{ "hugmesh.net/domain": "{name}" }}
     depends_on: {{ casdoor-{slug}-db: {{ condition: service_healthy }} }}
     environment:
       RUNNING_IN_DOCKER: "true"

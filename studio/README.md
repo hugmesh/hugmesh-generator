@@ -71,7 +71,23 @@ mesh node** from the system tray.
   - the cold-build maven prerequisite (`make stack-m2-bootstrap`) as a button;
   - live **streamed** build output, with a **Cancel** that stops the whole process group;
   - cold-aware timeouts (a first build compiles ~28 images and is never killed at minute 30);
-  - an **Open web UI** shortcut to the running stack's front door.
+  - an **Open web UI** shortcut to the running stack's front door;
+  - a running-mesh table (*Running mesh — pods, addresses and doors*) whose **Domain**
+    column says which domain each pod or container serves. The domain is read, never
+    guessed: the `hugmesh.net/domain` label (written on each per-domain own Casdoor and
+    its database by the Studio's overlay, and on each per-domain Casdoor pod by the
+    casdoor-domains ApplicationSet), the onion key directory of a per-domain onion, or
+    the Studio's own Domain services choice when only one domain chose a service. Rows
+    that serve every domain say **All domains**. Under the table, pick a domain and
+    press **Start**, **Stop**, **Restart** or **Logs**: they act on that domain's rows
+    only (`docker start|stop|restart|logs <container>`, databases first on Start and
+    last on Stop), and each button's tooltip lists the rows it will touch. On the kind
+    lane, Restart replaces the pod (`kubectl delete pod`) and Start/Stop are refused
+    with the reason: ArgoCD self-heal owns the replica count, so use **Halt DevOps
+    lane**. Logs show inline under the table. **Tor addresses** lists every onion the
+    mesh publishes (the mesh's own, then one per Tor domain), each with its own **Open
+    in Tor Browser** (greyed, with the reason, when no Tor Browser launcher is on
+    PATH) and **Copy**.
 
 ### Local mesh: saved meshes (on the "Saved meshes and the plan" step)
 
