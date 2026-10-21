@@ -83,6 +83,7 @@ from __future__ import annotations
 
 import datetime as _dt
 import fnmatch
+import hashlib
 import html
 import io
 import json
@@ -92,6 +93,8 @@ import shlex
 import shutil
 import subprocess
 import tarfile
+import tempfile
+import zlib
 from dataclasses import asdict, dataclass, field
 
 from .config import OPTIONAL_SERVICES_CHOICES, Domain, github_org_problem
@@ -975,74 +978,166 @@ def _marker_labels(views: list[str]) -> list[str]:
 def _scan_entries(workdir: str) -> list[str]:
     """``"<path>: <label>"`` for every banned marker in what a commit of ``workdir``
     publishes: every PATH (a file or folder name is published too), every link's
-    TARGET (git stores it as the link's content), and every file's bytes. The plan
-    runs it, and apply runs it again on the folder it is about to commit."""
+    TARGET (git stores it as the link's content), and every file's bytes. A path and
+    a link target get the same BYTE checks as file content (a token in cp037, the
+    robot footer in UTF-16): git stores and publishes them as bytes. The plan runs it,
+    and apply scans the commit's own objects again (:func:`_scan_commit`)."""
     found: list[str] = []
     for rel in _tree_entries(workdir):
         full = os.path.join(workdir, rel)
-        labels = _marker_labels([rel])
+        labels = _scan_bytes(os.fsencode(rel))[0]
         if os.path.islink(full):
             try:
-                target = os.readlink(full)
+                target = os.readlink(os.fsencode(full))
             except OSError:
                 labels.append("unreadable link, so not scanned for secrets")
             else:
-                labels += [lb for lb in _marker_labels([target]) if lb not in labels]
+                labels += [lb for lb in _scan_bytes(target)[0] if lb not in labels]
         else:
             labels += [lb for lb in _scan_file(full)[0] if lb not in labels]
-        found += [f"{rel}: {label}" for label in labels]
+        # a name that is not UTF-8 is shown with replacement characters: the plan
+        # files are written as UTF-8 and a raw (surrogate-escaped) name cannot be
+        found += [f"{_shown(os.fsencode(rel))}: {label}" for label in labels]
     return found
 
 
-def _scan_objects(entries: list[tuple[str, str, str]], objects: dict[str, bytes]) -> list[str]:
-    """:func:`_scan_entries` over a COMMIT: ``entries`` are ``(mode, sha, path)`` from
-    ``git ls-tree -r``, ``objects`` the raw object bytes by sha. The objects are what a
-    push sends, so no attribute (``export-ignore``, ``working-tree-encoding``, a
-    filter) stands between the scan and the published bytes. An entry that is not a
-    file or a link, or whose object is missing, is a finding, not a skip."""
+def _shown(path) -> str:
+    return path.decode("utf-8", "replace") if isinstance(path, bytes) else path
+
+
+def _scan_objects(entries: list[tuple[str, str, object]], objects: dict[str, bytes]) -> list[str]:
+    """:func:`_scan_entries` over a COMMIT: ``entries`` are ``(mode, sha, path)`` (the
+    path as the tree stores it, bytes, or text), ``objects`` the raw object bytes by
+    sha. The objects are what a push sends, so no attribute (``export-ignore``,
+    ``working-tree-encoding``, a filter) stands between the scan and the published
+    bytes. An entry that is not a file or a link, or whose object is missing, is a
+    finding, not a skip."""
     found: list[str] = []
     for mode, sha, path in entries:
-        labels = _marker_labels([path])
+        raw = path if isinstance(path, bytes) else os.fsencode(path)
+        labels = _scan_bytes(raw)[0]
         data = objects.get(sha)
         if mode not in ("100644", "100755", "120000"):
             labels.append(f"not a file or a link (mode {mode}), so not scanned for secrets")
         elif data is None:
             labels.append("object not readable, so not scanned for secrets")
-        elif mode == "120000":
-            target = data.decode("utf-8", "replace")
-            labels += [lb for lb in _marker_labels([target]) if lb not in labels]
         elif len(data) > SCAN_LIMIT:
             labels.append("too large to scan for secrets")
         else:
+            # a link's object is its target: the same byte checks as a file's content
             labels += [lb for lb in _scan_bytes(data)[0] if lb not in labels]
-        found += [f"{path}: {label}" for label in labels]
+        found += [f"{_shown(path)}: {label}" for label in labels]
     return found
 
 
-def _parse_ls_tree(raw: bytes) -> list[tuple[str, str, str]]:
-    """``(mode, sha, path)`` per record of ``git ls-tree -r -z``."""
-    out: list[tuple[str, str, str]] = []
-    for rec in raw.split(b"\0"):
-        if not rec:
-            continue
-        meta, _tab, path = rec.partition(b"\t")
-        mode, _type, sha = meta.decode("ascii", "replace").split(" ", 2)
-        out.append((mode, sha, path.decode("utf-8", "surrogateescape")))
+def _object_id(kind: bytes, data: bytes, hexlen: int) -> str:
+    """The name git gives an object of ``kind`` holding ``data``."""
+    h = hashlib.sha1() if hexlen == 40 else hashlib.sha256()
+    h.update(kind + b" " + str(len(data)).encode() + b"\0")
+    h.update(data)
+    return h.hexdigest()
+
+
+def _parse_tree(data: bytes, rawlen: int) -> list[tuple[str, str, bytes]]:
+    """``(mode, sha, name)`` per entry of a raw tree object."""
+    out: list[tuple[str, str, bytes]] = []
+    pos = 0
+    while pos < len(data):
+        sp = data.index(b" ", pos)
+        nul = data.index(b"\0", sp)
+        sha = data[nul + 1: nul + 1 + rawlen]
+        if len(sha) != rawlen:
+            raise ValueError("a tree entry is cut short")
+        out.append((data[pos:sp].decode("ascii"), sha.hex(), data[sp + 1:nul]))
+        pos = nul + 1 + rawlen
     return out
 
 
-def _parse_cat_file_batch(raw: bytes) -> dict[str, bytes]:
-    """``sha -> bytes`` from ``git cat-file --batch`` output."""
-    objects: dict[str, bytes] = {}
+def _scan_commit(commit: str, objects: dict[str, tuple[bytes, bytes]], label: str
+                 ) -> tuple[str, dict[str, tuple[bytes, bytes]], int, list[str]]:
+    """Walk ``commit`` through ``objects`` (``sha -> (type, bytes)``, as read from the
+    work folder) and scan everything it reaches: ``(tree, closure, files, found)``.
+
+    Every object is checked against its own name (the hash of its bytes), so whatever
+    git showed the reader in its place (a ``refs/replace`` entry, an alternate store)
+    is either the real object or a refusal. ``closure`` is EXACTLY the set of objects
+    a push of the commit can send: the commit, every tree, every file and link. The
+    commit may have no parent (a fresh ``git init``; a graft or a swapped commit would
+    otherwise bring history nobody scanned). Any problem raises: nothing is pushed."""
+    hexlen = len(commit)
+    rawlen = hexlen // 2
+    closure: dict[str, tuple[bytes, bytes]] = {}
+
+    def take(sha: str, kind: bytes) -> bytes:
+        got = objects.get(sha)
+        if got is None or got[0] != kind or _object_id(kind, got[1], hexlen) != sha:
+            why = "missing" if got is None else (
+                f"a {got[0].decode('ascii', 'replace')}" if got[0] != kind
+                else "not the object its name says")
+            raise RuntimeError(f"the snapshot commit of {label} could not be read as the "
+                               f"push sends it ({kind.decode()} {sha[:12]} is {why}): "
+                               "nothing is pushed")
+        closure[sha] = got
+        return got[1]
+
+    body = take(commit, b"commit")
+    head = body.split(b"\n\n", 1)[0].split(b"\n")
+    trees = [ln[5:].decode("ascii", "replace") for ln in head if ln.startswith(b"tree ")]
+    if len(trees) != 1 or not head[0].startswith(b"tree "):
+        raise RuntimeError(f"the snapshot commit of {label} does not name one tree: "
+                           "nothing is pushed")
+    if any(ln.startswith(b"parent ") for ln in head):
+        raise RuntimeError(f"the snapshot commit of {label} has a parent, so a push would "
+                           "send history this export did not scan: nothing is pushed")
+    tree = trees[0]
+    found = [f"the commit itself: {lb}" for lb in _scan_bytes(body)[0]]
+    entries: list[tuple[str, str, bytes]] = []
+    todo = [(tree, b"")]
+    while todo:
+        sha, prefix = todo.pop()
+        try:
+            listed = _parse_tree(take(sha, b"tree"), rawlen)
+        except (ValueError, UnicodeDecodeError):
+            raise RuntimeError(f"a tree of the snapshot commit of {label} could not be "
+                               "parsed: nothing is pushed") from None
+        for mode, child, name in listed:
+            path = prefix + name
+            if mode == "40000":
+                # a folder name is published as well, and an empty folder has no file
+                # path that would show it
+                found += [f"{_shown(path)}/: {lb}" for lb in _scan_bytes(path)[0]]
+                todo.append((child, path + b"/"))
+            else:
+                entries.append((mode, child, path))
+    blobs: dict[str, bytes] = {}
+    for mode, sha, _path in entries:
+        if mode in ("100644", "100755", "120000"):
+            blobs[sha] = take(sha, b"blob")
+    found += _scan_objects(sorted(entries, key=lambda e: e[2]), blobs)
+    return tree, closure, len(entries), found
+
+
+def _write_objects(git_dir: str, objects: dict[str, tuple[bytes, bytes]]) -> None:
+    """Store ``objects`` as loose objects of the bare repository ``git_dir``."""
+    for sha, (kind, data) in objects.items():
+        folder = os.path.join(git_dir, "objects", sha[:2])
+        os.makedirs(folder, exist_ok=True)
+        with open(os.path.join(folder, sha[2:]), "wb") as fh:
+            fh.write(zlib.compress(kind + b" " + str(len(data)).encode() + b"\0" + data, 1))
+
+
+def _parse_cat_file_batch(raw: bytes) -> dict[str, tuple[bytes, bytes]]:
+    """``sha -> (type, bytes)`` from ``git cat-file --batch`` output."""
+    objects: dict[str, tuple[bytes, bytes]] = {}
     pos = 0
     while pos < len(raw):
         nl = raw.index(b"\n", pos)
-        head = raw[pos:nl].decode("ascii", "replace").split(" ")
+        head = raw[pos:nl].split(b" ")
         if len(head) != 3:                 # "<sha> missing" and the like
             pos = nl + 1
             continue
         size = int(head[2])
-        objects[head[0]] = raw[nl + 1: nl + 1 + size]
+        objects[head[0].decode("ascii", "replace")] = (head[1], raw[nl + 1: nl + 1 + size])
         pos = nl + 1 + size + 1
     return objects
 
@@ -1510,9 +1605,18 @@ def _run_checked(runner: Runner, calls: list[list[str]], argv: list[str], *,
     return runner.run(argv, **kw)
 
 
+def _no_replace(env: dict[str, str]) -> dict[str, str]:
+    """``env`` with git's object replacement off: a ``refs/replace`` entry makes git's
+    readers show other objects than a push sends (pack-objects ignores it)."""
+    return {**env, "GIT_NO_REPLACE_OBJECTS": "1"}
+
+
 def _commit_snapshot(runner, calls, rp: RepoPlan, cfg: ExportConfig, stamp: str,
-                     message: str) -> tuple[str, str]:
-    """One fresh commit in the work tree; ``(commit, tree)``."""
+                     message: str, push_dir: str) -> tuple[str, str]:
+    """One fresh commit in the work tree, copied object by object into ``push_dir``
+    (a bare repository only this export writes) after every object was checked
+    against its name and scanned; ``(commit, tree)``. The push runs from
+    ``push_dir``, so it can send the scanned objects and nothing else."""
     env = _git_env(cfg, stamp)
     wd = rp.workdir
     if os.path.isdir(os.path.join(wd, ".git")):
@@ -1532,44 +1636,63 @@ def _commit_snapshot(runner, calls, rp: RepoPlan, cfg: ExportConfig, stamp: str,
     # writer to it can move HEAD between this scan and the push; a push of HEAD would
     # then send a commit nobody scanned while the result file named this one
     pinned = _run_checked(runner, calls, ["git", "rev-parse", "--verify", "-q",
-                                          "HEAD^{commit}"], cwd=wd)
+                                          "HEAD^{commit}"], cwd=wd, env=_no_replace(env))
     commit = pinned.text.strip()
     if pinned.returncode != 0 or not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", commit):
         raise RuntimeError(f"the snapshot commit of {rp.target_full} could not be named "
                            f"({pinned.err.strip()[:160]}): nothing is pushed")
-    # the commit must hold every file the plan counted: a count that differs is
-    # reported, never pushed, and never compared as an 'unchanged' tree
-    listed = _run_checked(runner, calls, ["git", "ls-tree", "-r", "-z", "--name-only", commit],
-                          cwd=wd)
-    held = len([n for n in listed.stdout.split(b"\0") if n])
-    # against the PLAN's count, not a fresh walk of the folder: a folder that changed
-    # since Plan (another plan reusing the same out folder) is no longer what was shown
-    want = rp.files
-    if listed.returncode != 0 or held != want:
-        raise RuntimeError(f"the snapshot commit of {rp.target_full} holds {held} files "
-                           f"but the plan counted {want}: files were left out of (or "
-                           "added to) the commit, nothing is pushed")
     # the plan's scan saw the FOLDER; the folder can change between plan and apply
     # (it is an ordinary directory under the out folder), and git's attributes can
     # make the committed bytes differ from it (a working-tree-encoding converts on
-    # add, an export-ignore hides a path from git archive). So the scan runs again on
-    # the commit's OWN objects, the bytes a push sends, and any finding refuses it.
-    # The repository was made by `git init` above, so every object in it is this commit's.
-    listing = _run_checked(runner, calls, ["git", "ls-tree", "-r", "-z", "--full-tree",
-                                           commit], cwd=wd)
+    # add, an export-ignore hides a path from git archive). So the commit's OWN
+    # objects are read, each checked against its name (what git shows a reader can be
+    # a replacement, a push sends the real object), walked from the pinned sha and
+    # scanned: the commit, every tree, every file and link. Any finding refuses it.
     objs = _run_checked(runner, calls, ["git", "cat-file", "--batch-all-objects", "--batch"],
-                        cwd=wd, timeout=1800)
-    if listing.returncode != 0 or objs.returncode != 0:
+                        cwd=wd, env=_no_replace(env), timeout=1800)
+    if objs.returncode != 0:
         raise RuntimeError(f"reading the snapshot commit of {rp.target_full} failed "
-                           f"({(listing.err or objs.err).strip()[:160]}): it could not be "
+                           f"({objs.err.strip()[:160]}): it could not be "
                            "scanned, nothing is pushed")
-    found = _scan_objects(_parse_ls_tree(listing.stdout), _parse_cat_file_batch(objs.stdout))
+    tree, closure, held, found = _scan_commit(commit, _parse_cat_file_batch(objs.stdout),
+                                              rp.target_full)
+    # the commit must hold every file the plan counted: a count that differs is
+    # reported, never pushed, and never compared as an 'unchanged' tree. Against the
+    # PLAN's count, not a fresh walk of the folder: a folder that changed since Plan
+    # (another plan reusing the same out folder) is no longer what was shown
+    if held != rp.files:
+        raise RuntimeError(f"the snapshot commit of {rp.target_full} holds {held} files "
+                           f"but the plan counted {rp.files}: files were left out of (or "
+                           "added to) the commit, nothing is pushed")
     if found:
         shown = "; ".join(found[:5]) + (" ..." if len(found) > 5 else "")
         raise RuntimeError(f"the snapshot commit of {rp.target_full} holds a banned "
                            f"marker the plan did not show ({shown}): nothing is pushed")
-    tree = _run_checked(runner, calls, ["git", "rev-parse", f"{commit}^{{tree}}"],
-                        cwd=wd).text.strip()
+    # git's own answer for the tree must be the one walked above
+    named = _run_checked(runner, calls, ["git", "rev-parse", f"{commit}^{{tree}}"],
+                         cwd=wd, env=_no_replace(env)).text.strip()
+    if named != tree:
+        raise RuntimeError(f"git names the tree of the snapshot commit of {rp.target_full} "
+                           f"{named or 'nothing'}, not the scanned {tree}: nothing is pushed")
+    # the scanned objects, and ONLY those, go into the push repository: a bare one this
+    # export made, outside the work folder, whose config, hooks, refs and grafts no
+    # writer to the work folder reaches. What a push of the sha from there can send is
+    # then exactly what `rev-list --objects` lists, and that must be the scanned set
+    fmt = ["--object-format=sha256"] if len(commit) == 64 else []
+    r = _run_checked(runner, calls, ["git", "init", "-q", "--bare", *fmt, push_dir],
+                     cwd=push_dir, env=_no_replace(env))
+    if r.returncode != 0:
+        raise RuntimeError(f"git init of the push repository for {rp.target_full} failed "
+                           f"({r.err.strip()[:160]}): nothing is pushed")
+    _write_objects(push_dir, closure)
+    sent = _run_checked(runner, calls, ["git", "rev-list", "--objects", "--no-object-names",
+                                        commit], cwd=push_dir, env=_no_replace(env),
+                        timeout=600)
+    listed = set(sent.text.split())
+    if sent.returncode != 0 or listed != set(closure):
+        raise RuntimeError(f"the push repository for {rp.target_full} would send "
+                           f"{len(listed)} objects, not the {len(closure)} scanned "
+                           f"({sent.err.strip()[:120]}): nothing is pushed")
     return commit, tree
 
 
@@ -1584,7 +1707,24 @@ def _push_one(runner, calls, rp: RepoPlan, cfg: ExportConfig, stamp: str,
                f"Single-commit snapshot of {rp.source or 'the generated site'}"
                + (f" at {rp.source_commit[:12]} ({rp.ref})" if rp.source_commit else "")
                + f", exported to {rp.target_full} on {stamp}.")
-    res.commit, res.tree = _commit_snapshot(runner, calls, rp, cfg, stamp, message)
+    # the push repository sits next to the work folders (the same disk the snapshot
+    # was sized for), never inside one, and is removed whatever happens
+    push_dir = tempfile.mkdtemp(prefix=".push-", dir=os.path.dirname(os.path.dirname(
+        os.path.abspath(rp.workdir))))
+    try:
+        res.commit, res.tree = _commit_snapshot(runner, calls, rp, cfg, stamp, message,
+                                                push_dir)
+        return _send(runner, calls, rp, cfg, stamp, create_missing, res, url, push_dir)
+    finally:
+        shutil.rmtree(push_dir, ignore_errors=True)
+
+
+def _send(runner, calls, rp: RepoPlan, cfg: ExportConfig, stamp: str,
+          create_missing: bool, res: RepoResult, url: str, push_dir: str) -> RepoResult:
+    """Every network git call of one repository, run in ``push_dir`` (see
+    :func:`_commit_snapshot`): the work folder's config (``url.*.insteadOf``, a
+    credential helper, hooks) never applies to them."""
+    env = _no_replace(_git_env(cfg, stamp))
     # does the target exist? (gh repo view; a missing one is created, private by default)
     view = _run_checked(runner, calls, ["gh", "repo", "view", rp.target_full, "--json",
                                         "name,isEmpty"], timeout=60)
@@ -1605,7 +1745,7 @@ def _push_one(runner, calls, rp: RepoPlan, cfg: ExportConfig, stamp: str,
     # main into it and reported 'update (empty repository)' on a repository gh had
     # just called non-empty. gh's own isEmpty answer counts as well.
     heads = _run_checked(runner, calls, ["git", "ls-remote", "--heads", url],
-                         cwd=rp.workdir, env=_git_env(cfg, stamp), timeout=120)
+                         cwd=push_dir, env=env, timeout=120)
     if heads.returncode != 0:
         res.skipped = f"git ls-remote failed: {heads.err.strip()[:160]}"
         return res
@@ -1618,11 +1758,11 @@ def _push_one(runner, calls, rp: RepoPlan, cfg: ExportConfig, stamp: str,
     if "main" in branches:
         # main exists: equal tree -> unchanged; else branch mode or refuse
         fetch = _run_checked(runner, calls, ["git", "fetch", "-q", url, "refs/heads/main"],
-                             cwd=rp.workdir, env=_git_env(cfg, stamp), timeout=600)
+                             cwd=push_dir, env=env, timeout=600)
         remote_tree = ""
         if fetch.returncode == 0:
             remote_tree = _run_checked(runner, calls, ["git", "rev-parse", "FETCH_HEAD^{tree}"],
-                                       cwd=rp.workdir).text.strip()
+                                       cwd=push_dir, env=env).text.strip()
         if remote_tree and remote_tree == res.tree:
             res.action = "unchanged"
             res.branch = "main"
@@ -1651,7 +1791,7 @@ def _push_one(runner, calls, rp: RepoPlan, cfg: ExportConfig, stamp: str,
     # every ref the remote holds right before the push, so the read-back below can tell
     # what the push changed. No answer: nothing is pushed
     before = _run_checked(runner, calls, ["git", "ls-remote", url],
-                          cwd=rp.workdir, env=_git_env(cfg, stamp), timeout=120)
+                          cwd=push_dir, env=env, timeout=120)
     if before.returncode != 0:
         res.skipped = f"git ls-remote failed: {before.err.strip()[:160]}"
         return res
@@ -1661,7 +1801,7 @@ def _push_one(runner, calls, rp: RepoPlan, cfg: ExportConfig, stamp: str,
     # message is never scanned); --no-verify because a pre-push hook there is not ours
     push = _run_checked(runner, calls, ["git", "push", "-q", "--no-follow-tags", "--no-verify",
                                         url, f"{res.commit}:refs/heads/{res.branch}"],
-                        cwd=rp.workdir, env=_git_env(cfg, stamp), timeout=1800)
+                        cwd=push_dir, env=env, timeout=1800)
     if push.returncode != 0:
         res.skipped = f"git push failed: {push.err.strip()[:200]}"
         return res
@@ -1670,7 +1810,7 @@ def _push_one(runner, calls, rp: RepoPlan, cfg: ExportConfig, stamp: str,
     # tag, no other branch). Anything else, or no answer, is reported as a failure,
     # never as a pushed repository
     back = _run_checked(runner, calls, ["git", "ls-remote", url],
-                        cwd=rp.workdir, env=_git_env(cfg, stamp), timeout=120)
+                        cwd=push_dir, env=env, timeout=120)
     ref = f"refs/heads/{res.branch}"
     was, now = _ls_remote_refs(before.text), _ls_remote_refs(back.text)
     held = now.get(ref, "")
