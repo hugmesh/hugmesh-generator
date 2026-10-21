@@ -541,6 +541,11 @@ class BrandSettingsTabs(QtCore.QObject):
             self.reach_words.setText(
                 f"VPN: {words.get(domain_reach.WAY_TAILNET, '')}\n"
                 f"Egress: {words.get(domain_reach.WAY_EGRESS, '')}")
+            # Row 0's onion IS the mesh's Tor, chosen on Mesh infrastructure (Docker)
+            # or the Network step (images). An unticked, greyed box here read as "off"
+            # even with the mesh's Tor on (domain-ui skeptic 3), so row 0 shows no box:
+            # the note below says where its onion comes from.
+            self.tor_box.setVisible(not own)
             if own:
                 self.tor_box.setChecked(False)
                 self.tor_box.setText("The mesh's own Tor address (its onion)")

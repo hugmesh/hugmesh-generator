@@ -186,6 +186,27 @@ def test_row_zero_shows_the_mesh_sign_in_it_inherits_and_where_it_is_chosen(qapp
     assert "Identity provider" in tabs.signin_note.text()
 
 
+def test_row_zero_ways_tab_does_not_show_a_tor_tick_that_reads_off(qapp, gen):
+    """Domain-ui skeptic 3: row 0's Ways tab showed a greyed, UNTICKED Tor box even with
+    the mesh's Tor on. Row 0's onion is the mesh's own Tor (set on Mesh infrastructure
+    or the Network step), so the box is not shown there and the note says so; an added
+    domain still gets its own, usable tick."""
+    wiz, page = _image_page(qapp, gen)
+    wiz.cfg.tor_onion_service = True
+    page._show()
+    tabs = page.brand_tabs
+    tabs.open_tab("Ways to reach it")
+    _settle(qapp)
+    assert tabs.view.own
+    assert tabs.tor_box.isHidden()
+    assert "the mesh's own Tor address" in tabs.reach_note.text()
+    page._step(1)                                       # shop.example
+    tabs.open_tab("Ways to reach it")
+    _settle(qapp)
+    assert not tabs.view.own and not tabs.tor_box.isHidden()
+    _usable(tabs.tor_box, "the Tor tick", min_w=40, min_h=14)
+
+
 # ── 3. Tor, VPN and egress per domain ───────────────────────────────────────────────
 def test_the_ways_tab_writes_vpn_and_egress_and_tor_follows_the_front_door(qapp, gen):
     wiz, page = _image_page(qapp, gen)
