@@ -74,13 +74,24 @@ def state(tmp_path):
 
 class FakeGit:
     """Records every git call. ``clone`` makes the destination with a ``.git`` folder
-    (what a clone leaves behind); ``status``/``rev-list`` answer from ``dirty`` /
-    ``unpushed``; ``fail`` names a subcommand that exits 1."""
+    (what a clone leaves behind); ``status``/``rev-list``/``stash list``/``worktree
+    list`` answer from ``dirty`` / ``ignored`` / ``unpushed`` / ``stashed`` /
+    ``worktrees``; ``fail`` names a subcommand that exits 1.
 
-    def __init__(self, dirty=None, unpushed=None, fail=""):
+    It answers ``rev-list`` only when asked about EVERY ref (``--all``) and reports
+    ignored files only under ``status --ignored``: a narrower question (HEAD only, or
+    no ``--ignored``) gets the answer the real git would give for a copy whose work is
+    on another branch or in an ignored file — none — so a check that asks too narrowly
+    goes red here, not only against the real git."""
+
+    def __init__(self, dirty=None, unpushed=None, fail="", stashed=None, ignored=None,
+                 worktrees=None):
         self.calls = []
         self.dirty = dirty or {}
         self.unpushed = unpushed or {}
+        self.stashed = stashed or {}
+        self.ignored = ignored or {}
+        self.worktrees = worktrees or {}
         self.fail = fail
 
     def __call__(self, argv, cwd):
@@ -92,9 +103,17 @@ class FakeGit:
             os.makedirs(os.path.join(dest, ".git"))
             return 0, ""
         if argv[0] == "status":
-            return 0, "\n".join(" M f" for _ in range(self.dirty.get(cwd, 0)))
+            lines = [" M f"] * self.dirty.get(cwd, 0)
+            if "--ignored" in argv:
+                lines += ["!! .env"] * self.ignored.get(cwd, 0)
+            return 0, "\n".join(lines)
         if argv[0] == "rev-list":
-            return 0, str(self.unpushed.get(cwd, 0))
+            return 0, str(self.unpushed.get(cwd, 0) if "--all" in argv else 0)
+        if argv[:2] == ["stash", "list"]:
+            return 0, "\n".join(f"stash@{{{i}}}: WIP" for i in range(self.stashed.get(cwd, 0)))
+        if argv[:2] == ["worktree", "list"]:
+            n = 1 + self.worktrees.get(cwd, 0)
+            return 0, "\n".join(f"worktree /w{i}\nHEAD abc\n" for i in range(n))
         return 0, ""
 
 
@@ -349,7 +368,111 @@ def test_the_folder_of_a_domain_that_left_the_mesh_is_listed_as_extra(gen, src, 
     gone = [d for d in plan.domains if not d.in_mesh]
     assert len(gone) == 1 and gone[0].name == "gone.example"
     assert len(gone[0].extras) == 2
-    assert all("no longer a domain of this mesh" in x.why for x in gone[0].extras)
+    assert all("gone.example is not a domain of this mesh, and no saved mesh has "
+               f"{x.app} on it" == x.why for x in gone[0].extras)
+
+
+def test_a_departed_folder_lists_a_copy_marked_for_another_domain_as_left_alone(
+        gen, src, state):
+    """A copy inside gone.example's folder whose marker names ANOTHER domain is not
+    gone.example's copy: it is listed as left alone, never as extra (skeptic S5)."""
+    _made(gen, src, state, [Domain(name="gone.example")], "gone.example")
+    _made(gen, src, state, [Domain(name="other.example")], "other.example")
+    root = os.path.join(state, "domain-code", MESH)
+    stray = os.path.join(root, "gone.example", "hugmesh-gateway.other.example")
+    shutil.move(os.path.join(root, "other.example", "hugmesh-gateway.other.example"),
+                stray)
+    plan = _plan(gen, src, state, [Domain(name="kept.example"),
+                                   Domain(name="other.example")])
+    gone = next(d for d in plan.domains if d.name == "gone.example")
+    assert stray not in {x.path for x in plan.extras()}
+    assert stray in gone.foreign
+    assert len(gone.extras) == 2
+
+
+# ── another (saved) mesh sharing the copies folder ──────────────────────────────
+def _save_record(state, rec_id, label, rows, cluster_domain=""):
+    meshes = os.path.join(state, "meshes")
+    os.makedirs(meshes, exist_ok=True)
+    cfg = {"domains": [{"name": r.name, "optional_services": list(r.optional_services),
+                        "idp": "superdomain"} for r in rows]}
+    if cluster_domain:
+        cfg["cluster_domain"] = cluster_domain
+    # the real record shape: a LocalMeshBootstrapConfig dict inside a SavedMesh
+    from hugmesh_studio.core import saved_meshes
+    from hugmesh_studio.core.local_mesh_bootstrap import LocalMeshBootstrapConfig
+    full = LocalMeshBootstrapConfig.from_dict(cfg).to_dict()
+    rec = saved_meshes.SavedMesh(id=rec_id, label=label, config=full)
+    with open(os.path.join(meshes, rec_id + ".json"), "w") as fh:
+        json.dump(rec.to_dict(), fh)
+
+
+def test_a_departed_domain_that_a_saved_mesh_still_has_is_never_extra(gen, src, state):
+    """The skeptic's two-mesh probe: mesh A (saved) has chat.example.org; mesh B, with
+    the same own name, must not offer A's copies for removal."""
+    _made(gen, src, state, [Domain(name="chat.example.org")], "chat.example.org")
+    _save_record(state, "20261021-100000-aaaaaa", "Mesh A",
+                 [Domain(name=MESH), Domain(name="chat.example.org")],
+                 cluster_domain=MESH)
+    plan = _plan(gen, src, state, [Domain(name=MESH), Domain(name="shop.example.org")])
+    gone = next(d for d in plan.domains if d.name == "chat.example.org")
+    assert not gone.in_mesh
+    assert gone.extras == () and plan.extras() == ()
+    assert sorted(x.app for x in gone.claimed) == ["hugmesh-gateway", "hugmesh-user-ui"]
+    assert all(x.why == f"the saved mesh ‘Mesh A’ still has {x.app} on chat.example.org"
+               for x in gone.claimed)
+    # and removal refuses it even when handed the folder directly
+    res = dw.remove_extra(gone.claimed[0], plan, FakeGit())
+    assert not res.removed and os.path.isdir(gone.claimed[0].path)
+
+
+def test_an_unticked_service_that_a_saved_mesh_still_has_is_kept(gen, src, state):
+    _made(gen, src, state, [Domain(name="live.example", optional_services=["owncast"])],
+          "live.example")
+    _save_record(state, "20261021-100000-bbbbbb", "Mesh A",
+                 [Domain(name="live.example", optional_services=["owncast"])])
+    plan = _plan(gen, src, state, [Domain(name="live.example")])
+    ws = plan.domains[0]
+    assert ws.extras == ()
+    assert sorted(x.app for x in ws.claimed) == ["hugmesh-owncast-bff-api",
+                                                 "hugmesh-owncast-ui"]
+
+
+def test_the_record_this_mesh_was_loaded_from_claims_nothing(gen, src, state):
+    """Its saved copy is stale by definition once the person un-ticks a service."""
+    _made(gen, src, state, [Domain(name="live.example", optional_services=["owncast"])],
+          "live.example")
+    rid = "20261021-100000-cccccc"
+    _save_record(state, rid, "This mesh",
+                 [Domain(name="live.example", optional_services=["owncast"])])
+    plan = dw.plan_workspaces(gen, "existing", src, [Domain(name="live.example")], MESH,
+                              state_root=state, record_id=rid)
+    assert len(plan.domains[0].extras) == 2 and plan.domains[0].claimed == ()
+
+
+def test_a_corrupt_or_linked_record_claims_nothing_and_breaks_nothing(
+        gen, src, state, tmp_path):
+    _made(gen, src, state, [Domain(name="gone.example")], "gone.example")
+    meshes = os.path.join(state, "meshes")
+    os.makedirs(meshes)
+    with open(os.path.join(meshes, "bad.json"), "w") as fh:
+        fh.write("{not json")
+    outside = tmp_path / "x.json"
+    outside.write_text(json.dumps({"id": "x", "label": "L",
+                                   "config": {"domains": [{"name": "gone.example"}]}}))
+    os.symlink(outside, os.path.join(meshes, "x.json"))
+    plan = _plan(gen, src, state, [Domain(name="kept.example")])
+    gone = next(d for d in plan.domains if not d.in_mesh)
+    assert len(gone.extras) == 2 and gone.claimed == ()
+
+
+def test_the_saved_meshes_are_not_read_when_nothing_could_be_extra(
+        gen, src, state, monkeypatch):
+    calls = []
+    monkeypatch.setattr(dw, "saved_mesh_claims", lambda *a, **k: calls.append(1) or {})
+    _made(gen, src, state, [Domain(name="live.example")], "live.example")
+    _plan(gen, src, state, [Domain(name="live.example")])
+    assert calls == []
 
 
 # ── removal ─────────────────────────────────────────────────────────────────────
@@ -375,6 +498,49 @@ def test_remove_keeps_a_copy_with_edits_or_commits_of_its_own(gen, src, state):
     assert not ra.removed and "2 changed files" in ra.message
     assert not rb.removed and "1 commit found nowhere else" in rb.message
     assert os.path.isdir(a.path) and os.path.isdir(b.path)
+
+
+@pytest.mark.parametrize("kind,words", [
+    ("unpushed", "1 commit found nowhere else (on any of its branches or tags)"),
+    ("stashed", "1 stashed change"),
+    ("ignored", "1 ignored file or folder (such as a .env or build output)"),
+    ("worktrees", "1 other working tree made from it"),
+])
+def test_remove_keeps_a_copy_with_any_other_kind_of_work(gen, src, state, kind, words):
+    """The skeptic's case (2026-10-21): work on ANOTHER branch, in the stash or in an
+    ignored ``.env`` used to read "no edits of its own" and was removed."""
+    _made(gen, src, state, [Domain(name="live.example", optional_services=["owncast"])],
+          "live.example")
+    plan = _plan(gen, src, state, [Domain(name="live.example")])
+    x = plan.extras()[0]
+    git = FakeGit(**{kind: {x.path: 1}})
+    st = dw.extra_status(x.path, git)
+    assert not st.safe_to_remove
+    assert st.words() == f"holds {words} — it will be kept"
+    res = dw.remove_extra(x, plan, git)
+    assert not res.removed and words in res.message
+    assert os.path.isdir(x.path)
+
+
+def test_a_plain_copy_says_so_in_words_that_name_every_check(gen, src, state):
+    _made(gen, src, state, [Domain(name="live.example", optional_services=["owncast"])],
+          "live.example")
+    plan = _plan(gen, src, state, [Domain(name="live.example")])
+    st = dw.extra_status(plan.extras()[0].path, FakeGit())
+    assert st.safe_to_remove
+    assert st.words() == ("a plain copy: no edits, commits, stashes or ignored files "
+                          "of its own")
+
+
+@pytest.mark.parametrize("sub", ["status", "rev-list", "stash", "worktree"])
+def test_a_check_that_cannot_run_keeps_the_copy(gen, src, state, sub):
+    _made(gen, src, state, [Domain(name="live.example", optional_services=["owncast"])],
+          "live.example")
+    plan = _plan(gen, src, state, [Domain(name="live.example")])
+    x = plan.extras()[0]
+    res = dw.remove_extra(x, plan, FakeGit(fail=sub))
+    assert not res.removed and "cannot be checked" in res.message
+    assert os.path.isdir(x.path)
 
 
 def test_remove_refuses_a_folder_that_is_no_longer_extra(gen, src, state):
@@ -465,3 +631,75 @@ def test_with_the_real_git_a_copy_is_a_named_clone_and_local_commits_keep_it(
     assert out["hugmesh-owncast-bff-api.live.example"].removed
     with open(os.path.join(dest, ".git", dw.MARKER)) as fh:
         assert json.load(fh)["app"] == "hugmesh-owncast-ui"
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git is not installed")
+@pytest.mark.parametrize("scenario,words", [
+    ("other-branch", "1 commit found nowhere else"),
+    ("tag", "1 commit found nowhere else"),
+    ("stash", "1 stashed change"),
+    ("ignored-file", "1 ignored file or folder"),
+    ("linked-worktree", "1 other working tree made from it"),
+    ("plain", ""),
+])
+def test_with_the_real_git_every_kind_of_local_work_keeps_a_copy(
+        gen, tmp_path, state, scenario, words):
+    """The skeptic's probe (2026-10-21, probe_loss.py) as a test, against the real git:
+    each kind of work a person can leave in a copy keeps it, and the words the screen
+    shows before the second click say which; only a plain clone is removed."""
+    src = tmp_path / "real-src"
+    env = dict(os.environ, GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@example.invalid",
+               GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@example.invalid")
+
+    def git(*argv):
+        subprocess.run(["git", *argv], check=True, env=env, capture_output=True)
+
+    for name in REPOS:
+        p = src / name
+        p.mkdir(parents=True)
+        git("init", "-q", str(p))
+        (p / "README").write_text(name)
+        (p / ".gitignore").write_text(".env\n")
+        git("-C", str(p), "add", "README", ".gitignore")
+        git("-C", str(p), "commit", "-qm", "init")
+    rows = [Domain(name="live.example", optional_services=["owncast"])]
+    plan = dw.plan_workspaces(gen, "existing", str(src), rows, MESH, state_root=state)
+    assert all(r.ok for r in dw.clone_missing(plan, "live.example"))
+    dest = os.path.join(plan.root, "live.example", "hugmesh-owncast-ui.live.example")
+    if scenario == "other-branch":
+        git("-C", dest, "switch", "-qc", "my-feature")
+        with open(os.path.join(dest, "WORK"), "w") as fh:
+            fh.write("precious")
+        git("-C", dest, "add", "WORK")
+        git("-C", dest, "commit", "-qm", "precious work")
+        git("-C", dest, "switch", "-q", "domain/live.example")
+    elif scenario == "tag":
+        git("-C", dest, "switch", "-q", "--detach")
+        with open(os.path.join(dest, "WORK"), "w") as fh:
+            fh.write("precious")
+        git("-C", dest, "add", "WORK")
+        git("-C", dest, "commit", "-qm", "precious work")
+        git("-C", dest, "tag", "keep-me")
+        git("-C", dest, "switch", "-q", "domain/live.example")
+    elif scenario == "stash":
+        with open(os.path.join(dest, "README"), "a") as fh:
+            fh.write("precious edit")
+        git("-C", dest, "stash", "-q")
+    elif scenario == "ignored-file":
+        with open(os.path.join(dest, ".env"), "w") as fh:
+            fh.write("SECRET=precious")
+    elif scenario == "linked-worktree":
+        git("-C", dest, "worktree", "add", "-q", "--detach", str(tmp_path / "linked"))
+    # the checked-out branch itself is clean in every scenario
+    assert subprocess.run(["git", "-C", dest, "status", "--porcelain"],
+                          capture_output=True, text=True).stdout == ""
+    plan = dw.plan_workspaces(gen, "existing", str(src), [Domain(name="live.example")],
+                              MESH, state_root=state)
+    x = next(x for x in plan.extras() if x.path == dest)
+    st = dw.extra_status(dest)
+    res = dw.remove_extra(x, plan)
+    if scenario == "plain":
+        assert st.safe_to_remove and res.removed and not os.path.exists(dest)
+    else:
+        assert words in st.words() and st.words().endswith("it will be kept")
+        assert not res.removed and os.path.isdir(dest)

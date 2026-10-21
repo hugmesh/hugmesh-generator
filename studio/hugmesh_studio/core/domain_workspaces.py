@@ -38,7 +38,14 @@ EXTRA FOLDERS. A copy of ours whose app the domain no longer has (a service was
 un-ticked), and the folder of a domain that is no longer in the mesh, are EXTRA. They
 are listed, never removed silently: the screen arms a removal on a first click and acts
 on a second, and :func:`remove_extra` re-checks every condition at that moment and
-refuses a copy that holds edits or commits the build checkout does not have.
+refuses a copy that is not still a plain clone (:func:`extra_status`: changed, untracked
+or ignored files, commits on any branch or tag, stashes, linked working trees).
+
+SHARED COPIES FOLDER. The ``<mesh>`` folder is the mesh's own domain name, and every
+test mesh has the same one, so meshes share it. A copy this mesh does not need but a
+SAVED mesh still has (:func:`saved_mesh_claims`) is CLAIMED, listed with that mesh's
+name, and never extra. A mesh that was never saved cannot be known about
+(:data:`SHARED_ROOT_NOTE` says so on every screen that lists another mesh's folders).
 
 SAFETY. No path is followed through a symbolic link: :func:`safe_folder_name` makes
 names that cannot climb, every folder between the workspace root and a copy is checked
@@ -65,6 +72,7 @@ __all__ = [
     "DomainWorkspace", "WorkspacePlan", "ExtraStatus", "CloneResult", "RemoveResult",
     "safe_folder_name", "copy_folder_name", "workspace_root", "plan_workspaces",
     "clone_repo", "clone_missing", "extra_status", "remove_extra", "read_marker",
+    "saved_mesh_claims", "SHARED_ROOT_NOTE",
 ]
 
 #: The marker file inside a copy's ``.git`` folder (so ``git status`` never sees it).
@@ -75,6 +83,13 @@ WORKSPACE_DIR = "domain-code"
 EDITS_NOTE = ("These copies are for working on each domain's apps. The mesh is still "
               "built from the source root above: an edit made in a copy reaches the "
               "mesh only once it is in that tree (push it, or pull it there).")
+
+#: Said wherever a folder that is not this mesh's is listed (the copies folder is keyed
+#: on the mesh's own domain name, which every test mesh shares).
+SHARED_ROOT_NOTE = ("Every mesh with this own domain name shares this copies folder. "
+                    "Copies a saved mesh still uses are kept and never offered for "
+                    "removal; a mesh that was never saved cannot be checked, so save a "
+                    "mesh before you remove another one's folders.")
 
 _MAX_NAME = 100
 
@@ -152,6 +167,9 @@ class DomainWorkspace:
     foreign: tuple[str, ...]
     #: False for the folder of a domain that is no longer in the mesh
     in_mesh: bool = True
+    #: copies this mesh does not need but a SAVED mesh still does (same copies folder):
+    #: listed, never offered for removal
+    claimed: tuple[ExtraFolder, ...] = ()
 
     def missing(self) -> tuple[WorkspaceRepo, ...]:
         return tuple(r for r in self.repos if r.can_clone)
@@ -238,14 +256,80 @@ def _scan(folder: str) -> "list[tuple[str, str, dict | None]]":
     return sorted(out)
 
 
+def saved_mesh_claims(generator_dir: str, *, state_root: Optional[str] = None,
+                      exclude_record_id: str = "", environ=None
+                      ) -> "dict[tuple[str, str], str]":
+    """``{(domain folder name, app): saved mesh label}`` for every app a SAVED mesh
+    (``<state dir>/meshes/*.json``, core/saved_meshes.py) still has on one of its
+    domains. Read-only, never raises.
+
+    Why: the copies folder is keyed on the mesh's own domain name, and every test mesh
+    is called the same (``hugmesh.net``), so several meshes share one copies folder. A
+    domain or a service that is gone from THIS mesh may still belong to another saved
+    mesh; its copies are then not extra. ``exclude_record_id`` is the record the form
+    was loaded from (its stale copy must not keep what the person just un-ticked). A
+    mesh that was never saved cannot be known about; every screen says so."""
+    from . import saved_meshes
+    from .local_mesh_bootstrap import DEFAULT_DOMAIN
+    meshes = os.path.join(state_root or state_dir(), "meshes")
+    out: dict[tuple[str, str], str] = {}
+    try:
+        names = sorted(os.listdir(meshes))
+    except OSError:
+        return out
+    for fname in names:
+        if not fname.endswith(".json") or _is_link(os.path.join(meshes, fname)):
+            continue
+        try:
+            rec = saved_meshes.load(os.path.join(meshes, fname))
+        except Exception:                        # noqa: BLE001 — an unreadable record claims nothing
+            continue
+        if exclude_record_id and rec.id == exclude_record_id:
+            continue
+        cfg = rec.config if isinstance(rec.config, dict) else {}
+        rows = [r for r in (cfg.get("domains") or ()) if isinstance(r, dict)
+                and isinstance(r.get("name"), str) and r.get("name").strip()]
+        own = str(cfg.get("cluster_domain") or "").strip() or DEFAULT_DOMAIN
+        if not any(r["name"].strip() == own for r in rows):
+            rows.insert(0, {"name": own, "optional_services": [], "idp": ""})
+        try:
+            m = cf.code_folder_map(generator_dir, "clone", "", rows, environ=environ)
+        except Exception:                        # noqa: BLE001
+            continue
+        label = rec.label or rec.id
+        for dom in m.domains:
+            slug = safe_folder_name(dom.name)
+            for app in dom.apps:
+                if slug and app.kind == cf.KIND_REPO:
+                    out.setdefault((slug, app.name), label)
+    return out
+
+
 def plan_workspaces(generator_dir: str, source_mode: str, source_dir: str, domains,
                     mesh: str, *, state_root: Optional[str] = None,
-                    environ=None, folder_map: "cf.CodeFolderMap | None" = None
+                    environ=None, folder_map: "cf.CodeFolderMap | None" = None,
+                    record_id: str = "",
+                    claims: "dict[tuple[str, str], str] | None" = None
                     ) -> WorkspacePlan:
     """The whole picture, read-only: for every domain row, the copies it should have,
     which exist, which cannot be made and why, and what is EXTRA. ``folder_map`` is the
-    code-folder map for the same inputs when the caller already has it."""
+    code-folder map for the same inputs when the caller already has it.
+
+    A copy this mesh does not need is EXTRA only when no saved mesh still has that app
+    on that domain (:func:`saved_mesh_claims`, read only when there is such a copy);
+    otherwise it is CLAIMED and never offered for removal. ``record_id`` is the saved
+    record this mesh was loaded from (left out of the claims); ``claims`` replaces the
+    saved-mesh read (tests)."""
     root = workspace_root(mesh, state_root)
+    _claims: "list[dict[tuple[str, str], str]]" = [claims] if claims is not None else []
+
+    def claimed_by(slug: str, app: str) -> str:
+        if not _claims:
+            _claims.append(saved_mesh_claims(generator_dir, state_root=state_root,
+                                             exclude_record_id=record_id,
+                                             environ=environ))
+        return _claims[0].get((slug, app), "")
+
     m = folder_map or cf.code_folder_map(generator_dir, source_mode, source_dir,
                                          domains, environ=environ)
     root_problem = ""
@@ -299,6 +383,7 @@ def plan_workspaces(generator_dir: str, source_mode: str, source_dir: str, domai
                                        cloned, reason, app.reasons))
 
         extras: list[ExtraFolder] = []
+        claimed: list[ExtraFolder] = []
         foreign: list[str] = []
         if folder and not problem and os.path.isdir(folder):
             for entry, path, marker in _scan(folder):
@@ -310,12 +395,21 @@ def plan_workspaces(generator_dir: str, source_mode: str, source_dir: str, domai
                     continue
                 if marker["app"] in wanted and entry == copy_folder_name(marker["app"], slug):
                     continue
+                if marker["app"] not in wanted:
+                    owner = claimed_by(slug, marker["app"])
+                    if owner and entry == copy_folder_name(marker["app"], slug):
+                        claimed.append(ExtraFolder(
+                            path, marker["app"], dom.name,
+                            f"the saved mesh ‘{owner}’ still has {marker['app']} on "
+                            f"{dom.name}"))
+                        continue
                 why = ("this domain no longer has " + marker["app"]
                        if marker["app"] not in wanted else
                        "a second copy of " + marker["app"])
                 extras.append(ExtraFolder(path, marker["app"], dom.name, why))
         out.append(DomainWorkspace(dom.name, slug, folder, problem, tuple(repos),
-                                   tuple(extras), tuple(foreign)))
+                                   tuple(extras), tuple(foreign),
+                                   claimed=tuple(claimed)))
 
     # Folders of domains that are no longer in the mesh: every marked copy is extra.
     if not root_problem and os.path.isdir(root) and not _is_link(root):
@@ -323,18 +417,28 @@ def plan_workspaces(generator_dir: str, source_mode: str, source_dir: str, domai
             if entry in seen_slugs or _is_link(path) or not os.path.isdir(path):
                 continue
             extras = []
+            claimed = []
             foreign = []
-            for _e, sub, marker in _scan(path):
+            for sub_entry, sub, marker in _scan(path):
                 if marker is not None and marker.get("slug") == entry:
-                    extras.append(ExtraFolder(sub, marker["app"], marker["domain"],
-                                              f"{marker['domain']} is no longer a domain "
-                                              "of this mesh"))
+                    owner = claimed_by(entry, marker["app"])
+                    if owner and sub_entry == copy_folder_name(marker["app"], entry):
+                        claimed.append(ExtraFolder(
+                            sub, marker["app"], marker["domain"],
+                            f"the saved mesh ‘{owner}’ still has {marker['app']} on "
+                            f"{marker['domain']}"))
+                        continue
+                    extras.append(ExtraFolder(
+                        sub, marker["app"], marker["domain"],
+                        f"{marker['domain']} is not a domain of this mesh, and no saved "
+                        f"mesh has {marker['app']} on it"))
                 else:
                     foreign.append(sub)
-            if extras or foreign:
-                name = extras[0].domain if extras else entry
+            if extras or foreign or claimed:
+                name = (extras or claimed)[0].domain if (extras or claimed) else entry
                 out.append(DomainWorkspace(name, entry, path, "", (), tuple(extras),
-                                           tuple(foreign), in_mesh=False))
+                                           tuple(foreign), in_mesh=False,
+                                           claimed=tuple(claimed)))
     return WorkspacePlan(mesh, root, root_problem, tuple(out))
 
 
@@ -438,42 +542,84 @@ def clone_missing(plan: WorkspacePlan, domain_name: str,
 # ── removing an extra copy ────────────────────────────────────────────────────────
 @dataclass(frozen=True)
 class ExtraStatus:
+    """What removing a copy would lose, as git sees it. Every kind of local work keeps
+    the copy: the Studio only ever removes a copy that is still a plain clone."""
     path: str
-    #: files with uncommitted changes (tracked or untracked)
+    #: files with uncommitted changes (tracked, or untracked and not ignored)
     dirty: int
-    #: commits no remote of the copy has (work that exists nowhere else)
+    #: commits on ANY local branch, tag, the stash or HEAD that no remote of the copy
+    #: has (work that exists nowhere else) — not only the checked-out branch
     unpushed: int
     error: str = ""
+    #: entries in ``git stash list``
+    stashed: int = 0
+    #: ignored files or folders (a ``.env``, build output): not re-made by a clone
+    ignored: int = 0
+    #: other working trees (``git worktree add``) that live on this copy's ``.git``
+    worktrees: int = 0
 
     @property
     def safe_to_remove(self) -> bool:
-        return not self.error and self.dirty == 0 and self.unpushed == 0
+        return (not self.error and self.dirty == 0 and self.unpushed == 0
+                and self.stashed == 0 and self.ignored == 0 and self.worktrees == 0)
 
     def words(self) -> str:
         if self.error:
             return f"cannot be checked ({self.error}) — it will be kept"
-        if self.dirty or self.unpushed:
+        if not self.safe_to_remove:
+            def n(count: int, one: str, many: str) -> str:
+                return f"{count} {one if count == 1 else many}"
             bits = []
             if self.dirty:
-                bits.append(f"{self.dirty} changed file{'s' if self.dirty != 1 else ''}")
+                bits.append(n(self.dirty, "changed file", "changed files"))
             if self.unpushed:
-                bits.append(f"{self.unpushed} commit{'s' if self.unpushed != 1 else ''} "
-                            "found nowhere else")
-            return "holds " + " and ".join(bits) + " — it will be kept"
-        return "no edits of its own"
+                bits.append(n(self.unpushed, "commit", "commits")
+                            + " found nowhere else (on any of its branches or tags)")
+            if self.stashed:
+                bits.append(n(self.stashed, "stashed change", "stashed changes"))
+            if self.ignored:
+                bits.append(n(self.ignored, "ignored file or folder",
+                              "ignored files or folders")
+                            + " (such as a .env or build output)")
+            if self.worktrees:
+                bits.append(n(self.worktrees, "other working tree", "other working trees")
+                            + " made from it")
+            return "holds " + ", ".join(bits) + " — it will be kept"
+        return "a plain copy: no edits, commits, stashes or ignored files of its own"
 
 
 def extra_status(path: str, runner: Optional[GitRunner] = None) -> ExtraStatus:
-    """What removing ``path`` would lose. Read-only."""
+    """What removing ``path`` would lose. Read-only. It looks at EVERYTHING a person can
+    leave in a copy that a fresh clone would not bring back: changed and untracked files,
+    ignored files (``status --ignored``: a ``.env`` is exactly the precious case),
+    commits on every local branch and tag and the stash that no remote has
+    (``rev-list --all --not --remotes``, not only HEAD), stash entries, and linked
+    working trees. What it cannot see: a commit that NO ref points to any more (made on
+    a detached HEAD and then left; only the reflog has it) — git warns about that when
+    it happens."""
     run = runner or _run_git
-    code, porcelain = run(["status", "--porcelain"], path)
+    code, porcelain = run(["status", "--porcelain", "--ignored"], path)
     if code != 0:
         return ExtraStatus(path, 0, 0, "git status failed")
-    dirty = len([ln for ln in porcelain.splitlines() if ln.strip()])
-    code, count = run(["rev-list", "--count", "HEAD", "--not", "--remotes"], path)
+    lines = [ln for ln in porcelain.splitlines() if ln.strip()]
+    ignored = len([ln for ln in lines if ln.startswith("!!")])
+    dirty = len(lines) - ignored
+    code, count = run(["rev-list", "--count", "--all", "--not", "--remotes"], path)
     if code != 0 or not count.strip().isdigit():
-        return ExtraStatus(path, dirty, 0, "git rev-list failed")
-    return ExtraStatus(path, dirty, int(count.strip()))
+        return ExtraStatus(path, dirty, 0, "git rev-list failed", ignored=ignored)
+    unpushed = int(count.strip())
+    code, stashes = run(["stash", "list"], path)
+    if code != 0:
+        return ExtraStatus(path, dirty, unpushed, "git stash list failed", ignored=ignored)
+    stashed = len([ln for ln in stashes.splitlines() if ln.strip()])
+    code, trees = run(["worktree", "list", "--porcelain"], path)
+    if code != 0:
+        return ExtraStatus(path, dirty, unpushed, "git worktree list failed",
+                           stashed=stashed, ignored=ignored)
+    worktrees = max(0, len([ln for ln in trees.splitlines()
+                            if ln.startswith("worktree ")]) - 1)
+    return ExtraStatus(path, dirty, unpushed, stashed=stashed, ignored=ignored,
+                       worktrees=worktrees)
 
 
 @dataclass(frozen=True)

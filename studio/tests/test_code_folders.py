@@ -18,7 +18,7 @@ import pytest
 
 from hugmesh_studio.core import code_folders as cf
 from hugmesh_studio.core import local_services
-from hugmesh_studio.core.config import DOMAIN_IDP_OWN, Domain
+from hugmesh_studio.core.config import DOMAIN_IDP_OWN, Domain, set_domain_signin
 from hugmesh_studio.core.domain_services import DOMAIN_CATALOGUE
 from hugmesh_studio.core.local_mesh_bootstrap import expected_build_contexts
 
@@ -430,6 +430,39 @@ def test_an_own_sign_in_domain_notes_its_casdoor_has_no_folder(gen):
     assert any(n.startswith("Own sign-in") for n in _notes(m, "own.example"))
     m2 = cf.code_folder_map(gen, "clone", "", [Domain(name="sd.example")])
     assert not any(n.startswith("Own sign-in") for n in _notes(m2, "sd.example"))
+
+
+def test_an_external_own_sign_in_notes_that_nothing_of_it_runs_here(gen):
+    """An own row that trusts Entra/Cognito/OIDC runs no Casdoor: its note says the
+    outside service runs nowhere here (skeptic S10). Written through the one writer."""
+    row = Domain(name="ext.example")
+    assert set_domain_signin(row, DOMAIN_IDP_OWN, provider="oidc",
+                             issuer="https://login.ext.example",
+                             client_id="hugmesh-ext") == []
+    m = cf.code_folder_map(gen, "clone", "", [row])
+    own = [n for n in _notes(m, "ext.example") if n.startswith("Own sign-in")]
+    assert own == ["Own sign-in: an outside sign-in service this domain trusts — "
+                   "nothing of it runs here, no source folder"]
+
+
+@pytest.mark.parametrize("services,matrix,mastodon", [
+    ((), False, False),
+    (("tuwunel",), True, True),
+    (("akkoma",), False, True),
+])
+def test_the_matrix_and_mastodon_front_ends_belong_to_the_domains_that_chose_them(
+        services, matrix, mastodon):
+    """On the REAL tree: hugmesh-matrix-ui is tuwunel's, hugmesh-mastodon-ui is
+    tuwunel's or akkoma's (UI_OWNERS); a domain that chose neither has neither folder
+    and its note says so (skeptic S12)."""
+    m = cf.code_folder_map(GENERATOR_DIR, "clone", "",
+                           [Domain(name="d.example", optional_services=list(services))])
+    apps = {a.name for a in m.domains[0].apps if a.kind == cf.KIND_REPO}
+    assert ("hugmesh-matrix-ui" in apps) is matrix
+    assert ("hugmesh-mastodon-ui" in apps) is mastodon
+    if not services:
+        note = next(n for n in _notes(m, "d.example") if n.startswith("Not chosen"))
+        assert "matrix-ui" in note and "mastodon-ui" in note
 
 
 def test_saved_record_dicts_are_accepted_like_domain_rows(gen):

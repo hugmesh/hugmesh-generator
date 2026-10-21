@@ -2956,7 +2956,8 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         'not downloaded yet', and no form control changes when it does."""
         self.code_folders.refresh(self.boot.cfg.source_mode, self.boot.cfg.source_dir,
                                   self.mesh_domains.domains,
-                                  own_name=self._own_domain_name())
+                                  own_name=self._own_domain_name(),
+                                  record_id=getattr(self, "_loaded_record_id", "") or "")
 
     def _refresh_plan(self):
         if getattr(self, "_applying_bootstrap", False):

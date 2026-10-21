@@ -175,6 +175,10 @@ class CodeFoldersWidget(QtWidgets.QGroupBox):
         #: domain -> the extra paths the FIRST click armed (the second acts on these)
         self.armed: dict[str, tuple[str, ...]] = {}
         self._armed_words: dict[str, str] = {}
+        #: the saved-mesh record the page's form was loaded from ("" = none): its stale
+        #: copy must not keep what the person just un-ticked (core.domain_workspaces)
+        self.record_id = ""
+        self.claimed_labels: dict[str, QtWidgets.QLabel] = {}
         self._job = None
         self.last_results: list[OpenResult] = []
         self.last_copy_results: list = []
@@ -268,10 +272,13 @@ class CodeFoldersWidget(QtWidgets.QGroupBox):
         self.result_note.repaint()
 
     def refresh(self, source_mode: str, source_dir: str, domains,
-                own_name: str = "") -> "code_folders.CodeFolderMap":
+                own_name: str = "", record_id: "str | None" = None
+                ) -> "code_folders.CodeFolderMap":
         """Re-read the map for the current source choice and domain rows. With no
         domain rows yet (the single-page frame never seeds the Domains table) the
         mesh's own domain stands in, so the block is never empty."""
+        if record_id is not None:
+            self.record_id = record_id or ""
         rows = list(domains or ())
         if not rows and own_name:
             rows = [{"name": own_name, "optional_services": [], "idp": ""}]
@@ -296,7 +303,7 @@ class CodeFoldersWidget(QtWidgets.QGroupBox):
         try:
             return dw.plan_workspaces(self.generator_dir, mode, sdir, list(rows),
                                       self._mesh_name(), state_root=self.state_root,
-                                      folder_map=folder_map)
+                                      folder_map=folder_map, record_id=self.record_id)
         except Exception as exc:                  # noqa: BLE001 — a block must not break the page
             self._plan_error = f"{type(exc).__name__}: {exc}"
             return None
@@ -319,7 +326,8 @@ class CodeFoldersWidget(QtWidgets.QGroupBox):
                 w.deleteLater()
         for d in (self.open_buttons, self.open_all_buttons, self.rows, self.row_paths,
                   self.copy_labels, self.clone_buttons, self.open_copies_buttons,
-                  self.extra_labels, self.remove_buttons, self.cancel_buttons):
+                  self.extra_labels, self.remove_buttons, self.cancel_buttons,
+                  self.claimed_labels):
             d.clear()
 
         self.root_path.setText(m.root or m.root_reason)
@@ -466,6 +474,17 @@ class CodeFoldersWidget(QtWidgets.QGroupBox):
                 + (f", +{more} more" if more else ""))
             note.setWordWrap(True)
             v.addWidget(_grey(note))
+        if ws.claimed:
+            names = "; ".join(f"{os.path.basename(x.path)} ({x.why})"
+                              for x in ws.claimed[:4])
+            more = len(ws.claimed) - min(4, len(ws.claimed))
+            note = QtWidgets.QLabel(
+                "Kept, another saved mesh still uses "
+                + ("it" if len(ws.claimed) == 1 else "them") + f": {names}"
+                + (f", +{more} more" if more else "") + ".")
+            note.setWordWrap(True)
+            v.addWidget(_grey(note))
+            self.claimed_labels[ws.name] = note
         if ws.extras:
             self._extras_part(v, ws)
 
@@ -506,11 +525,14 @@ class CodeFoldersWidget(QtWidgets.QGroupBox):
         frame.setFrameShape(QtWidgets.QFrame.Shape.StyledPanel)
         frame.setObjectName("code_folders_gone_domain")
         v = QtWidgets.QVBoxLayout(frame)
-        title = ElidedLabel(f"No longer a domain of this mesh: {ws.name}")
+        title = ElidedLabel(f"Not a domain of this mesh: {ws.name}")
         font = title.font()
         font.setBold(True)
         title.setFont(font)
         v.addWidget(title)
+        shared = QtWidgets.QLabel(dw.SHARED_ROOT_NOTE)
+        shared.setWordWrap(True)
+        v.addWidget(_grey(shared))
         self._copies_part(v, ws)
         return frame
 
@@ -541,6 +563,9 @@ class CodeFoldersWidget(QtWidgets.QGroupBox):
         self._job_done = done
         job.progress.connect(self._on_job_progress)
         job.result.connect(self._on_job_result)
+        # ``result`` is queued while the thread is still winding down, so the buttons
+        # rebuilt by its slot can see "busy"; re-enable them once it has really ended.
+        job.finished.connect(self._on_job_finished)
         self._say(working, "unverified")
         job.start()
         self._sync_busy()
@@ -548,6 +573,15 @@ class CodeFoldersWidget(QtWidgets.QGroupBox):
 
     def _on_job_progress(self, line) -> None:
         self._say(str(line), "unverified")
+
+    def _on_job_finished(self) -> None:
+        job = getattr(self, "_job", None)
+        if job is not None:
+            try:
+                job.wait(2000)
+            except RuntimeError:                   # its C++ object already went
+                pass
+        self._sync_busy()
 
     def _on_job_result(self, value) -> None:
         done, self._job_done = getattr(self, "_job_done", None), None
@@ -618,14 +652,38 @@ class CodeFoldersWidget(QtWidgets.QGroupBox):
         self._remove_armed(domain)
 
     def _arm(self, domain: str) -> None:
-        """FIRST click: list exactly what would go, and what will be kept and why.
-        Nothing is removed here."""
+        """FIRST click: check each extra folder on the worker thread (several git
+        commands each, so never on the window's thread), then list exactly what would
+        go, and what will be kept and why. Nothing is removed here."""
         ws = self._workspace(domain)
         if ws is None or not ws.extras:
             return
+        extras, runner = ws.extras, self.git_runner
+
+        def work(emit):
+            out = []
+            for i, x in enumerate(extras, 1):
+                emit(f"Checking {i} of {len(extras)} for {domain}: "
+                     f"{os.path.basename(x.path)}… (nothing is removed)")
+                out.append((x, dw.extra_status(x.path, runner)))
+            return out
+
+        n = len(extras)
+        self._start(work, f"Checking {n} extra folder{'s' if n != 1 else ''} for "
+                    f"{domain}… (nothing is removed)",
+                    lambda value, d=domain: self._checked(d, value))
+
+    def _checked(self, domain: str, value) -> None:
+        """The first click's check is back: arm exactly the folders that are still a
+        plain copy, and say what each one holds."""
+        if isinstance(value, BaseException):
+            self._say(f"Checking the extra folders of {domain} stopped: "
+                      f"{type(value).__name__}: {value}. Nothing was removed.", "failed")
+            self.reread_now()
+            self._sync_busy()
+            return
         lines, ok = [], []
-        for x in ws.extras:
-            st = dw.extra_status(x.path, self.git_runner)
+        for x, st in value:
             lines.append(f"{os.path.basename(x.path)} ({x.why}): {st.words()}")
             if st.safe_to_remove:
                 ok.append(x.path)
@@ -637,6 +695,7 @@ class CodeFoldersWidget(QtWidgets.QGroupBox):
         self._armed_words[domain] = head + "\n" + "\n".join(lines)
         self.result_note.setVisible(False)       # an older outcome is not this one
         self.reread_now()
+        self._sync_busy()
 
     def _remove_armed(self, domain: str) -> None:
         """SECOND click: re-read the disk, then remove only folders that are STILL
@@ -645,11 +704,11 @@ class CodeFoldersWidget(QtWidgets.QGroupBox):
         self._armed_words.pop(domain, None)
         mode, sdir, rows, _own = self._inputs
         runner, root_state = self.git_runner, self.state_root
-        gen, mesh = self.generator_dir, self._mesh_name()
+        gen, mesh, record_id = self.generator_dir, self._mesh_name(), self.record_id
 
         def work(emit):
             fresh = dw.plan_workspaces(gen, mode, sdir, list(rows), mesh,
-                                       state_root=root_state)
+                                       state_root=root_state, record_id=record_id)
             out = []
             for x in fresh.extras():
                 if x.path in armed:

@@ -64,7 +64,7 @@ class CodeFoldersScreen:
             out += [f"No copy can be made: {plan.root_problem}", ""]
         for i, ws in enumerate(plan.domains, 1):
             if not ws.in_mesh:
-                out.append(f"  {i}. {ws.name} — no longer a domain of this mesh "
+                out.append(f"  {i}. {ws.name} — not a domain of this mesh "
                            f"({ws.folder})")
             else:
                 made, missing = len(ws.cloned()), len(ws.missing())
@@ -77,9 +77,13 @@ class CodeFoldersScreen:
                                f"{blocked[0].reason}")
             for x in ws.extras:
                 out.append(f"       EXTRA {os.path.basename(x.path)}: {x.why}")
+            for x in ws.claimed:
+                out.append(f"       kept {os.path.basename(x.path)}: {x.why}")
             for p in ws.foreign:
                 out.append(f"       not made by the Studio, left alone: "
                            f"{os.path.basename(p)}")
+        if any(not ws.in_mesh for ws in plan.domains):
+            out += ["", dw.SHARED_ROOT_NOTE]
         if self.armed:
             out += ["", f"ARMED: removing {len(self.armed[1])} folder(s) of "
                     f"{self.armed[0]}. Type ‘yes’ to remove them; anything else keeps "

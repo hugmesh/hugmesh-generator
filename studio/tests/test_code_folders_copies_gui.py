@@ -15,7 +15,9 @@ Pinned here:
   removal;
 * the rendered block is a real picture (PNG paths written for a person to look at).
 """
+import json
 import os
+import threading
 
 import pytest
 
@@ -77,13 +79,20 @@ class FakeGit:
     def __init__(self):
         self.calls = []
         self.dirty = {}
+        self.ignored = {}
+        #: the thread each ``status`` ran on (the first click must not use the window's)
+        self.status_threads = []
 
     def __call__(self, argv, cwd):
         self.calls.append((list(argv), cwd))
         if argv[0] == "clone":
             os.makedirs(os.path.join(argv[-1], ".git"))
         if argv[0] == "status":
-            return 0, "\n".join(" M f" for _ in range(self.dirty.get(cwd, 0)))
+            self.status_threads.append(threading.current_thread())
+            lines = [" M f"] * self.dirty.get(cwd, 0)
+            if "--ignored" in argv:
+                lines += ["!! .env"] * self.ignored.get(cwd, 0)
+            return 0, "\n".join(lines)
         if argv[0] == "rev-list":
             return 0, "0"
         return 0, ""
@@ -201,7 +210,9 @@ def test_removing_extra_copies_takes_two_clicks(block, src):
     assert rm.text() == "Click again to remove 2 folders"
     _sane(rm)
     _sane(block.cancel_buttons["live.example"])
-    assert "no edits of its own" in block.extra_labels["live.example"].text()
+    assert ("a plain copy: no edits, commits, stashes or ignored files of its own"
+            in block.extra_labels["live.example"].text())
+    assert rm.isEnabled()
     shot = _shot(block, "copies-3-armed.png")
     # SECOND click: they go
     rm.click()
@@ -221,6 +232,7 @@ def test_keep_them_disarms_and_removes_nothing(block, src):
     assert block.wait_idle()
     block.refresh("existing", src, _rows(live_services=()), own_name=OWN)
     block.remove_buttons["live.example"].click()
+    assert block.wait_idle()
     _settle()
     block.cancel_buttons["live.example"].click()
     _settle()
@@ -242,6 +254,7 @@ def test_a_copy_with_edits_is_named_on_the_first_click_and_kept(block, src):
     dirty = next(x.path for x in ws.extras if x.app == "hugmesh-owncast-ui")
     block.git.dirty[dirty] = 3
     block.remove_buttons["live.example"].click()
+    assert block.wait_idle()
     _settle()
     text = block.extra_labels["live.example"].text()
     assert "holds 3 changed files — it will be kept" in text
@@ -263,6 +276,7 @@ def test_a_domain_that_left_the_mesh_gets_its_own_frame(block, src):
     assert block.remove_buttons["live.example"].text() == "Remove 4 extra folders…"
     _shot(block, "copies-5-gone-domain.png")
     block.remove_buttons["live.example"].click()
+    assert block.wait_idle()
     _settle()
     block.remove_buttons["live.example"].click()
     assert block.wait_idle()
@@ -287,3 +301,99 @@ def test_the_copies_root_and_the_edits_sentence_are_on_screen(block, src):
     assert block.copies_root.full_text() == os.path.join(
         block.state_root, "domain-code", OWN)
     assert block.copies_note.isVisible() and block.copies_note.text() == dw.EDITS_NOTE
+
+
+def test_the_first_click_checks_on_a_worker_thread_and_names_an_ignored_file(block, src):
+    """The check behind the first click runs several git commands per folder: it runs
+    off the window's thread, and an ignored ``.env`` keeps its copy, said in words
+    before the second click (skeptic blocker 2026-10-21)."""
+    block.refresh("existing", src, _rows(), own_name=OWN)
+    block.clone_buttons["live.example"].click()
+    assert block.wait_idle()
+    block.refresh("existing", src, _rows(live_services=()), own_name=OWN)
+    ws = next(d for d in block.plan.domains if d.name == "live.example")
+    env_copy = next(x.path for x in ws.extras if x.app == "hugmesh-owncast-ui")
+    block.git.ignored[env_copy] = 1
+    block.remove_buttons["live.example"].click()
+    assert block.wait_idle()
+    _settle()
+    assert block.git.status_threads
+    assert all(t is not threading.main_thread() for t in block.git.status_threads)
+    label = block.extra_labels["live.example"]
+    assert label.isVisible()
+    assert ("hugmesh-owncast-ui.live.example (this domain no longer has "
+            "hugmesh-owncast-ui): holds 1 ignored file or folder (such as a .env or "
+            "build output) — it will be kept") in label.text()
+    rm = block.remove_buttons["live.example"]
+    _sane(rm)
+    assert rm.isEnabled() and rm.text() == "Click again to remove 1 folder"
+    _shot(block, "copies-6-armed-ignored-kept.png")
+    rm.click()
+    assert block.wait_idle()
+    assert os.path.isdir(env_copy)
+
+
+def test_the_second_click_leaves_alone_a_folder_that_became_extra_after_the_first(
+        block, src):
+    """Only what the first click listed can go (skeptic S8)."""
+    block.refresh("existing", src, _rows(), own_name=OWN)
+    block.clone_buttons["live.example"].click()
+    assert block.wait_idle()
+    block.refresh("existing", src, _rows(live_services=()), own_name=OWN)
+    block.remove_buttons["live.example"].click()
+    assert block.wait_idle()
+    ws = next(d for d in block.plan.domains if d.name == "live.example")
+    late = os.path.join(ws.folder, "hugmesh-owncast-ui.live.example-late")
+    os.makedirs(os.path.join(late, ".git"))
+    with open(os.path.join(late, ".git", dw.MARKER), "w") as fh:
+        json.dump({"domain": "live.example", "slug": "live.example",
+                   "app": "hugmesh-owncast-ui"}, fh)
+    block.reread_now()
+    _settle()
+    assert late in {x.path for x in block.plan.extras()}
+    rm = block.remove_buttons["live.example"]
+    assert rm.text() == "Click again to remove 2 folders"
+    rm.click()
+    assert block.wait_idle()
+    assert os.path.isdir(late)
+    assert {x.path for x in block.plan.extras()} == {late}
+
+
+def _save_record(state_root, rec_id, label, rows):
+    from hugmesh_studio.core import saved_meshes
+    from hugmesh_studio.core.local_mesh_bootstrap import LocalMeshBootstrapConfig
+    cfg = LocalMeshBootstrapConfig.from_dict({
+        "cluster_domain": OWN,
+        "domains": [{"name": r.name, "optional_services": list(r.optional_services),
+                     "idp": "superdomain"} for r in rows]}).to_dict()
+    meshes = os.path.join(state_root, "meshes")
+    os.makedirs(meshes, exist_ok=True)
+    with open(os.path.join(meshes, rec_id + ".json"), "w") as fh:
+        json.dump(saved_meshes.SavedMesh(id=rec_id, label=label, config=cfg).to_dict(), fh)
+
+
+def test_another_saved_meshs_domain_is_shown_kept_and_never_offered(block, src):
+    """Two meshes with the same own name share one copies folder (skeptic concern):
+    mesh A (saved) made copies for live.example; mesh B does not have that domain."""
+    block.refresh("existing", src, _rows(), own_name=OWN)
+    block.clone_buttons["live.example"].click()
+    assert block.wait_idle()
+    _save_record(block.state_root, "20261021-120000-aaaaaa", "Mesh A", _rows())
+    block.refresh("existing", src, [Domain(name=OWN)], own_name=OWN)
+    _settle()
+    frames = block.findChildren(QtWidgets.QFrame, "code_folders_gone_domain")
+    assert len(frames) == 1 and frames[0].isVisible()
+    assert "live.example" not in block.remove_buttons
+    note = block.claimed_labels["live.example"]
+    assert note.isVisible() and note.width() >= 200 and note.height() >= 15
+    assert note.text().startswith("Kept, another saved mesh still uses them: ")
+    assert "the saved mesh ‘Mesh A’ still has hugmesh-gateway on live.example" in note.text()
+    shared = [lab for lab in frames[0].findChildren(QtWidgets.QLabel)
+              if lab.text() == dw.SHARED_ROOT_NOTE]
+    assert len(shared) == 1 and shared[0].isVisible()
+    _shot(block, "copies-7-other-saved-mesh.png")
+    # the record the form was loaded from does not keep what the form dropped
+    block.refresh("existing", src, [Domain(name=OWN)], own_name=OWN,
+                  record_id="20261021-120000-aaaaaa")
+    _settle()
+    assert block.remove_buttons["live.example"].text() == "Remove 4 extra folders…"

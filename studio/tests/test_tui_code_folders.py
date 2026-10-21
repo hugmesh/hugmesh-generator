@@ -2,6 +2,7 @@
 2026-10-21), the text twin of the GUI block's copies part. Same core, so the same
 folders; same two-step removal ("r N" lists and arms, "yes" removes, anything else
 keeps). Headless and Qt-free, with a fake git."""
+import json
 import os
 
 import pytest
@@ -28,6 +29,7 @@ class FakeGit:
     def __init__(self):
         self.clones = []
         self.dirty = {}
+        self.stashed = {}
 
     def __call__(self, argv, cwd):
         if argv[0] == "clone":
@@ -37,6 +39,8 @@ class FakeGit:
             return 0, "\n".join(" M f" for _ in range(self.dirty.get(cwd, 0)))
         if argv[0] == "rev-list":
             return 0, "0"
+        if argv[:2] == ["stash", "list"]:
+            return 0, "\n".join("stash@{0}: WIP" for _ in range(self.stashed.get(cwd, 0)))
         return 0, ""
 
 
@@ -129,3 +133,45 @@ def test_b_goes_back_to_the_review(at_folders):
     j, screen, _git, _src = at_folders
     j.feed("b")
     assert screen.stage == "review"
+
+
+def test_a_stashed_change_keeps_a_copy_in_the_same_words_as_the_window(at_folders):
+    """The skeptic's blocker: a stash used to read "no edits of its own"."""
+    j, screen, git, _src = at_folders
+    j.feed("m 2")
+    j.localmesh_domains.domains[1].optional_services = []
+    extra = os.path.join(screen.folders.plan(j).root, "live.example",
+                         "hugmesh-owncast-ui.live.example")
+    git.stashed[extra] = 1
+    j.feed("r 2")
+    assert screen.folders.armed is None
+    assert ("hugmesh-owncast-ui.live.example: holds 1 stashed change — it will be kept"
+            in _text(j))
+    j.feed("yes")
+    assert os.path.isdir(extra)
+
+
+def test_another_saved_meshs_domain_is_listed_kept_and_cannot_be_armed(at_folders):
+    from hugmesh_studio.core import saved_meshes
+    from hugmesh_studio.core.local_mesh_bootstrap import LocalMeshBootstrapConfig
+    j, screen, git, _src = at_folders
+    j.feed("m 2")
+    rec = saved_meshes.SavedMesh(
+        id="20261021-120000-aaaaaa", label="Mesh A",
+        config=LocalMeshBootstrapConfig.from_dict({"domains": [
+            {"name": "live.example", "optional_services": ["owncast"],
+             "idp": "superdomain"}]}).to_dict())
+    os.makedirs(saved_meshes.meshes_dir(), exist_ok=True)
+    with open(rec.path(), "w") as fh:
+        json.dump(rec.to_dict(), fh)
+    del j.localmesh_domains.domains[1]          # this mesh drops live.example
+    text = _text(j)
+    assert "live.example — not a domain of this mesh" in text
+    assert ("kept hugmesh-owncast-ui.live.example: the saved mesh ‘Mesh A’ still has "
+            "hugmesh-owncast-ui on live.example") in text
+    assert "EXTRA" not in text
+    assert "a mesh that was never saved cannot be checked" in text
+    n = next(i for i, ws in enumerate(screen.folders.plan(j).domains, 1)
+             if ws.name == "live.example")
+    j.feed(f"r {n}")
+    assert screen.folders.armed is None and "no extra copies" in j.status

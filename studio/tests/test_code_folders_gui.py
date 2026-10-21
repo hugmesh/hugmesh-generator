@@ -673,9 +673,10 @@ def test_the_copies_part_works_in_the_wizard_at_the_smallest_window(wiz, src_tre
     rm = block.remove_buttons["chat.example.org"]
     assert rm.text() == "Remove 1 extra folder…" and rm.isVisible() and rm.isEnabled()
     rm.click()
+    assert block.wait_idle()                     # the check runs off the window thread
     _settle()
     rm = block.remove_buttons["chat.example.org"]
-    assert rm.text() == "Click again to remove 1 folder"
+    assert rm.text() == "Click again to remove 1 folder" and rm.isEnabled()
     assert block.cancel_buttons["chat.example.org"].isVisible()
     _assert_block_geometry(block, page, SMALLEST)
     if shots:
@@ -689,3 +690,44 @@ def test_the_copies_part_works_in_the_wizard_at_the_smallest_window(wiz, src_tre
     rm.click()
     assert block.wait_idle()
     assert not os.path.exists(extra)
+
+
+def test_the_page_keeps_a_saved_meshs_copies_and_not_the_record_it_was_loaded_from(
+        wiz, src_tree):
+    """Meshes with the same own domain share one copies folder: a SAVED mesh that
+    still has owncast on chat.example.org keeps that copy from being offered; the
+    record the page's form was loaded from (``_loaded_record_id``) does not."""
+    import json
+
+    from hugmesh_studio.core import saved_meshes
+    from hugmesh_studio.core.local_mesh_bootstrap import LocalMeshBootstrapConfig
+    wiz.resize(*SMALLEST)
+    ctl, page = _to_source(wiz, source_dir=src_tree)
+    _settle()
+    block = ctl.code_folders
+    block.git_runner = _FakeGit()
+    block.clone_buttons["chat.example.org"].click()
+    assert block.wait_idle()
+    rec = saved_meshes.SavedMesh(
+        id="20261021-130000-abcdef", label="Mesh A",
+        config=LocalMeshBootstrapConfig.from_dict({"domains": [
+            {"name": "chat.example.org", "optional_services": ["owncast", "phpbb"],
+             "idp": "superdomain"}]}).to_dict())
+    os.makedirs(saved_meshes.meshes_dir(), exist_ok=True)
+    with open(rec.path(), "w") as fh:
+        json.dump(rec.to_dict(), fh)
+    row = ctl.mesh_domains.domains[1]
+    row.optional_services = [s for s in row.optional_services if s != "owncast"]
+    ctl._refresh_code_folders()
+    _settle()
+    assert "chat.example.org" not in block.remove_buttons
+    note = block.claimed_labels["chat.example.org"]
+    assert note.isVisible() and note.isEnabled() and note.width() >= 200
+    assert "the saved mesh ‘Mesh A’ still has hugmesh-owncast-ui on chat.example.org" \
+        in note.text()
+    _assert_block_geometry(block, page, SMALLEST)
+    ctl._loaded_record_id = rec.id
+    ctl._refresh_code_folders()
+    _settle()
+    rm = block.remove_buttons["chat.example.org"]
+    assert rm.text() == "Remove 1 extra folder…" and rm.isVisible() and rm.isEnabled()

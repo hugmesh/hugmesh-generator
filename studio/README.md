@@ -118,13 +118,24 @@ Domain names become folder names made safe (lower case, only `a-z 0-9 . -`, no `
 no leading dot or dash); two domains that would share a folder are refused. Nothing is
 created or removed through a symbolic link, and no copy is ever made inside a
 `.stack-src`. When a service is un-ticked on a domain, its copies are listed as
-**extra**, and so is the folder of a domain that left the mesh. **Remove N extra
-folders…** removes nothing on the first click: it lists each folder with what it holds
-("no edits of its own", or "holds 2 changed files — it will be kept"). The second click
-re-reads the disk and removes only the folders that are still extra and still clean;
-**Keep them** cancels. A copy with uncommitted edits or commits found nowhere else is
-always kept, and a folder the Studio did not make is listed as "left alone" and never
-offered. On the text interface the same screen is `f` on the Local Docker mesh review
+**extra**, and so is the folder of a domain that is not in the mesh. **Remove N extra
+folders…** removes nothing on the first click: it checks each folder (off the window's
+thread) and lists what it holds ("a plain copy: no edits, commits, stashes or ignored
+files of its own", or "holds 1 stashed change — it will be kept"). The second click
+re-reads the disk and removes only the folders that the first click listed, that are
+still extra and still a plain copy; **Keep them** cancels. A copy is always kept when it
+has changed, untracked or ignored files (a `.env`, build output), commits on ANY of its
+branches or tags that no remote has, stashed changes, or another working tree made from
+it. Not seen: a commit no branch, tag or stash points to any more (only git's reflog
+has it). A folder the Studio did not make is listed as "left alone" and never offered.
+
+The copies folder is named for the mesh's own domain, and every test mesh has the same
+one, so meshes share it. A copy this mesh does not need but a **saved** mesh still has
+(same domain, same app) is listed as kept, with that mesh's name, and never offered
+for removal; the saved mesh the form was loaded from does not count. A mesh that was
+never saved cannot be checked, so save a mesh before removing another one's folders.
+
+On the text interface the same screen is `f` on the Local Docker mesh review
 (`m N` / `m all` makes copies, `r N` lists extras, `yes` removes what `r` listed,
 anything else keeps them; `src PATH` copies from your own tree).
 
