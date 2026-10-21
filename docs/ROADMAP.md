@@ -48,10 +48,15 @@ correct, not stale.
 
 Restated in 14 documents.
 
-### 🔭 Casdoor MFA — enrollment and step-up
+### ✅ Casdoor MFA — enrollment and step-up
 
-The gateway layer merged dark (PR #40). The BFF challenge and step-up legs, WebAuthn,
-TOTP and recovery codes are designed as a nine-PR plan and not yet built.
+Shipped, **asserted** from the README's Current State (Casdoor MFA bullet; the BFF
+source was not re-read for this edit): the gateway layer merged dark (PR #40), and
+enrollment and challenge (TOTP, WebAuthn, recovery codes) are live in admin-bff
+through `hugmesh-auth-core`, with the `login-ui` and `admin-ui` enroll and challenge
+pages. **Still open, and not code:** the live operator flip of
+`mfa.enabled` and then `enforcePrivilegedFloor` on a real cluster
+([`MFA-ROLLOUT.md`](MFA-ROLLOUT.md)).
 
 **Verified:** `app.mfa.enabled: ${APP_MFA_ENABLED:false}`. With it off the
 `MFA_SATISFIED` marker is never derived and the `gateway_route_access.mfa_required`
@@ -66,9 +71,14 @@ open legs.
 
 Restated in 29 documents — the most duplicated item in the tree.
 
-### 🚧 Workload Console
+### ✅ Workload Console
 
-A podman/OpenShift-like console in the host shell, with admin-bff gating in flight.
+A podman/OpenShift-like console in the host shell. Shipped behind documented
+default-off flags, **asserted** from the README's Current State (Workload Console
+bullet): the admin-bff module, the hidden-tier admin-ui remote and the
+two-ServiceAccount RBAC slug. **Verified:** the generator-side guard
+[`tests/workload-console/test-workload-console.sh`](../tests/workload-console/test-workload-console.sh)
+is on `main`.
 
 Restated in 15 documents.
 
@@ -79,22 +89,40 @@ TAILNET-ONLY gateway posture are the open legs.
 
 Restated in 15 documents.
 
-### 🔭 Multi-tenancy provisioning
+### ✅ Multi-tenancy provisioning
 
-Domain scoping is shipped in the federation API. Materialising `domain_registry` rows
-into a provisioned tenant is the open leg.
+Domain scoping is shipped in the federation API (asserted).
+`provision_domain_registry` is merged: it is defined in
+[`specs/etc/keys-provision/provision.sh`](../specs/etc/keys-provision/provision.sh)
+and called from the provisioning sequence, with suites under
+[`tests/domain-registry/`](../tests/domain-registry/). **Verified** only that it
+exists and is wired in. It is a default-off hook (`.domain_registry.enabled=false`)
+that emits nothing without a real key and transport, and that it materialises
+`domain_registry` rows into a provisioned tenant is **asserted** from the README, not
+re-read here. **Still open:**
+hugmesh-generator#344, the multi-brand cut-over that strands every
+`domain='default'` row in the services that have no migration for it.
 
 Restated in 27 documents.
 
-### 🔭 Encrypted versioned backups
+### ✅ Encrypted versioned backups
 
-Per-domain and superadmin scope. Designed and queued.
+Per-domain and superadmin scope. Shipped dark. **Verified:** the Velero Applications
+`specs/cluster/apps/55-velero.yaml` and
+`specs/cluster/apps/56-velero-config.yaml`, the manifests under
+`specs/cluster/manifests/velero/` and `specs/usr/local/sbin/hugmesh-backup` exist on
+`main`. **Asserted** from the README's Current State: both Applications are
+manual-sync and the admin-bff effector stays a no-op until
+`app.backups.effector.enabled` is set. See [`CLOUD-BACKUPS.md`](CLOUD-BACKUPS.md).
 
 Restated in 24 documents.
 
-### 🔭 A/V via coturn / TURN
+### ✅ A/V via coturn / TURN
 
-Matrix and Owncast audio-video is LAN-only until a TURN server lands.
+Shipped dark, **asserted** from the README's Current State and
+[`COTURN.md`](COTURN.md): a default-off `coturn` optional service, with public
+reachability as a separate opt-in overlay. **Still open:** a group-call SFU; coturn
+is a relay for 1:1 and small-mesh calls only.
 
 Restated in 24 documents.
 
@@ -104,19 +132,34 @@ The registry and its signed export are shipped. Enforcement is not.
 
 Restated in 19 documents.
 
-### 🔭 Egress VPN and per-node attached storage
+### ✅ Egress VPN and per-node attached storage
+
+Shipped, **asserted** from the README's Current State and ARCHITECTURE: the
+admin-supplied egress-VPN drop-in ([`EGRESS-VPN.md`](EGRESS-VPN.md)) and the
+node-storage registries and reconcile agent ([`NODE-STORAGE.md`](NODE-STORAGE.md)).
+**Verified:** `specs/usr/sbin/hugmesh-egress-vpn` and
+`specs/selinux/hugmesh_node_storage.te` exist on `main`.
 
 Restated in 15 documents.
 
-### 🔭 Binhost fleet auto-update
+### ✅ Binhost fleet auto-update
 
-Gentoo binhost-driven distribution across the fleet.
+Gentoo binhost-driven distribution across the fleet. Shipped default-off.
+**Verified:** `build-x86-host-stage4.sh` adds `hugmesh-update` to the client service
+array and, unless the image is `--unaffiliated`, to the host array (PR #744, merged
+2026-10-14), and `tests/auto-update/` holds the poller and opt-in suites. A fleet
+opts in through the `devops/hugmesh-update-policy` ConfigMap
+([`DEVOPS.md`](DEVOPS.md), asserted).
 
 Restated in 10 documents.
 
-### 🚧 Upstream supply-chain hardening
+### ✅ Upstream supply-chain hardening
 
-Base-image and binary checksum/GPG verification.
+Base-image and binary checksum/GPG verification. Shipped, **asserted** from the
+ARCHITECTURE Roadmap and [`CRYPTO-AUDIT.md`](CRYPTO-AUDIT.md): stage3 GPG and sha
+checks and the headscale and tailscale binary checksums, fail-closed in the builders.
+**Verified:** [`scripts/_download-lib.sh`](../scripts/_download-lib.sh) exists on
+`main`.
 
 **Verified:** the pen-test stages are real, not aspirational.
 `hugmesh-federation-api/.gitlab-ci.yml` declares
@@ -125,11 +168,16 @@ Base-image and binary checksum/GPG verification.
 
 Restated in 7 documents.
 
-### 🔭 Auth-core relocation
+### ✅ Auth-core relocation
 
-Login, session and account logic moving out to `hugmesh-auth-core` and user-bff.
-Named in one document only — the least duplicated item here, and the one most likely
-to be forgotten.
+Login, session and account logic moved out to `hugmesh-auth-core` and user-bff.
+Shipped. **Verified** on 2026-10-15 against `origin/main` of both consumers
+(`git show origin/main:pom.xml` after a fetch): user-bff and admin-bff both depend on
+`hugmesh-auth-core` 2.5.1. The local checkouts and the repository table in
+[`ARCHITECTURE.md`](ARCHITECTURE.md) lag behind and still show 2.4.2 and 2.5.0, so
+trust the poms on `main`, not those. Named in one
+document only — the least duplicated item here, and the one most likely to be
+forgotten.
 
 ## Studio: built, not yet released
 
@@ -150,47 +198,40 @@ version, size and checksum on the download page is a placeholder.
 ## Code TODOs
 
 172 TODO/FIXME comments across 25 repositories, each read in its surrounding source
-rather than judged by its text. What came back:
+rather than judged by its text. The first triage (2026-09-09) found 24 done, 19 isolated,
+70 needing coordination and 59 not work. After the #323 fan-out and a re-check on
+2026-09-30, it stands at:
 
 | | Count | Meaning |
 |---|---:|---|
-| ✅ already done | 24 | the work landed; the comment outlived it |
-| 🚧 isolated, fixable | 19 | one person, one repo, no decision needed |
-| 🔭 needs coordination | 70 | spans repos, or waits on a decision |
+| ✅ already done | 56 | the work landed; the comment outlived it |
+| 🚧 isolated, fixable | 0 | one person, one repo, no decision needed |
+| 🔭 needs coordination | 57 | spans repos, or waits on a decision |
 | — not work | 59 | a marker, a legend, or a deliberate placeholder |
 
 The full triage is in [`roadmap-todos.tsv`](roadmap-todos.tsv), one row per comment.
+A row that was re-checked says so and gives its evidence in a `[re-checked <date>]`
+prefix.
 
-### 24 comments describe work that already shipped
+### Nothing isolated is left
 
-These are the cheapest thing on this page: the code does the thing, and only the
-comment still says otherwise. Deleting them costs nothing and stops the next reader
-re-doing finished work. They cluster in `hugmesh-generator` (13) and
-`hugmesh-mastodon-ui` (5).
+Every isolated row has been either fixed or reclassified. The last few went like this:
 
-### 19 are isolated and fixable now
+- The `hugmesh-actions` token mint had already landed.
+- The `hugmesh-gateway` mTLS profile was already fixed at the root. A named fail-fast
+  landed in hugmesh-gateway#42 (merged 2026-09-30).
+- The `hugmesh-games` input gates 2/3 had shipped (PR #14, gate 3 off by default), so
+  their four rows are done. `bundle_source` in Studio waits on decisions its own TODO
+  spells out, so it moved to needs-coordination.
 
-| Repo | Location | Effort | What it asks for |
-|---|---|---|---|
-| `hugmesh-admin-bff-api` | `src/main/java/net/hugmesh/adminbff/imagegen/Fabric8ImageJobLauncher.java:76` | trivial | Suggests converting the KubernetesClient acquire/use/close inside apply() from a synchronous try-with-resources block to Mono.usingWhen for a more 'reactive' resource lifecycle |
-| `hugmesh-admin-bff-api` | `src/main/java/net/hugmesh/adminbff/storage/Fabric8NodeStorageConfigMapWriter.java:65` | trivial | Suggests converting the KubernetesClient acquire/use/close inside writeAssignments() from a synchronous try-with-resources block to Mono.usingWhen for a more 'reactive' resource lifecycle |
-| `hugmesh-admin-bff-api` | `src/main/java/net/hugmesh/adminbff/testreports/Fabric8JobLauncher.java:52` | trivial | Suggests converting the KubernetesClient acquire/use/close inside apply() from a synchronous try-with-resources block to Mono.usingWhen for a more 'reactive' resource lifecycle |
-| `hugmesh-generator` | `tests/e2e/specs/18-rbac-phase8-10-pending.spec.ts:30` | small | Replace the test.skip() stub for 'host shell shows a ROLE_GAMES games entry-point only for games members' with a real Playwright assertion now that the host-shell UI it was waiting on has shipped |
-| `hugmesh-auth-core` | `src/main/java/net/hugmesh/authcore/account/BffSession.java:26` | small | Javadoc TODO noting that neither BffSession nor Account persists the Casdoor UUID `sub`, only the folded provider:handle id, and that a consumer needing the real subject would need a new nullable casdoor_sub column plus a version bump |
-| `hugmesh-mastodon-ui` | `src/app/notifications-column.component.ts:54` | small | Add auto-refresh to the notifications column — today it only re-fetches on an explicit filter switch/load-more/dismiss/clear-all, never on an interval or a push |
-| `hugmesh-actions` | `e2e/scripts/bring-up-stack.sh:76` | small | The token-minting step of the e2e stack bring-up script is a stub: it logs a TODO and writes an empty {} to e2e/.tokens.json instead of actually acquiring per-role bearer JWTs from Casdoor |
-| `hugmesh-gateway` | `checkstyle-suppressions.xml:18` | small | Verify whether this checkstyle-suppressions.xml is actually consumed by anything, since this repo's own pom.xml declares no checkstyle-maven-plugin/PMD/SpotBugs and deliberately opts out of the hugmesh-parent POM — then either wire checkstyle into this repo's build or remove the now-orphaned file |
-| `hugmesh-generator` | `specs/cluster/manifests/networkpolicy/tier-egress.yaml:109` | small | The five *-bff-db/federation-db pods are excluded from tier-egress but have no Egress NetworkPolicy anywhere, leaving their egress default-allow; add a DNS-only egress policy for them |
-| `hugmesh-games` | `docs/GODOT_DEVELOPER_GUIDE.md:7` | small | Finish the level->chapter terminology pass on this guide's prose (levels/level_id/level_assets/level_prerequisites -> chapters/chapter_id/chapter_assets/chapter_prerequisites) to match current source and CLAUDE.md's Naming section |
-| `hugmesh-generator` | `.gitlab-ci.yml:1668` | medium | Make the mesh-node key-zip generation step probeable/skippable so test_mesh_node_worklist_starts_all_images can rejoin the studio-suite CI job instead of being deselected |
-| `hugmesh-games` | `.gitlab-ci.yml:22` | medium | Add a real test-invocation stage (mvnw test / ng test / cargo test) to the pipeline; today build:image only compiles far enough to produce a runnable image, so a red unit/integration suite on main would not fail CI |
-| `hugmesh-pki-gateway` | `README.md:206` | medium | Add the two deployed `signup-gate-signup`/`signup-gate-login` routes (with a SIGNUP_GATE_URI env-overridable default) to this repo's application-pki.yml and the Liquibase gateway_routes seed, ahead of the casdoor-* routes, matching the generator's ArgoCD Application so a stack built from only this repo's local-dev mirror doesn't bypass the confusable-username signup gate |
-| `hugmesh-mod-ui` | `src/app/moderation-console.component.ts:278` | medium | Add the platform's MFA step-up gate (already shipped in admin-ui) in front of mod-ui's sensitive writes — ban/lift, domainLock/domainUnlock, and block — none of which currently require step-up MFA before submitting |
-| `hugmesh-generator` | `tests/qemu/docker-entrypoint.sh:1072` | medium | Suspected OpenRC ordering bug: keys-provision's start() inline-starts headscale via `rc-service headscale start` while its own depend() also declares it must run 'before headscale', a double-start race deliberately left unfixed until captured guest logs pin the exact failure |
-| `hugmesh-generator` | `tests/scripts/cluster_manifest_integrity.py:85` | medium | casdoor-pg and casdoor-games-pg are carried in the DB_ISOLATION_KNOWN_GAPS allowlist instead of getting the same per-pod NetworkPolicy + tier-ingress NotIn exclusion every other backend/pki Postgres pod already has under ADR-32 |
-| `hugmesh-games` | `backend/src/main/java/games/hugmesh/bff/controller/InputEventController.java:152` | medium | Implement gates 2 and 3 (features.<kind> and game_event_support) so InputEventController.submit() checks a game's enabled event kinds before accepting an event, beyond today's (kind,type) reference-row gate |
-| `hugmesh-games` | `docs/wiki/architecture/04-data-model.md:229` | medium | Implement validation gates 2 and 3 in InputEventController.submit() — checking the active game's games.features.<kind> flag and the game_event_support (game_slug, kind, type) opt-in table — so an input emit is refused (405) unless the game actually declared support for it, not just gate 1 (kind/type existing in the reference table) |
-| `hugmesh-generator` | `studio/hugmesh_studio/core/config.py:1808` | large | Give `bundle_source` a tri-state unset representation (like tailscale/sso) so it stops emitting unconditionally on out-of-scope node builds, now that the sequencing exemplar it was waiting on has landed |
+Open fixes for needs-coordination rows are named on the row itself:
+
+- hugmesh-admin-bff-api#113 for the registry half of #106 (merged 2026-09-30; its rows are done)
+- hugmesh-admin-bff-api#114 for the workload exec guard (merged 2026-09-30; its rows are done)
+- hugmesh-admin-ui#13 for step-up forwarding (merged; its two rows are now done)
+- hugmesh-admin-ui#14 for the adminGuard decision
+
+Such a row flips to done only when its PR merges.
 
 ### Not work, and staying
 

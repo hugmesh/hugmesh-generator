@@ -203,7 +203,7 @@ assert_has "sa: home encrypted"         "--home-encrypted"
 assert_has "sa: home seed"              "--home-seed-code stack"
 assert_has "sa: home archive"           "--include-home-archive /tmp/home.tar.zst"
 assert_has "sa: wallpaper"              "--wallpaper /tmp/wall.png"
-assert_has "sa: accent"                 "--accent-color #00ff88"
+assert_has "sa: accent"                 "--accent-color \"#00ff88\""
 assert_has "sa: installer ui"           "--installer-ui all"
 assert_has "sa: extra flags verbatim"   "--kernel-builtin --distdir /media/dist"
 assert_not "sa: no cluster services"    "--optional-services"
@@ -907,6 +907,15 @@ _local_mesh_bootstrap_run plan test superadmin "" "" "" "" ""
 grep -q -- '--own-casdoor-domain' "${MESH_ARGV_CAP}" \
     && _fail "mesh-bootstrap own-casdoor off: unexpected --own-casdoor-domain" || _ok
 unset -f python3 ui_msg
+
+# prod `up` runs in the foreground so its "Type 'yes'" prompt is visible
+python3() { echo "PROMPT Type 'yes'"; return 0; }
+ui_msg() { echo "msg" >>"${SNAP_MENU_STATE}/lm.msgs"; }
+PROMPT_OUT="$(_local_mesh_bootstrap_run up prod root 1 example.test "" "" "" 2>&1 </dev/null)"
+case "${PROMPT_OUT}" in *"PROMPT Type 'yes'"*) _ok ;; *) _bad "prod up: prompt was captured, not shown" ;; esac
+PROMPT_OUT="$(_local_mesh_bootstrap_run plan test root 1 "" "" "" "" 2>&1 </dev/null)"
+case "${PROMPT_OUT}" in *PROMPT*) _bad "test plan: output should stay captured for ui_msg" ;; *) _ok ;; esac
+unset -f python3 ui_msg
 rm -f "${MESH_ARGV_CAP}"
 
 # ── local_mesh_bootstrap_screen(): drive the owncas per-domain question ─────────
@@ -1029,6 +1038,80 @@ grep -qF -- 'k=v' "${CD_STUB_OUT}/argv" && _fail "deploy run: creds-file VALUE l
 CD_STUB_RC=7 _deploy_run status "" "" "" "" "" "" "" "" </dev/null 2>/dev/null
 assert_eq "deploy run: nonzero driver rc survives" "$?" "0"
 unset -f ui_msg
+
+# ── menu-correctness: free-text quoting, dropped-option warnings, fleet axes,
+# Clean-during-build refusal, prod prompt visibility ──────────────────────────
+# Free text with spaces / metacharacters must survive as ONE shell word: eval the
+# composed STANDALONE_FLAGS / IMG_FLAGS the way the recipe expands it and compare
+# the argv, and prove a `$(touch ...)` payload is never executed.
+_argv_of() { # _argv_of STRING -> NUL-free newline list of shell words
+    local -a w; eval "w=(${1})"; printf '%s\n' "${w[@]}"
+}
+_val() { local e; for e in "${RUN_MAKE[@]}"; do case "${e}" in "$1="*) printf '%s' "${e#"$1="}"; return ;; esac; done; }
+PWN="${SNAP_MENU_STATE}/pwned"
+reset_opts
+OPT_SA_MEDIA_LABEL="my label" OPT_BR_WALLPAPER="/tmp/my wall \$(touch ${PWN}).png" OPT_HOME_DEVICE='LABEL=a b'
+OPT_DISTDIR="/srv/dist files"
+build_make_cmd x86-standalone-thick "t" 1 2>/dev/null
+got="$(_argv_of "$(_val STANDALONE_FLAGS)")"
+case "${got}" in *$'\n'"my label"$'\n'*) _ok ;; *) _bad "quote: media label with space split" ;; esac
+case "${got}" in *$'\n'"/tmp/my wall \$(touch ${PWN}).png"$'\n'*) _ok ;; *) _bad "quote: wallpaper not one literal word" ;; esac
+case "${got}" in *$'\n'"LABEL=a b") _ok ;; *) _bad "quote: home-device split" ;; esac
+[ ! -e "${PWN}" ] && _ok || _bad "quote: command substitution was EXECUTED"
+got="$(_argv_of "$(_val IMG_FLAGS)")"
+case "${got}" in *$'\n'"/srv/dist files") _ok ;; *) _bad "quote: distdir with space split" ;; esac
+reset_opts; OPT_IDP=oidc OPT_IDP_ISSUER='https://i"x $(touch '"${PWN}"')' OPT_IDP_CLIENT_ID=cid
+build_make_cmd x86-backend "t" 1 2>/dev/null
+got="$(_argv_of "$(_val STANDALONE_FLAGS)")"
+case "${got}" in *$'\n''https://i"x $(touch '"${PWN}"')'$'\n'*) _ok ;; *) _bad "quote: idp issuer not literal" ;; esac
+[ ! -e "${PWN}" ] && _ok || _bad "quote: idp issuer substitution EXECUTED"
+
+# options dropped on non-x86 targets warn before launch
+reset_opts; OPT_SERVICES="games" OPT_TOR_ONION=yes
+warns="$(build_make_cmd rpi-desktop "t" 1 2>&1 >/dev/null)"
+case "${warns}" in *optional-services*tor*|*tor*optional-services*) _ok ;; *) _bad "drop-warn: rpi-desktop silent (${warns})" ;; esac
+warns="$(build_make_cmd x86-backend "t" 1 2>&1 >/dev/null)"
+case "${warns}" in *"x86-only"*) _bad "drop-warn: x86 target warned spuriously" ;; *) _ok ;; esac
+reset_opts; OPT_EXTRA_FLAGS="--foo"
+warns="$(build_make_cmd build-all "t" 1 2>&1 >/dev/null)"
+case "${warns}" in *"Extra builder flags"*) _ok ;; *) _bad "drop-warn: build-all dropped extra flags silently" ;; esac
+reset_opts; OPT_IDP=casdoor OPT_DISTDIR=""
+warns="$(build_make_cmd rpi-desktop "t" 1 2>&1 >/dev/null)"
+[ -z "${warns}" ] && _ok || _bad "drop-warn: warned with nothing set (${warns})"
+
+# fleet build threads the per-platform axes chosen on the single-role screens
+reset_opts; OPT_JETSON_FLEET=yes OPT_JETSON_BOARD=orin-nx-8gb OPT_JETSON_KFLAVOR=l4t
+OPT_FRITE_FLEET=yes OPT_FRITE_BOARD=le-potato OPT_ORANGEPI5_FLEET=yes OPT_ORANGEPI5_BOARD=orange-pi-5
+build_make_cmd build-all "t" 1 2>/dev/null
+assert_has "fleet: jetson board" "JETSON_BOARD=orin-nx-8gb"
+assert_has "fleet: jetson kernel" "JETSON_KERNEL_FLAVOR=l4t"
+assert_has "fleet: frite board" "FRITE_BOARD=le-potato"
+assert_has "fleet: orangepi5 board" "ORANGEPI5_BOARD=orange-pi-5"
+reset_opts; OPT_IDP=casdoor OPT_DISTDIR=""
+build_make_cmd build-all "t" 1 2>/dev/null
+assert_not "fleet: no jetson axes when fleet off" "JETSON_BOARD="
+
+# Clean refuses while a build is alive
+CLEAN_LOG="${SNAP_MENU_STATE}/clean.log"; : >"${CLEAN_LOG}"
+ui_yesno() { echo "yesno" >>"${CLEAN_LOG}"; return 0; }
+ui_msg()   { echo "msg:$2" >>"${CLEAN_LOG}"; }
+make()     { echo "make $*" >>"${CLEAN_LOG}"; }
+menu_build_alive() { return 0; }
+foreign_build_pid() { :; }
+clean_screen
+grep -q '^make' "${CLEAN_LOG}" && _bad "clean: ran make clean under a live build" || _ok
+grep -q 'msg:A build is running' "${CLEAN_LOG}" && _ok || _bad "clean: no refusal message"
+menu_build_alive() { return 1; }
+clean_screen
+grep -q '^make clean' "${CLEAN_LOG}" && _ok || _bad "clean: did not clean when idle"
+unset -f make menu_build_alive foreign_build_pid ui_yesno ui_msg
+
+
+# _word keeps a typed leading "~/" working (it reached the shell unquoted before).
+_got="$(HOME=/home/u _word '~/wall.png')"
+[ "${_got}" = "/home/u/wall.png" ] && _ok || _bad "_word: ~/wall.png -> ${_got}"
+_got="$(HOME='/home/my user' _word '~/a b.png')"
+[ "${_got}" = '"/home/my user/a b.png"' ] && _ok || _bad "_word: ~ with spaces -> ${_got}"
 
 printf '\n%d passed, %d failed\n' "${PASS}" "${FAIL}"
 [ "${FAIL}" -eq 0 ]

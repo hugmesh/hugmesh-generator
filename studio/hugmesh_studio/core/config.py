@@ -194,6 +194,10 @@ MODE_SKIPPED_PAGES = {
     # "domain_services" (#495) is NOT skipped in cloud: a cloud client image IS built
     # around its --domains tie, its Domains table is unconditional, and the domain it
     # carries is exactly the one whose services the operator must answer for.
+    # "vault" STAYS skipped in cloud (#588, decided 2026-09-24): the builder ignores
+    # --vault-addr on a client role and the per-domain CA is recorded-only, so the
+    # step would offer knobs a client build discards. The Domains step says where a
+    # client's trust really comes from instead (CLIENT_CA_INHERITANCE_NOTE).
     "cloud": ("idp", "worklist", "domains_choice", "users_choice",
               "vault"),                                       # single image, admin plane via key-zip
     # mesh USED to skip "branding" outright; it no longer can: the page now also hosts
@@ -546,7 +550,7 @@ SERVICES_ALL = "all"
 # is UNCHECKED; only pre-check what is genuinely on by default"), and it also made
 # unticking `phpbb` a no-op, since --optional-services REPLACES rather than subtracts.
 # tests/test_services_section.py parses both builder scripts and asserts set-equality with
-# this tuple, so it cannot rot into a comment.
+# this tuple, so it cannot go stale into a comment.
 BUILTIN_DEFAULT_SERVICES = ("akkoma", "tuwunel", "phpbb")
 
 # What the `all` sentinel / --all-services ACTUALLY expands to, mirrored from the single
@@ -566,6 +570,115 @@ BUILTIN_DEFAULT_SERVICES = ("akkoma", "tuwunel", "phpbb")
 # tests/test_services_section.py rather than aliased.
 USER_LEVEL_SERVICES = ("akkoma", "tuwunel", "phpbb", "games", "owncast", "tube",
                        "character-studio", "character-forge")
+
+# The anubis (public proof-of-work gate) row is a TRI-STATE, not a tick (issue #384):
+#   ""    -> the build's own ENV policy decides (prod on, test off); emits nothing
+#   "on"  -> force ON  — the `anubis` slug in --optional-services
+#   "off" -> force OFF — the `-anubis` token in --optional-services (NEVER
+#            --exclude-services: both builders refuse that spelling for it, because
+#            subtraction cannot beat the ENV default)
+ANUBIS_SLUG = "anubis"
+ANUBIS_OFF_TOKEN = "-anubis"
+ANUBIS_CHOICES = ("", "on", "off")
+# The words BOTH faces show for those three values (the GUI combo's items, the TUI's
+# state column), kept beside the values so the two cannot spell them differently.
+ANUBIS_LABELS = {"": "Default", "on": "Force on", "off": "Force off"}
+
+
+def anubis_locked(optional_services) -> bool:
+    """Is the anubis choice locked at Default by a whole-set selection?
+
+    ``--optional-services ""`` (no services at all) and ``--all-services`` each REPLACE
+    the slug list the choice rides in, so on both faces the row is decided by the preset
+    and reads Default until the operator goes back to picking services one by one."""
+    svcs = [str(s) for s in (optional_services or [])]
+    return SERVICES_NONE in svcs or SERVICES_ALL in svcs
+
+
+def anubis_shown(cfg) -> str:
+    """The value ("", "on" or "off") a face should SHOW for ``cfg``: the field itself,
+    else what a pre-tri-state picker spelling already says (the ``anubis`` slug is Force
+    on, ``-anubis`` / ``no-anubis`` is Force off). ``_services_args`` lets the field beat
+    a contradicting spelling, so the field is read first."""
+    mode = ImageConfig._anubis_mode(getattr(cfg, "anubis", ""))
+    if mode:
+        return mode
+    svcs = [str(x) for x in (getattr(cfg, "optional_services", None) or [])]
+    if ANUBIS_OFF_TOKEN in svcs or "no-anubis" in svcs:
+        return "off"
+    return "on" if ANUBIS_SLUG in svcs else ""
+
+
+def client_class_role(role: str, platform: str) -> bool:
+    """True when ``role`` builds a CLIENT-class (desktop) image on ``platform`` — the
+    class whose builder accepts ``--optional-services`` but bakes no cluster GitOps tree
+    (build-x86 skips the specs/cluster copy for ROLE_CLIENT; build-rpi5's plan echoes
+    'n/a (role=desktop; no cluster GitOps tree baked)').
+
+    * x86 — every role NOT in X86_NODE_ROLES (laptop/chromebook/desktop and all the
+      standalone-* desktops);
+    * rpi5 — ONLY builder ``--role desktop`` (Studio id rpi5-desktop, RPI5_ROLE_MAP);
+      generic/pki/backend/frontend are cluster-node class, and standalone 'generic'
+      DOES bake the tree (G16), so it must NOT count as client.
+
+    Qt-free so the GUI Network page and the TUI Network step share ONE answer."""
+    p = platform or "x86"
+    if p == "rpi5":
+        return RPI5_ROLE_MAP.get(role, role) == "desktop"
+    if p == "x86":
+        return role not in X86_NODE_ROLES
+    return False
+
+
+def services_picker_hidden(cfg) -> bool:
+    """True when the Network page hides the whole cluster-services picker — and with it
+    the anubis row — for ``cfg``: an unaffiliated image (no HugMesh plane at all) or a
+    standalone CLIENT-class desktop (no cluster tree is baked, so a selection would be
+    accepted and ignored). Standalone rpi5 'generic' is cluster-node class and is NOT
+    hidden: its builder bakes the tree, so the row applies there on both faces."""
+    platform = getattr(cfg, "platform", "") or "x86"
+    return bool(
+        getattr(cfg, "role", "") == UNAFFILIATED_ROLE
+        or getattr(cfg, "unaffiliated", False)
+        or (getattr(cfg, "mode", "") == "standalone"
+            and platform in PLATFORM_FIELD_SUPPORT.get("optional_services", (platform,))
+            and client_class_role(getattr(cfg, "role", ""), platform)))
+
+
+def with_service_slug(services, slug: str) -> list[str]:
+    """``services`` (an ImageConfig.optional_services value) with ``slug`` ADDED —
+    additively, the way a per-node infra toggle means it.
+
+    ``--optional-services`` is an ALLOW-LIST that REPLACES the builder's own default
+    (the builders' OPTIONAL_SERVICES default line), so a bare append is
+    only right when the list already names services. The three other shapes each
+    used to lose something without a word:
+
+    * ``[]`` (emit nothing, the builder default applies) -> ``["tor"]`` emitted
+      ``--optional-services tor`` and silently DROPPED akkoma/tuwunel/phpbb from the
+      node. It becomes the builder default plus the slug.
+    * ``[SERVICES_NONE]`` (the explicit "no optional services") -> ``["none", "tor"]``
+      emitted the literal slug ``none``. It becomes just the slug.
+    * ``[SERVICES_ALL, ...]`` -> ``--all-services`` expands to the USER-LEVEL set only,
+      which by construction excludes every infra slug, so the slug was dropped. It
+      becomes the user-level set spelled out, plus whatever else was listed, plus the
+      slug (both builders' own all-expansion keeps nothing beyond the user-level set).
+    """
+    svcs = [str(s) for s in (services or [])]
+    if slug in svcs:
+        return svcs
+    if svcs == [SERVICES_NONE]:
+        base: list[str] = []
+    elif SERVICES_ALL in svcs:
+        base = list(USER_LEVEL_SERVICES) + [
+            s for s in svcs if s not in (SERVICES_ALL, SERVICES_NONE)
+            and s not in USER_LEVEL_SERVICES]
+    elif not svcs:
+        base = list(BUILTIN_DEFAULT_SERVICES)
+    else:
+        base = svcs
+    return [*base, slug]
+
 
 # One line per service saying what ENABLING it does — the operator's "redo entire
 # services section" was in large part "these are eight slugs and I cannot tell what any
@@ -604,8 +717,9 @@ SERVICE_DESCRIPTIONS: dict[str, str] = {
     # (ImageConfig().env == "test"). Saying it "stays off on a test build" would be
     # false for the one action this row exists to perform.
     "anubis": "Anti-scraper proof-of-work gate in front of the public web routes. "
-              "Ticking it installs it on any build; left alone a prod build turns "
-              "it on by itself anyway and only a test build leaves it off.",
+              "Force on installs it on any build; Default leaves it to the build "
+              "(a prod build turns it on by itself, a test build leaves it off); "
+              "Force off keeps it out of a prod build.",
 }
 
 # Presentation grouping for the services surface: (group title, (slug, ...)). Ordered —
@@ -817,7 +931,7 @@ SECRET_FIELDS = ("local_pass", "luks_pass", "user_password", "root_password")
 # build-rpi5-stage4.sh), which bake CONNECTION FACTS ONLY into
 # /etc/hugmesh/vault.conf; keys-provision's provision_vault() reads that file
 # whenever the KEYS manifest carries no .vault block (the manifest still wins).
-# The token and unseal key are custody material: they ride the KEYS stick
+# The token and unseal key are secrets the operator keeps themselves: they ride the KEYS stick
 # (vault/token, vault/unseal-key), never a flag and never the image.
 # The INTERNAL/EXTERNAL split (issue #335): ``vault_addr`` is the address a node
 # reaches Vault at from INSIDE the mesh (the one that was always here, same key and
@@ -903,6 +1017,44 @@ def vault_field_error(addr: str, external_addr: str = "") -> str:
 # the SUBJECT + EXPIRY are read only when python-cryptography happens to be installed
 # (it is NOT a studio requirement — the urwid/TUI precedent: degrade, never hard-fail).
 CA_CERT_MAX_BYTES = 1 << 20             # 1 MiB: a CA bundle is kilobytes; refuse a blob
+
+#: WHERE A MESH DESKTOP CLIENT GETS ITS CERTIFICATE AUTHORITIES (#588). Cloud mode
+#: keeps skipping the Secrets store step and keeps the Domains table's Base CA column
+#: hidden, and says THIS on its Domains step instead (both faces render this one
+#: string, parity-pinned), because the two alternatives were dead knobs measured on
+#: the builders, not guessed:
+#:
+#: * ``bake_vault_conf`` (build-x86-host-stage4.sh) warns and RETURNS on a client role
+#:   — "--vault-addr given for a client role ... ignoring" — so a Vault address offered
+#:   to a client build is discarded by the builder;
+#: * the per-domain Base CA is recorded-only everywhere (no builder parses a CA flag).
+#:
+#: What really decides a client's trust is keys-provision's certificate import
+#: (specs/etc/keys-provision/provision.sh: every KEYS/certs/*.crt and *.pem copied to
+#: /usr/local/share/ca-certificates, then update-ca-certificates) — mesh-wide, from
+#: the stick, never per domain. THE ENGINE'S SIDE OF THIS SENTENCE IS ISSUE #588: as
+#: merged in #645 the import was the tail of provision_files(), below that function's
+#: `jqe '.files' || return 0`, so a client stick (KEYS profile `host`, whose manifest
+#: has no `files` key) imported nothing and the note promised an import that did not
+#: run. The engine fix — the import as its own step, provision_certs, called from
+#: main() for every manifest, with executing pins (studio/tests/
+#: test_keys_provision_certs.py) and the container and client-image proofs — lands in
+#: the same change as this wording: the note is true of the engine only WITH that
+#: change, so the two must not be separated. gen-provision-keys.sh does not mint the CA
+#: for a client: it tells the operator to copy certs/cluster-ca.crt from the pki node
+#: onto the stick, which is why the note says "the certificates you put there".
+#: studio/tests/test_client_ca_inheritance.py pins the text facts against the
+#: scripts, so this sentence goes red the day one of them changes.
+CLIENT_CA_INHERITANCE_NOTE = (
+    "Certificate authorities on a Mesh desktop client: the image carries none of its "
+    "own, so there is no per-domain CA to pick here and the Secrets store step is "
+    "skipped. At first boot keys-provision imports every certificate you put in the "
+    "KEYS stick's certs/ folder (*.crt and *.pem — the mesh's cluster-ca.crt, which "
+    "gen-provision-keys.sh tells you to copy there from the pki node, and any other "
+    "CA) into the system trust store, so this client trusts exactly the certificate "
+    "authorities on the stick you provision it with, for every domain it is tied to. "
+    "(A Vault address would be ignored too: the builder drops --vault-addr on a "
+    "client role — Vault/ESO seeding is a cluster-node first-boot step.)")
 _PEM_CERT_RE = re.compile(
     r"-----BEGIN CERTIFICATE-----\s*(?P<body>[A-Za-z0-9+/=\s]+?)\s*"
     r"-----END CERTIFICATE-----")
@@ -1175,6 +1327,7 @@ _FIELD_PLATFORMS: dict[str, tuple[str, ...]] = {
     "tor_onion_service": _X86, "character_studio": _X86_RPI5,
     "character_forge": _X86_RPI5,
     "optional_services": _X86_RPI5, "exclude_services": _X86_RPI5, "enable_games": _X86_RPI5,
+    "anubis": _X86_RPI5,
     # managed backing services (I8/M2) — the two node builders parse --managed-service;
     # a mesh-node cluster concern, so scoped to the only builders that bake a cluster tree.
     "managed_services": _X86_RPI5,
@@ -1347,7 +1500,7 @@ class BuilderDefault:
     recorded a fiction for half the table, and GUARD A could only ever have checked the
     variable NAMES. Carrying the fork ``condition`` verbatim instead lets the guard pin the
     whole sentinel — name, condition and both arms — so a builder-side edit to any part of
-    it goes RED.
+    it fails.
 
     ``policy`` is what STUDIO does about that sentinel, and it is descriptive of today's
     code, not aspirational:
@@ -1424,7 +1577,7 @@ class FieldScope:
         carries a cluster domain.
 
     A blanket ``modes=("cloud","mesh")`` would therefore have hidden a widget whose value
-    the ARM builders really do take, and (via the emission-neutral clear the wizard pairs
+    the ARM builders really do take, and (via the clear that leaves the output unchanged the wizard pairs
     with every hide) silently reset it to "hugmesh.net" on an operator who had typed
     something else. Same shape of bug as the orangepizero2 --standalone regression above,
     on the other axis. None means "the mode rule holds everywhere"; a tuple means it holds
@@ -1474,8 +1627,8 @@ _BD_BUNDLE_SOURCE = BuilderDefault(
 # frite / orangepi5 / orangepi-zero2 parse --standalone with NO role concept whatsoever
 # (zero ROLE_CLIENT/ROLE_K8S occurrences), so there is no class rule there to enforce and
 # Studio must not invent one. test_field_scope.py derives this set from the builder scripts
-# and asserts equality, so a builder that grows or loses a role-class concept goes RED here
-# rather than letting the tuple rot into a fiction.
+# and asserts equality, so a builder that grows or loses a role-class concept fails here
+# rather than letting the tuple go stale into a fiction.
 _STANDALONE_CLASS_GATED_PLATFORMS = ("x86", "rpi5")
 
 # The CLUSTER-IDENTITY trio — the three fields NetworkPage's "Identity & domain"
@@ -1640,7 +1793,7 @@ def x86_desktop_axis(role: str) -> tuple[str, ...]:
     * cluster NODE roles (pki/be/fe/be+gpu/omnibus/edge_ai) are headless k8s
       servers — the builder plans DESKTOP=none and ignores the flag, so NO
       desktop axis exists for them at all (advertising one manufactured 12 of
-      the 16 phantom inventory entries).
+      the 16 inventory entries that never existed).
     """
     if role in X86_CLIENT_ROLES:
         return ("thin", "full")
@@ -1749,7 +1902,7 @@ def cluster_identity_applies(cfg: "ImageConfig") -> bool:
     THE QUESTION IT ANSWERS is deliberately narrow: "are --cluster-domain /
     --games-domain / --release-state actually EMITTED for this image". Not "does this
     image have a domain", not "is this a mesh". Emission is the only thing a widget gate
-    may key on, because the wizard's hide contract is EMISSION-NEUTRAL — a hidden field
+    may key on, because the wizard's hide contract leaves the output unchanged — a hidden field
     is cleared to its dataclass default in validatePage, so hiding a field that IS emitted
     silently changes the built image.
 
@@ -1895,7 +2048,7 @@ def flow_images(cfg: "ImageConfig", entries=None) -> tuple[ImageAxes, ...]:
 def flow_allows(pred, cfg: "ImageConfig", entries=None) -> bool:
     """``pred`` must hold for EVERY image this flow builds.
 
-    ALL, not ANY, and that is the load-bearing choice. These surfaces live on the SHARED
+    ALL, not ANY, and that is the choice that matters. These surfaces live on the SHARED
     mesh base, which ``WorklistConfig._materialize_one`` DEEPCOPIES onto every entry, and
     ``clear_role_class_fields`` clears only the theme/home families — nothing per-entry
     ever strips ``standalone`` / ``local_pass`` / the media-data trio / ``egress_vpn``.
@@ -1928,7 +2081,7 @@ def superadmin_plane_applies(cfg: "ImageConfig") -> bool:
     so every operator building three node images walked two superadmin tables they had
     nothing to put in. Now the mesh arm asks whether the operator opted into
     ``additional_domains`` on the Network step ("this mesh also hosts domains beyond its
-    own cluster domain"). Emission-neutrality is preserved by NetworkPage.validatePage,
+    own cluster domain"). Unchanged-output rule is preserved by NetworkPage.validatePage,
     which CLEARS cfg.domains/cfg.users whenever the opt-in is off — so a skipped table
     can never leave rows behind for mesh_manifest() to publish. See the ask-8 note in
     gui/pages/network.py.
@@ -1950,8 +2103,9 @@ def effective_domain_note(cfg: "ImageConfig") -> str:
     joins (derived ``<brand>.internal`` when left blank — ``effective_superdomain``)."""
     return (f"Serve only {cfg.cluster_domain or 'the cluster domain'} and the internal "
             f"Tailscale root domain {cfg.effective_superdomain()} that every node joins. "
-            "No domains table, no per-domain services to pick — this is the default and "
-            "what almost every mesh wants.")
+            "No domains table — this is the default and what almost every mesh wants. "
+            f"The services {cfg.cluster_domain or 'the cluster domain'} provides are "
+            "still picked on its own services page, which comes next.")
 
 
 def users_table_applies(cfg: "ImageConfig") -> bool:
@@ -2344,7 +2498,7 @@ def effective_installer_ui(cfg: "ImageConfig") -> str:
 def field_default(name: str):
     """The dataclass default for one ImageConfig field.
 
-    PUBLIC since 2026-08-26. Every emission-neutral hide in the page set has to reset
+    PUBLIC since 2026-08-26. Every hide that leaves the output unchanged in the page set has to reset
     its field to this value, so three GUI pages had grown their own byte-identical
     copy (network.py, build.py, and role.py by importing the underscore name). They all
     delegate here now: the dataclass is the single truth, and a page that compares
@@ -2397,7 +2551,7 @@ def mode_axis_violated(fld: str, cfg: "ImageConfig") -> bool:
     every mode for all nine ARM builders, and build-rpi5-stage4.sh:3386 bakes it into
     /etc/hugmesh/cluster-domain unconditionally. Reading the mode tuple flat would put a
     standalone rpi5 image's REAL, EMITTED cluster domain out of scope — hiding the widget
-    and (the wizard pairs every hide with an emission-neutral clear) resetting the typed
+    and (the wizard pairs every hide with a clear that leaves the output unchanged) resetting the typed
     value to the "hugmesh.net" default behind the operator's back.
 
     Returns False when the platform axis already owns the rejection (that gate, and
@@ -2605,7 +2759,7 @@ def scope_violations(cfg: "ImageConfig") -> tuple[list[str], list[str]]:
 #     * BUILDER_DEFAULTS['bundle_source'].policy flips override -> defer, which turns
 #       GUARD A's test_guard_a_policy_override_pins_the_known_gap RED by design, and
 #       test_cli_args.py's X86 tails plus test_field_scope.py:190 move with it.
-#   GUARD A is doing its job in the meantime: it goes RED the moment either flag stops
+#   GUARD A is doing its job in the meantime: it fails the moment either flag stops
 #   emitting unconditionally, so this cannot be quietly inherited.
 
 
@@ -2716,6 +2870,32 @@ DOMAIN_IDP_SUPERDOMAIN = "superdomain"
 DOMAIN_IDP_OWN = "own"
 DOMAIN_IDP_CHOICES = (DOMAIN_IDP_SUPERDOMAIN, DOMAIN_IDP_OWN)
 
+# A GitHub organisation SLUG (the per-domain ``Domain.github_org`` field, read by the
+# Go-Live "Export to GitHub org" step): letters, digits and single hyphens, no leading
+# or trailing hyphen, at most 39 characters — GitHub's own login rule. The slug is the
+# ONLY thing ever stored: the export signs in with the person's own ``gh`` login at
+# run time (a pointer, never a token copy).
+GITHUB_ORG_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}$")
+
+
+def github_org_problem(slug) -> str:
+    """Why ``slug`` cannot be a GitHub organisation; "" when it can. Empty is fine:
+    no org is the default, and every config written before the field existed
+    carries exactly that."""
+    if slug is None:
+        return ""
+    if not isinstance(slug, str):
+        return f"GitHub org must be text, got {slug!r}"
+    s = slug.strip()
+    if not s:
+        return ""
+    if len(s) > 39:
+        return f"GitHub org {s!r} is longer than 39 characters"
+    if not GITHUB_ORG_RE.match(s):
+        return (f"not a GitHub org slug: {s!r} (letters, digits and single hyphens, "
+                "no leading or trailing hyphen)")
+    return ""
+
 
 @dataclass
 class Domain:
@@ -2734,6 +2914,40 @@ class Domain:
     # saved config/manifest == superdomain (_domain_from_dict normalizes), and
     # both manifest emitters OMIT the default so pre-#47 bytes never change.
     idp: str = DOMAIN_IDP_SUPERDOMAIN
+    # Does this domain get its OWN Tor v3 onion (hugmesh-generator#582, operator
+    # decision 68 = A on #347)? ``tor`` is the ONE infra slug that became per-domain:
+    # a Tor domain is its own HiddenService stanza fronting the SAME gateway, and the
+    # gateway tells the domains apart by the onion Host (hugmesh-gateway#38's host
+    # map). It needs Tor on the node / mesh (the node-plane ``tor`` selection) to do
+    # anything — see core/domain_services.tor_front_door_state. Manifest emission is
+    # OMIT-WHEN-FALSE, like ``idp``, so every pre-#582 manifest keeps its bytes. A
+    # legacy ``"tor"`` in ``optional_services`` (the pre-#227 freeform cell, a slot no
+    # builder ever read) MOVES here at load — the ``games`` precedent.
+    tor: bool = False
+    # The GitHub organisation this domain's repositories are EXPORTED to by the
+    # Go-Live "Export to GitHub org" step (core/org_export.py): an org SLUG
+    # (``GITHUB_ORG_RE``), never a token. "" — the default, and every config from
+    # before the field existed — means the step does not apply to this domain at
+    # all. OMIT-WHEN-EMPTY on every saved shape, like ``tor``, so an untouched
+    # config, record and manifest keep their bytes.
+    github_org: str = ""
+
+
+def domain_rows_to_dict(domains) -> list[dict[str, Any]]:
+    """The SAVED shape of a list of domain rows (a config file, a session record):
+    every field, except ``tor`` when it is false (#582) and ``github_org`` when it is
+    empty. A row that is not a Tor domain and names no org is written exactly as it
+    was before either field existed; loading treats an absent key as false / "". A
+    row that is already a plain dict is passed through the same filter."""
+    out: list[dict[str, Any]] = []
+    for d in domains or []:
+        row = dict(d) if isinstance(d, dict) else asdict(d)
+        if not row.get("tor"):
+            row.pop("tor", None)
+        if not (row.get("github_org") or "").strip():
+            row.pop("github_org", None)
+        out.append(row)
+    return out
 
 
 @dataclass
@@ -2886,6 +3100,24 @@ class ImageConfig:
     # core/domain_services.gate_reason, which is what refuses an image build or a
     # docker mesh start naming the domains that were never configured.
     domain_services_reviewed: list[str] = field(default_factory=list)
+    # The per-domain services of the MESH'S OWN domain (``cluster_domain``) — the
+    # implicit domain every mesh serves and which #494's rule gives a services page
+    # too, even on the default "just this mesh's own domain" path where the Domains
+    # table is skipped (core/domain_services.implicit_own_domain). It is a separate
+    # field, NOT a ``domains`` row, so the ASK-8 guard holds: an untouched flow emits
+    # no ``--domains`` and no manifest ``domains`` entry. Provisioning input like
+    # ``domains[].optional_services`` (never argv): both mesh manifests carry it as
+    # ``cluster_domain_services`` ONLY when non-empty — empty means "the cluster-wide
+    # set applies", the same reading as an empty per-domain list, and keeps every
+    # pre-existing manifest byte-identical. Mesh mode only; cloud prefills its
+    # cluster domain as a real row 0 and standalone has no domains.
+    cluster_domain_services: list[str] = field(default_factory=list)
+    # The GitHub org the MESH'S OWN domain exports to (``Domain.github_org`` for the
+    # implicit own domain — the ``cluster_domain_services`` precedent: a separate
+    # field, not a ``domains`` row, so the ASK-8 guard holds). "" = the own domain
+    # takes no part in the Go-Live export step; OMIT-WHEN-EMPTY in to_dict and the
+    # manifest, so every pre-existing config and manifest keeps its bytes.
+    cluster_domain_github_org: str = ""
     # ── hardware ──
     gpu_driver: str = "auto"           # auto|nvidia|amd-free|amd-pro|intel|none
     nvidia_cuda: bool = False          # --nvidia-cuda (CUDA bake for GPU/edge-AI images; x86)
@@ -2987,6 +3219,10 @@ class ImageConfig:
     # ── cluster optional services + games (node-scoped) ──
     optional_services: list[str] = field(default_factory=list)  # --optional-services slugs (+ none/all sentinels)
     exclude_services: list[str] = field(default_factory=list)   # --exclude-services subtractive list (applied last)
+    # Tri-state for the public PoW gate, "" / "on" / "off" (ANUBIS_CHOICES, issue #384).
+    # "" = the build's ENV policy (prod on / test off); "on"/"off" force it, and are
+    # folded into --optional-services by _services_args (never --exclude-services).
+    anubis: str = ""
     enable_games: bool = False         # --enable-games (Game Studio + games.<domain>)
     # ── managed backing services (I8/M2; x86 + rpi5 node builders) ──
     # Map backing-service id -> operator-supplied HOSTED endpoint. The EMPTY default
@@ -3131,6 +3367,13 @@ class ImageConfig:
         # users: the User wire shape (issue #228 — `roles` OMIT-WHEN-SINGLE), not the
         # raw asdict, so a one-role account keeps its pre-#228 bytes.
         d["users"] = [u.to_dict() if isinstance(u, User) else u for u in self.users]
+        # domains: per-domain ``tor`` (#582) is OMIT-WHEN-FALSE here too, so a saved
+        # config or session record with no Tor domain keeps its pre-#582 bytes.
+        d["domains"] = domain_rows_to_dict(self.domains)
+        # the own domain's GitHub org is OMIT-WHEN-EMPTY (its domains[] twin is), so
+        # a config that never met the field keeps its bytes
+        if not (d.get("cluster_domain_github_org") or "").strip():
+            d.pop("cluster_domain_github_org", None)
         if not include_secrets:
             for k in SECRET_FIELDS:
                 d[k] = ""
@@ -3157,6 +3400,36 @@ class ImageConfig:
                 f"domain {kw.get('name', '')!r}: idp must be one of "
                 f"{'|'.join(DOMAIN_IDP_CHOICES)}, got {v!r}")
         kw["idp"] = v
+        # per-domain Tor front door (#582). A real bool, or the two hand-written
+        # spellings; junk fails loudly at load (the idp rule), never coerced.
+        t = kw.get("tor", False)
+        if isinstance(t, str) and t.strip().lower() in ("true", "false", ""):
+            t = t.strip().lower() == "true"
+        if t is None:
+            t = False
+        if not isinstance(t, bool):
+            raise ValueError(
+                f"domain {kw.get('name', '')!r}: tor must be true or false, got {t!r}")
+        # MIGRATION: a legacy per-domain ``tor`` slug (pre-#227 freeform cell, kept as
+        # a carried-over slug since) did nothing — the manifest carried it and no
+        # builder read it (#580 addendum). Decision 68 made per-domain Tor a real
+        # mechanism, so the intent moves onto the field that drives it, and the slug
+        # leaves the allow-list rather than rendering a second, dead "tor" row.
+        svcs = kw.get("optional_services")
+        if isinstance(svcs, (list, tuple)) and "tor" in svcs:
+            t = True
+            kw["optional_services"] = [x for x in svcs if x != "tor"]
+        kw["tor"] = t
+        # per-domain GitHub org (the Go-Live export step): absent / null / "" is "no
+        # org" — every pre-existing config; anything else must be an org slug, and
+        # junk fails loudly at load like idp and tor do, never silently kept as a
+        # name the export would then try to create a repository under.
+        org = kw.get("github_org")
+        org = "" if org is None else org
+        problem = github_org_problem(org)
+        if problem:
+            raise ValueError(f"domain {kw.get('name', '')!r}: {problem}")
+        kw["github_org"] = org.strip()
         return Domain(**kw)
 
     @staticmethod
@@ -3202,6 +3475,11 @@ class ImageConfig:
             if k in d:
                 v = cls._tri_explicit(d[k], k)
                 d[k] = "" if v is None else v
+        # anubis tri-state (#384): the three spellings plus the bool a checkbox-era
+        # hand-written config would use; junk fails closed AT LOAD, because a typo that
+        # silently meant "default" would ship a public PoW gate the operator said to turn off.
+        if "anubis" in d:
+            d["anubis"] = cls._anubis_mode(d["anubis"])
         # base CA certificates (#335): tolerate `null` / a hand-edited scalar the same
         # way "domains": null is tolerated above — treat it as ABSENT (the native
         # empty default) rather than constructing a config whose list field holds a
@@ -3222,6 +3500,23 @@ class ImageConfig:
                 d["domain_services_reviewed"] = [x for x in v if isinstance(x, str)]
             else:
                 d.pop("domain_services_reviewed")
+        # The own domain's services (#494): the same tolerance — junk is ABSENT, i.e.
+        # the cluster-wide set, never a list holding a scalar.
+        if "cluster_domain_services" in d:
+            v = d["cluster_domain_services"]
+            if isinstance(v, (list, tuple)):
+                d["cluster_domain_services"] = [x for x in v if isinstance(x, str)]
+            else:
+                d.pop("cluster_domain_services")
+        # The own domain's GitHub org: the per-domain rule (_domain_from_dict) —
+        # absent / null is "", junk fails loudly rather than naming an org to export to.
+        if "cluster_domain_github_org" in d:
+            v = d["cluster_domain_github_org"]
+            v = "" if v is None else v
+            problem = github_org_problem(v)
+            if problem:
+                raise ValueError(f"cluster_domain_github_org: {problem}")
+            d["cluster_domain_github_org"] = v.strip()
         # MIGRATE the pre-2026-08-26 spelling of the post-build device-test opt-in.
         # from_dict filters unknown keys, so without this a config saved under the old
         # name would load with the opt-in silently OFF — the `games` precedent above:
@@ -3724,22 +4019,61 @@ class ImageConfig:
         lvl = clamp_compress_level(self.compress_level)
         return [] if lvl == COMPRESS_LEVEL_DEFAULT else ["--compress-level", str(lvl)]
 
+    @staticmethod
+    def _anubis_mode(value) -> str:
+        """Normalize the anubis tri-state to "", "on" or "off". Accepts the bools a
+        hand-written config may carry (True -> "on", False/None -> ""); anything else
+        is rejected fail-closed rather than read as "default"."""
+        if value is True:
+            return "on"
+        if value is False or value is None:
+            return ""
+        v = str(value).strip().lower()
+        if v in ANUBIS_CHOICES:
+            return v
+        raise ValueError(f"anubis must be one of '', 'on', 'off' (got {value!r})")
+
     def _services_args(self) -> list[str]:
         """--optional-services allow-list (with the explicit-none / --all-services
         sentinels, G13/G14) + the subtractive --exclude-services list. Shared by x86 +
-        rpi5, the only builders that parse them."""
+        rpi5, the only builders that parse them.
+
+        The anubis tri-state (``self.anubis``, #384) is folded in here, because it has
+        no flag of its own: "on" adds the slug, "off" adds the ``-anubis`` token, "" adds
+        nothing (so an untouched config emits the argv it always did). A force-off beside
+        an EMPTY list relies on the builders' rule that a list of only deselect tokens
+        keeps the built-in default; beside the EXPLICIT-none sentinel it cannot, so the
+        default slugs are subtracted with --exclude-services instead."""
         a: list[str] = []
         svcs = list(self.optional_services or [])
+        excl = list(self.exclude_services or [])
+        mode = self._anubis_mode(self.anubis)
+        if mode == "on":
+            svcs = [s for s in svcs if s not in (ANUBIS_OFF_TOKEN, "no-anubis")]
+            if SERVICES_ALL in svcs:
+                # the builders' `all` expansion keeps deselect tokens but DROPS a
+                # positive slug, so spell the set out (with_service_slug does).
+                svcs = [s for s in svcs if s != ANUBIS_SLUG]
+            svcs = with_service_slug(svcs, ANUBIS_SLUG)
+        elif mode == "off":
+            svcs = [s for s in svcs if s != ANUBIS_SLUG]
+            if svcs == [SERVICES_NONE]:
+                # none + veto: a lone veto would give the defaults back, so say "none"
+                # the other way — keep the veto and subtract the default slugs.
+                svcs = [ANUBIS_OFF_TOKEN]
+                excl += [s for s in BUILTIN_DEFAULT_SERVICES if s not in excl]
+            elif not any(s in (ANUBIS_OFF_TOKEN, "no-anubis") for s in svcs):
+                svcs.append(ANUBIS_OFF_TOKEN)
         if svcs == [SERVICES_NONE]:
             a += ["--optional-services", ""]           # EXPLICIT none (suppress the builder default)
-        elif svcs == [SERVICES_ALL] or SERVICES_ALL in svcs:
+        elif SERVICES_ALL in svcs and mode != "off":
             a += ["--all-services"]                    # full user-level set
         elif svcs:
             # SPACE-separated: the builders word-split OPTIONAL_SERVICES on IFS
             # whitespace (it stays ONE argv element — shlex.quote on print).
             a += ["--optional-services", " ".join(svcs)]
-        if self.exclude_services:
-            a += ["--exclude-services", " ".join(self.exclude_services)]
+        if excl:
+            a += ["--exclude-services", " ".join(excl)]
         return a
 
     def _managed_services_args(self) -> list[str]:
@@ -4610,13 +4944,25 @@ class ImageConfig:
             "brand": self.brand, "brand_title": self.brand_title, "org": self.org,
             "cluster_domain": self.cluster_domain,
             "superdomain": self.effective_superdomain(),
+            # per-domain ``tor`` (#582) is OMIT-WHEN-FALSE the same way: a domain
+            # without its own onion emits no key, so pre-#582 bytes never change.
             "domains": [{k: v for k, v in asdict(d).items()
-                         if not (k == "idp" and v == DOMAIN_IDP_SUPERDOMAIN)}
+                         if not (k == "idp" and v == DOMAIN_IDP_SUPERDOMAIN)
+                         and not (k == "tor" and not v)
+                         # the export org (OMIT-WHEN-EMPTY, the same reading)
+                         and not (k == "github_org" and not (v or "").strip())}
                         for d in self.domains],
             # per-user ``roles`` (issue #228) is OMIT-WHEN-SINGLE the same way (User.to_dict):
             # ``role`` stays the primary every consumer reads; a multi-role account adds
             # the full list beside it. test_user_multi_role.py pins both shapes.
             "users": [u.to_dict() for u in self.users],
+            # the mesh's OWN domain's per-domain services (#494) — OMIT-WHEN-EMPTY, so
+            # a manifest whose own domain takes the cluster-wide set keeps its bytes.
+            **({"cluster_domain_services": list(self.cluster_domain_services)}
+               if self.cluster_domain_services else {}),
+            # the own domain's export org (the Go-Live export step) — OMIT-WHEN-EMPTY
+            **({"cluster_domain_github_org": self.cluster_domain_github_org.strip()}
+               if (self.cluster_domain_github_org or "").strip() else {}),
         }
 
     def write_mesh_manifest(self, output_dir: str) -> str:

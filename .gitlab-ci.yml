@@ -147,6 +147,86 @@ lint:cluster-manifest-integrity:
     # regex cannot tell what a fused `for entry in ...` word list expands to.
     - bash tests/scripts/test-cluster-manifest-integrity.sh
 
+# Database connection budget gate (hugmesh-generator#663). Each BFF's autoscaler
+# can run up to 6 pods, a rolling update adds 2 more, and every pod holds an
+# R2DBC pool against a Postgres role created with CONNECTION LIMIT 20. With no pool
+# setting the default of 10 per pod asked for 6 x 10 = 60: the first two pods took
+# the whole budget and the persona sign-in answered 500. This job reads the
+# manifests (the role limit from each database's initdb, max_connections from its
+# entrypoint, maxReplicas from the HPA, the rolling-update surge, the pool env) and
+# fails when (replicas + surge) x pool exceeds the role limit, when initial-size
+# exceeds max-size, or when a database cannot hold all its roles at once. Offline,
+# no cluster, no network.
+lint:db-connection-budget:
+  stage: lint
+  image: python:3-slim
+  tags: [hugmesh-x86]
+  before_script:
+    - pip install --quiet pyyaml
+  script:
+    - bash tests/scripts/test-db-connection-budget.sh
+
+# The stop in front of the PG_TLS_ENABLED flip (docs/DB-HARDENING-RUNBOOK.md). Each
+# dedicated Postgres mounts <db>-mtls with `optional: true` and runs `strategy:
+# Recreate`, so flipping the gate before that ESO Secret exists takes the DB down.
+# scripts/pg-tls-preflight.sh refuses the flip; this job pins its DB table to the
+# manifests and drives it against a stub kubectl and real openssl certificates,
+# then mutates it to prove each guard bites. Offline, no cluster, no network. The
+# real-kubectl jsonpath cross-check SKIPs loudly here (no kubectl in the image).
+lint:pg-tls-preflight:
+  stage: lint
+  image: python:3-slim
+  tags: [hugmesh-x86]
+  before_script:
+    - apt-get update -qq && apt-get install -y -qq --no-install-recommends openssl >/dev/null
+  script:
+    - bash tests/scripts/test-pg-tls-preflight.sh
+
+# The egress cutover path (docs/DB-HARDENING-RUNBOOK.md part C). The overlay's old
+# "uncomment ../networkpolicy/tier-egress.yaml" step cannot render under kustomize's
+# default load restrictor; scripts/netpol-egress-scope.py carves one namespace into
+# the overlay directory instead. This pins coverage of tier-egress.yaml, that the
+# overlay still renders zero objects, and (with a real kubectl) that each carved file
+# renders. The kubectl legs SKIP loudly in this image (no kubectl).
+lint:netpol-egress-scope:
+  stage: lint
+  image: python:3-slim
+  tags: [hugmesh-x86]
+  script:
+    - bash tests/scripts/test-netpol-egress-scope.sh
+
+# Matrix instance-block reconciler (hugmesh-generator#564): the config-edit script
+# embedded in manifests/tuwunel/instance-block-sync-job.yaml, run against the real
+# tuwunel-config toml, plus the dark-by-default and hardening checks on the Job.
+# Offline; the kubectl kustomize legs SKIP loudly in this image (no kubectl).
+lint:tuwunel-instance-block-sync:
+  stage: lint
+  image: python:3-slim
+  tags: [hugmesh-x86]
+  before_script:
+    - pip install --quiet pyyaml
+  script:
+    - bash tests/scripts/test-tuwunel-instance-block-sync.sh
+
+# In-cluster JWKS gate (hugmesh-generator#693). Every BFF's application.yml reads
+# jwk-set-uri from CASDOOR_JWKS_URI, falling back to the public issuer host +
+# /.well-known/jwks. On a cluster where id.hugmesh.net does not resolve (kind) a
+# manifest that sets only CASDOOR_ISSUER_URI makes every signed-in call answer 500
+# ("Could not obtain the keys"). This job reads the manifests and the gateway chart
+# and fails when a container that sets CASDOOR_ISSUER_URI has no literal in-cluster
+# CASDOOR_JWKS_URI, when that URL names a Service or port the tree does not create,
+# or when the wired NetworkPolicies do not admit that pod to the Casdoor pod port.
+# Exemptions carry a reason and a predicate and rot loudly. Offline, no cluster,
+# no network.
+lint:bff-jwks-in-cluster:
+  stage: lint
+  image: python:3-slim
+  tags: [hugmesh-x86]
+  before_script:
+    - pip install --quiet pyyaml
+  script:
+    - bash tests/scripts/test-bff-jwks-in-cluster.sh
+
 # External Matrix/Mastodon CLIENT reachability gate. The fe route table ends in a
 # /** catch-all to the Angular shell, whose nginx serves index.html for anything
 # unrouted — so a MISSING protocol route does not 404, it returns 200 text/html
@@ -168,13 +248,22 @@ lint:client-connect-routes:
 # The COMPOSE fe route table and the CLUSTER fe route table must send the same
 # /bff path to the same BFF. hugmesh-generator#366: five paths went to admin-bff
 # on compose and user-bff on the cluster, so the compose e2e lane could not see
-# the cluster's 404s. Operator decision 40 (#347) aligned all five onto user-bff,
-# ACCEPTING that /bff/register/google and /bff/register/discord 404 on both lanes
-# until hugmesh/hugmesh-user-bff-api#13 lands. This job simulates Spring Cloud
-# Gateway's first-match-wins ordering over both tables and asserts the alignment,
-# that compose keeps EXACT paths rather than the cluster's subtrees (which would
-# also move /bff/me/appeal and /bff/register/complete off admin-bff), and that
-# those two still reach admin-bff. Six negative controls must each trip it.
+# the cluster's 404s. Operator decision 40 (#347) aligned all five onto user-bff.
+# Updated 2026-09-18: /bff/register/google and /bff/register/discord served
+# 404s on both lanes until hugmesh/hugmesh-user-bff-api#20 (PR #20, commit
+# dc34c8b) added both handlers to LegacyPathParityController — user-bff now
+# serves all five, and this job's own FIVE table asserts has_handler for every
+# one of them. This job simulates Spring Cloud Gateway's first-match-wins
+# ordering over both tables and asserts the alignment, that compose keeps
+# EXACT paths rather than the cluster's subtrees (which would also move
+# /bff/me/appeal and /bff/register/complete off admin-bff), and that those two
+# still reach admin-bff. Six negative controls must each trip it.
+# The same suite also owns decision 60 (#347, generator half #569): it asserts
+# APP_BFF_EXCHANGE_CACHE_TTL_MS is the string "0" for admin-bff-api and
+# mod-bff-api on both lanes (compose.local.yaml + the two cluster Deployments),
+# with its own mutation-tested controls. The BFF pin lives here rather than in
+# tests/stack/test-gateway-auth-flag-parity.sh because that guard needs the
+# gateway checkout; this one needs only the tree.
 # Offline, no cluster, no network.
 lint:fe-bff-route-lane-parity:
   stage: lint
@@ -1020,6 +1109,41 @@ lint:gateway-mfa-env:
   script:
     - bash tests/stack/test-gateway-mfa-env.sh
 
+# The kind lane's .onion front door (hugmesh-generator#577, decision 67 = B):
+# scripts/kind-tor.sh's torrc (HiddenServicePort 443 -> 127.0.0.1:8443, the kind
+# node's TLS door), its read-modify-write helm-parameter patch, and the fe-gateway
+# Ingress that patch renders — which needs a REAL `helm template`, so this job
+# inherits lint:gateway-mfa-env's pinned, sha256-verified, fail-closed helm install
+# rather than restating it. The suite also reads `make -n` and `git check-ignore`,
+# hence git + make. It exits 2 (never a pass) when helm or PyYAML is missing.
+lint:kind-tor:
+  extends: lint:gateway-mfa-env
+  script:
+    - apt-get update -qq && apt-get install -y --no-install-recommends git make >/dev/null
+    - git config --global --add safe.directory "$CI_PROJECT_DIR"
+    - bash tests/scripts/test-kind-tor.sh
+
+# A hardware node's .onion admitted at the ingress edge (hugmesh-generator#614): the
+# node agent specs/usr/sbin/hugmesh-tor-ingress-admit (plan + apply against a stub
+# kubectl) and the fe-gateway Ingress its ingress.onionHosts parameters render — a
+# REAL `helm template`, so this inherits lint:gateway-mfa-env's pinned, sha256-verified,
+# fail-closed helm install. The suite FAILS (never skips) without helm, jq or PyYAML.
+lint:tor-onion-ingress:
+  extends: lint:gateway-mfa-env
+  script:
+    - apt-get update -qq && apt-get install -y --no-install-recommends jq >/dev/null
+    - bash tests/scripts/test-tor-onion-ingress.sh
+
+# The fe-gateway's vanity-subdomain route per brand domain (hugmesh-generator#582):
+# `vanityDomains[i]` extends the route's Host predicate AND the Ingress hosts, and the
+# suite's own controls remove each half in a staged copy. A REAL `helm template`, so
+# this inherits lint:gateway-mfa-env's pinned, sha256-verified, fail-closed helm
+# install. The suite FAILS (never skips) without helm or PyYAML.
+lint:gateway-vanity-domains:
+  extends: lint:gateway-mfa-env
+  script:
+    - bash tests/scripts/test-gateway-vanity-domains.sh
+
 # MFA OPERATIONAL FLIP wiring gate (issue #47). The companion of the two jobs
 # above: they pin the default-OFF POSTURE, this one pins the SWITCH — MFA=1 must
 # reach EVERY consumer of the gateway MFA trio on every lane it claims to drive
@@ -1191,6 +1315,21 @@ lint:backing-service-endpoints-closure:
   tags: [hugmesh-x86]
   script:
     - bash tests/scripts/test-backing-service-endpoints-closure.sh
+
+# The 13a ApplicationSet cut-over, derived. docs/OPTIONAL-SERVICES.md section 10 named
+# "delete the hardcoded apps" as the remaining step, by a hand-written list that omitted
+# the edge-ai apps and hid that phpbb/games/character-forge own 3-4 Applications while one
+# 13a element covers one manifest directory. This derives the matrix from the registry,
+# 13a and apps/*.yaml, pins the doc block to it, and proves a correct single-app cut-over
+# is not blocked by the real build guard. Nothing here touches a cluster.
+lint:optional-services-cutover-matrix:
+  stage: lint
+  image: python:3
+  tags: [hugmesh-x86]
+  before_script:
+    - pip install --quiet pyyaml
+  script:
+    - bash tests/scripts/test-optional-services-cutover-matrix.sh
 
 # A curated kind profile must apply the companion Applications its own
 # Applications name. KIND_PROFILE=sso listed apps/00-cassandra.yaml (the Bitnami
@@ -1682,10 +1821,15 @@ lint:liquibase-grant-roles:
 # one that catches the silent case, and without the clone the checker exits 3
 # INCOMPLETE and the suite FAILS rather than reporting four green legs of five.
 #
-# ⚠ EXPECTED RED until hugmesh-admin-bff-api's OptionalServiceRegistry gains
-# character-forge and meshbridge (in flight on that repo's
-# feat/superadmin-optional-services-endpoint). That red is the defect, not a flaw in
-# the gate: it is a live, named, one-merge-away inconsistency. Do NOT add
+# ⚠ EXPECTED RED until hugmesh-admin-bff-api#106 lands (re-measured 2026-09-23,
+# hugmesh-generator #584): the controller's OptionalServiceRegistry keeps meshbridge
+# NOT_TOGGLEABLE as NOT_IN_CRD_ENUM although the CRD enum and seed CRs carry it, and
+# marks character-forge configMapSelfHealProtected=false although apps/16 carries its
+# pointer. (feat/superadmin-optional-services-endpoint, named here before, merged as
+# b8ed324 and did NOT fix either.) Until 2026-09-23 this job was red for a different
+# reason — the checker's regex no longer matched the controller's five-field Entry
+# record, so it exited INCOMPLETE and compared nothing. That red is the defect, not a
+# flaw in the gate: it is a live, named, one-merge-away inconsistency. Do NOT add
 # allow_failure and do NOT weaken the Java leg to get green — the suite's own
 # positive control stages exactly that landing and requires the whole gate to pass,
 # so the exit criterion is executable.
@@ -1826,6 +1970,26 @@ lint:patch-stack-src:
   tags: [hugmesh-x86]
   script:
     - bash tests/stack/test-patch-stack-src.sh
+
+# Image-CLI per-domain IdP flag (#509, child of #47). Runs every stage4 builder
+# (found by glob) with --print-plan, which executes the real argument loop and
+# validation and stops before any build step: --domain-idp <domain>=own|superdomain
+# is accepted and threaded into PLAN_DOMAIN_IDP, every malformed value is refused,
+# =superdomain changes no byte of the plan, and a builder or a new eleventh builder
+# that lacks the flag turns it red. No root, no network, no docker.
+lint:domain-idp-flag:
+  stage: lint
+  image: python:3-slim
+  tags: [hugmesh-x86]
+  script:
+    - bash tests/scripts/test-domain-idp-flag.sh
+  rules:
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+    - changes:
+        - build-*-stage4.sh
+        - scripts/_domain-idp-lib.sh
+        - tests/scripts/test-domain-idp-flag.sh
+        - studio/hugmesh_studio/core/config.py
 
 # HTTPS front door wiring (tests/stack/test-tls-front.sh): compose service /
 # nginx terminator / Makefile stack-certs cross-consistency (ports + mount
@@ -2059,8 +2223,8 @@ lint:media-poisoner-tls:
 # kube-proxy/MASQUERADE/dual-stack/NetworkPolicy DEAD on x86 nodes. This offline lint
 # asserts (1) the x86 fragment carries every required arch-neutral net/cgroup/overlay/
 # bpf symbol as =y (the SAME load-bearing set the build guard greps post-olddefconfig),
-# (2) no ARM/Pi-only symbol leaked in, (3) BTF stays OUT of both fragments (a separate
-# pahole-gated follow-up), and (4) both builders' fail-closed guards reference the
+# (2) no ARM/Pi-only symbol leaked in, (3) the BTF block in both fragments is complete or
+# absent as a whole, and (4) both builders' fail-closed guards reference the
 # load-bearing net subset. A re-truncation of the fragment, or a build guard that stops
 # asserting the net symbols, FAILS here. Cheap; no privileged runner needed.
 lint:x86-kernel-net-symbols:
@@ -2091,6 +2255,27 @@ lint:lsm-posture-honesty:
   tags: [hugmesh-x86]
   script:
     - bash tests/scripts/test-lsm-posture-honesty.sh
+
+# BTF <-> pahole pairing. bpf-LSM can be registered yet unable to attach without BTF, and
+# CONFIG_DEBUG_INFO_BTF is dropped silently by olddefconfig when its chain breaks. Pure
+# static analysis: fragment, package list, Dockerfile.build and the builders' guards agree.
+lint:btf-pahole-pairing:
+  stage: lint
+  image: python:3-slim
+  tags: [hugmesh-x86]
+  script:
+    - bash tests/scripts/test-btf-pahole-pairing.sh
+
+# docs/GROUP-CALL-SFU.md says the server half of group calls is designed, not
+# built. This lint checks that claim, and the repo facts the design reasons from
+# (tuwunel pin, coturn ports, reserved labels), against this checkout, so landing
+# the manifests or bumping the pin cannot leave the page stale. Static, no network.
+lint:group-call-sfu-doc-honesty:
+  stage: lint
+  image: python:3-slim
+  tags: [hugmesh-x86]
+  script:
+    - bash tests/scripts/test-group-call-sfu-doc-honesty.sh
 
 # Shell-injection remediation regression suite. Runs the fail-closed identity /
 # path / manifest validators added by the shell-injection hardening (build-x86 /
@@ -2398,7 +2583,10 @@ test:studio-suite:
     # (infra_services / desktop_user / desktop_user_role) reached the wire against an
     # `additionalProperties: false` schema and stayed there: this job skipped it, and
     # the GitHub job (which does install jsonschema) had the node deselected.
-    - pip install --quiet pytest PySide6 jsonschema
+    # cryptography is optional for the product but not for the gate: without it the
+    # certificate subject/expiry path (config.ca_cert_error and friends) degrades and
+    # the tests behind skipif(not HAVE_CRYPTOGRAPHY) skip silently.
+    - pip install --quiet pytest PySide6 jsonschema cryptography
   script:
     # KEEP, for whoever ever needs --deselect/--deselect-style node ids here: they are
     # ROOTDIR-relative. studio/pytest.ini makes rootdir studio/, so an id reads
@@ -2729,7 +2917,7 @@ desktop-governance-verify:
     # RSA keypair, signs real RS256 JWTs and runs the RENDERED python mapper
     # against a real JWKS. That suite hard-FAILs (not skips) without them, which
     # is the correct shape — a missing tool must never read as "crypto verified".
-    - apk add --no-cache bash jq coreutils grep sed gawk findutils diffutils python3 openssl
+    - apk add --no-cache bash jq coreutils grep sed gawk findutils diffutils python3 py3-yaml openssl
   script:
     - bash tests/desktop-governance/test-provision-desktop-governance.sh
     - bash tests/desktop-governance/test-gen-sso-session-start.sh
@@ -2739,6 +2927,14 @@ desktop-governance-verify:
     # alg=none rejection and rogue-key rejection, i.e. the entire reason a token
     # cannot mint sudo. Same tool set as the two legs above; 21 assertions.
     - bash tests/desktop-governance/test-desktop-sudo-mapper.sh
+    # The three dark device-exec flags (terminal, dial, remote-install) must stay
+    # declared, overridable and off in the cluster manifest + compose, and the go-live
+    # preconditions doc must exist. PyYAML (py3-yaml above) parses both files.
+    - bash tests/desktop-governance/test-governance-flags-visible.sh
+    # The SSO token producer (FD-07 increment 2): real device-flow client against a
+    # local fake issuer, then its output through the REAL deposit and the REAL
+    # mapper. Same tool set (python3 + openssl); hard-fails without them.
+    - bash tests/desktop-governance/test-sso-token-producer.sh
   rules:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
       changes:
@@ -2746,6 +2942,9 @@ desktop-governance-verify:
         - specs/etc/hugmesh/desktop-governance/**/*
         - keys-template/desktop-governance/**/*
         - tests/desktop-governance/**/*
+        - specs/cluster/manifests/admin-bff-api/deployment.yaml
+        - tests/stack/compose.local.yaml
+        - docs/CLIENT-IMAGES.md
         - .gitlab-ci.yml
     - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
 
@@ -3288,6 +3487,27 @@ lint:seed-password-reconcile:
   script:
     - bash tests/scripts/test-seed-password-reconcile.sh
     - bash tests/scripts/seed_password_reconcile_mutations.sh
+
+# The e2e password ROTATES per run (2026-10-15): the contract said "random per
+# run", but nothing ever started a new value — the operator's credentials file
+# was dated 2026-08-27 and served every run since. The suite pins the run
+# boundary (seed-e2e.sh / bootstrap-kind.sh / run-qemu-e2e.sh mint; sub-seeders
+# and consumers only read), one value per run, the KEEP/override opt-outs, the
+# 32-char generator, the Matrix leg-2 reconcile against a stub homeserver, and
+# the Studio keep-paths. Temp credentials files only; no stack, no network
+# egress. The battery reverts each production line 18 ways and demands RED.
+lint:password-rotation-per-run:
+  stage: lint
+  image: alpine:3
+  tags: [hugmesh-x86]
+  before_script:
+    # GNU grep/gawk, not busybox: the suite carries negative guards, and busybox
+    # grep/awk is where a negative guard fails open.
+    - apk add --no-cache bash coreutils curl jq openssl python3 findutils grep gawk
+    - for t in bash curl jq openssl python3 gawk; do command -v "$t" >/dev/null || { echo "TOOLCHAIN MISSING:$t"; exit 1; }; done
+  script:
+    - bash tests/scripts/test-password-rotation-per-run.sh
+    - bash tests/scripts/password_rotation_per_run_mutations.sh
 # ── Guards that nothing ran, now run ─────────────────────────────────────────
 # THE ORPHAN SWEEP. Forty-one tests/**/test-*.sh suites existed on main that no
 # pipeline job and no make target invoked. They were not drafts: they carry the
@@ -3368,8 +3588,17 @@ orphan-guards-verify:
     # renders the baked ArgoCD Application against the GIT manifests and EXITS 2 rather
     # than reporting a pass when no kustomize is on PATH (the same reason the GitHub
     # `extras` job carries it). Same apk idiom as the two kustomize-render jobs above.
-    - apk add --no-cache bash jq openssl python3 py3-yaml coreutils grep sed gawk findutils diffutils git tar util-linux openssh-keygen make kubectl
-    - for t in bash jq openssl python3 git tar keytool ssh-keygen make kubectl; do command -v "$t" >/dev/null || { echo "TOOLCHAIN MISSING:$t — this job's image cannot run its guards"; exit 1; }; done
+    # xz: tests/scripts/test-builder-resume-safety.sh builds two tiny stage3-shaped
+    # seed tarballs (.tar.xz, the real seed format) and restores static files from
+    # them with `tar xJf`; GNU tar shells out to xz for -J, so without it the suite
+    # would fail on its fixtures, not on the builder. Named in the preflight below.
+    # MEASURED, 2026-10-07, in eclipse-temurin:21-jdk-alpine with EXACTLY this apk
+    # line, as root (checkout copied in): tests/scripts/test-builder-resume-safety.sh
+    # 128 passed / 0 failed in 94 s (the one `unshare -Ur` leg SKIPs in a
+    # container; the suite re-runs itself against 28 mutated copies of the
+    # library) and tests/scripts/test-makefile-reown-skips-sysroot.sh 9 / 0.
+    - apk add --no-cache bash jq openssl python3 py3-yaml coreutils grep sed gawk findutils diffutils git tar xz util-linux openssh-keygen make kubectl
+    - for t in bash jq openssl python3 git tar xz keytool ssh-keygen make kubectl; do command -v "$t" >/dev/null || { echo "TOOLCHAIN MISSING:$t — this job's image cannot run its guards"; exit 1; }; done
   script:
     - |
       set -u
@@ -3385,6 +3614,7 @@ orphan-guards-verify:
         tests/domain-registry/test-foreign-ingest-fuzz.sh
         tests/go-live/test-go-live-driver.sh
         tests/go-live/test-go-live-reconcile-verify.sh
+        tests/go-live/test-onion-refuse.sh
         tests/keystores/test-keystores.sh
         tests/keystores/test-keystores-external-ca.sh
         tests/keystores/test-keystores-multidomain.sh
@@ -3395,9 +3625,11 @@ orphan-guards-verify:
         tests/scripts/test-arm-ro-distdir.sh
         tests/scripts/test-binpkg-pool-fingerprint.sh
         tests/scripts/test-builder-log-paths.sh
+        tests/scripts/test-builder-resume-safety.sh
         tests/scripts/test-calamares-boost-seed.sh
         tests/scripts/test-casdoor-jwt-no-preferred-username.sh
         tests/scripts/test-edge-ai-cuda-host-compiler.sh
+        tests/scripts/test-edge-ai-ollama-pin.sh
         tests/scripts/test-eso-remoteref-brand.sh
         tests/scripts/test-first-run-lib.sh
         tests/scripts/test-headscale-oidc-secret-staging.sh
@@ -3409,6 +3641,9 @@ orphan-guards-verify:
         tests/scripts/test-installer-ui-node-default.sh
         tests/scripts/test-intltool-preseed.sh
         tests/scripts/test-kernel-artifact-cache.sh
+        tests/scripts/test-local-ai-no-claude.sh
+        tests/scripts/test-makefile-reown-skips-sysroot.sh
+        tests/scripts/test-optional-netpol-autosync.sh
         tests/scripts/test-passhash-lib.sh
         tests/scripts/test-platform-key-spelling.sh
         tests/scripts/test-portage-config-sync.sh

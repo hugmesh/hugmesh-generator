@@ -115,7 +115,7 @@ def mesh(wiz, *ids):
 
     Seeded HERE, in the shared helper, rather than in each test: the three tests below
     that use a desktop worklist were written before the person requirement landed and
-    were silently failing for want of it, which is precisely the kind of rot a per-test
+    were silently failing for want of it, which is precisely the kind of staleness a per-test
     copy invites. Only desktop-class rows are touched, so a node-only worklist is
     byte-identical to before."""
     pick_mode(wiz, "mesh")
@@ -228,8 +228,12 @@ def test_toggling_a_row_changes_exactly_that_row_and_nothing_else(wiz):
     the one that carries the fix — before it, unticking `phpbb` left the forum running."""
     mesh(wiz)
     net = advance_to(wiz, wizard_mod.NetworkPage)
-    offered = [s for s, item in net._svc_items.items() if not item.isHidden()]
+    # The anubis row is a three-valued combo, not a tick (#384): it has no box to toggle,
+    # and test_anubis_tristate_page.py drives it through all three values.
+    offered = [s for s, item in net._svc_items.items()
+               if not item.isHidden() and s in net.service_boxes]
     assert offered, "no service rows offered on an x86 mesh node — test would be vacuous"
+    assert "anubis" not in net.service_boxes and not net._svc_items["anubis"].isHidden()
 
     def collect():
         page = wiz.currentPage()
@@ -360,7 +364,7 @@ def test_every_offered_row_says_what_enabling_it_does(wiz):
         assert len(desc) > 20, f"{slug} has no description of what enabling it does"
         assert item.toolTip(_SVC_COL_DESC).strip() == desc
         checked += 1
-    # NON-VACUITY. Every assertion above sits behind a `continue`, so a change that
+    # REAL-CASES CHECK. Every assertion above sits behind a `continue`, so a change that
     # hid every row would turn this test into an empty loop that passes — the
     # can't-fail shape this codebase has been bitten by before.
     assert checked >= 8, (
@@ -405,7 +409,7 @@ def test_group_grey_never_over_greys_a_supported_service(wiz):
         assert flag_platforms <= svc_platforms, (
             f"{slug} ({fld}) is parsed on {flag_platforms - svc_platforms}, where the "
             "services group is greyed as a unit — its row would be dead there")
-    # non-vacuity: the subset relation is not trivially true because both sides are equal
+    # real-cases check: the subset relation is not trivially true because both sides are equal
     assert any(set(PLATFORM_FIELD_SUPPORT[f]) < svc_platforms
                for f, _t in _FLAG_SERVICE_FIELDS.values()), (
         "no flag is a STRICT subset — the assertion above would be vacuous")
@@ -521,11 +525,22 @@ def test_regrouping_a_row_cannot_change_what_it_emits(wiz):
     assert wiz.cfg.tor_onion_service not in (False, "off", "")
     args = wiz.cfg.to_cli_args()
     assert "--with-tor" in args and "--no-tor" not in args
+    # ...and anubis, the other row the regrouping moved, drives its THREE arms through the
+    # same slug channel (#384): Default emits no anubis token, Force on the slug, Force off
+    # the veto — never --exclude-services, which both builders refuse for it.
+    back_to(wiz, wizard_mod.NetworkPage)
+    for index, want in ((0, []), (1, ["anubis"]), (2, ["-anubis"])):
+        net.anubis_mode.setCurrentIndex(index)
+        net.validatePage()
+        argv = wiz.cfg.to_cli_args()
+        val = argv[argv.index("--optional-services") + 1].split()
+        assert [t for t in val if "anubis" in t] == want, (index, val)
+        assert "--exclude-services" not in argv
 
 
 def test_builtin_default_services_match_both_builders():
     """BUILTIN_DEFAULT_SERVICES is the set the table arrives with TICKED, so it must be
-    the builders' real default and not a comment that rotted: pre-ticking the wrong three
+    the builders' real default and not a comment that went stale: pre-ticking the wrong three
     would put the lie back with the boxes the other way up. Parsed out of both scripts."""
     pat = re.compile(r'OPTIONAL_SERVICES="\$\{OPTIONAL_SERVICES:-([^}"]*)\}"')
     seen = {}
@@ -543,7 +558,7 @@ def test_builtin_default_services_match_both_builders():
 
 def test_user_level_services_match_both_builders():
     """USER_LEVEL_SERVICES is what the "every user-level service" preset EXPANDS TO, and
-    the page now greys+ticks exactly those rows on that preset. Same anti-rot treatment as
+    the page now greys+ticks exactly those rows on that preset. Same anti-staleness treatment as
     BUILTIN_DEFAULT_SERVICES: parsed out of both scripts, not restated in a comment."""
     pat = re.compile(r'^USER_LEVEL_SERVICES="([^"]*)"', re.M)
     for script in ("build-x86-host-stage4.sh", "build-rpi5-stage4.sh"):
@@ -553,7 +568,7 @@ def test_user_level_services_match_both_builders():
         assert set(found[0].split()) == set(USER_LEVEL_SERVICES), (
             f"{script} expands 'all' to {sorted(found[0].split())}, the wizard claims "
             f"{sorted(USER_LEVEL_SERVICES)}")
-    # non-vacuity for the preset rule this constant drives: it must be a STRICT superset
+    # real-cases check for the preset rule this constant drives: it must be a STRICT superset
     # of the builders' default set (or "all" would tick nothing new) and it must NOT cover
     # the infra slugs (or nothing would be left live underneath the preset).
     assert set(BUILTIN_DEFAULT_SERVICES) < set(USER_LEVEL_SERVICES)
@@ -700,7 +715,11 @@ def test_the_whole_set_preset_locks_the_rows_it_decides_and_leaves_the_rest_live
         f"decided={decided} discarded={discarded} left_alone={left_alone} — this test "
         "needs all three kinds of row on screen to be about anything")
     assert "tor" in left_alone                       # x86's --with-tor: a real choice
-    assert set(discarded) == {"egress-vpn", "workloadConsole", "anubis"}, discarded
+    assert set(discarded) == {"egress-vpn", "workloadConsole"}, discarded
+    # anubis is the third infra slug-channel row, but a three-valued combo (#384) and so
+    # not in service_boxes: the same lock, read off the combo — Default and greyed.
+    assert not net._svc_items["anubis"].isHidden()
+    assert net.anubis_mode.currentIndex() == 0 and not net.anubis_mode.isEnabled()
     # …and no --no-<x> for a service the preset bakes: the builder has no false arm for
     # those flags, so emitting one would be a claim the build cannot honour. Nor any
     # infra slug: the sentinel is the whole list, so one beside it would be dead argv.
@@ -873,7 +892,7 @@ def _flow_pages(wiz):
 
     The next id is peeked with nextId() BEFORE navigating, so the walk can decline to
     enter that page rather than entering and regretting it. Everything up to and
-    including LaunchPage is inert on arrival (ask 22 pins that the build screen
+    including LaunchPage does nothing on arrival (ask 22 pins that the build screen
     dispatches nothing), so stopping there costs no coverage."""
     seen = []
     for _ in range(len(WIZARD_PAGE_SLUGS) + 1):
@@ -905,7 +924,7 @@ def test_standalone_desktop_fields_are_unreachable_in_the_mesh_node_flow(wiz):
 
 def test_the_same_fields_stay_reachable_on_the_desktop_mesh_track(wiz):
     """The other half of ask 11 — "keep that to the desktop mesh track" — and the
-    non-vacuity proof for the test above: a gate that hid these everywhere would pass it
+    real-cases check proof for the test above: a gate that hid these everywhere would pass it
     while deleting the flow they belong to.
 
     A mesh worklist made entirely of desktop rows IS that track (build-rpi5-stage4.sh:1007
@@ -1072,7 +1091,7 @@ def test_the_excluded_rows_come_back_read_only_on_request(wiz):
 
 
 def test_mesh_capability_is_derived_from_the_catalog_not_a_hand_kept_list():
-    """The predicate must stay derived, or ask 18 becomes a list that rots: a device that
+    """The predicate must stay derived, or ask 18 becomes a list that goes stale: a device that
     GAINS a mesh role has to appear on the screen in the same commit that gives it one."""
     cat = device_catalog.load_catalog()
     for dev in cat.devices:
@@ -1188,9 +1207,22 @@ def test_the_client_role_overrides_cannot_fire_before_the_role_case():
     The hide's first justification was that build-x86-host-stage4.sh drops --with-tor /
     --with-character-studio / --with-character-forge / --with-edge-ai-tts / --with-edge-ai
     itself on a client role, so Studio's --no-<x> overrides were redundant. Every one of
-    those five guards reads ${ROLE_CLIENT} BEFORE the role case that assigns it, so all
-    five are dead on arrival. Pinned by ORDER rather than by line number so it survives the
-    builder moving (and so a fix that reorders the builder makes this test say so)."""
+    those five guards read ${ROLE_CLIENT} BEFORE the role case that assigns it, so all
+    five were dead on arrival. Pinned by ORDER rather than by line number so it survives the
+    builder moving (and so a fix that reorders the builder makes this test say so).
+
+    --with-tor WAS FIXED in the builder (#599, hugmesh-generator#583 item 6; this pin's
+    stale row was #621). Its dead pre-role-case guard is gone; the CLIENT drop now sits
+    after the LAST place ROLE_CLIENT can change, and every tor gate goes through
+    ``_tor_node_selected``, which reads ROLE_CLIENT at call time. So --with-tor is pinned
+    below as the FIXED shape, and the other four keep the dead-guard pin. Re-measured
+    with --print-plan (2026-09-24): ``--role desktop --with-tor`` and ``--role desktop
+    --config <WANT_TOR=true>`` both resolve PLAN_OPTIONAL_SERVICES=none and
+    PLAN_TOR_ONION=off WITHOUT a --no-tor, so the --no-tor the hide in
+    gui/pages/network.py still emits for a client role no longer carries weight for tor.
+    It is kept (harmless, and the other four flags still need their overrides); the
+    behavioural half of that measurement is
+    test_a_client_role_drops_tor_by_itself_in_the_real_resolver below."""
     src = open(BUILDER_X86, encoding="utf-8").read().splitlines()
 
     def line_of(needle, occurrence=0):
@@ -1200,7 +1232,6 @@ def test_the_client_role_overrides_cannot_fire_before_the_role_case():
 
     guards = {
         "--with-edge-ai":          line_of("if ${EDGE_AI_WANT} && ${ROLE_CLIENT}; then"),
-        "--with-tor":              line_of('if [ "${WANT_TOR}" = "true" ] && ${ROLE_CLIENT}; then'),
         "--with-character-studio": line_of('if [ "${WANT_CHARACTER_STUDIO}" = "true" ] && ${ROLE_CLIENT}; then'),
         "--with-character-forge":  line_of('if [ "${WANT_CHARACTER_FORGE}" = "true" ] && ${ROLE_CLIENT}; then'),
         "--with-edge-ai-tts":      line_of('if [ "${WANT_EDGE_AI_TTS}" = "true" ] && ${ROLE_CLIENT}; then'),
@@ -1216,16 +1247,85 @@ def test_the_client_role_overrides_cannot_fire_before_the_role_case():
     assert reset < first_true, (
         f"ROLE_CLIENT=true now appears at :{first_true}, before the reset at :{reset}")
 
+    # --with-tor: the FIXED shape (#599 / #621). The CLIENT drop must follow the LAST
+    # `ROLE_CLIENT=true` assignment (the STANDALONE fold turns `--role backend
+    # --standalone` into a client after the role case), and the ONE predicate every tor
+    # gate calls must be defined after the reset, so nothing can read ROLE_CLIENT's
+    # `false` default and call a desktop a node.
+    last_true = max(i + 1 for i, l in enumerate(src) if "ROLE_CLIENT=true" in l)
+    tor_def = line_of("_tor_node_selected() { ! ${ROLE_CLIENT} && _opt_selected tor; }")
+    tor_drop = line_of("if ${ROLE_CLIENT} && _opt_selected tor; then")
+    assert tor_def > reset, (
+        f"_tor_node_selected is defined at :{tor_def}, before the ROLE_CLIENT reset at "
+        f":{reset} — the #599 predicate has moved back ahead of the role case")
+    assert tor_drop > last_true, (
+        f"the CLIENT tor drop at :{tor_drop} runs before the last ROLE_CLIENT=true at "
+        f":{last_true} — a role that becomes a client after it keeps tor (#583 item 6)")
+    tor_gates = [i + 1 for i, l in enumerate(src)
+                 if "_opt_selected tor" in l and not l.lstrip().startswith("#")]
+    assert tor_gates == sorted({tor_def, tor_drop}), (
+        "a bare `_opt_selected tor` outside the predicate and the CLIENT drop — some tor "
+        f"gate bypasses _tor_node_selected: lines {tor_gates}")
+
+
+@pytest.mark.parametrize("args", [
+    ["--role", "desktop", "--with-tor"],
+    ["--role", "laptop", "--optional-services", "tor"],
+    ["--role", "backend", "--standalone", "--with-tor"],
+    ["--role", "desktop", "--config", "{profile}"],
+])
+def test_a_client_role_drops_tor_by_itself_in_the_real_resolver(tmp_path, args):
+    """The behavioural half of the --with-tor pin above: the builder's OWN resolver
+    (--print-plan: exits before the root gate, any mkdir or fetch) bakes nothing
+    Tor-related into a client role — however tor arrived — with no --no-tor on the argv.
+
+    WHAT THIS CAN AND CANNOT SEE, measured by mutation rather than assumed (2026-09-24):
+    PLAN_OPTIONAL_SERVICES prints ``none`` for EVERY client role by construction (the
+    ``_plan OPTIONAL_SERVICES`` line short-circuits on ROLE_CLIENT), so the real signal
+    is PLAN_TOR_ONION, which calls ``_tor_node_selected`` — the same predicate the SVCS
+    (runlevel) and PKGS (net-vpn/tor) gates call. The builder has TWO independent client
+    defences — the CLIENT drop strips tor from OPTIONAL_SERVICES, and the predicate's
+    ``! ${ROLE_CLIENT}`` arm refuses it anyway — and either one alone keeps a client
+    tor-free: breaking just one leaves this test green (the ORDER/TEXT pin above is what
+    goes red for each single break), breaking both turns it red. That is the end-to-end
+    promise this test holds: a client image bakes no Tor with no --no-tor on the argv.
+    The control row proves the same selection on a node role DOES carry tor, so a green
+    here is the client arm and not a resolver that never saw tor."""
+    profile = _services_profile(tmp_path, "WANT_TOR=true")
+    argv = [a.replace("{profile}", str(profile)) for a in args]
+
+    def plan(av):
+        proc = subprocess.run([BUILDER_X86, *av, "--print-plan"], cwd=str(tmp_path),
+                              capture_output=True, text=True)
+        assert proc.returncode == 0, f"builder refused {av}:\n{proc.stdout}{proc.stderr}"
+        out = dict(l.split("=", 1) for l in proc.stdout.splitlines()
+                   if l.startswith(("PLAN_OPTIONAL_SERVICES=", "PLAN_TOR_ONION=")))
+        return set(out["PLAN_OPTIONAL_SERVICES"].split()) - {"none"}, out["PLAN_TOR_ONION"]
+
+    services, onion = plan(argv)
+    assert "tor" not in services and onion == "off", (
+        f"a CLIENT role kept tor with no --no-tor: services={services} onion={onion}")
+    node = [("backend" if a in ("desktop", "laptop") else a) for a in argv
+            if a != "--standalone"]
+    services, onion = plan(node)
+    assert "tor" in services and onion.startswith("on"), (
+        f"control: the same selection on a NODE role did not carry tor ({node}) — the "
+        "resolver never saw tor, so the client assertion above proves nothing")
+
 
 def test_a_hidden_picker_cannot_inherit_a_brand_profiles_services(wiz, tmp_path):
     """THE DEFECT, measured end to end through the REAL builder.
 
     The "Brand profile (-C)" row is still offered on standalone-thin/thick/chromebook, and
     brand.conf is sourced BEFORE the arg loop — so with the picker hidden and emitting
-    nothing, the profile became the selection. `tor` is the slug that makes it concrete:
-    the PKGS line `_opt_selected tor && PKGS="${PKGS} net-vpn/tor"` carries NO ROLE_CLIENT
-    guard (unlike its runlevel neighbour), so a leaked slug really does emerge net-vpn/tor
-    into a standalone desktop image that never carried it."""
+    nothing, the profile became the selection. When this was written `tor` made it
+    concrete: the PKGS line carried no ROLE_CLIENT guard, so a leaked slug emerged
+    net-vpn/tor into a standalone desktop. Since #599 the builder drops tor from every
+    CLIENT role itself (``_tor_node_selected``; pinned above), so on a real standalone
+    role the tor half of the leak is closed by the builder — the akkoma half is not, and
+    the resolver below runs on the UNMASK role (a node) precisely so this test keeps
+    measuring the hide's explicit ``--optional-services ""`` and not the builder's own
+    client drop."""
     profile = _services_profile(tmp_path, 'OPTIONAL_SERVICES="akkoma tor"')
     # the control: this profile really does decide the build when nothing overrides it
     assert _plan_optional_services([], tmp_path) == {"akkoma", "tuwunel", "phpbb"}

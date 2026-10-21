@@ -48,7 +48,8 @@ from hugmesh_studio.gui.pages.domains import (  # noqa: E402
     _COL_SERVICES, _COL_TITLE, _ServicesCell)
 from hugmesh_studio.gui.qt import QtWidgets  # noqa: E402
 
-from _helpers import (  # noqa: E402
+from _helpers import (
+    added_row,   # noqa: E402
     advance_to, check_worklist_rows, enable_additional_domains, pick_mode)
 
 STUDIO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -94,9 +95,9 @@ def test_services_cell_is_a_widget_not_a_text_cell(wiz):
     QTableWidget.item() on that column is None and there is nothing to type into."""
     dom = _mesh_domains(wiz)
     dom._add("acme.example", "Acme")
-    cell = dom.table.cellWidget(0, _COL_SERVICES)
+    cell = dom.table.cellWidget(added_row(dom, 0), _COL_SERVICES)
     assert isinstance(cell, _ServicesCell)
-    assert dom.table.item(0, _COL_SERVICES) is None
+    assert dom.table.item(added_row(dom, 0), _COL_SERVICES) is None
     assert cell.selected_slugs() == []
 
 
@@ -106,7 +107,7 @@ def test_the_cell_is_read_only_it_cannot_be_clicked_into_a_picker(wiz):
     which nothing makes you visit. A QLabel has no menu and no clicked signal."""
     dom = _mesh_domains(wiz)
     dom._add("acme.example", "Acme")
-    cell = dom.table.cellWidget(0, _COL_SERVICES)
+    cell = dom.table.cellWidget(added_row(dom, 0), _COL_SERVICES)
     assert isinstance(cell, QtWidgets.QLabel)
     assert not hasattr(cell, "menu")
     assert not hasattr(cell, "clicked")
@@ -118,7 +119,7 @@ def test_an_unconfigured_row_does_not_read_like_a_configured_empty_one(wiz):
     this domain's services yet", which is what the build/mesh-start gate refuses on."""
     dom = _mesh_domains(wiz)
     dom._add("acme.example", "Acme")
-    cell = dom.table.cellWidget(0, _COL_SERVICES)
+    cell = dom.table.cellWidget(added_row(dom, 0), _COL_SERVICES)
     assert cell.text() == "not configured yet"
     cell.set_slugs([], reviewed=True)
     assert cell.text() == "cluster default"
@@ -154,7 +155,7 @@ def test_loaded_row_seeds_the_cell_back(wiz):
                         optional_services=["phpbb", "owncast"])]
     wiz.restart()
     dom = advance_to(wiz, wizard_mod.DomainsPage)
-    cell = dom.table.cellWidget(0, _COL_SERVICES)
+    cell = dom.table.cellWidget(added_row(dom, 0), _COL_SERVICES)
     assert cell.selected_slugs() == ["phpbb", "owncast"]
 
 
@@ -170,7 +171,7 @@ def test_unknown_slug_from_a_loaded_config_is_kept_not_dropped(wiz):
                         optional_services=["akkoma", "tor"])]
     wiz.restart()
     dom = advance_to(wiz, wizard_mod.DomainsPage)
-    cell = dom.table.cellWidget(0, _COL_SERVICES)
+    cell = dom.table.cellWidget(added_row(dom, 0), _COL_SERVICES)
     assert cell.selected_slugs() == ["akkoma", "tor"]
     assert "tor" in cell.text()
     advance_to(wiz, wizard_mod.UsersChoicePage)
@@ -183,7 +184,7 @@ def test_a_typo_can_no_longer_be_entered(wiz):
     from a loaded config, which the test above pins)."""
     dom = _mesh_domains(wiz)
     dom._add("acme.example", "Acme")
-    assert dom.table.item(0, _COL_SERVICES) is None      # nowhere to type
+    assert dom.table.item(added_row(dom, 0), _COL_SERVICES) is None      # nowhere to type
     advance_to(wiz, wizard_mod.UsersChoicePage)
     assert wiz.cfg.domains[0].optional_services == []
 
@@ -193,7 +194,7 @@ def test_add_still_accepts_the_legacy_string_form(wiz):
     to _add; keeping that shape is what stops this change breaking them."""
     dom = _mesh_domains(wiz)
     dom._add("beta.example", "Beta", "phpbb, owncast")
-    cell = dom.table.cellWidget(0, _COL_SERVICES)
+    cell = dom.table.cellWidget(added_row(dom, 0), _COL_SERVICES)
     assert cell.selected_slugs() == ["phpbb", "owncast"]
 
 
@@ -214,7 +215,7 @@ def test_the_cell_normalises_to_catalogue_order(wiz):
                         optional_services=["owncast", "games"])]  # NOT catalogue order
     wiz.restart()
     dom = advance_to(wiz, wizard_mod.DomainsPage)
-    cell = dom.table.cellWidget(0, _COL_SERVICES)
+    cell = dom.table.cellWidget(added_row(dom, 0), _COL_SERVICES)
     assert cell.selected_slugs() == ["games", "owncast"]
     advance_to(wiz, wizard_mod.UsersChoicePage)
     assert wiz.cfg.domains[0].optional_services == ["games", "owncast"]
@@ -238,7 +239,7 @@ def test_the_cell_follows_cfg_when_the_services_step_changes_it(wiz):
     wiz.cfg.domains[0].optional_services = ["akkoma"]
     wiz.cfg.domain_services_reviewed = ["acme.example"]
     dom._refresh_services_cells()
-    cell = dom.table.cellWidget(0, _COL_SERVICES)
+    cell = dom.table.cellWidget(added_row(dom, 0), _COL_SERVICES)
     assert cell.selected_slugs() == ["akkoma"]
     assert cell.text() == "akkoma"
 

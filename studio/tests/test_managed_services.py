@@ -10,7 +10,7 @@ this file owns the correctness that differ cannot see.
 
 Pure-core: no Qt import — runs in the headless suite.
 
-VACUOUS-PASS GUARDS (a source/regex miss must FAIL this file, never pass it seeing an
+CHECKED-NOTHING GUARDS (a source/regex miss must FAIL this file, never pass it seeing an
 empty set): _builder_ids() asserts each parse is non-empty, and the yaml agreement asserts
 it parsed >0 services before comparing. The pyyaml import is importorskip (optional dep —
 the studio venv may lack it; a missing dep must SKIP, never FAIL — the same rule the M1

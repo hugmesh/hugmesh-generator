@@ -40,6 +40,9 @@ flow, catching the TUI up to the GUI features merged after the scaffold:
 * the **welcome flow** with its three journey entry points and the
   journey-ordered mode menu (GUI PR #67);
 * the **Themes screen** (:mod:`.themes` — a screen, not a popup; GUI PR #63);
+* the **Local AI** status line on every screen and the Local AI screen (:mod:`.local_ai`;
+  F2 in the urwid face, ``local-ai`` in either) — the terminal twin of the Studio window's
+  Local AI bar, over the same Qt-free ``core.local_ai_status``;
 * the **create-nodes-for-local-cloud** abbreviated wizard (:mod:`.localcloud`,
   GUI PR #65) with the laptop+node worklist restriction;
 * the **whole-mesh emulation** per-device status list with copy-ready ssh /

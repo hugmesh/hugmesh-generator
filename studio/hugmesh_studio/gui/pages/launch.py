@@ -31,7 +31,7 @@ THE PER-DOMAIN SERVICES GATE (#494/#495) lives here, and here specifically becau
 this is the LAST door before dispatch: ProgressPage dispatches on arrival, and
 "build"/"launch"/"progress" are the terminal set nextId() never dynamically skips, so
 every wizard build path passes through this page. A domain whose Services step was
-never gone through refuses the build BY NAME — inline, through the one seam
+never gone through refuses the build BY NAME — inline, through the one override point
 ``core.domain_services.gate_reason``, which a test drives with a bare ImageConfig. It
 is a refusal and not a warning that scrolls past: all three of ``_continue``, the
 Continue card's enabled state and ``validatePage`` stop, and the reason is laid out
@@ -178,7 +178,7 @@ class LaunchPage(QtWidgets.QWizardPage):
     # ---- the per-domain services gate (#494/#495) --------------------------------
     def gate_refusal(self) -> str:
         """"" when this build may start; otherwise the refusal naming every domain
-        with no recorded service configuration. Pure read of cfg through the one seam,
+        with no recorded service configuration. Pure read of cfg through the one override point,
         so a test can assert the exact sentence without painting anything."""
         return gate_reason(self.wiz.cfg, ACTION_IMAGE_BUILD)
 

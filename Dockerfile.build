@@ -300,6 +300,7 @@ RUN emerge --verbose --noreplace \
         app-crypt/sbsigntools \
         app-crypt/efitools \
         sys-kernel/dracut \
+        dev-util/pahole \
         sys-apps/gptfdisk \
         app-emulation/qemu \
         sys-libs/libselinux \

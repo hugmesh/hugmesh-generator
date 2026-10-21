@@ -31,7 +31,7 @@ from hugmesh_studio.gui.pages import progress as progress_mod      # noqa: E402
 STUDIO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 GENERATOR_DIR = os.path.dirname(STUDIO_ROOT)
 
-# ── the coalescing seam, in ONE place ────────────────────────────────────────────────
+# ── the coalescing override point, in ONE place ────────────────────────────────────────────────
 # ProgressPage._on_line is now the worker's ENQUEUE-ONLY slot: it banks the line and the
 # ~20 Hz _drain_lines() runs the parse/render/append pipeline for the whole batch (see
 # tests/test_progress_log_coalescing.py for the contract, and the coalescing note in
@@ -410,7 +410,7 @@ def test_clicking_a_group_header_falls_back_to_the_stage_slice(wiz):
 
 # ── failure ────────────────────────────────────────────────────────────────────────────
 def test_failed_package_is_red_terminal_and_its_group_expands(wiz):
-    """The real libreoffice failure block (transcript L2794910-12): the row goes red ✗,
+    """The real libreoffice failure block (transcript L2794910-12): the row fails ✗,
     the bar freezes short of 100, and the group node expands so the culprit is visible."""
     page = _fresh_row(wiz)
     row = page._rows[0]
@@ -502,7 +502,7 @@ def test_group_seen_before_any_stage_nests_under_the_job(wiz):
     banner matches NO phase pattern (here: 'dependencies', which only x86 tables — and
     only a LATER phase — carry) arriving before any stage banner nests under the JOB
     itself, never nowhere. Uses rpi5, whose tables carry no 'dependencies' pattern at
-    all, so the premise cannot rot the way the 'system' one did."""
+    all, so the premise cannot go stale the way the 'system' one did."""
     page = _fresh_row(wiz, platform="rpi5")
     row = page._rows[0]
     _deliver(page, 0, _banner("Emerge group: dependencies"))

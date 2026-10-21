@@ -103,6 +103,46 @@ ok(){   echo "  PASS $*"; P=$((P+1)); }
 bad(){  echo "  FAIL $*"; F=$((F+1)); }
 
 # ─────────────────────────────────────────────────────────────────────────────
+# HELM FLOOR (#642). This guard's real gate, .gitlab-ci.yml, installs a PINNED
+# helm (HELM_VERSION, sha256-verified). An older helm fails here in a way that
+# does not name its cause: Bitnami's index now redirects to repo.broadcom.com and
+# lists chart URLs as `oci://registry-1.docker.io/bitnamicharts/<chart>:<ver>`,
+# which helm v3.16.3 cannot read, so the render dies on
+# `Error: invalid_reference: invalid tag`, and that reads like a bad
+# targetRevision in specs/cluster/apps/00-cassandra.yaml. It is not. helm
+# v3.19.x renders the same --repo/--version.
+#
+# So compare the helm on PATH with the pin FIRST, and FAIL (never skip) with a
+# message that names the floor. The pin is read from .gitlab-ci.yml, not copied
+# here, and every HELM_VERSION pin in that file must agree (the file itself
+# says "one version for the whole pipeline"). A missing, split or unreadable
+# pin FAILs too: without it there is no floor to compare against.
+# ─────────────────────────────────────────────────────────────────────────────
+echo "-- helm floor: the helm on PATH must be at least the version .gitlab-ci.yml pins --"
+CI_YML="${REPO}/.gitlab-ci.yml"
+HELM_PINS="$(sed -n -E 's/^[[:space:]]*HELM_VERSION:[[:space:]]*"?(v[0-9][^"[:space:]]*)"?[[:space:]]*$/\1/p' "${CI_YML}" 2>/dev/null | sort -u)"
+HELM_PIN_N="$(printf '%s\n' "${HELM_PINS}" | grep -c . 2>/dev/null)"
+if [ "${HELM_PIN_N:-0}" -ne 1 ]; then
+  bad "expected exactly ONE HELM_VERSION pin value in .gitlab-ci.yml, found ${HELM_PIN_N:-0} ($(printf '%s ' ${HELM_PINS})) — there is no single floor to check this helm against"
+  echo "== RESULT: ${P} passed, ${F} failed =="; exit 1
+fi
+HELM_PIN="${HELM_PINS}"
+HELM_FOUND_RAW="$(helm version --short 2>/dev/null | head -1)"
+HELM_FOUND="${HELM_FOUND_RAW%%+*}"
+case "${HELM_FOUND}" in
+  v[0-9]*.[0-9]*.[0-9]*) ;;
+  *) bad "could not read a version from \`helm version --short\` (got '${HELM_FOUND_RAW}') — cannot tell whether this helm meets the pinned ${HELM_PIN}"
+     echo "== RESULT: ${P} passed, ${F} failed =="; exit 1 ;;
+esac
+if [ "$(printf '%s\n%s\n' "${HELM_PIN}" "${HELM_FOUND}" | sort -V | head -1)" != "${HELM_PIN}" ]; then
+  bad "helm ${HELM_FOUND} is older than the pinned ${HELM_PIN}; Bitnami's index serves oci:// chart URLs this helm cannot read"
+  echo "       (pin: .gitlab-ci.yml HELM_VERSION; helm on PATH: $(command -v helm)). Put helm >= ${HELM_PIN} first on PATH."
+  echo "== RESULT: ${P} passed, ${F} failed =="; exit 1
+fi
+ok "helm ${HELM_FOUND} meets the pinned floor ${HELM_PIN} (.gitlab-ci.yml)"
+export HELM_FOUND HELM_PIN
+
+# ─────────────────────────────────────────────────────────────────────────────
 # The RENDERER. Walks this repo's Applications, renders every external chart
 # whose destination namespace we put ExternalSecrets in, and writes an inventory
 # of the object names those charts OWN. Runs once, against the real tree — the
@@ -210,6 +250,14 @@ for r in releases:
         print("  FAIL could not render %s %s from %s (%s)\n        %s"
               % (r["chart"], r["version"], r["repo"], r["file"],
                  (proc.stderr or "").strip().splitlines()[:1]))
+        if "invalid_reference" in (proc.stderr or ""):
+            # The helm floor above already passed, so this is NOT the known
+            # old-helm case: name what the error means rather than guess.
+            print("       invalid_reference = helm %s could not parse an oci:// chart "
+                  "reference from that repo's index. Bitnami's index serves oci:// chart "
+                  "URLs, which helm older than the pinned %s cannot read, but this helm "
+                  "meets that floor, so re-check the index and the pin."
+                  % (os.environ.get("HELM_FOUND", "?"), os.environ.get("HELM_PIN", "?")))
         print("       A chart this repo deploys but CANNOT be rendered leaves its "
               "object names unknown, which would silently turn every collision "
               "check for that namespace into a no-op. That is a failure, not a skip.")

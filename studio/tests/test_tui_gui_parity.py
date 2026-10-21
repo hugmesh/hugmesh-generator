@@ -19,7 +19,8 @@ pytest.importorskip("hugmesh_studio.gui.qt",
 from hugmesh_studio.core import e2e_environments as env_mod           # noqa: E402
 from hugmesh_studio.core import emulation as em                       # noqa: E402
 from hugmesh_studio.core import qemu_tests as qt                      # noqa: E402
-from hugmesh_studio.core.config import VAULT_FIELDS, WIZARD_PAGE_SLUGS  # noqa: E402
+from hugmesh_studio.core.config import (                               # noqa: E402
+    VAULT_FIELDS, WIZARD_PAGE_SLUGS, Domain, ImageConfig)
 from hugmesh_studio.core.platform_info import HostInfo                 # noqa: E402
 from hugmesh_studio.gui import wizard as wizard_mod                    # noqa: E402
 from hugmesh_studio.gui.pages import _theme_editor                     # noqa: E402
@@ -31,6 +32,7 @@ from hugmesh_studio.gui.qt import QtWidgets                            # noqa: E
 from hugmesh_studio.tui import domains_step, journey, themes           # noqa: E402
 from hugmesh_studio.tui import e2e as tui_e2e                          # noqa: E402
 from hugmesh_studio.tui import localcloud as tui_lc                    # noqa: E402
+from hugmesh_studio.tui import localmesh as tui_lm                     # noqa: E402
 from hugmesh_studio.tui import qemu as tui_qemu                        # noqa: E402
 
 from _helpers import advance_to                                        # noqa: E402
@@ -207,7 +209,7 @@ def test_localcloud_allowed_roles_match_the_gui_derivation():
 
 
 def test_localcloud_identity_readers_agree(tmp_path):
-    # both read the same on-disk seams (bootstrap config, secrets bundle,
+    # both read the same on-disk override points (bootstrap config, secrets bundle,
     # seeder roster); an empty generator dir must yield the same brand-default
     # answer from either face.
     assert tui_lc.local_mesh_identity(str(tmp_path)) == \
@@ -314,3 +316,266 @@ def test_worklist_screen_title_matches_the_gui_page(wiz):
     page = next(wiz.page(i) for i in wiz.pageIds()
                 if isinstance(wiz.page(i), wizard_mod.WorklistPage))
     assert journey.WorklistScreen.title == page.title() == "Choose the images to build"
+
+
+# ── #494 (decisions 69 + 71): domains and their services on both faces ──────────────
+def _localmesh_choice_page(wiz):
+    return next(wiz.page(i) for i in wiz.pageIds()
+                if isinstance(wiz.page(i), wizard_mod.LocalMeshChoicePage))
+
+
+def test_localmesh_choice_cards_match_the_gui_page(wiz):
+    page = _localmesh_choice_page(wiz)
+    assert [(cid, title) for cid, title, _ in page.choices] == \
+        list(tui_lm.LOCALMESH_CHOICES)
+    checked = [cid for cid, btn in page._buttons.items() if btn.isChecked()]
+    assert checked == [tui_lm.LOCALMESH_DEFAULT_CHOICE]
+
+
+def test_localmesh_domain_steps_are_hosted_on_both_faces(wiz):
+    """The GUI expands the slot into Domains + Domain services steps right after Env
+    & brand; the TUI hosts the same two steps (not a stub) over the same state."""
+    slugs = [s for s, _c in wizard_mod._LOCALMESH_STEPS]
+    assert slugs.index("localmesh_domain_services") == \
+        slugs.index("localmesh_domains") + 1
+    j = journey.Journey(GENERATOR_DIR)
+    screen = j.screen_for("localmesh")
+    assert isinstance(screen, tui_lm.LocalMeshScreen)
+    assert not isinstance(screen, journey.PendingSideFlow)
+    lm = wiz.page(wiz._page_ids["localmesh"])
+    for note in (lm.domain_services.lane_note.text(), tui_lm.LANE_NOTE):
+        assert "NOT what decides which compose profiles come up" in note
+
+
+def test_the_own_row_reads_the_same_on_both_faces():
+    assert (domains_step.OWN_APPLIES, domains_step.OWN_IDP, domains_step.OWN_CA) == \
+        (gui_domains._OWN_APPLIES, gui_domains._OWN_IDP, gui_domains._OWN_CA)
+
+
+@pytest.mark.parametrize("cfg", [
+    ImageConfig(mode="mesh"),                                       # default path
+    ImageConfig(mode="mesh", cluster_domain=""),
+    ImageConfig(mode="mesh", cluster_domain="", additional_domains=True,
+                domains=[Domain(name="a.example")]),
+    ImageConfig(mode="mesh", additional_domains=True,
+                domains=[Domain(name="a.example")]),
+    ImageConfig(mode="cloud", role="desktop", domains=[Domain(name="a.example")]),
+    ImageConfig(mode="cloud", role="desktop"),
+], ids=["mesh-default", "mesh-no-apex", "mesh-rows-no-apex", "mesh-rows",
+        "cloud-row", "cloud-empty"])
+def test_both_faces_walk_the_services_step_on_the_same_flows(wiz, cfg):
+    """The GUI page's applies_to and the TUI walk decide from the SAME predicate
+    (core services_page_applies), and both walk the same domains, own domain first."""
+    page = wiz.page(wiz._page_ids["domain_services"])
+    j = journey.Journey(GENERATOR_DIR, cfg=cfg)
+    j.slug = "domains"
+    j.advance()
+    assert (j.slug == "domain_services") == page.applies_to(cfg)
+    if page.applies_to(cfg):
+        from hugmesh_studio.core.domain_services import domain_names_for_services
+        assert [d.name for d in j.screen().domains(j)] == \
+            domain_names_for_services(cfg)
+
+
+# ── #587 / #588: the fleet, Go-Live and cloud-CA surfaces (decision 71 = A) ────────────
+def test_the_fleet_steps_are_the_same_objects_on_both_faces(qapp, monkeypatch):
+    """The GUI fleet window's Domains / Domain services steps and the TUI's fleet
+    screen: same lane sentence, no Sign-in column on either, same refusal."""
+    from hugmesh_studio.core import build_driver
+    from hugmesh_studio.core.fleet import FLEET_LANE_NOTE, fleet_gate_reason
+    from hugmesh_studio.gui.pages import fleet as gui_fleet
+    from hugmesh_studio.tui.fleet import FleetScreen
+    monkeypatch.setattr(build_driver, "detect",
+                        lambda builder_image="hugmesh-builder": HOST)
+    page = gui_fleet.FleetPage(GENERATOR_DIR)
+    assert page.domain_services.lane_note.text() == FLEET_LANE_NOTE
+    assert FleetScreen().services.lane_note == FLEET_LANE_NOTE
+    assert page.domains_table.table.isColumnHidden(gui_domains._COL_IDP)
+    j = journey.Journey(GENERATOR_DIR)
+    j.goto("fleet")
+    j.feed("set cluster_domain mesh.example")
+    j.feed("")
+    j.feed("a acme.example")
+    headers, _rows = j.screen().table(j)
+    assert "sign-in" not in headers
+    # the same rows on both faces refuse with the same sentence
+    page.cluster_domain.setText("mesh.example")
+    page._goto(gui_fleet.STEP_DOMAINS)
+    page.domains_table._add("acme.example", "")
+    assert page._commit_domains()
+    page._goto(gui_fleet.STEP_DOMAIN_SERVICES)    # GUI: lands on the own domain
+    page._leave(gui_fleet.STEP_DOMAIN_SERVICES)   # ...and records it walked
+    j.feed("")                                    # TUI: domains -> services (own)
+    j.feed("")                                    # services -> review
+    assert fleet_gate_reason(page.collect()) == j.screen().refusal(j) != ""
+    page.deleteLater()
+
+
+def test_the_fleet_tor_note_is_one_string_on_both_faces(qapp, monkeypatch):
+    """What WITH_TOR does per builder is said ONCE (core.fleet.WITH_TOR_NOTE): the
+    wrapped note under the GUI's Tor checkbox (and its tooltip) and the line the TUI's
+    options stage prints for the ``with_tor`` knob. The sentence left the checkbox
+    itself in the post-merge review of #645 — a QCheckBox never wraps, and it had made
+    every fleet step 825 px wide — so this is where a GUI-only or TUI-only rewording
+    would show."""
+    from hugmesh_studio.core import build_driver
+    from hugmesh_studio.core.fleet import WITH_TOR_NOTE
+    from hugmesh_studio.gui.pages import fleet as gui_fleet
+    monkeypatch.setattr(build_driver, "detect",
+                        lambda builder_image="hugmesh-builder": HOST)
+    page = gui_fleet.FleetPage(GENERATOR_DIR)
+    assert page.with_tor_note.text() == WITH_TOR_NOTE == page.with_tor.toolTip()
+    assert page.with_tor_note.wordWrap()
+    j = journey.Journey(GENERATOR_DIR)
+    j.goto("fleet")
+    assert "with_tor: " + WITH_TOR_NOTE in j.lines()
+    assert "x86 --with-tor" in WITH_TOR_NOTE and "--optional-services" in WITH_TOR_NOTE
+    page.deleteLater()
+
+
+def test_go_live_offers_and_plans_the_same_domains_on_both_faces(qapp, tmp_path,
+                                                                  monkeypatch):
+    from hugmesh_studio.core.golive_domains import exposure_lines, plan_rows
+    from hugmesh_studio.gui.pages import golive as gui_golive
+    from hugmesh_studio.tui.golive import GoLiveScreen
+    (tmp_path / "cd").write_text("mesh.example\n")
+    (tmp_path / "doms").write_text("shop.example\nmesh.example\n")
+    monkeypatch.setenv("GOLIVE_CLUSTER_DOMAIN_FILE", str(tmp_path / "cd"))
+    monkeypatch.setenv("GOLIVE_DOMAINS_FILE", str(tmp_path / "doms"))
+    monkeypatch.setenv("GL_ONION_EXPORT_DIR", str(tmp_path / "no-tor"))
+    w = gui_golive.GoLiveWizard(GENERATOR_DIR)
+    w.opts.provider, w.model = "byo-domain", w.driver.provider("byo-domain").model
+    inputs = w.page(w._page_ids["inputs"])
+    inputs.initializePage()
+    gui_list = [inputs.domain_pick.itemData(i) for i in range(inputs.domain_pick.count())]
+    j = journey.Journey(GENERATOR_DIR)
+    j.goto("golive")
+    screen = j.screen()
+    assert isinstance(screen, GoLiveScreen)
+    assert screen.domains(j) == gui_list == ["mesh.example", "shop.example"]
+    inputs.domain_pick.setCurrentIndex(1)
+    assert inputs.validatePage()
+    gen = w.page(w._page_ids["generate"])
+    gen.initializePage()
+    screen.opts.provider, screen.opts.domain = "byo-domain", "shop.example"
+    assert gen.exposure.toPlainText().splitlines() == screen.plan_lines(j) == \
+        exposure_lines(plan_rows(w.driver, w.opts))
+    w.deleteLater()
+
+
+def test_the_cloud_ca_inheritance_note_is_one_string_on_both_faces(wiz):
+    from hugmesh_studio.core.config import CLIENT_CA_INHERITANCE_NOTE
+    from _helpers import pick_mode
+    pick_mode(wiz, "cloud")
+    dom = advance_to(wiz, wizard_mod.DomainsPage)
+    j = journey.Journey(GENERATOR_DIR)
+    j.cfg.mode = "cloud"
+    j.goto("domains")
+    assert dom.client_ca_note.text() == CLIENT_CA_INHERITANCE_NOTE
+    assert CLIENT_CA_INHERITANCE_NOTE in j.screen().lines(j)
+
+
+# ── #383: a loaded worklist survives a pass through either face ─────────────────────
+def _fully_populated_worklist(base):
+    """One node row and one desktop row with EVERY optional per-entry field set — the
+    shape a saved JSON worklist has when an operator has edited it on the GUI."""
+    from hugmesh_studio.core.worklist import WorklistConfig, WorklistEntry
+    return WorklistConfig(base=base, entries=[
+        WorklistEntry(role="backend", platform="x86", board="", flavor="",
+                      desktop="", encrypt_root="on",
+                      packages_add="app-misc/foo", packages_drop="app-misc/bar",
+                      infra_services=("tor",), hostname="be-one"),
+        WorklistEntry(role="rpi5-desktop", platform="rpi5", board="rpi5",
+                      desktop="xfce", encrypt_root="off",
+                      packages_add="media-gfx/baz", packages_drop="app-misc/qux",
+                      desktop_user="alice", desktop_user_roles=["admin", "games"],
+                      hostname="alice-pi"),
+    ])
+
+
+def test_tui_worklist_feed_keeps_every_per_entry_field_of_a_loaded_worklist():
+    """WorklistScreen.feed rebuilt each kept entry as WorklistEntry(role, platform,
+    hostname) only, so board / flavor / desktop / encrypt_root / package deltas /
+    infra_services / the desktop person silently vanished on a re-entry through the TUI
+    (the loss is silent: the envelope just shrinks). Re-entering with the same rows
+    checked must be the identity on every entry."""
+    j = journey.Journey(GENERATOR_DIR)
+    j.worklist = _fully_populated_worklist(j.cfg)
+    before = [e.to_dict() for e in j.worklist.entries]
+    assert all(before[0][k] == v for k, v in (("encrypt_root", "on"), ("hostname", "be-one")))
+    screen = journey.WorklistScreen()
+    screen.enter(j)
+    assert len(screen._checked) == 2            # both loaded rows are pre-checked
+    screen.feed(j, "")
+    after = [e.to_dict() for e in j.worklist.entries]
+    assert after == before
+    # a NEW row starts from defaults, and an unchecked row is dropped, not carried
+    j2 = journey.Journey(GENERATOR_DIR)
+    j2.worklist = _fully_populated_worklist(j2.cfg)
+    s2 = journey.WorklistScreen()
+    s2.enter(j2)
+    gone = next(i for i, (r, p, _l) in enumerate(s2._rows) if (r, p) == ("backend", "x86"))
+    s2.feed(j2, str(gone + 1))                  # a NUMBER toggles: uncheck backend.x86
+    s2.feed(j2, "")
+    assert [e.id for e in j2.worklist.entries] == ["rpi5-desktop.rpi5"]
+    assert j2.worklist.entries[0].to_dict() == before[1]
+
+
+def test_tui_and_gui_worklist_passes_agree_on_a_loaded_worklist(wiz):
+    """The same loaded worklist, re-confirmed unchanged on each face, comes out equal
+    (the GUI path is the reference: its validatePage keeps prior state)."""
+    from _helpers import pick_mode
+    pick_mode(wiz, "mesh")
+    page = advance_to(wiz, wizard_mod.WorklistPage)
+    wiz.worklist = _fully_populated_worklist(wiz.cfg)
+    before = [e.to_dict() for e in wiz.worklist.entries]
+    page.initializePage()
+    assert page.validatePage()
+    gui = [e.to_dict() for e in wiz.worklist.entries]
+
+    j = journey.Journey(GENERATOR_DIR)
+    j.worklist = _fully_populated_worklist(j.cfg)
+    screen = journey.WorklistScreen()
+    screen.enter(j)
+    screen.feed(j, "")
+    tui = [e.to_dict() for e in j.worklist.entries]
+    assert tui == gui == before
+
+
+# ── #638 / decision 71 = A: the build-first mode picker on both faces ──────────────
+def test_the_build_first_arm_offers_the_same_three_builds_on_both_faces(wiz):
+    from hugmesh_studio.core import emulation as _emu
+    from hugmesh_studio.gui.pages import mode as gui_mode
+    page = wiz.page(wiz._page_ids["qemu"])
+    gui = [(rb.property("mode"), rb.text()) for rb in page.build_mode_radios.values()]
+    assert tuple(gui) == tui_qemu.image_mode_choices()
+    assert dict(tui_qemu.image_mode_choices()) == gui_mode.IMAGE_MODE_TITLES
+    # the sentence under the picker is ONE core string on both faces
+    page._seed_build_mode()                 # what entering the page does
+    page.build_first.setChecked(True)
+    page.build_mode_radios["cloud"].setChecked(True)
+    assert page.build_mode_note.text() == _emu.build_first_mode_note(
+        gui_mode.IMAGE_MODE_TITLES["cloud"], gui_mode.IMAGE_MODE_TITLES[wiz.cfg.mode])
+    j = journey.Journey(GENERATOR_DIR)
+    j.feed("")
+    j.feed("4")
+    j.feed(tui_e2e.DEVICE_LANE_KEY)
+    j.feed(tui_qemu.BUILD_FIRST_KEY)
+    assert _emu.build_first_mode_note(
+        gui_mode.IMAGE_MODE_TITLES[j.cfg.mode],
+        gui_mode.IMAGE_MODE_TITLES[j.cfg.mode]) in "\n".join(j.lines())
+
+
+# ── #661 / decision 71 = A: the consent line says the same thing on both faces ───────
+def test_the_consent_prompt_opens_with_the_tick_boxs_words(wiz):
+    """The GUI split its consent sentence (a short tick-box, the rest in a wrapped
+    label beside it) so the page fits its window; the TUI asks the same question in
+    one line. The words on the box are the opening of that question, and the box and
+    its label together are still the whole old sentence."""
+    box = wiz.page(wiz._page_ids["localcloud"]).confirm
+    assert box.text() == gui_lc.CONSENT_SHORT
+    prompt = tui_lc.LocalCloudScreen().prompt(journey.Journey(GENERATOR_DIR))
+    assert prompt.startswith(gui_lc.CONSENT_SHORT)
+    assert f"{gui_lc.CONSENT_SHORT} {gui_lc.CONSENT_REST}" == (
+        "I understand: k8s will stop to proceed — the local Kubernetes (DevOps) stack "
+        "must come down before these node images are configured and built.")

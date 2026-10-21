@@ -12,7 +12,7 @@ Pins the operator's interpretation flags and the page's discipline:
     reason, a row that loses its door loses its button, a repaint keeps the selection,
     a failed read clears the rows, and NO row ever offers a localhost:8443 URL.
 
-``mesh_monitor.snapshot`` is monkeypatched at the module seam; nothing here shells
+``mesh_monitor.snapshot`` is monkeypatched at the module override point; nothing here shells
 docker or kubectl, and no browser is ever opened.
 """
 from __future__ import annotations
@@ -37,7 +37,7 @@ from hugmesh_studio.gui.pages import _mesh_monitor_widget as mw          # noqa:
 from hugmesh_studio.gui.pages import _emulation_common as common_mod     # noqa: E402
 from hugmesh_studio.gui.qt import QtGui, QtWidgets                       # noqa: E402
 
-#: This module exercises the REAL snapshot (tests/conftest.py makes it inert for
+#: This module exercises the REAL snapshot (tests/conftest.py makes it do nothing for
 #: every other suite).
 pytestmark = pytest.mark.real_mesh_monitor
 
@@ -513,7 +513,7 @@ def test_view_up_runs_make_view_through_launch_never_directly(qapp, page, fake, 
 def test_verb_done_with_a_silenced_status_probe_starts_no_monitor_read(qapp, page, fake):
     """Two suites (save-notice and run-log attribution) silence _probe_mesh_state to
     a no-op to keep a page QUIET while they drive verbs. The monitor's verb-end read
-    rides that same seam: a silenced state probe means no monitor read and no stray
+    rides that same override point: a silenced state probe means no monitor read and no stray
     thread — the flag is simply remembered for the next state answer."""
     page._probe_mesh_state = lambda: None
     page._launch("Doing nothing", lambda: (True, ["ok"]))
@@ -812,7 +812,7 @@ def test_the_default_monitor_widget_is_still_the_six_column_table(qapp):
     explicit ``scaling=True`` (issue #341) and wires ``scale_requested`` — pinned by
     ``test_the_pages_own_monitor_mounts_the_replicas_column_and_wires_it`` — so a
     default that flipped to True would hand every OTHER bare mount a seventh column
-    whose Apply emits into nothing. This is the test that goes red for it."""
+    whose Apply emits into nothing. This is the test that fails for it."""
     w = mw.MeshMonitorWidget()
     try:
         assert w.scaling is False
@@ -936,6 +936,10 @@ def test_replicas_now_does_not_count_finished_rows():
     assert mm.replicas_now(snap, target) == 2
     assert mm.replicas_now(snap.units, target) == 2      # bare sequence too
     assert mm.replicas_now(snap, mm.ScaleTarget()) == 0  # never-scalable counts nothing
+    # a `completed` one-shot is finished work too (Decision 99 = A, #378)
+    snap = _snap(_scalable("hugmesh", "gw-1"),
+                 _scalable("hugmesh", "gw-job", state="completed"))
+    assert mm.replicas_now(snap, target) == 1
 
 
 # ── what the two lanes actually run ────────────────────────────────────────────────
@@ -1159,7 +1163,7 @@ def host(qapp):
 
 @pytest.fixture
 def section(qapp, host, monkeypatch):
-    """A real MeshMonitorSection whose snapshot read is instant and inert."""
+    """A real MeshMonitorSection whose snapshot read is instant and does nothing."""
     monkeypatch.setattr(mm, "snapshot",
                         lambda gen, node, **kw: _snap(_scalable("hugmesh", "gw-1")))
     sec = mw.MeshMonitorSection(host, GENERATOR_DIR, lambda: _ScaleNode(),
@@ -1194,7 +1198,7 @@ def test_apply_runs_the_scale_off_the_gui_thread_one_at_a_time(qapp, section,
     """M2 and M3 together.
 
     M3: ``mesh_monitor.scale`` inline on the GUI thread freezes the window for the
-    whole SCALE_TIMEOUT_S ceiling on a wedged daemon — 180 s of an unrepainting table
+    whole SCALE_TIMEOUT_S ceiling on a hung daemon — 180 s of an unrepainting table
     that is showing the thing being scaled.
     M2: two `docker compose up --scale` invocations against one project race each
     other's container set, and the second's ``--no-recreate`` does not protect the
@@ -1370,7 +1374,7 @@ def test_the_two_monitor_probes_have_not_drifted():
     it could — ``localmesh._MonitorProbe`` is now an ALIAS of the canonical class —
     so the pin is IDENTITY, and the shape checks below are kept as the contract the
     page's ``_refresh_monitor`` relies on (constructor, ``result`` signal, both run()
-    paths). A second class reappearing in localmesh.py goes red on the first line."""
+    paths). A second class reappearing in localmesh.py fails on the first line."""
     a, b = mw.MeshMonitorProbe, localmesh_mod._MonitorProbe
     assert a is b, "localmesh._MonitorProbe must be an alias of MeshMonitorProbe, not a copy"
     import inspect as _i
@@ -1748,3 +1752,12 @@ def test_a_scale_whose_probe_explodes_says_what_exploded(monkeypatch):
     ok, text = mm.scale("/gen", _Boom(), _scalable("hugmesh", "gw-1", ctrl="gw"), 2)
     assert ok is False
     assert "RuntimeError" in text and "the daemon went away" in text
+
+
+def test_completed_has_its_own_glyph_distinct_from_stopped_and_queued():
+    """The state rides progress.py's palette (no second catalogue): `completed` must not
+    fall back to the 'queued' glyph an unknown state gets, nor wear the halted
+    service's 'stopped' square."""
+    from hugmesh_studio.gui.pages import _mesh_monitor_widget as w
+    assert w._glyph("completed") not in (w._glyph("queued"), w._glyph("stopped"))
+    assert w._colour("completed") != w._colour("failed")

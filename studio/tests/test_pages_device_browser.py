@@ -392,7 +392,7 @@ def test_worklist_unsupported_info_rows_visible_never_checkable(wiz):
 
 def test_worklist_rpi3_never_offered_on_node_rows(wiz):
     """The rpi3 node-gate is intact: no node-role board combo offers rpi3; the desktop
-    row still does (non-vacuity)."""
+    row still does (real-cases check)."""
     pick_mode(wiz, "mesh")
     page = advance_to(wiz, wizard_mod.WorklistPage)
     for rid in ("pki.rpi5", "backend.rpi5", "frontend.rpi5"):

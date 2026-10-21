@@ -162,6 +162,10 @@ CHECKER="$(dirname "${BASH_SOURCE[0]}")/cluster_manifest_integrity.py"
 # real docs dir; a control that needs a MUTATED docs tree overrides this by writing
 # its path into ${WORK}/docsdir (see the [mcs-documented] rationale control).
 export HUGMESH_DOCS_DIR="${REPO}/docs"
+# [relay-host] also reads the brand twin templates/apps/20-gateway-be.yaml.hbs, which
+# lives outside the staged specs/cluster copy; same arrangement as the docs dir (a
+# control that needs a MUTATED template writes its path into ${WORK}/tpldir).
+export HUGMESH_TEMPLATES_DIR="${REPO}/templates"
 [ -f "${HUGMESH_DOCS_DIR}/SECURITY.md" ] || {
   echo "  FAIL cannot find ${HUGMESH_DOCS_DIR}/SECURITY.md — [mcs-documented] has no authority to compare against"; exit 1; }
 
@@ -192,7 +196,7 @@ expect_catch() {
   local label="$1" want="$2" inject="$3"
   local T="${WORK}/tree"
   rm -rf "${T}"; cp -r "${REPO}/specs/cluster" "${T}"
-  rm -f "${WORK}/docsdir"
+  rm -f "${WORK}/docsdir" "${WORK}/tpldir"
   local before after
   before="$(find "${T}" -type f -exec md5sum {} + | sort | md5sum)"
   ( T="${T}"; WORK="${WORK}"; REPO="${REPO}"; eval "${inject}" ) \
@@ -206,12 +210,14 @@ expect_catch() {
   # deliberately mutates something outside the tree and says so via ${WORK}/docsdir.
   local docs="${HUGMESH_DOCS_DIR}"
   [ -f "${WORK}/docsdir" ] && docs="$(cat "${WORK}/docsdir")"
-  if [ "${before}" = "${after}" ] && [ ! -f "${WORK}/docsdir" ]; then
+  local tpl="${HUGMESH_TEMPLATES_DIR}"
+  [ -f "${WORK}/tpldir" ] && tpl="$(cat "${WORK}/tpldir")"
+  if [ "${before}" = "${after}" ] && [ ! -f "${WORK}/docsdir" ] && [ ! -f "${WORK}/tpldir" ]; then
     neg_bad "${label} (INJECTION CHANGED NOTHING — the anchor has drifted; this control proves nothing)"
     return
   fi
   local out rc
-  out="$(HUGMESH_DOCS_DIR="${docs}" python3 "${CHECKER}" "${T}" 2>&1)"; rc=$?
+  out="$(HUGMESH_DOCS_DIR="${docs}" HUGMESH_TEMPLATES_DIR="${tpl}" python3 "${CHECKER}" "${T}" 2>&1)"; rc=$?
   # -F: the check ids contain [] and -, which grep would read as a bracket range.
   if [ "${rc}" -ne 0 ] && grep -qF "  FAIL ${want}" <<<"${out}"; then
     neg_ok "${label} -> caught by ${want}"
@@ -291,6 +297,25 @@ fused=("    for entry in hugmesh-pki-gateway:hugmesh-pki-gateway.hugmesh-pki \\\
        "    for entry in hugmesh-pki-gateway:")
 open(p,"w",encoding="utf-8").write(s.replace(anchor,fused,1))
 PY
+'
+# (4b) hugmesh-generator#622: the be gateway headscale-forward relay loses its
+#      PreserveHostHeader filter, so the pki gateway sees its own Service DNS name
+#      and Host=scale.<domain> can never match its headscale route.
+expect_catch "be headscale-forward relay without PreserveHostHeader" "[relay-host]" '
+  python3 - "$T" <<PY
+import sys
+p=sys.argv[1]+"/apps/20-gateway-be.yaml"
+s=open(p,encoding="utf-8").read()
+assert s.count("              - PreserveHostHeader\n")==1
+open(p,"w",encoding="utf-8").write(s.replace("              - PreserveHostHeader\n","              - AddRequestHeader=X-Relay, 1\n",1))
+PY
+'
+# (4c) ...and the same drift in the brand twin, which is outside the staged tree.
+expect_catch "brand template headscale-forward relay without PreserveHostHeader" "[relay-host]" '
+  rm -rf "$WORK/mtpl"; cp -r "$REPO/templates" "$WORK/mtpl"
+  sed -i "s/^              - PreserveHostHeader$/              - AddRequestHeader=X-Relay, 1/" "$WORK/mtpl/apps/20-gateway-be.yaml.hbs"
+  ! grep -q "PreserveHostHeader" "$WORK/mtpl/apps/20-gateway-be.yaml.hbs"
+  printf "%s" "$WORK/mtpl" > "$WORK/tpldir"
 '
 # (5) a pod mounting an *-mtls Secret that no ExternalSecret produces.
 expect_catch "pod mounts an *-mtls Secret nothing provisions" "[mtls-secret]" '
@@ -492,6 +517,40 @@ expect_catch "a Deployment re-pins replicas the HPA owns" "[hpa-replicas]" '
   grep -q "^  replicas: 1$" "$T/manifests/admin-bff-api/deployment.yaml"
 '
 
+# ── (11b) THE CHAT3D GAMES ORIGIN (hugmesh-generator#470) ────────────────────
+# The matrix-ui Deployment states HUG_GAMES_URL, and it must be the host the be
+# gateway routes to the games portal. Two defects, one control each, plus a control
+# that the check does not bite a profile that does not install games.
+expect_catch "matrix-ui HUG_GAMES_URL env deleted while games is installed" "[games-origin]" '
+  sed -i "/name: HUG_GAMES_URL/d" "$T/manifests/social-ui/deployment.yaml"
+  ! grep -qE "^[[:space:]]*- \{ name: HUG_GAMES_URL" "$T/manifests/social-ui/deployment.yaml"
+'
+expect_catch "HUG_GAMES_URL names a different host than the gateway games route" "[games-origin]" '
+  sed -i "s#value: \"https://games.hugmesh.net\" }#value: \"https://games.elsewhere.example\" }#" \
+      "$T/manifests/social-ui/deployment.yaml"
+  grep -q "games.elsewhere.example" "$T/manifests/social-ui/deployment.yaml"
+'
+# The gateway host moved but the manifest literal did not (a repo-tree edit of one
+# side only; this checks the tree, not what a builder bakes or what ArgoCD serves).
+expect_catch "gateway games host rewritten while the matrix-ui literal is left behind" "[games-origin]" '
+  sed -i "s#games\\.hugmesh\\.net#games.acme.example#g" "$T/apps/20-gateway-be.yaml"
+  grep -q "host: games.acme.example" "$T/apps/20-gateway-be.yaml"
+'
+# NOT vacuous the other way: a profile with no games Application is not asked for
+# an origin. Stage it, drop 50-games.yaml and the env, and require a clean verdict.
+{
+  T="${WORK}/tree"; rm -rf "${T}"; cp -r "${REPO}/specs/cluster" "${T}"
+  rm -f "${T}/apps/50-games.yaml"
+  sed -i "/name: HUG_GAMES_URL/d" "${T}/manifests/social-ui/deployment.yaml"
+  out="$(HUGMESH_DOCS_DIR="${HUGMESH_DOCS_DIR}" HUGMESH_TEMPLATES_DIR="${HUGMESH_TEMPLATES_DIR}" python3 "${CHECKER}" "${T}" 2>&1 || true)"
+  if grep -qF "  PASS [games-origin]" <<<"${out}" && ! grep -qF "  FAIL [games-origin]" <<<"${out}"; then
+    neg_ok "no games Application and no env -> [games-origin] passes (not asked for an origin)"
+  else
+    neg_bad "a profile without games was asked for a games origin (or the check vanished):"
+    grep -F "[games-origin]" <<<"${out}" | sed 's/^/        /'
+  fi
+}
+
 # ── (12) THE SUPERADMIN SERVICE CATALOG CHAIN ────────────────────────────────
 # (12a) THE SHIPPED DEFECT, re-injected: the console's Service deleted. Before this
 #       PR the ROUTE_SERVICE_ALLOW set exempted exactly this Service ("rendered by
@@ -602,9 +661,9 @@ SCPY
 #       would stay green here — that is the whole difference between a guard and a
 #       restatement of a literal.
 expect_catch "kaniko template renames its Secret (nothing else changes)" "[build-template-secret]" '
-  sed -i "s/^            secretName: service-catalog-builder-registry$/            secretName: service-catalog-builder-registry-RENAMED/" \
+  sed -i "s/^            secretName: service-catalog-registry-credentials$/            secretName: service-catalog-registry-credentials-RENAMED/" \
       "$T/manifests/service-catalog-builder/kaniko-build-job.template.yaml"
-  grep -q "secretName: service-catalog-builder-registry-RENAMED" \
+  grep -q "secretName: service-catalog-registry-credentials-RENAMED" \
       "$T/manifests/service-catalog-builder/kaniko-build-job.template.yaml"
 '
 # (14b) the other direction — THE SHIPPED DEFECT re-injected: no ExternalSecret, the
@@ -615,10 +674,10 @@ expect_catch "the builder push ExternalSecret removed (template mount left dangl
 import sys
 p=sys.argv[1]+"/manifests/external-secrets/service-catalog-builder-externalsecrets.yaml"
 s=open(p,encoding="utf-8").read()
-old="    name: service-catalog-builder-registry\n    creationPolicy: Owner"
+old="    name: service-catalog-registry-credentials\n    creationPolicy: Owner"
 assert s.count(old)==1, "ES target anchor matched %d times, not 1" % s.count(old)
-s=s.replace(old,"    name: service-catalog-builder-registry-X\n    creationPolicy: Owner",1)
-s=s.replace("  name: service-catalog-builder-registry\n","  name: service-catalog-builder-registry-X\n",1)
+s=s.replace(old,"    name: service-catalog-registry-credentials-X\n    creationPolicy: Owner",1)
+s=s.replace("  name: service-catalog-registry-credentials\n","  name: service-catalog-registry-credentials-X\n",1)
 open(p,"w",encoding="utf-8").write(s)
 SCPY
 '
@@ -764,7 +823,7 @@ expect_catch "push credential marked optional:true AND its ExternalSecret remove
 import sys, os
 p=sys.argv[1]+"/manifests/service-catalog-builder/kaniko-build-job.template.yaml"
 s=open(p,encoding="utf-8").read()
-old="            secretName: service-catalog-builder-registry\n"
+old="            secretName: service-catalog-registry-credentials\n"
 assert s.count(old)==1, "secretName anchor matched %d times, not 1" % s.count(old)
 open(p,"w",encoding="utf-8").write(s.replace(old, old+"            optional: true\n",1))
 os.remove(sys.argv[1]+"/manifests/external-secrets/service-catalog-builder-externalsecrets.yaml")
@@ -781,9 +840,9 @@ p=sys.argv[1]+"/manifests/service-catalog-builder/kaniko-build-job.template.yaml
 s=open(p,encoding="utf-8").read()
 vol="""        - name: docker-config
           secret:
-            secretName: service-catalog-builder-registry
+            secretName: service-catalog-registry-credentials
             items:
-              - key: .dockerconfigjson
+              - key: config.json
                 path: config.json
 """
 mnt="""            - name: docker-config

@@ -49,6 +49,10 @@ value throws with the legal set before a browser action runs.
 `@role:` names a **persona handle** (`e2e-admin`, `alice@gmail.com`), never a
 `ROLE_*` string. A role is not an identity and cannot be logged in as.
 
+`@issue:<repo>-<n>` is deliberately **absent** from this table: it traces a
+scenario to a GitHub issue, is not an axis, and is inert to every dimension
+check — see §8.
+
 ### 2a. FIXED dimension → a Gherkin tag
 
 ```gherkin
@@ -298,8 +302,9 @@ seed's own comments say admins reach a floor row via the bypass, which is why
 actually gets through is what the driven `@env:docker` scenarios answer. Two
 honest facts beat one blended number.
 
-Verify with `bash ../scripts/test-e2e-func-media-games.sh` (offline; seven
-mutations, tree restored on exit).
+Verify with `bash ../scripts/test-e2e-func-media-games.sh` (starts nothing;
+eight mutations M1–M8, tree restored on exit; with no e2e credential on the box
+its `@env:*` scenarios skip even if a stack is up — see its header).
 
 ## 3. Steps
 
@@ -640,3 +645,106 @@ The Python list and `ENVIRONMENTS` in `steps/dimensions.ts` are **cross-checked*
 (`studio/tests/test_e2e_environments.py` parses the TS file), so adding an
 environment on one side only goes red. Nothing here ever starts a mesh:
 `plan(..., boot=True)` is refused, naming what to run by hand.
+
+## 8. `@issue:<repo>-<number>` — tracing a scenario back to an issue
+
+A scenario written to cover a specific GitHub issue carries
+`@issue:<repo-without-the-hugmesh-prefix>-<number>`:
+
+```gherkin
+@issue:generator-549
+Scenario: ...
+
+@issue:user-bff-api-19 @fixme
+Scenario: ...
+
+@issue:github.io-15
+Scenario: ...
+```
+
+**Spelling.** `<repo>` drops the `hugmesh-` prefix (`hugmesh-user-bff-api` →
+`user-bff-api`, `hugmesh.github.io` → `github.io`) and keeps its own dots and
+dashes; `<number>` is that repo's issue number. The whole tag matches
+`^@issue:[a-z0-9][a-z0-9.-]*-[0-9]+$` — lowercase, the repo segment starts
+alphanumeric, then a literal `-`, then digits, nothing else — and the repo
+segment never starts `hugmesh-` or `hugmesh.` (the prefix really is dropped:
+`@issue:hugmesh-generator-549` is red, because the lookup grep below cannot
+find it). Enforced, not just
+documented: check 5 of `tests/scripts/test-e2e-gherkin-harness.sh` **fails** the
+build on a malformed `@issue:` tag — `@issue:Generator-549`, `@issue:generator`,
+`@issue:generator-`, a bare `@issue:`, `@issue:-549`, `@issue:-generator-549`,
+`@issue:generator-549x`, `@issue:generator_549`, `@issue:gen_erator-549`,
+`@issue:hugmesh-generator-549`, `@issue:hugmesh.github.io-15` and a
+capitalised `@Issue:` prefix are all red (each shape in that list kills a
+specific loosening of the regex; the harness's control E proves it). It judges **tag lines and
+keyword titles only**: a `"@issue:…"` inside a quoted step argument, a table
+cell, a docstring or a comment is text, not a tag, and is never judged
+(`cli/mesh-cli-surfaces.feature` already quotes `@interface:cli` inside a step
+string — that is why the scope matters). The guard sees only the `@issue:`
+prefix; `@issues:` or `@issue-generator-549` is just another inert unknown tag,
+and only a reader catches it.
+
+**It is NOT an axis.** `@issue:` sits outside the ROLE × PLATFORM × SERVICE ×
+ENV × INTERFACE table in §2 and carries none of that machinery: it is never
+validated in the `Before` hook, never gates availability, and is never an
+Examples column. `steps/dimensions.ts` `parseDimensionText` iterates only the
+six axes it knows by name (`role`, `platform`, `service`, `layer`, `env`,
+`interface`), so `@issue:` — like the pre-existing `@function:` tag of §2h —
+passes straight through as an ordinary Playwright tag, inert to every dimension
+check. **Measured, not assumed** (2026-09-23): a throwaway `@interface:cli`
+feature holding one `@issue:generator-000` scenario and one
+`@issue:generator-000 @fixme` scenario generated (a `test(` and a
+`test.fixme(`, the tag in each one's `tag:` array), listed
+(`Total: 2 tests in 1 file`) and — this is the part that proves it, because
+`--list` runs no fixture and `test.fixme` never reaches the hook — was
+**executed**: `1 passed, 1 skipped`, the `dimensions` fixture resolving with
+the tag present and throwing nothing. `steps/world.ts` needed no change; had the
+hook thrown on an unknown `@x:` prefix, `resolveDimensions` would have been
+taught this one.
+
+**`@fixme` needs the truth, not today's behaviour.** A scenario whose fix has
+**not yet landed on `origin/main`** carries `@fixme` in addition to `@issue:`.
+Its `Then` steps must assert the **correct** behaviour the issue asks for —
+never the currently-broken one — so the scenario is a real regression fence
+that turns green, unmodified, the day the fix merges. Asserting today's bug
+"to make it pass" defeats the point of writing the scenario ahead of the fix.
+
+**The all-`@fixme` file trap.** `playwright-bdd` emits **nothing** for a
+`.feature` in which every scenario is `@fixme` — no spec, nothing in `--list`,
+and `bddgen` still exits 0. Measured three ways on 2026-08-26 (the header of
+`mined-media/owncast-runtime-pending.feature` is the record) and again on
+2026-09-23, when a one-scenario all-`@fixme` file made harness check 1 fail
+twice (`124 spec file(s) for 125 .feature file(s)`; `3293 … but 3292
+generated`). So the harness catches it, loudly — but the fix is yours: keep at
+least one scenario that really runs in every file
+(`uncovered-services/console-discovery.feature` does this with six pending rows
+and one live), or use the `Given this scenario is PENDING because "<reason>"`
+step instead of the tag, as `owncast-runtime-pending.feature` does. A `@fixme`
+scenario also skips **before** its first step, so a `PENDING because` step
+under a `@fixme` tag never prints its reason.
+
+**Untraceable `@fixme` is reported, not failed.** A `@fixme` scenario with no
+`@issue:` tag in its effective tag set — the Feature line, an enclosing `Rule:`
+line, its own tag block, the tag block above its `Examples:` block, or a tag
+spelled into its title (§2b) — is listed by the harness under `REPORT`, with
+the count (control H pins every one of those five scoping rules, including a
+two-line tag block, and control K pins that the `REPORT <n>` line and its rows
+really reach the output, after a skeptic round found both unguarded). It is
+not a failure: ten such scenarios predate this convention
+(measured 2026-09-23 on the merged tree; other lanes move that number). But
+an untraceable `@fixme` is a TODO nobody can follow up on, so do not add to
+that list.
+
+**What nobody checks offline.** Whether the issue is still open, whether a
+`@fixme` should now be dropped because the fix landed, and whether `<repo>`
+names a real repository are questions for a person with GitHub, not for this
+guard.
+
+**Finding every scenario written for an issue:**
+
+```sh
+grep -rnwF "@issue:generator-549" tests/e2e/features
+```
+
+`-w` so `@issue:generator-5490` is not a hit; `-F` so the `.` in
+`@issue:github.io-15` is literal.
