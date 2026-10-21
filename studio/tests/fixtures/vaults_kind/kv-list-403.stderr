@@ -1,0 +1,10 @@
+Error making API request.
+
+URL: GET https://127.0.0.1:8200/v1/sys/internal/ui/mounts/secret
+Code: 403. Errors:
+
+* 2 errors occurred:
+	* permission denied
+	* invalid token
+
+
