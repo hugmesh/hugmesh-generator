@@ -2191,7 +2191,7 @@ if ${ROLE_CLIENT}; then
         if ${CAPABLE}; then ROOT_MiB=51200
         elif [ "${DESKTOP}" = "full" ]; then ROOT_MiB=24576
         else ROOT_MiB=16384; fi
-        info "Client desktop: compact root sized to ${ROOT_MiB} MiB for the ${DESKTOP}${CAPABLE:+/capable} payload (override with --img-size)"
+        info "Client desktop: compact root sized to ${ROOT_MiB} MiB for the ${DESKTOP}$(${CAPABLE} && echo /capable || true) payload (override with --img-size)"
     fi
 elif [ -n "${PERSON_ROLE}" ] || [ -n "${DOMAINS}" ]; then
     warn "--person-role/--domains are ignored for non-client role '${ROLE}'."
@@ -5474,8 +5474,8 @@ if ${GPU} && [ "${GPU_DRIVER}" = "nvidia" ] && ! ${ROLE_CLIENT}; then
     info "NVIDIA container toolkit: GPU pods schedule (nvidia.com/gpu + RuntimeClass nvidia)"
 fi
 ${EDGE_AI} && info "Edge-AI inference NODE: serving an OpenAI-compatible model API to the mesh (runtime=${EDGE_AI_RUNTIME}; k8s + tailnet)"
-${ROLE_CLIENT} && info "Client desktop role: including desktop stack (packages-desktop.list, weight=${DESKTOP}${CAPABLE:+ +capable})"
-${GPU} && info "GPU role: including Mesa/Vulkan stack (packages-gpu.list)${NVIDIA_PROPRIETARY:+ + NVIDIA proprietary}" \
+${ROLE_CLIENT} && info "Client desktop role: including desktop stack (packages-desktop.list, weight=${DESKTOP}$(${CAPABLE} && echo " +capable" || true))"
+${GPU} && info "GPU role: including Mesa/Vulkan stack (packages-gpu.list)$(${NVIDIA_PROPRIETARY} && echo " + NVIDIA proprietary" || true)" \
         || info "Headless role: skipping Mesa/Vulkan stack"
 [ -n "${SEED_PACKAGES_FROM}" ] && info "Seed packages appended from: ${SEED_PACKAGES_FROM}"
 
