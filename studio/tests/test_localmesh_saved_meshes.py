@@ -248,10 +248,15 @@ def test_apply_bootstrap_refreshes_the_plan_once(qapp, page, monkeypatch):
 
 
 # ── the section ───────────────────────────────────────────────────────────────
-def test_saved_section_is_collapsed_when_there_are_no_records(qapp, page):
+def test_saved_section_is_open_at_zero_records_because_it_holds_the_save(qapp, page):
+    """It USED to fold away at zero records. Since 2026-10-21 the section also holds
+    the 'Save current mesh' strip, and a fold there hid the one place to save a mesh
+    nobody had saved yet — exactly what the operator reported ("Saved meshes screen
+    does not give anywhere to save the mesh we just started working on")."""
     page.initializePage()
     assert page.saved_meshes.record_count() == 0
-    assert not page.saved_section.is_expanded()
+    assert page.saved_section.is_expanded()
+    assert page.saved_meshes.save_btn.isEnabled(), page.saved_meshes.save_btn.toolTip()
     # It sits BEFORE the Actions row — the operator asked for the saved-mesh table to
     # be in front of them when they go to generate a new mesh. Issue #334 split the two
     # into separate sections (and separate wizard steps), so the ordering is now
@@ -270,7 +275,7 @@ def test_saved_section_is_collapsed_when_there_are_no_records(qapp, page):
 def test_zero_records_shows_the_grey_note_not_a_hidden_widget(qapp, page):
     page.initializePage()
     assert not page.saved_meshes.empty_note.isHidden()
-    assert "Save this mesh" in page.saved_meshes.empty_note.text()
+    assert "Save current mesh" in page.saved_meshes.empty_note.text()
     page.saved_section.set_expanded(True)
     assert not page.saved_meshes.isHidden(), "the widget hid itself at zero rows"
     _settle(qapp, page)
@@ -300,20 +305,29 @@ def test_a_manual_fold_survives_a_page_revisit(qapp, page):
 
 
 # ── Save ──────────────────────────────────────────────────────────────────────
-def test_save_button_is_disabled_when_no_mesh_is_running(qapp, page):
-    page._mesh_up = False
-    page._set_verbs_enabled(True)
-    assert not page.save_mesh_btn.isEnabled()
-    assert "no local mesh is running" in page.save_mesh_btn.toolTip()
-    page._mesh_up = None
-    page._set_verbs_enabled(True)
-    assert not page.save_mesh_btn.isEnabled()
-    assert "Checking" in page.save_mesh_btn.toolTip()
+def test_save_needs_no_running_mesh_but_the_copy_box_does(qapp, page):
+    """The Actions row's save was greyed until a mesh was RUNNING, so a mesh being
+    worked on could not be saved at all (operator, 2026-10-21). Saving is now gated
+    by a running VERB only; copying credential files still needs a mesh that is up,
+    because the files on disk belong to whatever mesh last ran."""
+    for up in (False, None):
+        page._mesh_up = up
+        page._set_verbs_enabled(True)
+        assert page.save_mesh_btn.isEnabled(), f"_mesh_up={up}"
+        assert page.save_mesh_btn.text() == "Save current mesh"
+        assert "does not need the mesh to be running" in page.save_mesh_btn.toolTip()
+        assert not page.save_copy_creds.isEnabled(), f"_mesh_up={up}"
+        assert "POINTERS" in page.save_copy_creds.toolTip()
     page._mesh_up = True
     page._set_verbs_enabled(True)
-    assert page.save_mesh_btn.isEnabled()
+    assert page.save_mesh_btn.isEnabled() and page.save_copy_creds.isEnabled()
     assert "NOT saved" in page.save_mesh_btn.toolTip()
     assert not page.save_copy_creds.isChecked(), "credential copying must default OFF"
+    page._running = True
+    page._sync_saved_gate()
+    assert not page.save_mesh_btn.isEnabled()
+    assert "verb is running" in page.save_mesh_btn.toolTip()
+    page._running = False
     _settle(qapp, page)
 
 
@@ -727,4 +741,5 @@ def test_an_agreeing_save_leaves_no_warning_note(qapp, page, monkeypatch):
     page.save_mesh_btn.click()
     _settle(qapp, page)
     assert "WARNING" not in page.log.toPlainText()
-    assert page.saved_meshes.note.isHidden() or not page.saved_meshes.note.text()
+    note = page.saved_meshes.note.text()
+    assert "not the one running now" not in note and "env=" not in note

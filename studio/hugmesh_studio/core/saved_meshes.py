@@ -277,14 +277,19 @@ class SavedMesh:
 
     # ---- derived, render-only helpers (no IO) ---------------------------------
     def services_text(self) -> str:
-        """The saved service selection as one line — honouring the None/() split
-        (see :class:`.local_mesh_bootstrap.LocalMeshBootstrapConfig`)."""
-        svc = self.config.get("services")
-        if svc is None:
-            return "(picker unused — profile defaults)"
-        if not svc:
-            return "none (explicit)"
-        return ", ".join(str(s) for s in svc)
+        """What the saved mesh RUNS as one line — honouring the None/() split (see
+        :class:`.local_mesh_bootstrap.LocalMeshBootstrapConfig`).
+
+        Read through ``effective_services`` (the mesh-wide half plus every domain's
+        own choice), never the raw ``services`` key: since the per-domain screens
+        became the one place a service is chosen (2026-10-21), ``services`` holds only
+        the mesh-wide infrastructure, and a record whose domains run tuwunel would
+        otherwise read "none"."""
+        return services_text_of(self.config)
+
+    def domain_lines(self) -> list[str]:
+        """One plain line per domain the record carries (:func:`domain_lines_of`)."""
+        return domain_lines_of(self.config)
 
     def brand_text(self) -> str:
         env = str(self.config.get("env") or "test")
@@ -325,6 +330,149 @@ class SavedMesh:
             generator_dir or "")
         same_host = (not hostname) or (not self.hostname) or (self.hostname == hostname)
         return same_dir and same_host
+
+
+def _boot_cfg(config: dict):
+    """The record's config dict as a ``LocalMeshBootstrapConfig``, or None when it
+    cannot be read (a hand-edited record) — render helpers never raise."""
+    from .local_mesh_bootstrap import LocalMeshBootstrapConfig  # local: avoid a cycle
+    try:
+        return LocalMeshBootstrapConfig.from_dict(dict(config or {}))
+    except (TypeError, ValueError, AttributeError):
+        return None
+
+
+def services_text_of(config: dict) -> str:
+    """What a mesh configuration (a ``to_dict`` shape) RUNS, as one line: the
+    mesh-wide infrastructure plus every domain's own services
+    (``effective_services``). ``None`` there means no picker was ever used."""
+    cfg = _boot_cfg(config)
+    if cfg is None:
+        svc = (config or {}).get("services")
+        return "unreadable" if svc is not None else "(picker unused — profile defaults)"
+    svc = cfg.effective_services()
+    if svc is None:
+        return "(picker unused — profile defaults)"
+    if not svc:
+        return "none (explicit)"
+    return ", ".join(str(s) for s in svc)
+
+
+def domain_lines_of(config: dict) -> list[str]:
+    """One plain line per domain a mesh configuration carries — its own domain first
+    — naming everything that is saved for it: sign-in, services, look, VPN/egress and
+    its own Tor front door. What the Saved meshes table shows so the operator can see
+    the per-domain settings are in the record, not take it on trust. [] when the
+    configuration records no domain rows (the mesh's own domain only, at its
+    defaults)."""
+    from .config import (IDP_LABELS, has_external_signin, effective_signin,
+                         runs_own_casdoor)
+    from .local_mesh_domains import domains_from_bootstrap
+    cfg = _boot_cfg(config)
+    if cfg is None:
+        return []
+    try:
+        md = domains_from_bootstrap(cfg)
+    except Exception:                                  # noqa: BLE001 — render only
+        return []
+    if md is None:
+        return []
+    own = (md.own_name or "").strip()
+    out: list[str] = []
+    for row in md.domains:
+        name = (row.name or "").strip()
+        if not name:
+            continue
+        parts: list[str] = []
+        if name == own:
+            parts.append("this mesh's own domain; sign-in through the mesh")
+        else:
+            try:
+                if runs_own_casdoor(row):
+                    parts.append("its own Casdoor")
+                elif has_external_signin(row):
+                    prov = effective_signin(row).provider
+                    parts.append(f"its own sign-in through {IDP_LABELS.get(prov, prov)}")
+                else:
+                    parts.append("sign-in through the mesh")
+            except Exception:                          # noqa: BLE001 — render only
+                parts.append(f"sign-in {getattr(row, 'idp', '?')!r}")
+        svcs = [str(s) for s in (row.optional_services or [])]
+        parts.append("services: " + (", ".join(svcs) if svcs else "none chosen"))
+        look = getattr(row, "look", None) or {}
+        if look:
+            parts.append("look: " + ", ".join(f"{k}={v}" for k, v in sorted(look.items())))
+        ways = getattr(row, "ways", None) or {}
+        if "tailnet" in ways:
+            parts.append("VPN: " + ("on" if ways.get("tailnet") else "off"))
+        egress = ways.get("egress") if isinstance(ways, dict) else None
+        if isinstance(egress, dict) and egress.get("mode"):
+            conf = str(egress.get("conf") or "")
+            parts.append(f"outbound: {egress.get('mode')}"
+                         + (f" ({os.path.basename(conf)})" if conf else ""))
+        if getattr(row, "tor", False):
+            parts.append("its own Tor front door")
+        out.append(f"{name} — " + "; ".join(parts))
+    return out
+
+
+def config_for_record(cfg) -> dict:
+    """The configuration dict a record of ``cfg`` stores — ``to_dict`` with the
+    tailnet auth key blanked, exactly as :func:`capture` writes it. What the
+    "current mesh" row compares against the records on disk."""
+    d = cfg.to_dict() if hasattr(cfg, "to_dict") else dict(cfg or {})
+    d["auth_key"] = ""
+    return d
+
+
+def config_changes(saved: dict, current: dict) -> list[str]:
+    """The configuration FIELD NAMES on which ``current`` differs from ``saved``
+    (both ``config_for_record`` shapes), sorted. [] means the form is exactly what
+    the record holds. ``auth_key`` never counts: no record carries one. Both sides go
+    through ``from_dict``/``to_dict`` first, so a record written before a field
+    existed (or before the per-domain services migration) is compared as it LOADS,
+    not as its raw JSON happens to be spelled."""
+    def norm(d: dict) -> dict:
+        cfg = _boot_cfg(d)
+        out = config_for_record(cfg) if cfg is not None else dict(d or {})
+        out.pop("auth_key", None)
+        return out
+    a, b = norm(saved), norm(current)
+    return sorted(k for k in set(a) | set(b) if a.get(k) != b.get(k))
+
+
+def label_owner(label: str, records: list["SavedMesh"],
+                exclude_id: str = "") -> "SavedMesh | None":
+    """The record already called ``label`` (case and surrounding space ignored),
+    other than ``exclude_id``; None when the name is free. Two records with one name
+    make the Delete confirmation (type the name) ambiguous, so a new save refuses a
+    taken name and points at Overwrite instead."""
+    want = (label or "").strip().casefold()
+    if not want:
+        return None
+    for r in records:
+        if r.id != exclude_id and (r.label or "").strip().casefold() == want:
+            return r
+    return None
+
+
+def derived_label_of(config: dict) -> str:
+    """The label :func:`capture` would derive for a configuration dict."""
+    cfg = _boot_cfg(config)
+    return _derive_label(cfg) if cfg is not None else "saved mesh"
+
+
+def unique_label(base: str, records: list["SavedMesh"]) -> str:
+    """``base``, or ``base (2)``, ``base (3)``… — the first one no record has. A derived
+    name repeats for every mesh of one shape, and Delete is confirmed by typing the
+    name, so two records must never share one."""
+    base = (base or "saved mesh").strip()
+    if label_owner(base, records) is None:
+        return base
+    n = 2
+    while label_owner(f"{base} ({n})", records) is not None:
+        n += 1
+    return f"{base} ({n})"
 
 
 #: The fields DECLARED ``str``/``dict``/``list`` above — derived from the dataclass
@@ -602,9 +750,27 @@ def capture(generator_dir: str, cfg, node, boot, *, label: str = "",
             copy_credentials: bool = False,
             project: str = vaults.DEFAULT_PROJECT,
             extra_users: list[str] | None = None,
-            form: dict | None = None) -> SavedMesh:
+            form: dict | None = None,
+            overwrite: SavedMesh | None = None,
+            kind_running: bool | None = None) -> SavedMesh:
     """Build (and RETURN, without writing) the record for the mesh described by
     ``cfg`` and served by ``node``.
+
+    NOTHING HAS TO BE RUNNING. ``cfg`` is the configuration being worked on, and a
+    record of it is useful before its first bring-up (the operator's ask,
+    2026-10-21: "Saved meshes screen does not give anywhere to save the mesh we just
+    started working on"). With nothing up the inventory is empty, the record says a
+    restore is a cold one, and ``last_seen`` says nothing was running — a restore
+    then decides from the machine as it is, like every other record.
+
+    ``overwrite`` is a record to REPLACE: the new record takes its id (so its file
+    and side dir) and its ``created`` stamp, and its label unless ``label`` is
+    given. The caller writes it with :func:`save` and then calls
+    :func:`drop_unreferenced_copies`, so credential copies the old record kept do not
+    outlive it when the new one keeps none.
+
+    ``kind_running`` is the DevOps (kind) lane's tri-state as the caller last read
+    it (None = not known); it is recorded, never probed here.
 
     BLOCKING BY CONTRACT: ``docker volume ls`` + one ``inspect`` per volume, a
     ``git rev-parse`` per source repo, two sha256s, and ``node.running_env()``
@@ -622,10 +788,15 @@ def capture(generator_dir: str, cfg, node, boot, *, label: str = "",
     """
     from .local_mesh_bootstrap import LocalMeshBootstrapConfig  # local: avoid a cycle
 
-    rec = SavedMesh(id=new_id(), created=_now(),
+    if overwrite is not None and not _safe_id(overwrite.id):
+        raise ValueError(f"cannot overwrite a record whose id is {overwrite.id!r}")
+    rec = SavedMesh(id=overwrite.id if overwrite is not None else new_id(),
+                    created=(overwrite.created if overwrite is not None
+                             and overwrite.created else _now()),
                     generator_dir=os.path.abspath(generator_dir),
                     hostname=socket.gethostname())
-    rec.label = label or _derive_label(cfg)
+    rec.label = (label or (overwrite.label if overwrite is not None else "")
+                 or _derive_label(cfg))
     rec.generator_head = _git(rec.generator_dir, "rev-parse", "HEAD")
     rec.config = (cfg.to_dict() if hasattr(cfg, "to_dict")
                   else LocalMeshBootstrapConfig().to_dict())
@@ -697,8 +868,18 @@ def capture(generator_dir: str, cfg, node, boot, *, label: str = "",
         running_env = str(node.running_env() or "") if hasattr(node, "running_env") else ""
     except Exception:
         running_env = ""
-    rec.last_seen = {"compose_running": compose_running, "kind_running": None,
+    rec.last_seen = {"compose_running": compose_running,
+                     "kind_running": (None if kind_running is None
+                                      else bool(kind_running)),
                      "running_env": running_env, "at": _now()}
+    if not compose_running and kind_running is not True:
+        rec.notes.append(
+            "Saved while the local Docker mesh was not running"
+            + (" (and neither was the DevOps lane)" if kind_running is False else "")
+            + ": this record is the configuration as it was being worked on. 'Load "
+              "into the form' and then 'Generate && start' (or 'Start DevOps lane') "
+              "brings it up; a Restore needs credential files that a first bring-up "
+              "has not minted yet, and says so instead of starting.")
     # WHAT THE RECORD IS. `config` is the page FORM's configuration, not a read-back
     # of the running containers: the only knob this module can read off a running
     # mesh is ENV (`running_env`, from the gateway's CASDOOR_ISSUER_URI — nothing
@@ -729,12 +910,33 @@ def capture(generator_dir: str, cfg, node, boot, *, label: str = "",
     return rec
 
 
+def drop_unreferenced_copies(rec: SavedMesh) -> bool:
+    """Remove the record's side dir when the record declares NO credential copies —
+    what an overwrite leaves behind when the old record kept copies and the new one
+    keeps pointers only. Returns True when a dir was removed. Guarded exactly like
+    :func:`delete` (the dir must be ``<state>/meshes/<id>``), and a record that
+    declares a copy keeps its dir: those files are what its restore uses."""
+    if rec.has_credential_copies() or not _safe_id(rec.id):
+        return False
+    d = rec.copy_dir()
+    if not (_is_record_copy_dir(d, rec.id) and _inside_meshes(d) and os.path.isdir(d)):
+        return False
+    shutil.rmtree(d, ignore_errors=True)
+    return not os.path.isdir(d)
+
+
 def _derive_label(cfg) -> str:
     """A human row label: ``test · hugmesh · 7 service(s)``. Derived, never asked
-    for — a save must be one press, and a record with no label is unreadable."""
+    for — a save must be one press, and a record with no label is unreadable.
+    Counts what the mesh RUNS (``effective_services``: the mesh-wide half plus every
+    domain's own choice), never the raw mesh-wide ``services`` key alone."""
     env = getattr(cfg, "env", "test") or "test"
     brand = getattr(cfg, "brand", "") or ""
-    svc = getattr(cfg, "services", None)
+    eff = getattr(cfg, "effective_services", None)
+    try:
+        svc = eff() if callable(eff) else getattr(cfg, "services", None)
+    except Exception:                                  # noqa: BLE001 — a label only
+        svc = getattr(cfg, "services", None)
     if svc is None:
         tail = "profile defaults"
     else:
