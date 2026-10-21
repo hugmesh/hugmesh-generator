@@ -340,7 +340,7 @@ class SavedMeshesWidget(QtWidgets.QWidget):
         recs = [r.rec for r in self._rows if r.rec is not None]
         tied = next((r for r in recs if r.id == self._tied_id), None)
         if tied is not None:
-            changes = sm.config_changes(tied.config, self._current)
+            changes = sm.config_changes(tied.config, self._current, unrecorded_ok=True)
             return ("same" if not changes else "changed"), tied, changes
         for r in recs:
             if r.same_checkout(self.generator_dir, self.hostname) and \

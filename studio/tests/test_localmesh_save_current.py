@@ -381,3 +381,14 @@ def test_the_actions_row_save_says_where_the_name_came_from(qapp, page):
     page.save_mesh_btn.click()                                # blank box: derived
     _settle(qapp, page)
     assert "derived, because the 'Save as' box" in page.log.toPlainText()
+
+
+def test_a_record_that_never_chose_does_not_claim_an_unsaved_form(qapp, page):
+    """A CLI-made record with no services / add-on choice is not the form's twin:
+    the strip must not say the form is saved as it (only the record the form was
+    loaded from gets that leniency)."""
+    cli = _record(label="cli made")
+    cli.config = lmb.LocalMeshBootstrapConfig(services=None, kind_addons=None).to_dict()
+    assert sm.save(cli)
+    w = _entered(qapp, page)
+    assert w.current_title.text() == "Current mesh — not saved yet"

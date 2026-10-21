@@ -439,7 +439,8 @@ def config_for_record(cfg) -> dict:
     return d
 
 
-def config_changes(saved: dict, current: dict) -> list[str]:
+def config_changes(saved: dict, current: dict, *,
+                   unrecorded_ok: bool = False) -> list[str]:
     """The configuration FIELD NAMES on which ``current`` differs from ``saved``
     (both ``config_for_record`` shapes), sorted. [] means the form is exactly what
     the record holds. ``auth_key`` never counts: no record carries one. Both sides go
@@ -452,10 +453,15 @@ def config_changes(saved: dict, current: dict) -> list[str]:
         out.pop("auth_key", None)
         return out
     a, b = norm(saved), norm(current)
-    # A record that left ``services``/``kind_addons`` at None never made a choice
-    # there (no picker was used, or it predates the field), and Load leaves those
-    # boxes as they are — so the form's ticks are not a change FROM the record.
-    unrecorded = {k for k in UNRECORDED_WHEN_NONE if a.get(k) is None}
+    # ``unrecorded_ok``: the form was LOADED from (or saved as) this record. A record
+    # that left ``services``/``kind_addons`` at None never made a choice there (no
+    # picker was used, or it predates the field), and Load leaves those boxes as they
+    # are — so the form's ticks are not a change FROM that record. Strict otherwise:
+    # an unrelated record that never chose must not "match" a form that did, or the
+    # strip would call an unsaved form saved (and a Start of that record runs the
+    # profile defaults, not the form's ticks).
+    unrecorded = ({k for k in UNRECORDED_WHEN_NONE if a.get(k) is None}
+                  if unrecorded_ok else set())
     return sorted(k for k in set(a) | set(b)
                   if k not in unrecorded and a.get(k) != b.get(k))
 

@@ -232,15 +232,18 @@ def test_an_unrecorded_choice_is_not_a_change_but_is_named_for_an_overwrite():
                                          services=("tor",), kind_addons=None,
                                          with_tor=True).to_dict()
     form = dict(saved, kind_addons=["metrics-server"])
-    assert sm.config_changes(saved, form) == []
+    # the record the form was loaded from: an unrecorded choice is no change
+    assert sm.config_changes(saved, form, unrecorded_ok=True) == []
+    # any other comparison stays strict: that record never chose, the form did
+    assert sm.config_changes(saved, form) == ["kind_addons"]
     assert sm.unrecorded_fields(saved) == ["kind_addons"]
-    # a RECORDED choice still counts
+    # a RECORDED choice counts either way
     rec_saved = dict(saved, kind_addons=[])
-    assert sm.config_changes(rec_saved, form) == ["kind_addons"]
+    assert sm.config_changes(rec_saved, form, unrecorded_ok=True) == ["kind_addons"]
     assert sm.unrecorded_fields(rec_saved) == []
     # and a record from disk loads the same way
     raw = json.loads(json.dumps(saved))
-    assert sm.config_changes(raw, form) == []
+    assert sm.config_changes(raw, form, unrecorded_ok=True) == []
 
 
 # ── node domain config: a saved mesh's per-domain settings reach the node images
