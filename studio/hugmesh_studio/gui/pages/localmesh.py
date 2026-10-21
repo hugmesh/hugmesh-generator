@@ -116,7 +116,7 @@ from .. import console
 from ..choice_cards import ChoiceCard, ChoiceCardGroup
 from ..flow_layout import flow_box
 from ...core import saved_meshes, vaults
-from ...core.config import IDP_CHOICES, IDP_LABELS, idp_effective_jwks
+from ...core.config import IDP_CHOICES, IDP_LABELS, github_org_problem, idp_effective_jwks
 from ...core.config import DOMAIN_IDP_OWN, DOMAIN_IDP_SUPERDOMAIN, Domain
 from ...core.domain_services import ACTION_MESH_START, gate_reason, record_reviewed
 from ...core.local_mesh_domains import (
@@ -1136,13 +1136,32 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         else:
             own = md.own_name or own
         prev = md.by_name(md.own_name) if md.own_name else None
+        # The own row's org comes from its CELL, like every added row's: the state
+        # is written only by the cell's focus-loss slot, and the Next shortcut or a
+        # programmatic next() never moves focus. The state is read only when the
+        # table has no own row to read. A non-slug stays out of the state (the
+        # refusal below names it); the cell keeps it for the operator to fix.
+        table = self.domains_table
+        if any(table.is_own_row(r) for r in range(table.table.rowCount())):
+            own_org = table.own_row_github_org()
+            if github_org_problem(own_org):
+                own_org = ""
+        else:
+            own_org = getattr(prev, "github_org", "") if prev else ""
         own_row = Domain(name=own, title="", idp=DOMAIN_IDP_SUPERDOMAIN,
-                         optional_services=list(prev.optional_services) if prev else [])
+                         optional_services=list(prev.optional_services) if prev else [],
+                         github_org=own_org)
+        for d in added:
+            if github_org_problem(getattr(d, "github_org", "")):
+                d.github_org = ""
         md.domains = [own_row] + added
         md.own_name = own
         record_reviewed(md, md.domain_services_reviewed)
         blank = prod and not own
-        problems = self._domain_row_problems()
+        # a GitHub org that is not a slug is refused here, inline, with the sentence
+        # the image flow's DomainsPage.validatePage uses — it used to be accepted on
+        # this route and reach the saved record
+        problems = table.org_problems() + self._domain_row_problems()
         lines = list(problems)
         if blank:
             lines.append(
@@ -2851,18 +2870,17 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         form's markers for the record's names ONLY while the form holds this very
         record (``Load into the form`` sets ``_loaded_record_id``) — that is the
         remedy the refusal names: load it, walk the named domains, start it again.
-        A draft's walk of some other mesh's rows never counts. The image flow's
-        half (``wiz.cfg`` — a superadmin Domains table loaded on the Sessions
-        screen) is gated exactly as ``_bootstrap_up`` gates it."""
+        A draft's walk of some other mesh's rows never counts. Neither does the
+        image flow's table (``wiz.cfg`` — a superadmin Domains table loaded on the
+        Sessions screen): the record's config is what runs, so rows of an unrelated
+        image-flow draft must not refuse it (#631 section 3). ``_bootstrap_up``,
+        which starts the FORM's config, still gates that table."""
         md = domains_from_bootstrap(cfg)
-        if md is not None:
-            extra = self._saved_walk_extras(rec, md)
-            md.domain_services_reviewed = list(md.domain_services_reviewed) + extra
-            refusal = gate_reason(md, ACTION_MESH_START, remedy=SAVED_MESH_REMEDY)
-            if refusal:
-                return refusal
-        wcfg = getattr(getattr(self, "wiz", None), "cfg", None)
-        return "" if wcfg is None else gate_reason(wcfg, ACTION_MESH_START)
+        if md is None:
+            return ""
+        extra = self._saved_walk_extras(rec, md)
+        md.domain_services_reviewed = list(md.domain_services_reviewed) + extra
+        return gate_reason(md, ACTION_MESH_START, remedy=SAVED_MESH_REMEDY)
 
     def _saved_walk_extras(self, rec, md: LocalMeshDomains | None) -> list[str]:
         """The record's domains (``md`` — ``domains_from_bootstrap`` of its config)
@@ -3939,7 +3957,11 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         self._added_user_specs = [s for s in self._added_user_specs
                                   if s.split(":", 1)[0] != uname]
         self._added_user_specs.append(spec)
-        env = {"EXTRA_ROLE_USERS": " ".join(self._added_user_specs)}
+        # E2E_PASSWORD_KEEP=1: `make stack-seed` STARTS a run and would mint a new
+        # shared password (tests/stack/e2e-password.sh) — re-passwording every
+        # persona already on this mesh just to add one account. Keep the run's.
+        env = {"EXTRA_ROLE_USERS": " ".join(self._added_user_specs),
+               "E2E_PASSWORD_KEEP": "1"}
         if password:
             env[pw_env] = password          # env-only — never argv, never logged
         stack = self.boot._stack_node()

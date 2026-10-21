@@ -245,3 +245,161 @@ def test_extract_rejects_an_empty_staging_path(tmp_path):
     for bad in ("", "   "):
         with pytest.raises(ValueError):
             keyzip.extract(str(zp), bad)
+
+
+def test_extract_refuses_a_staging_path_that_is_a_regular_file(tmp_path):
+    """A regular file at the staging path is refused up front with the module's own
+    message (it used to surface as a bare FileExistsError from makedirs), and the file
+    is left exactly as it was."""
+    notdir = tmp_path / "a-file"
+    notdir.write_text("important", encoding="utf-8")
+    zp = tmp_path / "z.zip"
+    _make_zip(zp, {"branding/logo.svg": "<svg/>"})
+    with pytest.raises(ValueError, match="not a directory"):
+        keyzip.extract(str(zp), str(notdir))
+    assert notdir.read_text(encoding="utf-8") == "important"
+
+
+@pytest.mark.parametrize("empty_target", [False, True])
+def test_extract_refuses_a_symlink_as_the_staging_path(tmp_path, empty_target):
+    """A symlink is refused whatever it points at, including an EMPTY directory (which
+    the owned-or-empty rule alone would have waved through): rmtree cannot clear a
+    link, and extraction would write through it into the link's target."""
+    target = tmp_path / "target"
+    target.mkdir()
+    if not empty_target:
+        (target / "keep.txt").write_text("operator data", encoding="utf-8")
+    link = tmp_path / "staging-link"
+    link.symlink_to(target, target_is_directory=True)
+    zp = tmp_path / "z.zip"
+    _make_zip(zp, {"branding/logo.svg": "<svg/>"})
+    with pytest.raises(ValueError, match="not a directory"):
+        keyzip.extract(str(zp), str(link))
+    assert link.is_symlink()
+    assert sorted(p.name for p in target.iterdir()) == (
+        [] if empty_target else ["keep.txt"]), "extract wrote through / cleared the link target"
+
+
+# ── 4. the sweep: no production module may hand-roll a ~/.hugmesh path ──────────────
+
+#: Modules allowed to build a ``~/.hugmesh`` path straight from the home dir. Each is a
+#: seam DEFINITION: ``core/state_paths.py`` (the Studio state dir; the pytest guard
+#: lives there), ``core/keyzip.py`` (``_hugmesh_home``, which honours the same
+#: ``$HUGMESH_STUDIO_STATE_DIR`` override), and ``core/mesh_node.py`` (a workdir that is
+#: a constructor argument, which callers override). Everything else must reach its path
+#: through one of those, or it honours no override and a test cannot be isolated from
+#: the operator's real state.
+_SEAM_OWNERS = {"core/state_paths.py", "core/keyzip.py", "core/mesh_node.py"}
+
+
+def _hugmesh_home_sites(pkg: str) -> tuple[int, list[tuple[str, int, str]]]:
+    """(modules scanned, [(relpath, line number, line)]) for every code line that
+    derives a ``.hugmesh`` path from the home dir. Comments are stripped first, so
+    prose that merely MENTIONS ``~/.hugmesh`` is not a site."""
+    scanned, sites = 0, []
+    for root, _dirs, files in os.walk(pkg):
+        for f in sorted(files):
+            if not f.endswith(".py"):
+                continue
+            scanned += 1
+            path = os.path.join(root, f)
+            rel = os.path.relpath(path, pkg).replace(os.sep, "/")
+            with open(path, encoding="utf-8") as fh:
+                for n, line in enumerate(fh.read().splitlines(), 1):
+                    code = line.split("#", 1)[0]
+                    if ".hugmesh" in code and re.search(
+                            r"expanduser\(|Path\.home\(|environ.*HOME", code):
+                        sites.append((rel, n, line.strip()))
+    return scanned, sites
+
+
+def test_no_module_hand_rolls_a_hugmesh_home_path_outside_the_seams():
+    """Derived-list sweep with floors. The runtime leak guard in conftest only fires on
+    a path a test actually exercises; this catches a new hand-rolled ``~/.hugmesh`` in
+    production code whether or not any test reaches it."""
+    pkg = os.path.join(STUDIO_ROOT, "hugmesh_studio")
+    scanned, sites = _hugmesh_home_sites(pkg)
+
+    # floors: prove the sweep really walked the package and found the known seams,
+    # rather than passing vacuously over an empty walk or a matcher that matches nothing.
+    assert scanned >= 100, f"only scanned {scanned} modules; the sweep is not reaching the package"
+    found = {rel for rel, _n, _l in sites}
+    assert _SEAM_OWNERS <= found, (
+        f"the known seam definitions were not found (matcher is blind?): "
+        f"missing {sorted(_SEAM_OWNERS - found)}")
+
+    offenders = [f"{rel}:{n}: {line}" for rel, n, line in sites if rel not in _SEAM_OWNERS]
+    assert not offenders, (
+        "hand-rolled ~/.hugmesh path outside a seam (use core.state_paths / "
+        "core.keyzip.staging_dir):\n  " + "\n  ".join(offenders))
+
+
+def test_the_sweep_matcher_flags_a_hand_rolled_home_path(tmp_path):
+    """The sweep must be able to FAIL: feed it a synthetic offender and a prose-only
+    mention."""
+    pkg = tmp_path / "pkg"
+    (pkg / "core").mkdir(parents=True)
+    (pkg / "core" / "bad.py").write_text(
+        'import os\nP = os.path.join(os.path.expanduser("~"), ".hugmesh", "x")\n',
+        encoding="utf-8")
+    (pkg / "core" / "prose.py").write_text(
+        '# lives under ~/.hugmesh via expanduser("~")\nX = 1\n', encoding="utf-8")
+    scanned, sites = _hugmesh_home_sites(str(pkg))
+    assert scanned == 2
+    assert [(rel, n) for rel, n, _l in sites] == [("core/bad.py", 2)]
+
+
+def test_extract_refuses_a_dangling_symlink_as_the_staging_path(tmp_path):
+    """A symlink whose target does not exist is refused with the module's own message
+    and is left in place (lexists is true even though isdir is false)."""
+    zp = tmp_path / "z.zip"
+    _make_zip(zp, {"keys/ca.crt": "dummy-ca"})
+    dangling = tmp_path / "dangling"
+    os.symlink(str(tmp_path / "nowhere"), str(dangling))
+    with pytest.raises(ValueError, match="not a directory"):
+        keyzip.extract(str(zp), str(dangling))
+    assert os.path.islink(str(dangling))
+
+
+# Multi-line spellings: the line-based sweep above cannot see a join split across lines
+# (``expanduser("~"),\n ".hugmesh"``) or a ``Path.home() / ".hugmesh"`` spelling, so this
+# one matches on comment-stripped whole-file source with \s.
+_HOME_PATH_SPELLINGS = (
+    re.compile(r'expanduser\(\s*["\']~["\']\s*\)\s*,\s*["\']\.hugmesh["\']'),
+    re.compile(r'expanduser\(\s*["\']~/\.hugmesh'),
+    re.compile(r'Path\.home\(\)\s*/\s*["\']\.hugmesh["\']'),
+)
+
+
+def _home_path_spelling_sites(src: str) -> int:
+    code = "\n".join(l.split("#", 1)[0] for l in src.splitlines())
+    return sum(len(rx.findall(code)) for rx in _HOME_PATH_SPELLINGS)
+
+
+def test_the_home_path_spelling_matcher_sees_every_spelling_it_claims_to():
+    """Vacuity guard for the sweep below: each spelling is detected, a comment is not."""
+    assert _home_path_spelling_sites('os.path.join(os.path.expanduser("~"), ".hugmesh", "x")') == 1
+    assert _home_path_spelling_sites('os.path.join(os.path.expanduser("~"),\n    ".hugmesh")') == 1
+    assert _home_path_spelling_sites('os.path.expanduser("~/.hugmesh/keyzip")') == 1
+    assert _home_path_spelling_sites('Path.home() / ".hugmesh" / "keyzip"') == 1
+    assert _home_path_spelling_sites('# os.path.join(os.path.expanduser("~"), ".hugmesh")') == 0
+    assert _home_path_spelling_sites('os.path.expanduser("~/.config")') == 0
+
+
+def test_no_module_hand_rolls_a_multiline_or_pathlib_hugmesh_home_path():
+    pkg = os.path.join(STUDIO_ROOT, "hugmesh_studio")
+    scanned, found, offenders = 0, {}, []
+    for root, _dirs, files in os.walk(pkg):
+        for f in sorted(files):
+            if not f.endswith(".py"):
+                continue
+            scanned += 1
+            rel = os.path.relpath(os.path.join(root, f), pkg).replace(os.sep, "/")
+            with open(os.path.join(root, f), encoding="utf-8") as fh:
+                n = _home_path_spelling_sites(fh.read())
+            if n:
+                found[rel] = n
+                if rel not in _SEAM_OWNERS:
+                    offenders.append(f"{rel} ({n})")
+    assert scanned >= 100, f"only scanned {scanned} modules: the sweep is not reaching the package"
+    assert not offenders, "hand-rolled ~/.hugmesh path outside a seam: " + ", ".join(offenders)

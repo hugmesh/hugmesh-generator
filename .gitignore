@@ -58,6 +58,8 @@ tests/stack/.seed-e2e/
 # process in that same run + by the Playwright/mock-BFF consumers. Machine- and
 # run-specific; NEVER commit (this repo, or any that produces/reads one).
 /.e2e-credentials
+# ...and its seed stamp (which file the identity store was last reconciled to).
+/.e2e-credentials.seeded
 # Per-machine TLS CA + leaf for the https front door (`make stack-certs`).
 # PRIVATE KEYS — never commit (unlike tests/stack/certs, the committed
 # mock-stack FIXTURES, this CA may be imported into the operator's browser).

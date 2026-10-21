@@ -517,6 +517,40 @@ expect_catch "a Deployment re-pins replicas the HPA owns" "[hpa-replicas]" '
   grep -q "^  replicas: 1$" "$T/manifests/admin-bff-api/deployment.yaml"
 '
 
+# ── (11b) THE CHAT3D GAMES ORIGIN (hugmesh-generator#470) ────────────────────
+# The matrix-ui Deployment states HUG_GAMES_URL, and it must be the host the be
+# gateway routes to the games portal. Two defects, one control each, plus a control
+# that the check does not bite a profile that does not install games.
+expect_catch "matrix-ui HUG_GAMES_URL env deleted while games is installed" "[games-origin]" '
+  sed -i "/name: HUG_GAMES_URL/d" "$T/manifests/social-ui/deployment.yaml"
+  ! grep -qE "^[[:space:]]*- \{ name: HUG_GAMES_URL" "$T/manifests/social-ui/deployment.yaml"
+'
+expect_catch "HUG_GAMES_URL names a different host than the gateway games route" "[games-origin]" '
+  sed -i "s#value: \"https://games.hugmesh.net\" }#value: \"https://games.elsewhere.example\" }#" \
+      "$T/manifests/social-ui/deployment.yaml"
+  grep -q "games.elsewhere.example" "$T/manifests/social-ui/deployment.yaml"
+'
+# The gateway host moved but the manifest literal did not (a repo-tree edit of one
+# side only; this checks the tree, not what a builder bakes or what ArgoCD serves).
+expect_catch "gateway games host rewritten while the matrix-ui literal is left behind" "[games-origin]" '
+  sed -i "s#games\\.hugmesh\\.net#games.acme.example#g" "$T/apps/20-gateway-be.yaml"
+  grep -q "host: games.acme.example" "$T/apps/20-gateway-be.yaml"
+'
+# NOT vacuous the other way: a profile with no games Application is not asked for
+# an origin. Stage it, drop 50-games.yaml and the env, and require a clean verdict.
+{
+  T="${WORK}/tree"; rm -rf "${T}"; cp -r "${REPO}/specs/cluster" "${T}"
+  rm -f "${T}/apps/50-games.yaml"
+  sed -i "/name: HUG_GAMES_URL/d" "${T}/manifests/social-ui/deployment.yaml"
+  out="$(HUGMESH_DOCS_DIR="${HUGMESH_DOCS_DIR}" HUGMESH_TEMPLATES_DIR="${HUGMESH_TEMPLATES_DIR}" python3 "${CHECKER}" "${T}" 2>&1 || true)"
+  if grep -qF "  PASS [games-origin]" <<<"${out}" && ! grep -qF "  FAIL [games-origin]" <<<"${out}"; then
+    neg_ok "no games Application and no env -> [games-origin] passes (not asked for an origin)"
+  else
+    neg_bad "a profile without games was asked for a games origin (or the check vanished):"
+    grep -F "[games-origin]" <<<"${out}" | sed 's/^/        /'
+  fi
+}
+
 # ── (12) THE SUPERADMIN SERVICE CATALOG CHAIN ────────────────────────────────
 # (12a) THE SHIPPED DEFECT, re-injected: the console's Service deleted. Before this
 #       PR the ROUTE_SERVICE_ALLOW set exempted exactly this Service ("rendered by

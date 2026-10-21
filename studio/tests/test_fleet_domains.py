@@ -92,7 +92,11 @@ def test_preflight_refuses_an_unwalked_domain_naming_it():
     problems = FleetDriver(GENERATOR_DIR, HOST).preflight(_cfg(), "native")
     refusal = [p for p in problems if p.startswith(f"Cannot {ACTION_FLEET_BUILD}")]
     assert refusal and "acme.example" in refusal[0] and FLEET_REMEDY in refusal[0]
-    assert "mesh.example" not in refusal[0].split("—")[1].split(".")[0]
+    # EXACTLY the unwalked domain is named between the dash and the remedy — the
+    # walked own domain is not. (The earlier form of this line sliced at the first
+    # "." and so compared " acme" with "mesh.example": it could never fail.)
+    named = refusal[0].split("— ", 1)[1].split(". ", 1)[0]
+    assert named == "acme.example", refusal[0]
 
 
 def test_a_fully_walked_fleet_and_a_legacy_record_pass():
@@ -119,6 +123,33 @@ def test_mode_is_a_class_constant_not_a_field():
     assert FleetConfig.mode == "mesh"
     assert "mode" not in FleetConfig().to_dict()
     assert FleetConfig.from_dict({"mode": "standalone", "jobs": 3}).jobs == 3
+
+
+def test_validate_refuses_unbalanced_quotes_and_a_jobs_count_out_of_range():
+    """``extra_flags`` is shlex-split into argv, so an unbalanced quote used to raise a
+    bare ValueError from ``to_cli_args`` — which the TUI's review did not catch (the
+    post-merge review of #645: the whole text-mode fleet flow died on an apostrophe).
+    Now ``validate`` refuses it as an IdentityValidationError, with the remedy, and
+    ``-j`` is held to the GUI spin box's range on both faces."""
+    from hugmesh_studio.core.config import IdentityValidationError
+    from hugmesh_studio.core.fleet import JOBS_RANGE
+    for flags in ("--note it's", '--note "abc'):
+        with pytest.raises(IdentityValidationError, match="balance the quotes"):
+            FleetConfig(extra_flags=flags).validate()
+        with pytest.raises(IdentityValidationError):
+            FleetConfig(extra_flags=flags).to_cli_args()
+    assert FleetConfig(extra_flags='--note "it is"').to_cli_args() == ["--note", "it is"]
+    assert JOBS_RANGE == (1, 128)
+    for jobs in (0, -5, 129):
+        with pytest.raises(IdentityValidationError, match="jobs must be"):
+            FleetConfig(jobs=jobs).validate()
+    FleetConfig(jobs=1).validate()
+    FleetConfig(jobs=128).validate()
+    # a hand-edited saved record with `"jobs": true` must not put `-j True` on the command
+    # (bool is an int in Python, and 1 is inside the range)
+    for bad in (True, False, 8.0, "8", None):
+        with pytest.raises(IdentityValidationError, match="jobs must be"):
+            FleetConfig(jobs=bad).validate()
 
 
 # ── the steps' shared Qt-free logic ──────────────────────────────────────────────────
@@ -193,6 +224,222 @@ def test_the_tui_fleet_row_one_cannot_be_removed():
     j.feed("d 1")
     assert "cannot be removed" in j.status
     assert j.screen().state(j).names() == [FLEET_DEFAULT_DOMAIN]
+
+
+def test_leaving_the_domains_step_keeps_the_own_rows_recorded_services():
+    """``commit_fleet_domains`` rebuilds the rows from the table's ADDED rows and the
+    own row — which must keep the services recorded for it on the services step (a
+    Back to Domains and a Next again must not silently empty them; the post-merge
+    review of #645 measured that this had no pin)."""
+    from hugmesh_studio.core.fleet import commit_fleet_domains
+    st = FleetDomains()
+    seed_fleet_domains(st, "mesh.example")
+    st.by_name("mesh.example").optional_services = ["akkoma", "games"]
+    assert commit_fleet_domains(st, [Domain(name="acme.example", title="Acme")]) == []
+    assert st.names() == ["mesh.example", "acme.example"]
+    assert st.by_name("mesh.example").optional_services == ["akkoma", "games"]
+    assert commit_fleet_domains(st, []) == []
+    assert st.by_name("mesh.example").optional_services == ["akkoma", "games"]
+
+
+def test_the_tui_fleet_survives_an_apostrophe_in_extra_flags():
+    """The post-merge review of #645 (robustness M1): ``set extra_flags --note it's``
+    then Enter to Review raised ValueError('No closing quotation') out of shlex and
+    the plain face has no handler around feed(), so the whole TUI died with a
+    traceback. Now the value is refused at ``set`` time with the reason, the old value
+    is kept, and the walk goes on to Review."""
+    text = _tui(["set extra_flags --note it's", "", "", "", "q"])
+    assert "refused: extra_flags cannot be split into arguments" in text
+    assert "balance the quotes" in text
+    assert "fleet-review>" in text            # the walk went on: no traceback
+    j = journey.Journey(GENERATOR_DIR)
+    j.goto("fleet")
+    j.feed('set extra_flags --note "abc')
+    assert j.status.startswith("refused:") and j.screen().options(j).extra_flags == ""
+    j.feed("set jobs -5")
+    assert "jobs must be" in j.status and j.screen().options(j).jobs == 8
+    j.feed("set jobs 0")
+    assert "jobs must be" in j.status and j.screen().options(j).jobs == 8
+    j.feed("set jobs 128")
+    assert j.screen().options(j).jobs == 128
+
+
+def test_the_tui_domains_stage_refuses_junk_a_duplicate_and_the_own_domain_again():
+    """The TUI's ``a NAME`` refuses at entry what the GUI table refuses on Next — with
+    the same words as the shared ``added_row_problems`` (the post-merge review's M4:
+    these refusals existed and nothing pinned them)."""
+    j = journey.Journey(GENERATOR_DIR)
+    j.goto("fleet")
+    j.feed("set cluster_domain mesh.example")
+    j.feed("")                                 # options -> domains
+    st = j.screen().state(j)
+    j.feed("a Not A Domain")
+    assert j.status.startswith("not a domain name: 'Not A Domain'")
+    assert st.names() == ["mesh.example"]
+    j.feed("a acme.example")
+    assert st.names() == ["mesh.example", "acme.example"]
+    j.feed("a acme.example")
+    assert j.status == "already listed: acme.example"
+    j.feed("a mesh.example")
+    assert j.status.startswith("mesh.example is this fleet's own domain (row 1)")
+    assert st.names() == ["mesh.example", "acme.example"]
+
+
+def test_the_tui_enter_refuses_a_row_that_a_rename_made_the_own_domain_again():
+    """The one way a TUI row can be refused at Enter (entry already refuses junk and
+    duplicates): rename the fleet's own domain, on the options stage, to a name that is
+    an added row. Seeding renames row 1 and Enter then refuses the twin — the stage
+    stays ``domains`` and the status says why — until the row is deleted."""
+    j = journey.Journey(GENERATOR_DIR)
+    j.goto("fleet")
+    j.feed("set cluster_domain mesh.example")
+    j.feed("")
+    j.feed("a acme.example")
+    j.feed("b")                                # back to the options
+    j.feed("set cluster_domain acme.example")
+    j.feed("")                                 # -> domains: row 1 renamed
+    st = j.screen().state(j)
+    assert st.names() == ["acme.example", "acme.example"]
+    j.feed("")                                 # Enter: refused
+    assert j.screen().stage == "domains"
+    assert "acme.example is this mesh's own domain (row 0)" in j.status
+    assert "Fix or remove these rows to continue." in j.status
+    j.feed("d 2")
+    assert st.names() == ["acme.example"]
+    j.feed("")
+    assert j.screen().stage == "services"
+
+
+def test_the_tui_delete_prunes_the_deleted_rows_reviewed_marker():
+    """A row walked on the services step and then deleted must not leave its marker
+    behind (a stranded marker is what lets a re-added domain pass the gate unwalked)."""
+    j = journey.Journey(GENERATOR_DIR)
+    j.goto("fleet")
+    j.feed("set cluster_domain mesh.example")
+    j.feed("")
+    j.feed("a acme.example")
+    j.feed("")                                 # -> services: the own domain, marked
+    j.feed("n")                                # acme's page: marked
+    st = j.screen().state(j)
+    assert st.domain_services_reviewed == ["mesh.example", "acme.example"]
+    j.feed("b")                                # back to Domains
+    assert j.screen().stage == "domains"
+    j.feed("d 2")
+    assert j.status == "removed acme.example"
+    assert st.names() == ["mesh.example"]
+    assert st.domain_services_reviewed == ["mesh.example"]
+
+
+# ── a damaged record is refused at LOAD, with the field named (post-merge review of
+#    #645: hand-edited JSON used to pass from_dict and die later as a TypeError from
+#    dataclasses.asdict or an AttributeError in the gate, inside the RESTART slot) ────
+@pytest.mark.parametrize("damage, field", [
+    ({"domains": "junk"}, "domains must be a list"),
+    ({"domains": {"name": "mesh.example"}}, "domains must be a list"),
+    ({"domains": ["junk"]}, "domains[0] must be a domain row"),
+    ({"domains": [5]}, "domains[0] must be a domain row"),
+    ({"domains": [{"name": "mesh.example"}, 7]}, "domains[1] must be a domain row"),
+    ({"domains": [{"name": 7}]}, "domains[0].name must be text"),
+    ({"domains": [{"name": "mesh.example"}], "domain_services_reviewed": "abc"},
+     "domain_services_reviewed must be a list"),
+    # round-7 (the robustness skeptic's five escaping shapes, plus their kin): the
+    # scalars — these used to pass from_dict and die in a Qt setter inside apply()
+    ({"jobs": "8"}, "jobs must be a whole number, not str"),
+    ({"jobs": True}, "jobs must be a whole number, not bool"),
+    ({"jobs": None}, "jobs must be a whole number, not NoneType"),
+    ({"cluster_domain": 5}, "cluster_domain must be text, not int"),
+    ({"x86_roles": ["pki"]}, "x86_roles must be text, not list"),
+    ({"extra_flags": ["--a"]}, "extra_flags must be text, not list"),
+    ({"skip_x86": "yes"}, "skip_x86 must be true or false, not str"),
+    ({"with_tor": 1}, "with_tor must be true or false, not int"),
+    # the row builder's own ValueError (an idp typo) now arrives as the same refusal
+    ({"domains": [{"name": "mesh.example", "idp": "junk"}]},
+     "domains[0] is not a valid domain row (domain 'mesh.example': idp must be one of"),
+    # "" is a hand edit, not what an old serialiser wrote: refused, not silently empty
+    ({"domains": ""}, "domains must be a list, not str"),
+    ({"domains": 0}, "domains must be a list, not int"),
+    ({"domain_services_reviewed": ""}, "domain_services_reviewed must be a list, not str"),
+    # round-8 (both round-2 skeptics): an int OUTSIDE JOBS_RANGE passed the type check;
+    # 2**31 and up then raised OverflowError from QSpinBox.setValue (not a ValueError
+    # or TypeError: the slot's guard let it through and PyQt6 aborted the Studio), and
+    # 0 / -1 / 999 were clamped by the spin box without a word while Preflight said OK
+    ({"jobs": 2 ** 40}, "jobs must be a whole number from 1 to 128, not 1099511627776"),
+    ({"jobs": 2 ** 31}, "jobs must be a whole number from 1 to 128, not 2147483648"),
+    ({"jobs": -(2 ** 40)}, "jobs must be a whole number from 1 to 128, not -1099511627776"),
+    ({"jobs": 0}, "jobs must be a whole number from 1 to 128, not 0"),
+    ({"jobs": -1}, "jobs must be a whole number from 1 to 128, not -1"),
+    ({"jobs": 999}, "jobs must be a whole number from 1 to 128, not 999"),
+    # a row's list fields: an int passed the row builder and the name check, and ONE
+    # Back click from Review to the Domain services step raised TypeError ("'int'
+    # object is not iterable") inside the Back button's slot; a string was iterated
+    # as letters; a title that is not text reaches a QTableWidgetItem
+    ({"domains": [{"name": "mesh.example", "optional_services": 5}]},
+     "domains[0].optional_services must be a list of text, not int"),
+    ({"domains": [{"name": "mesh.example", "optional_services": "akkoma"}]},
+     "domains[0].optional_services must be a list of text, not str"),
+    ({"domains": [{"name": "mesh.example", "optional_services": [1, 2]}]},
+     "domains[0].optional_services must be a list of text, not int"),
+    ({"domains": [{"name": "mesh.example", "images": {"a": 1}}]},
+     "domains[0].images must be a list of text, not dict"),
+    ({"domains": [{"name": "mesh.example", "images": ["pki.x86", None]}]},
+     "domains[0].images must be a list of text, not NoneType"),
+    ({"domains": [{"name": "mesh.example", "title": 5}]},
+     "domains[0].title must be text, not int"),
+    # a marker that is not a domain name: str() of it matched nothing, silently
+    ({"domains": [{"name": "mesh.example"}], "domain_services_reviewed": [{"a": 1}]},
+     "domain_services_reviewed[0] must be text, not dict"),
+    ({"domain_services_reviewed": ["mesh.example", 7]},
+     "domain_services_reviewed[1] must be text, not int"),
+])
+def test_a_damaged_fleet_record_is_refused_at_load_naming_the_field(damage, field):
+    from hugmesh_studio.core.config import IdentityValidationError
+    record = dict(_cfg().to_dict()); record.update(damage)
+    with pytest.raises(IdentityValidationError) as ei:
+        FleetConfig.from_dict(record)
+    assert field in str(ei.value), str(ei.value)
+    # and the non-object record the loaders could meet (a top-level JSON array)
+    with pytest.raises(IdentityValidationError, match="must be a JSON object"):
+        FleetConfig.from_dict(["not", "a", "record"])
+
+
+def test_an_undamaged_record_with_absent_or_null_rows_still_loads():
+    """The lenient cases stay lenient: a pre-#645 record has no domains keys at all,
+    and ``null`` for either is what an old serialiser wrote — both are an empty list,
+    not a refusal (the legacy-record RESTART path, pinned above as passing the gate)."""
+    assert FleetConfig.from_dict({"jobs": 3}).domains == []
+    back = FleetConfig.from_dict({"domains": None, "domain_services_reviewed": None})
+    assert back.domains == [] and back.domain_services_reviewed == []
+    # a well-formed record round-trips with every scalar type as it was written
+    cfg = _cfg(); cfg.jobs = 3; cfg.with_tor = True; cfg.extra_flags = "--note x"
+    assert FleetConfig.from_dict(cfg.to_dict()) == cfg
+    # an unknown key (a future field, or a typo) is still ignored, not refused
+    assert FleetConfig.from_dict({"jobs": 3, "no_such_field": ["x"]}).jobs == 3
+    # both ends of JOBS_RANGE load; a well-formed row with every list field loads whole
+    from hugmesh_studio.core.fleet import JOBS_RANGE
+    assert FleetConfig.from_dict({"jobs": JOBS_RANGE[0]}).jobs == JOBS_RANGE[0]
+    assert FleetConfig.from_dict({"jobs": JOBS_RANGE[1]}).jobs == JOBS_RANGE[1]
+    row = {"name": "mesh.example", "title": "Mesh", "images": ["pki.x86"],
+           "optional_services": ["akkoma", "tuwunel"]}
+    back = FleetConfig.from_dict({"domains": [row], "domain_services_reviewed": ["mesh.example"]})
+    assert back.domains[0].optional_services == ["akkoma", "tuwunel"]
+    assert back.domains[0].images == ["pki.x86"]
+    assert back.domain_services_reviewed == ["mesh.example"]
+
+
+def test_fleet_domain_fields_hands_out_copies_of_the_rows():
+    """The docstring's promise: the recorded config keeps COPIES, so editing the step
+    state after a Back (the live rows) cannot rewrite a record already made."""
+    from hugmesh_studio.core.fleet import fleet_domain_fields
+    st = FleetDomains()
+    seed_fleet_domains(st, "mesh.example")
+    st.domains.append(Domain(name="acme.example", optional_services=["akkoma"]))
+    fields_ = fleet_domain_fields(st)
+    assert fields_["domains"] == st.domains
+    assert all(a is not b for a, b in zip(fields_["domains"], st.domains))
+    fields_["domains"][1].optional_services.append("games")
+    fields_["domains"][0].name = "renamed.example"
+    assert st.by_name("acme.example").optional_services == ["akkoma"]
+    assert st.names() == ["mesh.example", "acme.example"]
 
 
 # ── the GUI face ─────────────────────────────────────────────────────────────────────
@@ -300,3 +547,223 @@ def test_the_services_step_says_what_the_fleet_does_with_the_rows(page):
     page.next_btn.click()
     assert page.domain_services.lane_note.text() == FLEET_LANE_NOTE
     assert not page.domain_services.lane_note.isHidden()
+
+
+def test_back_from_the_domains_step_records_a_typed_row(page):
+    """Back records too (never refuses): a row typed on Domains must reach the state
+    whichever way the operator leaves, and be in the table when they come back."""
+    _to_domains(page)
+    page.domains_table._add("acme.example", "Acme")
+    page.back_btn.click()
+    assert page.stack.currentIndex() == fleet_mod.STEP_SHARED
+    assert page.fleet_domains.names() == ["mesh.example", "acme.example"]
+    page.next_btn.click()
+    assert page.stack.currentIndex() == fleet_mod.STEP_DOMAINS
+    assert page.domains_table.table.rowCount() == 2
+
+
+def test_removing_a_walked_domain_on_the_gui_prunes_its_marker(page):
+    """Leaving the Domains step rebuilds the reviewed markers from the rows that still
+    exist (``commit_fleet_domains``): a domain walked, then removed, leaves nothing
+    behind. Measured through Back, which records without loading the services step
+    (whose own load would hide the prune this pins)."""
+    _to_domains(page)
+    page.domains_table._add("acme.example", "Acme")
+    page.next_btn.click()                                   # -> Domain services (own)
+    page.domain_services._step(+1)                          # acme's page: walked
+    page.back_btn.click()                                   # -> Domains, walk recorded
+    assert set(page.fleet_domains.domain_services_reviewed) == {"mesh.example",
+                                                                "acme.example"}
+    page.domains_table.table.selectRow(1)
+    page.domains_table._remove()
+    assert page.domains_table.table.rowCount() == 1
+    page.back_btn.click()                                   # records the removal
+    assert page.fleet_domains.names() == ["mesh.example"]
+    assert page.fleet_domains.domain_services_reviewed == ["mesh.example"]
+    assert page.collect().domain_services_reviewed == ["mesh.example"]
+
+
+def test_the_gui_shows_an_unbalanced_quote_inline_and_refuses_to_build(page):
+    """The GUI twin of the TUI apostrophe case: the Review preview says INVALID with
+    the remedy, inline, and "Build fleet now" refuses without reaching the driver."""
+    page.extra_flags.setText("--note it's")
+    _to_domains(page)
+    page.next_btn.click()                                   # -> Domain services
+    page.next_btn.click()                                   # -> Review
+    assert page.stack.currentIndex() == fleet_mod.STEP_REVIEW
+    assert page.cmd.toPlainText().startswith("INVALID: extra_flags cannot be split")
+    assert "balance the quotes" in page.cmd.toPlainText()
+    page.next_btn.click()                                   # "Build fleet now"
+    assert page.stack.currentIndex() == fleet_mod.STEP_REVIEW
+    assert "Preflight FAILED" in page.problems.toPlainText()
+    assert "balance the quotes" in page.problems.toPlainText()
+    assert page.runs == [] and page.worker is None
+
+
+def test_the_gui_jobs_spin_box_is_bounded_by_the_same_range_validate_enforces(page):
+    """One range on both faces: the spin box's bounds ARE ``JOBS_RANGE`` (what
+    ``FleetConfig.validate`` refuses outside of, for the TUI's ``set jobs N``), not a
+    second literal that could drift from it (the round-2 review's L8: decoupling the
+    spin box to (0, 256) stayed green)."""
+    from hugmesh_studio.core.fleet import JOBS_RANGE
+    assert (page.jobs.minimum(), page.jobs.maximum()) == JOBS_RANGE
+    page.jobs.setValue(JOBS_RANGE[1] + 100)
+    assert page.jobs.value() == JOBS_RANGE[1]
+    page.jobs.setValue(0)
+    assert page.jobs.value() == JOBS_RANGE[0]
+    page.collect().validate()                               # what it clamps to is valid
+
+
+class _DamagedSession:
+    """What the Sessions page hands RESTART / REDO: a record whose saved config was
+    hand-edited into a shape FleetConfig.from_dict refuses."""
+    def __init__(self, config):
+        self.id = "fleet-damaged-1"
+        self.backend = "native"
+        self.config = config
+
+
+@pytest.mark.parametrize("pin", [True, False])
+def test_restarting_a_damaged_record_shows_the_refusal_inline_and_pins_nothing(page, pin):
+    """RESTART (pin) and REDO of a damaged record: no exception leaves the slot (PyQt6
+    would abort the Studio), the Review step's preflight pane names the record and the
+    field, nothing is applied and no record id is pinned — ‘Build fleet now’ would
+    build what the window already had, never the damaged record."""
+    page.cluster_domain.setText("keep.example")
+    page.load_from_session(_DamagedSession({"cluster_domain": "evil.example",
+                                            "domains": ["junk"]}), pin=pin)
+    assert page.stack.currentIndex() == fleet_mod.STEP_REVIEW
+    text = page.problems.toPlainText()
+    assert "Cannot restart fleet record fleet-damaged-1" in text
+    assert "domains[0] must be a domain row" in text
+    # the pane says what the enabled ‘Build fleet now’ under it WOULD build (a refusal
+    # above an enabled build button must say which configuration that button holds)
+    assert "Nothing from that record was applied" in text
+    assert "keep the configuration this window already showed" in text
+    # the damaged record's id is NOT pinned: Review minted its own fresh id for the
+    # window's own config (the normal lazy mint), so a Build there never reuses the
+    # damaged record's workdir
+    assert page.pending_session_id and page.pending_session_id != "fleet-damaged-1"
+    assert page.cluster_domain.text() == "keep.example"
+    assert page.runs == [] and page.worker is None
+
+
+@pytest.mark.parametrize("damage, field", [
+    # the robustness skeptic's measurement (round 6): each of these passed from_dict
+    # and raised out of load_from_session — ValueError from the row builder, TypeError
+    # from QSpinBox.setValue / QLineEdit.setText — i.e. the PyQt6 abort the earlier
+    # round said it had closed
+    ({"domains": [{"name": "a.example", "idp": "junk"}]}, "domains[0] is not a valid domain row"),
+    ({"jobs": "8"}, "jobs must be a whole number, not str"),
+    ({"cluster_domain": 5}, "cluster_domain must be text, not int"),
+    ({"x86_roles": ["pki"]}, "x86_roles must be text, not list"),
+    ({"extra_flags": ["--a"]}, "extra_flags must be text, not list"),
+    # round-8: the two round-2 skeptics' escaping shapes — an int past the C int range
+    # (OverflowError out of QSpinBox.setValue, which the guard did not catch: the real
+    # abort, measured rc=134 in a clicked slot), the clamped-without-a-word ones, and
+    # a row list field that is an int (TypeError on the Back click from Review)
+    ({"jobs": 2 ** 40}, "jobs must be a whole number from 1 to 128, not 1099511627776"),
+    ({"jobs": 2 ** 31}, "jobs must be a whole number from 1 to 128, not 2147483648"),
+    ({"jobs": 0}, "jobs must be a whole number from 1 to 128, not 0"),
+    ({"jobs": 999}, "jobs must be a whole number from 1 to 128, not 999"),
+    ({"domains": [{"name": "a.example", "optional_services": 5}]},
+     "domains[0].optional_services must be a list of text, not int"),
+    ({"domains": [{"name": "a.example", "images": "pki.x86"}]},
+     "domains[0].images must be a list of text, not str"),
+])
+def test_restarting_a_record_with_a_wrong_typed_scalar_or_idp_typo_is_refused_inline(
+        page, damage, field):
+    """No exception leaves the RESTART slot for the shapes the first guard missed, and
+    the refusal NAMES the field (from_dict's wording, not a Qt setter's)."""
+    page.cluster_domain.setText("keep.example"); page.jobs.setValue(5)
+    record = dict(_cfg().to_dict()); record.update(damage)
+    page.load_from_session(_DamagedSession(record), pin=True)
+    assert page.stack.currentIndex() == fleet_mod.STEP_REVIEW
+    text = page.problems.toPlainText()
+    assert "Cannot restart fleet record fleet-damaged-1" in text
+    assert field in text, text
+    assert page.pending_session_id != "fleet-damaged-1"
+    assert page.cluster_domain.text() == "keep.example" and page.jobs.value() == 5
+    assert page.runs == [] and page.worker is None
+
+
+def test_a_refusal_from_dict_does_not_name_yet_still_stays_inside_the_slot(page, monkeypatch):
+    """The last line: a ValueError or TypeError that no from_dict check names (a future
+    field, a Qt setter in apply refusing a value) is shown in the same pane, nothing is
+    pinned, and the slot returns normally — the Studio never aborts from here."""
+    def boom(_d):
+        raise TypeError("setValue(self, val: int): argument 1 has unexpected type 'str'")
+    monkeypatch.setattr(fleet_mod.FleetConfig, "from_dict", staticmethod(boom))
+    page.load_from_session(_DamagedSession({"jobs": "8"}), pin=True)
+    text = page.problems.toPlainText()
+    assert "Cannot restart fleet record fleet-damaged-1" in text
+    assert "unexpected type 'str'" in text
+    assert page.pending_session_id != "fleet-damaged-1"
+    assert page.runs == [] and page.worker is None
+
+
+@pytest.mark.parametrize("backend", [5, ["docker"], {"b": "docker"}, 1.5])
+def test_restarting_a_record_whose_backend_is_not_text_is_refused_inline(page, backend):
+    """The session record's OWN ``backend`` field (the same JSON file as the config;
+    ``BuildSession.from_dict`` leaves ``str | None`` fields uncoerced) used to reach
+    ``QComboBox.setCurrentText`` OUTSIDE the guarded region: a TypeError out of the
+    RESTART / REDO slot. It is checked first, before anything is applied, named, and
+    the config next to it is not applied either."""
+    page.cluster_domain.setText("keep.example"); page.jobs.setValue(5)
+    page.backend.setCurrentText("native")
+    s = _DamagedSession(dict(_cfg().to_dict(), cluster_domain="evil.example"))
+    s.backend = backend
+    page.load_from_session(s, pin=True)
+    assert page.stack.currentIndex() == fleet_mod.STEP_REVIEW
+    text = page.problems.toPlainText()
+    assert "Cannot restart fleet record fleet-damaged-1" in text
+    assert f"backend must be text, not {type(backend).__name__}" in text, text
+    assert page.pending_session_id != "fleet-damaged-1"
+    assert page.cluster_domain.text() == "keep.example" and page.jobs.value() == 5
+    assert page.backend.currentText() == "native"
+    assert page.runs == [] and page.worker is None
+
+
+@pytest.mark.parametrize("backend", [None, ""])
+def test_a_record_with_no_backend_still_loads_as_auto(page, backend):
+    """The lenient case stays lenient: an absent backend (an old record) is ‘auto’,
+    and the record IS applied and pinned."""
+    page.backend.setCurrentText("native")
+    s = _DamagedSession(dict(_cfg().to_dict(), cluster_domain="rec.example"))
+    s.backend = backend
+    page.load_from_session(s, pin=True)
+    assert page.backend.currentText() == "auto"
+    assert page.cluster_domain.text() == "rec.example"
+    assert page.pending_session_id == "fleet-damaged-1"
+
+
+def test_an_overflow_from_a_setter_inside_apply_stays_inside_the_slot(page, monkeypatch):
+    """The last line for the shape that measured as the real abort: a number past the
+    C int ``QSpinBox.setValue`` takes raises OverflowError, an ArithmeticError that is
+    neither ValueError nor TypeError. With from_dict's range check bypassed (a future
+    loader that forgets it), the REAL ``apply`` on the REAL spin box raises it, and the
+    slot still shows it inline and pins nothing."""
+    big = _cfg(); big.jobs = 2 ** 40
+    monkeypatch.setattr(fleet_mod.FleetConfig, "from_dict", staticmethod(lambda _d: big))
+    page.jobs.setValue(5)
+    page.load_from_session(_DamagedSession({"jobs": 2 ** 40}), pin=True)
+    text = page.problems.toPlainText()
+    assert "Cannot restart fleet record fleet-damaged-1" in text
+    assert "overflowed" in text, text
+    assert page.pending_session_id != "fleet-damaged-1"
+    assert page.runs == [] and page.worker is None
+
+
+def test_a_setter_refusing_a_value_inside_apply_stays_inside_the_slot(page, monkeypatch):
+    """``apply`` is INSIDE the guarded region: a record from_dict accepts but a widget
+    refuses (the exact way the five shapes used to abort the Studio) is shown inline
+    and not pinned, whatever check is missing upstream."""
+    def refusing_apply(_cfg):
+        raise TypeError("setText(self, a0: str|None): argument 1 has unexpected type 'int'")
+    monkeypatch.setattr(page, "apply", refusing_apply)
+    page.load_from_session(_DamagedSession(_cfg().to_dict()), pin=True)
+    text = page.problems.toPlainText()
+    assert "Cannot restart fleet record fleet-damaged-1" in text
+    assert "unexpected type 'int'" in text
+    assert page.pending_session_id != "fleet-damaged-1"
+    assert page.runs == [] and page.worker is None

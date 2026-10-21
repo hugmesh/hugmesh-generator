@@ -26,6 +26,8 @@ source "${SCRIPT_DIR}/scripts/_download-lib.sh"
 # the build host's libcrypt provably supports it, SHA-512 crypt ($6$) fallback.
 # shellcheck source=scripts/_passhash-lib.sh
 source "${SCRIPT_DIR}/scripts/_passhash-lib.sh"
+# shellcheck source=scripts/_domain-idp-lib.sh
+source "${SCRIPT_DIR}/scripts/_domain-idp-lib.sh"
 # THE role vocabulary — canonical tokens, the permanent input aliases, the hostname
 # defaults and the keys profiles, declared ONCE for every builder and for the Studio.
 # See scripts/_roles-lib.sh for why the long spelling won and why `+`/`_` are gone.
@@ -664,6 +666,10 @@ build-x86-host-stage4.sh — hardened Gentoo amd64 k8s/GPU worker image.
                             (default user). Baked to /etc/hugmesh/identity-role.
   --domains LIST            CLIENT only — domain tie (space/comma separated; first =
                             primary). Baked to /etc/hugmesh/domains + filename tag.
+  --domain-idp D=own|superdomain  (repeatable) Casdoor for domain D: own = a dedicated
+                            instance, superdomain = the mesh's (default; bakes nothing).
+                            Only `own` is baked: /etc/hugmesh/domain-idp. D must be in
+                            --domains when given. See docs/DOMAIN-IDP.md.
   --desktop WEIGHT          CLIENT only — thin (LXDE/openbox, default) | full (XFCE+).
   -H, --hostname NAME       Hostname. Default: derived from --role.
   -T, --timezone ZONE       Timezone. Default: ${TIMEZONE}
@@ -1079,6 +1085,7 @@ while [[ $# -gt 0 ]]; do
         --release-tag) RELEASE_TAG="$2"; shift 2 ;;
         --cluster-domain|--domain) CLUSTER_DOMAIN="$2"; shift 2 ;;
         --superdomain) SUPERDOMAIN="$2"; shift 2 ;;
+        --domain-idp) domain_idp_add "${2:-}"; shift 2 ;;   # repeatable <domain>=own|superdomain (#509)
         --release-state)      RELEASE_STATE="$2";      shift 2 ;;
         --brand) BRAND="$2"; shift 2 ;;
         --brand-title) BRAND_TITLE="$2"; shift 2 ;;
@@ -1275,6 +1282,13 @@ done
 # `case " ${OPTIONAL_SERVICES} "` folds) sees clean slugs. Mirrors DOMAINS.
 OPTIONAL_SERVICES="${OPTIONAL_SERVICES//,/ }"
 
+# A list of ONLY explicit-deselect tokens ("-anubis") is a veto, not a selection: it
+# keeps the built-in default instead of replacing it (hugmesh-generator#384). Runs
+# AFTER the comma normalisation (so "-anubis,-foo" is seen as tokens) and BEFORE the
+# `all` expansion below (a list holding `all` is not negative-only, so that arm is
+# untouched). The rule lives in scripts/_optional-services-lib.sh, once, for both builders.
+_opt_negative_only_keeps_defaults
+
 # FULL-SET sentinel: OPTIONAL_SERVICES=all (or --all-services, which sets the same
 # token) expands to EVERY user-level slug. Done HERE — after arg parse, before the
 # games/edge-ai/tor/character-studio opt-in folds and BEFORE EXCLUDE_SERVICES
@@ -1316,10 +1330,10 @@ fi
 EDGE_AI_WANT=false
 ${EDGE_AI} && [ "${WANT_EDGE_AI}" != "false" ] && EDGE_AI_WANT=true
 [ "${WANT_EDGE_AI}" = "true" ] && EDGE_AI_WANT=true
-if ${EDGE_AI_WANT} && ${ROLE_CLIENT}; then
-    warn "--with-edge-ai on a CLIENT/standalone role has no effect (no cluster tree); the edge-ai service is a k8s NODE service."
-    EDGE_AI_WANT=false
-fi
+# NOTE (hugmesh-generator#615): the CLIENT refusal for this service is NOT here. It
+# used to sit at this line and read ROLE_CLIENT's early `false` default for every
+# role, so it never fired. It lives after the STANDALONE fold, with the tor drop
+# ("Cluster-only optional services: CLIENT roles never carry them").
 if ${EDGE_AI_WANT}; then
     case " ${OPTIONAL_SERVICES} " in
         *" edge-ai "*) ;;
@@ -1348,10 +1362,10 @@ fi
 # CLIENT/standalone desktop is not a cluster member, so it is a no-op there (the
 # gate prunes the slug anyway when the cluster tree is absent).
 WANT_CHARACTER_STUDIO="${WANT_CHARACTER_STUDIO:-}"
-if [ "${WANT_CHARACTER_STUDIO}" = "true" ] && ${ROLE_CLIENT}; then
-    warn "--with-character-studio on a CLIENT/standalone role has no effect (no cluster tree); Character Studio is a frontend cluster service."
-    WANT_CHARACTER_STUDIO=false
-fi
+# NOTE (hugmesh-generator#615): the CLIENT refusal for this service is NOT here. It
+# used to sit at this line and read ROLE_CLIENT's early `false` default for every
+# role, so it never fired. It lives after the STANDALONE fold, with the tor drop
+# ("Cluster-only optional services: CLIENT roles never carry them").
 if [ "${WANT_CHARACTER_STUDIO}" = "true" ]; then
     case " ${OPTIONAL_SERVICES} " in
         *" character-studio "*) ;;
@@ -1364,10 +1378,10 @@ fi
 # CLIENT/standalone desktop is not a cluster member, so it is a no-op there (the
 # gate prunes the slug anyway when the cluster tree is absent).
 WANT_CHARACTER_FORGE="${WANT_CHARACTER_FORGE:-}"
-if [ "${WANT_CHARACTER_FORGE}" = "true" ] && ${ROLE_CLIENT}; then
-    warn "--with-character-forge on a CLIENT/standalone role has no effect (no cluster tree); Character Forge is a cluster service."
-    WANT_CHARACTER_FORGE=false
-fi
+# NOTE (hugmesh-generator#615): the CLIENT refusal for this service is NOT here. It
+# used to sit at this line and read ROLE_CLIENT's early `false` default for every
+# role, so it never fired. It lives after the STANDALONE fold, with the tor drop
+# ("Cluster-only optional services: CLIENT roles never carry them").
 if [ "${WANT_CHARACTER_FORGE}" = "true" ]; then
     case " ${OPTIONAL_SERVICES} " in
         *" character-forge "*) ;;
@@ -1403,10 +1417,10 @@ fi
 # not a cluster member, so it is a no-op there (the gate prunes the slug anyway when
 # the cluster tree is absent).
 WANT_EDGE_AI_TTS="${WANT_EDGE_AI_TTS:-}"
-if [ "${WANT_EDGE_AI_TTS}" = "true" ] && ${ROLE_CLIENT}; then
-    warn "--with-edge-ai-tts on a CLIENT/standalone role has no effect (no cluster tree); edge-ai-tts is a cluster inference service."
-    WANT_EDGE_AI_TTS=false
-fi
+# NOTE (hugmesh-generator#615): the CLIENT refusal for this service is NOT here. It
+# used to sit at this line and read ROLE_CLIENT's early `false` default for every
+# role, so it never fired. It lives after the STANDALONE fold, with the tor drop
+# ("Cluster-only optional services: CLIENT roles never carry them").
 if [ "${WANT_EDGE_AI_TTS}" = "true" ]; then
     case " ${OPTIONAL_SERVICES} " in
         *" edge-ai-tts "*) ;;
@@ -1723,6 +1737,7 @@ if ${UNAFFILIATED}; then
     [ "${MESH_FORCED}" = on ] && { err "--unaffiliated conflicts with --with-tailscale (the tailnet is HugMesh platform machinery)"; exit 1; }
     [ "${SSO_FORCED}" = on ] && { err "--unaffiliated conflicts with --with-sso (Casdoor SSO is HugMesh platform machinery)"; exit 1; }
     { [ -n "${PERSON_ROLE}" ] || [ -n "${DOMAINS}" ]; } && { err "--unaffiliated conflicts with --person-role/--domains (person-device identity is platform machinery)"; exit 1; }
+    [ -z "${DOMAIN_IDP_SPECS}" ] || { err "--unaffiliated conflicts with --domain-idp (an unaffiliated desktop has no identity provider to choose)"; exit 1; }
     BUNDLE_SOURCE=false
     # Neutral identity: every downstream sink (GRUB titles, ISO volids, UKI name,
     # installer text, artifact filenames, hostname) derives from BRAND/BRAND_TITLE,
@@ -1778,6 +1793,26 @@ if ${ROLE_CLIENT} && _opt_selected tor; then
     OPTIONAL_SERVICES="${_tor_kept# }"
     unset _tor_kept _tor_s
 fi
+
+# ── Cluster-only optional services: CLIENT roles never carry them (#615) ──────────
+# edge-ai, edge-ai-analysis, character-studio, character-forge and edge-ai-tts are k8s NODE services
+# (a cluster tree to bake into); a CLIENT / standalone / unaffiliated desktop has no
+# cluster tree. Same shape as the tor drop above and for the same reason: the folds
+# above run BEFORE the role case, and the refusals that used to sit beside them read
+# ROLE_CLIENT's early `false` default, so they never fired -- the user was never told
+# the flag did nothing, and the slug rode in OPTIONAL_SERVICES to every later reader.
+# ROLE_CLIENT is FINAL here, so the drop (however the slug arrived: --with-*,
+# --optional-services or brand.conf) is warned and applied once, for every role.
+for _cs_slug in edge-ai edge-ai-analysis character-studio character-forge edge-ai-tts; do
+    if ${ROLE_CLIENT} && _opt_selected "${_cs_slug}"; then
+        warn "${_cs_slug} selected on CLIENT role '${ROLE}' — dropped: it is a k8s NODE service (no cluster tree on a desktop); nothing ${_cs_slug}-related is baked."
+        _cs_kept=""
+        for _cs_s in ${OPTIONAL_SERVICES}; do [ "${_cs_s}" = "${_cs_slug}" ] || _cs_kept="${_cs_kept} ${_cs_s}"; done
+        OPTIONAL_SERVICES="${_cs_kept# }"
+        unset _cs_kept _cs_s
+    fi
+done
+unset _cs_slug
 
 # ── Boot-chain identifiers (volids / CDLABEL / UKI name / installer cmdline key /
 # partition labels / Secure-Boot cert identity + enrollment-cert dirs).
@@ -2206,6 +2241,9 @@ if [ -n "${DOMAINS}" ]; then
     for _d in ${DOMAINS//,/ }; do _validate_dnsname "--domains element" "${_d}"; done
     unset _d
 fi
+# --domain-idp (#509): vocabulary + DNS shape were checked as each flag was read; this is
+# the cross-check against --cluster-domain and the --domains list.
+domain_idp_check "${CLUSTER_DOMAIN}" "${DOMAINS}"
 # Accent is written as ACCENT_COLOR="..." into brand.conf — which the applier reads with
 # its STRICT KEY=VALUE parser, never by dot-sourcing (specs/usr/sbin/hugmesh-branding:83).
 # Gate it with the same #RRGGBB shape the applier's _norm_accent enforces (empty = default
@@ -2526,6 +2564,7 @@ if ${PRINT_PLAN}; then
     _plan BRAND              "${BRAND}"
     _plan CLUSTER_DOMAIN     "${CLUSTER_DOMAIN}"
     _plan SUPERDOMAIN        "${SUPERDOMAIN}"
+    domain_idp_plan_line   # PLAN_DOMAIN_IDP=<own domains>; prints nothing when none (#509)
     _plan HOSTNAME           "${HOSTNAME:-${BRAND}-host}"
     _plan OPTIONAL_SERVICES  "$(${ROLE_CLIENT} && echo none || echo "${OPTIONAL_SERVICES:-none}")"
     # Additive PLAN_ key (grep -qx consumers unaffected): what the tor NODE gates below
@@ -4810,6 +4849,8 @@ if [ -n "${SUPERDOMAIN}" ]; then
     echo "${SUPERDOMAIN}" > "${SYSROOT}${_sd_etc}/superdomain"
     info "Baked orchestration superdomain -> ${_sd_etc}/superdomain (${SUPERDOMAIN})"
 fi
+# Per-domain IdP choice (#509): /etc/hugmesh/domain-idp, own domains only; absent otherwise.
+domain_idp_bake "${SYSROOT}/etc/hugmesh"
 if ${UNAFFILIATED}; then
     info "Unaffiliated desktop: no marker tree, no cluster payload, no identity tie."
 elif ${ROLE_CLIENT}; then
@@ -6455,6 +6496,15 @@ if [ ! -e /usr/src/linux/Makefile ]; then
     emerge --noreplace --quiet-build sys-kernel/gentoo-sources \
         || emerge --quiet-build sys-kernel/gentoo-sources
 fi
+# dev-util/pahole must exist BEFORE make defconfig below: Kconfig reads its version
+# while it resolves, and CONFIG_DEBUG_INFO_BTF (the hardened-k8s.config BTF block)
+# is dropped by olddefconfig when it is missing. Same guarded top-up as above, with
+# no group banner of its own (the banner set is pinned by tests/build-matrix/check.sh); the
+# BTF assert after olddefconfig is what fails the build if this did not take.
+if ! command -v pahole >/dev/null 2>&1; then
+    emerge --noreplace --quiet-build dev-util/pahole \
+        || emerge --quiet-build dev-util/pahole
+fi
 eselect kernel set 1 || true
 if [ ! -e /usr/src/linux/Makefile ]; then
     echo "[build-x86] ERROR: /usr/src/linux is not set up (sys-kernel/gentoo-sources missing)"; exit 1
@@ -6588,6 +6638,13 @@ for _l in \$(sed -n 's/^CONFIG_LSM="\(.*\)"\$/\1/p' .config | tr ',' ' '); do
         *) echo "[build-x86] ERROR: CONFIG_LSM names '\${_l}', which this guard cannot verify — add its enabling CONFIG_* symbol to the case above"; exit 1 ;;
     esac
     grep -q "^\${_sym}=y\$" .config || { echo "[build-x86] ERROR: CONFIG_LSM names '\${_l}' but \${_sym} is not =y after olddefconfig — the kernel would SILENTLY DROP it from the LSM stack"; exit 1; }
+done
+# BTF is what lets a BPF_PROG_TYPE_LSM program attach to the bpf LSM that CONFIG_LSM
+# names. olddefconfig drops CONFIG_DEBUG_INFO_BTF silently when dev-util/pahole is
+# missing at configure time or when a struct-randomisation choice is on, so assert it
+# survived rather than ship a kernel whose bpf LSM registers but cannot enforce.
+for must in CONFIG_DEBUG_INFO_BTF CONFIG_DEBUG_INFO_BTF_MODULES; do
+    grep -q "^\${must}=y\$" .config || { echo "[build-x86] ERROR: \${must} not enabled after olddefconfig — dev-util/pahole missing at configure time, or struct layout randomisation is on (BTF depends on it being off); a BPF_PROG_TYPE_LSM program could not attach"; exit 1; }
 done
 make -j${JOBS} bzImage modules
 make modules_install

@@ -211,5 +211,88 @@ for x in goodpass1 MyWiFiPassword "$(printf 'a%.0s' {1..63})" "$(printf 'a%.0s' 
   if psk_ok "${x}"; then ok "psk accepted (len ${#x})"; else bad "psk rejected (len ${#x})"; fi
 done
 
+# ── (dial user) the BFF dial account (hugmesh-generator#367) ──────────────────────
+# gen-provision-keys.sh stages ssh/<dial_user>.authorized_keys, but nothing created the
+# account, so install_authorized_keys returned silently and sshd refused the dial. This
+# runs the REAL provision_dial_user() against stubbed system mutators and a sandbox KEYS
+# tree, and feeds it the tree gen-provision-keys.sh really writes.
+GEN="${REPO}/scripts/gen-provision-keys.sh"
+DIAL_FN="$(awk '/^provision_dial_user\(\) \{/{p=1} p{print} /^\}/{if(p){exit}}' "${PROV}")"
+DIAL_DEFAULT_LINE="$(grep -E '^DIAL_USER_DEFAULT=' "${PROV}" | head -1)"
+if [ -z "${DIAL_FN}" ] || [ -z "${DIAL_DEFAULT_LINE}" ]; then
+  echo "  FAIL provision_dial_user() / DIAL_USER_DEFAULT not found in provision.sh"; exit 1
+fi
+ok "extracted the real provision_dial_user()"
+
+# run_dial <BASE> <existing-uid|''>   -> prints the calls the function made
+run_dial() {
+  local base="$1" existing="${2:-}"
+  BASE="${base}" EXISTING_UID="${existing}" DIAL_FN="${DIAL_FN}" DIAL_DEFAULT_LINE="${DIAL_DEFAULT_LINE}" \
+  bash -c '
+    set -uo pipefail
+    log(){ :; }; warn(){ echo "warn: $*"; }
+    id(){
+      [ -n "${EXISTING_UID}" ] || return 1
+      [ "${1:-}" = "-u" ] && { echo "${EXISTING_UID}"; return 0; }
+      return 0
+    }
+    useradd(){ echo "useradd $*"; }
+    CALLS="$(mktemp "${TMPDIR:-/tmp}/dialcalls.XXXXXX")"
+    usermod(){ echo "usermod $*" >> "${CALLS}"; }
+    install_authorized_keys(){ echo "install_keys $*"; }
+    eval "${DIAL_DEFAULT_LINE}"; eval "${DIAL_FN}"
+    provision_dial_user
+    cat "${CALLS}"; rm -f "${CALLS}"
+  '
+}
+new_keys() { local d; d="$(mktemp -d "${TMPDIR:-/tmp}/dial423.XXXXXX")"; mkdir -p "${d}/ssh"; echo "${d}"; }
+
+K="$(new_keys)"; echo "ssh-ed25519 AAAA k" > "${K}/ssh/bff-dial.authorized_keys"
+out="$(run_dial "${K}")"
+case "${out}" in *"useradd -m -s /bin/bash -c HugMesh BFF dial (no sudo) bff-dial"*) ok "default: bff-dial created";; *) bad "default: bff-dial NOT created: ${out}";; esac
+case "${out}" in *"usermod -p * bff-dial"*) ok "default: password field set to '*'";; *) bad "default: no usermod -p '*': ${out}";; esac
+case "${out}" in *"install_keys bff-dial /dev/null 0"*) ok "default: its authorized_keys are installed";; *) bad "default: keys NOT installed: ${out}";; esac
+case "${out}" in *" -G "*|*"wheel"*) bad "default: dial user given supplementary groups: ${out}";; *) ok "default: no supplementary groups (not wheel)";; esac
+if printf '%s' "${DIAL_FN}" | grep 'sudoers' >/dev/null; then bad "provision_dial_user writes a sudoers entry"; else ok "provision_dial_user grants no sudo (no sudoers reference)"; fi
+
+K="$(new_keys)"; echo "ssh-ed25519 AAAA k" > "${K}/ssh/svc-dial.authorized_keys"; echo svc-dial > "${K}/ssh/dial_user"
+out="$(run_dial "${K}")"
+case "${out}" in *"svc-dial"*"useradd"*|*"useradd"*" svc-dial"*) ok "ssh/dial_user marker: custom account svc-dial created";; *) bad "marker ignored: ${out}";; esac
+
+K="$(new_keys)"
+out="$(run_dial "${K}")"
+[ -z "${out}" ] && ok "no staged dial key: nothing created" || bad "created an account with no dial key staged: ${out}"
+
+for nm in root 'Bad;Name' '../x' 'a b' 'UPPER' '-lead' "$(printf 'a%.0s' {1..40})"; do
+  K="$(new_keys)"; echo "ssh-ed25519 AAAA k" > "${K}/ssh/${nm//\//_}.authorized_keys" 2>/dev/null
+  printf '%s\n' "${nm}" > "${K}/ssh/dial_user"
+  out="$(run_dial "${K}")"
+  case "${out}" in *useradd*|*install_keys*) bad "unsafe dial user accepted: $(printf %q "${nm}")";; *) ok "unsafe dial user rejected: $(printf %q "${nm}" | cut -c1-30)";; esac
+done
+
+K="$(new_keys)"; echo "ssh-ed25519 AAAA k" > "${K}/ssh/bff-dial.authorized_keys"
+out="$(run_dial "${K}" 0)"
+case "${out}" in *install_keys*|*useradd*) bad "uid-0 account named bff-dial got the dial key: ${out}";; *) ok "an existing uid-0 account is refused the dial key";; esac
+out="$(run_dial "${K}" 1001)"
+case "${out}" in *useradd*) bad "existing dial user re-created";; *) ok "existing dial user not re-created";; esac
+case "${out}" in *"install_keys bff-dial"*) ok "existing dial user still gets its key installed";; *) bad "existing dial user key not installed: ${out}";; esac
+
+# End to end: the tree gen-provision-keys.sh really writes drives the function.
+G="$(mktemp -d "${TMPDIR:-/tmp}/dialgen423.XXXXXX")"
+if bash "${GEN}" --random -o "${G}/out" --dial-user svc-dial --device-id dev1 >/dev/null 2>&1; then
+  out="$(run_dial "${G}/out")"
+  case "${out}" in *"useradd"*" svc-dial"*) ok "gen-provision-keys --dial-user svc-dial => provision creates svc-dial";; *) bad "generated tree did not create svc-dial: ${out}";; esac
+else
+  bad "gen-provision-keys.sh failed in the sandbox"
+fi
+rm -rf "${G}"
+
+# Wiring: main() must reach the function, after provision_users and before anything that
+# could need the account.
+MAIN_FN="$(awk '/^main\(\) \{/{p=1} p{print} /^\}/{if(p){exit}}' "${PROV}")"
+if printf '%s\n' "${MAIN_FN}" | grep -E '^\s*provision_(users|dial_user)\b' | tr -s ' ' | cut -d' ' -f2 | paste -sd, | grep -x 'provision_users,provision_dial_user' >/dev/null; then
+  ok "main() calls provision_dial_user right after provision_users"
+else bad "main() does not call provision_dial_user after provision_users"; fi
+
 echo "== done: ${P} passed, ${F} failed =="
 [ "${F}" -eq 0 ]

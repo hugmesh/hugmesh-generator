@@ -35,6 +35,7 @@ STUDIO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 GENERATOR_DIR = os.path.dirname(STUDIO_ROOT)
 BUILDER_X86 = os.path.join(GENERATOR_DIR, "build-x86-host-stage4.sh")
 PROVISION = os.path.join(GENERATOR_DIR, "specs", "etc", "keys-provision", "provision.sh")
+GEN_KEYS = os.path.join(GENERATOR_DIR, "scripts", "gen-provision-keys.sh")
 
 
 def _read(path):
@@ -90,8 +91,37 @@ def test_no_builder_parses_a_ca_flag():
 
 def test_the_note_names_the_mechanism_it_describes():
     for needle in ("KEYS", "certs/", "*.crt", "*.pem", "trust store",
-                   "--vault-addr", "Secrets store step is skipped"):
+                   "--vault-addr", "Secrets store step is skipped",
+                   "trusts exactly the certificate authorities"):
         assert needle in CLIENT_CA_INHERITANCE_NOTE, needle
+
+
+def test_the_note_is_right_that_gen_provision_keys_tells_the_operator_to_copy_the_ca():
+    """The note says cluster-ca.crt is something gen-provision-keys.sh tells the operator
+    to copy onto the stick from the pki node — not something it mints for a client.
+    Pinned against the script: it prints that instruction (the "Add:" line and the
+    pki -> certs/cluster-ca.crt copy line) and never writes certs/cluster-ca.crt itself
+    on a client stick.
+
+    Whether keys-provision then IMPORTS that file for a client stick is the engine's
+    side of the note (issue #588): the text pin above cannot see it, and the executing
+    pins live with the engine fix (studio/tests/test_keys_provision_certs.py), which
+    lands in the same change as this note, not here."""
+    assert "gen-provision-keys.sh tells you to copy there" in CLIENT_CA_INHERITANCE_NOTE
+    # ... and the sentence that makes the note honest: the operator PUTS the certificates
+    # on the stick; the image carries none, so it is not "every certificate in" a stick
+    # that arrives with some
+    assert "every certificate you put in the KEYS stick's certs/ folder" in (
+        CLIENT_CA_INHERITANCE_NOTE)
+    src = _read(GEN_KEYS)
+    assert re.search(r'^\s*echo .*Add: .*certs/cluster-ca\.crt', src, re.M), (
+        "gen-provision-keys.sh no longer tells the operator to add certs/cluster-ca.crt "
+        "— the note's clause about it is stale")
+    assert re.search(r'^\s*echo .*pki:.*certs/cluster-ca\.crt\s+->\s+certs/cluster-ca\.crt',
+                     src, re.M), "the pki -> certs/cluster-ca.crt copy instruction is gone"
+    assert not re.search(r'^\s*(cp|openssl|cat) .*certs/cluster-ca\.crt', src, re.M), (
+        "gen-provision-keys.sh now WRITES certs/cluster-ca.crt itself — the note should "
+        "say so instead of telling the operator to copy it")
 
 
 # ── 2. the decision, on both faces ───────────────────────────────────────────────────
