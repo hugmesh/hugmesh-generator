@@ -15,18 +15,19 @@
 # WHAT #508 MEASURED: specs/cluster/apps/05b-casdoor-domains.yaml is a real
 # ApplicationSet whose element list ships `elements: []`, and the build-time
 # writer docs/DOMAIN-IDP.md names — `_domains_render_appset_elements()` — exists
-# only in that doc line. Its "Done when" has two halves: a build with an own-IdP
-# domain emits a non-empty list (needs the writer, @fixme), and a build with none
-# still emits `elements: []` byte-identically (true today, pinned here, and MUST
-# stay true after the writer lands — that is the half that keeps this file
-# generating while the other is pending).
+# only in that doc line. #508 was then CLOSED as not planned (decision 86 = A,
+# 2026-09-23): decision 42 = (b) puts domain data on the stick and stamps it at
+# FIRST BOOT (tracked on #527), and a second, build-time writer is exactly what
+# that decision rules out. So no scenario here waits for a build-time writer.
+# What stays true, and is pinned below, is the committed scaffold: a tree with
+# no own-IdP domain ships `elements: []` byte-identically.
 #
 # Running a stage4 build inside a scenario is out of the question (an image build
 # on a shared host), so the offline halves read the COMMITTED artefacts — the same
 # deploy-oracle stance the route-access features take with 20-schema.sql — and the
 # live half reads the kind cluster through kubectl, gated by @env:kind.
 @service:gateway @layer:gateway
-Feature: An optional-service build selection reaches the cluster, and the casdoor-domain element list is baked
+Feature: An optional-service build selection reaches the cluster, and the casdoor-domain scaffold ships empty
 
   # ── #496 — the three cardinalities this repo owns, compared as SETS ────────
   # #496 counts five sizes for one supposedly 1:1 slug set (17/14/13/13/12 on
@@ -64,29 +65,21 @@ Feature: An optional-service build selection reaches the cluster, and the casdoo
   # because the un-cut-over hardcoded Applications differ from the ApplicationSet's
   # in NAME (`akkoma` vs `optional-akkoma`) and agree in the manifests they sync.
   # @fixme: the §10 cut-over has not happened; today every hardcoded Application
-  # exists whatever the ConfigMap says. Drop @fixme when #496 lands.
+  # exists whatever the ConfigMap says. Drop @fixme when #496 lands. Measured on
+  # the kind profile 2026-10-21 (kubectl get configmap installed-services -n
+  # hugmesh-policy): NotFound, so today this goes red one step EARLIER, on the
+  # missing ConfigMap, before it ever compares Applications.
   @issue:generator-496 @fixme @env:kind @interface:cli @role:e2e-superadmin
   Scenario: a service deselected at build time has no ArgoCD Application on the kind cluster
     Then every optional service the installed-services ConfigMap marks false has no ArgoCD Application on the cluster
 
-  # ── #508 — the casdoor-domain ApplicationSet element writer ────────────────
-  # The half that is true today and must stay true: a build with no own-IdP
-  # domain ships the scaffold `elements: []`, byte-identically (the SCAFFOLD RULE
-  # at the top of 05b, guarded by tests/scripts/test-casdoor-domains-appset.sh).
+  # ── #508 — the casdoor-domain ApplicationSet scaffold ──────────────────────
+  # A tree with no own-IdP domain ships the scaffold `elements: []`,
+  # byte-identically (the SCAFFOLD RULE at the top of 05b, guarded by
+  # tests/scripts/test-casdoor-domains-appset.sh). Under decision 42 = (b) the
+  # elements are stamped at first boot (#527), never baked into the image.
   @issue:generator-508 @harness @interface:cli
   Scenario: with no own-IdP domain the casdoor-domains ApplicationSet ships an empty element list
     When I run the shell command "grep -c '^        elements: \[\]$' specs/cluster/apps/05b-casdoor-domains.yaml"
     Then the command succeeded
     And the command output contains "1"
-
-  # The half that needs the writer: docs/DOMAIN-IDP.md names
-  # `_domains_render_appset_elements()` as the stage4 bake and nothing under
-  # scripts/ or the root builders defines it (measured 2026-09-23: zero hits
-  # outside the doc). A KEYS manifest with one idp:own domain cannot render a
-  # non-empty list until it exists. @fixme until #508 lands the writer; the
-  # assertion is on the tree the builders execute, not on the doc.
-  @issue:generator-508 @fixme @harness @interface:cli
-  Scenario: the stage4 domain step carries the build-time ApplicationSet element writer
-    When I run the shell command "grep -l '_domains_render_appset_elements' scripts/*.sh build-rpi5-stage4.sh build-x86-host-stage4.sh"
-    Then the command succeeded
-    And the command output does not contain "docs/"

@@ -516,23 +516,6 @@ Then(
 // failure message names the file.
 // ═════════════════════════════════════════════════════════════════════════════
 
-/** The transcript key `common.steps.ts` stores `I run the shell command` under. */
-const CLI_TRANSCRIPT_KEY = 'cli.transcript';
-
-/**
- * The NEGATIVE twin of common.steps.ts's `the command output contains`. Kept in
- * this domain file rather than the shared vocabulary because the catalogue lane
- * owns common.steps.ts; if that lane lands the same text this copy is the one
- * to delete (a duplicate step text is a hard bddgen error, so it cannot drift).
- */
-Then('the command output does not contain {string}', async ({ world }, needle: string) => {
-  const t = world.get<CliTranscript>(CLI_TRANSCRIPT_KEY);
-  expect(
-    `${t.stdout}\n${t.stderr}`,
-    `\`${t.command}\` (${cliVerdict(t)}) output CONTAINED ${JSON.stringify(needle)}, which it must not`,
-  ).not.toContain(needle);
-});
-
 // ── optional-service selection: the five cardinalities (generator#496) ───────
 //
 // #496 counts five different sizes for one supposedly 1:1 slug set. Three of
