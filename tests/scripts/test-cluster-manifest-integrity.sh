@@ -1374,6 +1374,13 @@ expect_catch "Argo helm.parameters kubectl.image.tag (tag-only override, fail cl
 expect_catch "helm values image tag unquoted number" "$(ipw "apps/55-velero.yaml: a helm image map sets tag 1.3")" '
   imgswap apps/55-velero.yaml "          tag: v1.18.1" "          tag: 1.30"
 '
+# (22u) a ref inside a STRING gets no `images:` rewrite exemption: kustomize rewrites
+#       container image fields, never text in a ConfigMap value, so a bare busybox in
+#       the helper-pod template is pulled as busybox:latest even when the directory's
+#       kustomization rewrites the name busybox. (22u-render) shows the render agrees.
+LP_REWRITE='printf "images:\n  - {name: busybox, newName: busybox, newTag: \"1.37\", digest: sha256:bdf57e528e45e4433820e045b29b4597825a1c9e38353532d90a01445013f82e}\n" >> "$T/manifests/local-path/kustomization.yaml"
+  imgswap manifests/local-path/local-path.yaml "image: busybox:1.37@sha256:bdf57e528e45e4433820e045b29b4597825a1c9e38353532d90a01445013f82e" "image: busybox"'
+expect_catch "bare busybox in a ConfigMap template behind an images: rewrite of busybox" "$(ipw "manifests/local-path/local-path.yaml: image 'busybox' has no tag")" "${LP_REWRITE}"
 
 # (21-render) the kubectl render cross-check catches the three reported exploits ON
 # ITS OWN: the staged tree is rendered and judged without the static reader.
@@ -1412,6 +1419,7 @@ if command -v kubectl >/dev/null 2>&1; then
     lp_helper "  helperPod.yaml: '"'"'{\"apiVersion\":\"v1\",\"kind\":\"Pod\",\"metadata\":{\"name\":\"helper-pod\"},\"spec\":{\"containers\":[{\"name\":\"helper-pod\",\"image\":\"busybox:latest\"}]}}'"'"'"' busybox
   render_catch "render: configMapGenerator literal busybox:latest" '
     printf "configMapGenerator:\n  - name: helper\n    literals:\n      - '"'"'helperPod.yaml=%s'"'"'\n" "${GEN_POD}" >> "$T/manifests/owncast/kustomization.yaml"' busybox
+  render_catch "render: bare busybox in the helper-pod template is not rewritten by images:" "${LP_REWRITE}" busybox
 else
   echo "  NOTE (21-render) NOT run: kubectl is not on PATH, so the render cross-check is untested here"
 fi
