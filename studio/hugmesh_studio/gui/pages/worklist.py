@@ -96,6 +96,9 @@ _RAM_PLATFORMS = ("rpi5", "orangepi5", "orangepi4-lts")
 # The single-board platforms' RAM-table key (the Orange Pi 4 LTS has no --board).
 _RAM_BOARD_FALLBACK = {"orangepi4-lts": "orange-pi-4-lts", "rpi5": "rpi5",
                        "orangepi5": "orange-pi-5-plus"}
+# Short board names for the inline RAM message (PLATFORM_LABELS are a sentence each).
+_RAM_PLATFORM_NAMES = {"rpi5": "Raspberry Pi", "orangepi5": "Orange Pi 5 / 5 Plus",
+                       "orangepi4-lts": "Orange Pi 4 LTS"}
 # The RAM combo's "not stated" item text (data ""). omnibus shows a prompt instead.
 _RAM_UNSTATED = "—"
 _RAM_PROMPT = "choose…"
@@ -239,7 +242,8 @@ class WorklistPage(QtWidgets.QWizardPage):
         # uselessness, and a scrollbar is the honest answer. The CHECK column is
         # unaffected either way: it is section 0 at viewport x=0, so it stays visible
         # without dragging at any width, which is what the report was about.
-        self.tree.setColumnWidth(_COL_BOARD, 100)
+        # 128 fits "orange-pi-5-plus", the longest board token (the Orange Pi 5 node rows).
+        self.tree.setColumnWidth(_COL_BOARD, 128)
         self.tree.setColumnWidth(_COL_RAM, 84)
         self.tree.setColumnWidth(_COL_FLAVOR, 120)
         self.tree.setColumnWidth(_COL_ENC, 90)
@@ -931,7 +935,7 @@ class WorklistPage(QtWidgets.QWizardPage):
             return False   # a checked desktop must name its person (isComplete mirror)
         # The RAM rule (inline, never a modal): an omnibus row on a Pi / Orange Pi must
         # say how much RAM its board has — the builder refuses it otherwise.
-        missing = [f"{e.role} on {PLATFORM_LABELS.get(e.platform, e.platform)}"
+        missing = [f"{e.role} on the {_RAM_PLATFORM_NAMES.get(e.platform, e.platform)}"
                    for e in entries
                    if e.platform in _RAM_PLATFORMS and role_vocab.ram_required(e.role)
                    and not e.ram_gb]
