@@ -12,6 +12,7 @@ gate exists to catch.
 Deliberately dependency-light: PyYAML + bash only, so it runs in the
 `python:3-slim` CI image with no cluster, no kubectl and no network.
 """
+import copy
 import json
 import os
 import re
@@ -2740,8 +2741,19 @@ def check_workload_service_accounts(root):
 #     - `images:` entries of every kustomize doc of kind Kustomization OR Component;
 #     - every `image:` key anywhere in a non-kustomization manifest (containers,
 #       initContainers, helm values `image: {registry, repository, tag, digest}`),
-#       including YAML embedded in a string (a ConfigMap's helper-pod template, an
-#       Argo `helm.values: |` block);
+#       including YAML or JSON embedded in ANY string, single-line included (a
+#       ConfigMap's helper-pod template, an Argo `helm.values: |` block), with
+#       every value of a duplicated key kept, plus a text backstop over each string
+#       for `image: x` / `"image":"x"` / `--image=x` the parsers cannot read. A ref
+#       found inside a string gets no `images:` rewrite exemption (kustomize does
+#       not rewrite text);
+#     - `configMapGenerator:` / `secretGenerator:` `literals`, `files` and `envs`
+#       values, read the same way (a missing file fails closed);
+#     - an Argo helm source's `parameters:`, merged onto its values the way helm
+#       --set applies them; `valueFiles:` / `fileParameters:` (values outside this
+#       tree) fail closed, and a helm `image:` map that sets a tag or digest with no
+#       repository (an override of a chart default this tree cannot name) fails
+#       closed;
 #     - `patches:` / `patchesStrategicMerge:` / `patchesJson6902:` of a Kustomization or
 #       Component, inline or by file: a JSON6902 op whose path ends in `/image` is
 #       judged by its value, an op that adds a whole container is walked, and a
@@ -2764,7 +2776,7 @@ def check_workload_service_accounts(root):
 #     d) a kustomize `images:` entry keeps its stricter rules: a non-string newTag
 #        is refused (YAML reads 1.30 as 1.3), a repeated-character placeholder digest
 #        is refused, and a third-party entry needs a version tag AND a digest unless
-#        listed in IMAGE_DIGEST_KNOWN_GAPS.
+#        listed in IMAGE_DIGEST_KNOWN_GAPS by its full directory, name AND exact tag.
 #   A raw or patched ref is exempt from (a)-(c) only when an `images:` entry of the
 #   kustomization in its own directory (or a Component that kustomization includes)
 #   rewrites that exact name, and no kustomization in another directory includes the
@@ -2794,15 +2806,19 @@ def check_workload_service_accounts(root):
 # below is a ratchet, not an approval: an entry that no longer matches anything, or
 # has since gained a digest, fails as stale so a list cannot outlive its gap.
 IMAGE_DIGEST_KNOWN_GAPS = {
-    # "<manifest dir>:<effective image name>": reason
-    "coturn:coturn/coturn": "pinned by version tag (4.6.2), digest not yet recorded",
-    "nvidia-device-plugin:nvcr.io/nvidia/k8s-device-plugin":
-        "pinned by version tag (v0.15.0), digest not yet recorded",
-    "edge-ai:ollama/ollama":
-        "pinned by version tag (0.40.0); tests/scripts/test-edge-ai-ollama-pin.sh compares "
+    # "<kustomization dir, relative to specs/cluster>:<effective image name>:<exact tag>":
+    # reason. The key carries the FULL relative directory (not its basename, which any
+    # other directory of the same name would share) and the EXACT tag: retagging an
+    # entry (4.6.2 -> 4, a floating major) is a new ref and must carry a digest.
+    "manifests/coturn:coturn/coturn:4.6.2":
+        "pinned by version tag, digest not yet recorded",
+    "manifests/nvidia-device-plugin:nvcr.io/nvidia/k8s-device-plugin:v0.15.0":
+        "pinned by version tag, digest not yet recorded",
+    "manifests/edge-ai:ollama/ollama:0.40.0":
+        "pinned by version tag; tests/scripts/test-edge-ai-ollama-pin.sh compares "
         "the tag in two files and has not been taught about a digest yet",
-    "anubis:ghcr.io/techarohq/anubis":
-        "pinned by version tag (v1.25.0); tests/scripts/test-anubis-env-gate.sh reads the "
+    "manifests/anubis:ghcr.io/techarohq/anubis:v1.25.0":
+        "pinned by version tag; tests/scripts/test-anubis-env-gate.sh reads the "
         "tag and has not been taught about a digest yet",
 }
 
@@ -2943,10 +2959,93 @@ def _helm_image_ref(d):
 _IMAGE_REFS_MAX_DEPTH = 64
 
 
+class _EmbeddedRef(str):
+    """An image ref found inside a STRING (a ConfigMap value, a helm values block, a
+    generator literal or file). kustomize's `images:` transformer rewrites container
+    `image` fields, never text inside a string, so such a ref gets no rewrite
+    exemption."""
+
+
+class _AllPairsLoader(yaml.SafeLoader):
+    """SafeLoader that keeps every value of a duplicated key. Last-wins would hide an
+    earlier `image:` from this check while a consumer with first-wins (or a different
+    merge) pulls it; the shadowed values are kept under _DUP_KEYS and walked too."""
+
+
+_DUP_KEYS = ("duplicate keys",)   # a tuple: no YAML/JSON document can produce this key
+
+
+def _all_pairs_mapping(loader, node, deep=False):
+    loader.flatten_mapping(node)
+    out, dups = {}, []
+    for key_node, value_node in node.value:
+        key = loader.construct_object(key_node, deep=True)
+        val = loader.construct_object(value_node, deep=True)
+        try:
+            hash(key)
+        except TypeError:
+            key = repr(key)
+        if key in out:
+            dups.append({key: out[key]})
+        out[key] = val
+    if dups:
+        out[_DUP_KEYS] = dups
+    return out
+
+
+_AllPairsLoader.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,
+                                _all_pairs_mapping)
+
+
+def _json_all_pairs(pairs):
+    out, dups = {}, []
+    for key, val in pairs:
+        if key in out:
+            dups.append({key: out[key]})
+        out[key] = val
+    if dups:
+        out[_DUP_KEYS] = dups
+    return out
+
+
+def _parse_embedded(text):
+    """The documents a string holds when read as YAML, else as JSON (JSON that PyYAML
+    refuses, e.g. a tab between tokens, is still JSON to the consumer); None if
+    neither parses."""
+    try:
+        return list(yaml.load_all(text, Loader=_AllPairsLoader))
+    except Exception:
+        pass
+    try:
+        return [json.loads(text, object_pairs_hook=_json_all_pairs)]
+    except Exception:
+        return None
+
+
+# Text backstop over every string: `image: x`, `"image":"x"`, `image=x`, `--image=x`,
+# an escaped `\"image\":\"x\"`. It catches a spelling the YAML/JSON readers above
+# cannot parse but a consumer's parser can.
+_TEXT_IMAGE_RE = re.compile(
+    r"""(?i)(?<![A-Za-z0-9_])\\?["']?image\\?["']?[ \t]*[:=][ \t]*\\?["']?"""
+    r"""([A-Za-z0-9][A-Za-z0-9._/:@+-]*)""")
+
+
+_WHERE = [""]   # the file being walked, for findings raised inside _image_refs
+
+
+def _helm_tag_only(val):
+    """An `image:` map that sets tag or digest but no repository: an override of a
+    chart default image whose name this tree does not hold."""
+    return (isinstance(val, dict) and not _helm_image_ref(val)
+            and (val.get("tag") is not None or val.get("digest") is not None))
+
+
 def _image_refs(node, depth=0):
     """Every image ref set under `node`: any `image:` key (string, or a helm-style
-    {registry, repository, tag, digest} map), recursing into YAML embedded in strings.
-    Nesting past _IMAGE_REFS_MAX_DEPTH is a finding, not a silent stop."""
+    {registry, repository, tag, digest} map), recursing into YAML or JSON embedded in
+    ANY string (single-line JSON included) plus a text backstop over the string.
+    Nesting past _IMAGE_REFS_MAX_DEPTH is a finding, not a silent stop. A tag-only
+    helm image map fails closed."""
     if depth > _IMAGE_REFS_MAX_DEPTH:
         fail("[image-pin]", "a document nests deeper than %d levels; the image refs below "
              "that depth cannot be checked" % _IMAGE_REFS_MAX_DEPTH)
@@ -2964,20 +3063,37 @@ def _image_refs(node, depth=0):
                     yield val
                     continue
                 if isinstance(val, dict):
+                    tag = val.get("tag")
+                    if tag is not None and not isinstance(tag, str):
+                        fail("[image-pin]",
+                             "%s: a helm image map sets tag %r, which YAML read as a %s, not "
+                             "a string: quote it (an unquoted 1.30 becomes 1.3)"
+                             % (_WHERE[0], tag, type(tag).__name__))
                     ref = _helm_image_ref(val)
                     if ref is not None:
                         yield ref
+                    elif _helm_tag_only(val):
+                        fail("[image-pin]",
+                             "%s: a helm image map %r sets a tag/digest but no repository: "
+                             "it overrides a chart-default image this check cannot see, so "
+                             "the ref it pulls cannot be judged. Set `repository` too."
+                             % (_WHERE[0], val))
             yield from _image_refs(val, depth + 1)
     elif isinstance(node, list):
         for item in node:
             yield from _image_refs(item, depth + 1)
-    elif isinstance(node, str) and "\n" in node and "image" in node:
-        try:
-            for sub in yaml.safe_load_all(node):
+    elif isinstance(node, str) and (":" in node or "=" in node):
+        seen = set()
+        if ":" in node:
+            for sub in _parse_embedded(node) or []:
                 if isinstance(sub, (dict, list)):
-                    yield from _image_refs(sub, depth + 1)
-        except Exception:
-            pass  # a script or prose that happens to say "image"; not YAML
+                    for ref in _image_refs(sub, depth + 1):
+                        seen.add(ref)
+                        yield _EmbeddedRef(ref)
+        for m in _TEXT_IMAGE_RE.finditer(node):
+            if m.group(1) not in seen:
+                seen.add(m.group(1))
+                yield _EmbeddedRef(m.group(1))
 
 
 def _load_all(path):
@@ -3096,6 +3212,156 @@ def _argo_kustomize_blocks(node, depth=0):
             yield from _argo_kustomize_blocks(item, depth + 1)
 
 
+def _generator_texts(doc, d, where):
+    """(label, text) for every value a configMapGenerator / secretGenerator writes into
+    the cluster: `literals` values, `files` contents and `envs` values. A ConfigMap
+    value is a FILE its consumer parses (local-path-provisioner reads helperPod.yaml as
+    a pod spec), so it is read like any other embedded string. A file that is missing
+    or unreadable fails closed."""
+    for key in ("configMapGenerator", "secretGenerator"):
+        gens = doc.get(key) or []
+        if not isinstance(gens, list):
+            fail("[image-pin]", "%s: `%s:` is not a list" % (where, key))
+            continue
+        for g in gens:
+            if not isinstance(g, dict):
+                fail("[image-pin]", "%s: a `%s:` entry is not a map: %r" % (where, key, g))
+                continue
+            gname = g.get("name", "?")
+            for lit in g.get("literals") or []:
+                val = str(lit).split("=", 1)[-1]
+                yield "%s %s literal" % (key, gname), val
+                stripped = val.strip()
+                if len(stripped) > 1 and stripped[0] == stripped[-1] and stripped[0] in "\"'":
+                    yield "%s %s literal" % (key, gname), stripped[1:-1]
+            envs = list(g.get("envs") or [])
+            if isinstance(g.get("env"), str):
+                envs.append(g["env"])
+            for kind, items in (("file", g.get("files") or []), ("env file", envs)):
+                for f in items:
+                    rel = str(f).split("=", 1)[-1]
+                    path = os.path.join(d, rel)
+                    try:
+                        text = open(path, encoding="utf-8").read()
+                    except Exception as exc:
+                        fail("[image-pin]", "%s: `%s` %s %s cannot be read (%s), so an "
+                             "image it may carry cannot be checked" % (where, key, kind, rel, exc))
+                        continue
+                    if kind == "file":
+                        yield "%s %s file %s" % (key, gname, rel), text
+                        continue
+                    for line in text.splitlines():
+                        line = line.strip()
+                        if line and not line.startswith("#"):
+                            yield "%s %s env file %s" % (key, gname, rel), line.split("=", 1)[-1]
+
+
+def _argo_helm_blocks(node, depth=0):
+    if depth > 12:
+        return
+    if isinstance(node, dict):
+        for key, val in node.items():
+            if key == "helm" and isinstance(val, dict):
+                yield val
+            yield from _argo_helm_blocks(val, depth + 1)
+    elif isinstance(node, list):
+        for item in node:
+            yield from _argo_helm_blocks(item, depth + 1)
+
+
+_HELM_IMAGEISH_RE = re.compile(r"image|tag|digest|repositor|registry", re.I)
+_HELM_SEGMENT_RE = re.compile(r"^([^\[\]]*)((?:\[\d+\])*)$")
+
+
+def _helm_param_path(name):
+    """`a.b[0].c` / `a\\.b` (helm --set syntax) -> ["a", "b", 0, "c"], or None."""
+    segs, cur, i = [], "", 0
+    while i < len(name):
+        if name[i] == "\\" and i + 1 < len(name):
+            cur += name[i + 1]
+            i += 2
+            continue
+        if name[i] == ".":
+            segs.append(cur)
+            cur = ""
+        else:
+            cur += name[i]
+        i += 1
+    segs.append(cur)
+    out = []
+    for seg in segs:
+        m = _HELM_SEGMENT_RE.match(seg)
+        if not m or not m.group(1):
+            return None
+        out.append(m.group(1))
+        out.extend(int(x) for x in re.findall(r"\[(\d+)\]", m.group(2)))
+    return out
+
+
+def _helm_set(tree, path, value):
+    node = tree
+    for i, seg in enumerate(path):
+        last = i == len(path) - 1
+        nxt = None if last else ([] if isinstance(path[i + 1], int) else {})
+        if isinstance(seg, int):
+            if not isinstance(node, list):
+                return False
+            while len(node) <= seg:
+                node.append({} if nxt is None else type(nxt)())
+            if last:
+                node[seg] = value
+            elif not isinstance(node[seg], (dict, list)):
+                node[seg] = nxt
+            node = node[seg]
+        else:
+            if not isinstance(node, dict):
+                return False
+            if last:
+                node[seg] = value
+            elif not isinstance(node.get(seg), (dict, list)):
+                node[seg] = nxt
+            node = node[seg]
+    return True
+
+
+def _helm_override_refs(blk, where):
+    """Image refs an Argo helm source's `parameters:` produce. Argo applies parameters
+    on top of values/valuesObject (helm --set), so each is merged onto the values the
+    tree sets and the refs that merge CHANGES are returned for judging. Values that
+    come from files (`valueFiles`, `fileParameters`) are not in this tree: fail closed."""
+    for key in ("valueFiles", "fileParameters"):
+        if blk.get(key):
+            fail("[image-pin]", "%s: an Argo helm source sets `%s:`, values this check "
+                 "cannot read (they may set an image). Inline them in helm.values."
+                 % (where, key))
+    params = blk.get("parameters") or []
+    if not params:
+        return []
+    if not isinstance(params, list):
+        fail("[image-pin]", "%s: helm `parameters:` is not a list" % where)
+        return []
+    base = {}
+    vals = blk.get("values")
+    if isinstance(vals, str):
+        docs = _parse_embedded(vals) or []
+        if docs and isinstance(docs[0], dict):
+            base = docs[0]
+    elif isinstance(vals, dict):
+        base = vals
+    merged = copy.deepcopy(base)
+    if isinstance(blk.get("valuesObject"), dict):
+        merged.update(copy.deepcopy(blk["valuesObject"]))
+    before = set(_image_refs(copy.deepcopy(merged), 1))
+    for prm in params:
+        name = prm.get("name") if isinstance(prm, dict) else None
+        path = _helm_param_path(name) if isinstance(name, str) else None
+        if path is None or not _helm_set(merged, path, prm.get("value")):
+            if not isinstance(name, str) or _HELM_IMAGEISH_RE.search(name):
+                fail("[image-pin]", "%s: helm parameter %r cannot be applied to the values "
+                     "this check reads, so the image it may set cannot be judged" % (where, prm))
+    return [r for r in _image_refs(merged, 1) if r not in before]
+
+
 def _render_refs(root):
     """(refs-by-dir, reason-not-run). Renders every Kustomization directory with kubectl."""
     if os.environ.get("HUGMESH_IMAGE_PIN_RENDER", "1") == "0":
@@ -3123,6 +3389,7 @@ def _render_refs(root):
                                   (r.stderr.strip().splitlines() or ["?"])[-1]))
             continue
         refs = []
+        _WHERE[0] = "%s (rendered by kubectl kustomize)" % os.path.relpath(d, root)
         for doc in yaml.safe_load_all(r.stdout):
             if isinstance(doc, (dict, list)):
                 refs.extend(_image_refs(doc))
@@ -3153,7 +3420,7 @@ def check_image_pins(root):
             rel = os.path.relpath(path, root)
             d = os.path.dirname(path)
             kdocs.append((d, rel, doc))
-            dname = os.path.basename(d)
+            dname = os.path.relpath(d, root)
             for key in ("resources", "components", "bases"):
                 for r in doc.get(key) or []:
                     if isinstance(r, str) and ("://" in r or "?ref=" in r or r.startswith(
@@ -3208,7 +3475,7 @@ def check_image_pins(root):
                 if _is_first_party(eff):
                     continue
                 third_party += 1
-                gap = "%s:%s" % (dname, eff)
+                gap = "%s:%s:%s" % (dname, eff, tag)
                 if not tag or _floating_tag(tag):
                     fail("[image-pin]",
                          "%s (third-party) has tag %r, which is not a version (e.g. 1.27-alpine, "
@@ -3230,9 +3497,10 @@ def check_image_pins(root):
              "IMAGE_DIGEST_KNOWN_GAPS lists %s but it now carries a digest: remove the entry so "
              "the allowlist cannot outlive the gap." % gap)
     for gap in sorted(IMAGE_DIGEST_KNOWN_GAPS):
-        gd, _, n = gap.partition(":")
-        live = any(os.path.basename(d) == gd and any(
-            isinstance(e, dict) and str(e.get("newName") or e.get("name")) == n
+        live = any(any(
+            isinstance(e, dict) and isinstance(e.get("newTag"), str)
+            and "%s:%s:%s" % (os.path.relpath(d, root), e.get("newName") or e.get("name"),
+                              e["newTag"].strip()) == gap
             for e in doc.get("images") or []) for d, _rel, doc in kdocs)
         if not live:
             fail("[image-pin]",
@@ -3275,7 +3543,8 @@ def check_image_pins(root):
             name, tag, _dg = _split_image_ref(ref.strip())
             # A literal :latest is refused even behind a rewrite: the tag is what a
             # reader of the file trusts, and the rewrite is one edit from vanishing.
-            if exemptible and tag.lower() != "latest" and exempt(name, own_dir, file_path):
+            if exemptible and not isinstance(ref, _EmbeddedRef) and tag.lower() != "latest" \
+                    and exempt(name, own_dir, file_path):
                 continue
             if rendered and ref.strip() in entry_gap_refs:
                 continue  # the `images:` entry that renders it was judged by rule (d)
@@ -3287,6 +3556,7 @@ def check_image_pins(root):
     # Patches and replacements of every Kustomization / Component.
     patched = 0
     for d, rel, doc in kdocs:
+        _WHERE[0] = rel
         is_comp = doc.get("kind") == "Component"
         for obj in _patch_objects(doc, d, rel):
             # The images transformer runs after a Kustomization's own patches, so a
@@ -3295,6 +3565,9 @@ def check_image_pins(root):
             patched += judge_all(list(_patch_image_refs(obj, rel)), "%s (patch)" % rel,
                                  d, None, exemptible=not is_comp)
         _check_replacements(doc, d, rel)
+        for label, text in _generator_texts(doc, d, rel):
+            patched += judge_all(list(_image_refs(text, 1)), "%s (%s)" % (rel, label),
+                                 d, None, exemptible=False)
 
     raw = 0
     for path in yaml_files(root):
@@ -3302,6 +3575,7 @@ def check_image_pins(root):
             continue
         rel = os.path.relpath(path, root)
         d = os.path.dirname(path)
+        _WHERE[0] = rel
         for doc in docs_of(path):
             if doc.get("kind") in _KUSTOMIZE_KINDS:
                 continue
@@ -3316,6 +3590,11 @@ def check_image_pins(root):
                     raw += judge_all(list(_patch_image_refs(obj, rel)),
                                      "%s (kustomize.patches override)" % rel, d, None,
                                      exemptible=False)
+            # An Argo helm source's own parameters (applied on top of its values).
+            for blk in _argo_helm_blocks(doc):
+                raw += judge_all(_helm_override_refs(blk, rel),
+                                 "%s (helm.parameters override)" % rel, d, None,
+                                 exemptible=False)
 
     rendered, not_run = _render_refs(root)
     render_note = "render cross-check NOT run (%s)" % not_run
@@ -3344,14 +3623,15 @@ def check_image_pins(root):
     elif len(failures) == failed_before:
         ok("[image-pin]",
            "%d kustomize image entr(ies) (Kustomization + Component), %d workload/values "
-           "image ref(s) and %d patch image ref(s): none is :latest or untagged; no "
+           "image ref(s) and %d patch/generator image ref(s): none is :latest or untagged; no "
            "third-party ref carries a floating channel tag except %d recorded in "
            "FLOATING_TAG_KNOWN_GAPS; third-party refs carry a digest except %d version-tagged "
            "kustomize entr(ies) in IMAGE_DIGEST_KNOWN_GAPS and %d version-tagged ref(s) in "
            "RAW_DIGEST_KNOWN_GAPS (such a tag still moves on upstream patch releases); "
            "FIRST-PARTY images follow the moving `main` tag and are NOT checked beyond "
            ":latest/untagged; images a third-party helm chart defaults internally are not "
-           "visible; %s"
+           "visible, and Argo helm sources are judged statically only (kubectl kustomize "
+           "does not render them); %s"
            % (entries, raw, patched, len(FLOATING_TAG_KNOWN_GAPS),
               len(IMAGE_DIGEST_KNOWN_GAPS), len(RAW_DIGEST_KNOWN_GAPS), render_note))
 

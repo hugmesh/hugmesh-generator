@@ -1239,22 +1239,158 @@ open(sys.argv[1], "w").write(yaml.safe_dump(node))
 PY
 '
 
+# ── (22) IMAGE PINS, round 3: four more ways a mutable image got past (21) ──────
+# A review got a mutable image past round 2 with the gate green, static AND render:
+#   (a) a ConfigMap value holding SINGLE-LINE JSON (local-path-provisioner reads
+#       helperPod.yaml as YAML, and YAML accepts JSON): the embedded-string reader
+#       only parsed strings containing a newline, and the render pass used the same
+#       reader; the same hole through a configMapGenerator literal;
+#   (b) IMAGE_DIGEST_KNOWN_GAPS was keyed by directory BASENAME and image name with
+#       no tag, so coturn could be retagged to the floating major "4", and any other
+#       directory named coturn inherited the exemption;
+#   (c) an Argo helm source's `parameters:` (applied on top of values) were never
+#       read, and a helm `image: {tag: latest}` with no repository was dropped.
+# Each control below is one of those inputs or another spelling of the same hole.
+lp_helper() {  # <replacement line for the helperPod.yaml key>: drop the block scalar
+  python3 - "$T/manifests/local-path/local-path.yaml" "$1" <<"PY"
+import sys
+p, new = sys.argv[1], sys.argv[2]
+s = open(p, encoding="utf-8").read()
+i = s.index("  helperPod.yaml: |-\n")
+lines = s[i:].split("\n")
+j = 1
+while j < len(lines) and (lines[j].startswith("    ") or lines[j] == ""):
+    j += 1
+assert j > 5, "helperPod.yaml block not found"
+open(p, "w", encoding="utf-8").write(s[:i] + new + "\n" + "\n".join(lines[j:]))
+PY
+}
+LP_WANT="$(ipw "manifests/local-path/local-path.yaml: image 'busybox:latest'")"
+# (22a) THE REPORTED EXPLOIT: single-line JSON pod template in the ConfigMap.
+expect_catch "single-line JSON helperPod.yaml with busybox:latest" "${LP_WANT}" '
+  lp_helper "  helperPod.yaml: '"'"'{\"apiVersion\":\"v1\",\"kind\":\"Pod\",\"metadata\":{\"name\":\"helper-pod\"},\"spec\":{\"containers\":[{\"name\":\"helper-pod\",\"image\":\"busybox:latest\"}]}}'"'"'"
+'
+# (22b) the key spelled with a JSON/YAML unicode escape, so the text never says "image".
+expect_catch "single-line JSON helperPod.yaml with an escaped \\u0069mage key" "${LP_WANT}" '
+  lp_helper "  helperPod.yaml: '"'"'{\"spec\":{\"containers\":[{\"name\":\"h\",\"\\u0069mage\":\"busybox:latest\"}]}}'"'"'"
+'
+# (22c) JSON with a tab between tokens: PyYAML refuses it, a JSON consumer does not.
+expect_catch "single-line JSON helperPod.yaml with a tab PyYAML cannot scan" "${LP_WANT}" '
+  lp_helper "  helperPod.yaml: \"{\\\"spec\\\":{\\\"containers\\\":[{\\\"name\\\":\\\"h\\\",\\t\\\"image\\\":\\\"busybox:latest\\\"}]}}\""
+'
+# (22d) a duplicated key: last-wins would show only the pinned value.
+expect_catch "embedded JSON with a duplicate image key (shadowed :latest)" "${LP_WANT}" '
+  lp_helper "  helperPod.yaml: '"'"'{\"spec\":{\"containers\":[{\"name\":\"h\",\"image\":\"busybox:latest\",\"image\":\"busybox:1.37@sha256:bdf57e528e45e4433820e045b29b4597825a1c9e38353532d90a01445013f82e\"}]}}'"'"'"
+'
+# (22e) a script in a ConfigMap value that pulls an image (text backstop).
+expect_catch "ConfigMap script value runs kubectl run --image=busybox:latest" "${LP_WANT}" '
+  imgswap manifests/local-path/local-path.yaml "  helperPod.yaml: |-
+" "  probe.sh: \"kubectl run probe --restart=Never --image=busybox:latest -- true\"
+  helperPod.yaml: |-
+"
+'
+GEN_POD='{"apiVersion":"v1","kind":"Pod","spec":{"containers":[{"name":"h","image":"busybox:latest"}]}}'
+export GEN_POD
+# (22f) THE REPORTED EXPLOIT, generator spelling: a configMapGenerator literal.
+expect_catch "configMapGenerator literal holds a pod spec on busybox:latest" "$(ipw "manifests/owncast/kustomization.yaml (configMapGenerator helper literal): image 'busybox:latest'")" '
+  printf "configMapGenerator:\n  - name: helper\n    literals:\n      - '"'"'helperPod.yaml=%s'"'"'\n" "${GEN_POD}" >> "$T/manifests/owncast/kustomization.yaml"
+'
+# (22g) the same through a generator FILE with an extension no YAML walk reads.
+expect_catch "configMapGenerator files: helper.json holds busybox:latest" "$(ipw "manifests/owncast/kustomization.yaml (configMapGenerator helper file helper.json): image 'busybox:latest'")" '
+  printf "%s\n" "${GEN_POD}" > "$T/manifests/owncast/helper.json"
+  printf "configMapGenerator:\n  - name: helper\n    files:\n      - helperPod.yaml=helper.json\n" >> "$T/manifests/owncast/kustomization.yaml"
+'
+# (22h) an envs file value, and (22i) a secretGenerator literal.
+expect_catch "configMapGenerator envs: value holds busybox:latest" "$(ipw "manifests/owncast/kustomization.yaml (configMapGenerator helper env file helper.env): image 'busybox:latest'")" '
+  printf "POD=%s\n" "${GEN_POD}" > "$T/manifests/owncast/helper.env"
+  printf "configMapGenerator:\n  - name: helper\n    envs:\n      - helper.env\n" >> "$T/manifests/owncast/kustomization.yaml"
+'
+expect_catch "secretGenerator literal holds busybox:latest" "$(ipw "manifests/owncast/kustomization.yaml (secretGenerator helper literal): image 'busybox:latest'")" '
+  printf "secretGenerator:\n  - name: helper\n    literals:\n      - '"'"'pod=%s'"'"'\n" "${GEN_POD}" >> "$T/manifests/owncast/kustomization.yaml"
+'
+# (22j) a generator file that is not there cannot be checked: fail closed.
+expect_catch "configMapGenerator file that does not exist (fail closed)" "$(ipw "manifests/owncast/kustomization.yaml: \`configMapGenerator\` file no-such.json cannot be read")" '
+  printf "configMapGenerator:\n  - name: helper\n    files:\n      - no-such.json\n" >> "$T/manifests/owncast/kustomization.yaml"
+'
+# (22k) THE REPORTED EXPLOIT: a known-gap entry retagged to a floating major.
+expect_catch "coturn retagged 4.6.2 -> \"4\" with no digest" "$(ipw "manifests/coturn/kustomization.yaml: image coturn/coturn (third-party) is pinned by tag '4' only")" '
+  imgswap manifests/coturn/kustomization.yaml "newTag: 4.6.2 }" "newTag: \"4\" }"
+'
+# (22l) another directory with the same basename does not inherit the gap entry.
+expect_catch "a second directory named coturn does not inherit the known-gap entry" "$(ipw "manifests/extra/coturn/kustomization.yaml: image coturn/coturn (third-party) is pinned by tag '4.6.2' only")" '
+  mkdir -p "$T/manifests/extra"; cp -r "$T/manifests/coturn" "$T/manifests/extra/coturn"
+'
+# (22m) THE REPORTED EXPLOIT: an Argo helm parameter overriding the tag.
+HP_ANCHOR='    helm:
+      releaseName: velero
+'
+expect_catch "Argo helm.parameters image.tag=latest (velero)" "$(ipw "apps/55-velero.yaml (helm.parameters override): image 'velero/velero:latest'")" '
+  imgswap apps/55-velero.yaml "${HP_ANCHOR}" "${HP_ANCHOR}      parameters:
+        - name: image.tag
+          value: latest
+"
+'
+# (22n) the list-index spelling of a parameter.
+expect_catch "Argo helm.parameters initContainers[0].image=...:latest" "$(ipw "apps/55-velero.yaml (helm.parameters override): image 'velero/velero-plugin-for-aws:latest'")" '
+  imgswap apps/55-velero.yaml "${HP_ANCHOR}" "${HP_ANCHOR}      parameters:
+        - name: initContainers[0].image
+          value: velero/velero-plugin-for-aws:latest
+"
+'
+# (22o) a parameter on an image path this check cannot apply: fail closed.
+expect_catch "Argo helm parameter with an unreadable image path (fail closed)" "$(ipw "apps/55-velero.yaml: helm parameter")" '
+  imgswap apps/55-velero.yaml "${HP_ANCHOR}" "${HP_ANCHOR}      parameters:
+        - name: \"image.tag[\"
+          value: latest
+"
+'
+# (22p) valueFiles / (22q) fileParameters: values from outside this tree, fail closed.
+expect_catch "Argo helm valueFiles (unread values, fail closed)" "$(ipw "apps/55-velero.yaml: an Argo helm source sets \`valueFiles:\`")" '
+  imgswap apps/55-velero.yaml "${HP_ANCHOR}" "${HP_ANCHOR}      valueFiles: [values-latest.yaml]
+"
+'
+expect_catch "Argo helm fileParameters (unread values, fail closed)" "$(ipw "apps/55-velero.yaml: an Argo helm source sets \`fileParameters:\`")" '
+  imgswap apps/55-velero.yaml "${HP_ANCHOR}" "${HP_ANCHOR}      fileParameters:
+        - {name: image.tag, path: tag.txt}
+"
+'
+# (22r) THE REPORTED EXPLOIT: a tag-only helm image map over a chart default.
+expect_catch "helm values kubectl: {image: {tag: latest}} with no repository" "$(ipw "apps/55-velero.yaml: a helm image map {'tag': 'latest'} sets a tag/digest but no repository")" '
+  imgswap apps/55-velero.yaml "        installCRDs: true
+" "        installCRDs: true
+        kubectl:
+          image:
+            tag: latest
+"
+'
+# (22s) the same tag-only override arriving through a parameter.
+expect_catch "Argo helm.parameters kubectl.image.tag (tag-only override, fail closed)" "$(ipw "apps/55-velero.yaml: a helm image map {'tag': 'v1.31.0'} sets a tag/digest but no repository")" '
+  imgswap apps/55-velero.yaml "${HP_ANCHOR}" "${HP_ANCHOR}      parameters:
+        - name: kubectl.image.tag
+          value: v1.31.0
+"
+'
+# (22t) a non-string helm tag (YAML reads 1.30 as 1.3).
+expect_catch "helm values image tag unquoted number" "$(ipw "apps/55-velero.yaml: a helm image map sets tag 1.3")" '
+  imgswap apps/55-velero.yaml "          tag: v1.18.1" "          tag: 1.30"
+'
+
 # (21-render) the kubectl render cross-check catches the three reported exploits ON
 # ITS OWN: the staged tree is rendered and judged without the static reader.
-render_catch() {  # <label> <injection>
-  local label="$1" inject="$2" T="${WORK}/tree"
+render_catch() {  # <label> <injection> [image name prefix, default owncast/owncast]
+  local label="$1" inject="$2" prefix="${3:-owncast/owncast}" T="${WORK}/tree"
   rm -rf "${T}"; cp -r "${REPO}/specs/cluster" "${T}"
   ( T="${T}"; eval "${inject}" ) || { neg_bad "${label} (injection failed)"; return; }
   local out
-  if out="$(HUGMESH_IMAGE_PIN_RENDER=1 python3 - "$(dirname "${CHECKER}")" "${T}" <<"PY" 2>&1
+  if out="$(HUGMESH_IMAGE_PIN_RENDER=1 python3 - "$(dirname "${CHECKER}")" "${T}" "${prefix}" <<"PY" 2>&1
 import sys
 sys.path.insert(0, sys.argv[1])
 import cluster_manifest_integrity as m
 rendered, why = m._render_refs(sys.argv[2])
 assert rendered is not None, "render did not run: %s" % why
 bad = sorted({r for refs in rendered.values() for r in refs
-              if r.startswith("owncast/owncast") and m._judge_ref(r, set())})
-assert bad, "no mutable owncast ref in the render"
+              if r.startswith(sys.argv[3]) and m._judge_ref(r, set())})
+assert bad, "no mutable %s ref in the render" % sys.argv[3]
 print(" ".join(bad))
 PY
 )"; then neg_ok "${label} -> render cross-check caught ${out}"
@@ -1271,6 +1407,11 @@ if command -v kubectl >/dev/null 2>&1; then
     printf "components:\n  - pin\n" >> "$T/manifests/owncast/kustomization.yaml"'
   render_catch "render: JSON6902 patch :develop" '
     oc_drop_entry; printf "%s" "${OC_JSONPATCH}" >> "$T/manifests/owncast/kustomization.yaml"'
+  # (22-render) round 3: a single-line JSON ConfigMap value and a generator literal.
+  render_catch "render: single-line JSON helperPod.yaml busybox:latest" '
+    lp_helper "  helperPod.yaml: '"'"'{\"apiVersion\":\"v1\",\"kind\":\"Pod\",\"metadata\":{\"name\":\"helper-pod\"},\"spec\":{\"containers\":[{\"name\":\"helper-pod\",\"image\":\"busybox:latest\"}]}}'"'"'"' busybox
+  render_catch "render: configMapGenerator literal busybox:latest" '
+    printf "configMapGenerator:\n  - name: helper\n    literals:\n      - '"'"'helperPod.yaml=%s'"'"'\n" "${GEN_POD}" >> "$T/manifests/owncast/kustomization.yaml"' busybox
 else
   echo "  NOTE (21-render) NOT run: kubectl is not on PATH, so the render cross-check is untested here"
 fi
