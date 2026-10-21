@@ -303,19 +303,7 @@ Then('the Studio services row {string} offers a tri-state control', async ({ wor
 
 // ── transcript assertions the shared vocabulary lacks ────────────────────────
 
-/**
- * The negation of common.steps.ts 'the command output contains {string}'. Same
- * haystack (stdout + stderr), so "does not contain" cannot be satisfied by a
- * needle that merely moved streams.
- */
-Then('the command output does not contain {string}', async ({ world }, needle: string) => {
-  const t = world.get<CliTranscript>(CLI_KEY);
-  const hay = `${t.stdout}\n${t.stderr}`;
-  expect(
-    hay.includes(needle),
-    `\`${t.command}\` output contains ${JSON.stringify(needle)}, which it must not:\n${hay.slice(0, 1500)}`,
-  ).toBe(false);
-});
+// 'the command output does not contain {string}' is defined once, in cli.steps.ts.
 
 /**
  * stdout is EXACTLY one line — byte-for-byte, trailing newline included. This
