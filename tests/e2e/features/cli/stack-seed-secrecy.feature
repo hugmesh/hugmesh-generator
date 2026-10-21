@@ -39,9 +39,9 @@ Feature: seeding the stack never prints the shared e2e persona password
     And every non-empty line of the command's stdout matches "^e2e_password_(ensure|read)$"
 
   # The offline half of the defect: `make -n` prints the recipe without running
-  # it (the password helper is NOT executed under -n). Today the banner line
-  # interpolates the value twice; after the fix it names WHERE the value is.
-  @fixme
+  # it (the password helper is NOT executed under -n). When this was written the
+  # banner line interpolated the value twice; since the #362 fix (issue closed
+  # 2026-09-30) it names WHERE the value is, so this runs un-fixme'd.
   Scenario: the seed recipe's banner names where the password lives instead of interpolating it
     When I run the shell command "make -n stack-seed"
     Then the command succeeded

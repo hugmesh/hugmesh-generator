@@ -52,7 +52,9 @@ Feature: bootstrap-kind.sh fails closed on a broken in-node resolver and on a ha
     Then the command succeeded
     And the command output contains "0 failed"
 
-  @issue:generator-510 @fixme
+  # #510 is fixed on main (issue closed 2026-10-15): the bring-up now refuses
+  # here, so this runs un-fixme'd. #529 below is still open and stays @fixme.
+  @issue:generator-510
   Scenario: a node whose resolver cannot resolve refuses, naming the resolver and the name, before anything waits
     Given a stub kind node on PATH whose resolver cannot resolve any name
     When I run the kind bootstrap against the stub node
