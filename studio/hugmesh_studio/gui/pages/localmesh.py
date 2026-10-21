@@ -3505,7 +3505,10 @@ class LocalMeshPage(QtWidgets.QWizardPage):
                    "data volumes are recorded too. The volumes' contents are NOT "
                    "saved: multi-GB, a consistent copy needs the stack halted, "
                    "'Stop mesh' keeps them anyway, and casdoor-pg is an identity "
-                   "database. Runs off-thread; nothing is started or stopped.")
+                   "database. Runs off-thread; nothing is started or stopped.\n\n"
+                   "The NAME comes from the 'Save as' box in 'Saved meshes and the "
+                   "plan' (the review step), or is derived when that box is blank; the "
+                   "status line says which name was used.")
         self.save_mesh_btn.setToolTip(tip)
         if not idle:
             copy_tip = tip
@@ -3578,11 +3581,20 @@ class LocalMeshPage(QtWidgets.QWizardPage):
                                 "another name in the Saved meshes 'Save as' box, or "
                                 "overwrite that record from the Saved meshes list.")
             return
+        typed = bool(label)
         if not label:
             label = saved_meshes.unique_label(
                 saved_meshes.derived_label_of(self._current_mesh_config()),
                 self.saved_meshes.records())
         copy = bool(self.save_copy_creds.isChecked() and self._mesh_up is True)
+        # This button sits on the bring-up step, where the Saved meshes list and its
+        # Save as box cannot be seen: say in the run log where the name came from.
+        self._note(f"[mesh-save] the record is named ‘{label}’ — "
+                   + ("typed in the 'Save as' box under 'Saved meshes and the plan'"
+                      if typed else
+                      "derived, because the 'Save as' box under 'Saved meshes and the "
+                      "plan' is blank")
+                   + "; it can be renamed there with Overwrite selected.")
         self._save_current(None, label, copy=copy)
 
     def _on_save_requested(self, target, label: str):
@@ -3700,6 +3712,7 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         notes: list[str] = []
         if outcome.get("id"):
             notes.append(f"Saved ‘{outcome.get('label') or outcome['id']}’.")
+
             problems = [str(p) for p in (outcome.get("problems") or [])]
             if problems:
                 notes.append("It will not start until this is fixed: "

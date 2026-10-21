@@ -296,6 +296,20 @@ class SavedMesh:
         brand = str(self.config.get("brand") or "")
         return f"{env} / {brand}" if brand else env
 
+    def ran_when_saved(self) -> bool:
+        """Was this mesh UP (the Docker mesh or the DevOps lane) when it was saved?
+
+        False is a DRAFT: the configuration as it was being worked on, saved before
+        its first bring-up (the Saved meshes list allows that since 2026-10-21). A
+        record that carries no ``last_seen`` facts at all predates the field and
+        could only have been saved from a running mesh, so it counts as ran. An
+        Overwrite made while nothing runs rewrites ``last_seen``, so the replaced
+        record becomes a draft too: the configuration it now holds has not run."""
+        seen = self.last_seen if isinstance(self.last_seen, dict) else {}
+        if "compose_running" not in seen and "kind_running" not in seen:
+            return True
+        return seen.get("compose_running") is True or seen.get("kind_running") is True
+
     def volume_count(self) -> int:
         return len(self.volumes.get("inventory") or [])
 
@@ -438,7 +452,27 @@ def config_changes(saved: dict, current: dict) -> list[str]:
         out.pop("auth_key", None)
         return out
     a, b = norm(saved), norm(current)
-    return sorted(k for k in set(a) | set(b) if a.get(k) != b.get(k))
+    # A record that left ``services``/``kind_addons`` at None never made a choice
+    # there (no picker was used, or it predates the field), and Load leaves those
+    # boxes as they are — so the form's ticks are not a change FROM the record.
+    unrecorded = {k for k in UNRECORDED_WHEN_NONE if a.get(k) is None}
+    return sorted(k for k in set(a) | set(b)
+                  if k not in unrecorded and a.get(k) != b.get(k))
+
+
+#: Configuration fields where a saved None means "no choice recorded" rather than
+#: a value (``LocalMeshBootstrapConfig._TUPLE_OR_NONE_FIELDS``). :func:`config_changes`
+#: does not count them as changed, and :func:`unrecorded_fields` names them so an
+#: Overwrite can say that the form's choice is written in.
+UNRECORDED_WHEN_NONE = ("services", "kind_addons")
+
+
+def unrecorded_fields(saved: dict) -> list[str]:
+    """The :data:`UNRECORDED_WHEN_NONE` fields a record's configuration leaves at
+    None (read as it LOADS). An Overwrite writes the form's value into them."""
+    cfg = _boot_cfg(saved)
+    d = config_for_record(cfg) if cfg is not None else dict(saved or {})
+    return [k for k in UNRECORDED_WHEN_NONE if d.get(k) is None]
 
 
 def label_owner(label: str, records: list["SavedMesh"],
@@ -555,18 +589,39 @@ def find(mesh_id: str) -> SavedMesh | None:
     return None
 
 
-def latest_for_checkout(generator_dir: str,
-                        hostname: str | None = None) -> SavedMesh | None:
-    """The most recently SAVED record that describes the mesh this checkout drives
-    (:meth:`SavedMesh.same_checkout` — same generator dir, same host), or None.
+def records_for_checkout(generator_dir: str,
+                         hostname: str | None = None) -> list[SavedMesh]:
+    """Every readable record that describes the mesh this checkout drives
+    (:meth:`SavedMesh.same_checkout` — same generator dir, same host), the ones that
+    RAN first (:meth:`SavedMesh.ran_when_saved`), each group newest first.
 
-    "Most recent" is ``updated`` (a re-save moves a record forward), falling back to
-    ``created`` and then the sortable id. Pure file reads, no docker — the one reader
-    the node-image flows use to learn what a saved local mesh RAN (its domain, its
-    services and therefore whether it ran Tor, #579). ``hostname`` defaults to this
-    host; pass ``""`` to match any host."""
+    "Newest" is ``updated`` (a re-save moves a record forward), falling back to
+    ``created`` and then the sortable id. Pure file reads, no docker. The order the
+    node-image pages offer them in, and the first one is what they import unless the
+    operator picks another. ``hostname`` defaults to this host; pass ``""`` to match
+    any host."""
     host = socket.gethostname() if hostname is None else hostname
     mine = [r for r in scan()[0] if r.same_checkout(generator_dir, host)]
+    mine.sort(key=lambda r: (_stamp(r.updated) or _stamp(r.created), r.id),
+              reverse=True)
+    return ([r for r in mine if r.ran_when_saved()]
+            + [r for r in mine if not r.ran_when_saved()])
+
+
+def latest_for_checkout(generator_dir: str,
+                        hostname: str | None = None, *,
+                        ran_only: bool = False) -> SavedMesh | None:
+    """The most recently SAVED record that describes the mesh this checkout drives,
+    or None. With ``ran_only`` only a record whose mesh was up when it was saved
+    counts (a draft saved before its first bring-up describes a mesh that never ran).
+
+    The node-image flows read what a saved local mesh RAN (its domain, its services
+    and therefore whether it ran Tor, #579) through
+    :meth:`.local_mesh_bootstrap.LocalMeshBootstrap.for_checkout`, which asks for
+    ``ran_only`` first: a newer draft must never stand in for the mesh that ran."""
+    host = socket.gethostname() if hostname is None else hostname
+    mine = [r for r in scan()[0] if r.same_checkout(generator_dir, host)
+            and (not ran_only or r.ran_when_saved())]
     if not mine:
         return None
     return max(mine, key=lambda r: (_stamp(r.updated) or _stamp(r.created), r.id))

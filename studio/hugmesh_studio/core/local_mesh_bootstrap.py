@@ -38,6 +38,7 @@ import argparse
 import json
 import os
 import re
+import socket
 import subprocess
 import sys
 import time
@@ -687,18 +688,35 @@ class LocalMeshBootstrap:
         return cls(generator_dir, cfg)
 
     @classmethod
-    def for_checkout(cls, generator_dir: str, hostname: str | None = None):
+    def for_checkout(cls, generator_dir: str, hostname: str | None = None,
+                     record_id: str = ""):
         """``(bootstrap, record-or-None)`` for the local mesh THIS checkout drives, as
         far as anything on disk can say: the newest saved-mesh record for this
-        checkout and host, else a default config (the brand default, no Tor).
+        checkout and host whose mesh was UP when it was saved, else the newest draft
+        (a record saved before its first bring-up — ``saved_mesh_source`` says so),
+        else a default config (the brand default, no Tor). A newer draft never
+        stands in for the mesh that ran: since 2026-10-21 the Saved meshes list
+        saves the mesh being worked on with nothing up, and node images built from
+        that draft would join a domain nothing ever served.
+
+        ``record_id`` names the record to read instead (the node-image pages' picker);
+        it must be one of this checkout's records, else the default choice is used.
 
         OFFLINE by contract (plain file reads — it runs in page ``initializePage``):
         the running stack is never probed. That is also its limit, stated where the
         answer is used: a record is the mesh AS SAVED, and ``capture()`` records the
         form's selection, not a docker probe of what is running (#309)."""
         from . import saved_meshes
+        rec = None
         try:
-            rec = saved_meshes.latest_for_checkout(generator_dir, hostname=hostname)
+            if record_id:
+                rec = next((r for r in saved_meshes.records_for_checkout(
+                    generator_dir, hostname=hostname) if r.id == record_id), None)
+            if rec is None:
+                rec = (saved_meshes.latest_for_checkout(generator_dir, hostname=hostname,
+                                                        ran_only=True)
+                       or saved_meshes.latest_for_checkout(generator_dir,
+                                                           hostname=hostname))
         except Exception:                                  # noqa: BLE001 — offline read
             rec = None
         if rec is None:
@@ -1920,7 +1938,29 @@ def saved_mesh_source(rec) -> str:
         return ""
     label = str(getattr(rec, "label", "") or getattr(rec, "id", "") or "?")
     when = str(getattr(rec, "updated", "") or getattr(rec, "created", "") or "")
-    return f"saved mesh '{label}'" + (f" (saved {when})" if when else "")
+    ran = getattr(rec, "ran_when_saved", None)
+    try:
+        draft = callable(ran) and not ran()
+    except Exception:                                  # noqa: BLE001 — a label only
+        draft = False
+    return (f"saved mesh '{label}'" + (f" (saved {when})" if when else "")
+            + (" — NEVER RAN: saved as a draft before its first bring-up"
+               if draft else ""))
+
+
+def saved_mesh_choice_text(rec) -> str:
+    """One short line naming a record in the node-image pages' picker: its name,
+    when it was saved, and whether its mesh was up then."""
+    label = str(getattr(rec, "label", "") or getattr(rec, "id", "") or "?")
+    when = str(getattr(rec, "updated", "") or getattr(rec, "created", "") or "")
+    when = when[:16].replace("T", " ")
+    ran = getattr(rec, "ran_when_saved", None)
+    try:
+        draft = callable(ran) and not ran()
+    except Exception:                                  # noqa: BLE001 — a label only
+        draft = False
+    return (f"{label}" + (f" — saved {when}" if when else "")
+            + (" — never ran (draft)" if draft else " — ran"))
 
 
 def tor_carrier_platforms(platforms) -> tuple[tuple[str, ...], tuple[str, ...]]:
@@ -2079,20 +2119,78 @@ def _saved_mesh_cli(args: argparse.Namespace) -> int:
         cfg = _cfg_from_args(args)
         boot = LocalMeshBootstrap(args.generator_dir, cfg)
         node = boot._stack_node()
-        if not node.status().running:
-            print("[refused] no local mesh is running — there is nothing to save. "
-                  "(mesh-save records the RUNNING mesh; use `up` first.)",
-                  file=sys.stderr)
+        # NOTHING HAS TO BE RUNNING (the GUI's Saved meshes list, 2026-10-21): a
+        # record is the configuration, and one saved before its first bring-up is a
+        # DRAFT — the node-image pages never pick a draft over a mesh that ran, and
+        # say "never ran" when one is picked by hand. The GUI's rules, restated here
+        # so the two faces cannot disagree: credential COPIES need a mesh that is up
+        # (the files on disk belong to whatever mesh last ran), a new record never
+        # takes a name another record has, and an overwrite keeps the id, the place
+        # and the created stamp, and drops copies the replaced record kept.
+        try:
+            compose_up = bool(node.status().running)
+        except Exception:                                  # noqa: BLE001 — a fact only
+            compose_up = False
+        try:
+            probe = getattr(node, "devops_running", None)
+            kind_up = bool(probe()) if callable(probe) else None
+        except Exception:                                  # noqa: BLE001 — unknown
+            kind_up = None
+        if args.copy_credentials and not compose_up:
+            print("[refused] --copy-credentials needs the local mesh to be running: "
+                  "the credential files on disk belong to whatever mesh last ran, so "
+                  "a record of a mesh that is not up keeps POINTERS only. Save "
+                  "without it, or `up` first.", file=sys.stderr)
             return 1
+        records, _unreadable = saved_meshes.scan()
+        target = None
+        if args.overwrite:
+            target = next((r for r in records if r.id == args.overwrite), None)
+            if target is None:
+                print(f"[refused] no saved mesh with id {args.overwrite} to overwrite "
+                      "(`python3 -m hugmesh_studio.core.saved_meshes list`).",
+                      file=sys.stderr)
+                return 1
+            if not target.same_checkout(args.generator_dir, socket.gethostname()):
+                print(f"[refused] {target.id} is from another checkout or host — it "
+                      "describes another mesh; save a new record instead.",
+                      file=sys.stderr)
+                return 1
+        label = (args.label or "").strip()
+        if label:
+            owner = saved_meshes.label_owner(
+                label, records, exclude_id=target.id if target is not None else "")
+            if owner is not None:
+                print(f"[refused] a saved mesh is already called '{owner.label}' "
+                      f"({owner.id}) — pick another --label, or replace it with "
+                      f"--overwrite {owner.id}.", file=sys.stderr)
+                return 1
+        elif target is None:
+            label = saved_meshes.unique_label(
+                saved_meshes.derived_label_of(saved_meshes.config_for_record(cfg)),
+                records)
         rec = saved_meshes.capture(args.generator_dir, cfg, node, boot,
-                                  label=args.label,
-                                  copy_credentials=args.copy_credentials)
+                                  label=label,
+                                  copy_credentials=args.copy_credentials,
+                                  overwrite=target, kind_running=kind_up)
         path = saved_meshes.save(rec)
         if not path:
             print(f"[failed] the record could not be written under "
                   f"{saved_meshes.meshes_dir()}", file=sys.stderr)
             return 1
-        print(f"saved {rec.id} -> {path}")
+        dropped = (saved_meshes.drop_unreferenced_copies(rec)
+                   if target is not None else False)
+        print(f"{'overwrote' if target is not None else 'saved'} '{rec.label}' "
+              f"as {rec.id} -> {path}")
+        if dropped:
+            print("  the credential copies the replaced record kept were removed — "
+                  "this record keeps pointers only")
+        running = [n for n, up in (("Docker mesh", compose_up),
+                                   ("DevOps lane", kind_up is True)) if up]
+        print("  running at save time: " + (
+            ", ".join(running) if running else
+            "nothing — a DRAFT: the configuration as worked on (the node-image pages "
+            "do not import it unless it is picked by hand)"))
         print(f"  {rec.volume_count()} data volume(s) inventoried, NOT copied "
               f"(included=false: {saved_meshes.VOLUMES_NOT_INCLUDED_REASON})")
         print("  credential files: " + ("copied at 0600 into the record's side dir"
@@ -2152,8 +2250,10 @@ def main(argv: list[str] | None = None) -> int:
                    help="plan = print the confirm-before-run manifest (no side "
                         "effects); up = GENERATE creds + START the stack (explicit "
                         "action; prod TTY-confirms); down = stop both projects; "
-                        "status = are they running?; mesh-save = record the RUNNING "
-                        "mesh as a saved-mesh record (core/saved_meshes.py — "
+                        "status = are they running?; mesh-save = record this "
+                        "mesh's configuration as a saved-mesh record (running or "
+                        "not: one saved before its first bring-up is a draft; "
+                        "--overwrite ID replaces a record) (core/saved_meshes.py — "
                         "config, source HEADs, credential POINTERS, a volume "
                         "inventory; never volume contents, never a password); "
                         "mesh-restore <id> = bring a saved mesh back: a warm start "
@@ -2183,9 +2283,14 @@ def main(argv: list[str] | None = None) -> int:
                         "(`python3 -m hugmesh_studio.core.saved_meshes list`).")
     p.add_argument("--label", default="",
                    help="mesh-save: a human label for the record (default: derived).")
+    p.add_argument("--overwrite", default="", metavar="ID",
+                   help="mesh-save: replace the saved record with this id (its id, "
+                        "place and created stamp are kept; credential copies it kept "
+                        "are removed unless this save copies them again).")
     p.add_argument("--copy-credentials", action="store_true",
                    help="mesh-save: ALSO copy .e2e-credentials and keys-out/vault/"
-                        "secrets.json into the record's side dir (0600). OFF by "
+                        "secrets.json into the record's side dir (0600). Only while "
+                        "the mesh is running. OFF by "
                         "default — the record holds pointers only. Needed to bring "
                         "the SAME passwords back after `stack-clean`.")
     p.add_argument("--env", choices=("test", "prod"), default="test",

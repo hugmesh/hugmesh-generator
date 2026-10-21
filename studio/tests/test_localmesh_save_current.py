@@ -324,3 +324,60 @@ def test_a_probe_answer_for_a_record_since_overwritten_is_not_applied(qapp, page
     assert row.probe is None, "an answer about an older version was applied"
     w.apply_probe({rec.id: dict(stale, _updated=rec.updated)})
     assert row.probe is not None
+
+
+# ── fix round: what the armed overwrite says, old records, the Actions-row name ──
+def test_the_armed_overwrite_says_the_credential_copies_go(qapp, page):
+    rec = _record(label="with copies")
+    rec.credentials["e2e_file"] = {"copied": True, "copy": "e2e-credentials"}
+    assert sm.save(rec) and sm.load(rec.path()).has_credential_copies()
+    w = _entered(qapp, page)
+    _select(page)
+    w.overwrite_btn.click()                                   # FIRST click: arms
+    note = w.overwrite_note.text()
+    assert "Its saved credential copies are removed: this save keeps pointers only." \
+        in note, note
+    # nothing running: the second click turns the record into a draft, and says so
+    assert "becomes a draft (never ran)" in note
+
+
+def test_a_record_without_copies_does_not_claim_any_go(qapp, page):
+    _record(label="pointers only")
+    w = _entered(qapp, page)
+    _select(page)
+    w.overwrite_btn.click()
+    assert "credential copies" not in w.overwrite_note.text()
+
+
+def test_loading_an_old_record_does_not_read_as_changed(qapp, page):
+    """A record saved before the add-on picker existed leaves kind_addons at None;
+    Load keeps the boxes as they are, so the strip must not call that a change —
+    and the armed Overwrite says the form's add-on ticks are written in."""
+    old = _record(label="old shape")
+    old.config = lmb.LocalMeshBootstrapConfig(services=("tuwunel",),
+                                              kind_addons=None).to_dict()
+    assert sm.save(old)
+    w = _entered(qapp, page)
+    page._load_saved(sm.load(old.path()))
+    page._refresh_plan()
+    assert w.current_title.text() == \
+        "Current mesh — saved as ‘old shape’, no changes since", \
+        w.current_summary.text()
+    assert "kind_addons" not in w.current_summary.text()
+    _select(page)
+    w.overwrite_btn.click()
+    assert "never recorded a choice of DevOps add-ons" in w.overwrite_note.text()
+
+
+def test_the_actions_row_save_says_where_the_name_came_from(qapp, page):
+    w = _entered(qapp, page)
+    w.name_edit.setText("named on review")
+    page.save_mesh_btn.click()
+    _settle(qapp, page)
+    log = page.log.toPlainText()
+    assert "the record is named ‘named on review’ — typed in the 'Save as' box" in log
+    assert [r.label for r in sm.scan()[0]] == ["named on review"]
+    assert "'Save as' box" in page.save_mesh_btn.toolTip()
+    page.save_mesh_btn.click()                                # blank box: derived
+    _settle(qapp, page)
+    assert "derived, because the 'Save as' box" in page.log.toPlainText()

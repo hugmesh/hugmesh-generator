@@ -52,6 +52,9 @@ from ..qt import QtCore, QtGui, QtWidgets, Signal
 from ...core import saved_meshes as sm
 from ._emulation_common import make_table, set_cell
 
+#: plain words for :func:`.saved_meshes.unrecorded_fields` in the overwrite note
+_UNRECORDED_WORDS = {"services": "services", "kind_addons": "DevOps add-ons"}
+
 # Symbolic column indices only (network.py's rule).
 (_SM_COL_MESH, _SM_COL_SAVED, _SM_COL_ENV, _SM_COL_SERVICES,
  _SM_COL_RESTORE, _SM_COL_VOLUMES, _SM_COL_DOMAINS) = range(7)
@@ -416,11 +419,24 @@ class SavedMeshesWidget(QtWidgets.QWidget):
             typed = self._typed_label()
             if typed and typed != (rec.label or ""):
                 rename = f" It is renamed to ‘{typed}’."
+            # a record that never recorded a services / DevOps add-on choice does not
+            # read as "changed" when loaded, so say here that the form's choice is
+            # written into it
+            unrecorded = [_UNRECORDED_WORDS.get(k, k)
+                          for k in sm.unrecorded_fields(rec.config)]
+            fills = (" It never recorded a choice of " + " or ".join(unrecorded)
+                     + "; the form's current ticks are written in." if unrecorded
+                     else "")
+            draft = (" The Docker mesh is not running, so unless the DevOps lane is "
+                     "up the replaced record becomes a draft (never ran) and the "
+                     "node-image pages stop importing it by default."
+                     if self._mesh_up is False else "")
             self.overwrite_note.setText(
                 f"A second click replaces the saved record ‘{label}’ (saved "
                 f"{(rec.created or '?')[:16].replace('T', ' ')}) with the mesh being "
-                f"worked on now. Its place in the list is kept.{rename}{copies} Its "
-                "data volumes and the running mesh are not touched.")
+                f"worked on now. Its place in the list is kept.{rename}{copies}"
+                f"{fills}{draft} Its data volumes and the running mesh are not "
+                "touched.")
             self.overwrite_note.setVisible(True)
             return
         label = self._typed_label() or rec.label or rec.id
