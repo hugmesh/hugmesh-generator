@@ -68,6 +68,26 @@ mesh node** from the system tray.
   - cold-aware timeouts (a first build compiles ~28 images and is never killed at minute 30);
   - an **Open web UI** shortcut to the running stack's front door.
 
+### Local mesh: saved meshes (on the "Saved meshes and the plan" step)
+
+The **Saved meshes** list opens with the **current mesh**: the one being set up in
+the steps before it. It names every domain and what is kept for it (sign-in, services,
+look, VPN and outbound traffic, its own Tor front door), and says whether the mesh is
+saved already, unchanged, or changed since (by field). **Save current mesh** writes a
+new record (named from the **Save as** box, or derived when the box is empty; a name
+another record has is refused, with Overwrite named as the way). **Overwrite
+selected** replaces the selected record, keeping its place: the first click arms it
+and says what is replaced, the second click saves. No dialogs, and nothing has to be
+running: a record is the configuration, plus what was true when it was saved (which
+lanes were up, the volume inventory, credential **pointers**, never a password). The
+Actions-row button saves the same way; its credential-copy box is offered only while a
+mesh is running. A record saved before the mesh's first bring-up restores through
+**Load into the form** and **Generate && start**; its Restore refuses before any
+preflight. Records live in `<Studio state dir>/meshes/<id>.json`
+(`python3 -m hugmesh_studio.core.saved_meshes list|show|delete`). The node-image flow
+("Create nodes for local cloud") imports the newest record for the checkout, with every
+domain's settings.
+
 ### Local mesh: code folders (on the Repo source step)
 
 Under the Repo source cards, a **Code folders** block lists every domain from the
