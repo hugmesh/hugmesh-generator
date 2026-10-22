@@ -39,7 +39,8 @@ from ...core.config import (
     rpi_boards_for_role,
 )
 from ...core.worklist import (
-    WORKLIST_INFRA_SERVICES, WorklistConfig, WorklistEntry, entry_id,
+    RAM_PLATFORM_NAMES, RAM_PLATFORMS, WORKLIST_INFRA_SERVICES, WorklistConfig,
+    WorklistEntry, entry_id,
 )
 from ._desktop_user_dialog import DesktopUserDialog
 
@@ -93,13 +94,12 @@ _COL_CHECK, _COL_ROLE, _COL_PLATFORM, _COL_BOARD, _COL_RAM, _COL_FLAVOR, _COL_EN
 
 # The platforms whose NODE rows carry a RAM combo (--ram-gb): the Raspberry Pi and the
 # two Orange Pi node boards. x86/jetson builders do not take --ram-gb.
-_RAM_PLATFORMS = ("rpi5", "orangepi5", "orangepi4-lts")
+_RAM_PLATFORMS = RAM_PLATFORMS        # core/worklist.py, shared with the TUI
 # The single-board platforms' RAM-table key (the Orange Pi 4 LTS has no --board).
 _RAM_BOARD_FALLBACK = {"orangepi4-lts": "orange-pi-4-lts", "rpi5": "rpi5",
                        "orangepi5": "orange-pi-5-plus"}
 # Short board names for the inline RAM message (PLATFORM_LABELS are a sentence each).
-_RAM_PLATFORM_NAMES = {"rpi5": "Raspberry Pi", "orangepi5": "Orange Pi 5 / 5 Plus",
-                       "orangepi4-lts": "Orange Pi 4 LTS"}
+_RAM_PLATFORM_NAMES = RAM_PLATFORM_NAMES
 # The RAM combo's "not stated" item text (data ""). omnibus shows a prompt instead.
 _RAM_UNSTATED = "—"
 _RAM_PROMPT = "choose…"

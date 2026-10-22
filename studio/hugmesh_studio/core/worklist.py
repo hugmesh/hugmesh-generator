@@ -170,6 +170,40 @@ def duplicate_hostnames(entries: list["WorklistEntry"],
     return dups
 
 
+# The platforms whose NODE entries take the board's RAM (--ram-gb): the Raspberry Pi and
+# the two Orange Pi node boards. x86 / jetson builders do not take it. Shared by the GUI
+# WorklistPage (RAM column) and the TUI WorklistScreen (`ram N GB`).
+RAM_PLATFORMS = ("rpi5", "orangepi5", "orangepi4-lts")
+RAM_PLATFORM_NAMES = {"rpi5": "Raspberry Pi", "orangepi5": "Orange Pi 5 / 5 Plus",
+                      "orangepi4-lts": "Orange Pi 4 LTS"}
+
+
+def takes_ram(role: str, platform: str) -> bool:
+    """Does a (role, platform) worklist row carry a board RAM (--ram-gb)? Node roles
+    with a RAM floor (scripts/_roles-lib.sh HUGMESH_ROLE_MIN_RAM_GB) on RAM_PLATFORMS."""
+    return platform in RAM_PLATFORMS and roles.min_ram_gb(role) is not None
+
+
+def ram_problem(role: str, platform: str, ram_gb: str) -> str:
+    """Why ``ram_gb`` cannot be this row's board RAM ("" = fine). The builders' own
+    gate (hugmesh_role_ram_check): a whole number of GB, at or above the role's floor;
+    "" is fine except for a role that REQUIRES it (omnibus)."""
+    ram = str(ram_gb or "").strip()
+    if not takes_ram(role, platform):
+        return "" if not ram else f"{role}.{platform} takes no board RAM"
+    floor = roles.min_ram_gb(role) or 0
+    if not ram:
+        if roles.ram_required(role):
+            return (f"{role} on the {RAM_PLATFORM_NAMES.get(platform, platform)} needs its "
+                    f"board's RAM ({floor} GB or more): one image serves every RAM size")
+        return ""
+    if not ram.isdigit() or ram.startswith("0"):
+        return f"the RAM must be a whole number of GB, e.g. 8 (got {ram!r})"
+    if int(ram) < floor:
+        return f"{role} needs at least {floor} GB of RAM (got {ram})"
+    return ""
+
+
 def entry_id(role: str, platform: str) -> str:
     """The STABLE worklist entry id — ``f"{role}.{platform}"``. One id per role x
     platform combo; board/flavor are row ATTRIBUTES, so an id never dangles when a

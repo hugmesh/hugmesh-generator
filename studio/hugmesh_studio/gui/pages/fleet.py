@@ -302,7 +302,7 @@ class FleetPage(QtWidgets.QWidget):
         rl = QtWidgets.QVBoxLayout(self.rpi_group)
         self.rpi_roles = QtWidgets.QLineEdit()
         self.rpi_roles.setPlaceholderText(
-            "RPi role subset (RPI_ROLES=\"pki backend frontend desktop\"; desktop is opt-in; omnibus needs Board RAM 8+)")
+            "RPi role subset (RPI_ROLES=\"pki backend frontend desktop\"; desktop is opt-in)")
         rl.addWidget(_row("RPi roles", self.rpi_roles))
         self.rpi_board = _default_combo(
             RPI_BOARDS, "RPI_BOARD — rpi3 is DESKTOP-ONLY (pair with RPI_ROLES=desktop)")
@@ -334,8 +334,10 @@ class FleetPage(QtWidgets.QWidget):
         self.orangepi5_flavor = _default_combo(ORANGEPI5_FLAVORS)
         self.orangepi5_roles = QtWidgets.QLineEdit()
         self.orangepi5_roles.setPlaceholderText(
-            "ORANGEPI5_ROLES (default: desktop) — node roles pki backend frontend omnibus "
-            "are EXPERIMENTAL, installer only")
+            "ORANGEPI5_ROLES (default: desktop; or pki backend frontend omnibus)")
+        self.orangepi5_roles.setToolTip(
+            "Orange Pi 5 / 5 Plus cluster node roles are EXPERIMENTAL (hardware validation "
+            "pending) and installer-only; omnibus needs Board RAM 8 GB or more.")
         o5l.addWidget(_row("OPi5 roles", self.orangepi5_roles))
         o5l.addWidget(_row("OPi5 board", self.orangepi5_board))
         o5l.addWidget(_row("OPi5 flavor", self.orangepi5_flavor))
@@ -365,8 +367,10 @@ class FleetPage(QtWidgets.QWidget):
         self.orangepi4lts_flavor = _default_combo(ORANGEPI4LTS_FLAVORS)
         self.orangepi4lts_roles = QtWidgets.QLineEdit()
         self.orangepi4lts_roles.setPlaceholderText(
-            "ORANGEPI4LTS_ROLES (default: desktop) — frontend is its only node role "
-            "(EXPERIMENTAL, installer only)")
+            "ORANGEPI4LTS_ROLES (default: desktop; or frontend)")
+        self.orangepi4lts_roles.setToolTip(
+            "frontend is the Orange Pi 4 LTS's only cluster node role (4 GB RAM, 16 GB "
+            "eMMC); EXPERIMENTAL, installer-only.")
         o4ll.addWidget(_row("OPi4-LTS roles", self.orangepi4lts_roles))
         o4ll.addWidget(_row("OPi4-LTS flavor", self.orangepi4lts_flavor))
         l2.addWidget(self.orangepi4lts_group)

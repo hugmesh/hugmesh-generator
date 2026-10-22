@@ -188,3 +188,46 @@ def test_required_trio_never_checks_experimental_orange_pi_rows(wiz):
     assert {"pki.x86", "backend.x86", "frontend.x86",
             "pki.rpi5", "backend.rpi5", "frontend.rpi5"} <= checked
     assert not {r for r in checked if r.endswith((".orangepi5", ".orangepi4-lts"))}, checked
+
+
+# ── TUI parity: the text-mode worklist's `ram N GB` and its inline RAM refusal ─────────
+def test_tui_worklist_ram_rule_matches_the_gui():
+    from hugmesh_studio.core.config import ImageConfig as _Cfg
+    from hugmesh_studio.tui import journey
+
+    class _J:
+        worklist_role_allow = None
+        worklist = None
+        status = ""
+        advanced = False
+
+        def __init__(self):
+            self.cfg = _Cfg(mode="mesh")
+
+        def advance(self):
+            self.advanced = True
+
+    scr = journey.WorklistScreen()
+    j = _J()
+    scr.enter(j)
+    ids = [f"{r}.{p}" for r, p, _l in scr._rows]
+    for want in ("omnibus.rpi5", "omnibus.orangepi5", "frontend.orangepi4-lts"):
+        assert want in ids, f"the TUI worklist does not offer {want}"
+    n = ids.index("omnibus.rpi5") + 1
+    scr.feed(j, str(n))
+    scr.feed(j, "")                                   # Enter with no RAM: refused inline
+    assert not j.advanced and f"ram {n} 8" in j.status, j.status
+    scr.feed(j, f"ram {n} 4")
+    assert j.status.startswith("refused:") and "at least 8 GB" in j.status
+    scr.feed(j, f"ram {ids.index('pki.x86') + 1} 8")
+    assert "takes no board RAM" in j.status
+    scr.feed(j, f"ram {n} 8")
+    assert f"[RAM 8 GB]" in "\n".join(scr.lines(j))
+    scr.feed(j, "")
+    assert j.advanced, j.status
+    (entry,) = j.worklist.entries
+    assert (entry.id, entry.ram_gb) == ("omnibus.rpi5", "8")
+    # the materialized command carries it, like the GUI's
+    (_e, cfg), = j.worklist.materialize()
+    argv = cfg.to_cli_args()
+    assert argv[argv.index("--ram-gb") + 1] == "8"
