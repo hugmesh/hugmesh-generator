@@ -11,6 +11,11 @@ resources:
   - backing-service-endpoints.yaml
 
 images:
-  - { name: owncast/owncast, newName: owncast/owncast, newTag: latest }
+  # Upstream image: a release tag AND its index digest, never :latest. The tag is the readable
+  # name, the digest is what the runtime resolves (kustomize renders name:tag@sha256:...).
+  # Re-pin by resolving the new tag's index digest from the registry, changing both together;
+  # tests/scripts/cluster_manifest_integrity.py [image-pin] refuses latest, a floating tag or
+  # a missing/malformed digest on a third-party image.
+  - { name: owncast/owncast, newName: owncast/owncast, newTag: 0.3.0, digest: sha256:0f35b568b1098d2badbde2dbf3c73a902009c95eb687c647edea04d6da079a78 }
   - { name: hugmesh/owncast-bff-api, newName: registry.hugmesh.net/hugmesh/hugmesh-owncast-bff-api, newTag: main }
   - { name: hugmesh/owncast-ui, newName: registry.hugmesh.net/hugmesh/hugmesh-owncast-ui, newTag: main }
