@@ -41,7 +41,7 @@ validate_managed_services _mgd_rewrite_env _mgd_pg _mgd_pg_casdoor _mgd_velero
 _mgd_fed_bundles _mgd_bake_readme gate_backing_services
 parameterize_games_domain gate_env_apps bake_host_firewall rebrand_sysroot
 bake_idp_conf bake_vault_conf rewrite_idp_sysroot gate_casdoor_apps write_idp_readme
-apply_idp_external"
+apply_idp_external _validate_idp _idp_default_jwks _validate_vault"
 
 # Top-level settings the Pi builder declares and those functions read. Each is
 # loaded ONLY when the variable is unset, so a brand profile (-c) or the environment
@@ -55,6 +55,85 @@ _MGD_TIER12_IDS _MGD_TIER3_IDS _IDP_URL_RE _IDP_CLIENT_ID_RE _VAULT_PATH_RE"
 # list, build-rpi5-stage4.sh `DEFAULT_SVCS+=(hugmesh-firewall-reconcile ...)`;
 # tests/scripts/test-role-key-spelling.sh section E asserts the two stay equal).
 NODE_ROLE_RUNLEVEL_SVCS="hugmesh-firewall-reconcile hugmesh-coturn-firewall hugmesh-go-live-reconcile containerd kubelet"
+
+# The binaries a node's post-emerge payload assert requires (opi_assert_stage4_payload
+# in both Orange Pi builders). The Pi node floor (build-rpi5-stage4.sh `_payload_bins+=(kubelet
+# kubeadm kubectl containerd)` plus its auditd), and nft + iptables: without nft,
+# hugmesh-firewall-reconcile exits 0 with a warning and the release-state backstop
+# (public 80/443 closed while the mesh is internal) silently never loads.
+NODE_ROLE_REQUIRED_BINS="kubelet kubeadm kubectl containerd auditd nft iptables"
+
+# The kernel symbols a node kernel must have as =y after olddefconfig. This is the
+# Raspberry Pi node guard's list (build-rpi5-stage4.sh, the `k8s node kernel
+# option` loop; tests/scripts/test-role-key-spelling.sh section E asserts every one
+# of its symbols is here or in NODE_ROLE_KERNEL_PI_EXCEPT) plus IPV6, NFT_COMPAT,
+# IP_NF_FILTER/NAT, BRIDGE_NETFILTER, CGROUP_PIDS and MEMCG, which specs/kernel/k8s-node.config
+# also sets. =y, not =m: a symbol olddefconfig downgraded to a module is exactly the
+# silent prune this guard exists to catch.
+NODE_ROLE_KERNEL_MUST="CONFIG_NETFILTER_XTABLES
+CONFIG_NETFILTER_XT_MATCH_ADDRTYPE CONFIG_NETFILTER_XT_MATCH_COMMENT
+CONFIG_NETFILTER_XT_MATCH_CONNTRACK CONFIG_NETFILTER_XT_MATCH_MARK
+CONFIG_NETFILTER_XT_MATCH_MULTIPORT CONFIG_NETFILTER_XT_MATCH_STATISTIC
+CONFIG_NETFILTER_XT_TARGET_MARK CONFIG_NETFILTER_XT_TARGET_MASQUERADE
+CONFIG_NETFILTER_XT_TARGET_REDIRECT
+CONFIG_NETFILTER_XTABLES_LEGACY CONFIG_IP_NF_IPTABLES_LEGACY
+CONFIG_IP6_NF_IPTABLES_LEGACY
+CONFIG_IP_NF_FILTER CONFIG_IP_NF_NAT
+CONFIG_IP_NF_MANGLE CONFIG_NF_NAT CONFIG_NF_NAT_MASQUERADE
+CONFIG_NF_TABLES CONFIG_NF_TABLES_IPV4 CONFIG_NF_TABLES_IPV6
+CONFIG_NFT_NAT CONFIG_NFT_MASQ CONFIG_NFT_CT CONFIG_NFT_COMPAT
+CONFIG_IPV6
+CONFIG_IP6_NF_IPTABLES CONFIG_IP6_NF_FILTER CONFIG_IP6_NF_NAT
+CONFIG_IP6_NF_MANGLE
+CONFIG_VLAN_8021Q CONFIG_NET_L3_MASTER_DEV CONFIG_NET_SCH_HTB
+CONFIG_NET_CLS_CGROUP
+CONFIG_IP_VS CONFIG_VXLAN CONFIG_VETH CONFIG_BRIDGE CONFIG_BRIDGE_NETFILTER
+CONFIG_OVERLAY_FS CONFIG_OVERLAY_FS_REDIRECT_DIR CONFIG_OVERLAY_FS_INDEX
+CONFIG_CGROUP_NET_CLASSID CONFIG_CGROUP_NET_PRIO CONFIG_CGROUP_HUGETLB
+CONFIG_CGROUP_PERF CONFIG_CGROUP_WRITEBACK CONFIG_CGROUP_PIDS CONFIG_MEMCG
+CONFIG_FAIR_GROUP_SCHED
+CONFIG_BPF_SYSCALL
+CONFIG_POSIX_MQUEUE"
+
+# Pi guard symbols a node kernel here deliberately does NOT require, each with its
+# reason (section E fails on any other Pi symbol missing from NODE_ROLE_KERNEL_MUST):
+#   CONFIG_BPF_EVENTS - needs KPROBE_EVENTS/UPROBE_EVENTS, i.e. FTRACE, which the arm64
+#   defconfig + hardened-desktop.config leave off (measured on gentoo-sources 7.3.0);
+#   tracing is attack surface and no node component needs it.
+NODE_ROLE_KERNEL_PI_EXCEPT="CONFIG_BPF_EVENTS"
+
+# node_role_kernel_guard <.config> — print every NODE_ROLE_KERNEL_MUST symbol that is
+# not =y in <.config>, one per line; rc=1 when any is missing, rc=0 when all are =y.
+node_role_kernel_guard() {
+    local _cfg="$1"
+    local _sym
+    local _rc=0
+    for _sym in ${NODE_ROLE_KERNEL_MUST}; do
+        if ! grep -a -q "^${_sym}=y$" "${_cfg}"; then
+            printf '%s\n' "${_sym}"
+            _rc=1
+        fi
+    done
+    return "${_rc}"
+}
+
+# The host packages a node needs beyond the Pi k8s list
+# (specs-rpi5/portage/packages-k8s.list): on the Pi these sit in its BASE
+# packages.list, which an Orange Pi build does not read. Kept in ONE list,
+# specs-rpi5/portage/packages-node-host.list, that every Orange Pi node build appends;
+# tests/scripts/test-role-key-spelling.sh section E asserts the Orange Pi node set
+# covers the Pi base list minus its documented Pi-hardware atoms.
+NODE_ROLE_HOST_PACKAGES_LIST="specs-rpi5/portage/packages-node-host.list"
+
+# The Pi package.use files a node build lays over the board's own package.use:
+# containerd/runc with selinux + seccomp, iptables with nftables, nftables with
+# json + xtables, and the SELinux python bindings the policy tools pull in.
+NODE_ROLE_PI_PACKAGE_USE="kubernetes selinux"
+
+# The USE a node appends to the board's (desktop) make.conf: the Pi node USE line
+# (specs-rpi5/portage/make.conf.tmpl with @@CLIENT_USE@@ empty) minus what the board
+# make.conf already sets, plus -alsa (the board make.conf turns alsa on for the desktop).
+NODE_ROLE_MAKE_CONF_USE="-X -gtk -alsa -qt5 -qt6 -pulseaudio -bluetooth -introspection -vala cgroup cgroup2 seccomp selinux containers netlink"
 
 # _node_role_extract_fn <name> <file> — print the LAST column-0 `name() {` ... `}`
 # block in <file> (bash runs the last definition), nothing when absent.

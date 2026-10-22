@@ -1123,7 +1123,8 @@ if ${PRINT_PLAN}; then
         _plan RELEASE_STATE      "${RELEASE_STATE}"
         _plan RAM_GB             "${RAM_GB:-unspecified}"
         _plan RAM_FLOOR_GB       "$(hugmesh_role_min_ram_gb "${ROLE}")"
-        _plan NODE_PACKAGES      "specs-rpi5/portage/packages-k8s.list (the Raspberry Pi node set)"
+        _plan NODE_PACKAGES      "specs-rpi5/portage/packages-k8s.list + ${NODE_ROLE_HOST_PACKAGES_LIST} (the Raspberry Pi node set)"
+        _plan NODE_USE           "${NODE_ROLE_MAKE_CONF_USE} + package.use ${NODE_ROLE_PI_PACKAGE_USE} (from specs-rpi5)"
         _plan EXPERIMENTAL       "yes (no Orange Pi has booted an image from this repo; hardware validation pending)"
     else
     _plan OPTIONAL_SERVICES  "none"   # lean desktop client: no baked cluster tree
@@ -1162,6 +1163,12 @@ resolve_stage4_packages() {
         _rsp_info "Cluster node role ${ROLE} — appending specs-rpi5/portage/packages-k8s.list (the Pi node set)"
         mapfile -t -O "${#STAGE4_PACKAGES[@]}" STAGE4_PACKAGES < <(
             grep -v '^\s*#' "${SCRIPT_DIR}/specs-rpi5/portage/packages-k8s.list" | grep -v '^\s*$')
+        # ...plus the node host packages the Pi carries in its BASE list (nftables,
+        # conntrack-tools, iproute2, ethtool, cryptsetup, lvm2, nvme-cli, the SELinux
+        # container/virt policy, setools) — scripts/_node-role-lib.sh names the file.
+        _rsp_info "Cluster node role ${ROLE} — appending ${NODE_ROLE_HOST_PACKAGES_LIST} (the node host packages)"
+        mapfile -t -O "${#STAGE4_PACKAGES[@]}" STAGE4_PACKAGES < <(
+            grep -v '^\s*#' "${SCRIPT_DIR}/${NODE_ROLE_HOST_PACKAGES_LIST}" | grep -v '^\s*$')
     else
     _rsp_info "Appending packages-desktop.list (the lean LXDE desktop set)"
     mapfile -t -O "${#STAGE4_PACKAGES[@]}" STAGE4_PACKAGES < <(
@@ -1539,6 +1546,17 @@ cp "${SPECS_DIR}/portage/profile/use.mask"          "${SYSROOT}/etc/portage/prof
     cp "${SPECS_DIR}/portage/profile/package.provided" "${SYSROOT}/etc/portage/profile/package.provided"
 pcs_sync_dir "${SPECS_DIR}/portage/package.accept_keywords" "${SYSROOT}/etc/portage/package.accept_keywords"
 pcs_sync_dir "${SPECS_DIR}/portage/package.use" "${SYSROOT}/etc/portage/package.use"
+# Cluster NODE role: lay the Pi node package.use files over the board's own
+# (containerd/runc selinux+seccomp, iptables nftables, nftables json+xtables, the
+# SELinux python bindings). Read from specs-rpi5, not copied into this tree; a later
+# desktop build's pcs_sync_dir above prunes them again (not in the board's specs).
+if ${NODE_ROLE}; then
+    for _pu in ${NODE_ROLE_PI_PACKAGE_USE}; do
+        cp "${SCRIPT_DIR}/specs-rpi5/portage/package.use/${_pu}" \
+            "${SYSROOT}/etc/portage/package.use/hugmesh-node-${_pu}"
+    done
+    unset _pu
+fi
 pcs_sync_dir "${SPECS_DIR}/portage/package.env" "${SYSROOT}/etc/portage/package.env"
 # Quiet portage's per-file sendfile WARNING-traceback spam before the first
 # merge into this sysroot (sendfile(2) EINVALs for EVERY file merged onto the
@@ -1550,6 +1568,18 @@ pcs_sync_dir "${SPECS_DIR}/portage/package.env" "${SYSROOT}/etc/portage/package.
 pcs_quiet_sendfile_noise "${SYSROOT}"
 cp "${SPECS_DIR}/portage/env/"*.conf               "${SYSROOT}/etc/portage/env/" 2>/dev/null || true
 render_template "${SPECS_DIR}/portage/make.conf.tmpl" "${SYSROOT}/etc/portage/make.conf"
+# Cluster NODE role: the board make.conf is the DESKTOP's (USE X gtk alsa ...). A
+# node takes the Pi node USE instead: no X/gtk/alsa, plus the container flags
+# (specs-rpi5/portage/make.conf.tmpl renders @@CLIENT_USE@@ to nothing on a node and
+# always sets "cgroup cgroup2 seccomp selinux containers netlink"). make.conf is
+# shell-sourced, so this appended line wins.
+if ${NODE_ROLE}; then
+    {
+        echo ''
+        echo '# hugmesh cluster NODE role: the Pi node USE (no desktop stack, container flags)'
+        echo "USE=\"\${USE} ${NODE_ROLE_MAKE_CONF_USE}\""
+    } >> "${SYSROOT}/etc/portage/make.conf"
+fi
 # ── PYTHON_TARGETS: derived from the STAGE3 SEED, never a literal ─────────────
 # make.conf.tmpl deliberately ships no PYTHON_TARGETS/PYTHON_SINGLE_TARGET
 # assignment: a USE_EXPAND variable ASSIGNED in make.conf REPLACES the profile
@@ -2020,38 +2050,56 @@ have_in_sysroot() {
     done
     return 1
 }
-# Base payload (always required): networking + login + base utils + the desktop
-# stack (unconditional — this platform's ONLY role is the light desktop).
-REQUIRED_BINS=(NetworkManager nmcli sshd nano Xorg openbox lxsession pcmanfm lightdm)
-# Bootable flavors (LIVE or INSTALLER): dracut must be present to GENERATE the
-# dmsquash-live initramfs that both media boot from.
-if ${BUILD_LIVE} || ${BUILD_INSTALLER}; then
-    REQUIRED_BINS+=(dracut)
-fi
-# LUKS2 root (--encrypt-root): cryptsetup must be present in the LIVE environment
-# for install-orangepi5.sh's ENCRYPT branch to format/open the encrypted root.
-if ${ENCRYPT_ROOT}; then
-    REQUIRED_BINS+=(cryptsetup)
-fi
-payload_missing=""
-for _b in "${REQUIRED_BINS[@]}"; do
-    have_in_sysroot "${_b}" || payload_missing="${payload_missing} ${_b}"
-done
-if [ -n "${payload_missing}" ]; then
-    err "stage4 payload incomplete — missing role-defining binaries in ${SYSROOT}:${payload_missing}"
-    err "       the packages.list/packages-desktop.list emerge did not complete; review the emerge output above."
-    exit 1
-fi
-# display-manager OpenRC service: enabled in the runlevel unconditionally, so
-# the init script (from gui-libs/display-manager-init) MUST exist or the image
-# boots to a console with a dead service link. Assert it now that the desktop
-# set emerged.
-if [ ! -e "${SYSROOT}/etc/init.d/display-manager" ]; then
-    err "The 'display-manager' service is enabled in the runlevel but ${SYSROOT}/etc/init.d/display-manager is missing"
-    err "       (gui-libs/display-manager-init did not emerge) — the desktop would boot to a console. Aborting."
-    exit 1
-fi
-info "stage4 payload assert OK (${#REQUIRED_BINS[@]} role binaries present)."
+# opi_assert_stage4_payload — the post-emerge payload assert as ONE function, so
+# tests/scripts/test-role-key-spelling.sh (section E) extracts and RUNS it against
+# scratch roots instead of re-typing its steps. The desktop arm is the original
+# assert, unchanged. A cluster NODE role installs no desktop (packages-desktop.list
+# is skipped), so it asserts the k8s node floor instead (scripts/_node-role-lib.sh
+# NODE_ROLE_REQUIRED_BINS: the Pi node floor plus nft, without which
+# hugmesh-firewall-reconcile exits 0 and the release-state backstop fails open).
+opi_assert_stage4_payload() {
+    local _b
+    local payload_missing=""
+    if ${NODE_ROLE}; then
+        # shellcheck disable=SC2206  # word-split on purpose: a space-separated list
+        REQUIRED_BINS=(NetworkManager nmcli sshd nano ${NODE_ROLE_REQUIRED_BINS})
+    else
+        # Base payload: networking + login + base utils + the desktop stack.
+        REQUIRED_BINS=(NetworkManager nmcli sshd nano Xorg openbox lxsession pcmanfm lightdm)
+    fi
+    # Bootable flavors (LIVE or INSTALLER): dracut must be present to GENERATE the
+    # dmsquash-live initramfs that both media boot from.
+    if ${BUILD_LIVE} || ${BUILD_INSTALLER}; then
+        REQUIRED_BINS+=(dracut)
+    fi
+    # LUKS2 root (--encrypt-root): cryptsetup must be present in the LIVE environment
+    # for install-orangepi5.sh's ENCRYPT branch to format/open the encrypted root.
+    if ${ENCRYPT_ROOT}; then
+        REQUIRED_BINS+=(cryptsetup)
+    fi
+    for _b in "${REQUIRED_BINS[@]}"; do
+        have_in_sysroot "${_b}" || payload_missing="${payload_missing} ${_b}"
+    done
+    if [ -n "${payload_missing}" ]; then
+        err "stage4 payload incomplete — missing role-defining binaries in ${SYSROOT}:${payload_missing}"
+        if ${NODE_ROLE}; then
+            err "       the packages.list/node package emerge did not complete; review the emerge output above."
+        else
+            err "       the packages.list/packages-desktop.list emerge did not complete; review the emerge output above."
+        fi
+        exit 1
+    fi
+    # display-manager OpenRC service: the DESKTOP enables it in the runlevel, so the
+    # init script (from gui-libs/display-manager-init) MUST exist or the image boots
+    # to a console with a dead service link. A node links no display manager.
+    if ! ${NODE_ROLE} && [ ! -e "${SYSROOT}/etc/init.d/display-manager" ]; then
+        err "The 'display-manager' service is enabled in the runlevel but ${SYSROOT}/etc/init.d/display-manager is missing"
+        err "       (gui-libs/display-manager-init did not emerge) — the desktop would boot to a console. Aborting."
+        exit 1
+    fi
+    info "stage4 payload assert OK (${#REQUIRED_BINS[@]} role binaries present)."
+}
+opi_assert_stage4_payload
 
 # ── REQUESTED-ATOM COMPLETENESS GATE (scripts/_payload-gate-lib.sh) ───────────
 # The binary assert above only covers a HANDFUL of role-defining commands, so a
@@ -2192,9 +2240,13 @@ else
             grep -q "^${must}=y" .config || { err "SELinux kernel option ${must} not enabled after olddefconfig"; exit 1; }
         done
         if ${NODE_ROLE}; then
-            for must in CONFIG_OVERLAY_FS CONFIG_BRIDGE_NETFILTER CONFIG_VXLAN CONFIG_CGROUP_PIDS CONFIG_MEMCG CONFIG_NF_TABLES; do
-                grep -q "^${must}=[ym]" .config || { err "cluster node role ${ROLE}: kernel option ${must} not enabled after olddefconfig"; exit 1; }
-            done
+            # The Pi node guard's FULL symbol list (scripts/_node-role-lib.sh
+            # NODE_ROLE_KERNEL_MUST), each =y: olddefconfig prunes per leaf, so a
+            # surviving parent proves nothing about IP_NF_FILTER / IP_NF_NAT.
+            if ! _kmiss="$(node_role_kernel_guard .config)"; then
+                err "cluster node role ${ROLE}: kernel options not =y after olddefconfig (kube-proxy / CNI / container runtime would be impaired):" $_kmiss
+                exit 1
+            fi
         fi
         grep -q '^CONFIG_LSM="lockdown,yama,selinux"$' .config || { err "CONFIG_LSM malformed (expected lockdown,yama,selinux); lockdown/SELinux would not activate"; exit 1; }
         # ...and every NAME in that string must have its module COMPILED IN. The
