@@ -120,6 +120,9 @@ class BrandSettingsTabs(QtCore.QObject):
     def __init__(self, route: str = "image", parent=None):
         super().__init__(parent)
         self.route = route
+        #: False on a host that cannot open the Go-Live wizard: the Ways tab then draws
+        #: no button and its line names only the --go-live option
+        self.ways_offered = True
         self.view: brand_step.BrandView | None = None
         self._active = False
         self._services: list[QtWidgets.QWidget] = []
@@ -495,8 +498,9 @@ class BrandSettingsTabs(QtCore.QObject):
         # A client image serves no domain: the Go-Live wizard (internal and public
         # names) is a mesh device's, so the button and its pointer are not offered.
         client = v.client_image()
-        self.ways_btn.setVisible(not client)
-        self.ways_note.setText("" if client else brand_step.WAYS_HOME)
+        self.ways_btn.setVisible(not client and self.ways_offered)
+        self.ways_note.setText("" if client else (
+            brand_step.WAYS_HOME if self.ways_offered else brand_step.WAYS_HOME_NO_BUTTON))
 
     # ── the domain's sign-in ──────────────────────────────────────────────────────
     def _fill_signin(self, note: str = "", error: bool = False) -> None:

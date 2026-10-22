@@ -1391,7 +1391,9 @@ class LocalMeshPage(QtWidgets.QWizardPage):
             lane_note=DOCKER_SERVICES_NOTE,
             # each domain's Brand settings tabs (Identity, Look, Services, Ways) over
             # this route's superbrand session; row 0's Look tab is the mesh's own look
-            brand_session=self.brand_session, route="docker")
+            brand_session=self.brand_session, route="docker",
+            # the Ways tab's button opens the Go-Live wizard from this checkout
+            generator_dir=self.generator_dir)
         lay.addWidget(self.domain_services)
         return w
 

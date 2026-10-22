@@ -53,7 +53,8 @@ __all__ = ["SECTIONS", "SECTION_LOOK", "SECTION_SERVICES", "BrandView", "brand_v
            "TAILNET_CHOICES", "EGRESS_CHOICES", "REACH_RECORDED_ONLY", "OWN_REACH_HOME",
            "feed_identity", "feed_ways", "CLIENT_SIGNIN_NOTE", "CLIENT_LOOK_NOTE",
            "CLIENT_SERVICES_NOTE",
-           "CLIENT_WAYS_NOTE", "CLIENT_REACH_EFFECT"]
+           "CLIENT_WAYS_NOTE", "CLIENT_REACH_EFFECT", "WAYS_HOME", "WAYS_HOME_NO_BUTTON",
+           "WAYS_GO_LIVE_COMMAND", "WAYS_TUI_LINE"]
 
 #: (number, title) — the window's four tabs, in the window's order.
 SECTIONS: tuple[tuple[int, str], ...] = (
@@ -153,6 +154,16 @@ CLIENT_WAYS_NOTE = ("Mesh desktop client image: it serves no domain, so this dom
 WAYS_HOME = ("the internal name and the public name are chosen in the Go-Live wizard: "
              "run it with the --go-live option, or press ‘" + WAYS_BUTTON + "’ in the "
              "window (Tor, VPN and egress are chosen above, per domain)")
+#: The Ways line on a window that cannot open the Go-Live wizard itself (no checkout to
+#: run its driver from): no button is drawn, so the line names only the option.
+WAYS_HOME_NO_BUTTON = ("the internal name and the public name are chosen in the Go-Live "
+                       "wizard: run it with the --go-live option (Tor, VPN and egress "
+                       "are chosen above, per domain)")
+#: The text face's twin of the button: typed in section 4, it opens the Go-Live screen
+#: with this domain already picked.
+WAYS_GO_LIVE_COMMAND = "go-live"
+WAYS_TUI_LINE = ("here: type ‘" + WAYS_GO_LIVE_COMMAND + "’ to open the Go-Live screen "
+                 "with this domain picked (b on its first step comes back)")
 
 
 class BrandView:
@@ -654,7 +665,7 @@ def ways_lines(view: BrandView) -> list[str]:
             last = way
         out.append(f"      {path}: {effect}")
     if not view.client_image():
-        out += ["", WAYS_HOME]
+        out += ["", WAYS_HOME, WAYS_TUI_LINE]
     return out
 
 
@@ -672,7 +683,8 @@ def feed_ways(view: BrandView, line: str) -> str:
         problems = view.set_egress(arg, conf)
     else:
         return ("commands: tor on|off · vpn inherit|on|off · "
-                "egress inherit|direct|vpn [PROVIDER-FILE]")
+                "egress inherit|direct|vpn [PROVIDER-FILE]"
+                + ("" if view.client_image() else " · " + WAYS_GO_LIVE_COMMAND))
     if problems:
         return "Not changed: " + problems[0]
     w = view.reach_lines()

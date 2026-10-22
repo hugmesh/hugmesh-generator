@@ -535,7 +535,9 @@ class FleetPage(QtWidgets.QWidget):
         p_svc = QtWidgets.QWidget(); lsv = QtWidgets.QVBoxLayout(p_svc)
         self.domain_services = DomainServicesWidget(
             scope_cfg=None, entries=None, lane_note=FLEET_LANE_NOTE,
-            brand_session=lambda: self._brand_session(), route="fleet")
+            brand_session=lambda: self._brand_session(), route="fleet",
+            # the Ways tab's button opens the Go-Live wizard from this checkout
+            generator_dir=self.generator_dir)
         lsv.addWidget(self.domain_services)
         self.stack.addWidget(_scrolled(p_svc))
 
