@@ -147,6 +147,25 @@ if command -v openssl >/dev/null 2>&1; then
       && ok "leaf verifies against the minted CA" || bad "leaf does not chain to the minted CA"
     grep -c 'BEGIN CERTIFICATE' "${TMP}/mint/fullchain.crt" | grep -x 2 >/dev/null \
       && ok "fullchain.crt = leaf + CA (2 certs)" || bad "fullchain.crt is not leaf+CA"
+    # The CA is NAME-CONSTRAINED: trusting it must never let it vouch for an
+    # unrelated site. Sign a leaf for a foreign name with the minted CA key and
+    # require verification to FAIL (an unconstrained CA verifies it fine).
+    NC="$(openssl x509 -in "${TMP}/mint/ca.crt" -noout -ext nameConstraints 2>/dev/null || true)"
+    printf '%s' "${NC}" | grep 'DNS:localhost' >/dev/null \
+      && ok "CA carries nameConstraints (localhost permitted)" || bad "CA has NO nameConstraints: ${NC}"
+    openssl req -newkey rsa:2048 -nodes -keyout "${TMP}/foreign.key" -out "${TMP}/foreign.csr" \
+      -subj "/CN=foreign.example.com" >/dev/null 2>&1
+    printf 'subjectAltName = DNS:foreign.example.com\n' > "${TMP}/foreign.ext"
+    if openssl x509 -req -in "${TMP}/foreign.csr" -CA "${TMP}/mint/ca.crt" -CAkey "${TMP}/mint/ca.key" \
+         -CAcreateserial -days 2 -extfile "${TMP}/foreign.ext" -out "${TMP}/foreign.crt" >/dev/null 2>&1; then
+      if openssl verify -CAfile "${TMP}/mint/ca.crt" "${TMP}/foreign.crt" >/dev/null 2>&1; then
+        bad "CA vouches for foreign.example.com - it is not name-constrained"
+      else
+        ok "CA refuses to vouch for a foreign name (permitted-subtree violation)"
+      fi
+    else
+      bad "could not sign the foreign-name probe leaf"
+    fi
   else
     bad "gen-certs.sh failed to mint into ${TMP}/mint"
   fi

@@ -1625,7 +1625,7 @@ PUBLIC_HOST_PORT ?= 8088
 PUBLIC_HTTPS_PORT ?= 8488
 # Per-machine TLS material for the https front door — minted by `make
 # stack-certs` (gen-certs.sh), gitignored. NOT tests/stack/certs: those are
-# committed mock-stack fixtures whose CA key is public in the repo.
+# committed mock-stack fixtures whose leaf key is public in the repo.
 STACK_TLS_DIR   := tests/stack/.tls-front
 GIT_BASE        ?= https://github.com/hugmesh
 GIT_REF         ?= main
