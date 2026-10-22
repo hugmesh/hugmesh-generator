@@ -112,6 +112,10 @@ WIXUI_DLL='C:\wixext\ui\WixToolset.UI.wixext.dll'
 
 VERSION=$(sed -n 's/^__version__ = "\([^"]*\)".*/\1/p' "$STUDIO_DIR/hugmesh_studio/__init__.py" | head -n 1)
 MSI_NAME=hugmesh-studio-$VERSION-x64.msi
+# The MSI's ProductVersion: numbers only, so a beta's N moves into the third field
+# (0.3.0-beta.1 -> 0.3.1). Set in main from wix/msi_version.py, the same mapping the
+# release workflow uses. The file name above keeps the SemVer string.
+MSI_VERSION=""
 
 XVFB_PID=""
 GUARDED=0
@@ -655,7 +659,7 @@ build_msi() {
   rm -f "$out"
   (cd "$SRC/studio" && wine_run 'C:\dotnet\dotnet.exe' "$WIX_DLL" build -arch x64 \
       -dcl mszip \
-      -define "Version=$VERSION" -define "IconFile=build/icons/hugmesh-studio.ico" \
+      -define "Version=$MSI_VERSION" -define "IconFile=build/icons/hugmesh-studio.ico" \
       -define "LicenseFile=build/License.rtf" -define "AppDir=$appwin" \
       -ext "$WIXUI_DLL" -pdbtype none \
       -out "$outwin" packaging/wix/Package.wxs packaging/wix/Files.wxs) 2>&1 | tee -a "$LOGS/wix.log" | grep -v '^wineserver' >&2
@@ -718,7 +722,7 @@ phase_verify() {
   [ -f "$msi" ] || die "no $msi; run the msi phase first"
   (cd "$HUGMESH_DIST_DIR" && sha256sum -c "$MSI_NAME.sha256" >/dev/null) || die "$MSI_NAME does not match its .sha256 file"
   export_msi "$msi" "$BUILD/msitools" || die "msitools export failed"
-  run_verifier "$BUILD/msitools" "$VERSION" | sed 's/^/    /' >&2 || die "the MSI does not match what it was built from (above)"
+  run_verifier "$BUILD/msitools" "$MSI_VERSION" | sed 's/^/    /' >&2 || die "the MSI does not match what it was built from (above)"
 }
 
 phase_install_test() {
@@ -828,7 +832,7 @@ phase_selftest() {
   tree_check "$DIST_APP" >/dev/null || die "SELFTEST CONTROL FAILED: tree_check rejects the intact bundle"
   smoke_cli "$DIST_APP" >/dev/null || die "SELFTEST CONTROL FAILED: the --print-specs smoke rejects the intact bundle"
   export_msi "$good" "$BUILD/selftest-good" || die "msitools export failed"
-  run_verifier "$BUILD/selftest-good" "$VERSION" >/dev/null || die "SELFTEST CONTROL FAILED: the verifier rejects the intact MSI"
+  run_verifier "$BUILD/selftest-good" "$MSI_VERSION" >/dev/null || die "SELFTEST CONTROL FAILED: the verifier rejects the intact MSI"
   note "controls pass"
   say "selftest: now the broken inputs"
   expect_red "tree check without hugmesh-studio.exe" tree_check "$(mutant noexe hugmesh-studio.exe)"
@@ -847,7 +851,7 @@ phase_selftest() {
   bad_app=$(mutant mutant-msi hugmesh-studio.exe)
   build_msi "$bad_app" "$BUILD/selftest-bad/$MSI_NAME" >/dev/null 2>&1 || die "could not build the exe-less MSI"
   export_msi "$BUILD/selftest-bad/$MSI_NAME" "$BUILD/selftest-bad-export" || die "msitools export failed"
-  expect_red "verifier on an MSI with no hugmesh-studio.exe" run_verifier "$BUILD/selftest-bad-export" "$VERSION"
+  expect_red "verifier on an MSI with no hugmesh-studio.exe" run_verifier "$BUILD/selftest-bad-export" "$MSI_VERSION"
   say "selftest: every deliberately broken input was caught"
 }
 
@@ -880,6 +884,7 @@ main() {
     esac
   done
   [ -n "$VERSION" ] || die "could not read __version__ from $STUDIO_DIR/hugmesh_studio/__init__.py"
+  MSI_VERSION=$(python3 "$WIX_SRC_DIR/msi_version.py" "$VERSION") || die "no MSI ProductVersion for __version__ $VERSION (see wix/msi_version.py)"
   guard_prefix
   mkdir -p "$HUGMESH_MSI_WORKDIR" "$LOGS" "$BUILD/tmp"
   # Scratch (the unzip of the .NET runtime is ~70 MB) stays with the build, not in /tmp,
@@ -887,7 +892,7 @@ main() {
   export TMPDIR=$BUILD/tmp
   exec 9>"$HUGMESH_MSI_WORKDIR/.lock"
   flock -n 9 || die "another build-msi-wine.sh is using $HUGMESH_MSI_WORKDIR"
-  say "HugMesh Image Studio $VERSION -> $MSI_NAME (prefix $HUGMESH_WINE_PREFIX)"
+  say "HugMesh Image Studio $VERSION (MSI ProductVersion $MSI_VERSION) -> $MSI_NAME (prefix $HUGMESH_WINE_PREFIX)"
   refresh_scrub
   for p in "${phases[@]}"; do
     case "$p" in
