@@ -243,3 +243,73 @@ def test_tui_a_second_gate_pass_without_tor_clears_only_the_imported_tor():
     tui_lc.apply_gate(k, "running.example", [], with_tor=True)
     tui_lc.apply_gate(k, "draft.example", [], with_tor=False)
     assert k.cfg.tor_onion_service is True
+
+
+# ── the one-shot import latch is reset by a pick (skeptic 2, R4) ───────────────
+def test_a_re_pick_after_back_imports_the_new_record_with_the_same_tor(wiz, qapp):
+    """Isolates the latch from the Tor rule: two meshes that both RAN, both without
+    Tor, differing only in their domain. Next imports the default; Back; pick the
+    other; Next must import it. Without the latch reset in _on_record_picked the
+    second Next keeps the first domain (validatePage imports once per entry)."""
+    _save("first.example", False, running=True, label="first")
+    second = _save("second.example", False, running=True, label="second")
+    page = _gate(wiz, qapp)
+    assert page.record_pick.itemData(0) == second.id      # newest that ran
+    first_id = page.record_pick.itemData(1)
+    page.confirm.setChecked(True)
+    wiz.next()
+    qapp.processEvents()
+    assert wiz.cfg.cluster_domain == "second.example"
+    wiz.back()
+    qapp.processEvents()
+    assert wiz.currentPage() is page
+    page.record_pick.setCurrentIndex(page.record_pick.findData(first_id))
+    page.confirm.setChecked(True)
+    wiz.next()
+    qapp.processEvents()
+    assert wiz.cfg.cluster_domain == "first.example"
+    assert wiz.cfg.tor_onion_service is False
+
+
+def test_a_re_pick_after_back_turns_tor_on_for_a_mesh_that_ran_it(wiz, qapp,
+                                                                  ran_then_draft):
+    """The other direction: import the draft (Tor off) first, Back, pick the mesh
+    that ran Tor — the images carry Tor, as the summary says."""
+    ran, draft = ran_then_draft
+    page = _gate(wiz, qapp)
+    page.record_pick.setCurrentIndex(page.record_pick.findData(draft.id))
+    page.confirm.setChecked(True)
+    wiz.next()
+    qapp.processEvents()
+    assert wiz.cfg.cluster_domain == "draft.example"
+    assert wiz.cfg.tor_onion_service is False
+    wiz.back()
+    qapp.processEvents()
+    page.record_pick.setCurrentIndex(page.record_pick.findData(ran.id))
+    assert "Tor onion: <b>on</b>" in page.summary.text()
+    page.confirm.setChecked(True)
+    wiz.next()
+    qapp.processEvents()
+    assert wiz.cfg.cluster_domain == "running.example"
+    assert wiz.cfg.tor_onion_service is True
+
+
+# ── an Overwrite made with nothing running is not "never ran" in the picker ────
+def test_the_picker_says_not_run_as_saved_for_an_overwritten_mesh_that_ran(wiz, qapp):
+    ran = _save("lab.example", True, running=True, label="lab mesh")
+    ran_at = ran.last_seen["at"]
+    cfg = LocalMeshBootstrapConfig(cluster_domain="lab.example", kind_addons=(),
+                                   services=("tor",), with_tor=True)
+    over = sm.capture(GENERATOR_DIR, cfg, _Node(False), _Boot(), overwrite=ran)
+    assert sm.save(over)
+    page = _gate(wiz, qapp)
+    assert page.record_pick.count() == 1
+    text = page.record_pick.itemText(0)
+    assert "never ran" not in text and "not run as saved" in text, text
+    summary = page.summary.text()
+    assert "NEVER RAN" not in summary and "NOT RUN AS SAVED" in summary, summary
+    assert ran_at[:16].replace("T", " ") in summary
+    # TUI parity: the same words on the text gate
+    j = _tui_gate()
+    tui = "\n".join(j.lines())
+    assert "NEVER RAN" not in tui and "NOT RUN AS SAVED" in tui, tui

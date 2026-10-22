@@ -57,6 +57,13 @@ class _Node:
         return ""
 
     def devops_running(self):
+        return bool(self.kind)
+
+    def devops_running_state(self):
+        # the CLI records the lane's TRI-STATE: an Exception here is a probe that
+        # did not answer
+        if isinstance(self.kind, Exception):
+            raise self.kind
         return self.kind
 
 
@@ -278,3 +285,132 @@ def test_per_domain_settings_go_from_a_saved_mesh_into_a_saved_node_config(tmp_p
     assert b.look == row_b["look"]
     assert b.ways == row_b["ways"]
     assert b.tor is True and b.optional_services == ["tuwunel"]
+
+
+# ── an Overwrite with nothing running does not make a mesh that RAN "never ran" ───
+# (saved-meshes skeptic 2, probe_core.py case A, 2026-10-21)
+def _overwrite(target, domain, tor, *, running, kind=None, updated):
+    rec = sm.capture(GEN, _cfg(domain, tor), _Node(running), _Boot(),
+                     overwrite=target, kind_running=kind)
+    path = sm.save(rec)
+    assert path
+    with open(path, encoding="utf-8") as fh:
+        d = json.load(fh)
+    d["updated"] = updated
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(d, fh)
+    return sm.load(path)
+
+
+def test_an_overwrite_while_nothing_runs_keeps_that_the_mesh_ran():
+    ran = _save("lab.example", True, running=True, label="lab mesh",
+                updated="2026-10-14T10:00:00+00:00")
+    ran_at = ran.last_seen["at"]
+    over = _overwrite(ran, "lab.example", False, running=False,
+                      updated="2026-10-21T10:00:00+00:00")
+    assert over.id == ran.id
+    # the CONFIGURATION has not run, so it is not imported by default …
+    assert over.ran_when_saved() is False
+    # … but the mesh did run, and the record keeps when
+    assert over.ran_before_at() == ran_at and over.ever_ran() is True
+    src = lmb.saved_mesh_source(over)
+    assert "NEVER RAN" not in src and "before its first bring-up" not in src, src
+    assert "NOT RUN AS SAVED" in src and ran_at[:16].replace("T", " ") in src, src
+    choice = lmb.saved_mesh_choice_text(over)
+    assert "never ran" not in choice and "not run as saved" in choice, choice
+    assert any("An earlier version of this saved mesh ran" in n for n in over.notes)
+    # a second overwrite while still down carries the stamp forward
+    again = _overwrite(over, "lab.example", False, running=False,
+                       updated="2026-10-21T11:00:00+00:00")
+    assert again.ran_before_at() == ran_at
+    assert "NEVER RAN" not in lmb.saved_mesh_source(again)
+    # and its restore sentence never claims it was saved before its first bring-up
+    plan = sm.restore_plan(again, volumes_present=False, images_present=False,
+                           creds_match=False, mesh_running=False)
+    assert "before its first bring-up" not in plan.sentence, plan.sentence
+
+
+def test_an_overwrite_of_a_draft_that_never_ran_still_says_never_ran():
+    draft = _save("draft.example", False, running=False, label="draft",
+                  updated="2026-10-20T10:00:00+00:00")
+    over = _overwrite(draft, "draft.example", False, running=False,
+                      updated="2026-10-21T10:00:00+00:00")
+    assert over.ran_before_at() == "" and over.ever_ran() is False
+    assert "NEVER RAN" in lmb.saved_mesh_source(over)
+    assert "never ran (draft)" in lmb.saved_mesh_choice_text(over)
+    # an overwrite while the mesh RUNS is simply a mesh that ran
+    up = _overwrite(over, "draft.example", False, running=True,
+                    updated="2026-10-21T11:00:00+00:00")
+    assert up.ran_when_saved() is True and up.ran_before_at() == ""
+
+
+def test_a_legacy_record_overwritten_while_down_keeps_that_it_ran():
+    """A record from before last_seen existed counts as ran: an Overwrite of it
+    while nothing runs keeps its updated stamp as when it last ran."""
+    legacy = sm.SavedMesh(id=sm.new_id(), label="legacy", generator_dir=GEN,
+                          hostname=socket.gethostname(),
+                          created="2026-09-01T10:00:00+00:00")
+    legacy.config = _cfg("old.example", True).to_dict()
+    assert sm.save(legacy)
+    legacy = sm.find(legacy.id)
+    assert legacy.ran_when_saved() is True and legacy.last_seen == {}
+    over = _overwrite(legacy, "old.example", True, running=False,
+                      updated="2026-10-21T10:00:00+00:00")
+    assert over.ran_before_at() == legacy.updated
+    assert "NEVER RAN" not in lmb.saved_mesh_source(over)
+
+
+def test_a_record_that_ran_before_ranks_above_a_draft_that_never_ran():
+    """Nothing ran as saved: the node-image pages' default (for_checkout) and the
+    picker's row 0 (records_for_checkout) are the same record — the one whose
+    earlier version ran, over a NEWER draft that never ran."""
+    ran = _save("lab.example", True, running=True, label="lab",
+                updated="2026-10-10T10:00:00+00:00")
+    over = _overwrite(ran, "lab.example", True, running=False,
+                      updated="2026-10-19T10:00:00+00:00")
+    draft = _save("draft.example", False, running=False, label="draft",
+                  updated="2026-10-21T10:00:00+00:00")
+    assert [r.id for r in sm.records_for_checkout(GEN)] == [over.id, draft.id]
+    boot, rec = lmb.LocalMeshBootstrap.for_checkout(GEN)
+    assert rec.id == over.id and boot.cfg.resolved_domain() == "lab.example"
+    # a record that RAN as saved still comes first of all
+    up = _save("up.example", False, running=True, label="up",
+               updated="2026-10-01T10:00:00+00:00")
+    assert [r.id for r in sm.records_for_checkout(GEN)] == [up.id, over.id, draft.id]
+    assert lmb.LocalMeshBootstrap.for_checkout(GEN)[1].id == up.id
+
+
+# ── the CLI records an unanswered kind probe as UNKNOWN, never as "not running" ──
+@pytest.mark.parametrize("failure", [None, RuntimeError("kind: exec format error")])
+def test_cli_mesh_save_records_kind_unknown_when_its_probe_fails(cli_node, capsys,
+                                                                 failure):
+    cli_node.kind = failure
+    assert _cli("--cluster-domain", "k.example", "--label", "kind unknown") == 0
+    out = capsys.readouterr().out
+    (rec,) = sm.scan()[0]
+    assert rec.last_seen["kind_running"] is None, rec.last_seen
+    assert "could not be checked" in out, out
+    # the note does not claim the DevOps lane was down either
+    assert not any("neither was the DevOps lane" in n for n in rec.notes)
+
+
+def test_cli_mesh_save_records_the_kind_lane_up(cli_node, capsys):
+    cli_node.kind = True
+    assert _cli("--cluster-domain", "k.example", "--label", "kind up") == 0
+    assert "running at save time: DevOps lane" in capsys.readouterr().out
+    (rec,) = sm.scan()[0]
+    assert rec.last_seen["kind_running"] is True and rec.ran_when_saved() is True
+
+
+def test_cli_overwrite_of_a_mesh_that_ran_with_nothing_running_says_so(cli_node,
+                                                                        capsys):
+    cli_node.running = True
+    assert _cli("--cluster-domain", "lab.example", "--label", "lab") == 0
+    (first,) = sm.scan()[0]
+    capsys.readouterr()
+    cli_node.running = False
+    assert _cli("--cluster-domain", "lab.example", "--overwrite", first.id) == 0
+    out = capsys.readouterr().out
+    assert "NOT RUN AS SAVED" in out and "DRAFT" not in out, out
+    (again,) = sm.scan()[0]
+    assert again.ran_before_at() == first.last_seen["at"]

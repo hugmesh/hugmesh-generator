@@ -732,10 +732,13 @@ class LocalMeshBootstrap:
                 rec = next((r for r in saved_meshes.records_for_checkout(
                     generator_dir, hostname=hostname) if r.id == record_id), None)
             if rec is None:
+                # nothing ran: the picker's own row 0 (records_for_checkout puts a
+                # record whose EARLIER version ran — an Overwrite made while nothing
+                # ran — before a draft that never ran, each newest first)
                 rec = (saved_meshes.latest_for_checkout(generator_dir, hostname=hostname,
                                                         ran_only=True)
-                       or saved_meshes.latest_for_checkout(generator_dir,
-                                                           hostname=hostname))
+                       or next(iter(saved_meshes.records_for_checkout(
+                           generator_dir, hostname=hostname)), None))
         except Exception:                                  # noqa: BLE001 — offline read
             rec = None
         if rec is None:
@@ -2013,35 +2016,58 @@ class LocalMeshIdentity(NamedTuple):
     mesh_domains: object = None
 
 
+def _ran_state(rec) -> tuple[bool, str]:
+    """``(is a draft, when an earlier version last ran)`` for the import labels below.
+    A draft whose earlier version ran (an Overwrite made while nothing ran) is NOT a
+    mesh that never ran: ``ran_before`` names when it last did. Wording only, so a
+    record object without these methods reads as a mesh that ran."""
+    ran = getattr(rec, "ran_when_saved", None)
+    try:
+        draft = callable(ran) and not ran()
+    except Exception:                                  # noqa: BLE001 — a label only
+        draft = False
+    before = ""
+    if draft:
+        fn = getattr(rec, "ran_before_at", None)
+        try:
+            before = str(fn() or "") if callable(fn) else ""
+        except Exception:                              # noqa: BLE001 — a label only
+            before = ""
+    return draft, before
+
+
+def _short_when(stamp: str) -> str:
+    return str(stamp or "")[:16].replace("T", " ")
+
+
 def saved_mesh_source(rec) -> str:
     """One human line naming the record an import read, or "" when none was."""
     if rec is None:
         return ""
     label = str(getattr(rec, "label", "") or getattr(rec, "id", "") or "?")
     when = str(getattr(rec, "updated", "") or getattr(rec, "created", "") or "")
-    ran = getattr(rec, "ran_when_saved", None)
-    try:
-        draft = callable(ran) and not ran()
-    except Exception:                                  # noqa: BLE001 — a label only
-        draft = False
-    return (f"saved mesh '{label}'" + (f" (saved {when})" if when else "")
-            + (" — NEVER RAN: saved as a draft before its first bring-up"
-               if draft else ""))
+    draft, before = _ran_state(rec)
+    if draft and before:
+        tail = (" — NOT RUN AS SAVED: overwritten while nothing ran; an earlier "
+                f"version of this mesh last ran {_short_when(before)}")
+    elif draft:
+        tail = " — NEVER RAN: saved as a draft before its first bring-up"
+    else:
+        tail = ""
+    return f"saved mesh '{label}'" + (f" (saved {when})" if when else "") + tail
 
 
 def saved_mesh_choice_text(rec) -> str:
     """One short line naming a record in the node-image pages' picker: its name,
     when it was saved, and whether its mesh was up then."""
     label = str(getattr(rec, "label", "") or getattr(rec, "id", "") or "?")
-    when = str(getattr(rec, "updated", "") or getattr(rec, "created", "") or "")
-    when = when[:16].replace("T", " ")
-    ran = getattr(rec, "ran_when_saved", None)
-    try:
-        draft = callable(ran) and not ran()
-    except Exception:                                  # noqa: BLE001 — a label only
-        draft = False
-    return (f"{label}" + (f" — saved {when}" if when else "")
-            + (" — never ran (draft)" if draft else " — ran"))
+    when = _short_when(str(getattr(rec, "updated", "") or getattr(rec, "created", "")
+                           or ""))
+    draft, before = _ran_state(rec)
+    state = (f" — not run as saved (ran {_short_when(before)})"
+             if draft and before else
+             " — never ran (draft)" if draft else " — ran")
+    return f"{label}" + (f" — saved {when}" if when else "") + state
 
 
 def tor_carrier_platforms(platforms) -> tuple[tuple[str, ...], tuple[str, ...]]:
@@ -2212,9 +2238,14 @@ def _saved_mesh_cli(args: argparse.Namespace) -> int:
             compose_up = bool(node.status().running)
         except Exception:                                  # noqa: BLE001 — a fact only
             compose_up = False
+        # The DevOps lane is RECORDED as a tri-state: a probe that did not answer is
+        # None (unknown), never False — `devops_running()` folds every failure into
+        # False because it gates a page, and a broken kind binary with docker down
+        # then filed a mesh whose kind lane was up as a draft that never ran.
         try:
-            probe = getattr(node, "devops_running", None)
-            kind_up = bool(probe()) if callable(probe) else None
+            probe = getattr(node, "devops_running_state", None)
+            got = probe() if callable(probe) else None
+            kind_up = None if got is None else bool(got)
         except Exception:                                  # noqa: BLE001 — unknown
             kind_up = None
         if args.copy_credentials and not compose_up:
@@ -2268,10 +2299,17 @@ def _saved_mesh_cli(args: argparse.Namespace) -> int:
                   "this record keeps pointers only")
         running = [n for n, up in (("Docker mesh", compose_up),
                                    ("DevOps lane", kind_up is True)) if up]
+        before = rec.ran_before_at() if not running else ""
         print("  running at save time: " + (
             ", ".join(running) if running else
-            "nothing — a DRAFT: the configuration as worked on (the node-image pages "
-            "do not import it unless it is picked by hand)"))
+            ("nothing seen running (the DevOps lane could not be checked: its kind "
+             "probe did not answer)" if kind_up is None else "nothing")
+            + (f" — NOT RUN AS SAVED: an earlier version of this mesh last ran "
+               f"{before[:16].replace('T', ' ')}; this configuration has not run, so "
+               "the node-image pages do not import it unless it is picked by hand"
+               if before else
+               " — a DRAFT: the configuration as worked on (the node-image pages "
+               "do not import it unless it is picked by hand)")))
         print(f"  {rec.volume_count()} data volume(s) inventoried, NOT copied "
               f"(included=false: {saved_meshes.VOLUMES_NOT_INCLUDED_REASON})")
         print("  credential files: " + ("copied at 0600 into the record's side dir"
