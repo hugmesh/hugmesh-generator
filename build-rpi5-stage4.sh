@@ -3434,8 +3434,17 @@ fi
 cp "${SPECS_DIR}/portage/env/"*.conf                      "${SYSROOT}/etc/portage/env/" 2>/dev/null || true
 # Per-package user patches auto-applied by eapply_user (called from each ebuild's
 # default src_prepare). cross_emerge runs with PORTAGE_CONFIGROOT=${SYSROOT}, so
-# portage reads them from ${SYSROOT}/etc/portage/patches/<cat>/<pkg>/. Currently
-# holds net-misc/networkmanager's cross jansson-SONAME fix (see that .patch).
+# portage reads them from ${SYSROOT}/etc/portage/patches/<cat>/<pkg>/.
+# The sysroot copy is REBUILT from specs every run, never added to: a --resume
+# sysroot otherwise keeps a patch the specs have dropped, and portage applies a
+# patch in an unversioned <pkg>/ dir to EVERY future version of that package.
+# That is how the old net-misc/networkmanager cross jansson-SONAME patch killed
+# NetworkManager 1.58.1 in src_prepare ("Hunk #1 FAILED at 296"): 1.58.1's own
+# meson.build already prefixes the cross sys_root, so the patch was removed.
+# A new patch here goes in a VERSIONED dir (<cat>/<pkg>-<ver>/), which
+# studio/tests/test_portage_user_patches.py enforces.
+rm -rf "${SYSROOT}/etc/portage/patches"
+mkdir -p "${SYSROOT}/etc/portage/patches"
 if [ -d "${SPECS_DIR}/portage/patches" ]; then
     cp -a "${SPECS_DIR}/portage/patches/."             "${SYSROOT}/etc/portage/patches/"
 fi
