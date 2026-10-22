@@ -646,6 +646,16 @@ def client_class_role(role: str, platform: str) -> bool:
     return False
 
 
+def services_catalog(cfg) -> tuple:
+    """The optional-service slugs THIS image's builder accepts: the platform catalogue
+    (OPTIONAL_SERVICES_BY_PLATFORM), except an Orange Pi DESKTOP row, whose builder bakes
+    no cluster tree and refuses --optional-services (only its NODE roles take them)."""
+    plat = getattr(cfg, "platform", "") or "x86"
+    if plat in _OPI_NODE_PLATFORMS and getattr(cfg, "role", "") not in _ORANGEPI_NODE_ROLE_IDS:
+        return ()
+    return tuple(OPTIONAL_SERVICES_BY_PLATFORM.get(plat, ()))
+
+
 def services_picker_hidden(cfg) -> bool:
     """True when the Network page hides the whole cluster-services picker — and with it
     the anubis row — for ``cfg``: an unaffiliated image (no HugMesh plane at all) or a
