@@ -38,7 +38,9 @@ Qt-free, like everything in this package; the window's tabs call the same functi
 """
 from __future__ import annotations
 
-from ..core import brand_look, brand_model, domain_reach, plain_words
+import dataclasses
+
+from ..core import brand_look, brand_model, domain_reach, plain_words, reach_apply
 from ..core.config import (DOMAIN_IDP_OWN, DOMAIN_IDP_SUPERDOMAIN, SIGNIN_FROM_MESH,
                            SIGNIN_SOURCE_WORDS, Domain, effective_signin,
                            set_domain_signin)
@@ -98,10 +100,11 @@ EGRESS_CHOICES: tuple[tuple[str, str], ...] = (
     (domain_reach.EGRESS_VPN, "Through an egress VPN"),
     (domain_reach.EGRESS_DIRECT, "Direct (no egress VPN)"),
 )
-#: What every route does with a domain's own VPN and egress today (plain_words.
-#: WAY_EFFECT says it per path): recorded with the domain, applied by no route yet.
-REACH_RECORDED_ONLY = ("Recorded with this domain; no start path applies a domain's own "
-                       "VPN or egress yet — the mesh's own values are what runs.")
+#: What a route with no start of its own says about a domain's own VPN and egress
+#: (BrandView.reach_effect gives each route its own sentence: the Docker mesh APPLIES
+#: the egress of a domain that runs Mastodon, nothing applies a per-domain VPN, and
+#: the image and fleet routes apply neither — core/reach_apply).
+REACH_RECORDED_ONLY = reach_apply.ROUTE_NOT_APPLIED[""]
 #: The mesh's own row: its VPN and egress ARE the mesh's.
 OWN_REACH_HOME = ("this is the mesh's own domain: its VPN is the mesh's (on in "
                   "production), its egress is the mesh's egress VPN (the Mesh "
@@ -290,6 +293,33 @@ class BrandView:
             block["conf"] = conf.strip()
         return self._set_ways(egress=block)
 
+    def reach_effect(self) -> str:
+        """What THIS route's start does with this domain's own VPN and egress — the
+        sentence under the Ways controls, the same in the window and the text screen
+        (core/reach_apply). The Docker route reads the mesh's controls as they stand
+        and every row of the Domains step, so a choice made on another domain's tab
+        (who runs Mastodon, who names which provider file) shows here at once."""
+        if self.own:
+            return OWN_REACH_HOME[:1].upper() + OWN_REACH_HOME[1:] + "."
+        host = self.session.host
+        route = getattr(host, "route", "") or ""
+        if route != "docker":
+            return reach_apply.ROUTE_NOT_APPLIED.get(route,
+                                                     reach_apply.ROUTE_NOT_APPLIED[""])
+        mesh = self.mesh()
+        if mesh is None or not hasattr(mesh, "applied_egress"):
+            return reach_apply.ROUTE_NOT_APPLIED[""]
+        state = getattr(host, "state", None)
+        if state is not None:
+            rows = [dataclasses.asdict(d) for d in (state.domains or [])]
+            own = (state.own_name or "").strip() or reach_apply.docker_own_name(mesh)
+        else:
+            rows = [dict(r) for r in (getattr(host.cfg, "domains", None) or ())
+                    if isinstance(r, dict)]
+            own = reach_apply.docker_own_name(mesh)
+        cfg = dataclasses.replace(mesh, domains=tuple(rows))
+        return reach_apply.docker_reach_notes(self.name, cfg, rows, own)
+
     def reach_lines(self) -> dict[str, str]:
         """{'tailnet': line, 'egress': line} in the model's words."""
         row = Domain(name=self.name) if self.own else self.row
@@ -469,7 +499,7 @@ def ways_lines(view: BrandView) -> list[str]:
                 f"{words.get(domain_reach.WAY_TAILNET, '')}",
                 f"   egress        {mode}{(' ' + conf) if conf else ''}: "
                 f"{words.get(domain_reach.WAY_EGRESS, '')}",
-                "", "   " + REACH_RECORDED_ONLY, "",
+                ""] + ["   " + p for p in view.reach_effect().split("\n")] + ["",
                 "commands: tor on|off · vpn inherit|on|off · "
                 "egress inherit|direct|vpn [PROVIDER-FILE]", ""]
     last = ""

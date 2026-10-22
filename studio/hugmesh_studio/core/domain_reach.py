@@ -24,16 +24,16 @@ for the superbrand look — so every row written before these keys existed reads
   mesh's own file. Absent = the mesh's (``mesh_egress_default``: an image's
   ``--egress-vpn FILE``, a Docker mesh's egress-vpn service + its conf).
 
-WHAT EACH ROUTE DOES WITH THEM TODAY — measured, and said by
-``plain_words.WAY_EFFECT``: nothing yet applies either per domain. The Docker mesh
-runs ONE egress container and joins ONE tailnet for the whole mesh; no builder reads
-a manifest row's ``ways``. They are recorded intent with a resolver (``effective_*``)
-the screens use to say what a domain inherits, and the input the enforcing lanes will
-read. Tor is different: a domain's own onion RUNS on the Docker mesh. A mesh-wide Tor
-switch is NOT inherited as a per-domain onion — turning Tor on for a mesh gives the
-mesh its one address, and minting an onion for every domain because of it would
-change every existing Tor mesh; a domain without its own onion is reached through the
-mesh's.
+WHAT EACH ROUTE DOES WITH THEM — measured, said by ``plain_words.WAY_EFFECT`` and
+decided by ``core/reach_apply``: the Docker mesh runs ONE egress container that
+carries only Mastodon's outbound delivery, so the egress of the domains that run its
+one Mastodon decides that container (applied at start); it joins its VPN as one
+machine, so a per-domain VPN choice is not applied. No builder reads a manifest row's
+``ways``, and the kind lane applies neither. Tor is different: a domain's own onion
+RUNS on the Docker mesh. A mesh-wide Tor switch is NOT inherited as a per-domain
+onion — turning Tor on for a mesh gives the mesh its one address, and minting an
+onion for every domain because of it would change every existing Tor mesh; a domain
+without its own onion is reached through the mesh's.
 """
 from __future__ import annotations
 

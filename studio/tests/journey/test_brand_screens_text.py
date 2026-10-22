@@ -10,7 +10,7 @@ import os
 
 import pytest
 
-from hugmesh_studio.core import brand_model
+from hugmesh_studio.core import brand_model, reach_apply
 from hugmesh_studio.core.config import DOMAIN_IDP_OWN, Domain
 from hugmesh_studio.tui import brand_step
 from hugmesh_studio.tui.domain_services_step import DomainServicesScreen
@@ -198,7 +198,10 @@ def test_the_ways_section_edits_tor_vpn_and_egress_and_names_the_wizard(gen):
     text = _text(sc, j)
     assert "internal name: shop-example." in text
     assert "Docker mesh:" in text and "kind cluster:" in text and "node image:" in text
-    assert brand_step.WAYS_HOME in text and brand_step.REACH_RECORDED_ONLY in text
+    # the brand session here is the IMAGE route's: its Ways section says an image
+    # applies neither the domain's own VPN nor its egress (core/reach_apply)
+    assert brand_step.WAYS_HOME in text
+    assert reach_apply.ROUTE_NOT_APPLIED["image"] in text
     sc.feed(j, "tor on")
     assert sc.current(j).tor is True
     sc.feed(j, "vpn off")

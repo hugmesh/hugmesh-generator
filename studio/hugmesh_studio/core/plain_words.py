@@ -106,25 +106,28 @@ WAY_EFFECT: dict[tuple[str, str], str] = {
     ("public", "image"):
         "baked into the plan the Go-Live wizard reads on the device; opening public "
         "ports applies to the whole computer",
-    # per-domain VPN membership and egress (core/domain_reach): recorded on every path,
-    # applied on none yet — each mesh joins ONE private network and runs ONE egress
+    # per-domain VPN membership and egress (core/domain_reach -> core/reach_apply): the
+    # Docker mesh APPLIES a brand's egress when that brand runs the mesh's one Mastodon
+    # (the only container the egress VPN carries); nothing applies a per-brand VPN, and
+    # the kind and image paths apply neither — each sentence says which
     ("tailnet", "docker"):
-        "recorded only: this mesh joins its private network as a whole (production "
-        "only); nothing here applies a per-brand choice yet",
+        "not applied: this mesh's VPN container joins the private network as one "
+        "machine (production only) and puts no brand's pages on it, so there is no "
+        "per-brand switch",
     ("tailnet", "kind"):
-        "recorded only: the cluster joins no private network; nothing here applies "
-        "this yet",
+        "not applied: the cluster joins no private network",
     ("tailnet", "image"):
-        "recorded only: a node joins its mesh's private network as a whole; no "
-        "builder reads a per-brand choice yet",
+        "not applied: a node joins its mesh's private network as a whole machine; no "
+        "builder reads a per-brand choice",
     ("egress", "docker"):
-        "recorded only: this mesh runs one egress for all its brands; nothing here "
-        "applies a per-brand choice yet",
+        "applied for Mastodon only: the brands that run this mesh's one Mastodon (the "
+        "tuwunel service) decide whether its outbound delivery goes through the egress "
+        "VPN, and with which provider file; nothing else here uses the egress VPN",
     ("egress", "kind"):
-        "recorded only: the cluster has no egress VPN; nothing here applies this yet",
+        "not applied: the cluster's egress delivery ships switched off",
     ("egress", "image"):
-        "recorded only: an image's egress VPN covers the whole computer; no builder "
-        "reads a per-brand choice yet",
+        "not applied: an image's egress VPN covers the whole computer; no builder "
+        "reads a per-brand choice",
 }
 
 #: Words a brand screen never shows (D1). Exported for the screen lanes and their
