@@ -50,6 +50,7 @@ __all__ = ["SECTIONS", "SECTION_LOOK", "SECTION_SERVICES", "BrandView", "brand_v
            "SIGNIN_CHOICES", "SIGNIN_EXTERNAL", "SIGNIN_MESH_HOME", "PROVIDER_WORDS",
            "TAILNET_CHOICES", "EGRESS_CHOICES", "REACH_RECORDED_ONLY", "OWN_REACH_HOME",
            "feed_identity", "feed_ways", "CLIENT_SIGNIN_NOTE", "CLIENT_LOOK_NOTE",
+           "CLIENT_SERVICES_NOTE",
            "CLIENT_WAYS_NOTE"]
 
 #: (number, title) — the window's four tabs, in the window's order.
@@ -131,6 +132,10 @@ CLIENT_SIGNIN_NOTE = ("Mesh desktop client image: a domain's own sign-in is kept
 CLIENT_LOOK_NOTE = ("Mesh desktop client image: it serves no sign-in page, so no domain's "
                     "web look is shown by it. The desktop's own look (theme, wallpaper, "
                     "accent) is set on the Branding step.")
+CLIENT_SERVICES_NOTE = ("Mesh desktop client image: it runs no services for its domains "
+                        "and writes no mesh manifest, so the services ticked here are kept "
+                        "with this configuration only. Which services the image itself "
+                        "carries is the Network step's choice.")
 CLIENT_WAYS_NOTE = ("Mesh desktop client image: it serves no domain, so this domain's Tor, "
                     "VPN and egress choices are kept with this configuration only. The "
                     "computer joins the mesh's VPN and uses an egress VPN as a whole: "

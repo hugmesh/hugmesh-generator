@@ -192,3 +192,32 @@ def test_the_text_screen_prints_the_same_client_sentences(gen):
     # leaving the step writes no brand record on a client
     sc.feed(j, "")
     assert not os.path.exists(brand_model.record_path())
+
+
+def test_the_cloud_services_tab_says_a_client_keeps_its_ticks_only(qapp, gen):
+    """The cluster's "RECORDED, NOT YET ENFORCED AT THE CLUSTER" banner and the "they
+    ride the mesh manifest" help were both untrue on a client image, which has no
+    cluster and writes no manifest: the client's own line replaces them, both faces."""
+    from hugmesh_studio.core.domain_services import ENFORCEMENT_NOTE
+    _wiz, page = _page(qapp, gen, _cloud_cfg())
+    assert page.brand_tabs.current_title() == "Services"
+    _usable(page.lane_note, "the client services line", min_h=12)
+    assert page.lane_note.text() == brand_step.CLIENT_SERVICES_NOTE
+    assert page.enforcement.isHidden() and page.help.isHidden()
+    _usable(page.table, "the services table", min_w=200, min_h=60)
+    # a mesh keeps the banner and the help, and has no client line
+    mcfg = ImageConfig(mode="mesh")
+    mcfg.domains = [Domain(name="shop.example", title="Shop")]
+    _wiz, mpage = _page(qapp, gen, mcfg)
+    assert not mpage.enforcement.isHidden() and not mpage.help.isHidden()
+    assert mpage.lane_note.isHidden()
+    # the text screen
+    cfg = _cloud_cfg()
+    j = SimpleNamespace(status="", generator_dir=gen, overlay=None, advance=lambda: None,
+                        cfg=cfg)
+    sc = DomainServicesScreen(brand_session_of=lambda _j: session_for(
+        SimpleNamespace(), "image", cfg, gen), route="image")
+    sc.enter(j)
+    lines = sc.lines(j)
+    assert brand_step.CLIENT_SERVICES_NOTE in lines
+    assert ENFORCEMENT_NOTE not in lines

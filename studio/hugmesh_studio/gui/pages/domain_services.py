@@ -137,7 +137,7 @@ from types import SimpleNamespace
 from ..qt import Qt, QtCore, QtWidgets
 from ..styles import MUTED, WARN, muted
 from ._scroll import scrollable
-from .brand_screen import BrandSettingsTabs
+from .brand_screen import TAB_SERVICES, BrandSettingsTabs
 from ...core import plain_words
 from ...tui.brand_step import brand_view
 from ...core.domain_services import (
@@ -1082,6 +1082,21 @@ class DomainServicesPage(QtWidgets.QWizardPage, DomainServicesBody):
     def initializePage(self):
         cfg = self.wiz.cfg
         self._load(cfg, domain_names_for_services(cfg), implicit_own_domain(cfg))
+        self._paint_client_services(cfg)
+
+    def _paint_client_services(self, cfg) -> None:
+        """A Mesh desktop client (cloud) runs no services for its domains and writes no
+        manifest: the cluster's "not yet enforced" banner and the manifest help line
+        would both be untrue there, so the client's own line replaces them (the text
+        screen prints the same, ``brand_step.CLIENT_SERVICES_NOTE``). The step opens on
+        the Services tab, so the body's visibility is set where it is on screen."""
+        from ...tui import brand_step
+        client = (getattr(cfg, "mode", "") or "") == "cloud"
+        self.brand_tabs.setCurrentIndex(TAB_SERVICES)
+        self.enforcement.setVisible(not client)
+        self.help.setVisible(not client)
+        self.lane_note.setText(brand_step.CLIENT_SERVICES_NOTE if client else "")
+        self.lane_note.setVisible(client)
 
     def forget_answers(self) -> None:
         """Drop every working answer: the rows were REPLACED under this page on the
