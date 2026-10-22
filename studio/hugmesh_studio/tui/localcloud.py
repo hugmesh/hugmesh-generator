@@ -251,7 +251,8 @@ class LocalCloudScreen:
             return []
         current = self._picked_id or self._records[0].id
         return ["", "Saved meshes of this checkout (type a number to import that one "
-                    "instead; the ones that ran come first, drafts say 'never ran'):",
+                    "instead; the ones that ran come first, then the ones not running when "
+                    "saved, and drafts last, marked 'never ran'):",
                 *[f"  {i}) {saved_mesh_choice_text(r)}"
                   + ("   <- importing" if r.id == current else "")
                   for i, r in enumerate(self._records, 1)]]

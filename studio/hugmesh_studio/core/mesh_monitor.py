@@ -1297,9 +1297,11 @@ def _profile_slugs() -> dict[str, tuple[str, ...]]:
 #: profile.yaml + the two one-shots in compose.real.yaml): a domain ticks Matrix
 #: (``tuwunel``), and the profile that ticks also starts the whole Mastodon tier.
 #: Mastodon is NOT on any domain's Services tab — the per-domain ActivityPub choice
-#: is ``akkoma``, which has its own profile and its own two containers — and the
-#: Mastodon micro-frontend is one federation row every domain's shell shows. So the
-#: Mastodon containers are shared, and a domain's Stop stops its Matrix only.
+#: is ``akkoma``, which has its own profile and its own two containers. The mesh runs
+#: ONE Mastodon, and it serves the domains whose tuwunel choice brought it up (the
+#: same answer core/reach_apply.mastodon_domains gives for its egress). So the
+#: Mastodon rows read "Shared: <those domains>", and a domain's Stop stops its
+#: Matrix only: stopping the one Mastodon would stop it for every domain using it.
 #: tests/test_mesh_pod_domains_attribution.py pins this table against the real
 #: compose files: a service added to the profile goes red until it is placed here.
 _PROFILE_SERVICE_OWNERS: dict[str, dict[str, str | None]] = {
@@ -1317,8 +1319,8 @@ def _config_domain(service: str, profiles: dict, hints: DomainHints | None
     """``(domain, shared_by, why)`` for a compose service no label names, from the
     Studio's own per-domain service choice. ("", (), "") when the config says nothing
     — the row is then shared by every domain. A profile COMPANION
-    (``_PROFILE_SERVICE_OWNERS``) is shared with a reason saying which domains'
-    choice brought it up."""
+    (``_PROFILE_SERVICE_OWNERS``) is shared BY the domains whose choice brought it
+    up (``shared_by``), with a reason saying so — never a single domain's."""
     if hints is None or not hints.service_domains or not service:
         return "", (), ""
     by_profile = _profile_slugs()
@@ -1351,9 +1353,11 @@ def _config_domain(service: str, profiles: dict, hints: DomainHints | None
             return "", (), ""
         profs = "/".join(dict.fromkeys(p for p, _s in companion_of))
         picks = "/".join(dict.fromkeys(s for _p, s in companion_of))
-        return "", (), (f"part of the {profs} profile, which {', '.join(by)} turned on "
-                        f"by choosing {picks}; no domain chooses {service} itself, so "
-                        f"it is shared by every domain and no domain's Stop touches it")
+        return "", tuple(by), (
+            f"part of the {profs} profile, which {', '.join(by)} turned on by "
+            f"choosing {picks}; the mesh runs one of it for "
+            f"{'that domain' if len(by) == 1 else 'those domains'}, no domain chooses "
+            f"{service} itself, and no domain's Stop touches it")
     if not slugs or not chosen:
         return "", (), ""
     what = "/".join(dict.fromkeys(slugs))

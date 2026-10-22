@@ -783,3 +783,24 @@ def test_an_agreeing_save_leaves_no_warning_note(qapp, page, monkeypatch):
     assert "WARNING" not in page.log.toPlainText()
     note = page.saved_meshes.note.text()
     assert "not the one running now" not in note and "env=" not in note
+
+
+def test_the_saved_column_shows_the_last_save_after_an_overwrite(qapp, page):
+    """An Overwrite keeps `created` and moves `updated`; the table shows the LAST
+    save, as the node-image picker does (saved-meshes skeptic 3, 2026-10-21: the
+    table said the creation stamp while the picker said the overwrite's)."""
+    rec = _record("lab mesh", created="2026-10-14T09:00:00-07:00")
+    fresh = _record("fresh one")
+    page.initializePage()
+    _settle(qapp, page)
+    table = page.saved_meshes.table
+    rows = {table.item(i, smw._SM_COL_MESH).text(): i for i in range(table.rowCount())}
+    cell = table.item(rows["lab mesh"], smw._SM_COL_SAVED)
+    on_disk = sm.load(rec.path())
+    assert on_disk.created.startswith("2026-10-14T09:00")
+    assert cell.text() == on_disk.updated[:16].replace("T", " ") + " (re-saved)"
+    assert "first saved 2026-10-14T09:00" in cell.toolTip()
+    # a record saved once reads plainly: no "(re-saved)"
+    plain = table.item(rows["fresh one"], smw._SM_COL_SAVED).text()
+    assert "re-saved" not in plain and plain == sm.load(fresh.path()).updated[:16] \
+        .replace("T", " ")

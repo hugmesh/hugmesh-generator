@@ -4137,7 +4137,11 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         # The record the form holds (loaded, or saved from it last): this save is a
         # later state of THAT mesh, so its older records stop keeping domain code
         # copies this mesh no longer has (saved_meshes.lineage_of).
+        # Only when the Saved meshes box says so: the form may have been edited into
+        # a different mesh, and the person unticks it then (code-folders skeptic 2).
         follows = str(getattr(self, "_loaded_record_id", "") or "")
+        if not self.saved_meshes.follows_wanted(follows):
+            follows = ""
         # A configuration that will not start yet is still worth keeping (that is
         # the point of saving a mesh being worked on) — the problems are SAID with
         # the save, never a reason to refuse it.
@@ -4315,6 +4319,10 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         extras = self._saved_walk_extras(rec, domains_from_bootstrap(cfg))
         healed = self._heal_saved_record(rec, cfg, extras) if extras else ""
         missing = self.apply_bootstrap(cfg, form=rec.form)
+        # the form now holds THIS record, as after a Load: a later save follows it
+        # and a Domain services walk counts for it (it used to keep whichever record
+        # was loaded or saved before, so a save after Start followed the wrong one)
+        self._loaded_record_id = rec.id
         self.saved_meshes.mark_current(rec.id)
         self.saved_meshes.set_note(self._not_applied_text(rec, missing) + healed)
         # The RECORD's config is what runs — never the form's re-collection,

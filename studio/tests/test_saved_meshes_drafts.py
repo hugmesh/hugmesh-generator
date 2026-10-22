@@ -86,7 +86,10 @@ def _cfg(domain, tor):
         with_tor=tor)
 
 
-def _save(domain, tor, *, running, label, updated, kind=None):
+def _save(domain, tor, *, running, label, updated, kind=False):
+    # kind=False: the DevOps lane was CHECKED and was down. Only then is a record
+    # with nothing up and no volumes a draft that "never ran" (run_state); pass
+    # kind=None for a lane nobody could check.
     rec = sm.capture(GEN, _cfg(domain, tor), _Node(running), _Boot(), label=label,
                      kind_running=kind)
     path = sm.save(rec)
@@ -289,7 +292,7 @@ def test_per_domain_settings_go_from_a_saved_mesh_into_a_saved_node_config(tmp_p
 
 # ── an Overwrite with nothing running does not make a mesh that RAN "never ran" ───
 # (saved-meshes skeptic 2, probe_core.py case A, 2026-10-21)
-def _overwrite(target, domain, tor, *, running, kind=None, updated):
+def _overwrite(target, domain, tor, *, running, kind=False, updated):
     rec = sm.capture(GEN, _cfg(domain, tor), _Node(running), _Boot(),
                      overwrite=target, kind_running=kind)
     path = sm.save(rec)
@@ -414,3 +417,62 @@ def test_cli_overwrite_of_a_mesh_that_ran_with_nothing_running_says_so(cli_node,
     assert "NOT RUN AS SAVED" in out and "DRAFT" not in out, out
     (again,) = sm.scan()[0]
     assert again.ran_before_at() == first.last_seen["at"]
+
+
+# ── only a CHECKED draft says "never ran" (saved-meshes skeptic 3, 2026-10-21) ─────
+# An unknown DevOps lane may have been up, and data volumes on disk prove an earlier
+# bring-up: neither may be labelled "NEVER RAN: saved as a draft before its first
+# bring-up". Both stay out of the default import (ran_when_saved is False).
+def test_a_save_with_the_devops_lane_unchecked_does_not_say_never_ran():
+    rec = _save("unk.example", False, running=False, label="kind unknown", kind=None,
+                updated="2026-10-21T10:00:00+00:00")
+    assert rec.run_state() == "unchecked" and not rec.never_ran()
+    assert rec.ran_when_saved() is False
+    src = lmb.saved_mesh_source(rec)
+    assert "NEVER RAN" not in src and "NOT SEEN RUNNING WHEN SAVED" in src, src
+    assert "DevOps lane could not be checked" in src
+    pick = lmb.saved_mesh_choice_text(rec)
+    assert "never ran" not in pick and "not seen running" in pick, pick
+    assert not any("first bring-up has not minted" in n for n in rec.notes), rec.notes
+    assert any("could not be checked" in n for n in rec.notes), rec.notes
+
+
+def test_a_save_that_found_the_meshs_data_volumes_does_not_say_never_ran(monkeypatch):
+    vol = SimpleNamespace(name="hugmesh-local_casdoor-pg", short="casdoor-pg",
+                          size_bytes=1, in_use_by=())
+    monkeypatch.setattr(vaults, "list_volumes", lambda *a, **k: [vol])
+    rec = _save("halted.example", False, running=False, label="halted",
+                updated="2026-10-21T10:00:00+00:00")
+    assert rec.last_seen["kind_running"] is False
+    assert rec.run_state() == "volumes" and not rec.never_ran()
+    src = lmb.saved_mesh_source(rec)
+    assert "NEVER RAN" not in src and "NOT RUNNING WHEN SAVED" in src, src
+    assert "never ran" not in lmb.saved_mesh_choice_text(rec)
+    assert any("1 data volume(s) of this mesh were on disk" in n
+               for n in rec.notes), rec.notes
+
+
+def test_a_checked_draft_with_no_volumes_still_says_never_ran():
+    rec = _save("draft.example", False, running=False, label="draft",
+                updated="2026-10-21T10:00:00+00:00")
+    assert rec.run_state() == "draft" and rec.never_ran()
+    assert "NEVER RAN" in lmb.saved_mesh_source(rec)
+    assert "never ran (draft)" in lmb.saved_mesh_choice_text(rec)
+
+
+def test_records_that_may_have_run_come_before_true_drafts(monkeypatch):
+    draft = _save("d.example", False, running=False, label="d",
+                  updated="2026-10-05T10:00:00+00:00")
+    unk = _save("u.example", False, running=False, label="u", kind=None,
+                updated="2026-10-02T10:00:00+00:00")
+    ran = _save("r.example", False, running=True, label="r",
+                updated="2026-10-01T10:00:00+00:00")
+    assert [r.id for r in sm.records_for_checkout(GEN)] == [ran.id, unk.id, draft.id]
+
+
+def test_cli_mesh_save_with_the_kind_probe_failing_does_not_call_it_a_draft(cli_node,
+                                                                          capsys):
+    cli_node.kind = RuntimeError("kind: exec format error")
+    assert _cli("--cluster-domain", "k.example", "--label", "kind unknown") == 0
+    out = capsys.readouterr().out
+    assert "NOT SEEN RUNNING" in out and "DRAFT" not in out, out
