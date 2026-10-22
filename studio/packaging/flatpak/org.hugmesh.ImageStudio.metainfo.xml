@@ -62,9 +62,13 @@
   </requires>
 
   <releases>
-    <release version="1.0.0" date="2026-08-20">
+    <!-- AppStream spells a pre-release with "~" so it sorts BELOW its final release
+         (0.3.0~beta.1 < 0.3.0); the app's own __version__ is 0.3.0-beta.1. The 1.0.0
+         entry that used to be here was never published, and was withdrawn when the
+         Studio moved to the org's beta scheme. -->
+    <release version="0.3.0~beta.1" date="2026-10-21" type="development">
       <description>
-        <p>First packaged release.</p>
+        <p>First beta.</p>
         <ul>
           <li>Windows MSI and Linux Flatpak installers.</li>
           <li>Resource limits for CPU, memory and GPU across the build, local-stack and emulation lanes.</li>
