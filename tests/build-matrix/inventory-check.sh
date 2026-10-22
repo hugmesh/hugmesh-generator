@@ -2,7 +2,7 @@
 # inventory-check.sh — the ALL-IMAGES gate: the committed inventory must still be what
 # the six build channels actually say.
 #
-# tests/build-matrix/check.sh proves the 150 CURATED matrix.tsv cells build from five
+# tests/build-matrix/check.sh proves the CURATED matrix.tsv cells build from five
 # channels. This gate is the other half: it proves the committed FULL inventory
 # (docs/catalog/image-inventory.json — every image docs/catalog/image-catalog.json
 # advertises, x which channels can express it) still matches reality, so a channel change
@@ -104,6 +104,9 @@ for r in inv["images"]:
     for flag, key in (("--board", "board"), ("--flavor", "flavor"), ("--desktop", "desktop")):
         if r[key]:
             args += [flag, r[key]]
+    # the board RAM an omnibus record is built with on a Pi / Orange Pi (its floor)
+    if r.get("ram_gb"):
+        args += ["--ram-gb", r["ram_gb"]]
     # "|"-delimited, NOT tabs: tab is IFS *whitespace*, so bash `read` would COLLAPSE
     # consecutive tabs around an empty field (x86 has no board; job=no rows record no
     # accepted types) and silently shift every later column into the wrong variable.
@@ -212,7 +215,7 @@ PY
     RPI5_BOARD_OUT=""; JETSON_BOARD_OUT=""; FRITE_BOARD_OUT=""; FRITE_FLAVOR_OUT=""
     ORANGEPI5_BOARD_OUT=""; ORANGEPI5_FLAVOR_OUT=""; ORANGEPIZERO2_FLAVOR_OUT=""
     ORANGEPIZERO2W_FLAVOR_OUT=""; ORANGEPIZERO3_FLAVOR_OUT=""
-    ORANGEPI3LTS_FLAVOR_OUT=""; ORANGEPI4LTS_FLAVOR_OUT=""
+    ORANGEPI3LTS_FLAVOR_OUT=""; ORANGEPI4LTS_FLAVOR_OUT=""; RAM_GB_OUT=""
     # THE role vocabulary, sourced exactly as docker/build-image.sh sources it. The
     # extracted resolve_build_target() body CALLS hugmesh_role_for /
     # hugmesh_role_keyprofile; a probe that omitted them would see every row reject

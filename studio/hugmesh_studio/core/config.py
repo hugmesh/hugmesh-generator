@@ -1791,6 +1791,17 @@ def rpi_boards_for_role(role: str) -> tuple[str, ...]:
     return RPI_BOARDS if image_class("", role) == "desktop" else RPI_NODE_BOARDS
 
 
+def orangepi_flavors_for_role(platform: str, role: str) -> tuple[str, ...]:
+    """The --flavor choices to OFFER for an Orange Pi node-axis board (orangepi5 /
+    orangepi4-lts) and ``role``. A cluster NODE role is INSTALLER-only: the live flavor
+    runs from RAM with no persistence, and build-orangepi5-stage4.sh /
+    build-orangepi4-lts-stage4.sh refuse ``--flavor live|both`` for a node. The
+    desktop keeps every flavor. Same honesty rule as rpi_boards_for_role: a picker
+    never offers a combination the builder hard-errors."""
+    flavors = {"orangepi5": ORANGEPI5_FLAVORS, "orangepi4-lts": ORANGEPI4LTS_FLAVORS}[platform]
+    return ("installer",) if role in _ORANGEPI_NODE_ROLE_IDS else flavors
+
+
 def x86_desktop_axis(role: str) -> tuple[str, ...]:
     """The x86 --desktop weights the CATALOG may honestly OFFER for ``role``.
 

@@ -1017,10 +1017,12 @@ orangepi5-installer: ## build the Orange Pi 5 light desktop INSTALLER image only
 
 orangepi5-%: ## build an Orange Pi 5 / 5 Plus CLUSTER NODE: make orangepi5-pki | -backend | -frontend | -omnibus RAM_GB=8 (EXPERIMENTAL, hardware validation pending; installer flavor only; ORANGEPI5_BOARD=orange-pi-5-plus|orange-pi-5)
 ifndef NATIVE
+	@. scripts/_roles-lib.sh; hugmesh_role_board_node_role orangepi5 '$*' >/dev/null || { [ $$? -eq 2 ] && echo "ERROR: make orangepi5-$* is not a target: the Orange Pi 5 / 5 Plus node targets are orangepi5-pki | -backend | -frontend | -omnibus (the desktop is make orangepi5)." >&2; exit 1; }
 	$(MAKE) ensure-image
 	$(DOCKER_RUN) make orangepi5-$* NATIVE=1 WORK_DIR=/out JOBS=$(JOBS) IMG_FLAGS='$(IMG_FLAGS)' RAM_GB='$(RAM_GB)' $(BRAND_PASS) $(ORANGEPI5_PASS)
 else
-	@$(ORANGEPI5_BUILD) --board $(ORANGEPI5_BOARD) --role $* $(RAM_FLAGS) $(STANDALONE_FLAGS)
+	@. scripts/_roles-lib.sh; hugmesh_role_board_node_role orangepi5 '$*' >/dev/null || { [ $$? -eq 2 ] && echo "ERROR: make orangepi5-$* is not a target: the Orange Pi 5 / 5 Plus node targets are orangepi5-pki | -backend | -frontend | -omnibus (the desktop is make orangepi5)." >&2; exit 1; }
+	@$(ORANGEPI5_BUILD) --board $(ORANGEPI5_BOARD) --flavor installer --role $* $(RAM_FLAGS) $(STANDALONE_FLAGS)
 	$(chown-artifacts)
 endif
 
@@ -1101,10 +1103,12 @@ orangepi4-lts-installer: ## build the Orange Pi 4 LTS light desktop INSTALLER im
 
 orangepi4-lts-%: ## build the Orange Pi 4 LTS CLUSTER NODE: make orangepi4-lts-frontend (its only node role — 4 GB RAM / 16 GB eMMC; EXPERIMENTAL, installer flavor only)
 ifndef NATIVE
+	@. scripts/_roles-lib.sh; hugmesh_role_board_node_role orangepi4-lts '$*' >/dev/null || { [ $$? -eq 2 ] && echo "ERROR: make orangepi4-lts-$* is not a target: the Orange Pi 4 LTS node target is orangepi4-lts-frontend (the desktop is make orangepi4-lts)." >&2; exit 1; }
 	$(MAKE) ensure-image
 	$(DOCKER_RUN) make orangepi4-lts-$* NATIVE=1 WORK_DIR=/out JOBS=$(JOBS) IMG_FLAGS='$(IMG_FLAGS)' RAM_GB='$(RAM_GB)' $(BRAND_PASS) $(ORANGEPI4LTS_PASS)
 else
-	@$(ORANGEPI4LTS_BUILD) --role $* $(RAM_FLAGS) $(STANDALONE_FLAGS)
+	@. scripts/_roles-lib.sh; hugmesh_role_board_node_role orangepi4-lts '$*' >/dev/null || { [ $$? -eq 2 ] && echo "ERROR: make orangepi4-lts-$* is not a target: the Orange Pi 4 LTS node target is orangepi4-lts-frontend (the desktop is make orangepi4-lts)." >&2; exit 1; }
+	@$(ORANGEPI4LTS_BUILD) --flavor installer --role $* $(RAM_FLAGS) $(STANDALONE_FLAGS)
 	$(chown-artifacts)
 endif
 
@@ -1132,7 +1136,7 @@ matrix-check: ## dry-run validate the whole build matrix via --print-plan (tests
 	  || { echo "tests/build-matrix/check.sh not found — the build-matrix harness is not in this checkout yet."; exit 1; }
 	bash tests/build-matrix/check.sh
 
-# matrix-check proves the 150 CURATED matrix.tsv cells; inventory-check proves the
+# matrix-check proves the CURATED matrix.tsv cells; inventory-check proves the
 # other half — that the committed FULL inventory (every image the catalog grammar
 # advertises, x which of the six channels can express it) still matches reality.
 # Both are dry-run: --print-plan / make -n / command printing, no root, no docker.

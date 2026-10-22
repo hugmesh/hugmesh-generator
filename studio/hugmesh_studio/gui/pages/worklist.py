@@ -35,7 +35,8 @@ from ...core.config import (
     ORANGEPI5_BOARDS, ORANGEPI5_FLAVORS, ORANGEPIZERO2_FLAVORS, ORANGEPIZERO2W_FLAVORS,
     ORANGEPIZERO3_FLAVORS, ORANGEPI3LTS_FLAVORS, ORANGEPI4LTS_FLAVORS,
     PLATFORM_LABELS,
-    ROLE_CHOICES, RPI_BOARDS, image_class, normalize_user_roles, rpi_boards_for_role,
+    ROLE_CHOICES, RPI_BOARDS, image_class, normalize_user_roles, orangepi_flavors_for_role,
+    rpi_boards_for_role,
 )
 from ...core.worklist import (
     WORKLIST_INFRA_SERVICES, WorklistConfig, WorklistEntry, entry_id,
@@ -470,10 +471,10 @@ class WorklistPage(QtWidgets.QWizardPage):
             self.tree.setItemWidget(item, _COL_BOARD, board_combo)
         if _FLAVOR_CHOICES.get(platform):
             flavor_combo = NoWheelComboBox()
-            if platform in ("orangepi5", "orangepi4-lts") and image_class("mesh", role) == "node":
+            if platform in ("orangepi5", "orangepi4-lts"):
                 # An Orange Pi NODE is installer-only (live runs from RAM; the builder
                 # refuses it), so the only honest choice is offered.
-                flavor_combo.addItems(["installer"])
+                flavor_combo.addItems(list(orangepi_flavors_for_role(platform, role)))
             else:
                 flavor_combo.addItems(list(_FLAVOR_CHOICES[platform]))
             self.tree.setItemWidget(item, _COL_FLAVOR, flavor_combo)

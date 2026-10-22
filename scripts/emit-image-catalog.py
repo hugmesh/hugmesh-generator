@@ -26,7 +26,7 @@ from hugmesh_studio.core.config import (  # noqa: E402
     DESKTOP_ROLES, FRITE_BOARDS, FRITE_DESKTOPS, FRITE_FLAVORS, JETSON_BOARDS, NODE_ROLES,
     ORANGEPI5_BOARDS, ORANGEPI5_FLAVORS, ORANGEPIZERO2_FLAVORS, ORANGEPIZERO2W_FLAVORS,
     ORANGEPIZERO3_FLAVORS, ORANGEPI3LTS_FLAVORS, ORANGEPI4LTS_FLAVORS,
-    PLATFORM_LABELS, ROLE_CHOICES, image_class,
+    PLATFORM_LABELS, ROLE_CHOICES, image_class, orangepi_flavors_for_role,
     rpi_boards_for_role, x86_desktop_axis,
 )
 
@@ -62,8 +62,9 @@ def platform_axes(platform: str, role: str) -> dict:
         axes["flavor"] = list(FRITE_FLAVORS)
         axes["desktop"] = list(FRITE_DESKTOPS)
     elif platform == "orangepi5":
+        # a cluster NODE role is installer-only (orangepi_flavors_for_role)
         axes["board"] = list(ORANGEPI5_BOARDS)
-        axes["flavor"] = list(ORANGEPI5_FLAVORS)
+        axes["flavor"] = list(orangepi_flavors_for_role(platform, role))
     elif platform == "orangepizero2":
         axes["flavor"] = list(ORANGEPIZERO2_FLAVORS)
     elif platform == "orangepizero2w":
@@ -73,7 +74,7 @@ def platform_axes(platform: str, role: str) -> dict:
     elif platform == "orangepi3-lts":
         axes["flavor"] = list(ORANGEPI3LTS_FLAVORS)
     elif platform == "orangepi4-lts":
-        axes["flavor"] = list(ORANGEPI4LTS_FLAVORS)
+        axes["flavor"] = list(orangepi_flavors_for_role(platform, role))
     return axes
 
 
