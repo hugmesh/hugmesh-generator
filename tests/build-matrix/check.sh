@@ -107,6 +107,23 @@ builder_for() {
     esac
 }
 
+# ── cluster NODE rows on the Pi / Orange Pi boards (Orange Pi: EXPERIMENTAL) ─────
+# matrix.tsv has no RAM column: an omnibus row on rpi5/orangepi5 is probed with the
+# smallest RAM omnibus accepts (MATRIX_OMNIBUS_RAM_GB), the --ram-gb every channel must
+# then carry. An Orange Pi row whose role is a cluster node role is a NODE row
+# (installer flavor, --role); its desktop rows keep role "desktop" and are unchanged.
+MATRIX_OMNIBUS_RAM_GB=8
+is_opi_node_row() { # platform role
+    case "$1" in orangepi5|orangepi4-lts) ;; *) return 1 ;; esac
+    case "$2" in pki|backend|frontend|omnibus) return 0 ;; esac
+    return 1
+}
+row_ram_gb() { # platform role -> the RAM a row is probed with ("" = not stated)
+    case "$1:$2" in
+        rpi5:omnibus|orangepi5:omnibus) printf '%s' "${MATRIX_OMNIBUS_RAM_GB}" ;;
+    esac
+}
+
 # ── channel 1: CLI — builder --print-plan ───────────────────────────────────────
 check_cli() { # platform role env board flavor desktop
     local platform="$1" role="$2" env="$3" board="$4" flavor="$5" desktop="$6"
@@ -135,10 +152,22 @@ check_cli() { # platform role env board flavor desktop
         frite)     args=(--board "${board}" --flavor "${want_flavor}" --desktop "${desktop}") ;;
         jetson)    args=(--role "${role}" --board "${board}") ;;
         rpi5)      args=(--role "${want_role}"); [ -n "${board}" ] && args+=(--board "${board}") ;;
-        orangepi5) args=(--board "${board}" --flavor "${want_flavor}") ;;
-        orangepizero2|orangepizero2w|orangepizero3|orangepi3-lts|orangepi4-lts) args=(--flavor "${want_flavor}") ;;
+        orangepi5) if is_opi_node_row "${platform}" "${role}"; then
+                       args=(--board "${board}" --role "${role}")
+                   else
+                       args=(--board "${board}" --flavor "${want_flavor}")
+                   fi ;;
+        orangepi4-lts) if is_opi_node_row "${platform}" "${role}"; then
+                           args=(--role "${role}")
+                       else
+                           args=(--flavor "${want_flavor}")
+                       fi ;;
+        orangepizero2|orangepizero2w|orangepizero3|orangepi3-lts) args=(--flavor "${want_flavor}") ;;
         *)      args=(--role "${role}") ;;
     esac
+    local ram
+    ram="$(row_ram_gb "${platform}" "${role}")"
+    [ -n "${ram}" ] && args+=(--ram-gb "${ram}")
     if ${standalone_probe}; then
         args+=(--standalone --local-user matrixprobe)
     fi
@@ -176,6 +205,15 @@ check_cli() { # platform role env board flavor desktop
         # single board each, unlike Frite/Orange-Pi-5's board tables).
         grep -qx "PLAN_FLAVOR=${want_flavor}" "${out}" || miss+=" PLAN_FLAVOR=${want_flavor}"
     fi
+    # cluster NODE rows: the k8s topology the builder plans, and the RAM it was given
+    case "${platform}:${role}" in
+        rpi5:pki|rpi5:backend|rpi5:frontend|rpi5:omnibus|orangepi5:pki|orangepi5:backend|orangepi5:frontend|orangepi5:omnibus|orangepi4-lts:frontend)
+            local k8s=worker
+            [ "${role}" = pki ] && k8s=control-plane
+            [ "${role}" = omnibus ] && k8s=single-node
+            grep -qx "PLAN_K8S=${k8s}" "${out}" || miss+=" PLAN_K8S=${k8s}"
+            [ -n "${ram}" ] && { grep -qx "PLAN_RAM_GB=${ram}" "${out}" || miss+=" PLAN_RAM_GB=${ram}"; } ;;
+    esac
     if [ -n "${miss}" ]; then
         _fail CLI "${row}" "plan keys missing/mismatched:${miss}" "${out}"; CLI_FAIL=$((CLI_FAIL+1))
     else
@@ -188,14 +226,20 @@ check_make() { # platform role env board flavor desktop
     local platform="$1" role="$2" env="$3" board="$4" flavor="$5" desktop="$6"
     local target builder out="${TMP_DIR}/make.out" vars=()
     builder="$(builder_for "${platform}")"
+    local ram
+    ram="$(row_ram_gb "${platform}" "${role}")"
     case "${platform}" in
         rpi5)      target="rpi-${role}"; [ -n "${board}" ] && vars=("RPI_BOARD=${board}") ;;
         x86)       target="x86-${role}" ;;
         jetson)    target="jetson-${role}"; vars=("JETSON_BOARD=${board}") ;;
         frite)     target="frite"
                    vars=("FRITE_BOARD=${board}" "FRITE_FLAVOR=${flavor}" "FRITE_DESKTOP=${desktop}") ;;
-        orangepi5) target="orangepi5"
-                   vars=("ORANGEPI5_BOARD=${board}" "ORANGEPI5_FLAVOR=${flavor}") ;;
+        orangepi5) if is_opi_node_row "${platform}" "${role}"; then
+                       target="orangepi5-${role}"; vars=("ORANGEPI5_BOARD=${board}")
+                   else
+                       target="orangepi5"
+                       vars=("ORANGEPI5_BOARD=${board}" "ORANGEPI5_FLAVOR=${flavor}")
+                   fi ;;
         orangepizero2) target="orangepizero2"
                    vars=("ORANGEPIZERO2_FLAVOR=${flavor}") ;;
         orangepizero2w) target="orangepizero2w"
@@ -204,9 +248,14 @@ check_make() { # platform role env board flavor desktop
                    vars=("ORANGEPIZERO3_FLAVOR=${flavor}") ;;
         orangepi3-lts) target="orangepi3-lts"
                    vars=("ORANGEPI3LTS_FLAVOR=${flavor}") ;;
-        orangepi4-lts) target="orangepi4-lts"
-                   vars=("ORANGEPI4LTS_FLAVOR=${flavor}") ;;
+        orangepi4-lts) if is_opi_node_row "${platform}" "${role}"; then
+                           target="orangepi4-lts-${role}"
+                       else
+                           target="orangepi4-lts"
+                           vars=("ORANGEPI4LTS_FLAVOR=${flavor}")
+                       fi ;;
     esac
+    [ -n "${ram}" ] && vars+=("RAM_GB=${ram}")
     local row="make ${target} ENV=${env}${vars[0]:+ ${vars[*]}}"
     if ! make -n "${target}" NATIVE=1 "ENV=${env}" "${vars[@]}" >"${out}" 2>&1; then
         _fail MAKE "${row}" "make -n exited non-zero" "${out}"; MAKE_FAIL=$((MAKE_FAIL+1)); return
@@ -226,7 +275,11 @@ check_make() { # platform role env board flavor desktop
             ;;
         orangepi5)
             grep -q -- "--board ${board}"   "${out}" || miss+=" '--board ${board}'"
-            grep -q -- "--flavor ${flavor}" "${out}" || miss+=" '--flavor ${flavor}'"
+            if is_opi_node_row "${platform}" "${role}"; then
+                grep -q -- "--role ${role}" "${out}" || miss+=" '--role ${role}'"
+            else
+                grep -q -- "--flavor ${flavor}" "${out}" || miss+=" '--flavor ${flavor}'"
+            fi
             ;;
         rpi5)
             grep -q -- "--role ${role}" "${out}" || miss+=" '--role ${role}'"
@@ -237,13 +290,23 @@ check_make() { # platform role env board flavor desktop
                 grep -q -- "--board ${board}" "${out}" || miss+=" '--board ${board}'"
             fi
             ;;
-        orangepizero2|orangepizero2w|orangepizero3|orangepi3-lts|orangepi4-lts)
+        orangepi4-lts)
+            if is_opi_node_row "${platform}" "${role}"; then
+                grep -q -- "--role ${role}" "${out}" || miss+=" '--role ${role}'"
+            else
+                grep -q -- "--flavor ${flavor}" "${out}" || miss+=" '--flavor ${flavor}'"
+            fi
+            ;;
+        orangepizero2|orangepizero2w|orangepizero3|orangepi3-lts)
             grep -q -- "--flavor ${flavor}" "${out}" || miss+=" '--flavor ${flavor}'"
             ;;
         *)
             grep -q -- "--role ${role}" "${out}" || miss+=" '--role ${role}'"
             ;;
     esac
+    if [ -n "${ram}" ]; then
+        grep -q -- "--ram-gb ${ram}" "${out}" || miss+=" '--ram-gb ${ram}'"
+    fi
     if [ -n "${miss}" ]; then
         _fail MAKE "${row}" "recipe missing:${miss}" "${out}"; MAKE_FAIL=$((MAKE_FAIL+1))
     else
@@ -298,7 +361,7 @@ reset_opts() {
     OPT_FRITE_BOARD=la-frite OPT_FRITE_FLAVOR=both OPT_FRITE_DESKTOP=light
     OPT_JETSON_BOARD=orin-nano OPT_JETSON_KFLAVOR=mainline
     OPT_ORANGEPI5_BOARD=orange-pi-5-plus OPT_ORANGEPI5_FLAVOR=both OPT_ORANGEPI5_FLEET=no
-    OPT_ORANGEPIZERO2_FLAVOR=both
+    OPT_ORANGEPIZERO2_FLAVOR=both OPT_RAM_GB=""
     OPT_SA_GPU=all-free OPT_SA_STEAM=native OPT_SA_MEDIA=yes OPT_SA_USER=snap
     OPT_SA_KEYFILE=none OPT_SA_YUBIKEY=none OPT_SA_THEME="" OPT_SA_PROXY=yes
     OPT_SA_SNORT=yes OPT_SA_AIDE=no OPT_SA_KBUILTIN=no OPT_SA_EGRESS=""
@@ -323,7 +386,10 @@ while IFS=$'\t' read -r platform role env board flavor desktop; do
                 OPT_JETSON_BOARD="${board}" ;;
         frite)  target="frite"
                 OPT_FRITE_BOARD="${board}" OPT_FRITE_FLAVOR="${flavor}" OPT_FRITE_DESKTOP="${desktop}" ;;
-        orangepi5) target="orangepi5"
+        orangepi5) case "${role}" in
+                    pki|backend|frontend|omnibus) target="orangepi5-${role}" ;;
+                    *) target="orangepi5" ;;
+                esac
                 OPT_ORANGEPI5_BOARD="${board}" OPT_ORANGEPI5_FLAVOR="${flavor}" ;;
         orangepizero2) target="orangepizero2"
                 OPT_ORANGEPIZERO2_FLAVOR="${flavor}" ;;
@@ -333,9 +399,17 @@ while IFS=$'\t' read -r platform role env board flavor desktop; do
                 OPT_ORANGEPIZERO3_FLAVOR="${flavor}" ;;
         orangepi3-lts) target="orangepi3-lts"
                 OPT_ORANGEPI3LTS_FLAVOR="${flavor}" ;;
-        orangepi4-lts) target="orangepi4-lts"
+        orangepi4-lts) case "${role}" in
+                    frontend) target="orangepi4-lts-${role}" ;;
+                    *) target="orangepi4-lts" ;;
+                esac
                 OPT_ORANGEPI4LTS_FLAVOR="${flavor}" ;;
         *)      echo "MENU FAIL ${platform}/${role}/${env} unknown platform"; continue ;;
+    esac
+    # omnibus on a Pi / Orange Pi is probed with the menu's RAM picker set (the
+    # smallest size omnibus accepts — MATRIX_OMNIBUS_RAM_GB in the parent).
+    case "${platform}:${role}" in
+        rpi5:omnibus|orangepi5:omnibus) OPT_RAM_GB=8 ;;
     esac
     row="${target} ENV=${env}"
     build_make_cmd "${target}" "matrix ${row}" 1
@@ -358,7 +432,12 @@ while IFS=$'\t' read -r platform role env board flavor desktop; do
     fi
     if [ "${platform}" = orangepi5 ]; then
         has_elem "ORANGEPI5_BOARD=${board}"   || miss+=" ORANGEPI5_BOARD=${board}"
-        has_elem "ORANGEPI5_FLAVOR=${flavor}" || miss+=" ORANGEPI5_FLAVOR=${flavor}"
+        if [ "${target}" = orangepi5 ]; then
+            has_elem "ORANGEPI5_FLAVOR=${flavor}" || miss+=" ORANGEPI5_FLAVOR=${flavor}"
+        fi
+    fi
+    if [ -n "${OPT_RAM_GB}" ]; then
+        has_elem "RAM_GB=${OPT_RAM_GB}" || miss+=" RAM_GB=${OPT_RAM_GB}"
     fi
     if [ "${platform}" = orangepizero2 ]; then
         has_elem "ORANGEPIZERO2_FLAVOR=${flavor}" || miss+=" ORANGEPIZERO2_FLAVOR=${flavor}"
@@ -372,7 +451,7 @@ while IFS=$'\t' read -r platform role env board flavor desktop; do
     if [ "${platform}" = "orangepi3-lts" ]; then
         has_elem "ORANGEPI3LTS_FLAVOR=${flavor}" || miss+=" ORANGEPI3LTS_FLAVOR=${flavor}"
     fi
-    if [ "${platform}" = "orangepi4-lts" ]; then
+    if [ "${platform}" = "orangepi4-lts" ] && [ "${target}" = orangepi4-lts ]; then
         has_elem "ORANGEPI4LTS_FLAVOR=${flavor}" || miss+=" ORANGEPI4LTS_FLAVOR=${flavor}"
     fi
     if [ -n "${miss}" ]; then
@@ -635,12 +714,14 @@ gui_config_json() { # platform role env board flavor desktop -> stdout JSON
         frite)  mode=cloud; gui_role=frite ;;
         jetson) mode=mesh
                 [ "${role}" = desktop ] && gui_role=jetson-desktop ;;
-        orangepi5) mode=cloud; gui_role=orangepi5 ;;
+        orangepi5) if is_opi_node_row "${platform}" "${role}"; then mode=mesh
+                   else mode=cloud; gui_role=orangepi5; fi ;;
         orangepizero2) mode=cloud; gui_role=orangepizero2 ;;
         orangepizero2w) mode=cloud; gui_role=orangepizero2w ;;
         orangepizero3) mode=cloud; gui_role=orangepizero3 ;;
         orangepi3-lts) mode=cloud; gui_role=orangepi3-lts ;;
-        orangepi4-lts) mode=cloud; gui_role=orangepi4-lts ;;
+        orangepi4-lts) if is_opi_node_row "${platform}" "${role}"; then mode=mesh
+                       else mode=cloud; gui_role=orangepi4-lts; fi ;;
         x86)    case "${role}" in
                     standalone-*)             mode=standalone ;;
                     laptop|chromebook|desktop) mode=cloud ;;
@@ -653,6 +734,9 @@ gui_config_json() { # platform role env board flavor desktop -> stdout JSON
     printf '{"platform":"%s","role":"%s","mode":"%s","env":"%s"' \
         "${platform}" "${gui_role}" "${mode}" "${env}"
     ${standalone} && printf ',"standalone":true'
+    local ram
+    ram="$(row_ram_gb "${platform}" "${role}")"
+    [ -n "${ram}" ] && printf ',"ram_gb":"%s"' "${ram}"
     if [ "${platform}" = frite ]; then
         printf ',"board":"%s","flavor":"%s","desktop":"%s"' "${board}" "${gui_flavor}" "${desktop}"
     elif [ "${platform}" = jetson ]; then
@@ -660,6 +744,8 @@ gui_config_json() { # platform role env board flavor desktop -> stdout JSON
         printf ',"board":"%s"' "${board}"
     elif [ "${platform}" = orangepi5 ]; then
         printf ',"board":"%s","flavor":"%s"' "${board}" "${gui_flavor}"
+    elif [ "${platform}" = orangepi4-lts ] && is_opi_node_row "${platform}" "${role}"; then
+        printf ',"flavor":"%s"' "${gui_flavor}"
     elif [ "${platform}" = rpi5 ] && [ -n "${board}" ]; then
         # the rpi5 board axis (--board rpi4/rpi3; the rpi5-default rows have
         # board="" and correctly emit NO "board" key at all, same as an
@@ -721,6 +807,12 @@ check_gui() { # platform role env board flavor desktop
     elif [ "${platform}" = orangepi5 ]; then
         grep -q -- "--board ${board}"   "${out}" || miss+=" '--board ${board}'"
         grep -q -- "--flavor ${want_flavor}" "${out}" || miss+=" '--flavor ${want_flavor}'"
+        if is_opi_node_row "${platform}" "${role}"; then
+            grep -q -- "--role ${role}" "${out}" || miss+=" '--role ${role}'"
+        fi
+    elif [ "${platform}" = orangepi4-lts ] && is_opi_node_row "${platform}" "${role}"; then
+        grep -q -- "--flavor ${want_flavor}" "${out}" || miss+=" '--flavor ${want_flavor}'"
+        grep -q -- "--role ${role}" "${out}" || miss+=" '--role ${role}'"
     elif [ "${platform}" = orangepizero2 ] || [ "${platform}" = orangepizero2w ] || [ "${platform}" = orangepizero3 ] || [ "${platform}" = orangepi3-lts ] || [ "${platform}" = orangepi4-lts ]; then
         grep -q -- "--flavor ${want_flavor}" "${out}" || miss+=" '--flavor ${want_flavor}'"
     else
@@ -730,6 +822,22 @@ check_gui() { # platform role env board flavor desktop
         fi
         if [ "${platform}" = rpi5 ] && [ -n "${board}" ]; then
             grep -q -- "--board ${board}" "${out}" || miss+=" '--board ${board}'"
+        fi
+    fi
+    # Pi / Orange Pi NODE rows with a RAM, and every Orange Pi node row: the whole
+    # emitted argv must be ACCEPTED by the real builder (--print-plan), with the
+    # node's role and RAM in the plan — token presence alone is not enough.
+    local ram
+    ram="$(row_ram_gb "${platform}" "${role}")"
+    if [ -n "${ram}" ] || is_opi_node_row "${platform}" "${role}"; then
+        [ -n "${ram}" ] && { grep -q -- "--ram-gb ${ram}" "${out}" || miss+=" '--ram-gb ${ram}'"; }
+        if [ -z "${miss}" ]; then
+            if ! gui_plan_from_command "${out}" "${plan}"; then
+                miss+=" builder-rejected-argv(--print-plan rc!=0)"
+            else
+                grep -qx "PLAN_ROLE=${role}" "${plan}" || miss+=" PLAN_ROLE=${role}"
+                [ -n "${ram}" ] && { grep -qx "PLAN_RAM_GB=${ram}" "${plan}" || miss+=" PLAN_RAM_GB=${ram}"; }
+            fi
         fi
     fi
     if ${standalone_probe}; then
@@ -774,7 +882,7 @@ run_job_channel() {
        || ! grep -q 'hugmesh_role_for' "${fn}"; then
         _fail JOB "channel" "cannot extract resolve_build_target() from docker/build-image.sh — the whitelist format drifted; update this probe" "${fn}"
         JOB_FAIL=$((JOB_FAIL+1))
-        NEG_FAIL=$((NEG_FAIL+5))   # the 5 JOBNEG probes below never ran
+        NEG_FAIL=$((NEG_FAIL+13))  # the 13 JOBNEG probes below never ran
         return
     fi
     MATRIX="${MATRIX}" FN="${fn}" ROLES_LIB="${PWD}/scripts/_roles-lib.sh" \
@@ -788,7 +896,7 @@ set -u
 source "${ROLES_LIB}"
 # the extracted-verbatim resolve_build_target() + every variable it reads or
 # writes (mirrors build-image.sh's own top-level initialisation)
-HARDWARE_CLASS="" IMAGE_TYPE=""
+HARDWARE_CLASS="" IMAGE_TYPE="" RAM_GB_OUT="" ORANGEPI4LTS_FLAVOR_OUT=""
 PLATFORM="" BUILD_ROLE="" RPI5_BOARD_OUT="" RPI5_STANDALONE=false \
     FRITE_BOARD_OUT="" FRITE_FLAVOR_OUT="" FRITE_STANDALONE=false \
 JETSON_BOARD_OUT="" ORANGEPI5_BOARD_OUT="" ORANGEPI5_FLAVOR_OUT="" ORANGEPI5_STANDALONE=false \
@@ -834,7 +942,9 @@ while IFS=$'\t' read -r platform role env board flavor desktop; do
     # desktop axis (the worker builds the builder default), so test/prod (and
     # light/none) rows deliberately probe the same whitelist cell.
     case "${platform}" in
-        rpi5)   hw="rpi5.${role}${board:+.${board}}"; type=primary ;;
+        rpi5)   hw="rpi5.${role}${board:+.${board}}"; type=primary
+                # omnibus carries the RAM field (8 GB: the smallest omnibus accepts)
+                [ "${role}" = omnibus ] && hw="rpi5.omnibus.${board:-rpi5}.8gb" ;;
         x86)    hw="x86.${role/+/-}"
                 case "${role}" in
                     laptop|chromebook|desktop|standalone-*) type=client ;;
@@ -842,12 +952,19 @@ while IFS=$'\t' read -r platform role env board flavor desktop; do
                 esac ;;
         frite)  hw="frite.${board}.${flavor}"; type=client ;;
         jetson) hw="jetson.${role}.${board}"; type=primary ;;
-        orangepi5)     hw="orangepi5.${board}.${flavor}"; type=client ;;
+        orangepi5)     case "${role}" in
+                           pki|backend|frontend) hw="orangepi5.${role}.${board}"; type=primary ;;
+                           omnibus) hw="orangepi5.omnibus.${board}.8gb"; type=primary ;;
+                           *) hw="orangepi5.${board}.${flavor}"; type=client ;;
+                       esac ;;
         orangepizero2) hw="orangepizero2.${flavor}"; type=client ;;
         orangepizero2w) hw="orangepizero2w.${flavor}"; type=client ;;
         orangepizero3) hw="orangepizero3.${flavor}"; type=client ;;
         orangepi3-lts) hw="orangepi3-lts.${flavor}"; type=client ;;
-        orangepi4-lts) hw="orangepi4-lts.${flavor}"; type=client ;;
+        orangepi4-lts) case "${role}" in
+                           frontend) hw="orangepi4-lts.frontend"; type=primary ;;
+                           *) hw="orangepi4-lts.${flavor}"; type=client ;;
+                       esac ;;
         *)      echo "JOB FAIL ${row} — unknown platform"; continue ;;
     esac
     if { [ "${platform}" = frite ] || [ "${platform}" = orangepi5 ] || [ "${platform}" = orangepizero2 ] || [ "${platform}" = orangepizero2w ] || [ "${platform}" = orangepizero3 ] || [ "${platform}" = orangepi3-lts ] || [ "${platform}" = orangepi4-lts ]; } \
@@ -892,6 +1009,9 @@ while IFS=$'\t' read -r platform role env board flavor desktop; do
             expect_board="${board:-rpi5}"
             [ "${BUILD_ROLE}" = "${expect_role}" ]          || miss+=" BUILD_ROLE(got '${BUILD_ROLE}')"
             [ "${RPI5_BOARD_OUT}" = "${expect_board}" ] || miss+=" RPI5_BOARD_OUT(got '${RPI5_BOARD_OUT}')"
+            if [ "${role}" = omnibus ]; then
+                [ "${RAM_GB_OUT}" = 8 ] || miss+=" RAM_GB_OUT(got '${RAM_GB_OUT}')"
+            fi
             if ${expect_standalone}; then
                 [ "${RPI5_STANDALONE}" = true ] || miss+=" RPI5_STANDALONE(got '${RPI5_STANDALONE}')"
             fi
@@ -909,6 +1029,11 @@ while IFS=$'\t' read -r platform role env board flavor desktop; do
             ;;
         orangepi5)
             [ "${ORANGEPI5_BOARD_OUT}" = "${board}" ]   || miss+=" ORANGEPI5_BOARD_OUT(got '${ORANGEPI5_BOARD_OUT}')"
+            case "${role}" in
+                pki|backend|frontend|omnibus)
+                    [ "${BUILD_ROLE}" = "${role}" ] || miss+=" BUILD_ROLE(got '${BUILD_ROLE}')" ;;
+                *)  [ -z "${BUILD_ROLE}" ] || miss+=" BUILD_ROLE(got '${BUILD_ROLE}', want empty for the desktop)" ;;
+            esac
             [ "${ORANGEPI5_FLAVOR_OUT}" = "${expect_flavor}" ] || miss+=" ORANGEPI5_FLAVOR_OUT(got '${ORANGEPI5_FLAVOR_OUT}')"
             if ${expect_standalone}; then
                 [ "${ORANGEPI5_STANDALONE}" = true ] || miss+=" ORANGEPI5_STANDALONE(got '${ORANGEPI5_STANDALONE}')"
@@ -940,6 +1065,9 @@ while IFS=$'\t' read -r platform role env board flavor desktop; do
             ;;
         orangepi4-lts)
             [ "${ORANGEPI4LTS_FLAVOR_OUT}" = "${expect_flavor}" ] || miss+=" ORANGEPI4LTS_FLAVOR_OUT(got '${ORANGEPI4LTS_FLAVOR_OUT}')"
+            if [ "${role}" = frontend ]; then
+                [ "${BUILD_ROLE}" = frontend ] || miss+=" BUILD_ROLE(got '${BUILD_ROLE}')"
+            fi
             if ${expect_standalone}; then
                 [ "${ORANGEPI4LTS_STANDALONE}" = true ] || miss+=" ORANGEPI4LTS_STANDALONE(got '${ORANGEPI4LTS_STANDALONE}')"
             fi
@@ -980,16 +1108,26 @@ expect_reject "rpi5: node role as client" rpi5.pki  client
 #    reject exactly like the existing bare rpi5.pki/client probe above).
 expect_reject "jetson: standalone-shaped role rejected" jetson.standalone-desktop.orin-nano primary
 expect_reject "rpi5: standalone-desktop role as client" rpi5.standalone-desktop.rpi4 client
+# The RAM gate on the Job channel (omnibus needs the "<N>gb" field and 8 GB+), and
+# the Orange Pi node grammar's refusals.
+expect_reject "rpi5: omnibus without the RAM field"     rpi5.omnibus.rpi5 primary
+expect_reject "rpi5: omnibus with 4 GB"                  rpi5.omnibus.rpi4.4gb primary
+expect_reject "rpi5: backend with 2 GB"                  rpi5.backend.rpi4.2gb primary
+expect_reject "orangepi5: omnibus without the RAM field" orangepi5.omnibus.orange-pi-5 primary
+expect_reject "orangepi5: edge-ai is not an Orange Pi node role" orangepi5.edge-ai.orange-pi-5 primary
+expect_reject "orangepi5: node role as client"           orangepi5.pki.orange-pi-5 client
+expect_reject "orangepi4-lts: omnibus (4 GB board)"      orangepi4-lts.omnibus.8gb primary
+expect_reject "orangepi4-lts: pki (16 GB eMMC)"          orangepi4-lts.pki primary
 JOB_EOF
     local rc=$?
     JOB_PASS=$(grep -c '^JOB PASS' "${out}" || true)
     JOB_FAIL=$(grep -c '^JOB FAIL' "${out}" || true)
     # the child's negative probes count toward the NEG bucket; FAIL-CLOSED like
-    # the menu child's threading probes: 5 expected, shortfall = failures.
+    # the menu child's threading probes: 13 expected, shortfall = failures.
     local jneg_pass
     jneg_pass=$(grep -c '^JOBNEG PASS' "${out}" || true)
     NEG_PASS=$((NEG_PASS + jneg_pass))
-    NEG_FAIL=$((NEG_FAIL + 5 - jneg_pass))
+    NEG_FAIL=$((NEG_FAIL + 13 - jneg_pass))
     # FAIL-CLOSED: a crashed job child (drift canary, set -u trip, …) is a
     # channel failure, never "0 rows = 0 failures" (the completeness gate
     # below backstops this too).
@@ -1435,6 +1573,37 @@ run_negative_checks() {
     expect_fail "rpi5: --board rpi3 + role pki"       ./build-rpi5-stage4.sh --board rpi3 --role pki --print-plan
     expect_fail "rpi5: --board rpi3 + role frontend"  ./build-rpi5-stage4.sh --board rpi3 --role frontend --print-plan
     expect_fail "rpi5: --board rpi3 + role generic"   ./build-rpi5-stage4.sh --board rpi3 --role generic --print-plan
+    # ── RAM floors + Orange Pi node roles (scripts/_roles-lib.sh) ────────────────
+    # omnibus REQUIRES --ram-gb and 8 GB; the other node roles refuse below 4 GB.
+    expect_fail "rpi5: omnibus without --ram-gb"        ./build-rpi5-stage4.sh --role omnibus --print-plan
+    expect_fail "rpi5: omnibus --ram-gb 4"              ./build-rpi5-stage4.sh --role omnibus --ram-gb 4 --print-plan
+    expect_fail "rpi5: omnibus --board rpi4 --ram-gb 4" ./build-rpi5-stage4.sh --board rpi4 --role omnibus --ram-gb 4 --print-plan
+    expect_fail "rpi5: --board rpi3 + role omnibus"     ./build-rpi5-stage4.sh --board rpi3 --role omnibus --ram-gb 8 --print-plan
+    expect_fail "rpi5: backend --ram-gb 2"              ./build-rpi5-stage4.sh --board rpi4 --role backend --ram-gb 2 --print-plan
+    expect_fail "rpi5: --ram-gb not a number"           ./build-rpi5-stage4.sh --role omnibus --ram-gb 8G --print-plan
+    expect_ok   "rpi5: omnibus --ram-gb 8"              ./build-rpi5-stage4.sh --role omnibus --ram-gb 8 --print-plan
+    expect_fail "orangepi5: omnibus without --ram-gb"   ./build-orangepi5-stage4.sh --role omnibus --print-plan
+    expect_fail "orangepi5: omnibus --ram-gb 4"         ./build-orangepi5-stage4.sh --board orange-pi-5 --role omnibus --ram-gb 4 --print-plan
+    expect_fail "orangepi5: backend --ram-gb 2"         ./build-orangepi5-stage4.sh --board orange-pi-5 --role backend --ram-gb 2 --print-plan
+    expect_fail "orangepi5: node role + --flavor live"  ./build-orangepi5-stage4.sh --role backend --flavor live --print-plan
+    expect_fail "orangepi5: node role + --flavor both"  ./build-orangepi5-stage4.sh --role pki --flavor both --print-plan
+    expect_fail "orangepi5: node role + --live"         ./build-orangepi5-stage4.sh --role frontend --live --print-plan
+    expect_fail "orangepi5: node role + --standalone"   ./build-orangepi5-stage4.sh --role pki --standalone --print-plan
+    expect_fail "orangepi5: edge-ai is not built"       ./build-orangepi5-stage4.sh --role edge-ai --print-plan
+    expect_fail "orangepi5: backend-gpu is not built"   ./build-orangepi5-stage4.sh --role backend-gpu --print-plan
+    expect_ok   "orangepi5: omnibus --ram-gb 8"         ./build-orangepi5-stage4.sh --role omnibus --ram-gb 8 --print-plan
+    expect_ok   "orangepi5: desktop still takes --flavor live" ./build-orangepi5-stage4.sh --flavor live --print-plan
+    expect_fail "orangepi4-lts: omnibus (4 GB board)"   ./build-orangepi4-lts-stage4.sh --role omnibus --ram-gb 8 --print-plan
+    expect_fail "orangepi4-lts: pki (16 GB eMMC)"       ./build-orangepi4-lts-stage4.sh --role pki --print-plan
+    expect_fail "orangepi4-lts: backend (4 GB RAM)"     ./build-orangepi4-lts-stage4.sh --role backend --print-plan
+    expect_fail "orangepi4-lts: frontend + --flavor live" ./build-orangepi4-lts-stage4.sh --role frontend --flavor live --print-plan
+    expect_ok   "orangepi4-lts: frontend"               ./build-orangepi4-lts-stage4.sh --role frontend --print-plan
+    for _nb in build-orangepi-zero2-stage4.sh build-orangepi-zero2w-stage4.sh \
+               build-orangepi-zero3-stage4.sh build-orangepi3-lts-stage4.sh build-frite-stage4.sh; do
+        for _nr in pki backend frontend omnibus; do
+            expect_fail "${_nb%-stage4.sh}: node role ${_nr}" "./${_nb}" --role "${_nr}" --print-plan
+        done
+    done
     expect_fail "frite: invalid board"       ./build-frite-stage4.sh --board bogus --print-plan
     expect_fail "frite: invalid desktop"     ./build-frite-stage4.sh --board la-frite --desktop kde --print-plan
     expect_fail "jetson: invalid role"       ./build-jetson-stage4.sh --role bogus --print-plan

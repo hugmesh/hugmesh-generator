@@ -1165,5 +1165,152 @@ case "${only_out}" in
 esac
 rm -rf "${only_dir}"
 
+
+# ══ E) THE ORANGE PI NODE LOADER (scripts/_node-role-lib.sh) ═══════════════════
+# An Orange Pi node build does not carry its own copy of the Pi's cluster-tree gate
+# functions: _node-role-lib.sh LOADS them out of build-rpi5-stage4.sh at run time.
+# That loader only fails at the start of a real build if a function is missing, and
+# a helper the loaded functions call but the loader does not bring in would fail
+# HOURS into a real build (Phase 4), long after --print-plan said yes. So this
+# section runs the loader and the bake the Orange Pi builders run, into a scratch
+# sysroot, with no root and no image build.
+NRL="${GEN}/scripts/_node-role-lib.sh"
+E_TMP="$(mktemp -d)"
+# E1) the loader brings in every listed function and setting, from the Pi builder.
+e1_out="$(SCRIPT_DIR="${GEN}" bash -c '
+    set -euo pipefail
+    . "$1"; . "$2"
+    node_role_load_pi_settings
+    node_role_load_pi_functions
+    for f in ${NODE_ROLE_PI_FUNCTIONS}; do declare -F "$f" >/dev/null || echo "NOFN $f"; done
+    for v in ${NODE_ROLE_PI_SETTINGS}; do [ -n "${!v+x}" ] || echo "NOVAR $v"; done
+    echo LOADED' _ "${LIB}" "${NRL}" 2>&1 || true)"
+case "${e1_out}" in
+    *NOFN*|*NOVAR*) bad "node loader left gaps: $(printf '%s' "${e1_out}" | grep -a -E 'NOFN|NOVAR' | tr '\n' ' ')" ;;
+    *LOADED*)       ok "node loader defines every NODE_ROLE_PI_FUNCTIONS function and NODE_ROLE_PI_SETTINGS setting from build-rpi5-stage4.sh" ;;
+    *)              bad "node loader failed: $(printf '%s' "${e1_out}" | tail -n 3 | tr '\n' ' ')" ;;
+esac
+# E2) CLOSURE: every Pi-builder function the loaded set calls (comments stripped) is
+#     either loaded too or defined by each Orange Pi node builder / a lib it sources.
+for b in build-orangepi5-stage4.sh build-orangepi4-lts-stage4.sh; do
+    e2_miss="$(SCRIPT_DIR="${GEN}" bash -c '
+        set -uo pipefail
+        GEN="$1"; OPI="$2"; . "$3"
+        pi="${GEN}/build-rpi5-stage4.sh"
+        mapfile -t pi_fns < <(grep -a -oE "^[A-Za-z_][A-Za-z0-9_]*\(\) *\{" "${pi}" | sed "s/().*//" | sort -u)
+        avail="$( { grep -a -oE "^[A-Za-z_][A-Za-z0-9_]*\(\) *\{" "${GEN}/${OPI}" | sed "s/().*//"
+            for lib in $(grep -a -oE "source \"\\\$\{SCRIPT_DIR\}/scripts/[^\"]+\"" "${GEN}/${OPI}" | sed -E "s/.*scripts\/([^\"]+)\"/\1/"); do
+                grep -a -oE "^ *[A-Za-z_][A-Za-z0-9_]*\(\) *\{" "${GEN}/scripts/${lib}" | sed -E "s/^ *//; s/().*//"
+            done; } | sort -u)"
+        loaded=" $(echo ${NODE_ROLE_PI_FUNCTIONS}) "
+        todo=(${NODE_ROLE_PI_FUNCTIONS}); seen=" "
+        while [ ${#todo[@]} -gt 0 ]; do
+            f="${todo[0]}"; todo=("${todo[@]:1}")
+            case "${seen}" in *" ${f} "*) continue ;; esac
+            seen+="${f} "
+            body="$(_node_role_extract_fn "${f}" "${pi}" | sed -E "s/(^|[[:space:]])#.*$//")"
+            for g in "${pi_fns[@]}"; do
+                [ "${g}" = "${f}" ] && continue
+                printf "%s" "${body}" | grep -a -E "(^|[^A-Za-z0-9_-])${g}([^A-Za-z0-9_-]|$)" >/dev/null || continue
+                case "${loaded}" in *" ${g} "*) todo+=("${g}"); continue ;; esac
+                printf "%s\n" "${avail}" | grep -a -x -- "${g}" >/dev/null && continue
+                echo "${g}(called by ${f})"
+            done
+        done' _ "${GEN}" "${b}" "${NRL}" 2>&1 || true)"
+    if [ -z "${e2_miss}" ]; then
+        ok "${b}: every Pi function the loaded node gates call is loaded or defined (call closure)"
+    else
+        bad "${b}: the loaded node gates call Pi functions nothing brings in: $(echo ${e2_miss})"
+    fi
+done
+# E3) the node runlevel list is the Pi's own list (the Pi's DEFAULT_SVCS+= line).
+pi_svcs="$(grep -a -m1 -E '^ *DEFAULT_SVCS\+=\(hugmesh-firewall-reconcile ' "${GEN}/build-rpi5-stage4.sh" | sed -E 's/.*\((.*)\).*/\1/')"
+lib_svcs="$(SCRIPT_DIR="${GEN}" bash -c '. "$1"; echo ${NODE_ROLE_RUNLEVEL_SVCS}' _ "${NRL}")"
+if [ -n "${pi_svcs}" ] && [ "$(echo ${pi_svcs})" = "${lib_svcs}" ]; then
+    ok "NODE_ROLE_RUNLEVEL_SVCS equals the Pi node runlevel list (${lib_svcs})"
+else
+    bad "NODE_ROLE_RUNLEVEL_SVCS [${lib_svcs}] differs from build-rpi5-stage4.sh's node list [${pi_svcs}]"
+fi
+# E3b) the k8s payload file list is the Pi's: every file the Pi's cluster-node-only
+#      (`if ! ${ROLE_CLIENT}`) blocks copy between its "k8s modules/sysctl" comment and
+#      its firewall-alias note, versus the files node_role_bake_k8s_payload writes.
+pi_k8s="$(awk '
+    /^# k8s modules\/sysctl \+ containerd\/kubelet\/kubeadm config/ { on = 1 }
+    /^# NO .firewall. alias for firewalld/ { on = 0 }
+    !on { next }
+    /^if ! \$\{ROLE_CLIENT\}; then/ { node = 1; next }
+    /^fi/ { node = 0; loop = ""; next }
+    node && /for svc in .*; do/ { loop = $0; sub(/.*for svc in /, "", loop); sub(/; do.*/, "", loop); next }
+    node && /^ *cp "\$\{SHARED_SPECS\}/ {
+        d = $NF; gsub(/"/, "", d); sub(/^\$\{SYSROOT\}/, "", d)
+        if (d ~ /\$\{svc\}/ && loop != "") { n = split(loop, a, " "); for (i = 1; i <= n; i++) { x = d; sub(/\$\{svc\}/, a[i], x); print x } }
+        else print d
+    }' "${GEN}/build-rpi5-stage4.sh" | sort -u)"
+lib_k8s="$(sr="$(mktemp -d)"; SCRIPT_DIR="${GEN}" bash -c '. "$1"; node_role_bake_k8s_payload "$2" "$3/specs"' _ "${NRL}" "${sr}" "${GEN}" >/dev/null 2>&1; (cd "${sr}" && find . -type f | sed 's/^\.//' | sort -u); rm -rf "${sr}")"
+if [ -n "${pi_k8s}" ] && [ "${pi_k8s}" = "${lib_k8s}" ]; then
+    ok "node_role_bake_k8s_payload writes exactly the Pi node's k8s files ($(echo ${lib_k8s} | wc -w) files)"
+else
+    bad "node_role_bake_k8s_payload's files differ from the Pi node's k8s files"
+    diff <(echo "${pi_k8s}") <(echo "${lib_k8s}") | sed 's/^/      /' || true
+fi
+# E4) THE BAKE ITSELF, as both Orange Pi builders run it for a node role, into a
+#     scratch sysroot: k8s payload, cluster tree + the Pi's gates, rebrand, IdP,
+#     Vault, the RAM floor marker. Every runlevel service must then have its init
+#     script (a missing one would be a dangling symlink on the node).
+for role in omnibus frontend; do
+    sr="${E_TMP}/sysroot-${role}"
+    mkdir -p "${sr}"
+    e4_out="$(SCRIPT_DIR="${GEN}" SYSROOT="${sr}" ROLE="${role}" bash -c '
+        set -euo pipefail
+        SHARED_SPECS="${SCRIPT_DIR}/specs"
+        ENV=test BRAND=hugmesh BRAND_TITLE="HugMesh Systems" ORG=hugmesh CLUSTER_DOMAIN=hugmesh.net
+        ROLE_CLIENT=false NODE_ROLE=true
+        banner() { :; }; info() { :; }; warn() { echo "WARN $1" >&2; }; err() { echo "ERR $1" >&2; }
+        . "$1"; . "${SCRIPT_DIR}/scripts/_optional-services-lib.sh"; . "$2"
+        node_role_load_pi_settings
+        node_role_load_pi_functions
+        OPTIONAL_SERVICES="${OPTIONAL_SERVICES//,/ }"
+        node_role_bake_k8s_payload "${SYSROOT}" "${SHARED_SPECS}"
+        node_role_bake_cluster_tree "${SYSROOT}" "${SHARED_SPECS}"
+        [ "${ROLE}" = omnibus ] && node_role_bake_min_ram "${SYSROOT}" "${ROLE}"
+        rebrand_sysroot
+        apply_idp_external
+        bake_vault_conf
+        for s in ${NODE_ROLE_RUNLEVEL_SVCS}; do
+            [ -x "${SYSROOT}/etc/init.d/${s}" ] || echo "NOINIT ${s}"
+        done
+        echo BAKED' _ "${LIB}" "${NRL}" 2>&1 || true)"
+    case "${e4_out}" in
+        *NOINIT*) bad "node bake (${role}): runlevel service(s) with no init script: $(printf '%s' "${e4_out}" | grep -a NOINIT | tr '\n' ' ')" ;;
+        *BAKED*)  ok "node bake (${role}) runs to the end under set -euo pipefail into a scratch sysroot" ;;
+        *)        bad "node bake (${role}) failed: $(printf '%s' "${e4_out}" | tail -n 4 | tr '\n' ' ')" ;;
+    esac
+    for f in var/lib/hugmesh/cluster etc/kubernetes/kubeadm-config.yaml var/lib/kubelet/config.yaml \
+             etc/containerd/config.toml etc/sysctl.d/99-kubernetes.conf etc/modules-load.d/kubernetes.conf \
+             etc/hugmesh/release-state; do
+        [ -e "${sr}/${f}" ] && continue
+        bad "node bake (${role}) did not produce /${f}"
+    done
+    if [ "${role}" = omnibus ]; then
+        if [ "$(cat "${sr}/etc/hugmesh/min-ram-mb" 2>/dev/null)" = "8192" ]; then
+            ok "node bake (omnibus) records its 8 GB RAM floor as /etc/hugmesh/min-ram-mb = 8192"
+        else
+            bad "node bake (omnibus) /etc/hugmesh/min-ram-mb is '$(cat "${sr}/etc/hugmesh/min-ram-mb" 2>/dev/null)', expected 8192"
+        fi
+    elif [ -e "${sr}/etc/hugmesh/min-ram-mb" ]; then
+        bad "node bake (${role}) wrote /etc/hugmesh/min-ram-mb, which only omnibus records"
+    fi
+done
+# E5) FAIL-CLOSED: a Pi builder that lost one of the listed functions stops the
+#     loader with a message naming it (never a half-loaded node build).
+mkdir -p "${E_TMP}/fake"
+sed 's/^gate_env_apps() {/gate_env_apps_renamed() {/' "${GEN}/build-rpi5-stage4.sh" > "${E_TMP}/fake/build-rpi5-stage4.sh"
+e5_out="$(SCRIPT_DIR="${E_TMP}/fake" bash -c '. "$1"; node_role_load_pi_functions; echo "rc=$?"' _ "${NRL}" 2>&1 || true)"
+case "${e5_out}" in
+    *"function gate_env_apps not found"*"rc=1"*) ok "node loader refuses (rc=1, names gate_env_apps) when the Pi builder lost a listed function" ;;
+    *) bad "node loader did not fail closed on a missing function: $(printf '%s' "${e5_out}" | tail -n 2 | tr '\n' ' ')" ;;
+esac
+rm -rf "${E_TMP}"
+
 echo "== ${P} passed, ${F} failed =="
 [ "${F}" -eq 0 ]

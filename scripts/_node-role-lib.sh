@@ -25,8 +25,9 @@
 # keeps the Pi builder byte-identical and gives the Orange Pi nodes the SAME code,
 # not a copy that can drift. It is fail-closed: a function that cannot be found
 # or does not parse stops the build at t=0 (before --print-plan returns), and
-# tests/scripts/test-node-role-lib.sh runs the loader and checks every function
-# and default it brings in.
+# tests/scripts/test-role-key-spelling.sh (section E) runs the loader, checks every
+# function and default it brings in, the call closure of the loaded functions, and
+# runs the whole node bake into a scratch sysroot.
 #
 # NO `set -e` here: the caller owns its shell options. One `local` per assignment
 # (bash 5.3 localises a whole `local a=$1 b=$a` list before assigning).
@@ -52,7 +53,7 @@ _MGD_TIER12_IDS _MGD_TIER3_IDS _IDP_URL_RE _IDP_CLIENT_ID_RE _VAULT_PATH_RE"
 
 # The k8s node services every node role links into the default runlevel (the Pi
 # list, build-rpi5-stage4.sh `DEFAULT_SVCS+=(hugmesh-firewall-reconcile ...)`;
-# tests/scripts/test-node-role-lib.sh asserts the two stay equal).
+# tests/scripts/test-role-key-spelling.sh section E asserts the two stay equal).
 NODE_ROLE_RUNLEVEL_SVCS="hugmesh-firewall-reconcile hugmesh-coturn-firewall hugmesh-go-live-reconcile containerd kubelet"
 
 # _node_role_extract_fn <name> <file> — print the LAST column-0 `name() {` ... `}`
@@ -140,7 +141,7 @@ node_role_k8s_topology() {
 # node_role_bake_k8s_payload <sysroot> <shared-specs> — the k8s modules/sysctl,
 # containerd/kubelet/kubeadm configuration, their init scripts and the CNI /
 # containerd directories (the Pi's `if ! ${ROLE_CLIENT}` blocks; the file list is
-# pinned equal to the Pi's by tests/scripts/test-node-role-lib.sh).
+# pinned equal to the Pi's by tests/scripts/test-role-key-spelling.sh section E).
 node_role_bake_k8s_payload() {
     local _s="$1"
     local _sh="$2"

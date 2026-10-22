@@ -315,8 +315,13 @@ SAMPLES = {
 # still part of the emission vocabulary — probe the non-default board axes the
 # baselines leave unset (frite/opi5/opz2 emit --board/--flavor unconditionally).
 STRUCTURAL = {
-    "rpi5": [{"board": "rpi4"}],
+    # ram_gb (--ram-gb) is the board-RAM axis of a Pi / Orange Pi cluster NODE role:
+    # it is emitted only for a node role with a stated RAM, so probe it on omnibus
+    # (where it is required) and on the Orange Pi 4 LTS's one node role.
+    "rpi5": [{"board": "rpi4"}, {"role": "omnibus", "ram_gb": "8"}],
     "jetson": [{"board": "orin-nano"}],
+    "orangepi5": [{"mode": "mesh", "role": "omnibus", "ram_gb": "8"}],
+    "orangepi4-lts": [{"mode": "mesh", "role": "frontend", "ram_gb": "4"}],
 }
 
 missing = set(PLATFORM_FIELD_SUPPORT) - set(SAMPLES)
