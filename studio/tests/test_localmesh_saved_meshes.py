@@ -166,13 +166,18 @@ def test_apply_bootstrap_round_trips_collect_bootstrap(qapp, page, tmp_path):
     css, err = page.look_css_and_error()
     assert css and not err
     form = page.theme_form()
+    # the whole look the stylesheet is made from, which a record now carries too
+    # (the front door composes a domain's own look over it)
+    whole = dict(look.record())
+    assert whole == {"primary": "#123456", "secondary": "#654321"}
     svcs = tuple(s for s in local_slugs() if s != "egress-vpn")
     cfg = lmb.LocalMeshBootstrapConfig(
         env="prod", superadmin_username="root", social="tuwunel" in svcs,
         with_tor="tor" in svcs, services=svcs, cluster_domain="example.org",
         login_server="https://hs.example.org", brand="acme-x",
         source_mode="existing", source_dir=str(tmp_path), web_locales=("de", "fr"),
-        login_theme_css=css, idp="oidc", idp_issuer="https://id.example.org",
+        login_theme_css=css, login_look=whole, idp="oidc",
+        idp_issuer="https://id.example.org",
         idp_client_id="cid", idp_jwks="https://id.example.org/jwks",
         kind_addons=())
     # scramble the look first so the round-trip has to restore it (the brand is
