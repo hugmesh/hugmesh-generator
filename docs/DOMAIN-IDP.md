@@ -166,6 +166,13 @@ Nothing on the image reads `/etc/hugmesh/domain-idp` yet: the build-time writer 
 the `casdoor-domains` elements (below) is still open, and this file is the input it
 would take.
 
+The Studio does not pass `--domain-idp` to any builder (`ImageConfig.to_cli_args`); a
+domain's own sign-in picked in the Studio rides the mesh manifest only. So on a built
+image, and in a Fleet build (whose rows reach no builder and no manifest), every domain
+signs in through the mesh. The domain's Identity tab and the text screen say so on those
+routes (`tui/brand_step.SIGNIN_NOT_APPLIED`), and the Docker route's tab says what its
+start applies and that the kind lane does not (`SIGNIN_DOCKER_APPLIED`).
+
 ## Removal runbook (idp flip back / domain deletion)
 
 1. Retire the domain's `APP_TENANCY_ISSUERS`/`APP_TENANCY_HOSTS` pair from the

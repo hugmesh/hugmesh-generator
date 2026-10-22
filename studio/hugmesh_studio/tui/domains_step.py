@@ -5,8 +5,9 @@ and — MESH ONLY — the Sign-in column carrying each row's ``Domain.idp``:
 
 * ``superdomain`` (the DEFAULT — absent in old configs, omitted from manifests):
   sign-in via the mesh's central Casdoor on the superdomain;
-* ``own``: this domain runs its OWN Casdoor instance (cluster provisioning /
-  the local compose lane stand it up from the manifest).
+* ``own``: this domain runs its OWN Casdoor instance. The local compose lane stands
+  it up; on a built image it is kept with the configuration (and the mesh manifest)
+  and nothing applies it yet (docs/DOMAIN-IDP.md), which the step's help says.
 
 The column is hidden in cloud mode exactly as the GUI hides it (a client hosts
 no Casdoor and writes no manifest), and an untouched row keeps the default so
@@ -42,7 +43,8 @@ import re
 from ..core import plain_words
 from ..core.config import (
     CLIENT_CA_INHERITANCE_NOTE, DOMAIN_IDP_CHOICES, DOMAIN_IDP_OWN,
-    DOMAIN_IDP_SUPERDOMAIN, Domain, github_org_problem, set_domain_signin,
+    DOMAIN_IDP_SUPERDOMAIN, OWN_SIGNIN_NOT_APPLIED_ON_IMAGE, Domain, github_org_problem,
+    set_domain_signin,
 )
 from ..core.local_mesh_domains import added_row_problems
 from ..core.domain_services import (implicit_own_domain, reviewed_names,
@@ -178,7 +180,7 @@ class DomainsScreen:
             out.append("'Sign-in' = which Casdoor serves this domain's login: "
                        "Superdomain (its users sign in via the mesh's central "
                        "Casdoor — the default) or Own (this domain runs its "
-                       "own Casdoor instance).")
+                       "own Casdoor instance). " + OWN_SIGNIN_NOT_APPLIED_ON_IMAGE)
             out.append("'GitHub org' = the organisation this domain's repositories "
                        "are exported to by the Go-Live ‘Export to GitHub org’ step "
                        "(python -m hugmesh_studio.tui --go-live). An org slug only, "

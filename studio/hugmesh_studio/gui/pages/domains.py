@@ -28,8 +28,10 @@ the header — every mesh node joins it, it is never a table row and never attac
 
 The mesh-only 'Sign-in' column (issue #47) is each row's ``Domain.idp``: superdomain
 (the mesh's central Casdoor — the default, today's behavior) vs own (this domain runs
-its OWN Casdoor instance). It reaches provisioning via the mesh manifest and the local
-compose lane via core/own_casdoor.py; an untouched/hidden combo always collects the
+its OWN Casdoor instance). The local compose lane stands it up (core/own_casdoor.py);
+on an image it rides the mesh manifest and nothing reads it yet (the casdoor-domains
+element writer is not built — docs/DOMAIN-IDP.md), and the tooltips say so; an
+untouched/hidden combo always collects the
 superdomain default, so pre-#47 flows and manifests are byte-identical.
 
 The mesh-only 'Base CA' column (issue #335) is the per-domain half of the Vault
@@ -81,7 +83,8 @@ from ..qt import Qt, QtWidgets
 from ..styles import WARN, muted
 from ...core import plain_words
 from ...core.config import (CLIENT_CA_INHERITANCE_NOTE, DOMAIN_FIELDS, DOMAIN_IDP_OWN,
-                            DOMAIN_IDP_SUPERDOMAIN, GITHUB_ORG_RE, Domain,
+                            DOMAIN_IDP_SUPERDOMAIN, GITHUB_ORG_RE,
+                            OWN_SIGNIN_NOT_APPLIED_ON_IMAGE, Domain,
                             github_org_problem, image_class, set_domain_signin,
                             superadmin_plane_applies)
 from ...core.local_mesh_domains import added_row_problems
@@ -137,9 +140,11 @@ _IDP_ITEMS = (
      "Sign-in via the mesh's central Casdoor on the superdomain — today's "
      "behavior, nothing extra to run."),
     (DOMAIN_IDP_OWN, "Own Casdoor",
-     "This domain has its OWN sign-in: by default a Casdoor instance provisioned "
-     "just for it; its own Azure Entra ID, AWS Cognito or OIDC provider instead is "
-     "chosen on the domain's Identity tab (Domain services step)."),
+     "This domain has its OWN sign-in: by default a Casdoor instance of its own; its "
+     "own Azure Entra ID, AWS Cognito or OIDC provider instead is chosen on the "
+     "domain's Identity tab (Domain services step). Applied on the Docker mesh only: "
+     "a built image and a Fleet build keep the choice without applying it yet, so "
+     "there the domain still signs in through the mesh (docs/DOMAIN-IDP.md)."),
 )
 
 
@@ -378,9 +383,10 @@ class DomainsTableBody:
         idp_hdr.setToolTip(
             "Which Casdoor serves this domain's sign-in. Superdomain = "
             "the mesh's one central Casdoor (default — today's behavior). Own = a "
-            "Casdoor instance provisioned for this domain alone; reaches cluster "
-            "provisioning via the mesh manifest, and the local compose lane stands "
-            "it up next to the central one.")
+            "Casdoor instance for this domain alone: the Docker mesh stands it up next "
+            "to the central one. A built image and a Fleet build keep the choice "
+            "without applying it yet (nothing on them stands that Casdoor up), so "
+            "there the domain signs in through the mesh (docs/DOMAIN-IDP.md).")
         ca_hdr = self.table.horizontalHeaderItem(_COL_CA)
         ca_hdr.setToolTip(
             "Which of the certificate authorities from the Secrets store step this "
@@ -800,7 +806,8 @@ class DomainsPage(QtWidgets.QWizardPage, DomainsTableBody):
             "services you chose on the services step. ‘Applies to’ = which built node images the domain attaches "
             "to. ‘Sign-in’ = which Casdoor serves this domain's login: Superdomain "
             "(its users sign in via the mesh's central Casdoor — the default) or Own "
-            "(this domain runs its own Casdoor instance, provisioned just for it). "
+            "(this domain runs its own Casdoor instance). "
+            + OWN_SIGNIN_NOT_APPLIED_ON_IMAGE + " "
             "‘Base CA’ = which certificate authority from the Secrets store step this "
             "domain chains to; it is recorded with your config and consumed by nothing "
             "yet, and the list it offers is the one you fill in on that later step.")
