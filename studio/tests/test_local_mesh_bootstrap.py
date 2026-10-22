@@ -96,10 +96,16 @@ def test_plan_points_to_go_live_for_public_exposure(tmp_path):
 
 
 def test_plan_tor_on_reports_onion_not_go_live_for_public(tmp_path):
-    # With Tor already enabled the public step is already satisfied — do not tell the
-    # operator to run Go Live for an onion they already have.
+    # With Tor already enabled on a TEST mesh the address starts with the mesh — do not
+    # tell the operator to run Go Live for an onion they already have. #654 (D1, D14)
+    # replaced 'Public ... already ON' with what a Tor address IS: a way in that opens
+    # no public port; the public flip is a separate thing.
     p = _boot(tmp_path, env="test", with_tor=True).plan()
-    assert "already ON — the Tor v3 .onion" in p
+    assert "already ON" not in p
+    assert "A Tor address is another way in" in p
+    assert "starts with this mesh" in p
+    assert "opens no public port" in p
+    assert "Open public ports 80 and 443" in p
 
 
 def test_plan_flags_prod_blockers(tmp_path):

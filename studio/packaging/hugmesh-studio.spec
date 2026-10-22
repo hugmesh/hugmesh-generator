@@ -1,12 +1,16 @@
 # -*- mode: python ; coding: utf-8 -*-
-"""PyInstaller spec for the Windows build of HugMesh Image Studio.
+"""PyInstaller spec for the Windows build of HugMesh Image Studio, and for the Linux
+tarball built from the same spec.
 
     cd studio
     HUGMESH_STUDIO_ICON=<path to a .ico> pyinstaller --noconfirm packaging/hugmesh-studio.spec
 
 Output: ``dist/hugmesh-studio/hugmesh-studio.exe`` plus its ``_internal/`` tree (a
 "onedir" bundle: the MSI wraps the whole folder, and a onefile exe would unpack ~200 MB
-into %TEMP% on every start). It is a WINDOWED executable (no console window).
+into %TEMP% on every start). It is a WINDOWED executable (no console window). On Linux
+the same command (without HUGMESH_STUDIO_ICON) writes ``dist/hugmesh-studio/hugmesh-studio``,
+which the release workflow's ``linux`` job packs into
+``hugmesh-studio-<version>-linux-x86_64.tar.gz``.
 
 THIS FILE IS COMMITTED ON PURPOSE. It used to be missing: ``studio/.gitignore`` carried
 a blanket ``*.spec`` (the pattern PyInstaller's own ``.gitignore`` template uses for

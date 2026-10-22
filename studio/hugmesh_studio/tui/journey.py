@@ -43,6 +43,7 @@ from ..core.config import (
 )
 from ..core.domain_services import (ACTION_IMAGE_BUILD, gate_reason,
                                     services_page_applies)
+from ..core import plain_words
 from ..core.validate import validate_domain_name
 from ..core.worklist import (
     WorklistConfig, WorklistEntry, derived_hostname, duplicate_hostnames, entry_id,
@@ -329,7 +330,9 @@ class IdpScreen:
         return None
 
     def lines(self, j: "Journey") -> list[str]:
-        out = ["Which identity provider will this mesh's nodes trust?", ""]
+        out = ["Which identity provider will this mesh's nodes trust?",
+               "(This is the default every domain inherits; a domain can choose its "
+               "own in section 1, Identity, of the Domain services step.)", ""]
         for i, idp in enumerate(IDP_CHOICES, 1):
             marker = "*" if j.cfg.idp == idp else " "
             out.append(f" {marker}{i}. {IDP_LABELS[idp]}")
@@ -852,30 +855,53 @@ class UsersScreen:
 
 
 class BrandingScreen:
-    """Branding assets are pending; the THEMES surface (#63) is real — a screen,
-    not a popup (TUI-appropriate), opened with ``t``."""
+    """Branding assets are pending; the SUPERBRAND step (#654, D8) is real: the
+    drop-down with ``Create a new superbrand`` first and the design, opened with ``s``
+    and offered where the window's Branding page offers it (a mesh; on an unaffiliated
+    image it says why there is nothing to choose).
+
+    The THEMES entry (``t``) is gone (2026-10-21, the operator: "the theme selection
+    should be there instead of where it is now"): a domain's look is chosen in section
+    2 (Look) of that domain's Brand settings on the Domain services step, and the mesh's
+    own look in its own domain's section 2 — the window's Look tab, the same model."""
 
     slug = "branding"
-    title = "Branding & Themes"
+    title = "Branding"
 
     def enter(self, j: "Journey") -> None:  # noqa: ARG002
         return None
 
-    def lines(self, j: "Journey") -> list[str]:  # noqa: ARG002
-        return ["Branding assets (logo/wallpaper/plymouth) are not yet ported "
-                "to the TUI — configure them in the GUI if you need them.",
-                "",
-                "  t. Themes — edit the web login theme (colours, header/footer, "
-                "background effect)",
-                "", "(Enter continues; t opens the Themes screen)"]
+    @staticmethod
+    def _superbrand_offered(j: "Journey") -> bool:
+        return getattr(j.cfg, "mode", "") == "mesh"
+
+    def lines(self, j: "Journey") -> list[str]:
+        out = ["Branding assets (logo/wallpaper/plymouth) are not yet ported "
+               "to the TUI — configure them in the GUI if you need them.",
+               ""]
+        if self._superbrand_offered(j):
+            sb = plain_words.term("superbrand")
+            out += [f"  s. {sb.capitalize()} — which {sb} governs this mesh: "
+                    f"‘Create a new {sb}’, or one you made before; design it",
+                    ""]
+        out += ["  The web sign-in look (themes, colours, header/footer) is chosen per "
+                "domain: section 2 (Look) of each domain's Brand settings on the Domain "
+                "services step; the mesh's own look is its own domain's.",
+                "", "(Enter continues"
+                + ("; s opens the Superbrand step)" if self._superbrand_offered(j)
+                   else ")")]
+        return out
 
     def prompt(self, j: "Journey") -> str:  # noqa: ARG002
         return "branding> "
 
     def feed(self, j: "Journey", line: str) -> None:
-        if line.strip().lower() == "t":
-            from .themes import ThemesScreen
-            j.open_overlay(ThemesScreen())
+        verb = line.strip().lower()
+        if verb == "s" and self._superbrand_offered(j):
+            from .superbrand_step import SuperbrandScreen
+            screen = SuperbrandScreen()
+            screen.enter(j)
+            j.open_overlay(screen)
             return
         j.advance()
 
@@ -973,6 +999,17 @@ def _index(line: str, count: int) -> int | None:
     return n - 1 if 1 <= n <= count else None
 
 
+
+def _image_brand_session(j):
+    """The image route's superbrand session for the Domain services screen, with row 0's
+    writers told which worklist rows this flow builds (the egress VPN file is offered
+    only when every image can take it — the Network step's own rule)."""
+    from .superbrand_step import session_for
+    s = session_for(j, "image", j.cfg, j.generator_dir)
+    s.host.mesh_writes().entries = lambda: getattr(getattr(j, "worklist", None),
+                                                   "entries", None)
+    return s
+
 class Journey:
     """The face-independent journey state machine (see the module docstring)."""
 
@@ -1007,7 +1044,8 @@ class Journey:
                       "Add more domains beyond the internal Tailscale root "
                       "domain (public go-live domains this mesh serves)?",
                       "additional_domains"),
-            NetworkScreen(), DomainsScreen(), DomainServicesScreen(),
+            NetworkScreen(), DomainsScreen(), DomainServicesScreen(
+                brand_session_of=_image_brand_session, route="image"),
             YesNoStep("users_choice", "User accounts",
                       "Configure user accounts for this mesh now?",
                       "configure_users"),

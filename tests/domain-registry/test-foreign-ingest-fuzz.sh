@@ -106,23 +106,6 @@ else
   bad "(static a) FIB_* read bare but NEVER assigned in ${GATE##*/}: $(printf '%s' "$FIB_UNBOUND" | tr '\n' ' ')— under set -u the first read aborts the gate and EVERY base, clean ones included, is REJECTED"
 fi
 
-# ── STATIC (b): the header's named legacy envelope IS the constant [b] reads ────
-# ae322866 — the sibling of the same direct-to-main push, 6 minutes earlier — rewrote
-# gate [b]'s header line to say the pre-rebrand envelope is ".acme-provenance.json".
-# No such name exists anywhere in the tree: "acme" is THIS SUITE's fixture mesh, and
-# the real constant is ".snapdragon-provenance.json". Prose is what the next person
-# reads before deciding the dual-read can finally be retired, and a wrong filename
-# there points the decision at a file no mesh has ever shipped. Pin the sentence to
-# the constant so the two cannot drift apart again in silence.
-FIB_LEG_CONST="$(awk -F'"' '/^FIB_MANIFEST_LEGACY_COMPAT=/ { print $2; exit }' "$GATE")"
-if [ -z "$FIB_LEG_CONST" ]; then
-  bad "(static b) FIB_MANIFEST_LEGACY_COMPAT is not assigned at all in ${GATE##*/} — the dual-read has no envelope name"
-elif [ "$(grep -cF "pre-rebrand ${FIB_LEG_CONST}(.sig)" "$GATE")" != "0" ]; then
-  ok "(static b) gate [b]'s header names the real legacy envelope (${FIB_LEG_CONST}) — prose and constant agree"
-else
-  bad "(static b) gate [b]'s header does NOT name ${FIB_LEG_CONST} — the documented pre-rebrand envelope has drifted off the constant the dual-read actually reads"
-fi
-
 # ── Trust store: the RIGHT key for acme-mesh + a WRONG (foreign) key ────────────
 MESH="acme-mesh"
 TRUST="${WORK}/trust"; mkdir -p "${TRUST}/${MESH}"
@@ -185,24 +168,25 @@ JSON
     -in "${d}/.hugmesh-provenance.json" -out "${d}/.hugmesh-provenance.json.sig" 2>/dev/null
 }
 
-# LEGACY_COMPAT signer: same envelope, PRE-REBRAND filenames. Exercises the
-# dual-READ in scripts/provenance.sh + scripts/ingest-foreign-base.sh — a mesh that
-# cut its base before the HugMesh rebrand ships `.snapdragon-provenance.json(.sig)`
-# and its detached signature covers exactly those bytes, so the gate must still
-# admit it. sign_base_legacy DIR PRIV MESH PIN GEN
-sign_base_legacy() {
+# OTHER-NAME signer: a valid envelope, signed with the right key, but written under
+# a NON-canonical filename (`.exampleorg-provenance.json(.sig)`, a neutral stand-in
+# for any other spelling — the pre-rebrand one was retired before the public
+# release). The gate reads ONLY `.hugmesh-provenance.json`, so such a base must be
+# rejected as unsigned/unattested. sign_base_othername DIR PRIV MESH PIN GEN
+OTHER_ENV=".exampleorg-provenance.json"
+sign_base_othername() {
   local d="$1" priv="$2" mesh="$3" pin="$4" gen="$5"
   rm -f "${d}/.hugmesh-provenance.json" "${d}/.hugmesh-provenance.json.sig" \
-        "${d}/.snapdragon-provenance.json" "${d}/.snapdragon-provenance.json.sig"
+        "${d}/${OTHER_ENV}" "${d}/${OTHER_ENV}.sig"
   local tree; tree="$(_fib_tree_digest "$d")"
-  cat > "${d}/.snapdragon-provenance.json" <<JSON
+  cat > "${d}/${OTHER_ENV}" <<JSON
 { "schema":"hugmesh.net/provenance/v1",
   "base":{"repo":"hugmesh-login-ui","commitSha":"${pin}","meshId":"${mesh}","treeSha256":"${tree}","generation":${gen},"mode":"overlay"},
   "template":{"archetype":"angular-mfe"},
   "tenant":{"brand":"acme","org":"Acme-Inc","clusterDomain":"acme.test"} }
 JSON
   openssl pkeyutl -sign -inkey "$priv" -rawin \
-    -in "${d}/.snapdragon-provenance.json" -out "${d}/.snapdragon-provenance.json.sig" 2>/dev/null
+    -in "${d}/${OTHER_ENV}" -out "${d}/${OTHER_ENV}.sig" 2>/dev/null
 }
 
 # A 64-hex immutable "digest" for a fixture (deterministic from a label).
@@ -451,28 +435,21 @@ else
   bad "(benign vendored jar wrongly REJECTED (rc=${GATE_RC}) — tree-vuln scan over-blocks)"
 fi
 
-# ── (10g) LEGACY_COMPAT ENVELOPE — a PRE-REBRAND foreign base still ADMITS ───────
-#          The rebrand renamed the attestation envelope to `.hugmesh-provenance.json`
-#          (+ .sig), but signed bases cut before it are already on other meshes'
-#          disks and their signature covers those exact bytes. provenance.sh verify
-#          and ingest-foreign-base.sh therefore dual-READ, new spelling first. Without
-#          this case the fallback could be deleted and every gate here would stay
-#          green while every pre-rebrand mesh silently became "unsigned/unattested".
-B="${WORK}/legacyenv"; mkclean_base "$B"
-PIN="$(digest_of legacyenv)"; sign_base_legacy "$B" "$PRIV" "$MESH" "$PIN" 5
-run_gate legacyenv "$B" "$MESH" "$PIN"
-if [ "${GATE_RC}" -eq 0 ] && [ -n "${GATE_OUT}" ] && [ -f "${GATE_OUT}/.hugmesh-mesh-admitted" ]; then
-  ok "(LEGACY_COMPAT pre-rebrand provenance envelope -> ADMITTED, stamped with the new name)"
-else
-  bad "(LEGACY_COMPAT pre-rebrand envelope wrongly REJECTED (rc=${GATE_RC}) — the dual-read fallback is gone)"
-fi
+# ── (10g) AN ENVELOPE UNDER ANY OTHER NAME IS NO ENVELOPE ──────────────────────
+#          The gate reads ONLY `.hugmesh-provenance.json` (+ .sig). The pre-rebrand
+#          dual-read was retired before the public release, so a base signed under
+#          any other filename must be rejected as unsigned/unattested — never
+#          admitted through a fallback nobody remembers is there.
+B="${WORK}/otherenv"; mkclean_base "$B"
+PIN="$(digest_of otherenv)"; sign_base_othername "$B" "$PRIV" "$MESH" "$PIN" 5
+run_gate otherenv "$B" "$MESH" "$PIN"; assert_reject "(validly signed envelope under a non-canonical filename — no fallback read)"
 
-# ── (10h) …and a MIXED envelope must NOT half-verify: the new manifest beside only
-#          the LEGACY .sig is a mismatched pair, not a valid base.
+# ── (10h) …and a MIXED envelope must NOT half-verify: the canonical manifest
+#          beside only an other-name .sig is a mismatched pair, not a valid base.
 B="${WORK}/mixedenv"; mkclean_base "$B"
-PIN="$(digest_of mixedenv)"; sign_base_legacy "$B" "$PRIV" "$MESH" "$PIN" 5
-mv "${B}/.snapdragon-provenance.json" "${B}/.hugmesh-provenance.json"
-run_gate mixedenv "$B" "$MESH" "$PIN"; assert_reject "(new manifest + legacy-only .sig — mismatched envelope)"
+PIN="$(digest_of mixedenv)"; sign_base_othername "$B" "$PRIV" "$MESH" "$PIN" 5
+mv "${B}/${OTHER_ENV}" "${B}/.hugmesh-provenance.json"
+run_gate mixedenv "$B" "$MESH" "$PIN"; assert_reject "(canonical manifest + other-name-only .sig — mismatched envelope)"
 
 # ── (11) SYMLINK ESCAPE (relative symlink out of the tree) ───────────────────────
 B="${WORK}/symesc"; mkclean_base "$B"; ln -s '../../../../etc/passwd' "${B}/src/escape"

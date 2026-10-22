@@ -10,7 +10,7 @@
 # (specs/cluster/apps/13-service-catalog.yaml, templates/apps/13d-brand-repos.yaml.hbs)
 # discover repos by `pathsExist` on a FIXED descriptor filename. The HugMesh
 # rebrand renamed that file to `hugmesh-deploy.yaml` repo by repo, leaving the
-# pre-rebrand `snapdragon-deploy.yaml` live in the ones that had not moved yet.
+# pre-rebrand spelling live in the ones that had not moved yet.
 # Nothing anywhere noticed: an
 # scmProvider filter that matches no repo is not an error — the ApplicationSet
 # simply generates nothing, no event, no degraded Application, no log line. Three
@@ -67,13 +67,12 @@ spec:
     # These MUST be equal; the gate fails otherwise.
     orgRepos: 38
     sweptRepos: 38
-  # Result of that sweep: 9 adopters, 8 rebranded + 1 legacy spelling, every one of
-  # them also carrying a root `deploy/`. No repo carries `deploy/` without a
-  # descriptor, and no repo carries both spellings.
+  # Result of that sweep: 9 adopters, every one of them shipping
+  # `hugmesh-deploy.yaml` and also carrying a root `deploy/`. No repo carries
+  # `deploy/` without a descriptor. (The last pre-rebrand spelling, in
+  # hugmesh-forum-bff-api, was renamed by that repo on 2026-08-20; re-checked
+  # against its main branch on 2026-10-21 and the legacy filter retired.)
   adopters:
-    # ── rebranded spelling: hugmesh-deploy.yaml (8) ──────────────────────────
-    # Renamed by each repo's own rebrand PR. This GitOps tree does not own those
-    # repos, so the generators accept the name rather than the repos reverting it.
     - repo: hugmesh-admin-bff-api
       descriptor: hugmesh-deploy.yaml
     # No local checkout existed when this registry was first written, which is why
@@ -92,12 +91,8 @@ spec:
       descriptor: hugmesh-deploy.yaml
     - repo: hugmesh-remote-fragment
       descriptor: hugmesh-deploy.yaml
-    # ── LEGACY_COMPAT spelling: snapdragon-deploy.yaml (1) ───────────────────
-    # The last adopter still shipping the pre-rebrand descriptor name on disk.
-    # This is the repo the legacy generator filter exists for; when its own rebrand
-    # lands, update this row AND drop the legacy filter entry from BOTH generators.
     - repo: hugmesh-forum-bff-api
-      descriptor: snapdragon-deploy.yaml
+      descriptor: hugmesh-deploy.yaml
 
   # Every descriptor spelling the platform's own tooling emits, protects or
   # documents. The gate asserts each is matched by a generator filter, so a name
@@ -108,8 +103,4 @@ spec:
     - name: hugmesh-deploy.yaml
       where: specs/cluster/catalog/hugmesh-deploy.example.yaml (the documented example)
     - name: hugmesh-deploy.yaml
-      where: scripts/tooling/render-recipe.js (RENAME_CONTRACT_DENYLIST)
-    # LEGACY_COMPAT — not emitted any more, but still rename-protected because
-    # adopter repos carry it on disk (see the legacy adopter above).
-    - name: snapdragon-deploy.yaml
       where: scripts/tooling/render-recipe.js (RENAME_CONTRACT_DENYLIST)

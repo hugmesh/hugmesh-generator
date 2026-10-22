@@ -550,12 +550,17 @@ def summary_line(s: Snapshot) -> str:
     return "Local AI: " + ", ".join(bits)
 
 
-def commands(generator_dir: str = ".") -> dict:
-    """The exact commands a person can run, for screens that cannot start them."""
+def commands(generator_dir: str = ".", ollama_host: str = "") -> dict:
+    """The exact commands a person can run, for screens that cannot start them.
+
+    ``ollama_host`` (the Docker Ollama's address, when that is the chosen instance)
+    is put in front of each one: run bare, ``local-ai.sh start`` would use the system
+    Ollama on 127.0.0.1:11434 and move a running worker off the Docker one."""
     script = os.path.join(os.path.abspath(generator_dir), "scripts", "local-ai.sh")
-    return {"start": f"{script} start", "chat": f"{script} chat",
-            "watch": f"{script} watch", "todo": f"{script} todo 6 --watch",
-            "stop": f"{script} stop"}
+    pre = f"OLLAMA_HOST={ollama_host} " if ollama_host else ""
+    return {"start": f"{pre}{script} start", "chat": f"{pre}{script} chat",
+            "watch": f"{pre}{script} watch", "todo": f"{pre}{script} todo 6 --watch",
+            "stop": f"{pre}{script} stop"}
 
 
 def format_status(s: Snapshot) -> str:

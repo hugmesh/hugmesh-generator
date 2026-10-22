@@ -162,7 +162,7 @@ def test_page_has_no_free_text_path_to_a_theme(qapp):
         editable += list(page.findChildren(cls))
     assert editable, "found no editable widgets at all — the probe stopped working"
     strays = [w for w in editable
-              if not (_under(w, page.custom_group) or _under(w, page.login_theme))]
+              if not _under(w, page.custom_group)]
     assert strays == [], [(type(w).__name__, w.objectName()) for w in strays]
 
 
@@ -508,39 +508,44 @@ def test_both_unaffiliated_spellings_gate_identically(qapp, cfg_fn):
     assert state == (True, True, False, False)
 
 
-# ── the web login theme is a MESH surface (and is named for its plane) ────────────
+# ── the web login theme is NOT on this page any more (2026-10-21) ─────────────────
+# The operator: "the theme selection should be there instead of where it is now" — in
+# each domain's section. It is chosen on the Look tab of the mesh's own domain (row 0)
+# on the Domain services step; on a mesh this page says where, in one line.
 
-def test_web_login_theme_is_named_for_its_plane(qapp):
-    """The page hosts TWO theme surfaces. The desktop cards sit under a "Desktop theme"
-    header while the collapsible literally titled "Themes" was the WEB one — which is
-    why "the menu for adding the themes" was ambiguous. Label-only: the persisted
-    login_* keys are untouched (test_theme_editor_gui pins that)."""
+def test_the_web_login_theme_section_is_gone_and_a_mesh_says_where_it_went(qapp):
+    from hugmesh_studio.tui.brand_step import LOOK_POINTER
     page, _ = _page(qapp)
-    assert page.login_collapsible.title() == "Web login theme"
+    assert not hasattr(page, "login_theme") and not hasattr(page, "login_collapsible")
+    # the old group class itself is gone (dead-code cleanup): nothing titled Themes
+    assert not [g for g in page.findChildren(QtWidgets.QGroupBox)
+                if g.title().startswith("Themes")]
+    page, _ = _page_for(ImageConfig(mode="mesh", role="pki", platform="x86"))
+    assert page.look_pointer.isVisibleTo(page)
+    assert "Look" in page.look_pointer.text() and LOOK_POINTER[:40] in page.look_pointer.text()
 
 
 @pytest.mark.parametrize("mode,role,shown", [("standalone", "standalone-thick", False),
                                              ("standalone", UNAFFILIATED_ROLE, False),
                                              ("cloud", "laptop", False),
                                              ("mesh", "pki", True)])
-def test_web_login_theme_shown_only_in_mesh(qapp, mode, role, shown):
-    """It themes the login-ui a MESH serves to browsers; a standalone/cloud desktop
-    serves no login-ui, which the page's own applies_to docstring already conceded. The
-    COLLAPSIBLE is the gate target, so the header goes with the content — an orphan
-    header that expands to nothing is the defect network.py:906-909 records."""
+def test_the_look_pointer_is_shown_only_in_mesh(qapp, mode, role, shown):
+    """It points at the login-ui look a MESH serves to browsers; a standalone/cloud
+    desktop serves no login-ui, so it says nothing there."""
     page, _ = _page_for(ImageConfig(mode=mode, role=role, platform="x86"))
-    assert page.login_collapsible.isVisibleTo(page) is shown
-    if shown:
-        assert page.login_collapsible.is_expanded()
+    assert page.look_pointer.isVisibleTo(page) is shown
 
 
-def test_web_login_theme_still_round_trips_through_a_stray_visit(qapp):
-    """Hiding it leaves the output unchanged BECAUSE the commit stays unconditional: the fields
-    are NON_ARGV (config.py:755-766), and a mesh config that walks this page in another
-    mode must come out the other side unharmed."""
+def test_web_login_values_still_round_trip_through_a_stray_visit(qapp):
+    """The login_* fields are NON_ARGV (config.py) and this page no longer writes them
+    at all, so a config that walks it in any mode comes out the other side unharmed."""
     cfg = ImageConfig(mode="standalone", role="standalone-thick", platform="x86",
                       login_primary_color="#123456")
     page, _ = _page_for(cfg)
-    assert not page.login_collapsible.isVisibleTo(page)
     assert page.validatePage()
     assert cfg.login_primary_color == "#123456"
+    cfg = ImageConfig(mode="mesh", role="pki", platform="x86",
+                      login_primary_color="#654321", login_footer_bg="#101010")
+    page, _ = _page_for(cfg)
+    assert page.validatePage()
+    assert (cfg.login_primary_color, cfg.login_footer_bg) == ("#654321", "#101010")

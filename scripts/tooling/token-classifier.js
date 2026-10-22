@@ -23,7 +23,7 @@ const spec = JSON.parse(fs.readFileSync(TOKENS_PATH, 'utf8'));
 // tokens.json", a direct-to-main web-UI edit, 2026-08-28) deleted BOTH
 // `retired_protocol_constants` and `theme_contract_constants` in one 14-line change,
 // and for four days render-handlebars.js's fail-closed emit refusal for every
-// RETIRED snapdragon.* protocol constant AND for the whole theme-delivery hand-off
+// RETIRED pre-rebrand protocol constant AND for the whole theme-delivery hand-off
 // was inert on main — the JSON is not gated by shell-suites.yml (`on: pull_request`)
 // when it lands as a direct push, and nothing else noticed a data file getting
 // smaller. So the blocks are REQUIRED here, at require time, before a single
@@ -53,7 +53,10 @@ const REQUIRED_SPEC_BLOCKS = {
   // allowlist. Loud beats mysteriously-empty output.
   denylist:                   { mustBeNonEmpty: ['keys'], mustBeNonEmptyString: ['key_name_regex'] },
   frozen_protocol_constants:  { mustBeNonEmpty: ['label_key_namespaces', 'api_groups', 'wire_headers', 'subprotocol_prefixes'] },
-  retired_protocol_constants: { mustBeNonEmpty: ['label_key_namespaces', 'wire_headers', 'subprotocol_prefixes'] },
+  // retired_protocol_constants was LIFTED (2026-10-21) by exactly this procedure: its
+  // spellings named the operator's private pre-rebrand brand, which must not appear in
+  // a public hugmesh repository at all. Re-introduction in-tree is now caught by the
+  // repo-wide neutrality guard (studio/tests/test_org_export_neutrality.py).
   theme_contract_constants:   { mustBeNonEmpty: ['rename_denylist', 'env_keys', 'css_variable_prefixes'] },
 };
 
@@ -114,40 +117,17 @@ function isAllowed(token) {
 }
 
 const FROZEN = spec.frozen_protocol_constants;
-// THE BAN SIDE — protocol identity the rebrand RETIRED (tokens.json
-// `retired_protocol_constants`). Folded into the SAME fail-closed match as the live
-// constants: a retired spelling in a template/profile/emitted repo is drift, and
-// refusing it at emit is the only place the templating path can still catch it.
-// Kept as its own spec block (and its own isRetired()) so callers that must tell
-// "our live identity" from "a dead spelling" — ingest-foreign-base.sh's
-// impersonation scan reads frozen_protocol_constants ONLY — are not misled.
 // No `|| {}` default here or on THEME below: that is the exact fail-open shape
-// REQUIRED_SPEC_BLOCKS now refuses at load, and leaving it would still READ as if a
+// REQUIRED_SPEC_BLOCKS refuses at load, and leaving it would still READ as if a
 // missing block were survivable.
-const RETIRED = spec.retired_protocol_constants;
-const FROZEN_LABEL_NS = [...(FROZEN.label_key_namespaces || []), ...(RETIRED.label_key_namespaces || [])];
-const FROZEN_HEADERS = [...(FROZEN.wire_headers || []), ...(RETIRED.wire_headers || [])].map((h) => h.toLowerCase());
-const FROZEN_SUBPROTO = [...(FROZEN.subprotocol_prefixes || []), ...(RETIRED.subprotocol_prefixes || [])];
+const FROZEN_LABEL_NS = [...(FROZEN.label_key_namespaces || [])];
+const FROZEN_HEADERS = [...(FROZEN.wire_headers || [])].map((h) => h.toLowerCase());
+const FROZEN_SUBPROTO = [...(FROZEN.subprotocol_prefixes || [])];
 // The k8s CRD API group (tokens.json `api_groups`, e.g. platform.hugmesh.net) is
 // compiled into hugmesh-admin-bff-api's Fabric8 client the way a label key is
 // compiled into an operator; a token landing on it in ANY spelling (with or
 // without the /v1alpha1 suffix, quoted in apiGroups, the CRD's own name) is refused.
-const FROZEN_API_GROUPS = [...(FROZEN.api_groups || []), ...(RETIRED.api_groups || [])];
-const RETIRED_TERMS = [
-  ...(RETIRED.label_key_namespaces || []),
-  ...(RETIRED.wire_headers || []),
-  ...(RETIRED.subprotocol_prefixes || []),
-  ...(RETIRED.api_groups || []),
-];
-
-/** A token whose render TARGET is a RETIRED protocol constant — a spelling the
- *  rebrand killed. isFrozen() already refuses these; this narrower predicate tells
- *  a caller WHY, and lets the impersonation scan keep asking only about live ones. */
-function isRetired(token) {
-  const t = String(token);
-  const tl = t.toLowerCase();
-  return RETIRED_TERMS.some((term) => t.includes(term) || tl === term.toLowerCase());
-}
+const FROZEN_API_GROUPS = [...(FROZEN.api_groups || [])];
 
 /** A token whose render TARGET is a frozen protocol constant — a k8s label-KEY
  *  namespace (hugmesh.net/…), a wire header name, or a Sec-WebSocket
@@ -227,6 +207,6 @@ function isThemeContract(token) {
 }
 
 module.exports = {
-  isDenied, isAllowed, isFrozen, isRetired, isThemeContract, isRenameContractFile,
-  ALLOW, DENY_KEYS, DENY_NAME_RE, FROZEN, RETIRED, THEME, DECLARED_RENAME_DENYLIST, spec,
+  isDenied, isAllowed, isFrozen, isThemeContract, isRenameContractFile,
+  ALLOW, DENY_KEYS, DENY_NAME_RE, FROZEN, THEME, DECLARED_RENAME_DENYLIST, spec,
 };

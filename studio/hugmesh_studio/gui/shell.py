@@ -171,10 +171,13 @@ class StudioShell(QtCore.QObject):
             wiz.finished.connect(lambda _code=0, w=wiz: self._on_window_closed(w))
         except Exception:                        # pragma: no cover - defence in depth
             _log_swallowed("StudioShell.open_window(connect)")
-        # the Local AI bar along the bottom of every page; never allowed to stop a window opening
+        # the Studio panel along the bottom of every page (the local assistant, the
+        # local-mesh actions, the running mesh and the running builds); never allowed to
+        # stop a window opening. Its "Show this build" goes through open_build_window,
+        # the same door the tray's Running builds submenu uses.
         try:
             from ._local_ai_dock import mount_dock
-            mount_dock(wiz, self.generator_dir)
+            mount_dock(wiz, self.generator_dir, open_build=self.open_build_window)
         except Exception:
             _log_swallowed("StudioShell.open_window(local-ai dock)")
         wiz.show()

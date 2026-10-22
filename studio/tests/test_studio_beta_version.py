@@ -9,9 +9,10 @@ What this pins, and why each one matters:
   ``0.3.0`` -> ``0.3.99``). Both the release workflow and ``build-msi-wine.sh`` must
   hand WiX THAT number: ``-define Version=0.3.0-beta.1`` makes WiX fail the build.
 * The release workflow publishes only from a ``studio-v*`` tag ref, marks a beta as a
-  pre-release that is never "latest", and puts only its version and publish jobs on
-  the self-hosted runner, and only when ``RUNS_ON_PUBLISH`` is set and the run is not a
-  pull request. It has no pull_request trigger at all.
+  pre-release that is never "latest", and runs every job on a GitHub-hosted runner
+  (operator rule 2026-10-21: published downloads are built and signed on GitHub's
+  runners; this replaces the scheme's RUNS_ON_PUBLISH line for this workflow). It has
+  no pull_request trigger at all.
 * The AppStream metadata's newest ``<release>`` is the same version, spelt with ``~``.
 """
 from __future__ import annotations
@@ -31,12 +32,6 @@ MSI_SCRIPT = os.path.join(STUDIO_ROOT, "packaging", "build-msi-wine.sh")
 MAPPER = os.path.join(STUDIO_ROOT, "packaging", "wix", "msi_version.py")
 METAINFO = os.path.join(STUDIO_ROOT, "packaging", "flatpak", "org.hugmesh.ImageStudio.metainfo.xml")
 
-# The org's publish-runner line (beta SCHEME.md section 3.1), character for character.
-PUBLISH_RUNS_ON = (
-    "${{ fromJSON(github.event_name != 'pull_request' && github.event_name != "
-    "'pull_request_target' && (github.ref == 'refs/heads/main' || startsWith(github.ref, "
-    "'refs/tags/v') || startsWith(github.ref, 'refs/tags/studio-v')) && "
-    "vars.RUNS_ON_PUBLISH || '\"ubuntu-latest\"') }}")
 BETA_VERSION = re.compile(r"\d+\.\d+\.\d+(?:-beta\.[1-9]\d*)?")
 
 
@@ -152,17 +147,18 @@ def test_workflow_has_no_pull_request_trigger():
     assert on["push"] == {"tags": ["studio-v*"]}, on["push"]
 
 
-def test_publishing_jobs_use_the_publish_runner_line_and_builds_stay_hosted():
+def test_every_job_is_github_hosted():
     jobs = _workflow()["jobs"]
-    assert jobs["version"]["runs-on"] == PUBLISH_RUNS_ON
-    assert jobs["publish"]["runs-on"] == PUBLISH_RUNS_ON
+    assert jobs["version"]["runs-on"] == "ubuntu-latest"
+    assert jobs["publish"]["runs-on"] == "ubuntu-latest"
     assert jobs["msi"]["runs-on"] == "windows-latest"
+    assert jobs["linux"]["runs-on"] == "ubuntu-24.04"
     # flatpak installs its tooling with `sudo apt-get`; the local runner is Gentoo.
     assert jobs["flatpak"]["runs-on"] == "ubuntu-latest"
     text = _read(WORKFLOW)
-    assert not re.search(r"vars\.RUNS_ON\b(?!_PUBLISH)", text), (
-        "the release workflow reads vars.RUNS_ON, which is set to the self-hosted runner "
-        "for pull-request CI; publish jobs read RUNS_ON_PUBLISH only")
+    assert not re.search(r"vars\.RUNS_ON", text), (
+        "the release workflow reads a RUNS_ON* variable, which can move the build or the "
+        "signing onto the self-hosted runner")
 
 
 def test_publish_runs_only_on_a_studio_tag_ref():
@@ -171,7 +167,8 @@ def test_publish_runs_only_on_a_studio_tag_ref():
     # `inputs.publish` alone (a dispatch on main with the box ticked) must not publish.
     assert re.search(r"startsWith\(github\.ref, 'refs/tags/studio-v'\)\s*&&", cond), cond
     assert "permissions" in _workflow()["jobs"]["publish"]
-    assert _workflow()["jobs"]["publish"]["permissions"] == {"contents": "write"}
+    assert _workflow()["jobs"]["publish"]["permissions"] == {
+        "contents": "write", "id-token": "write", "attestations": "write"}
 
 
 def test_version_job_guards_ref_tag_and_snapshot():
@@ -202,7 +199,10 @@ def test_release_is_a_prerelease_never_latest_and_never_overwritten():
     exists = next(s for s in steps if s.get("id") == "exists")
     assert 'gh release view "studio-v$VERSION"' in exists["run"]
     assert steps[0] is exists, "the overwrite check must run before anything is built or uploaded"
-    for step in steps[1:]:
+    # The one exception is the site notification (last step): it changes nothing here,
+    # and a re-run on an existing release is how it is re-sent.
+    assert steps[-1]["name"] == "Tell hugmesh.github.io to rebuild its downloads data"
+    for step in steps[1:-1]:
         assert step.get("if") == "steps.exists.outputs.skip != 'true'", step
 
 

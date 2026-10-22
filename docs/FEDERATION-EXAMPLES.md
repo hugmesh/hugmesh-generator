@@ -160,8 +160,7 @@ Adding a remote to a live mesh touches eight places. The example trio exercises
    brand-X caller.
 
 8. **k8s + ArgoCD.** The remote's `deploy/` (Deployment/Service/nginx) + its
-   catalog descriptor (`hugmesh-deploy.yaml`, or the legacy `snapdragon-deploy.yaml`
-   an adopter has not renamed yet — the generators filter on both), discovered by the brand-repo
+   catalog descriptor (`hugmesh-deploy.yaml`), discovered by the brand-repo
    ApplicationSet (`13d`) and, for optional services, gated by the
    optional-services operator (`13a`/`13d`) which prunes the whole
    `manifests/<slug>/` dir when the slug is deselected.

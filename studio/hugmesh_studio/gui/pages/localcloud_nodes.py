@@ -45,11 +45,14 @@ from ...core.config import (
     MODE_DEFAULT_ROLE, ROLE_CHOICES, User, enter_mesh_defaults, image_class,
     normalize_user_roles,
 )
+from ...core import saved_meshes
 from ...core.local_mesh_bootstrap import (
-    LocalMeshBootstrap, LocalMeshIdentity, localcloud_tor_note, saved_mesh_source,
+    LocalMeshBootstrap, LocalMeshIdentity, localcloud_tor_note, saved_mesh_choice_text,
+    saved_mesh_source,
 )
 from ...core.local_mesh_domains import (
-    apply_imported_domains, imported_domains_lines, imported_mesh_domains,
+    apply_imported_domains, apply_imported_tor, imported_domains_lines,
+    imported_mesh_domains,
 )
 from ...core.seeded_credentials import load_roster
 
@@ -114,7 +117,7 @@ def _person_roles(roles) -> list[str]:
         [person for granted, person in _CASDOOR_ROLE_MAP if granted in roles])
 
 
-def local_mesh_identity(generator_dir: str) -> LocalMeshIdentity:
+def local_mesh_identity(generator_dir: str, record_id: str = "") -> LocalMeshIdentity:
     """The local mesh's importable identity: ``(apex domain, [(username, roles)...],
     with_tor, source, mesh_domains)`` — a :class:`LocalMeshIdentity`.
 
@@ -129,8 +132,13 @@ def local_mesh_identity(generator_dir: str) -> LocalMeshIdentity:
     superadmin in the runtime secrets bundle and the seeder's persona roster. Users
     created after go-live live in the running mesh's identity tier; they cannot be
     enumerated from disk and do not need to be. Passwords are never read into the
-    config (User rows carry no secret)."""
-    boot, rec = LocalMeshBootstrap.for_checkout(generator_dir)
+    config (User rows carry no secret).
+
+    WHICH record: the newest one whose mesh was UP when it was saved, so a newer
+    draft (saved before its first bring-up) never replaces the mesh that ran; the
+    newest draft only when nothing ever ran (``source`` then says NEVER RAN).
+    ``record_id`` is the operator's own pick from this checkout's records."""
+    boot, rec = LocalMeshBootstrap.for_checkout(generator_dir, record_id=record_id)
     domain = boot.cfg.resolved_domain()
     users: list[tuple[str, list[str]]] = []
     creds = boot.superadmin_login()
@@ -198,11 +206,14 @@ class LocalCloudNodesPage(QtWidgets.QWizardPage):
         super().__init__()
         self.wiz = wiz
         self._imported = False       # one-shot import latch (see validatePage)
+        self._tor_by_import = False  # Tor is on because an import here turned it on
         self._domain = ""
         self._users: list[tuple[str, list[str]]] = []
         self._with_tor = False       # the imported mesh ran the Tor onion (#579)
         self._source = ""            # which saved record the import read ("" = none)
         self._mesh_domains = None    # the saved mesh's domain rows (#636), or None
+        self._picked_id = ""         # a record the operator picked ("" = the default)
+        self._filling_pick = False   # the picker is being refilled, not picked from
         self.worker: _MeshWorker | None = None
         self._k8s_probe: _K8sGateProbe | None = None
         self._running = False        # a `make kind-down` is in flight
@@ -228,6 +239,39 @@ class LocalCloudNodesPage(QtWidgets.QWizardPage):
             "simply not listed below.")
         intro.setWordWrap(True)
         lay.addWidget(intro)
+
+        # WHICH saved mesh feeds the images — inline, never a modal. The default is
+        # the newest record whose mesh RAN (a newer draft, saved before its first
+        # bring-up, must not replace it); the operator can pick any record of this
+        # checkout, a draft included, and the summary below says what that imports.
+        # Hidden when this checkout has no saved mesh.
+        self.record_row = QtWidgets.QWidget()
+        prow = QtWidgets.QGridLayout(self.record_row)
+        prow.setContentsMargins(0, 0, 0, 0)
+        self.record_label = QtWidgets.QLabel("Import from saved mesh:")
+        self.record_pick = QtWidgets.QComboBox()
+        # the combo must not widen the page past the window (#661): its width comes
+        # from the layout, and a long record name is elided by the view
+        self.record_pick.setSizeAdjustPolicy(
+            QtWidgets.QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        self.record_pick.setMinimumContentsLength(24)
+        self.record_pick.setToolTip(
+            "The saved local mesh whose domain, domains, accounts and Tor choice the "
+            "node images take. Listed: the meshes that RAN first, newest first, then "
+            "drafts (saved before their first bring-up) marked 'never ran'.")
+        self.record_label.setBuddy(self.record_pick)
+        self.record_pick.currentIndexChanged.connect(self._on_record_picked)
+        prow.addWidget(self.record_label, 0, 0)
+        prow.addWidget(self.record_pick, 0, 1)
+        prow.setColumnStretch(1, 1)
+        lay.addWidget(self.record_row)
+        self.record_note = QtWidgets.QLabel(
+            "To keep the mesh you are working on, save it from the local mesh page "
+            "(the 'Saved meshes and the plan' section, Save current mesh); it then "
+            "shows up here.")
+        self.record_note.setWordWrap(True)
+        self.record_note.setStyleSheet("color: gray;")
+        lay.addWidget(self.record_note)
 
         # what WILL be imported, shown before consent is asked — filled per visit.
         self.summary = QtWidgets.QLabel("")
@@ -448,11 +492,12 @@ class LocalCloudNodesPage(QtWidgets.QWizardPage):
         # asked afresh each time the operator routes through it.
         self._imported = False
         self.confirm.setChecked(False)
-        # LocalMeshIdentity(*...) so a canned 3-tuple (with_tor, no source) loads too.
-        ident = LocalMeshIdentity(*local_mesh_identity(self.wiz.generator_dir))
-        self._domain, self._users = ident.domain, list(ident.users)
-        self._with_tor, self._source = bool(ident.with_tor), str(ident.source or "")
-        self._mesh_domains = ident.mesh_domains
+        records = self._fill_record_pick()
+        if self._picked_id and self._picked_id not in {r.id for r in records}:
+            self._picked_id = ""           # the picked record is gone
+        if self._picked_id:
+            self._select_pick(self._picked_id)
+        self._read_identity()
         # Re-establish the k8s truth too — unless a teardown is still streaming
         # (the operator can walk Back and forward while `make kind-down` runs, and
         # that run, not a fresh probe, owns the gate until it finishes).
@@ -460,6 +505,67 @@ class LocalCloudNodesPage(QtWidgets.QWizardPage):
             self._k8s_up = None
             self._start_k8s_probe()
         self._sync_gate()
+        self._render_summary()
+
+    # ---- which saved mesh the import reads ----------------------------------------
+    def _fill_record_pick(self) -> list:
+        """Refill the picker from this checkout's records (plain file reads) and
+        show it only when there is something to pick. Selects the default (row 0:
+        the newest record that ran, else the newest draft — ``for_checkout``'s
+        choice) without counting as a pick."""
+        try:
+            records = saved_meshes.records_for_checkout(self.wiz.generator_dir)
+        except Exception:                    # noqa: BLE001 — offline read, never fatal
+            records = []
+        self._filling_pick = True
+        try:
+            self.record_pick.clear()
+            for rec in records:
+                self.record_pick.addItem(saved_mesh_choice_text(rec), rec.id)
+            if records:
+                self.record_pick.setCurrentIndex(0)
+        finally:
+            self._filling_pick = False
+        self.record_row.setVisible(bool(records))
+        return records
+
+    def _select_pick(self, rec_id: str) -> None:
+        idx = self.record_pick.findData(rec_id)
+        if idx >= 0:
+            self._filling_pick = True
+            try:
+                self.record_pick.setCurrentIndex(idx)
+            finally:
+                self._filling_pick = False
+
+    def _read_identity(self) -> None:
+        # LocalMeshIdentity(*...) so a canned 3-tuple (with_tor, no source) loads too.
+        # The record id is passed only for an explicit pick, so a reader pinned with
+        # the one-argument signature keeps working.
+        gen = self.wiz.generator_dir
+        raw = (local_mesh_identity(gen, record_id=self._picked_id) if self._picked_id
+               else local_mesh_identity(gen))
+        ident = LocalMeshIdentity(*raw)
+        self._domain, self._users = ident.domain, list(ident.users)
+        self._with_tor, self._source = bool(ident.with_tor), str(ident.source or "")
+        self._mesh_domains = ident.mesh_domains
+
+    def _on_record_picked(self, *_):
+        """The operator picked a saved mesh: re-read what it imports, re-render the
+        summary, and import afresh on Next (the one-shot latch is reset)."""
+        if self._filling_pick:
+            return
+        try:
+            rec_id = str(self.record_pick.currentData() or "")
+            default = str(self.record_pick.itemData(0) or "")
+            self._picked_id = "" if rec_id == default else rec_id
+            self._imported = False
+            self._read_identity()
+            self._render_summary()
+        except Exception as e:               # noqa: BLE001 — never kill the page
+            self.summary.setText(f"Could not read that saved mesh: {html.escape(str(e))}")
+
+    def _render_summary(self) -> None:
         listed = ", ".join(
             f"{name} ({roles if isinstance(roles, str) else ', '.join(roles)})"
             for name, roles in self._users)
@@ -529,10 +635,11 @@ class LocalCloudNodesPage(QtWidgets.QWizardPage):
             # worklist rows do not exist yet at this point. materialize() emits it
             # through each platform's real channel: x86 --with-tor, rpi5 the `tor`
             # node slug (worklist._apply_infra_services), nothing where no builder
-            # can bake it. Only ever turns it ON: a mesh without Tor leaves the
-            # operator's own choice alone.
-            if self._with_tor:
-                cfg.tor_onion_service = True
+            # can bake it. A mesh without Tor leaves the operator's own choice
+            # alone, but turns OFF a Tor an earlier import on this page turned on
+            # (a re-pick after Back), so the images match the summary.
+            self._tor_by_import = apply_imported_tor(cfg, self._with_tor,
+                                                     self._tor_by_import)
             superdomain = cfg.effective_superdomain()
             # The saved mesh's accounts REPLACE ``cfg.users`` (like the domains above):
             # accounts an earlier flow of this Studio session left behind belong to

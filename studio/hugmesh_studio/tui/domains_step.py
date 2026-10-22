@@ -39,9 +39,10 @@ from __future__ import annotations
 import os
 import re
 
+from ..core import plain_words
 from ..core.config import (
     CLIENT_CA_INHERITANCE_NOTE, DOMAIN_IDP_CHOICES, DOMAIN_IDP_OWN,
-    DOMAIN_IDP_SUPERDOMAIN, Domain, github_org_problem,
+    DOMAIN_IDP_SUPERDOMAIN, Domain, github_org_problem, set_domain_signin,
 )
 from ..core.local_mesh_domains import added_row_problems
 from ..core.domain_services import (implicit_own_domain, reviewed_names,
@@ -68,18 +69,24 @@ IDP_LABELS = {
 _NAME_RE = re.compile(r"^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$")
 
 
-def domain_table(cfg, with_own: bool = False) -> tuple[list[str], list[list[str]]]:
+def domain_table(cfg, with_own: bool = False,
+                 summary=None) -> tuple[list[str], list[list[str]]]:
     """(headers, rows) for the domains table. The Sign-in column appears ONLY
     in mesh mode — the GUI hides it in cloud for the same reason. ``with_own``
     prepends the mesh's own domain as the display-only ``own`` row (see the module
     doc); off by default so row ``i`` stays ``cfg.domains[i]`` for every caller that
-    indexes the rows."""
+    indexes the rows. ``summary`` (a callable ``(name, own) -> str``) appends the
+    read-only ‘brand summary’ column (#654, D9): the GUI table's last column, one line
+    per brand saying how it signs in, how much of its look is its own and how it is
+    reached."""
     mesh = cfg.mode == "mesh"
     headers = ["#", "domain", "title", "optional services", "applies to"]
     if mesh:
         # 'github org' (the Go-Live export step) is a mesh column like the two
         # before it: a cloud client exports no repositories.
         headers += ["sign-in", "base CA", "github org"]
+    if summary is not None:
+        headers.append("brand summary")
     domain_ca = getattr(cfg, "domain_ca", None) or {}
     rows: list[list[str]] = []
     own = implicit_own_domain(cfg) if with_own else ""
@@ -88,7 +95,8 @@ def domain_table(cfg, with_own: bool = False) -> tuple[list[str], list[list[str]
                      services_summary(getattr(cfg, "cluster_domain_services", None),
                                       own in reviewed_names(cfg)),
                      OWN_APPLIES, OWN_IDP, OWN_CA,
-                     getattr(cfg, "cluster_domain_github_org", "") or "none"])
+                     getattr(cfg, "cluster_domain_github_org", "") or "none"]
+                    + ([summary(own, True)] if summary is not None else []))
     for i, d in enumerate(cfg.domains, 1):
         row = [str(i), d.name, d.title or "-",
                ", ".join(d.optional_services) or "-",
@@ -98,6 +106,8 @@ def domain_table(cfg, with_own: bool = False) -> tuple[list[str], list[list[str]
             chosen = domain_ca.get(d.name, "")
             row.append(os.path.basename(chosen) if chosen else "none")
             row.append(getattr(d, "github_org", "") or "none")
+        if summary is not None:
+            row.append(summary(d.name, False))
         rows.append(row)
     return headers, rows
 
@@ -127,12 +137,24 @@ class DomainsScreen:
     def enter(self, j) -> None:  # noqa: ARG002 — screen-protocol signature
         return None
 
+    @staticmethod
+    def _summary(j):
+        """The brand-summary callable for a MESH (the superbrand step's route), else
+        None: a client image has no brands to summarise."""
+        cfg = j.cfg
+        if cfg.mode != "mesh":
+            return None
+        from .brand_step import summary_line
+        from .superbrand_step import session_for
+        session = session_for(j, "image", cfg, getattr(j, "generator_dir", "") or "")
+        return lambda name, own: summary_line(session, name, own)
+
     def lines(self, j) -> list[str]:
         cfg = j.cfg
         out = ["The go-live domains this mesh serves to browsers."
                if cfg.mode == "mesh" else
                "The domains this client image is tied to.", ""]
-        headers, rows = domain_table(cfg, with_own=True)
+        headers, rows = domain_table(cfg, with_own=True, summary=self._summary(j))
         if rows:
             out += model.format_table(headers, rows)
         if not cfg.domains:
@@ -140,7 +162,9 @@ class DomainsScreen:
         if implicit_own_domain(cfg):
             out.append("Row 'own' is this mesh's OWN domain (the cluster domain): "
                        "always served, never removable, its services picked on the "
-                       "next step like every other domain's.")
+                       "next step like every other domain's."
+                       + (f" It is the {plain_words.term('superbrand')}'s row."
+                          if cfg.mode == "mesh" else ""))
         out.append("")
         commands = ["a NAME=add a domain", "d NUMBER=delete"]
         if cfg.mode == "mesh":
@@ -219,8 +243,12 @@ class DomainsScreen:
             flipped = (DOMAIN_IDP_OWN if d.idp == DOMAIN_IDP_SUPERDOMAIN
                        else DOMAIN_IDP_SUPERDOMAIN)
             assert flipped in DOMAIN_IDP_CHOICES
-            d.idp = flipped
-            j.status = f"{d.name}: sign-in -> {IDP_LABELS[d.idp]}"
+            # through the one writer: an own provider's settings and its Casdoor port
+            # go with the flip; the provider itself is chosen in the Domain services
+            # step's section 1 (Identity)
+            problems = set_domain_signin(d, flipped, mesh=cfg)
+            j.status = (problems[0] if problems
+                        else f"{d.name}: sign-in -> {IDP_LABELS[d.idp]}")
             return
         if verb == "b" and cfg.mode == "mesh":
             self._feed_base_ca(j, arg)

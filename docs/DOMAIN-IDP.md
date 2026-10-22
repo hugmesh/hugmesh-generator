@@ -10,6 +10,45 @@ Two DIFFERENT "idp" axes exist. Do not mix them up:
   byte for byte) uses the mesh's central Casdoor (`manifests/casdoor/`). `own` stands
   up a dedicated Casdoor instance for that domain. This page covers `own`.
 
+## A domain's own EXTERNAL provider (`Domain.idp_settings`, 2026-10-21)
+
+In the Studio this is chosen on the domain's **Identity** tab (Domain services step,
+section 1 of the text screen: `signin mesh|casdoor|entra|aws|oidc ...`), on every route
+that has a domains table; the Domains table's Sign-in cell still flips `superdomain` /
+`own`, and both write through `config.set_domain_signin`. The mesh-level IdP step is the
+default every `superdomain` domain inherits.
+
+An `own` domain can sign in through its own external provider instead of its own
+Casdoor. The row keeps `idp: own` and adds
+`idp_settings: {provider, issuer, client_id, jwks}`, with the provider being Entra,
+Cognito or OIDC. These follow the same rules as the mesh-level `--idp` (see
+docs/IDENTITY-PROVIDERS.md). The JWKS address is derived per provider when it is left
+empty.
+
+What changes and what does not:
+
+* **No Casdoor is stood up for it.** The own-Casdoor consumers all ask
+  `config.runs_own_casdoor`. These are the compose overlay, its port sequence,
+  `own_idp_domains` and `--own-casdoor-domain`.
+* **The issuer is still one brand.** The domain's issuer becomes one more
+  `<issuer>=<brand id>` pair in `APP_TENANCY_ISSUERS`, and its name one more
+  `<domain>=<brand id>` pair in `APP_TENANCY_HOSTS`. These are the same registry
+  variables, extended and never renamed. On the local Docker mesh, `LocalStackNode`
+  threads the pairs (`LocalMeshBootstrap.external_idp_domains`), and the domain's Tor
+  onion opens its own sign-in. The gateways fetch that issuer's keys by OIDC
+  discovery, so the provider must be reachable from the stack.
+* **An own row never inherits an external mesh provider.** A domain that wants the
+  mesh's provider uses `superdomain`. Two brands on one issuer are refused
+  (`config.domain_signin_problems`), because `DomainRegistry` maps one issuer to one
+  brand.
+* **The honest limits are the mesh-level ones.** Native `/bff/login`, MFA step-up and
+  role claims stay Casdoor-coupled, so people sign in on the provider's own page. The
+  Studio's bring-up warnings say so for each such domain.
+* **Cluster lane:** the manifest row carries `idp_settings`. The planned
+  `casdoor-domains` element writer must select `idp == "own"` **without** an external
+  provider, or it would stand up a Casdoor that nobody uses. That writer is not built
+  yet (see Open follow-ups).
+
 ## The issuer contract (proven by tests/stack/compose.brand-b.yaml)
 
 * issuer / `origin` = the domain's PUBLISHED URL: `https://id.<clusterDomain>`.

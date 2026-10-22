@@ -165,12 +165,13 @@ def test_plan_serve_section_follows_the_services_row_not_the_raw_flag():
     on = LocalMeshBootstrap(GENERATOR_DIR, LocalMeshBootstrapConfig(
         with_tor=False, services=("tor",))).plan()
     assert "also starts hugmesh-tor" in on
-    assert "already ON — the Tor v3 .onion above" in on
+    # #654 reworded step (4): a Tor address is another way in, not a public flip
+    assert "A Tor address is another way in" in on and "starts with this mesh" in on
     assert "Public exposure is a SEPARATE" not in on
     off = LocalMeshBootstrap(GENERATOR_DIR, LocalMeshBootstrapConfig(
         with_tor=True, services=("tuwunel",))).plan()
     assert "also starts hugmesh-tor" not in off
-    assert "already ON — the Tor v3 .onion above" not in off
+    assert "A Tor address is another way in" not in off
     assert "Public exposure is a SEPARATE" in off
 
 

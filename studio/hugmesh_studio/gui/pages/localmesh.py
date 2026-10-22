@@ -67,9 +67,13 @@ claims nothing — still hosts the entire surface on it.
 NEW on the bootstrap tab (the operator's other two asks):
   - BRAND — the GUI was strictly less capable than its own CLI: collect_bootstrap()
     never passed ``brand=``, pinning every GUI run to secret/hugmesh/ while
-    ``--brand`` worked fine. The picker lists the real brands/ catalog
-    (discover_brands) and stays editable; validate() DNS-label-gates the slug
-    exactly as gen-keystores.sh does.
+    ``--brand`` worked fine. Since #654 (D8) the brand box is the SUPERBRAND
+    DROP-DOWN (``brand_picker.BrandPicker``): ‘Create a new superbrand’ first and the
+    default, then this configuration's own superbrand, saved designs and the real
+    brands/*.conf profiles; choosing Create opens ``superbrand.SuperbrandStep`` (the
+    design) at the foot of this section. ``self.brand`` keeps the text surface over the
+    brand carrier the session writes; validate() DNS-label-gates the slug exactly as
+    gen-keystores.sh does.
   - SOURCE — where the buildable repo files come from: download/update all repos
     into ./.stack-src (the default; exactly what `make stack-up` has always done,
     now VISIBLE), or an existing tree (STACK_SRC=<dir> + STACK_NO_CLONE=1 so the
@@ -104,6 +108,7 @@ widgets in the same order, with no tab bar in front of them.
 """
 from __future__ import annotations
 
+import dataclasses
 import os
 import re
 import threading
@@ -115,20 +120,21 @@ from ..qt import Qt, QtCore, QtGui, QtWidgets, Signal
 from .. import console
 from ..choice_cards import ChoiceCard, ChoiceCardGroup
 from ..flow_layout import flow_box
-from ...core import saved_meshes, vaults
+from ...core import brand_look, mesh_controls, plain_words, saved_meshes, vaults
 from ...core.config import IDP_CHOICES, IDP_LABELS, github_org_problem, idp_effective_jwks
-from ...core.config import DOMAIN_IDP_OWN, DOMAIN_IDP_SUPERDOMAIN, Domain
+from ...core.config import (DOMAIN_IDP_OWN, DOMAIN_IDP_SUPERDOMAIN,
+                            OPTIONAL_SERVICES_CHOICES, Domain)
 from ...core.domain_services import ACTION_MESH_START, gate_reason, record_reviewed
 from ...core.local_mesh_domains import (
-    DOMAIN_NAME_RE, LOCAL_MESH_REMEDY, SAVED_MESH_REMEDY, LocalMeshDomains,
+    DOCKER_SERVICES_NOTE, DOMAIN_NAME_RE, LOCAL_MESH_REMEDY, SAVED_MESH_REMEDY,
+    LocalMeshDomains,
     added_row_problems, bootstrap_domain_records, domains_from_bootstrap,
     own_idp_names, record_walk, reviewed_record_names)
 from ...core.e2e_catalogue import Catalogue, load_catalogue
 from ...core.egress_conf import validate_egress_conf
 from ...core.local_mesh import LocalMeshConfig, LocalMeshNode
 from ...core.local_mesh_bootstrap import (
-    LocalMeshBootstrap, LocalMeshBootstrapConfig, _parse_web_locales,
-    discover_brands)
+    LocalMeshBootstrap, LocalMeshBootstrapConfig, _parse_web_locales)
 from ...core.local_mesh_stages import verb_phases
 from ...core.local_stack_node import (
     LocalStackNode,
@@ -139,25 +145,30 @@ from ...core.local_stack_node import (
 from ...core import mesh_monitor
 from ...core.local_services import (
     KIND_ADDONS, UNAVAILABLE_LOCALLY, by_slug as local_service, default_selection,
-    describe as local_describe, kind_addon_slugs, local_groups, local_slugs)
+    describe as local_describe, domain_local_slugs, kind_addon_slugs, local_groups,
+    local_slugs, mesh_plane_slugs)
 from ...core.progress_parse import ProgressParser
 from ...core import credentials_truth
 from ...core import kind_seed
 from ...core.seeded_credentials import Roster, annotate, load_roster
 from ...core.instance import state_dir
 from ...core.stage_tracker import StageTracker
+from ...tui.localmesh import PUBLIC_NAME_HOME, sync_brand_session
+from ...tui.superbrand_step import CREATE_KEY, MeshWrites, session_for
 from ...core import e2e_environments
 from ._credentials_dialog import CredentialsDialog
 from .domain_services import DomainServicesWidget
 from .domains import DomainsTableWidget
-from ._mesh_monitor_widget import MeshMonitorProbe, MeshMonitorWidget, MeshScaleWorker
+from ._mesh_monitor_widget import (MeshDomainWorker, MeshMonitorProbe,
+                                   MeshMonitorWidget, MeshScaleWorker,
+                                   open_in_tor_browser)
 from ._add_user_dialog import AddUserDialog
-from ._local_agent_widget import LocalAgentWidget, context_from_page
 from ._code_folders_widget import CodeFoldersWidget
 from ._saved_meshes_widget import SavedMeshProbe, SavedMeshesWidget
-from ._logintheme import LoginThemeGroup
 from ._scroll import scrollable
 from ._widgets import _row, collapsible, label_finish_as_exit, own_probe, probe_running
+from .brand_picker import BrandPicker
+from .superbrand import SuperbrandStep
 # The staged view is progress.py's, not a second one: importing its glyph palette and
 # its two formatters is what keeps a stage rendered here byte-identical to the same
 # stage rendered on the image-build screen. Re-declaring {"done": ("✓", "#188038"), …}
@@ -235,10 +246,48 @@ def _grey_note(text: str) -> "QtWidgets.QLabel":
     return lbl
 
 
-#: What LoginThemeGroup.load() reads when a saved-mesh record carries no theme
-#: inputs: the shipped brand. Keys are ImageConfig's login_* names (the group's
-#: own load/commit contract) — ALL seventeen that commit() writes, because
-#: apply_bootstrap filters the record's form against this dict. Listing only
+class _StatusLine(QtWidgets.QLabel):
+    """The page's one status line, which can also be shown in a second place.
+
+    With the bottom panel, the status line sits on the panel's Mesh run tab while the
+    buttons that write to it sit on the Local mesh tab, so a refused press would say
+    why on a tab nobody is looking at. Every text this line gets is copied to its
+    mirrors (the line just above the Actions buttons), so the reason is written next
+    to the button that was pressed. A mirror shows itself only while the panel holds
+    the actions and there is something to say; see LocalMeshPage._sync_action_status.
+    """
+
+    def __init__(self, text: str = ""):
+        super().__init__(text)
+        self._mirrors: list = []
+        self.on_text = None                       # the page's hook, called after each set
+
+    def add_mirror(self, label: "QtWidgets.QLabel") -> None:
+        self._mirrors.append(label)
+        label.setText(self.text())
+
+    def setText(self, text) -> None:              # noqa: N802 (Qt)
+        super().setText(text)
+        for m in self._mirrors:
+            try:
+                m.setText(text)
+            except RuntimeError:                  # a mirror deleted at teardown
+                pass
+        hook = self.on_text
+        if hook is not None:
+            try:
+                hook()
+            except Exception:                     # noqa: BLE001 — a status line never raises
+                pass
+
+
+#: What a saved-mesh record's theme ``form`` holds when it carries no theme inputs:
+#: the shipped brand. Keys are ImageConfig's login_* names (the old Themes group's
+#: load/commit contract, kept so every saved record still loads) — ALL seventeen,
+#: because apply_bootstrap filters the record's form against this dict. Since
+#: 2026-10-21 the form ALSO carries ``look`` (the mesh's whole look, as the brand
+#: record writes it: shape, decoration and pictures included) and the Themes group is
+#: gone: the look is chosen on the Look tab of the mesh's own domain. Listing only
 #: the eight colour/font keys silently threw away the nine web-chrome inputs on
 #: every Load/Restore (header hidden, header/footer colours, background effect),
 #: derived a different login page, and then reported "every field applied".
@@ -254,6 +303,27 @@ _THEME_FORM_DEFAULTS = {
     "login_footer_bg": "", "login_footer_text": "",
     "login_bg_effect": "",
 }
+
+
+def _migrated_services(cfg: LocalMeshBootstrapConfig) -> LocalMeshBootstrapConfig:
+    """A copy of ``cfg`` whose domain services are on its domain rows: the domain
+    slugs of ``services`` move into the rows (``_migrate_domain_services``, the loader's
+    own migration), and a record with no selection but the legacy ``social`` flag (a
+    CLI-made record) gives Matrix to the mesh's own domain the same way. Mesh-plane
+    slugs and ``services is None`` ("no picker was used") are kept as they are."""
+    out = dataclasses.replace(cfg, domains=tuple(dict(r) for r in (cfg.domains or ())))
+    if out.services is None and out.social:
+        out.services = ("tuwunel",)
+        out._migrate_domain_services()
+        out.services = None if not out.services else out.services
+    else:
+        out._migrate_domain_services()
+    return out
+
+
+#: The Docker route's mesh-wide services step, renamed when the "Local services" pick
+#: was retired (2026-10-21): what is left on it is the mesh's own infrastructure.
+MESH_INFRA_TITLE = "The mesh's own infrastructure (chosen once for the whole mesh)"
 
 
 _IDP_JWKS_HINTS = {
@@ -530,7 +600,125 @@ class _StageRun:
         return max((self.t_end if self.t_end is not None else now) - self.t_start, 0.0)
 
 
+class _BrandId(QtCore.QObject):
+    """The brand id this page reads and writes as TEXT — what the editable ``Brand`` box
+    was (#654, D8). ``collect_bootstrap``, the plan, the saved-mesh round trip and
+    ``tests/test_local_mesh_source_axis.py`` all say ``self.brand.currentText()`` and
+    ``setCurrentText``; the drop-down that replaced the box keeps that surface so none of
+    them changes, and the value lives in ONE place, the page's brand carrier."""
+
+    currentTextChanged = Signal(str)
+
+    def __init__(self, page: "LocalMeshPage"):
+        super().__init__(page)
+        self._page = page
+
+    def currentText(self) -> str:
+        return self._page._brand_boot.brand
+
+    def setCurrentText(self, text: str) -> None:
+        self._page._set_brand_id(text)
+
+
+
+class _LocalMeshWrites(MeshWrites):
+    """Row 0 of the Docker route's Domain services step writes the mesh's own sign-in,
+    Tor and egress into THIS page's controls — the Identity provider fields, the Mesh
+    infrastructure step's ``tor`` and ``egress-vpn`` ticks and the egress provider file —
+    which are what the start collects (``collect_bootstrap``). One home: the step and
+    row 0 always show the same value. Programmatic ``setChecked`` fires no ``clicked``,
+    so no file dialog opens; the provider file is checked the way the tick's own
+    handler checks it (``validate_egress_conf``), inline."""
+
+    signin_refusal = tor_refusal = egress_refusal = ""
+    vpn_where = ("a local mesh joins its VPN only in production: the environment "
+                 "choice (test or production) on this route decides it")
+
+    def __init__(self, page):
+        super().__init__()
+        self.page = page
+
+    def signin(self):
+        p = self.page
+        idp = p.selected_idp()
+        ext = idp != "casdoor"
+        return (idp, p.idp_issuer.text().strip() if ext else "",
+                p.idp_client_id.text().strip() if ext else "",
+                p.idp_jwks.text().strip() if ext else "")
+
+    def set_signin(self, idp, issuer="", client_id="", jwks=""):
+        from ...tui.superbrand_step import _signin_problems
+        problems, vals = _signin_problems(idp, issuer, client_id, jwks)
+        if problems:
+            return problems
+        p = self.page
+        p.idp.setCurrentIndex(max(0, p.idp.findData(vals[0])))
+        p.idp_issuer.setText(vals[1])
+        p.idp_client_id.setText(vals[2])
+        p.idp_jwks.setText(vals[3])
+        return self._refresh()
+
+    def tor(self):
+        box = self.page.service_boxes.get("tor")
+        return bool(box is not None and box.isChecked())
+
+    def set_tor(self, on):
+        box = self.page.service_boxes.get("tor")
+        if box is None:
+            return ["this mesh has no Tor service to turn on"]
+        box.setChecked(bool(on))
+        return self._refresh()
+
+    def egress(self):
+        p = self.page
+        box = p.service_boxes.get("egress-vpn")
+        if box is not None and box.isChecked() and p._egress_vpn_conf:
+            return ("vpn", p._egress_vpn_conf)
+        return ("direct", "")
+
+    def set_egress(self, mode, conf=""):
+        from ...tui.superbrand_step import _egress_shape
+        problems = _egress_shape(mode, conf)
+        if problems:
+            return problems
+        p = self.page
+        box = p.service_boxes.get("egress-vpn")
+        if box is None:
+            return ["this mesh has no egress VPN service"]
+        if mode == "direct":
+            box.setChecked(False)
+            p._egress_vpn_conf = ""
+            p.egress_note.setVisible(False)
+            return self._refresh()
+        kind, err = validate_egress_conf(conf.strip())
+        if err:
+            return [err]
+        p._egress_vpn_conf = conf.strip()
+        box.setChecked(True)
+        p.egress_note.setStyleSheet("color: gray;")
+        p.egress_note.setText(
+            f"Egress VPN config: {os.path.basename(conf.strip())} ({kind}).")
+        p.egress_note.setVisible(True)
+        return self._refresh()
+
+    def _refresh(self):
+        refresh = getattr(self.page, "_refresh_plan", None)
+        if callable(refresh):
+            try:
+                refresh()
+            except Exception:                   # noqa: BLE001 — a screen never raises
+                pass
+        return self._done()
+
 class LocalMeshPage(QtWidgets.QWizardPage):
+    #: The subtitle once the bottom panel holds the actions, the stages and the table.
+    DOCKED_SUBTITLE = (
+        "Everything is chosen. Press 'Generate & start' on the panel's Local mesh tab "
+        "(at the bottom of this window) to mint the credentials and bring the mesh up "
+        "on THIS machine; the panel's Mesh run and Running mesh tabs report what "
+        "happens. This is the end of this path: Exit closes the Studio; the mesh keeps "
+        "running in Docker.")
+
     def __init__(self, wiz):
         super().__init__()
         self.wiz = wiz
@@ -543,6 +731,24 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         # steps, and a saved-mesh Start on a flow that never opened the step, keep
         # passing the gate exactly as before).
         self.mesh_domains = LocalMeshDomains()
+        #: The parts the bottom panel (gui/_local_ai_dock.py) holds; see take_section.
+        self._docked: set = set()
+        self._dock_reveal = None
+        # THE BRAND CARRIER (#654, D8): the one bootstrap configuration the superbrand
+        # session (tui/superbrand_step.py) reads and writes, so the picker, the design
+        # and the text screens all drive one model. It holds only what the session owns:
+        # the brand id and the superbrand block. ``collect_bootstrap`` takes exactly
+        # those two from it and everything else from the page's own controls, so there
+        # is one writer for each field. REPLACED, never edited in place, when a saved
+        # mesh is applied (the session belongs to the configuration object it was made
+        # for).
+        self._brand_boot = LocalMeshBootstrapConfig()
+        self._brand_mounted = False
+        self._brand_busy = False
+        #: a central sign-in address a SAVED MESH carried (a choice, kept); every other
+        #: address is derived from the environment and the domain and re-derived
+        self._brand_explicit_signin = ""
+        self._brand_file_note = ""       # why the last record-file save was refused ("" = none)
         # THE CONTROLLER HANDLE. Every local-mesh step page (LocalMeshChoicePage and
         # the _LocalMeshStep subclasses at the bottom of this module) finds this page
         # here, and only at initializePage time — so the wizard may construct the steps
@@ -561,6 +767,9 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         self._added_user_specs: list[str] = []
         self._running = False
         self._running_label = ""
+        # Generate && start pressed from a page outside the local-mesh steps (the panel
+        # makes the button reachable from every page): the first press only arms it.
+        self._start_armed = 0
         # apply_bootstrap() in flight: _refresh_plan returns early so the plan
         # preview re-renders ONCE at the end, not once per setter (ask C).
         self._applying_bootstrap = False
@@ -626,9 +835,13 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         self.run_view = QtWidgets.QWidget()
         run_lay = QtWidgets.QVBoxLayout(self.run_view)
         run_lay.setContentsMargins(0, 0, 0, 0)
-        self.status = QtWidgets.QLabel("")
+        self.status = _StatusLine("")
         self.status.setWordWrap(True)
         run_lay.addWidget(self.status)
+        # its copy above the Actions buttons (built earlier, in the bring-up section)
+        if getattr(self, "action_status", None) is not None:
+            self.status.add_mirror(self.action_status)
+        self.status.on_text = self._sync_action_status
 
         # ── STAGED VIEW: stage tree above, the SAME single log below ─────────────────
         # The flat scrolling log this replaces was the operator's complaint: an hour-long
@@ -815,6 +1028,10 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         self.take_section("bringup", self._body)
         self.take_section("run", self._body)
         self._hide_stepped_sections()
+        # the standalone dialog hosts every section on this page and has no Environment
+        # step to give the brand drop-down its session; a wizard's step does it itself
+        # and this repeat is cheap and safe
+        self.mount_brand()
         self._refresh_status()
         self._refresh_plan()
         # ENTERING THE PAGE MUST TELL YOU WHAT IS ALREADY RUNNING. The stage tree
@@ -830,6 +1047,10 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         # The monitor adds NO probe here: its first snapshot rides _on_mesh_state's
         # slot, which keeps "entering the page returns immediately" provable.
         self._sync_monitor_gate()
+        # Arriving at the bring-up step opens the bottom panel on the actions, which now
+        # live there (a no-op without a panel).
+        if "actions" in self._docked:
+            self._reveal_in_dock("mesh")
 
     # ── section plumbing ────────────────────────────────────────────────────────
     def _stepped_sections(self) -> set:
@@ -860,7 +1081,79 @@ class LocalMeshPage(QtWidgets.QWizardPage):
             if sec is not None and sec.parentWidget() is host:
                 sec.setVisible(False)
 
-    def take_section(self, key: str, layout) -> "QtWidgets.QWidget | None":
+    def _claimable(self, key: str) -> "QtWidgets.QWidget | None":
+        """The widget behind a claim key: a section, or one of the three parts the
+        bottom panel takes ("actions", "monitor", "run")."""
+        parts = {"run": getattr(self, "run_view", None),
+                 "actions": getattr(self, "actions_box", None),
+                 "monitor": getattr(self, "monitor_section", None)}
+        return parts[key] if key in parts else self.sections.get(key)
+
+    def docked_parts(self) -> tuple:
+        """The parts the bottom panel holds (empty without a panel)."""
+        return tuple(self._docked)
+
+    def _reveal_in_dock(self, tab: str) -> None:
+        """Ask the bottom panel to open on ``tab`` (no-op without a panel)."""
+        reveal = getattr(self, "_dock_reveal", None)
+        if reveal is not None:
+            try:
+                reveal(tab)
+            except Exception:                    # noqa: BLE001 — a panel must not break the page
+                pass
+
+    def _sync_action_status(self) -> None:
+        """Show the status line's copy above the Actions buttons while the panel holds
+        them and there is something to say; keep it in view in the panel's scroll."""
+        mirror = getattr(self, "action_status", None)
+        if mirror is None:
+            return
+        show = "actions" in self._docked and bool(mirror.text().strip())
+        mirror.setVisible(show)
+        if show and mirror.isVisible():
+            w = mirror.parentWidget()
+            while w is not None and not isinstance(w, QtWidgets.QScrollArea):
+                w = w.parentWidget()
+            if w is not None:
+                w.ensureWidgetVisible(mirror, 0, 0)
+
+    def _refuse(self, text: str) -> None:
+        """Say why a press did nothing, WHERE THE PERSON CAN SEE IT.
+
+        The text goes to the status line (and its copy above the Actions buttons). In a
+        Studio window both of those live in the bottom panel; when neither is on screen
+        (the panel is folded, or the press came from a page or another tab: a saved
+        mesh's Start on the review step, the join step's Start, a pod row's Open), the
+        panel opens on its Mesh run tab, where the status line is. Without a panel
+        (LocalMeshDialog) the status line is on this page and nothing else happens.
+        A verb that STARTS needs none of this: the panel opens on the run by itself."""
+        self.status.setText(text)
+        if "run" not in self._docked:
+            return
+        mirror = getattr(self, "action_status", None)
+        if self.status.isVisible() or (mirror is not None and mirror.isVisible()):
+            return
+        self._reveal_in_dock("run")
+
+    def attach_dock(self, reveal, tall=None) -> None:
+        """Called by the bottom panel once it holds this page's parts: ``reveal(tab)``
+        opens it on a tab, ``tall(on)`` lets it take most of the window while this
+        page (which then has nothing else to show) is on screen. Shows the note that
+        says where the parts went."""
+        self._dock_reveal = reveal
+        self._dock_tall = tall
+        self.dock_note.setVisible(bool(self._docked))
+        self._sync_action_status()
+        if self._docked and self.subTitle() != self.DOCKED_SUBTITLE:
+            self.setSubTitle(self.DOCKED_SUBTITLE)
+        if self._docked and not getattr(self, "_dock_stretch", False):
+            # the run view used to take this page's spare height (stretch 1); with it in
+            # the panel, a trailing stretch keeps the note at the top instead of floating
+            # in the middle of an empty page
+            self._body.addStretch(1)
+            self._dock_stretch = True
+
+    def take_section(self, key: str, layout, *, dock: bool = False) -> "QtWidgets.QWidget | None":
         """Move section ``key`` into ``layout`` and return it (None for an unknown key).
 
         Adding a widget to a layout re-parents it, so this IS the move — there is no
@@ -873,11 +1166,17 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         page adds one so its content sits at the top), and at the end otherwise (this
         page's own body, where the run view must stay last).
         """
-        w = self.run_view if key == "run" else self.sections.get(key)
+        w = self._claimable(key)
         if w is None:
             return None
         host = layout.parentWidget()
         if host is not None and w.parentWidget() is host:
+            return w
+        # THE BOTTOM PANEL'S CLAIM IS FINAL. Every page that used to claim the run view
+        # (this one, the join step, the review step) still calls take_section on every
+        # show; once the panel holds a part, those calls leave it where it is, or the
+        # panel would lose its log each time a page was shown.
+        if key in self._docked and not dock:
             return w
         idx = layout.count()
         for i in range(layout.count()):
@@ -886,7 +1185,9 @@ class LocalMeshPage(QtWidgets.QWizardPage):
                 break
         # stretch 1 for the run view only: the staged tree + log is the one block that
         # should absorb a step page's spare height.
-        layout.insertWidget(idx, w, 1 if key == "run" else 0)
+        layout.insertWidget(idx, w, 1 if key in ("run", "monitor") else 0)
+        if dock:
+            self._docked.add(key)
         # setParent() hides a widget; a section that has been moved must be shown
         # again. The blocks INSIDE it keep their own visibility (prod_group's
         # test/prod toggle, every Collapsible's fold) — those are children, untouched.
@@ -979,17 +1280,31 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         envcol.addWidget(self.env_prod)
         lay.addWidget(_row("Environment", self._wrap(envcol)))
 
-        # BRAND — the real catalog + an editable slug. Fixes the GUI-narrower-than-
-        # CLI bug: collect_bootstrap() used to omit brand=, pinning every GUI run to
-        # secret/hugmesh/ and the wrong <brand>-pki superadmin lookup.
-        self.brand = QtWidgets.QComboBox()
-        self.brand.setEditable(True)
-        self.brand.addItems(discover_brands(self.generator_dir))
-        self.brand.setToolTip(
-            "The Vault base path segment (secret/<brand>/) AND the profile selector "
-            "(brands/<brand>.conf, sourced by gen-cluster-secrets.sh when present). "
-            "Must be a DNS label — the same gate gen-keystores.sh applies.")
-        lay.addWidget(_row("Brand", self.brand))
+        # BRAND — the superbrand drop-down (#654, D8) where the editable slug box was.
+        # ‘Create a new superbrand’ is the first item and the default; then this
+        # configuration's own superbrand, the saved designs and the real brands/*.conf
+        # profiles (the old box's catalogue, discover_brands, is the profile half). The
+        # slug the old box fixed (collect_bootstrap() used to omit brand=, pinning every
+        # GUI run to secret/hugmesh/) is still collected: ``self.brand`` keeps the text
+        # surface and reads the carrier the picker writes. The design itself is the last
+        # block of this section, below.
+        self.brand = _BrandId(self)
+        self.brand_picker = BrandPicker()
+        sb = plain_words.term("superbrand")
+        self.brand_picker.setToolTip(
+            f"Which {sb} governs this mesh. A brand's id is also the Vault base "
+            "path segment (secret/<id>/) AND the profile selector (brands/<id>.conf, "
+            "sourced by gen-cluster-secrets.sh when present): it must be a DNS label — "
+            "the same gate gen-keystores.sh applies.")
+        lay.addWidget(self.brand_picker)
+        # one plain sentence when the drop-down or the design could not do what was asked
+        # (the page used to print a traceback to the terminal and carry on half-drawn)
+        self.brand_error = QtWidgets.QLabel("")
+        self.brand_error.setObjectName("brand_error")
+        self.brand_error.setWordWrap(True)
+        self.brand_error.setStyleSheet("color: #b00020;")
+        self.brand_error.setVisible(False)
+        lay.addWidget(self.brand_error)
         self.brand_note = QtWidgets.QLabel("")
         self.brand_note.setWordWrap(True)
         self.brand_note.setStyleSheet("color: gray;")
@@ -1005,6 +1320,27 @@ class LocalMeshPage(QtWidgets.QWizardPage):
             "The platform superadmin login to mint. Its password is generated fresh "
             "and written ONLY to the offline secrets bundle — never shown here.")
         lay.addWidget(_row("Superadmin", self.superadmin))
+
+        # ‘DESIGN YOUR SUPERBRAND’ (#654, D8): the design the drop-down's ‘Create a new
+        # superbrand’ opens, drawn under the rest of this section so the environment
+        # and the account stay where they always were. It is the same step the image
+        # route's Branding page hosts, over the session of THIS route. The design is
+        # shown only while one is open (a created superbrand, or ‘Change it’ on an
+        # existing one); an existing choice shows its read-only summary in the picker.
+        self.superbrand_design = SuperbrandStep(route="docker", with_picker=False)
+        lay.addWidget(self.superbrand_design)
+        self.brand_effect_note = QtWidgets.QLabel(
+            "What this saves: the design goes into the mesh's brand record and the plan on "
+            "the review step. Its look is chosen on the ‘Look’ tab of this mesh's own "
+            "domain (the ‘Domain services’ step), and that look is what this Docker "
+            "mesh's sign-in page shows.")
+        self.brand_effect_note.setObjectName("brand_effect_note")
+        self.brand_effect_note.setWordWrap(True)
+        self.brand_effect_note.setStyleSheet("color: gray;")
+        lay.addWidget(self.brand_effect_note)
+        self.brand_picker.designing_changed.connect(self.superbrand_design.refresh)
+        self.brand_picker.designing_changed.connect(self._brand_changed)
+        self.superbrand_design.changed.connect(self._brand_changed)
         lay.addStretch(1)
         return w
 
@@ -1018,9 +1354,10 @@ class LocalMeshPage(QtWidgets.QWizardPage):
             "(fixed — a test mesh publishes nothing), on a prod mesh the public apex, "
             "typed here (it is what the minted issuer and superadmin align with; the "
             "Mesh overlay step shows it read-only). Add every OTHER domain this mesh "
-            "serves below. ‘Sign-in’ = which Casdoor serves that domain: Superdomain "
-            "(the mesh's central one) or Own (a Casdoor instance of its own is brought "
-            "up beside the central one — host ports 8001, 8002, … in row order). "
+            "serves below. ‘Sign-in’ = Superdomain (the mesh's central sign-in) or Own "
+            "(its own: by default a Casdoor of its own beside the central one — host "
+            "ports 8001, 8002, … in row order — or its own Entra, Cognito or OIDC "
+            "provider, chosen on the domain's Identity tab on the next step). "
             "‘Optional services’ is READ-ONLY here: every domain — this row 0 "
             "included — gets its own page on the ‘Domain services’ step that follows, "
             "and a mesh start refuses while any domain here has never been through "
@@ -1051,10 +1388,10 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         # says so rather than leaving the column looking broken.
         self.domain_services = DomainServicesWidget(
             scope_cfg=None, entries=None,
-            lane_note=("ON THIS LOCAL DOCKER MESH: the per-domain selection is "
-                       "recorded with the mesh (and shown in the plan) — it is NOT "
-                       "what decides which compose profiles come up; the mesh-wide "
-                       "‘Services’ step two steps on is."))
+            lane_note=DOCKER_SERVICES_NOTE,
+            # each domain's Brand settings tabs (Identity, Look, Services, Ways) over
+            # this route's superbrand session; row 0's Look tab is the mesh's own look
+            brand_session=self.brand_session, route="docker")
         lay.addWidget(self.domain_services)
         return w
 
@@ -1263,8 +1600,19 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         # and a choice-card group would state a mutual exclusion that does not exist.
         # The catalogue, the grouping, the descriptions and the shipped defaults all
         # come from core (local_services / config) — this loop builds widgets only.
-        svc_box = QtWidgets.QGroupBox("Services to run on this local mesh")
+        # THE MESH'S OWN INFRASTRUCTURE, NOT "LOCAL SERVICES" (2026-10-21). The
+        # operator: "The local services option doesn't make any sense, we should be
+        # using the per domain services configuration so please remove it." A
+        # domain's services (Matrix, the forums, the games, video, the character
+        # tools) are chosen on that domain's own page (the Domain services step) and
+        # the mesh runs every one any domain chose (LocalMeshBootstrapConfig.
+        # effective_services). What is left here is chosen ONCE for the whole mesh:
+        # Tor, Anubis, the wiki, the AI services and the egress VPN
+        # (local_services.mesh_plane_slugs), plus the read-only DevOps-lane rows.
+        svc_box = QtWidgets.QGroupBox(MESH_INFRA_TITLE)
+        svc_box.setObjectName("mesh_infra_box")
         svl = QtWidgets.QVBoxLayout(svc_box)
+        svl.addWidget(_grey_note(DOCKER_SERVICES_NOTE))
         svl.addWidget(_grey_note(
             "Two mechanisms you can tick, one list. COMPOSE PROFILE rows start or "
             "stop containers, so they take effect at bring-up and changing one later "
@@ -1304,7 +1652,12 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         self._svc_items: dict[str, QtWidgets.QTreeWidgetItem] = {}
         # The VPN conf backing the egress-vpn checkbox ("" = none picked yet).
         self._egress_vpn_conf = ""
-        for _title, _slugs in local_groups():
+        _per_domain = set(domain_local_slugs()) | set(OPTIONAL_SERVICES_CHOICES)
+        for _title, _all_slugs in local_groups():
+            # a slug a DOMAIN chooses is never a row here (it is on the domain's page)
+            _slugs = tuple(x for x in _all_slugs if x not in _per_domain)
+            if not _slugs:
+                continue
             gitem = QtWidgets.QTreeWidgetItem(self.services_table)
             gitem.setText(_LS_COL_NAME, _title)
             _gf = gitem.font(_LS_COL_NAME)
@@ -1368,7 +1721,9 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         # Aliases of the very same widget — never a second checkbox that could disagree
         # with its row, which is exactly the "one service, two spellings" bug the node
         # wizard's services table was rebuilt to kill.
-        self.social = self.service_boxes["tuwunel"]
+        # ``social`` (the Matrix profile) is no longer a box on this page: Matrix is a
+        # domain's service now, and the profile comes up when any domain chose it
+        # (``domain_social``). ``with_tor`` stays: Tor is the mesh's own.
         self.with_tor = self.service_boxes["tor"]
         # egress-vpn status line: which conf backs the checkbox, or why it was
         # unchecked. Inline, never a message box (no-modal rule).
@@ -1393,15 +1748,11 @@ class LocalMeshPage(QtWidgets.QWizardPage):
             "login-ui image build fails loudly.")
         lay.addWidget(_row("Web login languages", self.web_locales))
 
-        # Web login THEME — the same shared group BrandingPage hosts (one
-        # implementation, two frames): this flow is terminal at this page, so
-        # BrandingPage is unreachable from it. Collapsed: a from-scratch bring-up
-        # usually starts with the shipped brand.
-        self.login_theme = LoginThemeGroup()
-        # "Themes", not "Web login theme" (#50 item 2): label-only rename — the
-        # persisted login_* config keys keep their names so old sessions load.
-        lay.addWidget(collapsible("Themes (colours, fonts + web chrome)",
-                                  self.login_theme, expanded=False))
+        # NO THEME PANEL HERE ANY MORE (2026-10-21, the operator: "the theme selection
+        # should be there instead of where it is now" — in each domain's section). The
+        # look is edited on the Look tab of the mesh's own domain (row 0) on the
+        # Domain services step, over the superbrand session's look model; the start
+        # reads its stylesheet from there (``look_css_and_error``).
         return w
 
     def _build_idp_section(self) -> QtWidgets.QWidget:
@@ -1520,6 +1871,12 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         self.saved_meshes.start_requested.connect(self._start_saved)
         self.saved_meshes.load_requested.connect(self._load_saved)
         self.saved_meshes.probe_needed.connect(self._probe_saved)
+        # THE CURRENT MESH (operator, 2026-10-21: "Saved meshes screen does not give
+        # anywhere to save the mesh we just started working on"): the strip at the top
+        # of the list reads this page's form, and its Save / Overwrite run through
+        # _save_current — no running mesh needed.
+        self.saved_meshes.current_provider = self._current_mesh_config
+        self.saved_meshes.save_requested.connect(self._on_save_requested)
         lay.addWidget(self.saved_section)
         return w
 
@@ -1714,25 +2071,21 @@ class LocalMeshPage(QtWidgets.QWizardPage):
             "you how to start it rather than showing an empty list.")
         self.vaults_btn.clicked.connect(self._open_vaults)
         brow.addWidget(self.vaults_btn)
-        # ── save the RUNNING mesh (ask C) ─────────────────────────────────────
-        # Gated by _sync_saved_gate (this page's own `_mesh_up`, never a monitor
-        # snapshot): a record of a mesh that is not running would describe
-        # nothing. The copy-credentials box is OFF by default — the operator's
-        # own wording was "credential pointers" — and the consequence of leaving
-        # it off is stated in the table's "Restores as" column, not hidden.
-        self.save_mesh_btn = QtWidgets.QPushButton("Save this mesh")
+        # ── save the CURRENT mesh (ask C; 2026-10-21) ─────────────────────────
+        # Gated by _sync_saved_gate: only a running VERB greys it — a record is the
+        # configuration being worked on, running or not (the operator found nowhere
+        # to save a mesh they had just started on). The same save sits at the top of
+        # the Saved meshes list, with Save as / Overwrite. The copy-credentials box is
+        # OFF by default — the operator's own wording was "credential pointers" —
+        # and only offered while a mesh is up; the consequence of leaving it off is
+        # stated in the table's "Restores as" column, not hidden.
+        self.save_mesh_btn = QtWidgets.QPushButton("Save current mesh")
         self.save_mesh_btn.clicked.connect(self._save_mesh)
         brow.addWidget(self.save_mesh_btn)
         self.save_copy_creds = QtWidgets.QCheckBox(
             "Also copy its credential files into the record")
         self.save_copy_creds.setChecked(False)
-        self.save_copy_creds.setToolTip(
-            "OFF (default): the record keeps only POINTERS to .e2e-credentials and "
-            "keys-out/vault/secrets.json (paths, hashes, mtimes) — no password ever "
-            "enters the record. ON: both files are ALSO copied into the record's "
-            "own folder under the Studio state dir at 0600, which is what brings "
-            "the SAME accounts and passwords back after 'Stop && clean Docker' "
-            "(the next 'Generate && start' re-mints them otherwise).")
+        self.save_copy_creds.setToolTip(self._COPY_CREDS_TIP)
         brow.addWidget(self.save_copy_creds)
         # ── the DEVOPS lane (Kubernetes) ────────────────────────────────────
         # ArgoCD + the workload console are k8s CONTROLLERS — no compose profile
@@ -1804,21 +2157,47 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         brow.addWidget(self.add_user_btn)
         # No trailing addStretch: a FlowLayout has no stretch concept, and a
         # spacer item would be wrapped as if it were another button.
-        lay.addWidget(brow_box)
-        # LOCAL AI AGENT (#695). The Docker mesh and the kind DevOps lane end on this one
-        # page, so one card serves both (its Lane drop-down only changes the brief). It
-        # reads the source choice and domains at press time through the context callable;
-        # the one hook is completeChanged, which fires at every verb start and end, so the
-        # card's Lane follows the lane whose verb just ran (Start DevOps lane -> kind).
-        self.local_agent = LocalAgentWidget(
-            self.generator_dir, context=lambda: context_from_page(self))
-        lay.addWidget(self.local_agent)
-        self.completeChanged.connect(self.local_agent.refresh_apps)
-        # The source cards too: the stepped wizard re-shows the card after the Repo
-        # source step, but the single-page frame has no step change, so a changed
-        # source choice there would keep listing the other tree's apps until Re-check.
-        self.src_existing.toggled.connect(lambda _on: self.local_agent.refresh_apps())
-        self.src_dir.textChanged.connect(lambda _t: self.local_agent.refresh_apps())
+        # The status line's copy, ABOVE the buttons: in the bottom panel the status line
+        # itself is on the Mesh run tab, so a refused press says why HERE, next to the
+        # button (hidden when there is no panel: the status line is on this page then).
+        self.action_status = QtWidgets.QLabel("")
+        self.action_status.setObjectName("actionStatus")
+        self.action_status.setWordWrap(True)
+        self.action_status.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.action_status.setVisible(False)
+        actions_part = QtWidgets.QWidget()
+        _ap = QtWidgets.QVBoxLayout(actions_part)
+        _ap.setContentsMargins(0, 0, 0, 0)
+        _ap.setSpacing(4)
+        _ap.addWidget(self.action_status)
+        _ap.addWidget(brow_box)
+        lay.addWidget(actions_part)
+        # THE BOTTOM PANEL (operator ask 2026-10-21). In a Studio window this Actions box,
+        # the running-mesh monitor and the run view are claimed by the panel docked at
+        # the bottom of the window (gui/_local_ai_dock.py, take_section(..., dock=True)),
+        # so they can be opened on ANY page, or in a window of their own, and a verb
+        # keeps running whatever page is on screen. A host with no panel (the standalone
+        # LocalMeshDialog, a bare wizard) keeps all three here, exactly as before.
+        # The local AI agent card that used to sit here (#695) moved to that panel too:
+        # the operator asked for it out of the build phase.
+        self.actions_box = actions_part
+        self.dock_note = QtWidgets.QWidget()
+        _dn = QtWidgets.QHBoxLayout(self.dock_note)
+        _dn.setContentsMargins(0, 0, 0, 0)
+        self.dock_note_label = _grey_note(
+            "The actions, the running mesh (pods and containers) and the run log are in "
+            "the panel at the bottom of this window. It stays there on every page, and "
+            "it can open in a window of its own. A verb you start keeps running whatever "
+            "page you are on.")
+        self.dock_note_btn = QtWidgets.QPushButton("Show the panel")
+        self.dock_note_btn.setToolTip("Open the bottom panel on its Local mesh tab.")
+        self.dock_note_btn.clicked.connect(lambda: self._reveal_in_dock("mesh"))
+        self.dock_note_label.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
+        _dn.addWidget(self.dock_note_label, 1, Qt.AlignmentFlag.AlignTop)
+        _dn.addWidget(self.dock_note_btn, 0, Qt.AlignmentFlag.AlignTop)
+        self.dock_note.setVisible(False)
+        lay.addWidget(self.dock_note)
 
         # ── RUNNING-MESH MONITOR (operator ask, 2026-09-01): every pod and container
         # of BOTH lanes, its addresses, and an Open button only where the browser may
@@ -1851,6 +2230,10 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         # bring-up is worse than either.
         self.monitor.halt_requested.connect(self._devops_halt)
         self.monitor.resume_requested.connect(self._devops_resume)
+        # Per-domain Start / Stop / Restart / Logs and every onion's own Open
+        # (2026-10-21). Off-thread and one at a time, like the scale above.
+        self.monitor.domain_action_requested.connect(self._domain_action)
+        self.monitor.onion_open_requested.connect(self._open_onion)
         #: Which row's scale is in flight ("" when none) — what _on_scale_done forgets.
         self._scaling_key = ""
         lay.addWidget(self.monitor_section)
@@ -1878,10 +2261,9 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         for _svc_box in self.service_boxes.values():
             _svc_box.toggled.connect(self._refresh_plan)
         self.web_locales.textChanged.connect(self._refresh_plan)
-        self.login_theme.primary.textChanged.connect(self._refresh_plan)
-        self.login_theme.secondary.textChanged.connect(self._refresh_plan)
-        self.login_theme.font_preset.currentIndexChanged.connect(self._refresh_plan)
-        self.login_theme.font_file.textChanged.connect(self._refresh_plan)
+        # a look edit on a domain's Look tab (row 0's is the mesh's own look): written
+        # onto the carrier like a design edit, then the plan follows
+        self.domain_services.brand_tabs.look_changed.connect(self._look_tab_changed)
         self.idp.currentIndexChanged.connect(self._refresh_plan)
         self.idp_issuer.textChanged.connect(self._refresh_plan)
         self.idp_client_id.textChanged.connect(self._refresh_plan)
@@ -1963,8 +2345,22 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         # the FOLD STATE survives the visit, so a section the operator left open
         # must get its 10 s refresh back or it freezes on the page-entry read while
         # its own tooltip still promises "refreshed every 10 s".
-        self._monitor_timer.stop()
+        # Not when the bottom panel holds the monitor: it is on screen on every page
+        # then, and _on_monitor_tick reads the TABLE's visibility, not this page's.
+        if "monitor" not in self._docked:
+            self._monitor_timer.stop()
+        self._set_dock_tall(False)
         super().hideEvent(event)
+
+    def _set_dock_tall(self, on: bool) -> None:
+        """While this page is on screen and the panel holds its parts, the page itself
+        shows only a note, so the panel may take most of the window (no-op otherwise)."""
+        tall = getattr(self, "_dock_tall", None)
+        if tall is not None and self._docked:
+            try:
+                tall(bool(on))
+            except Exception:                    # noqa: BLE001 — a panel must not break the page
+                pass
 
     def _reclaim_sections(self) -> None:
         """Take back what THIS page shows: the bring-up block and the run view.
@@ -1986,6 +2382,7 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         # body would silently lose to this one (later def wins, no error anywhere), so
         # the section reclaim is a call from here rather than its own override.
         self._reclaim_sections()
+        self._set_dock_tall(True)
         # The twin of hideEvent's stop (mesh_emulation.py:500-513 is the in-repo
         # precedent). Nothing else restarts the timer — _on_monitor_toggled only
         # fires on an actual fold change — so without this a revisited page shows a
@@ -2007,8 +2404,199 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         # BEFORE its `clicked` handler could open the conf dialog. The pending
         # conf-less moment is covered by bootstrap.validate()'s blocking problem
         # (shown in the plan) and _enforce_egress_conf at the real exits.
+        # The MESH-PLANE slugs only: a domain's services are on its rows now
+        # (effective_services is the union), so this never names one.
         return tuple(s for s in local_slugs()
-                     if self.service_boxes[s].isChecked())
+                     if s in self.service_boxes and self.service_boxes[s].isChecked())
+
+    def domain_social(self) -> bool:
+        """Whether any domain of this mesh chose Matrix (``tuwunel``), the service
+        behind the ``social`` compose profile. Matrix is a domain's service since the
+        "Local services" pick was retired; the mesh runs it when any domain chose it."""
+        return any("tuwunel" in (d.optional_services or ())
+                   for d in (self.mesh_domains.domains or ()))
+
+    # ── the superbrand drop-down and its design (#654, D8) ───────────────────────
+    def _brand_sync_in(self) -> None:
+        """Copy onto the carrier what the record also says and the page alone owns: the
+        environment, the typed domain and the Tor selection (the record reads them to
+        derive its public name, its central sign-in and its Tor way), and refresh the
+        session's cached copies of the two that are derived, so a design made on a test
+        mesh and saved after the person switched to prod says the prod name."""
+        c = self._brand_boot
+        c.env = "prod" if self.env_prod.isChecked() else "test"
+        c.cluster_domain = self.boot_domain.text().strip()
+        c.with_tor = self.with_tor.isChecked()
+        c.services = self.collect_services()
+        s = self.superbrand_design.session
+        if s is not None:
+            sync_brand_session(s, c, explicit_signin=self._brand_explicit_signin)
+
+    def _superbrand_block(self) -> dict:
+        """The designed superbrand block ``collect_bootstrap`` hands the bring-up: the
+        session's block without the things this page derives from its own controls.
+        A Tor choice would be a second statement of the Tor tick (and the start refuses
+        a record that contradicts the tick); a DERIVED sign-in address would go stale
+        the day the environment or the domain changes. A sign-in address a saved mesh
+        carried as its own choice is kept."""
+        block = dict(self._brand_boot.superbrand or {})
+        ways = {k: v for k, v in (block.get("ways") or {}).items() if k != "tor"}
+        if ways:
+            block["ways"] = ways
+        else:
+            block.pop("ways", None)
+        if not self._brand_explicit_signin:
+            block.pop("central_signin", None)       # derived: re-derived by whoever reads it
+        return block
+
+    def _fix_design_widgets(self) -> None:
+        """Put back what this route fixes about the design after the session redrew it
+        (every refresh re-enables its boxes). The public-name box is read-only: the
+        mesh's public name has ONE editing home, the Domains step's first row (a test
+        mesh has none), and a second box would be a setting editable in two places that
+        could disagree. The sentence about what a design saves shows under an open one."""
+        box = self.superbrand_design.fields["public_name"]
+        box.setEnabled(False)
+        box.setText("")
+        box.setPlaceholderText(PUBLIC_NAME_HOME)
+        box.setToolTip(f"The public name is {PUBLIC_NAME_HOME}.")
+        # the sentence about what a design saves belongs under an OPEN design only
+        s = self.superbrand_design.session
+        self.brand_effect_note.setVisible(bool(s is not None and s.designing))
+
+    def mount_brand(self) -> None:
+        """Give the drop-down and the design their session. Called whenever a step
+        claims the Environment section (and by the standalone dialog's page), so the
+        session always describes the page as it is now; cheap and safe to repeat."""
+        try:
+            self._brand_sync_in()
+            session = session_for(self, "docker", (self._brand_boot, self.mesh_domains),
+                                  self.generator_dir)
+            self._brand_busy = True
+            try:
+                if self.brand_picker.session is not session:
+                    self.brand_picker.set_session(session)
+                    self.superbrand_design.set_session(session)
+                else:
+                    self.brand_picker.refresh()
+                    self.superbrand_design.refresh()
+                self._fix_design_widgets()
+                self._brand_mounted = True
+            finally:
+                self._brand_busy = False
+            self._refresh_brand_note()
+            self._brand_ok()
+        except Exception:                       # noqa: BLE001 — never raise out of a slot
+            self._brand_swallow("mount_brand")
+
+    def _refresh_brand_note(self) -> None:
+        """The note about a picked profile that has no brands/<id>.conf. It is redrawn
+        whenever the pick can have changed (the plan refresh, the step mounting, the
+        drop-down or the design changing), not only with the plan: a note drawn before
+        the session existed would otherwise stay under the default Create."""
+        brand = self.brand.currentText().strip()
+        sess = self.superbrand_design.session
+        # About a profile the person PICKED. Under ‘Create a new superbrand’ (the default)
+        # nothing was picked, and a brand being designed has no profile file by
+        # definition: the sentence there read as a warning about something they did not
+        # choose.
+        creating = sess is not None and sess.choice == CREATE_KEY
+        # read the file, not self.boot: that object is built from the LAST plan refresh
+        # and may still hold the brand from before this pick
+        has_conf = os.path.isfile(os.path.join(self.generator_dir, "brands", f"{brand}.conf"))
+        self.brand_note.setText(
+            "" if creating or has_conf or not brand
+            else f"No brands/{brand}.conf — runs with built-in defaults "
+                 f"(profile presets stay unset).")
+        self.brand_note.setVisible(bool(self.brand_note.text()))
+
+    def _brand_changed(self, *_args) -> None:
+        """The picker or the design changed the session: write it onto the carrier (the
+        session refuses a record that cannot be saved and says why inline) and let the
+        plan and the brand note follow."""
+        if self._brand_busy or self.superbrand_design.session is None:
+            return
+        try:
+            self._brand_sync_in()
+            step = self.superbrand_design
+            problems = step.session.commit()
+            # a refusal is added to the step's note, never wiped by a good commit: the
+            # design that just refused an id (and put its sentence there) commits the
+            # id it fell back to without a problem
+            if problems:
+                step.note.setStyleSheet("color: #b00020;")
+                step.note.setText(problems[0])
+                step.note.setVisible(True)
+            self._fix_design_widgets()
+            self.brand.currentTextChanged.emit(self._brand_boot.brand)
+            self._refresh_brand_note()
+            self._brand_ok()
+        except Exception:                       # noqa: BLE001
+            self._brand_swallow("_brand_changed")
+
+    def leave_brand(self) -> bool:
+        """Leave the step (Next or Back), or reach the review: write the design onto the
+        carrier and the record file. NEVER blocks: a refusal is shown inline by the
+        design and the start refuses downstream; a page that refused its own Next would
+        strand a person who cannot see why. An untouched session writes nothing."""
+        if not self._brand_mounted or self.superbrand_design.session is None:
+            return True
+        try:
+            self._brand_sync_in()
+            problems = self.superbrand_design.commit(save=True)
+            self.brand.currentTextChanged.emit(self._brand_boot.brand)
+            self._brand_ok()
+            # The design's own note sits under the drop-down, on a step the person has
+            # just left. A refusal is also said on the plan they read before starting
+            # (and here, for when they come back), so a record file that was not
+            # written is never silent.
+            sentence = ((self.superbrand_design.session.message or problems[0])
+                        if problems else "")
+            self._brand_file_note = sentence
+            if sentence:
+                self.brand_error.setText(sentence)
+                self.brand_error.setVisible(True)
+        except Exception:                       # noqa: BLE001
+            self._brand_swallow("leave_brand")
+        return True
+
+    def _set_brand_id(self, text: str) -> None:
+        """``self.brand.setCurrentText``: the text surface the old box had."""
+        block = dict(self._brand_boot.superbrand or {})
+        if not self._brand_explicit_signin:
+            block.pop("central_signin", None)       # the carrier's one is derived
+        self._adopt_brand(text, block)
+
+    def _adopt_brand(self, brand: str, block: dict | None) -> None:
+        """Make ``brand`` and the designed ``block`` this page's brand (a typed slug, a
+        saved mesh applied). The carrier is REPLACED, not edited: the session belongs
+        to the configuration object it was made for, so a new carrier gets a new
+        session, which selects what the saved mesh carried."""
+        brand = (brand or "").strip()
+        self._brand_explicit_signin = str((block or {}).get("central_signin") or "")
+        self._brand_boot = dataclasses.replace(
+            self._brand_boot, brand=brand, superbrand=dict(block or {}))
+        if self._brand_mounted:
+            self.mount_brand()
+        self.brand.currentTextChanged.emit(brand)
+
+    def _brand_swallow(self, where: str) -> None:
+        """A slot must never raise (PyQt6 aborts the process), so the failure is written
+        to the terminal for whoever debugs it AND said once on the page, where the person
+        is looking: they are never left with a half-drawn step and no word."""
+        import sys
+        import traceback
+        print(f"localmesh: swallowed exception in {where}", file=sys.stderr)
+        traceback.print_exc(file=sys.stderr)
+        self.brand_error.setText(
+            f"The {plain_words.term('superbrand')} step could not be drawn or saved just "
+            "now, and nothing was changed by that. Go back one step and forward again; if "
+            "it comes back, the details are in the terminal.")
+        self.brand_error.setVisible(True)
+
+    def _brand_ok(self) -> None:
+        self.brand_error.setText("")
+        self.brand_error.setVisible(False)
 
     def collect_bootstrap(self) -> LocalMeshBootstrapConfig:
         """BOOTSTRAP-tab widgets -> LocalMeshBootstrapConfig — EVERY operator-visible
@@ -2021,9 +2609,11 @@ class LocalMeshPage(QtWidgets.QWizardPage):
             env=("prod" if self.env_prod.isChecked() else "test"),
             superadmin_username=self.superadmin.text().strip() or "superadmin",
             # social/with_tor stay because they are what LocalStackNode turns into
-            # SOCIAL=/TOR=; they read the SAME two widgets the services table hosts,
-            # so they can never disagree with the selection below.
-            social=self.social.isChecked(),
+            # SOCIAL=/TOR= on a record with no selection. ``with_tor`` reads the Tor box
+            # the infrastructure table hosts; ``social`` says whether any DOMAIN chose
+            # Matrix (the per-domain choice is what runs, effective_services), so
+            # neither can disagree with what the mesh starts.
+            social=self.domain_social(),
             with_tor=self.with_tor.isChecked(),
             services=self.collect_services(),
             egress_vpn_conf=self._egress_vpn_conf,
@@ -2031,13 +2621,21 @@ class LocalMeshPage(QtWidgets.QWizardPage):
             auth_key=self.boot_auth_key.text().strip(),
             login_server=self.boot_login_server.text().strip(),
             brand=self.brand.currentText().strip(),
+            # the design's block, from the carrier the superbrand session writes (the one
+            # writer of this field, so a design cannot be lost the way ``brand`` once was)
+            superbrand=self._superbrand_block(),
             source_mode=("existing" if self.src_existing.isChecked() else "clone"),
             source_dir=self.src_dir.text().strip(),
             web_locales=_parse_web_locales(self.web_locales.text()),
-            # "" on invalid input, with the reason in error_text() — the verb
-            # handlers refuse to launch on it, so a typo can never silently ship
+            # The mesh's own look (row 0's Look tab, the superbrand's look model):
+            # "" on an invalid look, with the reason in look_css_and_error() — the
+            # verb handlers refuse to launch on it, so a typo can never silently ship
             # an unthemed stack the operator believed was themed.
-            login_theme_css=self.login_theme.compose_css(),
+            login_theme_css=self.look_css_and_error()[0],
+            # the WHOLE look that stylesheet is made from: a domain with a look of its
+            # own is composed over it on the front door (core/look_serving), so it
+            # keeps the mesh's header, footer, pictures and font
+            login_look=self._mesh_look_record(),
             # I6.6 identity provider — casdoor default carries EMPTY endpoint
             # fields (byte-identical env); validate() fail-closes the combinations.
             idp=self.selected_idp(),
@@ -2066,13 +2664,129 @@ class LocalMeshPage(QtWidgets.QWizardPage):
             domain_services_reviewed=reviewed_record_names(self.mesh_domains, records),
         )
 
+    # ── the mesh's own look (row 0's Look tab) ──────────────────────────────────────
+    def brand_session(self):
+        """The superbrand session of this route (``tui.superbrand_step.session_for``):
+        the same object the drop-down, the design and every domain's tabs drive. None
+        only if it cannot be made, which no slot may raise over."""
+        try:
+            s = session_for(self, "docker", (self._brand_boot, self.mesh_domains),
+                            self.generator_dir)
+            # what a domain that inherits reads: this page's own sign-in, environment
+            # and egress controls as they stand NOW (the carrier holds only the brand)
+            s.host.mesh_of = self._mesh_now
+            # row 0 edits the mesh's own sign-in, Tor and egress IN THIS PAGE'S
+            # CONTROLS: they are the one home of those values on this route
+            w = self.__dict__.get("_row0_writes")
+            if w is None:
+                w = self._row0_writes = _LocalMeshWrites(self)
+            s.host.writes = w
+            return s
+        except Exception:                       # noqa: BLE001 — called from slots
+            return None
+
+    def _mesh_now(self) -> LocalMeshBootstrapConfig:
+        """The mesh-wide values the per-domain tabs inherit from — sign-in, environment,
+        the mesh's own infrastructure and its egress file — read off this page's
+        controls without the rest of ``collect_bootstrap``."""
+        idp = self.selected_idp()
+        ext = idp != "casdoor"
+        return LocalMeshBootstrapConfig(
+            env=("prod" if self.env_prod.isChecked() else "test"),
+            services=self.collect_services(), egress_vpn_conf=self._egress_vpn_conf,
+            cluster_domain=self.boot_domain.text().strip(), idp=idp,
+            idp_issuer=self.idp_issuer.text().strip() if ext else "",
+            idp_client_id=self.idp_client_id.text().strip() if ext else "",
+            idp_jwks=self.idp_jwks.text().strip() if ext else "",
+            # whether the mesh's VPN container attaches (production + a key): what a
+            # domain's own VPN choice is compared with on its Ways tab (reach_apply)
+            auth_key=self.boot_auth_key.text().strip())
+
+    def mesh_look(self):
+        """The mesh's own look model (``brand_look.Look``, design mode): what row 0's
+        Look tab edits and what the start turns into the sign-in page's stylesheet."""
+        s = self.brand_session()
+        return s.look if s is not None else None
+
+    def look_css_and_error(self) -> tuple[str, str]:
+        """``(stylesheet, why it cannot be made)``. The stylesheet is "" when the look
+        deviates from nothing (the shipped page) or cannot be made; the reason is ""
+        unless it cannot. Never raises."""
+        look = self.mesh_look()
+        if look is None:
+            return "", ""
+        try:
+            needs = look.requirements()
+            if needs:
+                return "", needs[0]
+            return look.css(), ""
+        except brand_look.LookError as exc:
+            return "", str(exc)
+        except Exception as exc:                # noqa: BLE001
+            return "", f"the look could not be turned into a stylesheet: {exc}"
+
+    def _mesh_look_record(self) -> dict:
+        """The mesh's whole look as its record holds it ({} when there is none or it
+        cannot be made, the same cases ``look_css_and_error`` gives no stylesheet).
+        Never raises."""
+        css, why = self.look_css_and_error()
+        if not css or why:
+            return {}
+        try:
+            look = self.mesh_look()
+            return dict(look.record()) if look is not None else {}
+        except Exception:                       # noqa: BLE001 — called from slots
+            return {}
+
+    def _look_tab_changed(self) -> None:
+        """A Look tab edit: the same write a design edit makes (the session commits
+        its superbrand block onto the carrier), then the plan. Never raises."""
+        try:
+            if self.superbrand_design.session is not self.brand_session():
+                self.mount_brand()
+            self._brand_changed()
+            self._refresh_plan()
+        except Exception:                       # noqa: BLE001 — a slot must not raise
+            self._brand_swallow("_look_tab_changed")
+
     def theme_form(self) -> dict:
-        """The Themes group's INPUTS (colours, preset, mode, font, chrome) — what a
-        saved-mesh record needs to re-populate widgets whose config field is
-        DERIVED: ``login_theme_css`` is their output and is not invertible."""
-        ns = types.SimpleNamespace()
-        self.login_theme.commit(ns)
-        return dict(vars(ns))
+        """The look's INPUTS — what a saved-mesh record needs to re-populate the look
+        whose config field is DERIVED (``login_theme_css`` is its output and is not
+        invertible): the seventeen ``login_*`` values every older record carries, plus
+        ``look``, the whole look as the brand record writes it."""
+        look = self.mesh_look()
+        eff = look.effective() if look is not None else brand_look.effective_look({})
+        form = {attr: eff[f] for f, attr in brand_look.CFG_FIELDS.items()
+                if attr in _THEME_FORM_DEFAULTS}
+        if look is not None:
+            form["look"] = dict(look.record())
+        return form
+
+    def _apply_look_form(self, cfg: LocalMeshBootstrapConfig, form: dict | None,
+                         missing: list[str]) -> None:
+        """Put a saved record's look into the session's look model. A form with
+        ``look`` gives the whole look; an older form's ``login_*`` inputs are laid over
+        the superbrand block's own look; no form but a stylesheet cannot be inverted,
+        so the look stays as the record's superbrand block says and the field is
+        reported."""
+        look_in = None
+        if form and isinstance(form.get("look"), dict):
+            look_in = dict(form["look"])
+        elif form:
+            ns = dict(_THEME_FORM_DEFAULTS)
+            ns.update({k: v for k, v in form.items() if k in ns})
+            from_form = brand_look.look_from_cfg(types.SimpleNamespace(**ns))
+            look_in = dict((cfg.superbrand or {}).get("look") or {})
+            look_in.update({f: from_form[f] for f, attr in brand_look.CFG_FIELDS.items()
+                            if attr in _THEME_FORM_DEFAULTS})
+        elif cfg.login_theme_css.strip():
+            missing.append("login_theme_css")
+        s = self.brand_session()
+        if look_in is None or s is None:
+            return
+        s.look.own = brand_look.normalise(look_in)
+        s.look.armed = None
+        s.touched = True
 
     def apply_bootstrap(self, cfg: LocalMeshBootstrapConfig,
                         form: dict | None = None) -> list[str]:
@@ -2090,7 +2804,9 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         self._applying_bootstrap = True
         try:
             (self.env_prod if cfg.env == "prod" else self.env_test).setChecked(True)
-            self.brand.setCurrentText(cfg.brand)
+            # the id AND the designed block: the picker then shows what the saved mesh
+            # carried (a design as the current superbrand, a profile as itself)
+            self._adopt_brand(cfg.brand, cfg.superbrand)
             if cfg.source_mode == "existing":
                 self.src_existing.setChecked(True)
             else:
@@ -2100,9 +2816,15 @@ class LocalMeshPage(QtWidgets.QWizardPage):
                     and not os.path.isdir(cfg.source_dir)):
                 missing.append("source_dir")
             self.superadmin.setText(cfg.superadmin_username or "superadmin")
-            # The two legacy booleans first (a CLI-made record with no picker),
-            # then the explicit selection — which is authoritative — wins.
-            self.social.setChecked(bool(cfg.social))
+            # A record's DOMAIN services belong on its domain rows (the retired
+            # "Local services" pick, 2026-10-21): a selection that still names them in
+            # ``services``, and a CLI-made record's legacy Matrix flag, move onto the
+            # rows here exactly as LocalMeshBootstrapConfig.from_dict moves a saved
+            # one — so the mesh starts what the record started, said once. Done on a
+            # COPY: the caller's record object is not this page's to change.
+            cfg = _migrated_services(cfg)
+            # The legacy Tor boolean first (a CLI-made record with no picker), then the
+            # explicit selection — which is authoritative — wins.
             self.with_tor.setChecked(bool(cfg.with_tor))
             if cfg.services is None:
                 missing.append("services")
@@ -2130,15 +2852,11 @@ class LocalMeshPage(QtWidgets.QWizardPage):
                         f"{os.path.basename(cfg.egress_vpn_conf)} ({kind}).")
                 self.egress_note.setVisible(True)
             self.web_locales.setText(", ".join(cfg.web_locales))
-            # THEME: the record's `form` carries the group's inputs; without them a
-            # non-empty derived css cannot be reproduced, so the group is reset to
-            # the shipped brand and the field is reported rather than half-applied.
-            theme_ns = dict(_THEME_FORM_DEFAULTS)
-            if form:
-                theme_ns.update({k: v for k, v in form.items() if k in theme_ns})
-            elif cfg.login_theme_css.strip():
-                missing.append("login_theme_css")
-            self.login_theme.load(types.SimpleNamespace(**theme_ns))
+            # THE LOOK: the record's `form` carries its inputs; without them a
+            # non-empty derived css cannot be reproduced, so the look stays what the
+            # record's superbrand block says and the field is reported rather than
+            # half-applied.
+            self._apply_look_form(cfg, form, missing)
             idx = self.idp.findData(cfg.idp if cfg.idp in IDP_CHOICES else "casdoor")
             self.idp.setCurrentIndex(max(0, idx))
             self.idp_issuer.setText(cfg.idp_issuer)
@@ -2233,19 +2951,25 @@ class LocalMeshPage(QtWidgets.QWizardPage):
             # NOTHING. "I pressed Start and nothing happened" is then the only
             # symptom, with no line in the log and no status text to work from.
             busy = self._running_label or "a previous step"
-            self.status.setText(
+            self._refuse(
                 f"Still running: {busy}. One verb at a time — its output is in the "
                 f"log below. Wait for it to finish"
                 + (", or press Cancel to stop it."
                    if self.cancel_btn.isVisible() else ".")
             )
             return
+        if probe_running(self, "_domain_worker"):
+            self._refuse(
+                "Still running: a domain's Start/Stop/Restart in the running-mesh "
+                "table. One action at a time on this mesh — wait for its result on "
+                "that table's status line, then press again.")
+            return
         if probe_running(self, "_scale_worker"):
             # The mirror of _scale_monitor's verb guard (issue #341): a verb that
             # rewrites the compose project or the cluster while a `--scale` / `kubectl
             # scale` is still running races it for the same container set. Said out
             # loud for the same reason the guard above is.
-            self.status.setText(
+            self._refuse(
                 "Still running: a Replicas change in the running-mesh table. One "
                 "action at a time on this mesh — wait for its result on that table's "
                 "status line, then press again.")
@@ -2391,7 +3115,7 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         # in two suites that never asked for a monitor.
         self._monitor_stale = True
         # …and the SAVED-MESH table with it. _sync_saved_gate (from
-        # _set_verbs_enabled above) re-gates the 'Save this mesh' button, but the
+        # _set_verbs_enabled above) re-gates the 'Save current mesh' button, but the
         # table's own rows are read from things a verb changes and it does not
         # touch: 'Clean mesh' drops the data volumes a record's Start needs,
         # 'Restore (reseed)' rewrites the credentials file a record hashed, and a
@@ -2662,7 +3386,7 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         self.node = LocalMeshNode(self.generator_dir, self.collect())
         ok, why = self.node.available()
         if not ok:
-            self.status.setText(f"Cannot start: {why}")
+            self._refuse(f"Cannot start: {why}")
             return
         self._note("[local-mesh] docker compose up -d …")
         self._launch("Starting the mesh node", self.node.start)
@@ -2688,7 +3412,8 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         'not downloaded yet', and no form control changes when it does."""
         self.code_folders.refresh(self.boot.cfg.source_mode, self.boot.cfg.source_dir,
                                   self.mesh_domains.domains,
-                                  own_name=self._own_domain_name())
+                                  own_name=self._own_domain_name(),
+                                  record_id=getattr(self, "_loaded_record_id", "") or "")
 
     def _refresh_plan(self):
         if getattr(self, "_applying_bootstrap", False):
@@ -2727,12 +3452,17 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         # (every path that changes either already lands here). Cheap: the widget
         # rebuilds only when the map differs.
         self._refresh_code_folders()
-        self.brand_note.setText(
-            "" if self.boot.brand_has_conf() or not self.brand.currentText().strip()
-            else f"No brands/{self.brand.currentText().strip()}.conf — runs with "
-                 f"built-in defaults (profile presets stay unset).")
-        self.plan_view.setPlainText(self.boot.plan())
+        self._refresh_brand_note()
+        plan = self.boot.plan()
+        note = getattr(self, "_brand_file_note", "")
+        if note:
+            plan += f"\n\nBRAND RECORD: {note}\n"
+        self.plan_view.setPlainText(plan)
         self._sync_boot_gate()
+        # the Saved meshes strip shows the mesh being worked on: keep it in step
+        saved = getattr(self, "saved_meshes", None)
+        if saved is not None:
+            saved.update_current()
 
     def _probe_mesh_state(self):
         """Kick off the off-thread stack probe (see _StatusProbe). Re-entrant-safe:
@@ -2920,6 +3650,48 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         return (f" The service configuration walked for {named} could NOT be written "
                 "into the saved record, so the next Start will ask for it again.")
 
+    def _on_flow_page(self) -> bool:
+        """True when the wizard is showing one of the local-mesh steps (or there is no
+        wizard page to ask: the standalone dialog)."""
+        try:
+            page = self.wiz.currentPage()
+        except Exception:                        # noqa: BLE001 — a shim with no pages
+            return True
+        return page is None or isinstance(page, (LocalMeshPage, _LocalMeshStep))
+
+    def _start_confirmed(self) -> bool:
+        """THE SECOND PRESS. With the bottom panel, Generate && start can be pressed on
+        any page, the Welcome page included, before a single local-mesh step was seen;
+        one press would then start a mesh on settings nobody looked at. Off the
+        local-mesh steps the first press only arms the button (its text and the line
+        above it say so) and a second press within 15 seconds starts. No dialog."""
+        if "actions" not in self._docked or self._on_flow_page() or self._start_armed:
+            self._disarm_start()
+            return True
+        self._arm_seq = getattr(self, "_arm_seq", 0) + 1
+        self._start_armed = token = self._arm_seq
+        try:
+            where = self.wiz.currentPage().title() or "this"
+        except Exception:                        # noqa: BLE001
+            where = "this"
+        self.boot_start_btn.setText("Press again to start")
+        self._refuse(
+            f"You are on the ‘{where}’ page, not on the local-mesh steps: Generate & "
+            "start would use the mesh settings exactly as they are now, without your "
+            "review. Press it again within 15 seconds to start anyway, or walk the "
+            "local-mesh steps first.")
+        QtCore.QTimer.singleShot(15000, lambda: self._disarm_start(token))
+        return False
+
+    def _disarm_start(self, token: int = 0) -> None:
+        if not self._start_armed or (token and token != self._start_armed):
+            return
+        self._start_armed = 0
+        try:
+            self.boot_start_btn.setText("Generate && start")
+        except RuntimeError:                     # the page went away first
+            pass
+
     def _bootstrap_up(self):
         # THE PER-DOMAIN SERVICES GATE (#494/#495), on the docker/local-mesh half of
         # the operator's ask ("before building or starting a mesh in docker or nodes").
@@ -2941,23 +3713,27 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         # this is the backstop for any other way they got here (the TUI's words, one
         # helper) — and only then the services gate, which is about the rows that
         # can: fixing a row may change which domains still need their page.
+        if not self._start_confirmed():
+            return
         row_problems = self._domain_row_problems()
         if row_problems:
-            self.status.setText("Cannot start: domains: " + "; ".join(row_problems)
+            self._refuse("Cannot start: domains: " + "; ".join(row_problems)
                                 + " — fix them on the ‘Domains’ step.")
             return
         refusal = self._domain_services_refusal()
         if refusal:
-            self.status.setText(refusal)
+            self._refuse(refusal)
             return
         self.boot = LocalMeshBootstrap(self.generator_dir, self.collect_bootstrap())
-        if self.login_theme.error_text():
-            self.status.setText(
-                "Cannot start: themes: " + self.login_theme.error_text())
+        look_error = self.look_css_and_error()[1]
+        if look_error:
+            self._refuse(
+                "Cannot start: the look (the ‘Look’ tab of this mesh's own domain): "
+                + look_error)
             return
         problems = self.boot.validate()
         if problems:
-            self.status.setText("Cannot start: " + "; ".join(problems))
+            self._refuse("Cannot start: " + "; ".join(problems))
             return
         for warn in self.boot.warnings():
             self._note(f"WARNING: {warn}")
@@ -3100,7 +3876,7 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         node = self.boot._stack_node()
         need = node.devops_available()
         if not need:
-            self.status.setText("DevOps prerequisites are already installed.")
+            self._refuse("DevOps prerequisites are already installed.")
             return
         self._note("[devops] installing the DevOps lane's prerequisites into "
                    "out/tools/bin (user-local, checksum-verified) …")
@@ -3122,7 +3898,7 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         node = self.boot._stack_node()
         problems = node.devops_available()
         if problems:
-            self.status.setText("Cannot start the DevOps lane: "
+            self._refuse("Cannot start the DevOps lane: "
                                 + "; ".join(problems))
             return
         self._note("[devops] creating the local Kubernetes cluster and "
@@ -3201,42 +3977,62 @@ class LocalMeshPage(QtWidgets.QWizardPage):
 
     # ── saved meshes (ask C): save / probe / start / load ─────────────────────
     def _sync_saved_gate(self):
-        """The ONE writer for 'Save this mesh' and the saved-meshes table's gate,
-        driven by this page's own tri-state ``_mesh_up`` — deliberately NOT by any
-        monitor snapshot (that would couple two lanes for one boolean). Called
-        from the tail of _set_verbs_enabled, which owns the greyed-with-a-reason
-        idiom, and once at construction."""
+        """The ONE writer for 'Save current mesh' (the Actions row), its copy box and
+        the saved-meshes table's gate. Saving no longer waits for a RUNNING mesh
+        (operator, 2026-10-21: "Saved meshes screen does not give anywhere to save the
+        mesh we just started working on"): a record is the configuration being worked
+        on, so only a running VERB greys it. The copy box still needs a mesh that is
+        up — the credential files on disk belong to whatever mesh last ran, and copying
+        them into a record of a mesh that never ran would promise passwords it never
+        had. Driven by this page's own tri-state ``_mesh_up`` — deliberately NOT by
+        any monitor snapshot. Called from the tail of _set_verbs_enabled and once at
+        construction."""
         up = self._mesh_up
         idle = not self._running
-        on = idle and up is True
-        self.save_mesh_btn.setEnabled(on)
-        self.save_copy_creds.setEnabled(on)
+        self.save_mesh_btn.setEnabled(idle)
+        self.save_copy_creds.setEnabled(idle and up is True)
         if not idle:
             tip = "Disabled while a verb is running — wait for it to finish, or Cancel."
-        elif up is None:
-            tip = "Checking whether a local mesh is running…"
-        elif up is False:
-            tip = ("Disabled — no local mesh is running; there is nothing to save. "
-                   "(Checked on entry; re-checked after every verb.)")
         else:
-            tip = ("Record the RUNNING mesh so it can be started or restored from "
-                   "the 'Saved meshes' table instead of generated from scratch: "
-                   "THIS PAGE'S configuration (the only knob a running mesh can be "
-                   "read back for is its env, which is cross-checked and reported "
-                   "when it disagrees), the env it exports, the overlay text, the "
-                   "per-repo source HEADs, the doors, the superadmin/operator "
-                   "usernames and the accounts this Studio added (names and roles), "
-                   "credential POINTERS (paths, hashes — never a password) and an "
-                   "INVENTORY of its data volumes. The volumes' contents are NOT "
+            tip = ("Record the mesh being worked on — THIS PAGE'S configuration, every "
+                   "domain's look, sign-in, services and VPN/egress choices included — "
+                   "so it can be loaded, started or restored from the 'Saved meshes' "
+                   "list instead of set up from scratch. It does not need the mesh to "
+                   "be running. When one is up, its env is cross-checked and a "
+                   "disagreement is reported; the env it exports, the overlay text, the "
+                   "per-repo source HEADs, the doors, the superadmin/operator usernames "
+                   "and the accounts this Studio added (names and roles), credential "
+                   "POINTERS (paths, hashes — never a password) and an INVENTORY of its "
+                   "data volumes are recorded too. The volumes' contents are NOT "
                    "saved: multi-GB, a consistent copy needs the stack halted, "
                    "'Stop mesh' keeps them anyway, and casdoor-pg is an identity "
-                   "database. Runs off-thread; the mesh is not touched.")
+                   "database. Runs off-thread; nothing is started or stopped.\n\n"
+                   "The NAME comes from the 'Save as' box in 'Saved meshes and the "
+                   "plan' (the review step), or is derived when that box is blank; the "
+                   "status line says which name was used.")
         self.save_mesh_btn.setToolTip(tip)
+        if not idle:
+            copy_tip = tip
+        elif up is True:
+            copy_tip = self._COPY_CREDS_TIP
+        else:
+            copy_tip = ("Only while a local mesh is running: the credential files on "
+                        "disk belong to whatever mesh last ran, so a record of a mesh "
+                        "that is not up keeps POINTERS to them, never copies.")
+        self.save_copy_creds.setToolTip(copy_tip)
         self.saved_meshes.set_context(mesh_up=up, busy=not idle)
         if idle and up is not None and up != self._saved_last_up:
             # a verb changed what is on disk — re-check every row's plan
             self._saved_last_up = up
             self._probe_saved(self.saved_meshes.records())
+
+    _COPY_CREDS_TIP = (
+        "OFF (default): the record keeps only POINTERS to .e2e-credentials and "
+        "keys-out/vault/secrets.json (paths, hashes, mtimes) — no password ever "
+        "enters the record. ON: both files are ALSO copied into the record's "
+        "own folder under the Studio state dir at 0600, which is what brings "
+        "the SAME accounts and passwords back after 'Stop && clean Docker' "
+        "(the next 'Generate && start' re-mints them otherwise).")
 
     def _probe_saved(self, records):
         """Kick off the off-thread per-record probe (docker volumes/images/ps + a
@@ -3263,43 +4059,131 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         if pending:
             self._probe_saved(pending)
 
+    def _current_mesh_config(self) -> dict:
+        """The Saved meshes strip's view of the mesh being worked on: this page's
+        form, as a record would store it (auth key blanked)."""
+        return saved_meshes.config_for_record(self.collect_bootstrap())
+
+    def _kind_lane_running(self) -> bool | None:
+        """The DevOps (kind) lane's tri-state as the monitor last read it — recorded in
+        a saved mesh, never probed for it (None = not read yet)."""
+        snap = getattr(self, "_monitor", None)
+        kind = getattr(snap, "kind", None) if snap is not None else None
+        running = getattr(kind, "running", None)
+        return None if running is None else bool(running)
+
     def _save_mesh(self):
-        """Record the running mesh — through _launch, so it inherits the busy
-        guard, the staged view, the run log and the buttons' re-arm. The capture
-        is docker + git + two sha256s and runs on the worker; nothing here touches
-        the mesh. No credential VALUE reaches a log line: the worker prints the
-        record id and path, and whether files were copied or only pointed at."""
-        if self._mesh_up is not True:
-            self.status.setText("Nothing to save: no local mesh is running "
-                                "(checked on entry and after every verb).")
+        """The Actions row's 'Save current mesh': a NEW record of the mesh being worked
+        on, named from the Saved meshes 'Save as' box (derived when blank). The copy
+        box applies only while a mesh is up (see _sync_saved_gate)."""
+        label = self.saved_meshes.name_edit.text().strip()
+        if label and saved_meshes.label_owner(label, self.saved_meshes.records()):
+            self._refuse(f"A saved mesh is already called ‘{label}’ — pick "
+                         "another name in the Saved meshes 'Save as' box, or "
+                         "overwrite that record from the Saved meshes list.")
             return
-        boot = self.boot
+        typed = bool(label)
+        if not label:
+            label = saved_meshes.unique_label(
+                saved_meshes.derived_label_of(self._current_mesh_config()),
+                self.saved_meshes.records())
+        copy = bool(self.save_copy_creds.isChecked() and self._mesh_up is True)
+        # This button sits on the bring-up step, where the Saved meshes list and its
+        # Save as box cannot be seen: say in the run log where the name came from.
+        self._note(f"[mesh-save] the record is named ‘{label}’ — "
+                   + ("typed in the 'Save as' box under 'Saved meshes and the plan'"
+                      if typed else
+                      "derived, because the 'Save as' box under 'Saved meshes and the "
+                      "plan' is blank")
+                   + "; it can be renamed there with Overwrite selected.")
+        self._save_current(None, label, copy=copy)
+
+    def _on_save_requested(self, target, label: str):
+        """The Saved meshes strip asked: a new record (target None) or an overwrite of
+        ``target`` (already confirmed there by its second click). Pointers only —
+        the copy box lives with the Actions row and is not visible from this list."""
+        self._save_current(target, label, copy=False)
+
+    def _save_current(self, target, label: str, *, copy: bool = False):
+        """Record the mesh being worked on — through _launch, so it inherits the busy
+        guard, the staged view, the run log and the buttons' re-arm. The capture is
+        docker + git + two sha256s and runs on the worker; nothing here touches the
+        mesh, and nothing needs to be running. No credential VALUE reaches a log line:
+        the worker prints the record id and path, and whether files were copied or
+        only pointed at.
+
+        ``target`` is a record to OVERWRITE (its id, place and created stamp are kept;
+        credential copies it kept are removed when this save keeps pointers only), or
+        None for a new record. The configuration is read from the form NOW, not from
+        whatever the last plan refresh left in ``self.boot``."""
+        if self._running:
+            self._refuse(f"Still running: {self._running_label or 'a verb'}. "
+                         "Wait for it to finish, or Cancel.")
+            return
+        try:
+            cfg = self.collect_bootstrap()
+        except Exception as e:                       # noqa: BLE001 — say it, inline
+            self._refuse(f"Cannot save: the form could not be read ({e}).")
+            return
+        boot = self.boot = LocalMeshBootstrap(self.generator_dir, cfg)
         node = boot._stack_node()
         gen = self.generator_dir
-        copy = self.save_copy_creds.isChecked()
         users = list(self._added_user_specs)
         form = self.theme_form()
+        kind_up = self._kind_lane_running()
+        mesh_up = self._mesh_up
+        # The record the form holds (loaded, or saved from it last): this save is a
+        # later state of THAT mesh, so its older records stop keeping domain code
+        # copies this mesh no longer has (saved_meshes.lineage_of).
+        follows = str(getattr(self, "_loaded_record_id", "") or "")
+        # A configuration that will not start yet is still worth keeping (that is
+        # the point of saving a mesh being worked on) — the problems are SAID with
+        # the save, never a reason to refuse it.
+        try:
+            problems = list(boot.validate())
+        except Exception as e:                       # noqa: BLE001 — a note only
+            problems = [f"could not be checked ({type(e).__name__}: {e})"]
+        look_err = self.look_css_and_error()[1]
+        if look_err:
+            problems.append("the look (the ‘Look’ tab of this mesh's own domain): "
+                            + look_err)
 
         # filled by the worker, read by _on_saved_captured on the GUI thread (the
         # done signal is what orders the two) — the disagreement belongs ON SCREEN,
         # under the table, not only in the run log the operator has to scroll back.
-        outcome: dict = {}
+        outcome: dict = {"problems": problems}
 
         def capture(on_line, cancel):
-            rec = saved_meshes.capture(gen, boot.cfg, node, boot,
-                                       copy_credentials=copy, extra_users=users,
-                                       form=form)
+            rec = saved_meshes.capture(gen, cfg, node, boot,
+                                       label=label, copy_credentials=copy,
+                                       extra_users=users, form=form,
+                                       overwrite=target, kind_running=kind_up,
+                                       follows=follows)
             path = saved_meshes.save(rec)
             if not path:
                 on_line("[mesh-save] FAILED: the record could not be written under "
                         f"{saved_meshes.meshes_dir()} (is the Studio state dir "
-                        "writable?). The mesh is untouched.")
+                        "writable?). Nothing else was touched.")
                 return False, []
-            on_line(f"[mesh-save] saved '{rec.label}' as {rec.id} -> {path}")
+            dropped = (saved_meshes.drop_unreferenced_copies(rec)
+                       if target is not None else False)
+            outcome["id"], outcome["label"] = rec.id, rec.label
+            verb = "overwrote" if target is not None else "saved"
+            on_line(f"[mesh-save] {verb} '{rec.label}' as {rec.id} -> {path}")
+            if dropped:
+                on_line("[mesh-save] the credential copies the replaced record kept "
+                        "were removed — this record keeps pointers only")
+            running = [n for n, up in (("Docker mesh", mesh_up is True),
+                                       ("DevOps lane", kind_up is True)) if up]
+            on_line("[mesh-save] running at save time: "
+                    + (", ".join(running) if running else
+                       "nothing — the record is the configuration as worked on"))
             on_line(f"[mesh-save] {rec.volume_count()} data volume(s) inventoried, "
                     "not copied; credential files "
                     + ("copied into the record's folder at 0600" if copy else
                        "recorded as pointers only (paths, hashes, mtimes)"))
+            on_line(f"[mesh-save] {len(rec.domain_lines()) or 1} domain(s) recorded "
+                    "with their look, sign-in, services and VPN/egress choices")
             # The record is built from THIS PAGE's configuration; the one knob that
             # can be read back off a running mesh is its env. When the two disagree
             # the record does not describe the mesh that is up, and a restore from
@@ -3316,7 +4200,10 @@ class LocalMeshPage(QtWidgets.QWizardPage):
             return True, []
 
         before = self.worker
-        self._note("[mesh-save] recording the running mesh …")
+        self._note("[mesh-save] recording the mesh being worked on …"
+                   if target is None else
+                   f"[mesh-save] overwriting '{target.label or target.id}' with the "
+                   "mesh being worked on …")
         self._launch("Saving mesh", capture, stream=True, cancellable=False, verb="")
         if self.worker is not None and self.worker is not before:
             # after _verb_done (connected first): the table re-scans the disk
@@ -3324,10 +4211,33 @@ class LocalMeshPage(QtWidgets.QWizardPage):
                 lambda ok, out=outcome: self._on_saved_captured(ok, out))
 
     def _on_saved_captured(self, _ok: bool, outcome: dict | None = None):
+        outcome = outcome or {}
+        if outcome.get("id"):
+            self.saved_meshes.mark_current(str(outcome["id"]))
+            self.saved_meshes.name_edit.clear()
+            # The form now IS this record, as after a Load: its own copies are not
+            # "kept because a saved mesh still uses them" (code-folders skeptic 2 —
+            # a Save used to make the person's own mesh block its own clean-up), and a
+            # Domain services walk from here on counts for this record's Start.
+            self._loaded_record_id = str(outcome["id"])
+            try:
+                self._refresh_code_folders()
+            except Exception:                    # noqa: BLE001 — a slot must not raise
+                pass
         self.saved_meshes.refresh()
-        warning = str((outcome or {}).get("warning") or "")
+        notes: list[str] = []
+        if outcome.get("id"):
+            notes.append(f"Saved ‘{outcome.get('label') or outcome['id']}’.")
+
+            problems = [str(p) for p in (outcome.get("problems") or [])]
+            if problems:
+                notes.append("It will not start until this is fixed: "
+                             + "; ".join(problems))
+        warning = str(outcome.get("warning") or "")
         if warning:
-            self.saved_meshes.set_note(warning)
+            notes.append(warning)
+        if notes:
+            self.saved_meshes.set_note(" ".join(notes))
 
     _NOT_APPLIED_WHY = {
         "auth_key": "auth key (never stored — re-enter it for a prod mesh)",
@@ -3338,8 +4248,8 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         "source_dir": "source tree (the recorded directory no longer exists)",
         "egress_vpn_conf": "egress VPN config (the file moved or is invalid — the "
                            "egress-vpn row was unticked)",
-        "login_theme_css": "theme (the record carries only the derived CSS — the "
-                           "Themes group was reset to the shipped brand)",
+        "login_theme_css": "look (the record carries only the derived stylesheet — "
+                           "the look stays what the record's brand says)",
         "out_dir": "out_dir (this page has no control for it)",
         "node_name": "node_name (this page has no control for it)",
     }
@@ -3358,6 +4268,8 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         # services step from here on counts for this record's Start (the saved-mesh
         # refusal's remedy — _saved_domain_services_refusal)
         self._loaded_record_id = rec.id
+        # the strip at the top of the list now compares the form against THIS record
+        self.saved_meshes.mark_current(rec.id)
         self.saved_meshes.set_note(self._not_applied_text(rec, missing))
 
     def _start_saved(self, rec, mode: str):
@@ -3370,11 +4282,11 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         mint-and-seed ladder neither walks, and staging against it would render a
         ladder that never completes."""
         if self._running:
-            self.status.setText(f"Still running: {self._running_label or 'a verb'}. "
+            self._refuse(f"Still running: {self._running_label or 'a verb'}. "
                                 "Wait for it to finish, or Cancel.")
             return
         if self._mesh_up is True:
-            self.status.setText("A local mesh is running — stop it first. Starting "
+            self._refuse("A local mesh is running — stop it first. Starting "
                                 "a saved mesh over a live one would bring up a "
                                 "second stack on the same compose project.")
             return
@@ -3393,7 +4305,7 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         cfg = LocalMeshBootstrapConfig.from_dict(rec.config)
         refusal = self._saved_domain_services_refusal(rec, cfg)
         if refusal:
-            self.status.setText(refusal)
+            self._refuse(refusal)
             return
         # The gate passed on the form's walk of some of the record's domains: write
         # that walk INTO the record before the record is applied back over the form
@@ -3401,6 +4313,7 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         extras = self._saved_walk_extras(rec, domains_from_bootstrap(cfg))
         healed = self._heal_saved_record(rec, cfg, extras) if extras else ""
         missing = self.apply_bootstrap(cfg, form=rec.form)
+        self.saved_meshes.mark_current(rec.id)
         self.saved_meshes.set_note(self._not_applied_text(rec, missing) + healed)
         # The RECORD's config is what runs — never the form's re-collection,
         # which would turn a CLI-made record's services=None (profile defaults)
@@ -3410,13 +4323,14 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         # from the form: a prod restore needs the auth key the operator typed.
         cfg.auth_key = self.boot_auth_key.text().strip()
         self.boot = LocalMeshBootstrap(self.generator_dir, cfg)
-        if self.login_theme.error_text():
-            self.status.setText("Cannot start the saved mesh: themes: "
-                                + self.login_theme.error_text())
+        look_error = self.look_css_and_error()[1]
+        if look_error:
+            self._refuse("Cannot start the saved mesh: the look (the ‘Look’ "
+                         "tab of this mesh's own domain): " + look_error)
             return
         problems = self.boot.validate()
         if problems:
-            self.status.setText("Cannot start the saved mesh: " + "; ".join(problems))
+            self._refuse("Cannot start the saved mesh: " + "; ".join(problems))
             return
         boot = self.boot
         label = rec.label or rec.id
@@ -3464,7 +4378,7 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         A probe already in flight is left alone rather than stacking `npx` processes.
         """
         if probe_running(self, "_e2e_cat_probe"):
-            self.status.setText("Still enumerating the e2e suite — one moment.")
+            self._refuse("Still enumerating the e2e suite — one moment.")
             return
         self.status.setText(
             "Enumerating the e2e suite (asking Playwright for the spec list; this "
@@ -3523,7 +4437,7 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         env_id = self.e2e_environment()
         problems = node.e2e_ready(env_id)
         if problems:
-            self.status.setText("Cannot run e2e: " + "; ".join(problems))
+            self._refuse("Cannot run e2e: " + "; ".join(problems))
             self._sync_e2e_gate()
             return
         plan = e2e_environments.plan(env_id)
@@ -3575,7 +4489,7 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         try:
             plan = e2e_environments.plan(env_id)
         except ValueError as exc:
-            self.status.setText(str(exc))
+            self._refuse(str(exc))
             return
         self.status.setText(
             "e2e target: %s — the run will be launched as %s=%s make %s. "
@@ -3723,8 +4637,13 @@ class LocalMeshPage(QtWidgets.QWizardPage):
                 errors=(f"no stack node to ask: {type(e).__name__}: {e}",))
             self._sync_monitor_gate()
             return True
+        # The Studio's own per-domain choices name the domain of rows no label
+        # names (a service only one domain chose); a config that cannot be read
+        # gives empty hints and the rows fall back to their labels.
+        hints = mesh_monitor.domain_hints(getattr(self.boot, "cfg", None))
         probe = own_probe(self, "_monitor_probe",
-                          _MonitorProbe(self.generator_dir, node, parent=self))
+                          _MonitorProbe(self.generator_dir, node, parent=self,
+                                        hints=hints))
         probe.result.connect(self._on_monitor)
         # own_probe connected its release FIRST, so by this slot the attribute is
         # clear and a follow-up read can start.
@@ -3772,7 +4691,10 @@ class LocalMeshPage(QtWidgets.QWizardPage):
             self._monitor_timer.stop()
 
     def _on_monitor_tick(self):
-        if not (self.isVisible() and self.monitor_section.is_expanded()):
+        # The TABLE must be on screen, wherever it is: on this page (where that means
+        # this page is shown and the section unfolded) or in the bottom panel, which is
+        # on screen while the person is on any other page.
+        if not (self.monitor.isVisible() and self.monitor_section.is_expanded()):
             return
         if self._running:
             self._sync_monitor_gate()           # the note says "paused"
@@ -3803,6 +4725,11 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         nothing on the table says a verb is running.
         """
         if probe_running(self, "_scale_worker"):
+            return
+        if probe_running(self, "_domain_worker"):
+            self.monitor.set_scale_status(
+                "Not scaled: a domain's Start/Stop/Restart is still running — wait "
+                "for its result here, then press Apply again.")
             return
         if self._running:
             busy = self._running_label or "a previous step"
@@ -3843,12 +4770,60 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         self.monitor.set_scale_busy(False, text)
         self._refresh_monitor("post-scale")
 
+    def _domain_action(self, domain: str, verb: str) -> None:
+        """A press on the monitor's per-domain strip: ONE Start / Stop / Restart /
+        Logs off the GUI thread. Refused, inline, while a page verb or a scale runs —
+        all three act on the same containers."""
+        if probe_running(self, "_domain_worker"):
+            return
+        if self._running:
+            busy = self._running_label or "a previous step"
+            self.monitor.set_scale_status(
+                f"Not run: {busy} is still running. One action at a time on this "
+                f"mesh — wait for it to finish, then press again.")
+            return
+        if probe_running(self, "_scale_worker"):
+            self.monitor.set_scale_status(
+                "Not run: a Replicas change is still running — wait for its result "
+                "here, then press again.")
+            return
+        snap = self._monitor
+        if snap is None:
+            self.monitor.set_scale_status("Nothing has been read yet — press Refresh.")
+            return
+        try:
+            node = self.boot._stack_node()
+        except Exception as e:                  # a bad config, not a crash
+            self.monitor.set_scale_status(f"Cannot run: {type(e).__name__}: {e}")
+            return
+        self.monitor.set_domain_busy(
+            True, f"{mesh_controls.VERB_WORDS.get(verb, verb)} {domain}…")
+        worker = own_probe(self, "_domain_worker",
+                           MeshDomainWorker(self.generator_dir, node, snap.units,
+                                            domain, verb))
+        worker.done.connect(self._on_domain_done)
+        worker.start()
+
+    def _on_domain_done(self, res) -> None:
+        self.monitor.set_domain_busy(False, res.text)
+        if getattr(res, "verb", "") == "logs":
+            self.monitor.show_logs(f"Logs — {getattr(res, 'domain', '')}", res.logs)
+        else:
+            self._refresh_monitor("post-domain-action")
+
+    def _open_onion(self, url: str) -> None:
+        """An onion row's 'Open in Tor Browser'. Never openUrl: a normal browser
+        cannot reach a .onion, and handing one to it leaks the address to a resolver."""
+        why = open_in_tor_browser(url)
+        self.monitor.set_scale_status(f"Not opened: {why}" if why
+                                      else f"Opened {url} in Tor Browser.")
+
     def _open_door(self, url: str):
         """A row's Open button. The URL was gated twice already (core + widget); a
         third refusal here is belt-and-braces, and the status line says why."""
         why = mesh_monitor.unsafe_door_reason(url)
         if why:
-            self.status.setText(f"Not opened: {why}")
+            self._refuse(f"Not opened: {why}")
             return
         QtGui.QDesktopServices.openUrl(QtCore.QUrl(url))
 
@@ -4065,6 +5040,8 @@ class _LocalMeshStep(QtWidgets.QWizardPage):
     SECTION = ""
     TITLE = ""
     SUBTITLE = ""
+    #: The subtitle once the bottom panel holds the run view ("" = SUBTITLE still true).
+    DOCKED_SUBTITLE = ""
 
     def __init__(self, wiz):
         super().__init__()
@@ -4124,6 +5101,10 @@ class _LocalMeshStep(QtWidgets.QWizardPage):
         if ctl is None:
             return
         ctl.take_section(self.SECTION, self._lay)
+        if self.DOCKED_SUBTITLE:
+            want = self.DOCKED_SUBTITLE if "run" in ctl.docked_parts() else self.SUBTITLE
+            if self.subTitle() != want:        # setting it re-shows the page: only on change
+                self.setSubTitle(want)
 
     def showEvent(self, ev):
         super().showEvent(ev)
@@ -4158,6 +5139,11 @@ class LocalMeshJoinPage(_LocalMeshStep):
                 "tailnet/headscale auth key — no server hardware, no image build. "
                 "This is the end of this path: Exit closes the Studio; the node keeps "
                 "running in Docker.")
+    DOCKED_SUBTITLE = (
+        "Run a HugMesh mesh node on THIS machine in Docker with a tailnet/headscale auth "
+        "key — no server hardware, no image build. Its status line and output are in "
+        "the panel at the bottom of this window (Mesh run tab). Exit closes the Studio; "
+        "the node keeps running in Docker.")
 
     def __init__(self, wiz):
         super().__init__(wiz)
@@ -4183,14 +5169,41 @@ class LocalMeshJoinPage(_LocalMeshStep):
         if ctl is None:
             return
         ctl._refresh_status()
+        # The node's status line and its log are in the bottom panel: open it there.
+        if "run" in ctl.docked_parts():
+            ctl._reveal_in_dock("run")
 
 
 class LocalMeshEnvPage(_LocalMeshStep):
     SECTION = "env"
     TITLE = "Environment and brand"
     SUBTITLE = ("Where this mesh lives and whose name it carries: a LAN-only test "
-                "mesh or a public prod one, the brand whose Vault path and profile it "
-                "uses, and the superadmin account the bring-up mints.")
+                f"mesh or a public prod one, the {plain_words.term('superbrand')} that "
+                "governs it (create one, or pick an existing profile), and the "
+                "superadmin account the bring-up mints.")
+
+    def initializePage(self):
+        super().initializePage()
+        ctl = self.ctl
+        if ctl is not None:
+            ctl.mount_brand()
+
+    def showEvent(self, ev):
+        """Back into this step fires no initializePage, and the drop-down must describe
+        the page as it is now (the environment and the domain may have changed)."""
+        super().showEvent(ev)
+        ctl = self.ctl
+        if ctl is not None:
+            ctl.mount_brand()
+
+    def validatePage(self):
+        ctl = self.ctl
+        return True if ctl is None else ctl.leave_brand()
+
+    def cleanupPage(self):
+        ctl = self.ctl
+        if ctl is not None:
+            ctl.leave_brand()
 
 
 class LocalMeshDomainsPage(_LocalMeshStep):
@@ -4201,7 +5214,7 @@ class LocalMeshDomainsPage(_LocalMeshStep):
     SUBTITLE = ("Every domain this mesh serves, its own domain first. Each one gets "
                 "its own service page on the next step, and the mesh will not start "
                 "while any domain here has never been through it. A row whose sign-in "
-                "is ‘Own’ brings up a Casdoor of its own beside the central one.")
+                "is ‘Own’ gets its own (its Identity tab, next step, says which).")
 
     def initializePage(self):
         super().initializePage()
@@ -4242,9 +5255,8 @@ class LocalMeshDomainServicesPage(_LocalMeshStep):
     # to, where the earlier 177-character sentence wrapped to three). The rest of what
     # it said is on the page itself (the lane note above the tables, and the ‘not
     # domain-scoped’ table's own heading).
-    SUBTITLE = ("Each domain's optional services, one domain per page, this mesh's own "
-                "first. Choices that bind the whole mesh are on the ‘Services’ step, "
-                "two steps on.")
+    SUBTITLE = ("Each domain's settings and services, one domain per page, this "
+                "mesh's own first. What you tick here is what the mesh runs.")
 
     def initializePage(self):
         super().initializePage()
@@ -4256,6 +5268,8 @@ class LocalMeshDomainServicesPage(_LocalMeshStep):
         ctl = self.ctl
         if ctl is not None:
             ctl.domain_services.record(ctl.mesh_domains)
+            # the brands (the Domains rows) are final here: save the record with them
+            ctl.leave_brand()
             ctl._refresh_plan()
         return True
 
@@ -4274,19 +5288,23 @@ class LocalMeshSourcePage(_LocalMeshStep):
 
 
 class LocalMeshServicesPage(_LocalMeshStep):
+    """The mesh's own infrastructure (Tor, Anubis, the wiki, the AI services, the egress
+    VPN) and its web login languages. The mesh-wide "Local services" pick that used to
+    be this step was retired on 2026-10-21: a domain's services are chosen on its own
+    page, and the look of every domain on its page's Look tab."""
     SECTION = "services"
-    TITLE = "Services"
-    SUBTITLE = ("Which services this mesh runs, and how its web login looks. A row "
-                "the local docker stack has no mechanism for is greyed with the "
-                "reason instead of offered as a toggle that would change nothing.")
+    TITLE = "Mesh infrastructure"
+    SUBTITLE = ("What runs once for the whole mesh: Tor, Anubis, the wiki, the AI "
+                "services and the egress VPN. Each domain's own services are on its "
+                "page.")
 
 
 class LocalMeshIdpPage(_LocalMeshStep):
     SECTION = "idp"
     TITLE = "Identity provider"
-    SUBTITLE = ("Who signs users in. Casdoor is built in and needs nothing; an "
-                "external OIDC provider is threaded into the stack env, and the note "
-                "on this step says exactly how far that goes on a local stack.")
+    SUBTITLE = ("Who signs users in: the default every domain inherits (a domain can "
+                "choose its own on its Identity tab). Casdoor is built in and needs "
+                "nothing; the note says how far another provider goes locally.")
 
 
 class LocalMeshOverlayPage(_LocalMeshStep):
@@ -4321,6 +5339,11 @@ class LocalMeshReviewPage(_LocalMeshStep):
     SUBTITLE = ("What a bring-up will generate and start, and the meshes already "
                 "saved on this machine. The plan itself is read-only; a saved row's "
                 "Start or Restore does run docker, and its output appears below.")
+    DOCKED_SUBTITLE = (
+        "What a bring-up will generate and start, and the meshes already saved on this "
+        "machine. The plan itself is read-only; a saved row's Start or Restore does run "
+        "docker, and its output appears in the panel at the bottom of this window (Mesh "
+        "run tab).")
 
     def _claim(self) -> None:
         # THE RUN SURFACE COMES WITH THE TABLE. The saved-mesh rows are not a preview:
@@ -4348,6 +5371,7 @@ class LocalMeshReviewPage(_LocalMeshStep):
         # Re-render the plan from the four steps behind this one, then answer "what is
         # already running?" and re-read the saved rows. Both probes are off-thread and
         # re-entrant-safe (probe_running), so arriving here twice starts no second one.
+        ctl.leave_brand()
         ctl._refresh_plan()
         ctl._probe_mesh_state()
         ctl.saved_meshes.refresh()

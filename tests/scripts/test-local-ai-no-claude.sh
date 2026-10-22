@@ -430,6 +430,35 @@ PATHV="${P_DECOY}"; battery "decoy claude"
 # with a decoy claude first on PATH. The decoy canary is removed right before each run and must
 # be absent right after it, so a claude call that only the worker (or `start`, `stop`, `up`)
 # makes, through a name built at run time that the static scan cannot see, is caught here.
+# What the worker runs with follows the LAST start (skeptic 2026-10-21: switching the
+# Studio's Ollama between the system one and the Docker one left a running worker, and
+# every draft it spawned, on the old address). A start with the same settings keeps the
+# worker; a start with another Ollama address restarts it on the new one, read back from
+# the new worker's own /proc environment, not from what the script says.
+worker_settings_checks() {   # LABEL
+    local label="$1" out pid1 pid2 fp2 envf
+    pid1="$(cat "${LA_STATE}/worker.pid" 2>/dev/null)"
+    envf="$(cat "${LA_STATE}/worker.env" 2>/dev/null)"
+    has "${envf}" "^OLLAMA_HOST=127\\.0\\.0\\.1:${PORT}\$" \
+        && has "${envf}" "^HUGMESH_AGENT_CONTEXT=${LA_STATE}/HUGMESH-CONTEXT\\.md\$" \
+        && has "$(cat "${LA_STATE}/HUGMESH-CONTEXT.md" 2>/dev/null)" "hugmesh-fixture" \
+        && has "$(tr '\0' '\n' <"/proc/${pid1}/environ" 2>/dev/null)" "^HUGMESH_AGENT_CONTEXT=${LA_STATE}/HUGMESH-CONTEXT\\.md\$" \
+        && ok "[${label}] a worker started from the shell gets a project context naming the checkouts" \
+        || bad "[${label}] worker.env / context after start: ${envf}"
+    out="$(la bash "${GEN}/scripts/local-ai.sh" start 2>&1)"
+    has "${out}" 'worker already running' && [ "$(cat "${LA_STATE}/worker.pid" 2>/dev/null)" = "${pid1}" ] \
+        && ok "[${label}] start with the same settings keeps the running worker" \
+        || bad "[${label}] second start with the same settings: ${out}"
+    fp2="$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1])')"
+    out="$(la env OLLAMA_HOST="127.0.0.1:${fp2}" bash "${GEN}/scripts/local-ai.sh" start 2>&1)"
+    pid2="$(cat "${LA_STATE}/worker.pid" 2>/dev/null)"
+    if has "${out}" 'restarting it' && [ -n "${pid2}" ] && [ "${pid2}" != "${pid1}" ] && ! alive "${pid1}" \
+       && has "$(tr '\0' '\n' <"/proc/${pid2}/environ" 2>/dev/null)" "^OLLAMA_HOST=127\\.0\\.0\\.1:${fp2}\$"; then
+        ok "[${label}] start with another Ollama address restarts the worker on that address"
+    else bad "[${label}] start after the Ollama moved: pid ${pid1} -> ${pid2}: ${out}"; fi
+    la env OLLAMA_HOST="127.0.0.1:${fp2}" bash "${GEN}/scripts/local-ai.sh" stop --server >/dev/null 2>&1
+}
+
 worker_section() {   # LABEL
     local label="$1" out sj left
     rm -rf "${LA_STATE}"; printf good >"${LOG}/mode"; rm -f "${LOG}/claude-was-run"
@@ -482,6 +511,7 @@ worker_section() {   # LABEL
     # `start` (server check + worker) and a second stop, still under the same PATH
     out="$(la bash "${GEN}/scripts/local-ai.sh" start 2>&1)"
     has "${out}" 'worker started' && ok "[${label}] start brings the worker up" || bad "[${label}] start: ${out}"
+    worker_settings_checks "${label}"
     la bash "${GEN}/scripts/local-ai.sh" stop >/dev/null 2>&1
     left="$(wait_gone 8)" && ok "[${label}] after stop no process of this state directory is left" \
         || bad "[${label}] processes left after stop: ${left}"

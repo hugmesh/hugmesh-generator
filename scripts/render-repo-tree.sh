@@ -87,19 +87,13 @@ declare -a SET_VALUES=()
 # row (e.g. cluster_domain:) would re-export the scalar AFTER its validator ran,
 # shadowing the DNS/forbidden-char guard and enabling YAML line-injection into the
 # rendered application.yml. The legitimate identity keys never collide with these.
-# ── LEGACY_COMPAT — pre-rebrand admission-stamp name ────────────────────────
-# ingest-foreign-base.sh WRITES `.hugmesh-mesh-admitted`. A quarantine snapshot
-# admitted by an older generator (and still in REPO_BASE_CACHE) carries the
-# pre-rebrand name, and re-admitting is not free — so every READ tries the new
-# name first and falls back. Retire once no cache can hold a pre-rebrand snapshot.
+# The admission stamp ingest-foreign-base.sh WRITES into a quarantine snapshot.
 ADMIT_STAMP=".hugmesh-mesh-admitted"
-ADMIT_STAMP_LEGACY_COMPAT=".snapdragon-mesh-admitted"
 
-# _admit_stamp_path DIR -> echoes the admission stamp inside DIR (new spelling
-# first, LEGACY_COMPAT fallback); returns 1 and echoes nothing when neither exists.
+# _admit_stamp_path DIR -> echoes the admission stamp inside DIR; returns 1 and
+# echoes nothing when it does not exist.
 _admit_stamp_path() {
-  if   [[ -f "$1/${ADMIT_STAMP}" ]];               then printf '%s\n' "$1/${ADMIT_STAMP}"
-  elif [[ -f "$1/${ADMIT_STAMP_LEGACY_COMPAT}" ]]; then printf '%s\n' "$1/${ADMIT_STAMP_LEGACY_COMPAT}"
+  if [[ -f "$1/${ADMIT_STAMP}" ]]; then printf '%s\n' "$1/${ADMIT_STAMP}"
   else return 1; fi
 }
 
@@ -369,12 +363,6 @@ if [[ -n "$BASE" && -d "$BASE" ]]; then
       --exclude='./.hugmesh-provenance.json.sig' \
       --exclude='./.hugmesh-sbom.json' \
       --exclude='./.hugmesh-mesh-admitted' \
-      `# LEGACY_COMPAT: a base admitted before the rebrand carries the old envelope` \
-      `# names; they must be stripped from the emitted tree exactly like the new ones,` \
-      `# or a foreign mesh's inbound attestation would ride out under our provenance.` \
-      --exclude='./.snapdragon-provenance.json' \
-      --exclude='./.snapdragon-provenance.json.sig' \
-      --exclude='./.snapdragon-mesh-admitted' \
       --exclude='./.foreign-mesh-id' \
       --exclude='./.hugmesh-base-ref' \
       --exclude='./.hugmesh-base-origin*' -cf - . | tar -C "$BRAND_OUT" -xf -
