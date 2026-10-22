@@ -1774,6 +1774,28 @@ def domain_hints(cfg) -> DomainHints:
         return DomainHints()
 
 
+def wizard_hints(local_cfg=None, domains=()) -> DomainHints:
+    """Hints for a mount that has no local-mesh config of its own — the qemu and
+    mesh-emulation pages, which read the SAME compose project and kind cluster as the
+    local-mesh page. ``local_cfg`` is that page's LocalMeshBootstrapConfig when the
+    window has one (so both mounts of one table say the same thing); ``domains`` are
+    the wizard's own Domains rows (``Domain`` objects or dicts), which add their
+    names so a kind pod's slug reads as its domain. NEVER raises."""
+    base = domain_hints(local_cfg) if local_cfg is not None else DomainHints()
+    names = dict(base.names)
+    try:
+        from .own_casdoor import slug as _slug
+        for d in domains or ():
+            n = d.get("name") if isinstance(d, dict) else getattr(d, "name", "")
+            n = str(n or "").strip()
+            if n:
+                names.setdefault(_slug(n), n)
+    except Exception:                                 # noqa: BLE001 — hints, not facts
+        pass
+    return DomainHints(service_domains=dict(base.service_domains), names=names,
+                       own_domain=base.own_domain)
+
+
 def addresses_text(snap: MonitorSnapshot) -> str:
     """Every row's addresses as copyable lines — the 'Copy all addresses' button."""
     lines = []

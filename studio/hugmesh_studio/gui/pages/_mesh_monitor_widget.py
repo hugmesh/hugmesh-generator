@@ -1033,11 +1033,15 @@ class MeshMonitorSection(QtCore.QObject):
 
     def __init__(self, page, generator_dir: str, node_factory, *,
                  title: str = "Running mesh — pods, addresses and doors",
-                 scaling: bool = True, what: str = ""):
+                 scaling: bool = True, what: str = "", hints_fn=None):
         super().__init__(page)
         self.page = page
         self.generator_dir = generator_dir
         self._node_factory = node_factory
+        #: ``() -> mesh_monitor.DomainHints`` asked on every read (the config can
+        #: change between reads), or None: rows then take a domain from their labels
+        #: and from each other only. See :func:`emulation_hints`.
+        self._hints_fn = hints_fn
         self.title = title
         #: One sentence naming WHAT this mount reads, appended to the empty-state note.
         #: The emulation screens need it: their own tables are emulated QEMU guests and
@@ -1141,8 +1145,14 @@ class MeshMonitorSection(QtCore.QObject):
             self._sync_gate()
             return True
         self._node = node
+        hints = None
+        if self._hints_fn is not None:
+            try:
+                hints = self._hints_fn()
+            except Exception:                   # noqa: BLE001 — hints, not facts
+                hints = None
         probe = own_probe(self, "_probe",
-                          MeshMonitorProbe(self.generator_dir, node))
+                          MeshMonitorProbe(self.generator_dir, node, hints=hints))
         probe.result.connect(self._on_snapshot)
         probe.start()
         self._sync_gate()
@@ -1321,6 +1331,22 @@ class MeshMonitorSection(QtCore.QObject):
         self.refresh("post-scale")
 
 
+def emulation_hints(wiz) -> "mesh_monitor.DomainHints":
+    """The domain hints for a Running mesh section on a page that is not the local-
+    mesh page (qemu, mesh emulation): the window's local-mesh config when it has one,
+    plus the names on the wizard's own Domains rows. Never raises — a wizard that has
+    neither (a test double, a window opened in another mode) gives empty hints."""
+    page = getattr(wiz, "localmesh_page", None)
+    boot = getattr(page, "boot", None) if page is not None else None
+    local_cfg = getattr(boot, "cfg", None) if boot is not None else None
+    cfg = getattr(wiz, "cfg", None)
+    domains = (getattr(cfg, "domains", None) or ()) if cfg is not None else ()
+    try:
+        return mesh_monitor.wizard_hints(local_cfg, domains)
+    except Exception:                           # noqa: BLE001
+        return mesh_monitor.DomainHints()
+
+
 def _lane_word(lane) -> str:
     if lane.running is None:
         return "not established"
@@ -1328,7 +1354,7 @@ def _lane_word(lane) -> str:
 
 
 __all__ = ["MeshMonitorWidget", "MeshMonitorProbe", "MeshScaleWorker",
-           "MeshDomainWorker", "open_in_tor_browser",
+           "MeshDomainWorker", "open_in_tor_browser", "emulation_hints",
            "MeshMonitorSection", "_MON_HEADERS", "_MON_HEADERS_SCALING",
            "_MON_COL_NAME", "_MON_COL_DOMAIN", "_MON_COL_LANE", "_MON_COL_STATE", "_MON_COL_K8S",
            "_MON_COL_EXT", "_MON_COL_OPEN", "_MON_COL_SCALE"]

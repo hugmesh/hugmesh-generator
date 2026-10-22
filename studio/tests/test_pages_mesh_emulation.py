@@ -1592,6 +1592,17 @@ def test_this_page_offers_no_second_make_view_launcher(wiz):
     assert "local-mesh page" in w.view_up_btn.toolTip()
 
 
+def test_the_monitor_names_kind_slugs_from_the_wizards_domains(wiz):
+    """2026-10-21 round 2: the section reads with the wizard's domain names, so a
+    kind pod labelled acme-example reads acme.example on this page too."""
+    from hugmesh_studio.core.config import Domain
+    page = _page(wiz)
+    wiz.cfg.domains = [Domain(name="acme.example")]
+    hints = page.monitor._hints_fn()
+    assert isinstance(hints, mm.DomainHints)
+    assert hints.names.get("acme-example") == "acme.example"
+
+
 def test_leaving_and_hiding_the_page_stop_the_monitors_clock(wiz, qapp, registry):
     page = _page(wiz)
     page.monitor.section.toggle.setChecked(True)

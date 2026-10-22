@@ -1164,6 +1164,18 @@ def test_the_monitor_node_is_built_once_and_is_a_plain_local_stack_node(wiz):
     assert page._monitor_node() is first, "a node per tick is a node per 10 seconds"
 
 
+def test_the_monitor_names_kind_slugs_from_the_wizards_domains(wiz):
+    """2026-10-21 round 2: the section reads with the wizard's domain names, so a
+    kind pod labelled acme-example reads acme.example on this page too."""
+    from hugmesh_studio.core import mesh_monitor as mm
+    from hugmesh_studio.core.config import Domain
+    page = _qemu_page(wiz)
+    wiz.cfg.domains = [Domain(name="acme.example")]
+    hints = page.monitor._hints_fn()
+    assert isinstance(hints, mm.DomainHints)
+    assert hints.names.get("acme-example") == "acme.example"
+
+
 def test_hiding_and_leaving_the_page_stop_the_monitors_clock(wiz, qapp):
     page = _qemu_page(wiz)
     page.monitor.section.toggle.setChecked(True)

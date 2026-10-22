@@ -284,3 +284,48 @@ def test_page_scale_is_refused_while_a_domain_action_runs(page, monkeypatch, qap
     finally:
         _release(gate, t, qapp)
     assert started == []
+
+
+# ── the emulation pages' mount gets the same domain names ────────────────────────
+
+def test_section_hands_its_hints_to_every_read(qapp, monkeypatch):
+    seen = []
+    monkeypatch.setattr(mm, "snapshot", lambda gen, node, **kw: seen.append(
+        kw.get("hints")) or mm.MonitorSnapshot("t", mm.LaneState(False),
+                                               mm.LaneState(False)))
+    host = QtWidgets.QWidget()
+    want = mm.DomainHints(names={"acme-example": "acme.example"})
+    sec = mw.MeshMonitorSection(host, GENERATOR_DIR, lambda: _Node("[]"),
+                                hints_fn=lambda: want)
+    try:
+        assert sec.refresh("button")
+        assert _wait(qapp, lambda: bool(seen))
+        assert seen[0] is want
+        # a hints function that raises is a read without hints, never a crash
+        sec._hints_fn = lambda: 1 / 0
+        _wait(qapp, lambda: not probe_running(sec, "_probe"), 3)
+        assert sec.refresh("button")
+        assert _wait(qapp, lambda: len(seen) == 2)
+        assert seen[1] is None
+    finally:
+        sec.shutdown()
+        host.deleteLater()
+        qapp.processEvents()
+
+
+def test_emulation_hints_name_the_wizards_domains_and_follow_the_local_mesh():
+    from hugmesh_studio.core.config import Domain
+    from hugmesh_studio.core.local_mesh_bootstrap import LocalMeshBootstrapConfig
+    wiz = SimpleNamespace(cfg=SimpleNamespace(
+        domains=[Domain(name="acme.example"), {"name": "shop.example"}]))
+    h = mw.emulation_hints(wiz)
+    assert h.names == {"acme-example": "acme.example", "shop-example": "shop.example"}
+    assert h.service_domains == {}
+    local = LocalMeshBootstrapConfig(
+        domains=({"name": "team.example", "optional_services": ["tuwunel"]},))
+    wiz.localmesh_page = SimpleNamespace(boot=SimpleNamespace(cfg=local))
+    h = mw.emulation_hints(wiz)
+    assert h.service_domains == {"tuwunel": ("team.example",)}
+    assert h.names["team-example"] == "team.example"
+    assert h.names["acme-example"] == "acme.example"
+    assert mw.emulation_hints(SimpleNamespace()) == mm.DomainHints()
