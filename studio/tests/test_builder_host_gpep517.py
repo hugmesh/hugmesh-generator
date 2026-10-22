@@ -117,7 +117,7 @@ def test_dockerfile_bakes_the_floor():
 # ── behaviour of the helper itself ────────────────────────────────────────────
 
 def _run(tmp_path, *, installed: str, allowed: bool, uid: str = "0", emerge_rc: int = 0,
-         emerge_installs: bool = True, have_portageq: bool = True):
+         emerge_installs: bool = True, have_portageq: bool = True, extra_env=None):
     """Run hostguard_ensure_cross_gpep517 with stubbed portageq/emerge/id.
 
     ``installed`` is the host gpep517 version the stub portageq reports. The stub
@@ -129,10 +129,13 @@ def _run(tmp_path, *, installed: str, allowed: bool, uid: str = "0", emerge_rc: 
     state.write_text(installed)
     log = tmp_path / "emerge.argv"
     qlog = tmp_path / "portageq.argv"
+    envlog = tmp_path / "root.env"
+    envline = f"printf '%s\\n' \"ROOT=${{ROOT:-}} SYSROOT=${{SYSROOT:-}} PCR=${{PORTAGE_CONFIGROOT:-}}\" >> '{envlog}'"
     if have_portageq:
         (bindir / "portageq").write_text(textwrap.dedent(f"""\
             #!/bin/bash
             printf '%s\\n' "$*" >> '{qlog}'
+            {envline}
             [ "$1" = has_version ] && [ "$2" = / ] || exit 2
             have=$(cat '{state}')
             case "$3" in
@@ -144,6 +147,7 @@ def _run(tmp_path, *, installed: str, allowed: bool, uid: str = "0", emerge_rc: 
     (bindir / "emerge").write_text(textwrap.dedent(f"""\
         #!/bin/bash
         printf '%s\\n' "$*" >> '{log}'
+        {envline}
         {"echo 23 > '" + str(state) + "'" if emerge_installs else ":"}
         exit {emerge_rc}
         """))
@@ -162,6 +166,7 @@ def _run(tmp_path, *, installed: str, allowed: bool, uid: str = "0", emerge_rc: 
     if not have_portageq:
         path = str(bindir)  # nothing else on PATH may provide portageq
     env["PATH"] = path
+    env.update(extra_env or {})
     proc = subprocess.run(["/bin/bash", "-c", script], env=env, capture_output=True, text=True)
     kw = etc / "package.accept_keywords" / "hugmesh-host-gpep517"
     return {
@@ -170,6 +175,7 @@ def _run(tmp_path, *, installed: str, allowed: bool, uid: str = "0", emerge_rc: 
         "emerge": log.read_text().splitlines() if log.exists() else [],
         "portageq": qlog.read_text().splitlines() if qlog.exists() else [],
         "kw": kw.read_text() if kw.exists() else None,
+        "env": envlog.read_text().splitlines() if envlog.exists() else [],
     }
 
 
@@ -229,3 +235,12 @@ def test_missing_portageq_fails_closed(tmp_path):
     assert r["rc"] != 0
     assert r["emerge"] == []
     assert "portageq not found" in r["err"]
+
+
+def test_cross_root_variables_never_reach_the_host_emerge(tmp_path):
+    """The floor is about the BUILD HOST. An exported ROOT/SYSROOT must not redirect it."""
+    sysroot = "/out/snap-build-pi5/sysroot"
+    r = _run(tmp_path, installed="20", allowed=True,
+             extra_env={"ROOT": sysroot, "SYSROOT": sysroot, "PORTAGE_CONFIGROOT": sysroot})
+    assert r["rc"] == 0, r["err"]
+    assert r["env"] and all(line == "ROOT= SYSROOT= PCR=" for line in r["env"]), r["env"]
