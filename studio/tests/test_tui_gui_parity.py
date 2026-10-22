@@ -23,7 +23,7 @@ from hugmesh_studio.core.config import (                               # noqa: E
     VAULT_FIELDS, WIZARD_PAGE_SLUGS, Domain, ImageConfig)
 from hugmesh_studio.core.platform_info import HostInfo                 # noqa: E402
 from hugmesh_studio.gui import wizard as wizard_mod                    # noqa: E402
-from hugmesh_studio.gui.pages import _theme_editor                     # noqa: E402
+from hugmesh_studio.gui.pages import _lookeditor                       # noqa: E402
 from hugmesh_studio.gui.pages import domains as gui_domains            # noqa: E402
 from hugmesh_studio.gui.pages import localcloud_nodes as gui_lc        # noqa: E402
 from hugmesh_studio.gui.pages import vault as gui_vault                # noqa: E402
@@ -259,11 +259,13 @@ def test_domain_signin_labels_match_the_gui_combo():
 
 # ── themes (#63): effect labels and the vanta dependency note ───────────────────────
 def test_effect_labels_match_the_gui_editor():
-    assert themes.EFFECT_LABELS == _theme_editor._EFFECT_LABELS
+    # the window's one look editor (the old ThemeEditorDialog was removed as dead code)
+    assert themes.EFFECT_LABELS == _lookeditor.EFFECT_LABELS
 
 
 def test_vanta_dependency_note_matches_the_gui_editor():
-    assert themes.VANTA_DEPENDENCY_NOTE == _theme_editor.VANTA_DEPENDENCY_NOTE
+    # the LookEditor shows the core sentence on its greyed vanta rows and its note
+    assert themes.VANTA_DEPENDENCY_NOTE == _lookeditor.theme.VANTA_DEPENDENCY_NOTE
 
 
 # ── the secrets store (#224): one trio, one rule, both faces ────────────────────────

@@ -19,7 +19,7 @@ ratios straight from core/theme.py (the values that ship, by construction); the
 contrast line says in one sentence whether text, accent text and button text clear AA.
 'Preview in your browser' writes ONE themed page (the captured real login page plus
 representative panes) from ``model.css()`` — the delivered bytes — and opens it in the
-operator's real browser (see _logintheme.open_platform_preview for the honesty rules).
+operator's real browser (see _look_shared.open_platform_preview for the honesty rules).
 
 THE METER. The web look may spend 100 KiB of finished stylesheet; the two pictures are
 what spend it. The meter is brand_look.budget() measured on the real composition, and a
@@ -41,7 +41,7 @@ from ..qt import QtCore, QtGui, QtWidgets, Signal
 from ...core import (brand_images, brand_look, fonts as core_fonts, plain_words, theme,
                      theme_presets)
 from ...core.branding_themes import PREMADE_THEMES, THEME_SPECS
-from ._logintheme import open_platform_preview, populate_preset_combo
+from ._look_shared import open_platform_preview, populate_preset_combo
 from ._scroll import scrollable
 from ._widgets import NoWheelComboBox, _file_picker, _row
 

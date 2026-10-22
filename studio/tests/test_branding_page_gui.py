@@ -514,11 +514,12 @@ def test_both_unaffiliated_spellings_gate_identically(qapp, cfg_fn):
 # on the Domain services step; on a mesh this page says where, in one line.
 
 def test_the_web_login_theme_section_is_gone_and_a_mesh_says_where_it_went(qapp):
-    from hugmesh_studio.gui.pages._logintheme import LoginThemeGroup
     from hugmesh_studio.tui.brand_step import LOOK_POINTER
     page, _ = _page(qapp)
     assert not hasattr(page, "login_theme") and not hasattr(page, "login_collapsible")
-    assert page.findChildren(LoginThemeGroup) == []
+    # the old group class itself is gone (dead-code cleanup): nothing titled Themes
+    assert not [g for g in page.findChildren(QtWidgets.QGroupBox)
+                if g.title().startswith("Themes")]
     page, _ = _page_for(ImageConfig(mode="mesh", role="pki", platform="x86"))
     assert page.look_pointer.isVisibleTo(page)
     assert "Look" in page.look_pointer.text() and LOOK_POINTER[:40] in page.look_pointer.text()

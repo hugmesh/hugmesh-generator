@@ -1,18 +1,23 @@
-"""The Web-login-theme GUI (shared LoginThemeGroup + its two hosts).
+"""The web sign-in look in the window, after the theme move (2026-10-21).
 
-The invariants that make the feature real rather than decorative:
-  1. The token board consumes core/theme.py derive() — the swatches show the hexes
-     that SHIP, with live-measured AA ratios (no second implementation to drift).
-  2. BrandingPage in MESH mode: the desktop half greys, and the web login look is
-     NOT here any more (2026-10-21): one line points at the Look tab of the mesh's
-     own domain, which is where it is chosen.
-  3. the unaffiliated-role / role-class clears may not touch login_* (mesh-plane
+The old mesh-wide "Themes" group (LoginThemeGroup) and its modeless editor
+(ThemeEditorDialog) were removed as dead code: the look is chosen on the Look tab of
+each domain (row 0 is the mesh's own), by the LookEditor. What this file still pins:
+  1. The browser preview's honesty rules, now on the LookEditor's button (the only
+     caller of open_platform_preview): a verified open is green and names the file, a
+     dispatched-but-unconfirmed open is amber, a total miss is red; every outcome names
+     the file; a bad look refuses instead of opening a stale page; pressing again
+     rewrites the same file with the new font.
+  2. BrandingPage in MESH mode: the desktop half greys, and the web look is NOT here:
+     one line points at the Look tab of the mesh's own domain.
+  3. The unaffiliated-role / role-class clears may not touch login_* (mesh-plane
      data, image-scope clears).
   4. LocalMeshPage: collect_bootstrap() carries the css derived from the mesh's own
-     look (row 0's Look tab — the silently-does-nothing-default class guard), and a
-     typo'd colour REFUSES the verb instead of silently shipping an unthemed stack.
-  5. Slots never raise: garbage input -> error note, not a PyQt6 abort.
+     look (row 0's Look tab), and a typo'd colour REFUSES the verb instead of silently
+     shipping an unthemed stack.
+  5. The two dead modules stay gone (an import of either fails).
 """
+import importlib
 import os
 from types import SimpleNamespace
 
@@ -20,10 +25,11 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from hugmesh_studio.core import theme                      # noqa: E402
+from hugmesh_studio.core import brand_look, platform_preview, theme  # noqa: E402
 from hugmesh_studio.core.config import ImageConfig         # noqa: E402
 from hugmesh_studio.gui import wizard as wizard_mod        # noqa: E402
-from hugmesh_studio.gui.pages._logintheme import LoginThemeGroup   # noqa: E402
+from hugmesh_studio.gui.pages import _look_shared          # noqa: E402
+from hugmesh_studio.gui.pages._lookeditor import LookEditor  # noqa: E402
 from hugmesh_studio.gui.qt import QtWidgets                # noqa: E402
 
 GENERATOR_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -35,90 +41,44 @@ def qapp():
     yield app
 
 
-def _board_texts(group):
-    out = []
-    for i in range(group.board_grid.count()):
-        w = group.board_grid.itemAt(i).widget()
-        if w is not None:
-            out.append(w.text())
-    return "\n".join(out)
+# ── 5. the dead code stays dead ─────────────────────────────────────────────────────
+@pytest.mark.parametrize("name", ["_logintheme", "_theme_editor"])
+def test_the_old_theme_group_and_editor_modules_are_gone(name):
+    with pytest.raises(ModuleNotFoundError):
+        importlib.import_module(f"hugmesh_studio.gui.pages.{name}")
 
 
-def test_board_shows_the_derived_hexes_and_measured_AA_ratios(qapp):
-    g = LoginThemeGroup()
-    g.primary.setText("#e91e63")
-    g.secondary.setText("#00bcd4")
-    board = _board_texts(g)
-    d = theme.derive("#e91e63", "#00bcd4")
-    for token in ("--sd-primary-bright", "--sd-primary-dim", "--sd-primary-soft",
-                  "--sd-secondary-soft"):
-        assert d[token] in board, f"{token}={d[token]} missing from the board"
-    assert ":1 AA" in board            # live-measured ratios, not a static claim
-    soft = d["--sd-primary-soft"]
-    assert f"{theme.contrast_ratio(soft, theme.SHELL_BG):.2f}:1" in board
+def test_the_look_editor_takes_its_two_helpers_from_the_shared_module():
+    from hugmesh_studio.gui.pages import _lookeditor
+    assert _lookeditor.open_platform_preview is _look_shared.open_platform_preview
+    assert _lookeditor.populate_preset_combo is _look_shared.populate_preset_combo
 
 
-def test_group_slots_never_raise_on_garbage_and_show_the_reason(qapp):
-    g = LoginThemeGroup()
-    g.primary.setText("not a colour")   # textChanged slot fires _refresh + compose
-    assert g.compose_css() == ""
-    assert "not an #RRGGBB" in g.error_text()
-    assert g.error_note.isVisibleTo(g)
-    g.primary.setText("#336699")
-    assert g.compose_css() != "" and g.error_text() == ""
-
-
-def test_commit_load_roundtrip(qapp):
-    g = LoginThemeGroup()
-    g.primary.setText("#336699")
-    g.secondary.setText("#996633")
-    g.font_preset.setCurrentText("System UI")
-    g.font_licence.setText("SIL OFL 1.1")
-    g.font_source.setText("https://example.com")
-    cfg = ImageConfig()
-    g.commit(cfg)
-    assert cfg.login_primary_color == "#336699"
-    assert cfg.login_secondary_color == "#996633"
-    assert cfg.login_font == "System UI"
-    g2 = LoginThemeGroup()
-    g2.load(cfg)
-    assert g2.primary.text() == "#336699"
-    assert g2.font_preset.currentText() == "System UI"
-    # the "(keep the shipped font)" sentinel round-trips as EMPTY, not as a name.
-    cfg2 = ImageConfig()
-    LoginThemeGroup().commit(cfg2)
-    assert cfg2.login_font == ""
-
-
-def test_cfg_login_theme_css_matches_the_group_composition(qapp):
-    g = LoginThemeGroup()
-    g.primary.setText("#336699")
-    g.font_preset.setCurrentText("Monospace")
-    cfg = ImageConfig()
-    g.commit(cfg)
-    assert cfg.login_theme_css() == g.compose_css() != ""
+# ── 1. the preview button's honesty rules, on the LookEditor ─────────────────────────
+def _editor(primary="#e91e63"):
+    ed = LookEditor(brand_look.Look(), path="docker")
+    if primary:
+        assert ed.model.try_set("primary", primary).ok
+    return ed
 
 
 def test_preview_button_writes_the_platform_page_and_opens_it(qapp, tmp_path,
                                                               monkeypatch):
-    import hugmesh_studio.gui.pages._logintheme as lt
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))   # -> preview_out_dir()
     opened = []
-    monkeypatch.setattr(lt.login_preview, "open_in_browser",
+    monkeypatch.setattr(_look_shared.login_preview, "open_in_browser",
                         lambda p: (bool(opened.append(p)) or True,
                                    "verified: test-opener exited 0"))
-    # QDesktopServices is the LAST resort now (its True is dispatch-only — the
+    # QDesktopServices is the LAST resort (its True is dispatch-only — the
     # historical false-positive); it must not fire when a verified opener worked.
     monkeypatch.setattr(
-        lt.QtGui.QDesktopServices, "openUrl",
+        _look_shared.QtGui.QDesktopServices, "openUrl",
         staticmethod(lambda url: pytest.fail(
             "QDesktopServices must not run when the verified opener succeeded")))
-    g = LoginThemeGroup()
-    g.primary.setText("#e91e63")
-    g._open_preview()
+    ed = _editor("#e91e63")
+    ed.preview_btn.click()
     assert len(opened) == 1
     path = opened[0]
-    from hugmesh_studio.core import platform_preview
     assert path.endswith(platform_preview.PLATFORM_PREVIEW_BASENAME)
     assert str(tmp_path) in path             # stable cache dir, NOT gettempdir()
     text = open(path, encoding="utf-8").read()
@@ -128,41 +88,48 @@ def test_preview_button_writes_the_platform_page_and_opens_it(qapp, tmp_path,
     for pane in ("pane-login", "pane-matrix", "pane-akkoma", "pane-forum"):
         assert f'id="{pane}"' in text
     # result feedback: mechanism + path, selectable for a manual open
-    assert "verified" in g.preview_note.text() and path in g.preview_note.text()
-    assert g.preview_note.isVisibleTo(g)
-    # invalid input: preview refuses (no second write/open) instead of lying
-    g.primary.setText("nope")
-    g._open_preview()
-    assert len(opened) == 1
-    assert "Fix the theme error" in g.preview_note.text()
+    assert "verified" in ed.preview_note.text() and path in ed.preview_note.text()
+    assert ed.preview_note.isVisibleTo(ed)
+
+
+def test_a_bad_look_refuses_the_preview_instead_of_opening_a_stale_page(qapp, tmp_path,
+                                                                       monkeypatch):
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+    opened = []
+    monkeypatch.setattr(_look_shared.login_preview, "open_in_browser",
+                        lambda p: (bool(opened.append(p)) or True, "verified: test"))
+    ed = _editor(None)
+
+    def _bad_css():
+        raise brand_look.LookError("primary: not an #RRGGBB colour")
+    monkeypatch.setattr(ed.model, "css", _bad_css)
+    ed.preview_btn.click()
+    assert opened == []
+    assert "Fix the look error" in ed.preview_note.text()
+    assert ed.preview_note.isVisibleTo(ed)
 
 
 def test_preview_button_rewrites_the_artifact_with_the_new_font(qapp, tmp_path,
                                                                 monkeypatch):
-    """Issue #225 ("font doesn't appear to be properly shown / the preview button
-    doesn't overwrite the preview file"): change the font, press preview again —
-    the SAME artifact must now carry the new font-family (old stack gone), in both
-    the outer page and the login iframe, with the form-control inherit rule that
-    makes the login form actually render it."""
-    import hugmesh_studio.gui.pages._logintheme as lt
-    from hugmesh_studio.core import platform_preview, theme
-    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))   # -> preview_out_dir()
+    """Issue #225 ("the preview button doesn't overwrite the preview file"): change the
+    font, press preview again — the SAME artifact must now carry the new font-family
+    (old stack gone), in both the outer page and the login iframe."""
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
     opened = []
-    monkeypatch.setattr(lt.login_preview, "open_in_browser",
+    monkeypatch.setattr(_look_shared.login_preview, "open_in_browser",
                         lambda p: (bool(opened.append(p)) or True,
                                    "verified: test-opener exited 0"))
-    g = LoginThemeGroup()
-    g.font_preset.setCurrentText("Geometric")
-    g._open_preview()
+    ed = _editor(None)
+    assert ed.model.try_set("font", "Geometric").ok
+    ed.preview_btn.click()
     assert "--sd-font-sans: Avenir" in open(opened[0], encoding="utf-8").read()
 
-    g.font_preset.setCurrentText("Slab serif")
-    g._open_preview()
+    assert ed.model.try_set("font", "Slab serif").ok
+    ed.preview_btn.click()
     assert opened[1] == opened[0]                    # same artifact, rewritten
     text = open(opened[1], encoding="utf-8").read()
     assert text.count("--sd-font-sans: Rockwell") == 2   # outer page + iframe srcdoc
     assert "Avenir" not in text                      # old font family is GONE
-    assert text.count(theme.FORM_FONT_RESET.strip()) == 2
     assert opened[1].endswith(platform_preview.PLATFORM_PREVIEW_BASENAME)
 
 
@@ -170,49 +137,26 @@ def test_preview_feedback_is_never_silent_and_always_names_the_file(qapp, tmp_pa
                                                                     monkeypatch):
     """The operator's actual bug report ("the login page preview isn't working"):
     every open outcome must leave a visible note carrying the file path — verified
-    green, dispatched-but-unconfirmed amber (the old code showed GREEN here, the
-    lie that made the failure undiagnosable), and total-miss red."""
-    import hugmesh_studio.gui.pages._logintheme as lt
-    from hugmesh_studio.core import platform_preview
+    green, dispatched-but-unconfirmed amber, and total-miss red."""
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
-    monkeypatch.setattr(lt.login_preview, "open_in_browser",
+    monkeypatch.setattr(_look_shared.login_preview, "open_in_browser",
                         lambda p: (False, "no browser opener worked (test)"))
-    monkeypatch.setattr(lt.QtGui.QDesktopServices, "openUrl",
+    monkeypatch.setattr(_look_shared.QtGui.QDesktopServices, "openUrl",
                         staticmethod(lambda url: True))
-    g = LoginThemeGroup()
-    g.primary.setText("#336699")
-    g._open_preview()
-    note = g.preview_note.text()
+    ed = _editor("#336699")
+    ed.preview_btn.click()
+    note = ed.preview_note.text()
     assert "cannot be confirmed" in note          # amber: honest about openUrl's True
     assert platform_preview.PLATFORM_PREVIEW_BASENAME in note
     assert "manually" in note
     # total miss: red, still names the file for a manual open
-    monkeypatch.setattr(lt.QtGui.QDesktopServices, "openUrl",
+    monkeypatch.setattr(_look_shared.QtGui.QDesktopServices, "openUrl",
                         staticmethod(lambda url: False))
-    g._open_preview()
-    note = g.preview_note.text()
+    ed.preview_btn.click()
+    note = ed.preview_note.text()
     assert "Could not launch a browser" in note
     assert platform_preview.PLATFORM_PREVIEW_BASENAME in note
-    assert g.preview_note.isVisibleTo(g)
-
-
-def test_real_font_upload_is_validated_and_reaches_the_css(qapp, monkeypatch):
-    import glob
-    faces = sorted(glob.glob("/usr/share/fonts/**/*.ttf", recursive=True))
-    if not faces:
-        pytest.skip("no system ttf to exercise the real QFontDatabase path")
-    g = LoginThemeGroup()
-    g.font_file.setText(faces[0])
-    assert g._font_bytes, g.font_note.text()
-    assert g._font_family
-    css = g.compose_css()
-    assert "@font-face" in css and "data:font/ttf;base64," in css
-    assert f'"{g._font_family}"' in css
-    # junk rejected by the SAME path
-    g2 = LoginThemeGroup()
-    junk = os.path.join(os.path.dirname(faces[0]), "")  # a dir -> read error
-    g2.font_file.setText("/nonexistent/file.woff2")
-    assert g2._font_bytes == b"" and "cannot read" in g2.font_note.text()
+    assert ed.preview_note.isVisibleTo(ed)
 
 
 # ── host: BrandingPage ──────────────────────────────────────────────────────────────

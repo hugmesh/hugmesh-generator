@@ -56,7 +56,7 @@ class SuperbrandStep(QtWidgets.QWidget):
     """The picker plus the design step for one route's :class:`BrandSession`."""
 
     #: emitted after any edit that reached the session (a host may re-load a sibling
-    #: control that shows the same values, e.g. the Branding page's legacy theme group)
+    #: control that shows the same values)
     changed = Signal()
 
     def __init__(self, session: BrandSession | None = None, *, route: str = "image",
