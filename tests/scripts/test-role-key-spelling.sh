@@ -1330,6 +1330,156 @@ case "${e5_out}" in
     *"function gate_env_apps not found"*"rc=1"*) ok "node loader refuses (rc=1, names gate_env_apps) when the Pi builder lost a listed function" ;;
     *) bad "node loader did not fail closed on a missing function: $(printf '%s' "${e5_out}" | tail -n 2 | tr '\n' ' ')" ;;
 esac
+# E6) KERNEL: the Orange Pi node guard covers the Raspberry Pi node guard's symbol
+#     list (minus the documented exceptions), every guarded symbol is requested =y by
+#     specs/kernel/k8s-node.config, and both Orange Pi builders run the shared guard.
+#     (The 2026-10-21 skeptic: the old six-symbol guard passed a 7.3 kernel with no
+#     iptables filter/nat/mangle tables at all.)
+e6_pi_syms="$(awk '/k8s node kernel option/{exit} /for must in CONFIG_NETFILTER_XTABLES/{p=1} p' "${GEN}/build-rpi5-stage4.sh" \
+    | grep -oE 'CONFIG_[A-Z0-9_]+' | sort -u)"
+e6_lib="$(bash -c '. "$1"; printf "%s\n" ${NODE_ROLE_KERNEL_MUST} ${NODE_ROLE_KERNEL_PI_EXCEPT}' _ "${NRL}" | sort -u)"
+if [ "$(printf '%s\n' "${e6_pi_syms}" | wc -l)" -lt 30 ]; then
+    bad "E6 could not extract the Pi node kernel guard list (got $(printf '%s\n' "${e6_pi_syms}" | wc -l) symbols)"
+else
+    e6_miss="$(comm -23 <(printf '%s\n' "${e6_pi_syms}") <(printf '%s\n' "${e6_lib}") | tr '\n' ' ')"
+    if [ -z "${e6_miss// /}" ]; then
+        ok "Orange Pi node kernel guard covers all $(printf '%s\n' "${e6_pi_syms}" | wc -l) Pi node guard symbols (or names them as exceptions)"
+    else
+        bad "Pi node kernel guard symbols missing from NODE_ROLE_KERNEL_MUST: ${e6_miss}"
+    fi
+fi
+e6_unreq=""
+for e6_s in $(bash -c '. "$1"; printf "%s\n" ${NODE_ROLE_KERNEL_MUST}' _ "${NRL}"); do
+    grep -a -q "^${e6_s}=y$" "${GEN}/specs/kernel/k8s-node.config" || e6_unreq="${e6_unreq} ${e6_s}"
+done
+if [ -z "${e6_unreq}" ]; then
+    ok "specs/kernel/k8s-node.config requests every guarded node symbol as =y (incl. the 6.16+ *_LEGACY trio)"
+else
+    bad "guarded node symbols the fragment does not request =y:${e6_unreq}"
+fi
+for e6_b in build-orangepi5-stage4.sh build-orangepi4-lts-stage4.sh; do
+    if grep -a -q 'node_role_kernel_guard .config' "${GEN}/${e6_b}"; then
+        ok "${e6_b} runs the shared node kernel guard"
+    else
+        bad "${e6_b} does not run node_role_kernel_guard on the node kernel .config"
+    fi
+done
+# the guard itself: a .config with the legacy trio missing fails and names them
+printf 'CONFIG_IP_NF_FILTER=y\n' > "${E_TMP}/e6.config"
+e6_out="$(bash -c '. "$1"; node_role_kernel_guard "$2"; echo "rc=$?"' _ "${NRL}" "${E_TMP}/e6.config")"
+case "${e6_out}" in
+    *CONFIG_NETFILTER_XTABLES_LEGACY*CONFIG_IP_NF_NAT*"rc=1") ok "node_role_kernel_guard fails (rc=1) and names the missing symbols" ;;
+    *) bad "node_role_kernel_guard did not fail on a .config missing the legacy tables: $(printf '%s' "${e6_out}" | tail -n 1)" ;;
+esac
+
+# E7) PACKAGES: the Orange Pi node set (board base + Pi k8s list + the node host list)
+#     covers the Raspberry Pi BASE list minus its Raspberry Pi hardware atoms — the
+#     skeptic's comm -23, as a test (nftables, conntrack-tools, iproute2, ethtool,
+#     cryptsetup, lvm2, the SELinux container/virt policy and setools were missing).
+e7_norm() { grep -a -v '^[[:space:]]*#' "$1" | sed 's/[[:space:]]*#.*//; s/[[:space:]]*$//' | grep -a -v '^$' | sort -u; }
+e7_host="$(bash -c '. "$1"; printf "%s" "${NODE_ROLE_HOST_PACKAGES_LIST}"' _ "${NRL}")"
+for e7_board in orangepi5 orangepi4-lts; do
+    e7_miss="$(comm -23 <(e7_norm "${GEN}/specs-rpi5/portage/packages.list" | grep -a -v -E 'raspberrypi|rpi-eeprom') \
+        <(sort -u <(e7_norm "${GEN}/specs-${e7_board}/portage/packages.list") \
+                  <(e7_norm "${GEN}/specs-rpi5/portage/packages-k8s.list") \
+                  <(e7_norm "${GEN}/${e7_host}")) | tr '\n' ' ')"
+    if [ -z "${e7_miss// /}" ]; then
+        ok "${e7_board} node package set covers the Pi base list (minus Raspberry Pi hardware atoms)"
+    else
+        bad "${e7_board} node package set lacks Pi base atoms: ${e7_miss}"
+    fi
+done
+for e7_b in build-orangepi5-stage4.sh build-orangepi4-lts-stage4.sh; do
+    e7_n="$(grep -a -c 'NODE_ROLE_HOST_PACKAGES_LIST}"' "${GEN}/${e7_b}")"
+    e7_u="$(grep -a -c 'NODE_ROLE_PI_PACKAGE_USE}' "${GEN}/${e7_b}")"
+    e7_m="$(grep -a -c 'NODE_ROLE_MAKE_CONF_USE}' "${GEN}/${e7_b}")"
+    if [ "${e7_n}" -ge 1 ] && [ "${e7_u}" -ge 1 ] && [ "${e7_m}" -ge 1 ]; then
+        ok "${e7_b} appends the node host list, the Pi package.use files and the node USE"
+    else
+        bad "${e7_b} node path: host-list refs=${e7_n} package.use refs=${e7_u} make.conf USE refs=${e7_m} (each must be >=1)"
+    fi
+done
+for e7_pu in $(bash -c '. "$1"; printf "%s" "${NODE_ROLE_PI_PACKAGE_USE}"' _ "${NRL}"); do
+    [ -f "${GEN}/specs-rpi5/portage/package.use/${e7_pu}" ] \
+        && ok "node package.use source specs-rpi5/portage/package.use/${e7_pu} exists" \
+        || bad "node package.use source specs-rpi5/portage/package.use/${e7_pu} is missing"
+done
+grep -a -q '^net-firewall/iptables nftables' "${GEN}/specs-rpi5/portage/package.use/kubernetes" \
+    && ok "the node package.use builds iptables with nftables" \
+    || bad "specs-rpi5/portage/package.use/kubernetes no longer sets iptables nftables"
+
+# E8) PAYLOAD ASSERT, RUN (not re-typed): extract opi_assert_stage4_payload from each
+#     Orange Pi builder and run it against scratch roots. A node root passes on the k8s
+#     floor; a node build whose root has only the desktop fails naming kubelet; the
+#     desktop arm is unchanged. (The 2026-10-21 skeptic: the old block demanded
+#     Xorg/lightdm from every node build, after the full emerge.)
+e8_mkroot() { # dir bins...
+    local d="$1"; shift
+    mkdir -p "${d}/usr/bin" "${d}/etc/init.d"
+    local b
+    for b in "$@"; do : > "${d}/usr/bin/${b}"; done
+}
+e8_node_bins="NetworkManager nmcli sshd nano dracut $(bash -c '. "$1"; printf "%s" "${NODE_ROLE_REQUIRED_BINS}"' _ "${NRL}")"
+e8_desk_bins="NetworkManager nmcli sshd nano dracut Xorg openbox lxsession pcmanfm lightdm"
+for e8_b in build-orangepi5-stage4.sh build-orangepi4-lts-stage4.sh; do
+    e8_fn="$(bash -c '. "$1"; _node_role_extract_fn opi_assert_stage4_payload "$2"' _ "${NRL}" "${GEN}/${e8_b}")"
+    if [ -z "${e8_fn}" ]; then bad "${e8_b}: opi_assert_stage4_payload not found"; continue; fi
+    e8_run() { # node(true|false) root
+        bash -c '
+            err() { echo "ERR: $*"; }; info() { echo "INFO: $*"; }
+            have_in_sysroot() { local d; for d in usr/bin usr/sbin bin sbin; do [ -e "${SYSROOT}/${d}/$1" ] && return 0; done; return 1; }
+            . "$1"; eval "$2"
+            NODE_ROLE=$3; SYSROOT=$4; BUILD_LIVE=false; BUILD_INSTALLER=true; ENCRYPT_ROOT=false
+            opi_assert_stage4_payload; echo "rc=0"' _ "${NRL}" "${e8_fn}" "$1" "$2" 2>&1
+        echo "exit=$?"
+    }
+    rm -rf "${E_TMP}/e8"; e8_mkroot "${E_TMP}/e8/node" ${e8_node_bins}
+    e8_mkroot "${E_TMP}/e8/desk" ${e8_desk_bins}; : > "${E_TMP}/e8/desk/etc/init.d/display-manager"
+    e8_mkroot "${E_TMP}/e8/desk-nodm" ${e8_desk_bins}
+    case "$(e8_run true "${E_TMP}/e8/node")" in
+        *"payload assert OK"*"rc=0"*) ok "${e8_b}: node payload assert passes a root with the k8s floor and no desktop" ;;
+        *) bad "${e8_b}: node payload assert failed a correct node root: $(e8_run true "${E_TMP}/e8/node" | tr '\n' ' ')" ;;
+    esac
+    e8_o="$(e8_run true "${E_TMP}/e8/desk")"
+    case "${e8_o}" in
+        *"missing role-defining binaries"*kubelet*nft*"exit=1"*) ok "${e8_b}: node payload assert fails (exit 1) on a desktop-only root, naming kubelet and nft" ;;
+        *) bad "${e8_b}: node payload assert did not fail on a root with no k8s floor: $(printf '%s' "${e8_o}" | tr '\n' ' ')" ;;
+    esac
+    case "$(e8_run false "${E_TMP}/e8/desk")" in
+        *"payload assert OK"*"rc=0"*) ok "${e8_b}: desktop payload assert unchanged (passes the desktop root)" ;;
+        *) bad "${e8_b}: desktop payload assert failed a correct desktop root" ;;
+    esac
+    case "$(e8_run false "${E_TMP}/e8/desk-nodm")" in
+        *"display-manager is missing"*"exit=1"*) ok "${e8_b}: desktop payload assert still refuses a missing display-manager" ;;
+        *) bad "${e8_b}: desktop payload assert no longer checks display-manager" ;;
+    esac
+done
+
+# E9) CLUSTER CHOICES through the real builders (--print-plan): a node carries the
+#     mesh's IdP / release state / services; a host-daemon slug is refused from argv
+#     AND from the environment; the desktop refuses a cluster flag.
+e9_p5() { (cd "${GEN}" && TMPDIR="${E_TMP}" ./build-orangepi5-stage4.sh --board orange-pi-5-plus "$@" --print-plan 2>&1); echo "exit=$?"; }
+e9_out="$(e9_p5 --role pki --ram-gb 8 --idp oidc --idp-issuer https://id.mesh.example --idp-client-id hugmesh --release-state public --optional-services owncast)"
+case "${e9_out}" in
+    *PLAN_OPTIONAL_SERVICES=owncast*PLAN_RELEASE_STATE=public*PLAN_IDP=oidc*PLAN_IDP_ISSUER=https://id.mesh.example*"exit=0"*)
+        ok "orangepi5 pki --print-plan carries the mesh's optional services, release state and IdP" ;;
+    *) bad "orangepi5 pki plan lost a cluster choice: $(printf '%s' "${e9_out}" | grep -a -E 'PLAN_(OPTIONAL|RELEASE|IDP)|ERROR|exit=' | tr '\n' ' ')" ;;
+esac
+e9_out="$(OPTIONAL_SERVICES='tor games' e9_p5 --role pki --ram-gb 8)"
+case "${e9_out}" in
+    *"optional service(s) tor need a host daemon"*"exit=1"*) ok "orangepi5 node refuses OPTIONAL_SERVICES='tor games' from the environment (exit 1)" ;;
+    *) bad "orangepi5 node accepted tor from the environment: $(printf '%s' "${e9_out}" | tail -n 2 | tr '\n' ' ')" ;;
+esac
+e9_out="$( (cd "${GEN}" && TMPDIR="${E_TMP}" ./build-orangepi4-lts-stage4.sh --role frontend --ram-gb 4 --optional-services 'akkoma egress-vpn' --print-plan 2>&1); echo "exit=$?")"
+case "${e9_out}" in
+    *"optional service(s) egress-vpn need a host daemon"*"exit=1"*) ok "orangepi4-lts frontend refuses --optional-services egress-vpn (exit 1)" ;;
+    *) bad "orangepi4-lts frontend accepted egress-vpn: $(printf '%s' "${e9_out}" | tail -n 2 | tr '\n' ' ')" ;;
+esac
+e9_out="$(e9_p5 --release-state public)"
+case "${e9_out}" in
+    *"--release-state: cluster choices only apply to a cluster node role"*"exit=1"*) ok "orangepi5 desktop refuses --release-state (exit 1) instead of dropping it" ;;
+    *) bad "orangepi5 desktop did not refuse --release-state: $(printf '%s' "${e9_out}" | tail -n 2 | tr '\n' ' ')" ;;
+esac
 rm -rf "${E_TMP}"
 
 echo "== ${P} passed, ${F} failed =="
