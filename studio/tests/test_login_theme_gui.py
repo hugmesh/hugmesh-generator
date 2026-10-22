@@ -71,12 +71,14 @@ def test_preview_button_writes_the_platform_page_and_opens_it(qapp, tmp_path,
                                    "verified: test-opener exited 0"))
     # QDesktopServices is the LAST resort (its True is dispatch-only — the
     # historical false-positive); it must not fire when a verified opener worked.
-    monkeypatch.setattr(
-        _look_shared.QtGui.QDesktopServices, "openUrl",
-        staticmethod(lambda url: pytest.fail(
-            "QDesktopServices must not run when the verified opener succeeded")))
+    # Recorded, not pytest.fail()ed: an exception escaping the button's slot would
+    # abort the whole PyQt6 process instead of failing this one test.
+    dispatched = []
+    monkeypatch.setattr(_look_shared.QtGui.QDesktopServices, "openUrl",
+                        staticmethod(lambda url: bool(dispatched.append(url)) or True))
     ed = _editor("#e91e63")
     ed.preview_btn.click()
+    assert dispatched == [], "QDesktopServices ran although the verified opener succeeded"
     assert len(opened) == 1
     path = opened[0]
     assert path.endswith(platform_preview.PLATFORM_PREVIEW_BASENAME)
