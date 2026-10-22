@@ -446,7 +446,8 @@ class SavedMeshesWidget(QtWidgets.QWidget):
                          "is up the replaced record stays a draft (never ran).")
             self.overwrite_note.setText(
                 f"A second click replaces the saved record ‘{label}’ (saved "
-                f"{(rec.created or '?')[:16].replace('T', ' ')}) with the mesh being "
+                f"{(rec.updated or rec.created or '?')[:16].replace('T', ' ')}) with "
+                "the mesh being "
                 f"worked on now. Its place in the list is kept.{rename}{copies}"
                 f"{fills}{draft} Its data volumes and the running mesh are not "
                 "touched.")
@@ -557,14 +558,28 @@ class SavedMeshesWidget(QtWidgets.QWidget):
             set_cell(self.table, i, _SM_COL_DOMAINS, "—")
             return
         rec = r.rec
-        tip = (f"{rec.id}\nsaved {rec.created} on {rec.hostname or '?'}\n"
+        tip = (f"{rec.id}\nsaved {rec.updated or rec.created} on {rec.hostname or '?'}"
+               + (f" (first saved {rec.created})"
+                  if rec.updated and rec.created and rec.updated != rec.created else "")
+               + "\n"
                f"generator: {rec.generator_dir} @ {rec.generator_head[:12] or '?'}")
         if not rec.same_checkout(self.generator_dir, self.hostname):
             tip += ("\n\nThis record is from ANOTHER checkout or host — it points "
                     "at another mesh's volumes, so Start is disabled here.")
         set_cell(self.table, i, _SM_COL_MESH, rec.label or rec.id, tooltip=tip)
-        set_cell(self.table, i, _SM_COL_SAVED, (rec.created or "")[:16].replace("T", " "),
-                 tooltip=rec.created)
+        # The LAST save, as the node-image picker shows it: an Overwrite keeps
+        # `created` and moves `updated` (saved-meshes skeptic 3 — the two screens
+        # disagreed about when the same record was saved).
+        # A plain save stamps `created` and then `updated` a moment apart; more than
+        # two minutes apart is a later save of the same record (an Overwrite, or a
+        # Start that wrote the form's Domain services walk into it).
+        last = rec.updated or rec.created or ""
+        t_up, t_made = sm._stamp(rec.updated), sm._stamp(rec.created)
+        resaved = bool(t_up and t_made and t_up - t_made > 120)
+        set_cell(self.table, i, _SM_COL_SAVED,
+                 last[:16].replace("T", " ") + (" (re-saved)" if resaved else ""),
+                 tooltip=(f"last saved {rec.updated}\nfirst saved {rec.created}"
+                          if resaved else last))
         set_cell(self.table, i, _SM_COL_ENV, rec.brand_text())
         set_cell(self.table, i, _SM_COL_SERVICES, rec.services_text(),
                  tooltip=rec.services_text())

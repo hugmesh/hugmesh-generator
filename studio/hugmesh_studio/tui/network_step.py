@@ -17,7 +17,8 @@ from __future__ import annotations
 from ..core import plain_words
 from ..core.config import (
     ANUBIS_CHOICES, ANUBIS_LABELS, PLATFORM_FIELD_SUPPORT, SERVICE_DESCRIPTIONS,
-    UNAFFILIATED_ROLE, anubis_locked, anubis_shown, services_picker_hidden,
+    UNAFFILIATED_ROLE, _OPI_NODE_PLATFORMS, anubis_locked, anubis_shown,
+    services_catalog, services_picker_hidden,
 )
 
 #: What each command word sets. Longest spelling first is irrelevant (exact match).

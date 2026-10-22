@@ -107,7 +107,10 @@ class _Boot:
 def _save(domain, tor, *, running, label):
     cfg = LocalMeshBootstrapConfig(cluster_domain=domain, kind_addons=(),
                                    services=("tor",) if tor else (), with_tor=tor)
-    rec = sm.capture(GENERATOR_DIR, cfg, _Node(running), _Boot(), label=label)
+    # kind_running=False: both lanes checked and down, so a not-running save is a
+    # true draft ("never ran"), not one whose DevOps lane was unchecked
+    rec = sm.capture(GENERATOR_DIR, cfg, _Node(running), _Boot(), label=label,
+                     kind_running=False)
     assert sm.save(rec)
     time.sleep(1.05)        # `updated` has one-second resolution: keep the order real
     return rec
