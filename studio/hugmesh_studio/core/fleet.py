@@ -214,6 +214,9 @@ class FleetConfig:
     orangepi5_only: bool = False       # ORANGEPI5_ONLY=1
     orangepi5_board: str = ""          # ORANGEPI5_BOARD
     orangepi5_flavor: str = ""         # ORANGEPI5_FLAVOR
+    # ORANGEPI5_ROLES ("" = the script default, desktop): may name the cluster node
+    # roles pki/backend/frontend/omnibus (EXPERIMENTAL, installer flavor only).
+    orangepi5_roles: str = ""
     orangepizero2: bool = False        # ORANGEPIZERO2=1
     orangepizero2_only: bool = False   # ORANGEPIZERO2_ONLY=1
     orangepizero2_flavor: str = ""     # ORANGEPIZERO2_FLAVOR
@@ -229,6 +232,12 @@ class FleetConfig:
     orangepi4lts: bool = False        # ORANGEPI4LTS=1
     orangepi4lts_only: bool = False   # ORANGEPI4LTS_ONLY=1
     orangepi4lts_flavor: str = ""     # ORANGEPI4LTS_FLAVOR
+    # ORANGEPI4LTS_ROLES ("" = desktop): may name frontend, its only node role.
+    orangepi4lts_roles: str = ""
+    # RAM_GB: GB of RAM on the Raspberry Pi / Orange Pi boards this run's NODE images
+    # are for (--ram-gb). REQUIRED (8 or more) when RPI_ROLES or ORANGEPI5_ROLES
+    # names omnibus — one image serves every RAM size a board is sold with.
+    ram_gb: str = ""
     # ── per-role KEYS folders + pen-test harness ──
     skip_keys: bool = False            # SKIP_KEYS=1 (keys folders are the default)
     pentest: bool = False              # PENTEST=1 run the OWASP harness after the build
@@ -390,11 +399,14 @@ class FleetConfig:
         for name, roleset in (("x86_roles", self.x86_roles),
                               ("rpi_roles", self.rpi_roles),
                               ("jetson_roles", self.jetson_roles),
+                              ("orangepi5_roles", self.orangepi5_roles),
+                              ("orangepi4lts_roles", self.orangepi4lts_roles),
                               ("optional_services", self._services_words())):
             for tok in roleset.split():
                 if not _ROLE_TOKEN_RE.match(tok):
                     raise IdentityValidationError(
                         f"invalid {name} token: {tok!r} — rejected by the fleet allowlist")
+        self._validate_ram()
         # extra_flags is shlex-split into argv by to_cli_args: an unbalanced quote (a
         # plain apostrophe in a note, an unterminated "...) raised ValueError from
         # shlex there, which the TUI's review did not catch — the whole text-mode fleet
@@ -414,6 +426,33 @@ class FleetConfig:
             raise IdentityValidationError(
                 f"jobs must be a whole number from {JOBS_RANGE[0]} to {JOBS_RANGE[1]}, "
                 f"not {self.jobs!r}")
+
+    def _validate_ram(self) -> None:
+        """The builders' RAM gate (scripts/_roles-lib.sh hugmesh_role_ram_check), up
+        front: RAM_GB is a whole number of GB, and an omnibus in RPI_ROLES or
+        ORANGEPI5_ROLES needs it at or above omnibus's floor. Refused here so neither
+        face (GUI preview / TUI ``set``) starts a run the first omnibus build kills."""
+        from . import roles as role_vocab
+        ram = str(self.ram_gb or "").strip()
+        if ram and (not ram.isdigit() or ram.startswith("0")):
+            raise IdentityValidationError(
+                f"ram_gb must be a whole number of GB, e.g. 8 (got {ram!r})")
+        omnibus_in = [name for name, roleset in (("rpi_roles", self.rpi_roles),
+                                                 ("orangepi5_roles", self.orangepi5_roles))
+                      if any(role_vocab.canonicalize(t) == "omnibus"
+                             for t in roleset.split())]
+        if not omnibus_in:
+            return
+        floor = role_vocab.min_ram_gb("omnibus") or 0
+        if not ram:
+            raise IdentityValidationError(
+                f"{' and '.join(omnibus_in)} names omnibus, which needs ram_gb (the GB of "
+                f"RAM on the boards, {floor} or more): one image serves every RAM size a "
+                "board is sold with, so the build cannot tell")
+        if int(ram) < floor:
+            raise IdentityValidationError(
+                f"omnibus needs at least {floor} GB of RAM (got ram_gb {ram}); build "
+                "pki/backend/frontend for a smaller board")
 
     # ---- the canonical env-knob + argv translation ---------------------------
     def to_env(self) -> dict[str, str]:
@@ -455,11 +494,14 @@ class FleetConfig:
             ("JETSON_KERNEL_FLAVOR", self.jetson_kernel_flavor),
             ("ORANGEPI5_BOARD", self.orangepi5_board),
             ("ORANGEPI5_FLAVOR", self.orangepi5_flavor),
+            ("ORANGEPI5_ROLES", " ".join(self.orangepi5_roles.split())),
             ("ORANGEPIZERO2_FLAVOR", self.orangepizero2_flavor),
             ("ORANGEPIZERO2W_FLAVOR", self.orangepizero2w_flavor),
             ("ORANGEPIZERO3_FLAVOR", self.orangepizero3_flavor),
             ("ORANGEPI3LTS_FLAVOR", self.orangepi3lts_flavor),
             ("ORANGEPI4LTS_FLAVOR", self.orangepi4lts_flavor),
+            ("ORANGEPI4LTS_ROLES", " ".join(self.orangepi4lts_roles.split())),
+            ("RAM_GB", str(self.ram_gb or "").strip()),
             ("PENTEST_ENV", self.pentest_env), ("PENTEST_SCAN", self.pentest_scan),
             ("PENTEST_PIPELINE", self.pentest_pipeline),
             ("HEADSCALE_URL", self.headscale_url),

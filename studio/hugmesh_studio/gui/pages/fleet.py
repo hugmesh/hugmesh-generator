@@ -302,7 +302,7 @@ class FleetPage(QtWidgets.QWidget):
         rl = QtWidgets.QVBoxLayout(self.rpi_group)
         self.rpi_roles = QtWidgets.QLineEdit()
         self.rpi_roles.setPlaceholderText(
-            "RPi role subset (RPI_ROLES=\"pki backend frontend desktop\"; desktop is opt-in)")
+            "RPi role subset (RPI_ROLES=\"pki backend frontend desktop\"; desktop is opt-in; omnibus needs Board RAM 8+)")
         rl.addWidget(_row("RPi roles", self.rpi_roles))
         self.rpi_board = _default_combo(
             RPI_BOARDS, "RPI_BOARD — rpi3 is DESKTOP-ONLY (pair with RPI_ROLES=desktop)")
@@ -332,6 +332,11 @@ class FleetPage(QtWidgets.QWidget):
         o5l = QtWidgets.QVBoxLayout(self.orangepi5_group)
         self.orangepi5_board = _default_combo(ORANGEPI5_BOARDS)
         self.orangepi5_flavor = _default_combo(ORANGEPI5_FLAVORS)
+        self.orangepi5_roles = QtWidgets.QLineEdit()
+        self.orangepi5_roles.setPlaceholderText(
+            "ORANGEPI5_ROLES (default: desktop) — node roles pki backend frontend omnibus "
+            "are EXPERIMENTAL, installer only")
+        o5l.addWidget(_row("OPi5 roles", self.orangepi5_roles))
         o5l.addWidget(_row("OPi5 board", self.orangepi5_board))
         o5l.addWidget(_row("OPi5 flavor", self.orangepi5_flavor))
         l2.addWidget(self.orangepi5_group)
@@ -358,8 +363,25 @@ class FleetPage(QtWidgets.QWidget):
         self.orangepi4lts_group = QtWidgets.QGroupBox("Orange Pi 4 LTS")
         o4ll = QtWidgets.QVBoxLayout(self.orangepi4lts_group)
         self.orangepi4lts_flavor = _default_combo(ORANGEPI4LTS_FLAVORS)
+        self.orangepi4lts_roles = QtWidgets.QLineEdit()
+        self.orangepi4lts_roles.setPlaceholderText(
+            "ORANGEPI4LTS_ROLES (default: desktop) — frontend is its only node role "
+            "(EXPERIMENTAL, installer only)")
+        o4ll.addWidget(_row("OPi4-LTS roles", self.orangepi4lts_roles))
         o4ll.addWidget(_row("OPi4-LTS flavor", self.orangepi4lts_flavor))
         l2.addWidget(self.orangepi4lts_group)
+        # RAM_GB -> --ram-gb on every Raspberry Pi / Orange Pi NODE build of the run.
+        # Required (8 or more) when RPi roles or OPi5 roles name omnibus; the refusal
+        # is the preview's inline message (FleetConfig.validate), never a dialog.
+        self.ram_group = QtWidgets.QGroupBox("Board RAM (Raspberry Pi / Orange Pi cluster nodes)")
+        rgl = QtWidgets.QVBoxLayout(self.ram_group)
+        self.ram_gb = _default_combo(
+            ("4", "8", "16", "32"),
+            "RAM_GB — GB of RAM on the boards (--ram-gb). (default) = not stated. "
+            "Required, 8 or more, when a role list names omnibus; pki/backend/frontend "
+            "are refused below 4 when it is given.")
+        rgl.addWidget(_row("Board RAM (GB)", self.ram_gb))
+        l2.addWidget(self.ram_group)
         self.pentest_group = QtWidgets.QGroupBox("Pen-test")
         ptl = QtWidgets.QVBoxLayout(self.pentest_group)
         self.pentest_env = _default_combo(("compose", "local", "cluster"))
@@ -554,6 +576,7 @@ class FleetPage(QtWidgets.QWidget):
             orangepi5_only=self.orangepi5_only.isChecked(),
             orangepi5_board=self.orangepi5_board.currentData(),
             orangepi5_flavor=self.orangepi5_flavor.currentData(),
+            orangepi5_roles=self.orangepi5_roles.text().strip(),
             orangepizero2=self.orangepizero2.isChecked(),
             orangepizero2_only=self.orangepizero2_only.isChecked(),
             orangepizero2_flavor=self.orangepizero2_flavor.currentData(),
@@ -569,6 +592,8 @@ class FleetPage(QtWidgets.QWidget):
             orangepi4lts=self.orangepi4lts.isChecked(),
             orangepi4lts_only=self.orangepi4lts_only.isChecked(),
             orangepi4lts_flavor=self.orangepi4lts_flavor.currentData(),
+            orangepi4lts_roles=self.orangepi4lts_roles.text().strip(),
+            ram_gb=self.ram_gb.currentData(),
             skip_keys=self.skip_keys.isChecked(),
             pentest=self.pentest.isChecked(), pentest_only=self.pentest_only.isChecked(),
             pentest_env=self.pentest_env.currentData(),
@@ -616,6 +641,7 @@ class FleetPage(QtWidgets.QWidget):
         self.orangepi5_only.setChecked(cfg.orangepi5_only)
         combo(self.orangepi5_board, cfg.orangepi5_board)
         combo(self.orangepi5_flavor, cfg.orangepi5_flavor)
+        self.orangepi5_roles.setText(cfg.orangepi5_roles)
         self.orangepizero2.setChecked(cfg.orangepizero2)
         self.orangepizero2_only.setChecked(cfg.orangepizero2_only)
         combo(self.orangepizero2_flavor, cfg.orangepizero2_flavor)
@@ -631,6 +657,11 @@ class FleetPage(QtWidgets.QWidget):
         self.orangepi4lts.setChecked(cfg.orangepi4lts)
         self.orangepi4lts_only.setChecked(cfg.orangepi4lts_only)
         combo(self.orangepi4lts_flavor, cfg.orangepi4lts_flavor)
+        self.orangepi4lts_roles.setText(cfg.orangepi4lts_roles)
+        # a RAM the TUI set that is not one of the offered sizes is shown, not dropped
+        if cfg.ram_gb and self.ram_gb.findData(cfg.ram_gb) < 0:
+            self.ram_gb.addItem(cfg.ram_gb, cfg.ram_gb)
+        combo(self.ram_gb, cfg.ram_gb)
         self.skip_keys.setChecked(cfg.skip_keys)
         self.pentest.setChecked(cfg.pentest)
         self.pentest_only.setChecked(cfg.pentest_only)
@@ -807,6 +838,10 @@ class FleetPage(QtWidgets.QWidget):
             self.orangepi3lts.isChecked() or self.orangepi3lts_only.isChecked())
         self.orangepi4lts_group.setVisible(
             self.orangepi4lts.isChecked() or self.orangepi4lts_only.isChecked())
+        self.ram_group.setVisible(
+            not self.skip_rpi.isChecked() or self.orangepi5.isChecked()
+            or self.orangepi5_only.isChecked() or self.orangepi4lts.isChecked()
+            or self.orangepi4lts_only.isChecked())
         self.pentest_group.setVisible(
             self.pentest.isChecked() or self.pentest_only.isChecked())
 
