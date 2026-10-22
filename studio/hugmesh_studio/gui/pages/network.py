@@ -83,6 +83,8 @@ from ._gating import (
     scope_allows_flow,
 )
 from ._widgets import _file_picker, _row, collapsible
+# one sentence and one rule for both faces (the TUI Network step shows the same)
+from ...tui.network_step import brand_mirror_text, brand_mirrored
 
 # ── DEFINITE OFF: why there is no tri-state left on this page ────────────────────────
 # Operator, verbatim (asks 1 + 4): "gui studio should leave optional services and edge ai
@@ -590,12 +592,41 @@ class NetworkPage(QtWidgets.QWizardPage):
         # On a mesh the superbrand step (Branding) is the one home of the brand's id,
         # title, organisation and public name (#654, D8): this page SHOWS them, read-only,
         # and says where they are changed — one editing home per setting.
-        self.brand_mirror_note = _hint(
-            f"Brand ID, Brand Title, Org and Public Apex Domain are the {plain_words.term('superbrand')}'s. "
-            f"They are shown here, read-only: change them in the {plain_words.term('superbrand')} step on the "
-            "Branding page.")
-        self.brand_mirror_note.setVisible(False)
-        il.addWidget(self.brand_mirror_note)
+        #
+        # WHY NOT EDITABLE HERE (measured 2026-10-21): the Branding page keeps one
+        # superbrand session for the whole run and writes it onto the config on every
+        # Next, so a title typed here was silently put back to the superbrand's on the
+        # next Back-then-Next through Branding. The rows therefore stay read-only and
+        # LOOK it (greyed, with a tooltip), and the box below says where they are
+        # changed and takes the person there in one click — an inline note, no pop-up.
+        sb = plain_words.term("superbrand")
+        self.brand_mirror_box = QtWidgets.QFrame()
+        self.brand_mirror_box.setObjectName("brand_mirror_box")
+        self.brand_mirror_box.setFrameShape(QtWidgets.QFrame.Shape.StyledPanel)
+        mbl = QtWidgets.QVBoxLayout(self.brand_mirror_box)
+        self.brand_mirror_note = QtWidgets.QLabel(
+            brand_mirror_text() + " To change them, use the button below or press Back.")
+        self.brand_mirror_note.setWordWrap(True)
+        mbl.addWidget(self.brand_mirror_note)
+        self.brand_mirror_go = QtWidgets.QPushButton(f"Go back to the {sb} step")
+        self.brand_mirror_go.setObjectName("brand_mirror_go")
+        self.brand_mirror_go.setToolTip(
+            f"Goes back to the Branding page; the {sb} step at its top holds the brand's "
+            "ID, title, organisation and public apex domain. Next brings you back here.")
+        self.brand_mirror_go.clicked.connect(self._go_to_superbrand)
+        mbh = QtWidgets.QHBoxLayout()
+        mbh.setContentsMargins(0, 0, 0, 0)
+        mbh.addWidget(self.brand_mirror_go)
+        mbh.addStretch(1)
+        mbl.addLayout(mbh)
+        # what the button could not do, said beside it
+        self.brand_mirror_why = QtWidgets.QLabel("")
+        self.brand_mirror_why.setWordWrap(True)
+        self.brand_mirror_why.setStyleSheet("color: #a65d00;")
+        self.brand_mirror_why.setVisible(False)
+        mbl.addWidget(self.brand_mirror_why)
+        self.brand_mirror_box.setVisible(False)
+        il.addWidget(self.brand_mirror_box)
         # brand profile (G3): -C/--config brands/*.conf — the sole carrier of the
         # HEADSCALE_URL / RELEASE_STATE / ADMIN_EMAILS / MAIL_* / EXCLUDE_SERVICES
         # presets; sourced by every builder before its CLI flags (CLI wins).
@@ -1310,11 +1341,20 @@ class NetworkPage(QtWidgets.QWizardPage):
         # that was not there. Composed from what the section still HOLDS.
         self.identity_help.setText(_identity_help_text(brand_ok, cluster_ok, show_cp))
         self.identity_help.setVisible(bool(self.identity_help.text()))
-        # the brand rows are read-only mirrors where the superbrand step is shown
-        mirror = (c.mode == "mesh") and brand_ok
+        # the brand rows are read-only mirrors where the superbrand step is shown, and
+        # look it: a read-only QLineEdit is drawn exactly like an editable one, which is
+        # how "I cannot type in Brand ID" read as a bug rather than a rule
+        mirror = brand_mirrored(c)
+        tip = (f"Set in the {plain_words.term('superbrand')} step on the Branding page; "
+               "shown here so you can check it." if mirror else "")
         for edit in (self.brand, self.brand_title, self.org, self.domain):
             edit.setReadOnly(mirror)
-        self.brand_mirror_note.setVisible(mirror)
+            edit.setToolTip(tip)
+            edit.setStyleSheet(
+                "QLineEdit { background: palette(window); color: palette(window-text); }"
+                if mirror else "")
+        self.brand_mirror_box.setVisible(mirror)
+        self.brand_mirror_why.setVisible(False)
         # Hide the SECTION when both axes reject, or the page keeps a bold
         # "Identity & domain" header over an empty body — the orphan-header rule the
         # tailnet and egress sections already follow (and which
@@ -1888,6 +1928,28 @@ class NetworkPage(QtWidgets.QWizardPage):
             self.edge_ai_item.setExpanded(True)
         if self.wiz.cfg.managed_services:
             self.group_items[_BACKING_GROUP].setExpanded(True)
+
+    def _go_to_superbrand(self, *_):
+        """Walk Back to the Branding page, where the superbrand step is. A slot: never
+        raises (PyQt6 aborts on an exception escaping one), and anything it cannot do
+        is a sentence beside the button."""
+        try:
+            wiz = self.wizard()
+            target = (getattr(self.wiz, "_page_ids", None) or {}).get("branding")
+            if wiz is None or target is None or target not in wiz.visitedIds():
+                self.brand_mirror_why.setText(
+                    "The Branding page is not behind this one in this walk, so there is "
+                    "no step to go back to: open it from the start of the wizard.")
+                self.brand_mirror_why.setVisible(True)
+                return
+            while wiz.currentId() != target:
+                before = wiz.currentId()
+                wiz.back()
+                if wiz.currentId() == before:      # Back did nothing: stop, never spin
+                    break
+        except Exception as exc:                  # pragma: no cover - qFatal guard
+            self.brand_mirror_why.setText(f"Could not go back: {exc}")
+            self.brand_mirror_why.setVisible(True)
 
     def validatePage(self):
         c = self.wiz.cfg
