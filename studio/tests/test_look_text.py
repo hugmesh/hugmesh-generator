@@ -171,32 +171,6 @@ def test_the_board_command_prints_the_measured_contrast_the_window_shows():
     assert "as text" in out and ":1" in out
 
 
-def test_font_commands_on_the_themes_screen_edit_the_image_config_through_the_model():
-    from hugmesh_studio.core.config import ImageConfig
-    cfg = ImageConfig()
-    screen = tui_themes.ThemesScreen()
-
-    class _J:                                          # the three things feed() touches
-        status = ""
-        cfg = None
-
-        def close_overlay(self):
-            pass
-
-    j = _J()
-    j.cfg = cfg
-    screen.feed(j, "font Humanist")
-    assert cfg.login_font == "Humanist"
-    screen.feed(j, "font Nonesuch")
-    assert "no such choice" in j.status and cfg.login_font == "Humanist"
-    screen.feed(j, "fontlicence SIL OFL 1.1")
-    assert cfg.login_font_licence == "SIL OFL 1.1"
-    screen.feed(j, "board")
-    assert "Measured contrast" in j.status
-    shown = "\n".join(screen.lines(j))
-    assert "font       Humanist" in shown and "fontfile" in shown
-
-
 # ── parity with the window ───────────────────────────────────────────────────────────
 VALUES = {
     "preset": "forest", "mode": "light", "primary": "#112233", "secondary": "#445566",
@@ -268,12 +242,11 @@ def test_every_window_control_has_a_text_command_and_writes_the_same_record(qapp
 
 def test_both_faces_read_their_labels_from_the_one_table_in_core():
     pytest.importorskip("hugmesh_studio.gui.qt", reason="no Qt binding")
-    from hugmesh_studio.gui.pages import _lookeditor, _theme_editor
+    from hugmesh_studio.gui.pages import _lookeditor
     assert _lookeditor.EFFECT_LABELS is brand_look.EFFECT_LABELS
     assert _lookeditor.STYLE_LABELS is brand_look.STYLE_LABELS
     assert _lookeditor.DECOR_LABELS is brand_look.DECOR_LABELS
     assert tui_themes.EFFECT_LABELS == brand_look.EFFECT_LABELS
-    assert _theme_editor._EFFECT_LABELS == brand_look.EFFECT_LABELS
     assert _lookeditor.USE_SUPERBRAND is brand_look.USE_SUPERBRAND
     assert _lookeditor.DOCKER_ONLY_SENTENCE is brand_look.DOCKER_ONLY_SENTENCE
     # and the table covers every selectable value, so neither face falls back to a bare id

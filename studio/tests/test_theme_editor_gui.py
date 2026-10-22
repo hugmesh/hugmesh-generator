@@ -1,77 +1,35 @@
-"""The Themes surface rename + the modeless Themes editor (#50 item 2).
+"""The web chrome and background-effect fields of the look, after the theme move.
 
-Pins:
-  1. RENAME: every user-visible label says "Themes"; the persisted ``login_*``
-     config KEYS are untouched, so every saved session keeps loading.
-  2. MODELESS: the editor opens via show() — never exec() — and is pinned NonModal
-     (repo rule: a nested event loop hangs headless tests and blocks the wizard).
-  3. ROUND-TRIP: editor edits land in cfg.login_* fields, emit as literal
-     --sd-header-*/--sd-footer-*/--sd-bg-effect tokens (with their --hug-* twins)
-     through the SAME compose path the page always used, and reload into a fresh
-     group + editor.
-  4. OLD THEMES LOAD: a config JSON saved before the chrome fields existed loads
-     to the shipped defaults and composes BYTE-IDENTICAL css.
-  5. EFFECT PICKER: all six --sd-bg-effect contract values (login-ui PR #6 renders
-     them; the host shell consumes the same channel) are SELECTABLE, default
-     gradient, on a NoWheelComboBox (PR #72 — an unfocused hover-scroll must never
-     silently swap the mesh's page background); presets MAY declare an effect and
-     fill the picker like they fill the hex fields, presets without one emit
-     nothing (omit-when-default keeps old theme files byte-identical).
+The modeless ThemeEditorDialog (#50 item 2) and the LoginThemeGroup it edited were
+removed on 2026-10-21 as dead code (the look is chosen on each domain's Look tab, by
+the LookEditor). The MODEL rules they carried still hold and are pinned here:
+  1. The persisted ``login_*`` config KEYS never changed, so every saved session loads.
+  2. A config saved before the chrome fields existed loads to the shipped defaults and
+     composes BYTE-IDENTICAL css.
+  3. Vanta values are valid persisted state and emit their token; unknown values fail
+     closed.
+  4. The LookEditor's background-effect picker ignores an unfocused wheel (PR #72), as
+     the removed dialog's did.
 """
 import json
 import os
-from types import SimpleNamespace
 
 import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from hugmesh_studio.core import theme, theme_presets                # noqa: E402
+from hugmesh_studio.core import brand_look, theme                   # noqa: E402
 from hugmesh_studio.core.config import ImageConfig                  # noqa: E402
 from hugmesh_studio.core.validate import IdentityValidationError    # noqa: E402
-from hugmesh_studio.gui import wizard as wizard_mod                 # noqa: E402
-from hugmesh_studio.gui.pages._logintheme import LoginThemeGroup    # noqa: E402
-from hugmesh_studio.gui.pages._theme_editor import ThemeEditorDialog  # noqa: E402
-from hugmesh_studio.gui.pages._widgets import (                     # noqa: E402
-    Collapsible, NoWheelComboBox)
+from hugmesh_studio.gui.pages._lookeditor import LookEditor         # noqa: E402
+from hugmesh_studio.gui.pages._widgets import NoWheelComboBox       # noqa: E402
 from hugmesh_studio.gui.qt import QtCore, QtGui, QtWidgets          # noqa: E402
-
-GENERATOR_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
 @pytest.fixture
 def qapp():
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     yield app
-
-
-def _opened_editor(qapp) -> tuple[LoginThemeGroup, ThemeEditorDialog]:
-    g = LoginThemeGroup()
-    g.open_editor()
-    return g, g.editor
-
-
-# ── 1. the rename ────────────────────────────────────────────────────────────────────
-def test_no_host_carries_a_mesh_wide_theme_group_any_more(qapp):
-    """The two hosts that carried the mesh-wide group (the Branding page's "Web login
-    theme" and the Docker route's "Themes" panel) are gone: the operator asked for
-    the theme selection to be in each domain's section "instead of where it is now"
-    (2026-10-16, repeated 2026-10-21). The look is chosen on the Look tab of the
-    mesh's own domain. The group class itself stays (its title still says Themes) for
-    any caller outside the two wizard hosts."""
-    assert LoginThemeGroup().title().startswith("Themes")
-    branding = wizard_mod.BrandingPage(
-        SimpleNamespace(cfg=ImageConfig(), generator_dir=GENERATOR_DIR))
-    assert branding.findChildren(LoginThemeGroup) == []
-    assert not hasattr(branding, "login_collapsible")
-    mesh = wizard_mod.LocalMeshPage(
-        SimpleNamespace(cfg=ImageConfig(), generator_dir=GENERATOR_DIR,
-                        localmesh_selected=True))
-    assert mesh.findChildren(LoginThemeGroup) == []
-    assert not [c for c in mesh.findChildren(Collapsible)
-                if c.title().startswith("Themes")]
-    # a freshly built page's standing subtitle carries no web-login wording
-    assert "Web login theme" not in branding.subTitle()
 
 
 def test_rename_is_labels_only_the_persisted_login_keys_survive(qapp):
@@ -84,91 +42,6 @@ def test_rename_is_labels_only_the_persisted_login_keys_survive(qapp):
         assert key in d
 
 
-# ── 2. modeless, by construction ─────────────────────────────────────────────────────
-def test_editor_opens_modeless_via_show_and_is_reused(qapp):
-    g, ed = _opened_editor(qapp)
-    assert isinstance(ed, ThemeEditorDialog)
-    assert ed.isVisible()                       # show() ran — no exec() anywhere
-    assert not ed.isModal()
-    assert ed.windowModality() == QtCore.Qt.WindowModality.NonModal
-    # the page behind it stays interactive (the whole point of modeless)
-    g.primary.setText("#336699")
-    assert g.compose_css() != ""
-    g.open_editor()
-    assert g.editor is ed                       # one instance, reused
-
-
-# ── 3. round-trip: editor -> cfg -> .theme.css -> fresh editor ───────────────────────
-def test_chrome_edits_roundtrip_through_cfg_and_the_theme_css(qapp):
-    g, ed = _opened_editor(qapp)
-    hdr, ftr = ed._chrome_widgets["header"], ed._chrome_widgets["footer"]
-    hdr["hidden"].setChecked(True)
-    hdr["size"].setCurrentIndex(hdr["size"].findData("compact"))
-    hdr["bg"].setText("#112233")
-    ftr["text"].setText("© Example Mesh")
-    ed.bg_effect.setCurrentIndex(ed.bg_effect.findData("none"))
-
-    cfg = ImageConfig()
-    g.commit(cfg)
-    assert cfg.login_header_hidden is True
-    assert cfg.login_header_size == "compact"
-    assert cfg.login_header_bg == "#112233"
-    assert cfg.login_footer_text == "© Example Mesh"
-    assert cfg.login_bg_effect == "none"
-
-    css = cfg.login_theme_css()
-    assert css == g.compose_css() != ""         # page preview == delivered bytes
-    assert "--sd-header-display: none;" in css
-    assert f"--sd-header-height: {theme.CHROME_SIZES['compact']};" in css
-    assert "--sd-header-bg: #112233;" in css
-    assert "--sd-header-on:" in css             # legibility twin, by construction
-    assert "--sd-footer-content: '© Example Mesh';" in css
-    assert "--sd-bg-effect: none;" in css
-    assert "--hug-bg-effect: none;" in css      # the runtime-contract twin
-
-    # ...and back: a FRESH group + editor restores every choice from the cfg.
-    g2 = LoginThemeGroup()
-    g2.load(cfg)
-    g2.open_editor()
-    ed2 = g2.editor
-    assert ed2._chrome_widgets["header"]["hidden"].isChecked()
-    assert ed2._chrome_widgets["header"]["size"].currentData() == "compact"
-    assert ed2._chrome_widgets["header"]["bg"].text() == "#112233"
-    assert ed2._chrome_widgets["footer"]["text"].text() == "© Example Mesh"
-    assert ed2.bg_effect.currentData() == "none"
-    # the round-trip is lossless at the css level too
-    cfg2 = ImageConfig()
-    g2.commit(cfg2)
-    assert cfg2.login_theme_css() == css
-
-
-def test_colour_controls_sync_both_ways_with_the_page_group(qapp):
-    g, ed = _opened_editor(qapp)
-    ed.primary.setText("#336699")
-    assert g.primary.text() == "#336699"        # editor -> page
-    g.secondary.setText("#996633")
-    assert ed.secondary.text() == "#996633"     # page -> editor
-    # a preset picked in the editor drives the page combo AND its hex fill-in,
-    # which then syncs straight back into the editor's own hex fields.
-    idx = ed.theme_preset.findData("ocean")
-    assert idx > 0
-    ed.theme_preset.setCurrentIndex(idx)
-    assert g.theme_preset.currentData() == "ocean"
-    assert g.primary.text() == theme_presets.by_id("ocean").primary
-    assert ed.primary.text() == g.primary.text()
-
-
-def test_chrome_errors_surface_in_the_page_never_raise(qapp):
-    g, ed = _opened_editor(qapp)
-    ed._chrome_widgets["header"]["bg"].setText("nope")   # textChanged slot fires
-    assert g.compose_css() == ""
-    assert "not an #RRGGBB" in g.error_text()
-    assert g.error_note.isVisibleTo(g)
-    ed._chrome_widgets["header"]["bg"].setText("")
-    assert g.error_text() == ""
-
-
-# ── 4. old theme files still load ────────────────────────────────────────────────────
 def test_old_theme_files_load_to_shipped_defaults_and_compose_identically(qapp, tmp_path):
     # A config saved BEFORE the chrome fields existed: no login_header_*/footer_*/
     # bg_effect keys at all.
@@ -183,81 +56,6 @@ def test_old_theme_files_load_to_shipped_defaults_and_compose_identically(qapp, 
     p = tmp_path / "old-theme.json"
     p.write_text(json.dumps(old), encoding="utf-8")
     assert ImageConfig.load(str(p)).login_theme_css() == expected
-
-    # an UNTOUCHED renamed surface commits the same bytes an old save composes
-    g = LoginThemeGroup()
-    g.load(cfg)
-    cfg2 = ImageConfig()
-    g.commit(cfg2)
-    assert cfg2.login_theme_css() == expected
-
-
-# ── 5. the background-effect picker (--sd-bg-effect, login-ui PR #6's contract) ──────
-def test_all_six_contract_effects_are_selectable_and_default_to_gradient(qapp):
-    g, ed = _opened_editor(qapp)
-    # exactly the contract vocabulary, in contract order, defaulting to gradient
-    assert [ed.bg_effect.itemData(i) for i in range(ed.bg_effect.count())] \
-        == list(theme.BG_EFFECTS)
-    assert ed.bg_effect.currentData() == theme.BG_EFFECT_DEFAULT == "gradient"
-    model = ed.bg_effect.model()
-    for i in range(ed.bg_effect.count()):
-        assert model.item(i).flags() & QtCore.Qt.ItemFlag.ItemIsEnabled, \
-            f"{ed.bg_effect.itemData(i)} must be selectable — login-ui PR #6 " \
-            "renders the full catalog, and unknown values degrade to gradient"
-    # a vanta pick round-trips picker -> cfg -> css like any other theme option
-    ed.bg_effect.setCurrentIndex(ed.bg_effect.findData("vanta-globe"))
-    cfg = ImageConfig()
-    g.commit(cfg)
-    assert cfg.login_bg_effect == "vanta-globe"
-    cfg.validate_identity()                     # a selectable value is a valid one
-    css = cfg.login_theme_css()
-    assert "--sd-bg-effect: vanta-globe;" in css
-    assert "--hug-bg-effect: vanta-globe;" in css   # the runtime-contract twin
-
-
-def test_effect_picker_ignores_an_unfocused_wheel(qapp):
-    """PR #72's NoWheelComboBox pattern: a hover-scroll on the way past the picker
-    must scroll the container, never silently swap the mesh's page background —
-    the worklist board-combo corruption class. The ignored event propagates
-    (accepted=False) so a containing scroll area still gets the scroll."""
-    g, ed = _opened_editor(qapp)
-    assert isinstance(ed.bg_effect, NoWheelComboBox)
-    ed.bg_effect.clearFocus()
-    before = ed.bg_effect.currentData()
-    ev = QtGui.QWheelEvent(
-        QtCore.QPointF(5, 5), QtCore.QPointF(5, 5),
-        QtCore.QPoint(0, 0), QtCore.QPoint(0, -120),
-        QtCore.Qt.MouseButton.NoButton, QtCore.Qt.KeyboardModifier.NoModifier,
-        QtCore.Qt.ScrollPhase.NoScrollPhase, False)
-    QtWidgets.QApplication.sendEvent(ed.bg_effect, ev)
-    assert ed.bg_effect.currentData() == before, \
-        "wheel over the UNFOCUSED effect picker edited it"
-    assert not ev.isAccepted(), \
-        "the ignored wheel must propagate so the page can scroll past the picker"
-
-
-def test_preset_declared_effect_fills_the_picker_and_undeclared_leaves_it(qapp, monkeypatch):
-    # A preset MAY declare an effect (ThemePreset.effect). Choosing it fills the
-    # picker exactly like the hex fill-in, so the editor never shows a value the
-    # preset's delta block would override — and the write-through means cfg +
-    # css agree with what the picker shows.
-    aurora = theme_presets.ThemePreset(
-        "aurora-test", "Aurora", "Colours", "#1976d2", "#0097a7", effect="vanta-fog")
-    monkeypatch.setattr(theme_presets, "PRESETS", theme_presets.PRESETS + (aurora,))
-    g = LoginThemeGroup()
-    g.open_editor()
-    ed = g.editor
-    ed.theme_preset.setCurrentIndex(ed.theme_preset.findData("aurora-test"))
-    assert g.chrome["bg_effect"] == "vanta-fog"
-    assert ed.bg_effect.currentData() == "vanta-fog"    # the open editor follows
-    cfg = ImageConfig()
-    g.commit(cfg)
-    assert cfg.login_bg_effect == "vanta-fog"
-    assert "--sd-bg-effect: vanta-fog;" in cfg.login_theme_css()
-    # a preset WITHOUT a declared effect leaves the operator's pick alone
-    ed.theme_preset.setCurrentIndex(ed.theme_preset.findData("ocean"))
-    assert g.chrome["bg_effect"] == "vanta-fog"
-    assert ed.bg_effect.currentData() == "vanta-fog"
 
 
 def test_vanta_values_are_valid_persisted_state_and_emit_their_token(qapp):
@@ -276,3 +74,24 @@ def test_unknown_effect_and_size_fail_closed_like_every_login_field():
         ImageConfig(login_footer_bg="blue").validate_identity()
     # defaults stay valid (the conservative-schema guarantee)
     ImageConfig().validate_identity()
+
+
+def test_effect_picker_ignores_an_unfocused_wheel(qapp):
+    """PR #72's NoWheelComboBox pattern, on the look editor that replaced the dialog:
+    a hover-scroll on the way past the picker must scroll the container, never
+    silently swap the mesh's page background. The ignored event propagates
+    (accepted=False) so a containing scroll area still gets the scroll."""
+    ed = LookEditor(brand_look.Look(), path="docker")
+    assert isinstance(ed.bg_effect, NoWheelComboBox)
+    ed.bg_effect.clearFocus()
+    before = ed.bg_effect.currentData()
+    ev = QtGui.QWheelEvent(
+        QtCore.QPointF(5, 5), QtCore.QPointF(5, 5),
+        QtCore.QPoint(0, 0), QtCore.QPoint(0, -120),
+        QtCore.Qt.MouseButton.NoButton, QtCore.Qt.KeyboardModifier.NoModifier,
+        QtCore.Qt.ScrollPhase.NoScrollPhase, False)
+    QtWidgets.QApplication.sendEvent(ed.bg_effect, ev)
+    assert ed.bg_effect.currentData() == before, \
+        "wheel over the UNFOCUSED effect picker edited it"
+    assert not ev.isAccepted(), \
+        "the ignored wheel must propagate so the page can scroll past the picker"

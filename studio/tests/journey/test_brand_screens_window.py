@@ -255,13 +255,13 @@ def test_the_network_pages_brand_rows_are_read_only_mirrors_on_a_mesh(qapp, gen)
     page.initializePage()
     for edit in (page.brand, page.brand_title, page.org, page.domain):
         assert edit.isReadOnly()
-    assert page.brand.text() == "acme" and not page.brand_mirror_note.isHidden()
+    assert page.brand.text() == "acme" and not page.brand_mirror_box.isHidden()
     assert "superbrand step" in page.brand_mirror_note.text()
     w.cfg.mode = "standalone"
     page.initializePage()
     for edit in (page.brand, page.brand_title, page.org, page.domain):
         assert not edit.isReadOnly()
-    assert page.brand_mirror_note.isHidden()
+    assert page.brand_mirror_box.isHidden()
 
 
 # ── the brands table ─────────────────────────────────────────────────────────────────

@@ -41,6 +41,11 @@ mesh node** from the system tray.
   - **per-domain sign-in, Tor, VPN and egress** on the same tabs (Identity, Ways to reach
     it): a domain signs in through the mesh, its own Casdoor, or its own Entra / Cognito /
     OIDC provider; it can have its own onion, and records its own VPN and egress choice;
+  - the brand's **ID, title, organisation and public apex domain**: on a mesh they are set
+    in the superbrand step at the top of the Branding page and nowhere else. The Network
+    page shows them greyed, says where they are changed, and its **Go back to the
+    superbrand step** button takes you there (a value typed on Network would be put back
+    by Branding's next Next, so it is not offered). Off a mesh they are edited on Network;
   - Wi-Fi/BT, **kernel built-in vs modules**, egress VPN, home mode + eCryptfs, installer
     front-ends, cached/uncached;
   - the **cluster optional-services catalog** (+ games), client **desktop weight + Steam
@@ -114,6 +119,18 @@ any other record of the checkout, a draft included, and the summary then says NE
 RAN. From the command line, `local_mesh_bootstrap mesh-save` saves with nothing running
 too (a draft), refuses `--copy-credentials` then and a name another record has, and
 `--overwrite ID` replaces a record the way Overwrite selected does.
+
+### Local mesh: vaults and volumes (the panel's Local mesh tab, **Vaults & volumes…**)
+
+One window, two tabs. **Managed volumes** lists the running mesh's Docker volumes with
+their size and what holds each one; deleting one needs its own name typed in, never a
+pop-up. **Vault entries** reads the DevOps (kind) lane's `vault-0` through `kubectl
+exec`, with the token passed on stdin, never on a command line. When it cannot read
+them it says exactly why and what to do instead of showing an empty table: the lane is
+not up or is halted, Vault is sealed, or its token Secret is not readable (that last one
+names the context and the Secret). The fix for "the vault entries never show even with
+the kind lane up" is in this branch; the reason path was exercised against the live kind
+lane, but a full entry listing against a running, unsealed Vault has not been run yet.
 
 ### Local mesh: code folders (on the Repo source step)
 
