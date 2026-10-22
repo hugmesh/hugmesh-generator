@@ -52,7 +52,7 @@ first time you run it. Check the SHA-256 from the release against your download
 before you run it:
 
 ```powershell
-Get-FileHash .\hugmesh-studio-1.0.0-x64.msi -Algorithm SHA256
+Get-FileHash .\hugmesh-studio-0.3.0-beta.1-x64.msi -Algorithm SHA256
 ```
 
 > **Windows and WSL.** `core/platform_info.py` records a decision (2026-08-14) that
@@ -67,7 +67,7 @@ Get-FileHash .\hugmesh-studio-1.0.0-x64.msi -Algorithm SHA256
 ## Linux
 
 ```bash
-flatpak install --user ./hugmesh-studio-1.0.0-x86_64.flatpak
+flatpak install --user ./hugmesh-studio-0.3.0-beta.1-x86_64.flatpak
 flatpak run org.hugmesh.ImageStudio --generator-dir ~/Github/hugmesh-generator
 ```
 
@@ -83,16 +83,59 @@ The release is a **bundle**, not a Flathub app. HugMesh's own governed desktops 
 the Flathub remote (`keys-template/desktop-governance/flatpak/flathub-disable.conf`),
 so Flathub would not reach the machines most likely to want this.
 
+## Versions
+
+The Studio follows the org's beta scheme: `MAJOR.MINOR.PATCH-beta.N`, for example
+`0.3.0-beta.1`. N starts at 1 and goes up by one for each published beta of the same
+base. A fix during a beta raises N, not PATCH. There is no `+build` part and never a
+`-SNAPSHOT`.
+
+The version is written in one place, `__version__` in
+`studio/hugmesh_studio/__init__.py`. Everything else is derived from it:
+
+| Where | What it shows for `0.3.0-beta.1` |
+|---|---|
+| Installer file names, About box, release tag | `0.3.0-beta.1`, tag `studio-v0.3.0-beta.1` |
+| MSI ProductVersion (Add/Remove Programs) | `0.3.1` |
+| Python package metadata (PEP 440) | `0.3.0b1` |
+
+**Why the MSI shows a different number.** An MSI version is numbers only, and
+Windows Installer compares just the first three fields when it decides whether one
+install replaces another. So the beta number goes into the third field:
+`PATCH * 100 + N` for `-beta.N`, and `PATCH * 100 + 99` for the final release.
+`0.3.0-beta.2` becomes `0.3.2`, the final `0.3.0` becomes `0.3.99`, and
+`0.3.1-beta.1` becomes `0.3.101`. That always goes up, and allows 98 betas per PATCH.
+[`studio/packaging/wix/msi_version.py`](../studio/packaging/wix/msi_version.py) does the
+mapping for both the workflow and `build-msi-wine.sh`.
+
+**If a 1.0.0 MSI is installed.** The Studio was numbered 1.0.0 before the beta scheme,
+and no 1.0.0 was ever released. A local 1.0.0 MSI built with `build-msi-wine.sh`
+counts as newer than `0.3.1`, so the beta installer refuses to replace it. Uninstall
+the 1.0.0 build first.
+
 ## Cutting a release
 
-1. Bump `__version__` in `studio/hugmesh_studio/__init__.py`. It is the **only** place
-   a version is written. The installer filenames, the About box and the release tag
-   all derive from it.
-2. Tag: `git tag studio-v1.2.3 && git push origin studio-v1.2.3`.
-   (Or run the workflow manually with **publish** ticked.)
-3. The workflow stops if the tag and `__version__` disagree.
+1. Set `__version__` in `studio/hugmesh_studio/__init__.py` to the new beta, and add a
+   matching `<release>` to
+   `studio/packaging/flatpak/org.hugmesh.ImageStudio.metainfo.xml` (AppStream writes
+   the pre-release with `~`: `0.3.0~beta.2`). Merge that to `main`.
+2. Tag the merged commit on `main` and push the tag:
+   `git tag -a studio-v0.3.0-beta.2 -m "Studio 0.3.0-beta.2" && git push origin studio-v0.3.0-beta.2`.
+3. The workflow stops if the tag and `__version__` disagree. It builds both installers
+   and creates the GitHub Release, marked **pre-release** and never "latest".
 4. Copy the `releases.json` from the job summary into `hugmesh.github.io` at
    `src/assets/releases.json`. That updates the site's Downloads page.
+
+To re-run a release, run the workflow manually **on the tag** with **publish** ticked:
+`gh workflow run studio-release.yml --repo hugmesh/hugmesh-generator --ref studio-v0.3.0-beta.2 -f publish=true`.
+If the release already exists, the run stops without changing it. A manual run on
+`main` builds both installers as workflow artifacts and publishes nothing. A run on
+any other branch is refused.
+
+The version and publish jobs use the self-hosted runner only when the repository
+variable `RUNS_ON_PUBLISH` is set, and only for `main` and `studio-v*` tags. Delete
+the variable and they go back to GitHub's hosted runners. The MSI job always needs
+`windows-latest`, and the Flatpak job always runs on `ubuntu-latest`.
 
 Step 4 is manual on purpose. `GITHUB_TOKEN` cannot reach another repository, and a
 cross-repo PAT for a once-per-release file would be the first PAT anywhere in this
