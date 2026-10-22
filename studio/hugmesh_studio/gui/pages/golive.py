@@ -1246,6 +1246,9 @@ class GoLiveFlipPage(QtWidgets.QWizardPage):
         self._report(ok, msg)
 
 
+GOLIVE_WINDOW_TITLE = "HugMesh Go-Live Wizard"
+
+
 class GoLiveWizard(QtWidgets.QWizard):
     """Internal-only → publicly live, in seven guided steps — the Studio face of
     the one shared driver (hugmesh-go-live-cli / -menu drive the same
@@ -1265,7 +1268,7 @@ class GoLiveWizard(QtWidgets.QWizard):
         self.export_config_files: list[str] = []
         self.export_runner = None
         self.export_remote_base = ""
-        self.setWindowTitle("HugMesh Go-Live Wizard")
+        self.setWindowTitle(GOLIVE_WINDOW_TITLE)
         self.setWindowIcon(brand_icon())
         self.setWizardStyle(QtWidgets.QWizard.WizardStyle.ModernStyle)
         self.resize(820, 640)
@@ -1294,3 +1297,58 @@ class GoLiveWizard(QtWidgets.QWizard):
                 i = ids.index(export_id)
                 return ids[i + 1] if i + 1 < len(ids) else -1
         return nid
+
+    # ── opened from a brand's Ways tab ─────────────────────────────────────────────
+    def preselect_domain(self, name: str) -> None:
+        """Fill the Inputs step's Public domain with ``name`` (the brand whose Ways tab
+        asked). The typed field is what carries it: the picker above it lists only the
+        domains baked on THIS device, which on a dev box is usually none, and the
+        Inputs step autofills only an empty field. An empty name changes nothing."""
+        name = (name or "").strip().lower()
+        if not name:
+            return
+        self.opts.domain = name
+        inputs = self._pages[GOLIVE_PAGE_SLUGS.index("inputs")]
+        inputs.domain.setText(name)
+        inputs.domain_hint.setText(FROM_WAYS_TAB_HINT)
+        # said from the first step on: the Inputs step is three steps away
+        self.setWindowTitle(f"{GOLIVE_WINDOW_TITLE} — {name}")
+
+    def before_inputs(self) -> bool:
+        """True while the person has not gone past the Inputs step (a new domain can
+        still be filled in without throwing away anything they did)."""
+        ids = list(self.pageIds())
+        cur = self.currentId()
+        at = ids.index(cur) if cur in ids else 0
+        return at <= GOLIVE_PAGE_SLUGS.index("inputs")
+
+
+#: the Public domain's hint when a brand's Ways tab filled it in
+FROM_WAYS_TAB_HINT = "filled in from the brand's ‘Ways to reach it’ tab"
+
+
+def open_go_live(generator_dir: str, domain: str = "", current=None):
+    """Show the Go-Live wizard with ``domain`` filled in, and return it — the receiver
+    of every Brand settings ‘Set up ways to reach this brand’ button (image, Docker
+    and Fleet routes alike).
+
+    ``current`` is the wizard this caller opened last time, if any: while it is still
+    open and has not gone past the Inputs step it is reused (the new domain filled
+    in, the window raised); otherwise a new wizard opens, so a run already past the
+    Inputs step is never thrown away. The caller keeps the returned wizard (a
+    top-level window with no parent is closed by Python's garbage collector the
+    moment nothing holds it). Shown, never exec()'d: no modal."""
+    wiz = current
+    reuse = False
+    try:
+        reuse = (wiz is not None and wiz.isVisible() and wiz.before_inputs()
+                 and os.path.abspath(generator_dir) == wiz.generator_dir)
+    except RuntimeError:                         # its C++ side was deleted
+        reuse = False
+    if not reuse:
+        wiz = GoLiveWizard(generator_dir)
+    wiz.preselect_domain(domain)
+    wiz.show()
+    wiz.raise_()
+    wiz.activateWindow()
+    return wiz

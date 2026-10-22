@@ -87,13 +87,25 @@ class GoLiveScreen:
         if not providers:
             return out + ["(the driver's registry listed no providers — is "
                           "specs/usr/sbin/hugmesh-go-live present?)", "",
-                          "commands: q=quit"]
+                          "commands: " + ("b=back to Brand settings" if self._over(j)
+                                          else "q=quit")]
         for i, p in enumerate(providers, 1):
             out.append(f"  {i}. {p.id} — {p.model} ({p.mechanism}) — {p.title}")
-        out += ["", "commands: NUMBER=pick"]
+        if self.opts.domain and self._over(j):
+            out += ["", f"domain: {self.opts.domain} (picked from its Brand settings)"]
+        out += ["", "commands: NUMBER=pick" + (" · b=back to Brand settings"
+                                              if self._over(j) else "")]
         return out
 
+    def _over(self, j) -> bool:
+        """True when this screen was opened over Brand settings (its Ways section's
+        ``go-live``), so b on the first step closes it again."""
+        return getattr(j, "overlay", None) is self
+
     def _feed_provider(self, j, line: str) -> None:
+        if line.lower() == "b" and self._over(j):
+            j.close_overlay()
+            return
         providers = self._driver(j).providers()
         try:
             n = int(line)

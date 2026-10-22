@@ -120,6 +120,9 @@ class BrandSettingsTabs(QtCore.QObject):
     def __init__(self, route: str = "image", parent=None):
         super().__init__(parent)
         self.route = route
+        #: False on a host that cannot open the Go-Live wizard: the Ways tab then draws
+        #: no button and its line names only the --go-live option
+        self.ways_offered = True
         self.view: brand_step.BrandView | None = None
         self._active = False
         self._services: list[QtWidgets.QWidget] = []
@@ -152,6 +155,13 @@ class BrandSettingsTabs(QtCore.QObject):
         sl = QtWidgets.QVBoxLayout(self.signin_box)
         self.signin_now = _wrapped("", name="brand_signin_now")
         sl.addWidget(self.signin_now)
+        # what THIS route does with an added domain's own sign-in (BrandView
+        # .signin_effect): on the image and Fleet routes it is kept, not applied, and
+        # the line says so in the Look tab's orange; on the Docker route it says what
+        # the start stands up. Hidden on row 0 and on a client image.
+        self.signin_route_note = _wrapped("", name="brand_signin_route_note")
+        self.signin_route_note.setVisible(False)
+        sl.addWidget(self.signin_route_note)
         self.signin_choice = QtWidgets.QComboBox()
         self.signin_choice.setObjectName("brand_signin_choice")
         for key, label in brand_step.SIGNIN_CHOICES:
@@ -495,8 +505,9 @@ class BrandSettingsTabs(QtCore.QObject):
         # A client image serves no domain: the Go-Live wizard (internal and public
         # names) is a mesh device's, so the button and its pointer are not offered.
         client = v.client_image()
-        self.ways_btn.setVisible(not client)
-        self.ways_note.setText("" if client else brand_step.WAYS_HOME)
+        self.ways_btn.setVisible(not client and self.ways_offered)
+        self.ways_note.setText("" if client else (
+            brand_step.WAYS_HOME if self.ways_offered else brand_step.WAYS_HOME_NO_BUTTON))
 
     # ── the domain's sign-in ──────────────────────────────────────────────────────
     def _fill_signin(self, note: str = "", error: bool = False) -> None:
@@ -508,6 +519,11 @@ class BrandSettingsTabs(QtCore.QObject):
                 return
             self.signin_box.setVisible(True)
             self.signin_now.setText("Now: " + v.signin_words())
+            effect = v.signin_effect()
+            self.signin_route_note.setStyleSheet(
+                "color: #a65d00;" if v.signin_not_applied() else _MUTED)
+            self.signin_route_note.setText(effect)
+            self.signin_route_note.setVisible(bool(effect))
             own = v.own
             # row 0 offers the MESH's own provider (it IS the mesh); a brand offers its
             # own sign-in or the mesh's

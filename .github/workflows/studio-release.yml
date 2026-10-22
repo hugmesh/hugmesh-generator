@@ -80,7 +80,11 @@ concurrency:
 
 jobs:
   version:
-    runs-on: ${{ fromJSON(github.event_name != 'pull_request' && github.event_name != 'pull_request_target' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v') || startsWith(github.ref, 'refs/tags/studio-v')) && vars.RUNS_ON_PUBLISH || '"ubuntu-latest"') }}
+    # Hosted literally, like every job here (see RUNNERS above). A RUNS_ON_PUBLISH
+    # expression here would let one repository variable put the version gate on the
+    # self-hosted runner, whose group refuses public repositories: the run would queue
+    # forever and nothing would be released.
+    runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
       version: ${{ steps.read.outputs.version }}
@@ -515,8 +519,12 @@ jobs:
       AUTHENTICODE: ${{ needs.msi.outputs.authenticode }}
     steps:
       - name: Never overwrite a published release
-        # A published beta is an immutable coordinate. A re-run on a tag whose release
-        # already exists stops here, green, and changes nothing. Only gh's own "release
+        # WARNING (2026-10-22): the steps below no longer carry
+        # `if: steps.exists.outputs.skip != 'true'` (removed by hand on main), so today a
+        # re-run on a tag whose release already exists does NOT stop here: it rebuilds,
+        # re-signs and replaces the release's same-named files with new bytes. Only the
+        # Summarise step still reads `skip`. Restore those `if:` lines to make a
+        # published beta immutable again. Only gh's own "release
         # not found" counts as absent: any other failure (network, auth, rate limit)
         # stops the job, because the publish step below would otherwise run against a
         # release that may exist and replace its same-named files.
@@ -792,9 +800,10 @@ jobs:
 
       - name: Tell hugmesh.github.io to rebuild its downloads data
         # Contract: .wf-scripts downloads/DISPATCH-CONTRACT.md (event type
-        # releases-updated). NOT gated on the overwrite check: a re-run on a tag whose
-        # release already exists (for example after SITE_DISPATCH_TOKEN was added) only
-        # re-sends this notice, which changes nothing here. GITHUB_TOKEN cannot reach
+        # releases-updated). NOT gated on the overwrite check. WARNING: while the
+        # publish steps above are not gated either (see "Never overwrite"), re-running
+        # this workflow on an existing tag just to re-send this notice ALSO replaces the
+        # published files; send the dispatch by hand instead. GITHUB_TOKEN cannot reach
         # another repository; SITE_DISPATCH_TOKEN is a fine-grained token (or GitHub App
         # token) with Contents: read and write on hugmesh/hugmesh.github.io only.
         env:

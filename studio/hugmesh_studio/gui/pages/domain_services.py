@@ -400,6 +400,11 @@ class DomainServicesBody:
         # and each control shows what the other set.
         self.brand_tabs.tor_changed.connect(self._on_tabs_tor)
         self.brand_tabs.row_changed.connect(self._on_tabs_row_changed)
+        # The Ways tab's 'Set up ways to reach this brand': opens the Go-Live wizard
+        # with this domain filled in, on every host (each says where its checkout is:
+        # ``_golive_generator_dir``). It had no receiver at all before 2026-10-21.
+        self._golive = None
+        self.brand_tabs.ways_requested.connect(self._open_go_live)
         _services_from = lay.count()
 
         # ── the domain's FRONT DOOR (#582, decision 68 = A) ────────────────────────
@@ -694,10 +699,35 @@ class DomainServicesBody:
                 f"All {total} domain{'s' if total != 1 else ''} configured.")
             self.remaining.setStyleSheet(f"color: {MUTED};")
 
+    # ── the Ways tab's button: the Go-Live wizard for this domain ─────────────────
+    def _golive_generator_dir(self) -> str:
+        """Host hook: the checkout the Go-Live wizard runs its driver from ("" = this
+        host cannot open it, and the Ways tab then offers no button)."""
+        return ""
+
+    def _open_go_live(self, name: str) -> None:
+        """The 'Set up ways to reach this brand' click: show the Go-Live wizard with
+        ``name`` filled in as its public domain. Never raises (a PyQt6 slot that raises
+        is fatal); the wizard is kept on the host so it is not garbage-collected."""
+        try:
+            gen = self._golive_generator_dir()
+            if not gen:
+                return
+            from .golive import open_go_live
+            self._golive = open_go_live(gen, name, current=self._golive)
+        except Exception:                       # noqa: BLE001 — PyQt6 qFatal guard
+            import sys
+            import traceback
+            print("domain_services: swallowed exception in _open_go_live",
+                  file=sys.stderr)
+            traceback.print_exc(file=sys.stderr)
+
     def _refresh_brand_tabs(self, name: str) -> None:
         """Point the four tabs at the domain on screen (the mesh's own domain is the
         superbrand's row). Never raises: a slot must not take the Studio down."""
         try:
+            # the Ways button is offered only where pressing it can open the wizard
+            self.brand_tabs.ways_offered = bool(self._golive_generator_dir())
             session = self._brand_session()
             self.brand_tabs.set_active(session is not None)
             if session is None:
@@ -1022,6 +1052,9 @@ class DomainServicesPage(QtWidgets.QWizardPage, DomainServicesBody):
     def _scope_cfg(self):
         return self.wiz.cfg
 
+    def _golive_generator_dir(self) -> str:
+        return getattr(self.wiz, "generator_dir", "") or ""
+
     def _brand_session(self):
         """The image route's superbrand session — on a mesh AND on a Mesh desktop client
         image (cloud mode: the same four tabs, each saying the client keeps its choices
@@ -1152,8 +1185,12 @@ class DomainServicesWidget(QtWidgets.QWidget, DomainServicesBody):
     sentence saying what this lane does with the selection."""
 
     def __init__(self, scope_cfg=None, entries=None, lane_note: str = "",
-                 brand_session=None, route: str = "docker", parent=None):
+                 brand_session=None, route: str = "docker", parent=None,
+                 generator_dir: str = ""):
         super().__init__(parent)
+        #: the host's checkout: where the Ways tab's button opens the Go-Live wizard
+        #: from ("" = no button)
+        self._generator_dir = generator_dir or ""
         self._scope_cfg_fn = scope_cfg
         self._entries_fn = entries
         #: ``brand_session`` is a callable returning the host's superbrand session (or
@@ -1191,6 +1228,9 @@ class DomainServicesWidget(QtWidgets.QWidget, DomainServicesBody):
 
     def _entries(self):
         return list(self._entries_fn() or ()) if self._entries_fn else []
+
+    def _golive_generator_dir(self) -> str:
+        return self._generator_dir
 
     def _brand_session(self):
         return self._brand_session_fn() if self._brand_session_fn else None
