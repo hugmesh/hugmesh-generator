@@ -337,8 +337,12 @@ def test_the_armed_overwrite_says_the_credential_copies_go(qapp, page):
     note = w.overwrite_note.text()
     assert "Its saved credential copies are removed: this save keeps pointers only." \
         in note, note
-    # nothing running: the second click turns the record into a draft, and says so
-    assert "becomes a draft (never ran)" in note
+    # nothing running: the second click files a configuration that has not run, and
+    # says so — but this record's mesh RAN (a record with no last_seen facts predates
+    # the field and could only have been saved from a running mesh), so it is never
+    # called one that never ran (saved-meshes skeptic 2, probe_core.py case A)
+    assert "marked not run as saved" in note, note
+    assert "never ran" not in note, note
 
 
 def test_a_record_without_copies_does_not_claim_any_go(qapp, page):
@@ -406,5 +410,65 @@ def test_the_save_records_what_the_monitor_last_read_of_the_kind_lane(qapp, page
     w.save_btn.click()
     _settle(qapp, page)
     rec = next(r for r in sm.scan()[0] if r.label == f"kind-{kind}")
+    assert rec.last_seen["kind_running"] is kind
+    assert rec.ran_when_saved() is bool(kind)
+
+
+def test_the_armed_overwrite_of_a_draft_says_it_stays_one(qapp, page):
+    """A record saved with nothing up (it never ran) overwritten with nothing up is
+    still a draft that never ran — and only that record is called one."""
+    _record(label="never up", last_seen={"compose_running": False,
+                                         "kind_running": False, "at": "x"})
+    w = _entered(qapp, page)
+    _select(page)
+    w.overwrite_btn.click()
+    note = w.overwrite_note.text()
+    assert "stays a draft (never ran)" in note, note
+    assert "marked not run as saved" not in note
+
+
+def test_an_overwrite_with_nothing_running_keeps_that_the_mesh_ran(qapp, page):
+    """The second click with nothing up: the record keeps WHEN its mesh last ran, and
+    the node-image import line does not call it a mesh that never ran."""
+    old = _record(label="ran last week",
+                  last_seen={"compose_running": True, "kind_running": None,
+                             "at": "2026-10-14T09:30:00+00:00"})
+    w = _entered(qapp, page)
+    _select(page)
+    w.overwrite_btn.click()                                   # arms
+    w.overwrite_btn.click()                                   # saves
+    _settle(qapp, page)
+    got = sm.find(old.id)
+    assert got.ran_when_saved() is False
+    assert got.ran_before_at() == "2026-10-14T09:30:00+00:00"
+    src = lmb.saved_mesh_source(got)
+    assert "NEVER RAN" not in src and "NOT RUN AS SAVED" in src, src
+
+
+# ── the GUI kind-lane path, from the monitor's own snapshot (no stubbed reader) ──
+@pytest.mark.parametrize("kind", [True, False, None])
+def test_the_save_records_the_kind_lane_from_the_monitor_snapshot(qapp, page, kind,
+                                                                  monkeypatch):
+    """Saved-meshes skeptic 2 (R5), end to end on the page: a monitor snapshot that
+    arrives through _on_monitor (the slot the off-thread probe feeds) decides the
+    record's kind_running — True, False, or None while the census could not be
+    taken. The reader itself is not stubbed, so dropping what it reads goes red."""
+    from hugmesh_studio.core import mesh_monitor as mm
+    w = _entered(qapp, page)
+    # no REAL census may land over the test's snapshot: let one in flight finish,
+    # then start no more (the reader under test is untouched)
+    t = getattr(page, "_monitor_probe", None)
+    if t is not None:
+        t.wait(10000)
+        qapp.processEvents()
+    monkeypatch.setattr(page, "_refresh_monitor", lambda reason="": False)
+    page._on_monitor(mm.MonitorSnapshot(
+        taken_at="10:00:00", compose=mm.LaneState(False, "not started"),
+        kind=mm.LaneState(kind, "cluster hugmesh-local" if kind else "",
+                          error="" if kind is not None else "kubectl is not installed")))
+    w.name_edit.setText(f"monitor-{kind}")
+    w.save_btn.click()
+    _settle(qapp, page)
+    rec = next(r for r in sm.scan()[0] if r.label == f"monitor-{kind}")
     assert rec.last_seen["kind_running"] is kind
     assert rec.ran_when_saved() is bool(kind)

@@ -427,10 +427,23 @@ class SavedMeshesWidget(QtWidgets.QWidget):
             fills = (" It never recorded a choice of " + " or ".join(unrecorded)
                      + "; the form's current ticks are written in." if unrecorded
                      else "")
-            draft = (" The Docker mesh is not running, so unless the DevOps lane is "
-                     "up the replaced record becomes a draft (never ran) and the "
-                     "node-image pages stop importing it by default."
-                     if self._mesh_up is False else "")
+            # a record whose mesh RAN keeps that it did (capture's ran_before_at):
+            # only a record that never ran is called one that never ran
+            try:
+                last_ran = rec.last_ran_at()
+            except Exception:                       # noqa: BLE001 — wording only
+                last_ran = ""
+            if self._mesh_up is not False:
+                draft = ""
+            elif last_ran:
+                draft = (" The Docker mesh is not running, so unless the DevOps lane "
+                         "is up the replaced record is marked not run as saved (it "
+                         "keeps that this mesh last ran "
+                         f"{last_ran[:16].replace('T', ' ')}) and the node-image "
+                         "pages stop importing it by default.")
+            else:
+                draft = (" The Docker mesh is not running, so unless the DevOps lane "
+                         "is up the replaced record stays a draft (never ran).")
             self.overwrite_note.setText(
                 f"A second click replaces the saved record ‘{label}’ (saved "
                 f"{(rec.created or '?')[:16].replace('T', ' ')}) with the mesh being "

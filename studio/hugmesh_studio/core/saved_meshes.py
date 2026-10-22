@@ -304,11 +304,38 @@ class SavedMesh:
         record that carries no ``last_seen`` facts at all predates the field and
         could only have been saved from a running mesh, so it counts as ran. An
         Overwrite made while nothing runs rewrites ``last_seen``, so the replaced
-        record becomes a draft too: the configuration it now holds has not run."""
+        record becomes a draft too: the configuration it now holds has not run. It
+        does not become a mesh that NEVER ran, though — :meth:`ran_before_at` keeps
+        that an earlier version of it did."""
         seen = self.last_seen if isinstance(self.last_seen, dict) else {}
         if "compose_running" not in seen and "kind_running" not in seen:
             return True
         return seen.get("compose_running") is True or seen.get("kind_running") is True
+
+    def ran_before_at(self) -> str:
+        """When an EARLIER version of this record last ran, or "" when none did.
+
+        Set by :func:`capture` on an Overwrite made while nothing runs: the record's
+        configuration has not run (so :meth:`ran_when_saved` is False and the
+        node-image pages do not import it by default), but the mesh it names DID run
+        — calling it "saved before its first bring-up" would be false (saved-meshes
+        skeptic 2, 2026-10-21). Carried forward across further such overwrites."""
+        seen = self.last_seen if isinstance(self.last_seen, dict) else {}
+        return str(seen.get("ran_before_at") or "")
+
+    def last_ran_at(self) -> str:
+        """When this record's mesh was last seen UP: its own save time when it ran
+        then (a legacy record with no facts: its updated/created stamp), else
+        :meth:`ran_before_at`. "" = it never ran, as far as any version of it says."""
+        if self.ran_when_saved():
+            seen = self.last_seen if isinstance(self.last_seen, dict) else {}
+            return str(seen.get("at") or self.updated or self.created or "unknown")
+        return self.ran_before_at()
+
+    def ever_ran(self) -> bool:
+        """Did this record's mesh run at all — at its save, or in an earlier version
+        of it that an Overwrite replaced? False only for a true draft."""
+        return bool(self.last_ran_at())
 
     def volume_count(self) -> int:
         return len(self.volumes.get("inventory") or [])
@@ -599,7 +626,9 @@ def records_for_checkout(generator_dir: str,
                          hostname: str | None = None) -> list[SavedMesh]:
     """Every readable record that describes the mesh this checkout drives
     (:meth:`SavedMesh.same_checkout` — same generator dir, same host), the ones that
-    RAN first (:meth:`SavedMesh.ran_when_saved`), each group newest first.
+    RAN first (:meth:`SavedMesh.ran_when_saved`), then the ones overwritten while
+    nothing ran whose earlier version did (:meth:`SavedMesh.ran_before_at`), then the
+    true drafts, each group newest first.
 
     "Newest" is ``updated`` (a re-save moves a record forward), falling back to
     ``created`` and then the sortable id. Pure file reads, no docker. The order the
@@ -611,7 +640,8 @@ def records_for_checkout(generator_dir: str,
     mine.sort(key=lambda r: (_stamp(r.updated) or _stamp(r.created), r.id),
               reverse=True)
     return ([r for r in mine if r.ran_when_saved()]
-            + [r for r in mine if not r.ran_when_saved()])
+            + [r for r in mine if not r.ran_when_saved() and r.ever_ran()]
+            + [r for r in mine if not r.ever_ran()])
 
 
 def latest_for_checkout(generator_dir: str,
@@ -934,13 +964,30 @@ def capture(generator_dir: str, cfg, node, boot, *, label: str = "",
                                       else bool(kind_running)),
                      "running_env": running_env, "at": _now()}
     if not compose_running and kind_running is not True:
+        # An OVERWRITE of a record whose mesh ran (in this version or an earlier one)
+        # keeps WHEN it last ran: the new configuration has not run, but the mesh it
+        # names did, and its data volumes may well still be here. Without this the
+        # record read "NEVER RAN: saved as a draft before its first bring-up" — false
+        # for a mesh that ran last week (saved-meshes skeptic 2, 2026-10-21).
+        prior = ""
+        if overwrite is not None:
+            try:
+                prior = overwrite.last_ran_at()
+            except Exception:                        # noqa: BLE001 — a fact only
+                prior = ""
+        if prior:
+            rec.last_seen["ran_before_at"] = prior
         rec.notes.append(
             "Saved while the local Docker mesh was not running"
             + (" (and neither was the DevOps lane)" if kind_running is False else "")
-            + ": this record is the configuration as it was being worked on. 'Load "
-              "into the form' and then 'Generate && start' (or 'Start DevOps lane') "
-              "brings it up; a Restore needs credential files that a first bring-up "
-              "has not minted yet, and says so instead of starting.")
+            + ": this record is the configuration as it was being worked on. "
+            + (f"An earlier version of this saved mesh ran (last seen up {prior}); "
+               "this configuration has not run yet. " if prior else "")
+            + "'Load into the form' and then 'Generate && start' (or 'Start DevOps "
+              "lane') brings it up"
+            + ("." if prior else
+               "; a Restore needs credential files that a first bring-up has not "
+               "minted yet, and says so instead of starting."))
     # WHAT THE RECORD IS. `config` is the page FORM's configuration, not a read-back
     # of the running containers: the only knob this module can read off a running
     # mesh is ENV (`running_env`, from the gateway's CASDOOR_ISSUER_URI — nothing
@@ -1299,7 +1346,15 @@ def restore_plan(rec: SavedMesh, *, volumes_present: bool | None = None,
     # a record saved before its first bring-up (or while docker did not answer) has
     # no inventory: its volumes are not "gone", there never were any on record — and
     # then there is no .onion key to lose either
+    # — unless the record (or an earlier version an Overwrite replaced) DID run: then
+    # "before its first bring-up" is false, and the honest reason is what is left
+    try:
+        ran = rec.ever_ran()
+    except Exception:                                  # noqa: BLE001 — wording only
+        ran = False
     gone = ("the data volumes are gone" if n else
+            "no data volumes were recorded with it (none were found when it was "
+            "saved: docker did not answer, or they had been removed)" if ran else
             "no data volumes were recorded with it (saved before its first bring-up, "
             "or while docker did not answer)")
     onion = (" The .onion is not restored (its key volume was removed)." if n else "")

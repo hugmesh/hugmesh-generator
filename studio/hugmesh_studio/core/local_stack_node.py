@@ -1619,11 +1619,24 @@ class LocalStackNode:
         binary that creates it, and an unestablished reason must never be reported as
         a running cluster (the same tri-state rule the e2e gate follows: unknown is
         rendered as unknown, never as a blocker)."""
+        return self.devops_running_state() is True
+
+    def devops_running_state(self) -> bool | None:
+        """The same question as :meth:`devops_running`, as a TRI-STATE for a caller
+        that RECORDS the answer rather than gating on it (``mesh-save``): True the
+        cluster is listed, False it is not (or no ``kind`` binary resolves — a
+        cluster this lane created cannot exist without the binary that creates it),
+        **None** the probe itself failed (non-zero exit, a timeout, a binary that
+        will not run), so nothing was established either way. A saved mesh must
+        never file "the DevOps lane was not running" on a probe that did not
+        answer (saved-meshes fix round, 2026-10-21)."""
         kind = devops_tools.which("kind", self.generator_dir)
         if not kind:
             return False
         rc, out = self._probe([kind, "get", "clusters"])
-        return rc == 0 and _kind_cluster_name() in out.split()
+        if rc != 0:
+            return None
+        return _kind_cluster_name() in out.split()
 
     def devops_down(self, on_line=None, cancel=None) -> tuple[bool, str]:
         """`make kind-down` — delete the local Kubernetes cluster. Destructive for

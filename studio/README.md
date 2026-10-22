@@ -111,9 +111,14 @@ node-image flow ("Create nodes for local cloud", GUI and terminal) imports the n
 record for the checkout whose mesh **ran**, with every domain's settings; a newer draft
 never replaces it. Its **Import from saved mesh** list (a number in the terminal) picks
 any other record of the checkout, a draft included, and the summary then says NEVER
-RAN. From the command line, `local_mesh_bootstrap mesh-save` saves with nothing running
-too (a draft), refuses `--copy-credentials` then and a name another record has, and
-`--overwrite ID` replaces a record the way Overwrite selected does.
+RAN. An **Overwrite** made while nothing runs files a configuration that has not run,
+but a record whose mesh ran keeps when it last did: it reads NOT RUN AS SAVED (with
+that date), never NEVER RAN, and the import lists it after the records that ran and
+before the true drafts. From the command line, `local_mesh_bootstrap mesh-save` saves
+with nothing running too (a draft), refuses `--copy-credentials` then and a name
+another record has, and `--overwrite ID` replaces a record the way Overwrite selected
+does. It records the DevOps lane as unknown, never as "not running", when its `kind
+get clusters` probe fails.
 
 ### Local mesh: code folders (on the Repo source step)
 
