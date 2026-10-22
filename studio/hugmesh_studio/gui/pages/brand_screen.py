@@ -155,6 +155,13 @@ class BrandSettingsTabs(QtCore.QObject):
         sl = QtWidgets.QVBoxLayout(self.signin_box)
         self.signin_now = _wrapped("", name="brand_signin_now")
         sl.addWidget(self.signin_now)
+        # what THIS route does with an added domain's own sign-in (BrandView
+        # .signin_effect): on the image and Fleet routes it is kept, not applied, and
+        # the line says so in the Look tab's orange; on the Docker route it says what
+        # the start stands up. Hidden on row 0 and on a client image.
+        self.signin_route_note = _wrapped("", name="brand_signin_route_note")
+        self.signin_route_note.setVisible(False)
+        sl.addWidget(self.signin_route_note)
         self.signin_choice = QtWidgets.QComboBox()
         self.signin_choice.setObjectName("brand_signin_choice")
         for key, label in brand_step.SIGNIN_CHOICES:
@@ -512,6 +519,11 @@ class BrandSettingsTabs(QtCore.QObject):
                 return
             self.signin_box.setVisible(True)
             self.signin_now.setText("Now: " + v.signin_words())
+            effect = v.signin_effect()
+            self.signin_route_note.setStyleSheet(
+                "color: #a65d00;" if v.signin_not_applied() else _MUTED)
+            self.signin_route_note.setText(effect)
+            self.signin_route_note.setVisible(bool(effect))
             own = v.own
             # row 0 offers the MESH's own provider (it IS the mesh); a brand offers its
             # own sign-in or the mesh's

@@ -3089,6 +3089,16 @@ SIGNIN_SOURCE_WORDS = {
     SIGNIN_OWN_EXTERNAL: "this domain's own external provider",
 }
 
+#: What the image route's Domains step says about an 'Own' sign-in, in the window and
+#: the text screen alike: ImageConfig.to_cli_args passes no per-domain sign-in to any
+#: builder, the row rides the mesh manifest only, and the casdoor-domains element writer
+#: that would read it is not built (docs/DOMAIN-IDP.md). The domain's Identity tab says
+#: the same in full (tui/brand_step.SIGNIN_NOT_APPLIED).
+OWN_SIGNIN_NOT_APPLIED_ON_IMAGE = (
+    "Not applied by a built image yet: an Own choice is kept with this configuration "
+    "and the domain signs in through the mesh until the cluster side is built "
+    "(docs/DOMAIN-IDP.md).")
+
 
 class DomainSignIn(NamedTuple):
     """A domain's EFFECTIVE sign-in (``effective_signin``). ``issuer`` is "" when the

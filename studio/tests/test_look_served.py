@@ -480,3 +480,48 @@ def test_the_whole_look_survives_a_record_round_trip():
     assert back.login_look == {"header_bg": "#abcdef", "header_hidden": True}
     assert LocalMeshBootstrapConfig.from_dict(
         dict(cfg.to_dict(), login_look="junk")).login_look == {}
+
+
+def test_a_domain_with_its_own_look_keeps_the_meshs_pictures_and_uploaded_font(
+        gen, fake_make, tmp_path):
+    """The other two nouns the Look tab shows as inherited: the mesh's pictures and its
+    uploaded font live outside the record's eight look keys too, and must reach the
+    stylesheet served at a domain that took one colour of its own."""
+    from hugmesh_studio.core import brand_images
+    from test_look_model import png_bytes
+    font = tmp_path / "Brand-Face.woff2"
+    font.write_bytes(b"wOF2" + b"\x00" * 60)
+    logo = brand_images.reencode(png_bytes(8, 8), "logo").data_uri()
+    whole = {"primary": "#123456", "logo_image": logo, "font_file": str(font),
+             "font_licence": "SIL OFL 1.1", "font_source": "example foundry"}
+    node = LocalMeshBootstrap(gen, _cfg(login_look=whole))._stack_node()
+    assert node.start() == (True, "")
+    served = _read(_looks(gen), "by-host", "shop.example", "hug-theme.css")
+    assert "#ff0000" in served.lower()                     # its own colour
+    assert logo in served, "the mesh's logo picture is not carried"
+    assert "data:font/woff2;base64," in served, "the mesh's uploaded font is not carried"
+    assert '"Brand Face"' in served
+
+
+def test_without_the_whole_look_a_domains_served_page_keeps_the_recorded_mesh_look(
+        gen, fake_make):
+    """The CLI and older records carry no ``login_look``: a domain with one colour of its
+    own is served the superbrand's recorded look under it, not the shipped defaults (an
+    empty superbrand look here would drop the mesh's secondary colour silently)."""
+    sb = {"primary": "#123456", "secondary": "#0000aa"}
+    node = LocalMeshBootstrap(gen, _cfg(superbrand={"look": sb}))._stack_node()
+    assert node.start() == (True, "")
+    served = _read(_looks(gen), "by-host", "shop.example", "hug-theme.css").lower()
+    assert "#ff0000" in served                             # its own primary
+    assert "#0000aa" in served, "the mesh's recorded secondary colour is not carried"
+    assert served == brand_look.look_css(
+        brand_look.effective_look(sb, {"primary": "#ff0000"})).lower()
+
+
+def test_the_docker_served_sentence_says_what_does_not_show_the_domains_look():
+    """Two true limits the skeptics found missing from the Docker Look tab: a running
+    `make view` gives a new name no row until it is stopped, and the kind lane started
+    from the same page shows the mesh's own look on every domain."""
+    s = brand_look.DOCKER_SERVED_SENTENCE
+    assert "\"make view-stop\"" in s
+    assert "DevOps (kind) lane" in s and "show the mesh's own look" in s

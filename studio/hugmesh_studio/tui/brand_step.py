@@ -96,6 +96,41 @@ SIGNIN_MESH_HOME = ("the mesh's own sign-in is the default every domain inherits
 SIGNIN_MESH_EDIT = ("this is the mesh's own sign-in: every domain that signs in through "
                     "the mesh inherits it. Changing it here changes the ‘Identity "
                     "provider’ step's choice too — they are the same setting")
+#: What each route does with an ADDED domain's own sign-in (its own Casdoor, or its own
+#: Entra ID / Cognito / OIDC provider), said under the choice on the window's Identity
+#: tab and the text screen's section 1 (BrandView.signin_effect), like the Look tab's
+#: DOCKER_ONLY_SENTENCE. Measured, not assumed (docs/DOMAIN-IDP.md):
+#: * image: ImageConfig.to_cli_args passes no per-domain sign-in to any builder; the
+#:   row's ``idp``/``idp_settings`` ride the mesh manifest, and the casdoor-domains
+#:   element writer that would read them is not built (its list ships empty).
+#: * fleet: core/fleet.py — the rows reach no builder and build-all-roles.sh writes no
+#:   mesh manifest; they are kept with the fleet's session only.
+#: * docker: LocalStackNode stands up an own domain's Casdoor (OWN_CASDOOR=1 and the
+#:   own-domains overlay) or threads its external issuer into APP_TENANCY_*; the kind
+#:   lane started from the same page applies neither (05b-casdoor-domains.yaml ships
+#:   ``elements: []`` and nothing writes it).
+SIGNIN_NOT_APPLIED: dict[str, str] = {
+    "image": ("Not applied on this route yet: a built image signs every domain in "
+              "through the mesh's own sign-in. A domain's own Casdoor, Azure Entra ID, "
+              "AWS Cognito or OIDC choice is kept with this configuration only; no "
+              "builder takes it and nothing on the image or its cluster reads it yet "
+              "(docs/DOMAIN-IDP.md). A domain's own sign-in is applied on the Docker "
+              "mesh only."),
+    "fleet": ("Not applied on this route yet: a Fleet build signs every domain in "
+              "through the mesh's own sign-in. A domain's own Casdoor, Azure Entra ID, "
+              "AWS Cognito or OIDC choice is kept with this fleet's session only; it "
+              "reaches no builder and no mesh manifest (docs/DOMAIN-IDP.md). A domain's "
+              "own sign-in is applied on the Docker mesh only."),
+    "": ("Recorded with this domain only: this screen's route does not apply a "
+         "domain's own sign-in (docs/DOMAIN-IDP.md)."),
+}
+SIGNIN_DOCKER_APPLIED = ("On the Docker mesh a domain's own sign-in is applied when the "
+                         "Studio starts the mesh: its own Casdoor runs next to the "
+                         "mesh's, or its own provider is added to the gateways' list of "
+                         "sign-ins. The DevOps (kind) lane does not apply it yet (its "
+                         "per-domain sign-in list ships empty): there every domain signs "
+                         "in through the mesh.")
+__all__ += ["SIGNIN_NOT_APPLIED", "SIGNIN_DOCKER_APPLIED"]
 
 # ── per-domain reach (VPN and egress; Tor is the row's own onion) ───────────────────
 TAILNET_CHOICES: tuple[tuple[str, str], ...] = (
@@ -320,6 +355,24 @@ class BrandView:
         # row 0 IS the mesh: its sign-in is not inherited from anything
         src = OWN_SOURCE_WORDS if self.own else SIGNIN_SOURCE_WORDS[eff.source]
         return f"{what}{at} — {src}"
+
+    def signin_effect(self) -> str:
+        """What THIS route does with an added domain's own sign-in (SIGNIN_NOT_APPLIED,
+        SIGNIN_DOCKER_APPLIED) — the line under the choice in the window and the text
+        screen alike. "" on the mesh's own row (its sign-in IS the mesh's, applied by
+        every route that keeps one) and on a client image (CLIENT_SIGNIN_NOTE says it)."""
+        if self.own or self.client_image():
+            return ""
+        route = getattr(self.session.host, "route", "") or ""
+        if route == "docker":
+            return SIGNIN_DOCKER_APPLIED
+        return SIGNIN_NOT_APPLIED.get(route, SIGNIN_NOT_APPLIED[""])
+
+    def signin_not_applied(self) -> bool:
+        """True when this route keeps the domain's own sign-in without applying it —
+        the window draws the line in the Look tab's orange then."""
+        effect = self.signin_effect()
+        return bool(effect) and effect != SIGNIN_DOCKER_APPLIED
 
     # ── 4b. Ways: Tor, VPN and egress, per domain ─────────────────────────────────
     def _set_ways(self, **kw) -> list[str]:
@@ -587,6 +640,9 @@ def identity_lines(view: BrandView) -> list[str]:
         out.append(f"   {k:<14}{v}")
     out += ["", view.identity_home(), ""]
     out.append(f"   Sign-in now   {view.signin_words()}")
+    effect = view.signin_effect()
+    if effect:
+        out += ["", effect]
     if view.own:
         why = view.signin_refusal()
         if why:
