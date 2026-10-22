@@ -348,6 +348,12 @@ gate_optional_services() {
                 ;;
         esac
     done
+    # The ai.<domain> host on the be-gateway Ingress is shared by edge-ai,
+    # edge-ai-analysis and edge-ai-tts (tts schedules without edge-ai), so it goes
+    # only when all three are deselected.
+    if ! _opt_selected edge-ai && ! _opt_selected edge-ai-analysis && ! _opt_selected edge-ai-tts; then
+        _opt_drop_extrahost "${apps}/20-gateway-be.yaml" ai.
+    fi
     # Edge-AI model library: when edge-ai SURVIVED the selection, patch the
     # edge-ai-models ConfigMap from the --edge-ai-* flags (the model catalog /
     # preload / runtime knobs exposed to the mesh). Each read is ${VAR:-} so a

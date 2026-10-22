@@ -24,6 +24,9 @@
 #   D. controls, staged in a COPY of the chart (the repo tree is never touched): with
 #      the route half removed, or the Ingress half removed, or the route's `vanity`
 #      mark removed, the checks of B go red. Each control proves its edit landed.
+#   E. the edge-AI host: every Host the be-gateway's edge-ai* routes match on is an
+#      exact host of the be-gateway Ingress, so ai.<domain> is not handed to the
+#      fe-gateway wildcard (whose vanity route would swallow /v1/**); with a control.
 #
 # WHAT IT CANNOT PROVE: that anything WRITES `vanityDomains` (nothing does yet — no
 # builder reads the mesh manifest's domains[]), or that a live ingress-nginx and
@@ -225,6 +228,44 @@ render "${stage}/chart" hugmesh-fe-gateway "${stage}/fe.yaml" "${SETS[@]}" > "${
 check_b "$(facts "${stage}/out.yaml")" \
     && ok "D positive control: an unedited staged copy passes" \
     || bad "D positive control: an unedited staged copy FAILED — staging is wrong, the controls above mean nothing"
+
+# ═════════════════════ E. the edge-AI host is not a vanity host ═════════════════════
+# ingress-nginx serves a Host that has an exact rule from that rule and everything else
+# under *.<domain> from the fe-gateway, whose host-only vanity-subdomain route rewrites
+# EVERY path to the profile lookup. So each Host the be-gateway's edge-ai* routes match
+# on must be an exact host of the be-gateway Ingress, or https://ai.<domain>/v1/models
+# lands on the vanity route and never reaches the model server.
+echo "== E. ai.<domain> is admitted by the be-gateway Ingress, exactly =="
+BE_APP="${APPS}/20-gateway-be.yaml"
+# check_e APP_FILE -> 0 when every edge-ai* route Host is an exact be Ingress host
+check_e() {
+    values_of "$1" "${WORK}/e.values" || return 1
+    render "${CHART}" hugmesh-be-gateway "${WORK}/e.values" > "${WORK}/e.yaml" || return 1
+    python3 - "$(facts "${WORK}/e.yaml")" <<'PY'
+import json, sys
+f = json.loads(sys.argv[1])
+want = sorted({h for rid, preds in f["route_hosts"].items() if rid.startswith("edge-ai")
+               for p in preds for h in p[len("Host="):].split(",")})
+if not want:
+    sys.exit("no edge-ai route carries a Host predicate")
+missing = [h for h in want if h not in f["ingress_hosts"]]
+print("edge-ai hosts %s; be Ingress hosts %s" % (want, f["ingress_hosts"]))
+sys.exit(1 if missing else 0)
+PY
+}
+e_out="$(check_e "${BE_APP}" 2>&1)" \
+    && ok "E every edge-ai route Host is an exact be-gateway Ingress host (${e_out})" \
+    || bad "E an edge-ai route Host is missing from the be-gateway Ingress: ${e_out}"
+# control: the same app with the ai. extraHost removed must go red
+mkdir -p "${WORK}/stage-e"
+grep -avE '^[[:space:]]*-[[:space:]]+"?ai\.' "${BE_APP}" > "${WORK}/stage-e/app.yaml"
+if cmp -s "${BE_APP}" "${WORK}/stage-e/app.yaml"; then
+    bad "E control: removing the ai. extraHost changed nothing — it proves nothing"
+elif check_e "${WORK}/stage-e/app.yaml" >/dev/null 2>&1; then
+    bad "E control: without the ai. extraHost the check still passes"
+else
+    ok "E control: without the ai. extraHost the check goes red"
+fi
 
 echo
 echo "== RESULT: ${P} passed, ${F} failed =="
