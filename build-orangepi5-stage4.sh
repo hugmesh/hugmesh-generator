@@ -97,11 +97,11 @@ source "${SCRIPT_DIR}/scripts/_download-lib.sh"
 source "${SCRIPT_DIR}/scripts/_passhash-lib.sh"
 # shellcheck source=scripts/_domain-idp-lib.sh
 source "${SCRIPT_DIR}/scripts/_domain-idp-lib.sh"
-# THE role vocabulary (scripts/_roles-lib.sh). This board has NO role axis — --role
-# is a hostname/marker validated by a slug regex only — so the lib is sourced for one
-# thing: hugmesh_role_reject_node_role, which refuses a token that NAMES a cluster
-# node role this board cannot build. `--role backend` here was silently accepted and
-# quietly became a hostname.
+# THE role vocabulary (scripts/_roles-lib.sh). This board has a NODE axis: a
+# --role that names a node role in its platform set builds a cluster node
+# (hugmesh_role_board_node_role), one it does not build is refused with the reason,
+# and any other token keeps the old meaning — a hostname/marker for the desktop,
+# validated by a slug regex. The RAM floors (hugmesh_role_ram_check) come from here.
 # shellcheck source=scripts/_roles-lib.sh
 source "${SCRIPT_DIR}/scripts/_roles-lib.sh"
 
@@ -1536,6 +1536,28 @@ if [ -d "${SYSROOT}" ]; then
         exit 1
     fi
 fi
+# ONE sysroot per board serves EVERY role (desktop, pki, backend, frontend,
+# omnibus share ${BUILD_SUBDIR} unless --build-subdir says otherwise), and every
+# runlevel link and baked file below is only ever ADDED. So a sysroot that last
+# built another role would leak it into this image: a desktop built after pki kept
+# kubelet, containerd and headscale linked; a node built after the desktop kept the
+# display manager (skeptic, 2026-10-22). The role a sysroot was built for is
+# recorded next to it; a run that REUSES the tree (--resume, --image-only) must be
+# for the same role, and a fresh run wipes a populated tree first (as the Raspberry
+# Pi and x86 builders already do), which also removes stale .so symlinks.
+SYSROOT_ROLE_MARK="${BUILD_ROOT}/sysroot.role"
+if ${NODE_ROLE}; then SYSROOT_ROLE="node:${ROLE}"; else SYSROOT_ROLE="desktop"; fi
+if [ -f "${SYSROOT}/etc/gentoo-release" ] && { ${RESUME} || ${IMAGE_ONLY}; }; then
+    _prev_sysroot_role="$(cat "${SYSROOT_ROLE_MARK}" 2>/dev/null || true)"
+    if [ -z "${_prev_sysroot_role}" ]; then
+        warn "Sysroot ${SYSROOT} has no role record (built before roles were recorded); reusing it as ${SYSROOT_ROLE}. If it was built for another role, rebuild WITHOUT --resume/--image-only."
+    elif [ "${_prev_sysroot_role}" != "${SYSROOT_ROLE}" ]; then
+        err "Sysroot ${SYSROOT} was built for ${_prev_sysroot_role}, and this run is ${SYSROOT_ROLE}."
+        err "Reusing it (--resume / --image-only) would carry that role's services and files into this image."
+        err "Rebuild WITHOUT --resume/--image-only (the tree is wiped and rebuilt), or pass --build-subdir to keep a separate tree per role."
+        exit 1
+    fi
+fi
 if [ -f "${SYSROOT}/etc/gentoo-release" ] && ${RESUME}; then
     # A ROOT build may only reuse a build system that is still root's: the live and
     # installer squashfs are made from the sysroot (mksquashfs without -all-root, or
@@ -1544,13 +1566,21 @@ if [ -f "${SYSROOT}/etc/gentoo-release" ] && ${RESUME}; then
     # bake that user into the image — on x86 such an image booted with sshd and
     # tor refusing to start (#659). A non-root build owns its sysroot by design
     # (the stage3 is extracted with --no-same-owner below) and is exempt. Checked
-    # here, before any write to the tree. This builder extracts the stage3 OVER an
-    # existing tree rather than wiping it, so the remedy is to remove the tree.
+    # here, before any write to the tree. A run WITHOUT --resume wipes the tree
+    # first, so that is the remedy.
     if [ "$(id -u)" -eq 0 ]; then
-        hmr_owner_gate "${SYSROOT}" "remove ${SYSROOT} (this builder extracts the stage3 over an existing tree; it does not wipe it) and rebuild WITHOUT --resume as root" || exit 1
+        hmr_owner_gate "${SYSROOT}" "rebuild WITHOUT --resume as root (that wipes ${SYSROOT} and extracts a fresh stage3)" || exit 1
     fi
     info "Sysroot already populated and --resume set, skipping extraction"
 else
+    # A fresh run over an ALREADY-POPULATED sysroot starts CLEAN (see above).
+    # --image-only keeps the tree: it skips the package phases and only assembles
+    # the image from what is there.
+    if [ -f "${SYSROOT}/etc/gentoo-release" ] && ! ${IMAGE_ONLY}; then
+        warn "Sysroot already populated and NOT --resume: wiping it for a clean stage3 extract (it may hold another role's services, and stale .so symlinks)"
+        rm -rf "${SYSROOT:?}"
+        mkdir -p "${SYSROOT}"
+    fi
     TAR_X=(--exclude='./dev/*')
     [ "$(id -u)" -ne 0 ] && TAR_X+=(--no-same-owner)
     tar -C "${SYSROOT}" --xattrs-include='*.*' "${TAR_X[@]}" -xpf "${STAGE3_LOCAL}" 2>/dev/null || \
@@ -1558,6 +1588,7 @@ else
     mkdir -p "${SYSROOT}/dev"
     info "Extracted into ${SYSROOT} (device nodes skipped; devtmpfs at boot)"
 fi
+printf '%s\n' "${SYSROOT_ROLE}" > "${SYSROOT_ROLE_MARK}"
 
 banner "Installing spec files into sysroot (hardened profile)"
 mkdir -p "${SYSROOT}/etc/portage/"{package.use,package.accept_keywords,package.mask,profile,env,package.env,repos.conf}
@@ -1841,10 +1872,12 @@ if ${STANDALONE}; then
     info "Standalone desktop: local user '${DEFAULT_USER}', no mesh."
 fi
 if ${NODE_ROLE}; then
-    # Cluster NODE role: the k8s configuration + init scripts, the cluster GitOps
+    # Cluster NODE role: the k8s configuration + init scripts, the etcd/PostgreSQL
+    # backup engine (hugmesh-backup, as on the Pi), the cluster GitOps
     # tree with the Pi's env / firewall / optional-service / backing-service gates
     # (scripts/_node-role-lib.sh), and omnibus's RAM floor marker.
     node_role_bake_k8s_payload "${SYSROOT}" "${SHARED_SPECS}"
+    node_role_bake_backup_engine "${SYSROOT}" "${SHARED_SPECS}"
     node_role_bake_cluster_tree "${SYSROOT}" "${SHARED_SPECS}"
     info "Installed cluster GitOps payload (role=${ROLE})"
     if [ "${ROLE}" = "omnibus" ]; then

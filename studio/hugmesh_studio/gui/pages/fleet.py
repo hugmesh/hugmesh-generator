@@ -73,6 +73,7 @@ from ..qt import QtCore, QtWidgets, Signal
 from .. import console
 from ..branding_icon import brand_icon
 from ...core import build_sessions
+from ...core import roles as role_vocab
 from ...core.config import (
     ENV_CHOICES, FRITE_BOARDS, FRITE_DESKTOPS, FRITE_FLAVORS, JETSON_BOARDS,
     KERNEL_FLAVOR_CHOICES, ORANGEPI5_BOARDS, ORANGEPI5_FLAVORS,
@@ -337,7 +338,9 @@ class FleetPage(QtWidgets.QWidget):
             "ORANGEPI5_ROLES (default: desktop; or pki backend frontend omnibus)")
         self.orangepi5_roles.setToolTip(
             "Orange Pi 5 / 5 Plus cluster node roles are EXPERIMENTAL (hardware validation "
-            "pending) and installer-only; omnibus needs Board RAM 8 GB or more.")
+            "pending) and installer-only; omnibus needs Board RAM "
+            f"{role_vocab.min_ram_gb('omnibus')} GB or more, backend "
+            f"{role_vocab.min_ram_gb('backend')} GB.")
         o5l.addWidget(_row("OPi5 roles", self.orangepi5_roles))
         o5l.addWidget(_row("OPi5 board", self.orangepi5_board))
         o5l.addWidget(_row("OPi5 flavor", self.orangepi5_flavor))
@@ -375,15 +378,16 @@ class FleetPage(QtWidgets.QWidget):
         o4ll.addWidget(_row("OPi4-LTS flavor", self.orangepi4lts_flavor))
         l2.addWidget(self.orangepi4lts_group)
         # RAM_GB -> --ram-gb on every Raspberry Pi / Orange Pi NODE build of the run.
-        # Required (8 or more) when RPi roles or OPi5 roles name omnibus; the refusal
+        # Required (omnibus's floor, 16) when RPi roles or OPi5 roles name omnibus; the refusal
         # is the preview's inline message (FleetConfig.validate), never a dialog.
         self.ram_group = QtWidgets.QGroupBox("Board RAM (Raspberry Pi / Orange Pi cluster nodes)")
         rgl = QtWidgets.QVBoxLayout(self.ram_group)
         self.ram_gb = _default_combo(
             ("4", "8", "16", "32"),
             "RAM_GB — GB of RAM on the boards (--ram-gb). (default) = not stated. "
-            "Required, 8 or more, when a role list names omnibus; pki/backend/frontend "
-            "are refused below 4 when it is given.")
+            f"Required, {role_vocab.min_ram_gb('omnibus')} or more, when a role list names "
+            f"omnibus; when given, below backend's {role_vocab.min_ram_gb('backend')} or "
+            f"pki/frontend's {role_vocab.min_ram_gb('pki')} is refused.")
         rgl.addWidget(_row("Board RAM (GB)", self.ram_gb))
         l2.addWidget(self.ram_group)
         self.pentest_group = QtWidgets.QGroupBox("Pen-test")

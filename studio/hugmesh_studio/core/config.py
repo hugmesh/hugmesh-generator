@@ -306,11 +306,11 @@ ROLE_CHOICES = {
         ("backend-gpu", ("x86", "jetson"),
          "Backend + GPU node — a backend worker with a GPU, no inference service "
          "(x86, or Jetson Orin — EXPERIMENTAL)"),
-        # omnibus on a Raspberry Pi 4/5 or Orange Pi 5 needs the board's RAM (8 GB+;
+        # omnibus on a Raspberry Pi 5 or Orange Pi 5 needs the board's RAM (16 GB+;
         # ImageConfig.ram_gb -> --ram-gb): one image serves every RAM size it is sold in.
         ("omnibus", ("x86", "jetson", "rpi5", "orangepi5"),
-         "Omnibus — every cluster role on one node (x86; Raspberry Pi 4/5 or Orange Pi 5 "
-         "with 8 GB+ RAM; Jetson Orin / Orange Pi — EXPERIMENTAL)"),
+         "Omnibus — every cluster role on one node (x86; Raspberry Pi 5 or Orange Pi 5 "
+         "with 16 GB+ RAM; Jetson Orin / Orange Pi — EXPERIMENTAL)"),
         # Person-device desktops attachable to the mesh (operator ask 2026-08-14):
         # checking one on the WorklistPage asks for the person's user + role via a
         # popup; the account is provisioned on the internal Tailscale root
@@ -1828,8 +1828,13 @@ def rpi_boards_for_role(role: str) -> tuple[str, ...]:
     role (pki/be/fe, generic) may target rpi5/rpi4 ONLY — rpi3's 1GB RAM cannot host the
     hardened SELinux/containerd/kubelet stack, and build-rpi5-stage4.sh hard-errors that
     combo. Keeping rpi3 out of the node picker mirrors the builder's own contract so a
-    Studio/menu selection can never dead-end in that hard-error (honesty rule)."""
-    return RPI_BOARDS if image_class("", role) == "desktop" else RPI_NODE_BOARDS
+    Studio/menu selection can never dead-end in that hard-error (honesty rule). A node
+    role whose RAM floor a board is never sold with is kept off that board too: omnibus
+    (16 GB) is offered on rpi5 only, because a Pi 4 has 8 GB at most and the builder
+    refuses it (roles.board_fits_role)."""
+    if image_class("", role) == "desktop":
+        return RPI_BOARDS
+    return tuple(b for b in RPI_NODE_BOARDS if roles.board_fits_role(role, b))
 
 
 def orangepi_flavors_for_role(platform: str, role: str) -> tuple[str, ...]:
@@ -3085,8 +3090,8 @@ class ImageConfig:
     board: str = ""                    # frite: FRITE_BOARDS | jetson: JETSON_BOARDS | rpi5: RPI_BOARDS
     flavor: str = ""                   # frite: live | installer | both
     # GB of RAM on the Raspberry Pi / Orange Pi board a cluster NODE image is for
-    # (--ram-gb). "" = not stated. REQUIRED for omnibus (8 GB+); for pki/backend/
-    # frontend the builder refuses a value below 4. x86/jetson do not take it.
+    # (--ram-gb). "" = not stated. REQUIRED for omnibus (16 GB+); for backend the
+    # builder refuses a value below 8, for pki/frontend below 4. x86/jetson do not take it.
     ram_gb: str = ""
     env: str = "test"
     brand: str = "hugmesh"

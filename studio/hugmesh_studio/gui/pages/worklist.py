@@ -260,8 +260,10 @@ class WorklistPage(QtWidgets.QWizardPage):
         hdr.setToolTip(_COL_RAM,
                        "Per-node hardware: the GB of RAM on the Raspberry Pi / Orange Pi "
                        "board (--ram-gb). One image serves every RAM size a board is sold "
-                       "with, so the build cannot see it. Omnibus REQUIRES it (8 GB or "
-                       "more); sizes below a role's floor are not offered.")
+                       "with, so the build cannot see it. Omnibus REQUIRES it ("
+                       f"{role_vocab.min_ram_gb('omnibus')} GB or more; backend "
+                       f"{role_vocab.min_ram_gb('backend')} GB); sizes below a role's floor "
+                       "are not offered.")
         hdr.setToolTip(_COL_FLAVOR,
                        "Per-node hardware: image flavor (live / installer) or desktop variant.")
         hdr.setToolTip(_COL_ENC,
@@ -487,7 +489,7 @@ class WorklistPage(QtWidgets.QWizardPage):
             ram_combo.setToolTip(
                 "GB of RAM on this board (--ram-gb). "
                 + ("Required: omnibus runs every cluster role on one node and needs "
-                   "8 GB or more." if role_vocab.ram_required(role)
+                   f"{role_vocab.min_ram_gb(role)} GB or more." if role_vocab.ram_required(role)
                    else "Optional: when given, below "
                    f"{role_vocab.min_ram_gb(role)} GB is refused."))
             self.tree.setItemWidget(item, _COL_RAM, ram_combo)
@@ -950,7 +952,8 @@ class WorklistPage(QtWidgets.QWizardPage):
         if missing:
             self.ram_error.setText(
                 "Pick the board's RAM in the RAM column for: " + ", ".join(missing)
-                + ". Omnibus runs every cluster role on one node and needs 8 GB or more; "
+                + ". Omnibus runs every cluster role on one node and needs "
+                f"{role_vocab.min_ram_gb('omnibus')} GB or more; "
                 "the image cannot tell how much RAM the board has.")
             self.ram_error.setVisible(True)
             return False

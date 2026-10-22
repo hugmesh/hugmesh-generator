@@ -235,8 +235,9 @@ class FleetConfig:
     # ORANGEPI4LTS_ROLES ("" = desktop): may name frontend, its only node role.
     orangepi4lts_roles: str = ""
     # RAM_GB: GB of RAM on the Raspberry Pi / Orange Pi boards this run's NODE images
-    # are for (--ram-gb). REQUIRED (8 or more) when RPI_ROLES or ORANGEPI5_ROLES
-    # names omnibus — one image serves every RAM size a board is sold with.
+    # are for (--ram-gb). REQUIRED (16 or more) when RPI_ROLES or ORANGEPI5_ROLES
+    # names omnibus — one image serves every RAM size a board is sold with; when
+    # given, below a listed role's floor (backend 8, pki/frontend 4) is refused.
     ram_gb: str = ""
     # ── per-role KEYS folders + pen-test harness ──
     skip_keys: bool = False            # SKIP_KEYS=1 (keys folders are the default)
@@ -428,31 +429,52 @@ class FleetConfig:
                 f"not {self.jobs!r}")
 
     def _validate_ram(self) -> None:
-        """The builders' RAM gate (scripts/_roles-lib.sh hugmesh_role_ram_check), up
-        front: RAM_GB is a whole number of GB, and an omnibus in RPI_ROLES or
-        ORANGEPI5_ROLES needs it at or above omnibus's floor. Refused here so neither
-        face (GUI preview / TUI ``set``) starts a run the first omnibus build kills."""
+        """The builders' role + RAM gates (scripts/_roles-lib.sh
+        hugmesh_role_board_node_role / hugmesh_role_ram_check), up front, so neither
+        face (GUI preview / TUI ``set``) starts a run the first unfit build kills:
+        RAM_GB is a whole number of GB; an Orange Pi role list names only roles that
+        board builds; a node role is refused on a board never SOLD with its RAM floor
+        (omnibus 16 GB on a Pi 4); omnibus needs RAM_GB; and a stated RAM_GB below a
+        listed role's floor is refused. One RAM_GB serves every Pi / Orange Pi board in
+        the run; a size above a small board's largest is only a builder warning."""
         from . import roles as role_vocab
         ram = str(self.ram_gb or "").strip()
         if ram and (not ram.isdigit() or ram.startswith("0")):
             raise IdentityValidationError(
                 f"ram_gb must be a whole number of GB, e.g. 8 (got {ram!r})")
-        omnibus_in = [name for name, roleset in (("rpi_roles", self.rpi_roles),
-                                                 ("orangepi5_roles", self.orangepi5_roles))
-                      if any(role_vocab.canonicalize(t) == "omnibus"
-                             for t in roleset.split())]
-        if not omnibus_in:
-            return
-        floor = role_vocab.min_ram_gb("omnibus") or 0
-        if not ram:
+        groups = (("rpi_roles", self.rpi_roles, "rpi5", self.rpi_board or "rpi5", "rpi_board"),
+                  ("orangepi5_roles", self.orangepi5_roles, "orangepi5",
+                   self.orangepi5_board or "orange-pi-5-plus", "orangepi5_board"),
+                  ("orangepi4lts_roles", self.orangepi4lts_roles, "orangepi4-lts",
+                   "orange-pi-4-lts", ""))
+        omnibus_in = []
+        for name, roleset, platform, board, board_field in groups:
+            for tok in roleset.split():
+                role = role_vocab.canonicalize(tok)
+                if platform != "rpi5" and not role_vocab.accepts(tok, platform):
+                    raise IdentityValidationError(
+                        f"{name} names {tok}, which the {platform} builder does not build "
+                        f"(it builds: {' '.join(role_vocab.roles_for_platform(platform))})")
+                floor = role_vocab.min_ram_gb(role)
+                if floor is None:
+                    continue
+                if not role_vocab.board_fits_role(role, board):
+                    where = f"{board_field} {board}" if board_field else board
+                    raise IdentityValidationError(
+                        f"{name} names {role}, which needs {floor} GB of RAM, and {where} "
+                        f"is sold with at most {max(role_vocab.board_ram_gb(board))} GB")
+                if role_vocab.ram_required(role) and name not in omnibus_in:
+                    omnibus_in.append(name)
+                if ram and int(ram) < floor:
+                    raise IdentityValidationError(
+                        f"{name} names {role}, which needs at least {floor} GB of RAM "
+                        f"(got ram_gb {ram})")
+        if omnibus_in and not ram:
+            floor = role_vocab.min_ram_gb("omnibus") or 0
             raise IdentityValidationError(
                 f"{' and '.join(omnibus_in)} names omnibus, which needs ram_gb (the GB of "
                 f"RAM on the boards, {floor} or more): one image serves every RAM size a "
                 "board is sold with, so the build cannot tell")
-        if int(ram) < floor:
-            raise IdentityValidationError(
-                f"omnibus needs at least {floor} GB of RAM (got ram_gb {ram}); build "
-                "pki/backend/frontend for a smaller board")
 
     # ---- the canonical env-knob + argv translation ---------------------------
     def to_env(self) -> dict[str, str]:

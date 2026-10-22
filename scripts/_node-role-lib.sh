@@ -82,6 +82,9 @@ CONFIG_IP_NF_FILTER CONFIG_IP_NF_NAT
 CONFIG_IP_NF_MANGLE CONFIG_NF_NAT CONFIG_NF_NAT_MASQUERADE
 CONFIG_NF_TABLES CONFIG_NF_TABLES_IPV4 CONFIG_NF_TABLES_IPV6
 CONFIG_NFT_NAT CONFIG_NFT_MASQ CONFIG_NFT_CT CONFIG_NFT_COMPAT
+CONFIG_IP_NF_TARGET_REJECT CONFIG_IP6_NF_TARGET_REJECT CONFIG_NFT_REJECT
+CONFIG_IP_SET CONFIG_IP_SET_HASH_IP CONFIG_IP_SET_HASH_NET CONFIG_NETFILTER_XT_SET
+CONFIG_NF_CT_NETLINK
 CONFIG_IPV6
 CONFIG_IP6_NF_IPTABLES CONFIG_IP6_NF_FILTER CONFIG_IP6_NF_NAT
 CONFIG_IP6_NF_MANGLE
@@ -237,6 +240,19 @@ node_role_bake_k8s_payload() {
         chmod +x "${_s}/etc/init.d/${_svc}"
     done
     mkdir -p "${_s}/opt/cni/bin" "${_s}/etc/cni/net.d" "${_s}/etc/containerd/certs.d"
+}
+
+# node_role_bake_backup_engine <sysroot> <shared-specs> — the etcd + PostgreSQL
+# backup engine the Pi builder installs ("Backup engine" block in
+# build-rpi5-stage4.sh). keys-provision's provision_backup only WARNS when it is
+# missing, so without this an Orange Pi pki/omnibus node with backup.enabled=true
+# silently never backs up (skeptic, 2026-10-22).
+node_role_bake_backup_engine() {
+    local _s="$1"
+    local _sh="$2"
+    mkdir -p "${_s}/usr/local/sbin"
+    cp "${_sh}/usr/local/sbin/hugmesh-backup" "${_s}/usr/local/sbin/hugmesh-backup"
+    chmod +x "${_s}/usr/local/sbin/hugmesh-backup"
 }
 
 # node_role_bake_cluster_tree <sysroot> <shared-specs> — copy the cluster GitOps

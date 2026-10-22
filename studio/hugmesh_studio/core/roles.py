@@ -197,6 +197,16 @@ def ram_choices(role: str, board: str) -> tuple[int, ...]:
     return tuple(g for g in board_ram_gb(board) if g >= floor)
 
 
+def board_fits_role(role: str, board: str) -> bool:
+    """Is ``board`` SOLD with enough RAM for ``role``? False when the board's largest
+    RAM size (HUGMESH_BOARD_RAM_GB) is below the role's floor — the builders' own
+    outright refusal (hugmesh_role_ram_check), e.g. omnibus (16 GB) on a Pi 4 (8 GB
+    at most). True for a role with no floor or a board not in the table."""
+    floor = min_ram_gb(role)
+    sizes = board_ram_gb(board)
+    return floor is None or not sizes or max(sizes) >= floor
+
+
 def ram_required(role: str) -> bool:
     """omnibus needs --ram-gb (one image serves every RAM size a board is sold with)."""
     return canonicalize(role) == "omnibus"

@@ -2,7 +2,7 @@
 
 scripts/build-all-roles.sh takes ORANGEPI5_ROLES / ORANGEPI4LTS_ROLES (default
 "desktop", so ORANGEPI5=1 is unchanged) and RAM_GB (--ram-gb on every Raspberry Pi /
-Orange Pi node build; REQUIRED, 8 or more, when a role list names omnibus). The
+Orange Pi node build; REQUIRED, 16 or more, when a role list names omnibus). The
 fleet window and the text-mode fleet screen must both field them (GUI/TUI parity),
 and both must refuse an omnibus run with no RAM, or too little, BEFORE a build starts
 (inline, never a dialog). No fleet build is ever started here.
@@ -40,7 +40,19 @@ def test_orange_pi_roles_and_ram_reach_the_script():
     ({"rpi_roles": "pki omnibus"}, "needs ram_gb"),
     ({"orangepi5": True, "orangepi5_roles": "omnibus"}, "needs ram_gb"),
     ({"rpi_roles": "full"}, "needs ram_gb"),                     # the omnibus alias
-    ({"rpi_roles": "omnibus", "ram_gb": "4"}, "at least 8 GB"),
+    ({"rpi_roles": "omnibus", "ram_gb": "4"}, "at least 16 GB"),
+    # omnibus needs 16 GB: the whole stack asks the scheduler for ~8.3 GiB (measured)
+    ({"rpi_roles": "omnibus", "ram_gb": "8"}, "at least 16 GB"),
+    # a board never SOLD with the floor is refused the role, whatever RAM_GB says
+    ({"rpi_roles": "omnibus", "rpi_board": "rpi4", "ram_gb": "16"}, "at most 8 GB"),
+    ({"rpi_roles": "pki", "rpi_board": "rpi3"}, "at most 1 GB"),
+    ({"orangepi4lts_roles": "frontend backend"}, "does not build"),
+    ({"orangepi4lts_roles": "omnibus", "ram_gb": "16"}, "does not build"),
+    ({"orangepi4lts_roles": "pki"}, "does not build"),
+    ({"orangepi5_roles": "edge-ai"}, "does not build"),
+    # a stated RAM_GB below a listed role's floor (backend 8, pki 4)
+    ({"orangepi5_roles": "pki", "ram_gb": "2"}, "at least 4 GB"),
+    ({"orangepi5_roles": "backend", "ram_gb": "4"}, "at least 8 GB"),
     ({"ram_gb": "8G"}, "whole number"),
     ({"ram_gb": "08"}, "whole number"),
     ({"orangepi5_roles": "pki;rm"}, "orangepi5_roles"),
@@ -52,7 +64,11 @@ def test_refusals(kw, needle):
 
 
 def test_omnibus_with_enough_ram_is_accepted():
-    FleetConfig(rpi_roles="omnibus", ram_gb="8").validate()
+    FleetConfig(rpi_roles="omnibus", ram_gb="16").validate()
+    # one RAM_GB for the run: a 16 GB omnibus with a 4 GB Orange Pi 4 LTS frontend
+    # riding along is accepted (above a board's largest size is only a builder warning)
+    FleetConfig(rpi_roles="omnibus", orangepi4lts=True, orangepi4lts_roles="frontend",
+                ram_gb="16").validate()
     FleetConfig(orangepi5=True, orangepi5_roles="omnibus", ram_gb="32").validate()
     # a node role that does not need RAM is fine without it
     FleetConfig(orangepi5=True, orangepi5_roles="pki backend frontend").validate()
@@ -76,8 +92,12 @@ def test_tui_fields_the_new_knobs_and_refuses_inline():
     assert j.status.startswith("refused:") and "ram_gb" in j.status
     scr.feed(j, "set ram_gb 8")
     scr.feed(j, "set rpi_roles omnibus")
+    # 8 GB is below omnibus's 16 GB floor: refused inline, naming it
+    assert j.status.startswith("refused:") and "at least 16 GB" in j.status, j.status
+    scr.feed(j, "set ram_gb 16")
+    scr.feed(j, "set rpi_roles omnibus")
     assert j.status == "rpi_roles -> omnibus", j.status
-    assert scr.options(j).to_env()["RAM_GB"] == "8"
+    assert scr.options(j).to_env()["RAM_GB"] == "16"
 
 
 # ── GUI face: the widgets exist, are visible/enabled/sized, and refuse inline ─────────
@@ -146,9 +166,15 @@ def test_omnibus_without_ram_is_refused_inline(page):
     # and the dispatch preflight refuses it too (the gate a RESTART goes through)
     problems = page.driver.preflight(page.collect(), None)
     assert any("ram_gb" in p for p in problems), problems
+    # 8 GB is below omnibus's 16 GB floor (the whole stack asks for ~8.3 GiB):
+    # still refused inline, naming the floor
     page.ram_gb.setCurrentIndex(page.ram_gb.findData("8"))
     page.refresh_preview()
-    assert "RAM_GB=8" in page.cmd.toPlainText()
+    assert page.cmd.toPlainText().startswith("INVALID:")
+    assert "16" in page.cmd.toPlainText()
+    page.ram_gb.setCurrentIndex(page.ram_gb.findData("16"))
+    page.refresh_preview()
+    assert "RAM_GB=16" in page.cmd.toPlainText()
 
 
 def test_render_png(page, tmp_path):

@@ -121,8 +121,8 @@ The standalone/LUKS posture **is** reachable through this channel on rpi5, frite
 and every Orange Pi platform, mirroring x86's standalone-thin, standalone-thick
 and standalone-unaffiliated roles. rpi5 gets a dedicated `standalone-desktop` role
 token, because it already has a role axis to extend. Frite and the Orange Pi
-platforms have no role axis, so they signal the posture with a `standalone`
-*flavor* value. Both normalize onto the real build target plus
+desktops have no desktop role axis (the Orange Pi 5 and 4 LTS node roles refuse
+`--standalone`), so they signal the posture with a `standalone` *flavor* value. Both normalize onto the real build target plus
 `--standalone`/`--local-user` (see the `HARDWARE_CLASS` convention in the header
 of `docker/build-image.sh`). Jetson is the one deliberate exception. Its builder
 hard-errors on `--standalone` and `--encrypt-root`: the Orin's single boot+root
@@ -134,7 +134,7 @@ EXCEPTION" note in the same header).
 ## The canonical matrix — `tests/build-matrix/matrix.tsv`
 
 One row per buildable image cell `(platform, role, env, board, flavor,
-desktop)`; `-` marks an axis a platform does not have. **172 cells** today
+desktop)`; `-` marks an axis a platform does not have. **170 cells** today
 (includes 16 JOB-channel-only standalone-posture probe rows, see below):
 
 ### The role vocabulary — one spelling, everywhere
@@ -160,9 +160,13 @@ repo; hardware validation pending) and installer-only. On a Raspberry Pi or an O
 Pi, a node role takes the board's RAM as `--ram-gb N` (`RAM_GB=N` in make and
 build-all, the RAM column in the Studio worklist, the RAM picker in the menu, a
 trailing `.<N>gb` field on the Job channel): one image serves every RAM size a board
-is sold with, so the build cannot see it. `omnibus` REQUIRES it and needs 8 GB or
-more; pki/backend/frontend are refused below 4 GB when it is given
-(`HUGMESH_ROLE_MIN_RAM_GB` in `scripts/_roles-lib.sh`). The Orange Pi 4 LTS (4 GB,
+is sold with, so the build cannot see it. `omnibus` REQUIRES it and needs 16 GB or
+more; backend is refused below 8 GB and pki/frontend below 4 GB when it is given
+(`HUGMESH_ROLE_MIN_RAM_GB` in `scripts/_roles-lib.sh`). A board that is not sold
+with enough RAM for a role is refused it outright, so the Pi 4 (8 GB at most) is
+never an omnibus. The numbers come from the live single-node kind cluster: every
+namespace together asks the scheduler for about 8.3 GiB of memory, the backend
+tier alone for 4 GiB. The Orange Pi 4 LTS (4 GB,
 16 GB eMMC) builds only `frontend`; the Allwinner boards and Frite build no node role.
 Every refusal names its reason (`HUGMESH_ROLE_REFUSAL`).
 
@@ -194,11 +198,11 @@ token and the label key are fully decoupled.
 
 | Platform | Builder | Cells | Axes |
 |---|---|---|---|
-| **rpi5** | `build-rpi5-stage4.sh` | board `rpi5`(default): 5 roles × 2 env = 10; board `rpi4`: 5 roles × 2 env = 10 + 2 `standalone-desktop` probe rows; board `rpi3`: 1 role × 2 env = 2 → **24** | roles `pki backend frontend omnibus desktop` (rpi5/rpi4 — all 5; omnibus rows are probed with `--ram-gb 8`); `desktop` only on `rpi3` (1 GB RAM has no headroom for the k8s cluster-node stack); board `rpi5\|rpi4\|rpi3`; JOB-channel-only role `standalone-desktop` (resolves the same `--role desktop`, plus `--standalone`) |
+| **rpi5** | `build-rpi5-stage4.sh` | board `rpi5`(default): 5 roles × 2 env = 10; board `rpi4`: 4 roles × 2 env = 8 + 2 `standalone-desktop` probe rows; board `rpi3`: 1 role × 2 env = 2 → **22** | roles `pki backend frontend omnibus desktop` (rpi5 — all 5, omnibus rows probed with `--ram-gb 16`; rpi4 — all but omnibus, which needs 16 GB and a Pi 4 has 8 GB at most); `desktop` only on `rpi3` (1 GB RAM has no headroom for the k8s cluster-node stack); board `rpi5\|rpi4\|rpi3`; JOB-channel-only role `standalone-desktop` (resolves the same `--role desktop`, plus `--standalone`) |
 | **x86** | `build-x86-host-stage4.sh` | 12 roles × 2 env = **24** | nodes `pki backend frontend backend-gpu`, `omnibus`, `edge-ai`, clients `laptop chromebook desktop`, `standalone-thin standalone-thick standalone-unaffiliated` |
 | **frite** | `build-frite-stage4.sh` | 3 boards × 3 flavors × 2 desktops × 2 env = 36 + 2 `standalone` probe rows → **38** | board `la-frite\|le-potato\|sweet-potato`, flavor `live\|installer\|both`, desktop `light\|none`; JOB-channel-only flavor `standalone` (normalizes to `installer`, plus `--standalone`) |
 | **jetson** *(EXPERIMENTAL)* | `build-jetson-stage4.sh` | 4 roles × 2 env on `orin-nano` + 3 boards × 2 env on `edge-ai` = **14** | roles `edge-ai backend-gpu omnibus desktop`; board `orin-nano\|orin-nano-4gb\|orin-nx-8gb\|orin-nx-16gb` (non-default boards carried on the headline `edge-ai` role); deliberately **no** standalone token (see above) |
-| **orangepi5** *(EXPERIMENTAL)* | `build-orangepi5-stage4.sh` | desktop: 2 boards × 3 flavors × 2 env = 12 + 2 `standalone` probe rows; nodes: 4 roles × 2 boards × 2 env = 16 (installer) → **30** | board `orange-pi-5-plus\|orange-pi-5` (RK3588 vs RK3588S), flavor `live\|installer\|both` for the `desktop`; cluster node roles `pki backend frontend omnibus` are installer-only (`--flavor live\|both` is refused) and omnibus rows are probed with `--ram-gb 8`; JOB-channel-only flavor `standalone` (normalizes to `installer`, plus `--standalone`) |
+| **orangepi5** *(EXPERIMENTAL)* | `build-orangepi5-stage4.sh` | desktop: 2 boards × 3 flavors × 2 env = 12 + 2 `standalone` probe rows; nodes: 4 roles × 2 boards × 2 env = 16 (installer) → **30** | board `orange-pi-5-plus\|orange-pi-5` (RK3588 vs RK3588S), flavor `live\|installer\|both` for the `desktop`; cluster node roles `pki backend frontend omnibus` are installer-only (`--flavor live\|both` is refused) and omnibus rows are probed with `--ram-gb 16`; JOB-channel-only flavor `standalone` (normalizes to `installer`, plus `--standalone`) |
 | **orangepizero2** *(EXPERIMENTAL)* | `build-orangepi-zero2-stage4.sh` | 1 role (`appliance`) × 3 flavors × 2 env = 6 + 2 `standalone` probe rows → **8** | flavor `live\|installer\|both`; headless only — Allwinner H616 has no mainline display-engine driver, so this platform never gets a `desktop` role; JOB-channel-only flavor `standalone` (normalizes to `installer`, plus `--standalone`) |
 | **orangepizero2w** *(EXPERIMENTAL)* | `build-orangepi-zero2w-stage4.sh` | 1 role (`appliance`) × 3 flavors × 2 env = 6 + 2 `standalone` probe rows → **8** | flavor `live\|installer\|both`; the Zero 2's Allwinner H618 sibling — same headless-only rationale (identical DE33 display engine, no mainline driver) and NO onboard Ethernet (USB-Ethernet-first); JOB-channel-only flavor `standalone` (normalizes to `installer`, plus `--standalone`) |
 | **orangepizero3** *(EXPERIMENTAL)* | `build-orangepi-zero3-stage4.sh` | 1 role (`appliance`) × 3 flavors × 2 env = 6 + 2 `standalone` probe rows → **8** | flavor `live\|installer\|both`; the Zero 2's Allwinner H618 sibling — same headless-only rationale (identical DE33 display engine, no mainline driver) but onboard Gigabit Ethernet is BACK (Ethernet-first, unlike the Zero 2W); JOB-channel-only flavor `standalone` (normalizes to `installer`, plus `--standalone`) |

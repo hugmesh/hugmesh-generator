@@ -190,7 +190,7 @@ OPT_ORANGEPI3LTS_FLAVOR="both"          # both (DEFAULT) | live | installer
 # HDMI in the mainline DTB it boots — see specs-orangepi4-lts/README.md). ──
 OPT_ORANGEPI4LTS_FLAVOR="both"          # both (DEFAULT) | live | installer
 # GB of RAM on the Pi / Orange Pi board a NODE image is for (--ram-gb via RAM_GB).
-# "" = not stated (fine for pki/backend/frontend); omnibus REQUIRES it (8 GB+).
+# "" = not stated (fine for pki/backend/frontend); omnibus REQUIRES it (16 GB+).
 OPT_RAM_GB=""
 # ── Standalone hardened NVIDIA desktop options (NON-secret; persisted) ──────────
 OPT_SA_GPU="all-free"         # all-free|nvidia-free|nvidia|amd-free|amd-pro|intel-free|intel-pro
@@ -1604,9 +1604,16 @@ ram_screen() {
     floor="$(hugmesh_role_min_ram_gb "${role}" 2>/dev/null || echo 0)"
     skus="$(_hm_role_lookup "${HUGMESH_BOARD_RAM_GB}" "${board}" 2>/dev/null || echo "4,8,16")"
     [ "${role}" = omnibus ] || items+=(none "not stated — the build does not check the RAM")
+    local offered=0
     for sz in ${skus//,/ }; do
-        [ "${sz}" -ge "${floor}" ] && items+=("${sz}" "${sz} GB")
+        [ "${sz}" -ge "${floor}" ] && { items+=("${sz}" "${sz} GB"); offered=1; }
     done
+    # A board not sold with enough RAM for the role (a Pi 4 omnibus: 8 GB at most,
+    # omnibus needs 16) gets the builder's own refusal, not an empty picker.
+    if [ "${offered}" = 0 ]; then
+        warn "${board} is not sold with the ${floor} GB of RAM --role ${role} needs, so the build refuses it. Pick another board or another role."
+        return 1
+    fi
     pick="$(ui_menu "Board RAM" "How much RAM does the ${board} you will flash have? (--ram-gb; ${role} needs at least ${floor} GB$([ "${role}" = omnibus ] && echo ', and omnibus requires you to say'); sizes below that are not offered):" \
         "${items[@]}" back "‹ back")" || return 1
     [ "${pick}" = back ] && return 1
@@ -1635,7 +1642,7 @@ single_role_screen() {
                 pki "pki      — cluster PKI / control" \
                 backend "backend  — backend services node" \
                 frontend "frontend — gateway / UI node" \
-                omnibus "omnibus  — every cluster role on ONE Pi 4/5 (8 GB+ RAM; you pick the RAM next)" \
+                omnibus "omnibus  — every cluster role on ONE 16 GB Pi 5 (you pick the RAM next; a Pi 4 is too small)" \
                 desktop "desktop  — arm64 client image (compose with --standalone for FDE)" \
                 back "‹ back")" || return 0
             [ "${role}" = back ] && return 0
@@ -1734,7 +1741,7 @@ x86-only options (cluster services, edge-AI models, branding overrides) do not a
                 pki "pki      — cluster PKI / control plane node (installer only)" \
                 backend "backend  — backend services node (installer only)" \
                 frontend "frontend — gateway / UI node (installer only)" \
-                omnibus "omnibus  — every cluster role on ONE board (8 GB+ RAM; installer only)" \
+                omnibus "omnibus  — every cluster role on ONE board (16 GB+ RAM; installer only)" \
                 back "‹ back")" || return 0
             [ "${role}" = back ] && return 0
             board="$(ui_menu "Orange Pi 5 board" "Board variant (--board; current: ${OPT_ORANGEPI5_BOARD}). EXPERIMENTAL — hardware validation pending, see specs-orangepi5/README.md:" \

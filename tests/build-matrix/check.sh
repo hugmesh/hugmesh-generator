@@ -112,7 +112,7 @@ builder_for() {
 # smallest RAM omnibus accepts (MATRIX_OMNIBUS_RAM_GB), the --ram-gb every channel must
 # then carry. An Orange Pi row whose role is a cluster node role is a NODE row
 # (installer flavor, --role); its desktop rows keep role "desktop" and are unchanged.
-MATRIX_OMNIBUS_RAM_GB=8
+MATRIX_OMNIBUS_RAM_GB=16
 is_opi_node_row() { # platform role
     case "$1" in orangepi5|orangepi4-lts) ;; *) return 1 ;; esac
     case "$2" in pki|backend|frontend|omnibus) return 0 ;; esac
@@ -409,7 +409,7 @@ while IFS=$'\t' read -r platform role env board flavor desktop; do
     # omnibus on a Pi / Orange Pi is probed with the menu's RAM picker set (the
     # smallest size omnibus accepts — MATRIX_OMNIBUS_RAM_GB in the parent).
     case "${platform}:${role}" in
-        rpi5:omnibus|orangepi5:omnibus) OPT_RAM_GB=8 ;;
+        rpi5:omnibus|orangepi5:omnibus) OPT_RAM_GB=16 ;;
     esac
     row="${target} ENV=${env}"
     build_make_cmd "${target}" "matrix ${row}" 1
@@ -943,8 +943,8 @@ while IFS=$'\t' read -r platform role env board flavor desktop; do
     # light/none) rows deliberately probe the same whitelist cell.
     case "${platform}" in
         rpi5)   hw="rpi5.${role}${board:+.${board}}"; type=primary
-                # omnibus carries the RAM field (8 GB: the smallest omnibus accepts)
-                [ "${role}" = omnibus ] && hw="rpi5.omnibus.${board:-rpi5}.8gb" ;;
+                # omnibus carries the RAM field (16 GB: the smallest omnibus accepts)
+                [ "${role}" = omnibus ] && hw="rpi5.omnibus.${board:-rpi5}.${MATRIX_OMNIBUS_RAM_GB}gb" ;;
         x86)    hw="x86.${role/+/-}"
                 case "${role}" in
                     laptop|chromebook|desktop|standalone-*) type=client ;;
@@ -954,7 +954,7 @@ while IFS=$'\t' read -r platform role env board flavor desktop; do
         jetson) hw="jetson.${role}.${board}"; type=primary ;;
         orangepi5)     case "${role}" in
                            pki|backend|frontend) hw="orangepi5.${role}.${board}"; type=primary ;;
-                           omnibus) hw="orangepi5.omnibus.${board}.8gb"; type=primary ;;
+                           omnibus) hw="orangepi5.omnibus.${board}.${MATRIX_OMNIBUS_RAM_GB}gb"; type=primary ;;
                            *) hw="orangepi5.${board}.${flavor}"; type=client ;;
                        esac ;;
         orangepizero2) hw="orangepizero2.${flavor}"; type=client ;;
@@ -1108,10 +1108,15 @@ expect_reject "rpi5: node role as client" rpi5.pki  client
 #    reject exactly like the existing bare rpi5.pki/client probe above).
 expect_reject "jetson: standalone-shaped role rejected" jetson.standalone-desktop.orin-nano primary
 expect_reject "rpi5: standalone-desktop role as client" rpi5.standalone-desktop.rpi4 client
-# The RAM gate on the Job channel (omnibus needs the "<N>gb" field and 8 GB+), and
-# the Orange Pi node grammar's refusals.
+# The RAM gate on the Job channel (omnibus needs the "<N>gb" field and 16 GB+,
+# backend 8 GB+), and the Orange Pi node grammar's refusals.
 expect_reject "rpi5: omnibus without the RAM field"     rpi5.omnibus.rpi5 primary
 expect_reject "rpi5: omnibus with 4 GB"                  rpi5.omnibus.rpi4.4gb primary
+expect_reject "rpi5: omnibus with 8 GB"                  rpi5.omnibus.rpi5.8gb primary
+expect_reject "rpi5: omnibus on a Pi 4 (8 GB at most)"   rpi5.omnibus.rpi4.16gb primary
+expect_reject "rpi5: backend with 4 GB"                  rpi5.backend.rpi4.4gb primary
+expect_reject "orangepi5: omnibus with 8 GB"             orangepi5.omnibus.orange-pi-5.8gb primary
+expect_reject "orangepi5: backend with 4 GB"             orangepi5.backend.orange-pi-5.4gb primary
 expect_reject "rpi5: backend with 2 GB"                  rpi5.backend.rpi4.2gb primary
 expect_reject "orangepi5: omnibus without the RAM field" orangepi5.omnibus.orange-pi-5 primary
 expect_reject "orangepi5: edge-ai is not an Orange Pi node role" orangepi5.edge-ai.orange-pi-5 primary
@@ -1574,14 +1579,20 @@ run_negative_checks() {
     expect_fail "rpi5: --board rpi3 + role frontend"  ./build-rpi5-stage4.sh --board rpi3 --role frontend --print-plan
     expect_fail "rpi5: --board rpi3 + role generic"   ./build-rpi5-stage4.sh --board rpi3 --role generic --print-plan
     # ── RAM floors + Orange Pi node roles (scripts/_roles-lib.sh) ────────────────
-    # omnibus REQUIRES --ram-gb and 8 GB; the other node roles refuse below 4 GB.
+    # omnibus REQUIRES --ram-gb and 16 GB; backend refuses below 8 GB, pki and
+    # frontend below 4 GB; a board not sold with the floor is refused the role.
     expect_fail "rpi5: omnibus without --ram-gb"        ./build-rpi5-stage4.sh --role omnibus --print-plan
     expect_fail "rpi5: omnibus --ram-gb 4"              ./build-rpi5-stage4.sh --role omnibus --ram-gb 4 --print-plan
     expect_fail "rpi5: omnibus --board rpi4 --ram-gb 4" ./build-rpi5-stage4.sh --board rpi4 --role omnibus --ram-gb 4 --print-plan
     expect_fail "rpi5: --board rpi3 + role omnibus"     ./build-rpi5-stage4.sh --board rpi3 --role omnibus --ram-gb 8 --print-plan
     expect_fail "rpi5: backend --ram-gb 2"              ./build-rpi5-stage4.sh --board rpi4 --role backend --ram-gb 2 --print-plan
     expect_fail "rpi5: --ram-gb not a number"           ./build-rpi5-stage4.sh --role omnibus --ram-gb 8G --print-plan
-    expect_ok   "rpi5: omnibus --ram-gb 8"              ./build-rpi5-stage4.sh --role omnibus --ram-gb 8 --print-plan
+    expect_fail "rpi5: omnibus --ram-gb 8"              ./build-rpi5-stage4.sh --role omnibus --ram-gb 8 --print-plan
+    expect_ok   "rpi5: omnibus --ram-gb 16"             ./build-rpi5-stage4.sh --role omnibus --ram-gb 16 --print-plan
+    expect_fail "rpi5: omnibus --board rpi4 (8 GB max)" ./build-rpi5-stage4.sh --board rpi4 --role omnibus --ram-gb 16 --print-plan
+    expect_fail "rpi5: backend --board rpi4 --ram-gb 4" ./build-rpi5-stage4.sh --board rpi4 --role backend --ram-gb 4 --print-plan
+    expect_ok   "rpi5: backend --board rpi4 --ram-gb 8" ./build-rpi5-stage4.sh --board rpi4 --role backend --ram-gb 8 --print-plan
+    expect_ok   "rpi5: pki --board rpi4 --ram-gb 4"     ./build-rpi5-stage4.sh --board rpi4 --role pki --ram-gb 4 --print-plan
     expect_fail "orangepi5: omnibus without --ram-gb"   ./build-orangepi5-stage4.sh --role omnibus --print-plan
     expect_fail "orangepi5: omnibus --ram-gb 4"         ./build-orangepi5-stage4.sh --board orange-pi-5 --role omnibus --ram-gb 4 --print-plan
     expect_fail "orangepi5: backend --ram-gb 2"         ./build-orangepi5-stage4.sh --board orange-pi-5 --role backend --ram-gb 2 --print-plan
@@ -1591,9 +1602,12 @@ run_negative_checks() {
     expect_fail "orangepi5: node role + --standalone"   ./build-orangepi5-stage4.sh --role pki --standalone --print-plan
     expect_fail "orangepi5: edge-ai is not built"       ./build-orangepi5-stage4.sh --role edge-ai --print-plan
     expect_fail "orangepi5: backend-gpu is not built"   ./build-orangepi5-stage4.sh --role backend-gpu --print-plan
-    expect_ok   "orangepi5: omnibus --ram-gb 8"         ./build-orangepi5-stage4.sh --role omnibus --ram-gb 8 --print-plan
+    expect_fail "orangepi5: omnibus --ram-gb 8"         ./build-orangepi5-stage4.sh --role omnibus --ram-gb 8 --print-plan
+    expect_ok   "orangepi5: omnibus --ram-gb 16"        ./build-orangepi5-stage4.sh --role omnibus --ram-gb 16 --print-plan
+    expect_fail "orangepi5: backend --ram-gb 4"         ./build-orangepi5-stage4.sh --board orange-pi-5 --role backend --ram-gb 4 --print-plan
+    expect_ok   "orangepi5: backend --ram-gb 8"         ./build-orangepi5-stage4.sh --board orange-pi-5 --role backend --ram-gb 8 --print-plan
     expect_ok   "orangepi5: desktop still takes --flavor live" ./build-orangepi5-stage4.sh --flavor live --print-plan
-    expect_fail "orangepi4-lts: omnibus (4 GB board)"   ./build-orangepi4-lts-stage4.sh --role omnibus --ram-gb 8 --print-plan
+    expect_fail "orangepi4-lts: omnibus (4 GB board)"   ./build-orangepi4-lts-stage4.sh --role omnibus --ram-gb 16 --print-plan
     expect_fail "orangepi4-lts: pki (16 GB eMMC)"       ./build-orangepi4-lts-stage4.sh --role pki --print-plan
     expect_fail "orangepi4-lts: backend (4 GB RAM)"     ./build-orangepi4-lts-stage4.sh --role backend --print-plan
     expect_fail "orangepi4-lts: frontend + --flavor live" ./build-orangepi4-lts-stage4.sh --role frontend --flavor live --print-plan

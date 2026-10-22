@@ -216,14 +216,14 @@ for pair in "${NODE_AXIS[@]}"; do
     for r in ${HUGMESH_ROLES_NODE}; do
         case " ${_set} " in
             *" ${r} "*)
-                if timeout 120 bash "${GEN}/${b}" --print-plan --role "${r}" --ram-gb 8 >"${TMPDIR:-/tmp}/rks-node.out" 2>&1 \
+                if timeout 120 bash "${GEN}/${b}" --print-plan --role "${r}" --ram-gb 16 >"${TMPDIR:-/tmp}/rks-node.out" 2>&1 \
                    && grep -qx "PLAN_ROLE=${r}" "${TMPDIR:-/tmp}/rks-node.out"; then
                     ok "${b} builds its node role '${r}'"
                 else
                     bad "${b} does not build '${r}', which HUGMESH_ROLES for ${plat} lists"
                 fi ;;
             *)
-                if timeout 120 bash "${GEN}/${b}" --print-plan --role "${r}" --ram-gb 8 >/dev/null 2>&1; then
+                if timeout 120 bash "${GEN}/${b}" --print-plan --role "${r}" --ram-gb 16 >/dev/null 2>&1; then
                     bad "${b} ACCEPTED '--role ${r}', which is not in its node set (${_set})"
                 else
                     ok "${b} refuses node role '${r}' (not in ${plat}'s set)"
@@ -1291,6 +1291,7 @@ for role in omnibus frontend; do
         node_role_load_pi_functions
         OPTIONAL_SERVICES="${OPTIONAL_SERVICES//,/ }"
         node_role_bake_k8s_payload "${SYSROOT}" "${SHARED_SPECS}"
+        node_role_bake_backup_engine "${SYSROOT}" "${SHARED_SPECS}"
         node_role_bake_cluster_tree "${SYSROOT}" "${SHARED_SPECS}"
         [ "${ROLE}" = omnibus ] && node_role_bake_min_ram "${SYSROOT}" "${ROLE}"
         rebrand_sysroot
@@ -1311,14 +1312,30 @@ for role in omnibus frontend; do
         [ -e "${sr}/${f}" ] && continue
         bad "node bake (${role}) did not produce /${f}"
     done
+    # the etcd + PostgreSQL backup engine, as the Pi bakes it (skeptic 2026-10-22:
+    # without it provision_backup only warns and a node never backs up)
+    if [ -x "${sr}/usr/local/sbin/hugmesh-backup" ] && cmp -s "${sr}/usr/local/sbin/hugmesh-backup" "${GEN}/specs/usr/local/sbin/hugmesh-backup"; then
+        ok "node bake (${role}) installs the backup engine /usr/local/sbin/hugmesh-backup, executable"
+    else
+        bad "node bake (${role}) did not install an executable /usr/local/sbin/hugmesh-backup"
+    fi
     if [ "${role}" = omnibus ]; then
-        if [ "$(cat "${sr}/etc/hugmesh/min-ram-mb" 2>/dev/null)" = "8192" ]; then
-            ok "node bake (omnibus) records its 8 GB RAM floor as /etc/hugmesh/min-ram-mb = 8192"
+        if [ "$(cat "${sr}/etc/hugmesh/min-ram-mb" 2>/dev/null)" = "16384" ]; then
+            ok "node bake (omnibus) records its 16 GB RAM floor as /etc/hugmesh/min-ram-mb = 16384"
         else
-            bad "node bake (omnibus) /etc/hugmesh/min-ram-mb is '$(cat "${sr}/etc/hugmesh/min-ram-mb" 2>/dev/null)', expected 8192"
+            bad "node bake (omnibus) /etc/hugmesh/min-ram-mb is '$(cat "${sr}/etc/hugmesh/min-ram-mb" 2>/dev/null)', expected 16384"
         fi
     elif [ -e "${sr}/etc/hugmesh/min-ram-mb" ]; then
         bad "node bake (${role}) wrote /etc/hugmesh/min-ram-mb, which only omnibus records"
+    fi
+done
+# E4b) both Orange Pi builders run the backup-engine bake next to the k8s payload
+#      (E4 calls the lib directly, so it cannot see a builder that forgot the call).
+for b in build-orangepi5-stage4.sh build-orangepi4-lts-stage4.sh; do
+    if grep -a -E '^[[:space:]]+node_role_bake_backup_engine "\$\{SYSROOT\}" "\$\{SHARED_SPECS\}"' "${GEN}/${b}" >/dev/null 2>&1; then
+        ok "${b} bakes the backup engine on a node role"
+    else
+        bad "${b} never calls node_role_bake_backup_engine (an Orange Pi pki/omnibus node would never back up)"
     fi
 done
 # E5) FAIL-CLOSED: a Pi builder that lost one of the listed functions stops the
@@ -1480,6 +1497,117 @@ case "${e9_out}" in
     *"--release-state: cluster choices only apply to a cluster node role"*"exit=1"*) ok "orangepi5 desktop refuses --release-state (exit 1) instead of dropping it" ;;
     *) bad "orangepi5 desktop did not refuse --release-state: $(printf '%s' "${e9_out}" | tail -n 2 | tr '\n' ' ')" ;;
 esac
+# F1) RAM FLOORS: one floor per node role (HUGMESH_ROLE_MIN_RAM_GB), from the live
+#     single-node kind measurement (about 8.3 GiB of requests for the whole stack,
+#     4 GiB for the backend tier alone). hugmesh_role_ram_check is THE gate every
+#     channel calls (builders, Job grammar); a board never sold with a role's floor
+#     is refused that role whatever --ram-gb says. Expected outcomes, not re-typed
+#     numbers: each row is <role> <ram> <board> <rc>.
+f1_floor() { hugmesh_role_min_ram_gb "$1"; }
+[ "$(f1_floor omnibus)" = 16 ] && ok "omnibus RAM floor is 16 GB" || bad "omnibus RAM floor is '$(f1_floor omnibus)', expected 16 (8.3 GiB of requests do not fit an 8 GB board)"
+[ "$(f1_floor backend)" = 8 ]  && ok "backend RAM floor is 8 GB"  || bad "backend RAM floor is '$(f1_floor backend)', expected 8 (the tier alone requests 4 GiB)"
+[ "$(f1_floor pki)" = 4 ]      && ok "pki RAM floor is 4 GB"      || bad "pki RAM floor is '$(f1_floor pki)', expected 4"
+[ "$(f1_floor frontend)" = 4 ] && ok "frontend RAM floor is 4 GB" || bad "frontend RAM floor is '$(f1_floor frontend)', expected 4"
+while read -r f1_role f1_ram f1_board f1_want; do
+    [ -n "${f1_role}" ] || continue
+    [ "${f1_ram}" = - ] && f1_ram=""
+    f1_rc=0; hugmesh_role_ram_check "${f1_role}" "${f1_ram}" "${f1_board}" 2>/dev/null || f1_rc=$?
+    if [ "${f1_rc}" = "${f1_want}" ]; then
+        ok "ram check ${f1_role} --ram-gb '${f1_ram}' on ${f1_board} -> rc=${f1_rc}"
+    else
+        bad "ram check ${f1_role} --ram-gb '${f1_ram}' on ${f1_board} -> rc=${f1_rc}, expected ${f1_want}"
+    fi
+done <<'F1_EOF'
+omnibus - rpi5 1
+omnibus 8 rpi5 1
+omnibus 16 rpi5 0
+omnibus 16 rpi4 1
+omnibus - rpi4 1
+omnibus 8 orange-pi-5 1
+omnibus 16 orange-pi-5 0
+omnibus 32 orange-pi-5-plus 0
+omnibus 16 orange-pi-4-lts 1
+backend 4 rpi4 1
+backend 8 rpi4 0
+backend 4 orange-pi-5 1
+backend 8 orange-pi-5 0
+backend - orange-pi-4-lts 1
+pki 4 rpi4 0
+pki 2 rpi4 1
+frontend 4 orange-pi-4-lts 0
+frontend - rpi5 0
+F1_EOF
+# Every refusal says why, with the same numbers: the board-cannot line names the
+# board's largest size, and the Orange Pi 4 LTS table reasons name the floors.
+f1_msg="$(hugmesh_role_ram_check omnibus 16 rpi4 2>&1 >/dev/null || true)"
+case "${f1_msg}" in
+    *"needs at least 16 GB"*"rpi4 is sold with at most 8 GB"*"8.3 GiB"*) ok "a Pi 4 omnibus refusal names the 16 GB floor, the Pi 4's 8 GB and the measured 8.3 GiB" ;;
+    *) bad "Pi 4 omnibus refusal text: ${f1_msg}" ;;
+esac
+for f1_pair in "omnibus:$(f1_floor omnibus)" "backend:$(f1_floor backend)"; do
+    f1_r="${f1_pair%%:*}"; f1_g="${f1_pair##*:}"
+    case "$(hugmesh_role_refusal_reason orangepi4-lts "${f1_r}")" in
+        *"${f1_r}'s ${f1_g} GB RAM floor"*) ok "orangepi4-lts refuses ${f1_r} citing the same ${f1_g} GB floor the gate enforces" ;;
+        *) bad "orangepi4-lts ${f1_r} refusal does not cite the ${f1_g} GB floor: $(hugmesh_role_refusal_reason orangepi4-lts "${f1_r}")" ;;
+    esac
+done
+# Prose that states a floor must state THIS floor (the PR once said 8 GB / 6.3 GiB
+# in nine places after the gate moved). Comments-and-docs sweep over tracked text.
+f1_stale="$(cd "${GEN}" && git grep -n -I -E '6\.3 GiB|omnibus[^.]{0,60}\b8 GB (or more|\+|minimum)|RAM_GB=8\+|8 GB\+ RAM|\.8gb\b' -- \
+    ':!tests/scripts/test-role-key-spelling.sh' ':!tests/build-matrix/check.sh' ':!docs/catalog' 2>/dev/null || true)"
+if [ -z "${f1_stale}" ]; then
+    ok "no tracked file still states the old 8 GB omnibus floor or the 6.3 GiB figure"
+else
+    bad "stale RAM-floor prose: $(printf '%s' "${f1_stale}" | head -n 5 | tr '\n' ' ')"
+fi
+
+# G1) ONE SYSROOT, MANY ROLES (skeptic 2026-10-22): every Orange Pi 5 role shares one
+#     sysroot by default and runlevel links are only ever added, so a desktop built
+#     after pki kept kubelet/headscale. The builders' own extract block is RUN here
+#     (extracted from each builder, tar/mount helpers stubbed) against a scratch tree:
+#     a fresh run wipes a populated tree; --resume / --image-only onto a tree recorded
+#     for another role is refused; the same role resumes; --image-only keeps the tree.
+g1_run() {  # <builder> <prev-role-or-""> <node true|false> <role> <resume> <image_only> -> "rc=N kept|wiped"
+    local b="$1" prev="$2" node="$3" role="$4" resume="$5" io="$6" d
+    d="$(mktemp -d "${E_TMP}/g1.XXXXXX")"
+    mkdir -p "${d}/sysroot/etc/init.d"
+    echo "Gentoo" > "${d}/sysroot/etc/gentoo-release"
+    echo leftover > "${d}/sysroot/etc/init.d/kubelet"
+    [ -n "${prev}" ] && echo "${prev}" > "${d}/sysroot.role"
+    awk '/^SYSROOT_ROLE_MARK=/{p=1} p{print} p && /> "\$\{SYSROOT_ROLE_MARK\}"$/{exit}' "${GEN}/${b}" > "${d}/block.sh"
+    (
+        set -euo pipefail
+        BUILD_ROOT="${d}"; SYSROOT="${d}/sysroot"; STAGE3_LOCAL=/dev/null
+        NODE_ROLE="${node}"; ROLE="${role}"; RESUME="${resume}"; IMAGE_ONLY="${io}"
+        warn() { :; }; err() { :; }; info() { :; }
+        hmr_owner_gate() { return 0; }
+        tar() { return 0; }
+        . "${d}/block.sh"
+    ) >/dev/null 2>&1
+    local rc=$?
+    if [ -e "${d}/sysroot/etc/init.d/kubelet" ]; then echo "rc=${rc} kept $(cat "${d}/sysroot.role" 2>/dev/null)"; else echo "rc=${rc} wiped $(cat "${d}/sysroot.role" 2>/dev/null)"; fi
+}
+for b in build-orangepi5-stage4.sh build-orangepi4-lts-stage4.sh; do
+    if ! grep -a -E '^SYSROOT_ROLE_MARK=' "${GEN}/${b}" >/dev/null 2>&1; then
+        bad "${b}: no SYSROOT_ROLE_MARK block (one sysroot leaks roles into each other)"; continue
+    fi
+    nr=frontend
+    while IFS='|' read -r g1_name g1_prev g1_node g1_role g1_res g1_io g1_want; do
+        [ -n "${g1_name}" ] || continue
+        g1_got="$(g1_run "${b}" "${g1_prev}" "${g1_node}" "${g1_role:-${nr}}" "${g1_res}" "${g1_io}")"
+        if [ "${g1_got}" = "${g1_want}" ]; then ok "${b}: ${g1_name} -> ${g1_got}"; else bad "${b}: ${g1_name} -> '${g1_got}', expected '${g1_want}'"; fi
+    done <<G1_EOF
+fresh desktop over a node:pki tree wipes it|node:pki|false||false|false|rc=0 wiped desktop
+fresh node over a desktop tree wipes it|desktop|true||false|false|rc=0 wiped node:${nr}
+fresh run over an unrecorded tree wipes it||true||false|false|rc=0 wiped node:${nr}
+--resume desktop onto a node tree is refused|node:${nr}|false||true|false|rc=1 kept node:${nr}
+--image-only node onto a desktop tree is refused|desktop|true||false|true|rc=1 kept desktop
+--resume onto the same role keeps the tree|node:${nr}|true||true|false|rc=0 kept node:${nr}
+--image-only onto the same role keeps the tree|desktop|false||false|true|rc=0 kept desktop
+--resume onto an unrecorded tree keeps it (warns)||false||true|false|rc=0 kept desktop
+G1_EOF
+done
+
 rm -rf "${E_TMP}"
 
 echo "== ${P} passed, ${F} failed =="

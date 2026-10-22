@@ -102,9 +102,9 @@ The other node roles are REFUSED, each with its reason, because this board has
 | role | verdict | why |
 |---|---|---|
 | frontend | builds | the gateway / UI tier asks for about 1.5 GiB |
-| backend | refused | the backend tier's memory limits alone add up to more than 4 GB |
+| backend | refused | below backend's 8 GB RAM floor: the backend tier alone asks the scheduler for 4 GiB |
 | pki | refused | 16 GB of eMMC is too small for etcd, Vault, Harbor and Cassandra |
-| omnibus | refused | below omnibus's 8 GB RAM floor; the operator asked for an Orange Pi 4 omnibus, and this is the honest answer — the board cannot hold the whole stack |
+| omnibus | refused | below omnibus's 16 GB RAM floor (the whole stack asks for about 8.3 GiB); the operator asked for an Orange Pi 4 omnibus, and this is the honest answer — the board cannot hold the whole stack |
 
 A frontend node is installer-only (`--flavor live|both` is refused: a node needs a
 persistent root) and gets the same node payload as the Raspberry Pi and Orange Pi

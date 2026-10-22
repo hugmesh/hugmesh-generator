@@ -637,7 +637,7 @@ ships a full multi-tenant platform. State key: **✅ shipped** (on `main`) ·
 | **edge-ai** (x86_64 / Jetson) | `./build-x86-host-stage4.sh --role edge-ai` | GPU inference node: serves an OpenAI-compatible model API (Ollama) to the mesh over k8s + tailnet; NVIDIA + CUDA + nvidia-device-plugin. See [docs/EDGE-AI.md](docs/EDGE-AI.md) |
 | **Frite light desktop** (Libre Computer, arm64) — *opt-in client* | `make frite` (or `./build-frite-stage4.sh`) | LEAN LXDE desktop on the Amlogic La Frite / Le Potato SBC; joins the tailnet + Casdoor login. LIVE + INSTALLER flavors, `--desktop light\|none` |
 | **Jetson Orin edge-AI** (NVIDIA Tegra234, arm64) — **EXPERIMENTAL** | `make jetson` (or `./build-jetson-stage4.sh --role edge-ai\|backend-gpu\|omnibus\|desktop`) | arm64 edge-AI node family on the Jetson Orin Nano/NX: same mesh + KEYS provisioning + shared cluster tree; mainline kernel (NO CUDA yet — the L4T/CUDA flavor is a documented stub). **Hardware validation pending** — see [`specs-jetson/README.md`](specs-jetson/README.md) |
-| **Orange Pi family** (6 builders, arm64) — **EXPERIMENTAL** | `make orangepi5` / `orangepi4-lts` / `orangepizero2` / `orangepizero2w` / `orangepizero3` / `orangepi3-lts` (each `-live` / `-installer` too); cluster nodes `make orangepi5-pki` / `-backend` / `-frontend` / `-omnibus RAM_GB=8` and `make orangepi4-lts-frontend` | Light desktops on Rockchip (**Orange Pi 5 / 5 Plus** RK3588/RK3588S, `--board` axis; **Orange Pi 4 LTS** RK3399, single-board, blob-free boot chain) and headless appliances on Allwinner (**Zero 2** H616; **Zero 2W** + **Zero 3** H618 — headless is forced, no mainline display-engine driver; **3 LTS** H6, headless by scope). Same mesh + KEYS provisioning. The Orange Pi 5 / 5 Plus can also be a pki, backend, frontend or omnibus cluster node (omnibus needs 8 GB+ RAM) and the Orange Pi 4 LTS a frontend node (installer images). **Hardware validation pending on all six** — see [`docs/BUILD-MATRIX.md`](docs/BUILD-MATRIX.md) and each `specs-orangepi*/README.md` |
+| **Orange Pi family** (6 builders, arm64) — **EXPERIMENTAL** | `make orangepi5` / `orangepi4-lts` / `orangepizero2` / `orangepizero2w` / `orangepizero3` / `orangepi3-lts` (each `-live` / `-installer` too); cluster nodes `make orangepi5-pki` / `-backend` / `-frontend` / `-omnibus RAM_GB=16` and `make orangepi4-lts-frontend` | Light desktops on Rockchip (**Orange Pi 5 / 5 Plus** RK3588/RK3588S, `--board` axis; **Orange Pi 4 LTS** RK3399, single-board, blob-free boot chain) and headless appliances on Allwinner (**Zero 2** H616; **Zero 2W** + **Zero 3** H618 — headless is forced, no mainline display-engine driver; **3 LTS** H6, headless by scope). Same mesh + KEYS provisioning. The Orange Pi 5 / 5 Plus can also be a pki, backend, frontend or omnibus cluster node (omnibus needs 16 GB+ RAM, backend 8 GB+) and the Orange Pi 4 LTS a frontend node (installer images). **Hardware validation pending on all six** — see [`docs/BUILD-MATRIX.md`](docs/BUILD-MATRIX.md) and each `specs-orangepi*/README.md` |
 
 > The friendlier path is the **Makefile** (`make local` / `make prod` /
 > `make build-all`), which dispatches the same builders inside a self-contained
@@ -885,7 +885,7 @@ make prod               # PROD fleet: ENV=prod, real domain (announced)
 make build-all          # the default fleet (3 Pi + x86 pki/backend/frontend/backend-gpu), ENV defaults to test
 make rpi                # all 3 Pi roles        make rpi-frontend     # one Pi role
 make x86                # the 4 x86 roles       make x86-backend-gpu       # one x86 role
-make omnibus            # opt-in x86 all-in-one node (OMNIBUS_PLATFORM=rpi|orangepi5 RAM_GB=8+ for ARM)
+make omnibus            # opt-in x86 all-in-one node (OMNIBUS_PLATFORM=rpi|orangepi5 RAM_GB=16+ for ARM)
 ```
 
 Products land in `./out` (gitignored). Run `make help` for every target. Use
@@ -1247,7 +1247,7 @@ live list). Common overrides: `ENV=test|prod`, `BRAND=`, `DOMAIN=`,
 | `make build-all` / `make rebuild` | the default fleet (3 Pi + x86 pki/backend/frontend/backend-gpu); `rebuild` wipes first. |
 | `make rpi` / `make rpi-<role>` | all 3 Pi roles / one Pi role (`rpi-frontend`). |
 | `make x86` / `make x86-<role>` | the 4 x86 roles / one (`x86-backend-gpu`, `x86-pki`, `x86-omnibus`). |
-| `make omnibus` | the opt-in x86 all-namespaces-on-one-node image; `OMNIBUS_PLATFORM=rpi` (Pi 4/5) or `orangepi5` (EXPERIMENTAL) with `RAM_GB=8` or more builds it on ARM. |
+| `make omnibus` | the opt-in x86 all-namespaces-on-one-node image; `OMNIBUS_PLATFORM=rpi` (a 16 GB Pi 5) or `orangepi5` (EXPERIMENTAL) with `RAM_GB=16` or more builds it on ARM. |
 | `make frite` / `frite-live` / `frite-installer` | the opt-in Frite client (`FRITE_BOARD=`, `FRITE_FLAVOR=`, `FRITE_DESKTOP=light\|none`). |
 | `make jetson` / `make jetson-<role>` | the **EXPERIMENTAL** Jetson Orin edge-AI platform (`jetson-edge-ai`, `jetson-backend-gpu`, `jetson-omnibus`, `jetson-desktop`; `JETSON_BOARD=`, `JETSON_KERNEL_FLAVOR=`). Hardware validation pending. |
 | `make build-everything` | the **FULL documented matrix**: 3 Pi + all 12 x86 roles (nodes + omnibus + edge-ai + clients + standalone, incl. unaffiliated) + Frite + Jetson + the six Orange Pi builders (honors `ENV=test\|prod`). |

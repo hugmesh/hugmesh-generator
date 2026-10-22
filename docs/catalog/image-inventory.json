@@ -1,5 +1,5 @@
 {
-  "build_count": 284,
+  "build_count": 282,
   "channel_gaps": [
     {
       "channels": {
@@ -779,7 +779,7 @@
     "prod"
   ],
   "generated_by": "scripts/emit-image-inventory.py",
-  "image_count": 142,
+  "image_count": 141,
   "images": [
     {
       "artifacts": [
@@ -4181,7 +4181,7 @@
           "mesh-extension"
         ]
       },
-      "label": "Omnibus \u2014 every cluster role on one node (x86; Raspberry Pi 4/5 or Orange Pi 5 with 8 GB+ RAM; Jetson Orin / Orange Pi \u2014 EXPERIMENTAL)",
+      "label": "Omnibus \u2014 every cluster role on one node (x86; Raspberry Pi 5 or Orange Pi 5 with 16 GB+ RAM; Jetson Orin / Orange Pi \u2014 EXPERIMENTAL)",
       "make_target": "jetson-omnibus",
       "make_vars": {
         "JETSON_BOARD": "orin-nano"
@@ -4237,7 +4237,7 @@
           "mesh-extension"
         ]
       },
-      "label": "Omnibus \u2014 every cluster role on one node (x86; Raspberry Pi 4/5 or Orange Pi 5 with 8 GB+ RAM; Jetson Orin / Orange Pi \u2014 EXPERIMENTAL)",
+      "label": "Omnibus \u2014 every cluster role on one node (x86; Raspberry Pi 5 or Orange Pi 5 with 16 GB+ RAM; Jetson Orin / Orange Pi \u2014 EXPERIMENTAL)",
       "make_target": "jetson-omnibus",
       "make_vars": {
         "JETSON_BOARD": "orin-nano-4gb"
@@ -4293,7 +4293,7 @@
           "mesh-extension"
         ]
       },
-      "label": "Omnibus \u2014 every cluster role on one node (x86; Raspberry Pi 4/5 or Orange Pi 5 with 8 GB+ RAM; Jetson Orin / Orange Pi \u2014 EXPERIMENTAL)",
+      "label": "Omnibus \u2014 every cluster role on one node (x86; Raspberry Pi 5 or Orange Pi 5 with 16 GB+ RAM; Jetson Orin / Orange Pi \u2014 EXPERIMENTAL)",
       "make_target": "jetson-omnibus",
       "make_vars": {
         "JETSON_BOARD": "orin-nx-16gb"
@@ -4349,7 +4349,7 @@
           "mesh-extension"
         ]
       },
-      "label": "Omnibus \u2014 every cluster role on one node (x86; Raspberry Pi 4/5 or Orange Pi 5 with 8 GB+ RAM; Jetson Orin / Orange Pi \u2014 EXPERIMENTAL)",
+      "label": "Omnibus \u2014 every cluster role on one node (x86; Raspberry Pi 5 or Orange Pi 5 with 16 GB+ RAM; Jetson Orin / Orange Pi \u2014 EXPERIMENTAL)",
       "make_target": "jetson-omnibus",
       "make_vars": {
         "JETSON_BOARD": "orin-nx-8gb"
@@ -4672,22 +4672,22 @@
         "prod"
       ],
       "flavor": "installer",
-      "gui_command": "sudo bash ./build-orangepi5-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --board orange-pi-5-plus --flavor installer --role omnibus --ram-gb 8 --env test --superdomain hugmesh.internal --compress --resume",
+      "gui_command": "sudo bash ./build-orangepi5-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --board orange-pi-5-plus --flavor installer --role omnibus --ram-gb 16 --env test --superdomain hugmesh.internal --compress --resume",
       "id": "mesh/orangepi5/omnibus/orange-pi-5-plus/installer",
       "image_class": "node",
       "job_token": {
-        "HARDWARE_CLASS": "orangepi5.omnibus.orange-pi-5-plus.8gb",
+        "HARDWARE_CLASS": "orangepi5.omnibus.orange-pi-5-plus.16gb",
         "IMAGE_TYPE": "primary",
         "accepted_image_types": [
           "primary",
           "mesh-extension"
         ]
       },
-      "label": "Omnibus \u2014 every cluster role on one node (x86; Raspberry Pi 4/5 or Orange Pi 5 with 8 GB+ RAM; Jetson Orin / Orange Pi \u2014 EXPERIMENTAL)",
+      "label": "Omnibus \u2014 every cluster role on one node (x86; Raspberry Pi 5 or Orange Pi 5 with 16 GB+ RAM; Jetson Orin / Orange Pi \u2014 EXPERIMENTAL)",
       "make_target": "orangepi5-omnibus",
       "make_vars": {
         "ORANGEPI5_BOARD": "orange-pi-5-plus",
-        "RAM_GB": "8"
+        "RAM_GB": "16"
       },
       "mode": "mesh",
       "phantom": false,
@@ -4695,7 +4695,7 @@
       "plan_platform": "orangepi5",
       "plan_role": "omnibus",
       "platform": "orangepi5",
-      "ram_gb": "8",
+      "ram_gb": "16",
       "reachable": [
         "cli",
         "gui",
@@ -4729,22 +4729,22 @@
         "prod"
       ],
       "flavor": "installer",
-      "gui_command": "sudo bash ./build-orangepi5-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --board orange-pi-5 --flavor installer --role omnibus --ram-gb 8 --env test --superdomain hugmesh.internal --compress --resume",
+      "gui_command": "sudo bash ./build-orangepi5-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --board orange-pi-5 --flavor installer --role omnibus --ram-gb 16 --env test --superdomain hugmesh.internal --compress --resume",
       "id": "mesh/orangepi5/omnibus/orange-pi-5/installer",
       "image_class": "node",
       "job_token": {
-        "HARDWARE_CLASS": "orangepi5.omnibus.orange-pi-5.8gb",
+        "HARDWARE_CLASS": "orangepi5.omnibus.orange-pi-5.16gb",
         "IMAGE_TYPE": "primary",
         "accepted_image_types": [
           "primary",
           "mesh-extension"
         ]
       },
-      "label": "Omnibus \u2014 every cluster role on one node (x86; Raspberry Pi 4/5 or Orange Pi 5 with 8 GB+ RAM; Jetson Orin / Orange Pi \u2014 EXPERIMENTAL)",
+      "label": "Omnibus \u2014 every cluster role on one node (x86; Raspberry Pi 5 or Orange Pi 5 with 16 GB+ RAM; Jetson Orin / Orange Pi \u2014 EXPERIMENTAL)",
       "make_target": "orangepi5-omnibus",
       "make_vars": {
         "ORANGEPI5_BOARD": "orange-pi-5",
-        "RAM_GB": "8"
+        "RAM_GB": "16"
       },
       "mode": "mesh",
       "phantom": false,
@@ -4752,7 +4752,7 @@
       "plan_platform": "orangepi5",
       "plan_role": "omnibus",
       "platform": "orangepi5",
-      "ram_gb": "8",
+      "ram_gb": "16",
       "reachable": [
         "cli",
         "gui",
@@ -5109,64 +5109,6 @@
         "img",
         "stage4.tar.xz"
       ],
-      "board": "rpi4",
-      "builder_role": "omnibus",
-      "channel_notes": {},
-      "channels": {
-        "cli": "yes",
-        "gui": "yes",
-        "job": "yes",
-        "make": "yes",
-        "menu": "yes",
-        "worklist": "yes"
-      },
-      "desktop": "",
-      "desktop_implied": false,
-      "envs": [
-        "test",
-        "prod"
-      ],
-      "flavor": "",
-      "gui_command": "sudo bash ./build-rpi5-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --role omnibus --board rpi4 --ram-gb 8 --env test --superdomain hugmesh.internal --compress --resume",
-      "id": "mesh/rpi5/omnibus/rpi4",
-      "image_class": "node",
-      "job_token": {
-        "HARDWARE_CLASS": "rpi5.omnibus.rpi4.8gb",
-        "IMAGE_TYPE": "primary",
-        "accepted_image_types": [
-          "primary",
-          "mesh-extension"
-        ]
-      },
-      "label": "Omnibus \u2014 every cluster role on one node (x86; Raspberry Pi 4/5 or Orange Pi 5 with 8 GB+ RAM; Jetson Orin / Orange Pi \u2014 EXPERIMENTAL)",
-      "make_target": "rpi-omnibus",
-      "make_vars": {
-        "RAM_GB": "8",
-        "RPI_BOARD": "rpi4"
-      },
-      "mode": "mesh",
-      "phantom": false,
-      "phantom_reason": "",
-      "plan_platform": "rpi4",
-      "plan_role": "omnibus",
-      "platform": "rpi5",
-      "ram_gb": "8",
-      "reachable": [
-        "cli",
-        "gui",
-        "job",
-        "make",
-        "menu",
-        "worklist"
-      ],
-      "role": "omnibus"
-    },
-    {
-      "artifacts": [
-        "fs.tar.xz",
-        "img",
-        "stage4.tar.xz"
-      ],
       "board": "rpi5",
       "builder_role": "omnibus",
       "channel_notes": {},
@@ -5185,21 +5127,21 @@
         "prod"
       ],
       "flavor": "",
-      "gui_command": "sudo bash ./build-rpi5-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --role omnibus --board rpi5 --ram-gb 8 --env test --superdomain hugmesh.internal --compress --resume",
+      "gui_command": "sudo bash ./build-rpi5-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --role omnibus --board rpi5 --ram-gb 16 --env test --superdomain hugmesh.internal --compress --resume",
       "id": "mesh/rpi5/omnibus/rpi5",
       "image_class": "node",
       "job_token": {
-        "HARDWARE_CLASS": "rpi5.omnibus.rpi5.8gb",
+        "HARDWARE_CLASS": "rpi5.omnibus.rpi5.16gb",
         "IMAGE_TYPE": "primary",
         "accepted_image_types": [
           "primary",
           "mesh-extension"
         ]
       },
-      "label": "Omnibus \u2014 every cluster role on one node (x86; Raspberry Pi 4/5 or Orange Pi 5 with 8 GB+ RAM; Jetson Orin / Orange Pi \u2014 EXPERIMENTAL)",
+      "label": "Omnibus \u2014 every cluster role on one node (x86; Raspberry Pi 5 or Orange Pi 5 with 16 GB+ RAM; Jetson Orin / Orange Pi \u2014 EXPERIMENTAL)",
       "make_target": "rpi-omnibus",
       "make_vars": {
-        "RAM_GB": "8",
+        "RAM_GB": "16",
         "RPI_BOARD": "rpi5"
       },
       "mode": "mesh",
@@ -5208,7 +5150,7 @@
       "plan_platform": "rpi5",
       "plan_role": "omnibus",
       "platform": "rpi5",
-      "ram_gb": "8",
+      "ram_gb": "16",
       "reachable": [
         "cli",
         "gui",
@@ -6100,7 +6042,7 @@
           "mesh-extension"
         ]
       },
-      "label": "Omnibus \u2014 every cluster role on one node (x86; Raspberry Pi 4/5 or Orange Pi 5 with 8 GB+ RAM; Jetson Orin / Orange Pi \u2014 EXPERIMENTAL)",
+      "label": "Omnibus \u2014 every cluster role on one node (x86; Raspberry Pi 5 or Orange Pi 5 with 16 GB+ RAM; Jetson Orin / Orange Pi \u2014 EXPERIMENTAL)",
       "make_target": "x86-omnibus",
       "make_vars": {},
       "mode": "mesh",
@@ -8754,43 +8696,43 @@
       "role": "standalone-unaffiliated"
     }
   ],
-  "matrix_cells": 172,
-  "matrix_distinct_cells": 78,
+  "matrix_cells": 170,
+  "matrix_distinct_cells": 77,
   "mode_counts": {
     "cloud": 48,
-    "mesh": 48,
+    "mesh": 47,
     "standalone": 46
   },
   "per_channel_counts": {
     "cli": {
       "escape-hatch": 0,
       "no": 0,
-      "yes": 142
+      "yes": 141
     },
     "gui": {
       "escape-hatch": 0,
       "no": 0,
-      "yes": 142
+      "yes": 141
     },
     "job": {
       "escape-hatch": 9,
       "no": 41,
-      "yes": 92
+      "yes": 91
     },
     "make": {
       "escape-hatch": 49,
       "no": 0,
-      "yes": 93
+      "yes": 92
     },
     "menu": {
       "escape-hatch": 40,
       "no": 9,
-      "yes": 93
+      "yes": 92
     },
     "worklist": {
       "escape-hatch": 0,
       "no": 0,
-      "yes": 142
+      "yes": 141
     }
   },
   "phantom_count": 0,
@@ -8804,7 +8746,7 @@
     "orangepizero2": 6,
     "orangepizero2w": 6,
     "orangepizero3": 6,
-    "rpi5": 16,
+    "rpi5": 15,
     "x86": 23
   },
   "schema": "hugmesh-image-inventory/v1",

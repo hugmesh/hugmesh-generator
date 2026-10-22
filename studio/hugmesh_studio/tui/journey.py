@@ -44,6 +44,7 @@ from ..core.config import (
 from ..core.domain_services import (ACTION_IMAGE_BUILD, gate_reason,
                                     services_page_applies)
 from ..core.validate import validate_domain_name
+from ..core import roles as role_vocab
 from ..core.worklist import (
     WorklistConfig, WorklistEntry, derived_hostname, duplicate_hostnames, entry_id,
     ram_problem, resolve_hostname, takes_ram,
@@ -635,8 +636,9 @@ class WorklistScreen:
                        + (f"  [RAM {ram} GB]" if ram else ""))
         out.append("")
         out.append("(Enter = continue with the checked rows. `ram N GB` sets row N's "
-                   "board RAM — Raspberry Pi / Orange Pi node rows; omnibus needs 8 or "
-                   "more; `ram N -` clears it)")
+                   "board RAM — Raspberry Pi / Orange Pi node rows; omnibus needs "
+                   f"{role_vocab.min_ram_gb('omnibus')} or more, backend "
+                   f"{role_vocab.min_ram_gb('backend')}; `ram N -` clears it)")
         return out
 
     def prompt(self, j: "Journey") -> str:  # noqa: ARG002
@@ -677,7 +679,8 @@ class WorklistScreen:
                 role, platform, _label = self._rows[i]
                 why = ram_problem(role, platform, self._ram.get(i, ""))
                 if why:
-                    j.status = f"row {i + 1}: {why} — type `ram {i + 1} 8` (or 16 / 32)"
+                    floor = role_vocab.min_ram_gb(role) or 8
+                    j.status = f"row {i + 1}: {why} — type `ram {i + 1} {floor}` (or more)"
                     return
             # a row staying checked KEEPS everything it carries (#383): the System
             # step's hostname (issue #229), and board / flavor / desktop / encrypt_root
