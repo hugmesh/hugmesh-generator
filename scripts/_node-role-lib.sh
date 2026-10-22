@@ -267,3 +267,78 @@ node_role_bake_min_ram() {
     mkdir -p "${_s}/etc/hugmesh"
     printf '%s\n' "$(( _gb * 1024 ))" > "${_s}/etc/hugmesh/min-ram-mb"
 }
+
+# Optional-service slugs whose Pi implementation is a HOST daemon the Orange Pi node
+# path does not carry yet (net-vpn/tor + hugmesh-tor-reconcile, the egress VPN
+# packages + hugmesh-egress-vpn/hugmesh-vpn-reconcile, hugmesh-domain-reconcile).
+# Selecting one on an Orange Pi node is REFUSED, never baked half (the cluster app
+# with no daemon behind it).
+NODE_ROLE_UNSUPPORTED_HOST_SLUGS="tor egress-vpn domain-registry-bridge"
+
+# The cluster-choice flags an Orange Pi builder parses for a NODE role only (the
+# same spellings the Raspberry Pi builder parses). A desktop build that is given one
+# stops: the desktop bakes no cluster tree, and accepting the flag would drop it.
+NODE_ROLE_CLUSTER_FLAGS="--release-state --games-domain --optional-services --all-services
+--exclude-services --enable-games --idp --idp-issuer --idp-client-id --idp-jwks
+--vault-addr --vault-external-addr"
+
+# node_role_resolve_cluster_choices <board> — validate and resolve the cluster
+# choices a node bakes, exactly as the Pi builder does after its arg parse: the
+# release state, the identity provider (the Pi's own _validate_idp + default JWKS),
+# the secrets store (_validate_vault), and the optional-service selection
+# (comma normalisation, the negative-only veto, the `all` expansion, the games fold,
+# the exclude list). Then refuse a host-daemon slug this board's node path does not
+# carry. Needs node_role_load_pi_settings + node_role_load_pi_functions +
+# scripts/_optional-services-lib.sh. rc=1 with a message on any refusal (the loaded
+# Pi validators themselves exit 1, as on the Pi).
+node_role_resolve_cluster_choices() {
+    local _board="$1"
+    case "${RELEASE_STATE}" in
+        internal|public) ;;
+        *) printf 'ERROR: --release-state must be one of: internal | public  (got %s)\n' "'${RELEASE_STATE}'" >&2; return 1 ;;
+    esac
+    _validate_idp
+    if [ "${IDP}" != "casdoor" ] && [ -z "${IDP_JWKS}" ]; then
+        IDP_JWKS="$(_idp_default_jwks)"
+    fi
+    _validate_vault
+    OPTIONAL_SERVICES="${OPTIONAL_SERVICES//,/ }"
+    _opt_negative_only_keeps_defaults
+    case " ${OPTIONAL_SERVICES} " in
+        *" all "*)
+            local _neg
+            _neg="$(_opt_negative_tokens)"
+            OPTIONAL_SERVICES="${USER_LEVEL_SERVICES}${_neg}"
+            ;;
+    esac
+    if [ "${ENABLE_GAMES}" = "true" ]; then
+        case " ${OPTIONAL_SERVICES} " in
+            *" games "*) ;;
+            *) OPTIONAL_SERVICES="${OPTIONAL_SERVICES} games" ;;
+        esac
+    fi
+    local _x
+    local _s
+    local _kept
+    if [ -n "${EXCLUDE_SERVICES//[[:space:],]/}" ]; then
+        for _x in ${EXCLUDE_SERVICES//,/ }; do
+            _kept=""
+            for _s in ${OPTIONAL_SERVICES}; do
+                [ "${_s}" = "${_x}" ] || _kept="${_kept} ${_s}"
+            done
+            OPTIONAL_SERVICES="${_kept# }"
+        done
+    fi
+    OPTIONAL_SERVICES="${OPTIONAL_SERVICES# }"
+    local _bad=""
+    for _s in ${OPTIONAL_SERVICES}; do
+        case " ${NODE_ROLE_UNSUPPORTED_HOST_SLUGS} " in
+            *" ${_s} "*) _bad="${_bad} ${_s}" ;;
+        esac
+    done
+    if [ -n "${_bad}" ]; then
+        printf 'ERROR: optional service(s)%s need a host daemon the %s node image does not carry yet (EXPERIMENTAL node path) — refused rather than baking the cluster app with nothing behind it. Remove them from --optional-services / OPTIONAL_SERVICES, or build this node role on a Raspberry Pi or x86.\n' "${_bad}" "${_board}" >&2
+        return 1
+    fi
+    return 0
+}

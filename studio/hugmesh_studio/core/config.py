@@ -541,6 +541,12 @@ INFRA_SERVICES_CHOICES = ("tor", "egress-vpn", "workloadConsole", "anubis")
 OPTIONAL_SERVICES_BY_PLATFORM = {
     "x86": OPTIONAL_SERVICES_CHOICES + INFRA_SERVICES_CHOICES,
     "rpi5": OPTIONAL_SERVICES_CHOICES + INFRA_SERVICES_CHOICES,
+    # Orange Pi NODE roles (EXPERIMENTAL): the user-level set plus the two cluster-plane
+    # infra slugs. NOT tor / egress-vpn: those are host daemons the Orange Pi node image
+    # does not carry, and its builder refuses them (scripts/_node-role-lib.sh
+    # NODE_ROLE_UNSUPPORTED_HOST_SLUGS) rather than bake the cluster app alone.
+    "orangepi5": OPTIONAL_SERVICES_CHOICES + ("workloadConsole", "anubis"),
+    "orangepi4-lts": OPTIONAL_SERVICES_CHOICES + ("workloadConsole", "anubis"),
 }
 
 # --optional-services sentinels (mirror build-menu.sh's OPT_SERVICES + the builders):
@@ -1262,6 +1268,12 @@ _IMAGE_ONLY_PLATFORMS = ("frite", "jetson", "orangepi5", "orangepizero2", "orang
                          "orangepizero3", "orangepi3-lts", "orangepi4-lts")
 _X86 = ("x86",)
 _X86_RPI5 = ("x86", "rpi5")
+# The Orange Pi boards with cluster NODE roles (EXPERIMENTAL): their builders parse the
+# mesh's cluster choices (release state, games domain, optional services, IdP, Vault)
+# for a NODE role only and refuse them on the desktop, so those fields are in scope
+# there for the node class only (_OPI_NODE_CLASS_FIELDS below).
+_OPI_NODE_PLATFORMS = ("orangepi5", "orangepi4-lts")
+_X86_RPI5_OPI = _X86_RPI5 + _OPI_NODE_PLATFORMS
 
 # The builders whose MEDIA is chosen by --flavor (live | installer | both; default
 # "both") instead of by per-artifact ISO flags. Named once here because TWO separate
@@ -1289,7 +1301,7 @@ _FIELD_PLATFORMS: dict[str, tuple[str, ...]] = {
     # host identity (-H/-T/-u) — all builders.
     "hostname": _ALL_PLATFORMS, "timezone": _ALL_PLATFORMS, "user": _ALL_PLATFORMS,
     # cluster / mesh identity.
-    "cluster_domain": _ALL_PLATFORMS, "games_domain": _X86_RPI5, "release_state": _X86_RPI5,
+    "cluster_domain": _ALL_PLATFORMS, "games_domain": _X86_RPI5_OPI, "release_state": _X86_RPI5_OPI,
     "person_role": _X86, "domains": _X86,
     # Tailscale root domain — every builder parses --superdomain (WS-SUPER-B bake);
     # emitted ONLY in mesh mode (see _superdomain_args), so it is EXCLUDED from the
@@ -1325,19 +1337,19 @@ _FIELD_PLATFORMS: dict[str, tuple[str, ...]] = {
     "edge_ai_tts": _X86_RPI5,
     # mesh-node identity provider (I6) — the two node builders only. Casdoor
     # default emits nothing; the probe uses an external combo (multi-key entry).
-    "idp": _X86_RPI5, "idp_issuer": _X86_RPI5, "idp_client_id": _X86_RPI5,
-    "idp_jwks": _X86_RPI5,
+    "idp": _X86_RPI5_OPI, "idp_issuer": _X86_RPI5_OPI, "idp_client_id": _X86_RPI5_OPI,
+    "idp_jwks": _X86_RPI5_OPI,
     # mesh secrets store (#224) — the two node builders bake /etc/hugmesh/vault.conf;
     # the empty address emits nothing (byte-identity), so the probe supplies one.
     # vault_external_addr (#335) rides the same two builders and the same rule.
     # base_ca_certs / domain_ca are ABSENT on purpose: they emit no flag anywhere, so
     # a capability-table entry would claim a builder surface that does not exist.
-    "vault_addr": _X86_RPI5, "vault_external_addr": _X86_RPI5,
+    "vault_addr": _X86_RPI5_OPI, "vault_external_addr": _X86_RPI5_OPI,
     # tor / character-studio / character-forge / services.
     "tor_onion_service": _X86, "character_studio": _X86_RPI5,
     "character_forge": _X86_RPI5,
-    "optional_services": _X86_RPI5, "exclude_services": _X86_RPI5, "enable_games": _X86_RPI5,
-    "anubis": _X86_RPI5,
+    "optional_services": _X86_RPI5_OPI, "exclude_services": _X86_RPI5_OPI,
+    "enable_games": _X86_RPI5_OPI, "anubis": _X86_RPI5_OPI,
     # managed backing services (I8/M2) — the two node builders parse --managed-service;
     # a mesh-node cluster concern, so scoped to the only builders that bake a cluster tree.
     "managed_services": _X86_RPI5,
@@ -1449,6 +1461,11 @@ _ARM_DESKTOP_ROLES = ("rpi5-desktop", "jetson-desktop", "frite", "orangepi5", "o
 # (orangepi5: pki/backend/frontend/omnibus; orangepi4-lts: frontend). Their desktop
 # keeps the board id as its role id ("orangepi5"/"orangepi4-lts"), unchanged.
 _ORANGEPI_NODE_ROLE_IDS = ("pki", "backend", "frontend", "omnibus")
+# The cluster-choice fields an Orange Pi NODE role emits (_orangepi_node_cluster_args)
+# and its DESKTOP does not: node-class only on _OPI_NODE_PLATFORMS (FIELD_SCOPE).
+_OPI_NODE_CLASS_FIELDS = ("games_domain", "release_state", "idp", "idp_issuer",
+                          "idp_client_id", "idp_jwks", "vault_addr", "vault_external_addr",
+                          "optional_services", "exclude_services", "enable_games", "anubis")
 DESKTOP_ROLES = X86_CLIENT_ROLES + _STANDALONE_DESKTOP_ROLES + _ARM_DESKTOP_ROLES
 # Cluster-node / headless-appliance family (root-encrypted infra). X86_NODE_ROLES already
 # covers pki/backend/frontend/backend-gpu/omnibus/edge-ai (x86 AND rpi5 share
@@ -1681,6 +1698,12 @@ _CLUSTER_PLANE_MODE_GATED_PLATFORMS = ("x86",)
 # deliberately undeclared: a scope nothing reads would be policy with no effect. They land
 # with their enforcement, not before.
 _FIELD_SCOPE_OVERRIDES: dict[str, FieldScope] = {
+    # The mesh's cluster choices on the Orange Pi node boards: a NODE role bakes them,
+    # the Orange Pi DESKTOP bakes no cluster tree and its builder refuses the flags. The
+    # class rule applies on those two builders only (x86/rpi5 keep their own rules).
+    **{f: FieldScope(platforms=_FIELD_PLATFORMS[f], classes=("node",),
+                     class_platforms=_OPI_NODE_PLATFORMS)
+       for f in _OPI_NODE_CLASS_FIELDS},
     **{f: FieldScope(platforms=_FIELD_PLATFORMS[f], classes=("desktop",))
        for f in THEME_FIELDS},
     **{f: FieldScope(platforms=_FIELD_PLATFORMS[f], classes=("desktop",))
@@ -1758,8 +1781,13 @@ _FIELD_SCOPE_OVERRIDES: dict[str, FieldScope] = {
     # CLIENT alike (_x86_args:3582-3584 emits it outside the `role not in X86_NODE_ROLES`
     # gate that --person-role/--domains sit behind), so a class rule here would be an
     # invented constraint of exactly the kind FieldScope's docstring warns about.
+    # ...EXCEPT on the Orange Pi node boards, where --games-domain / --release-state are
+    # parsed for a NODE role only (the Orange Pi desktop refuses them): there the class
+    # rule is real, so it rides class_platforms exactly like _OPI_NODE_CLASS_FIELDS above.
     **{f: FieldScope(platforms=_FIELD_PLATFORMS[f], modes=_CLUSTER_PLANE_MODES,
-                     mode_platforms=_CLUSTER_PLANE_MODE_GATED_PLATFORMS)
+                     mode_platforms=_CLUSTER_PLANE_MODE_GATED_PLATFORMS,
+                     **({"classes": ("node",), "class_platforms": _OPI_NODE_PLATFORMS}
+                        if f in _OPI_NODE_CLASS_FIELDS else {}))
        for f in _CLUSTER_IDENTITY_FIELDS},
 }
 
@@ -2881,6 +2909,17 @@ def strip_platform_unsupported(cfg: "ImageConfig") -> list[str]:
             continue
         if _reset_field(cfg, fld):
             cleared.append(fld)
+    # An INFRA slug this platform's builder cannot bake (tor / egress-vpn on an Orange Pi
+    # node: host daemons that image does not carry, and its builder refuses them) is
+    # dropped from a mesh-wide selection that reached this row, exactly like the
+    # worklist's per-node infra fold drops a slug the platform cannot express.
+    catalog = OPTIONAL_SERVICES_BY_PLATFORM.get(plat)
+    if catalog is not None and cfg.optional_services:
+        kept = [s for s in cfg.optional_services
+                if not (s in INFRA_SERVICES_CHOICES and s not in catalog)]
+        if kept != list(cfg.optional_services):
+            cfg.optional_services = kept
+            cleared.append("optional_services")
     return cleared
 
 
@@ -4429,6 +4468,7 @@ class ImageConfig:
             a += self._encrypt_root_args()
             if self.image_only:
                 a += ["--image-only"]
+            a += self._orangepi_node_cluster_args()
             return a
         a: list[str] = ["--board", self.board or "orange-pi-5-plus", "--flavor", self.flavor or "both"]
         if self.dtb:
@@ -4496,6 +4536,24 @@ class ImageConfig:
             a += ["--image-only"]
         return a
 
+    def _orangepi_node_cluster_args(self) -> list[str]:
+        """The mesh's cluster choices on an Orange Pi NODE role (EXPERIMENTAL): the
+        same release-state / games-domain / optional-services / IdP / Vault surface
+        _rpi5_args emits, so a mesh mixing Pi and Orange Pi nodes bakes ONE set of
+        choices. Every default emits nothing. Never called for the Orange Pi desktop
+        (its builder refuses these flags: no cluster tree is baked there)."""
+        a: list[str] = []
+        if self.release_state:
+            a += ["--release-state", self.release_state]
+        if self.games_domain:
+            a += ["--games-domain", self.games_domain]
+        a += self._services_args()
+        if self.enable_games:
+            a += ["--enable-games"]
+        a += self._idp_args()
+        a += self._vault_args()
+        return a
+
     def _orangepi4lts_args(self) -> list[str]:
         """build-orangepi4-lts-stage4.sh — arm64 LIGHT-DESKTOP CLIENT: flavor
         only, no --role and no --board. EXPERIMENTAL (hardware validation
@@ -4526,6 +4584,7 @@ class ImageConfig:
             a += self._encrypt_root_args()
             if self.image_only:
                 a += ["--image-only"]
+            a += self._orangepi_node_cluster_args()
             return a
         a: list[str] = ["--flavor", self.flavor or "both"]
         if self.dtb:

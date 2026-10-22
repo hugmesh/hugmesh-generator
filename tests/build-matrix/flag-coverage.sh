@@ -324,6 +324,12 @@ STRUCTURAL = {
     "orangepi4-lts": [{"mode": "mesh", "role": "frontend", "ram_gb": "4"}],
 }
 
+# The node baseline of each board whose cluster-choice flags exist for a NODE role only.
+NODE_BASELINES = {
+    "orangepi5": {"mode": "mesh", "role": "pki", "ram_gb": "8"},
+    "orangepi4-lts": {"mode": "mesh", "role": "frontend", "ram_gb": "4"},
+}
+
 missing = set(PLATFORM_FIELD_SUPPORT) - set(SAMPLES)
 if missing:
     print(f"FLAGCOV-VOCAB-ERROR: capability-table field(s) with no sample here: "
@@ -340,6 +346,10 @@ for platform in BUILDER_SCRIPTS:
             continue
         for ov in SAMPLES[field]:
             batteries.append({**base, **ov})
+            # The Orange Pi node boards emit the cluster choices for a NODE role only,
+            # so every sample is ALSO probed on that board's node baseline.
+            if platform in NODE_BASELINES:
+                batteries.append({**base, **NODE_BASELINES[platform], **ov})
     for kwargs in batteries:
         try:
             args = ImageConfig(**kwargs).to_cli_args()

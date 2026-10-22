@@ -324,6 +324,7 @@ FLAVOR_SET=false                                # true once --flavor/--live/--in
 RAM_GB=""                                       # --ram-gb N : GB of RAM on the board (REQUIRED for --role omnibus)
 NODE_ROLE=false                                 # true for a cluster NODE role (frontend); false for the desktop
 ROLE_CLIENT=true                                # the Pi gate functions read this: false on a node role
+CLUSTER_ARGS_GIVEN=""                           # cluster-choice flags given (--release-state, --idp, ...); a desktop refuses them
 GROW_POLICY="fill"
 COMPRESS_IMG=false
 COMPRESS_LEVEL=9        # xz preset --compress uses (0-9); --compress-level N
@@ -658,6 +659,21 @@ while [[ $# -gt 0 ]]; do
         --image-only)         IMAGE_ONLY=true; SKIP_KERNEL=true; shift ;;
         --img-size)           ROOT_MiB="$2"; IMG_SIZE_SET=true; shift 2 ;;
         --ram-gb)             RAM_GB="$2";                shift 2 ;;
+        # Cluster choices (NODE roles only; a desktop build refuses them below). The
+        # same spellings the Raspberry Pi builder parses; validated after the role is
+        # known by node_role_resolve_cluster_choices (scripts/_node-role-lib.sh).
+        --release-state)      RELEASE_STATE="$2";      CLUSTER_ARGS_GIVEN+=" $1"; shift 2 ;;
+        --games-domain)       GAMES_DOMAIN="$2";       CLUSTER_ARGS_GIVEN+=" $1"; shift 2 ;;
+        --optional-services)  OPTIONAL_SERVICES="$2";  CLUSTER_ARGS_GIVEN+=" $1"; shift 2 ;;
+        --all-services)       OPTIONAL_SERVICES="all"; CLUSTER_ARGS_GIVEN+=" $1"; shift   ;;
+        --exclude-services)   EXCLUDE_SERVICES="$2";   CLUSTER_ARGS_GIVEN+=" $1"; shift 2 ;;
+        --enable-games)       ENABLE_GAMES=true;       CLUSTER_ARGS_GIVEN+=" $1"; shift   ;;
+        --idp)                IDP="$2";                CLUSTER_ARGS_GIVEN+=" $1"; shift 2 ;;
+        --idp-issuer)         IDP_ISSUER="$2";         CLUSTER_ARGS_GIVEN+=" $1"; shift 2 ;;
+        --idp-client-id)      IDP_CLIENT_ID="$2";      CLUSTER_ARGS_GIVEN+=" $1"; shift 2 ;;
+        --idp-jwks)           IDP_JWKS="$2";           CLUSTER_ARGS_GIVEN+=" $1"; shift 2 ;;
+        --vault-addr)         VAULT_ADDR="$2";         CLUSTER_ARGS_GIVEN+=" $1"; shift 2 ;;
+        --vault-external-addr) VAULT_EXTERNAL_ADDR="$2"; CLUSTER_ARGS_GIVEN+=" $1"; shift 2 ;;
         --grow)               GROW_POLICY="$2";           shift 2 ;;
         --no-grow)            GROW_POLICY="none";         shift   ;;
         --compress)           COMPRESS_IMG=true;          shift   ;;
@@ -740,9 +756,18 @@ if ${NODE_ROLE}; then
     fi
     node_role_load_pi_settings || exit 1
     node_role_load_pi_functions || exit 1
-    OPTIONAL_SERVICES="${OPTIONAL_SERVICES//,/ }"
-elif [ -n "${RAM_GB}" ]; then
-    warn "--ram-gb ${RAM_GB} is ignored for the desktop (no RAM floor on it)."
+    # The mesh's cluster choices (release state, IdP, Vault, optional services),
+    # validated and resolved exactly as the Pi does; a host-daemon slug this board
+    # does not carry (tor, egress-vpn, domain-registry-bridge) is refused.
+    node_role_resolve_cluster_choices orangepi4-lts || exit 1
+else
+    if [ -n "${RAM_GB}" ]; then
+        warn "--ram-gb ${RAM_GB} is ignored for the desktop (no RAM floor on it)."
+    fi
+    if [ -n "${CLUSTER_ARGS_GIVEN}" ]; then
+        err "${CLUSTER_ARGS_GIVEN# }: cluster choices only apply to a cluster node role (pki backend frontend omnibus); the desktop bakes no cluster tree. Drop them, or pick a node role with --role."
+        exit 1
+    fi
 fi
 
 # ── Validate flavor / env / grow ───────────────────────────────────
@@ -1202,6 +1227,13 @@ if ${PRINT_PLAN}; then
         _plan K8S                "$(node_role_k8s_topology "${ROLE}")"
         _plan OPTIONAL_SERVICES  "${OPTIONAL_SERVICES:-none}"
         _plan RELEASE_STATE      "${RELEASE_STATE}"
+        _plan GAMES_DOMAIN       "${GAMES_DOMAIN:-none}"
+        _plan IDP                "${IDP}"
+        _plan IDP_ISSUER         "${IDP_ISSUER:-none}"
+        _plan IDP_CLIENT_ID      "${IDP_CLIENT_ID:-none}"
+        _plan IDP_JWKS           "${IDP_JWKS:-none}"
+        _plan VAULT_ADDR         "${VAULT_ADDR:-none}"
+        _plan VAULT_EXTERNAL_ADDR "${VAULT_EXTERNAL_ADDR:-none}"
         _plan RAM_GB             "${RAM_GB:-unspecified}"
         _plan RAM_FLOOR_GB       "$(hugmesh_role_min_ram_gb "${ROLE}")"
         _plan NODE_PACKAGES      "specs-rpi5/portage/packages-k8s.list + ${NODE_ROLE_HOST_PACKAGES_LIST} (the Raspberry Pi node set)"
