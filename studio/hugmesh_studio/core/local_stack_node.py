@@ -1142,6 +1142,12 @@ class LocalStackNode:
             self.looks_error = (f"domain looks not served: {str(exc).rstrip('.')}. "
                                 "Every domain shows the mesh's own look on this start.")
         except OSError as exc:
+            # a half-written folder could serve an earlier start's look under this
+            # record: clear it too (best effort), so the sentence below stays true
+            try:
+                look_serving.clear(self.generator_dir)
+            except OSError:
+                pass
             self.looks_error = (f"domain looks not written: {str(exc).rstrip('.')}. "
                                 "Every domain shows the mesh's own look on this start.")
 

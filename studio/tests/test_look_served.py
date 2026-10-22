@@ -237,6 +237,28 @@ def test_a_look_that_cannot_be_written_clears_the_old_folder_and_says_why(gen, f
     assert msg.startswith("[looks] domain looks not served")
 
 
+def test_a_disk_error_while_writing_is_said_and_leaves_no_old_look_served(
+        gen, fake_make, monkeypatch):
+    """Skeptic 2's N8: an OSError while writing was swallowed by no test. It must be
+    said first in the run log, and an earlier start's host folders must not stay
+    served under the new record (the sentence says every domain shows the mesh's)."""
+    LocalMeshBootstrap(gen, _cfg())._stack_node().start()
+    assert _hosts(gen) == ["shop.example"]
+    real_write = brand_look.write_look_files
+
+    def half_then_fail(*a, **k):
+        real_write(*a, **k)
+        raise OSError(28, "No space left on device")
+    monkeypatch.setattr(brand_look, "write_look_files", half_then_fail)
+    node = LocalMeshBootstrap(gen, _cfg())._stack_node()
+    ok, msg = node.start()                  # the buffered path: make is faked
+    assert ok, msg
+    assert node.looks_error.startswith("domain looks not written: ")
+    assert "No space left on device" in node.looks_error
+    assert msg.startswith("[looks] domain looks not written")
+    assert _hosts(gen) is None, "an earlier start's look is still served"
+
+
 def test_only_safe_names_become_folders():
     rows = [{"name": "ok.example"}, {"name": "evil.example;}"}, {"name": "x"},
             {"name": "mesh.example"}, {"name": "OK.example"},
