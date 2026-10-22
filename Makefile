@@ -2749,6 +2749,17 @@ e2e-ungated: ## MANUAL ONLY: run ALL the PREMERGE_UNGATED suites (24 of 24 by de
 builder-unmount-real-check: ## OPT-IN, needs unshare -Urm (a developer host, not a CI container): the builder's unmount and stale-mount refusal against real stacked binds, through awkward path spellings
 	bash tests/scripts/test-builder-unmount-real.sh
 
+# mesh-node-launcher-parity-check: the Windows launcher (clients/docker-mesh-node/
+# mesh-node.ps1) hands docker the same arguments as the Linux one (mesh-node.sh),
+# except the TUN pair Linux adds when the host has /dev/net/tun. Pester 5.6.1 runs
+# both real launchers against an argv-recording docker stub; uses pwsh if it is on
+# PATH, else the pinned PowerShell image in docker (--network none). Exit 2 =
+# SKIPPED (neither available). Gated post-merge by .gitlab-ci.yml's
+# lint:mesh-node-launcher-parity.
+.PHONY: mesh-node-launcher-parity-check
+mesh-node-launcher-parity-check: ## Windows vs Linux mesh-node launchers pass docker identical arguments (bar the TUN pair); Pester in pwsh or the PowerShell image
+	bash tests/docker-mesh-node/test-launcher-parity.sh
+
 # build-image-dial-identity-check: the image-gen worker (docker/build-image.sh) run end to end
 # against fake builders and a capturing curl; asserts the ingest body reports the DEVICE_ID /
 # VAULT_REF the BFF handed the Job, sends no k8sSecretName and no host key

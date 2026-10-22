@@ -998,6 +998,17 @@ PREMERGE_UNGATED=(
   # .gitlab-ci.yml's desktop-governance-verify. WIRE IT into that SUITES list, then
   # delete this entry and raise PREMERGE_BASELINE by one.
   tests/desktop-governance/test-sso-token-producer.sh
+  # NOT an exemption, a wiring gap: the Windows/Linux mesh-node launcher parity suite
+  # (Pester 5.6.1 over both real launchers and an argv-recording docker stub). It needs
+  # bash plus pwsh, OR bash plus docker to run the pinned PowerShell image; no root, no
+  # network once Pester is present. It is listed solely because wiring it into
+  # .github/workflows/shell-suites.yml is an edit the change that added it was not
+  # permitted to make. It IS run post-merge by .gitlab-ci.yml's
+  # lint:mesh-node-launcher-parity and locally by `make mesh-node-launcher-parity-check`.
+  # TO CLOSE THIS: add a shell-suites job on a pwsh image (ubuntu-latest runners ship
+  # pwsh; Pester 5.6.1 must be installed), DELETE this entry and raise PREMERGE_BASELINE
+  # by one to the number this file then prints.
+  tests/docker-mesh-node/test-launcher-parity.sh
   tests/device-registry/test-layer-a-headscale-acl.sh
   tests/egress-vpn/test-secret-contract.sh
   # Offline, bash + python3 only, 48 passed / 0 failed on 2026-10-14 (#654 D12:
