@@ -50,8 +50,10 @@ add attack surface. FDE relies only on the ARMv8 Crypto Extensions
 
 ## What this adds
 
-A lean, hardened LXDE **light desktop** client image for the Orange Pi 4 LTS. It
-is a **client device**, like Frite, not a K8s cluster node. It reuses the SAME
+A lean, hardened LXDE **light desktop** client image for the Orange Pi 4 LTS, and
+(since 2026-10-21, also EXPERIMENTAL) one **cluster node role**, frontend — see
+"Cluster node role: frontend only" below. The desktop is a **client device**, like
+Frite. It reuses the SAME
 aarch64 cross toolchain and shared `specs/` mesh/provisioning/sshd plumbing as
 every other client image (Frite/RPi5-desktop/Jetson-desktop/Orange Pi 5):
 headscale/tailscale mesh join, hardened key-only sshd, and KEYS-USB first-boot
@@ -82,6 +84,34 @@ neither situation**, and the upstream device tree says so:
 So this board gets the FULL light-desktop taxonomy: `ROLE="desktop"`,
 `packages-desktop.list`, `hardened-desktop.config`, LXDE + lightdm. That matches
 `build-orangepi5-stage4.sh`, not the appliance shape.
+
+## Cluster node role: frontend only (EXPERIMENTAL, hardware validation pending)
+
+`--role frontend` builds a Kubernetes frontend worker
+(scripts/_roles-lib.sh `HUGMESH_ROLES_ORANGEPI4LTS="desktop frontend"`). No Orange
+Pi has booted a node image from this repo.
+
+```sh
+./build-orangepi4-lts-stage4.sh --role frontend --print-plan
+make orangepi4-lts-frontend                          # the real build (root, hours)
+```
+
+The other node roles are REFUSED, each with its reason, because this board has
+4 GB of RAM (one SKU) and 16 GB of eMMC with no M.2 slot:
+
+| role | verdict | why |
+|---|---|---|
+| frontend | builds | the gateway / UI tier asks for about 1.5 GiB |
+| backend | refused | the backend tier's memory limits alone add up to more than 4 GB |
+| pki | refused | 16 GB of eMMC is too small for etcd, Vault, Harbor and Cassandra |
+| omnibus | refused | below omnibus's 8 GB RAM floor; the operator asked for an Orange Pi 4 omnibus, and this is the honest answer — the board cannot hold the whole stack |
+
+A frontend node is installer-only (`--flavor live|both` is refused: a node needs a
+persistent root) and gets the same node payload as the Raspberry Pi and Orange Pi
+5 nodes: `specs-rpi5/portage/packages-k8s.list`, the shared
+`specs/kernel/k8s-node.config` kernel fragment, and the Pi builder's own cluster
+tree gates (scripts/_node-role-lib.sh). `--ram-gb` is optional (4 is the only
+size); `--standalone` stays desktop-only.
 
 ## Single-board platform (no `--board` axis)
 

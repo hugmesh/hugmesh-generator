@@ -293,14 +293,24 @@ ROLE_CHOICES = {
         # RPI5_ROLE_MAP; there is now one vocabulary (scripts/_roles-lib.sh) and
         # nothing to translate. Every old id still LOADS from a saved session — see
         # WorklistEntry.from_dict / BuildSession.from_dict.
-        ("pki", ("x86", "rpi5"), "PKI node — cluster certificate authority (x86 or Raspberry Pi 4/5)"),
-        ("backend", ("x86", "rpi5"), "Backend node (x86 or Raspberry Pi 4/5)"),
-        ("frontend", ("x86", "rpi5"), "Frontend node (x86 or Raspberry Pi 4/5)"),
+        # The Orange Pi 5 / 5 Plus builds pki/backend/frontend/omnibus and the 4 GB
+        # Orange Pi 4 LTS builds frontend only — both EXPERIMENTAL (no Orange Pi has
+        # booted an image from this repo; hardware validation pending). Installer
+        # flavor only. scripts/_roles-lib.sh HUGMESH_ROLES_ORANGEPI5/_ORANGEPI4LTS.
+        ("pki", ("x86", "rpi5", "orangepi5"),
+         "PKI node — cluster certificate authority (x86, Raspberry Pi 4/5, or Orange Pi 5 — EXPERIMENTAL)"),
+        ("backend", ("x86", "rpi5", "orangepi5"),
+         "Backend node (x86, Raspberry Pi 4/5, or Orange Pi 5 — EXPERIMENTAL)"),
+        ("frontend", ("x86", "rpi5", "orangepi5", "orangepi4-lts"),
+         "Frontend node (x86, Raspberry Pi 4/5, or Orange Pi 5 / 4 LTS — EXPERIMENTAL)"),
         ("backend-gpu", ("x86", "jetson"),
          "Backend + GPU node — a backend worker with a GPU, no inference service "
          "(x86, or Jetson Orin — EXPERIMENTAL)"),
-        ("omnibus", ("x86", "jetson"),
-         "Omnibus — every cluster role on one node (x86, or Jetson Orin — EXPERIMENTAL)"),
+        # omnibus on a Raspberry Pi 4/5 or Orange Pi 5 needs the board's RAM (8 GB+;
+        # ImageConfig.ram_gb -> --ram-gb): one image serves every RAM size it is sold in.
+        ("omnibus", ("x86", "jetson", "rpi5", "orangepi5"),
+         "Omnibus — every cluster role on one node (x86; Raspberry Pi 4/5 or Orange Pi 5 "
+         "with 8 GB+ RAM; Jetson Orin / Orange Pi — EXPERIMENTAL)"),
         # Person-device desktops attachable to the mesh (operator ask 2026-08-14):
         # checking one on the WorklistPage asks for the person's user + role via a
         # popup; the account is provisioned on the internal Tailscale root
@@ -531,6 +541,12 @@ INFRA_SERVICES_CHOICES = ("tor", "egress-vpn", "workloadConsole", "anubis")
 OPTIONAL_SERVICES_BY_PLATFORM = {
     "x86": OPTIONAL_SERVICES_CHOICES + INFRA_SERVICES_CHOICES,
     "rpi5": OPTIONAL_SERVICES_CHOICES + INFRA_SERVICES_CHOICES,
+    # Orange Pi NODE roles (EXPERIMENTAL): the user-level set plus the two cluster-plane
+    # infra slugs. NOT tor / egress-vpn: those are host daemons the Orange Pi node image
+    # does not carry, and its builder refuses them (scripts/_node-role-lib.sh
+    # NODE_ROLE_UNSUPPORTED_HOST_SLUGS) rather than bake the cluster app alone.
+    "orangepi5": OPTIONAL_SERVICES_CHOICES + ("workloadConsole", "anubis"),
+    "orangepi4-lts": OPTIONAL_SERVICES_CHOICES + ("workloadConsole", "anubis"),
 }
 
 # --optional-services sentinels (mirror build-menu.sh's OPT_SERVICES + the builders):
@@ -628,6 +644,16 @@ def client_class_role(role: str, platform: str) -> bool:
     if p == "x86":
         return role not in X86_NODE_ROLES
     return False
+
+
+def services_catalog(cfg) -> tuple:
+    """The optional-service slugs THIS image's builder accepts: the platform catalogue
+    (OPTIONAL_SERVICES_BY_PLATFORM), except an Orange Pi DESKTOP row, whose builder bakes
+    no cluster tree and refuses --optional-services (only its NODE roles take them)."""
+    plat = getattr(cfg, "platform", "") or "x86"
+    if plat in _OPI_NODE_PLATFORMS and getattr(cfg, "role", "") not in _ORANGEPI_NODE_ROLE_IDS:
+        return ()
+    return tuple(OPTIONAL_SERVICES_BY_PLATFORM.get(plat, ()))
 
 
 def services_picker_hidden(cfg) -> bool:
@@ -1252,6 +1278,12 @@ _IMAGE_ONLY_PLATFORMS = ("frite", "jetson", "orangepi5", "orangepizero2", "orang
                          "orangepizero3", "orangepi3-lts", "orangepi4-lts")
 _X86 = ("x86",)
 _X86_RPI5 = ("x86", "rpi5")
+# The Orange Pi boards with cluster NODE roles (EXPERIMENTAL): their builders parse the
+# mesh's cluster choices (release state, games domain, optional services, IdP, Vault)
+# for a NODE role only and refuse them on the desktop, so those fields are in scope
+# there for the node class only (_OPI_NODE_CLASS_FIELDS below).
+_OPI_NODE_PLATFORMS = ("orangepi5", "orangepi4-lts")
+_X86_RPI5_OPI = _X86_RPI5 + _OPI_NODE_PLATFORMS
 
 # The builders whose MEDIA is chosen by --flavor (live | installer | both; default
 # "both") instead of by per-artifact ISO flags. Named once here because TWO separate
@@ -1279,7 +1311,7 @@ _FIELD_PLATFORMS: dict[str, tuple[str, ...]] = {
     # host identity (-H/-T/-u) — all builders.
     "hostname": _ALL_PLATFORMS, "timezone": _ALL_PLATFORMS, "user": _ALL_PLATFORMS,
     # cluster / mesh identity.
-    "cluster_domain": _ALL_PLATFORMS, "games_domain": _X86_RPI5, "release_state": _X86_RPI5,
+    "cluster_domain": _ALL_PLATFORMS, "games_domain": _X86_RPI5_OPI, "release_state": _X86_RPI5_OPI,
     "person_role": _X86, "domains": _X86,
     # Tailscale root domain — every builder parses --superdomain (WS-SUPER-B bake);
     # emitted ONLY in mesh mode (see _superdomain_args), so it is EXCLUDED from the
@@ -1315,19 +1347,19 @@ _FIELD_PLATFORMS: dict[str, tuple[str, ...]] = {
     "edge_ai_tts": _X86_RPI5,
     # mesh-node identity provider (I6) — the two node builders only. Casdoor
     # default emits nothing; the probe uses an external combo (multi-key entry).
-    "idp": _X86_RPI5, "idp_issuer": _X86_RPI5, "idp_client_id": _X86_RPI5,
-    "idp_jwks": _X86_RPI5,
+    "idp": _X86_RPI5_OPI, "idp_issuer": _X86_RPI5_OPI, "idp_client_id": _X86_RPI5_OPI,
+    "idp_jwks": _X86_RPI5_OPI,
     # mesh secrets store (#224) — the two node builders bake /etc/hugmesh/vault.conf;
     # the empty address emits nothing (byte-identity), so the probe supplies one.
     # vault_external_addr (#335) rides the same two builders and the same rule.
     # base_ca_certs / domain_ca are ABSENT on purpose: they emit no flag anywhere, so
     # a capability-table entry would claim a builder surface that does not exist.
-    "vault_addr": _X86_RPI5, "vault_external_addr": _X86_RPI5,
+    "vault_addr": _X86_RPI5_OPI, "vault_external_addr": _X86_RPI5_OPI,
     # tor / character-studio / character-forge / services.
     "tor_onion_service": _X86, "character_studio": _X86_RPI5,
     "character_forge": _X86_RPI5,
-    "optional_services": _X86_RPI5, "exclude_services": _X86_RPI5, "enable_games": _X86_RPI5,
-    "anubis": _X86_RPI5,
+    "optional_services": _X86_RPI5_OPI, "exclude_services": _X86_RPI5_OPI,
+    "enable_games": _X86_RPI5_OPI, "anubis": _X86_RPI5_OPI,
     # managed backing services (I8/M2) — the two node builders parse --managed-service;
     # a mesh-node cluster concern, so scoped to the only builders that bake a cluster tree.
     "managed_services": _X86_RPI5,
@@ -1439,6 +1471,15 @@ _STANDALONE_DESKTOP_ROLES = ("standalone-thin", "standalone-thick", UNAFFILIATED
 # rpi5-desktop / jetson-desktop are the two COMPOSITE ids (a platform mangled into
 # the role string) that survive this change; see RPI5_ROLE_MAP above.
 _ARM_DESKTOP_ROLES = ("rpi5-desktop", "jetson-desktop", "frite", "orangepi5", "orangepi4-lts")
+# The Studio role ids that are cluster NODE roles on the Orange Pi node-axis boards
+# (orangepi5: pki/backend/frontend/omnibus; orangepi4-lts: frontend). Their desktop
+# keeps the board id as its role id ("orangepi5"/"orangepi4-lts"), unchanged.
+_ORANGEPI_NODE_ROLE_IDS = ("pki", "backend", "frontend", "omnibus")
+# The cluster-choice fields an Orange Pi NODE role emits (_orangepi_node_cluster_args)
+# and its DESKTOP does not: node-class only on _OPI_NODE_PLATFORMS (FIELD_SCOPE).
+_OPI_NODE_CLASS_FIELDS = ("games_domain", "release_state", "idp", "idp_issuer",
+                          "idp_client_id", "idp_jwks", "vault_addr", "vault_external_addr",
+                          "optional_services", "exclude_services", "enable_games", "anubis")
 DESKTOP_ROLES = X86_CLIENT_ROLES + _STANDALONE_DESKTOP_ROLES + _ARM_DESKTOP_ROLES
 # Cluster-node / headless-appliance family (root-encrypted infra). X86_NODE_ROLES already
 # covers pki/backend/frontend/backend-gpu/omnibus/edge-ai (x86 AND rpi5 share
@@ -1633,7 +1674,10 @@ _BD_BUNDLE_SOURCE = BuilderDefault(
 # Studio must not invent one. test_field_scope.py derives this set from the builder scripts
 # and asserts equality, so a builder that grows or loses a role-class concept fails here
 # rather than letting the tuple go stale into a fiction.
-_STANDALONE_CLASS_GATED_PLATFORMS = ("x86", "rpi5")
+# The two Orange Pi node-axis builders joined on 2026-10-21: their node roles refuse
+# --standalone (a cluster node joins the mesh) while their desktop composes it, exactly
+# the rpi5 split, and they now carry ROLE_CLIENT for it.
+_STANDALONE_CLASS_GATED_PLATFORMS = ("x86", "rpi5", "orangepi5", "orangepi4-lts")
 
 # The CLUSTER-IDENTITY trio — the three fields NetworkPage's "Identity & domain"
 # collapsible collects (network.py:494/:499/:504: "Public apex domain", "Games domain",
@@ -1668,6 +1712,12 @@ _CLUSTER_PLANE_MODE_GATED_PLATFORMS = ("x86",)
 # deliberately undeclared: a scope nothing reads would be policy with no effect. They land
 # with their enforcement, not before.
 _FIELD_SCOPE_OVERRIDES: dict[str, FieldScope] = {
+    # The mesh's cluster choices on the Orange Pi node boards: a NODE role bakes them,
+    # the Orange Pi DESKTOP bakes no cluster tree and its builder refuses the flags. The
+    # class rule applies on those two builders only (x86/rpi5 keep their own rules).
+    **{f: FieldScope(platforms=_FIELD_PLATFORMS[f], classes=("node",),
+                     class_platforms=_OPI_NODE_PLATFORMS)
+       for f in _OPI_NODE_CLASS_FIELDS},
     **{f: FieldScope(platforms=_FIELD_PLATFORMS[f], classes=("desktop",))
        for f in THEME_FIELDS},
     **{f: FieldScope(platforms=_FIELD_PLATFORMS[f], classes=("desktop",))
@@ -1745,8 +1795,13 @@ _FIELD_SCOPE_OVERRIDES: dict[str, FieldScope] = {
     # CLIENT alike (_x86_args:3582-3584 emits it outside the `role not in X86_NODE_ROLES`
     # gate that --person-role/--domains sit behind), so a class rule here would be an
     # invented constraint of exactly the kind FieldScope's docstring warns about.
+    # ...EXCEPT on the Orange Pi node boards, where --games-domain / --release-state are
+    # parsed for a NODE role only (the Orange Pi desktop refuses them): there the class
+    # rule is real, so it rides class_platforms exactly like _OPI_NODE_CLASS_FIELDS above.
     **{f: FieldScope(platforms=_FIELD_PLATFORMS[f], modes=_CLUSTER_PLANE_MODES,
-                     mode_platforms=_CLUSTER_PLANE_MODE_GATED_PLATFORMS)
+                     mode_platforms=_CLUSTER_PLANE_MODE_GATED_PLATFORMS,
+                     **({"classes": ("node",), "class_platforms": _OPI_NODE_PLATFORMS}
+                        if f in _OPI_NODE_CLASS_FIELDS else {}))
        for f in _CLUSTER_IDENTITY_FIELDS},
 }
 
@@ -1779,6 +1834,17 @@ def rpi_boards_for_role(role: str) -> tuple[str, ...]:
     combo. Keeping rpi3 out of the node picker mirrors the builder's own contract so a
     Studio/menu selection can never dead-end in that hard-error (honesty rule)."""
     return RPI_BOARDS if image_class("", role) == "desktop" else RPI_NODE_BOARDS
+
+
+def orangepi_flavors_for_role(platform: str, role: str) -> tuple[str, ...]:
+    """The --flavor choices to OFFER for an Orange Pi node-axis board (orangepi5 /
+    orangepi4-lts) and ``role``. A cluster NODE role is INSTALLER-only: the live flavor
+    runs from RAM with no persistence, and build-orangepi5-stage4.sh /
+    build-orangepi4-lts-stage4.sh refuse ``--flavor live|both`` for a node. The
+    desktop keeps every flavor. Same honesty rule as rpi_boards_for_role: a picker
+    never offers a combination the builder hard-errors."""
+    flavors = {"orangepi5": ORANGEPI5_FLAVORS, "orangepi4-lts": ORANGEPI4LTS_FLAVORS}[platform]
+    return ("installer",) if role in _ORANGEPI_NODE_ROLE_IDS else flavors
 
 
 def x86_desktop_axis(role: str) -> tuple[str, ...]:
@@ -2857,6 +2923,17 @@ def strip_platform_unsupported(cfg: "ImageConfig") -> list[str]:
             continue
         if _reset_field(cfg, fld):
             cleared.append(fld)
+    # An INFRA slug this platform's builder cannot bake (tor / egress-vpn on an Orange Pi
+    # node: host daemons that image does not carry, and its builder refuses them) is
+    # dropped from a mesh-wide selection that reached this row, exactly like the
+    # worklist's per-node infra fold drops a slug the platform cannot express.
+    catalog = OPTIONAL_SERVICES_BY_PLATFORM.get(plat)
+    if catalog is not None and cfg.optional_services:
+        kept = [s for s in cfg.optional_services
+                if not (s in INFRA_SERVICES_CHOICES and s not in catalog)]
+        if kept != list(cfg.optional_services):
+            cfg.optional_services = kept
+            cleared.append("optional_services")
     return cleared
 
 
@@ -3376,6 +3453,10 @@ class ImageConfig:
     platform: str = "x86"              # x86 | rpi5 | frite | jetson -> BUILDER_SCRIPTS
     board: str = ""                    # frite: FRITE_BOARDS | jetson: JETSON_BOARDS | rpi5: RPI_BOARDS
     flavor: str = ""                   # frite: live | installer | both
+    # GB of RAM on the Raspberry Pi / Orange Pi board a cluster NODE image is for
+    # (--ram-gb). "" = not stated. REQUIRED for omnibus (8 GB+); for pki/backend/
+    # frontend the builder refuses a value below 4. x86/jetson do not take it.
+    ram_gb: str = ""
     env: str = "test"
     brand: str = "hugmesh"
     brand_title: str = "HugMesh Systems"
@@ -4708,6 +4789,14 @@ class ImageConfig:
             a += ["--luks-pass", self.luks_pass]
         return a
 
+    def _ram_gb_args(self) -> list[str]:
+        """--ram-gb N for a Pi / Orange Pi NODE role, when the RAM was stated. A desktop
+        or the Pi's generic server has no RAM floor, so nothing is emitted for them."""
+        ram = str(self.ram_gb or "").strip()
+        if not ram or image_class(self.mode, self.role) == "desktop" or self.role == "generic":
+            return []
+        return ["--ram-gb", ram]
+
     def _rpi5_args(self) -> list[str]:
         """build-rpi5-stage4.sh — arm64: pki | backend | frontend (cluster nodes)
         or desktop (client; compose with --standalone for FDE, no mesh). --board
@@ -4723,6 +4812,7 @@ class ImageConfig:
         a = ["--role", roles.builder_role(self.role, "rpi5")]
         if self.board:                 # rpi5 | rpi4 | rpi3 ("" = builder default: rpi5)
             a += ["--board", self.board]
+        a += self._ram_gb_args()
         # rpi5-only kernel/board overrides (x86 & the other ARM builders lack these).
         if self.dtb_prefix:
             a += ["--dtb-prefix", self.dtb_prefix]
@@ -4803,6 +4893,21 @@ class ImageConfig:
         shape exactly (this platform has ONE role — a client desktop — like
         Frite), minus Frite's --desktop light|none toggle (this platform has
         no headless variant to gate — see specs-orangepi5/README.md)."""
+        if self.role in _ORANGEPI_NODE_ROLE_IDS:
+            # Cluster NODE role (EXPERIMENTAL): --role + the board's RAM, installer
+            # flavor only (the builder refuses live/both for a node).
+            a = ["--board", self.board or "orange-pi-5-plus", "--flavor", "installer",
+                 "--role", roles.builder_role(self.role, "orangepi5")]
+            a += self._ram_gb_args()
+            if self.dtb:
+                a += ["--dtb", self.dtb]
+            a += self._uboot_args()
+            a += self._arm_common_args()
+            a += self._encrypt_root_args()
+            if self.image_only:
+                a += ["--image-only"]
+            a += self._orangepi_node_cluster_args()
+            return a
         a: list[str] = ["--board", self.board or "orange-pi-5-plus", "--flavor", self.flavor or "both"]
         if self.dtb:
             a += ["--dtb", self.dtb]
@@ -4869,6 +4974,24 @@ class ImageConfig:
             a += ["--image-only"]
         return a
 
+    def _orangepi_node_cluster_args(self) -> list[str]:
+        """The mesh's cluster choices on an Orange Pi NODE role (EXPERIMENTAL): the
+        same release-state / games-domain / optional-services / IdP / Vault surface
+        _rpi5_args emits, so a mesh mixing Pi and Orange Pi nodes bakes ONE set of
+        choices. Every default emits nothing. Never called for the Orange Pi desktop
+        (its builder refuses these flags: no cluster tree is baked there)."""
+        a: list[str] = []
+        if self.release_state:
+            a += ["--release-state", self.release_state]
+        if self.games_domain:
+            a += ["--games-domain", self.games_domain]
+        a += self._services_args()
+        if self.enable_games:
+            a += ["--enable-games"]
+        a += self._idp_args()
+        a += self._vault_args()
+        return a
+
     def _orangepi4lts_args(self) -> list[str]:
         """build-orangepi4-lts-stage4.sh — arm64 LIGHT-DESKTOP CLIENT: flavor
         only, no --role and no --board. EXPERIMENTAL (hardware validation
@@ -4885,7 +5008,22 @@ class ImageConfig:
           * SINGLE-BOARD, like the appliances: mainline ships exactly one
             Orange Pi RK3399 DTB and one U-Boot defconfig for the whole
             4/4B/4 LTS family, so a --board axis would be a fake axis.
-        See specs-orangepi4-lts/README.md."""
+        See specs-orangepi4-lts/README.md.
+
+        The ``frontend`` role is its one cluster NODE role (EXPERIMENTAL; 4 GB RAM,
+        16 GB eMMC): --role frontend, installer flavor only."""
+        if self.role in _ORANGEPI_NODE_ROLE_IDS:
+            a = ["--flavor", "installer", "--role", roles.builder_role(self.role, "orangepi4-lts")]
+            a += self._ram_gb_args()
+            if self.dtb:
+                a += ["--dtb", self.dtb]
+            a += self._uboot_args()
+            a += self._arm_common_args()
+            a += self._encrypt_root_args()
+            if self.image_only:
+                a += ["--image-only"]
+            a += self._orangepi_node_cluster_args()
+            return a
         a: list[str] = ["--flavor", self.flavor or "both"]
         if self.dtb:
             a += ["--dtb", self.dtb]

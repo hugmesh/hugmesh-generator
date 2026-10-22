@@ -102,13 +102,25 @@
 HUGMESH_ROLES_CANONICAL="pki backend frontend backend-gpu omnibus edge-ai generic laptop chromebook desktop standalone-thin standalone-thick standalone-unaffiliated"
 
 # ── PER-PLATFORM ACCEPTED SETS ─────────────────────────────────────────────────
-# Only the three platforms with a real role axis. The other seven builders
-# (frite, orangepi5, orangepi4-lts, orangepi-zero2/-zero2w/-zero3, orangepi3-lts)
-# have NO role axis: --role there is a free-form hostname/marker validated by a
-# slug regex only. They are handled by hugmesh_role_reject_node_role below.
+# Three platforms have a full role axis (x86, rpi5, jetson). Two Orange Pi boards
+# have a NODE axis on top of their desktop (orangepi5 = Orange Pi 5 / 5 Plus,
+# orangepi4-lts): a canonical node role in their set builds a cluster node, while
+# any token that is not a node role keeps the old meaning there — a free-form
+# hostname/marker (default `desktop`), so every existing desktop invocation is
+# unchanged. Both are EXPERIMENTAL (no Orange Pi has booted an image from this
+# repo; hardware validation pending). The other five builders (frite,
+# orangepi-zero2/-zero2w/-zero3, orangepi3-lts) have NO role axis: they are
+# handled by hugmesh_role_reject_node_role below, which names the reason.
+#
+# omnibus on rpi5/orangepi5 is gated on RAM (HUGMESH_ROLE_MIN_RAM_GB below): the
+# same image is sold with 1-16 GB (Pi) or 4-32 GB (Orange Pi 5), so the builder
+# requires --ram-gb for it. The Orange Pi 4 LTS (one 4 GB SKU, 16 GB eMMC) does
+# not list omnibus, pki or backend at all — see HUGMESH_ROLE_REFUSAL.
 HUGMESH_ROLES_X86="pki backend frontend backend-gpu omnibus edge-ai laptop chromebook desktop standalone-thin standalone-thick standalone-unaffiliated"
-HUGMESH_ROLES_RPI5="generic pki backend frontend desktop"
+HUGMESH_ROLES_RPI5="generic pki backend frontend omnibus desktop"
 HUGMESH_ROLES_JETSON="edge-ai backend-gpu omnibus desktop"
+HUGMESH_ROLES_ORANGEPI5="desktop pki backend frontend omnibus"
+HUGMESH_ROLES_ORANGEPI4LTS="desktop frontend"
 
 # ── ALIASES (input only, PERMANENT) ────────────────────────────────────────────
 # Not a deprecation window. There is no forcing function that would ever let these
@@ -254,6 +266,8 @@ hugmesh_role_platform_set() {
         x86)    printf '%s\n' "${HUGMESH_ROLES_X86}" ;;
         rpi5)   printf '%s\n' "${HUGMESH_ROLES_RPI5}" ;;
         jetson) printf '%s\n' "${HUGMESH_ROLES_JETSON}" ;;
+        orangepi5)     printf '%s\n' "${HUGMESH_ROLES_ORANGEPI5}" ;;
+        orangepi4-lts) printf '%s\n' "${HUGMESH_ROLES_ORANGEPI4LTS}" ;;
         *)      return 1 ;;
     esac
 }
@@ -470,8 +484,9 @@ hugmesh_role_keyprofile() {
 
 # ── CLUSTER NODE ROLES ─────────────────────────────────────────────────────────
 # The subset of the vocabulary that names a k8s cluster member. Declared ONCE
-# because two different rules key off it: the seven free-slug boards refuse them
-# (they cannot build a node image), and scripts/flash-disk.sh anchors its artifact
+# because two different rules key off it: the five free-slug boards refuse them
+# (they cannot build a node image; the two Orange Pi node boards refuse the ones
+# outside their set), and scripts/flash-disk.sh anchors its artifact
 # search to the platforms that build them (a node role identifies its platform, so a
 # `--role backend --arch arm64` request can never surface a Jetson image).
 HUGMESH_ROLES_NODE="pki backend frontend backend-gpu omnibus edge-ai"
@@ -492,21 +507,193 @@ hugmesh_role_arch() {
     esac
 }
 
-# hugmesh_role_reject_node_role <role> — for the seven free-slug boards, whose
-# --role is a hostname/marker with no vocabulary. `--role backend` on an Orange Pi
-# is silently accepted today and becomes a hostname; that names a node image the
-# board cannot build. rc=1 (with a message on stderr) for any canonical NODE role
-# or an alias of one. Custom markers stay available via --hostname.
+# hugmesh_role_reject_node_role <role> [platform] — for the five free-slug boards,
+# whose --role is a hostname/marker with no vocabulary. `--role backend` on an
+# Orange Pi Zero was once silently accepted and became a hostname; that names a node
+# image the board cannot build. rc=1 (with a message on stderr) for any canonical
+# NODE role or an alias of one; with <platform>, the message also says WHY (from
+# HUGMESH_ROLE_REFUSAL). Custom markers stay available via --hostname.
 hugmesh_role_reject_node_role() {
     local _r="$1"
+    local _plat="${2:-}"
     local _c
     _c="$(hugmesh_role_canonicalize "${_r}")" || return 0     # not in the vocabulary: fine
     if hugmesh_role_is_node_role "${_c}"; then
         printf "ERROR: --role '%s' names the cluster node role '%s', which this board does not build.\\n" \
             "${_r}" "${_c}" >&2
+        local _why
+        if [ -n "${_plat}" ] && _why="$(hugmesh_role_refusal_reason "${_plat}" "${_c}")"; then
+            printf '       Why: %s\n' "${_why}" >&2
+        fi
         printf '       This platform has no role axis — --role is only a hostname/marker here.\n' >&2
         printf '       Use --hostname NAME for a custom name.\n' >&2
         return 1
+    fi
+    return 0
+}
+
+# ── BOARD NODE AXIS (orangepi5 / orangepi4-lts) ────────────────────────────────
+# hugmesh_role_board_node_role <platform> <role> — for the two Orange Pi builders
+# whose --role is EITHER a node role from their platform set OR the old free-form
+# hostname/marker. Echoes the canonical node role and returns 0 when <role> names
+# a node role the platform builds; returns 2 (silently) when <role> is not a node
+# role at all (the caller keeps its desktop/marker path, byte-for-byte as before);
+# returns 1 with a reason-naming message on stderr when <role> names a node role
+# the platform refuses (e.g. omnibus on the 4 GB Orange Pi 4 LTS).
+hugmesh_role_board_node_role() {
+    local _plat="$1"
+    local _raw="$2"
+    local _c
+    _c="$(hugmesh_role_canonicalize "${_raw}")" || return 2
+    hugmesh_role_is_node_role "${_c}" || return 2
+    local _set
+    _set="$(hugmesh_role_platform_set "${_plat}")" || {
+        hugmesh_role_reject_node_role "${_raw}" "${_plat}"; return 1; }
+    case " ${_set} " in
+        *" ${_c} "*) printf '%s\n' "${_c}"; return 0 ;;
+    esac
+    printf "ERROR: --role '%s' (cluster node role '%s') is not built for platform %s.\\n" \
+        "${_raw}" "${_c}" "${_plat}" >&2
+    local _why
+    if _why="$(hugmesh_role_refusal_reason "${_plat}" "${_c}")"; then
+        printf '       Why: %s\n' "${_why}" >&2
+    fi
+    printf '       Node roles this board builds: %s\n' "$(hugmesh_role_node_set "${_plat}")" >&2
+    return 1
+}
+
+# hugmesh_role_node_set <platform> — the node roles in a platform's set, space
+# separated ("none" when it has none).
+hugmesh_role_node_set() {
+    local _set
+    _set="$(hugmesh_role_platform_set "$1" 2>/dev/null)" || { printf 'none\n'; return 0; }
+    local _out=""
+    local _r
+    for _r in ${_set}; do
+        hugmesh_role_is_node_role "${_r}" && _out="${_out}${_out:+ }${_r}"
+    done
+    printf '%s\n' "${_out:-none}"
+}
+
+# ── WHY A BOARD REFUSES A NODE ROLE ────────────────────────────────────────────
+# `<platform>:<role>=<one-line reason>`; `<platform>:any` covers every other node role
+# (not `*`: the lookup word-splits the table UNQUOTED, so a glob character would be
+# subject to pathname expansion — and vanish under nullglob).
+# Underscores stand for spaces so the table stays flat for the shell loop and the
+# Python reader (the reader and hugmesh_role_refusal_reason both turn `_` back into
+# a space). The RAM/storage numbers come from each board's specs-*/README.md.
+HUGMESH_ROLE_REFUSAL="
+orangepi4-lts:omnibus=the_Orange_Pi_4_LTS_has_4_GB_of_RAM_(single_SKU)_and_16_GB_of_eMMC,_below_omnibus's_8_GB_RAM_floor;_it_can_be_a_frontend_worker
+orangepi4-lts:pki=the_Orange_Pi_4_LTS_has_16_GB_of_eMMC_and_no_M.2_slot,_too_small_for_the_control_plane's_etcd,_Vault,_Harbor_and_Cassandra_storage;_it_can_be_a_frontend_worker
+orangepi4-lts:backend=the_Orange_Pi_4_LTS_has_4_GB_of_RAM,_and_the_backend_tier's_memory_limits_alone_add_up_to_more_than_that;_it_can_be_a_frontend_worker
+orangepi4-lts:any=the_Orange_Pi_4_LTS_builds_only_the_frontend_node_role
+orangepi5:any=the_Orange_Pi_5_/_5_Plus_builds_the_pki,_backend,_frontend_and_omnibus_node_roles_only
+orangepizero2:any=the_Orange_Pi_Zero_2_has_at_most_1_GB_of_RAM_and_boots_from_microSD_only,_not_enough_for_the_hardened_containerd/kubelet_node_stack
+orangepizero2w:any=the_Orange_Pi_Zero_2W_has_at_most_4_GB_of_RAM,_microSD-only_storage_and_no_onboard_Ethernet,_not_enough_for_a_cluster_node
+orangepizero3:any=the_Orange_Pi_Zero_3_has_at_most_4_GB_of_RAM_and_microSD-only_storage_(no_eMMC_or_NVMe),_not_enough_for_a_cluster_node
+orangepi3-lts:any=the_Orange_Pi_3_LTS_has_2_GB_of_RAM_and_its_onboard_Ethernet_does_not_work_on_the_mainline_device_tree,_not_enough_for_a_cluster_node
+frite:any=the_Frite_family_(Amlogic_S805X/S905X)_has_512_MB_to_2_GB_of_RAM,_not_enough_for_the_hardened_containerd/kubelet_node_stack
+"
+
+# hugmesh_role_refusal_reason <platform> <canonical role> — echo the reason (with
+# spaces), rc=1 when none is declared.
+hugmesh_role_refusal_reason() {
+    local _v
+    _v="$(_hm_role_lookup "${HUGMESH_ROLE_REFUSAL}" "$1:$2")" \
+        || _v="$(_hm_role_lookup "${HUGMESH_ROLE_REFUSAL}" "$1:any")" || return 1
+    # Pure shell (no `tr`: this file runs no external process, and is sourced
+    # under /bin/sh by docker/build-image.sh).
+    local _out=""
+    while :; do
+        case "${_v}" in
+            *_*) _out="${_out}${_v%%_*} "; _v="${_v#*_}" ;;
+            *)   _out="${_out}${_v}"; break ;;
+        esac
+    done
+    printf '%s\n' "${_out}"
+}
+
+# ── RAM FLOORS (cluster node roles) ────────────────────────────────────────────
+# GB of installed RAM a node role needs. An image cannot see the RAM of the board
+# it will be flashed onto (`--board rpi4` is ONE image for the 1, 2, 4 and 8 GB
+# Pi 4), so the builders take the RAM as `--ram-gb N`: REQUIRED for omnibus (the
+# role that runs every cluster tier on one node), optional for the others (when
+# given and below the floor it is refused). Evidence for the numbers: the live kind
+# cluster, which runs every namespace on ONE node, asks the scheduler for about
+# 6.3 GiB of memory requests before the OS (measured 2026-10-21 on x86; a real ARM
+# node will use more). The baked /etc/hugmesh/min-ram-mb records the floor on the
+# image. x86/jetson builders do not take --ram-gb yet.
+HUGMESH_ROLE_MIN_RAM_GB="
+omnibus=8
+pki=4
+backend=4
+frontend=4
+"
+
+# RAM SKUs each board is SOLD with, in GB (comma separated). Used only for a
+# WARNING when --ram-gb names a size that is not in the list — never to refuse, so
+# a missing SKU here cannot block a real board. The Raspberry Pi and Orange Pi 5
+# lists are vendor recollection, NOT read from this repo: confirm against the
+# vendors' pages. orangepi4-lts/rpi3 come from their specs-*/README.md.
+HUGMESH_BOARD_RAM_GB="
+rpi5=1,2,4,8,16
+rpi4=1,2,4,8
+rpi3=1
+orange-pi-5=4,8,16,32
+orange-pi-5-plus=4,8,16,32
+orange-pi-4-lts=4
+"
+
+# hugmesh_role_min_ram_gb <canonical role> — echo the floor; rc=1 for a role with
+# none (client/standalone roles).
+hugmesh_role_min_ram_gb() {
+    _hm_role_lookup "${HUGMESH_ROLE_MIN_RAM_GB}" "$1"
+}
+
+# hugmesh_role_ram_check <canonical role> <ram-gb or ""> <board> — THE build-time
+# RAM gate. rc=0 to proceed; rc=1 with a full message on stderr to refuse.
+#   omnibus + no --ram-gb            -> refuse (the image cannot tell which SKU)
+#   --ram-gb not a positive integer  -> refuse
+#   --ram-gb below the role's floor  -> refuse
+#   --ram-gb not a SKU of <board>    -> warning only (the SKU list may be stale)
+hugmesh_role_ram_check() {
+    local _role="$1"
+    local _ram="$2"
+    local _board="$3"
+    local _floor
+    _floor="$(hugmesh_role_min_ram_gb "${_role}")" || return 0
+    if [ -z "${_ram}" ]; then
+        [ "${_role}" = "omnibus" ] || return 0
+        printf 'ERROR: --role omnibus needs --ram-gb N (the GB of RAM on the board you will flash).\n' >&2
+        printf '       Omnibus runs every cluster role on one node and needs at least %s GB; the\n' "${_floor}" >&2
+        printf '       %s image is the same for every RAM size the board is sold with (%s GB),\n' \
+            "${_board}" "$(_hm_role_lookup "${HUGMESH_BOARD_RAM_GB}" "${_board}" || printf 'several')" >&2
+        printf '       so the build cannot tell which one you have.\n' >&2
+        return 1
+    fi
+    case "${_ram}" in
+        ''|*[!0-9]*|0*)
+            printf "ERROR: --ram-gb must be a whole number of GB, e.g. 8 (got '%s')\\n" "${_ram}" >&2
+            return 1 ;;
+    esac
+    if [ "${_ram}" -lt "${_floor}" ]; then
+        printf 'ERROR: --role %s needs at least %s GB of RAM (got --ram-gb %s).\n' "${_role}" "${_floor}" "${_ram}" >&2
+        if [ "${_role}" = "omnibus" ]; then
+            printf '       The whole stack asks the scheduler for about 6.3 GiB of memory before the\n' >&2
+            printf '       operating system. Build pki/backend/frontend for this board, or use a\n' >&2
+            printf '       variant with %s GB or more.\n' "${_floor}" >&2
+        else
+            printf '       Below that the hardened containerd/kubelet stack plus this tier'"'"'s pods do not fit.\n' >&2
+        fi
+        return 1
+    fi
+    local _skus
+    if _skus="$(_hm_role_lookup "${HUGMESH_BOARD_RAM_GB}" "${_board}")"; then
+        case ",${_skus}," in
+            *",${_ram},"*) ;;
+            *) printf 'WARNING: --ram-gb %s is not a RAM size %s is known to be sold with (%s GB); continuing.\n' \
+                   "${_ram}" "${_board}" "${_skus}" >&2 ;;
+        esac
     fi
     return 0
 }

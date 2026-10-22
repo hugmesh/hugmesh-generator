@@ -60,6 +60,7 @@ from ...core.config import (
     MANAGED_SERVICE_TIER3_IDS,
     MANAGED_SERVICE_TIER12_IDS,
     OPTIONAL_SERVICES_BY_PLATFORM,
+    services_catalog, field_in_scope, _OPI_NODE_PLATFORMS,
     RELEASE_STATE_CHOICES,
     SERVICE_DESCRIPTIONS,
     SERVICE_GROUPS,
@@ -509,6 +510,10 @@ def _service_channel(slug: str, platform: str, catalog: tuple) -> str:
     catalogue slug is the fallback that makes `tor` reachable on rpi5, whose builder has
     no --with-tor at all. A service reachable BOTH ways emits exactly one of them."""
     fld = _FLAG_SERVICE_FIELDS.get(slug)
+    # An Orange Pi DESKTOP row gets an empty catalogue (services_catalog): its builder
+    # takes no cluster flag at all, only the Orange Pi NODE roles do.
+    if (platform or "x86") in _OPI_NODE_PLATFORMS and not catalog:
+        return ""
     if fld is not None and platform_supports(fld[0], platform):
         return "flag"
     if slug in catalog:
@@ -1213,7 +1218,7 @@ class NetworkPage(QtWidgets.QWizardPage):
     def _channel(self, slug: str) -> str:
         """``_service_channel`` for the CURRENT config (flag | slug | unreachable)."""
         c = self.wiz.cfg
-        catalog = tuple(OPTIONAL_SERVICES_BY_PLATFORM.get(c.platform or "x86", ()))
+        catalog = services_catalog(c)
         return _service_channel(slug, c.platform, catalog)
 
     def initializePage(self):
@@ -1432,7 +1437,7 @@ class NetworkPage(QtWidgets.QWizardPage):
             self._services_none_is_ours = False
         else:
             self._services_none_is_ours = False
-        catalog = tuple(OPTIONAL_SERVICES_BY_PLATFORM.get(c.platform or "x86", ()))
+        catalog = services_catalog(c)
         picked = [s for s in c.optional_services if s not in (SERVICES_NONE, SERVICES_ALL)]
         # ── the builders' OWN default set arrives TICKED ──────────────────────────────
         # Ask 23's rule, verbatim: "anything off by default is UNCHECKED; only pre-check
@@ -1761,6 +1766,18 @@ class NetworkPage(QtWidgets.QWizardPage):
             "managed_services": tuple(
                 w for row in self.managed_rows.values() for w in row),
         })
+        # Orange Pi node boards: --games-domain / --release-state are parsed for a NODE
+        # role only (the Orange Pi desktop's builder refuses them), so the platform gate
+        # above is not the whole answer there — grey them (and the services group, as
+        # on every other ARM desktop) on the desktop row.
+        if (c.platform or "x86") in _OPI_NODE_PLATFORMS:
+            for _fld, _w in (("games_domain", self.games_domain),
+                             ("release_state", self.release_state),
+                             ("optional_services", self.services_box)):
+                if not field_in_scope(_fld, c):
+                    _w.setEnabled(False)
+                    _w.setToolTip("Only a cluster node role bakes this; the Orange Pi "
+                                  "desktop has no cluster tree.")
         # Managed backing services (I8/M2): a cluster concern — shown for cloud/mesh
         # builds (a standalone desktop bakes no cluster tree), platform-gated to x86/rpi5
         # by gate_widgets above. Populate each tier-1/2 row from cfg.managed_services;
@@ -2054,7 +2071,7 @@ class NetworkPage(QtWidgets.QWizardPage):
         # _service_channel). Unreachable rows are left at the dataclass default rather
         # than at "off": emitting --no-<x> for a flag this builder never had would be a
         # lie in the other direction, and clear_unsupported would strip it anyway.
-        catalog = tuple(OPTIONAL_SERVICES_BY_PLATFORM.get(c.platform or "x86", ()))
+        catalog = services_catalog(c)
         picked: list[str] = []
         # Was the slug channel on screen at all on this flow? Distinguishes "the operator
         # cleared every service" from "this platform's builder parses no --optional-services

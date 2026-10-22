@@ -167,8 +167,11 @@ esac
 #   1. --platform given            use it verbatim.
 #   2. the role is a CLUSTER NODE role (pki/backend/frontend/backend-gpu/omnibus/
 #      edge-ai)                    the platforms of this arch that BUILD that role.
-#      A node role identifies its platform: on arm64 `backend` can only be rpi5 and
-#      `omnibus`/`edge-ai`/`backend-gpu` can only be jetson. The free-slug boards are
+#      A node role narrows its platform: on arm64 `backend` can only be rpi5 and
+#      `edge-ai`/`backend-gpu` only jetson. `omnibus` is built by BOTH rpi5 (Pi 4/5)
+#      and jetson, so with both on disk assert_one_platform below REFUSES rather than
+#      pick the newest. (The Orange Pi node boards emit installer ISOs, not a flashable
+#      .img, and are not in this loop: pass --platform orangepi5 for one.) The free-slug boards are
 #      excluded on purpose — they refuse a node --role (hugmesh_role_reject_node_role),
 #      so they cannot have emitted one.
 #   3. otherwise (desktop/laptop/generic/appliance/a free slug)

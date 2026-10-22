@@ -29,15 +29,18 @@ from __future__ import annotations
 
 from ..qt import Qt, QtGui, QtWidgets
 from ...core import device_catalog
+from ...core import roles as role_vocab
 from ...core.config import (
     FRITE_BOARDS, FRITE_FLAVORS, JETSON_BOARDS, OPTIONAL_SERVICES_BY_PLATFORM,
     ORANGEPI5_BOARDS, ORANGEPI5_FLAVORS, ORANGEPIZERO2_FLAVORS, ORANGEPIZERO2W_FLAVORS,
     ORANGEPIZERO3_FLAVORS, ORANGEPI3LTS_FLAVORS, ORANGEPI4LTS_FLAVORS,
     PLATFORM_LABELS,
-    ROLE_CHOICES, RPI_BOARDS, image_class, normalize_user_roles, rpi_boards_for_role,
+    ROLE_CHOICES, RPI_BOARDS, image_class, normalize_user_roles, orangepi_flavors_for_role,
+    rpi_boards_for_role,
 )
 from ...core.worklist import (
-    WORKLIST_INFRA_SERVICES, WorklistConfig, WorklistEntry, entry_id,
+    RAM_PLATFORM_NAMES, RAM_PLATFORMS, WORKLIST_INFRA_SERVICES, WorklistConfig,
+    WorklistEntry, entry_id,
 )
 from ._desktop_user_dialog import DesktopUserDialog
 
@@ -87,7 +90,19 @@ _FLAVOR_CHOICES = {
     "orangepi4-lts": ORANGEPI4LTS_FLAVORS,
 }
 
-_COL_CHECK, _COL_ROLE, _COL_PLATFORM, _COL_BOARD, _COL_FLAVOR, _COL_ENC, _COL_SERVICES, _COL_NOTES = range(8)
+_COL_CHECK, _COL_ROLE, _COL_PLATFORM, _COL_BOARD, _COL_RAM, _COL_FLAVOR, _COL_ENC, _COL_SERVICES, _COL_NOTES = range(9)
+
+# The platforms whose NODE rows carry a RAM combo (--ram-gb): the Raspberry Pi and the
+# two Orange Pi node boards. x86/jetson builders do not take --ram-gb.
+_RAM_PLATFORMS = RAM_PLATFORMS        # core/worklist.py, shared with the TUI
+# The single-board platforms' RAM-table key (the Orange Pi 4 LTS has no --board).
+_RAM_BOARD_FALLBACK = {"orangepi4-lts": "orange-pi-4-lts", "rpi5": "rpi5",
+                       "orangepi5": "orange-pi-5-plus"}
+# Short board names for the inline RAM message (PLATFORM_LABELS are a sentence each).
+_RAM_PLATFORM_NAMES = RAM_PLATFORM_NAMES
+# The RAM combo's "not stated" item text (data ""). omnibus shows a prompt instead.
+_RAM_UNSTATED = "—"
+_RAM_PROMPT = "choose…"
 
 # per-entry encrypt_root override values (worklist.WorklistEntry.encrypt_root):
 # "default" inherits the worklist-wide Home-step encrypt_root; on/off force it.
@@ -192,7 +207,7 @@ class WorklistPage(QtWidgets.QWizardPage):
         self.tree = QtWidgets.QTreeWidget()
         self.tree.setRootIsDecorated(True)
         self.tree.setHeaderLabels(
-            ["", "Role", "Platform", "Board", "Flavor/Desktop", "Encryption",
+            ["", "Role", "Platform", "Board", "RAM", "Flavor/Desktop", "Encryption",
              "Services", "Notes"])
         # COLUMN SIZING. The check column is this page's PRIMARY control (it is what
         # selects a node to build), so it must be fully visible on arrival with no
@@ -228,7 +243,9 @@ class WorklistPage(QtWidgets.QWizardPage):
         # uselessness, and a scrollbar is the honest answer. The CHECK column is
         # unaffected either way: it is section 0 at viewport x=0, so it stays visible
         # without dragging at any width, which is what the report was about.
-        self.tree.setColumnWidth(_COL_BOARD, 100)
+        # 128 fits "orange-pi-5-plus", the longest board token (the Orange Pi 5 node rows).
+        self.tree.setColumnWidth(_COL_BOARD, 128)
+        self.tree.setColumnWidth(_COL_RAM, 84)
         self.tree.setColumnWidth(_COL_FLAVOR, 120)
         self.tree.setColumnWidth(_COL_ENC, 90)
         self.tree.setColumnWidth(_COL_SERVICES, 120)
@@ -240,6 +257,11 @@ class WorklistPage(QtWidgets.QWizardPage):
         # per-node root-disk choice (spec 4); Notes is auto-derived.
         hdr = self.tree.headerItem()
         hdr.setToolTip(_COL_BOARD, "Per-node hardware: the target board for ARM nodes.")
+        hdr.setToolTip(_COL_RAM,
+                       "Per-node hardware: the GB of RAM on the Raspberry Pi / Orange Pi "
+                       "board (--ram-gb). One image serves every RAM size a board is sold "
+                       "with, so the build cannot see it. Omnibus REQUIRES it (8 GB or "
+                       "more); sizes below a role's floor are not offered.")
         hdr.setToolTip(_COL_FLAVOR,
                        "Per-node hardware: image flavor (live / installer) or desktop variant.")
         hdr.setToolTip(_COL_ENC,
@@ -254,6 +276,13 @@ class WorklistPage(QtWidgets.QWizardPage):
         hdr.setToolTip(_COL_NOTES,
                        "Auto: this node's encryption reality, GPU, and client-brand caveats.")
         lay.addWidget(self.tree, 1)
+        # Inline refusal for the RAM rule (no modal in page logic): set and shown by
+        # validatePage when a checked omnibus row on a Pi / Orange Pi has no RAM.
+        self.ram_error = QtWidgets.QLabel("")
+        self.ram_error.setWordWrap(True)
+        self.ram_error.setStyleSheet("color: #c0392b;")
+        self.ram_error.setVisible(False)
+        lay.addWidget(self.ram_error)
 
         # ── the mesh's desktop PEOPLE (operator ask 2026-08-14) ──────────────────
         # Checking a desktop-class row pops DesktopUserDialog; the collected pairs
@@ -295,8 +324,8 @@ class WorklistPage(QtWidgets.QWizardPage):
         # hardware, and point forward to the SERVICES / domains / users steps that
         # follow (STEP 3-6) so the mesh-node path reads as an obvious sequence.
         self.hint = QtWidgets.QLabel(
-            "Each row is one server node image, grouped by device family. The Board and "
-            "Flavor/Desktop columns set that node's hardware; the Notes column is filled "
+            "Each row is one server node image, grouped by device family. The Board, RAM "
+            "and Flavor/Desktop columns set that node's hardware; the Notes column is filled "
             "in automatically. Grayed rows are devices with no mesh role — shown so the "
             "answer is honest, never buildable from here. Next you'll choose the cluster "
             "services this mesh runs (once, for every node — they are baked into the "
@@ -317,6 +346,8 @@ class WorklistPage(QtWidgets.QWizardPage):
         # id -> per-row Services combo (None where the platform expresses no per-node
         # infra service). Each item's data is the infra_services tuple it selects.
         self._services_combos: dict[str, QtWidgets.QComboBox | None] = {}
+        # per-row board RAM combo (Pi / Orange Pi node rows only; None elsewhere)
+        self._ram_combos: dict[str, QtWidgets.QComboBox | None] = {}
         self._id_axes: dict[str, tuple[str, str]] = {}   # id -> (role, platform)
         # family id -> group header item; per-item arch (for the arch filter).
         self._family_items: dict[str, QtWidgets.QTreeWidgetItem] = {}
@@ -440,8 +471,31 @@ class WorklistPage(QtWidgets.QWizardPage):
             self.tree.setItemWidget(item, _COL_BOARD, board_combo)
         if _FLAVOR_CHOICES.get(platform):
             flavor_combo = NoWheelComboBox()
-            flavor_combo.addItems(list(_FLAVOR_CHOICES[platform]))
+            if platform in ("orangepi5", "orangepi4-lts"):
+                # An Orange Pi NODE is installer-only (live runs from RAM; the builder
+                # refuses it), so the only honest choice is offered.
+                flavor_combo.addItems(list(orangepi_flavors_for_role(platform, role)))
+            else:
+                flavor_combo.addItems(list(_FLAVOR_CHOICES[platform]))
             self.tree.setItemWidget(item, _COL_FLAVOR, flavor_combo)
+
+        # per-node board RAM (--ram-gb) for Pi / Orange Pi NODE rows.
+        ram_combo = None
+        if platform in _RAM_PLATFORMS and image_class("mesh", role) == "node" \
+                and role_vocab.min_ram_gb(role) is not None:
+            ram_combo = NoWheelComboBox()
+            ram_combo.setToolTip(
+                "GB of RAM on this board (--ram-gb). "
+                + ("Required: omnibus runs every cluster role on one node and needs "
+                   "8 GB or more." if role_vocab.ram_required(role)
+                   else "Optional: when given, below "
+                   f"{role_vocab.min_ram_gb(role)} GB is refused."))
+            self.tree.setItemWidget(item, _COL_RAM, ram_combo)
+            self._fill_ram_combo(ram_combo, role, platform,
+                                 board_combo.currentText() if board_combo is not None else "")
+            if board_combo is not None:
+                board_combo.currentTextChanged.connect(
+                    lambda b, c=ram_combo, r=role, p=platform: self._fill_ram_combo(c, r, p, b))
 
         # per-node root-disk encryption (spec 4). jetson cannot encrypt (its builder
         # forces off, _resolve_encrypt_root), so its cell is a disabled display; every
@@ -471,6 +525,7 @@ class WorklistPage(QtWidgets.QWizardPage):
 
         self.rows[rid] = item
         self._combos[rid] = (board_combo, flavor_combo)
+        self._ram_combos[rid] = ram_combo
         self._enc_combos[rid] = enc_combo
         self._services_combos[rid] = services_combo
         self._id_axes[rid] = (role, platform)
@@ -558,7 +613,7 @@ class WorklistPage(QtWidgets.QWizardPage):
     def _sync_combo_enabled(self, rid: str) -> None:
         on = self._is_checked(self.rows[rid])
         for combo in (*self._combos[rid], self._enc_combos[rid],
-                      self._services_combos[rid]):
+                      self._services_combos[rid], self._ram_combos.get(rid)):
             if combo is not None:
                 combo.setEnabled(on)
 
@@ -668,6 +723,13 @@ class WorklistPage(QtWidgets.QWizardPage):
                 continue
             if arch and self._item_arch.get(id(item), "") != arch:
                 continue
+            # EXPERIMENTAL boards (the Orange Pi node rows — no Orange Pi has booted an
+            # image from this repo) are opt-in row by row, never part of the one-click
+            # "required trio".
+            _role, platform = self._id_axes[rid]
+            if self._catalog.device(
+                    device_catalog.default_device_for_platform(platform)).status == "experimental":
+                continue
             item.setCheckState(_COL_CHECK, Qt.CheckState.Checked)
         self.tree.blockSignals(False)
         for rid in self.rows:
@@ -714,6 +776,7 @@ class WorklistPage(QtWidgets.QWizardPage):
                         if j >= 0:
                             enc_combo.setCurrentIndex(j)
                     self._apply_infra_to_combo(rid, e.infra_services)
+                    self._apply_ram_to_combo(rid, e.ram_gb)
         else:
             # fresh mesh entry: pre-check the mode-default row so the flow is navigable
             # (like RolePage preselecting MODE_DEFAULT_ROLE) — the superadmin adds more.
@@ -769,6 +832,30 @@ class WorklistPage(QtWidgets.QWizardPage):
                 combo.setCurrentIndex(i)
                 return
         combo.setCurrentIndex(0)                       # unknown/inexpressible -> none
+
+    def _fill_ram_combo(self, combo, role: str, platform: str, board: str) -> None:
+        """(Re)fill a row's RAM combo for ``board``: the board's RAM sizes at or above
+        the role's floor (scripts/_roles-lib.sh), plus "—" (not stated) for the roles
+        that do not require it, or a "choose…" prompt for omnibus. Keeps the current
+        size when the new board still offers it."""
+        keep = combo.currentData()
+        key = board or _RAM_BOARD_FALLBACK.get(platform, "")
+        combo.blockSignals(True)
+        combo.clear()
+        combo.addItem(_RAM_PROMPT if role_vocab.ram_required(role) else _RAM_UNSTATED, "")
+        for gb in role_vocab.ram_choices(role, key):
+            combo.addItem(f"{gb} GB", str(gb))
+        i = combo.findData(keep) if keep else -1
+        combo.setCurrentIndex(i if i >= 0 else 0)
+        combo.blockSignals(False)
+
+    def _apply_ram_to_combo(self, rid: str, ram_gb: str) -> None:
+        combo = self._ram_combos.get(rid)
+        if combo is None or not ram_gb:
+            return
+        i = combo.findData(str(ram_gb))
+        if i >= 0:
+            combo.setCurrentIndex(i)
 
     def _apply_axes_to_combos(self, rid: str, board: str, flavor: str) -> None:
         board_combo, flavor_combo = self._combos[rid]
@@ -831,6 +918,8 @@ class WorklistPage(QtWidgets.QWizardPage):
             # materialize: the TIER as --person-role on this image + a manifest User
             # holding the full role set on the internal Tailscale root domain. The
             # entry derives desktop_user_role (the tier) from the set (issue #228).
+            ram_combo = self._ram_combos.get(rid)
+            ram_gb = (ram_combo.currentData() or "") if ram_combo is not None else ""
             person_user, person_roles = self._desktop_people.get(rid, ("", ["user"]))
             entries.append(WorklistEntry(
                 role=role, platform=platform, board=board, flavor=flavor,
@@ -845,12 +934,27 @@ class WorklistPage(QtWidgets.QWizardPage):
                 # staying checked keeps the name it was given there, a new row starts
                 # blank (= the builder's role-derived name).
                 hostname=keep.hostname if keep else "",
+                ram_gb=ram_gb,
             ))
         if not entries:
             return False   # isComplete() already blocks Next; guard the collect path too
         if any(image_class("mesh", e.role) == "desktop" and not e.desktop_user
                for e in entries):
             return False   # a checked desktop must name its person (isComplete mirror)
+        # The RAM rule (inline, never a modal): an omnibus row on a Pi / Orange Pi must
+        # say how much RAM its board has — the builder refuses it otherwise.
+        missing = [f"{e.role} on the {_RAM_PLATFORM_NAMES.get(e.platform, e.platform)}"
+                   for e in entries
+                   if e.platform in _RAM_PLATFORMS and role_vocab.ram_required(e.role)
+                   and not e.ram_gb]
+        if missing:
+            self.ram_error.setText(
+                "Pick the board's RAM in the RAM column for: " + ", ".join(missing)
+                + ". Omnibus runs every cluster role on one node and needs 8 GB or more; "
+                "the image cannot tell how much RAM the board has.")
+            self.ram_error.setVisible(True)
+            return False
+        self.ram_error.setVisible(False)
 
         checked = {e.id for e in entries}
         # dangling-ref reconciliation: an unchecked row's id can no longer be attached.

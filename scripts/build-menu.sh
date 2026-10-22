@@ -189,6 +189,9 @@ OPT_ORANGEPI3LTS_FLAVOR="both"          # both (DEFAULT) | live | installer
 # appliances above, but this board IS a desktop client (enabled Mali-T860 +
 # HDMI in the mainline DTB it boots — see specs-orangepi4-lts/README.md). ──
 OPT_ORANGEPI4LTS_FLAVOR="both"          # both (DEFAULT) | live | installer
+# GB of RAM on the Pi / Orange Pi board a NODE image is for (--ram-gb via RAM_GB).
+# "" = not stated (fine for pki/backend/frontend); omnibus REQUIRES it (8 GB+).
+OPT_RAM_GB=""
 # ── Standalone hardened NVIDIA desktop options (NON-secret; persisted) ──────────
 OPT_SA_GPU="all-free"         # all-free|nvidia-free|nvidia|amd-free|amd-pro|intel-free|intel-pro
 OPT_SA_STEAM="native"         # native | flatpak | none
@@ -280,6 +283,7 @@ save_conf() {
         printf 'OPT_ORANGEPIZERO3_FLAVOR=%q\n' "${OPT_ORANGEPIZERO3_FLAVOR}"
         printf 'OPT_ORANGEPI3LTS_FLAVOR=%q\n' "${OPT_ORANGEPI3LTS_FLAVOR}"
         printf 'OPT_ORANGEPI4LTS_FLAVOR=%q\n' "${OPT_ORANGEPI4LTS_FLAVOR}"
+        printf 'OPT_RAM_GB=%q\n' "${OPT_RAM_GB}"
         # Standalone-desktop NON-secret options (passwords are NEVER persisted).
         printf 'OPT_SA_GPU=%q\n'        "${OPT_SA_GPU}"
         printf 'OPT_SA_STEAM=%q\n'      "${OPT_SA_STEAM}"
@@ -651,7 +655,7 @@ build_make_cmd() {
     # macros already contain $(IMG_FLAGS)).
     local imgflags="${OPT_IMGFLAGS}"
     case "${target}" in
-        x86-*|jetson-*|frite|orangepi5|orangepizero2|orangepizero2w|orangepizero3|orangepi3-lts|orangepi4-lts|rpi-*|build-all|build-everything) ;;   # STANDALONE_FLAGS channel / no passthrough
+        x86-*|jetson-*|frite|orangepi5|orangepi5-*|orangepizero2|orangepizero2w|orangepizero3|orangepi3-lts|orangepi4-lts|orangepi4-lts-*|rpi-*|build-all|build-everything) ;;   # STANDALONE_FLAGS channel / no passthrough
         *) [ -n "${OPT_EXTRA_FLAGS}" ] && imgflags="${imgflags:+${imgflags} }${OPT_EXTRA_FLAGS}" ;;
     esac
     # Shared READ-ONLY distfiles (shared-binpkg Lane 3): a --distdir cache path is
@@ -703,8 +707,22 @@ build_make_cmd() {
     # fleet target does NOT (it has no single role to apply a standalone-shaped
     # flag to — same reasoning as x86's plain fleet target).
     if [[ "${target}" == rpi-* ]]; then
+        # RAM of the board (--ram-gb via RAM_GB) — node roles only; omnibus needs it.
+        [ -n "${OPT_RAM_GB}" ] && [ "${target}" != rpi-desktop ] && RUN_MAKE+=("RAM_GB=${OPT_RAM_GB}")
         { local _armflags; _armflags="$(_arm_standalone_flags)"; [ -n "${_armflags}" ] && RUN_MAKE+=("STANDALONE_FLAGS=${_armflags}"); }
     fi
+    # ── Orange Pi cluster NODE targets (orangepi5-<role> / orangepi4-lts-<role>;
+    # EXPERIMENTAL): the board (Orange Pi 5 family only), the RAM, and the escape
+    # hatch. No flavor: node images are installer-only (the builder forces it).
+    case "${target}" in
+        orangepi5-*)
+            RUN_MAKE+=("ORANGEPI5_BOARD=${OPT_ORANGEPI5_BOARD}")
+            [ -n "${OPT_RAM_GB}" ] && RUN_MAKE+=("RAM_GB=${OPT_RAM_GB}")
+            { local _armflags; _armflags="$(_arm_standalone_flags)"; [ -n "${_armflags}" ] && RUN_MAKE+=("STANDALONE_FLAGS=${_armflags}"); } ;;
+        orangepi4-lts-*)
+            [ -n "${OPT_RAM_GB}" ] && RUN_MAKE+=("RAM_GB=${OPT_RAM_GB}")
+            { local _armflags; _armflags="$(_arm_standalone_flags)"; [ -n "${_armflags}" ] && RUN_MAKE+=("STANDALONE_FLAGS=${_armflags}"); } ;;
+    esac
     # Frite board/flavor/desktop only matter for the frite target but are harmless
     # else. FRITE_BOARD/FRITE_FLAVOR/FRITE_DESKTOP map onto the builder's --board /
     # --flavor / --desktop light|none knobs, which the Makefile frite target
@@ -1573,6 +1591,30 @@ options_screen() {
     done
 }
 
+# ram_screen <role> <board> — pick the GB of RAM on the board a NODE image is for
+# (OPT_RAM_GB -> RAM_GB -> --ram-gb). Offers the board's RAM sizes from
+# scripts/_roles-lib.sh (HUGMESH_BOARD_RAM_GB) that meet the role's floor
+# (HUGMESH_ROLE_MIN_RAM_GB), plus "not stated" for the roles that do not require it.
+# omnibus requires a size. rc=1 on back. Same rule the builder enforces, so a size
+# offered here is one the build accepts.
+ram_screen() {
+    local role="$1" board="$2" floor skus items=() sz pick
+    # shellcheck source=scripts/_roles-lib.sh
+    . "${REPO_DIR}/scripts/_roles-lib.sh"
+    floor="$(hugmesh_role_min_ram_gb "${role}" 2>/dev/null || echo 0)"
+    skus="$(_hm_role_lookup "${HUGMESH_BOARD_RAM_GB}" "${board}" 2>/dev/null || echo "4,8,16")"
+    [ "${role}" = omnibus ] || items+=(none "not stated — the build does not check the RAM")
+    for sz in ${skus//,/ }; do
+        [ "${sz}" -ge "${floor}" ] && items+=("${sz}" "${sz} GB")
+    done
+    pick="$(ui_menu "Board RAM" "How much RAM does the ${board} you will flash have? (--ram-gb; ${role} needs at least ${floor} GB$([ "${role}" = omnibus ] && echo ', and omnibus requires you to say'); sizes below that are not offered):" \
+        "${items[@]}" back "‹ back")" || return 1
+    [ "${pick}" = back ] && return 1
+    [ "${pick}" = none ] && pick=""
+    OPT_RAM_GB="${pick}"
+    return 0
+}
+
 # Build a single role (pick arch then role).
 single_role_screen() {
     local arch role board kflavor
@@ -1593,6 +1635,7 @@ single_role_screen() {
                 pki "pki      — cluster PKI / control" \
                 backend "backend  — backend services node" \
                 frontend "frontend — gateway / UI node" \
+                omnibus "omnibus  — every cluster role on ONE Pi 4/5 (8 GB+ RAM; you pick the RAM next)" \
                 desktop "desktop  — arm64 client image (compose with --standalone for FDE)" \
                 back "‹ back")" || return 0
             [ "${role}" = back ] && return 0
@@ -1610,6 +1653,9 @@ single_role_screen() {
                 warn "--board rpi3 only composes onto --role desktop (1GB RAM is not enough headroom for the k8s cluster-node stack) — the build will hard-error for role '${role}'. Pick 'desktop', or choose rpi4/rpi5 for ${role}."
             fi
             OPT_RPI_BOARD="${board}"
+            if [ "${role}" != desktop ]; then
+                ram_screen "${role}" "${board}" || return 0
+            fi
             # --standalone only composes onto --role desktop — the masked secrets
             # prompt is only meaningful there (a cluster-node role would just
             # ignore/reject --local-pass/--luks-pass).
@@ -1683,12 +1729,27 @@ x86-only options (cluster services, edge-AI models, branding overrides) do not a
             # --standalone/--encrypt-root) stays reachable via 'Extra builder
             # flags' (the escape hatch).
             local flavor
+            role="$(ui_menu "Orange Pi 5 role" "What should this Orange Pi 5 / 5 Plus be? EXPERIMENTAL — hardware validation pending:" \
+                desktop "desktop  — the light desktop (live and/or installer)" \
+                pki "pki      — cluster PKI / control plane node (installer only)" \
+                backend "backend  — backend services node (installer only)" \
+                frontend "frontend — gateway / UI node (installer only)" \
+                omnibus "omnibus  — every cluster role on ONE board (8 GB+ RAM; installer only)" \
+                back "‹ back")" || return 0
+            [ "${role}" = back ] && return 0
             board="$(ui_menu "Orange Pi 5 board" "Board variant (--board; current: ${OPT_ORANGEPI5_BOARD}). EXPERIMENTAL — hardware validation pending, see specs-orangepi5/README.md:" \
                 orange-pi-5-plus "orange-pi-5-plus — RK3588: dual 2.5GbE, PCIe3.0x4 NVMe, dual HDMI+HDMI-in (DEFAULT)" \
                 orange-pi-5 "orange-pi-5      — RK3588S: fewer PCIe lanes, single NIC, single HDMI" \
                 back "‹ back")" || return 0
             [ "${board}" = back ] && return 0
             OPT_ORANGEPI5_BOARD="${board}"
+            if [ "${role}" != desktop ]; then
+                ram_screen "${role}" "${board}" || return 0
+                save_conf
+                build_make_cmd "orangepi5-${role}" "Orange Pi 5 ${board} ${role} node (installer, ${OPT_PATH}, ENV=${OPT_ENV}) [EXPERIMENTAL]" 1
+                launch_build
+                return 0
+            fi
             flavor="$(ui_menu "Orange Pi 5 flavor" "Image flavor (--flavor; current: ${OPT_ORANGEPI5_FLAVOR}):" \
                 both "both       — live + installer (DEFAULT)" \
                 live "live       — ephemeral USB/microSD boot" \
@@ -1802,6 +1863,18 @@ x86-only options (cluster services, edge-AI models, branding overrides) do not a
             # --standalone/--encrypt-root) stays reachable via 'Extra builder
             # flags' (the escape hatch).
             local wflavor
+            role="$(ui_menu "Orange Pi 4 LTS role" "What should this Orange Pi 4 LTS be? EXPERIMENTAL — hardware validation pending. It has 4 GB of RAM and 16 GB of eMMC, so frontend is its only cluster node role (no pki, backend or omnibus):" \
+                desktop "desktop  — the light desktop (live and/or installer)" \
+                frontend "frontend — gateway / UI node (installer only)" \
+                back "‹ back")" || return 0
+            [ "${role}" = back ] && return 0
+            if [ "${role}" = frontend ]; then
+                ram_screen "${role}" orange-pi-4-lts || return 0
+                save_conf
+                build_make_cmd "orangepi4-lts-${role}" "Orange Pi 4 LTS ${role} node (installer, ${OPT_PATH}, ENV=${OPT_ENV}) [EXPERIMENTAL]" 1
+                launch_build
+                return 0
+            fi
             wflavor="$(ui_menu "Orange Pi 4 LTS flavor" "Image flavor (--flavor; current: ${OPT_ORANGEPI4LTS_FLAVOR}). EXPERIMENTAL — hardware validation pending, see specs-orangepi4-lts/README.md:" \
                 both "both       — live + installer (DEFAULT)" \
                 live "live       — ephemeral microSD/USB boot" \
