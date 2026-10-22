@@ -300,6 +300,15 @@ class LocalMeshBootstrapConfig:
     # and the login-ui entrypoint writes snap-theme.css at container start, so a
     # rebrand needs no image rebuild. EMPTY = shipped default brand, byte-identical.
     login_theme_css: str = ""
+    # The mesh's WHOLE look (row 0's Look tab, ``brand_look.Look.record()``: every
+    # field that differs from the shipped page, pictures, header, footer and an
+    # uploaded font included). ``superbrand["look"]`` holds only the brand record's
+    # eight look keys (brand_model.LOOK_KEYS), so a domain with a look of its own was
+    # composed from those eight and lost the rest of the mesh's look on its sign-in
+    # page while its Look tab said they were inherited. The front door composes a
+    # domain's own look over THIS when it is set (``superbrand_look``). EMPTY (the
+    # default, the CLI, every older record) = the eight recorded keys, as before.
+    login_look: dict = field(default_factory=dict)
     # ── identity provider (I6.6 — the SAME picker the node wizard carries) ──
     # "casdoor" (the DEFAULT) threads NOTHING: the stack env stays byte-identical
     # to before these fields existed (the #1 invariant). An external provider
@@ -571,7 +580,7 @@ class LocalMeshBootstrapConfig:
     _DICT_TUPLE_FIELDS = ("domains",)
     _BOOL_FIELDS = ("social", "with_tor", "tor_release")
     #: plain JSON objects (the superbrand block, #654).
-    _DICT_FIELDS = ("superbrand",)
+    _DICT_FIELDS = ("superbrand", "login_look")
 
     def to_dict(self) -> dict:
         """Every field, JSON-shaped. A pure serialiser: it drops NOTHING — the
@@ -833,8 +842,14 @@ class LocalMeshBootstrap:
                               look_brands=self.look_brands())
 
     def superbrand_look(self) -> dict:
-        """The superbrand's recorded look (the record's eight look fields): what a
-        domain with a look of its own starts from on the front door."""
+        """What a domain with a look of its own starts from on the front door: the
+        mesh's WHOLE look (``cfg.login_look``, the same look ``login_theme_css`` is made
+        from) when the page carried it, so the domain keeps the mesh's header, footer,
+        pictures and font that its Look tab shows as inherited; else the superbrand's
+        recorded look (the record's eight look fields)."""
+        whole = self.cfg.login_look
+        if isinstance(whole, dict) and whole:
+            return dict(whole)
         look = (self.cfg.superbrand or {}).get("look") or {}
         return dict(look) if isinstance(look, dict) else {}
 

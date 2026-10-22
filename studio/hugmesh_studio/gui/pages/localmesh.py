@@ -2632,6 +2632,10 @@ class LocalMeshPage(QtWidgets.QWizardPage):
             # verb handlers refuse to launch on it, so a typo can never silently ship
             # an unthemed stack the operator believed was themed.
             login_theme_css=self.look_css_and_error()[0],
+            # the WHOLE look that stylesheet is made from: a domain with a look of its
+            # own is composed over it on the front door (core/look_serving), so it
+            # keeps the mesh's header, footer, pictures and font
+            login_look=self._mesh_look_record(),
             # I6.6 identity provider — casdoor default carries EMPTY endpoint
             # fields (byte-identical env); validate() fail-closes the combinations.
             idp=self.selected_idp(),
@@ -2720,6 +2724,19 @@ class LocalMeshPage(QtWidgets.QWizardPage):
             return "", str(exc)
         except Exception as exc:                # noqa: BLE001
             return "", f"the look could not be turned into a stylesheet: {exc}"
+
+    def _mesh_look_record(self) -> dict:
+        """The mesh's whole look as its record holds it ({} when there is none or it
+        cannot be made, the same cases ``look_css_and_error`` gives no stylesheet).
+        Never raises."""
+        css, why = self.look_css_and_error()
+        if not css or why:
+            return {}
+        try:
+            look = self.mesh_look()
+            return dict(look.record()) if look is not None else {}
+        except Exception:                       # noqa: BLE001 — called from slots
+            return {}
 
     def _look_tab_changed(self) -> None:
         """A Look tab edit: the same write a design edit makes (the session commits

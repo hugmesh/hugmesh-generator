@@ -147,3 +147,61 @@ def test_the_mesh_own_look_row_has_no_where_sentence(qapp):
     _settle(qapp)
     assert ed.served_note.isHidden() and ed.path_note.isHidden()
     ed.close()
+
+
+def test_the_real_docker_page_serves_an_added_domain_the_meshs_whole_look(qapp, tmp_path,
+                                                                          monkeypatch):
+    """Skeptic 2's chain, through the REAL Docker page: row 0's header background (a
+    field outside the record's eight look keys) set, shop.example given its own
+    primary. Its served stylesheet must carry both, as its Look tab says."""
+    from hugmesh_studio.core import look_serving
+    from hugmesh_studio.core.local_mesh_bootstrap import LocalMeshBootstrap
+    from hugmesh_studio.gui.pages import localmesh as lm
+    from hugmesh_studio.gui.wizard import StudioWizard
+    monkeypatch.setenv("HUGMESH_STUDIO_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.setattr(lm.LocalMeshPage, "_probe_mesh_state", lambda self: None)
+    wiz = StudioWizard(REPO)
+    wiz.localmesh_selected = True
+    wiz.localmesh_join_selected = False
+    page = wiz.localmesh_page
+    page._seed_domains()
+    own = page.mesh_domains.domains[0].name
+    page.mesh_domains.domains.append(Domain(name="shop.example", title="Shop"))
+    page.domain_services.load(page.mesh_domains)
+    wiz.setStartId(wiz._page_ids["localmesh_domain_services"])
+    wiz.restart()
+    wiz.show()
+    _settle(qapp)
+    ds = page.domain_services
+    for _ in range(4):
+        if ds.current_domain() == own:
+            break
+        ds._step(-1)
+        _settle(qapp)
+    tabs = ds.brand_tabs
+    tabs.open_tab("Look")
+    _settle(qapp)
+    tabs.look_editor._write("primary", "#00aa00")
+    tabs.look_editor._write("header_bg", "#123456")
+    for _ in range(4):
+        if ds.current_domain() == "shop.example":
+            break
+        ds._step(1)
+        _settle(qapp)
+    tabs.open_tab("Look")
+    _settle(qapp)
+    ed = tabs.look_editor
+    assert ed.model.mode == "override"
+    ed._write("primary", "#ff0000")
+    _settle(qapp)
+    assert ed.model.effective()["header_bg"] == "#123456"     # what the tab shows
+    cfg = page.collect_bootstrap()
+    assert "123456" in cfg.login_theme_css.lower()
+    node = LocalMeshBootstrap(REPO, cfg)._stack_node()
+    out = str(tmp_path / "gen")
+    look_serving.write(out, node.superbrand_look, node.look_brands)
+    served = open(os.path.join(look_serving.looks_dir(out), look_serving.HOSTS_DIRNAME,
+                               "shop.example", "hug-theme.css"), encoding="utf-8").read()
+    assert "#ff0000" in served.lower()
+    assert "#123456" in served.lower(), "the mesh's header colour is not carried"
+    wiz.close()

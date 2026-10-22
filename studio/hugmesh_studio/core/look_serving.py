@@ -29,10 +29,11 @@ touched brings up a byte-identical stack.
 
 WHAT IS NOT DONE HERE. The plain http door (8088) goes straight to the gateway, Tor
 addresses go straight to the gateway, a built image and a Fleet cluster have one look
-per mesh: none of them shows a domain's own look. The record's look holds eight fields
-(``brand_model.LOOK_KEYS``), so a domain with its own look is composed from the mesh's
-eight recorded fields plus its own; the mesh's pictures and header/footer choices are
-not carried to it.
+per mesh: none of them shows a domain's own look. A domain with its own look is
+composed over the mesh's WHOLE look (``LocalMeshBootstrapConfig.login_look``, the look
+``login_theme_css`` is made from: header, footer, pictures and font included), so what
+its Look tab shows as inherited is what its page shows. A config without it (the CLI,
+an older record) falls back to the record's eight look fields (``brand_model.LOOK_KEYS``).
 
 Qt-free; nothing here starts a container.
 """

@@ -427,3 +427,34 @@ def test_the_studio_reads_the_same_rows_as_the_script(tmp_path, hv):
     shutil.copy(tmp_path / view_doors.CATALOG_REL, tmp_path / "other.tsv")
     assert "compose-brand-shop-example" not in [
         d.name for d in view_doors.load_with_generated(str(tmp_path), env)]
+
+
+# ── a domain's own look is composed over the mesh's WHOLE look (skeptic 2 blocker) ──
+def test_a_domain_with_its_own_look_keeps_the_rest_of_the_meshs_whole_look(gen, fake_make):
+    """The mesh's header, footer, pictures and font live outside the record's eight
+    look keys. A domain with one colour of its own must still get them on its sign-in
+    page, because its Look tab shows them as inherited."""
+    whole = {"primary": "#123456", "header_bg": "#abcdef", "footer_bg": "#fedcba"}
+    node = LocalMeshBootstrap(gen, _cfg(login_look=whole))._stack_node()
+    assert node.start() == (True, "")
+    served = _read(_looks(gen), "by-host", "shop.example", "hug-theme.css").lower()
+    assert "#ff0000" in served                      # its own colour
+    assert "#abcdef" in served and "#fedcba" in served   # the mesh's header and footer
+    assert served == brand_look.look_css(
+        brand_look.effective_look(whole, {"primary": "#ff0000"})).lower()
+
+
+def test_without_the_whole_look_the_eight_recorded_keys_are_used_as_before(gen):
+    """The CLI and every older record carry no ``login_look``: the record's look."""
+    boot = LocalMeshBootstrap(gen, _cfg())
+    assert boot.superbrand_look() == {"primary": "#123456"}
+    boot = LocalMeshBootstrap(gen, _cfg(login_look={"header_bg": "#abcdef"}))
+    assert boot.superbrand_look() == {"header_bg": "#abcdef"}
+
+
+def test_the_whole_look_survives_a_record_round_trip():
+    cfg = _cfg(login_look={"header_bg": "#abcdef", "header_hidden": True})
+    back = LocalMeshBootstrapConfig.from_dict(cfg.to_dict())
+    assert back.login_look == {"header_bg": "#abcdef", "header_hidden": True}
+    assert LocalMeshBootstrapConfig.from_dict(
+        dict(cfg.to_dict(), login_look="junk")).login_look == {}
