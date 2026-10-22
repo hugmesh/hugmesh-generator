@@ -76,7 +76,7 @@ and `--image IMG` (`-Image`; default `hugmesh/mesh-node:latest`).
 ## Published image (BETA)
 
 GitHub Actions builds this folder on a GitHub-hosted runner and publishes it as
-`ghcr.io/hugmesh/hugmesh-mesh-node` (workflow `.github/workflows/mesh-node-image.yml`).
+`ghcr.io/hugmesh/hugmesh-mesh-node` (workflow `.github/workflows/mesh-node-release.yml`).
 The version is in `VERSION`; a release is the git tag `mesh-node-v<VERSION>`, which pushes
 `:<VERSION>`, `:beta` and `:sha-<12>`. `:latest` is never pushed. Each pushed digest is signed
 with cosign (keyless, GitHub OIDC) and carries a build-provenance and an SPDX SBOM attestation.
@@ -88,7 +88,7 @@ default to the local name `hugmesh/mesh-node:latest`. To run the published beta 
 docker pull ghcr.io/hugmesh/hugmesh-mesh-node:0.1.0-beta.1
 cosign verify ghcr.io/hugmesh/hugmesh-mesh-node:0.1.0-beta.1 \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-  --certificate-identity-regexp '^https://github.com/hugmesh/hugmesh-generator/.github/workflows/mesh-node-image.yml@refs/tags/mesh-node-v'
+  --certificate-identity-regexp '^https://github.com/hugmesh/hugmesh-generator/.github/workflows/mesh-node-release.yml@refs/tags/mesh-node-v'
 gh attestation verify oci://ghcr.io/hugmesh/hugmesh-mesh-node:0.1.0-beta.1 --repo hugmesh/hugmesh-generator
 ./mesh-node.sh --image ghcr.io/hugmesh/hugmesh-mesh-node:0.1.0-beta.1 --keys ./mykeys --role user
 ```

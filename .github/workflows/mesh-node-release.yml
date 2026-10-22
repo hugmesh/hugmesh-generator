@@ -31,7 +31,7 @@ on:
     branches: [main]
     paths:
       - 'clients/docker-mesh-node/**'
-      - '.github/workflows/mesh-node-image.yml'
+      - '.github/workflows/mesh-node-release.yml'
     tags: ['mesh-node-v*']
   workflow_dispatch: {}
 
@@ -39,7 +39,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: mesh-node-image-${{ github.ref }}
+  group: mesh-node-release-${{ github.ref }}
   cancel-in-progress: false
 
 env:
@@ -264,7 +264,7 @@ jobs:
             echo "### Signed image"
             echo '```'
             echo "$REPO_IMAGE@$DIGEST"
-            echo "cosign verify $REPO_IMAGE@$DIGEST --certificate-oidc-issuer https://token.actions.githubusercontent.com --certificate-identity-regexp '^https://github.com/$GITHUB_REPOSITORY/.github/workflows/mesh-node-image.yml@refs/(heads/main|tags/mesh-node-v.*)\$'"
+            echo "cosign verify $REPO_IMAGE@$DIGEST --certificate-oidc-issuer https://token.actions.githubusercontent.com --certificate-identity-regexp '^https://github.com/$GITHUB_REPOSITORY/.github/workflows/mesh-node-release.yml@refs/(heads/main|tags/mesh-node-v.*)\$'"
             echo "gh attestation verify oci://$REPO_IMAGE@$DIGEST --repo $GITHUB_REPOSITORY"
             echo "gh attestation verify oci://$REPO_IMAGE@$DIGEST --repo $GITHUB_REPOSITORY --predicate-type https://spdx.dev/Document/v2.3"
             echo '```'
@@ -301,7 +301,7 @@ jobs:
 
           Verify:
 
-              cosign verify $image:$VERSION --certificate-oidc-issuer https://token.actions.githubusercontent.com --certificate-identity-regexp '^https://github.com/$GH_REPO/.github/workflows/mesh-node-image.yml@refs/tags/mesh-node-v'
+              cosign verify $image:$VERSION --certificate-oidc-issuer https://token.actions.githubusercontent.com --certificate-identity-regexp '^https://github.com/$GH_REPO/.github/workflows/mesh-node-release.yml@refs/tags/mesh-node-v'
               gh attestation verify oci://$image:$VERSION --repo $GH_REPO
           EOF
           )
