@@ -1713,10 +1713,12 @@ class NetworkPage(QtWidgets.QWizardPage):
         })
         # Orange Pi node boards: --games-domain / --release-state are parsed for a NODE
         # role only (the Orange Pi desktop's builder refuses them), so the platform gate
-        # above is not the whole answer there — grey them on the desktop row.
+        # above is not the whole answer there — grey them (and the services group, as
+        # on every other ARM desktop) on the desktop row.
         if (c.platform or "x86") in _OPI_NODE_PLATFORMS:
             for _fld, _w in (("games_domain", self.games_domain),
-                             ("release_state", self.release_state)):
+                             ("release_state", self.release_state),
+                             ("optional_services", self.services_box)):
                 if not field_in_scope(_fld, c):
                     _w.setEnabled(False)
                     _w.setToolTip("Only a cluster node role bakes this; the Orange Pi "
