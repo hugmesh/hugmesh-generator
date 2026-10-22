@@ -63,7 +63,7 @@ import os
 import re
 import shutil
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from urllib.parse import urlparse
 
 from . import devops_tools, view_doors
@@ -179,6 +179,82 @@ class ScaleTarget:
         return f"{self.kind}/{self.name} in {self.namespace}"
 
 
+#: The label a container or pod carries when it serves ONE domain. The Studio writes
+#: it on every service of the per-domain own-Casdoor overlay (core/own_casdoor.py) and
+#: the casdoor-domains ApplicationSet writes it on its pods
+#: (specs/cluster/apps/05b-casdoor-domains.yaml). Its value is the domain's name on
+#: the Docker mesh and its slug on the kind lane (``DomainHints.names`` maps it back).
+DOMAIN_LABEL = "hugmesh.net/domain"
+#: The pod ANNOTATION that carries the domain's real name beside the slug label (a
+#: label value cannot hold every DNS name — 63 characters at most — an annotation
+#: can). The casdoor-domains ApplicationSet writes it from the element's
+#: clusterDomain. When a pod has it, the row shows that name on every mount, with or
+#: without the Studio's own config.
+DOMAIN_NAME_ANNOTATION = "hugmesh.net/domain-name"
+#: What a shared unit is labelled — the gateway, Casdoor, the databases every domain
+#: reads, the one tor container that carries every onion.
+ALL_DOMAINS = "All domains"
+
+#: The four per-domain verbs, in button order.
+CONTROL_VERBS = ("start", "stop", "restart", "logs")
+
+
+@dataclass(frozen=True)
+class UnitControl:
+    """What the per-domain Start / Stop / Restart / Logs buttons act on for ONE row.
+
+    ``kind`` is "container" (a compose container, driven by name with the docker CLI)
+    or "pod" (a kind pod). ``refusals`` holds ``(verb, sentence)`` pairs for every
+    verb this row will not run — a refusal is a sentence, never a silent skip."""
+    kind: str = ""
+    name: str = ""
+    namespace: str = ""
+    refusals: tuple[tuple[str, str], ...] = ()
+    #: compose only: the row's service, and the services it waits for (compose's
+    #: own depends_on label) — a domain's Start starts those first, Stop stops
+    #: them last, so its Casdoor never starts ahead of its database.
+    service: str = ""
+    depends_on: tuple[str, ...] = ()
+
+    def refusal(self, verb: str) -> str:
+        if not (self.kind and self.name):
+            return "this row carries nothing to start, stop or read logs from"
+        for v, why in self.refusals:
+            if v == verb:
+                return why
+        return ""
+
+    def allows(self, verb: str) -> bool:
+        return not self.refusal(verb)
+
+
+@dataclass(frozen=True)
+class DomainHints:
+    """What the Studio's OWN configuration says about domains, for the rows no label
+    names. Built by :func:`domain_hints` from a LocalMeshBootstrapConfig; empty (the
+    default) on every mount that has no config — the emulation pages — where only real
+    labels name a domain.
+
+    ``service_domains``: local-service slug -> the domain names whose Domain services
+    chose it, for slugs NOT also chosen mesh-wide. ``names``: brand id / slug ->
+    domain name (a kind pod's label carries the slug). ``own_domain``: the mesh's own
+    domain, the one the primary onion serves."""
+    service_domains: dict = field(default_factory=dict)
+    names: dict = field(default_factory=dict)
+    own_domain: str = ""
+
+
+@dataclass(frozen=True)
+class OnionDoor:
+    """One Tor address the running mesh publishes: the mesh's own (``primary``) or
+    one domain's own. ``login`` is what Tor Browser is handed; ``url`` the bare
+    onion. Never a browser button — a normal browser cannot reach a .onion."""
+    domain: str
+    url: str
+    login: str
+    primary: bool = False
+
+
 @dataclass(frozen=True)
 class MeshUnit:
     lane: str                     # "compose" | "kind"
@@ -202,10 +278,31 @@ class MeshUnit:
     #: MeshUnit built anywhere that predates scaling reads as "not scalable" rather
     #: than raising.
     scale: ScaleTarget = field(default_factory=ScaleTarget)
+    #: THE ONE DOMAIN this unit serves (2026-10-21, pod controls per domain), or ""
+    #: when it is shared. Read from a real label (``DOMAIN_LABEL`` on the container
+    #: or pod), from the onion key directory a per-domain onion row was minted
+    #: under, or from the Studio's own per-domain service choice — never guessed
+    #: from a name. ``domain_why`` says which of those it was.
+    domain: str = ""
+    #: A SHARED unit that the Studio's config says only these domains chose (one
+    #: tuwunel two domains picked). Empty with ``domain`` empty = every domain.
+    shared_by: tuple[str, ...] = ()
+    domain_why: str = ""
+    #: What the Start / Stop / Restart / Logs controls act on, or why they refuse.
+    control: "UnitControl" = field(default_factory=lambda: UnitControl())
 
     @property
     def key(self) -> str:
         return f"{self.lane}/{self.namespace}/{self.name}"
+
+    @property
+    def domain_text(self) -> str:
+        """What the Domain column shows."""
+        if self.domain:
+            return self.domain
+        if self.shared_by:
+            return "Shared: " + ", ".join(self.shared_by)
+        return ALL_DOMAINS
 
 
 @dataclass(frozen=True)
@@ -235,6 +332,13 @@ class MonitorSnapshot:
     #: the lane that live session serves (session.json `lane`: "kind" / "compose"),
     #: "" when no session is live — so the GUI can say WHICH lane's doors are taken
     view_lane: str = ""
+    #: Every onion the running tor container published — the mesh's own first, then
+    #: one per Tor domain — each with its own Open / Copy in the GUI.
+    onions: tuple[OnionDoor, ...] = ()
+
+    def domains(self) -> tuple[str, ...]:
+        """Every domain at least one row serves on its own, sorted."""
+        return tuple(sorted({u.domain for u in self.units if u.domain}))
 
     @property
     def any_running(self) -> bool:
@@ -521,8 +625,41 @@ def _pod_scale_target(pod: dict, ns: str) -> ScaleTarget:
                                f"not drive")
 
 
+#: Why Start and Stop are not offered on a kind pod. Measured, not assumed: every
+#: Application the kind lane syncs runs ``automated: {prune: true, selfHeal: true}``
+#: (specs/cluster/apps/05b-casdoor-domains.yaml for the per-domain Casdoors), and
+#: self-heal puts a Deployment's replica count back within seconds of a scale to 0.
+KIND_STOP_REFUSAL = (
+    "on the kind lane ArgoCD self-heal owns every workload's replica count, so a stop "
+    "from here would be undone within seconds and a start has nothing to start. "
+    "`Halt DevOps lane` stops the whole lane without deleting it; Restart below "
+    "replaces this domain's pods.")
+
+
+def _pod_control(pod: dict, ns: str, name: str) -> UnitControl:
+    """Restart = delete the pod and let its controller make a new one (no spec edit
+    for ArgoCD to revert); Logs = ``kubectl logs``. A pod nothing would re-create is
+    refused Restart, because deleting it would be a stop that cannot be undone."""
+    refs = [r for r in ((pod.get("metadata") or {}).get("ownerReferences") or [])
+            if (r or {}).get("name")]
+    owner = str((refs[0] if refs else {}).get("kind") or "")
+    refusals = [("start", KIND_STOP_REFUSAL), ("stop", KIND_STOP_REFUSAL)]
+    if not owner:
+        refusals.append(("restart", "a bare pod — nothing would create it again, so "
+                                    "deleting it is a stop, not a restart"))
+    elif owner == "Node":
+        refusals.append(("restart", "a static pod run by the node's kubelet from a "
+                                    "manifest on disk — deleting it through the API "
+                                    "does not restart it"))
+    elif owner in ("Job", "CronJob"):
+        refusals.append(("restart", "a Job's pod — deleting it re-runs the Job's work "
+                                    "rather than restarting a service"))
+    return UnitControl("pod", name, ns, tuple(refusals))
+
+
 def _join(objects: dict, host_ports: dict[int, tuple[str, int]], catalog, live: dict,
-          cluster: str, *, stale_view: bool = False, kind_ports=(KIND_HTTPS_PORT_DEFAULT,)
+          cluster: str, *, stale_view: bool = False, kind_ports=(KIND_HTTPS_PORT_DEFAULT,),
+          hints: DomainHints | None = None
           ) -> tuple[list[MeshUnit], list[str]]:
     """Pods x Services x Endpoints x Ingresses -> rows. Pure: no I/O, so a test can
     hand it canned JSON trimmed from a live cluster and pin every rule."""
@@ -719,16 +856,38 @@ def _join(objects: dict, host_ports: dict[int, tuple[str, int]], catalog, live: 
             door = Door(blocked=door.blocked + " A previous view session left state "
                         "behind; press 'Open the browser door' to restart it.")
         door = _gate(door, kind_ports)
+        label_dom = str(((meta.get("labels") or {}).get(DOMAIN_LABEL) or "")).strip()
+        domain = ""
+        domain_why = "no hugmesh.net/domain label: shared by every domain"
+        if label_dom:
+            # The name, in order of trust: the pod's own annotation (the cluster
+            # wrote it from the same element as the label), then the Studio's own
+            # domain list, then — nothing names it — the slug itself, which
+            # snapshot()'s last pass may still name from the compose rows.
+            ann_name = str(((meta.get("annotations") or {})
+                            .get(DOMAIN_NAME_ANNOTATION) or "")).strip()
+            hint_name = str(((hints.names if hints else {}) or {}).get(label_dom) or "")
+            domain = ann_name or hint_name or label_dom
+            domain_why = f"pod label {DOMAIN_LABEL}={label_dom}"
+            if ann_name and ann_name != label_dom:
+                domain_why += (f" (the domain {domain}, from its "
+                               f"{DOMAIN_NAME_ANNOTATION} annotation)")
+            elif domain != label_dom:
+                domain_why += f" (the domain {domain})"
+            detail_bits.append(f"domain: {domain} ({domain_why})")
         units.append(MeshUnit(
             lane="kind", namespace=ns, name=name, owner=owner, phase=phase_text,
             ready=ready, reason=reason, state=state, cluster_path=cluster_path,
             external="; ".join(external_bits), door=door,
-            detail="\n".join(detail_bits), scale=_pod_scale_target(pod, ns)))
+            detail="\n".join(detail_bits), scale=_pod_scale_target(pod, ns),
+            domain=domain, domain_why=domain_why,
+            control=_pod_control(pod, ns, name)))
     return units, notes
 
 
 def _kind_units(node, generator_dir: str, catalog, live: dict, budget: _Budget, *,
-                stale_view: bool = False, kind_ports=(KIND_HTTPS_PORT_DEFAULT,)
+                stale_view: bool = False, kind_ports=(KIND_HTTPS_PORT_DEFAULT,),
+                hints: DomainHints | None = None
                 ) -> tuple[LaneState, list[MeshUnit], list[str], list[str]]:
     """The kind lane: cheapest question first, then ONE round trip for everything."""
     notes: list[str] = []
@@ -792,7 +951,7 @@ def _kind_units(node, generator_dir: str, catalog, live: dict, budget: _Budget, 
         notes.append("docker is not available, so the kind node's published host "
                      "ports are not shown")
     units, jnotes = _join(objects, host_ports, catalog, live, cluster,
-                          stale_view=stale_view, kind_ports=kind_ports)
+                          stale_view=stale_view, kind_ports=kind_ports, hints=hints)
     notes.extend(jnotes)
     pods = len(units)
     api = host_ports.get(6443)
@@ -895,6 +1054,13 @@ def _domain_onions(node) -> list[tuple[str, str, str]]:
             for slug, url in sorted(urls.items()) if url]
 
 
+#: Why a per-domain onion row will not start, stop or restart on its own.
+_SHARED_TOR_REFUSAL = (
+    "every onion is one HiddenService stanza in the SAME hugmesh-tor container, so "
+    "stopping or restarting it here would take down every domain's onion, not just "
+    "this one. Logs are that shared container's.")
+
+
 def _domain_onion_units(tor_unit: "MeshUnit", onions) -> list["MeshUnit"]:
     """ONE row — one Door — per (domain, onion), each carrying THAT domain's login URL
     ``https://<onion>/login``. They are the SAME container as the hugmesh-tor row (one
@@ -910,6 +1076,12 @@ def _domain_onion_units(tor_unit: "MeshUnit", onions) -> list["MeshUnit"]:
     for label, slug, url in onions:
         login = url.rstrip("/") + "/login"
         out.append(MeshUnit(
+            domain=label,
+            domain_why=(f"its own onion, minted under the key directory {slug} "
+                        f"(TOR_ONION_DOMAINS)"),
+            control=UnitControl("container", tor_unit.control.name or tor_unit.name,
+                                tor_unit.namespace, tuple(
+                (v, _SHARED_TOR_REFUSAL) for v in ("start", "stop", "restart"))),
             lane=tor_unit.lane, namespace=tor_unit.namespace,
             name=f"{tor_unit.name} · {label} onion", owner=tor_unit.owner,
             phase=tor_unit.phase, ready=tor_unit.ready, reason=tor_unit.reason,
@@ -947,11 +1119,7 @@ def _parse_docker_ps(text: str) -> list[dict]:
             continue
         if not isinstance(r, dict):
             continue
-        labels = {}
-        for kv in str(r.get("Labels") or "").split(","):
-            if "=" in kv:
-                k, v = kv.split("=", 1)
-                labels[k.strip()] = v.strip()
+        labels = _row_labels({"Labels": r.get("Labels")})
         pubs = []
         for part in str(r.get("Ports") or "").split(","):
             part = part.strip()
@@ -969,6 +1137,7 @@ def _parse_docker_ps(text: str) -> list[dict]:
         status = r.get("Status") or ""
         row = {
             "Name": r.get("Names") or r.get("Name") or "",
+            "Labels": labels,
             "Service": labels.get("com.docker.compose.service", ""),
             "State": str(r.get("State") or "").lower(),
             "Status": status,
@@ -1028,8 +1197,177 @@ def _compose_oneshot_services(compose_file: str) -> frozenset[str]:
     return frozenset(out)
 
 
+def _row_labels(row: dict) -> dict[str, str]:
+    """A container's labels from either listing: ``docker compose ps --format json``
+    carries them as ONE comma-joined ``k=v`` string, the ``docker ps`` fallback is
+    already a dict. A label value holding a comma is cut there — no label this module
+    reads (a compose service, a domain name) can hold one."""
+    raw = row.get("Labels")
+    if isinstance(raw, dict):
+        return {str(k): str(v) for k, v in raw.items()}
+    out: dict[str, str] = {}
+    last = ""
+    for kv in str(raw or "").split(","):
+        if "=" in kv:
+            k, v = kv.split("=", 1)
+            last = k.strip()
+            out[last] = v.strip()
+        elif last and kv.strip():
+            # compose's own multi-valued label (depends_on=a:…,b:…) was cut at its
+            # commas by the join: the piece belongs to the label before it
+            out[last] += "," + kv.strip()
+    return out
+
+
+def _depends_on(labels: dict[str, str]) -> tuple[str, ...]:
+    """The compose services this container waits for, from compose's own
+    ``com.docker.compose.depends_on`` label (``svc:condition:restart,…``)."""
+    raw = labels.get("com.docker.compose.depends_on") or ""
+    return tuple(p.split(":", 1)[0].strip() for p in raw.split(",")
+                 if p.split(":", 1)[0].strip())
+
+
+_COMPOSE_PROFILES_LINE = re.compile(r"^    profiles:\s*\[([^\]]*)\]\s*(?:#.*)?$")
+
+
+def _compose_service_profiles(compose_file: str) -> dict[str, tuple[str, ...]]:
+    """``{compose service: (profile, ...)}`` read from the compose file's directory:
+    ``compose.local.yaml`` and every file it includes (``compose*.yaml``) plus the
+    Studio's generated own-Casdoor overlay. The same uniformly formatted text scan as
+    :func:`_compose_oneshot_services` (a test pins it against the real files); a read
+    failure is an empty map, i.e. "no domain from config" — never a guess."""
+    if not compose_file:
+        return {}
+    folder = os.path.dirname(compose_file)
+    try:
+        names = sorted(n for n in os.listdir(folder)
+                       if (n.startswith("compose") or n.startswith(".compose"))
+                       and n.endswith(".yaml"))
+    except OSError:
+        return {}
+    out: dict[str, tuple[str, ...]] = {}
+    for fn in names:
+        try:
+            with open(os.path.join(folder, fn), encoding="utf-8",
+                      errors="replace") as fh:
+                lines = fh.read(2_000_000).splitlines()
+        except OSError:
+            continue
+        in_services = False
+        current = ""
+        for line in lines:
+            if _COMPOSE_SERVICES_HEAD.match(line):
+                in_services, current = True, ""
+                continue
+            if in_services and line and not line[0].isspace() and not line.startswith("#"):
+                in_services, current = False, ""
+            if not in_services:
+                continue
+            m = _COMPOSE_SERVICE_KEY.match(line)
+            if m:
+                current = m.group(1)
+                continue
+            m = _COMPOSE_PROFILES_LINE.match(line)
+            if current and m:
+                profs = tuple(p.strip().strip("'\"") for p in m.group(1).split(",")
+                              if p.strip().strip("'\""))
+                if profs:
+                    out[current] = tuple(dict.fromkeys(out.get(current, ()) + profs))
+    return out
+
+
+def _profile_slugs() -> dict[str, tuple[str, ...]]:
+    """``{compose profile: (local-service slug, ...)}`` from the services catalogue."""
+    from . import local_services
+    out: dict[str, tuple[str, ...]] = {}
+    for slug in local_services.catalogue_slugs():
+        svc = local_services.by_slug(slug)
+        if svc is not None and svc.is_profile() and svc.profile:
+            out[svc.profile] = out.get(svc.profile, ()) + (slug,)
+    return out
+
+
+#: WHICH services of a compose profile belong to the per-domain choice that brings
+#: the profile up, for a profile that carries more than that choice's own
+#: containers. ``{profile: {compose service: owning slug, or None}}``. None is a
+#: COMPANION: it comes up with the profile but no domain chooses it, so it serves
+#: every domain and no domain's Start / Stop / Restart touches it.
+#:
+#: The social profile is the one such profile today (tests/stack/compose.social-
+#: profile.yaml + the two one-shots in compose.real.yaml): a domain ticks Matrix
+#: (``tuwunel``), and the profile that ticks also starts the whole Mastodon tier.
+#: Mastodon is NOT on any domain's Services tab — the per-domain ActivityPub choice
+#: is ``akkoma``, which has its own profile and its own two containers — and the
+#: Mastodon micro-frontend is one federation row every domain's shell shows. So the
+#: Mastodon containers are shared, and a domain's Stop stops its Matrix only.
+#: tests/test_mesh_pod_domains_attribution.py pins this table against the real
+#: compose files: a service added to the profile goes red until it is placed here.
+_PROFILE_SERVICE_OWNERS: dict[str, dict[str, str | None]] = {
+    "social": {
+        "tuwunel": "tuwunel",
+        "mastodon-db": None, "mastodon-redis": None, "mastodon-web": None,
+        "mastodon-sidekiq": None, "mastodon-streaming": None,
+        "mastodon-init": None, "mastodon-autoconfirm": None,
+    },
+}
+
+
+def _config_domain(service: str, profiles: dict, hints: DomainHints | None
+                   ) -> tuple[str, tuple[str, ...], str]:
+    """``(domain, shared_by, why)`` for a compose service no label names, from the
+    Studio's own per-domain service choice. ("", (), "") when the config says nothing
+    — the row is then shared by every domain. A profile COMPANION
+    (``_PROFILE_SERVICE_OWNERS``) is shared with a reason saying which domains'
+    choice brought it up."""
+    if hints is None or not hints.service_domains or not service:
+        return "", (), ""
+    by_profile = _profile_slugs()
+    chosen: list[str] = []
+    slugs: list[str] = []
+    companion_of: list[tuple[str, str]] = []          # (profile, slug)
+    for prof in profiles.get(service, ()):
+        owners = _PROFILE_SERVICE_OWNERS.get(prof)
+        prof_slugs = by_profile.get(prof, ())
+        if owners is not None and service in owners:
+            owner = owners[service]
+            if owner is None:
+                companion_of.extend((prof, s) for s in prof_slugs
+                                    if (prof, s) not in companion_of)
+                continue
+            prof_slugs = tuple(s for s in prof_slugs if s == owner)
+        for slug in prof_slugs:
+            if slug not in hints.service_domains:
+                return "", (), ""         # chosen mesh-wide (or unknown): shared
+            slugs.append(slug)
+            for name in hints.service_domains.get(slug) or ():
+                if name not in chosen:
+                    chosen.append(name)
+    if not slugs and companion_of:
+        if any(s not in hints.service_domains for _p, s in companion_of):
+            return "", (), ""             # the profile came up mesh-wide: shared
+        by = list(dict.fromkeys(n for _p, s in companion_of
+                                for n in (hints.service_domains.get(s) or ())))
+        if not by:
+            return "", (), ""
+        profs = "/".join(dict.fromkeys(p for p, _s in companion_of))
+        picks = "/".join(dict.fromkeys(s for _p, s in companion_of))
+        return "", (), (f"part of the {profs} profile, which {', '.join(by)} turned on "
+                        f"by choosing {picks}; no domain chooses {service} itself, so "
+                        f"it is shared by every domain and no domain's Stop touches it")
+    if not slugs or not chosen:
+        return "", (), ""
+    what = "/".join(dict.fromkeys(slugs))
+    if len(chosen) == 1:
+        return chosen[0], (), (f"started for {what}, which only {chosen[0]} chose on "
+                               f"its Domain services step")
+    return "", tuple(chosen), (f"started for {what}, which {', '.join(chosen)} chose "
+                               f"on their Domain services steps — shared by them")
+
+
 def _compose_units(node, generator_dir: str, catalog, live: dict, budget: _Budget, *,
-                   kind_ports=(KIND_HTTPS_PORT_DEFAULT,)
+                   kind_ports=(KIND_HTTPS_PORT_DEFAULT,),
+                   hints: DomainHints | None = None,
+                   onions_out: list | None = None
                    ) -> tuple[LaneState, list[MeshUnit], list[str], list[str]]:
     notes: list[str] = []
     errors: list[str] = []
@@ -1091,6 +1429,15 @@ def _compose_units(node, generator_dir: str, catalog, live: dict, budget: _Budge
     except Exception:                                 # noqa: BLE001
         onion = ""
     domain_onions = _domain_onions(node)
+    if onions_out is not None:
+        if onion:
+            own = (hints.own_domain if hints else "") or "this mesh's own domain"
+            onions_out.append(OnionDoor(own, onion, onion.rstrip("/") + "/login",
+                                        primary=True))
+        for label, _slug, url in domain_onions:
+            onions_out.append(OnionDoor(label, url, url.rstrip("/") + "/login"))
+    profiles = (_compose_service_profiles(compose_file)
+                if hints is not None and hints.service_domains else {})
     by_name = {d.name: d for d in (catalog or [])}
     units: list[MeshUnit] = []
     # Counted apart from the rows: a per-domain onion Door is a row of the same
@@ -1191,7 +1538,33 @@ def _compose_units(node, generator_dir: str, catalog, live: dict, budget: _Budge
             f"status: {r.get('Status') or '?'}",
             f"compose network address: {cluster_path or 'none'}",
         ])
+        labels = _row_labels(r)
+        label_dom = str(labels.get(DOMAIN_LABEL) or "").strip()
+        shared_by: tuple[str, ...] = ()
+        if label_dom:
+            domain = label_dom
+            domain_why = f"container label {DOMAIN_LABEL}={label_dom}"
+        else:
+            domain, shared_by, domain_why = _config_domain(service, profiles, hints)
+            if not domain_why:
+                domain_why = ("no hugmesh.net/domain label and no single domain chose "
+                              "it: shared by every domain")
+        if domain or shared_by:
+            udetail += "\ndomain: " + (domain or ", ".join(shared_by)) + \
+                f" ({domain_why})"
+        if name:
+            refusals: tuple[tuple[str, str], ...] = ()
+            if _is_compose_service(service, name, _COMPOSE_ONION_SERVICE) and \
+                    domain_onions:
+                refusals = tuple((v, _SHARED_TOR_REFUSAL)
+                                 for v in ("start", "stop", "restart"))
+            control = UnitControl("container", name, _COMPOSE_PROJECT, refusals,
+                                  service=service, depends_on=_depends_on(labels))
+        else:
+            control = UnitControl()
         units.append(MeshUnit(
+            domain=domain, shared_by=shared_by, domain_why=domain_why,
+            control=control,
             lane="compose", namespace=_COMPOSE_PROJECT, name=name or service,
             owner=service, phase=phase, ready=ready, reason=reason, state=state,
             cluster_path=cluster_path, external="; ".join(external_bits), door=door,
@@ -1222,7 +1595,7 @@ def _catalog_and_doors(generator_dir: str, env=None):
     catalog = []
     kind_ports = {KIND_HTTPS_PORT_DEFAULT}
     try:
-        catalog = view_doors.load(generator_dir, env)
+        catalog = view_doors.load_with_generated(generator_dir, env)
         for d in catalog:
             # ONLY the kind lanes' rows name the pinning port. The compose-tls row's
             # upstream is https://127.0.0.1:${PUBLIC_HTTPS_PORT:-8488} — the tls-front
@@ -1255,8 +1628,11 @@ def _catalog_and_doors(generator_dir: str, env=None):
 
 def snapshot(generator_dir: str, node, *, want_compose: bool = True,
              want_kind: bool = True, deadline_s: float = DEFAULT_DEADLINE_S,
-             env=None) -> MonitorSnapshot:
-    """Read both lanes. NEVER raises — every failure is a sentence in the result."""
+             env=None, hints: DomainHints | None = None) -> MonitorSnapshot:
+    """Read both lanes. NEVER raises — every failure is a sentence in the result.
+    ``hints`` (:func:`domain_hints`) lets rows no label names take a domain from the
+    Studio's own per-domain choices; None leaves them to their labels."""
+    onions: list[OnionDoor] = []
     budget = _Budget(deadline_s)
     errors: list[str] = []
     notes: list[str] = []
@@ -1272,7 +1648,8 @@ def snapshot(generator_dir: str, node, *, want_compose: bool = True,
     if want_kind:
         try:
             kind, ku, kn, ke = _kind_units(node, generator_dir, catalog, live, budget,
-                                           stale_view=stale, kind_ports=kind_ports)
+                                           stale_view=stale, kind_ports=kind_ports,
+                                           hints=hints)
             units.extend(ku)
             notes.extend(kn)
             errors.extend(ke)
@@ -1282,7 +1659,8 @@ def snapshot(generator_dir: str, node, *, want_compose: bool = True,
     if want_compose:
         try:
             compose, cu, cn, ce = _compose_units(node, generator_dir, catalog, live,
-                                                 budget, kind_ports=kind_ports)
+                                                 budget, kind_ports=kind_ports,
+                                                 hints=hints, onions_out=onions)
             units.extend(cu)
             notes.extend(cn)
             errors.extend(ce)
@@ -1302,11 +1680,120 @@ def snapshot(generator_dir: str, node, *, want_compose: bool = True,
                             or "")
         except Exception:                             # noqa: BLE001 — a name, not a fact
             view_lane = ""
+    units = _name_kind_slugs(units, hints)
     units.sort(key=lambda u: (u.lane, u.namespace, u.name))
     return MonitorSnapshot(
         taken_at=time.strftime("%H:%M:%S"), compose=compose, kind=kind,
         units=tuple(units), errors=tuple(errors), notes=tuple(notes),
-        view_doors=tuple(sorted(live)), view_lane=view_lane)
+        view_doors=tuple(sorted(live)), view_lane=view_lane, onions=tuple(onions))
+
+
+def _name_kind_slugs(units: list[MeshUnit], hints: DomainHints | None
+                     ) -> list[MeshUnit]:
+    """Give a kind pod that is still labelled with its domain's SLUG the domain's
+    NAME, when anything else in the same read names it.
+
+    Why a last pass: the kind lane is read first, and a mount with no Studio config
+    (the qemu and mesh-emulation pages pass no hints) then left ``acme-example`` on
+    the pod while the compose rows read ``acme.example`` — one domain, two entries in
+    the domain picker, and each entry's buttons acting on half of its rows. The names
+    come from what was actually read: a compose row's domain (its own
+    ``hugmesh.net/domain`` label or the Studio's choice), a per-domain onion's label,
+    and ``hints.names``. The slug of a name is ``own_casdoor.slug`` — the same rule
+    the per-domain overlay and the ApplicationSet element use. Never raises."""
+    try:
+        from .own_casdoor import slug as _slug
+        named: dict[str, tuple[str, str]] = {}
+        for key, name in ((hints.names if hints else {}) or {}).items():
+            if key and name and key != name:
+                named.setdefault(str(key), (str(name), "the Studio's domain list"))
+        for u in units:
+            if u.lane == "kind" or not u.domain:
+                continue
+            s = _slug(u.domain)
+            if s and s != u.domain:
+                named.setdefault(s, (u.domain, f"the {u.lane} row {u.name}"))
+        if not named:
+            return units
+        out: list[MeshUnit] = []
+        for u in units:
+            hit = named.get(u.domain) if u.lane == "kind" and u.domain else None
+            if hit is None or hit[0] == u.domain:
+                out.append(u)
+                continue
+            name, source = hit
+            why = f"{u.domain_why} (the domain {name}, named by {source})"
+            out.append(replace(u, domain=name, domain_why=why,
+                               detail=(u.detail + "\n" if u.detail else "")
+                               + f"domain name: {name} (slug {u.domain}, named by "
+                                 f"{source})"))
+        return out
+    except Exception:                                 # noqa: BLE001 — a label, not a fact
+        return units
+
+
+def domain_hints(cfg) -> DomainHints:
+    """The Studio config's half of "which domain does this row serve" — see
+    :class:`DomainHints`. ``cfg`` is a LocalMeshBootstrapConfig (or anything with its
+    ``domains`` / ``services`` / ``cluster_domain`` fields). NEVER raises: a config it
+    cannot read gives empty hints, and rows then fall back to their labels."""
+    if cfg is None:
+        return DomainHints()
+    try:
+        from . import local_services, own_casdoor, brand_model
+        mesh_wide = set(local_services.split_selection(
+            getattr(cfg, "services", None))[0])
+        if getattr(cfg, "services", None) is None and getattr(cfg, "social", False):
+            mesh_wide.add("tuwunel")      # the legacy SOCIAL flag runs it mesh-wide
+        rows = [r for r in (getattr(cfg, "domains", None) or ()) if isinstance(r, dict)]
+        service_domains: dict[str, tuple[str, ...]] = {}
+        for slug in local_services.domain_local_slugs():
+            if slug in mesh_wide:
+                continue                  # a mesh-wide pick runs for every domain
+            names = tuple(str(r.get("name") or "").strip() for r in rows
+                          if slug in (r.get("optional_services") or ())
+                          and str(r.get("name") or "").strip())
+            if names:                     # nobody chose it: nothing to say
+                service_domains[slug] = names
+        names: dict[str, str] = {}
+        for r in rows:
+            n = str(r.get("name") or "").strip()
+            if not n:
+                continue
+            names.setdefault(own_casdoor.slug(n), n)
+            names[brand_model.brand_id(r)] = n
+        own = ""
+        try:
+            own = (str(getattr(cfg, "cluster_domain", "") or "").strip()
+                   or str(cfg.resolved_domain() or ""))
+        except Exception:                             # noqa: BLE001
+            own = ""
+        return DomainHints(service_domains=service_domains, names=names,
+                           own_domain=own)
+    except Exception:                                 # noqa: BLE001 — hints, not facts
+        return DomainHints()
+
+
+def wizard_hints(local_cfg=None, domains=()) -> DomainHints:
+    """Hints for a mount that has no local-mesh config of its own — the qemu and
+    mesh-emulation pages, which read the SAME compose project and kind cluster as the
+    local-mesh page. ``local_cfg`` is that page's LocalMeshBootstrapConfig when the
+    window has one (so both mounts of one table say the same thing); ``domains`` are
+    the wizard's own Domains rows (``Domain`` objects or dicts), which add their
+    names so a kind pod's slug reads as its domain. NEVER raises."""
+    base = domain_hints(local_cfg) if local_cfg is not None else DomainHints()
+    names = dict(base.names)
+    try:
+        from .own_casdoor import slug as _slug
+        for d in domains or ():
+            n = d.get("name") if isinstance(d, dict) else getattr(d, "name", "")
+            n = str(n or "").strip()
+            if n:
+                names.setdefault(_slug(n), n)
+    except Exception:                                 # noqa: BLE001 — hints, not facts
+        pass
+    return DomainHints(service_domains=dict(base.service_domains), names=names,
+                       own_domain=base.own_domain)
 
 
 def addresses_text(snap: MonitorSnapshot) -> str:

@@ -56,7 +56,7 @@ class RunningBuild:
 
     def __init__(self, *, session_id: str, label: str, worker, driver,
                  window=None, workdir: str = "", kind: str = "wizard",
-                 on_cancelled=None):
+                 on_cancelled=None, log_path: str = ""):
         self.session_id = session_id
         self.label = label or session_id or "build"
         self.worker = worker
@@ -68,6 +68,9 @@ class RunningBuild:
         # destroyed while its worker is still emitting into its page's slots.
         self.window = window
         self.workdir = workdir
+        # the build's shared log (build_sessions' <workdir>/build.log): the Studio
+        # panel's Image builds tab follows its last lines. "" = none known.
+        self.log_path = log_path
         self.kind = kind
         self.started = time.time()
         self.finished = False
@@ -111,7 +114,7 @@ class BuildSupervisor(QtCore.QObject):
     # ---- registration ------------------------------------------------------------
     def adopt(self, *, session_id: str, label: str, worker, driver,
               window=None, workdir: str = "", kind: str = "wizard",
-              on_cancelled=None) -> RunningBuild:
+              on_cancelled=None, log_path: str = "") -> RunningBuild:
         """Take ownership of a dispatched run. Called by the page at dispatch, BEFORE
         ``worker.start()``.
 
@@ -121,7 +124,7 @@ class BuildSupervisor(QtCore.QObject):
         """
         build = RunningBuild(session_id=session_id, label=label, worker=worker,
                              driver=driver, window=window, workdir=workdir, kind=kind,
-                             on_cancelled=on_cancelled)
+                             on_cancelled=on_cancelled, log_path=log_path)
         try:
             if worker is not None and hasattr(worker, "setParent"):
                 worker.setParent(self)          # Qt ownership leaves the page/window

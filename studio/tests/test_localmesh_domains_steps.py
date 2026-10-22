@@ -245,11 +245,20 @@ def test_the_services_stepper_walks_every_domain_own_domain_first(wiz):
     assert w.current_domain() == "team.example"
     assert "3 of 3" in w.subtitle_label.text()
     assert w.unconfigured() == []
-    # the same catalogue and the same honesty line as the image flow's page
+    # the same catalogue as the image flow's page; the CLUSTER's "not yet enforced"
+    # banner is not said here, because this route runs what is ticked
     assert sorted(w._boxes) == sorted(OPTIONAL_SERVICES_CHOICES)
-    assert "NOT YET ENFORCED AT THE CLUSTER" in w.enforcement.text()
+    assert w.enforcement.isHidden()
+    assert "On this local Docker mesh they run" in w.help.text()
+    wheres = [w.other_table.topLevelItem(i).text(2)
+              for i in range(w.other_table.topLevelItemCount())]
+    assert wheres and all("Mesh infrastructure" in t for t in wheres), wheres
+    assert "Mesh infrastructure" in w.legend.text()
+    assert "Network & services" not in w.legend.text()
     assert w.lane_note.isVisibleTo(w)
-    assert "NOT what decides" in w.lane_note.text()
+    # 2026-10-21: the per-domain choice IS what the Docker mesh runs, and it says so
+    assert "what you tick here runs" in w.lane_note.text()
+    assert "NOT what decides" not in w.lane_note.text()
 
 
 # ── 5. the gate, on both doors ─────────────────────────────────────────────────────
@@ -533,11 +542,17 @@ def test_own_sign_in_rows_feed_own_casdoor_domains_and_rows_are_recorded(wiz):
     assert ctl.mesh_domains.own_name not in [d["name"] for d in cfg.domains]
     plan = ctl.boot.plan()
     assert "domains recorded" in plan and "acme.example" in plan and "games" in plan
-    assert "RECORDED, not enforced" in plan
+    # 2026-10-21: per-domain services RUN on this lane (the "Local services" pick is
+    # retired; the mesh starts the union of its domains' choices)
+    assert "per-domain services RUN" in plan
+    assert "games" in ctl.boot.cfg.effective_services()
     assert "team.example: host port 8001" in plan
 
 
-def test_the_per_domain_selection_does_not_change_the_compose_profiles(wiz):
+def test_the_per_domain_selection_leaves_the_mesh_wide_pick_and_runs_by_union(wiz):
+    """The per-domain ticks are recorded on the rows, never written into the mesh-wide
+    ``services`` pick; since 2026-10-21 the mesh RUNS them anyway, because what runs is
+    the union (``effective_services``)."""
     ctl = _two_added(wiz)
     _to(wiz, localmesh_mod.LocalMeshDomainServicesPage)
     services_before = ctl.collect_bootstrap().services
@@ -549,6 +564,8 @@ def test_the_per_domain_selection_does_not_change_the_compose_profiles(wiz):
     _to(wiz, localmesh_mod.LocalMeshReviewPage)
     assert ctl.collect_bootstrap().services == services_before
     assert ctl.collect_bootstrap().domains[0]["optional_services"] == ["akkoma", "games"]
+    ran = ctl.collect_bootstrap().effective_services()
+    assert "akkoma" in ran and "games" in ran
 
 
 def test_a_reviewed_selection_survives_a_round_trip_through_apply_bootstrap(wiz):

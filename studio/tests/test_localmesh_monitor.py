@@ -816,8 +816,8 @@ def test_the_default_monitor_widget_is_still_the_six_column_table(qapp):
     w = mw.MeshMonitorWidget()
     try:
         assert w.scaling is False
-        assert w.table.columnCount() == 6
-        got = tuple(w.table.horizontalHeaderItem(c).text() for c in range(6))
+        assert w.table.columnCount() == len(mw._MON_HEADERS) == 7
+        got = tuple(w.table.horizontalHeaderItem(c).text() for c in range(7))
         assert got == mw._MON_HEADERS
         assert "Replicas" not in got
         w.render(_snap(_scalable("hugmesh", "gw-1")))
@@ -830,13 +830,16 @@ def test_the_default_monitor_widget_is_still_the_six_column_table(qapp):
 
 
 def test_the_replicas_column_is_appended_so_no_existing_index_moved(qapp):
-    """M1's other half: the seventh column may only ever be seventh."""
-    assert (mw._MON_COL_NAME, mw._MON_COL_LANE, mw._MON_COL_STATE, mw._MON_COL_K8S,
-            mw._MON_COL_EXT, mw._MON_COL_OPEN, mw._MON_COL_SCALE) == (0, 1, 2, 3, 4, 5, 6)
+    """M1's other half: the Replicas column may only ever be LAST. (The Domain
+    column, 2026-10-21, was inserted at 1 deliberately: every caller reads the
+    indices through these names.)"""
+    assert (mw._MON_COL_NAME, mw._MON_COL_DOMAIN, mw._MON_COL_LANE, mw._MON_COL_STATE,
+            mw._MON_COL_K8S, mw._MON_COL_EXT, mw._MON_COL_OPEN,
+            mw._MON_COL_SCALE) == (0, 1, 2, 3, 4, 5, 6, 7)
     assert mw._MON_HEADERS_SCALING == mw._MON_HEADERS + ("Replicas",)
     w = mw.MeshMonitorWidget(scaling=True)
     try:
-        assert w.table.columnCount() == 7
+        assert w.table.columnCount() == 8
         assert w.table.horizontalHeaderItem(mw._MON_COL_OPEN).text() == "Open"
         assert w.table.horizontalHeaderItem(mw._MON_COL_SCALE).text() == "Replicas"
         assert "kubectl" in w.table.horizontalHeaderItem(mw._MON_COL_SCALE).toolTip()
@@ -1356,7 +1359,7 @@ def test_a_declined_door_is_said_out_loud_even_on_a_non_scaling_mount(qapp, host
     sec = mw.MeshMonitorSection(host, GENERATOR_DIR, lambda: _ScaleNode(), scaling=False)
     try:
         assert sec.monitor.scaling is False
-        assert sec.monitor.table.columnCount() == 6
+        assert sec.monitor.table.columnCount() == len(mw._MON_HEADERS)
         sec._open_door("https://localhost:8443/")        # the HSTS ban
         assert opened == []
         assert "Not opened:" in sec.monitor.scale_status_text()

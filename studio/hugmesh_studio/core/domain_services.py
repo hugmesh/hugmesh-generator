@@ -47,6 +47,8 @@ __all__ = [
     "IMAGE_SCOPE_ROW_LABEL",
     "image_service_state", "node_service_state", "other_scope_rows",
     "DOMAIN_CATALOGUE", "ENFORCEMENT_NOTE",
+    "DOCKER_INFRA_WHERE", "DOCKER_TOR_WHERE", "DOCKER_IMAGE_ROW", "DOCKER_SERVICES_HELP",
+    "route_shows_enforcement_note", "scope_where",
     "scope_of", "grouped_domain_catalogue", "split_services", "normalise_slugs",
     "carried_over_slugs", "describe", "describe_carried_over",
     "CARRIED_OVER_NOTE", "reviewed_names", "unconfigured_domains",
@@ -106,6 +108,41 @@ SCOPE_BINDS = {
     SCOPE_IMAGE: "every image this build produces — not one domain",
     SCOPE_NODE: "a node, or the whole cluster — never one domain",
 }
+
+#: The local Docker mesh route (2026-10-21): there is no image, no worklist and no
+#: ‘Network & services’ step. What runs once for the whole mesh is picked on its
+#: ‘Mesh infrastructure’ step, and what a domain ticks here RUNS — so the #496
+#: "not yet enforced" banner (about the CLUSTER's ArgoCD) is not said on that route.
+DOCKER_INFRA_WHERE = ("the ‘Mesh infrastructure’ step — once for the whole local "
+                      "mesh, never one domain")
+DOCKER_TOR_WHERE = ("the ‘Mesh infrastructure’ step (runs Tor for the whole local "
+                    "mesh); whether a DOMAIN gets its own .onion is that domain's "
+                    "‘Tor front door’ row")
+DOCKER_IMAGE_ROW = ("the ‘Mesh infrastructure’ step, once for the whole local mesh")
+DOCKER_SERVICES_HELP = (
+    "Tick the services THIS domain provides. On this local Docker mesh they run: the "
+    "mesh starts every service any domain chose, one copy each. Ticking nothing means "
+    "this domain adds no service of its own.")
+
+
+def scope_where(scope: str, route: str = "image") -> str:
+    """Where a choice of ``scope`` is made, on ``route``: the image flow's
+    ``SCOPE_WHERE``, or the local Docker mesh's own step for the two scopes it has no
+    ‘Network & services’ step or worklist for."""
+    if route == "docker" and scope == SCOPE_IMAGE:
+        return "on " + DOCKER_IMAGE_ROW
+    if route == "docker" and scope == SCOPE_NODE:
+        return "on " + DOCKER_INFRA_WHERE
+    return SCOPE_WHERE[scope]
+
+
+def route_shows_enforcement_note(route: str) -> bool:
+    """Whether a step on ``route`` shows ENFORCEMENT_NOTE. It is about the CLUSTER
+    (ArgoCD creates every optional-service Application); the local Docker mesh starts
+    exactly what the domains chose, so saying "not yet enforced" there contradicts
+    the page's own next sentence."""
+    return route != "docker"
+
 
 #: The read-only "not domain-scoped" table's columns.
 OTHER_SCOPE_HEADERS = ("Service", "Scope", "Where it is set", "Right now")
@@ -650,7 +687,8 @@ def node_service_state(entries, slug: str) -> str:
     return ", ".join(n for n in named if n)
 
 
-def other_scope_rows(cfg=None, entries=()) -> list[tuple[str, str, str, str]]:
+def other_scope_rows(cfg=None, entries=(), route: str = "image"
+                     ) -> list[tuple[str, str, str, str]]:
     """``[(service, scope, where it is set, right now), ...]`` for every choice this
     page SHOWS but does not own (#497).
 
@@ -665,16 +703,23 @@ def other_scope_rows(cfg=None, entries=()) -> list[tuple[str, str, str, str]]:
     The last row stands for the image-wide services table as a whole: it is a SURFACE
     (dedicated-flag services, edge-AI and its sub-options, the managed backing
     services), not a slug list, and re-listing it here slug by slug would create a
-    second catalogue to drift against the first."""
+    second catalogue to drift against the first.
+
+    ``route="docker"`` (the local Docker mesh) names that route's own step, the
+    ‘Mesh infrastructure’ step, instead of the image flow's ‘Network & services’ step
+    and worklist, which that route does not have."""
+    docker = route == "docker"
     rows: list[tuple[str, str, str, str]] = []
     for slug in INFRA_SERVICES_CHOICES:
         state = image_service_state(cfg, slug) if cfg is not None else ""
         nodes = node_service_state(entries, slug)
         if nodes:
             state = (state + "; per node: " + nodes) if state else "per node: " + nodes
-        rows.append((slug, SCOPE_NODE,
-                     INFRA_WHERE.get(slug, SCOPE_WHERE[SCOPE_NODE]), state))
-    rows.append((IMAGE_SCOPE_ROW_LABEL, SCOPE_IMAGE, SCOPE_WHERE[SCOPE_IMAGE],
+        where = ((DOCKER_TOR_WHERE if slug == "tor" else DOCKER_INFRA_WHERE) if docker
+                 else INFRA_WHERE.get(slug, SCOPE_WHERE[SCOPE_NODE]))
+        rows.append((slug, SCOPE_NODE, where, state))
+    rows.append((IMAGE_SCOPE_ROW_LABEL, SCOPE_IMAGE,
+                 DOCKER_IMAGE_ROW if docker else SCOPE_WHERE[SCOPE_IMAGE],
                  "the dedicated-flag services, edge-AI and its sub-options, and the "
                  "managed backing services"))
     return rows
@@ -750,19 +795,28 @@ TOR_OWN_DOMAIN_NOTE = (
     "the default brand; nothing to choose here")
 
 
-def onion_slug(name: str) -> str:
+def onion_slug(name: str, stored_id: str = "") -> str:
     """The directory slug a domain's onion is minted under, or "" when ``name``
     cannot make one the node contract accepts (empty, or longer than 63 characters
-    once slugged — truncating could collide two domains onto one key)."""
-    s = _own_casdoor.slug((name or "").strip())
+    once slugged — truncating could collide two domains onto one key). A brand id the
+    record STORES (#654, D4: one id for every consumer) wins over the derived one."""
+    s = (stored_id or "").strip() or _own_casdoor.slug((name or "").strip())
     return s if TOR_SLUG_RE.match(s) else ""
+
+
+def _row_id(d) -> str:
+    """A row's stored brand id ("" on a pre-#654 row), from a Domain or a record dict."""
+    get = d.get if isinstance(d, dict) else (lambda k, _d=d: getattr(_d, k, None))
+    return str(get("id") or "").strip()
 
 
 def onion_tenant(domain) -> str:
     """The tenancy key the gateway maps this domain's onion Host to — see the section
-    comment. ``slug(name)`` for sign-in ``own``, ``default`` otherwise."""
+    comment. The brand id (stored, else ``slug(name)``) for sign-in ``own``, ``default``
+    otherwise."""
     if getattr(domain, "idp", "") == _DOMAIN_IDP_OWN:
-        return onion_slug(getattr(domain, "name", "")) or TOR_DEFAULT_TENANT
+        return (onion_slug(getattr(domain, "name", ""), _row_id(domain))
+                or TOR_DEFAULT_TENANT)
     return TOR_DEFAULT_TENANT
 
 
@@ -781,7 +835,7 @@ def tor_domain_entries(domains, own_name: str = "") -> list[tuple[str, str, str]
         name = str(get("name") or "").strip()
         if not name or name == own or get("tor") is not True:
             continue
-        slug = onion_slug(name)
+        slug = onion_slug(name, _row_id(d))
         if not slug or slug in seen:
             continue
         seen.add(slug)
@@ -803,7 +857,7 @@ def tor_slug_clash(domain, domains=(), own_name: str = "") -> str:
     one key directory per slug, so only the first in table order gets an onion
     (:func:`tor_domain_entries`) — and the second one's row has to say so."""
     name = (getattr(domain, "name", "") or "").strip()
-    slug = onion_slug(name)
+    slug = onion_slug(name, _row_id(domain))
     if not slug:
         return ""
     own = (own_name or "").strip()
@@ -812,7 +866,8 @@ def tor_slug_clash(domain, domains=(), own_name: str = "") -> str:
         other = str(get("name") or "").strip()
         if other == name:
             return ""
-        if other and other != own and get("tor") is True and onion_slug(other) == slug:
+        if (other and other != own and get("tor") is True
+                and onion_slug(other, _row_id(d)) == slug):
             return other
     return ""
 
@@ -821,13 +876,13 @@ def tor_row_problem(domain, domains=(), own_name: str = "") -> str:
     """Why a ticked Tor front door cannot be minted for ``domain`` ("" when it can).
     ``domains`` (the rows in table order) lets it see a key-directory clash."""
     name = (getattr(domain, "name", "") or "").strip()
-    if name and not onion_slug(name):
+    if name and not onion_slug(name, _row_id(domain)):
         return (f"{name} is too long to name an onion key directory (63 characters "
                 "once its dots become dashes) — no onion would be minted for it")
     clash = tor_slug_clash(domain, domains, own_name)
     if clash:
         return (f"{name} and {clash} share one key directory name "
-                f"(‘{onion_slug(name)}’), and {clash} comes first — only {clash} "
+                f"(‘{onion_slug(name, _row_id(domain))}’), and {clash} comes first — only {clash} "
                 "gets an onion; rename one of them")
     return ""
 
@@ -910,10 +965,10 @@ def tor_row_state(domain, cfg=None, entries=(), own_name: str = "",
     if problem:
         return "on, but " + problem + ". " + reach
     # Only a route that ACTS on the tick may say the domain has an onion.
-    bits = [f"on — its own onion, key directory ‘{onion_slug(name)}’"
+    bits = [f"on — its own onion, key directory ‘{onion_slug(name, _row_id(domain))}’"
             if route == TOR_ROUTE_COMPOSE else
             "ticked — it would be this domain's own onion, key directory "
-            f"‘{onion_slug(name)}’"]
+            f"‘{onion_slug(name, _row_id(domain))}’"]
     if onion_tenant(domain) == TOR_DEFAULT_TENANT:
         bits.append("it signs in through the mesh's Casdoor, so its onion serves the "
                     "DEFAULT brand's login; choose sign-in ‘own’ on the Domains table "
