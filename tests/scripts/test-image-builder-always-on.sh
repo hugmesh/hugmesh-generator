@@ -432,6 +432,111 @@ else
   neg_bad "9l mutation itself failed to apply"
 fi
 
+# ── 10: THE WHOLE TRACKED TREE, not only the image-builder surface ──────────────────
+# Check 9 bans the retired brand in the image-builder surface only. The repository is
+# public, so the same stem must not appear in ANY tracked file — and the only whole-repo
+# scan, studio/tests/test_org_export_neutrality.py, runs in a workflow that fires only
+# when studio/** changes. A docs, fixture or certificate change outside studio/ could
+# reintroduce the name and pass every PR check. This suite runs on every PR, so the
+# whole-tree scan rides here, next to the check it extends. It reads every tracked file
+# as bytes (plain, UTF-16, hex, base64 at every alignment, PNG text chunks); it cannot
+# read text drawn as pixels — a committed screenshot needs an eye or an OCR pass.
+TREE_CHECKER="$(dirname "${BASH_SOURCE[0]}")/private_name_neutrality.py"
+echo
+echo "-- whole tracked tree: no file may name the retired private target --"
+TREE_RC=1
+if [ -f "${TREE_CHECKER}" ]; then
+  python3 "${TREE_CHECKER}" "${REPO}"; TREE_RC=$?
+else
+  echo "  FAIL missing checker: ${TREE_CHECKER}"
+fi
+
+# tree_expect <description> <expected rc> <tag or ""> <checker> <dir> [--min-files N]
+# Runs the tree checker on a small staged git tree and requires the exact exit status
+# and, for a hit, the named shape tag.
+tree_expect() {
+  local desc="$1" want="$2" tag="$3" checker="$4" dir="$5"; shift 5
+  local out rc
+  out="$(python3 "${checker}" "${dir}" "$@" 2>&1)"; rc=$?
+  if [ "${rc}" -ne "${want}" ]; then
+    neg_bad "${desc} — exit ${rc}, wanted ${want}:"
+    printf '%s\n' "${out}" | sed 's/^/        /'
+  elif [ -n "${tag}" ] && ! printf '%s' "${out}" | grep -F -- "${tag}" >/dev/null; then
+    neg_bad "${desc} — exit ${rc}, but no '${tag}' in the report:"
+    printf '%s\n' "${out}" | sed 's/^/        /'
+  else
+    neg_ok "${desc} => exit ${rc}${tag:+ ${tag}}"
+  fi
+}
+# stage_tree <dir>: a small git tree of neutral files, tracked (index only, no commit).
+stage_tree() {
+  local d="$1"
+  rm -rf "${d}"; mkdir -p "${d}/docs"
+  printf 'domain: mesh.example\norg: exampleorg\n' > "${d}/docs/a.yaml"
+  printf 'snap dragon snapper dragonfly\n' > "${d}/docs/near-miss.txt"
+  git -C "${d}" init -q && git -C "${d}" add -A
+}
+TT="${WORK}/tree"
+# (10a) a clean staged tree passes — the near-miss words alone are not a hit.
+stage_tree "${TT}" && tree_expect "clean staged tree is accepted" 0 "" "${TREE_CHECKER}" "${TT}" --min-files 1
+# (10b) the stem, mixed case, in a tracked doc OUTSIDE studio/ and outside the
+#       image-builder surface: the hole this section closes.
+stage_tree "${TT}" && printf 'see https://id.%s.example/\n' "${RB^}" > "${TT}/docs/b.md" \
+  && git -C "${TT}" add -A \
+  && tree_expect "stem in a tracked doc outside studio/" 1 "docs/b.md: plain" "${TREE_CHECKER}" "${TT}" --min-files 1
+# (10c) the stem hidden inside a base64 dev key (the shape that hid in compose).
+stage_tree "${TT}" && printf 'KEY: ${KEY:-%s}\n' "$(printf 'x%s-dev-key-32byte' "${RB}" | base64 -w0)" > "${TT}/docs/c.env" \
+  && git -C "${TT}" add -A \
+  && tree_expect "stem inside a base64 dev key" 1 "docs/c.env: base64" "${TREE_CHECKER}" "${TT}" --min-files 1
+# (10d) the stem in a PNG's compressed zTXt metadata chunk.
+stage_tree "${TT}" && python3 - "${TT}/docs/d.png" <<'PY' && git -C "${TT}" add -A \
+  && tree_expect "stem in a PNG zTXt chunk" 1 "docs/d.png: png-text" "${TREE_CHECKER}" "${TT}" --min-files 1
+import os, struct, sys, zlib
+def chunk(t, b):
+    return struct.pack(">I", len(b)) + t + b + struct.pack(">I", zlib.crc32(t + b) & 0xFFFFFFFF)
+payload = b"Comment\0\0" + zlib.compress(("admin@" + os.environ["RB"] + ".example").encode())
+open(sys.argv[1], "wb").write(b"\x89PNG\r\n\x1a\n" + chunk(b"zTXt", payload) + chunk(b"IEND", b""))
+PY
+# (10e) an UNTRACKED file is not the repository's business — and the same file once
+#       added is. Pins that the scan reads what git tracks, not the working directory.
+stage_tree "${TT}" && printf '%s\n' "${RB}" > "${TT}/docs/untracked.txt" \
+  && tree_expect "untracked file is ignored" 0 "" "${TREE_CHECKER}" "${TT}" --min-files 1 \
+  && git -C "${TT}" add -A \
+  && tree_expect "the same file once tracked is caught" 1 "docs/untracked.txt: plain" "${TREE_CHECKER}" "${TT}" --min-files 1
+# (10f) VACUITY: a tree too small for the default floor is INCOMPLETE (exit 2), never clean.
+stage_tree "${TT}" && tree_expect "too few tracked files is incomplete, not clean" 2 "[neutrality-incomplete]" "${TREE_CHECKER}" "${TT}"
+# (10g) THE MATCHER ROTTED: a copy of the checker whose stem never matches must fail its
+#       own self-probe (exit 2), whatever the tree holds.
+TC_NARROW="${WORK}/tree-checker-narrow.py"
+if python3 - "${TREE_CHECKER}" "${TC_NARROW}" <<'PY'
+import sys
+src, dst = sys.argv[1], sys.argv[2]
+s = open(src, encoding="utf-8").read()
+a = '_STEM = "snap" + "dragon"'
+assert s.count(a) == 1, "stem line not found: the mutation would be a no-op"
+open(dst, "w", encoding="utf-8").write(s.replace(a, '_STEM = "snap" + "dragon" + "ZZZ"', 1))
+PY
+then
+  stage_tree "${TT}" && tree_expect "tree matcher rotted into a never-matching stem" 2 "[neutrality-probe]" "${TC_NARROW}" "${TT}" --min-files 1
+else
+  neg_bad "10g mutation itself failed to apply"
+fi
+# (10h) THE MATCHER LOST case-insensitivity on the plain shape.
+TC_CASE="${WORK}/tree-checker-case.py"
+if python3 - "${TREE_CHECKER}" "${TC_CASE}" <<'PY'
+import sys
+src, dst = sys.argv[1], sys.argv[2]
+s = open(src, encoding="utf-8").read()
+a = "        low = data.lower()\n        shapes: list[str] = []"
+assert s.count(a) == 1, "lowercasing line not found: the mutation would be a no-op"
+open(dst, "w", encoding="utf-8").write(s.replace(a, "        low = data\n        shapes: list[str] = []", 1))
+PY
+then
+  stage_tree "${TT}" && tree_expect "tree matcher lost case-insensitivity" 2 "[neutrality-probe]" "${TC_CASE}" "${TT}" --min-files 1
+else
+  neg_bad "10h mutation itself failed to apply"
+fi
+
 echo
 echo "== negative controls: ${NEG_P} passed, ${NEG_F} failed =="
 [ "${NEG_F}" -eq 0 ] || exit 1
@@ -439,6 +544,11 @@ if [ "${POS_RC}" -ne 0 ]; then
   echo "== image-builder always-on: FAIL — the repo's own tree does not pass. The finding is"
   echo "   at the top of this run; the ${NEG_P} negative controls above are all green, so the"
   echo "   guard is intact and the finding is a real one. =="
+  exit 1
+fi
+if [ "${TREE_RC}" -ne 0 ]; then
+  echo "== image-builder always-on: FAIL — a tracked file names the retired private target"
+  echo "   (or the whole-tree scan could not run); see the whole-tree section above. =="
   exit 1
 fi
 echo "== image-builder always-on: PASS =="
