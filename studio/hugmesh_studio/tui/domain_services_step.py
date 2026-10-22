@@ -211,7 +211,10 @@ class DomainServicesScreen:
         if view is not None:
             if self.section == brand_step.SECTION_LOOK:
                 view.commit_look()
-            problems = view.session.commit(save=True)
+            # a client image (cloud) writes no brand record: the rows are written in
+            # place, and the record file is the mesh's (the window's rule)
+            problems = ([] if view.client_image()
+                        else view.session.commit(save=True))
             if problems:
                 j.status = view.session.message or problems[0]
         if self._on_continue:

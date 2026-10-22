@@ -107,6 +107,13 @@ class BrandHost:
     def unaffiliated(self) -> bool:
         return False
 
+    def client_image(self) -> bool:
+        """True when this route builds a Mesh desktop CLIENT image (the image wizard in
+        cloud mode): it serves no domain, so a domain's own sign-in, look and ways are
+        kept with the configuration and no builder reads them (the brand screen says so
+        on every tab)."""
+        return False
+
     def read(self) -> brand_model.BrandRecord:
         raise NotImplementedError
 
@@ -165,6 +172,9 @@ class ImageHost(BrandHost):
 
     def unaffiliated(self) -> bool:
         return unaffiliated_image(self.cfg)
+
+    def client_image(self) -> bool:
+        return (getattr(self.cfg, "mode", "") or "") == "cloud"
 
     def read(self) -> brand_model.BrandRecord:
         return brand_model.record_from_image_config(self.cfg)

@@ -49,7 +49,8 @@ __all__ = ["SECTIONS", "SECTION_LOOK", "SECTION_SERVICES", "BrandView", "brand_v
            "IDENTITY_HOME", "WAYS_BUTTON", "LOOK_HOME", "LOOK_POINTER",
            "SIGNIN_CHOICES", "SIGNIN_EXTERNAL", "SIGNIN_MESH_HOME", "PROVIDER_WORDS",
            "TAILNET_CHOICES", "EGRESS_CHOICES", "REACH_RECORDED_ONLY", "OWN_REACH_HOME",
-           "feed_identity", "feed_ways"]
+           "feed_identity", "feed_ways", "CLIENT_SIGNIN_NOTE", "CLIENT_LOOK_NOTE",
+           "CLIENT_WAYS_NOTE"]
 
 #: (number, title) — the window's four tabs, in the window's order.
 SECTIONS: tuple[tuple[int, str], ...] = (
@@ -107,6 +108,23 @@ OWN_REACH_HOME = ("this is the mesh's own domain: its VPN is the mesh's (on in "
                   "production), its egress is the mesh's egress VPN (the Mesh "
                   "infrastructure step, or the image's egress setting) and its onion is "
                   "the mesh's own Tor address")
+# ── a Mesh desktop CLIENT image (the image wizard in cloud mode) ───────────────────
+# A client image serves no domain. The builder takes only the NAMES of the domains it
+# is tied to (--domains -> /etc/hugmesh/domains) and the mesh-wide --idp; no --domain-idp,
+# no domain look and no domain way reaches it. These three sentences are what each tab
+# says on that route, in both faces, so nothing on a client screen claims an effect.
+CLIENT_SIGNIN_NOTE = ("Mesh desktop client image: a domain's own sign-in is kept with "
+                      "this configuration only. The image carries the names of its "
+                      "domains and nothing else about them, so no builder reads this "
+                      "choice for a client yet.")
+CLIENT_LOOK_NOTE = ("Mesh desktop client image: it serves no sign-in page, so no domain's "
+                    "web look is shown by it. The desktop's own look (theme, wallpaper, "
+                    "accent) is set on the Branding step.")
+CLIENT_WAYS_NOTE = ("Mesh desktop client image: it serves no domain, so this domain's Tor, "
+                    "VPN and egress choices are kept with this configuration only. The "
+                    "computer joins the mesh's VPN and uses an egress VPN as a whole: "
+                    "both are set on the Network step.")
+
 WAYS_HOME = ("the internal name and the public name are chosen in the Go-Live wizard: "
              "run it with the --go-live option, or press ‘" + WAYS_BUTTON + "’ in the "
              "window (Tor, VPN and egress are chosen above, per domain)")
@@ -133,6 +151,14 @@ class BrandView:
 
     def label(self) -> str:
         return f"{self.name} (the superbrand)" if self.own else self.name
+
+    def client_image(self) -> bool:
+        """Is this screen building a Mesh desktop client image (cloud mode)? Then every
+        tab says its choices are kept with the configuration only (CLIENT_*_NOTE)."""
+        try:
+            return bool(self.session.host.client_image())
+        except Exception:                       # noqa: BLE001 — screens never raise
+            return False
 
     # ── 1. Identity: a read-only mirror ───────────────────────────────────────────
     def identity(self) -> list[tuple[str, str]]:
@@ -418,6 +444,8 @@ def _plain_signin(sentence: str) -> str:
 
 def identity_lines(view: BrandView) -> list[str]:
     out = [f"1. Identity — {view.label()}", ""]
+    if view.client_image():
+        out += [CLIENT_SIGNIN_NOTE, ""]
     for k, v in view.identity():
         out.append(f"   {k:<14}{v}")
     out += ["", view.identity_home(), ""]
@@ -459,6 +487,8 @@ def feed_identity(view: BrandView, line: str) -> str:
 
 def ways_lines(view: BrandView) -> list[str]:
     out = [f"4. Ways to reach it — {view.label()}", ""]
+    if view.client_image():
+        out += [CLIENT_WAYS_NOTE, ""]
     if view.own:
         out += ["   " + OWN_REACH_HOME[:1].upper() + OWN_REACH_HOME[1:] + ".", ""]
     else:
@@ -478,7 +508,8 @@ def ways_lines(view: BrandView) -> list[str]:
             out.append(f"   {way}: {value}")
             last = way
         out.append(f"      {path}: {effect}")
-    out += ["", WAYS_HOME]
+    if not view.client_image():
+        out += ["", WAYS_HOME]
     return out
 
 
@@ -509,5 +540,7 @@ def look_section_lines(view: BrandView, route: str) -> list[str]:
     """Section 2 as text: the look screen for a brand that can be edited, the read-only
     values where it cannot."""
     out = [f"2. Look — {view.label()}", ""]
+    if view.client_image():
+        out += [CLIENT_LOOK_NOTE, ""]
     out += view.look_lines(route)
     return out

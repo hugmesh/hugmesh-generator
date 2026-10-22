@@ -243,6 +243,23 @@ class BrandSettingsTabs(QtCore.QObject):
         self.ways_note = _wrapped("", name="brand_ways_note", muted=True)
         wl.addWidget(self.ways_note)
 
+        # ── a Mesh desktop CLIENT image (cloud mode): one honest line on top of each
+        # of the three pages — what that route does with the tab's choices (nothing
+        # but keep them; brand_step.CLIENT_*_NOTE, the text screen prints the same)
+        self.client_notes: dict[int, QtWidgets.QLabel] = {}
+        for tab, page, text, name in (
+                (TAB_IDENTITY, self.identity_page, brand_step.CLIENT_SIGNIN_NOTE,
+                 "brand_client_identity"),
+                (TAB_LOOK, self.look_page, brand_step.CLIENT_LOOK_NOTE,
+                 "brand_client_look"),
+                (TAB_WAYS, self.ways_page, brand_step.CLIENT_WAYS_NOTE,
+                 "brand_client_ways")):
+            note = _wrapped(text, name=name)
+            note.setStyleSheet("color: #a65d00;")
+            note.setVisible(False)
+            page.layout().insertWidget(0, note)
+            self.client_notes[tab] = note
+
         self._pages = {TAB_IDENTITY: self.identity_page, TAB_LOOK: self.look_page,
                        TAB_WAYS: self.ways_page}
         for pg in self._pages.values():
@@ -329,6 +346,9 @@ class BrandSettingsTabs(QtCore.QObject):
         # each change), but a model swap must not carry another brand's edits over
         self.view = view
         try:
+            client = bool(view is not None and view.client_image())
+            for note in self.client_notes.values():
+                note.setVisible(client)
             self._fill_identity()
             self._fill_signin()
             self._fill_look()
@@ -444,8 +464,11 @@ class BrandSettingsTabs(QtCore.QObject):
             lines.append(f"&nbsp;&nbsp;&nbsp;{html.escape(path)}: {html.escape(effect)}")
         self.ways_text.setTextFormat(QtCore.Qt.TextFormat.RichText)
         self.ways_text.setText("<br>".join(lines))
-        self.ways_btn.setVisible(True)
-        self.ways_note.setText(brand_step.WAYS_HOME)
+        # A client image serves no domain: the Go-Live wizard (internal and public
+        # names) is a mesh device's, so the button and its pointer are not offered.
+        client = v.client_image()
+        self.ways_btn.setVisible(not client)
+        self.ways_note.setText("" if client else brand_step.WAYS_HOME)
 
     # ── the domain's sign-in ──────────────────────────────────────────────────────
     def _fill_signin(self, note: str = "", error: bool = False) -> None:

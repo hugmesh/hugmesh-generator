@@ -1023,11 +1023,13 @@ class DomainServicesPage(QtWidgets.QWizardPage, DomainServicesBody):
         return self.wiz.cfg
 
     def _brand_session(self):
-        """The image route's superbrand session — on a mesh only (a standalone image
-        has no brands to configure per domain)."""
+        """The image route's superbrand session — on a mesh AND on a Mesh desktop client
+        image (cloud mode: the same four tabs, each saying the client keeps its choices
+        with the configuration only — ``brand_step.CLIENT_*_NOTE``). A standalone image
+        has no brands to configure per domain."""
         from ...tui.superbrand_step import session_for
         cfg = self.wiz.cfg
-        if getattr(cfg, "mode", "") != "mesh":
+        if getattr(cfg, "mode", "") not in ("mesh", "cloud"):
             return None
         return session_for(self.wiz, "image", cfg,
                            getattr(self.wiz, "generator_dir", "") or "")
@@ -1074,7 +1076,11 @@ class DomainServicesPage(QtWidgets.QWizardPage, DomainServicesBody):
         """Record (see ``DomainServicesBody._record``); always True — the refusal
         belongs at the build/mesh-start screens, where it can be acted on."""
         self._record(self.wiz.cfg)
-        self.commit_brand(save=True)
+        # A client image (cloud) writes no brand record: its tabs write the domain rows
+        # in place, and the record file is the MESH's — a client configuration must
+        # never overwrite it.
+        if getattr(self.wiz.cfg, "mode", "") == "mesh":
+            self.commit_brand(save=True)
         return True
 
     def cleanupPage(self):
