@@ -238,6 +238,31 @@ def open_in_tor_browser(url: str) -> str:
     return "" if ok else f"Tor Browser could not be started ({argv[0]})."
 
 
+class _ElidedAddress(QtWidgets.QLabel):
+    """An address that elides in the middle to the width it is given, never sets it.
+    The whole address is the tooltip and is what Copy copies."""
+
+    def __init__(self, text: str, parent=None):
+        super().__init__(parent)
+        self._full = text
+        self.setToolTip(text)
+        self.setMinimumWidth(60)
+        self.setSizePolicy(QtWidgets.QSizePolicy.Policy.Ignored,
+                           QtWidgets.QSizePolicy.Policy.Preferred)
+        self._elide()
+
+    def full_text(self) -> str:
+        return self._full
+
+    def _elide(self) -> None:
+        self.setText(self.fontMetrics().elidedText(
+            self._full, Qt.TextElideMode.ElideMiddle, max(10, self.width())))
+
+    def resizeEvent(self, event):              # noqa: N802 — Qt override
+        super().resizeEvent(event)
+        self._elide()
+
+
 def _grey_note(text: str) -> QtWidgets.QLabel:
     lbl = QtWidgets.QLabel(text)
     lbl.setWordWrap(True)
@@ -335,7 +360,15 @@ class MeshMonitorWidget(QtWidgets.QWidget):
         dlay.addWidget(drow_w)
         self.domain_note = _grey_note(_DOMAIN_NONE)
         dlay.addWidget(self.domain_note)
-        lay.addWidget(self.domain_box)
+        dlay.addStretch(1)
+        # The domain strip and the Tor list sit SIDE BY SIDE under the table: stacked,
+        # they pushed the table below six rows in the bottom panel's Running mesh tab
+        # (2026-10-21 round 2). One row, two halves, on every mount.
+        self.controls_row = QtWidgets.QWidget()
+        crow = QtWidgets.QHBoxLayout(self.controls_row)
+        crow.setContentsMargins(0, 0, 0, 0)
+        crow.addWidget(self.domain_box, 1)
+        lay.addWidget(self.controls_row)
         # ── every onion, each with its own Open / Copy ───────────────────────────
         self.onion_box = QtWidgets.QWidget()
         olay = QtWidgets.QVBoxLayout(self.onion_box)
@@ -350,8 +383,9 @@ class MeshMonitorWidget(QtWidgets.QWidget):
         self.onion_grid = QtWidgets.QGridLayout(self.onion_grid_host)
         self.onion_grid.setContentsMargins(0, 0, 0, 0)
         olay.addWidget(self.onion_grid_host)
+        olay.addStretch(1)
         self.onion_box.setVisible(False)
-        lay.addWidget(self.onion_box)
+        crow.addWidget(self.onion_box, 1)
         #: per onion login address: (open button, copy button) — what tests read
         self._onion_rows: dict[str, tuple[QtWidgets.QPushButton,
                                           QtWidgets.QPushButton]] = {}
@@ -841,6 +875,20 @@ class MeshMonitorWidget(QtWidgets.QWidget):
         self.logs_title.setText(title)
         self.logs_view.setPlainText(text or "(no log lines)")
         self.logs_box.setVisible(True)
+        # In the bottom panel the box opens below the fold of the tab's scroll area;
+        # bring it into view, or the press looks like it did nothing. After the
+        # layout has placed it (the next turn of the event loop).
+        QtCore.QTimer.singleShot(0, self._reveal_logs)
+
+    def _reveal_logs(self) -> None:
+        try:
+            w = self.parentWidget()
+            while w is not None and not isinstance(w, QtWidgets.QScrollArea):
+                w = w.parentWidget()
+            if w is not None and self.logs_box.isVisible():
+                w.ensureWidgetVisible(self.logs_box, 0, 0)
+        except RuntimeError:                    # the widget went away first
+            pass
 
     # ── onions ───────────────────────────────────────────────────────────────────
     def onion_buttons(self, login: str):
@@ -862,9 +910,9 @@ class MeshMonitorWidget(QtWidgets.QWidget):
         self._onion_rows = {}
         for r, o in enumerate(onions):
             who = QtWidgets.QLabel(o.domain + (" (the mesh's own)" if o.primary else ""))
-            addr = QtWidgets.QLabel(o.login)
-            addr.setTextInteractionFlags(
-                Qt.TextInteractionFlag.TextSelectableByMouse)
+            # elided to its cell (the full address is the tooltip, and Copy copies it
+            # whole): a 70-character onion must not set the width of the Tor half
+            addr = _ElidedAddress(o.login)
             argv = mesh_controls.tor_browser_argv(o.login)
             open_b = QtWidgets.QPushButton("Open in Tor Browser")
             if argv:
