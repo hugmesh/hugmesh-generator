@@ -17,6 +17,7 @@ import binascii
 import copy
 import json
 import os
+import posixpath
 import re
 import shutil
 import subprocess
@@ -2861,6 +2862,9 @@ RAW_DIGEST_KNOWN_GAPS = {
     "cloudflare/cloudflared:2024.10.0",
     "codeberg.org/forgejo/forgejo:9.0.3",
     "docker.io/bitnamilegacy/cassandra:5.0.5",
+    # apps/00-cassandra.yaml: the cassandra chart 12.3.11 default tag, written out in
+    # round 5 when a repository-only helm image map stopped being read as "no ref".
+    "docker.io/bitnamilegacy/cassandra:5.0.5-debian-12-r7",
     "docker.io/bitnamilegacy/kubectl:1.30",
     "docker.io/bitnamilegacy/kubectl:1.31",
     "gcr.io/kaniko-project/executor:v1.23.2",
@@ -3036,6 +3040,24 @@ _AllPairsLoader.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,
                                 _all_pairs_mapping)
 
 
+def _untagged(loader, _suffix, node):
+    """A node under a tag PyYAML does not know (`!x`, `!!foo`), built as if untagged.
+    go-yaml (helm, kubectl, local-path-provisioner) decodes such a node into its plain
+    map / list / string, so refusing it here would let `metadata: !x` hide every image
+    in the document from this check while the consumer pulls them (round 5, n5/n9)."""
+    if isinstance(node, yaml.MappingNode):
+        return _all_pairs_mapping(loader, node)
+    if isinstance(node, yaml.SequenceNode):
+        return loader.construct_sequence(node, deep=True)
+    return loader.construct_scalar(node)
+
+
+# Known tags (!!binary, !!str, !!int, ...) keep their own constructor: PyYAML looks up
+# an exact tag before a multi-constructor prefix.
+_AllPairsLoader.add_multi_constructor("!", _untagged)
+_AllPairsLoader.add_multi_constructor("tag:", _untagged)
+
+
 def _json_all_pairs(pairs):
     out, dups = {}, []
     for key, val in pairs:
@@ -3084,9 +3106,81 @@ _SET_IMAGE_VALUE_FLAGS = ("-l", "--selector", "-n", "--namespace", "-f", "--file
                           "--kustomize", "--field-manager", "--template")
 
 
-def _text_refs(text):
-    """Image refs the text backstop finds in one string (see _TEXT_IMAGE_RE)."""
+_ESCAPE_RE = re.compile(r"\\(?:x([0-9A-Fa-f]{2})|u([0-9A-Fa-f]{4})|U([0-9A-Fa-f]{8})|([0-7]{3}))")
+
+
+def _unescape(text):
+    """`\\x61`, `\\u0061`, `\\U00000061` and octal `\\141` decoded to the character: the
+    escapes YAML and JSON double-quoted strings, printf and $'..' shell quoting decode
+    before the consumer reads a key or flag. `"im\\x61ge":` is an `image:` key to go-yaml
+    and to kubectl's JSON decoder (round 5, n2/n7/n9)."""
+    def dec(m):
+        code = int(m.group(1) or m.group(2) or m.group(3), 16) if not m.group(4) \
+            else int(m.group(4), 8)
+        try:
+            return chr(code)
+        except (ValueError, OverflowError):
+            return m.group(0)
+    return _ESCAPE_RE.sub(dec, text)
+
+
+# Inside one shell word, quotes only join the pieces: `--ima""ge`, `--im'a'ge` and
+# `--i"mag"e` are all `--image` to the shell (round 5, n8).
+_SHELL_JOIN_RE = re.compile(r"""(?<=[A-Za-z0-9_-])(?:""|''|["'])(?=[A-Za-z0-9_-])""")
+# A flag whose NAME the shell assembles from quotes, escapes or a variable: what flag
+# the program receives cannot be read here, so it is refused (fail closed).
+_UNREADABLE_FLAG_RE = re.compile(
+    r"""(?<![A-Za-z0-9_-])--[A-Za-z0-9-]*["'\\`$][^\s=;|&)]+""")
+# kubectl flags that rewrite the pod spec after --image is applied, so the image the
+# pod runs is not the one --image names (round 5, n6/n7): `run/create --overrides`
+# (with --override-type json/merge/strategic) and `debug --custom`.
+_OVERRIDE_FLAG_RE = re.compile(r"(?<![A-Za-z0-9_-])--(override-type|overrides|custom)(?![A-Za-z0-9_-])")
+# A JSON patch op written as text (`kubectl patch --type json -p ...`) onto an image
+# path: its value is the image, and it is not written as an `image:` key.
+_TEXT_PATCH_IMAGE_RE = re.compile(r"""(?i)["']?path["']?\s*:\s*["']?[^"'\s,}]*image""")
+
+
+def _text_variants(text):
     joined = re.sub(r"\\\r?\n", " ", text)    # shell line continuations
+    out = [joined]
+    for v in (_unescape(joined), _SHELL_JOIN_RE.sub("", joined),
+              _SHELL_JOIN_RE.sub("", _unescape(joined))):
+        if v not in out:
+            out.append(v)
+    return out
+
+
+def _text_refusals(text, parsed=False):
+    """Reasons a string cannot be read by the text backstop at all (fail closed).
+    A JSON-patch op in text is refused only when the string did not parse: a parsed
+    op list is read op by op by _image_refs."""
+    out = []
+    for v in _text_variants(text):
+        for m in _UNREADABLE_FLAG_RE.finditer(v):
+            out.append("passes a command-line flag whose name is assembled from quotes, "
+                       "escapes or a variable (%r), so whether it is --image cannot be read"
+                       % m.group(0))
+        for m in _OVERRIDE_FLAG_RE.finditer(v):
+            out.append("passes kubectl --%s, which rewrites the pod spec after --image, so "
+                       "the image the pod runs cannot be read here: write a manifest instead"
+                       % m.group(1))
+        for m in ([] if parsed else _TEXT_PATCH_IMAGE_RE.finditer(v)):
+            out.append("holds a JSON patch op onto an image path (%r); the image it writes "
+                       "cannot be read here: set the image in a manifest" % m.group(0))
+    return sorted(set(out))
+
+
+def _text_refs(text):
+    """Image refs the text backstop finds in one string (see _TEXT_IMAGE_RE), read in
+    every spelling a consumer decodes: as written, with escapes decoded, and with shell
+    quote-joins removed."""
+    out = []
+    for joined in _text_variants(text):
+        out.extend(r for r in _text_refs_one(joined) if r not in out)
+    return out
+
+
+def _text_refs_one(joined):
     out = []
     for rx in (_TEXT_IMAGE_RE, _TEXT_FLAG_RE):
         for m in rx.finditer(joined):
@@ -3159,7 +3253,17 @@ def _helm_tag_only(val):
             and (val.get("tag") is not None or val.get("digest") is not None))
 
 
-def _image_refs(node, depth=0):
+class _ContainerRef(str):
+    """The `image` of an item of a `containers:` / `initContainers:` list: the only
+    field kustomize's `images:` transformer rewrites (measured: kustomize v5.8.1 leaves
+    an Argo WorkflowTemplate `container.image`, a `sidecars:` item and any other
+    `image:` untouched). Only such a ref may be credited to an `images:` entry."""
+
+
+_CONTAINER_LIST_KEYS = ("containers", "initContainers")
+
+
+def _image_refs(node, depth=0, container_item=False):
     """Every image ref set under `node`: any `image:` key (string, YAML !!binary, or a
     helm-style {registry, repository, tag, digest} map), recursing into YAML or JSON
     embedded in ANY string (single-line JSON included) plus a text backstop over the
@@ -3181,6 +3285,22 @@ def _image_refs(node, depth=0):
                       and _WHERE[0].replace(os.sep, "/").startswith("catalog/"))
         kind = node.get("kind")
         b64key = _BASE64_MAPS.get(kind) if isinstance(kind, str) else None
+        op_path = node.get("path")
+        if isinstance(node.get("op"), str) and isinstance(op_path, str) \
+                and op_path.rstrip("/").rsplit("/", 1)[-1].lower().endswith("image") \
+                and "value" in node:
+            # A JSON-patch op held as data (a ConfigMap a Job feeds to `kubectl patch`):
+            # the value it writes onto an image path is an image.
+            val = node["value"]
+            if isinstance(val, str):
+                # A patch FILE kustomize applies before its images: rewrite gets the
+                # same credit as the container field it writes; inside a string the
+                # caller re-wraps it as _EmbeddedRef (no credit).
+                yield (_ContainerRef(val) if re.search(
+                    r"/(?:containers|initContainers)/[^/]+/image$", op_path) else val)
+            elif not isinstance(val, dict):
+                fail("[image-pin]", "%s: a JSON-patch op onto %s writes %r, not an image "
+                     "string" % (_WHERE[0], op_path, val))
         for key, val in node.items():
             if key == "image" and descriptor and isinstance(val, str):
                 continue
@@ -3201,7 +3321,7 @@ def _image_refs(node, depth=0):
                 continue
             if key == "image":
                 if isinstance(val, str):
-                    yield val
+                    yield _ContainerRef(val) if container_item else val
                     continue
                 if isinstance(val, (bytes, bytearray)):
                     text = _decoded_text(val, "a !!binary `image:` value")
@@ -3218,6 +3338,12 @@ def _image_refs(node, depth=0):
                     ref = _helm_image_ref(val)
                     if ref is not None:
                         yield ref
+                    elif isinstance(val.get("repository"), str) and val.get("repository"):
+                        fail("[image-pin]",
+                             "%s: a helm image map sets repository %r but no tag or digest: "
+                             "the chart's own default tag is pulled for an image this tree "
+                             "names, and that tag cannot be seen here (n3). Set tag AND digest."
+                             % (_WHERE[0], val.get("repository")))
                     elif _helm_tag_only(val):
                         fail("[image-pin]",
                              "%s: a helm image map %r sets a tag/digest but no repository: "
@@ -3229,10 +3355,25 @@ def _image_refs(node, depth=0):
                          "an image map, so the ref it pulls cannot be judged"
                          % (_WHERE[0], val, type(val).__name__))
                     continue
+            if key in _CONTAINER_LIST_KEYS and isinstance(val, list):
+                for item in val:
+                    yield from _image_refs(item, depth + 2, container_item=True)
+                continue
             yield from _image_refs(val, depth + 1)
     elif isinstance(node, list):
+        seen = set()
         for item in node:
-            yield from _image_refs(item, depth + 1)
+            for ref in _image_refs(item, depth + 1):
+                seen.add(ref)
+                yield ref
+        # An argv list (`command:` / `args:`): a flag and its value are separate items,
+        # `["--image", "busybox:latest"]`, so the items are also read joined (n13).
+        words = [x for x in node if isinstance(x, str)]
+        if len(words) > 1:
+            for ref in _image_refs(" ".join(words), depth + 1):
+                if ref not in seen:
+                    seen.add(ref)
+                    yield _EmbeddedRef(ref)
     elif isinstance(node, (bytes, bytearray)):
         text = _decoded_text(node, "a !!binary value")
         if text is not None:
@@ -3240,12 +3381,15 @@ def _image_refs(node, depth=0):
                 yield _EmbeddedRef(ref)
     elif isinstance(node, str):
         seen = set()
-        if ":" in node:
-            for sub in _parse_embedded(node) or []:
-                if isinstance(sub, (dict, list, bytes)):
-                    for ref in _image_refs(sub, depth + 1):
-                        seen.add(ref)
-                        yield _EmbeddedRef(ref)
+        subs = _parse_embedded(node) if ":" in node else None
+        for sub in subs or []:
+            if isinstance(sub, (dict, list, bytes)):
+                for ref in _image_refs(sub, depth + 1):
+                    seen.add(ref)
+                    yield _EmbeddedRef(ref)
+        parsed = any(isinstance(sub, (dict, list)) for sub in subs or [])
+        for why in _text_refusals(node, parsed):
+            fail("[image-pin]", "%s: a string %s." % (_WHERE[0], why))
         for ref in _text_refs(node):
             if ref not in seen:
                 seen.add(ref)
@@ -3312,7 +3456,8 @@ def _patch_image_refs(obj, where):
             val = op.get("value")
             if last == "image":
                 if isinstance(val, str):
-                    yield val
+                    yield (_ContainerRef(val) if re.search(
+                        r"/(?:containers|initContainers)/[^/]+/image$", path) else val)
                 elif isinstance(val, dict) and _helm_image_ref(val) is not None:
                     yield _helm_image_ref(val)
                 else:
@@ -3429,6 +3574,14 @@ _HELM_IMAGEISH_RE = re.compile(r"image|tag|digest|repositor|registry", re.I)
 _HELM_SEGMENT_RE = re.compile(r"^([^\[\]]*)((?:\[\d+\])*)$")
 
 
+def _helm_param_unsafe(name):
+    """True if a helm parameter NAME holds an unescaped `,` or `=`. Argo CD passes
+    `--set <name>=<value>` and escapes commas in the value only, so helm splits such a
+    name into SEVERAL assignments: `image.tag=latest,image.pullPolicy` sets image.tag
+    (n14)."""
+    return bool(re.search(r"(?<!\\)[,=]", name))
+
+
 def _helm_param_path(name):
     """`a.b[0].c` / `a\\.b` (helm --set syntax) -> ["a", "b", 0, "c"], or None."""
     segs, cur, i = [], "", 0
@@ -3510,6 +3663,11 @@ def _helm_override_refs(blk, where):
     before = set(_image_refs(copy.deepcopy(merged), 1))
     for prm in params:
         name = prm.get("name") if isinstance(prm, dict) else None
+        if isinstance(name, str) and _helm_param_unsafe(name):
+            fail("[image-pin]", "%s: helm parameter name %r holds an unescaped `,` or `=`; "
+                 "helm splits it into several assignments this check cannot read "
+                 "(write one parameter per value)" % (where, name))
+            continue
         path = _helm_param_path(name) if isinstance(name, str) else None
         if path is None or not _helm_set(merged, path, prm.get("value")):
             if not isinstance(name, str) or _HELM_IMAGEISH_RE.search(name):
@@ -3632,6 +3790,114 @@ _VALUES_IMAGE_LINE_RE = re.compile(
     r"""(?:registry|repository|tag|digest)\s*-?\}\}|[:/@])+)\1\s*(?:#.*)?$""")
 
 
+_TPL_ACTION_RE = re.compile(r"\{\{(.*?)\}\}", re.S)
+_TPL_LITERAL_RE = re.compile(r'"(?:\\.|[^"\\])*"|`[^`]*`')
+# The template functions and keywords an in-tree chart may use. Each either passes
+# a value through unchanged, picks one of several, indents it, or aborts. Anything
+# else (tpl, fromYaml, b64dec, replace, cat, lookup, dict, ...) can build or decode an
+# image key or ref that neither the text read nor one render can see: refused.
+_TPL_ALLOWED_FUNCS = frozenset("""
+    if else end range with define include template block toYaml nindent indent quote
+    squote default required not eq ne lt le gt ge and or has list ternary printf print
+    fail sha256sum trunc trimSuffix empty nil true false len index
+""".split())
+# Render state the gate's `helm template` cannot reproduce the way Argo CD does (it
+# passes the destination namespace, the cluster's --api-versions and --kube-version):
+# a branch on it can show the gate one manifest and the cluster another (n1).
+_TPL_RENDER_STATE_RE = re.compile(
+    r"\.(?:Capabilities|Release\.(?:Namespace|IsInstall|IsUpgrade|Revision|Service))\b")
+_TPL_IDENT_RE = re.compile(r"(?<![.$\w])[A-Za-z_]\w*")
+_TPL_TOKEN_RE = re.compile(r'"(?:\\.|[^"\\])*"|`[^`]*`|\(|\)|\||[^\s()|]+')
+
+
+def _tpl_print_operands(body):
+    """The most non-literal operands any print/printf/println call in one action takes."""
+    toks = _TPL_TOKEN_RE.findall(body)
+    worst = 0
+    for i, t in enumerate(toks):
+        if t not in ("print", "printf", "println"):
+            continue
+        depth, n, j = 0, 0, i + 1
+        while j < len(toks):
+            u = toks[j]
+            if u == "(":
+                if depth == 0:
+                    n += 1
+                depth += 1
+            elif u == ")":
+                if depth == 0:
+                    break
+                depth -= 1
+            elif u == "|" and depth == 0:
+                break
+            elif depth == 0 and u[0] not in "\"`":
+                n += 1
+            j += 1
+        worst = max(worst, n)
+    return worst
+
+
+def _template_refusals(text):
+    """Reasons a chart template cannot be read as text with certainty (fail closed).
+    The text read sees every branch of every `if`, so a condition hides nothing from
+    it; what it cannot see is text a template action ASSEMBLES: a key split by an
+    action (`ima{{""}}ge:`), a key that is an action, a YAML-escaped key, a string
+    literal carrying YAML structure, or a function that builds or decodes text."""
+    out = []
+    spliced = set()
+    for m in _TPL_ACTION_RE.finditer(text):
+        # The character the action's output (or, for a control action, the text it
+        # trims up to) is joined to on each side: `{{-` / `-}}` trim whitespace,
+        # newlines included, so `ima\n{{- "" -}}\nge:` is `image:` too.
+        left = text[:m.start()]
+        right = text[m.end():]
+        if m.group(0).startswith("{{-"):
+            left = left.rstrip()
+        if m.group(0).endswith("-}}"):
+            right = right.lstrip()
+        lw = bool(re.match(r"\w", left[-1:]))
+        rw = bool(re.match(r"\w", right[:1]))
+        body = m.group(1).strip("- \t\n")
+        control = bool(re.match(r"(?:if|else|end|range|with|define|block|break|continue)\b|/\*|\$\w*\s*:?=", body))
+        if not ((lw and rw) if control else (lw or rw)):
+            continue
+        line = text.count("\n", 0, m.start()) + 1
+        if line in spliced:
+            continue
+        spliced.add(line)
+        out.append("line %d: a template action joined to a word (%r) assembles a key or "
+                   "value the text read cannot see" % (line, text[max(0, m.start() - 12):m.end() + 12]))
+    blanked = _TPL_ACTION_RE.sub("\x00", text)
+    for lineno, line in enumerate(blanked.splitlines(), 1):
+        if line.lstrip().startswith("#"):
+            continue   # a YAML comment line: an action there is not a key
+        key = re.match(r"^\s*(?:-\s+)*(.*?):(?:\s|$)", line)
+        if key and "\x00" in key.group(1):
+            out.append("line %d: a YAML key written by a template action" % lineno)
+        if re.search(r'"[^"\n]*\\[^"\n]*"\s*:(?:\s|$)', line):
+            out.append("line %d: a YAML key spelled with a backslash escape" % lineno)
+    for m in _TPL_ACTION_RE.finditer(text):
+        body = re.sub(r"/\*.*?\*/", "", m.group(1), flags=re.S)
+        line = text.count("\n", 0, m.start()) + 1
+        if _TPL_RENDER_STATE_RE.search(body):
+            out.append("line %d: the action %r reads render state (namespace, API versions, "
+                       "install/upgrade) that the gate's helm render cannot reproduce"
+                       % (line, m.group(0)[:80]))
+        for lit in _TPL_LITERAL_RE.findall(body):
+            if lit.startswith("`") or re.search(r"[:\n\\]|%[cU]", lit[1:-1]):
+                out.append("line %d: the string literal %r in a template action may carry "
+                           "YAML structure (a colon, newline, escape or %%c)" % (line, lit[:60]))
+        bare = _TPL_LITERAL_RE.sub('""', body)
+        for ident in _TPL_IDENT_RE.findall(bare):
+            if ident not in _TPL_ALLOWED_FUNCS:
+                out.append("line %d: template function %r is not one this check models "
+                           "(it may build or decode an image)" % (line, ident))
+        if _tpl_print_operands(body) > 1:
+            out.append("line %d: print/printf joins more than one value (%r), which can "
+                       "assemble a key or ref from pieces" % (line, m.group(0)[:80]))
+    return out
+
+
 def _chart_template_refs(root, structured):
     """[(rel, refs)] for every file of an in-tree chart (a directory holding Chart.yaml)
     that the manifest walk does not read structurally (`structured`): its templates/
@@ -3655,6 +3921,11 @@ def _chart_template_refs(root, structured):
             except Exception as exc:
                 fail("[image-pin]", "%s: chart template cannot be read (%s)" % (rel, exc))
                 continue
+            if "templates" in os.path.relpath(dirpath, root).split(os.sep):
+                for why in _template_refusals(text):
+                    fail("[image-pin]", "%s (chart template): %s" % (rel, why))
+            for why in _text_refusals(text):
+                fail("[image-pin]", "%s (chart file): a string %s." % (rel, why))
             kept = []
             for line in text.splitlines():
                 m = _VALUES_IMAGE_LINE_RE.match(line)
@@ -3722,6 +3993,78 @@ def _check_argo_source_paths(doc, rel):
                      "manifests under specs/cluster." % (rel, pth))
 
 
+# Keys of an Argo CD source's kustomize / helm block. An unknown key may change what
+# is rendered in a way this check does not model, so it is refused, not ignored.
+_ARGO_KUSTOMIZE_KEYS = frozenset("""
+    images patches components commonLabels commonAnnotations commonAnnotationsEnvsubst
+    forceCommonLabels forceCommonAnnotations namePrefix nameSuffix namespace replicas
+    version kubeVersion apiVersions labelWithoutSelector labelIncludeTemplates
+""".split())
+_ARGO_HELM_KEYS = frozenset("""
+    values valuesObject parameters releaseName valueFiles fileParameters passCredentials
+    ignoreMissingValueFiles skipCrds skipSchemaValidation skipTests version namespace
+    kubeVersion apiVersions
+""".split())
+
+
+def _check_argo_source_fields(doc, rel, root):
+    """What an Argo source can add beyond the tree this check reads (round 5):
+    a revision of THIS repo other than main (n11: the cluster applies a commit or a
+    branch nobody judged here), kustomize `components:` outside specs/cluster (n10), a
+    config-management plugin or Jsonnet, and kustomize/helm keys this check does not
+    model. A list ApplicationSet is checked per element; another generator's template
+    is checked as written."""
+    if doc.get("kind") not in ("Application", "ApplicationSet"):
+        return
+    apps = list(_argo_apps(doc, rel, root=root))
+    if doc.get("kind") == "ApplicationSet" and not apps:
+        apps = [doc.get("spec", {}).get("template") or {}]
+    for app in apps:
+        for src in _argo_source_nodes(app.get("spec") if isinstance(app, dict) else None):
+            this_repo = bool(_THIS_REPO_RE.search(str(src.get("repoURL") or "")))
+            if this_repo:
+                rev = str(src.get("targetRevision") or "HEAD").strip()
+                if rev not in ("main", "HEAD"):
+                    fail("[image-pin]", "%s: an Argo source in this repo pins targetRevision "
+                         "%r. The cluster then applies that commit or branch, not the tree "
+                         "this check read: use `main`." % (rel, rev))
+            if src.get("plugin") is not None:
+                fail("[image-pin]", "%s: an Argo source uses a config-management `plugin:`, "
+                     "whose output (and every image in it) this check cannot read" % rel)
+            dirb = src.get("directory")
+            if isinstance(dirb, dict) and dirb.get("jsonnet"):
+                fail("[image-pin]", "%s: an Argo directory source sets `jsonnet:`, which this "
+                     "check cannot evaluate" % rel)
+            kz = src.get("kustomize")
+            if isinstance(kz, dict):
+                for key in sorted(set(kz) - _ARGO_KUSTOMIZE_KEYS):
+                    fail("[image-pin]", "%s: Argo kustomize key %r is not one this check "
+                         "models; it may change the images rendered" % (rel, key))
+                base = _argo_chart_key(src)
+                for comp in kz.get("components") or []:
+                    target = None
+                    if base is not None and isinstance(comp, str):
+                        norm = posixpath.normpath(posixpath.join("/specs/cluster", base, comp))
+                        if norm.startswith("/specs/cluster/"):
+                            target = os.path.join(root, norm[len("/specs/cluster/"):])
+                    if target is None or not os.path.isdir(target):
+                        fail("[image-pin]", "%s: Argo kustomize component %r is not a directory "
+                             "under specs/cluster of this repo, so the patches and images it "
+                             "applies are never read here" % (rel, comp))
+            hb = src.get("helm")
+            if isinstance(hb, dict):
+                for key in sorted(set(hb) - _ARGO_HELM_KEYS):
+                    fail("[image-pin]", "%s: Argo helm key %r is not one this check models; it "
+                         "may change the images rendered" % (rel, key))
+                vals = hb.get("values")
+                if isinstance(vals, str) and vals.strip():
+                    parsed = _parse_embedded(vals)
+                    if not parsed or not isinstance(parsed[0], (dict, type(None))):
+                        fail("[image-pin]", "%s: Argo helm.values does not parse as a YAML "
+                             "map here, so the images it sets cannot be read (helm may read "
+                             "it differently)" % rel)
+
+
 def _argo_sources(doc):
     spec = doc.get("spec") if isinstance(doc.get("spec"), dict) else {}
     srcs = []
@@ -3729,6 +4072,58 @@ def _argo_sources(doc):
         srcs.append(spec["source"])
     srcs.extend(x for x in spec.get("sources") or [] if isinstance(x, dict))
     return srcs
+
+
+def _argo_chart_key(src):
+    """The specs/cluster-relative path an Argo source in THIS repo applies, cleaned the
+    way Argo cleans it (filepath.Join: `./specs/cluster/x/` is `specs/cluster/x`, n3);
+    None for another repo or no path."""
+    if "path" not in src or not _THIS_REPO_RE.search(str(src.get("repoURL") or "")):
+        return None
+    norm = posixpath.normpath("/" + str(src.get("path") or "").replace("\\", "/")).lstrip("/")
+    if norm.startswith("specs/cluster/"):
+        return norm[len("specs/cluster/"):]
+    return None
+
+
+def _tpl_fill(node, element):
+    """`node` with every `{{ .key }}` / `{{key}}` an ApplicationSet list element sets
+    replaced by its value; other template expressions are left as written."""
+    if isinstance(node, dict):
+        return {k: _tpl_fill(v, element) for k, v in node.items()}
+    if isinstance(node, list):
+        return [_tpl_fill(v, element) for v in node]
+    if isinstance(node, str) and "{{" in node:
+        return _TEMPLATE_KEY_RE.sub(lambda m: str(element[m.group(1)])
+                                    if m.group(1) in element else m.group(0), node)
+    return node
+
+
+def _argo_apps(doc, rel, report=True, root=None):
+    """The Applications a document makes: itself, or one per list-generator element of
+    an ApplicationSet (its template filled in). An ApplicationSet with any other
+    generator over an in-tree chart cannot be expanded here: refused (n4)."""
+    kind = doc.get("kind")
+    if kind == "Application":
+        yield doc
+        return
+    if kind != "ApplicationSet":
+        return
+    spec = doc.get("spec") if isinstance(doc.get("spec"), dict) else {}
+    tmpl = spec.get("template") if isinstance(spec.get("template"), dict) else {}
+    gens = spec.get("generators") or []
+    if gens and all(isinstance(g, dict) and set(g) - {"selector"} == {"list"} for g in gens):
+        for g in gens:
+            for e in (g["list"].get("elements") or []):
+                yield _tpl_fill(tmpl, e if isinstance(e, dict) else {})
+        return
+    for src in _argo_sources(tmpl):
+        key = _argo_chart_key(src)
+        if report and key is not None and root is not None \
+                and os.path.isfile(os.path.join(root, key, "Chart.yaml")):
+            fail("[image-pin]", "%s: ApplicationSet %r over this repo uses a generator other "
+                 "than `list`, so the Applications (and helm values) it makes cannot be "
+                 "expanded and rendered here" % (rel, (doc.get("metadata") or {}).get("name")))
 
 
 def _helm_render_refs(root):
@@ -3744,16 +4139,13 @@ def _helm_render_refs(root):
     for dirpath, _dirnames, filenames in os.walk(root):
         if "Chart.yaml" in filenames and not _in_chart_templates(dirpath):
             charts[os.path.relpath(dirpath, root).replace(os.sep, "/")] = dirpath
-    runs = [("%s (helm template, chart values)" % rel, d, "release", None, [])
+    runs = [("%s (helm template, chart values)" % rel, d, "release", None, [], None)
             for rel, d in sorted(charts.items())]
-    for path in yaml_files(root):
-        for doc in docs_of(path):
-            if doc.get("kind") != "Application":
-                continue
-            for src in _argo_sources(doc):
-                spath = str(src.get("path") or "").strip("/")
-                if spath.startswith("specs/cluster/"):
-                    spath = spath[len("specs/cluster/"):]
+    for path in _pin_files(root):
+        rel = os.path.relpath(path, root)
+        for app in (a for doc in _pin_docs(path, root) for a in _argo_apps(doc, rel, False)):
+            for src in _argo_sources(app):
+                spath = _argo_chart_key(src)
                 if spath not in charts:
                     continue
                 blk = src.get("helm") if isinstance(src.get("helm"), dict) else {}
@@ -3769,15 +4161,25 @@ def _helm_render_refs(root):
                     vals.update(copy.deepcopy(blk["valuesObject"]))
                 sets = []
                 for prm in blk.get("parameters") or []:
-                    if isinstance(prm, dict) and isinstance(prm.get("name"), str):
+                    if isinstance(prm, dict) and isinstance(prm.get("name"), str) \
+                            and not _helm_param_unsafe(prm["name"]):
                         flag = "--set-string" if prm.get("forceString") else "--set"
                         sets += [flag, "%s=%s" % (prm["name"], prm.get("value", ""))]
-                runs.append(("%s (helm template via %s)" % (spath, os.path.relpath(path, root)),
-                             charts[spath], str(blk.get("releaseName") or "release"), vals, sets))
+                # As Argo CD runs it: release = helm.releaseName or the Application's
+                # name, --namespace = helm.namespace or the destination namespace.
+                meta = app.get("metadata") if isinstance(app.get("metadata"), dict) else {}
+                dest = (app.get("spec") or {}).get("destination") or {}
+                release = str(blk.get("releaseName") or meta.get("name") or "release")
+                ns = str(blk.get("namespace") or (dest.get("namespace") if isinstance(dest, dict)
+                                                  else "") or "")
+                runs.append(("%s (helm template via %s)" % (spath, rel), charts[spath],
+                             release, vals, sets, ns or None))
     out = {}
     with tempfile.TemporaryDirectory() as tmp:
-        for i, (label, d, release, vals, sets) in enumerate(runs):
+        for i, (label, d, release, vals, sets, ns) in enumerate(runs):
             cmd = [helm, "template", release, d]
+            if ns:
+                cmd += ["--namespace", ns]
             if vals is not None:
                 vf = os.path.join(tmp, "values-%d.yaml" % i)
                 with open(vf, "w", encoding="utf-8") as fh:
@@ -3837,11 +4239,14 @@ def check_image_pins(root):
             dname = os.path.relpath(d, root)
             for key in ("resources", "components", "bases"):
                 for r in doc.get(key) or []:
-                    if isinstance(r, str) and ("://" in r or "?ref=" in r or r.startswith(
-                            ("github.com/", "gitlab.com/", "bitbucket.org/", "git@"))):
-                        fail("[image-pin]", "%s: `%s:` pulls in the REMOTE %r; the images it "
-                             "sets cannot be read here (and a ?ref= branch moves). Vendor it "
-                             "into the tree." % (rel, key, r))
+                    # kustomize fetches ANY entry that is not a local file or directory
+                    # as a remote (`git::github.com/..`, `github.com:org/repo//dir`, n16),
+                    # so the test is "exists locally", not a list of remote spellings.
+                    if not isinstance(r, str) or not os.path.exists(os.path.join(d, r)):
+                        fail("[image-pin]", "%s: `%s:` pulls in the REMOTE %r: it is not a "
+                             "file or directory in this checkout, so kustomize fetches it, "
+                             "and the images it sets cannot be read here (and a branch "
+                             "moves). Vendor it into the tree." % (rel, key, r))
             for key in _UNREADABLE_KUSTOMIZE_KEYS:
                 if doc.get(key):
                     fail("[image-pin]", "%s: uses `%s:`, whose output (including any image it "
@@ -3957,7 +4362,7 @@ def check_image_pins(root):
             name, tag, _dg = _split_image_ref(ref.strip())
             # A literal :latest is refused even behind a rewrite: the tag is what a
             # reader of the file trusts, and the rewrite is one edit from vanishing.
-            if exemptible and not isinstance(ref, _EmbeddedRef) and tag.lower() != "latest" \
+            if exemptible and isinstance(ref, _ContainerRef) and tag.lower() != "latest" \
                     and exempt(name, own_dir, file_path):
                 continue
             if rendered and ref.strip() in entry_gap_refs:
@@ -3980,6 +4385,7 @@ def check_image_pins(root):
                                  d, None, exemptible=not is_comp)
         _check_replacements(doc, d, rel)
         for label, text in _generator_texts(doc, d, rel):
+            _WHERE[0] = "%s (%s)" % (rel, label)
             patched += judge_all(list(_image_refs(text, 1)), "%s (%s)" % (rel, label),
                                  d, None, exemptible=False)
 
@@ -4010,6 +4416,20 @@ def check_image_pins(root):
             if isinstance(doc, dict) and doc.get("kind") in _KUSTOMIZE_KINDS:
                 continue
             raw += judge_all(list(_image_refs(doc)), _WHERE[0], d, os.path.normpath(p))
+    # A chart dependency is a chart this tree does not hold (n15): its templates and
+    # default images are never read, and a version range moves.
+    for dirpath, _dirs, filenames in os.walk(root):
+        if "Chart.yaml" in filenames:
+            crel = os.path.relpath(os.path.join(dirpath, "Chart.yaml"), root)
+            for cdoc in docs_of(os.path.join(dirpath, "Chart.yaml")):
+                if cdoc.get("dependencies"):
+                    fail("[image-pin]", "%s: declares chart `dependencies:`, charts this check "
+                         "never reads (their images and templates); vendor them as in-tree "
+                         "charts or deploy them as their own Argo app" % crel)
+            if os.path.isdir(os.path.join(dirpath, "charts")) and os.listdir(
+                    os.path.join(dirpath, "charts")):
+                fail("[image-pin]", "%s: has a charts/ subdirectory (vendored subcharts or "
+                     "archives) that this check does not render" % crel)
     for rel, refs in _chart_template_refs(root, scanned):
         raw += judge_all(refs, "%s (chart file, read as text)" % rel, None, None,
                          exemptible=False)
@@ -4024,6 +4444,7 @@ def check_image_pins(root):
                 continue
             raw += judge_all(list(_image_refs(doc)), rel, d, os.path.normpath(path))
             _check_argo_source_paths(doc, rel)
+            _check_argo_source_fields(doc, rel, root)
             # An Argo Application's own kustomize overrides.
             for blk in _argo_kustomize_blocks(doc):
                 for s in blk.get("images") or []:
@@ -4085,7 +4506,11 @@ def check_image_pins(root):
            "FIRST-PARTY images follow the moving `main` tag and are NOT checked beyond "
            ":latest/untagged; images a third-party (remote) helm chart defaults internally "
            "are not visible, and remote Argo helm sources are judged statically only; "
-           "in-tree charts are read as text and rendered with helm when it is on PATH; "
+           "in-tree charts are read as text (a template that assembles a key or ref, or "
+           "branches on render state, is refused) and rendered with helm when it is on "
+           "PATH the way Argo CD renders them (release name, destination namespace, "
+           "list ApplicationSets expanded); YAML under unknown tags is read as go-yaml "
+           "reads it; a this-repo Argo source must track main; "
            "files read: .yaml/.yml/.json, kustomize resources of any name, ConfigMap "
            "binaryData / Secret data decoded, YAML !!binary decoded; %s"
            % (entries, raw, patched, len(FLOATING_TAG_KNOWN_GAPS),

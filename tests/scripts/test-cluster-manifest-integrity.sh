@@ -1570,6 +1570,244 @@ expect_catch "env {name: HELPER_IMAGE, value: busybox:latest}" "$(ipw "manifests
 expect_catch "script HELPER_IMAGE=busybox:latest (env-style assignment)" "$(ph_want busybox:latest)" '
   printf "\nHELPER_IMAGE=busybox:latest\n" >> "$T/${PH}"
 '
+# ── (24) IMAGE PINS, round 5: what Argo renders, what Go's YAML reads, what a shell
+# joins ──────────────────────────────────────────────────────────────────────────
+# A review got a mutable image past round 4 with the gate green, static AND render:
+#   (a) an in-tree chart template whose key is split by an empty action
+#       (`ima{{""}}ge:`) or escaped (`"im\x61ge":`), inside an `if` on
+#       .Release.Namespace that the gate's own helm render (no --namespace) skipped;
+#   (b) a repository-only helm image map (`image: {repository: busybox}`), read as
+#       "no ref" though the chart's default tag is pulled for it; the same through a
+#       `./specs/cluster/...` path and an ApplicationSet, neither of which was rendered;
+#   (c) YAML under a tag PyYAML refuses (`!x`) and go-yaml accepts, which hid a whole
+#       helm values string or helper-pod spec from the walk;
+#   (d) kubectl `--overrides` / `--override-type`, `--ima""ge`, and `--image` and its
+#       value as two items of an args list;
+#   (e) Argo fields never read: kustomize.components outside the tree, a pinned
+#       targetRevision, a helm parameter NAME with a comma;
+#   (f) static-only: a CRD `container.image` credited to an `images:` rewrite that
+#       kustomize never applies to it, a Chart.yaml dependency, and remote kustomize
+#       resources spelled without `://`.
+R5_TPL=charts/hugmesh-gateway/templates/r5-probe.yaml
+r5tpl() {  # <container line(s)> [condition]: write a probe Pod template into the chart
+  { [ -n "${2:-}" ] && printf '{{- if %s }}\n' "$2"
+    printf 'apiVersion: v1\nkind: Pod\nmetadata:\n  name: r5-probe\nspec:\n  containers:\n    - name: p\n%s\n' "$1"
+    [ -n "${2:-}" ] && printf '{{- end }}\n'; true; } > "$T/${R5_TPL}"
+}
+ph_want_r5() { ipw "manifests/prod-hygiene/kustomization.yaml (configMapGenerator prod-hygiene-script file validate-prod-hygiene.sh): $1"; }
+tplw() { ipw "${R5_TPL} (chart template): line $1: $2"; }
+# (24a) THE REPORTED EXPLOIT n1: an action splitting the key, behind a namespace test.
+expect_catch "chart template key split by an empty action: ima{{\"\"}}ge" "$(tplw 8 'a template action joined to a word')" '
+  r5tpl "      ima{{\"\"}}ge: busybox:latest"
+'
+expect_catch "chart template key joined across a newline by {{- \"\" -}} trimming" "$(tplw 9 'a template action joined to a word')" '
+  r5tpl "      ima
+{{- \"\" -}}
+      ge: busybox:latest"
+'
+expect_catch "chart template branch on .Release.Namespace (render state the gate cannot reproduce)" "$(tplw 1 "the action '{{- if ne .Release.Namespace \"default\" }}' reads render state")" '
+  r5tpl "      image: registry.hugmesh.net/hugmesh/hugmesh-gateway:dev" "ne .Release.Namespace \"default\""
+'
+expect_catch "chart template branch on .Capabilities.APIVersions.Has" "$(tplw 1 "the action '{{- if .Capabilities.APIVersions.Has \"r5/v1\" }}' reads render state")" '
+  r5tpl "      image: registry.hugmesh.net/hugmesh/hugmesh-gateway:dev" ".Capabilities.APIVersions.Has \"r5/v1\""
+'
+# (24b) THE REPORTED EXPLOIT n2/n2b: a YAML-escaped key; the text read decodes it.
+expect_catch "chart template \"im\\x61ge\": busybox:latest (escape decoded)" "$(ipw "${R5_TPL} (chart file, read as text): image 'busybox:latest'")" '
+  r5tpl "      \"im\\x61ge\": \"busybox:latest\""
+'
+expect_catch "chart template key spelled with an escape (fail closed)" "$(tplw 8 'a YAML key spelled with a backslash escape')" '
+  r5tpl "      \"im\\x61ge\": \"registry.hugmesh.net/hugmesh/hugmesh-gateway:dev\""
+'
+# (24c) other ways a template assembles text: a key that IS an action, a function
+# outside the modelled set, printf joining two values, a literal carrying a colon.
+expect_catch "chart template key written by an action" "$(tplw 8 'a YAML key written by a template action')" '
+  r5tpl "      {{ .Values.instance.name }}: busybox:latest"
+'
+expect_catch "chart template function tpl (not modelled, fail closed)" "$(tplw 9 "template function 'tpl' is not one this check models")" '
+  r5tpl "      image: registry.hugmesh.net/hugmesh/hugmesh-gateway:dev
+      args: [{{ tpl .Values.instance.name . }}]"
+'
+expect_catch "chart template printf joining two values" "$(tplw 9 'print/printf joins more than one value')" '
+  r5tpl "      image: registry.hugmesh.net/hugmesh/hugmesh-gateway:dev
+      args: [{{ printf \"%s%s\" .Values.instance.name .Release.Name }}]"
+'
+expect_catch "chart template literal with a colon in an action" "$(tplw 9 "the string literal '\"ge: busybox\"' in a template action")" '
+  r5tpl "      image: registry.hugmesh.net/hugmesh/hugmesh-gateway:dev
+      args: [{{ print \"ge: busybox\" }}]"
+'
+# (24d) THE REPORTED EXPLOIT n3/n3b/n4: a repository-only helm image map.
+R5_REPO_ONLY='      values: |
+        image:
+          repository: busybox
+        instance:
+'
+expect_catch "Argo helm values image: {repository: busybox} with no tag (chart default tag)" "$(ipw "apps/20-gateway-pki.yaml: a helm image map sets repository 'busybox' but no tag or digest")" '
+  imgswap apps/20-gateway-pki.yaml "      values: |
+        instance:
+" "${R5_REPO_ONLY}"
+'
+export R5_REPO_ONLY
+R5_APPSET='apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata: {name: r5-probe, namespace: devops}
+spec:
+  goTemplate: true
+  generators:
+    - list:
+        elements:
+          - {slug: probe}
+  template:
+    metadata: {name: "r5-{{ .slug }}"}
+    spec:
+      project: default
+      source:
+        repoURL: https://github.com/hugmesh/hugmesh-generator.git
+        targetRevision: main
+        path: specs/cluster/charts/hugmesh-gateway
+        helm:
+          releaseName: r5-probe
+          valuesObject:
+            image: {repository: busybox}
+      destination: {server: https://kubernetes.default.svc, namespace: hugmesh-fe}
+'
+export R5_APPSET
+expect_catch "ApplicationSet over the in-tree chart, valuesObject image.repository busybox" "$(ipw "apps/99-r5-set.yaml: a helm image map sets repository 'busybox' but no tag or digest")" '
+  printf "%s" "${R5_APPSET}" > "$T/apps/99-r5-set.yaml"
+'
+expect_catch "ApplicationSet with a git generator over the in-tree chart (fail closed)" "$(ipw "apps/99-r5-set.yaml: ApplicationSet 'r5-probe' over this repo uses a generator other than \`list\`")" '
+  printf "%s" "${R5_APPSET}" | python3 -c "import sys; s=sys.stdin.read(); o=\"    - list:\n        elements:\n          - {slug: probe}\n\"; assert o in s; sys.stdout.write(s.replace(o, \"    - git: {repoURL: https://github.com/hugmesh/hugmesh-generator.git, revision: main, directories: [{path: x}]}\n\").replace(\"image: {repository: busybox}\", \"replicaCount: 1\"))" > "$T/apps/99-r5-set.yaml"
+'
+# (24e) THE REPORTED EXPLOIT n5: an unknown YAML tag no longer hides helm values.
+R5_VELERO='apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata: {name: r5-velero, namespace: devops}
+spec:
+  project: default
+  source:
+    repoURL: https://vmware-tanzu.github.io/helm-charts
+    chart: velero
+    targetRevision: 8.0.0
+    helm:
+      values: |
+        r5note: !x unread
+        image:
+          repository: velero/velero
+          tag: latest
+  destination: {server: https://kubernetes.default.svc, namespace: velero}
+'
+export R5_VELERO
+expect_catch "helm values string with an unknown !x tag (go-yaml reads it)" "$(ipw "apps/99-r5-velero.yaml: image 'velero/velero:latest'")" '
+  printf "%s" "${R5_VELERO}" > "$T/apps/99-r5-velero.yaml"
+'
+expect_catch "helm values string that does not parse (fail closed)" "$(ipw "apps/99-r5-velero.yaml: Argo helm.values does not parse")" '
+  printf "%s" "${R5_VELERO}" | sed "s/r5note: !x unread/r5note: [unclosed/" > "$T/apps/99-r5-velero.yaml"
+'
+expect_catch "ConfigMap values.yaml with an unknown !x tag over a helm image map (structure only)" "$(ipw "apps/99-r5-cm.yaml: image 'velero/velero:latest'")" '
+  printf "apiVersion: v1\nkind: ConfigMap\nmetadata: {name: r5-values, namespace: devops}\ndata:\n  values.yaml: |\n    r5note: !x unread\n    image:\n      repository: velero/velero\n      tag: latest\n" > "$T/apps/99-r5-cm.yaml"
+'
+# (24f) THE REPORTED EXPLOIT n9: helperPod.yaml with `metadata: !x` and an escaped key.
+expect_catch "helperPod.yaml metadata: !x with \"im\\x61ge\": busybox:latest" "${LP_WANT}" '
+  python3 - "$T/manifests/local-path/local-path.yaml" <<"PY"
+import re, sys
+p = sys.argv[1]; s = open(p, encoding="utf-8").read()
+i = s.index("  helperPod.yaml: |-\n"); blk = s[i:]
+new = re.sub(r"(\n\s*)image: (\S*busybox\S*)", lambda m: m.group(1) + "\"im\\x61ge\": \"busybox:latest\"", blk, count=1)
+a = "\n    metadata:\n      name: helper-pod\n"
+assert a in new and new != blk
+open(p, "w", encoding="utf-8").write(s[:i] + new.replace(a, "\n    metadata: !x\n      name: helper-pod\n", 1))
+PY
+'
+# (24g) THE REPORTED EXPLOITS n6/n7/n8: kubectl spellings in the prod-hygiene script.
+expect_catch "kubectl run --override-type=json --overrides (JSON patch onto the image)" "$(ph_want_r5 "a string passes kubectl --overrides")" '
+  printf "\nkubectl -n \"\$NS\" run r5-probe --restart=Never ${CURL_PIN} --override-type=json --overrides='"'"'[{\"op\":\"replace\",\"path\":\"/spec/containers/0/image\",\"value\":\"busybox:latest\"}]'"'"' -- true\n" >> "$T/${PH}"
+'
+expect_catch "kubectl run --overrides with a \\u0061 escape in the image key" "$(ph_want busybox:latest)" '
+  printf "\nkubectl -n x run r5-probe ${CURL_PIN} --overrides='"'"'{\"spec\":{\"containers\":[{\"name\":\"r5-probe\",\"im\\\\u0061ge\":\"busybox:latest\"}]}}'"'"' -- true\n" >> "$T/${PH}"
+'
+expect_catch "--ima\"\"ge=busybox:latest (shell joins the quotes)" "$(ph_want busybox:latest)" '
+  printf "\nkubectl -n x run r5-probe --restart=Never --ima\"\"ge=busybox:latest -- true\n" >> "$T/${PH}"
+'
+expect_catch "--\"\$F\"=busybox:latest (flag name from a variable, fail closed)" "$(ph_want_r5 "a string passes a command-line flag whose name is assembled")" '
+  printf "\nkubectl -n x run r5-probe --\"\$F\"=busybox:latest -- true\n" >> "$T/${PH}"
+'
+expect_catch "kubectl patch --type json onto a container image path (fail closed)" "$(ph_want_r5 "a string holds a JSON patch op onto an image path")" '
+  printf "\nkubectl -n x patch deploy/web --type json -p '"'"'[{\"op\":\"replace\",\"path\":\"/spec/template/spec/containers/0/image\",\"value\":\"busybox:latest\"}]'"'"'\n" >> "$T/${PH}"
+'
+# (24h) THE REPORTED EXPLOIT n13: --image and its value as two items of an args list.
+expect_catch "initContainer args [\"--image\", \"busybox:latest\"] (argv list)" "$(ipw "manifests/prod-hygiene/job.yaml: image 'busybox:latest'")" '
+  python3 - "$T/manifests/prod-hygiene/job.yaml" <<"PY"
+import sys
+p = sys.argv[1]; s = open(p, encoding="utf-8").read()
+a = "      containers:\n        - name: gate\n"
+assert s.count(a) == 1
+s = s.replace(a, "      initContainers:\n        - name: r5-probe\n          image: docker.io/bitnamilegacy/kubectl:1.31\n          command: [\"kubectl\"]\n          args: [\"-n\", \"hugmesh-system\", \"run\", \"r5-probe\", \"--restart=Never\", \"--image\", \"busybox:latest\", \"--\", \"true\"]\n" + a)
+open(p, "w", encoding="utf-8").write(s)
+PY
+'
+# (24i) THE REPORTED EXPLOITS n10/n11/n14: Argo fields the gate never read.
+R5_EDGE='apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata: {name: r5-edge-ai, namespace: devops}
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/hugmesh/hugmesh-generator.git
+    targetRevision: main
+    path: specs/cluster/manifests/edge-ai
+  destination: {server: https://kubernetes.default.svc, namespace: hugmesh-inference}
+'
+export R5_EDGE
+expect_catch "Argo kustomize.components outside specs/cluster (fail closed)" "$(ipw "apps/99-r5-comp.yaml: Argo kustomize component '../../../../tests/r5-comp' is not a directory under specs/cluster")" '
+  printf "%s    kustomize:\n      components: [../../../../tests/r5-comp]\n" "$(printf "%s" "${R5_EDGE}" | sed "/^  destination/d")
+" > "$T/apps/99-r5-comp.yaml"
+  printf "  destination: {server: https://kubernetes.default.svc, namespace: hugmesh-inference}\n" >> "$T/apps/99-r5-comp.yaml"
+'
+expect_catch "Argo kustomize key the check does not model (fail closed)" "$(ipw "apps/99-r5-comp.yaml: Argo kustomize key 'r5Unknown' is not one this check models")" '
+  printf "%s    kustomize:\n      r5Unknown: true\n" "$(printf "%s" "${R5_EDGE}" | sed "/^  destination/d")
+" > "$T/apps/99-r5-comp.yaml"
+  printf "  destination: {server: https://kubernetes.default.svc, namespace: hugmesh-inference}\n" >> "$T/apps/99-r5-comp.yaml"
+'
+expect_catch "Argo app on this repo with targetRevision ae585a51 (an old commit)" "$(ipw "apps/99-r5-rev.yaml: an Argo source in this repo pins targetRevision 'ae585a51'")" '
+  printf "%s" "${R5_EDGE}" | sed "s/targetRevision: main/targetRevision: ae585a51/" > "$T/apps/99-r5-rev.yaml"
+'
+expect_catch "helm parameter name image.tag=latest,image.pullPolicy (comma in the NAME)" "$(ipw "apps/55-velero.yaml: helm parameter name 'image.tag=latest,image.pullPolicy' holds an unescaped")" '
+  imgswap apps/55-velero.yaml "    helm:
+" "    helm:
+      parameters:
+        - name: \"image.tag=latest,image.pullPolicy\"
+          value: Always
+"
+'
+# (24j) static-only in round 4: a CRD field kustomize's images: never rewrites.
+expect_catch "WorkflowTemplate container.image ollama/ollama behind an images: entry it does not get" "$(ipw "manifests/edge-ai/r5-workflow.yaml: image 'ollama/ollama' has no tag")" '
+  printf "apiVersion: argoproj.io/v1alpha1\nkind: WorkflowTemplate\nmetadata: {name: r5-probe}\nspec:\n  entrypoint: main\n  templates:\n    - name: main\n      container: {image: ollama/ollama, command: [\"true\"]}\n" > "$T/manifests/edge-ai/r5-workflow.yaml"
+  imgswap manifests/edge-ai/kustomization.yaml "
+resources:
+" "
+resources:
+  - r5-workflow.yaml
+"
+'
+expect_catch "Chart.yaml dependencies: on a remote chart (fail closed)" "$(ipw "charts/hugmesh-gateway/Chart.yaml: declares chart \`dependencies:\`")" '
+  printf "dependencies:\n  - name: r5-sub\n    repository: https://charts.example.org/r5\n    version: \"*\"\n" >> "$T/charts/hugmesh-gateway/Chart.yaml"
+'
+expect_catch "kustomize resource git::github.com/... (remote without ://)" "$(ipw "manifests/edge-ai/kustomization.yaml: \`resources:\` pulls in the REMOTE 'git::github.com/kubernetes-sigs/kustomize//examples/helloWorld': it is not a file or directory")" '
+  imgswap manifests/edge-ai/kustomization.yaml "
+resources:
+" "
+resources:
+  - git::github.com/kubernetes-sigs/kustomize//examples/helloWorld
+"
+'
+expect_catch "kustomize resource github.com:org/repo//dir (remote, scp-style)" "$(ipw "manifests/edge-ai/kustomization.yaml: \`resources:\` pulls in the REMOTE 'github.com:kubernetes-sigs/kustomize//examples/helloWorld': it is not a file or directory")" '
+  imgswap manifests/edge-ai/kustomization.yaml "
+resources:
+" "
+resources:
+  - github.com:kubernetes-sigs/kustomize//examples/helloWorld
+"
+'
+
 # (21-render) the kubectl render cross-check catches the three reported exploits ON
 # ITS OWN: the staged tree is rendered and judged without the static reader.
 render_catch() {  # <label> <injection> [image name prefix, default owncast/owncast]
@@ -1650,6 +1888,20 @@ if command -v helm >/dev/null 2>&1; then
       parameters:
         - {name: image.tag, value: latest}
 "' registry.hugmesh.net/hugmesh/hugmesh-gateway
+  # (24-helm) round 5: rendered the way Argo CD renders it. --namespace is the
+  # destination namespace (n1), a `./specs/cluster/...` path is the same chart (n3),
+  # and a list ApplicationSet is expanded and rendered per element (n4).
+  helm_render_catch "helm render: template behind if ne .Release.Namespace \"default\" (Argo passes --namespace)" '
+    r5tpl "      image: busybox:latest" "ne .Release.Namespace \"default\""' busybox
+  helm_render_catch "helm render: app path ./specs/cluster/charts/hugmesh-gateway + image.repository busybox" '
+    imgswap apps/20-gateway-pki.yaml "    path: specs/cluster/charts/hugmesh-gateway
+" "    path: ./specs/cluster/charts/hugmesh-gateway
+"
+    imgswap apps/20-gateway-pki.yaml "      values: |
+        instance:
+" "${R5_REPO_ONLY}"' busybox
+  helm_render_catch "helm render: list ApplicationSet over the in-tree chart, valuesObject image.repository busybox" '
+    printf "%s" "${R5_APPSET}" > "$T/apps/99-r5-set.yaml"' busybox
 else
   echo "  NOTE (23-helm) NOT run: helm is not on PATH, so the helm render is untested here"
 fi
