@@ -45,7 +45,7 @@ import time
 from dataclasses import asdict, dataclass, field, fields
 from typing import NamedTuple
 
-from . import brand_model, domain_reach, own_casdoor, theme
+from . import brand_model, domain_reach, look_serving, own_casdoor, theme
 from .config import DOMAIN_FIELDS, IDP_CHOICES, IDP_LABELS, _IDP_CLIENT_ID_RE, _IDP_URL_RE, \
     domain_signin_problems, effective_signin, github_org_problem, has_external_signin, \
     idp_effective_jwks
@@ -813,7 +813,23 @@ class LocalMeshBootstrap:
                               own_idp_domains=self.cfg.own_idp_domains,
                               kind_addons=self.cfg.kind_addons,
                               tor_domains=self.tor_domains(),
-                              external_idp_domains=self.external_idp_domains())
+                              external_idp_domains=self.external_idp_domains(),
+                              superbrand_look=self.superbrand_look(),
+                              look_brands=self.look_brands())
+
+    def superbrand_look(self) -> dict:
+        """The superbrand's recorded look (the record's eight look fields): what a
+        domain with a look of its own starts from on the front door."""
+        look = (self.cfg.superbrand or {}).get("look") or {}
+        return dict(look) if isinstance(look, dict) else {}
+
+    def look_brands(self) -> list:
+        """The added domains the HTTPS front door serves a look for, by Host
+        (core/look_serving.py), in record order. The mesh's own domain never: its look
+        is HUG_THEME_CSS, served by the sign-in page itself."""
+        own = (self.cfg.cluster_domain or "").strip() or self.cfg.resolved_domain()
+        return look_serving.served_brands(
+            [r for r in (self.cfg.domains or ()) if isinstance(r, dict)], own)
 
     def external_idp_domains(self) -> list[tuple[str, str, str]]:
         """``[(name, issuer, brand id), ...]`` — the recorded domains that sign in
@@ -1285,6 +1301,25 @@ class LocalMeshBootstrap:
                          f"({len(c.login_theme_css)} chars of derived --sd-* css,")
             lines.append("             written to snap-theme.css at container start — "
                          "rebrand needs no rebuild)")
+        # A domain's own look (core/look_serving.py): which added domains the HTTPS
+        # front door answers with a stylesheet of their own, and the `make view` port
+        # each one is opened on. No added domain renders NOTHING.
+        _lb = self.look_brands()
+        if _lb:
+            served = look_serving.door_serves_looks(self.generator_dir)
+            own = [b for b in _lb if b.has_own_look]
+            lines.append("          -> domain looks (tests/stack/.looks/): "
+                         + (", ".join(b.name for b in own) or "none of its own")
+                         + (" served by Host at the HTTPS door" if served and own else "")
+                         + ("" if served else
+                            " — RECORDED ONLY: this checkout's front door does not "
+                            "serve them"))
+            if served:
+                for b in _lb:
+                    lines.append(f"             {b.name}: make view LANE=compose -> "
+                                 f"{b.view_url} ("
+                                 + ("its own look" if b.has_own_look
+                                    else "the mesh's own look") + ")")
         # Per-domain OWN Casdoor (issue #47): disclose EXACTLY what the compose
         # lane derives — the same ports/issuers own_casdoor.py allocates and
         # LocalStackNode threads into APP_TENANCY_ISSUERS — so the plan and the

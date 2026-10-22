@@ -1,0 +1,21 @@
+# compose.looks.yaml — a DOMAIN'S OWN LOOK on the local stack's HTTPS front door.
+#
+# An OVERLAY, loaded only while tests/stack/.looks/hosts.map exists (the Makefile's
+# STACK_LOOKS_FLAGS, a $(wildcard) gate like the own-domains and limits overlays).
+# HugMesh Studio writes that folder when it starts a mesh with added domains
+# (studio core/look_serving.py) and removes it when the mesh has none, so a
+# checkout the Studio never touched runs exactly the containers it ran before.
+#
+# What it adds, and nothing else: the folder, READ-ONLY, inside hugmesh-https-front
+# at the path tls-front/default.conf reads (its `map $host $hug_look` include and
+# the theme location's root). The front door then answers hug-theme.css and
+# snap-theme.css from the requesting domain's own folder; every other request, and
+# every Host hosts.map does not name, goes to the gateway as before.
+#
+# Why an overlay and not a line in compose.local.yaml: a bind mount whose host
+# folder is missing is CREATED by the Docker daemon, as root, inside the operator's
+# checkout, and the Studio (no root) could then never write the folder again.
+services:
+  hugmesh-https-front:
+    volumes:
+      - ./.looks:/etc/hugmesh-looks:ro

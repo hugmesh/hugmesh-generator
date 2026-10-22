@@ -26,7 +26,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 
 from . import devops_tools, e2e_catalogue, own_casdoor, proc_group, proc_text
-from . import resource_limits, stack_limits
+from . import brand_look, look_serving, resource_limits, stack_limits
 from .domain_services import TOR_SLUG_RE as _TOR_SLUG_RE_SHARED
 from .local_services import (KIND_ADDONS_ENV, KIND_ADDONS_NONE, federation_env,
                              kind_addon_default_selection, kind_addon_env,
@@ -215,7 +215,9 @@ class LocalStackNode:
                  own_idp_domains: tuple[str, ...] = (),
                  kind_addons=None,
                  tor_domains=(),
-                 external_idp_domains=()):
+                 external_idp_domains=(),
+                 superbrand_look=None,
+                 look_brands=()):
         self.generator_dir = os.path.abspath(generator_dir)
         self.compose_file = os.path.join(self.generator_dir, _COMPOSE_FILE)
         self.env = env
@@ -353,6 +355,19 @@ class LocalStackNode:
         # each in the gateway's host map (hugmesh-gateway#38). Empty (the default, and
         # every caller from before this existed) passes nothing new.
         self.tor_domains = tuple(tuple(e) for e in (tor_domains or ()))
+        # A domain's own look on the HTTPS front door (theme survey item B,
+        # core/look_serving.py): the superbrand's recorded look and the added domains
+        # (``look_serving.ServedBrand``, record order). At bring-up they become
+        # tests/stack/.looks/ — per-domain stylesheets, the Host map the front door
+        # includes and the extra `make view` rows; with no added domain an old folder
+        # is removed instead. Empty (the default, every caller before) writes nothing
+        # on a checkout that has no such folder, so the untouched bring-up is unchanged.
+        self.superbrand_look = dict(superbrand_look or {})
+        self.look_brands = tuple(look_brands or ())
+        #: Why the looks could not be written at the last bring-up ("" when they were):
+        #: the plan and the run log say it; the bring-up itself goes on (best-effort,
+        #: like .theme.css), and the domains then show the mesh's own look.
+        self.looks_error = ""
 
     @property
     def web_url(self) -> str:
@@ -908,6 +923,22 @@ class LocalStackNode:
                         fh.write(self.login_theme_css)
             except OSError:
                 pass
+        # A DOMAIN'S OWN LOOK (core/look_serving.py): written beside .theme.css and on
+        # the same terms (best-effort, write_overlays only). The Makefile adds the
+        # mount overlay while .looks/hosts.map exists, so a mesh with no added domain
+        # clears the folder and comes up exactly as before.
+        if write_overlays and (self.look_brands or os.path.isdir(
+                look_serving.looks_dir(self.generator_dir))):
+            try:
+                self.looks_error = ""
+                look_serving.write(self.generator_dir, self.superbrand_look,
+                                   self.look_brands)
+            except brand_look.LookError as exc:
+                # write() has cleared the folder: no look from an earlier start is
+                # served under this record
+                self.looks_error = f"domain looks not served: {exc}"
+            except OSError as exc:
+                self.looks_error = f"domain looks not written: {exc}"
         # RESOURCE LIMITS (CPU / memory). Delivered as a generated compose overlay
         # rather than as a flag, because compose expresses limits per service inside
         # the file and there is no `docker compose --cpus`. Written on EVERY

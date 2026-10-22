@@ -238,7 +238,7 @@ def test_off_the_docker_mesh_the_look_is_shown_with_the_reason_and_not_editable(
     sc.feed(j, "n")
     sc.feed(j, "open 2")
     text = _text(sc, j)
-    assert "shown on the Docker mesh only" in text
+    assert "Not applied on this route yet" in text
     sc.feed(j, "1 #aa0000")
     assert "Docker mesh only" in j.status
     assert j.cfg.domains[0].look == {}

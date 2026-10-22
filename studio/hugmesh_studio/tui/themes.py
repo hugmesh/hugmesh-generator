@@ -373,12 +373,24 @@ class LookText:
     line and shows :meth:`lines`. Slots-never-raise applies here too: every edit is
     checked and a refusal is a sentence in :attr:`message`, the record untouched."""
 
-    def __init__(self, model: brand_look.Look, *, path: str = "docker") -> None:
+    def __init__(self, model: brand_look.Look, *, path: str = "docker",
+                 generator_dir: str = "") -> None:
         self.model = model
         self.path = path
+        #: the checkout the Docker sentence is measured on ("" = this Studio's own)
+        self.generator_dir = generator_dir
         self.message: list[str] = []
 
     # ── what the screen shows ──────────────────────────────────────────────────────
+    def _served_note(self) -> str:
+        """Where an added domain's own look shows on a route that can show it (the
+        window's ``served_note``): served by Host on the Docker mesh, or recorded only
+        when this checkout's front door does not serve it. "" otherwise."""
+        if self.model.mode != "override" or self.path not in brand_look.PATHS_WITH_OWN_LOOK:
+            return ""
+        from ..core import look_serving
+        return look_serving.own_look_sentence(self.path, self.generator_dir)
+
     def _override_note(self) -> str:
         return ("" if (self.model.mode != "override"
                        or self.path in brand_look.PATHS_WITH_OWN_LOOK)
@@ -413,6 +425,9 @@ class LookText:
         note = self._override_note()
         if note:
             out.append("  " + note + "  (the settings below are shown, not editable here)")
+        served = self._served_note()
+        if served:
+            out.append("  " + served)
         out.append("")
         for number, (title, fields) in enumerate(SECTIONS, 1):
             out.append(f"{number}. {title}")

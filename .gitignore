@@ -41,6 +41,9 @@ tests/stack/.m2-registry.env
 # Composed web-login theme CSS (Studio writes it; Makefile threads it as
 # HUG_THEME_CSS so terminal stack-ups keep the operator's theme).
 tests/stack/.theme.css
+# Per-domain looks the HTTPS front door serves by Host, plus their `make view`
+# rows (studio core/look_serving.py writes them at every Studio bring-up).
+tests/stack/.looks/
 # Per-domain OWN-Casdoor compose overlay (issue #47; Studio core/own_casdoor.py
 # writes it, the Makefile wildcard-includes it behind the `own-casdoor` profile).
 tests/stack/.compose.own-domains.yaml

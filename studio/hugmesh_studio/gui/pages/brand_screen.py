@@ -390,7 +390,10 @@ class BrandSettingsTabs(QtCore.QObject):
                 f"{plain_words.term('superbrand')}'s value’ gives it back.")
         self.look_summary.setVisible(False)
         if self.look_editor is None:
-            self.look_editor = LookEditor(model, path=self.route)
+            self.look_editor = LookEditor(
+                model, path=self.route,
+                generator_dir=getattr(getattr(v.session, "host", None), "generator_dir",
+                                      "") or "")
             # the editor scrolls inside itself: give it room for the colours and the
             # font at once, or the tab shows a 300 px slot over blank space (looked at)
             self.look_editor.setMinimumHeight(520)

@@ -356,9 +356,11 @@ class BrandView:
                 out.append(f"   {k:<12}{eff.get(k) or '(shipped)'}")
             out += ["", LOOK_HOME]
             return out
-        out = []
-        if route not in brand_look.PATHS_WITH_OWN_LOOK:
-            out += [brand_look.DOCKER_ONLY_SENTENCE, ""]
+        from ..core import look_serving
+        gen = getattr(getattr(self.session, "host", None), "generator_dir", "") or ""
+        # the image and Fleet routes: not applied there; the Docker mesh: served by
+        # Host, or recorded only on a checkout whose front door does not serve it
+        out = [look_serving.own_look_sentence(route, gen), ""]
         eff = brand_model.effective_look(self.session.record(), self.row)
         for k, (v, src) in eff.items():
             out.append(f"   {k:<12}{v or '(shipped)':<24}{src}")
