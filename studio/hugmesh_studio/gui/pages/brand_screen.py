@@ -15,8 +15,10 @@ EACH SETTING HAS EXACTLY ONE EDITING HOME (the rule the screen is built on):
   sign-in (inherited), its own Casdoor, or its own Azure Entra ID / AWS Cognito / OIDC
   provider with a sign-in address, client id and key address, written by
   ``config.set_domain_signin`` (the one writer) with every refusal inline. The mesh's
-  own row shows the mesh's sign-in, which is the default every domain inherits and is
-  chosen on the Identity provider step.
+  own row (row 0) EDITS the mesh's sign-in, which is the default every domain inherits:
+  through ``superbrand_step.MeshWrites``, into the one place the route keeps it (the
+  Identity provider step's fields, or the Docker page's controls), so the step and
+  row 0 are two doors on one value; a route that keeps none says so (2026-10-21).
 * Look is edited here: a :class:`~._lookeditor.LookEditor` over the brand's override model
   (every setting says 'inherited from the superbrand' or 'this brand's own'; 'Use the
   superbrand's value' is an inline second click). On every route but the Docker mesh the
@@ -28,7 +30,12 @@ EACH SETTING HAS EXACTLY ONE EDITING HOME (the rule the screen is built on):
   the Services tab's front door, kept in step with it), its VPN membership and its
   egress (inherit / on / off; inherit / an egress VPN with an optional provider file /
   direct), through ``brand_model.set_ways``, and says what each route does with them.
-  The internal and public names stay with the Go-Live wizard: one button opens it.
+  Row 0's Tor and egress are the MESH's and are edited in place the same way as its
+  sign-in (``MeshWrites``); its VPN is shown, never chosen (the mesh's whole posture).
+  The internal and public names stay with the Go-Live wizard.
+* A Mesh desktop CLIENT image (cloud mode) gets the same tabs, each with one line
+  saying the client keeps the choice with its configuration only
+  (``brand_step.CLIENT_*_NOTE``).
 
 LAYOUT. This is a tab BAR with the four tabs' content in the body's own layout, not a
 QTabWidget: the services body (two checkbox tables, their state line, the honesty banner,
@@ -56,6 +63,9 @@ __all__ = ["BrandSettingsTabs", "TAB_TITLES"]
 TAB_TITLES = tuple(t for _n, t in brand_step.SECTIONS)
 (TAB_IDENTITY, TAB_LOOK, TAB_SERVICES, TAB_WAYS) = range(4)
 _MUTED = "color: gray;"
+#: the provider-file box's hint: a brand may fall back on the mesh's file; row 0 IS it
+_BRAND_CONF_HINT = "/absolute/path/provider.conf — empty: the mesh's own provider file"
+_OWN_CONF_HINT = "/absolute/path/provider.conf (a WireGuard .conf or an OpenVPN .ovpn)"
 
 
 def own_look_note() -> str:
@@ -73,6 +83,22 @@ def _wrapped(text: str = "", *, name: str = "", muted: bool = False) -> QtWidget
     if muted:
         lab.setStyleSheet(_MUTED)
     return lab
+
+
+def _set_items(combo: QtWidgets.QComboBox, choices) -> None:
+    """Give ``combo`` exactly ``choices`` ((key, label) pairs), keeping it untouched
+    when it already holds them (row 0 and a brand offer different lists)."""
+    want = [(k, lab) for k, lab in choices]
+    have = [(combo.itemData(i), combo.itemText(i)) for i in range(combo.count())]
+    if have == want:
+        return
+    blocked = combo.blockSignals(True)
+    try:
+        combo.clear()
+        for k, lab in want:
+            combo.addItem(lab, k)
+    finally:
+        combo.blockSignals(blocked)
 
 
 class BrandSettingsTabs(QtCore.QObject):
@@ -213,8 +239,7 @@ class BrandSettingsTabs(QtCore.QObject):
         self.egress_conf.setObjectName("brand_ways_egress_conf")
         # typed, never a file dialog (no modal on this screen): an absolute path to a
         # WireGuard .conf or OpenVPN .ovpn, checked as a real file when the mesh starts
-        self.egress_conf.setPlaceholderText(
-            "/absolute/path/provider.conf — empty: the mesh's own provider file")
+        self.egress_conf.setPlaceholderText(_BRAND_CONF_HINT)
         self.egress_conf.editingFinished.connect(self._egress_conf_done)
         cr.addWidget(self.egress_conf, 1)
         self.egress_conf_row = conf_row
@@ -481,14 +506,19 @@ class BrandSettingsTabs(QtCore.QObject):
             self.signin_box.setVisible(True)
             self.signin_now.setText("Now: " + v.signin_words())
             own = v.own
-            for w in (self.signin_choice, self.signin_apply):
-                w.setVisible(not own)
-            if own:
+            # row 0 offers the MESH's own provider (it IS the mesh); a brand offers its
+            # own sign-in or the mesh's
+            _set_items(self.signin_choice, v.signin_choices())
+            why = v.signin_refusal()
+            self.signin_choice.setVisible(not why)
+            if why:
+                # a route that keeps no mesh-wide sign-in: say so, offer nothing
                 self.signin_fields.setVisible(False)
+                self.signin_apply.setVisible(False)
                 self.signin_note.setStyleSheet(_MUTED)
                 self.signin_note.setText(
                     brand_step.SIGNIN_MESH_HOME[:1].upper()
-                    + brand_step.SIGNIN_MESH_HOME[1:] + ".")
+                    + brand_step.SIGNIN_MESH_HOME[1:] + ". " + why + ".")
                 return
             choice = v.signin_choice()
             self.signin_choice.setCurrentIndex(max(0, self.signin_choice.findData(choice)))
@@ -498,6 +528,9 @@ class BrandSettingsTabs(QtCore.QObject):
             self.signin_keys.setText(vals["jwks"])
             self._show_signin_fields()
             self.signin_note.setStyleSheet("color: #b00020;" if error else _MUTED)
+            if not note and own:
+                note = (brand_step.SIGNIN_MESH_EDIT[:1].upper()
+                        + brand_step.SIGNIN_MESH_EDIT[1:] + ".")
             self.signin_note.setText(note)
         finally:
             self._loading = False
@@ -505,7 +538,7 @@ class BrandSettingsTabs(QtCore.QObject):
     def _show_signin_fields(self) -> None:
         ext = self.signin_choice.currentData() in brand_step.SIGNIN_EXTERNAL
         self.signin_fields.setVisible(ext)
-        self.signin_apply.setVisible(ext and not (self.view is not None and self.view.own))
+        self.signin_apply.setVisible(ext)
 
     def _signin_choice_clicked(self, *_args) -> None:
         """A person picked a sign-in. Through the mesh and its own Casdoor need nothing
@@ -557,29 +590,21 @@ class BrandSettingsTabs(QtCore.QObject):
                 return
             self.reach_box.setVisible(True)
             own = v.own
-            for w in (self.tailnet_combo, self.egress_combo, self.egress_conf):
-                w.setEnabled(not own)
-            self.tor_box.setEnabled(not own)
             words = v.reach_lines()
             self.reach_words.setText(
                 f"VPN: {words.get(domain_reach.WAY_TAILNET, '')}\n"
                 f"Egress: {words.get(domain_reach.WAY_EGRESS, '')}")
-            # Row 0's onion IS the mesh's Tor, chosen on Mesh infrastructure (Docker)
-            # or the Network step (images). An unticked, greyed box here read as "off"
-            # even with the mesh's Tor on (domain-ui skeptic 3), so row 0 shows no box:
-            # the note below says where its onion comes from.
-            self.tor_box.setVisible(not own)
             if own:
-                self.tor_box.setChecked(False)
-                self.tor_box.setText("The mesh's own Tor address (its onion)")
-                self.tailnet_combo.setCurrentIndex(0)
-                self.egress_combo.setCurrentIndex(0)
-                self.egress_conf.setText("")
-                self.egress_conf_row.setEnabled(False)
-                self.reach_note.setStyleSheet(_MUTED)
-                self.reach_note.setText(brand_step.OWN_REACH_HOME[:1].upper()
-                                        + brand_step.OWN_REACH_HOME[1:] + ".")
+                self._fill_own_reach(v, note, error)
                 return
+            _set_items(self.tailnet_combo, brand_step.TAILNET_CHOICES)
+            _set_items(self.egress_combo, brand_step.EGRESS_CHOICES)
+            for w in (self.tailnet_combo, self.egress_combo, self.egress_conf):
+                w.setEnabled(True)
+            self.tailnet_combo.setToolTip("")
+            self.egress_conf.setPlaceholderText(_BRAND_CONF_HINT)
+            self.tor_box.setEnabled(True)
+            self.tor_box.setVisible(True)
             self.tor_box.setText("Its own Tor address (an onion of its own)")
             self.tor_box.setChecked(v.tor_on())
             self.tailnet_combo.setCurrentIndex(
@@ -592,6 +617,44 @@ class BrandSettingsTabs(QtCore.QObject):
             self.reach_note.setText(note or brand_step.REACH_RECORDED_ONLY)
         finally:
             self._loading = False
+
+    def _fill_own_reach(self, v, note: str, error: bool) -> None:
+        """Row 0: the MESH's own Tor and egress, edited in place where the route keeps
+        them (``MeshWrites``); its VPN is shown, never chosen here (the mesh's whole
+        posture). A way this route keeps nowhere is greyed with the reason — and a Tor
+        box that cannot be set is not drawn at all, because an unticked grey box read as
+        "off" even with the mesh's Tor on (domain-ui skeptic 3)."""
+        tor_why = v.own_way_refusal("tor")
+        egress_why = v.own_way_refusal("egress")
+        self.tor_box.setText("The mesh's own Tor address (its onion)")
+        self.tor_box.setVisible(not tor_why)
+        self.tor_box.setEnabled(not tor_why)
+        self.tor_box.setChecked(bool(v.tor_on()) and not tor_why)
+        own_tail = tuple(c for c in brand_step.TAILNET_CHOICES
+                         if c[0] != domain_reach.REACH_INHERIT)
+        _set_items(self.tailnet_combo, own_tail)
+        self.tailnet_combo.setCurrentIndex(
+            max(0, self.tailnet_combo.findData(v.tailnet_choice())))
+        self.tailnet_combo.setEnabled(False)
+        self.tailnet_combo.setToolTip(v.own_way_refusal("tailnet"))
+        own_egress = tuple(c for c in brand_step.EGRESS_CHOICES
+                           if c[0] != domain_reach.REACH_INHERIT)
+        _set_items(self.egress_combo, own_egress)
+        mode, conf = v.egress_choice()
+        self.egress_combo.setCurrentIndex(max(0, self.egress_combo.findData(mode)))
+        self.egress_combo.setEnabled(not egress_why)
+        self.egress_conf.setEnabled(not egress_why)
+        self.egress_conf.setPlaceholderText(_OWN_CONF_HINT)
+        self.egress_conf.setText(conf)
+        self.egress_conf_row.setEnabled(not egress_why and mode == domain_reach.EGRESS_VPN)
+        lines = [note] if note else [brand_step.OWN_REACH_EDIT[:1].upper()
+                                     + brand_step.OWN_REACH_EDIT[1:] + "."]
+        lines.append(v.own_way_refusal("tailnet") + ".")
+        for why in (tor_why, egress_why):
+            if why:
+                lines.append(why + ".")
+        self.reach_note.setStyleSheet("color: #b00020;" if error else _MUTED)
+        self.reach_note.setText(" ".join(lines))
 
     def show_tor(self, available: bool, on: bool) -> None:
         """The host's front door says what the domain's Tor choice is now."""
@@ -613,7 +676,11 @@ class BrandSettingsTabs(QtCore.QObject):
 
     def _tor_clicked(self, checked: bool) -> None:
         try:
-            if self._loading or self.view is None or self.view.own:
+            if self._loading or self.view is None:
+                return
+            if self.view.own:
+                # row 0's onion IS the mesh's Tor: written where the mesh keeps it
+                self._reach_done(self.view.set_tor(bool(checked)))
                 return
             self.tor_changed.emit(bool(checked))
             self._fill_ways()
@@ -634,6 +701,15 @@ class BrandSettingsTabs(QtCore.QObject):
                 return
             mode = self.egress_combo.currentData()
             self.egress_conf_row.setEnabled(mode == domain_reach.EGRESS_VPN)
+            if (self.view.own and mode == domain_reach.EGRESS_VPN
+                    and not self.egress_conf.text().strip()):
+                # the mesh's egress VPN needs its file before anything is written:
+                # leave the choice on screen and ask for the path, inline
+                self.reach_note.setStyleSheet(_MUTED)
+                self.reach_note.setText(
+                    "Type the provider file's absolute path and press Enter. Nothing "
+                    "has changed yet.")
+                return
             self._reach_done(self.view.set_egress(
                 mode, self.egress_conf.text() if mode == domain_reach.EGRESS_VPN else ""))
         except Exception:                       # noqa: BLE001

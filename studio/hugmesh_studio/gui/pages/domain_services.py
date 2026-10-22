@@ -1031,8 +1031,32 @@ class DomainServicesPage(QtWidgets.QWizardPage, DomainServicesBody):
         cfg = self.wiz.cfg
         if getattr(cfg, "mode", "") not in ("mesh", "cloud"):
             return None
-        return session_for(self.wiz, "image", cfg,
-                           getattr(self.wiz, "generator_dir", "") or "")
+        session = session_for(self.wiz, "image", cfg,
+                              getattr(self.wiz, "generator_dir", "") or "")
+        # row 0 edits the mesh's own sign-in, Tor and egress in place: the pages that
+        # hold those values in widgets are re-shown from the config after each write,
+        # or their own collect (validatePage, re-run by collect_all) would write the
+        # old value straight back
+        writes = session.host.mesh_writes()
+        writes.after = self._mirror_mesh
+        writes.entries = self._entries
+        return session
+
+    def _mirror_mesh(self) -> None:
+        """After row 0 wrote the mesh's sign-in, Tor or egress onto the config: show it
+        on the Identity provider step and the Network step, which keep those values in
+        their widgets (one value, two doors). Never raises."""
+        wiz = self.wiz
+        ids = getattr(wiz, "_page_ids", None) or {}
+        page_of = getattr(wiz, "page", None)
+        if not callable(page_of):
+            return
+        idp = page_of(ids["idp"]) if "idp" in ids else None
+        if idp is not None and hasattr(idp, "initializePage"):
+            idp.initializePage()                  # it only reads cfg into its widgets
+        net = page_of(ids["network"]) if "network" in ids else None
+        if net is not None and hasattr(net, "mirror_mesh_reach"):
+            net.mirror_mesh_reach(wiz.cfg)
 
     def _entries(self):
         """The worklist rows this wizard is carrying, or () — the per-node half of the

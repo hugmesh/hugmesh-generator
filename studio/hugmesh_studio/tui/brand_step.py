@@ -42,7 +42,7 @@ from ..core import brand_look, brand_model, domain_reach, plain_words
 from ..core.config import (DOMAIN_IDP_OWN, DOMAIN_IDP_SUPERDOMAIN, SIGNIN_FROM_MESH,
                            SIGNIN_SOURCE_WORDS, Domain, effective_signin,
                            set_domain_signin)
-from .superbrand_step import BrandSession
+from .superbrand_step import MESH_SIGNIN_CHOICES, BrandSession
 
 __all__ = ["SECTIONS", "SECTION_LOOK", "SECTION_SERVICES", "BrandView", "brand_view",
            "section_menu", "identity_lines", "ways_lines", "summary_line",
@@ -87,6 +87,11 @@ PROVIDER_WORDS = {"casdoor": "Casdoor", "entra": "Azure Entra ID", "aws": "AWS C
 #: Where the mesh's own sign-in (what every 'through the mesh' domain inherits) is set.
 SIGNIN_MESH_HOME = ("the mesh's own sign-in is the default every domain inherits; it is "
                     "chosen on the ‘Identity provider’ step")
+#: Row 0 (the mesh's own domain) EDITS that sign-in in place: the same value as the
+#: Identity provider step, written where that step keeps it (one home, two doors).
+SIGNIN_MESH_EDIT = ("this is the mesh's own sign-in: every domain that signs in through "
+                    "the mesh inherits it. Changing it here changes the ‘Identity "
+                    "provider’ step's choice too — they are the same setting")
 
 # ── per-domain reach (VPN and egress; Tor is the row's own onion) ───────────────────
 TAILNET_CHOICES: tuple[tuple[str, str], ...] = (
@@ -103,6 +108,12 @@ EGRESS_CHOICES: tuple[tuple[str, str], ...] = (
 #: WAY_EFFECT says it per path): recorded with the domain, applied by no route yet.
 REACH_RECORDED_ONLY = ("Recorded with this domain; no start path applies a domain's own "
                        "VPN or egress yet — the mesh's own values are what runs.")
+#: Where row 0's values come from: they ARE the mesh's (never "inherited").
+OWN_SOURCE_WORDS = "the mesh's own setting"
+#: Row 0 edits the mesh's own Tor and egress in place (the mesh-wide step's values).
+OWN_REACH_EDIT = ("this is the mesh's own domain: its Tor address and its egress ARE the "
+                  "mesh's, so changing them here changes the mesh-wide step's setting "
+                  "too (the same value, one home)")
 #: The mesh's own row: its VPN and egress ARE the mesh's.
 OWN_REACH_HOME = ("this is the mesh's own domain: its VPN is the mesh's (on in "
                   "production), its egress is the mesh's egress VPN (the Mesh "
@@ -203,16 +214,37 @@ class BrandView:
         row = self.row
         return [d for d in self.session.host._live_rows() if d is not row]
 
+    def writes(self):
+        """Row 0's writers (``superbrand_step.MeshWrites``) for this route."""
+        return self.session.host.mesh_writes()
+
+    def signin_choices(self) -> tuple[tuple[str, str], ...]:
+        """What the sign-in choice offers: a brand's own sign-in, or on row 0 the mesh's
+        own provider (row 0 IS the mesh: 'through the mesh' would name itself)."""
+        return MESH_SIGNIN_CHOICES if self.own else SIGNIN_CHOICES
+
+    def signin_refusal(self) -> str:
+        """Why this row's sign-in cannot be changed on this route ("" = it can)."""
+        if not self.own:
+            return ""
+        why = self.writes().signin_refusal
+        return (why[:1].upper() + why[1:]) if why else ""
+
     def signin_choice(self) -> str:
-        """The SIGNIN_CHOICES key the row says now ("mesh" for the own row)."""
+        """The SIGNIN_CHOICES key the row says now (row 0: the mesh's own provider)."""
+        if self.own:
+            return self.writes().signin()[0] or "casdoor"
         r = self.row
-        if self.own or r is None or (r.idp or "") != DOMAIN_IDP_OWN:
+        if r is None or (r.idp or "") != DOMAIN_IDP_OWN:
             return "mesh"
         prov = str((r.idp_settings or {}).get("provider") or "casdoor")
         return prov if prov in SIGNIN_EXTERNAL else "casdoor"
 
     def signin_values(self) -> dict[str, str]:
         """The row's own provider values: sign-in address, client id, key address."""
+        if self.own:
+            _idp, issuer, client_id, jwks = self.writes().signin()
+            return {"issuer": issuer, "client_id": client_id, "jwks": jwks}
         r = self.row
         st = dict((r.idp_settings or {}) if r is not None else {})
         return {k: str(st.get(k) or "") for k in ("issuer", "client_id", "jwks")}
@@ -220,10 +252,17 @@ class BrandView:
     def set_signin(self, choice: str, issuer: str = "", client_id: str = "",
                    jwks: str = "") -> list[str]:
         """Write this domain's sign-in through ``set_domain_signin`` (the one writer).
-        Returns the problems; nothing is written while there is one. The mesh's own row
-        has no sign-in of its own to write: it IS the mesh's."""
+        Returns the problems; nothing is written while there is one. On the mesh's own
+        row the choice IS the mesh's sign-in: it is written where the Identity provider
+        step keeps it (``MeshWrites.set_signin``), or refused with the reason on a route
+        that keeps none."""
         if self.own:
-            return [SIGNIN_MESH_HOME[:1].upper() + SIGNIN_MESH_HOME[1:]]
+            why = self.signin_refusal()
+            if why:
+                return [why]
+            # the mesh's sign-in is not in the brand record: nothing for it to save
+            return [_plain_signin(p) for p in
+                    self.writes().set_signin(choice, issuer, client_id, jwks)]
         r = self.row
         if r is None:
             return [f"no domain named {self.name} on this screen"]
@@ -253,12 +292,16 @@ class BrandView:
         if eff.source == SIGNIN_FROM_MESH and eff.provider == "casdoor":
             what = "the mesh's central Casdoor"
         at = f" at {eff.issuer}" if eff.issuer else ""
-        return f"{what}{at} — {SIGNIN_SOURCE_WORDS[eff.source]}"
+        # row 0 IS the mesh: its sign-in is not inherited from anything
+        src = OWN_SOURCE_WORDS if self.own else SIGNIN_SOURCE_WORDS[eff.source]
+        return f"{what}{at} — {src}"
 
     # ── 4b. Ways: Tor, VPN and egress, per domain ─────────────────────────────────
     def _set_ways(self, **kw) -> list[str]:
         """Write this brand's ways through ``brand_model.set_ways`` (the one writer)
-        on the record, then put the result on the live row. [] = written."""
+        on the record, then put the result on the live row. [] = written. Row 0's
+        ways are the mesh's: ``set_tor`` / ``set_egress`` write them through
+        ``MeshWrites``, and nothing reaches here for row 0."""
         if self.own:
             return [OWN_REACH_HOME[:1].upper() + OWN_REACH_HOME[1:]]
         r = self.row
@@ -275,14 +318,32 @@ class BrandView:
         self.session.touched = True
         return []
 
+    def own_way_refusal(self, way: str) -> str:
+        """Row 0: why the mesh's ``way`` ("tor", "tailnet" or "egress") cannot be
+        changed here ("" = it can). The mesh's VPN never can: it is the mesh's whole
+        posture, decided where ``vpn_where`` says."""
+        w = self.writes()
+        why = {"tor": w.tor_refusal, "egress": w.egress_refusal}.get(
+            way, "the mesh's VPN is not chosen per domain: " + w.vpn_where)
+        return (why[:1].upper() + why[1:]) if why else ""
+
     def tor_on(self) -> bool:
+        if self.own:
+            return bool(self.writes().tor())
         r = self.row
-        return bool(getattr(r, "tor", False)) if (r is not None and not self.own) else False
+        return bool(getattr(r, "tor", False)) if r is not None else False
 
     def set_tor(self, on: bool) -> list[str]:
+        if self.own:
+            why = self.own_way_refusal("tor")
+            if why:
+                return [why]
+            return self.writes().set_tor(bool(on))
         return self._set_ways(tor=bool(on))
 
     def tailnet_choice(self) -> str:
+        if self.own:
+            return "on" if domain_reach.mesh_tailnet_default(self.mesh()) else "off"
         r = self.row
         v = ((r.ways or {}).get(domain_reach.WAY_TAILNET)
              if (r is not None and not self.own) else None)
@@ -291,6 +352,8 @@ class BrandView:
         return domain_reach.REACH_INHERIT
 
     def set_tailnet(self, choice: str) -> list[str]:
+        if self.own:
+            return [self.own_way_refusal("tailnet")]
         val = {"on": True, "off": False,
                domain_reach.REACH_INHERIT: domain_reach.REACH_INHERIT}.get(choice)
         if val is None:
@@ -298,7 +361,10 @@ class BrandView:
         return self._set_ways(tailnet=val)
 
     def egress_choice(self) -> tuple[str, str]:
-        """(inherit | vpn | direct, the provider file this domain names or "")."""
+        """(inherit | vpn | direct, the provider file this domain names or ""); row 0:
+        the mesh's own egress (vpn with its file, or direct)."""
+        if self.own:
+            return self.writes().egress()
         r = self.row
         v = ((r.ways or {}).get(domain_reach.WAY_EGRESS)
              if (r is not None and not self.own) else None)
@@ -307,6 +373,14 @@ class BrandView:
         return domain_reach.REACH_INHERIT, ""
 
     def set_egress(self, choice: str, conf: str = "") -> list[str]:
+        if self.own:
+            why = self.own_way_refusal("egress")
+            if why:
+                return [why]
+            if choice == domain_reach.REACH_INHERIT:
+                return ["This is the mesh's own domain, so there is nothing to inherit "
+                        "from: choose the egress VPN (with its provider file) or direct"]
+            return self.writes().set_egress(choice, conf)
         if choice == domain_reach.REACH_INHERIT:
             return self._set_ways(egress=domain_reach.REACH_INHERIT)
         if choice not in domain_reach.EGRESS_MODES:
@@ -317,11 +391,16 @@ class BrandView:
         return self._set_ways(egress=block)
 
     def reach_lines(self) -> dict[str, str]:
-        """{'tailnet': line, 'egress': line} in the model's words."""
+        """{'tailnet': line, 'egress': line} in the model's words (row 0's values are
+        the mesh's own, never 'inherited')."""
         row = Domain(name=self.name) if self.own else self.row
         if row is None:
             return {}
-        return domain_reach.reach_words(row, self.mesh())
+        words = domain_reach.reach_words(row, self.mesh())
+        if self.own:
+            words = {k: v.replace(domain_reach.REACH_FROM_MESH, OWN_SOURCE_WORDS)
+                     for k, v in words.items()}
+        return words
 
     # ── 2. Look ───────────────────────────────────────────────────────────────────
     def look_model(self) -> brand_look.Look | None:
@@ -451,18 +530,25 @@ def identity_lines(view: BrandView) -> list[str]:
     out += ["", view.identity_home(), ""]
     out.append(f"   Sign-in now   {view.signin_words()}")
     if view.own:
-        out += ["", SIGNIN_MESH_HOME]
-        return out
+        why = view.signin_refusal()
+        if why:
+            out += ["", SIGNIN_MESH_HOME, "   " + why]
+            return out
+        out += ["", SIGNIN_MESH_EDIT]
     vals = view.signin_values()
-    out.append("   choices       " + ", ".join(k for k, _l in SIGNIN_CHOICES)
+    out.append("   choices       " + ", ".join(k for k, _l in view.signin_choices())
                + f" (now: {view.signin_choice()})")
     if view.signin_choice() in SIGNIN_EXTERNAL:
         out.append(f"   sign-in address  {vals['issuer'] or '(not set)'}")
         out.append(f"   client id        {vals['client_id'] or '(not set)'}")
         out.append(f"   key address      {vals['jwks'] or '(derived from the sign-in address)'}")
-    out += ["", "commands: signin mesh | signin casdoor | "
-                "signin entra|aws|oidc ADDRESS CLIENT-ID [KEY-ADDRESS]"]
+    out += ["", _signin_commands(view)]
     return out
+
+
+def _signin_commands(view: BrandView) -> str:
+    first = "signin casdoor" if view.own else "signin mesh | signin casdoor"
+    return f"commands: {first} | signin entra|aws|oidc ADDRESS CLIENT-ID [KEY-ADDRESS]"
 
 
 def feed_identity(view: BrandView, line: str) -> str:
@@ -470,10 +556,9 @@ def feed_identity(view: BrandView, line: str) -> str:
     status sentence; nothing is written when it names a problem."""
     words = line.split()
     if not words or words[0].lower() != "signin":
-        return ("commands: signin mesh | signin casdoor | "
-                "signin entra|aws|oidc ADDRESS CLIENT-ID [KEY-ADDRESS]")
+        return _signin_commands(view)
     if len(words) < 2:
-        return "signin needs a choice: " + ", ".join(k for k, _l in SIGNIN_CHOICES)
+        return "signin needs a choice: " + ", ".join(k for k, _l in view.signin_choices())
     choice = words[1].lower()
     rest = words[2:]
     issuer = rest[0] if len(rest) > 0 else ""
@@ -490,7 +575,20 @@ def ways_lines(view: BrandView) -> list[str]:
     if view.client_image():
         out += [CLIENT_WAYS_NOTE, ""]
     if view.own:
-        out += ["   " + OWN_REACH_HOME[:1].upper() + OWN_REACH_HOME[1:] + ".", ""]
+        mode, conf = view.egress_choice()
+        tor_why = view.own_way_refusal("tor")
+        egress_why = view.own_way_refusal("egress")
+        out += ["   " + OWN_REACH_EDIT[:1].upper() + OWN_REACH_EDIT[1:] + ".", "",
+                "   Tor address   " + ("on — the mesh's onion" if view.tor_on() else "off")
+                + (f"   ({tor_why})" if tor_why else ""),
+                f"   VPN           {view.tailnet_choice()}: "
+                f"{view.own_way_refusal('tailnet')}",
+                f"   egress        {mode}{(' ' + conf) if conf else ''}"
+                + (f"   ({egress_why})" if egress_why else ""), ""]
+        verbs = [v for v, why in (("tor on|off", tor_why),
+                                  ("egress direct|vpn PROVIDER-FILE", egress_why)) if not why]
+        if verbs:
+            out += ["commands: " + " · ".join(verbs), ""]
     else:
         words = view.reach_lines()
         mode, conf = view.egress_choice()

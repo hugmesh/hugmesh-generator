@@ -50,7 +50,8 @@ from ..core.config import DOMAIN_FIELDS, Domain, ImageConfig, unaffiliated_image
 
 __all__ = ["CREATE_KEY", "CREATE_LABEL", "UNAFFILIATED_REASON", "Choice", "BrandHost",
            "ImageHost", "BootstrapHost", "FleetHost", "BrandSession", "SuperbrandScreen",
-           "session_for", "IDENTITY_FIELDS", "IDENTITY_LABELS"]
+           "session_for", "IDENTITY_FIELDS", "IDENTITY_LABELS", "MeshWrites",
+           "ImageMeshWrites", "MESH_SIGNIN_CHOICES"]
 
 CREATE_KEY = "create"
 #: The word every screen uses for the mesh's governing brand: the table's, never a copy.
@@ -92,6 +93,170 @@ class Choice:
 
 
 # ── the hosts ────────────────────────────────────────────────────────────────────────
+# ── row 0: the mesh's own sign-in, Tor and egress, edited in place ───────────────────
+#: (key, the words a screen shows) — the MESH's own sign-in, as row 0 offers it. The
+#: keys are core.config.IDP_CHOICES; there is no "through the mesh" here, row 0 IS it.
+MESH_SIGNIN_CHOICES: tuple[tuple[str, str], ...] = (
+    ("casdoor", "The mesh's built-in Casdoor"),
+    ("entra", "Azure Entra ID"),
+    ("aws", "AWS Cognito"),
+    ("oidc", "Another OIDC provider"),
+)
+
+
+class MeshWrites:
+    """Row 0's writers (2026-10-21: "every tab per domain"). Row 0 is the mesh's own
+    domain, so its sign-in, Tor and egress ARE the mesh's: each write lands in the one
+    place the mesh-wide step keeps that value, never in a copy, so the step and row 0
+    always show the same thing. A value a route has no home for is refused with the
+    reason (``*_refusal``: "" = writable); the mesh's VPN is never chosen here (it is
+    the mesh's whole posture: ``vpn_where`` says where it is decided).
+
+    ``after`` (set by a window) is called after every successful write, so a page that
+    holds the value in a widget (the Identity provider step, the Network step) shows it
+    at once and cannot write its old value back."""
+
+    signin_refusal = ("this route keeps no mesh-wide sign-in, so row 0 has none to "
+                      "change")
+    tor_refusal = "this route keeps no mesh-wide Tor setting"
+    egress_refusal = "this route keeps no mesh-wide egress setting"
+    vpn_where = "this route keeps no mesh-wide VPN setting"
+
+    def __init__(self):
+        self.after = None
+
+    def _done(self) -> list[str]:
+        if callable(self.after):
+            try:
+                self.after()
+            except Exception:                   # noqa: BLE001 — a screen never raises
+                import sys
+                import traceback
+                print("superbrand_step: swallowed exception in MeshWrites.after",
+                      file=sys.stderr)
+                traceback.print_exc(file=sys.stderr)
+        return []
+
+    # the readers
+    def signin(self) -> tuple[str, str, str, str]:
+        return ("casdoor", "", "", "")
+
+    def tor(self) -> bool | None:
+        """The mesh's Tor (True/False), or None when this route has no such switch."""
+        return None
+
+    def egress(self) -> tuple[str, str]:
+        return ("direct", "")
+
+    # the writers
+    def set_signin(self, idp: str, issuer: str = "", client_id: str = "",
+                   jwks: str = "") -> list[str]:
+        return [self.signin_refusal]
+
+    def set_tor(self, on: bool) -> list[str]:
+        return [self.tor_refusal]
+
+    def set_egress(self, mode: str, conf: str = "") -> list[str]:
+        return [self.egress_refusal]
+
+
+def _signin_problems(idp: str, issuer: str, client_id: str, jwks: str) -> tuple[
+        list[str], tuple[str, str, str, str]]:
+    """The Identity provider step's own check (``ImageConfig.validate_identity`` on a
+    candidate carrying only the four fields — IdpPage._candidate), and the cleaned
+    values: the built-in Casdoor carries no external residue (that page's rule)."""
+    idp = (idp or "").strip()
+    keys = [k for k, _l in MESH_SIGNIN_CHOICES]
+    if idp not in keys:
+        return [f"‘{idp}’ is not a sign-in for the mesh ({', '.join(keys)})"], ("", "", "", "")
+    ext = idp != "casdoor"
+    vals = (idp, issuer.strip() if ext else "", client_id.strip() if ext else "",
+            jwks.strip() if ext else "")
+    try:
+        ImageConfig(idp=vals[0], idp_issuer=vals[1], idp_client_id=vals[2],
+                    idp_jwks=vals[3]).validate_identity()
+    except ValueError as exc:
+        return [str(exc)], vals
+    return [], vals
+
+
+def _egress_shape(mode: str, conf: str) -> list[str]:
+    from ..core import domain_reach
+    if mode not in domain_reach.EGRESS_MODES:
+        return [f"‘{mode}’ is not an egress choice for the mesh (vpn, direct)"]
+    block = {"mode": mode, **({"conf": conf.strip()} if conf.strip() else {})}
+    problems = domain_reach.egress_problems(block, "the mesh")
+    if not problems and mode == domain_reach.EGRESS_VPN and not conf.strip():
+        problems = ["the mesh's egress VPN needs its provider file: give the absolute "
+                    "path to a WireGuard .conf or an OpenVPN .ovpn"]
+    return problems
+
+
+class ImageMeshWrites(MeshWrites):
+    """The image wizard on a mesh: the Identity provider step's ``idp*`` fields and the
+    Network step's Tor service (``tor_onion_service``) and egress VPN file
+    (``egress_vpn``), on the wizard's ``ImageConfig``."""
+
+    signin_refusal = tor_refusal = ""
+    vpn_where = ("every node of a mesh joins the mesh's VPN: the mesh flow turns it on "
+                 "for every image, so it is not a choice")
+
+    def __init__(self, cfg: ImageConfig):
+        super().__init__()
+        self.cfg = cfg
+        #: the worklist rows the flow builds (a window or the text journey sets it):
+        #: the egress VPN file is a DESKTOP image's setting, offered by the Network step
+        #: only when every image of the flow can take it (``scope_allows_flow``)
+        self.entries = None
+
+    @property
+    def egress_refusal(self) -> str:
+        from ..core.config import field_in_scope, flow_allows
+        try:
+            entries = self.entries() if callable(self.entries) else None
+        except Exception:                       # noqa: BLE001 — a screen never raises
+            entries = None
+        if flow_allows(lambda img: field_in_scope("egress_vpn", img), self.cfg,
+                       entries or None):
+            return ""
+        return ("this mesh's images have no egress VPN setting: an egress VPN file is "
+                "a desktop image's choice (the Network step offers it only when every "
+                "image of the mesh is a desktop)")
+
+    def signin(self) -> tuple[str, str, str, str]:
+        c = self.cfg
+        return (c.idp or "casdoor", c.idp_issuer or "", c.idp_client_id or "",
+                c.idp_jwks or "")
+
+    def set_signin(self, idp, issuer="", client_id="", jwks="") -> list[str]:
+        problems, vals = _signin_problems(idp, issuer, client_id, jwks)
+        if problems:
+            return problems
+        c = self.cfg
+        c.idp, c.idp_issuer, c.idp_client_id, c.idp_jwks = vals
+        return self._done()
+
+    def tor(self) -> bool | None:
+        v = self.cfg.tor_onion_service
+        return v is True or (isinstance(v, str) and v.strip().lower() in ("on", "true"))
+
+    def set_tor(self, on: bool) -> list[str]:
+        # the Network step's two values for this tri-state field (its _off_value)
+        self.cfg.tor_onion_service = True if on else "off"
+        return self._done()
+
+    def egress(self) -> tuple[str, str]:
+        conf = (self.cfg.egress_vpn or "").strip()
+        return ("vpn", conf) if conf else ("direct", "")
+
+    def set_egress(self, mode, conf="") -> list[str]:
+        problems = _egress_shape(mode, conf)
+        if problems:
+            return problems
+        self.cfg.egress_vpn = conf.strip() if mode == "vpn" else ""
+        return self._done()
+
+
 class BrandHost:
     """Where one route keeps a mesh's brand. A host reads a record out of its
     configuration and writes the superbrand block (and a brand's row fields) back; it
@@ -153,6 +318,10 @@ class BrandHost:
         when the route has none."""
         return None
 
+    def mesh_writes(self) -> MeshWrites:
+        """Row 0's writers for this route (:class:`MeshWrites`); the base refuses all."""
+        return MeshWrites()
+
     # the rows, as fresh Domain objects (a snapshot the record can hold)
     def rows(self) -> list[Domain]:
         return [Domain(**dataclasses.asdict(d)) for d in self._live_rows()]
@@ -204,6 +373,14 @@ class ImageHost(BrandHost):
     def mesh(self):
         return self.cfg
 
+    def mesh_writes(self) -> MeshWrites:
+        # one writer object per host, so a window's ``after`` stays attached
+        w = self.__dict__.get("_mesh_writes")
+        if w is None:
+            w = ImageMeshWrites(self.cfg)
+            self._mesh_writes = w
+        return w
+
     def base_ca(self, name: str) -> str | None:
         return os.path.basename((getattr(self.cfg, "domain_ca", None) or {}).get(
             (name or "").strip(), ""))
@@ -253,6 +430,21 @@ class BootstrapHost(BrandHost):
         #: this to a callable returning the configuration those controls say NOW (the
         #: carrier holds only the brand); without it the carrier is read
         self.mesh_of = None
+        #: the same page's row-0 writers (a :class:`MeshWrites` that sets its controls);
+        #: without one (the text route, which has no mesh-wide sign-in, Tor or egress
+        #: step yet, #519) row 0 says where they are set instead
+        self.writes = None
+
+    def mesh_writes(self) -> MeshWrites:
+        if self.writes is not None:
+            return self.writes
+        w = MeshWrites()
+        w.signin_refusal = w.tor_refusal = w.egress_refusal = (
+            "the local mesh's own sign-in, Tor and egress are set in the window's "
+            "local mesh steps; the text route has no such step yet")
+        w.vpn_where = ("a local mesh joins its VPN only in production (the "
+                       "environment choice)")
+        return w
 
     def mesh(self):
         if callable(self.mesh_of):
@@ -349,6 +541,16 @@ class FleetHost(BrandHost):
 
     def mesh(self):
         return self.options
+
+    def mesh_writes(self) -> MeshWrites:
+        w = MeshWrites()
+        w.signin_refusal = ("the fleet build has no mesh-wide sign-in setting: its "
+                            "images sign in through the built-in Casdoor")
+        w.tor_refusal = "the fleet build has no mesh-wide Tor setting"
+        w.egress_refusal = "the fleet build has no mesh-wide egress setting"
+        w.vpn_where = ("a fleet's nodes join the VPN of the headscale server it names "
+                       "(the fleet's own setting)")
+        return w
 
     def profile_chosen(self, name: str) -> None:
         path = os.path.join(self.generator_dir, "brands", f"{name}.conf")

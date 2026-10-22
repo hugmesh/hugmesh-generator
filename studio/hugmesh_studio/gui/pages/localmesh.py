@@ -154,7 +154,7 @@ from ...core.seeded_credentials import Roster, annotate, load_roster
 from ...core.instance import state_dir
 from ...core.stage_tracker import StageTracker
 from ...tui.localmesh import PUBLIC_NAME_HOME, sync_brand_session
-from ...tui.superbrand_step import CREATE_KEY, session_for
+from ...tui.superbrand_step import CREATE_KEY, MeshWrites, session_for
 from ...core import e2e_environments
 from ._credentials_dialog import CredentialsDialog
 from .domain_services import DomainServicesWidget
@@ -619,6 +619,96 @@ class _BrandId(QtCore.QObject):
     def setCurrentText(self, text: str) -> None:
         self._page._set_brand_id(text)
 
+
+
+class _LocalMeshWrites(MeshWrites):
+    """Row 0 of the Docker route's Domain services step writes the mesh's own sign-in,
+    Tor and egress into THIS page's controls — the Identity provider fields, the Mesh
+    infrastructure step's ``tor`` and ``egress-vpn`` ticks and the egress provider file —
+    which are what the start collects (``collect_bootstrap``). One home: the step and
+    row 0 always show the same value. Programmatic ``setChecked`` fires no ``clicked``,
+    so no file dialog opens; the provider file is checked the way the tick's own
+    handler checks it (``validate_egress_conf``), inline."""
+
+    signin_refusal = tor_refusal = egress_refusal = ""
+    vpn_where = ("a local mesh joins its VPN only in production: the environment "
+                 "choice (test or production) on this route decides it")
+
+    def __init__(self, page):
+        super().__init__()
+        self.page = page
+
+    def signin(self):
+        p = self.page
+        idp = p.selected_idp()
+        ext = idp != "casdoor"
+        return (idp, p.idp_issuer.text().strip() if ext else "",
+                p.idp_client_id.text().strip() if ext else "",
+                p.idp_jwks.text().strip() if ext else "")
+
+    def set_signin(self, idp, issuer="", client_id="", jwks=""):
+        from ...tui.superbrand_step import _signin_problems
+        problems, vals = _signin_problems(idp, issuer, client_id, jwks)
+        if problems:
+            return problems
+        p = self.page
+        p.idp.setCurrentIndex(max(0, p.idp.findData(vals[0])))
+        p.idp_issuer.setText(vals[1])
+        p.idp_client_id.setText(vals[2])
+        p.idp_jwks.setText(vals[3])
+        return self._refresh()
+
+    def tor(self):
+        box = self.page.service_boxes.get("tor")
+        return bool(box is not None and box.isChecked())
+
+    def set_tor(self, on):
+        box = self.page.service_boxes.get("tor")
+        if box is None:
+            return ["this mesh has no Tor service to turn on"]
+        box.setChecked(bool(on))
+        return self._refresh()
+
+    def egress(self):
+        p = self.page
+        box = p.service_boxes.get("egress-vpn")
+        if box is not None and box.isChecked() and p._egress_vpn_conf:
+            return ("vpn", p._egress_vpn_conf)
+        return ("direct", "")
+
+    def set_egress(self, mode, conf=""):
+        from ...tui.superbrand_step import _egress_shape
+        problems = _egress_shape(mode, conf)
+        if problems:
+            return problems
+        p = self.page
+        box = p.service_boxes.get("egress-vpn")
+        if box is None:
+            return ["this mesh has no egress VPN service"]
+        if mode == "direct":
+            box.setChecked(False)
+            p._egress_vpn_conf = ""
+            p.egress_note.setVisible(False)
+            return self._refresh()
+        kind, err = validate_egress_conf(conf.strip())
+        if err:
+            return [err]
+        p._egress_vpn_conf = conf.strip()
+        box.setChecked(True)
+        p.egress_note.setStyleSheet("color: gray;")
+        p.egress_note.setText(
+            f"Egress VPN config: {os.path.basename(conf.strip())} ({kind}).")
+        p.egress_note.setVisible(True)
+        return self._refresh()
+
+    def _refresh(self):
+        refresh = getattr(self.page, "_refresh_plan", None)
+        if callable(refresh):
+            try:
+                refresh()
+            except Exception:                   # noqa: BLE001 — a screen never raises
+                pass
+        return self._done()
 
 class LocalMeshPage(QtWidgets.QWizardPage):
     #: The subtitle once the bottom panel holds the actions, the stages and the table.
@@ -2581,6 +2671,12 @@ class LocalMeshPage(QtWidgets.QWizardPage):
             # what a domain that inherits reads: this page's own sign-in, environment
             # and egress controls as they stand NOW (the carrier holds only the brand)
             s.host.mesh_of = self._mesh_now
+            # row 0 edits the mesh's own sign-in, Tor and egress IN THIS PAGE'S
+            # CONTROLS: they are the one home of those values on this route
+            w = self.__dict__.get("_row0_writes")
+            if w is None:
+                w = self._row0_writes = _LocalMeshWrites(self)
+            s.host.writes = w
             return s
         except Exception:                       # noqa: BLE001 — called from slots
             return None
