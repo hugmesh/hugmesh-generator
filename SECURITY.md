@@ -32,8 +32,9 @@ never be trusted or reused anywhere real. Reporting them is not needed:
 
 - `tests/stack/certs/` — the mock UI server's TLS leaf certificate and its private
   key. The CA that signed it is name-constrained (it can only vouch for the cluster
-  domain, `localhost` and the loopback addresses), and its private key is not in the
-  repository: `tests/e2e/run-all.sh` mints a fresh one on every run.
+  domain, `localhost` and the loopback addresses), and its private key is not
+  committed: `tests/e2e/run-all.sh` mints a fresh one on every run. Older commits hold
+  the key of a previous, retired test CA; never trust that CA anywhere.
 - The `${VAR:-default}` dev defaults in `tests/stack/compose.local.yaml`, such as
   `APP_BFF_CUSTODY_KEY`, `APP_MFA_FACTOR_KEY` and `dev-app-user-bff-secret`. They only
   make the local stack start; a real cluster gets its own values from
