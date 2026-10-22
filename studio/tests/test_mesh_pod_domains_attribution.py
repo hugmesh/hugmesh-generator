@@ -208,3 +208,13 @@ def test_two_rows_of_one_container_are_acted_on_once(monkeypatch):
     res = mc.run_domain_action(GENERATOR_DIR, None, [casdoor, twin], "acme.example",
                                "logs")
     assert res.ok and len(ran) == 1
+
+
+def test_a_refused_plan_reads_as_one_sentence():
+    """Seen live on kind: the Stop tooltip ended "…replaces this domain's pods..",
+    the refusal's own full stop plus the summary's."""
+    units = mm._name_kind_slugs(
+        _kind(), mm.DomainHints(names={"acme-example": "acme.example"}))
+    text = mc.domain_plan(units, "acme.example", "stop").summary()
+    assert mm.KIND_STOP_REFUSAL.endswith(".")
+    assert text.endswith("pods.") and not text.endswith(".."), text
