@@ -1994,7 +1994,7 @@ def saved_mesh_choice_text(rec) -> str:
     when = _short_when(str(getattr(rec, "updated", "") or getattr(rec, "created", "")
                            or ""))
     draft, before = _ran_state(rec)
-    state = (f" — not run as saved (ran before, {_short_when(before)})"
+    state = (f" — not run as saved (ran {_short_when(before)})"
              if draft and before else
              " — never ran (draft)" if draft else " — ran")
     return f"{label}" + (f" — saved {when}" if when else "") + state

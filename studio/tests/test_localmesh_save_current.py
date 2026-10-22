@@ -343,6 +343,11 @@ def test_the_armed_overwrite_says_the_credential_copies_go(qapp, page):
     # called one that never ran (saved-meshes skeptic 2, probe_core.py case A)
     assert "marked not run as saved" in note, note
     assert "never ran" not in note, note
+    # the words are where the person looks: the note is shown under an enabled,
+    # armed button, and is not squeezed to nothing
+    assert not w.overwrite_note.isHidden() and w.overwrite_note.isVisibleTo(w)
+    assert w.overwrite_btn.isEnabled() and "Click again" in w.overwrite_btn.text()
+    assert w.overwrite_note.wordWrap() and w.overwrite_note.sizeHint().height() > 0
 
 
 def test_a_record_without_copies_does_not_claim_any_go(qapp, page):
