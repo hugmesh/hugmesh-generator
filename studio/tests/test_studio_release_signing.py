@@ -125,6 +125,28 @@ def test_signing_actions_are_pinned_to_a_commit():
             assert re.fullmatch(r"[0-9a-f]{40}", ref), f"{action}@{ref} is not a commit SHA"
 
 
+def test_every_action_is_pinned_to_a_commit_with_its_tag_as_a_comment():
+    # The publish job holds contents/id-token/attestations write and signs what the
+    # build jobs uploaded, so a moved tag on ANY action in this file (the release
+    # action, checkout, the artifact up/download pair) could change what is signed or
+    # published. Each pin carries the tag it was resolved from, for the next bump.
+    uses = re.findall(r"(?m)^\s*(?:-\s+)?uses:\s*(\S+)(.*)$", _text())
+    assert len(uses) >= 10, uses
+    for ref, rest in uses:
+        action, _, sha = ref.partition("@")
+        assert re.fullmatch(r"[0-9a-f]{40}", sha), f"{ref} is not pinned to a commit SHA"
+        assert re.fullmatch(r"\s+#\s+v\d+(\.\d+)*\s*", rest), (
+            f"{action} pin has no '# vX.Y.Z' comment naming its tag: {rest!r}")
+    publish = [s["uses"] for s in _jobs()["publish"]["steps"] if "uses" in s]
+    assert any(u.startswith("softprops/action-gh-release@") for u in publish)
+
+
+def test_publish_checkout_does_not_keep_the_write_token_on_disk():
+    checkout = next(s for s in _jobs()["publish"]["steps"]
+                    if s.get("uses", "").startswith("actions/checkout@"))
+    assert checkout.get("with", {}).get("persist-credentials") is False
+
+
 def test_release_uploads_every_signed_file_and_stays_a_prerelease():
     release = next(s for s in _jobs()["publish"]["steps"]
                    if s.get("uses", "").startswith("softprops/action-gh-release@"))
