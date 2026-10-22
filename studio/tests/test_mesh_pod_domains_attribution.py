@@ -122,7 +122,8 @@ def test_the_appset_writes_the_name_annotation_on_both_pod_templates():
     assert seen == {"casdoor-domain", "casdoor-domain-pg"}
 
 
-# ── 2. the social profile: Matrix is the domain's, Mastodon is everyone's ────────
+# ── 2. the social profile: Matrix is the domain's, Mastodon is shared by the domains
+#       that turned it on (never one domain's: a domain's Stop never touches it) ───
 
 def _row(service, state="running", status="Up"):
     return {"Name": f"hugmesh-local-{service}-1", "Service": service, "State": state,
@@ -147,8 +148,11 @@ def test_one_domains_matrix_is_its_own_and_the_mastodon_tier_is_shared(monkeypat
     assert by["tuwunel"].domain == "shop.example"
     for svc in MASTODON:
         u = by[svc]
-        assert u.domain == "" and u.shared_by == (), svc
-        assert u.domain_text == mm.ALL_DOMAINS, svc
+        # it serves the domain whose tuwunel brought it up (reach_apply's answer),
+        # so it is labelled with that domain, not "All domains" — but it is still
+        # not that domain's own row: domain stays "" and no domain's verb touches it
+        assert u.domain == "" and u.shared_by == ("shop.example",), svc
+        assert u.domain_text == "Shared: shop.example", svc
         assert "social profile, which shop.example turned on by choosing tuwunel" \
             in u.domain_why, (svc, u.domain_why)
         assert f"no domain chooses {svc} itself" in u.domain_why
@@ -159,13 +163,35 @@ def test_one_domains_matrix_is_its_own_and_the_mastodon_tier_is_shared(monkeypat
         assert [u.owner for u in plan.targets] == ["tuwunel"], verb
 
 
-def test_two_domains_share_matrix_and_mastodon_stays_everyones(monkeypatch):
+def test_two_domains_share_matrix_and_their_mastodon(monkeypatch):
     hints = mm.DomainHints(service_domains={"tuwunel": ("a.example", "b.example")})
     by, _units = _compose(monkeypatch, _social_tier(), hints=hints)
     assert by["tuwunel"].shared_by == ("a.example", "b.example")
     for svc in MASTODON:
-        assert by[svc].shared_by == () and by[svc].domain == "", svc
+        assert by[svc].shared_by == ("a.example", "b.example") \
+            and by[svc].domain == "", svc
+        assert by[svc].domain_text == "Shared: a.example, b.example", svc
         assert "a.example, b.example turned on" in by[svc].domain_why
+
+
+@pytest.mark.parametrize("ticked", [("b.example",), ("mesh.example", "b.example"),
+                                     ("b.example", "c.example")])
+def test_the_mastodon_rows_name_the_domains_reach_apply_says_it_serves(monkeypatch,
+                                                                      ticked):
+    """One config, two readers: the monitor's Mastodon label and the egress code's
+    list of the domains the mesh's one Mastodon serves must name the same domains."""
+    from hugmesh_studio.core import reach_apply
+    from hugmesh_studio.core.local_mesh_bootstrap import LocalMeshBootstrapConfig
+    rows = tuple({"name": n, "optional_services": (["tuwunel"] if n in ticked else [])}
+                 for n in ("mesh.example", "b.example", "c.example"))
+    cfg = LocalMeshBootstrapConfig(cluster_domain="mesh.example", domains=rows,
+                                   services=())
+    serves = tuple(n for n, _r, _own in reach_apply.mastodon_domains(cfg))
+    assert set(serves) == set(ticked)
+    by, _units = _compose(monkeypatch, _social_tier(), hints=mm.domain_hints(cfg))
+    for svc in MASTODON:
+        assert set(by[svc].shared_by) == set(serves), svc
+        assert by[svc].domain == "", svc
 
 
 def test_matrix_chosen_for_the_whole_mesh_leaves_everything_shared(monkeypatch):
