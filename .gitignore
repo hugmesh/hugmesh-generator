@@ -64,9 +64,17 @@ tests/stack/.seed-e2e/
 # ...and its seed stamp (which file the identity store was last reconciled to).
 /.e2e-credentials.seeded
 # Per-machine TLS CA + leaf for the https front door (`make stack-certs`).
-# PRIVATE KEYS — never commit (unlike tests/stack/certs, the committed
-# mock-stack FIXTURES, this CA may be imported into the operator's browser).
+# PRIVATE KEYS — never commit (unlike the tests/stack/certs leaf, a committed
+# mock-stack FIXTURE, this CA may be imported into the operator's browser).
 tests/stack/.tls-front/
+# The mock-stack fixture CA's private key, serial and CSR. tests/e2e/run-all.sh
+# re-mints tests/stack/certs on every run; only the leaf, its key, the chain and
+# values.json are committed. A CA private key never goes into the repository:
+# anyone holding it could sign certificates that every machine trusting the CA
+# accepts (gen-certs.sh name-constrains the CA as a second line of defence).
+tests/stack/certs/ca.key
+tests/stack/certs/ca.srl
+tests/stack/certs/server.csr
 # The OPT-IN hugmesh-tor service (`make stack-up TOR=1`) copies the minted
 # PUBLIC .onion hostname here for the host/GUI to read (the private key stays in
 # the tor-onion-keys volume). Runtime-only, machine-specific; never commit.

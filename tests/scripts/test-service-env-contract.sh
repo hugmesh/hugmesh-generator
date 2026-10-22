@@ -273,15 +273,15 @@ p.write_text(s.replace(old, 'appname = f\"hm-{name}\"'), encoding='utf-8')
 PY
 "
 
-# (11) #14 verbatim: a pre-rebrand namespace comes back as an EMITTED value. The
-#      planted host keeps the RETIRED spelling on purpose — this control's whole
-#      subject is a pre-rebrand identifier resurfacing, so a rebranded fixture would
-#      make it a duplicate of (12) and stop testing what it names. Drift-guard
-#      fixture: the token is named here to prove it is CAUGHT, never to keep it live.
+# (11) #14's shape: a FOREIGN-brand namespace comes back as an EMITTED value. The
+#      planted host keeps a non-hugmesh prefix on purpose (a neutral `exampleorg-`
+#      stand-in for the retired pre-rebrand spelling) — this control's subject is a
+#      foreign identifier resurfacing, so a `hugmesh-` fixture would make it a
+#      duplicate of (12) and stop testing what it names.
 expect_catch "pre-rebrand namespace reintroduced in an env value (finding #14)" \
   "[stale-ref] hugmesh-user-bff-api/hugmesh-user-bff-api: ADMIN_BFF_INTERNAL_BASE_URL" "
   python3 -c '${PY_ENV}' \"\$T/manifests/user-bff-api/deployment.yaml\" hugmesh-user-bff-api \
-    '[e.update(value=\"http://snapdragon-admin-bff-api.snapdragon-backend.svc.cluster.local:8080\") for e in env if e[\"name\"]==\"ADMIN_BFF_INTERNAL_BASE_URL\"]'
+    '[e.update(value=\"http://exampleorg-admin-bff-api.exampleorg-backend.svc.cluster.local:8080\") for e in env if e[\"name\"]==\"ADMIN_BFF_INTERNAL_BASE_URL\"]'
 "
 
 # (12) …and the version a brand-prefix pattern rule CANNOT see: a perfectly
@@ -407,7 +407,7 @@ YAML
   cat > "$2/hugmesh-newthing-bff-api/src/main/resources/application.yml" <<'YAML'
 newthing:
   peer:
-    base-url: "${NEWTHING_PEER_BASE_URL:http://newthing-peer.snapdragon-backend.svc.cluster.local:8080}"
+    base-url: "${NEWTHING_PEER_BASE_URL:http://newthing-peer.exampleorg-backend.svc.cluster.local:8080}"
 YAML
 }
 expect_catch_fn "a new BFF arrives carrying its own stale default" \
@@ -441,7 +441,7 @@ inject_actions_new_stale_default() {   # a NEW dangling-namespace default in hug
 import sys
 p = sys.argv[1]
 s = open(p, encoding="utf-8").read()
-s += "\nplanted:\n  peer:\n    base-url: \"${PLANTED_PEER_URL:http://peer.snapdragon-backend.svc.cluster.local:8080}\"\n"
+s += "\nplanted:\n  peer:\n    base-url: \"${PLANTED_PEER_URL:http://peer.exampleorg-backend.svc.cluster.local:8080}\"\n"
 open(p, "w", encoding="utf-8").write(s)
 PY
 }
@@ -464,7 +464,7 @@ expect_catch_fn "without the allowlist entry R3 still flags hugmesh-actions (R3 
   "[env-derived] hugmesh-api/api: none of GITHUB_API_BASE_URL is set" inject_allowlist_removed
 inject_allowlist_covers_namespace() {   # allowlisting must never excuse a dangling namespace
   inject_actions_new_stale_default "$1" "$2"
-  contract_edit "$1" 'c["externalIntegrations"].append({"repo": "hugmesh-actions", "property": "planted.peer.base-url", "default": "http://peer.snapdragon-backend.svc.cluster.local:8080", "reason": "x"})'
+  contract_edit "$1" 'c["externalIntegrations"].append({"repo": "hugmesh-actions", "property": "planted.peer.base-url", "default": "http://peer.exampleorg-backend.svc.cluster.local:8080", "reason": "x"})'
 }
 expect_catch_fn "the allowlist cannot excuse a dangling-namespace default" \
   "[env-derived] hugmesh-api/api: none of PLANTED_PEER_URL is set" inject_allowlist_covers_namespace

@@ -631,8 +631,8 @@ services:
   # gateway, never this terminator — HTTPS works under ENV=test and ENV=prod
   # alike. Certs are per-machine and gitignored (tests/stack/.tls-front, minted
   # by `make stack-certs`); the committed tests/stack/certs fixtures are NOT
-  # used because their CA private key is public in the repo — a browser must
-  # never be asked to trust a CA anyone can sign with.
+  # used because their leaf private key is public in the repo and their CA is
+  # re-minted on every e2e run — a browser must never be asked to trust them.
   hugmesh-https-front:
     <<: *amd64
     image: nginx:1.27-alpine
@@ -864,7 +864,7 @@ services:
       APP_BFF_OIDC_ISSUER: ${APP_BFF_OIDC_ISSUER:-http://casdoor:8000}
       APP_BFF_OIDC_CLIENT_ID: ${CASDOOR_APP_CLIENT_ID:-app-user-bff}
       APP_BFF_OIDC_CLIENT_SECRET: ${CASDOOR_APP_SECRET:-dev-app-user-bff-secret}
-      APP_BFF_CUSTODY_KEY: ${APP_BFF_CUSTODY_KEY:-c25hcGRyYWdvbi1kZXYtY3VzdG9keS1rZXktMzJieXQ=}
+      APP_BFF_CUSTODY_KEY: ${APP_BFF_CUSTODY_KEY:-aHVnbWVzaC1sb2NhbC1kZXYtY3VzdG9keS1rZXktMzI=}
       # A3+A5 Casdoor-MFA step-up leg (app.casdoor.mfa.enabled). Platform-wide rollout
       # (see specs/cluster/manifests/admin-bff-api/deployment.yaml): a fresh bff_session
       # MFA stamp becomes a co-equal, license-independent step-up satisfier alongside the
@@ -878,7 +878,7 @@ services:
       # INERT and every TOTP enroll returned 503 "MFA factor key not provisioned" —
       # MFA was un-exercisable on the local stack. Dev key (any 32-byte base64; the
       # login-ui MFA enroll/challenge pages + the e2e MFA specs need it live).
-      APP_MFA_FACTOR_KEY: ${APP_MFA_FACTOR_KEY:-c25hcGRyYWdvbi1kZXYtbWZhLWZhY3Rvci1rZXktMzJieXRl}
+      APP_MFA_FACTOR_KEY: ${APP_MFA_FACTOR_KEY:-aHVnbWVzaC1sb2NhbC1kZXYtbWZhLWZhY3Rvci1rZXk=}
     depends_on:
       admin-bff-db-init: { condition: service_completed_successfully }
       admin-bff-db: { condition: service_healthy }
@@ -1039,7 +1039,7 @@ services:
       APP_BFF_OIDC_CLIENT_ID: ${CASDOOR_APP_CLIENT_ID:-app-user-bff}
       APP_BFF_OIDC_CLIENT_SECRET: ${CASDOOR_APP_SECRET:-dev-app-user-bff-secret}
       APP_BFF_OIDC_REDIRECT_URI: ${CASDOOR_APP_REDIRECT_URI:-http://hugmesh-user-bff-api:8080/bff/auth/callback}
-      APP_BFF_CUSTODY_KEY: ${APP_BFF_CUSTODY_KEY:-c25hcGRyYWdvbi1kZXYtY3VzdG9keS1rZXktMzJieXQ=}
+      APP_BFF_CUSTODY_KEY: ${APP_BFF_CUSTODY_KEY:-aHVnbWVzaC1sb2NhbC1kZXYtY3VzdG9keS1rZXktMzI=}
       # ── Self-service Casdoor account writes (change password / change email) ──
       # user-bff's /bff/user/profile/{password,email} relay to Casdoor's
       # /api/set-password and /api/update-user. The BFF ships this surface DARK

@@ -36,8 +36,7 @@
 #          canonical TREE digest MUST equal manifest.base.treeSha256 (binds the
 #          SIGNED manifest to the actual file bytes — provenance metadata alone does
 #          NOT cover the tree); manifest.base.meshId MUST equal the declared mesh.
-#   [b]    PROVENANCE / SIGNATURE — verify .hugmesh-provenance.json(.sig), or the
-#          LEGACY_COMPAT pre-rebrand .snapdragon-provenance.json(.sig), via
+#   [b]    PROVENANCE / SIGNATURE — verify .hugmesh-provenance.json(.sig) via
 #          provenance.sh against the FOREIGN mesh's PINNED pubkey resolved from the
 #          trust store (base64 SPKI DER, pubkeys-only). NO trust-on-first-use: an
 #          unknown mesh with no pinned key fails closed. Verify ONLY against the
@@ -100,21 +99,10 @@ FIB_MAX_DEPTH="${FIB_MAX_DEPTH:-24}"
 FIB_MANIFEST=".hugmesh-provenance.json"
 FIB_SIG=".hugmesh-provenance.json.sig"
 FIB_SBOM=".hugmesh-sbom.json"
-# ── LEGACY_COMPAT — pre-rebrand attestation-envelope names ───────────────────
-# These files are SIGNED and already sitting on other meshes' disks. A foreign
-# base cut before the HugMesh rebrand ships them under the old names, and the
-# signature covers the tree as it is — so this side READS both spellings (new
-# first) while provenance.sh WRITES only the new ones. Dropping the fallback does
-# not migrate those meshes; it just makes their bases unverifiable (rejected as
-# "unsigned/unattested"). Retire only when no fleet mesh can still be on a
-# pre-rebrand base.
-FIB_MANIFEST_LEGACY_COMPAT=".snapdragon-provenance.json"
-FIB_SIG_LEGACY_COMPAT=".snapdragon-provenance.json.sig"
-# Markers dropped into an ADMITTED snapshot (stripped before overlay-copy).
-# WRITE side is new-only; the digest exclusion below also covers the legacy name
-# so a pre-rebrand snapshot's stamp never enters the canonical tree digest.
+# (The pre-rebrand envelope and stamp names were retired before the public
+# release: a base carrying only those is rejected as unsigned/unattested.)
+# Marker dropped into an ADMITTED snapshot (stripped before overlay-copy).
 FIB_ADMIT_STAMP=".hugmesh-mesh-admitted"
-FIB_ADMIT_STAMP_LEGACY_COMPAT=".snapdragon-mesh-admitted"
 FIB_FOREIGN_MARK=".foreign-mesh-id"
 
 _FIB_DNS_LABEL='^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$'
@@ -188,9 +176,6 @@ _fib_tree_digest() {
         ! -path "./${FIB_MANIFEST}" \
         ! -path "./${FIB_SIG}" \
         ! -path "./${FIB_ADMIT_STAMP}" \
-        ! -path "./${FIB_MANIFEST_LEGACY_COMPAT}" \
-        ! -path "./${FIB_SIG_LEGACY_COMPAT}" \
-        ! -path "./${FIB_ADMIT_STAMP_LEGACY_COMPAT}" \
         ! -path "./${FIB_FOREIGN_MARK}" \
         -print0 \
       | LC_ALL=C sort -z \
@@ -417,15 +402,10 @@ ingest_foreign_base() {
   fi
 
   # ── [a] DIGEST PIN — bind the SIGNED manifest to the actual tree bytes ────────
-  # LEGACY_COMPAT dual-read: prefer the new envelope, fall back to the pre-rebrand
-  # one. Manifest and signature are resolved as a PAIR — a tree that ships the new
-  # manifest beside only the legacy .sig (or the reverse) is a mismatched envelope
-  # and must be rejected, not silently half-verified.
+  # Manifest and signature are resolved as a PAIR.
   local manifest="" sigfile=""
   if [ -f "${build}/${FIB_MANIFEST}" ]; then
     manifest="${build}/${FIB_MANIFEST}"; sigfile="${build}/${FIB_SIG}"
-  elif [ -f "${build}/${FIB_MANIFEST_LEGACY_COMPAT}" ]; then
-    manifest="${build}/${FIB_MANIFEST_LEGACY_COMPAT}"; sigfile="${build}/${FIB_SIG_LEGACY_COMPAT}"
   fi
   [ -n "$manifest" ] || { _fib_reject "no ${FIB_MANIFEST} in foreign base (unsigned/unattested)"; return 1; }
   [ -f "$sigfile" ] || { _fib_reject "no ${sigfile##*/} detached signature in foreign base"; return 1; }
@@ -618,7 +598,6 @@ ingest_foreign_base() {
     [ -n "$term" ] || continue
     hit="$(grep -ralF -- "$term" "$build" 2>/dev/null \
             | grep -vxF -e "${build}/${FIB_MANIFEST}" -e "${build}/${FIB_SIG}" -e "${build}/${FIB_SBOM}" \
-                         -e "${build}/${FIB_MANIFEST_LEGACY_COMPAT}" -e "${build}/${FIB_SIG_LEGACY_COMPAT}" \
             | head -n1)"
     if [ -n "$hit" ]; then
       _fib_reject "foreign code carries OUR frozen protocol constant '${term}' (${hit#$build/}) — impersonation/laundering"; return 1

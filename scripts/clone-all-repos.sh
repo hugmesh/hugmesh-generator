@@ -56,9 +56,6 @@ REPOS=(
   # ── Static fragment fleet (sync image; the nginx image is public upstream) ──
   hugmesh-remote-fragment
   # ── Angular host + federated remotes (each Dockerfile -> nginx) ──
-  # NOTE: the host shell's repo is hugmesh-host-shell — its pre-rename name was
-  # domain-shaped rather than `<brand>-<service>`, so it did not follow the
-  # mechanical prefix rename. legacy_name() below carries the mapping.
   hugmesh-host-shell
   hugmesh-admin-ui
   hugmesh-mod-ui
@@ -299,41 +296,6 @@ if [ -z "${CRED_MECH}" ]; then
 fi
 echo "    using: ${CRED_MECH} — $(mech_desc "${CRED_MECH}")"
 
-# ── pre-rename checkout migration (LEGACY_COMPAT) ────────────────────────────
-# The org renamed every service repo to hugmesh-* during the HugMesh rebrand. A
-# ./.stack-src populated before that holds the old DIRECTORY names, which compose
-# no longer resolves. Rename in place rather than re-clone: same git objects, no
-# multi-GB re-download, and the stale dirs don't linger as dead weight. Only ever
-# renames INTO a free name, so a tree that already has both is left untouched.
-#
-# The pre-rename spellings below are LEGACY_COMPAT READ-ONLY inputs — the only
-# thing that can identify an existing multi-GB checkout on the operator's disk.
-# They are never written and never emitted; deleting them does not migrate those
-# directories, it just makes the migration silently stop finding them. Retire when
-# no ./.stack-src can predate the rebrand.
-legacy_name() { # canonical name -> pre-rename name ("" if there is none)
-  case "$1" in
-    # The host shell's pre-rename repo was domain-shaped, not <brand>-<service>.
-    hugmesh-host-shell) printf 'snapdragon.systems' ;;
-    hugmesh-*)          printf 'snapdragon-%s' "${1#hugmesh-}" ;;
-    *)                  printf '' ;;
-  esac
-}
-
-migrate_legacy_dir() { # canonical name
-  local new="$1" old
-  old="$(legacy_name "${new}")"
-  [ -n "${old}" ]                       || return 0
-  [ -d "${STACK_SRC}/${old}/.git" ]     || return 0
-  [ ! -e "${STACK_SRC}/${new}" ]        || return 0
-  echo "  ~~ ${old} -> ${new}: renaming pre-rename checkout in place"
-  mv "${STACK_SRC}/${old}" "${STACK_SRC}/${new}"
-  # Re-point at the canonical URL (the old one only resolves via GitHub's rename
-  # redirect). Deliberately NOT the token-injecting helper above: that would
-  # persist a credential into .git/config.
-  git -C "${STACK_SRC}/${new}" remote set-url origin "${GIT_BASE}/${new}.git" 2>/dev/null || true
-}
-
 # Fetch, falling back to the gh-CLI credential helper.
 #
 # WHY THE FALLBACK: an ambient FINE-GRAINED `GH_TOKEN` in the environment takes
@@ -399,7 +361,6 @@ checkout_is_disposable() { # <checkout-dir> <ref>
 
 ok=0 fail=0 kept=0
 for repo in "${REPOS[@]}"; do
-  migrate_legacy_dir "${repo}"
   dest="${STACK_SRC}/${repo}"
   if [ -d "${dest}/.git" ]; then
     echo "  -- ${repo}: present, updating (${GIT_REF})"
