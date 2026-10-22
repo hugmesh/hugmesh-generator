@@ -151,6 +151,35 @@ def test_a_mastodon_domains_direct_turns_the_meshs_tick_off(confs):
                for w in boot.warnings())
 
 
+def test_the_meshs_file_is_checked_only_when_the_start_uses_it(confs, tmp_path):
+    """The Mesh infrastructure tick is on with a bad (or no) provider file, but the
+    domains that run the mesh's one Mastodon chose for themselves: the start never
+    mounts the mesh's file, so it must not refuse over it."""
+    bad = tmp_path / "not-a-vpn.conf"
+    bad.write_text("hello\n")
+
+    def mesh_refusals(cfg):
+        return [p for p in LocalMeshBootstrap(GENERATOR_DIR, cfg).validate()
+                if p.startswith("Egress VPN is selected")]
+
+    for mesh_conf in (str(bad), ""):
+        own_file = _cfg([_row("b.example", ["tuwunel"],
+                              {"mode": "vpn", "conf": confs["b"]})],
+                        mesh_conf=mesh_conf, mesh_tick=True)
+        assert own_file.applied_egress().conf == os.path.abspath(confs["b"])
+        assert mesh_refusals(own_file) == [], mesh_conf
+        all_direct = _cfg([_row("b.example", ["tuwunel"], {"mode": "direct"})],
+                          mesh_conf=mesh_conf, mesh_tick=True)
+        assert not all_direct.applied_egress().on
+        assert mesh_refusals(all_direct) == [], mesh_conf
+        # still refused wherever the mesh's file IS what the start mounts: no domain
+        # choice, or a domain VPN with no file of its own (it inherits the mesh's)
+        for rows in ([_row("b.example", ["tuwunel"])],
+                     [_row("b.example", ["tuwunel"], {"mode": "vpn"})]):
+            cfg = _cfg(rows, mesh_conf=mesh_conf, mesh_tick=True)
+            assert mesh_refusals(cfg), (mesh_conf, rows)
+
+
 def test_a_domain_vpn_without_a_file_uses_the_meshs_file(confs):
     cfg = _cfg([_row("b.example", ["tuwunel"], {"mode": "vpn"})],
                mesh_conf=confs["mesh"], mesh_tick=True)

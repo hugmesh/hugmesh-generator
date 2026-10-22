@@ -1018,7 +1018,16 @@ class LocalMeshBootstrap:
         # container refuses to start without one, fail-closed; this preflight moves
         # that refusal from minutes into the up to the plan). Same sniff rules as
         # the entrypoint via core.egress_conf.
-        if self.cfg.effective_egress_vpn():
+        # Checked only when the start USES the mesh's file: the domains that run the
+        # mesh's one Mastodon can override the tick (core/reach_apply) — all direct
+        # turns the container off, their own files replace the mesh's — and their
+        # files are checked per domain below (domain_reach.egress_conf_problems).
+        egress = self.cfg.applied_egress()
+        mesh_conf = self.cfg.egress_vpn_conf.strip()
+        mesh_file = os.path.abspath(os.path.expanduser(mesh_conf)) if mesh_conf else ""
+        uses_mesh_file = (not egress.from_domains
+                          or (egress.on and egress.conf in ("", mesh_file)))
+        if self.cfg.effective_egress_vpn() and uses_mesh_file:
             _kind, err = validate_egress_conf(self.cfg.egress_vpn_conf.strip())
             if err:
                 problems.append(f"Egress VPN is selected but has no usable config "
