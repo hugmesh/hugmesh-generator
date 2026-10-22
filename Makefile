@@ -1975,17 +1975,18 @@ STACK_OWN_CASDOOR_DOWN_FLAGS := $(if $(wildcard $(STACK_OWN_CASDOOR_COMPOSE)),-f
 STACK_LIMITS_COMPOSE := tests/stack/.compose.limits.yaml
 STACK_LIMITS_FLAGS := $(if $(wildcard $(STACK_LIMITS_COMPOSE)),-f $(STACK_LIMITS_COMPOSE),)
 # A domain's own look, served by Host at the HTTPS front door. The Studio writes
-# tests/stack/.looks/ (gitignored: per-domain hug-theme.css folders, hosts.map, and
-# the extra `make view` rows) when it starts a mesh with added domains, and removes
-# it when there are none (studio core/look_serving.py). While hosts.map exists the
-# committed overlay mounts that folder read-only into hugmesh-https-front, whose
-# tls-front/default.conf maps the Host to the folder. Gated on the FILE, never on a
+# tests/stack/.looks/ (gitignored: per-domain hug-theme.css folders, a by-host/
+# folder per domain with its own look, and the extra `make view` rows) when it
+# starts a mesh with added domains, and removes it when there are none (studio
+# core/look_serving.py). While by-host/ exists the committed overlay mounts that
+# folder read-only into hugmesh-https-front, whose tls-front/default.conf answers
+# the stylesheet from by-host/<Host>/ (looked up per request, so no reload). Gated on the FILE, never on a
 # bare mount in compose.local.yaml: Docker creates a missing bind-mount folder as
 # root, which the Studio could then never write again. Absent on every untouched
 # checkout, so the compose invocation stays byte-identical there.
-STACK_LOOKS_MAP := tests/stack/.looks/hosts.map
+STACK_LOOKS_GATE := tests/stack/.looks/by-host
 STACK_LOOKS_COMPOSE := tests/stack/compose.looks.yaml
-STACK_LOOKS_FLAGS := $(if $(wildcard $(STACK_LOOKS_MAP)),-f $(STACK_LOOKS_COMPOSE),)
+STACK_LOOKS_FLAGS := $(if $(wildcard $(STACK_LOOKS_GATE)),-f $(STACK_LOOKS_COMPOSE),)
 
 STACK_EGRESS_COMPOSE := tests/stack/compose.egress-vpn.yaml
 STACK_EGRESS_FLAGS := $(if $(strip $(EGRESS_VPN)),-f $(STACK_EGRESS_COMPOSE) --profile egress-vpn,) $(if $(strip $(ANUBIS)),--profile anubis,)

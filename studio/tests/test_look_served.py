@@ -1,12 +1,13 @@
 """A domain's own look reaches that domain's sign-in page on the Docker mesh
 (theme survey item B; core/look_serving.py).
 
-The chain, every link offline: the bootstrap record -> LocalStackNode writes
-tests/stack/.looks/ (one folder of stylesheets per added domain, the nginx Host map,
-the extra `make view` rows) -> the committed HTTPS front door includes the map and
-answers *-theme.css from the folder -> the Makefile mounts the folder only while the
-map exists -> hugmesh-view serves one row per added domain. The parametrised
-door test below removes each committed half in turn and expects "not served".
+The chain, every link offline: the bootstrap record -> LocalStackNode.start() writes
+tests/stack/.looks/ (one folder of stylesheets per added domain, a by-host/<name>/
+folder per domain with its own look, the extra `make view` rows) -> the committed
+HTTPS front door answers *-theme.css from by-host/$host/ -> the Makefile mounts the
+folder only while by-host/ exists -> hugmesh-view serves one row per added domain.
+The parametrised door test below removes each committed half in turn and expects
+"not served".
 """
 from __future__ import annotations
 
@@ -18,7 +19,9 @@ import sys
 
 import pytest
 
-from hugmesh_studio.core import brand_look, look_serving, stack_limits, view_doors
+from hugmesh_studio.core import (brand_look, local_stack_node, look_serving, stack_limits,
+                                  view_doors)
+from hugmesh_studio.core.local_stack_node import LocalStackNode
 from hugmesh_studio.core.local_mesh_bootstrap import (LocalMeshBootstrap,
                                                       LocalMeshBootstrapConfig)
 
@@ -53,10 +56,50 @@ def _read(*parts):
         return fh.read()
 
 
+def _hosts(gen):
+    d = os.path.join(_looks(gen), look_serving.HOSTS_DIRNAME)
+    return sorted(os.listdir(d)) if os.path.isdir(d) else None
+
+
+def _snapshot(root):
+    """Every file under ``root`` with its bytes (None when ``root`` is missing)."""
+    if not os.path.isdir(root):
+        return None
+    out = {}
+    for dirpath, _dirs, files in os.walk(root):
+        for f in files:
+            p = os.path.join(dirpath, f)
+            with open(p, "rb") as fh:
+                out[os.path.relpath(p, root)] = fh.read()
+    return out
+
+
+class _FakeMake:
+    """Stands in for `make` (subprocess.run in local_stack_node): records each target
+    and answers rc 0, so a verb runs its real Python path and no container starts."""
+    def __init__(self):
+        self.targets = []
+
+    def __call__(self, argv, **kw):
+        self.targets.append(argv[1])
+        return local_stack_node.subprocess.CompletedProcess(argv, 0, "", "")
+
+
+@pytest.fixture
+def fake_make(monkeypatch):
+    fake = _FakeMake()
+    monkeypatch.setattr(local_stack_node.subprocess, "run", fake)
+    monkeypatch.setattr(LocalStackNode, "preflight", lambda self: [])
+    monkeypatch.setattr(LocalStackNode, "cold_build_expected", lambda self: False)
+    return fake
+
+
 # ── the record -> files -> map -> view rows chain ───────────────────────────────────
-def test_a_bring_up_writes_each_added_domains_look_the_host_map_and_the_view_rows(gen):
+def test_a_bring_up_writes_each_added_domains_look_its_host_folder_and_the_view_rows(
+        gen, fake_make):
     node = LocalMeshBootstrap(gen, _cfg())._stack_node()
-    node._build_env()
+    assert node.start() == (True, "")
+    assert fake_make.targets == ["stack-up"]
     d = _looks(gen)
     assert node.looks_error == ""
     # the domain with its own look: its stylesheet is the record's composition
@@ -67,10 +110,11 @@ def test_a_bring_up_writes_each_added_domains_look_the_host_map_and_the_view_row
     # an inheriting domain's file is the superbrand's, byte for byte
     assert (_read(d, "blog-example", "hug-theme.css")
             == _read(d, "default", "hug-theme.css"))
-    # the map names ONLY the domain with its own look; never the mesh's own name
-    live = [l for l in _read(d, look_serving.MAP_NAME).splitlines()
-            if l.strip() and not l.startswith("#")]
-    assert live == ["shop.example shop-example;"]
+    # a Host folder ONLY for the domain with its own look; never the mesh's own name
+    assert _hosts(gen) == ["shop.example"]
+    for f in ("hug-theme.css", "snap-theme.css"):
+        assert _read(d, "by-host", "shop.example", f) == want
+    assert not os.path.exists(os.path.join(d, "hosts.map"))
     # one view row per added domain, through the TLS door, on its own port
     rows = view_doors.parse(_read(d, look_serving.VIEW_NAME), {})
     assert [(r.name, r.lane, r.host, r.upstream, r.port, r.path) for r in rows] == [
@@ -80,38 +124,94 @@ def test_a_bring_up_writes_each_added_domains_look_the_host_map_and_the_view_row
          "https://127.0.0.1:8488", 9101, "/login/")]
 
 
-def test_a_mesh_with_no_added_domain_writes_nothing(gen):
+def test_a_mesh_with_no_added_domain_writes_nothing(gen, fake_make):
     node = LocalMeshBootstrap(gen, _cfg(domains=()))._stack_node()
-    node._build_env()
+    node.start()
     assert not os.path.exists(_looks(gen))
 
 
-def test_dropping_the_last_added_domain_clears_the_folder_so_the_mount_goes_too(gen):
-    LocalMeshBootstrap(gen, _cfg())._stack_node()._build_env()
-    assert os.path.isfile(os.path.join(_looks(gen), look_serving.MAP_NAME))
-    LocalMeshBootstrap(gen, _cfg(domains=()))._stack_node()._build_env()
+def test_dropping_the_last_added_domain_clears_the_folder_so_the_mount_goes_too(
+        gen, fake_make):
+    LocalMeshBootstrap(gen, _cfg())._stack_node().start()
+    assert os.path.isdir(os.path.join(_looks(gen), look_serving.HOSTS_DIRNAME))
+    LocalMeshBootstrap(gen, _cfg(domains=()))._stack_node().start()
     assert not os.path.exists(_looks(gen))
+
+
+def test_a_domain_added_or_switched_later_changes_the_host_folders_as_a_set(gen, fake_make):
+    """The stale-map blocker: what the door serves must follow the record at every
+    start, with no restart of the door. The door reads by-host/<Host>/ per request
+    (pinned below and proven in a throwaway nginx), so the folders ARE the state."""
+    LocalMeshBootstrap(gen, _cfg())._stack_node().start()
+    assert _hosts(gen) == ["shop.example"]
+    # blog.example gets a look of its own on the second start: its folder appears
+    LocalMeshBootstrap(gen, _cfg(domains=(
+        {"name": "shop.example", "look": {"primary": "#ff0000"}},
+        {"name": "blog.example", "look": {"primary": "#00ff00"}})))._stack_node().start()
+    assert _hosts(gen) == ["blog.example", "shop.example"]
+    assert "#00ff00" in _read(_looks(gen), "by-host", "blog.example", "hug-theme.css")
+    # shop.example goes back to inheriting: its folder goes, so the gateway answers it
+    LocalMeshBootstrap(gen, _cfg(domains=(
+        {"name": "shop.example"},
+        {"name": "blog.example", "look": {"primary": "#00ff00"}})))._stack_node().start()
+    assert _hosts(gen) == ["blog.example"]
+
+
+def test_a_bare_node_never_touches_the_looks(gen, fake_make):
+    """The stack tray (and the pod views) build LocalStackNode(generator_dir), which
+    knows nothing about domains. Its Start and Stop must leave the folder exactly as
+    the last Studio start wrote it, or the overlay drops and every look is lost."""
+    LocalMeshBootstrap(gen, _cfg())._stack_node().start()
+    before = _snapshot(_looks(gen))
+    assert before and "by-host/shop.example/hug-theme.css" in before
+    bare = LocalStackNode(gen)
+    assert bare.start()[0] and bare.stop()[0]
+    bare._build_env()
+    assert fake_make.targets == ["stack-up", "stack-up", "stack-halt"]
+    assert _snapshot(_looks(gen)) == before
+
+
+def test_only_a_start_writes_the_looks(gen, fake_make):
+    """A page that holds the EMPTY default config (the e2e page) runs make verbs too;
+    only a start may write or clear the folder, so those verbs leave it alone."""
+    LocalMeshBootstrap(gen, _cfg())._stack_node().start()
+    before = _snapshot(_looks(gen))
+    empty = LocalMeshBootstrap(gen, LocalMeshBootstrapConfig())._stack_node()
+    assert empty.stop()[0]
+    empty._build_env()
+    assert _snapshot(_looks(gen)) == before
 
 
 def test_a_read_env_writes_no_looks(gen):
     node = LocalMeshBootstrap(gen, _cfg())._stack_node()
     assert node._build_env(write_overlays=False) == node._build_env(write_overlays=False)
+    node._build_env()
     assert not os.path.exists(_looks(gen))
 
 
-def test_a_look_that_cannot_be_written_clears_the_old_folder_and_says_why(gen, monkeypatch):
-    LocalMeshBootstrap(gen, _cfg())._stack_node()._build_env()
+def test_a_look_that_cannot_be_written_clears_the_old_folder_and_says_why(gen, fake_make):
+    LocalMeshBootstrap(gen, _cfg())._stack_node().start()
     node = LocalMeshBootstrap(gen, _cfg(domains=(
         {"name": "shop.example", "look": {"primary": "not-a-colour"}},)))._stack_node()
-    node._build_env()                       # never raises: best-effort like .theme.css
+    seen = []
+    ok, msg = node.start(on_line=seen.append)   # never raises: best-effort
     assert "domain looks not served" in node.looks_error
     assert not os.path.exists(_looks(gen))  # nothing from the earlier start is served
+    # ...and the operator is TOLD, first thing in the run log and in the message
+    assert seen and seen[0].startswith("[looks] domain looks not served")
+    assert "mesh's own look" in seen[0]
+    assert msg.startswith("[looks] domain looks not served")
+    # the buffered path (no on_line) says it too
+    ok, msg = node.stop()
+    assert msg.startswith("[looks] domain looks not served")
 
 
-def test_only_safe_names_reach_the_nginx_map():
+def test_only_safe_names_become_folders():
     rows = [{"name": "ok.example"}, {"name": "evil.example;}"}, {"name": "x"},
             {"name": "mesh.example"}, {"name": "OK.example"},
-            {"name": "two.example", "id": "Bad_Id"}, {"name": "d.example", "id": "default"}]
+            {"name": "two.example", "id": "Bad_Id"}, {"name": "d.example", "id": "default"},
+            {"name": "h.example", "id": "by-host"}, {"name": "../up.example"},
+            {"name": "a/b.example"}]
     got = look_serving.served_brands(rows, "mesh.example")
     assert [(b.name, b.bid) for b in got] == [("ok.example", "ok-example")]
 
@@ -143,19 +243,47 @@ def test_the_overlay_mounts_the_folder_where_the_conf_reads_it():
     assert vols == [f"./.looks:{look_serving.MOUNT_POINT}:ro"]
     # the base never mounts it (Docker would create a missing folder as root)
     assert not any(".looks" in v for v in base["services"]["hugmesh-https-front"]["volumes"])
-    assert re.search(r"map \$host \$hug_look \{\s*default _unmapped;\s*include "
-                     + re.escape(look_serving.MOUNT_POINT) + r"/hosts\.map\*;", conf)
-    assert f"root {look_serving.MOUNT_POINT}/$hug_look;" in conf
+    assert f"root {look_serving.MOUNT_POINT}/by-host/$host;" in conf
     assert "try_files /${hug_look_file}-theme.css @gateway;" in conf
+    # nothing about the looks is read only at start (a map or an include would go
+    # stale on a running door: the round-1 blocker)
+    live = look_serving._live(conf)
+    assert "hugmesh-looks" not in live.replace(
+        f"root {look_serving.MOUNT_POINT}/by-host/$host;", "")
+    assert not re.search(r"^\s*(map|include)\b.*hugmesh-looks", live, re.M)
     assert re.search(r"location @gateway \{\s*proxy_pass http://\$fe_gateway:8080"
                      r"\$request_uri;", conf)
 
 
-def test_the_makefile_adds_the_overlay_only_while_the_map_exists():
+@pytest.mark.parametrize("uri,hit", [
+    # what login-ui really requests: it links the stylesheet RELATIVELY, so the
+    # request carries the page's path (the round-1 skeptic's root-only mutation
+    # `^/(hug|snap)-theme` kept every other test green while missing all of these)
+    ("/login/hug-theme.css", "hug"),
+    ("/_remotes/login/snap-theme.css", "snap"),
+    ("/hug-theme.css", "hug"),
+    ("/snap-theme.css", "snap"),
+    ("/login/", None),
+    ("/login/xhug-theme.css", None),
+    ("/login/hug-theme.css.bak", None),
+    ("/login/hug-theme.cssx", None),
+    ("/login/hug-themeXcss", None),
+    ("/hosts.map", None),
+])
+def test_the_committed_theme_location_matches_the_paths_a_sign_in_page_requests(uri, hit):
+    """nginx matches a regex location against the normalised URI WITHOUT the query
+    string, so the path alone is what is run through the committed regex here."""
+    rx = look_serving.theme_location_regex(_read(REPO, look_serving.TLS_FRONT_CONF_REL))
+    assert rx is not None, "the theme location is gone from tls-front/default.conf"
+    m = rx.search(uri)
+    assert (m.group("hug_look_file") if m else None) == hit
+
+
+def test_the_makefile_adds_the_overlay_only_while_the_host_folders_exist():
     make = _read(REPO, "Makefile")
-    assert ("STACK_LOOKS_FLAGS := $(if $(wildcard $(STACK_LOOKS_MAP)),"
+    assert ("STACK_LOOKS_FLAGS := $(if $(wildcard $(STACK_LOOKS_GATE)),"
             "-f $(STACK_LOOKS_COMPOSE),)") in make
-    assert "STACK_LOOKS_MAP := tests/stack/.looks/hosts.map" in make
+    assert "STACK_LOOKS_GATE := tests/stack/.looks/by-host" in make
     up = [l for l in make.splitlines() if l.rstrip().endswith(" up -d")
           and "$(STACK_COMPOSE)" in l]
     assert up and all("$(STACK_LOOKS_FLAGS)" in l for l in up)
@@ -166,8 +294,11 @@ def test_the_folder_is_gitignored():
 
 
 @pytest.mark.parametrize("path,old,new", [
-    (look_serving.TLS_FRONT_CONF_REL, "include /etc/hugmesh-looks/hosts.map*;", ""),
-    (look_serving.TLS_FRONT_CONF_REL, "root /etc/hugmesh-looks/$hug_look;", ""),
+    (look_serving.TLS_FRONT_CONF_REL, "root /etc/hugmesh-looks/by-host/$host;",
+     "root /etc/hugmesh-looks/$host;"),
+    (look_serving.TLS_FRONT_CONF_REL, "(?:^|/)(?<hug_look_file>", "^/(?<hug_look_file>"),
+    (look_serving.TLS_FRONT_CONF_REL, "try_files /${hug_look_file}-theme.css @gateway;",
+     "try_files /${hug_look_file}-theme.css =404;"),
     (look_serving.LOOKS_COMPOSE_REL, "./.looks:/etc/hugmesh-looks:ro", "./x:/y:ro"),
     ("Makefile", "-f $(STACK_LOOKS_COMPOSE)", "-f nothing.yaml"),
     ("Makefile", "$(STACK_LIMITS_FLAGS) $(STACK_LOOKS_FLAGS) $(STACK_EGRESS_FLAGS) up -d",

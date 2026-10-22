@@ -143,9 +143,10 @@ DOCKER_ONLY_SENTENCE = ("Not applied on this route yet: a built image and a Flee
 #: (core/look_serving.door_serves_looks measures it; look_serving.own_look_sentence
 #: picks the line).
 DOCKER_SERVED_SENTENCE = ("On the Docker mesh this domain's own look is served at its own "
-                          "name through the HTTPS front door; `make view LANE=compose` "
-                          "opens it there. The plain http door and Tor addresses show the "
-                          "mesh's own look.")
+                          "name through the HTTPS front door, from the first page load "
+                          "after the Studio starts the mesh; the command "
+                          "\"make view LANE=compose\" opens it there. The plain http "
+                          "door and Tor addresses show the mesh's own look.")
 #: The Docker route, on a checkout whose front door does not serve looks by Host.
 DOCKER_NOT_SERVED_SENTENCE = ("Recorded only: this checkout's Docker front door does not "
                               "serve a domain's own look, so every domain shows the "

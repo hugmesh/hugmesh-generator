@@ -14,7 +14,8 @@ import pytest
 pytest.importorskip("hugmesh_studio.gui.qt", reason="no Qt binding (PySide6/PyQt6) installed")
 
 from hugmesh_studio.core import brand_look                                     # noqa: E402
-from hugmesh_studio.core.config import Domain                                  # noqa: E402
+from hugmesh_studio.core.config import Domain, ImageConfig                     # noqa: E402
+from hugmesh_studio.core.fleet import FleetConfig, FleetDomains                # noqa: E402
 from hugmesh_studio.core.local_mesh_bootstrap import LocalMeshBootstrapConfig  # noqa: E402
 from hugmesh_studio.core.local_mesh_domains import LocalMeshDomains            # noqa: E402
 from hugmesh_studio.gui.pages import domain_services as ds_mod                 # noqa: E402
@@ -70,6 +71,8 @@ def test_docker_route_says_the_added_domains_look_is_served(qapp):
     state, widget, ed = _docker_tab(qapp, REPO)
     assert ed is not None and ed.model.mode == "override"
     assert ed.served_note.text() == brand_look.DOCKER_SERVED_SENTENCE
+    # plain words on screen: no markdown backticks (round-1 skeptic concern)
+    assert "`" not in ed.served_note.text()
     _sane(ed.served_note, "the served sentence")
     assert ed.path_note.isHidden() and ed.primary.isEnabled()
     _shot(widget, "docker-added-domain-look-served")
@@ -99,6 +102,43 @@ def test_image_and_fleet_say_plainly_it_is_not_applied(qapp, path):
     assert not ed.primary.isEnabled()
     _shot(ed, f"{path}-added-domain-look-not-applied")
     ed.close()
+
+
+def _route_tab(qapp, route):
+    """The image or Fleet route's Domain services page, the REAL widget, opened on the
+    added domain's Look tab (the round-1 skeptic could render only the image route
+    through it; this builds the Fleet session from a FleetConfig/FleetDomains pair)."""
+    owner = SimpleNamespace()
+    if route == "image":
+        cfg = ImageConfig()
+        cfg.domains = [Domain(name="shop.example", title="Shop")]
+        state, source = cfg, cfg
+    else:
+        state = FleetDomains(domains=[Domain(name="mesh.example"),
+                                      Domain(name="shop.example")],
+                             own_name="mesh.example")
+        source = (FleetConfig(), state)
+    session = session_for(owner, route, source, REPO)
+    widget = ds_mod.DomainServicesWidget(brand_session=lambda: session, route=route)
+    widget.load(state)
+    widget._step(1)                                   # the added domain
+    widget.resize(1000, 900)
+    widget.show()
+    widget.brand_tabs.setCurrentIndex(TAB_LOOK)
+    _settle(qapp)
+    return widget, widget.brand_tabs.look_editor
+
+
+@pytest.mark.parametrize("route", ["image", "fleet"])
+def test_the_real_page_on_image_and_fleet_says_not_applied(qapp, route):
+    widget, ed = _route_tab(qapp, route)
+    assert ed is not None, f"{route}: no Look tab editor on the added domain"
+    assert ed.path_note.text() == brand_look.DOCKER_ONLY_SENTENCE
+    _sane(ed.path_note, f"{route}: the not-applied sentence")
+    assert ed.served_note.isHidden()
+    assert not ed.primary.isEnabled()
+    _shot(widget, f"{route}-page-added-domain-look-not-applied")
+    widget.close()
 
 
 def test_the_mesh_own_look_row_has_no_where_sentence(qapp):

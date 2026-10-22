@@ -1,23 +1,30 @@
 """A domain's own look, served by Host on the Docker mesh (theme survey item B).
 
 WHAT HAPPENS. When the Docker mesh starts, :func:`write` turns the recorded domains into
-three generated things under ``tests/stack/.looks/`` (gitignored, like ``.theme.css``):
+generated files under ``tests/stack/.looks/`` (gitignored, like ``.theme.css``):
 
 * ``<brand id>/hug-theme.css`` and ``snap-theme.css`` for every added domain, plus the
   mesh's own look in ``default/`` (``brand_look.write_look_files`` does this part);
-* ``hosts.map``: one nginx map line ``<domain name> <brand id>;`` for every added domain
-  that has a look of its OWN. The HTTPS front door (``tests/stack/tls-front/
-  default.conf``) includes it and answers any request whose path ends in
-  ``hug-theme.css`` or ``snap-theme.css`` from that brand's folder. A Host that is not in
-  the map (the mesh's own name, localhost, a domain that only inherits) is passed to the
-  gateway exactly as before, so its page keeps the mesh's own look from
-  ``HUG_THEME_CSS``, pictures and header included;
+* ``by-host/<domain name>/`` holding a copy of those two files, for every added domain
+  that has a look of its OWN, and for no other name. The HTTPS front door
+  (``tests/stack/tls-front/default.conf``) answers any request whose path ends in
+  ``hug-theme.css`` or ``snap-theme.css`` from ``by-host/$host/`` when that file
+  exists, and passes the request to the gateway otherwise. So a Host with no folder
+  (the mesh's own name, localhost, a domain that only inherits) keeps the mesh's own
+  look from ``HUG_THEME_CSS``, pictures and header included;
 * ``view.tsv``: one ``make view`` row per added domain (lane ``compose``), so a browser
   on this machine can reach the domain BY ITS NAME through the HTTPS door with no
   ``/etc/hosts`` edit and no root.
 
+WHY FOLDERS AND NOT AN NGINX MAP. nginx looks for the file on disk on every request,
+but reads a ``map`` include only when it starts. With a map, a domain added (or
+switched from inheriting to its own look) while the front door was already running
+stayed on the gateway until someone restarted the door, because ``make stack-up`` does
+not recreate a container whose compose settings did not change. A folder per Host is
+picked up by the very next request, whoever started the mesh.
+
 The folder is mounted read-only into the front door by ``tests/stack/compose.looks.yaml``,
-which the Makefile adds only when ``hosts.map`` exists, so a checkout the Studio never
+which the Makefile adds only while ``by-host/`` exists, so a checkout the Studio never
 touched brings up a byte-identical stack.
 
 WHAT IS NOT DONE HERE. The plain http door (8088) goes straight to the gateway, Tor
@@ -42,10 +49,16 @@ from .config import default_brand_id
 
 #: Generated folder, relative to the generator checkout. Gitignored.
 LOOKS_RELDIR = os.path.join("tests", "stack", ".looks")
-#: The nginx map include the front door reads (inside its ``map $host $hug_look``).
-MAP_NAME = "hosts.map"
+#: The per-Host folders the front door reads (``root .../by-host/$host``). Its presence
+#: is also the Makefile's gate for the mount overlay.
+HOSTS_DIRNAME = "by-host"
+#: What the first version of this feature wrote (an nginx map include). Never written
+#: now; removed when found, so a checkout that ran that version is cleaned up.
+LEGACY_MAP_NAME = "hosts.map"
 #: Extra ``make view`` rows, read by scripts/hugmesh-view.py with the shipped catalog.
 VIEW_NAME = "view.tsv"
+#: The two stylesheet names a sign-in page requests (``brand_look.write_look_files``).
+_LOOK_FILES = ("hug-theme.css", "snap-theme.css")
 #: The committed pieces whose presence is what makes the sentence "served" true.
 TLS_FRONT_CONF_REL = os.path.join("tests", "stack", "tls-front", "default.conf")
 LOOKS_COMPOSE_REL = os.path.join("tests", "stack", "compose.looks.yaml")
@@ -96,8 +109,9 @@ def _get(row, key):
 def served_brands(domains: Iterable[Any] | None, own_name: str = "") -> list[ServedBrand]:
     """Every recorded domain other than the mesh's own, in record order, whose name is
     a plain DNS name and whose brand id can name a folder. A row that fails either is
-    left out (it could not be written into an nginx map safely); a second row on a name
-    or id already taken is left out too. Accepts the bootstrap's record dicts or
+    left out (it could not name a folder safely); a second row on a name or id already
+    taken is left out too, and so is an id spelled like one of the generated folders
+    (``default``, ``by-host``). Accepts the bootstrap's record dicts or
     ``config.Domain`` rows."""
     own = (own_name or "").strip().lower()
     out: list[ServedBrand] = []
@@ -108,7 +122,8 @@ def served_brands(domains: Iterable[Any] | None, own_name: str = "") -> list[Ser
         if not name or name == own or not _DNS_NAME_RE.fullmatch(name):
             continue
         bid = str(_get(row, "id") or "").strip() or default_brand_id(name)
-        if bid == "default" or not _ID_RE.fullmatch(bid) or bid in ids or name in names:
+        if (bid in ("default", HOSTS_DIRNAME) or not _ID_RE.fullmatch(bid)
+                or bid in ids or name in names):
             continue
         look = _get(row, "look") or {}
         look = dict(look) if isinstance(look, Mapping) else {}
@@ -119,11 +134,11 @@ def served_brands(domains: Iterable[Any] | None, own_name: str = "") -> list[Ser
     return out
 
 
-def hosts_map_text(brands: Iterable[ServedBrand]) -> str:
-    """The map lines: only domains with a look of their own. An inheriting domain is
-    left to the gateway, whose page already carries the mesh's whole look."""
-    lines = [f"{b.name} {b.bid};" for b in brands if b.has_own_look]
-    return _GENERATED_HEADER + "".join(line + "\n" for line in lines)
+def served_hosts(brands: Iterable[ServedBrand]) -> list[str]:
+    """The Host names the front door answers from disk: only domains with a look of
+    their own. An inheriting domain is left to the gateway, whose page already carries
+    the mesh's whole look."""
+    return [b.name for b in brands if b.has_own_look]
 
 
 def view_rows_text(brands: Iterable[ServedBrand]) -> str:
@@ -144,23 +159,39 @@ def clear(generator_dir: str) -> None:
     d = looks_dir(generator_dir)
     if not os.path.isdir(d):
         return
-    for name in (MAP_NAME, VIEW_NAME):
+    for name in (LEGACY_MAP_NAME, VIEW_NAME):
         p = os.path.join(d, name)
         if os.path.isfile(p):
             os.remove(p)
-    for entry in os.listdir(d):
-        folder = os.path.join(d, entry)
-        if (os.path.isdir(folder) and not os.path.islink(folder)
-                and set(os.listdir(folder)) <= {"hug-theme.css", "snap-theme.css"}):
-            shutil.rmtree(folder)
+    hosts = os.path.join(d, HOSTS_DIRNAME)
+    if os.path.isdir(hosts) and not os.path.islink(hosts):
+        _prune_look_folders(hosts, keep=())
+        if not os.listdir(hosts):
+            os.rmdir(hosts)
+    _prune_look_folders(d, keep=())
     if not os.listdir(d):
         os.rmdir(d)
 
 
+def _prune_look_folders(parent: str, keep: Iterable[str]) -> None:
+    """Remove every folder under ``parent`` that holds only look files and is not named
+    in ``keep``. A folder holding anything else is left alone."""
+    keep = set(keep)
+    for entry in os.listdir(parent):
+        folder = os.path.join(parent, entry)
+        if (entry not in keep and os.path.isdir(folder) and not os.path.islink(folder)
+                and set(os.listdir(folder)) <= set(_LOOK_FILES)):
+            shutil.rmtree(folder)
+
+
 def write(generator_dir: str, superbrand_look: Mapping[str, Any] | None,
           brands: Iterable[ServedBrand]) -> list[str]:
-    """Write the looks, the map and the view rows. With no added domain it CLEARS
-    instead, so the Makefile stops adding the mount and the stack is as before.
+    """Write the looks, the per-Host folders and the view rows. With no added domain it
+    CLEARS instead, so the Makefile stops adding the mount and the stack is as before.
+
+    ``by-host/`` is rebuilt as a SET every time: a folder for a domain that now
+    inherits, or that is gone, is removed, so the front door stops answering for it on
+    the next request.
 
     The looks are composed and checked first (``write_look_files`` refuses the whole
     write on a bad look or one past its budget): on that refusal the folder is cleared,
@@ -177,20 +208,50 @@ def write(generator_dir: str, superbrand_look: Mapping[str, Any] | None,
     except brand_look.LookError:
         clear(generator_dir)
         raise
-    for name, text in ((MAP_NAME, hosts_map_text(brands)),
-                       (VIEW_NAME, view_rows_text(brands))):
-        p = os.path.join(d, name)
-        with open(p, "w", encoding="utf-8") as fh:
-            fh.write(text)
-        written.append(p)
+    legacy = os.path.join(d, LEGACY_MAP_NAME)
+    if os.path.isfile(legacy):
+        os.remove(legacy)
+    hosts = os.path.join(d, HOSTS_DIRNAME)
+    os.makedirs(hosts, exist_ok=True)
+    own = {b.name: b.bid for b in brands if b.has_own_look}
+    _prune_look_folders(hosts, keep=own)
+    for name, bid in own.items():
+        folder = os.path.join(hosts, name)
+        os.makedirs(folder, exist_ok=True)
+        for fname in _LOOK_FILES:
+            dst = os.path.join(folder, fname)
+            shutil.copyfile(os.path.join(d, bid, fname), dst)
+            written.append(dst)
+    p = os.path.join(d, VIEW_NAME)
+    with open(p, "w", encoding="utf-8") as fh:
+        fh.write(view_rows_text(brands))
+    written.append(p)
     return written
+
+
+#: The front door's theme location regex, as committed in tls-front/default.conf (an
+#: nginx PCRE). login-ui links the stylesheet relatively, so it arrives as
+#: /login/hug-theme.css, /_remotes/login/snap-theme.css or /hug-theme.css: the regex
+#: must match a name at the end of ANY path, not only at the root.
+#: :func:`theme_location_regex` reads it back out of a conf so tests can run real
+#: request paths through the committed text.
+THEME_LOCATION_PCRE = r"(?:^|/)(?<hug_look_file>hug|snap)-theme\.css$"
+
+
+def theme_location_regex(conf_text: str) -> "re.Pattern[str] | None":
+    """The theme location's regex from a tls-front conf, compiled as Python (``(?<name>``
+    becomes ``(?P<name>``), or None when the conf has no ``location ~ "...-theme..."``."""
+    m = re.search(r'^\s*location ~ "([^"]*-theme[^"]*)"\s*\{', _live(conf_text), re.M)
+    if not m:
+        return None
+    return re.compile(m.group(1).replace("(?<", "(?P<"))
 
 
 # ── measured truth: does THIS checkout's front door serve a domain's own look? ──────
 def door_serves_looks(generator_dir: str) -> bool:
-    """True when the checkout carries all three committed halves: the front door's map
-    include and theme location, the overlay that mounts the folder, and the Makefile
-    line that adds that overlay. Measured, never assumed (the makefile_holds_tor
+    """True when the checkout carries all three committed halves: the front door's theme
+    location that reads ``by-host/$host``, the overlay that mounts the folder, and the
+    Makefile line that adds that overlay. Measured, never assumed (the makefile_holds_tor
     pattern), so a screen cannot say "served" for a checkout that would not serve it."""
     try:
         with open(os.path.join(generator_dir, TLS_FRONT_CONF_REL), encoding="utf-8") as fh:
@@ -203,14 +264,16 @@ def door_serves_looks(generator_dir: str) -> bool:
         return False
     up_lines = [line for line in make.splitlines()
                 if line.rstrip().endswith(" up -d") and "$(STACK_COMPOSE)" in line]
-    return (f"include {MOUNT_POINT}/{MAP_NAME}" in conf
-            and "-theme\\.css" in conf and f"root {MOUNT_POINT}/$hug_look" in conf
+    return (f'location ~ "{THEME_LOCATION_PCRE}"' in conf
+            and re.search(rf"^\s*root {re.escape(MOUNT_POINT)}/{HOSTS_DIRNAME}/\$host;",
+                          conf, re.M) is not None
+            and "try_files /${hug_look_file}-theme.css @gateway;" in conf
             and f"./.looks:{MOUNT_POINT}:ro" in overlay
-            and re.search(r"^STACK_LOOKS_MAP\s*:=\s*tests/stack/\.looks/hosts\.map\s*$",
+            and re.search(r"^STACK_LOOKS_GATE\s*:=\s*tests/stack/\.looks/by-host\s*$",
                           make, re.M) is not None
             and re.search(r"^STACK_LOOKS_COMPOSE\s*:=\s*tests/stack/compose\.looks\.yaml\s*$",
                           make, re.M) is not None
-            and re.search(r"^STACK_LOOKS_FLAGS\s*:=.*\$\(wildcard \$\(STACK_LOOKS_MAP\)\),"
+            and re.search(r"^STACK_LOOKS_FLAGS\s*:=.*\$\(wildcard \$\(STACK_LOOKS_GATE\)\),"
                           r"-f \$\(STACK_LOOKS_COMPOSE\)", make, re.M) is not None
             and bool(up_lines) and all("$(STACK_LOOKS_FLAGS)" in line for line in up_lines))
 
