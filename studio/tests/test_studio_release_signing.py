@@ -115,6 +115,16 @@ def test_sums_are_signed_and_every_file_attested_before_the_release_exists():
     assert installer["with"]["cosign-release"].startswith("v2."), "the notes promise cosign 2.x syntax"
 
 
+def test_signing_actions_are_pinned_to_a_commit():
+    # A moved tag on a signing action would change what signs the release.
+    text = _text()
+    for action in ("actions/attest-build-provenance", "sigstore/cosign-installer", "anchore/sbom-action"):
+        uses = re.findall(r"uses: %s@(\S+)" % re.escape(action), text)
+        assert uses, action
+        for ref in uses:
+            assert re.fullmatch(r"[0-9a-f]{40}", ref), f"{action}@{ref} is not a commit SHA"
+
+
 def test_release_uploads_every_signed_file_and_stays_a_prerelease():
     release = next(s for s in _jobs()["publish"]["steps"]
                    if s.get("uses", "").startswith("softprops/action-gh-release@"))
