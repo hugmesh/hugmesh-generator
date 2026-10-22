@@ -226,7 +226,24 @@ def write(generator_dir: str, superbrand_look: Mapping[str, Any] | None,
     with open(p, "w", encoding="utf-8") as fh:
         fh.write(view_rows_text(brands))
     written.append(p)
+    _readable_by_the_door(d)
     return written
+
+
+def _readable_by_the_door(root: str) -> None:
+    """Make every folder and file under ``root`` readable by anyone. The front door's
+    nginx workers run as the image's own ``nginx`` user, not as the operator, and a
+    Studio started under a strict umask (077) would write files they cannot open:
+    try_files then falls through to the gateway WITHOUT A WORD and every domain shows
+    the mesh's own look. Nothing here is secret (the same colours the sign-in page
+    sends to anyone who asks). Symbolic links are left alone."""
+    for dirpath, _dirs, files in os.walk(root):
+        if not os.path.islink(dirpath):
+            os.chmod(dirpath, 0o755)
+        for f in files:
+            p = os.path.join(dirpath, f)
+            if not os.path.islink(p):
+                os.chmod(p, 0o644)
 
 
 #: The front door's theme location regex, as committed in tls-front/default.conf (an

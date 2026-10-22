@@ -124,6 +124,26 @@ def test_a_bring_up_writes_each_added_domains_look_its_host_folder_and_the_view_
          "https://127.0.0.1:8488", 9101, "/login/")]
 
 
+def test_the_door_can_read_the_looks_under_a_strict_umask(gen, fake_make):
+    """nginx's workers in the front door are not the operator: a Studio started with
+    umask 077 must still leave every folder and stylesheet readable by anyone, or
+    try_files falls through to the gateway silently."""
+    old = os.umask(0o077)
+    try:
+        assert LocalMeshBootstrap(gen, _cfg())._stack_node().start()[0]
+    finally:
+        os.umask(old)
+    d = _looks(gen)
+    seen = 0
+    for dirpath, _dirs, files in os.walk(d):
+        assert os.stat(dirpath).st_mode & 0o005 == 0o005, dirpath
+        for f in files:
+            assert os.stat(os.path.join(dirpath, f)).st_mode & 0o004, f
+            seen += 1
+    assert os.path.isfile(os.path.join(d, "by-host", "shop.example", "hug-theme.css"))
+    assert seen >= 7
+
+
 def test_a_mesh_with_no_added_domain_writes_nothing(gen, fake_make):
     node = LocalMeshBootstrap(gen, _cfg(domains=()))._stack_node()
     node.start()
