@@ -614,7 +614,9 @@ class BrandSettingsTabs(QtCore.QObject):
             self.egress_conf.setText(conf)
             self.egress_conf_row.setEnabled(mode == domain_reach.EGRESS_VPN)
             self.reach_note.setStyleSheet("color: #b00020;" if error else _MUTED)
-            self.reach_note.setText(note or brand_step.REACH_RECORDED_ONLY)
+            # what THIS route's start does with the choice (core/reach_apply):
+            # applied, or why not — never a blanket 'recorded'
+            self.reach_note.setText(note or v.reach_effect())
         finally:
             self._loading = False
 

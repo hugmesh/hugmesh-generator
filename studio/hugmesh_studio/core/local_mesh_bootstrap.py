@@ -45,7 +45,7 @@ import time
 from dataclasses import asdict, dataclass, field, fields
 from typing import NamedTuple
 
-from . import brand_model, domain_reach, own_casdoor, theme
+from . import brand_model, domain_reach, own_casdoor, reach_apply, theme
 from .config import DOMAIN_FIELDS, IDP_CHOICES, IDP_LABELS, _IDP_CLIENT_ID_RE, _IDP_URL_RE, \
     domain_signin_problems, effective_signin, github_org_problem, has_external_signin, \
     idp_effective_jwks
@@ -523,6 +523,14 @@ class LocalMeshBootstrapConfig:
             return False
         return profile_flags(sel).get(PROFILE_EGRESS_VPN, False)
 
+    def applied_egress(self) -> "reach_apply.DockerEgress":
+        """The egress a start APPLIES (``EGRESS_VPN`` + ``EGRESS_VPN_CONF``): the
+        mesh's own tick and file, unless a domain that runs the mesh's one Mastodon
+        chose an egress of its own (core/reach_apply — the egress VPN carries only
+        Mastodon's outbound delivery, so those domains decide it). With no such
+        choice this is exactly ``effective_egress_vpn()`` and ``egress_vpn_conf``."""
+        return reach_apply.docker_egress(self)
+
     def federation_services(self) -> tuple[str, ...]:
         """The federation-mechanism half of the selection (catalogue order)."""
         return federation_selection(self.effective_services())
@@ -790,6 +798,10 @@ class LocalMeshBootstrap:
         # flags when there is not. `services` rides separately because the stack node
         # consumes only its FEDERATION half (an env pair for `make stack-seed`) — the
         # compose half has already become these two booleans by the time it gets here.
+        # EGRESS: what the per-domain choices make of the mesh's tick (2026-10-21
+        # round 2) — identical to the tick and its file when no domain that runs
+        # Mastodon chose for itself (core/reach_apply.docker_egress)
+        egress = self.cfg.applied_egress()
         return LocalStackNode(self.generator_dir, env=self.cfg.env,
                               social=self.cfg.effective_social(), domain=domain,
                               services=self.cfg.effective_services(),
@@ -804,8 +816,8 @@ class LocalMeshBootstrap:
                               with_anubis=self.cfg.effective_anubis(),
                               with_tts=self.cfg.effective_tts(),
                               with_poisoner=self.cfg.effective_poisoner(),
-                              with_egress_vpn=self.cfg.effective_egress_vpn(),
-                              egress_vpn_conf=self.cfg.egress_vpn_conf.strip(),
+                              with_egress_vpn=egress.on,
+                              egress_vpn_conf=egress.conf,
                               idp=self.cfg.idp,
                               idp_issuer=self.cfg.idp_issuer.strip(),
                               idp_client_id=self.cfg.idp_client_id.strip(),
@@ -1006,7 +1018,16 @@ class LocalMeshBootstrap:
         # container refuses to start without one, fail-closed; this preflight moves
         # that refusal from minutes into the up to the plan). Same sniff rules as
         # the entrypoint via core.egress_conf.
-        if self.cfg.effective_egress_vpn():
+        # Checked only when the start USES the mesh's file: the domains that run the
+        # mesh's one Mastodon can override the tick (core/reach_apply) — all direct
+        # turns the container off, their own files replace the mesh's — and their
+        # files are checked per domain below (domain_reach.egress_conf_problems).
+        egress = self.cfg.applied_egress()
+        mesh_conf = self.cfg.egress_vpn_conf.strip()
+        mesh_file = os.path.abspath(os.path.expanduser(mesh_conf)) if mesh_conf else ""
+        uses_mesh_file = (not egress.from_domains
+                          or (egress.on and egress.conf in ("", mesh_file)))
+        if self.cfg.effective_egress_vpn() and uses_mesh_file:
             _kind, err = validate_egress_conf(self.cfg.egress_vpn_conf.strip())
             if err:
                 problems.append(f"Egress VPN is selected but has no usable config "
@@ -1113,6 +1134,11 @@ class LocalMeshBootstrap:
         for r in rows:
             problems.extend(domain_signin_problems(r, self.cfg, rows))
         problems.extend(domain_reach.egress_conf_problems(rows, self.cfg))
+        # ONE egress tunnel, ONE Mastodon: two domains that share it and name
+        # different provider files cannot both be honoured (core/reach_apply)
+        conflict = self.cfg.applied_egress().conflict
+        if conflict:
+            problems.append("Egress VPN: " + conflict + ".")
         if self.cfg.is_prod():
             if not self.cfg.cluster_domain.strip():
                 problems.append("prod requires a public cluster domain "
@@ -1160,6 +1186,8 @@ class LocalMeshBootstrap:
                 "provider's sign-ins for this domain only. The native login page, MFA "
                 "step-up and role claims still need Casdoor (docs/IDENTITY-PROVIDERS.md), "
                 "so sign in through the provider's own page.")
+        # per-domain VPN and egress choices this start cannot honour, said plainly
+        out.extend(reach_apply.reach_warnings(self.cfg, self.overlay_will_attach()))
         return out
 
     def preflight(self) -> list[str]:
@@ -1390,6 +1418,13 @@ class LocalMeshBootstrap:
                 lines.append("           page — it is separate from, and changes "
                              "nothing about, the")
                 lines.append("           docker mesh above.")
+        # Per-domain VPN and egress (2026-10-21 round 2): what this start applies and
+        # what it cannot. Empty (no domain chose either, and the egress is the mesh's)
+        # renders NOTHING — the plan stays byte-identical.
+        reach = reach_apply.plan_lines(c, overlay)
+        if reach:
+            lines.append("")
+            lines.extend(reach)
         lines.append("")
         lines.append("(3) MESH OVERLAY (hugmesh-mesh compose project, tailscale):")
         if overlay:

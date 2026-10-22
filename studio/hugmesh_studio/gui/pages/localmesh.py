@@ -2693,7 +2693,10 @@ class LocalMeshPage(QtWidgets.QWizardPage):
             cluster_domain=self.boot_domain.text().strip(), idp=idp,
             idp_issuer=self.idp_issuer.text().strip() if ext else "",
             idp_client_id=self.idp_client_id.text().strip() if ext else "",
-            idp_jwks=self.idp_jwks.text().strip() if ext else "")
+            idp_jwks=self.idp_jwks.text().strip() if ext else "",
+            # whether the mesh's VPN container attaches (production + a key): what a
+            # domain's own VPN choice is compared with on its Ways tab (reach_apply)
+            auth_key=self.boot_auth_key.text().strip())
 
     def mesh_look(self):
         """The mesh's own look model (``brand_look.Look``, design mode): what row 0's

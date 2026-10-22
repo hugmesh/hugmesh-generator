@@ -40,7 +40,12 @@ mesh node** from the system tray.
     captured login page. It applies at container start, with no rebuild;
   - **per-domain sign-in, Tor, VPN and egress** on the same tabs (Identity, Ways to reach
     it): a domain signs in through the mesh, its own Casdoor, or its own Entra / Cognito /
-    OIDC provider; it can have its own onion, and records its own VPN and egress choice;
+    OIDC provider; it can have its own onion, and records its own VPN and egress choice.
+    On the Docker mesh a domain's egress is APPLIED when that domain runs the mesh's one
+    Mastodon (the tuwunel service): the egress VPN carries only Mastodon's outbound
+    delivery, so those domains decide whether it runs and with which provider file (two
+    different files are refused at start). A per-domain VPN choice is applied by no
+    route, and the image, fleet and kind lanes apply neither; the Ways tab says which;
   - the brand's **ID, title, organisation and public apex domain**: on a mesh they are set
     in the superbrand step at the top of the Branding page and nowhere else. The Network
     page shows them greyed, says where they are changed, and its **Go back to the
