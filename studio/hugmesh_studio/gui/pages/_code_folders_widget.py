@@ -523,8 +523,10 @@ class CodeFoldersWidget(QtWidgets.QGroupBox):
         self.extra_labels[ws.name] = lab
         row = QtWidgets.QHBoxLayout()
         count = len(self.armed.get(ws.name, ())) if armed else n
+        # armed with nothing to remove (every extra holds work): say so, not "remove 0"
         btn = QtWidgets.QPushButton(
-            f"Click again to remove {count} folder{'s' if count != 1 else ''}" if armed
+            ("Nothing to remove: all kept" if not count else
+             f"Click again to remove {count} folder{'s' if count != 1 else ''}") if armed
             else f"Remove {n} extra folder{'s' if n != 1 else ''}…")
         btn.setEnabled(not armed or bool(count))
         btn.clicked.connect(lambda _=False, d=ws.name: self._remove_clicked(d))

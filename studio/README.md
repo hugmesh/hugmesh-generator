@@ -154,7 +154,9 @@ none). **Make N copies** runs on a worker thread and `git clone`s each missing a
 the build checkout above (local, no network, the exact commit the mesh compiles), then
 names the copy for its domain: branch `domain/<domain>`, `.git/description` "<app> for
 the domain <domain>", and `git config hugmesh.domain` / `hugmesh.app` /
-`hugmesh.mesh`. The remote stays `origin` = the build checkout it came from. A marker
+`hugmesh.mesh` / `hugmesh.remote`. Its git remote is named for the domain, not
+`origin` (`git push chat.example.org domain/chat.example.org`); the remote's URL is the
+build checkout it came from. A marker
 file, `.git/hugmesh-workspace.json`, is written last; only a folder carrying it is ever
 treated as the Studio's. Once a copy exists, its row shows and opens the copy (the
 build folder is in the row's tooltip). The copies do not change what the mesh builds:
@@ -167,13 +169,21 @@ created or removed through a symbolic link, and no copy is ever made inside a
 `.stack-src`. When a service is un-ticked on a domain, its copies are listed as
 **extra**, and so is the folder of a domain that is not in the mesh. **Remove N extra
 folders…** removes nothing on the first click: it checks each folder (off the window's
-thread) and lists what it holds ("a plain copy: no edits, commits, stashes or ignored
-files of its own", or "holds 1 stashed change — it will be kept"). The second click
+thread) and lists what it holds ("a plain copy: no edits, commits, stashes, ignored
+files, hooks or settings of its own, and the build checkout has every commit", or
+"holds 1 stashed change — it will be kept"); when every extra folder holds work, the
+button reads "Nothing to remove: all kept". The second click
 re-reads the disk and removes only the folders that the first click listed, that are
 still extra and still a plain copy; **Keep them** cancels. A copy is always kept when it
 has changed, untracked or ignored files (a `.env`, build output), commits on ANY of its
 branches or tags that no remote has, stashed changes, another working tree made from
-it, or files git was told not to check for changes (skip-worktree, assume-unchanged). The
+it, files git was told not to check for changes (skip-worktree, assume-unchanged),
+commits the build checkout it came from does not have NOW (checked in that checkout,
+not only against the copy's own remote refs, which go stale when the build checkout is
+reset or a branch there is deleted), or its own git hooks, `.git/config` or
+`.git/info` files changed since the Studio made it (a pre-commit hook, an added remote,
+an `info/exclude` line; what was there is recorded in the marker when the copy is made,
+and a copy made before that is judged by what a clone writes). The
 untracked-file check overrides `status.showUntrackedFiles`, so a new file is seen even
 when the copy's or the person's git config hides untracked files. Not seen: a commit no branch, tag or stash points to any more (only git's reflog
 has it). A folder the Studio did not make is listed as "left alone" and never offered.
@@ -181,8 +191,12 @@ has it). A folder the Studio did not make is listed as "left alone" and never of
 The copies folder is named for the mesh's own domain, and every test mesh has the same
 one, so meshes share it. A copy this mesh does not need but a **saved** mesh still has
 (same domain, same app) is listed as kept, with that mesh's name, and never offered
-for removal; the saved mesh the form was loaded from does not count. A mesh that was
-never saved cannot be checked, so save a mesh before removing another one's folders.
+for removal; the saved mesh the form was loaded from does not count, and neither do
+the EARLIER saves of that same mesh (each record lists the records it was saved after,
+so saving a mesh twice does not leave the first save keeping copies the second one
+dropped). A newer save of the same mesh still counts. A mesh that was never saved
+cannot be checked, so save a mesh before removing another one's folders. The last
+outcome line ("Made 20 copies…") goes away when the domains or their services change.
 
 On the text interface the same screen is `f` on the Local Docker mesh review
 (`m N` / `m all` makes copies, `r N` lists extras, `yes` removes what `r` listed,

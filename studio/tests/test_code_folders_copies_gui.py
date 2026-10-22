@@ -254,6 +254,28 @@ def test_the_copies_line_names_the_domains_git_remote(block, src):
     assert block.copy_labels["live.example"].isVisible()
 
 
+def test_when_every_extra_holds_work_the_armed_button_says_nothing_goes(block, src):
+    """Round 2 (2026-10-21): it used to read "Click again to remove 0 folders"."""
+    block.refresh("existing", src, _rows(), own_name=OWN)
+    block.clone_buttons["live.example"].click()
+    assert block.wait_idle()
+    block.refresh("existing", src, _rows(live_services=()), own_name=OWN)
+    ws = next(d for d in block.plan.domains if d.name == "live.example")
+    for x in ws.extras:
+        block.git.dirty[x.path] = 1
+    block.remove_buttons["live.example"].click()
+    assert block.wait_idle()
+    _settle()
+    rm = block.remove_buttons["live.example"]
+    assert rm.text() == "Nothing to remove: all kept"
+    assert rm.isVisible() and not rm.isEnabled()
+    assert rm.width() >= 60 and rm.height() >= 20
+    assert "Every extra folder holds work of its own" in \
+        block.extra_labels["live.example"].text()
+    assert block.cancel_buttons["live.example"].isVisible()
+    assert all(os.path.isdir(x.path) for x in ws.extras)
+
+
 def test_keep_them_disarms_and_removes_nothing(block, src):
     block.refresh("existing", src, _rows(), own_name=OWN)
     block.clone_buttons["live.example"].click()
