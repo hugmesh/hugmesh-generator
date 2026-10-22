@@ -157,6 +157,17 @@ def test_a_domain_added_or_switched_later_changes_the_host_folders_as_a_set(gen,
     assert _hosts(gen) == ["blog.example"]
 
 
+def test_a_round_one_host_map_is_removed_at_the_next_start(gen, fake_make):
+    """The first version wrote .looks/hosts.map; nothing reads it now, so a start
+    removes it rather than leave a file that looks like it still matters."""
+    os.makedirs(_looks(gen))
+    with open(os.path.join(_looks(gen), look_serving.LEGACY_MAP_NAME), "w") as fh:
+        fh.write("shop.example shop-example;\n")
+    LocalMeshBootstrap(gen, _cfg())._stack_node().start()
+    assert not os.path.exists(os.path.join(_looks(gen), look_serving.LEGACY_MAP_NAME))
+    assert _hosts(gen) == ["shop.example"]
+
+
 def test_a_bare_node_never_touches_the_looks(gen, fake_make):
     """The stack tray (and the pod views) build LocalStackNode(generator_dir), which
     knows nothing about domains. Its Start and Stop must leave the folder exactly as
