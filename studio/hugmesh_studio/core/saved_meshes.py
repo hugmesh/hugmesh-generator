@@ -494,6 +494,12 @@ def config_changes(saved: dict, current: dict, *,
     # profile defaults, not the form's ticks).
     unrecorded = ({k for k in UNRECORDED_WHEN_NONE if a.get(k) is None}
                   if unrecorded_ok else set())
+    # ``login_look`` is DERIVED from the look, like ``login_theme_css`` (which is
+    # still compared and changes with every look field). A record saved before the
+    # field existed carries none; loading it gives the form one, which is not a
+    # change FROM that record.
+    if not a.get("login_look"):
+        unrecorded.add("login_look")
     return sorted(k for k in set(a) | set(b)
                   if k not in unrecorded and a.get(k) != b.get(k))
 

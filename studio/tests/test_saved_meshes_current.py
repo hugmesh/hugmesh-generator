@@ -273,3 +273,21 @@ def test_restoring_a_never_run_record_refuses_before_any_preflight(tmp_path,
     assert ok is False
     assert any("no superadmin password is available" in ln for ln in log), log
     assert any("Generate && start" in ln for ln in log)
+
+
+def test_a_record_saved_before_the_whole_look_existed_is_not_changed_by_it():
+    """``login_look`` (the mesh's whole look, carried for the domain looks) is derived
+    from the look like ``login_theme_css``. A record saved before it existed must not
+    read as changed only because the loaded form now carries one; a record that has
+    it still compares it, and the stylesheet still catches a real look change."""
+    old = lmb.LocalMeshBootstrapConfig(login_theme_css=":root{--sd-primary:#123456}")
+    old_dict = old.to_dict()
+    old_dict.pop("login_look")
+    form = lmb.LocalMeshBootstrapConfig(login_theme_css=":root{--sd-primary:#123456}",
+                                        login_look={"primary": "#123456"}).to_dict()
+    assert sm.config_changes(old_dict, form, unrecorded_ok=True) == []
+    assert sm.config_changes(old_dict, form) == []
+    new = dict(form, login_look={"primary": "#654321"})
+    assert sm.config_changes(new, form, unrecorded_ok=True) == ["login_look"]
+    css_changed = dict(form, login_theme_css=":root{--sd-primary:#000000}")
+    assert sm.config_changes(old_dict, css_changed) == ["login_theme_css"]
