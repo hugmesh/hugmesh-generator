@@ -439,6 +439,16 @@ class DomainServicesScreen:
                 # the domain's own sign-in (the window's Identity tab controls)
                 j.status = brand_step.feed_identity(view, line)
                 return
+            if (self.section == 4 and verb == brand_step.WAYS_GO_LIVE_COMMAND
+                    and not view.client_image()):
+                # the window's 'Set up ways to reach this brand' button: the Go-Live
+                # screen over this one, with this domain picked; b on its first
+                # step comes back here
+                from .golive import GoLiveScreen
+                screen = GoLiveScreen()
+                j.open_overlay(screen)
+                screen.opts.domain = view.name.strip().lower()
+                return
             if self.section == 4 and verb not in ("n", "p"):
                 # its Tor address, VPN and egress (the window's Ways tab controls)
                 j.status = brand_step.feed_ways(view, line)
