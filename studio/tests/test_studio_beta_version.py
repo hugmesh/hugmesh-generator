@@ -217,3 +217,34 @@ def test_metainfo_newest_release_is_this_version():
         assert newest.get("type") == "development"
     assert all(r.get("version") != "1.0.0" for r in releases.findall("release")), (
         "the never-published 1.0.0 entry is back: software centres would show 1.0.0")
+
+
+@pytest.mark.parametrize("gh_rc,gh_out,want_rc,want_skip", [
+    (0, '{"tagName":"studio-v0.3.0-beta.1"}', 0, "true"),   # the release exists: skip, green
+    (1, "release not found", 0, "false"),                    # it does not: publish
+    (1, "HTTP 502: Bad Gateway", 1, None),                   # cannot tell: stop, never guess
+    (4, "authentication required", 1, None),
+])
+def test_overwrite_check_fails_closed(tmp_path, gh_rc, gh_out, want_rc, want_skip):
+    """Run the real step script with a fake `gh`. Only gh's own "release not found" may
+    count as absent: treating a network or auth failure as absent would send the publish
+    step at a release that may exist, and it replaces same-named files."""
+    import subprocess
+    steps = _workflow()["jobs"]["publish"]["steps"]
+    script = next(s for s in steps if s.get("id") == "exists")["run"]
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    fake = bindir / "gh"
+    fake.write_text(f"#!/bin/sh\nprintf '%s\\n' '{gh_out}' >&2\nexit {gh_rc}\n")
+    fake.chmod(0o755)
+    out_file = tmp_path / "github_output"
+    out_file.write_text("")
+    env = {"PATH": f"{bindir}:/usr/bin:/bin", "VERSION": "0.3.0-beta.1",
+           "GITHUB_REPOSITORY": "hugmesh/hugmesh-generator", "GITHUB_OUTPUT": str(out_file)}
+    # GitHub runs a `run:` block as `bash -e {0}`.
+    proc = subprocess.run(["bash", "-e", "-c", script], env=env, capture_output=True, text=True)
+    assert proc.returncode == want_rc, (proc.stdout, proc.stderr)
+    if want_skip is None:
+        assert "skip=" not in out_file.read_text()
+    else:
+        assert out_file.read_text() == f"skip={want_skip}\n"

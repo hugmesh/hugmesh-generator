@@ -322,16 +322,22 @@ jobs:
     steps:
       - name: Never overwrite a published release
         # A published beta is an immutable coordinate. A re-run on a tag whose release
-        # already exists stops here, green, and changes nothing.
+        # already exists stops here, green, and changes nothing. Only gh's own "release
+        # not found" counts as absent: any other failure (network, auth, rate limit)
+        # stops the job, because the publish step below would otherwise run against a
+        # release that may exist and replace its same-named files.
         id: exists
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if gh release view "studio-v$VERSION" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+          if out=$(gh release view "studio-v$VERSION" --repo "$GITHUB_REPOSITORY" --json tagName 2>&1); then
             echo "::notice::release studio-v$VERSION already exists; nothing is published or changed"
             echo "skip=true" >> "$GITHUB_OUTPUT"
           else
-            echo "skip=false" >> "$GITHUB_OUTPUT"
+            case "$out" in
+              *"release not found"*) echo "skip=false" >> "$GITHUB_OUTPUT" ;;
+              *) echo "::error::could not tell whether release studio-v$VERSION exists: $out"; exit 1 ;;
+            esac
           fi
 
       - uses: actions/checkout@v4
