@@ -211,7 +211,10 @@ class DomainServicesScreen:
         if view is not None:
             if self.section == brand_step.SECTION_LOOK:
                 view.commit_look()
-            problems = view.session.commit(save=True)
+            # a client image (cloud) writes no brand record: the rows are written in
+            # place, and the record file is the mesh's (the window's rule)
+            problems = ([] if view.client_image()
+                        else view.session.commit(save=True))
             if problems:
                 j.status = view.session.message or problems[0]
         if self._on_continue:
@@ -323,9 +326,10 @@ class DomainServicesScreen:
                         + (" · look commands as listed" if self.section == 2
                            and self._look_editable(view) else "")
                         + (" · signin … as listed" if self.section == 1
-                           and not view.own else "")
+                           and not (view.own and view.signin_refusal()) else "")
                         + (" · tor/vpn/egress … as listed" if self.section == 4
-                           and not view.own else "")
+                           and not (view.own and view.own_way_refusal("tor")
+                                    and view.own_way_refusal("egress")) else "")
                         + " · Enter=continue"]
                 return out
         # The front door FIRST, right under the domain line — the GUI page's order
@@ -342,15 +346,19 @@ class DomainServicesScreen:
                    + tor_row_state(d, scope_cfg, self._entries(j), _own_name(cfg),
                                    walked=cfg, domains=doms))
         out.append("")
-        if route_shows_enforcement_note(self.route):
-            out += [ENFORCEMENT_NOTE, ""]
-        if self.lane_note:
-            out += [self.lane_note, ""]
-        out += [DOCKER_SERVICES_HELP if not route_shows_enforcement_note(self.route) else
-                "The services THIS domain provides. They ride the mesh manifest as "
-                "per-domain provisioning input; they do not change which services the "
-                "image bakes.",
-                ""]
+        if (getattr(cfg, "mode", "") or "") == "cloud":
+            # a Mesh desktop client: no cluster, no manifest — the window's line
+            out += [brand_step.CLIENT_SERVICES_NOTE, ""]
+        else:
+            if route_shows_enforcement_note(self.route):
+                out += [ENFORCEMENT_NOTE, ""]
+            if self.lane_note:
+                out += [self.lane_note, ""]
+            out += [DOCKER_SERVICES_HELP if not route_shows_enforcement_note(self.route)
+                    else "The services THIS domain provides. They ride the mesh manifest "
+                         "as per-domain provisioning input; they do not change which "
+                         "services the image bakes.",
+                    ""]
         headers, rows = service_table(d)
         out += model.format_table(headers, rows)
         out.append("")

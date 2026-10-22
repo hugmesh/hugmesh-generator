@@ -999,6 +999,17 @@ def _index(line: str, count: int) -> int | None:
     return n - 1 if 1 <= n <= count else None
 
 
+
+def _image_brand_session(j):
+    """The image route's superbrand session for the Domain services screen, with row 0's
+    writers told which worklist rows this flow builds (the egress VPN file is offered
+    only when every image can take it — the Network step's own rule)."""
+    from .superbrand_step import session_for
+    s = session_for(j, "image", j.cfg, j.generator_dir)
+    s.host.mesh_writes().entries = lambda: getattr(getattr(j, "worklist", None),
+                                                   "entries", None)
+    return s
+
 class Journey:
     """The face-independent journey state machine (see the module docstring)."""
 
@@ -1013,7 +1024,6 @@ class Journey:
         from .meshemu import MeshEmuScreen
         from .network_step import NetworkScreen
         from .qemu import QemuScreen
-        from .superbrand_step import session_for
         self.generator_dir = generator_dir
         self.cfg = cfg or ImageConfig()
         self.worklist: WorklistConfig | None = None
@@ -1035,8 +1045,7 @@ class Journey:
                       "domain (public go-live domains this mesh serves)?",
                       "additional_domains"),
             NetworkScreen(), DomainsScreen(), DomainServicesScreen(
-                brand_session_of=lambda j: session_for(
-                    j, "image", j.cfg, j.generator_dir), route="image"),
+                brand_session_of=_image_brand_session, route="image"),
             YesNoStep("users_choice", "User accounts",
                       "Configure user accounts for this mesh now?",
                       "configure_users"),

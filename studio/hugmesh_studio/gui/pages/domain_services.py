@@ -137,7 +137,7 @@ from types import SimpleNamespace
 from ..qt import Qt, QtCore, QtWidgets
 from ..styles import MUTED, WARN, muted
 from ._scroll import scrollable
-from .brand_screen import BrandSettingsTabs
+from .brand_screen import TAB_SERVICES, BrandSettingsTabs
 from ...core import plain_words
 from ...tui.brand_step import brand_view
 from ...core.domain_services import (
@@ -1023,14 +1023,40 @@ class DomainServicesPage(QtWidgets.QWizardPage, DomainServicesBody):
         return self.wiz.cfg
 
     def _brand_session(self):
-        """The image route's superbrand session — on a mesh only (a standalone image
-        has no brands to configure per domain)."""
+        """The image route's superbrand session — on a mesh AND on a Mesh desktop client
+        image (cloud mode: the same four tabs, each saying the client keeps its choices
+        with the configuration only — ``brand_step.CLIENT_*_NOTE``). A standalone image
+        has no brands to configure per domain."""
         from ...tui.superbrand_step import session_for
         cfg = self.wiz.cfg
-        if getattr(cfg, "mode", "") != "mesh":
+        if getattr(cfg, "mode", "") not in ("mesh", "cloud"):
             return None
-        return session_for(self.wiz, "image", cfg,
-                           getattr(self.wiz, "generator_dir", "") or "")
+        session = session_for(self.wiz, "image", cfg,
+                              getattr(self.wiz, "generator_dir", "") or "")
+        # row 0 edits the mesh's own sign-in, Tor and egress in place: the pages that
+        # hold those values in widgets are re-shown from the config after each write,
+        # or their own collect (validatePage, re-run by collect_all) would write the
+        # old value straight back
+        writes = session.host.mesh_writes()
+        writes.after = self._mirror_mesh
+        writes.entries = self._entries
+        return session
+
+    def _mirror_mesh(self) -> None:
+        """After row 0 wrote the mesh's sign-in, Tor or egress onto the config: show it
+        on the Identity provider step and the Network step, which keep those values in
+        their widgets (one value, two doors). Never raises."""
+        wiz = self.wiz
+        ids = getattr(wiz, "_page_ids", None) or {}
+        page_of = getattr(wiz, "page", None)
+        if not callable(page_of):
+            return
+        idp = page_of(ids["idp"]) if "idp" in ids else None
+        if idp is not None and hasattr(idp, "initializePage"):
+            idp.initializePage()                  # it only reads cfg into its widgets
+        net = page_of(ids["network"]) if "network" in ids else None
+        if net is not None and hasattr(net, "mirror_mesh_reach"):
+            net.mirror_mesh_reach(wiz.cfg)
 
     def _entries(self):
         """The worklist rows this wizard is carrying, or () — the per-node half of the
@@ -1056,6 +1082,21 @@ class DomainServicesPage(QtWidgets.QWizardPage, DomainServicesBody):
     def initializePage(self):
         cfg = self.wiz.cfg
         self._load(cfg, domain_names_for_services(cfg), implicit_own_domain(cfg))
+        self._paint_client_services(cfg)
+
+    def _paint_client_services(self, cfg) -> None:
+        """A Mesh desktop client (cloud) runs no services for its domains and writes no
+        manifest: the cluster's "not yet enforced" banner and the manifest help line
+        would both be untrue there, so the client's own line replaces them (the text
+        screen prints the same, ``brand_step.CLIENT_SERVICES_NOTE``). The step opens on
+        the Services tab, so the body's visibility is set where it is on screen."""
+        from ...tui import brand_step
+        client = (getattr(cfg, "mode", "") or "") == "cloud"
+        self.brand_tabs.setCurrentIndex(TAB_SERVICES)
+        self.enforcement.setVisible(not client)
+        self.help.setVisible(not client)
+        self.lane_note.setText(brand_step.CLIENT_SERVICES_NOTE if client else "")
+        self.lane_note.setVisible(client)
 
     def forget_answers(self) -> None:
         """Drop every working answer: the rows were REPLACED under this page on the
@@ -1074,7 +1115,11 @@ class DomainServicesPage(QtWidgets.QWizardPage, DomainServicesBody):
         """Record (see ``DomainServicesBody._record``); always True — the refusal
         belongs at the build/mesh-start screens, where it can be acted on."""
         self._record(self.wiz.cfg)
-        self.commit_brand(save=True)
+        # A client image (cloud) writes no brand record: its tabs write the domain rows
+        # in place, and the record file is the MESH's — a client configuration must
+        # never overwrite it.
+        if getattr(self.wiz.cfg, "mode", "") == "mesh":
+            self.commit_brand(save=True)
         return True
 
     def cleanupPage(self):

@@ -357,7 +357,10 @@ def test_the_four_tabs_are_in_the_designs_order_and_services_is_open(qapp, gen):
 
 def test_a_host_with_no_session_draws_no_tab_bar(qapp, gen):
     w = _wiz(gen)
-    w.cfg.mode = "cloud"
+    # a standalone image has no brands to configure per domain, so its host has no
+    # session (a cloud client used to be the example; it has the four tabs now —
+    # tests/test_cloud_brand_tabs.py)
+    w.cfg.mode = "standalone"
     w.cfg.domains = [Domain(name="shop.example")]
     page = ds_mod.DomainServicesPage(w)
     page._load(w.cfg, ["shop.example"], "")

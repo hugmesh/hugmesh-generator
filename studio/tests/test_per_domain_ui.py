@@ -181,25 +181,33 @@ def test_row_zero_shows_the_mesh_sign_in_it_inherits_and_where_it_is_chosen(qapp
     _settle(qapp)
     assert tabs.view.own
     assert "AWS Cognito" in tabs.signin_now.text()
-    assert "inherited from the mesh" in tabs.signin_now.text()
-    assert tabs.signin_choice.isHidden()
+    assert "the mesh's own setting" in tabs.signin_now.text()
+    # row 0 EDITS the mesh's sign-in in place now (r2-cloud-tabs, 2026-10-21): the
+    # choice shows the mesh's provider and its values, and says it is the same setting
+    # as the Identity provider step (test_row_zero_mesh_writes.py pins the write)
+    _usable(tabs.signin_choice, "row 0's sign-in choice")
+    assert tabs.signin_choice.currentData() == "aws"
+    assert tabs.signin_issuer.text() == "https://cognito-idp.eu-west-1.amazonaws.com/pool"
     assert "Identity provider" in tabs.signin_note.text()
 
 
 def test_row_zero_ways_tab_does_not_show_a_tor_tick_that_reads_off(qapp, gen):
     """Domain-ui skeptic 3: row 0's Ways tab showed a greyed, UNTICKED Tor box even with
-    the mesh's Tor on. Row 0's onion is the mesh's own Tor (set on Mesh infrastructure
-    or the Network step), so the box is not shown there and the note says so; an added
-    domain still gets its own, usable tick."""
+    the mesh's Tor on. Row 0's onion is the mesh's own Tor, and row 0 now edits it in
+    place (r2-cloud-tabs), so the box shows the mesh's REAL state — ticked when the
+    mesh's Tor is on, unticked when it is off — and an added domain still gets its own,
+    usable tick."""
     wiz, page = _image_page(qapp, gen)
-    wiz.cfg.tor_onion_service = True
-    page._show()
-    tabs = page.brand_tabs
-    tabs.open_tab("Ways to reach it")
-    _settle(qapp)
-    assert tabs.view.own
-    assert tabs.tor_box.isHidden()
-    assert "the mesh's own Tor address" in tabs.reach_note.text()
+    for value, ticked in ((True, True), ("off", False)):
+        wiz.cfg.tor_onion_service = value
+        page._show()
+        tabs = page.brand_tabs
+        tabs.open_tab("Ways to reach it")
+        _settle(qapp)
+        assert tabs.view.own
+        _usable(tabs.tor_box, "row 0's Tor tick", min_w=40, min_h=14)
+        assert tabs.tor_box.isChecked() is ticked
+        assert tabs.tor_box.text() == "The mesh's own Tor address (its onion)"
     page._step(1)                                       # shop.example
     tabs.open_tab("Ways to reach it")
     _settle(qapp)
@@ -255,8 +263,12 @@ def test_row_zero_ways_are_the_meshs_and_say_so(qapp, gen):
     tabs.open_tab("Ways to reach it")
     _settle(qapp)
     assert tabs.view.own
-    assert not tabs.tailnet_combo.isEnabled() and not tabs.tor_box.isEnabled()
+    # the mesh's VPN is never chosen per domain (shown, greyed, with where it is
+    # decided); its Tor and egress are edited in place (r2-cloud-tabs)
+    assert not tabs.tailnet_combo.isEnabled()
+    assert tabs.tor_box.isEnabled() and tabs.egress_combo.isEnabled()
     assert "mesh's own domain" in tabs.reach_note.text()
+    assert "not chosen per domain" in tabs.reach_note.text()
 
 
 # ── 4. the Domains table never flips a sign-in back ─────────────────────────────────

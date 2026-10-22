@@ -1951,6 +1951,18 @@ class NetworkPage(QtWidgets.QWizardPage):
             self.brand_mirror_why.setText(f"Could not go back: {exc}")
             self.brand_mirror_why.setVisible(True)
 
+    def mirror_mesh_reach(self, c) -> None:
+        """Show the mesh's Tor and egress VPN file as ``c`` holds them NOW — row 0 of
+        the Domain services step edits the same two values in place (2026-10-21), and
+        this page's ``validatePage`` (re-run by ``collect_all``) collects them from these
+        widgets, so they must say what the config says. Touches those two widgets only:
+        ``initializePage`` re-seeds every service row and the picker's hide sentinel,
+        which a row-0 edit must not."""
+        self.egress.setText(c.egress_vpn or "")
+        self.tor_onion.setChecked(_on_off(c.tor_onion_service)
+                                  and bool(getattr(self, "_service_offered", {}).get(
+                                      "tor", True)))
+
     def validatePage(self):
         c = self.wiz.cfg
         c.tailscale = self.tailscale.isChecked()
