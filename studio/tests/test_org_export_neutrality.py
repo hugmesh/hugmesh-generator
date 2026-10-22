@@ -233,6 +233,11 @@ def test_each_owned_python_file_is_clean(rel):
 # checked: the stem itself (case-insensitive, read as bytes so a NUL byte cannot
 # blind it), and the stem inside BASE64, which is how it hid in the dev keys and the
 # DER bodies of the old test certificates where no plain grep could see it.
+#
+# This file runs only when studio/** changes. The same whole-tree scan, with more
+# shapes (UTF-16, hex, URL-safe base64, PNG text chunks), runs on EVERY pull request
+# as section 10 of tests/scripts/test-image-builder-always-on.sh, through
+# tests/scripts/private_name_neutrality.py. Neither can read text drawn as pixels.
 
 def _b64_cores(word: str) -> tuple[str, ...]:
     """The stable base64 substrings ``word`` produces at each of the three byte
