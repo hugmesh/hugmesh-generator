@@ -250,3 +250,22 @@ def test_a_mesh_image_always_joins_its_vpn_and_only_a_client_reads_its_setting()
     assert domain_reach.mesh_tailnet_default(_cloud_cfg()) is True
     assert domain_reach.mesh_tailnet_default(
         ImageConfig(mode="standalone", role="laptop")) is False
+
+
+def test_a_client_domains_ways_never_claim_the_node_image_sentence(qapp, gen):
+    """The reach-applied lane gave every route its own sentence under the Ways
+    controls; on a client (route 'image' in the session) that was the NODE image's
+    "a node image's private network ... cover the whole computer". A client gets its
+    own sentence, in the window and on the text screen."""
+    _wiz, page = _page(qapp, gen, _cloud_cfg())
+    page._step(1)
+    tabs = page.brand_tabs
+    tabs.open_tab("Ways to reach it")
+    _settle(qapp)
+    assert tabs.reach_note.text() == brand_step.CLIENT_REACH_EFFECT
+    _usable(tabs.reach_note, "the client reach sentence", min_w=200, min_h=12)
+    view = tabs.view
+    text = "\n".join(brand_step.ways_lines(view))
+    assert brand_step.CLIENT_REACH_EFFECT in text
+    assert "a node image's private network" not in text
+    assert "a node image's private network" not in tabs.reach_note.text()

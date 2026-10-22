@@ -53,7 +53,7 @@ __all__ = ["SECTIONS", "SECTION_LOOK", "SECTION_SERVICES", "BrandView", "brand_v
            "TAILNET_CHOICES", "EGRESS_CHOICES", "REACH_RECORDED_ONLY", "OWN_REACH_HOME",
            "feed_identity", "feed_ways", "CLIENT_SIGNIN_NOTE", "CLIENT_LOOK_NOTE",
            "CLIENT_SERVICES_NOTE",
-           "CLIENT_WAYS_NOTE"]
+           "CLIENT_WAYS_NOTE", "CLIENT_REACH_EFFECT"]
 
 #: (number, title) — the window's four tabs, in the window's order.
 SECTIONS: tuple[tuple[int, str], ...] = (
@@ -139,6 +139,12 @@ CLIENT_SERVICES_NOTE = ("Mesh desktop client image: it runs no services for its 
                         "and writes no mesh manifest, so the services ticked here are kept "
                         "with this configuration only. Which services the image itself "
                         "carries is the Network step's choice.")
+#: What a client image's start does with a domain's own VPN and egress (the sentence
+#: under the Ways controls on cloud, in place of the node-image one).
+CLIENT_REACH_EFFECT = ("Not applied: a Mesh desktop client image joins the mesh's VPN and "
+                       "uses an egress VPN as one whole computer (the Network step), so "
+                       "this domain's own VPN and egress are kept with the configuration "
+                       "only.")
 CLIENT_WAYS_NOTE = ("Mesh desktop client image: it serves no domain, so this domain's Tor, "
                     "VPN and egress choices are kept with this configuration only. The "
                     "computer joins the mesh's VPN and uses an egress VPN as a whole: "
@@ -406,6 +412,10 @@ class BrandView:
         (who runs Mastodon, who names which provider file) shows here at once."""
         if self.own:
             return OWN_REACH_HOME[:1].upper() + OWN_REACH_HOME[1:] + "."
+        if self.client_image():
+            # a client is not a node image: the image route's sentence ("a node
+            # image's private network ...") would be wrong under the client line
+            return CLIENT_REACH_EFFECT
         host = self.session.host
         route = getattr(host, "route", "") or ""
         if route != "docker":
