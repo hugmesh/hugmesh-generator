@@ -495,6 +495,36 @@ def test_the_older_record_of_the_same_mesh_releases_what_the_newer_dropped(
                                                 "hugmesh-owncast-ui"]
 
 
+def test_a_superseded_record_releases_even_when_the_form_holds_no_record(
+        gen, src, state):
+    """After a restart, or on the text interface, the form holds no saved record
+    (record_id ""). A1 was saved again as A2 without owncast, so A1 is an older state
+    of a mesh that moved on: it keeps nothing, and A2 (the newest) does not have
+    owncast either, so both owncast copies are extra."""
+    _made(gen, src, state, WITH_OWNCAST, "live.example")
+    _save_record(state, A1, "My mesh", WITH_OWNCAST)
+    _save_record(state, A2, "My mesh (2)", WITHOUT, follows=[A1])
+    plan = dw.plan_workspaces(gen, "existing", src, WITHOUT, MESH, state_root=state,
+                              record_id="")
+    ws = plan.domains[0]
+    assert ws.claimed == ()
+    assert sorted(x.app for x in ws.extras) == ["hugmesh-owncast-bff-api",
+                                                "hugmesh-owncast-ui"]
+    assert dw.superseded_ids(dw_records(state)) == {A1}
+
+
+def dw_records(state):
+    from hugmesh_studio.core import saved_meshes
+    meshes = os.path.join(state, "meshes")
+    return [saved_meshes.load(os.path.join(meshes, f)) for f in sorted(os.listdir(meshes))]
+
+
+def test_a_record_never_supersedes_itself():
+    from hugmesh_studio.core.saved_meshes import SavedMesh
+    recs = [SavedMesh(id="a", follows=["a", "", 3, None]), SavedMesh(id="b")]
+    assert dw.superseded_ids(recs) == set()
+
+
 def test_a_record_that_is_not_in_the_line_still_keeps_its_copies(gen, src, state):
     """The same two records with no line between them are two meshes: A1 keeps."""
     _made(gen, src, state, WITH_OWNCAST, "live.example")

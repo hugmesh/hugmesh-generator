@@ -76,7 +76,8 @@ __all__ = [
     "DomainWorkspace", "WorkspacePlan", "ExtraStatus", "CloneResult", "RemoveResult",
     "safe_folder_name", "copy_folder_name", "workspace_root", "plan_workspaces",
     "clone_repo", "clone_missing", "extra_status", "remove_extra", "read_marker",
-    "saved_mesh_claims", "same_mesh_ids", "remote_name", "git_settings",
+    "saved_mesh_claims", "same_mesh_ids", "superseded_ids", "remote_name",
+    "git_settings",
     "SHARED_ROOT_NOTE",
 ]
 
@@ -287,7 +288,13 @@ def saved_mesh_claims(generator_dir: str, *, state_root: Optional[str] = None,
     records it was saved after (``SavedMesh.follows``, core/saved_meshes.py), so two
     saves of one mesh do not leave the first one keeping copies the second dropped.
     A NEWER record saved from the same line still claims (it may be the state the
-    person goes back to)."""
+    person goes back to).
+
+    A record that a later save of its mesh lists (:func:`superseded_ids`) claims
+    nothing either, whatever the form holds: after a restart, or on the text
+    interface (which loads no record), the first of two saves would otherwise keep
+    the copies the second save dropped. Releasing only makes a copy EXTRA; it is still
+    removed only on a second click, and only when it is a plain copy."""
     from . import saved_meshes
     from .local_mesh_bootstrap import DEFAULT_DOMAIN
     meshes = os.path.join(state_root or state_dir(), "meshes")
@@ -304,7 +311,7 @@ def saved_mesh_claims(generator_dir: str, *, state_root: Optional[str] = None,
             records.append(saved_meshes.load(os.path.join(meshes, fname)))
         except Exception:                        # noqa: BLE001 — an unreadable record claims nothing
             continue
-    skip = same_mesh_ids(records, exclude_record_id)
+    skip = same_mesh_ids(records, exclude_record_id) | superseded_ids(records)
     for rec in records:
         if rec.id in skip:
             continue
@@ -324,6 +331,18 @@ def saved_mesh_claims(generator_dir: str, *, state_root: Optional[str] = None,
             for app in dom.apps:
                 if slug and app.kind == cf.KIND_REPO:
                     out.setdefault((slug, app.name), label)
+    return out
+
+
+def superseded_ids(records) -> "set[str]":
+    """The ids of records a later save of the same mesh lists in its ``follows``:
+    older states of a mesh that was saved again. A record never supersedes itself."""
+    out: set = set()
+    for rec in records:
+        own = getattr(rec, "id", "")
+        for value in (getattr(rec, "follows", None) or ()):
+            if isinstance(value, str) and value and value != own:
+                out.add(value)
     return out
 
 

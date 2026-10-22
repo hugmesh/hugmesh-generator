@@ -194,7 +194,9 @@ one, so meshes share it. A copy this mesh does not need but a **saved** mesh sti
 for removal; the saved mesh the form was loaded from does not count, and neither do
 the EARLIER saves of that same mesh (each record lists the records it was saved after,
 so saving a mesh twice does not leave the first save keeping copies the second one
-dropped). A newer save of the same mesh still counts. A mesh that was never saved
+dropped). An earlier save of a mesh that was saved again never counts, whatever the
+form holds (after a restart, and on the text interface, which loads no saved mesh). A
+newer save of the same mesh still counts. A mesh that was never saved
 cannot be checked, so save a mesh before removing another one's folders. The last
 outcome line ("Made 20 copies…") goes away when the domains or their services change.
 
