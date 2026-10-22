@@ -1,11 +1,16 @@
-"""The "Work on this mesh with a local AI agent" card (issue #695).
+"""The local AI agent launcher (issue #695), now part of the Studio's bottom panel.
 
-One card on the local-mesh Bring-up page, which is where BOTH ways of building a local
-mesh end: the Docker mesh (Generate & start) and the kind DevOps lane (Start DevOps
-lane) share that page, its Actions box and its running-mesh table. So there is one card
-and one probe and one launch path, with a Lane drop-down that only changes the words in
-the brief (and which rebuild command it names). The stepped wizard and the single-page
-``LocalMeshDialog`` both host it, because both build the same Bring-up section.
+It used to be a card, "Work on this mesh with a local AI agent", on the local-mesh
+Bring-up page. The operator asked (2026-10-21) for it to leave the build phase and live
+with the local assistant in the panel at the bottom of every Studio window
+(``gui/_local_ai_dock.py``), with every option it had. So this module is unchanged in
+what it does; only its host moved. :func:`follow_page` is the one place that wires it to
+a local-mesh page (the dock and the tests both use it), and the dock hands it the
+environment of the Ollama the assistant uses (system or Docker, core/ollama_docker.py)
+and the project-context text every agent starts with (core/agent_context.py).
+
+There is one card and one probe and one launch path, with a Lane drop-down that only
+changes the words in the brief (and which rebuild command it names).
 
 What the card does (all of it in :mod:`core.local_agent`, which is Qt-free):
 
@@ -43,9 +48,9 @@ from ...core.e2e_catalogue import STACK_SRC_DIR
 from ._widgets import own_probe, probe_running
 
 __all__ = ["AgentContext", "AppChoice", "Outcome", "LocalAgentWidget", "list_apps",
-           "context_from_page", "lane_from_page", "TITLE"]
+           "context_from_page", "lane_from_page", "follow_page", "TITLE"]
 
-TITLE = "Work on this mesh with a local AI agent"
+TITLE = "Start a local AI agent on this mesh's code"
 _GREEN, _AMBER, _RED = "#2e7d32", "#a65d00", "#b00020"
 _INTRO = (
     "Opens a terminal with a coding agent that runs on a model on this PC (Ollama), in a "
@@ -89,6 +94,9 @@ class _Snapshot:
     model: str
     ctx: AgentContext
     probe: "Optional[la.Probe]"
+    #: the environment of the Ollama in use (core/ollama_docker.assistant_env), read on
+    #: the GUI thread; None = the Studio's own environment
+    env: "Optional[dict]" = None
 
 
 @dataclass(frozen=True)
@@ -191,6 +199,19 @@ def context_from_page(page) -> AgentContext:
         kind_cluster=cluster, lane=lane, lane_runs=lane_runs)
 
 
+def follow_page(card: "LocalAgentWidget", page) -> None:
+    """Keep ``card``'s app list and Lane in step with a local-mesh page: every verb start
+    and end (``completeChanged``) and every change of the source choice. The one wiring,
+    shared by the dock and the tests, so the card hears the page however it is hosted."""
+    page.completeChanged.connect(card.refresh_apps)
+    src_existing = getattr(page, "src_existing", None)
+    src_dir = getattr(page, "src_dir", None)
+    if src_existing is not None:
+        src_existing.toggled.connect(lambda _on: card.refresh_apps())
+    if src_dir is not None:
+        src_dir.textChanged.connect(lambda _t: card.refresh_apps())
+
+
 # ── small pieces ─────────────────────────────────────────────────────────────────
 class _Elided(QtWidgets.QLabel):
     """A one-line label that elides in the middle instead of widening its row, so a long
@@ -278,18 +299,26 @@ class LocalAgentWidget(QtWidgets.QGroupBox):
     * ``context``  ``() -> AgentContext``      what the mesh is
     * ``prober``   ``() -> Probe``             what is installed (default: the real probe)
     * ``launcher`` ``(Plan) -> LaunchResult``  open the window (default: the real one)
+    * ``environ``  ``() -> dict``              the Ollama in use (default: the Studio's)
+    * ``context_text`` ``(AgentContext) -> str`` the project context (default: none);
+      called on the WORKER, so it may read the disk
     """
 
     def __init__(self, generator_dir: str,
                  context: "Optional[Callable[[], AgentContext]]" = None,
                  prober: "Optional[Callable[[], la.Probe]]" = None,
                  launcher: "Optional[Callable[[la.Plan], la.LaunchResult]]" = None,
-                 parent=None):
+                 parent=None, *, environ: "Optional[Callable[[], dict]]" = None,
+                 context_text: "Optional[Callable[[AgentContext], str]]" = None):
         super().__init__(TITLE, parent)
         self.setObjectName("local_agent_card")
         self.generator_dir = generator_dir
         self._context = context or (lambda: AgentContext())
-        self._prober = prober or la.probe
+        self._environ = environ
+        self._context_text = context_text
+        # The default probe asks the Ollama the assistant uses: in Docker mode that is
+        # the container's port, never the system 11434.
+        self._prober = prober or (lambda: la.probe(environ=self._env()))
         self._launcher = launcher or la.launch
         self.probe: "Optional[la.Probe]" = None
         self.apps: "list[AppChoice]" = []
@@ -371,6 +400,12 @@ class LocalAgentWidget(QtWidgets.QGroupBox):
 
     def set_launcher(self, launcher: "Callable[[la.Plan], la.LaunchResult]") -> None:
         self._launcher = launcher
+
+    def _env(self) -> "Optional[dict]":
+        try:
+            return self._environ() if self._environ is not None else None
+        except Exception:                          # noqa: BLE001 — never break the card
+            return None
 
     # ── reading the page ─────────────────────────────────────────────────────────
     def ctx(self) -> AgentContext:
@@ -557,19 +592,27 @@ class LocalAgentWidget(QtWidgets.QGroupBox):
         callable reads the page's widgets (and Re-check rebuilds the app list), and Qt
         widgets are GUI-thread only: a worker that touched them can abort the Studio."""
         lane, app, agent, model = self.selection()
-        return _Snapshot(lane, app, agent, model, self.ctx(), self.probe)
+        return _Snapshot(lane, app, agent, model, self.ctx(), self.probe, self._env())
 
     def _prepare_plan(self, snap: "_Snapshot") -> "la.Plan":
         """Pure on the snapshot: touches no widget, so it may run on a worker."""
         if snap.app is None:
             raise la.ScratchError("No app folder is known yet.")
         ctx, lane, app = snap.ctx, snap.lane, snap.app
+        context_text = ""
+        if self._context_text is not None:
+            try:
+                context_text = self._context_text(ctx) or ""
+            except Exception as exc:               # noqa: BLE001 — said in the brief, not raised
+                context_text = (f"(The Studio could not gather the project context: "
+                                f"{type(exc).__name__}: {exc})")
         return la.prepare(
             lane=lane, mesh=ctx.mesh, domains=list(ctx.domains),
             doors=list(ctx.doors.get(lane, ())), repo=app.name, source=app.path,
             source_root=os.path.dirname(app.path), source_mode=ctx.source_mode,
             generator_dir=self.generator_dir, pr=snap.probe, agent=snap.agent,
-            model=snap.model, kind_cluster=ctx.kind_cluster)
+            model=snap.model, kind_cluster=ctx.kind_cluster, environ=snap.env,
+            context_text=context_text)
 
     def _start(self) -> None:
         if not self.start_btn.isEnabled() or self.probe is None:

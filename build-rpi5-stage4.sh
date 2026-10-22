@@ -3202,6 +3202,17 @@ if [ "${#HOST_POLICY_TOOLS[@]}" -ne 0 ]; then
         exit 1
     fi
 fi
+
+# ── HOST gpep517 floor (cross-built python C extensions) ──────────────────────
+# Every python wheel in this cross build is built by the HOST gpep517 with
+# --sysroot. gpep517 < 23 breaks every python C extension against setuptools-84
+# ("patched_config_vars() takes 0 positional arguments but 9 were given", shown
+# by portage only as "Wheel build failed"), so libselinux[python] and pypax fail
+# in @system and the whole payload is skipped (rpi5 run 2026-10-21). The
+# 2026-09-24 builder image ships gpep517-20 as its only stable version, and
+# --with-bdeps=n means the cross emerge never upgrades it. Full rationale in
+# scripts/_host-guard-lib.sh. Must run before the first cross_emerge.
+hostguard_ensure_cross_gpep517 || exit 1
 info "Host SELinux policy build tools present (checkpolicy, checkmodule, semodule_package, m4)"
 
 if ! ${SKIP_ISO} && ! command -v xorrisofs &>/dev/null; then
@@ -3465,8 +3476,17 @@ fi
 cp "${SPECS_DIR}/portage/env/"*.conf                      "${SYSROOT}/etc/portage/env/" 2>/dev/null || true
 # Per-package user patches auto-applied by eapply_user (called from each ebuild's
 # default src_prepare). cross_emerge runs with PORTAGE_CONFIGROOT=${SYSROOT}, so
-# portage reads them from ${SYSROOT}/etc/portage/patches/<cat>/<pkg>/. Currently
-# holds net-misc/networkmanager's cross jansson-SONAME fix (see that .patch).
+# portage reads them from ${SYSROOT}/etc/portage/patches/<cat>/<pkg>/.
+# The sysroot copy is REBUILT from specs every run, never added to: a --resume
+# sysroot otherwise keeps a patch the specs have dropped, and portage applies a
+# patch in an unversioned <pkg>/ dir to EVERY future version of that package.
+# That is how the old net-misc/networkmanager cross jansson-SONAME patch killed
+# NetworkManager 1.58.1 in src_prepare ("Hunk #1 FAILED at 296"): 1.58.1's own
+# meson.build already prefixes the cross sys_root, so the patch was removed.
+# A new patch here goes in a VERSIONED dir (<cat>/<pkg>-<ver>/), which
+# studio/tests/test_portage_user_patches.py enforces.
+rm -rf "${SYSROOT}/etc/portage/patches"
+mkdir -p "${SYSROOT}/etc/portage/patches"
 if [ -d "${SPECS_DIR}/portage/patches" ]; then
     cp -a "${SPECS_DIR}/portage/patches/."             "${SYSROOT}/etc/portage/patches/"
 fi

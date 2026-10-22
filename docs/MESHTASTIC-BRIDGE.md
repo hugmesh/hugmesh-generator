@@ -74,9 +74,8 @@ messages "via LoRa mesh". Treat mesh attribution as convenience, not authenticat
 
 Room state event **`net.hugmesh.mesh.bridge`** (state key `""`, power-level-gated like
 `net.hugmesh.vn.scene`). The canonical wire prefix follows the `.net` domain move. On read,
-the bridge also HONORS the two legacy spellings, post-squash `systems.hugmesh.mesh.bridge`
-and pre-rebrand `systems.snapdragon.mesh.bridge`, and the canonical one wins when several
-exist. Only the canonical type is ever written.
+the bridge also HONORS the legacy post-squash spelling `systems.hugmesh.mesh.bridge`, and
+the canonical one wins when both exist. Only the canonical type is ever written.
 
 ```json
 { "enabled": true, "device": "default", "meshChannel": 0 }

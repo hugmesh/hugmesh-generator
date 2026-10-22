@@ -1752,6 +1752,10 @@ def test_non_argv_fields_set():
         "login_footer_hidden", "login_footer_size", "login_footer_bg",
         "login_footer_text",
         "login_bg_effect",
+        # #654: the superbrand's shape/decoration (same channel as login_*), and the
+        # brand record path, which is a Studio-side resolver until a builder parses
+        # --brand-record (test_brand_record_copy_sites pins that hand-over).
+        "login_style", "login_decor", "brand_record",
         "additional_domains", "configure_users", "qemu_device_tests",
         "domain_services_reviewed"}
     # no flow flag may reach ANY builder argv, on any platform, in any mode

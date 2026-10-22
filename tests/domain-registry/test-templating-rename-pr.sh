@@ -170,14 +170,14 @@ if [ $RC -ne 0 ] && [ ! -e "${WORK}/escape.md" ]; then ok "A8 '..' TO (outside-t
 # Contract denylist — the PINNED names, exercised on BOTH sides.
 run_recipe A9 'edits: []
 renames:
-  - { from: docs/BRANDING.md, to: "snapdragon-deploy.yaml" }' "$T"
-[ $RC -ne 0 ] && grep -q "CONTRACT" "${WORK}/recipe-A9.err" && ok "A9 contract denylist TO=snapdragon-deploy.yaml refused" || bad "A9 deploy-descriptor rename accepted"
+  - { from: docs/BRANDING.md, to: ".hugmesh-provenance.json.sig" }' "$T"
+[ $RC -ne 0 ] && grep -q "CONTRACT" "${WORK}/recipe-A9.err" && ok "A9 contract denylist TO=.hugmesh-provenance.json.sig refused" || bad "A9 provenance-signature rename accepted"
 
-# The post-rebrand spelling of the SAME contract. 3 org repos ship this name and
-# both catalog generators filter on it (specs/cluster/catalog/adopters.yaml), so
-# renaming it un-discovers the repo exactly as renaming the legacy name does. This
-# is the only place the denylist is exercised behaviourally — the discovery gate
-# only string-greps the JS source — so the entry needs its own case on BOTH sides.
+# The deploy descriptor. Every catalog adopter ships this name and both catalog
+# generators filter on it (specs/cluster/catalog/adopters.yaml), so renaming it
+# un-discovers the repo. This is the only place the denylist is exercised
+# behaviourally — the discovery gate only string-greps the JS source — so the
+# entry needs its own case on BOTH sides.
 run_recipe A9b 'edits: []
 renames:
   - { from: docs/BRANDING.md, to: "hugmesh-deploy.yaml" }' "$T"
@@ -190,8 +190,8 @@ renames:
 
 run_recipe A9d 'edits: []
 renames:
-  - { from: snapdragon-deploy.yaml, to: "docs/d.yaml" }' "$T"
-[ $RC -ne 0 ] && grep -q "CONTRACT" "${WORK}/recipe-A9d.err" && ok "A9d contract denylist FROM=snapdragon-deploy.yaml refused" || bad "A9d legacy deploy-descriptor rename-away accepted"
+  - { from: .hugmesh-base-origin.json, to: "docs/d.json" }' "$T"
+[ $RC -ne 0 ] && grep -q "CONTRACT" "${WORK}/recipe-A9d.err" && ok "A9d contract denylist FROM=.hugmesh-base-origin.json refused" || bad "A9d base-origin marker rename-away accepted"
 
 # THE THEME CONTRACT (scripts/tooling/tokens.json `theme_contract_constants`).
 # Unlike the deploy descriptor, a moved theme link fails SILENTLY: the emitted repo
@@ -320,13 +320,12 @@ renames:
   - { from: .hugmesh-provenance.json, to: "docs/p.json" }' "$T"
 [ $RC -ne 0 ] && grep -q "CONTRACT" "${WORK}/recipe-A10.err" && ok "A10 contract denylist FROM=.hugmesh-provenance.json refused" || bad "A10 provenance rename accepted"
 
-# LEGACY_COMPAT half of the SAME contract. provenance.sh verify / ingest-foreign-
-# base.sh still dual-READ the pre-rebrand envelope off other meshes' disks, so a
-# recipe that renames it away is exactly as breaking as renaming the new name.
+# The detached signature is half of the SAME envelope: moving it away leaves a
+# manifest that provenance.sh verify can never check.
 run_recipe A10b 'edits: []
 renames:
-  - { from: .snapdragon-provenance.json, to: "docs/p.json" }' "$T"
-[ $RC -ne 0 ] && grep -q "CONTRACT" "${WORK}/recipe-A10b.err" && ok "A10b contract denylist FROM=.snapdragon-provenance.json (LEGACY_COMPAT) refused" || bad "A10b legacy provenance rename accepted"
+  - { from: .hugmesh-provenance.json.sig, to: "docs/p.sig" }' "$T"
+[ $RC -ne 0 ] && grep -q "CONTRACT" "${WORK}/recipe-A10b.err" && ok "A10b contract denylist FROM=.hugmesh-provenance.json.sig refused" || bad "A10b provenance-signature rename accepted"
 
 run_recipe A11 'edits: []
 renames:
@@ -335,8 +334,8 @@ renames:
 
 run_recipe A11b 'edits: []
 renames:
-  - { from: .snapdragon-mesh-admitted, to: "docs/stamp" }' "$T"
-[ $RC -ne 0 ] && grep -q "CONTRACT" "${WORK}/recipe-A11b.err" && ok "A11b contract denylist FROM=.snapdragon-mesh-admitted (LEGACY_COMPAT) refused" || bad "A11b legacy admission-stamp rename accepted"
+  - { from: .hugmesh-base-ref, to: "docs/ref" }' "$T"
+[ $RC -ne 0 ] && grep -q "CONTRACT" "${WORK}/recipe-A11b.err" && ok "A11b contract denylist FROM=.hugmesh-base-ref refused" || bad "A11b base-ref marker rename accepted"
 
 run_recipe A12 'edits: []
 renames:
@@ -345,8 +344,8 @@ renames:
 
 run_recipe A12b 'edits: []
 renames:
-  - { from: docs/BRANDING.md, to: "sub/.snapdragon-mesh-admitted" }' "$T"
-[ $RC -ne 0 ] && ok "A12b BASENAME guard also fires on the LEGACY_COMPAT stamp name" || bad "A12b subdir legacy contract name accepted"
+  - { from: docs/BRANDING.md, to: "sub/.hugmesh-provenance.json" }' "$T"
+[ $RC -ne 0 ] && ok "A12b BASENAME guard also fires on the provenance manifest name" || bad "A12b subdir provenance name accepted"
 
 T="${WORK}/A13"; mktree "$T"; printf 'y\n' > "${T}/docs/EXISTS.md"
 run_recipe A13 'edits: []

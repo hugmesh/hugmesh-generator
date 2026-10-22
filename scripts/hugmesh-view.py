@@ -118,6 +118,9 @@ Every domain, upstream and port lives in scripts/hugmesh-view.tsv. Adding a
 domain is appending a row; moving a port off a collision is one env var
 (`HUGMESH_VIEW_PORT_<NAME>`); pointing the whole tool at a different mesh is
 `--catalog`. No mapping is hardcoded here.
+The Studio also writes tests/stack/.looks/view.tsv (gitignored) with one compose-lane
+row per added domain of the local stack, so `make view LANE=compose` opens each
+domain by its own name; it is read only together with the shipped catalog.
 
 NOT SUPPORTED, ON PURPOSE
 -------------------------
@@ -155,6 +158,12 @@ REPO = os.path.dirname(HERE)
 #: Default catalog. `--catalog` / HUGMESH_VIEW_TSV point elsewhere (a brand's
 #: own domain set, a second mesh, a test fixture).
 DEFAULT_CATALOG = os.path.join(HERE, "hugmesh-view.tsv")
+
+#: Rows GENERATED for the local stack's added domains (studio core/look_serving.py
+#: writes it when the Studio starts a mesh with added domains, and removes it when
+#: there are none; gitignored). Read together with the DEFAULT catalog only: a
+#: `--catalog` of your own is taken exactly as written.
+GENERATED_CATALOG = os.path.join(REPO, "tests", "stack", ".looks", "view.tsv")
 
 #: Where a background session records its pids so `stop` can find them — and so
 #: a CRASHED session's port-forwards can be swept instead of silently squatting
@@ -300,6 +309,28 @@ def load_catalog(path: str, env=None) -> list[Entry]:
         raise ViewError(f"catalog not found: {path}")
     with open(path, encoding="utf-8") as fh:
         return parse_catalog(fh.read(), env)
+
+
+def load_entries(path: str, env=None, generated: str | None = None) -> list[Entry]:
+    """The catalog at ``path`` plus, when ``path`` is the shipped default, the
+    generated per-domain rows (``GENERATED_CATALOG``) if that file exists. A row name
+    in both is refused like any other duplicate: a generated row must never silently
+    replace a shipped door."""
+    entries = load_catalog(path, env)
+    generated = GENERATED_CATALOG if generated is None else generated
+    if (os.path.abspath(path) != os.path.abspath(DEFAULT_CATALOG)
+            or not os.path.isfile(generated)):
+        return entries
+    try:
+        extra = load_catalog(generated, env)
+    except ViewError as exc:
+        raise ViewError(f"{generated}: {exc}") from None
+    names = [e.name for e in entries + extra]
+    dupes = sorted({n for n in names if names.count(n) > 1})
+    if dupes:
+        raise ViewError(f"{generated}: row name(s) already in the catalog: "
+                        f"{', '.join(dupes)}")
+    return entries + extra
 
 
 def select(entries: list[Entry], lane: str, only: list[str]) -> list[Entry]:
@@ -1564,7 +1595,7 @@ def main(argv=None) -> int:
             return cmd_trust(args)
         if args.command == "untrust":
             return cmd_untrust(args)
-        entries = load_catalog(args.catalog, env)
+        entries = load_entries(args.catalog, env)
         if args.command == "list":
             return cmd_list(args, entries)
         return cmd_up(args, entries, env)

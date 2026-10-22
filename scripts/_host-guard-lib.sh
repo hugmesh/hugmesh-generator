@@ -72,6 +72,9 @@
 #   hostguard_require_host_portage — READ-ONLY: does the host already satisfy the
 #                                    portage config the build needs? Never writes.
 #   hostguard_require_host_tools   — host-tool preflight; fail fast natively.
+#   hostguard_ensure_cross_gpep517 — HOST gpep517 floor for cross-built python
+#                                    C extensions (upgraded in the container;
+#                                    exact commands + return 1 on a real host).
 
 # shellcheck disable=SC2317
 if [ -n "${_HOST_GUARD_LIB_SOURCED:-}" ]; then
@@ -352,4 +355,87 @@ hostguard_require_host_tools() {
     [ -n "${hint}" ] && _hg_err "${hint}"
     _hg_err "Or build in the container instead, which touches nothing on this host: make docker-image"
     exit 1
+}
+
+# ── HOST gpep517 floor for cross-built python C extensions ─────────
+# hostguard_ensure_cross_gpep517 [portage-etc-dir]
+#
+# WHY: in an ARM cross build portage's distutils-r1 eclass builds every python
+# wheel with the HOST interpreter and the HOST gpep517, passing
+# `--sysroot ${SYSROOT}` (cross_emerge sets SYSROOT). Under --sysroot, gpep517
+# before 23 swaps sysconfig.get_config_vars for a function that takes NO
+# arguments; setuptools-84's bundled distutils calls get_config_vars(*names)
+# while it sets up the C compiler. Every python C extension then dies with
+#     TypeError: patch_sysconfig.<locals>.patched_config_vars() takes
+#     0 positional arguments but 9 were given
+# which portage reports only as "Wheel build failed". In the 2026-09-24
+# builder image gpep517-20 is the only amd64-stable version and setuptools-84
+# is stable, so sys-libs/libselinux (python USE is profile-forced on
+# hardened/selinux) and dev-python/pypax fail in @system, and everything that
+# needs them is skipped: every ARM board, every role (rpi5 run 2026-10-21,
+# 37 libselinux attempts). Pure-python packages never reach build_ext, which
+# is why most python packages still cross-built fine in the same run.
+# gpep517-23 made the replacement `patched_config_vars(*args)`. 22 is NOT
+# enough: replayed against the failed sysroot, gpep517-22 fails identically.
+#
+# x86 is not affected and must not call this: its emerges run inside
+# `chroot ${SYSROOT}`, where gpep517 is the sysroot's own copy.
+#
+# Container (hostguard_mutation_allowed + root): accept ~amd64 for the floor
+# atom in a dedicated file and emerge it (pure python, one ~31 KiB source
+# tarball; reuses the host-bdep binpkg pool when the builder wired one), then
+# re-check. Real host: write nothing, print the exact commands, return 1.
+# Returns 0 when the floor is met. The argument exists only so a test can
+# point the keyword write at a scratch dir; builders call it with none.
+HOSTGUARD_GPEP517_FLOOR='>=dev-python/gpep517-23'
+HOSTGUARD_GPEP517_KW_FILE='hugmesh-host-gpep517'
+
+_hg_host_portage() {
+    # The floor is about the BUILD HOST's root, never the sysroot: drop any
+    # cross-root variables a caller might have exported.
+    env -u ROOT -u SYSROOT -u PORTAGE_CONFIGROOT -u EROOT -u ESYSROOT -u BROOT "$@"
+}
+
+hostguard_ensure_cross_gpep517() {
+    local etc="${1:-/etc/portage}"
+    local floor="${HOSTGUARD_GPEP517_FLOOR}"
+    local kw_dir="${etc}/package.accept_keywords"
+    local kw_file="${kw_dir}/${HOSTGUARD_GPEP517_KW_FILE}"
+
+    if ! command -v portageq >/dev/null 2>&1; then
+        _hg_err "portageq not found: cannot check the HOST gpep517 version that every cross-built python C extension needs (${floor})."
+        return 1
+    fi
+    if _hg_host_portage portageq has_version / "${floor}" >/dev/null 2>&1; then
+        return 0
+    fi
+
+    if hostguard_mutation_allowed && [ "$(id -u)" -eq 0 ] && command -v emerge >/dev/null 2>&1; then
+        _hg_info "HOST gpep517 is older than 23: cross-built python C extensions (libselinux, pypax, libsemanage, setools) would fail with 'Wheel build failed'. Installing ${floor} in this builder container."
+        mkdir -p "${kw_dir}" || return 1
+        {
+            printf '%s\n' "# Auto-written by the ARM stage4 builder (_host-guard-lib.sh hostguard_ensure_cross_gpep517)."
+            printf '%s\n' "# gpep517 < 23 breaks every cross-built python C extension with setuptools >= 84."
+            printf '%s\n' "${floor} ~amd64"
+        } > "${kw_file}" || return 1
+        if ! _hg_host_portage emerge --oneshot --quiet --usepkg=y --binpkg-respect-use=y "${floor}"; then
+            _hg_err "Failed to install HOST ${floor}. Without it every cross-built python C extension fails (Wheel build failed)."
+            return 1
+        fi
+        if ! _hg_host_portage portageq has_version / "${floor}" >/dev/null 2>&1; then
+            _hg_err "emerge returned success but HOST gpep517 is still older than 23; refusing to start a cross build that would fail at @system."
+            return 1
+        fi
+        _hg_info "HOST gpep517 now satisfies ${floor}."
+        return 0
+    fi
+
+    _hg_err "HOST gpep517 is older than 23. Every cross-built python C extension (libselinux, pypax, libsemanage, setools) would fail with 'Wheel build failed' at @system."
+    _hg_err "This build will NOT change your system. Review and run on the BUILD host yourself:"
+    _hg_err "  sudo mkdir -p ${kw_dir}"
+    _hg_err "  echo '${floor} ~amd64' | sudo tee ${kw_file}"
+    _hg_err "  sudo emerge --oneshot '${floor}'"
+    _hg_err "Or build in the container instead, which touches nothing on this host:"
+    _hg_err "      make docker-image && make <target>"
+    return 1
 }

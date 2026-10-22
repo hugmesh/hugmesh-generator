@@ -24,15 +24,18 @@ binding exists, so they cannot drift silently.
 """
 from __future__ import annotations
 
+from ..core import saved_meshes
 from ..core.config import (
     MODE_DEFAULT_ROLE, ROLE_CHOICES, User, enter_mesh_defaults, image_class,
     normalize_user_roles,
 )
 from ..core.local_mesh_bootstrap import (
-    LocalMeshBootstrap, LocalMeshIdentity, localcloud_tor_note, saved_mesh_source,
+    LocalMeshBootstrap, LocalMeshIdentity, localcloud_tor_note, saved_mesh_choice_text,
+    saved_mesh_source,
 )
 from ..core.local_mesh_domains import (
-    apply_imported_domains, imported_domains_lines, imported_mesh_domains,
+    apply_imported_domains, apply_imported_tor, imported_domains_lines,
+    imported_mesh_domains,
 )
 from ..core.seeded_credentials import load_roster
 
@@ -71,7 +74,7 @@ def _person_roles(roles) -> list[str]:
         [person for granted, person in _CASDOOR_ROLE_MAP if granted in roles])
 
 
-def local_mesh_identity(generator_dir: str) -> LocalMeshIdentity:
+def local_mesh_identity(generator_dir: str, record_id: str = "") -> LocalMeshIdentity:
     """The local mesh's importable identity: ``(apex domain, [(username, roles)...],
     with_tor, source, mesh_domains)`` — a :class:`LocalMeshIdentity`.
 
@@ -86,8 +89,13 @@ def local_mesh_identity(generator_dir: str) -> LocalMeshIdentity:
     superadmin in the runtime secrets bundle and the seeder's persona roster. Users
     created after go-live live in the running mesh's identity tier; they cannot be
     enumerated from disk and do not need to be. Passwords are never read into the
-    config (User rows carry no secret)."""
-    boot, rec = LocalMeshBootstrap.for_checkout(generator_dir)
+    config (User rows carry no secret).
+
+    WHICH record: the newest one whose mesh was UP when it was saved, so a newer
+    draft (saved before its first bring-up) never replaces the mesh that ran; the
+    newest draft only when nothing ever ran (``source`` then says NEVER RAN).
+    ``record_id`` is the operator's own pick from this checkout's records."""
+    boot, rec = LocalMeshBootstrap.for_checkout(generator_dir, record_id=record_id)
     domain = boot.cfg.resolved_domain()
     users: list[tuple[str, list[str]]] = []
     creds = boot.superadmin_login()
@@ -135,10 +143,10 @@ def apply_gate(journey, domain: str, users: list[tuple[str, list[str]]],
     apply_imported_domains(cfg, mesh_domains)
     # THE SAVED-MESH -> NODE-IMAGE BRIDGE (#579), the GUI gate's rule restated: a
     # mesh that ran Tor sets the mesh-wide onion default on the base (the network
-    # step shows it and can clear it); materialize() emits it per platform. Only
-    # ever turns it ON.
-    if with_tor:
-        cfg.tor_onion_service = True
+    # step shows it and can clear it); materialize() emits it per platform. A mesh
+    # without Tor turns off only a Tor an earlier gate pass's import turned on.
+    journey._localcloud_tor_by_import = apply_imported_tor(
+        cfg, with_tor, bool(getattr(journey, "_localcloud_tor_by_import", False)))
     superdomain = cfg.effective_superdomain()
     # The saved mesh's accounts REPLACE ``cfg.users`` (like the domains), the GUI
     # gate's rule restated (#707): accounts an earlier flow of the session left behind
@@ -174,13 +182,30 @@ class LocalCloudScreen:
         self._with_tor = False
         self._source = ""
         self._mesh_domains = None
+        #: this checkout's saved meshes, the ones that RAN first (the GUI picker's
+        #: list), and the one the operator picked by number ("" = the default)
+        self._records: list = []
+        self._picked_id = ""
 
     def enter(self, j) -> None:
         # re-read on EVERY forward entry (the mesh may have been re-bootstrapped
         # since); consent is asked afresh each time — that is the point of the
         # page. local_mesh_identity is looked up on the MODULE so tests can pin
         # a canned mesh exactly as the GUI tests do.
-        ident = LocalMeshIdentity(*local_mesh_identity(j.generator_dir))
+        try:
+            self._records = saved_meshes.records_for_checkout(j.generator_dir)
+        except Exception:                    # noqa: BLE001 — offline read, never fatal
+            self._records = []
+        if self._picked_id not in {r.id for r in self._records}:
+            self._picked_id = ""
+        self._read(j)
+
+    def _read(self, j) -> None:
+        # the record id rides only an explicit pick, so a reader pinned with the
+        # one-argument signature keeps working
+        raw = (local_mesh_identity(j.generator_dir, record_id=self._picked_id)
+               if self._picked_id else local_mesh_identity(j.generator_dir))
+        ident = LocalMeshIdentity(*raw)
         self._domain, self._users = ident.domain, list(ident.users)
         self._with_tor, self._source = bool(ident.with_tor), str(ident.source or "")
         self._mesh_domains = ident.mesh_domains
@@ -205,6 +230,7 @@ class LocalCloudScreen:
             *[("  domains: " if i == 0 else "           ") + line
               for i, line in enumerate(imported_domains_lines(self._mesh_domains))],
             *(["", localcloud_tor_note(PLATFORMS)] if self._with_tor else []),
+            *self._pick_lines(),
             "",
             "If this mesh has already gone LIVE with real users, that stays "
             "valid — accounts created after go-live live in the mesh's "
@@ -218,11 +244,35 @@ class LocalCloudScreen:
             "its volumes are untouched).",
         ]
 
+    def _pick_lines(self) -> list[str]:
+        """The GUI's 'Import from saved mesh' picker as a numbered list (only when
+        there is more than one record to choose from)."""
+        if len(self._records) < 2:
+            return []
+        current = self._picked_id or self._records[0].id
+        return ["", "Saved meshes of this checkout (type a number to import that one "
+                    "instead; the ones that ran come first, drafts say 'never ran'):",
+                *[f"  {i}) {saved_mesh_choice_text(r)}"
+                  + ("   <- importing" if r.id == current else "")
+                  for i, r in enumerate(self._records, 1)]]
+
     def prompt(self, j) -> str:  # noqa: ARG002
+        pick = (f", or 1-{len(self._records)} to import another saved mesh"
+                if len(self._records) > 1 else "")
         return ("I understand: k8s will stop to proceed — continue into the "
-                "abbreviated mesh wizard? [y/N] ")
+                f"abbreviated mesh wizard? [y/N{pick}] ")
 
     def feed(self, j, line: str) -> None:
+        if line.strip().isdigit() and len(self._records) > 1:
+            n = int(line.strip())
+            if 1 <= n <= len(self._records):
+                rec = self._records[n - 1]
+                self._picked_id = "" if n == 1 else rec.id
+                self._read(j)
+                j.status = f"importing saved mesh '{rec.label or rec.id}'"
+            else:
+                j.status = f"no saved mesh numbered {n} — pick 1-{len(self._records)}"
+            return                       # stay on the gate: consent is still asked
         if line.lower() in ("y", "yes"):
             apply_gate(j, self._domain, self._users, with_tor=self._with_tor,
                        mesh_domains=self._mesh_domains)

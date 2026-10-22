@@ -80,6 +80,8 @@ __all__ = [
 ]
 
 DOC_PATH = "docs/LOCAL-AI-ASSISTANT.md"
+#: The project-context file's name beside each brief (core/agent_context.py writes the text).
+CONTEXT_FILE = "HUGMESH-CONTEXT.md"
 LANE_DOCKER = "docker"
 LANE_KIND = "kind"
 
@@ -736,8 +738,13 @@ def render_brief(*, lane: str, mesh: str, domains: Sequence[str], doors: Sequenc
                  repo: str, clone: str, branch: str, base_sha: str, source: str,
                  source_root: str, source_mode: str, source_dirty: int,
                  kind_repos: "frozenset[str]" = frozenset(), cluster: str = "",
-                 first_task: str = "") -> str:
-    """The text the session starts from (docs section 6.5, filled with real values)."""
+                 first_task: str = "", context_path: str = "",
+                 context_text: str = "") -> str:
+    """The text the session starts from (docs section 6.5, filled with real values).
+
+    ``context_path`` names the project-context file (core/agent_context.py) written
+    beside the brief: what HugMesh is and where every local source lives. The brief
+    tells the agent to read it before anything else."""
     lane_word = ("kind (a local Kubernetes cluster" + (f" named {cluster}" if cluster else "")
                  + ")") if lane == LANE_KIND else "Docker (docker compose on this machine)"
     out = [
@@ -749,6 +756,10 @@ def render_brief(*, lane: str, mesh: str, domains: Sequence[str], doors: Sequenc
         f"{source} made from commit {base_sha[:12]}; nothing you do here changes the "
         "real folder or the running mesh.",
     ]
+    if context_path:
+        out.append(f"- Read {context_path} first: what HugMesh is, its repositories, the "
+                   "Studio, and where every local source folder is (per domain too). It "
+                   "is context, not a task.")
     if source_dirty:
         out.append(f"- The real folder had {source_dirty} uncommitted change(s) when "
                    "this copy was made. They are NOT in your copy: you see only what "
@@ -773,6 +784,12 @@ def render_brief(*, lane: str, mesh: str, domains: Sequence[str], doors: Sequenc
     out.append(f"- To hand a result back, leave it committed on {branch}. The person "
                f"reads `git diff {base_sha[:12]}..HEAD` and applies it to the real "
                "folder (`git format-patch` here, `git am` there).")
+    if context_text.strip():
+        # Inline as well as on disk: a small model that never opens the file still
+        # starts knowing what the project is and where its sources are.
+        out += ["", "Project context" + (f" (the same text is in {context_path})"
+                                         if context_path else "")]
+        out += ["> " + line if line else ">" for line in context_text.strip().splitlines()]
     out += ["", "Rules"]
     out += [f"- {rule}" for rule in RULES]
     out += ["", "First task: " + (first_task or
@@ -800,6 +817,10 @@ class Plan:
     title: str
     #: the launch line alone (banner, ``env -i ...``, ``ollama launch ...``)
     run_line: str = ""
+    #: the project-context file written beside the brief (core/agent_context.py), and
+    #: its text; "" when the caller gave none
+    context_path: str = ""
+    context_text: str = ""
 
     @property
     def cwd(self) -> str:
@@ -821,6 +842,11 @@ def write_brief(plan: Plan) -> str:
     would make it look like it holds uncommitted work). Returns the path."""
     path = plan.scratch.brief_path
     os.makedirs(os.path.dirname(path), exist_ok=True)
+    # The project context first and FRESH on every write: the brief points at it, and a
+    # context left from an earlier session would describe yesterday's domains.
+    if plan.context_path:
+        with open(plan.context_path, "w", encoding="utf-8") as fh:
+            fh.write(plan.context_text)
     with open(path, "w", encoding="utf-8") as fh:
         fh.write(plan.brief)
     return path
@@ -840,7 +866,7 @@ def prepare(*, lane: str, mesh: str, domains: Sequence[str], doors: Sequence[str
             environ=None, state_root: Optional[str] = None,
             runner: Optional[GitRunner] = None,
             now: Optional[Callable[[], float]] = None,
-            kind_cluster: str = "") -> Plan:
+            kind_cluster: str = "", context_text: str = "") -> Plan:
     """Decide the launch for one app. Raises ScratchError when the source cannot be
     copied and ValueError when no agent or model can be chosen (``diagnose`` names why
     first; the card does not offer Start in those states)."""
@@ -854,12 +880,14 @@ def prepare(*, lane: str, mesh: str, domains: Sequence[str], doors: Sequence[str
     if bad:                                           # a defect here, never a setting
         raise ValueError(f"refusing to build a command with {bad}")
     positional = AGENTS[agent]["prompt"] == "positional"
+    context_path = (os.path.join(os.path.dirname(spec.brief_path), CONTEXT_FILE)
+                    if context_text else "")
     brief = render_brief(
         lane=lane, mesh=mesh, domains=list(domains), doors=list(doors), repo=repo,
         clone=spec.dest, branch=spec.branch, base_sha=spec.source.head_sha,
         source=spec.source.path, source_root=source_root, source_mode=source_mode,
         source_dirty=spec.source.dirty_files, kind_repos=kind_image_repos(generator_dir),
-        cluster=kind_cluster)
+        cluster=kind_cluster, context_path=context_path, context_text=context_text)
     launch_words = list(argv)
     if positional:
         launch_words += ["--", '"$(cat ' + shlex.quote(spec.brief_path) + ')"']
@@ -888,7 +916,7 @@ def prepare(*, lane: str, mesh: str, domains: Sequence[str], doors: Sequence[str
     paste_text = " &&\n".join(setup + [run_line]) + "\n"
     title = f"{AGENTS[agent]['label']} on {model} (local) - {repo}"
     return Plan(agent, model, lane, argv, positional, spec, brief, env, shell_command,
-                paste_text, title, run_line)
+                paste_text, title, run_line, context_path, context_text)
 
 
 # ── the terminal ─────────────────────────────────────────────────────────────────

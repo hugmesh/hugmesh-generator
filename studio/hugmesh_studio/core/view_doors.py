@@ -33,6 +33,9 @@ from dataclasses import dataclass
 #: ``DEFAULT_STATE``), and the same env overrides its argparse honours, so what the
 #: Studio reads is what ``make view`` served.
 CATALOG_REL = os.path.join("scripts", "hugmesh-view.tsv")
+#: The generated per-domain rows (core/look_serving.py); read only with the shipped
+#: catalog, the script's GENERATED_CATALOG rule.
+GENERATED_REL = os.path.join("tests", "stack", ".looks", "view.tsv")
 STATE_REL = os.path.join("out", "hugmesh-view")
 CATALOG_ENV = "HUGMESH_VIEW_TSV"
 STATE_ENV = "HUGMESH_VIEW_STATE"
@@ -171,6 +174,32 @@ def load(generator_dir: str, env=None) -> list[ViewDoor]:
     except OSError as exc:
         raise ViewDoorError(f"catalog not readable: {path}: {exc}") from None
     return parse(text, env)
+
+
+def load_with_generated(generator_dir: str, env=None) -> list[ViewDoor]:
+    """:func:`load` plus the generated per-domain rows when the catalog is the shipped
+    one and the file exists — what ``make view`` serves (the script's
+    ``load_entries``). A row name in both is refused, never replaced."""
+    doors = load(generator_dir, env)
+    if (os.path.abspath(catalog_path(generator_dir, env))
+            != os.path.abspath(os.path.join(generator_dir, CATALOG_REL))):
+        return doors
+    path = os.path.join(generator_dir, GENERATED_REL)
+    if not os.path.isfile(path):
+        return doors
+    try:
+        with open(path, encoding="utf-8") as fh:
+            extra = parse(fh.read(), env)
+    except OSError as exc:
+        raise ViewDoorError(f"generated rows not readable: {path}: {exc}") from None
+    except ViewDoorError as exc:
+        raise ViewDoorError(f"{path}: {exc}") from None
+    names = [d.name for d in doors + extra]
+    dupes = sorted({n for n in names if names.count(n) > 1})
+    if dupes:
+        raise ViewDoorError(f"{path}: row name(s) already in the catalog: "
+                            f"{', '.join(dupes)}")
+    return doors + extra
 
 
 def live_session(generator_dir: str, env=None) -> dict:
