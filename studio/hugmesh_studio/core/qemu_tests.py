@@ -234,8 +234,8 @@ def _split_artifact_name(basename: str, brand: str = "") -> list[str] | None:
     ``brand``, when given (:func:`declared_brand`), is the session's own declared
     brand: a leading ``<brand>-`` is then removed as ONE field however many
     hyphens it spells, so field 1 is the platform for a hyphenated brand too. The
-    trailing "-" matters — brand "snap" must not swallow the head of
-    ``snapdragon-…``. With no declared brand the split is purely positional, which
+    trailing "-" matters — brand "exam" must not swallow the head of
+    ``example-…``. With no declared brand the split is purely positional, which
     is right for every brand that holds no hyphen (hugmesh, sdhm, gentoo).
     """
     name = basename

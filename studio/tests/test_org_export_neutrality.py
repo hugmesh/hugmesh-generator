@@ -225,3 +225,84 @@ def test_each_owned_python_file_is_clean(rel):
     if not os.path.isfile(path):
         pytest.skip(f"{rel} is not in this tree")
     assert forbidden_hits(path) == []
+
+
+# ── THE WHOLE REPOSITORY, not only the files this feature owns ───────────────
+# The repository goes public, so the private target's stem must not appear in ANY
+# tracked file — code, docs, fixtures, built bundles, certificates. Two shapes are
+# checked: the stem itself (case-insensitive, read as bytes so a NUL byte cannot
+# blind it), and the stem inside BASE64, which is how it hid in the dev keys and the
+# DER bodies of the old test certificates where no plain grep could see it.
+
+def _b64_cores(word: str) -> tuple[str, ...]:
+    """The stable base64 substrings ``word`` produces at each of the three byte
+    alignments, in lower, Title and UPPER case. A substring check on these finds
+    the word inside any base64 blob, whatever precedes it."""
+    import base64
+    cores: set[str] = set()
+    for variant in {word.lower(), word.title(), word.upper()}:
+        for pad in range(3):
+            enc = base64.b64encode(b"\0" * pad + variant.encode()).decode()
+            # drop the chars that depend on the padding prefix / trailing bytes
+            lead = {0: 0, 1: 2, 2: 3}[pad]
+            core = enc[lead:]
+            core = core[: len(core) - (len(core) % 4 or 4)]
+            if len(core) >= 8:
+                cores.add(core)
+    return tuple(sorted(cores))
+
+
+def tracked_files() -> list[str]:
+    """Every file git tracks in this checkout (absolute paths)."""
+    import subprocess
+    out = subprocess.run(["git", "-C", REPO_ROOT, "ls-files", "-z"],
+                         capture_output=True, check=True).stdout
+    return [os.path.join(REPO_ROOT, p) for p in out.decode("utf-8").split("\0") if p]
+
+
+def repo_hits(paths) -> list[str]:
+    stems = [s.encode() for s in FORBIDDEN]
+    cores = [c.encode() for s in FORBIDDEN for c in _b64_cores(s)]
+    hits: list[str] = []
+    for path in paths:
+        try:
+            with open(path, "rb") as fh:
+                data = fh.read()
+        except OSError:
+            continue                                  # a submodule dir or a dangling link
+        low = data.lower()
+        for stem in stems:
+            if stem in low:
+                hits.append(f"{os.path.relpath(path, REPO_ROOT)}: plain")
+        for core in cores:
+            if core in data:
+                hits.append(f"{os.path.relpath(path, REPO_ROOT)}: base64")
+    return hits
+
+
+def test_no_tracked_file_in_the_repository_names_the_private_target():
+    files = tracked_files()
+    assert len(files) > 1000, "git ls-files returned too little — the scan would be vacuous"
+    hits = repo_hits(files)
+    assert hits == [], "\n".join(sorted(set(hits)))
+
+
+def test_the_repository_scan_catches_plain_and_base64_plants(tmp_path):
+    """The mutation for the whole-repo scan: a plain mixed-case plant, one behind a NUL
+    byte, and a base64 plant at every alignment must each be reported."""
+    import base64
+    plain = tmp_path / "plain.txt"
+    plain.write_text("host: registry." + _A.title() + ".example\n")
+    nul = tmp_path / "nul.bin"
+    nul.write_bytes(b"\0\0" + _A.upper().encode() + b"\0")
+    plants = [str(plain), str(nul)]
+    for pad in range(3):
+        f = tmp_path / f"b64-{pad}.yaml"
+        blob = base64.b64encode(b"x" * pad + (_A + "-dev-key-32byte").encode()).decode()
+        f.write_text(f"KEY: ${{KEY:-{blob}}}\n")
+        plants.append(str(f))
+    for path in plants:
+        assert repo_hits([path]), path
+    clean = tmp_path / "clean.txt"
+    clean.write_text("snap dragon snapper dragonfly " + base64.b64encode(b"hugmesh-dev").decode())
+    assert repo_hits([str(clean)]) == []

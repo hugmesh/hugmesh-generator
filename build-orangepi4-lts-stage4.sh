@@ -241,6 +241,15 @@ source "${SCRIPT_DIR}/scripts/_dracut-cross-lib.sh"
 # destination or a dead branch all leave untouched.
 # shellcheck source=scripts/_node-storage-bake-lib.sh
 source "${SCRIPT_DIR}/scripts/_node-storage-bake-lib.sh"
+# Cluster NODE roles (EXPERIMENTAL, hardware validation pending): the optional-
+# service gate and the node plumbing an Orange Pi node build shares with the
+# Raspberry Pi node path (scripts/_node-role-lib.sh loads the Pi builder's own
+# gate functions only when a node role is selected — the desktop path never
+# calls anything from either file).
+# shellcheck source=scripts/_optional-services-lib.sh
+source "${SCRIPT_DIR}/scripts/_optional-services-lib.sh"
+# shellcheck source=scripts/_node-role-lib.sh
+source "${SCRIPT_DIR}/scripts/_node-role-lib.sh"
 
 WORK_DIR=""
 BUILD_SUBDIR="${BUILD_SUBDIR:-snap-build-orangepi4-lts}"   # per-arch isolation (never shares another sysroot)
@@ -310,6 +319,12 @@ IMAGE_ONLY=false          # skip Phase 1-3 entirely; go straight to Phase 4 imag
 # both (DEFAULT) = produce the LIVE squashfs image AND the INSTALLER image.
 OPI4LTS_FLAVOR="both"                              # live | installer | both
 ROOT_MiB=3072                                   # ext4 root size for the installer's persistent build
+IMG_SIZE_SET=false                              # true once --img-size is given (node roles raise the default only when it was not)
+FLAVOR_SET=false                                # true once --flavor/--live/--installer is given (node roles refuse live)
+RAM_GB=""                                       # --ram-gb N : GB of RAM on the board (REQUIRED for --role omnibus)
+NODE_ROLE=false                                 # true for a cluster NODE role (frontend); false for the desktop
+ROLE_CLIENT=true                                # the Pi gate functions read this: false on a node role
+CLUSTER_ARGS_GIVEN=""                           # cluster-choice flags given (--release-state, --idp, ...); a desktop refuses them
 GROW_POLICY="fill"
 COMPRESS_IMG=false
 COMPRESS_LEVEL=9        # xz preset --compress uses (0-9); --compress-level N
@@ -602,9 +617,9 @@ while [[ $# -gt 0 ]]; do
         --uboot-defconfig)    OPI4LTS_UBOOT_DEFCONFIG="$2";  shift 2 ;;
         --uboot-url)          OPI4LTS_UBOOT_URL="$2";        shift 2 ;;
         --skip-uboot)         SKIP_UBOOT=true;            shift   ;;
-        --flavor)             OPI4LTS_FLAVOR="$2";           shift 2 ;;
-        --live)               OPI4LTS_FLAVOR="live";         shift   ;;
-        --installer)          OPI4LTS_FLAVOR="installer";    shift   ;;
+        --flavor)             FLAVOR_SET=true; OPI4LTS_FLAVOR="$2";           shift 2 ;;
+        --live)               FLAVOR_SET=true; OPI4LTS_FLAVOR="live";         shift   ;;
+        --installer)          FLAVOR_SET=true; OPI4LTS_FLAVOR="installer";    shift   ;;
         -v|--version)         REL_VERSION="$2";           shift 2 ;;
         --seed-url)           SEED_STAGE3_URL="$2";       shift 2 ;;
         -H|--hostname)        HOSTNAME="$2";              shift 2 ;;
@@ -642,7 +657,23 @@ while [[ $# -gt 0 ]]; do
         --skip-tailscale)     SKIP_TAILSCALE=true;        shift   ;;
         --skip-kernel)        SKIP_KERNEL=true;           shift   ;;
         --image-only)         IMAGE_ONLY=true; SKIP_KERNEL=true; shift ;;
-        --img-size)           ROOT_MiB="$2";              shift 2 ;;
+        --img-size)           ROOT_MiB="$2"; IMG_SIZE_SET=true; shift 2 ;;
+        --ram-gb)             RAM_GB="$2";                shift 2 ;;
+        # Cluster choices (NODE roles only; a desktop build refuses them below). The
+        # same spellings the Raspberry Pi builder parses; validated after the role is
+        # known by node_role_resolve_cluster_choices (scripts/_node-role-lib.sh).
+        --release-state)      RELEASE_STATE="$2";      CLUSTER_ARGS_GIVEN+=" $1"; shift 2 ;;
+        --games-domain)       GAMES_DOMAIN="$2";       CLUSTER_ARGS_GIVEN+=" $1"; shift 2 ;;
+        --optional-services)  OPTIONAL_SERVICES="$2";  CLUSTER_ARGS_GIVEN+=" $1"; shift 2 ;;
+        --all-services)       OPTIONAL_SERVICES="all"; CLUSTER_ARGS_GIVEN+=" $1"; shift   ;;
+        --exclude-services)   EXCLUDE_SERVICES="$2";   CLUSTER_ARGS_GIVEN+=" $1"; shift 2 ;;
+        --enable-games)       ENABLE_GAMES=true;       CLUSTER_ARGS_GIVEN+=" $1"; shift   ;;
+        --idp)                IDP="$2";                CLUSTER_ARGS_GIVEN+=" $1"; shift 2 ;;
+        --idp-issuer)         IDP_ISSUER="$2";         CLUSTER_ARGS_GIVEN+=" $1"; shift 2 ;;
+        --idp-client-id)      IDP_CLIENT_ID="$2";      CLUSTER_ARGS_GIVEN+=" $1"; shift 2 ;;
+        --idp-jwks)           IDP_JWKS="$2";           CLUSTER_ARGS_GIVEN+=" $1"; shift 2 ;;
+        --vault-addr)         VAULT_ADDR="$2";         CLUSTER_ARGS_GIVEN+=" $1"; shift 2 ;;
+        --vault-external-addr) VAULT_EXTERNAL_ADDR="$2"; CLUSTER_ARGS_GIVEN+=" $1"; shift 2 ;;
         --grow)               GROW_POLICY="$2";           shift 2 ;;
         --no-grow)            GROW_POLICY="none";         shift   ;;
         --compress)           COMPRESS_IMG=true;          shift   ;;
@@ -686,6 +717,58 @@ select_board() {
     OPI4LTS_HAS_SD="${has_sd}"
 }
 select_board
+
+# ── Cluster NODE role (EXPERIMENTAL — hardware validation pending) ───────────
+# --role here is EITHER a node role this board builds (frontend, see
+# HUGMESH_ROLES_ORANGEPI4LTS in scripts/_roles-lib.sh) OR, as before, a free-form
+# hostname/marker for the light desktop (default `desktop`). A node role this board
+# refuses stops here with the reason. Everything below that is node-only is
+# guarded by NODE_ROLE, so a desktop build is byte-for-byte what it was.
+_nr_rc=0
+_nr="$(hugmesh_role_board_node_role orangepi4-lts "${ROLE}")" || _nr_rc=$?
+if [ "${_nr_rc}" -eq 0 ]; then
+    ROLE="${_nr}"
+    NODE_ROLE=true
+    ROLE_CLIENT=false
+elif [ "${_nr_rc}" -eq 1 ]; then
+    exit 1
+fi
+unset _nr _nr_rc
+if ${NODE_ROLE}; then
+    if ${STANDALONE}; then
+        err "--standalone only composes onto the desktop (got --role ${ROLE}): a cluster node joins the mesh and the cluster."
+        exit 1
+    fi
+    # A node needs a persistent root: the LIVE flavor runs from RAM and forgets
+    # everything on reboot. Node images are INSTALLER-only (the installer writes
+    # the node to eMMC / microSD / NVMe on the board itself).
+    if ${FLAVOR_SET} && [ "${OPI4LTS_FLAVOR}" != "installer" ]; then
+        err "--flavor ${OPI4LTS_FLAVOR} runs from RAM with no persistence; a cluster node (--role ${ROLE}) needs --flavor installer."
+        exit 1
+    fi
+    OPI4LTS_FLAVOR="installer"
+    hugmesh_role_ram_check "${ROLE}" "${RAM_GB}" "${OPI4LTS_BOARD}" || exit 1
+    # Node root size: the Pi node default, or the x86/Jetson omnibus size for
+    # omnibus, unless --img-size was given.
+    if ! ${IMG_SIZE_SET}; then
+        ROOT_MiB=9216
+        [ "${ROLE}" = "omnibus" ] && ROOT_MiB=20480
+    fi
+    node_role_load_pi_settings || exit 1
+    node_role_load_pi_functions || exit 1
+    # The mesh's cluster choices (release state, IdP, Vault, optional services),
+    # validated and resolved exactly as the Pi does; a host-daemon slug this board
+    # does not carry (tor, egress-vpn, domain-registry-bridge) is refused.
+    node_role_resolve_cluster_choices orangepi4-lts || exit 1
+else
+    if [ -n "${RAM_GB}" ]; then
+        warn "--ram-gb ${RAM_GB} is ignored for the desktop (no RAM floor on it)."
+    fi
+    if [ -n "${CLUSTER_ARGS_GIVEN}" ]; then
+        err "${CLUSTER_ARGS_GIVEN# }: cluster choices only apply to a cluster node role (pki backend frontend omnibus); the desktop bakes no cluster tree. Drop them, or pick a node role with --role."
+        exit 1
+    fi
+fi
 
 # ── Validate flavor / env / grow ───────────────────────────────────
 case "${OPI4LTS_FLAVOR}" in
@@ -808,7 +891,9 @@ _require_match "--role"           "${ROLE}"           "${_RE_SLUG}"
 # names a cluster NODE role (or an alias of one) is a mistake, not a marker: it asks
 # for an image this board does not build. Custom markers stay available via
 # --hostname. See scripts/_roles-lib.sh.
-hugmesh_role_reject_node_role "${ROLE}" || exit 1
+if ! ${NODE_ROLE}; then
+    hugmesh_role_reject_node_role "${ROLE}" orangepi4-lts || exit 1
+fi
 
 
 BUILD_ROOT="${WORK_DIR}/${BUILD_SUBDIR}"
@@ -1082,6 +1167,8 @@ _validate_pkg_atoms --packages-drop "${PACKAGES_DROP}"
 # ships). Dropping one is rejected (Decision #5: tier-2 defaults are droppable;
 # tier-1 essentials are hard-locked).
 SNAP_MANDATORY_ATOMS="sys-block/parted app-misc/jq net-misc/networkmanager"
+# A cluster node cannot drop its k8s runtime (the Pi node floor).
+${NODE_ROLE} && SNAP_MANDATORY_ATOMS="${SNAP_MANDATORY_ATOMS} sys-cluster/kubelet sys-cluster/kubeadm app-containers/containerd"
 if [ -n "${PACKAGES_DROP}" ]; then
     read -ra _drop_check <<< "${PACKAGES_DROP}"
     for _d in "${_drop_check[@]}"; do
@@ -1135,14 +1222,33 @@ if ${PRINT_PLAN}; then
     _plan SUPERDOMAIN        "${SUPERDOMAIN}"
     domain_idp_plan_line   # PLAN_DOMAIN_IDP=<own domains>; prints nothing when none (#509)
     _plan HOSTNAME           "${HOSTNAME}"
+    if ${NODE_ROLE}; then
+        # Node-only keys: a desktop plan is byte-identical to before the node axis.
+        _plan K8S                "$(node_role_k8s_topology "${ROLE}")"
+        _plan OPTIONAL_SERVICES  "${OPTIONAL_SERVICES:-none}"
+        _plan RELEASE_STATE      "${RELEASE_STATE}"
+        _plan GAMES_DOMAIN       "${GAMES_DOMAIN:-none}"
+        _plan IDP                "${IDP}"
+        _plan IDP_ISSUER         "${IDP_ISSUER:-none}"
+        _plan IDP_CLIENT_ID      "${IDP_CLIENT_ID:-none}"
+        _plan IDP_JWKS           "${IDP_JWKS:-none}"
+        _plan VAULT_ADDR         "${VAULT_ADDR:-none}"
+        _plan VAULT_EXTERNAL_ADDR "${VAULT_EXTERNAL_ADDR:-none}"
+        _plan RAM_GB             "${RAM_GB:-unspecified}"
+        _plan RAM_FLOOR_GB       "$(hugmesh_role_min_ram_gb "${ROLE}")"
+        _plan NODE_PACKAGES      "specs-rpi5/portage/packages-k8s.list + ${NODE_ROLE_HOST_PACKAGES_LIST} (the Raspberry Pi node set)"
+        _plan NODE_USE           "${NODE_ROLE_MAKE_CONF_USE} + package.use ${NODE_ROLE_PI_PACKAGE_USE} (from specs-rpi5)"
+        _plan EXPERIMENTAL       "yes (no Orange Pi has booted an image from this repo; hardware validation pending)"
+    else
     _plan OPTIONAL_SERVICES  "none"   # lean desktop client: no baked cluster tree
+    fi
     _plan MESH               "$(${SKIP_MESH} && echo skip || echo "headscale=${HEADSCALE_VERSION},tailscale=$(${SKIP_TAILSCALE} && echo skip || echo "${TAILSCALE_VERSION}")")"
     _plan STANDALONE         "${STANDALONE}"
     _plan ENCRYPT_ROOT       "${ENCRYPT_ROOT}"
     _plan LUKS_PASS          "$([ -n "${LUKS_PASS}" ] && echo REDACTED || echo none)"
     _plan LOCAL_USER         "${LOCAL_USER:-$DEFAULT_USER}"
     _plan LOCAL_PASS         "$([ -n "${LOCAL_PASSHASH}" ] && echo REDACTED || echo none)"
-    _plan KERNEL             "mainline-arm64 (defconfig=${OPI4LTS_DEFCONFIG} + hardened-desktop.config)"
+    _plan KERNEL             "mainline-arm64 (defconfig=${OPI4LTS_DEFCONFIG} + hardened-desktop.config$(${NODE_ROLE} && echo " + specs/kernel/k8s-node.config"))"
     _plan FLAGS_EFFECTIVE    "env=${ENV} board=${OPI4LTS_BOARD} flavor=${_EFF_FLAVOR} img_size=${ROOT_MiB} grow=${GROW_POLICY} compress=${COMPRESS_IMG} compress_level=${COMPRESS_LEVEL} resume=${RESUME} skip_kernel=${SKIP_KERNEL} skip_uboot=${SKIP_UBOOT} skip_mesh=${SKIP_MESH} skip_tailscale=${SKIP_TAILSCALE} permit_root_login=${PERMIT_ROOT_LOGIN} enable_wifi=${ENABLE_WIFI} enable_bluetooth=${ENABLE_BLUETOOTH} standalone=${STANDALONE} encrypt_root=${ENCRYPT_ROOT}"
     exit 0
 fi
@@ -1164,9 +1270,23 @@ resolve_stage4_packages() {
     # Desktop packages are appended UNCONDITIONALLY: this platform has ONE role
     # (the light desktop) — unlike Frite's --desktop light|none, there is no
     # headless variant to gate this behind.
+    if ${NODE_ROLE}; then
+        # Cluster NODE role: the SAME k8s node set the Raspberry Pi nodes install
+        # (read from specs-rpi5, not copied), and no desktop.
+        _rsp_info "Cluster node role ${ROLE} — appending specs-rpi5/portage/packages-k8s.list (the Pi node set)"
+        mapfile -t -O "${#STAGE4_PACKAGES[@]}" STAGE4_PACKAGES < <(
+            grep -v '^\s*#' "${SCRIPT_DIR}/specs-rpi5/portage/packages-k8s.list" | grep -v '^\s*$')
+        # ...plus the node host packages the Pi carries in its BASE list (nftables,
+        # conntrack-tools, iproute2, ethtool, cryptsetup, lvm2, nvme-cli, the SELinux
+        # container/virt policy, setools) — scripts/_node-role-lib.sh names the file.
+        _rsp_info "Cluster node role ${ROLE} — appending ${NODE_ROLE_HOST_PACKAGES_LIST} (the node host packages)"
+        mapfile -t -O "${#STAGE4_PACKAGES[@]}" STAGE4_PACKAGES < <(
+            grep -v '^\s*#' "${SCRIPT_DIR}/${NODE_ROLE_HOST_PACKAGES_LIST}" | grep -v '^\s*$')
+    else
     _rsp_info "Appending packages-desktop.list (the lean LXDE desktop set)"
     mapfile -t -O "${#STAGE4_PACKAGES[@]}" STAGE4_PACKAGES < <(
         grep -v '^\s*#' "${SPECS_DIR}/portage/packages-desktop.list" | grep -v '^\s*$')
+    fi
     # LIVE *and* INSTALLER flavors: pull in sys-kernel/dracut so the builder can
     # generate a dmsquash-live initramfs (the bare kernel cannot mount
     # root=live:/rd.live.* — that is a dracut job). The INSTALLER medium is itself a
@@ -1402,6 +1522,17 @@ if [ "${#HOST_POLICY_TOOLS[@]}" -ne 0 ]; then
         exit 1
     fi
 fi
+
+# ── HOST gpep517 floor (cross-built python C extensions) ──────────────────────
+# Every python wheel in this cross build is built by the HOST gpep517 with
+# --sysroot. gpep517 < 23 breaks every python C extension against setuptools-84
+# ("patched_config_vars() takes 0 positional arguments but 9 were given", shown
+# by portage only as "Wheel build failed"), so libselinux[python] and pypax fail
+# in @system and the whole payload is skipped (rpi5 run 2026-10-21). The
+# 2026-09-24 builder image ships gpep517-20 as its only stable version, and
+# --with-bdeps=n means the cross emerge never upgrades it. Full rationale in
+# scripts/_host-guard-lib.sh. Must run before the first cross_emerge.
+hostguard_ensure_cross_gpep517 || exit 1
 # The LIVE/INSTALLER images need a squasher (mksquashfs, or tar2sqfs from
 # squashfs-tools-ng) + xorriso to wrap the squashfs ISO.
 # NATIVE HOST-TOOL PREFLIGHT: in the builder container this keeps TODAY'S
@@ -1539,6 +1670,17 @@ cp "${SPECS_DIR}/portage/profile/use.mask"          "${SYSROOT}/etc/portage/prof
     cp "${SPECS_DIR}/portage/profile/package.provided" "${SYSROOT}/etc/portage/profile/package.provided"
 pcs_sync_dir "${SPECS_DIR}/portage/package.accept_keywords" "${SYSROOT}/etc/portage/package.accept_keywords"
 pcs_sync_dir "${SPECS_DIR}/portage/package.use" "${SYSROOT}/etc/portage/package.use"
+# Cluster NODE role: lay the Pi node package.use files over the board's own
+# (containerd/runc selinux+seccomp, iptables nftables, nftables json+xtables, the
+# SELinux python bindings). Read from specs-rpi5, not copied into this tree; a later
+# desktop build's pcs_sync_dir above prunes them again (not in the board's specs).
+if ${NODE_ROLE}; then
+    for _pu in ${NODE_ROLE_PI_PACKAGE_USE}; do
+        cp "${SCRIPT_DIR}/specs-rpi5/portage/package.use/${_pu}" \
+            "${SYSROOT}/etc/portage/package.use/hugmesh-node-${_pu}"
+    done
+    unset _pu
+fi
 pcs_sync_dir "${SPECS_DIR}/portage/package.env" "${SYSROOT}/etc/portage/package.env"
 # Quiet portage's per-file sendfile WARNING-traceback spam before the first
 # merge into this sysroot (sendfile(2) EINVALs for EVERY file merged onto the
@@ -1550,6 +1692,18 @@ pcs_sync_dir "${SPECS_DIR}/portage/package.env" "${SYSROOT}/etc/portage/package.
 pcs_quiet_sendfile_noise "${SYSROOT}"
 cp "${SPECS_DIR}/portage/env/"*.conf               "${SYSROOT}/etc/portage/env/" 2>/dev/null || true
 render_template "${SPECS_DIR}/portage/make.conf.tmpl" "${SYSROOT}/etc/portage/make.conf"
+# Cluster NODE role: the board make.conf is the DESKTOP's (USE X gtk alsa ...). A
+# node takes the Pi node USE instead: no X/gtk/alsa, plus the container flags
+# (specs-rpi5/portage/make.conf.tmpl renders @@CLIENT_USE@@ to nothing on a node and
+# always sets "cgroup cgroup2 seccomp selinux containers netlink"). make.conf is
+# shell-sourced, so this appended line wins.
+if ${NODE_ROLE}; then
+    {
+        echo ''
+        echo '# hugmesh cluster NODE role: the Pi node USE (no desktop stack, container flags)'
+        echo "USE=\"\${USE} ${NODE_ROLE_MAKE_CONF_USE}\""
+    } >> "${SYSROOT}/etc/portage/make.conf"
+fi
 # Derive PYTHON_TARGETS/PYTHON_SINGLE_TARGET from the seed's own installed
 # interpreter set (superset invariant — never a frozen literal). Fails the
 # build rather than guessing. Analysis: docs/PYTHON-TARGETS-SEED-DRIFT.md.
@@ -1766,7 +1920,24 @@ if ${STANDALONE}; then
     echo "true" > "${SYSROOT}/etc/hugmesh/standalone"
     info "Standalone desktop: local user '${DEFAULT_USER}', no mesh."
 fi
+if ${NODE_ROLE}; then
+    # Cluster NODE role: the k8s configuration + init scripts, the cluster GitOps
+    # tree with the Pi's env / firewall / optional-service / backing-service gates
+    # (scripts/_node-role-lib.sh), and omnibus's RAM floor marker.
+    node_role_bake_k8s_payload "${SYSROOT}" "${SHARED_SPECS}"
+    node_role_bake_cluster_tree "${SYSROOT}" "${SHARED_SPECS}"
+    info "Installed cluster GitOps payload (role=${ROLE})"
+    if [ "${ROLE}" = "omnibus" ]; then
+        node_role_bake_min_ram "${SYSROOT}" "${ROLE}"
+    fi
+fi
+# On a node role this is the Raspberry Pi builder's rebrand_sysroot (loaded by
+# node_role_load_pi_functions), which also rewrites the baked cluster tree.
 rebrand_sysroot
+if ${NODE_ROLE}; then
+    apply_idp_external
+    bake_vault_conf
+fi
 
 # First-boot finaliser (shared template) + radio hardening.
 # Rendered UNCONDITIONALLY (like the frite/rpi5/x86 siblings): the finaliser is
@@ -1828,6 +1999,15 @@ fi
 # lightdm + its greeter + a modern X session need a running system bus (dbus)
 # and a seat/login manager (elogind), plus the display-manager OpenRC service.
 # Without dbus+elogind the greeter/session bring-up is unreliable.
+if ${NODE_ROLE}; then
+    # Cluster NODE role: auditd + the Pi node services (firewall reconcile,
+    # coturn firewall, go-live reconcile, containerd, kubelet) and, on the
+    # roles that host the mesh control server (pki / omnibus), headscale.
+    DEFAULT_SVCS+=(auditd ${NODE_ROLE_RUNLEVEL_SVCS})
+    if node_role_runs_headscale "${ROLE}"; then
+        DEFAULT_SVCS+=(headscale)
+    fi
+else
 DEFAULT_SVCS+=(dbus elogind display-manager)
 # gui-libs/display-manager-init's /etc/init.d/display-manager reads this conf to
 # decide WHICH DM to launch; lightdm ships no OpenRC service of its own. Without
@@ -1847,9 +2027,14 @@ cat > "${SYSROOT}/etc/lightdm/lightdm.conf" <<'LIGHTDM'
 greeter-session=lightdm-gtk-greeter
 user-session=LXDE
 LIGHTDM
+fi
 for svc in "${DEFAULT_SVCS[@]}"; do
     ln -sf "/etc/init.d/${svc}" "${SYSROOT}/etc/runlevels/default/${svc}" 2>/dev/null || true
 done
+# A worker must never background-start the control server, even on a reused sysroot.
+if ${NODE_ROLE} && ! node_role_runs_headscale "${ROLE}"; then
+    rm -f "${SYSROOT}/etc/runlevels/default/headscale"
+fi
 
 info "Profile: ${PROFILE_PATH}"
 
@@ -1977,38 +2162,56 @@ have_in_sysroot() {
     done
     return 1
 }
-# Base payload (always required): networking + login + base utils + the desktop
-# stack (unconditional — this platform's ONLY role is the light desktop).
-REQUIRED_BINS=(NetworkManager nmcli sshd nano Xorg openbox lxsession pcmanfm lightdm)
-# Bootable flavors (LIVE or INSTALLER): dracut must be present to GENERATE the
-# dmsquash-live initramfs that both media boot from.
-if ${BUILD_LIVE} || ${BUILD_INSTALLER}; then
-    REQUIRED_BINS+=(dracut)
-fi
-# LUKS2 root (--encrypt-root): cryptsetup must be present in the LIVE environment
-# for install-orangepi4-lts.sh's ENCRYPT branch to format/open the encrypted root.
-if ${ENCRYPT_ROOT}; then
-    REQUIRED_BINS+=(cryptsetup)
-fi
-payload_missing=""
-for _b in "${REQUIRED_BINS[@]}"; do
-    have_in_sysroot "${_b}" || payload_missing="${payload_missing} ${_b}"
-done
-if [ -n "${payload_missing}" ]; then
-    err "stage4 payload incomplete — missing role-defining binaries in ${SYSROOT}:${payload_missing}"
-    err "       the packages.list/packages-desktop.list emerge did not complete; review the emerge output above."
-    exit 1
-fi
-# display-manager OpenRC service: enabled in the runlevel unconditionally, so
-# the init script (from gui-libs/display-manager-init) MUST exist or the image
-# boots to a console with a dead service link. Assert it now that the desktop
-# set emerged.
-if [ ! -e "${SYSROOT}/etc/init.d/display-manager" ]; then
-    err "The 'display-manager' service is enabled in the runlevel but ${SYSROOT}/etc/init.d/display-manager is missing"
-    err "       (gui-libs/display-manager-init did not emerge) — the desktop would boot to a console. Aborting."
-    exit 1
-fi
-info "stage4 payload assert OK (${#REQUIRED_BINS[@]} role binaries present)."
+# opi_assert_stage4_payload — the post-emerge payload assert as ONE function, so
+# tests/scripts/test-role-key-spelling.sh (section E) extracts and RUNS it against
+# scratch roots instead of re-typing its steps. The desktop arm is the original
+# assert, unchanged. A cluster NODE role installs no desktop (packages-desktop.list
+# is skipped), so it asserts the k8s node floor instead (scripts/_node-role-lib.sh
+# NODE_ROLE_REQUIRED_BINS: the Pi node floor plus nft, without which
+# hugmesh-firewall-reconcile exits 0 and the release-state backstop fails open).
+opi_assert_stage4_payload() {
+    local _b
+    local payload_missing=""
+    if ${NODE_ROLE}; then
+        # shellcheck disable=SC2206  # word-split on purpose: a space-separated list
+        REQUIRED_BINS=(NetworkManager nmcli sshd nano ${NODE_ROLE_REQUIRED_BINS})
+    else
+        # Base payload: networking + login + base utils + the desktop stack.
+        REQUIRED_BINS=(NetworkManager nmcli sshd nano Xorg openbox lxsession pcmanfm lightdm)
+    fi
+    # Bootable flavors (LIVE or INSTALLER): dracut must be present to GENERATE the
+    # dmsquash-live initramfs that both media boot from.
+    if ${BUILD_LIVE} || ${BUILD_INSTALLER}; then
+        REQUIRED_BINS+=(dracut)
+    fi
+    # LUKS2 root (--encrypt-root): cryptsetup must be present in the LIVE environment
+    # for install-orangepi4-lts.sh's ENCRYPT branch to format/open the encrypted root.
+    if ${ENCRYPT_ROOT}; then
+        REQUIRED_BINS+=(cryptsetup)
+    fi
+    for _b in "${REQUIRED_BINS[@]}"; do
+        have_in_sysroot "${_b}" || payload_missing="${payload_missing} ${_b}"
+    done
+    if [ -n "${payload_missing}" ]; then
+        err "stage4 payload incomplete — missing role-defining binaries in ${SYSROOT}:${payload_missing}"
+        if ${NODE_ROLE}; then
+            err "       the packages.list/node package emerge did not complete; review the emerge output above."
+        else
+            err "       the packages.list/packages-desktop.list emerge did not complete; review the emerge output above."
+        fi
+        exit 1
+    fi
+    # display-manager OpenRC service: the DESKTOP enables it in the runlevel, so the
+    # init script (from gui-libs/display-manager-init) MUST exist or the image boots
+    # to a console with a dead service link. A node links no display manager.
+    if ! ${NODE_ROLE} && [ ! -e "${SYSROOT}/etc/init.d/display-manager" ]; then
+        err "The 'display-manager' service is enabled in the runlevel but ${SYSROOT}/etc/init.d/display-manager is missing"
+        err "       (gui-libs/display-manager-init did not emerge) — the desktop would boot to a console. Aborting."
+        exit 1
+    fi
+    info "stage4 payload assert OK (${#REQUIRED_BINS[@]} role binaries present)."
+}
+opi_assert_stage4_payload
 
 # ── REQUESTED-ATOM COMPLETENESS GATE (scripts/_payload-gate-lib.sh) ───────────
 # The binary assert above only covers a HANDFUL of role-defining commands, so a
@@ -2138,11 +2341,25 @@ else
         # haven't been evaluated yet in the defconfig ordering).
         ARCH=arm64 CROSS_COMPILE="${CROSS_TARGET}-" \
             bash scripts/kconfig/merge_config.sh -m .config "${SPECS_DIR}/kernel/hardened-desktop.config"
+        # Cluster NODE role: the shared container/k8s data-plane fragment on top.
+        if ${NODE_ROLE}; then
+            ARCH=arm64 CROSS_COMPILE="${CROSS_TARGET}-" \
+                bash scripts/kconfig/merge_config.sh -m .config "${SCRIPT_DIR}/specs/kernel/k8s-node.config"
+        fi
         make ARCH=arm64 CROSS_COMPILE="${CROSS_TARGET}-" olddefconfig
         # Refuse to ship a kernel that silently lost SELinux (fleet posture guard).
         for must in CONFIG_SECURITY_SELINUX CONFIG_SECURITY_SELINUX_BOOTPARAM; do
             grep -q "^${must}=y" .config || { err "SELinux kernel option ${must} not enabled after olddefconfig"; exit 1; }
         done
+        if ${NODE_ROLE}; then
+            # The Pi node guard's FULL symbol list (scripts/_node-role-lib.sh
+            # NODE_ROLE_KERNEL_MUST), each =y: olddefconfig prunes per leaf, so a
+            # surviving parent proves nothing about IP_NF_FILTER / IP_NF_NAT.
+            if ! _kmiss="$(node_role_kernel_guard .config)"; then
+                err "cluster node role ${ROLE}: kernel options not =y after olddefconfig (kube-proxy / CNI / container runtime would be impaired):" $_kmiss
+                exit 1
+            fi
+        fi
         grep -q '^CONFIG_LSM="lockdown,yama,selinux"$' .config || { err "CONFIG_LSM malformed (expected lockdown,yama,selinux); lockdown/SELinux would not activate"; exit 1; }
         # ...and every NAME in that string must have its module COMPILED IN. The
         # string-only assert above is structurally blind to how this actually

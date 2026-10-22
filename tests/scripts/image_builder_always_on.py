@@ -34,152 +34,42 @@ WAVED_ROOT = "specs/cluster/apps/00-app-of-apps-waved.yaml"
 CI_FILE = ".gitlab-ci.yml"
 CI_JOB = "build:images"
 
-# Pre-rebrand scan. Exactly ONE occurrence of the old brand is still NOT stale, and only in
-# one syntactic position:
-#   * `snapdragon-deploy.yaml` (and its `.example.` sibling) — the LEGACY service-catalog
-#     deploy-descriptor filename, which adopting repos still ship on disk and which both
-#     catalog generators deliberately still accept as LEGACY_COMPAT (#498). The live
-#     count is registered in specs/cluster/catalog/adopters.yaml, not restated here.
-# Everything else bearing the old brand in this surface is a rebrand miss.
+# Pre-rebrand scan. The retired brand stem is spelled from PARTS so this file never
+# carries it whole: hugmesh repositories must not name the operator's private target
+# (studio/tests/test_org_export_neutrality.py follows the same convention). EVERY
+# occurrence in the scanned surface is a finding. The old allowlist (frozen label keys,
+# a GitHub org segment, and last the pre-rebrand deploy-descriptor filename) is gone:
+# the label keys moved to `hugmesh.net/<name>`, git hosting moved to
+# `github.com/hugmesh/`, and the old descriptor filename was retired before the public
+# release once no adopter shipped it any more.
 #
-# RETIRED ALLOWLIST ENTRY — `snapdragon.systems/<name>:` label KEYS (was entry (a)). The
-# operator has ruled that hugmesh carries NO `.systems` token at all: `snapdragon.systems`
-# is their PRIVATE control-plane domain, not hugmesh naming. The label-key/annotation
-# namespace therefore migrated to `hugmesh.net/<name>`, together with the CRD API group
-# (the CRD API group moved to `platform.hugmesh.net`) and every host with it. There is
-# no `.systems` hugmesh spelling: that form is banned in EVERY brand, not just the old
-# one, which is why the migration was a move to `.net` and not a rebrand in place.
-# That migration could be done outright, with no dual-label transition, because there is no
-# live cluster to keep schedulable — set-sites and selectors moved in the same pass.
-# The exemption is gone, so a `snapdragon.systems/` label key is now a finding EVEN IN
-# mapping-key position. docs/BRANDING.md and scripts/tooling/tokens.json
-# (`frozen_protocol_constants.label_key_namespaces`) must agree with this.
-#
-# RETIRED ALLOWLIST ENTRY — `github.com/Snapdragon-Systems/` (was entry (b)). Git hosting
-# has since moved: every repo's `origin` is `github.com/hugmesh/<repo>`, and no file in this
-# scanned surface carries the old org path any more. Snapdragon-Systems remains only as a
-# retained downstream FORK org, which is not a hugmesh source-of-truth path and must not be
-# written into hugmesh's own specs. Keeping the exemption would silently re-admit that org
-# segment anywhere under a `github.com/` host, so it is gone and such a path is now a
-# finding like any other.
-#
-# POSITION MATTERS, AND THE FIRST VERSION OF THIS CHECK IGNORED IT. It held the RAW
-# substrings ("snapdragon.systems/", "Snapdragon-Systems") and did
-# `line.replace(frozen, "")` over the WHOLE line before running BRAND_RE. That strip is
-# positional-blind, so it also deleted the token from every FUNCTIONAL identifier of the
-# shape `<host-or-scheme>snapdragon.systems/<path>` — and those are exactly the shapes
-# this check exists to catch:
-#     DEST_REPO: "registry.snapdragon.systems/hugmesh/hugmesh-gateway"   (Kaniko PUSH target)
-#     image:      registry.snapdragon.systems/hugmesh/…                  (Job template)
-#     repoURL:    https://<git-host>/hugmesh/snapdragon-generator.git             (ArgoCD source)
-# All three passed the old check with exit 0. They are negative controls 9c/9e/9f now.
-# (9f plants its takeover on a NEUTRAL example host — `git.example.internal` — because no
-# `.systems` spelling may live in this tree outside a rule that names what it bans; 9c/9e
-# still pin the `…snapdragon.systems/<path>` HOST shape directly.)
-#
-# So the allowlist is a list of ANCHORED regexes, and matching is POSITIONAL: a brand-token
-# occurrence is exempt only when its span lies inside the span an allowlist pattern marks as
-# frozen. An occurrence anywhere else is a finding, no matter what text surrounds it.
-BRAND_RE = re.compile(r"snapdragon", re.IGNORECASE)
-ALLOWLIST_RES = (
-    # (c) the LEGACY DEPLOY-DESCRIPTOR FILENAME, which is still live on disk in other repos.
-    #     The rebrand renamed it to `hugmesh-deploy.yaml` repo by repo; adopters that have
-    #     not moved still ship `snapdragon-deploy.yaml`, and the service-catalog generators
-    #     deliberately accept BOTH spellings (#498 — dropping the legacy name makes those
-    #     repos invisible to the catalog again). So it is a live filename, not a rebrand miss.
-    #     Anchored to the WHOLE filename token — nothing of the `[\w.-]` class may precede it
-    #     and no name character may follow — so `registry.snapdragon-deploy.yaml/hugmesh/…`
-    #     cannot borrow it as a host prefix (negative control 9j).
-    re.compile(r"(?<![\w.-])(?P<tok>snapdragon)-deploy(\.example)?\.yaml(?![\w-])"),
-)
+# History worth keeping: the first version of this check stripped exempt SUBSTRINGS
+# from the whole line before matching, which also hid the token inside functional
+# identifiers that merely contain it — a registry host in DEST_REPO, an `image:`
+# reference in the Job template, an ArgoCD `repoURL`. Driver controls 9c/9e/9f plant
+# exactly those shapes, so any future exemption must be POSITIONAL, never a strip.
+_RETIRED_BRAND = "snap" + "dragon"
+BRAND_RE = re.compile(re.escape(_RETIRED_BRAND), re.IGNORECASE)
 
 
-def unallowlisted_brand_spans(line: str) -> list[tuple[int, int]]:
-    """Spans of every pre-rebrand brand token on `line` that is NOT in a frozen position.
-
-    Positional, not substring-stripping: each BRAND_RE hit is kept unless it falls inside
-    a span an ALLOWLIST_RES pattern marked frozen. See the block comment above for why the
-    substring-strip form was blind to every functional `…snapdragon.systems/<path>`.
-    """
-    frozen_spans = [
-        m.span("tok") for rx in ALLOWLIST_RES for m in rx.finditer(line)
-    ]
-    return [
-        m.span()
-        for m in BRAND_RE.finditer(line)
-        if not any(lo <= m.start() and m.end() <= hi for lo, hi in frozen_spans)
-    ]
+def brand_spans(line: str) -> list[tuple[int, int]]:
+    """Spans of every retired-brand token on `line` (case-insensitive)."""
+    return [m.span() for m in BRAND_RE.finditer(line)]
 
 
-# ── ANTI-VACUITY FIXTURES FOR THE ALLOWLIST, OWNED BY THIS FILE ──────────────
-# A positional allowlist can rot in two OPPOSITE directions, and each rot is a silent
-# false result of a different kind:
-#   * too NARROW (in the limit, a never-matching regex) — the live LEGACY_COMPAT
-#     descriptor filename starts being reported as a rebrand miss, which pushes someone
-#     to "fix" a filename adopter repos still ship on disk and makes them invisible to
-#     the catalog again (#498);
-#   * too WIDE (anchors dropped) — `registry.snapdragon-deploy.yaml/hugmesh/…` inherits
-#     the exemption and entry (c) degenerates into a textual blanket mute for every
-#     functional identifier that merely CONTAINS the token. That is precisely the
-#     failure the positional form replaced (see the block comment above), and the shape
-#     the driver's negative control 9j plants.
-#
-# THIS USED TO BE MEASURED BY COUNTING FROZEN-POSITION OCCURRENCES IN THE SCANNED
-# SURFACE (`frozen_seen >= 1`), AND THE SURFACE WAS THE WRONG PLACE TO READ IT FROM.
-# The surface's one and only frozen-position occurrence was never functional config: it
-# lived in a PROSE COMMENT in .gitlab-ci.yml. Commit 857e84d9 ("Update .gitlab-ci.yml
-# (#220)", 2026-08-28) reflowed that comment and dropped the clause "leaving the
-# pre-rebrand `snapdragon-deploy.yaml` live in the ones that had not moved yet,". The
-# count went 1 -> 0 and this gate went red with nothing whatsoever wrong in the product.
-# The old guard's own escape hatch did not apply either — the filename is still live in
-# functional config fleet-wide (specs/cluster/apps/13-service-catalog.yaml `pathsExist`,
-# templates/apps/13d-brand-repos.yaml.hbs, scripts/publish-tenant-set.sh's
-# DESCRIPTOR_LEGACY_COMPAT, scripts/tooling/render-recipe.js's rename denylist,
-# specs/cluster/catalog/adopters.yaml) — so deleting the allowlist would have been
-# wrong, and dropping the threshold to 0 would have been the exact silent false PASS
-# the guard existed to prevent.
-#
-# So the evidence is no longer scraped from a file a comment edit can empty. The
-# fixtures below belong to this check: they run on EVERY invocation regardless of what
-# the surface happens to contain, they assert BOTH directions (the old count could only
-# ever see the narrow one — a widened allowlist matched MORE and looked healthier), and
-# they can only be defeated by a deliberate edit to this file. The live-surface count is
-# no longer asserted at all: a surface with nothing to exempt is a legitimate state, and
-# it is no longer confusable with a rotted regex.
-#
-# The driver keeps the "is the exemption still EARNED?" half of the old guard's job,
-# asked of functional generator paths instead of prose (control 9m).
-ALLOWLIST_PROBE_EXEMPT = (
-    # The LEGACY_COMPAT descriptor filename in the shapes functional config really
-    # spells it — an ApplicationSet `pathsExist` filter, the publisher's shell
-    # constant, the catalog registry row and the rename-contract denylist entry.
-    '            pathsExist: ["snapdragon-deploy.yaml", "deploy"]',
-    'DESCRIPTOR_LEGACY_COMPAT="snapdragon-deploy.yaml"',
-    "      descriptor: snapdragon-deploy.yaml",
-    "  'snapdragon-deploy.yaml',",
-    # The `.example.` sibling the pattern's optional group exists for. The tree does not
-    # currently carry that legacy spelling anywhere, which is exactly why it needs a
-    # fixture: nothing else on any surface exercises that branch of the regex.
-    "    - name: snapdragon-deploy.example.yaml",
-)
-ALLOWLIST_PROBE_CAUGHT = (
-    # The same filename re-used as a REGISTRY HOST — a `[\w.-]` character precedes it, so
-    # it is an ordinary stale identifier and not the frozen whole-filename token. This is
-    # negative control 9j, asserted in-process too so that a widened allowlist is caught
-    # even on a surface carrying no brand token at all (which is the state main has been
-    # in since 857e84d9, and in which NO tree mutation can reach these regexes).
-    '  DEST_REPO: "registry.snapdragon-deploy.yaml/hugmesh/hugmesh-gateway"',
-    # A name character FOLLOWS it: also not the whole-filename token.
-    "        image: snapdragon-deploy.yamlx/hugmesh/kaniko:latest",
-    # The two RETIRED allowlist entries, in the positions that used to exempt them —
-    # a `snapdragon.systems/` label key (was entry (a)) and the `Snapdragon-Systems` org
-    # segment under the github.com host (was entry (b)). Driver controls 9g/9h plant
-    # these on the tree; pinning them here too means re-adding either exemption fails
-    # this check even on a surface that no longer carries the shape to plant into.
-    '    snapdragon.systems/image-build: "true"',
-    "  repoURL: https://github.com/Snapdragon-Systems/hugmesh-generator.git",
-    # The retired brand with no allowlisted spelling anywhere near it.
-    '  IMAGE_APP: "snapdragon-gateway"',
+# ── ANTI-VACUITY FIXTURES FOR THE MATCHER, OWNED BY THIS FILE ────────────────
+# The scanned surface legitimately carries no brand token at all, so no surface count
+# can tell a working matcher from a rotted one (a never-matching pattern reads as a
+# clean tree). These fixtures run on EVERY invocation whatever the surface contains:
+# each must be reported, in every shape the check exists for, including the retired
+# descriptor filename that used to be exempt and the mixed-case org-segment shape.
+BRAND_PROBE_CAUGHT = (
+    f'  DEST_REPO: "registry.{_RETIRED_BRAND}.example/hugmesh/hugmesh-gateway"',
+    f"        image: registry.{_RETIRED_BRAND}.example/hugmesh/kaniko:latest",
+    f'    {_RETIRED_BRAND}.example/image-build: "true"',
+    f"  repoURL: https://github.com/{_RETIRED_BRAND.capitalize()}-Org/hugmesh-generator.git",
+    f'  IMAGE_APP: "{_RETIRED_BRAND}-gateway"',
+    f'            pathsExist: ["{_RETIRED_BRAND}-deploy.yaml", "deploy"]',
 )
 
 findings: list[str] = []
@@ -189,56 +79,21 @@ def fail(check: str, msg: str) -> None:
     findings.append(f"  FAIL [{check}] {msg}")
 
 
-def allowlist_self_probe() -> None:
-    """Prove ALLOWLIST_RES still means what the block comment above says it means.
-
-    Both directions, on fixtures this file owns. An EXEMPT sample must actually carry a
-    brand token (otherwise exempting it proves nothing — that is how the old surface
-    count died) AND come back with no unallowlisted span; a CAUGHT sample must still be
-    reported. Either rot silently changes what every span this file reports MEANS, so it
-    is a finding here rather than something a future reader has to notice.
-    """
-    if not ALLOWLIST_RES:
+def brand_self_probe() -> None:
+    """Prove BRAND_RE still catches every shape this check exists for."""
+    if not BRAND_PROBE_CAUGHT:
         fail(
             "pre-rebrand",
-            "ALLOWLIST_RES is empty, so nothing is exempt and the positional matcher is "
-            "inert. If the legacy snapdragon-deploy.yaml descriptor is genuinely gone "
-            "fleet-wide, delete this probe, the fixtures and the allowlist together — do "
-            "not leave an empty tuple behind, which reads as coverage.",
+            "matcher self-probe fixtures were emptied — this check asserts nothing in "
+            "that state, which is the vacuity it exists to prevent.",
         )
         return
-    if not ALLOWLIST_PROBE_EXEMPT or not ALLOWLIST_PROBE_CAUGHT:
-        fail(
-            "pre-rebrand",
-            "the allowlist self-probe fixtures were emptied — this check asserts nothing "
-            "in that state, which is the vacuity it exists to prevent.",
-        )
-        return
-    for sample in ALLOWLIST_PROBE_EXEMPT:
-        if not BRAND_RE.search(sample):
+    for sample in BRAND_PROBE_CAUGHT:
+        if not brand_spans(sample):
             fail(
                 "pre-rebrand",
-                f"allowlist self-probe is vacuous: BRAND_RE no longer matches the "
-                f"frozen-position sample {sample!r}, so exempting it proves nothing.",
-            )
-        elif unallowlisted_brand_spans(sample):
-            fail(
-                "pre-rebrand",
-                f"allowlist self-probe: the frozen-position sample {sample!r} is no "
-                f"longer exempt — ALLOWLIST_RES has narrowed, or rotted into a "
-                f"never-matching pattern. The legacy descriptor filename is still live in "
-                f"functional config (13-service-catalog.yaml pathsExist, "
-                f"13d-brand-repos.yaml.hbs, publish-tenant-set.sh, render-recipe.js), so "
-                f"this check would now report a live filename as a rebrand miss.",
-            )
-    for sample in ALLOWLIST_PROBE_CAUGHT:
-        if not unallowlisted_brand_spans(sample):
-            fail(
-                "pre-rebrand",
-                f"allowlist self-probe: {sample!r} is NOT reported — ALLOWLIST_RES has "
-                f"widened past the frozen whole-filename token and now exempts a "
-                f"functional identifier that merely CONTAINS it. That is the textual "
-                f"blanket mute the positional form exists to prevent.",
+                f"matcher self-probe: {sample!r} is NOT reported — the retired-brand "
+                f"matcher has rotted, so a clean surface no longer means anything.",
             )
 
 
@@ -661,21 +516,17 @@ def main(root: str) -> int:
             continue
         scanned += 1
         for lineno, line in enumerate(open(full, encoding="utf-8"), 1):
-            for lo, _hi in unallowlisted_brand_spans(line):
+            for lo, _hi in brand_spans(line):
                 fail(
                     "pre-rebrand",
-                    f"{rel}:{lineno}:{lo + 1} carries a retired pre-rebrand identifier in a "
-                    f"NON-frozen position (hugmesh carries no snapdragon token and no .systems "
-                    f"token at all; the only survivor is the legacy snapdragon-deploy.yaml "
-                    f"descriptor FILENAME): {line.strip()[:120]}",
+                    f"{rel}:{lineno}:{lo + 1} carries the retired pre-rebrand brand token "
+                    f"(hugmesh carries it nowhere, in any position): {line.strip()[:120]}",
                 )
     if scanned < 4:
         fail("pre-rebrand", f"only {scanned} file(s) of the image-builder surface were scanned — the check is vacuous")
-    # ANTI-VACUITY for the ALLOWLIST, measured on fixtures this file owns rather than on
-    # whatever the scanned surface happens to contain. See ALLOWLIST_PROBE_* above for why
-    # the old `frozen_seen >= 1` surface count was the wrong anchor, what deleted it, and
-    # why the replacement is strictly stronger (it asserts both rot directions, not one).
-    allowlist_self_probe()
+    # ANTI-VACUITY for the MATCHER, measured on fixtures this file owns rather than on
+    # whatever the scanned surface happens to contain (see BRAND_PROBE_CAUGHT above).
+    brand_self_probe()
 
     for f in findings:
         print(f)

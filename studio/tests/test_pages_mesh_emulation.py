@@ -464,9 +464,9 @@ def branded_generator(tmp_path):
     for log in ("build-pki.rpi5.log", "build-be.rpi5.log", "build-fe.rpi5.log"):
         (sess / log).write_text("=== Post-install ===\n")
     (sess / qemu_tests.MESH_MANIFEST_NAME).write_text(json.dumps({
-        "format": 2, "brand": "sdhm", "brand_title": "Snapdragon Hugmesh",
-        "org": "sdhm", "cluster_domain": "snapdragon.systems",
-        "superdomain": "snapdragon.local", "domains": [], "users": [],
+        "format": 2, "brand": "sdhm", "brand_title": "Example Hugmesh",
+        "org": "sdhm", "cluster_domain": "mesh.example",
+        "superdomain": "example.local", "domains": [], "users": [],
         "images": [{"id": "pki.rpi5", "role": "pki", "platform": "rpi5",
                     "board": "rpi5", "flavor": "", "encrypt_root": True},
                    # ids keep their real on-disk spelling; the `role` values are
