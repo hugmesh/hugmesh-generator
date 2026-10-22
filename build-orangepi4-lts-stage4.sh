@@ -84,9 +84,10 @@
 #       there is NO NVMe install target here (unlike Orange Pi 5 Plus). The
 #       installer writes microSD, the onboard eMMC, or USB only.
 #
-# ONE role (a client desktop, like Frite / Orange Pi 5 — NOT a K8s cluster node,
-# so no --role axis with cluster-node choices; ROLE is a hostname/marker only,
-# always "desktop") and — like the 3 LTS port and UNLIKE Orange Pi 5 / Frite —
+# The default role is a client desktop (like Frite / Orange Pi 5); --role
+# frontend builds the one cluster NODE role this 4 GB board can hold (any other
+# --role token is a hostname/marker for the desktop) and — like the 3 LTS port
+# and UNLIKE Orange Pi 5 / Frite —
 # NO --board axis at all: this is one specific board, not a family. Full
 # --standalone (local user, no mesh, LUKS2 FDE on install) and --encrypt-root
 # support from day one, following the Frite/Orange-Pi-5 LUKS2 patterns (see the
@@ -333,7 +334,7 @@ PACKAGES_ADD=""          # --packages-add : atoms to add on top of the derived s
 PACKAGES_DROP=""         # --packages-drop: default-set atoms to remove (mandatory floor honored)
 TIMEZONE="UTC"
 HOSTNAME=""
-ROLE="desktop"                                  # this image's role marker (ONE role, like Frite — no cluster-node axis)
+ROLE="desktop"                                  # the desktop by default; a node role from --role (scripts/_roles-lib.sh)
 CLUSTER_DOMAIN="hugmesh.net"
 # Orchestration superdomain (WS-SUPER-B): the mesh control plane's MagicDNS suffix every
 # node joins. "" = builder default (legacy byte-identical). The Studio emits --superdomain
@@ -440,9 +441,11 @@ DESCRIPTION
     the Rockchip RK3399 (Orange Pi 4 LTS) SBC, reusing
     the aarch64 cross path and the SHARED mesh + KEYS-USB provisioning engine.
     The image joins headscale/tailscale and honors the hardened, key-only SSH
-    posture exactly like the Frite/Pi5/x86 client images. This platform has
-    ONE role (a client desktop) — there is no --role axis with cluster-node
-    choices.
+    posture exactly like the Frite/Pi5/x86 client images. The default role is
+    that client desktop; --role frontend builds a cluster NODE instead
+    (EXPERIMENTAL, installer flavor only). pki, backend and omnibus are
+    refused: this is a single 4 GB board with 16 GB of eMMC (backend needs
+    8 GB of RAM, omnibus 16 GB).
 
 OPTIONS
   Board
@@ -1267,9 +1270,9 @@ resolve_stage4_packages() {
     local STAGE4_PACKAGES _extras _padd _pdrop _kept _p _d _skip _pkg
     STAGE4_PACKAGES=()
     mapfile -t STAGE4_PACKAGES < <(grep -v '^\s*#' "${SPECS_DIR}/portage/packages.list" | grep -v '^\s*$')
-    # Desktop packages are appended UNCONDITIONALLY: this platform has ONE role
-    # (the light desktop) — unlike Frite's --desktop light|none, there is no
-    # headless variant to gate this behind.
+    # The DESKTOP role appends the desktop packages unconditionally (unlike
+    # Frite's --desktop light|none there is no headless desktop variant); the
+    # frontend node role takes the k8s node set instead (below).
     if ${NODE_ROLE}; then
         # Cluster NODE role: the SAME k8s node set the Raspberry Pi nodes install
         # (read from specs-rpi5, not copied), and no desktop.

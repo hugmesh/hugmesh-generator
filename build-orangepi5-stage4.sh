@@ -31,9 +31,9 @@
 # orange-pi-5 (RK3588S — same CPU/GPU/NPU core, fewer PCIe lanes, single NIC,
 # single HDMI, no HDMI input). See the BOARD TABLE below + specs-orangepi5/README.md.
 #
-# ONE role, like Frite (a client device, NOT a K8s cluster node — no --role
-# axis with cluster-node choices; ROLE is a hostname/marker only, always
-# "desktop"). Full --standalone (local user, no mesh, LUKS2 FDE on install) and
+# The default role is a client desktop, like Frite; --role pki | backend |
+# frontend | omnibus builds a cluster NODE instead (EXPERIMENTAL, installer only;
+# any other --role token is a hostname/marker for the desktop). Full --standalone (local user, no mesh, LUKS2 FDE on install) and
 # --encrypt-root support from day one, following the Frite/RPi5/Jetson LUKS2
 # patterns (see the ON-DEVICE LUKS FORMAT note below).
 #
@@ -265,7 +265,7 @@ PACKAGES_ADD=""          # --packages-add : atoms to add on top of the derived s
 PACKAGES_DROP=""         # --packages-drop: default-set atoms to remove (mandatory floor honored)
 TIMEZONE="UTC"
 HOSTNAME=""
-ROLE="desktop"                                  # this image's role marker (ONE role, like Frite — no cluster-node axis)
+ROLE="desktop"                                  # the desktop by default; a node role from --role (scripts/_roles-lib.sh)
 CLUSTER_DOMAIN="hugmesh.net"
 # Orchestration superdomain (WS-SUPER-B): the mesh control plane's MagicDNS suffix every
 # node joins. "" = builder default (legacy byte-identical). The Studio emits --superdomain
@@ -365,9 +365,11 @@ DESCRIPTION
     the Rockchip RK3588/RK3588S (Orange Pi 5 / Orange Pi 5 Plus) SBCs, reusing
     the aarch64 cross path and the SHARED mesh + KEYS-USB provisioning engine.
     The image joins headscale/tailscale and honors the hardened, key-only SSH
-    posture exactly like the Frite/Pi5/x86 client images. This platform has
-    ONE role (a client desktop) — there is no --role axis with cluster-node
-    choices.
+    posture exactly like the Frite/Pi5/x86 client images. The default role is
+    that client desktop; --role pki | backend | frontend | omnibus builds a
+    cluster NODE instead (EXPERIMENTAL, installer flavor only). RAM floors per
+    node role (--ram-gb): omnibus 16 GB (required), backend 8, pki 4,
+    frontend 4.
 
 OPTIONS
   Board
@@ -1186,9 +1188,9 @@ resolve_stage4_packages() {
     local STAGE4_PACKAGES _extras _padd _pdrop _kept _p _d _skip _pkg
     STAGE4_PACKAGES=()
     mapfile -t STAGE4_PACKAGES < <(grep -v '^\s*#' "${SPECS_DIR}/portage/packages.list" | grep -v '^\s*$')
-    # Desktop packages are appended UNCONDITIONALLY: this platform has ONE role
-    # (the light desktop) — unlike Frite's --desktop light|none, there is no
-    # headless variant to gate this behind.
+    # The DESKTOP role appends the desktop packages unconditionally (unlike
+    # Frite's --desktop light|none there is no headless desktop variant); a node
+    # role takes the k8s node set instead (below).
     if ${NODE_ROLE}; then
         # Cluster NODE role: the SAME k8s node set the Raspberry Pi nodes install
         # (read from specs-rpi5, not copied), and no desktop.
