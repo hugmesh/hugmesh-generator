@@ -831,6 +831,26 @@ for probe in "backend:arm64:hugmesh-rpi5-" "pki:arm64:hugmesh-rpi5-" \
     esac
 done
 
+# D2b) omnibus is a node role TWO arm64 platforms build (rpi5 since 2026-10-21, and
+#      jetson): with both images on disk the flasher must REFUSE, never pick the newest.
+omni_dir="$(mktemp -d)"
+: > "${omni_dir}/hugmesh-jetson-orin-nano-arm64-omnibus-test-20260101T000000Z.img"
+: > "${omni_dir}/hugmesh-rpi5-arm64-omnibus-test-20260102T000000Z.img"
+omni_out="$( (cd "${GEN}" && ./scripts/flash-disk.sh --role omnibus --arch arm64 \
+              --work-dir "${omni_dir}" --list 2>/dev/null) || true)"
+if printf '%s\n' "${omni_out}" | grep -E '^AMBIGUOUS' >/dev/null; then
+    ok "flash-disk.sh --role omnibus --arch arm64 with a Pi AND a Jetson omnibus image: AMBIGUOUS (a flash refuses)"
+else
+    bad "flash-disk.sh --role omnibus --arch arm64 did not flag a Pi + Jetson omnibus pair as ambiguous — a wrong-board whole-disk write"
+fi
+omni_pick="$( (cd "${GEN}" && ./scripts/flash-disk.sh --role omnibus --arch arm64 --platform rpi5 \
+               --work-dir "${omni_dir}" --list 2>/dev/null | sed -n 's/^Would flash: //p') || true)"
+case "$(basename "${omni_pick}" 2>/dev/null)" in
+    hugmesh-rpi5-*) ok "flash-disk.sh --role omnibus --arch arm64 --platform rpi5 picks the Pi image" ;;
+    *) bad "flash-disk.sh --role omnibus --platform rpi5 picked '${omni_pick}'" ;;
+esac
+rm -rf "${omni_dir}"
+
 # D3) the roles that genuinely span boards (desktop, laptop, a free slug) cannot be
 #     narrowed by derivation, so the flasher must REFUSE rather than pick the newest.
 : > "${fixture_dir}/hugmesh-rpi5-arm64-desktop-user-test-20260101T000000Z.img"
