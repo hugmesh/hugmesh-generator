@@ -1246,6 +1246,9 @@ class GoLiveFlipPage(QtWidgets.QWizardPage):
         self._report(ok, msg)
 
 
+GOLIVE_WINDOW_TITLE = "HugMesh Go-Live Wizard"
+
+
 class GoLiveWizard(QtWidgets.QWizard):
     """Internal-only → publicly live, in seven guided steps — the Studio face of
     the one shared driver (hugmesh-go-live-cli / -menu drive the same
@@ -1265,7 +1268,7 @@ class GoLiveWizard(QtWidgets.QWizard):
         self.export_config_files: list[str] = []
         self.export_runner = None
         self.export_remote_base = ""
-        self.setWindowTitle("HugMesh Go-Live Wizard")
+        self.setWindowTitle(GOLIVE_WINDOW_TITLE)
         self.setWindowIcon(brand_icon())
         self.setWizardStyle(QtWidgets.QWizard.WizardStyle.ModernStyle)
         self.resize(820, 640)
@@ -1308,6 +1311,8 @@ class GoLiveWizard(QtWidgets.QWizard):
         inputs = self._pages[GOLIVE_PAGE_SLUGS.index("inputs")]
         inputs.domain.setText(name)
         inputs.domain_hint.setText(FROM_WAYS_TAB_HINT)
+        # said from the first step on: the Inputs step is three steps away
+        self.setWindowTitle(f"{GOLIVE_WINDOW_TITLE} — {name}")
 
     def before_inputs(self) -> bool:
         """True while the person has not gone past the Inputs step (a new domain can
