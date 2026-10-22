@@ -7,7 +7,7 @@ claiming only the login page.
 WHY ONE SELF-CONTAINED FILE (not an index + linked pages): the open path is the
 fragile half of this feature — QDesktopServices/xdg-open dispatch failures are
 exactly what produced the operator's "the login page preview isn't working" report
-(see gui/pages/_logintheme.py) — so the preview is a SINGLE ``file://`` artifact:
+(see gui/pages/_look_shared.py) — so the preview is a SINGLE ``file://`` artifact:
 one open action, no relative links to break when the file is copied out of the
 cache dir or attached to a bug report, and the login snapshot rides along inside
 it (iframe ``srcdoc``, so its captured component styles stay isolated from the

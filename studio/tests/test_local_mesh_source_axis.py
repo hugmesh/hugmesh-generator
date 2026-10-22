@@ -76,8 +76,11 @@ def test_collect_bootstrap_drops_no_operator_visible_field(qapp_localmesh_page):
     page = qapp_localmesh_page
     page.env_prod.setChecked(True)
     page.superadmin.setText("boss")
-    page.social.setChecked(True)
     page.with_tor.setChecked(True)
+    # Matrix (the `social` profile) is a domain's service now: the mesh's own domain
+    # chooses it on its page, and `social` says that some domain did
+    page._seed_domains()
+    page.mesh_domains.domains[0].optional_services = ["tuwunel"]
     page.boot_domain.setText("acme.example")
     page.boot_auth_key.setText("tskey-x")
     page.boot_login_server.setText("https://hs.acme.example")
@@ -125,7 +128,7 @@ def _clone_script_repos():
 def test_every_compose_build_context_is_a_repo_the_clone_step_creates():
     """The drift that broke a live bring-up: the HugMesh rebrand renamed every
     compose ``context:`` to .stack-src/hugmesh-*, but clone-all-repos.sh kept
-    cloning the pre-rename snapdragon-* directory names. Nothing compared the two
+    cloning the pre-rename directory names. Nothing compared the two
     sides, so `make stack-up` died at the first image with "unable to prepare
     context: path …/.stack-src/hugmesh-remote-fragment not found" — after a full
     24-repo clone. One side is the producer, the other the consumer; pin them."""
@@ -233,25 +236,6 @@ def test_every_private_maven_consumer_is_wired_into_the_m2_override():
         f"{sorted(need - wired)} build from a checkout that resolves org-private maven "
         f"artifacts but are not in compose.m2-local.yaml — their cold build gets an "
         f"empty CI_API_V4_URL")
-
-
-def test_clone_script_migrates_pre_rename_checkouts_instead_of_re_cloning():
-    """A ./.stack-src from before the rename holds snapdragon-* dirs (several GB).
-    The script must rename them into the canonical names rather than leave them
-    orphaned beside a fresh 24-repo download."""
-    path = os.path.join(GENERATOR_DIR, "scripts", "clone-all-repos.sh")
-    with open(path, encoding="utf-8") as fh:
-        text = fh.read()
-    assert "migrate_legacy_dir" in text and "hugmesh.net" in text, \
-        "the pre-rename directory migration is gone"
-    assert text.index("migrate_legacy_dir \"${repo}\"") < text.index('dest="${STACK_SRC}/${repo}"'), \
-        "migration must run BEFORE the present/absent check that decides clone-vs-update"
-    body = text.split("migrate_legacy_dir()")[1].split("\n}")[0]
-    code = "\n".join(ln for ln in body.splitlines() if not ln.strip().startswith("#"))
-    assert "clone_url" not in code, \
-        "clone_url injects the token — never write that URL into .git/config"
-    assert 'remote set-url origin "${GIT_BASE}/${new}.git"' in code, \
-        "the migrated checkout must be re-pointed at the canonical (token-free) URL"
 
 
 def test_failure_lines_report_the_tail_of_the_output_not_the_banner():

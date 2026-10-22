@@ -177,6 +177,14 @@ for p in kust.get("patches") or []:
             bad.append("[base] patch path %s missing in %s/%s (%s) — a replace "
                        "on an absent path fails every domain's sync"
                        % (op.get("path"), key[0], key[1], fname))
+        # an ADD needs its PARENT: adding a key under a map the base never declares
+        # fails every domain's sync exactly like a replace on an absent path
+        if op.get("op") == "add":
+            parent = op.get("path", "").rsplit("/", 1)[0]
+            if not jptr_exists(doc, parent):
+                bad.append("[base] patch add-parent %s missing in %s/%s (%s) — an "
+                           "add under an absent map fails every domain's sync"
+                           % (parent, key[0], key[1], fname))
 
 # ── PVC prune protection ──────────────────────────────────────────────────────
 pvcs = [(k, v) for k, v in objs.items() if k[0] == "PersistentVolumeClaim"]
@@ -304,6 +312,11 @@ corrupt "kind-set-dropped" \
 # a patch path that resolves nowhere in the base
 corrupt "patch-path-typo" \
   's|path: /data/CASDOOR_ORIGIN|path: /data/CASDOOR_ORIGIN_TYPO|' \
+  "apps/05b-casdoor-domains.yaml"
+
+# an add whose parent map the base never declares (the pod domain label's add)
+corrupt "add-parent-missing" \
+  's|path: /spec/template/metadata/labels/hugmesh.net~1domain|path: /spec/template/metadata/labelz/hugmesh.net~1domain|' \
   "apps/05b-casdoor-domains.yaml"
 
 echo "== ${pass} passed, ${fail} failed =="

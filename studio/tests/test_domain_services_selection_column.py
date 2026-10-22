@@ -603,8 +603,13 @@ def test_the_bodys_widgets_follow_one_another_on_every_host(host):
     rows). Each widget's top is at or below the previous one's bottom, in the layout
     they share, and the services table keeps at least its minimum height."""
     body, _window = host
-    order = [body.head, body.front_door_table, body.tor_note, body.enforcement,
-             body.help, body.table, body.other_head, body.other_table]
+    # the cluster's "not yet enforced" banner is not said on the local Docker mesh,
+    # which runs what is ticked (route_shows_enforcement_note)
+    assert body.enforcement.isHidden() == (body._route == "docker") if hasattr(
+        body, "_route") else not body.enforcement.isHidden()
+    order = [w for w in (body.head, body.front_door_table, body.tor_note, body.enforcement,
+                         body.help, body.table, body.other_head, body.other_table)
+             if not w.isHidden()]
     parent = body.table.parentWidget()
     for w in order:
         assert w.parentWidget() is parent, type(w).__name__
@@ -659,7 +664,7 @@ def test_the_wizard_steps_subtitle_is_whole(look, qapp, monkeypatch, tmp_path):
     qt = _qt()
     saved = _apply_look(qapp, look)
     try:
-        for name, must_say in (("local-docker-mesh", "two steps on"),
+        for name, must_say in (("local-docker-mesh", "what the mesh runs"),
                                ("image-flow", "every domain gets its own")):
             _body, window = _build_host(name, qapp, monkeypatch, tmp_path)
             try:
@@ -728,8 +733,12 @@ def _prose_is_readable(body, qapp, where):
         f"viewport, so its right edge is cut off ({where})"
     for name, lab in _prose_of(body):
         if not lab.isVisible():
-            # the one label allowed off the page is the lane note, and only while empty
-            assert name == "lane note" and lab.text() == "", f"the {name} is hidden"
+            # the labels allowed off the page: the lane note, only while empty, and the
+            # cluster's "not yet enforced" banner on the local Docker mesh, which runs
+            # what is ticked (route_shows_enforcement_note)
+            assert ((name == "lane note" and lab.text() == "")
+                    or (name == "banner" and getattr(body, "_route", "") == "docker")), \
+                f"the {name} is hidden"
             continue
         assert lab.text(), f"the {name} is on the page with nothing to say ({where})"
         assert lab.wordWrap(), f"the {name} does not wrap ({where})"
@@ -825,8 +834,8 @@ def test_the_front_door_is_laid_out_above_the_services_on_both_faces(host):
     domain navigation and before the honesty banner, the help and the catalogue; the
     TUI screen prints the same order (decision 71 = A — no new parity exemption)."""
     body, _window = host
-    gui = [body.prev_btn, body.front_door_table, body.tor_note, body.enforcement,
-           body.help, body.table]
+    gui = [w for w in (body.prev_btn, body.front_door_table, body.tor_note,
+                       body.enforcement, body.help, body.table) if not w.isHidden()]
     tops = [w.geometry().top() for w in gui]
     assert tops == sorted(tops) and len(set(tops)) == len(tops), tops
     assert body.front_door_table.geometry().bottom() <= body.table.geometry().top()

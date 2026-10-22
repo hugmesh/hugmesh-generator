@@ -350,6 +350,34 @@ def test_devops_running_is_false_without_kind(monkeypatch, tmp_path):
     assert LocalStackNode(_clone(tmp_path)).devops_running() is False
 
 
+def test_devops_running_state_says_unknown_when_the_probe_fails(monkeypatch, tmp_path):
+    """The RECORDING form (mesh-save): a `kind get clusters` that fails is None —
+    nothing was established — while the gate's boolean still reads False. Before
+    the tri-state, a broken kind binary with docker down filed a saved mesh whose
+    DevOps lane was up as 'not running', i.e. a draft that never ran."""
+    monkeypatch.delenv("KIND_CLUSTER_NAME", raising=False)
+    monkeypatch.setattr(devops_tools, "which", lambda tool, gd: f"/fake/bin/{tool}",
+                        raising=True)
+    monkeypatch.setattr(LocalStackNode, "_probe",
+                        lambda self, cmd, timeout=15: (1, "kind: exec format error"),
+                        raising=True)
+    node = LocalStackNode(_clone(tmp_path))
+    assert node.devops_running_state() is None
+    assert node.devops_running() is False
+
+
+def test_devops_running_state_answers_both_ways_when_the_probe_does(monkeypatch,
+                                                                    tmp_path):
+    monkeypatch.delenv("KIND_CLUSTER_NAME", raising=False)
+    node = LocalStackNode(_clone(tmp_path))
+    _probes(monkeypatch, clusters="kind\nhugmesh-local\n")
+    assert node.devops_running_state() is True
+    _probes(monkeypatch, clusters="No kind clusters found.")
+    assert node.devops_running_state() is False
+    _probes(monkeypatch, kind_installed=False)
+    assert node.devops_running_state() is False
+
+
 # ── the credential the CLUSTER already holds (live 2026-08-22) ───────────────
 # The preflight asked two questions, neither of which is the question that
 # matters. "Is ARGOCD_REPO_TOKEN in *this* process's environment?" and "is the

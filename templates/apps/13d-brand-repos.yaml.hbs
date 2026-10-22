@@ -5,8 +5,8 @@
 # for multi-tenant scoping. Rendered per brand into <BRAND>-gitops/apps/ by
 # generate-brand-repos.sh (sed token path). ArgoCD's ApplicationSet controller
 # scans the tenant's Forgejo org and generates one Application per pushed brand
-# repo that carries a deploy descriptor — `hugmesh-deploy.yaml`, or the
-# LEGACY_COMPAT `snapdragon-deploy.yaml` — plus a `deploy/` dir (the discovery contract
+# repo that carries a deploy descriptor — `hugmesh-deploy.yaml` — plus a
+# `deploy/` dir (the discovery contract
 # publish-tenant-set.sh guarantees on every pushed tree).
 #
 # SCOPING DECISION (Phase-5 spec, decision #1 — recorded here + in
@@ -48,22 +48,16 @@ spec:
           # Defense-in-depth even within the per-tenant org: only this brand's
           # <brand>-<repo> trees, and only those honouring the discovery contract.
           #
-          # TWO entries = a DISJUNCTION over the descriptor filename, kept in
-          # LOCKSTEP with specs/cluster/apps/13-service-catalog.yaml (a tenant's
-          # catalog must not accept a different name set from the upstream one —
-          # scripts/validate-catalog-discovery.sh fails on divergence). ArgoCD's
-          # scmProvider ORs across `filters` entries and ANDs inside one, and
-          # `pathsExist` is itself an AND-list, so "either descriptor name" is not
-          # expressible in a single entry; a second entry is the generator's own
-          # mechanism. A tree carrying both names still yields ONE Application.
-          # `hugmesh-deploy.yaml` is the name every emitter writes; the legacy
-          # spelling is LEGACY_COMPAT for adopter repos that have not renamed it.
-          # See catalog/adopters.yaml. NEW FIRST.
+          # Kept in LOCKSTEP with specs/cluster/apps/13-service-catalog.yaml (a
+          # tenant's catalog must not accept a different name set from the
+          # upstream one — scripts/validate-catalog-discovery.sh fails on
+          # divergence). `hugmesh-deploy.yaml` is the name every emitter writes.
+          # ArgoCD's scmProvider ORs
+          # across `filters` entries and ANDs inside one (and `pathsExist` is itself
+          # an AND-list), so a future second spelling needs a second entry. See
+          # catalog/adopters.yaml.
           - repositoryMatch: "^{{BRAND}}-"
             pathsExist: ["hugmesh-deploy.yaml", "deploy"]
-          # LEGACY_COMPAT — pre-rebrand descriptor spelling.
-          - repositoryMatch: "^{{BRAND}}-"
-            pathsExist: ["snapdragon-deploy.yaml", "deploy"]
   template:
     metadata:
       name: "{{ .repository }}"

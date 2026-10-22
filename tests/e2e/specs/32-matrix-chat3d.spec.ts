@@ -36,8 +36,8 @@ import { tags } from './report-tags';
 //
 // STATE-TYPE GENERATIONS (a DEPLOYED-BUNDLE divergence, measured 2026-08-12):
 // matrix-ui main's canonical chat3d types are `net.hugmesh.chat3d` /
-// `net.hugmesh.chat3d.avatar` (with the systems.hugmesh/systems.snapdragon
-// names as read-only legacy fallbacks) — but the matrix remote actually BUILT
+// `net.hugmesh.chat3d.avatar` (with the older systems.hugmesh names as
+// read-only legacy fallbacks) — but the matrix remote actually BUILT
 // into tests/stack/.uidist predates the .net rename: grepping its chunks finds
 // ONLY `systems.hugmesh.chat3d*` (3+4+3 hits) and ZERO `net.hugmesh.*`, so the
 // deployed join menu reads, and the deployed host publishes, the OLD names.
@@ -133,7 +133,7 @@ const CHAT3D_STATE_GENERATIONS = [
 /** The avatar state type's generation chain, newest first (matrix-ui
  *  CHAT3D_AVATAR_TYPE + LEGACY_CHAT3D_AVATAR_TYPES). */
 const CHAT3D_AVATAR_GENERATIONS = [
-  'net.hugmesh.chat3d.avatar', 'systems.hugmesh.chat3d.avatar', 'systems.snapdragon.chat3d.avatar',
+  'net.hugmesh.chat3d.avatar', 'systems.hugmesh.chat3d.avatar',
 ] as const;
 
 /** Enable the 3D room on `roomId` — the same PUT the room-settings UI issues

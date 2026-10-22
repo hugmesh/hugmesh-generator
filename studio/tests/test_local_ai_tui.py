@@ -183,13 +183,14 @@ def test_the_screen_opens_over_a_deeper_screen_and_returns_to_it(state):
 def test_the_screen_opens_over_an_open_overlay_and_gives_it_back(state):
     j = journey.Journey(".")
     j.feed("1")
-    from hugmesh_studio.tui.themes import ThemesScreen
-    themes = ThemesScreen()
-    j.open_overlay(themes)
+    from hugmesh_studio.tui.superbrand_step import SuperbrandScreen
+    under = SuperbrandScreen()
+    j.open_overlay(under)
     j.feed("local-ai")
     assert isinstance(j.screen(), local_ai.LocalAIScreen)
     j.feed("q")
-    assert j.screen() is themes, "closing the Local AI screen must leave Themes open underneath"
+    assert j.screen() is under, \
+        "closing the Local AI screen must leave the screen it opened over open underneath"
 
 
 def test_a_question_goes_to_the_local_model_and_the_answer_is_shown(state):

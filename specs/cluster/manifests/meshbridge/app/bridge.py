@@ -35,14 +35,12 @@ log = logging.getLogger("meshbridge.core")
 
 # Canonical wire name follows the .net domain move (the same reasoning as the
 # Java package rename systems.hugmesh -> net.hugmesh). Rooms may still carry
-# the two OLDER spellings — the post-squash systems.hugmesh one and the
-# pre-rebrand systems.snapdragon one — so the bridge HONORS all three on read.
-# Precedence when a room carries several: canonical first, then each legacy
-# generation (refresh_room scans in MESH_STATE_TYPES order). Writers (the
+# the OLDER post-squash systems.hugmesh spelling, so the bridge HONORS both on
+# read. Precedence when a room carries both: canonical first, then the legacy
+# one (refresh_room scans in MESH_STATE_TYPES order). Writers (the
 # matrix-ui room-settings section) mint ONLY the canonical type.
 MESH_STATE_TYPE = "net.hugmesh.mesh.bridge"
-LEGACY_MESH_STATE_TYPES = ("systems.hugmesh.mesh.bridge",
-                           "systems.snapdragon.mesh.bridge")
+LEGACY_MESH_STATE_TYPES = ("systems.hugmesh.mesh.bridge",)
 MESH_STATE_TYPES = (MESH_STATE_TYPE, *LEGACY_MESH_STATE_TYPES)
 MESH_META_KEY = "com.hugmesh.mesh"
 

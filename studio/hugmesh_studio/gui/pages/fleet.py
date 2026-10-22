@@ -86,15 +86,47 @@ from ...core.fleet import (FLEET_LANE_NOTE, JOBS_RANGE, WITH_TOR_NOTE, FleetConf
                            FleetDomains, FleetDriver, commit_fleet_domains,
                            fleet_domain_fields, fleet_domains_from_config,
                            seed_fleet_domains)
+from ...core import plain_words
+from ...tui.superbrand_step import session_for
 from ._widgets import _file_picker, _row
+from .brand_picker import BrandPicker
 from .domain_services import DomainServicesWidget
 from .domains import _COL_IDP, DomainsTableWidget
+from .superbrand import SuperbrandStep
 
-# The progressive steps (indices into FleetPage.stack).
-(STEP_PLATFORMS, STEP_ROLES, STEP_SHARED, STEP_DOMAINS, STEP_DOMAIN_SERVICES,
- STEP_REVIEW, STEP_RUN) = range(7)
-_STEP_TITLES = ("Platforms", "Roles & boards", "Shared options", "Domains",
+# The progressive steps (indices into FleetPage.stack). STEP_BRAND (#654, D8) is the
+# superbrand's design: the drop-down is on Shared options (where the brand profile row
+# was), and choosing ‘Create a new superbrand’ there opens the design on this step.
+(STEP_PLATFORMS, STEP_ROLES, STEP_SHARED, STEP_BRAND, STEP_DOMAINS,
+ STEP_DOMAIN_SERVICES, STEP_REVIEW, STEP_RUN) = range(8)
+_STEP_TITLES = ("Platforms", "Roles & boards", "Shared options",
+                plain_words.term("superbrand").capitalize(), "Domains",
                 "Domain services", "Review", "Run")
+
+
+class _FleetBrandOptions:
+    """The two FleetConfig fields the superbrand step reads and writes — the Cluster
+    domain and the brand profile — as attributes over the page's own line edits, so the
+    fleet has ONE store for each (the edit, which ``collect`` already reads)."""
+
+    def __init__(self, page):
+        self._page = page
+
+    @property
+    def cluster_domain(self) -> str:
+        return self._page.cluster_domain.text().strip()
+
+    @cluster_domain.setter
+    def cluster_domain(self, value: str) -> None:
+        self._page.cluster_domain.setText(value)
+
+    @property
+    def brand_profile(self) -> str:
+        return self._page.brand_profile.text().strip()
+
+    @brand_profile.setter
+    def brand_profile(self, value: str) -> None:
+        self._page.brand_profile.setText(value)
 
 # ── the log drain (see FleetPage.__init__'s coalescing note) ──────────────────────────
 #: ~20 Hz, the same figure localmesh.py and progress.py use: below the ~100 ms threshold
@@ -195,6 +227,7 @@ class FleetPage(QtWidgets.QWidget):
         #: step is first entered (it seeds row 0 there), so a run that never walks the
         #: steps (a RESTART lands on Review) carries exactly what its record carried.
         self.fleet_domains = FleetDomains()
+        self._brand_options = _FleetBrandOptions(self)
 
         # ── LINE COALESCING — the GUI thread must not do per-line I/O ────────────────
         # _FleetWorker emits ONE queued signal PER OUTPUT LINE, and the old slot did three
@@ -411,6 +444,12 @@ class FleetPage(QtWidgets.QWidget):
         sl.addWidget(self.skip_keys)
         self.env = _default_combo(ENV_CHOICES, "--env forwarded to every builder (default test)")
         sl.addWidget(_row("Build env", self.env))
+        # The superbrand drop-down (#654, D8): the same widget the image route's Branding
+        # page and the Docker route's brand step host, over the same session. A profile
+        # chosen here fills the Brand profile field below it (one store); ‘Create a new
+        # superbrand’ opens the design on the next step.
+        self.brand_picker = BrandPicker()
+        sl.addWidget(self.brand_picker)
         self.brand_profile = QtWidgets.QLineEdit()
         bp_btn = _file_picker(self, self.brand_profile, "Brand profile", "Brand profile (*.conf)")
         bp = QtWidgets.QWidget(); bh = QtWidgets.QHBoxLayout(bp); bh.setContentsMargins(0, 0, 0, 0)
@@ -469,7 +508,27 @@ class FleetPage(QtWidgets.QWidget):
         l3.addStretch(1)
         self.stack.addWidget(_scrolled(p3))
 
-        # ── step 4: DOMAINS — the shared table, row 0 = this fleet's own domain ──
+        # ── step 4: SUPERBRAND — the design the drop-down's ‘Create a new superbrand’ opens ──
+        # SCROLLS like every step of this window (``_scrolled`` below, not a second
+        # ``scrollable`` inside the page): the look editor is long, and at the window's
+        # 760x700 a plain layout clipped it (#647, looked at).
+        p_brand = QtWidgets.QWidget(); lb = QtWidgets.QVBoxLayout(p_brand)
+        self.brand_help = QtWidgets.QLabel(
+            "The superbrand is the mesh's one governing brand: its name, its look and "
+            "how it is reached are what every brand under it starts from. Choose it "
+            "from the drop-down on the previous step; ‘Create a new superbrand’ opens "
+            "the design here.")
+        self.brand_help.setWordWrap(True)
+        self.brand_help.setStyleSheet("color: gray;")
+        lb.addWidget(self.brand_help)
+        self.superbrand_step = SuperbrandStep(route="fleet", with_picker=False)
+        lb.addWidget(self.superbrand_step)
+        lb.addStretch(1)
+        self.stack.addWidget(_scrolled(p_brand))
+        self.brand_picker.designing_changed.connect(self.superbrand_step.refresh)
+        self.superbrand_step.picker.designing_changed.connect(self.brand_picker.refresh)
+
+        # ── step 5: DOMAINS — the shared table, row 0 = this fleet's own domain ──
         p_dom = QtWidgets.QWidget(); ld = QtWidgets.QVBoxLayout(p_dom)
         self.domains_help = QtWidgets.QLabel(
             "Every domain this fleet's mesh serves. The first row is its OWN domain — "
@@ -480,7 +539,8 @@ class FleetPage(QtWidgets.QWidget):
         self.domains_help.setWordWrap(True)
         self.domains_help.setStyleSheet("color: gray;")
         ld.addWidget(self.domains_help)
-        self.domains_table = DomainsTableWidget(cfg=lambda: self.fleet_domains)
+        self.domains_table = DomainsTableWidget(
+            cfg=lambda: self.fleet_domains, brand_session=lambda: self._brand_session())
         # a fleet stands up no Casdoor: a per-domain "Own" sign-in would reach nothing
         self.domains_table.table.setColumnHidden(_COL_IDP, True)
         ld.addWidget(self.domains_table)
@@ -492,7 +552,7 @@ class FleetPage(QtWidgets.QWidget):
         ld.addWidget(self.domains_note)
         self.stack.addWidget(_scrolled(p_dom))
 
-        # ── step 5: DOMAIN SERVICES — one page per domain, own domain first ──
+        # ── step 6: DOMAIN SERVICES — one page per domain, own domain first ──
         # SCROLLS, like the image flow's page and the local docker mesh's step (#647,
         # looked at): the shared body is taller than this page at its default size —
         # two checkbox tables, the state line and the read-only table — and in a
@@ -504,11 +564,12 @@ class FleetPage(QtWidgets.QWidget):
         # and test_fleet_window_layout refuses it.
         p_svc = QtWidgets.QWidget(); lsv = QtWidgets.QVBoxLayout(p_svc)
         self.domain_services = DomainServicesWidget(
-            scope_cfg=None, entries=None, lane_note=FLEET_LANE_NOTE)
+            scope_cfg=None, entries=None, lane_note=FLEET_LANE_NOTE,
+            brand_session=lambda: self._brand_session(), route="fleet")
         lsv.addWidget(self.domain_services)
         self.stack.addWidget(_scrolled(p_svc))
 
-        # ── step 6: REVIEW — the exact command (unchanged emission) + preflight ──
+        # ── step 7: REVIEW — the exact command (unchanged emission) + preflight ──
         p4 = QtWidgets.QWidget(); l4 = QtWidgets.QVBoxLayout(p4)
         l4.addWidget(QtWidgets.QLabel("Command:"))
         self.cmd = console.attach(QtWidgets.QPlainTextEdit()); self.cmd.setReadOnly(True); self.cmd.setMaximumHeight(100)
@@ -525,7 +586,7 @@ class FleetPage(QtWidgets.QWidget):
         l4.addWidget(self.problems, 1)
         self.stack.addWidget(_scrolled(p4))
 
-        # ── step 7: RUN — live progress + Stop ──
+        # ── step 8: RUN — live progress + Stop ──
         p5 = QtWidgets.QWidget(); l5 = QtWidgets.QVBoxLayout(p5)
         self.stop_btn = QtWidgets.QPushButton("Stop"); self.stop_btn.setEnabled(False)
         self.stop_btn.clicked.connect(self._stop)
@@ -752,13 +813,31 @@ class FleetPage(QtWidgets.QWidget):
     def _goto(self, i: int) -> None:
         self.stack.setCurrentIndex(i)
         self.step_title.setText(f"Step {i + 1} of {len(_STEP_TITLES)} — {_STEP_TITLES[i]}")
-        if i == STEP_DOMAINS:
+        if i == STEP_SHARED:
+            self._refresh_brand_widgets()
+        elif i == STEP_BRAND:
+            self._refresh_brand_widgets()
+        elif i == STEP_DOMAINS:
             self._seed_domains()
+            self.domains_table._refresh_summary_cells()
         elif i == STEP_DOMAIN_SERVICES:
             self.domain_services.load(self.fleet_domains)
         elif i == STEP_REVIEW:
             self._enter_review()
         self._update_nav()
+
+    # ---- the superbrand drop-down and its design (#654, D8) ------------------------
+    def _brand_session(self):
+        """This window's superbrand session: the Cluster domain and Brand profile line
+        edits and the Domains steps' state, behind the one model the image route and the
+        text screens use. Rebuilt when the state object is replaced (``apply``)."""
+        return session_for(self, "fleet", (self._brand_options, self.fleet_domains),
+                           self.generator_dir)
+
+    def _refresh_brand_widgets(self) -> None:
+        session = self._brand_session()
+        self.brand_picker.set_session(session)
+        self.superbrand_step.set_session(session)
 
     # ---- the Domains / Domain services steps (#587) ----------------------------
     def _seed_domains(self) -> None:
@@ -792,10 +871,13 @@ class FleetPage(QtWidgets.QWidget):
 
     def _leave(self, i: int) -> bool:
         """Record what the step being LEFT holds; False keeps the operator there."""
+        if i == STEP_BRAND:
+            self.superbrand_step.commit(save=False)
         if i == STEP_DOMAINS:
             return self._commit_domains()
         if i == STEP_DOMAIN_SERVICES:
             self.domain_services.record(self.fleet_domains)
+            self.domain_services.commit_brand(save=True)
         return True
 
     def _update_nav(self) -> None:

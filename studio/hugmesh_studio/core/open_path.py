@@ -17,7 +17,7 @@ test box with no subprocess at all.
 
 WHAT ``core/login_preview.open_in_browser`` ALREADY LEARNED, reused here rather
 than re-learned (the "preview button does nothing" post-mortem, and the amber
-note in ``gui/pages/_logintheme._open_preview``):
+note in ``gui/pages/_look_shared.open_platform_preview``):
 
   * every launch mechanism reports DISPATCH, not DISPLAY. ``xdg-open`` exits 0 only
     after a successful handoff and exits non-zero (2, 3, 4) when no handler exists

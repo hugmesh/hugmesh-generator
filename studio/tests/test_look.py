@@ -1,6 +1,6 @@
 """The look tests, run where they can be fast: in a FRESH interpreter (#647, #656).
 
-Every ``test_look_*`` test in the three files below measures what a person sees — at
+Every ``test_look_*`` test in the files below measures what a person sees — at
 the wizard's default window size, under two Qt styles, at the default font and at
 8 pt — and skips in an ordinary run (``tests/_look.py`` says why: switching the
 application style in a process that has already run other wizard tests takes minutes).
@@ -45,10 +45,13 @@ STUDIO_ROOT = os.path.dirname(HERE)
 #: must be added here, or it would never run anywhere (test_every_look_test_is_run
 #: below fails when a file carries one that is not listed).
 LOOK_FILES = ("test_anubis_tristate_page.py", "test_localcloud_nodes.py",
-              "test_pages_qemu.py", "test_pages_mesh_emulation.py")
+              "test_pages_qemu.py", "test_pages_mesh_emulation.py",
+              "test_look_editor.py")
 
 
-_PASSED_CASE = re.compile(r"\[([A-Za-z]+)-(?:default|\d+(?:\.\d+)?pt)\]\s+PASSED")
+# an id may also end in the window size a look case was drawn at (``fusion-9pt-736x736``)
+_PASSED_CASE = re.compile(
+    r"\[([A-Za-z]+)-(?:default|\d+(?:\.\d+)?pt)(?:-\d+x\d+)?\]\s+PASSED")
 
 
 def styles_passed(lines: list) -> set:
@@ -108,6 +111,10 @@ def test_every_required_style_needs_a_passing_case_of_its_own():
     why = child_verdict(0, ["x.py::t[breeze-default] PASSED", "1 passed in 1s"], ("Fusion",))
     assert "fusion" in why, why
     assert styles_passed(["a[Breeze-8pt] PASSED", "b[fusion-default] FAILED"]) == {"breeze"}
+    # a case drawn at a named window size keeps its style (the look editor's ids)
+    assert styles_passed(["a[fusion-9pt-736x736] PASSED",
+                          "b[breeze-8pt-1040x780] PASSED"]) == {"fusion", "breeze"}
+    assert styles_passed(["a[fusion-9pt-736x736] FAILED"]) == set()
 
 
 def test_a_missing_style_fails_when_the_run_requires_it_and_skips_when_optional():

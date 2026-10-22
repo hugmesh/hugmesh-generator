@@ -1681,7 +1681,7 @@ PUBLIC_HOST_PORT ?= 8088
 PUBLIC_HTTPS_PORT ?= 8488
 # Per-machine TLS material for the https front door — minted by `make
 # stack-certs` (gen-certs.sh), gitignored. NOT tests/stack/certs: those are
-# committed mock-stack fixtures whose CA key is public in the repo.
+# committed mock-stack fixtures whose leaf key is public in the repo.
 STACK_TLS_DIR   := tests/stack/.tls-front
 GIT_BASE        ?= https://github.com/hugmesh
 GIT_REF         ?= main
@@ -2030,6 +2030,19 @@ STACK_OWN_CASDOOR_DOWN_FLAGS := $(if $(wildcard $(STACK_OWN_CASDOOR_COMPOSE)),-f
 # a machine-specific core count.
 STACK_LIMITS_COMPOSE := tests/stack/.compose.limits.yaml
 STACK_LIMITS_FLAGS := $(if $(wildcard $(STACK_LIMITS_COMPOSE)),-f $(STACK_LIMITS_COMPOSE),)
+# A domain's own look, served by Host at the HTTPS front door. The Studio writes
+# tests/stack/.looks/ (gitignored: per-domain hug-theme.css folders, a by-host/
+# folder per domain with its own look, and the extra `make view` rows) when it
+# starts a mesh with added domains, and removes it when there are none (studio
+# core/look_serving.py). While by-host/ exists the committed overlay mounts that
+# folder read-only into hugmesh-https-front, whose tls-front/default.conf answers
+# the stylesheet from by-host/<Host>/ (looked up per request, so no reload). Gated on the FILE, never on a
+# bare mount in compose.local.yaml: Docker creates a missing bind-mount folder as
+# root, which the Studio could then never write again. Absent on every untouched
+# checkout, so the compose invocation stays byte-identical there.
+STACK_LOOKS_GATE := tests/stack/.looks/by-host
+STACK_LOOKS_COMPOSE := tests/stack/compose.looks.yaml
+STACK_LOOKS_FLAGS := $(if $(wildcard $(STACK_LOOKS_GATE)),-f $(STACK_LOOKS_COMPOSE),)
 
 STACK_EGRESS_COMPOSE := tests/stack/compose.egress-vpn.yaml
 STACK_EGRESS_FLAGS := $(if $(strip $(EGRESS_VPN)),-f $(STACK_EGRESS_COMPOSE) --profile egress-vpn,) $(if $(strip $(ANUBIS)),--profile anubis,)
@@ -2134,12 +2147,12 @@ stack-certs: ## mint the per-machine TLS CA + leaf for the https front door (ide
 	fi
 
 stack-build: stack-clone stack-certs stack-m2-check $(STACK_SOCIAL_DEP) ## build every service from its cloned repo (no run)
-	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_M2_FLAGS) $(STACK_PROFILE) $(STACK_ALT_PROFILE) $(STACK_TOR_PROFILE) $(STACK_GAMES_PROFILE) $(STACK_BRAND_B_PROFILE) $(STACK_OWN_CASDOOR_FLAGS) $(STACK_LIMITS_FLAGS) $(STACK_EGRESS_FLAGS) build
+	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_M2_FLAGS) $(STACK_PROFILE) $(STACK_ALT_PROFILE) $(STACK_TOR_PROFILE) $(STACK_GAMES_PROFILE) $(STACK_BRAND_B_PROFILE) $(STACK_OWN_CASDOOR_FLAGS) $(STACK_LIMITS_FLAGS) $(STACK_LOOKS_FLAGS) $(STACK_EGRESS_FLAGS) build
 
 stack-up: stack-clone stack-certs stack-m2-check $(STACK_SOCIAL_DEP) ## clone -> build -> run the FULL stack (ENV=test|prod; SOCIAL=1 adds matrix/mastodon)
 	@echo "==> Local stack: ENV=$(ENV), issuer=$(CASDOOR_ISSUER), host port=$(PUBLIC_HOST_PORT), social=$(if $(strip $(SOCIAL)),on,off)$(if $(strip $(MFA)), mfa=ON(explicit),)$(if $(strip $(MFA_FLOOR)), mfa-floor=ON,)$(if $(wildcard $(STACK_M2_ENV)), m2-registry=on,)"
-	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_M2_FLAGS) $(STACK_PROFILE) $(STACK_ALT_PROFILE) $(STACK_TOR_PROFILE) $(STACK_GAMES_PROFILE) $(STACK_BRAND_B_PROFILE) $(STACK_OWN_CASDOOR_FLAGS) $(STACK_LIMITS_FLAGS) $(STACK_EGRESS_FLAGS) build
-	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_M2_FLAGS) $(STACK_PROFILE) $(STACK_ALT_PROFILE) $(STACK_TOR_PROFILE)$(STACK_TOR_DOMAINS_FLAGS) $(STACK_GAMES_PROFILE) $(STACK_BRAND_B_PROFILE) $(STACK_OWN_CASDOOR_FLAGS) $(STACK_LIMITS_FLAGS) $(STACK_EGRESS_FLAGS) up -d
+	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_M2_FLAGS) $(STACK_PROFILE) $(STACK_ALT_PROFILE) $(STACK_TOR_PROFILE) $(STACK_GAMES_PROFILE) $(STACK_BRAND_B_PROFILE) $(STACK_OWN_CASDOOR_FLAGS) $(STACK_LIMITS_FLAGS) $(STACK_LOOKS_FLAGS) $(STACK_EGRESS_FLAGS) build
+	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_M2_FLAGS) $(STACK_PROFILE) $(STACK_ALT_PROFILE) $(STACK_TOR_PROFILE)$(STACK_TOR_DOMAINS_FLAGS) $(STACK_GAMES_PROFILE) $(STACK_BRAND_B_PROFILE) $(STACK_OWN_CASDOOR_FLAGS) $(STACK_LIMITS_FLAGS) $(STACK_LOOKS_FLAGS) $(STACK_EGRESS_FLAGS) up -d
 	@echo "==> Up. Front door: http://localhost:$(PUBLIC_HOST_PORT)  |  https://localhost:$(PUBLIC_HTTPS_PORT)  | Casdoor: http://localhost:8000"
 	@echo "    (https uses the per-machine CA $(STACK_TLS_DIR)/ca.crt - import it to trust, or accept the browser warning)"
 	@echo "    Logs: make stack-logs   Down: make stack-down"
@@ -2379,10 +2392,10 @@ stack-tor-mechanism-check: ## OPT-IN, needs the public Tor network + a host tor 
 	HUGMESH_TOR_E2E=1 bash tests/stack/test-tor-onion-mechanism.sh
 
 stack-logs: ## tail logs from the running local stack
-	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_PROFILE) $(STACK_ALT_PROFILE) $(STACK_TOR_PROFILE) $(STACK_GAMES_PROFILE) $(STACK_BRAND_B_PROFILE) $(STACK_OWN_CASDOOR_FLAGS) $(STACK_LIMITS_FLAGS) $(STACK_EGRESS_FLAGS) logs -f --tail=100
+	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_PROFILE) $(STACK_ALT_PROFILE) $(STACK_TOR_PROFILE) $(STACK_GAMES_PROFILE) $(STACK_BRAND_B_PROFILE) $(STACK_OWN_CASDOOR_FLAGS) $(STACK_LIMITS_FLAGS) $(STACK_LOOKS_FLAGS) $(STACK_EGRESS_FLAGS) logs -f --tail=100
 
 stack-ps: ## list the local stack's containers + status
-	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_PROFILE) $(STACK_ALT_PROFILE) $(STACK_TOR_PROFILE) $(STACK_GAMES_PROFILE) $(STACK_BRAND_B_PROFILE) $(STACK_OWN_CASDOOR_FLAGS) $(STACK_LIMITS_FLAGS) $(STACK_EGRESS_FLAGS) ps
+	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_PROFILE) $(STACK_ALT_PROFILE) $(STACK_TOR_PROFILE) $(STACK_GAMES_PROFILE) $(STACK_BRAND_B_PROFILE) $(STACK_OWN_CASDOOR_FLAGS) $(STACK_LIMITS_FLAGS) $(STACK_LOOKS_FLAGS) $(STACK_EGRESS_FLAGS) ps
 
 # ── The Gherkin (BDD) e2e lane ───────────────────────────────────────────────
 # SEPARATE targets on purpose: the `stack-e2e` recipe above is edited by other
