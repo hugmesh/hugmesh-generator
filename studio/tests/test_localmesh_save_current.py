@@ -182,6 +182,63 @@ def test_a_second_save_records_the_first_as_an_earlier_state_of_this_mesh(qapp, 
     assert page._loaded_record_id == second.id
 
 
+def test_the_later_version_box_names_the_record_and_is_on_screen(qapp, page):
+    """The tie a save makes to the record the form holds is SHOWN (code-folders
+    skeptic 2): hidden with no record, then a ticked, visible, sanely sized box
+    naming the record once the form holds one."""
+    w = _entered(qapp, page)
+    page.resize(1000, 900)
+    page.show()
+    w.section.set_expanded(True)
+    _settle(qapp, page)
+    assert w.follows_box.isHidden()
+    w.name_edit.setText("first")
+    w.save_btn.click()
+    _settle(qapp, page)
+    box = w.follows_box
+    assert box.isVisible() and box.isEnabled() and box.isChecked()
+    assert box.width() >= 200 and box.height() >= 16, box.size()
+    assert box.text().startswith("This is a later version of ‘first’"), box.text()
+
+
+def test_unticking_the_box_saves_a_different_mesh_that_follows_nothing(qapp, page):
+    """Load or save mesh A, edit the form into a DIFFERENT mesh, untick the box and
+    save: the new record does not list A, so A keeps claiming its code copies."""
+    w = _entered(qapp, page)
+    w.name_edit.setText("mesh a")
+    w.save_btn.click()
+    _settle(qapp, page)
+    a = next(r for r in sm.scan()[0] if r.label == "mesh a")
+    page.env_prod.setChecked(not page.env_prod.isChecked())
+    page._refresh_plan()
+    w.follows_box.setChecked(False)
+    w.name_edit.setText("mesh b")
+    w.save_btn.click()
+    _settle(qapp, page)
+    b = next(r for r in sm.scan()[0] if r.label == "mesh b")
+    assert b.follows == [], b.follows
+    from hugmesh_studio.core import domain_workspaces as dw
+    assert a.id not in dw.superseded_ids(sm.scan()[0])
+    # the form now holds b: the box offers b, ticked again
+    assert w.follows_box.isChecked() and "‘mesh b’" in w.follows_box.text()
+
+
+def test_a_start_ties_the_form_to_the_started_record(qapp, page, monkeypatch):
+    """Start applies a saved record to the form, so a later save follows THAT record
+    — not whichever one was loaded or saved before (it used to keep the old id)."""
+    w = _entered(qapp, page)
+    w.name_edit.setText("loaded first")
+    w.save_btn.click()
+    _settle(qapp, page)
+    started = _record(label="started")
+    w.refresh()
+    page._mesh_up = False
+    monkeypatch.setattr(page, "_launch", lambda *a, **k: None)
+    page._start_saved(started, sm.MODE_START)
+    assert page._loaded_record_id == started.id
+    assert w.follows_wanted(started.id) and "‘started’" in w.follows_box.text()
+
+
 def test_a_taken_name_refuses_save_and_points_at_overwrite(qapp, page):
     _record(label="kept")
     w = _entered(qapp, page)

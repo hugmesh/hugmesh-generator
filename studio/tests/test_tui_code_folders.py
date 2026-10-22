@@ -149,7 +149,31 @@ def test_the_last_outcome_and_an_arm_go_when_the_services_change(at_folders):
 
 def test_the_screen_says_each_copys_remote_is_named_for_its_domain(at_folders):
     j, _screen, _git, _src = at_folders
-    assert "Each copy's git remote is named for its domain" in _text(j)
+    assert "Each copy's git remote is named for its domain's folder" in _text(j)
+
+
+def _make_legacy(folder):
+    """Rewrite a copy's marker as one made before the remote was named for the
+    domain: no ``remote`` key (git's own ``origin`` was kept)."""
+    import json
+    from hugmesh_studio.core import domain_workspaces as dw
+    path = os.path.join(folder, ".git", dw.MARKER)
+    with open(path, encoding="utf-8") as fh:
+        data = json.load(fh)
+    data.pop("remote", None)
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(data, fh)
+
+
+def test_an_older_copy_still_on_origin_is_named_with_the_push_that_works(at_folders):
+    j, screen, _git, _src = at_folders
+    j.feed("m 2")
+    assert "older cop" not in _text(j)
+    root = screen.folders.plan(j).root
+    _make_legacy(os.path.join(root, "live.example", "hugmesh-owncast-ui.live.example"))
+    text = _text(j)
+    assert ("1 older copy still call the build checkout origin (git push origin "
+            "domain/live.example): hugmesh-owncast-ui") in text, text
 
 
 def test_b_goes_back_to_the_review(at_folders):

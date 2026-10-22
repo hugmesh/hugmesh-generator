@@ -211,6 +211,18 @@ class SavedMeshesWidget(QtWidgets.QWidget):
         save_row.addWidget(self.name_edit, 0, 1, 1, 2)
         save_row.addWidget(self.save_btn, 1, 1)
         save_row.addWidget(self.overwrite_btn, 1, 2)
+        # WHICH MESH THIS SAVE IS A LATER STATE OF (code-folders skeptic 2,
+        # 2026-10-21). A save lists the record the form holds in its ``follows``,
+        # and that older record then stops keeping domain code copies the newer one
+        # dropped. Silently, that also fired when the form had been edited into a
+        # different mesh. Shown only while the form holds a record; ticked by
+        # default (saving again is the usual case); untick it and the older record
+        # keeps its copies.
+        self.follows_box = QtWidgets.QCheckBox("")
+        self.follows_box.setChecked(True)
+        self.follows_box.setVisible(False)
+        self._follows_offered = ""
+        save_row.addWidget(self.follows_box, 2, 1, 1, 2)
         save_row.setColumnStretch(1, 1)
         save_row.setColumnStretch(2, 1)
         cur.addLayout(save_row)
@@ -348,7 +360,39 @@ class SavedMeshesWidget(QtWidgets.QWidget):
                 return "same", r, []
         return "unsaved", None, []
 
+    def follows_wanted(self, rec_id: str) -> bool:
+        """Should a save made now list ``rec_id`` (the record the form holds) as the
+        mesh it is a later state of? Only when the box offers that very record and
+        is ticked; a record that is gone from the list is never followed."""
+        return bool(rec_id) and self._follows_offered == rec_id and \
+            self.follows_box.isChecked()
+
+    def _render_follows(self) -> None:
+        tied = next((r.rec for r in self._rows
+                     if r.rec is not None and r.rec.id == self._tied_id), None)
+        if tied is None or self._current is None:
+            self._follows_offered = ""
+            self.follows_box.setVisible(False)
+            return
+        if self._follows_offered != tied.id:      # a new tie: ticked again
+            self.follows_box.setChecked(True)
+        self._follows_offered = tied.id
+        label = tied.label or tied.id
+        # a checkbox does not wrap: a long name must not widen the page (#661)
+        short = label if len(label) <= 40 else label[:39] + "…"
+        self.follows_box.setText(
+            f"This is a later version of ‘{short}’ (it then stops keeping code "
+            "copies this save drops)")
+        self.follows_box.setToolTip(
+            f"Ticked: the new or overwritten record lists ‘{label}’ as an earlier "
+            "state of the same mesh, so the domain code copies only it still had "
+            "become extra (removable on a second click, and only if they hold no "
+            f"work). Untick it when the form now holds a different mesh: ‘{label}’ "
+            "then keeps its copies.")
+        self.follows_box.setVisible(True)
+
     def _render_current(self) -> None:
+        self._render_follows()
         state, rec, changes = self.current_state()
         label = (rec.label or rec.id) if rec is not None else ""
         self.current_title.setText(_CURRENT_TITLE[state].format(label=label))
@@ -446,7 +490,8 @@ class SavedMeshesWidget(QtWidgets.QWidget):
                          "is up the replaced record stays a draft (never ran).")
             self.overwrite_note.setText(
                 f"A second click replaces the saved record ‘{label}’ (saved "
-                f"{(rec.created or '?')[:16].replace('T', ' ')}) with the mesh being "
+                f"{(rec.updated or rec.created or '?')[:16].replace('T', ' ')}) with "
+                "the mesh being "
                 f"worked on now. Its place in the list is kept.{rename}{copies}"
                 f"{fills}{draft} Its data volumes and the running mesh are not "
                 "touched.")
@@ -557,14 +602,28 @@ class SavedMeshesWidget(QtWidgets.QWidget):
             set_cell(self.table, i, _SM_COL_DOMAINS, "—")
             return
         rec = r.rec
-        tip = (f"{rec.id}\nsaved {rec.created} on {rec.hostname or '?'}\n"
+        tip = (f"{rec.id}\nsaved {rec.updated or rec.created} on {rec.hostname or '?'}"
+               + (f" (first saved {rec.created})"
+                  if rec.updated and rec.created and rec.updated != rec.created else "")
+               + "\n"
                f"generator: {rec.generator_dir} @ {rec.generator_head[:12] or '?'}")
         if not rec.same_checkout(self.generator_dir, self.hostname):
             tip += ("\n\nThis record is from ANOTHER checkout or host — it points "
                     "at another mesh's volumes, so Start is disabled here.")
         set_cell(self.table, i, _SM_COL_MESH, rec.label or rec.id, tooltip=tip)
-        set_cell(self.table, i, _SM_COL_SAVED, (rec.created or "")[:16].replace("T", " "),
-                 tooltip=rec.created)
+        # The LAST save, as the node-image picker shows it: an Overwrite keeps
+        # `created` and moves `updated` (saved-meshes skeptic 3 — the two screens
+        # disagreed about when the same record was saved).
+        # A plain save stamps `created` and then `updated` a moment apart; more than
+        # two minutes apart is a later save of the same record (an Overwrite, or a
+        # Start that wrote the form's Domain services walk into it).
+        last = rec.updated or rec.created or ""
+        t_up, t_made = sm._stamp(rec.updated), sm._stamp(rec.created)
+        resaved = bool(t_up and t_made and t_up - t_made > 120)
+        set_cell(self.table, i, _SM_COL_SAVED,
+                 last[:16].replace("T", " ") + (" (re-saved)" if resaved else ""),
+                 tooltip=(f"last saved {rec.updated}\nfirst saved {rec.created}"
+                          if resaved else last))
         set_cell(self.table, i, _SM_COL_ENV, rec.brand_text())
         set_cell(self.table, i, _SM_COL_SERVICES, rec.services_text(),
                  tooltip=rec.services_text())

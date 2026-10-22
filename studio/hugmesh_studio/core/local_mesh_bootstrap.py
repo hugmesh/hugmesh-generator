@@ -2031,24 +2031,34 @@ class LocalMeshIdentity(NamedTuple):
     mesh_domains: object = None
 
 
-def _ran_state(rec) -> tuple[bool, str]:
-    """``(is a draft, when an earlier version last ran)`` for the import labels below.
-    A draft whose earlier version ran (an Overwrite made while nothing ran) is NOT a
-    mesh that never ran: ``ran_before`` names when it last did. Wording only, so a
-    record object without these methods reads as a mesh that ran."""
-    ran = getattr(rec, "ran_when_saved", None)
+def _ran_state(rec) -> tuple[str, str]:
+    """``(state, when an earlier version last ran)`` for the import labels below.
+    ``state`` is :meth:`.saved_meshes.SavedMesh.run_state` (``ran``, ``ran_before``,
+    ``volumes``, ``unchecked`` or ``draft``). Only ``draft`` may be called a mesh that
+    never ran: a draft whose earlier version ran (an Overwrite made while nothing ran)
+    names when it last did, and a save that found the mesh's data volumes or could
+    not check the DevOps lane says that instead. Wording only, so a record object
+    without these methods reads as a mesh that ran."""
+    state = "ran"
+    fn = getattr(rec, "run_state", None)
     try:
-        draft = callable(ran) and not ran()
+        if callable(fn):
+            state = str(fn() or "ran")
+        else:
+            ran = getattr(rec, "ran_when_saved", None)
+            state = "draft" if callable(ran) and not ran() else "ran"
     except Exception:                                  # noqa: BLE001 — a label only
-        draft = False
+        state = "ran"
     before = ""
-    if draft:
+    if state == "ran_before":
         fn = getattr(rec, "ran_before_at", None)
         try:
             before = str(fn() or "") if callable(fn) else ""
         except Exception:                              # noqa: BLE001 — a label only
             before = ""
-    return draft, before
+        if not before:
+            state = "unchecked"
+    return state, before
 
 
 def _short_when(stamp: str) -> str:
@@ -2061,14 +2071,17 @@ def saved_mesh_source(rec) -> str:
         return ""
     label = str(getattr(rec, "label", "") or getattr(rec, "id", "") or "?")
     when = str(getattr(rec, "updated", "") or getattr(rec, "created", "") or "")
-    draft, before = _ran_state(rec)
-    if draft and before:
-        tail = (" — NOT RUN AS SAVED: overwritten while nothing ran; an earlier "
-                f"version of this mesh last ran {_short_when(before)}")
-    elif draft:
-        tail = " — NEVER RAN: saved as a draft before its first bring-up"
-    else:
-        tail = ""
+    state, before = _ran_state(rec)
+    tail = {
+        "ran_before": (" — NOT RUN AS SAVED: overwritten while the mesh was not seen "
+                       f"running; an earlier version of this mesh last ran "
+                       f"{_short_when(before)}"),
+        "volumes": (" — NOT RUNNING WHEN SAVED: its data volumes were on disk, so it "
+                    "came up before; this configuration was not seen running"),
+        "unchecked": (" — NOT SEEN RUNNING WHEN SAVED: the Docker mesh was down and "
+                      "the DevOps lane could not be checked"),
+        "draft": " — NEVER RAN: saved as a draft before its first bring-up",
+    }.get(state, "")
     return f"saved mesh '{label}'" + (f" (saved {when})" if when else "") + tail
 
 
@@ -2078,11 +2091,14 @@ def saved_mesh_choice_text(rec) -> str:
     label = str(getattr(rec, "label", "") or getattr(rec, "id", "") or "?")
     when = _short_when(str(getattr(rec, "updated", "") or getattr(rec, "created", "")
                            or ""))
-    draft, before = _ran_state(rec)
-    state = (f" — not run as saved (ran {_short_when(before)})"
-             if draft and before else
-             " — never ran (draft)" if draft else " — ran")
-    return f"{label}" + (f" — saved {when}" if when else "") + state
+    state, before = _ran_state(rec)
+    tail = {
+        "ran_before": f" — not run as saved (ran {_short_when(before)})",
+        "volumes": " — not running when saved (ran before)",
+        "unchecked": " — not seen running (DevOps lane unchecked)",
+        "draft": " — never ran (draft)",
+    }.get(state, " — ran")
+    return f"{label}" + (f" — saved {when}" if when else "") + tail
 
 
 def tor_carrier_platforms(platforms) -> tuple[tuple[str, ...], tuple[str, ...]]:
@@ -2315,16 +2331,22 @@ def _saved_mesh_cli(args: argparse.Namespace) -> int:
         running = [n for n, up in (("Docker mesh", compose_up),
                                    ("DevOps lane", kind_up is True)) if up]
         before = rec.ran_before_at() if not running else ""
+        state = rec.run_state() if not running else "ran"
+        by_hand = ("the node-image pages do not import it unless it is picked by "
+                   "hand")
         print("  running at save time: " + (
             ", ".join(running) if running else
             ("nothing seen running (the DevOps lane could not be checked: its kind "
              "probe did not answer)" if kind_up is None else "nothing")
             + (f" — NOT RUN AS SAVED: an earlier version of this mesh last ran "
                f"{before[:16].replace('T', ' ')}; this configuration has not run, so "
-               "the node-image pages do not import it unless it is picked by hand"
-               if before else
-               " — a DRAFT: the configuration as worked on (the node-image pages "
-               "do not import it unless it is picked by hand)")))
+               + by_hand if before else
+               f" — NOT RUNNING WHEN SAVED: {rec.volume_count()} data volume(s) of "
+               "this mesh were on disk, so it came up before; " + by_hand
+               if state == "volumes" else
+               " — NOT SEEN RUNNING: it may have been up on the DevOps lane; "
+               + by_hand if state == "unchecked" else
+               " — a DRAFT: the configuration as worked on (" + by_hand + ")")))
         print(f"  {rec.volume_count()} data volume(s) inventoried, NOT copied "
               f"(included=false: {saved_meshes.VOLUMES_NOT_INCLUDED_REASON})")
         print("  credential files: " + ("copied at 0600 into the record's side dir"

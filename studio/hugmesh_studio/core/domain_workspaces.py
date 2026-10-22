@@ -77,7 +77,7 @@ __all__ = [
     "safe_folder_name", "copy_folder_name", "workspace_root", "plan_workspaces",
     "clone_repo", "clone_missing", "extra_status", "remove_extra", "read_marker",
     "saved_mesh_claims", "same_mesh_ids", "superseded_ids", "remote_name",
-    "git_settings",
+    "older_remote_copies", "git_settings",
     "SHARED_ROOT_NOTE",
 ]
 
@@ -132,6 +132,16 @@ def remote_name(domain_slug: str) -> str:
     return domain_slug
 
 
+def older_remote_copies(ws: "DomainWorkspace") -> "list[tuple[str, str]]":
+    """``[(app, remote), ...]`` for the made copies of ``ws`` whose build-checkout
+    remote is NOT the domain's name (:func:`remote_name`) — made before that rule, so
+    ``git push <domain>`` does not work there and every screen must say which name
+    does."""
+    want = remote_name(ws.slug)
+    return [(repo.app, repo.remote) for repo in ws.cloned()
+            if repo.remote and repo.remote != want]
+
+
 def workspace_root(mesh: str, state_root: Optional[str] = None) -> str:
     """``<state dir>/domain-code/<mesh>``: under the Studio's state, never /tmp and never
     inside a ``.stack-src`` (which ``make stack-clone`` git-resets)."""
@@ -153,6 +163,9 @@ class WorkspaceRepo:
     #: why a copy cannot be made now ("" = it can, or it is already made)
     reason: str
     reasons: tuple[str, ...] = ()
+    #: a made copy's name for its build checkout, from its marker (``origin`` for a
+    #: copy made before the remote was named for the domain); "" when not made
+    remote: str = ""
 
     @property
     def can_clone(self) -> bool:
@@ -440,8 +453,12 @@ def plan_workspaces(generator_dir: str, source_mode: str, source_dir: str, domai
                 elif dest and os.path.lexists(dest):
                     reason = (f"{dest} already exists and was not made by the Studio; "
                               "move it away to make a fresh copy")
+            remote = ""
+            if cloned:
+                got = marker.get("remote")
+                remote = got if isinstance(got, str) and got else "origin"
             repos.append(WorkspaceRepo(app.name, fname, dest, app.path, bool(app.exists),
-                                       cloned, reason, app.reasons))
+                                       cloned, reason, app.reasons, remote))
 
         extras: list[ExtraFolder] = []
         claimed: list[ExtraFolder] = []

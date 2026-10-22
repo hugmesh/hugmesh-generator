@@ -254,6 +254,32 @@ def test_the_copies_line_names_the_domains_git_remote(block, src):
     assert block.copy_labels["live.example"].isVisible()
 
 
+def test_an_older_copy_still_on_origin_is_named_on_the_copies_line(block, src):
+    """Copies made before the remote was named for the domain kept git's own
+    'origin' (their marker has no 'remote'): the line must not tell people to
+    'git push live.example' there without saying which copies differ."""
+    import json
+    block.refresh("existing", src, _rows(), own_name=OWN)
+    block.clone_buttons["live.example"].click()
+    assert block.wait_idle()
+    assert "older cop" not in block.copy_labels["live.example"].text()
+    marker = os.path.join(block.plan.root, "live.example",
+                          "hugmesh-owncast-ui.live.example", ".git", dw.MARKER)
+    with open(marker, encoding="utf-8") as fh:
+        data = json.load(fh)
+    data.pop("remote")
+    with open(marker, "w", encoding="utf-8") as fh:
+        json.dump(data, fh)
+    block.refresh("existing", src, _rows(), own_name=OWN)
+    _settle()
+    lab = block.copy_labels["live.example"]
+    assert ("1 older copy (made before that rule) still calls it ‘origin’: "
+            "hugmesh-owncast-ui — in those, push with git push origin "
+            "domain/live.example") in lab.text(), lab.text()
+    assert lab.isVisible() and lab.width() >= 200 and lab.height() >= 20, lab.size()
+    _shot(block, "copies-older-origin.png")
+
+
 def test_when_every_extra_holds_work_the_armed_button_says_nothing_goes(block, src):
     """Round 2 (2026-10-21): it used to read "Click again to remove 0 folders"."""
     block.refresh("existing", src, _rows(), own_name=OWN)
