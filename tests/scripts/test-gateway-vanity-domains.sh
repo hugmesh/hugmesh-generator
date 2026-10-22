@@ -24,6 +24,11 @@
 #   D. controls, staged in a COPY of the chart (the repo tree is never touched): with
 #      the route half removed, or the Ingress half removed, or the route's `vanity`
 #      mark removed, the checks of B go red. Each control proves its edit landed.
+#   E. the wildcard's other side: every edge-AI Host route on the be-gateway
+#      (ai.<domain>) is claimed by an exact rule on the be-gateway's OWN Ingress. The
+#      fe Ingress admits `*.<domain>`, so a be Host route the be Ingress does not
+#      claim is handed to the fe-gateway's vanity route instead of to its own route.
+#      A staged copy of 20-gateway-be.yaml without the ai host turns E red.
 #
 # WHAT IT CANNOT PROVE: that anything WRITES `vanityDomains` (nothing does yet — no
 # builder reads the mesh manifest's domains[]), or that a live ingress-nginx and
@@ -37,6 +42,7 @@ REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 CHART="${REPO}/specs/cluster/charts/hugmesh-gateway"
 APPS="${REPO}/specs/cluster/apps"
 FE_APP="${APPS}/20-gateway-fe.yaml"
+BE_APP="${APPS}/20-gateway-be.yaml"
 for f in "${FE_APP}" "${CHART}/templates/configmap.yaml" "${CHART}/templates/service.yaml" "${CHART}/values.yaml"; do
     [ -e "${f}" ] || { echo "FAIL missing ${f}"; exit 1; }
 done
@@ -225,6 +231,55 @@ render "${stage}/chart" hugmesh-fe-gateway "${stage}/fe.yaml" "${SETS[@]}" > "${
 check_b "$(facts "${stage}/out.yaml")" \
     && ok "D positive control: an unedited staged copy passes" \
     || bad "D positive control: an unedited staged copy FAILED — staging is wrong, the controls above mean nothing"
+
+# ═════════════════════ E. be Host routes vs the fe wildcard ═════════════════════
+echo "== E. the edge-AI host is claimed by the be-gateway's own Ingress, not the fe wildcard =="
+# edge_ai_unclaimed RENDERED -> prints each edge-ai* route host the Ingress of the same
+# render does not admit; exit 3 when the render has no edge-ai route at all (vacuous).
+# matrix./mastodon. Host routes are deliberately NOT checked here: their edge path is
+# outside this check and has not been verified.
+edge_ai_unclaimed() {
+    python3 - "$(facts "$1")" <<'PY'
+import json, sys
+f = json.loads(sys.argv[1])
+hosts = sorted({h for rid, preds in f["route_hosts"].items() if rid.startswith("edge-ai")
+                for p in preds for h in p[len("Host="):].split(",")})
+if not hosts:
+    sys.exit(3)
+missing = [h for h in hosts if h not in f["ingress_hosts"]]
+print(" ".join(missing))
+sys.exit(1 if missing else 0)
+PY
+}
+values_of "${BE_APP}" "${WORK}/be.yaml" || bad "E cannot read ${BE_APP}"
+render "${CHART}" hugmesh-be-gateway "${WORK}/be.yaml" > "${WORK}/e.yaml" \
+    || bad "E helm template failed: $(head -c 300 "${WORK}/render.err")"
+miss="$(edge_ai_unclaimed "${WORK}/e.yaml")"; rc=$?
+case "${rc}" in
+    0) ok "E every edge-ai route host is an exact rule on the be Ingress ($(jget "$(facts "${WORK}/e.yaml")" ingress_hosts))" ;;
+    3) bad "E the be render has no edge-ai Host route at all — nothing to check, refusing a vacuous pass" ;;
+    *) bad "E edge-ai route host(s) not admitted by the be Ingress: ${miss} (the fe wildcard would take them)" ;;
+esac
+# the fe side really is a wildcard over the same domain, or E's premise is gone
+jget "${A}" ingress_hosts | grep -aF '"*.hugmesh.net"' >/dev/null \
+    && ok "E premise: the fe Ingress admits *.hugmesh.net, so an unclaimed ai. host lands on the fe-gateway" \
+    || bad "E premise: the fe Ingress no longer admits *.hugmesh.net — re-read this check"
+# control: the same render from a staged app without the ai host goes red
+stage="${WORK}/stage-e"; mkdir -p "${stage}"; cp "${BE_APP}" "${stage}/app.yaml"
+python3 - "${stage}/app.yaml" <<'PY' || bad "E control: the ai host line is not present exactly once"
+import sys
+p = sys.argv[1]; s = open(p).read(); old = "            - ai.hugmesh.net\n"
+if s.count(old) != 1:
+    sys.exit(1)
+open(p, "w").write(s.replace(old, ""))
+PY
+values_of "${stage}/app.yaml" "${stage}/be.yaml"
+render "${CHART}" hugmesh-be-gateway "${stage}/be.yaml" > "${stage}/out.yaml" 2>/dev/null
+if edge_ai_unclaimed "${stage}/out.yaml" >/dev/null; then
+    bad "E control: with the ai host removed the check still passes — it would not notice"
+else
+    ok "E control: with the ai host removed from the be Ingress the check goes red"
+fi
 
 echo
 echo "== RESULT: ${P} passed, ${F} failed =="
