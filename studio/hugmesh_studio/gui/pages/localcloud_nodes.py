@@ -257,8 +257,10 @@ class LocalCloudNodesPage(QtWidgets.QWizardPage):
         self.record_pick.setMinimumContentsLength(24)
         self.record_pick.setToolTip(
             "The saved local mesh whose domain, domains, accounts and Tor choice the "
-            "node images take. Listed: the meshes that RAN first, newest first, then "
-            "drafts (saved before their first bring-up) marked 'never ran'.")
+            "node images take. Listed: the meshes that RAN first, newest first; then "
+            "the ones not running when saved (marked 'not run as saved', 'not running "
+            "when saved' or 'not seen running'); then drafts (saved before their "
+            "first bring-up) marked 'never ran'.")
         self.record_label.setBuddy(self.record_pick)
         self.record_pick.currentIndexChanged.connect(self._on_record_picked)
         prow.addWidget(self.record_label, 0, 0)

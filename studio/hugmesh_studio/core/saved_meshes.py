@@ -339,8 +339,42 @@ class SavedMesh:
 
     def ever_ran(self) -> bool:
         """Did this record's mesh run at all — at its save, or in an earlier version
-        of it that an Overwrite replaced? False only for a true draft."""
+        of it that an Overwrite replaced? False for a draft, and for a record whose
+        run cannot be dated (see :meth:`run_state`)."""
         return bool(self.last_ran_at())
+
+    def run_state(self) -> str:
+        """What the record can honestly say about whether its mesh ever ran:
+
+        * ``ran`` — it was up when saved (:meth:`ran_when_saved`);
+        * ``ran_before`` — an earlier version of it ran (:meth:`ran_before_at`);
+        * ``volumes`` — not up when saved, but the save found the compose project's
+          data volumes on disk, so the mesh came up at least once before (a save
+          after ``make stack-halt``);
+        * ``unchecked`` — the Docker mesh was down and the DevOps (kind) lane could
+          not be checked (``kind_running`` recorded as None): it may have been up;
+        * ``draft`` — nothing was up, the DevOps lane was checked and was down, and
+          no volume was found: the only case that may be called "never ran".
+
+        Only ``ran`` is imported by default on the node-image pages (unchanged:
+        :meth:`ran_when_saved`); this decides the WORDS and the picker order
+        (saved-meshes skeptic 3, 2026-10-21: an unknown kind lane and a halted mesh
+        with its volumes both read "NEVER RAN")."""
+        if self.ran_when_saved():
+            return "ran"
+        if self.ran_before_at():
+            return "ran_before"
+        if self.volume_count() > 0:
+            return "volumes"
+        seen = self.last_seen if isinstance(self.last_seen, dict) else {}
+        if "kind_running" in seen and seen.get("kind_running") is None:
+            return "unchecked"
+        return "draft"
+
+    def never_ran(self) -> bool:
+        """True only for a record that may be called one that never ran
+        (:meth:`run_state` is ``draft``)."""
+        return self.run_state() == "draft"
 
     def volume_count(self) -> int:
         return len(self.volumes.get("inventory") or [])
@@ -639,7 +673,8 @@ def records_for_checkout(generator_dir: str,
     (:meth:`SavedMesh.same_checkout` — same generator dir, same host), the ones that
     RAN first (:meth:`SavedMesh.ran_when_saved`), then the ones overwritten while
     nothing ran whose earlier version did (:meth:`SavedMesh.ran_before_at`), then the
-    true drafts, each group newest first.
+    ones that may have run (volumes on disk, or a DevOps lane nobody could check —
+    :meth:`SavedMesh.run_state`), then the true drafts, each group newest first.
 
     "Newest" is ``updated`` (a re-save moves a record forward), falling back to
     ``created`` and then the sortable id. Pure file reads, no docker. The order the
@@ -650,9 +685,8 @@ def records_for_checkout(generator_dir: str,
     mine = [r for r in scan()[0] if r.same_checkout(generator_dir, host)]
     mine.sort(key=lambda r: (_stamp(r.updated) or _stamp(r.created), r.id),
               reverse=True)
-    return ([r for r in mine if r.ran_when_saved()]
-            + [r for r in mine if not r.ran_when_saved() and r.ever_ran()]
-            + [r for r in mine if not r.ever_ran()])
+    rank = {"ran": 0, "ran_before": 1, "volumes": 2, "unchecked": 2, "draft": 3}
+    return sorted(mine, key=lambda r: rank.get(r.run_state(), 3))   # stable: newest first
 
 
 def latest_for_checkout(generator_dir: str,
@@ -996,15 +1030,24 @@ def capture(generator_dir: str, cfg, node, boot, *, label: str = "",
                 prior = ""
         if prior:
             rec.last_seen["ran_before_at"] = prior
+        # Only a save that CHECKED both lanes and found no data volume may say the
+        # mesh has not had its first bring-up (SavedMesh.run_state): an unknown
+        # DevOps lane may have been up, and volumes on disk prove an earlier one.
+        vols = rec.volume_count()
         rec.notes.append(
             "Saved while the local Docker mesh was not running"
-            + (" (and neither was the DevOps lane)" if kind_running is False else "")
+            + (" (and neither was the DevOps lane)" if kind_running is False else
+               " (the DevOps lane could not be checked: its kind probe did not "
+               "answer)" if kind_running is None else "")
             + ": this record is the configuration as it was being worked on. "
             + (f"An earlier version of this saved mesh ran (last seen up {prior}); "
-               "this configuration has not run yet. " if prior else "")
+               "this configuration has not run yet. " if prior else
+               f"{vols} data volume(s) of this mesh were on disk, so it came up "
+               "before; this configuration was not running when saved. " if vols
+               else "")
             + "'Load into the form' and then 'Generate && start' (or 'Start DevOps "
               "lane') brings it up"
-            + ("." if prior else
+            + ("." if (prior or vols or kind_running is None) else
                "; a Restore needs credential files that a first bring-up has not "
                "minted yet, and says so instead of starting."))
     # WHAT THE RECORD IS. `config` is the page FORM's configuration, not a read-back

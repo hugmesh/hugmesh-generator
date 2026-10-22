@@ -449,9 +449,21 @@ class CodeFoldersWidget(QtWidgets.QGroupBox):
         else:
             blocked = total - made - missing
             text = (f"Copies for this domain: {made} of {total} made, in "
-                    f"{os.path.basename(ws.folder)}/ (each named "
+                    f"{os.path.basename(ws.folder)}/ (each "
+                    + ("is" if made else "will be") + f" named "
                     f"<app>.{ws.slug}; its git remote ‘{dw.remote_name(ws.slug)}’ "
                     "is the build checkout it was copied from)")
+            older = dw.older_remote_copies(ws)
+            if older:
+                names = sorted({r for _a, r in older})
+                text += (f". {len(older)} older cop{'y' if len(older) == 1 else 'ies'}"
+                         f" (made before that rule) still call"
+                         f"{'s' if len(older) == 1 else ''} it "
+                         + " / ".join(f"‘{n}’" for n in names) + ": "
+                         + ", ".join(a for a, _r in older[:4])
+                         + (" …" if len(older) > 4 else "")
+                         + f" — in those, push with git push {names[0]} "
+                         f"domain/{ws.slug}")
             if blocked:
                 first = next(r for r in ws.repos if not r.cloned and r.reason)
                 text += (f". {blocked} cannot be made yet: {first.reason}")
