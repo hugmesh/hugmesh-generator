@@ -147,19 +147,13 @@ REPO_ROOT="$(cd "${HERE}/.." && pwd)"
 # docs/ORG-MOVE-TODO.md for the remaining non-GitHub sibling flips.
 GIT_BASE="${GIT_BASE:-https://github.com/hugmesh}"
 
-# ── LEGACY_COMPAT — pre-rebrand admission-stamp name ────────────────────────
-# ingest-foreign-base.sh WRITES `.hugmesh-mesh-admitted`. A quarantine snapshot
-# admitted by an older generator (and still in REPO_BASE_CACHE) carries the
-# pre-rebrand name, and re-admitting is not free — so every READ tries the new
-# name first and falls back. Retire once no cache can hold a pre-rebrand snapshot.
+# The admission stamp ingest-foreign-base.sh WRITES into a quarantine snapshot.
 ADMIT_STAMP=".hugmesh-mesh-admitted"
-ADMIT_STAMP_LEGACY_COMPAT=".snapdragon-mesh-admitted"
 
-# _admit_stamp_path DIR -> echoes the admission stamp inside DIR (new spelling
-# first, LEGACY_COMPAT fallback); returns 1 and echoes nothing when neither exists.
+# _admit_stamp_path DIR -> echoes the admission stamp inside DIR; returns 1 and
+# echoes nothing when it does not exist.
 _admit_stamp_path() {
-  if   [[ -f "$1/${ADMIT_STAMP}" ]];               then printf '%s\n' "$1/${ADMIT_STAMP}"
-  elif [[ -f "$1/${ADMIT_STAMP_LEGACY_COMPAT}" ]]; then printf '%s\n' "$1/${ADMIT_STAMP_LEGACY_COMPAT}"
+  if [[ -f "$1/${ADMIT_STAMP}" ]]; then printf '%s\n' "$1/${ADMIT_STAMP}"
   else return 1; fi
 }
 GIT_REF="${GIT_REF:-main}"

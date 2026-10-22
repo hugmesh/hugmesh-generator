@@ -4,11 +4,8 @@
 #
 # The patch pass rewrites SOURCE FILES in ./.stack-src that `docker compose build`
 # then consumes, so a sloppy rewrite silently corrupts an image build rather than
-# failing loudly. The case that motivated this suite: the pom-dependency remover
-# treated `<dependency>` as always opening a MULTI-LINE element, so on a pom whose
-# other dependencies are written on ONE line it swallowed every line between the
-# first single-line dependency and the next multi-line close — 101 lines gone from
-# a 1-dependency edit, and the result still parsed as valid XML.
+# failing loudly. (Sections 1-4 tested a pom-dependency remover for a pre-rebrand
+# Maven coordinate; it was retired on 2026-10-21 once no repo declared it.)
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -21,90 +18,6 @@ pass=0 fail=0
 ok()   { echo "  ok   $1"; pass=$((pass+1)); }
 bad()  { echo "  FAIL $1" >&2; fail=$((fail+1)); }
 check(){ if [ "$2" = "$3" ]; then ok "$1"; else bad "$1 (expected '$3', got '$2')"; fi; }
-
-# ── fixture: a pom shaped like hugmesh-remote-fragment's — single-line deps around
-#    a multi-line pre-rename private dependency, and prose that NAMES the old
-#    coordinate (which must not itself trigger anything).
-make_pom() { # <dir> <with-stale-dep: yes|no>
-  mkdir -p "$1"
-  {
-    echo '<project>'
-    echo '  <dependencies>'
-    # ONE single-line dependency here, deliberately: an odd count before the
-    # multi-line element below is what exposes a rewriter that assumes
-    # <dependency> always opens a multi-line block (it then stays "open" across
-    # the prose and swallows it together with the element it was meant to drop).
-    echo '    <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-webflux</artifactId></dependency>'
-    echo '    <!-- snapdragon-commons — prose mentioning snapdragon-parent and the old'
-    echo '         systems.snapdragon coordinate. Comments must survive verbatim. -->'
-    if [ "$2" = "yes" ]; then
-      echo '    <dependency>'
-      echo '      <groupId>systems.snapdragon</groupId>'
-      echo '      <artifactId>snapdragon-commons</artifactId>'
-      echo '      <version>2.0.0</version>'
-      echo '      <exclusions>'
-      echo '        <exclusion>'
-      echo '          <groupId>org.postgresql</groupId>'
-      echo '          <artifactId>postgresql</artifactId>'
-      echo '        </exclusion>'
-      echo '      </exclusions>'
-      echo '    </dependency>'
-    fi
-    echo '    <dependency><groupId>com.fasterxml.jackson.core</groupId><artifactId>jackson-databind</artifactId></dependency>'
-    echo '    <dependency>'
-    echo '      <groupId>io.projectreactor</groupId>'
-    echo '      <artifactId>reactor-test</artifactId>'
-    echo '    </dependency>'
-    echo '  </dependencies>'
-    echo '</project>'
-  } > "$1/pom.xml"
-}
-
-deps() { grep -o '<dependency>' "$1" | wc -l | tr -d ' '; }
-
-echo "== 1. the stale dependency is removed, and NOTHING else is =="
-SRC="${WORK}/a"; make_pom "${SRC}/svc" yes
-before_deps="$(deps "${SRC}/svc/pom.xml")"
-bash "${PATCH_SH}" "${SRC}" >/dev/null
-check "exactly one <dependency> element removed" \
-      "$(( before_deps - $(deps "${SRC}/svc/pom.xml") ))" "1"
-check "the pre-rename coordinate is gone" \
-      "$(grep -c '<groupId>systems\.snapdragon<' "${SRC}/svc/pom.xml" || true)" "0"
-check "the single-line webflux dependency survived" \
-      "$(grep -c 'spring-boot-starter-webflux' "${SRC}/svc/pom.xml" || true)" "1"
-check "the single-line jackson dependency survived" \
-      "$(grep -c 'jackson-databind' "${SRC}/svc/pom.xml" || true)" "1"
-check "the trailing multi-line dependency survived" \
-      "$(grep -c 'reactor-test' "${SRC}/svc/pom.xml" || true)" "1"
-check "prose naming the old coordinate survived" \
-      "$(grep -c 'prose mentioning snapdragon-parent' "${SRC}/svc/pom.xml" || true)" "1"
-if python3 -c "import xml.etree.ElementTree as ET,sys; ET.parse(sys.argv[1])" \
-     "${SRC}/svc/pom.xml" 2>/dev/null; then ok "the result is well-formed XML"
-else bad "the result is well-formed XML"; fi
-
-echo "== 2. idempotent: a second pass is a no-op =="
-cp "${SRC}/svc/pom.xml" "${WORK}/after-first"
-bash "${PATCH_SH}" "${SRC}" >/dev/null
-if diff -q "${WORK}/after-first" "${SRC}/svc/pom.xml" >/dev/null; then ok "second pass changed nothing"
-else bad "second pass changed the file"; fi
-
-echo "== 3. a clean checkout is untouched =="
-SRC2="${WORK}/b"; make_pom "${SRC2}/svc" no
-cp "${SRC2}/svc/pom.xml" "${WORK}/clean-before"
-bash "${PATCH_SH}" "${SRC2}" >/dev/null
-if diff -q "${WORK}/clean-before" "${SRC2}/svc/pom.xml" >/dev/null; then ok "no stale coordinate => byte-identical"
-else bad "a clean pom was rewritten"; fi
-
-echo "== 4. a checkout that IMPORTS the old package is refused, not mangled =="
-SRC3="${WORK}/c"; make_pom "${SRC3}/svc" yes
-mkdir -p "${SRC3}/svc/src/main/java"
-printf 'import systems.snapdragon.commons.Roles;\n' > "${SRC3}/svc/src/main/java/App.java"
-cp "${SRC3}/svc/pom.xml" "${WORK}/imported-before"
-out="$(bash "${PATCH_SH}" "${SRC3}" 2>&1 || true)"
-if diff -q "${WORK}/imported-before" "${SRC3}/svc/pom.xml" >/dev/null; then ok "pom left alone when the package is imported"
-else bad "patched a pom whose source imports the package"; fi
-case "${out}" in *"IMPORTED in source"*) ok "the refusal is reported" ;;
-                 *) bad "the refusal is reported (got: ${out})" ;; esac
 
 echo "== 5. the http-blocker settings.xml patch still applies + is idempotent =="
 SRC4="${WORK}/d"; mkdir -p "${SRC4}/svc"

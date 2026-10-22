@@ -11,7 +11,7 @@
 # WHY THIS EXISTS. The catalog generators discover repos by `pathsExist` on a
 # FIXED descriptor filename. The HugMesh rebrand renamed that file to
 # `hugmesh-deploy.yaml` repo by repo, leaving the pre-rebrand
-# `snapdragon-deploy.yaml` live in the ones that had not moved yet, while both
+# spelling live in the ones that had not moved yet, while both
 # generators filtered on ONE name only. The unmatched repos were invisible to the
 # catalog — and NOTHING reported it: an scmProvider filter that matches no repo is
 # not an error, the ApplicationSet just generates no Application. No event, no

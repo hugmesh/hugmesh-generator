@@ -10,13 +10,9 @@
 #
 # FILENAME. `hugmesh-deploy.yaml` (this example) is THE name: it is what
 # publish-tenant-set.sh synthesises and what templates/archetypes/generator/
-# recipe.yaml records as frozen. The pre-rebrand spelling
-# `snapdragon-deploy.yaml` stays matched by a generator filter as LEGACY_COMPAT
-# — adopter repos this GitOps tree does not own still ship it on disk, and
-# dropping the filter makes them silently invisible to the catalog. Ship exactly
-# ONE of the two (new adopters: this one), and register the repo + the name it
-# ships in catalog/adopters.yaml, or scripts/validate-catalog-discovery.sh fails
-# the build.
+# recipe.yaml records as frozen, and the only name the generator filters accept.
+# Register the repo + the name it ships in catalog/adopters.yaml, or
+# scripts/validate-catalog-discovery.sh fails the build.
 #
 # This file is the human-facing contract; the actual manifests live in the repo's
 # deploy/ kustomize (image tag, ports, replicas, namespace, route). An admin
