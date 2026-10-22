@@ -1643,7 +1643,10 @@ _BD_BUNDLE_SOURCE = BuilderDefault(
 # Studio must not invent one. test_field_scope.py derives this set from the builder scripts
 # and asserts equality, so a builder that grows or loses a role-class concept fails here
 # rather than letting the tuple go stale into a fiction.
-_STANDALONE_CLASS_GATED_PLATFORMS = ("x86", "rpi5")
+# The two Orange Pi node-axis builders joined on 2026-10-21: their node roles refuse
+# --standalone (a cluster node joins the mesh) while their desktop composes it, exactly
+# the rpi5 split, and they now carry ROLE_CLIENT for it.
+_STANDALONE_CLASS_GATED_PLATFORMS = ("x86", "rpi5", "orangepi5", "orangepi4-lts")
 
 # The CLUSTER-IDENTITY trio — the three fields NetworkPage's "Identity & domain"
 # collapsible collects (network.py:494/:499/:504: "Public apex domain", "Games domain",
