@@ -1567,13 +1567,16 @@ provision_kubernetes() {
     done
     sysctl --system >/dev/null 2>&1 || true
 
+    # Before any kubeadm run (here, or a manual join when bootstrap=false): kubeadm
+    # restarts the kubelet, and the kubelet applies --node-labels only when it first
+    # registers the node.
+    _stage_kubelet_node_labels
+
     [ "${bootstrap}" = "true" ] || {
         log "K8s config staged; skipping live bootstrap (set kubernetes.bootstrap=true to run kubeadm)"
         return 0
     }
     have kubeadm || { warn "kubeadm not installed"; return 0; }
-    # Before kubeadm restarts the kubelet: labels apply only at first registration.
-    _stage_kubelet_node_labels
     rc-service containerd start 2>/dev/null || true
 
     case "${role}" in

@@ -75,15 +75,15 @@ EOF
 printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> /out/rc-service.argv\nexit 0\n' > "${WORK}/stub/rc-service"
 chmod +x "${WORK}/stub/"*
 
-# run_case NAME K8S_ROLE NODE_LABELS_JSON — provision, then evaluate the kubelet.
+# run_case NAME K8S_ROLE NODE_LABELS_JSON [BOOTSTRAP] — provision, then evaluate the kubelet.
 run_case() {
-  local name="$1" krole="$2" labels="$3"
+  local name="$1" krole="$2" labels="$3" boot="${4:-true}"
   local keys="${WORK}/keys-${name}" out="${WORK}/out-${name}"
   mkdir -p "${keys}" "${out}"
   cat > "${keys}/provision.json" <<EOF
 { "version": 1, "hostname": "hugmesh-${name}", "timezone": "UTC",
   "headscale": { "enabled": false }, "tailscale": { "enabled": false },
-  "kubernetes": { "role": "${krole}", "bootstrap": true,
+  "kubernetes": { "role": "${krole}", "bootstrap": ${boot},
     "join": { "api_server": "192.0.2.10:6443", "token": "abcdef.0123456789abcdef",
               "ca_cert_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000000" } },
   "hugmesh": { "role": "${name}", "cluster_domain": "hugmesh.net", "node_labels": ${labels} } }
@@ -157,6 +157,13 @@ grep -a '^label node .*hugmesh.net/pki=true --overwrite' "${o}/kubectl.argv" >/d
   || bad "control-plane kubectl label path lost (kubectl argv: $(tr '\n' '|' < "${o}/kubectl.argv" 2>/dev/null))"
 grep -aF -- '--node-labels=hugmesh.net/pki=true' "${o}/cmdline" >/dev/null \
   && ok "control plane also registers with its labels" || bad "control plane kubelet has no --node-labels"
+
+echo "== case bootstrap=false: labels staged for a later manual kubeadm join =="
+o="$(run_case manual worker '{ "hugmesh.net/compute": "gpu" }' false)"
+[ ! -s "${o}/kubeadm.argv" ] && ok "bootstrap=false: kubeadm was not run" || bad "bootstrap=false still ran kubeadm"
+grep -aF -- '--node-labels=hugmesh.net/compute=gpu' "${o}/cmdline" >/dev/null \
+  && ok "bootstrap=false: kubelet command line already carries the labels" \
+  || bad "bootstrap=false: a manual join would register without labels: $(cat "${o}/cmdline")"
 
 echo "== case no labels: kubelet command line unchanged =="
 o="$(run_case nolabels worker '{}')"
