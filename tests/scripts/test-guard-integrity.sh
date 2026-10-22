@@ -812,6 +812,16 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # RUNNING this file on that branch (origin/main 298e5a72), not computed:
 #     198 of 238 suites are named by a pull_request-triggered workflow
 #     PASS the ungated SET matches its pin exactly (40 suite(s))
+#
+# 198 -> 198 (denominator 238 -> 239, ungated SET 40 -> 41) on 2026-10-22 for the
+# Windows/Linux mesh-node launcher parity suite: tests/docker-mesh-node/
+# test-launcher-parity.sh landed on disk, in .gitlab-ci.yml's
+# lint:mesh-node-launcher-parity and in `make mesh-node-launcher-parity-check`, but NOT
+# in shell-suites.yml (that change was not permitted to edit .github), so it is recorded
+# in PREMERGE_UNGATED as a wiring gap and the gated count does not move. MEASURED by
+# RUNNING this file on that branch (origin/main cdcc8fcd), not computed:
+#     198 of 239 suites are named by a pull_request-triggered workflow
+#     PASS the ungated SET matches its pin exactly (41 suite(s))
 PREMERGE_BASELINE="${GUARD_PREMERGE:-198}"
 
 # 182 -> 192 (denominator 205 -> 215) on 2026-09-30 for #385: the census gained a
