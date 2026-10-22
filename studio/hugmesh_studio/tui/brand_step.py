@@ -53,8 +53,7 @@ __all__ = ["SECTIONS", "SECTION_LOOK", "SECTION_SERVICES", "BrandView", "brand_v
            "TAILNET_CHOICES", "EGRESS_CHOICES", "REACH_RECORDED_ONLY", "OWN_REACH_HOME",
            "feed_identity", "feed_ways", "CLIENT_SIGNIN_NOTE", "CLIENT_LOOK_NOTE",
            "CLIENT_SERVICES_NOTE",
-           "CLIENT_WAYS_NOTE", "CLIENT_REACH_EFFECT", "SIGNIN_NOT_APPLIED",
-           "SIGNIN_DOCKER_APPLIED"]
+           "CLIENT_WAYS_NOTE", "CLIENT_REACH_EFFECT"]
 
 #: (number, title) — the window's four tabs, in the window's order.
 SECTIONS: tuple[tuple[int, str], ...] = (
@@ -130,6 +129,7 @@ SIGNIN_DOCKER_APPLIED = ("On the Docker mesh a domain's own sign-in is applied w
                          "sign-ins. The DevOps (kind) lane does not apply it yet (its "
                          "per-domain sign-in list ships empty): there every domain signs "
                          "in through the mesh.")
+__all__ += ["SIGNIN_NOT_APPLIED", "SIGNIN_DOCKER_APPLIED"]
 
 # ── per-domain reach (VPN and egress; Tor is the row's own onion) ───────────────────
 TAILNET_CHOICES: tuple[tuple[str, str], ...] = (
