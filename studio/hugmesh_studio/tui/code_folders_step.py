@@ -70,8 +70,9 @@ class CodeFoldersScreen:
                "app that domain has, each named <app>.<domain>.",
                f"Copies folder: {plan.root}",
                f"Copied from: {where}",
-               "Each copy's git remote is named for its domain (git push <domain> "
-               "domain/<domain>) and is the build checkout it was copied from.",
+               "Each copy's git remote is named for its domain's folder (git push "
+               "<folder> domain/<folder>) and is the build checkout it was copied "
+               "from.",
                dw.EDITS_NOTE, ""]
         if plan.root_problem:
             out += [f"No copy can be made: {plan.root_problem}", ""]
@@ -88,6 +89,16 @@ class CodeFoldersScreen:
                 if blocked and not ws.problem:
                     out.append(f"       {len(blocked)} cannot be made yet: "
                                f"{blocked[0].reason}")
+                # copies made before the remote was named for the domain kept
+                # 'origin': say which, or "git push <folder>" fails there
+                older = dw.older_remote_copies(ws)
+                if older:
+                    names = sorted({r for _a, r in older})
+                    out.append(f"       {len(older)} older cop"
+                               f"{'y' if len(older) == 1 else 'ies'} still call the "
+                               "build checkout " + " / ".join(names) + " (git push "
+                               f"{names[0]} domain/{ws.slug}): "
+                               + ", ".join(a for a, _r in older))
             for x in ws.extras:
                 out.append(f"       EXTRA {os.path.basename(x.path)}: {x.why}")
             for x in ws.claimed:
