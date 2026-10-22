@@ -72,6 +72,17 @@ def test_host_daemon_slugs_are_not_offered_and_are_dropped(platform):
     assert "tor" not in " ".join(args) and "egress-vpn" not in " ".join(args)
 
 
+def test_tui_anubis_row_follows_the_same_class_rule():
+    """TUI parity: the text-mode Network step's one row (anubis) applies on an Orange Pi
+    node row and not on the Orange Pi desktop row, like the GUI services table."""
+    from hugmesh_studio.tui.network_step import anubis_applies
+    assert anubis_applies(ImageConfig(mode="mesh", platform="orangepi5", role="pki")) == ""
+    assert anubis_applies(ImageConfig(mode="mesh", platform="orangepi4-lts",
+                                      role="frontend")) == ""
+    assert "desktop" in anubis_applies(ImageConfig(mode="mesh", platform="orangepi5",
+                                                   role="orangepi5"))
+
+
 def test_rpi5_keeps_tor():
     cfg = ImageConfig(mode="mesh", platform="rpi5", role="pki", optional_services=["tor"])
     strip_platform_unsupported(cfg)

@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from ..core.config import (
     ANUBIS_CHOICES, ANUBIS_LABELS, PLATFORM_FIELD_SUPPORT, SERVICE_DESCRIPTIONS,
-    anubis_locked, anubis_shown, services_picker_hidden,
+    anubis_locked, anubis_shown, services_picker_hidden, services_catalog, _OPI_NODE_PLATFORMS,
 )
 
 #: What each command word sets. Longest spelling first is irrelevant (exact match).
@@ -39,6 +39,10 @@ def anubis_applies(cfg) -> str:
         return f"the {cfg.platform} builder has no --optional-services"
     if services_picker_hidden(cfg):
         return "this image bakes no cluster services"
+    # An Orange Pi DESKTOP row: its builder takes no --optional-services (only the
+    # Orange Pi node roles do) — the GUI offers it no services either.
+    if (getattr(cfg, "platform", "") or "x86") in _OPI_NODE_PLATFORMS and not services_catalog(cfg):
+        return f"the {cfg.platform} desktop bakes no cluster services (only its node roles do)"
     return ""
 
 
