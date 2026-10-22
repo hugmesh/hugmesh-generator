@@ -28,7 +28,10 @@ how big a file would fit).
 
 WHERE AN OVERRIDE CAN SHOW. A brand's own look is served on the Docker mesh only (D18).
 In override mode on any other path every edit control is drawn DISABLED with the
-sentence that says why, never hidden: a control that is missing cannot say why.
+sentence that says why, never hidden: a control that is missing cannot say why. On the
+Docker mesh ``served_note`` says where it is served (the HTTPS front door, by Host),
+measured on the checkout (core/look_serving.own_look_sentence), so it never claims
+more than the mesh does.
 
 Slots never raise (an exception escaping a Qt slot aborts PyQt6): every write is guarded
 and lands in error_note instead.
@@ -38,7 +41,8 @@ from __future__ import annotations
 import os
 
 from ..qt import QtCore, QtGui, QtWidgets, Signal
-from ...core import (brand_images, brand_look, fonts as core_fonts, plain_words, theme,
+from ...core import (brand_images, brand_look, fonts as core_fonts, look_serving,
+                     plain_words, theme,
                      theme_presets)
 from ...core.branding_themes import PREMADE_THEMES, THEME_SPECS
 from ._look_shared import open_platform_preview, populate_preset_combo
@@ -108,10 +112,14 @@ class LookEditor(QtWidgets.QWidget):
 
     changed = Signal()
 
-    def __init__(self, model: brand_look.Look, *, path: str = "docker", parent=None):
+    def __init__(self, model: brand_look.Look, *, path: str = "docker",
+                 generator_dir: str = "", parent=None):
         super().__init__(parent)
         self.model = model
         self.path = path
+        #: the checkout whose front door the Docker sentence is measured on ("" = the
+        #: one this Studio runs from; core/look_serving.own_look_sentence)
+        self.generator_dir = generator_dir
         self.controls: dict[str, QtWidgets.QWidget] = {}
         self.source_labels: dict[str, QtWidgets.QLabel] = {}
         self.use_buttons: dict[str, QtWidgets.QPushButton] = {}
@@ -139,6 +147,14 @@ class LookEditor(QtWidgets.QWidget):
         self.path_note.setStyleSheet("color: #a65d00;")
         self.path_note.setVisible(False)
         lay.addWidget(self.path_note)
+        # Where an added domain's own look shows on a route that CAN show it (the
+        # Docker mesh): served by Host, or recorded only on a checkout whose front door
+        # does not serve it. Measured, never assumed (look_serving.door_serves_looks).
+        self.served_note = QtWidgets.QLabel()
+        self.served_note.setObjectName("look_served")
+        self.served_note.setWordWrap(True)
+        self.served_note.setVisible(False)
+        lay.addWidget(self.served_note)
 
         lay.addWidget(self._colours_group())
         lay.addWidget(self._font_group())
@@ -676,6 +692,11 @@ class LookEditor(QtWidgets.QWidget):
         own_look_shows = (self.model.mode != "override"
                           or path in brand_look.PATHS_WITH_OWN_LOOK)
         self.path_note.setVisible(not own_look_shows)
+        served = (self.model.mode == "override"
+                  and path in brand_look.PATHS_WITH_OWN_LOOK)
+        self.served_note.setText(
+            look_serving.own_look_sentence(path, self.generator_dir) if served else "")
+        self.served_note.setVisible(served)
         for field, control in self.controls.items():
             row = control.parentWidget()
             if row is not None:

@@ -288,7 +288,10 @@ class DomainServicesScreen:
         from .themes import LookText
         m = view.look_model()
         if self._look_text is None or self._look_text.model is not m:
-            self._look_text = LookText(m, path=self.route)
+            self._look_text = LookText(
+                m, path=self.route,
+                generator_dir=getattr(getattr(view.session, "host", None),
+                                      "generator_dir", "") or "")
         return self._look_text
 
     def _open_section(self, j, view, n: int) -> None:
@@ -429,8 +432,8 @@ class DomainServicesScreen:
                     self._look(view).feed(line)
                     view.commit_look()
                 else:
-                    j.status = ("This brand's own look is shown on the Docker mesh "
-                                "only; it is not editable on this route.")
+                    j.status = ("Not editable on this route. "
+                                + brand_step.brand_look.DOCKER_ONLY_SENTENCE)
                 return
             if self.section == 1 and verb not in ("n", "p"):
                 # the domain's own sign-in (the window's Identity tab controls)

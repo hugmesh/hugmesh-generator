@@ -772,3 +772,26 @@ def test_the_unaffiliated_reason_is_one_sentence_on_both_faces(qapp, tmp_path):
     assert picker.note.text() == step.reason.text() == sbs.UNAFFILIATED_REASON
     assert sbs.UNAFFILIATED_REASON in text
     assert picker.combo.count() == 0 and sbs.CREATE_LABEL not in text
+
+
+@pytest.mark.parametrize("path,where", [("docker", "repo"), ("docker", "bare"),
+                                        ("image", "repo"), ("fleet", "repo")])
+def test_where_a_domains_own_look_shows_is_one_sentence_on_both_faces(
+        qapp, tmp_path, path, where):
+    """The window's Look tab and the text screen's look section say the same thing
+    about where an added domain's own look shows (core/look_serving): served by Host on
+    the Docker mesh, recorded only on a checkout whose door does not serve it, not
+    applied on the image and Fleet routes."""
+    from hugmesh_studio.core import brand_look, look_serving
+    from hugmesh_studio.gui.pages._lookeditor import LookEditor
+    gen = (os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+           if where == "repo" else str(tmp_path))
+    base = brand_look.Look({"primary": "#3355aa"}).effective()
+    ed = LookEditor(brand_look.Look({}, base=base), path=path, generator_dir=gen)
+    text = "\n".join(themes.LookText(brand_look.Look({}, base=base), path=path,
+                                     generator_dir=gen).lines())
+    want = look_serving.own_look_sentence(path, gen)
+    gui = ed.served_note.text() if path == "docker" else ed.path_note.text()
+    assert gui == want
+    assert want in text
+    ed.deleteLater()

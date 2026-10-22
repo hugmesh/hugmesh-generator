@@ -49,7 +49,8 @@ __all__ = [
     "LOOK_FIELDS", "LOOK_DEFAULTS", "CFG_FIELDS", "IDENTITY_FIELDS", "PICTURE_FIELDS",
     "SUPERBRAND", "OWN", "Resolved", "LookError", "LookBudgetError",
     "INHERITED_TEXT", "OWN_TEXT", "USE_SUPERBRAND", "USE_SUPERBRAND_ARMED",
-    "PATHS_WITH_OWN_LOOK", "DOCKER_ONLY_SENTENCE", "VANTA_UNSELECTABLE",
+    "PATHS_WITH_OWN_LOOK", "DOCKER_ONLY_SENTENCE", "DOCKER_SERVED_SENTENCE",
+    "DOCKER_NOT_SERVED_SENTENCE", "VANTA_UNSELECTABLE",
     "normalise", "effective_look", "resolve", "look_css",
     "LOOK_CSS_BUDGET", "ENV_ENTRY_LIMIT", "ENV_VALUE_LIMIT", "CONFIGMAP_LIMIT",
     "Budget", "budget", "picture_cost", "picture_fits", "fits_configmap",
@@ -132,10 +133,24 @@ OWN_TEXT = "this brand's own"
 USE_SUPERBRAND = "Use the superbrand's value"
 USE_SUPERBRAND_ARMED = "Click again to use the superbrand's value"
 #: Where a brand's own look can be shown (D18): the Docker mesh only. Everywhere else the
-#: override controls are drawn disabled with this sentence.
+#: override controls are drawn disabled with DOCKER_ONLY_SENTENCE.
 PATHS_WITH_OWN_LOOK: tuple[str, ...] = ("docker",)
-DOCKER_ONLY_SENTENCE = ("This brand's own look is shown on the Docker mesh only. "
-                        "Tor addresses show the superbrand's look.")
+#: The image and Fleet routes: what the page says, plainly, beside the disabled controls.
+DOCKER_ONLY_SENTENCE = ("Not applied on this route yet: a built image and a Fleet cluster "
+                        "show the mesh's own look on every domain. A domain's own look "
+                        "is served on the Docker mesh only.")
+#: The Docker route, when this checkout's front door serves looks by Host
+#: (core/look_serving.door_serves_looks measures it; look_serving.own_look_sentence
+#: picks the line).
+DOCKER_SERVED_SENTENCE = ("On the Docker mesh this domain's own look is served at its own "
+                          "name through the HTTPS front door, from the first page load "
+                          "after the Studio starts the mesh; the command "
+                          "\"make view LANE=compose\" opens it there. The plain http "
+                          "door and Tor addresses show the mesh's own look.")
+#: The Docker route, on a checkout whose front door does not serve looks by Host.
+DOCKER_NOT_SERVED_SENTENCE = ("Recorded only: this checkout's Docker front door does not "
+                              "serve a domain's own look, so every domain shows the "
+                              "mesh's own look.")
 #: The four vanta effects are kept in the record but cannot be picked (D6).
 VANTA_UNSELECTABLE = "saved but not selectable"
 

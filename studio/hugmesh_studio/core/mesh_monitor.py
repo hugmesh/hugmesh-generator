@@ -1530,7 +1530,7 @@ def _catalog_and_doors(generator_dir: str, env=None):
     catalog = []
     kind_ports = {KIND_HTTPS_PORT_DEFAULT}
     try:
-        catalog = view_doors.load(generator_dir, env)
+        catalog = view_doors.load_with_generated(generator_dir, env)
         for d in catalog:
             # ONLY the kind lanes' rows name the pinning port. The compose-tls row's
             # upstream is https://127.0.0.1:${PUBLIC_HTTPS_PORT:-8488} — the tls-front

@@ -26,7 +26,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 
 from . import devops_tools, e2e_catalogue, own_casdoor, proc_group, proc_text
-from . import resource_limits, stack_limits
+from . import brand_look, look_serving, resource_limits, stack_limits
 from .domain_services import TOR_SLUG_RE as _TOR_SLUG_RE_SHARED
 from .local_services import (KIND_ADDONS_ENV, KIND_ADDONS_NONE, federation_env,
                              kind_addon_default_selection, kind_addon_env,
@@ -215,7 +215,9 @@ class LocalStackNode:
                  own_idp_domains: tuple[str, ...] = (),
                  kind_addons=None,
                  tor_domains=(),
-                 external_idp_domains=()):
+                 external_idp_domains=(),
+                 superbrand_look=None,
+                 look_brands=None):
         self.generator_dir = os.path.abspath(generator_dir)
         self.compose_file = os.path.join(self.generator_dir, _COMPOSE_FILE)
         self.env = env
@@ -353,6 +355,24 @@ class LocalStackNode:
         # each in the gateway's host map (hugmesh-gateway#38). Empty (the default, and
         # every caller from before this existed) passes nothing new.
         self.tor_domains = tuple(tuple(e) for e in (tor_domains or ()))
+        # A domain's own look on the HTTPS front door (theme survey item B,
+        # core/look_serving.py): the superbrand's recorded look and the added domains
+        # (``look_serving.ServedBrand``, record order). At bring-up they become
+        # tests/stack/.looks/ — per-domain stylesheets, one by-host/<name>/ folder per
+        # domain with its own look, and the extra `make view` rows; an EMPTY list
+        # (a mesh the Studio configured with no added domain) removes an old folder.
+        # Written by start() only (see _write_looks).
+        # None (the default: the stack tray, the pod views and every caller that knows
+        # nothing about domains) leaves tests/stack/.looks/ exactly as it is, so a
+        # tray Start/Stop keeps serving the looks the last Studio start wrote.
+        self.superbrand_look = dict(superbrand_look or {})
+        self.look_brands = None if look_brands is None else tuple(look_brands)
+        #: Why the looks could not be written at the last bring-up ("" when they were).
+        #: Every `make` this node runs afterwards prints it as a "[looks] ..." line at
+        #: the top of the run log (and of the returned message); the bring-up itself
+        #: goes on (best-effort, like .theme.css), and the domains then show the mesh's
+        #: own look.
+        self.looks_error = ""
 
     @property
     def web_url(self) -> str:
@@ -1013,13 +1033,20 @@ class LocalStackNode:
         replays, so streaming them cannot double anything."""
         env = self._build_env(extra_env)
         argv = ["make", target, *[str(a) for a in (args or ())]]
+        # A domain look the Studio refused to write (core/look_serving.py) is said
+        # here, first, in the log the operator watches: the folder was cleared, so the
+        # domains show the mesh's own look although their Look tabs hold their own.
+        looks_note = f"[looks] {self.looks_error}" if self.looks_error else ""
+        if looks_note and on_line is not None:
+            on_line(looks_note)
         if on_line is None and cancel is None:
             try:
                 r = subprocess.run(argv, cwd=self.generator_dir, env=env,
                                    capture_output=True, text=True, timeout=timeout)
-                return (r.returncode == 0), (r.stderr or r.stdout).strip()
+                out = (r.stderr or r.stdout).strip()
+                return (r.returncode == 0), (f"{looks_note}\n{out}" if looks_note else out)
             except (OSError, subprocess.SubprocessError) as e:
-                return False, str(e)
+                return False, (f"{looks_note}\n{e}" if looks_note else str(e))
         try:
             proc = subprocess.Popen(
                 argv, cwd=self.generator_dir, env=env,
@@ -1034,6 +1061,8 @@ class LocalStackNode:
                 on_line(why)
             return False, why
         tail: collections.deque[str] = collections.deque(maxlen=400)
+        if looks_note:
+            tail.append(looks_note)
         deadline = time.monotonic() + timeout
         cancelled = timed_out = False
 
@@ -1088,6 +1117,34 @@ class LocalStackNode:
         return any(not self._image_present(f"{_COMPOSE_PROJECT}-{s}")
                    for s in PRIVATE_ARTIFACT_SERVICES)
 
+    def _write_looks(self) -> None:
+        """A DOMAIN'S OWN LOOK (core/look_serving.py): write tests/stack/.looks/ for
+        THIS bring-up, best-effort like .theme.css (a failure never blocks the start;
+        it is kept in ``looks_error`` and :meth:`_make` prints it at the top of the
+        run log). The Makefile adds the mount overlay while .looks/by-host exists, so
+        a mesh configured with no added domain clears the folder and comes up exactly
+        as before.
+
+        Called by :meth:`start` only, never from :meth:`_build_env`: every other verb
+        (stop, seed, e2e, clean) runs with whatever config its page happened to hold,
+        and the e2e page's is the empty default, so writing there would delete the
+        looks the last start wrote. And only a node that was TOLD the domains
+        (``look_brands`` not None) touches the folder: "knows nothing about domains"
+        (the tray's bare node) is not "configured zero domains"."""
+        if self.look_brands is None:
+            return
+        self.looks_error = ""
+        try:
+            look_serving.write(self.generator_dir, self.superbrand_look, self.look_brands)
+        except brand_look.LookError as exc:
+            # write() has cleared the folder: no look from an earlier start is
+            # served under this record
+            self.looks_error = (f"domain looks not served: {str(exc).rstrip('.')}. "
+                                "Every domain shows the mesh's own look on this start.")
+        except OSError as exc:
+            self.looks_error = (f"domain looks not written: {str(exc).rstrip('.')}. "
+                                "Every domain shows the mesh's own look on this start.")
+
     def start(self, on_line=None, cancel=None) -> tuple[bool, str]:
         # Fail-fast for EVERY caller — the tray's "start" invokes start() directly
         # (not via LocalMeshBootstrap.up()), and without this gate a cold box gets
@@ -1099,6 +1156,7 @@ class LocalStackNode:
         # stack-clone + build + up -d. COLD (service images absent) compiles ~24
         # images and needs the generous ceiling — the flat 1800 s here used to kill
         # every healthy first bring-up at minute 30 and report it FAILED.
+        self._write_looks()
         cold = self.cold_build_expected()
         if cold and on_line is not None:
             on_line("[stack-up] COLD BUILD: service images are absent, so this first "
