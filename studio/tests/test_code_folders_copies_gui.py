@@ -210,7 +210,8 @@ def test_removing_extra_copies_takes_two_clicks(block, src):
     assert rm.text() == "Click again to remove 2 folders"
     _sane(rm)
     _sane(block.cancel_buttons["live.example"])
-    assert ("a plain copy: no edits, commits, stashes or ignored files of its own"
+    assert ("a plain copy: no edits, commits, stashes, ignored files, hooks or settings "
+            "of its own, and the build checkout has every commit"
             in block.extra_labels["live.example"].text())
     assert rm.isEnabled()
     shot = _shot(block, "copies-3-armed.png")
@@ -224,6 +225,33 @@ def test_removing_extra_copies_takes_two_clicks(block, src):
                                              "hugmesh-user-ui.live.example"]
     _shot(block, "copies-4-removed.png")
     del shot
+
+
+def test_the_last_outcome_goes_when_the_domains_services_change(block, src):
+    """Round 2 (2026-10-21, skeptic 2's sk2-1-extra.png): "Made 4 copies for
+    live.example." stayed on screen after owncast was un-ticked, over a mesh that no
+    longer had what it described. A re-read after the copy keeps it; a change of the
+    services drops it."""
+    block.refresh("existing", src, _rows(), own_name=OWN)
+    block.clone_buttons["live.example"].click()
+    assert block.wait_idle()
+    _settle()
+    assert block.result_note.isVisible()
+    assert block.result_note.text() == "Made 4 copies for live.example."
+    block.refresh("existing", src, _rows(), own_name=OWN)        # nothing changed
+    assert block.result_note.isVisible()
+    block.refresh("existing", src, _rows(live_services=()), own_name=OWN)
+    _settle()
+    assert not block.result_note.isVisible() and block.result_note.text() == ""
+    assert not block.copy_btn.isVisible() and not block.result_path.isVisible()
+
+
+def test_the_copies_line_names_the_domains_git_remote(block, src):
+    block.refresh("existing", src, _rows(), own_name=OWN)
+    _settle()
+    text = block.copy_labels["live.example"].text()
+    assert "its git remote ‘live.example’ is the build checkout" in text
+    assert block.copy_labels["live.example"].isVisible()
 
 
 def test_keep_them_disarms_and_removes_nothing(block, src):

@@ -33,7 +33,7 @@ class FakeGit:
 
     def __call__(self, argv, cwd):
         if argv[0] == "clone":
-            self.clones.append(argv[3])
+            self.clones.append(argv[argv.index("--") + 1])
             os.makedirs(os.path.join(argv[-1], ".git"))
         if argv[0] == "status":
             return 0, "\n".join(" M f" for _ in range(self.dirty.get(cwd, 0)))
@@ -127,6 +127,29 @@ def test_a_copy_with_edits_is_never_armed(at_folders):
     assert "holds 1 changed file — it will be kept" in _text(j)
     j.feed("yes")
     assert os.path.isdir(extra)
+
+
+def test_the_last_outcome_and_an_arm_go_when_the_services_change(at_folders):
+    """Round 2 (2026-10-21): the same rule as the window's note — what the last
+    command did is about the mesh as it was; once a domain's services change it is
+    dropped, and so is an armed removal (a ``yes`` then removes nothing)."""
+    j, screen, git, _src = at_folders
+    j.feed("m 2")
+    assert "live.example: made 2 of 2 copies" in _text(j)
+    assert "live.example: made 2 of 2 copies" in _text(j)        # a re-read keeps it
+    j.localmesh_domains.domains[1].optional_services = []
+    assert "made 2 of 2 copies" not in _text(j)
+    j.feed("r 2")
+    assert "ARMED" in _text(j)
+    j.localmesh_domains.domains[1].optional_services = ["owncast"]
+    assert "ARMED" not in _text(j) and screen.folders.armed is None
+    j.feed("yes")
+    assert "nothing is armed" in j.status
+
+
+def test_the_screen_says_each_copys_remote_is_named_for_its_domain(at_folders):
+    j, _screen, _git, _src = at_folders
+    assert "Each copy's git remote is named for its domain" in _text(j)
 
 
 def test_b_goes_back_to_the_review(at_folders):

@@ -232,6 +232,11 @@ class SavedMesh:
     form: dict = field(default_factory=dict)
     #: Free-text notes rendered under the table (never a substitute for a field).
     notes: list = field(default_factory=list)
+    #: The ids of EARLIER records of this same mesh, nearest first: the record the
+    #: form held (loaded or last saved) when this one was saved, then that record's
+    #: own ``follows``. An older record of the same mesh then claims no domain code
+    #: copy the newer mesh dropped (core/domain_workspaces.saved_mesh_claims).
+    follows: list = field(default_factory=list)
 
     def path(self) -> str:
         return os.path.join(meshes_dir(), f"{self.id}.json")
@@ -813,7 +818,8 @@ def capture(generator_dir: str, cfg, node, boot, *, label: str = "",
             extra_users: list[str] | None = None,
             form: dict | None = None,
             overwrite: SavedMesh | None = None,
-            kind_running: bool | None = None) -> SavedMesh:
+            kind_running: bool | None = None,
+            follows: str = "") -> SavedMesh:
     """Build (and RETURN, without writing) the record for the mesh described by
     ``cfg`` and served by ``node``.
 
@@ -846,6 +852,11 @@ def capture(generator_dir: str, cfg, node, boot, *, label: str = "",
 
     ``form`` is the GUI's opaque input dict for derived config fields (the theme
     inputs); core stores it and never reads it.
+
+    ``follows`` is the id of the record the form held when this save was pressed
+    (loaded into the form, or saved from it last): this record is a later state of
+    THAT mesh, and :attr:`SavedMesh.follows` keeps the line of them (see
+    :func:`lineage_of`).
     """
     from .local_mesh_bootstrap import LocalMeshBootstrapConfig  # local: avoid a cycle
 
@@ -858,6 +869,8 @@ def capture(generator_dir: str, cfg, node, boot, *, label: str = "",
                     hostname=socket.gethostname())
     rec.label = (label or (overwrite.label if overwrite is not None else "")
                  or _derive_label(cfg))
+    rec.follows = lineage_of(rec.id, follows,
+                             overwrite.follows if overwrite is not None else ())
     rec.generator_head = _git(rec.generator_dir, "rev-parse", "HEAD")
     rec.config = (cfg.to_dict() if hasattr(cfg, "to_dict")
                   else LocalMeshBootstrapConfig().to_dict())
@@ -969,6 +982,36 @@ def capture(generator_dir: str, cfg, node, boot, *, label: str = "",
             "warm start reuses the mesh's own files; a cold restore seeds with "
             "whatever credential files are on disk then.")
     return rec
+
+
+#: A line of saves is cut here (a record is JSON anyone can write; nothing loops).
+_MAX_LINEAGE = 64
+
+
+def lineage_of(rec_id: str, follows: str, kept=()) -> list:
+    """The ``follows`` list of a record with id ``rec_id`` saved while the form held
+    the record ``follows`` ("" = none): that id first, then that record's own line
+    as it is on disk, then ``kept`` (the line of a record being OVERWRITTEN), each id
+    once, never ``rec_id`` itself, at most :data:`_MAX_LINEAGE`. Reads the meshes
+    folder only when ``follows`` names another record; never raises."""
+    out: list = []
+
+    def add(value) -> None:
+        if (isinstance(value, str) and value and value != rec_id and value not in out
+                and len(out) < _MAX_LINEAGE):
+            out.append(value)
+
+    if follows and follows != rec_id:
+        add(follows)
+        try:
+            parent = find(follows) if _safe_id(follows) else None
+        except Exception:                                # noqa: BLE001 — a line is a hint
+            parent = None
+        for value in (parent.follows if parent is not None else ()):
+            add(value)
+    for value in (kept or ()):
+        add(value)
+    return out
 
 
 def drop_unreferenced_copies(rec: SavedMesh) -> bool:

@@ -285,6 +285,11 @@ class CodeFoldersWidget(QtWidgets.QGroupBox):
         self._inputs = (source_mode, source_dir, tuple(rows), own_name)
         new = code_folders.code_folder_map(self.generator_dir, source_mode,
                                           source_dir, rows)
+        # The domains, their services or the source changed (not a re-read after a
+        # copy or a removal, which clears ``self.map`` first): the last outcome line
+        # ("Made 20 copies for …") is about a mesh that is no longer on screen.
+        if self.map is not None and new != self.map and not self.busy():
+            self.clear_note()
         plan = self._plan(new)
         if new == self.map and plan == self.plan:
             return new
@@ -292,6 +297,14 @@ class CodeFoldersWidget(QtWidgets.QGroupBox):
         self.plan = plan
         self._rebuild()
         return new
+
+    def clear_note(self) -> None:
+        """Hide the last outcome line (and its path and Copy button)."""
+        self.result_note.setText("")
+        self.result_note.setVisible(False)
+        self.result_path.setText("")
+        self.result_path.setVisible(False)
+        self.copy_btn.setVisible(False)
 
     def _mesh_name(self) -> str:
         return (self._inputs[3] or "").strip() or "mesh"
@@ -437,7 +450,8 @@ class CodeFoldersWidget(QtWidgets.QGroupBox):
             blocked = total - made - missing
             text = (f"Copies for this domain: {made} of {total} made, in "
                     f"{os.path.basename(ws.folder)}/ (each named "
-                    f"<app>.{ws.slug})")
+                    f"<app>.{ws.slug}; its git remote ‘{dw.remote_name(ws.slug)}’ "
+                    "is the build checkout it was copied from)")
             if blocked:
                 first = next(r for r in ws.repos if not r.cloned and r.reason)
                 text += (f". {blocked} cannot be made yet: {first.reason}")

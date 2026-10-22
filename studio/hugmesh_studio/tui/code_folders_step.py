@@ -43,6 +43,9 @@ class CodeFoldersScreen:
         #: (domain name, armed paths) — set by ``r N``, consumed by ``yes``
         self.armed: "tuple[str, tuple[str, ...]] | None" = None
         self.last: list[str] = []
+        #: the domains and source ``last`` and ``armed`` were about (as text: the rows
+        #: are changed in place) — when they change, both are stale and dropped
+        self._about = ""
 
     def plan(self, j) -> dw.WorkspacePlan:
         return dw.plan_workspaces(getattr(j, "generator_dir", "") or ".",
@@ -50,8 +53,16 @@ class CodeFoldersScreen:
                                   list(self.rows_of(j)), self.mesh_of(j) or "mesh",
                                   state_root=self.state_root)
 
+    def _inputs_text(self, j) -> str:
+        return repr((self.source_mode, self.source_dir, self.mesh_of(j),
+                     list(self.rows_of(j))))
+
     # ── screen protocol ─────────────────────────────────────────────────────────
     def lines(self, j) -> list[str]:
+        # the services or domains changed since the last outcome: it is about a mesh
+        # that is no longer on screen (the GUI clears its note the same way)
+        if self._about and self._about != self._inputs_text(j):
+            self.last, self.armed, self._about = [], None, ""
         plan = self.plan(j)
         where = ("your own tree " + self.source_dir if self.source_mode == "existing"
                  else ".stack-src (make stack-clone)")
@@ -59,6 +70,8 @@ class CodeFoldersScreen:
                "app that domain has, each named <app>.<domain>.",
                f"Copies folder: {plan.root}",
                f"Copied from: {where}",
+               "Each copy's git remote is named for its domain (git push <domain> "
+               "domain/<domain>) and is the build checkout it was copied from.",
                dw.EDITS_NOTE, ""]
         if plan.root_problem:
             out += [f"No copy can be made: {plan.root_problem}", ""]
@@ -100,6 +113,7 @@ class CodeFoldersScreen:
 
     def feed(self, j, line: str) -> None:
         line = line.strip()
+        self._about = self._inputs_text(j)
         armed, self.armed = self.armed, None          # any command disarms…
         if line == "yes":
             self._remove(j, armed)                    # …except the one that confirms

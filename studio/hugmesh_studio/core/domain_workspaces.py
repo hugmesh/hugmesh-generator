@@ -18,10 +18,12 @@ The copies here are a SECOND tree, for working on one domain's apps:
   nothing outside ``[a-z0-9.-]``), and a copy's folder carries the domain again, so a
   path pasted anywhere still says which domain it is for.
 * Each copy is a ``git clone`` of the build checkout (no network, no credentials, the
-  exact commit the mesh compiles). Its ``origin`` stays that build checkout, which is
-  the honest name for where it came from; the local branch is ``domain/<domain>``,
-  ``.git/description`` says "<app> for <domain>", and ``git config hugmesh.domain``
-  / ``hugmesh.app`` / ``hugmesh.mesh`` carry the same facts for scripts.
+  exact commit the mesh compiles). Its git remote is named for the DOMAIN, not
+  ``origin`` (``git push chat.example.org domain/chat.example.org`` reads as what it
+  does; the remote's URL is still that build checkout); the local branch is
+  ``domain/<domain>``, ``.git/description`` says "<app> for <domain>", and ``git
+  config hugmesh.domain`` / ``hugmesh.app`` / ``hugmesh.mesh`` / ``hugmesh.remote``
+  carry the same facts for scripts.
 * A marker file, ``.git/hugmesh-workspace.json``, is written LAST. Only a folder with
   the marker is ever treated as one of ours: a folder without it is reported as "not
   made by the Studio" and is never offered for removal.
@@ -39,7 +41,8 @@ un-ticked), and the folder of a domain that is no longer in the mesh, are EXTRA.
 are listed, never removed silently: the screen arms a removal on a first click and acts
 on a second, and :func:`remove_extra` re-checks every condition at that moment and
 refuses a copy that is not still a plain clone (:func:`extra_status`: changed, untracked
-or ignored files, commits on any branch or tag, stashes, linked working trees).
+or ignored files, commits on any branch or tag, commits the build checkout does not
+have NOW, stashes, linked working trees, and its own git hooks or settings).
 
 SHARED COPIES FOLDER. The ``<mesh>`` folder is the mesh's own domain name, and every
 test mesh has the same one, so meshes share it. A copy this mesh does not need but a
@@ -56,6 +59,7 @@ domain folder.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -72,7 +76,8 @@ __all__ = [
     "DomainWorkspace", "WorkspacePlan", "ExtraStatus", "CloneResult", "RemoveResult",
     "safe_folder_name", "copy_folder_name", "workspace_root", "plan_workspaces",
     "clone_repo", "clone_missing", "extra_status", "remove_extra", "read_marker",
-    "saved_mesh_claims", "SHARED_ROOT_NOTE",
+    "saved_mesh_claims", "same_mesh_ids", "remote_name", "git_settings",
+    "SHARED_ROOT_NOTE",
 ]
 
 #: The marker file inside a copy's ``.git`` folder (so ``git status`` never sees it).
@@ -116,6 +121,14 @@ def copy_folder_name(app: str, domain_slug: str) -> str:
     """``hugmesh-user-ui`` + ``chat.example.org`` -> ``hugmesh-user-ui.chat.example.org``
     — the app first (it sorts and reads as "this app, for that domain")."""
     return f"{app}.{domain_slug}"
+
+
+def remote_name(domain_slug: str) -> str:
+    """The git remote a domain's copy names its build checkout by: the domain's own
+    folder name (``chat.example.org``). :func:`safe_folder_name` already makes it a
+    legal remote name: only ``[a-z0-9.-]``, no ``..``, no leading dot or dash, never
+    ending in ``.lock``."""
+    return domain_slug
 
 
 def workspace_root(mesh: str, state_root: Optional[str] = None) -> str:
@@ -268,7 +281,13 @@ def saved_mesh_claims(generator_dir: str, *, state_root: Optional[str] = None,
     domain or a service that is gone from THIS mesh may still belong to another saved
     mesh; its copies are then not extra. ``exclude_record_id`` is the record the form
     was loaded from (its stale copy must not keep what the person just un-ticked). A
-    mesh that was never saved cannot be known about; every screen says so."""
+    mesh that was never saved cannot be known about; every screen says so.
+
+    The OLDER records of that same mesh are left out too: every record lists the
+    records it was saved after (``SavedMesh.follows``, core/saved_meshes.py), so two
+    saves of one mesh do not leave the first one keeping copies the second dropped.
+    A NEWER record saved from the same line still claims (it may be the state the
+    person goes back to)."""
     from . import saved_meshes
     from .local_mesh_bootstrap import DEFAULT_DOMAIN
     meshes = os.path.join(state_root or state_dir(), "meshes")
@@ -277,14 +296,17 @@ def saved_mesh_claims(generator_dir: str, *, state_root: Optional[str] = None,
         names = sorted(os.listdir(meshes))
     except OSError:
         return out
+    records = []
     for fname in names:
         if not fname.endswith(".json") or _is_link(os.path.join(meshes, fname)):
             continue
         try:
-            rec = saved_meshes.load(os.path.join(meshes, fname))
+            records.append(saved_meshes.load(os.path.join(meshes, fname)))
         except Exception:                        # noqa: BLE001 — an unreadable record claims nothing
             continue
-        if exclude_record_id and rec.id == exclude_record_id:
+    skip = same_mesh_ids(records, exclude_record_id)
+    for rec in records:
+        if rec.id in skip:
             continue
         cfg = rec.config if isinstance(rec.config, dict) else {}
         rows = [r for r in (cfg.get("domains") or ()) if isinstance(r, dict)
@@ -302,6 +324,26 @@ def saved_mesh_claims(generator_dir: str, *, state_root: Optional[str] = None,
             for app in dom.apps:
                 if slug and app.kind == cf.KIND_REPO:
                     out.setdefault((slug, app.name), label)
+    return out
+
+
+def same_mesh_ids(records, record_id: str) -> "set[str]":
+    """``record_id`` and every EARLIER record of the same mesh: its ``follows`` line,
+    and the lines of those records in turn (a record deleted from the middle of a
+    line does not cut off the ones before it, since each record lists all of them).
+    Empty when ``record_id`` is ""."""
+    if not record_id:
+        return set()
+    by_id = {getattr(r, "id", ""): r for r in records}
+    out, todo = set(), [record_id]
+    while todo and len(out) < 1000:
+        cur = todo.pop()
+        if not isinstance(cur, str) or not cur or cur in out:
+            continue
+        out.add(cur)
+        rec = by_id.get(cur)
+        todo.extend(v for v in (getattr(rec, "follows", None) or ())
+                    if isinstance(v, str))
     return out
 
 
@@ -491,14 +533,17 @@ def clone_repo(repo: WorkspaceRepo, domain: DomainWorkspace, mesh: str, root: st
     link = _links_below(root, os.path.dirname(repo.dest))
     if link:                                    # raced in between: refuse, make nothing
         return CloneResult(repo.app, repo.dest, False, f"{link} is a link")
-    code, out = run(["clone", "--quiet", "--", repo.source, repo.dest], None)
+    remote = remote_name(domain.slug)
+    code, out = run(["clone", "--quiet", "--origin", remote, "--", repo.source,
+                     repo.dest], None)
     if code != 0:
         return CloneResult(repo.app, repo.dest, False,
                            f"git clone failed: {out[-300:] or 'no output'}")
     for step in (["switch", "-c", f"domain/{domain.slug}"],
                  ["config", "hugmesh.domain", domain.name],
                  ["config", "hugmesh.app", repo.app],
-                 ["config", "hugmesh.mesh", mesh]):
+                 ["config", "hugmesh.mesh", mesh],
+                 ["config", "hugmesh.remote", remote]):
         code, out = run(step, repo.dest)
         if code != 0:
             return CloneResult(repo.app, repo.dest, False,
@@ -512,9 +557,19 @@ def clone_repo(repo: WorkspaceRepo, domain: DomainWorkspace, mesh: str, root: st
         with open(os.path.join(git_dir, "description"), "w", encoding="utf-8") as fh:
             fh.write(f"{repo.folder_name}: {repo.app} for the domain {domain.name} "
                      f"(mesh {mesh})\n")
+    except OSError as exc:
+        return CloneResult(repo.app, repo.dest, False, f"could not name the copy: {exc}")
+    # What the copy's own git settings and hooks look like as made, so a later check
+    # can tell a person's own hook or setting from what the clone wrote.
+    settings, why = git_settings(repo.dest, run)
+    if why:
+        return CloneResult(repo.app, repo.dest, False,
+                           f"{why} in {repo.dest}. The copy was left as it is, unmarked.")
+    try:
         with open(os.path.join(git_dir, MARKER), "w", encoding="utf-8") as fh:
             json.dump({"domain": domain.name, "slug": domain.slug, "app": repo.app,
-                       "mesh": mesh, "source": repo.source}, fh, indent=1)
+                       "mesh": mesh, "source": repo.source, "remote": remote,
+                       "settings": settings}, fh, indent=1)
     except OSError as exc:
         return CloneResult(repo.app, repo.dest, False, f"could not name the copy: {exc}")
     return CloneResult(repo.app, repo.dest, True, f"copied to {repo.dest}")
@@ -535,6 +590,169 @@ def clone_missing(plan: WorkspacePlan, domain_name: str,
             progress(i, len(todo), repo.app)
         out.append(clone_repo(repo, dom, plan.mesh, plan.root, runner))
     return out
+
+
+# ── a copy's own git settings and hooks ───────────────────────────────────────────
+#: The folders inside ``.git`` a person edits by hand: hooks (a pre-commit, a
+#: commit-msg) and info (``info/exclude``, ``info/attributes``, a sparse-checkout list).
+_SETTINGS_DIRS = ("hooks", "info")
+#: Written by git itself (``update-server-info``), never by a person.
+_SETTINGS_DERIVED = frozenset({"info/refs"})
+_MAX_SETTINGS_FILES = 500
+
+
+def _sha256(path: str) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(65536), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _settings_files(git_dir: str) -> "dict[str, str]":
+    """``{path under .git: sha256}`` for every file under ``.git/hooks`` and
+    ``.git/info``; a link is ``link:<target>`` and is never followed."""
+    out: dict[str, str] = {}
+    for sub in _SETTINGS_DIRS:
+        top = os.path.join(git_dir, sub)
+        if _is_link(top):
+            try:
+                out[sub] = "link:" + os.readlink(top)
+            except OSError:
+                out[sub] = "link:?"
+            continue
+        if not os.path.isdir(top):
+            continue
+        for dirpath, dirnames, filenames in os.walk(top):     # never follows a link
+            for name in sorted(dirnames + filenames):
+                full = os.path.join(dirpath, name)
+                rel = os.path.relpath(full, git_dir).replace(os.sep, "/")
+                if rel in _SETTINGS_DERIVED:
+                    continue
+                if _is_link(full):
+                    try:
+                        out[rel] = "link:" + os.readlink(full)
+                    except OSError:
+                        out[rel] = "link:?"
+                elif os.path.isfile(full):
+                    try:
+                        out[rel] = _sha256(full)
+                    except OSError:
+                        out[rel] = "unreadable"
+            if len(out) > _MAX_SETTINGS_FILES:
+                return out
+    return out
+
+
+def _config_entries(path: str, run: GitRunner) -> "tuple[list[str] | None, str]":
+    """The copy's OWN ``.git/config`` (``--local``: never the person's global one), one
+    ``key\nvalue`` string per entry, sorted; None and why when git cannot list it."""
+    code, out = run(["config", "--local", "--list", "--null"], path)
+    if code != 0:
+        return None, "git config --list failed"
+    return sorted(e for e in out.split("\0") if e.strip()), ""
+
+
+def git_settings(path: str, runner: Optional[GitRunner] = None
+                 ) -> "tuple[dict, str]":
+    """``({"config": [...], "files": {...}}, "")`` — a copy's own git settings and the
+    files under its ``.git/hooks`` and ``.git/info``, as they are now — or
+    ``({}, why)``. Recorded in the marker when the copy is made, compared before a
+    removal is offered."""
+    run = runner or _run_git
+    entries, why = _config_entries(path, run)
+    if entries is None:
+        return {}, why
+    return {"config": entries, "files": _settings_files(os.path.join(path, ".git"))}, ""
+
+
+def _stock_entry(entry: str, remotes: "set[str]") -> bool:
+    """For a copy made before settings were recorded: is this ``.git/config`` entry one
+    a clone and the Studio write themselves?"""
+    key = entry.split("\n", 1)[0].lower()
+    if key.startswith(("core.", "extensions.", "hugmesh.")):
+        return True
+    m = re.fullmatch(r"remote\.(.+)\.(url|fetch)", key)
+    if m:
+        return m.group(1) in remotes
+    m = re.fullmatch(r"branch\.(.+)\.(remote|merge)", key)
+    return bool(m)
+
+
+def _settings_changes(path: str, marker: "dict | None", run: GitRunner
+                      ) -> "tuple[int, str]":
+    """How many of the copy's own git settings, hooks and ``.git/info`` files differ
+    from what was there when the Studio made it; ``(0, why)`` when it cannot tell."""
+    entries, why = _config_entries(path, run)
+    if entries is None:
+        return 0, why
+    files = _settings_files(os.path.join(path, ".git"))
+    snap = (marker or {}).get("settings")
+    if (isinstance(snap, dict) and isinstance(snap.get("config"), list)
+            and isinstance(snap.get("files"), dict)):
+        def by_key(items) -> "dict[str, list[str]]":
+            out: dict[str, list[str]] = {}
+            for e in items:
+                if isinstance(e, str):
+                    k, _, v = e.partition("\n")
+                    out.setdefault(k.lower(), []).append(v)
+            return out
+        was, now = by_key(snap["config"]), by_key(entries)
+        changed = sum(1 for k in set(was) | set(now) if was.get(k) != now.get(k))
+        before = snap["files"]
+        changed += sum(1 for k in set(before) | set(files)
+                       if before.get(k) != files.get(k))
+        return changed, ""
+    # A copy made before its settings were recorded: anything a clone does not write
+    # is the person's (a hook that is not a stock ``.sample``, a remote, a setting).
+    remotes = {"origin", str((marker or {}).get("remote") or ""),
+               str((marker or {}).get("slug") or "")} - {""}
+    changed = sum(1 for e in entries if not _stock_entry(e, remotes))
+    changed += sum(1 for rel, digest in files.items()
+                   if rel.startswith("hooks/") and (not rel.endswith(".sample")
+                                                    or digest.startswith("link:")))
+    return changed, ""
+
+
+def _not_in_build(path: str, source: str, run: GitRunner) -> "tuple[int, str]":
+    """How many commits of the copy (every branch, tag and HEAD) the BUILD CHECKOUT it
+    was made from does not have reachable from any of its refs NOW, or ``(0, why)``.
+
+    The copy's own remote-tracking refs are not enough: work pushed to the build
+    checkout and later lost there (a branch deleted, ``make stack-clone`` resetting
+    it) still shows in the copy as pushed. A commit the build checkout no longer has
+    at all counts as one (its history behind it is not counted)."""
+    code, refs = run(["for-each-ref", "--format=%(objectname) %(*objectname)",
+                      "refs/heads", "refs/tags"], path)
+    if code != 0:
+        return 0, "git for-each-ref failed"
+    tips = {ln.split()[-1] for ln in refs.splitlines() if ln.split()}
+    code, head = run(["rev-parse", "--verify", "--quiet", "HEAD^{commit}"], path)
+    if code == 0 and head.strip():
+        tips.add(head.strip())
+    tips = sorted(t for t in tips if re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", t))
+    if not tips:
+        return 0, ""
+    if not source or _is_link(source) or not os.path.isdir(source):
+        return 0, (f"the build checkout it was copied from ({source or 'not recorded'}) "
+                   "is not there to compare with")
+    code, count = run(["rev-list", "--count", *tips, "--not", "--all"], source)
+    if code == 0 and count.strip().isdigit():
+        return int(count.strip()), ""
+    # Some tip is not in the build checkout at all: count those, and the rest as usual.
+    present, missing = [], 0
+    for tip in tips:
+        c, _ = run(["cat-file", "-e", f"{tip}^{{commit}}"], source)
+        if c == 0:
+            present.append(tip)
+        else:
+            missing += 1
+    if not present:
+        return missing, ""
+    code, count = run(["rev-list", "--count", *present, "--not", "--all"], source)
+    if code != 0 or not count.strip().isdigit():
+        return 0, "git rev-list failed in the build checkout"
+    return missing + int(count.strip()), ""
 
 
 # ── removing an extra copy ────────────────────────────────────────────────────────
@@ -560,12 +778,19 @@ class ExtraStatus:
     #: --skip-worktree`` / ``--assume-unchanged``): an edit to one is invisible to
     #: ``git status``, so the copy cannot be shown to be plain
     hidden: int = 0
+    #: commits the BUILD CHECKOUT it was copied from does not have now (pushed there
+    #: once and since lost, or never pushed there)
+    not_in_build: int = 0
+    #: its own git settings, hooks or ``.git/info`` files that differ from what the
+    #: Studio made (a pre-commit hook, an added remote, an ``info/exclude`` line)
+    settings: int = 0
 
     @property
     def safe_to_remove(self) -> bool:
         return (not self.error and self.dirty == 0 and self.unpushed == 0
                 and self.stashed == 0 and self.ignored == 0 and self.worktrees == 0
-                and self.hidden == 0)
+                and self.hidden == 0 and self.not_in_build == 0
+                and self.settings == 0)
 
     def words(self) -> str:
         if self.error:
@@ -592,8 +817,16 @@ class ExtraStatus:
                 bits.append(n(self.hidden, "file", "files")
                             + " git is told not to check for changes (skip-worktree or "
                             "assume-unchanged)")
+            if self.not_in_build:
+                bits.append(n(self.not_in_build, "commit", "commits")
+                            + " the build checkout it came from does not have now")
+            if self.settings:
+                bits.append(n(self.settings, "change", "changes")
+                            + " to its own git hooks or settings (.git/hooks, "
+                            ".git/config, .git/info)")
             return "holds " + ", ".join(bits) + " — it will be kept"
-        return "a plain copy: no edits, commits, stashes or ignored files of its own"
+        return ("a plain copy: no edits, commits, stashes, ignored files, hooks or "
+                "settings of its own, and the build checkout has every commit")
 
 
 def extra_status(path: str, runner: Optional[GitRunner] = None) -> ExtraStatus:
@@ -605,8 +838,16 @@ def extra_status(path: str, runner: Optional[GitRunner] = None) -> ExtraStatus:
     working trees. What it cannot see: a commit that NO ref points to any more (made on
     a detached HEAD and then left; only the reflog has it) — git warns about that when
     it happens. Files git was told not to check (skip-worktree, assume-unchanged) keep
-    the copy too, since an edit to one cannot be seen."""
+    the copy too, since an edit to one cannot be seen.
+
+    Two more checks look past what ``git status`` knows. Every commit of the copy must
+    be reachable in the BUILD CHECKOUT it was made from as that checkout is NOW (the
+    copy's remote-tracking refs can be stale: :func:`_not_in_build`). And its own git
+    hooks, ``.git/config`` and ``.git/info`` files must be as the Studio made them
+    (:func:`_settings_changes`, against the record in the marker); a person's
+    pre-commit hook or an added remote keeps the copy."""
     run = runner or _run_git
+    marker = read_marker(path)
     # ``--untracked-files=normal`` and ``--ignore-submodules=none`` on the command line
     # beat every config level: with ``status.showUntrackedFiles=no`` (the copy's own
     # config, or the person's global one) a brand-new file is otherwise invisible and
@@ -641,8 +882,15 @@ def extra_status(path: str, runner: Optional[GitRunner] = None) -> ExtraStatus:
                            ignored=ignored, worktrees=worktrees)
     hidden = len([ln for ln in listing.splitlines()
                   if ln[:1] == "S" or (ln[:1].isalpha() and ln[:1].islower())])
-    return ExtraStatus(path, dirty, unpushed, stashed=stashed, ignored=ignored,
-                       worktrees=worktrees, hidden=hidden)
+    so_far = dict(stashed=stashed, ignored=ignored, worktrees=worktrees, hidden=hidden)
+    settings, why = _settings_changes(path, marker, run)
+    if why:
+        return ExtraStatus(path, dirty, unpushed, why, **so_far)
+    not_in_build, why = _not_in_build(path, str((marker or {}).get("source") or ""), run)
+    if why:
+        return ExtraStatus(path, dirty, unpushed, why, settings=settings, **so_far)
+    return ExtraStatus(path, dirty, unpushed, not_in_build=not_in_build,
+                       settings=settings, **so_far)
 
 
 @dataclass(frozen=True)
