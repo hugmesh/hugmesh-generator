@@ -137,6 +137,12 @@ spec:
             # give it that domain's Restart / Logs (core/mesh_monitor.py
             # DOMAIN_LABEL). A template label outside the selector, so adding it
             # changes no selector and only rolls the pod once.
+            # hugmesh.net/domain-name beside it: the domain's real name (a label
+            # value is capped at 63 characters and a DNS name is not), so the
+            # Studio shows "acme.example", not "acme-example", on every page that
+            # reads the cluster. The base pod templates carry NO annotations, so
+            # this add creates the map; tests/test_mesh_pod_domains_attribution.py
+            # goes red if the base ever gains one this add would overwrite.
             - target: { group: apps, kind: Deployment, name: casdoor-domain }
               patch: |-
                 - op: replace
@@ -145,6 +151,10 @@ spec:
                 - op: add
                   path: /spec/template/metadata/labels/hugmesh.net~1domain
                   value: "{{ .slug }}"
+                - op: add
+                  path: /spec/template/metadata/annotations
+                  value:
+                    hugmesh.net/domain-name: "{{ .clusterDomain }}"
             - target: { group: apps, kind: Deployment, name: casdoor-domain-pg }
               patch: |-
                 - op: replace
@@ -153,6 +163,10 @@ spec:
                 - op: add
                   path: /spec/template/metadata/labels/hugmesh.net~1domain
                   value: "{{ .slug }}"
+                - op: add
+                  path: /spec/template/metadata/annotations
+                  value:
+                    hugmesh.net/domain-name: "{{ .clusterDomain }}"
             # The published issuer host (ingress.yaml's placeholder).
             - target: { group: networking.k8s.io, kind: Ingress, name: casdoor-domain }
               patch: |-

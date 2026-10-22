@@ -63,7 +63,7 @@ import os
 import re
 import shutil
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from urllib.parse import urlparse
 
 from . import devops_tools, view_doors
@@ -185,6 +185,12 @@ class ScaleTarget:
 #: (specs/cluster/apps/05b-casdoor-domains.yaml). Its value is the domain's name on
 #: the Docker mesh and its slug on the kind lane (``DomainHints.names`` maps it back).
 DOMAIN_LABEL = "hugmesh.net/domain"
+#: The pod ANNOTATION that carries the domain's real name beside the slug label (a
+#: label value cannot hold every DNS name — 63 characters at most — an annotation
+#: can). The casdoor-domains ApplicationSet writes it from the element's
+#: clusterDomain. When a pod has it, the row shows that name on every mount, with or
+#: without the Studio's own config.
+DOMAIN_NAME_ANNOTATION = "hugmesh.net/domain-name"
 #: What a shared unit is labelled — the gateway, Casdoor, the databases every domain
 #: reads, the one tor container that carries every onion.
 ALL_DOMAINS = "All domains"
@@ -854,10 +860,20 @@ def _join(objects: dict, host_ports: dict[int, tuple[str, int]], catalog, live: 
         domain = ""
         domain_why = "no hugmesh.net/domain label: shared by every domain"
         if label_dom:
-            domain = str(((hints.names if hints else {}) or {}).get(label_dom)
-                         or label_dom)
-            domain_why = (f"pod label {DOMAIN_LABEL}={label_dom}"
-                          + (f" (the domain {domain})" if domain != label_dom else ""))
+            # The name, in order of trust: the pod's own annotation (the cluster
+            # wrote it from the same element as the label), then the Studio's own
+            # domain list, then — nothing names it — the slug itself, which
+            # snapshot()'s last pass may still name from the compose rows.
+            ann_name = str(((meta.get("annotations") or {})
+                            .get(DOMAIN_NAME_ANNOTATION) or "")).strip()
+            hint_name = str(((hints.names if hints else {}) or {}).get(label_dom) or "")
+            domain = ann_name or hint_name or label_dom
+            domain_why = f"pod label {DOMAIN_LABEL}={label_dom}"
+            if ann_name and ann_name != label_dom:
+                domain_why += (f" (the domain {domain}, from its "
+                               f"{DOMAIN_NAME_ANNOTATION} annotation)")
+            elif domain != label_dom:
+                domain_why += f" (the domain {domain})"
             detail_bits.append(f"domain: {domain} ({domain_why})")
         units.append(MeshUnit(
             lane="kind", namespace=ns, name=name, owner=owner, phase=phase_text,
@@ -1271,24 +1287,73 @@ def _profile_slugs() -> dict[str, tuple[str, ...]]:
     return out
 
 
+#: WHICH services of a compose profile belong to the per-domain choice that brings
+#: the profile up, for a profile that carries more than that choice's own
+#: containers. ``{profile: {compose service: owning slug, or None}}``. None is a
+#: COMPANION: it comes up with the profile but no domain chooses it, so it serves
+#: every domain and no domain's Start / Stop / Restart touches it.
+#:
+#: The social profile is the one such profile today (tests/stack/compose.social-
+#: profile.yaml + the two one-shots in compose.real.yaml): a domain ticks Matrix
+#: (``tuwunel``), and the profile that ticks also starts the whole Mastodon tier.
+#: Mastodon is NOT on any domain's Services tab — the per-domain ActivityPub choice
+#: is ``akkoma``, which has its own profile and its own two containers — and the
+#: Mastodon micro-frontend is one federation row every domain's shell shows. So the
+#: Mastodon containers are shared, and a domain's Stop stops its Matrix only.
+#: tests/test_mesh_pod_domains_attribution.py pins this table against the real
+#: compose files: a service added to the profile goes red until it is placed here.
+_PROFILE_SERVICE_OWNERS: dict[str, dict[str, str | None]] = {
+    "social": {
+        "tuwunel": "tuwunel",
+        "mastodon-db": None, "mastodon-redis": None, "mastodon-web": None,
+        "mastodon-sidekiq": None, "mastodon-streaming": None,
+        "mastodon-init": None, "mastodon-autoconfirm": None,
+    },
+}
+
+
 def _config_domain(service: str, profiles: dict, hints: DomainHints | None
                    ) -> tuple[str, tuple[str, ...], str]:
     """``(domain, shared_by, why)`` for a compose service no label names, from the
     Studio's own per-domain service choice. ("", (), "") when the config says nothing
-    — the row is then shared by every domain."""
+    — the row is then shared by every domain. A profile COMPANION
+    (``_PROFILE_SERVICE_OWNERS``) is shared with a reason saying which domains'
+    choice brought it up."""
     if hints is None or not hints.service_domains or not service:
         return "", (), ""
     by_profile = _profile_slugs()
     chosen: list[str] = []
     slugs: list[str] = []
+    companion_of: list[tuple[str, str]] = []          # (profile, slug)
     for prof in profiles.get(service, ()):
-        for slug in by_profile.get(prof, ()):
+        owners = _PROFILE_SERVICE_OWNERS.get(prof)
+        prof_slugs = by_profile.get(prof, ())
+        if owners is not None and service in owners:
+            owner = owners[service]
+            if owner is None:
+                companion_of.extend((prof, s) for s in prof_slugs
+                                    if (prof, s) not in companion_of)
+                continue
+            prof_slugs = tuple(s for s in prof_slugs if s == owner)
+        for slug in prof_slugs:
             if slug not in hints.service_domains:
                 return "", (), ""         # chosen mesh-wide (or unknown): shared
             slugs.append(slug)
             for name in hints.service_domains.get(slug) or ():
                 if name not in chosen:
                     chosen.append(name)
+    if not slugs and companion_of:
+        if any(s not in hints.service_domains for _p, s in companion_of):
+            return "", (), ""             # the profile came up mesh-wide: shared
+        by = list(dict.fromkeys(n for _p, s in companion_of
+                                for n in (hints.service_domains.get(s) or ())))
+        if not by:
+            return "", (), ""
+        profs = "/".join(dict.fromkeys(p for p, _s in companion_of))
+        picks = "/".join(dict.fromkeys(s for _p, s in companion_of))
+        return "", (), (f"part of the {profs} profile, which {', '.join(by)} turned on "
+                        f"by choosing {picks}; no domain chooses {service} itself, so "
+                        f"it is shared by every domain and no domain's Stop touches it")
     if not slugs or not chosen:
         return "", (), ""
     what = "/".join(dict.fromkeys(slugs))
@@ -1615,11 +1680,56 @@ def snapshot(generator_dir: str, node, *, want_compose: bool = True,
                             or "")
         except Exception:                             # noqa: BLE001 — a name, not a fact
             view_lane = ""
+    units = _name_kind_slugs(units, hints)
     units.sort(key=lambda u: (u.lane, u.namespace, u.name))
     return MonitorSnapshot(
         taken_at=time.strftime("%H:%M:%S"), compose=compose, kind=kind,
         units=tuple(units), errors=tuple(errors), notes=tuple(notes),
         view_doors=tuple(sorted(live)), view_lane=view_lane, onions=tuple(onions))
+
+
+def _name_kind_slugs(units: list[MeshUnit], hints: DomainHints | None
+                     ) -> list[MeshUnit]:
+    """Give a kind pod that is still labelled with its domain's SLUG the domain's
+    NAME, when anything else in the same read names it.
+
+    Why a last pass: the kind lane is read first, and a mount with no Studio config
+    (the qemu and mesh-emulation pages pass no hints) then left ``acme-example`` on
+    the pod while the compose rows read ``acme.example`` — one domain, two entries in
+    the domain picker, and each entry's buttons acting on half of its rows. The names
+    come from what was actually read: a compose row's domain (its own
+    ``hugmesh.net/domain`` label or the Studio's choice), a per-domain onion's label,
+    and ``hints.names``. The slug of a name is ``own_casdoor.slug`` — the same rule
+    the per-domain overlay and the ApplicationSet element use. Never raises."""
+    try:
+        from .own_casdoor import slug as _slug
+        named: dict[str, tuple[str, str]] = {}
+        for key, name in ((hints.names if hints else {}) or {}).items():
+            if key and name and key != name:
+                named.setdefault(str(key), (str(name), "the Studio's domain list"))
+        for u in units:
+            if u.lane == "kind" or not u.domain:
+                continue
+            s = _slug(u.domain)
+            if s and s != u.domain:
+                named.setdefault(s, (u.domain, f"the {u.lane} row {u.name}"))
+        if not named:
+            return units
+        out: list[MeshUnit] = []
+        for u in units:
+            hit = named.get(u.domain) if u.lane == "kind" and u.domain else None
+            if hit is None or hit[0] == u.domain:
+                out.append(u)
+                continue
+            name, source = hit
+            why = f"{u.domain_why} (the domain {name}, named by {source})"
+            out.append(replace(u, domain=name, domain_why=why,
+                               detail=(u.detail + "\n" if u.detail else "")
+                               + f"domain name: {name} (slug {u.domain}, named by "
+                                 f"{source})"))
+        return out
+    except Exception:                                 # noqa: BLE001 — a label, not a fact
+        return units
 
 
 def domain_hints(cfg) -> DomainHints:
@@ -1662,6 +1772,28 @@ def domain_hints(cfg) -> DomainHints:
                            own_domain=own)
     except Exception:                                 # noqa: BLE001 — hints, not facts
         return DomainHints()
+
+
+def wizard_hints(local_cfg=None, domains=()) -> DomainHints:
+    """Hints for a mount that has no local-mesh config of its own — the qemu and
+    mesh-emulation pages, which read the SAME compose project and kind cluster as the
+    local-mesh page. ``local_cfg`` is that page's LocalMeshBootstrapConfig when the
+    window has one (so both mounts of one table say the same thing); ``domains`` are
+    the wizard's own Domains rows (``Domain`` objects or dicts), which add their
+    names so a kind pod's slug reads as its domain. NEVER raises."""
+    base = domain_hints(local_cfg) if local_cfg is not None else DomainHints()
+    names = dict(base.names)
+    try:
+        from .own_casdoor import slug as _slug
+        for d in domains or ():
+            n = d.get("name") if isinstance(d, dict) else getattr(d, "name", "")
+            n = str(n or "").strip()
+            if n:
+                names.setdefault(_slug(n), n)
+    except Exception:                                 # noqa: BLE001 — hints, not facts
+        pass
+    return DomainHints(service_domains=dict(base.service_domains), names=names,
+                       own_domain=base.own_domain)
 
 
 def addresses_text(snap: MonitorSnapshot) -> str:

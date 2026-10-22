@@ -79,6 +79,12 @@ EXPANDED_FRACTION = 0.38
 TALL_FRACTION = 0.62
 MIN_CLICK_PX = 28
 _SETTINGS = assistant_settings.FILE_NAME
+#: Tabs that get the TALL height while they are open in the docked panel. The Running
+#: mesh tab holds the pod table (at least six rows), the domain strip and the Tor list;
+#: at the usual 280 px cap only five rows showed and the strip and the Tor list were
+#: below the fold (2026-10-21 round 2: "the docked Running mesh tab shows the domain
+#: strip, Tor list and at least 6 rows at the default docked size").
+TALL_TABS = ("pods",)
 #: The panel's tabs, in order: (key, label).
 TABS = (("assistant", "Assistant"), ("mesh", "Local mesh"), ("pods", "Running mesh"),
         ("run", "Mesh run"), ("builds", "Image builds"))
@@ -585,6 +591,8 @@ class LocalAIDock(QtWidgets.QFrame):
         self.gpu = None
         self.expanded = load_expanded() if expanded is None else bool(expanded)
         self.tall = False
+        #: what the page asked for (set_tall); ``tall`` also follows the open tab
+        self._page_tall = False
         self._history: list = []
         # Counts the times Clear was pressed. Every request remembers the number it started
         # under; what comes back from an older one (late words, its finished answer, its
@@ -849,6 +857,7 @@ class LocalAIDock(QtWidgets.QFrame):
         last = str(assistant_settings.get("tab", "assistant") or "assistant")
         self.tabs.setCurrentIndex(self._tab_index.get(last, 0))
         self.tabs.currentChanged.connect(self._on_tab_changed)
+        self._sync_tall()                 # a remembered Running mesh tab opens tall
 
         self._drain = QtCore.QTimer(self)
         self._drain.setInterval(DRAIN_MS)
@@ -929,10 +938,16 @@ class LocalAIDock(QtWidgets.QFrame):
 
     def set_tall(self, on: bool) -> None:
         """Let the panel take most of the window (the Bring-up step is on screen) or go
-        back to its usual cap."""
-        if bool(on) == self.tall:
+        back to its usual cap. The panel is ALSO tall while a ``TALL_TABS`` tab is
+        open, whatever the page says: ``_sync_tall`` is the one writer of ``tall``."""
+        self._page_tall = bool(on)
+        self._sync_tall()
+
+    def _sync_tall(self) -> None:
+        want = bool(getattr(self, "_page_tall", False)) or self.current_tab() in TALL_TABS
+        if want == self.tall:
             return
-        self.tall = bool(on)
+        self.tall = want
         self.layout_changed.emit()
 
     # ---- expand / collapse ----------------------------------------------------------
@@ -984,6 +999,7 @@ class LocalAIDock(QtWidgets.QFrame):
         try:
             key = self.current_tab()
             assistant_settings.update(tab=key)
+            self._sync_tall()
             self._tab_shown(key)
         except Exception:
             _log_swallowed("LocalAIDock._on_tab_changed")

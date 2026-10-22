@@ -118,7 +118,8 @@ class DomainPlan:
             bits.append(f"{word} has nothing to act on")
         for u, why in self.skipped:
             bits.append(f"{u.name}: {why}")
-        return f"{self.domain} — " + "; ".join(bits) + "."
+        # a refusal is a whole sentence with its own full stop; never end on ".."
+        return f"{self.domain} — " + "; ".join(bits).rstrip(".") + "."
 
 
 def domain_plan(units, domain: str, verb: str) -> DomainPlan:
