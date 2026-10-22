@@ -160,6 +160,28 @@ def test_a_blank_name_is_derived_and_never_repeats(qapp, page):
     assert len(labels) == 2 and len(set(x.casefold() for x in labels)) == 2
 
 
+def test_a_second_save_records_the_first_as_an_earlier_state_of_this_mesh(qapp, page):
+    """Round 2 (2026-10-21): two saves of the same mesh are one line, so the OLDER
+    record stops keeping domain code copies the newer one dropped
+    (core/domain_workspaces.saved_mesh_claims). The form holds the first record after
+    it is saved; the second save says it follows it."""
+    w = _entered(qapp, page)
+    w.name_edit.setText("first")
+    w.save_btn.click()
+    _settle(qapp, page)
+    first = next(r for r in sm.scan()[0] if r.label == "first")
+    assert first.follows == []
+    assert page._loaded_record_id == first.id
+    page.env_prod.setChecked(not page.env_prod.isChecked())
+    page._refresh_plan()
+    w.name_edit.setText("second")
+    w.save_btn.click()
+    _settle(qapp, page)
+    second = next(r for r in sm.scan()[0] if r.label == "second")
+    assert second.follows == [first.id]
+    assert page._loaded_record_id == second.id
+
+
 def test_a_taken_name_refuses_save_and_points_at_overwrite(qapp, page):
     _record(label="kept")
     w = _entered(qapp, page)

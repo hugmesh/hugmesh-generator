@@ -4115,6 +4115,10 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         form = self.theme_form()
         kind_up = self._kind_lane_running()
         mesh_up = self._mesh_up
+        # The record the form holds (loaded, or saved from it last): this save is a
+        # later state of THAT mesh, so its older records stop keeping domain code
+        # copies this mesh no longer has (saved_meshes.lineage_of).
+        follows = str(getattr(self, "_loaded_record_id", "") or "")
         # A configuration that will not start yet is still worth keeping (that is
         # the point of saving a mesh being worked on) — the problems are SAID with
         # the save, never a reason to refuse it.
@@ -4136,7 +4140,8 @@ class LocalMeshPage(QtWidgets.QWizardPage):
             rec = saved_meshes.capture(gen, cfg, node, boot,
                                        label=label, copy_credentials=copy,
                                        extra_users=users, form=form,
-                                       overwrite=target, kind_running=kind_up)
+                                       overwrite=target, kind_running=kind_up,
+                                       follows=follows)
             path = saved_meshes.save(rec)
             if not path:
                 on_line("[mesh-save] FAILED: the record could not be written under "

@@ -33,7 +33,7 @@ class FakeGit:
 
     def __call__(self, argv, cwd):
         if argv[0] == "clone":
-            self.clones.append(argv[3])
+            self.clones.append(argv[argv.index("--") + 1])
             os.makedirs(os.path.join(argv[-1], ".git"))
         if argv[0] == "status":
             return 0, "\n".join(" M f" for _ in range(self.dirty.get(cwd, 0)))
@@ -129,6 +129,29 @@ def test_a_copy_with_edits_is_never_armed(at_folders):
     assert os.path.isdir(extra)
 
 
+def test_the_last_outcome_and_an_arm_go_when_the_services_change(at_folders):
+    """Round 2 (2026-10-21): the same rule as the window's note — what the last
+    command did is about the mesh as it was; once a domain's services change it is
+    dropped, and so is an armed removal (a ``yes`` then removes nothing)."""
+    j, screen, git, _src = at_folders
+    j.feed("m 2")
+    assert "live.example: made 2 of 2 copies" in _text(j)
+    assert "live.example: made 2 of 2 copies" in _text(j)        # a re-read keeps it
+    j.localmesh_domains.domains[1].optional_services = []
+    assert "made 2 of 2 copies" not in _text(j)
+    j.feed("r 2")
+    assert "ARMED" in _text(j)
+    j.localmesh_domains.domains[1].optional_services = ["owncast"]
+    assert "ARMED" not in _text(j) and screen.folders.armed is None
+    j.feed("yes")
+    assert "nothing is armed" in j.status
+
+
+def test_the_screen_says_each_copys_remote_is_named_for_its_domain(at_folders):
+    j, _screen, _git, _src = at_folders
+    assert "Each copy's git remote is named for its domain" in _text(j)
+
+
 def test_b_goes_back_to_the_review(at_folders):
     j, screen, _git, _src = at_folders
     j.feed("b")
@@ -175,3 +198,37 @@ def test_another_saved_meshs_domain_is_listed_kept_and_cannot_be_armed(at_folder
              if ws.name == "live.example")
     j.feed(f"r {n}")
     assert screen.folders.armed is None and "no extra copies" in j.status
+
+
+def test_a_mesh_saved_twice_lets_the_first_save_go_on_the_text_screen(at_folders):
+    """The text screen holds no saved record. Mesh A was saved with owncast on
+    live.example, then saved again (A2, which follows A) without it: the first save no
+    longer keeps the owncast copy, which is now EXTRA and can be armed."""
+    from hugmesh_studio.core import saved_meshes
+    from hugmesh_studio.core.local_mesh_bootstrap import LocalMeshBootstrapConfig
+    j, screen, git, _src = at_folders
+    j.feed("m 2")
+    first = "20261021-120000-aaaaaa"
+
+    def save(rec_id, label, services, follows=()):
+        rec = saved_meshes.SavedMesh(
+            id=rec_id, label=label, follows=list(follows),
+            config=LocalMeshBootstrapConfig.from_dict({"domains": [
+                {"name": "live.example", "optional_services": services,
+                 "idp": "superdomain"}]}).to_dict())
+        os.makedirs(saved_meshes.meshes_dir(), exist_ok=True)
+        with open(rec.path(), "w") as fh:
+            json.dump(rec.to_dict(), fh)
+
+    save(first, "Mesh A", ["owncast"])
+    save("20261021-130000-bbbbbb", "Mesh A (2)", [], follows=[first])
+    j.localmesh_domains.domains[1].optional_services = []   # this mesh drops owncast
+    text = _text(j)
+    assert "still uses" not in text
+    assert "EXTRA" in text and "hugmesh-owncast-ui.live.example" in text
+    n = next(i for i, ws in enumerate(screen.folders.plan(j).domains, 1)
+             if ws.name == "live.example")
+    j.feed(f"r {n}")
+    assert screen.folders.armed is not None
+    assert [os.path.basename(p) for p in screen.folders.armed[1]] == [
+        "hugmesh-owncast-ui.live.example"]

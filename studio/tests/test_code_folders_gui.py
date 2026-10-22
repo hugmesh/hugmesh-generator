@@ -631,7 +631,7 @@ class _FakeGit:
 
     def __call__(self, argv, cwd):
         if argv[0] == "clone":
-            self.clones.append(argv[3])
+            self.clones.append(argv[argv.index("--") + 1])
             os.makedirs(os.path.join(argv[-1], ".git"))
         if argv[0] == "rev-list":
             return 0, "0"
