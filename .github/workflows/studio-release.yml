@@ -534,19 +534,19 @@ jobs:
           fi
 
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
-        if: steps.exists.outputs.skip != 'true'
+
         with:
           # This job's token can write releases: keep it out of .git/config. Nothing
           # below uses git; the release and the dispatch go through the API.
           persist-credentials: false
 
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4.3.0
-        if: steps.exists.outputs.skip != 'true'
+
         with:
           path: artifacts
 
       - name: Collect the installers
-        if: steps.exists.outputs.skip != 'true'
+
         run: |
           mkdir -p release
           find artifacts -type f \( -name '*.msi' -o -name '*.flatpak' -o -name '*.tar.gz' -o -name '*.spdx.json' \) -exec cp {} release/ \;
@@ -558,7 +558,6 @@ jobs:
       - name: SBOM of the Windows build's locked Python packages
         # The MSI job installs exactly windows-build-requirements.txt (--require-hashes),
         # so the lock IS the list of third-party packages frozen into the MSI.
-        if: steps.exists.outputs.skip != 'true'
         continue-on-error: true
         uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c  # v0.24.3
         with:
@@ -569,7 +568,6 @@ jobs:
           upload-release-assets: false
 
       - name: Write SHA256SUMS
-        if: steps.exists.outputs.skip != 'true'
         working-directory: release
         run: |
           shopt -s nullglob
@@ -578,7 +576,6 @@ jobs:
           cat SHA256SUMS
 
       - name: Generate releases.json for the documentation site
-        if: steps.exists.outputs.skip != 'true'
         # The shape of src/assets/releases.json.example in hugmesh.github.io. Every
         # field added for signing (per-installer "sbom", top-level "checksums",
         # "signature", "provenance", "verify") is additive: the page ignores keys it does
@@ -666,7 +663,6 @@ jobs:
           PY
 
       - name: Install cosign
-        if: steps.exists.outputs.skip != 'true'
         uses: sigstore/cosign-installer@7e8b541eb2e61bf99390e1afd4be13a184e9ebc5  # v3.10.1
         with:
           cosign-release: 'v2.4.1'
@@ -676,7 +672,6 @@ jobs:
         # GitHub's OIDC issuer, and logged in Sigstore's public transparency log. The
         # check right after uses the same identity the release notes tell users to use,
         # so a notes/identity mismatch fails here and not on a user's machine.
-        if: steps.exists.outputs.skip != 'true'
         working-directory: release
         env:
           IDENTITY: https://github.com/${{ github.repository }}/.github/workflows/studio-release.yml@${{ github.ref }}
@@ -692,13 +687,11 @@ jobs:
         # tarball, the SBOMs, SHA256SUMS, its cosign bundle and releases.json. On a
         # PRIVATE repository on this org's plan this step fails, and so nothing is
         # released: publish after the repository is public.
-        if: steps.exists.outputs.skip != 'true'
         uses: actions/attest-build-provenance@96278af6caaf10aea03fd8d33a09a777ca52d62f  # v3.2.0
         with:
           subject-path: release/*
 
       - name: Write the release notes
-        if: steps.exists.outputs.skip != 'true'
         run: |
           tag="studio-v$VERSION"
           workflow="$GITHUB_REPOSITORY/.github/workflows/studio-release.yml"
@@ -761,7 +754,6 @@ jobs:
       - name: Publish the release
         # LAST of the release steps: everything above (sums, cosign, attestations) has
         # already succeeded, so a release never exists without its signatures.
-        if: steps.exists.outputs.skip != 'true'
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65  # v2.6.2
         with:
           tag_name: studio-v${{ env.VERSION }}
@@ -784,7 +776,6 @@ jobs:
             release/releases.json
 
       - name: Summarise
-        if: steps.exists.outputs.skip != 'true'
         run: |
           # shellcheck disable=SC2016  # the backticks are Markdown, not command substitution
           {
