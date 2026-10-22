@@ -24,7 +24,7 @@ pytest.importorskip("hugmesh_studio.gui.qt",
 from hugmesh_studio.core.platform_info import HostInfo  # noqa: E402
 from hugmesh_studio.gui import wizard as wizard_mod  # noqa: E402
 from hugmesh_studio.gui.pages.worklist import _COL_RAM  # noqa: E402
-from hugmesh_studio.gui.qt import Qt  # noqa: E402
+from hugmesh_studio.gui.qt import Qt, QtWidgets  # noqa: E402
 
 from _helpers import advance_to, check_worklist_rows, pick_mode  # noqa: E402
 
@@ -176,6 +176,41 @@ def test_render_png(wiz, tmp_path):
     path2 = os.path.join(out_dir, "worklist-orangepi-nodes-ram-refusal.png")
     assert wiz.grab().save(path2)
     assert page.ram_error.isVisible()
+
+
+def test_ram_and_board_controls_are_visible_with_the_new_floors(wiz, tmp_path):
+    """The RAM floors are LOOKED at, not only tested: the omnibus row's board and RAM
+    pickers and the backend row's RAM picker are visible, enabled and sized, offer
+    only what the builders accept (omnibus: a 16 GB Pi 5; backend: 8 GB and up), and
+    the RAM refusal names 16 GB. PNGs land in $HUGMESH_RENDER_DIR when set."""
+    page = _worklist(wiz)
+    _only(page, "omnibus.rpi5", "backend.orangepi5", "frontend.orangepi4-lts")
+    page.tree.expandAll()
+    wiz.resize(1400, 900)
+    wiz.show()
+    QtWidgets.QApplication.processEvents()
+    board_combo, _flavor = page._combos["omnibus.rpi5"]
+    shown = {"omnibus.rpi5 board": board_combo,
+             "omnibus.rpi5 RAM": page._ram_combos["omnibus.rpi5"],
+             "backend.orangepi5 RAM": page._ram_combos["backend.orangepi5"],
+             "frontend.orangepi4-lts RAM": page._ram_combos["frontend.orangepi4-lts"]}
+    out_dir = os.environ.get("HUGMESH_RENDER_DIR") or str(tmp_path)
+    os.makedirs(out_dir, exist_ok=True)
+    for name, w in shown.items():
+        page.tree.scrollToItem(page.rows[name.split()[0]])
+        QtWidgets.QApplication.processEvents()
+        assert w.isVisible() and w.isEnabled(), name
+        assert w.width() >= 60 and w.height() >= 18, (name, w.width(), w.height())
+        assert w.grab().save(os.path.join(out_dir, f"worklist-{name.replace(' ', '-')}.png"))
+    assert _items(board_combo) == ["rpi5"]
+    assert _items(page._ram_combos["omnibus.rpi5"]) == ["choose…", "16 GB"]
+    assert _items(page._ram_combos["backend.orangepi5"])[1:] == ["8 GB", "16 GB", "32 GB"]
+    assert _items(page._ram_combos["frontend.orangepi4-lts"]) == ["—", "4 GB"]
+    page.tree.scrollToItem(page.rows["omnibus.rpi5"])
+    assert page.validatePage() is False
+    assert page.ram_error.isVisible() and "16 GB" in page.ram_error.text()
+    assert page.ram_error.width() >= 200
+    assert wiz.grab().save(os.path.join(out_dir, "worklist-ram-floors-refusal.png"))
 
 
 def test_required_trio_never_checks_experimental_orange_pi_rows(wiz):
