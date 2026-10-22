@@ -707,7 +707,7 @@ jobs:
 
           Every file was built and signed by GitHub Actions on GitHub-hosted runners, by \`.github/workflows/studio-release.yml\` at tag \`$tag\`.
 
-          1. Build provenance (GitHub CLI 2.49 or newer), for each file:
+          1. Build provenance, for each file (a current GitHub CLI: every flag below exists in gh 2.94):
 
           \`\`\`
           gh attestation verify hugmesh-studio-$VERSION-x64.msi \\
