@@ -1637,9 +1637,9 @@ fi
 # recorded next to it; a run that REUSES the tree (--resume, --image-only) must be
 # for the same role, and a fresh run wipes a populated tree first (as the Raspberry
 # Pi and x86 builders already do), which also removes stale .so symlinks.
-SYSROOT_ROLE_MARK="${BUILD_ROOT}/sysroot.role"
-if ${NODE_ROLE}; then SYSROOT_ROLE="node:${ROLE}"; else SYSROOT_ROLE="desktop"; fi
-if [ -f "${SYSROOT}/etc/gentoo-release" ] && { ${RESUME} || ${IMAGE_ONLY}; }; then
+SYSROOT_ROLE_MARK="${SYSROOT%/*}/sysroot.role"     # next to the tree: ${BUILD_ROOT}/sysroot.role
+if ${NODE_ROLE:-false}; then SYSROOT_ROLE="node:${ROLE}"; else SYSROOT_ROLE="desktop"; fi
+if [ -f "${SYSROOT}/etc/gentoo-release" ] && { ${RESUME} || ${IMAGE_ONLY:-false}; }; then
     _prev_sysroot_role="$(cat "${SYSROOT_ROLE_MARK}" 2>/dev/null || true)"
     if [ -z "${_prev_sysroot_role}" ]; then
         warn "Sysroot ${SYSROOT} has no role record (built before roles were recorded); reusing it as ${SYSROOT_ROLE}. If it was built for another role, rebuild WITHOUT --resume/--image-only."
@@ -1668,7 +1668,7 @@ else
     # A fresh run over an ALREADY-POPULATED sysroot starts CLEAN (see above).
     # --image-only keeps the tree: it skips the package phases and only assembles
     # the image from what is there.
-    if [ -f "${SYSROOT}/etc/gentoo-release" ] && ! ${IMAGE_ONLY}; then
+    if [ -f "${SYSROOT}/etc/gentoo-release" ] && ! ${IMAGE_ONLY:-false}; then
         warn "Sysroot already populated and NOT --resume: wiping it for a clean stage3 extract (it may hold another role's services, and stale .so symlinks)"
         rm -rf "${SYSROOT:?}"
         mkdir -p "${SYSROOT}"

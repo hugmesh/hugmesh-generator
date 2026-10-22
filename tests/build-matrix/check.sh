@@ -870,6 +870,11 @@ check_gui() { # platform role env board flavor desktop
 # one probe per matrix row plus bogus-token negatives, emitting
 # "JOB PASS|FAIL <row>" / "JOBNEG PASS|FAIL <name>" lines like the menu child.
 run_job_channel() {
+    # How many JOBNEG probes the child must report: every `expect_reject "` line
+    # in its heredoc below, counted from this file so adding a probe can never
+    # leave a stale hand-typed total (it said 13 after the list grew to 20).
+    JOBNEG_EXPECTED="$(grep -c '^expect_reject "' "${BASH_SOURCE[0]}" 2>/dev/null || true)"
+    [ "${JOBNEG_EXPECTED:-0}" -ge 1 ] 2>/dev/null || JOBNEG_EXPECTED=1
     local out="${TMP_DIR}/job.out" fn="${TMP_DIR}/job.fn"
     sed -n '/^resolve_build_target() {$/,/^}$/p' docker/build-image.sh >"${fn}"
     # DRIFT ASSERT (fail-loud): the extraction leans on the function's exact
@@ -882,10 +887,11 @@ run_job_channel() {
        || ! grep -q 'hugmesh_role_for' "${fn}"; then
         _fail JOB "channel" "cannot extract resolve_build_target() from docker/build-image.sh — the whitelist format drifted; update this probe" "${fn}"
         JOB_FAIL=$((JOB_FAIL+1))
-        NEG_FAIL=$((NEG_FAIL+13))  # the 13 JOBNEG probes below never ran
+        NEG_FAIL=$((NEG_FAIL+JOBNEG_EXPECTED))  # the JOBNEG probes below never ran
         return
     fi
     MATRIX="${MATRIX}" FN="${fn}" ROLES_LIB="${PWD}/scripts/_roles-lib.sh" \
+    MATRIX_OMNIBUS_RAM_GB="${MATRIX_OMNIBUS_RAM_GB}" \
         bash <<'JOB_EOF' >"${out}" 2>"${TMP_DIR}/job.err"
 set -u
 # THE ROLE VOCABULARY, sourced exactly as build-image.sh sources it. The extracted
@@ -1010,7 +1016,7 @@ while IFS=$'\t' read -r platform role env board flavor desktop; do
             [ "${BUILD_ROLE}" = "${expect_role}" ]          || miss+=" BUILD_ROLE(got '${BUILD_ROLE}')"
             [ "${RPI5_BOARD_OUT}" = "${expect_board}" ] || miss+=" RPI5_BOARD_OUT(got '${RPI5_BOARD_OUT}')"
             if [ "${role}" = omnibus ]; then
-                [ "${RAM_GB_OUT}" = 8 ] || miss+=" RAM_GB_OUT(got '${RAM_GB_OUT}')"
+                [ "${RAM_GB_OUT}" = "${MATRIX_OMNIBUS_RAM_GB}" ] || miss+=" RAM_GB_OUT(got '${RAM_GB_OUT}')"
             fi
             if ${expect_standalone}; then
                 [ "${RPI5_STANDALONE}" = true ] || miss+=" RPI5_STANDALONE(got '${RPI5_STANDALONE}')"
@@ -1128,11 +1134,11 @@ JOB_EOF
     JOB_PASS=$(grep -c '^JOB PASS' "${out}" || true)
     JOB_FAIL=$(grep -c '^JOB FAIL' "${out}" || true)
     # the child's negative probes count toward the NEG bucket; FAIL-CLOSED like
-    # the menu child's threading probes: 13 expected, shortfall = failures.
+    # the menu child's threading probes: JOBNEG_EXPECTED expected, shortfall = failures.
     local jneg_pass
     jneg_pass=$(grep -c '^JOBNEG PASS' "${out}" || true)
     NEG_PASS=$((NEG_PASS + jneg_pass))
-    NEG_FAIL=$((NEG_FAIL + 13 - jneg_pass))
+    NEG_FAIL=$((NEG_FAIL + JOBNEG_EXPECTED - jneg_pass))
     # FAIL-CLOSED: a crashed job child (drift canary, set -u trip, …) is a
     # channel failure, never "0 rows = 0 failures" (the completeness gate
     # below backstops this too).
