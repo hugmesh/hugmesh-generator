@@ -97,6 +97,10 @@ def _read_lines(path: str) -> list[str]:
 _SHARED_LIST_SOURCE = {
     ("orangepi5", "packages-k8s"): "rpi5",
     ("orangepi4-lts", "packages-k8s"): "rpi5",
+    # ...and the node host packages the Pi carries in its own base list
+    # (scripts/_node-role-lib.sh NODE_ROLE_HOST_PACKAGES_LIST).
+    ("orangepi5", "packages-node-host"): "rpi5",
+    ("orangepi4-lts", "packages-node-host"): "rpi5",
 }
 
 
@@ -240,6 +244,7 @@ PLATFORM_LISTS: dict[str, tuple[ListSpec, ...]] = {
         ListSpec("packages-live", "live", _flavor_live),
         # cluster NODE roles (EXPERIMENTAL): the Raspberry Pi k8s node set
         ListSpec("packages-k8s", "k8s", _NODE),
+        ListSpec("packages-node-host", "node-host", _NODE),
     ),
     "orangepizero2": (
         ListSpec("packages", "base", _ALWAYS),
@@ -266,6 +271,7 @@ PLATFORM_LISTS: dict[str, tuple[ListSpec, ...]] = {
         ListSpec("packages-live", "live", _flavor_live),
         # the frontend cluster NODE role (EXPERIMENTAL): the Raspberry Pi k8s node set
         ListSpec("packages-k8s", "k8s", _NODE),
+        ListSpec("packages-node-host", "node-host", _NODE),
     ),
 }
 

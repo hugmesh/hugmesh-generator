@@ -23,10 +23,11 @@ _GEN = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 # glib[introspection] chain does not cross-compile (the real build died in glib's
 # in-source gobject-introspection bootstrap), so the atom was removed behind a
 # paper-trail comment and tests/requested-atoms-resolvable.sh pins the exclusion.
-# orangepi5 = 53 + 8: its cluster NODE roles (EXPERIMENTAL) read the Raspberry Pi
-# k8s node set (specs-rpi5/portage/packages-k8s.list, 8 atoms) rather than a copy.
+# orangepi5 = 53 + 8 + 10: its cluster NODE roles (EXPERIMENTAL) read the Raspberry Pi
+# k8s node set (specs-rpi5/portage/packages-k8s.list, 8 atoms) and the node host list
+# (specs-rpi5/portage/packages-node-host.list, 10 atoms) rather than a copy.
 _RAW_TOTALS = {"x86": 151, "rpi5": 73, "jetson": 66, "frite": 52,
-               "orangepi5": 61, "orangepizero2": 32, "orangepizero2w": 32}
+               "orangepi5": 71, "orangepizero2": 32, "orangepizero2w": 32}
 
 _CONFIGS = [
     ("x86 omnibus node", ImageConfig(mode="mesh", role="omnibus", platform="x86")),
