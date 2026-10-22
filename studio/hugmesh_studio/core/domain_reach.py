@@ -140,16 +140,22 @@ def egress_problems(value, where: str) -> list[str]:
 # ── the mesh-wide defaults ────────────────────────────────────────────────────────────
 def mesh_tailnet_default(mesh) -> bool:
     """Whether the MESH joins its VPN (tailnet): a local Docker mesh in production
-    (the overlay attaches there; a test mesh is LAN-only), an image in mesh mode or a
-    Mesh desktop client image (cloud) whose resolved tailscale plane is on (the Network
-    step's Tailscale setting, on by default for both; ``tailscale_enabled``), a fleet
+    (the overlay attaches there; a test mesh is LAN-only), an image in mesh mode
+    (always), a Mesh desktop client image (cloud) whose resolved tailscale plane is on
+    (the Network step's Tailscale setting, on by default; ``tailscale_enabled``), a fleet
     when it names a headscale server. None or anything else: no."""
     if mesh is None:
         return False
     if callable(getattr(mesh, "is_prod", None)) and hasattr(mesh, "egress_vpn_conf"):
         return bool(mesh.is_prod())
     if hasattr(mesh, "mode"):
-        if (getattr(mesh, "mode", "") or "") not in ("mesh", "cloud"):
+        mode = getattr(mesh, "mode", "") or ""
+        if mode == "mesh":
+            # every node of a mesh joins its VPN: the wizard forces tailscale on for
+            # each mesh entry, and the row-0 note says so (skeptic concern 1: reading
+            # the resolved value here could only contradict that note)
+            return True
+        if mode != "cloud":
             return False
         resolved = getattr(mesh, "tailscale_enabled", None)
         if callable(resolved):
@@ -157,7 +163,7 @@ def mesh_tailnet_default(mesh) -> bool:
                 return bool(resolved())
             except (TypeError, ValueError):
                 return True
-        return (getattr(mesh, "mode", "") or "") == "mesh"
+        return False
     return bool((getattr(mesh, "headscale_url", "") or "").strip())
 
 

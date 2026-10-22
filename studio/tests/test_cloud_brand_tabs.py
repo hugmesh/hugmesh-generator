@@ -221,3 +221,32 @@ def test_the_cloud_services_tab_says_a_client_keeps_its_ticks_only(qapp, gen):
     lines = sc.lines(j)
     assert brand_step.CLIENT_SERVICES_NOTE in lines
     assert ENFORCEMENT_NOTE not in lines
+
+
+def test_coming_back_to_the_step_keeps_the_tab_that_was_open(qapp, gen):
+    """The first entry opens on Services; Back and Next again (a second
+    initializePage) must not throw away the tab the person was on (skeptic concern 2:
+    the page reset to Services on every entry)."""
+    for mode in ("cloud", "mesh"):
+        cfg = (_cloud_cfg() if mode == "cloud"
+               else ImageConfig(mode="mesh", role="backend", platform="rpi5"))
+        _wiz, page = _page(qapp, gen, cfg)
+        tabs = page.brand_tabs
+        assert tabs.currentIndex() == bs_mod.TAB_SERVICES
+        tabs.setCurrentIndex(bs_mod.TAB_WAYS)
+        _settle(qapp)
+        page.initializePage()
+        _settle(qapp)
+        assert tabs.currentIndex() == bs_mod.TAB_WAYS, mode
+
+
+def test_a_mesh_image_always_joins_its_vpn_and_only_a_client_reads_its_setting():
+    """Skeptic concern 1: a mesh's row-0 note says every node joins, so the mesh's
+    VPN must read on even with a hand-set tailscale=False; a client reads its own."""
+    from hugmesh_studio.core import domain_reach
+    mesh = ImageConfig(mode="mesh", role="backend", platform="rpi5", tailscale=False)
+    assert domain_reach.mesh_tailnet_default(mesh) is True
+    assert domain_reach.mesh_tailnet_default(_cloud_cfg(tailscale=False)) is False
+    assert domain_reach.mesh_tailnet_default(_cloud_cfg()) is True
+    assert domain_reach.mesh_tailnet_default(
+        ImageConfig(mode="standalone", role="laptop")) is False

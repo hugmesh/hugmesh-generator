@@ -1092,7 +1092,11 @@ class DomainServicesPage(QtWidgets.QWizardPage, DomainServicesBody):
         the Services tab, so the body's visibility is set where it is on screen."""
         from ...tui import brand_step
         client = (getattr(cfg, "mode", "") or "") == "cloud"
-        self.brand_tabs.setCurrentIndex(TAB_SERVICES)
+        # the FIRST entry opens on Services; a later entry (Back, then Next again)
+        # keeps the tab the person had open, as the page did before (skeptic concern 2)
+        if not getattr(self, "_services_tab_opened", False):
+            self.brand_tabs.setCurrentIndex(TAB_SERVICES)
+            self._services_tab_opened = True
         self.enforcement.setVisible(not client)
         self.help.setVisible(not client)
         self.lane_note.setText(brand_step.CLIENT_SERVICES_NOTE if client else "")
