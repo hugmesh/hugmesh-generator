@@ -1331,6 +1331,71 @@ provision_headscale_policy_sync() {
 }
 
 # ── Kubernetes ─────────────────────────────────────────────────────
+# Node labels from the KEYS stick (.hugmesh.node_labels) handed to the KUBELET, so
+# the node registers WITH them. Before this, the only code that applied those labels
+# was the `kubectl label` in provision_hugmesh(), which needs
+# /etc/kubernetes/admin.conf — a file only a control plane has. A worker (backend,
+# frontend, backend-gpu, edge-ai) joined with no labels at all, so the GPU tier
+# (nvidia-device-plugin DaemonSet, edge-ai, owncast, tube, games, media-poisoner,
+# every one pinned to hugmesh.net/compute=gpu) could never schedule onto it.
+#
+# How it reaches the kubelet: openrc-run sources /etc/conf.d/kubelet before
+# /etc/init.d/kubelet, and the init script appends ${KUBELET_EXTRA_ARGS} to the
+# kubelet command line. This is written BEFORE kubeadm runs, because `kubeadm
+# join`/`init` restarts the kubelet and the kubelet applies --node-labels only when
+# it first registers the node.
+#
+# Each key and value is checked against the Kubernetes label syntax (this file is
+# sourced as shell, so nothing outside [A-Za-z0-9._/-] may reach it). Keys in the
+# kubernetes.io / k8s.io namespaces are NOT passed: the kubelet refuses to start
+# when --node-labels carries one outside its small allowed set ("unknown
+# 'kubernetes.io' or 'k8s.io' labels specified with --node-labels"), which would
+# leave the node unable to join. Those stay with the control-plane kubectl path.
+KUBELET_CONFD="${KUBELET_CONFD:-/etc/conf.d/kubelet}"
+_KUBELET_LABELS_TAG="# hugmesh keys-provision: node labels from KEYS .hugmesh.node_labels"
+_stage_kubelet_node_labels() {
+    local raw kv k v name prefix ok_labels="" conf="${KUBELET_CONFD}" tmp
+    local re_name='^[A-Za-z0-9]([-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?$'
+    local re_prefix='^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$'
+    local re_value='^([A-Za-z0-9]([-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?)?$'
+    raw="$(jq -r '.hugmesh.node_labels // {} | to_entries[] | "\(.key)=\(.value)"' "${MANIFEST}" 2>/dev/null)" || raw=""
+    while IFS= read -r kv; do
+        [ -n "${kv}" ] || continue
+        k="${kv%%=*}"; v="${kv#*=}"
+        case "${k}" in
+            */*) prefix="${k%/*}"; name="${k##*/}" ;;
+            *)   prefix="";        name="${k}" ;;
+        esac
+        if ! [[ "${name}" =~ ${re_name} ]] \
+           || { [ -n "${prefix}" ] && { [ "${#prefix}" -gt 253 ] || ! [[ "${prefix}" =~ ${re_prefix} ]]; }; } \
+           || ! [[ "${v}" =~ ${re_value} ]]; then
+            warn "node label '${k}' is not a valid Kubernetes label (or its value is not) — NOT passed to the kubelet"
+            continue
+        fi
+        case "${prefix}" in
+            kubernetes.io|*.kubernetes.io|k8s.io|*.k8s.io)
+                log "node label '${k}' is in a kubernetes.io/k8s.io namespace the kubelet may not set on itself — left for the control-plane kubectl path"
+                continue ;;
+        esac
+        ok_labels="${ok_labels:+${ok_labels},}${k}=${v}"
+    done <<< "${raw}"
+
+    mkdir -p "$(dirname "${conf}")"
+    tmp="${conf}.hugmesh.$$"
+    # Drop only the lines this function wrote before (re-provision), keep the rest.
+    if [ -f "${conf}" ]; then
+        grep -vF -e "${_KUBELET_LABELS_TAG}" "${conf}" > "${tmp}" || true
+    else
+        : > "${tmp}"
+    fi
+    if [ -n "${ok_labels}" ]; then
+        printf 'KUBELET_EXTRA_ARGS="${KUBELET_EXTRA_ARGS:+${KUBELET_EXTRA_ARGS} }--node-labels=%s"  %s\n' \
+            "${ok_labels}" "${_KUBELET_LABELS_TAG}" >> "${tmp}"
+        log "kubelet will register this node with labels: ${ok_labels} (${conf})"
+    fi
+    mv -f "${tmp}" "${conf}"
+}
+
 # Shared kubeadm join helper. Workers omit the extra args; additional
 # control-plane nodes pass `--control-plane --certificate-key <ck>`.
 # Idempotent: a node that already has a kubelet.conf is treated as joined.
@@ -1501,6 +1566,11 @@ provision_kubernetes() {
         modprobe "${m}" 2>/dev/null || true
     done
     sysctl --system >/dev/null 2>&1 || true
+
+    # Before any kubeadm run (here, or a manual join when bootstrap=false): kubeadm
+    # restarts the kubelet, and the kubelet applies --node-labels only when it first
+    # registers the node.
+    _stage_kubelet_node_labels
 
     [ "${bootstrap}" = "true" ] || {
         log "K8s config staged; skipping live bootstrap (set kubernetes.bootstrap=true to run kubeadm)"
