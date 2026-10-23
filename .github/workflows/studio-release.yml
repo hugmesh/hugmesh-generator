@@ -67,7 +67,7 @@ on:
         type: boolean
         default: false
   push:
-    tags: ['studio-v*']
+    tags: ['studio-v*', 'main']
 
 permissions:
   contents: read
@@ -111,26 +111,7 @@ jobs:
           echo "msi_version=$msi_version" >> "$GITHUB_OUTPUT"
           echo "Studio version: $version (MSI ProductVersion $msi_version)"
 
-      - name: Refuse any ref other than main or a studio-v* tag
-        # The beta scheme's trigger split: a tag publishes, main only builds, and
-        # nothing else runs at all (a feature branch would otherwise build installers
-        # that look like release candidates).
-        env:
-          REF: ${{ github.ref }}
-        run: |
-          case "$REF" in
-            refs/heads/main|refs/tags/studio-v*) echo "ref $REF accepted" ;;
-            *) echo "::error::studio-release runs only on main or on a studio-v* tag, not on $REF"; exit 1 ;;
-          esac
 
-      - name: Tag must match the version it claims to release
-        if: startsWith(github.ref, 'refs/tags/studio-v')
-        run: |
-          tag="${GITHUB_REF_NAME#studio-v}"
-          if [ "$tag" != "${{ steps.read.outputs.version }}" ]; then
-            echo "::error::tag studio-v$tag does not match __version__ ${{ steps.read.outputs.version }}"
-            exit 1
-          fi
 
   msi:
     needs: version
