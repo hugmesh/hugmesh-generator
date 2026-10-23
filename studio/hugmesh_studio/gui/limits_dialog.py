@@ -26,6 +26,19 @@ from ..core import stack_limits as sl
 #: Shown when the operator has picked "no limit" on the CPU slider.
 UNLIMITED_LABEL = "No limit"
 
+#: The dialog's opening paragraph. Every lane it names as LIMITED must have code that
+#: reads the setting (tests/test_limits_reach_lanes.py checks that); lanes that do not
+#: yet are named as such, so the operator is never told a cap exists that nothing applies.
+BLURB = (
+    "How much of this machine HugMesh may use while it runs in the background. "
+    "These apply to image and fleet builds, the local Docker stack and the mesh node "
+    "started from this tray. Emulated devices (QEMU) and Kubernetes (kind) nodes are "
+    "not limited by this setting yet.")
+
+#: The lanes the setting does NOT reach yet, stated in the per-lane effect list.
+NOT_YET_LIMITED = ("Not limited by this setting yet: emulated devices (QEMU) and "
+                   "Kubernetes (kind) nodes.")
+
 
 def limits_summary(limits: rl.ResourceLimits) -> str:
     """The one-line status the tray tooltip and the dialog header both show."""
@@ -43,7 +56,7 @@ def describe_effect(limits: rl.ResourceLimits, *, service_count: int = 0) -> lis
     value rather than repeating the input back.
     """
     if limits.is_unlimited():
-        return ["Builds, the local stack and emulated meshes run unbounded, "
+        return ["Builds, the local stack and the mesh node run unbounded, "
                 "as they did before limits existed."]
 
     out: list[str] = []
@@ -62,15 +75,22 @@ def describe_effect(limits: rl.ResourceLimits, *, service_count: int = 0) -> lis
             detail += " (memory left unlimited — the share would be too small to start a service)"
         out.append(f"Each of the {service_count} local-stack services is capped at {detail}.")
 
-    smp = rl.qemu_smp(limits)
-    if smp is not None:
-        out.append(f"Emulated devices boot with {smp} vCPU{'s' if smp != 1 else ''} each.")
+    node = []
+    if limits.cpus is not None:
+        node.append(f"{limits.cpus:g} CPU")
+    if limits.memory is not None:
+        node.append(f"{limits.memory} of memory, no swap")
+    if node:
+        out.append("The mesh node started from the tray is capped at "
+                   + " and ".join(node) + ".")
 
     if limits.gpus:
-        out.append(f"Containers are offered GPU: {limits.gpus}.")
+        out.append(f"Image and fleet builds are offered GPU: {limits.gpus}. "
+                   "The mesh node is never given one.")
     else:
         out.append("No lane is given GPU access.")
 
+    out.append(NOT_YET_LIMITED)
     return out
 
 
@@ -90,10 +110,7 @@ class LimitsDialog(QtWidgets.QDialog):
 
         layout = QtWidgets.QVBoxLayout(self)
 
-        blurb = QtWidgets.QLabel(
-            "How much of this machine HugMesh may use while it runs in the background. "
-            "These apply to image builds, the local Docker stack, emulated meshes and "
-            "Kubernetes nodes started from this Studio.")
+        blurb = QtWidgets.QLabel(BLURB)
         blurb.setWordWrap(True)
         layout.addWidget(blurb)
 
@@ -210,4 +227,4 @@ def open_limits_dialog(parent=None, *, generator_dir: str = "") -> rl.ResourceLi
 
 
 __all__ = ["LimitsDialog", "open_limits_dialog", "limits_summary", "describe_effect",
-           "UNLIMITED_LABEL"]
+           "UNLIMITED_LABEL", "BLURB", "NOT_YET_LIMITED"]
