@@ -58,7 +58,7 @@ real board joins a real cluster.
 
 ```sh
 ./build-orangepi5-stage4.sh --role backend --print-plan                         # 5 Plus backend node
-./build-orangepi5-stage4.sh --board orange-pi-5 --role pki --ram-gb 8 --print-plan
+./build-orangepi5-stage4.sh --board orange-pi-5 --role pki --ram-gb 4 --print-plan
 ./build-orangepi5-stage4.sh --role omnibus --ram-gb 16 --print-plan             # every role on one board
 make orangepi5-omnibus RAM_GB=16 ORANGEPI5_BOARD=orange-pi-5-plus               # the real build (root, hours)
 ```
@@ -69,11 +69,13 @@ make orangepi5-omnibus RAM_GB=16 ORANGEPI5_BOARD=orange-pi-5-plus               
   `.img` like the Raspberry Pi's is a follow-up.
 * **RAM.** The board is sold with 4, 8, 16 or 32 GB and one image serves all of
   them, so the build is told the RAM with `--ram-gb N`. omnibus REQUIRES it and
-  needs **8 GB or more** (16 GB recommended): the whole stack asks the scheduler
-  for about 6.3 GiB before the operating system (measured on the single-node
-  kind cluster, on x86). pki, backend and frontend need 4 GB; when `--ram-gb` is
-  given below that, the build is refused. A 4 GB board can be pki, backend or
-  frontend, never omnibus. For omnibus, use NVMe or eMMC, not microSD.
+  needs **16 GB or more**: the whole stack asks the scheduler for about 8.3 GiB
+  before the operating system (measured 2026-10-22 on the single-node kind
+  cluster, on x86; an ARM node will not use less), so it does not fit 8 GB.
+  backend needs **8 GB** (its tier alone asks for 4 GiB); pki and frontend need
+  **4 GB**. When `--ram-gb` is given below a role's floor, the build is refused.
+  A 4 GB board can be pki or frontend; an 8 GB board can also be backend; only a
+  16 or 32 GB board can be omnibus. For omnibus, use NVMe or eMMC, not microSD.
 * **Same node payload as the Raspberry Pi.** The k8s package set is
   `specs-rpi5/portage/packages-k8s.list` (read, not copied); the kernel adds the
   shared `specs/kernel/k8s-node.config` fragment on top of hardened-desktop.config
@@ -82,14 +84,14 @@ make orangepi5-omnibus RAM_GB=16 ORANGEPI5_BOARD=orange-pi-5-plus               
   env / optional-service / backing-service / firewall gates, the brand and IdP
   rewrites and the node runlevel come from the Raspberry Pi builder's own
   functions (scripts/_node-role-lib.sh loads them; it does not copy them).
-  headscale runs on pki and omnibus only. omnibus records its 8 GB floor on the
+  headscale runs on pki and omnibus only. omnibus records its 16 GB floor on the
   image as `/etc/hugmesh/min-ram-mb`.
 * **Root size.** 9216 MiB for pki/backend/frontend, 20480 MiB for omnibus (the
   x86/Jetson omnibus size), unless `--img-size` is given.
 * `--standalone` stays desktop-only.
 * **What must be checked on a real board:** the U-Boot chain (rkbin blobs), NVMe
   and the RTL8125 2.5GbE on the Plus with the mainline kernel, that the node's
-  kubelet joins, and real memory use of an omnibus on 8 GB.
+  kubelet joins, and real memory use of an omnibus on 16 GB.
 
 ## Boot chain (researched — see confidence notes)
 

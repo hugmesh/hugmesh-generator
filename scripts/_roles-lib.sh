@@ -112,9 +112,9 @@ HUGMESH_ROLES_CANONICAL="pki backend frontend backend-gpu omnibus edge-ai generi
 # orangepi-zero2/-zero2w/-zero3, orangepi3-lts) have NO role axis: they are
 # handled by hugmesh_role_reject_node_role below, which names the reason.
 #
-# omnibus on rpi5/orangepi5 is gated on RAM (HUGMESH_ROLE_MIN_RAM_GB below): the
-# same image is sold with 1-16 GB (Pi) or 4-32 GB (Orange Pi 5), so the builder
-# requires --ram-gb for it. The Orange Pi 4 LTS (one 4 GB SKU, 16 GB eMMC) does
+# omnibus on rpi5/orangepi5 is gated on RAM (HUGMESH_ROLE_MIN_RAM_GB below, 16 GB):
+# the same image is sold with 1-16 GB (Pi) or 4-32 GB (Orange Pi 5), so the builder
+# requires --ram-gb for it, and the Pi 4 (8 GB at most) is refused it. The Orange Pi 4 LTS (one 4 GB SKU, 16 GB eMMC) does
 # not list omnibus, pki or backend at all — see HUGMESH_ROLE_REFUSAL.
 HUGMESH_ROLES_X86="pki backend frontend backend-gpu omnibus edge-ai laptop chromebook desktop standalone-thin standalone-thick standalone-unaffiliated"
 HUGMESH_ROLES_RPI5="generic pki backend frontend omnibus desktop"
@@ -583,9 +583,9 @@ hugmesh_role_node_set() {
 # Python reader (the reader and hugmesh_role_refusal_reason both turn `_` back into
 # a space). The RAM/storage numbers come from each board's specs-*/README.md.
 HUGMESH_ROLE_REFUSAL="
-orangepi4-lts:omnibus=the_Orange_Pi_4_LTS_has_4_GB_of_RAM_(single_SKU)_and_16_GB_of_eMMC,_below_omnibus's_8_GB_RAM_floor;_it_can_be_a_frontend_worker
+orangepi4-lts:omnibus=the_Orange_Pi_4_LTS_has_4_GB_of_RAM_(single_SKU)_and_16_GB_of_eMMC,_below_omnibus's_16_GB_RAM_floor;_it_can_be_a_frontend_worker
 orangepi4-lts:pki=the_Orange_Pi_4_LTS_has_16_GB_of_eMMC_and_no_M.2_slot,_too_small_for_the_control_plane's_etcd,_Vault,_Harbor_and_Cassandra_storage;_it_can_be_a_frontend_worker
-orangepi4-lts:backend=the_Orange_Pi_4_LTS_has_4_GB_of_RAM,_and_the_backend_tier's_memory_limits_alone_add_up_to_more_than_that;_it_can_be_a_frontend_worker
+orangepi4-lts:backend=the_Orange_Pi_4_LTS_has_4_GB_of_RAM,_below_backend's_8_GB_RAM_floor_(the_backend_tier_alone_asks_for_4_GiB);_it_can_be_a_frontend_worker
 orangepi4-lts:any=the_Orange_Pi_4_LTS_builds_only_the_frontend_node_role
 orangepi5:any=the_Orange_Pi_5_/_5_Plus_builds_the_pki,_backend,_frontend_and_omnibus_node_roles_only
 orangepizero2:any=the_Orange_Pi_Zero_2_has_at_most_1_GB_of_RAM_and_boots_from_microSD_only,_not_enough_for_the_hardened_containerd/kubelet_node_stack
@@ -618,15 +618,29 @@ hugmesh_role_refusal_reason() {
 # it will be flashed onto (`--board rpi4` is ONE image for the 1, 2, 4 and 8 GB
 # Pi 4), so the builders take the RAM as `--ram-gb N`: REQUIRED for omnibus (the
 # role that runs every cluster tier on one node), optional for the others (when
-# given and below the floor it is refused). Evidence for the numbers: the live kind
-# cluster, which runs every namespace on ONE node, asks the scheduler for about
-# 6.3 GiB of memory requests before the OS (measured 2026-10-21 on x86; a real ARM
-# node will use more). The baked /etc/hugmesh/min-ram-mb records the floor on the
-# image. x86/jetson builders do not take --ram-gb yet.
+# given and below the floor it is refused). A board whose LARGEST RAM size
+# (HUGMESH_BOARD_RAM_GB) is below a role's floor is refused that role outright
+# (the Pi 4 tops out at 8 GB, so it is never an omnibus).
+#
+# Evidence: the live kind cluster runs every namespace on ONE node. Measured
+# read-only 2026-10-22 00:08 PDT (`kubectl get pods -A -o json`, 68 Running pods;
+# `kubectl describe nodes`: "memory 8496Mi" requested), the scheduler is asked for
+# 8496 MiB (8.3 GiB) of memory before the OS, and the node's working set was
+# 9764 MiB. Per tier (requests / limits, MiB): backend 4096 / 11520,
+# pki 1536 / 3328, frontend 1472 / 3200, vault 288, kube-system 490, keda 300,
+# kyverno 192, ingress 90. A real ARM node will use more, not less. So:
+#   omnibus  16  8.3 GiB of requests + OS + kubelet reserve does not fit a board
+#                sold as 8 GB (about 7.6 GiB usable); 16 GB is the next size.
+#   backend   8  its tier alone requests 4.0 GiB, more than a 4 GB board can
+#                give the scheduler once the OS and kubelet have theirs.
+#   pki       4  about 2.4 GiB with Vault, ingress and the control plane.
+#   frontend  4  about 2 GiB with the per-node system pods.
+# The baked /etc/hugmesh/min-ram-mb records the omnibus floor on the image.
+# x86/jetson builders do not take --ram-gb yet.
 HUGMESH_ROLE_MIN_RAM_GB="
-omnibus=8
+omnibus=16
 pki=4
-backend=4
+backend=8
 frontend=4
 "
 
@@ -650,6 +664,32 @@ hugmesh_role_min_ram_gb() {
     _hm_role_lookup "${HUGMESH_ROLE_MIN_RAM_GB}" "$1"
 }
 
+# _hm_role_board_max_ram_gb <board> — the largest RAM size <board> is sold with
+# (HUGMESH_BOARD_RAM_GB); rc=1 for a board not in the table. Pure shell.
+_hm_role_board_max_ram_gb() {
+    local _skus _g _max=0
+    _skus="$(_hm_role_lookup "${HUGMESH_BOARD_RAM_GB}" "$1")" || return 1
+    while :; do
+        case "${_skus}" in
+            *,*) _g="${_skus%%,*}"; _skus="${_skus#*,}" ;;
+            *)   _g="${_skus}"; _skus="" ;;
+        esac
+        [ "${_g}" -gt "${_max}" ] && _max="${_g}"
+        [ -n "${_skus}" ] || break
+    done
+    printf '%s\n' "${_max}"
+}
+
+# hugmesh_role_ram_why <canonical role> — one line saying why the floor is what it
+# is (the numbers measured above). Used by every RAM refusal so they all agree.
+hugmesh_role_ram_why() {
+    case "$1" in
+        omnibus)  printf 'The whole stack asks the scheduler for about 8.3 GiB of memory before the operating system (measured), so it does not fit an 8 GB board. Build pki/backend/frontend for this board instead.' ;;
+        backend)  printf 'The backend tier alone asks the scheduler for 4 GiB of memory, so it does not fit a 4 GB board next to the operating system and kubelet.' ;;
+        *)        printf 'Below that the hardened containerd/kubelet stack plus this tier'"'"'s pods do not fit.' ;;
+    esac
+}
+
 # hugmesh_role_ram_check <canonical role> <ram-gb or ""> <board> — THE build-time
 # RAM gate. rc=0 to proceed; rc=1 with a full message on stderr to refuse.
 #   omnibus + no --ram-gb            -> refuse (the image cannot tell which SKU)
@@ -662,6 +702,15 @@ hugmesh_role_ram_check() {
     local _board="$3"
     local _floor
     _floor="$(hugmesh_role_min_ram_gb "${_role}")" || return 0
+    # A board that is not SOLD with enough RAM for this role is refused the role,
+    # whatever --ram-gb says (a larger --ram-gb than the board exists in is a typo).
+    local _max
+    if _max="$(_hm_role_board_max_ram_gb "${_board}")" && [ "${_max}" -lt "${_floor}" ]; then
+        printf 'ERROR: --role %s needs at least %s GB of RAM, and %s is sold with at most %s GB.\n' \
+            "${_role}" "${_floor}" "${_board}" "${_max}" >&2
+        printf '       %s\n' "$(hugmesh_role_ram_why "${_role}")" >&2
+        return 1
+    fi
     if [ -z "${_ram}" ]; then
         [ "${_role}" = "omnibus" ] || return 0
         printf 'ERROR: --role omnibus needs --ram-gb N (the GB of RAM on the board you will flash).\n' >&2
@@ -678,13 +727,7 @@ hugmesh_role_ram_check() {
     esac
     if [ "${_ram}" -lt "${_floor}" ]; then
         printf 'ERROR: --role %s needs at least %s GB of RAM (got --ram-gb %s).\n' "${_role}" "${_floor}" "${_ram}" >&2
-        if [ "${_role}" = "omnibus" ]; then
-            printf '       The whole stack asks the scheduler for about 6.3 GiB of memory before the\n' >&2
-            printf '       operating system. Build pki/backend/frontend for this board, or use a\n' >&2
-            printf '       variant with %s GB or more.\n' "${_floor}" >&2
-        else
-            printf '       Below that the hardened containerd/kubelet stack plus this tier'"'"'s pods do not fit.\n' >&2
-        fi
+        printf '       %s\n' "$(hugmesh_role_ram_why "${_role}")" >&2
         return 1
     fi
     local _skus

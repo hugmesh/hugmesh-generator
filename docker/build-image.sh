@@ -142,7 +142,8 @@
 #   rpi5 node roles      (primary | mesh-extension): "<role>[.<board>[.<N>gb]]"; role =
 #                        pki | backend | frontend | omnibus | desktop | standalone-desktop.
 #                        The optional "<N>gb" field is the board's RAM (--ram-gb):
-#                        REQUIRED for omnibus and 8 GB or more (rpi5.omnibus.rpi4.8gb);
+#                        REQUIRED for omnibus and 16 GB or more (rpi5.omnibus.rpi5.16gb;
+#                        backend 8, pki/frontend 4; a Pi 4 is never an omnibus);
 #                        a node role below its floor, or omnibus without it, is a
 #                        clean FAILED ingest (the builder's own RAM gate).
 #                        (default: backend); board = rpi5 (default) | rpi4 |
@@ -767,7 +768,7 @@ resolve_build_target() {
   ORANGEPI3LTS_STANDALONE=false
   ORANGEPI4LTS_STANDALONE=false
   # --ram-gb for a Pi / Orange Pi NODE role: the optional LAST dotted field
-  # "<N>gb" (e.g. rpi5.omnibus.rpi4.8gb). REQUIRED for omnibus (8 GB+).
+  # "<N>gb" (e.g. rpi5.omnibus.rpi5.16gb). REQUIRED for omnibus (16 GB+).
   RAM_GB_OUT=""
 
   if [ -z "$HARDWARE_CLASS" ]; then
@@ -840,8 +841,9 @@ resolve_build_target() {
           *gb) RAM_GB_OUT="${RAM_GB_OUT%gb}" ;;
           *) return 1 ;;
         esac
-        # The builder's RAM gate, silently (omnibus needs the RAM field and 8 GB+;
-        # the other node roles need 4 GB+ when it is given).
+        # The builder's RAM gate, silently (omnibus needs the RAM field and 16 GB+;
+        # backend needs 8 GB+ and pki/frontend 4 GB+ when it is given; a board not
+        # sold with the floor, e.g. a Pi 4 omnibus, is refused outright).
         if [ "$BUILD_ROLE" != "desktop" ] && [ "$BUILD_ROLE" != "generic" ]; then
           hugmesh_role_ram_check "$BUILD_ROLE" "$RAM_GB_OUT" "$RPI5_BOARD_OUT" 2>/dev/null || return 1
         elif [ -n "$RAM_GB_OUT" ]; then
@@ -890,7 +892,7 @@ resolve_build_target() {
       orangepi5)
         if [ "$IMAGE_TYPE" != "client" ]; then
           # CLUSTER NODE (EXPERIMENTAL): "<role>.<board>[.<N>gb]" — role = pki |
-          # backend | frontend | omnibus (omnibus needs the RAM field, 8 GB+);
+          # backend | frontend | omnibus (omnibus needs the RAM field, 16 GB+);
           # board = orange-pi-5-plus (default) | orange-pi-5. Installer flavor only.
           BUILD_ROLE="$(hugmesh_role_board_node_role orangepi5 "$p2" 2>/dev/null)" || return 1
           ORANGEPI5_BOARD_OUT="${p3%%.*}"

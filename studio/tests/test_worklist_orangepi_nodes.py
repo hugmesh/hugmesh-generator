@@ -24,7 +24,7 @@ pytest.importorskip("hugmesh_studio.gui.qt",
 from hugmesh_studio.core.platform_info import HostInfo  # noqa: E402
 from hugmesh_studio.gui import wizard as wizard_mod  # noqa: E402
 from hugmesh_studio.gui.pages.worklist import _COL_RAM  # noqa: E402
-from hugmesh_studio.gui.qt import Qt  # noqa: E402
+from hugmesh_studio.gui.qt import Qt, QtWidgets  # noqa: E402
 
 from _helpers import advance_to, check_worklist_rows, pick_mode  # noqa: E402
 
@@ -105,13 +105,12 @@ def test_ram_choices_follow_the_board_and_the_floor(wiz):
     _only(page, "omnibus.rpi5", "backend.orangepi5")
     board_combo, _flavor = page._combos["omnibus.rpi5"]
     ram = page._ram_combos["omnibus.rpi5"]
-    board_combo.setCurrentText("rpi4")
-    # omnibus: a prompt, then only sizes >= 8 GB the Pi 4 is sold with
-    assert _items(ram) == ["choose…", "8 GB"]
-    board_combo.setCurrentText("rpi5")
-    assert _items(ram) == ["choose…", "8 GB", "16 GB"]
-    # backend on an Orange Pi 5: "not stated" allowed, sizes >= 4 GB
-    assert _items(page._ram_combos["backend.orangepi5"]) == ["—", "4 GB", "8 GB", "16 GB", "32 GB"]
+    # omnibus needs 16 GB, and a Pi 4 is sold with 8 GB at most: the board picker
+    # does not offer it (the builder refuses it), and the RAM picker offers only 16
+    assert _items(board_combo) == ["rpi5"]
+    assert _items(ram) == ["choose…", "16 GB"]
+    # backend on an Orange Pi 5: "not stated" allowed, sizes >= its 8 GB floor
+    assert _items(page._ram_combos["backend.orangepi5"]) == ["—", "8 GB", "16 GB", "32 GB"]
 
 
 def test_orange_pi_node_rows_are_installer_only(wiz):
@@ -131,17 +130,18 @@ def test_omnibus_without_ram_is_refused_inline_then_accepted(wiz):
     _only(page, "omnibus.rpi5")
     assert page.validatePage() is False
     assert page.ram_error.isVisible()
-    assert "omnibus" in page.ram_error.text() and "8 GB" in page.ram_error.text()
+    assert "omnibus" in page.ram_error.text() and "16 GB" in page.ram_error.text()
     ram = page._ram_combos["omnibus.rpi5"]
-    ram.setCurrentIndex(ram.findData("8"))
+    assert ram.findData("8") == -1                    # below the floor: not offered
+    ram.setCurrentIndex(ram.findData("16"))
     assert page.validatePage() is True
     assert not page.ram_error.isVisible()
     entry = wiz.worklist.entries[0]
-    assert (entry.role, entry.platform, entry.ram_gb) == ("omnibus", "rpi5", "8")
+    assert (entry.role, entry.platform, entry.ram_gb) == ("omnibus", "rpi5", "16")
     (_e, cfg), = wiz.worklist.materialize()
     argv = cfg.to_cli_args()
     assert argv[argv.index("--role") + 1] == "omnibus"
-    assert argv[argv.index("--ram-gb") + 1] == "8"
+    assert argv[argv.index("--ram-gb") + 1] == "16"
 
 
 def test_orange_pi_omnibus_argv(wiz):
@@ -176,6 +176,41 @@ def test_render_png(wiz, tmp_path):
     path2 = os.path.join(out_dir, "worklist-orangepi-nodes-ram-refusal.png")
     assert wiz.grab().save(path2)
     assert page.ram_error.isVisible()
+
+
+def test_ram_and_board_controls_are_visible_with_the_new_floors(wiz, tmp_path):
+    """The RAM floors are LOOKED at, not only tested: the omnibus row's board and RAM
+    pickers and the backend row's RAM picker are visible, enabled and sized, offer
+    only what the builders accept (omnibus: a 16 GB Pi 5; backend: 8 GB and up), and
+    the RAM refusal names 16 GB. PNGs land in $HUGMESH_RENDER_DIR when set."""
+    page = _worklist(wiz)
+    _only(page, "omnibus.rpi5", "backend.orangepi5", "frontend.orangepi4-lts")
+    page.tree.expandAll()
+    wiz.resize(1400, 900)
+    wiz.show()
+    QtWidgets.QApplication.processEvents()
+    board_combo, _flavor = page._combos["omnibus.rpi5"]
+    shown = {"omnibus.rpi5 board": board_combo,
+             "omnibus.rpi5 RAM": page._ram_combos["omnibus.rpi5"],
+             "backend.orangepi5 RAM": page._ram_combos["backend.orangepi5"],
+             "frontend.orangepi4-lts RAM": page._ram_combos["frontend.orangepi4-lts"]}
+    out_dir = os.environ.get("HUGMESH_RENDER_DIR") or str(tmp_path)
+    os.makedirs(out_dir, exist_ok=True)
+    for name, w in shown.items():
+        page.tree.scrollToItem(page.rows[name.split()[0]])
+        QtWidgets.QApplication.processEvents()
+        assert w.isVisible() and w.isEnabled(), name
+        assert w.width() >= 60 and w.height() >= 18, (name, w.width(), w.height())
+        assert w.grab().save(os.path.join(out_dir, f"worklist-{name.replace(' ', '-')}.png"))
+    assert _items(board_combo) == ["rpi5"]
+    assert _items(page._ram_combos["omnibus.rpi5"]) == ["choose…", "16 GB"]
+    assert _items(page._ram_combos["backend.orangepi5"])[1:] == ["8 GB", "16 GB", "32 GB"]
+    assert _items(page._ram_combos["frontend.orangepi4-lts"]) == ["—", "4 GB"]
+    page.tree.scrollToItem(page.rows["omnibus.rpi5"])
+    assert page.validatePage() is False
+    assert page.ram_error.isVisible() and "16 GB" in page.ram_error.text()
+    assert page.ram_error.width() >= 200
+    assert wiz.grab().save(os.path.join(out_dir, "worklist-ram-floors-refusal.png"))
 
 
 def test_required_trio_never_checks_experimental_orange_pi_rows(wiz):
@@ -216,18 +251,18 @@ def test_tui_worklist_ram_rule_matches_the_gui():
     n = ids.index("omnibus.rpi5") + 1
     scr.feed(j, str(n))
     scr.feed(j, "")                                   # Enter with no RAM: refused inline
-    assert not j.advanced and f"ram {n} 8" in j.status, j.status
-    scr.feed(j, f"ram {n} 4")
-    assert j.status.startswith("refused:") and "at least 8 GB" in j.status
+    assert not j.advanced and f"ram {n} 16" in j.status, j.status
+    scr.feed(j, f"ram {n} 8")
+    assert j.status.startswith("refused:") and "at least 16 GB" in j.status
     scr.feed(j, f"ram {ids.index('pki.x86') + 1} 8")
     assert "takes no board RAM" in j.status
-    scr.feed(j, f"ram {n} 8")
-    assert f"[RAM 8 GB]" in "\n".join(scr.lines(j))
+    scr.feed(j, f"ram {n} 16")
+    assert f"[RAM 16 GB]" in "\n".join(scr.lines(j))
     scr.feed(j, "")
     assert j.advanced, j.status
     (entry,) = j.worklist.entries
-    assert (entry.id, entry.ram_gb) == ("omnibus.rpi5", "8")
+    assert (entry.id, entry.ram_gb) == ("omnibus.rpi5", "16")
     # the materialized command carries it, like the GUI's
     (_e, cfg), = j.worklist.materialize()
     argv = cfg.to_cli_args()
-    assert argv[argv.index("--ram-gb") + 1] == "8"
+    assert argv[argv.index("--ram-gb") + 1] == "16"

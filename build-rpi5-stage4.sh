@@ -725,8 +725,8 @@ OPTIONS
         Node role. One of: generic | pki | backend | frontend | omnibus |
         desktop. omnibus is ONE node running every cluster role (the
         control plane plus the backend and frontend tiers) — the same role
-        x86 builds; it needs --ram-gb 8 or more and is refused on
-        --board rpi3. The old short x86 spellings are ACCEPTED here too,
+        x86 builds; it needs --ram-gb 16 (a 16 GB Pi 5) and is refused
+        on --board rpi4 (8 GB at most) and --board rpi3. The old short x86 spellings are ACCEPTED here too,
         forever, and are normalized at parse time: be=backend, fe=frontend,
         full=omnibus. (One vocabulary across every platform —
         scripts/_roles-lib.sh.)
@@ -736,9 +736,10 @@ OPTIONS
         GB of RAM on the board you will flash (Pi 4: 1/2/4/8, Pi 5:
         1/2/4/8/16). The image is the same for every RAM size, so the build
         cannot see it. REQUIRED for --role omnibus, which needs at least
-        8 GB (the whole stack asks for about 6.3 GiB before the OS); optional
-        for pki/backend/frontend, which are refused below 4 GB when it is
-        given. Ignored (with a warning) for --role desktop/generic.
+        16 GB (the whole stack asks the scheduler for about 8.3 GiB before
+        the OS, measured); optional for the others, refused below their
+        floor when given: backend 8 GB (its tier alone asks for 4 GiB),
+        pki 4 GB, frontend 4 GB. Ignored (with a warning) for --role desktop/generic.
 
     -H, --hostname NAME
         Target system hostname.
@@ -1453,7 +1454,7 @@ fi
 
 # ── RAM floor (scripts/_roles-lib.sh HUGMESH_ROLE_MIN_RAM_GB) ───────────────────
 # The image is the same for a 1 GB and an 8 GB board, so the RAM is DECLARED with
-# --ram-gb. omnibus (every cluster role on one node) requires it and needs 8 GB;
+# --ram-gb. omnibus (every cluster role on one node) requires it and needs 16 GB;
 # the other node roles are checked only when it is given. Before --print-plan, so a
 # refusal is a plain non-zero exit with no plan (tests/build-matrix/check.sh).
 if ${ROLE_CLIENT} || [ "${ROLE}" = "generic" ]; then

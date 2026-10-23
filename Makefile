@@ -5,7 +5,7 @@
 # `make` is the friendly interface.
 #
 #   build-rpi5-stage4.sh      aarch64 (RPi5/RPi4/RPi3, RPI_BOARD=rpi5|rpi4|rpi3 — rpi3 desktop-only) cross-build -> .img + .fs.tar.xz
-#                             (rpi-omnibus = every cluster role on one Pi 4/5; needs RAM_GB=8 or more)
+#                             (rpi-omnibus = every cluster role on one 16 GB Pi 5; needs RAM_GB=16)
 #   build-x86-host-stage4.sh  amd64 multi-role build      -> .img + live ISO + .fs.tar.xz
 #   build-frite-stage4.sh     aarch64 (Amlogic) light desktop -> live/installer ISO
 #   build-jetson-stage4.sh    aarch64 (Tegra234 Orin) edge-AI node -> .img (EXPERIMENTAL)
@@ -99,7 +99,8 @@ ORANGEPI5_ONLY ?=
 ORANGEPI5_ROLES    ?=
 ORANGEPI4LTS_ROLES ?=
 # RAM_GB=N — GB of RAM on the Raspberry Pi / Orange Pi board a NODE image is for
-# (--ram-gb). REQUIRED for omnibus (8 GB minimum): make rpi-omnibus RAM_GB=8.
+# (--ram-gb). REQUIRED for omnibus (16 GB minimum): make rpi-omnibus RAM_GB=16.
+# Floors (scripts/_roles-lib.sh): omnibus 16, backend 8, pki 4, frontend 4.
 RAM_GB ?=
 ORANGEPIZERO2      ?=
 ORANGEPIZERO2_ONLY ?=
@@ -442,13 +443,13 @@ help: ## list targets
 	@echo "              + ./out/snap-build-orangepi4-lts"
 	@echo "              (never share a sysroot)."
 	@echo "  Platforms:  rpi (3 cluster roles + rpi-desktop client; RPI_BOARD=rpi5 [DEFAULT] | rpi4 | rpi3 [desktop-only];"
-	@echo "              rpi-omnibus RAM_GB=8|16 = every cluster role on ONE Pi 4/5 with 8 GB+ RAM) |"
+	@echo "              rpi-omnibus RAM_GB=16 = every cluster role on ONE 16 GB Pi 5) |"
 	@echo "              x86 (nodes+omnibus+edge-ai+clients+standalone) |"
 	@echo "              frite (arm64 light desktop) | jetson (arm64 Tegra edge-AI — EXPERIMENTAL,"
 	@echo "              JETSON_ROLE=edge-ai|backend-gpu|omnibus|desktop, hardware validation pending) |"
 	@echo "              orangepi5 (arm64 Rockchip RK3588/RK3588S light desktop — EXPERIMENTAL,"
 	@echo "              ORANGEPI5_BOARD=orange-pi-5-plus|orange-pi-5, hardware validation pending;"
-	@echo "              cluster nodes: orangepi5-pki|-backend|-frontend|-omnibus RAM_GB=8|16|32,"
+	@echo "              cluster nodes: orangepi5-pki|-backend|-frontend|-omnibus RAM_GB=4|8|16|32,"
 	@echo "              installer only — EXPERIMENTAL) |"
 	@echo "              orangepizero2 (arm64 Allwinner H616 HEADLESS APPLIANCE — EXPERIMENTAL,"
 	@echo "              no desktop mode ever — see specs-orangepi-zero2/README.md, hardware validation pending) |"
@@ -466,7 +467,7 @@ help: ## list targets
 	@echo "              RK3399 DTB — see specs-orangepi4-lts/README.md, hardware validation pending;"
 	@echo "              orangepi4-lts-frontend = its one cluster node role — 4 GB RAM, no omnibus)."
 	@echo "  Omnibus:    make omnibus [OMNIBUS_PLATFORM=x86 (DEFAULT) | rpi | orangepi5] RAM_GB=N"
-	@echo "              (one node running every cluster role; Pi/Orange Pi need RAM_GB=8 or more)."
+	@echo "              (one node running every cluster role; Pi 5/Orange Pi 5 need RAM_GB=16 or more)."
 	@echo "  Matrix:     make build-everything = the FULL documented matrix (honors ENV);"
 	@echo "              make matrix-check = dry-run validate every role/flag combo via the"
 	@echo "              builders' --print-plan (no root, no writes; tests/build-matrix/check.sh)."
@@ -865,10 +866,10 @@ endif
 
 # OMNIBUS_PLATFORM picks the device: x86 (DEFAULT, unchanged), rpi (Raspberry Pi
 # 4/5 — RPI_BOARD), orangepi5 (Orange Pi 5 / 5 Plus — ORANGEPI5_BOARD; EXPERIMENTAL).
-# The ARM ones need RAM_GB=8 or more (the builder refuses below that). The package
+# The ARM ones need RAM_GB=16 or more (the builder refuses below that; a Pi 4 is never an omnibus). The package
 # set is the same rule everywhere: the node base + the k8s node set, no omnibus list.
 OMNIBUS_PLATFORM ?= x86
-omnibus: ## build the omnibus — all namespaces on one node (OMNIBUS_PLATFORM=x86 [DEFAULT] | rpi | orangepi5; ARM needs RAM_GB=8+)
+omnibus: ## build the omnibus — all namespaces on one node (OMNIBUS_PLATFORM=x86 [DEFAULT] | rpi | orangepi5; ARM needs RAM_GB=16+)
 ifeq ($(OMNIBUS_PLATFORM),x86)
 ifndef NATIVE
 	$(MAKE) ensure-image
@@ -949,7 +950,7 @@ else
 	$(chown-artifacts)
 endif
 
-rpi-%: ## build ONE Pi role: make rpi-frontend | rpi-desktop | rpi-omnibus RAM_GB=8  (same vocabulary as x86 now; add IMG_FLAGS='--no-iso' etc.; RPI_BOARD=rpi5 [DEFAULT] | rpi4 | rpi3 [desktop-only]; RAM_GB=N passes --ram-gb (REQUIRED for omnibus); STANDALONE_FLAGS='--standalone --local-user … --local-pass …' for rpi-desktop)
+rpi-%: ## build ONE Pi role: make rpi-frontend | rpi-desktop | rpi-omnibus RAM_GB=16  (same vocabulary as x86 now; add IMG_FLAGS='--no-iso' etc.; RPI_BOARD=rpi5 [DEFAULT] | rpi4 | rpi3 [desktop-only]; RAM_GB=N passes --ram-gb (REQUIRED for omnibus); STANDALONE_FLAGS='--standalone --local-user … --local-pass …' for rpi-desktop)
 ifndef NATIVE
 	$(MAKE) ensure-image
 	$(DOCKER_RUN) make rpi-$* NATIVE=1 WORK_DIR=/out IMG_FLAGS='$(IMG_FLAGS)' JOBS=$(JOBS) RPI_BOARD='$(RPI_BOARD)' RAM_GB='$(RAM_GB)' $(BRAND_PASS)
@@ -1015,7 +1016,7 @@ orangepi5-live: ## build the Orange Pi 5 light desktop LIVE image only (boots ep
 orangepi5-installer: ## build the Orange Pi 5 light desktop INSTALLER image only (writes to eMMC/microSD/NVMe)
 	$(MAKE) orangepi5 ORANGEPI5_FLAVOR=installer
 
-orangepi5-%: ## build an Orange Pi 5 / 5 Plus CLUSTER NODE: make orangepi5-pki | -backend | -frontend | -omnibus RAM_GB=8 (EXPERIMENTAL, hardware validation pending; installer flavor only; ORANGEPI5_BOARD=orange-pi-5-plus|orange-pi-5)
+orangepi5-%: ## build an Orange Pi 5 / 5 Plus CLUSTER NODE: make orangepi5-pki | -backend | -frontend | -omnibus RAM_GB=16 (EXPERIMENTAL, hardware validation pending; installer flavor only; ORANGEPI5_BOARD=orange-pi-5-plus|orange-pi-5)
 ifndef NATIVE
 	@. scripts/_roles-lib.sh; hugmesh_role_board_node_role orangepi5 '$*' >/dev/null || { [ $$? -eq 2 ] && echo "ERROR: make orangepi5-$* is not a target: the Orange Pi 5 / 5 Plus node targets are orangepi5-pki | -backend | -frontend | -omnibus (the desktop is make orangepi5)." >&2; exit 1; }
 	$(MAKE) ensure-image

@@ -58,14 +58,14 @@
 # The Orange Pi 5 / Orange Pi 5 Plus (Rockchip RK3588/RK3588S) light-desktop
 # client image is OPT-IN too — EXPERIMENTAL: hardware validation pending
 # (specs-orangepi5/README.md). Knobs mirror the FRITE family exactly (board +
-# flavor, no role axis — this is a ONE-role client device, like Frite):
+# flavor; its desktop has no role axis — ORANGEPI5_ROLES below adds the node roles):
 #   ORANGEPI5=1      ./scripts/build-all-roles.sh  # ALSO build it (orange-pi-5-plus, both flavors)
 #   ORANGEPI5_BOARD=orange-pi-5 ORANGEPI5=1 ./scripts/build-all-roles.sh   # the smaller-I/O sibling
 #   ORANGEPI5_ONLY=1 ./scripts/build-all-roles.sh  # ONLY it (skip Pi + x86 + Frite + Jetson)
 #   ORANGEPI5_FLAVOR=live ORANGEPI5=1 ./scripts/build-all-roles.sh          # live image only
 # (build-orangepi5-stage4.sh — see specs-orangepi5/README.md.)
 # ORANGEPI5_ROLES (default "desktop") also builds the Orange Pi 5 / 5 Plus as a
-# cluster NODE — EXPERIMENTAL, installer flavor only; omnibus needs RAM_GB (8+):
+# cluster NODE — EXPERIMENTAL, installer flavor only; omnibus needs RAM_GB (16+):
 #   ORANGEPI5=1 ORANGEPI5_ROLES="pki backend frontend" ./scripts/build-all-roles.sh
 #   ORANGEPI5=1 ORANGEPI5_ROLES=omnibus RAM_GB=16 ./scripts/build-all-roles.sh
 #
@@ -117,8 +117,9 @@
 #
 # RAM_GB=N is the GB of RAM on the boards being built for; it is passed as --ram-gb to
 # every Raspberry Pi and Orange Pi NODE role. REQUIRED when a role list holds omnibus
-# (one node running every cluster role, 8 GB minimum), e.g.
-#   RPI_ROLES=omnibus RAM_GB=8 ./scripts/build-all-roles.sh
+# (one node running every cluster role, 16 GB minimum; backend 8, pki/frontend 4),
+# e.g. a 16 GB Pi 5 (a Pi 4 is never an omnibus):
+#   RPI_ROLES=omnibus RAM_GB=16 ./scripts/build-all-roles.sh
 # (The build-orangepi3-lts-stage4.sh note below belongs to the Orange Pi 3 LTS block
 # above.)
 # (build-orangepi3-lts-stage4.sh — see specs-orangepi3-lts/README.md. Headless
@@ -379,8 +380,8 @@ ORANGEPI3LTS_FLAVOR_SEL="${ORANGEPI3LTS_FLAVOR:-both}"
 # hardware validation pending). ORANGEPI4LTS_ONLY=1 builds ONLY it (skip
 # everything else) — same shape as ORANGEPI3LTS_ONLY above. No board axis (one
 # mainline DTB/defconfig for the whole RK3399 Orange Pi family). UNLIKE every
-# other Orange Pi platform here this one IS a desktop client, but it still has
-# no role axis: one role, and no headless variant to gate.
+# other Orange Pi platform here this one IS a desktop client; its node axis is
+# ORANGEPI4LTS_ROLES (frontend only), and there is no headless variant to gate.
 BUILD_ORANGEPI4LTS_IMG=false
 if [ "${ORANGEPI4LTS_ONLY:-0}" = "1" ]; then
     BUILD_ORANGEPI4LTS_IMG=true

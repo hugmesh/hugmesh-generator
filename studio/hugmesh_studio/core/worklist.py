@@ -184,14 +184,18 @@ def takes_ram(role: str, platform: str) -> bool:
     return platform in RAM_PLATFORMS and roles.min_ram_gb(role) is not None
 
 
-def ram_problem(role: str, platform: str, ram_gb: str) -> str:
+def ram_problem(role: str, platform: str, ram_gb: str, board: str = "") -> str:
     """Why ``ram_gb`` cannot be this row's board RAM ("" = fine). The builders' own
     gate (hugmesh_role_ram_check): a whole number of GB, at or above the role's floor;
-    "" is fine except for a role that REQUIRES it (omnibus)."""
+    "" is fine except for a role that REQUIRES it (omnibus); and a ``board`` that is
+    never sold with the floor (a Pi 4 omnibus) is refused whatever the RAM says."""
     ram = str(ram_gb or "").strip()
     if not takes_ram(role, platform):
         return "" if not ram else f"{role}.{platform} takes no board RAM"
     floor = roles.min_ram_gb(role) or 0
+    if board and not roles.board_fits_role(role, board):
+        return (f"{role} needs at least {floor} GB of RAM, and {board} is sold with at "
+                f"most {max(roles.board_ram_gb(board))} GB")
     if not ram:
         if roles.ram_required(role):
             return (f"{role} on the {RAM_PLATFORM_NAMES.get(platform, platform)} needs its "
@@ -263,7 +267,7 @@ class WorklistEntry:
     hostname: str = ""
     # GB of RAM on the Raspberry Pi / Orange Pi board this NODE entry is for
     # (ImageConfig.ram_gb -> --ram-gb). "" = not stated; REQUIRED for an omnibus
-    # entry on rpi5/orangepi5 (8 GB+). Serialized OMIT-WHEN-EMPTY, so every entry
+    # entry on rpi5/orangepi5 (16 GB+). Serialized OMIT-WHEN-EMPTY, so every entry
     # saved before the field existed keeps its bytes.
     ram_gb: str = ""
 

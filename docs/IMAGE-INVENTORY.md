@@ -4,10 +4,10 @@
      Regenerate: python3 scripts/emit-image-inventory.py
      CI gate:    bash tests/build-matrix/inventory-check.sh (`make inventory-check`) -->
 
-`docs/catalog/image-catalog.json` is the image GRAMMAR and `tests/build-matrix/matrix.tsv` is a curated 172-cell SAMPLE of it. This table is the third thing neither of them is: the FULL cross-product of that grammar — every image the platform advertises — with, per image, which of the six build channels can actually express it.
+`docs/catalog/image-catalog.json` is the image GRAMMAR and `tests/build-matrix/matrix.tsv` is a curated 170-cell SAMPLE of it. This table is the third thing neither of them is: the FULL cross-product of that grammar — every image the platform advertises — with, per image, which of the six build channels can actually express it.
 
-- **142 distinct images** (x 2 hardening envs = 284 builds)
-- **172 matrix.tsv cells** (78 distinct, env-collapsed) — the sampled subset `tests/build-matrix/check.sh` proves across five channels
+- **141 distinct images** (x 2 hardening envs = 282 builds)
+- **170 matrix.tsv cells** (77 distinct, env-collapsed) — the sampled subset `tests/build-matrix/check.sh` proves across five channels
 - **68 images with a channel gap**, 0 phantom, 0 undocumented
 
 Legend: ✅ first-class selection &nbsp; ⚠️ escape-hatch only (raw builder flags) &nbsp; ❌ not expressible
@@ -16,12 +16,12 @@ Legend: ✅ first-class selection &nbsp; ⚠️ escape-hatch only (raw builder f
 
 | channel | source of truth | ✅ | ⚠️ | ❌ |
 | --- | --- | ---: | ---: | ---: |
-| `cli` | build-*-stage4.sh --print-plan | 142 | 0 | 0 |
-| `make` | Makefile targets (make -n) | 93 | 49 | 0 |
-| `menu` | scripts/build-menu.sh ui_menu pickers | 93 | 40 | 9 |
-| `gui` | studio/hugmesh_studio --print-command | 142 | 0 | 0 |
-| `job` | docker/build-image.sh resolve_build_target() | 92 | 9 | 41 |
-| `worklist` | hugmesh-worklist/v1 envelope -> materialize() | 142 | 0 | 0 |
+| `cli` | build-*-stage4.sh --print-plan | 141 | 0 | 0 |
+| `make` | Makefile targets (make -n) | 92 | 49 | 0 |
+| `menu` | scripts/build-menu.sh ui_menu pickers | 92 | 40 | 9 |
+| `gui` | studio/hugmesh_studio --print-command | 141 | 0 | 0 |
+| `job` | docker/build-image.sh resolve_build_target() | 91 | 9 | 41 |
+| `worklist` | hugmesh-worklist/v1 envelope -> materialize() | 141 | 0 | 0 |
 
 ## The inventory
 
@@ -104,7 +104,6 @@ Legend: ✅ first-class selection &nbsp; ⚠️ escape-hatch only (raw builder f
 | `mesh/rpi5/backend/rpi5` | mesh | rpi5 | `backend` | `backend` | rpi5 | — | — | fs.tar.xz, img, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `mesh/rpi5/frontend/rpi4` | mesh | rpi5 | `frontend` | `frontend` | rpi4 | — | — | fs.tar.xz, img, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `mesh/rpi5/frontend/rpi5` | mesh | rpi5 | `frontend` | `frontend` | rpi5 | — | — | fs.tar.xz, img, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| `mesh/rpi5/omnibus/rpi4` | mesh | rpi5 | `omnibus` | `omnibus` | rpi4 | — | — | fs.tar.xz, img, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `mesh/rpi5/omnibus/rpi5` | mesh | rpi5 | `omnibus` | `omnibus` | rpi5 | — | — | fs.tar.xz, img, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `mesh/rpi5/pki/rpi4` | mesh | rpi5 | `pki` | `pki` | rpi4 | — | — | fs.tar.xz, img, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `mesh/rpi5/pki/rpi5` | mesh | rpi5 | `pki` | `pki` | rpi5 | — | — | fs.tar.xz, img, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
