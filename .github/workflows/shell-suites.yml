@@ -563,6 +563,7 @@ jobs:
               tests/scripts/test-url-embedded-credentials.sh
               tests/scripts/test-docs-command-coverage.sh
               tests/scripts/test-x86-artifact-integrity.sh
+              tests/scripts/test-x86-live-root-pack.sh
               tests/stack/test-anubis-flip-wiring.sh
               tests/stack/test-mfa-flip-wiring.sh
               tests/stack/test-patch-stack-src.sh
@@ -579,7 +580,7 @@ jobs:
     steps:
       - run: |
           apt-get update -qq
-          apt-get install -y --no-install-recommends git jq openssl perl procps make m4 openssh-client libarchive-tools passwd default-jre-headless
+          apt-get install -y --no-install-recommends git jq openssl perl procps make m4 openssh-client libarchive-tools passwd default-jre-headless squashfs-tools
           pip install --quiet pyyaml
       - uses: actions/checkout@v4
       - name: trust the workspace

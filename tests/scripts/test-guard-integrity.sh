@@ -822,7 +822,13 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # RUNNING this file on that branch (origin/main cdcc8fcd), not computed:
 #     198 of 239 suites are named by a pull_request-triggered workflow
 #     PASS the ungated SET matches its pin exactly (41 suite(s))
-PREMERGE_BASELINE="${GUARD_PREMERGE:-198}"
+#
+# 198 -> 199 (denominator 240 -> 241) on 2026-10-28 for the live-ISO root pack guard:
+# tests/scripts/test-x86-live-root-pack.sh landed on disk, in shell-suites.yml's
+# container job (next to test-x86-artifact-integrity.sh, with squashfs-tools added to
+# its apt line) and in .gitlab-ci.yml's orphan-guards-verify. MEASURED by RUNNING this
+# file on that branch, not computed.
+PREMERGE_BASELINE="${GUARD_PREMERGE:-199}"
 
 # 182 -> 192 (denominator 205 -> 215) on 2026-09-30 for #385: the census gained a
 # THIRD spelling, bare `tests/*.sh` at depth 1, and the ten suites it exposed were
