@@ -2178,6 +2178,7 @@ class _Card(QtWidgets.QFrame):
         """Never squeezed below its wrapped text: the answer area above gives way
         instead (a long status line was once clipped top and bottom)."""
         self.rows.setVisible(bool(self.rows.text()))
+        self.status.setVisible(bool(self.status.text()))
         w = self.width() if self.width() > 50 else self.sizeHint().width()
         need = self._lay.totalHeightForWidth(w)
         if need > 0 and need != self.minimumHeight():
