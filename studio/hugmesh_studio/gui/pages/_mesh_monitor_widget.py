@@ -77,7 +77,7 @@ import time
 
 from ..qt import Qt, QtCore, QtGui, QtWidgets, Signal
 from ..flow_layout import flow_box
-from ...core import mesh_monitor
+from ...core import mesh_controls, mesh_monitor
 from ...core.mesh_monitor import MonitorSnapshot, unsafe_door_reason
 from ._emulation_common import ReplicaStrip, make_table, set_cell
 from ._widgets import collapsible, own_probe, probe_running
@@ -87,11 +87,16 @@ from .progress import _STATUS_GLYPH
 # reads, and inserting one stays a one-line change. _MON_COL_SCALE is APPENDED: it
 # exists only on a scaling mount, and appending is what keeps every index before it
 # identical for the non-scaling one.
-_MON_COL_NAME, _MON_COL_LANE, _MON_COL_STATE, _MON_COL_K8S, _MON_COL_EXT, _MON_COL_OPEN = \
-    range(6)
-_MON_COL_SCALE = 6
-_MON_HEADERS = ("Pod / container", "Lane", "State", "Kubernetes / compose address",
-                "External address", "Open")
+#
+# _MON_COL_DOMAIN (2026-10-21, pod controls per domain) is INSERTED at 1, right of the
+# name it qualifies: every index after it moved by one, which every caller and test
+# reads through these names. The domain is read in core (mesh_monitor: a label, an
+# onion key directory, or the Studio's own per-domain choice) — never from a name.
+(_MON_COL_NAME, _MON_COL_DOMAIN, _MON_COL_LANE, _MON_COL_STATE, _MON_COL_K8S,
+ _MON_COL_EXT, _MON_COL_OPEN) = range(7)
+_MON_COL_SCALE = 7
+_MON_HEADERS = ("Pod / container", "Domain", "Lane", "State",
+                "Kubernetes / compose address", "External address", "Open")
 _MON_HEADERS_SCALING = _MON_HEADERS + ("Replicas",)
 
 _DASH = "—"
@@ -194,6 +199,70 @@ _HALT_STATE_UNKNOWN = (
     "`make kind-halt-status` before pressing this.")
 
 
+#: The per-domain strip's tooltips. Each says what the verb RUNS and what it never
+#: touches, because "stop acme.example" must not read as "stop the mesh".
+_DOMAIN_VERB_TIPS = {
+    "start": ("Start every stopped container of this domain (its own Casdoor and "
+              "database, a service only it chose), databases first: `docker start "
+              "<container>`. Shared rows ('All domains') are never touched."),
+    "stop": ("Stop every running container of this domain, its database last: `docker "
+             "stop <container>`. Every other domain keeps running; shared rows are "
+             "never touched. Kind pods refuse this — ArgoCD self-heal would undo it."),
+    "restart": ("Restart this domain's containers (`docker restart`), or replace its "
+                "kind pods (`kubectl delete pod` — the controller makes a new one, so "
+                "ArgoCD has nothing to revert)."),
+    "logs": (f"Show the last {mesh_controls.LOG_TAIL} lines of each of this domain's "
+             "containers or pods below the table (`docker logs` / `kubectl logs`)."),
+}
+_DOMAIN_NONE = ("Every row here is shared by all domains, so there is nothing to start "
+                "or stop for one domain alone. A domain gets its own rows when it runs "
+                "its own Casdoor, when only it chose a service, or when a pod carries "
+                "the hugmesh.net/domain label.")
+_ONION_OPEN_TIP = "Open {login} in Tor Browser ({cmd})."
+_ONION_COPY_TIP = ("Copy {login} to the clipboard, to paste into Tor Browser (a normal "
+                   "browser cannot reach a .onion).")
+
+
+def open_in_tor_browser(url: str) -> str:
+    """Hand ``url`` (an onion login address) to Tor Browser, detached. "" when it was
+    launched, else the sentence saying why not — shown inline, never in a dialog."""
+    argv = mesh_controls.tor_browser_argv(url)
+    if not argv:
+        return mesh_controls.tor_browser_missing_reason()
+    try:
+        ok = QtCore.QProcess.startDetached(argv[0], argv[1:])
+        if isinstance(ok, tuple):              # PySide/PyQt return (ok, pid)
+            ok = ok[0]
+    except Exception as exc:                   # noqa: BLE001 — a sentence, not a crash
+        return f"Tor Browser could not be started: {type(exc).__name__}: {exc}"
+    return "" if ok else f"Tor Browser could not be started ({argv[0]})."
+
+
+class _ElidedAddress(QtWidgets.QLabel):
+    """An address that elides in the middle to the width it is given, never sets it.
+    The whole address is the tooltip and is what Copy copies."""
+
+    def __init__(self, text: str, parent=None):
+        super().__init__(parent)
+        self._full = text
+        self.setToolTip(text)
+        self.setMinimumWidth(60)
+        self.setSizePolicy(QtWidgets.QSizePolicy.Policy.Ignored,
+                           QtWidgets.QSizePolicy.Policy.Preferred)
+        self._elide()
+
+    def full_text(self) -> str:
+        return self._full
+
+    def _elide(self) -> None:
+        self.setText(self.fontMetrics().elidedText(
+            self._full, Qt.TextElideMode.ElideMiddle, max(10, self.width())))
+
+    def resizeEvent(self, event):              # noqa: N802 — Qt override
+        super().resizeEvent(event)
+        self._elide()
+
+
 def _grey_note(text: str) -> QtWidgets.QLabel:
     lbl = QtWidgets.QLabel(text)
     lbl.setWordWrap(True)
@@ -228,6 +297,12 @@ class MeshMonitorWidget(QtWidgets.QWidget):
     #: they only EMIT; the mounting page owns the shelling.
     halt_requested = Signal()
     resume_requested = Signal()
+    #: (domain, verb) — a press on the per-domain strip. Like scale_requested, the
+    #: MOUNTING page runs it off the GUI thread; a mount that connected nothing gets
+    #: an inline refusal, never a button that silently does nothing.
+    domain_action_requested = Signal(str, str)
+    #: an onion login address — the mounting page hands it to Tor Browser
+    onion_open_requested = Signal(str)
 
     def __init__(self, parent=None, *, scaling: bool = False):
         super().__init__(parent)
@@ -247,6 +322,8 @@ class MeshMonitorWidget(QtWidgets.QWidget):
             QtWidgets.QAbstractItemView.SelectionMode.SingleSelection)
         self.table.verticalHeader().setVisible(False)
         self.table.setSortingEnabled(False)       # order is ours: sorted by key
+        # Selecting a row that serves one domain points the domain strip at it.
+        self.table.itemSelectionChanged.connect(self._follow_selection)
         hdr = self.table.horizontalHeader()
         hdr.setSectionResizeMode(_MON_COL_NAME,
                                  QtWidgets.QHeaderView.ResizeMode.Interactive)
@@ -259,6 +336,79 @@ class MeshMonitorWidget(QtWidgets.QWidget):
             if head_item is not None:
                 head_item.setToolTip(_SCALE_HEADER_TIP)
         lay.addWidget(self.table, 1)
+        # ── per-domain controls (2026-10-21) ──────────────────────────────────────
+        self.domain_box = QtWidgets.QWidget()
+        dlay = QtWidgets.QVBoxLayout(self.domain_box)
+        dlay.setContentsMargins(0, 4, 0, 0)
+        drow_w, drow = flow_box("")
+        self.domain_label = QtWidgets.QLabel("Domain:")
+        drow.addWidget(self.domain_label)
+        self.domain_combo = QtWidgets.QComboBox()
+        self.domain_combo.setMinimumWidth(180)
+        self.domain_combo.setToolTip("The domain the buttons beside act on. Rows "
+                                     "serving every domain are labelled 'All "
+                                     "domains' and are never touched from here.")
+        self.domain_combo.currentIndexChanged.connect(
+            lambda _i: self._paint_domain_buttons())
+        drow.addWidget(self.domain_combo)
+        self.domain_btns: dict[str, QtWidgets.QPushButton] = {}
+        for verb in mesh_monitor.CONTROL_VERBS:
+            b = QtWidgets.QPushButton(mesh_controls.VERB_WORDS[verb])
+            b.clicked.connect(lambda _c=False, v=verb: self._domain_clicked(v))
+            drow.addWidget(b)
+            self.domain_btns[verb] = b
+        dlay.addWidget(drow_w)
+        self.domain_note = _grey_note(_DOMAIN_NONE)
+        dlay.addWidget(self.domain_note)
+        dlay.addStretch(1)
+        # The domain strip and the Tor list sit SIDE BY SIDE under the table: stacked,
+        # they pushed the table below six rows in the bottom panel's Running mesh tab
+        # (2026-10-21 round 2). One row, two halves, on every mount.
+        self.controls_row = QtWidgets.QWidget()
+        crow = QtWidgets.QHBoxLayout(self.controls_row)
+        crow.setContentsMargins(0, 0, 0, 0)
+        crow.addWidget(self.domain_box, 1)
+        lay.addWidget(self.controls_row)
+        # ── every onion, each with its own Open / Copy ───────────────────────────
+        self.onion_box = QtWidgets.QWidget()
+        olay = QtWidgets.QVBoxLayout(self.onion_box)
+        olay.setContentsMargins(0, 4, 0, 0)
+        self.onion_title = QtWidgets.QLabel("Tor addresses")
+        self.onion_title.setToolTip(
+            "Every .onion this mesh publishes: the mesh's own, then one per domain "
+            "that has its own Tor front door. A normal browser cannot reach a .onion; "
+            "Open hands it to Tor Browser, Copy puts it on the clipboard.")
+        olay.addWidget(self.onion_title)
+        self.onion_grid_host = QtWidgets.QWidget()
+        self.onion_grid = QtWidgets.QGridLayout(self.onion_grid_host)
+        self.onion_grid.setContentsMargins(0, 0, 0, 0)
+        olay.addWidget(self.onion_grid_host)
+        olay.addStretch(1)
+        self.onion_box.setVisible(False)
+        crow.addWidget(self.onion_box, 1)
+        #: per onion login address: (open button, copy button) — what tests read
+        self._onion_rows: dict[str, tuple[QtWidgets.QPushButton,
+                                          QtWidgets.QPushButton]] = {}
+        self._onions_shown: tuple = ()
+        # ── one domain's logs, inline (no dialog) ─────────────────────────────────
+        self.logs_box = QtWidgets.QWidget()
+        llay = QtWidgets.QVBoxLayout(self.logs_box)
+        llay.setContentsMargins(0, 4, 0, 0)
+        lhead_w, lhead = flow_box("")
+        self.logs_title = QtWidgets.QLabel("")
+        lhead.addWidget(self.logs_title)
+        self.logs_hide_btn = QtWidgets.QPushButton("Hide logs")
+        self.logs_hide_btn.clicked.connect(lambda: self.logs_box.setVisible(False))
+        lhead.addWidget(self.logs_hide_btn)
+        llay.addWidget(lhead_w)
+        self.logs_view = QtWidgets.QPlainTextEdit()
+        self.logs_view.setReadOnly(True)
+        self.logs_view.setMinimumHeight(160)
+        self.logs_view.setLineWrapMode(QtWidgets.QPlainTextEdit.LineWrapMode.NoWrap)
+        llay.addWidget(self.logs_view)
+        self.logs_box.setVisible(False)
+        lay.addWidget(self.logs_box)
+        self._domain_busy = False
         # INLINE status (the no-modals rule): scale progress, scale refusals AND door
         # refusals. Present on BOTH mounts — hidden and empty, so it costs a non-scaling
         # mount no layout, but a refusal on one is no longer swallowed (a non-scaling
@@ -447,6 +597,8 @@ class MeshMonitorWidget(QtWidgets.QWidget):
         self._buttons = {}
         self._button_urls = {}
         self._scale_cells = {}
+        self._paint_domains(None)
+        self._paint_onions(())
 
     def render(self, snap: MonitorSnapshot) -> None:
         """Repaint from a snapshot, preserving the selected row by key."""
@@ -461,6 +613,8 @@ class MeshMonitorWidget(QtWidgets.QWidget):
             self._rebuild_rows(keys)
         for r, u in enumerate(units):
             self._paint_row(r, u, snap)
+        self._paint_domains(snap)
+        self._paint_onions(tuple(getattr(snap, "onions", ()) or ()))
         if selected_key:
             r = self.row_of(selected_key)
             if r >= 0:
@@ -488,6 +642,9 @@ class MeshMonitorWidget(QtWidgets.QWidget):
         state_tip = u.reason or ("ready" if u.ready else u.phase)
         set_cell(self.table, r, _MON_COL_NAME, f"{u.namespace}/{u.name}",
                  tooltip=u.detail, colour=col)
+        set_cell(self.table, r, _MON_COL_DOMAIN, u.domain_text,
+                 tooltip=(u.domain_why or u.domain_text),
+                 colour="" if u.domain else _GREY)
         set_cell(self.table, r, _MON_COL_LANE, u.lane,
                  tooltip=("docker compose project" if u.lane == "compose"
                           else "kind (Kubernetes) cluster"))
@@ -618,6 +775,171 @@ class MeshMonitorWidget(QtWidgets.QWidget):
         already been asked for."""
         self._scale_targets.pop(key, None)
 
+    # ── per-domain controls ───────────────────────────────────────────────────────
+    def current_domain(self) -> str:
+        return str(self.domain_combo.currentData() or "")
+
+    def select_domain(self, domain: str) -> bool:
+        i = self.domain_combo.findData(domain)
+        if i >= 0:
+            self.domain_combo.setCurrentIndex(i)
+        return i >= 0
+
+    def _paint_domains(self, snap) -> None:
+        """Refill the combo from THIS snapshot's single-domain rows, keeping the
+        chosen domain when it is still there, then re-arm the four buttons."""
+        domains = snap.domains() if snap is not None else ()
+        keep = self.current_domain()
+        want = []
+        for d in domains:
+            n = sum(1 for u in snap.units if u.domain == d)
+            want.append((f"{d} ({n} row{'s' if n != 1 else ''})", d))
+        have = [(self.domain_combo.itemText(i), self.domain_combo.itemData(i))
+                for i in range(self.domain_combo.count())]
+        if have != want:
+            self.domain_combo.blockSignals(True)
+            self.domain_combo.clear()
+            for text, d in want:
+                self.domain_combo.addItem(text, d)
+            if keep:
+                i = self.domain_combo.findData(keep)
+                if i >= 0:
+                    self.domain_combo.setCurrentIndex(i)
+            self.domain_combo.blockSignals(False)
+        self._paint_domain_buttons()
+
+    def domain_plan(self, verb: str):
+        snap = self._snapshot
+        dom = self.current_domain()
+        if snap is None or not dom:
+            return None
+        return mesh_controls.domain_plan(snap.units, dom, verb)
+
+    def _paint_domain_buttons(self) -> None:
+        dom = self.current_domain()
+        has = bool(dom)
+        self.domain_combo.setEnabled(has and not self._domain_busy)
+        if not has:
+            self.domain_note.setText(_DOMAIN_NONE)
+        for verb, b in self.domain_btns.items():
+            plan = self.domain_plan(verb) if has else None
+            if plan is None:
+                b.setEnabled(False)
+                b.setToolTip(_DOMAIN_VERB_TIPS[verb] + "\n\n" + _DOMAIN_NONE)
+                continue
+            b.setEnabled(bool(plan.targets) and not self._domain_busy)
+            b.setToolTip(_DOMAIN_VERB_TIPS[verb] + "\n\nNow: " + plan.summary())
+        if has:
+            rows = [u for u in (self._snapshot.units if self._snapshot else ())
+                    if u.domain == dom]
+            self.domain_note.setText(
+                f"{dom}: " + ", ".join(f"{u.name} ({u.phase})" for u in rows)
+                + ". Rows labelled 'All domains' are shared and never touched here.")
+
+    def _follow_selection(self) -> None:
+        sel = self.table.selectionModel().selectedRows() if self.table.selectionModel() \
+            else []
+        if not sel or self._snapshot is None:
+            return
+        key = self.row_key(sel[0].row())
+        for u in self._snapshot.units:
+            if u.key == key and u.domain:
+                self.select_domain(u.domain)
+                return
+
+    #: What a mount whose domain strip would emit into nothing says (see NO_SINK).
+    NO_DOMAIN_SINK = ("This table is not wired to run a domain's controls: the page "
+                      "that mounted it connected nothing to domain_action_requested. "
+                      "Nothing was run.")
+
+    def _domain_clicked(self, verb: str) -> None:
+        dom = self.current_domain()
+        if not dom or self._domain_busy:
+            return
+        try:
+            wired = self.receivers(self.domain_action_requested) > 0
+        except Exception:                      # noqa: BLE001 — binding difference only
+            wired = True
+        if not wired:
+            self.set_scale_status(self.NO_DOMAIN_SINK)
+            return
+        self.domain_action_requested.emit(dom, verb)
+
+    def set_domain_busy(self, busy: bool, text: str = "") -> None:
+        """ONE domain action at a time; the inline line says which."""
+        self._domain_busy = bool(busy)
+        self.set_scale_status(text)
+        self._paint_domain_buttons()
+
+    def show_logs(self, title: str, text: str) -> None:
+        self.logs_title.setText(title)
+        self.logs_view.setPlainText(text or "(no log lines)")
+        self.logs_box.setVisible(True)
+        # In the bottom panel the box opens below the fold of the tab's scroll area;
+        # bring it into view, or the press looks like it did nothing. After the
+        # layout has placed it (the next turn of the event loop).
+        QtCore.QTimer.singleShot(0, self._reveal_logs)
+
+    def _reveal_logs(self) -> None:
+        try:
+            w = self.parentWidget()
+            while w is not None and not isinstance(w, QtWidgets.QScrollArea):
+                w = w.parentWidget()
+            if w is not None and self.logs_box.isVisible():
+                w.ensureWidgetVisible(self.logs_box, 0, 0)
+        except RuntimeError:                    # the widget went away first
+            pass
+
+    # ── onions ───────────────────────────────────────────────────────────────────
+    def onion_buttons(self, login: str):
+        """``(open, copy)`` for that onion login address, or None."""
+        return self._onion_rows.get(login)
+
+    def _paint_onions(self, onions: tuple) -> None:
+        """One row per onion, rebuilt only when the set changed (a 10 s repaint must
+        not recreate buttons under the cursor)."""
+        if onions == self._onions_shown:
+            return
+        self._onions_shown = onions
+        while self.onion_grid.count():
+            item = self.onion_grid.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.setParent(None)
+                w.deleteLater()
+        self._onion_rows = {}
+        for r, o in enumerate(onions):
+            who = QtWidgets.QLabel(o.domain + (" (the mesh's own)" if o.primary else ""))
+            # elided to its cell (the full address is the tooltip, and Copy copies it
+            # whole): a 70-character onion must not set the width of the Tor half
+            addr = _ElidedAddress(o.login)
+            argv = mesh_controls.tor_browser_argv(o.login)
+            open_b = QtWidgets.QPushButton("Open in Tor Browser")
+            if argv:
+                open_b.setToolTip(_ONION_OPEN_TIP.format(login=o.login, cmd=argv[0]))
+            else:
+                open_b.setEnabled(False)
+                open_b.setToolTip(mesh_controls.tor_browser_missing_reason())
+            open_b.clicked.connect(
+                lambda _c=False, u=o.login: self.onion_open_requested.emit(u))
+            copy_b = QtWidgets.QPushButton("Copy")
+            copy_b.setToolTip(_ONION_COPY_TIP.format(login=o.login))
+            copy_b.clicked.connect(lambda _c=False, u=o.login: self._copy_onion(u))
+            self.onion_grid.addWidget(who, r, 0)
+            self.onion_grid.addWidget(addr, r, 1)
+            self.onion_grid.addWidget(open_b, r, 2)
+            self.onion_grid.addWidget(copy_b, r, 3)
+            self._onion_rows[o.login] = (open_b, copy_b)
+        self.onion_grid.setColumnStretch(1, 1)
+        self.onion_title.setText(f"Tor addresses ({len(onions)})")
+        self.onion_box.setVisible(bool(onions))
+
+    def _copy_onion(self, login: str) -> None:
+        cb = QtWidgets.QApplication.clipboard()
+        if cb is not None:
+            cb.setText(login)
+        self.set_scale_status(f"Copied {login} — paste it into Tor Browser.")
+
     # ── footer ───────────────────────────────────────────────────────────────────
     def addresses_text(self) -> str:
         return mesh_monitor.addresses_text(self._snapshot) if self._snapshot else ""
@@ -663,14 +985,18 @@ class MeshMonitorProbe(QtCore.QThread):
     """
     result = Signal(object)                     # mesh_monitor.MonitorSnapshot
 
-    def __init__(self, generator_dir: str, node, parent=None):
+    def __init__(self, generator_dir: str, node, parent=None, *, hints=None):
         super().__init__(parent)
         self._dir = generator_dir
         self._node = node
+        #: mesh_monitor.DomainHints from the mounting page's config, or None (rows
+        #: then take a domain from their labels only)
+        self._hints = hints
 
     def run(self):                              # noqa: D102 — QThread contract
         try:
-            self.result.emit(mesh_monitor.snapshot(self._dir, self._node))
+            self.result.emit(mesh_monitor.snapshot(self._dir, self._node,
+                                                   hints=self._hints))
         except Exception as e:                  # noqa: BLE001 — never kill the page
             self.result.emit(mesh_monitor.MonitorSnapshot(
                 taken_at=time.strftime("%H:%M:%S"),
@@ -704,6 +1030,32 @@ class MeshScaleWorker(QtCore.QThread):
         self.done.emit(bool(ok), str(text))
 
 
+class MeshDomainWorker(QtCore.QThread):
+    """ONE domain's Start / Stop / Restart / Logs off the GUI thread
+    (``mesh_controls.run_domain_action``: a ``docker stop`` waits up to 10 s per
+    container). Emits the DomainResult; never raises."""
+    done = Signal(object)
+
+    def __init__(self, generator_dir: str, node, units, domain: str, verb: str,
+                 parent=None):
+        super().__init__(parent)
+        self._dir = generator_dir
+        self._node = node
+        self._units = tuple(units)
+        self._domain = domain
+        self._verb = verb
+
+    def run(self):                              # noqa: D102 — QThread contract
+        try:
+            res = mesh_controls.run_domain_action(self._dir, self._node, self._units,
+                                                  self._domain, self._verb)
+        except Exception as e:                  # noqa: BLE001 — a worker never dies mute
+            res = mesh_controls.DomainResult(
+                False, f"{self._verb} {self._domain} failed: {type(e).__name__}: {e}")
+        res.domain, res.verb = self._domain, self._verb
+        self.done.emit(res)
+
+
 class MeshMonitorSection(QtCore.QObject):
     """The monitor, ready to drop onto a page: widget + collapsible + probe + timer +
     the ONE gate that writes ``setEnabled``, the note and the section title.
@@ -729,11 +1081,15 @@ class MeshMonitorSection(QtCore.QObject):
 
     def __init__(self, page, generator_dir: str, node_factory, *,
                  title: str = "Running mesh — pods, addresses and doors",
-                 scaling: bool = True, what: str = ""):
+                 scaling: bool = True, what: str = "", hints_fn=None):
         super().__init__(page)
         self.page = page
         self.generator_dir = generator_dir
         self._node_factory = node_factory
+        #: ``() -> mesh_monitor.DomainHints`` asked on every read (the config can
+        #: change between reads), or None: rows then take a domain from their labels
+        #: and from each other only. See :func:`emulation_hints`.
+        self._hints_fn = hints_fn
         self.title = title
         #: One sentence naming WHAT this mount reads, appended to the empty-state note.
         #: The emulation screens need it: their own tables are emulated QEMU guests and
@@ -747,6 +1103,8 @@ class MeshMonitorSection(QtCore.QObject):
         self.monitor.refresh_requested.connect(lambda: self.refresh("button"))
         self.monitor.open_requested.connect(self._open_door)
         self.monitor.scale_requested.connect(self._scale)
+        self.monitor.domain_action_requested.connect(self._domain_action)
+        self.monitor.onion_open_requested.connect(self._open_onion)
         self.timer = QtCore.QTimer(self)
         self.timer.setInterval(self.POLL_MS)
         self.timer.timeout.connect(self._tick)
@@ -775,7 +1133,8 @@ class MeshMonitorSection(QtCore.QObject):
     #: ceiling is ``SCALE_TIMEOUT_S`` (180 s, and a compose scale that has to BUILD
     #: can want all of it), and freezing the window for three minutes because the
     #: operator pressed Back is not a trade this page gets to make. See the docstring.
-    SHUTDOWN_WAIT_MS = {"_probe": 30_000, "_scale_worker": 5_000}
+    SHUTDOWN_WAIT_MS = {"_probe": 30_000, "_scale_worker": 5_000,
+                        "_domain_worker": 5_000}
 
     def shutdown(self) -> tuple[str, ...]:
         """Page teardown: stop the clock, wait a BOUNDED moment per thread, and answer
@@ -834,8 +1193,14 @@ class MeshMonitorSection(QtCore.QObject):
             self._sync_gate()
             return True
         self._node = node
+        hints = None
+        if self._hints_fn is not None:
+            try:
+                hints = self._hints_fn()
+            except Exception:                   # noqa: BLE001 — hints, not facts
+                hints = None
         probe = own_probe(self, "_probe",
-                          MeshMonitorProbe(self.generator_dir, node))
+                          MeshMonitorProbe(self.generator_dir, node, hints=hints))
         probe.result.connect(self._on_snapshot)
         probe.start()
         self._sync_gate()
@@ -929,9 +1294,54 @@ class MeshMonitorSection(QtCore.QObject):
             return
         QtGui.QDesktopServices.openUrl(QtCore.QUrl(url))
 
+    def _open_onion(self, url: str) -> None:
+        why = open_in_tor_browser(url)
+        self.monitor.set_scale_status(f"Not opened: {why}" if why
+                                      else f"Opened {url} in Tor Browser.")
+
+    def _domain_action(self, domain: str, verb: str) -> None:
+        """A press on the per-domain strip: ONE action off the GUI thread, never
+        while a scale runs (both act on the same containers)."""
+        if probe_running(self, "_domain_worker"):
+            return
+        if probe_running(self, "_scale_worker"):
+            self.monitor.set_scale_status(
+                "Not run: a Replicas change is still running — wait for it.")
+            return
+        snap = self.snapshot
+        if snap is None:
+            self.monitor.set_scale_status("Nothing read yet — press Refresh.")
+            return
+        node = getattr(self, "_node", None)
+        if node is None:
+            try:
+                node = self._node_factory()
+            except Exception as e:              # noqa: BLE001
+                self.monitor.set_scale_status(f"Cannot run: {type(e).__name__}: {e}")
+                return
+            self._node = node
+        self.monitor.set_domain_busy(
+            True, f"{mesh_controls.VERB_WORDS.get(verb, verb)} {domain}…")
+        worker = own_probe(self, "_domain_worker",
+                           MeshDomainWorker(self.generator_dir, node, snap.units,
+                                            domain, verb))
+        worker.done.connect(self._domain_done)
+        worker.start()
+
+    def _domain_done(self, res) -> None:
+        self.monitor.set_domain_busy(False, res.text)
+        if getattr(res, "verb", "") == "logs":
+            self.monitor.show_logs(f"Logs — {getattr(res, 'domain', '')}", res.logs)
+        else:
+            self.refresh("post-domain-action")
+
     def _scale(self, key: str, replicas: int) -> None:
         """Apply on a row: run ONE scale off the GUI thread, behind the busy guard."""
         if probe_running(self, "_scale_worker"):
+            return
+        if probe_running(self, "_domain_worker"):
+            self.monitor.set_scale_status(
+                "Not scaled: a domain's Start/Stop/Restart is still running.")
             return
         snap = self.snapshot
         unit = None
@@ -969,6 +1379,22 @@ class MeshMonitorSection(QtCore.QObject):
         self.refresh("post-scale")
 
 
+def emulation_hints(wiz) -> "mesh_monitor.DomainHints":
+    """The domain hints for a Running mesh section on a page that is not the local-
+    mesh page (qemu, mesh emulation): the window's local-mesh config when it has one,
+    plus the names on the wizard's own Domains rows. Never raises — a wizard that has
+    neither (a test double, a window opened in another mode) gives empty hints."""
+    page = getattr(wiz, "localmesh_page", None)
+    boot = getattr(page, "boot", None) if page is not None else None
+    local_cfg = getattr(boot, "cfg", None) if boot is not None else None
+    cfg = getattr(wiz, "cfg", None)
+    domains = (getattr(cfg, "domains", None) or ()) if cfg is not None else ()
+    try:
+        return mesh_monitor.wizard_hints(local_cfg, domains)
+    except Exception:                           # noqa: BLE001
+        return mesh_monitor.DomainHints()
+
+
 def _lane_word(lane) -> str:
     if lane.running is None:
         return "not established"
@@ -976,6 +1402,7 @@ def _lane_word(lane) -> str:
 
 
 __all__ = ["MeshMonitorWidget", "MeshMonitorProbe", "MeshScaleWorker",
+           "MeshDomainWorker", "open_in_tor_browser", "emulation_hints",
            "MeshMonitorSection", "_MON_HEADERS", "_MON_HEADERS_SCALING",
-           "_MON_COL_NAME", "_MON_COL_LANE", "_MON_COL_STATE", "_MON_COL_K8S",
+           "_MON_COL_NAME", "_MON_COL_DOMAIN", "_MON_COL_LANE", "_MON_COL_STATE", "_MON_COL_K8S",
            "_MON_COL_EXT", "_MON_COL_OPEN", "_MON_COL_SCALE"]

@@ -253,10 +253,11 @@ def test_an_image_flow_table_with_unwalked_rows_does_not_refuse_a_saved_mesh(
 
 
 # ── display-only ────────────────────────────────────────────────────────────────
-def test_the_saved_cell_is_the_created_stamp_and_a_healed_start_does_not_move_it(
-        wiz, monkeypatch):
+def test_the_saved_cell_is_the_last_save_and_a_healed_start_is_one(wiz, monkeypatch):
     """A Start that writes the walk into the record bumps ``updated`` (``save``) and
-    leaves ``created`` alone, and the cell renders ``created``: nothing to refresh."""
+    leaves ``created`` alone. The cell renders the LAST save (``updated``, as the
+    node-image picker does — saved-meshes skeptic 3), so it moves only when the table
+    is re-read, and then to the healed record's stamp."""
     ctl = _ctl(wiz)
     _to_env(wiz)
     monkeypatch.setattr(ctl, "_launch", lambda *a, **k: None)
@@ -264,7 +265,8 @@ def test_the_saved_cell_is_the_created_stamp_and_a_healed_start_does_not_move_it
     ctl.saved_meshes.refresh()
     cell = lambda: ctl.saved_meshes.table.item(0, 1).text()      # noqa: E731
     shown = cell()
-    assert shown == rec.created[:16].replace("T", " ")
+    on_disk = saved_meshes.load(rec.path())
+    assert shown == (on_disk.updated or on_disk.created)[:16].replace("T", " ")
     ctl._load_saved(rec)
     _to(wiz, localmesh_mod.LocalMeshDomainServicesPage)
     w = ctl.domain_services
@@ -281,4 +283,6 @@ def test_the_saved_cell_is_the_created_stamp_and_a_healed_start_does_not_move_it
         else healed.config.get("domain_services_reviewed")
     assert healed.created == rec.created
     assert healed.updated >= updated_before
-    assert cell() == shown
+    assert cell() == shown                                  # display-only: no re-read
+    ctl.saved_meshes.refresh()
+    assert cell().startswith(healed.updated[:16].replace("T", " "))

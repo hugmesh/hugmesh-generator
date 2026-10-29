@@ -148,7 +148,15 @@ def _vocab() -> dict:
             "x86": tuple(_scalar(t, "HUGMESH_ROLES_X86").split()),
             "rpi5": tuple(_scalar(t, "HUGMESH_ROLES_RPI5").split()),
             "jetson": tuple(_scalar(t, "HUGMESH_ROLES_JETSON").split()),
+            # The two Orange Pi NODE-axis boards (EXPERIMENTAL): their set holds
+            # `desktop` (the light desktop, whose Studio id is the board itself) plus
+            # the cluster node roles they build.
+            "orangepi5": tuple(_scalar(t, "HUGMESH_ROLES_ORANGEPI5").split()),
+            "orangepi4-lts": tuple(_scalar(t, "HUGMESH_ROLES_ORANGEPI4LTS").split()),
         },
+        "min_ram_gb": {k: int(v) for k, v in _table(t, "HUGMESH_ROLE_MIN_RAM_GB")},
+        "board_ram_gb": {k: tuple(int(x) for x in v.split(","))
+                         for k, v in _table(t, "HUGMESH_BOARD_RAM_GB")},
         "aliases": aliases,
         "composite": composite,
         "hostname": hostname,
@@ -164,9 +172,44 @@ def canonical_roles() -> tuple[str, ...]:
 
 
 def roles_for_platform(platform: str) -> tuple[str, ...]:
-    """The canonical roles a platform builds. () for the seven free-slug boards,
-    which have no role axis at all (``--role`` there is a hostname/marker)."""
+    """The canonical roles a platform builds. () for the five free-slug boards,
+    which have no role axis at all (``--role`` there is a hostname/marker); the two
+    Orange Pi node-axis boards list `desktop` plus their node roles."""
     return _vocab()["platform"].get(platform, ())
+
+
+def min_ram_gb(role: str) -> int | None:
+    """The RAM floor (GB) a cluster node role needs (scripts/_roles-lib.sh
+    HUGMESH_ROLE_MIN_RAM_GB), or None for a role with no floor."""
+    return _vocab()["min_ram_gb"].get(canonicalize(role))
+
+
+def board_ram_gb(board: str) -> tuple[int, ...]:
+    """The RAM sizes (GB) ``board`` is sold with (HUGMESH_BOARD_RAM_GB); () when
+    unknown. A hint for the RAM picker, never a refusal (the list may be stale)."""
+    return _vocab()["board_ram_gb"].get(board, ())
+
+
+def ram_choices(role: str, board: str) -> tuple[int, ...]:
+    """The RAM sizes to OFFER for ``role`` on ``board``: the board's sizes at or above
+    the role's floor (the same rule the builders enforce with --ram-gb)."""
+    floor = min_ram_gb(role) or 0
+    return tuple(g for g in board_ram_gb(board) if g >= floor)
+
+
+def board_fits_role(role: str, board: str) -> bool:
+    """Is ``board`` SOLD with enough RAM for ``role``? False when the board's largest
+    RAM size (HUGMESH_BOARD_RAM_GB) is below the role's floor — the builders' own
+    outright refusal (hugmesh_role_ram_check), e.g. omnibus (16 GB) on a Pi 4 (8 GB
+    at most). True for a role with no floor or a board not in the table."""
+    floor = min_ram_gb(role)
+    sizes = board_ram_gb(board)
+    return floor is None or not sizes or max(sizes) >= floor
+
+
+def ram_required(role: str) -> bool:
+    """omnibus needs --ram-gb (one image serves every RAM size a board is sold with)."""
+    return canonicalize(role) == "omnibus"
 
 
 def aliases() -> dict[str, str]:

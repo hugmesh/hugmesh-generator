@@ -70,6 +70,9 @@ README = os.path.join(FLATPAK, "README.md")
 SCRIPT = os.path.join(PACKAGING, "build-flatpak-local.sh")
 RELEASE_WORKFLOW = os.path.join(GENERATOR_DIR, ".github", "workflows", "studio-release.yml")
 PYPROJECT = os.path.join(STUDIO_ROOT, "pyproject.toml")
+#: Where a bundle says its runtime comes from (build-bundle --runtime-repo). Flathub's
+#: own .flatpakrepo, on the host Flathub documents for it.
+RUNTIME_REPO_URL = "https://dl.flathub.org/repo/flathub.flatpakrepo"
 
 BASH = shutil.which("bash")
 needs_bash = pytest.mark.skipif(
@@ -277,8 +280,9 @@ def test_python_deps_is_pinned_and_offline():
 def test_pyside6_is_pinned_to_the_runtimes_qt_minor_release():
     """Wheels carry their own Qt; keep it the same release as the runtime's.
 
-    org.kde.Platform//6.8 ships Qt 6.8.x, so PySide6 must be 6.8.y. A runtime bump that
-    forgets to regenerate python-deps.json fails here, not on a user's desktop.
+    org.kde.Platform//6.11 ships Qt 6.11.x, so PySide6 must be 6.11.y (the branch is read
+    from the manifest, not held here). A runtime bump that forgets to regenerate
+    python-deps.json fails here, not on a user's desktop.
     """
     runtime_version = _manifest_scalar("runtime-version")
     wheels: dict[str, dict[str, str]] = {}                    # arch -> dist -> version
@@ -394,6 +398,28 @@ def test_runtime_branch_matches_what_the_release_workflow_installs():
         assert set(branches) == {version}, (
             f"the manifest builds against {ref}//{version} but the release workflow "
             f"installs {sorted(set(branches))}: the job would stop at a missing runtime")
+
+
+def test_release_bundle_names_where_its_runtime_comes_from():
+    """``flatpak build-bundle --runtime-repo=<flathub.flatpakrepo>``.
+
+    The published 0.3.0-beta.1 bundle was exported without it, and on a machine with no
+    Flatpak remotes ``flatpak install --user ./hugmesh-studio-0.3.0-beta.1-x86_64.flatpak``
+    stopped with "requires the runtime org.kde.Platform/x86_64/6.8 which was not found"
+    (2026-10-29). With the key in the bundle, flatpak adds that remote to the same
+    installation and pulls the runtime first. The local script is held to the same
+    option by test_script_runs_the_same_commands_as_the_release_workflows_flatpak_job.
+    """
+    lines = [ln for ln in _workflow_flatpak_lines() if ln.startswith("flatpak build-bundle ")]
+    assert len(lines) == 1, lines
+    words = _words_of(lines[0])
+    assert f"--runtime-repo={RUNTIME_REPO_URL}" in words, (
+        "the release workflow exports the bundle without --runtime-repo: a machine "
+        "without the KDE runtime cannot install it")
+    # One Flathub, not two: the job installs the runtime from the remote it adds, and
+    # the bundle sends users to Flathub for the same runtime.
+    assert any(ln.startswith("flatpak remote-add ") and "flathub.flatpakrepo" in ln
+               for ln in _workflow_flatpak_lines())
 
 
 def _workflow_flatpak_lines() -> list[str]:
@@ -1437,7 +1463,11 @@ def _scripted_flatpak(tmp_path, validators=True):
         "        case \"$*\" in *--show-commit*) echo 0123abcd ;; esac ;;\n"
         "    build-bundle)\n"                         # not empty: a checksum of nothing must not pass for this one
         "        [ \"${FAKE_FLATPAK_BUNDLE_EXIT-0}\" = 0 ] || exit \"$FAKE_FLATPAK_BUNDLE_EXIT\"\n"
-        "        printf 'fake flatpak bundle %s\\n' \"$$\" > \"$3\" ;;\n"
+        # The bundle path is the SECOND operand after the options (--runtime-repo=...),
+        # wherever the script puts those.
+        "        shift; out=; n=0\n"
+        "        for a in \"$@\"; do case \"$a\" in -*) ;; *) n=$((n + 1)); [ \"$n\" -ne 2 ] || out=\"$a\" ;; esac; done\n"
+        "        printf 'fake flatpak bundle %s\\n' \"$$\" > \"$out\" ;;\n"
         "    install)\n"
         "        case \"$*\" in *--bundle*)\n"
         f"            mkdir -p \"$FLATPAK_USER_DIR/exports/share/applications\"\n"
@@ -1703,7 +1733,8 @@ def test_script_sends_every_flatpak_call_to_the_private_directory(tmp_path):
     studio_version = re.search(r'(?m)^__version__ = "([^"]+)"',
                                _read(os.path.join(STUDIO_ROOT, "hugmesh_studio", "__init__.py"))).group(1)
     bundle = os.path.join(out, f"hugmesh-studio-{studio_version}-x86_64.flatpak")
-    assert f"build-bundle {work}/repo {bundle}.partial {APP_ID}" in args, args
+    assert (f"build-bundle --runtime-repo={RUNTIME_REPO_URL} {work}/repo {bundle}.partial "
+            f"{APP_ID}") in args, args
     assert os.path.isfile(bundle) and os.path.isfile(bundle + ".sha256")
     assert not os.path.exists(bundle + ".partial"), (
         "the bundle was copied, not renamed, from its .partial name: a copy that is cut "
@@ -1799,13 +1830,21 @@ def test_script_runs_the_same_commands_as_the_release_workflows_flatpak_job(tmp_
     assert len(from_workflow) == 2, from_workflow
     assert sorted(from_script) == sorted(from_workflow), (from_script, from_workflow)
 
-    # build-bundle and the names it produces.
+    # build-bundle: the same options (--runtime-repo above all: without it the bundle
+    # does not say where its runtime comes from, and a machine with no remotes stops at
+    # "requires the runtime ... which was not found") and the names it produces.
     bundle_words = _words_of(workflow_one(lambda ln: ln.startswith("flatpak build-bundle "), "export"))
     script_bundle = next(shlex.split(a) for a in args if a.startswith("build-bundle "))
-    assert bundle_words[3].replace("${VERSION}", version) == name, bundle_words
-    assert os.path.basename(script_bundle[1]) == bundle_words[2] == "repo", (script_bundle, bundle_words)
-    assert os.path.basename(script_bundle[2]) == name + ".partial", script_bundle
-    assert script_bundle[3] == bundle_words[4] == APP_ID, (script_bundle, bundle_words)
+    options = lambda words: sorted(w for w in words if w.startswith("--"))
+    operands = lambda words: [w for w in words if not w.startswith("--")]
+    assert options(script_bundle) == options(bundle_words[1:]), (script_bundle, bundle_words)
+    assert f"--runtime-repo={RUNTIME_REPO_URL}" in options(bundle_words), bundle_words
+    wf_repo, wf_bundle, wf_app = operands(bundle_words)[2:]
+    assert wf_bundle.replace("${VERSION}", version) == name, bundle_words
+    sc_repo, sc_bundle, sc_app = operands(script_bundle)[1:]
+    assert os.path.basename(sc_repo) == wf_repo == "repo", (script_bundle, bundle_words)
+    assert os.path.basename(sc_bundle) == name + ".partial", script_bundle
+    assert sc_app == wf_app == APP_ID, (script_bundle, bundle_words)
     checksum = workflow_one(lambda ln: ln.startswith("sha256sum "), "checksum")
     assert checksum.replace("${VERSION}", version).endswith(f'tee "{name}.sha256"'), checksum
     assert os.path.isfile(os.path.join(out, name + ".sha256")), "the script wrote no .sha256 of that name"

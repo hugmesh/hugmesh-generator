@@ -5,7 +5,7 @@
 # GL, fonts and the KDE look. It does not supply the Qt the app actually runs on. The
 # PySide6 wheels below carry their own Qt, and on the installed bundle the Python side
 # loads that copy (measured 2026-09-30: 625 MB of the 675 MB app), not the runtime's.
-# Both are 6.8.3 today, which is why python-deps.json pins it, but they are two copies
+# Both are 6.11.2 today, which is why python-deps.json pins it, but they are two copies
 # all the same.
 #
 # WHAT THIS SANDBOX CANNOT DO, stated here because the honest answer belongs next to
@@ -30,10 +30,12 @@
 #   application does not use it. Building images from the Flatpak needs that code first.
 app-id: org.hugmesh.ImageStudio
 runtime: org.kde.Platform
-# Flathub flags KDE 6.8 end-of-life as of 2026-09-30 (it still installs; 6.10 and 6.11
-# are current). The release workflow installs this same branch by name, so the two have
-# to move together: tests/test_flatpak_packaging_files.py holds them to it.
-runtime-version: '6.8'
+# The newest KDE branch Flathub offers that is not end-of-life (read with
+# `flatpak remote-ls flathub` and `flatpak remote-info` on 2026-10-29: 6.10 and 6.11
+# current, 6.8 and 6.9 flagged end-of-life, no 6.12). The release workflow installs this
+# same branch by name, so the two have to move together:
+# tests/test_flatpak_packaging_files.py holds them to it.
+runtime-version: '6.11'
 sdk: org.kde.Sdk
 command: hugmesh-studio
 
@@ -67,16 +69,20 @@ modules:
   # flatpak-pip-generator and COMMITTED, so the build is offline-reproducible and a
   # release cannot silently pick up a different Qt than the one that was tested.
   #
-  # THE PIN FOLLOWS THE RUNTIME. org.kde.Platform//6.8 carries Qt 6.8.3, so PySide6 is
-  # held at 6.8.3 and the Qt inside the wheels is the same release as the Qt in the
-  # runtime. Mixing releases (the runtime's platform plugins loaded into the wheels'
-  # libraries) was not tried and is not worth finding out. When the runtime moves,
-  # move PySide6 with it and regenerate:
+  # THE PIN FOLLOWS THE RUNTIME. org.kde.Platform//6.11 carries Qt 6.11.2 (read from
+  # libQt6Core.so.6.11.2 in the installed runtime, 2026-10-29), so PySide6 is held at
+  # 6.11.2 and the Qt inside the wheels is the same release as the Qt in the runtime.
+  # Mixing releases (the runtime's platform plugins loaded into the wheels' libraries)
+  # was not tried and is not worth finding out. When the runtime moves, move PySide6
+  # with it and regenerate:
   #
   #   FLATPAK_PIP_GENERATOR_ALLOW_RESTRICTED_MODULES=1 flatpak-pip-generator \
-  #       --runtime=org.kde.Sdk//6.8 \
+  #       --runtime=org.kde.Sdk//6.11 \
   #       --prefer-wheels=PySide6,PySide6-Addons,PySide6-Essentials,shiboken6 \
-  #       --output python-deps 'PySide6==6.8.3' tzdata
+  #       --output python-deps 'PySide6==6.11.2' tzdata
+  #
+  # The 6.11 wheels are cp310-abi3 / manylinux_2_34; the SDK's Python is 3.13 and its
+  # glibc 2.42, so they fit.
   #
   # The generator refuses PySide6 ("please use the baseapp") unless that variable is
   # set, and it takes platform wheels only when asked, which PySide6 needs because it

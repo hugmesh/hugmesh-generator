@@ -4,10 +4,10 @@
      Regenerate: python3 scripts/emit-image-inventory.py
      CI gate:    bash tests/build-matrix/inventory-check.sh (`make inventory-check`) -->
 
-`docs/catalog/image-catalog.json` is the image GRAMMAR and `tests/build-matrix/matrix.tsv` is a curated 150-cell SAMPLE of it. This table is the third thing neither of them is: the FULL cross-product of that grammar — every image the platform advertises — with, per image, which of the six build channels can actually express it.
+`docs/catalog/image-catalog.json` is the image GRAMMAR and `tests/build-matrix/matrix.tsv` is a curated 170-cell SAMPLE of it. This table is the third thing neither of them is: the FULL cross-product of that grammar — every image the platform advertises — with, per image, which of the six build channels can actually express it.
 
-- **131 distinct images** (x 2 hardening envs = 262 builds)
-- **150 matrix.tsv cells** (67 distinct, env-collapsed) — the sampled subset `tests/build-matrix/check.sh` proves across five channels
+- **141 distinct images** (x 2 hardening envs = 282 builds)
+- **170 matrix.tsv cells** (77 distinct, env-collapsed) — the sampled subset `tests/build-matrix/check.sh` proves across five channels
 - **68 images with a channel gap**, 0 phantom, 0 undocumented
 
 Legend: ✅ first-class selection &nbsp; ⚠️ escape-hatch only (raw builder flags) &nbsp; ❌ not expressible
@@ -16,12 +16,12 @@ Legend: ✅ first-class selection &nbsp; ⚠️ escape-hatch only (raw builder f
 
 | channel | source of truth | ✅ | ⚠️ | ❌ |
 | --- | --- | ---: | ---: | ---: |
-| `cli` | build-*-stage4.sh --print-plan | 131 | 0 | 0 |
-| `make` | Makefile targets (make -n) | 82 | 49 | 0 |
-| `menu` | scripts/build-menu.sh ui_menu pickers | 82 | 40 | 9 |
-| `gui` | studio/hugmesh_studio --print-command | 131 | 0 | 0 |
-| `job` | docker/build-image.sh resolve_build_target() | 81 | 9 | 41 |
-| `worklist` | hugmesh-worklist/v1 envelope -> materialize() | 131 | 0 | 0 |
+| `cli` | build-*-stage4.sh --print-plan | 141 | 0 | 0 |
+| `make` | Makefile targets (make -n) | 92 | 49 | 0 |
+| `menu` | scripts/build-menu.sh ui_menu pickers | 92 | 40 | 9 |
+| `gui` | studio/hugmesh_studio --print-command | 141 | 0 | 0 |
+| `job` | docker/build-image.sh resolve_build_target() | 91 | 9 | 41 |
+| `worklist` | hugmesh-worklist/v1 envelope -> materialize() | 141 | 0 | 0 |
 
 ## The inventory
 
@@ -91,10 +91,20 @@ Legend: ✅ first-class selection &nbsp; ⚠️ escape-hatch only (raw builder f
 | `mesh/jetson/omnibus/orin-nano-4gb` | mesh | jetson | `omnibus` | `omnibus` | orin-nano-4gb | — | — | img, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `mesh/jetson/omnibus/orin-nx-16gb` | mesh | jetson | `omnibus` | `omnibus` | orin-nx-16gb | — | — | img, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `mesh/jetson/omnibus/orin-nx-8gb` | mesh | jetson | `omnibus` | `omnibus` | orin-nx-8gb | — | — | img, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| `mesh/orangepi4-lts/frontend/installer` | mesh | orangepi4-lts | `frontend` | `frontend` | — | installer | — | installer.iso, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| `mesh/orangepi5/backend/orange-pi-5-plus/installer` | mesh | orangepi5 | `backend` | `backend` | orange-pi-5-plus | installer | — | installer.iso, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| `mesh/orangepi5/backend/orange-pi-5/installer` | mesh | orangepi5 | `backend` | `backend` | orange-pi-5 | installer | — | installer.iso, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| `mesh/orangepi5/frontend/orange-pi-5-plus/installer` | mesh | orangepi5 | `frontend` | `frontend` | orange-pi-5-plus | installer | — | installer.iso, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| `mesh/orangepi5/frontend/orange-pi-5/installer` | mesh | orangepi5 | `frontend` | `frontend` | orange-pi-5 | installer | — | installer.iso, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| `mesh/orangepi5/omnibus/orange-pi-5-plus/installer` | mesh | orangepi5 | `omnibus` | `omnibus` | orange-pi-5-plus | installer | — | installer.iso, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| `mesh/orangepi5/omnibus/orange-pi-5/installer` | mesh | orangepi5 | `omnibus` | `omnibus` | orange-pi-5 | installer | — | installer.iso, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| `mesh/orangepi5/pki/orange-pi-5-plus/installer` | mesh | orangepi5 | `pki` | `pki` | orange-pi-5-plus | installer | — | installer.iso, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| `mesh/orangepi5/pki/orange-pi-5/installer` | mesh | orangepi5 | `pki` | `pki` | orange-pi-5 | installer | — | installer.iso, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `mesh/rpi5/backend/rpi4` | mesh | rpi5 | `backend` | `backend` | rpi4 | — | — | fs.tar.xz, img, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `mesh/rpi5/backend/rpi5` | mesh | rpi5 | `backend` | `backend` | rpi5 | — | — | fs.tar.xz, img, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `mesh/rpi5/frontend/rpi4` | mesh | rpi5 | `frontend` | `frontend` | rpi4 | — | — | fs.tar.xz, img, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `mesh/rpi5/frontend/rpi5` | mesh | rpi5 | `frontend` | `frontend` | rpi5 | — | — | fs.tar.xz, img, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| `mesh/rpi5/omnibus/rpi5` | mesh | rpi5 | `omnibus` | `omnibus` | rpi5 | — | — | fs.tar.xz, img, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `mesh/rpi5/pki/rpi4` | mesh | rpi5 | `pki` | `pki` | rpi4 | — | — | fs.tar.xz, img, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `mesh/rpi5/pki/rpi5` | mesh | rpi5 | `pki` | `pki` | rpi5 | — | — | fs.tar.xz, img, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `mesh/rpi5/rpi5-desktop/rpi3` | mesh | rpi5 | `rpi5-desktop` | `desktop` | rpi3 | — | — | fs.tar.xz, img, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
@@ -305,10 +315,10 @@ An image one channel can express and another cannot. This is the defect class th
 | `standalone/orangepizero3/orangepizero3/live` | `menu` | ⚠️ | no standalone-posture selection; --skip-mesh/--standalone only via 'Extra builder flags' |
 | `standalone/rpi5/generic/rpi4` | `job` | ❌ | resolve_build_target rejects every IMAGE_TYPE for HARDWARE_CLASS=rpi5.generic.rpi4 |
 | `standalone/rpi5/generic/rpi4` | `make` | ⚠️ | `make rpi-generic` recipe omits --skip-mesh (standalone posture) (reachable only via STANDALONE_FLAGS) |
-| `standalone/rpi5/generic/rpi4` | `menu` | ❌ | role 'generic' (picker offers: pki, backend, frontend, desktop) |
+| `standalone/rpi5/generic/rpi4` | `menu` | ❌ | role 'generic' (picker offers: pki, backend, frontend, omnibus, desktop) |
 | `standalone/rpi5/generic/rpi5` | `job` | ❌ | resolve_build_target rejects every IMAGE_TYPE for HARDWARE_CLASS=rpi5.generic.rpi5 |
 | `standalone/rpi5/generic/rpi5` | `make` | ⚠️ | `make rpi-generic` recipe omits --skip-mesh (standalone posture) (reachable only via STANDALONE_FLAGS) |
-| `standalone/rpi5/generic/rpi5` | `menu` | ❌ | role 'generic' (picker offers: pki, backend, frontend, desktop) |
+| `standalone/rpi5/generic/rpi5` | `menu` | ❌ | role 'generic' (picker offers: pki, backend, frontend, omnibus, desktop) |
 | `standalone/x86/chromebook/full` | `make` | ⚠️ | `make x86-chromebook` recipe omits --desktop full, --no-sso (standalone posture) (reachable only via STANDALONE_FLAGS) |
 | `standalone/x86/chromebook/full` | `menu` | ❌ | no desktop picker at all (cannot select desktop=full) |
 | `standalone/x86/chromebook/thin` | `make` | ⚠️ | `make x86-chromebook` recipe omits --no-sso (standalone posture) (reachable only via STANDALONE_FLAGS) |

@@ -24,6 +24,9 @@ if other=$(la_worker_pid) && [ "$other" != "$$" ]; then
   exit 0
 fi
 echo $$ >"$PIDFILE"
+# What this worker runs with (see la_worker_signature): `local-ai.sh start` compares it
+# with what a new start would use and restarts the worker when they differ.
+la_worker_signature >"$LA_DIR/worker.env" 2>/dev/null || rm -f "$LA_DIR/worker.env"
 
 CHILD=0
 CURRENT=""

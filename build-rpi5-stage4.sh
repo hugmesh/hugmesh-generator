@@ -147,6 +147,11 @@ source "${SCRIPT_DIR}/scripts/_node-storage-bake-lib.sh"
 # EXCLUDE_SERVICES). See the lib header for the observed symptoms.
 # shellcheck source=scripts/_optional-services-lib.sh
 source "${SCRIPT_DIR}/scripts/_optional-services-lib.sh"
+# Cluster NODE plumbing shared with the Orange Pi node builders: here only the
+# headscale-host rule (pki/omnibus/generic) and the k8s topology word, so the two
+# builders cannot disagree about which roles run the mesh control server.
+# shellcheck source=scripts/_node-role-lib.sh
+source "${SCRIPT_DIR}/scripts/_node-role-lib.sh"
 
 WORK_DIR=""
 # Per-BOARD build subdirectory under WORK_DIR. The heavy, ARCH-SPECIFIC build
@@ -229,6 +234,8 @@ BUILD_IMG=true          # produce the flashable raw .img (the Pi live USB)
 BUILD_ISO=false         # no installer/ISO by default for the Pi (--iso to force)
 BUILD_TAR=true          # also emit the mounted-filesystem tarball (.fs.tar.xz)
 ROOT_MiB=9216           # ext4 root partition size in the .img (growroot expands it on first boot)
+IMG_SIZE_SET=false      # true once --img-size is given (omnibus raises the default only when it was not)
+RAM_GB=""               # --ram-gb N : GB of RAM on the board to be flashed (REQUIRED for --role omnibus)
 GROW_POLICY="fill"      # first-boot grow policy baked into /etc/growfs.conf: fill|none|<size> (see growroot)
 SD_ONLY=false           # use literal /dev/mmcblk0p2 instead of PARTUUID/LABEL identity
 COMPRESS_IMG=false      # xz-compress the finished .img (preset: COMPRESS_LEVEL)
@@ -238,7 +245,7 @@ PACKAGES_ADD=""          # --packages-add : atoms to add on top of the derived s
 PACKAGES_DROP=""         # --packages-drop: default-set atoms to remove (mandatory floor honored)
 TIMEZONE="UTC"
 HOSTNAME=""
-ROLE="generic"          # generic | pki | backend | frontend | desktop  (unchanged;
+ROLE="generic"          # generic | pki | backend | frontend | omnibus | desktop  (unchanged;
                         # be/fe are accepted aliases — see scripts/_roles-lib.sh)
 DESKTOP="none"          # derived: 'light' for --role desktop, else none (--print-plan/banner display only)
 CLUSTER_DOMAIN="hugmesh.net"
@@ -454,7 +461,7 @@ DESCRIPTION
     --board rpi3 is DESKTOP-ONLY (1GB RAM is not enough headroom for
     this repo's hardened SELinux/containerd/kubelet k8s stack on top of
     it): it must be combined with --role desktop, and hard-errors on
-    every other --role (generic/pki/backend/frontend).
+    every other --role (generic/pki/backend/frontend/omnibus).
 
     Run as root (sudo).  The cross-emerge merges into the sysroot's
     package database and writes the host emerge log/cache, so real root
@@ -715,11 +722,24 @@ OPTIONS
 
   System
     -r, --role ROLE
-        Node role. One of: generic | pki | backend | frontend | desktop.
-        The old short x86 spellings are ACCEPTED here too, forever, and are
-        normalized at parse time: be=backend, fe=frontend. (One vocabulary
-        across every platform — scripts/_roles-lib.sh.)
+        Node role. One of: generic | pki | backend | frontend | omnibus |
+        desktop. omnibus is ONE node running every cluster role (the
+        control plane plus the backend and frontend tiers) — the same role
+        x86 builds; it needs --ram-gb 16 (a 16 GB Pi 5) and is refused
+        on --board rpi4 (8 GB at most) and --board rpi3. The old short x86 spellings are ACCEPTED here too,
+        forever, and are normalized at parse time: be=backend, fe=frontend,
+        full=omnibus. (One vocabulary across every platform —
+        scripts/_roles-lib.sh.)
         Default: generic
+
+    --ram-gb N
+        GB of RAM on the board you will flash (Pi 4: 1/2/4/8, Pi 5:
+        1/2/4/8/16). The image is the same for every RAM size, so the build
+        cannot see it. REQUIRED for --role omnibus, which needs at least
+        16 GB (the whole stack asks the scheduler for about 8.3 GiB before
+        the OS, measured); optional for the others, refused below their
+        floor when given: backend 8 GB (its tier alone asks for 4 GiB),
+        pki 4 GB, frontend 4 GB. Ignored (with a warning) for --role desktop/generic.
 
     -H, --hostname NAME
         Target system hostname.
@@ -1186,7 +1206,8 @@ while [[ $# -gt 0 ]]; do
         --no-img)             BUILD_IMG=false;         shift   ;;
         --iso)                BUILD_ISO=true;          shift   ;;
         --both)               BUILD_IMG=true; BUILD_ISO=true; shift ;;
-        --img-size)           ROOT_MiB="$2";           shift 2 ;;
+        --img-size)           ROOT_MiB="$2"; IMG_SIZE_SET=true; shift 2 ;;
+        --ram-gb)             RAM_GB="$2";             shift 2 ;;
         --grow)               GROW_POLICY="$2";        shift 2 ;;
         --no-grow)            GROW_POLICY="none";      shift   ;;
         --sd-only)            SD_ONLY=true;            shift   ;;
@@ -1390,7 +1411,7 @@ if ${BUILD_ISO}; then SKIP_ISO=false; else SKIP_ISO=true; fi
 # (the case block, the artifact name, /etc/hugmesh/role) sees two spellings.
 ROLE="$(hugmesh_role_validate "${ROLE}" rpi5)" || exit 1
 case "${ROLE}" in
-    generic|pki|backend|frontend) ;;
+    generic|pki|backend|frontend|omnibus) ;;
     desktop) ROLE_CLIENT=true; DESKTOP="light" ;;
     # UNREACHABLE via the CLI (validate ran first); fail-closed net for drift between
     # this block and HUGMESH_ROLES_RPI5 in scripts/_roles-lib.sh.
@@ -1429,6 +1450,22 @@ if [ "${BOARD}" = "rpi3" ] && ! ${ROLE_CLIENT}; then
     err "--board rpi3 only composes onto --role desktop (got --role ${ROLE}) — 1GB RAM is not enough headroom for this repo's hardened SELinux/containerd/kubelet k8s stack on a cluster-node role."
     echo "    Build --board rpi3 --role desktop, or pick --board rpi4/rpi5 for a cluster-node role." >&2
     exit 1
+fi
+
+# ── RAM floor (scripts/_roles-lib.sh HUGMESH_ROLE_MIN_RAM_GB) ───────────────────
+# The image is the same for a 1 GB and an 8 GB board, so the RAM is DECLARED with
+# --ram-gb. omnibus (every cluster role on one node) requires it and needs 16 GB;
+# the other node roles are checked only when it is given. Before --print-plan, so a
+# refusal is a plain non-zero exit with no plan (tests/build-matrix/check.sh).
+if ${ROLE_CLIENT} || [ "${ROLE}" = "generic" ]; then
+    [ -z "${RAM_GB}" ] || warn "--ram-gb ${RAM_GB} is ignored for --role ${ROLE} (no RAM floor on this role)."
+else
+    hugmesh_role_ram_check "${ROLE}" "${RAM_GB}" "${BOARD}" || exit 1
+fi
+# omnibus carries every tier's images and volumes on one root: raise the compact
+# .img root to the x86/Jetson omnibus size unless --img-size was given.
+if [ "${ROLE}" = "omnibus" ] && ! ${IMG_SIZE_SET}; then
+    ROOT_MiB=20480
 fi
 
 # Client-desktop make.conf USE (appended LAST in make.conf.tmpl so it overrides
@@ -2675,7 +2712,13 @@ if ${PRINT_PLAN}; then
     _plan SUPERDOMAIN        "${SUPERDOMAIN}"
     domain_idp_plan_line   # PLAN_DOMAIN_IDP=<own domains>; prints nothing when none (#509)
     _plan HOSTNAME           "${HOSTNAME}"
-    _plan K8S                "$(${ROLE_CLIENT} && echo none || { [ "${ROLE}" = "pki" ] && echo control-plane || echo worker; })"
+    _plan K8S                "$(${ROLE_CLIENT} && echo none || node_role_k8s_topology "${ROLE}")"
+    # Additive keys, printed only when --ram-gb was given (every pre-existing plan
+    # stays byte-identical): the declared RAM and this role's floor.
+    if [ -n "${RAM_GB}" ] && ! ${ROLE_CLIENT} && [ "${ROLE}" != "generic" ]; then
+        _plan RAM_GB             "${RAM_GB}"
+        _plan RAM_FLOOR_GB       "$(hugmesh_role_min_ram_gb "${ROLE}")"
+    fi
     _plan OPTIONAL_SERVICES  "$(${ROLE_CLIENT} && echo "n/a (role=desktop; no cluster GitOps tree baked)" || echo "${OPTIONAL_SERVICES:-none}")"
     # Additive PLAN_ key (grep -qx consumers unaffected): what the tor NODE gates will
     # do, from the SAME predicate + arrays they call — `off`, or the packages and
@@ -3160,6 +3203,17 @@ if [ "${#HOST_POLICY_TOOLS[@]}" -ne 0 ]; then
         exit 1
     fi
 fi
+
+# ── HOST gpep517 floor (cross-built python C extensions) ──────────────────────
+# Every python wheel in this cross build is built by the HOST gpep517 with
+# --sysroot. gpep517 < 23 breaks every python C extension against setuptools-84
+# ("patched_config_vars() takes 0 positional arguments but 9 were given", shown
+# by portage only as "Wheel build failed"), so libselinux[python] and pypax fail
+# in @system and the whole payload is skipped (rpi5 run 2026-10-21). The
+# 2026-09-24 builder image ships gpep517-20 as its only stable version, and
+# --with-bdeps=n means the cross emerge never upgrades it. Full rationale in
+# scripts/_host-guard-lib.sh. Must run before the first cross_emerge.
+hostguard_ensure_cross_gpep517 || exit 1
 info "Host SELinux policy build tools present (checkpolicy, checkmodule, semodule_package, m4)"
 
 if ! ${SKIP_ISO} && ! command -v xorrisofs &>/dev/null; then
@@ -3423,8 +3477,17 @@ fi
 cp "${SPECS_DIR}/portage/env/"*.conf                      "${SYSROOT}/etc/portage/env/" 2>/dev/null || true
 # Per-package user patches auto-applied by eapply_user (called from each ebuild's
 # default src_prepare). cross_emerge runs with PORTAGE_CONFIGROOT=${SYSROOT}, so
-# portage reads them from ${SYSROOT}/etc/portage/patches/<cat>/<pkg>/. Currently
-# holds net-misc/networkmanager's cross jansson-SONAME fix (see that .patch).
+# portage reads them from ${SYSROOT}/etc/portage/patches/<cat>/<pkg>/.
+# The sysroot copy is REBUILT from specs every run, never added to: a --resume
+# sysroot otherwise keeps a patch the specs have dropped, and portage applies a
+# patch in an unversioned <pkg>/ dir to EVERY future version of that package.
+# That is how the old net-misc/networkmanager cross jansson-SONAME patch killed
+# NetworkManager 1.58.1 in src_prepare ("Hunk #1 FAILED at 296"): 1.58.1's own
+# meson.build already prefixes the cross sys_root, so the patch was removed.
+# A new patch here goes in a VERSIONED dir (<cat>/<pkg>-<ver>/), which
+# studio/tests/test_portage_user_patches.py enforces.
+rm -rf "${SYSROOT}/etc/portage/patches"
+mkdir -p "${SYSROOT}/etc/portage/patches"
 if [ -d "${SPECS_DIR}/portage/patches" ]; then
     cp -a "${SPECS_DIR}/portage/patches/."             "${SYSROOT}/etc/portage/patches/"
 fi
@@ -3748,6 +3811,10 @@ chmod +x "${SYSROOT}/usr/share/hugmesh/generator/scripts/gen-keystores.sh" "${SY
 mkdir -p "${SYSROOT}/etc/hugmesh"
 echo "${ROLE}"           > "${SYSROOT}/etc/hugmesh/role"
 echo "${CLUSTER_DOMAIN}" > "${SYSROOT}/etc/hugmesh/cluster-domain"
+# omnibus only: record its RAM floor (/etc/hugmesh/min-ram-mb) on the image.
+if [ "${ROLE}" = "omnibus" ]; then
+    node_role_bake_min_ram "${SYSROOT}" "${ROLE}"
+fi
 # Orchestration superdomain (WS-SUPER-B): record the mesh plane the image joins.
 if [ -n "${SUPERDOMAIN}" ]; then
     echo "${SUPERDOMAIN}" > "${SYSROOT}/etc/hugmesh/superdomain"
@@ -3869,8 +3936,9 @@ fi
 # it pulls nothing until a superadmin sets enabled:true in the hugmesh-update-policy
 # ConfigMap (fail-safe-to-OFF: an absent/unreachable policy => NO pull).
 DEFAULT_SVCS+=(hugmesh-update)
-# headscale runs on the PKI/identity node (and on a generic all-in-one image)
-if [ "${ROLE}" = "pki" ] || [ "${ROLE}" = "generic" ]; then
+# headscale runs on the PKI/identity node, the one-node omnibus cluster and a
+# generic all-in-one image (node_role_runs_headscale, scripts/_node-role-lib.sh).
+if node_role_runs_headscale "${ROLE}"; then
     DEFAULT_SVCS+=(headscale)
 fi
 # tailscale client everywhere unless the mesh / client is skipped
@@ -3935,7 +4003,7 @@ done
 # role's run (the cross-build does pki first) can leave a headscale runlevel symlink
 # behind that a worker image would then background-start. Remove it for any role that
 # must NOT run the control server. (Pi audit finding, 2026-06-13.)
-if [ "${ROLE}" != "pki" ] && [ "${ROLE}" != "generic" ]; then
+if ! node_role_runs_headscale "${ROLE}"; then
     rm -f "${SYSROOT}/etc/runlevels/default/headscale"
 fi
 

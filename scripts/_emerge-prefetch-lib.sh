@@ -43,11 +43,16 @@
 # brought sys-apps/portage and sys-apps/baselayout current, would write
 # package.use against a portage the payload merge no longer runs and would move
 # what the #223 payload-plan gate later sees. So a resolver wall (keyword, mask,
-# USE, slot conflict) means "the pre-fetch could not run", NOT "this build is
-# doomed" — the payload merge crosses those with --autounmask-continue=y and the
-# #223 gate is the thing that judges them. That case WARNS loudly, names the
-# wall, and returns 0. Retrying it would be pointless: nothing about the network
-# changes a slot conflict.
+# USE, slot conflict) means "the pre-fetch could not run"; the #223 payload-plan
+# gate is the thing that judges it, just before the image merge. That case WARNS
+# loudly, names the wall, and returns 0. Retrying it would be pointless: nothing
+# about the network changes a slot conflict. BEWARE (measured 2026-10-21): a USE
+# wall here is NOT healed later. The merges run under --binpkg-respect-use=y,
+# which leaves portage's automatic USE changes off, so --autounmask-continue=y
+# has nothing to apply; the 2026-10-21 desktop build printed its qtdeclarative
+# wayland wall here and then spent two more hours on @world before the gate
+# stopped it. The warning below says so, so an operator watching the log can
+# stop the build early.
 #
 # WHAT THIS DOES NOT PROVE. The pass is a FLOOR, not a completeness proof: it
 # resolves before the system/world groups have run, so a handful of distfiles
@@ -151,7 +156,7 @@ hugmesh_prefetch_payload() {
         fi
         class="$(hugmesh_prefetch_classify "${HUGMESH_PREFETCH_LOG}")"
         if [ "${class}" = "resolve" ]; then
-            _hugmesh_prefetch_say "WARN: PRE-FETCH SKIPPED — portage could not RESOLVE the payload here (rc=${rc}), so nothing was downloaded. This is a keyword/mask/USE/slot wall, not a network problem, and retrying cannot help: the payload merge crosses those with --autounmask-continue=y, and the payload-plan gate (issue #223) is what judges them. The build continues UNPROTECTED by the pre-fetch — a single-source distfile can still drop its package under --keep-going. Resolver output: ${HUGMESH_PREFETCH_LOG}"
+            _hugmesh_prefetch_say "WARN: PRE-FETCH SKIPPED — portage could not RESOLVE the payload here (rc=${rc}), so nothing was downloaded. This is a keyword/mask/USE/slot wall, not a network problem, and retrying cannot help. The payload-plan gate (issue #223) judges it just before the image merge, AFTER @world (hours from now). A USE or keyword wall named below will NOT heal by itself (--autounmask-continue=y applies nothing under --binpkg-respect-use=y): if the lines below say \"there are no ebuilds built with USE flags\" or name a keyword change, stop this build, pre-seed the spec, and start again. The build continues UNPROTECTED by the pre-fetch — a single-source distfile can still drop its package under --keep-going. Resolver output: ${HUGMESH_PREFETCH_LOG}"
             grep -aE "All ebuilds that could satisfy|there are no ebuilds|The following (keyword|mask|USE|license) changes are necessary|Multiple package instances within a single package slot|masked by|slot conflict" \
                 "${HUGMESH_PREFETCH_LOG}" 2>/dev/null | head -n 20 || true
             return 0

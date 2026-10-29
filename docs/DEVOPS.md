@@ -66,20 +66,14 @@ Forgejo** as the source of truth. The scaffold exists. The cut-over has not happ
   adopters are registered in `specs/cluster/catalog/adopters.yaml`. Its `spec.sweep`
   block records this provenance and is itself gate-checked:
   - `hugmesh-deploy.yaml` + `deploy/` — `admin-bff-api`, `be-gateway`,
-    `character-forge-bff-api`, `federation-api`, `forum-ui`, `mod-bff-api`,
-    `remote-fragment`, `user-bff-api`.
-  - `snapdragon-deploy.yaml` + `deploy/` (LEGACY_COMPAT, the pre-rebrand descriptor
-    name) — `forum-bff-api`, the registry's last legacy row (swept 2026-08-20).
-    **Stale:** on 2026-10-07 `hugmesh-forum-bff-api` ships `hugmesh-deploy.yaml` at
-    its root (`gh api repos/hugmesh/hugmesh-forum-bff-api/contents/`), so all 9
-    adopters use the new name. The registry row and the legacy generator filter need
-    the update the registry's header describes. The registry, not this list, is the
-    authority, and the gate checks it against the repos.
+    `character-forge-bff-api`, `federation-api`, `forum-bff-api`, `forum-ui`,
+    `mod-bff-api`, `remote-fragment`, `user-bff-api`. The registry, not this list,
+    is the authority, and the gate checks it against the repos.
 
-  The catalog generators filter on **both** filenames (two `filters` entries: the
-  scmProvider ORs across entries and ANDs inside one, and `pathsExist` is itself an
-  AND-list, so a single entry cannot express the either-or). Until 2026-07-30 they
-  matched the legacy name only, and 3 repos were **silently invisible** to the
+  The catalog generators filter on `hugmesh-deploy.yaml` only. (The pre-rebrand
+  descriptor spelling was retired on 2026-10-21, once `hugmesh-forum-bff-api`, its
+  last user, had renamed it.) Until 2026-07-30 the generators matched the
+  pre-rebrand name only, and 3 repos were **silently invisible** to the
   catalog. `scripts/validate-catalog-discovery.sh` (CI job
   `lint:catalog-descriptor-discovery`) now fails the pipeline if any adopting repo
   ships a descriptor no generator matches.

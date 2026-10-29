@@ -128,7 +128,7 @@ from ...core import emulation, qemu_tests
 from ...core.domain_services import session_boot_gate_reason
 from ...core.local_stack_node import LocalStackNode
 from . import _emulation_common as common
-from ._mesh_monitor_widget import MeshMonitorSection
+from ._mesh_monitor_widget import MeshMonitorSection, emulation_hints
 from ._scroll import scrollable
 from ._widgets import label_finish_as_exit
 from .localmesh import _MeshWorker
@@ -554,7 +554,11 @@ class QemuPage(QtWidgets.QWizardPage):
             title="Running mesh — pods, containers and their addresses",
             scaling=True,
             what=("This reads the docker compose project and the kind cluster on THIS "
-                  "workstation — not the emulated guests in the table above."))
+                  "workstation — not the emulated guests in the table above."),
+            # the same domain names (and per-domain service picks) the local-mesh
+            # page's mount of this table uses, so a kind pod reads "acme.example"
+            # here too and not its slug
+            hints_fn=lambda: emulation_hints(self.wiz))
         self.monitor.monitor.hide_view_controls(
             "Open the browser door from the local-mesh page — it owns the `make view` "
             "session, and two launchers would fight over one session lock.")

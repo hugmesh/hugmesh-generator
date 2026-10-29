@@ -302,7 +302,7 @@ node and could not be exercised in CI. On first GPU-cluster bring-up, verify:
    becomes Ready; `curl http://<svc>:11434/v1/models` lists the preloaded models;
    `curl https://ai.<domain>/v1/chat/completions` (with a mesh token) returns a
    completion.
-5. **Model cache PVC** binds (local-path) so weights survive a pod restart.
+5. **Model cache PVC** binds (StorageClass `hugmesh-local`, the local-path provisioner) so weights survive a pod restart.
 
 ---
 

@@ -58,7 +58,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-from .config import SERVICE_DESCRIPTIONS, SERVICE_GROUPS
+from .config import OPTIONAL_SERVICES_CHOICES, SERVICE_DESCRIPTIONS, SERVICE_GROUPS
 
 # ── the two mechanisms, as values rather than an is-it-tor special case ──────────
 MECH_COMPOSE_PROFILE = "compose-profile"
@@ -669,3 +669,37 @@ def federation_env(selection: Sequence[str] | None) -> dict[str, str]:
         FEDERATION_ENABLE_ENV: " ".join(federation_modules(chosen)),
         FEDERATION_DISABLE_ENV: " ".join(federation_modules(off)),
     }
+
+
+# ── the per-domain split (2026-10-21: the "Local services" option is retired) ────────
+# The operator: "The local services option doesn't make any sense, we should be using
+# the per domain services configuration so please remove it." This module stays the
+# MECHANISM table (slug -> compose profile / federation row); it is no longer where a
+# docker mesh's services are CHOSEN. Two kinds of selectable slug remain:
+#
+# * DOMAIN slugs — the per-domain catalogue (domain_services.DOMAIN_CATALOGUE ==
+#   OPTIONAL_SERVICES_CHOICES) that the local stack can run. These are chosen PER
+#   DOMAIN (``Domain.optional_services``); the mesh runs the UNION of its domains'
+#   choices (LocalMeshBootstrapConfig.effective_services).
+# * MESH-PLANE slugs — everything else the local stack can run (tor, anubis, wiki,
+#   edge-ai-tts, media-poisoner, egress-vpn): one container or registry row for the
+#   whole mesh, never one domain's. They stay in ``LocalMeshBootstrapConfig.services``
+#   and a screen offers them as the mesh's own infrastructure, not as "services".
+def domain_local_slugs() -> tuple[str, ...]:
+    """The selectable local slugs that are chosen per DOMAIN, in catalogue order."""
+    return tuple(s for s in local_slugs() if s in OPTIONAL_SERVICES_CHOICES)
+
+
+def mesh_plane_slugs() -> tuple[str, ...]:
+    """The selectable local slugs that belong to the whole MESH, in catalogue order."""
+    return tuple(s for s in local_slugs() if s not in OPTIONAL_SERVICES_CHOICES)
+
+
+def split_selection(selection: Sequence[str] | None
+                    ) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """``(domain part, the rest)`` of a selection, each in the order given. The rest
+    keeps mesh-plane slugs AND anything this catalogue does not know (validate_selection
+    names those), so a split never drops a slug silently."""
+    dom = set(domain_local_slugs())
+    sel = tuple(selection or ())
+    return (tuple(s for s in sel if s in dom), tuple(s for s in sel if s not in dom))

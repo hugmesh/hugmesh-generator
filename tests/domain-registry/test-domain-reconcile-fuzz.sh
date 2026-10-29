@@ -220,20 +220,13 @@ if command -v node >/dev/null && [ -r "${TOKEN_CLASSIFIER}" ]; then
       // + the CRD API group (tokens.json api_groups), in the bare spelling the
       // label-ns substring match cannot see (no slash): compiled into admin-bff.
       const frozen = ["hugmesh.net/domain","X-HugMesh-Local","hugmesh.device-terminal.stepup.x","platform.hugmesh.net"];
-      // THE BAN SIDE (tokens.json retired_protocol_constants): the spellings the
-      // HugMesh rebrand RETIRED must still be refused at emit, or the templating
-      // path silently becomes the way the dead token comes back.
-      const retired = ["snapdragon.systems/image-build","X-Snapdragon-Local","snapdragon.device-terminal.stepup.x"];
       const denied = ["CASDOOR_ADMIN_CLIENT_SECRET","ROOT_PASS","APP_REGISTRY_SIGNING_KEY"];
       for (const t of frozen) if (!c.isFrozen(t)) { console.error("NOT frozen:", t); process.exit(1); }
-      for (const t of frozen) if (c.isRetired(t)) { console.error("live constant wrongly RETIRED:", t); process.exit(1); }
-      for (const t of retired) if (!c.isFrozen(t)) { console.error("retired constant NOT refused:", t); process.exit(1); }
-      for (const t of retired) if (!c.isRetired(t)) { console.error("retired constant not flagged:", t); process.exit(1); }
       for (const t of denied) if (!c.isDenied(t)) { console.error("NOT denied:", t); process.exit(1); }
       if (c.isAllowed("hugmesh.net/domain")) { console.error("frozen ns wrongly ALLOWED"); process.exit(1); }
       process.exit(0);
     ' "${TOKEN_CLASSIFIER}" >/dev/null 2>&1; then
-        ok "(d) token-classifier isFrozen()/isDenied() reject hugmesh.net/* + wire headers + secret keys + the RETIRED spellings"
+        ok "(d) token-classifier isFrozen()/isDenied() reject hugmesh.net/* + wire headers + secret keys"
     else bad "(d) token-classifier did NOT reject a frozen/retired/denied protocol constant"; fi
 else
     echo "  SKIP (d) node/token-classifier unavailable (Handlebars-path assertion)"
@@ -243,9 +236,9 @@ fi
 # fail-OPEN by shape: commit a38208e6 ("Update tokens.json", a direct-to-main
 # web-UI edit, 2026-08-28) deleted retired_protocol_constants AND
 # theme_contract_constants in one 14-line change, every consumer kept loading and
-# exiting 0, and render-handlebars.js's emit refusal for the retired snapdragon.*
-# constants and for the whole theme hand-off sat inert on main for four days. Only
-# d2 above — which names the exact dead spellings — went red. So: mutate a COPY of
+# exiting 0, and render-handlebars.js's emit refusal for the (since lifted) retired
+# pre-rebrand constants and for the whole theme hand-off sat inert on main for four
+# days. Only d2 above — which named the exact dead spellings — went red. So: mutate a COPY of
 # the spec (never the tree's own) and require the classifier to refuse to LOAD.
 if command -v node >/dev/null && command -v jq >/dev/null && [ -r "${TOKEN_CLASSIFIER}" ]; then
     TCDIR="${WORK}/tc"; mkdir -p "${TCDIR}"
@@ -294,7 +287,7 @@ if command -v node >/dev/null && command -v jq >/dev/null && [ -r "${TOKEN_CLASS
     # allowlist IS in this list. It is the only block held to `mustExist` rather than
     # `mustBeNonEmpty`, so leaving it out shipped that whole branch untested —
     # measured: deleting the mustExist branch outright left the battery 96/0 GREEN.
-    for _blk in allowlist denylist frozen_protocol_constants retired_protocol_constants theme_contract_constants; do
+    for _blk in allowlist denylist frozen_protocol_constants theme_contract_constants; do
         # THREE distinct shapes, because they fail DIFFERENT halves of the guard and
         # a two-shape battery hid that: `deleted`/`emptied` both leave every named
         # array UNDEFINED, so a presence-only check (`Array.isArray(b[k])` with the

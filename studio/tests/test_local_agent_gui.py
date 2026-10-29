@@ -1,12 +1,15 @@
-"""The "Work on this mesh with a local AI agent" card, driven headless through the REAL
-wizard and the REAL single-page dialog with a fake prober and a fake launcher (#695).
+"""The local AI agent launcher (#695), driven headless through the REAL wizard with the
+REAL bottom panel mounted, and through the REAL single-page dialog, with a fake prober and
+a fake launcher.
 
 Pinned here:
 
-* the card sits on the Bring-up page — where the Docker mesh AND the kind DevOps lane
-  both end — in the stepped wizard and in ``LocalMeshDialog``; building the page reads
-  nothing from the machine, the first look happens when the card is first SHOWN, on a
-  worker thread, and nothing starts without a press;
+* the card lives in the Studio's bottom panel (gui/_local_ai_dock.py, Assistant tab) and
+  NOT on the Bring-up page any more (operator ask 2026-10-21: out of the build phase);
+  the build phase hosts no copy of it, in the wizard or in ``LocalMeshDialog``; it still
+  follows the local-mesh page (``follow_page``); building it reads nothing from the
+  machine, the first look happens when the card is first SHOWN, on a worker thread, and
+  nothing starts without a press;
 * every missing prerequisite (Ollama not installed, server not answering, no model with
   tools, no agent command, a folder that is not a repository) is named in the status in
   plain words, the Start button is disabled and its tooltip says why, and Re-check picks
@@ -38,6 +41,8 @@ pytest.importorskip("hugmesh_studio.gui.qt",
 
 from hugmesh_studio.core import local_agent as la                       # noqa: E402
 from hugmesh_studio.core.platform_info import HostInfo                  # noqa: E402
+from hugmesh_studio.core import local_ai_status as lai                 # noqa: E402
+from hugmesh_studio.gui import _local_ai_dock as dock_mod              # noqa: E402
 from hugmesh_studio.gui import wizard as wizard_mod                     # noqa: E402
 from hugmesh_studio.gui.pages import _local_agent_widget as law         # noqa: E402
 from hugmesh_studio.gui.pages import localmesh as lm                    # noqa: E402
@@ -68,9 +73,19 @@ def qapp():
             or QtWidgets.QApplication(["hugmesh-studio-local-agent-tests"]))
 
 
+def _quiet_snapshot():
+    return lai.Snapshot(taken=0.0, state_dir="/nonexistent", host="127.0.0.1:11434",
+                        summary="Local AI: (test)")
+
+
 @pytest.fixture
 def wiz(qapp):
+    """A Studio window as StudioShell opens one: the wizard with the bottom panel
+    mounted, COLLAPSED, so the card is not shown (and does not look at the machine)
+    until a test has installed its fakes."""
     w = wizard_mod.StudioWizard(GENERATOR_DIR)
+    dock_mod.mount_dock(w, GENERATOR_DIR, auto_poll=False, expanded=False,
+                        snapshot_fn=_quiet_snapshot)
     w.show()
     yield w
     w.close()
@@ -158,7 +173,7 @@ def _to_bringup(wiz, probe=None, launcher=None, source_dir=None, size=None):
     wiz.currentPage()._buttons["generate"].setChecked(True)
     wiz.next()
     ctl = wiz.localmesh_page
-    card = ctl.local_agent
+    card = wiz.local_ai_dock.agent_card
     prober = Prober(probe or probe_of())
     launch = launcher or Launcher()
     card.set_prober(prober)
@@ -168,6 +183,9 @@ def _to_bringup(wiz, probe=None, launcher=None, source_dir=None, size=None):
         ctl.src_existing.setChecked(True)
         ctl.src_dir.setText(source_dir)
     _to(wiz, lm.LocalMeshPage)
+    # the Bring-up step opens the panel on its Local mesh tab; the card is on Assistant
+    wiz.local_ai_dock.show_tab("assistant")
+    _settle()
     assert card.isVisible()
     card.wait_idle()
     _settle()
@@ -188,23 +206,30 @@ def _pick(card, app=APP, lane=None):
 
 
 # ── where the card lives, and when it first looks ────────────────────────────────
-def test_the_card_sits_on_the_bringup_page_in_the_stepped_wizard(wiz, src_tree):
+def test_the_card_sits_in_the_bottom_panel_not_on_the_bringup_page(wiz, src_tree):
     ctl, card, prober, _l = _to_bringup(wiz, source_dir=src_tree)
+    dock = wiz.local_ai_dock
     assert isinstance(card, law.LocalAgentWidget)
     assert isinstance(wiz.currentPage(), lm.LocalMeshPage)
-    assert ctl.isAncestorOf(card) and card.isVisible()
-    assert card.title() == "Work on this mesh with a local AI agent"
+    assert not ctl.isAncestorOf(card), "the card is back in the build phase"
+    assert dock.isAncestorOf(card) and card.isVisible()
+    assert card.title() == law.TITLE
     assert prober.calls == 1
-    # the Actions box that holds BOTH lanes' buttons is on the same page
-    assert ctl.isAncestorOf(ctl.boot_start_btn) and ctl.isAncestorOf(ctl.devops_up_btn)
+    # the ONE card: the panel's, nowhere else in the window
+    assert wiz.findChildren(law.LocalAgentWidget) == [card]
+    assert not hasattr(ctl, "local_agent")
+    # the Actions box that holds BOTH lanes' buttons moved into the same panel
+    assert dock.isAncestorOf(ctl.boot_start_btn) and dock.isAncestorOf(ctl.devops_up_btn)
 
 
-def test_the_single_page_frame_hosts_the_same_card(qapp):
+def test_the_build_phase_hosts_no_card(qapp):
+    """The operator's ask: the card leaves the build phase. The single-page frame (which
+    has no panel) builds the whole Bring-up surface and must not bring the card back."""
     dlg = lm.LocalMeshDialog(GENERATOR_DIR)
     try:
-        card = dlg.page.local_agent
-        assert isinstance(card, law.LocalAgentWidget)
-        assert dlg.page.isAncestorOf(card)
+        assert dlg.findChildren(law.LocalAgentWidget) == []
+        assert not hasattr(dlg.page, "local_agent")
+        assert "LocalAgentWidget" not in inspect.getsource(lm)
     finally:
         dlg.close()
         dlg.deleteLater()
@@ -286,6 +311,33 @@ def test_a_press_hands_the_launcher_the_right_command_folder_environment_and_bri
     assert card.note.isVisible() and "#2e7d32" in card.note.styleSheet()
     assert "konsole" in card.note.text() and plan.title in card.note.text()
     assert card.command_box.isVisible() and "env -i" in card.command_box.toPlainText()
+
+
+def test_every_start_writes_the_project_context_fresh_and_the_brief_points_at_it(
+        wiz, src_tree):
+    """The operator's rule: every agent the assistant starts is told what HugMesh is and
+    where the local sources are — written fresh at each start, beside the brief."""
+    ctl, card, _p, launch = _to_bringup(wiz, source_dir=src_tree)
+    _pick(card, APP)
+    card.start_btn.click()
+    assert card.wait_idle()
+    _settle()
+    (plan,) = launch.plans
+    assert plan.context_path and os.path.isfile(plan.context_path)
+    text = open(plan.context_path, encoding="utf-8").read()
+    assert "## Where the local sources are" in text
+    assert f"The folder this mesh builds from: `{src_tree}`" in text
+    assert os.path.join(src_tree, APP) in text, "the domain's code folders are missing"
+    assert f"Domain `{ctl.mesh_domains.own_name}`" in text or ctl.mesh_domains.own_name in text
+    brief = open(plan.scratch.brief_path, encoding="utf-8").read()
+    assert f"Read {plan.context_path} first" in brief
+    # fresh: a second start rewrites it (an old file is never left to describe the mesh)
+    with open(plan.context_path, "w", encoding="utf-8") as fh:
+        fh.write("stale")
+    card.start_btn.click()
+    assert card.wait_idle()
+    _settle()
+    assert open(plan.context_path, encoding="utf-8").read() != "stale"
 
 
 def _run_verb(ctl, label):
@@ -374,17 +426,23 @@ def frame(qapp, src_tree):
     signals can reach the card, which is what the hook tests need."""
     dlg = lm.LocalMeshDialog(GENERATOR_DIR)
     page = dlg.page
-    card = page.local_agent
+    # The card as the panel builds it, wired to this page by the same one function.
+    card = law.LocalAgentWidget(GENERATOR_DIR, context=lambda: law.context_from_page(page))
+    law.follow_page(card, page)
     card.set_prober(Prober(probe_of()))
     launch = Launcher()
     card.set_launcher(launch)
     dlg.resize(*SMALLEST)
     dlg.show()
+    card.resize(*SMALLEST)
+    card.show()
     page.src_existing.setChecked(True)
     page.src_dir.setText(src_tree)
     assert card.wait_idle()
     _settle(3)
     yield dlg, page, card, launch
+    card.close()
+    card.deleteLater()
     dlg.close()
     dlg.deleteLater()
 
@@ -414,40 +472,44 @@ def test_the_lane_follows_the_page_in_the_single_page_frame_too(frame, src_tree)
 
 
 @pytest.mark.parametrize("size", [SMALLEST, NORMAL], ids=["736x736", "1040x706"])
-def test_the_card_and_the_code_folders_block_never_overlap(frame, src_tree, size):
-    """#689's Code folders block and this card are mounted by the same page. In the
-    single-page frame both are on one page: each sits whole inside the content, the
-    block (Repo source) above the card (Bring-up), and neither covers the other."""
-    dlg, page, card, _launch = frame
-    block = page.code_folders
-    dlg.resize(*size)
+def test_the_card_and_the_code_folders_block_never_overlap(wiz, src_tree, size):
+    """#689's Code folders block is on the Repo source step; the card is in the bottom
+    panel, which is on every step. With both on screen, each is drawn whole, the block
+    above the panel, and neither covers the other."""
+    ctl, card, _p, _l = _to_bringup(wiz, source_dir=src_tree, size=size)
+    block = ctl.code_folders
+    for _ in range(16):
+        if isinstance(wiz.currentPage(), lm.LocalMeshSourcePage):
+            break
+        wiz.back()
+    assert isinstance(wiz.currentPage(), lm.LocalMeshSourcePage)
+    wiz.local_ai_dock.show_tab("assistant")
     _settle(3)
-    # the frame has no step change to re-show the card: the source cards tell it
     assert {a.name for a in card.apps} >= {APP, "hugmesh-admin-ui"}
     assert card.selection()[1].path.startswith(src_tree + os.sep)
     assert card.start_btn.isEnabled(), card.status.text()
-    scroll = page._content_scroll
-    content = scroll.widget()
     assert card.isVisible() and block.isVisible()
-    assert scroll.horizontalScrollBar().maximum() == 0
-    cr, br = _rect_in(card, content), _rect_in(block, content)
-    assert content.rect().contains(cr) and content.rect().contains(br), (cr, br)
+    # what is ON SCREEN of each: the panel's options viewport, and the part of the block
+    # inside the step's own scroll viewport (the block is taller than the step)
+    _scroll_of(block).ensureWidgetVisible(block, 0, 0)
+    _settle(3)
+    cr = _rect_in(_scroll_of(card).viewport(), wiz)
+    br = _rect_in(block, wiz).intersected(_rect_in(_scroll_of(block).viewport(), wiz))
+    assert not cr.isEmpty() and br.height() >= 60, (cr, br)
+    assert wiz.rect().contains(cr) and wiz.rect().contains(br), (cr, br)
     assert not cr.intersects(br), (cr, br)
-    assert br.bottom() < cr.top(), "Repo source sits above Bring-up"
-    assert cr.width() >= 400 and br.width() >= 400, (cr.width(), br.width())
-    scroll.ensureWidgetVisible(block, 0, 0)
-    _window_shot(dlg, f"frame-code-folders-{size[0]}x{size[1]}")
-    scroll.ensureWidgetVisible(card, 0, 0)
-    _window_shot(dlg, f"frame-card-{size[0]}x{size[1]}")
-    _assert_geometry(card, page, "frame", size)
+    assert br.bottom() < cr.top(), "the Repo source block sits above the panel"
+    assert card.width() >= 400 and block.width() >= 400, (card.width(), block.width())
+    _window_shot(wiz, f"wizard-repo-source-and-panel-{size[0]}x{size[1]}")
+    _assert_geometry(card, None, "source-step", size)
 
 
-def test_in_the_stepped_wizard_the_block_and_the_card_are_on_different_steps(wiz, src_tree):
+def test_the_card_is_in_the_panel_on_every_step(wiz, src_tree):
     ctl, card, _p, _l = _to_bringup(wiz, source_dir=src_tree, size=SMALLEST)
     block = ctl.code_folders
     assert isinstance(wiz.currentPage(), lm.LocalMeshPage) and card.isVisible()
     assert not block.isVisible() and not ctl.isAncestorOf(block)
-    ctl._content_scroll.ensureWidgetVisible(card, 0, 0)
+    _scroll_of(card).ensureWidgetVisible(card, 0, 0)
     _window_shot(wiz, "wizard-bringup-736x736")
     for _ in range(16):
         if isinstance(wiz.currentPage(), lm.LocalMeshSourcePage):
@@ -457,7 +519,7 @@ def test_in_the_stepped_wizard_the_block_and_the_card_are_on_different_steps(wiz
     assert isinstance(page, lm.LocalMeshSourcePage)
     _settle(3)
     assert page.isAncestorOf(block) and block.isVisible()
-    assert not card.isVisible()
+    assert card.isVisible() and not page.isAncestorOf(card)
     _window_shot(wiz, "wizard-repo-source-736x736")
 
 
@@ -758,8 +820,10 @@ def test_no_modal_and_no_window_move_anywhere_in_the_card():
         for banned in ("QMessageBox", ".exec(", "QFileDialog", "QInputDialog", ".move(",
                        "exec_("):
             assert banned not in text, banned
-    mount = inspect.getsource(lm.LocalMeshPage._build_bringup_section)
-    assert "QMessageBox" not in mount.split("LOCAL AI AGENT")[1].split("RUNNING-MESH")[0]
+    # the card's new host: the panel opens no modal and moves no window either
+    panel = inspect.getsource(dock_mod)
+    for banned in ("QMessageBox", ".exec(", "QFileDialog", "QInputDialog", ".move("):
+        assert banned not in panel, banned
 
 
 # ── geometry: a control nobody can see is not delivered ──────────────────────────
@@ -774,8 +838,17 @@ def _controls(card):
     return out
 
 
-def _assert_geometry(card, ctl, state, size):
-    scroll = ctl._content_scroll
+def _scroll_of(card):
+    """The scroll area the card is drawn in (the panel's options column)."""
+    w = card.parentWidget()
+    while w is not None and not isinstance(w, QtWidgets.QScrollArea):
+        w = w.parentWidget()
+    assert w is not None, "the card is not inside a scroll area"
+    return w
+
+
+def _assert_geometry(card, ctl, state, size):  # noqa: ARG001 — ctl kept for the call sites
+    scroll = _scroll_of(card)
     viewport = scroll.viewport()
     assert scroll.horizontalScrollBar().maximum() == 0, \
         "content wider than the viewport is cut off: no horizontal scrollbar exists"
@@ -823,7 +896,7 @@ def _shot(card, ctl, name):
     if not SHOTS:
         return
     os.makedirs(SHOTS, exist_ok=True)
-    ctl._content_scroll.ensureWidgetVisible(card, 0, 0)
+    _scroll_of(card).ensureWidgetVisible(card, 0, 0)
     _settle(3)
     card.grab().save(os.path.join(SHOTS, f"local-agent-{name}.png"))
 
@@ -878,7 +951,7 @@ def test_every_state_is_drawn_whole_at_the_window_sizes(wiz, tmp_path, state, si
         assert card.command_box.isVisible()
         assert len(card.command_box.toPlainText().splitlines()[-1]) > 300, \
             "the command line is long; it must scroll, not widen the card"
-    ctl._content_scroll.ensureWidgetVisible(card, 0, 0)
+    _scroll_of(card).ensureWidgetVisible(card, 0, 0)
     _settle(3)
     _assert_geometry(card, ctl, state, size)
     _shot(card, ctl, f"{state}-{size[0]}x{size[1]}")
@@ -892,7 +965,7 @@ def test_geometry_holds_at_a_small_font_too(wiz, src_tree, qapp):
     qapp.setFont(small)
     try:
         ctl, card, _p, _l = _to_bringup(wiz, source_dir=src_tree, size=SMALLEST)
-        ctl._content_scroll.ensureWidgetVisible(card, 0, 0)
+        _scroll_of(card).ensureWidgetVisible(card, 0, 0)
         _settle(3)
         _assert_geometry(card, ctl, "ready-8pt", SMALLEST)
     finally:

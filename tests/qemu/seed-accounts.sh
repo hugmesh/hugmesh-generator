@@ -40,8 +40,10 @@
 #   * casdoor-systems-roles.json   — role->member grants for the SYSTEMS Casdoor
 #       (org "hugmesh"), to MERGE into manifests/casdoor init_data. NOTE it
 #       grants ROLE_GAMES + ROLE_ADMIN to e2e-gamesadmin but does NOT put anyone
-#       in ROLE_GAMES_ADMIN — that derived role is materialized by the
-#       games-admin-sync Job ( = ROLE_GAMES ∩ (ROLE_ADMIN ∪ ROLE_MOD) ).
+#       in ROLE_GAMES_ADMIN — that role is DERIVED ( = ROLE_GAMES ∩ (ROLE_ADMIN ∪
+#       ROLE_MOD) ): computed by tests/stack/derive-games-admin.sh on compose
+#       (seed-e2e.sh calls it after the persona grants) and by the
+#       games-admin-sync Job on cluster.
 #   * casdoor-games-users.json     — one native player for the GAMES Casdoor
 #       (org "threewizards"). The games admin appears via the systems->games sync,
 #       not seeded here.

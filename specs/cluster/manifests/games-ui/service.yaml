@@ -1,0 +1,16 @@
+# Service for hugmesh-games-ui (see deployment.yaml). The fe-gateway route
+# `games-ui` (apps/20-gateway-fe.yaml) targets this Service on :8080 —
+# http://hugmesh-games-ui.hugmesh-frontend.svc.cluster.local:8080 — and the
+# federation_modules remote_entry_url (federation-api changeset 025) names the
+# same host:port (http://hugmesh-games-ui:8080/remoteEntry.json).
+apiVersion: v1
+kind: Service
+metadata:
+  name: hugmesh-games-ui
+  namespace: hugmesh-frontend
+  labels:
+    app: hugmesh-games-ui
+    app.kubernetes.io/part-of: hugmesh.net
+spec:
+  selector: { app: hugmesh-games-ui }
+  ports: [{ name: http, port: 8080, targetPort: http }]

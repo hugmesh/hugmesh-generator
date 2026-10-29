@@ -36,9 +36,11 @@ What the rows turn into on the bring-up (``LocalMeshBootstrapConfig``):
   omitting the mesh's own domain while it is default-shaped, so an untouched flow
   keeps the empty tuple it always had (emission neutrality, pinned by test).
 
-The per-domain optional services are recorded and NOT enforced on this lane: the
-compose profiles come from the mesh-wide Services step (``services=``), exactly as
-the cluster lane's #496 note says for ArgoCD. The page says so in one sentence.
+Since 2026-10-21 the per-domain optional services ARE what this lane runs: the mesh
+starts the UNION of its recorded domains' choices plus its mesh-plane infrastructure
+(``LocalMeshBootstrapConfig.effective_services``); the mesh-wide "Local services" pick
+is retired, and a saved one migrates into the rows on load. (On the cluster lane they
+are still provisioning input only — #496.)
 """
 from __future__ import annotations
 
@@ -46,14 +48,28 @@ import re
 from dataclasses import dataclass, field
 from typing import ClassVar
 
-from .config import DOMAIN_IDP_CHOICES, DOMAIN_IDP_OWN, DOMAIN_IDP_SUPERDOMAIN, Domain
+from .config import (DOMAIN_IDP_CHOICES, DOMAIN_IDP_OWN, DOMAIN_IDP_SUPERDOMAIN, IDP_LABELS,
+                     Domain, domain_from_record_row, domain_rows_to_dict, effective_signin,
+                     has_external_signin, runs_own_casdoor)
 from .domain_services import normalise_slugs, record_reviewed, reviewed_names
 
 __all__ = ["LocalMeshDomains", "bootstrap_domain_records", "own_idp_names",
            "added_row_problems", "domains_from_bootstrap", "reviewed_record_names",
            "record_walk", "imported_mesh_domains", "apply_imported_domains",
-           "imported_domains_lines",
-           "DOMAIN_NAME_RE", "LOCAL_MESH_REMEDY", "SAVED_MESH_REMEDY"]
+           "apply_imported_tor", "imported_domains_lines",
+           "DOMAIN_NAME_RE", "LOCAL_MESH_REMEDY", "SAVED_MESH_REMEDY",
+           "DOCKER_SERVICES_NOTE"]
+
+#: The one sentence a per-domain services step shows on the local Docker mesh route
+#: since the mesh-wide "Local services" pick was retired (2026-10-21). It REPLACES the
+#: older lane note ("…it is NOT what decides which compose profiles come up; the
+#: mesh-wide ‘Services’ step is"), which stopped being true the day per-domain services
+#: became what the mesh runs (``LocalMeshBootstrapConfig.effective_services``).
+DOCKER_SERVICES_NOTE = (
+    "ON THIS LOCAL DOCKER MESH: what you tick here runs. The mesh starts every service "
+    "any of its domains chose (one copy each, shared by the domains that chose it); the "
+    "mesh's own infrastructure (Tor, the egress VPN, Anubis, the AI services, the wiki) "
+    "is chosen once for the whole mesh.")
 
 #: A domain row's name: a lowercase dotted hostname (the TUI Domains steps' shape).
 DOMAIN_NAME_RE = re.compile(
@@ -107,7 +123,8 @@ class LocalMeshDomains:
 
 
 def own_idp_names(domains) -> tuple[str, ...]:
-    """The names whose sign-in is ``own``, in table order, DUPLICATES COLLAPSED to
+    """The names that run their OWN Casdoor (sign-in ``own`` with no external provider,
+    ``config.runs_own_casdoor``), in table order, DUPLICATES COLLAPSED to
     the first occurrence — what ``LocalMeshBootstrapConfig.own_idp_domains`` (and so
     the compose overlay's port sequence) is derived from. The collapse is the CLI's
     ``_parse_own_casdoor_domains`` rule: own_casdoor emits one compose service per
@@ -115,7 +132,7 @@ def own_idp_names(domains) -> tuple[str, ...]:
     out: list[str] = []
     for d in domains:
         name = (d.name or "").strip()
-        if name and getattr(d, "idp", "") == DOMAIN_IDP_OWN and name not in out:
+        if name and runs_own_casdoor(d) and name not in out:
             out.append(name)
     return tuple(out)
 
@@ -135,7 +152,7 @@ def added_row_problems(names, own_name: str) -> list[str]:
         name = (raw or "").strip()
         if not name:
             continue
-        if not DOMAIN_NAME_RE.match(name):
+        if not DOMAIN_NAME_RE.fullmatch(name):
             problems.append(f"not a domain name: {name!r} (lowercase dotted "
                             "hostname, e.g. chat.example.org)")
         elif own and name == own:
@@ -177,21 +194,29 @@ def bootstrap_domain_records(domains, own_name: str) -> tuple[dict, ...]:
             continue
         if name == own and _default_shaped(d):
             continue
-        rec = {"name": name, "title": (d.title or "").strip(),
-               "idp": getattr(d, "idp", DOMAIN_IDP_SUPERDOMAIN)
-               or DOMAIN_IDP_SUPERDOMAIN,
-               "optional_services": normalise_slugs(d.optional_services)}
+        # COPY SITE (brand_model.COPY_SITES): the row's saved shape comes from the
+        # field list, so a Domain field added later is recorded here without a change
+        # (#654); only the values this route normalises are touched.
+        rec = domain_rows_to_dict([d])[0]
+        rec["name"] = name
+        rec["title"] = (d.title or "").strip()
+        rec["idp"] = getattr(d, "idp", DOMAIN_IDP_SUPERDOMAIN) or DOMAIN_IDP_SUPERDOMAIN
+        rec["optional_services"] = normalise_slugs(d.optional_services)
+        # a docker mesh builds no image, so an empty worklist-entry list says nothing
+        # here and is left out (the pre-#654 record never carried the key)
+        if not rec.get("images"):
+            rec.pop("images", None)
         # the domain's own Tor front door (#582): OMIT-WHEN-FALSE, so every record
         # without one keeps its bytes. Unlike optional_services this one RUNS on the
         # local docker mesh — LocalStackNode passes it as TOR_ONION_DOMAINS when TOR=1.
-        if getattr(d, "tor", False) and name != own:
-            rec["tor"] = True
-        # the GitHub org this domain exports to (the Go-Live export step):
-        # OMIT-WHEN-EMPTY for the same reason, and recorded for the own row too —
-        # the mesh's own domain is the one most worth exporting.
-        org = (getattr(d, "github_org", "") or "").strip()
-        if org:
-            rec["github_org"] = org
+        # The mesh's own row never has one: its front door is the primary onion.
+        if name == own:
+            rec.pop("tor", None)
+        # the GitHub org this domain exports to (the Go-Live export step) travels by the
+        # field list too, OMIT-WHEN-EMPTY, and is recorded for the own row as well: the
+        # mesh's own domain is the one most worth exporting
+        if "github_org" in rec:
+            rec["github_org"] = str(rec["github_org"]).strip()
         out.append(rec)
     return tuple(out)
 
@@ -227,15 +252,22 @@ def domains_from_bootstrap(cfg) -> "LocalMeshDomains | None":
     rows: list[Domain] = [Domain(name=own, title="")]
     for rec in rec_rows:
         name = rec["name"].strip()
+        # COPY SITE (brand_model.COPY_SITES): rebuild the row through the ONE lenient
+        # loader (every field by the field list; a junk sign-in kept as text for
+        # _import_problem to name), so a field the record carries is never left at
+        # its default here (#654); then apply this route's own-row rules.
+        loaded = domain_from_record_row(dict(rec, name=name))
         row = next((r for r in rows if r.name == name), None)
         if row is None:
-            row = Domain(name=name)
+            row = loaded
             rows.append(row)
+        else:
+            for k in Domain.__dataclass_fields__:
+                if k != "name":
+                    setattr(row, k, getattr(loaded, k))
         row.title = (rec.get("title") or "").strip()
-        row.idp = rec.get("idp") or DOMAIN_IDP_SUPERDOMAIN
         row.optional_services = list(rec.get("optional_services") or [])
         row.tor = rec.get("tor") is True and name != own
-        row.github_org = str(rec.get("github_org") or "").strip()
     for name in idp_names:
         row = next((r for r in rows if r.name == name), None)
         if row is None:
@@ -287,10 +319,19 @@ def record_walk(cfg, md: "LocalMeshDomains", names) -> None:
                if form_row is not None else "")
         row = by_name.get(name)
         if row is None:
-            row = {"name": name,
-                   "title": (form_row.title or "").strip() if form_row else "",
-                   "idp": DOMAIN_IDP_OWN if name in own_idp else DOMAIN_IDP_SUPERDOMAIN,
-                   "optional_services": picked}
+            # COPY SITE (brand_model.COPY_SITES): a new row starts from the form row's
+            # full saved shape (every field, #654), not a hand-listed subset; the
+            # sign-in is what the record said (own-IdP name), as domains_from_bootstrap
+            # read it.
+            row = domain_rows_to_dict([form_row])[0] if form_row else {}
+            row["name"] = name
+            row["title"] = (form_row.title or "").strip() if form_row else ""
+            row["idp"] = (DOMAIN_IDP_OWN if name in own_idp
+                          or (form_row is not None and has_external_signin(form_row))
+                          else DOMAIN_IDP_SUPERDOMAIN)
+            if row["idp"] != DOMAIN_IDP_OWN:
+                row.pop("idp_settings", None)   # through the superdomain: nothing to keep
+            row["optional_services"] = picked
             rows.append(row)
             by_name[name] = row
         else:
@@ -342,12 +383,31 @@ def _import_problem(row) -> str:
     change nobody asked for. Only a hand-edited record can carry either problem — the
     local-mesh Domains step refuses both when the row is typed."""
     name = (getattr(row, "name", "") or "").strip()
-    if not DOMAIN_NAME_RE.match(name):
+    if not DOMAIN_NAME_RE.fullmatch(name):
         return "not a domain name"
     idp = getattr(row, "idp", "") or DOMAIN_IDP_SUPERDOMAIN
     if idp not in DOMAIN_IDP_CHOICES:
         return f"sign-in {idp!r} is not one of {', '.join(DOMAIN_IDP_CHOICES)}"
     return ""
+
+
+def apply_imported_tor(cfg, with_tor: bool, set_by_import: bool) -> bool:
+    """THE SAVED-MESH -> NODE-IMAGE Tor BRIDGE (#579), shared by the GUI gate's
+    validatePage and the TUI's ``apply_gate``. A mesh that ran Tor turns the mesh-wide
+    onion default ON (the Network step shows it ticked and can clear it). A mesh
+    without Tor leaves the operator's own choice alone — EXCEPT a Tor setting that an
+    earlier import on the same gate turned on (``set_by_import``): picking another
+    saved mesh, or the same page re-imported after Back, must not keep the first
+    mesh's Tor while the summary says "Tor onion: off" (saved-meshes skeptic 2,
+    2026-10-21). Returns the new ``set_by_import`` for the caller to keep."""
+    if with_tor:
+        if not cfg.tor_onion_service:
+            cfg.tor_onion_service = True
+            return True
+        return set_by_import
+    if set_by_import:
+        cfg.tor_onion_service = False
+    return False
 
 
 def apply_imported_domains(cfg, md: "LocalMeshDomains | None") -> list[str]:
@@ -410,7 +470,11 @@ def apply_imported_domains(cfg, md: "LocalMeshDomains | None") -> list[str]:
             continue
         if _import_problem(row):
             continue                        # imported_domains_lines says so, by name
-        dom = Domain(name=name)
+        # COPY SITE (brand_model.COPY_SITES): the image row is the saved row's full
+        # shape re-loaded (#654) — the title, sign-in, services and Tor front door as
+        # before, and every later field with them.
+        dom = domain_from_record_row(domain_rows_to_dict([row])[0])
+        dom.name = name
         dom.title = (row.title or "").strip()
         dom.idp = getattr(row, "idp", "") or DOMAIN_IDP_SUPERDOMAIN
         dom.optional_services = list(picked)
@@ -444,8 +508,10 @@ def imported_domains_lines(md: "LocalMeshDomains | None") -> list[str]:
         if problem:                  # the import will not take it: say so, never list it
             out.append(f"{name} — NOT imported: {problem}")
             continue
-        signin = ("own Casdoor" if getattr(row, "idp", "") == DOMAIN_IDP_OWN
-                  else "superdomain sign-in")
+        signin = ("own Casdoor" if runs_own_casdoor(row)
+                  else (f"own sign-in through "
+                        f"{IDP_LABELS.get(effective_signin(row).provider, '?')}")
+                  if has_external_signin(row) else "superdomain sign-in")
         slugs = normalise_slugs(row.optional_services)
         svc = ", ".join(slugs) if slugs else "cluster default"
         state = "" if name in marks else " (services not confirmed yet)"

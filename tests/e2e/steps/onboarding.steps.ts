@@ -16,7 +16,7 @@
 //     steps/dimensions.ts. Nothing here reimplements login, seeding or navigation:
 //     the Gherkin must drive the SAME code the handwritten specs drive or the two
 //     lanes drift.
-//   * No step writes into tests/e2e/screenshots/ (38 git-tracked PNGs the legacy
+//   * No step writes into tests/e2e/screenshots/ (37 git-tracked PNGs the legacy
 //     `shot()` helper overwrites in place). Evidence is the AfterStep hook's job.
 //
 // MERGE NOTE FOR THE OPERATOR: three definitions below are GENERIC UI vocabulary

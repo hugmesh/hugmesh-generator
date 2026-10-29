@@ -1047,7 +1047,15 @@ pin_arm() {   # <builder> -> 0 when every pin holds
             # The gate, for a ROOT build only — the line right above it is the id -u
             # test — before 'skipping extraction', with the remove-the-tree remedy.
             # No *.a clean step (one arriving would need the restore too).
-            n_gate="$(grep -a -n -F 'hmr_owner_gate "${SYSROOT}" "remove ${SYSROOT} (this builder extracts the stage3 over an existing tree' "$b" | head -1 | cut -d: -f1)"
+            # The two Orange Pi node-axis builders WIPE a populated tree on a fresh run
+            # (one sysroot serves every role there), so their remedy is that rebuild.
+            case "$(basename "$b")" in
+                build-orangepi5-stage4.sh|build-orangepi4-lts-stage4.sh)
+                    n_gate="$(grep -a -n -F 'hmr_owner_gate "${SYSROOT}" "rebuild WITHOUT --resume as root (that wipes ${SYSROOT}' "$b" | head -1 | cut -d: -f1)"
+                    has "$b" 'rm -rf "${SYSROOT:?}"' || rc=1 ;;
+                *)
+                    n_gate="$(grep -a -n -F 'hmr_owner_gate "${SYSROOT}" "remove ${SYSROOT} (this builder extracts the stage3 over an existing tree' "$b" | head -1 | cut -d: -f1)" ;;
+            esac
             n_cond="$(grep -a -n -F 'if [ "$(id -u)" -eq 0 ]; then' "$b" | awk -F: -v g="${n_gate:-0}" '$1<g {l=$1} END{print l+0}')"
             [ -n "${n_gate}" ] && [ "${n_gate}" -lt "${n_skip}" ] && [ $((n_gate - n_cond)) -eq 1 ] || rc=1
             grep -a -F "name '*.a' -delete" "$b" >/dev/null 2>&1 && rc=1 ;;
@@ -1125,7 +1133,9 @@ for b in "${REPO}"/build-*-stage4.sh; do
     fi
     out="$(run_arm_resume "$b" "${SX}" 0 2>&1)"; rc=$?
     if [ "${rc}" -ne 1 ] || ! printf '%s' "${out}" | grep -a -F "Refusing --resume: the build system directory ${SX} is owned by uid ${FIX_UID}" >/dev/null \
-       || ! printf '%s' "${out}" | grep -a -F "remove ${SX} (this builder extracts the stage3 over an existing tree" >/dev/null \
+       || ! { printf '%s' "${out}" | grep -a -F "remove ${SX} (this builder extracts the stage3 over an existing tree" >/dev/null \
+              || { case "${bn}" in build-orangepi5-stage4.sh|build-orangepi4-lts-stage4.sh) true ;; *) false ;; esac \
+                   && printf '%s' "${out}" | grep -a -F "rebuild WITHOUT --resume as root (that wipes ${SX}" >/dev/null; }; } \
        || printf '%s' "${out}" | grep -a -F "skipping extraction" >/dev/null; then
         bad "${bn} resume (root, user-owned tree): expected ONE refusal with the remove-the-tree remedy before 'skipping extraction', got rc=${rc}: ${out}"; continue
     fi

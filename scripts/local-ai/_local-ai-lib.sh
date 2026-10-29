@@ -22,6 +22,40 @@ la_py() {
   PYTHONPATH="$LA_GEN/studio${PYTHONPATH:+:$PYTHONPATH}" python3 -m hugmesh_studio.core.local_ai_status "$@"
 }
 
+# The project-context module (studio core/agent_context.py), run as a command:
+#   env -> HUGMESH_AGENT_CONTEXT=... and HUGMESH_REPOS_ROOT=... lines   root   refresh PATH
+la_ctx() {
+  PYTHONPATH="$LA_GEN/studio${PYTHONPATH:+:$PYTHONPATH}" python3 -m hugmesh_studio.core.agent_context "$@"
+}
+
+# Export the two variables every worker is started with. A caller that passed
+# HUGMESH_AGENT_CONTEXT (the Studio, which wrote the file with its mesh's domains) keeps
+# its file; otherwise the context is written now, without domains. Never fatal: a worker
+# without a context still drafts.
+la_worker_env() {
+  local line
+  local out
+  out=$(la_ctx env 2>>"$LA_DIR/worker.log") || { echo "warning: no project context for the worker's agents (see $LA_DIR/worker.log)" >&2; return 0; }
+  while IFS= read -r line; do
+    case "$line" in
+      HUGMESH_AGENT_CONTEXT=*|HUGMESH_REPOS_ROOT=*) export "${line?}" ;;
+    esac
+  done <<<"$out"
+  return 0
+}
+
+# What a worker started now would run with, one NAME=value per line. worker.sh writes the
+# same lines to $LA_DIR/worker.env when it starts, so `start` can tell a worker that runs
+# with other settings (another Ollama, another context file or checkouts folder).
+la_worker_signature() {
+  local host
+  local root
+  host=$(la_host) || return 1
+  root=${HUGMESH_REPOS_ROOT:-$(la_ctx root 2>/dev/null)}
+  printf 'OLLAMA_HOST=%s\nHUGMESH_AGENT_CONTEXT=%s\nHUGMESH_REPOS_ROOT=%s\n' \
+    "$host" "${HUGMESH_AGENT_CONTEXT:-$LA_DIR/HUGMESH-CONTEXT.md}" "$root"
+}
+
 # host:port of the Ollama to use. Fails (status 2, sentence on stderr) when OLLAMA_HOST is
 # not a loopback address, so nothing below can be pointed at another machine.
 la_host() { la_py host; }

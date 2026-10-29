@@ -3597,7 +3597,10 @@ orphan-guards-verify:
     # 128 passed / 0 failed in 94 s (the one `unshare -Ur` leg SKIPs in a
     # container; the suite re-runs itself against 28 mutated copies of the
     # library) and tests/scripts/test-makefile-reown-skips-sysroot.sh 9 / 0.
-    - apk add --no-cache bash jq openssl python3 py3-yaml coreutils grep sed gawk findutils diffutils git tar xz util-linux openssh-keygen make kubectl
+    # squashfs-tools: tests/scripts/test-x86-live-root-pack.sh EXECUTES the builder's live
+    # pack block (mksquashfs) and its live-root gate (unsquashfs) against a fixture
+    # sysroot; without them the executable half of that guard cannot run.
+    - apk add --no-cache bash jq openssl python3 py3-yaml coreutils grep sed gawk findutils diffutils git tar xz util-linux openssh-keygen make kubectl squashfs-tools
     - for t in bash jq openssl python3 git tar xz keytool ssh-keygen make kubectl; do command -v "$t" >/dev/null || { echo "TOOLCHAIN MISSING:$t — this job's image cannot run its guards"; exit 1; }; done
   script:
     - |
@@ -3656,6 +3659,7 @@ orphan-guards-verify:
         tests/scripts/test-spec-use-parity.sh
         tests/scripts/test-stack-fetch-repos.sh
         tests/scripts/test-x86-artifact-integrity.sh
+        tests/scripts/test-x86-live-root-pack.sh
         tests/stack/test-front-door-client-surface.sh
       "
       rc=0
@@ -3914,4 +3918,25 @@ lint:eso-provider-refs:
         - specs/etc/keys-provision/**/*
         - tests/scripts/test-eso-provider-refs.sh
         - tests/scripts/eso_provider_refs.py
+        - .gitlab-ci.yml
+
+# Windows/Linux mesh-node launcher parity. clients/docker-mesh-node/mesh-node.ps1
+# (Windows, Docker Desktop) must hand docker the same arguments as mesh-node.sh
+# (Linux), except the --cap-add=NET_ADMIN --device=/dev/net/tun pair the Linux
+# launcher adds when the host has TUN. Both real launchers run under Pester 5.6.1
+# against an argv-recording docker stub; both TUN branches are forced on every
+# run. No daemon, no network once Pester is installed, no root.
+lint:mesh-node-launcher-parity:
+  stage: lint
+  image: mcr.microsoft.com/powershell:7.4-ubuntu-22.04@sha256:62300a213a9293916333df2b014cd3a8f22fb0b0b65f2bb446aaf436bcf8c868
+  tags: [hugmesh-x86]
+  before_script:
+    - pwsh -NoProfile -NonInteractive -c "Set-PSRepository PSGallery -InstallationPolicy Trusted; Install-Module Pester -RequiredVersion 5.6.1 -Scope AllUsers -Force"
+  script:
+    - bash tests/docker-mesh-node/test-launcher-parity.sh
+  rules:
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+    - changes:
+        - clients/docker-mesh-node/**/*
+        - tests/docker-mesh-node/**/*
         - .gitlab-ci.yml

@@ -561,12 +561,60 @@
           }
         ]
       },
+      "packages-k8s": {
+        "gate": "k8s",
+        "sections": [
+          {
+            "atoms": [
+              "app-containers/containerd",
+              "app-containers/runc",
+              "app-containers/cni-plugins",
+              "app-containers/cri-tools"
+            ],
+            "title": "Container runtime"
+          },
+          {
+            "atoms": [
+              "sys-cluster/kubelet",
+              "sys-cluster/kubeadm",
+              "sys-cluster/kubectl"
+            ],
+            "title": "Kubernetes"
+          },
+          {
+            "atoms": [
+              "sys-fs/xfsprogs"
+            ],
+            "title": "K8s-specific dependencies"
+          }
+        ]
+      },
       "packages-live": {
         "gate": "live",
         "sections": [
           {
             "atoms": [
               "sys-kernel/dracut"
+            ],
+            "title": ""
+          }
+        ]
+      },
+      "packages-node-host": {
+        "gate": "node-host",
+        "sections": [
+          {
+            "atoms": [
+              "net-firewall/nftables",
+              "net-firewall/conntrack-tools",
+              "sys-apps/iproute2",
+              "sys-apps/ethtool",
+              "sys-fs/cryptsetup",
+              "sys-fs/lvm2",
+              "sys-apps/nvme-cli",
+              "sec-policy/selinux-container",
+              "sec-policy/selinux-virt",
+              "app-admin/setools"
             ],
             "title": ""
           }
@@ -696,12 +744,60 @@
           }
         ]
       },
+      "packages-k8s": {
+        "gate": "k8s",
+        "sections": [
+          {
+            "atoms": [
+              "app-containers/containerd",
+              "app-containers/runc",
+              "app-containers/cni-plugins",
+              "app-containers/cri-tools"
+            ],
+            "title": "Container runtime"
+          },
+          {
+            "atoms": [
+              "sys-cluster/kubelet",
+              "sys-cluster/kubeadm",
+              "sys-cluster/kubectl"
+            ],
+            "title": "Kubernetes"
+          },
+          {
+            "atoms": [
+              "sys-fs/xfsprogs"
+            ],
+            "title": "K8s-specific dependencies"
+          }
+        ]
+      },
       "packages-live": {
         "gate": "live",
         "sections": [
           {
             "atoms": [
               "sys-kernel/dracut"
+            ],
+            "title": ""
+          }
+        ]
+      },
+      "packages-node-host": {
+        "gate": "node-host",
+        "sections": [
+          {
+            "atoms": [
+              "net-firewall/nftables",
+              "net-firewall/conntrack-tools",
+              "sys-apps/iproute2",
+              "sys-apps/ethtool",
+              "sys-fs/cryptsetup",
+              "sys-fs/lvm2",
+              "sys-apps/nvme-cli",
+              "sec-policy/selinux-container",
+              "sec-policy/selinux-virt",
+              "app-admin/setools"
             ],
             "title": ""
           }
@@ -1837,8 +1933,104 @@
       }
     },
     "orangepi4-lts": {
+      "frontend": {
+        "available": [
+          "gui-libs/display-manager-init",
+          "lxde-base/lxappearance",
+          "lxde-base/lxpanel",
+          "lxde-base/lxsession",
+          "media-fonts/dejavu",
+          "media-fonts/noto",
+          "media-gfx/feh",
+          "sys-kernel/dracut",
+          "www-client/netsurf",
+          "x11-apps/setxkbmap",
+          "x11-apps/xrandr",
+          "x11-apps/xset",
+          "x11-base/xorg-drivers",
+          "x11-base/xorg-server",
+          "x11-misc/lightdm",
+          "x11-misc/lightdm-gtk-greeter",
+          "x11-misc/pcmanfm",
+          "x11-terms/xterm",
+          "x11-wm/openbox"
+        ],
+        "essential": [
+          "app-admin/sudo",
+          "app-containers/cni-plugins",
+          "app-containers/containerd",
+          "app-containers/cri-tools",
+          "app-containers/runc",
+          "app-editors/nano",
+          "app-misc/jq",
+          "app-misc/screen",
+          "dev-embedded/u-boot-tools",
+          "net-firewall/iptables",
+          "net-fs/cifs-utils",
+          "net-fs/nfs-utils",
+          "net-misc/networkmanager",
+          "net-misc/openssh",
+          "net-misc/socat",
+          "net-vpn/openvpn",
+          "net-vpn/wireguard-tools",
+          "net-wireless/wpa_supplicant",
+          "sec-policy/selinux-base",
+          "sec-policy/selinux-base-policy",
+          "sys-apps/checkpolicy",
+          "sys-apps/haveged",
+          "sys-apps/i2c-tools",
+          "sys-apps/pciutils",
+          "sys-apps/policycoreutils",
+          "sys-apps/semodule-utils",
+          "sys-apps/usbutils",
+          "sys-apps/util-linux",
+          "sys-block/parted",
+          "sys-cluster/kubeadm",
+          "sys-cluster/kubectl",
+          "sys-cluster/kubelet",
+          "sys-fs/dosfstools",
+          "sys-fs/e2fsprogs",
+          "sys-fs/xfsprogs",
+          "sys-kernel/gentoo-sources",
+          "sys-kernel/linux-firmware",
+          "sys-libs/libseccomp",
+          "sys-libs/libselinux",
+          "sys-process/audit",
+          "sys-process/cronie"
+        ],
+        "removable": [
+          "app-admin/setools",
+          "net-firewall/conntrack-tools",
+          "net-firewall/nftables",
+          "sec-policy/selinux-container",
+          "sec-policy/selinux-virt",
+          "sys-apps/ethtool",
+          "sys-apps/iproute2",
+          "sys-apps/nvme-cli",
+          "sys-fs/cryptsetup",
+          "sys-fs/lvm2"
+        ]
+      },
       "orangepi4-lts": {
         "available": [
+          "app-admin/setools",
+          "app-containers/cni-plugins",
+          "app-containers/containerd",
+          "app-containers/cri-tools",
+          "app-containers/runc",
+          "net-firewall/conntrack-tools",
+          "net-firewall/nftables",
+          "sec-policy/selinux-container",
+          "sec-policy/selinux-virt",
+          "sys-apps/ethtool",
+          "sys-apps/iproute2",
+          "sys-apps/nvme-cli",
+          "sys-cluster/kubeadm",
+          "sys-cluster/kubectl",
+          "sys-cluster/kubelet",
+          "sys-fs/cryptsetup",
+          "sys-fs/lvm2",
+          "sys-fs/xfsprogs",
           "sys-kernel/dracut"
         ],
         "essential": [
@@ -1899,8 +2091,260 @@
       }
     },
     "orangepi5": {
+      "backend": {
+        "available": [
+          "gui-libs/display-manager-init",
+          "lxde-base/lxappearance",
+          "lxde-base/lxpanel",
+          "lxde-base/lxsession",
+          "media-fonts/dejavu",
+          "media-fonts/noto",
+          "media-gfx/feh",
+          "sys-kernel/dracut",
+          "www-client/netsurf",
+          "x11-apps/setxkbmap",
+          "x11-apps/xrandr",
+          "x11-apps/xset",
+          "x11-base/xorg-drivers",
+          "x11-base/xorg-server",
+          "x11-misc/lightdm",
+          "x11-misc/lightdm-gtk-greeter",
+          "x11-misc/pcmanfm",
+          "x11-terms/xterm",
+          "x11-wm/openbox"
+        ],
+        "essential": [
+          "app-admin/sudo",
+          "app-containers/cni-plugins",
+          "app-containers/containerd",
+          "app-containers/cri-tools",
+          "app-containers/runc",
+          "app-editors/nano",
+          "app-misc/jq",
+          "app-misc/screen",
+          "dev-embedded/u-boot-tools",
+          "net-firewall/iptables",
+          "net-fs/cifs-utils",
+          "net-fs/nfs-utils",
+          "net-misc/networkmanager",
+          "net-misc/openssh",
+          "net-misc/socat",
+          "net-vpn/openvpn",
+          "net-vpn/wireguard-tools",
+          "net-wireless/wpa_supplicant",
+          "sec-policy/selinux-base",
+          "sec-policy/selinux-base-policy",
+          "sys-apps/checkpolicy",
+          "sys-apps/haveged",
+          "sys-apps/i2c-tools",
+          "sys-apps/pciutils",
+          "sys-apps/policycoreutils",
+          "sys-apps/semodule-utils",
+          "sys-apps/usbutils",
+          "sys-apps/util-linux",
+          "sys-block/parted",
+          "sys-cluster/kubeadm",
+          "sys-cluster/kubectl",
+          "sys-cluster/kubelet",
+          "sys-fs/dosfstools",
+          "sys-fs/e2fsprogs",
+          "sys-fs/xfsprogs",
+          "sys-kernel/gentoo-sources",
+          "sys-kernel/linux-firmware",
+          "sys-libs/libseccomp",
+          "sys-libs/libselinux",
+          "sys-process/audit",
+          "sys-process/cronie"
+        ],
+        "removable": [
+          "app-admin/setools",
+          "net-firewall/conntrack-tools",
+          "net-firewall/nftables",
+          "sec-policy/selinux-container",
+          "sec-policy/selinux-virt",
+          "sys-apps/ethtool",
+          "sys-apps/iproute2",
+          "sys-apps/nvme-cli",
+          "sys-fs/cryptsetup",
+          "sys-fs/lvm2"
+        ]
+      },
+      "frontend": {
+        "available": [
+          "gui-libs/display-manager-init",
+          "lxde-base/lxappearance",
+          "lxde-base/lxpanel",
+          "lxde-base/lxsession",
+          "media-fonts/dejavu",
+          "media-fonts/noto",
+          "media-gfx/feh",
+          "sys-kernel/dracut",
+          "www-client/netsurf",
+          "x11-apps/setxkbmap",
+          "x11-apps/xrandr",
+          "x11-apps/xset",
+          "x11-base/xorg-drivers",
+          "x11-base/xorg-server",
+          "x11-misc/lightdm",
+          "x11-misc/lightdm-gtk-greeter",
+          "x11-misc/pcmanfm",
+          "x11-terms/xterm",
+          "x11-wm/openbox"
+        ],
+        "essential": [
+          "app-admin/sudo",
+          "app-containers/cni-plugins",
+          "app-containers/containerd",
+          "app-containers/cri-tools",
+          "app-containers/runc",
+          "app-editors/nano",
+          "app-misc/jq",
+          "app-misc/screen",
+          "dev-embedded/u-boot-tools",
+          "net-firewall/iptables",
+          "net-fs/cifs-utils",
+          "net-fs/nfs-utils",
+          "net-misc/networkmanager",
+          "net-misc/openssh",
+          "net-misc/socat",
+          "net-vpn/openvpn",
+          "net-vpn/wireguard-tools",
+          "net-wireless/wpa_supplicant",
+          "sec-policy/selinux-base",
+          "sec-policy/selinux-base-policy",
+          "sys-apps/checkpolicy",
+          "sys-apps/haveged",
+          "sys-apps/i2c-tools",
+          "sys-apps/pciutils",
+          "sys-apps/policycoreutils",
+          "sys-apps/semodule-utils",
+          "sys-apps/usbutils",
+          "sys-apps/util-linux",
+          "sys-block/parted",
+          "sys-cluster/kubeadm",
+          "sys-cluster/kubectl",
+          "sys-cluster/kubelet",
+          "sys-fs/dosfstools",
+          "sys-fs/e2fsprogs",
+          "sys-fs/xfsprogs",
+          "sys-kernel/gentoo-sources",
+          "sys-kernel/linux-firmware",
+          "sys-libs/libseccomp",
+          "sys-libs/libselinux",
+          "sys-process/audit",
+          "sys-process/cronie"
+        ],
+        "removable": [
+          "app-admin/setools",
+          "net-firewall/conntrack-tools",
+          "net-firewall/nftables",
+          "sec-policy/selinux-container",
+          "sec-policy/selinux-virt",
+          "sys-apps/ethtool",
+          "sys-apps/iproute2",
+          "sys-apps/nvme-cli",
+          "sys-fs/cryptsetup",
+          "sys-fs/lvm2"
+        ]
+      },
+      "omnibus": {
+        "available": [
+          "gui-libs/display-manager-init",
+          "lxde-base/lxappearance",
+          "lxde-base/lxpanel",
+          "lxde-base/lxsession",
+          "media-fonts/dejavu",
+          "media-fonts/noto",
+          "media-gfx/feh",
+          "sys-kernel/dracut",
+          "www-client/netsurf",
+          "x11-apps/setxkbmap",
+          "x11-apps/xrandr",
+          "x11-apps/xset",
+          "x11-base/xorg-drivers",
+          "x11-base/xorg-server",
+          "x11-misc/lightdm",
+          "x11-misc/lightdm-gtk-greeter",
+          "x11-misc/pcmanfm",
+          "x11-terms/xterm",
+          "x11-wm/openbox"
+        ],
+        "essential": [
+          "app-admin/sudo",
+          "app-containers/cni-plugins",
+          "app-containers/containerd",
+          "app-containers/cri-tools",
+          "app-containers/runc",
+          "app-editors/nano",
+          "app-misc/jq",
+          "app-misc/screen",
+          "dev-embedded/u-boot-tools",
+          "net-firewall/iptables",
+          "net-fs/cifs-utils",
+          "net-fs/nfs-utils",
+          "net-misc/networkmanager",
+          "net-misc/openssh",
+          "net-misc/socat",
+          "net-vpn/openvpn",
+          "net-vpn/wireguard-tools",
+          "net-wireless/wpa_supplicant",
+          "sec-policy/selinux-base",
+          "sec-policy/selinux-base-policy",
+          "sys-apps/checkpolicy",
+          "sys-apps/haveged",
+          "sys-apps/i2c-tools",
+          "sys-apps/pciutils",
+          "sys-apps/policycoreutils",
+          "sys-apps/semodule-utils",
+          "sys-apps/usbutils",
+          "sys-apps/util-linux",
+          "sys-block/parted",
+          "sys-cluster/kubeadm",
+          "sys-cluster/kubectl",
+          "sys-cluster/kubelet",
+          "sys-fs/dosfstools",
+          "sys-fs/e2fsprogs",
+          "sys-fs/xfsprogs",
+          "sys-kernel/gentoo-sources",
+          "sys-kernel/linux-firmware",
+          "sys-libs/libseccomp",
+          "sys-libs/libselinux",
+          "sys-process/audit",
+          "sys-process/cronie"
+        ],
+        "removable": [
+          "app-admin/setools",
+          "net-firewall/conntrack-tools",
+          "net-firewall/nftables",
+          "sec-policy/selinux-container",
+          "sec-policy/selinux-virt",
+          "sys-apps/ethtool",
+          "sys-apps/iproute2",
+          "sys-apps/nvme-cli",
+          "sys-fs/cryptsetup",
+          "sys-fs/lvm2"
+        ]
+      },
       "orangepi5": {
         "available": [
+          "app-admin/setools",
+          "app-containers/cni-plugins",
+          "app-containers/containerd",
+          "app-containers/cri-tools",
+          "app-containers/runc",
+          "net-firewall/conntrack-tools",
+          "net-firewall/nftables",
+          "sec-policy/selinux-container",
+          "sec-policy/selinux-virt",
+          "sys-apps/ethtool",
+          "sys-apps/iproute2",
+          "sys-apps/nvme-cli",
+          "sys-cluster/kubeadm",
+          "sys-cluster/kubectl",
+          "sys-cluster/kubelet",
+          "sys-fs/cryptsetup",
+          "sys-fs/lvm2",
+          "sys-fs/xfsprogs",
           "sys-kernel/dracut"
         ],
         "essential": [
@@ -1957,6 +2401,84 @@
           "x11-misc/lightdm-gtk-greeter",
           "x11-misc/pcmanfm",
           "x11-terms/xterm"
+        ]
+      },
+      "pki": {
+        "available": [
+          "gui-libs/display-manager-init",
+          "lxde-base/lxappearance",
+          "lxde-base/lxpanel",
+          "lxde-base/lxsession",
+          "media-fonts/dejavu",
+          "media-fonts/noto",
+          "media-gfx/feh",
+          "sys-kernel/dracut",
+          "www-client/netsurf",
+          "x11-apps/setxkbmap",
+          "x11-apps/xrandr",
+          "x11-apps/xset",
+          "x11-base/xorg-drivers",
+          "x11-base/xorg-server",
+          "x11-misc/lightdm",
+          "x11-misc/lightdm-gtk-greeter",
+          "x11-misc/pcmanfm",
+          "x11-terms/xterm",
+          "x11-wm/openbox"
+        ],
+        "essential": [
+          "app-admin/sudo",
+          "app-containers/cni-plugins",
+          "app-containers/containerd",
+          "app-containers/cri-tools",
+          "app-containers/runc",
+          "app-editors/nano",
+          "app-misc/jq",
+          "app-misc/screen",
+          "dev-embedded/u-boot-tools",
+          "net-firewall/iptables",
+          "net-fs/cifs-utils",
+          "net-fs/nfs-utils",
+          "net-misc/networkmanager",
+          "net-misc/openssh",
+          "net-misc/socat",
+          "net-vpn/openvpn",
+          "net-vpn/wireguard-tools",
+          "net-wireless/wpa_supplicant",
+          "sec-policy/selinux-base",
+          "sec-policy/selinux-base-policy",
+          "sys-apps/checkpolicy",
+          "sys-apps/haveged",
+          "sys-apps/i2c-tools",
+          "sys-apps/pciutils",
+          "sys-apps/policycoreutils",
+          "sys-apps/semodule-utils",
+          "sys-apps/usbutils",
+          "sys-apps/util-linux",
+          "sys-block/parted",
+          "sys-cluster/kubeadm",
+          "sys-cluster/kubectl",
+          "sys-cluster/kubelet",
+          "sys-fs/dosfstools",
+          "sys-fs/e2fsprogs",
+          "sys-fs/xfsprogs",
+          "sys-kernel/gentoo-sources",
+          "sys-kernel/linux-firmware",
+          "sys-libs/libseccomp",
+          "sys-libs/libselinux",
+          "sys-process/audit",
+          "sys-process/cronie"
+        ],
+        "removable": [
+          "app-admin/setools",
+          "net-firewall/conntrack-tools",
+          "net-firewall/nftables",
+          "sec-policy/selinux-container",
+          "sec-policy/selinux-virt",
+          "sys-apps/ethtool",
+          "sys-apps/iproute2",
+          "sys-apps/nvme-cli",
+          "sys-fs/cryptsetup",
+          "sys-fs/lvm2"
         ]
       }
     },
@@ -2243,6 +2765,85 @@
         "removable": []
       },
       "generic": {
+        "available": [
+          "gui-libs/display-manager-init",
+          "lxde-base/lxappearance",
+          "lxde-base/lxpanel",
+          "lxde-base/lxsession",
+          "media-fonts/dejavu",
+          "media-fonts/noto",
+          "media-gfx/feh",
+          "www-client/netsurf",
+          "x11-apps/setxkbmap",
+          "x11-apps/xrandr",
+          "x11-apps/xset",
+          "x11-base/xorg-drivers",
+          "x11-base/xorg-server",
+          "x11-misc/lightdm",
+          "x11-misc/lightdm-gtk-greeter",
+          "x11-misc/pcmanfm",
+          "x11-terms/xterm",
+          "x11-wm/openbox"
+        ],
+        "essential": [
+          "app-admin/setools",
+          "app-admin/sudo",
+          "app-containers/cni-plugins",
+          "app-containers/containerd",
+          "app-containers/cri-tools",
+          "app-containers/runc",
+          "app-editors/nano",
+          "app-misc/jq",
+          "app-misc/screen",
+          "dev-embedded/raspberrypi-utils",
+          "dev-embedded/rpi-eeprom",
+          "dev-embedded/u-boot-tools",
+          "net-firewall/conntrack-tools",
+          "net-firewall/iptables",
+          "net-firewall/nftables",
+          "net-fs/cifs-utils",
+          "net-fs/nfs-utils",
+          "net-misc/networkmanager",
+          "net-misc/openssh",
+          "net-misc/socat",
+          "net-vpn/openvpn",
+          "net-vpn/wireguard-tools",
+          "net-wireless/wpa_supplicant",
+          "sec-policy/selinux-base",
+          "sec-policy/selinux-base-policy",
+          "sec-policy/selinux-container",
+          "sec-policy/selinux-virt",
+          "sys-apps/checkpolicy",
+          "sys-apps/ethtool",
+          "sys-apps/haveged",
+          "sys-apps/i2c-tools",
+          "sys-apps/iproute2",
+          "sys-apps/nvme-cli",
+          "sys-apps/pciutils",
+          "sys-apps/policycoreutils",
+          "sys-apps/semodule-utils",
+          "sys-apps/usbutils",
+          "sys-apps/util-linux",
+          "sys-block/parted",
+          "sys-boot/raspberrypi-firmware",
+          "sys-cluster/kubeadm",
+          "sys-cluster/kubectl",
+          "sys-cluster/kubelet",
+          "sys-firmware/raspberrypi-wifi-ucode",
+          "sys-fs/cryptsetup",
+          "sys-fs/dosfstools",
+          "sys-fs/e2fsprogs",
+          "sys-fs/lvm2",
+          "sys-fs/xfsprogs",
+          "sys-kernel/raspberrypi-sources",
+          "sys-libs/libseccomp",
+          "sys-libs/libselinux",
+          "sys-process/audit",
+          "sys-process/cronie"
+        ],
+        "removable": []
+      },
+      "omnibus": {
         "available": [
           "gui-libs/display-manager-init",
           "lxde-base/lxappearance",

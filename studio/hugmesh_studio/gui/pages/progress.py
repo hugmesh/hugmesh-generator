@@ -1443,6 +1443,9 @@ class ProgressPage(QtWidgets.QWizardPage):
                      else self._work_dir()),
             kind=(getattr(self._session, "kind", "wizard")
                   if self._session is not None else "wizard"),
+            # followed by the Studio panel's Image builds tab (its live tail)
+            log_path=(getattr(self._session, "log_path", "") or ""
+                      if self._session is not None else ""),
             # A REAL exit (aboutToQuit -> cancel_all) genuinely stops this run, so the
             # record must say "stopped". Without this hook the old close-abort's
             # _finalize_session was simply lost when the abort moved off the window

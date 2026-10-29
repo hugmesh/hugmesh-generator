@@ -604,12 +604,15 @@ def test_roles_for_platform_inversion():
     """roles_for_platform inverts ROLE_CHOICES exactly (guards a catalog edit that would
     silently drop a role from a platform's accepted set)."""
     assert roles_for_platform("frite") == frozenset({"frite"})
-    assert roles_for_platform("orangepi5") == frozenset({"orangepi5"})
+    # the Orange Pi 5 light desktop + its cluster NODE roles (EXPERIMENTAL)
+    assert roles_for_platform("orangepi5") == frozenset(
+        {"orangepi5", "pki", "backend", "frontend", "omnibus"})
     assert roles_for_platform("orangepizero2") == frozenset({"orangepizero2"})
     assert roles_for_platform("orangepizero2w") == frozenset({"orangepizero2w"})
     assert roles_for_platform("orangepizero3") == frozenset({"orangepizero3"})
     assert roles_for_platform("orangepi3-lts") == frozenset({"orangepi3-lts"})
-    assert roles_for_platform("rpi5") == frozenset({"generic", "rpi5-desktop", "pki", "backend", "frontend"})
+    assert roles_for_platform("rpi5") == frozenset(
+        {"generic", "rpi5-desktop", "pki", "backend", "frontend", "omnibus"})
     assert roles_for_platform("jetson") == frozenset({"edge-ai", "omnibus", "backend-gpu", "jetson-desktop"})
     assert "standalone-thick" in roles_for_platform("x86")
     assert roles_for_platform("") == roles_for_platform("x86")   # "" defaults to x86
