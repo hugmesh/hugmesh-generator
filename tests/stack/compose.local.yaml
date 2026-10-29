@@ -50,10 +50,14 @@ include:
   # DEFAULT-OFF profile — built from specs/cluster/manifests/edge-ai-tts/image
   # (the in-mesh registry image is unreachable off-cluster). `make stack-up TTS=1`.
   - path: compose.edge-ai-tts.yaml
-  # Games WASM asset tier (`--profile games`, make stack-up GAMES=1): the
-  # hugmesh-games wasm-fragment nginx serving the committed Godot bundles at
-  # /_remotes/wasm-fragment/** behind the fe-gateway. DEFAULT-OFF; builds from
-  # the SIBLING hugmesh-games clone (GAMES_SRC), see compose.games.yaml.
+  # Games tier (`--profile games`, make stack-up GAMES=1): the hugmesh-games
+  # wasm-fragment nginx serving the committed Godot bundles at
+  # /_remotes/wasm-fragment/**, PLUS (2026-10-28) the `games` native-federation
+  # remote hugmesh-games-ui (member catalog/play + admin screens the host shell
+  # mounts at /games and /games/admin) and the games BFF hugmesh-games-bff on
+  # the SYSTEMS issuer behind /games/api/** with its own Postgres + a keyspace
+  # one-shot on the platform cassandra. DEFAULT-OFF; builds from the SIBLING
+  # hugmesh-games clone (GAMES_SRC), see compose.games.yaml.
   - path: compose.games.yaml
   # AI media cloak (`--profile media-poisoner`, make stack-up POISONER=1): the
   # hugmesh-media-poisoner worker the user-bff media-proxy poisons uploads

@@ -1,6 +1,6 @@
 {
   "//": "THE SHOT TABLE. Adding a screenshot to a manual test plan is a DATA edit: append a row to shots[] below and run `node shot-harness/shot-table.mjs validate`. No TypeScript, no code. See shot-harness/README.md.",
-  "//routing": "HOW A ROW NAVIGATES. capture.spec.ts does page.goto(route): a HARD document GET. The fe-gateway routes /login/**, /admin/**, /mod/** and /user/** to the remote's own container (tests/stack/gateway-routes/fe/application-routes.yml:154-179, StripPrefix=1), so a hard GET to those prefixes renders the BARE remote — no host-shell header, no menubar, no home cards. Only host-shell-served URLs (/, /home, /about, /games, and the remote-deeplink-to-host-shell prefixes at :88-92) boot the shell. A row that needs shell chrome (home-services-nav, home-card-*, profile-trigger, nav-user, menu-*, nav-*, subnav-*, denied-notice) must therefore start at '/' (roleHomeGuard lands on /user client-side) or '/home', and reach a console by CLICKING home-card-nav-admin / home-card-nav-mod. Rows that hard-GET /admin/... or /mod/... and wait only on the remote's own testids DO capture, but they photograph the standalone remote — see the reconcile notes in the commit that added this comment.",
+  "//routing": "HOW A ROW NAVIGATES. capture.spec.ts does page.goto(route): a HARD document GET. The fe-gateway routes /login/**, /admin/**, /mod/** and /user/** to the remote's own container (tests/stack/gateway-routes/fe/application-routes.yml:154-179, StripPrefix=1), so a hard GET to those prefixes renders the BARE remote — no host-shell header, no menubar, no home cards. Only host-shell-served URLs (/, /home, /about, and the remote-deeplink-to-host-shell prefixes — which since 2026-10-28 include /games/**, so /games and /games/admin boot the shell and the shell mounts the `games` remote) boot the shell. A row that needs shell chrome (home-services-nav, home-card-*, profile-trigger, nav-user, menu-*, nav-*, subnav-*, denied-notice) must therefore start at '/' (roleHomeGuard lands on /user client-side) or '/home', and reach a console by CLICKING home-card-nav-admin / home-card-nav-mod. Rows that hard-GET /admin/... or /mod/... and wait only on the remote's own testids DO capture, but they photograph the standalone remote — see the reconcile notes in the commit that added this comment.",
   "//state": "WHAT A ROW MAY WRITE, AND IN WHAT ORDER. Every row is an independent Playwright test that signs in afresh; capture.spec.ts runs rows in personas[] order then step order (--all: every persona in that order), and a row that fails costs exactly its own PNG - no later row is skipped for it. Most rows read, or fill and stop BEFORE the write. The rows that DO write, each a step its plan names: games-operator-14/15/17 (suspend/resume/terminate the FIRST Instances row - 'first': true - #300 line 44), image-builder-14 (grant THEN revoke ROLE_IMAGE_BUILDER: net zero; both 503 while casdoor.admin.enabled=false), curtailed-member-10 (files an appeal as e2e-user; idempotent, #311 step 10), fleet-owner-10 (mfa-choose-totp POSTs a TOTP enrolment start; #314 step 21 reverses it), anonymous-10 (forgot-request-submit), moderator-30 (mc-block; the 403 is the expected result), superadmin-13 (fe-grant; step-up refuses), games-operator-11 (gs-create; client-side validation refuses, no request). ORDERING HAZARD: curtailed-member-10 leaves a PENDING appeal, after which admin-20 (expects aa-empty, #307 step 20) fails until an admin decides it - run admin before curtailed-member (what --all does). Running a persona twice, or after another persona's writes, changes what later shots show (RECONCILE-20260916.md H8).",
   "personas": [
     { "slug": "anonymous", "issue": 290, "title": "the anonymous visitor" },
@@ -148,24 +148,23 @@
       "login": "e2e-gamesadmin",
       "route": "/games/admin",
       "do": [
-        { "action": "expect", "testid": "games-admin-todo-badge" },
-        { "action": "expect", "testid": "games-admin-placeholder-message" },
-        { "action": "expect", "testid": "games-admin-future-remote" }
+        { "action": "expect", "testid": "games-admin-shell" },
+        { "action": "expect", "testid": "games-admin-overview" }
       ],
-      "note": "Step 8. Honest TODO placeholder, not a console (gap 3)."
+      "note": "Step 8. [2026-10-28] The real games admin console: the `games` remote's GAMES_ADMIN_ROUTES mounted at /games/admin (A0 shell with the Overview tab, A1 stat tiles + active sessions). Replaces the TODO placeholder (gap 3 closed). Needs the games profile (make stack-up GAMES=1) — without it the shell mounts nothing and games-admin-shell never appears; the mock lane's tracked .uidist still renders the placeholder."
     },
     {
       "persona": "games-namespace-admin",
       "step": "09",
-      "slug": "games-placeholder",
+      "slug": "games-catalog",
       "auth": "onboard",
       "login": "e2e-gamesadmin",
       "route": "/games",
       "do": [
-        { "action": "expect", "testid": "games-todo-badge" },
-        { "action": "expect", "testid": "games-future-remote" }
+        { "action": "expect", "testid": "games-catalog" },
+        { "action": "expect", "testid": "games-card-chess" }
       ],
-      "note": "Step 9. Must differ from step 08: games/admin precedes games in the router."
+      "note": "Step 9. Must differ from step 08: games/admin precedes games in the router. [2026-10-28] The member catalog (M1): one card per playable game; chess is a 'Plays here' bundle on every deployment that ships the wasm-fragment tier."
     },
     {
       "persona": "games-namespace-admin",
@@ -228,10 +227,10 @@
       "login": "mesh-operator",
       "route": "/games/admin",
       "do": [
-        { "action": "expect", "testid": "games-admin-todo-badge" },
-        { "action": "expect", "testid": "games-admin-placeholder-message" }
+        { "action": "expect", "testid": "games-admin-shell" },
+        { "action": "expect", "testid": "games-admin-overview" }
       ],
-      "note": "Step 13. superadmin branch of gamesAdminGuard."
+      "note": "Step 13. superadmin branch of gamesAdminGuard. [2026-10-28] mesh-operator also holds ROLE_GAMES + ROLE_ADMIN, so derive-games-admin.sh makes it a real ROLE_GAMES_ADMIN and the admin API behind the console answers too."
     },
     {
       "persona": "games-namespace-admin",
@@ -241,9 +240,9 @@
       "login": "e2e-gamesonly",
       "route": "/games",
       "do": [
-        { "action": "expect", "testid": "games-todo-badge" }
+        { "action": "expect", "testid": "games-catalog" }
       ],
-      "note": "N1 positive control. The /games/admin half is a 403 with a 0-byte body: nothing renders, so it is captured by curl headers, not a PNG."
+      "note": "N1 positive control. [2026-10-28] The member catalog renders for the games-only persona. The /games/admin half is a 403 with a 0-byte body: nothing renders, so it is captured by curl headers, not a PNG."
     },
     {
       "persona": "games-namespace-admin",
@@ -1579,7 +1578,7 @@
       "do": [
         { "action": "expect", "testid": "login-view" }
       ],
-      "note": "Plan step 15(b) and N9. gamesGuard admits isGames()||isAdmin()||isSuperadmin(); games_services is not the literal games, so a SIGNED-IN principal is parked on the login card. If games-todo-badge renders instead, the guard was widened."
+      "note": "Plan step 15(b) and N9. gamesGuard admits isGames()||isAdmin()||isSuperadmin(); games_services is not the literal games, so a SIGNED-IN principal is parked on the login card. If games-catalog renders instead, the guard was widened."
     },
     {
       "persona": "games-store-member",
@@ -2034,29 +2033,30 @@
     {
       "persona": "games-member",
       "step": "08",
-      "slug": "games-placeholder",
+      "slug": "games-catalog",
       "auth": "onboard",
       "login": "e2e-gamesonly",
       "route": "/home",
       "do": [
         { "action": "click", "testid": "card-games" },
-        { "action": "expect", "testid": "games-todo-badge" },
-        { "action": "expect", "testid": "games-back" }
+        { "action": "expect", "testid": "games-catalog" },
+        { "action": "expect", "testid": "games-card-chess" }
       ],
-      "note": "Plan step 8. Reached by clicking the card, the only in-UI route to /games."
+      "note": "Plan step 8. Reached by clicking the card (the shell also lists nav-games / menu-games since 2026-10-28). [2026-10-28] The member catalog (M1) replaces the TODO placeholder: games-catalog with one games-card-<slug> per playable game; needs the games profile up."
     },
     {
       "persona": "games-member",
       "step": "09",
-      "slug": "games-deep-link",
+      "slug": "games-play",
       "auth": "onboard",
       "login": "e2e-gamesonly",
-      "route": "/games",
+      "route": "/games/play/chess",
       "do": [
-        { "action": "expect", "testid": "games-todo-badge" },
-        { "action": "expect", "testid": "games-placeholder-message" }
+        { "action": "expect", "testid": "games-play" },
+        { "action": "expect", "testid": "games-play-frame" },
+        { "action": "expect", "testid": "games-play-back" }
       ],
-      "note": "Plan step 9. A cold document load of /games; gamesGuard admits."
+      "note": "Plan step 9. A cold document load of a deep link under /games (the deeplink route sends it to the shell; gamesGuard admits); the Play screen (M2) POSTs /games/api/games/chess/launch and renders the same-origin wasm-fragment iframe. The launch is cleaned up on route leave (DELETE /games/api/games/launches/<uid>)."
     },
     {
       "persona": "games-member",
@@ -2066,9 +2066,9 @@
       "login": "e2e-gamesonly",
       "route": "/games/admin",
       "do": [
-        { "action": "expectHidden", "testid": "games-admin-todo-badge" }
+        { "action": "expectHidden", "testid": "games-admin-shell" }
       ],
-      "note": "Plan step 12. The gateway 403s the document, so the placeholder must never render. expectHidden is the settle AND the assertion."
+      "note": "Plan step 12. A hard navigation to /games/admin is the gateway's existing 403 for a governed console path (the fe row /games/admin/** keys on ROLE_GAMES_ADMIN alone), so the admin shell must never render. expectHidden is the settle AND the assertion."
     },
     {
       "persona": "games-member",

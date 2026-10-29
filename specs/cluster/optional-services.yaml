@@ -323,18 +323,31 @@ spec:
       extraManifestPaths:
         - manifests/casdoor-games
         - manifests/games-instances
+        # The `games` native-federation remote (hugmesh-games/games-ui) the host
+        # shell mounts at /games + /games/admin — frontend-namespace manifests,
+        # pruned with the slug like the two above (2026-10-28).
+        - manifests/games-ui
       esoFile: null
       esoKeys: [casdoor-games-db, casdoor-games-app]
       # NOTE: the games host is GAMES_DOMAIN (parameterized below), NOT a
       # hugmesh.net subdomain literal — see gamesDomain.
       gatewayHost: games.${GAMES_DOMAIN}
       # games = the games portal host route; games-servers-console = the games app-store
-      # per-instance HTTP console path-route (both pruned when games is deselected).
-      gatewayRouteIds: [games, games-servers-console]
+      # per-instance HTTP console path-route; games-bff + games-ui = the fe-gateway
+      # path routes for the shell-mounted games screens (/games/api/** -> the games
+      # BFF, /games/** -> the `games` remote; apps/20-gateway-fe.yaml). All four are
+      # pruned when games is deselected.
+      gatewayRouteIds: [games, games-servers-console, games-bff, games-ui]
       routeAccessRows:
         - { gateway: hugmesh-be-gateway, urlPattern: /games/api/admin/** }
         - { gateway: hugmesh-be-gateway, urlPattern: /games/** }
         - { gateway: hugmesh-fe-gateway, urlPattern: /games/admin/** }
+        # ── games member + admin SCREENS via the browser door (2026-10-28) ──
+        # /games/api/admin/** ROLE_GAMES_ADMIN; /games/api/** and /games/**
+        # ROLE_GAMES|ROLE_ADMIN|ROLE_MOD (paired supersets, see 20-schema.sql).
+        - { gateway: hugmesh-fe-gateway, urlPattern: /games/api/admin/** }
+        - { gateway: hugmesh-fe-gateway, urlPattern: /games/api/** }
+        - { gateway: hugmesh-fe-gateway, urlPattern: /games/** }
         # ── games-services control-plane rows (degrade with games) ──
         - { gateway: hugmesh-be-gateway, urlPattern: /bff/superadmin/games-services/** }
         - { gateway: hugmesh-be-gateway, urlPattern: /bff/games-services/instances/** }
