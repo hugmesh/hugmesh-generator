@@ -265,6 +265,23 @@ jobs:
           if ($p.ExitCode -ne 0) { Get-Content specs.err; throw "--print-specs exited $($p.ExitCode)" }
           if ((Get-Item specs.json).Length -eq 0) { Get-Content specs.err; throw "no output from --print-specs" }
           Get-Content specs.json -TotalCount 3
+
+          # The CONSOLE twin, run the way a user runs it: a plain redirect, no
+          # Start-Process. Before it existed every CLI flag printed nothing from a
+          # shell, because the windowed exe has no stdout (2026-10-29, Windows 11).
+          # Its output must be the same JSON as the windowed exe's. Compared PARSED:
+          # PowerShell's `>` re-encodes a native program's lines and ends them CRLF, so
+          # the bytes differ even when the answer does not. The exe writes UTF-8
+          # (packaging/run_studio.py), so PowerShell must decode it as UTF-8.
+          [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
+          $cli = (Resolve-Path dist\hugmesh-studio\hugmesh-studio-cli.exe).Path
+          & $cli --print-specs > cli-specs.json
+          if ($LASTEXITCODE -ne 0) { throw "hugmesh-studio-cli.exe --print-specs exited $LASTEXITCODE" }
+          $want = Get-Content specs.json -Raw -Encoding utf8 | ConvertFrom-Json | ConvertTo-Json -Depth 50 -Compress
+          $got = Get-Content cli-specs.json -Raw -Encoding utf8 | ConvertFrom-Json | ConvertTo-Json -Depth 50 -Compress
+          if ($got -ne $want) { throw "hugmesh-studio-cli.exe and hugmesh-studio.exe disagree on --print-specs" }
+          & $cli --help | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "hugmesh-studio-cli.exe --help exited $LASTEXITCODE" }
         shell: pwsh
 
       - name: Authenticode — is a signing certificate configured?

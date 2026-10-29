@@ -460,6 +460,11 @@ def main(argv=None) -> int:
             print('usage: python -m hugmesh_studio --local-ai-prompt "question"',
                   file=sys.stderr)
             return 2
+        # sys.stdout is None in the WINDOWED exe (hugmesh-studio.exe, console=False):
+        # writing to it raised AttributeError on the first chunk. The console exe
+        # (hugmesh-studio-cli.exe) has one; without it the answer has nowhere to go.
+        if sys.stdout is None:
+            return 2
         try:
             lai.send_prompt(args.local_ai_prompt,
                             on_chunk=lambda c: (sys.stdout.write(c), sys.stdout.flush()))

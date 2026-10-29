@@ -134,9 +134,13 @@ class _Rec:
         return rec
 
 
-def _run_spec(monkeypatch, icon=None, tz=("datas", "binaries", "hidden"), spec=None):
-    """Execute the spec and return {kind: recorded call}. ``tz`` is what collect_all
-    ("tzdata") hands back: a truthy datas list is "tzdata is installed"."""
+def _run_spec(monkeypatch, icon=None, tz=("datas", "binaries", "hidden"), spec=None,
+              platform="linux"):
+    """Execute the spec and return {kind: FIRST recorded call}, plus "EXES": every EXE
+    in order. ``tz`` is what collect_all ("tzdata") hands back: a truthy datas list is
+    "tzdata is installed". ``platform`` is the sys.platform the spec sees (the console
+    twin exists only on "win32"), so the answer does not depend on the test host."""
+    monkeypatch.setattr(sys, "platform", platform)
     _Rec.log = []
     hooks = types.ModuleType("PyInstaller.utils.hooks")
     hooks.collect_all = lambda name: (
@@ -154,7 +158,11 @@ def _run_spec(monkeypatch, icon=None, tz=("datas", "binaries", "hidden"), spec=N
     namespace = {"SPECPATH": os.path.dirname(path), "__name__": "spec",
                  **{k: _Rec(k) for k in ("Analysis", "PYZ", "EXE", "COLLECT")}}
     exec(compile(open(path, encoding="utf-8").read(), path, "exec"), namespace)
-    return {r.kind: r for r in _Rec.log}
+    calls = {}
+    for r in _Rec.log:
+        calls.setdefault(r.kind, r)
+    calls["EXES"] = [r for r in _Rec.log if r.kind == "EXE"]
+    return calls
 
 
 def _package_data_files() -> set[tuple[str, str]]:
@@ -181,6 +189,22 @@ def test_the_spec_freezes_the_entry_shim_as_a_windowed_onedir(monkeypatch):
     assert exe.kwargs["exclude_binaries"] is True, "onedir (binaries go in COLLECT), not onefile"
     assert exe.kwargs["upx"] is False
     assert coll.kwargs["name"] == "hugmesh-studio", "dist/hugmesh-studio/ is where the MSI harvests"
+    assert [e.kwargs["name"] for e in calls["EXES"]] == ["hugmesh-studio"], (
+        "Linux freezes one executable: the tarball has no subsystem split")
+
+
+@needs_tomllib
+def test_windows_also_freezes_a_console_twin_into_the_same_tree(monkeypatch):
+    """The windowed exe has no stdout when started from a shell, so every CLI flag
+    printed nothing on Windows. The twin is the same app with a console."""
+    calls = _run_spec(monkeypatch, platform="win32")
+    gui, cli = calls["EXES"]
+    assert (gui.kwargs["name"], gui.kwargs["console"]) == ("hugmesh-studio", False)
+    assert (cli.kwargs["name"], cli.kwargs["console"]) == ("hugmesh-studio-cli", True)
+    assert cli.kwargs["exclude_binaries"] is True and cli.kwargs["upx"] is False
+    assert cli.args[:2] == gui.args[:2], "same PYZ and scripts: one app, two subsystems"
+    assert cli in calls["COLLECT"].args and gui in calls["COLLECT"].args, (
+        "both must land in dist/hugmesh-studio/, the tree Files.wxs packs")
 
 
 @needs_tomllib

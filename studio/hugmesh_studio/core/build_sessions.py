@@ -39,7 +39,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from typing import Any
 
-from . import roles, secret_files
+from . import pid_probe, roles, secret_files
 from .config import PLATFORM_FIELD_SUPPORT, SECRET_FIELDS
 from .state_paths import state_dir
 from .worklist import WorklistConfig
@@ -463,6 +463,11 @@ def load_all() -> list[BuildSession]:
 
 
 def _pid_alive(pid: int) -> bool:
+    # NEVER os.kill(pid, 0) on Windows: it is GenerateConsoleCtrlEvent there, which
+    # fails with OSError for every pid from the windowed exe, so a build whose Studio
+    # crashed stayed "running" forever and could not be deleted or restarted.
+    if os.name == "nt":
+        return pid_probe.alive_windows(pid)
     try:
         os.kill(pid, 0)
     except ProcessLookupError:

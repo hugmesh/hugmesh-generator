@@ -120,7 +120,7 @@ from ..qt import Qt, QtCore, QtGui, QtWidgets, Signal
 from .. import console
 from ..choice_cards import ChoiceCard, ChoiceCardGroup
 from ..flow_layout import flow_box
-from ...core import brand_look, mesh_controls, plain_words, saved_meshes, vaults
+from ...core import brand_look, mesh_controls, plain_words, platform_info, saved_meshes, vaults
 from ...core.config import IDP_CHOICES, IDP_LABELS, github_org_problem, idp_effective_jwks
 from ...core.config import (DOMAIN_IDP_OWN, DOMAIN_IDP_SUPERDOMAIN,
                             OPTIONAL_SERVICES_CHOICES, Domain)
@@ -3051,8 +3051,16 @@ class LocalMeshPage(QtWidgets.QWizardPage):
             safe = "".join(c if (c.isalnum() or c in "-_") else "-"
                            for c in (run.label or "verb")).strip("-") or "verb"
             path = os.path.join(d, f"{stamp}-{safe}-{'ok' if ok else 'FAILED'}.log")
-            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-            os.fchmod(fd, 0o600)    # a pre-existing file keeps its old mode otherwise
+            # O_BINARY (Windows only): a text-mode fd under the text-mode wrapper below
+            # turned every line ending into \r\r\n.
+            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+                         | getattr(os, "O_BINARY", 0), 0o600)
+            # A pre-existing file keeps its old mode otherwise. os.fchmod does not
+            # exist on Windows before Python 3.13: calling it unguarded raised
+            # AttributeError AFTER os.open had created the file, so every MSI user's
+            # run log was a 0-byte *-FAILED.log and the run's output was lost.
+            if hasattr(os, "fchmod"):
+                os.fchmod(fd, 0o600)
             with os.fdopen(fd, "w", encoding="utf-8", errors="replace") as fh:
                 fh.write(f"# {run.label} — {'succeeded' if ok else 'FAILED'}\n")
                 fh.write("# %d line(s) retained (the pane's ring buffer keeps the last "
@@ -3876,6 +3884,12 @@ class LocalMeshPage(QtWidgets.QWizardPage):
     def _devops_install_tools(self):
         """Install the lane's missing CLIs (user-local, checksum-verified)."""
         node = self.boot._stack_node()
+        blocker = platform_info.native_windows_blocker("The DevOps (Kubernetes) lane")
+        if blocker:
+            # A refusal, not a launched verb that FAILS: nothing here can install
+            # its way past it.
+            self._refuse(blocker)
+            return
         need = node.devops_available()
         if not need:
             self._refuse("DevOps prerequisites are already installed.")

@@ -2316,11 +2316,23 @@ def default_local_user() -> str:
     NOT consulted on the worker spec channel in practice: ``to_dict``/``save`` pin
     every field via ``asdict``, so a materialized IMAGE_SPEC_JSON always carries
     ``local_user`` explicitly and ``from_dict`` assigns it verbatim.
+
+    FOLDED INTO A LOGIN NAME. The account name is the host's, the value is the
+    IMAGE's login, and validate_username() holds it to ``[a-z_][a-z0-9_-]{0,31}``.
+    Windows account names are routinely capitalised or contain spaces ("Magus",
+    "Jane Doe"), so the unfolded default failed that allowlist on every real Windows
+    machine: ``--print-specs`` and every build command exited 2 before doing anything
+    (measured on Windows 11 with the 0.3.0-beta.1 MSI; the CI runner's account,
+    ``runneradmin``, happens to be legal, which is why the release job never saw it).
+    A name that is already legal comes back unchanged.
     """
     try:
-        return getpass.getuser()
+        name = getpass.getuser()
     except Exception:
         return "user"
+    login = re.sub(r"[^a-z0-9_-]", "", name.strip().lower())
+    login = re.sub(r"^[^a-z_]+", "", login)[:32]
+    return login or "user"
 
 
 def derive_hostname(cfg: "ImageConfig") -> str:

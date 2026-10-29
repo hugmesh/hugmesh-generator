@@ -14,4 +14,11 @@ import sys
 from hugmesh_studio.app import main
 
 if __name__ == "__main__":
+    # Redirected to a file or pipe on Windows, stdout is the ANSI code page (cp1252)
+    # with strict errors, so the first non-ASCII character (an em dash in a status
+    # line, a model's answer) raised UnicodeEncodeError mid-output. UTF-8, as on Linux.
+    # A console keeps its own Unicode writer, and the windowed exe has no stream at all.
+    for stream in (sys.stdout, sys.stderr):
+        if stream is not None and not stream.isatty():
+            stream.reconfigure(encoding="utf-8", errors="replace")
     sys.exit(main())

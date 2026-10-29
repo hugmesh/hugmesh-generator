@@ -684,9 +684,20 @@ def test_on_posix_the_pid_probe_still_uses_the_zero_signal(monkeypatch):
     assert sent == [(os.getpid(), 0)]
 
 
+@pytest.mark.skipif(os.name == "nt", reason="Windows has the API this test proves absent")
 def test_the_windows_probe_fails_closed_where_there_is_no_windows_api():
     # on this (non-Windows) host ctypes has no windll: a dead answer, never an exception
     assert lai._pid_alive_windows(os.getpid()) is False
+
+
+@pytest.mark.skipif(os.name != "nt", reason="asks the real Windows process API")
+def test_the_windows_probe_tells_a_live_pid_from_a_dead_one():
+    import subprocess
+    import sys
+    p = subprocess.Popen([sys.executable, "-c", "pass"])
+    p.wait()
+    assert lai._pid_alive_windows(os.getpid()) is True
+    assert lai._pid_alive_windows(p.pid) is False
 
 
 def test_the_real_os_name_is_used_when_none_is_injected(monkeypatch):
