@@ -16,7 +16,8 @@
 #      printed) must show the reconcile invocation AFTER the `compose … up -d`
 #      line; `make -n stack-route-access-reconcile` must exist; scripts/stack-up.ps1
 #      (the Windows bring-up, which never goes through make) must carry the same
-#      step after its `up -d`; and the reconciler's apply line must carry BOTH
+#      step after its `up -d`, with no `"` inside any of its `docker … sh -c`
+#      arguments (Windows PowerShell 5.1 splits `-c "SELECT 1"`); and the reconciler's apply line must carry BOTH
 #      `-v ON_ERROR_STOP=1` and `-1`. Every assertion is mutation-tested on a
 #      staged copy (line removed / moved before `up -d` / `-` ignore-error prefix /
 #      flag stripped) and must go RED, with the mutation's landing proven by diff.
@@ -152,6 +153,27 @@ else
   bad "scripts/stack-up.ps1 does not re-apply the seed after \`up -d\` — the Windows bring-up keeps a stale route table"
 fi
 
+# Windows PowerShell 5.1 (the file's `#requires -Version 5.1`) and pwsh 7.0-7.2 use
+# "Legacy" native argument passing: an embedded `"` inside an argument is NOT
+# escaped on docker's command line, so `sh -c '… -c "SELECT 1"'` reaches sh as
+# `-c SELECT` plus a stray `1` — the readiness loop can never succeed and the
+# count queries break. Measured 2026-10-29 with pwsh 7.1.5 (Legacy) and a stub
+# docker printing its argv. So: no `"` in any `docker … sh -c` line of the step.
+ps1_quotes_ok() {
+  awk '
+    /^# ── 3b\./ { s = 1; next }
+    s && /route-access reconcile: \$before/ { s = 0 }
+    s && /^[[:space:]]*#/ { next }
+    s && /docker compose .* sh -c / && /"/ { bad = 1 }
+    s && /docker compose .* sh -c / { n++ }
+    END { exit (n >= 4 && !bad) ? 0 : 1 }' "$1"
+}
+if ps1_quotes_ok "${PS1_SCRIPT}"; then
+  ok "scripts/stack-up.ps1's reconcile step passes no embedded \" to docker (Windows PowerShell 5.1 would split \`-c \"SELECT 1\"\`)"
+else
+  bad "scripts/stack-up.ps1's reconcile step has a \" inside a docker \`sh -c\` argument (or fewer than 4 such calls) — Windows PowerShell 5.1 mangles it"
+fi
+
 # ── Static MUTATIONS on staged copies: each must go RED, and each is proven to
 #    have landed (diff non-empty) before its verdict counts.
 mutate_make() {  # mutate_make <name> <python-transform>
@@ -214,6 +236,15 @@ elif ps1_ok "${W}/stack-up.ps1.removed"; then
   bad "ps1 mutation (apply line removed) still passes — the check cannot fail"
 else
   ok "ps1 mutation goes RED (apply line removed)"
+fi
+# ps1 mutation: the pre-fix spelling of the readiness probe (embedded double quotes)
+sed "s/-c ''SELECT 1'''/-c \"SELECT 1\"'/" "${PS1_SCRIPT}" > "${W}/stack-up.ps1.dquote"
+if diff -q "${PS1_SCRIPT}" "${W}/stack-up.ps1.dquote" >/dev/null; then
+  bad "ps1 dquote mutation did NOT land"
+elif ps1_quotes_ok "${W}/stack-up.ps1.dquote"; then
+  bad "ps1 dquote mutation (-c \"SELECT 1\" restored) still passes — the quoting check cannot fail"
+else
+  ok "ps1 dquote mutation goes RED (-c \"SELECT 1\" inside the sh -c argument)"
 fi
 
 # Script-flag mutations (static half; the engine half below proves the behaviour)

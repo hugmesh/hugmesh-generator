@@ -173,19 +173,26 @@ if ($LASTEXITCODE -ne 0) { throw 'docker compose up failed.' }
 # canonical seed in one transaction (additive: an admin's row edits survive, a
 # deleted seed row comes back) and print counts only. The file is bind-mounted
 # into the container, so this needs no psql on the host.
+# NO double quote inside any `sh -c` argument below: Windows PowerShell 5.1 (and
+# pwsh 7.0-7.2, "Legacy" native argument passing) does not escape an embedded `"`
+# when it builds docker's command line, so `-c "SELECT 1"` reached sh as
+# `-c SELECT` plus a stray `1` and the readiness loop could never succeed. The sh
+# side quotes with '' (a literal ' inside a PowerShell single-quoted string), which
+# every PowerShell version passes through unchanged. An unquoted $POSTGRES_PASSWORD
+# in a `VAR=value cmd` prefix is an assignment word, so sh never field-splits it.
+# tests/stack/test-route-access-reconcile.sh pins this.
 Write-Host '==> Reconciling gateway_route_access from the canonical seed'
-$sqlInContainer = '/docker-entrypoint-initdb.d/10-schema.sql'
 $ready = $false
 for ($i = 0; $i -lt 60; $i++) {
-  docker compose -f $Compose exec -T route-access-db sh -c 'PGPASSWORD="$POSTGRES_PASSWORD" psql -X -q -h 127.0.0.1 -U gateway -d gateway -v ON_ERROR_STOP=1 -c "SELECT 1"' *> $null
+  docker compose -f $Compose exec -T route-access-db sh -c 'PGPASSWORD=$POSTGRES_PASSWORD psql -X -q -h 127.0.0.1 -U gateway -d gateway -v ON_ERROR_STOP=1 -c ''SELECT 1''' *> $null
   if ($LASTEXITCODE -eq 0) { $ready = $true; break }
   Start-Sleep -Seconds 2
 }
 if (-not $ready) { throw 'route-access-db did not become reachable within 120s.' }
-$before = docker compose -f $Compose exec -T route-access-db sh -c 'PGPASSWORD="$POSTGRES_PASSWORD" psql -X -q -tA -h 127.0.0.1 -U gateway -d gateway -c "SELECT count(*) FROM gateway_route_access"'
-docker compose -f $Compose exec -T route-access-db sh -c "PGPASSWORD=`"`$POSTGRES_PASSWORD`" psql -X -q -h 127.0.0.1 -U gateway -d gateway -v ON_ERROR_STOP=1 -1 -f $sqlInContainer"
+$before = docker compose -f $Compose exec -T route-access-db sh -c 'PGPASSWORD=$POSTGRES_PASSWORD psql -X -q -tA -h 127.0.0.1 -U gateway -d gateway -v ON_ERROR_STOP=1 -c ''SELECT count(*) FROM gateway_route_access'''
+docker compose -f $Compose exec -T route-access-db sh -c 'PGPASSWORD=$POSTGRES_PASSWORD psql -X -q -h 127.0.0.1 -U gateway -d gateway -v ON_ERROR_STOP=1 -1 -f /docker-entrypoint-initdb.d/10-schema.sql'
 if ($LASTEXITCODE -ne 0) { throw 'route-access reconcile FAILED (transaction rolled back, table unchanged).' }
-$after = docker compose -f $Compose exec -T route-access-db sh -c 'PGPASSWORD="$POSTGRES_PASSWORD" psql -X -q -tA -h 127.0.0.1 -U gateway -d gateway -c "SELECT count(*) FROM gateway_route_access"'
+$after = docker compose -f $Compose exec -T route-access-db sh -c 'PGPASSWORD=$POSTGRES_PASSWORD psql -X -q -tA -h 127.0.0.1 -U gateway -d gateway -v ON_ERROR_STOP=1 -c ''SELECT count(*) FROM gateway_route_access'''
 Write-Host "    route-access reconcile: $before -> $after rows"
 
 Write-Host ''
