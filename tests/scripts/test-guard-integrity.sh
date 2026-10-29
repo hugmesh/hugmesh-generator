@@ -828,7 +828,20 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # container job (next to test-x86-artifact-integrity.sh, with squashfs-tools added to
 # its apt line) and in .gitlab-ci.yml's orphan-guards-verify. MEASURED by RUNNING this
 # file on that branch, not computed.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-199}"
+#
+# 199 -> 200 (denominator 241 -> 241) on 2026-10-29 for tests/boot/test-gpu-worker-
+# node-labels.sh: it landed in 1abc9bf3 / 2ab3325f (2026-10-22) named by NOTHING —
+# check 3 and 7b both red on main — and it needs a docker daemon (it runs the real
+# keys-provision engine inside a kindest/node container), which none of the four
+# container jobs in shell-suites.yml has. It is now named by a NEW bare-runner job
+# there (`docker`, ubuntu-latest, no `container:`) and post-merge by .gitlab-ci.yml's
+# lint:gpu-worker-node-labels on the privileged runner. RUN on a Linux host with
+# docker and the pinned image before wiring: 17 passed / 0 failed, rc=0. MEASURED by
+# RUNNING this file on the branch (origin/main 398b2327), not computed:
+#     200 of 241 suites are named by a pull_request-triggered workflow
+#     PASS the ungated SET matches its pin exactly (41 suite(s))
+# and '199 of 241' + check 3/7b red again with the one SUITES line removed.
+PREMERGE_BASELINE="${GUARD_PREMERGE:-200}"
 
 # 182 -> 192 (denominator 205 -> 215) on 2026-09-30 for #385: the census gained a
 # THIRD spelling, bare `tests/*.sh` at depth 1, and the ten suites it exposed were

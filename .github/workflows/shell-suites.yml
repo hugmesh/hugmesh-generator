@@ -870,3 +870,55 @@ jobs:
           echo "── ran $ran suite(s) ──"
           [ -z "$failed" ] || { echo "::error::failed:$failed"; }
           exit $rc
+
+  docker:
+    name: shell suites (host docker)
+    runs-on: ubuntu-latest
+    # NO `container:` ON PURPOSE. The four jobs above run inside alpine:3,
+    # python:3.12-slim and node:24-alpine, where there is no docker daemon and no
+    # socket is mounted (that is why tests/casdoor/test-jwt-custom-token.sh sits in
+    # PREMERGE_UNGATED). tests/boot/test-gpu-worker-node-labels.sh runs the REAL
+    # keys-provision engine inside a kindest/node container (bash, jq and a real
+    # kubelet binary live there; --network none, no privileges) and exits 2 rather
+    # than passing when docker or the image is absent — which is a FAIL here, never a
+    # silent green. It therefore needs the runner host's own daemon, which
+    # ubuntu-latest ships. MEASURED 2026-10-29 on a Linux host with docker and the
+    # pinned image: 17 passed / 0 failed, rc=0. It joined the gate because it was the
+    # one suite on disk that nothing ran (check 3 and check 7b of
+    # tests/scripts/test-guard-integrity.sh both named it): it landed in 1abc9bf3 /
+    # 2ab3325f with neither this file nor .gitlab-ci.yml naming it.
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: preflight
+        run: |
+          # Fail here, loudly, rather than let the suite's own `exit 2` be the first
+          # sign that the runner image stopped shipping docker.
+          docker info >/dev/null 2>&1 || { echo "::error::preflight: no usable docker daemon — the suite would exit 2"; exit 1; }
+          command -v jq >/dev/null 2>&1 || { echo "::error::preflight: jq missing"; exit 1; }
+      - name: run suites
+        shell: bash
+        run: |
+          SUITES="
+            tests/boot/test-gpu-worker-node-labels.sh
+          "
+          rc=0; failed=""; ran=0
+          for t in $SUITES; do
+            [ -f "$t" ] || { echo "::error::listed suite does not exist: $t"; rc=1; failed="$failed $t(MISSING)"; continue; }
+            echo "::group::$t"
+            if bash "$t" </dev/null; then echo "PASS $t"; else
+              s=$?; echo "FAIL($s) $t"
+              case "$s" in
+                2) echo "::error::$t exited 2 — it could not run at all (docker or the kindest/node image); that is a job failure, not a skip" ;;
+                141) echo "::warning::$t exited 141 (SIGPIPE) — a pipeline stage was killed mid-write; this is NOT an assertion failure" ;;
+                137) echo "::warning::$t exited 137 (SIGKILL) — almost always the OOM killer on the runner" ;;
+                124) echo "::warning::$t exited 124 — it hit the timeout" ;;
+              esac
+              rc=1; failed="$failed $t($s)"
+            fi
+            echo "::endgroup::"
+            ran=$((ran+1))
+          done
+          echo "── ran $ran suite(s) ──"
+          [ -z "$failed" ] || { echo "::error::failed:$failed"; }
+          exit $rc
