@@ -126,7 +126,9 @@ grep -q "members: hugmesh/e2e-gamesadmin, hugmesh/mesh-operator" "${WORK}/fx.out
 grep -q -- "- hugmesh/stale-admin" "${WORK}/fx.out" \
   && ok "[fixture] the stale member is pruned (default-deny)" || bad "[fixture] stale member not pruned"
 for h in e2e-gamesonly e2e-adminonly "e2e-admin," "e2e-mod\b"; do
-  if grep -E "members:|\+ " "${WORK}/fx.out" | grep -Eq "${h}"; then bad "[fixture] single-half holder ${h} qualified"; else ok "[fixture] ${h} (one half only) does not qualify"; fi
+  # No `| grep -q` here: under pipefail a quit-early -q can report a FOUND match as
+  # failure (SIGPIPE), and this is a NEGATIVE guard, so that would fail OPEN.
+  if grep -E "members:|\+ " "${WORK}/fx.out" | grep -E "${h}" >/dev/null; then bad "[fixture] single-half holder ${h} qualified"; else ok "[fixture] ${h} (one half only) does not qualify"; fi
 done
 grep -q "DRY RUN: nothing written" "${WORK}/fx.out" && ok "[fixture] announces the dry run" || bad "[fixture] no dry-run notice"
 # a fixture without the derived role must refuse

@@ -81,7 +81,12 @@ services:
   # nonce'd CSP from its own nginx.conf, docker-entrypoint.d/50-hug-theme.sh
   # consuming HUG_THEME_CSS exactly like user-ui). The healthcheck fetches the
   # federation manifest the host shell will load, so "healthy" means "the
-  # remote is actually mountable", not merely "nginx answers".
+  # remote is actually mountable", not merely "nginx answers". It probes
+  # 127.0.0.1, NOT localhost: games-ui/nginx.conf has `listen 8080;` only (no
+  # `listen [::]:8080;`), and busybox wget in nginx-unprivileged:1.27-alpine
+  # resolves localhost to ::1 first -> "Connection refused" forever (measured
+  # 2026-10-28 inside the built image). wasm-fragment's localhost probe above
+  # works only because ITS nginx.conf also listens on [::]:8080.
   hugmesh-games-ui:
     profiles: ["games"]
     platform: linux/amd64
@@ -92,7 +97,7 @@ services:
       # Runtime theme (fleet 50-snap-theme.sh hook; see login-ui in compose.local.yaml).
       HUG_THEME_CSS: ${HUG_THEME_CSS:-${SNAP_THEME_CSS:-}}
     healthcheck:
-      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:8080/remoteEntry.json || exit 1"]
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8080/remoteEntry.json || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 12

@@ -822,7 +822,19 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # RUNNING this file on that branch (origin/main cdcc8fcd), not computed:
 #     198 of 239 suites are named by a pull_request-triggered workflow
 #     PASS the ungated SET matches its pin exactly (41 suite(s))
-PREMERGE_BASELINE="${GUARD_PREMERGE:-198}"
+# 198 -> 200 (denominator 240 -> 242, ungated SET unchanged) on 2026-10-29 for the
+# games member + games admin screens round (#824): tests/stack/test-derive-games-admin.sh
+# (the ROLE_GAMES_ADMIN := ROLE_GAMES ∩ (ROLE_ADMIN ∪ ROLE_MOD) derivation) and
+# tests/scripts/test-games-screens-wiring.sh (compose/fe-route/route-access/kind-twin
+# wiring for the `games` remote and BFF) both landed on disk AND in shell-suites.yml
+# (:472 and :555), so the gated count moves by two. MEASURED by RUNNING this file, not
+# computed, on the branch tip AND on a scratch merge of the branch with origin/main
+# 62056111 (both print the same line; the base 8319b5c6 prints 198 of 240):
+#     200 of 242 suites are named by a pull_request-triggered workflow
+# Check 7's SET pin is still red on that tree for tests/boot/test-gpu-worker-node-labels.sh
+# (unwired on main since before this round; check 3 names it too) — that is main's
+# defect, not this change's, and it is NOT added to PREMERGE_UNGATED here.
+PREMERGE_BASELINE="${GUARD_PREMERGE:-200}"
 
 # 182 -> 192 (denominator 205 -> 215) on 2026-09-30 for #385: the census gained a
 # THIRD spelling, bare `tests/*.sh` at depth 1, and the ten suites it exposed were
