@@ -24,13 +24,20 @@
 # PUBLIC_PATHS carry no /bff/register/* entry, so an anonymous POST is 401'd by
 # the coarse authenticated() floor before any BFF sees it (hugmesh-gateway#29
 # records the identical posture for /bff/register itself). So through the front
-# door the ALLOWED callers are ROLE_USER holders plus the two bypass tiers
-# (SUPERADMIN cross-domain, ADMIN own-domain — GatewayRouteAccessFilter), the
-# DENIED callers are a ROLE_MOD-only persona (403 + X-Route-Denied from the
-# gateway, never reaching user-bff) and anonymous (401). The two 403s are told
-# apart by the header: user-bff's own refusal carries a "not invited" body and
-# no X-Route-Denied. That distinction is the whole point — a route-access 403
-# and a "not invited" 403 look identical to a status-only assertion.
+# door the ALLOWED callers are every signed-in principal — hugmesh-gateway's
+# BffSessionAuthFilter adds a ROLE_USER floor to every bff_ session, so even a
+# persona whose Casdoor roles are ROLE_MOD only (e2e-mod) holds ROLE_USER at the
+# gateway — and the only DENIED caller is anonymous (401). The 403s below are
+# therefore user-bff's own: a "not invited" body and no X-Route-Denied. That
+# distinction is the whole point — a route-access 403 and a "not invited" 403
+# look identical to a status-only assertion.
+#
+# REWRITTEN 2026-10-29: an earlier draft expected e2e-mod to be refused at the
+# door (403 + X-Route-Denied). Measured through https://localhost:8488 that day,
+# e2e-mod's POSTs reached user-bff (403, no X-Route-Denied) while the same
+# session was refused at a ROLE_ADMIN row with X-Route-Denied — route-access
+# was enforcing; the persona simply holds the ROLE_USER floor. The mod rows now
+# sit in the handler outline.
 #
 # STATE THESE SCENARIOS CREATE, STATED PLAINLY. The "fresh identity" rows invite
 # a per-run `bdd-invite-<stamp>` handle as admin@hugmesh.net (the same
@@ -114,23 +121,10 @@ Feature: The realigned legacy user paths are served by user-bff through the fron
       | role           | provider | handle                        |
       | e2e-user       | google   | never-invited-bdd@example.test |
       | e2e-user       | discord  | never-invited-bdd              |
+      | e2e-mod        | google   | never-invited-bdd@example.test |
+      | e2e-mod        | discord  | never-invited-bdd              |
       | e2e-admin      | google   | never-invited-bdd@example.test |
       | e2e-superadmin | discord  | never-invited-bdd              |
-
-  # A persona holding no ROLE_USER (e2e-mod is ROLE_MOD only — specs/rbac-roles.ts)
-  # never reaches user-bff: the route-access row on /bff/register/** decides
-  # DENY and the gateway stamps the path it refused.
-  @issue:generator-366 @issue:user-bff-api-19
-  Scenario Outline: <role> is refused the <provider> registration path at the door @role:<role> @service:login @layer:gateway
-    Given I hold an API session as the persona for this scenario
-    When the API client registers the handle "<handle>" through "/bff/register/<provider>"
-    Then the response status is 403
-    And the response header "X-Route-Denied" contains "/bff/register/<provider>"
-
-    Examples:
-      | role    | provider | handle                         |
-      | e2e-mod | google   | never-invited-bdd@example.test |
-      | e2e-mod | discord  | never-invited-bdd              |
 
   @issue:generator-366 @issue:user-bff-api-19
   Scenario Outline: an anonymous caller is refused the <provider> registration path at the door @service:login @layer:gateway
@@ -214,8 +208,11 @@ Feature: The realigned legacy user paths are served by user-bff through the fron
       | discord  | bdd-complete-discord          |
 
   # ── hugmesh-user-bff-api#14: the residual resolver key-miss ─────────────────
-  # (Written 2026-09-23; #14 has been CLOSED since, and these rows have never
-  # run, so what follows is the 2026-09-23 reading, not a fresh measurement.)
+  # (Written 2026-09-23. #14 was FIXED since: hugmesh-user-bff-api PR #18, merged
+  # 2026-09-30, "resolveOwnAccount keys a bff_ session off its sub (409, not 401,
+  # for google:/discord:)". The rows below already assert that fixed behaviour, so
+  # they need no rewrite; they stay PENDING only for the missing fixture. What
+  # follows is the 2026-09-23 reading of the defect, kept for its history.)
   # CanonicalIdentityResolver.resolveOwnAccount keyed a bff_ session off
   # SUBJECT_CLAIMS, so a google:/discord: account with a BLANK persisted localpart
   # gets 401 "no registered account for this token's OWN identity" where a
@@ -247,7 +244,9 @@ Feature: The realigned legacy user paths are served by user-bff through the fron
   # persona-driven suite CAN and must assert is that neither is reachable from
   # the front door: /bff/internal/** carries an EXPLICIT deny row (20-schema
   # .sql:1017) and admin-bff permitAll()s the prefix app-side, so the gateway
-  # row is the only wall a plain member meets. The offline decision is in
+  # row is the only wall a plain member meets.
+# The e2e-mod row is refused for the same reason as e2e-user: the deny row is
+# keyed on ROLE_USER, which every bff_ session holds (the gateway's floor). The offline decision is in
   # mined-identity/internal-ingest-deny.feature; these are the live rows.
   # ADMIN/SUPERADMIN are deliberately absent: GatewayRouteAccessFilter forwards
   # both tiers on a bypass before decide() runs, so what they meet is admin-bff's

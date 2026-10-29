@@ -32,12 +32,25 @@
 # GET is therefore the honest live probe of #480; the curtailed leg stays
 # PENDING in blocked-signin-appeal.feature with its seeder gap named.
 #
-# THE ROLE MATRIX. /bff/me/** is a ROLE_USER row (20-schema.sql:629), so every
-# ROLE_USER holder reaches it; SUPERADMIN and ADMIN reach it on their gateway
-# bypasses; a ROLE_MOD-only persona is denied at the door with X-Route-Denied
-# (never reaching admin-bff); anonymous is refused by the floor. e2e-banned is
-# in the allowed set on purpose — seeded as a bare ROLE_USER, it is the
-# post-ban persona whose appeal history a person will want to read first.
+# THE ROLE MATRIX. /bff/me/** is a ROLE_USER row (20-schema.sql), and EVERY
+# signed-in bff_ session holds ROLE_USER at the gateway: hugmesh-gateway's
+# BffSessionAuthFilter adds a ROLE_USER floor to the authorities it builds from
+# the session ("always added, mirrors the JWT converter"). So every signed-in
+# persona reaches the surface — including e2e-mod, whose Casdoor roles are
+# ROLE_MOD only — and the only caller refused is anonymous (the authenticated()
+# floor, 401). e2e-banned is in the allowed set on purpose — seeded as a bare
+# ROLE_USER, it is the post-ban persona whose appeal history a person will want
+# to read first.
+#
+# REWRITTEN 2026-10-29: an earlier draft expected e2e-mod to be refused here
+# with 403 + X-Route-Denied, on the premise that a ROLE_MOD-only persona holds no
+# ROLE_USER. That premise was never true for a bff_ session (the floor predates
+# this file; it is in the gateway's 2026-08-14 history). Measured through
+# https://localhost:8488 on 2026-10-29: e2e-mod's session reports roles ['mod'],
+# GET /bff/me/appeal answers 200 [] with no X-Route-Denied, while the same
+# session IS refused at a ROLE_ADMIN row (/bff/admin/allowlist -> 403 +
+# X-Route-Denied), so route-access was enforcing. The mod rows now sit in the
+# admitted outline.
 @service:admin @layer:bff
 Feature: The ban-appeal surface is reachable behind /bff/me on both lanes
 
@@ -53,24 +66,14 @@ Feature: The ban-appeal surface is reachable behind /bff/me on both lanes
       | role           | env    |
       | e2e-user       | docker |
       | e2e-banned     | docker |
+      | e2e-mod        | docker |
       | e2e-admin      | docker |
       | e2e-superadmin | docker |
       | e2e-user       | kind   |
       | e2e-banned     | kind   |
+      | e2e-mod        | kind   |
       | e2e-admin      | kind   |
       | e2e-superadmin | kind   |
-
-  @issue:generator-480
-  Scenario Outline: <role> is refused /bff/me/appeal at the door on the <env> lane @role:<role> @env:<env> @service:admin @layer:gateway
-    Given I hold an API session as the persona for this scenario
-    When the API client GETs "/bff/me/appeal"
-    Then the response status is 403
-    And the response header "X-Route-Denied" contains "/bff/me/appeal"
-
-    Examples:
-      | role    | env    |
-      | e2e-mod | docker |
-      | e2e-mod | kind   |
 
   @issue:generator-480
   Scenario Outline: an anonymous caller is refused /bff/me/appeal on the <env> lane @env:<env> @service:admin @layer:gateway

@@ -616,12 +616,11 @@ Then('the response JSON field {string} is present', async ({ world }, field: str
   ).toBe(true);
 });
 
-Then('the response JSON field {string} is {string}',
-  async ({ world }, field: string, expected: string) => {
-    const got = fieldAt(responseJson(world), field);
-    expect(got.present, `${world.get<string>('responseLabel')} body has no '${field}' field`).toBe(true);
-    expect(String(got.value), `${world.get<string>('responseLabel')} body.${field}`).toBe(expected);
-  });
+// `Then the response JSON field {string} is {string}` is NOT defined here: main's
+// admin.steps.ts (domain-registry lane) defines the identical text over the same
+// world keys ('responseBody' / 'responseLabel'), and a second definition makes
+// bddgen fail with "Multiple definitions matched scenario step" for EVERY
+// feature that uses it. The features in this lane use that one.
 
 Then('the response body is a JSON array', async ({ world }) => {
   const json = responseJson(world);
@@ -641,20 +640,29 @@ Then('the response body is a JSON array', async ({ world }) => {
 // a Set-Cookie whose attributes do not match the mint (name, Path, host-only)
 // is a no-op for the browser and would still "contain Max-Age=0".
 
+/** What the jar is being read AFTER. A cookie assertion is legal straight after
+ *  'I hold an API session as the persona for this scenario' — before any request
+ *  step has set world['responseLabel'] — and world.get() throws on an unset key
+ *  (by design), so reading the label unguarded turned that perfectly ordered
+ *  step into "world['responseLabel'] was never set" on every live run. */
+function jarMoment(world: any): string {
+  return world.has('responseLabel') ? world.get<string>('responseLabel') : 'the API session sign-in';
+}
+
 async function cookieNames(world: any): Promise<string[]> {
   const state = await api(world).storageState();
   return state.cookies.map((c) => c.name);
 }
 
 Then('the API client holds a cookie named {string}', async ({ world }, name: string) => {
-  expect(await cookieNames(world), `cookie jar after ${world.get<string>('responseLabel')}`)
+  expect(await cookieNames(world), `cookie jar after ${jarMoment(world)}`)
     .toContain(name);
 });
 
 Then('the API client holds no cookie named {string}', async ({ world }, name: string) => {
   expect(
     await cookieNames(world),
-    `'${name}' is still in the jar after ${world.get<string>('responseLabel')}. A sign-out `
+    `'${name}' is still in the jar after ${jarMoment(world)}. A sign-out `
     + `that answers 204 but leaves the cookie alive is the exact no-op hugmesh-generator#549 `
     + `fixed — the next GET /bff/session re-hydrates the session as if nothing happened.`,
   ).not.toContain(name);
