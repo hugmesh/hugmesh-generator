@@ -284,9 +284,13 @@ step "Building $app_id (downloads the pinned PySide6 wheels, installs the app, r
     2>&1 | tee "$work/build.log"
 
 # ---- 4. the bundle -----------------------------------------------------------------------------
+# --runtime-repo, as in the release workflow: the bundle records where its runtime comes
+# from, so `flatpak install` on a machine without that runtime adds the remote and fetches
+# it instead of stopping at "requires the runtime ... which was not found".
+runtime_repo_url="https://dl.flathub.org/repo/flathub.flatpakrepo"
 step "Exporting $bundle_name (compresses about 650 MB: a few minutes on one CPU)"
 rm -f "$bundle" "$bundle.partial" "$bundle.sha256"
-flatpak build-bundle "$work/repo" "$bundle.partial" "$app_id"
+flatpak build-bundle --runtime-repo="$runtime_repo_url" "$work/repo" "$bundle.partial" "$app_id"
 mv -f "$bundle.partial" "$bundle"
 ( cd "$out_dir" && sha256sum "$bundle_name" | tee "$bundle_name.sha256" && sha256sum -c "$bundle_name.sha256" )
 
