@@ -120,7 +120,9 @@ def test_manifest_v2_carries_tor_only_when_true(tmp_path):
     host = HostInfo(os="linux", is_gentoo=True, has_docker=True, has_bash=True,
                     has_kvm=False, is_root=True, builder_image="hugmesh-builder")
     doms = WorklistDriver(str(tmp_path), wl, host=host).manifest_v2()["domains"]
-    assert list(doms[0]) == ["name", "title", "optional_services", "images"]
+    # #654: one row writer for both emitters, so v2 carries the v1 shim's key order
+    assert list(doms[0]) == ["name", "title", "images", "optional_services"]
+    assert doms == base.mesh_manifest()["domains"]
     assert doms[1]["tor"] is True
 
 

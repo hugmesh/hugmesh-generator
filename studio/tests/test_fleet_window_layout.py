@@ -291,6 +291,23 @@ def test_every_placeholder_is_whole_in_its_field(window):
     assert not cut, "; ".join(cut)
 
 
+def test_orange_pi_role_placeholders_are_whole_when_their_groups_show(window):
+    """The OPi5 / OPi4-LTS roles fields (2026-10-21) sit in groups that are hidden until
+    their platform is ticked, so the sweep above never measures them by default. Tick
+    both, then hold their hints to the same 8 px rule."""
+    win, p = window, window.page
+    p.orangepi5.setChecked(True)
+    p.orangepi4lts.setChecked(True)
+    _goto(win, fleet_mod.STEP_ROLES)
+    cut = []
+    for le in (p.orangepi5_roles, p.orangepi4lts_roles):
+        assert le.isVisibleTo(win), le.placeholderText()
+        need = le.fontMetrics().horizontalAdvance(le.placeholderText())
+        if need > le.width() - 8:
+            cut.append(f"{le.placeholderText()[:48]!r} needs {need}px, has {le.width() - 8}px")
+    assert not cut, "; ".join(cut)
+
+
 def test_the_review_refusal_wraps_instead_of_scrolling_sideways(window):
     win, p = window, window.page
     p.cluster_domain.setText("mesh.example")

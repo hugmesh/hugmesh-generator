@@ -10,8 +10,10 @@ mechanisms and every one of them expresses "use at most this much" differently:
   fleet build             the same flags (core/fleet.py) — the lane that caused the
                           2026-07-15 host freeze, and the only one that had NEITHER
   local compose stack     ``deploy.resources.limits`` in a compose override file
-  QEMU emulation          ``-smp`` / ``-m`` on the guest, ``--cpus`` on the harness
-  kind / k8s              ``docker update`` on the node container, since the cluster
+  mesh node (tray)        the same, in an overlay next to the staged node
+                          (core/mesh_node.py), with the WHOLE budget on its one service
+  QEMU emulation          NOT WIRED: ``-smp`` / ``-m`` on the guest, ``--cpus`` on the harness
+  kind / k8s              NOT WIRED: ``docker update`` on the node container, since the cluster
                           spec is a committed file that must stay machine-independent
   =====================  ==============================================================
 

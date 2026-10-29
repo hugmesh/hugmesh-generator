@@ -224,7 +224,11 @@ def test_tui_gate_bridges_a_tor_mesh_into_x86_and_rpi5_node_argv(tmp_path, monke
     j.feed("2")
     assert j.slug == "localcloud"
     text = "\n".join(j.lines())
-    assert "Tor onion: on" in text and "cannot carry Tor: jetson" in text
+    assert "Tor onion: on" in text
+    # the platforms that cannot carry Tor are listed (jetson, and the Orange Pi boards
+    # whose node roles refuse the tor slug), whatever their order.
+    cannot = text.split("cannot carry Tor: ", 1)[1].split(" — ", 1)[0].split(", ")
+    assert "jetson" in cannot and "x86" not in cannot and "rpi5" not in cannot
     j.feed("y")
     assert j.cfg.tor_onion_service is True
     wl = WorklistConfig(base=j.cfg, entries=[

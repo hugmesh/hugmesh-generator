@@ -315,8 +315,19 @@ SAMPLES = {
 # still part of the emission vocabulary — probe the non-default board axes the
 # baselines leave unset (frite/opi5/opz2 emit --board/--flavor unconditionally).
 STRUCTURAL = {
-    "rpi5": [{"board": "rpi4"}],
+    # ram_gb (--ram-gb) is the board-RAM axis of a Pi / Orange Pi cluster NODE role:
+    # it is emitted only for a node role with a stated RAM, so probe it on omnibus
+    # (where it is required) and on the Orange Pi 4 LTS's one node role.
+    "rpi5": [{"board": "rpi4"}, {"role": "omnibus", "ram_gb": "8"}],
     "jetson": [{"board": "orin-nano"}],
+    "orangepi5": [{"mode": "mesh", "role": "omnibus", "ram_gb": "8"}],
+    "orangepi4-lts": [{"mode": "mesh", "role": "frontend", "ram_gb": "4"}],
+}
+
+# The node baseline of each board whose cluster-choice flags exist for a NODE role only.
+NODE_BASELINES = {
+    "orangepi5": {"mode": "mesh", "role": "pki", "ram_gb": "8"},
+    "orangepi4-lts": {"mode": "mesh", "role": "frontend", "ram_gb": "4"},
 }
 
 missing = set(PLATFORM_FIELD_SUPPORT) - set(SAMPLES)
@@ -335,6 +346,10 @@ for platform in BUILDER_SCRIPTS:
             continue
         for ov in SAMPLES[field]:
             batteries.append({**base, **ov})
+            # The Orange Pi node boards emit the cluster choices for a NODE role only,
+            # so every sample is ALSO probed on that board's node baseline.
+            if platform in NODE_BASELINES:
+                batteries.append({**base, **NODE_BASELINES[platform], **ov})
     for kwargs in batteries:
         try:
             args = ImageConfig(**kwargs).to_cli_args()

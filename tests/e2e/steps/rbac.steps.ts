@@ -22,9 +22,10 @@
 // made. See the unit report.
 
 import { expect, request as playwrightRequest } from '@playwright/test';
-import type { APIRequestContext } from '@playwright/test';
+import type { APIRequestContext, APIResponse } from '@playwright/test';
 import { Given, When, Then, After, requireDimension, substep } from './world';
 import { persona, personaSource } from './dimensions';
+import { CliTranscript } from './evidence';
 import {
   SYSTEMS_SEED_USERS, GAMES_SEED_USERS, systemsUser, passwordFor,
   SUPERADMIN_GATEWAY, SUPERADMIN_ALLOW_ROUTES,
@@ -34,7 +35,7 @@ import {
   gatewayDecision, effectiveRoles, Gateway, GatewayDecision,
 } from '../specs/rbac-route-access';
 import {
-  onboard, registerOnly, getSession, personaPassword,
+  onboard, registerOnly, getSession, personaPassword, apiContext, SUPERADMIN_USERNAME,
 } from '../specs/helpers';
 import {
   PEER_BASE, LOCAL_MASTODON, federationSkipReason,
@@ -799,3 +800,434 @@ Given('the Phase 8-10 surface {string} has landed', async ({ $testInfo }, surfac
     + 'features/rbac/gateway-route-access.feature. Set SNAP_PHASE8_SURFACES=1 once the UI lands.',
   );
 });
+
+// ═════════════════════════════════════════════════════════════════════════════
+// 8. ISSUE-TRACED COVERAGE — the 2026-09-23 BDD round (features/rbac/*, @issue:)
+//
+// Every step below binds a scenario that names a GitHub issue. The world keys
+// are the ones the SHARED API vocabulary already pins, so these steps chain
+// with it instead of growing a second dialect:
+//   world['api']      the APIRequestContext a Given established — reuse
+//                     moderation-media's 'I hold an API session as the persona
+//                     for this scenario' / 'I hold an anonymous API client'
+//                     (both go through helpers.apiContext, which is the ONLY
+//                     kind-safe way to build one: a raw request.newContext dies on
+//                     `getaddrinfo hugmesh.net` for every @env:kind row).
+//   world['response'] / ['responseLabel'] / ['responseBody']
+//                     mined-identity's record() shape, so 'the response status
+//                     is {int}' and 'the response header {string} is {string}'
+//                     read what a POST made here wrote.
+//   world['cli.transcript']
+//                     common.steps.ts's pinned key for the last cli transcript.
+// ═════════════════════════════════════════════════════════════════════════════
+
+type WorldLike = { has(k: string): boolean; get<T>(k: string): T; set<T>(k: string, v: T): void };
+
+async function recordResponse(world: WorldLike, label: string, r: APIResponse): Promise<void> {
+  world.set('response', r);
+  world.set('responseLabel', label);
+  world.set('responseBody', await r.text().catch(() => ''));
+}
+
+function responseLabel(world: WorldLike): string {
+  const r = world.get<APIResponse>('response');
+  return `${world.get<string>('responseLabel')} -> ${r.status()} `
+    + `${JSON.stringify(world.get<string>('responseBody')).slice(0, 300)}`;
+}
+
+// ── generic HTTP verbs the shared vocabulary lacks (candidates for common.steps) ──
+
+/**
+ * A POST with a literal JSON body. The body is parsed HERE so a .feature that
+ * mistypes its JSON fails at the step, not as a 400 that reads like the BFF's
+ * verdict. The status is recorded, never judged: a refusal is the NEXT step's
+ * claim, which is what lets one scenario say "admitted" and its sibling "refused".
+ */
+When('the API client POSTs {string} with the JSON body {string}',
+  async ({ world }, path: string, json: string) => {
+    let data: unknown;
+    try {
+      data = JSON.parse(json);
+    } catch (e) {
+      throw new Error(`the JSON body written in the .feature is not JSON: ${json} (${(e as Error).message})`);
+    }
+    const api = world.get<APIRequestContext>('api');
+    await recordResponse(world, `POST ${path}`, await api.post(path, { data }));
+  });
+
+Then('the response body does not contain {string}', async ({ world }, needle: string) => {
+  const body = world.get<string>('responseBody');
+  expect(body.includes(needle), `${responseLabel(world)} must not contain ${JSON.stringify(needle)}`)
+    .toBe(false);
+});
+
+Then('the response status is a 2xx', async ({ world }) => {
+  const r = world.get<APIResponse>('response');
+  expect(r.status() >= 200 && r.status() < 300, responseLabel(world)).toBe(true);
+});
+
+// ── the host shell's launcher cards (hugmesh-host-shell HomeServicesComponent) ──
+//
+// The public `/home` page renders one card per catalog row as `data-testid="card-<id>"`
+// carrying `data-state`: `enabled` (an <a> to the route), `absent` (the optional
+// service is not installed), `role` (the session lacks the gating role) or
+// `registration` (the two-stage gate is incomplete). A greyed card is a
+// <span aria-disabled="true"> with `card-<id>-help` naming the reason. The shell
+// GREYS, it never hides — which is why "only for members" is a state assertion,
+// not a presence/absence one (specs/18-rbac-phase8-10-pending.spec.ts).
+
+const CARD_STATES = ['enabled', 'absent', 'role', 'registration'] as const;
+
+Then('the launcher card {string} is in state {string}', async ({ page }, card: string, state: string) => {
+  if (!(CARD_STATES as readonly string[]).includes(state)) {
+    throw new Error(
+      `'${state}' is not a launcher-card state. Legal states (hugmesh-host-shell `
+      + `home-services.service.ts resolve()): ${CARD_STATES.join(', ')}.`,
+    );
+  }
+  const el = page.getByTestId(card);
+  await expect(el, `launcher card '${card}' must render — the shell greys, it never hides`)
+    .toBeVisible();
+  await expect(el, `launcher card '${card}' data-state`).toHaveAttribute('data-state', state);
+  if (state === 'enabled') {
+    await expect(el, `an enabled card is a live link`).toHaveAttribute('href', /.+/);
+  } else {
+    await expect(el, `a greyed card is aria-disabled`).toHaveAttribute('aria-disabled', 'true');
+    await expect(page.getByTestId(`${card}-help`),
+      `a greyed card EXPLAINS itself (greyed-and-silent is a defect)`).not.toBeEmpty();
+  }
+});
+
+/**
+ * THE DECISION-NEUTRAL CONTRACT behind generator#299 / #295's "enabled card, dead
+ * link": a card the shell offers as a live link must be MOUNTABLE — its remote
+ * entry must be admitted at the gateway for this same session — and a card the
+ * gateway refuses must be greyed. Whichever side moves (the shell grows a role
+ * gate, or the seed widens the row), this stays green; only the mismatch fails.
+ *
+ * `page.request` shares the browser's cookie jar, so the probe is the SAME
+ * identity the card was rendered for. Admission means 200 + JSON: the SPA
+ * catch-all answers 200 text/html for an unrouted path (the F4 trap in every
+ * persona plan), and that is not a mounted remote.
+ */
+Then('the launcher card {string} agrees with the gateway verdict at {string}',
+  async ({ page, dimensions }, card: string, path: string) => {
+    const el = page.getByTestId(card);
+    await expect(el, `launcher card '${card}' must render`).toBeVisible();
+    const state = await el.getAttribute('data-state');
+    const r = await page.request.get(path, { headers: { accept: 'application/json' }, maxRedirects: 0 });
+    const ct = r.headers()['content-type'] ?? '';
+    const admitted = r.status() === 200 && /json/i.test(ct);
+    const who = dimensions.role ?? 'this persona';
+    const verdict = `${r.status()} ${ct || '(no content-type)'} x-route-denied=${r.headers()['x-route-denied'] ?? '<none>'}`;
+    if (state === 'enabled') {
+      expect(
+        admitted,
+        `${who}: '${card}' is offered as a LIVE LINK (data-state=enabled) but the gateway answers `
+        + `${verdict} at ${path} — an enabled card into a refused remote is the "enabled card, dead `
+        + `link" contract violation (generator#299 N7 / #295 step 14). Either the shell gates the `
+        + `card on the same role the route-access seed keys the row on, or the row admits the caller.`,
+      ).toBe(true);
+    } else {
+      expect(
+        admitted,
+        `${who}: '${card}' is greyed (data-state=${state}) yet the gateway ADMITS ${path} (${verdict}) `
+        + `— the card withholds a surface the caller may use.`,
+      ).toBe(false);
+    }
+  });
+
+// ── optional-service gates (the games entry-point, generator#522 / #326) ─────
+//
+// `games` is an OPTIONAL service and DEFAULT-OFF on every lane this repo brings
+// up (specs/cluster/optional-services.yaml), so a role assertion about the games
+// card runs on NO default lane — which is exactly generator#522's complaint about
+// spec 18. These two gates are exact COMPLEMENTS: whichever install-state a
+// stack has, one of the two scenario families runs, and the other SKIPS NAMING
+// what to bring up. Read anonymously off the same capability projection the
+// shell derives `absent` from, so the gate and the card cannot disagree.
+
+async function capabilityInstalled(
+  baseURL: string | undefined, slug: string,
+): Promise<{ installed: boolean; detail: string }> {
+  const api = await apiContext(baseURL);
+  try {
+    const r = await api.get('/api/federation/capabilities', { headers: { accept: 'application/json' } });
+    if (!r.ok()) return { installed: false, detail: `GET /api/federation/capabilities -> ${r.status()}` };
+    const rows = await r.json().catch(() => null);
+    const row = Array.isArray(rows) ? rows.find((c) => c && c.slug === slug) : undefined;
+    if (!row) return { installed: false, detail: `'${slug}' is absent from the capability projection` };
+    return { installed: row.installed === true, detail: `${slug}.installed=${row.installed}` };
+  } finally {
+    await api.dispose().catch(() => { /* already gone */ });
+  }
+}
+
+function bringUpHint(slug: string): string {
+  return slug === 'games'
+    ? 'compose: `make stack-up GAMES=1` then `HUGMESH_FEDERATION_ENABLE=games make stack-seed`'
+    : `bring the stack up with the '${slug}' optional service enabled (see specs/cluster/optional-services.yaml)`;
+}
+
+Given('the {string} optional service is installed on this stack',
+  async ({ baseURL, $testInfo }, slug: string) => {
+    const c = await capabilityInstalled(baseURL, slug);
+    $testInfo.annotations.push({ type: 'capability-probe', description: c.detail });
+    $testInfo.skip(
+      !c.installed,
+      `the '${slug}' optional service is NOT installed on this stack (${c.detail}). It is `
+      + `DEFAULT-OFF, so this row never executes on a default lane — ${bringUpHint(slug)} — `
+      + `and it runs as written. Its complement ("… is not installed …") covers this lane.`,
+    );
+  });
+
+Given('the {string} optional service is not installed on this stack',
+  async ({ baseURL, $testInfo }, slug: string) => {
+    const c = await capabilityInstalled(baseURL, slug);
+    $testInfo.annotations.push({ type: 'capability-probe', description: c.detail });
+    $testInfo.skip(
+      c.installed,
+      `the '${slug}' optional service IS installed on this stack (${c.detail}); the `
+      + `installed-state scenarios are the ones that apply here.`,
+    );
+  });
+
+// ── sign-out lifecycle (generator#549) ──────────────────────────────────────
+//
+// STATEFUL, never "the endpoint was called": the 2026-08-15 host-shell round
+// shipped a sign-out whose own broadcast re-hydrated a still-live cookie, and
+// generator#549 shipped a /bff/sessionOut that answered {"loggedOut":true}
+// having deleted nothing. Both passed a fetch-was-called test. So the
+// assertions are the post-logout STATE, read through the same cookie jar the
+// browser holds: the server answers 401 on /bff/session, and the jar carries no
+// bff_session at all.
+
+When('I sign out through the account menu', async ({ page }) => {
+  await page.getByTestId('profile-trigger').click();
+  await page.getByTestId('menu-logout').click();
+  // The shell navigates to /login only AFTER the sign-out fetch resolved
+  // (session.service.ts clear() awaits it — the 2026-08-15 fix), so reaching
+  // /login is the moment the server-side outcome is observable.
+  await page.waitForURL(/\/login(\/|$|\?)/, { timeout: 20_000 });
+});
+
+Then('my browser session answers status {int} at {string}',
+  async ({ page }, status: number, path: string) => {
+    await expect.poll(
+      async () => (await page.request.get(path, { headers: { accept: 'application/json' } })).status(),
+      {
+        message: `GET ${path} through the browser's own cookie jar must answer ${status}`,
+        timeout: 10_000,
+        intervals: [250, 500, 1_000],
+      },
+    ).toBe(status);
+  });
+
+// ── the moderator's guard rails (generator#294 NC4 / NC5) ───────────────────
+//
+// Both known gaps are WRITES on a shared mesh if the guard is missing: a
+// moderator banning an admin, or banning themselves by handle, lands a real
+// access_suspension. So the attempt step LIFTS any accepted ban at once (same
+// body, DELETE /bff/mod/ban — the console's own lift call) BEFORE the Then
+// judges it. The scenario still FAILS when the write landed — the lift is
+// hygiene, not forgiveness — and the failure message says it landed and was
+// lifted, so nobody inherits a suspension from a red run.
+
+const BAN_PROBE_REASON = 'bdd-rbac-probe';
+
+async function attemptBan(world: WorldLike, target: string, platform: string): Promise<void> {
+  const api = world.get<APIRequestContext>('api');
+  const body = { platform, target, reason: BAN_PROBE_REASON };
+  const r = await api.post('/bff/mod/ban', { data: body });
+  await recordResponse(world, `POST /bff/mod/ban {platform:${platform}, target:${target}}`, r);
+  if (r.status() >= 200 && r.status() < 300) {
+    const lift = await api.delete('/bff/mod/ban', { data: body });
+    world.set('banLift', `DELETE /bff/mod/ban -> ${lift.status()}`);
+  }
+}
+
+When('the moderator attempts to ban {string} on the {string} platform',
+  async ({ world }, target: string, platform: string) => {
+    await attemptBan(world, target, platform);
+  });
+
+When('the moderator attempts to ban their own session id on the {string} platform',
+  async ({ world }, platform: string) => {
+    const api = world.get<APIRequestContext>('api');
+    const me = await api.get('/bff/session', { headers: { accept: 'application/json' } });
+    expect(me.status(), 'GET /bff/session for the moderator').toBe(200);
+    const id = (await me.json()).id;
+    expect(typeof id === 'string' && id.length > 0, '/bff/session carries the session id string').toBe(true);
+    await attemptBan(world, id, platform);
+  });
+
+Then('the ban attempt was refused', async ({ world }) => {
+  const r = world.get<APIResponse>('response');
+  const landed = world.has('banLift')
+    ? ` — THE WRITE LANDED on the shared mesh and was lifted immediately (${world.get<string>('banLift')})`
+    : '';
+  expect(r.status(), `${responseLabel(world)}${landed}`).toBe(403);
+});
+
+// ── timed access-role suspensions (admin-bff-api#56 / #45) ──────────────────
+//
+// A timed suspension so a red run self-heals; an explicit lift so a green one
+// leaves nothing behind; and an After hook that lifts whatever a scenario failed
+// to. The admin context is e2e-admin's own /bff/login session, built kind-safe.
+
+interface PendingSuspension { role: string; user: string }
+
+Given('an admin has suspended the {string} access role of {string} for {int} seconds',
+  async ({ baseURL, world }, role: string, user: string, ttl: number) => {
+    const admin = trackContext(world, await apiContext(baseURL));
+    await loginApiAs(admin, persona('e2e-admin'));
+    const r = await admin.post(`/bff/admin/access-roles/${role}/${encodeURIComponent(user)}`, {
+      data: { ttlSeconds: ttl, reason: BAN_PROBE_REASON },
+    });
+    expect(
+      r.status() >= 200 && r.status() < 300,
+      `POST /bff/admin/access-roles/${role}/${user} (ttl ${ttl}s) -> ${r.status()} ${(await r.text()).slice(0, 200)}`,
+    ).toBe(true);
+    world.set('adminApi', admin);
+    world.set('suspension', { role, user } as PendingSuspension);
+  });
+
+When('the admin lifts the {string} access-role suspension of {string}',
+  async ({ world }, role: string, user: string) => {
+    const admin = world.get<APIRequestContext>('adminApi');
+    const r = await admin.delete(`/bff/admin/access-roles/${role}/${encodeURIComponent(user)}`);
+    expect(
+      r.status() >= 200 && r.status() < 300,
+      `DELETE /bff/admin/access-roles/${role}/${user} -> ${r.status()} ${(await r.text()).slice(0, 200)}`,
+    ).toBe(true);
+    world.set('suspension', undefined as unknown as PendingSuspension);
+  });
+
+After(async ({ world }) => {
+  // Hygiene for a scenario that suspended and then failed before its lift.
+  if (!world.has('suspension') || !world.has('adminApi')) return;
+  const s = world.get<PendingSuspension | undefined>('suspension');
+  if (!s) return;
+  const admin = world.get<APIRequestContext>('adminApi');
+  await admin.delete(`/bff/admin/access-roles/${s.role}/${encodeURIComponent(s.user)}`)
+    .catch(() => { /* the TTL self-heals; nothing more to do here */ });
+});
+
+// ── the gateway fast-path revocation list (admin-bff-api#45) ────────────────
+//
+// GET /api/gateway/revocations is the gateway's OWN controller (SUPERADMIN
+// only) and answers the snapshot set of live keys. The push leg is a logged
+// no-op until the service credential exists (decision 45 on generator#347), so
+// the scenario is gated on a runner knob that says "this mesh really pushes":
+// asserting the list on a mesh that cannot push would fail for the wrong reason
+// and read like the fast path is broken rather than unbuilt.
+
+Given('the gateway fast-path revocation broker is enabled on this run', async ({ $testInfo }) => {
+  $testInfo.skip(
+    process.env.SNAP_GATEWAY_REVOCATION !== '1',
+    'set SNAP_GATEWAY_REVOCATION=1 ONLY against a mesh whose admin-bff runs with '
+    + 'BROKER_GATEWAY_REVOCATION_ENABLED=true and a Casdoor client_credentials JWT for the '
+    + 'gateway revocation API (hugmesh/hugmesh-admin-bff-api#45, blocked on decision 45 of '
+    + 'hugmesh-generator#347). Until then every revokeCoarse/revokeSubject is a 401-swallowed '
+    + 'no-op and this scenario would fail for the wrong reason.',
+  );
+});
+
+async function revocationSnapshot(world: WorldLike, baseURL: string | undefined): Promise<string[]> {
+  if (!world.has('superadminApi')) {
+    const sa = trackContext(world, await apiContext(baseURL));
+    await loginApiAs(sa, SUPERADMIN_USERNAME);
+    world.set('superadminApi', sa);
+  }
+  const sa = world.get<APIRequestContext>('superadminApi');
+  const r = await sa.get('/api/gateway/revocations', { headers: { accept: 'application/json' } });
+  expect(r.status(), `GET /api/gateway/revocations as ${SUPERADMIN_USERNAME}`).toBe(200);
+  const body = await r.json();
+  expect(Array.isArray(body), 'the revocation snapshot is a JSON array of keys').toBe(true);
+  return body as string[];
+}
+
+Then('the gateway revocation list holds the key {string}', async ({ baseURL, world }, key: string) => {
+  // ≤15 s: a key POSTed to the PKI pod reaches the FE pod's snapshot on the
+  // Cassandra poll (app.revocation.refresh-interval-ms, 5 s) — #45, 2026-09-09.
+  await expect.poll(async () => (await revocationSnapshot(world, baseURL)).includes(key), {
+    message: `the gateway revocation snapshot must hold '${key}'`,
+    timeout: 15_000,
+    intervals: [1_000, 2_000, 5_000],
+  }).toBe(true);
+});
+
+Then('the gateway revocation list no longer holds the key {string}', async ({ baseURL, world }, key: string) => {
+  await expect.poll(async () => (await revocationSnapshot(world, baseURL)).includes(key), {
+    message: `the gateway revocation snapshot must have dropped '${key}'`,
+    timeout: 15_000,
+    intervals: [1_000, 2_000, 5_000],
+  }).toBe(false);
+});
+
+// ── cli: a NEGATIVE substring over the whole transcript (generator#505) ─────
+
+Then('the command output carries no line containing {string}', async ({ world }, needle: string) => {
+  const t = world.get<CliTranscript>('cli.transcript');
+  const hits = `${t.stdout}\n${t.stderr}`.split('\n').filter((l) => l.includes(needle));
+  expect(
+    hits,
+    `\`${t.command}\` output must carry no line containing ${JSON.stringify(needle)}`,
+  ).toEqual([]);
+});
+
+// ── the docstring twin of the POST step, for bodies that are not one token ───
+
+When('the API client POSTs {string} with this JSON body:', async ({ world }, path: string, body: string) => {
+  let data: unknown;
+  try {
+    data = JSON.parse(body);
+  } catch (e) {
+    throw new Error(`the JSON docstring under the step is not JSON (${(e as Error).message}):\n${body}`);
+  }
+  const api = world.get<APIRequestContext>('api');
+  await recordResponse(world, `POST ${path}`, await api.post(path, { data }));
+});
+
+Then('the response status is not a 2xx', async ({ world }) => {
+  const r = world.get<APIResponse>('response');
+  expect(r.status() >= 200 && r.status() < 300, responseLabel(world)).toBe(false);
+});
+
+// ── replaying a REMEMBERED cookie after sign-out (generator#549) ─────────────
+//
+// An expiring Set-Cookie empties the jar, so a post-logout 401 through the jar
+// proves only that the CLIENT dropped the cookie. The row on the server is the
+// thing #549 is about ("deleted no session row"), and the only way to observe
+// it is to keep the pre-logout token and present it again, bare, from a context
+// that holds nothing else. 401 on that replay is the proof; 200 is the defect.
+
+interface RememberedCookie { name: string; value: string }
+
+Given('I remember the browser cookie {string}', async ({ context, world }, name: string) => {
+  const c = (await context.cookies()).find((k) => k.name === name);
+  expect(c, `the browser holds a '${name}' cookie to remember`).toBeDefined();
+  world.set('rememberedCookie', { name, value: c!.value } as RememberedCookie);
+});
+
+Given('I remember the API client cookie {string}', async ({ world }, name: string) => {
+  const api = world.get<APIRequestContext>('api');
+  const c = (await api.storageState()).cookies.find((k) => k.name === name);
+  expect(c, `the API client holds a '${name}' cookie to remember`).toBeDefined();
+  world.set('rememberedCookie', { name, value: c!.value } as RememberedCookie);
+});
+
+Then('replaying the remembered cookie at {string} answers status {int}',
+  async ({ baseURL, world }, path: string, status: number) => {
+    const c = world.get<RememberedCookie>('rememberedCookie');
+    const bare = trackContext(world, await apiContext(baseURL));
+    const r = await bare.get(path, {
+      headers: { accept: 'application/json', cookie: `${c.name}=${c.value}` },
+    });
+    expect(
+      r.status(),
+      `GET ${path} presenting the pre-sign-out '${c.name}' token from a context holding nothing else `
+      + `-> ${r.status()}. A 200 here means the server never deleted the session row: the browser `
+      + `dropped its cookie and the session lived on.`,
+    ).toBe(status);
+  });

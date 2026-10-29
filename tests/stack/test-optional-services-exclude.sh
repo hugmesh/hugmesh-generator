@@ -1957,5 +1957,35 @@ CRCASES
   ENV="test"
 fi
 
+# ── ai.<domain> on the be-gateway Ingress follows the edge-AI trio ───────────
+# The host is shared by edge-ai, edge-ai-analysis and edge-ai-tts (tts schedules
+# without edge-ai), so the gate drops it only when all three are deselected, and
+# never touches the other extraHosts.
+echo "== ai.<domain> be-gateway Ingress host vs the edge-AI selection =="
+ai_host_in() { grep -aE '^[[:space:]]*-[[:space:]]+"?ai\.' "$1" >/dev/null; }
+if ! ai_host_in "${SRC}/apps/20-gateway-be.yaml"; then
+  bad "ai-host: specs/cluster/apps/20-gateway-be.yaml carries no ai.<domain> extraHost — the cases below would be vacuous"
+else
+  while IFS='|' read -r _lbl _sel _want; do
+    [ -n "${_lbl}" ] || continue
+    seed_tree "ai-host-${_lbl}"
+    ENV="test"
+    OPTIONAL_SERVICES="${_sel}"
+    gate_optional_services
+    if ai_host_in "${TREE}/apps/20-gateway-be.yaml"; then _got=kept; else _got=dropped; fi
+    [ "${_got}" = "${_want}" ] \
+      && ok "ai-host [${_lbl}]: ai.<domain> ${_want} on the be-gateway Ingress (selection: ${_sel})" \
+      || bad "ai-host [${_lbl}]: ai.<domain> ${_got}, expected ${_want} (selection: ${_sel})"
+    grep -aE '^[[:space:]]*-[[:space:]]+"?scale\.' "${TREE}/apps/20-gateway-be.yaml" >/dev/null \
+      && ok "ai-host [${_lbl}]: scale.<domain> untouched" \
+      || bad "ai-host [${_lbl}]: the ai. prune also removed scale.<domain>"
+  done <<'AICASES'
+none|akkoma tuwunel games|dropped
+edge-ai|akkoma tuwunel games edge-ai|kept
+tts-only|akkoma tuwunel games edge-ai-tts|kept
+analysis|akkoma tuwunel games edge-ai edge-ai-analysis|kept
+AICASES
+fi
+
 echo "== RESULT: ${P} passed, ${F} failed =="
 [ "${F}" -eq 0 ]

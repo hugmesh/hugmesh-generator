@@ -26,6 +26,12 @@ rpi5	pki	prod	rpi4	-	-
 rpi5	backend	prod	rpi4	-	-
 rpi5	frontend	prod	rpi4	-	-
 rpi5	desktop	prod	rpi4	-	-
+# omnibus (one node running every cluster role) on the Raspberry Pi 5 only. Needs
+# --ram-gb 16 or more (the Pi 4 tops out at 8 GB and is refused it);
+# tests/build-matrix/check.sh probes these rows with MATRIX_OMNIBUS_RAM_GB=16 on
+# every channel (matrix.tsv has no RAM column).
+rpi5	omnibus	test	-	-	-
+rpi5	omnibus	prod	-	-	-
 # --board rpi3 (Phase 8, Pi 3 support): SAME "rpi5" platform id / builder
 # script (build-rpi5-stage4.sh --board rpi3) — DESKTOP-ONLY (1GB RAM is not
 # enough headroom for the k8s cluster-node stack), so only the desktop role is
@@ -146,6 +152,25 @@ orangepi5	desktop	prod	orange-pi-5	both	-
 # header comment.
 orangepi5	desktop	test	orange-pi-5-plus	standalone	-
 orangepi5	desktop	prod	orange-pi-5-plus	standalone	-
+# Orange Pi 5 / 5 Plus CLUSTER NODE roles — EXPERIMENTAL (hardware validation
+# pending). Installer flavor only (a node needs a persistent root); omnibus rows are
+# probed with --ram-gb 16 (MATRIX_OMNIBUS_RAM_GB).
+orangepi5	pki	test	orange-pi-5-plus	installer	-
+orangepi5	pki	test	orange-pi-5	installer	-
+orangepi5	pki	prod	orange-pi-5-plus	installer	-
+orangepi5	pki	prod	orange-pi-5	installer	-
+orangepi5	backend	test	orange-pi-5-plus	installer	-
+orangepi5	backend	test	orange-pi-5	installer	-
+orangepi5	backend	prod	orange-pi-5-plus	installer	-
+orangepi5	backend	prod	orange-pi-5	installer	-
+orangepi5	frontend	test	orange-pi-5-plus	installer	-
+orangepi5	frontend	test	orange-pi-5	installer	-
+orangepi5	frontend	prod	orange-pi-5-plus	installer	-
+orangepi5	frontend	prod	orange-pi-5	installer	-
+orangepi5	omnibus	test	orange-pi-5-plus	installer	-
+orangepi5	omnibus	test	orange-pi-5	installer	-
+orangepi5	omnibus	prod	orange-pi-5-plus	installer	-
+orangepi5	omnibus	prod	orange-pi-5	installer	-
 orangepizero2	appliance	test	-	live	-
 orangepizero2	appliance	test	-	installer	-
 orangepizero2	appliance	test	-	both	-
@@ -209,3 +234,7 @@ orangepi4-lts	desktop	prod	-	installer	-
 orangepi4-lts	desktop	prod	-	both	-
 orangepi4-lts	desktop	test	-	standalone	-
 orangepi4-lts	desktop	prod	-	standalone	-
+# Orange Pi 4 LTS frontend CLUSTER NODE — EXPERIMENTAL; its only node role (4 GB RAM,
+# 16 GB eMMC: no pki/backend/omnibus). Installer flavor only.
+orangepi4-lts	frontend	test	-	installer	-
+orangepi4-lts	frontend	prod	-	installer	-

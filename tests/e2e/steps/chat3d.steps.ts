@@ -55,7 +55,7 @@ const CHAT3D_ON = { enabled: true, style: 'noir', maxParticipants: 8, allowMedia
 
 const CHAT3D_STATE_GENERATIONS = ['net.hugmesh.chat3d', 'systems.hugmesh.chat3d'] as const;
 const CHAT3D_AVATAR_GENERATIONS = [
-  'net.hugmesh.chat3d.avatar', 'systems.hugmesh.chat3d.avatar', 'systems.snapdragon.chat3d.avatar',
+  'net.hugmesh.chat3d.avatar', 'systems.hugmesh.chat3d.avatar',
 ] as const;
 
 /** Budget for the Godot wasm to boot inside the iframe and deliver the first

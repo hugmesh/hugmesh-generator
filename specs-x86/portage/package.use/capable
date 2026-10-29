@@ -17,7 +17,9 @@ dev-qt/qtspeech qml
 # qtquick3d (via qtmultimedia[qml]) USE-matches qtbase[opengl=,vulkan=]; qtbase has
 # both on, so qtquick3d needs both to match (and agree with qtwebengine[opengl]).
 dev-qt/qtquick3d opengl vulkan
-dev-qt/qtdeclarative opengl vulkan
+# wayland: qtdeclarative >= 6.11.2-r1 depends on qtbase[wayland=], and qtbase
+# below has wayland on (see the same line in package.use/desktop).
+dev-qt/qtdeclarative opengl vulkan wayland
 # neochat (Matrix client) needs QML bindings on these KDE-frameworks/Qt deps.
 # Drop neochat's offline KDE handbook (-handbook): it pulls kdoctools -> karchive
 # which forces a conflicting qtbase/qttools icu/opengl USE combo that autounmask

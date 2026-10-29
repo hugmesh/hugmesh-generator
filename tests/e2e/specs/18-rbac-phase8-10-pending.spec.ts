@@ -168,12 +168,16 @@ test.describe('PENDING (Phase 8/10): svc-* service identities', () => {
 //     EXPLAINED (aria-disabled + a helptext) before skipping. A shell that hid an
 //     absent card, or greyed only one of the pair, fails on the default lane.
 //
-// NOT ASSERTED, deliberately: e2e-adminonly. The CARD gate is isGames() alone,
-// while hugmesh-host-shell's gamesGuard admits isGames() || isAdmin() ||
-// isSuperadmin() — so a bare admin is offered a greyed card for a route their
-// own guard would let them open. That is a real cross-surface inconsistency in
-// the shell, not something this spec should silently pick a side on; pinning it
-// belongs in a host-shell issue, not in an assertion invented here.
+// NOT ASSERTED, deliberately: e2e-adminonly. Until 2026-10-28 the CARD gate was
+// isGames() alone while hugmesh-host-shell's gamesGuard admitted isGames() ||
+// isAdmin() || isSuperadmin() — a bare admin was offered a greyed card for a
+// route their own guard would open. The games-screens round ALIGNED the card
+// with the guard in the shell (hasRole('games') := isGames() || isAdmin() ||
+// isSuperadmin(), so a bare admin now sees an ENABLED Games card and reaches the
+// member catalog; the Games Admin card stays 'role' for them). This spec keeps
+// e2e-adminonly out of its table because the shell change lands in a sibling
+// lane; once it is deployed the expected entry card for e2e-adminonly is
+// 'enabled', and games-console.feature already drives that path.
 // ────────────────────────────────────────────────────────────────────────────
 
 /** The card states HomeServicesService can resolve (service-card.model.ts). */

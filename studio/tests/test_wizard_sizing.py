@@ -264,3 +264,35 @@ def test_medium_size_is_above_every_page_minimum(wiz):
             pass
         m = page.minimumSizeHint()
         assert m.width() <= medium.width(), type(page).__name__
+
+
+def test_the_brand_pages_on_a_mesh_fit_the_smallest_window_and_do_not_jitter(wiz):
+    """#654, D8 and D9: the Branding page (drop-down and design step), the Network page
+    (read-only brand rows), the Domains page (its summaries) and the Domain services
+    page (four tabs) in MESH mode ask for no more width than the 800x800 screen's window
+    (736 px) and the window keeps its one size across them. The pages are measured with
+    the design OPEN and a brand row present: the tallest, widest state each has."""
+    from hugmesh_studio.core.config import Domain
+    wiz.cfg.mode = "mesh"
+    wiz.cfg.domains = [Domain(name="shop.example", title="Shop"),
+                       Domain(name="blog.example", title="Blog", idp="own")]
+    wiz.show()
+    smallest = medium_size(QtCore.QRect(0, 0, 800, 800))
+    assert smallest.width() == 736
+    sizes = {}
+    for cls in (wizard_mod.BrandingPage, wizard_mod.NetworkPage, wizard_mod.DomainsPage,
+                wizard_mod.DomainServicesPage):
+        pid = next(p for p in wiz.pageIds() if isinstance(wiz.page(p), cls))
+        page = wiz.page(pid)
+        wiz.setStartId(pid)
+        wiz.restart()
+        QtWidgets.QApplication.processEvents()
+        assert page.minimumSizeHint().width() <= smallest.width(), (
+            f"{cls.__name__} asks for {page.minimumSizeHint().width()}px of "
+            f"{smallest.width()}")
+        sizes.setdefault((wiz.width(), wiz.height()), []).append(cls.__name__)
+    wiz.setStartId(-1)
+    assert len(sizes) == 1, f"window size jitters across the brand pages: {sizes}"
+    branding = wiz.page(next(p for p in wiz.pageIds()
+                             if isinstance(wiz.page(p), wizard_mod.BrandingPage)))
+    assert branding.superbrand is not None and not branding.superbrand.isHidden()

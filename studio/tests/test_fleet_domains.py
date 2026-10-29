@@ -555,7 +555,8 @@ def test_back_from_the_domains_step_records_a_typed_row(page):
     _to_domains(page)
     page.domains_table._add("acme.example", "Acme")
     page.back_btn.click()
-    assert page.stack.currentIndex() == fleet_mod.STEP_SHARED
+    # The step before Domains is the superbrand's design (#654), not Shared options.
+    assert page.stack.currentIndex() == fleet_mod.STEP_BRAND
     assert page.fleet_domains.names() == ["mesh.example", "acme.example"]
     page.next_btn.click()
     assert page.stack.currentIndex() == fleet_mod.STEP_DOMAINS

@@ -45,7 +45,10 @@
 #       only: no proxy_hide_header / add_header of Cache-Control|Pragma|Expires
 #       (the ONLY hide the door makes is the deliberate per-host HSTS strip —
 #       see the comment block in default.conf), no `expires` directive, no
-#       proxy_cache* / proxy_store. Non-vacuity: discovery must find
+#       proxy_cache* / proxy_store. One pinned exception: the location that
+#       answers a domain's own hug-theme.css FROM DISK may add `Cache-Control
+#       "no-store"` (conf_minus_look_location; controls 5k-5n keep it that
+#       narrow). Non-vacuity: discovery must find
 #       default.conf, and every conf must really be a proxy front (>=1
 #       non-comment proxy_pass) — a gate greping the wrong file passes nothing.
 #   (2) COMPOSE CACHE-KNOB TRIPWIRE: the services that OWN the posture — every
@@ -170,8 +173,46 @@ echo "== stale-after-logout header posture: front door + compose + source pins =
 # and deliberately does NOT match the door's one legitimate hide
 # (proxy_hide_header Strict-Transport-Security).
 conf_cache_violations() { # <conf> -> one matched line per violation
-  grep -viE '^[[:space:]]*#' "$1" \
+  conf_minus_look_location "$1" \
+    | grep -viE '^[[:space:]]*#' \
     | grep -iE '(proxy_hide_header|add_header)[[:space:]]+"?(cache-control|pragma|expires)([^a-z-]|$)|^[[:space:]]*expires([[:space:]]|;)|proxy_cache|proxy_store'
+}
+# The ONE deliberate exception (studio core/look_serving.py, theme survey item B):
+# the location that answers hug-theme.css / snap-theme.css FROM DISK for a domain
+# with its own look may say `add_header Cache-Control "no-store" always;`, the
+# posture login-ui's own nginx gives that file. It is not a proxied response, so
+# it cannot weaken the gateway's trio. The block is dropped from the scan ONLY
+# when it never proxies (no proxy_pass) and that exact line is its only cache
+# directive; any other shape is printed back and the scan judges it as usual.
+conf_minus_look_location() { # <conf> -> the conf, minus a conforming theme location
+  python3 - "$1" <<'PY'
+import re, sys
+lines = open(sys.argv[1], encoding="utf-8").read().splitlines()
+head = re.compile(r'^\s*location\s+~\s+.*-theme\\\.css\$"?\s*\{\s*$')
+cache = re.compile(r'(proxy_hide_header|add_header)\s+"?(cache-control|pragma|expires)([^a-z-]|$)'
+                   r'|^\s*expires(\s|;)|proxy_cache|proxy_store', re.I)
+allowed = re.compile(r'^\s*add_header\s+Cache-Control\s+"no-store"\s+always;\s*$')
+out, i = [], 0
+while i < len(lines):
+    if head.match(lines[i]):
+        depth, j = 0, i
+        while j < len(lines):
+            depth += lines[j].count("{") - lines[j].count("}")
+            if depth == 0:
+                break
+            j += 1
+        block = [l for l in lines[i:j + 1] if not l.lstrip().startswith("#")]
+        hits = [l for l in block if cache.search(l)]
+        conforming = (not any(re.match(r"\s*proxy_pass\s", l) for l in block)
+                      and len(hits) == 1 and allowed.match(hits[0]))
+        if not conforming:
+            out.extend(lines[i:j + 1])
+        i = j + 1
+        continue
+    out.append(lines[i])
+    i += 1
+print("\n".join(out))
+PY
 }
 conf_is_proxy_front() { # <conf> — non-vacuity: the file really proxies
   grep -viE '^[[:space:]]*#' "$1" | grep -E '^[[:space:]]*proxy_pass[[:space:]]' >/dev/null
@@ -389,6 +430,48 @@ for ctl in \
       && ok "(${tag}) staged conf still a proxy front — the mutation is isolated" \
       || { bad "(${tag}) staged conf lost its proxy_pass — control did not isolate the cache directive"
            conf_diag "${mconf}"; }
+  fi
+done
+
+# 5k-5n) the look location's no-store exception is exactly as wide as it says:
+# it does not leak to the server or to `/`, it is lost the moment the block
+# proxies, and it covers no second cache directive.
+LOOK_ANCHOR='        try_files /${hug_look_file}-theme.css @gateway;'
+grep -qF "${LOOK_ANCHOR}" "${TLS_FRONT_DIR}/default.conf" \
+  && ok "(5k-n) the look location's anchor line is in default.conf (controls are not vacuous)" \
+  || bad "(5k-n) LOOK ANCHOR MISSING from default.conf: '${LOOK_ANCHOR}' — the look-location controls below would stage nothing"
+stage_look_with() { # <name> <directive> -> staged conf path (directive inside the look location)
+  local d="${WORK}/conf-$1"; mkdir -p "${d}"
+  cp "${TLS_FRONT_DIR}/default.conf" "${d}/default.conf"
+  python3 - "${d}/default.conf" "${LOOK_ANCHOR}" "$2" <<'PY'
+import sys
+p, anchor, directive = sys.argv[1], sys.argv[2], sys.argv[3]
+s = open(p, encoding="utf-8").read()
+if anchor + "\n" not in s:
+    raise SystemExit("look mutator: anchor line not found: %r" % anchor)
+open(p, "w", encoding="utf-8").write(
+    s.replace(anchor + "\n", anchor + "\n        " + directive + "\n", 1))
+PY
+  local rc=$?
+  echo "${d}/default.conf"
+  return "${rc}"
+}
+mconf="$(stage_conf_with 5k 'add_header Cache-Control "no-store" always;')"; MRC=$?
+if mut_ok "${MRC}" 5k; then
+  [ -n "$(conf_cache_violations "${mconf}")" ] \
+    && ok "(5k) the no-store exception does not leak to server level: a server-wide no-store FAILS it" \
+    || bad "(5k) EXCEPTION LEAKS: a server-level add_header Cache-Control no-store passed"
+fi
+for ctl in \
+  '5l|proxy_pass http://$fe_gateway:8080$request_uri;|the look location proxying (its no-store would then cover gateway bytes)' \
+  '5m|add_header Cache-Control "public, max-age=300";|a second, weak Cache-Control in the look location' \
+  '5n|expires 5m;|an expires directive in the look location' ; do
+  IFS='|' read -r tag directive what <<< "${ctl}"
+  mconf="$(stage_look_with "${tag}" "${directive}")"; MRC=$?
+  if mut_ok "${MRC}" "${tag}"; then
+    [ -n "$(conf_cache_violations "${mconf}")" ] \
+      && ok "(${tag}) look-location exception bites: ${what} FAILS it" \
+      || bad "(${tag}) LOOK EXCEPTION TOO WIDE: it passed ${what}"
   fi
 done
 

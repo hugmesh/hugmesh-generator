@@ -23,7 +23,14 @@ WHAT "THE APPS OF A DOMAIN" MEANS IN THIS CODE, and where it comes from:
   first-party ``context: ${STACK_SRC:-…}/hugmesh-<name>`` there is a PLATFORM app:
   none of them carries a ``profiles:`` key, so compose builds and starts every one
   regardless of which domains exist, and the gateways serve every domain from the
-  same images. Those rows are therefore listed under EVERY domain.
+  same images. Those rows are therefore listed under EVERY domain — EXCEPT the ones
+  that belong to one per-domain service (:func:`service_owners`: the federation rows
+  of owncast, tube and the two character apps, and the Matrix/Mastodon front ends of
+  :data:`UI_OWNERS`). A domain that did not choose that service does not have that
+  app, so it gets no row and no folder; one note names what was left out (operator
+  ask 2026-10-21: "any services a domain shouldn't have doesn't have those folders").
+* The per-domain COPIES (a folder per domain, a clone per app, named for the
+  domain) are :mod:`core.domain_workspaces`, which reads this map.
 * A SELECTED optional service adds what its mechanism names
   (``core.local_services.LOCAL_SERVICES`` — the same catalogue the Services step
   reads):
@@ -52,7 +59,7 @@ import re
 from dataclasses import dataclass
 
 from . import local_services
-from .config import DOMAIN_IDP_OWN
+from .config import has_external_signin, runs_own_casdoor
 from .domain_services import normalise_slugs
 from .e2e_catalogue import STACK_SRC_DIR
 # THE one parse of a build context (see expected_build_contexts) — reused, not
@@ -63,8 +70,9 @@ __all__ = [
     "StackService", "AppFolder", "DomainFolders", "CodeFolderMap",
     "KIND_REPO", "KIND_PATH", "KIND_IMAGE", "REASON_PLATFORM",
     "CLONE_MODE_NOTICE", "EXISTING_MODE_NOTICE", "NOT_DOWNLOADED_REASON",
-    "NO_SOURCE_DIR_REASON",
+    "NO_SOURCE_DIR_REASON", "UI_OWNERS",
     "compose_files", "stack_services", "source_root", "code_folder_map",
+    "service_owners",
 ]
 
 #: Where the local stack's compose files live, relative to the generator checkout.
@@ -76,6 +84,18 @@ KIND_PATH = "path"      # a folder elsewhere: inside this repo (tor), or GAMES_S
 KIND_IMAGE = "image"    # a stock image — nothing to open
 
 REASON_PLATFORM = "platform"
+
+#: Always-built front ends that serve ONE per-domain service although compose builds
+#: them with no profile (so the federation naming rule cannot see them): the Matrix
+#: and Mastodon web apps are the faces of the ``tuwunel`` slug's SOCIAL tier
+#: (compose.social-profile.yaml: tuwunel + the full Mastodon set), and the Mastodon
+#: one also speaks to ``akkoma``, which serves the same Mastodon client API. A domain
+#: that chose none of a row's owners does not have that app, so it gets no folder.
+#: A test pins every name here against the real compose files.
+UI_OWNERS: dict[str, tuple[str, ...]] = {
+    "hugmesh-matrix-ui": ("tuwunel",),
+    "hugmesh-mastodon-ui": ("tuwunel", "akkoma"),
+}
 
 #: The clone-mode sentence. VERIFIED against scripts/clone-all-repos.sh (read
 #: 2026-10-07): ``checkout_is_disposable`` counts ``rev-list origin/<ref>..HEAD`` —
@@ -392,6 +412,30 @@ def _federation_services(services, module: str) -> list[StackService]:
     return out
 
 
+def service_owners(services) -> dict[str, tuple[str, ...]]:
+    """``compose service name -> the per-domain slugs that own it`` for the
+    always-built (platform) services that belong to ONE per-domain choice: the
+    federation rows named after a per-domain slug's module (owncast, tube, the two
+    character apps) and the front ends in :data:`UI_OWNERS`. A service with no entry
+    here belongs to every domain. Only per-DOMAIN slugs count: the mesh-plane ones
+    (wiki, tor, ...) are the whole mesh's, never one domain's."""
+    owners: dict[str, list[str]] = {}
+    platform = [s for s in services if not s.profiles]
+    for slug in local_services.domain_local_slugs():
+        svc_def = local_services.by_slug(slug)
+        if svc_def is None or not svc_def.is_federation():
+            continue
+        for svc in _federation_services(platform, svc_def.module):
+            owners.setdefault(svc.name, [])
+            if slug not in owners[svc.name]:
+                owners[svc.name].append(slug)
+    for name, slugs in UI_OWNERS.items():
+        if any(s.name == name for s in platform):
+            row = owners.setdefault(name, [])
+            row.extend(x for x in slugs if x not in row)
+    return {k: tuple(v) for k, v in owners.items()}
+
+
 def code_folder_map(generator_dir: str, source_mode: str, source_dir: str,
                     domains, environ=None) -> CodeFolderMap:
     """The whole map for ``domains`` (Domain rows, or saved-record dicts with the
@@ -415,6 +459,7 @@ def code_folder_map(generator_dir: str, source_mode: str, source_dir: str,
 
     services = stack_services(generator_dir)
     platform = [s for s in services if not s.profiles]
+    owners = service_owners(services)
 
     def folder_rows(picked: list[tuple[StackService, str]]):
         """``[(service, reason), ...]`` -> rows keyed by folder, plus image notes."""
@@ -447,9 +492,22 @@ def code_folder_map(generator_dir: str, source_mode: str, source_dir: str,
         dname = (_field(dom, "name", "") or "").strip()
         if not dname:
             continue
-        picked: list[tuple[StackService, str]] = [(s, REASON_PLATFORM) for s in platform]
+        chosen = normalise_slugs(_field(dom, "optional_services", []) or [])
+        # A platform app that belongs to ONE per-domain service is this domain's only
+        # when the domain chose that service: compose still builds it for the whole
+        # mesh, but a domain that did not pick owncast has no owncast app, so it gets
+        # no owncast folder (and no copy of one, core/domain_workspaces.py).
+        picked: list[tuple[StackService, str]] = []
+        not_chosen: dict[str, list[str]] = {}
+        for s in platform:
+            own = owners.get(s.name, ())
+            if not own or any(o in chosen for o in own):
+                picked.append((s, REASON_PLATFORM))
+                picked.extend((s, f"selected: {o}") for o in own if o in chosen)
+            elif s.context:                    # a stock backing DB has no folder anyway
+                not_chosen.setdefault(" or ".join(own), []).append(s.name)
         notes: list[str] = []
-        for slug in normalise_slugs(_field(dom, "optional_services", []) or []):
+        for slug in chosen:
             svc_def = local_services.by_slug(slug)
             reason = f"selected: {slug}"
             if svc_def is None:
@@ -493,9 +551,18 @@ def code_folder_map(generator_dir: str, source_mode: str, source_dir: str,
             slug = reason[len("selected: "):]
             notes.append(f"{slug}: runs stock images only ({', '.join(names)}) — no "
                          "source folder")
-        if (_field(dom, "idp", "") or "") == DOMAIN_IDP_OWN:
+        if runs_own_casdoor(dom):
             notes.append("Own sign-in: a Casdoor of its own (stock image) — no "
                          "source folder")
+        elif has_external_signin(dom):
+            notes.append("Own sign-in: an outside sign-in service this domain trusts "
+                         "— nothing of it runs here, no source folder")
+        if not_chosen:
+            parts = [f"{what} ({', '.join(sorted(n[len('hugmesh-'):] if n.startswith('hugmesh-') else n for n in names))})"
+                     for what, names in sorted(not_chosen.items())]
+            notes.append("Not chosen for this domain, so no folder: " + "; ".join(parts)
+                         + ". The mesh still builds these apps for the domains that "
+                         "chose them.")
         if platform_images:
             shown = ", ".join(sorted(platform_images)[:6])
             more = len(platform_images) - min(6, len(platform_images))

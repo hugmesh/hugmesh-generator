@@ -1,0 +1,20 @@
+# Build dependencies for the Linux PyInstaller tarball (the `linux` job in
+# .github/workflows/studio-release.yml). Installed with
+#   pip install --only-binary=:all: -r linux-build-requirements.txt
+#
+# The SAME versions as the hash-locked Windows file (wix/windows-build-requirements.txt),
+# minus the Windows-only packages (pefile, pywin32-ctypes) and Pillow (only the Windows
+# .ico needs it). Exact versions, wheels only. NOT hash-locked yet: lock_windows_build.py
+# only knows win_amd64 wheels, and a Linux lock has to be generated against PyPI's
+# manylinux wheel list. Until it is, the build's SBOM (published with the release) and
+# `pip freeze` in the job log record exactly what was installed.
+altgraph==0.17.5
+packaging==26.3
+pyinstaller==6.22.3
+pyinstaller-hooks-contrib==2026.8
+pyside6==6.11.2
+pyside6-addons==6.11.2
+pyside6-essentials==6.11.2
+setuptools==84.0.0
+shiboken6==6.11.2
+tzdata==2026.4

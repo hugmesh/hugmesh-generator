@@ -67,7 +67,7 @@
       "status": "supported",
       "reason": "",
       "role_allow": null,
-      "notes": "desktop client + cluster node (pki/be/fe) + plain generic server"
+      "notes": "desktop client + cluster node (pki/be/fe; omnibus on a 16 GB Pi 5 only) + plain generic server"
     },
     {
       "id": "rpi4",
@@ -79,7 +79,7 @@
       "status": "supported",
       "reason": "",
       "role_allow": null,
-      "notes": "desktop client + cluster node (pki/be/fe) + plain generic server"
+      "notes": "desktop client + cluster node (pki/be/fe; omnibus on a 16 GB Pi 5 only) + plain generic server"
     },
     {
       "id": "rpi3",
@@ -189,9 +189,9 @@
       "soc": "Rockchip RK3588 (4x Cortex-A76 + 4x Cortex-A55)",
       "builder": {"platform": "orangepi5", "board": "orange-pi-5-plus"},
       "status": "experimental",
-      "reason": "hardware validation pending (specs-orangepi5/README.md) — fail-loud preflight; single client-desktop role: the orangepi5 builder has no cluster-node role axis (extending it is a builder change, not a selection)",
+      "reason": "hardware validation pending (specs-orangepi5/README.md) — fail-loud preflight; the light desktop plus the pki/backend/frontend/omnibus cluster node roles (EXPERIMENTAL; nodes are installer-only; omnibus needs 16 GB+ RAM, backend 8 GB+)",
       "role_allow": null,
-      "notes": "single 'orangepi5' role (FDE local desktop; board + flavor axes)"
+      "notes": "the 'orangepi5' light desktop (board + flavor axes) + cluster node pki/backend/frontend/omnibus (installer; RAM 4/8/16/32 GB; omnibus 16 GB+, backend 8 GB+)"
     },
     {
       "id": "orange-pi-5",
@@ -201,9 +201,9 @@
       "soc": "Rockchip RK3588S (4x Cortex-A76 + 4x Cortex-A55)",
       "builder": {"platform": "orangepi5", "board": "orange-pi-5"},
       "status": "experimental",
-      "reason": "hardware validation pending (specs-orangepi5/README.md) — fail-loud preflight; single client-desktop role: the orangepi5 builder has no cluster-node role axis (extending it is a builder change, not a selection)",
+      "reason": "hardware validation pending (specs-orangepi5/README.md) — fail-loud preflight; the light desktop plus the pki/backend/frontend/omnibus cluster node roles (EXPERIMENTAL; nodes are installer-only; omnibus needs 16 GB+ RAM, backend 8 GB+)",
       "role_allow": null,
-      "notes": "single 'orangepi5' role (FDE local desktop; board + flavor axes)"
+      "notes": "the 'orangepi5' light desktop (board + flavor axes) + cluster node pki/backend/frontend/omnibus (installer; RAM 4/8/16/32 GB; omnibus 16 GB+, backend 8 GB+)"
     },
     {
       "id": "orange-pi-zero2",
@@ -265,7 +265,7 @@
       "status": "experimental",
       "reason": "hardware validation pending (specs-orangepi4-lts/README.md) — fail-loud preflight; LIGHT DESKTOP (not an appliance: the mainline rk3399-orangepi DTB it boots has an enabled Mali-T860 GPU, enabled HDMI and both VOPs); no board axis (single-board platform — mainline ships one Orange Pi RK3399 DTB/defconfig for the whole 4/4B/4 LTS family); onboard GbE works via the SoC GMAC, and the boot chain is blob-free (mainline U-Boot TPL + mainline TF-A BL31)",
       "role_allow": null,
-      "notes": "single 'orangepi4-lts' light-desktop role (flavor axis only)"
+      "notes": "the 'orangepi4-lts' light desktop (flavor axis) + the frontend cluster node role (installer; EXPERIMENTAL). 4 GB RAM / 16 GB eMMC: no pki, backend or omnibus"
     },
     {
       "id": "rpi400",

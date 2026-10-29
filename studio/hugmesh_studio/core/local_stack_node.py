@@ -26,7 +26,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 
 from . import devops_tools, e2e_catalogue, own_casdoor, proc_group, proc_text
-from . import resource_limits, stack_limits
+from . import brand_look, look_serving, resource_limits, stack_limits
 from .domain_services import TOR_SLUG_RE as _TOR_SLUG_RE_SHARED
 from .local_services import (KIND_ADDONS_ENV, KIND_ADDONS_NONE, federation_env,
                              kind_addon_default_selection, kind_addon_env,
@@ -214,7 +214,10 @@ class LocalStackNode:
                  services=None,
                  own_idp_domains: tuple[str, ...] = (),
                  kind_addons=None,
-                 tor_domains=()):
+                 tor_domains=(),
+                 external_idp_domains=(),
+                 superbrand_look=None,
+                 look_brands=None):
         self.generator_dir = os.path.abspath(generator_dir)
         self.compose_file = os.path.join(self.generator_dir, _COMPOSE_FILE)
         self.env = env
@@ -339,6 +342,12 @@ class LocalStackNode:
         # ports 8001+), flips OWN_CASDOOR=1 (the Makefile's `own-casdoor`
         # profile) and exports the multi-issuer APP_TENANCY_* registry.
         self.own_idp_domains = tuple(own_idp_domains or ())
+        # Domains that sign in through their OWN external provider (2026-10-21,
+        # config.has_external_signin): ``((name, issuer, brand id), ...)``. No Casdoor
+        # and no overlay for them: each is one more issuer=brand pair (and Host=brand)
+        # in the same APP_TENANCY_* registry the own Casdoors use. Empty (the default,
+        # every caller before) threads nothing new.
+        self.external_idp_domains = tuple(tuple(e) for e in (external_idp_domains or ()))
         # The domains with their OWN Tor front door (#582, decision 68 = A):
         # ``((name, slug, tenant), ...)`` from core.domain_services.tor_domain_entries.
         # Passed to `make stack-up` as TOR_ONION_DOMAINS="<slug>=<tenant> ..." ONLY on
@@ -346,6 +355,24 @@ class LocalStackNode:
         # each in the gateway's host map (hugmesh-gateway#38). Empty (the default, and
         # every caller from before this existed) passes nothing new.
         self.tor_domains = tuple(tuple(e) for e in (tor_domains or ()))
+        # A domain's own look on the HTTPS front door (theme survey item B,
+        # core/look_serving.py): the superbrand's recorded look and the added domains
+        # (``look_serving.ServedBrand``, record order). At bring-up they become
+        # tests/stack/.looks/ — per-domain stylesheets, one by-host/<name>/ folder per
+        # domain with its own look, and the extra `make view` rows; an EMPTY list
+        # (a mesh the Studio configured with no added domain) removes an old folder.
+        # Written by start() only (see _write_looks).
+        # None (the default: the stack tray, the pod views and every caller that knows
+        # nothing about domains) leaves tests/stack/.looks/ exactly as it is, so a
+        # tray Start/Stop keeps serving the looks the last Studio start wrote.
+        self.superbrand_look = dict(superbrand_look or {})
+        self.look_brands = None if look_brands is None else tuple(look_brands)
+        #: Why the looks could not be written at the last bring-up ("" when they were).
+        #: Every `make` this node runs afterwards prints it as a "[looks] ..." line at
+        #: the top of the run log (and of the returned message); the bring-up itself
+        #: goes on (best-effort, like .theme.css), and the domains then show the mesh's
+        #: own look.
+        self.looks_error = ""
 
     @property
     def web_url(self) -> str:
@@ -947,9 +974,11 @@ class LocalStackNode:
         # the wildcard -f empty and the stack comes up single-Casdoor, honest
         # in `docker compose ps` rather than half-wired.
         env["OWN_CASDOOR"] = "1" if self.own_idp_domains else ""
-        if self.own_idp_domains:
+        if self.own_idp_domains or self.external_idp_domains:
             env.update(own_casdoor.tenancy_env(
-                self.own_idp_domains, self._central_issuer()))
+                self.own_idp_domains, self._central_issuer(),
+                external=self.external_idp_domains))
+        if self.own_idp_domains:
             try:
                 if write_overlays:
                     path = own_casdoor.overlay_path(self.generator_dir)
@@ -1004,13 +1033,20 @@ class LocalStackNode:
         replays, so streaming them cannot double anything."""
         env = self._build_env(extra_env)
         argv = ["make", target, *[str(a) for a in (args or ())]]
+        # A domain look the Studio refused to write (core/look_serving.py) is said
+        # here, first, in the log the operator watches: the folder was cleared, so the
+        # domains show the mesh's own look although their Look tabs hold their own.
+        looks_note = f"[looks] {self.looks_error}" if self.looks_error else ""
+        if looks_note and on_line is not None:
+            on_line(looks_note)
         if on_line is None and cancel is None:
             try:
                 r = subprocess.run(argv, cwd=self.generator_dir, env=env,
                                    capture_output=True, text=True, timeout=timeout)
-                return (r.returncode == 0), (r.stderr or r.stdout).strip()
+                out = (r.stderr or r.stdout).strip()
+                return (r.returncode == 0), (f"{looks_note}\n{out}" if looks_note else out)
             except (OSError, subprocess.SubprocessError) as e:
-                return False, str(e)
+                return False, (f"{looks_note}\n{e}" if looks_note else str(e))
         try:
             proc = subprocess.Popen(
                 argv, cwd=self.generator_dir, env=env,
@@ -1025,6 +1061,8 @@ class LocalStackNode:
                 on_line(why)
             return False, why
         tail: collections.deque[str] = collections.deque(maxlen=400)
+        if looks_note:
+            tail.append(looks_note)
         deadline = time.monotonic() + timeout
         cancelled = timed_out = False
 
@@ -1079,6 +1117,40 @@ class LocalStackNode:
         return any(not self._image_present(f"{_COMPOSE_PROJECT}-{s}")
                    for s in PRIVATE_ARTIFACT_SERVICES)
 
+    def _write_looks(self) -> None:
+        """A DOMAIN'S OWN LOOK (core/look_serving.py): write tests/stack/.looks/ for
+        THIS bring-up, best-effort like .theme.css (a failure never blocks the start;
+        it is kept in ``looks_error`` and :meth:`_make` prints it at the top of the
+        run log). The Makefile adds the mount overlay while .looks/by-host exists, so
+        a mesh configured with no added domain clears the folder and comes up exactly
+        as before.
+
+        Called by :meth:`start` only, never from :meth:`_build_env`: every other verb
+        (stop, seed, e2e, clean) runs with whatever config its page happened to hold,
+        and the e2e page's is the empty default, so writing there would delete the
+        looks the last start wrote. And only a node that was TOLD the domains
+        (``look_brands`` not None) touches the folder: "knows nothing about domains"
+        (the tray's bare node) is not "configured zero domains"."""
+        if self.look_brands is None:
+            return
+        self.looks_error = ""
+        try:
+            look_serving.write(self.generator_dir, self.superbrand_look, self.look_brands)
+        except brand_look.LookError as exc:
+            # write() has cleared the folder: no look from an earlier start is
+            # served under this record
+            self.looks_error = (f"domain looks not served: {str(exc).rstrip('.')}. "
+                                "Every domain shows the mesh's own look on this start.")
+        except OSError as exc:
+            # a half-written folder could serve an earlier start's look under this
+            # record: clear it too (best effort), so the sentence below stays true
+            try:
+                look_serving.clear(self.generator_dir)
+            except OSError:
+                pass
+            self.looks_error = (f"domain looks not written: {str(exc).rstrip('.')}. "
+                                "Every domain shows the mesh's own look on this start.")
+
     def start(self, on_line=None, cancel=None) -> tuple[bool, str]:
         # Fail-fast for EVERY caller — the tray's "start" invokes start() directly
         # (not via LocalMeshBootstrap.up()), and without this gate a cold box gets
@@ -1090,6 +1162,7 @@ class LocalStackNode:
         # stack-clone + build + up -d. COLD (service images absent) compiles ~24
         # images and needs the generous ceiling — the flat 1800 s here used to kill
         # every healthy first bring-up at minute 30 and report it FAILED.
+        self._write_looks()
         cold = self.cold_build_expected()
         if cold and on_line is not None:
             on_line("[stack-up] COLD BUILD: service images are absent, so this first "
@@ -1610,11 +1683,24 @@ class LocalStackNode:
         binary that creates it, and an unestablished reason must never be reported as
         a running cluster (the same tri-state rule the e2e gate follows: unknown is
         rendered as unknown, never as a blocker)."""
+        return self.devops_running_state() is True
+
+    def devops_running_state(self) -> bool | None:
+        """The same question as :meth:`devops_running`, as a TRI-STATE for a caller
+        that RECORDS the answer rather than gating on it (``mesh-save``): True the
+        cluster is listed, False it is not (or no ``kind`` binary resolves — a
+        cluster this lane created cannot exist without the binary that creates it),
+        **None** the probe itself failed (non-zero exit, a timeout, a binary that
+        will not run), so nothing was established either way. A saved mesh must
+        never file "the DevOps lane was not running" on a probe that did not
+        answer (saved-meshes fix round, 2026-10-21)."""
         kind = devops_tools.which("kind", self.generator_dir)
         if not kind:
             return False
         rc, out = self._probe([kind, "get", "clusters"])
-        return rc == 0 and _kind_cluster_name() in out.split()
+        if rc != 0:
+            return None
+        return _kind_cluster_name() in out.split()
 
     def devops_down(self, on_line=None, cancel=None) -> tuple[bool, str]:
         """`make kind-down` — delete the local Kubernetes cluster. Destructive for

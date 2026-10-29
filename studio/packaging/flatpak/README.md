@@ -6,7 +6,7 @@ builds it on a machine with **no sudo, no apt and no `flatpak-builder` package**
 | File | What it is |
 |---|---|
 | `org.hugmesh.ImageStudio.yml` | The manifest `flatpak-builder` builds. Its source is the whole of `studio/`, so it carries a skip list: without one a stale `build/lib` in a used checkout ships inside the Flatpak (measured). |
-| `python-deps.json` | PySide6 6.8.3 and `tzdata` as pinned wheels (a sha256 each, x86_64 and aarch64). Generated, then committed. The manifest's first module: without it nothing builds. |
+| `python-deps.json` | PySide6 6.11.2 and `tzdata` as pinned wheels (a sha256 each, x86_64 and aarch64). Generated, then committed. The manifest's first module: without it nothing builds. |
 | `org.hugmesh.ImageStudio.desktop`, `.metainfo.xml` | The launcher and the AppStream data. |
 | `../build-flatpak-local.sh` | Builds, exports, installs and smoke-tests the Flatpak locally. |
 | `.gitignore` | Keeps the output of a by-hand build in this directory out of git. |
@@ -206,6 +206,18 @@ names it.
 
 ## What the packaged app can and cannot do
 
+Measured again on 2026-10-29 on the first `org.kde.Platform//6.11` build (flatpak
+1.18.4, this script, Builder and runtimes already in the private directory): exit 0 in
+238 s, all three smoke tests passing with `qt-ok binding=PySide6 qt=6.11.2
+platform=offscreen`, a 172,794,824-byte bundle; installed from that bundle into an
+empty directory with no remotes (43 s, see "Where the runtime comes from"), `--help`
+and `--print-specs` answered, and the real `StudioShell` window built and drew on the
+offscreen platform (736x736: title, the welcome page's heading, the wizard buttons and
+the dock with its tabs). The welcome page's body painted blank in that grab, and so did
+the 6.8 build's from 2026-10-22 taken the same way, so that is how the page grabs
+offscreen here and not something the runtime move changed. The 2026-09-30 measurements
+below are of the 6.8 build and were not repeated.
+
 Measured on the installed 1.0.0 bundle on 2026-09-30, on a host that has Docker.
 
 It works: the app starts; `--print-specs` prints its JSON; PySide6 6.8.3 loads and
@@ -252,11 +264,19 @@ work="$(mktemp -d)" && cd "$work"
 python3 -m venv venv && venv/bin/pip install 'requirements-parser<1.0.0,>=0.11.0' packaging
 generator="$FLATPAK_USER_DIR/app/org.flatpak.Builder/x86_64/stable/active/files/bin/flatpak-pip-generator"
 FLATPAK_PIP_GENERATOR_ALLOW_RESTRICTED_MODULES=1 venv/bin/python "$generator" \
-    --runtime=org.kde.Sdk//6.8 \
+    --runtime=org.kde.Sdk//6.11 \
     --prefer-wheels=PySide6,PySide6-Addons,PySide6-Essentials,shiboken6 \
-    --output python-deps 'PySide6==6.8.3' tzdata
+    --output python-deps 'PySide6==6.11.2' tzdata
 cp python-deps.json /path/to/hugmesh-generator/studio/packaging/flatpak/
 ```
+
+The PySide6 version to name is the runtime's own Qt, read from the installed runtime
+and not from memory: `ls "$FLATPAK_USER_DIR"/runtime/org.kde.Platform/x86_64/<branch>/active/files/lib/x86_64-linux-gnu/libQt6Core.so.6.*`
+(6.11 carries `libQt6Core.so.6.11.2`, read 2026-10-29). PyPI must have that exact
+release for the SDK's Python (`flatpak run --command=python3 org.kde.Sdk//<branch> --version`;
+6.11's is 3.13, and the 6.11.2 wheels are `cp310-abi3`, `manylinux_2_34` against the
+runtime's glibc 2.42). If the newest runtime's Qt has no PySide6 release yet, stay on the
+newest branch that does and say so in the manifest.
 
 Set `TMPDIR` to somewhere with a few hundred MB free first: the generator downloads the
 wheels to compute their hashes. Then run `build-flatpak-local.sh` again and read the
@@ -264,12 +284,48 @@ smoke tests.
 
 ## Runtime version
 
-The manifest builds against `org.kde.Platform//6.8`. Flathub flags that branch
-end-of-life (checked 2026-09-30: it still installs; `6.10` and `6.11` are current).
+The manifest builds against `org.kde.Platform//6.11`: the newest KDE branch Flathub
+offers that it does not flag end-of-life. Read it, do not guess it:
+
+```bash
+export FLATPAK_USER_DIR=~/.hugmesh-wt-local/flatpak-studio    # the private directory
+flatpak remote-ls --user flathub --columns=ref | grep -E '^runtime/org\.kde\.(Platform|Sdk)/x86_64/'
+flatpak remote-info --user flathub org.kde.Platform//6.11 | grep -i end-of-life   # nothing = current
+```
+
+On 2026-10-29 that listed `6.10` and `6.11` (no `6.12`), with `6.8` and `6.9` answering
+"End-of-life: We strongly recommend moving to the latest stable version". The bundle
+published as `studio-v0.3.0-beta.1` was built on `6.8` before this move and still needs
+that branch (`docs/STUDIO-INSTALLERS.md` has the one-line install for it).
+
 The release workflow installs the same branch by name, so moving the manifest alone
 would make the job stop at a missing SDK. The test
 `test_runtime_branch_matches_what_the_release_workflow_installs` holds the two together:
-change the manifest, the workflow's install line and `python-deps.json` in one commit.
+change the manifest, the workflow's install line and `python-deps.json` in one commit
+(the recipe above), and the PySide6 pin with them
+(`test_pyside6_is_pinned_to_the_runtimes_qt_minor_release`).
+
+## Where the runtime comes from when a machine has none
+
+`flatpak build-bundle` is run with `--runtime-repo=https://dl.flathub.org/repo/flathub.flatpakrepo`
+in both the workflow and the script, which writes a `RuntimeRepo` key into the bundle.
+Without it the published beta.1 bundle could not be installed on a host with no Flatpak
+remotes at all: `flatpak install --user ./hugmesh-studio-0.3.0-beta.1-x86_64.flatpak`
+stopped with "requires the runtime org.kde.Platform/x86_64/6.8 which was not found"
+(2026-10-29). With the key, `flatpak install` asks to add that remote to the
+installation the bundle is going into and pulls the runtime before the app. Measured
+the same day with flatpak 1.18.4 and the bundle this script built: into an empty
+private directory with no remotes, `flatpak install --user --noninteractive <bundle>`
+added `flathub`, installed `org.kde.Platform//6.11` (with its locale, the Adwaita style
+and the GL extensions) and the app in 43 s; `--help` and `--print-specs` then ran. The
+key is consulted on every install of the bundle, not only when the runtime is missing:
+with the runtime installed and `flathub` deleted, a non-interactive install added the
+remote again, and an interactive one that answered **n** failed with `Remote "flathub"
+not found`. The key can be read back with libflatpak
+(`Flatpak.BundleRef.new(Gio.File.new_for_path(bundle)).get_runtime_repo_url()`); the
+beta.1 bundle answers `None`. `test_release_bundle_names_where_its_runtime_comes_from`
+pins the workflow line and the scripted run pins the script's. What that means on a
+governed HugMesh desktop is in `docs/STUDIO-INSTALLERS.md`.
 
 ## Not verified
 

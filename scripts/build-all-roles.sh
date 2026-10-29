@@ -58,12 +58,16 @@
 # The Orange Pi 5 / Orange Pi 5 Plus (Rockchip RK3588/RK3588S) light-desktop
 # client image is OPT-IN too — EXPERIMENTAL: hardware validation pending
 # (specs-orangepi5/README.md). Knobs mirror the FRITE family exactly (board +
-# flavor, no role axis — this is a ONE-role client device, like Frite):
+# flavor; its desktop has no role axis — ORANGEPI5_ROLES below adds the node roles):
 #   ORANGEPI5=1      ./scripts/build-all-roles.sh  # ALSO build it (orange-pi-5-plus, both flavors)
 #   ORANGEPI5_BOARD=orange-pi-5 ORANGEPI5=1 ./scripts/build-all-roles.sh   # the smaller-I/O sibling
 #   ORANGEPI5_ONLY=1 ./scripts/build-all-roles.sh  # ONLY it (skip Pi + x86 + Frite + Jetson)
 #   ORANGEPI5_FLAVOR=live ORANGEPI5=1 ./scripts/build-all-roles.sh          # live image only
 # (build-orangepi5-stage4.sh — see specs-orangepi5/README.md.)
+# ORANGEPI5_ROLES (default "desktop") also builds the Orange Pi 5 / 5 Plus as a
+# cluster NODE — EXPERIMENTAL, installer flavor only; omnibus needs RAM_GB (16+):
+#   ORANGEPI5=1 ORANGEPI5_ROLES="pki backend frontend" ./scripts/build-all-roles.sh
+#   ORANGEPI5=1 ORANGEPI5_ROLES=omnibus RAM_GB=16 ./scripts/build-all-roles.sh
 #
 # The Orange Pi Zero 2 (Allwinner H616) HEADLESS appliance image is OPT-IN too —
 # EXPERIMENTAL: hardware validation pending (specs-orangepi-zero2/README.md).
@@ -107,6 +111,17 @@
 #   ORANGEPI4LTS=1      ./scripts/build-all-roles.sh  # ALSO build it (both flavors)
 #   ORANGEPI4LTS_ONLY=1 ./scripts/build-all-roles.sh  # ONLY it (skip everything else)
 #   ORANGEPI4LTS_FLAVOR=live ORANGEPI4LTS=1 ./scripts/build-all-roles.sh   # live image only
+# ORANGEPI4LTS_ROLES (default "desktop") may also name `frontend` — the one node role
+# the 4 GB / 16 GB-eMMC Orange Pi 4 LTS builds (EXPERIMENTAL, installer only):
+#   ORANGEPI4LTS=1 ORANGEPI4LTS_ROLES=frontend ./scripts/build-all-roles.sh
+#
+# RAM_GB=N is the GB of RAM on the boards being built for; it is passed as --ram-gb to
+# every Raspberry Pi and Orange Pi NODE role. REQUIRED when a role list holds omnibus
+# (one node running every cluster role, 16 GB minimum; backend 8, pki/frontend 4),
+# e.g. a 16 GB Pi 5 (a Pi 4 is never an omnibus):
+#   RPI_ROLES=omnibus RAM_GB=16 ./scripts/build-all-roles.sh
+# (The build-orangepi3-lts-stage4.sh note below belongs to the Orange Pi 3 LTS block
+# above.)
 # (build-orangepi3-lts-stage4.sh — see specs-orangepi3-lts/README.md. Headless
 # by SCOPE decision (H6 display support exists in mainline but is partial and
 # the DTB is the PLAIN OPi3's — mainline has no -lts variant); onboard GbE is
@@ -307,6 +322,7 @@ elif [ "${ORANGEPI5:-0}" = "1" ]; then
 fi
 ORANGEPI5_BOARD_SEL="${ORANGEPI5_BOARD:-orange-pi-5-plus}"
 ORANGEPI5_FLAVOR_SEL="${ORANGEPI5_FLAVOR:-both}"
+read -r -a ORANGEPI5_BUILD_ROLES <<< "${ORANGEPI5_ROLES:-desktop}"
 
 # Orange Pi Zero 2 (Allwinner H616) headless appliance is OPT-IN (EXPERIMENTAL
 # — hardware validation pending). ORANGEPIZERO2_ONLY=1 builds ONLY it (skip
@@ -364,8 +380,8 @@ ORANGEPI3LTS_FLAVOR_SEL="${ORANGEPI3LTS_FLAVOR:-both}"
 # hardware validation pending). ORANGEPI4LTS_ONLY=1 builds ONLY it (skip
 # everything else) — same shape as ORANGEPI3LTS_ONLY above. No board axis (one
 # mainline DTB/defconfig for the whole RK3399 Orange Pi family). UNLIKE every
-# other Orange Pi platform here this one IS a desktop client, but it still has
-# no role axis: one role, and no headless variant to gate.
+# other Orange Pi platform here this one IS a desktop client; its node axis is
+# ORANGEPI4LTS_ROLES (frontend only), and there is no headless variant to gate.
 BUILD_ORANGEPI4LTS_IMG=false
 if [ "${ORANGEPI4LTS_ONLY:-0}" = "1" ]; then
     BUILD_ORANGEPI4LTS_IMG=true
@@ -374,6 +390,12 @@ elif [ "${ORANGEPI4LTS:-0}" = "1" ]; then
     BUILD_ORANGEPI4LTS_IMG=true
 fi
 ORANGEPI4LTS_FLAVOR_SEL="${ORANGEPI4LTS_FLAVOR:-both}"
+read -r -a ORANGEPI4LTS_BUILD_ROLES <<< "${ORANGEPI4LTS_ROLES:-desktop}"
+# --ram-gb for the Pi / Orange Pi NODE roles (REQUIRED by omnibus; see the header).
+RAM_ARGS=()
+[ -n "${RAM_GB:-}" ] && RAM_ARGS=(--ram-gb "${RAM_GB}")
+# _is_node_role <role> — a cluster node role (any spelling) per scripts/_roles-lib.sh.
+_is_node_role() { hugmesh_role_is_node_role "$(hugmesh_role_canonicalize "$1" 2>/dev/null || echo "$1")"; }
 
 # ── WITH_TOR=1: resolve the per-builder Tor channel ONCE, fail closed before any build ──
 WITH_TOR="${WITH_TOR:-0}"
@@ -442,12 +464,12 @@ echo "==> RPi5 roles:  ${RPI_ROLES[*]:-(none)}  (board=${RPI_BOARD_SEL})"
 echo "==> x86 roles:   ${X86_BUILD_ROLES[*]:-(none)}"
 echo "==> Frite:       $([ "${BUILD_FRITE_IMG}" = true ] && echo "${FRITE_BOARD_SEL} (flavor=${FRITE_FLAVOR_SEL}, desktop=${FRITE_DESKTOP_SEL})" || echo '(off — set FRITE=1)')"
 echo "==> Jetson:      $([ "${BUILD_JETSON_IMG}" = true ] && echo "${JETSON_BOARD_SEL} roles: ${JETSON_BUILD_ROLES[*]} (kernel=${JETSON_KFLAVOR_SEL}; EXPERIMENTAL)" || echo '(off — set JETSON=1)')"
-echo "==> Orange Pi 5: $([ "${BUILD_ORANGEPI5_IMG}" = true ] && echo "${ORANGEPI5_BOARD_SEL} (flavor=${ORANGEPI5_FLAVOR_SEL}; EXPERIMENTAL)" || echo '(off — set ORANGEPI5=1)')"
+echo "==> Orange Pi 5: $([ "${BUILD_ORANGEPI5_IMG}" = true ] && echo "${ORANGEPI5_BOARD_SEL} (roles=${ORANGEPI5_BUILD_ROLES[*]}; desktop flavor=${ORANGEPI5_FLAVOR_SEL}; EXPERIMENTAL)" || echo '(off — set ORANGEPI5=1)')"
 echo "==> OPi Zero 2:  $([ "${BUILD_ORANGEPIZERO2_IMG}" = true ] && echo "(flavor=${ORANGEPIZERO2_FLAVOR_SEL}; EXPERIMENTAL, headless)" || echo '(off — set ORANGEPIZERO2=1)')"
 echo "==> OPi Zero 2W: $([ "${BUILD_ORANGEPIZERO2W_IMG}" = true ] && echo "(flavor=${ORANGEPIZERO2W_FLAVOR_SEL}; EXPERIMENTAL, headless)" || echo '(off — set ORANGEPIZERO2W=1)')"
 echo "==> OPi Zero 3: $([ "${BUILD_ORANGEPIZERO3_IMG}" = true ] && echo "(flavor=${ORANGEPIZERO3_FLAVOR_SEL}; EXPERIMENTAL, headless)" || echo '(off — set ORANGEPIZERO3=1)')"
 echo "==> OPi 3 LTS:  $([ "${BUILD_ORANGEPI3LTS_IMG}" = true ] && echo "(flavor=${ORANGEPI3LTS_FLAVOR_SEL}; EXPERIMENTAL, headless)" || echo '(off — set ORANGEPI3LTS=1)')"
-echo "==> OPi 4 LTS:  $([ "${BUILD_ORANGEPI4LTS_IMG}" = true ] && echo "(flavor=${ORANGEPI4LTS_FLAVOR_SEL}; EXPERIMENTAL, light desktop)" || echo '(off — set ORANGEPI4LTS=1)')"
+echo "==> OPi 4 LTS:  $([ "${BUILD_ORANGEPI4LTS_IMG}" = true ] && echo "(roles=${ORANGEPI4LTS_BUILD_ROLES[*]}; desktop flavor=${ORANGEPI4LTS_FLAVOR_SEL}; EXPERIMENTAL)" || echo '(off — set ORANGEPI4LTS=1)')"
 if [ "${WITH_TOR}" = "1" ]; then
     echo "==> Tor onion:   ON — x86 node roles: --with-tor; rpi5 node roles: --optional-services \"${RPI_TOR_SERVICES}\"; client roles and frite/jetson/orangepi: none (no Tor on those builders)"
 else
@@ -480,7 +502,9 @@ for role in "${RPI_ROLES[@]}"; do
     echo "############################################################"
     TOR_ARGS=()
     while IFS= read -r -d '' _t; do TOR_ARGS+=("${_t}"); done < <(_tor_args_for rpi5 "${role}")
-    "${BUILD_RPI}" --role "${role}" --board "${RPI_BOARD_SEL}" "$@" "${TOR_ARGS[@]+"${TOR_ARGS[@]}"}" \
+    _ram=()
+    if _is_node_role "${role}"; then _ram=("${RAM_ARGS[@]+"${RAM_ARGS[@]}"}"); fi
+    "${BUILD_RPI}" --role "${role}" --board "${RPI_BOARD_SEL}" "${_ram[@]+"${_ram[@]}"}" "$@" "${TOR_ARGS[@]+"${TOR_ARGS[@]}"}" \
         || { echo "!! RPi role '${role}' (board=${RPI_BOARD_SEL}) build FAILED — continuing with the remaining roles" >&2; BUILDS_FAILED+=("rpi-${RPI_BOARD_SEL}:${role}"); }
 done
 
@@ -530,11 +554,21 @@ if [ "${BUILD_JETSON_IMG}" = true ]; then
 fi
 
 if [ "${BUILD_ORANGEPI5_IMG}" = true ]; then
-    echo "############################################################"
-    echo "#  Building Orange Pi 5 light desktop: ${ORANGEPI5_BOARD_SEL} (flavor=${ORANGEPI5_FLAVOR_SEL}) — EXPERIMENTAL"
-    echo "############################################################"
-    "${BUILD_ORANGEPI5}" --board "${ORANGEPI5_BOARD_SEL}" --flavor "${ORANGEPI5_FLAVOR_SEL}" "$@" \
-        || { echo "!! Orange Pi 5 build FAILED — continuing" >&2; BUILDS_FAILED+=("orangepi5:${ORANGEPI5_BOARD_SEL}"); }
+    for role in "${ORANGEPI5_BUILD_ROLES[@]}"; do
+        if ! _is_node_role "${role}"; then
+            echo "############################################################"
+            echo "#  Building Orange Pi 5 light desktop: ${ORANGEPI5_BOARD_SEL} (flavor=${ORANGEPI5_FLAVOR_SEL}) — EXPERIMENTAL"
+            echo "############################################################"
+            "${BUILD_ORANGEPI5}" --board "${ORANGEPI5_BOARD_SEL}" --flavor "${ORANGEPI5_FLAVOR_SEL}" "$@" \
+                || { echo "!! Orange Pi 5 build FAILED — continuing" >&2; BUILDS_FAILED+=("orangepi5:${ORANGEPI5_BOARD_SEL}"); }
+            continue
+        fi
+        echo "############################################################"
+        echo "#  Building Orange Pi 5 cluster node: ${role} (${ORANGEPI5_BOARD_SEL}, installer) — EXPERIMENTAL"
+        echo "############################################################"
+        "${BUILD_ORANGEPI5}" --board "${ORANGEPI5_BOARD_SEL}" --role "${role}" "${RAM_ARGS[@]+"${RAM_ARGS[@]}"}" "$@" \
+            || { echo "!! Orange Pi 5 node '${role}' build FAILED — continuing" >&2; BUILDS_FAILED+=("orangepi5-${role}:${ORANGEPI5_BOARD_SEL}"); }
+    done
 fi
 
 if [ "${BUILD_ORANGEPIZERO2_IMG}" = true ]; then
@@ -572,8 +606,16 @@ fi
 if [ "${BUILD_ORANGEPI4LTS_IMG}" = true ]; then
     echo
     echo "#  Building Orange Pi 4 LTS light desktop (flavor=${ORANGEPI4LTS_FLAVOR_SEL}) — EXPERIMENTAL"
-    "${BUILD_ORANGEPI4LTS}" --flavor "${ORANGEPI4LTS_FLAVOR_SEL}" "$@" \
-        || { echo "!! Orange Pi 4 LTS build FAILED — continuing" >&2; BUILDS_FAILED+=("orangepi4-lts"); }
+    for role in "${ORANGEPI4LTS_BUILD_ROLES[@]}"; do
+        if ! _is_node_role "${role}"; then
+            "${BUILD_ORANGEPI4LTS}" --flavor "${ORANGEPI4LTS_FLAVOR_SEL}" "$@" \
+                || { echo "!! Orange Pi 4 LTS build FAILED — continuing" >&2; BUILDS_FAILED+=("orangepi4-lts"); }
+            continue
+        fi
+        echo "#  Building Orange Pi 4 LTS cluster node: ${role} (installer) — EXPERIMENTAL"
+        "${BUILD_ORANGEPI4LTS}" --role "${role}" "${RAM_ARGS[@]+"${RAM_ARGS[@]}"}" "$@" \
+            || { echo "!! Orange Pi 4 LTS node '${role}' build FAILED — continuing" >&2; BUILDS_FAILED+=("orangepi4-lts-${role}"); }
+    done
 fi
 
 # ── Generate provisioning keys ───────────────────────────────────────
@@ -633,13 +675,36 @@ if [ "${SKIP_KEYS:-0}" != "1" ]; then
     # appliance (no users.json / no cluster join) — the 'host' worker-key
     # profile, exactly like the Frite client.
     if [ "${BUILD_ORANGEPI5_IMG}" = true ]; then
-        echo "==> Generating keys folder: ${WORK_DIR}/keys-orangepi5 (host profile)"
-        if ! "${GENKEYS}" --role host --out "${WORK_DIR}/keys-orangepi5" --random; then
-            echo "!! keys generation FAILED for orangepi5 — removing partial ${WORK_DIR}/keys-orangepi5" >&2
-            rm -rf "${WORK_DIR}/keys-orangepi5"
-            KEYS_FAILED+=(orangepi5)
-        fi
+        for role in "${ORANGEPI5_BUILD_ROLES[@]}"; do
+            _is_node_role "${role}" && continue
+            echo "==> Generating keys folder: ${WORK_DIR}/keys-orangepi5 (host profile)"
+            if ! "${GENKEYS}" --role host --out "${WORK_DIR}/keys-orangepi5" --random; then
+                echo "!! keys generation FAILED for orangepi5 — removing partial ${WORK_DIR}/keys-orangepi5" >&2
+                rm -rf "${WORK_DIR}/keys-orangepi5"
+                KEYS_FAILED+=(orangepi5)
+            fi
+            break
+        done
     fi
+    # Orange Pi cluster NODE roles (EXPERIMENTAL): the node's own keys profile from
+    # HUGMESH_ROLE_KEYPROFILE, folder keys-<board>-<role> (KEYS_FAILED keeps the
+    # folder suffix; the remap below turns it back into the profile).
+    for _opn in "orangepi5:${BUILD_ORANGEPI5_IMG}:${ORANGEPI5_BUILD_ROLES[*]}" \
+                "orangepi4-lts:${BUILD_ORANGEPI4LTS_IMG}:${ORANGEPI4LTS_BUILD_ROLES[*]}"; do
+        _opb="${_opn%%:*}"; _rest="${_opn#*:}"; _on="${_rest%%:*}"; _roles="${_rest#*:}"
+        [ "${_on}" = true ] || continue
+        for role in ${_roles}; do
+            _is_node_role "${role}" || continue
+            _crole="$(hugmesh_role_canonicalize "${role}")"
+            _kprof="$(hugmesh_role_keyprofile "${_crole}")" || { KEYS_FAILED+=("${_opb}-${_crole}"); continue; }
+            echo "==> Generating keys folder: ${WORK_DIR}/keys-${_opb}-${_crole} (profile ${_kprof})"
+            if ! "${GENKEYS}" --role "${_kprof}" --out "${WORK_DIR}/keys-${_opb}-${_crole}" --random; then
+                echo "!! keys generation FAILED for ${_opb}-${_crole} — removing partial ${WORK_DIR}/keys-${_opb}-${_crole}" >&2
+                rm -rf "${WORK_DIR}/keys-${_opb}-${_crole}"
+                KEYS_FAILED+=("${_opb}-${_crole}")
+            fi
+        done
+    done
     # Orange Pi Zero 2 provisions from the SAME KEYS USB mechanism, as a headless
     # appliance (no users.json / no cluster join) — the 'host' worker-key
     # profile, exactly like the Frite/Orange Pi 5 clients.
@@ -710,7 +775,7 @@ if [ "${#BUILDS_FAILED[@]}" -gt 0 ]; then
     echo >&2
     echo "!! IMAGE BUILD FAILED for: ${BUILDS_FAILED[*]}  (the other roles + keys were still produced)" >&2
     echo "!! Re-run a failed role with its per-arch builder:" >&2
-    echo "!!   ./build-rpi5-stage4.sh --role <r>  |  ./build-x86-host-stage4.sh --role <r>  |  ./build-frite-stage4.sh --board <b>  |  ./build-jetson-stage4.sh --role <r>  |  ./build-orangepi5-stage4.sh --board <b>  |  ./build-orangepi-zero2-stage4.sh --flavor <f>  |  ./build-orangepi-zero2w-stage4.sh --flavor <f>  |  ./build-orangepi-zero3-stage4.sh --flavor <f>" >&2
+    echo "!!   ./build-rpi5-stage4.sh --role <r>  |  ./build-x86-host-stage4.sh --role <r>  |  ./build-frite-stage4.sh --board <b>  |  ./build-jetson-stage4.sh --role <r>  |  ./build-orangepi5-stage4.sh --board <b> [--role <node role> --ram-gb N]  |  ./build-orangepi4-lts-stage4.sh [--role frontend]  |  ./build-orangepi-zero2-stage4.sh --flavor <f>  |  ./build-orangepi-zero2w-stage4.sh --flavor <f>  |  ./build-orangepi-zero3-stage4.sh --flavor <f>" >&2
 fi
 # A run whose keys folders failed has NO usable provisioning deliverable for those roles.
 if [ "${#KEYS_FAILED[@]}" -gt 0 ]; then
@@ -724,6 +789,8 @@ if [ "${#KEYS_FAILED[@]}" -gt 0 ]; then
         case "${_r}" in
             frite)          _kp=host ;;
             orangepi5)      _kp=host ;;
+            orangepi5-*)    _kp="$(hugmesh_role_keyprofile "${_r#orangepi5-}" 2>/dev/null || echo host)" ;;
+            orangepi4-lts-*) _kp="$(hugmesh_role_keyprofile "${_r#orangepi4-lts-}" 2>/dev/null || echo host)" ;;
             orangepizero2)  _kp=host ;;
             orangepizero2w) _kp=host ;;
             orangepizero3) _kp=host ;;

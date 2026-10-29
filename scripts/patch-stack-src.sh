@@ -61,75 +61,6 @@ unblock_http_registry() { # <repo-checkout-dir>
   patched=$((patched+1))
 }
 
-# ── patch: drop the UNRESOLVABLE pre-rename private dependency ────────────────
-# LEGACY_COMPAT READ: a stale checkout can still declare the pre-HugMesh
-# coordinate `systems.snapdragon:snapdragon-commons`. That spelling is matched
-# here ONLY to recognise and remove it — it is never written, and dropping the
-# matcher does not fix such a checkout, it just lets the image build die on it
-# again. Nothing publishes the old coordinate any more: the artifact is
-# `systems.hugmesh:hugmesh-commons` now, which is what m2-bootstrap.sh builds and
-# serves, so the old coordinate resolves nowhere and the image build dies with
-#   Could not find artifact systems.snapdragon:snapdragon-commons:jar:2.0.0 in central
-# (live case: hugmesh-remote-fragment, whose own pom comment records the dep as
-# "Currently unused by any class here — added purely for fleet-artifact alignment").
-# Removing an UNUSED dependency is the conservative local repair; a checkout that
-# actually IMPORTS commons would fail to compile and is out of scope for a patch.
-# UPSTREAM FIX: the repo should drop (or re-coordinate) the dependency itself —
-# once it does, the marker is gone and this becomes a natural no-op.
-drop_pre_rename_commons_dep() { # <repo-checkout-dir>
-  local f="$1/pom.xml"
-  [ -f "${f}" ] || return 0
-  # Match the COORDINATE ELEMENT, never prose: these poms carry long comments that
-  # mention snapdragon-parent/-commons by name, and those must not trip the patch.
-  grep -q '<groupId>systems\.snapdragon<' "${f}" || return 0   # clean / never affected
-  if grep -rqE '(^|[^A-Za-z0-9_])import[[:space:]]+systems\.snapdragon\.' "$1/src" 2>/dev/null; then
-    echo "  ! $(basename "$1")/pom.xml: pre-rename commons is IMPORTED in source — NOT patched (needs an upstream fix)" >&2
-    return 0
-  fi
-  awk '
-    # Buffer each <dependency> element and drop it whole when it names the
-    # pre-rename private commons coordinate. Substring matches, so CRLF is fine.
-    # NOTE the missing `next` on the opening rule: these poms also carry
-    # SINGLE-LINE <dependency>…</dependency> entries, so the same line must fall
-    # through to the close check below — skipping it swallowed every line up to
-    # the next multi-line close (caught by the element-count guard in the caller).
-    /<dependency>/ && !inblock { inblock=1; buf=""; grp=0; art=0 }
-    inblock {
-      buf = buf $0 "\n"
-      if ($0 ~ /<groupId>systems\.snapdragon</)      grp=1
-      if ($0 ~ /<artifactId>snapdragon-commons</)    art=1
-      if ($0 ~ /<\/dependency>/) {
-        if (grp && art) {
-          print "    <!-- systems.snapdragon:snapdragon-commons dependency removed by"
-          print "         scripts/patch-stack-src.sh: pre-rename coordinate, published nowhere. -->"
-        } else printf "%s", buf
-        inblock=0; buf=""
-      }
-      next
-    }
-    { print }
-    END { if (inblock) printf "%s", buf }        # unterminated element: keep it verbatim
-  ' "${f}" > "${f}.patch-tmp"
-  # SAFETY: the rewrite must remove EXACTLY one <dependency> element and nothing
-  # else. Anything other than that is a patch bug, not a repo problem — keep the
-  # original and say so rather than hand `docker build` a mangled pom.
-  local before after
-  before="$(grep -o '<dependency>' "${f}" | wc -l)"
-  after="$(grep -o '<dependency>' "${f}.patch-tmp" | wc -l)"
-  if [ "$((before - after))" -ne 1 ]; then
-    rm -f "${f}.patch-tmp"
-    echo "  ! $(basename "$1")/pom.xml: patch would have removed $((before - after)) <dependency> elements (expected 1) — LEFT UNPATCHED" >&2
-    return 0
-  fi
-  mv "${f}.patch-tmp" "${f}"
-  if grep -q '<groupId>systems\.snapdragon<' "${f}"; then
-    echo "  ! $(basename "$1")/pom.xml: pre-rename coordinate survived the patch — the build will fail" >&2
-    return 0
-  fi
-  echo "  ~ $(basename "$1")/pom.xml: unresolvable pre-rename commons dependency dropped"
-  patched=$((patched+1))
-}
-
 # ── patch: give a private-artifact consumer that ships NO settings.xml a way to
 #           resolve one ────────────────────────────────────────────────────────
 # hugmesh-gateway and hugmesh-actions DEPEND on the private hugmesh-commons
@@ -504,7 +435,6 @@ for dir in "${STACK_SRC}"/*/; do
   scanned=$((scanned+1))
   repo="$(basename "${dir}")"
   unblock_http_registry "${dir%/}"
-  drop_pre_rename_commons_dep "${dir%/}"
   wire_local_maven_registry "${dir%/}"
   pin_federation_to_one_copy "${dir%/}"
   fix_ui_base_href "${dir%/}" "${repo}"

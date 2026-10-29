@@ -35,7 +35,7 @@ import re
 import shlex
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, asdict, MISSING
-from typing import Any
+from typing import Any, NamedTuple
 
 import sys
 
@@ -293,14 +293,24 @@ ROLE_CHOICES = {
         # RPI5_ROLE_MAP; there is now one vocabulary (scripts/_roles-lib.sh) and
         # nothing to translate. Every old id still LOADS from a saved session — see
         # WorklistEntry.from_dict / BuildSession.from_dict.
-        ("pki", ("x86", "rpi5"), "PKI node — cluster certificate authority (x86 or Raspberry Pi 4/5)"),
-        ("backend", ("x86", "rpi5"), "Backend node (x86 or Raspberry Pi 4/5)"),
-        ("frontend", ("x86", "rpi5"), "Frontend node (x86 or Raspberry Pi 4/5)"),
+        # The Orange Pi 5 / 5 Plus builds pki/backend/frontend/omnibus and the 4 GB
+        # Orange Pi 4 LTS builds frontend only — both EXPERIMENTAL (no Orange Pi has
+        # booted an image from this repo; hardware validation pending). Installer
+        # flavor only. scripts/_roles-lib.sh HUGMESH_ROLES_ORANGEPI5/_ORANGEPI4LTS.
+        ("pki", ("x86", "rpi5", "orangepi5"),
+         "PKI node — cluster certificate authority (x86, Raspberry Pi 4/5, or Orange Pi 5 — EXPERIMENTAL)"),
+        ("backend", ("x86", "rpi5", "orangepi5"),
+         "Backend node (x86, Raspberry Pi 4/5, or Orange Pi 5 — EXPERIMENTAL)"),
+        ("frontend", ("x86", "rpi5", "orangepi5", "orangepi4-lts"),
+         "Frontend node (x86, Raspberry Pi 4/5, or Orange Pi 5 / 4 LTS — EXPERIMENTAL)"),
         ("backend-gpu", ("x86", "jetson"),
          "Backend + GPU node — a backend worker with a GPU, no inference service "
          "(x86, or Jetson Orin — EXPERIMENTAL)"),
-        ("omnibus", ("x86", "jetson"),
-         "Omnibus — every cluster role on one node (x86, or Jetson Orin — EXPERIMENTAL)"),
+        # omnibus on a Raspberry Pi 5 or Orange Pi 5 needs the board's RAM (16 GB+;
+        # ImageConfig.ram_gb -> --ram-gb): one image serves every RAM size it is sold in.
+        ("omnibus", ("x86", "jetson", "rpi5", "orangepi5"),
+         "Omnibus — every cluster role on one node (x86; Raspberry Pi 5 or Orange Pi 5 "
+         "with 16 GB+ RAM; Jetson Orin / Orange Pi — EXPERIMENTAL)"),
         # Person-device desktops attachable to the mesh (operator ask 2026-08-14):
         # checking one on the WorklistPage asks for the person's user + role via a
         # popup; the account is provisioned on the internal Tailscale root
@@ -531,6 +541,12 @@ INFRA_SERVICES_CHOICES = ("tor", "egress-vpn", "workloadConsole", "anubis")
 OPTIONAL_SERVICES_BY_PLATFORM = {
     "x86": OPTIONAL_SERVICES_CHOICES + INFRA_SERVICES_CHOICES,
     "rpi5": OPTIONAL_SERVICES_CHOICES + INFRA_SERVICES_CHOICES,
+    # Orange Pi NODE roles (EXPERIMENTAL): the user-level set plus the two cluster-plane
+    # infra slugs. NOT tor / egress-vpn: those are host daemons the Orange Pi node image
+    # does not carry, and its builder refuses them (scripts/_node-role-lib.sh
+    # NODE_ROLE_UNSUPPORTED_HOST_SLUGS) rather than bake the cluster app alone.
+    "orangepi5": OPTIONAL_SERVICES_CHOICES + ("workloadConsole", "anubis"),
+    "orangepi4-lts": OPTIONAL_SERVICES_CHOICES + ("workloadConsole", "anubis"),
 }
 
 # --optional-services sentinels (mirror build-menu.sh's OPT_SERVICES + the builders):
@@ -628,6 +644,16 @@ def client_class_role(role: str, platform: str) -> bool:
     if p == "x86":
         return role not in X86_NODE_ROLES
     return False
+
+
+def services_catalog(cfg) -> tuple:
+    """The optional-service slugs THIS image's builder accepts: the platform catalogue
+    (OPTIONAL_SERVICES_BY_PLATFORM), except an Orange Pi DESKTOP row, whose builder bakes
+    no cluster tree and refuses --optional-services (only its NODE roles take them)."""
+    plat = getattr(cfg, "platform", "") or "x86"
+    if plat in _OPI_NODE_PLATFORMS and getattr(cfg, "role", "") not in _ORANGEPI_NODE_ROLE_IDS:
+        return ()
+    return tuple(OPTIONAL_SERVICES_BY_PLATFORM.get(plat, ()))
 
 
 def services_picker_hidden(cfg) -> bool:
@@ -1252,6 +1278,12 @@ _IMAGE_ONLY_PLATFORMS = ("frite", "jetson", "orangepi5", "orangepizero2", "orang
                          "orangepizero3", "orangepi3-lts", "orangepi4-lts")
 _X86 = ("x86",)
 _X86_RPI5 = ("x86", "rpi5")
+# The Orange Pi boards with cluster NODE roles (EXPERIMENTAL): their builders parse the
+# mesh's cluster choices (release state, games domain, optional services, IdP, Vault)
+# for a NODE role only and refuse them on the desktop, so those fields are in scope
+# there for the node class only (_OPI_NODE_CLASS_FIELDS below).
+_OPI_NODE_PLATFORMS = ("orangepi5", "orangepi4-lts")
+_X86_RPI5_OPI = _X86_RPI5 + _OPI_NODE_PLATFORMS
 
 # The builders whose MEDIA is chosen by --flavor (live | installer | both; default
 # "both") instead of by per-artifact ISO flags. Named once here because TWO separate
@@ -1279,7 +1311,7 @@ _FIELD_PLATFORMS: dict[str, tuple[str, ...]] = {
     # host identity (-H/-T/-u) — all builders.
     "hostname": _ALL_PLATFORMS, "timezone": _ALL_PLATFORMS, "user": _ALL_PLATFORMS,
     # cluster / mesh identity.
-    "cluster_domain": _ALL_PLATFORMS, "games_domain": _X86_RPI5, "release_state": _X86_RPI5,
+    "cluster_domain": _ALL_PLATFORMS, "games_domain": _X86_RPI5_OPI, "release_state": _X86_RPI5_OPI,
     "person_role": _X86, "domains": _X86,
     # Tailscale root domain — every builder parses --superdomain (WS-SUPER-B bake);
     # emitted ONLY in mesh mode (see _superdomain_args), so it is EXCLUDED from the
@@ -1315,19 +1347,19 @@ _FIELD_PLATFORMS: dict[str, tuple[str, ...]] = {
     "edge_ai_tts": _X86_RPI5,
     # mesh-node identity provider (I6) — the two node builders only. Casdoor
     # default emits nothing; the probe uses an external combo (multi-key entry).
-    "idp": _X86_RPI5, "idp_issuer": _X86_RPI5, "idp_client_id": _X86_RPI5,
-    "idp_jwks": _X86_RPI5,
+    "idp": _X86_RPI5_OPI, "idp_issuer": _X86_RPI5_OPI, "idp_client_id": _X86_RPI5_OPI,
+    "idp_jwks": _X86_RPI5_OPI,
     # mesh secrets store (#224) — the two node builders bake /etc/hugmesh/vault.conf;
     # the empty address emits nothing (byte-identity), so the probe supplies one.
     # vault_external_addr (#335) rides the same two builders and the same rule.
     # base_ca_certs / domain_ca are ABSENT on purpose: they emit no flag anywhere, so
     # a capability-table entry would claim a builder surface that does not exist.
-    "vault_addr": _X86_RPI5, "vault_external_addr": _X86_RPI5,
+    "vault_addr": _X86_RPI5_OPI, "vault_external_addr": _X86_RPI5_OPI,
     # tor / character-studio / character-forge / services.
     "tor_onion_service": _X86, "character_studio": _X86_RPI5,
     "character_forge": _X86_RPI5,
-    "optional_services": _X86_RPI5, "exclude_services": _X86_RPI5, "enable_games": _X86_RPI5,
-    "anubis": _X86_RPI5,
+    "optional_services": _X86_RPI5_OPI, "exclude_services": _X86_RPI5_OPI,
+    "enable_games": _X86_RPI5_OPI, "anubis": _X86_RPI5_OPI,
     # managed backing services (I8/M2) — the two node builders parse --managed-service;
     # a mesh-node cluster concern, so scoped to the only builders that bake a cluster tree.
     "managed_services": _X86_RPI5,
@@ -1407,6 +1439,10 @@ NON_ARGV_FIELDS = ("headscale_url", "pentest", "hw_profile",
                    "login_footer_hidden", "login_footer_size", "login_footer_bg",
                    "login_footer_text",
                    "login_bg_effect",
+                   # #654: the superbrand's shape/decoration ride the same channel,
+                   # and the brand record is a Studio-side path until the builders
+                   # parse --brand-record (see ImageConfig.brand_record).
+                   "login_style", "login_decor", "brand_record",
                    "additional_domains", "configure_users", "qemu_device_tests",
                    # #495: which domains have been through their Services page. Pure
                    # wizard-flow bookkeeping for the build/mesh-start gate — saved with
@@ -1435,6 +1471,15 @@ _STANDALONE_DESKTOP_ROLES = ("standalone-thin", "standalone-thick", UNAFFILIATED
 # rpi5-desktop / jetson-desktop are the two COMPOSITE ids (a platform mangled into
 # the role string) that survive this change; see RPI5_ROLE_MAP above.
 _ARM_DESKTOP_ROLES = ("rpi5-desktop", "jetson-desktop", "frite", "orangepi5", "orangepi4-lts")
+# The Studio role ids that are cluster NODE roles on the Orange Pi node-axis boards
+# (orangepi5: pki/backend/frontend/omnibus; orangepi4-lts: frontend). Their desktop
+# keeps the board id as its role id ("orangepi5"/"orangepi4-lts"), unchanged.
+_ORANGEPI_NODE_ROLE_IDS = ("pki", "backend", "frontend", "omnibus")
+# The cluster-choice fields an Orange Pi NODE role emits (_orangepi_node_cluster_args)
+# and its DESKTOP does not: node-class only on _OPI_NODE_PLATFORMS (FIELD_SCOPE).
+_OPI_NODE_CLASS_FIELDS = ("games_domain", "release_state", "idp", "idp_issuer",
+                          "idp_client_id", "idp_jwks", "vault_addr", "vault_external_addr",
+                          "optional_services", "exclude_services", "enable_games", "anubis")
 DESKTOP_ROLES = X86_CLIENT_ROLES + _STANDALONE_DESKTOP_ROLES + _ARM_DESKTOP_ROLES
 # Cluster-node / headless-appliance family (root-encrypted infra). X86_NODE_ROLES already
 # covers pki/backend/frontend/backend-gpu/omnibus/edge-ai (x86 AND rpi5 share
@@ -1629,7 +1674,10 @@ _BD_BUNDLE_SOURCE = BuilderDefault(
 # Studio must not invent one. test_field_scope.py derives this set from the builder scripts
 # and asserts equality, so a builder that grows or loses a role-class concept fails here
 # rather than letting the tuple go stale into a fiction.
-_STANDALONE_CLASS_GATED_PLATFORMS = ("x86", "rpi5")
+# The two Orange Pi node-axis builders joined on 2026-10-21: their node roles refuse
+# --standalone (a cluster node joins the mesh) while their desktop composes it, exactly
+# the rpi5 split, and they now carry ROLE_CLIENT for it.
+_STANDALONE_CLASS_GATED_PLATFORMS = ("x86", "rpi5", "orangepi5", "orangepi4-lts")
 
 # The CLUSTER-IDENTITY trio — the three fields NetworkPage's "Identity & domain"
 # collapsible collects (network.py:494/:499/:504: "Public apex domain", "Games domain",
@@ -1664,6 +1712,12 @@ _CLUSTER_PLANE_MODE_GATED_PLATFORMS = ("x86",)
 # deliberately undeclared: a scope nothing reads would be policy with no effect. They land
 # with their enforcement, not before.
 _FIELD_SCOPE_OVERRIDES: dict[str, FieldScope] = {
+    # The mesh's cluster choices on the Orange Pi node boards: a NODE role bakes them,
+    # the Orange Pi DESKTOP bakes no cluster tree and its builder refuses the flags. The
+    # class rule applies on those two builders only (x86/rpi5 keep their own rules).
+    **{f: FieldScope(platforms=_FIELD_PLATFORMS[f], classes=("node",),
+                     class_platforms=_OPI_NODE_PLATFORMS)
+       for f in _OPI_NODE_CLASS_FIELDS},
     **{f: FieldScope(platforms=_FIELD_PLATFORMS[f], classes=("desktop",))
        for f in THEME_FIELDS},
     **{f: FieldScope(platforms=_FIELD_PLATFORMS[f], classes=("desktop",))
@@ -1741,8 +1795,13 @@ _FIELD_SCOPE_OVERRIDES: dict[str, FieldScope] = {
     # CLIENT alike (_x86_args:3582-3584 emits it outside the `role not in X86_NODE_ROLES`
     # gate that --person-role/--domains sit behind), so a class rule here would be an
     # invented constraint of exactly the kind FieldScope's docstring warns about.
+    # ...EXCEPT on the Orange Pi node boards, where --games-domain / --release-state are
+    # parsed for a NODE role only (the Orange Pi desktop refuses them): there the class
+    # rule is real, so it rides class_platforms exactly like _OPI_NODE_CLASS_FIELDS above.
     **{f: FieldScope(platforms=_FIELD_PLATFORMS[f], modes=_CLUSTER_PLANE_MODES,
-                     mode_platforms=_CLUSTER_PLANE_MODE_GATED_PLATFORMS)
+                     mode_platforms=_CLUSTER_PLANE_MODE_GATED_PLATFORMS,
+                     **({"classes": ("node",), "class_platforms": _OPI_NODE_PLATFORMS}
+                        if f in _OPI_NODE_CLASS_FIELDS else {}))
        for f in _CLUSTER_IDENTITY_FIELDS},
 }
 
@@ -1773,8 +1832,24 @@ def rpi_boards_for_role(role: str) -> tuple[str, ...]:
     role (pki/be/fe, generic) may target rpi5/rpi4 ONLY — rpi3's 1GB RAM cannot host the
     hardened SELinux/containerd/kubelet stack, and build-rpi5-stage4.sh hard-errors that
     combo. Keeping rpi3 out of the node picker mirrors the builder's own contract so a
-    Studio/menu selection can never dead-end in that hard-error (honesty rule)."""
-    return RPI_BOARDS if image_class("", role) == "desktop" else RPI_NODE_BOARDS
+    Studio/menu selection can never dead-end in that hard-error (honesty rule). A node
+    role whose RAM floor a board is never sold with is kept off that board too: omnibus
+    (16 GB) is offered on rpi5 only, because a Pi 4 has 8 GB at most and the builder
+    refuses it (roles.board_fits_role)."""
+    if image_class("", role) == "desktop":
+        return RPI_BOARDS
+    return tuple(b for b in RPI_NODE_BOARDS if roles.board_fits_role(role, b))
+
+
+def orangepi_flavors_for_role(platform: str, role: str) -> tuple[str, ...]:
+    """The --flavor choices to OFFER for an Orange Pi node-axis board (orangepi5 /
+    orangepi4-lts) and ``role``. A cluster NODE role is INSTALLER-only: the live flavor
+    runs from RAM with no persistence, and build-orangepi5-stage4.sh /
+    build-orangepi4-lts-stage4.sh refuse ``--flavor live|both`` for a node. The
+    desktop keeps every flavor. Same honesty rule as rpi_boards_for_role: a picker
+    never offers a combination the builder hard-errors."""
+    flavors = {"orangepi5": ORANGEPI5_FLAVORS, "orangepi4-lts": ORANGEPI4LTS_FLAVORS}[platform]
+    return ("installer",) if role in _ORANGEPI_NODE_ROLE_IDS else flavors
 
 
 def x86_desktop_axis(role: str) -> tuple[str, ...]:
@@ -2853,6 +2928,17 @@ def strip_platform_unsupported(cfg: "ImageConfig") -> list[str]:
             continue
         if _reset_field(cfg, fld):
             cleared.append(fld)
+    # An INFRA slug this platform's builder cannot bake (tor / egress-vpn on an Orange Pi
+    # node: host daemons that image does not carry, and its builder refuses them) is
+    # dropped from a mesh-wide selection that reached this row, exactly like the
+    # worklist's per-node infra fold drops a slug the platform cannot express.
+    catalog = OPTIONAL_SERVICES_BY_PLATFORM.get(plat)
+    if catalog is not None and cfg.optional_services:
+        kept = [s for s in cfg.optional_services
+                if not (s in INFRA_SERVICES_CHOICES and s not in catalog)]
+        if kept != list(cfg.optional_services):
+            cfg.optional_services = kept
+            cleared.append("optional_services")
     return cleared
 
 
@@ -2897,10 +2983,28 @@ def github_org_problem(slug) -> str:
     return ""
 
 
+#: The default brand id of a public name (hugmesh-generator#654, D4): the DNS name with
+#: every run of non-[a-z0-9] turned into one dash ("acme.example" -> "acme-example") —
+#: the rule own_casdoor.slug has always used for the tenant key, the Tor key folder and
+#: the compose service names, so a record without stored ids keeps the ids its running
+#: mesh already uses.
+_BRAND_ID_SLUG_RE = re.compile(r"[^a-z0-9]+")
+
+
+def default_brand_id(name: str) -> str:
+    return _BRAND_ID_SLUG_RE.sub("-", (name or "").strip().lower()).strip("-")
+
+
 @dataclass
 class Domain:
     name: str = ""
     title: str = ""
+    # The brand's one id (#654, D4): the text the registry's nsPrefix, an own-sign-in
+    # brand's tenant key, the Tor key-folder name, the certificate list's brand column
+    # and the Vault path segment all share. "" (every pre-#654 row) = the default
+    # derived from ``name`` (default_brand_id), which is what every consumer derived
+    # for itself before; brand_model.brand_id reads it. OMIT-WHEN-EMPTY when saved.
+    id: str = ""
     # Worklist entry-id refs this domain attaches to (f"{role}.{platform}"); empty =
     # attach to every eligible image. Legacy `games: bool` was DROPPED — from_dict
     # migrates a truthy games into optional_services += ["games"] (games never reached
@@ -2924,6 +3028,24 @@ class Domain:
     # legacy ``"tor"`` in ``optional_services`` (the pre-#227 freeform cell, a slot no
     # builder ever read) MOVES here at load — the ``games`` precedent.
     tor: bool = False
+    # The brand record (hugmesh-generator#654, D5/D7/D10). Three keys that every copy
+    # site carries by the FIELD LIST (``DOMAIN_FIELDS``), never by a literal key list,
+    # so a field added here reaches the manifest, the local mesh, the saved mesh and
+    # the fleet without a change at any of them. All three are OMIT-WHEN-EMPTY in
+    # every saved shape, so a row that uses none keeps its pre-#654 bytes.
+    #
+    # ``look``: ONLY the look fields this brand changes (brand_model.LOOK_KEYS); the
+    # superbrand's default supplies the rest (brand_model.effective_look).
+    look: dict[str, Any] = field(default_factory=dict)
+    # ``ways``: how this brand is reached, written through ONE function
+    # (brand_model.set_ways): {"internal_name": str, "public": {"provider", "inputs",
+    # "token_file"}}. The Tor way is the ``tor`` field above — one field, one writer.
+    ways: dict[str, Any] = field(default_factory=dict)
+    # ``issuer_port``: the published host port of an own-sign-in brand's Casdoor,
+    # STORED here and never recomputed from the row's position (D4): removing or
+    # reordering a brand must not move another brand's issuer. 0 = not allocated
+    # (a brand that signs in through the superbrand, or a pre-#654 row).
+    issuer_port: int = 0
     # The GitHub organisation this domain's repositories are EXPORTED to by the
     # Go-Live "Export to GitHub org" step (core/org_export.py): an org SLUG
     # (``GITHUB_ORG_RE``), never a token. "" — the default, and every config from
@@ -2931,22 +3053,361 @@ class Domain:
     # all. OMIT-WHEN-EMPTY on every saved shape, like ``tor``, so an untouched
     # config, record and manifest keep their bytes.
     github_org: str = ""
+    # This domain's OWN identity-provider settings (2026-10-21, per-domain sign-in):
+    # {"provider", "issuer", "client_id", "jwks"} — the same four values the mesh-wide
+    # provider carries (ImageConfig.idp / idp_issuer / idp_client_id / idp_jwks), and
+    # validated by the same rules (``signin_problems``). EMPTY — the default and every
+    # row written before the field existed — INHERITS: a ``superdomain`` row signs in
+    # through the mesh's central provider, whatever that is, and an ``own`` row runs
+    # its own Casdoor exactly as before. Only an ``own`` row may carry settings, and
+    # only an external provider (entra/aws/oidc) needs them: that brand then trusts its
+    # own external issuer — one more ``<issuer>=<brand id>`` pair in the gateways'
+    # tenancy registry (hugmesh-gateway DomainRegistry: one issuer, one brand) — and
+    # no Casdoor is stood up for it. Written through ONE function,
+    # ``set_domain_signin``; read through ``effective_signin``. OMIT-WHEN-EMPTY.
+    idp_settings: dict[str, Any] = field(default_factory=dict)
+
+
+#: Every field a brand row carries, in declaration order — THE key list every copy
+#: site reads. A site that spells its own list is the defect brand_model.COPY_SITES
+#: and the mutation battery exist to catch.
+DOMAIN_FIELDS: tuple[str, ...] = tuple(Domain.__dataclass_fields__)
+
+#: Row keys left out of every SAVED shape when they are empty/false/zero, so a row
+#: that does not use them is written exactly as before the field existed.
+DOMAIN_OMIT_WHEN_EMPTY: tuple[str, ...] = ("id", "tor", "look", "ways", "issuer_port",
+                                           "github_org", "idp_settings")
+
+
+# ── per-domain identity-provider settings (2026-10-21) ──────────────────────────────
+#: The keys ``Domain.idp_settings`` may hold, in display order.
+DOMAIN_IDP_SETTINGS_KEYS: tuple[str, ...] = ("provider", "issuer", "client_id", "jwks")
+
+#: Where a domain's effective sign-in comes from (``DomainSignIn.source``).
+SIGNIN_FROM_MESH = "mesh"                # superdomain row: the mesh's central provider
+SIGNIN_OWN_CASDOOR = "own-casdoor"       # own row, no settings: its own Casdoor
+SIGNIN_OWN_EXTERNAL = "own-external"     # own row with an external provider
+
+SIGNIN_SOURCE_WORDS = {
+    SIGNIN_FROM_MESH: "inherited from the mesh's sign-in",
+    SIGNIN_OWN_CASDOOR: "this domain's own Casdoor",
+    SIGNIN_OWN_EXTERNAL: "this domain's own external provider",
+}
+
+#: What the image route's Domains step says about an 'Own' sign-in, in the window and
+#: the text screen alike: ImageConfig.to_cli_args passes no per-domain sign-in to any
+#: builder, the row rides the mesh manifest only, and the casdoor-domains element writer
+#: that would read it is not built (docs/DOMAIN-IDP.md). The domain's Identity tab says
+#: the same in full (tui/brand_step.SIGNIN_NOT_APPLIED).
+OWN_SIGNIN_NOT_APPLIED_ON_IMAGE = (
+    "Not applied by a built image yet: an Own choice is kept with this configuration "
+    "and the domain signs in through the mesh until the cluster side is built "
+    "(docs/DOMAIN-IDP.md).")
+
+
+class DomainSignIn(NamedTuple):
+    """A domain's EFFECTIVE sign-in (``effective_signin``). ``issuer`` is "" when the
+    path that starts the mesh derives it (the central Casdoor, or the domain's own
+    Casdoor: core/own_casdoor.issuer_for on the Docker mesh, https://id.<domain> on a
+    cluster); ``jwks`` is the effective JWKS (explicit, else the per-provider
+    derivation ``idp_effective_jwks``)."""
+    where: str          # DOMAIN_IDP_SUPERDOMAIN | DOMAIN_IDP_OWN
+    provider: str       # IDP_CHOICES
+    issuer: str
+    client_id: str
+    jwks: str
+    source: str         # SIGNIN_FROM_MESH | SIGNIN_OWN_CASDOOR | SIGNIN_OWN_EXTERNAL
+
+
+def signin_problems(provider: str, issuer: str = "", client_id: str = "",
+                    jwks: str = "", where: str = "") -> list[str]:
+    """Why one provider block cannot be used ([] when it can) — the mesh-wide rules of
+    ``ImageConfig.validate_identity`` (the same regexes, the same combinations), for a
+    domain's own block: Casdoor carries no external values at all; an external
+    provider needs an https:// issuer and a client id, and a JWKS override must be
+    https:// too. ``where`` prefixes each sentence ("domain shop.example: ")."""
+    p = f"{where}: " if where else ""
+    prov = (provider or "").strip() or "casdoor"
+    issuer, client_id, jwks = ((issuer or "").strip(), (client_id or "").strip(),
+                               (jwks or "").strip())
+    if prov not in IDP_CHOICES:
+        return [f"{p}unknown identity provider {provider!r} (known: "
+                f"{', '.join(IDP_CHOICES)})"]
+    out: list[str] = []
+    if prov == "casdoor":
+        for label, v in (("sign-in address", issuer), ("client id", client_id),
+                         ("key address (JWKS)", jwks)):
+            if v:
+                out.append(f"{p}a {label} is set but the provider is Casdoor, which "
+                           "derives its own; clear it or pick an external provider")
+        return out
+    if not issuer or not _IDP_URL_RE.fullmatch(issuer):
+        out.append(f"{p}{IDP_LABELS.get(prov, prov)} needs an https:// sign-in address "
+                   f"(got {issuer!r}); it is what every sign-in is checked against "
+                   "and must be TLS")
+    if not client_id or not _IDP_CLIENT_ID_RE.fullmatch(client_id):
+        out.append(f"{p}{IDP_LABELS.get(prov, prov)} needs a client id (got "
+                   f"{client_id!r}; letters, digits and . _ : / -, at most 128)")
+    if jwks and not _IDP_URL_RE.fullmatch(jwks):
+        out.append(f"{p}the key address (JWKS) must be an https:// URL (got {jwks!r}); "
+                   "leave it empty to derive the provider's default")
+    return out
+
+
+def idp_settings_shape_problem(settings) -> str:
+    """Why ``settings`` is not a ``Domain.idp_settings`` SHAPE ("" when it is): an
+    object of text values under the four known keys, with a known provider. What the
+    strict loader refuses at load (``ImageConfig._domain_from_dict``); the values
+    themselves are checked by :func:`domain_signin_problems`."""
+    if settings is None:
+        return ""
+    if not isinstance(settings, dict):
+        return f"idp_settings must be an object, got {settings!r}"
+    for k, v in settings.items():
+        if k not in DOMAIN_IDP_SETTINGS_KEYS:
+            return (f"idp_settings has an unknown key {k!r} (known: "
+                    f"{', '.join(DOMAIN_IDP_SETTINGS_KEYS)})")
+        if v is not None and not isinstance(v, str):
+            return f"idp_settings.{k} must be text, got {v!r}"
+    prov = str(settings.get("provider") or "").strip()
+    if prov and prov not in IDP_CHOICES:
+        return (f"idp_settings.provider must be one of {'|'.join(IDP_CHOICES)}, "
+                f"got {prov!r}")
+    return ""
+
+
+def clean_idp_settings(settings) -> dict[str, str]:
+    """The STORED form of a settings block: stripped text, empty values dropped, and
+    a block that says only "casdoor" (the own-Casdoor default) is empty — so a row
+    whose screen merely showed the provider picker keeps its old bytes."""
+    if not isinstance(settings, dict):
+        return {}
+    out = {k: str(settings.get(k) or "").strip() for k in DOMAIN_IDP_SETTINGS_KEYS}
+    out = {k: v for k, v in out.items() if v}
+    if out.get("provider", "casdoor") == "casdoor" and set(out) <= {"provider"}:
+        return {}
+    return out
+
+
+def _row_get(row, key, default=None):
+    if isinstance(row, dict):
+        return row.get(key, default)
+    return getattr(row, key, default)
+
+
+def runs_own_casdoor(row) -> bool:
+    """Whether this domain stands up ITS OWN Casdoor: sign-in ``own`` with no external
+    provider. What every own-Casdoor consumer (the compose overlay, its port sequence,
+    ``ImageConfig.own_idp_domains``) asks instead of ``idp == "own"`` alone, so a
+    domain with its own EXTERNAL provider never gets a Casdoor nobody uses. Accepts a
+    Domain or a recorded row dict."""
+    if (_row_get(row, "idp", "") or "") != DOMAIN_IDP_OWN:
+        return False
+    settings = _row_get(row, "idp_settings") or {}
+    prov = (str(settings.get("provider") or "").strip()
+            if isinstance(settings, dict) else "")
+    return prov in ("", "casdoor")
+
+
+def has_external_signin(row) -> bool:
+    """Whether this domain trusts its OWN external issuer (sign-in ``own`` with an
+    entra/aws/oidc provider)."""
+    return ((_row_get(row, "idp", "") or "") == DOMAIN_IDP_OWN
+            and not runs_own_casdoor(row))
+
+
+def effective_signin(row, mesh=None) -> DomainSignIn:
+    """THE resolver of a domain's sign-in, like ``brand_model.effective_look`` is of
+    its look: a ``superdomain`` row inherits the MESH's provider (``mesh`` is any
+    object with ``idp``/``idp_issuer``/``idp_client_id``/``idp_jwks`` — an ImageConfig
+    or a LocalMeshBootstrapConfig; None = the built-in Casdoor); an ``own`` row with
+    no settings is its own Casdoor; an ``own`` row with an external provider is that
+    provider. An ``own`` row never inherits an external MESH provider: two brands on
+    one issuer cannot be told apart (the gateways' DomainRegistry maps one issuer to
+    one brand), so "its own" always means a different issuer."""
+    where = (_row_get(row, "idp", "") or DOMAIN_IDP_SUPERDOMAIN)
+    if where != DOMAIN_IDP_OWN:
+        prov = (getattr(mesh, "idp", "") or "casdoor") if mesh is not None else "casdoor"
+        if prov == "casdoor":
+            return DomainSignIn(DOMAIN_IDP_SUPERDOMAIN, "casdoor", "", "", "",
+                                SIGNIN_FROM_MESH)
+        iss = (getattr(mesh, "idp_issuer", "") or "").strip()
+        jw = (getattr(mesh, "idp_jwks", "") or "").strip()
+        return DomainSignIn(DOMAIN_IDP_SUPERDOMAIN, prov, iss,
+                            (getattr(mesh, "idp_client_id", "") or "").strip(),
+                            idp_effective_jwks(prov, iss, jw), SIGNIN_FROM_MESH)
+    s = clean_idp_settings(_row_get(row, "idp_settings") or {})
+    prov = s.get("provider", "casdoor")
+    if prov == "casdoor":
+        return DomainSignIn(DOMAIN_IDP_OWN, "casdoor", "", "", "", SIGNIN_OWN_CASDOOR)
+    iss = s.get("issuer", "")
+    return DomainSignIn(DOMAIN_IDP_OWN, prov, iss, s.get("client_id", ""),
+                        idp_effective_jwks(prov, iss, s.get("jwks", "")),
+                        SIGNIN_OWN_EXTERNAL)
+
+
+def domain_signin_problems(row, mesh=None, others=()) -> list[str]:
+    """Why a domain's sign-in cannot be used ([] when it can): its settings block's
+    shape and values (:func:`signin_problems`), settings on a ``superdomain`` row
+    (they would never be read — the row inherits the mesh's), and an external issuer
+    that is the mesh's own or another domain's (``others``: the other rows), because
+    one issuer can only ever be one brand."""
+    name = (_row_get(row, "name", "") or "").strip()
+    where = f"domain {name}" if name else "domain"
+    settings = _row_get(row, "idp_settings") or {}
+    shape = idp_settings_shape_problem(settings)
+    if shape:
+        return [f"{where}: {shape}"]
+    s = clean_idp_settings(settings)
+    idp = _row_get(row, "idp", "") or DOMAIN_IDP_SUPERDOMAIN
+    if idp != DOMAIN_IDP_OWN:
+        return ([f"{where}: it signs in through the mesh, so its own identity-provider "
+                 "settings would never be read; choose sign-in ‘own’ or clear them"]
+                if s else [])
+    out = signin_problems(s.get("provider", ""), s.get("issuer", ""),
+                          s.get("client_id", ""), s.get("jwks", ""), where)
+    if out or not has_external_signin(row):
+        return out
+    iss = s.get("issuer", "").rstrip("/")
+    mesh_iss = ((getattr(mesh, "idp_issuer", "") or "").strip().rstrip("/")
+                if mesh is not None and (getattr(mesh, "idp", "") or "casdoor") != "casdoor"
+                else "")
+    if iss and iss == mesh_iss:
+        out.append(f"{where}: its sign-in address is the mesh's own; a domain with its "
+                   "own sign-in needs an address of its own (one address can only be "
+                   "one brand), or choose sign-in ‘superdomain’")
+    for o in others or ():
+        if o is row:
+            continue
+        oname = (_row_get(o, "name", "") or "").strip()
+        if oname == name or not has_external_signin(o):
+            continue
+        oset = _row_get(o, "idp_settings") or {}
+        oiss = str(oset.get("issuer") or "").strip() if isinstance(oset, dict) else ""
+        if oiss.rstrip("/") == iss:
+            out.append(f"{where}: {oname} already uses the sign-in address {iss}; one "
+                       "address can only be one brand")
+    return out
+
+
+def set_domain_signin(row, idp: str, *, provider: str = "", issuer: str = "",
+                      client_id: str = "", jwks: str = "", mesh=None,
+                      others=()) -> list[str]:
+    """THE ONE WRITER of a domain's sign-in (``idp`` + ``idp_settings``), for every
+    screen: ``idp`` is DOMAIN_IDP_CHOICES; ``provider`` "" or "casdoor" on an ``own``
+    row means its own Casdoor (settings cleared), an external provider stores the
+    block. A ``superdomain`` row's settings are always cleared (it inherits the
+    mesh's). ``others`` are the other rows (an issuer clash is refused). Returns the
+    problems ([] = written); nothing is written when there is one. ``issuer_port`` (an
+    own Casdoor's stored port) is cleared when the row stops running its own Casdoor,
+    so a port is never held by a brand that has none. Accepts a Domain or a recorded
+    row dict."""
+    idp = (idp or "").strip() or DOMAIN_IDP_SUPERDOMAIN
+    if idp not in DOMAIN_IDP_CHOICES:
+        return [f"sign-in must be one of {'|'.join(DOMAIN_IDP_CHOICES)}, got {idp!r}"]
+    block = ({} if idp != DOMAIN_IDP_OWN else clean_idp_settings(
+        {"provider": provider, "issuer": issuer, "client_id": client_id, "jwks": jwks}))
+    probe = Domain(name=str(_row_get(row, "name", "") or ""), idp=idp,
+                   idp_settings=dict(block))
+    problems = domain_signin_problems(probe, mesh, [o for o in (others or ())
+                                                    if o is not row])
+    if problems:
+        return problems
+    if isinstance(row, dict):
+        row["idp"] = idp
+        if block:
+            row["idp_settings"] = dict(block)
+        else:
+            row.pop("idp_settings", None)
+        if not runs_own_casdoor(row):
+            row.pop("issuer_port", None)
+    else:
+        row.idp = idp
+        row.idp_settings = dict(block)
+        if not runs_own_casdoor(row):
+            row.issuer_port = 0
+    return []
 
 
 def domain_rows_to_dict(domains) -> list[dict[str, Any]]:
-    """The SAVED shape of a list of domain rows (a config file, a session record):
-    every field, except ``tor`` when it is false (#582) and ``github_org`` when it is
-    empty. A row that is not a Tor domain and names no org is written exactly as it
-    was before either field existed; loading treats an absent key as false / "". A
-    row that is already a plain dict is passed through the same filter."""
+    """The SAVED shape of a list of domain rows (a config file, a session record, the
+    brand record): every field, except the ``DOMAIN_OMIT_WHEN_EMPTY`` ones when they
+    say nothing (``tor`` false since #582; ``look``/``ways`` empty and ``issuer_port``
+    0 since #654; ``github_org`` empty). A row that uses none of them is written exactly as it was before
+    they existed; loading treats an absent key as the empty default. A row that is
+    already a plain dict is passed through the same filter."""
     out: list[dict[str, Any]] = []
     for d in domains or []:
         row = dict(d) if isinstance(d, dict) else asdict(d)
-        if not row.get("tor"):
-            row.pop("tor", None)
-        if not (row.get("github_org") or "").strip():
-            row.pop("github_org", None)
+        for k in DOMAIN_OMIT_WHEN_EMPTY:
+            v = row.get(k)
+            # an org of only spaces says nothing either (the export step strips it)
+            if not (v.strip() if isinstance(v, str) and k == "github_org" else v):
+                row.pop(k, None)
         out.append(row)
+    return out
+
+
+def domain_from_record_row(rec: dict[str, Any]) -> Domain:
+    """A Domain from a RECORDED row (a saved mesh's ``domains`` entry), carrying every
+    field by the field list and coercing each to its declared shape WITHOUT raising —
+    the local-mesh route keeps a junk sign-in as the text it found and names it later
+    (``local_mesh_domains._import_problem``), where ``ImageConfig._domain_from_dict``
+    fails loudly for a saved config. One lenient loader, so no route spells its own
+    key list (#654)."""
+    kw: dict[str, Any] = {}
+    for k in DOMAIN_FIELDS:
+        if k not in rec:
+            continue
+        v = rec.get(k)
+        f = Domain.__dataclass_fields__[k]
+        if k == "tor":
+            kw[k] = v is True
+        elif k == "issuer_port":
+            kw[k] = v if isinstance(v, int) and not isinstance(v, bool) and v > 0 else 0
+        elif f.type in ("dict[str, Any]",):
+            kw[k] = dict(v) if isinstance(v, dict) else {}
+        elif f.type in ("list[str]",):
+            kw[k] = [str(s) for s in v] if isinstance(v, (list, tuple)) else []
+        elif f.type == "bool":
+            kw[k] = bool(v)
+        else:
+            kw[k] = "" if v is None else str(v)
+    # an empty sign-in is the default, as every reader before #654 took it
+    if not kw.get("idp"):
+        kw.pop("idp", None)
+    return Domain(**kw)
+
+
+def manifest_domain_rows(domains) -> list[dict[str, Any]]:
+    """The MANIFEST shape of the domain rows — what BOTH mesh manifest emitters write
+    (``ImageConfig.mesh_manifest`` and ``WorklistDriver.manifest_v2``), so the two
+    cannot disagree: the saved shape above, with ``idp`` left out when it is the
+    superdomain default (#47: absent == superdomain for every consumer)."""
+    out: list[dict[str, Any]] = []
+    for row in domain_rows_to_dict(domains):
+        if row.get("idp", DOMAIN_IDP_SUPERDOMAIN) == DOMAIN_IDP_SUPERDOMAIN:
+            row.pop("idp", None)
+        out.append(row)
+    return out
+
+
+def brand_header_fields(brand: str, brand_title: str, org: str, cluster_domain: str,
+                        superdomain: str, login_style: str = "",
+                        login_decor: str = "") -> dict[str, Any]:
+    """The manifest HEADER both emitters write, as a projection of the record's
+    superbrand block (#654, D5): the superbrand's id is the manifest's ``brand``, its
+    internal root name the manifest's ``superdomain``. ``login_style``/``login_decor``
+    (the superbrand's shape and menu decoration) are OMIT-WHEN-EMPTY so a pre-#654
+    manifest keeps its bytes."""
+    out: dict[str, Any] = {
+        "brand": brand, "brand_title": brand_title, "org": org,
+        "cluster_domain": cluster_domain, "superdomain": superdomain,
+    }
+    if login_style:
+        out["login_style"] = login_style
+    if login_decor:
+        out["login_decor"] = login_decor
     return out
 
 
@@ -3007,6 +3468,10 @@ class ImageConfig:
     platform: str = "x86"              # x86 | rpi5 | frite | jetson -> BUILDER_SCRIPTS
     board: str = ""                    # frite: FRITE_BOARDS | jetson: JETSON_BOARDS | rpi5: RPI_BOARDS
     flavor: str = ""                   # frite: live | installer | both
+    # GB of RAM on the Raspberry Pi / Orange Pi board a cluster NODE image is for
+    # (--ram-gb). "" = not stated. REQUIRED for omnibus (16 GB+); for backend the
+    # builder refuses a value below 8, for pki/frontend below 4. x86/jetson do not take it.
+    ram_gb: str = ""
     env: str = "test"
     brand: str = "hugmesh"
     brand_title: str = "HugMesh Systems"
@@ -3188,6 +3653,17 @@ class ImageConfig:
     # "vanta-<effect>" (theme.VANTA_EFFECTS) is persisted but not yet selectable in
     # the UI — the effect loader ships only in hugmesh-login-ui today.
     login_bg_effect: str = "gradient"  # theme.BG_EFFECTS
+    # ── the superbrand's shape and menu decoration (#654, D5/D6) — the two look
+    # axes the Themes editor had no field for. The same NON-argv plane as the
+    # login_* fields; they reach the mesh through the brand record and the manifest
+    # header (OMIT-WHEN-EMPTY), never a builder flag. "" = the shipped page.
+    login_style: str = ""              # theme.STYLE_VARIANTS id
+    login_decor: str = ""              # theme.DECOR_VARIANTS id
+    # ── the brand record this image is built from (#654, D5): a PATH the Studio
+    # resolves names and flags from. NON-argv UNTIL the image builders parse
+    # --brand-record (the builders-brand-record lane); test_brand_record_copy_sites
+    # pins that the flag is emitted exactly when a builder parses it.
+    brand_record: str = ""
     # ── egress VPN ──
     egress_vpn: str = ""               # --egress-vpn FILE
     egress_vpn_locked: bool = False
@@ -3420,6 +3896,28 @@ class ImageConfig:
             t = True
             kw["optional_services"] = [x for x in svcs if x != "tor"]
         kw["tor"] = t
+        # The brand record's keys (#654): absent/null — every pre-#654 row — is the
+        # empty default; a wrong SHAPE fails loudly at load like idp and tor do, never
+        # a dict field holding a string.
+        bid = kw.get("id")
+        kw["id"] = "" if bid is None else str(bid).strip()
+        for k in ("look", "ways"):
+            v = kw.get(k)
+            if v is None:
+                kw[k] = {}
+            elif not isinstance(v, dict):
+                raise ValueError(
+                    f"domain {kw.get('name', '')!r}: {k} must be an object, got {v!r}")
+        port = kw.get("issuer_port", 0)
+        if port is None or port == "":
+            port = 0
+        if isinstance(port, str) and port.strip().isdigit():
+            port = int(port.strip())
+        if isinstance(port, bool) or not isinstance(port, int) or port < 0 or port > 65535:
+            raise ValueError(
+                f"domain {kw.get('name', '')!r}: issuer_port must be a port number, "
+                f"got {port!r}")
+        kw["issuer_port"] = port
         # per-domain GitHub org (the Go-Live export step): absent / null / "" is "no
         # org" — every pre-existing config; anything else must be an org slug, and
         # junk fails loudly at load like idp and tor do, never silently kept as a
@@ -3430,6 +3928,15 @@ class ImageConfig:
         if problem:
             raise ValueError(f"domain {kw.get('name', '')!r}: {problem}")
         kw["github_org"] = org.strip()
+        # per-domain identity-provider settings (2026-10-21): absent/null — every
+        # earlier row — is the empty (inherit) default; a wrong SHAPE or an unknown
+        # provider fails loudly at load like idp does; the values (issuer, client id)
+        # are checked by validate_identity, through domain_signin_problems.
+        st = kw.get("idp_settings")
+        problem = idp_settings_shape_problem(st)
+        if problem:
+            raise ValueError(f"domain {kw.get('name', '')!r}: {problem}")
+        kw["idp_settings"] = clean_idp_settings(st or {})
         return Domain(**kw)
 
     @staticmethod
@@ -3589,6 +4096,15 @@ class ImageConfig:
             family = os.path.splitext(os.path.basename(self.login_font_file))[0] \
                 .replace("-", " ").replace("_", " ")
         primary, secondary = self.login_primary_color, self.login_secondary_color
+        # The superbrand's shape/decoration (#654): an unknown id fails loudly here,
+        # like an unknown preset below — theme.style_tokens would otherwise fall back
+        # to the shipped style and the Studio preview would lie about the mesh.
+        for _fld, _table in (("login_style", _theme.STYLE_VARIANTS),
+                             ("login_decor", _theme.DECOR_VARIANTS)):
+            _v = getattr(self, _fld)
+            if _v and _v not in _table:
+                raise ValueError(f"unknown {_fld}: {_v!r} (one of "
+                                 f"{', '.join(sorted(_table))})")
         delta = ""
         if self.login_theme_preset:
             # A preset supplies the colours and its delta block; the shared
@@ -3738,6 +4254,14 @@ class ImageConfig:
         for d in self.domains:
             if getattr(d, "name", ""):
                 validate_domain_name(d.name)
+        # ── per-domain sign-in (2026-10-21): each own row's provider block follows the
+        # mesh-wide rules below (signin_problems), a superdomain row carries none, and
+        # no two brands share one issuer. Every pre-existing config has no block and
+        # passes untouched.
+        for d in self.domains:
+            problems = domain_signin_problems(d, self, self.domains)
+            if problems:
+                raise IdentityValidationError(problems[0])
         # ── mesh-node identity provider (I6) — fail-closed at the earliest boundary.
         # The values flow into a root-baked idp.conf AND the builders' issuer/JWKS
         # sed rewrite, so both the combination rules and the charset are enforced
@@ -4280,6 +4804,14 @@ class ImageConfig:
             a += ["--luks-pass", self.luks_pass]
         return a
 
+    def _ram_gb_args(self) -> list[str]:
+        """--ram-gb N for a Pi / Orange Pi NODE role, when the RAM was stated. A desktop
+        or the Pi's generic server has no RAM floor, so nothing is emitted for them."""
+        ram = str(self.ram_gb or "").strip()
+        if not ram or image_class(self.mode, self.role) == "desktop" or self.role == "generic":
+            return []
+        return ["--ram-gb", ram]
+
     def _rpi5_args(self) -> list[str]:
         """build-rpi5-stage4.sh — arm64: pki | backend | frontend (cluster nodes)
         or desktop (client; compose with --standalone for FDE, no mesh). --board
@@ -4295,6 +4827,7 @@ class ImageConfig:
         a = ["--role", roles.builder_role(self.role, "rpi5")]
         if self.board:                 # rpi5 | rpi4 | rpi3 ("" = builder default: rpi5)
             a += ["--board", self.board]
+        a += self._ram_gb_args()
         # rpi5-only kernel/board overrides (x86 & the other ARM builders lack these).
         if self.dtb_prefix:
             a += ["--dtb-prefix", self.dtb_prefix]
@@ -4375,6 +4908,21 @@ class ImageConfig:
         shape exactly (this platform has ONE role — a client desktop — like
         Frite), minus Frite's --desktop light|none toggle (this platform has
         no headless variant to gate — see specs-orangepi5/README.md)."""
+        if self.role in _ORANGEPI_NODE_ROLE_IDS:
+            # Cluster NODE role (EXPERIMENTAL): --role + the board's RAM, installer
+            # flavor only (the builder refuses live/both for a node).
+            a = ["--board", self.board or "orange-pi-5-plus", "--flavor", "installer",
+                 "--role", roles.builder_role(self.role, "orangepi5")]
+            a += self._ram_gb_args()
+            if self.dtb:
+                a += ["--dtb", self.dtb]
+            a += self._uboot_args()
+            a += self._arm_common_args()
+            a += self._encrypt_root_args()
+            if self.image_only:
+                a += ["--image-only"]
+            a += self._orangepi_node_cluster_args()
+            return a
         a: list[str] = ["--board", self.board or "orange-pi-5-plus", "--flavor", self.flavor or "both"]
         if self.dtb:
             a += ["--dtb", self.dtb]
@@ -4441,6 +4989,24 @@ class ImageConfig:
             a += ["--image-only"]
         return a
 
+    def _orangepi_node_cluster_args(self) -> list[str]:
+        """The mesh's cluster choices on an Orange Pi NODE role (EXPERIMENTAL): the
+        same release-state / games-domain / optional-services / IdP / Vault surface
+        _rpi5_args emits, so a mesh mixing Pi and Orange Pi nodes bakes ONE set of
+        choices. Every default emits nothing. Never called for the Orange Pi desktop
+        (its builder refuses these flags: no cluster tree is baked there)."""
+        a: list[str] = []
+        if self.release_state:
+            a += ["--release-state", self.release_state]
+        if self.games_domain:
+            a += ["--games-domain", self.games_domain]
+        a += self._services_args()
+        if self.enable_games:
+            a += ["--enable-games"]
+        a += self._idp_args()
+        a += self._vault_args()
+        return a
+
     def _orangepi4lts_args(self) -> list[str]:
         """build-orangepi4-lts-stage4.sh — arm64 LIGHT-DESKTOP CLIENT: flavor
         only, no --role and no --board. EXPERIMENTAL (hardware validation
@@ -4457,7 +5023,22 @@ class ImageConfig:
           * SINGLE-BOARD, like the appliances: mainline ships exactly one
             Orange Pi RK3399 DTB and one U-Boot defconfig for the whole
             4/4B/4 LTS family, so a --board axis would be a fake axis.
-        See specs-orangepi4-lts/README.md."""
+        See specs-orangepi4-lts/README.md.
+
+        The ``frontend`` role is its one cluster NODE role (EXPERIMENTAL; 4 GB RAM,
+        16 GB eMMC): --role frontend, installer flavor only."""
+        if self.role in _ORANGEPI_NODE_ROLE_IDS:
+            a = ["--flavor", "installer", "--role", roles.builder_role(self.role, "orangepi4-lts")]
+            a += self._ram_gb_args()
+            if self.dtb:
+                a += ["--dtb", self.dtb]
+            a += self._uboot_args()
+            a += self._arm_common_args()
+            a += self._encrypt_root_args()
+            if self.image_only:
+                a += ["--image-only"]
+            a += self._orangepi_node_cluster_args()
+            return a
         a: list[str] = ["--flavor", self.flavor or "both"]
         if self.dtb:
             a += ["--dtb", self.dtb]
@@ -4921,10 +5502,11 @@ class ImageConfig:
 
     def own_idp_domains(self) -> tuple[str, ...]:
         """Names of the domains that chose to HOST THEIR OWN Casdoor (Domain.idp ==
-        "own", issue #47), in Domains-table order — the order the compose lane's
+        "own" with no external provider — ``runs_own_casdoor``; issue #47), in
+        Domains-table order — the order the compose lane's
         port allocation (core/own_casdoor.py: 8001, 8002, …) is derived from, and
         the k8s/ArgoCD lane's input once it lands. Empty on every pre-#47 config."""
-        return tuple(d.name for d in self.domains if d.idp == DOMAIN_IDP_OWN)
+        return tuple(d.name for d in self.domains if runs_own_casdoor(d))
 
     # ---- superadmin mesh manifest -----------------------------------------
     def mesh_manifest(self) -> dict[str, Any]:
@@ -4941,17 +5523,16 @@ class ImageConfig:
         one backward-compatible reading for every consumer (old manifests provision
         identically; test_domain_idp_schema.py pins the exact golden bytes)."""
         return {
-            "brand": self.brand, "brand_title": self.brand_title, "org": self.org,
-            "cluster_domain": self.cluster_domain,
-            "superdomain": self.effective_superdomain(),
-            # per-domain ``tor`` (#582) is OMIT-WHEN-FALSE the same way: a domain
-            # without its own onion emits no key, so pre-#582 bytes never change.
-            "domains": [{k: v for k, v in asdict(d).items()
-                         if not (k == "idp" and v == DOMAIN_IDP_SUPERDOMAIN)
-                         and not (k == "tor" and not v)
-                         # the export org (OMIT-WHEN-EMPTY, the same reading)
-                         and not (k == "github_org" and not (v or "").strip())}
-                        for d in self.domains],
+            # The header is a projection of the record's superbrand block (#654, D5):
+            # the SAME function manifest_v2 calls, so the two emitters agree.
+            **brand_header_fields(self.brand, self.brand_title, self.org,
+                                  self.cluster_domain, self.effective_superdomain(),
+                                  self.login_style, self.login_decor),
+            # per-domain ``tor`` (#582), ``look``/``ways``/``issuer_port`` (#654) and
+            # ``github_org`` (the export step) are
+            # OMIT-WHEN-EMPTY the same way: a domain that uses none emits no key, so
+            # pre-#582 bytes never change. ONE row writer for both emitters.
+            "domains": manifest_domain_rows(self.domains),
             # per-user ``roles`` (issue #228) is OMIT-WHEN-SINGLE the same way (User.to_dict):
             # ``role`` stays the primary every consumer reads; a multi-role account adds
             # the full list beside it. test_user_multi_role.py pins both shapes.

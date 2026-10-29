@@ -137,7 +137,9 @@ GOLDEN_CHOICES = {
         extra_flags="--foo bar --baz",
     ),
     "mixed": dict(
-        skip_x86=True, rpi_roles="pki desktop", rpi_board="rpi3",
+        # rpi4, not rpi3: a Pi 3 (1 GB) cannot be a pki node, and the fleet check now
+        # refuses that pair up front, as the builder does
+        skip_x86=True, rpi_roles="pki desktop", rpi_board="rpi4",
         frite=True, frite_flavor="both", pentest=True, pentest_scan="baseline",
         headscale_url="https://hs.mixed.example", cluster_domain="mixed.internal",
         output_dir="/fleet-out", jobs=16, env="test",
@@ -166,7 +168,7 @@ _EVERYTHING_ENV = [
 ]
 _MIXED_ENV = [
     "SKIP_X86=1", "FRITE=1", "PENTEST=1", "RPI_ROLES=pki desktop",
-    "RPI_BOARD=rpi3", "FRITE_FLAVOR=both", "PENTEST_SCAN=baseline",
+    "RPI_BOARD=rpi4", "FRITE_FLAVOR=both", "PENTEST_SCAN=baseline",
     "HEADSCALE_URL=https://hs.mixed.example",
 ]
 

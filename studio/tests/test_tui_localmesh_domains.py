@@ -139,7 +139,11 @@ def test_the_services_step_walks_every_domain_own_domain_first():
     j.feed("")
     text = "\n".join(j.lines())
     assert f"{APEX} (this mesh's own domain) — domain 1 of 3" in text
-    assert localmesh.LANE_NOTE in text and ds.ENFORCEMENT_NOTE in text
+    assert localmesh.LANE_NOTE in text
+    # the local Docker mesh runs what is ticked: the CLUSTER's "not yet enforced"
+    # banner would contradict the lane note, so this route does not say it
+    assert ds.ENFORCEMENT_NOTE not in text and ds.DOCKER_SERVICES_HELP in text
+    assert "Mesh infrastructure" in text and "Network & services" not in text
     j.feed("n")
     assert "acme.example — domain 2 of 3" in "\n".join(j.lines())
     j.feed("n")

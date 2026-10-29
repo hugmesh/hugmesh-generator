@@ -43,10 +43,12 @@ from ..core.config import (
 )
 from ..core.domain_services import (ACTION_IMAGE_BUILD, gate_reason,
                                     services_page_applies)
+from ..core import plain_words
 from ..core.validate import validate_domain_name
+from ..core import roles as role_vocab
 from ..core.worklist import (
     WorklistConfig, WorklistEntry, derived_hostname, duplicate_hostnames, entry_id,
-    resolve_hostname,
+    ram_problem, resolve_hostname, takes_ram,
 )
 from .local_ai import OPEN_COMMAND as _LOCAL_AI_COMMAND, LocalAIScreen as _LocalAIScreen
 
@@ -329,7 +331,9 @@ class IdpScreen:
         return None
 
     def lines(self, j: "Journey") -> list[str]:
-        out = ["Which identity provider will this mesh's nodes trust?", ""]
+        out = ["Which identity provider will this mesh's nodes trust?",
+               "(This is the default every domain inherits; a domain can choose its "
+               "own in section 1, Identity, of the Domain services step.)", ""]
         for i, idp in enumerate(IDP_CHOICES, 1):
             marker = "*" if j.cfg.idp == idp else " "
             out.append(f" {marker}{i}. {IDP_LABELS[idp]}")
@@ -602,6 +606,8 @@ class WorklistScreen:
     def __init__(self):
         self._rows: list[tuple[str, str, str]] = []   # (role, platform, label)
         self._checked: set[int] = set()
+        # row index -> the board RAM (GB) typed with `ram N GB` (the GUI's RAM column)
+        self._ram: dict[int, str] = {}
 
     def enter(self, j: "Journey") -> None:
         allow = j.worklist_role_allow
@@ -615,6 +621,10 @@ class WorklistScreen:
                          if j.worklist is not None
                          and any(e.role == role and e.platform == _p
                                  for e in j.worklist.entries)}
+        prior = ({e.id: e for e in j.worklist.entries} if j.worklist is not None else {})
+        self._ram = {i: prior[entry_id(r, p)].ram_gb
+                     for i, (r, p, _l) in enumerate(self._rows)
+                     if entry_id(r, p) in prior and prior[entry_id(r, p)].ram_gb}
 
     def lines(self, j: "Journey") -> list[str]:
         out = ["Pick every image this mesh build produces (a NUMBER toggles):", ""]
@@ -624,19 +634,57 @@ class WorklistScreen:
                           "cloud).")
         for i, (role, platform, label) in enumerate(self._rows, 1):
             mark = "x" if (i - 1) in self._checked else " "
-            out.append(f" [{mark}] {i:2d}. {role}.{platform} — {label}")
+            ram = self._ram.get(i - 1, "")
+            out.append(f" [{mark}] {i:2d}. {role}.{platform} — {label}"
+                       + (f"  [RAM {ram} GB]" if ram else ""))
         out.append("")
-        out.append("(Enter = continue with the checked rows)")
+        out.append("(Enter = continue with the checked rows. `ram N GB` sets row N's "
+                   "board RAM — Raspberry Pi / Orange Pi node rows; omnibus needs "
+                   f"{role_vocab.min_ram_gb('omnibus')} or more, backend "
+                   f"{role_vocab.min_ram_gb('backend')}; `ram N -` clears it)")
         return out
 
     def prompt(self, j: "Journey") -> str:  # noqa: ARG002
         return "worklist> "
 
+    def _feed_ram(self, j: "Journey", line: str) -> None:
+        parts = line.split()
+        idx = _index(parts[1], len(self._rows)) if len(parts) == 3 else None
+        if idx is None:
+            j.status = "usage: ram N GB (row N's board RAM), or ram N - to clear it"
+            return
+        role, platform, _label = self._rows[idx]
+        if not takes_ram(role, platform):
+            j.status = f"row {idx + 1} ({role}.{platform}) takes no board RAM"
+            return
+        value = "" if parts[2] == "-" else parts[2]
+        why = ram_problem(role, platform, value) if value else ""
+        if why:
+            j.status = f"refused: {why}"
+            return
+        if value:
+            self._ram[idx] = value
+        else:
+            self._ram.pop(idx, None)
+        j.status = f"row {idx + 1} {role}.{platform}: RAM {value + ' GB' if value else 'not stated'}"
+
     def feed(self, j: "Journey", line: str) -> None:
+        if line.startswith("ram ") or line == "ram":
+            self._feed_ram(j, line)
+            return
         if line == "":
             if not self._checked:
                 j.status = "pick at least one row first (a NUMBER toggles)"
                 return
+            # the RAM rule, inline (the GUI's ram_error twin): an omnibus row on a Pi /
+            # Orange Pi must say how much RAM its board has — the builder refuses it.
+            for i in sorted(self._checked):
+                role, platform, _label = self._rows[i]
+                why = ram_problem(role, platform, self._ram.get(i, ""))
+                if why:
+                    floor = role_vocab.min_ram_gb(role) or 8
+                    j.status = f"row {i + 1}: {why} — type `ram {i + 1} {floor}` (or more)"
+                    return
             # a row staying checked KEEPS everything it carries (#383): the System
             # step's hostname (issue #229), and board / flavor / desktop / encrypt_root
             # / package deltas / infra_services / the desktop person — the GUI
@@ -650,8 +698,10 @@ class WorklistScreen:
                 if i not in self._checked:
                     continue
                 keep = prior.get(entry_id(role, platform))
-                entries.append(copy.deepcopy(keep) if keep is not None
-                               else WorklistEntry(role=role, platform=platform))
+                entry = (copy.deepcopy(keep) if keep is not None
+                         else WorklistEntry(role=role, platform=platform))
+                entry.ram_gb = self._ram.get(i, "")
+                entries.append(entry)
             j.worklist = WorklistConfig(base=j.cfg, entries=entries)
             j.advance()
             return
@@ -852,30 +902,53 @@ class UsersScreen:
 
 
 class BrandingScreen:
-    """Branding assets are pending; the THEMES surface (#63) is real — a screen,
-    not a popup (TUI-appropriate), opened with ``t``."""
+    """Branding assets are pending; the SUPERBRAND step (#654, D8) is real: the
+    drop-down with ``Create a new superbrand`` first and the design, opened with ``s``
+    and offered where the window's Branding page offers it (a mesh; on an unaffiliated
+    image it says why there is nothing to choose).
+
+    The THEMES entry (``t``) is gone (2026-10-21, the operator: "the theme selection
+    should be there instead of where it is now"): a domain's look is chosen in section
+    2 (Look) of that domain's Brand settings on the Domain services step, and the mesh's
+    own look in its own domain's section 2 — the window's Look tab, the same model."""
 
     slug = "branding"
-    title = "Branding & Themes"
+    title = "Branding"
 
     def enter(self, j: "Journey") -> None:  # noqa: ARG002
         return None
 
-    def lines(self, j: "Journey") -> list[str]:  # noqa: ARG002
-        return ["Branding assets (logo/wallpaper/plymouth) are not yet ported "
-                "to the TUI — configure them in the GUI if you need them.",
-                "",
-                "  t. Themes — edit the web login theme (colours, header/footer, "
-                "background effect)",
-                "", "(Enter continues; t opens the Themes screen)"]
+    @staticmethod
+    def _superbrand_offered(j: "Journey") -> bool:
+        return getattr(j.cfg, "mode", "") == "mesh"
+
+    def lines(self, j: "Journey") -> list[str]:
+        out = ["Branding assets (logo/wallpaper/plymouth) are not yet ported "
+               "to the TUI — configure them in the GUI if you need them.",
+               ""]
+        if self._superbrand_offered(j):
+            sb = plain_words.term("superbrand")
+            out += [f"  s. {sb.capitalize()} — which {sb} governs this mesh: "
+                    f"‘Create a new {sb}’, or one you made before; design it",
+                    ""]
+        out += ["  The web sign-in look (themes, colours, header/footer) is chosen per "
+                "domain: section 2 (Look) of each domain's Brand settings on the Domain "
+                "services step; the mesh's own look is its own domain's.",
+                "", "(Enter continues"
+                + ("; s opens the Superbrand step)" if self._superbrand_offered(j)
+                   else ")")]
+        return out
 
     def prompt(self, j: "Journey") -> str:  # noqa: ARG002
         return "branding> "
 
     def feed(self, j: "Journey", line: str) -> None:
-        if line.strip().lower() == "t":
-            from .themes import ThemesScreen
-            j.open_overlay(ThemesScreen())
+        verb = line.strip().lower()
+        if verb == "s" and self._superbrand_offered(j):
+            from .superbrand_step import SuperbrandScreen
+            screen = SuperbrandScreen()
+            screen.enter(j)
+            j.open_overlay(screen)
             return
         j.advance()
 
@@ -973,6 +1046,17 @@ def _index(line: str, count: int) -> int | None:
     return n - 1 if 1 <= n <= count else None
 
 
+
+def _image_brand_session(j):
+    """The image route's superbrand session for the Domain services screen, with row 0's
+    writers told which worklist rows this flow builds (the egress VPN file is offered
+    only when every image can take it — the Network step's own rule)."""
+    from .superbrand_step import session_for
+    s = session_for(j, "image", j.cfg, j.generator_dir)
+    s.host.mesh_writes().entries = lambda: getattr(getattr(j, "worklist", None),
+                                                   "entries", None)
+    return s
+
 class Journey:
     """The face-independent journey state machine (see the module docstring)."""
 
@@ -1007,7 +1091,8 @@ class Journey:
                       "Add more domains beyond the internal Tailscale root "
                       "domain (public go-live domains this mesh serves)?",
                       "additional_domains"),
-            NetworkScreen(), DomainsScreen(), DomainServicesScreen(),
+            NetworkScreen(), DomainsScreen(), DomainServicesScreen(
+                brand_session_of=_image_brand_session, route="image"),
             YesNoStep("users_choice", "User accounts",
                       "Configure user accounts for this mesh now?",
                       "configure_users"),
