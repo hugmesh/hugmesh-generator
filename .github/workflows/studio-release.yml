@@ -967,7 +967,7 @@ jobs:
 
           **Linux x86_64**: \`hugmesh-studio-$VERSION-x86_64.flatpak\` (install with \`flatpak install --user ./hugmesh-studio-$VERSION-x86_64.flatpak\`; needs the org.kde.Platform 6.11 runtime, and the bundle names Flathub as the place to fetch it from, so the install offers to add that remote when the runtime is missing), or \`hugmesh-studio-$VERSION-linux-x86_64.tar.gz\` (unpack and run \`hugmesh-studio\`; needs glibc 2.39 or newer).
 
-          **Linux aarch64** (ARM64: Raspberry Pi 4/5 desktops, Apple-silicon VMs, Ampere and Snapdragon machines): \`hugmesh-studio-$VERSION-aarch64.flatpak\`, built on GitHub's hosted arm64 runner from the same manifest and installed the same way (\`flatpak install --user ./hugmesh-studio-$VERSION-aarch64.flatpak\`). There is no aarch64 tarball.
+          **Linux aarch64** (ARM64: Raspberry Pi 4/5 desktops, Apple-silicon VMs, Ampere machines): \`hugmesh-studio-$VERSION-aarch64.flatpak\`, built on GitHub's hosted arm64 runner from the same manifest and installed the same way (\`flatpak install --user ./hugmesh-studio-$VERSION-aarch64.flatpak\`). There is no aarch64 tarball.
 
           Every bundle carries its architecture in its name; \`flatpak install\` refuses one built for another architecture. All packages contain the same application. The Studio drives host tooling (Docker, QEMU, kubectl) rather than replacing it, and needs a \`hugmesh-generator\` checkout to read build scripts and cluster specs from: point it at one on first run.
 

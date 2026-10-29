@@ -15,7 +15,7 @@ other way (a button in Actions). The first beta, `0.3.0-beta.1`, shipped on
 |---|---|---|
 | `hugmesh-studio-<version>-x64.msi` | Windows 10/11 x64 | PyInstaller → WiX v6 |
 | `hugmesh-studio-<version>-x86_64.flatpak` | x86_64 Linux with Flatpak | flatpak-builder, `org.kde.Platform` 6.11 (the bundle names Flathub as its source) |
-| `hugmesh-studio-<version>-aarch64.flatpak` | aarch64 (ARM64) Linux with Flatpak: Raspberry Pi 4/5 desktops, Apple-silicon VMs, Ampere and Snapdragon machines | the same manifest on GitHub's hosted `ubuntu-24.04-arm` runner (job `flatpak-aarch64`) |
+| `hugmesh-studio-<version>-aarch64.flatpak` | aarch64 (ARM64) Linux with Flatpak: Raspberry Pi 4/5 desktops, Apple-silicon VMs, Ampere machines | the same manifest on GitHub's hosted `ubuntu-24.04-arm` runner (job `flatpak-aarch64`) |
 | `hugmesh-studio-<version>-linux-x86_64.tar.gz` | x86_64 Linux, glibc 2.39+ | PyInstaller (same spec as the MSI) |
 
 [`.github/workflows/studio-release.yml`](../.github/workflows/studio-release.yml)
