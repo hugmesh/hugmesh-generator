@@ -258,6 +258,7 @@ def _domain_options() -> "list[Option]":
                               "set on the Go-Live wizard", ("domains",), source=name))
         elif name == "tor":
             out.append(Option("domain", "tor", "its own Tor address (front door)", "bool", (), False,
+                              "an onion address of its own, ticked on the Ways to reach it tab; "
                               "needs Tor on the node or mesh", DOMAIN_PAGES, setter="tor",
                               source=name))
         elif name == "github_org":
@@ -469,6 +470,8 @@ def render_options(opts: Iterable[Option], budget_tokens: int = 600,
                     v = "on" if v else "off"
                 cur = str(v) if str(v) != "" else "not set"
         line = f"- {o.key} ({o.label}): {o.choices_text()}"
+        if o.doc and not o.key.startswith("look.") and o.scope != "image":
+            line += f" — {o.doc}"
         if cur:
             line += f" | current: {cur}"
         if o.setter == "" and not o.secret:

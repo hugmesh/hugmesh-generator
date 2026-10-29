@@ -136,3 +136,57 @@ def test_the_flags_are_documented_next_to_print_specs():
                                "README.md"), encoding="utf-8").read()
     assert "--local-ai-status" in readme and "--local-ai-prompt" in readme
     assert readme.index("--local-ai-status") > readme.index("--scan-hardware")
+
+
+# ── the grounded assistant's command-line faces (2026-10-29) ─────────────────────────
+STUDIO_ROOT_ = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def test_prompt_is_unchanged_unless_grounded_and_then_carries_a_system_and_a_footer(fake, env, capsys):
+    env.setenv("OLLAMA_HOST", fake.host)
+    env.delenv("LOCAL_AI_GROUNDED", raising=False)
+    rc, out, err = cli(["--local-ai-prompt", "what is hugmesh"], capsys)
+    body = [r[2] for r in fake.requests if r[1] == "/api/chat"][-1]
+    assert rc == 0 and out.strip() == "Hello there" and body["messages"] == [{"role": "user", "content": "what is hugmesh"}]
+    env.setenv("LOCAL_AI_GROUNDED", "1")
+    env.setenv("HUGMESH_GENERATOR_DIR", os.path.dirname(STUDIO_ROOT_))
+    rc, out, err = cli(["--local-ai-prompt", "what is hugmesh"], capsys)
+    body = [r[2] for r in fake.requests if r[1] == "/api/chat"][-1]
+    assert rc == 0 and body["messages"][0]["role"] == "system"
+    assert "# HugMesh primer" in body["messages"][0]["content"] and "- face: command line (cli)" in body["messages"][0]["content"]
+    assert out.startswith("Hello there") and "\nSources: " in out
+
+
+def test_catalogue_and_docs_need_no_model(env, capsys):
+    from hugmesh_studio.core import local_ai_status as lai_mod
+    import io
+    out = io.StringIO()
+    assert lai_mod.main(["catalogue", "domain"], out=out, err=io.StringIO()) == 0
+    text = out.getvalue()
+    for key in ("services", "signin", "tor", "tailnet", "egress", "look.preset", "look.primary", "github_org"):
+        assert f"\n- {key} (" in text, key
+    err = io.StringIO()
+    assert lai_mod.main(["catalogue", "nope"], out=io.StringIO(), err=err) == 2 and "usage" in err.getvalue()
+    env.setenv("HUGMESH_GENERATOR_DIR", os.path.dirname(STUDIO_ROOT_))
+    out = io.StringIO()
+    assert lai_mod.main(["docs", "how", "do", "I", "stop", "the", "DevOps", "lane", "without", "deleting", "it"],
+                        out=out, err=io.StringIO()) == 0
+    text = out.getvalue()
+    assert "[doc: STUDIO-WALKTHROUGH.md § Stopping the DevOps lane without deleting it]" in text
+    assert text.rstrip().split("\n")[-1].startswith("Sources: STUDIO-WALKTHROUGH.md § ")
+    err = io.StringIO()
+    assert lai_mod.main(["docs"], out=io.StringIO(), err=err) == 2 and "usage: docs" in err.getvalue()
+    env.setenv("HUGMESH_GENERATOR_DIR", str(env._setitem[0][0]) if False else os.path.join(os.environ["HUGMESH_STUDIO_STATE_DIR"], "nodocs"))
+    os.makedirs(os.environ["HUGMESH_GENERATOR_DIR"], exist_ok=True)
+    out = io.StringIO()
+    assert lai_mod.main(["docs", "what", "is", "hugmesh"], out=out, err=io.StringIO()) == 0
+    assert out.getvalue().strip() == "Sources: none (no docs folder on this machine)"
+
+
+def test_the_shell_script_lists_the_new_verbs_and_grounds_prompt_and_chat():
+    path = os.path.join(os.path.dirname(STUDIO_ROOT_), "scripts", "local-ai.sh")
+    with open(path, encoding="utf-8") as fh:
+        sh = fh.read()
+    assert "LOCAL_AI_GROUNDED=1 la_py chat" in sh and 'LOCAL_AI_GROUNDED=1 la_py prompt "$@"' in sh
+    assert 'docs)          shift; la_py docs "$@" ;;' in sh and 'catalogue)     shift; la_py catalogue "$@" ;;' in sh
+    assert "scripts/local-ai.sh docs" in sh and "scripts/local-ai.sh catalogue" in sh

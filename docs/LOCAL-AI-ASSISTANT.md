@@ -328,7 +328,9 @@ can hold, at the price of the prompt leaving your PC for a machine you run.
   `gh` is logged in if you cannot watch every command. The no-remote clone of section
   6.1 helps; it is not a sandbox.
 * **No secrets in prompts.** `.e2e-credentials`, vault files and `.env` files stay out
-  of what you paste or let it read.
+  of what you paste or let it read. The Studio's assistant enforces this with a
+  deny-list (section 12.6): a file on it is never opened, and every log line it quotes
+  is redacted first.
 * **Review every diff.** A small model invents function names and reports tests it did
   not run.
 * **No auto-approval of tools**, and no `sudo` in a session you cannot watch.
@@ -594,3 +596,182 @@ shown failing against a doctored copy of the code it covers.
 
 *Measured on 2026-10-07 with Ollama 0.21.2. Model data from the Ollama library pages
 of the same day; re-check them before relying on a size, a context window or a tag.*
+
+## 12. What the assistant knows and can do
+
+Since 2026-10-29 the bottom panel of every Studio window, the text UI's Local AI
+screen (F2 / `local-ai`) and `scripts/local-ai.sh prompt|chat` are one grounded
+assistant. It is still the same local model on the same loopback Ollama; what changed
+is what it is told before every question. Everything below is Qt-free code under
+`studio/hugmesh_studio/core/assistant_*.py`.
+
+### 12.1 The primer
+
+One text, `core/agent_context.primer_text`, says what HugMesh is, what the Studio
+does and where the local sources are. The coding-agent brief (`HUGMESH-CONTEXT.md`)
+starts with the same text, so the two never describe the project differently. It is
+under 600 tokens by test.
+
+### 12.2 Where you are
+
+Every question carries the page the person is on (`core/assistant_context.Where`):
+the face (window, terminal, command line), the page title and its step number for
+the mode, the domain on screen and which of its tabs (Identity, Look, Services, Ways)
+is open, the brand, one line per domain (services, sign-in, Tor, VPN and egress
+choices), whether the local mesh is up and which verb runs, the running build or the
+last failed one with its last error lines (redacted), the model and context size, and
+the per-domain code folders. The window reads its page facts on the window thread
+(attribute reads only) and collects the file-based facts on the worker, each
+collector under a one-second budget; a slow one yields "(unavailable)", never a stall.
+
+### 12.3 The docs it reads
+
+`core/assistant_docs` splits an allowlist of this checkout's Markdown (the Studio
+walkthrough and wizard flow, the studio README, the per-feature docs; `README.md` by
+its user-facing headings only) on `##`/`###` headings and ranks the sections with
+BM25 (stdlib, offline). The index is cached under `<state dir>/assistant/docs-index.json`
+and rebuilt only when a file's mtime or size changes. Hand-offs, roadmaps, audits and
+machine-written inventories are never indexed. An installed Studio without a `docs/`
+folder still works; every answer then ends with
+`Sources: none (no docs folder on this machine)`.
+
+### 12.4 Tips along the bottom
+
+`core/assistant_tips` holds one to three short tips for every page (the wizard's
+slugs with the local-mesh steps expanded, plus the text UI's screens). The collapsed
+bar shows `Tip: ...` with a `×` (Hide tips; a per-viewer setting, `tips_hidden` in
+`local-ai-dock.json`, with a `Show tips` button in the panel's options column); the
+expanded panel shows the same line above the answer area; the text UI prints it under
+the status and `tips on|off` toggles it. A running model may replace the curated tip
+with one sentence for the same page (60 tokens, 20 s, never while an answer is in
+flight, once per page and domain in ten minutes); a sentence that names a command the
+docs do not, or a word the brand screens never show, is dropped.
+
+### 12.5 Answers and their Sources line
+
+The model is asked with: `# HugMesh primer`, `# Rules` (answer from the snippets, the
+page facts and the primer only; say "I do not know from the docs I have" otherwise;
+never a command that is not in a snippet; never claim to have changed anything),
+`# Where the person is`, `# Options on this page`, `# Snippets` and, on a page with
+proposable settings, `# Change format`. Each part has a cap and the whole stays under
+the context size minus 6000 tokens for the answer; when it cannot, the options, the
+snippets, the page facts and the history are dropped in that order and the answer
+says `(page facts left out: the question is long)`. After every answer the face
+prints `Sources: STUDIO-WALKTHROUGH.md § Domain services; ...` — made by the code
+from what was retrieved, never by the model — and, when the answer spells a `make`,
+`scripts/`, `ollama`, `docker compose` or `git` command no snippet contains,
+`Commands not found in the docs I read: ...`. With no model running the face shows
+`[Local AI is not running. Press Start local assistant.]` and the best snippet.
+
+`scripts/local-ai.sh prompt` and `chat` export `LOCAL_AI_GROUNDED=1`, which makes a
+bare `send_prompt` (and so `hugmesh-studio --local-ai-prompt`) grounded the same way;
+unset, the command line sends exactly what it sent before. `chat` understands
+`/where <page>`. Two model-free commands: `scripts/local-ai.sh docs [--page=SLUG]
+<question>` prints the snippets and the Sources line; `scripts/local-ai.sh catalogue
+[domain|mesh|image]` prints every option (12.7).
+
+### 12.6 Privacy: the deny-list and redaction
+
+Nothing leaves the machine. Files that hold secrets are never opened by the
+assistant — not by the docs index, not by a code edit, not by a state collector
+(`core/assistant_context.DENY_PATHS`):
+
+- `<generator>/keys-out/**` — generated node keys
+- `<generator>/keys-*/` — generated node keys (any keys-* folder)
+- `<generator>/.e2e-credentials` — e2e account credentials
+- `<generator>/tests/stack/.env` — the local stack's environment
+- `~/.hugmesh/mesh-node/.env` — the mesh node's environment
+- `~/.hugmesh/keyzip/**` — admin key-zips
+- `~/.config/hugmesh-studio/local-login/roles.json` — local sign-in roles
+- `<state>/**/secrets.json` — a build's secrets
+- `<workdir>/secrets.json` — a build's secrets
+- `<workdir>/report.json` — a build's report (carries seeded credentials)
+- `<workdir>/.cli.json` — a build's argv (carries secrets)
+- `**/vault/token` — a Vault token
+- `**/vault/unseal-key` — a Vault unseal key
+- `*.kubeconfig` — a cluster credential
+- `$KUBECONFIG` — the cluster credential the shell names
+- `**/*.pem` — key or certificate material
+- `**/*.key` — key material
+- `**/id_*` — SSH keys
+- `**/.env` — an environment file
+- `~/.local/share/hugmesh-local-only/**` — the operator's local-only folder
+- `<secret_files>/**` — a secret-files staging folder
+- `<egress_vpn_conf>` — the egress VPN provider file
+
+A question that names one gets "That file holds secrets; I do not read it." Every
+value whose key looks secret (password, token, auth_key, api_key, private, unseal,
+kubeconfig, luks, client_secret, cookie, session_id) is rendered as
+`(set, never shown)`, and every free-text line (error tails, run logs, file texts shown
+for a code edit) goes through `redact`: private-key blocks, bearer tokens,
+`password=...`, Tailscale, GitHub, AWS and Vault tokens, JWTs, database URLs with
+credentials, the local-only folder's path and the e2e `user / secret` shape are
+blanked. `studio/tests/test_assistant_privacy.py` plants a canary in every denied path
+and asserts none reaches any rendered text.
+
+### 12.7 The option catalogue (from the code)
+
+`core/assistant_catalogue` builds, at import, one entry per setting the Studio
+offers — from `config.Domain`, `LocalMeshBootstrapConfig` and `ImageConfig` and the
+`*_CHOICES` tables, the theme presets, modes, styles, decorations and background
+effects, the font presets, the reach choices — with its valid values, default, the
+page it is edited on (`assistant_catalogue_pages.json`, written by
+`scripts/local-ai/catalogue-pages.py` and checked by a test) and whether the
+assistant may propose a change to it. The slice for the page on screen goes into every
+prompt as `# Options on this page`. `scripts/local-ai.sh catalogue domain` lists the
+domain scope: `services`, `signin` (and `provider`, `issuer`, `client_id`, `jwks`),
+`tor`, `tailnet`, `egress`, `look.preset`, `look.mode`, `look.primary`,
+`look.secondary`, `look.font`, `look.style`, `look.decor`, `look.bg_effect`,
+`github_org` and the rest.
+
+### 12.8 Small changes to a domain, on a press
+
+On a domain's page the model may answer a request such as "turn off the forum for
+this domain", "use a darker purple" or "switch this domain to its own Casdoor" with
+one sentence and one fenced block:
+
+```
+I can turn the forum off for shop.example.
+```change
+{"domain": "shop.example", "field": "services", "to": ["akkoma", "tuwunel"]}
+```
+```
+
+`core/assistant_actions.parse_proposal` reads the block; `validate` checks the field
+against the catalogue and the page's own validators (`brand_look.check_value`,
+`domain_reach`, `config.signin_problems`), reads the current value from the page —
+never from the model — and refuses a no-op ("Already set to ..."), another domain
+than the one on screen unless the question named it, or a field this page does not
+edit ("I can only change these on this page: ... Valid values for <key>: ..."). The
+window shows a card `Proposed change — <domain>` with `<label>: <from> -> <to>`,
+Apply and Cancel; the text UI prints the same block and takes `apply`, `cancel` and
+later `undo`. Apply re-reads the page first (a value that moved since the proposal is
+refused: "changed to <x> since I proposed this; ask again") and then writes through
+the page's own functions — the `BrandView` setters, the look model, the Ways tab's
+Tor signal, the Services tab's check boxes — so the visible widgets show the new value
+exactly as after a click; Undo puts the before value back the same way (one level per
+page). The keys the assistant may propose (`FIELD_ROUTES`): `services`, `tor`,
+`signin`, `provider`, `issuer`, `client_id`, `jwks`, `tailnet`, `egress` (`vpn` is
+proposed as a mode only — "pick the VPN file on the page"), `look.preset`,
+`look.mode`, `look.primary`, `look.secondary`, `look.font`, `look.style`,
+`look.decor`, `look.bg_effect`; on the local-mesh steps `env`, `with_tor`, `services`
+(the mesh-level list), `web_locales` and `superadmin_username`. Passwords, the auth
+key, the egress provider file, paths and every image-route field are refused.
+
+### 12.9 Small code edits, on a press
+
+For a domain that has a code folder (the per-domain workspaces the Studio made under
+`<state>/domain-code/<mesh>/<app>-<domain>/`), a request that names a file ("change
+the footer text in index.html") sends the file's current text and gets back one
+sentence and one fenced `diff` block. `core/assistant_code_edits.parse_diff` is a
+small unified-diff parser: every context line must match the file exactly. The window
+shows `Proposed edit — <app>-<domain>` with View diff (the Current work window's
+viewer), Apply and Cancel, then Revert. Apply writes byte copies of the files to
+`<state>/assistant-edits/<id>/before/` with a manifest (sha256 before and after), then
+the files; Revert restores the copies after checking the file still has the applied
+sha. Limits: text files only, at most 3 files and 120 changed lines, 64 KiB per file,
+never a secret-shaped name, never through a symlink or outside the folder, never the
+build source root. Nothing is committed, pushed or run. Anything bigger ("refactor",
+"add a feature", more files) is handed to the coding-agent launcher: "That is more
+than a small edit (...). Open a coding session with the Launch button — your request
+is in the brief."

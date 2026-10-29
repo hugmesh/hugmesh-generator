@@ -151,10 +151,18 @@ TITLE_ALIASES: dict[str, str] = {
     "vault": "Secrets store — mesh only",
     "Secrets store": "Secrets store — mesh only",
     "home": "Home folder, encryption & login",
-    "build": "Build",
-    "launch": "Build",
+    "build": "Review",                       # gui/pages/build.py's title is "Review"
+    "launch": "Build",                       # gui/pages/launch.py's title is "Build"
     "progress": "Building",
     "review": "Review",
+    "HugMesh Image Studio": 'Welcome — "HugMesh Image Studio"',
+    "Home Folder, Encryption, and Login": "Home folder, encryption & login",
+    "Target hardware": "Target hardware — standalone and cloud",
+    "Load your admin config (key-zip or link)": "Load your admin config (key-zip or link) — cloud and mesh",
+    "Bring-up and monitor": "Local Docker mesh",
+    "Domain, Mesh, and Services": "Domain, Mesh, and Services — every mode",
+    "Domains": "Domains — mesh only",
+    "Users": "Users — generated accounts, or your own",
 }
 for _slug in ("localmesh_choice", "localmesh_join", "localmesh_env", "localmesh_domains",
               "localmesh_domain_services", "localmesh_source", "localmesh_services",
@@ -171,6 +179,10 @@ who will with you your not no yes also any all more one two up down out over und
 _TOKEN_RE = re.compile(r"[a-z0-9][a-z0-9_.\-]{1,}")
 _HEADING_RE = re.compile(r"^(#{2,3})\s+(.*?)\s*#*\s*$")
 _K1, _B = 1.2, 0.75
+#: A chunk scoring under this share of the best one is left out (precision over padding).
+MIN_RELATIVE_SCORE = 0.3
+#: A file's text before its first heading is an introduction, not an answer.
+TOP_PENALTY = 0.6
 MAX_CHUNK_TOKENS = 700
 MIN_PART_TOKENS = 300
 SCHEMA = 2
@@ -426,20 +438,36 @@ def _bm25(idx: Index, query: "list[str]", i: int) -> float:
 
 
 def _title_for(where) -> str:
+    """The ONE walkthrough heading for the page (for callers that want a string)."""
+    heads = _headings_for(where)
+    return heads[0] if heads else ""
+
+
+def _headings_for(where) -> "list[str]":
+    """Every heading that may describe the page: the title's alias, the slug's alias,
+    the title itself (a page whose title IS a walkthrough heading needs no alias)."""
+    if where is None:
+        return []
     title = (getattr(where, "title", "") or "").strip()
     slug = (getattr(where, "slug", "") or "").strip()
-    return TITLE_ALIASES.get(title) or TITLE_ALIASES.get(slug) or title
+    out = []
+    for cand in (TITLE_ALIASES.get(title), TITLE_ALIASES.get(slug), title):
+        if cand and cand not in out:
+            out.append(cand)
+    return out
 
 
 def scored(idx: Index, question: str, where=None) -> "list[tuple[float, Chunk]]":
     """Every chunk with its score, best first (deterministic: ties by id)."""
     query = _words(question)
-    page_heading = _title_for(where).lower() if where is not None else ""
+    page_headings = {h.lower() for h in _headings_for(where)}
     qwords = set(query)
     rows = []
     for i, c in enumerate(idx.chunks):
         s = _bm25(idx, query, i) * c.weight
-        if page_heading and c.heading.lower() == page_heading:
+        if c.heading == "(top)":
+            s *= TOP_PENALTY                 # a file's preamble is rarely the answer
+        if page_headings and c.heading.lower() in page_headings:
             s += 1.5
         if qwords & set(_words(c.heading)):
             s += 0.5
@@ -457,18 +485,21 @@ def retrieve(question: str, where=None, *, index: Optional[Index] = None,
     if idx.empty:
         return []
     ranked = scored(idx, question, where)
+    best = ranked[0][0] if ranked else 0.0
     out, used, seen = [], 0, set()
-    for _s, c in ranked:
+    for s, c in ranked:
         key = (c.file, c.heading)
         if key in seen or len(out) >= k or used + c.tokens > budget_tokens:
             continue
+        if s < best * MIN_RELATIVE_SCORE:    # a weak match pads the Sources line with noise
+            break
         out.append(c)
         used += c.tokens
         seen.add(key)
     # the page's own section is always worth having: the person is standing on it
-    page_heading = _title_for(where).lower() if where is not None else ""
-    if page_heading and not any(c.heading.lower() == page_heading for c in out):
-        own = next((c for _s, c in ranked if c.heading.lower() == page_heading), None)
+    page_headings = {h.lower() for h in _headings_for(where)}
+    if page_headings and not any(c.heading.lower() in page_headings for c in out):
+        own = next((c for _s, c in ranked if c.heading.lower() in page_headings), None)
         if own is not None and used + own.tokens <= budget_tokens:
             if len(out) >= k:
                 used -= out[-1].tokens
@@ -476,12 +507,14 @@ def retrieve(question: str, where=None, *, index: Optional[Index] = None,
             out.append(own)
             used += own.tokens
             seen.add((own.file, own.heading))
-    for _s, c in ranked:                           # second parts, if room is left
-        if len(out) >= k or c in out or used + c.tokens > budget_tokens:
+    for s, c in ranked:                            # second parts, if room is left
+        if len(out) >= k or c in out or used + c.tokens > budget_tokens or s < best * MIN_RELATIVE_SCORE:
             continue
         if (c.file, c.heading) in seen and c.part:
             out.append(c)
             used += c.tokens
+    # the page's own section reads first: a small model weighs the first snippet most
+    out.sort(key=lambda c: 0 if c.heading.lower() in page_headings else 1)
     return out
 
 
@@ -515,15 +548,16 @@ def fallback_text(chunks: Iterable[Chunk], primer: str = "", *, index: Optional[
 
 
 # ── commands ─────────────────────────────────────────────────────────────────────────
+_ARG = r"(?:[ \t]+(?![A-Z])[A-Za-z0-9_./:@\-=]+(?<![.;,]))*"
 _CMD_RE = re.compile(
     r"(?:(?<=^)|(?<=[\s`$>]))"
-    r"((?:make\s+[A-Za-z0-9_.\-]+)"
-    r"|(?:\./scripts/[A-Za-z0-9_./\-]+(?:\s+[A-Za-z0-9_.\-=]+)*)"
-    r"|(?:scripts/[A-Za-z0-9_./\-]+(?:\s+[A-Za-z0-9_.\-=]+)*)"
-    r"|(?:ollama\s+(?:pull|run|serve|list|ps|rm|stop|show|create)(?:\s+[A-Za-z0-9_.:\-]+)?)"
-    r"|(?:docker\s+compose(?:\s+[A-Za-z0-9_.\-]+)*)"
+    r"((?:make\s+[a-z0-9_.\-]+(?<![.;,]))"
+    r"|(?:\./scripts/[A-Za-z0-9_./\-]+(?<![.;,])" + _ARG + r")"
+    r"|(?:scripts/[A-Za-z0-9_./\-]+(?<![.;,])" + _ARG + r")"
+    r"|(?:ollama\s+(?:pull|run|serve|list|ps|rm|stop|show|create)(?:[ \t]+[A-Za-z0-9_.:\-]+(?<![.;,]))?)"
+    r"|(?:docker\s+compose" + _ARG + r")"
     r"|(?:git\s+(?:clone|pull|push|commit|checkout|reset|rebase|merge|fetch|add|status|log|diff)"
-    r"(?:\s+[A-Za-z0-9_./:@\-]+)*))", re.M)
+    + _ARG + r"))", re.M)
 _BOUND = ("Run", "The", "Then", "Use", "and", "or", "to", "then", "when", "if")
 
 

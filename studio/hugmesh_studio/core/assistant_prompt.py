@@ -54,7 +54,10 @@ RULES = (
     "this page and this domain unless the person names another. Everything stays on this "
     "machine. To propose a setting change, reply with one sentence and one ```change "
     "block (see Change format). Do not claim to have changed anything; a change happens "
-    "only when the person presses Apply."
+    "only when the person presses Apply. If the person asks to change something that is "
+    "not under Options on this page (a password, a key, a path, another page's setting), "
+    "say so by name: 'I cannot change <that> here' and list what this page offers. Use the "
+    "page's own words (the tab names, the labels under Options) when you point somewhere."
 )
 
 CHANGE_FORMAT = (
@@ -162,6 +165,13 @@ def build(question: str, where: Optional[Where], history: "list[dict] | None" = 
         fmt = (fmt + "\n\n" if fmt else "") + DIFF_FORMAT
     rules_block = _cap(rules + ("\n\n# Change format\n" + fmt if fmt else ""), CAPS["rules"] + 150)
     where_text = render_where(where)
+    try:
+        from . import assistant_tips as atips
+        tip = atips.tip_for(where, rotation=atips.TipRotation()) if where.slug else ""
+    except Exception:                        # noqa: BLE001 — a tip is decoration
+        tip = ""
+    if tip:
+        where_text += f"\n- about this page: {tip}"
     if index is None:
         try:
             index = adocs.load_index(gen)
@@ -192,6 +202,8 @@ def build(question: str, where: Optional[Where], history: "list[dict] | None" = 
             dropped.append(name)
             if name == "snippets":
                 chunks = []
+        elif name == "snippets" and snippets is None and snippet_budget <= 0:
+            dropped.append(name)                  # there was no room to retrieve any
     hist_cap = min(CAPS["history"], max(0, room - total()))
     hist = trim_history(history or [], hist_cap)
     if (history or []) and not hist:

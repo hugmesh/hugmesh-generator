@@ -566,6 +566,7 @@ class GuiTabsTarget(RowTarget):
         return self.view
 
     def read(self, route: str, key: str):
+        self._view()                             # no tabs on screen: nothing is proposed
         if route == "services":
             return list(self.body.selected_slugs())
         if route == "tor":
