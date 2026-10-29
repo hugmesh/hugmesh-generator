@@ -918,3 +918,44 @@ Then('concurrent author-observer pairs each achieve read-after-write within {int
       await req.dispose();
     }
   });
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// BDD coverage round 2026-09-23 (services lane) — admin-bff-api#93. The step
+// below reuses the helpers this file already carries (api / csrfHeaders).
+// ═══════════════════════════════════════════════════════════════════════════
+
+// ── the mod-bff notify_channels directive (admin-bff-api#93, the wire half) ──
+//
+// mod-bff's BanRequest carries `notifyChannels` and AdminSuspensionClient puts it
+// in the body it POSTs to admin-bff. A TTL'd ban on the standing banned persona is
+// the least-destructive real write that exercises that path: the effect expires
+// on its own and touches a persona no other scenario expects to be unbanned.
+
+When('I ban {string} on platform {string} for {int} seconds with the notify channels {string}',
+  async ({ world }, target: string, platform: string, ttlSeconds: number, channelsCsv: string) => {
+    const ctx = api(world);
+    const notifyChannels = channelsCsv.split(',').map((s) => s.trim()).filter(Boolean);
+    const r = await ctx.post('/bff/mod/ban', {
+      headers: await csrfHeaders(ctx),
+      data: { platform, target, reason: 'bdd: notify_channels directive (admin-bff-api#93)', ttlSeconds, notifyChannels },
+      failOnStatusCode: false,
+    });
+    world.set('ban', r);
+  });
+
+Then('the ban was accepted as pending-reconcile with HTTP {int}', async ({ world }, status: number) => {
+  const r = world.get<APIResponse>('ban');
+  expect(r.status(), `POST /bff/mod/ban -> ${r.status()} ${(await r.text()).slice(0, 300)}`).toBe(status);
+});
+
+// ── the upstream's OWN refusal on a governed path (admin-bff-api#62) ─────────
+//
+// 'the gateway verdict is {string}' reads DENIED only when the 403 carries
+// X-Route-Denied, so a refusal made by the BFF behind the door (403, no header)
+// reads PASSED there. A scenario that means "the gateway let it through and the
+// BFF said no" pairs 'the gateway did not reject the request' with this step.
+Then('the governed path answered HTTP {int}', async ({ world }, status: number) => {
+  const r = world.get<APIResponse>('governed');
+  expect(r.status(), `GET ${world.get<string>('governedPath')} -> ${whyOf(r)}`).toBe(status);
+});
