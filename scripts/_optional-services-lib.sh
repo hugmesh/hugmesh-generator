@@ -145,8 +145,16 @@ gate_optional_services() {
                 _opt_drop_extrahost "${apps}/20-gateway-be.yaml" games.
                 _opt_drop_rows  "${tree}/manifests/route-access/initdb/20-schema.sql" hugmesh-be-gateway \
                     '/games/api/admin/**' '/games/**'
+                # ── the shell-mounted games SCREENS (2026-10-28) — degrade with games ──
+                # The `games` federation remote (manifests/games-ui) + the two fe-gateway
+                # path routes that reach it and the games BFF (games-bff /games/api/**,
+                # games-ui /games/**), and the fe route-access rows for both — pruned
+                # together, so a games-deselected build carries no route into the void
+                # and no grant for a path nothing serves.
+                rm -rf "${tree}/manifests/games-ui"
+                _opt_drop_route     "${apps}/20-gateway-fe.yaml" games-bff games-ui
                 _opt_drop_rows  "${tree}/manifests/route-access/initdb/20-schema.sql" hugmesh-fe-gateway \
-                    '/games/admin/**'
+                    '/games/admin/**' '/games/api/admin/**' '/games/api/**' '/games/**'
                 # ── GAMES APP-STORE (games-services control plane) — degrade with games ──
                 # The app-store rides the games slug (it needs the games namespace up), so
                 # deselecting games prunes the WHOLE control plane: the 13c instances

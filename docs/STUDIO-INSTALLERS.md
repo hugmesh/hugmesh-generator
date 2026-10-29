@@ -14,7 +14,7 @@ other way (a button in Actions). The first beta, `0.3.0-beta.1`, shipped on
 | Artifact | Platform | Built by |
 |---|---|---|
 | `hugmesh-studio-<version>-x64.msi` | Windows 10/11 x64 | PyInstaller → WiX v6 |
-| `hugmesh-studio-<version>-x86_64.flatpak` | x86_64 Linux with Flatpak | flatpak-builder, `org.kde.Platform` 6.8 |
+| `hugmesh-studio-<version>-x86_64.flatpak` | x86_64 Linux with Flatpak | flatpak-builder, `org.kde.Platform` 6.11 (the bundle names Flathub as its source) |
 | `hugmesh-studio-<version>-linux-x86_64.tar.gz` | x86_64 Linux, glibc 2.39+ | PyInstaller (same spec as the MSI) |
 
 [`.github/workflows/studio-release.yml`](../.github/workflows/studio-release.yml)
@@ -111,22 +111,73 @@ Get-FileHash .\hugmesh-studio-0.3.0-beta.1-x64.msi -Algorithm SHA256
 
 ## Linux
 
+The bundle needs the `org.kde.Platform` 6.11 runtime (the app is Qt, and the KDE
+runtime already ships Qt; building against GNOME would mean bundling all of Qt). Since
+this change the bundle also says where that runtime comes from (`flatpak build-bundle
+--runtime-repo=https://dl.flathub.org/repo/flathub.flatpakrepo`): when the installation
+has no remote with that URL, `flatpak install` asks to add it as `flathub`, then fetches
+the runtime before the app. On a machine with **no Flatpak remotes at all**:
+
 ```bash
-flatpak install --user ./hugmesh-studio-0.3.0-beta.1-x86_64.flatpak
+flatpak install --user ./hugmesh-studio-<version>-x86_64.flatpak
 flatpak run org.hugmesh.ImageStudio --generator-dir ~/Github/hugmesh-generator
 ```
 
-The bundle needs the `org.kde.Platform` 6.8 runtime. The app is Qt, and the KDE
-runtime already ships Qt; building against GNOME would mean bundling all of Qt.
+The first command asks before it adds the remote (`-y` or `--noninteractive` answers
+yes for you). Measured on flatpak 1.18.4 (2026-10-29): the question is asked whenever
+no remote with that URL exists, even when the runtime is already installed, and
+answering no fails the install with `Remote "flathub" not found`. So installing this
+bundle means having Flathub as a remote in that installation. To add it yourself first,
+which is the same thing one step earlier:
+
+```bash
+flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+flatpak install --user ./hugmesh-studio-<version>-x86_64.flatpak
+```
+
+**The published `0.3.0-beta.1` bundle** was exported before this change: it carries no
+runtime hint and was built on `org.kde.Platform` 6.8, a branch Flathub now flags
+end-of-life (it still installs). On a machine without that runtime it stops with
+`requires the runtime org.kde.Platform/x86_64/6.8 which was not found` (reproduced
+2026-10-29). Install the runtime by hand first, then the bundle:
+
+```bash
+flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+flatpak install --user -y flathub org.kde.Platform//6.8
+flatpak install --user ./hugmesh-studio-0.3.0-beta.1-x86_64.flatpak
+```
 
 The manifest requests `--filesystem=host` and `--talk-name=org.freedesktop.Flatpak`.
 Those grants are broad. They let the app read your checkout and run host
 `docker`/`qemu`. If you would rather not grant them, run the Studio from a checkout; it
 needs no installer.
 
-The release is a **bundle**, not a Flathub app. HugMesh's own governed desktops remove
-the Flathub remote (`keys-template/desktop-governance/flatpak/flathub-disable.conf`),
-so Flathub would not reach the machines most likely to want this.
+### Governed HugMesh desktops
+
+The release is a **bundle**, not a Flathub app, because HugMesh's own governed desktops
+remove the Flathub remote (`keys-template/desktop-governance/flatpak/flathub-disable.conf`)
+so that the domain's registry is the only software source. What that policy does, read
+from `provision_desktop_governance` in `specs/etc/keys-provision/provision.sh`: it
+deletes `flathub` and the other listed names from the **system** installation
+(`flatpak remote-delete --system`) and removes their preset files under
+`/etc/flatpak/remotes.d`. It does nothing to **user** installations
+(`~/.local/share/flatpak`): flatpak has no setting that forbids `flatpak remote-add
+--user`, and provisioning does not try to.
+
+So on a governed desktop the runtime hint in this bundle does what it does anywhere
+else: `flatpak install --user <bundle>` asks to add a per-user `flathub` remote (and
+adds it unasked with `-y`), pulls `org.kde.Platform` from it, and that remote is then
+visible to Discover for that user, with everything on Flathub behind it. Saying no
+leaves the bundle uninstalled, runtime present or not (measured above). There is no
+way to install this bundle without a Flathub remote in the target installation, and
+provisioning does nothing to stop a user adding one. This change does not weaken the
+policy and does not route around it; it makes the bundle installable on every other
+machine and says plainly that on a governed desktop a per-user install of it is a
+per-user Flathub. If a governed desktop must not have Flathub even per user, that is
+for provisioning to close, not for this bundle to pretend; the Studio for such a desktop
+is the tarball or a checkout, neither of which touches Flatpak, or a build of the
+bundle whose `--runtime-repo` names the domain registry once that carries the KDE
+runtime.
 
 ## Versions
 

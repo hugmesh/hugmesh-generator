@@ -106,7 +106,7 @@ spring:
             - id: remote-deeplink-to-host-shell
               uri: http://hugmesh-host-shell:8080
               predicates:
-                - Path=/social/matrix/**,/social/mastodon/**,/social/forum/**,/wiki/**,/tube/**,/owncast/**,/character-studio/**,/character-forge/**,/admin/**,/mod/**,/user/**
+                - Path=/social/matrix/**,/social/mastodon/**,/social/forum/**,/wiki/**,/tube/**,/owncast/**,/character-studio/**,/character-forge/**,/admin/**,/mod/**,/user/**,/games/**
                 - Header=Accept, .*text/html.*
             - id: matrix-ui
               uri: http://hugmesh-matrix-ui:80
@@ -410,14 +410,57 @@ spring:
             # Deliberately NO gateway_route_access row (optional-services.yaml
             # games.routeAccessRows has no /_remotes entry): per-slug access is
             # the gateway's own ResourceAccessFilter "game" pattern on this very
-            # path — ROLE_ADMIN/ROLE_GAME-MASTER pass, others need a
-            # resource_access grant (none seeded locally; see stack docs).
+            # path. Since the games member screens (2026-10-28) that filter has
+            # a ROLE_GAMES FLOOR: a ROLE_GAMES holder passes for resource_type
+            # 'game' with no per-slug grant (next to the ROLE_ADMIN /
+            # ROLE_GAME-MASTER bypass); 'session' tuples and non-holders stay
+            # grant-gated (none seeded locally). Per-game visibility is the
+            # games BFF's game_access (catalog filter + launch 403), not a
+            # per-slug gateway grant — no writer for those exists.
             - id: wasm-fragment
               uri: http://hugmesh-wasm-fragment:8080
               predicates:
                 - Path=/_remotes/wasm-fragment/**
               filters:
                 - StripPrefix=2
+            # The games BFF + the `games` federation remote (`games` profile —
+            # make stack-up GAMES=1; compose.games.yaml). Like wasm-fragment
+            # above, BOTH resolve only when that profile is up: with the profile
+            # off the upstream names do not resolve and the gateway answers 503
+            # on /games/api/** and /games/**, which the remote's screens surface
+            # as "The games service is not reachable on this deployment".
+            #
+            # ORDER MATTERS, twice. games-bff (/games/api/**) must precede
+            # games-ui (/games/**) or the remote's nginx would swallow every API
+            # call; and both sit after remote-deeplink-to-host-shell (whose Path
+            # list carries /games/**) so an HTML navigation to /games/... boots
+            # the SHELL (which then mounts the remote's routes), while
+            # remoteEntry.json, chunks and fetch() calls — no Accept: text/html
+            # — fall through to the two routes here. The remote is built with
+            # --base-href=/games/ and the BFF serves /api/**, so StripPrefix=1
+            # on both: /games/remoteEntry.json -> /remoteEntry.json on the
+            # remote's docroot, /games/api/games -> /api/games on the BFF.
+            #
+            # Route-access rows (optional-services.yaml games.routeAccessRows +
+            # 20-schema.sql): /games/api/admin/** ROLE_GAMES_ADMIN;
+            # /games/api/** and /games/** ROLE_GAMES|ROLE_ADMIN|ROLE_MOD. The
+            # remote's bundle bytes live under /games/, never /games/admin/, so
+            # the pre-existing /games/admin/** ROLE_GAMES_ADMIN row keeps gating
+            # only the admin HTML path. The id MUST stay `games-ui`:
+            # tests/scripts/test-deeplink-remote-coverage.sh derives the
+            # deep-link contract from `*-ui` route ids.
+            - id: games-bff
+              uri: http://hugmesh-games-bff:8080
+              predicates:
+                - Path=/games/api/**
+              filters:
+                - StripPrefix=1
+            - id: games-ui
+              uri: http://hugmesh-games-ui:8080
+              predicates:
+                - Path=/games/**
+              filters:
+                - StripPrefix=1
             # DB-hosted module-federation FRAGMENT bundles (static fleet).
             #
             # TARGETS THE WEB HALF, NOT THE SYNC APP. This route used to read

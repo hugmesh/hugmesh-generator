@@ -506,8 +506,10 @@ jobs:
           appstreamcli validate --no-net org.hugmesh.ImageStudio.metainfo.xml
 
       - name: Install the runtime
+        # The branch is the manifest's runtime-version; tests/test_flatpak_packaging_files.py
+        # holds the two together. Flathub lists 6.8 and 6.9 as end-of-life (2026-10-29).
         run: |
-          flatpak install --user -y flathub org.kde.Platform//6.8 org.kde.Sdk//6.8
+          flatpak install --user -y flathub org.kde.Platform//6.11 org.kde.Sdk//6.11
 
       - name: Build the Flatpak
         working-directory: studio/packaging/flatpak
@@ -521,8 +523,16 @@ jobs:
         # desktops actively remove the flathub remote
         # (keys-template/desktop-governance/flatpak/flathub-disable.conf), so Flathub
         # is not a delivery path for the machines most likely to want this.
+        #
+        # --runtime-repo writes a RuntimeRepo key into the bundle: where the runtime
+        # (org.kde.Platform) comes from when the installing machine does not have it.
+        # Without it the beta.1 bundle failed on a host with no remotes ("requires the
+        # runtime org.kde.Platform/x86_64/6.8 which was not found", 2026-10-29); with it
+        # `flatpak install` adds that remote to the same installation (user or system)
+        # and pulls the runtime first. docs/STUDIO-INSTALLERS.md says what that means on
+        # a governed desktop.
         run: |
-          flatpak build-bundle repo "hugmesh-studio-${VERSION}-x86_64.flatpak" org.hugmesh.ImageStudio
+          flatpak build-bundle --runtime-repo=https://dl.flathub.org/repo/flathub.flatpakrepo repo "hugmesh-studio-${VERSION}-x86_64.flatpak" org.hugmesh.ImageStudio
           sha256sum "hugmesh-studio-${VERSION}-x86_64.flatpak" | tee "hugmesh-studio-${VERSION}-x86_64.flatpak.sha256"
 
       - name: Smoke-test the bundle
@@ -723,8 +733,10 @@ jobs:
                   installers.append(entry(
                       path, "linux", "flatpak", "Flatpak bundle (x86_64)",
                       "Install with: flatpak install --user ./" + path.name + " (needs the "
-                      "org.kde.Platform 6.8 runtime). Point it at a hugmesh-generator checkout "
-                      "on first run; building images needs Docker on the host.", None))
+                      "org.kde.Platform 6.11 runtime; the bundle names Flathub as its source, "
+                      "so the install offers to add that remote and fetch it). Point it at a "
+                      "hugmesh-generator checkout on first run; building images needs Docker "
+                      "on the host.", None))
               elif path.name.endswith(".tar.gz"):
                   installers.append(entry(
                       path, "linux", "tarball", "Linux tarball (x86_64, glibc 2.39+)",
@@ -820,7 +832,7 @@ jobs:
           }
           **Windows**: download \`hugmesh-studio-$VERSION-x64.msi\`. It installs per-user, so no administrator rights are needed. $win_sign
 
-          **Linux**: \`hugmesh-studio-$VERSION-x86_64.flatpak\` (install with \`flatpak install --user ./hugmesh-studio-$VERSION-x86_64.flatpak\`, needs the org.kde.Platform 6.8 runtime), or \`hugmesh-studio-$VERSION-linux-x86_64.tar.gz\` (unpack and run \`hugmesh-studio\`; needs glibc 2.39 or newer).
+          **Linux**: \`hugmesh-studio-$VERSION-x86_64.flatpak\` (install with \`flatpak install --user ./hugmesh-studio-$VERSION-x86_64.flatpak\`; needs the org.kde.Platform 6.11 runtime, and the bundle names Flathub as the place to fetch it from, so the install offers to add that remote when the runtime is missing), or \`hugmesh-studio-$VERSION-linux-x86_64.tar.gz\` (unpack and run \`hugmesh-studio\`; needs glibc 2.39 or newer).
 
           All packages contain the same application. The Studio drives host tooling (Docker, QEMU, kubectl) rather than replacing it, and needs a \`hugmesh-generator\` checkout to read build scripts and cluster specs from: point it at one on first run.
 

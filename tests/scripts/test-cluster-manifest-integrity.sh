@@ -949,16 +949,22 @@ open(p,"w",encoding="utf-8").write(s.replace(old,"""          - id: widget-ui
 """+old,1))
 SCPY
 '
-# (19b) BOTH discovery seeds killed at once (descriptor kind renamed AND both
-#       /remoteEntry.json probes retargeted). The tier can no longer be derived, so
-#       [remote-strip-prefix] must say so LOUDLY rather than report a clean pass over
-#       an empty set — the exact way this check was hollow before.
+# (19b) ALL discovery seeds killed at once (descriptor kind renamed AND every
+#       /remoteEntry.json probe retargeted — character-forge, character-studio and,
+#       since the games screens round, games-ui). The tier can no longer be derived,
+#       so [remote-strip-prefix] must say so LOUDLY rather than report a clean pass
+#       over an empty set — the exact way this check was hollow before. A probing
+#       workload added to the tree WITHOUT being listed here turns this control red
+#       (the tier stays derivable from the one probe left), which is the prompt to
+#       add it: the list must stay the complete set of probe-proven bundle roots.
 expect_catch "every remote-discovery seed removed (the tier check must not go vacuous)" "[remote-strip-prefix]" '
   sed -i "s/^kind: FederationModuleRegistration$/kind: FederationModuleRegistrationX/" \
       "$T/manifests/federation-api/register-superadmin-service-catalog.descriptor.yaml"
   sed -i "s|path: /remoteEntry.json|path: /healthz|g" \
-      "$T/manifests/character-forge/deployment.yaml" "$T/manifests/character-studio/deployment.yaml"
+      "$T/manifests/character-forge/deployment.yaml" "$T/manifests/character-studio/deployment.yaml" \
+      "$T/manifests/games-ui/deployment.yaml"
   ! grep -q "remoteEntry.json, port" "$T/manifests/character-forge/deployment.yaml"
+  ! grep -q "remoteEntry.json, port" "$T/manifests/games-ui/deployment.yaml"
 '
 # (19c) EVERY NetworkPolicy in the tree neutralised. With nothing default-denied there
 #       is nothing to admit, so [gateway-netpol] has no claim left — and must report

@@ -1,0 +1,27 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: hugmesh-frontend
+resources:
+  - deployment.yaml
+  - service.yaml
+
+# First-party images pull from the in-cluster Harbor container registry
+# (registry.hugmesh.net, served by Harbor — apps/03a-harbor.yaml; project path =
+# <group>/<repo>). Mirrors user-ui/character-studio. The source REPO is
+# hugmesh-games (the remote lives in its games-ui/ directory), whose CI already
+# pushes the BFF as hugmesh/hugmesh-games, so this image takes the
+# `hugmesh-games-ui` image name under the same project to avoid colliding with
+# the BFF tag — the games repo's CI must push games-ui/ under that name
+# (:<branch> + :<sha>; we track the moving :main here for dev). Pulls need the
+# harbor-registry imagePullSecret (ESO-materialized, see manifests/external-secrets).
+images:
+  - name: hugmesh/games-ui
+    newName: registry.hugmesh.net/hugmesh/hugmesh-games-ui
+    newTag: main
+patches:
+  - target: { kind: Deployment }
+    patch: |
+      - op: add
+        path: /spec/template/spec/imagePullSecrets
+        value:
+          - name: harbor-registry

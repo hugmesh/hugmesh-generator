@@ -829,7 +829,23 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # its apt line) and in .gitlab-ci.yml's orphan-guards-verify. MEASURED by RUNNING this
 # file on that branch, not computed.
 #
-# 199 -> 200 (denominator 241 -> 241) on 2026-10-29 for tests/boot/test-gpu-worker-
+# 198 -> 200 (denominator 240 -> 242, ungated SET unchanged) on 2026-10-29 for the
+# games member + games admin screens round (#824): tests/stack/test-derive-games-admin.sh
+# (the ROLE_GAMES_ADMIN := ROLE_GAMES ∩ (ROLE_ADMIN ∪ ROLE_MOD) derivation) and
+# tests/scripts/test-games-screens-wiring.sh (compose/fe-route/route-access/kind-twin
+# wiring for the `games` remote and BFF) both landed on disk AND in shell-suites.yml
+# (:472 and :555), so the gated count moves by two. MEASURED by RUNNING this file, not
+# computed, on the branch tip AND on a scratch merge of the branch with origin/main
+# 62056111 (both print the same line; the base 8319b5c6 prints 198 of 240):
+#     200 of 242 suites are named by a pull_request-triggered workflow
+# Check 7's SET pin is still red on that tree for tests/boot/test-gpu-worker-node-labels.sh
+# (unwired on main since before this round; check 3 names it too) — that is main's
+# defect, not this change's, and it is NOT added to PREMERGE_UNGATED here.
+# Both steps met in the merge of origin/main 398b2327 into #824 (199 from the live-ISO
+# guard + the two games suites above): MEASURED by RUNNING this file on the merged tree:
+#     201 of 243 suites are named by a pull_request-triggered workflow
+#
+# 201 -> 202 (denominator 243 -> 243) on 2026-10-29 for tests/boot/test-gpu-worker-
 # node-labels.sh: it landed in 1abc9bf3 / 2ab3325f (2026-10-22) named by NOTHING —
 # check 3 and 7b both red on main — and it needs a docker daemon (it runs the real
 # keys-provision engine inside a kindest/node container), which none of the four
@@ -837,11 +853,16 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # there (`docker`, ubuntu-latest, no `container:`) and post-merge by .gitlab-ci.yml's
 # lint:gpu-worker-node-labels on the privileged runner. RUN on a Linux host with
 # docker and the pinned image before wiring: 17 passed / 0 failed, rc=0. MEASURED by
-# RUNNING this file on the branch (origin/main 398b2327), not computed:
+# RUNNING this file: on the branch over origin/main 398b2327 it printed
 #     200 of 241 suites are named by a pull_request-triggered workflow
+# and, after merging origin/main 2b13b2f9 (which carries #824's two games suites and
+# its 201 of 243 above) into the branch, the merged tree printed
+#     202 of 243 suites are named by a pull_request-triggered workflow
 #     PASS the ungated SET matches its pin exactly (41 suite(s))
-# and '199 of 241' + check 3/7b red again with the one SUITES line removed.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-200}"
+# — '201 of 243' + check 3/7b red again with the one SUITES line removed. This line
+# CONFLICTED with #824's (both raised it from 199); resolved by re-measuring, per the
+# doctrine above, not by keeping either number.
+PREMERGE_BASELINE="${GUARD_PREMERGE:-202}"
 
 # 182 -> 192 (denominator 205 -> 215) on 2026-09-30 for #385: the census gained a
 # THIRD spelling, bare `tests/*.sh` at depth 1, and the ten suites it exposed were
