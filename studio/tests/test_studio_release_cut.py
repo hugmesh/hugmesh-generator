@@ -150,7 +150,8 @@ def test_cut_job_mutates_nothing_on_a_republish():
     assert checkout["with"]["persist-credentials"] is True, "the bump push needs the token"
     bump = _step("cut", "Bump __version__ on main")["run"]
     assert "git push origin HEAD:main" in bump and "Open a PR" in bump and "run again" in bump
-    assert "Co-Authored-By" not in bump
+    # The bump commit is the two files and one line: no trailer of any kind.
+    assert re.search(r'(?m) commit -q -m "Studio \$VERSION"$', bump), bump
     tag = _step("cut", "Create (or keep, or move) the tag on GitHub")["run"]
     assert "git tag" not in tag, "the tag is created through the API, never by a local git"
     assert "-X DELETE" not in _read(CUT), "the cut never deletes anything"
