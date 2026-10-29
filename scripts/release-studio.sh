@@ -25,6 +25,10 @@
 # attestation changes and anyone who downloaded earlier can no longer verify what they
 # have. The script prints that and makes you type the version back (--yes does not
 # skip it). A wrong build gets a new beta N, not a republish.
+#
+# CLOCKS. The two runs are found by "created after this machine's UTC now"; a local
+# clock that runs slow can make the 90 s poll miss them. Nothing is lost: the script
+# exits 3 and points at Actions, where the runs are.
 set -euo pipefail
 
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)

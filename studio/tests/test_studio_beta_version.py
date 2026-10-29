@@ -366,7 +366,13 @@ def test_bump_version_edits_both_files(tmp_path):
     shutil.copy(os.path.join(STUDIO_ROOT, "hugmesh_studio", "__init__.py"), root / "studio" / "hugmesh_studio")
     shutil.copy(METAINFO, root / "studio" / "packaging" / "flatpak")
     before = ET.parse(METAINFO).getroot().find("releases").findall("release")
-    target = "0.3.0-beta.2" if _version() != "0.3.0-beta.2" else "0.3.0-beta.3"
+    # Targets are derived from the tree, never spelt: the cut's preflight runs this
+    # test AFTER bumping the working tree, so a literal target is already present
+    # there from the second cut on (0.3.0-beta.2 in the metainfo once beta.3 is cut).
+    target = _rv("next", "--root", str(root)).stdout.strip()
+    final = _rv("next", target, "--final").stdout.strip() if "-" in target else _rv("next", target).stdout.strip()
+    assert f'<release version="{target.replace("-", "~")}"' not in _read(METAINFO), target
+    assert f'<release version="{final.replace("-", "~")}"' not in _read(METAINFO), final
     proc = _rv("bump", target, "--root", str(root), "--date", "2026-10-28")
     assert proc.returncode == 0, proc.stderr
     assert _rv("current", "--root", str(root)).stdout.strip() == target
@@ -383,9 +389,14 @@ def test_bump_version_edits_both_files(tmp_path):
     proc = _rv("bump", target, "--root", str(root), "--date", "2026-11-01")
     assert proc.returncode == 0 and "nothing changed" in proc.stdout
     assert {p.name: p.read_bytes() for p in (meta, root / "studio" / "hugmesh_studio" / "__init__.py")} == snapshot
-    # A final release gets no type="development".
-    proc = _rv("bump", "0.3.0", "--root", str(root), "--date", "2026-12-01")
+    # A bump BACKWARDS is refused and changes nothing (the files would disagree).
+    proc = _rv("bump", _version(), "--root", str(root), "--date", "2026-11-02")
+    assert proc.returncode == 1 and "never goes backwards" in proc.stderr
+    assert {p.name: p.read_bytes() for p in (meta, root / "studio" / "hugmesh_studio" / "__init__.py")} == snapshot
+    # A final release gets no type="development"; a later beta.1 gets it back.
+    proc = _rv("bump", final, "--root", str(root), "--date", "2026-12-01")
     assert proc.returncode == 0, proc.stderr
     newest = ET.parse(meta).getroot().find("releases").find("release")
-    assert newest.get("version") == "0.3.0" and newest.get("type") is None
+    assert newest.get("version") == final.replace("-", "~")
+    assert (newest.get("type") == "development") == ("-" in final)
     assert _rv("bump", "0.3.0-rc.1", "--root", str(root)).returncode == 1

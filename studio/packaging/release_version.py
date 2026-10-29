@@ -177,8 +177,13 @@ def _release_entry(version: str, date: str, indent: str) -> str:
 
 
 def bump(version: str, date: str | None = None, root: str = GENERATOR_ROOT) -> list[str]:
-    """Set the tree to `version`. Returns the files it changed (none when already there)."""
+    """Set the tree to `version`. Returns the files it changed (none when already there).
+    A bump BACKWARDS is refused: it would rewrite __version__ while the metainfo keeps
+    the newer entry first, and the two files would disagree silently."""
     parse(version)
+    before = current(root)
+    if compare(version, before) < 0:
+        raise VersionError(f"the tree is at {before}, which is later than {version}; a version never goes backwards")
     date = date or datetime.date.today().isoformat()
     if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", date):
         raise VersionError(f"--date must be YYYY-MM-DD, not {date!r}")
