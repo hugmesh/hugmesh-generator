@@ -150,7 +150,7 @@ if [ "$REPUBLISH" = false ]; then
 else
     say "  6. (main's version not compared: republish)"
     file_at_tag=$(gh_ api "repos/$REPO/contents/.github/workflows/studio-release.yml?ref=refs/tags/$TAG" --jq .content | base64 -d) || stop "could not read the workflow file at $TAG"
-    if ! printf '%s\n' "$file_at_tag" | grep -qE '^ {6}republish:[[:space:]]*$'; then
+    if ! printf '%s\n' "$file_at_tag" | grep -E '^ {6}republish:[[:space:]]*$' >/dev/null; then
         stop "the workflow file at tag $TAG predates the republish input; this release cannot be re-published through this path (see docs/STUDIO-INSTALLERS.md, 'Releases cut before the republish input')"
     fi
     say "  7. the workflow file at $TAG declares the republish input"
