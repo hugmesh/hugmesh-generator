@@ -1965,6 +1965,7 @@ if command -v kubectl >/dev/null 2>&1; then
   # per directory, as an [image-pin] finding that says it reached for the network.
   pool_run render_offline_job
 else
+  pool_drain  # a NOTE is not a pool job: print it after the controls before it
   echo "  NOTE (21-render) NOT run: kubectl is not on PATH, so the render cross-check is untested here"
 fi
 
@@ -2020,6 +2021,7 @@ if command -v helm >/dev/null 2>&1; then
   helm_render_catch "helm render: list ApplicationSet over the in-tree chart, valuesObject image.repository busybox" '
     printf "%s" "${R5_APPSET}" > "$T/apps/99-r5-set.yaml"' busybox
 else
+  pool_drain  # a NOTE is not a pool job: print it after the controls before it
   echo "  NOTE (23-helm) NOT run: helm is not on PATH, so the helm render is untested here"
 fi
 
