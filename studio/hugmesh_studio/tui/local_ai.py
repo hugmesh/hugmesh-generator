@@ -175,9 +175,13 @@ class LocalAIScreen:
                                        odk.assistant_env(odk.current_mode())))])
         except Exception:                # noqa: BLE001 — facts, never a crash
             state = []
+        try:
+            current = aact.current_values(self._target(j))
+        except Exception:                # noqa: BLE001 — "current:" is a help, never a crash
+            current = ()
         return actxt.Where(face="tui", slug=slug, title=title, mode=mode, domain=domain,
                            own_domain=own, tab=tab, brand=brand, domains=domains,
-                           question=question).with_state(state)
+                           question=question, current=current).with_state(state)
 
     def _target(self, j):
         step, row = self._step_and_row(j)

@@ -1561,6 +1561,11 @@ class LocalAIDock(QtWidgets.QFrame):
         # the page half of "where", read HERE on the window thread (widgets); the state
         # half (files) is collected on the worker below
         where = self._page_where(question=text) if default else None
+        if where is not None:
+            try:                                # the values on screen, through Apply's own readers
+                where = where.with_page(current=aact.current_values(self._target_for(where)))
+            except Exception:                   # noqa: BLE001 — "current:" is a help, never a crash
+                _log_swallowed("LocalAIDock.current_values")
         code = self._code_context(where, text) if default else None
         self._stop_tip()                        # the model answers one thing at a time
 

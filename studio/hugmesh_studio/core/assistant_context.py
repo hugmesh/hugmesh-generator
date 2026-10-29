@@ -307,6 +307,7 @@ class Where:
     activity: "tuple[tuple[str, str], ...]" = ()   # what the dock already knows (mesh up, verb, builds)
     state: "tuple[tuple[str, str], ...]" = ()      # the worker-collected half
     question: str = ""                     # the question this Where was built for (actions read it)
+    current: "tuple[tuple[str, str], ...]" = ()    # option key -> value on screen (assistant_actions.current_values)
 
     def with_state(self, rows: Iterable[tuple]) -> "Where":
         return replace(self, state=scrub_rows(rows))

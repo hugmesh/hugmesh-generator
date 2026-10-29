@@ -39,12 +39,14 @@ from dataclasses import dataclass, field
 from typing import Any, Optional
 
 from . import assistant_catalogue as acat
+from . import assistant_context as actxt
 from . import config
 
 __all__ = [
     "Proposal", "Validated", "Refusal", "Applied", "FIELD_ROUTES", "SYNONYMS", "parse_proposal",
     "normalise_value", "validate", "apply", "undo", "Target", "GuiTabsTarget", "TuiTarget",
-    "MeshTarget", "RowTarget", "NO_BLOCK_HINT", "card_lines", "as_refusal",
+    "MeshTarget", "RowTarget", "NO_BLOCK_HINT", "card_lines", "as_refusal", "current_values",
+    "secret_request_note",
 ]
 
 NO_BLOCK_HINT = "Say which setting and which value and I will propose the change."
@@ -302,6 +304,27 @@ def _route_key(key: str, where) -> str:
     return key
 
 
+_CHANGE_VERB_RE = re.compile(r"\b(set|change|reset|update|use|make|put|give|switch|type|enter|fill)\b", re.I)
+_SECRET_NOUN_RE = re.compile(r"\b(pass(word|phrase)?s?|passwd|secrets?|tokens?|api[ _-]?keys?|auth[ _-]?keys?|"
+                             r"private keys?|keys?|unseal|kubeconfig|client[ _]secret|pins?)\b", re.I)
+
+
+def secret_request_note(question: str, where, answer: str = "") -> str:
+    """When the person asks to SET a password, key or token and the answer proposes
+    nothing, the footer says so plainly (a small model may only say "I do not know"):
+    the assistant never sets secrets, and these are the keys this page lets it change.
+    "" otherwise. Deterministic; never depends on the model."""
+    q = question or ""
+    if not (_CHANGE_VERB_RE.search(q) and _SECRET_NOUN_RE.search(q)):
+        return ""
+    if "```change" in (answer or "") or "```diff" in (answer or ""):
+        return ""
+    keys = [k.replace("@mesh", "") for k in _page_keys(where)] if where is not None else []
+    tail = (f" I can only change these on this page: {', '.join(keys)}." if keys else "")
+    return ("I never set passwords, keys or tokens: you type those on the page itself, "
+            "and they never reach me." + tail)
+
+
 # ── validation ───────────────────────────────────────────────────────────────────────
 def validate(proposal: Proposal, where, target: "Target | None") -> "Validated | Refusal":
     """Check ``proposal`` against the catalogue, the page's validators and the target's
@@ -445,6 +468,38 @@ def undo(applied: Applied, where, target: "Target") -> "Applied | Refusal":
     undone = Validated(v.key, v.label, v.domain, v.scope, v.route, applied.after, applied.before,
                        v.extra, "", v.question)
     return Applied(undone, applied.after, applied.before, getattr(target, "id", ""))
+
+
+def current_values(target, where=None) -> "tuple[tuple[str, str], ...]":
+    """``((option key, value on screen), ...)`` read through the SAME readers
+    :func:`validate` uses, so the Options block can say ``current: ...`` and a request
+    like "turn the forum off" or "a darker purple" starts from what the page shows.
+    Window thread (widget reads). A reader that raises is skipped; values pass
+    :func:`assistant_context.scrub_rows` (secret keys never shown)."""
+    if target is None:
+        return ()
+    rows: list = []
+    signin = None
+    for key, (scope, route) in FIELD_ROUTES.items():
+        if (scope == "mesh") != isinstance(target, MeshTarget):
+            continue
+        try:
+            if route == "signin":
+                if signin is None:
+                    signin = dict(target.read("signin", "signin") or {})
+                value = signin.get({"signin": "choice"}.get(key, key), "")
+            else:
+                value = target.read(route if route != "look" else key, key)
+        except Exception:                    # noqa: BLE001 — a reader that cannot answer is left out
+            continue
+        if isinstance(value, (list, tuple, set, frozenset)):
+            value = ", ".join(str(x) for x in value) or "none"
+        elif isinstance(value, bool):
+            value = "on" if value else "off"
+        elif value in (None, ""):
+            value = "not set (inherited)" if key.startswith("look.") else "not set"
+        rows.append((key.replace("@mesh", ""), str(value)))
+    return actxt.scrub_rows(rows)
 
 
 # ── targets ──────────────────────────────────────────────────────────────────────────

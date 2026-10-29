@@ -10,7 +10,8 @@ and HOME under mktemp: brand "Shop", domains shop.example [tuwunel, phpbb] and
 blog.example [akkoma], a failed build whose error tail carries two canaries, a
 workspace folder web-shop.example/src/index.html), the question goes to the loopback
 Ollama (temperature 0.2, num_predict 700; never started, stopped or pulled here) and
-the FINAL text is scored: the answer plus its footer, or for a proposal the validated
+the FINAL text is scored (the model is sent only what a person would type: an
+``ACTION (...):`` setup note is stripped first): the answer plus its footer, or for a proposal the validated
 card text (or the refusal).
 
 Matching: case-insensitive substring. A must_mention starting with ``{`` is compared to
@@ -62,6 +63,12 @@ def plant(root: str) -> dict:
     return {"state": state, "home": home, "workspace": ws}
 
 
+def asked(question: str) -> str:
+    """What a person would type: the ``ACTION (...):`` setup note is stripped (it only
+    picks the tab and states the planted values, which the page facts already carry)."""
+    return re.sub(r"^ACTION \([^)]*\):\s*", "", question)
+
+
 class Fixture:
     def __init__(self, planted):
         from hugmesh_studio.core import assistant_context as ac, assistant_docs as ad, assistant_code_edits as ce
@@ -88,7 +95,10 @@ class Fixture:
                      domain="shop.example" if "domain_services" in page else "", tab=tab,
                      route="docker" if page.startswith("localmesh") else "image",
                      brand=ac.brand_rows_from({"title": "Shop", "id": "shop"}), domains=rows,
-                     activity=(("local mesh", "down"), ("running now", "nothing")), question=q)
+                     activity=(("local mesh", "down"), ("running now", "nothing")), question=asked(q))
+        from hugmesh_studio.core import assistant_actions as aa
+        if w.domain:                     # what the page shows, through the readers Apply uses
+            w = w.with_page(current=aa.current_values(ReaderTarget(self)))
         return w.with_state(state)
 
 
@@ -151,7 +161,7 @@ def score(item, final, answer, fx, where):
     from hugmesh_studio.core import assistant_actions as aa
     low = final.lower()
     hits, misses = [], []
-    proposal = aa.parse_proposal(answer, item["question"])
+    proposal = aa.parse_proposal(answer, asked(item["question"]))
     card = ""
     action = item["question"].startswith("ACTION")
     valid_ok = None
@@ -211,7 +221,7 @@ def main(argv):
                 files_block = f"[file: src/index.html in {fx.ws.name}]\n{text}"
             t0 = time.time()
             try:
-                final, answer, pec, prompt, num_ctx = ask(q, where, fx, files_block)
+                final, answer, pec, prompt, num_ctx = ask(asked(q), where, fx, files_block)
             except Exception as exc:                        # noqa: BLE001
                 final, answer, pec, prompt, num_ctx = f"[error: {exc}]", "", 0, None, 16384
             took = time.time() - t0

@@ -366,3 +366,28 @@ def test_nothing_here_opens_a_dialog(monkeypatch, page):
     v = aa.validate(aa.Proposal("shop.example", "services", ["tuwunel"]), w, t)
     a = aa.apply(v, w, t)
     assert isinstance(a, aa.Applied) and isinstance(aa.undo(a, w, t), aa.Applied)
+
+
+# ── what the page shows now, for the Options block ──────────────────────────────────────
+def test_current_values_read_through_the_same_readers_and_reach_the_options_block():
+    from hugmesh_studio.core import assistant_prompt as ap
+    t = FakeTarget(env="prod", with_tor=True, **{"look.primary": "#5b2a86"})  # answers mesh keys too
+    cur = dict(aa.current_values(t))
+    assert cur["services"] == "tuwunel, phpbb" and cur["tor"] == "off"
+    assert cur["signin"] == "superdomain" and cur["look.primary"] == "#5b2a86"
+    assert cur["look.preset"] == "not set (inherited)"
+    assert "env" not in cur and "with_tor" not in cur            # mesh keys only from the mesh page
+    text, proposable = ap._options_block(where("services", current=aa.current_values(t)))
+    assert proposable
+    line = next(ln for ln in text.splitlines() if ln.startswith("- services "))
+    assert line.endswith("| current: tuwunel, phpbb"), line
+    assert aa.current_values(None) == ()
+
+
+def test_current_values_on_the_real_page_match_its_widgets(page):
+    pg, body, app = page
+    cur = dict(aa.current_values(aa.GuiTabsTarget(body)))
+    assert cur["services"] == ", ".join(body.selected_slugs()) == "tuwunel, phpbb"
+    assert cur["tor"] == ("on" if body.brand_tabs.view.tor_on() else "off")
+    mesh = dict(aa.current_values(aa.MeshTarget(pg)))
+    assert "services" in mesh and "look.primary" not in mesh

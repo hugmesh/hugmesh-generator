@@ -17,6 +17,7 @@ STUDIO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 GENERATOR_DIR = os.path.dirname(STUDIO_ROOT)
 
 INDEX = "<html>\n<body>\n<footer>\n  <p>Welcome to shop</p>\n</footer>\n</body>\n</html>\n"
+_QT_APP: list = []
 DIFF = ("Changing the footer text in index.html.\n```diff\n--- a/src/index.html\n+++ b/src/index.html\n"
         "@@ -3,3 +3,3 @@\n <footer>\n-  <p>Welcome to shop</p>\n+  <p>Welcome to the Shop</p>\n </footer>\n```\n")
 
@@ -152,7 +153,8 @@ def test_set_first_task_reaches_the_brief_through_the_context_text(tmp_path, mon
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
     from hugmesh_studio.gui.qt import QtWidgets
     from hugmesh_studio.gui.pages import _local_agent_widget as law
-    QtWidgets.QApplication.instance() or QtWidgets.QApplication(["t"])
+    # Held at module scope: a QApplication collected before the widget aborts the process.
+    _QT_APP.append(QtWidgets.QApplication.instance() or QtWidgets.QApplication(["t"]))
     monkeypatch.setenv("HUGMESH_STUDIO_STATE_DIR", str(tmp_path / "state"))
     card = law.LocalAgentWidget(GENERATOR_DIR, context_text=lambda ctx: "CONTEXT")
     card.set_first_task("refactor the footer across every page")
@@ -176,3 +178,26 @@ def test_no_file_under_the_repo_changes(ws):
     assert not space.path.startswith(GENERATOR_DIR)
     ce.apply(ce.parse_diff(DIFF, space), space, str(state))
     assert not os.path.exists(os.path.join(GENERATOR_DIR, "src", "index.html"))
+
+
+def test_a_garbled_hunk_header_is_applied_only_when_its_start_line_is_readable(ws):
+    """qwen3:8b wrote "@@ -3 @@ -3 @@" in the 2026-10-29 eval: the parser used to accept
+    that as an edit with NO hunks, so Apply would have said "Applied" and changed nothing."""
+    space, state = ws
+    loose = DIFF.replace("@@ -3,3 +3,3 @@", "@@ -3 @@ -3 @@")
+    edits = ce.parse_diff(loose, space)
+    assert not isinstance(edits, ce.DiffProblem), edits
+    assert edits[0].changed == 2 and len(edits[0].hunks) == 1
+    ce.apply(edits, space, str(state))
+    with open(os.path.join(space.path, "src", "index.html")) as fh:
+        assert "Welcome to the Shop" in fh.read()
+    bad = ce.parse_diff(DIFF.replace("@@ -3,3 +3,3 @@", "@@ footer @@"), space)
+    assert isinstance(bad, ce.DiffProblem) and "hunk header" in bad.text
+
+
+def test_a_diff_that_changes_nothing_is_refused_not_applied(ws):
+    space, state = ws
+    for body in ("--- a/src/index.html\n+++ b/src/index.html\n",
+                 "--- a/src/index.html\n+++ b/src/index.html\n@@ -3,1 +3,1 @@\n <footer>\n"):
+        out = ce.parse_diff("x\n```diff\n" + body + "```\n", space)
+        assert isinstance(out, ce.DiffProblem) and "changes nothing" in out.text, out

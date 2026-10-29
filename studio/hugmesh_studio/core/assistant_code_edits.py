@@ -249,6 +249,17 @@ def handoff_text(reason: str) -> str:
 # ── the diff ─────────────────────────────────────────────────────────────────────────
 _DIFF_FENCE = re.compile(r"```diff\s*\n(.*?)```", re.S)
 _HUNK_RE = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
+# A small model sometimes garbles the right half ("@@ -3 @@ -3 @@"). Only the old start
+# line positions a hunk (the counts are advisory and every context/minus line must match
+# the file exactly), so a header whose old start is readable is accepted.
+_LOOSE_HUNK_RE = re.compile(r"^@@ -(\d+)(?:,(\d+))?(?:\s.*)?@@")
+
+
+def _hunk_header(line: str):
+    m = _HUNK_RE.match(line) or _LOOSE_HUNK_RE.match(line)
+    if not m:
+        return None
+    return int(m.group(1)), (int(m.group(2)) if m.group(2) is not None else 1)
 
 
 def _diff_body(text: str) -> str:
@@ -295,15 +306,16 @@ def parse_diff(text: str, ws: Workspace) -> "list[FileEdit] | DiffProblem":
             file_lines = data.decode("utf-8", "replace").split("\n")
             i += 1
             continue
-        m = _HUNK_RE.match(ln)
-        if m:
+        hdr = _hunk_header(ln) if ln.startswith("@@") else None
+        if ln.startswith("@@") and hdr is None:
+            return DiffProblem(f"unreadable hunk header {ln!r}; it must start with @@ - and a line number")
+        if hdr:
             if cur_path is None:
                 return DiffProblem("the diff names no file (+++ b/<path>)")
-            old_start = int(m.group(1))
-            old_n = int(m.group(2)) if m.group(2) is not None else 1
+            old_start, old_n = hdr
             i += 1
             olds, news, added, removed = [], [], 0, 0
-            while i < len(lines) and not _HUNK_RE.match(lines[i]) and not lines[i].startswith(("+++ ", "--- ")):
+            while i < len(lines) and not lines[i].startswith(("@@", "+++ ", "--- ")):
                 hl = lines[i]
                 if hl.startswith("\\ No newline"):
                     i += 1
@@ -338,6 +350,9 @@ def parse_diff(text: str, ws: Workspace) -> "list[FileEdit] | DiffProblem":
     flush()
     if not edits:
         return DiffProblem("no diff hunks found; say which file and what to change")
+    for e in edits:                       # never report an Apply that changes nothing
+        if not e.hunks or not e.changed:
+            return DiffProblem(f"{e.path}: the diff changes nothing; say what to change")
     if len(edits) > SCOPE["max_files"]:
         return DiffProblem(too_big_reason("", edits))
     if sum(e.changed for e in edits) > SCOPE["max_changed_lines"]:

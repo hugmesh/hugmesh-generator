@@ -758,13 +758,23 @@ proposed as a mode only — "pick the VPN file on the page"), `look.preset`,
 (the mesh-level list), `web_locales` and `superadmin_username`. Passwords, the auth
 key, the egress provider file, paths and every image-route field are refused.
 
+The Options block the model reads carries `current: ...` for each key, read through
+the same readers Apply uses (`assistant_actions.current_values`), so "turn the forum
+off" starts from the services actually ticked and a colour request knows whether the
+main colour is set or inherited. When a question asks to set a password, a key or a
+token and the answer proposes nothing, the footer adds, whatever the model said: "I
+never set passwords, keys or tokens: you type those on the page itself, and they never
+reach me. I can only change these on this page: ...".
+
 ### 12.9 Small code edits, on a press
 
 For a domain that has a code folder (the per-domain workspaces the Studio made under
 `<state>/domain-code/<mesh>/<app>-<domain>/`), a request that names a file ("change
 the footer text in index.html") sends the file's current text and gets back one
 sentence and one fenced `diff` block. `core/assistant_code_edits.parse_diff` is a
-small unified-diff parser: every context line must match the file exactly. The window
+small unified-diff parser: every context line must match the file exactly, a hunk
+header only needs a readable start line (`@@ -3 ...`), and a diff that would change
+nothing is refused rather than "applied". The window
 shows `Proposed edit — <app>-<domain>` with View diff (the Current work window's
 viewer), Apply and Cancel, then Revert. Apply writes byte copies of the files to
 `<state>/assistant-edits/<id>/before/` with a manifest (sha256 before and after), then

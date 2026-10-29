@@ -36,7 +36,7 @@ from .assistant_context import Where, render_where, tokens
 __all__ = [
     "Prompt", "RULES", "CHANGE_FORMAT", "DIFF_FORMAT", "CAPS", "ANSWER_RESERVE", "build",
     "answer", "after_answer", "trim_history", "tokens", "GROUNDED_ENV", "primer_for",
-    "FACTS_DROPPED", "NOT_RUNNING", "fallback_line",
+    "FACTS_DROPPED", "NOT_RUNNING", "fallback_line", "RULES_BLOCK_CAP",
 ]
 
 GROUNDED_ENV = "LOCAL_AI_GROUNDED"
@@ -48,38 +48,38 @@ FACTS_DROPPED = "(page facts left out: the question is long)"
 NOT_RUNNING = "[Local AI is not running. Press Start local assistant.]"
 
 RULES = (
-    "Answer from the snippets, the page facts and the primer only. If they do not "
-    "contain the answer, say 'I do not know from the docs I have' and point at the "
-    "walkthrough. Never write a command, flag or path that is not in a snippet. Keep to "
-    "this page and this domain unless the person names another. Everything stays on this "
-    "machine. To propose a setting change, reply with one sentence and one ```change "
-    "block (see Change format). Do not claim to have changed anything; a change happens "
-    "only when the person presses Apply. If the person asks to change something that is "
-    "not under Options on this page (a password, a key, a path, another page's setting), "
-    "say so by name: 'I cannot change <that> here' and list what this page offers. Use the "
-    "page's own words (the tab names, the labels under Options) when you point somewhere."
+    "Answer from the primer, the page facts and the snippets only. When they do not "
+    "hold the answer, say \"I do not know from the docs I have\" and point at the "
+    "walkthrough. Never write a command, flag or path that no snippet contains. Keep "
+    "to this page and this domain unless the person names another. Everything stays on "
+    "this machine. Never claim to have changed anything; only the Apply button does."
 )
 
+# No angle-bracket placeholders anywhere in these texts: a small model copies them
+# verbatim (the 2026-10-29 eval answered "I cannot change <that> here").
 CHANGE_FORMAT = (
-    "To propose ONE setting change on this page: one sentence, then exactly one fenced "
-    "block tagged change holding a JSON object with keys domain (the domain on screen "
-    "unless the person named another), field (one of the keys under Options on this "
-    "page) and to (the new value: a string from the choices, true/false, a list of "
-    "service names, or a hex colour like #5b2a86). No from key, nothing else in the "
-    "block. If unsure of the field or the value, do not emit a block; ask one question. "
-    "Look keys are look.preset, look.primary and so on. Example:\n"
+    "To propose one setting change: one sentence, then one fenced block tagged change "
+    "holding a JSON object: domain (the domain on screen unless the person named "
+    "another), field (a key under Options), to (one of its choices, true/false, a list "
+    "of service names, or a hex colour). A colour described in words is a hex value "
+    "in look.primary or look.secondary, never a preset. Nothing else in the block. If "
+    "the setting is not under Options (a password, a key, a file path), write no block: "
+    "say this page cannot change it and list the keys under Options. Example:\n"
     "I can turn the forum off for shop.example.\n"
     "```change\n{\"domain\": \"shop.example\", \"field\": \"services\", "
-    "\"to\": [\"akkoma\", \"tuwunel\"]}\n```"
+    "\"to\": [\"akkoma\"]}\n```"
 )
 
 DIFF_FORMAT = (
-    "To propose a small code edit in this domain's code folder: one sentence, then one "
-    "fenced block tagged diff holding a unified diff (--- a/<path> / +++ b/<path>, @@ "
-    "hunks) against the exact file text shown under Files. Paths are relative to the "
-    "folder. At most 3 files and 120 changed lines; context lines must match the file "
-    "exactly. Never git commands, never a commit."
+    "To edit a file shown under Files: one sentence, then one fenced block tagged diff "
+    "holding a unified diff (--- a/path, +++ b/path, @@ -start,count +start,count @@) "
+    "against that exact text, paths relative to the code folder. At most 3 files and "
+    "120 changed lines. Applied only when the person presses Apply; never suggest git."
 )
+
+# The rules block is never truncated: a cut here once removed the diff grammar
+# entirely (tests/test_assistant_prompt.py pins that every combination fits).
+RULES_BLOCK_CAP = CAPS["rules"] + 150
 
 
 @dataclass(frozen=True)
@@ -138,7 +138,10 @@ def _options_block(where: Where) -> "tuple[str, bool]":
         return "", False
     if not opts:
         return "", False
-    return acat.render_options(opts, budget_tokens=CAPS["options"]), any(o.setter for o in opts)
+    cur = dict(getattr(where, "current", ()) or ())
+    reader = (lambda o: cur.get(o.key)) if cur else None
+    return (acat.render_options(opts, budget_tokens=CAPS["options"], current=reader),
+            any(o.setter for o in opts))
 
 
 def build(question: str, where: Optional[Where], history: "list[dict] | None" = None, *,
@@ -163,7 +166,7 @@ def build(question: str, where: Optional[Where], history: "list[dict] | None" = 
         fmt = CHANGE_FORMAT
     if files_block:
         fmt = (fmt + "\n\n" if fmt else "") + DIFF_FORMAT
-    rules_block = _cap(rules + ("\n\n# Change format\n" + fmt if fmt else ""), CAPS["rules"] + 150)
+    rules_block = rules + ("\n\n# Change format\n" + fmt if fmt else "")
     where_text = render_where(where)
     try:
         from . import assistant_tips as atips
@@ -241,6 +244,14 @@ def after_answer(answer_text: str, prompt: Prompt, *, index: Optional["adocs.Ind
         line += "\nCommands not found in the docs I read: " + ", ".join(bad)
     if "where" in prompt.budget.get("dropped", []):
         line += "\n" + FACTS_DROPPED
+    try:
+        from . import assistant_actions as aact
+        w = prompt.where
+        note = aact.secret_request_note(getattr(w, "question", "") or "", w, answer_text)
+    except Exception:                        # noqa: BLE001 — a note is a help, never a crash
+        note = ""
+    if note:
+        line += "\n" + note
     return line
 
 

@@ -64,6 +64,23 @@ def test_budget_holds_under_16k_with_a_40_message_20kb_history():
     assert p.sources and all(ad.tokens(c.text) <= 700 for c in p.sources)
 
 
+def test_the_rules_and_both_formats_are_sent_whole_never_cut():
+    """A cap once truncated this block mid-example and dropped the diff grammar, so a
+    code-edit question never got a diff (2026-10-29 eval item 20)."""
+    import re
+    for text in (ap.RULES, ap.CHANGE_FORMAT, ap.DIFF_FORMAT):
+        # a small model copies a placeholder verbatim ("I cannot change <that> here")
+        assert not re.search(r"<[a-z][^<>]*>", text), text
+    whole = ap.RULES + "\n\n# Change format\n" + ap.CHANGE_FORMAT + "\n\n" + ap.DIFF_FORMAT
+    assert ap.tokens(whole) <= ap.RULES_BLOCK_CAP
+    w = ac.Where(slug="domain_services", title="Domain services", domain="shop.example", tab="services",
+                 domains=ac.domain_rows_from([{"name": "shop.example", "optional_services": ["tuwunel"]}]))
+    p = ap.build("change the footer in index.html", w, [], generator_dir=GENERATOR_DIR, ctx_tokens=16384,
+                 files_block="[file: src/index.html in web-shop.example]\n<p>hi</p>\n")
+    assert ap.CHANGE_FORMAT in p.system and ap.DIFF_FORMAT in p.system and ap.RULES in p.system
+    assert p.budget["rules"] <= ap.RULES_BLOCK_CAP
+
+
 def test_drop_order_when_the_question_itself_is_huge():
     w = ac.Where(slug="domain_services", title="Domain services", domain="shop.example")
     order = ["options", "snippets", "where", "history"]
@@ -174,3 +191,21 @@ def test_answer_calls_the_module_attribute_send_prompt_and_history_stays_bare(mo
     assert seen["history"] == hist and "Sources:" not in json.dumps(seen["history"])
     assert "# Where the person is" in seen["system"]
     assert ap.after_answer(text, prompt).startswith("Sources: ")
+
+
+def test_a_request_to_set_a_secret_gets_a_plain_footer_note_whatever_the_model_said():
+    """The model may only say "I do not know" (2026-10-29 eval item 19); the footer
+    always says why nothing was proposed and what this page CAN change."""
+    def footer(question, answer):
+        w = ac.Where(slug="domain_services", title="Domain services", domain="shop.example",
+                     tab="services", question=question)
+        p = ap.build(question, w, [], generator_dir=GENERATOR_DIR, ctx_tokens=16384)
+        return ap.after_answer(answer, p)
+    out = footer("set the root password for this domain to hunter2", "I do not know from the docs I have.")
+    assert "I never set passwords, keys or tokens" in out and "services" in out and "tor" in out
+    assert "hunter2" not in out
+    assert "never set" not in footer("which services can I switch on?", "akkoma, tuwunel ...")
+    assert "never set" not in footer("where do the node key folders end up?", "under keys-")
+    blocked = footer("change the api key and turn the forum off",
+                     'ok\n```change\n{"domain": "shop.example", "field": "services", "to": []}\n```')
+    assert "never set" not in blocked
