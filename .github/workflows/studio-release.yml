@@ -1,5 +1,5 @@
 # HugMesh Image Studio — installer build, signing and release
-# (Windows MSI, Linux Flatpak, Linux PyInstaller tarball).
+# (Windows MSI, Linux Flatpak for x86_64 and aarch64, Linux PyInstaller tarball).
 #
 # THIS IS A NEW PATTERN FOR THIS ORG, deliberately. Every other release.yml in the
 # fleet means "build a container image and push it to GHCR". This workflow publishes
@@ -51,7 +51,7 @@
 #
 # SIGNING (all in the publish job, all BEFORE the release is created, so a signing
 # failure leaves no release behind):
-#   * SHA256SUMS lists every published file (installers, tarball, SBOMs).
+#   * SHA256SUMS lists every published file (installers for every arch, tarball, SBOMs).
 #   * cosign signs SHA256SUMS keyless (Sigstore, GitHub OIDC). The bundle
 #     SHA256SUMS.sigstore.json carries signature, certificate and transparency-log
 #     entry. The job verifies its own signature against the exact workflow identity
@@ -567,8 +567,131 @@ jobs:
             studio/packaging/flatpak/hugmesh-studio-*.flatpak.sha256
           if-no-files-found: error
 
+  flatpak-aarch64:
+    needs: version
+    # The SAME manifest on GitHub's hosted arm64 runner (free for public repositories):
+    # python-deps.json pins the aarch64 PySide6 wheels next to the x86_64 ones, and
+    # nothing in the manifest names an architecture, so the only differences from the
+    # job above are the runner, the bundle's name and the artifact's name. A TWIN JOB
+    # rather than a matrix on purpose: the x86_64 job is the proven path and its
+    # commands are what tests/test_flatpak_packaging_files.py reads the local build
+    # script against; a matrix would have changed every line of it to add one arch.
+    #
+    # Two checks this job has that the x86_64 one does not: the runner's arch is
+    # asserted before anything is built (a mislabelled runner would otherwise export an
+    # x86_64 bundle under the aarch64 name and every later check would pass), and Qt is
+    # started offscreen inside the installed bundle, because --print-specs is the
+    # app's Qt-FREE path and so proves nothing about the aarch64 wheels.
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 90
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      ARCH: aarch64
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+
+      - name: Install flatpak tooling
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y flatpak flatpak-builder appstream desktop-file-utils
+          flatpak remote-add --if-not-exists --user flathub https://flathub.org/repo/flathub.flatpakrepo
+
+      - name: The runner must really be aarch64
+        # The bundle's name below is a promise about its contents. `flatpak --default-arch`
+        # is what flatpak-builder and build-bundle will use, so it is the fact to check.
+        run: |
+          have=$(flatpak --default-arch)
+          if [ "$have" != "$ARCH" ]; then
+            echo "::error::this job builds the $ARCH Flatpak but flatpak's default arch on this runner is $have ($(uname -m))"
+            exit 1
+          fi
+          echo "flatpak default arch: $have ($(uname -m))"
+
+      - name: Validate the desktop entry and AppStream metadata
+        working-directory: studio/packaging/flatpak
+        run: |
+          desktop-file-validate org.hugmesh.ImageStudio.desktop
+          appstreamcli validate --no-net org.hugmesh.ImageStudio.metainfo.xml
+
+      - name: Install the runtime
+        # The same branch as the x86_64 job: tests/test_flatpak_packaging_files.py reads
+        # every org.kde.Platform// and org.kde.Sdk// in this file against the manifest.
+        run: |
+          flatpak install --user -y flathub org.kde.Platform//6.11 org.kde.Sdk//6.11
+
+      - name: Build the Flatpak
+        working-directory: studio/packaging/flatpak
+        run: |
+          flatpak-builder --user --disable-rofiles-fuse --force-clean \
+            --repo=repo build-dir org.hugmesh.ImageStudio.yml
+
+      - name: Export a single-file bundle
+        working-directory: studio/packaging/flatpak
+        # --runtime-repo as above: the bundle names Flathub as where its runtime comes from.
+        run: |
+          flatpak build-bundle --runtime-repo=https://dl.flathub.org/repo/flathub.flatpakrepo repo "hugmesh-studio-${VERSION}-${ARCH}.flatpak" org.hugmesh.ImageStudio
+          sha256sum "hugmesh-studio-${VERSION}-${ARCH}.flatpak" | tee "hugmesh-studio-${VERSION}-${ARCH}.flatpak.sha256"
+
+      - name: Smoke-test the bundle (--print-specs, the Qt-free path)
+        working-directory: studio/packaging/flatpak
+        run: |
+          flatpak install --user -y --noninteractive \
+            "hugmesh-studio-${VERSION}-${ARCH}.flatpak"
+          flatpak run --command=hugmesh-studio org.hugmesh.ImageStudio \
+            --print-specs > specs.json
+          if [ ! -s specs.json ]; then
+            echo "::error::no output from --print-specs — the installed bundle is incomplete"
+            exit 1
+          fi
+          head -c 400 specs.json; echo
+
+      - name: Smoke-test the bundle (Qt starts offscreen on the aarch64 wheels)
+        working-directory: studio/packaging/flatpak
+        # The same check as build-flatpak-local.sh's smoke test 2: PySide6 (not a PyQt6
+        # fallback) loads, a QApplication starts on the offscreen platform and grabs a
+        # widget, and the package-data files are inside the install. --nofilesystem=host
+        # keeps it inside the sandbox. This is the step that would catch an x86_64
+        # wheel inside an aarch64 bundle, which --print-specs never imports.
+        run: |
+          out=$(flatpak run --nofilesystem=host --env=QT_QPA_PLATFORM=offscreen \
+            --command=python3 org.hugmesh.ImageStudio - <<'PY'
+          import os, platform, sys
+          import hugmesh_studio
+          from hugmesh_studio.gui.qt import QtCore, QtWidgets, BINDING
+
+          package = os.path.dirname(hugmesh_studio.__file__)
+          expected = ["core/device-catalog.json", "core/progress-tables.json", "core/_roles-lib.sh"]
+          missing = [p for p in expected if not os.path.isfile(os.path.join(package, p))]
+          if missing:
+              sys.exit(f"package data missing from the install: {missing}")
+          app = QtWidgets.QApplication(["flatpak-smoke"])
+          label = QtWidgets.QLabel("smoke")
+          label.resize(120, 40)
+          label.show()
+          shot = label.grab()
+          if BINDING != "PySide6" or app.platformName() != "offscreen" or shot.isNull():
+              sys.exit(f"unexpected Qt state: binding={BINDING} platform={app.platformName()} "
+                       f"grab_null={shot.isNull()}")
+          print(f"qt-ok binding={BINDING} qt={QtCore.qVersion()} platform={app.platformName()} "
+                f"machine={platform.machine()} grab={shot.width()}x{shot.height()}")
+          PY
+          )
+          echo "$out"
+          case "$out" in
+            *"qt-ok binding=PySide6"*"machine=$ARCH"*) ;;
+            *) echo "::error::the Qt smoke test did not report qt-ok on $ARCH"; exit 1 ;;
+          esac
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+        with:
+          name: flatpak-aarch64
+          path: |
+            studio/packaging/flatpak/hugmesh-studio-*-aarch64.flatpak
+            studio/packaging/flatpak/hugmesh-studio-*-aarch64.flatpak.sha256
+          if-no-files-found: error
+
   publish:
-    needs: [version, msi, linux, flatpak]
+    needs: [version, msi, linux, flatpak, flatpak-aarch64]
     # Only a studio-v* tag ref publishes: the tag push itself, or a dispatch ON that tag
     # with "publish" ticked (the re-run path). A dispatch on main never does, ticked or not.
     if: ${{ startsWith(github.ref, 'refs/tags/studio-v') && (github.event_name == 'push' || inputs.publish) }}
@@ -659,11 +782,13 @@ jobs:
           path: artifacts
 
       - name: Collect the installers
-
+        # Every installer the build jobs promise, by name: the MSI, BOTH Flatpaks (one
+        # per architecture) and the tarball. A missing one is an error, never a release
+        # with fewer files than the notes describe.
         run: |
           mkdir -p release
           find artifacts -type f \( -name '*.msi' -o -name '*.flatpak' -o -name '*.tar.gz' -o -name '*.spdx.json' \) -exec cp {} release/ \;
-          for want in "hugmesh-studio-$VERSION-x64.msi" "hugmesh-studio-$VERSION-x86_64.flatpak" "hugmesh-studio-$VERSION-linux-x86_64.tar.gz"; do
+          for want in "hugmesh-studio-$VERSION-x64.msi" "hugmesh-studio-$VERSION-x86_64.flatpak" "hugmesh-studio-$VERSION-aarch64.flatpak" "hugmesh-studio-$VERSION-linux-x86_64.tar.gz"; do
             [ -s "release/$want" ] || { echo "::error::release/$want is missing"; exit 1; }
           done
           ls -la release
@@ -692,7 +817,8 @@ jobs:
         # The shape of src/assets/releases.json.example in hugmesh.github.io. Every
         # field added for signing (per-installer "sbom", top-level "checksums",
         # "signature", "provenance", "verify") is additive: the page ignores keys it does
-        # not know. A "linux" + "tarball" entry is listed with the Linux downloads.
+        # not know. A "linux" + "tarball" entry is listed with the Linux downloads, and
+        # the two "linux" + "flatpak" entries carry an "arch" (x86_64 or aarch64).
         run: |
           python3 - <<'PY'
           import hashlib, json, os, pathlib, datetime
@@ -730,13 +856,20 @@ jobs:
                   installers.append(entry(path, "windows", "msi", "Windows installer (x64)",
                                           msi_note, f"hugmesh-studio-{version}-windows-x64.spdx.json"))
               elif path.name.endswith(".flatpak"):
-                  installers.append(entry(
-                      path, "linux", "flatpak", "Flatpak bundle (x86_64)",
+                  # One bundle per architecture, named hugmesh-studio-<version>-<arch>.flatpak
+                  # by the flatpak jobs; the label and the arch field say which is which.
+                  arch = path.name[len(f"hugmesh-studio-{version}-"):-len(".flatpak")]
+                  if arch not in ("x86_64", "aarch64"):
+                      raise SystemExit(f"{path.name}: not a bundle of a known architecture")
+                  item = entry(
+                      path, "linux", "flatpak", f"Flatpak bundle ({arch})",
                       "Install with: flatpak install --user ./" + path.name + " (needs the "
-                      "org.kde.Platform 6.11 runtime; the bundle names Flathub as its source, "
-                      "so the install offers to add that remote and fetch it). Point it at a "
-                      "hugmesh-generator checkout on first run; building images needs Docker "
-                      "on the host.", None))
+                      "org.kde.Platform 6.11 runtime for " + arch + "; the bundle names Flathub "
+                      "as its source, so the install offers to add that remote and fetch it). "
+                      "Point it at a hugmesh-generator checkout on first run; building images "
+                      "needs Docker on the host.", None)
+                  item["arch"] = arch
+                  installers.append(item)
               elif path.name.endswith(".tar.gz"):
                   installers.append(entry(
                       path, "linux", "tarball", "Linux tarball (x86_64, glibc 2.39+)",
@@ -832,9 +965,11 @@ jobs:
           }
           **Windows**: download \`hugmesh-studio-$VERSION-x64.msi\`. It installs per-user, so no administrator rights are needed. $win_sign
 
-          **Linux**: \`hugmesh-studio-$VERSION-x86_64.flatpak\` (install with \`flatpak install --user ./hugmesh-studio-$VERSION-x86_64.flatpak\`; needs the org.kde.Platform 6.11 runtime, and the bundle names Flathub as the place to fetch it from, so the install offers to add that remote when the runtime is missing), or \`hugmesh-studio-$VERSION-linux-x86_64.tar.gz\` (unpack and run \`hugmesh-studio\`; needs glibc 2.39 or newer).
+          **Linux x86_64**: \`hugmesh-studio-$VERSION-x86_64.flatpak\` (install with \`flatpak install --user ./hugmesh-studio-$VERSION-x86_64.flatpak\`; needs the org.kde.Platform 6.11 runtime, and the bundle names Flathub as the place to fetch it from, so the install offers to add that remote when the runtime is missing), or \`hugmesh-studio-$VERSION-linux-x86_64.tar.gz\` (unpack and run \`hugmesh-studio\`; needs glibc 2.39 or newer).
 
-          All packages contain the same application. The Studio drives host tooling (Docker, QEMU, kubectl) rather than replacing it, and needs a \`hugmesh-generator\` checkout to read build scripts and cluster specs from: point it at one on first run.
+          **Linux aarch64** (ARM64: Raspberry Pi 4/5 desktops, Apple-silicon VMs, Ampere and Snapdragon machines): \`hugmesh-studio-$VERSION-aarch64.flatpak\`, built on GitHub's hosted arm64 runner from the same manifest and installed the same way (\`flatpak install --user ./hugmesh-studio-$VERSION-aarch64.flatpak\`). There is no aarch64 tarball.
+
+          Every bundle carries its architecture in its name; \`flatpak install\` refuses one built for another architecture. All packages contain the same application. The Studio drives host tooling (Docker, QEMU, kubectl) rather than replacing it, and needs a \`hugmesh-generator\` checkout to read build scripts and cluster specs from: point it at one on first run.
 
           ## Verify what you downloaded
 

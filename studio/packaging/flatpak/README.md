@@ -12,8 +12,16 @@ builds it on a machine with **no sudo, no apt and no `flatpak-builder` package**
 | `.gitignore` | Keeps the output of a by-hand build in this directory out of git. |
 
 The release workflow (`.github/workflows/studio-release.yml`, job `flatpak`) builds the
-same manifest on a GitHub runner. `tests/test_flatpak_packaging_files.py` keeps the two
-and the files in this directory from drifting apart.
+same manifest on a GitHub runner, and its twin `flatpak-aarch64` builds it again on
+GitHub's hosted arm64 runner for the `-aarch64.flatpak` bundle (the manifest names no
+architecture; `python-deps.json` carries both wheel sets). `tests/test_flatpak_packaging_files.py`
+keeps the two and the files in this directory from drifting apart, and
+`tests/test_studio_release_signing.py` holds the aarch64 job to the x86_64 one's commands.
+The local script below builds for whatever `flatpak --default-arch` says, so on an ARM64
+host it produces the aarch64 bundle with no option; it has no `--arch` for cross-building
+(a flatpak sandbox cannot run another architecture's binaries through binfmt_misc unless
+the interpreter was registered with the `F` flag, and flatpak-builder would also need the
+aarch64 SDK).
 
 ## Build it here, with no sudo and no apt
 

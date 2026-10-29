@@ -15,10 +15,11 @@ other way (a button in Actions). The first beta, `0.3.0-beta.1`, shipped on
 |---|---|---|
 | `hugmesh-studio-<version>-x64.msi` | Windows 10/11 x64 | PyInstaller → WiX v6 |
 | `hugmesh-studio-<version>-x86_64.flatpak` | x86_64 Linux with Flatpak | flatpak-builder, `org.kde.Platform` 6.11 (the bundle names Flathub as its source) |
+| `hugmesh-studio-<version>-aarch64.flatpak` | aarch64 (ARM64) Linux with Flatpak: Raspberry Pi 4/5 desktops, Apple-silicon VMs, Ampere and Snapdragon machines | the same manifest on GitHub's hosted `ubuntu-24.04-arm` runner (job `flatpak-aarch64`) |
 | `hugmesh-studio-<version>-linux-x86_64.tar.gz` | x86_64 Linux, glibc 2.39+ | PyInstaller (same spec as the MSI) |
 
 [`.github/workflows/studio-release.yml`](../.github/workflows/studio-release.yml)
-builds all three **on GitHub-hosted runners only**, signs them there, and attaches
+builds all four **on GitHub-hosted runners only**, signs them there, and attaches
 them to a GitHub Release with `SHA256SUMS`, its cosign signature bundle
 `SHA256SUMS.sigstore.json`, SPDX SBOMs and a `releases.json` that feeds the Downloads
 page on the documentation site. Nothing built on a developer machine is ever published;
@@ -122,6 +123,17 @@ the runtime before the app. On a machine with **no Flatpak remotes at all**:
 flatpak install --user ./hugmesh-studio-<version>-x86_64.flatpak
 flatpak run org.hugmesh.ImageStudio --generator-dir ~/Github/hugmesh-generator
 ```
+
+On an ARM64 machine the file is `hugmesh-studio-<version>-aarch64.flatpak` and the
+commands are the same. Each bundle carries its architecture in its name, and `flatpak
+install` refuses a bundle built for another one (`flatpak --default-arch` prints the
+one you need). There is no aarch64 tarball: the PyInstaller job runs on x86_64 only.
+The aarch64 bundle is built by `flatpak-aarch64`, a twin of the `flatpak` job on
+GitHub's hosted `ubuntu-24.04-arm` runner, from the same manifest (`python-deps.json`
+pins the aarch64 PySide6 wheels beside the x86_64 ones); it is checksummed in
+`SHA256SUMS`, covered by the cosign signature and attested like every other file. The
+job also starts Qt offscreen inside the installed bundle, because `--print-specs` is the
+Qt-free path and would pass with the wrong architecture's wheels inside.
 
 The first command asks before it adds the remote (`-y` or `--noninteractive` answers
 yes for you). Measured on flatpak 1.18.4 (2026-10-29): the question is asked whenever
