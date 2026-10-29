@@ -207,6 +207,31 @@ def test_version_job_guards_ref_tag_and_snapshot():
     assert "GITHUB_STEP_SUMMARY" in verdict["run"]
 
 
+@pytest.mark.parametrize("ref, event, publish, want", [
+    # A hand-pushed tag: inputs.publish is EMPTY on a push event. This combination once
+    # exited 1 under `bash -e` (a false `[ ]` inside a `$( )` failed the assignment) and
+    # killed the job every build job needs, so a documented release path was dead.
+    ("refs/tags/studio-v0.3.0-beta.2", "push", "", "WILL publish (tag ref; push event)"),
+    ("refs/tags/studio-v0.3.0-beta.2", "workflow_dispatch", "true", "WILL publish (tag ref; workflow_dispatch event, publish=true)"),
+    ("refs/tags/studio-v0.3.0-beta.2", "workflow_dispatch", "false", "WILL NOT publish (tag ref, but publish was not ticked)"),
+    ("refs/heads/main", "workflow_dispatch", "", "WILL NOT publish (refs/heads/main is not a studio-v* tag"),
+    ("refs/heads/main", "push", "", "WILL NOT publish (refs/heads/main is not a studio-v* tag"),
+])
+def test_verdict_step_runs_to_the_end_for_every_event(tmp_path, ref, event, publish, want):
+    import subprocess
+    steps = _workflow()["jobs"]["version"]["steps"]
+    script = next(s for s in steps if s.get("name") == "Say whether this run will publish")["run"]
+    summary = tmp_path / "summary"
+    summary.write_text("")
+    env = {"PATH": "/usr/bin:/bin", "REF": ref, "EVENT": event, "PUBLISH": publish, "REPUBLISH": "",
+           "GITHUB_STEP_SUMMARY": str(summary)}
+    # GitHub runs a `run:` block as `bash -e {0}`.
+    proc = subprocess.run(["bash", "-e", "-c", script], env=env, capture_output=True, text=True)
+    assert proc.returncode == 0, (proc.stdout, proc.stderr)
+    assert want in proc.stdout, proc.stdout
+    assert want in summary.read_text()
+
+
 def test_msi_job_defines_the_numeric_version():
     job = _workflow()["jobs"]["msi"]
     assert job["env"]["MSI_VERSION"] == "${{ needs.version.outputs.msi_version }}"

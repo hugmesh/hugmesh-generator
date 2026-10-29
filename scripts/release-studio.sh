@@ -211,8 +211,10 @@ find_run() {  # find_run WORKFLOW [--branch B]  -> prints "id url" of the newest
 
 cut_run=$(find_run studio-release-cut.yml) || { say "The cut run is not found yet: Actions > Cut a Studio release" >&2; exit 3; }
 say "Cut run: ${cut_run#* }"
-if ! gh_ run watch "${cut_run%% *}" --repo "$REPO" --exit-status; then
-    rc=$?
+# `cmd || rc=$?` keeps gh's real status; inside `if ! cmd; then`, $? is the negation (0).
+rc=0
+gh_ run watch "${cut_run%% *}" --repo "$REPO" --exit-status || rc=$?
+if [ "$rc" -ne 0 ]; then
     say "The cut failed: ${cut_run#* }" >&2
     say "Fix what it reports, then run the same command again (the cut is idempotent)." >&2
     exit "$rc"
@@ -220,8 +222,9 @@ fi
 
 release_run=$(find_run studio-release.yml --branch "$TAG") || { say "The release run is not found yet: Actions > Studio release, branch $TAG" >&2; exit 3; }
 say "Release run: ${release_run#* }"
-if ! gh_ run watch "${release_run%% *}" --repo "$REPO" --exit-status; then
-    rc=$?
+rc=0
+gh_ run watch "${release_run%% *}" --repo "$REPO" --exit-status || rc=$?
+if [ "$rc" -ne 0 ]; then
     say "The build/publish run failed: ${release_run#* }" >&2
     say "Fix, then run the same command again." >&2
     exit "$rc"

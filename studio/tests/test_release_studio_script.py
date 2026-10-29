@@ -41,8 +41,20 @@ case "$1 $2" in
       *) echo "HTTP 502: Bad Gateway" >&2; exit 1 ;;
     esac ;;
   "run list")
-    case "$*" in *studio-release-cut.yml*) [ "${FAKE_CUT_EXISTS:-1}" = "1" ] || { echo "HTTP 404: workflow studio-release-cut.yml not found on the default branch" >&2; exit 1; } ;; esac
+    case "$*" in
+      *"--event workflow_dispatch"*)
+        # find_run after the dispatch: the fake stands in for gh+jq, so it prints "<id> <url>".
+        case "$*" in
+          *"--branch "*) echo "${FAKE_RELEASE_RUN_ID:-222} https://example.invalid/runs/${FAKE_RELEASE_RUN_ID:-222}" ;;
+          *) echo "${FAKE_CUT_RUN_ID:-111} https://example.invalid/runs/${FAKE_CUT_RUN_ID:-111}" ;;
+        esac
+        exit 0 ;;
+      *studio-release-cut.yml*) [ "${FAKE_CUT_EXISTS:-1}" = "1" ] || { echo "HTTP 404: workflow studio-release-cut.yml not found on the default branch" >&2; exit 1; } ;;
+    esac
     echo "${FAKE_BUSY:-0}"; exit 0 ;;
+  "run watch")
+    # FAKE_WATCH_RC_<id> is that run's exit status under --exit-status (0 when unset).
+    var="FAKE_WATCH_RC_$3"; exit "${!var:-0}" ;;
   "workflow run") exit 0 ;;
 esac
 echo "fake gh: unexpected call: $*" >&2
@@ -205,6 +217,28 @@ def test_cut_workflow_not_yet_on_main_is_not_a_run_in_progress(fake):
     # Before this change is merged the cut workflow 404s; that is zero runs, not an error.
     proc, _ = fake("0.3.0-beta.2", "--dry-run", FAKE_CUT_EXISTS="0")
     assert proc.returncode == 0, (proc.stdout, proc.stderr)
+
+
+def test_a_failed_cut_run_exits_with_gh_status(fake):
+    # `if ! gh run watch; then rc=$?` once made rc the negated status (0): the script
+    # announced "The cut failed" and exited 0. gh's real status must come back.
+    proc, log = fake("0.3.0-beta.2", "--yes", FAKE_WATCH_RC_111="7")
+    assert "workflow run studio-release-cut.yml" in log, log
+    assert "run watch 111 " in log, log
+    assert "run watch 222 " not in log, "the release run must not be watched after a failed cut"
+    assert proc.returncode == 7, (proc.returncode, proc.stdout, proc.stderr)
+    assert "The cut failed: https://example.invalid/runs/111" in proc.stderr
+    assert "run the same command again" in proc.stderr
+    assert "Released:" not in proc.stdout
+
+
+def test_a_failed_build_or_publish_run_exits_with_gh_status(fake):
+    # The second watch site had the same bug, independently.
+    proc, log = fake("0.3.0-beta.2", "--yes", FAKE_WATCH_RC_222="5")
+    assert "run watch 111 " in log and "run watch 222 " in log, log
+    assert proc.returncode == 5, (proc.returncode, proc.stdout, proc.stderr)
+    assert "The build/publish run failed: https://example.invalid/runs/222" in proc.stderr
+    assert "Released:" not in proc.stdout
 
 
 def test_the_script_never_tags_or_pushes():

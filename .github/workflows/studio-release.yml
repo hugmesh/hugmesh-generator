@@ -176,10 +176,14 @@ jobs:
           PUBLISH: ${{ inputs.publish }}
           REPUBLISH: ${{ inputs.republish }}
         run: |
+          # No `$( [ ... ] && ... )` here: under `bash -e` a false test inside a
+          # substitution fails the assignment and the job, which killed every tag push.
+          extra=""
+          if [ "$PUBLISH" = "true" ]; then extra=", publish=true"; fi
           case "$REF" in
             refs/tags/studio-v*)
               if [ "$EVENT" = "push" ] || [ "$PUBLISH" = "true" ]; then
-                verdict="WILL publish (tag ref; ${EVENT} event$( [ "$PUBLISH" = "true" ] && printf ', publish=true' ))"
+                verdict="WILL publish (tag ref; ${EVENT} event${extra})"
               else
                 verdict="WILL NOT publish (tag ref, but publish was not ticked)"
               fi ;;
