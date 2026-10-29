@@ -1934,7 +1934,7 @@ assert rendered is not None, "render did not run: %s" % why
 hits = [msg for chk, msg in m.failures if chk == "[image-pin]"
         and msg.startswith("manifests/zz-blackhole:") and "reached for the NETWORK" in msg]
 assert hits, "no network-refusal finding for manifests/zz-blackhole: %r" % m.failures
-assert took < 10, "rendering one blackholed remote took %.1fs (it waited on the network)" % took
+assert took < 25, "rendering one blackholed remote took %.1fs (it waited on the network)" % took
 print("refused in %.2fs: %s" % (took, hits[0][:150]))
 PY
 )"; then neg_ok "${label} -> ${out}"
@@ -1961,8 +1961,11 @@ if command -v kubectl >/dev/null 2>&1; then
   render_catch "render: ConfigMap binaryData helperPod.yaml busybox:latest" 'lp_b64 image' busybox
   # (25-offline) the render never waits on the network. A remote kustomize resource
   # on an unroutable address (TEST-NET-1) held one `kubectl kustomize` for 30-57 s
-  # before the render was made offline; it must now fail in well under a second
-  # per directory, as an [image-pin] finding that says it reached for the network.
+  # before the render was made offline; it must now be refused as an [image-pin]
+  # finding that says it reached for the network. That finding is the proof; the
+  # time bound only backs it up: 0.04 s idle, but 8.25 s on a dev box at load
+  # average ~100-500 (2026-10-29), so the bound sits below the network wait's floor
+  # (Go's 30 s dial timeout), not near the idle figure.
   pool_run render_offline_job
 else
   pool_drain  # a NOTE is not a pool job: print it after the controls before it
