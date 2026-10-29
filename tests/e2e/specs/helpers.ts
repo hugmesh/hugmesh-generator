@@ -407,7 +407,71 @@ export async function registerOnly(page: Page, username: string, password = logi
   await page.goto('/login');
   await page.getByTestId('login-username').fill(username);
   await page.getByTestId('login-password').fill(password);
+  // Recorded, never awaited here and never thrown on: callers that EXPECT the
+  // sign-in to fail (a wrong password, a banned account) use registerOnly too.
+  // onboard() reads it only when its own wait fails, to say WHY.
+  LOGIN_RESPONSE.set(page, page.waitForResponse(
+    (r) => r.url().includes('/bff/login') && r.request().method() === 'POST',
+    { timeout: 30_000 },
+  ).then(async (r) => ({ status: r.status(), body: await r.text().catch(() => '') }))
+    .catch(() => null));
   await page.getByTestId('login-submit').click();
+}
+
+// ── why did a native sign-in fail? (hugmesh-generator#473, #306 box 2) ───────
+//
+// Family A of #306: e2e-user's POST /bff/login answered 401 for ~15 minutes of a
+// full compose run, WITH the correct password, and every failing test reported
+// only "invalid_credentials" / "Received: false". The leading hypothesis is
+// Casdoor's own sign-in throttle (an account freeze after a handful of WRONG
+// passwords — the kind lane already guards it: specs/cluster/manifests/casdoor/
+// init-job.yaml LOCKOUT_MARKER). user-bff answers that freeze as
+//   401 {"error":"invalid_credentials","message":"<Casdoor's own text>"}
+// (SsoAuthController.LoginError), and Casdoor's text for it says the wrong
+// password or code was entered "too many times, please wait for N minutes".
+// The login form shows only the error code, so the one string that tells a
+// lockout from a wrong password never reached a test report. These helpers put
+// it there. Classifying is all they do: they never retry and never wait the
+// lockout out — a throttled account is a finding, not a flake to absorb.
+
+/** The substring the kind lane's casdoor init Jobs already key on. */
+export const CASDOOR_LOCKOUT_MARKER = 'too many times';
+
+/** One line naming why a POST /bff/login was refused. A Casdoor lockout is
+ *  called out by name; anything else reports status, error code and message. */
+export function describeLoginFailure(status: number, body: string): string {
+  let error = '';
+  let message = '';
+  try {
+    const j = JSON.parse(body) as { error?: unknown; message?: unknown };
+    error = typeof j.error === 'string' ? j.error : '';
+    message = typeof j.message === 'string' ? j.message : '';
+  } catch {
+    message = body.slice(0, 200);
+  }
+  const text = `HTTP ${status}${error ? ` ${error}` : ''}${message ? `: ${message}` : ''}`;
+  if (`${error} ${message}`.toLowerCase().includes(CASDOOR_LOCKOUT_MARKER)) {
+    return `CASDOOR SIGN-IN LOCKOUT (the account is throttled after repeated wrong passwords; `
+      + `this is not a wrong password in THIS request — see hugmesh-generator#473) — ${text}`;
+  }
+  return text;
+}
+
+const LOGIN_RESPONSE = new WeakMap<Page, Promise<{ status: number; body: string } | null>>();
+
+/** onboard()'s failure path: if the form's POST /bff/login was refused, put the
+ *  classified reason on the FIRST line (spec 33's signInFailure() and the Gherkin
+ *  skip reasons keep only that line), and keep the original error below it. */
+async function withLoginReason(page: Page, username: string, err: unknown): Promise<unknown> {
+  const pending = LOGIN_RESPONSE.get(page);
+  if (!pending) return err;
+  const got = await Promise.race([
+    pending,
+    new Promise<null>((resolve) => setTimeout(() => resolve(null), 2_000)),
+  ]);
+  if (!got || got.status < 400) return err;
+  const original = err instanceof Error ? err.message : String(err);
+  return new Error(`native sign-in of ${username} was refused: ${describeLoginFailure(got.status, got.body)}\n${original}`);
 }
 
 /**
@@ -473,10 +537,14 @@ export async function onboard(page: Page, username: string, password = loginPass
   // in flight — which is exactly the "nav-user timeout" these specs hit.
   const displayName = page.getByTestId('register-display-name');
   const navUser = page.getByTestId('nav-user');
-  await Promise.race([
-    displayName.waitFor({ state: 'visible', timeout: SHELL_AFTER_PROVISION_MS }),
-    navUser.waitFor({ state: 'attached', timeout: SHELL_AFTER_PROVISION_MS }),
-  ]);
+  try {
+    await Promise.race([
+      displayName.waitFor({ state: 'visible', timeout: SHELL_AFTER_PROVISION_MS }),
+      navUser.waitFor({ state: 'attached', timeout: SHELL_AFTER_PROVISION_MS }),
+    ]);
+  } catch (e) {
+    throw await withLoginReason(page, username, e);
+  }
   if (await displayName.isVisible()) {
     // Stage 2: the login-ui requires a display name before "Complete registration"
     // enables (completeBlocked()); an ASCII handle also skips the conditional
