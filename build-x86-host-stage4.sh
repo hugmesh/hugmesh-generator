@@ -5339,6 +5339,127 @@ mount_chroot() {
         fi
     fi
 }
+# ── Live-ISO root pack helpers ───────────────────────────────────────────────
+# The live ISO's rootfs is this sysroot squashed. Two properties of that pack decide
+# whether the live boot survives `dracut: Switching root`. Both were wrong in every
+# live ISO this builder ever shipped (the exclude list dates from the first commit),
+# and the 2026-10-23 standalone-thick live ISO showed exactly the operator's symptom
+# — "not booting past the root filesystem mounting": root mounted, root switched,
+# then silence:
+#
+# 1. The kernel-filesystem MOUNT POINTS must exist in the squashfs. The pack passed
+#    `mksquashfs -e proc sys dev run`, and -e drops the DIRECTORY, not just its
+#    contents (the stage4 tar spells the same intent `--exclude=./proc/*`, which keeps
+#    the directory — which is why the .img had all four and the live root had none).
+#    util-linux switch_root then cannot `mount --move` /dev /proc /sys /run into the
+#    new root, force-unmounts them instead, and PID 1 starts with no console, no
+#    /proc and no /sys: sysvinit prints "Mount failed for selinuxfs on
+#    /sys/fs/selinux: No such file or directory", OpenRC's init-early.sh is the last
+#    process the kernel ever logs, and nothing is printed again. Proven in QEMU on the
+#    shipped ISO: `mkdir /sysroot/{dev,proc,sys,run}` from a rd.break=pre-pivot shell
+#    and the very same squashfs boots on to agetty.
+# 2. /etc/fstab must be the LIVE one. The sysroot's fstab is the installed image's
+#    (PARTUUID=__ROOT_PARTUUID__ for / and __ESP_PARTUUID__ for /boot/efi; build_img
+#    substitutes the real PARTUUIDs into ITS extracted copy, the sysroot keeps the
+#    tokens). On a live boot neither device exists: OpenRC's fsck says "Filesystems
+#    couldn't be fixed", then "rc: Aborting!", and the boot runlevel never completes.
+#    mksquashfs cannot override a file that exists in the source (a -p pseudo file
+#    loses to the source file, and -e of that path discards the pseudo file too), so
+#    the sysroot's fstab is SWAPPED for a tmpfs-only one for the duration of the pack
+#    and restored immediately after. The pack block arms its OWN `trap
+#    live_fstab_restore EXIT` for the window in between (the umount_chroot EXIT trap
+#    is already disarmed by then: `umount_chroot; trap - EXIT` runs before the live
+#    pack), so an `exit 1` or a signal mid-pack still puts the installed image's
+#    fstab back and leaves no fstab.img-tokens behind. A leftover would not reach an
+#    artifact — the specs fstab is re-copied into the sysroot on every run before
+#    the stage4 tar — but a sysroot that lies about its own fstab is not left lying.
+#
+# live_root_gate() is the fail-closed check of both on the packed squashfs, and
+# tests/scripts/test-x86-live-root-pack.sh executes these helpers and the pack block.
+LIVE_ROOT_MOUNTPOINTS="proc sys dev run"
+LIVE_FSTAB_SAVED=""
+LIVE_SQUASH_EXCL=()
+
+# live_squash_excludes <mksquashfs|tar> — fills LIVE_SQUASH_EXCL with the exclude
+# ARGUMENTS for the live pack. Both spellings keep the mount-point directory and drop
+# its contents; the dotfile pattern is explicit because mksquashfs's `*` does not
+# match a leading dot (the sysroot's /dev carries static nodes, /run may carry
+# dotfiles). An array, not a word-split string: `proc/*` must reach mksquashfs
+# unexpanded whatever the cwd holds.
+live_squash_excludes() {
+    local mode="$1" m
+    LIVE_SQUASH_EXCL=()
+    case "${mode}" in
+        mksquashfs)
+            for m in ${LIVE_ROOT_MOUNTPOINTS}; do LIVE_SQUASH_EXCL+=("${m}/*" "${m}/.*"); done
+            LIVE_SQUASH_EXCL+=(var/cache/distfiles "home/${DEFAULT_USER}") ;;
+        tar)
+            for m in ${LIVE_ROOT_MOUNTPOINTS}; do LIVE_SQUASH_EXCL+=("--exclude=./${m}/*"); done
+            LIVE_SQUASH_EXCL+=(--exclude=./var/cache/distfiles "--exclude=./home/${DEFAULT_USER}") ;;
+        *) err "live_squash_excludes: unknown mode '${mode}' (mksquashfs|tar)"; return 1 ;;
+    esac
+}
+
+# live_fstab_swap_in — replace ${SYSROOT}/etc/fstab with the live one (every
+# disk-addressed line dropped, the tmpfs hardening lines kept), keeping the original
+# OUTSIDE the sysroot so the saved copy cannot ride into the squashfs itself.
+live_fstab_swap_in() {
+    local f="${SYSROOT}/etc/fstab"
+    [ -f "${f}" ] || { err "live pack: ${f} is missing — no fstab to derive the live one from"; return 1; }
+    [ -z "${LIVE_FSTAB_SAVED}" ] || { err "live pack: fstab already swapped (${LIVE_FSTAB_SAVED}) — restore first"; return 1; }
+    local saved="${BUILD_ROOT}/fstab.img-tokens"
+    cp -a "${f}" "${saved}" || return 1
+    LIVE_FSTAB_SAVED="${saved}"
+    {
+        printf '# /etc/fstab — LIVE ISO root (tmpfs overlay over the squashfs).\n'
+        printf '# The installed image'"'"'s PARTUUID lines for / and /boot/efi are omitted on purpose:\n'
+        printf '# a live boot has no such disk, and OpenRC fsck/localmount would abort the boot\n'
+        printf '# runlevel on them. The installer writes the real fstab onto the target disk.\n'
+        awk '$1 !~ /^(PARTUUID|UUID|LABEL|PARTLABEL)=|^\/dev\//' "${saved}"
+    } > "${f}"
+}
+
+# live_fstab_restore — put the installed image's fstab back. Idempotent; called
+# right after the pack and from the EXIT trap.
+live_fstab_restore() {
+    [ -n "${LIVE_FSTAB_SAVED:-}" ] && [ -f "${LIVE_FSTAB_SAVED}" ] || return 0
+    mv -f "${LIVE_FSTAB_SAVED}" "${SYSROOT}/etc/fstab" && LIVE_FSTAB_SAVED=""
+}
+
+# live_root_gate <squashfs.img> — refuse to ship a live rootfs that cannot be booted:
+# every mount point in LIVE_ROOT_MOUNTPOINTS must be a top-level directory of the
+# squashfs, and /etc/fstab must not address a disk. Reads the packed image, not the
+# argv that produced it. unsquashfs (squashfs-tools) first, rdsquashfs
+# (squashfs-tools-ng, the tar2sqfs fallback's sibling) second; with neither the gate
+# cannot look and says so — it does not pretend to have checked.
+live_root_gate() {
+    local sq="$1" top="" fstab="" m
+    [ -s "${sq}" ] || { err "live-root gate: ${sq} is missing or empty"; return 1; }
+    if command -v unsquashfs >/dev/null; then
+        top="$(unsquashfs -ls -max-depth 1 -d '' "${sq}" 2>/dev/null | grep -E '^/[^/]+$')" \
+            || top="$(unsquashfs -ls -d '' "${sq}" 2>/dev/null | grep -E '^/[^/]+$')"
+        fstab="$(unsquashfs -cat "${sq}" etc/fstab 2>/dev/null)" \
+            || { err "live-root gate: ${sq} has no /etc/fstab"; return 1; }
+    elif command -v rdsquashfs >/dev/null; then
+        top="$(rdsquashfs -l / "${sq}" 2>/dev/null | sed -E 's#.*[[:space:]/]##; s#^#/#')"
+        fstab="$(rdsquashfs -c /etc/fstab "${sq}" 2>/dev/null)" \
+            || { err "live-root gate: ${sq} has no /etc/fstab"; return 1; }
+    else
+        warn "live-root gate: neither unsquashfs nor rdsquashfs on this host — cannot verify that ${sq} carries /proc /sys /dev /run and a live /etc/fstab"
+        return 0
+    fi
+    for m in ${LIVE_ROOT_MOUNTPOINTS}; do
+        grep -qx "/${m}" <<<"${top}" || {
+            err "live-root gate: ${sq} has no /${m} directory — switch_root cannot move the kernel filesystems into the live root and the boot dies right after 'Switching root' (exclude '${m}/*', never '${m}')"
+            return 1
+        }
+    done
+    if printf '%s\n' "${fstab}" | awk '$1 ~ /^(PARTUUID|UUID|LABEL|PARTLABEL)=|^\/dev\// {found=1} END {exit !found}'; then
+        err "live-root gate: ${sq}'s /etc/fstab still addresses a disk (PARTUUID/UUID/LABEL//dev line) — OpenRC fsck/localmount would abort the live boot runlevel; the pack must run between live_fstab_swap_in and live_fstab_restore"
+        return 1
+    fi
+    info "Live-root gate: /${LIVE_ROOT_MOUNTPOINTS// / /} present and /etc/fstab is the live one"
+}
 umount_chroot() {
     # Detach exactly what mount_chroot attached in THIS run — each flag below is
     # set by the matching mount above — and nothing else: a mount somebody else
@@ -7043,9 +7164,9 @@ slx_stage_node_policy "${SYSROOT}" "${SHARED_SPECS}" \
 # that every `backup` opt-in in this repo is paired with a revert.
 pcs_unquiet_sendfile_noise "${SYSROOT}"
 # The staged patcher itself must not ship either. The stage4 tar excludes ./tmp/*, but
-# the live-ISO squash does NOT (mksquashfs -e / the tar2sqfs fallback list proc, sys,
-# dev, run, var/cache/distfiles and the local user's home — no tmp), so a file left in
-# ${SYSROOT}/tmp rides into the ISO's rootfs.
+# the live-ISO squash does NOT (live_squash_excludes lists the CONTENTS of proc, sys,
+# dev, run, plus var/cache/distfiles and the local user's home — no tmp), so a file
+# left in ${SYSROOT}/tmp rides into the ISO's rootfs.
 rm -f "${SYSROOT}/tmp/hugmesh-patch-portage-file-copy.py"
 
 banner "Packaging stage4 tarball"
@@ -7485,6 +7606,13 @@ CHROOT
             cp -r "${BRAND_GRUB_THEME_STAGED}/." "${ISO_DIR}/boot/grub/themes/${BRAND_GRUB_THEME_NAME}/" 2>/dev/null || true
         fi
         rm -f "${ISO_DIR}/LiveOS/squashfs.img"
+        # The live root must NOT carry the installed image's fstab (see the live-ISO
+        # root pack helpers next to umount_chroot): swap it for the live one for the
+        # duration of the pack. Restored right after the pack — and by the EXIT trap
+        # armed HERE if the pack exits or is killed in between (umount_chroot's trap is
+        # already disarmed above; nothing else would put the fstab back).
+        live_fstab_swap_in || { err "could not stage the live /etc/fstab — cannot build a bootable live ISO"; exit 1; }
+        trap live_fstab_restore EXIT
         if command -v mksquashfs >/dev/null; then
             # The build host's mksquashfs may lack zstd/xz (USE-gated). A hard-coded
             # -comp zstd then FAILS and (previously) silently shipped a rootfs-less
@@ -7495,8 +7623,13 @@ CHROOT
             done
             rm -rf "${_sqp}" /tmp/.sqprobe.sqfs
             info "Squashing rootfs with -comp ${sq_comp} (this can take a while)..."
+            # -wildcards + `proc/*` (not `-e proc`): the mount-point directories MUST
+            # stay in the image, only their contents go — `-e proc sys dev run` shipped a
+            # root switch_root could not move /dev /proc /sys /run into, and the live
+            # boot died right after "Switching root" (helpers next to umount_chroot).
+            live_squash_excludes mksquashfs
             mksquashfs "${SYSROOT}" "${ISO_DIR}/LiveOS/squashfs.img" \
-                -comp "${sq_comp}" -e proc sys dev run var/cache/distfiles "home/${DEFAULT_USER}" >/dev/null \
+                -comp "${sq_comp}" -wildcards -e "${LIVE_SQUASH_EXCL[@]}" >/dev/null \
                 || { err "mksquashfs failed — cannot build a bootable live ISO"; exit 1; }
         else
             # squashfs-tools-ng fallback: same excludes, xz (kernel has SQUASHFS_XZ).
@@ -7505,13 +7638,17 @@ CHROOT
             # shipped a squashfs with every xattr (security.selinux included) stripped,
             # while the mksquashfs path, the stage4 tar and fs.tar all kept them.
             # tar2sqfs itself keeps whatever xattrs it finds in the archive.
+            # `--exclude=./proc/*` (not `./proc`) for the same reason as above: the
+            # directory entry must stay in the archive, exactly as the stage4 tar does.
             info "Squashing rootfs with tar2sqfs -c xz (this can take a while)..."
+            live_squash_excludes tar
             tar -C "${SYSROOT}" --xattrs --xattrs-include='*.*' --numeric-owner \
-                --exclude='./proc' --exclude='./sys' --exclude='./dev' \
-                --exclude='./run' --exclude='./var/cache/distfiles' --exclude="./home/${DEFAULT_USER}" \
+                "${LIVE_SQUASH_EXCL[@]}" \
                 -cpf - . | tar2sqfs -q -c xz -j "${JOBS}" "${ISO_DIR}/LiveOS/squashfs.img" \
                 || { err "tar2sqfs failed — cannot build a bootable live ISO"; exit 1; }
         fi
+        live_fstab_restore || { err "could not restore ${SYSROOT}/etc/fstab after the live pack"; exit 1; }
+        trap - EXIT
         # Sanity: a real desktop rootfs squashes to GiBs; a tiny image means the squash
         # silently failed (unsupported compressor, bad excludes) — refuse to ship a
         # live ISO that boots to nothing (this is exactly the 111 MiB rootfs-less ISO).
@@ -7519,6 +7656,9 @@ CHROOT
         if [ "${sq_mib}" -lt 200 ]; then
             err "live squashfs is only ${sq_mib} MiB — the rootfs was not captured; not shipping a broken live ISO."; exit 1
         fi
+        # Fail closed on what the pack must have produced: the four kernel-filesystem
+        # mount points and a live /etc/fstab. Reads the image, not the argv.
+        live_root_gate "${ISO_DIR}/LiveOS/squashfs.img" || exit 1
         info "Live rootfs squashed: ${sq_mib} MiB (-comp ${sq_comp:-xz})"
         # Unify the cmdline with the .img: source GRUB_CMDLINE_LINUX from the same
         # grub defaults (full KSPP/LSM/audit/cgroup hardening), not a short literal.

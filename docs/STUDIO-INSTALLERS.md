@@ -6,9 +6,10 @@ exist for people who do not want to set up a Python environment first.
 
 They package **the same code**. Nothing is added or removed for a packaged build.
 
-**No installer has been released yet.** The workflow exists, but no `studio-v*` tag
-exists, and the site's Downloads page says so. Until one ships, run the Studio from a
-checkout.
+**To release one:** `scripts/release-studio.sh <version>`. That is the whole procedure;
+["Cutting a release"](#cutting-a-release) below explains what it does and the one
+other way (a button in Actions). The first beta, `0.3.0-beta.1`, shipped on
+2026-10-22.
 
 | Artifact | Platform | Built by |
 |---|---|---|
@@ -26,18 +27,18 @@ the local scripts below are dry runs.
 ## Verifying a download
 
 Every published file has a GitHub build-provenance attestation, and `SHA256SUMS` is
-signed keyless with cosign by the release workflow at the release tag. For
-`0.3.0-beta.1`:
+signed keyless with cosign by the release workflow at the release tag. For a release
+`<V>` (tag `studio-v<V>`), substituting `0.3.0-beta.2` here:
 
 ```bash
-gh attestation verify hugmesh-studio-0.3.0-beta.1-x64.msi \
+gh attestation verify hugmesh-studio-0.3.0-beta.2-x64.msi \
   --repo hugmesh/hugmesh-generator \
   --signer-workflow hugmesh/hugmesh-generator/.github/workflows/studio-release.yml \
-  --source-ref refs/tags/studio-v0.3.0-beta.1 \
+  --source-ref refs/tags/studio-v0.3.0-beta.2 \
   --deny-self-hosted-runners
 
 cosign verify-blob --bundle SHA256SUMS.sigstore.json \
-  --certificate-identity https://github.com/hugmesh/hugmesh-generator/.github/workflows/studio-release.yml@refs/tags/studio-v0.3.0-beta.1 \
+  --certificate-identity https://github.com/hugmesh/hugmesh-generator/.github/workflows/studio-release.yml@refs/tags/studio-v0.3.0-beta.2 \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   SHA256SUMS
 sha256sum --check --ignore-missing SHA256SUMS
@@ -45,6 +46,19 @@ sha256sum --check --ignore-missing SHA256SUMS
 
 The release notes print the same commands for each release, including the identity as
 an anchored regular expression for `--certificate-identity-regexp`.
+
+> **`0.3.0-beta.1` does not verify with its own printed commands.** Its files were
+> replaced on 2026-10-23 by a run on a since-deleted tag `studio-v0.3.1-beta.1` (the
+> tag-must-match gate had been removed by hand), so the certificate in its
+> `SHA256SUMS.sigstore.json` names
+> `...studio-release.yml@refs/tags/studio-v0.3.1-beta.1` and its attestations carry
+> that source ref, while the notes and `releases.json` say `studio-v0.3.0-beta.1`.
+> Anyone who downloaded on 10-22 holds different bytes again. Verify that release
+> with `--certificate-identity ...@refs/tags/studio-v0.3.1-beta.1` and
+> `--source-ref refs/tags/studio-v0.3.1-beta.1`, or install `0.3.0-beta.2` or later,
+> which this page's procedure cuts correctly. A third set of bytes under the
+> `0.3.0-beta.1` name is not recommended; see "Releases cut before the republish
+> input" below.
 
 Artifact attestations need the repository to be **public** on this org's plan. On a
 private repository the attest step fails and the workflow creates no release, so the
@@ -146,32 +160,114 @@ the 1.0.0 build first.
 
 ## Cutting a release
 
-1. Set `__version__` in `studio/hugmesh_studio/__init__.py` to the new beta, and add a
-   matching `<release>` to
-   `studio/packaging/flatpak/org.hugmesh.ImageStudio.metainfo.xml` (AppStream writes
-   the pre-release with `~`: `0.3.0~beta.2`). Merge that to `main`.
-2. Tag the merged commit on `main` and push the tag:
-   `git tag -a studio-v0.3.0-beta.2 -m "Studio 0.3.0-beta.2" && git push origin studio-v0.3.0-beta.2`.
-3. The workflow stops if the tag and `__version__` disagree. It builds the MSI, the
-   Flatpak and the tarball, writes `SHA256SUMS`, signs it with cosign, attests every
-   file, and only then creates the GitHub Release, marked **pre-release** and never
-   "latest".
-4. Its last step sends `hugmesh/hugmesh.github.io` a `releases-updated`
-   repository_dispatch so the site rebuilds its Downloads data. That needs the
-   repository secret `SITE_DISPATCH_TOKEN` (a fine-grained token with Contents: read
-   and write on `hugmesh/hugmesh.github.io` only). Without it the step prints a notice
-   and the site must be updated by hand: copy `releases.json` from the release into
-   `src/assets/releases.json` there.
+**The one way:**
 
-To re-run a release, run the workflow manually **on the tag** with **publish** ticked:
-`gh workflow run studio-release.yml --repo hugmesh/hugmesh-generator --ref studio-v0.3.0-beta.2 -f publish=true`.
-If the release already exists, the run stops without changing it. A manual run on
-`main` builds both installers as workflow artifacts and publishes nothing. A run on
-any other branch is refused.
+```bash
+scripts/release-studio.sh 0.3.0-beta.2
+```
+
+With no argument it proposes the next beta of the current base and asks. It preflights
+read-only (login, repository public, version valid and later than every existing
+`studio-v*` tag, no release yet, nothing in progress, `main`'s `__version__` not past
+it), prints the plan, asks `Proceed? [y/N]`, and starts **one** GitHub Actions run,
+[**Cut a Studio release**](../.github/workflows/studio-release-cut.yml). That run:
+
+1. commits the bump of `__version__` (and the matching `<release>` in the Flatpak
+   metainfo) to `main`, through `studio/packaging/release_version.py bump`;
+2. creates the tag `studio-v<version>` **on GitHub** at that commit (never on your
+   machine);
+3. dispatches [`studio-release.yml`](../.github/workflows/studio-release.yml) **on
+   that tag** with `publish=true`. That run builds the MSI, the Flatpak and the
+   tarball on GitHub-hosted runners, writes `SHA256SUMS`, signs it with cosign,
+   attests every file, and only then creates the GitHub Release, marked
+   **pre-release** and never "latest" for a beta.
+
+The script streams both runs and ends with the release URL, the checksums and the
+verify commands. Nothing else to do.
+
+**The same thing from the browser:** Actions > **Cut a Studio release** > Run
+workflow > `version` = `0.3.0-beta.2`, everything else left alone > Run. The cut
+run's summary links the release run; that run's summary has the release URL.
+
+**Rehearsal:** `scripts/release-studio.sh 0.3.0-beta.2 --dry-run` does the read-only
+preflight, prints the plan and stops before anything is dispatched. The button's
+`dry_run` box does the same on GitHub: it runs the guard tests and actionlint against
+the tree that would execute and writes the plan ("What a real run WOULD do") to the
+run summary, creating nothing. A manual run of `studio-release.yml` on `main` with
+`publish` unticked is still the build-only rehearsal: it builds all three packages as
+workflow artifacts and publishes nothing (with `publish` ticked on `main` it fails in
+seconds instead, because `main` never publishes).
+
+**After a failed build:** run the same command again. The cut is idempotent: `main`
+already at the version means no bump; a tag already at that commit is kept; a tag at
+another commit with no release behind it is moved to the bump commit (it says so,
+loudly: nothing published references it); no release means dispatch. Nothing is ever
+deleted. If the release already exists but with files missing because the upload died
+half-way, the same command stops **red** with "already exists": that recovery is a
+republish, by design, because some users may already hold the files that did upload.
+
+### Re-publishing a version
+
+`scripts/release-studio.sh 0.3.0-beta.2 --republish`, or the button with
+`republish` ticked **and** the version typed into `confirm`.
+
+This replaces every file of the existing release `studio-v0.3.0-beta.2` with new
+bytes built from the same tag. **Every checksum, signature and attestation changes,
+and anyone who downloaded earlier can no longer verify what they have against the
+new notes.** The script prints that and makes you type the version back (`--yes`
+does not skip it). The release notes then carry "Files replaced on `<date>` from
+`<sha>`; every checksum, signature and attestation changed", and the run summary is
+titled "REPUBLISHED: all checksums changed". The tag is never moved: a published tag
+is the coordinate users' verify commands name.
+
+The rule: **a wrong build gets a new beta N, not a republish.** Republish exists for
+the half-uploaded case above and for a deliberate rebuild of the same commit.
+
+### Releases cut before the republish input
+
+`studio-v0.3.0-beta.1` points at b7edc89c, whose copy of `studio-release.yml` has
+only the `publish` input. It **cannot** be re-published through this path: both the
+script and the cut refuse with "the workflow file at tag studio-v0.3.0-beta.1
+predates the republish input". A bare `gh workflow run studio-release.yml --ref
+studio-v0.3.0-beta.1 -f publish=true` would run that old file and replace its files
+silently, with no warning and no note. Do not do that. Cut `0.3.0-beta.2` instead,
+and edit the beta.1 release notes to say it is superseded (see "Verifying a
+download" for why its signature material names another tag).
+
+### The hand-tag fallback
+
+`git tag -a studio-v0.3.0-beta.3 -m "Studio 0.3.0-beta.3" && git push origin
+studio-v0.3.0-beta.3` still publishes through the `push` trigger, but only when
+`__version__` at that commit **equals** the tag's version; otherwise the version job
+refuses in seconds (that gate was missing on 2026-10-23, which is how a push of
+`studio-v0.3.1-beta.1` published under the `0.3.0-beta.1` name). The version bump
+then has to be merged to `main` by hand first, so this is more steps than the
+script, not fewer.
+
+### The Downloads page
+
+`hugmesh.github.io` rebuilds its `src/assets/releases.json` from the GitHub Releases
+API itself (its `pages.yml`: hourly cron, a `releases-updated` dispatch, or a manual
+run). **Nobody copies `releases.json` by hand.** After a release the Downloads page
+refreshes within the hour; `scripts/release-studio.sh ... --site` runs
+`gh workflow run pages.yml --repo hugmesh/hugmesh.github.io` with your own token to
+ask for it now. The publish job also sends the `releases-updated` dispatch itself
+when the repository secret `SITE_DISPATCH_TOKEN` exists (a fine-grained token with
+Contents: read and write on `hugmesh/hugmesh.github.io` only); **it does not exist
+today**, and the job prints a notice and goes on.
+
+### Where the guard lives
 
 Every job runs on a GitHub-hosted runner (`ubuntu-latest`, `ubuntu-24.04`,
 `windows-latest`); no variable can move one onto the self-hosted runner. Only the
-publish job can write or sign (`contents`, `id-token` and `attestations: write`).
+publish job of `studio-release.yml` can sign (`id-token` and `attestations: write`);
+the cut's `cut` job holds `contents` and `actions: write` and nothing else. The
+tests under `studio/tests/test_studio_beta_version.py`,
+`test_studio_release_signing.py`, `test_studio_release_cut.py` and
+`test_release_studio_script.py` parse and execute the workflows' own `run:` blocks
+with fake tools; the cut runs the first two itself before it commits anything, and
+`studio-tests.yml` runs them on every push to `main` that touches the release files,
+so a hand edit of the workflow goes red where it happened.
 
 **Authenticode (optional).** Add the secrets `STUDIO_AUTHENTICODE_PFX_BASE64` (a
 base64-encoded code-signing `.pfx`) and `STUDIO_AUTHENTICODE_PFX_PASSWORD`, and the MSI

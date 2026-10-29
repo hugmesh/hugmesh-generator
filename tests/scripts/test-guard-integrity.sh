@@ -822,6 +822,13 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # RUNNING this file on that branch (origin/main cdcc8fcd), not computed:
 #     198 of 239 suites are named by a pull_request-triggered workflow
 #     PASS the ungated SET matches its pin exactly (41 suite(s))
+#
+# 198 -> 199 (denominator 240 -> 241) on 2026-10-28 for the live-ISO root pack guard:
+# tests/scripts/test-x86-live-root-pack.sh landed on disk, in shell-suites.yml's
+# container job (next to test-x86-artifact-integrity.sh, with squashfs-tools added to
+# its apt line) and in .gitlab-ci.yml's orphan-guards-verify. MEASURED by RUNNING this
+# file on that branch, not computed.
+#
 # 198 -> 200 (denominator 240 -> 242, ungated SET unchanged) on 2026-10-29 for the
 # games member + games admin screens round (#824): tests/stack/test-derive-games-admin.sh
 # (the ROLE_GAMES_ADMIN := ROLE_GAMES ∩ (ROLE_ADMIN ∪ ROLE_MOD) derivation) and
@@ -834,7 +841,10 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # Check 7's SET pin is still red on that tree for tests/boot/test-gpu-worker-node-labels.sh
 # (unwired on main since before this round; check 3 names it too) — that is main's
 # defect, not this change's, and it is NOT added to PREMERGE_UNGATED here.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-200}"
+# Both steps met in the merge of origin/main 398b2327 into #824 (199 from the live-ISO
+# guard + the two games suites above): MEASURED by RUNNING this file on the merged tree:
+#     201 of 243 suites are named by a pull_request-triggered workflow
+PREMERGE_BASELINE="${GUARD_PREMERGE:-201}"
 
 # 182 -> 192 (denominator 205 -> 215) on 2026-09-30 for #385: the census gained a
 # THIRD spelling, bare `tests/*.sh` at depth 1, and the ten suites it exposed were
