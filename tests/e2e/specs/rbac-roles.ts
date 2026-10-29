@@ -11,10 +11,15 @@
 // gateway_route_access seed (manifests/route-access/schema.sql). Crucially:
 //
 //   * ROLE_GAMES_ADMIN is NEVER granted directly. It is a DERIVED/composite role
-//     materialized by manifests/casdoor/games-admin-sync-job.yaml as
-//         ROLE_GAMES_ADMIN = ROLE_GAMES INTERSECT (ROLE_ADMIN UNION ROLE_MOD).
+//         ROLE_GAMES_ADMIN = ROLE_GAMES INTERSECT (ROLE_ADMIN UNION ROLE_MOD)
+//     materialized by manifests/casdoor/games-admin-sync-job.yaml on the cluster
+//     and by tests/stack/derive-games-admin.sh on compose (seed-e2e.sh calls it
+//     after the persona grants). The `roles` arrays below are the DIRECT grants
+//     only: a live /bff/session for e2e-gamesadmin therefore carries
+//     'games_admin' IN ADDITION to these, and a spec asserting that persona's
+//     exact live role set must allow it.
 //     So `e2e-gamesadmin` holds ROLE_GAMES + ROLE_ADMIN and EARNS the derived
-//     role via the sync job; `e2e-gamesonly` (ROLE_GAMES only) and
+//     role via the derivation; `e2e-gamesonly` (ROLE_GAMES only) and
 //     `e2e-adminonly` (ROLE_ADMIN only) must NOT earn it (default-deny). The
 //     `expectGamesAdmin` flag is what the gate specs assert against.
 //
@@ -121,11 +126,13 @@ export const SYSTEMS_SEED_USERS: SystemsSeedUser[] = [
   {
     username: 'e2e-gamesadmin',
     passwordEnv: 'E2E_GAMESADMIN_PASSWORD',
-    // ROLE_GAMES + ROLE_ADMIN -> the intersection job materializes ROLE_GAMES_ADMIN.
+    // ROLE_GAMES + ROLE_ADMIN -> the derivation (derive-games-admin.sh on compose,
+    // games-admin-sync on cluster) materializes ROLE_GAMES_ADMIN; a live session
+    // additionally carries 'games_admin'.
     roles: ['ROLE_GAMES', 'ROLE_ADMIN', 'ROLE_USER'],
     expectGamesAdmin: true,
     registrationComplete: true,
-    note: 'Games namespace admin — ROLE_GAMES ∩ ROLE_ADMIN earns derived ROLE_GAMES_ADMIN; reaches /games/admin/**.',
+    note: 'Games namespace admin — ROLE_GAMES ∩ ROLE_ADMIN earns DERIVED ROLE_GAMES_ADMIN (derive-games-admin.sh on compose, games-admin-sync on cluster; live roles also carry games_admin); reaches /games/admin/** and /games/api/admin/**.',
   },
   {
     username: 'e2e-gamesonly',

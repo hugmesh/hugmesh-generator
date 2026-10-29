@@ -469,6 +469,7 @@ jobs:
             tests/scripts/test-x86-prefetch-gate.sh
             tests/stack/test-attestation-dockerfile-patches.sh
             tests/stack/test-coturn-optional-service.sh
+            tests/stack/test-derive-games-admin.sh
             tests/stack/test-front-door-client-surface.sh
             tests/stack/test-no-store-posture.sh
             tests/stack/test-optional-services-exclude.sh
@@ -551,6 +552,7 @@ jobs:
               tests/scripts/test-fe-bff-route-lane-parity.sh
               tests/scripts/test-first-run-lib.sh
               tests/scripts/test-fragment-route-target.sh
+              tests/scripts/test-games-screens-wiring.sh
               tests/scripts/test-gitlab-ci-wellformed.sh
               tests/scripts/test-headscale-oidc-secret-staging.sh
               tests/scripts/test-mfa-raw-jwt-posture.sh

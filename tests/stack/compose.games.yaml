@@ -1,18 +1,66 @@
-# compose.games.yaml — the games WASM ASSET TIER behind the `games` profile
+# compose.games.yaml — the games tier behind the `games` profile
 # (`make stack-up GAMES=1`), following the alt-social single-file precedent.
 #
-# HONEST SCOPE: this is the asset tier ONLY — one nginx serving the committed
-# Godot Web exports (shadows-of-the-net + friends) at
-# /_remotes/wasm-fragment/<slug>/, which is exactly the origin matrix-ui's
-# chat3d stage and the host's games surfaces address. The games PORTAL, games
-# BFF, app store and the two-Casdoor games realm stay ABSENT locally; /games in
-# the host shell remains the guarded placeholder it documents.
+# HONEST SCOPE (rewritten 2026-10-28, the games member + games admin screens
+# round). This profile now carries FOUR things, all built from the sibling
+# hugmesh-games clone:
+#
+#   1. hugmesh-wasm-fragment — the WASM ASSET TIER: one nginx serving the
+#      committed Godot/web exports at /_remotes/wasm-fragment/<slug>/ (the URL
+#      matrix-ui's chat3d bridge and the games member Play screen's iframe both
+#      address). Unchanged.
+#   2. hugmesh-games-ui — the native-federation REMOTE `games` (hugmesh-games/
+#      games-ui, NOT hugmesh-games/frontend, which stays the standalone two-realm
+#      portal). It exposes './routes' (GAMES_ROUTES, the member catalog + play
+#      screens the host mounts at /games) and './admin-routes'
+#      (GAMES_ADMIN_ROUTES, the admin screens the host mounts at /games/admin).
+#      Served by nginx-unprivileged on :8080, built with --base-href=/games/, so
+#      the fe route `games-ui` (Path=/games/**, StripPrefix=1) lands
+#      /games/remoteEntry.json on its docroot — matching the federation-api
+#      changeset 025 remote_entry_url http://hugmesh-games-ui:8080/remoteEntry.json.
+#   3. hugmesh-games-bff — the games BFF (hugmesh-games/backend) run as an
+#      ORDINARY MESH BFF: it validates the SYSTEMS Casdoor custody JWT the
+#      fe-gateway mints from the httpOnly bff_session cookie
+#      (BffCookieToBearerWebFilter -> BffJwtExchangeWebFilter), so jwk-set-uri is
+#      the platform casdoor:8000 and CASDOOR_ORGANIZATION is `hugmesh`. There is
+#      NO games-realm (threewizards) login, no password grant and no second
+#      Casdoor in this lane — the CASDOOR_CLIENT_ID/SECRET below are the unused
+#      password-grant credentials the BFF's config requires to be non-empty.
+#      Reached ONLY through the fe route `games-bff` (Path=/games/api/**,
+#      StripPrefix=1 -> /api/** on the BFF); the route-access rows for
+#      /games/api/** (ROLE_GAMES|ROLE_ADMIN|ROLE_MOD) and /games/api/admin/**
+#      (ROLE_GAMES_ADMIN) gate it at the gateway, and the BFF's own
+#      SecurityConfig (/api/admin/** = hasRole ADMIN, player paths =
+#      authenticated()) gates it again inside.
+#   4. games-bff-db + games-cassandra-init — the BFF's own Postgres
+#      (threewizards) and a one-shot that creates the `threewizards` keyspace +
+#      tables on the PLATFORM cassandra (the BFF shares the core node; the
+#      keyspace is what hugmesh-games/docker/cassandra-init.cql declares,
+#      SimpleStrategy RF1, every statement IF NOT EXISTS so re-runs are no-ops).
+#
+# STILL ABSENT, deliberately: the standalone games portal (hugmesh-games/
+# frontend), the app-store control plane UI, the games-realm Casdoor and the
+# systems->games role mirror (hugmesh-actions' GM sync stays DEV-stubbed in
+# compose.local.yaml). The games admin Settings screen lists those as "managed
+# in the standalone games portal" rather than pretending they are here.
+#
+# ROLE_GAMES_ADMIN on this lane is DERIVED by tests/stack/derive-games-admin.sh
+# (ROLE_GAMES ∩ (ROLE_ADMIN ∪ ROLE_MOD)), which seed-e2e.sh calls after the
+# persona grants — the compose twin of the cluster's games-admin-sync Job.
 #
 # BUILD CONTEXT IS THE SIBLING CLONE: hugmesh-games is 333M of committed game
 # bundles and is deliberately NOT in scripts/clone-all-repos.sh; the mock lane
 # (tests/stack/up.sh GAMES_REPO) already established the sibling-path
 # convention this reuses. Clone github.com/hugmesh/hugmesh-games next to
-# hugmesh-generator, or point GAMES_SRC at a checkout.
+# hugmesh-generator, or point GAMES_SRC at a checkout. All four build/mount
+# contexts below resolve under ${GAMES_SRC:-../../../hugmesh-games}.
+#
+# compose.m2-local.yaml is NOT needed for this profile (verified 2026-10-28):
+# hugmesh-games/backend/Dockerfile builds with `./mvnw dependency:go-offline`
+# and `./mvnw package` against Maven Central (the wrapper's default
+# repository; no settings.xml, no private registry), and games-ui builds with
+# npm against the public registry. If an npm/Maven fetch stalls inside the
+# build, use BUILD_NETWORK=host (the docker-bridge MTU trap), not an m2 mirror.
 name: hugmesh-local
 
 services:
@@ -27,3 +75,126 @@ services:
       interval: 10s
       timeout: 5s
       retries: 12
+
+  # The `games` native-federation remote (member + admin screens). Same image
+  # shape as every other first-party remote here (nginx-unprivileged :8080,
+  # nonce'd CSP from its own nginx.conf, docker-entrypoint.d/50-hug-theme.sh
+  # consuming HUG_THEME_CSS exactly like user-ui). The healthcheck fetches the
+  # federation manifest the host shell will load, so "healthy" means "the
+  # remote is actually mountable", not merely "nginx answers".
+  hugmesh-games-ui:
+    profiles: ["games"]
+    platform: linux/amd64
+    image: hugmesh-games/games-ui:dev
+    build:
+      context: ${GAMES_SRC:-../../../hugmesh-games}/games-ui
+    environment:
+      # Runtime theme (fleet 50-snap-theme.sh hook; see login-ui in compose.local.yaml).
+      HUG_THEME_CSS: ${HUG_THEME_CSS:-${SNAP_THEME_CSS:-}}
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:8080/remoteEntry.json || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  # The games BFF on the SYSTEMS issuer (see the header). Env exactly as the
+  # cross-repo contract names it; every value is the BFF's own application.yml
+  # key (DB_* -> spring.r2dbc/liquibase, CASDOOR_* -> casdoor.* + the resource
+  # server's jwk-set-uri, CASSANDRA_* -> spring.cassandra.*, APP_UPLOADS_GAMES_DIR
+  # -> app.uploads.games-dir).
+  hugmesh-games-bff:
+    profiles: ["games"]
+    platform: linux/amd64
+    image: hugmesh-games/bff:dev
+    build:
+      context: ${GAMES_SRC:-../../../hugmesh-games}/backend
+    environment:
+      DB_HOST: games-bff-db
+      DB_PORT: "5432"
+      DB_NAME: threewizards
+      DB_USER: threewizards
+      DB_PASS: threewizards
+      # The PLATFORM Casdoor, in-DNS: jwk-set-uri = http://casdoor:8000/.well-known/jwks.
+      # The fe-gateway's bff-exchange mints the custody JWT against this same
+      # Casdoor (HUGMESH_GATEWAY_BFF_EXCHANGE_ENABLED=true in compose.local.yaml),
+      # so its `roles` claim is the systems role set CasdoorAuthorities maps to
+      # ROLE_GAMES / ROLE_ADMIN / ROLE_MOD / ROLE_USER (+ ROLE_ADMIN for a
+      # GAMES_ADMIN holder — the derived systems role IS the games admin here).
+      CASDOOR_ENDPOINT: http://casdoor:8000
+      CASDOOR_ORGANIZATION: hugmesh
+      # UNUSED password-grant client (no games-realm login exists on this lane);
+      # present because the BFF refuses an empty client secret at boot.
+      CASDOOR_CLIENT_ID: dev-games-client
+      CASDOOR_CLIENT_SECRET: dev-games-secret
+      # The PLATFORM cassandra (compose.real.yaml), keyspace from
+      # games-cassandra-init below. datacenter1 = what the stock cassandra:5
+      # image's SimpleSnitch advertises (measured on the live platform node with
+      # `nodetool status`, 2026-10-28) — NOT the dc1 the games repo's own
+      # GossipingPropertyFileSnitch compose uses.
+      CASSANDRA_CONTACT_POINTS: cassandra:9042
+      CASSANDRA_KEYSPACE: threewizards
+      CASSANDRA_LOCAL_DC: datacenter1
+      SPRING_PROFILES_ACTIVE: prod
+      APP_UPLOADS_GAMES_DIR: /var/hugmesh/games
+    volumes:
+      - games-bff-uploads:/var/hugmesh/games
+    depends_on:
+      games-bff-db: { condition: service_healthy }
+      games-cassandra-init: { condition: service_completed_successfully }
+      casdoor: { condition: service_started }
+    healthcheck:
+      # eclipse-temurin:25-jre (the BFF's runtime image) ships bash but NEITHER
+      # curl NOR wget (verified 2026-10-28), so the probe is bash's own /dev/tcp.
+      # CMD (not CMD-SHELL) and an explicit `bash -c`: the image's /bin/sh is
+      # dash, which has no /dev/tcp ("cannot create /dev/tcp/...: Directory
+      # nonexistent", measured on a sibling Temurin container) — under CMD-SHELL
+      # this probe would never go healthy. /actuator/health is permitAll in the
+      # BFF's SecurityConfig and answers {"status":"UP"} to an anonymous probe
+      # (details are GAME-MASTER-gated), which is exactly the one string this
+      # asserts.
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/8080 && printf 'GET /actuator/health HTTP/1.0\\r\\nHost: localhost\\r\\n\\r\\n' >&3 && grep -q '\"status\":\"UP\"' <&3"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 90s
+
+  games-bff-db:
+    profiles: ["games"]
+    platform: linux/amd64
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: threewizards
+      POSTGRES_USER: threewizards
+      POSTGRES_PASSWORD: threewizards
+    volumes:
+      - games-bff-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U threewizards -d threewizards"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  # One-shot: the BFF's keyspace + tables on the PLATFORM cassandra. Same shape
+  # as compose.local.yaml's cassandra-init (which only makes the gateway and
+  # federation keyspaces — Spring Data makes TABLES, never the KEYSPACE), but
+  # runs the games repo's own CQL so the two never drift. Every statement in that
+  # file is CREATE ... IF NOT EXISTS, so a re-run is a no-op and `restart: "no"`
+  # is safe. Depends on the platform cassandra being HEALTHY and on the core
+  # cassandra-init having COMPLETED, so two cqlsh schema writers never run
+  # concurrently against the single dev node (schema agreement on one node is
+  # cheap, but a race here would surface as a confusing boot-order failure).
+  games-cassandra-init:
+    profiles: ["games"]
+    platform: linux/amd64
+    image: cassandra:5
+    restart: "no"
+    depends_on:
+      cassandra: { condition: service_healthy }
+      cassandra-init: { condition: service_completed_successfully }
+    volumes:
+      - ${GAMES_SRC:-../../../hugmesh-games}/docker/cassandra-init.cql:/init.cql:ro
+    entrypoint: ["cqlsh", "cassandra", "9042", "-f", "/init.cql"]
+
+volumes:
+  games-bff-db-data:
+  games-bff-uploads:

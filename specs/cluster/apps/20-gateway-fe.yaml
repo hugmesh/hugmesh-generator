@@ -232,7 +232,7 @@ spec:
           # that /login/** never is.
           - id: remote-deeplink-to-host-shell
             uri: http://hugmesh-host-shell.hugmesh-frontend.svc.cluster.local:80
-            path: /social/matrix/**,/social/mastodon/**,/social/forum/**,/wiki/**,/tube/**,/owncast/**,/character-studio/**,/character-forge/**,/admin/**,/mod/**,/user/**
+            path: /social/matrix/**,/social/mastodon/**,/social/forum/**,/wiki/**,/tube/**,/owncast/**,/character-studio/**,/character-forge/**,/admin/**,/mod/**,/user/**,/games/**
             header: "Accept, .*text/html.*"
           - id: matrix-ui
             uri: http://hugmesh-matrix-ui.hugmesh-frontend.svc.cluster.local:80
@@ -303,6 +303,42 @@ spec:
           - id: character-forge-ui
             uri: http://hugmesh-character-forge-ui.hugmesh-frontend.svc.cluster.local:8080
             path: /character-forge/**
+            filters:
+              - StripPrefix=1
+          # Games member + games admin SCREENS (2026-10-28) — the kind twins of
+          # tests/stack/gateway-routes/fe/application-routes.yml `games-bff` +
+          # `games-ui`. The host shell mounts the `games` native-federation
+          # remote (hugmesh-games/games-ui, manifests/games-ui) at /games and
+          # /games/admin; the remote talks ONLY to the games BFF through
+          # /games/api/** (StripPrefix=1 -> /api/** on the BFF, the existing
+          # hugmesh-games Service in the hugmesh-games namespace, :8080).
+          # ORDER: games-bff (/games/api/**) BEFORE games-ui (/games/**) or the
+          # remote's nginx swallows every API call; both after the deep-link
+          # route above (its path list carries /games/**) so an HTML navigation
+          # boots the shell while remoteEntry.json/chunks/fetch() fall through
+          # here. Route-access rows (20-schema.sql): /games/api/admin/**
+          # ROLE_GAMES_ADMIN; /games/api/** and /games/** ROLE_GAMES|ROLE_ADMIN|
+          # ROLE_MOD. OPTIONAL slug `games`: gate_optional_services REMOVES both
+          # routes when the slug is deselected (optional-services.yaml
+          # games.gatewayRouteIds).
+          #
+          # DEFERRED, stated honestly: on the CLUSTER the games BFF behind this
+          # route still validates the GAMES-realm Casdoor (casdoor-games,
+          # manifests/games/deployment.yaml CASDOOR_ISSUER_URI), while the
+          # fe-gateway's bff-exchange mints the SYSTEMS custody JWT. Until the
+          # cluster BFF is bridged to the systems issuer (or the exchange learns
+          # the games realm) every /games/api/** call through this route answers
+          # 401 on kind — the remote surfaces that as its "gateway did not
+          # accept your session" panel rather than a blank screen. The compose
+          # lane (compose.games.yaml) runs the BFF on the systems issuer today.
+          - id: games-bff
+            uri: http://hugmesh-games.hugmesh-games.svc.cluster.local:8080
+            path: /games/api/**
+            filters:
+              - StripPrefix=1
+          - id: games-ui
+            uri: http://hugmesh-games-ui.hugmesh-frontend.svc.cluster.local:8080
+            path: /games/**
             filters:
               - StripPrefix=1
           # API documentation micro-frontend remote (/api-docs/** -> hugmesh-api-docs).
