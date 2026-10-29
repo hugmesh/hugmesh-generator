@@ -4,8 +4,10 @@
 ``CTRL_C_EVENT``, so CPython calls ``GenerateConsoleCtrlEvent`` instead of looking the
 process up. From the windowed MSI exe that fails with a plain ``OSError`` for every pid,
 dead or alive, and a caller that reads ``OSError`` as "exists, not ours" calls every
-pid alive. A leaf module so build_sessions and local_ai_status can share it without
-importing each other (local_ai_status already imports build_sessions).
+pid alive. The same probe as local_ai_status._pid_alive_windows, moved to a leaf
+module so build_sessions can use it without importing local_ai_status (which imports
+build_sessions). local_ai_status can delegate here too; that file is being reworked on
+another branch, so it keeps its own copy until then.
 """
 from __future__ import annotations
 
