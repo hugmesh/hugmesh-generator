@@ -33,8 +33,10 @@
 // from .stack-src — that tree is gitignored and `make stack-clone` resets it, so
 // a step that depended on it would pass on this machine and fail in CI. (The
 // SELECTORS the features assert on — `wiki-nav-access`, `cf-header`,
-// `games-todo-badge` … — were read out of those checkouts by hand while writing
-// the features, exactly as the handwritten specs' selectors were.)
+// `games-catalog`, `games-admin-shell` … — were read out of those checkouts (and,
+// for games, out of the 2026-10-28 cross-repo contract the hugmesh-games/games-ui
+// remote implements) by hand while writing the features, exactly as the
+// handwritten specs' selectors were.)
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
