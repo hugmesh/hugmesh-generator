@@ -23,7 +23,7 @@
 # to tell a measurement from a judgement call.
 #
 # WHY THE 'unreachable' LIST IS AN ASSERTION AND NOT A COMMENT. 13 of the
-# 66 catalogued functions can be reached by NO seeded persona at all. Most of
+# 72 catalogued functions can be reached by NO seeded persona at all. Most of
 # those are a real gap rather than a bug in this file: no seeding lane grants
 # ROLE_WIKI, ROLE_OWNCAST, ROLE_TUBE, ROLE_FORUM_MOD or the ROLE_GAMES_SERVICES_*
 # pair, so three whole services and two consoles are gated behind roles that
@@ -48,6 +48,7 @@ Feature: The function catalogue the coverage matrix is computed from
       | tuwunel.start-call              | tuwunel          | hugmesh-fe-gateway         | /_matrix/client/v3/rooms/!e2e:hugmesh.net/send/m.call.invite/1  | derived  |
       | tuwunel.leave-room              | tuwunel          | hugmesh-fe-gateway         | /_matrix/client/v3/rooms/!e2e:hugmesh.net/leave                 | derived  |
       | tuwunel.well-known              | tuwunel          | hugmesh-fe-gateway         | /.well-known/matrix/client                                      | derived  |
+      | tuwunel.provision-account       | tuwunel          | hugmesh-fe-gateway         | /bff/provision/matrix                                           | derived  |
       | akkoma.open-ui                  | akkoma           | hugmesh-fe-gateway         | /social/mastodon/                                               | derived  |
       | akkoma.sign-in                  | akkoma           | hugmesh-fe-gateway         | /oauth/token                                                    | derived  |
       | akkoma.post                     | akkoma           | hugmesh-fe-gateway         | /api/v1/statuses                                                | derived  |
@@ -56,6 +57,7 @@ Feature: The function catalogue the coverage matrix is computed from
       | akkoma.timeline                 | akkoma           | hugmesh-fe-gateway         | /api/v1/timelines/home                                          | derived  |
       | akkoma.delete-post              | akkoma           | hugmesh-fe-gateway         | /api/v1/statuses/1                                              | derived  |
       | akkoma.moderate                 | akkoma           | hugmesh-be-gateway         | /api/v1/pleroma/admin/users                                     | derived  |
+      | akkoma.provision-account        | akkoma           | hugmesh-fe-gateway         | /bff/provision/mastodon                                         | derived  |
       | phpbb.open-ui                   | phpbb            | hugmesh-fe-gateway         | /social/forum/                                                  | derived  |
       | phpbb.read-topic                | phpbb            | hugmesh-fe-gateway         | /bff/forum/topics/1                                             | derived  |
       | phpbb.post-topic                | phpbb            | hugmesh-fe-gateway         | /bff/forum/topics                                               | derived  |
@@ -82,6 +84,7 @@ Feature: The function catalogue the coverage matrix is computed from
       | wiki.edit                       | wiki             | hugmesh-fe-gateway         | /bff/wiki/pages/home                                            | asserted |
       | wiki.history                    | wiki             | hugmesh-fe-gateway         | /bff/wiki/pages/home/history                                    | asserted |
       | wiki.administer                 | wiki             | hugmesh-fe-gateway         | /bff/wiki/admin/pages                                           | derived  |
+      | wiki.brand-catalogue            | wiki             | hugmesh-fe-gateway         | /bff/wiki/superadmin/brands                                     | derived  |
       | character-studio.open           | character-studio | hugmesh-fe-gateway         | /character-studio/                                              | derived  |
       | character-studio.create         | character-studio | hugmesh-fe-gateway         | /bff/user/character-studio/characters                           | derived  |
       | character-studio.save           | character-studio | hugmesh-fe-gateway         | /bff/user/character-studio/characters/1                         | derived  |
@@ -100,12 +103,15 @@ Feature: The function catalogue the coverage matrix is computed from
       | login.native-sign-in            | login            | hugmesh-fe-gateway         | /bff/login                                                      | derived  |
       | login.register                  | login            | hugmesh-fe-gateway         | /bff/register/complete                                          | derived  |
       | login.provision                 | login            | hugmesh-fe-gateway         | /bff/provision/keys                                             | derived  |
+      | login.register-google           | login            | hugmesh-fe-gateway         | /bff/register/google                                            | derived  |
+      | login.register-discord          | login            | hugmesh-fe-gateway         | /bff/register/discord                                           | derived  |
       | admin.console                   | admin            | hugmesh-fe-gateway         | /admin/                                                         | derived  |
       | admin.allowlist                 | admin            | hugmesh-fe-gateway         | /bff/admin/allowlist                                            | derived  |
       | admin.phone-fleet               | admin            | hugmesh-fe-gateway         | /bff/admin/phone-fleet/devices                                  | derived  |
       | admin.api-docs                  | admin            | hugmesh-fe-gateway         | /api-docs/index.html                                            | derived  |
       | admin.moderation-console        | admin            | hugmesh-fe-gateway         | /mod/                                                           | derived  |
       | admin.superadmin-catalog        | admin            | hugmesh-superadmin-gateway | /superadmin/service-catalog/index                               | derived  |
+      | admin.service-store-withdraw    | admin            | hugmesh-fe-gateway         | /bff/superadmin/service-store/example.net/withdraw              | derived  |
 
   # Every SERVICES id must carry at least one function, and every catalogued
   # function must name a legal service. Both directions, because a one-way check

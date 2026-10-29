@@ -371,6 +371,9 @@ export const FUNCTIONS: ServiceFunction[] = [
   { id: 'tuwunel.well-known', service: 'tuwunel', name: 'resolve the server delegation',
     gateway: FE, probePath: '/.well-known/matrix/client', evidence: 'derived',
     source: "route-access seed row ('hugmesh-fe-gateway','/.well-known/matrix/**',ROLE_MATRIX/MOD/ADMIN)" },
+  { id: 'tuwunel.provision-account', service: 'tuwunel', name: 'provision my Matrix account on the homeserver',
+    gateway: FE, probePath: '/bff/provision/matrix', evidence: 'derived',
+    source: "route-access seed row ('hugmesh-fe-gateway','/bff/provision/**','ROLE_USER'); the compose fe table sends this exact path to user-bff (LegacyPathParityController#provisionMatrix, user-bff-api#19). The BFF's own hasRole('MATRIX') method gate is invisible to the seed — features/rbac/provision-role-gate.feature drives it live" },
 
   // ── akkoma (Mastodon-compatible) ───────────────────────────────────────────
   { id: 'akkoma.open-ui', service: 'akkoma', name: 'open the Mastodon surface in the host shell',
@@ -397,6 +400,9 @@ export const FUNCTIONS: ServiceFunction[] = [
   { id: 'akkoma.moderate', service: 'akkoma', name: 'use the akkoma moderation API',
     gateway: BE, probePath: '/api/v1/pleroma/admin/users', evidence: 'derived',
     source: "route-access seed rows ('hugmesh-be-gateway','/api/v1/pleroma/admin/**',ROLE_MOD/ROLE_ADMIN)" },
+  { id: 'akkoma.provision-account', service: 'akkoma', name: 'provision my Mastodon account on the homeserver',
+    gateway: FE, probePath: '/bff/provision/mastodon', evidence: 'derived',
+    source: "route-access seed row ('hugmesh-fe-gateway','/bff/provision/**','ROLE_USER'); compose fe table -> user-bff LegacyPathParityController#provisionMastodon (user-bff-api#19). Its hasRole('MASTODON') method gate is invisible to the seed — features/rbac/provision-role-gate.feature drives it live" },
 
   // ── phpbb (forum) ──────────────────────────────────────────────────────────
   { id: 'phpbb.open-ui', service: 'phpbb', name: 'open the forum micro-frontend',
@@ -485,6 +491,9 @@ export const FUNCTIONS: ServiceFunction[] = [
   { id: 'wiki.administer', service: 'wiki', name: 'administer the wiki',
     gateway: FE, probePath: '/bff/wiki/admin/pages', evidence: 'derived',
     source: "route-access seed row ('hugmesh-fe-gateway','/bff/wiki/admin/**','ROLE_ADMIN')" },
+  { id: 'wiki.brand-catalogue', service: 'wiki', name: 'read the known-brand catalogue for the superadmin brand picker',
+    gateway: FE, probePath: '/bff/wiki/superadmin/brands', evidence: 'derived',
+    source: "route-access seed row ('hugmesh-fe-gateway','/bff/wiki/superadmin/**','ROLE_SUPERADMIN') — a MORE SPECIFIC row than /bff/wiki/**, so ROLE_WIKI/ROLE_ADMIN do not reach it; the endpoint is wiki-bff WikiAccessController (wiki-bff-api#12, commit b124b24c)" },
 
   // ── character-studio (2D) ──────────────────────────────────────────────────
   { id: 'character-studio.open', service: 'character-studio', name: 'open the 2D character studio',
@@ -547,6 +556,20 @@ export const FUNCTIONS: ServiceFunction[] = [
   { id: 'login.provision', service: 'login', name: 'provision device keys',
     gateway: FE, probePath: '/bff/provision/keys', evidence: 'derived',
     source: "route-access seed row ('hugmesh-fe-gateway','/bff/provision/**','ROLE_USER')" },
+  // The two invite-gated social registration legs. NOTE what the matrix will say
+  // about them and why it is correct as a CONTRACT statement: the seed carries no
+  // PUBLIC row under /bff/register/**, so a caller presenting no Casdoor role —
+  // the new account these endpoints exist to create — is refused at the fe door by
+  // the table, and every fully-registered persona (all of whom hold ROLE_USER) is
+  // admitted. That is the pre-auth paradox user-bff-api#19 and gateway#29 are
+  // about; the day a PUBLIC row (or a SecurityConfig PUBLIC_PATHS carve-out that
+  // the seed mirrors) lands, these cells flip and the drift guard names them.
+  { id: 'login.register-google', service: 'login', name: 'self-register with an invited Google address',
+    gateway: FE, probePath: '/bff/register/google', evidence: 'derived',
+    source: "route-access seed row ('hugmesh-fe-gateway','/bff/register/**','ROLE_USER'); compose fe table routes the exact path to user-bff LegacyPathParityController#registerGoogle (user-bff-api#19, commit dc34c8b8). tests/qemu/seed-accounts.sh POSTs it BFF-direct, bypassing this gate" },
+  { id: 'login.register-discord', service: 'login', name: 'self-register with an invited Discord username',
+    gateway: FE, probePath: '/bff/register/discord', evidence: 'derived',
+    source: "route-access seed row ('hugmesh-fe-gateway','/bff/register/**','ROLE_USER'); compose fe table routes the exact path to user-bff LegacyPathParityController#registerDiscord (user-bff-api#19, commit dc34c8b8)" },
 
   // ── admin ──────────────────────────────────────────────────────────────────
   { id: 'admin.console', service: 'admin', name: 'open the admin console',
@@ -567,6 +590,9 @@ export const FUNCTIONS: ServiceFunction[] = [
   { id: 'admin.superadmin-catalog', service: 'admin', name: 'open the superadmin service catalog',
     gateway: 'hugmesh-superadmin-gateway', probePath: '/superadmin/service-catalog/index', evidence: 'derived',
     source: "route-access seed row ('hugmesh-superadmin-gateway','/superadmin/service-catalog/**','ROLE_SUPERADMIN') — no ROLE_ADMIN down-cascade row exists" },
+  { id: 'admin.service-store-withdraw', service: 'admin', name: 'withdraw an offered service from a domain catalogue',
+    gateway: FE, probePath: '/bff/superadmin/service-store/example.net/withdraw', evidence: 'derived',
+    source: "route-access seed row ('hugmesh-fe-gateway','/bff/superadmin/**','ROLE_SUPERADMIN') — the #244-accepted PUBLIC-browser-door floor; admin-bff ServiceCurationController#withdraw is ROLE-ONLY by operator decision (admin-bff-api#51 gated it, commit a9cbfdda reverted it the same day after hugmesh-generator#347 decision 6 'role only'), so unlike offer there is no step-up layer the seed cannot see. features/rbac/superadmin-seams-role-gate.feature drives the whole role matrix live" },
 ];
 
 const FUNCTION_BY_ID = new Map(FUNCTIONS.map((f) => [f.id, f]));
