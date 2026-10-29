@@ -198,6 +198,8 @@ def page(tmp_path, monkeypatch):
 
 
 def _png(widget, path):
+    """The domain-services body, not the whole page: the page scrolls, and a grab of it
+    showed the top of the local-mesh form with the tabs out of the picture."""
     widget.grab().save(str(path))
     assert os.path.getsize(path) > 1000
 
@@ -214,12 +216,12 @@ def test_gui_target_applies_services_through_the_pages_check_boxes(page, tmp_pat
     app.processEvents()
     assert not body._boxes["phpbb"].isChecked() and body._boxes["tuwunel"].isChecked()
     assert body.selected_slugs() == ["tuwunel"]
-    _png(pg, tmp_path / "services-after-apply.png")
+    _png(body, tmp_path / "services-after-apply.png")
     back = aa.undo(a, w, t)
     assert isinstance(back, aa.Applied)
     app.processEvents()
     assert body._boxes["phpbb"].isChecked() and body.selected_slugs() == ["tuwunel", "phpbb"]
-    _png(pg, tmp_path / "services-after-undo.png")
+    _png(body, tmp_path / "services-after-undo.png")
 
 
 def test_gui_target_applies_a_look_colour_and_the_tab_shows_the_swatch(page, tmp_path):
@@ -243,13 +245,13 @@ def test_gui_target_applies_a_look_colour_and_the_tab_shows_the_swatch(page, tmp
     assert row.look.get("primary") == "#5b2a86"
     editor = tabs.look_editor
     assert editor is not None and editor.primary.text().lower() == "#5b2a86"
-    _png(pg, tmp_path / "look-after-apply.png")
+    _png(body, tmp_path / "look-after-apply.png")
     back = aa.undo(a, w, t)
     assert isinstance(back, aa.Applied)
     app.processEvents()
     assert "primary" not in row.look or row.look.get("primary") in ("", None)
     assert editor.primary.text().lower() != "#5b2a86"
-    _png(pg, tmp_path / "look-after-undo.png")
+    _png(body, tmp_path / "look-after-undo.png")
     r = aa.validate(aa.Proposal("shop.example", "look.primary", "purple"), w, t)
     assert "not #RRGGBB" in r.text
 
@@ -271,7 +273,7 @@ def test_gui_target_applies_signin_tailnet_egress_and_tor_and_the_widgets_follow
     row = next(d for d in pg.mesh_domains.domains if d.name == "shop.example")
     assert row.idp == "own"
     assert tabs.signin_choice.currentData() == "casdoor" or "Casdoor" in tabs.signin_choice.currentText()
-    _png(pg, tmp_path / "identity-after-apply.png")
+    _png(body, tmp_path / "identity-after-apply.png")
     assert isinstance(aa.undo(a, w, t), aa.Applied) and row.idp == "superdomain"
     app.processEvents()
     assert tabs.signin_choice.currentData() == "mesh"
@@ -295,7 +297,7 @@ def test_gui_target_applies_signin_tailnet_egress_and_tor_and_the_widgets_follow
     assert isinstance(a, aa.Applied)
     app.processEvents()
     assert body.tor_front_door() is True and row.tor is True and tabs.tor_box.isChecked()
-    _png(pg, tmp_path / "ways-after-apply.png")
+    _png(body, tmp_path / "ways-after-apply.png")
     assert isinstance(aa.undo(a, w, t), aa.Applied)
     app.processEvents()
     assert body.tor_front_door() is False and not tabs.tor_box.isChecked()

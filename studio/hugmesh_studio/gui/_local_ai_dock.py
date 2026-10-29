@@ -1818,8 +1818,11 @@ class LocalAIDock(QtWidgets.QFrame):
         return not self.tip.isVisibleTo(self) if hasattr(self, "tip") else False
 
     def _apply_tips_hidden(self, hidden: bool) -> None:
-        for w in (self.tip, self.tip_hide, self.tip_row):
+        for w in (self.tip, self.tip_hide):
             w.setVisible(not hidden)
+        # the expanded tip line steps aside while a card is up (the bar above keeps the
+        # tip): at 1024x700 the two together pushed the card's buttons off the window
+        self.tip_row.setVisible(not hidden and getattr(self, "_card", None) is None)
         self.tips_show_btn.setVisible(hidden)
 
     def _set_tip_text(self, text: str, model: bool = False) -> None:
@@ -1897,13 +1900,16 @@ class LocalAIDock(QtWidgets.QFrame):
             self._card.setParent(None)
             self._card.deleteLater()
             self._card = None
+            self._apply_tips_hidden(not self.tip_hide.isVisibleTo(self))
             self.layout_changed.emit()
 
     def _show_card(self, card) -> None:
         self._drop_card()
         self._card = card
         self.card_host.addWidget(card)
+        self.tip_row.setVisible(False)
         card.show()
+        card._fit()
         self.layout_changed.emit()
 
     def _offer_card(self, answer: str, question: str, prompt) -> None:
@@ -2062,7 +2068,7 @@ class LocalAIDock(QtWidgets.QFrame):
                 if prompt is not None:
                     footer = aprompt.after_answer(answer, prompt)
                     if footer:
-                        self._append("\n" + footer)
+                        self._append("\n\n" + footer)        # a blank line: the footer is not the answer
                 self._append("\n\n")
                 self._finish_prompt()
                 self._drop_card()                 # a new answer replaces any pending card
@@ -2149,9 +2155,37 @@ class _Card(QtWidgets.QFrame):
         self.buttons.addStretch(1)
         self._lay = lay
 
-    def say(self, text: str, warn: bool = False) -> None:
+    STATUS_CHARS = 170                          # about three lines at the narrow width
+
+    @classmethod
+    def compact(cls, text: str) -> str:
+        """``text`` cut at a list comma under STATUS_CHARS (the card is a few lines;
+        the full text goes to the tooltip and the answer area)."""
+        if len(text) <= cls.STATUS_CHARS:
+            return text
+        cut = text.rfind(", ", 0, cls.STATUS_CHARS)
+        cut = cut if cut > 40 else cls.STATUS_CHARS
+        return text[:cut].rstrip(" ,") + ", … (the full list is in the answer above)"
+
+    def say(self, text: str, warn: bool = False, detail: str = "") -> None:
         self.status.setStyleSheet(f"color: {styles.WARN};" if warn else styles.muted())
-        self.status.setText(text)
+        shown = self.compact(text)
+        self.status.setText(shown)
+        self.status.setToolTip(detail or (text if shown != text else ""))
+        self._fit()
+
+    def _fit(self) -> None:
+        """Never squeezed below its wrapped text: the answer area above gives way
+        instead (a long status line was once clipped top and bottom)."""
+        self.rows.setVisible(bool(self.rows.text()))
+        w = self.width() if self.width() > 50 else self.sizeHint().width()
+        need = self._lay.totalHeightForWidth(w)
+        if need > 0 and need != self.minimumHeight():
+            self.setMinimumHeight(need)
+
+    def resizeEvent(self, event) -> None:       # noqa: N802 — Qt override
+        super().resizeEvent(event)
+        self._fit()
 
     def refused(self, text: str) -> None:
         self.say(text, warn=True)
@@ -2178,6 +2212,8 @@ class _ProposalCard(_Card):
         if isinstance(v, aact.Refusal):
             self.rows.setText("")
             self.refused(v.text)
+            if self.compact(v.text) != v.text:      # the whole list, where it can scroll
+                dock._append(v.text + "\n\n")
             return
         self.rows.setText(v.row_text() + (f"\n({v.note})" if v.note else ""))
         if v.key in ("look.primary", "look.secondary") and isinstance(v.after, str):
@@ -2264,7 +2300,9 @@ class _DiffCard(_Card):
                 return
             self.applied = res
             self.dock._applied_edit = res
-            self.say(f"Applied to {res.workspace}. Not committed. Before-copies: {res.before_dir}.")
+            self.say(f"Applied to {os.path.basename(res.workspace.rstrip(os.sep))}. Not committed; "
+                     "Revert puts the old text back.",
+                     detail=f"Folder: {res.workspace}\nBefore-copies: {res.before_dir}")
             self.apply_btn.setVisible(False)
             self.undo_btn.setVisible(True)
             self.cancel_btn.setText("Close")

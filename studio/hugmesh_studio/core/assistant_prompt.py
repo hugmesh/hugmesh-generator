@@ -52,29 +52,28 @@ RULES = (
     "hold the answer, say \"I do not know from the docs I have\" and point at the "
     "walkthrough. Never write a command, flag or path that no snippet contains. Keep "
     "to this page and this domain unless the person names another. Everything stays on "
-    "this machine. Never claim to have changed anything; only the Apply button does."
+    "this machine. Answer a how or what question in words first; propose a change only "
+    "when the person asks for one, and never claim to have made it (only Apply does)."
 )
 
 # No angle-bracket placeholders anywhere in these texts: a small model copies them
 # verbatim (the 2026-10-29 eval answered "I cannot change <that> here").
 CHANGE_FORMAT = (
     "To propose one setting change: one sentence, then one fenced block tagged change "
-    "holding a JSON object: domain (the domain on screen unless the person named "
-    "another), field (a key under Options), to (one of its choices, true/false, a list "
-    "of service names, or a hex colour). A colour described in words is a hex value "
-    "in look.primary or look.secondary, never a preset. Nothing else in the block. If "
-    "the setting is not under Options (a password, a key, a file path), write no block: "
-    "say this page cannot change it and list the keys under Options. Example:\n"
-    "I can turn the forum off for shop.example.\n"
-    "```change\n{\"domain\": \"shop.example\", \"field\": \"services\", "
-    "\"to\": [\"akkoma\"]}\n```"
+    "holding a JSON object: domain (the one on screen unless another is named), field (a key under Options), to (one of its choices, true/false, or a "
+    "hex colour). For services, to is the whole new list: start from its current list, "
+    "then add or remove. A colour described in words is a hex value in look.primary or "
+    "look.secondary, never a preset. If the setting is not under Options (a password, "
+    "a key, a path), write no block; say so and list the Options keys. Example:\n"
+    "I can give shop.example its own Tor address.\n"
+    "```change\n{\"domain\": \"shop.example\", \"field\": \"tor\", \"to\": true}\n```"
 )
 
 DIFF_FORMAT = (
     "To edit a file shown under Files: one sentence, then one fenced block tagged diff "
     "holding a unified diff (--- a/path, +++ b/path, @@ -start,count +start,count @@) "
     "against that exact text, paths relative to the code folder. At most 3 files and "
-    "120 changed lines. Applied only when the person presses Apply; never suggest git."
+    "120 changed lines. Never suggest git."
 )
 
 # The rules block is never truncated: a cut here once removed the diff grammar

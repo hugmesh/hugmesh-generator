@@ -731,11 +731,14 @@ this domain", "use a darker purple" or "switch this domain to its own Casdoor" w
 one sentence and one fenced block:
 
 ```
-I can turn the forum off for shop.example.
+I can give shop.example its own Tor address.
 ```change
-{"domain": "shop.example", "field": "services", "to": ["akkoma", "tuwunel"]}
+{"domain": "shop.example", "field": "tor", "to": true}
 ```
 ```
+
+(For `services` the value is the whole new list, built from the `current:` list the
+model is shown; the card always says `from -> to` before anything is applied.)
 
 `core/assistant_actions.parse_proposal` reads the block; `validate` checks the field
 against the catalogue and the page's own validators (`brand_look.check_value`,

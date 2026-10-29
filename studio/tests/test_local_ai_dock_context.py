@@ -114,6 +114,21 @@ def rect_in(wiz, widget):
     return QtCore.QRect(widget.mapTo(wiz, QtCore.QPoint(0, 0)), widget.size())
 
 
+def assert_card_fits(wiz, dock, card):
+    """Nothing on a card is clipped: every wrapped label is as tall as its text needs,
+    inside the card, and the buttons are clickable and inside the dock (a long status
+    line was once cut off top and bottom; see diff-applied.png in the PR)."""
+    for lab in (card.title, card.rows, card.status):
+        if lab.isVisible() and lab.text():
+            need = lab.heightForWidth(lab.width())
+            assert lab.height() >= need, (lab.text()[:60], lab.height(), need)
+            assert rect_in(wiz, card).contains(rect_in(wiz, lab)), lab.text()[:60]
+    for b in (card.apply_btn, card.cancel_btn, card.undo_btn):
+        if b.isVisible():
+            assert b.height() >= dock_mod.MIN_CLICK_PX
+            assert rect_in(wiz, dock).contains(rect_in(wiz, b)), b.text()
+
+
 # ── the hook ─────────────────────────────────────────────────────────────────────────
 def test_the_dock_knows_every_wizard_page_by_its_slug(shell, qapp):
     wiz = open_at(shell, qapp)
@@ -298,10 +313,12 @@ def test_a_change_block_becomes_a_card_and_apply_undo_go_through_the_page(mesh_w
         r = rect_in(wiz, b)
         assert rect_in(wiz, dock).contains(r) and not r.intersects(rect_in(wiz, dock.answer))
     assert "Sources:" in dock.answer.toPlainText()
+    assert_card_fits(wiz, dock, card)
     wiz.grab().save(str(tmp_path / "proposal-card.png"))
     card.apply_btn.click()
     pump(qapp)
     assert card.status.text() == "Applied. The page shows the new value."
+    assert_card_fits(wiz, dock, card)
     assert body.selected_slugs() == ["tuwunel"] and not body._boxes["phpbb"].isChecked()
     assert card.undo_btn.isVisible() and not card.apply_btn.isVisible()
     wiz.grab().save(str(tmp_path / "proposal-applied.png"))
@@ -316,8 +333,111 @@ def test_a_change_block_becomes_a_card_and_apply_undo_go_through_the_page(mesh_w
     dock._last_prompt[dock._clears] = prompt
     dock._handle("done", (dock._clears, "q", answer), None)
     assert dock._card is not None
+    assert not dock.tip_row.isVisibleTo(dock)            # the card has the room
     dock.clear()
     assert dock._card is None and dock._undo == {}
+    assert dock.tip_row.isVisibleTo(dock)                # and the tip line is back
+
+
+def test_an_answer_shows_its_sources_line_at_both_widths(mesh_window, qapp, tmp_path):
+    """An answered question as the person sees it: the bare answer, then the Sources
+    line the code (never the model) writes from the docs it retrieved."""
+    wiz, dock, body = mesh_window
+    from hugmesh_studio.core import assistant_prompt as ap
+    q = "Which services can I switch on for this domain?"
+    w = dock._page_where(question=q)
+    prompt = ap.build(q, w, [], generator_dir=GENERATOR_DIR, ctx_tokens=16384)
+    assert prompt.sources, "the real docs index retrieved nothing"
+    dock._last_prompt[dock._clears] = prompt
+    dock._handle("done", (dock._clears, q, "shop.example runs tuwunel and phpbb; you can also "
+                                           "tick akkoma, owncast, tube, games and the two character apps."), None)
+    pump(qapp)
+    text = dock.answer.toPlainText()
+    assert "Sources: STUDIO-WALKTHROUGH.md" in text or "Sources: " in text
+    assert dock._history[-1]["content"].startswith("shop.example runs") and "Sources:" not in dock._history[-1]["content"]
+    for size in SIZES:
+        wiz.resize(*size)
+        pump(qapp)
+        name = tmp_path / f"answered-{size[0]}x{size[1]}.png"
+        wiz.grab().save(str(name))
+        assert os.path.getsize(name) > 5000
+        a = rect_in(wiz, dock.answer)
+        assert a.height() >= 3 * dock_mod.MIN_CLICK_PX and QtCore.QRect(0, 0, wiz.width(), wiz.height()).contains(a)
+
+
+DIFF_ANSWER = ("I can change the footer text.\n```diff\n--- a/src/index.html\n+++ b/src/index.html\n"
+               "@@ -3 @@ -3 @@\n <footer>\n-  <p>Welcome to shop</p>\n+  <p>Welcome to the Shop</p>\n"
+               " </footer>\n```\n")   # the garbled header qwen3:8b really wrote on 2026-10-29
+
+
+def test_a_diff_block_becomes_a_diff_card_and_apply_revert_touch_only_the_folder(mesh_window, qapp, tmp_path,
+                                                                                 monkeypatch):
+    import json as _json
+    from hugmesh_studio.core import assistant_code_edits as ce
+    from hugmesh_studio.core import assistant_prompt as ap
+    from hugmesh_studio.core import domain_workspaces as dw
+    wiz, dock, body = mesh_window
+    state = os.environ["HUGMESH_STUDIO_STATE_DIR"]
+    folder = os.path.join(state, "domain-code", "shop", "web-shop.example")
+    os.makedirs(os.path.join(folder, ".git"))
+    os.makedirs(os.path.join(folder, "src"))
+    with open(os.path.join(folder, ".git", dw.MARKER), "w") as fh:
+        _json.dump({"app": "web", "domain": "shop.example", "mesh": "shop", "source": "x", "schema": 1}, fh)
+    index = os.path.join(folder, "src", "index.html")
+    original = "<html>\n<body>\n<footer>\n  <p>Welcome to shop</p>\n</footer>\n</body>\n</html>\n"
+    with open(index, "w") as fh:
+        fh.write(original)
+    ws = ce.Workspace("shop", "shop.example", "web", os.path.realpath(folder))
+    # workspace discovery itself is pinned in test_assistant_code_edits.py
+    monkeypatch.setattr(dock, "_code_context", lambda where, q: {"ctx": None, "workspace": ws,
+                                                                  "files": ["src/index.html"], "wants_edit": True})
+    q = "change the footer text in index.html to 'Welcome to the Shop'"
+    dock._last_prompt[dock._clears] = ap.Prompt("sys", [], [], {}, dock._page_where(q))
+    dock._handle("done", (dock._clears, q, DIFF_ANSWER), None)
+    pump(qapp)
+    card = dock._card
+    assert isinstance(card, dock_mod._DiffCard)
+    assert card.title.text() == "Proposed edit \u2014 web-shop.example"
+    assert card.rows.text() == "1 file(s), 2 changed lines: src/index.html"
+    for b in (card.view_btn, card.apply_btn, card.cancel_btn):
+        assert b.isVisible() and b.height() >= dock_mod.MIN_CLICK_PX
+        r = rect_in(wiz, b)
+        assert rect_in(wiz, dock).contains(r) and not r.intersects(rect_in(wiz, dock.answer))
+    wiz.grab().save(str(tmp_path / "diff-card.png"))
+    card.view_btn.click()
+    pump(qapp)
+    win = dock._work_window if hasattr(dock, "_work_window") else None
+    shown = [w for w in QtWidgets.QApplication.topLevelWidgets()
+             if w.isVisible() and hasattr(w, "diff_view")]
+    assert shown and "+  <p>Welcome to the Shop</p>" in shown[0].diff_view.toPlainText()
+    assert not shown[0].isModal()
+    shown[0].grab().save(str(tmp_path / "diff-viewer.png"))
+    shown[0].close()
+    card.apply_btn.click()
+    pump(qapp)
+    with open(index) as fh:
+        assert "Welcome to the Shop" in fh.read()
+    assert card.status.text().startswith("Applied to web-shop.example") and "Not committed" in card.status.text()
+    assert card.undo_btn.text() == "Revert" and card.undo_btn.isVisible()
+    assert_card_fits(wiz, dock, card)
+    assert folder in card.status.toolTip() and "assistant-edits" in card.status.toolTip()
+    wiz.grab().save(str(tmp_path / "diff-applied.png"))
+    wiz.resize(*SIZES[1])
+    pump(qapp)
+    assert_card_fits(wiz, dock, card)
+    wiz.grab().save(str(tmp_path / "diff-applied-1024x700.png"))
+    card.undo_btn.click()
+    pump(qapp)
+    with open(index) as fh:
+        assert fh.read() == original
+    assert card.status.text() == "Reverted."
+    wiz.grab().save(str(tmp_path / "diff-reverted.png"))
+    del win
+    # a diff that changes nothing never becomes a card
+    dock._last_prompt[dock._clears] = ap.Prompt("sys", [], [], {}, dock._page_where(q))
+    dock._handle("done", (dock._clears, q, "x\n```diff\n--- a/src/index.html\n+++ b/src/index.html\n```\n"), None)
+    pump(qapp)
+    assert dock._card is None and "changes nothing" in dock.answer.toPlainText()
 
 
 def test_a_refused_change_shows_the_valid_choices_on_the_card(mesh_window, qapp):
@@ -330,6 +450,24 @@ def test_a_refused_change_shows_the_valid_choices_on_the_card(mesh_window, qapp)
     assert isinstance(card, dock_mod._ProposalCard) and not card.apply_btn.isVisible()
     assert card.status.text().startswith("I can only change these on this page: services, signin, tor")
     assert "hunter2" not in card.status.text()
+    pump(qapp)
+    assert_card_fits(wiz, dock, card)
+
+
+def test_the_longest_refusal_fits_its_card_at_the_narrow_width(mesh_window, qapp, tmp_path):
+    wiz, dock, body = mesh_window
+    wiz.resize(*SIZES[1])
+    pump(qapp)
+    from hugmesh_studio.core import assistant_prompt as ap
+    dock._last_prompt[dock._clears] = ap.Prompt("sys", [], [], {}, dock._page_where())
+    dock._handle("done", (dock._clears, "use a darker purple",
+                          '```change\n{"domain": "shop.example", "field": "look.preset", "to": "purple"}\n```'), None)
+    pump(qapp)
+    card = dock._card
+    assert card.status.text().startswith("Valid values for look.preset: dark, light")
+    assert "demisexual" in card.status.toolTip() and "demisexual" in dock.answer.toPlainText()
+    wiz.grab().save(str(tmp_path / "refusal-1024x700.png"))
+    assert_card_fits(wiz, dock, card)
 
 
 def test_the_prompt_fn_injection_still_gets_no_footer_and_no_card(shell, qapp):
