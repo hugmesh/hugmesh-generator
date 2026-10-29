@@ -579,7 +579,16 @@ paths, not a 404).
   an `actions` client), expect the UIs to load but those auth-gated
   flows to 401. The cluster seeds those via `manifests/casdoor/init-*`. The
   route-access DB **does** seed from `manifests/route-access/initdb/20-schema.sql`,
-  independent of `make stack-seed`.
+  independent of `make stack-seed` — and `make stack-up` **re-applies** that file
+  to the running `route-access-db` on every bring-up (`tests/stack/route-access-reconcile.sh`,
+  also `make stack-route-access-reconcile`), because the postgres image runs
+  `initdb.d` only on the volume's first init: a stack whose volume predates a
+  route change otherwise keeps the old table, and the gateways treat the table as
+  authoritative (2026-10-29: 1 of 8 fe `/games` rows present, every games member
+  403). The re-apply is additive (`INSERT … ON CONFLICT DO NOTHING`, one
+  transaction, counts only): an admin's edits to an existing row survive, a seed
+  row an admin deleted comes back (seed is the floor), and `mfa_required` under
+  `/bff/admin` + `/bff/superadmin` converges back to `true` as the file documents.
 - **Fragment fleet serves an empty set** until federation has enabled modules +
   a valid `app-fragment-sync` Casdoor client, so `/_fragments/**` is up but
   empty. It is the standalone sync image on `:8081` (in k8s it is nginx + a sync

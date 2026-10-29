@@ -413,7 +413,7 @@ ORANGEPI4LTS_PASS    := ORANGEPI4LTS_FLAVOR='$(ORANGEPI4LTS_FLAVOR)'
         flash qemu qemu-rpi qemu-x86 qemu-matrix qemu-matrix-enumerate qemu-mesh qemu-mesh-enumerate \
         playwright-deps e2e e2e-list ci ci-quick docker-image ensure-image image-gen-docker-image \
         docker docker-build local prod \
-        stack-clone stack-mastodon-env stack-m2-bootstrap stack-certs stack-build stack-up stack-halt stack-down stack-logs stack-ps stack-e2e stack-e2e-list \
+        stack-clone stack-mastodon-env stack-m2-bootstrap stack-certs stack-build stack-up stack-halt stack-down stack-logs stack-ps stack-route-access-reconcile stack-e2e stack-e2e-list \
         stack-onion stack-e2e-tor stack-e2e-tor-domains stack-tor-mechanism-check \
         kind-images kind-up kind-e2e kind-e2e-mfa kind-mfa-posture kind-down kind-honesty \
         kind-metrics-check kind-addon-check kind-tor kind-tor-down kind-tor-status kind-e2e-tor kind-tor-check \
@@ -2149,10 +2149,18 @@ stack-certs: ## mint the per-machine TLS CA + leaf for the https front door (ide
 stack-build: stack-clone stack-certs stack-m2-check $(STACK_SOCIAL_DEP) ## build every service from its cloned repo (no run)
 	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_M2_FLAGS) $(STACK_PROFILE) $(STACK_ALT_PROFILE) $(STACK_TOR_PROFILE) $(STACK_GAMES_PROFILE) $(STACK_BRAND_B_PROFILE) $(STACK_OWN_CASDOOR_FLAGS) $(STACK_LIMITS_FLAGS) $(STACK_LOOKS_FLAGS) $(STACK_EGRESS_FLAGS) build
 
+# stack-up's LAST step reconciles gateway_route_access (the line right after
+# `up -d`, see stack-route-access-reconcile below): the volume's initdb seeds the
+# table ONCE, so an existing stack never saw a route row added since — 2026-10-29:
+# 1 of 8 fe /games rows present, every games member 403 until a hand re-apply.
+# The reconcile fails the target loudly on a SQL error and prints counts only.
+# stack-halt -> stack-up is the resume path, so this covers it (and the Studio,
+# which shells out to `make stack-up`). Guard: tests/stack/test-route-access-reconcile.sh.
 stack-up: stack-clone stack-certs stack-m2-check $(STACK_SOCIAL_DEP) ## clone -> build -> run the FULL stack (ENV=test|prod; SOCIAL=1 adds matrix/mastodon)
 	@echo "==> Local stack: ENV=$(ENV), issuer=$(CASDOOR_ISSUER), host port=$(PUBLIC_HOST_PORT), social=$(if $(strip $(SOCIAL)),on,off)$(if $(strip $(MFA)), mfa=ON(explicit),)$(if $(strip $(MFA_FLOOR)), mfa-floor=ON,)$(if $(wildcard $(STACK_M2_ENV)), m2-registry=on,)"
 	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_M2_FLAGS) $(STACK_PROFILE) $(STACK_ALT_PROFILE) $(STACK_TOR_PROFILE) $(STACK_GAMES_PROFILE) $(STACK_BRAND_B_PROFILE) $(STACK_OWN_CASDOOR_FLAGS) $(STACK_LIMITS_FLAGS) $(STACK_LOOKS_FLAGS) $(STACK_EGRESS_FLAGS) build
 	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_M2_FLAGS) $(STACK_PROFILE) $(STACK_ALT_PROFILE) $(STACK_TOR_PROFILE)$(STACK_TOR_DOMAINS_FLAGS) $(STACK_GAMES_PROFILE) $(STACK_BRAND_B_PROFILE) $(STACK_OWN_CASDOOR_FLAGS) $(STACK_LIMITS_FLAGS) $(STACK_LOOKS_FLAGS) $(STACK_EGRESS_FLAGS) up -d
+	COMPOSE_CMD='$(COMPOSE_CMD)' STACK_COMPOSE='$(STACK_COMPOSE)' bash tests/stack/route-access-reconcile.sh
 	@echo "==> Up. Front door: http://localhost:$(PUBLIC_HOST_PORT)  |  https://localhost:$(PUBLIC_HTTPS_PORT)  | Casdoor: http://localhost:8000"
 	@echo "    (https uses the per-machine CA $(STACK_TLS_DIR)/ca.crt - import it to trust, or accept the browser warning)"
 	@echo "    Logs: make stack-logs   Down: make stack-down"
@@ -2396,6 +2404,22 @@ stack-logs: ## tail logs from the running local stack
 
 stack-ps: ## list the local stack's containers + status
 	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_PROFILE) $(STACK_ALT_PROFILE) $(STACK_TOR_PROFILE) $(STACK_GAMES_PROFILE) $(STACK_BRAND_B_PROFILE) $(STACK_OWN_CASDOOR_FLAGS) $(STACK_LIMITS_FLAGS) $(STACK_LOOKS_FLAGS) $(STACK_EGRESS_FLAGS) ps
+
+# Re-apply the canonical route-access seed (specs/cluster/manifests/route-access/
+# initdb/20-schema.sql) to the RUNNING stack's route-access-db, in one transaction
+# with ON_ERROR_STOP, printing counts only. compose.local.yaml mounts that file
+# into /docker-entrypoint-initdb.d, which the postgres image runs ONLY on the
+# volume's first init — so a stack brought back with stack-up after a route
+# change (a new fe /games row, a renamed pattern) silently kept the OLD table,
+# and the gateways treat the table as authoritative (they replace their baked
+# CanonicalSeed with the DB rows on every refresh). The file is designed for
+# in-place re-apply: additive INSERT … ON CONFLICT DO NOTHING (an admin's edits
+# to an existing row survive; a seed row an admin DELETED comes back — seed is
+# the floor), plus its documented mfa_required convergence under /bff/admin and
+# /bff/superadmin. stack-up runs this automatically; it is exposed for a stack
+# that is already up. Guard: tests/stack/test-route-access-reconcile.sh.
+stack-route-access-reconcile: ## re-apply the route-access seed to the running stack's route-access-db (stack-up does this itself)
+	COMPOSE_CMD='$(COMPOSE_CMD)' STACK_COMPOSE='$(STACK_COMPOSE)' bash tests/stack/route-access-reconcile.sh
 
 # ── The Gherkin (BDD) e2e lane ───────────────────────────────────────────────
 # SEPARATE targets on purpose: the `stack-e2e` recipe above is edited by other

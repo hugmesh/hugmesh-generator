@@ -1013,6 +1013,41 @@ lint:mfa-required-rules:
   script:
     - bash tests/scripts/test-mfa-required-rules.sh
 
+# ROUTE-ACCESS RECONCILE gate (2026-10-29). The local stack's route-access-db
+# seeds gateway_route_access only through /docker-entrypoint-initdb.d, i.e. on
+# the volume's FIRST init; `make stack-up` on an existing stack never received a
+# route row added since (1 of 8 fe /games rows, every games member 403), and the
+# gateways treat the table as authoritative. stack-up (and scripts/stack-up.ps1)
+# now re-apply the seed through tests/stack/route-access-reconcile.sh in ONE
+# transaction with ON_ERROR_STOP. This suite pins the wiring statically (make -n
+# ordering, 7 mutations) and, on the SAME postgres:16-alpine service idiom as
+# lint:mfa-required-rules, proves on the real engine that a missing seed row
+# comes back, an admin's row edits survive, the documented mfa convergence still
+# holds, a re-run is a no-op, and a SQL error leaves the table untouched — with
+# the reconciler's two flags each mutated to RED. REQUIRE_ENGINE=1: here the
+# engine leg is MANDATORY (no docker on this runner, so the service IS the
+# engine; an unreachable service or missing psql fails the job, never skips).
+lint:route-access-reconcile:
+  stage: lint
+  image: alpine:3
+  tags: [hugmesh-x86]
+  services:
+    - name: postgres:16-alpine
+      alias: postgres
+  variables:
+    POSTGRES_HOST: postgres
+    POSTGRES_HOST_AUTH_METHOD: trust
+    # The service's own database: the reconciler connects as the stack's owner
+    # role (gateway/gateway), the same names compose.local.yaml uses.
+    POSTGRES_USER: gateway
+    POSTGRES_DB: gateway
+    ROUTE_ACCESS_RECONCILE_REQUIRE_ENGINE: "1"
+  before_script:
+    - apk add --no-cache bash coreutils diffutils make postgresql16-client python3
+    - for t in bash make psql python3 diff awk sed; do command -v "$t" >/dev/null || { echo "TOOLCHAIN MISSING:$t"; exit 1; }; done
+  script:
+    - bash tests/stack/test-route-access-reconcile.sh
+
 # Gateway MFA-ENFORCEMENT env gate. The gateway is what enforces MFA at route level
 # (GatewayRouteAccessFilter.decide() honours gateway_route_access.mfa_required plus
 # the privileged floor), and its three properties — app.mfa.enabled /

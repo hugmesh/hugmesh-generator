@@ -167,6 +167,27 @@ Write-Host "==> Starting the stack (ENV=$Env, host port $PublicHostPort, social=
 docker compose -f $Compose @profileArgs up -d
 if ($LASTEXITCODE -ne 0) { throw 'docker compose up failed.' }
 
+# ── 3b. Reconcile the route-access table (same step `make stack-up` runs) ──
+# The postgres image runs /docker-entrypoint-initdb.d ONLY on the volume's first
+# init, so an existing stack never receives a route row added since. Re-apply the
+# canonical seed in one transaction (additive: an admin's row edits survive, a
+# deleted seed row comes back) and print counts only. The file is bind-mounted
+# into the container, so this needs no psql on the host.
+Write-Host '==> Reconciling gateway_route_access from the canonical seed'
+$sqlInContainer = '/docker-entrypoint-initdb.d/10-schema.sql'
+$ready = $false
+for ($i = 0; $i -lt 60; $i++) {
+  docker compose -f $Compose exec -T route-access-db sh -c 'PGPASSWORD="$POSTGRES_PASSWORD" psql -X -q -h 127.0.0.1 -U gateway -d gateway -v ON_ERROR_STOP=1 -c "SELECT 1"' *> $null
+  if ($LASTEXITCODE -eq 0) { $ready = $true; break }
+  Start-Sleep -Seconds 2
+}
+if (-not $ready) { throw 'route-access-db did not become reachable within 120s.' }
+$before = docker compose -f $Compose exec -T route-access-db sh -c 'PGPASSWORD="$POSTGRES_PASSWORD" psql -X -q -tA -h 127.0.0.1 -U gateway -d gateway -c "SELECT count(*) FROM gateway_route_access"'
+docker compose -f $Compose exec -T route-access-db sh -c "PGPASSWORD=`"`$POSTGRES_PASSWORD`" psql -X -q -h 127.0.0.1 -U gateway -d gateway -v ON_ERROR_STOP=1 -1 -f $sqlInContainer"
+if ($LASTEXITCODE -ne 0) { throw 'route-access reconcile FAILED (transaction rolled back, table unchanged).' }
+$after = docker compose -f $Compose exec -T route-access-db sh -c 'PGPASSWORD="$POSTGRES_PASSWORD" psql -X -q -tA -h 127.0.0.1 -U gateway -d gateway -c "SELECT count(*) FROM gateway_route_access"'
+Write-Host "    route-access reconcile: $before -> $after rows"
+
 Write-Host ''
 Write-Host "Stack up. Front door: http://localhost:$PublicHostPort"
 Write-Host "Casdoor (identity):  http://localhost:8000"

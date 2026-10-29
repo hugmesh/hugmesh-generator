@@ -197,6 +197,14 @@
 #       and the suite reports INCOMPLETE and FAILS rather than degrading, so listing
 #       it here would just paint the PR gate red. It IS gated post-merge by
 #       .gitlab-ci.yml's lint:gateway-auth-flag-parity, which clones it.
+#   * tests/stack/test-route-access-reconcile.sh — ENGINE LEG ONLY (the suite IS
+#       listed, in the debian job): its static leg (make -n stack-up ordering,
+#       stack-up.ps1, the reconciler's -1 + ON_ERROR_STOP, 7 mutations) runs and
+#       gates there; its engine leg prints NOT RUN because it needs either a
+#       docker daemon (a throwaway postgres:16-alpine) or POSTGRES_HOST, and the
+#       container jobs have neither. It is gated post-merge by .gitlab-ci.yml's
+#       lint:route-access-reconcile (postgres `services:`, REQUIRE_ENGINE=1, so a
+#       missing engine there FAILS instead of printing NOT RUN).
 #   * tests/stack/test-m2-bootstrap.sh
 #       the ${STACK_SRC:-.stack-src} consumer checkouts its pin-drift leg walks
 #       (`make stack-clone`), or M2_PIN_DRIFT_SKIP=1
@@ -569,6 +577,7 @@ jobs:
               tests/stack/test-anubis-flip-wiring.sh
               tests/stack/test-mfa-flip-wiring.sh
               tests/stack/test-patch-stack-src.sh
+              tests/stack/test-route-access-reconcile.sh
               tests/workload-console/test-console-posture-and-inventory.sh
               tests/workload-console/test-workload-console.sh
           - part: ', cluster-manifest'
