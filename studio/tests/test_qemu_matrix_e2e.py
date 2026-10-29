@@ -9,7 +9,7 @@ artifacts, and — under TCG on an x86 host — many hours. Enable with HUGMESH_
 (and qemu installed). Everything ELSE in this file is HERMETIC and always runs: the
 matrix enumeration, the launcher resolution, the pseudo-role translation, the compact
 image-size formula, the ``img_size=``-from-``--print-plan`` parser, and the shell
-driver's ``--dry-run`` (which enumerates all 150 rows with no root/boot/builder).
+driver's ``--dry-run`` (which enumerates every row with no root/boot/builder).
 """
 import os
 import re
@@ -28,13 +28,16 @@ DRIVER = os.path.join(QEMU_DIR, "run-matrix-e2e.sh")
 LAUNCH_ARM = os.path.join(QEMU_DIR, "launch-arm.sh")
 ASSERTIONS = os.path.join(QEMU_DIR, "matrix-assertions.sh")
 
-# Expected per-platform row counts — the canonical census of matrix.tsv (frite 38,
-# jetson 14, orangepi5 14, orangepizero2 8, orangepizero2w 8, orangepizero3 8,
-# orangepi3-lts 8, orangepi4-lts 8, rpi5 20, x86 24; 150 total).
-EXPECTED_COUNTS = {"frite": 38, "jetson": 14, "orangepi5": 14,
+# Expected per-platform row counts — the canonical census of matrix.tsv. It was 150
+# (orangepi5 14, orangepi4-lts 8, rpi5 20) until 518ef057 (2026-10-21, the Pi omnibus
+# and Orange Pi node rows) and 89af250b (2026-10-22, one RAM floor per Orange Pi
+# role) made it 170; a row added or dropped there must land here too.
+EXPECTED_COUNTS = {"frite": 38, "jetson": 14, "orangepi5": 30,
                    "orangepizero2": 8, "orangepizero2w": 8, "orangepizero3": 8,
-                   "orangepi3-lts": 8, "orangepi4-lts": 8,
-                   "rpi5": 20, "x86": 24}
+                   "orangepi3-lts": 8, "orangepi4-lts": 10,
+                   "rpi5": 22, "x86": 24}
+EXPECTED_TOTAL = sum(EXPECTED_COUNTS.values())
+assert EXPECTED_TOTAL == 170, EXPECTED_TOTAL
 
 _qemu = shutil.which("qemu-system-x86_64")
 
@@ -51,9 +54,9 @@ def test_harness_scripts_exist_and_are_executable():
 
 
 # ── always-run: hermetic matrix enumeration (no builder, no boot) ─────────────────
-def test_matrix_enumerates_150_rows_by_platform():
+def test_matrix_enumerates_every_row_by_platform():
     rows = bm.matrix_rows()
-    assert len(rows) == sum(EXPECTED_COUNTS.values()) == 150
+    assert len(rows) == EXPECTED_TOTAL
     assert bm.platform_counts() == EXPECTED_COUNTS
 
 
@@ -135,13 +138,13 @@ def test_declared_ram_mb_is_positive():
             assert isinstance(d.ram_mb, int) and d.ram_mb > 0, f"{d.id}: bad ram_mb {d.ram_mb!r}"
 
 
-# ── always-run: the shell driver's --dry-run enumerates all 150 rows ──────────────
+# ── always-run: the shell driver's --dry-run enumerates every row ─────────────────
 def test_driver_dry_run_enumerates_all_rows():
     r = subprocess.run(["bash", DRIVER, "--dry-run"], capture_output=True, text=True, timeout=300)
     assert r.returncode == 0, f"dry-run failed:\n{r.stdout}\n{r.stderr}"
     rows = [ln for ln in r.stdout.splitlines() if ln.startswith("ROW ")]
-    assert len(rows) == 150
-    assert "DRY-RUN enumerated 150 matrix rows" in r.stdout
+    assert len(rows) == EXPECTED_TOTAL
+    assert f"DRY-RUN enumerated {EXPECTED_TOTAL} matrix rows" in r.stdout
 
 
 def test_driver_subset_filter():

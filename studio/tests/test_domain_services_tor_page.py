@@ -231,12 +231,15 @@ def test_both_faces_list_the_onion_scope_in_their_legend():
     """Decision 71: the text screen and the page say the same thing about the new
     scope, taken from core. Dropping it from either legend leaves a person looking at
     a row whose scope word is explained nowhere."""
-    from hugmesh_studio.gui.pages import domain_services as page_mod
     line = (f"{ds.SCOPE_LABELS[ds.SCOPE_ONION]}: set {ds.SCOPE_WHERE[ds.SCOPE_ONION]}, "
             f"binds {ds.SCOPE_BINDS[ds.SCOPE_ONION]}")
     assert line in domain_services_step.scope_legend()
-    assert line in page_mod._scope_legend()
     assert len(domain_services_step.scope_legend()) == 4
+    # the page half only with a Qt binding (this file's rule, line 21); the text face
+    # above has already been checked by then, so a Qt-free run still asserts it
+    _qt()
+    from hugmesh_studio.gui.pages import domain_services as page_mod
+    assert line in page_mod._scope_legend()
 
 
 def test_gui_loading_another_config_drops_the_previous_configs_tor_ticks(wiz):
