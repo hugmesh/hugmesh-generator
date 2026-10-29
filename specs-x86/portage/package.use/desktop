@@ -32,13 +32,16 @@ xfce-base/thunar udisks
 gnome-base/gvfs udisks
 net-firewall/nftables python json xtables
 # 'x11-libs/libdrm video_cards_radeon' USED to sit here, for the xf86-video-ati DDX
-# that x11-base/xorg-drivers pulls. Removed: it was redundant when it mattered and a
-# lie when it did not. libdrm has a video_cards_* IUSE, so it INHERITS make.conf's
-# VIDEO_CARDS — which carries 'radeon' exactly for --gpu-driver amd-free, the only
-# selection under which xorg-drivers pulls xf86-video-ati at all. Under every other
-# --gpu-driver the pin claimed a card the image does not have, which is the same
-# class of spec/argv disagreement that killed the 2026-08-22 edge_ai build via
-# package.use/gpu. No video_cards_* token belongs in package.use — see that file.
+# that x11-base/xorg-drivers pulls. It stays out: libdrm has a video_cards_* IUSE,
+# so it INHERITS make.conf's VIDEO_CARDS, and no video_cards_* token belongs in
+# package.use (see package.use/gpu; assert_spec_video_cards refuses a card the
+# --gpu-driver did not select). CORRECTION (2026-10-21): xorg-drivers pulls
+# xf86-video-ati for video_cards_radeon AND video_cards_radeonsi
+# (xorg-drivers-21.1-r2.ebuild:80-81), not only under amd-free. The old note said
+# otherwise, so all-free and amd-pro (both carry radeonsi) lost 'radeon' and every
+# client build on them walled on ">=x11-libs/libdrm-2.4.89[video_cards_radeon]".
+# The fix lives where the card set is decided: gpu_video_cards() in
+# build-x86-host-stage4.sh now puts 'radeon' next to every 'radeonsi'.
 kde-plasma/discover flatpak
 # Discover's Qt6/appstream stack tightened in newer releases (the note above is now
 # stale): the AppStream backend needs qt6, xdg-utils' man pages need xmlto[text], and
@@ -71,7 +74,14 @@ media-libs/libcanberra alsa
 dev-qt/qtbase opengl libproxy icu wayland
 dev-qt/qtmultimedia qml opengl
 dev-qt/qttools opengl
-dev-qt/qtdeclarative opengl vulkan
+# qtdeclarative needs wayland too: from 6.11.2-r1 it depends on
+# ~dev-qt/qtbase-6.11.2:6[...,wayland=,...], so it must carry the SAME wayland
+# setting as qtbase above. Without it no qtdeclarative/qtbase pair can satisfy
+# that dependency and the payload emerge stops before merging anything (the
+# 2026-10-21 desktop build, pulled by keditfiletype -> kcmutils -> kio -> kwallet
+# -> qca -> qt5compat[qml] -> qtdeclarative). tests/scripts/test-spec-use-parity.sh
+# section 4 pins the pair.
+dev-qt/qtdeclarative opengl vulkan wayland
 dev-qt/qtquick3d opengl vulkan
 dev-qt/qt5compat qml icu
 kde-frameworks/prison qml

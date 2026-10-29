@@ -14,6 +14,15 @@
 #   1) the Deployment's `ollama` container image is `ollama/ollama:<MAJOR.MINOR.PATCH>`;
 #   2) kustomization.yaml's `ollama/ollama` entry has newTag equal to that tag;
 #   3) neither is `latest`, empty, a branch name or a digest-less floating tag.
+#
+# AND THE MODEL CACHE MUST BE ABLE TO BIND (same Deployment, so it lives in this already-wired
+# suite). pvc.yaml named storageClassName `local-path` — the class k3s ships — while the mesh's
+# only class is `hugmesh-local` (manifests/local-path). On a real cluster the claim then never
+# bound ("storageclass.storage.k8s.io "local-path" not found") and the edge-ai pod never
+# scheduled, even on a ready GPU node. The rule:
+#   4) every PersistentVolumeClaim under manifests/edge-ai either names no storageClassName (the
+#      cluster default) or names a StorageClass that some manifest under specs/cluster/manifests
+#      defines.
 set -uo pipefail
 REPO=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 P=0; F=0
@@ -85,6 +94,59 @@ expect_caught other-image 's#image: ollama/ollama:#image: example/ollama:#' depl
 doctored agree 's#[0-9]+\.[0-9]+\.[0-9]+#9.9.9#' deployment.yaml
 sed -i -E 's#newTag: [0-9.]+#newTag: 9.9.9#' "$T/agree/kustomization.yaml"
 out=$(problems "$T/agree"); if [ -z "$out" ]; then ok "negative control: two agreeing pins at another version — clean"; else bad "agreeing pins were flagged: $out"; fi
+
+# storage_problems <edge-ai dir> <manifests root> -> one line per PVC naming an undefined class
+storage_problems() {
+  python3 - "$1" "$2" <<'PY2'
+import glob, os, sys, yaml
+d, root = sys.argv[1], sys.argv[2]
+defined = set()
+for f in glob.glob(os.path.join(root, "**", "*.y*ml"), recursive=True):
+    try:
+        with open(f) as fh:
+            docs = list(yaml.safe_load_all(fh))
+    except Exception:
+        continue  # templated/placeholder files are not StorageClass sources
+    for x in docs:
+        if isinstance(x, dict) and x.get("kind") == "StorageClass":
+            defined.add((x.get("metadata") or {}).get("name"))
+if not defined:
+    print(f"no StorageClass is defined anywhere under {root} (the checker cannot judge)")
+claims = 0
+for f in sorted(glob.glob(os.path.join(d, "*.y*ml"))):
+    with open(f) as fh:
+        for x in yaml.safe_load_all(fh):
+            if not isinstance(x, dict) or x.get("kind") != "PersistentVolumeClaim":
+                continue
+            claims += 1
+            sc = (x.get("spec") or {}).get("storageClassName")
+            if sc is not None and sc not in defined:
+                print(f"{os.path.basename(f)}: PVC {x['metadata']['name']} names storageClassName {sc!r}, "
+                      f"which no manifest defines (defined: {sorted(defined)})")
+if claims == 0:
+    print(f"no PersistentVolumeClaim found under {d} (the model cache claim is gone)")
+PY2
+}
+
+MANIFESTS=$REPO/specs/cluster/manifests
+echo "== model cache storage class"
+out=$(storage_problems "$SRC" "$MANIFESTS")
+if [ -z "$out" ]; then ok "the edge-ai model cache PVC names a StorageClass the mesh defines"; else bad "live tree: $out"; fi
+doctored_pvc() { # name sed-expression
+  rm -rf "$T/$1"; mkdir -p "$T/$1"; cp "$SRC/pvc.yaml" "$T/$1/"; sed -i -E "$2" "$T/$1/pvc.yaml"
+}
+doctored_pvc k3s-class 's#storageClassName: [a-z-]+#storageClassName: local-path#'
+out=$(storage_problems "$T/k3s-class" "$MANIFESTS")
+if [ -n "$out" ]; then ok "negative control: PVC back on the k3s-only class local-path — caught"; else bad "negative control: PVC on local-path — NOT caught"; fi
+doctored_pvc typo-class 's#storageClassName: [a-z-]+#storageClassName: hugmesh-locl#'
+out=$(storage_problems "$T/typo-class" "$MANIFESTS")
+if [ -n "$out" ]; then ok "negative control: a misspelt class — caught"; else bad "negative control: misspelt class — NOT caught"; fi
+doctored_pvc default-class '/storageClassName:/d'
+out=$(storage_problems "$T/default-class" "$MANIFESTS")
+if [ -z "$out" ]; then ok "negative control: no storageClassName (cluster default) — clean"; else bad "a PVC on the cluster default was flagged: $out"; fi
+mkdir -p "$T/empty-root"
+out=$(storage_problems "$SRC" "$T/empty-root")
+if [ -n "$out" ]; then ok "negative control: a tree defining no StorageClass at all — reported, not passed"; else bad "an empty class set passed silently"; fi
 
 echo; echo "== edge-ai ollama pin: $P passed, $F failed =="
 [ "$F" -eq 0 ]

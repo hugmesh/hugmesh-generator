@@ -46,6 +46,39 @@ HUG_THEME_CSS="$(cat theme.css)" make stack-up
 scripts/tooling/derive-theme.py --preset nord --configmap | kubectl apply -f -
 ```
 
+## Pictures, shape, and what the writer refuses (#654)
+
+The Studio's look editor adds two web pictures and two shape settings to the
+stylesheet. `derive-theme.py` does not take them yet; the Studio and the mesh start
+commands write them through the same `theme.py`.
+
+| Token | Meaning |
+|---|---|
+| `--sd-logo-image` and its twin `--hug-logo-image` | The brand's logo, a `url(data:image/png;base64,...)` or JPEG, at most 256x256 pixels. |
+| `--sd-login-bg-image` and its twin `--hug-login-bg-image` | The sign-in page's background picture, at most 1280x720 pixels. |
+| shape and decoration tokens | The `style` and `decor` choices (`theme.STYLE_VARIANTS`, `theme.DECOR_VARIANTS`). Left out when they are the shipped value. |
+
+**One brand's finished stylesheet may be at most 100 KiB (102,400 bytes).** The two
+pictures are what spend it, so the look editor shows a meter and refuses a picture that
+would not fit, with the numbers. A brand's stylesheet is the superbrand's look plus the
+brand's own changes, so a superbrand edit that would push one brand over the budget is
+refused with that brand's name. Several looks share one ConfigMap on the kind cluster
+(1 MiB in all); the same refusal applies there.
+
+A picture is never the uploaded file. It is rebuilt from the parts a browser needs and
+only a PNG or JPEG is accepted (SVG can carry script and is refused). Anything after the
+end of the pixel data inside the file is dropped on upload, and a picture that still
+carries any is refused when a record names it.
+
+The writer (`theme.css_root`) writes only custom properties named `--sd-*`, `--hug-*` or
+`--bs-*`, and refuses, outside a quoted string: `var(`, any control character (including
+DEL and the C1 range), a backslash, a comment opener or closer, `{`, `}`, `;`, `@`
+(it would open an at-rule such as `@import`), `<` and `>` (they could close a `<style>`
+element), an unterminated quote, `url(` on any token except the two picture tokens and
+then only one data: PNG or JPEG whose bytes match its label, and the functions that
+fetch a picture without `url(` (`image-set(`, `src(`, `image(`, `cross-fade(`,
+`element(`, `paint(`). Text inside a quoted string is inert and passes.
+
 Related: [`BRANDING.md`](BRANDING.md) covers what a tenant's *rendered generator
 copy* rebrands (names, domains, files); this page is only the login page's
 look. The Studio's own theme system and its pride presets are described in

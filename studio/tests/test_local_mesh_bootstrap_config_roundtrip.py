@@ -26,7 +26,9 @@ SA_VALUE = "Sa-Pass-77"
 def _full_cfg(**over) -> LocalMeshBootstrapConfig:
     base = dict(
         env="prod", superadmin_username="root", out_dir="/tmp/keys", social=True,
-        with_tor=True, services=("tuwunel", "tor", "wiki"), egress_vpn_conf="/x.conf",
+        # the mesh-plane half of the services pick (2026-10-21): the per-domain slugs
+        # live on the domain rows below, so this config is already in its saved shape
+        with_tor=True, services=("tor", "wiki"), egress_vpn_conf="/x.conf",
         auth_key="tskey-1", login_server="https://hs.example.org", node_name="n1",
         brand="acme", cluster_domain="example.org", source_mode="existing",
         source_dir="/src", web_locales=("de", "fr"), login_theme_css=":root{}",
@@ -36,7 +38,7 @@ def _full_cfg(**over) -> LocalMeshBootstrapConfig:
         # #494: the recorded domain rows — a tuple of JSON objects, the one field
         # whose items are not scalars, so "every field round-trips" has to carry one
         domains=({"name": "a.org", "title": "A", "idp": "own",
-                  "optional_services": ["games"]},))
+                  "optional_services": ["tuwunel", "games"]},))
     base.update(over)
     return LocalMeshBootstrapConfig(**base)
 
@@ -85,7 +87,19 @@ def test_cli_config_round_trips():
     cfg = _cfg_from_args(args)
     assert cfg.services == ("tuwunel", "tor") and cfg.login_theme_css
     back = LocalMeshBootstrapConfig.from_dict(json.loads(json.dumps(cfg.to_dict())))
-    assert back == cfg
+    # 2026-10-21: the CLI's mesh-wide pick of a per-domain service (tuwunel) MIGRATES
+    # into the mesh's own domain row on load; the mesh-plane slug (tor) stays. What
+    # the mesh runs, and the stack env it starts with, are unchanged.
+    assert back.services == ("tor",)
+    assert back.domains[0]["name"] == "example.org"
+    assert back.domains[0]["optional_services"] == ["tuwunel"]
+    assert back.effective_services() == cfg.effective_services()
+    assert (LocalMeshBootstrap(GENERATOR_DIR, back)._stack_node()._build_env(
+                write_overlays=False)
+            == LocalMeshBootstrap(GENERATOR_DIR, cfg)._stack_node()._build_env(
+                write_overlays=False))
+    again = LocalMeshBootstrapConfig.from_dict(json.loads(json.dumps(back.to_dict())))
+    assert again == back
     # the absent flag stays None through the round-trip too
     args.services = None
     cfg2 = _cfg_from_args(args)

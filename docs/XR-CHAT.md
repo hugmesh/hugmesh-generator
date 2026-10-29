@@ -22,7 +22,7 @@ The pieces, by repo:
 |---|---|---|
 | **Character Forge** (3D maker) | `hugmesh-character-forge-bff-api` (one multi-surface repo; the brand prefix was renamed by the HugMesh rebrand) | Spring BFF at the root (`/bff/character-forge/**`: Char3DConfig CRUD, one-active-per-owner, cross-user lookup, VN→3D `/map`), `godot/` (a pointer: the Godot 4 maker moved to `hugmesh-games`, `games/character-forge/`, which holds the CANONICAL `scripts/character_assembler.gd`; `godot/character-forge/build/bundle/` keeps a prebuilt web export), `frontend/` (Angular native-federation remote mounted at `/character-forge`) |
 | **The room** | `hugmesh.games` repo, `games/shadows-of-the-net/` | Godot WASM chat chamber; dual mode — `mode=session` (games-portal wasm-game contract) and `mode=matrix` (all I/O via the host page `Chat3D` JS bridge) |
-| **Matrix integration** | `hugmesh-matrix-ui` | `net.hugmesh.chat3d*` state events (room enable/config, scene placements, per-user avatar, stage holder; legacy `systems.hugmesh.*`/`systems.snapdragon.*` spellings still readable), room-settings section, iframe host for the room, full-mesh WebRTC audio + pose/blendshape data channels, self-hosted MediaPipe face tracking |
+| **Matrix integration** | `hugmesh-matrix-ui` | `net.hugmesh.chat3d*` state events (room enable/config, scene placements, per-user avatar, stage holder; legacy `systems.hugmesh.*` spellings still readable), room-settings section, iframe host for the room, full-mesh WebRTC audio + pose/blendshape data channels, self-hosted MediaPipe face tracking |
 | **Platform slug** | THIS repo | everything in §2 |
 
 The 3D avatar is **procedural** by default: parameterized primitive meshes assembled by

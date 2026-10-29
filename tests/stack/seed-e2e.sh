@@ -427,10 +427,13 @@ EXTRA_SPECS="${E2E_EXTRA_PERSONAS}"
 # suite's role matrix is untouched — spec 15 walks rbac-roles.ts, not Casdoor, so
 # an extra account is invisible to it.
 #
-# ROLE_GAMES_ADMIN and ROLE_FORUM_MOD are NEVER granted directly (both are DERIVED
-# by their reconcile Jobs — seed-accounts.sh declares them present-but-empty), and
-# the *_DOMAINLOCKED / *_EXTERNAL_CLIENT markers are RESTRICTIONS, not grants, so
-# handing them to an operator would take capability away.
+# ROLE_GAMES_ADMIN and ROLE_FORUM_MOD are NEVER granted directly (both are DERIVED:
+# ROLE_GAMES_ADMIN is computed by derive-games-admin.sh on compose — called below,
+# right after the persona grants — and by games-admin-sync on cluster;
+# seed-accounts.sh declares both present-but-empty), and the *_DOMAINLOCKED /
+# *_EXTERNAL_CLIENT markers are RESTRICTIONS, not grants, so handing them to an
+# operator would take capability away. mesh-operator holds ROLE_GAMES + ROLE_ADMIN,
+# so the derivation below makes it a games admin without a direct grant.
 LOCAL_OPERATOR_USER="${LOCAL_OPERATOR_USER:-mesh-operator}"
 LOCAL_OPERATOR_ROLES="${LOCAL_OPERATOR_ROLES:-ROLE_SUPERADMIN,ROLE_ADMIN,ROLE_MOD,ROLE_MATRIX,ROLE_MASTODON,ROLE_FORUM,ROLE_WIKI,ROLE_GAMES,ROLE_FLEET_ADMIN,ROLE_USER}"
 if [ "${SEED_COMPLETE_REGISTRATION:-0}" = "1" ]; then
@@ -474,6 +477,24 @@ PREMINT_APP="${CASDOOR_APP_CLIENT_ID}" \
 PREMINT_CLIENT_SECRET="${CASDOOR_APP_SECRET}" \
   bash "${ROLES_DIR}/roles/apply-systems-roles.sh" \
   || die "apply-systems-roles.sh failed against ${CASDOOR_URL}"
+
+# ── DERIVED: ROLE_GAMES_ADMIN = ROLE_GAMES ∩ (ROLE_ADMIN ∪ ROLE_MOD) ──────────
+# apply-systems-roles.sh sends ROLE_GAMES_ADMIN EMPTY on purpose (it is never
+# granted directly); on the cluster the games-admin-sync Job materialises it, and
+# on compose that is derive-games-admin.sh — a standalone script so the games
+# screens' deploy step can re-derive it on a running stack WITHOUT re-running
+# this seed (which would rotate every persona to this run's rendered
+# credentials). Without it e2e-gamesadmin and mesh-operator hold both halves of
+# the AND and still 403 at /games/admin/** and /games/api/admin/**: the gateway
+# keys those rows on the composite alone. Read-back verified, dies on any denied
+# call, prints counts + handles only.
+log "deriving ${CASDOOR_ORG}/ROLE_GAMES_ADMIN (games ∩ (admin ∪ mod)) via derive-games-admin.sh"
+CASDOOR_URL="${CASDOOR_URL}" \
+CASDOOR_ADMIN_USER="${CASDOOR_ADMIN_USER}" \
+CASDOOR_ADMIN_PASS="${CASDOOR_ADMIN_PASS}" \
+CASDOOR_ORG="${CASDOOR_ORG}" \
+  bash "${HERE}/derive-games-admin.sh" \
+  || die "derive-games-admin.sh failed against ${CASDOOR_URL} — ROLE_GAMES_ADMIN is NOT materialised, every games admin 403s at the gateway"
 
 # VERIFY (fail-honest): every persona the UI suites assume must now resolve.
 for persona in e2e-user e2e-mod e2e-admin "${SUPERADMIN_PERSONA}" e2e-banned \

@@ -1,25 +1,44 @@
-"""The Local AI dock — one thin bar along the bottom of every Studio window.
+"""The Studio's bottom panel — one strip along the bottom of every Studio window.
+
+It began as the Local AI dock (a prompt bar) and is now the one panel the operator asked
+for on 2026-10-21: the local assistant, the local-mesh actions, the live pod view and the
+running builds, docked at the bottom of the wizard window, open or collapsed on ANY page,
+and able to pop out into a window of its own and back.
 
 Collapsed it is a single row: a chevron, one line of local-AI status ("Local AI: ready,
-qwen3:8b loaded, 2 queued, 1 running"), a **Start local assistant** button and a
-**Current work** button. Expanded it adds a prompt line (Enter sends) and a scrollable
-answer area. **Current work** opens a separate, non-modal window listing the queue, the
-drafts (with a viewer for each draft's diff), the model loaded and the Studio's own
-running builds.
+qwen3:8b loaded, 2 queued, 1 running"), one line of what is running ("Mesh: idle · 1
+image build"), **Start local assistant**, **Current work** and **Pop out**. Expanded it
+adds tabs:
 
-Everything here reads :mod:`..core.local_ai_status` — the same snapshot the text UI and
-the command line show — and talks only to the Ollama on this machine.
+* **Assistant** — the prompt line (Enter sends) and its answer area, and beside them
+  every option the assistant has: WHICH Ollama it talks to (the system one, or the
+  Studio's own pinned container — core/ollama_docker.py), where the person's checkouts
+  are, and the local AI agent launcher that used to be the card "Work on this mesh with a
+  local AI agent" on the Bring-up page (gui/pages/_local_agent_widget.py, unchanged in
+  what it does). Every agent it starts gets a fresh project-context file
+  (core/agent_context.py).
+* **Local mesh** — the local-mesh Actions box (Generate & start, Stop, DevOps lane, …).
+* **Running mesh** — the pods and containers of both lanes (the running-mesh monitor).
+* **Mesh run** — the staged view and log of the verb that is running.
+* **Image builds** — every image build this Studio is running, with a way to show it.
 
-THREADS. The window thread never waits on the model or on the disk. Snapshot reads, the
-prompt and the start request run on short daemon threads that touch no Qt object: they
-put their results on a plain queue, and a timer on the window thread drains it. A window
-closed mid-request therefore leaves a thread finishing harmlessly, never a thread
-calling into a destroyed widget. Nothing starts at import time, and the first poll waits
-until the dock is actually shown.
+The last four are the local-mesh page's own widgets, MOVED here (LocalMeshPage.take_section
+with ``dock=True``), never copied: one implementation, and a verb keeps running and
+streaming into them whatever page is on screen, with the panel collapsed or popped out.
+
+Everything about the local AI reads :mod:`..core.local_ai_status` — the same snapshot the
+text UI and the command line show — and talks only to an Ollama on this machine.
+
+THREADS. The window thread never waits on the model, on docker or on the disk. Snapshot
+reads, the prompt and the start request run on short daemon threads that touch no Qt
+object: they put their results on a plain queue, and a timer on the window thread drains
+it. A window closed mid-request therefore leaves a thread finishing harmlessly, never a
+thread calling into a destroyed widget. Nothing starts at import time, and the first poll
+waits until the dock is actually shown.
 
 NO MODAL DIALOGS. Problems are shown inline, in words, with the fix. The Current work
-window is an ordinary window. Nothing here positions a window with ``move()`` (a no-op
-on Wayland): the dock is laid out inside its parent.
+window and the popped-out panel are ordinary windows. Nothing here positions a window with
+``move()`` (a no-op on Wayland): the dock is laid out inside its parent.
 
 WHERE IT SITS. QWizard keeps all its content in one child widget and exposes no bottom
 slot, so :func:`mount_dock` shortens that child by the dock's height and puts the dock
@@ -28,27 +47,47 @@ resizes it in its own ``resizeEvent``, after any filter on the wizard has run.
 """
 from __future__ import annotations
 
-import json
 import os
 import queue
 import sys
 import threading
 import traceback
 
+from ..core import agent_context as actx
+from ..core import assistant_settings
 from ..core import local_ai_status as lai
-from ..core import state_paths
+from ..core import ollama_docker as odk
 from . import styles
 from .qt import Qt, QtCore, QtGui, QtWidgets, Signal
 
-__all__ = ["LocalAIDock", "LocalWorkWindow", "mount_dock", "dock_height_for"]
+__all__ = ["LocalAIDock", "LocalWorkWindow", "PanelWindow", "mount_dock", "dock_height_for",
+           "TABS"]
 
 POLL_MS = 5000
+#: How many lines of a running image build's log the Image builds tab shows.
+BUILD_TAIL_LINES = 400
+_TAIL_BYTES = 64 * 1024
 DRAIN_MS = 120
-#: Height of the dock when expanded, capped so the page above stays usable.
-EXPANDED_PX = 190
-EXPANDED_FRACTION = 0.36
+#: Height of the dock when expanded, capped so the page above stays usable. The panel
+#: shows tabs of real content now, so it may take a little more than the prompt bar did;
+#: the full-size view is the popped-out window.
+EXPANDED_PX = 280
+EXPANDED_FRACTION = 0.38
+#: While the local-mesh Bring-up step is on screen the page itself holds only a note
+#: (its actions, table and log are in the panel), so the panel may take this share of
+#: the window instead. The page's title, note and the wizard's buttons keep the rest.
+TALL_FRACTION = 0.62
 MIN_CLICK_PX = 28
-_SETTINGS = "local-ai-dock.json"
+_SETTINGS = assistant_settings.FILE_NAME
+#: Tabs that get the TALL height while they are open in the docked panel. The Running
+#: mesh tab holds the pod table (at least six rows), the domain strip and the Tor list;
+#: at the usual 280 px cap only five rows showed and the strip and the Tor list were
+#: below the fold (2026-10-21 round 2: "the docked Running mesh tab shows the domain
+#: strip, Tor list and at least 6 rows at the default docked size").
+TALL_TABS = ("pods",)
+#: The panel's tabs, in order: (key, label).
+TABS = (("assistant", "Assistant"), ("mesh", "Local mesh"), ("pods", "Running mesh"),
+        ("run", "Mesh run"), ("builds", "Image builds"))
 
 
 def _log_swallowed(where: str) -> None:
@@ -56,41 +95,31 @@ def _log_swallowed(where: str) -> None:
     traceback.print_exc(file=sys.stderr)
 
 
-def dock_height_for(window_height: int, expanded: bool, bar_px: int) -> int:
+def dock_height_for(window_height: int, expanded: bool, bar_px: int,
+                    tall: bool = False) -> int:
     """How tall the dock may be in a window of ``window_height`` — a pure function so
-    the cap is testable for window sizes this host does not have."""
+    the cap is testable for window sizes this host does not have. ``tall``: the page
+    above has nothing but a note to show (the Bring-up step)."""
     if not expanded:
         return bar_px
+    if tall:
+        return max(bar_px + 76, int(window_height * TALL_FRACTION))
     return max(bar_px + 76, min(EXPANDED_PX, int(window_height * EXPANDED_FRACTION)))
 
 
 # ── remembering open/closed ──────────────────────────────────────────────────────────
 def _settings_path() -> str | None:
-    try:
-        return os.path.join(state_paths.state_dir(), _SETTINGS)
-    except Exception:                       # e.g. pytest without an isolated state dir
-        return None
+    return assistant_settings.settings_path()
 
 
 def load_expanded() -> bool:
-    path = _settings_path()
-    try:
-        with open(path or "", encoding="utf-8") as fh:
-            return bool(json.load(fh).get("expanded", False))
-    except (OSError, ValueError, AttributeError):
-        return False
+    return bool(assistant_settings.get("expanded", False))
 
 
 def save_expanded(expanded: bool) -> None:
-    path = _settings_path()
-    if not path:
-        return
-    try:
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, "w", encoding="utf-8") as fh:
-            json.dump({"expanded": bool(expanded)}, fh)
-    except OSError:
-        pass                                # a convenience, never worth a message
+    # MERGED into the file, never a rewrite: the same file holds the Ollama choice and
+    # the checkouts folder, and opening the panel must not forget either.
+    assistant_settings.update(expanded=bool(expanded))
 
 
 # ── small pieces ─────────────────────────────────────────────────────────────────────
@@ -245,8 +274,9 @@ class _Threads:
                 tag, value, error = self._q.get_nowait()
             except queue.Empty:
                 return
-            if tag in self.in_flight and tag in ("snapshot", "start"):
-                self.in_flight.discard(tag)
+            # every submitted job clears its own tag when its result comes home (the
+            # prompt's chunk/done/error are put(), never submitted, so they hold none)
+            self.in_flight.discard(tag)
             handle(tag, value, error)
 
 
@@ -338,10 +368,8 @@ class LocalWorkWindow(QtWidgets.QWidget):
         self.commands.setWordWrap(True)
         self.commands.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         self.commands.setStyleSheet(styles.muted())
-        cmds = lai.commands(generator_dir)
-        self.commands.setText(
-            "Run it yourself in a terminal:  " + cmds["start"] + "   |   queue issues and watch:  "
-            + cmds["todo"] + "   |   chat:  " + cmds["chat"])
+        self._generator_dir = generator_dir
+        self._set_commands()
         lay.addWidget(self.commands)
 
         self._timer = QtCore.QTimer(self)
@@ -380,8 +408,20 @@ class LocalWorkWindow(QtWidgets.QWidget):
         if not self._drain.isActive():
             self._drain.start()
 
+    def _set_commands(self) -> None:
+        """The run-it-yourself line, for the Ollama the assistant uses NOW (Docker mode
+        puts that instance's OLLAMA_HOST in front of each command)."""
+        try:
+            cmds = odk.commands_for(self._generator_dir)
+        except Exception:                        # noqa: BLE001 — a label never raises
+            cmds = lai.commands(self._generator_dir)
+        self.commands.setText(
+            "Run it yourself in a terminal:  " + cmds["start"] + "   |   queue issues and watch:  "
+            + cmds["todo"] + "   |   chat:  " + cmds["chat"])
+
     def show_snapshot(self, snap) -> None:
         """Render a snapshot now (the dock hands over the one it already has)."""
+        self._set_commands()
         self.snapshot = snap
         self.summary.setText(snap.summary)
         if snap.problem:
@@ -455,29 +495,104 @@ class LocalWorkWindow(QtWidgets.QWidget):
             self.summary.setText(f"Could not read the local AI state: {error}")
 
 
+# ── the panel's pieces ───────────────────────────────────────────────────────────────
+def _scroll(inner: QtWidgets.QWidget) -> QtWidgets.QScrollArea:
+    """A tab's content in a scroll area: a part taller than the strip scrolls instead of
+    forcing the strip (and with it the window) taller, or being clipped."""
+    area = QtWidgets.QScrollArea()
+    area.setWidgetResizable(True)
+    area.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
+    area.setWidget(inner)
+    return area
+
+
+def _placeholder(text: str) -> QtWidgets.QLabel:
+    lab = QtWidgets.QLabel(text)
+    lab.setWordWrap(True)
+    lab.setStyleSheet(styles.muted())
+    lab.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
+    return lab
+
+
+class PanelWindow(QtWidgets.QWidget):
+    """The panel popped out into a window of its own. Closing it (or Escape) puts the
+    panel back at the bottom of the Studio window; nothing running is touched."""
+
+    def __init__(self, dock: "LocalAIDock", parent=None):
+        super().__init__(parent)
+        self.setWindowFlag(Qt.WindowType.Window, True)
+        self.setWindowTitle("HugMesh Studio panel")
+        self.setObjectName("studioPanelWindow")
+        self._dock = dock
+        self.lay = QtWidgets.QVBoxLayout(self)
+        self.lay.setContentsMargins(8, 8, 8, 8)
+        head = QtWidgets.QHBoxLayout()
+        note = QtWidgets.QLabel("The panel from the bottom of the Studio window. Close this "
+                                "window, or press Put back, to return it there.")
+        note.setWordWrap(True)
+        note.setStyleSheet(styles.muted())
+        self.back_btn = _styled_button("Put back", "Return the panel to the bottom of the "
+                                                   "Studio window")
+        self.back_btn.clicked.connect(self.close)
+        head.addWidget(note, 1)
+        head.addWidget(self.back_btn)
+        self.lay.addLayout(head)
+        self.resize(980, 640)
+
+    def keyPressEvent(self, event):
+        if _key_code(event) == _ESCAPE:
+            self.close()
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+    def closeEvent(self, event):
+        try:
+            self._dock.put_back()
+        except Exception:
+            _log_swallowed("PanelWindow.closeEvent")
+        super().closeEvent(event)
+
+
 # ── the dock ─────────────────────────────────────────────────────────────────────────
 class LocalAIDock(QtWidgets.QFrame):
-    """The persistent prompt bar. See the module docstring."""
+    """The Studio's bottom panel. See the module docstring."""
 
     layout_changed = Signal()
 
     def __init__(self, generator_dir: str, parent=None, *, snapshot_fn=None, prompt_fn=None,
                  start_fn=None, poll_ms: int = POLL_MS, auto_poll: bool = True,
-                 expanded: bool | None = None, work_window_factory=None):
+                 expanded: bool | None = None, work_window_factory=None,
+                 open_build=None, agent_card: bool = True):
         super().__init__(parent)
         self.setObjectName("localAIDock")
         self.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
         self.setAutoFillBackground(True)
         self.generator_dir = generator_dir
-        self._snapshot_fn = snapshot_fn or (lambda: lai.read_snapshot())
+        # WHICH OLLAMA. Read once here and changed only by the Assistant tab's choice;
+        # every call below takes its environment from _env(), the ONE switch
+        # (core/ollama_docker.assistant_env), so the instance shown is the one used.
+        self.ollama_mode = odk.current_mode()
+        self._snapshot_fn = snapshot_fn or self._default_snapshot
         self._prompt_fn = prompt_fn or self._default_prompt
-        self._start_fn = start_fn or (lambda: lai.start_assistant(generator_dir))
+        self._custom_start = start_fn is not None
+        self._start_fn = start_fn or self._default_start_now
         self._work_factory = work_window_factory
+        self._open_build = open_build
         self._threads = _Threads()
         self._auto_poll = auto_poll
         self.snapshot = None
         self.work_window = None
+        self.panel_window = None
+        self.popped = False
+        self.mesh_page = None
+        self._mesh_was_running = False
+        self.docker_state = None
+        self.gpu = None
         self.expanded = load_expanded() if expanded is None else bool(expanded)
+        self.tall = False
+        #: what the page asked for (set_tall); ``tall`` also follows the open tab
+        self._page_tall = False
         self._history: list = []
         # Counts the times Clear was pressed. Every request remembers the number it started
         # under; what comes back from an older one (late words, its finished answer, its
@@ -494,6 +609,7 @@ class LocalAIDock(QtWidgets.QFrame):
         outer = QtWidgets.QVBoxLayout(self)
         outer.setContentsMargins(8, 3, 8, 4)
         outer.setSpacing(3)
+        self._outer = outer
 
         # the bar: always visible
         self.bar = QtWidgets.QWidget()
@@ -503,29 +619,51 @@ class LocalAIDock(QtWidgets.QFrame):
         self.chevron = _Chevron()
         self.chevron.setAutoRaise(True)
         self.chevron.setMinimumSize(MIN_CLICK_PX, MIN_CLICK_PX)
-        self.chevron.clicked.connect(lambda: self.set_expanded(not self.expanded))
-        self.chevron.setAccessibleName("Show or hide the local AI prompt")
+        self.chevron.clicked.connect(self._chevron_clicked)
+        self.chevron.setAccessibleName("Show or hide the Studio panel")
         self.summary = _ElidedLabel()
         self.summary.setMinimumHeight(MIN_CLICK_PX)
         self.summary.set_full_text("Local AI: reading status…")
+        self.activity = _ElidedLabel()
+        self.activity.setMinimumHeight(MIN_CLICK_PX)
+        self.activity.setStyleSheet(styles.muted())
+        self.activity.set_full_text("Mesh: idle · no image build running")
         self.start_btn = _styled_button("Start local assistant",
                                         "Start the local Ollama and the queue worker "
-                                        "(runs scripts/local-ai.sh start)")
+                                        "(runs scripts/local-ai.sh start; in Docker mode it "
+                                        "starts the Studio's Ollama container first)")
         self.start_btn.clicked.connect(self.start_assistant)
         self.work_btn = _styled_button("Current work",
                                        "Open a window with the queue, the drafts and the running builds")
         self.work_btn.clicked.connect(self.show_current_work)
+        self.pop_btn = _styled_button("Pop out", "Open this panel in a window of its own "
+                                                 "(close that window to put it back)")
+        self.pop_btn.clicked.connect(self.toggle_pop)
         bar.addWidget(self.chevron)
-        bar.addWidget(self.summary, 1)
+        bar.addWidget(self.summary, 3)
+        bar.addWidget(self.activity, 2)
         bar.addWidget(self.start_btn)
         bar.addWidget(self.work_btn)
+        bar.addWidget(self.pop_btn)
         outer.addWidget(self.bar)
 
-        # the expanded part
+        # the expanded part: the tabs
         self.body = QtWidgets.QWidget()
         body = QtWidgets.QVBoxLayout(self.body)
         body.setContentsMargins(0, 0, 0, 0)
-        body.setSpacing(3)
+        body.setSpacing(0)
+        self.tabs = QtWidgets.QTabWidget()
+        self.tabs.setDocumentMode(True)
+        self.tabs.setUsesScrollButtons(True)
+        body.addWidget(self.tabs, 1)
+        outer.addWidget(self.body, 1)
+        self._tab_index: dict = {}
+
+        # ── Assistant: the chat on the left, every option on the right ──────────────
+        chat = QtWidgets.QWidget()
+        chat_lay = QtWidgets.QVBoxLayout(chat)
+        chat_lay.setContentsMargins(0, 3, 0, 0)
+        chat_lay.setSpacing(3)
         self.note = QtWidgets.QLabel("")
         self.note.setWordWrap(True)
         self.note.setStyleSheet(styles.muted())
@@ -550,10 +688,176 @@ class LocalAIDock(QtWidgets.QFrame):
         self.answer.setMinimumHeight(36)
         self.answer.setPlaceholderText("The model's answer appears here.")
         self.answer.setAccessibleName("Answer from the local model")
-        body.addWidget(self.note)
-        body.addLayout(row)
-        body.addWidget(self.answer, 1)
-        outer.addWidget(self.body, 1)
+        chat_lay.addWidget(self.note)
+        chat_lay.addLayout(row)
+        chat_lay.addWidget(self.answer, 1)
+
+        options = QtWidgets.QWidget()
+        opt = QtWidgets.QVBoxLayout(options)
+        opt.setContentsMargins(0, 3, 4, 3)
+        self.instance_box = QtWidgets.QGroupBox("Which Ollama the assistant uses")
+        ib = QtWidgets.QVBoxLayout(self.instance_box)
+        self.mode_system = QtWidgets.QRadioButton(f"System Ollama ({odk.endpoint(odk.SYSTEM)})")
+        self.mode_system.setToolTip(odk.MODE_WORDS[odk.SYSTEM] + ". The Studio never "
+                                    "starts a second one beside it in this mode.")
+        self.mode_docker = QtWidgets.QRadioButton(
+            f"Ollama in Docker ({odk.IMAGE_VERSION}, port {odk.docker_port()})")
+        self.mode_docker.setToolTip(odk.MODE_WORDS[odk.DOCKER] + ". "
+            f"Runs {odk.IMAGE.split('@')[0]} as the container {odk.CONTAINER}, models kept "
+            f"in the {odk.VOLUME} volume, on a loopback-only port that never clashes with "
+            "the system 11434. The GPU is passed through when Docker can provide one. "
+            "Nothing starts until you press Start.")
+        for radio in (self.mode_system, self.mode_docker):
+            radio.setMinimumHeight(MIN_CLICK_PX)            # a click target, not a 19 px line
+        (self.mode_docker if self.ollama_mode == odk.DOCKER else self.mode_system).setChecked(True)
+        self.mode_system.toggled.connect(lambda on: on and self.set_ollama_mode(odk.SYSTEM))
+        self.mode_docker.toggled.connect(lambda on: on and self.set_ollama_mode(odk.DOCKER))
+        self.instance_label = QtWidgets.QLabel("")
+        self.instance_label.setWordWrap(True)
+        self.instance_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.docker_label = QtWidgets.QLabel("")
+        self.docker_label.setWordWrap(True)
+        self.docker_label.setStyleSheet(styles.muted())
+        self.docker_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        drow = QtWidgets.QHBoxLayout()
+        self.docker_start_btn = _styled_button("Start Docker Ollama",
+                                               "Start only the container (Start local "
+                                               "assistant also starts the queue worker)")
+        self.docker_start_btn.clicked.connect(self.start_docker_ollama)
+        self.docker_stop_btn = _styled_button("Stop Docker Ollama",
+                                              "Stop the container; the models volume stays")
+        self.docker_stop_btn.clicked.connect(self.stop_docker_ollama)
+        drow.addWidget(self.docker_start_btn)
+        drow.addWidget(self.docker_stop_btn)
+        drow.addStretch(1)
+        ib.addWidget(self.mode_system)
+        ib.addWidget(self.mode_docker)
+        ib.addWidget(self.instance_label)
+        ib.addLayout(drow)
+        ib.addWidget(self.docker_label)
+        opt.addWidget(self.instance_box)
+
+        self.checkouts_box = QtWidgets.QGroupBox("Where your checkouts are")
+        cb = QtWidgets.QVBoxLayout(self.checkouts_box)
+        self.checkouts_edit = QtWidgets.QLineEdit(
+            str(assistant_settings.get("checkouts_dir", "") or ""))
+        self.checkouts_edit.setMinimumHeight(MIN_CLICK_PX)
+        self.checkouts_edit.setPlaceholderText(actx.default_checkouts_dir(generator_dir))
+        self.checkouts_edit.setToolTip(
+            "The folder that holds your hugmesh-* git checkouts. Every agent the assistant "
+            "starts is told about it, and the queue worker drafts from it. Empty = the "
+            "folder that holds this generator checkout (or $HUGMESH_REPOS_ROOT).")
+        self.checkouts_edit.editingFinished.connect(self._save_checkouts)
+        self.checkouts_note = QtWidgets.QLabel(
+            "Every agent the assistant starts gets a fresh project-context file: what "
+            "HugMesh is, its repositories, the Studio, and where these checkouts and "
+            "each domain's code folders are.")
+        self.checkouts_note.setWordWrap(True)
+        self.checkouts_note.setStyleSheet(styles.muted())
+        cb.addWidget(self.checkouts_edit)
+        cb.addWidget(self.checkouts_note)
+        opt.addWidget(self.checkouts_box)
+
+        self.agent_card = None
+        if agent_card:
+            from .pages import _local_agent_widget as law
+            self.agent_card = law.LocalAgentWidget(
+                generator_dir, context=self._agent_context, environ=self._env,
+                context_text=self._agent_context_text)
+            opt.addWidget(self.agent_card)
+        opt.addStretch(1)
+        self.options_scroll = _scroll(options)
+
+        self.assistant_split = QtWidgets.QSplitter(Qt.Orientation.Horizontal)
+        self.assistant_split.setChildrenCollapsible(False)
+        self.assistant_split.addWidget(chat)
+        self.assistant_split.addWidget(self.options_scroll)
+        # The options column gets three fifths: the agent launcher's form needs about
+        # 400 px to show its drop-downs whole, and the chat line needs less.
+        # Until the person drags the handle, every resize re-applies that split.
+        self._split_moved = False
+        self.assistant_split.splitterMoved.connect(self._on_split_moved)
+        self.assistant_split.installEventFilter(self)
+        self._add_tab("assistant", self.assistant_split)
+
+        # ── the local mesh's parts (claimed from LocalMeshPage by attach_mesh_page) ──
+        self._hosts: dict = {}
+        no_page = ("This Studio window has no local-mesh page yet. Choose \"Run a local "
+                   "Docker mesh\" on the mode screen; its {what} then lives here.")
+        for key, what in (("mesh", "actions"), ("pods", "running-mesh view"),
+                          ("run", "run log")):
+            inner = QtWidgets.QWidget()
+            lay = QtWidgets.QVBoxLayout(inner)
+            lay.setContentsMargins(0, 3, 4, 3)
+            ph = _placeholder(no_page.format(what=what))
+            lay.addWidget(ph)
+            lay.addStretch(1)
+            self._hosts[key] = (inner, lay, ph)
+            self._add_tab(key, _scroll(inner))
+
+        # ── image builds: the process-wide roster (gui/build_supervisor.py) ─────────
+        builds = QtWidgets.QWidget()
+        bl = QtWidgets.QVBoxLayout(builds)
+        bl.setContentsMargins(0, 3, 4, 3)
+        self.builds_tree = QtWidgets.QTreeWidget()
+        self.builds_tree.setHeaderLabels(["Build", "State", "Running for"])
+        self.builds_tree.setRootIsDecorated(False)
+        self.builds_tree.setUniformRowHeights(True)
+        self.builds_tree.setMinimumHeight(60)
+        self.builds_tree.setColumnWidth(0, 210)        # the tree shares the tab with the log
+        self.builds_tree.currentItemChanged.connect(lambda *_: self._on_build_picked())
+        brow = QtWidgets.QHBoxLayout()
+        self.build_show_btn = _styled_button("Show this build",
+                                             "Bring the window that is running it to the front")
+        self.build_show_btn.clicked.connect(self.show_selected_build)
+        self.builds_note = QtWidgets.QLabel("")
+        self.builds_note.setWordWrap(True)
+        self.builds_note.setStyleSheet(styles.muted())
+        brow.addWidget(self.build_show_btn)
+        brow.addWidget(self.builds_note, 1)
+        # THE RUNNING BUILD ITSELF, at the bottom of the window: the last lines of the
+        # picked build's log, read from its build.log once a second while this tab is
+        # on screen. The full view (stages, packages, flash) stays in the build's own
+        # window ("Show this build"); this is the live tail, never a second runner.
+        self.build_log_title = QtWidgets.QLabel("")
+        self.build_log_title.setWordWrap(True)
+        self.build_log_title.setStyleSheet(styles.muted())
+        self.build_log_title.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.build_log = QtWidgets.QPlainTextEdit()
+        self.build_log.setReadOnly(True)
+        self.build_log.setLineWrapMode(QtWidgets.QPlainTextEdit.LineWrapMode.NoWrap)
+        self.build_log.setMaximumBlockCount(BUILD_TAIL_LINES)
+        self.build_log.setMinimumHeight(60)
+        self.build_log.setAccessibleName("Last lines of the picked build's log")
+        self.build_log.setPlaceholderText("Pick a running build above to follow its log here.")
+        self._tail_key = None                    # (path, size, mtime) last shown
+        self._tail_pick = None                   # the row whose log is shown
+        self._tail_follow = True                 # keep the newest line in view
+        self.build_log.verticalScrollBar().actionTriggered.connect(self._on_tail_scrolled)
+        self.builds_split = QtWidgets.QSplitter(Qt.Orientation.Horizontal)
+        self.builds_split.setChildrenCollapsible(False)
+        left = QtWidgets.QWidget()
+        ll = QtWidgets.QVBoxLayout(left)
+        ll.setContentsMargins(0, 0, 0, 0)
+        ll.addWidget(self.builds_tree, 1)
+        ll.addLayout(brow)
+        right = QtWidgets.QWidget()
+        rl = QtWidgets.QVBoxLayout(right)
+        rl.setContentsMargins(0, 0, 0, 0)
+        rl.addWidget(self.build_log_title)
+        rl.addWidget(self.build_log, 1)
+        self.builds_split.addWidget(left)
+        self.builds_split.addWidget(right)
+        self.builds_split.setStretchFactor(0, 2)
+        self.builds_split.setStretchFactor(1, 3)
+        bl.addWidget(self.builds_split, 1)
+        self._add_tab("builds", builds)
+
+        last = str(assistant_settings.get("tab", "assistant") or "assistant")
+        self.tabs.setCurrentIndex(self._tab_index.get(last, 0))
+        self.tabs.currentChanged.connect(self._on_tab_changed)
+        self._sync_tall()                 # a remembered Running mesh tab opens tall
 
         self._drain = QtCore.QTimer(self)
         self._drain.setInterval(DRAIN_MS)
@@ -561,19 +865,65 @@ class LocalAIDock(QtWidgets.QFrame):
         self._poll = QtCore.QTimer(self)
         self._poll.setInterval(poll_ms)
         self._poll.timeout.connect(self.refresh)
+        # The "what is running" line and the builds list: in-memory reads only, once a
+        # second while the panel is on screen.
+        self._activity_timer = QtCore.QTimer(self)
+        self._activity_timer.setInterval(1000)
+        self._activity_timer.timeout.connect(self.refresh_activity)
+        try:
+            from . import build_supervisor
+            build_supervisor.supervisor().changed.connect(self.refresh_activity)
+        except Exception:                        # pragma: no cover - no QApplication
+            _log_swallowed("LocalAIDock(supervisor)")
         alive = self._alive
         self.destroyed.connect(lambda *_: alive.set())      # a request outliving its window stops
+        self._render_instance()
+        self.refresh_activity()
         self._apply_expanded(notify=False)
 
+    def _on_split_moved(self, *_a) -> None:
+        self._split_moved = True
+
+    def eventFilter(self, obj, event):
+        try:
+            if obj is self.assistant_split and event.type() == QtCore.QEvent.Type.Resize \
+                    and not self._split_moved:
+                self._apply_split()
+                # and once more after the splitter's own resize handling has run
+                QtCore.QTimer.singleShot(0, self._apply_split)
+        except Exception:
+            _log_swallowed("LocalAIDock.eventFilter")
+        return False
+
+    def _apply_split(self) -> None:
+        try:
+            sp = self.assistant_split
+            if self._split_moved or sp.width() <= 0:
+                return
+            w = max(0, sp.width() - sp.handleWidth())
+            want = [w * 2 // 5, w - w * 2 // 5]
+            if sp.sizes() != want:
+                sp.blockSignals(True)
+                sp.setSizes(want)
+                sp.blockSignals(False)
+        except RuntimeError:                     # destroyed before the timer fired
+            pass
+
+    def _add_tab(self, key: str, widget) -> None:
+        label = dict(TABS)[key]
+        self._tab_index[key] = self.tabs.addTab(widget, label)
+
     def keyPressEvent(self, event):
-        """Escape never closes the Studio from the dock. A key a dock widget leaves
-        unaccepted travels up through here to the wizard, and a QDialog closes itself on
-        an Escape nobody took. The operator's rule is that Escape only cancels the
-        current input or dialog: the prompt clears its own text (:class:`_PromptLine`),
-        and on every other stop of the dock — a button, the chevron, the answer area, an
-        empty prompt — there is nothing of the dock's to cancel, so the key ends here.
-        The wizard's own Cancel button and the window's close button still close it."""
-        if _key_code(event) == _ESCAPE:
+        """Escape never closes the Studio from the dock, and Enter never presses the
+        wizard's Next from it. A key a dock widget leaves unaccepted travels up through
+        here to the wizard: a QDialog closes itself on an Escape nobody took, and presses
+        its default button (Next, or on the worklist page the one that starts a build) on
+        an Enter nobody took — from a drop-down or a check box of the Local mesh tab,
+        say. The operator's rule is that Escape only cancels the current input or dialog:
+        the prompt clears its own text (:class:`_PromptLine`), and on every other stop of
+        the dock there is nothing of the dock's to cancel, so the key ends here. The
+        wizard's own Cancel button and the window's close button still close it."""
+        if _key_code(event) in (_ESCAPE,) + _SEND_KEYS:
             event.accept()
             return
         super().keyPressEvent(event)
@@ -583,29 +933,445 @@ class LocalAIDock(QtWidgets.QFrame):
         return max(MIN_CLICK_PX, self.bar.sizeHint().height()) + 7
 
     def preferred_height(self, window_height: int) -> int:
-        return dock_height_for(window_height, self.expanded, self.bar_height())
+        return dock_height_for(window_height, self.expanded and not self.popped,
+                               self.bar_height(), self.tall)
+
+    def set_tall(self, on: bool) -> None:
+        """Let the panel take most of the window (the Bring-up step is on screen) or go
+        back to its usual cap. The panel is ALSO tall while a ``TALL_TABS`` tab is
+        open, whatever the page says: ``_sync_tall`` is the one writer of ``tall``."""
+        self._page_tall = bool(on)
+        self._sync_tall()
+
+    def _sync_tall(self) -> None:
+        want = bool(getattr(self, "_page_tall", False)) or self.current_tab() in TALL_TABS
+        if want == self.tall:
+            return
+        self.tall = want
+        self.layout_changed.emit()
 
     # ---- expand / collapse ----------------------------------------------------------
+    def _chevron_clicked(self) -> None:
+        if self.popped:
+            self.put_back()
+            if not self.expanded:
+                self.set_expanded(True)
+            return
+        self.set_expanded(not self.expanded)
+
     def set_expanded(self, on: bool) -> None:
         if bool(on) == self.expanded:
             return
         self.expanded = bool(on)
         save_expanded(self.expanded)
         self._apply_expanded()
-        if self.expanded:
+        if self.expanded and self.current_tab() == "assistant":
             self.prompt.setFocus()
 
     def _apply_expanded(self, notify: bool = True) -> None:
-        self.body.setVisible(self.expanded)
-        self.chevron.setArrowType(Qt.ArrowType.DownArrow if self.expanded else Qt.ArrowType.UpArrow)
-        self.chevron.setToolTip("Hide the prompt" if self.expanded else "Show the prompt")
+        if not self.popped:
+            self.body.setVisible(self.expanded)
+        self.chevron.setArrowType(Qt.ArrowType.DownArrow if self.expanded and not self.popped
+                                  else Qt.ArrowType.UpArrow)
+        self.chevron.setToolTip("Hide the panel" if self.expanded and not self.popped
+                                else "Show the panel")
         if notify:
             self.layout_changed.emit()
+
+    # ---- tabs -----------------------------------------------------------------------
+    def current_tab(self) -> str:
+        i = self.tabs.currentIndex()
+        return next((k for k, v in self._tab_index.items() if v == i), "assistant")
+
+    def show_tab(self, key: str) -> None:
+        """Open the panel on tab ``key``: in its window when popped out, at the bottom
+        of the Studio window otherwise."""
+        if key in self._tab_index:
+            self.tabs.setCurrentIndex(self._tab_index[key])
+        if self.popped and self.panel_window is not None:
+            self.panel_window.show()
+            self.panel_window.raise_()
+            self.panel_window.activateWindow()
+        else:
+            self.set_expanded(True)
+
+    def _on_tab_changed(self, _i: int) -> None:
+        try:
+            key = self.current_tab()
+            assistant_settings.update(tab=key)
+            self._sync_tall()
+            self._tab_shown(key)
+        except Exception:
+            _log_swallowed("LocalAIDock._on_tab_changed")
+
+    def _tab_shown(self, key: str) -> None:
+        """A local-mesh tab was opened: make sure what it shows is being read."""
+        page = self.mesh_page
+        if key == "builds":
+            self.refresh_activity()
+        if page is None or key not in ("mesh", "pods"):
+            return
+        try:
+            if getattr(page, "_mesh_up", None) is None:
+                page._probe_mesh_state()
+            sec = getattr(page, "monitor_section", None)
+            if key == "pods" and sec is not None and not sec.is_expanded():
+                # In the panel the TAB is the open-or-closed control; a folded table
+                # inside an opened tab would be a second click for nothing.
+                sec.set_expanded(True)
+        except Exception:
+            _log_swallowed("LocalAIDock._tab_shown")
+
+    # ---- pop out / put back ---------------------------------------------------------
+    def toggle_pop(self) -> None:
+        if self.popped:
+            self.put_back()
+        else:
+            self.pop_out()
+
+    def pop_out(self):
+        """Move the tabs into a window of their own. Nothing is rebuilt: the same widgets
+        change parent, so a running verb keeps streaming into its log."""
+        if self.popped:
+            return self.panel_window
+        if self.panel_window is None:
+            self.panel_window = PanelWindow(self, parent=self.window())
+        self._outer.removeWidget(self.body)
+        self.panel_window.lay.addWidget(self.body, 1)
+        self.body.setVisible(True)
+        self.popped = True
+        self.pop_btn.setText("Put back")
+        self.pop_btn.setToolTip("Return the panel to the bottom of this window")
+        self._apply_expanded()
+        self.panel_window.show()
+        self.panel_window.raise_()
+        self.panel_window.activateWindow()
+        return self.panel_window
+
+    def put_back(self) -> None:
+        if not self.popped:
+            return
+        self.popped = False
+        if self.panel_window is not None:
+            self.panel_window.lay.removeWidget(self.body)
+        self._outer.addWidget(self.body, 1)
+        self.pop_btn.setText("Pop out")
+        self.pop_btn.setToolTip("Open this panel in a window of its own "
+                                "(close that window to put it back)")
+        self._apply_expanded()
+        if self.panel_window is not None and self.panel_window.isVisible():
+            self.panel_window.hide()
+
+    # ---- the local-mesh page's parts -------------------------------------------------
+    def attach_mesh_page(self, page) -> bool:
+        """Take the local-mesh page's Actions box, running-mesh monitor and run view into
+        the panel. They are MOVED (one implementation); the page shows a note saying
+        where they went. False when there is no page to take them from."""
+        if page is None or not hasattr(page, "take_section"):
+            return False
+        self.mesh_page = page
+        for key, part in (("mesh", "actions"), ("pods", "monitor"), ("run", "run")):
+            _inner, lay, ph = self._hosts[key]
+            w = page.take_section(part, lay, dock=True)
+            if w is not None:
+                ph.setVisible(False)
+        try:
+            page.attach_dock(self.show_tab, self.set_tall)
+            page.completeChanged.connect(self._on_mesh_changed)
+        except Exception:
+            _log_swallowed("LocalAIDock.attach_mesh_page")
+        if self.agent_card is not None:
+            from .pages import _local_agent_widget as law
+            law.follow_page(self.agent_card, page)
+        self.refresh_activity()
+        return True
+
+    def _on_mesh_changed(self) -> None:
+        """A verb started or ended on the local-mesh page (its completeChanged). When one
+        STARTS, the panel opens on the run so the person sees it, wherever they are."""
+        try:
+            running = bool(getattr(self.mesh_page, "_running", False))
+            if running and not self._mesh_was_running:
+                self.show_tab("run")
+            self._mesh_was_running = running
+            self.refresh_activity()
+        except Exception:
+            _log_swallowed("LocalAIDock._on_mesh_changed")
+
+    # ---- what is running --------------------------------------------------------------
+    def _running_builds(self) -> list:
+        try:
+            from . import build_supervisor
+            return build_supervisor.supervisor().running()
+        except Exception:
+            return []
+
+    def refresh_activity(self) -> None:
+        try:
+            page = self.mesh_page
+            mesh_running = bool(getattr(page, "_running", False)) if page is not None else False
+            mesh_label = str(getattr(page, "_running_label", "") or "") if mesh_running else ""
+            builds = self._running_builds()
+            mesh_words = f"Mesh: {mesh_label or 'a verb'} running" if mesh_running else "Mesh: idle"
+            build_words = (f"{len(builds)} image build{'s' if len(builds) != 1 else ''} running"
+                           if builds else "no image build running")
+            self.activity.set_full_text(f"{mesh_words} · {build_words}")
+            if self.current_tab() == "builds" or self.builds_tree.topLevelItemCount() != (
+                    len(builds) + (1 if mesh_running else 0)):
+                self._fill_builds(builds, mesh_running, mesh_label)
+            if self.current_tab() == "builds":
+                self.refresh_build_tail()
+        except RuntimeError:                     # a widget deleted under us at teardown
+            pass
+        except Exception:
+            _log_swallowed("LocalAIDock.refresh_activity")
+
+    def _fill_builds(self, builds, mesh_running: bool, mesh_label: str) -> None:
+        keep = self.builds_tree.currentItem().data(0, Qt.ItemDataRole.UserRole) \
+            if self.builds_tree.currentItem() else None
+        # rebuilt in silence: the pick is re-read ONCE at the end (_on_build_picked), so
+        # the clear in between is not taken for "nothing picked"
+        self.builds_tree.blockSignals(True)
+        try:
+            self._fill_builds_rows(builds, mesh_running, mesh_label, keep)
+        finally:
+            self.builds_tree.blockSignals(False)
+        self.builds_note.setText(
+            "" if self.builds_tree.topLevelItemCount() else
+            "Nothing is building. An image build started from any Studio window, and a "
+            "local-mesh verb, are listed here while they run; closing a window or this "
+            "panel never stops one.")
+        self._on_build_picked()
+
+    def _fill_builds_rows(self, builds, mesh_running: bool, mesh_label: str, keep) -> None:
+        self.builds_tree.clear()
+        pick = None
+        if mesh_running:
+            item = QtWidgets.QTreeWidgetItem([f"Local mesh: {mesh_label or 'a verb'}",
+                                              "running", ""])
+            item.setData(0, Qt.ItemDataRole.UserRole, "mesh:")
+            self.builds_tree.addTopLevelItem(item)
+            if keep == "mesh:":
+                pick = item
+        for b in builds:
+            secs = int(b.elapsed())
+            item = QtWidgets.QTreeWidgetItem([b.label, "running", f"{secs // 60}:{secs % 60:02d}"])
+            key = f"build:{b.session_id}"
+            item.setData(0, Qt.ItemDataRole.UserRole, key)
+            item.setToolTip(0, b.workdir or b.label)
+            self.builds_tree.addTopLevelItem(item)
+            if keep == key:
+                pick = item
+        if pick is None and self.builds_tree.topLevelItemCount():
+            pick = self.builds_tree.topLevelItem(0)
+        if pick is not None:
+            self.builds_tree.setCurrentItem(pick)
+
+    def _on_build_picked(self) -> None:
+        """Another row was picked. The list is rebuilt every second while the tab is on
+        screen, which re-picks the same row: that is not a new pick, and the log is
+        re-read only when its file changed (refresh_activity -> refresh_build_tail)."""
+        self._sync_builds_buttons()
+        item = self.builds_tree.currentItem()
+        key = item.data(0, Qt.ItemDataRole.UserRole) if item is not None else None
+        if key != self._tail_pick:
+            self._tail_pick = key
+            self._tail_key = None
+            self._tail_follow = True
+            self.refresh_build_tail()
+
+    def _picked_build_log(self) -> "tuple[str, str]":
+        """``(log path, words for the title)`` of the picked row; path "" = nothing to
+        follow, and the words say why."""
+        item = self.builds_tree.currentItem()
+        key = str(item.data(0, Qt.ItemDataRole.UserRole) or "") if item is not None else ""
+        if not key:
+            return "", ""
+        if key == "mesh:":
+            return "", ("The local mesh's own run log is on the Mesh run tab "
+                        "(\u201cShow this build\u201d opens it).")
+        from . import build_supervisor
+        b = build_supervisor.supervisor().find(key[len("build:"):])
+        if b is None:
+            return "", "That build is no longer running."
+        path = getattr(b, "log_path", "") or (
+            os.path.join(b.workdir, "build.log") if getattr(b, "workdir", "") else "")
+        if not path:
+            return "", f"{b.label}: this build has no log file to follow."
+        return path, f"{b.label} \u2014 last lines of {path}"
+
+    def _tail_to_end(self) -> None:
+        # QPlainTextEdit lays text out lazily, so the scroll range grows after the set:
+        # move now and once more when the layout has caught up.
+        self.build_log.moveCursor(QtGui.QTextCursor.MoveOperation.End)
+        bar = self.build_log.verticalScrollBar()
+        bar.setValue(bar.maximum())
+
+        def again():
+            try:
+                if self._tail_follow:
+                    bar.setValue(bar.maximum())
+            except RuntimeError:
+                pass
+        QtCore.QTimer.singleShot(0, again)
+
+    def _on_tail_scrolled(self, *_a) -> None:
+        """The person moved the log's scroll bar: follow the end only while it is there."""
+        def look():
+            try:
+                bar = self.build_log.verticalScrollBar()
+                self._tail_follow = bar.value() >= bar.maximum() - 2
+            except RuntimeError:
+                pass
+        QtCore.QTimer.singleShot(0, look)
+
+    def refresh_build_tail(self) -> None:
+        """Show the last lines of the picked build's log. Reads at most 64 KB from the
+        end of the file, and only when its size or time changed."""
+        try:
+            path, words = self._picked_build_log()
+            self.build_log_title.setText(words)
+            if not path:
+                if self._tail_key is not None or self.build_log.toPlainText():
+                    self.build_log.clear()
+                self._tail_key = None
+                return
+            try:
+                st = os.stat(path)
+            except OSError:
+                self.build_log_title.setText(words + " (not written yet)")
+                self.build_log.clear()
+                self._tail_key = None
+                return
+            key = (path, st.st_size, st.st_mtime_ns)
+            if key == self._tail_key:
+                return
+            self._tail_key = key
+            with open(path, "rb") as fh:
+                fh.seek(max(0, st.st_size - _TAIL_BYTES))
+                data = fh.read(_TAIL_BYTES)
+            lines = data.decode("utf-8", "replace").splitlines()
+            if st.st_size > _TAIL_BYTES and lines:
+                lines = lines[1:]                # the first one was cut in the middle
+            bar = self.build_log.verticalScrollBar()
+            was = bar.value()
+            self.build_log.setPlainText("\n".join(lines[-BUILD_TAIL_LINES:]))
+            # follow the end unless the person scrolled up to read something
+            if self._tail_follow:
+                self._tail_to_end()
+            else:
+                bar.setValue(min(was, bar.maximum()))
+        except RuntimeError:                     # a widget deleted under us at teardown
+            pass
+        except Exception:
+            _log_swallowed("LocalAIDock.refresh_build_tail")
+
+    def _sync_builds_buttons(self) -> None:
+        item = self.builds_tree.currentItem()
+        self.build_show_btn.setEnabled(item is not None)
+        self.build_show_btn.setToolTip("Bring the window that is running it to the front"
+                                       if item is not None else "Select a running build")
+
+    def show_selected_build(self) -> bool:
+        item = self.builds_tree.currentItem()
+        key = item.data(0, Qt.ItemDataRole.UserRole) if item is not None else ""
+        if key == "mesh:":
+            self.show_tab("run")
+            return True
+        if not key or not str(key).startswith("build:"):
+            return False
+        sid = str(key)[len("build:"):]
+        from . import build_supervisor
+        live = build_supervisor.supervisor().find(sid)
+        if self._open_build is not None:
+            self._open_build(_SessionRef(sid))
+            return True
+        win = getattr(live, "window", None) if live is not None else None
+        if win is not None:
+            win.show()
+            win.raise_()
+            win.activateWindow()
+            return True
+        return False
+
+    # ---- which Ollama -----------------------------------------------------------------
+    def _env(self) -> dict:
+        """The environment every assistant call uses — THE switch between the system
+        Ollama and the Docker one (core/ollama_docker.assistant_env)."""
+        return odk.assistant_env(self.ollama_mode)
+
+    def set_ollama_mode(self, mode: str) -> None:
+        if mode == self.ollama_mode:
+            return
+        self.ollama_mode = mode
+        odk.set_mode(mode)
+        self._render_instance()
+        self.refresh()
+        if self.agent_card is not None and getattr(self.agent_card, "_first_probe_done", False):
+            self.agent_card.recheck()            # the models live on the other server
+
+    def _render_instance(self) -> None:
+        mode = self.ollama_mode
+        self.instance_label.setText(odk.describe(mode))
+        docker = mode == odk.DOCKER
+        self.docker_start_btn.setVisible(docker)
+        self.docker_stop_btn.setVisible(docker)
+        st, gpu = self.docker_state, self.gpu
+        if not docker:
+            self.docker_label.setText(
+                "The Studio does not start or stop the system Ollama from here: Start "
+                "local assistant runs scripts/local-ai.sh start, which starts it only if "
+                "it is down.")
+            return
+        bits = []
+        if st is None:
+            bits.append("Checking Docker…")
+        elif not st.docker_ok:
+            bits.append(f"Docker is not answering: {st.error}")
+        elif st.running:
+            bits.append(f"Container {odk.CONTAINER} is running.")
+        elif st.exists:
+            bits.append(f"Container {odk.CONTAINER} exists and is stopped.")
+        else:
+            bits.append(f"No container yet: the first start downloads {odk.IMAGE_VERSION} "
+                        "(about 3.8 GB).")
+        if gpu is not None:
+            bits.append(gpu.words)
+        bits.append("Pull a model into it: " + odk.pull_command(lai.DEFAULT_MODEL))
+        self.docker_label.setText("  ".join(bits))
+        self.docker_start_btn.setEnabled(not (st is not None and st.running))
+        self.docker_stop_btn.setEnabled(bool(st is not None and st.running))
+
+    def start_docker_ollama(self) -> None:
+        self.docker_start_btn.setEnabled(False)
+        self._say("Starting the Docker Ollama (the first start downloads the image)…")
+        self._threads.submit("docker-start", lambda: odk.start(environ=self._env()))
+
+    def stop_docker_ollama(self) -> None:
+        self.docker_stop_btn.setEnabled(False)
+        self._threads.submit("docker-stop", odk.stop)
+
+    def _save_checkouts(self) -> None:
+        assistant_settings.update(checkouts_dir=self.checkouts_edit.text().strip())
+
+    # ---- the agent card's inputs ----------------------------------------------------------
+    def _agent_context(self):
+        from .pages import _local_agent_widget as law
+        page = self.mesh_page
+        return law.context_from_page(page) if page is not None else law.AgentContext()
+
+    def _agent_context_text(self, ctx) -> str:
+        """The project-context text for one agent start. Runs on the card's WORKER (it
+        reads the disk); it reads only plain values."""
+        return actx.context_for(
+            self.generator_dir, source_mode=ctx.source_mode, source_dir=ctx.source_dir,
+            rows=ctx.domain_rows, mesh=ctx.mesh, ollama=odk.describe(self.ollama_mode))
 
     # ---- polling --------------------------------------------------------------------
     def showEvent(self, event):
         super().showEvent(event)
         self._drain.start()
+        self._activity_timer.start()
         if self._auto_poll:
             self._poll.start()
         QtCore.QTimer.singleShot(0, self.refresh)          # after the window is up, not during it
@@ -613,14 +1379,28 @@ class LocalAIDock(QtWidgets.QFrame):
     def hideEvent(self, event):
         super().hideEvent(event)
         self._poll.stop()
+        self._activity_timer.stop()
+
+    def _default_snapshot(self):
+        mode = self.ollama_mode
+        snap = lai.read_snapshot(env=odk.assistant_env(mode))
+        return odk.adjust_snapshot(snap, mode, self.generator_dir)
 
     def refresh(self) -> None:
         self._threads.submit("snapshot", self._snapshot_fn)
+        if self.ollama_mode == odk.DOCKER and self._auto_poll:
+            self._threads.submit("docker-state", odk.state)
+            if self.gpu is None:
+                self._threads.submit("gpu", odk.detect_gpu)
 
     def apply_snapshot(self, snap) -> None:
         self.snapshot = snap
-        self.summary.set_full_text(snap.summary)
-        tip = snap.summary
+        line = snap.summary
+        if self.ollama_mode == odk.DOCKER and line.startswith("Local AI:"):
+            # which instance is in use, on the line that is always on screen
+            line = "Local AI (Docker):" + line[len("Local AI:"):]
+        self.summary.set_full_text(line)
+        tip = line + "\n" + odk.describe(self.ollama_mode)
         if snap.problem:
             tip += f"\n{snap.problem} {snap.fix}\nSee {snap.doc}"
         self.summary.setToolTip(tip)
@@ -659,13 +1439,14 @@ class LocalAIDock(QtWidgets.QFrame):
         self.note.setVisible(bool(text))
 
     # ---- the prompt -----------------------------------------------------------------
-    def _default_prompt(self, text, history, on_chunk, should_stop):
+    def _default_prompt(self, text, history, on_chunk, should_stop, env=None):
         # No model is named here on purpose: ``send_prompt`` then asks ``pick_model``, the
         # one place $LOCAL_AI_MODEL and the default are honoured, exactly as the command
         # line and the text UI do. Preferring whatever happens to be loaded would make the
         # dock answer from a different model than the other faces under the same settings.
+        # ``env`` is the chosen Ollama's (read on the window thread at Send).
         return lai.send_prompt(text, history=history, on_chunk=on_chunk,
-                               should_stop=should_stop)
+                               should_stop=should_stop, env=env)
 
     def send(self) -> bool:
         """Send the prompt line to the model on a worker thread. False if nothing was sent."""
@@ -685,11 +1466,17 @@ class LocalAIDock(QtWidgets.QFrame):
         history = list(self._history)
         q = self._threads
         born = self._clears
+        env = self._env()
+        default = self._prompt_fn == self._default_prompt
 
         def work():
             try:
-                answer = self._prompt_fn(text, history, lambda c: q.put("chunk", (born, c)),
-                                     lambda: stop.is_set() or alive.is_set())
+                chunk = lambda c: q.put("chunk", (born, c))          # noqa: E731
+                stopping = lambda: stop.is_set() or alive.is_set()     # noqa: E731
+                if default:
+                    answer = self._default_prompt(text, history, chunk, stopping, env=env)
+                else:
+                    answer = self._prompt_fn(text, history, chunk, stopping)
                 q.put("done", (born, text, answer))
             except Exception as exc:      # noqa: BLE001 — shown to the person, as a sentence
                 q.put("error", (born, str(exc) or exc.__class__.__name__))
@@ -727,12 +1514,41 @@ class LocalAIDock(QtWidgets.QFrame):
         self._say("")
 
     # ---- the buttons ----------------------------------------------------------------
+    def _worker_env(self, ctx) -> dict:
+        """What the queue worker is started with beyond the Ollama address: the checkouts
+        folder (draft.sh's HUGMESH_REPOS_ROOT) and the project-context file its agents
+        read (HUGMESH_AGENT_CONTEXT, written fresh here with this mesh's domains, and
+        written again by draft.sh before each agent). The same core call the shell's
+        `local-ai.sh start` makes when the text UI or a terminal starts the worker.
+        Runs on the start thread."""
+        env = self._env()
+        return actx.worker_env(self.generator_dir, ollama=odk.describe(self.ollama_mode),
+                               source_mode=ctx.source_mode, source_dir=ctx.source_dir,
+                               rows=ctx.domain_rows, mesh=ctx.mesh, environ=env)
+
+    def _default_start_now(self):
+        """The default start when no ``start_fn`` was injected: built at press time by
+        :meth:`start_assistant` (it must read the page on the window thread)."""
+        return self._make_default_start()()
+
+    def _make_default_start(self):
+        ctx = self._agent_context()               # widgets: read HERE, on the window thread
+        mode = self.ollama_mode
+        gen = self.generator_dir
+
+        def run():
+            extra = self._worker_env(ctx)
+            return odk.start_assistant(gen, mode, extra_env=extra)
+        return run
+
     def start_assistant(self) -> None:
-        """Start the local Ollama and the queue worker; never blocks, never a dialog."""
+        """Start the local Ollama (system or Docker) and the queue worker; never blocks,
+        never a dialog."""
         self.start_btn.setEnabled(False)
         self.start_btn.setText("Starting…")
         self._threads.in_flight.discard("start")
-        self._threads.submit("start", self._start_fn)
+        fn = self._start_fn if self._custom_start else self._make_default_start()
+        self._threads.submit("start", fn)
 
     def show_current_work(self):
         if self.work_window is None:
@@ -760,6 +1576,22 @@ class LocalAIDock(QtWidgets.QFrame):
                 self.apply_snapshot(value)
             else:
                 self.summary.set_full_text(f"Local AI: status unavailable ({error})")
+        elif tag == "docker-state":
+            if error is None:
+                self.docker_state = value
+                self._render_instance()
+        elif tag == "gpu":
+            if error is None:
+                self.gpu = value
+                self._render_instance()
+        elif tag in ("docker-start", "docker-stop"):
+            ok = error is None and value is not None and value.ok
+            msg = value.message if value is not None else str(error)
+            self._say(msg, 30, warn=not ok)
+            if self._auto_poll:
+                self._threads.submit("docker-state", odk.state)
+            QtCore.QTimer.singleShot(1500, self.refresh)
+            self._render_instance()
         elif tag == "chunk":
             born, piece = value
             if born != self._clears:
@@ -796,10 +1628,18 @@ class LocalAIDock(QtWidgets.QFrame):
             else:
                 # Could not start it from here: open the work window, which shows the
                 # exact command to run yourself.
-                cmd = res.command if res is not None else lai.commands(self.generator_dir)["start"]
+                cmd = (res.command if res is not None
+                       else odk.commands_for(self.generator_dir, self.ollama_mode)["start"])
                 why = res.message if res is not None else str(error)
                 self._say(f"{why} Run it yourself: {cmd}", 60, warn=True)
                 self.show_current_work()
+
+
+class _SessionRef:
+    """What StudioShell.open_build_window reads from a session: its id."""
+
+    def __init__(self, sid: str):
+        self.id = sid
 
 
 # ── mounting on a window ─────────────────────────────────────────────────────────────
@@ -862,14 +1702,19 @@ class _DockMount(QtCore.QObject):
 
 
 def mount_dock(wizard, generator_dir: str, **kw) -> LocalAIDock:
-    """Add the Local AI dock to a Studio window. Idempotent: a second call returns the
-    dock the window already has."""
+    """Add the Studio panel to a Studio window. Idempotent: a second call returns the
+    dock the window already has. The window's local-mesh page (when it has one) hands
+    its Actions box, running-mesh monitor and run view to the panel here."""
     existing = getattr(wizard, "local_ai_dock", None)
     if existing is not None:
         return existing
     dock = LocalAIDock(generator_dir, parent=wizard, **kw)
     wizard.local_ai_dock = dock
     wizard._local_ai_mount = _DockMount(wizard, dock)
+    try:
+        dock.attach_mesh_page(getattr(wizard, "localmesh_page", None))
+    except Exception:
+        _log_swallowed("mount_dock(attach_mesh_page)")
     wizard._local_ai_mount.relayout()
     dock.show()
     return dock

@@ -17,9 +17,9 @@
 # Games platform — the ACCESS MATRIX: every seeded persona against every catalogued
 # function of this service.
 #
-# 32 personas x 6 functions = 192 cells.
-# 5 of 6 function probe paths are DERIVED from a committed artefact;
-# 1 are ASSERTED (no artefact pins them yet) — see the FUNCTIONS entry's
+# 32 personas x 8 functions = 256 cells.
+# 8 of 8 function probe paths are DERIVED from a committed artefact;
+# 0 are ASSERTED (no artefact pins them yet) — see the FUNCTIONS entry's
 # `source` field, which the function-catalogue feature pins row by row.
 #
 # COLUMNS
@@ -40,194 +40,258 @@ Feature: Games platform — every persona against every function
 
     Examples:
       | role                         | function                 | outcome  | pattern                  | source                         |
-      | admin@hugmesh.net            | games.list               | refused  | (none — default deny)    | extra-personas-sh              |
-      | admin@hugmesh.net            | games.launch             | refused  | (none — default deny)    | extra-personas-sh              |
+      | admin@hugmesh.net            | games.list               | admitted | /games/**                | extra-personas-sh              |
+      | admin@hugmesh.net            | games.launch             | admitted | /games/**                | extra-personas-sh              |
+      | admin@hugmesh.net            | games.member-api         | admitted | /games/api/**            | extra-personas-sh              |
+      | admin@hugmesh.net            | games.admin-api          | refused  | /games/api/admin/**      | extra-personas-sh              |
       | admin@hugmesh.net            | games.instance-lifecycle | admitted | /games/**                | extra-personas-sh              |
       | admin@hugmesh.net            | games.server-fleet       | admitted | /games/servers/**        | extra-personas-sh              |
       | admin@hugmesh.net            | games.admin-console      | refused  | /games/admin/**          | extra-personas-sh              |
       | admin@hugmesh.net            | games.services-runner    | refused  | /admin/games-services/** | extra-personas-sh              |
-      | alice@gmail.com              | games.list               | refused  | (none — default deny)    | extra-personas-sh              |
-      | alice@gmail.com              | games.launch             | refused  | (none — default deny)    | extra-personas-sh              |
+      | alice@gmail.com              | games.list               | refused  | /games/**                | extra-personas-sh              |
+      | alice@gmail.com              | games.launch             | refused  | /games/**                | extra-personas-sh              |
+      | alice@gmail.com              | games.member-api         | refused  | /games/api/**            | extra-personas-sh              |
+      | alice@gmail.com              | games.admin-api          | refused  | /games/api/admin/**      | extra-personas-sh              |
       | alice@gmail.com              | games.instance-lifecycle | refused  | /games/**                | extra-personas-sh              |
       | alice@gmail.com              | games.server-fleet       | refused  | /games/servers/**        | extra-personas-sh              |
       | alice@gmail.com              | games.admin-console      | refused  | /games/admin/**          | extra-personas-sh              |
       | alice@gmail.com              | games.services-runner    | refused  | /admin/games-services/** | extra-personas-sh              |
-      | bob@gmail.com                | games.list               | refused  | (none — default deny)    | extra-personas-sh              |
-      | bob@gmail.com                | games.launch             | refused  | (none — default deny)    | extra-personas-sh              |
+      | bob@gmail.com                | games.list               | refused  | /games/**                | extra-personas-sh              |
+      | bob@gmail.com                | games.launch             | refused  | /games/**                | extra-personas-sh              |
+      | bob@gmail.com                | games.member-api         | refused  | /games/api/**            | extra-personas-sh              |
+      | bob@gmail.com                | games.admin-api          | refused  | /games/api/admin/**      | extra-personas-sh              |
       | bob@gmail.com                | games.instance-lifecycle | refused  | /games/**                | extra-personas-sh              |
       | bob@gmail.com                | games.server-fleet       | refused  | /games/servers/**        | extra-personas-sh              |
       | bob@gmail.com                | games.admin-console      | refused  | /games/admin/**          | extra-personas-sh              |
       | bob@gmail.com                | games.services-runner    | refused  | /admin/games-services/** | extra-personas-sh              |
-      | carol@gmail.com              | games.list               | refused  | (none — default deny)    | extra-personas-sh              |
-      | carol@gmail.com              | games.launch             | refused  | (none — default deny)    | extra-personas-sh              |
+      | carol@gmail.com              | games.list               | refused  | /games/**                | extra-personas-sh              |
+      | carol@gmail.com              | games.launch             | refused  | /games/**                | extra-personas-sh              |
+      | carol@gmail.com              | games.member-api         | refused  | /games/api/**            | extra-personas-sh              |
+      | carol@gmail.com              | games.admin-api          | refused  | /games/api/admin/**      | extra-personas-sh              |
       | carol@gmail.com              | games.instance-lifecycle | refused  | /games/**                | extra-personas-sh              |
       | carol@gmail.com              | games.server-fleet       | refused  | /games/servers/**        | extra-personas-sh              |
       | carol@gmail.com              | games.admin-console      | refused  | /games/admin/**          | extra-personas-sh              |
       | carol@gmail.com              | games.services-runner    | refused  | /admin/games-services/** | extra-personas-sh              |
-      | dave@gmail.com               | games.list               | refused  | (none — default deny)    | extra-personas-sh              |
-      | dave@gmail.com               | games.launch             | refused  | (none — default deny)    | extra-personas-sh              |
+      | dave@gmail.com               | games.list               | refused  | /games/**                | extra-personas-sh              |
+      | dave@gmail.com               | games.launch             | refused  | /games/**                | extra-personas-sh              |
+      | dave@gmail.com               | games.member-api         | refused  | /games/api/**            | extra-personas-sh              |
+      | dave@gmail.com               | games.admin-api          | refused  | /games/api/admin/**      | extra-personas-sh              |
       | dave@gmail.com               | games.instance-lifecycle | refused  | /games/**                | extra-personas-sh              |
       | dave@gmail.com               | games.server-fleet       | refused  | /games/servers/**        | extra-personas-sh              |
       | dave@gmail.com               | games.admin-console      | refused  | /games/admin/**          | extra-personas-sh              |
       | dave@gmail.com               | games.services-runner    | refused  | /admin/games-services/** | extra-personas-sh              |
-      | dragoneer                    | games.list               | refused  | (none — default deny)    | extra-personas-sh              |
-      | dragoneer                    | games.launch             | refused  | (none — default deny)    | extra-personas-sh              |
+      | dragoneer                    | games.list               | refused  | /games/**                | extra-personas-sh              |
+      | dragoneer                    | games.launch             | refused  | /games/**                | extra-personas-sh              |
+      | dragoneer                    | games.member-api         | refused  | /games/api/**            | extra-personas-sh              |
+      | dragoneer                    | games.admin-api          | refused  | /games/api/admin/**      | extra-personas-sh              |
       | dragoneer                    | games.instance-lifecycle | refused  | /games/**                | extra-personas-sh              |
       | dragoneer                    | games.server-fleet       | refused  | /games/servers/**        | extra-personas-sh              |
       | dragoneer                    | games.admin-console      | refused  | /games/admin/**          | extra-personas-sh              |
       | dragoneer                    | games.services-runner    | refused  | /admin/games-services/** | extra-personas-sh              |
-      | e2e-admin                    | games.list               | refused  | (none — default deny)    | seed-accounts-sh+ts-catalogue  |
-      | e2e-admin                    | games.launch             | refused  | (none — default deny)    | seed-accounts-sh+ts-catalogue  |
+      | e2e-admin                    | games.list               | admitted | /games/**                | seed-accounts-sh+ts-catalogue  |
+      | e2e-admin                    | games.launch             | admitted | /games/**                | seed-accounts-sh+ts-catalogue  |
+      | e2e-admin                    | games.member-api         | admitted | /games/api/**            | seed-accounts-sh+ts-catalogue  |
+      | e2e-admin                    | games.admin-api          | refused  | /games/api/admin/**      | seed-accounts-sh+ts-catalogue  |
       | e2e-admin                    | games.instance-lifecycle | admitted | /games/**                | seed-accounts-sh+ts-catalogue  |
       | e2e-admin                    | games.server-fleet       | admitted | /games/servers/**        | seed-accounts-sh+ts-catalogue  |
       | e2e-admin                    | games.admin-console      | refused  | /games/admin/**          | seed-accounts-sh+ts-catalogue  |
       | e2e-admin                    | games.services-runner    | refused  | /admin/games-services/** | seed-accounts-sh+ts-catalogue  |
-      | e2e-adminonly                | games.list               | refused  | (none — default deny)    | seed-accounts-sh+ts-catalogue  |
-      | e2e-adminonly                | games.launch             | refused  | (none — default deny)    | seed-accounts-sh+ts-catalogue  |
+      | e2e-adminonly                | games.list               | admitted | /games/**                | seed-accounts-sh+ts-catalogue  |
+      | e2e-adminonly                | games.launch             | admitted | /games/**                | seed-accounts-sh+ts-catalogue  |
+      | e2e-adminonly                | games.member-api         | admitted | /games/api/**            | seed-accounts-sh+ts-catalogue  |
+      | e2e-adminonly                | games.admin-api          | refused  | /games/api/admin/**      | seed-accounts-sh+ts-catalogue  |
       | e2e-adminonly                | games.instance-lifecycle | admitted | /games/**                | seed-accounts-sh+ts-catalogue  |
       | e2e-adminonly                | games.server-fleet       | admitted | /games/servers/**        | seed-accounts-sh+ts-catalogue  |
       | e2e-adminonly                | games.admin-console      | refused  | /games/admin/**          | seed-accounts-sh+ts-catalogue  |
       | e2e-adminonly                | games.services-runner    | refused  | /admin/games-services/** | seed-accounts-sh+ts-catalogue  |
-      | e2e-banned                   | games.list               | refused  | (none — default deny)    | extra-personas-sh              |
-      | e2e-banned                   | games.launch             | refused  | (none — default deny)    | extra-personas-sh              |
+      | e2e-banned                   | games.list               | refused  | /games/**                | extra-personas-sh              |
+      | e2e-banned                   | games.launch             | refused  | /games/**                | extra-personas-sh              |
+      | e2e-banned                   | games.member-api         | refused  | /games/api/**            | extra-personas-sh              |
+      | e2e-banned                   | games.admin-api          | refused  | /games/api/admin/**      | extra-personas-sh              |
       | e2e-banned                   | games.instance-lifecycle | refused  | /games/**                | extra-personas-sh              |
       | e2e-banned                   | games.server-fleet       | refused  | /games/servers/**        | extra-personas-sh              |
       | e2e-banned                   | games.admin-console      | refused  | /games/admin/**          | extra-personas-sh              |
       | e2e-banned                   | games.services-runner    | refused  | /admin/games-services/** | extra-personas-sh              |
-      | e2e-denied                   | games.list               | refused  | (none — default deny)    | seed-accounts-sh+ts-catalogue  |
-      | e2e-denied                   | games.launch             | refused  | (none — default deny)    | seed-accounts-sh+ts-catalogue  |
+      | e2e-denied                   | games.list               | refused  | /games/**                | seed-accounts-sh+ts-catalogue  |
+      | e2e-denied                   | games.launch             | refused  | /games/**                | seed-accounts-sh+ts-catalogue  |
+      | e2e-denied                   | games.member-api         | refused  | /games/api/**            | seed-accounts-sh+ts-catalogue  |
+      | e2e-denied                   | games.admin-api          | refused  | /games/api/admin/**      | seed-accounts-sh+ts-catalogue  |
       | e2e-denied                   | games.instance-lifecycle | refused  | /games/**                | seed-accounts-sh+ts-catalogue  |
       | e2e-denied                   | games.server-fleet       | refused  | /games/servers/**        | seed-accounts-sh+ts-catalogue  |
       | e2e-denied                   | games.admin-console      | refused  | /games/admin/**          | seed-accounts-sh+ts-catalogue  |
       | e2e-denied                   | games.services-runner    | refused  | /admin/games-services/** | seed-accounts-sh+ts-catalogue  |
-      | e2e-fleet                    | games.list               | refused  | (none — default deny)    | extra-personas-sh              |
-      | e2e-fleet                    | games.launch             | refused  | (none — default deny)    | extra-personas-sh              |
+      | e2e-fleet                    | games.list               | refused  | /games/**                | extra-personas-sh              |
+      | e2e-fleet                    | games.launch             | refused  | /games/**                | extra-personas-sh              |
+      | e2e-fleet                    | games.member-api         | refused  | /games/api/**            | extra-personas-sh              |
+      | e2e-fleet                    | games.admin-api          | refused  | /games/api/admin/**      | extra-personas-sh              |
       | e2e-fleet                    | games.instance-lifecycle | refused  | /games/**                | extra-personas-sh              |
       | e2e-fleet                    | games.server-fleet       | refused  | /games/servers/**        | extra-personas-sh              |
       | e2e-fleet                    | games.admin-console      | refused  | /games/admin/**          | extra-personas-sh              |
       | e2e-fleet                    | games.services-runner    | refused  | /admin/games-services/** | extra-personas-sh              |
-      | e2e-forum                    | games.list               | refused  | (none — default deny)    | seed-accounts-sh+ts-catalogue  |
-      | e2e-forum                    | games.launch             | refused  | (none — default deny)    | seed-accounts-sh+ts-catalogue  |
+      | e2e-forum                    | games.list               | refused  | /games/**                | seed-accounts-sh+ts-catalogue  |
+      | e2e-forum                    | games.launch             | refused  | /games/**                | seed-accounts-sh+ts-catalogue  |
+      | e2e-forum                    | games.member-api         | refused  | /games/api/**            | seed-accounts-sh+ts-catalogue  |
+      | e2e-forum                    | games.admin-api          | refused  | /games/api/admin/**      | seed-accounts-sh+ts-catalogue  |
       | e2e-forum                    | games.instance-lifecycle | refused  | /games/**                | seed-accounts-sh+ts-catalogue  |
       | e2e-forum                    | games.server-fleet       | refused  | /games/servers/**        | seed-accounts-sh+ts-catalogue  |
       | e2e-forum                    | games.admin-console      | refused  | /games/admin/**          | seed-accounts-sh+ts-catalogue  |
       | e2e-forum                    | games.services-runner    | refused  | /admin/games-services/** | seed-accounts-sh+ts-catalogue  |
-      | e2e-gamesadmin               | games.list               | refused  | (none — default deny)    | seed-accounts-sh+ts-catalogue  |
-      | e2e-gamesadmin               | games.launch             | refused  | (none — default deny)    | seed-accounts-sh+ts-catalogue  |
+      | e2e-gamesadmin               | games.list               | admitted | /games/**                | seed-accounts-sh+ts-catalogue  |
+      | e2e-gamesadmin               | games.launch             | admitted | /games/**                | seed-accounts-sh+ts-catalogue  |
+      | e2e-gamesadmin               | games.member-api         | admitted | /games/api/**            | seed-accounts-sh+ts-catalogue  |
+      | e2e-gamesadmin               | games.admin-api          | admitted | /games/api/admin/**      | seed-accounts-sh+ts-catalogue  |
       | e2e-gamesadmin               | games.instance-lifecycle | admitted | /games/**                | seed-accounts-sh+ts-catalogue  |
       | e2e-gamesadmin               | games.server-fleet       | admitted | /games/servers/**        | seed-accounts-sh+ts-catalogue  |
       | e2e-gamesadmin               | games.admin-console      | admitted | /games/admin/**          | seed-accounts-sh+ts-catalogue  |
       | e2e-gamesadmin               | games.services-runner    | refused  | /admin/games-services/** | seed-accounts-sh+ts-catalogue  |
-      | e2e-gamesonly                | games.list               | refused  | (none — default deny)    | seed-accounts-sh+ts-catalogue  |
-      | e2e-gamesonly                | games.launch             | refused  | (none — default deny)    | seed-accounts-sh+ts-catalogue  |
+      | e2e-gamesonly                | games.list               | admitted | /games/**                | seed-accounts-sh+ts-catalogue  |
+      | e2e-gamesonly                | games.launch             | admitted | /games/**                | seed-accounts-sh+ts-catalogue  |
+      | e2e-gamesonly                | games.member-api         | admitted | /games/api/**            | seed-accounts-sh+ts-catalogue  |
+      | e2e-gamesonly                | games.admin-api          | refused  | /games/api/admin/**      | seed-accounts-sh+ts-catalogue  |
       | e2e-gamesonly                | games.instance-lifecycle | admitted | /games/**                | seed-accounts-sh+ts-catalogue  |
       | e2e-gamesonly                | games.server-fleet       | refused  | /games/servers/**        | seed-accounts-sh+ts-catalogue  |
       | e2e-gamesonly                | games.admin-console      | refused  | /games/admin/**          | seed-accounts-sh+ts-catalogue  |
       | e2e-gamesonly                | games.services-runner    | refused  | /admin/games-services/** | seed-accounts-sh+ts-catalogue  |
-      | e2e-mastodon                 | games.list               | refused  | (none — default deny)    | seed-accounts-sh+ts-catalogue  |
-      | e2e-mastodon                 | games.launch             | refused  | (none — default deny)    | seed-accounts-sh+ts-catalogue  |
+      | e2e-mastodon                 | games.list               | refused  | /games/**                | seed-accounts-sh+ts-catalogue  |
+      | e2e-mastodon                 | games.launch             | refused  | /games/**                | seed-accounts-sh+ts-catalogue  |
+      | e2e-mastodon                 | games.member-api         | refused  | /games/api/**            | seed-accounts-sh+ts-catalogue  |
+      | e2e-mastodon                 | games.admin-api          | refused  | /games/api/admin/**      | seed-accounts-sh+ts-catalogue  |
       | e2e-mastodon                 | games.instance-lifecycle | refused  | /games/**                | seed-accounts-sh+ts-catalogue  |
       | e2e-mastodon                 | games.server-fleet       | refused  | /games/servers/**        | seed-accounts-sh+ts-catalogue  |
       | e2e-mastodon                 | games.admin-console      | refused  | /games/admin/**          | seed-accounts-sh+ts-catalogue  |
       | e2e-mastodon                 | games.services-runner    | refused  | /admin/games-services/** | seed-accounts-sh+ts-catalogue  |
-      | e2e-mastodon-domainlocked    | games.list               | refused  | (none — default deny)    | seed-accounts-sh+ts-catalogue  |
-      | e2e-mastodon-domainlocked    | games.launch             | refused  | (none — default deny)    | seed-accounts-sh+ts-catalogue  |
+      | e2e-mastodon-domainlocked    | games.list               | refused  | /games/**                | seed-accounts-sh+ts-catalogue  |
+      | e2e-mastodon-domainlocked    | games.launch             | refused  | /games/**                | seed-accounts-sh+ts-catalogue  |
+      | e2e-mastodon-domainlocked    | games.member-api         | refused  | /games/api/**            | seed-accounts-sh+ts-catalogue  |
+      | e2e-mastodon-domainlocked    | games.admin-api          | refused  | /games/api/admin/**      | seed-accounts-sh+ts-catalogue  |
       | e2e-mastodon-domainlocked    | games.instance-lifecycle | refused  | /games/**                | seed-accounts-sh+ts-catalogue  |
       | e2e-mastodon-domainlocked    | games.server-fleet       | refused  | /games/servers/**        | seed-accounts-sh+ts-catalogue  |
       | e2e-mastodon-domainlocked    | games.admin-console      | refused  | /games/admin/**          | seed-accounts-sh+ts-catalogue  |
       | e2e-mastodon-domainlocked    | games.services-runner    | refused  | /admin/games-services/** | seed-accounts-sh+ts-catalogue  |
-      | e2e-mastodon-external-client | games.list               | refused  | (none — default deny)    | seed-accounts-sh+ts-catalogue  |
-      | e2e-mastodon-external-client | games.launch             | refused  | (none — default deny)    | seed-accounts-sh+ts-catalogue  |
+      | e2e-mastodon-external-client | games.list               | refused  | /games/**                | seed-accounts-sh+ts-catalogue  |
+      | e2e-mastodon-external-client | games.launch             | refused  | /games/**                | seed-accounts-sh+ts-catalogue  |
+      | e2e-mastodon-external-client | games.member-api         | refused  | /games/api/**            | seed-accounts-sh+ts-catalogue  |
+      | e2e-mastodon-external-client | games.admin-api          | refused  | /games/api/admin/**      | seed-accounts-sh+ts-catalogue  |
       | e2e-mastodon-external-client | games.instance-lifecycle | refused  | /games/**                | seed-accounts-sh+ts-catalogue  |
       | e2e-mastodon-external-client | games.server-fleet       | refused  | /games/servers/**        | seed-accounts-sh+ts-catalogue  |
       | e2e-mastodon-external-client | games.admin-console      | refused  | /games/admin/**          | seed-accounts-sh+ts-catalogue  |
       | e2e-mastodon-external-client | games.services-runner    | refused  | /admin/games-services/** | seed-accounts-sh+ts-catalogue  |
-      | e2e-matrix                   | games.list               | refused  | (none — default deny)    | seed-accounts-sh+ts-catalogue  |
-      | e2e-matrix                   | games.launch             | refused  | (none — default deny)    | seed-accounts-sh+ts-catalogue  |
+      | e2e-matrix                   | games.list               | refused  | /games/**                | seed-accounts-sh+ts-catalogue  |
+      | e2e-matrix                   | games.launch             | refused  | /games/**                | seed-accounts-sh+ts-catalogue  |
+      | e2e-matrix                   | games.member-api         | refused  | /games/api/**            | seed-accounts-sh+ts-catalogue  |
+      | e2e-matrix                   | games.admin-api          | refused  | /games/api/admin/**      | seed-accounts-sh+ts-catalogue  |
       | e2e-matrix                   | games.instance-lifecycle | refused  | /games/**                | seed-accounts-sh+ts-catalogue  |
       | e2e-matrix                   | games.server-fleet       | refused  | /games/servers/**        | seed-accounts-sh+ts-catalogue  |
       | e2e-matrix                   | games.admin-console      | refused  | /games/admin/**          | seed-accounts-sh+ts-catalogue  |
       | e2e-matrix                   | games.services-runner    | refused  | /admin/games-services/** | seed-accounts-sh+ts-catalogue  |
-      | e2e-matrix-domainlocked      | games.list               | refused  | (none — default deny)    | seed-accounts-sh+ts-catalogue  |
-      | e2e-matrix-domainlocked      | games.launch             | refused  | (none — default deny)    | seed-accounts-sh+ts-catalogue  |
+      | e2e-matrix-domainlocked      | games.list               | refused  | /games/**                | seed-accounts-sh+ts-catalogue  |
+      | e2e-matrix-domainlocked      | games.launch             | refused  | /games/**                | seed-accounts-sh+ts-catalogue  |
+      | e2e-matrix-domainlocked      | games.member-api         | refused  | /games/api/**            | seed-accounts-sh+ts-catalogue  |
+      | e2e-matrix-domainlocked      | games.admin-api          | refused  | /games/api/admin/**      | seed-accounts-sh+ts-catalogue  |
       | e2e-matrix-domainlocked      | games.instance-lifecycle | refused  | /games/**                | seed-accounts-sh+ts-catalogue  |
       | e2e-matrix-domainlocked      | games.server-fleet       | refused  | /games/servers/**        | seed-accounts-sh+ts-catalogue  |
       | e2e-matrix-domainlocked      | games.admin-console      | refused  | /games/admin/**          | seed-accounts-sh+ts-catalogue  |
       | e2e-matrix-domainlocked      | games.services-runner    | refused  | /admin/games-services/** | seed-accounts-sh+ts-catalogue  |
-      | e2e-matrix-external-client   | games.list               | refused  | (none — default deny)    | seed-accounts-sh+ts-catalogue  |
-      | e2e-matrix-external-client   | games.launch             | refused  | (none — default deny)    | seed-accounts-sh+ts-catalogue  |
+      | e2e-matrix-external-client   | games.list               | refused  | /games/**                | seed-accounts-sh+ts-catalogue  |
+      | e2e-matrix-external-client   | games.launch             | refused  | /games/**                | seed-accounts-sh+ts-catalogue  |
+      | e2e-matrix-external-client   | games.member-api         | refused  | /games/api/**            | seed-accounts-sh+ts-catalogue  |
+      | e2e-matrix-external-client   | games.admin-api          | refused  | /games/api/admin/**      | seed-accounts-sh+ts-catalogue  |
       | e2e-matrix-external-client   | games.instance-lifecycle | refused  | /games/**                | seed-accounts-sh+ts-catalogue  |
       | e2e-matrix-external-client   | games.server-fleet       | refused  | /games/servers/**        | seed-accounts-sh+ts-catalogue  |
       | e2e-matrix-external-client   | games.admin-console      | refused  | /games/admin/**          | seed-accounts-sh+ts-catalogue  |
       | e2e-matrix-external-client   | games.services-runner    | refused  | /admin/games-services/** | seed-accounts-sh+ts-catalogue  |
-      | e2e-matrix-groupchat         | games.list               | refused  | (none — default deny)    | seed-accounts-sh+ts-catalogue  |
-      | e2e-matrix-groupchat         | games.launch             | refused  | (none — default deny)    | seed-accounts-sh+ts-catalogue  |
+      | e2e-matrix-groupchat         | games.list               | refused  | /games/**                | seed-accounts-sh+ts-catalogue  |
+      | e2e-matrix-groupchat         | games.launch             | refused  | /games/**                | seed-accounts-sh+ts-catalogue  |
+      | e2e-matrix-groupchat         | games.member-api         | refused  | /games/api/**            | seed-accounts-sh+ts-catalogue  |
+      | e2e-matrix-groupchat         | games.admin-api          | refused  | /games/api/admin/**      | seed-accounts-sh+ts-catalogue  |
       | e2e-matrix-groupchat         | games.instance-lifecycle | refused  | /games/**                | seed-accounts-sh+ts-catalogue  |
       | e2e-matrix-groupchat         | games.server-fleet       | refused  | /games/servers/**        | seed-accounts-sh+ts-catalogue  |
       | e2e-matrix-groupchat         | games.admin-console      | refused  | /games/admin/**          | seed-accounts-sh+ts-catalogue  |
       | e2e-matrix-groupchat         | games.services-runner    | refused  | /admin/games-services/** | seed-accounts-sh+ts-catalogue  |
-      | e2e-mod                      | games.list               | refused  | (none — default deny)    | seed-accounts-sh+ts-catalogue  |
-      | e2e-mod                      | games.launch             | refused  | (none — default deny)    | seed-accounts-sh+ts-catalogue  |
+      | e2e-mod                      | games.list               | admitted | /games/**                | seed-accounts-sh+ts-catalogue  |
+      | e2e-mod                      | games.launch             | admitted | /games/**                | seed-accounts-sh+ts-catalogue  |
+      | e2e-mod                      | games.member-api         | admitted | /games/api/**            | seed-accounts-sh+ts-catalogue  |
+      | e2e-mod                      | games.admin-api          | refused  | /games/api/admin/**      | seed-accounts-sh+ts-catalogue  |
       | e2e-mod                      | games.instance-lifecycle | admitted | /games/**                | seed-accounts-sh+ts-catalogue  |
       | e2e-mod                      | games.server-fleet       | admitted | /games/servers/**        | seed-accounts-sh+ts-catalogue  |
       | e2e-mod                      | games.admin-console      | refused  | /games/admin/**          | seed-accounts-sh+ts-catalogue  |
       | e2e-mod                      | games.services-runner    | refused  | /admin/games-services/** | seed-accounts-sh+ts-catalogue  |
-      | e2e-pending                  | games.list               | refused  | (none — default deny)    | seed-accounts-sh+ts-catalogue  |
-      | e2e-pending                  | games.launch             | refused  | (none — default deny)    | seed-accounts-sh+ts-catalogue  |
+      | e2e-pending                  | games.list               | refused  | /games/**                | seed-accounts-sh+ts-catalogue  |
+      | e2e-pending                  | games.launch             | refused  | /games/**                | seed-accounts-sh+ts-catalogue  |
+      | e2e-pending                  | games.member-api         | refused  | /games/api/**            | seed-accounts-sh+ts-catalogue  |
+      | e2e-pending                  | games.admin-api          | refused  | /games/api/admin/**      | seed-accounts-sh+ts-catalogue  |
       | e2e-pending                  | games.instance-lifecycle | refused  | /games/**                | seed-accounts-sh+ts-catalogue  |
       | e2e-pending                  | games.server-fleet       | refused  | /games/servers/**        | seed-accounts-sh+ts-catalogue  |
       | e2e-pending                  | games.admin-console      | refused  | /games/admin/**          | seed-accounts-sh+ts-catalogue  |
       | e2e-pending                  | games.services-runner    | refused  | /admin/games-services/** | seed-accounts-sh+ts-catalogue  |
-      | e2e-superadmin               | games.list               | refused  | (none — default deny)    | extra-personas-sh+ts-catalogue |
-      | e2e-superadmin               | games.launch             | refused  | (none — default deny)    | extra-personas-sh+ts-catalogue |
+      | e2e-superadmin               | games.list               | refused  | /games/**                | extra-personas-sh+ts-catalogue |
+      | e2e-superadmin               | games.launch             | refused  | /games/**                | extra-personas-sh+ts-catalogue |
+      | e2e-superadmin               | games.member-api         | refused  | /games/api/**            | extra-personas-sh+ts-catalogue |
+      | e2e-superadmin               | games.admin-api          | refused  | /games/api/admin/**      | extra-personas-sh+ts-catalogue |
       | e2e-superadmin               | games.instance-lifecycle | refused  | /games/**                | extra-personas-sh+ts-catalogue |
       | e2e-superadmin               | games.server-fleet       | refused  | /games/servers/**        | extra-personas-sh+ts-catalogue |
       | e2e-superadmin               | games.admin-console      | refused  | /games/admin/**          | extra-personas-sh+ts-catalogue |
       | e2e-superadmin               | games.services-runner    | refused  | /admin/games-services/** | extra-personas-sh+ts-catalogue |
-      | e2e-suspended                | games.list               | refused  | (none — default deny)    | extra-personas-sh              |
-      | e2e-suspended                | games.launch             | refused  | (none — default deny)    | extra-personas-sh              |
+      | e2e-suspended                | games.list               | refused  | /games/**                | extra-personas-sh              |
+      | e2e-suspended                | games.launch             | refused  | /games/**                | extra-personas-sh              |
+      | e2e-suspended                | games.member-api         | refused  | /games/api/**            | extra-personas-sh              |
+      | e2e-suspended                | games.admin-api          | refused  | /games/api/admin/**      | extra-personas-sh              |
       | e2e-suspended                | games.instance-lifecycle | refused  | /games/**                | extra-personas-sh              |
       | e2e-suspended                | games.server-fleet       | refused  | /games/servers/**        | extra-personas-sh              |
       | e2e-suspended                | games.admin-console      | refused  | /games/admin/**          | extra-personas-sh              |
       | e2e-suspended                | games.services-runner    | refused  | /admin/games-services/** | extra-personas-sh              |
-      | e2e-user                     | games.list               | refused  | (none — default deny)    | seed-accounts-sh+ts-catalogue  |
-      | e2e-user                     | games.launch             | refused  | (none — default deny)    | seed-accounts-sh+ts-catalogue  |
+      | e2e-user                     | games.list               | refused  | /games/**                | seed-accounts-sh+ts-catalogue  |
+      | e2e-user                     | games.launch             | refused  | /games/**                | seed-accounts-sh+ts-catalogue  |
+      | e2e-user                     | games.member-api         | refused  | /games/api/**            | seed-accounts-sh+ts-catalogue  |
+      | e2e-user                     | games.admin-api          | refused  | /games/api/admin/**      | seed-accounts-sh+ts-catalogue  |
       | e2e-user                     | games.instance-lifecycle | refused  | /games/**                | seed-accounts-sh+ts-catalogue  |
       | e2e-user                     | games.server-fleet       | refused  | /games/servers/**        | seed-accounts-sh+ts-catalogue  |
       | e2e-user                     | games.admin-console      | refused  | /games/admin/**          | seed-accounts-sh+ts-catalogue  |
       | e2e-user                     | games.services-runner    | refused  | /admin/games-services/** | seed-accounts-sh+ts-catalogue  |
-      | eve@gmail.com                | games.list               | refused  | (none — default deny)    | extra-personas-sh              |
-      | eve@gmail.com                | games.launch             | refused  | (none — default deny)    | extra-personas-sh              |
+      | eve@gmail.com                | games.list               | refused  | /games/**                | extra-personas-sh              |
+      | eve@gmail.com                | games.launch             | refused  | /games/**                | extra-personas-sh              |
+      | eve@gmail.com                | games.member-api         | refused  | /games/api/**            | extra-personas-sh              |
+      | eve@gmail.com                | games.admin-api          | refused  | /games/api/admin/**      | extra-personas-sh              |
       | eve@gmail.com                | games.instance-lifecycle | refused  | /games/**                | extra-personas-sh              |
       | eve@gmail.com                | games.server-fleet       | refused  | /games/servers/**        | extra-personas-sh              |
       | eve@gmail.com                | games.admin-console      | refused  | /games/admin/**          | extra-personas-sh              |
       | eve@gmail.com                | games.services-runner    | refused  | /admin/games-services/** | extra-personas-sh              |
-      | frank@gmail.com              | games.list               | refused  | (none — default deny)    | extra-personas-sh              |
-      | frank@gmail.com              | games.launch             | refused  | (none — default deny)    | extra-personas-sh              |
+      | frank@gmail.com              | games.list               | refused  | /games/**                | extra-personas-sh              |
+      | frank@gmail.com              | games.launch             | refused  | /games/**                | extra-personas-sh              |
+      | frank@gmail.com              | games.member-api         | refused  | /games/api/**            | extra-personas-sh              |
+      | frank@gmail.com              | games.admin-api          | refused  | /games/api/admin/**      | extra-personas-sh              |
       | frank@gmail.com              | games.instance-lifecycle | refused  | /games/**                | extra-personas-sh              |
       | frank@gmail.com              | games.server-fleet       | refused  | /games/servers/**        | extra-personas-sh              |
       | frank@gmail.com              | games.admin-console      | refused  | /games/admin/**          | extra-personas-sh              |
       | frank@gmail.com              | games.services-runner    | refused  | /admin/games-services/** | extra-personas-sh              |
-      | rbac-approved@gmail.com      | games.list               | refused  | (none — default deny)    | extra-personas-sh              |
-      | rbac-approved@gmail.com      | games.launch             | refused  | (none — default deny)    | extra-personas-sh              |
+      | rbac-approved@gmail.com      | games.list               | refused  | /games/**                | extra-personas-sh              |
+      | rbac-approved@gmail.com      | games.launch             | refused  | /games/**                | extra-personas-sh              |
+      | rbac-approved@gmail.com      | games.member-api         | refused  | /games/api/**            | extra-personas-sh              |
+      | rbac-approved@gmail.com      | games.admin-api          | refused  | /games/api/admin/**      | extra-personas-sh              |
       | rbac-approved@gmail.com      | games.instance-lifecycle | refused  | /games/**                | extra-personas-sh              |
       | rbac-approved@gmail.com      | games.server-fleet       | refused  | /games/servers/**        | extra-personas-sh              |
       | rbac-approved@gmail.com      | games.admin-console      | refused  | /games/admin/**          | extra-personas-sh              |
       | rbac-approved@gmail.com      | games.services-runner    | refused  | /admin/games-services/** | extra-personas-sh              |
-      | rbac-login-user@gmail.com    | games.list               | refused  | (none — default deny)    | extra-personas-sh              |
-      | rbac-login-user@gmail.com    | games.launch             | refused  | (none — default deny)    | extra-personas-sh              |
+      | rbac-login-user@gmail.com    | games.list               | refused  | /games/**                | extra-personas-sh              |
+      | rbac-login-user@gmail.com    | games.launch             | refused  | /games/**                | extra-personas-sh              |
+      | rbac-login-user@gmail.com    | games.member-api         | refused  | /games/api/**            | extra-personas-sh              |
+      | rbac-login-user@gmail.com    | games.admin-api          | refused  | /games/api/admin/**      | extra-personas-sh              |
       | rbac-login-user@gmail.com    | games.instance-lifecycle | refused  | /games/**                | extra-personas-sh              |
       | rbac-login-user@gmail.com    | games.server-fleet       | refused  | /games/servers/**        | extra-personas-sh              |
       | rbac-login-user@gmail.com    | games.admin-console      | refused  | /games/admin/**          | extra-personas-sh              |
       | rbac-login-user@gmail.com    | games.services-runner    | refused  | /admin/games-services/** | extra-personas-sh              |
-      | rbac-pending@gmail.com       | games.list               | refused  | (none — default deny)    | extra-personas-sh              |
-      | rbac-pending@gmail.com       | games.launch             | refused  | (none — default deny)    | extra-personas-sh              |
+      | rbac-pending@gmail.com       | games.list               | refused  | /games/**                | extra-personas-sh              |
+      | rbac-pending@gmail.com       | games.launch             | refused  | /games/**                | extra-personas-sh              |
+      | rbac-pending@gmail.com       | games.member-api         | refused  | /games/api/**            | extra-personas-sh              |
+      | rbac-pending@gmail.com       | games.admin-api          | refused  | /games/api/admin/**      | extra-personas-sh              |
       | rbac-pending@gmail.com       | games.instance-lifecycle | refused  | /games/**                | extra-personas-sh              |
       | rbac-pending@gmail.com       | games.server-fleet       | refused  | /games/servers/**        | extra-personas-sh              |
       | rbac-pending@gmail.com       | games.admin-console      | refused  | /games/admin/**          | extra-personas-sh              |
       | rbac-pending@gmail.com       | games.services-runner    | refused  | /admin/games-services/** | extra-personas-sh              |
-      | rbac-plain@gmail.com         | games.list               | refused  | (none — default deny)    | extra-personas-sh              |
-      | rbac-plain@gmail.com         | games.launch             | refused  | (none — default deny)    | extra-personas-sh              |
+      | rbac-plain@gmail.com         | games.list               | refused  | /games/**                | extra-personas-sh              |
+      | rbac-plain@gmail.com         | games.launch             | refused  | /games/**                | extra-personas-sh              |
+      | rbac-plain@gmail.com         | games.member-api         | refused  | /games/api/**            | extra-personas-sh              |
+      | rbac-plain@gmail.com         | games.admin-api          | refused  | /games/api/admin/**      | extra-personas-sh              |
       | rbac-plain@gmail.com         | games.instance-lifecycle | refused  | /games/**                | extra-personas-sh              |
       | rbac-plain@gmail.com         | games.server-fleet       | refused  | /games/servers/**        | extra-personas-sh              |
       | rbac-plain@gmail.com         | games.admin-console      | refused  | /games/admin/**          | extra-personas-sh              |

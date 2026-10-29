@@ -38,15 +38,17 @@ import argparse
 import json
 import os
 import re
+import socket
 import subprocess
 import sys
 import time
-from dataclasses import asdict, dataclass, fields
+from dataclasses import asdict, dataclass, field, fields
 from typing import NamedTuple
 
-from . import own_casdoor, theme
-from .config import IDP_CHOICES, IDP_LABELS, _IDP_CLIENT_ID_RE, _IDP_URL_RE, \
-    github_org_problem, idp_effective_jwks
+from . import brand_model, domain_reach, look_serving, own_casdoor, reach_apply, theme
+from .config import DOMAIN_FIELDS, IDP_CHOICES, IDP_LABELS, _IDP_CLIENT_ID_RE, _IDP_URL_RE, \
+    domain_signin_problems, effective_signin, github_org_problem, has_external_signin, \
+    idp_effective_jwks
 from .local_mesh import ENV_AUTHKEY, LocalMeshConfig, LocalMeshNode
 from .local_services import (
     FEDERATION_DISABLE_ENV, FEDERATION_ENABLE_ENV, PROFILE_AKKOMA, PROFILE_ANUBIS,
@@ -55,6 +57,7 @@ from .local_services import (
     by_slug as by_local_slug, federation_env, federation_selection,
     federation_slugs, local_slugs, profile_flags, profile_slugs, validate_selection,
     PROFILE_MEDIA_POISONER, KIND_LANE_LABEL, kind_slugs,
+    domain_local_slugs, split_selection,
 )
 from .egress_conf import validate_egress_conf
 from .domain_services import tor_domain_entries
@@ -166,23 +169,50 @@ def expected_build_contexts(generator_dir: str) -> list[str]:
 
 
 def _domain_record(x: dict) -> dict:
-    """One recorded domain row, coerced to its JSON shape (str fields, a list of str
-    slugs) — see ``LocalMeshBootstrapConfig.domains``."""
+    """One recorded domain row, coerced to its JSON shape — see
+    ``LocalMeshBootstrapConfig.domains``. COPY SITE (brand_model.COPY_SITES): every
+    ``config.Domain`` field is carried by the FIELD LIST (#654), each coerced to its
+    declared shape and left out when it says nothing, so a field added to Domain
+    reaches a saved mesh without a change here. A junk value keeps the pre-#654
+    leniency: it is coerced, never raised on (a saved mesh is JSON on a writable disk,
+    and ``_import_problem`` names an unknown sign-in later, by name)."""
     svcs = x.get("optional_services") or ()
-    rec = {"name": str(x.get("name") or "").strip(),
-           "title": str(x.get("title") or "").strip(),
-           "idp": str(x.get("idp") or "superdomain"),
-           "optional_services": [str(s) for s in svcs] if isinstance(svcs, (list, tuple)) else []}
-    # the domain's own Tor front door (#582): OMIT-WHEN-FALSE, and only a real
-    # ``true`` counts — a hand-edited "yes" must not mint an onion.
-    if x.get("tor") is True:
-        rec["tor"] = True
-    # the GitHub org the domain exports to (the Go-Live export step): OMIT-WHEN-EMPTY,
-    # and only a slug the Domains step itself would accept — a re-opened record used
-    # to lose this key here, and the next save wrote it away for good.
-    org = str(x.get("github_org") or "").strip()
-    if org and not github_org_problem(org):
-        rec["github_org"] = org
+    rec: dict = {"name": str(x.get("name") or "").strip(),
+                 "title": str(x.get("title") or "").strip(),
+                 "idp": str(x.get("idp") or "superdomain"),
+                 "optional_services": ([str(s) for s in svcs]
+                                       if isinstance(svcs, (list, tuple)) else [])}
+    for k in DOMAIN_FIELDS:
+        if k in rec or k not in x:
+            continue
+        v = x.get(k)
+        if k == "tor":
+            # the domain's own Tor front door (#582): OMIT-WHEN-FALSE, and only a real
+            # ``true`` counts — a hand-edited "yes" must not mint an onion.
+            if v is True:
+                rec["tor"] = True
+        elif k == "github_org":
+            # the GitHub org the domain exports to (the Go-Live export step): only a
+            # slug the Domains step itself would accept, so a re-opened record never
+            # loses the key here and a junk one is never carried
+            org = str(v or "").strip()
+            if org and not github_org_problem(org):
+                rec["github_org"] = org
+        elif k == "images":
+            if isinstance(v, (list, tuple)) and v:
+                rec["images"] = [str(s) for s in v]
+        elif k == "issuer_port":
+            if isinstance(v, int) and not isinstance(v, bool) and v > 0:
+                rec["issuer_port"] = v
+        elif isinstance(v, dict):
+            if v:
+                rec[k] = dict(v)
+        elif isinstance(v, str):
+            if v.strip():
+                rec[k] = v.strip()
+        elif isinstance(v, bool):
+            if v:
+                rec[k] = True
     return rec
 
 
@@ -211,7 +241,12 @@ class LocalMeshBootstrapConfig:
     # the minted .onion address. Mirrors the NODE `tor` optional service, scaled to
     # the local docker mesh; reachability is over Tor, with no public IP/DNS/ports.
     with_tor: bool = False
-    # WHICH individual services the local mesh runs (core/local_services.py's
+    # 2026-10-21: the MESH-PLANE half only (local_services.mesh_plane_slugs — tor,
+    # anubis, wiki, edge-ai-tts, media-poisoner, egress-vpn). The per-domain services
+    # live on the ``domains`` rows and the mesh runs the union
+    # (``effective_services``); a per-domain slug found here still runs (union) and a
+    # saved one migrates into the rows on load (``_migrate_domain_services``).
+    # Before: WHICH individual services the local mesh runs (core/local_services.py's
     # catalogue slugs). Two mechanisms behind one list: the compose-profile slugs
     # (`tuwunel` -> the social profile, `tor`) start/stop containers at bring-up,
     # the federation slugs (wiki/owncast/tube/character-*) flip their
@@ -265,6 +300,15 @@ class LocalMeshBootstrapConfig:
     # and the login-ui entrypoint writes snap-theme.css at container start, so a
     # rebrand needs no image rebuild. EMPTY = shipped default brand, byte-identical.
     login_theme_css: str = ""
+    # The mesh's WHOLE look (row 0's Look tab, ``brand_look.Look.record()``: every
+    # field that differs from the shipped page, pictures, header, footer and an
+    # uploaded font included). ``superbrand["look"]`` holds only the brand record's
+    # eight look keys (brand_model.LOOK_KEYS), so a domain with a look of its own was
+    # composed from those eight and lost the rest of the mesh's look on its sign-in
+    # page while its Look tab said they were inherited. The front door composes a
+    # domain's own look over THIS when it is set (``superbrand_look``). EMPTY (the
+    # default, the CLI, every older record) = the eight recorded keys, as before.
+    login_look: dict = field(default_factory=dict)
     # ── identity provider (I6.6 — the SAME picker the node wizard carries) ──
     # "casdoor" (the DEFAULT) threads NOTHING: the stack env stays byte-identical
     # to before these fields existed (the #1 invariant). An external provider
@@ -301,8 +345,9 @@ class LocalMeshBootstrapConfig:
     # byte-identical to a config from before the field existed. ``own_idp_domains``
     # above is what the compose lane CONSUMES (derived from the same rows); this
     # tuple is what the saved-mesh record and the plan carry. The per-domain
-    # ``optional_services`` are recorded and NOT enforced on this lane: the compose
-    # profiles come from ``services`` (the mesh-wide Services step).
+    # ``optional_services`` ARE what this lane runs (2026-10-21): the compose profiles
+    # and federation rows come from their union with the mesh-plane ``services``
+    # (``effective_services``).
     domains: tuple[dict, ...] = ()
     # WHICH of the recorded ``domains`` rows had been through the Studio's Domain
     # services step when this config was collected (#494 fix round). A saved-mesh
@@ -325,25 +370,107 @@ class LocalMeshBootstrapConfig:
     # tuple is an explicit "none of them" and IS exported (as the literal `none`) —
     # see local_services.kind_addon_env for why those two must not collapse.
     kind_addons: tuple[str, ...] | None = None
+    # ── the SUPERBRAND block of the brand record (#654, D5) — everything the record's
+    # superbrand says beyond ``brand`` (its id) and ``cluster_domain`` (its public
+    # name), which stay the fields they always were: title, organisation, internal
+    # root name, central sign-in, default look, default ways, login style and
+    # decoration (brand_model.Superbrand.to_dict, every key OMIT-WHEN-EMPTY). The
+    # recorded ``domains`` rows are the record's brands. EMPTY (the default) on every
+    # pre-#654 config: the plan, env and argv are byte-identical, and the saved-mesh
+    # record grows by two keys (this one and ``tor_release``, both at their
+    # defaults) as it grew by one for ``domains``; to_dict drops nothing by design.
+    superbrand: dict = field(default_factory=dict)
+    # ── Go live pressed on a production mesh (#654, D14). D14 holds a production
+    # mesh's Tor addresses until Go live with the Makefile knob TOR_HOLD=1, which the
+    # Studio passes to `make stack-up` for production only, and not once Go live was
+    # pressed (this flag). The Makefile's side of the hold is the docker-mesh-tor
+    # lane's and is NOT built yet: whether the knob is read is measured
+    # (LocalMeshBootstrap.makefile_holds_tor) and the plan says what happens today. A
+    # TEST mesh ignores all of it: a Tor tick there starts the address with the mesh
+    # as it always did (open question 2 = A).
+    tor_release: bool = False
 
     def is_prod(self) -> bool:
         return self.env == "prod"
 
+    def tor_hold_requested(self) -> bool:
+        """Whether this config ASKS for the production hold (D14): production with Tor
+        on and Go live not pressed. False on a test mesh, or when Tor is off. Whether
+        the mesh is then actually held is LocalMeshBootstrap.tor_held, which also
+        needs a Makefile that reads the knob."""
+        return self.is_prod() and self.effective_with_tor() and not self.tor_release
+
     # ── services selection -> the two back-ends ─────────────────────────────────
+    def domain_services_union(self) -> tuple[str, ...]:
+        """Every local-stack service any recorded domain row chose
+        (``domains[].optional_services``), in catalogue order — the PER-DOMAIN half of
+        what the mesh runs (2026-10-21: per-domain services are the one source of
+        truth; the mesh-wide "Local services" pick is retired). A slug the local stack
+        cannot run is not here (the row still records it for the cluster)."""
+        chosen: set[str] = set()
+        for r in self.domains or ():
+            if isinstance(r, dict):
+                svcs = r.get("optional_services") or ()
+                if isinstance(svcs, (list, tuple)):
+                    chosen.update(str(x) for x in svcs)
+        return tuple(s for s in domain_local_slugs() if s in chosen)
+
+    def mesh_plane_services(self) -> tuple[str, ...]:
+        """The MESH-PLANE half of ``services`` (tor, anubis, wiki, edge-ai-tts,
+        media-poisoner, egress-vpn — local_services.mesh_plane_slugs), plus any slug
+        this catalogue does not know (validate() names it). () when no selection."""
+        return split_selection(self.services)[1]
+
+    def effective_services(self) -> tuple[str, ...] | None:
+        """WHAT THE MESH RUNS: the union of the mesh-plane ``services`` and every
+        recorded domain's own services. ONE function every reader asks (the profile
+        switches below, the federation half, the stack node, the plan), so a domain's
+        choice and the mesh's infrastructure cannot disagree.
+
+        UNION, never subtraction: a domain slug still found in ``services`` (a caller
+        that has not moved to per-domain rows yet — the GUI's old picker, the CLI's
+        ``--services``) still runs. ``from_dict`` MIGRATES a saved one into the rows,
+        so a reloaded record says it once.
+
+        None — "no picker was ever used" — only when ``services`` is None AND no
+        recorded domain chose anything: the legacy ``social``/``with_tor`` flags then
+        rule and nothing federation-shaped is exported, byte-identical to before.
+        With ``services`` None and a domain that chose something, the legacy flags
+        become their slugs (``with_tor`` -> tor, ``social`` -> tuwunel) and join the
+        union. When the rows add nothing new, ``services`` is returned AS GIVEN (same
+        tuple, same order), so every pre-existing config reads exactly as before."""
+        rows = self.domain_services_union()
+        if self.services is None:
+            if not rows:
+                return None
+            base: tuple[str, ...] = ((("tor",) if self.with_tor else ())
+                                     + (("tuwunel",) if self.social else ()))
+        else:
+            base = tuple(self.services)
+        extra = [s for s in rows if s not in base]
+        if not extra and self.services is not None:
+            return self.services
+        chosen = set(base) | set(rows)
+        known = local_slugs()
+        return (tuple(s for s in known if s in chosen)
+                + tuple(dict.fromkeys(s for s in base if s not in known)))
+
     def effective_social(self) -> bool:
         """Whether the `social` compose profile comes up. An explicit services
         selection decides it (the picker's Matrix row IS the social switch — one
         profile, six containers); with no selection the legacy flag still rules, so
         every pre-picker caller behaves exactly as it did."""
-        if self.services is None:
+        sel = self.effective_services()
+        if sel is None:
             return self.social
-        return profile_flags(self.services).get(PROFILE_SOCIAL, False)
+        return profile_flags(sel).get(PROFILE_SOCIAL, False)
 
     def effective_with_tor(self) -> bool:
         """Same rule as effective_social(), for the `tor` profile."""
-        if self.services is None:
+        sel = self.effective_services()
+        if sel is None:
             return self.with_tor
-        return profile_flags(self.services).get(PROFILE_TOR, False)
+        return profile_flags(sel).get(PROFILE_TOR, False)
 
     def effective_phpbb(self) -> bool:
         """Same rule again, for the `phpbb` profile (PHPBB=1 -> STACK_ALT_PROFILE).
@@ -351,56 +478,71 @@ class LocalMeshBootstrapConfig:
         No legacy flag to fall back on: unlike social/tor these slugs never had a
         pre-picker boolean, so with NO selection they are simply off — which keeps a
         pre-picker caller's stack byte-identical to before these profiles existed."""
-        if self.services is None:
+        sel = self.effective_services()
+        if sel is None:
             return False
-        return profile_flags(self.services).get(PROFILE_PHPBB, False)
+        return profile_flags(sel).get(PROFILE_PHPBB, False)
 
     def effective_akkoma(self) -> bool:
         """Same rule, for the `akkoma` profile (AKKOMA=1 -> STACK_ALT_PROFILE)."""
-        if self.services is None:
+        sel = self.effective_services()
+        if sel is None:
             return False
-        return profile_flags(self.services).get(PROFILE_AKKOMA, False)
+        return profile_flags(sel).get(PROFILE_AKKOMA, False)
 
     def effective_games(self) -> bool:
         """Same rule, for the `games` profile (GAMES=1 -> STACK_GAMES_PROFILE).
         No legacy flag, like phpbb/akkoma: with no selection it is simply off."""
-        if self.services is None:
+        sel = self.effective_services()
+        if sel is None:
             return False
-        return profile_flags(self.services).get(PROFILE_GAMES, False)
+        return profile_flags(sel).get(PROFILE_GAMES, False)
 
     def effective_anubis(self) -> bool:
         """Same rule, for the `anubis` profile (ANUBIS=1 -> STACK_ALT_PROFILE)."""
-        if self.services is None:
+        sel = self.effective_services()
+        if sel is None:
             return False
-        return profile_flags(self.services).get(PROFILE_ANUBIS, False)
+        return profile_flags(sel).get(PROFILE_ANUBIS, False)
 
     def effective_tts(self) -> bool:
         """Same rule, for the `edge-ai-tts` profile (TTS=1). Threading this was
         MISSED when the row graduated (2026-08-14): the checkbox existed but
         exported nothing, so a checked box brought up no container."""
-        if self.services is None:
+        sel = self.effective_services()
+        if sel is None:
             return False
-        return profile_flags(self.services).get(PROFILE_EDGE_AI_TTS, False)
+        return profile_flags(sel).get(PROFILE_EDGE_AI_TTS, False)
 
     def effective_poisoner(self) -> bool:
         """Same rule, for the `media-poisoner` profile (POISONER=1) — the AI
         media cloak. Threading this is NOT optional bookkeeping: the exact same
         link was missed for edge-ai-tts above, and the symptom is a checkbox
         that reports success and brings up nothing."""
-        if self.services is None:
+        sel = self.effective_services()
+        if sel is None:
             return False
-        return profile_flags(self.services).get(PROFILE_MEDIA_POISONER, False)
+        return profile_flags(sel).get(PROFILE_MEDIA_POISONER, False)
 
     def effective_egress_vpn(self) -> bool:
         """Same rule, for the `egress-vpn` profile (EGRESS_VPN=1 +
         EGRESS_VPN_CONF=<path> -> STACK_EGRESS_FLAGS)."""
-        if self.services is None:
+        sel = self.effective_services()
+        if sel is None:
             return False
-        return profile_flags(self.services).get(PROFILE_EGRESS_VPN, False)
+        return profile_flags(sel).get(PROFILE_EGRESS_VPN, False)
+
+    def applied_egress(self) -> "reach_apply.DockerEgress":
+        """The egress a start APPLIES (``EGRESS_VPN`` + ``EGRESS_VPN_CONF``): the
+        mesh's own tick and file, unless a domain that runs the mesh's one Mastodon
+        chose an egress of its own (core/reach_apply — the egress VPN carries only
+        Mastodon's outbound delivery, so those domains decide it). With no such
+        choice this is exactly ``effective_egress_vpn()`` and ``egress_vpn_conf``."""
+        return reach_apply.docker_egress(self)
 
     def federation_services(self) -> tuple[str, ...]:
         """The federation-mechanism half of the selection (catalogue order)."""
-        return federation_selection(self.services)
+        return federation_selection(self.effective_services())
 
     def idp_external(self) -> bool:
         return self.idp != "casdoor"
@@ -436,7 +578,9 @@ class LocalMeshBootstrapConfig:
     _TUPLE_FIELDS = ("web_locales", "own_idp_domains", "domain_services_reviewed")
     #: tuples of JSON objects (the recorded domain rows, #494).
     _DICT_TUPLE_FIELDS = ("domains",)
-    _BOOL_FIELDS = ("social", "with_tor")
+    _BOOL_FIELDS = ("social", "with_tor", "tor_release")
+    #: plain JSON objects (the superbrand block, #654).
+    _DICT_FIELDS = ("superbrand", "login_look")
 
     def to_dict(self) -> dict:
         """Every field, JSON-shaped. A pure serialiser: it drops NOTHING — the
@@ -478,6 +622,9 @@ class LocalMeshBootstrapConfig:
         for k in cls._BOOL_FIELDS:
             if k in vals:
                 vals[k] = bool(vals[k])
+        for k in cls._DICT_FIELDS:
+            if k in vals and not isinstance(vals[k], dict):
+                vals[k] = {}          # a hand-edited scalar is ABSENT, never a crash
         for k, f in known.items():
             if k in vals and f.type == "str" and not isinstance(vals[k], str):
                 vals[k] = "" if vals[k] is None else str(vals[k])
@@ -491,12 +638,58 @@ class LocalMeshBootstrapConfig:
         # refusing the record would strand an operator's saved mesh over bookkeeping.
         # services=None (CLI-made, "no picker was used") keeps the booleans as the
         # authority, untouched.
-        svc = vals.get("services")
-        if svc is not None:
-            flags = profile_flags(svc)
-            vals["with_tor"] = bool(flags.get(PROFILE_TOR, False))
-            vals["social"] = bool(flags.get(PROFILE_SOCIAL, False))
-        return cls(**vals)
+        cfg = cls(**vals)
+        cfg._migrate_domain_services()
+        if cfg.services is not None:
+            flags = profile_flags(cfg.effective_services())
+            cfg.with_tor = bool(flags.get(PROFILE_TOR, False))
+            cfg.social = bool(flags.get(PROFILE_SOCIAL, False))
+        return cfg
+
+    def _migrate_domain_services(self) -> None:
+        """MIGRATION (2026-10-21, the retired "Local services" pick). A saved
+        ``services`` selection's DOMAIN slugs (the per-domain catalogue) move into
+        every recorded domain row that has no services of its own, and leave
+        ``services``, which keeps the mesh-plane slugs only (a tuple stays a tuple,
+        even an empty one). A record with no rows at all gets ONE row: the mesh's own
+        domain, carrying the selection — what the Domains step records for an own
+        domain that says something — and it is marked as walked, because before this
+        the own domain was the implicit, already-reviewed cluster default and a saved
+        Start never asked about it. Rows that chose their own services keep them. The
+        mesh therefore runs exactly what it ran (``effective_services`` is the union);
+        it is only said once. No domain slug in ``services`` (every record written by
+        a per-domain screen, and every None) changes nothing."""
+        if self.services is None:
+            return
+        dom, rest = split_selection(self.services)
+        if not dom:
+            return
+        rows = [dict(r) for r in self.domains]
+        for r in rows:
+            if str(r.get("name") or "").strip() and not (r.get("optional_services") or []):
+                r["optional_services"] = list(dom)
+        own = (self.cluster_domain or "").strip() or self.resolved_domain()
+        if not any(str(r.get("name") or "").strip() == own for r in rows):
+            # the own domain was implicit (never a row): it gets its row first, as the
+            # Domains step records it, and keeps the walked status it implicitly had
+            rows.insert(0, {"name": own, "title": "", "idp": "superdomain",
+                            "optional_services": list(dom)})
+            if own not in self.domain_services_reviewed:
+                self.domain_services_reviewed = ((own,)
+                                                 + tuple(self.domain_services_reviewed))
+        # A slug no row carries now (every row already had services of its own) would
+        # silently stop running — services=[tor, tuwunel] with an own row of [phpbb]
+        # lost Matrix (domain-ui skeptic 3). It joins the mesh's own domain row, where
+        # a mesh-wide pick belongs, so the mesh still runs exactly what it ran.
+        covered = {s for r in rows for s in (r.get("optional_services") or [])}
+        orphans = [s for s in dom if s not in covered]
+        if orphans:
+            for r in rows:
+                if str(r.get("name") or "").strip() == own:
+                    r["optional_services"] = list(r.get("optional_services") or []) + orphans
+                    break
+        self.domains = tuple(rows)
+        self.services = tuple(rest)
 
 
 class LocalMeshBootstrap:
@@ -523,18 +716,38 @@ class LocalMeshBootstrap:
         return cls(generator_dir, cfg)
 
     @classmethod
-    def for_checkout(cls, generator_dir: str, hostname: str | None = None):
+    def for_checkout(cls, generator_dir: str, hostname: str | None = None,
+                     record_id: str = ""):
         """``(bootstrap, record-or-None)`` for the local mesh THIS checkout drives, as
         far as anything on disk can say: the newest saved-mesh record for this
-        checkout and host, else a default config (the brand default, no Tor).
+        checkout and host whose mesh was UP when it was saved, else the newest draft
+        (a record saved before its first bring-up — ``saved_mesh_source`` says so),
+        else a default config (the brand default, no Tor). A newer draft never
+        stands in for the mesh that ran: since 2026-10-21 the Saved meshes list
+        saves the mesh being worked on with nothing up, and node images built from
+        that draft would join a domain nothing ever served.
+
+        ``record_id`` names the record to read instead (the node-image pages' picker);
+        it must be one of this checkout's records, else the default choice is used.
 
         OFFLINE by contract (plain file reads — it runs in page ``initializePage``):
         the running stack is never probed. That is also its limit, stated where the
         answer is used: a record is the mesh AS SAVED, and ``capture()`` records the
         form's selection, not a docker probe of what is running (#309)."""
         from . import saved_meshes
+        rec = None
         try:
-            rec = saved_meshes.latest_for_checkout(generator_dir, hostname=hostname)
+            if record_id:
+                rec = next((r for r in saved_meshes.records_for_checkout(
+                    generator_dir, hostname=hostname) if r.id == record_id), None)
+            if rec is None:
+                # nothing ran: the picker's own row 0 (records_for_checkout puts a
+                # record whose EARLIER version ran — an Overwrite made while nothing
+                # ran — before a draft that never ran, each newest first)
+                rec = (saved_meshes.latest_for_checkout(generator_dir, hostname=hostname,
+                                                        ran_only=True)
+                       or next(iter(saved_meshes.records_for_checkout(
+                           generator_dir, hostname=hostname)), None))
         except Exception:                                  # noqa: BLE001 — offline read
             rec = None
         if rec is None:
@@ -597,9 +810,13 @@ class LocalMeshBootstrap:
         # flags when there is not. `services` rides separately because the stack node
         # consumes only its FEDERATION half (an env pair for `make stack-seed`) — the
         # compose half has already become these two booleans by the time it gets here.
+        # EGRESS: what the per-domain choices make of the mesh's tick (2026-10-21
+        # round 2) — identical to the tick and its file when no domain that runs
+        # Mastodon chose for itself (core/reach_apply.docker_egress)
+        egress = self.cfg.applied_egress()
         return LocalStackNode(self.generator_dir, env=self.cfg.env,
                               social=self.cfg.effective_social(), domain=domain,
-                              services=self.cfg.services,
+                              services=self.cfg.effective_services(),
                               source_mode=self.cfg.source_mode,
                               source_dir=self.cfg.source_dir,
                               web_locales=self.cfg.web_locales,
@@ -611,15 +828,63 @@ class LocalMeshBootstrap:
                               with_anubis=self.cfg.effective_anubis(),
                               with_tts=self.cfg.effective_tts(),
                               with_poisoner=self.cfg.effective_poisoner(),
-                              with_egress_vpn=self.cfg.effective_egress_vpn(),
-                              egress_vpn_conf=self.cfg.egress_vpn_conf.strip(),
+                              with_egress_vpn=egress.on,
+                              egress_vpn_conf=egress.conf,
                               idp=self.cfg.idp,
                               idp_issuer=self.cfg.idp_issuer.strip(),
                               idp_client_id=self.cfg.idp_client_id.strip(),
                               idp_jwks=self.cfg.effective_idp_jwks(),
                               own_idp_domains=self.cfg.own_idp_domains,
                               kind_addons=self.cfg.kind_addons,
-                              tor_domains=self.tor_domains())
+                              tor_domains=self.tor_domains(),
+                              external_idp_domains=self.external_idp_domains(),
+                              superbrand_look=self.superbrand_look(),
+                              look_brands=self.look_brands())
+
+    def superbrand_look(self) -> dict:
+        """What a domain with a look of its own starts from on the front door: the
+        mesh's WHOLE look (``cfg.login_look``, the same look ``login_theme_css`` is made
+        from) when the page carried it, so the domain keeps the mesh's header, footer,
+        pictures and font that its Look tab shows as inherited; else the superbrand's
+        recorded look (the record's eight look fields)."""
+        whole = self.cfg.login_look
+        if isinstance(whole, dict) and whole:
+            return dict(whole)
+        look = (self.cfg.superbrand or {}).get("look") or {}
+        return dict(look) if isinstance(look, dict) else {}
+
+    def look_brands(self) -> list:
+        """The added domains the HTTPS front door serves a look for, by Host
+        (core/look_serving.py), in record order. The mesh's own domain never: its look
+        is HUG_THEME_CSS, served by the sign-in page itself."""
+        own = (self.cfg.cluster_domain or "").strip() or self.cfg.resolved_domain()
+        return look_serving.served_brands(
+            [r for r in (self.cfg.domains or ()) if isinstance(r, dict)], own)
+
+    def external_idp_domains(self) -> list[tuple[str, str, str]]:
+        """``[(name, issuer, brand id), ...]`` — the recorded domains that sign in
+        through their OWN external provider (config.has_external_signin), in record
+        order: what LocalStackNode adds to the gateways' APP_TENANCY_* registry (one
+        issuer, one brand; no Casdoor is stood up). The mesh's own domain never (it
+        signs in through the mesh), nor a row whose block does not pass
+        ``domain_signin_problems`` (validate() names it), nor a second row on an issuer
+        already taken."""
+        own = (self.cfg.cluster_domain or "").strip() or self.cfg.resolved_domain()
+        rows = [r for r in self.cfg.domains if isinstance(r, dict)]
+        out: list[tuple[str, str, str]] = []
+        seen: set[str] = set()
+        for r in rows:
+            name = str(r.get("name") or "").strip()
+            if not name or name == own or not has_external_signin(r):
+                continue
+            if domain_signin_problems(r, self.cfg, rows):
+                continue
+            s = effective_signin(r, self.cfg)
+            if s.issuer in seen:
+                continue
+            seen.add(s.issuer)
+            out.append((name, s.issuer, brand_model.brand_id(r)))
+        return out
 
     def tor_domains(self) -> list[tuple[str, str, str]]:
         """``[(name, slug, tenant), ...]`` — the recorded domains with their OWN Tor
@@ -631,11 +896,51 @@ class LocalMeshBootstrap:
         # brand only when it is in ``own_idp_domains`` (the list own_casdoor turns
         # into APP_TENANCY_HOSTS), whatever the recorded row's ``idp`` says — the
         # host map must never name a tenant the gateway has no issuer for.
-        own_idp = {n.strip() for n in self.cfg.own_idp_domains}
+        own_idp = ({n.strip() for n in self.cfg.own_idp_domains}
+                   | {n for n, _i, _b in self.external_idp_domains()})
         rows = [dict(r, idp=("own" if (r.get("name") or "").strip() in own_idp
                              else "superdomain"))
                 for r in self.cfg.domains]
         return tor_domain_entries(rows, own_name=own)
+
+    # ---- the brand record (#654, D5) ---------------------------------------------
+    def record(self) -> "brand_model.BrandRecord":
+        """The brand record this mesh carries: ``brand``/``cluster_domain`` are the
+        superbrand's id and public name, ``cfg.superbrand`` the rest of its block, the
+        recorded domain rows its brands (brand_model.record_from_bootstrap)."""
+        return brand_model.record_from_bootstrap(self.cfg)
+
+    def makefile_holds_tor(self) -> bool:
+        """Whether this checkout's Makefile reads the hold knob (a word-match on
+        TOR_HOLD). Measured, never assumed: until the docker-mesh-tor lane lands the
+        knob, `make stack-up TOR=1` starts hugmesh-tor on every env, and the plan must
+        say so instead of promising a hold. The same pinning pattern as the
+        --brand-record argv test (studio/tests/test_brand_record_copy_sites.py), which
+        emits the flag exactly when a builder parses it."""
+        try:
+            with open(os.path.join(self.generator_dir, "Makefile"), encoding="utf-8") as fh:
+                return re.search(r"\bTOR_HOLD\b", fh.read()) is not None
+        except OSError:
+            return False
+
+    def tor_held(self) -> bool:
+        """Whether this mesh's Tor addresses are really HELD at start (D14): the
+        config asks for the hold AND the Makefile reads the knob."""
+        return self.cfg.tor_hold_requested() and self.makefile_holds_tor()
+
+    def _hand_over_tor_hold(self) -> None:
+        """The Tor hold hand-over (#654, D14), run right before every `make stack-up`:
+        TOR_HOLD=1 (D14's knob) reaches the Makefile for a production mesh with Tor
+        on whose Go live was not pressed, and for nothing else; an ambient TOR_HOLD
+        inherited from the shell is dropped, so a test mesh can never be held, nor a
+        released one re-held, by an environment nobody chose. LocalStackNode builds
+        its env from os.environ (the TS_AUTHKEY precedent in _start_seed_overlay).
+        Passing the knob to a Makefile that does not read it yet changes nothing;
+        the plan says which of the two this checkout is."""
+        if self.cfg.tor_hold_requested():
+            os.environ["TOR_HOLD"] = "1"
+        else:
+            os.environ.pop("TOR_HOLD", None)
 
     def _mesh_node(self) -> LocalMeshNode:
         return LocalMeshNode(self.generator_dir, LocalMeshConfig(
@@ -708,10 +1013,15 @@ class LocalMeshBootstrap:
         # (gen-keystores.sh:45-53 refuses to source brands/<brand>.conf). A brand with no
         # .conf is NOT blocked — the tool accepts it and exits 0 (see warnings()).
         brand = self.cfg.brand.strip()
+        if brand and self.cfg.brand != brand:
+            # the check below runs on the stripped text, but every consumer reads the
+            # raw one: a trailing newline reached the Vault path and the profile name
+            problems.append(f"Brand {self.cfg.brand!r} has a space or a line break at "
+                            "an end; remove it.")
         if not brand:
             problems.append("Brand must not be empty — it is the secret/<BRAND>/ Vault "
                             "base path segment.")
-        elif not _BRAND_DNS_LABEL.match(brand):
+        elif not _BRAND_DNS_LABEL.fullmatch(brand):
             problems.append(f"Brand '{brand}' is not a DNS label [a-z0-9-] — "
                             f"gen-keystores.sh refuses to source brands/{brand}.conf.")
         # SOURCE axis — BLOCK only where compose will certainly hard-error.
@@ -742,7 +1052,16 @@ class LocalMeshBootstrap:
         # container refuses to start without one, fail-closed; this preflight moves
         # that refusal from minutes into the up to the plan). Same sniff rules as
         # the entrypoint via core.egress_conf.
-        if self.cfg.effective_egress_vpn():
+        # Checked only when the start USES the mesh's file: the domains that run the
+        # mesh's one Mastodon can override the tick (core/reach_apply) — all direct
+        # turns the container off, their own files replace the mesh's — and their
+        # files are checked per domain below (domain_reach.egress_conf_problems).
+        egress = self.cfg.applied_egress()
+        mesh_conf = self.cfg.egress_vpn_conf.strip()
+        mesh_file = os.path.abspath(os.path.expanduser(mesh_conf)) if mesh_conf else ""
+        uses_mesh_file = (not egress.from_domains
+                          or (egress.on and egress.conf in ("", mesh_file)))
+        if self.cfg.effective_egress_vpn() and uses_mesh_file:
             _kind, err = validate_egress_conf(self.cfg.egress_vpn_conf.strip())
             if err:
                 problems.append(f"Egress VPN is selected but has no usable config "
@@ -789,7 +1108,7 @@ class LocalMeshBootstrap:
         # silent drop is the exact failure mode this axis exists to kill.
         for name in self.cfg.own_idp_domains:
             if not name.strip() or not all(
-                    _BRAND_DNS_LABEL.match(lbl)
+                    _BRAND_DNS_LABEL.fullmatch(lbl)
                     for lbl in name.strip().lower().split(".")):
                 problems.append(
                     f"own-Casdoor domain '{name}' is not a DNS name (dot-"
@@ -816,6 +1135,44 @@ class LocalMeshBootstrap:
                 problems.append(
                     f"own-Casdoor domain '{name.strip()}' is this mesh's own domain — "
                     "it signs in via the central Casdoor and cannot have an own one.")
+        # ── the brand record (#654): the id rule for every brand (D4), duplicate
+        # ids, every look and ways block, and the secret scan (D5). The Docker start's
+        # form of the save checks (docker_start): NO title rule, because on this path
+        # a title reaches no sourced file and no sed (the compose overlay uses names
+        # only; the generated profile refuses an unsafe title at its own write), and
+        # the id length is _BRAND_DNS_LABEL's 63, not the record file's 59 — so a mesh
+        # that started before the record existed still starts.
+        if self.cfg.domains or self.cfg.superbrand:
+            try:
+                rec = self.record()
+            except ValueError as e:
+                problems.append(f"brand record: {e}")
+            else:
+                problems.extend(
+                    f"brand record: {p}" for p in
+                    brand_model.record_problems(
+                        rec, profiles=brand_model.profile_names(self.generator_dir),
+                        docker_start=True))
+                problems.extend(
+                    f"brand record: {p}" for p in
+                    brand_model.secret_problems(
+                        {"superbrand": self.cfg.superbrand,
+                         "brands": list(self.cfg.domains)}, "record"))
+        # ── per-domain sign-in and egress (2026-10-21): each recorded row's own
+        # provider block follows the mesh-wide rules (config.domain_signin_problems,
+        # the same checks as the idp block above), and a row whose egress names its
+        # own provider file gets the same file check as the mesh's egress-vpn
+        # (domain_reach.egress_conf_problems -> validate_egress_conf). A config with
+        # no such row (every one written before) adds nothing here.
+        rows = [r for r in self.cfg.domains if isinstance(r, dict)]
+        for r in rows:
+            problems.extend(domain_signin_problems(r, self.cfg, rows))
+        problems.extend(domain_reach.egress_conf_problems(rows, self.cfg))
+        # ONE egress tunnel, ONE Mastodon: two domains that share it and name
+        # different provider files cannot both be honoured (core/reach_apply)
+        conflict = self.cfg.applied_egress().conflict
+        if conflict:
+            problems.append("Egress VPN: " + conflict + ".")
         if self.cfg.is_prod():
             if not self.cfg.cluster_domain.strip():
                 problems.append("prod requires a public cluster domain "
@@ -833,7 +1190,7 @@ class LocalMeshBootstrap:
         of the build contexts compose will eventually ask for."""
         out: list[str] = []
         brand = self.cfg.brand.strip()
-        if brand and _BRAND_DNS_LABEL.match(brand) and not self.brand_has_conf():
+        if brand and _BRAND_DNS_LABEL.fullmatch(brand) and not self.brand_has_conf():
             if brand != DEFAULT_BRAND:
                 out.append(
                     f"No brands/{brand}.conf profile — gen-cluster-secrets.sh runs fine "
@@ -849,6 +1206,22 @@ class LocalMeshBootstrap:
                     f"builds fine until it reaches a missing one "
                     f"(missing: {', '.join(missing[:4])}"
                     + (", …" if len(missing) > 4 else "") + ").")
+        # a domain with its own EXTERNAL provider (config.has_external_signin): the
+        # stack trusts that provider's tokens for that domain only (one more pair in
+        # APP_TENANCY_*), and that is ALL it does — the honest limits of
+        # docs/IDENTITY-PROVIDERS.md, said here rather than implied.
+        for name, _iss, _bid in self.external_idp_domains():
+            r = next(x for x in self.cfg.domains
+                     if isinstance(x, dict) and str(x.get("name") or "").strip() == name)
+            s = effective_signin(r, self.cfg)
+            out.append(
+                f"{name} signs in through its own "
+                f"{IDP_LABELS.get(s.provider, s.provider)}: this mesh accepts that "
+                "provider's sign-ins for this domain only. The native login page, MFA "
+                "step-up and role claims still need Casdoor (docs/IDENTITY-PROVIDERS.md), "
+                "so sign in through the provider's own page.")
+        # per-domain VPN and egress choices this start cannot honour, said plainly
+        out.extend(reach_apply.reach_warnings(self.cfg, self.overlay_will_attach()))
         return out
 
     def preflight(self) -> list[str]:
@@ -877,7 +1250,9 @@ class LocalMeshBootstrap:
         lines.append(f"ENV:        {c.env}"
                      + ("  (LAN-only / offline — the safe default)" if not c.is_prod()
                         else "  (REAL public domain)"))
-        lines.append(f"Brand:      {c.brand}")
+        lines.append(f"Brand:      {c.brand}"
+                     + (f"  ({c.superbrand.get('title')})" if c.superbrand.get("title")
+                        else ""))
         lines.append(f"Domain:     {c.resolved_domain()}"
                      + ("" if c.is_prod() else "  (brand default; not a public issuer in test)"))
         lines.append(f"Issuer:     {c.issuer()}")
@@ -946,6 +1321,21 @@ class LocalMeshBootstrap:
             for name, slug, tenant in self.tor_domains():
                 lines.append(f"             + {name}: its own onion (key ‘{slug}’), "
                              f"served as brand ‘{tenant}’")
+            # production HOLDS the addresses until Go live (#654, D14) — ONLY once the
+            # Makefile reads the knob; until then the plan says what really happens
+            # (the confirm-before-run text must never promise a hold that is not
+            # built). A test mesh starts them with the mesh as it always did.
+            if self.tor_held():
+                lines.append("             HELD: a production mesh starts no Tor address "
+                             "until Go live (TOR_HOLD=1 is passed to make stack-up)")
+            elif c.tor_hold_requested():
+                lines.append("             NOT HELD YET: this production mesh publishes its "
+                             "Tor address at start — this Makefile does not read TOR_HOLD, "
+                             "so the production hold is not built yet (TOR_HOLD=1 is "
+                             "passed for the day it is)")
+            elif c.is_prod():
+                lines.append("             starts with this mesh (Go live was pressed: no "
+                             "hold is asked for)")
         elif self.tor_domains():
             lines.append("          -> NO onion for the Tor domains ("
                          + ", ".join(n for n, _s, _t in self.tor_domains())
@@ -957,6 +1347,25 @@ class LocalMeshBootstrap:
                          f"({len(c.login_theme_css)} chars of derived --sd-* css,")
             lines.append("             written to snap-theme.css at container start — "
                          "rebrand needs no rebuild)")
+        # A domain's own look (core/look_serving.py): which added domains the HTTPS
+        # front door answers with a stylesheet of their own, and the `make view` port
+        # each one is opened on. No added domain renders NOTHING.
+        _lb = self.look_brands()
+        if _lb:
+            served = look_serving.door_serves_looks(self.generator_dir)
+            own = [b for b in _lb if b.has_own_look]
+            lines.append("          -> domain looks (tests/stack/.looks/): "
+                         + (", ".join(b.name for b in own) or "none of its own")
+                         + (" served by Host at the HTTPS door" if served and own else "")
+                         + ("" if served else
+                            " — RECORDED ONLY: this checkout's front door does not "
+                            "serve them"))
+            if served:
+                for b in _lb:
+                    lines.append(f"             {b.name}: make view LANE=compose -> "
+                                 f"{b.view_url} ("
+                                 + ("its own look" if b.has_own_look
+                                    else "the mesh's own look") + ")")
         # Per-domain OWN Casdoor (issue #47): disclose EXACTLY what the compose
         # lane derives — the same ports/issuers own_casdoor.py allocates and
         # LocalStackNode threads into APP_TENANCY_ISSUERS — so the plan and the
@@ -970,19 +1379,39 @@ class LocalMeshBootstrap:
             lines.append(f"             domain signs in via the superdomain Casdoor "
                          f"({c.issuer()}")
             lines.append("             = tenant `default`):")
+            # the stack node allocates by table position and reads no stored port
+            # (#654): when the record stores a different one, say so here rather than
+            # print a port this mesh will not publish on
+            stored_ports = {str(r.get("name") or "").strip(): r.get("issuer_port")
+                            for r in c.domains
+                            if isinstance(r.get("issuer_port"), int)
+                            and not isinstance(r.get("issuer_port"), bool)}
             for i, name in enumerate(c.own_idp_domains):
                 lines.append(f"             * {name}: host port "
                              f"{own_casdoor.port_for(i)}, issuer "
                              f"{own_casdoor.issuer_for(name, i)}")
+                if stored_ports.get(name) and stored_ports[name] != own_casdoor.port_for(i):
+                    lines.append(f"               (the brand record stores sign-in port "
+                                 f"{stored_ports[name]}; this mesh does not read it yet)")
+        # Domains with their OWN external provider (2026-10-21): one more issuer=brand
+        # pair each in the same registry; no Casdoor. Empty renders nothing.
+        ext = self.external_idp_domains()
+        if ext:
+            lines.append("          -> domains with their own external sign-in (no "
+                         "Casdoor; the gateways")
+            lines.append("             accept that provider's tokens for that domain "
+                         "only):")
+            for name, iss, bid in ext:
+                lines.append(f"             * {name}: issuer {iss} = tenant `{bid}`")
         # The DOMAINS the Studio's Domains step recorded (#494). Empty (the default,
-        # and every flow that never opened the step) renders NOTHING. Per-domain
-        # services are shown as what they are on this lane: recorded, not what picks
-        # the compose profiles — that is the Services step, printed below.
+        # and every flow that never opened the step) renders NOTHING. Since 2026-10-21
+        # the per-domain services RUN on this lane: the mesh starts their union with
+        # its own infrastructure, printed under SERVICES below.
         if c.domains:
             lines.append("          -> domains recorded with this mesh (per-domain "
-                         "services are RECORDED, not enforced:")
-            lines.append("             the compose profiles come from the Services "
-                         "step below):")
+                         "services RUN: the mesh")
+            lines.append("             starts every one any domain chose — see "
+                         "SERVICES below):")
             for row in c.domains:
                 svcs = ", ".join(row.get("optional_services") or []) or "cluster default"
                 title = row.get("title") or ""
@@ -1001,9 +1430,9 @@ class LocalMeshBootstrap:
         # the one on screen. The third block is marked NOT-RUN rather than checkboxed,
         # which is the same thing the rows themselves say.
         fed = c.federation_services()
-        fed_env = federation_env(c.services)
-        if c.services is not None:
-            chosen = set(c.services)
+        fed_env = federation_env(c.effective_services())
+        if c.effective_services() is not None:
+            chosen = set(c.effective_services())
             lines.append("")
             lines.append("      SERVICES (compose profiles — start/stop containers here):")
             for slug in profile_slugs():
@@ -1042,6 +1471,13 @@ class LocalMeshBootstrap:
                 lines.append("           page — it is separate from, and changes "
                              "nothing about, the")
                 lines.append("           docker mesh above.")
+        # Per-domain VPN and egress (2026-10-21 round 2): what this start applies and
+        # what it cannot. Empty (no domain chose either, and the egress is the mesh's)
+        # renders NOTHING — the plan stays byte-identical.
+        reach = reach_apply.plan_lines(c, overlay)
+        if reach:
+            lines.append("")
+            lines.extend(reach)
         lines.append("")
         lines.append("(3) MESH OVERLAY (hugmesh-mesh compose project, tailscale):")
         if overlay:
@@ -1058,7 +1494,20 @@ class LocalMeshBootstrap:
         # hugmesh-tor (and OFF over one that does) — step (3) above already reads it
         # this way, and one plan must not say both things.
         if c.effective_with_tor():
-            lines.append("      Public (no IP/DNS): already ON — the Tor v3 .onion above.")
+            # #654: a Tor address is a way IN, not a public flip — the old line said
+            # 'Public ... already ON', which is not what an onion does
+            lines.append("      A Tor address is another way in to this mesh (the .onion")
+            lines.append("      above): it opens no public port and needs no public")
+            if self.tor_held():
+                how = "It is HELD until Go live (a production mesh)."
+            elif not c.is_prod():
+                how = "It starts with this mesh (a test mesh)."
+            elif c.tor_hold_requested():
+                how = "It starts with this mesh (a production mesh; the hold is not built yet)."
+            else:
+                how = "It starts with this mesh (Go live was pressed)."
+            lines.append("      IP or DNS. " + how)
+            lines.append("      'Open public ports 80 and 443' is the separate public flip.")
         else:
             lines.append("      Public exposure is a SEPARATE, opt-in step — run Go Live")
             lines.append("      after this is up (Studio 'Go Live' page / `hugmesh-go-live`):")
@@ -1202,6 +1651,7 @@ class LocalMeshBootstrap:
         share; the ONLY difference between the two is what runs BEFORE it (mint
         fresh credentials, or reuse the saved ones)."""
         stack = self._stack_node()
+        self._hand_over_tor_hold()
         ok, msg = stack.start(on_line=on_line, cancel=cancel)
         _note(f"[stack-up] {'ok' if ok else 'FAILED'}: {_tail(msg)}")
         if not ok:
@@ -1398,6 +1848,7 @@ class LocalMeshBootstrap:
         _note(f"[saved-mesh] starting '{rec.label}' — reattaching its "
               f"{rec.volume_count()} data volume(s); nothing is re-minted or re-seeded")
         stack = self._stack_node()
+        self._hand_over_tor_hold()
         ok, msg = stack.start(on_line=on_line, cancel=cancel)
         _note(f"[stack-up] {'ok' if ok else 'FAILED'}: {_tail(msg)}")
         if ok:
@@ -1441,6 +1892,18 @@ class LocalMeshBootstrap:
             return False, log
         if plan.mode == saved_meshes.MODE_BLOCKED:
             _note(f"[restore] refused — {plan.sentence} Nothing was started or seeded.")
+            return False, log
+        # A record saved before its mesh ever ran (the Saved meshes list saves the mesh
+        # being worked on, 2026-10-21) has no minted superadmin anywhere: refuse HERE,
+        # from two file reads, rather than after _prepare's preflight and m2 self-heal
+        # (minutes of docker) only to refuse at the same question below.
+        if not (saved_meshes.restore_env(rec).get(SEED_SUPERADMIN_PASSWORD_ENV)
+                or self.read_superadmin().get("password")):
+            _note("[restore] refused — no superadmin password is available: the "
+                  f"secrets bundle at {self.secrets_json} is not there and this record "
+                  "kept no copy (a mesh saved before its first bring-up has none yet). "
+                  "Load it into the form and use 'Generate && start' to mint one. "
+                  "Nothing was started or seeded.")
             return False, log
         if not self._prepare(_note, on_line=on_line, cancel=cancel):
             return False, log
@@ -1568,13 +2031,74 @@ class LocalMeshIdentity(NamedTuple):
     mesh_domains: object = None
 
 
+def _ran_state(rec) -> tuple[str, str]:
+    """``(state, when an earlier version last ran)`` for the import labels below.
+    ``state`` is :meth:`.saved_meshes.SavedMesh.run_state` (``ran``, ``ran_before``,
+    ``volumes``, ``unchecked`` or ``draft``). Only ``draft`` may be called a mesh that
+    never ran: a draft whose earlier version ran (an Overwrite made while nothing ran)
+    names when it last did, and a save that found the mesh's data volumes or could
+    not check the DevOps lane says that instead. Wording only, so a record object
+    without these methods reads as a mesh that ran."""
+    state = "ran"
+    fn = getattr(rec, "run_state", None)
+    try:
+        if callable(fn):
+            state = str(fn() or "ran")
+        else:
+            ran = getattr(rec, "ran_when_saved", None)
+            state = "draft" if callable(ran) and not ran() else "ran"
+    except Exception:                                  # noqa: BLE001 — a label only
+        state = "ran"
+    before = ""
+    if state == "ran_before":
+        fn = getattr(rec, "ran_before_at", None)
+        try:
+            before = str(fn() or "") if callable(fn) else ""
+        except Exception:                              # noqa: BLE001 — a label only
+            before = ""
+        if not before:
+            state = "unchecked"
+    return state, before
+
+
+def _short_when(stamp: str) -> str:
+    return str(stamp or "")[:16].replace("T", " ")
+
+
 def saved_mesh_source(rec) -> str:
     """One human line naming the record an import read, or "" when none was."""
     if rec is None:
         return ""
     label = str(getattr(rec, "label", "") or getattr(rec, "id", "") or "?")
     when = str(getattr(rec, "updated", "") or getattr(rec, "created", "") or "")
-    return f"saved mesh '{label}'" + (f" (saved {when})" if when else "")
+    state, before = _ran_state(rec)
+    tail = {
+        "ran_before": (" — NOT RUN AS SAVED: overwritten while the mesh was not seen "
+                       f"running; an earlier version of this mesh last ran "
+                       f"{_short_when(before)}"),
+        "volumes": (" — NOT RUNNING WHEN SAVED: its data volumes were on disk, so it "
+                    "came up before; this configuration was not seen running"),
+        "unchecked": (" — NOT SEEN RUNNING WHEN SAVED: the Docker mesh was down and "
+                      "the DevOps lane could not be checked"),
+        "draft": " — NEVER RAN: saved as a draft before its first bring-up",
+    }.get(state, "")
+    return f"saved mesh '{label}'" + (f" (saved {when})" if when else "") + tail
+
+
+def saved_mesh_choice_text(rec) -> str:
+    """One short line naming a record in the node-image pages' picker: its name,
+    when it was saved, and whether its mesh was up then."""
+    label = str(getattr(rec, "label", "") or getattr(rec, "id", "") or "?")
+    when = _short_when(str(getattr(rec, "updated", "") or getattr(rec, "created", "")
+                           or ""))
+    state, before = _ran_state(rec)
+    tail = {
+        "ran_before": f" — not run as saved (ran {_short_when(before)})",
+        "volumes": " — not running when saved (ran before)",
+        "unchecked": " — not seen running (DevOps lane unchecked)",
+        "draft": " — never ran (draft)",
+    }.get(state, " — ran")
+    return f"{label}" + (f" — saved {when}" if when else "") + tail
 
 
 def tor_carrier_platforms(platforms) -> tuple[tuple[str, ...], tuple[str, ...]]:
@@ -1651,7 +2175,8 @@ def _cfg_from_args(args: argparse.Namespace) -> LocalMeshBootstrapConfig:
     for w in theme.warnings(args.login_primary or theme._DEFAULT_PRIMARY,
                             args.login_secondary) if login_theme_css else []:
         print(f"WARNING: {w}", file=sys.stderr)
-    return LocalMeshBootstrapConfig(
+    typed_brand = getattr(args, "brand", None)
+    cfg = LocalMeshBootstrapConfig(
         env=args.env, superadmin_username=args.superadmin_username,
         out_dir=args.out, social=args.social, with_tor=args.with_tor,
         # None (the flag absent) is NOT the same as an empty selection: absent means
@@ -1662,13 +2187,49 @@ def _cfg_from_args(args: argparse.Namespace) -> LocalMeshBootstrapConfig:
                   else tuple(args.services.replace(",", " ").split())),
         auth_key=_read_authkey(args),
         login_server=args.login_server, node_name=args.node_name,
-        brand=args.brand, cluster_domain=args.cluster_domain,
+        # --brand has no argparse default (None = not typed), so a typed 'hugmesh' can
+        # be told from the absent flag when a record is applied below
+        brand=typed_brand if typed_brand is not None else DEFAULT_BRAND,
+        cluster_domain=args.cluster_domain,
         source_mode=args.source_mode, source_dir=args.source_dir,
         web_locales=_parse_web_locales(args.web_locales),
         login_theme_css=login_theme_css,
         idp=args.idp, idp_issuer=args.idp_issuer,
         idp_client_id=args.idp_client_id, idp_jwks=args.idp_jwks,
-        own_idp_domains=_parse_own_casdoor_domains(args.own_casdoor_domain))
+        own_idp_domains=_parse_own_casdoor_domains(args.own_casdoor_domain),
+        tor_release=bool(getattr(args, "tor_release", False)))
+    # `--record FILE` (#654, D5): the brand record is the authority for the brand, the
+    # public name, the superbrand block and the brands; every other flag stays; a flag that
+    # contradicts one of those is refused by apply_record_to_bootstrap.
+    if getattr(args, "record", ""):
+        rec = brand_model.load_record(args.record)
+        brand_model.apply_record_to_bootstrap(rec, cfg, typed_brand=typed_brand)
+    return cfg
+
+
+def _show_record_cli(args: argparse.Namespace) -> int:
+    """``show-record``: print every brand's effective look with the source of each
+    value and the effect of each way on each path, from a record file or, without
+    one, from the flags (D2, D5, D10). Reads nothing live."""
+    try:
+        cfg = _cfg_from_args(args)
+    except (OSError, ValueError) as e:
+        print(f"[refused] brand record: {e}", file=sys.stderr)
+        return 2
+    rec = brand_model.record_from_bootstrap(cfg)
+    for line in brand_model.show_record_lines(rec, env=cfg.env):
+        print(line)
+    # the same check `up` runs (validate()), profiles and the Docker start's form
+    # included, so a record shown clean here is never refused at the start
+    problems = brand_model.record_problems(
+        rec, profiles=brand_model.profile_names(args.generator_dir), docker_start=True)
+    if problems:
+        print("")
+        print("PROBLEMS (this record would be refused):")
+        for p in problems:
+            print(f"  - {p}")
+        return 1
+    return 0
 
 
 def _confirm_prod(action: str) -> int:
@@ -1696,20 +2257,96 @@ def _saved_mesh_cli(args: argparse.Namespace) -> int:
         cfg = _cfg_from_args(args)
         boot = LocalMeshBootstrap(args.generator_dir, cfg)
         node = boot._stack_node()
-        if not node.status().running:
-            print("[refused] no local mesh is running — there is nothing to save. "
-                  "(mesh-save records the RUNNING mesh; use `up` first.)",
-                  file=sys.stderr)
+        # NOTHING HAS TO BE RUNNING (the GUI's Saved meshes list, 2026-10-21): a
+        # record is the configuration, and one saved before its first bring-up is a
+        # DRAFT — the node-image pages never pick a draft over a mesh that ran, and
+        # say "never ran" when one is picked by hand. The GUI's rules, restated here
+        # so the two faces cannot disagree: credential COPIES need a mesh that is up
+        # (the files on disk belong to whatever mesh last ran), a new record never
+        # takes a name another record has, and an overwrite keeps the id, the place
+        # and the created stamp, and drops copies the replaced record kept.
+        try:
+            compose_up = bool(node.status().running)
+        except Exception:                                  # noqa: BLE001 — a fact only
+            compose_up = False
+        # The DevOps lane is RECORDED as a tri-state: a probe that did not answer is
+        # None (unknown), never False — `devops_running()` folds every failure into
+        # False because it gates a page, and a broken kind binary with docker down
+        # then filed a mesh whose kind lane was up as a draft that never ran.
+        try:
+            probe = getattr(node, "devops_running_state", None)
+            got = probe() if callable(probe) else None
+            kind_up = None if got is None else bool(got)
+        except Exception:                                  # noqa: BLE001 — unknown
+            kind_up = None
+        if args.copy_credentials and not compose_up:
+            print("[refused] --copy-credentials needs the local mesh to be running: "
+                  "the credential files on disk belong to whatever mesh last ran, so "
+                  "a record of a mesh that is not up keeps POINTERS only. Save "
+                  "without it, or `up` first.", file=sys.stderr)
             return 1
+        records, _unreadable = saved_meshes.scan()
+        target = None
+        if args.overwrite:
+            target = next((r for r in records if r.id == args.overwrite), None)
+            if target is None:
+                print(f"[refused] no saved mesh with id {args.overwrite} to overwrite "
+                      "(`python3 -m hugmesh_studio.core.saved_meshes list`).",
+                      file=sys.stderr)
+                return 1
+            if not target.same_checkout(args.generator_dir, socket.gethostname()):
+                print(f"[refused] {target.id} is from another checkout or host — it "
+                      "describes another mesh; save a new record instead.",
+                      file=sys.stderr)
+                return 1
+        label = (args.label or "").strip()
+        if label:
+            owner = saved_meshes.label_owner(
+                label, records, exclude_id=target.id if target is not None else "")
+            if owner is not None:
+                print(f"[refused] a saved mesh is already called '{owner.label}' "
+                      f"({owner.id}) — pick another --label, or replace it with "
+                      f"--overwrite {owner.id}.", file=sys.stderr)
+                return 1
+        elif target is None:
+            label = saved_meshes.unique_label(
+                saved_meshes.derived_label_of(saved_meshes.config_for_record(cfg)),
+                records)
         rec = saved_meshes.capture(args.generator_dir, cfg, node, boot,
-                                  label=args.label,
-                                  copy_credentials=args.copy_credentials)
+                                  label=label,
+                                  copy_credentials=args.copy_credentials,
+                                  overwrite=target, kind_running=kind_up)
         path = saved_meshes.save(rec)
         if not path:
             print(f"[failed] the record could not be written under "
                   f"{saved_meshes.meshes_dir()}", file=sys.stderr)
             return 1
-        print(f"saved {rec.id} -> {path}")
+        dropped = (saved_meshes.drop_unreferenced_copies(rec)
+                   if target is not None else False)
+        print(f"{'overwrote' if target is not None else 'saved'} '{rec.label}' "
+              f"as {rec.id} -> {path}")
+        if dropped:
+            print("  the credential copies the replaced record kept were removed — "
+                  "this record keeps pointers only")
+        running = [n for n, up in (("Docker mesh", compose_up),
+                                   ("DevOps lane", kind_up is True)) if up]
+        before = rec.ran_before_at() if not running else ""
+        state = rec.run_state() if not running else "ran"
+        by_hand = ("the node-image pages do not import it unless it is picked by "
+                   "hand")
+        print("  running at save time: " + (
+            ", ".join(running) if running else
+            ("nothing seen running (the DevOps lane could not be checked: its kind "
+             "probe did not answer)" if kind_up is None else "nothing")
+            + (f" — NOT RUN AS SAVED: an earlier version of this mesh last ran "
+               f"{before[:16].replace('T', ' ')}; this configuration has not run, so "
+               + by_hand if before else
+               f" — NOT RUNNING WHEN SAVED: {rec.volume_count()} data volume(s) of "
+               "this mesh were on disk, so it came up before; " + by_hand
+               if state == "volumes" else
+               " — NOT SEEN RUNNING: it may have been up on the DevOps lane; "
+               + by_hand if state == "unchecked" else
+               " — a DRAFT: the configuration as worked on (" + by_hand + ")")))
         print(f"  {rec.volume_count()} data volume(s) inventoried, NOT copied "
               f"(included=false: {saved_meshes.VOLUMES_NOT_INCLUDED_REASON})")
         print("  credential files: " + ("copied at 0600 into the record's side dir"
@@ -1765,25 +2402,51 @@ def main(argv: list[str] | None = None) -> int:
             "composes the gen scripts + `make stack-up` + the docker-compose.mesh.yml "
             "overlay. Host-local only (refuses to run in a cluster pod)."))
     p.add_argument("subcommand", choices=("plan", "up", "down", "status",
-                                          "mesh-save", "mesh-restore"),
+                                          "mesh-save", "mesh-restore", "show-record"),
                    help="plan = print the confirm-before-run manifest (no side "
                         "effects); up = GENERATE creds + START the stack (explicit "
                         "action; prod TTY-confirms); down = stop both projects; "
-                        "status = are they running?; mesh-save = record the RUNNING "
-                        "mesh as a saved-mesh record (core/saved_meshes.py — "
+                        "status = are they running?; mesh-save = record this "
+                        "mesh's configuration as a saved-mesh record (running or "
+                        "not: one saved before its first bring-up is a draft; "
+                        "--overwrite ID replaces a record) (core/saved_meshes.py — "
                         "config, source HEADs, credential POINTERS, a volume "
                         "inventory; never volume contents, never a password); "
                         "mesh-restore <id> = bring a saved mesh back: a warm start "
                         "when its volumes+images are still here, else bring up + "
-                        "re-seed WITHOUT re-minting credentials.")
+                        "re-seed WITHOUT re-minting credentials; show-record = print "
+                        "the brand record (every brand's effective look with the "
+                        "source of each value, and what each way to reach it does on "
+                        "each start path) — reads nothing live.")
+    p.add_argument("--record", default="",
+                   help="a brand-record.json (core/brand_model.py): its superbrand "
+                        "block and brands become this mesh's brand, public name and "
+                        "domains; every other flag still applies, but a flag that says "
+                        "something else about those (--brand, --cluster-domain, "
+                        "--own-casdoor-domain, --with-tor) is refused, not "
+                        "overridden. `up --record FILE` "
+                        "starts a mesh from a record; `show-record --record FILE` "
+                        "prints it.")
+    p.add_argument("--tor-release", action="store_true",
+                   help="production only: Go live was pressed, so no hold is asked for "
+                        "(TOR_HOLD is not passed). Without it a production mesh with Tor "
+                        "on is passed TOR_HOLD=1, which holds its Tor addresses until Go "
+                        "live ONCE the Makefile reads that knob — the plan says whether "
+                        "this checkout's does. A test mesh starts them with the mesh "
+                        "either way.")
     p.add_argument("mesh_id", nargs="?", default="",
                    help="mesh-restore: the saved record id "
                         "(`python3 -m hugmesh_studio.core.saved_meshes list`).")
     p.add_argument("--label", default="",
                    help="mesh-save: a human label for the record (default: derived).")
+    p.add_argument("--overwrite", default="", metavar="ID",
+                   help="mesh-save: replace the saved record with this id (its id, "
+                        "place and created stamp are kept; credential copies it kept "
+                        "are removed unless this save copies them again).")
     p.add_argument("--copy-credentials", action="store_true",
                    help="mesh-save: ALSO copy .e2e-credentials and keys-out/vault/"
-                        "secrets.json into the record's side dir (0600). OFF by "
+                        "secrets.json into the record's side dir (0600). Only while "
+                        "the mesh is running. OFF by "
                         "default — the record holds pointers only. Needed to bring "
                         "the SAME passwords back after `stack-clean`.")
     p.add_argument("--env", choices=("test", "prod"), default="test",
@@ -1805,8 +2468,9 @@ def main(argv: list[str] | None = None) -> int:
                         f"from: {' '.join(local_slugs())}. Omit to leave the stack as "
                         "shipped (--social/--with-tor still apply); pass an empty "
                         "string for an explicit none.")
-    p.add_argument("--brand", default=DEFAULT_BRAND,
-                   help=f"brand slug (default: {DEFAULT_BRAND}).")
+    p.add_argument("--brand", default=None,
+                   help=f"brand slug (default: {DEFAULT_BRAND}). With --record it must "
+                        "be the record's superbrand id, or it is refused.")
     p.add_argument("--cluster-domain", default="",
                    help="public apex domain (REQUIRED in prod).")
     p.add_argument("--source-mode", choices=("clone", "existing"), default="clone",
@@ -1889,8 +2553,14 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.subcommand in ("mesh-save", "mesh-restore"):
         return _saved_mesh_cli(args)
+    if args.subcommand == "show-record":
+        return _show_record_cli(args)
 
-    cfg = _cfg_from_args(args)
+    try:
+        cfg = _cfg_from_args(args)
+    except (OSError, ValueError) as e:
+        print(f"[refused] brand record: {e}", file=sys.stderr)
+        return 2
     boot = LocalMeshBootstrap(args.generator_dir, cfg)
 
     if args.subcommand == "plan":

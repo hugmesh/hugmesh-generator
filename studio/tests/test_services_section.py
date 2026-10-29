@@ -1215,7 +1215,8 @@ def test_the_client_role_overrides_cannot_fire_before_the_role_case():
     stale row was #621). Its dead pre-role-case guard is gone; the CLIENT drop now sits
     after the LAST place ROLE_CLIENT can change, and every tor gate goes through
     ``_tor_node_selected``, which reads ROLE_CLIENT at call time. So --with-tor is pinned
-    below as the FIXED shape, and the other four keep the dead-guard pin. Re-measured
+    below as the FIXED shape. The other four were fixed the same way in #615
+    (2026-10-07): one CLIENT drop loop after the role case, pinned below. Re-measured
     with --print-plan (2026-09-24): ``--role desktop --with-tor`` and ``--role desktop
     --config <WANT_TOR=true>`` both resolve PLAN_OPTIONAL_SERVICES=none and
     PLAN_TOR_ONION=off WITHOUT a --no-tor, so the --no-tor the hide in
@@ -1230,20 +1231,26 @@ def test_the_client_role_overrides_cannot_fire_before_the_role_case():
         assert len(hits) > occurrence, f"builder no longer contains {needle!r}"
         return hits[occurrence]
 
-    guards = {
-        "--with-edge-ai":          line_of("if ${EDGE_AI_WANT} && ${ROLE_CLIENT}; then"),
-        "--with-character-studio": line_of('if [ "${WANT_CHARACTER_STUDIO}" = "true" ] && ${ROLE_CLIENT}; then'),
-        "--with-character-forge":  line_of('if [ "${WANT_CHARACTER_FORGE}" = "true" ] && ${ROLE_CLIENT}; then'),
-        "--with-edge-ai-tts":      line_of('if [ "${WANT_EDGE_AI_TTS}" = "true" ] && ${ROLE_CLIENT}; then'),
-    }
     reset = line_of("ROLE_CLIENT=false            # true for person-device desktop roles")
     first_true = min(i + 1 for i, l in enumerate(src) if "ROLE_CLIENT=true" in l)
-    for flag, at in sorted(guards.items(), key=lambda kv: kv[1]):
-        assert at < reset, (
-            f"the {flag} client guard at :{at} now runs AFTER the ROLE_CLIENT reset at "
-            f":{reset} — the builder may have been fixed. If ROLE_CLIENT is genuinely "
-            "true there, the hide in gui/pages/network.py can stop emitting the --no-<x> "
-            "overrides; re-measure with --print-plan before changing anything.")
+    # The four other flags: FIXED in the builder too (#615, 2026-10-07). The dead
+    # pre-role-case guards are gone, and one loop after the LAST place ROLE_CLIENT can
+    # change drops every cluster-only slug for a client, the same shape as the tor
+    # drop below. Pinned by order, so moving the loop back ahead of the role case (or
+    # bringing a dead guard back) goes red here.
+    for dead in ("if ${EDGE_AI_WANT} && ${ROLE_CLIENT}; then",
+                 'if [ "${WANT_CHARACTER_STUDIO}" = "true" ] && ${ROLE_CLIENT}; then',
+                 'if [ "${WANT_CHARACTER_FORGE}" = "true" ] && ${ROLE_CLIENT}; then',
+                 'if [ "${WANT_EDGE_AI_TTS}" = "true" ] && ${ROLE_CLIENT}; then'):
+        assert not [i for i, l in enumerate(src) if dead in l], (
+            f"the dead pre-role-case guard {dead!r} is back in the builder")
+    cs_loop = line_of("for _cs_slug in edge-ai edge-ai-analysis character-studio "
+                      "character-forge edge-ai-tts; do")
+    cs_drop = line_of('if ${ROLE_CLIENT} && _opt_selected "${_cs_slug}"; then')
+    assert cs_loop < cs_drop <= cs_loop + 2
+    assert cs_loop > max(i + 1 for i, l in enumerate(src) if "ROLE_CLIENT=true" in l), (
+        f"the CLIENT drop of the cluster-only slugs at :{cs_loop} runs before the last "
+        "ROLE_CLIENT=true — a role that becomes a client after it keeps them (#615)")
     assert reset < first_true, (
         f"ROLE_CLIENT=true now appears at :{first_true}, before the reset at :{reset}")
 

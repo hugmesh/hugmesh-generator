@@ -28,11 +28,15 @@ What is pinned:
 """
 from __future__ import annotations
 
+import io
 import json
 import os
 import re
 import shlex
 import shutil
+import subprocess
+import sys
+import tarfile
 
 import pytest
 import yaml
@@ -773,7 +777,7 @@ def test_apply_pushes_one_fresh_commit_per_repository_never_force(world):
         assert "--mirror" not in joined
         assert "--delete" not in joined and " -f " not in f" {joined} "
         if call[:2] == ["git", "push"]:
-            assert call[-1].startswith("HEAD:refs/heads/")
+            assert re.fullmatch(r"[0-9a-f]{40}:refs/heads/main", call[-1]), call
     # gh was the fake, called only for view/create
     verbs = {" ".join(c.split()[:2]) for c in runner.gh_calls()}
     assert verbs == {"repo view", "repo create"}
@@ -1652,6 +1656,134 @@ def test_a_banned_marker_in_a_non_utf8_or_binary_file_still_refuses(world, name,
     assert next(r for r in res.repos if r.target.endswith("example-commons")).skipped
 
 
+_SCAN_SPELLINGS = [
+    ("latin1", b"caf\xe9 " + _GH_TOKEN + b"\n"),
+    ("nul-first", b"\0\0\0binary header\0 " + _GH_TOKEN),
+    ("utf16-bom", ("tok " + _GH_TOKEN.decode()).encode("utf-16")),
+    ("utf16-be-no-bom", ("tok " + _GH_TOKEN.decode()).encode("utf-16-be")),
+    ("utf32", ("tok " + _GH_TOKEN.decode()).encode("utf-32")),
+    ("late-nul", b"x" * 20000 + b"\0" + _GH_TOKEN),
+    ("nul-inside-the-token", _GH_TOKEN[:10] + b"\0" + _GH_TOKEN[10:]),
+    ("invalid-byte-then-token", b"\xff\xfe\x80" + _GH_TOKEN),
+    # a token glued to a character that `\b` counted as part of a word
+    ("glued-to-utf8-letter", "caf\u00e9".encode() + _GH_TOKEN),
+    ("glued-to-latin1-letter", b"caf\xe9" + _GH_TOKEN),
+    ("glued-to-underscore", b"X_" + _GH_TOKEN),
+    ("glued-to-digit", b"1" + _GH_TOKEN),
+    ("glued-to-letter", b"x" + _GH_TOKEN),
+    ("fine-grained-glued", b"1github_pat_" + b"B" * 30),
+]
+
+
+@pytest.mark.parametrize("name,data", _SCAN_SPELLINGS, ids=[n for n, _ in _SCAN_SPELLINGS])
+def test_scan_file_flags_a_planted_token_in_every_spelling(tmp_path, name, data):
+    """Unit level: whatever the bytes are, a token inside them is found."""
+    f = tmp_path / "planted.dat"
+    f.write_bytes(data)
+    labels, _text, _clean = oe._scan_file(str(f))
+    assert labels and all("token" in lb for lb in labels), (name, labels)
+
+
+def test_scan_file_says_so_when_it_cannot_scan(tmp_path, monkeypatch):
+    """An unreadable or oversize file is a finding, never a silent pass."""
+    f = tmp_path / "big.bin"
+    f.write_bytes(b"x")
+    monkeypatch.setattr(oe, "SCAN_LIMIT", 0)
+    assert oe._scan_file(str(f))[0] == ["too large to scan for secrets"]
+    monkeypatch.undo()
+    assert oe._scan_file(str(tmp_path / "missing"))[0] == \
+        ["unreadable, so not scanned for secrets"]
+
+
+def _tar_runner(members):
+    """A runner whose ``git archive`` answers with a tar of ``members``
+    (``(name, kind, data_or_target)``)."""
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w") as tf:
+        for name, kind, payload in members:
+            ti = tarfile.TarInfo(name)
+            if kind == "sym":
+                ti.type, ti.linkname = tarfile.SYMTYPE, payload
+                tf.addfile(ti)
+            elif kind == "dir":
+                ti.type = tarfile.DIRTYPE
+                ti.mode = 0o755
+                tf.addfile(ti)
+            else:
+                ti.size = len(payload)
+                tf.addfile(ti, io.BytesIO(payload))
+
+    class R(oe.Runner):
+        def run(self, argv, *, cwd=None, env=None, timeout=600):
+            return oe.RunResult(0, buf.getvalue(), b"")
+    return R()
+
+
+def test_snapshot_passes_the_data_filter_explicitly(tmp_path, monkeypatch):
+    seen = []
+    real = tarfile.TarFile.extract
+
+    def spy(self, member, path="", *a, **kw):
+        seen.append(kw.get("filter"))
+        return real(self, member, path, *a, **kw)
+    monkeypatch.setattr(tarfile.TarFile, "extract", spy)
+    files = oe._snapshot(_tar_runner([("a.txt", "file", b"hi")]), str(tmp_path), "HEAD",
+                         str(tmp_path / "w"))
+    assert files == ["a.txt"] and seen == ["data"]
+
+
+@pytest.mark.parametrize("members", [
+    # a link out of the tree, then a file written THROUGH it
+    [("esc", "sym", "../outside"), ("esc/pwn.txt", "file", b"x")],
+    # an absolute link, then a file through it
+    [("esc", "sym", "{abs}"), ("esc/pwn.txt", "file", b"x")],
+    # a link that climbs out from a sub folder
+    [("d", "dir", None), ("d/esc", "sym", "../../outside"), ("d/esc/pwn.txt", "file", b"x")],
+    # a plain name that climbs out
+    [("../outside/pwn.txt", "file", b"x")],
+], ids=["relative-link", "absolute-link", "nested-link", "dotdot-name"])
+def test_snapshot_never_writes_outside_even_without_extraction_filters(
+        tmp_path, monkeypatch, members):
+    """On a Python with no extraction filter (3.10 before .12, 3.11 before .4) the
+    snapshot used to rely on a name check that does not follow links. Emulated here by
+    a ``tarfile`` whose ``extract`` rejects ``filter=`` and extracts everything else
+    unfiltered."""
+    work = tmp_path / "w"
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    members = [(n, k, (str(outside) if p == "{abs}" else p)) for n, k, p in members]
+    real = tarfile.TarFile.extract
+
+    def old_python(self, member, path="", *a, **kw):
+        if "filter" in kw:
+            raise TypeError("extract() got an unexpected keyword argument 'filter'")
+        return real(self, member, path, *a, filter="fully_trusted", **kw)
+    monkeypatch.setattr(tarfile.TarFile, "extract", old_python)
+    oe._snapshot(_tar_runner(members), str(tmp_path), "HEAD", str(work))
+    assert os.listdir(outside) == [], "the snapshot wrote outside its folder"
+    assert not (tmp_path / "pwn.txt").exists()
+    assert not os.path.exists(tmp_path / "outside" / "pwn.txt")
+
+
+def test_snapshot_keeps_a_link_that_points_inside_the_tree(tmp_path):
+    files = oe._snapshot(_tar_runner([("real.txt", "file", b"hi"), ("d", "dir", None),
+                                      ("d/link", "sym", "../real.txt")]),
+                         str(tmp_path), "HEAD", str(tmp_path / "w"))
+    # the link is a member too: it goes through the exclusion rules and the scan
+    assert files == ["d/link", "real.txt"]
+    assert os.path.islink(tmp_path / "w" / "d" / "link")
+
+
+def test_the_subprocess_runner_never_lets_git_prompt_for_a_login(monkeypatch):
+    """Pinned in the runner itself: not the ambient environment, and not a caller's
+    ``env``, can switch the terminal prompt on."""
+    monkeypatch.setenv("GIT_TERMINAL_PROMPT", "1")
+    argv = [sys.executable, "-c", "import os;print(os.environ['GIT_TERMINAL_PROMPT'])"]
+    for env in (None, {}, {"GIT_TERMINAL_PROMPT": "1"}):
+        r = oe.SubprocessRunner().run(argv, env=env)
+        assert r.returncode == 0 and r.text.strip() == "0", (env, r.text, r.err)
+
+
 def test_a_clean_non_utf8_or_binary_file_is_published_byte_for_byte_and_noted(world):
     cfg, runner = world["cfg"], world["runner"]
     blob = b"caf\xe9 hugmesh-commons\n\0\x01\x02"
@@ -2296,3 +2428,552 @@ def test_a_plain_java_repository_gets_the_java_build_and_its_matrix_row(world, t
     # the other three kinds map to their own words and anything else to none
     assert [oe._build_word(k) for k in ("java", "java+settings", "angular", "other")] == \
         ["java", "java", "angular", "none"]
+
+
+# ── round 2: every spelling a commit publishes is scanned, at plan AND at apply ──────
+_AWS_KEY = "AKIA" + "IOSFODNN7EXAMPLE"
+_SLACK = "xoxb" + "-1234567890-abcdefghij"
+_FINE = "github_pat_" + "B" * 30
+_ROBOT = "\U0001F916"
+
+
+def _plant_tree(src, files, links=None):
+    """Plant ``files`` (bytes) and ``links`` (name -> target) in a source repository."""
+    for rel, target in (links or {}).items():
+        full = os.path.join(src, rel)
+        os.makedirs(os.path.dirname(full) or src, exist_ok=True)
+        os.symlink(target, full)
+    _plant_bytes(src, files)
+
+
+_PIPELINE_SPELLINGS = [
+    # a key glued to a word character on either side (the old `\b` rules missed them)
+    ("aws-after-underscore", {"cfg.txt": ("SECRET_" + _AWS_KEY + "\n").encode()}, None),
+    ("aws-after-digit", {"cfg.txt": ("1" + _AWS_KEY + "\n").encode()}, None),
+    ("aws-before-letters", {"cfg.txt": (_AWS_KEY + "id\n").encode()}, None),
+    ("aws-after-utf8-letter", {"cfg.txt": ("café" + _AWS_KEY).encode()}, None),
+    ("aws-before-utf8-letter", {"cfg.txt": (_AWS_KEY + "é").encode()}, None),
+    ("slack-after-underscore", {"cfg.txt": ("TOKEN_" + _SLACK + "\n").encode()}, None),
+    ("slack-after-utf8-letter", {"cfg.txt": ("é" + _SLACK).encode()}, None),
+    ("slack-before-utf8-letter", {"cfg.txt": (_SLACK + "é").encode()}, None),
+    ("fine-grained-before-utf8-letter", {"cfg.txt": (_FINE + "é").encode()}, None),
+    ("fine-grained-after-digit", {"cfg.txt": ("1" + _FINE).encode()}, None),
+    # the robot footer outside UTF-8, and a token in EBCDIC
+    ("robot-utf16-bom", {"n.txt": ("(" + _ROBOT + " done)").encode("utf-16")}, None),
+    ("robot-utf16-le-bare", {"n.txt": _ROBOT.encode("utf-16-le")}, None),
+    ("robot-utf16-be-odd-offset", {"n.txt": b"x" + _ROBOT.encode("utf-16-be")}, None),
+    ("robot-utf32-le-bare", {"n.txt": _ROBOT.encode("utf-32-le")}, None),
+    ("robot-utf32-be", {"n.txt": ("ok " + _ROBOT).encode("utf-32-be")}, None),
+    ("ebcdic-github-token", {"n.txt": _GH_TOKEN.decode().encode("cp037")}, None),
+    ("ebcdic-aws-key", {"n.txt": ("key=" + _AWS_KEY).encode("cp037")}, None),
+    # a link's TARGET is its content in git; names are published too
+    ("link-target", {"ok.txt": b"x"}, {"link": _GH_TOKEN.decode()}),
+    ("link-name-in-folder", {"ok.txt": b"x"}, {"d/" + _AWS_KEY: "../ok.txt"}),
+    ("file-name", {_GH_TOKEN.decode() + ".txt": b"x"}, None),
+    ("folder-name", {"keys/" + _SLACK + "/x.txt": b"x"}, None),
+]
+
+
+@pytest.mark.parametrize("name,files,links", _PIPELINE_SPELLINGS,
+                         ids=[n for n, _f, _l in _PIPELINE_SPELLINGS])
+def test_a_marker_in_any_published_spelling_refuses_and_is_not_pushed(world, name, files,
+                                                                        links):
+    """Through the real plan() and apply() with real git: each spelling was PUBLISHED
+    (pushed to main of the remote) with banned=[] before this round."""
+    cfg, runner = world["cfg"], world["runner"]
+    _plant_tree(os.path.join(world["src"], "hugmesh-commons"), files, links)
+    p = oe.plan(cfg, runner, stamp="20260101T000000Z", probe=False)
+    rp = next(r for r in p.repos if r.source == "hugmesh-commons")
+    assert rp.action == "refused: banned marker" and rp.banned, (name, rp.banned)
+    res = oe.apply(p, runner)
+    assert not os.path.isdir(_bare(world, "example-commons")), f"{name} was pushed"
+    assert next(r for r in res.repos if r.target.endswith("example-commons")).skipped
+
+
+def test_apply_rescans_the_commit_and_refuses_what_changed_after_the_plan(world):
+    """The work folder is an ordinary folder: a token written into it between plan()
+    and apply() (same file count) was pushed. apply scans the commit it built."""
+    cfg, runner = world["cfg"], world["runner"]
+    p = oe.plan(cfg, runner, stamp="20260101T000000Z", probe=False)
+    rp = next(r for r in p.repos if r.source == "hugmesh-commons")
+    assert rp.banned == []
+    with open(os.path.join(rp.workdir, "README.md"), "a", encoding="utf-8") as fh:
+        fh.write("\n" + _GH_TOKEN.decode() + "\n")
+    res = oe.apply(p, runner)
+    got = next(r for r in res.repos if r.target.endswith("example-commons"))
+    assert "README.md: GitHub token" in got.skipped and "nothing is pushed" in got.skipped
+    assert not os.path.isdir(_bare(world, "example-commons"))
+    # the other repositories of the same plan still go out
+    assert [r.target for r in res.repos if not r.skipped] == [
+        "exampleorg/example-actions", "exampleorg/example-parent",
+        "exampleorg/mesh.example.github.io"]
+
+
+def test_the_commit_scan_fails_closed_on_an_entry_it_cannot_read():
+    """An entry that is not a file or a link (a submodule), or whose object is
+    missing, is a finding; a link's object is its target and is scanned."""
+    entries = [("100644", "a" * 40, "a.txt"), ("160000", "b" * 40, "sub"),
+               ("100644", "c" * 40, "gone.txt"), ("120000", "d" * 40, "link")]
+    objects = {"a" * 40: b"hi", "b" * 40: b"", "d" * 40: _GH_TOKEN}
+    assert oe._scan_objects(entries, objects) == [
+        "sub: not a file or a link (mode 160000), so not scanned for secrets",
+        "gone.txt: object not readable, so not scanned for secrets",
+        "link: GitHub token"]
+
+
+def test_apply_scans_the_objects_an_export_ignore_hides_from_git_archive(world):
+    """A token added after the plan to a path the work folder's .gitattributes marks
+    export-ignore (count kept equal) was invisible to a scan of `git archive` but is
+    in the commit the push sends."""
+    cfg, runner = world["cfg"], world["runner"]
+    p = oe.plan(cfg, runner, stamp="20260101T000000Z", probe=False)
+    rp = next(r for r in p.repos if r.source == "hugmesh-commons")
+    wd = rp.workdir
+    assert not os.path.exists(os.path.join(wd, ".gitattributes"))
+    victim = next(e for e in oe._tree_entries(wd)
+                  if e != "README.md" and not os.path.islink(os.path.join(wd, e)))
+    os.unlink(os.path.join(wd, victim))            # the new .gitattributes takes its count
+    with open(os.path.join(wd, "README.md"), "a", encoding="utf-8") as fh:
+        fh.write("\n" + _GH_TOKEN.decode() + "\n")
+    with open(os.path.join(wd, ".gitattributes"), "w", encoding="utf-8") as fh:
+        fh.write("README.md export-ignore\n")
+    res = oe.apply(p, runner)
+    got = next(r for r in res.repos if r.target.endswith("example-commons"))
+    assert "README.md: GitHub token" in got.skipped, got.skipped
+    assert not os.path.isdir(_bare(world, "example-commons"))
+
+
+def test_a_working_tree_encoding_cannot_hide_a_marker_from_the_published_blob(world):
+    """The source's .gitattributes says n.txt is UTF-7 in the work tree: git archive
+    (the snapshot) gives ASCII `+2D3dFg-`, which the plan's folder scan cannot read
+    as the robot footer, while `git add` converts it back and the BLOB holds it."""
+    cfg, runner = world["cfg"], world["runner"]
+    src = os.path.join(world["src"], "hugmesh-commons")
+    with open(os.path.join(src, ".gitattributes"), "a", encoding="utf-8") as fh:
+        fh.write("\nn.txt working-tree-encoding=UTF-7\n")
+    _plant_bytes(src, {"n.txt": ("ok " + _ROBOT + "\n").encode("utf-7")})
+    p = oe.plan(cfg, runner, stamp="20260101T000000Z", probe=False)
+    res = oe.apply(p, runner)
+    got = next(r for r in res.repos if r.target.endswith("example-commons"))
+    assert "n.txt: robot footer" in got.skipped, (got.action, got.skipped)
+    assert not os.path.isdir(_bare(world, "example-commons"))
+
+
+def test_a_link_goes_through_the_exclusion_rules(world):
+    """A link was never listed as a snapshot member, so a link named like a secret
+    (``.env``, ``id_rsa``) was kept whatever it pointed at."""
+    cfg, runner = world["cfg"], world["runner"]
+    _plant_tree(os.path.join(world["src"], "hugmesh-commons"), {"ok.txt": b"x"},
+                {"id_rsa": "ok.txt", "conf/.env": "../ok.txt"})
+    p = oe.plan(cfg, runner, stamp="20260101T000000Z", probe=False)
+    rp = next(r for r in p.repos if r.source == "hugmesh-commons")
+    assert {e.split(":", 1)[0] for e in rp.excluded} >= {"id_rsa", "conf/.env"}
+    assert not os.path.lexists(os.path.join(rp.workdir, "id_rsa"))
+
+
+def test_the_widened_token_rules_do_not_fire_on_lookalikes():
+    """No boundary, but still a prefix plus a length floor."""
+    def hit(text):
+        return [lbl for lbl, rx in oe.BANNED_MARKERS if rx.search(text)]
+    assert hit("AKIA" + "SHORT1234") == []                 # 9 after the prefix, not 16
+    assert hit("AKIA" + "abcdefghijklmnop") == []          # lower case is not a key id
+    assert hit("xoxb" + "-short") == []
+    assert hit("github_pat_" + "short") == []
+    # cp037 runs the token rules only: a cp037 view of these bytes spells a URL with
+    # a password, which is not a finding there
+    assert oe._scan_bytes(("https://u:" + "p" * 20 + "@h").encode("cp037") + b"\xff")[0] \
+        == []
+
+
+# ── the push sends the SCANNED commit ───────────────────────────────────────────────
+def _move_head_with_a_token(workdir):
+    """What a writer to the work folder can do at any moment: commit a token on top
+    of the snapshot, moving HEAD."""
+    with open(os.path.join(workdir, "README.md"), "ab") as fh:
+        fh.write(b"\n" + _GH_TOKEN + b"\n")
+    _git(workdir, "add", "README.md")
+    _git(workdir, "commit", "-q", "-m", "swap")
+    return _git(workdir, "rev-parse", "HEAD")
+
+
+def _hooked(runner, when, action):
+    """Run ``action`` once, just before the first runner call ``when(argv, kw)`` matches."""
+    orig, fired = runner.run, []
+
+    def run(argv, **kw):
+        if not fired and when(list(argv), kw):
+            fired.append(action(list(argv), kw))
+        return orig(argv, **kw)
+    runner.run = run
+    return fired
+
+
+def _after_the_push(target):
+    """A hook condition: the first ``git ls-remote`` of ``target`` after its push."""
+    seen = []
+
+    def when(a, kw):
+        if a[:2] == ["git", "push"] and target in a[-2]:
+            seen.append(True)
+            return False
+        return bool(seen) and a[:2] == ["git", "ls-remote"] and target in a[-1]
+    return when
+
+
+def _in(wd):
+    return lambda kw: bool(kw.get("cwd")) and os.path.samefile(kw["cwd"], wd)
+
+
+@pytest.mark.parametrize("point", [
+    # after the scan, before the push: the reported exploit
+    lambda a, kw, rp: a[:3] == ["gh", "repo", "view"] and a[3] == rp.target_full,
+    # (the network calls run in the push repository since round 4, not the work folder)
+    lambda a, kw, rp: a[:3] == ["git", "ls-remote", "--heads"] and rp.target_full in a[-1],
+    # after the scan, while the snapshot's tree is being named
+    lambda a, kw, rp: a[:2] == ["git", "rev-parse"] and a[-1].endswith("^{tree}")
+    and _in(rp.workdir)(kw),
+    # inside the scan itself: the moved commit's objects are on disk by then
+    lambda a, kw, rp: a[:3] == ["git", "cat-file", "--batch-all-objects"]
+    and _in(rp.workdir)(kw),
+], ids=["gh-repo-view", "ls-remote-heads", "rev-parse-tree", "cat-file-scan"])
+def test_head_moved_after_the_snapshot_commit_never_reaches_the_remote(world, point):
+    """The push used to send HEAD as it stood at push time: a commit added to the work
+    folder after the scan (the folder is an ordinary directory) was PUBLISHED with no
+    skip reason, and the result file named the scanned commit while the remote held
+    the other one. The push now sends the scanned sha, and the result names what the
+    remote holds; a move seen by the scan itself refuses the repository instead."""
+    cfg, runner = world["cfg"], world["runner"]
+    p = oe.plan(cfg, runner, stamp="20260101T000000Z", probe=False)
+    rp = next(r for r in p.repos if r.source == "hugmesh-commons")
+    fired = _hooked(runner, lambda a, kw: point(a, kw, rp),
+                    lambda a, kw: _move_head_with_a_token(rp.workdir))
+    res = oe.apply(p, runner)
+    assert fired, "the hook never ran: the test proves nothing"
+    r = next(x for x in res.repos if x.target == rp.target_full)
+    bare = _bare(world, "example-commons")
+    if not os.path.isdir(bare):
+        # refused before anything was created or pushed
+        assert r.skipped and "banned marker" in r.skipped, r.skipped
+        return
+    remote = _git(bare, "rev-parse", "main")
+    assert remote != fired[0], "the unscanned commit was pushed"
+    assert _GH_TOKEN.decode() not in _git(bare, "show", "main:README.md")
+    assert _GH_TOKEN.decode() not in _git(bare, "log", "--all", "-p", "--format=%H")
+    assert r.commit == remote and not r.skipped, (r.commit, remote, r.skipped)
+    push = [c for c in res.calls if c[:2] == ["git", "push"] and "example-commons" in c[-2]]
+    assert push and push[0][-1] == f"{r.commit}:refs/heads/main", push
+
+
+def test_a_remote_branch_that_is_not_the_scanned_commit_after_the_push_is_a_failure(world):
+    """The branch is read back after the push: when the remote holds anything but the
+    scanned commit, the repository is reported as skipped, never as pushed."""
+    cfg, runner = world["cfg"], world["runner"]
+    p = oe.plan(cfg, runner, stamp="20260101T000000Z", probe=False)
+    rp = next(r for r in p.repos if r.source == "hugmesh-commons")
+    bare = _bare(world, "example-commons")
+
+    def overwrite(argv, kw):
+        other = _move_head_with_a_token(rp.workdir)
+        _git(rp.workdir, "push", "-q", bare, "+HEAD:refs/heads/main")
+        return other
+    fired = _hooked(runner, _after_the_push("example-commons"), overwrite)
+    res = oe.apply(p, runner)
+    assert fired
+    r = next(x for x in res.repos if x.target == rp.target_full)
+    assert r in res.failures
+    assert "not the scanned commit" in r.skipped and fired[0] in r.skipped, r.skipped
+
+
+def test_an_unreadable_remote_branch_after_the_push_is_a_failure(world):
+    cfg, runner = world["cfg"], world["runner"]
+    p = oe.plan(cfg, runner, stamp="20260101T000000Z", probe=False)
+    rp = next(r for r in p.repos if r.source == "hugmesh-commons")
+    orig, after = runner.run, _after_the_push("example-commons")
+
+    def run(argv, **kw):
+        if after(list(argv), kw):
+            return oe.RunResult(128, b"", b"fatal: could not read from remote")
+        return orig(argv, **kw)
+    runner.run = run
+    res = oe.apply(p, runner)
+    r = next(x for x in res.repos if x.target == rp.target_full)
+    assert r in res.failures and "unreadable" in r.skipped, r.skipped
+
+
+def test_an_unreadable_remote_before_the_push_pushes_nothing(world):
+    """The refs are listed right before the push so the read-back can tell what the
+    push changed; when that listing fails, nothing is pushed."""
+    cfg, runner = world["cfg"], world["runner"]
+    p = oe.plan(cfg, runner, stamp="20260101T000000Z", probe=False)
+    rp = next(r for r in p.repos if r.source == "hugmesh-commons")
+    orig = runner.run
+
+    def run(argv, **kw):
+        if argv[:2] == ["git", "ls-remote"] and "--heads" not in argv \
+                and "example-commons" in argv[-1]:
+            return oe.RunResult(128, b"", b"fatal: could not read from remote")
+        return orig(argv, **kw)
+    runner.run = run
+    res = oe.apply(p, runner)
+    r = next(x for x in res.repos if x.target == rp.target_full)
+    assert r in res.failures and "git ls-remote failed" in r.skipped, r.skipped
+    assert not [c for c in res.calls if c[:2] == ["git", "push"] and "example-commons" in c[-2]]
+
+
+def test_a_second_run_compares_the_scanned_tree_even_when_head_moves(world):
+    """The tree that decides 'unchanged' is the scanned commit's, not HEAD's: a commit
+    added while the tree is being named neither turns a matching remote into a
+    refusal nor reaches it."""
+    cfg, runner = world["cfg"], world["runner"]
+    assert oe.apply(oe.plan(cfg, runner, stamp="20260101T000000Z"), runner).failures == []
+    bare = _bare(world, "example-commons")
+    before = _git(bare, "rev-parse", "main")
+    p = oe.plan(cfg, runner, stamp="20260202T000000Z")
+    rp = next(r for r in p.repos if r.source == "hugmesh-commons")
+    fired = _hooked(runner, lambda a, kw: a[:2] == ["git", "rev-parse"]
+                    and a[-1].endswith("^{tree}") and _in(rp.workdir)(kw),
+                    lambda a, kw: _move_head_with_a_token(rp.workdir))
+    res = oe.apply(p, runner)
+    assert fired
+    r = next(x for x in res.repos if x.target == rp.target_full)
+    assert r.action == "unchanged" and not r.skipped, (r.action, r.skipped)
+    assert _git(bare, "rev-parse", "main") == before
+
+
+# ── the push sends the scanned commit and NOTHING else ─────────────────────────────
+def _tag_with_a_token(workdir, *, follow=True, hook=False):
+    """What a writer to the work folder can do after the scan: an annotated tag on the
+    scanned commit whose message is a token, push.followTags turned on in the folder's
+    own config, and a pre-push hook that would publish that tag."""
+    if follow:
+        _git(workdir, "config", "push.followTags", "true")
+    _git(workdir, "-c", "user.name=x", "-c", "user.email=x@example.invalid",
+         "tag", "-a", "v0", "-m", _GH_TOKEN.decode(), "HEAD")
+    if hook:
+        hooks = os.path.join(workdir, ".git", "evil-hooks")
+        os.makedirs(hooks, exist_ok=True)
+        path = os.path.join(hooks, "pre-push")
+        with open(path, "w") as fh:
+            fh.write('#!/bin/sh\ngit push -q "$2" refs/tags/v0:refs/tags/v0\n')
+        os.chmod(path, 0o755)
+        _git(workdir, "config", "core.hooksPath", hooks)
+    return True
+
+
+@pytest.mark.parametrize("follow,hook", [(True, False), (False, True), (True, True)],
+                         ids=["push.followTags", "pre-push-hook", "both"])
+def test_a_tag_made_after_the_scan_never_reaches_the_remote(world, follow, hook):
+    """The push sends one refspec, the scanned sha, and nothing rides along with it:
+    a tag object made after the scan (its message is never scanned) is not followed
+    by the folder's push.followTags, and a pre-push hook the folder names does not run."""
+    cfg, runner = world["cfg"], world["runner"]
+    p = oe.plan(cfg, runner, stamp="20260101T000000Z", probe=False)
+    rp = next(r for r in p.repos if r.source == "hugmesh-commons")
+    fired = _hooked(runner, lambda a, kw: a[:3] == ["gh", "repo", "view"]
+                    and a[3] == rp.target_full,
+                    lambda a, kw: _tag_with_a_token(rp.workdir, follow=follow, hook=hook))
+    res = oe.apply(p, runner)
+    assert fired, "the hook never ran: the test proves nothing"
+    r = next(x for x in res.repos if x.target == rp.target_full)
+    bare = _bare(world, "example-commons")
+    assert _git(bare, "for-each-ref", "refs/tags") == ""
+    objs = subprocess.run(["git", "-C", bare, "cat-file", "--batch-all-objects", "--batch"],
+                          capture_output=True).stdout
+    assert _GH_TOKEN not in objs
+    assert r.commit == _git(bare, "rev-parse", "main") and not r.skipped, r.skipped
+
+
+def test_a_ref_the_push_did_not_send_is_a_failure(world):
+    """Whatever else changes on the remote between the listing before the push and the
+    read-back (a tag here) is reported as a failure, never as a pushed repository."""
+    cfg, runner = world["cfg"], world["runner"]
+    p = oe.plan(cfg, runner, stamp="20260101T000000Z", probe=False)
+    rp = next(r for r in p.repos if r.source == "hugmesh-commons")
+    bare = _bare(world, "example-commons")
+
+    def sneak(argv, kw):
+        _tag_with_a_token(rp.workdir, follow=False)
+        _git(rp.workdir, "push", "-q", bare, "refs/tags/v0:refs/tags/v0")
+        return True
+    fired = _hooked(runner, lambda a, kw: a[:2] == ["git", "push"]
+                    and "example-commons" in a[-2], sneak)
+    res = oe.apply(p, runner)
+    assert fired
+    r = next(x for x in res.repos if x.target == rp.target_full)
+    assert r in res.failures
+    assert "also changed refs/tags/v0" in r.skipped, r.skipped
+
+
+# ── round 4: the push sends the objects the scan read, from a repository the work ────
+# folder cannot change. Every case below published a token (or reported a push that
+# never reached the target) with an empty skip reason before this round.
+def _token_in_the_commit_then_hide_it(runner, rp, kind):
+    """A writer to the work folder: a token goes into README.md just before the
+    snapshot commit, and right after it a ``refs/replace`` entry shows git's readers a
+    clean ``kind`` (blob, tree or the commit itself) in its place. pack-objects
+    ignores replacements, so a push sends the real one."""
+    wd, state = rp.workdir, {}
+
+    def plant(argv, kw):
+        state["tree"] = _git(wd, "write-tree")
+        state["commit"] = _git(wd, "commit-tree", state["tree"], "-m", "clean")
+        state["blob"] = _git(wd, "rev-parse", state["tree"] + ":README.md")
+        with open(os.path.join(wd, "README.md"), "ab") as fh:
+            fh.write(b"\n" + _GH_TOKEN + b"\n")
+        _git(wd, "add", "README.md")
+        return True
+
+    def hide(argv, kw):
+        real = {"blob": "HEAD:README.md", "tree": "HEAD^{tree}", "commit": "HEAD"}[kind]
+        _git(wd, "replace", _git(wd, "rev-parse", real), state[kind])
+        return True
+    a = _hooked(runner, lambda a, kw: a[:1] == ["git"] and "commit" in a
+                and "-m" in a and _in(wd)(kw), plant)
+    b = _hooked(runner, lambda a, kw: a[:2] == ["git", "rev-parse"]
+                and "HEAD^{commit}" in a and _in(wd)(kw), hide)
+    return a, b
+
+
+def _remote_objects(bare):
+    if not os.path.isdir(bare):
+        return b""
+    return subprocess.run(["git", "-C", bare, "cat-file", "--batch-all-objects", "--batch"],
+                          capture_output=True).stdout
+
+
+@pytest.mark.parametrize("kind", ["blob", "tree", "commit"])
+def test_a_replace_ref_cannot_show_the_scan_other_objects_than_the_push_sends(world, kind):
+    cfg, runner = world["cfg"], world["runner"]
+    p = oe.plan(cfg, runner, stamp="20260101T000000Z", probe=False)
+    rp = next(r for r in p.repos if r.source == "hugmesh-commons")
+    assert rp.banned == []
+    a, b = _token_in_the_commit_then_hide_it(runner, rp, kind)
+    res = oe.apply(p, runner)
+    assert a and b, "a hook never ran: the test proves nothing"
+    r = next(x for x in res.repos if x.target == rp.target_full)
+    assert _GH_TOKEN not in _remote_objects(_bare(world, "example-commons")), \
+        f"the token was published ({r.action}, skipped={r.skipped!r})"
+    assert r in res.failures and "README.md: GitHub token" in r.skipped, r.skipped
+
+
+def test_a_graft_cannot_add_history_the_scan_never_saw(world):
+    """A ``.git/info/grafts`` line gives the scanned commit a parent that holds a token:
+    the scan reads one commit's tree, while a push from the work folder walked the
+    grafted history and sent the parent too."""
+    cfg, runner = world["cfg"], world["runner"]
+    p = oe.plan(cfg, runner, stamp="20260101T000000Z", probe=False)
+    rp = next(r for r in p.repos if r.source == "hugmesh-commons")
+    wd = rp.workdir
+
+    def graft(argv, kw):
+        blob = subprocess.run(["git", "hash-object", "-w", "--stdin"], cwd=wd,
+                              input=_GH_TOKEN, capture_output=True).stdout.decode().strip()
+        tree = subprocess.run(["git", "mktree"], cwd=wd, capture_output=True,
+                              input=f"100644 blob {blob}\tsecret.txt\n".encode()
+                              ).stdout.decode().strip()
+        parent = _git(wd, "commit-tree", tree, "-m", "old")
+        with open(os.path.join(wd, ".git", "info", "grafts"), "w") as fh:
+            fh.write(f"{_git(wd, 'rev-parse', 'HEAD')} {parent}\n")
+        return parent
+    fired = _hooked(runner, lambda a, kw: a[:3] == ["gh", "repo", "view"]
+                    and a[3] == rp.target_full, graft)
+    res = oe.apply(p, runner)
+    assert fired, "the hook never ran: the test proves nothing"
+    r = next(x for x in res.repos if x.target == rp.target_full)
+    bare = _bare(world, "example-commons")
+    assert _GH_TOKEN not in _remote_objects(bare), \
+        f"the grafted parent was published ({r.action}, skipped={r.skipped!r})"
+    assert r.commit == _git(bare, "rev-parse", "main") and not r.skipped, r.skipped
+
+
+def test_a_url_rewrite_in_the_work_folder_cannot_report_a_push_that_never_happened(world):
+    """``url.<other>.insteadOf`` in the work folder's own config sent the push AND the
+    read-back to another remote: the target stayed empty while the result said pushed.
+    The network calls now run in a repository the work folder's config never reaches."""
+    cfg, runner = world["cfg"], world["runner"]
+    p = oe.plan(cfg, runner, stamp="20260101T000000Z", probe=False)
+    rp = next(r for r in p.repos if r.source == "hugmesh-commons")
+    decoy = world["tmp"] / "decoy"
+
+    def redirect(argv, kw):
+        _git(str(world["tmp"]), "init", "-q", "--bare",
+             str(decoy / "exampleorg" / "example-commons.git"))
+        _git(rp.workdir, "config", f"url.file://{decoy}/.insteadOf", cfg.remote_base)
+        return True
+    fired = _hooked(runner, lambda a, kw: a[:3] == ["gh", "repo", "view"]
+                    and a[3] == rp.target_full, redirect)
+    res = oe.apply(p, runner)
+    assert fired, "the hook never ran: the test proves nothing"
+    r = next(x for x in res.repos if x.target == rp.target_full)
+    held = subprocess.run(["git", "-C", _bare(world, "example-commons"), "rev-parse",
+                           "--verify", "-q", "main"], capture_output=True, text=True)
+    assert r.ok and held.stdout.strip() == r.commit, \
+        (r.action, r.skipped, held.stdout.strip(), r.commit)
+
+
+_ODD_SPELLINGS = [
+    ("link-cp037", {"ok.txt": b"x"}, {"link": os.fsdecode(_GH_TOKEN.decode().encode("cp037"))}),
+    ("link-robot16", {"ok.txt": b"x"}, {"link": os.fsdecode(_ROBOT.encode("utf-16-le"))}),
+    ("name-cp037", {os.fsdecode(_GH_TOKEN.decode().encode("cp037")) + ".txt": b"x"}, None),
+    ("name-robot16", {os.fsdecode(_ROBOT.encode("utf-16-le")) + ".txt": b"x"}, None),
+]
+
+
+@pytest.mark.parametrize("name,files,links", _ODD_SPELLINGS,
+                         ids=[n for n, _f, _l in _ODD_SPELLINGS])
+def test_a_name_or_link_target_gets_the_same_byte_checks_as_file_content(world, name,
+                                                                         files, links):
+    """The cp037 and UTF-16 checks ran over file CONTENT only: the same bytes as a file
+    name or a link target were published with banned=[]."""
+    cfg, runner = world["cfg"], world["runner"]
+    _plant_tree(os.path.join(world["src"], "hugmesh-commons"), files, links)
+    p = oe.plan(cfg, runner, stamp="20260101T000000Z", probe=False)
+    rp = next(r for r in p.repos if r.source == "hugmesh-commons")
+    assert rp.action == "refused: banned marker" and rp.banned, (name, rp.banned)
+    oe.apply(p, runner)
+    assert not os.path.isdir(_bare(world, "example-commons")), f"{name} was pushed"
+
+
+def test_the_commit_scan_reads_names_and_link_targets_as_bytes():
+    """The apply-time scan of the commit's own objects applies the byte checks to a
+    path and a link target too."""
+    cp037 = _GH_TOKEN.decode().encode("cp037")
+    entries = [("100644", "a" * 40, cp037 + b".txt"),
+               ("120000", "d" * 40, b"link")]
+    objects = {"a" * 40: b"x", "d" * 40: _ROBOT.encode("utf-16-le")}
+    found = oe._scan_objects(entries, objects)
+    assert len(found) == 2 and found[0].endswith(": GitHub token") \
+        and found[1] == "link: robot footer", found
+
+
+def _obj(kind, data):
+    return oe._object_id(kind, data, 40), (kind, data)
+
+
+def _one_file_commit(content, parent=""):
+    blob, b = _obj(b"blob", content)
+    tree, t = _obj(b"tree", b"100644 README.md\0" + bytes.fromhex(blob))
+    head = f"tree {tree}\n" + (f"parent {parent}\n" if parent else "")
+    commit, c = _obj(b"commit", (head + "author a <a@example.invalid> 0 +0000\n"
+                                 "committer a <a@example.invalid> 0 +0000\n\nx\n").encode())
+    return commit, tree, blob, {commit: c, tree: t, blob: b}
+
+
+def test_the_commit_walk_checks_every_object_against_its_name():
+    """What a reader is shown under a name (a replacement, an alternate store) must
+    hash to that name: a clean stand-in for the token blob is a refusal, not a pass."""
+    commit, tree, blob, objects = _one_file_commit(b"hello " + _GH_TOKEN + b"\n")
+    got_tree, closure, files, found = oe._scan_commit(commit, objects, "t")
+    assert (got_tree, set(closure), files) == (tree, {commit, tree, blob}, 1)
+    assert found == ["README.md: GitHub token"], found
+    objects[blob] = (b"blob", b"hello\n")               # the stand-in a replace ref shows
+    with pytest.raises(RuntimeError, match="not the object its name says"):
+        oe._scan_commit(commit, objects, "t")
+
+
+def test_the_commit_walk_refuses_a_commit_with_a_parent():
+    """A fresh snapshot commit has no parent; one that does would push history the
+    walk never scanned."""
+    commit, _t, _b, objects = _one_file_commit(b"hi\n", parent="1" * 40)
+    with pytest.raises(RuntimeError, match="has a parent"):
+        oe._scan_commit(commit, objects, "t")

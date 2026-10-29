@@ -22,8 +22,8 @@
 # catalogue records, and still carries the derived/asserted label a reader uses
 # to tell a measurement from a judgement call.
 #
-# WHY THE 'unreachable' LIST IS AN ASSERTION AND NOT A COMMENT. 15 of the
-# 70 catalogued functions can be reached by NO seeded persona at all. Most of
+# WHY THE 'unreachable' LIST IS AN ASSERTION AND NOT A COMMENT. 13 of the
+# 72 catalogued functions can be reached by NO seeded persona at all. Most of
 # those are a real gap rather than a bug in this file: no seeding lane grants
 # ROLE_WIKI, ROLE_OWNCAST, ROLE_TUBE, ROLE_FORUM_MOD or the ROLE_GAMES_SERVICES_*
 # pair, so three whole services and two consoles are gated behind roles that
@@ -65,7 +65,9 @@ Feature: The function catalogue the coverage matrix is computed from
       | phpbb.moderate                  | phpbb            | hugmesh-fe-gateway         | /bff/forum/moderation/reports                                   | derived  |
       | phpbb.administer                | phpbb            | hugmesh-fe-gateway         | /bff/forum/admin/forums                                         | derived  |
       | games.list                      | games            | hugmesh-fe-gateway         | /games/                                                         | derived  |
-      | games.launch                    | games            | hugmesh-fe-gateway         | /games/play/chat3d                                              | asserted |
+      | games.launch                    | games            | hugmesh-fe-gateway         | /games/play/chess                                               | derived  |
+      | games.member-api                | games            | hugmesh-fe-gateway         | /games/api/games/chess/launch                                   | derived  |
+      | games.admin-api                 | games            | hugmesh-fe-gateway         | /games/api/admin/stats                                          | derived  |
       | games.instance-lifecycle        | games            | hugmesh-be-gateway         | /games/api/instances                                            | derived  |
       | games.server-fleet              | games            | hugmesh-be-gateway         | /games/servers/lobby                                            | derived  |
       | games.admin-console             | games            | hugmesh-fe-gateway         | /games/admin/queue                                              | derived  |
@@ -124,8 +126,6 @@ Feature: The function catalogue the coverage matrix is computed from
     Examples:
       | function                 | service |
       | phpbb.moderate           | phpbb   |
-      | games.list               | games   |
-      | games.launch             | games   |
       | games.services-runner    | games   |
       | owncast.watch            | owncast |
       | owncast.publish          | owncast |

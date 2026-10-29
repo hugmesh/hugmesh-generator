@@ -64,11 +64,34 @@ cmd_up() {
   return 1
 }
 
+# cmd_worker [--restart-if-changed] [--foreground]
+# --restart-if-changed (what `start` passes): a worker that is already running but was
+# started with another Ollama address, context file or checkouts folder is stopped and
+# started again, so a changed choice (the Studio's system/Docker Ollama switch, say)
+# reaches the drafts it runs. The job in hand goes back to the queue (worker.sh finish).
 cmd_worker() {
   local pid
+  local restart=0
+  local want
+  local have
   la_dirs
-  if [ "${1:-}" = "--foreground" ]; then exec "$HERE/local-ai/worker.sh"; fi
-  if pid=$(la_worker_pid); then echo "worker already running (pid $pid)"; return 0; fi
+  if [ "${1:-}" = "--restart-if-changed" ]; then restart=1; shift; fi
+  if [ "${1:-}" = "--foreground" ]; then la_worker_env; exec "$HERE/local-ai/worker.sh"; fi
+  if pid=$(la_worker_pid); then
+    if [ "$restart" = 0 ]; then echo "worker already running (pid $pid)"; return 0; fi
+    want=$(la_worker_signature) || return 1
+    have=$(cat "$LA_DIR/worker.env" 2>/dev/null)
+    if [ "$want" = "$have" ]; then echo "worker already running (pid $pid)"; return 0; fi
+    echo "the worker (pid $pid) runs with other settings; restarting it (a job in hand goes back to the queue)"
+    echo "  was: $(printf '%s' "${have:-not recorded}" | tr '\n' ' ')"
+    echo "  now: $(printf '%s' "$want" | tr '\n' ' ')"
+    cmd_stop >/dev/null
+    if pid=$(la_worker_pid); then
+      echo "the worker (pid $pid) did not stop; it keeps its old settings" >&2
+      return 1
+    fi
+  fi
+  la_worker_env
   "${LA_DETACH[@]}" "$HERE/local-ai/worker.sh" >>"$LA_DIR/worker.log" 2>&1 </dev/null &
   local _
   for _ in $(seq 1 20); do
@@ -186,7 +209,7 @@ cmd_watch() {
 
 case "${1:-help}" in
   up)            shift; cmd_up "$@" ;;
-  start)         cmd_up && cmd_worker; rc=$?; la_py status --brief; exit "$rc" ;;
+  start)         cmd_up && cmd_worker --restart-if-changed; rc=$?; la_py status --brief; exit "$rc" ;;
   status)        shift; la_py status "$@" ;;
   todo)          shift; cmd_todo "$@" ;;
   draft)         shift; cmd_draft "$@" ;;

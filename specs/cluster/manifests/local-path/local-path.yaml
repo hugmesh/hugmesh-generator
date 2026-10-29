@@ -113,6 +113,9 @@ data:
   # (deploy/local-path-storage.yaml in the v0.0.30 tag) — the tiny pod the
   # provisioner spins up on the target node to mkdir/rm the PV's hostPath
   # directory; unrelated to the workload pods that mount the resulting PVCs.
+  # One deliberate change from upstream: upstream says `image: busybox` (untagged,
+  # an implicit :latest pulled onto every node); it is pinned here to a release tag
+  # and its index digest ([image-pin] reads YAML embedded in a ConfigMap too).
   helperPod.yaml: |-
     apiVersion: v1
     kind: Pod
@@ -126,5 +129,5 @@ data:
           effect: NoSchedule
       containers:
       - name: helper-pod
-        image: busybox
+        image: busybox:1.37@sha256:bdf57e528e45e4433820e045b29b4597825a1c9e38353532d90a01445013f82e
         imagePullPolicy: IfNotPresent

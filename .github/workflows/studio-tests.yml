@@ -57,6 +57,23 @@ on:
       - 'scripts/build-all-roles.sh'
       - 'scripts/_roles-lib.sh'
       - 'build-rpi5-stage4.sh'
+  # A PUSH to main, for the Studio release machinery only. The release guard tests
+  # (test_studio_beta_version.py, test_studio_release_signing.py,
+  # test_studio_release_cut.py) parse the release workflows, and on 2026-10-22/23
+  # studio-release.yml was edited by hand on main through the web UI: three of them
+  # went red and nothing showed it, because this workflow ran only on pull requests.
+  # Now such an edit goes red where it happened. A push made with GITHUB_TOKEN (the
+  # cut workflow's bump commit) does not fire this, by GitHub's no-cascade rule; the
+  # cut runs the same tests itself before it commits anything.
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/studio-release.yml'
+      - '.github/workflows/studio-release-cut.yml'
+      - 'studio/packaging/release_version.py'
+      - 'studio/hugmesh_studio/__init__.py'
+      - 'studio/packaging/flatpak/org.hugmesh.ImageStudio.metainfo.xml'
+      - 'scripts/release-studio.sh'
   workflow_dispatch: {}
 
 permissions:
@@ -180,6 +197,7 @@ jobs:
           # known entry behind it. The file's own instruction is to delete a line the
           # moment its test passes, so emptying the list is the intended end state and
           # walking into that message is the trap it leads to.
+          # shellcheck disable=SC2016  # the backticks are Markdown, not command substitution
           if [ -z "$nodes" ]; then
             {
               echo 'None. `studio/tests/known-failures.txt` lists no deselected tests,'
@@ -189,6 +207,7 @@ jobs:
             exit 0
           fi
 
+          # shellcheck disable=SC2016,SC2086  # Markdown backticks; $nodes is a word list
           if python -m pytest -q --no-header $nodes > known.txt 2>&1; then
             {
               echo '**These now PASS.** Delete them from `studio/tests/known-failures.txt`'

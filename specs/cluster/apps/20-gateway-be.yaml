@@ -66,6 +66,15 @@ spec:
             # is the `games` route below; the federation manifest greys it out when
             # the games slug is omitted (gate_optional_services prunes the route).
             - games.hugmesh.net
+            # ai.<CLUSTER_DOMAIN> — the edge-AI inference host (the edge-ai,
+            # edge-ai-analysis and edge-ai-tts routes below match on it). Without an
+            # exact rule here ingress-nginx hands ai.<domain> to the fe-gateway's
+            # *.<domain> wildcard, whose vanity-subdomain route rewrites /v1/models
+            # and /v1/chat/completions to the public profile lookup, so inference was
+            # unreachable from outside the cluster. gate_optional_services drops this
+            # line when edge-ai, edge-ai-analysis and edge-ai-tts are ALL deselected.
+            # Pinned by tests/scripts/test-gateway-vanity-domains.sh section E.
+            - ai.hugmesh.net
         nodeSelector:
           hugmesh.net/backend: "true"
         seLinux:

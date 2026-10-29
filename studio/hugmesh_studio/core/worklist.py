@@ -170,6 +170,44 @@ def duplicate_hostnames(entries: list["WorklistEntry"],
     return dups
 
 
+# The platforms whose NODE entries take the board's RAM (--ram-gb): the Raspberry Pi and
+# the two Orange Pi node boards. x86 / jetson builders do not take it. Shared by the GUI
+# WorklistPage (RAM column) and the TUI WorklistScreen (`ram N GB`).
+RAM_PLATFORMS = ("rpi5", "orangepi5", "orangepi4-lts")
+RAM_PLATFORM_NAMES = {"rpi5": "Raspberry Pi", "orangepi5": "Orange Pi 5 / 5 Plus",
+                      "orangepi4-lts": "Orange Pi 4 LTS"}
+
+
+def takes_ram(role: str, platform: str) -> bool:
+    """Does a (role, platform) worklist row carry a board RAM (--ram-gb)? Node roles
+    with a RAM floor (scripts/_roles-lib.sh HUGMESH_ROLE_MIN_RAM_GB) on RAM_PLATFORMS."""
+    return platform in RAM_PLATFORMS and roles.min_ram_gb(role) is not None
+
+
+def ram_problem(role: str, platform: str, ram_gb: str, board: str = "") -> str:
+    """Why ``ram_gb`` cannot be this row's board RAM ("" = fine). The builders' own
+    gate (hugmesh_role_ram_check): a whole number of GB, at or above the role's floor;
+    "" is fine except for a role that REQUIRES it (omnibus); and a ``board`` that is
+    never sold with the floor (a Pi 4 omnibus) is refused whatever the RAM says."""
+    ram = str(ram_gb or "").strip()
+    if not takes_ram(role, platform):
+        return "" if not ram else f"{role}.{platform} takes no board RAM"
+    floor = roles.min_ram_gb(role) or 0
+    if board and not roles.board_fits_role(role, board):
+        return (f"{role} needs at least {floor} GB of RAM, and {board} is sold with at "
+                f"most {max(roles.board_ram_gb(board))} GB")
+    if not ram:
+        if roles.ram_required(role):
+            return (f"{role} on the {RAM_PLATFORM_NAMES.get(platform, platform)} needs its "
+                    f"board's RAM ({floor} GB or more): one image serves every RAM size")
+        return ""
+    if not ram.isdigit() or ram.startswith("0"):
+        return f"the RAM must be a whole number of GB, e.g. 8 (got {ram!r})"
+    if int(ram) < floor:
+        return f"{role} needs at least {floor} GB of RAM (got {ram})"
+    return ""
+
+
 def entry_id(role: str, platform: str) -> str:
     """The STABLE worklist entry id — ``f"{role}.{platform}"``. One id per role x
     platform combo; board/flavor are row ATTRIBUTES, so an id never dangles when a
@@ -227,6 +265,11 @@ class WorklistEntry:
     # role-derived name); non-"" = THIS image's -H/--hostname. Timezone and the
     # default account stay mesh-wide on the base — the issue accepts that for both.
     hostname: str = ""
+    # GB of RAM on the Raspberry Pi / Orange Pi board this NODE entry is for
+    # (ImageConfig.ram_gb -> --ram-gb). "" = not stated; REQUIRED for an omnibus
+    # entry on rpi5/orangepi5 (16 GB+). Serialized OMIT-WHEN-EMPTY, so every entry
+    # saved before the field existed keeps its bytes.
+    ram_gb: str = ""
 
     def __post_init__(self) -> None:
         if not self.id:
@@ -267,6 +310,7 @@ class WorklistEntry:
             **({"desktop_user_roles": list(self.desktop_user_roles)}
                if self.desktop_user_roles != [self.desktop_user_role] else {}),
             "hostname": self.hostname,
+            **({"ram_gb": str(self.ram_gb)} if self.ram_gb else {}),
         }
 
     @classmethod
@@ -428,6 +472,7 @@ class WorklistConfig:
         cfg.board = entry.board
         cfg.flavor = entry.flavor
         cfg.desktop = entry.desktop
+        cfg.ram_gb = str(entry.ram_gb or "")
 
         # 1b. Platform-aware default resolution — BEFORE the role-class gating in step 5
         #    (clear_role_class_fields keys image_class() on cfg.role, so a leaked x86

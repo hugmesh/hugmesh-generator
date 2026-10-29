@@ -145,9 +145,13 @@ spec:
           level: "s0:c37"
       containers:
         - name: squid
-          # ubuntu/squid is a small, maintained squid image. Pin a digest at
-          # deploy time (the prod-hygiene gate forbids floating tags).
-          image: ubuntu/squid:6.6-24.04_edge
+          # ubuntu/squid is a small, maintained squid image. Canonical publishes it
+          # only on risk CHANNELS (`_edge`, `_beta`), which move, so the tag here is
+          # the readable name and the index digest is what the runtime resolves.
+          # Re-pin by resolving the tag's index digest and changing both together;
+          # tests/scripts/cluster_manifest_integrity.py [image-pin] refuses a
+          # channel tag without a digest.
+          image: ubuntu/squid:6.6-24.04_edge@sha256:8a3baed477e2c282ab8aa5edad442f69873246964f225c5c2ae8364b6610963c
           command: ["/bin/sh", "/etc/squid/entrypoint.sh"]
           ports:
             - { name: proxy, containerPort: 3128 }

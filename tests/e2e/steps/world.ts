@@ -27,7 +27,7 @@
 //      (playwright.config.ts sets screenshot:'only-on-failure').
 //
 // WHERE THE EVIDENCE GOES — and where it deliberately does NOT go. NOT into
-// tests/e2e/screenshots/: that directory holds 38 GIT-TRACKED PNGs which every
+// tests/e2e/screenshots/: that directory holds 37 GIT-TRACKED PNGs which every
 // legacy run overwrites in place, so a test run dirties the working tree. Step
 // evidence lands under ${SNAP_REPORT_DIR:-test-results}/bdd-steps/<runId>/…,
 // which .gitignore already excludes. Overridable with SNAP_BDD_SHOTS.
