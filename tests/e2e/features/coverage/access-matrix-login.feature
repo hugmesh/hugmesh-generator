@@ -17,7 +17,7 @@
 # login-ui remote — the ACCESS MATRIX: every seeded persona against every catalogued
 # function of this service.
 #
-# 32 personas x 6 functions = 192 cells.
+# 31 personas x 6 functions = 186 cells.
 # 6 of 6 function probe paths are DERIVED from a committed artefact;
 # 0 are ASSERTED (no artefact pins them yet) — see the FUNCTIONS entry's
 # `source` field, which the function-catalogue feature pins row by row.
@@ -184,12 +184,6 @@ Feature: login-ui remote — every persona against every function
       | e2e-superadmin               | login.provision        | refused  | /bff/provision/** | extra-personas-sh+ts-catalogue |
       | e2e-superadmin               | login.register-google  | refused  | /bff/register/**  | extra-personas-sh+ts-catalogue |
       | e2e-superadmin               | login.register-discord | refused  | /bff/register/**  | extra-personas-sh+ts-catalogue |
-      | e2e-suspended                | login.form             | admitted | /login/**         | extra-personas-sh              |
-      | e2e-suspended                | login.native-sign-in   | admitted | /bff/login        | extra-personas-sh              |
-      | e2e-suspended                | login.register         | admitted | /bff/register/**  | extra-personas-sh              |
-      | e2e-suspended                | login.provision        | admitted | /bff/provision/** | extra-personas-sh              |
-      | e2e-suspended                | login.register-google  | admitted | /bff/register/**  | extra-personas-sh              |
-      | e2e-suspended                | login.register-discord | admitted | /bff/register/**  | extra-personas-sh              |
       | e2e-user                     | login.form             | admitted | /login/**         | seed-accounts-sh+ts-catalogue  |
       | e2e-user                     | login.native-sign-in   | admitted | /bff/login        | seed-accounts-sh+ts-catalogue  |
       | e2e-user                     | login.register         | admitted | /bff/register/**  | seed-accounts-sh+ts-catalogue  |

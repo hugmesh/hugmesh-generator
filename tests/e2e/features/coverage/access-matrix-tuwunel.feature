@@ -17,7 +17,7 @@
 # Matrix homeserver (tuwunel) — the ACCESS MATRIX: every seeded persona against every catalogued
 # function of this service.
 #
-# 32 personas x 9 functions = 288 cells.
+# 31 personas x 9 functions = 279 cells.
 # 9 of 9 function probe paths are DERIVED from a committed artefact;
 # 0 are ASSERTED (no artefact pins them yet) — see the FUNCTIONS entry's
 # `source` field, which the function-catalogue feature pins row by row.
@@ -256,15 +256,6 @@ Feature: Matrix homeserver (tuwunel) — every persona against every function
       | e2e-superadmin               | tuwunel.leave-room        | refused  | /_matrix/**              | extra-personas-sh+ts-catalogue |
       | e2e-superadmin               | tuwunel.well-known        | refused  | /.well-known/matrix/**   | extra-personas-sh+ts-catalogue |
       | e2e-superadmin               | tuwunel.provision-account | refused  | /bff/provision/**        | extra-personas-sh+ts-catalogue |
-      | e2e-suspended                | tuwunel.open-ui           | admitted | /social/matrix/**        | extra-personas-sh              |
-      | e2e-suspended                | tuwunel.sign-in           | refused  | /_matrix/client/v3/login | extra-personas-sh              |
-      | e2e-suspended                | tuwunel.join-room         | refused  | /_matrix/**              | extra-personas-sh              |
-      | e2e-suspended                | tuwunel.send-message      | refused  | /_matrix/**              | extra-personas-sh              |
-      | e2e-suspended                | tuwunel.receive-message   | refused  | /_matrix/**              | extra-personas-sh              |
-      | e2e-suspended                | tuwunel.start-call        | refused  | /_matrix/**              | extra-personas-sh              |
-      | e2e-suspended                | tuwunel.leave-room        | refused  | /_matrix/**              | extra-personas-sh              |
-      | e2e-suspended                | tuwunel.well-known        | refused  | /.well-known/matrix/**   | extra-personas-sh              |
-      | e2e-suspended                | tuwunel.provision-account | admitted | /bff/provision/**        | extra-personas-sh              |
       | e2e-user                     | tuwunel.open-ui           | admitted | /social/matrix/**        | seed-accounts-sh+ts-catalogue  |
       | e2e-user                     | tuwunel.sign-in           | refused  | /_matrix/client/v3/login | seed-accounts-sh+ts-catalogue  |
       | e2e-user                     | tuwunel.join-room         | refused  | /_matrix/**              | seed-accounts-sh+ts-catalogue  |

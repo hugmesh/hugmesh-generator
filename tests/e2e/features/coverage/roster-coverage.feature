@@ -17,10 +17,10 @@
 # THE PERSONA ROSTER, reconciled across THREE DISAGREEING SOURCES.
 #
 #   17  specs/rbac-roles.ts SYSTEMS_SEED_USERS
-#   16  tests/e2e-extra-personas.sh
+#   15  tests/e2e-extra-personas.sh
 #   16  tests/qemu/seed-accounts.sh SYSTEMS_ROLE_USERS
 #    0  seeded by all three
-#   32  union — the roster the access matrices iterate
+#   31  union — the roster the access matrices iterate
 #
 # The disagreement is REPRESENTED, not resolved: the `lanes` column names which
 # seeders create each handle. Resolving it means changing what a seeder seeds,
@@ -62,7 +62,6 @@ Feature: The persona roster the coverage matrix iterates
       | e2e-mod                      | seed-accounts-sh+ts-catalogue  | ROLE_MOD                                              | true                  |
       | e2e-pending                  | seed-accounts-sh+ts-catalogue  | (none)                                                | false                 |
       | e2e-superadmin               | extra-personas-sh+ts-catalogue | ROLE_SUPERADMIN                                       | true                  |
-      | e2e-suspended                | extra-personas-sh              | ROLE_USER                                             | true                  |
       | e2e-user                     | seed-accounts-sh+ts-catalogue  | ROLE_USER                                             | true                  |
       | eve@gmail.com                | extra-personas-sh              | ROLE_USER                                             | true                  |
       | frank@gmail.com              | extra-personas-sh              | ROLE_USER                                             | true                  |

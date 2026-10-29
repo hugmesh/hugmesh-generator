@@ -29,8 +29,21 @@
 #       gateway answers 502/503 for every tier and this feature is honestly red,
 #       not vacuously green.
 #
+# TWO LAYERS REFUSE, BY TIER (rewritten 2026-10-29). Both paths sit under a
+# ROLE_SUPERADMIN fe gateway row ('/bff/superadmin/**', the #244 public-door
+# floor, and '/bff/wiki/superadmin/**'). ROLE_ADMIN is forwarded past decide() on
+# the gateway's admin bypass, so for e2e-admin / e2e-adminonly the refusal is the
+# METHOD gate (403, no X-Route-Denied). Every other tier — mod, member, fleet — is
+# refused at the DOOR by the seed row (403 + X-Route-Denied) before any BFF sees
+# the request. An earlier draft called every refusal a method refusal; the
+# outlines below are split so each row names its layer. Measured through
+# https://localhost:8488 on 2026-10-29 for GET /bff/wiki/superadmin/brands:
+# e2e-user / e2e-mod 403 + X-Route-Denied, e2e-admin / e2e-adminonly 403 without
+# it, e2e-superadmin 200. The withdraw POST rows were NOT run live (a mutating
+# verb on the operator's stack); they are verified offline only.
+#
 # All three BFFs' RoleHierarchy is SUPERADMIN > ADMIN / MOD / USER only
-# (admin-bff SecurityConfig:608, wiki-bff SecurityConfig:365), so a 403 for
+# (admin-bff SecurityConfig, wiki-bff SecurityConfig), so a 403 for
 # ROLE_ADMIN is the method gate, not a hierarchy accident; and the seed's
 # /bff/superadmin/** floor sits under the mfa_required prefix, so on a mesh with
 # the privileged MFA floor ARMED the superadmin control rows answer 403/503 from
@@ -38,12 +51,12 @@
 #
 # LIVE — @env:docker. Skips loudly with the start command when nothing answers.
 @service:admin @layer:bff @env:docker
-Feature: Superadmin-only BFF seams refuse every lower tier at the method, not just at the route
+Feature: Superadmin-only BFF seams refuse every lower tier — admins at the method, everyone else at the door
 
   # ── service-store withdraw (admin-bff-api#51) ─────────────────────────────
 
   @issue:admin-bff-api-51
-  Scenario Outline: <role> is refused the service-store withdraw verb (<what>) @role:<role> @service:admin @layer:bff
+  Scenario Outline: <role> is refused the service-store withdraw verb by admin-bff's method gate (<what>) @role:<role> @service:admin @layer:bff
     Given I hold an API session as the persona for this scenario
     When I submit a POST to "/bff/superadmin/service-store/e2e-unoffered.example/withdraw" with body:
       """
@@ -55,9 +68,22 @@ Feature: Superadmin-only BFF seams refuse every lower tier at the method, not ju
       | role          | what                                                              |
       | e2e-admin     | ROLE_ADMIN — the admin-bypass forwards it, the method gate refuses |
       | e2e-adminonly | ROLE_ADMIN without any platform role                               |
-      | e2e-fleet     | ROLE_FLEET_ADMIN — the fleet tier is not the superadmin tier       |
-      | e2e-mod       | bare ROLE_MOD                                                     |
-      | e2e-user      | bare ROLE_USER                                                    |
+
+  @issue:admin-bff-api-51
+  Scenario Outline: <role> is refused the service-store withdraw verb at the gateway door (<what>) @role:<role> @service:admin @layer:gateway
+    Given I hold an API session as the persona for this scenario
+    When I submit a POST to "/bff/superadmin/service-store/e2e-unoffered.example/withdraw" with body:
+      """
+      {"serviceKey": "e2e-probe"}
+      """
+    Then the response status is 403
+    And the response header "X-Route-Denied" contains "/bff/superadmin/service-store/e2e-unoffered.example/withdraw"
+
+    Examples:
+      | role      | what                                                        |
+      | e2e-fleet | ROLE_FLEET_ADMIN — the fleet tier is not the superadmin tier |
+      | e2e-mod   | ROLE_MOD                                                    |
+      | e2e-user  | ROLE_USER                                                   |
 
   # The control: the superadmin passes the role gate and reaches the curation
   # SERVICE, which answers 404 for a (domain, serviceKey) nobody offered
@@ -78,7 +104,7 @@ Feature: Superadmin-only BFF seams refuse every lower tier at the method, not ju
   # ── wiki brand catalogue (wiki-bff-api#12) ────────────────────────────────
 
   @issue:wiki-bff-api-12
-  Scenario Outline: <role> is refused the wiki brand catalogue (<what>) @role:<role> @service:wiki @layer:bff
+  Scenario Outline: <role> is refused the wiki brand catalogue by wiki-bff's method gate (<what>) @role:<role> @service:wiki @layer:bff
     Given I hold an API session as the persona for this scenario
     When I request "GET /bff/wiki/superadmin/brands"
     Then the response status is 403
@@ -87,8 +113,18 @@ Feature: Superadmin-only BFF seams refuse every lower tier at the method, not ju
       | role          | what                                                           |
       | e2e-admin     | ROLE_ADMIN — reaches /bff/wiki/admin/**, not the superadmin seam |
       | e2e-adminonly | ROLE_ADMIN without any platform role                            |
-      | e2e-mod       | bare ROLE_MOD                                                  |
-      | e2e-user      | bare ROLE_USER                                                 |
+
+  @issue:wiki-bff-api-12
+  Scenario Outline: <role> is refused the wiki brand catalogue at the gateway door (<what>) @role:<role> @service:wiki @layer:gateway
+    Given I hold an API session as the persona for this scenario
+    When I request "GET /bff/wiki/superadmin/brands"
+    Then the response status is 403
+    And the response header "X-Route-Denied" contains "/bff/wiki/superadmin/brands"
+
+    Examples:
+      | role     | what      |
+      | e2e-mod  | ROLE_MOD  |
+      | e2e-user | ROLE_USER |
 
   @issue:wiki-bff-api-12 @role:e2e-superadmin
   Scenario: the superadmin reads the brand catalogue the console's picker needs @role:e2e-superadmin @service:wiki @layer:bff

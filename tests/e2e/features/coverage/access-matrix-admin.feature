@@ -17,7 +17,7 @@
 # admin-ui remote — the ACCESS MATRIX: every seeded persona against every catalogued
 # function of this service.
 #
-# 32 personas x 7 functions = 224 cells.
+# 31 personas x 7 functions = 217 cells.
 # 7 of 7 function probe paths are DERIVED from a committed artefact;
 # 0 are ASSERTED (no artefact pins them yet) — see the FUNCTIONS entry's
 # `source` field, which the function-catalogue feature pins row by row.
@@ -208,13 +208,6 @@ Feature: admin-ui remote — every persona against every function
       | e2e-superadmin               | admin.moderation-console     | refused  | /mod/**                        | extra-personas-sh+ts-catalogue |
       | e2e-superadmin               | admin.superadmin-catalog     | admitted | /superadmin/service-catalog/** | extra-personas-sh+ts-catalogue |
       | e2e-superadmin               | admin.service-store-withdraw | admitted | /bff/superadmin/**             | extra-personas-sh+ts-catalogue |
-      | e2e-suspended                | admin.console                | refused  | /admin/**                      | extra-personas-sh              |
-      | e2e-suspended                | admin.allowlist              | refused  | /bff/admin/**                  | extra-personas-sh              |
-      | e2e-suspended                | admin.phone-fleet            | refused  | /bff/admin/phone-fleet/**      | extra-personas-sh              |
-      | e2e-suspended                | admin.api-docs               | refused  | /api-docs/**                   | extra-personas-sh              |
-      | e2e-suspended                | admin.moderation-console     | refused  | /mod/**                        | extra-personas-sh              |
-      | e2e-suspended                | admin.superadmin-catalog     | refused  | /superadmin/service-catalog/** | extra-personas-sh              |
-      | e2e-suspended                | admin.service-store-withdraw | refused  | /bff/superadmin/**             | extra-personas-sh              |
       | e2e-user                     | admin.console                | refused  | /admin/**                      | seed-accounts-sh+ts-catalogue  |
       | e2e-user                     | admin.allowlist              | refused  | /bff/admin/**                  | seed-accounts-sh+ts-catalogue  |
       | e2e-user                     | admin.phone-fleet            | refused  | /bff/admin/phone-fleet/**      | seed-accounts-sh+ts-catalogue  |

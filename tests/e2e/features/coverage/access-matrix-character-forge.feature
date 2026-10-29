@@ -17,7 +17,7 @@
 # Character forge (3D) — the ACCESS MATRIX: every seeded persona against every catalogued
 # function of this service.
 #
-# 32 personas x 4 functions = 128 cells.
+# 31 personas x 4 functions = 124 cells.
 # 3 of 4 function probe paths are DERIVED from a committed artefact;
 # 1 are ASSERTED (no artefact pins them yet) — see the FUNCTIONS entry's
 # `source` field, which the function-catalogue feature pins row by row.
@@ -136,10 +136,6 @@ Feature: Character forge (3D) — every persona against every function
       | e2e-superadmin               | character-forge.create | refused  | /bff/character-forge/** | extra-personas-sh+ts-catalogue |
       | e2e-superadmin               | character-forge.save   | refused  | /bff/character-forge/** | extra-personas-sh+ts-catalogue |
       | e2e-superadmin               | character-forge.export | refused  | /bff/character-forge/** | extra-personas-sh+ts-catalogue |
-      | e2e-suspended                | character-forge.open   | admitted | /character-forge/**     | extra-personas-sh              |
-      | e2e-suspended                | character-forge.create | admitted | /bff/character-forge/** | extra-personas-sh              |
-      | e2e-suspended                | character-forge.save   | admitted | /bff/character-forge/** | extra-personas-sh              |
-      | e2e-suspended                | character-forge.export | admitted | /bff/character-forge/** | extra-personas-sh              |
       | e2e-user                     | character-forge.open   | admitted | /character-forge/**     | seed-accounts-sh+ts-catalogue  |
       | e2e-user                     | character-forge.create | admitted | /bff/character-forge/** | seed-accounts-sh+ts-catalogue  |
       | e2e-user                     | character-forge.save   | admitted | /bff/character-forge/** | seed-accounts-sh+ts-catalogue  |

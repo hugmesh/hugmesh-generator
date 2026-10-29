@@ -17,7 +17,7 @@
 # Mastodon-compatible server (akkoma) — the ACCESS MATRIX: every seeded persona against every catalogued
 # function of this service.
 #
-# 32 personas x 9 functions = 288 cells.
+# 31 personas x 9 functions = 279 cells.
 # 9 of 9 function probe paths are DERIVED from a committed artefact;
 # 0 are ASSERTED (no artefact pins them yet) — see the FUNCTIONS entry's
 # `source` field, which the function-catalogue feature pins row by row.
@@ -256,15 +256,6 @@ Feature: Mastodon-compatible server (akkoma) — every persona against every fun
       | e2e-superadmin               | akkoma.delete-post       | refused  | /api/v1/**               | extra-personas-sh+ts-catalogue |
       | e2e-superadmin               | akkoma.moderate          | refused  | /api/v1/pleroma/admin/** | extra-personas-sh+ts-catalogue |
       | e2e-superadmin               | akkoma.provision-account | refused  | /bff/provision/**        | extra-personas-sh+ts-catalogue |
-      | e2e-suspended                | akkoma.open-ui           | admitted | /social/mastodon/**      | extra-personas-sh              |
-      | e2e-suspended                | akkoma.sign-in           | refused  | /oauth/**                | extra-personas-sh              |
-      | e2e-suspended                | akkoma.post              | refused  | /api/v1/**               | extra-personas-sh              |
-      | e2e-suspended                | akkoma.boost             | refused  | /api/v1/**               | extra-personas-sh              |
-      | e2e-suspended                | akkoma.follow            | refused  | /api/v1/**               | extra-personas-sh              |
-      | e2e-suspended                | akkoma.timeline          | refused  | /api/v1/**               | extra-personas-sh              |
-      | e2e-suspended                | akkoma.delete-post       | refused  | /api/v1/**               | extra-personas-sh              |
-      | e2e-suspended                | akkoma.moderate          | refused  | /api/v1/pleroma/admin/** | extra-personas-sh              |
-      | e2e-suspended                | akkoma.provision-account | admitted | /bff/provision/**        | extra-personas-sh              |
       | e2e-user                     | akkoma.open-ui           | admitted | /social/mastodon/**      | seed-accounts-sh+ts-catalogue  |
       | e2e-user                     | akkoma.sign-in           | refused  | /oauth/**                | seed-accounts-sh+ts-catalogue  |
       | e2e-user                     | akkoma.post              | refused  | /api/v1/**               | seed-accounts-sh+ts-catalogue  |

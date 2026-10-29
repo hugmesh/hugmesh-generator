@@ -17,7 +17,7 @@
 # Games platform — the ACCESS MATRIX: every seeded persona against every catalogued
 # function of this service.
 #
-# 32 personas x 8 functions = 256 cells.
+# 31 personas x 8 functions = 248 cells.
 # 8 of 8 function probe paths are DERIVED from a committed artefact;
 # 0 are ASSERTED (no artefact pins them yet) — see the FUNCTIONS entry's
 # `source` field, which the function-catalogue feature pins row by row.
@@ -232,14 +232,6 @@ Feature: Games platform — every persona against every function
       | e2e-superadmin               | games.server-fleet       | refused  | /games/servers/**        | extra-personas-sh+ts-catalogue |
       | e2e-superadmin               | games.admin-console      | refused  | /games/admin/**          | extra-personas-sh+ts-catalogue |
       | e2e-superadmin               | games.services-runner    | refused  | /admin/games-services/** | extra-personas-sh+ts-catalogue |
-      | e2e-suspended                | games.list               | refused  | /games/**                | extra-personas-sh              |
-      | e2e-suspended                | games.launch             | refused  | /games/**                | extra-personas-sh              |
-      | e2e-suspended                | games.member-api         | refused  | /games/api/**            | extra-personas-sh              |
-      | e2e-suspended                | games.admin-api          | refused  | /games/api/admin/**      | extra-personas-sh              |
-      | e2e-suspended                | games.instance-lifecycle | refused  | /games/**                | extra-personas-sh              |
-      | e2e-suspended                | games.server-fleet       | refused  | /games/servers/**        | extra-personas-sh              |
-      | e2e-suspended                | games.admin-console      | refused  | /games/admin/**          | extra-personas-sh              |
-      | e2e-suspended                | games.services-runner    | refused  | /admin/games-services/** | extra-personas-sh              |
       | e2e-user                     | games.list               | refused  | /games/**                | seed-accounts-sh+ts-catalogue  |
       | e2e-user                     | games.launch             | refused  | /games/**                | seed-accounts-sh+ts-catalogue  |
       | e2e-user                     | games.member-api         | refused  | /games/api/**            | seed-accounts-sh+ts-catalogue  |

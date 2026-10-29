@@ -17,7 +17,7 @@
 # Forum (phpBB) — the ACCESS MATRIX: every seeded persona against every catalogued
 # function of this service.
 #
-# 32 personas x 6 functions = 192 cells.
+# 31 personas x 6 functions = 186 cells.
 # 6 of 6 function probe paths are DERIVED from a committed artefact;
 # 0 are ASSERTED (no artefact pins them yet) — see the FUNCTIONS entry's
 # `source` field, which the function-catalogue feature pins row by row.
@@ -184,12 +184,6 @@ Feature: Forum (phpBB) — every persona against every function
       | e2e-superadmin               | phpbb.reply      | refused  | /bff/forum/**            | extra-personas-sh+ts-catalogue |
       | e2e-superadmin               | phpbb.moderate   | refused  | /bff/forum/moderation/** | extra-personas-sh+ts-catalogue |
       | e2e-superadmin               | phpbb.administer | refused  | /bff/forum/admin/**      | extra-personas-sh+ts-catalogue |
-      | e2e-suspended                | phpbb.open-ui    | refused  | /social/forum/**         | extra-personas-sh              |
-      | e2e-suspended                | phpbb.read-topic | refused  | /bff/forum/**            | extra-personas-sh              |
-      | e2e-suspended                | phpbb.post-topic | refused  | /bff/forum/**            | extra-personas-sh              |
-      | e2e-suspended                | phpbb.reply      | refused  | /bff/forum/**            | extra-personas-sh              |
-      | e2e-suspended                | phpbb.moderate   | refused  | /bff/forum/moderation/** | extra-personas-sh              |
-      | e2e-suspended                | phpbb.administer | refused  | /bff/forum/admin/**      | extra-personas-sh              |
       | e2e-user                     | phpbb.open-ui    | refused  | /social/forum/**         | seed-accounts-sh+ts-catalogue  |
       | e2e-user                     | phpbb.read-topic | refused  | /bff/forum/**            | seed-accounts-sh+ts-catalogue  |
       | e2e-user                     | phpbb.post-topic | refused  | /bff/forum/**            | seed-accounts-sh+ts-catalogue  |

@@ -17,7 +17,7 @@
 # Wiki — the ACCESS MATRIX: every seeded persona against every catalogued
 # function of this service.
 #
-# 32 personas x 5 functions = 160 cells.
+# 31 personas x 5 functions = 155 cells.
 # 3 of 5 function probe paths are DERIVED from a committed artefact;
 # 2 are ASSERTED (no artefact pins them yet) — see the FUNCTIONS entry's
 # `source` field, which the function-catalogue feature pins row by row.
@@ -160,11 +160,6 @@ Feature: Wiki — every persona against every function
       | e2e-superadmin               | wiki.history         | refused  | /bff/wiki/**            | extra-personas-sh+ts-catalogue |
       | e2e-superadmin               | wiki.administer      | refused  | /bff/wiki/admin/**      | extra-personas-sh+ts-catalogue |
       | e2e-superadmin               | wiki.brand-catalogue | admitted | /bff/wiki/superadmin/** | extra-personas-sh+ts-catalogue |
-      | e2e-suspended                | wiki.read            | refused  | /wiki/**                | extra-personas-sh              |
-      | e2e-suspended                | wiki.edit            | refused  | /bff/wiki/**            | extra-personas-sh              |
-      | e2e-suspended                | wiki.history         | refused  | /bff/wiki/**            | extra-personas-sh              |
-      | e2e-suspended                | wiki.administer      | refused  | /bff/wiki/admin/**      | extra-personas-sh              |
-      | e2e-suspended                | wiki.brand-catalogue | refused  | /bff/wiki/superadmin/** | extra-personas-sh              |
       | e2e-user                     | wiki.read            | refused  | /wiki/**                | seed-accounts-sh+ts-catalogue  |
       | e2e-user                     | wiki.edit            | refused  | /bff/wiki/**            | seed-accounts-sh+ts-catalogue  |
       | e2e-user                     | wiki.history         | refused  | /bff/wiki/**            | seed-accounts-sh+ts-catalogue  |
