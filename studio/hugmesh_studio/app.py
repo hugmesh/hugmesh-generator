@@ -29,7 +29,7 @@ import argparse
 import os
 import sys
 
-from .core import crashlog
+from .core import crashlog, no_console
 
 
 def _default_generator_dir() -> str:
@@ -56,6 +56,9 @@ def main(argv=None) -> int:
     # nowhere to print — which is why the 2026-07-29 GUI crash had to be
     # reconstructed from build artifacts and file mtimes. See core/crashlog.py.
     crashlog.install()
+    # Second, before anything can spawn a process: the windowed Windows exe would
+    # otherwise flash a console window for every docker/kubectl/git probe.
+    no_console.install()
     ap = argparse.ArgumentParser(description="HugMesh Image Studio")
     ap.add_argument("--generator-dir", default=_default_generator_dir(),
                     help="path to the hugmesh-generator checkout")

@@ -511,7 +511,10 @@ class _MeshWorker(QtCore.QThread):
 
                 ok, out = self._fn(_emit, self.cancel)
                 if not ok and emitted == 0 and out:
-                    for ln in str(out).splitlines():
+                    # A verb may return its reason as a LIST of lines (m2_bootstrap's
+                    # refusal does); str() of that printed a Python list repr.
+                    lines = out if isinstance(out, (list, tuple)) else [out]
+                    for ln in (s for item in lines for s in str(item).splitlines()):
                         self.line.emit(ln)
             else:
                 ok, out = self._fn()

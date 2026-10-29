@@ -293,6 +293,7 @@ jobs:
           tests/test_native_windows_gates.py
           tests/test_windows_binary_writes.py
           tests/test_default_local_user.py
+          tests/test_no_console.py
           tests/test_localmesh_run_log_private.py
           tests/test_build_sessions.py
           "tests/test_windows_packaging_files.py::test_the_spec_freezes_the_entry_shim_as_a_windowed_onedir"
