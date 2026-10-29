@@ -1,0 +1,83 @@
+# hugmesh-games-ui — the `games` Angular native-federation REMOTE (games member
+# catalog + play screens, and the games admin screens). Its own nginx (own pod)
+# in the hugmesh-frontend namespace, federated into the hugmesh.net host: it
+# serves a remoteEntry.json the host's loadRemoteModule consumes, mounted at
+# /games (gamesGuard: games|admin|superadmin) and /games/admin (gamesAdminGuard:
+# games AND (admin|mod), or superadmin). Talks ONLY to the games BFF via the
+# same-origin /games/api/** fe-gateway route (apps/20-gateway-fe.yaml games-bff).
+#
+# IMAGE SOURCE: built from the SIBLING hugmesh-games clone, directory games-ui/
+# (github.com/hugmesh/hugmesh-games — NOT a hugmesh-games-ui repo, which does not
+# exist and must not be created; and NOT hugmesh-games/frontend, which stays the
+# standalone two-realm portal). The games-ui workspace is cloned from the
+# hugmesh-user-ui skeleton (federation-base.js + federation.config.js, nonce'd-CSP
+# nginx.conf, docker-entrypoint.d/50-hug-theme.sh), built with --base-href=/games/
+# and served by nginxinc/nginx-unprivileged:1.27-alpine on :8080 — the same
+# container shape as manifests/character-studio (uid 101, /remoteEntry.json probes).
+# The image placeholder below (hugmesh/games-ui, the user-ui naming convention)
+# is rewritten by the kustomization `images:` transform to the in-cluster Harbor
+# tag.
+#
+# DEFERRED, stated honestly: the CLUSTER games BFF this remote calls
+# (manifests/games/deployment.yaml) still validates the GAMES-realm Casdoor
+# (casdoor-games), while the fe-gateway's bff-exchange mints the SYSTEMS custody
+# JWT the remote rides on. Bridging the cluster BFF to the systems issuer is NOT
+# part of this change: until it lands, the member/admin screens render on kind
+# but every /games/api/** call answers 401, which the screens surface as their
+# "gateway did not accept your session" panel. The compose lane
+# (tests/stack/compose.games.yaml) runs the BFF on the systems issuer today.
+#
+# OPTIONAL service (DEFAULT-OFF, games slug): when the slug is deselected,
+# gate_optional_services() prunes this manifest dir (optional-services.yaml
+# games.extraManifestPaths) + the fe-gateway games-ui/games-bff routes + the
+# /games/** route-access rows, and the installed-services ConfigMap renders
+# games:"false" so the host greys the Games cards out instead of 404/502.
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hugmesh-games-ui
+  namespace: hugmesh-frontend
+  labels:
+    app: hugmesh-games-ui
+    app.kubernetes.io/part-of: hugmesh.net
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: hugmesh-games-ui }
+  template:
+    metadata:
+      labels: { app: hugmesh-games-ui }
+    spec:
+      nodeSelector: { hugmesh.net/frontend: "true" }
+      securityContext:
+        seLinuxOptions:
+          # Unique MCS level (docs/SECURITY.md §3 matrix); games-ui -> c88, the
+          # next free category above the current max (edge-ai-analysis c87).
+          type: container_t
+          level: "s0:c88"
+      containers:
+        - name: web
+          # PLACEHOLDER image (rewritten by kustomization images: transform). The base
+          # is nginxinc/nginx-unprivileged:1.27-alpine — non-root (uid 101), :8080.
+          image: hugmesh/games-ui:dev
+          ports: [{ name: http, containerPort: 8080 }]
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 101
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            capabilities: { drop: ["ALL"] }
+          resources:
+            requests: { cpu: 50m, memory: 96Mi }
+            limits:   { cpu: 300m, memory: 192Mi }
+          # The probes fetch the federation manifest the host shell loads, so
+          # "ready" means "mountable", not merely "nginx answers".
+          readinessProbe:
+            httpGet: { path: /remoteEntry.json, port: http }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /remoteEntry.json, port: http }
+            initialDelaySeconds: 10
+            periodSeconds: 20

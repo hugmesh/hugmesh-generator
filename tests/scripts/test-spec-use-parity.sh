@@ -289,6 +289,140 @@ if [ -n "${X86_BUILDER}" ]; then
   fi
 fi
 
+echo "-- 4) qtdeclarative carries the SAME qtbase-matched USE as qtbase (wayland=, opengl=, ...) --"
+# dev-qt/qtdeclarative-6.11.2-r1 (stable amd64 in the 2026-09-24 builder tree, and
+# 6.12.0 the same) depends UNCONDITIONALLY on
+#   ~dev-qt/qtbase-${PV}:6[accessibility=,gui,network=,opengl=,sql?,ssl?,vulkan=,wayland=,widgets=]
+# Each '=' flag must be set the same way on both packages. The x86 specs turned
+# wayland on for qtbase but not for qtdeclarative, so no pair could satisfy the
+# dependency: the 2026-10-21 standalone-unaffiliated build stopped its payload
+# emerge at "Calculating dependencies" with
+#   there are no ebuilds built with USE flags to satisfy
+#   "~dev-qt/qtbase-6.11.2:6[...,wayland=,...]"
+# and reported eight "missing" binaries (grub-install ... openbox). Every x86
+# desktop role ships that chain (keditfiletype -> kcmutils -> kio -> kwallet ->
+# qca -> qt5compat[qml] -> qtdeclarative).
+# Rule, per package.use FILE (each file must be right on its own, because which
+# files a role installs differs by role): a qtbase-matched flag that a file turns
+# on (or off) for dev-qt/qtbase must be turned on (or off) for
+# dev-qt/qtdeclarative in that same file. Fields, not a regex over the line.
+QTDECL_EQ_FLAGS="accessibility network opengl vulkan wayland widgets"
+# Optional: derive the '=' set from a real gentoo tree too, so a Qt bump that adds
+# a flag (the way 6.11.2-r1 added wayland=) trips this before a build does.
+# HUGMESH_GENTOO_TREE=/var/db/repos/gentoo bash tests/scripts/test-spec-use-parity.sh
+if [ -n "${HUGMESH_GENTOO_TREE:-}" ]; then
+  if [ -d "${HUGMESH_GENTOO_TREE}/dev-qt/qtdeclarative" ]; then
+    derived="$(cat "${HUGMESH_GENTOO_TREE}"/dev-qt/qtdeclarative/qtdeclarative-*.ebuild 2>/dev/null \
+      | grep -aoE 'dev-qt/qtbase-\$\{PV\}:6\[[^]]*\]' \
+      | grep -aoE '[a-z0-9_-]+=' | tr -d '=' | sort -u | tr '\n' ' ')"
+    if [ -n "${derived}" ]; then
+      ok "derived qtdeclarative's qtbase '=' flags from ${HUGMESH_GENTOO_TREE}: ${derived}"
+      for f in ${derived}; do
+        case " ${QTDECL_EQ_FLAGS} " in *" ${f} "*) ;; *) QTDECL_EQ_FLAGS="${QTDECL_EQ_FLAGS} ${f}" ;; esac
+      done
+    else
+      bad "HUGMESH_GENTOO_TREE=${HUGMESH_GENTOO_TREE} has qtdeclarative ebuilds but no qtbase '=' dependency could be parsed — the derivation is blind"
+    fi
+  else
+    bad "HUGMESH_GENTOO_TREE=${HUGMESH_GENTOO_TREE} has no dev-qt/qtdeclarative — wrong path"
+  fi
+fi
+pu_flag_state() { # <file> <atom> <flag> -> on | off | unset (last mention wins)
+  awk -v atom="$2" -v want="$3" '
+    /^[[:space:]]*#/ { next }
+    $1 == atom { for (i = 2; i <= NF; i++) { if ($i == want) s = "on"; else if ($i == "-" want) s = "off" } }
+    END { print (s == "" ? "unset" : s) }' "$1" 2>/dev/null
+}
+qt_pairs_checked=0
+for p in "${PLATFORMS[@]}"; do
+  pud="${REPO}/specs-${p}/portage/package.use"
+  [ -d "${pud}" ] || continue
+  for puf in "${pud}"/*; do
+    [ -f "${puf}" ] || continue
+    for f in ${QTDECL_EQ_FLAGS}; do
+      base_state="$(pu_flag_state "${puf}" dev-qt/qtbase "${f}")"
+      [ "${base_state}" = "unset" ] && continue
+      qt_pairs_checked=$((qt_pairs_checked + 1))
+      decl_state="$(pu_flag_state "${puf}" dev-qt/qtdeclarative "${f}")"
+      if [ "${decl_state}" = "${base_state}" ]; then
+        ok "${p}: package.use/$(basename "${puf}") sets '${f}'=${base_state} on BOTH qtbase and qtdeclarative"
+      else
+        bad "${p}: package.use/$(basename "${puf}") sets '${f}'=${base_state} on dev-qt/qtbase but '${f}'=${decl_state} on dev-qt/qtdeclarative — qtdeclarative depends on qtbase[${f}=], so the pair cannot resolve and the whole payload emerge stops before merging anything (2026-10-21 desktop build: wayland)"
+      fi
+    done
+  done
+done
+# Floor: the shipped x86 specs set at least qtbase opengl + wayland in desktop AND
+# capable, so fewer than 4 checked pairs means the parser read nothing.
+[ "${qt_pairs_checked}" -ge 4 ] \
+  && ok "checked ${qt_pairs_checked} qtbase/qtdeclarative flag pair(s)" \
+  || bad "checked only ${qt_pairs_checked} qtbase/qtdeclarative flag pair(s) (expected >= 4: opengl+wayland in x86 desktop and capable) — section 4 is reading the wrong files and would pass vacuously"
+# Positive control: replay the 2026-10-21 shape (qtbase wayland, qtdeclarative
+# without it) into a throwaway file; the rule must call it a mismatch.
+QCTL="${TMP3}/qtctl"; mkdir -p "${QCTL}"
+printf 'dev-qt/qtbase opengl libproxy icu wayland\ndev-qt/qtdeclarative opengl vulkan\n' > "${QCTL}/desktop"
+if [ "$(pu_flag_state "${QCTL}/desktop" dev-qt/qtbase wayland)" = "on" ] \
+   && [ "$(pu_flag_state "${QCTL}/desktop" dev-qt/qtdeclarative wayland)" = "unset" ]; then
+  ok "positive control: the 2026-10-21 line pair reads as qtbase wayland=on, qtdeclarative wayland=unset (a mismatch)"
+else
+  bad "positive control: the parser does not see the 2026-10-21 qtbase/qtdeclarative wayland mismatch — section 4 cannot detect the defect it exists for"
+fi
+
+echo "-- 5) every --gpu-driver card list closes over the xorg DDX -> libdrm card it pulls --"
+# On a client role x11-base/xorg-drivers turns each VIDEO_CARDS entry into an X
+# driver (DDX), and some DDXs need libdrm built for a card of their own. libdrm
+# inherits make.conf's VIDEO_CARDS (section 3 forbids pinning it), so that card
+# MUST be in the same --gpu-driver list or the payload emerge cannot resolve.
+# From xorg-drivers-21.1-r2.ebuild (2026-09-24 builder tree) and the
+# x11-drivers/xf86-video-* ebuilds it names:
+#   radeonsi -> xf86-video-ati      -> libdrm[video_cards_radeon]   (line 81)
+#   radeon   -> xf86-video-ati      -> libdrm[video_cards_radeon]   (line 80)
+#   amdgpu   -> xf86-video-amdgpu   -> libdrm[video_cards_amdgpu]
+#   nouveau  -> xf86-video-nouveau  -> libdrm[video_cards_nouveau]
+#   i915     -> xf86-video-intel    -> libdrm[video_cards_intel]
+# The 2026-10-21 all-free build (amdgpu radeonsi intel iris nouveau) walled on
+#   ">=x11-libs/libdrm-2.4.89[video_cards_radeon]" required by xf86-video-ati
+# once the Qt wall in section 4 was out of the way (replayed in its own sysroot).
+DDX_LIBDRM="radeonsi:radeon radeon:radeon amdgpu:amdgpu nouveau:nouveau i915:intel"
+# Optional: derive the same map from a gentoo tree (newest xorg-drivers ebuild's
+# 'video_cards_X? ( ...x11-drivers/xf86-video-Y... )' plus Y's libdrm[video_cards_Z]).
+if [ -n "${HUGMESH_GENTOO_TREE:-}" ] && [ -d "${HUGMESH_GENTOO_TREE}/x11-base/xorg-drivers" ]; then
+  for xd in "${HUGMESH_GENTOO_TREE}"/x11-base/xorg-drivers/xorg-drivers-[0-9]*.ebuild; do
+    [ -f "${xd}" ] || continue
+    while read -r card ddx; do
+      [ -n "${ddx}" ] || continue
+      for need in $(cat "${HUGMESH_GENTOO_TREE}/x11-drivers/xf86-video-${ddx}"/*.ebuild 2>/dev/null \
+                     | grep -aoE 'x11-libs/libdrm[^ ]*\[video_cards_[a-z0-9]+\]' \
+                     | sed -E 's/.*video_cards_([a-z0-9]+)\].*/\1/' | sort -u); do
+        case " ${DDX_LIBDRM} " in *" ${card}:${need} "*) ;; *) DDX_LIBDRM="${DDX_LIBDRM} ${card}:${need}" ;; esac
+      done
+    done < <(grep -aoE 'video_cards_[a-z0-9]+\?[[:space:]]*\([[:space:]]*[^)]*x11-drivers/xf86-video-[a-z0-9]+' "${xd}" \
+               | sed -E 's/^video_cards_([a-z0-9]+)\?.*xf86-video-([a-z0-9]+)$/\1 \2/')
+  done
+  ok "card -> libdrm map after reading ${HUGMESH_GENTOO_TREE}: ${DDX_LIBDRM}"
+fi
+ddx_rows=0
+while IFS='|' read -r drv cards; do
+  [ -n "${drv}" ] || continue
+  [ -n "${cards}" ] || continue
+  ddx_rows=$((ddx_rows + 1))
+  missing=""
+  for pair in ${DDX_LIBDRM}; do
+    c="${pair%%:*}"; need="${pair##*:}"
+    case " ${cards} " in
+      *" ${c} "*) case " ${cards} " in *" ${need} "*) ;; *) missing="${missing}${missing:+, }${c} needs ${need}" ;; esac ;;
+    esac
+  done
+  if [ -z "${missing}" ]; then
+    ok "--gpu-driver ${drv} (${cards}): every X driver it pulls finds its libdrm card in the same list"
+  else
+    bad "--gpu-driver ${drv} (${cards}): ${missing} — xorg-drivers pulls the X driver for the first card and that driver needs x11-libs/libdrm[video_cards_<second>], which libdrm cannot have because it inherits this list; the client payload emerge stops before merging anything (2026-10-21 all-free build)"
+  fi
+done <<< "${MATRIX}"
+[ "${ddx_rows}" -ge 6 ] \
+  && ok "checked ${ddx_rows} non-empty --gpu-driver card lists against the X driver -> libdrm map" \
+  || bad "checked only ${ddx_rows} card lists (expected >= 6) — section 5 read an empty matrix and would pass vacuously"
+
 echo
 echo "== ${P} passed, ${F} failed =="
 [ "${F}" -eq 0 ]

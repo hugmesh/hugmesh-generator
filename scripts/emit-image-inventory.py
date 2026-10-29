@@ -5,7 +5,7 @@ WHY THIS EXISTS (and why it is not ``image-catalog.json``)
 ---------------------------------------------------------
 ``docs/catalog/image-catalog.json`` (scripts/emit-image-catalog.py) is the GRAMMAR: the
 role x platform x axes vocabulary the Studio and the admin-ui worklist multi-select share.
-``tests/build-matrix/matrix.tsv`` is a hand-curated SAMPLE of that grammar (150 cells) that
+``tests/build-matrix/matrix.tsv`` is a hand-curated SAMPLE of that grammar that
 tests/build-matrix/check.sh proves across five channels.
 
 Neither answers the operator's actual question — *"can we create ALL the images?"* — because
@@ -94,6 +94,15 @@ ROLE_TO_BUILDER_ROLE = {
 }
 NO_ROLE_AXIS = ("frite", "orangepi5", "orangepizero2", "orangepizero2w",
                 "orangepizero3", "orangepi3-lts", "orangepi4-lts")
+# The two Orange Pi NODE-axis boards (EXPERIMENTAL): their desktop keeps the no-role-axis
+# shape above (Studio role id = the board, no --role), but a cluster node role in their
+# scripts/_roles-lib.sh set (HUGMESH_ROLES_ORANGEPI5 / _ORANGEPI4LTS, read through the
+# Studio's role reader) is passed as --role, like rpi5's.
+NODE_AXIS_PLATFORMS = ("orangepi5", "orangepi4-lts")
+# The platforms whose node roles take --ram-gb (the board's RAM). An omnibus record on
+# them is probed at the role's floor (the smallest RAM omnibus accepts): one image serves
+# every RAM size, so the RAM is a build input, not a separate image.
+RAM_PLATFORMS = ("rpi5", "orangepi5", "orangepi4-lts")
 
 # Makefile axis variables per platform (Makefile's own names).
 MAKE_AXIS_VARS = {
@@ -126,14 +135,20 @@ MENU_PICKERS = {
     ("frite", "board"): "Frite board",
     ("frite", "flavor"): "Frite flavor",
     ("frite", "desktop"): "Frite desktop",
+    ("orangepi5", "role"): "Orange Pi 5 role",
     ("orangepi5", "board"): "Orange Pi 5 board",
     ("orangepi5", "flavor"): "Orange Pi 5 flavor",
     ("orangepizero2", "flavor"): "Orange Pi Zero 2 flavor",
     ("orangepizero2w", "flavor"): "Orange Pi Zero 2W flavor",
     ("orangepizero3", "flavor"): "Orange Pi Zero 3 flavor",
     ("orangepi3-lts", "flavor"): "Orange Pi 3 LTS flavor",
+    ("orangepi4-lts", "role"): "Orange Pi 4 LTS role",
     ("orangepi4-lts", "flavor"): "Orange Pi 4 LTS flavor",
 }
+# The RAM picker (scripts/build-menu.sh ram_screen) builds its options at run time from
+# the same scripts/_roles-lib.sh floors the builders enforce, so it has no static tokens
+# to read: its PRESENCE is what menu_reach checks for a record that needs a RAM.
+MENU_RAM_PICKER = "Board RAM"
 # The menu's arch token for a platform (its "Single role" picker spells rpi5 as "rpi").
 MENU_ARCH_TOKEN = {"rpi5": "rpi"}
 
@@ -185,7 +200,7 @@ RPI5_BOARD_OUT=""; JETSON_BOARD_OUT=""
 FRITE_BOARD_OUT=""; FRITE_FLAVOR_OUT=""
 ORANGEPI5_BOARD_OUT=""; ORANGEPI5_FLAVOR_OUT=""
 ORANGEPIZERO2_FLAVOR_OUT=""; ORANGEPIZERO2W_FLAVOR_OUT=""; ORANGEPIZERO3_FLAVOR_OUT=""
-ORANGEPI3LTS_FLAVOR_OUT=""; ORANGEPI4LTS_FLAVOR_OUT=""
+ORANGEPI3LTS_FLAVOR_OUT=""; ORANGEPI4LTS_FLAVOR_OUT=""; RAM_GB_OUT=""
 . "$1"
 while IFS='|' read -r key IMAGE_TYPE HARDWARE_CLASS; do
     [ -n "${key}" ] || continue
@@ -197,7 +212,7 @@ while IFS='|' read -r key IMAGE_TYPE HARDWARE_CLASS; do
     FRITE_BOARD_OUT=""; FRITE_FLAVOR_OUT=""
     ORANGEPI5_BOARD_OUT=""; ORANGEPI5_FLAVOR_OUT=""
     ORANGEPIZERO2_FLAVOR_OUT=""; ORANGEPIZERO2W_FLAVOR_OUT=""; ORANGEPIZERO3_FLAVOR_OUT=""
-    ORANGEPI3LTS_FLAVOR_OUT=""; ORANGEPI4LTS_FLAVOR_OUT=""
+    ORANGEPI3LTS_FLAVOR_OUT=""; ORANGEPI4LTS_FLAVOR_OUT=""; RAM_GB_OUT=""
     if resolve_build_target 2>/dev/null; then
         printf '%s\t1\t%s\t%s\t%s\t%s\t%s\t%s\n' "${key}" "${PLATFORM}" "${BUILD_ROLE}" \
             "${RPI5_BOARD_OUT}${JETSON_BOARD_OUT}${FRITE_BOARD_OUT}${ORANGEPI5_BOARD_OUT}" \
@@ -281,6 +296,7 @@ def enumerate_records(catalog: dict) -> list[dict]:
                         "platform": platform,
                         "role": role,
                         "builder_role": builder_role_for(platform, role),
+                        "ram_gb": probe_ram_gb(platform, builder_role_for(platform, role)),
                         "board": board,
                         "flavor": flavor,
                         "desktop": desktop,
@@ -293,9 +309,24 @@ def enumerate_records(catalog: dict) -> list[dict]:
 
 
 def builder_role_for(platform: str, role: str) -> str:
+    if platform in NODE_AXIS_PLATFORMS:
+        from hugmesh_studio.core import roles as role_vocab        # noqa: E402
+        if role != "desktop" and role in role_vocab.roles_for_platform(platform):
+            return role
     if platform in NO_ROLE_AXIS:
         return ""
     return ROLE_TO_BUILDER_ROLE.get((platform, role), role)
+
+
+def probe_ram_gb(platform: str, builder_role: str) -> str:
+    """The --ram-gb a record is probed with: the role's floor for a role that REQUIRES
+    a RAM (omnibus) on a platform that takes one, else "" (no RAM stated)."""
+    if platform not in RAM_PLATFORMS or not builder_role:
+        return ""
+    from hugmesh_studio.core import roles as role_vocab            # noqa: E402
+    if not role_vocab.ram_required(builder_role):
+        return ""
+    return str(role_vocab.min_ram_gb(builder_role))
 
 
 def cli_args(rec: dict) -> list[str]:
@@ -305,6 +336,8 @@ def cli_args(rec: dict) -> list[str]:
         args += ["--role", rec["builder_role"]]
     if rec["board"]:
         args += ["--board", rec["board"]]
+    if rec.get("ram_gb"):
+        args += ["--ram-gb", rec["ram_gb"]]
     if rec["flavor"]:
         args += ["--flavor", rec["flavor"]]
     if rec["desktop"]:
@@ -325,6 +358,8 @@ def gui_config(rec: dict) -> dict:
     for axis in AXIS_ORDER:
         if rec[axis]:
             cfg[axis] = rec[axis]
+    if rec.get("ram_gb"):
+        cfg["ram_gb"] = rec["ram_gb"]
     return cfg
 
 
@@ -333,6 +368,8 @@ def worklist_envelope(rec: dict) -> dict:
     for axis in AXIS_ORDER:
         if rec[axis]:
             entry[axis] = rec[axis]
+    if rec.get("ram_gb"):
+        entry["ram_gb"] = rec["ram_gb"]
     return {"schema": "hugmesh-worklist/v1", "mode": rec["mode"], "env": "test",
             "platform": rec["platform"], "role": rec["role"], "entries": [entry]}
 
@@ -346,12 +383,18 @@ def make_target(rec: dict) -> tuple[str, dict[str, str]]:
         target = f"rpi-{rec['builder_role']}"
     elif p == "jetson":
         target = f"jetson-{rec['builder_role']}"
+    elif p in NODE_AXIS_PLATFORMS and rec["builder_role"]:
+        target = f"{p}-{rec['builder_role']}"     # orangepi5-<role> / orangepi4-lts-<role>
     else:
         target = p
     axvars = {}
     for axis, var in MAKE_AXIS_VARS[p].items():
         if rec[axis]:
+            if axis == "flavor" and p in NODE_AXIS_PLATFORMS and rec["builder_role"]:
+                continue        # a node target is installer-only; it takes no flavor var
             axvars[var] = rec[axis]
+    if rec.get("ram_gb"):
+        axvars["RAM_GB"] = rec["ram_gb"]
     return target, axvars
 
 
@@ -399,6 +442,7 @@ def main(argv: list[str] | None = None) -> int:
 
     # ── menu picker tokens (read once out of the real script) ────────────────────────
     pickers = {k: menu_tokens(menu_src, t) for k, t in MENU_PICKERS.items()}
+    pickers["__ram__"] = bool(re.search(_UI_MENU_RE % re.escape(MENU_RAM_PICKER), menu_src))
     menu_arches = set(pickers[("__arch__", "arch")]) | set(pickers[("__arch__", "build")])
 
     # ── the JOB channel, batched into ONE bash child ─────────────────────────────────
@@ -560,7 +604,8 @@ def job_hwclass(rec: dict) -> str:
         role_tok = rec["builder_role"]
         if mode == "standalone" and role_tok == "desktop":
             role_tok = "standalone-desktop"
-        return f"rpi5.{role_tok}.{rec['board'] or 'rpi5'}"
+        ram = f".{rec['ram_gb']}gb" if rec.get("ram_gb") else ""
+        return f"rpi5.{role_tok}.{rec['board'] or 'rpi5'}{ram}"
     if p == "jetson":
         return f"jetson.{rec['builder_role']}.{rec['board'] or 'orin-nano'}"
     flavor = rec["flavor"]
@@ -568,6 +613,11 @@ def job_hwclass(rec: dict) -> str:
         flavor = "standalone"           # the ARM standalone-posture flavor token
     if p == "frite":
         return f"frite.{rec['board'] or 'la-frite'}.{flavor or 'installer'}"
+    if p in NODE_AXIS_PLATFORMS and rec["builder_role"]:
+        # a cluster NODE: "<platform>.<role>[.<board>][.<N>gb]" (installer only)
+        ram = f".{rec['ram_gb']}gb" if rec.get("ram_gb") else ""
+        board = f".{rec['board']}" if rec["board"] else ""
+        return f"{p}.{rec['builder_role']}{board}{ram}"
     if p == "orangepi5":
         return f"orangepi5.{rec['board'] or 'orange-pi-5-plus'}.{flavor or 'installer'}"
     return f"{p}.{flavor or 'installer'}"
@@ -641,6 +691,8 @@ def argv_missing(rec: dict, text: str, make_channel: bool = False) -> str:
         miss.append(f"--role {rec['builder_role']}")
     if rec["board"] and f"--board {rec['board']}" not in text:
         miss.append(f"--board {rec['board']}")
+    if rec.get("ram_gb") and f"--ram-gb {rec['ram_gb']}" not in text:
+        miss.append(f"--ram-gb {rec['ram_gb']}")
     if rec["flavor"] and f"--flavor {rec['flavor']}" not in text:
         miss.append(f"--flavor {rec['flavor']}")
     if rec["desktop"] and f"--desktop {rec['desktop']}" not in text \
@@ -669,9 +721,12 @@ def menu_reach(rec: dict, pickers: dict, menu_arches: set) -> tuple[str, str]:
     missing = []
     role_toks = pickers.get((p, "role"))
     if role_toks is not None:
-        want = rec["builder_role"] or rec["role"]
+        # a node-axis board's desktop is its picker's `desktop` entry
+        want = rec["builder_role"] or ("desktop" if p in NODE_AXIS_PLATFORMS else rec["role"])
         if want not in role_toks:
             missing.append(f"role {want!r} (picker offers: {', '.join(role_toks)})")
+    if rec.get("ram_gb") and not pickers.get("__ram__"):
+        missing.append(f"no RAM picker at all (cannot select --ram-gb {rec['ram_gb']})")
     for axis in AXIS_ORDER:
         val = rec[axis]
         if not val:
@@ -850,7 +905,7 @@ def render_md(rep: dict) -> str:
     a("     Regenerate: python3 scripts/emit-image-inventory.py")
     a("     CI gate:    bash tests/build-matrix/inventory-check.sh (`make inventory-check`) -->\n")
     a("`docs/catalog/image-catalog.json` is the image GRAMMAR and "
-      "`tests/build-matrix/matrix.tsv` is a curated 150-cell SAMPLE of it. This table is the "
+      f"`tests/build-matrix/matrix.tsv` is a curated {rep['matrix_cells']}-cell SAMPLE of it. This table is the "
       "third thing neither of them is: the FULL cross-product of that grammar — every image "
       "the platform advertises — with, per image, which of the six build channels can "
       "actually express it.\n")

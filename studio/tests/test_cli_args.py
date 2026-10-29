@@ -10,6 +10,7 @@ import json
 import pytest
 
 from hugmesh_studio.core.config import (
+    field_in_scope,
     BUILDER_SCRIPTS,
     COMPRESS_LEVEL_CHOICES,
     COMPRESS_LEVEL_DEFAULT,
@@ -1209,7 +1210,13 @@ def test_cluster_identity_applies_stays_true_where_only_cluster_domain_is_parsed
         cfg = ImageConfig(mode="standalone", role=role, platform=plat,
                           cluster_domain="acme.example")
         assert cluster_identity_applies(cfg), f"{plat} bakes a cluster domain in standalone"
-        assert set(PLATFORM_FIELD_SUPPORT["games_domain"]) == {"x86", "rpi5"}
+        # x86 + rpi5, and the Orange Pi node boards (whose builders parse it for a NODE
+        # role only — FIELD_SCOPE carries that class rule; the orangepi5 DESKTOP above
+        # still does not take it).
+        assert set(PLATFORM_FIELD_SUPPORT["games_domain"]) == {
+            "x86", "rpi5", "orangepi5", "orangepi4-lts"}
+        if plat == "orangepi5":
+            assert not field_in_scope("games_domain", cfg)
 
 
 # ---- G18: explicit --person-role picker; node roles carry none ------------------
@@ -1745,6 +1752,10 @@ def test_non_argv_fields_set():
         "login_footer_hidden", "login_footer_size", "login_footer_bg",
         "login_footer_text",
         "login_bg_effect",
+        # #654: the superbrand's shape/decoration (same channel as login_*), and the
+        # brand record path, which is a Studio-side resolver until a builder parses
+        # --brand-record (test_brand_record_copy_sites pins that hand-over).
+        "login_style", "login_decor", "brand_record",
         "additional_domains", "configure_users", "qemu_device_tests",
         "domain_services_reviewed"}
     # no flow flag may reach ANY builder argv, on any platform, in any mode
@@ -1926,17 +1937,32 @@ _FIELD_PROBE = {
 }
 
 
-def _emits(platform, overrides):
-    """True iff applying ``overrides`` changes this platform's emitted argv. A raised
-    ValueError (a rejected combination, e.g. encrypt-root on jetson) counts as 'the
-    flag never reaches the builder' -> not supported."""
-    base = _BASELINES[platform]
+# The Orange Pi node boards emit the mesh's cluster choices for a NODE role only (their
+# desktop builder refuses them), so a field also counts as emitted there when it changes
+# the argv of the board's node baseline.
+_NODE_BASELINES = {
+    "orangepi5": dict(mode="mesh", role="pki", platform="orangepi5", ram_gb="8"),
+    "orangepi4-lts": dict(mode="mesh", role="frontend", platform="orangepi4-lts", ram_gb="4"),
+}
+
+
+def _emits_on(base, overrides):
     before = ImageConfig(**base).to_cli_args()
     try:
         after = ImageConfig(**{**base, **overrides}).to_cli_args()
     except ValueError:
         return False
     return before != after
+
+
+def _emits(platform, overrides):
+    """True iff applying ``overrides`` changes this platform's emitted argv. A raised
+    ValueError (a rejected combination, e.g. encrypt-root on jetson) counts as 'the
+    flag never reaches the builder' -> not supported."""
+    if _emits_on(_BASELINES[platform], overrides):
+        return True
+    node = _NODE_BASELINES.get(platform)
+    return node is not None and _emits_on(node, overrides)
 
 
 def test_field_probe_covers_the_whole_capability_table():

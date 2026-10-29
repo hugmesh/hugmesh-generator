@@ -22,7 +22,7 @@ remained. This feature closes them:
 
 ## What the setting does, per lane
 
-One number, five lanes, because each lane expresses limits differently. Three
+One number, six lanes, because each lane expresses limits differently. Four
 deliver the limit today. Two are designed but not wired:
 
 | Lane | How the limit is delivered | Wired |
@@ -30,14 +30,23 @@ deliver the limit today. Two are designed but not wired:
 | Single-image build | `docker run --cpus/--memory/--gpus` (`core/build_driver.py`) | yes |
 | Fleet build | the same flags (`core/fleet.py`) | yes |
 | Local compose stack | a generated `tests/stack/.compose.limits.yaml` overlay | yes |
+| Mesh node (tray **Start mesh node**, `make mesh-node-up`) | a generated `docker-compose.limits.yml` overlay next to the staged node (`core/mesh_node.py`) | yes |
 | QEMU emulation | `-smp` on the guest | **no** |
 | kind / Kubernetes | `docker update` on the node container | **no** |
 
-QEMU: `qemu_smp()` exists and the dialog prints its result, but
-`core/emulation.py` never reads it and keeps its own `--smp` default. kind:
-`docker update` appears only in a docstring; no code runs it. Until both are
-wired, the dialog's line for emulated devices states a setting the emulated guests
-do not receive.
+QEMU: `qemu_smp()` exists, but `core/emulation.py` never reads it and the
+emulation page always asks for 2 vCPUs per device. kind: `docker update` appears
+only in a docstring; no code runs it. The dialog and the tray say so ("Not limited
+by this setting yet: emulated devices (QEMU) and Kubernetes (kind) nodes"), and
+`studio/tests/test_limits_reach_lanes.py` fails if either text claims one of these
+lanes again before code reads the setting for it.
+
+The mesh node is a single container, so it gets the **whole** budget, not a share.
+Memory swap is pinned to the memory limit (no swap), as for builds. It is never given
+a GPU: it only carries tailnet traffic. Measured 2026-10-21: with a 2-CPU, 1g limit
+saved in the dialog, the tray-started node's container ran with `NanoCpus=2000000000`,
+`Memory=1073741824`, cgroup `cpu.max = 200000 100000`, and still joined headscale.
+Before this change the same node ran with `NanoCpus=0` (no cap).
 
 The dialog shows the **transformed** value for each lane, not your input, because two
 lanes change it:

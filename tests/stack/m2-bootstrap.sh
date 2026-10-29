@@ -130,6 +130,14 @@ PINS=(
   "hugmesh-auth-core|401ca9e38168791e5642125d96dd1f65487b8ff1|hugmesh-auth-core|2.4.2|jar|net/hugmesh"
   "hugmesh-auth-core|1578565de8c54f4358ef3f172ff95767223f3746|hugmesh-auth-core|2.5.0|jar|net/hugmesh"
   "hugmesh-auth-core|68639eba4522b748f59fecff53ec27be7fadf261|hugmesh-auth-core|2.5.1|jar|net/hugmesh"
+  # The 2026-10-21 beta line: every consumer main now asks for these (parent
+  # 2.9.0-beta.1 manages commons 2.2.0-beta.1 + auth-core 2.6.0-beta.1 and pulls
+  # build-config 0.6.0-beta.1 as its plugin dep). Without these rows a cold
+  # stack-up / kind-images dies resolving the parent POM. Same order rule.
+  "hugmesh-build-config|3d21950a2ee87ca8125ef303179d2132ccbd7172|hugmesh-build-config|0.6.0-beta.1|jar|net/hugmesh"
+  "hugmesh-parent|dd9ff5d3174b502a45bee1fbb9225cb281ca73f9|hugmesh-parent|2.9.0-beta.1|pom|net/hugmesh"
+  "hugmesh-commons|126e85b3f8591f2118a2a8de46378f06ecaef994|hugmesh-commons|2.2.0-beta.1|jar+tests|net/hugmesh"
+  "hugmesh-auth-core|0237a8661236e55f72795a834ecbbef5f0d08919|hugmesh-auth-core|2.6.0-beta.1|jar|net/hugmesh"
 )
 
 M2_REPO="${M2_CACHE}/m2/repository"

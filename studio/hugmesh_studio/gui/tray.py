@@ -45,6 +45,11 @@ NO_RUNNING_BUILDS = "(no builds running)"
 #: limits…" makes you open a dialog to answer "am I limited right now?".
 LIMITS_LABEL = "Resource limits…"
 
+#: The notice shown after the limits are saved. It names only lanes that read the
+#: setting; see limits_dialog.BLURB for the lanes it does not reach yet.
+LIMITS_SAVED_NOTICE = ("Applies to the next build, stack bring-up or mesh-node start. "
+                       "Emulated devices and kind nodes are not limited yet.")
+
 
 def limits_menu_label(limits=None) -> str:
     """The tray label for the current limits, e.g. "Resource limits: 7 CPU, 23808m…"."""
@@ -355,8 +360,7 @@ class _ControlTray(QtWidgets.QSystemTrayIcon):
             return
         if saved is not None:
             self.refresh_limits_label()
-            self._notify("Resource limits saved",
-                         "Applies to the next build, stack bring-up or emulated mesh.")
+            self._notify("Resource limits saved", LIMITS_SAVED_NOTICE)
 
     # ---- ASK 16: running-builds submenu -------------------------------------------
     def refresh_running_builds(self) -> None:

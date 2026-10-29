@@ -74,6 +74,11 @@ class _Stub:
         self.status = _Text()
         self.cancel_btn = _Btn(cancellable)
 
+    def _refuse(self, text: str) -> None:
+        # the page's refusal path (it also opens the bottom panel when the line is
+        # off screen; a stub has no panel)
+        self.status.setText(text)
+
 
 def _launch(stub, label, fn):
     return localmesh.LocalMeshPage._launch(stub, label, fn)

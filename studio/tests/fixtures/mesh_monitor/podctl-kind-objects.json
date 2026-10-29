@@ -1,0 +1,342 @@
+{
+ "apiVersion": "v1",
+ "kind": "List",
+ "items": [
+  {
+   "kind": "Pod",
+   "metadata": {
+    "namespace": "devops",
+    "name": "argocd-application-controller-0",
+    "labels": {
+     "app.kubernetes.io/name": "argocd-application-controller",
+     "apps.kubernetes.io/pod-index": "0",
+     "controller-revision-hash": "argocd-application-controller-57dd796f45",
+     "statefulset.kubernetes.io/pod-name": "argocd-application-controller-0"
+    },
+    "ownerReferences": [
+     {
+      "kind": "StatefulSet",
+      "name": "argocd-application-controller"
+     }
+    ]
+   },
+   "spec": {
+    "nodeName": "hugmesh-local-control-plane",
+    "containers": [
+     {
+      "name": "argocd-application-controller",
+      "image": "quay.io/argoproj/argocd:v3.5.3"
+     }
+    ]
+   },
+   "status": {
+    "phase": "Running",
+    "podIP": "10.244.0.5",
+    "containerStatuses": [
+     {
+      "name": "argocd-application-controller",
+      "ready": true,
+      "restartCount": 1,
+      "state": {
+       "running": {
+        "startedAt": "2026-10-21T19:14:10Z"
+       }
+      },
+      "image": "quay.io/argoproj/argocd:v3.5.3"
+     }
+    ],
+    "initContainerStatuses": []
+   }
+  },
+  {
+   "kind": "Pod",
+   "metadata": {
+    "namespace": "devops",
+    "name": "argocd-server-54bf8f7497-v299r",
+    "labels": {
+     "app.kubernetes.io/name": "argocd-server",
+     "pod-template-hash": "54bf8f7497"
+    },
+    "ownerReferences": [
+     {
+      "kind": "ReplicaSet",
+      "name": "argocd-server-54bf8f7497"
+     }
+    ]
+   },
+   "spec": {
+    "nodeName": "hugmesh-local-control-plane",
+    "containers": [
+     {
+      "name": "argocd-server",
+      "image": "quay.io/argoproj/argocd:v3.5.3"
+     }
+    ]
+   },
+   "status": {
+    "phase": "Running",
+    "podIP": "10.244.0.7",
+    "containerStatuses": [
+     {
+      "name": "argocd-server",
+      "ready": true,
+      "restartCount": 1,
+      "state": {
+       "running": {
+        "startedAt": "2026-10-21T19:14:11Z"
+       }
+      },
+      "image": "quay.io/argoproj/argocd:v3.5.3"
+     }
+    ],
+    "initContainerStatuses": []
+   }
+  },
+  {
+   "kind": "Pod",
+   "metadata": {
+    "namespace": "kube-system",
+    "name": "etcd-hugmesh-local-control-plane",
+    "labels": {
+     "component": "etcd",
+     "tier": "control-plane"
+    },
+    "ownerReferences": [
+     {
+      "kind": "Node",
+      "name": "hugmesh-local-control-plane"
+     }
+    ]
+   },
+   "spec": {
+    "nodeName": "hugmesh-local-control-plane",
+    "containers": [
+     {
+      "name": "etcd",
+      "image": "registry.k8s.io/etcd:3.5.12-0"
+     }
+    ]
+   },
+   "status": {
+    "phase": "Running",
+    "podIP": "172.18.0.2",
+    "containerStatuses": [
+     {
+      "name": "etcd",
+      "ready": true,
+      "restartCount": 1,
+      "state": {
+       "running": {
+        "startedAt": "2026-10-21T19:14:05Z"
+       }
+      },
+      "image": "registry.k8s.io/etcd:3.5.12-0"
+     }
+    ],
+    "initContainerStatuses": []
+   }
+  },
+  {
+   "kind": "Pod",
+   "metadata": {
+    "namespace": "kube-system",
+    "name": "kindnet-z9vn4",
+    "labels": {
+     "app": "kindnet",
+     "controller-revision-hash": "7c866fccbb",
+     "k8s-app": "kindnet",
+     "pod-template-generation": "1",
+     "tier": "node"
+    },
+    "ownerReferences": [
+     {
+      "kind": "DaemonSet",
+      "name": "kindnet"
+     }
+    ]
+   },
+   "spec": {
+    "nodeName": "hugmesh-local-control-plane",
+    "containers": [
+     {
+      "name": "kindnet-cni",
+      "image": "docker.io/kindest/kindnetd:v20240202-8f1494ea"
+     }
+    ]
+   },
+   "status": {
+    "phase": "Running",
+    "podIP": "172.18.0.2",
+    "containerStatuses": [
+     {
+      "name": "kindnet-cni",
+      "ready": true,
+      "restartCount": 1,
+      "state": {
+       "running": {
+        "startedAt": "2026-10-21T19:14:09Z"
+       }
+      },
+      "image": "docker.io/kindest/kindnetd:v20240202-8f1494ea"
+     }
+    ],
+    "initContainerStatuses": []
+   }
+  },
+  {
+   "kind": "Pod",
+   "metadata": {
+    "namespace": "kyverno",
+    "name": "kyverno-cleanup-update-requests-29876900-dbhcl",
+    "labels": {
+     "app.kubernetes.io/component": "cleanup",
+     "app.kubernetes.io/instance": "kyverno",
+     "app.kubernetes.io/managed-by": "Helm",
+     "app.kubernetes.io/part-of": "kyverno",
+     "app.kubernetes.io/version": "3.2.8",
+     "batch.kubernetes.io/controller-uid": "ba647997-a91b-4018-ac1e-a5ec5d7edd47",
+     "batch.kubernetes.io/job-name": "kyverno-cleanup-update-requests-29876900",
+     "controller-uid": "ba647997-a91b-4018-ac1e-a5ec5d7edd47",
+     "helm.sh/chart": "kyverno-3.2.8",
+     "job-name": "kyverno-cleanup-update-requests-29876900"
+    },
+    "ownerReferences": [
+     {
+      "kind": "Job",
+      "name": "kyverno-cleanup-update-requests-29876900"
+     }
+    ]
+   },
+   "spec": {
+    "nodeName": "hugmesh-local-control-plane",
+    "containers": [
+     {
+      "name": "cleanup",
+      "image": "bitnamilegacy/kubectl:1.28.5"
+     }
+    ]
+   },
+   "status": {
+    "phase": "Succeeded",
+    "podIP": "10.244.0.26",
+    "containerStatuses": [
+     {
+      "name": "cleanup",
+      "ready": false,
+      "restartCount": 0,
+      "state": {
+       "terminated": {
+        "containerID": "containerd://015281bffc3b845286a3a8b74ea32701284565ec7926c2f841fa1baa1f1a1341",
+        "exitCode": 0,
+        "finishedAt": "2026-10-21T20:20:00Z",
+        "reason": "Completed",
+        "startedAt": "2026-10-21T20:20:00Z"
+       }
+      },
+      "image": "docker.io/bitnamilegacy/kubectl:1.28.5"
+     }
+    ],
+    "initContainerStatuses": []
+   }
+  },
+  {
+   "kind": "Service",
+   "metadata": {
+    "namespace": "devops",
+    "name": "argocd-server"
+   },
+   "spec": {
+    "type": "ClusterIP",
+    "selector": {
+     "app.kubernetes.io/name": "argocd-server"
+    },
+    "ports": [
+     {
+      "name": "http",
+      "port": 80,
+      "protocol": "TCP",
+      "targetPort": 8080
+     },
+     {
+      "name": "https",
+      "port": 443,
+      "protocol": "TCP",
+      "targetPort": 8080
+     }
+    ]
+   }
+  },
+  {
+   "kind": "Endpoints",
+   "metadata": {
+    "namespace": "devops",
+    "name": "argocd-server"
+   },
+   "subsets": [
+    {
+     "addresses": [
+      {
+       "targetRef": {
+        "kind": "Pod",
+        "name": "argocd-server-54bf8f7497-v299r",
+        "namespace": "devops",
+        "uid": "8d4fe84e-dd1d-4339-b372-0be47e77eb4d"
+       }
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "kind": "IngressClass",
+   "metadata": {
+    "name": "nginx-internal"
+   }
+  },
+  {
+   "kind": "Pod",
+   "metadata": {
+    "namespace": "acme-pki",
+    "name": "casdoor-domain-7c9d6b5f4-q8x2m",
+    "labels": {
+     "app": "casdoor-domain",
+     "hugmesh.net/domain": "acme-example",
+     "pod-template-hash": "7c9d6b5f4"
+    },
+    "ownerReferences": [
+     {
+      "kind": "ReplicaSet",
+      "name": "casdoor-domain-7c9d6b5f4"
+     }
+    ]
+   },
+   "spec": {
+    "nodeName": "hugmesh-local-control-plane",
+    "containers": [
+     {
+      "name": "casdoor",
+      "image": "casbin/casdoor:3.80.0"
+     }
+    ]
+   },
+   "status": {
+    "phase": "Running",
+    "podIP": "10.244.0.7",
+    "containerStatuses": [
+     {
+      "name": "casdoor",
+      "ready": true,
+      "restartCount": 1,
+      "state": {
+       "running": {
+        "startedAt": "2026-10-21T19:14:11Z"
+       }
+      },
+      "image": "casbin/casdoor:3.80.0"
+     }
+    ],
+    "initContainerStatuses": []
+   }
+  }
+ ]
+}

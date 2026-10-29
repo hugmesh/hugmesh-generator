@@ -2,6 +2,13 @@
 # not re-download multi-GB models every boot. Uses the cluster's local-path
 # provisioner (node-pinned local PV; the inference pod is already pinned to the GPU
 # node by nodeSelector). Size for the catalog you intend to preload + a working set.
+#
+# STORAGE CLASS: the mesh's local-path provisioner (manifests/local-path) defines ONE
+# class, `hugmesh-local`. This claim used to name `local-path` — the class k3s ships,
+# which no mesh cluster has — so the claim never bound ("storageclass.storage.k8s.io
+# "local-path" not found") and the edge-ai pod never scheduled, even on a ready GPU
+# node. tests/scripts/test-edge-ai-ollama-pin.sh checks the name against the classes
+# the tree defines.
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
@@ -12,7 +19,7 @@ metadata:
     hugmesh.net/slug: edge-ai
 spec:
   accessModes: [ReadWriteOnce]
-  storageClassName: local-path
+  storageClassName: hugmesh-local    # the WaitForFirstConsumer local-path class
   resources:
     requests:
       storage: 40Gi

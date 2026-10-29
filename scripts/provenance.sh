@@ -43,14 +43,8 @@ set -euo pipefail
 
 MANIFEST=".hugmesh-provenance.json"
 SIG=".hugmesh-provenance.json.sig"
-# ── LEGACY_COMPAT — the pre-rebrand envelope names ──────────────────────────
-# `write`/`sign` emit the NEW names only. `verify` must still READ the old ones:
-# trees signed before the HugMesh rebrand are already on other meshes' disks and
-# their detached signature covers those exact bytes, so renaming is not something
-# this side can do for them. Dropping the fallback makes every pre-rebrand base
-# read as unsigned. Retire only when no fleet mesh can still ship one.
-MANIFEST_LEGACY_COMPAT=".snapdragon-provenance.json"
-SIG_LEGACY_COMPAT=".snapdragon-provenance.json.sig"
+# (The pre-rebrand envelope names were retired before the public release: no mesh
+# that could still ship them was ever deployed outside development.)
 
 _die() { echo "[provenance] FATAL: $*" >&2; exit 1; }
 _log() { echo "[provenance] $*" >&2; }
@@ -190,15 +184,10 @@ case "$cmd" in
     ;;
 
   verify)
-    # LEGACY_COMPAT dual-read: NEW envelope first, pre-rebrand envelope as the
-    # fallback. Resolved as a PAIR — a tree mixing a new manifest with a legacy
-    # .sig (or the reverse) is a mismatched envelope and must fail, not be
-    # half-verified against the wrong file.
+    # Manifest and signature are resolved as a PAIR.
     V_MANIFEST="" V_SIG=""
     if [[ -f "${REPO_DIR}/${MANIFEST}" ]]; then
       V_MANIFEST="${REPO_DIR}/${MANIFEST}"; V_SIG="${REPO_DIR}/${SIG}"
-    elif [[ -f "${REPO_DIR}/${MANIFEST_LEGACY_COMPAT}" ]]; then
-      V_MANIFEST="${REPO_DIR}/${MANIFEST_LEGACY_COMPAT}"; V_SIG="${REPO_DIR}/${SIG_LEGACY_COMPAT}"
     fi
     [[ -n "$V_MANIFEST" ]] || _die "no manifest at ${REPO_DIR}/${MANIFEST}"
     [[ -f "$V_SIG" ]] || _die "no signature at ${V_SIG}"

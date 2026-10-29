@@ -1064,7 +1064,7 @@ def test_stack_src_is_never_writable():
 
 def test_orphan_screenshots_are_not_lost(tmp_path):
     """A shot whose NN- prefix matches no spec belongs to nobody. Dropping it is how a
-    flat tracked directory of 38 PNGs stops being looked at."""
+    flat tracked directory of 37 PNGs stops being looked at."""
     shots = tmp_path / "tests" / "e2e" / "screenshots"
     shots.mkdir(parents=True)
     for n in ("01-a.png", "97-nobody.png", "unnumbered.png"):

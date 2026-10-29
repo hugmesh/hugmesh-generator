@@ -139,22 +139,28 @@ subset_of() {  # subset_of <label> <superset> <candidate set>
 mapfile -t BUILDERS < <(cd "${GEN}" && git ls-files 'build-*-stage4.sh' | sort)
 [ "${#BUILDERS[@]}" -gt 0 ] || guard_require_capability "git ls-files found no build-*-stage4.sh — every builder check below would be vacuous"
 ROLE_AXIS=(build-x86-host-stage4.sh build-rpi5-stage4.sh build-jetson-stage4.sh)
-FREE_SLUG=(build-frite-stage4.sh build-orangepi5-stage4.sh build-orangepi4-lts-stage4.sh
+# NODE-AXIS: a desktop builder whose --role is a free marker EXCEPT for the cluster
+# node roles in its platform set (scripts/_roles-lib.sh HUGMESH_ROLES_ORANGEPI5 /
+# HUGMESH_ROLES_ORANGEPI4LTS), which it builds. Checked by behaviour in A3c.
+NODE_AXIS=(build-orangepi5-stage4.sh:orangepi5 build-orangepi4-lts-stage4.sh:orangepi4-lts)
+FREE_SLUG=(build-frite-stage4.sh
            build-orangepi-zero2-stage4.sh build-orangepi-zero2w-stage4.sh
            build-orangepi-zero3-stage4.sh build-orangepi3-lts-stage4.sh)
+NODE_AXIS_FILES=()
+for _na in "${NODE_AXIS[@]}"; do NODE_AXIS_FILES+=("${_na%%:*}"); done
 unclassified=""
 for b in "${BUILDERS[@]}"; do
-    case " ${ROLE_AXIS[*]} ${FREE_SLUG[*]} " in
+    case " ${ROLE_AXIS[*]} ${NODE_AXIS_FILES[*]} ${FREE_SLUG[*]} " in
         *" ${b} "*) ;;
         *) unclassified="${unclassified} ${b}" ;;
     esac
 done
 if [ -z "${unclassified// /}" ]; then
-    ok "every builder on disk is classified (${#ROLE_AXIS[@]} role-axis, ${#FREE_SLUG[@]} free-slug)"
+    ok "every builder on disk is classified (${#ROLE_AXIS[@]} role-axis, ${#NODE_AXIS[@]} node-axis, ${#FREE_SLUG[@]} free-slug)"
 else
-    bad "UNCLASSIFIED builder(s):${unclassified} — a new builder must be declared here as role-axis or free-slug, or nothing below checks its role vocabulary at all"
+    bad "UNCLASSIFIED builder(s):${unclassified} — a new builder must be declared here as role-axis, node-axis or free-slug, or nothing below checks its role vocabulary at all"
 fi
-for b in "${ROLE_AXIS[@]}" "${FREE_SLUG[@]}"; do
+for b in "${ROLE_AXIS[@]}" "${NODE_AXIS_FILES[@]}" "${FREE_SLUG[@]}"; do
     [ -f "${GEN}/${b}" ] || bad "${b} is classified here but does not exist — the classification is stale"
 done
 
@@ -194,6 +200,44 @@ for b in "${FREE_SLUG[@]}"; do
     else
         bad "${b} rejects its OWN default role — the node-role refusal is over-broad"
     fi
+done
+
+# A3c) the NODE-AXIS boards build EXACTLY the node roles in their platform set and
+#      refuse every other node role, while their desktop default and a free marker
+#      still work. By behaviour (--print-plan), for the same reason as A3.
+for pair in "${NODE_AXIS[@]}"; do
+    b="${pair%%:*}"; plat="${pair##*:}"
+    if grep -q "hugmesh_role_board_node_role ${plat} " "${GEN}/${b}"; then
+        ok "${b} resolves --role through hugmesh_role_board_node_role (${plat})"
+    else
+        bad "${b} does not call hugmesh_role_board_node_role ${plat} — its node roles are validated by a private table, or not at all"
+    fi
+    _set="$(hugmesh_role_platform_set "${plat}")"
+    for r in ${HUGMESH_ROLES_NODE}; do
+        case " ${_set} " in
+            *" ${r} "*)
+                if timeout 120 bash "${GEN}/${b}" --print-plan --role "${r}" --ram-gb 16 >"${TMPDIR:-/tmp}/rks-node.out" 2>&1 \
+                   && grep -qx "PLAN_ROLE=${r}" "${TMPDIR:-/tmp}/rks-node.out"; then
+                    ok "${b} builds its node role '${r}'"
+                else
+                    bad "${b} does not build '${r}', which HUGMESH_ROLES for ${plat} lists"
+                fi ;;
+            *)
+                if timeout 120 bash "${GEN}/${b}" --print-plan --role "${r}" --ram-gb 16 >/dev/null 2>&1; then
+                    bad "${b} ACCEPTED '--role ${r}', which is not in its node set (${_set})"
+                else
+                    ok "${b} refuses node role '${r}' (not in ${plat}'s set)"
+                fi ;;
+        esac
+    done
+    for r in desktop matrixmarker; do
+        if timeout 120 bash "${GEN}/${b}" --print-plan --role "${r}" >"${TMPDIR:-/tmp}/rks-node.out" 2>&1 \
+           && grep -qx "PLAN_ROLE=${r}" "${TMPDIR:-/tmp}/rks-node.out" && ! grep -q '^PLAN_K8S=' "${TMPDIR:-/tmp}/rks-node.out"; then
+            ok "${b} keeps '--role ${r}' a desktop marker (no node keys in its plan)"
+        else
+            bad "${b} no longer treats '--role ${r}' as a desktop marker"
+        fi
+    done
 done
 
 # A4) each role-axis builder's CASE ARMS are exactly its platform's canonical set.
@@ -787,6 +831,26 @@ for probe in "backend:arm64:hugmesh-rpi5-" "pki:arm64:hugmesh-rpi5-" \
     esac
 done
 
+# D2b) omnibus is a node role TWO arm64 platforms build (rpi5 since 2026-10-21, and
+#      jetson): with both images on disk the flasher must REFUSE, never pick the newest.
+omni_dir="$(mktemp -d)"
+: > "${omni_dir}/hugmesh-jetson-orin-nano-arm64-omnibus-test-20260101T000000Z.img"
+: > "${omni_dir}/hugmesh-rpi5-arm64-omnibus-test-20260102T000000Z.img"
+omni_out="$( (cd "${GEN}" && ./scripts/flash-disk.sh --role omnibus --arch arm64 \
+              --work-dir "${omni_dir}" --list 2>/dev/null) || true)"
+if printf '%s\n' "${omni_out}" | grep -E '^AMBIGUOUS' >/dev/null; then
+    ok "flash-disk.sh --role omnibus --arch arm64 with a Pi AND a Jetson omnibus image: AMBIGUOUS (a flash refuses)"
+else
+    bad "flash-disk.sh --role omnibus --arch arm64 did not flag a Pi + Jetson omnibus pair as ambiguous — a wrong-board whole-disk write"
+fi
+omni_pick="$( (cd "${GEN}" && ./scripts/flash-disk.sh --role omnibus --arch arm64 --platform rpi5 \
+               --work-dir "${omni_dir}" --list 2>/dev/null | sed -n 's/^Would flash: //p') || true)"
+case "$(basename "${omni_pick}" 2>/dev/null)" in
+    hugmesh-rpi5-*) ok "flash-disk.sh --role omnibus --arch arm64 --platform rpi5 picks the Pi image" ;;
+    *) bad "flash-disk.sh --role omnibus --platform rpi5 picked '${omni_pick}'" ;;
+esac
+rm -rf "${omni_dir}"
+
 # D3) the roles that genuinely span boards (desktop, laptop, a free slug) cannot be
 #     narrowed by derivation, so the flasher must REFUSE rather than pick the newest.
 : > "${fixture_dir}/hugmesh-rpi5-arm64-desktop-user-test-20260101T000000Z.img"
@@ -1120,6 +1184,431 @@ case "${only_out}" in
     *) bad "flash-disk.sh --list produced no verdict: ${only_out}" ;;
 esac
 rm -rf "${only_dir}"
+
+
+# ══ E) THE ORANGE PI NODE LOADER (scripts/_node-role-lib.sh) ═══════════════════
+# An Orange Pi node build does not carry its own copy of the Pi's cluster-tree gate
+# functions: _node-role-lib.sh LOADS them out of build-rpi5-stage4.sh at run time.
+# That loader only fails at the start of a real build if a function is missing, and
+# a helper the loaded functions call but the loader does not bring in would fail
+# HOURS into a real build (Phase 4), long after --print-plan said yes. So this
+# section runs the loader and the bake the Orange Pi builders run, into a scratch
+# sysroot, with no root and no image build.
+NRL="${GEN}/scripts/_node-role-lib.sh"
+E_TMP="$(mktemp -d)"
+# E1) the loader brings in every listed function and setting, from the Pi builder.
+e1_out="$(SCRIPT_DIR="${GEN}" bash -c '
+    set -euo pipefail
+    . "$1"; . "$2"
+    node_role_load_pi_settings
+    node_role_load_pi_functions
+    for f in ${NODE_ROLE_PI_FUNCTIONS}; do declare -F "$f" >/dev/null || echo "NOFN $f"; done
+    for v in ${NODE_ROLE_PI_SETTINGS}; do [ -n "${!v+x}" ] || echo "NOVAR $v"; done
+    echo LOADED' _ "${LIB}" "${NRL}" 2>&1 || true)"
+case "${e1_out}" in
+    *NOFN*|*NOVAR*) bad "node loader left gaps: $(printf '%s' "${e1_out}" | grep -a -E 'NOFN|NOVAR' | tr '\n' ' ')" ;;
+    *LOADED*)       ok "node loader defines every NODE_ROLE_PI_FUNCTIONS function and NODE_ROLE_PI_SETTINGS setting from build-rpi5-stage4.sh" ;;
+    *)              bad "node loader failed: $(printf '%s' "${e1_out}" | tail -n 3 | tr '\n' ' ')" ;;
+esac
+# E2) CLOSURE: every Pi-builder function the loaded set calls (comments stripped) is
+#     either loaded too or defined by each Orange Pi node builder / a lib it sources.
+for b in build-orangepi5-stage4.sh build-orangepi4-lts-stage4.sh; do
+    e2_miss="$(SCRIPT_DIR="${GEN}" bash -c '
+        set -uo pipefail
+        GEN="$1"; OPI="$2"; . "$3"
+        pi="${GEN}/build-rpi5-stage4.sh"
+        mapfile -t pi_fns < <(grep -a -oE "^[A-Za-z_][A-Za-z0-9_]*\(\) *\{" "${pi}" | sed "s/().*//" | sort -u)
+        avail="$( { grep -a -oE "^[A-Za-z_][A-Za-z0-9_]*\(\) *\{" "${GEN}/${OPI}" | sed "s/().*//"
+            for lib in $(grep -a -oE "source \"\\\$\{SCRIPT_DIR\}/scripts/[^\"]+\"" "${GEN}/${OPI}" | sed -E "s/.*scripts\/([^\"]+)\"/\1/"); do
+                grep -a -oE "^ *[A-Za-z_][A-Za-z0-9_]*\(\) *\{" "${GEN}/scripts/${lib}" | sed -E "s/^ *//; s/().*//"
+            done; } | sort -u)"
+        loaded=" $(echo ${NODE_ROLE_PI_FUNCTIONS}) "
+        todo=(${NODE_ROLE_PI_FUNCTIONS}); seen=" "
+        while [ ${#todo[@]} -gt 0 ]; do
+            f="${todo[0]}"; todo=("${todo[@]:1}")
+            case "${seen}" in *" ${f} "*) continue ;; esac
+            seen+="${f} "
+            body="$(_node_role_extract_fn "${f}" "${pi}" | sed -E "s/(^|[[:space:]])#.*$//")"
+            for g in "${pi_fns[@]}"; do
+                [ "${g}" = "${f}" ] && continue
+                printf "%s" "${body}" | grep -a -E "(^|[^A-Za-z0-9_-])${g}([^A-Za-z0-9_-]|$)" >/dev/null || continue
+                case "${loaded}" in *" ${g} "*) todo+=("${g}"); continue ;; esac
+                printf "%s\n" "${avail}" | grep -a -x -- "${g}" >/dev/null && continue
+                echo "${g}(called by ${f})"
+            done
+        done' _ "${GEN}" "${b}" "${NRL}" 2>&1 || true)"
+    if [ -z "${e2_miss}" ]; then
+        ok "${b}: every Pi function the loaded node gates call is loaded or defined (call closure)"
+    else
+        bad "${b}: the loaded node gates call Pi functions nothing brings in: $(echo ${e2_miss})"
+    fi
+done
+# E3) the node runlevel list is the Pi's own list (the Pi's DEFAULT_SVCS+= line).
+pi_svcs="$(grep -a -m1 -E '^ *DEFAULT_SVCS\+=\(hugmesh-firewall-reconcile ' "${GEN}/build-rpi5-stage4.sh" | sed -E 's/.*\((.*)\).*/\1/')"
+lib_svcs="$(SCRIPT_DIR="${GEN}" bash -c '. "$1"; echo ${NODE_ROLE_RUNLEVEL_SVCS}' _ "${NRL}")"
+if [ -n "${pi_svcs}" ] && [ "$(echo ${pi_svcs})" = "${lib_svcs}" ]; then
+    ok "NODE_ROLE_RUNLEVEL_SVCS equals the Pi node runlevel list (${lib_svcs})"
+else
+    bad "NODE_ROLE_RUNLEVEL_SVCS [${lib_svcs}] differs from build-rpi5-stage4.sh's node list [${pi_svcs}]"
+fi
+# E3b) the k8s payload file list is the Pi's: every file the Pi's cluster-node-only
+#      (`if ! ${ROLE_CLIENT}`) blocks copy between its "k8s modules/sysctl" comment and
+#      its firewall-alias note, versus the files node_role_bake_k8s_payload writes.
+pi_k8s="$(awk '
+    /^# k8s modules\/sysctl \+ containerd\/kubelet\/kubeadm config/ { on = 1 }
+    /^# NO .firewall. alias for firewalld/ { on = 0 }
+    !on { next }
+    /^if ! \$\{ROLE_CLIENT\}; then/ { node = 1; next }
+    /^fi/ { node = 0; loop = ""; next }
+    node && /for svc in .*; do/ { loop = $0; sub(/.*for svc in /, "", loop); sub(/; do.*/, "", loop); next }
+    node && /^ *cp "\$\{SHARED_SPECS\}/ {
+        d = $NF; gsub(/"/, "", d); sub(/^\$\{SYSROOT\}/, "", d)
+        if (d ~ /\$\{svc\}/ && loop != "") { n = split(loop, a, " "); for (i = 1; i <= n; i++) { x = d; sub(/\$\{svc\}/, a[i], x); print x } }
+        else print d
+    }' "${GEN}/build-rpi5-stage4.sh" | sort -u)"
+lib_k8s="$(sr="$(mktemp -d)"; SCRIPT_DIR="${GEN}" bash -c '. "$1"; node_role_bake_k8s_payload "$2" "$3/specs"' _ "${NRL}" "${sr}" "${GEN}" >/dev/null 2>&1; (cd "${sr}" && find . -type f | sed 's/^\.//' | sort -u); rm -rf "${sr}")"
+if [ -n "${pi_k8s}" ] && [ "${pi_k8s}" = "${lib_k8s}" ]; then
+    ok "node_role_bake_k8s_payload writes exactly the Pi node's k8s files ($(echo ${lib_k8s} | wc -w) files)"
+else
+    bad "node_role_bake_k8s_payload's files differ from the Pi node's k8s files"
+    diff <(echo "${pi_k8s}") <(echo "${lib_k8s}") | sed 's/^/      /' || true
+fi
+# E4) THE BAKE ITSELF, as both Orange Pi builders run it for a node role, into a
+#     scratch sysroot: k8s payload, cluster tree + the Pi's gates, rebrand, IdP,
+#     Vault, the RAM floor marker. Every runlevel service must then have its init
+#     script (a missing one would be a dangling symlink on the node).
+for role in omnibus frontend; do
+    sr="${E_TMP}/sysroot-${role}"
+    mkdir -p "${sr}"
+    e4_out="$(SCRIPT_DIR="${GEN}" SYSROOT="${sr}" ROLE="${role}" bash -c '
+        set -euo pipefail
+        SHARED_SPECS="${SCRIPT_DIR}/specs"
+        ENV=test BRAND=hugmesh BRAND_TITLE="HugMesh Systems" ORG=hugmesh CLUSTER_DOMAIN=hugmesh.net
+        ROLE_CLIENT=false NODE_ROLE=true
+        banner() { :; }; info() { :; }; warn() { echo "WARN $1" >&2; }; err() { echo "ERR $1" >&2; }
+        . "$1"; . "${SCRIPT_DIR}/scripts/_optional-services-lib.sh"; . "$2"
+        node_role_load_pi_settings
+        node_role_load_pi_functions
+        OPTIONAL_SERVICES="${OPTIONAL_SERVICES//,/ }"
+        node_role_bake_k8s_payload "${SYSROOT}" "${SHARED_SPECS}"
+        node_role_bake_backup_engine "${SYSROOT}" "${SHARED_SPECS}"
+        node_role_bake_cluster_tree "${SYSROOT}" "${SHARED_SPECS}"
+        [ "${ROLE}" = omnibus ] && node_role_bake_min_ram "${SYSROOT}" "${ROLE}"
+        rebrand_sysroot
+        apply_idp_external
+        bake_vault_conf
+        for s in ${NODE_ROLE_RUNLEVEL_SVCS}; do
+            [ -x "${SYSROOT}/etc/init.d/${s}" ] || echo "NOINIT ${s}"
+        done
+        echo BAKED' _ "${LIB}" "${NRL}" 2>&1 || true)"
+    case "${e4_out}" in
+        *NOINIT*) bad "node bake (${role}): runlevel service(s) with no init script: $(printf '%s' "${e4_out}" | grep -a NOINIT | tr '\n' ' ')" ;;
+        *BAKED*)  ok "node bake (${role}) runs to the end under set -euo pipefail into a scratch sysroot" ;;
+        *)        bad "node bake (${role}) failed: $(printf '%s' "${e4_out}" | tail -n 4 | tr '\n' ' ')" ;;
+    esac
+    for f in var/lib/hugmesh/cluster etc/kubernetes/kubeadm-config.yaml var/lib/kubelet/config.yaml \
+             etc/containerd/config.toml etc/sysctl.d/99-kubernetes.conf etc/modules-load.d/kubernetes.conf \
+             etc/hugmesh/release-state; do
+        [ -e "${sr}/${f}" ] && continue
+        bad "node bake (${role}) did not produce /${f}"
+    done
+    # the etcd + PostgreSQL backup engine, as the Pi bakes it (skeptic 2026-10-22:
+    # without it provision_backup only warns and a node never backs up)
+    if [ -x "${sr}/usr/local/sbin/hugmesh-backup" ] && cmp -s "${sr}/usr/local/sbin/hugmesh-backup" "${GEN}/specs/usr/local/sbin/hugmesh-backup"; then
+        ok "node bake (${role}) installs the backup engine /usr/local/sbin/hugmesh-backup, executable"
+    else
+        bad "node bake (${role}) did not install an executable /usr/local/sbin/hugmesh-backup"
+    fi
+    if [ "${role}" = omnibus ]; then
+        if [ "$(cat "${sr}/etc/hugmesh/min-ram-mb" 2>/dev/null)" = "16384" ]; then
+            ok "node bake (omnibus) records its 16 GB RAM floor as /etc/hugmesh/min-ram-mb = 16384"
+        else
+            bad "node bake (omnibus) /etc/hugmesh/min-ram-mb is '$(cat "${sr}/etc/hugmesh/min-ram-mb" 2>/dev/null)', expected 16384"
+        fi
+    elif [ -e "${sr}/etc/hugmesh/min-ram-mb" ]; then
+        bad "node bake (${role}) wrote /etc/hugmesh/min-ram-mb, which only omnibus records"
+    fi
+done
+# E4b) both Orange Pi builders run the backup-engine bake next to the k8s payload
+#      (E4 calls the lib directly, so it cannot see a builder that forgot the call).
+for b in build-orangepi5-stage4.sh build-orangepi4-lts-stage4.sh; do
+    if grep -a -E '^[[:space:]]+node_role_bake_backup_engine "\$\{SYSROOT\}" "\$\{SHARED_SPECS\}"' "${GEN}/${b}" >/dev/null 2>&1; then
+        ok "${b} bakes the backup engine on a node role"
+    else
+        bad "${b} never calls node_role_bake_backup_engine (an Orange Pi pki/omnibus node would never back up)"
+    fi
+done
+# E5) FAIL-CLOSED: a Pi builder that lost one of the listed functions stops the
+#     loader with a message naming it (never a half-loaded node build).
+mkdir -p "${E_TMP}/fake"
+sed 's/^gate_env_apps() {/gate_env_apps_renamed() {/' "${GEN}/build-rpi5-stage4.sh" > "${E_TMP}/fake/build-rpi5-stage4.sh"
+e5_out="$(SCRIPT_DIR="${E_TMP}/fake" bash -c '. "$1"; node_role_load_pi_functions; echo "rc=$?"' _ "${NRL}" 2>&1 || true)"
+case "${e5_out}" in
+    *"function gate_env_apps not found"*"rc=1"*) ok "node loader refuses (rc=1, names gate_env_apps) when the Pi builder lost a listed function" ;;
+    *) bad "node loader did not fail closed on a missing function: $(printf '%s' "${e5_out}" | tail -n 2 | tr '\n' ' ')" ;;
+esac
+# E6) KERNEL: the Orange Pi node guard covers the Raspberry Pi node guard's symbol
+#     list (minus the documented exceptions), every guarded symbol is requested =y by
+#     specs/kernel/k8s-node.config, and both Orange Pi builders run the shared guard.
+#     (The 2026-10-21 skeptic: the old six-symbol guard passed a 7.3 kernel with no
+#     iptables filter/nat/mangle tables at all.)
+e6_pi_syms="$(awk '/k8s node kernel option/{exit} /for must in CONFIG_NETFILTER_XTABLES/{p=1} p' "${GEN}/build-rpi5-stage4.sh" \
+    | grep -oE 'CONFIG_[A-Z0-9_]+' | sort -u)"
+e6_lib="$(bash -c '. "$1"; printf "%s\n" ${NODE_ROLE_KERNEL_MUST} ${NODE_ROLE_KERNEL_PI_EXCEPT}' _ "${NRL}" | sort -u)"
+if [ "$(printf '%s\n' "${e6_pi_syms}" | wc -l)" -lt 30 ]; then
+    bad "E6 could not extract the Pi node kernel guard list (got $(printf '%s\n' "${e6_pi_syms}" | wc -l) symbols)"
+else
+    e6_miss="$(comm -23 <(printf '%s\n' "${e6_pi_syms}") <(printf '%s\n' "${e6_lib}") | tr '\n' ' ')"
+    if [ -z "${e6_miss// /}" ]; then
+        ok "Orange Pi node kernel guard covers all $(printf '%s\n' "${e6_pi_syms}" | wc -l) Pi node guard symbols (or names them as exceptions)"
+    else
+        bad "Pi node kernel guard symbols missing from NODE_ROLE_KERNEL_MUST: ${e6_miss}"
+    fi
+fi
+e6_unreq=""
+for e6_s in $(bash -c '. "$1"; printf "%s\n" ${NODE_ROLE_KERNEL_MUST}' _ "${NRL}"); do
+    grep -a -q "^${e6_s}=y$" "${GEN}/specs/kernel/k8s-node.config" || e6_unreq="${e6_unreq} ${e6_s}"
+done
+if [ -z "${e6_unreq}" ]; then
+    ok "specs/kernel/k8s-node.config requests every guarded node symbol as =y (incl. the 6.16+ *_LEGACY trio)"
+else
+    bad "guarded node symbols the fragment does not request =y:${e6_unreq}"
+fi
+for e6_b in build-orangepi5-stage4.sh build-orangepi4-lts-stage4.sh; do
+    if grep -a -q 'node_role_kernel_guard .config' "${GEN}/${e6_b}"; then
+        ok "${e6_b} runs the shared node kernel guard"
+    else
+        bad "${e6_b} does not run node_role_kernel_guard on the node kernel .config"
+    fi
+done
+# the guard itself: a .config with the legacy trio missing fails and names them
+printf 'CONFIG_IP_NF_FILTER=y\n' > "${E_TMP}/e6.config"
+e6_out="$(bash -c '. "$1"; node_role_kernel_guard "$2"; echo "rc=$?"' _ "${NRL}" "${E_TMP}/e6.config")"
+case "${e6_out}" in
+    *CONFIG_NETFILTER_XTABLES_LEGACY*CONFIG_IP_NF_NAT*"rc=1") ok "node_role_kernel_guard fails (rc=1) and names the missing symbols" ;;
+    *) bad "node_role_kernel_guard did not fail on a .config missing the legacy tables: $(printf '%s' "${e6_out}" | tail -n 1)" ;;
+esac
+
+# E7) PACKAGES: the Orange Pi node set (board base + Pi k8s list + the node host list)
+#     covers the Raspberry Pi BASE list minus its Raspberry Pi hardware atoms — the
+#     skeptic's comm -23, as a test (nftables, conntrack-tools, iproute2, ethtool,
+#     cryptsetup, lvm2, the SELinux container/virt policy and setools were missing).
+e7_norm() { grep -a -v '^[[:space:]]*#' "$1" | sed 's/[[:space:]]*#.*//; s/[[:space:]]*$//' | grep -a -v '^$' | sort -u; }
+e7_host="$(bash -c '. "$1"; printf "%s" "${NODE_ROLE_HOST_PACKAGES_LIST}"' _ "${NRL}")"
+for e7_board in orangepi5 orangepi4-lts; do
+    e7_miss="$(comm -23 <(e7_norm "${GEN}/specs-rpi5/portage/packages.list" | grep -a -v -E 'raspberrypi|rpi-eeprom') \
+        <(sort -u <(e7_norm "${GEN}/specs-${e7_board}/portage/packages.list") \
+                  <(e7_norm "${GEN}/specs-rpi5/portage/packages-k8s.list") \
+                  <(e7_norm "${GEN}/${e7_host}")) | tr '\n' ' ')"
+    if [ -z "${e7_miss// /}" ]; then
+        ok "${e7_board} node package set covers the Pi base list (minus Raspberry Pi hardware atoms)"
+    else
+        bad "${e7_board} node package set lacks Pi base atoms: ${e7_miss}"
+    fi
+done
+for e7_b in build-orangepi5-stage4.sh build-orangepi4-lts-stage4.sh; do
+    e7_n="$(grep -a -c 'NODE_ROLE_HOST_PACKAGES_LIST}"' "${GEN}/${e7_b}")"
+    e7_u="$(grep -a -c 'NODE_ROLE_PI_PACKAGE_USE}' "${GEN}/${e7_b}")"
+    e7_m="$(grep -a -c 'NODE_ROLE_MAKE_CONF_USE}' "${GEN}/${e7_b}")"
+    if [ "${e7_n}" -ge 1 ] && [ "${e7_u}" -ge 1 ] && [ "${e7_m}" -ge 1 ]; then
+        ok "${e7_b} appends the node host list, the Pi package.use files and the node USE"
+    else
+        bad "${e7_b} node path: host-list refs=${e7_n} package.use refs=${e7_u} make.conf USE refs=${e7_m} (each must be >=1)"
+    fi
+done
+for e7_pu in $(bash -c '. "$1"; printf "%s" "${NODE_ROLE_PI_PACKAGE_USE}"' _ "${NRL}"); do
+    [ -f "${GEN}/specs-rpi5/portage/package.use/${e7_pu}" ] \
+        && ok "node package.use source specs-rpi5/portage/package.use/${e7_pu} exists" \
+        || bad "node package.use source specs-rpi5/portage/package.use/${e7_pu} is missing"
+done
+grep -a -q '^net-firewall/iptables nftables' "${GEN}/specs-rpi5/portage/package.use/kubernetes" \
+    && ok "the node package.use builds iptables with nftables" \
+    || bad "specs-rpi5/portage/package.use/kubernetes no longer sets iptables nftables"
+
+# E8) PAYLOAD ASSERT, RUN (not re-typed): extract opi_assert_stage4_payload from each
+#     Orange Pi builder and run it against scratch roots. A node root passes on the k8s
+#     floor; a node build whose root has only the desktop fails naming kubelet; the
+#     desktop arm is unchanged. (The 2026-10-21 skeptic: the old block demanded
+#     Xorg/lightdm from every node build, after the full emerge.)
+e8_mkroot() { # dir bins...
+    local d="$1"; shift
+    mkdir -p "${d}/usr/bin" "${d}/etc/init.d"
+    local b
+    for b in "$@"; do : > "${d}/usr/bin/${b}"; done
+}
+e8_node_bins="NetworkManager nmcli sshd nano dracut $(bash -c '. "$1"; printf "%s" "${NODE_ROLE_REQUIRED_BINS}"' _ "${NRL}")"
+e8_desk_bins="NetworkManager nmcli sshd nano dracut Xorg openbox lxsession pcmanfm lightdm"
+for e8_b in build-orangepi5-stage4.sh build-orangepi4-lts-stage4.sh; do
+    e8_fn="$(bash -c '. "$1"; _node_role_extract_fn opi_assert_stage4_payload "$2"' _ "${NRL}" "${GEN}/${e8_b}")"
+    if [ -z "${e8_fn}" ]; then bad "${e8_b}: opi_assert_stage4_payload not found"; continue; fi
+    e8_run() { # node(true|false) root
+        bash -c '
+            err() { echo "ERR: $*"; }; info() { echo "INFO: $*"; }
+            have_in_sysroot() { local d; for d in usr/bin usr/sbin bin sbin; do [ -e "${SYSROOT}/${d}/$1" ] && return 0; done; return 1; }
+            . "$1"; eval "$2"
+            NODE_ROLE=$3; SYSROOT=$4; BUILD_LIVE=false; BUILD_INSTALLER=true; ENCRYPT_ROOT=false
+            opi_assert_stage4_payload; echo "rc=0"' _ "${NRL}" "${e8_fn}" "$1" "$2" 2>&1
+        echo "exit=$?"
+    }
+    rm -rf "${E_TMP}/e8"; e8_mkroot "${E_TMP}/e8/node" ${e8_node_bins}
+    e8_mkroot "${E_TMP}/e8/desk" ${e8_desk_bins}; : > "${E_TMP}/e8/desk/etc/init.d/display-manager"
+    e8_mkroot "${E_TMP}/e8/desk-nodm" ${e8_desk_bins}
+    case "$(e8_run true "${E_TMP}/e8/node")" in
+        *"payload assert OK"*"rc=0"*) ok "${e8_b}: node payload assert passes a root with the k8s floor and no desktop" ;;
+        *) bad "${e8_b}: node payload assert failed a correct node root: $(e8_run true "${E_TMP}/e8/node" | tr '\n' ' ')" ;;
+    esac
+    e8_o="$(e8_run true "${E_TMP}/e8/desk")"
+    case "${e8_o}" in
+        *"missing role-defining binaries"*kubelet*nft*"exit=1"*) ok "${e8_b}: node payload assert fails (exit 1) on a desktop-only root, naming kubelet and nft" ;;
+        *) bad "${e8_b}: node payload assert did not fail on a root with no k8s floor: $(printf '%s' "${e8_o}" | tr '\n' ' ')" ;;
+    esac
+    case "$(e8_run false "${E_TMP}/e8/desk")" in
+        *"payload assert OK"*"rc=0"*) ok "${e8_b}: desktop payload assert unchanged (passes the desktop root)" ;;
+        *) bad "${e8_b}: desktop payload assert failed a correct desktop root" ;;
+    esac
+    case "$(e8_run false "${E_TMP}/e8/desk-nodm")" in
+        *"display-manager is missing"*"exit=1"*) ok "${e8_b}: desktop payload assert still refuses a missing display-manager" ;;
+        *) bad "${e8_b}: desktop payload assert no longer checks display-manager" ;;
+    esac
+done
+
+# E9) CLUSTER CHOICES through the real builders (--print-plan): a node carries the
+#     mesh's IdP / release state / services; a host-daemon slug is refused from argv
+#     AND from the environment; the desktop refuses a cluster flag.
+e9_p5() { (cd "${GEN}" && TMPDIR="${E_TMP}" ./build-orangepi5-stage4.sh --board orange-pi-5-plus "$@" --print-plan 2>&1); echo "exit=$?"; }
+e9_out="$(e9_p5 --role pki --ram-gb 8 --idp oidc --idp-issuer https://id.mesh.example --idp-client-id hugmesh --release-state public --optional-services owncast)"
+case "${e9_out}" in
+    *PLAN_OPTIONAL_SERVICES=owncast*PLAN_RELEASE_STATE=public*PLAN_IDP=oidc*PLAN_IDP_ISSUER=https://id.mesh.example*"exit=0"*)
+        ok "orangepi5 pki --print-plan carries the mesh's optional services, release state and IdP" ;;
+    *) bad "orangepi5 pki plan lost a cluster choice: $(printf '%s' "${e9_out}" | grep -a -E 'PLAN_(OPTIONAL|RELEASE|IDP)|ERROR|exit=' | tr '\n' ' ')" ;;
+esac
+e9_out="$(OPTIONAL_SERVICES='tor games' e9_p5 --role pki --ram-gb 8)"
+case "${e9_out}" in
+    *"optional service(s) tor need a host daemon"*"exit=1"*) ok "orangepi5 node refuses OPTIONAL_SERVICES='tor games' from the environment (exit 1)" ;;
+    *) bad "orangepi5 node accepted tor from the environment: $(printf '%s' "${e9_out}" | tail -n 2 | tr '\n' ' ')" ;;
+esac
+e9_out="$( (cd "${GEN}" && TMPDIR="${E_TMP}" ./build-orangepi4-lts-stage4.sh --role frontend --ram-gb 4 --optional-services 'akkoma egress-vpn' --print-plan 2>&1); echo "exit=$?")"
+case "${e9_out}" in
+    *"optional service(s) egress-vpn need a host daemon"*"exit=1"*) ok "orangepi4-lts frontend refuses --optional-services egress-vpn (exit 1)" ;;
+    *) bad "orangepi4-lts frontend accepted egress-vpn: $(printf '%s' "${e9_out}" | tail -n 2 | tr '\n' ' ')" ;;
+esac
+e9_out="$(e9_p5 --release-state public)"
+case "${e9_out}" in
+    *"--release-state: cluster choices only apply to a cluster node role"*"exit=1"*) ok "orangepi5 desktop refuses --release-state (exit 1) instead of dropping it" ;;
+    *) bad "orangepi5 desktop did not refuse --release-state: $(printf '%s' "${e9_out}" | tail -n 2 | tr '\n' ' ')" ;;
+esac
+# F1) RAM FLOORS: one floor per node role (HUGMESH_ROLE_MIN_RAM_GB), from the live
+#     single-node kind measurement (about 8.3 GiB of requests for the whole stack,
+#     4 GiB for the backend tier alone). hugmesh_role_ram_check is THE gate every
+#     channel calls (builders, Job grammar); a board never sold with a role's floor
+#     is refused that role whatever --ram-gb says. Expected outcomes, not re-typed
+#     numbers: each row is <role> <ram> <board> <rc>.
+f1_floor() { hugmesh_role_min_ram_gb "$1"; }
+[ "$(f1_floor omnibus)" = 16 ] && ok "omnibus RAM floor is 16 GB" || bad "omnibus RAM floor is '$(f1_floor omnibus)', expected 16 (8.3 GiB of requests do not fit an 8 GB board)"
+[ "$(f1_floor backend)" = 8 ]  && ok "backend RAM floor is 8 GB"  || bad "backend RAM floor is '$(f1_floor backend)', expected 8 (the tier alone requests 4 GiB)"
+[ "$(f1_floor pki)" = 4 ]      && ok "pki RAM floor is 4 GB"      || bad "pki RAM floor is '$(f1_floor pki)', expected 4"
+[ "$(f1_floor frontend)" = 4 ] && ok "frontend RAM floor is 4 GB" || bad "frontend RAM floor is '$(f1_floor frontend)', expected 4"
+while read -r f1_role f1_ram f1_board f1_want; do
+    [ -n "${f1_role}" ] || continue
+    [ "${f1_ram}" = - ] && f1_ram=""
+    f1_rc=0; hugmesh_role_ram_check "${f1_role}" "${f1_ram}" "${f1_board}" 2>/dev/null || f1_rc=$?
+    if [ "${f1_rc}" = "${f1_want}" ]; then
+        ok "ram check ${f1_role} --ram-gb '${f1_ram}' on ${f1_board} -> rc=${f1_rc}"
+    else
+        bad "ram check ${f1_role} --ram-gb '${f1_ram}' on ${f1_board} -> rc=${f1_rc}, expected ${f1_want}"
+    fi
+done <<'F1_EOF'
+omnibus - rpi5 1
+omnibus 8 rpi5 1
+omnibus 16 rpi5 0
+omnibus 16 rpi4 1
+omnibus - rpi4 1
+omnibus 8 orange-pi-5 1
+omnibus 16 orange-pi-5 0
+omnibus 32 orange-pi-5-plus 0
+omnibus 16 orange-pi-4-lts 1
+backend 4 rpi4 1
+backend 8 rpi4 0
+backend 4 orange-pi-5 1
+backend 8 orange-pi-5 0
+backend - orange-pi-4-lts 1
+pki 4 rpi4 0
+pki 2 rpi4 1
+frontend 4 orange-pi-4-lts 0
+frontend - rpi5 0
+F1_EOF
+# Every refusal says why, with the same numbers: the board-cannot line names the
+# board's largest size, and the Orange Pi 4 LTS table reasons name the floors.
+f1_msg="$(hugmesh_role_ram_check omnibus 16 rpi4 2>&1 >/dev/null || true)"
+case "${f1_msg}" in
+    *"needs at least 16 GB"*"rpi4 is sold with at most 8 GB"*"8.3 GiB"*) ok "a Pi 4 omnibus refusal names the 16 GB floor, the Pi 4's 8 GB and the measured 8.3 GiB" ;;
+    *) bad "Pi 4 omnibus refusal text: ${f1_msg}" ;;
+esac
+for f1_pair in "omnibus:$(f1_floor omnibus)" "backend:$(f1_floor backend)"; do
+    f1_r="${f1_pair%%:*}"; f1_g="${f1_pair##*:}"
+    case "$(hugmesh_role_refusal_reason orangepi4-lts "${f1_r}")" in
+        *"${f1_r}'s ${f1_g} GB RAM floor"*) ok "orangepi4-lts refuses ${f1_r} citing the same ${f1_g} GB floor the gate enforces" ;;
+        *) bad "orangepi4-lts ${f1_r} refusal does not cite the ${f1_g} GB floor: $(hugmesh_role_refusal_reason orangepi4-lts "${f1_r}")" ;;
+    esac
+done
+# Prose that states a floor must state THIS floor (the PR once said 8 GB / 6.3 GiB
+# in nine places after the gate moved). Comments-and-docs sweep over tracked text.
+f1_stale="$(cd "${GEN}" && git grep -n -I -E '6\.3 GiB|omnibus[^.]{0,60}\b8 GB (or more|\+|minimum)|RAM_GB=8\+|8 GB\+ RAM|\.8gb\b' -- \
+    ':!tests/scripts/test-role-key-spelling.sh' ':!tests/build-matrix/check.sh' ':!docs/catalog' 2>/dev/null || true)"
+if [ -z "${f1_stale}" ]; then
+    ok "no tracked file still states the old 8 GB omnibus floor or the 6.3 GiB figure"
+else
+    bad "stale RAM-floor prose: $(printf '%s' "${f1_stale}" | head -n 5 | tr '\n' ' ')"
+fi
+
+# G1) ONE SYSROOT, MANY ROLES (skeptic 2026-10-22): every Orange Pi 5 role shares one
+#     sysroot by default and runlevel links are only ever added, so a desktop built
+#     after pki kept kubelet/headscale. The builders' own extract block is RUN here
+#     (extracted from each builder, tar/mount helpers stubbed) against a scratch tree:
+#     a fresh run wipes a populated tree; --resume / --image-only onto a tree recorded
+#     for another role is refused; the same role resumes; --image-only keeps the tree.
+g1_run() {  # <builder> <prev-role-or-""> <node true|false> <role> <resume> <image_only> -> "rc=N kept|wiped"
+    local b="$1" prev="$2" node="$3" role="$4" resume="$5" io="$6" d
+    d="$(mktemp -d "${E_TMP}/g1.XXXXXX")"
+    mkdir -p "${d}/sysroot/etc/init.d"
+    echo "Gentoo" > "${d}/sysroot/etc/gentoo-release"
+    echo leftover > "${d}/sysroot/etc/init.d/kubelet"
+    [ -n "${prev}" ] && echo "${prev}" > "${d}/sysroot.role"
+    awk '/^SYSROOT_ROLE_MARK=/{p=1} p{print} p && /> "\$\{SYSROOT_ROLE_MARK\}"$/{exit}' "${GEN}/${b}" > "${d}/block.sh"
+    (
+        set -euo pipefail
+        BUILD_ROOT="${d}"; SYSROOT="${d}/sysroot"; STAGE3_LOCAL=/dev/null
+        NODE_ROLE="${node}"; ROLE="${role}"; RESUME="${resume}"; IMAGE_ONLY="${io}"
+        warn() { :; }; err() { :; }; info() { :; }
+        hmr_owner_gate() { return 0; }
+        tar() { return 0; }
+        . "${d}/block.sh"
+    ) >/dev/null 2>&1
+    local rc=$?
+    if [ -e "${d}/sysroot/etc/init.d/kubelet" ]; then echo "rc=${rc} kept $(cat "${d}/sysroot.role" 2>/dev/null)"; else echo "rc=${rc} wiped $(cat "${d}/sysroot.role" 2>/dev/null)"; fi
+}
+for b in build-orangepi5-stage4.sh build-orangepi4-lts-stage4.sh; do
+    if ! grep -a -E '^SYSROOT_ROLE_MARK=' "${GEN}/${b}" >/dev/null 2>&1; then
+        bad "${b}: no SYSROOT_ROLE_MARK block (one sysroot leaks roles into each other)"; continue
+    fi
+    nr=frontend
+    while IFS='|' read -r g1_name g1_prev g1_node g1_role g1_res g1_io g1_want; do
+        [ -n "${g1_name}" ] || continue
+        g1_got="$(g1_run "${b}" "${g1_prev}" "${g1_node}" "${g1_role:-${nr}}" "${g1_res}" "${g1_io}")"
+        if [ "${g1_got}" = "${g1_want}" ]; then ok "${b}: ${g1_name} -> ${g1_got}"; else bad "${b}: ${g1_name} -> '${g1_got}', expected '${g1_want}'"; fi
+    done <<G1_EOF
+fresh desktop over a node:pki tree wipes it|node:pki|false||false|false|rc=0 wiped desktop
+fresh node over a desktop tree wipes it|desktop|true||false|false|rc=0 wiped node:${nr}
+fresh run over an unrecorded tree wipes it||true||false|false|rc=0 wiped node:${nr}
+--resume desktop onto a node tree is refused|node:${nr}|false||true|false|rc=1 kept node:${nr}
+--image-only node onto a desktop tree is refused|desktop|true||false|true|rc=1 kept desktop
+--resume onto the same role keeps the tree|node:${nr}|true||true|false|rc=0 kept node:${nr}
+--image-only onto the same role keeps the tree|desktop|false||false|true|rc=0 kept desktop
+--resume onto an unrecorded tree keeps it (warns)||false||true|false|rc=0 kept desktop
+G1_EOF
+done
+
+rm -rf "${E_TMP}"
 
 echo "== ${P} passed, ${F} failed =="
 [ "${F}" -eq 0 ]

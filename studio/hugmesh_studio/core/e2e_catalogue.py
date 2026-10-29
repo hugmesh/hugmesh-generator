@@ -81,7 +81,7 @@ SCREENSHOTS: MODEL WHAT EXISTS, PROMISE NOTHING MORE (:func:`index_screenshots`)
 Today there is no per-step screenshot data and this module does not pretend otherwise.
 There are exactly two real sources:
 
-  * tests/e2e/screenshots/ — 38 flat, GIT-TRACKED PNGs written by helpers.ts ``shot()``
+  * tests/e2e/screenshots/ — 37 flat, GIT-TRACKED PNGs written by helpers.ts ``shot()``
     with a caller-chosen name and OVERWRITTEN IN PLACE every run. Nothing in the file
     ties a shot to a test, a run or a persona: helpers.ts even keeps a ``personaOf()``
     WeakMap and does not put it in the name. The ONLY link that exists is the leading
@@ -1418,7 +1418,7 @@ def load_catalogue(generator_dir: str, env: dict[str, str] | None = None,
     cat.features = build_features(tests, shots)
     # Any bucket no feature claimed. Screenshot numbers that match no spec file (and
     # the un-numbered "" bucket) would otherwise be invisible, which is how a flat
-    # tracked directory of 38 PNGs stops being looked at.
+    # tracked directory of 37 PNGs stops being looked at.
     claimed = {f.number for f in cat.features}
     cat.orphan_screenshots = tuple(
         sh for num, group in sorted(shots.items()) if num not in claimed

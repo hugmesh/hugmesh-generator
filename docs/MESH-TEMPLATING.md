@@ -600,9 +600,8 @@ render): absolute paths; any `..` segment; a realpath (symlinked parents
 included) escaping the target tree; renaming a **directory** (files only — a dir
 rename could silently move the `deploy/` discovery contract); clobbering an
 existing destination; and the hardcoded **contract denylist** —
-`hugmesh-deploy.yaml` (+ the legacy `snapdragon-deploy.yaml`),
-`.hugmesh-provenance.json`, `.hugmesh-mesh-admitted` (and their legacy
-spellings) — renaming those breaks the 13d `pathsExist`
+`hugmesh-deploy.yaml`,
+`.hugmesh-provenance.json`, `.hugmesh-mesh-admitted` — renaming those breaks the 13d `pathsExist`
 discovery filter, the fixed provenance manifest name, and the publish
 launder-refusal stamp reads) plus their siblings (`.sig`, base-origin/base-ref
 markers). BOTH deploy-descriptor spellings are denylisted because both are live:

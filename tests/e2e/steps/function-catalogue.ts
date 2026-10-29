@@ -210,31 +210,36 @@ export const FUNCTIONS: MeshFunction[] = [
   // ── games ──────────────────────────────────────────────────────────────────
   {
     service: 'games', id: 'entry', name: 'reach the games entry point',
-    gateway: 'hugmesh-be-gateway', pattern: '/games/**', gateRole: 'ROLE_GAMES',
+    gateway: 'hugmesh-fe-gateway', pattern: '/games/**', gateRole: 'ROLE_GAMES',
     driveability: 'ui', blockedBy: '',
-    note: 'The fe side has NO /games/** row: /games is a GUARDED LOCAL PLACEHOLDER the '
-        + 'host shell renders itself (games-placeholder-message + games-todo-badge), so '
-        + 'the fe gateway never proxies it. The be-gateway rows govern the games PORTAL '
-        + 'in the separate hugmesh-games deployment.',
+    note: 'Since 2026-10-28 the fe gateway proxies /games/** to the `games` federation '
+        + 'remote (hugmesh-games/games-ui, fe route games-ui) behind a ROLE_GAMES floor '
+        + '(+ROLE_ADMIN/ROLE_MOD supersets) — the host shell mounts its GAMES_ROUTES at '
+        + '/games (games-catalog, games-card-<slug>, games-play-frame). Before that the '
+        + 'fe side had NO /games/** row and /games was a guarded local placeholder. The '
+        + 'be-gateway /games/** trio still governs the standalone PORTAL door.',
   },
   {
     service: 'games', id: 'admin', name: 'reach the derived games-admin mount',
     gateway: 'hugmesh-fe-gateway', pattern: '/games/admin/**', gateRole: 'ROLE_GAMES_ADMIN',
     driveability: 'ui', blockedBy: '',
     note: 'ROLE_GAMES_ADMIN is DERIVED: ROLE_GAMES intersect (ROLE_ADMIN union ROLE_MOD), '
-        + 'materialised by games-admin-sync. A bare ROLE_GAMES and a bare ROLE_ADMIN each '
-        + 'hold one half and are BOTH refused. Also a placeholder mount.',
+        + 'materialised by derive-games-admin.sh on compose and games-admin-sync on the '
+        + 'cluster. A bare ROLE_GAMES and a bare ROLE_ADMIN each hold one half and are '
+        + 'BOTH refused. The mount is the remote\'s GAMES_ADMIN_ROUTES (games-admin-shell: '
+        + 'overview, live sessions, session logs, access, settings) and its API rides the '
+        + 'sibling /games/api/admin/** row keyed on the same composite.',
   },
   {
     service: 'games', id: 'catalogue', name: 'list the games offered to my domain',
     gateway: 'hugmesh-be-gateway', pattern: '/bff/games-services/catalog/**',
     gateRole: 'ROLE_GAMES_SERVICES',
     driveability: 'absent',
-    blockedBy: 'the games app-store control plane has no UI mounted in this mesh and no '
-             + 'persona holds ROLE_GAMES_SERVICES. tests/stack/compose.local.yaml defines '
-             + 'NO games micro-frontend container at all (only hugmesh-wasm-fragment in '
-             + 'compose.games.yaml), and the host shell serves /games as a TODO '
-             + 'placeholder. Nothing exists to list a catalogue from.',
+    blockedBy: 'this is the games APP-STORE control plane (games-services: server '
+             + 'instances offered per domain), a DIFFERENT surface from the games member '
+             + 'catalog the `games` remote lists from /games/api/games. It has no UI '
+             + 'mounted in this mesh and no persona holds ROLE_GAMES_SERVICES. Nothing '
+             + 'exists to list an app-store catalogue from.',
     note: 'The route-access row is real and seeded — the gate is ready, the surface is not.',
   },
   {
@@ -244,7 +249,9 @@ export const FUNCTIONS: MeshFunction[] = [
     driveability: 'absent',
     blockedBy: 'same missing app-store UI as games/catalogue, and ROLE_GAMES_SERVICES_ADMIN '
              + '(games-services intersect (admin|mod)) is held by no seeded persona. The '
-             + 'instance lifecycle is a control-plane API with no mounted client here.',
+             + 'instance lifecycle is a control-plane API with no mounted client here — '
+             + 'not to be confused with a games member LAUNCHING a title in the remote '
+             + '(POST /games/api/games/<slug>/launch, driven by games-console.feature).',
     note: 'ROLE_GAMES_SERVICES_RUNNER is the mod-delegated run/stop half of the same row.',
   },
   {

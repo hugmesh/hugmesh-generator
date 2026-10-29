@@ -19,7 +19,12 @@ fi
 # exists (kubeadm init writes it directly; a completed join minted it) the
 # kubelet ignores the bootstrap flag, so init/single-node behavior is
 # unchanged.
-command_args="--config=/var/lib/kubelet/config.yaml --kubeconfig=/etc/kubernetes/kubelet.conf --bootstrap-kubeconfig=/etc/kubernetes/bootstrap-kubelet.conf --v=2${KUBELET_KUBEADM_ARGS:+ ${KUBELET_KUBEADM_ARGS}}"
+#
+# KUBELET_EXTRA_ARGS comes from /etc/conf.d/kubelet (openrc-run sources it before
+# this script). keys-provision writes --node-labels there from the KEYS stick's
+# .hugmesh.node_labels, so a WORKER registers with its hugmesh.net/* labels; the
+# control-plane-only `kubectl label` cannot reach a worker. Unset -> unchanged.
+command_args="--config=/var/lib/kubelet/config.yaml --kubeconfig=/etc/kubernetes/kubelet.conf --bootstrap-kubeconfig=/etc/kubernetes/bootstrap-kubelet.conf --v=2${KUBELET_KUBEADM_ARGS:+ ${KUBELET_KUBEADM_ARGS}}${KUBELET_EXTRA_ARGS:+ ${KUBELET_EXTRA_ARGS}}"
 command_background=true
 pidfile="/run/${RC_SVCNAME}.pid"
 start_stop_daemon_args="--stderr /var/log/kubelet.err --stdout /var/log/kubelet.log"

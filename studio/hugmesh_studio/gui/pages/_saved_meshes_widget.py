@@ -18,9 +18,22 @@ supplies (:class:`SavedMeshProbe`), never guessed at save time. Until the probe
 answers the column says so ("Checking…"), and the buttons stay disabled with that
 reason: unknown is not "no".
 
+THE CURRENT MESH, AT THE TOP (operator, 2026-10-21: "Saved meshes screen does not
+give anywhere to save the mesh we just started working on"). Above the table sits a
+strip for the mesh being worked on — the page's form, read through the page's
+``current_provider`` — with what it carries per domain, whether it is saved
+already (the same as a record, or changed since one), and the SAVE controls:
+``Save current mesh`` (a new record, named by the ``Save as`` box or derived), and
+``Overwrite selected``, which replaces the selected record only on a SECOND click.
+None of these needs a running mesh: the record is the configuration, and a restore
+decides from the machine as it is, like every other record. It is a strip and not a
+row of the table on purpose: the table holds records only, so a row index always
+means a record and nothing that selects row 0 can mean the form.
+
 HOUSE RULES THIS FILE KEEPS:
   * NO modal from page logic. Delete is armed by typing the record's label into an
-    inline QLineEdit (the vaults_dialog idiom) — never a nested QMessageBox.
+    inline QLineEdit (the vaults_dialog idiom) — never a nested QMessageBox; an
+    overwrite is armed by its own first click and carried out by the second.
   * ``cellClicked``/``itemActivated`` only. Never ``itemChanged``.
   * ONE writer of ``setEnabled`` for the button cluster (:meth:`_update_buttons`),
     and every disabled button carries the reason in its tooltip.
@@ -39,15 +52,29 @@ from ..qt import QtCore, QtGui, QtWidgets, Signal
 from ...core import saved_meshes as sm
 from ._emulation_common import make_table, set_cell
 
+#: plain words for :func:`.saved_meshes.unrecorded_fields` in the overwrite note
+_UNRECORDED_WORDS = {"services": "services", "kind_addons": "DevOps add-ons"}
+
 # Symbolic column indices only (network.py's rule).
 (_SM_COL_MESH, _SM_COL_SAVED, _SM_COL_ENV, _SM_COL_SERVICES,
- _SM_COL_RESTORE, _SM_COL_VOLUMES) = range(6)
-_SM_HEADERS = ("Mesh", "Saved", "Env / brand", "Services", "Restores as", "Volumes")
+ _SM_COL_RESTORE, _SM_COL_VOLUMES, _SM_COL_DOMAINS) = range(7)
+_SM_HEADERS = ("Mesh", "Saved", "Env / brand", "Services", "Restores as", "Volumes",
+               "Domains")
 
-_EMPTY_NOTE = ("No saved meshes yet — press 'Save this mesh' once one is up. A record "
-               "keeps the mesh's configuration, source HEADs, credential pointers and "
-               "a volume inventory, so it can be started or restored from here "
-               "instead of generated from scratch.")
+_EMPTY_NOTE = ("No saved meshes yet — press 'Save current mesh' above (it does not "
+               "need the mesh to be running). A record keeps the mesh's configuration "
+               "— every domain's look, sign-in, services and VPN/egress choices "
+               "included — its source HEADs, credential pointers and a volume "
+               "inventory, so it can be loaded, started or restored from here instead "
+               "of set up from scratch.")
+
+#: The heading of the "current mesh" strip at the top of the list, by state.
+_CURRENT_TITLE = {
+    "unsaved": "Current mesh — not saved yet",
+    "same": "Current mesh — saved as ‘{label}’, no changes since",
+    "changed": "Current mesh — changed since it was saved as ‘{label}’",
+    "none": "Current mesh — the form could not be read",
+}
 
 _VOLUMES_NOTE = (
     "Records never contain data volumes — only an inventory of them. They are "
@@ -86,6 +113,9 @@ class SavedMeshProbe(QtCore.QThread):
                 out[rec.id] = sm.probe_state(rec)
             except Exception as e:            # never kill the page over a probe
                 out[rec.id] = {"error": f"{type(e).__name__}: {e}"}
+            # which VERSION of the record these facts are about: an overwrite keeps
+            # the id, and an answer for the old one must not land on the new one
+            out[rec.id]["_updated"] = rec.updated
         self.result.emit(out)
 
 
@@ -111,6 +141,10 @@ class SavedMeshesWidget(QtWidgets.QWidget):
     load_requested = Signal(object)
     #: list[SavedMesh] — the page owns the QThread (own_probe/probe_running).
     probe_needed = Signal(object)
+    #: (SavedMesh | None, label) — save the CURRENT mesh: None = a new record, a
+    #: record = overwrite that one (already confirmed by the second click). The page
+    #: does the capture off-thread and calls :meth:`mark_current` when it is written.
+    save_requested = Signal(object, str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -123,9 +157,83 @@ class SavedMeshesWidget(QtWidgets.QWidget):
         self._mesh_up: bool | None = None
         self._busy = False
         self._rows: list[_Row] = []
+        #: () -> the current mesh's config dict (``saved_meshes.config_for_record``),
+        #: set by the page. None = this widget has no form behind it (the strip
+        #: says so and Save stays off).
+        self.current_provider = None
+        self._current: dict | None = None
+        self._current_error = ""
+        #: the record the form was last saved as / loaded from (this session)
+        self._tied_id = ""
+        #: the record id the FIRST click of Overwrite armed ("" = not armed)
+        self._armed_id = ""
 
         lay = QtWidgets.QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
+
+        # ── THE CURRENT MESH (top of the list) ───────────────────────────────
+        self.current_box = QtWidgets.QFrame()
+        self.current_box.setObjectName("savedMeshesCurrent")
+        self.current_box.setFrameShape(QtWidgets.QFrame.Shape.StyledPanel)
+        # never taller than its contents: spare height belongs to the list below,
+        # not to gaps between the strip's lines
+        self.current_box.setSizePolicy(QtWidgets.QSizePolicy.Policy.Preferred,
+                                       QtWidgets.QSizePolicy.Policy.Maximum)
+        cur = QtWidgets.QVBoxLayout(self.current_box)
+        cur.setContentsMargins(8, 6, 8, 6)
+        self.current_title = QtWidgets.QLabel(_CURRENT_TITLE["unsaved"])
+        f = self.current_title.font()
+        f.setBold(True)
+        self.current_title.setFont(f)
+        self.current_title.setWordWrap(True)
+        cur.addWidget(self.current_title)
+        self.current_summary = QtWidgets.QLabel("")
+        self.current_summary.setTextFormat(QtCore.Qt.TextFormat.PlainText)
+        self.current_summary.setWordWrap(True)
+        cur.addWidget(self.current_summary)
+        self.current_domains = QtWidgets.QLabel("")
+        self.current_domains.setTextFormat(QtCore.Qt.TextFormat.PlainText)
+        self.current_domains.setWordWrap(True)
+        self.current_domains.setStyleSheet("color: gray;")
+        cur.addWidget(self.current_domains)
+        # GRID, not one row: the wizard sizes to its widest page.
+        save_row = QtWidgets.QGridLayout()
+        self.name_label = QtWidgets.QLabel("Save as:")
+        self.name_edit = QtWidgets.QLineEdit()
+        self.name_edit.setPlaceholderText("a name for the record (blank = derived)")
+        self.name_edit.textChanged.connect(self._on_name_changed)
+        self.name_label.setBuddy(self.name_edit)
+        self.save_btn = QtWidgets.QPushButton("Save current mesh")
+        self.save_btn.clicked.connect(self._save_new)
+        self.overwrite_btn = QtWidgets.QPushButton("Overwrite selected")
+        self.overwrite_btn.clicked.connect(self._overwrite)
+        save_row.addWidget(self.name_label, 0, 0)
+        save_row.addWidget(self.name_edit, 0, 1, 1, 2)
+        save_row.addWidget(self.save_btn, 1, 1)
+        save_row.addWidget(self.overwrite_btn, 1, 2)
+        # WHICH MESH THIS SAVE IS A LATER STATE OF (code-folders skeptic 2,
+        # 2026-10-21). A save lists the record the form holds in its ``follows``,
+        # and that older record then stops keeping domain code copies the newer one
+        # dropped. Silently, that also fired when the form had been edited into a
+        # different mesh. Shown only while the form holds a record; ticked by
+        # default (saving again is the usual case); untick it and the older record
+        # keeps its copies.
+        self.follows_box = QtWidgets.QCheckBox("")
+        self.follows_box.setChecked(True)
+        self.follows_box.setVisible(False)
+        self._follows_offered = ""
+        save_row.addWidget(self.follows_box, 2, 1, 1, 2)
+        save_row.setColumnStretch(1, 1)
+        save_row.setColumnStretch(2, 1)
+        cur.addLayout(save_row)
+        # What the armed overwrite will replace — inline, never a modal.
+        self.overwrite_note = QtWidgets.QLabel("")
+        self.overwrite_note.setWordWrap(True)
+        self.overwrite_note.setStyleSheet("color: #a05000;")
+        self.overwrite_note.setVisible(False)
+        cur.addWidget(self.overwrite_note)
+        lay.addWidget(self.current_box)
+
         self.empty_note = QtWidgets.QLabel(_EMPTY_NOTE)
         self.empty_note.setWordWrap(True)
         self.empty_note.setStyleSheet("color: gray;")
@@ -203,12 +311,195 @@ class SavedMeshesWidget(QtWidgets.QWidget):
         changed = (mesh_up != self._mesh_up) or (busy != self._busy)
         self._mesh_up, self._busy = mesh_up, busy
         if changed:
+            if busy:
+                self._disarm()
             self._replan()
             self._update_buttons()
 
     def set_note(self, text: str) -> None:
         self.note.setText(text)
         self.note.setVisible(bool(text))
+
+    # ---- the current mesh (the strip at the top) ---------------------------------
+    def update_current(self) -> None:
+        """Re-read the current mesh from the page (``current_provider``) and re-render
+        the strip. Cheap — the page's form plus an in-memory compare against the
+        records already listed; no disk, no subprocess. A provider that raises leaves
+        the strip saying the form could not be read, with Save off: a record of a form
+        nobody could read would describe nothing."""
+        self._current, self._current_error = None, ""
+        if self.current_provider is not None:
+            try:
+                cur = self.current_provider()
+                self._current = dict(cur) if isinstance(cur, dict) else None
+            except Exception as e:                    # noqa: BLE001 — never kill the page
+                self._current_error = f"{type(e).__name__}: {e}"
+        self._render_current()
+        self._update_buttons()
+
+    def mark_current(self, rec_id: str) -> None:
+        """The form now IS record ``rec_id`` (it was just saved as it, or loaded or
+        started from it): the strip compares against that record from here on."""
+        self._tied_id = str(rec_id or "")
+        self._render_current()
+
+    def current_state(self) -> tuple[str, "sm.SavedMesh | None", list[str]]:
+        """``(state, record, changed fields)`` for the strip: ``unsaved``, ``same``
+        (identical to ``record``), ``changed`` (differs from the record it was saved
+        as or loaded from) or ``none`` (no form / unreadable form)."""
+        if self._current is None:
+            return "none", None, []
+        recs = [r.rec for r in self._rows if r.rec is not None]
+        tied = next((r for r in recs if r.id == self._tied_id), None)
+        if tied is not None:
+            changes = sm.config_changes(tied.config, self._current, unrecorded_ok=True)
+            return ("same" if not changes else "changed"), tied, changes
+        for r in recs:
+            if r.same_checkout(self.generator_dir, self.hostname) and \
+                    not sm.config_changes(r.config, self._current):
+                return "same", r, []
+        return "unsaved", None, []
+
+    def follows_wanted(self, rec_id: str) -> bool:
+        """Should a save made now list ``rec_id`` (the record the form holds) as the
+        mesh it is a later state of? Only when the box offers that very record and
+        is ticked; a record that is gone from the list is never followed."""
+        return bool(rec_id) and self._follows_offered == rec_id and \
+            self.follows_box.isChecked()
+
+    def _render_follows(self) -> None:
+        tied = next((r.rec for r in self._rows
+                     if r.rec is not None and r.rec.id == self._tied_id), None)
+        if tied is None or self._current is None:
+            self._follows_offered = ""
+            self.follows_box.setVisible(False)
+            return
+        if self._follows_offered != tied.id:      # a new tie: ticked again
+            self.follows_box.setChecked(True)
+        self._follows_offered = tied.id
+        label = tied.label or tied.id
+        # a checkbox does not wrap: a long name must not widen the page (#661)
+        short = label if len(label) <= 40 else label[:39] + "…"
+        self.follows_box.setText(
+            f"This is a later version of ‘{short}’ (it then stops keeping code "
+            "copies this save drops)")
+        self.follows_box.setToolTip(
+            f"Ticked: the new or overwritten record lists ‘{label}’ as an earlier "
+            "state of the same mesh, so the domain code copies only it still had "
+            "become extra (removable on a second click, and only if they hold no "
+            f"work). Untick it when the form now holds a different mesh: ‘{label}’ "
+            "then keeps its copies.")
+        self.follows_box.setVisible(True)
+
+    def _render_current(self) -> None:
+        self._render_follows()
+        state, rec, changes = self.current_state()
+        label = (rec.label or rec.id) if rec is not None else ""
+        self.current_title.setText(_CURRENT_TITLE[state].format(label=label))
+        if state == "none":
+            self.current_summary.setText(
+                ("The form could not be read: " + self._current_error)
+                if self._current_error else
+                "There is no mesh form behind this list, so there is nothing to save.")
+            self.current_domains.setText("")
+            return
+        cur = self._current or {}
+        env = str(cur.get("env") or "test")
+        brand = str(cur.get("brand") or "")
+        summary = (f"{env} / {brand}" if brand else env) + \
+            " · services: " + sm.services_text_of(cur)
+        if state == "changed" and changes:
+            shown = ", ".join(changes[:6]) + (", …" if len(changes) > 6 else "")
+            summary += f"\nChanged since it was saved: {shown}."
+        self.current_summary.setText(summary)
+        lines = sm.domain_lines_of(cur)
+        self.current_domains.setText(
+            "\n".join(lines) if lines else
+            "Domains: this mesh's own domain only, at its defaults.")
+
+    def _on_name_changed(self, *_):
+        self._disarm()
+        self._update_buttons()
+
+    def _disarm(self) -> None:
+        if self._armed_id:
+            self._armed_id = ""
+        self.overwrite_btn.setText("Overwrite selected")
+        self.overwrite_note.setVisible(False)
+
+    def _typed_label(self) -> str:
+        return self.name_edit.text().strip()
+
+    def _save_new(self) -> None:
+        """One press: a NEW record of the current mesh. A blank name is derived by the
+        core (and made unique here, so the Delete confirmation — type the name — is
+        never ambiguous); a typed name that another record already has is refused by
+        the gate in :meth:`_update_buttons`, with Overwrite named as the way."""
+        if not self.save_btn.isEnabled() or self._current is None:
+            return
+        label = self._typed_label()
+        if not label:
+            label = sm.unique_label(sm.derived_label_of(self._current), self.records())
+        self._disarm()
+        self.save_requested.emit(None, label)
+
+    def _overwrite(self) -> None:
+        """TWO clicks. The first ARMS (the button and the note say exactly which
+        record is replaced, and what goes with it); the second, on the same selected
+        record, asks the page to save over it. Any selection change, a typed name,
+        a refresh or a verb starting disarms it."""
+        r = self.selected()
+        if (not self.overwrite_btn.isEnabled() or r is None or r.rec is None
+                or self._current is None):
+            return
+        rec = r.rec
+        if self._armed_id != rec.id:
+            self._armed_id = rec.id
+            label = rec.label or rec.id
+            self.overwrite_btn.setText(f"Click again to overwrite ‘{label}’")
+            copies = (" Its saved credential copies are removed: this save keeps "
+                      "pointers only." if rec.has_credential_copies() else "")
+            rename = ""
+            typed = self._typed_label()
+            if typed and typed != (rec.label or ""):
+                rename = f" It is renamed to ‘{typed}’."
+            # a record that never recorded a services / DevOps add-on choice does not
+            # read as "changed" when loaded, so say here that the form's choice is
+            # written into it
+            unrecorded = [_UNRECORDED_WORDS.get(k, k)
+                          for k in sm.unrecorded_fields(rec.config)]
+            fills = (" It never recorded a choice of " + " or ".join(unrecorded)
+                     + "; the form's current ticks are written in." if unrecorded
+                     else "")
+            # a record whose mesh RAN keeps that it did (capture's ran_before_at):
+            # only a record that never ran is called one that never ran
+            try:
+                last_ran = rec.last_ran_at()
+            except Exception:                       # noqa: BLE001 — wording only
+                last_ran = ""
+            if self._mesh_up is not False:
+                draft = ""
+            elif last_ran:
+                draft = (" The Docker mesh is not running, so unless the DevOps lane "
+                         "is up the replaced record is marked not run as saved (it "
+                         "keeps that this mesh last ran "
+                         f"{last_ran[:16].replace('T', ' ')}) and the node-image "
+                         "pages stop importing it by default.")
+            else:
+                draft = (" The Docker mesh is not running, so unless the DevOps lane "
+                         "is up the replaced record stays a draft (never ran).")
+            self.overwrite_note.setText(
+                f"A second click replaces the saved record ‘{label}’ (saved "
+                f"{(rec.updated or rec.created or '?')[:16].replace('T', ' ')}) with "
+                "the mesh being "
+                f"worked on now. Its place in the list is kept.{rename}{copies}"
+                f"{fills}{draft} Its data volumes and the running mesh are not "
+                "touched.")
+            self.overwrite_note.setVisible(True)
+            return
+        label = self._typed_label() or rec.label or rec.id
+        self._disarm()
+        self.save_requested.emit(rec, label)
 
     # ---- data -------------------------------------------------------------------
     def records(self) -> list:
@@ -227,21 +518,30 @@ class SavedMeshesWidget(QtWidgets.QWidget):
         subprocess). Probe results already known for a record are kept so the
         table does not flash back to "Checking…" on every revisit; records the
         probe has not seen yet are handed to the page via ``probe_needed``."""
-        known = {r.rec.id: r.probe for r in self._rows
+        # keyed by id AND the record's `updated` stamp: an OVERWRITE keeps the id, and
+        # the old record's facts (its volumes, its credential copies) say nothing
+        # about the record that replaced it
+        known = {(r.rec.id, r.rec.updated): r.probe for r in self._rows
                  if r.rec is not None and r.probe is not None}
         recs, unreadable = sm.scan()
-        rows = [_Row("record", rec=rec, probe=known.get(rec.id)) for rec in recs]
+        rows = [_Row("record", rec=rec, probe=known.get((rec.id, rec.updated)))
+                for rec in recs]
         rows += [_Row("unreadable", path=p) for p in unreadable]
         self._rows = rows
+        self._disarm()
         self.empty_note.setVisible(not rows)
         self.table.setRowCount(len(rows))
         for i, r in enumerate(rows):
             self._render_row(i, r)
         self.table.resizeColumnsToContents()
         self._replan()
-        self._update_buttons()
+        # the strip compares the form against the records just read
+        self.update_current()
         if self.section is not None:
-            self.section.set_default_expanded(bool(rows))
+            # OPEN whenever there is something to act on: a record, or the current
+            # mesh to save (the Save controls live in here — folded away at zero
+            # records they were exactly the "nowhere to save" the operator found)
+            self.section.set_default_expanded(bool(rows) or self._current is not None)
         pending = [r.rec for r in rows if r.rec is not None and r.probe is None]
         if pending:
             self.probe_needed.emit(pending)
@@ -251,7 +551,11 @@ class SavedMeshesWidget(QtWidgets.QWidget):
         re-derive its plan (pure)."""
         for r in self._rows:
             if r.rec is not None and r.rec.id in results:
-                r.probe = results[r.rec.id]
+                ans = results[r.rec.id]
+                if isinstance(ans, dict) and "_updated" in ans and \
+                        ans["_updated"] != r.rec.updated:
+                    continue                 # facts about a record since overwritten
+                r.probe = ans
         self._replan()
         self._update_buttons()
 
@@ -295,19 +599,41 @@ class SavedMeshesWidget(QtWidgets.QWidget):
                 set_cell(self.table, i, c, "—")
             set_cell(self.table, i, _SM_COL_RESTORE, "cannot be restored (corrupt record)")
             set_cell(self.table, i, _SM_COL_VOLUMES, "—")
+            set_cell(self.table, i, _SM_COL_DOMAINS, "—")
             return
         rec = r.rec
-        tip = (f"{rec.id}\nsaved {rec.created} on {rec.hostname or '?'}\n"
+        tip = (f"{rec.id}\nsaved {rec.updated or rec.created} on {rec.hostname or '?'}"
+               + (f" (first saved {rec.created})"
+                  if rec.updated and rec.created and rec.updated != rec.created else "")
+               + "\n"
                f"generator: {rec.generator_dir} @ {rec.generator_head[:12] or '?'}")
         if not rec.same_checkout(self.generator_dir, self.hostname):
             tip += ("\n\nThis record is from ANOTHER checkout or host — it points "
                     "at another mesh's volumes, so Start is disabled here.")
         set_cell(self.table, i, _SM_COL_MESH, rec.label or rec.id, tooltip=tip)
-        set_cell(self.table, i, _SM_COL_SAVED, (rec.created or "")[:16].replace("T", " "),
-                 tooltip=rec.created)
+        # The LAST save, as the node-image picker shows it: an Overwrite keeps
+        # `created` and moves `updated` (saved-meshes skeptic 3 — the two screens
+        # disagreed about when the same record was saved).
+        # A plain save stamps `created` and then `updated` a moment apart; more than
+        # two minutes apart is a later save of the same record (an Overwrite, or a
+        # Start that wrote the form's Domain services walk into it).
+        last = rec.updated or rec.created or ""
+        t_up, t_made = sm._stamp(rec.updated), sm._stamp(rec.created)
+        resaved = bool(t_up and t_made and t_up - t_made > 120)
+        set_cell(self.table, i, _SM_COL_SAVED,
+                 last[:16].replace("T", " ") + (" (re-saved)" if resaved else ""),
+                 tooltip=(f"last saved {rec.updated}\nfirst saved {rec.created}"
+                          if resaved else last))
         set_cell(self.table, i, _SM_COL_ENV, rec.brand_text())
         set_cell(self.table, i, _SM_COL_SERVICES, rec.services_text(),
                  tooltip=rec.services_text())
+        lines = rec.domain_lines()
+        names = [ln.split(" — ", 1)[0] for ln in lines]
+        set_cell(self.table, i, _SM_COL_DOMAINS,
+                 (f"{len(names)}: " + ", ".join(names)) if names else "own domain only",
+                 tooltip="\n".join(lines) if lines else
+                 "This record carries no domain rows: the mesh's own domain only, at "
+                 "its defaults.")
         self._render_plan_cells(i, r)
 
     def _render_plan_cells(self, i: int, r: _Row) -> None:
@@ -341,6 +667,7 @@ class SavedMeshesWidget(QtWidgets.QWidget):
             btn.setEnabled(bool(on))
             btn.setToolTip(ok_tip if on else why)
 
+        self._gate_save(r, gate, busy_tip)
         if r is None:
             for b, ok_tip in ((self.start_btn, ""), (self.restore_btn, ""),
                               (self.load_btn, ""), (self.delete_btn, "")):
@@ -399,6 +726,60 @@ class SavedMeshesWidget(QtWidgets.QWidget):
                r.rec.has_credential_copies() else "")
             + ". The running mesh, its volumes and keys-out/ are not touched.")
         self.danger.setVisible(True)
+
+    def _gate_save(self, r: "_Row | None", gate, busy_tip: str) -> None:
+        """Save current mesh / Overwrite selected — part of the one setEnabled writer
+        (:meth:`_update_buttons` calls this first). Neither asks whether a mesh is
+        RUNNING: the record is the configuration being worked on."""
+        # a selection that moved off the armed record disarms it
+        if self._armed_id and (r is None or r.rec is None or r.rec.id != self._armed_id):
+            self._disarm()
+        typed = self._typed_label()
+        records = self.records()
+        if self._current is None:
+            why = ("The form could not be read: " + self._current_error
+                   if self._current_error else "There is no mesh form to save here.")
+            gate(self.save_btn, False, why, "")
+            gate(self.overwrite_btn, False, why, "")
+            self.name_edit.setEnabled(False)
+            return
+        self.name_edit.setEnabled(not self._busy)
+        taken = sm.label_owner(typed, records) if typed else None
+        save_tip = ("Save the mesh being worked on as a NEW record"
+                    + (f" called ‘{typed}’" if typed else " (the name is derived)")
+                    + ": every domain's look, sign-in, services and VPN/egress "
+                      "choices, the mesh-wide settings, source HEADs and credential "
+                      "POINTERS (paths and hashes — never a password). It does not "
+                      "need the mesh to be running, and nothing is started or "
+                      "stopped. Runs off-thread.")
+        if self._busy:
+            gate(self.save_btn, False, busy_tip, save_tip)
+        elif taken is not None:
+            gate(self.save_btn, False,
+                 f"A saved mesh is already called ‘{taken.label}’ — pick another name, "
+                 "or select that record and use Overwrite selected.", save_tip)
+        else:
+            gate(self.save_btn, True, "", save_tip)
+
+        over_ok = ("Replace the selected record with the mesh being worked on. The "
+                   "FIRST click only arms this and says what is replaced; the "
+                   "second click saves over it.")
+        if self._busy:
+            gate(self.overwrite_btn, False, busy_tip, over_ok)
+        elif r is None or r.rec is None:
+            gate(self.overwrite_btn, False,
+                 "Select the saved record to replace first." if r is None else
+                 "This record is unreadable — delete it, then save a new one.", over_ok)
+        elif not r.rec.same_checkout(self.generator_dir, self.hostname):
+            gate(self.overwrite_btn, False,
+                 "This record is from another checkout or host — it describes "
+                 "another mesh; save a new record instead.", over_ok)
+        elif typed and sm.label_owner(typed, records, exclude_id=r.rec.id) is not None:
+            gate(self.overwrite_btn, False,
+                 f"Another saved mesh is already called ‘{typed}’ — pick another "
+                 "name, or clear the box to keep this record's name.", over_ok)
+        else:
+            gate(self.overwrite_btn, True, "", over_ok)
 
     # ---- actions ------------------------------------------------------------------
     def _activate(self) -> None:

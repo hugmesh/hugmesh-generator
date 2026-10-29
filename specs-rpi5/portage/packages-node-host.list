@@ -1,0 +1,30 @@
+# packages-node-host.list — the host packages a cluster NODE needs beyond
+# packages-k8s.list, for a board whose own base list is a desktop's.
+#
+# The Raspberry Pi carries every one of these in its BASE packages.list (beside its
+# Pi-only firmware/EEPROM/kernel atoms), so a Pi node build never reads this file.
+# The Orange Pi node roles (build-orangepi5-stage4.sh, build-orangepi4-lts-stage4.sh;
+# EXPERIMENTAL, hardware validation pending) start from the Orange Pi desktop base
+# list, which lacks them, and append this list after packages-k8s.list.
+# tests/scripts/test-role-key-spelling.sh section E asserts the Orange Pi node set
+# covers the Pi base list minus its Raspberry Pi hardware atoms, so an atom added to
+# the Pi base list and missing here fails that test.
+
+# Host firewall: hugmesh-firewall-reconcile loads its release-state rules with nft
+# and exits 0 (rules never loaded) when nft is absent.
+net-firewall/nftables
+net-firewall/conntrack-tools
+
+# Pod networking tools kube-proxy / the CNI plugins / kubeadm preflight call.
+sys-apps/iproute2
+sys-apps/ethtool
+
+# Encrypted data disks + LVM (the node storage bake, --encrypt-root).
+sys-fs/cryptsetup
+sys-fs/lvm2
+sys-apps/nvme-cli
+
+# SELinux policy for containers and VMs, and the policy query tools.
+sec-policy/selinux-container
+sec-policy/selinux-virt
+app-admin/setools

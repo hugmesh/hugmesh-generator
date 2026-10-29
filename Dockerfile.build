@@ -295,6 +295,22 @@ RUN mkdir -p /etc/portage/package.use && \
       'sys-libs/libselinux python' \
       'sys-process/audit python' \
       > /etc/portage/package.use/hugmesh-host-build-backends
+# HOST gpep517 floor for cross-built python C extensions. Under --sysroot (every
+# ARM cross_emerge sets SYSROOT) gpep517 < 23 patches sysconfig.get_config_vars
+# with a zero-argument function; setuptools-84 calls get_config_vars(*names), so
+# every cross-built python C extension (libselinux[python] is profile-forced on
+# hardened/selinux, pypax, libsemanage, setools) fails with "Wheel build failed"
+# and the ARM payload is skipped from @system on (rpi5 run 2026-10-21). gpep517-20
+# is the only amd64-stable version in the 2026-09-24 tree; 22 still fails, 23 works
+# (replayed against the failed sysroot). Its own keyword file, the same one
+# scripts/_host-guard-lib.sh hostguard_ensure_cross_gpep517 writes at run time,
+# because the ARM builders REWRITE hugmesh-host-build-backends at run time and
+# would drop a line kept there.
+RUN mkdir -p /etc/portage/package.accept_keywords && \
+    printf '%s\n' \
+      '# gpep517 < 23 breaks every cross-built python C extension with setuptools >= 84.' \
+      '>=dev-python/gpep517-23 ~amd64' \
+      > /etc/portage/package.accept_keywords/hugmesh-host-gpep517
 RUN emerge --verbose --noreplace \
         sys-boot/shim \
         app-crypt/sbsigntools \
@@ -304,7 +320,8 @@ RUN emerge --verbose --noreplace \
         sys-apps/gptfdisk \
         app-emulation/qemu \
         sys-libs/libselinux \
-        sys-apps/policycoreutils
+        sys-apps/policycoreutils \
+        '>=dev-python/gpep517-23'
 # ── Host-safety marker (belt-and-braces) ───────────────────────────────────────
 # scripts/_host-guard-lib.sh refuses to seed /etc/portage or run a host emerge
 # unless it can PROVE this root is disposable. Under Docker /.dockerenv (created

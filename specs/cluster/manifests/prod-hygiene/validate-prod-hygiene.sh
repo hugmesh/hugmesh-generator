@@ -225,7 +225,7 @@ runtime_mode() {
       [ -n "${target}" ] || continue
       key="${target##*#}"; target="${target%#*}"
       body="$(kubectl -n "${PROBE_NS}" run "prod-hygiene-seam-$$-${RANDOM}" --rm -i --restart=Never \
-          --image=curlimages/curl:8.10.1 --quiet -- \
+          --image=curlimages/curl:8.10.1@sha256:d9b4541e214bcd85196d6e92e2753ac6d0ea699f0af5741f8c6cccbfcf00ef4b --quiet -- \
           -sk --max-time 5 "${target}" 2>/dev/null || true)"
       if printf '%s' "${body}" | grep -qiE "\"${key}\"[[:space:]]*:[[:space:]]*\"(stub|disabled|noop|dev|placeholder)\""; then
         red   "  ✗ seam not flipped: ${target} reports ${key}=stub/disabled"

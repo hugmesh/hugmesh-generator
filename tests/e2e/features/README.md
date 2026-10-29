@@ -337,7 +337,7 @@ manifest.json           the browsable index, materialised in AfterAll
 ```
 
 Override the base with `SNAP_BDD_SHOTS`. Evidence never goes to
-`tests/e2e/screenshots/` — that holds 38 git-tracked PNGs which every legacy run
+`tests/e2e/screenshots/` — that holds 37 git-tracked PNGs which every legacy run
 overwrites in place, dirtying the working tree. Do not add to that pattern.
 
 ### 4a. The sidecar

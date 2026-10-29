@@ -1,0 +1,12 @@
+#!/bin/sh
+# Argument-recording stand-in for docker (Linux) and docker.exe (Windows), used by
+# tests/docker-mesh-node/launcher-parity.Tests.ps1. It writes each argument it is
+# given on its own line to "$STUB_LOG.<n>.<subcommand>.argv" (n counts calls) and
+# exits 0, so both launchers run to the end. It never talks to a real daemon.
+LOG="${STUB_LOG:?STUB_LOG must name the argv log prefix}"
+n=$(ls "$LOG".*.argv 2>/dev/null | wc -l | tr -d ' ')
+for a in "$@"; do printf '%s\n' "$a"; done > "$LOG.$n.${1:-none}.argv"
+case "${1:-}" in
+  run) echo 0123456789abcdef ;;
+esac
+exit 0

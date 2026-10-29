@@ -5,7 +5,7 @@
 # WHY THIS EXISTS. The defect the gate exists to catch was SILENT: the catalog
 # ApplicationSets filtered on ONE descriptor filename while the HugMesh rebrand was
 # renaming that file to `hugmesh-deploy.yaml` repo by repo, leaving the pre-rebrand
-# `snapdragon-deploy.yaml` live in the ones that had not moved yet. An scmProvider
+# spelling live in the ones that had not moved yet. An scmProvider
 # filter that matches no repo is not an error —
 # the ApplicationSet simply generates nothing. No event, no degraded Application,
 # no log line, and the three repos' own descriptors kept asserting they were
@@ -17,11 +17,11 @@
 # MUST NOT PRODUCE A GREEN RUN.
 #
 #   (a) tree as shipped              -> exit 0, clean `RESULT: PASS`
-#   (b) drop the hugmesh- filter     -> exit 1, [adopter-visibility] naming every
-#       (the exact pre-fix state)       adopter that has completed the rename
-#   (c) drop the LEGACY_COMPAT filter-> exit 1, naming every adopter still on the
-#                                       pre-rebrand descriptor name
-#   (d) only ONE generator fixed     -> exit 1, [appset-lockstep] (a tenant catalog
+#   (b) generators on an OLD name    -> exit 1, [adopter-visibility] naming every
+#       (the exact pre-fix state)       adopter that ships hugmesh-deploy.yaml
+#   (c) an adopter on a 2nd spelling -> exit 1, naming the adopter whose registered
+#       with no filter for it           descriptor no generator accepts
+#   (d) only ONE generator widened   -> exit 1, [appset-lockstep] (a tenant catalog
 #                                       that accepts fewer names re-creates the bug
 #                                       once per tenant)
 #   (e) both names in ONE pathsExist -> exit 1, [appset-parse]: pathsExist is an
@@ -118,8 +118,10 @@ drop = os.environ.get("DROP", "")
 flip = os.environ.get("FLIP", "")
 nodeploy = os.environ.get("NODEPLOY", "")
 extra = os.environ.get("EXTRA", "")
-OTHER = {"snapdragon-deploy.yaml": "hugmesh-deploy.yaml",
-         "hugmesh-deploy.yaml": "snapdragon-deploy.yaml"}
+# exampleorg-deploy.yaml is a NEUTRAL stand-in for "some other descriptor
+# spelling" (the real pre-rebrand one was retired before the public release).
+OTHER = {"exampleorg-deploy.yaml": "hugmesh-deploy.yaml",
+         "hugmesh-deploy.yaml": "exampleorg-deploy.yaml"}
 spec = (yaml.safe_load(open(reg, encoding="utf-8")) or {}).get("spec") or {}
 
 
@@ -188,6 +190,39 @@ open(path, "w", encoding="utf-8").write(new)
 PY
 }
 
+# rename_filter <tree> <file> <from-name> <to-name> — point the filter entry that
+# matches on <from-name> at <to-name> instead.
+rename_filter() {
+  python3 - "$1/$2" "$3" "$4" <<'PY'
+import re, sys
+path, old, new = sys.argv[1], sys.argv[2], sys.argv[3]
+src = open(path, encoding="utf-8").read()
+pat = re.compile(r'(pathsExist: \[")%s(", "deploy"\])' % re.escape(old))
+out, n = pat.subn(lambda m: m.group(1) + new + m.group(2), src, count=1)
+if n != 1:
+    sys.exit("injection failed: no filter entry for %s in %s" % (old, path))
+open(path, "w", encoding="utf-8").write(out)
+PY
+}
+
+# add_filter <tree> <file> <descriptor-name> — append a second filter entry that
+# matches on <descriptor-name>, copying the first entry's repositoryMatch.
+add_filter() {
+  python3 - "$1/$2" "$3" <<'PY'
+import re, sys
+path, name = sys.argv[1], sys.argv[2]
+src = open(path, encoding="utf-8").read()
+pat = re.compile(r'(\n([ \t]*)- repositoryMatch:([^\n]*)\n([ \t]*)pathsExist: \["hugmesh-deploy\.yaml", "deploy"\])')
+def add(m):
+    return (m.group(1) + "\n" + m.group(2) + "- repositoryMatch:" + m.group(3) + "\n"
+            + m.group(4) + 'pathsExist: ["%s", "deploy"]' % name)
+out, n = pat.subn(add, src, count=1)
+if n != 1:
+    sys.exit("injection failed: no hugmesh-deploy.yaml filter entry in %s" % path)
+open(path, "w", encoding="utf-8").write(out)
+PY
+}
+
 echo "== service-catalog discovery gate: negative-control regression =="
 
 # ── (a) the tree as shipped, every checkout present: a real PASS ─────────────
@@ -219,22 +254,22 @@ grep -qF "[FAIL] [" "${W}/out" \
   || ok "clean run emits no '[FAIL] [' line at all — the anchor discriminates"
 
 # ── (b) NEGATIVE CONTROL: the exact pre-fix state ────────────────────────────
-# Point the generators at the LEGACY filename only — what main shipped — and every
-# adopter that has completed the rename must be named as invisible. Without this
+# Point the generators at an OLD filename only — the shape main shipped before the
+# fix (a neutral stand-in name here) — and every adopter must be named invisible. Without this
 # case, (a) proves nothing: a visibility check that always passes is green too.
 # The repo set and both counts are DERIVED from adopters.yaml, never hard-coded, so
 # this case tracks the adoption state instead of going stale — and silently
 # vacuous — the next time a repo renames its descriptor.
-echo "-- (b) negative control: drop the hugmesh-deploy.yaml filter (the shipped bug) --"
+echo "-- (b) negative control: generators filter on an old name only (the shipped bug) --"
 T="$(stage nohug)"
-drop_filter "${T}" specs/cluster/apps/13-service-catalog.yaml hugmesh-deploy.yaml \
-  && drop_filter "${T}" templates/apps/13d-brand-repos.yaml.hbs hugmesh-deploy.yaml \
+rename_filter "${T}" specs/cluster/apps/13-service-catalog.yaml hugmesh-deploy.yaml exampleorg-deploy.yaml \
+  && rename_filter "${T}" templates/apps/13d-brand-repos.yaml.hbs hugmesh-deploy.yaml exampleorg-deploy.yaml \
   || bad "(b) injection itself failed"
 synth_siblings "${T}" "${W}/sib-nohug"
 run_gate "${T}" "${W}/sib-nohug"
 [ "${RC}" -eq 1 ] \
-  && ok "legacy-name-only generators exit 1 (FAIL), not 0/3" \
-  || bad "legacy-name-only generators exited ${RC} — the visibility check is vacuous"
+  && ok "old-name-only generators exit 1 (FAIL), not 0/3" \
+  || bad "old-name-only generators exited ${RC} — the visibility check is vacuous"
 grep -qF "[FAIL] [adopter-visibility]" "${W}/out" \
   && ok "the FAIL is reported under [adopter-visibility]" \
   || bad "the FAIL is not reported under [adopter-visibility]"
@@ -256,33 +291,41 @@ grep -q "${NEWCOUNT} adopting repo(s) are INVISIBLE" "${W}/out" \
   && ok "the FAIL counts exactly the ${NEWCOUNT} invisible repos" \
   || bad "the FAIL does not count the invisible repos correctly: $(grep INVISIBLE "${W}/out")"
 
-# ── (c) NEGATIVE CONTROL: the mirror image — legacy repos must not be dropped ─
-# Proves the LEGACY_COMPAT filter entry is load-bearing, not decoration: removing
-# the pre-rebrand name breaks every adopter still carrying it on disk. This case
-# must keep passing until adopters.yaml registers none — at which point the legacy
-# filter entry, and this case with it, can go.
-echo "-- (c) negative control: drop the LEGACY_COMPAT snapdragon-deploy.yaml filter --"
+# ── (c) NEGATIVE CONTROL: an adopter on a spelling no filter accepts ─────────
+# The mirror image of (b): the generators are right, but ONE registered adopter
+# ships a second descriptor spelling. It must be named invisible — a second
+# spelling needs its own filter entry in BOTH generators, never silence.
+echo "-- (c) negative control: a registered adopter ships a spelling no filter accepts --"
 T="$(stage nosnap)"
-drop_filter "${T}" specs/cluster/apps/13-service-catalog.yaml snapdragon-deploy.yaml \
-  && drop_filter "${T}" templates/apps/13d-brand-repos.yaml.hbs snapdragon-deploy.yaml \
-  || bad "(c) injection itself failed"
+python3 - "${T}/specs/cluster/catalog/adopters.yaml" <<'PY'
+import sys
+p = sys.argv[1]
+s = open(p, encoding="utf-8").read()
+old = "    - repo: hugmesh-forum-bff-api\n      descriptor: hugmesh-deploy.yaml\n"
+new = "    - repo: hugmesh-forum-bff-api\n      descriptor: exampleorg-deploy.yaml\n"
+if old not in s:
+    sys.exit("injection failed: forum-bff-api adopter row not found verbatim")
+open(p, "w", encoding="utf-8").write(s.replace(old, new, 1))
+PY
+[ $? -eq 0 ] || bad "(c) injection itself failed"
 synth_siblings "${T}" "${W}/sib-nosnap"
 run_gate "${T}" "${W}/sib-nosnap"
 [ "${RC}" -eq 1 ] \
-  && ok "rebranded-name-only generators exit 1 (FAIL)" \
-  || bad "rebranded-name-only generators exited ${RC} — the legacy adopters are unprotected"
+  && ok "an adopter on an unfiltered spelling exits 1 (FAIL)" \
+  || bad "an adopter on an unfiltered spelling exited ${RC} — second-spelling adopters are unprotected"
 grep -qF "[FAIL] [adopter-visibility]" "${W}/out" \
   && ok "(c) the FAIL is reported under [adopter-visibility]" \
   || bad "(c) the FAIL is not reported under [adopter-visibility]"
-LEGACYCOUNT="$(registry_repos_with "${REPO}" snapdragon-deploy.yaml | grep -c .)"
-{ grep -q "${LEGACYCOUNT} adopting repo(s) are INVISIBLE" "${W}/out" && [ "${LEGACYCOUNT}" -gt 0 ]; } \
-  && ok "the FAIL counts exactly the ${LEGACYCOUNT} LEGACY_COMPAT adopter(s)" \
-  || bad "the FAIL does not count the legacy adopters (count=${LEGACYCOUNT}): $(grep INVISIBLE "${W}/out")"
+OTHERCOUNT="$(registry_repos_with "${T}" exampleorg-deploy.yaml | grep -c .)"
+{ grep -q "${OTHERCOUNT} adopting repo(s) are INVISIBLE" "${W}/out" && [ "${OTHERCOUNT}" -eq 1 ] \
+  && grep -qF -- "- hugmesh-forum-bff-api ships exampleorg-deploy.yaml; generators accept" "${W}/out"; } \
+  && ok "the FAIL names and counts exactly the 1 adopter on the unfiltered spelling" \
+  || bad "the FAIL does not name/count the unfiltered adopter (count=${OTHERCOUNT}): $(grep INVISIBLE "${W}/out")"
 
 # ── (d) only ONE generator fixed: the tenant catalog would still be broken ────
 echo "-- (d) generators out of lockstep (13d left on one name) --"
 T="$(stage lockstep)"
-drop_filter "${T}" templates/apps/13d-brand-repos.yaml.hbs hugmesh-deploy.yaml \
+add_filter "${T}" specs/cluster/apps/13-service-catalog.yaml exampleorg-deploy.yaml \
   || bad "(d) injection itself failed"
 synth_siblings "${T}" "${W}/sib-lockstep"
 run_gate "${T}" "${W}/sib-lockstep"
@@ -290,8 +333,8 @@ run_gate "${T}" "${W}/sib-lockstep"
   && ok "a one-sided fix exits 1 (FAIL)" \
   || bad "a one-sided fix exited ${RC} — every tenant would inherit the bug"
 if grep -qF "[FAIL] [appset-lockstep]" "${W}/out" \
-   && grep -qF "13-service-catalog=['hugmesh-deploy.yaml', 'snapdragon-deploy.yaml']" "${W}/out" \
-   && grep -qF "13d-brand-repos=['snapdragon-deploy.yaml']" "${W}/out"; then
+   && grep -qF "13-service-catalog=['exampleorg-deploy.yaml', 'hugmesh-deploy.yaml']" "${W}/out" \
+   && grep -qF "13d-brand-repos=['hugmesh-deploy.yaml']" "${W}/out"; then
   ok "the FAIL is reported under [appset-lockstep] with both name sets"
 else
   bad "the FAIL is not reported under [appset-lockstep] with both name sets"
@@ -307,13 +350,9 @@ import sys
 p = sys.argv[1]
 s = open(p, encoding="utf-8").read()
 old = ('          - repositoryMatch: "^hugmesh-"\n'
-       '            pathsExist: ["hugmesh-deploy.yaml", "deploy"]\n'
-       '          # LEGACY_COMPAT — pre-rebrand descriptor spelling, still shipped by\n'
-       '          # adopter repos this tree does not own. See catalog/adopters.yaml.\n'
-       '          - repositoryMatch: "^hugmesh-"\n'
-       '            pathsExist: ["snapdragon-deploy.yaml", "deploy"]\n')
+       '            pathsExist: ["hugmesh-deploy.yaml", "deploy"]\n')
 new = ('          - repositoryMatch: "^hugmesh-"\n'
-       '            pathsExist: ["hugmesh-deploy.yaml", "snapdragon-deploy.yaml", "deploy"]\n')
+       '            pathsExist: ["hugmesh-deploy.yaml", "exampleorg-deploy.yaml", "deploy"]\n')
 if old not in s:
     sys.exit("injection failed: filter block not found verbatim")
 open(p, "w", encoding="utf-8").write(s.replace(old, new, 1))
@@ -336,7 +375,7 @@ run_gate "${T}" "${W}/sib-drift"
   && ok "a drifted registry entry exits 1 (FAIL)" \
   || bad "a drifted registry entry exited ${RC} — the registry could go stale unnoticed"
 grep -qF "[FAIL] [registry-drift] hugmesh-user-bff-api:" "${W}/out" \
-   && grep -qF "actually ships ['snapdragon-deploy.yaml']" "${W}/out" \
+   && grep -qF "actually ships ['exampleorg-deploy.yaml']" "${W}/out" \
   && ok "the FAIL names the drifted repo and both filenames" \
   || bad "the FAIL does not name the drifted repo"
 

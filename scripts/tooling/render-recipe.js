@@ -44,8 +44,8 @@
 //   * a resolved path (realpath — symlinked parents included) escaping the
 //     target tree on either side;
 //   * a CONTRACT-DENYLISTED name on either side — hugmesh-deploy.yaml +
-//     .hugmesh-provenance.json + .hugmesh-mesh-admitted, and their LEGACY_COMPAT
-//     pre-rebrand spellings (renaming those breaks the 13d pathsExist discovery
+//     .hugmesh-provenance.json + .hugmesh-mesh-admitted (renaming those breaks
+//     the 13d pathsExist discovery
 //     filter, the provenance manifest's fixed name, and the publish
 //     launder-refusal stamp checks) plus their fail-closed siblings
 //     (.sig / base-origin / base-ref markers);
@@ -112,13 +112,6 @@ function renderGated(str, ctx, label) {
 // launder-refusal stamp + durable-marker reads. The base-origin/base-ref entries
 // are OUR outbound lineage markers — publish keys fail-closed behavior off their
 // exact names, so a recipe may never move them either.
-//
-// LEGACY_COMPAT: the pre-rebrand spellings stay in the SAME denylist. They are
-// still filtered on (13-service-catalog + 13d), still dual-READ by
-// provenance.sh / ingest-foreign-base.sh / publish-tenant-set.sh, and still
-// present on adopter repos' and other meshes' disks — so moving one silently
-// un-discovers a repo or orphans a signed envelope exactly as moving the new
-// name does. Retire an entry only once nothing in the fleet can still carry it.
 const RENAME_CONTRACT_DENYLIST = new Set([
   'hugmesh-deploy.yaml',
   '.hugmesh-provenance.json',
@@ -126,11 +119,6 @@ const RENAME_CONTRACT_DENYLIST = new Set([
   '.hugmesh-mesh-admitted',
   '.hugmesh-base-origin.json',
   '.hugmesh-base-ref',
-  // ── LEGACY_COMPAT (pre-rebrand spellings, still live on disk elsewhere) ──
-  'snapdragon-deploy.yaml',
-  '.snapdragon-provenance.json',
-  '.snapdragon-provenance.json.sig',
-  '.snapdragon-mesh-admitted',
 ]);
 
 // DECLARED contracts, from any scripts/tooling/tokens.json block carrying a

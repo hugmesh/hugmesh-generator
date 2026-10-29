@@ -1,4 +1,4 @@
-"""The SAVED MESHES table + 'Save this mesh' on the local-mesh page (ask C).
+"""The SAVED MESHES table + the Actions-row 'Save current mesh' (formerly 'Save this mesh') on the local-mesh page (ask C).
 
 Headless (QT_QPA_PLATFORM=offscreen); every docker/git override point is faked the way
 test_localmesh_page_entry_offthread.py fakes them, so nothing here shells out.
@@ -23,6 +23,7 @@ pytest.importorskip("hugmesh_studio.gui.qt",
 from hugmesh_studio.core import local_mesh_bootstrap as lmb          # noqa: E402
 from hugmesh_studio.core import saved_meshes as sm                   # noqa: E402
 from hugmesh_studio.core import vaults                               # noqa: E402
+from hugmesh_studio.core.domain_services import normalise_slugs     # noqa: E402
 from hugmesh_studio.core.local_services import local_slugs           # noqa: E402
 from hugmesh_studio.core.mesh_node import MeshNode, MeshStatus       # noqa: E402
 from hugmesh_studio.gui.pages import localmesh as localmesh_mod      # noqa: E402
@@ -159,25 +160,43 @@ def _select(page, row=0):
 def test_apply_bootstrap_round_trips_collect_bootstrap(qapp, page, tmp_path):
     """THE fidelity test: every page-owned field non-default, including the
     None-vs-() distinction for services/kind_addons."""
-    page.login_theme.primary.setText("#123456")
-    page.login_theme.secondary.setText("#654321")
-    css = page.login_theme.compose_css()
-    assert css and not page.login_theme.error_text()
+    look = page.mesh_look()                     # row 0's Look tab edits this model
+    look.set("primary", "#123456")
+    look.set("secondary", "#654321")
+    css, err = page.look_css_and_error()
+    assert css and not err
     form = page.theme_form()
+    # the whole look the stylesheet is made from, which a record now carries too
+    # (the front door composes a domain's own look over it)
+    whole = dict(look.record())
+    assert whole == {"primary": "#123456", "secondary": "#654321"}
     svcs = tuple(s for s in local_slugs() if s != "egress-vpn")
     cfg = lmb.LocalMeshBootstrapConfig(
         env="prod", superadmin_username="root", social="tuwunel" in svcs,
         with_tor="tor" in svcs, services=svcs, cluster_domain="example.org",
         login_server="https://hs.example.org", brand="acme-x",
         source_mode="existing", source_dir=str(tmp_path), web_locales=("de", "fr"),
-        login_theme_css=css, idp="oidc", idp_issuer="https://id.example.org",
+        login_theme_css=css, login_look=whole, idp="oidc",
+        idp_issuer="https://id.example.org",
         idp_client_id="cid", idp_jwks="https://id.example.org/jwks",
         kind_addons=())
-    # scramble the theme first so the round-trip has to restore it
-    page.login_theme.primary.setText("")
+    # scramble the look first so the round-trip has to restore it (the brand is
+    # changed by the record, so the session — and its look — is a new one anyway)
+    look.set("primary", "")
     missing = page.apply_bootstrap(cfg, form=form)
     assert missing == ["auth_key"]
-    assert page.collect_bootstrap() == cfg
+    # The record's DOMAIN services land on the mesh's own domain row (the retired
+    # "Local services" pick, 2026-10-21) — exactly what the loader's own migration
+    # makes of the same record — and the mesh still runs every one of them.
+    want = lmb.LocalMeshBootstrapConfig.from_dict(cfg.to_dict())
+    # (the Domain services step keeps a row's slugs in CATALOGUE order, never the
+    # order a selection listed them in — core/domain_services.normalise_slugs)
+    want.domains = tuple(dict(r, optional_services=normalise_slugs(
+        r.get("optional_services"))) for r in want.domains)
+    got = page.collect_bootstrap()
+    assert got == want
+    assert set(got.effective_services()) == set(svcs)
+    assert got.login_theme_css == css
     # …and the other direction of the two tuple fields
     cfg2 = lmb.LocalMeshBootstrapConfig(services=(), kind_addons=("metrics-server",))
     page.apply_bootstrap(cfg2, form={})
@@ -194,25 +213,45 @@ def test_apply_bootstrap_restores_the_web_chrome_the_record_carries(qapp, page):
     DIFFERENT login page, and _not_applied_text still said "every field applied".
     This test sets two chrome inputs, scrambles them, and requires the record
     to bring them — and the identical derived css — back."""
-    g = page.login_theme
-    g.primary.setText("#123456")
-    g.secondary.setText("#654321")
-    g.set_chrome("header_hidden", True)
-    g.set_chrome("footer_bg", "#101010")
-    css = g.compose_css()
-    assert css and not g.error_text()
+    g = page.mesh_look()                        # row 0's Look tab edits this model
+    g.set("primary", "#123456")
+    g.set("secondary", "#654321")
+    g.set("header_hidden", True)
+    g.set("footer_bg", "#101010")
+    css, err = page.look_css_and_error()
+    assert css and not err
     form = page.theme_form()
     assert form["login_header_hidden"] is True and form["login_footer_bg"] == "#101010"
     cfg = lmb.LocalMeshBootstrapConfig(login_theme_css=css)
     # scramble the chrome so the round-trip has to restore it — and prove the
     # scramble changed the derived css, or the equality below proves nothing
-    g.set_chrome("header_hidden", False)
-    g.set_chrome("footer_bg", "")
-    assert g.compose_css() != css
+    g.set("header_hidden", False)
+    g.set("footer_bg", "")
+    assert page.look_css_and_error()[0] != css
     missing = page.apply_bootstrap(cfg, form=form)
     assert "login_theme_css" not in missing
-    assert g.chrome["header_hidden"] is True
-    assert g.chrome["footer_bg"] == "#101010"
+    eff = page.mesh_look().effective()
+    assert eff["header_hidden"] is True
+    assert eff["footer_bg"] == "#101010"
+    assert page.collect_bootstrap().login_theme_css == css
+
+
+def test_an_older_record_form_without_look_still_loads_its_login_inputs(qapp, page):
+    """A record saved before the Themes group was retired carries ONLY the seventeen
+    login_* inputs (no ``look`` key). They still load — into the mesh's own look, which
+    row 0's Look tab now edits — and derive the same stylesheet."""
+    g = page.mesh_look()
+    g.set("primary", "#123456")
+    g.set("footer_bg", "#101010")
+    css = page.look_css_and_error()[0]
+    old_form = {k: v for k, v in page.theme_form().items() if k != "look"}
+    assert set(old_form) == set(localmesh_mod._THEME_FORM_DEFAULTS)
+    g.set("primary", "")
+    g.set("footer_bg", "")
+    missing = page.apply_bootstrap(lmb.LocalMeshBootstrapConfig(login_theme_css=css),
+                                   form=old_form)
+    assert "login_theme_css" not in missing
+    assert page.mesh_look().effective()["primary"] == "#123456"
     assert page.collect_bootstrap().login_theme_css == css
 
 
@@ -248,10 +287,15 @@ def test_apply_bootstrap_refreshes_the_plan_once(qapp, page, monkeypatch):
 
 
 # ── the section ───────────────────────────────────────────────────────────────
-def test_saved_section_is_collapsed_when_there_are_no_records(qapp, page):
+def test_saved_section_is_open_at_zero_records_because_it_holds_the_save(qapp, page):
+    """It USED to fold away at zero records. Since 2026-10-21 the section also holds
+    the 'Save current mesh' strip, and a fold there hid the one place to save a mesh
+    nobody had saved yet — exactly what the operator reported ("Saved meshes screen
+    does not give anywhere to save the mesh we just started working on")."""
     page.initializePage()
     assert page.saved_meshes.record_count() == 0
-    assert not page.saved_section.is_expanded()
+    assert page.saved_section.is_expanded()
+    assert page.saved_meshes.save_btn.isEnabled(), page.saved_meshes.save_btn.toolTip()
     # It sits BEFORE the Actions row — the operator asked for the saved-mesh table to
     # be in front of them when they go to generate a new mesh. Issue #334 split the two
     # into separate sections (and separate wizard steps), so the ordering is now
@@ -262,15 +306,16 @@ def test_saved_section_is_collapsed_when_there_are_no_records(qapp, page):
     idx = [body.indexOf(page.sections["review"]), body.indexOf(page.sections["bringup"])]
     assert idx[0] >= 0 and idx[1] >= 0 and idx[0] < idx[1]
     assert page.sections["review"].layout().indexOf(page.saved_section) >= 0
-    assert page.sections["bringup"].layout().indexOf(
-        page.boot_start_btn.parentWidget()) >= 0
+    # the Actions part (the flow box plus the status line's copy above it)
+    assert page.sections["bringup"].layout().indexOf(page.actions_box) >= 0
+    assert page.actions_box.isAncestorOf(page.boot_start_btn)
     _settle(qapp, page)
 
 
 def test_zero_records_shows_the_grey_note_not_a_hidden_widget(qapp, page):
     page.initializePage()
     assert not page.saved_meshes.empty_note.isHidden()
-    assert "Save this mesh" in page.saved_meshes.empty_note.text()
+    assert "Save current mesh" in page.saved_meshes.empty_note.text()
     page.saved_section.set_expanded(True)
     assert not page.saved_meshes.isHidden(), "the widget hid itself at zero rows"
     _settle(qapp, page)
@@ -300,20 +345,29 @@ def test_a_manual_fold_survives_a_page_revisit(qapp, page):
 
 
 # ── Save ──────────────────────────────────────────────────────────────────────
-def test_save_button_is_disabled_when_no_mesh_is_running(qapp, page):
-    page._mesh_up = False
-    page._set_verbs_enabled(True)
-    assert not page.save_mesh_btn.isEnabled()
-    assert "no local mesh is running" in page.save_mesh_btn.toolTip()
-    page._mesh_up = None
-    page._set_verbs_enabled(True)
-    assert not page.save_mesh_btn.isEnabled()
-    assert "Checking" in page.save_mesh_btn.toolTip()
+def test_save_needs_no_running_mesh_but_the_copy_box_does(qapp, page):
+    """The Actions row's save was greyed until a mesh was RUNNING, so a mesh being
+    worked on could not be saved at all (operator, 2026-10-21). Saving is now gated
+    by a running VERB only; copying credential files still needs a mesh that is up,
+    because the files on disk belong to whatever mesh last ran."""
+    for up in (False, None):
+        page._mesh_up = up
+        page._set_verbs_enabled(True)
+        assert page.save_mesh_btn.isEnabled(), f"_mesh_up={up}"
+        assert page.save_mesh_btn.text() == "Save current mesh"
+        assert "does not need the mesh to be running" in page.save_mesh_btn.toolTip()
+        assert not page.save_copy_creds.isEnabled(), f"_mesh_up={up}"
+        assert "POINTERS" in page.save_copy_creds.toolTip()
     page._mesh_up = True
     page._set_verbs_enabled(True)
-    assert page.save_mesh_btn.isEnabled()
+    assert page.save_mesh_btn.isEnabled() and page.save_copy_creds.isEnabled()
     assert "NOT saved" in page.save_mesh_btn.toolTip()
     assert not page.save_copy_creds.isChecked(), "credential copying must default OFF"
+    page._running = True
+    page._sync_saved_gate()
+    assert not page.save_mesh_btn.isEnabled()
+    assert "verb is running" in page.save_mesh_btn.toolTip()
+    page._running = False
     _settle(qapp, page)
 
 
@@ -727,4 +781,26 @@ def test_an_agreeing_save_leaves_no_warning_note(qapp, page, monkeypatch):
     page.save_mesh_btn.click()
     _settle(qapp, page)
     assert "WARNING" not in page.log.toPlainText()
-    assert page.saved_meshes.note.isHidden() or not page.saved_meshes.note.text()
+    note = page.saved_meshes.note.text()
+    assert "not the one running now" not in note and "env=" not in note
+
+
+def test_the_saved_column_shows_the_last_save_after_an_overwrite(qapp, page):
+    """An Overwrite keeps `created` and moves `updated`; the table shows the LAST
+    save, as the node-image picker does (saved-meshes skeptic 3, 2026-10-21: the
+    table said the creation stamp while the picker said the overwrite's)."""
+    rec = _record("lab mesh", created="2026-10-14T09:00:00-07:00")
+    fresh = _record("fresh one")
+    page.initializePage()
+    _settle(qapp, page)
+    table = page.saved_meshes.table
+    rows = {table.item(i, smw._SM_COL_MESH).text(): i for i in range(table.rowCount())}
+    cell = table.item(rows["lab mesh"], smw._SM_COL_SAVED)
+    on_disk = sm.load(rec.path())
+    assert on_disk.created.startswith("2026-10-14T09:00")
+    assert cell.text() == on_disk.updated[:16].replace("T", " ") + " (re-saved)"
+    assert "first saved 2026-10-14T09:00" in cell.toolTip()
+    # a record saved once reads plainly: no "(re-saved)"
+    plain = table.item(rows["fresh one"], smw._SM_COL_SAVED).text()
+    assert "re-saved" not in plain and plain == sm.load(fresh.path()).updated[:16] \
+        .replace("T", " ")
