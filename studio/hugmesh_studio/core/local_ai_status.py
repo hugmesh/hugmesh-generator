@@ -51,13 +51,16 @@ __all__ = [
     "DEFAULT_HOST", "DEFAULT_MODEL", "DOC", "STALE_AFTER", "LocalAIError", "NotLoopback",
     "Job", "Snapshot", "StartResult", "state_dir", "ollama_host", "base_url",
     "read_snapshot", "summary_line", "send_prompt", "pick_model", "write_status",
-    "start_assistant", "chat_loop", "format_status", "commands",
+    "start_assistant", "chat_loop", "format_status", "commands", "GROUNDED_ENV",
 ]
 
 STATE_ENV = "HUGMESH_LOCAL_AI_DIR"
 HOST_ENV = "OLLAMA_HOST"
 MODEL_ENV = "LOCAL_AI_MODEL"
 CTX_ENV = "LOCAL_AI_CTX"
+#: Set by scripts/local-ai.sh prompt|chat: a bare ``send_prompt`` call is then grounded
+#: in the primer, the docs and a command-line "where" (core/assistant_prompt).
+GROUNDED_ENV = "LOCAL_AI_GROUNDED"
 
 DEFAULT_HOST = "127.0.0.1:11434"
 DEFAULT_MODEL = "qwen3:8b"
@@ -676,6 +679,17 @@ def send_prompt(text: str, model: str | None = None, *, env: dict | None = None,
         except _NOT_ANSWERING:
             raise LocalAIError(_down_message(env)) from None
         model = pick_model(env, pulled)
+    # GROUNDED (LOCAL_AI_GROUNDED=1): a bare call with no system message gets the
+    # assistant's own one — the primer, the rules, a command-line "where", the docs
+    # snippets for the question — and the Sources footer is appended to the answer
+    # (and sent through on_chunk once the stream is done). ``system=""`` always means
+    # no system message, and a caller that passes its own is never grounded twice.
+    grounded = None
+    if system is None and _grounded(env):
+        from . import assistant_prompt as ap
+        grounded = ap.build(text, ap.Where(face="cli"), list(history or []), env=dict(env))
+        system = grounded.system
+        history = grounded.history
     messages = ([{"role": "system", "content": system}] if system else []) \
         + list(history or []) + [{"role": "user", "content": text}]
     opts = {"num_ctx": num_ctx, "temperature": 0.2}
@@ -738,7 +752,19 @@ def send_prompt(text: str, model: str | None = None, *, env: dict | None = None,
         # and raises nothing. Ollama ends every answer with a ``done`` line, so a stream
         # without one was cut, and a truncated answer must not pass for a whole one.
         raise LocalAIError(cut.format(n=len("".join(out).split())))
+    if grounded is not None:
+        from . import assistant_prompt as ap
+        footer = ap.after_answer("".join(out), grounded)
+        if footer:
+            tail = "\n\n" + footer
+            out.append(tail)
+            if on_chunk is not None:
+                on_chunk(tail)
     return "".join(out)
+
+
+def _grounded(env: dict) -> bool:
+    return (env.get(GROUNDED_ENV) or "").strip() in ("1", "true", "yes", "on")
 
 
 # ── starting the assistant ───────────────────────────────────────────────────────────
@@ -796,8 +822,12 @@ def chat_loop(inp, out, env: dict | None = None, model: str | None = None) -> in
         return 1
     history: list = []
     shown = model or env.get(MODEL_ENV) or DEFAULT_MODEL
+    grounded = _grounded(env)
+    slug = ""
     print(f"Local AI chat with {shown}. Everything stays on this machine. "
-          "/clear forgets the conversation, /quit leaves.", file=out)
+          "/clear forgets the conversation, /quit leaves"
+          + (", /where <page> sets the page the answers are about." if grounded else "."),
+          file=out)
     while True:
         out.write("> ")
         out.flush()
@@ -812,11 +842,25 @@ def chat_loop(inp, out, env: dict | None = None, model: str | None = None) -> in
             history.clear()
             print("(forgotten)", file=out)
             continue
+        if line.startswith("/where"):
+            slug = line[len("/where"):].strip()
+            print(f"(page: {slug or 'none'})", file=out)
+            continue
         if not line:
             continue
         try:
-            answer = send_prompt(line, model, env=env, history=history,
-                                 on_chunk=lambda c: (out.write(c), out.flush()))
+            if grounded:
+                from . import assistant_prompt as ap
+                where = ap.Where(face="cli", slug=slug, title=slug.replace("_", " ").title()
+                                 if slug else "", question=line)
+                answer, prompt = ap.answer(line, where, history, env=dict(env), model=model,
+                                           on_chunk=lambda c: (out.write(c), out.flush()))
+                footer = ap.after_answer(answer, prompt)
+                if footer:
+                    out.write("\n" + footer)
+            else:
+                answer = send_prompt(line, model, env=env, history=history,
+                                     on_chunk=lambda c: (out.write(c), out.flush()))
         except LocalAIError as exc:
             print(f"\n{exc}", file=out)
             continue
@@ -877,8 +921,37 @@ def main(argv: list | None = None, *, out=None, err=None, inp=None) -> int:
         pid = int(args[0]) if args and args[0].isdigit() else os.getpid()
         write_status(pid, args[1] if len(args) > 1 else "")
         return 0
+    if cmd == "catalogue":                                   # model-free: every option, from the code
+        from . import assistant_catalogue as acat
+        scope = args[0] if args else None
+        if scope and scope not in acat.SCOPES:
+            print(f"usage: catalogue [{'|'.join(acat.SCOPES)}]", file=err)
+            return 2
+        print(acat.catalogue_text(scope), file=out, end="")
+        return 0
+    if cmd == "docs":                                        # model-free: what the docs say
+        from . import assistant_docs as adocs, assistant_prompt as ap
+        slug = next((a.split("=", 1)[1] for a in args if a.startswith("--page=")), "")
+        question = " ".join(a for a in args if not a.startswith("--page="))
+        if not question.strip():
+            print("usage: docs [--page=SLUG] QUESTION", file=err)
+            return 2
+        where = ap.Where(face="cli", slug=slug, title=slug.replace("_", " ").title() if slug else "")
+        try:
+            idx = adocs.load_index()
+        except Exception as exc:                             # noqa: BLE001 — a sentence, not a trace
+            print(f"could not read the docs: {exc}", file=err)
+            return 1
+        chunks = adocs.retrieve(question, where, index=idx)
+        for c in chunks:
+            print(f"[doc: {c.label}]", file=out)
+            print(c.text.strip(), file=out)
+            print(file=out)
+        print(adocs.sources_line(chunks, index=idx), file=out)
+        return 0
     print("usage: local_ai_status [status [--json] | prompt TEXT | chat | host | dir | "
-          "ping | write-status PID [JOB]]", file=err)
+          "ping | write-status PID [JOB] | catalogue [domain|mesh|image] | docs QUESTION]",
+          file=err)
     return 2
 
 
