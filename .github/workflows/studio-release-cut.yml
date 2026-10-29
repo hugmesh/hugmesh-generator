@@ -1,0 +1,437 @@
+# Cut a Studio release — THE one way to release the HugMesh Image Studio.
+#
+# HOW TO RELEASE, in one line: `scripts/release-studio.sh 0.3.0-beta.2` on a terminal,
+# or Actions > "Cut a Studio release" > Run workflow > version = 0.3.0-beta.2 > Run.
+# Nothing else. This workflow then (1) commits the bump of __version__ to main,
+# (2) creates the tag studio-v<version> ON GITHUB (never on an operator machine), and
+# (3) dispatches studio-release.yml on that tag with publish=true, which builds, signs
+# and publishes on GitHub-hosted runners. The cut run's summary links the release run.
+#
+# WHY A SEPARATE WORKFLOW. studio-release.yml must run ON the tag ref, so that the
+# cosign certificate identity and the attestation source-ref are
+# .../studio-release.yml@refs/tags/studio-v<version>, exactly what the release notes
+# tell users to verify against. A tag created with GITHUB_TOKEN fires no push
+# workflow (GitHub's no-cascade rule), so this workflow starts the publishing run
+# itself with `gh workflow run --ref refs/tags/...` (workflow_dispatch is the one event
+# GITHUB_TOKEN may start). Exactly one publishing run results.
+#
+# THE BUMP COMMIT TRIGGERS NO CI. A push made with GITHUB_TOKEN starts no workflow, so
+# the bump must never grow beyond the two files release_version.py edits
+# (studio/hugmesh_studio/__init__.py and the Flatpak metainfo); this workflow runs the
+# release guard tests itself, against the tree that will execute, before anything is
+# committed or tagged.
+#
+# IDEMPOTENT, so "run the same command again" is the universal retry: main already at
+# the version -> no bump; the tag already at that commit -> kept; the tag elsewhere
+# with no release published -> moved (loudly); the release present -> stop, unless
+# republish was asked for. Nothing here ever deletes anything.
+#
+# REPUBLISH (opt-in, loud). Ticking `republish` and typing the version into `confirm`
+# dispatches the publishing run on the EXISTING tag: its files are rebuilt from that
+# commit and the release's same-named assets are REPLACED, so every checksum,
+# signature and attestation changes and anyone who already downloaded can no longer
+# verify what they have. The tag is never moved (a published tag is a coordinate that
+# users' verify commands name). A wrong build gets a new beta N, not a republish.
+#
+# PERMISSIONS. The whole file is contents: read. Only the `cut` job holds
+# contents: write (the bump commit and the tag) and actions: write (the dispatch); it
+# has NO id-token and NO attestations: nothing here can sign. Signing stays in
+# studio-release.yml's publish job and nowhere else.
+name: Cut a Studio release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'MAJOR.MINOR.PATCH or MAJOR.MINOR.PATCH-beta.N, e.g. 0.3.0-beta.2'
+        type: string
+        required: true
+      republish:
+        description: 'REPLACE the files of the existing studio-v<version> release with new bytes. Every checksum, signature and attestation changes and anyone who already downloaded can no longer verify what they have. Requires confirm. The normal path is the next beta N.'
+        type: boolean
+        default: false
+      confirm:
+        description: 'Type the version again. Required when republish is ticked.'
+        type: string
+        default: ''
+      dry_run:
+        description: 'Preflight only: check everything and write the plan; create and change nothing.'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: studio-release-cut
+  # Two cuts at once could bump main twice or tag the wrong commit; the second waits.
+  cancel-in-progress: false
+
+env:
+  VERSION: ${{ inputs.version }}
+  REPUBLISH: ${{ inputs.republish }}
+  CONFIRM: ${{ inputs.confirm }}
+  DRY_RUN: ${{ inputs.dry_run }}
+
+jobs:
+  preflight:
+    # Read-only, no permissions block (inherits contents: read). Decides everything;
+    # the cut job below only executes the plan this job wrote.
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      sha: ${{ steps.main.outputs.sha }}
+      bump_needed: ${{ steps.main.outputs.bump_needed }}
+      tag_state: ${{ steps.probe.outputs.tag_state }}
+      tag_sha: ${{ steps.probe.outputs.tag_sha }}
+      release_state: ${{ steps.probe.outputs.release_state }}
+    steps:
+      - name: Refuse any ref but main
+        env:
+          REF: ${{ github.ref }}
+        run: |
+          if [ "$REF" != "refs/heads/main" ]; then
+            echo "::error::a Studio release is cut from main only, not from $REF"
+            exit 1
+          fi
+
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+        with:
+          ref: main
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5.6.0
+        with:
+          python-version: '3.12'
+
+      - name: Install the test dependencies studio-tests.yml's pytest job uses
+        run: python -m pip install --upgrade pip pytest PyYAML jsonschema cryptography
+
+      - name: Validate the version (format and MSI mapping)
+        run: python3 studio/packaging/release_version.py validate "$VERSION"
+
+      - name: Look at what already exists (release, tag, runs in progress)
+        # Fail-closed, like studio-release.yml's own check: only gh's "release not
+        # found" counts as absent; any other failure stops the run, never guesses.
+        # A matching-refs lookup is a PREFIX match (studio-v0.3.0-beta.1 also returns
+        # studio-v0.3.0-beta.10), so the exact ref is selected, and an annotated tag's
+        # object sha is dereferenced to its commit before anything compares it.
+        id: probe
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          R="$GITHUB_REPOSITORY"
+          tag="studio-v$VERSION"
+
+          if out=$(gh release view "$tag" --repo "$R" --json tagName,assets 2>&1); then
+            summary=$(printf '%s' "$out" | python3 -c 'import json,sys
+          try:
+              assets = json.load(sys.stdin).get("assets") or []
+              print(len(assets), max((a.get("updatedAt") or "?" for a in assets), default="?"))
+          except Exception:
+              print("? ?")')
+            release_state="present(${summary%% *} assets, newest ${summary#* })"
+          else
+            case "$out" in
+              *"release not found"*) release_state="absent" ;;
+              *) echo "::error::could not tell whether release $tag exists: $out"; exit 1 ;;
+            esac
+          fi
+
+          if ! refs=$(gh api "repos/$R/git/matching-refs/tags/$tag" --jq ".[] | select(.ref == \"refs/tags/$tag\") | .object.type + \" \" + .object.sha" 2>&1); then
+            echo "::error::could not list tags: $refs"; exit 1
+          fi
+          if [ -z "$refs" ]; then
+            tag_state="absent"; tag_sha=""
+          else
+            kind=${refs%% *}; tag_sha=${refs#* }
+            if [ "$kind" = "tag" ]; then
+              if ! tag_sha=$(gh api "repos/$R/git/tags/$tag_sha" --jq .object.sha 2>&1); then
+                echo "::error::could not dereference annotated tag $tag: $tag_sha"; exit 1
+              fi
+            fi
+            tag_state="present@$tag_sha"
+          fi
+
+          for status in in_progress queued; do
+            if ! busy=$(gh run list --repo "$R" --workflow studio-release.yml --branch "$tag" --status "$status" --json databaseId --jq length 2>&1); then
+              echo "::error::could not list runs: $busy"; exit 1
+            fi
+            if [ "$busy" != "0" ]; then
+              echo "::error::a studio-release.yml run on $tag is $status; wait for it to finish (Actions > Studio release), then run again"
+              exit 1
+            fi
+          done
+
+          if [ "$REPUBLISH" = "true" ]; then
+            if [ "$release_state" = "absent" ]; then
+              echo "::error::republish was requested but release $tag does not exist; run a normal release"
+              exit 1
+            fi
+            if [ "$CONFIRM" != "$VERSION" ]; then
+              echo "::error::republish replaces every file of $tag; type the version into confirm to say you mean it"
+              exit 1
+            fi
+            if [ "$tag_state" = "absent" ]; then
+              echo "::error::release $tag exists but its tag does not; nothing can be rebuilt from it"
+              exit 1
+            fi
+            echo "::warning::REPUBLISHING $tag: its files will be replaced ($release_state); every checksum, signature and attestation changes"
+          else
+            if [ "$release_state" != "absent" ]; then
+              echo "::error::release $tag already exists; nothing was changed. To replace its files on purpose (every checksum changes): scripts/release-studio.sh $VERSION --republish, or tick republish and type the version into confirm"
+              exit 1
+            fi
+            if ! all=$(gh api "repos/$R/git/matching-refs/tags/studio-v" --jq '.[].ref' 2>&1); then
+              echo "::error::could not list tags: $all"; exit 1
+            fi
+            # Every existing tag EXCEPT this version's own: with no release behind it
+            # (checked above) that tag is the "build failed, run again" case.
+            all=$(printf '%s\n' "$all" | grep -vx "refs/tags/$tag" || true)
+            # shellcheck disable=SC2086  # the refs are one per line and contain no spaces
+            python3 studio/packaging/release_version.py validate "$VERSION" --after-tags $all
+          fi
+
+          {
+            echo "release_state=$release_state"
+            echo "tag_state=$tag_state"
+            echo "tag_sha=$tag_sha"
+          } >> "$GITHUB_OUTPUT"
+          echo "release: $release_state; tag: $tag_state"
+
+      - name: Read main and decide the bump
+        # Normal cut only. main's __version__ must be the version or sort before it;
+        # main already past the version means somebody released or bumped meanwhile.
+        # A tag at another commit does not block when no release exists: the cut
+        # moves it to the bump commit (nothing published references it) and says so.
+        id: main
+        if: ${{ !inputs.republish }}
+        env:
+          TAG_STATE: ${{ steps.probe.outputs.tag_state }}
+          TAG_SHA: ${{ steps.probe.outputs.tag_sha }}
+        run: |
+          sha=$(git rev-parse HEAD)
+          current=$(python3 studio/packaging/release_version.py current)
+          case "$(python3 studio/packaging/release_version.py compare "$current" "$VERSION")" in
+            eq) bump_needed=false ;;
+            lt) bump_needed=true ;;
+            gt) echo "::error::main is already at $current, which is later than $VERSION; choose a later version"; exit 1 ;;
+            *) echo "::error::could not compare $current with $VERSION"; exit 1 ;;
+          esac
+          {
+            echo "sha=$sha"
+            echo "bump_needed=$bump_needed"
+          } >> "$GITHUB_OUTPUT"
+          echo "main is at $sha with __version__ $current; bump needed: $bump_needed"
+          if [ "$TAG_STATE" = "absent" ]; then
+            echo "tag studio-v$VERSION: will be created"
+          elif [ "$TAG_STATE" = "present@$sha" ] && [ "$bump_needed" = "false" ]; then
+            echo "tag studio-v$VERSION: already at main's head; kept"
+          else
+            echo "::warning::tag studio-v$VERSION exists at $TAG_SHA (never published); it will be MOVED to the bump commit"
+          fi
+
+      - name: Check out the tag that will be rebuilt
+        # Republish only: the workflow file at the TAG's commit is the one that will
+        # execute, so the tests and the input check below look at that tree, not main.
+        if: ${{ inputs.republish }}
+        run: git -c advice.detachedHead=false checkout "refs/tags/studio-v$VERSION"
+
+      - name: The workflow file at the tag must know republish
+        # Releases cut before the republish input existed (studio-v0.3.0-beta.1, whose
+        # workflow copy is b7edc89c) cannot be re-published through this path: the
+        # dispatch would pass an input that file does not declare, and a bare
+        # publish=true dispatch on that tag would replace its files silently.
+        if: ${{ inputs.republish }}
+        run: |
+          if ! python3 - .github/workflows/studio-release.yml <<'PY'
+          import sys, yaml
+          doc = yaml.safe_load(open(sys.argv[1]))
+          on = doc.get("on", doc.get(True)) or {}
+          inputs = (on.get("workflow_dispatch") or {}).get("inputs") or {}
+          sys.exit(0 if "republish" in inputs else 1)
+          PY
+          then
+            echo "::error::the workflow file at tag studio-v$VERSION predates the republish input; this release cannot be re-published through this path (see docs/STUDIO-INSTALLERS.md, 'Releases cut before the republish input')"
+            exit 1
+          fi
+
+      - name: Apply the bump to the working tree (not committed here)
+        if: ${{ !inputs.republish && steps.main.outputs.bump_needed == 'true' }}
+        run: python3 studio/packaging/release_version.py bump "$VERSION"
+
+      - name: Run the release guard tests against the tree that will execute
+        # These parse studio-release.yml, so a hand edit like 8319b5c6 (the deleted
+        # tag gate) turns this run RED before any tag exists.
+        run: python -m pytest -q -p no:cacheprovider studio/tests/test_studio_beta_version.py studio/tests/test_studio_release_signing.py
+
+      - name: actionlint the release workflow that will execute, and this one
+        # The image is pinned by digest (rhysd/actionlint:1.7.7 as resolved on
+        # 2026-10-28), the same version the guard tests are run against locally.
+        run: |
+          docker run --rm -v "$PWD":/repo -w /repo \
+            rhysd/actionlint@sha256:887a259a5a534f3c4f36cb02dca341673c6089431057242cdc931e9f133147e9 \
+            -no-color .github/workflows/studio-release.yml .github/workflows/studio-release-cut.yml
+
+      - name: Write the plan
+        env:
+          SHA: ${{ steps.main.outputs.sha }}
+          BUMP_NEEDED: ${{ steps.main.outputs.bump_needed }}
+          TAG_STATE: ${{ steps.probe.outputs.tag_state }}
+          TAG_SHA: ${{ steps.probe.outputs.tag_sha }}
+          RELEASE_STATE: ${{ steps.probe.outputs.release_state }}
+          HAS_SITE_TOKEN: ${{ secrets.SITE_DISPATCH_TOKEN != '' }}
+        run: |
+          tag="studio-v$VERSION"
+          if [ "$DRY_RUN" = "true" ]; then head="## What a real run WOULD do (dry run: nothing was created or changed)"; else head="## What this run WILL do"; fi
+          if [ "$REPUBLISH" = "true" ]; then
+            bump="no (republish)"
+            tagline="untouched (republish rebuilds from the existing tag at $TAG_SHA)"
+            release="REPLACE the files of $tag ($RELEASE_STATE): every checksum, signature and attestation changes"
+          else
+            if [ "$BUMP_NEEDED" = "true" ]; then bump="yes: commit \"Studio $VERSION\" on main (parent $SHA)"; else bump="no: main ($SHA) is already at $VERSION"; fi
+            if [ "$TAG_STATE" = "absent" ]; then
+              tagline="create $tag at the bump commit"
+            elif [ "$TAG_STATE" = "present@$SHA" ] && [ "$BUMP_NEEDED" = "false" ]; then
+              tagline="keep $tag at $SHA"
+            else
+              tagline="MOVE $tag from $TAG_SHA to the bump commit (never published)"
+            fi
+            release="create $tag as a PRE-RELEASE (never latest)"
+            case "$VERSION" in *-*) ;; *) release="create $tag as the latest release" ;; esac
+          fi
+          if [ "$HAS_SITE_TOKEN" = "true" ]; then site="releases-updated dispatch to hugmesh.github.io, plus its hourly rebuild"; else site="SITE_DISPATCH_TOKEN absent today: hugmesh.github.io rebuilds its Downloads page from the Releases API within the hour (pages.yml cron), or now via gh workflow run pages.yml --repo hugmesh/hugmesh.github.io"; fi
+          {
+            echo "$head"
+            echo
+            echo "| # | Step | Plan |"
+            echo "|---|---|---|"
+            echo "| 1 | bump commit on main | $bump |"
+            echo "| 2 | tag $tag | $tagline |"
+            echo "| 3 | dispatch studio-release.yml | on refs/tags/$tag with publish=true republish=${REPUBLISH:-false} |"
+            echo "| 4 | release | $release |"
+            echo "| 5 | site | $site |"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
+  cut:
+    needs: preflight
+    if: ${{ !inputs.dry_run }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # The ONLY job in this repository besides studio-release.yml's publish (and the
+    # mesh-node image's) with any write. contents: the bump commit and the tag;
+    # actions: the workflow_dispatch of studio-release.yml. No id-token, no
+    # attestations: this job cannot sign anything.
+    permissions:
+      contents: write
+      actions: write
+    env:
+      TAG_STATE: ${{ needs.preflight.outputs.tag_state }}
+      TAG_SHA: ${{ needs.preflight.outputs.tag_sha }}
+      PREFLIGHT_SHA: ${{ needs.preflight.outputs.sha }}
+      BUMP_NEEDED: ${{ needs.preflight.outputs.bump_needed }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+        if: ${{ !inputs.republish }}
+        with:
+          ref: main
+          fetch-depth: 0
+          fetch-tags: true
+          # This job's token pushes the bump commit; the checkout keeps it in
+          # .git/config for that one push and nothing else runs git after it.
+          persist-credentials: true
+
+      - name: main must not have moved since the preflight
+        if: ${{ !inputs.republish }}
+        run: |
+          git fetch origin main
+          head=$(git rev-parse origin/main)
+          if [ "$head" != "$PREFLIGHT_SHA" ]; then
+            echo "::error::main moved during the preflight ($PREFLIGHT_SHA -> $head); run again"
+            exit 1
+          fi
+          git checkout -q "$head"
+
+      - name: Bump __version__ on main
+        # Only the two files release_version.py edits. A refused push (a ruleset
+        # appeared, or someone pushed between the check above and now) is loud and
+        # final: open a PR with the two files, merge it, run the cut again (it then
+        # finds __version__ already bumped and skips this step).
+        if: ${{ !inputs.republish }}
+        id: bump
+        run: |
+          if [ "$BUMP_NEEDED" = "true" ]; then
+            python3 studio/packaging/release_version.py bump "$VERSION"
+            git add studio/hugmesh_studio/__init__.py studio/packaging/flatpak/org.hugmesh.ImageStudio.metainfo.xml
+            git -c user.name="$GITHUB_ACTOR" -c user.email="${GITHUB_ACTOR_ID}+${GITHUB_ACTOR}@users.noreply.github.com" commit -q -m "Studio $VERSION"
+            if ! out=$(git push origin HEAD:main 2>&1); then
+              echo "::error::push to main refused: $out. Open a PR with these two files (studio/hugmesh_studio/__init__.py, studio/packaging/flatpak/org.hugmesh.ImageStudio.metainfo.xml) and run again"
+              exit 1
+            fi
+            echo "bumped main to $VERSION: $(git rev-parse HEAD)"
+          else
+            echo "main is already at $VERSION; no bump commit"
+          fi
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Create (or keep, or move) the tag on GitHub
+        # Through the API, with GITHUB_TOKEN: a tag made this way fires no push
+        # workflow, which is wanted. The next step starts exactly one publishing run.
+        # A tag is only ever MOVED here when the preflight saw no release for it.
+        if: ${{ !inputs.republish }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ steps.bump.outputs.sha }}
+        run: |
+          R="$GITHUB_REPOSITORY"
+          tag="studio-v$VERSION"
+          case "$TAG_STATE" in
+            absent)
+              tag_obj=$(gh api -X POST "repos/$R/git/tags" \
+                -f tag="$tag" -f type=commit -f object="$SHA" \
+                -f message="Studio $VERSION, cut by $GITHUB_SERVER_URL/$R/actions/runs/$GITHUB_RUN_ID" \
+                -f 'tagger[name]'="$GITHUB_ACTOR" -f 'tagger[email]'="${GITHUB_ACTOR_ID}+${GITHUB_ACTOR}@users.noreply.github.com" \
+                --jq .sha)
+              gh api -X POST "repos/$R/git/refs" -f ref="refs/tags/$tag" -f sha="$tag_obj" --jq .ref
+              echo "created tag $tag at $SHA" ;;
+            "present@$SHA")
+              echo "tag $tag is already at $SHA; kept" ;;
+            present@*)
+              gh api -X PATCH "repos/$R/git/refs/tags/$tag" -f sha="$SHA" -F force=true --jq .ref
+              echo "::warning::moved tag $tag from $TAG_SHA (never published) to $SHA" ;;
+            *)
+              echo "::error::unexpected tag state '$TAG_STATE'"; exit 1 ;;
+          esac
+
+      - name: Dispatch the signed build and publish on the tag
+        # workflow_dispatch is the one event GITHUB_TOKEN may start. The run gets
+        # github.ref = refs/tags/studio-v<version> and inputs.publish = true, so
+        # studio-release.yml's unchanged publish gate holds and the cosign identity is
+        # ...studio-release.yml@refs/tags/studio-v<version>, as for a human tag push.
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          R="$GITHUB_REPOSITORY"
+          tag="studio-v$VERSION"
+          since=$(date -u +%FT%TZ)
+          gh workflow run studio-release.yml --repo "$R" --ref refs/tags/studio-v"$VERSION" -f publish=true -f republish="${REPUBLISH:-false}"
+          echo "dispatched studio-release.yml on refs/tags/$tag (publish=true republish=${REPUBLISH:-false})"
+          url=""
+          for _ in $(seq 1 18); do
+            sleep 5
+            url=$(gh run list --repo "$R" --workflow studio-release.yml --branch "$tag" --event workflow_dispatch --json databaseId,createdAt,url \
+              --jq "[.[] | select(.createdAt >= \"$since\")] | sort_by(.createdAt) | last | .url // empty" 2>/dev/null || true)
+            [ -n "$url" ] && break
+          done
+          {
+            echo
+            if [ -n "$url" ]; then
+              echo "Release run: $url"
+            else
+              echo "Release run: not visible yet: Actions > Studio release, branch $tag"
+            fi
+            echo
+            echo "When it finishes, the release is at $GITHUB_SERVER_URL/$R/releases/tag/$tag"
+          } | tee -a "$GITHUB_STEP_SUMMARY"

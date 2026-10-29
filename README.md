@@ -1376,7 +1376,8 @@ on a bad/placeholder key). See [`docs/DEVOPS.md`](docs/DEVOPS.md).
 > |---|---|
 > | [`shell-suites.yml`](.github/workflows/shell-suites.yml) | The pre-merge gate: runs a curated set of the shell test suites on every pull request (jobs `alpine`, `debian`, `node`, `extras`). GitLab here is a pull mirror whose pipelines run after the merge, so this is what can stop a bad merge. |
 > | [`studio-tests.yml`](.github/workflows/studio-tests.yml) | Runs the Qt-free `studio/` test subset on a pull request that touches `studio/`. A fast pre-merge answer, not a replacement for GitLab's fuller `test:studio-suite`. |
-> | [`studio-release.yml`](.github/workflows/studio-release.yml) | Builds the Studio's Windows MSI and Linux Flatpak and publishes them as a GitHub Release. Dispatch- or tag-triggered only. |
+> | [`studio-release.yml`](.github/workflows/studio-release.yml) | Builds the Studio's Windows MSI, Linux Flatpak and tarball, signs them, and publishes them as a GitHub Release when run on a `studio-v*` tag. |
+> | [`studio-release-cut.yml`](.github/workflows/studio-release-cut.yml) | **The one way to release the Studio**: `scripts/release-studio.sh <version>` (or Actions > "Cut a Studio release") bumps `__version__` on main, creates the tag on GitHub and starts the signed build. See [`docs/STUDIO-INSTALLERS.md`](docs/STUDIO-INSTALLERS.md). |
 >
 > **Never target `[self-hosted, hugmesh-x86]` from a GitHub workflow.** No self-hosted
 > runners are registered against this org, so such a job queues for 24 hours and then
