@@ -62,8 +62,8 @@ Feature: The app-store effector legs are armed on the cluster profile, and their
 
   # ── the live posture reads (kind only: compose ships both legs dark) ────────
   # The superadmin reads these two through the public front door: the fe
-  # gateway's /bff/** catch-all forwards /bff/superadmin/** as NO_RULE and the
-  # SUPERADMIN bypass admits it (generator#302 N13 records the same door).
+  # gateway carries a '/bff/superadmin/**' -> ROLE_SUPERADMIN row (20-schema.sql,
+  # the #244-accepted public-door floor) and the SUPERADMIN bypass admits it.
   @issue:admin-bff-api-62 @env:kind @role:e2e-superadmin @service:admin @layer:bff
   Scenario: on the cluster profile the effector reports a real ArgoCD client
     Given I hold an API session as the persona for this scenario
@@ -79,17 +79,42 @@ Feature: The app-store effector legs are armed on the cluster profile, and their
     And the gateway verdict is "PASSED"
 
   # The other side of the same door: neither posture read is a plain-admin or
-  # member surface. admin-bff's own SecurityConfig refuses them (no gateway row,
-  # so no X-Route-Denied — the absent header is part of the contract).
+  # member surface, and the two refusals come from DIFFERENT layers.
+  #
+  # REWRITTEN 2026-10-29. The earlier draft asserted, for all three tiers, that
+  # admin-bff itself refused (no X-Route-Denied) on the premise that
+  # /bff/superadmin/** had no fe gateway row; it also paired "the gateway did not
+  # reject" with the verdict DENIED, which can never both hold (DENIED means a 403
+  # WITH X-Route-Denied). main's seed now carries the /bff/superadmin/** ->
+  # ROLE_SUPERADMIN row, so the outcome splits by tier. Measured through
+  # https://localhost:8488 on 2026-10-29 for both posture reads:
+  #   e2e-user, e2e-mod  -> 403 X-Route-Denied=hugmesh-fe-gateway:<path> (the door)
+  #   e2e-admin          -> 403, no X-Route-Denied (admin bypass; admin-bff refuses)
+  #   e2e-superadmin     -> 200 {"real":false} (compose ships the legs dark)
   @issue:admin-bff-api-62 @env:docker
-  Scenario Outline: <role> is refused the effector posture reads by admin-bff itself @role:<role> @service:admin @layer:bff
+  Scenario Outline: <role> is refused the effector posture read <path> at the gateway door @role:<role> @service:admin @layer:gateway
     Given I hold an API session as the persona for this scenario
-    When I request the governed path "/bff/superadmin/service-store/effector"
-    Then the gateway did not reject the request
-    And the gateway verdict is "DENIED"
+    When I request the governed path "<path>"
+    Then the gateway verdict is "DENIED"
+    And the gateway route-access reject names the path "<path>"
 
     Examples:
-      | role      |
-      | e2e-admin |
-      | e2e-mod   |
-      | e2e-user  |
+      | role     | path                                     |
+      | e2e-mod  | /bff/superadmin/service-store/effector   |
+      | e2e-mod  | /bff/superadmin/service-store/federation |
+      | e2e-user | /bff/superadmin/service-store/effector   |
+      | e2e-user | /bff/superadmin/service-store/federation |
+
+  # ROLE_ADMIN is forwarded past decide() on the admin bypass, so what refuses it
+  # is admin-bff's own SecurityConfig: a 403 with NO X-Route-Denied.
+  @issue:admin-bff-api-62 @env:docker
+  Scenario Outline: e2e-admin is refused the effector posture read <path> by admin-bff itself @role:e2e-admin @service:admin @layer:bff
+    Given I hold an API session as the persona for this scenario
+    When I request the governed path "<path>"
+    Then the gateway did not reject the request
+    And the governed path answered HTTP 403
+
+    Examples:
+      | path                                     |
+      | /bff/superadmin/service-store/effector   |
+      | /bff/superadmin/service-store/federation |

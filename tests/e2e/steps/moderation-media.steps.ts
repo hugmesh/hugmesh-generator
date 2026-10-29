@@ -948,3 +948,14 @@ Then('the ban was accepted as pending-reconcile with HTTP {int}', async ({ world
   const r = world.get<APIResponse>('ban');
   expect(r.status(), `POST /bff/mod/ban -> ${r.status()} ${(await r.text()).slice(0, 300)}`).toBe(status);
 });
+
+// ── the upstream's OWN refusal on a governed path (admin-bff-api#62) ─────────
+//
+// 'the gateway verdict is {string}' reads DENIED only when the 403 carries
+// X-Route-Denied, so a refusal made by the BFF behind the door (403, no header)
+// reads PASSED there. A scenario that means "the gateway let it through and the
+// BFF said no" pairs 'the gateway did not reject the request' with this step.
+Then('the governed path answered HTTP {int}', async ({ world }, status: number) => {
+  const r = world.get<APIResponse>('governed');
+  expect(r.status(), `GET ${world.get<string>('governedPath')} -> ${whyOf(r)}`).toBe(status);
+});
