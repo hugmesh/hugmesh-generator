@@ -5366,9 +5366,13 @@ mount_chroot() {
 #    mksquashfs cannot override a file that exists in the source (a -p pseudo file
 #    loses to the source file, and -e of that path discards the pseudo file too), so
 #    the sysroot's fstab is SWAPPED for a tmpfs-only one for the duration of the pack
-#    and restored immediately after — and again from the EXIT trap (umount_chroot),
-#    so a pack that dies cannot leave a resumed build, which re-tars the stage4 from
-#    this sysroot, with a token-less fstab.
+#    and restored immediately after. The pack block arms its OWN `trap
+#    live_fstab_restore EXIT` for the window in between (the umount_chroot EXIT trap
+#    is already disarmed by then: `umount_chroot; trap - EXIT` runs before the live
+#    pack), so an `exit 1` or a signal mid-pack still puts the installed image's
+#    fstab back and leaves no fstab.img-tokens behind. A leftover would not reach an
+#    artifact — the specs fstab is re-copied into the sysroot on every run before
+#    the stage4 tar — but a sysroot that lies about its own fstab is not left lying.
 #
 # live_root_gate() is the fail-closed check of both on the packed squashfs, and
 # tests/scripts/test-x86-live-root-pack.sh executes these helpers and the pack block.
@@ -5470,13 +5474,6 @@ umount_chroot() {
     # symlink, a space, an umlaut, a relative --work-dir — is unmounted like any
     # other), then counts layers before and after and warns when the count did
     # not go down (`umount -l ... || true` alone is silent).
-    # The live pack's fstab swap is undone here too, so a pack that dies cannot
-    # leave the sysroot carrying the live fstab (see live_fstab_swap_in). Inlined
-    # rather than calling live_fstab_restore: tests/scripts/test-builder-resume-safety.sh
-    # extracts and runs THIS function on its own, so it must not depend on a sibling.
-    if [ -n "${LIVE_FSTAB_SAVED:-}" ] && [ -f "${LIVE_FSTAB_SAVED}" ]; then
-        mv -f "${LIVE_FSTAB_SAVED}" "${SYSROOT}/etc/fstab" && LIVE_FSTAB_SAVED=""
-    fi
     if ${DISTFILES_MOUNTED:-false}; then
         hmr_umount_own "${SYSROOT}/var/cache/distfiles-ro" || true; DISTFILES_MOUNTED=false
     fi
@@ -7611,8 +7608,11 @@ CHROOT
         rm -f "${ISO_DIR}/LiveOS/squashfs.img"
         # The live root must NOT carry the installed image's fstab (see the live-ISO
         # root pack helpers next to umount_chroot): swap it for the live one for the
-        # duration of the pack. Restored right after the pack and from the EXIT trap.
+        # duration of the pack. Restored right after the pack — and by the EXIT trap
+        # armed HERE if the pack exits or is killed in between (umount_chroot's trap is
+        # already disarmed above; nothing else would put the fstab back).
         live_fstab_swap_in || { err "could not stage the live /etc/fstab — cannot build a bootable live ISO"; exit 1; }
+        trap live_fstab_restore EXIT
         if command -v mksquashfs >/dev/null; then
             # The build host's mksquashfs may lack zstd/xz (USE-gated). A hard-coded
             # -comp zstd then FAILS and (previously) silently shipped a rootfs-less
@@ -7648,6 +7648,7 @@ CHROOT
                 || { err "tar2sqfs failed — cannot build a bootable live ISO"; exit 1; }
         fi
         live_fstab_restore || { err "could not restore ${SYSROOT}/etc/fstab after the live pack"; exit 1; }
+        trap - EXIT
         # Sanity: a real desktop rootfs squashes to GiBs; a tiny image means the squash
         # silently failed (unsupported compressor, bad excludes) — refuse to ship a
         # live ISO that boots to nothing (this is exactly the 111 MiB rootfs-less ISO).

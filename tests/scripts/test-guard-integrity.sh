@@ -823,7 +823,7 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 #     198 of 239 suites are named by a pull_request-triggered workflow
 #     PASS the ungated SET matches its pin exactly (41 suite(s))
 #
-# 198 -> 199 (denominator 239 -> 240) on 2026-10-28 for the live-ISO root pack guard:
+# 198 -> 199 (denominator 240 -> 241) on 2026-10-28 for the live-ISO root pack guard:
 # tests/scripts/test-x86-live-root-pack.sh landed on disk, in shell-suites.yml's
 # container job (next to test-x86-artifact-integrity.sh, with squashfs-tools added to
 # its apt line) and in .gitlab-ci.yml's orphan-guards-verify. MEASURED by RUNNING this

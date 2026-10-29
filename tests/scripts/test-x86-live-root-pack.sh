@@ -21,7 +21,7 @@
 # executable cases are reported as NOTE and only the static ones run. The tar2sqfs
 # branch is executed up to the tar stream (tar2sqfs itself is not needed).
 #
-# No root, no network, no chroot. Checks 1–7 below.
+# No root, no network, no chroot. Checks 1–7 below (4b: a pack that dies mid-way).
 set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -66,8 +66,8 @@ grep -qE 'mksquashfs "\$\{SYSROOT\}".*' "${TMPD}/pack.sh" && grep -q -- '-wildca
   || bad "mksquashfs line does not use -wildcards -e \"\${LIVE_SQUASH_EXCL[@]}\""
 grep -vE '^[[:space:]]*#' "${TMPD}/pack.sh" | grep -E -- '-e (proc|sys|dev|run)( |$)' >/dev/null && bad "a bare mount-point name is still passed to mksquashfs -e (drops the directory)" || ok "no bare mount-point name on any -e"
 grep -vE '^[[:space:]]*#' "${TMPD}/pack.sh" | grep -E -- "--exclude='\./(proc|sys|dev|run)'" >/dev/null && bad "tar fallback still excludes a bare ./<mountpoint> (drops the directory)" || ok "tar fallback carries no bare ./<mountpoint> exclude"
-awk '/^umount_chroot\(\) \{/{f=1} f&&/^}/{exit} f' "${BUILDER}" | grep -E 'mv -f "\$\{LIVE_FSTAB_SAVED\}" "\$\{SYSROOT\}/etc/fstab"' >/dev/null \
-  && ok "umount_chroot (the EXIT trap) restores the fstab too" || bad "umount_chroot does not restore \${LIVE_FSTAB_SAVED} — a dead pack leaves the live fstab in the sysroot"
+grep -q '^        trap live_fstab_restore EXIT$' "${TMPD}/pack.sh" && ok "pack block arms its own EXIT trap for the swap window (umount_chroot's is disarmed before the live pack)" || bad "pack block arms no EXIT trap after live_fstab_swap_in — an exit mid-pack leaves the live fstab in the sysroot"
+grep -q '^        trap - EXIT$' "${TMPD}/pack.sh" && ok "pack block disarms that trap after the restore" || bad "pack block never disarms the swap-window trap"
 
 # ── Helpers, EXECUTED ────────────────────────────────────────────────────────
 echo "-- 3) live_squash_excludes, EXECUTED --"
@@ -122,6 +122,26 @@ cmp -s "${FIX}/etc/fstab" "${SPEC_FSTAB}" && ok "sysroot fstab restored byte-ide
 [ -e "${BR}/fstab.img-tokens" ] && bad "saved copy left behind after restore" || ok "no saved copy left behind"
 grep -q 'SAVED_AFTER=$' <<<"${out}" && ok "LIVE_FSTAB_SAVED cleared after restore" || bad "LIVE_FSTAB_SAVED not cleared: ${out}"
 
+echo "-- 4b) a pack that dies mid-way still restores the fstab, EXECUTED --"
+# A stub mksquashfs that FAILS: `command -v mksquashfs` sees the function, the pack
+# block takes the mksquashfs branch, the call fails, the block `exit 1`s between
+# live_fstab_swap_in and live_fstab_restore. Only the trap the block armed can put
+# the installed image's fstab back (umount_chroot's EXIT trap is disarmed before
+# the live pack runs in the builder, so it is NOT simulated here either).
+mkfake "${FIX}"; ISO="${TMPD}/isoroot-dead"; mkdir -p "${ISO}/LiveOS"
+{
+  echo 'err(){ echo "ERROR: $*" >&2; }; info(){ echo "INFO: $*"; }; warn(){ echo "WARN: $*"; }'
+  echo "DEFAULT_USER=snap; SYSROOT='${FIX}'; BUILD_ROOT='${BR}'; ISO_DIR='${ISO}'; JOBS=2"
+  echo 'mksquashfs(){ return 1; }'
+  cat "${TMPD}/helpers.sh"
+  cat "${TMPD}/pack.sh"
+  echo 'echo REACHED_PAST_THE_PACK'
+} > "${TMPD}/run-dead-pack"
+out="$(bash "${TMPD}/run-dead-pack" 2>&1)"; rc=$?
+[ "${rc}" -ne 0 ] && ! grep -q REACHED_PAST_THE_PACK <<<"${out}" && ok "the block exited on the failing mksquashfs (rc=${rc})" || bad "the block did not stop on a failing mksquashfs (rc=${rc}): ${out}"
+cmp -s "${FIX}/etc/fstab" "${SPEC_FSTAB}" && ok "sysroot fstab restored by the EXIT trap after the mid-pack exit" || bad "sysroot fstab left as the LIVE one after a mid-pack exit (no trap put it back)"
+[ -e "${BR}/fstab.img-tokens" ] && bad "fstab.img-tokens left behind after the mid-pack exit" || ok "no fstab.img-tokens left behind after the mid-pack exit"
+
 # ── The pack block + gate, EXECUTED (needs mksquashfs) ───────────────────────
 echo "-- 5) pack block + live_root_gate, EXECUTED --"
 if ! command -v mksquashfs >/dev/null || ! command -v unsquashfs >/dev/null; then
@@ -138,6 +158,7 @@ else
     cat "${TMPD}/helpers.sh"
     # the block's 200 MiB sanity floor is for a real rootfs; a fixture is tiny
     sed 's/-lt 200 \]/-lt 0 ]/' "${TMPD}/pack.sh"
+    echo 'echo "TRAP_AFTER=[$(trap -p EXIT)]"'
   } > "${TMPD}/run-pack"
   out="$(bash "${TMPD}/run-pack" 2>&1)"; rc=$?
   SQ="${ISO}/LiveOS/squashfs.img"
@@ -158,6 +179,7 @@ else
     grep -qE '^tmpfs[[:space:]]+/tmp[[:space:]]' <<<"${sqf}" && ok "squashfs /etc/fstab keeps the tmpfs lines" || bad "squashfs /etc/fstab lost the tmpfs lines"
     cmp -s "${FIX}/etc/fstab" "${SPEC_FSTAB}" && ok "sysroot fstab restored after the pack" || bad "sysroot fstab NOT restored after the pack"
     grep -q 'Live-root gate:' <<<"${out}" && ok "live_root_gate ran on the packed image and said so" || bad "no 'Live-root gate:' line in the pack output: ${out}"
+    grep -q 'TRAP_AFTER=\[\]' <<<"${out}" && ok "swap-window EXIT trap disarmed after a successful pack" || bad "EXIT trap still armed after the pack: $(grep TRAP_AFTER <<<"${out}")"
   fi
 
   echo "-- 6) live_root_gate rejects the two shipped defects, EXECUTED --"
