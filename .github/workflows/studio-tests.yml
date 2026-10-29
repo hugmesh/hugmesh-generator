@@ -273,9 +273,16 @@ jobs:
         # The same hash-locked set the MSI freezes (PySide6 included: the run-log test
         # drives the real page code). pytest is a second install because a
         # --require-hashes install refuses any line without a hash.
+        # Each native call is checked: pwsh does not stop on a failing exe, so without the
+        # checks a failed locked install was masked by a successful second one, and the
+        # run-log test below (importorskip on Qt) would SKIP and the job go green.
         run: |
           python -m pip install --require-hashes --only-binary=:all: -r studio/packaging/wix/windows-build-requirements.txt
+          if ($LASTEXITCODE -ne 0) { throw "the locked install failed ($LASTEXITCODE)" }
           python -m pip install pytest PyYAML jsonschema
+          if ($LASTEXITCODE -ne 0) { throw "pip install pytest failed ($LASTEXITCODE)" }
+          python -c "import PySide6.QtCore as q; print('PySide6', q.qVersion())"
+          if ($LASTEXITCODE -ne 0) { throw "PySide6 does not import: the run-log test would skip" }
 
       - name: Run the Windows contract
         working-directory: studio

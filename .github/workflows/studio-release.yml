@@ -307,26 +307,33 @@ jobs:
         shell: pwsh
 
       - name: Authenticode — sign the executable
-        # Before WiX packs it, so the installed program carries the signature too.
+        # Before WiX packs it, so the installed program carries the signature too. BOTH
+        # executables: the console twin (hugmesh-studio-cli.exe) ships in the same MSI,
+        # and an unsigned exe beside a signed one is what Smart App Control, WDAC and
+        # AppLocker publisher rules treat differently.
         if: steps.authenticode.outputs.enabled == 'true'
         working-directory: studio
         env:
           PFX_B64: ${{ secrets.STUDIO_AUTHENTICODE_PFX_BASE64 }}
           PFX_PASSWORD: ${{ secrets.STUDIO_AUTHENTICODE_PFX_PASSWORD }}
           TIMESTAMP_URL: ${{ vars.STUDIO_AUTHENTICODE_TIMESTAMP_URL || 'http://timestamp.digicert.com' }}
-          TARGET: dist\hugmesh-studio\hugmesh-studio.exe
+          TARGETS: dist\hugmesh-studio\hugmesh-studio.exe;dist\hugmesh-studio\hugmesh-studio-cli.exe
         run: |
-          $target = $env:TARGET
-          if (-not (Test-Path $target)) { throw "nothing to sign at $target" }
+          $targets = $env:TARGETS -split ';'
+          foreach ($target in $targets) {
+            if (-not (Test-Path $target)) { throw "nothing to sign at $target" }
+          }
           $signtool = Get-ChildItem 'C:\Program Files (x86)\Windows Kits\10\bin\*\x64\signtool.exe' | Sort-Object FullName -Descending | Select-Object -First 1
           if (-not $signtool) { throw "signtool.exe not found in the Windows SDK" }
           $pfx = Join-Path $env:RUNNER_TEMP "authenticode.pfx"
           try {
             [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:PFX_B64))
-            & $signtool.FullName sign /fd SHA256 /f $pfx /p $env:PFX_PASSWORD /tr $env:TIMESTAMP_URL /td SHA256 /d "HugMesh Image Studio" $target
-            if ($LASTEXITCODE -ne 0) { throw "signtool sign failed ($LASTEXITCODE) on $target" }
-            & $signtool.FullName verify /pa /v $target
-            if ($LASTEXITCODE -ne 0) { throw "signtool verify failed ($LASTEXITCODE) on $target" }
+            foreach ($target in $targets) {
+              & $signtool.FullName sign /fd SHA256 /f $pfx /p $env:PFX_PASSWORD /tr $env:TIMESTAMP_URL /td SHA256 /d "HugMesh Image Studio" $target
+              if ($LASTEXITCODE -ne 0) { throw "signtool sign failed ($LASTEXITCODE) on $target" }
+              & $signtool.FullName verify /pa /v $target
+              if ($LASTEXITCODE -ne 0) { throw "signtool verify failed ($LASTEXITCODE) on $target" }
+            }
           } finally {
             Remove-Item -Force -ErrorAction SilentlyContinue $pfx
           }

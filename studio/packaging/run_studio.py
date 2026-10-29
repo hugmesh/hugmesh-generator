@@ -14,11 +14,14 @@ import sys
 from hugmesh_studio.app import main
 
 if __name__ == "__main__":
-    # Redirected to a file or pipe on Windows, stdout is the ANSI code page (cp1252)
-    # with strict errors, so the first non-ASCII character (an em dash in a status
-    # line, a model's answer) raised UnicodeEncodeError mid-output. UTF-8, as on Linux.
-    # A console keeps its own Unicode writer, and the windowed exe has no stream at all.
-    for stream in (sys.stdout, sys.stderr):
-        if stream is not None and not stream.isatty():
-            stream.reconfigure(encoding="utf-8", errors="replace")
+    # Redirected to a file, a pipe or NUL on Windows, stdout is the ANSI code page
+    # (cp1252), so the first character outside it (an arrow in a status line, a model's
+    # answer) raised UnicodeEncodeError mid-output. UTF-8, as on Linux. NOT gated on
+    # isatty(): NUL is a character device, so isatty() is True there and the stream is
+    # still cp1252. A real console's writer is already UTF-16 inside, so reconfiguring
+    # it changes nothing; the windowed exe has no stream at all. Linux is left as is.
+    if sys.platform == "win32":
+        for stream in (sys.stdout, sys.stderr):
+            if stream is not None:
+                stream.reconfigure(encoding="utf-8", errors="replace")
     sys.exit(main())
