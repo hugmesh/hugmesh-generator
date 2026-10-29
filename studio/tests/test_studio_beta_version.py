@@ -13,6 +13,13 @@ What this pins, and why each one matters:
   (operator rule 2026-10-21: published downloads are built and signed on GitHub's
   runners; this replaces the scheme's RUNS_ON_PUBLISH line for this workflow). It has
   no pull_request trigger at all.
+* RED IS THE CONTRACT for an existing release: the publish job fails unless the run was
+  dispatched with ``republish=true``, and then it says loudly that every checksum
+  changes. A green run that published nothing is how the gates were hand-deleted on
+  2026-10-22 without anyone noticing, so no step carries a ``skip`` output any more.
+* ``packaging/release_version.py`` is the one place that spells the version rules
+  (format, ordering, the bump of the two files); the cut workflow and the release
+  script call it rather than re-implementing them.
 * The AppStream metadata's newest ``<release>`` is the same version, spelt with ``~``.
 """
 from __future__ import annotations
@@ -30,6 +37,7 @@ GENERATOR_DIR = os.path.dirname(STUDIO_ROOT)
 WORKFLOW = os.path.join(GENERATOR_DIR, ".github", "workflows", "studio-release.yml")
 MSI_SCRIPT = os.path.join(STUDIO_ROOT, "packaging", "build-msi-wine.sh")
 MAPPER = os.path.join(STUDIO_ROOT, "packaging", "wix", "msi_version.py")
+RELEASE_VERSION = os.path.join(STUDIO_ROOT, "packaging", "release_version.py")
 METAINFO = os.path.join(STUDIO_ROOT, "packaging", "flatpak", "org.hugmesh.ImageStudio.metainfo.xml")
 
 BETA_VERSION = re.compile(r"\d+\.\d+\.\d+(?:-beta\.[1-9]\d*)?")
@@ -144,7 +152,15 @@ def test_wine_build_defines_the_msi_version_not_the_semver():
 def test_workflow_has_no_pull_request_trigger():
     on = _workflow()["on"]
     assert set(on) == {"workflow_dispatch", "push"}, on
+    # 'main' in a TAG filter (added by hand on 2026-10-23) can never match a branch.
     assert on["push"] == {"tags": ["studio-v*"]}, on["push"]
+    inputs = on["workflow_dispatch"]["inputs"]
+    assert set(inputs) == {"publish", "republish"}, sorted(inputs)
+    for name in inputs:
+        assert inputs[name]["type"] == "boolean" and inputs[name]["default"] is False, name
+    assert "can no longer verify" in inputs["republish"]["description"], (
+        "the republish input must state its consequence where the operator ticks it")
+    assert "release-studio.sh" in inputs["publish"]["description"]
 
 
 def test_every_job_is_github_hosted():
@@ -180,6 +196,15 @@ def test_version_job_guards_ref_tag_and_snapshot():
     assert "python3 studio/packaging/wix/msi_version.py" in runs
     outputs = _workflow()["jobs"]["version"]["outputs"]
     assert set(outputs) == {"version", "msi_version"}
+    # publish=true off a tag fails in seconds, not after a 40-minute build that skips.
+    refusal = next(s for s in steps if s.get("name") == "A publish from main is impossible")
+    assert refusal["if"] == "inputs.publish == true && !startsWith(github.ref, 'refs/tags/studio-v')"
+    assert "which never publishes" in refusal["run"] and "release-studio.sh" in refusal["run"]
+    assert "exit 1" in refusal["run"]
+    verdict = next(s for s in steps if s.get("name") == "Say whether this run will publish")
+    assert verdict["if"] == "always()"
+    assert "WILL NOT publish" in verdict["run"] and "WILL publish" in verdict["run"]
+    assert "GITHUB_STEP_SUMMARY" in verdict["run"]
 
 
 def test_msi_job_defines_the_numeric_version():
@@ -192,6 +217,9 @@ def test_msi_job_defines_the_numeric_version():
 
 
 def test_release_is_a_prerelease_never_latest_and_never_overwritten():
+    """RED is the contract: a green run that published nothing is how the gates were
+    hand-deleted on 10-22. An existing release fails the job unless republish=true was
+    dispatched, so there is no `skip` output for a hand edit to remove any more."""
     steps = _workflow()["jobs"]["publish"]["steps"]
     release = next(s for s in steps if s.get("uses", "").startswith("softprops/action-gh-release"))
     assert release["with"]["prerelease"] == "${{ contains(env.VERSION, '-') }}"
@@ -199,11 +227,26 @@ def test_release_is_a_prerelease_never_latest_and_never_overwritten():
     exists = next(s for s in steps if s.get("id") == "exists")
     assert 'gh release view "studio-v$VERSION"' in exists["run"]
     assert steps[0] is exists, "the overwrite check must run before anything is built or uploaded"
-    # The one exception is the site notification (last step): it changes nothing here,
-    # and a re-run on an existing release is how it is re-sent.
+    assert exists["env"]["REPUBLISH"] == "${{ inputs.republish }}"
+    assert "exit 1" in exists["run"] and "--republish" in exists["run"]
+    assert "::warning::REPUBLISHING" in exists["run"]
+    # Second: the ref IS the tag of this version (the gate deleted by hand on 10-23).
+    ref = steps[1]
+    assert ref["name"] == "The ref must be the tag of this version", ref
+    assert '[ "$GITHUB_REF" != "refs/tags/studio-v$VERSION" ]' in ref["run"] and "exit 1" in ref["run"]
+    # No step anywhere reads or writes a `skip`: a skip is a green run that did nothing.
+    for step in steps:
+        assert "skip" not in str(step.get("if", "")), step.get("name")
+        assert "skip=" not in step.get("run", ""), step.get("name")
+    assert "outputs.skip" not in _read(WORKFLOW)
+    notes = next(s for s in steps if s.get("name") == "Write the release notes")
+    assert notes["env"]["REPLACED"] == "${{ steps.exists.outputs.replaced }}"
+    summarise = next(s for s in steps if s.get("name") == "Summarise")
+    assert "if" not in summarise
+    assert summarise["env"]["REPLACED"] == "${{ steps.exists.outputs.replaced }}"
+    assert "REPUBLISHED: all checksums changed" in summarise["run"]
+    # The site notification stays last and ungated.
     assert steps[-1]["name"] == "Tell hugmesh.github.io to rebuild its downloads data"
-    for step in steps[1:-1]:
-        assert step.get("if") == "steps.exists.outputs.skip != 'true'", step
 
 
 # ── AppStream ──────────────────────────────────────────────────────────────────────
@@ -219,16 +262,30 @@ def test_metainfo_newest_release_is_this_version():
         "the never-published 1.0.0 entry is back: software centres would show 1.0.0")
 
 
-@pytest.mark.parametrize("gh_rc,gh_out,want_rc,want_skip", [
-    (0, '{"tagName":"studio-v0.3.0-beta.1"}', 0, "true"),   # the release exists: skip, green
-    (1, "release not found", 0, "false"),                    # it does not: publish
-    (1, "HTTP 502: Bad Gateway", 1, None),                   # cannot tell: stop, never guess
-    (4, "authentication required", 1, None),
+EXISTS = '{"tagName":"studio-v0.3.0-beta.1","assets":[{"updatedAt":"2026-10-23T07:35:52Z"},{"updatedAt":"2026-10-22T10:28:46Z"}]}'
+
+
+@pytest.mark.parametrize("gh_rc,gh_out,republish,want_rc,want_output,want_text", [
+    # the release exists and nobody asked to replace it: RED, names the way to do so
+    (0, EXISTS, "false", 1, "", "--republish"),
+    (0, EXISTS, "", 1, "", "--republish"),                       # a push event: no inputs at all
+    # the release exists and republish was asked for: go on, loudly
+    (0, EXISTS, "true", 0, "replaced=true\n", "::warning::REPUBLISHING studio-v0.3.0-beta.1: 2 files will be replaced (newest currently from 2026-10-23T07:35:52Z)"),
+    (0, '{"tagName":"studio-v0.3.0-beta.1"}', "true", 0, "replaced=true\n", "::warning::REPUBLISHING"),
+    # it does not exist: a republish is an error, a normal publish goes on
+    (1, "release not found", "true", 1, "", "does not exist; run a normal release"),
+    (1, "release not found", "false", 0, "replaced=false\n", ""),
+    # cannot tell: stop, never guess, whatever was asked
+    (1, "HTTP 502: Bad Gateway", "false", 1, "", "could not tell"),
+    (1, "HTTP 502: Bad Gateway", "true", 1, "", "could not tell"),
+    (4, "authentication required", "false", 1, "", "could not tell"),
+    (4, "authentication required", "true", 1, "", "could not tell"),
 ])
-def test_overwrite_check_fails_closed(tmp_path, gh_rc, gh_out, want_rc, want_skip):
+def test_overwrite_check_fails_closed(tmp_path, gh_rc, gh_out, republish, want_rc, want_output, want_text):
     """Run the real step script with a fake `gh`. Only gh's own "release not found" may
     count as absent: treating a network or auth failure as absent would send the publish
-    step at a release that may exist, and it replaces same-named files."""
+    step at a release that may exist, and it replaces same-named files. An existing
+    release is RED unless REPUBLISH=true, and then the warning names what is replaced."""
     import subprocess
     steps = _workflow()["jobs"]["publish"]["steps"]
     script = next(s for s in steps if s.get("id") == "exists")["run"]
@@ -239,12 +296,96 @@ def test_overwrite_check_fails_closed(tmp_path, gh_rc, gh_out, want_rc, want_ski
     fake.chmod(0o755)
     out_file = tmp_path / "github_output"
     out_file.write_text("")
-    env = {"PATH": f"{bindir}:/usr/bin:/bin", "VERSION": "0.3.0-beta.1",
+    env = {"PATH": f"{bindir}:/usr/bin:/bin", "VERSION": "0.3.0-beta.1", "REPUBLISH": republish,
            "GITHUB_REPOSITORY": "hugmesh/hugmesh-generator", "GITHUB_OUTPUT": str(out_file)}
     # GitHub runs a `run:` block as `bash -e {0}`.
     proc = subprocess.run(["bash", "-e", "-c", script], env=env, capture_output=True, text=True)
     assert proc.returncode == want_rc, (proc.stdout, proc.stderr)
-    if want_skip is None:
-        assert "skip=" not in out_file.read_text()
-    else:
-        assert out_file.read_text() == f"skip={want_skip}\n"
+    assert out_file.read_text() == want_output
+    assert want_text in proc.stdout + proc.stderr, (proc.stdout, proc.stderr)
+    if want_rc == 1:
+        assert "::error::" in proc.stdout
+
+
+@pytest.mark.parametrize("replaced", ["true", "false", ""])
+def test_release_notes_say_when_files_were_replaced(tmp_path, replaced):
+    import subprocess
+    steps = _workflow()["jobs"]["publish"]["steps"]
+    script = next(s for s in steps if s.get("name") == "Write the release notes")["run"]
+    env = {"PATH": "/usr/bin:/bin", "VERSION": "0.3.0-beta.2", "GITHUB_REPOSITORY": "hugmesh/hugmesh-generator",
+           "AUTHENTICODE": "false", "REPLACED": replaced, "GITHUB_SHA": "abc123", "GITHUB_RUN_ID": "42",
+           "GITHUB_SERVER_URL": "https://github.com"}
+    proc = subprocess.run(["bash", "-e", "-c", script], env=env, cwd=tmp_path, capture_output=True, text=True)
+    assert proc.returncode == 0, proc.stderr
+    notes = (tmp_path / "release-notes.md").read_text()
+    assert ("Files replaced on" in notes) == (replaced == "true")
+    if replaced == "true":
+        assert "every checksum, signature and attestation changed" in notes
+        assert "from abc123 by run https://github.com/hugmesh/hugmesh-generator/actions/runs/42" in notes
+        assert "must re-download to verify" in notes
+    assert notes.startswith("HugMesh Image Studio 0.3.0-beta.2 (beta, pre-release).\n")
+    assert "**Windows**" in notes
+
+
+# ── release_version.py: the one place the version rules are spelt ─────────────────
+def _rv(*args, **kwargs):
+    import subprocess
+    return subprocess.run(["python3", RELEASE_VERSION, *args], capture_output=True, text=True, **kwargs)
+
+
+def test_release_version_cli_current_next_validate_compare():
+    assert _rv("current").stdout.strip() == _version()
+    base = _version().split("-")[0]
+    if "-" in _version():
+        n = int(_version().rsplit(".", 1)[1])
+        assert _rv("next").stdout.strip() == f"{base}-beta.{n + 1}"
+        assert _rv("next", "--final").stdout.strip() == base
+    assert _rv("next", "0.3.0").stdout.strip() == "0.3.1-beta.1"
+    assert _rv("validate", "0.3.0-beta.2").returncode == 0
+    for bad in ("0.3.0-rc.1", "0.3.0-SNAPSHOT", "0.3.0+build.1", "0.3.0-beta.0", "0.3.0-beta.99", "v0.3.0"):
+        assert _rv("validate", bad).returncode == 1, bad
+    tags = ["refs/tags/studio-v0.3.0-beta.1", "refs/tags/studio-vgarbage"]
+    assert _rv("validate", "0.3.0-beta.1", "--after-tags", *tags).returncode == 1
+    assert _rv("validate", "0.3.0-beta.2", "--after-tags", *tags).returncode == 0
+    assert _rv("validate", "0.3.0", "--after-tags", *tags).returncode == 0
+    assert _rv("validate", "0.2.9", "--after-tags", *tags).returncode == 1
+    assert _rv("validate", "0.3.0-beta.2", "--after-tags").returncode == 0, "no tags yet: anything valid goes"
+    order = ["0.3.0-beta.1", "0.3.0-beta.2", "0.3.0-beta.10", "0.3.0", "0.3.1-beta.1", "0.3.1", "0.4.0-beta.1"]
+    for a, b in zip(order, order[1:]):
+        assert _rv("compare", a, b).stdout.strip() == "lt", (a, b)
+        assert _rv("compare", b, a).stdout.strip() == "gt", (a, b)
+    assert _rv("compare", "0.3.0", "0.3.0").stdout.strip() == "eq"
+
+
+def test_bump_version_edits_both_files(tmp_path):
+    import shutil
+    import subprocess
+    root = tmp_path / "tree"
+    (root / "studio" / "hugmesh_studio").mkdir(parents=True)
+    (root / "studio" / "packaging" / "flatpak").mkdir(parents=True)
+    shutil.copy(os.path.join(STUDIO_ROOT, "hugmesh_studio", "__init__.py"), root / "studio" / "hugmesh_studio")
+    shutil.copy(METAINFO, root / "studio" / "packaging" / "flatpak")
+    before = ET.parse(METAINFO).getroot().find("releases").findall("release")
+    target = "0.3.0-beta.2" if _version() != "0.3.0-beta.2" else "0.3.0-beta.3"
+    proc = _rv("bump", target, "--root", str(root), "--date", "2026-10-28")
+    assert proc.returncode == 0, proc.stderr
+    assert _rv("current", "--root", str(root)).stdout.strip() == target
+    meta = root / "studio" / "packaging" / "flatpak" / "org.hugmesh.ImageStudio.metainfo.xml"
+    releases = ET.parse(meta).getroot().find("releases").findall("release")
+    assert releases[0].get("version") == target.replace("-", "~") and releases[0].get("type") == "development"
+    assert releases[0].get("date") == "2026-10-28"
+    assert [r.get("version") for r in releases[1:]] == [r.get("version") for r in before], "an old entry was lost"
+    text = meta.read_text()
+    assert "AppStream spells a pre-release with" in text, "the explanatory comment was lost"
+    assert "<p>First beta.</p>" in text
+    # Idempotent: a second bump to the same version changes nothing.
+    snapshot = {p.name: p.read_bytes() for p in (meta, root / "studio" / "hugmesh_studio" / "__init__.py")}
+    proc = _rv("bump", target, "--root", str(root), "--date", "2026-11-01")
+    assert proc.returncode == 0 and "nothing changed" in proc.stdout
+    assert {p.name: p.read_bytes() for p in (meta, root / "studio" / "hugmesh_studio" / "__init__.py")} == snapshot
+    # A final release gets no type="development".
+    proc = _rv("bump", "0.3.0", "--root", str(root), "--date", "2026-12-01")
+    assert proc.returncode == 0, proc.stderr
+    newest = ET.parse(meta).getroot().find("releases").find("release")
+    assert newest.get("version") == "0.3.0" and newest.get("type") is None
+    assert _rv("bump", "0.3.0-rc.1", "--root", str(root)).returncode == 1

@@ -92,6 +92,36 @@ def test_only_publish_writes_and_only_publish_can_sign():
             assert "permissions" not in job, f"build job {name} must stay read-only"
 
 
+def test_no_other_workflow_can_sign():
+    """Over EVERY workflow file: a job that can mint a signing identity (id-token) or
+    store attestations is one of the two release workflows' publish jobs and nothing
+    else. The cut workflow in particular writes contents and actions only: it creates
+    the tag and starts the publishing run, it never signs."""
+    workflows = os.path.join(GENERATOR_DIR, ".github", "workflows")
+    allowed = {("studio-release.yml", "publish"), ("mesh-node-release.yml", "image")}
+    seen = set()
+    for name in sorted(os.listdir(workflows)):
+        if not name.endswith((".yml", ".yaml")):
+            continue
+        with open(os.path.join(workflows, name), encoding="utf-8") as handle:
+            doc = yaml.safe_load(handle)
+        top = doc.get("permissions") or {}
+        assert not isinstance(top, dict) or not ({"id-token", "attestations"} & set(top)), (
+            f"{name}: workflow-level id-token/attestations")
+        assert top != "write-all", name
+        for job, spec in (doc.get("jobs") or {}).items():
+            perms = spec.get("permissions") or {}
+            if perms == "write-all" or (isinstance(perms, dict) and {"id-token", "attestations"} & set(perms)):
+                seen.add((name, job))
+    assert seen == allowed, seen
+    cut = os.path.join(workflows, "studio-release-cut.yml")
+    with open(cut, encoding="utf-8") as handle:
+        cut_doc = yaml.safe_load(handle)
+    assert cut_doc["permissions"] == {"contents": "read"}
+    assert "permissions" not in cut_doc["jobs"]["preflight"]
+    assert cut_doc["jobs"]["cut"]["permissions"] == {"contents": "write", "actions": "write"}
+
+
 # ── signing order and coverage ─────────────────────────────────────────────────────
 def test_sums_are_signed_and_every_file_attested_before_the_release_exists():
     steps = _jobs()["publish"]["steps"]

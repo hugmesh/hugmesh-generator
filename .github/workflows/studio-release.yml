@@ -6,21 +6,40 @@
 # real downloadable installers, because that is what a Downloads page on a public docs
 # site needs and a container image cannot be one.
 #
-# WHY THE SITE READS A STATIC FILE, NOT THE GITHUB API: the Downloads page on
-# hugmesh.github.io renders from `src/assets/releases.json`. The publish job below
-# emits that file, in the shape of `src/assets/releases.json.example` in the site repo
-# (plus additive fields for the signature material), attaches it to the release, and
-# then sends the site a `releases-updated` repository_dispatch so it can rebuild.
+# HOW A RELEASE IS CUT (2026-10-28): `scripts/release-studio.sh <version>` on a
+# terminal, or Actions > "Cut a Studio release" in the browser. Both drive
+# studio-release-cut.yml, which bumps __version__ on main, creates the studio-v<version>
+# tag ON GITHUB and dispatches THIS workflow on that tag with publish=true. Nobody
+# needs to push a tag by hand any more, though a hand-pushed tag still works.
 #
-# TRIGGER: workflow_dispatch, plus a `studio-v*` tag. A tag that a human deliberately
-# created and pushed is the explicit publish decision.
+# THE SITE'S DATA FILE: the Downloads page on hugmesh.github.io renders from its
+# `src/assets/releases.json`, which the site's own pages.yml rebuilds from the GitHub
+# Releases API (hourly cron, a `releases-updated` repository_dispatch, or a manual
+# run of pages.yml). Nobody writes that file by hand. The publish job below still
+# attaches a `releases.json` to the release (the same shape, plus the signature
+# material) and sends the dispatch when SITE_DISPATCH_TOKEN exists; without the
+# secret the site catches up within the hour.
+#
+# TRIGGER: workflow_dispatch, plus a `studio-v*` tag. A run on a tag ref is the
+# publish decision; a dispatch on main is a build-only rehearsal.
 #
 # BETA SCHEME (org-wide, 2026-10-21). __version__ is MAJOR.MINOR.PATCH-beta.N. Only a
 # run on a `studio-v<version>` tag ref publishes (a tag push, or a dispatch ON the tag
-# with "publish" ticked, which is the re-run path). A dispatch on main builds all three
-# packages and stops there. Any other ref is refused by the version job. A release
-# whose version has a "-" is marked pre-release and is never made "latest", and an
-# existing release is never overwritten.
+# with "publish" ticked, which is what the cut workflow does). A dispatch on main builds
+# all three packages and stops there; with "publish" ticked on main the version job
+# fails in seconds instead of building for 40 minutes and then skipping. Any other ref
+# is refused by the version job. A release whose version has a "-" is marked
+# pre-release and is never made "latest".
+#
+# RE-PUBLISHING IS EXPLICIT (2026-10-28). The publish job's first step fails RED when
+# the release already exists, unless the run was dispatched with `republish=true`
+# (scripts/release-studio.sh <version> --republish, or the cut form with republish
+# ticked and the version typed into confirm). A republish replaces every file of the
+# release with new bytes, so every checksum, signature and attestation changes and
+# anyone who downloaded earlier can no longer verify what they have; the release
+# notes and the run summary then say so. The old green-skip gates (eleven `if:` lines
+# that let a run publish nothing and still pass) are gone: they were deleted by hand on
+# main on 2026-10-22, and a green skip is exactly what nobody notices.
 #
 # RUNNERS: GITHUB-HOSTED ONLY (operator rule, 2026-10-21). Every download that is
 # published must be built and signed on GitHub's own runners. So every job here names
@@ -63,11 +82,17 @@ on:
   workflow_dispatch:
     inputs:
       publish:
-        description: 'Create the GitHub Release (only when run on a studio-v* tag; on main this builds and stops)'
+        description: 'Create the GitHub Release (only when run on a studio-v* tag). On main this never publishes; to publish run scripts/release-studio.sh or Actions > Cut a Studio release.'
+        type: boolean
+        default: false
+      republish:
+        description: 'REPLACE the files of the existing studio-v<version> release with new bytes. Every checksum, signature and attestation changes and anyone who already downloaded can no longer verify what they have. The normal path is the next beta N.'
         type: boolean
         default: false
   push:
-    tags: ['studio-v*', 'main']
+    # A tag filter only ever matches tags: 'main' here (added by hand on 2026-10-23)
+    # could never fire and only made the trigger look like it covered the branch.
+    tags: ['studio-v*']
 
 permissions:
   contents: read
@@ -111,7 +136,56 @@ jobs:
           echo "msi_version=$msi_version" >> "$GITHUB_OUTPUT"
           echo "Studio version: $version (MSI ProductVersion $msi_version)"
 
+      - name: Refuse any ref other than main or a studio-v* tag
+        # The beta scheme's trigger split: a tag publishes, main only builds, and
+        # nothing else runs at all (a feature branch would otherwise build installers
+        # that look like release candidates).
+        env:
+          REF: ${{ github.ref }}
+        run: |
+          case "$REF" in
+            refs/heads/main|refs/tags/studio-v*) echo "ref $REF accepted" ;;
+            *) echo "::error::studio-release runs only on main or on a studio-v* tag, not on $REF"; exit 1 ;;
+          esac
 
+      - name: Tag must match the version it claims to release
+        if: startsWith(github.ref, 'refs/tags/studio-v')
+        run: |
+          tag="${GITHUB_REF_NAME#studio-v}"
+          if [ "$tag" != "${{ steps.read.outputs.version }}" ]; then
+            echo "::error::tag studio-v$tag does not match __version__ ${{ steps.read.outputs.version }}"
+            exit 1
+          fi
+
+      - name: A publish from main is impossible
+        # Red in seconds, not a 40-minute build that then skips the publish job: a
+        # dispatch on main with "publish" ticked is the mistake of 2026-10-22, and a
+        # green run that published nothing is what made it hard to see.
+        if: inputs.publish == true && !startsWith(github.ref, 'refs/tags/studio-v')
+        env:
+          REF: ${{ github.ref }}
+        run: |
+          echo "::error::publish was ticked on $REF, which never publishes. To release: scripts/release-studio.sh <version>, or Actions > Cut a Studio release"
+          exit 1
+
+      - name: Say whether this run will publish
+        if: always()
+        env:
+          REF: ${{ github.ref }}
+          EVENT: ${{ github.event_name }}
+          PUBLISH: ${{ inputs.publish }}
+          REPUBLISH: ${{ inputs.republish }}
+        run: |
+          case "$REF" in
+            refs/tags/studio-v*)
+              if [ "$EVENT" = "push" ] || [ "$PUBLISH" = "true" ]; then
+                verdict="WILL publish (tag ref; ${EVENT} event$( [ "$PUBLISH" = "true" ] && printf ', publish=true' ))"
+              else
+                verdict="WILL NOT publish (tag ref, but publish was not ticked)"
+              fi ;;
+            *) verdict="WILL NOT publish ($REF is not a studio-v* tag; only a tag ref publishes)" ;;
+          esac
+          echo "ref=$REF, event=$EVENT, publish=${PUBLISH:-false}, republish=${REPUBLISH:-false}: this run $verdict" | tee -a "$GITHUB_STEP_SUMMARY"
 
   msi:
     needs: version
@@ -500,27 +574,62 @@ jobs:
       AUTHENTICODE: ${{ needs.msi.outputs.authenticode }}
     steps:
       - name: Never overwrite a published release
-        # WARNING (2026-10-22): the steps below no longer carry
-        # `if: steps.exists.outputs.skip != 'true'` (removed by hand on main), so today a
-        # re-run on a tag whose release already exists does NOT stop here: it rebuilds,
-        # re-signs and replaces the release's same-named files with new bytes. Only the
-        # Summarise step still reads `skip`. Restore those `if:` lines to make a
-        # published beta immutable again. Only gh's own "release
-        # not found" counts as absent: any other failure (network, auth, rate limit)
-        # stops the job, because the publish step below would otherwise run against a
-        # release that may exist and replace its same-named files.
+        # RED, NOT A GREEN SKIP. An existing release stops this job with an error
+        # unless the run was dispatched with republish=true; then it prints a warning
+        # naming how many files are about to be replaced and sets replaced=true, which
+        # the notes and the summary pick up. The former contract (a green run that
+        # published nothing, gated on a `skip` output) was deleted by hand on main on
+        # 2026-10-22 and nobody noticed for a day; a red run cannot be missed, and
+        # there is no `skip` for a hand edit to remove any more. republish=true with
+        # no release is also an error: it is never a silent first publish.
+        #
+        # Only gh's own "release not found" counts as absent: any other failure
+        # (network, auth, rate limit) stops the job, because the publish step below
+        # would otherwise run against a release that may exist and replace its
+        # same-named files.
         id: exists
         env:
           GH_TOKEN: ${{ github.token }}
+          REPUBLISH: ${{ inputs.republish }}
         run: |
-          if out=$(gh release view "studio-v$VERSION" --repo "$GITHUB_REPOSITORY" --json tagName 2>&1); then
-            echo "::notice::release studio-v$VERSION already exists; nothing is published or changed"
-            echo "skip=true" >> "$GITHUB_OUTPUT"
+          if out=$(gh release view "studio-v$VERSION" --repo "$GITHUB_REPOSITORY" --json tagName,assets 2>&1); then
+            summary=$(printf '%s' "$out" | python3 -c 'import json,sys
+          try:
+              assets = json.load(sys.stdin).get("assets") or []
+              print(len(assets), max((a.get("updatedAt") or "?" for a in assets), default="?"))
+          except Exception:
+              print("? ?")')
+            count=${summary%% *}
+            newest=${summary#* }
+            if [ "$REPUBLISH" = "true" ]; then
+              echo "::warning::REPUBLISHING studio-v$VERSION: $count files will be replaced (newest currently from $newest); every checksum, signature and attestation changes"
+              echo "replaced=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "::error::release studio-v$VERSION already exists; nothing was changed. To replace its files on purpose (every checksum changes): scripts/release-studio.sh $VERSION --republish"
+              exit 1
+            fi
           else
             case "$out" in
-              *"release not found"*) echo "skip=false" >> "$GITHUB_OUTPUT" ;;
+              *"release not found"*)
+                if [ "$REPUBLISH" = "true" ]; then
+                  echo "::error::republish was requested but release studio-v$VERSION does not exist; run a normal release"
+                  exit 1
+                fi
+                echo "replaced=false" >> "$GITHUB_OUTPUT" ;;
               *) echo "::error::could not tell whether release studio-v$VERSION exists: $out"; exit 1 ;;
             esac
+          fi
+
+      - name: The ref must be the tag of this version
+        # Belt and braces under the version job's tag gate, which was deleted by hand
+        # once (2026-10-23: a push of studio-v0.3.1-beta.1 published under the
+        # 0.3.0-beta.1 name, and the certificate identity names the wrong tag). The
+        # asset names derive from VERSION and the cosign identity from github.ref; this
+        # step is what keeps the two the same thing.
+        run: |
+          if [ "$GITHUB_REF" != "refs/tags/studio-v$VERSION" ]; then
+            echo "::error::this run is on $GITHUB_REF but __version__ is $VERSION; a release is published only from refs/tags/studio-v$VERSION"
+            exit 1
           fi
 
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
@@ -682,9 +791,16 @@ jobs:
           subject-path: release/*
 
       - name: Write the release notes
+        env:
+          REPLACED: ${{ steps.exists.outputs.replaced }}
         run: |
           tag="studio-v$VERSION"
           workflow="$GITHUB_REPOSITORY/.github/workflows/studio-release.yml"
+          if [ "$REPLACED" = "true" ]; then
+            replaced_note="> **Files replaced on $(date -u +%F) from ${GITHUB_SHA:-?} by run ${GITHUB_SERVER_URL:-https://github.com}/$GITHUB_REPOSITORY/actions/runs/${GITHUB_RUN_ID:-?}; every checksum, signature and attestation changed.** Anyone who downloaded before this date must re-download to verify."
+          else
+            replaced_note=""
+          fi
           # The exact certificate identity as an anchored regular expression (dots escaped).
           identity_re="^$(printf '%s' "https://github.com/$workflow@refs/tags/$tag" | sed 's/[.]/\\./g')\$"
           if [ "$AUTHENTICODE" = "true" ]; then
@@ -695,7 +811,9 @@ jobs:
           case "$VERSION" in *-*) stage=" (beta, pre-release)" ;; *) stage="" ;; esac
           cat > release-notes.md <<EOF
           HugMesh Image Studio $VERSION$stage.
-
+          ${replaced_note:+
+          $replaced_note
+          }
           **Windows**: download \`hugmesh-studio-$VERSION-x64.msi\`. It installs per-user, so no administrator rights are needed. $win_sign
 
           **Linux**: \`hugmesh-studio-$VERSION-x86_64.flatpak\` (install with \`flatpak install --user ./hugmesh-studio-$VERSION-x86_64.flatpak\`, needs the org.kde.Platform 6.8 runtime), or \`hugmesh-studio-$VERSION-linux-x86_64.tar.gz\` (unpack and run \`hugmesh-studio\`; needs glibc 2.39 or newer).
@@ -744,6 +862,12 @@ jobs:
       - name: Publish the release
         # LAST of the release steps: everything above (sums, cosign, attestations) has
         # already succeeded, so a release never exists without its signatures.
+        #
+        # On a republish this REPLACES the same-named assets of the existing release
+        # (softprops overwrites by name). Nothing deletes the old assets first, on
+        # purpose: every asset name derives from VERSION, and "The ref must be the tag
+        # of this version" pins VERSION to the tag, so a stale name cannot occur, while
+        # deleting first would leave an empty release for the minutes the upload takes.
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65  # v2.6.2
         with:
           tag_name: studio-v${{ env.VERSION }}
@@ -766,13 +890,21 @@ jobs:
             release/releases.json
 
       - name: Summarise
-        if: steps.exists.outputs.skip != 'true'
+        env:
+          REPLACED: ${{ steps.exists.outputs.replaced }}
         run: |
+          if [ "$REPLACED" = "true" ]; then
+            title='## Studio '"$VERSION"' REPUBLISHED: all checksums changed'
+          else
+            title='## Studio '"$VERSION"' published, signed and attested'
+          fi
           # shellcheck disable=SC2016  # the backticks are Markdown, not command substitution
           {
-            echo '## Studio '"$VERSION"' published, signed and attested'
+            echo "$title"
             echo
-            echo 'The documentation site was sent a `releases-updated` dispatch (next step). If it was skipped, copy this into `hugmesh.github.io` at `src/assets/releases.json`:'
+            echo "Release: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/tag/studio-v$VERSION"
+            echo
+            echo 'Downloads page: hugmesh.github.io rebuilds `releases.json` from the Releases API within the hour (pages.yml cron) or now via `gh workflow run pages.yml --repo hugmesh/hugmesh.github.io`. The `releases-updated` dispatch (next step) asks for it sooner when SITE_DISPATCH_TOKEN exists. The file attached to this release:'
             echo
             echo '```json'
             cat release/releases.json
@@ -781,10 +913,11 @@ jobs:
 
       - name: Tell hugmesh.github.io to rebuild its downloads data
         # Contract: .wf-scripts downloads/DISPATCH-CONTRACT.md (event type
-        # releases-updated). NOT gated on the overwrite check. WARNING: while the
-        # publish steps above are not gated either (see "Never overwrite"), re-running
-        # this workflow on an existing tag just to re-send this notice ALSO replaces the
-        # published files; send the dispatch by hand instead. GITHUB_TOKEN cannot reach
+        # releases-updated). Not gated on anything: it runs after every publish and
+        # every explicit republish. To re-send only this notice, do not re-run this
+        # workflow (a re-run is a republish and needs republish=true): run
+        # `gh workflow run pages.yml --repo hugmesh/hugmesh.github.io` instead, which
+        # rebuilds the site's data from the Releases API. GITHUB_TOKEN cannot reach
         # another repository; SITE_DISPATCH_TOKEN is a fine-grained token (or GitHub App
         # token) with Contents: read and write on hugmesh/hugmesh.github.io only.
         env:
@@ -792,7 +925,7 @@ jobs:
           SITE_REPO: hugmesh/hugmesh.github.io
         run: |
           if [ -z "$SITE_DISPATCH_TOKEN" ]; then
-            echo "::notice::SITE_DISPATCH_TOKEN is not set; skipping the releases-updated dispatch to $SITE_REPO. Copy releases.json by hand or run the site's workflow."
+            echo "::notice::SITE_DISPATCH_TOKEN is not set; skipping the releases-updated dispatch to $SITE_REPO. The site rebuilds releases.json from the Releases API within the hour (pages.yml cron), or now via: gh workflow run pages.yml --repo $SITE_REPO"
             exit 0
           fi
           payload=$(python3 -c 'import json,os; v=os.environ["VERSION"]; r=os.environ["GITHUB_REPOSITORY"]; t="studio-v"+v; print(json.dumps({"event_type":"releases-updated","client_payload":{"source":r,"kind":"studio","version":v,"tag":t,"releases_json":"https://github.com/%s/releases/download/%s/releases.json"%(r,t)}}))')
