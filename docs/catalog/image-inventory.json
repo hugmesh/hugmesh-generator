@@ -1,5 +1,5 @@
 {
-  "build_count": 262,
+  "build_count": 282,
   "channel_gaps": [
     {
       "channels": {
@@ -735,7 +735,7 @@
       "notes": {
         "job": "resolve_build_target rejects every IMAGE_TYPE for HARDWARE_CLASS=rpi5.generic.rpi4",
         "make": "`make rpi-generic` recipe omits --skip-mesh (standalone posture) (reachable only via STANDALONE_FLAGS)",
-        "menu": "role 'generic' (picker offers: pki, backend, frontend, desktop)"
+        "menu": "role 'generic' (picker offers: pki, backend, frontend, omnibus, desktop)"
       }
     },
     {
@@ -748,7 +748,7 @@
       "notes": {
         "job": "resolve_build_target rejects every IMAGE_TYPE for HARDWARE_CLASS=rpi5.generic.rpi5",
         "make": "`make rpi-generic` recipe omits --skip-mesh (standalone posture) (reachable only via STANDALONE_FLAGS)",
-        "menu": "role 'generic' (picker offers: pki, backend, frontend, desktop)"
+        "menu": "role 'generic' (picker offers: pki, backend, frontend, omnibus, desktop)"
       }
     },
     {
@@ -779,7 +779,7 @@
     "prod"
   ],
   "generated_by": "scripts/emit-image-inventory.py",
-  "image_count": 131,
+  "image_count": 141,
   "images": [
     {
       "artifacts": [
@@ -828,6 +828,7 @@
       "plan_platform": "frite",
       "plan_role": "desktop",
       "platform": "frite",
+      "ram_gb": "",
       "reachable": [
         "cli",
         "gui",
@@ -884,6 +885,7 @@
       "plan_platform": "frite",
       "plan_role": "desktop",
       "platform": "frite",
+      "ram_gb": "",
       "reachable": [
         "cli",
         "gui",
@@ -939,6 +941,7 @@
       "plan_platform": "frite",
       "plan_role": "desktop",
       "platform": "frite",
+      "ram_gb": "",
       "reachable": [
         "cli",
         "gui",
@@ -995,6 +998,7 @@
       "plan_platform": "frite",
       "plan_role": "desktop",
       "platform": "frite",
+      "ram_gb": "",
       "reachable": [
         "cli",
         "gui",
@@ -1051,6 +1055,7 @@
       "plan_platform": "frite",
       "plan_role": "desktop",
       "platform": "frite",
+      "ram_gb": "",
       "reachable": [
         "cli",
         "gui",
@@ -1107,6 +1112,7 @@
       "plan_platform": "frite",
       "plan_role": "desktop",
       "platform": "frite",
+      "ram_gb": "",
       "reachable": [
         "cli",
         "gui",
@@ -1164,6 +1170,7 @@
       "plan_platform": "frite",
       "plan_role": "desktop",
       "platform": "frite",
+      "ram_gb": "",
       "reachable": [
         "cli",
         "gui",
@@ -1220,6 +1227,7 @@
       "plan_platform": "frite",
       "plan_role": "desktop",
       "platform": "frite",
+      "ram_gb": "",
       "reachable": [
         "cli",
         "gui",
@@ -1275,6 +1283,7 @@
       "plan_platform": "frite",
       "plan_role": "desktop",
       "platform": "frite",
+      "ram_gb": "",
       "reachable": [
         "cli",
         "gui",
@@ -1331,6 +1340,7 @@
       "plan_platform": "frite",
       "plan_role": "desktop",
       "platform": "frite",
+      "ram_gb": "",
       "reachable": [
         "cli",
         "gui",
@@ -1387,6 +1397,7 @@
       "plan_platform": "frite",
       "plan_role": "desktop",
       "platform": "frite",
+      "ram_gb": "",
       "reachable": [
         "cli",
         "gui",
@@ -1443,6 +1454,7 @@
       "plan_platform": "frite",
       "plan_role": "desktop",
       "platform": "frite",
+      "ram_gb": "",
       "reachable": [
         "cli",
         "gui",
@@ -1500,6 +1512,7 @@
       "plan_platform": "frite",
       "plan_role": "desktop",
       "platform": "frite",
+      "ram_gb": "",
       "reachable": [
         "cli",
         "gui",
@@ -1556,6 +1569,7 @@
       "plan_platform": "frite",
       "plan_role": "desktop",
       "platform": "frite",
+      "ram_gb": "",
       "reachable": [
         "cli",
         "gui",
@@ -1611,6 +1625,7 @@
       "plan_platform": "frite",
       "plan_role": "desktop",
       "platform": "frite",
+      "ram_gb": "",
       "reachable": [
         "cli",
         "gui",
@@ -1667,6 +1682,7 @@
       "plan_platform": "frite",
       "plan_role": "desktop",
       "platform": "frite",
+      "ram_gb": "",
       "reachable": [
         "cli",
         "gui",
@@ -1723,6 +1739,7 @@
       "plan_platform": "frite",
       "plan_role": "desktop",
       "platform": "frite",
+      "ram_gb": "",
       "reachable": [
         "cli",
         "gui",
@@ -1779,6 +1796,7 @@
       "plan_platform": "frite",
       "plan_role": "desktop",
       "platform": "frite",
+      "ram_gb": "",
       "reachable": [
         "cli",
         "gui",
@@ -1834,6 +1852,7 @@
       "plan_platform": "orangepi3-lts",
       "plan_role": "appliance",
       "platform": "orangepi3-lts",
+      "ram_gb": "",
       "reachable": [
         "cli",
         "gui",
@@ -1887,6 +1906,7 @@
       "plan_platform": "orangepi3-lts",
       "plan_role": "appliance",
       "platform": "orangepi3-lts",
+      "ram_gb": "",
       "reachable": [
         "cli",
         "gui",
@@ -1941,6 +1961,7 @@
       "plan_platform": "orangepi3-lts",
       "plan_role": "appliance",
       "platform": "orangepi3-lts",
+      "ram_gb": "",
       "reachable": [
         "cli",
         "gui",
@@ -1996,6 +2017,7 @@
       "plan_platform": "orangepi4-lts",
       "plan_role": "desktop",
       "platform": "orangepi4-lts",
+      "ram_gb": "",
       "reachable": [
         "cli",
         "gui",
@@ -2049,6 +2071,7 @@
       "plan_platform": "orangepi4-lts",
       "plan_role": "desktop",
       "platform": "orangepi4-lts",
+      "ram_gb": "",
       "reachable": [
         "cli",
         "gui",
@@ -2103,6 +2126,7 @@
       "plan_platform": "orangepi4-lts",
       "plan_role": "desktop",
       "platform": "orangepi4-lts",
+      "ram_gb": "",
       "reachable": [
         "cli",
         "gui",
@@ -2159,6 +2183,7 @@
       "plan_platform": "orangepi5",
       "plan_role": "desktop",
       "platform": "orangepi5",
+      "ram_gb": "",
       "reachable": [
         "cli",
         "gui",
@@ -2213,6 +2238,7 @@
       "plan_platform": "orangepi5",
       "plan_role": "desktop",
       "platform": "orangepi5",
+      "ram_gb": "",
       "reachable": [
         "cli",
         "gui",
@@ -2268,6 +2294,7 @@
       "plan_platform": "orangepi5",
       "plan_role": "desktop",
       "platform": "orangepi5",
+      "ram_gb": "",
       "reachable": [
         "cli",
         "gui",
@@ -2324,6 +2351,7 @@
       "plan_platform": "orangepi5",
       "plan_role": "desktop",
       "platform": "orangepi5",
+      "ram_gb": "",
       "reachable": [
         "cli",
         "gui",
@@ -2378,6 +2406,7 @@
       "plan_platform": "orangepi5",
       "plan_role": "desktop",
       "platform": "orangepi5",
+      "ram_gb": "",
       "reachable": [
         "cli",
         "gui",
@@ -2433,6 +2462,7 @@
       "plan_platform": "orangepi5",
       "plan_role": "desktop",
       "platform": "orangepi5",
+      "ram_gb": "",
       "reachable": [
         "cli",
         "gui",
@@ -2488,6 +2518,7 @@
       "plan_platform": "orangepizero2",
       "plan_role": "appliance",
       "platform": "orangepizero2",
+      "ram_gb": "",
       "reachable": [
         "cli",
         "gui",
@@ -2541,6 +2572,7 @@
       "plan_platform": "orangepizero2",
       "plan_role": "appliance",
       "platform": "orangepizero2",
+      "ram_gb": "",
       "reachable": [
         "cli",
         "gui",
@@ -2595,6 +2627,7 @@
       "plan_platform": "orangepizero2",
       "plan_role": "appliance",
       "platform": "orangepizero2",
+      "ram_gb": "",
       "reachable": [
         "cli",
         "gui",
@@ -2650,6 +2683,7 @@
       "plan_platform": "orangepizero2w",
       "plan_role": "appliance",
       "platform": "orangepizero2w",
+      "ram_gb": "",
       "reachable": [
         "cli",
         "gui",
@@ -2703,6 +2737,7 @@
       "plan_platform": "orangepizero2w",
       "plan_role": "appliance",
       "platform": "orangepizero2w",
+      "ram_gb": "",
       "reachable": [
         "cli",
         "gui",
@@ -2757,6 +2792,7 @@
       "plan_platform": "orangepizero2w",
       "plan_role": "appliance",
       "platform": "orangepizero2w",
+      "ram_gb": "",
       "reachable": [
         "cli",
         "gui",
@@ -2812,6 +2848,7 @@
       "plan_platform": "orangepizero3",
       "plan_role": "appliance",
       "platform": "orangepizero3",
+      "ram_gb": "",
       "reachable": [
         "cli",
         "gui",
@@ -2865,6 +2902,7 @@
       "plan_platform": "orangepizero3",
       "plan_role": "appliance",
       "platform": "orangepizero3",
+      "ram_gb": "",
       "reachable": [
         "cli",
         "gui",
@@ -2919,6 +2957,7 @@
       "plan_platform": "orangepizero3",
       "plan_role": "appliance",
       "platform": "orangepizero3",
+      "ram_gb": "",
       "reachable": [
         "cli",
         "gui",
@@ -2977,6 +3016,7 @@
       "plan_platform": "rpi3",
       "plan_role": "desktop",
       "platform": "rpi5",
+      "ram_gb": "",
       "reachable": [
         "cli",
         "gui",
@@ -3034,6 +3074,7 @@
       "plan_platform": "rpi4",
       "plan_role": "desktop",
       "platform": "rpi5",
+      "ram_gb": "",
       "reachable": [
         "cli",
         "gui",
@@ -3091,6 +3132,7 @@
       "plan_platform": "rpi5",
       "plan_role": "desktop",
       "platform": "rpi5",
+      "ram_gb": "",
       "reachable": [
         "cli",
         "gui",
@@ -3147,6 +3189,7 @@
       "plan_platform": "x86",
       "plan_role": "chromebook",
       "platform": "x86",
+      "ram_gb": "",
       "reachable": [
         "cli",
         "gui",
@@ -3199,6 +3242,7 @@
       "plan_platform": "x86",
       "plan_role": "chromebook",
       "platform": "x86",
+      "ram_gb": "",
       "reachable": [
         "cli",
         "gui",
@@ -3253,6 +3297,7 @@
       "plan_platform": "x86",
       "plan_role": "desktop",
       "platform": "x86",
+      "ram_gb": "",
       "reachable": [
         "cli",
         "gui",
@@ -3310,6 +3355,7 @@
       "plan_platform": "x86",
       "plan_role": "desktop",
       "platform": "x86",
+      "ram_gb": "",
       "reachable": [
         "cli",
         "gui",
@@ -3365,6 +3411,7 @@
       "plan_platform": "x86",
       "plan_role": "laptop",
       "platform": "x86",
+      "ram_gb": "",
       "reachable": [
         "cli",
         "gui",
@@ -3417,6 +3464,7 @@
       "plan_platform": "x86",
       "plan_role": "laptop",
       "platform": "x86",
+      "ram_gb": "",
       "reachable": [
         "cli",
         "gui",
@@ -3472,6 +3520,7 @@
       "plan_platform": "jetson",
       "plan_role": "backend-gpu",
       "platform": "jetson",
+      "ram_gb": "",
       "reachable": [
         "cli",
         "gui",
@@ -3527,6 +3576,7 @@
       "plan_platform": "jetson",
       "plan_role": "backend-gpu",
       "platform": "jetson",
+      "ram_gb": "",
       "reachable": [
         "cli",
         "gui",
@@ -3582,6 +3632,7 @@
       "plan_platform": "jetson",
       "plan_role": "backend-gpu",
       "platform": "jetson",
+      "ram_gb": "",
       "reachable": [
         "cli",
         "gui",
@@ -3637,6 +3688,7 @@
       "plan_platform": "jetson",
       "plan_role": "backend-gpu",
       "platform": "jetson",
+      "ram_gb": "",
       "reachable": [
         "cli",
         "gui",
@@ -3692,6 +3744,7 @@
       "plan_platform": "jetson",
       "plan_role": "edge-ai",
       "platform": "jetson",
+      "ram_gb": "",
       "reachable": [
         "cli",
         "gui",
@@ -3747,6 +3800,7 @@
       "plan_platform": "jetson",
       "plan_role": "edge-ai",
       "platform": "jetson",
+      "ram_gb": "",
       "reachable": [
         "cli",
         "gui",
@@ -3802,6 +3856,7 @@
       "plan_platform": "jetson",
       "plan_role": "edge-ai",
       "platform": "jetson",
+      "ram_gb": "",
       "reachable": [
         "cli",
         "gui",
@@ -3857,6 +3912,7 @@
       "plan_platform": "jetson",
       "plan_role": "edge-ai",
       "platform": "jetson",
+      "ram_gb": "",
       "reachable": [
         "cli",
         "gui",
@@ -3912,6 +3968,7 @@
       "plan_platform": "jetson",
       "plan_role": "desktop",
       "platform": "jetson",
+      "ram_gb": "",
       "reachable": [
         "cli",
         "gui",
@@ -3967,6 +4024,7 @@
       "plan_platform": "jetson",
       "plan_role": "desktop",
       "platform": "jetson",
+      "ram_gb": "",
       "reachable": [
         "cli",
         "gui",
@@ -4022,6 +4080,7 @@
       "plan_platform": "jetson",
       "plan_role": "desktop",
       "platform": "jetson",
+      "ram_gb": "",
       "reachable": [
         "cli",
         "gui",
@@ -4077,6 +4136,7 @@
       "plan_platform": "jetson",
       "plan_role": "desktop",
       "platform": "jetson",
+      "ram_gb": "",
       "reachable": [
         "cli",
         "gui",
@@ -4121,7 +4181,7 @@
           "mesh-extension"
         ]
       },
-      "label": "Omnibus \u2014 every cluster role on one node (x86, or Jetson Orin \u2014 EXPERIMENTAL)",
+      "label": "Omnibus \u2014 every cluster role on one node (x86; Raspberry Pi 5 or Orange Pi 5 with 16 GB+ RAM; Jetson Orin / Orange Pi \u2014 EXPERIMENTAL)",
       "make_target": "jetson-omnibus",
       "make_vars": {
         "JETSON_BOARD": "orin-nano"
@@ -4132,6 +4192,7 @@
       "plan_platform": "jetson",
       "plan_role": "omnibus",
       "platform": "jetson",
+      "ram_gb": "",
       "reachable": [
         "cli",
         "gui",
@@ -4176,7 +4237,7 @@
           "mesh-extension"
         ]
       },
-      "label": "Omnibus \u2014 every cluster role on one node (x86, or Jetson Orin \u2014 EXPERIMENTAL)",
+      "label": "Omnibus \u2014 every cluster role on one node (x86; Raspberry Pi 5 or Orange Pi 5 with 16 GB+ RAM; Jetson Orin / Orange Pi \u2014 EXPERIMENTAL)",
       "make_target": "jetson-omnibus",
       "make_vars": {
         "JETSON_BOARD": "orin-nano-4gb"
@@ -4187,6 +4248,7 @@
       "plan_platform": "jetson",
       "plan_role": "omnibus",
       "platform": "jetson",
+      "ram_gb": "",
       "reachable": [
         "cli",
         "gui",
@@ -4231,7 +4293,7 @@
           "mesh-extension"
         ]
       },
-      "label": "Omnibus \u2014 every cluster role on one node (x86, or Jetson Orin \u2014 EXPERIMENTAL)",
+      "label": "Omnibus \u2014 every cluster role on one node (x86; Raspberry Pi 5 or Orange Pi 5 with 16 GB+ RAM; Jetson Orin / Orange Pi \u2014 EXPERIMENTAL)",
       "make_target": "jetson-omnibus",
       "make_vars": {
         "JETSON_BOARD": "orin-nx-16gb"
@@ -4242,6 +4304,7 @@
       "plan_platform": "jetson",
       "plan_role": "omnibus",
       "platform": "jetson",
+      "ram_gb": "",
       "reachable": [
         "cli",
         "gui",
@@ -4286,7 +4349,7 @@
           "mesh-extension"
         ]
       },
-      "label": "Omnibus \u2014 every cluster role on one node (x86, or Jetson Orin \u2014 EXPERIMENTAL)",
+      "label": "Omnibus \u2014 every cluster role on one node (x86; Raspberry Pi 5 or Orange Pi 5 with 16 GB+ RAM; Jetson Orin / Orange Pi \u2014 EXPERIMENTAL)",
       "make_target": "jetson-omnibus",
       "make_vars": {
         "JETSON_BOARD": "orin-nx-8gb"
@@ -4297,6 +4360,7 @@
       "plan_platform": "jetson",
       "plan_role": "omnibus",
       "platform": "jetson",
+      "ram_gb": "",
       "reachable": [
         "cli",
         "gui",
@@ -4306,6 +4370,510 @@
         "worklist"
       ],
       "role": "omnibus"
+    },
+    {
+      "artifacts": [
+        "installer.iso",
+        "stage4.tar.xz"
+      ],
+      "board": "",
+      "builder_role": "frontend",
+      "channel_notes": {},
+      "channels": {
+        "cli": "yes",
+        "gui": "yes",
+        "job": "yes",
+        "make": "yes",
+        "menu": "yes",
+        "worklist": "yes"
+      },
+      "desktop": "",
+      "desktop_implied": false,
+      "envs": [
+        "test",
+        "prod"
+      ],
+      "flavor": "installer",
+      "gui_command": "sudo bash ./build-orangepi4-lts-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --flavor installer --role frontend --env test --superdomain hugmesh.internal --compress --resume",
+      "id": "mesh/orangepi4-lts/frontend/installer",
+      "image_class": "node",
+      "job_token": {
+        "HARDWARE_CLASS": "orangepi4-lts.frontend",
+        "IMAGE_TYPE": "primary",
+        "accepted_image_types": [
+          "primary",
+          "mesh-extension"
+        ]
+      },
+      "label": "Frontend node (x86, Raspberry Pi 4/5, or Orange Pi 5 / 4 LTS \u2014 EXPERIMENTAL)",
+      "make_target": "orangepi4-lts-frontend",
+      "make_vars": {},
+      "mode": "mesh",
+      "phantom": false,
+      "phantom_reason": "",
+      "plan_platform": "orangepi4-lts",
+      "plan_role": "frontend",
+      "platform": "orangepi4-lts",
+      "ram_gb": "",
+      "reachable": [
+        "cli",
+        "gui",
+        "job",
+        "make",
+        "menu",
+        "worklist"
+      ],
+      "role": "frontend"
+    },
+    {
+      "artifacts": [
+        "installer.iso",
+        "stage4.tar.xz"
+      ],
+      "board": "orange-pi-5-plus",
+      "builder_role": "backend",
+      "channel_notes": {},
+      "channels": {
+        "cli": "yes",
+        "gui": "yes",
+        "job": "yes",
+        "make": "yes",
+        "menu": "yes",
+        "worklist": "yes"
+      },
+      "desktop": "",
+      "desktop_implied": false,
+      "envs": [
+        "test",
+        "prod"
+      ],
+      "flavor": "installer",
+      "gui_command": "sudo bash ./build-orangepi5-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --board orange-pi-5-plus --flavor installer --role backend --env test --superdomain hugmesh.internal --compress --resume",
+      "id": "mesh/orangepi5/backend/orange-pi-5-plus/installer",
+      "image_class": "node",
+      "job_token": {
+        "HARDWARE_CLASS": "orangepi5.backend.orange-pi-5-plus",
+        "IMAGE_TYPE": "primary",
+        "accepted_image_types": [
+          "primary",
+          "mesh-extension"
+        ]
+      },
+      "label": "Backend node (x86, Raspberry Pi 4/5, or Orange Pi 5 \u2014 EXPERIMENTAL)",
+      "make_target": "orangepi5-backend",
+      "make_vars": {
+        "ORANGEPI5_BOARD": "orange-pi-5-plus"
+      },
+      "mode": "mesh",
+      "phantom": false,
+      "phantom_reason": "",
+      "plan_platform": "orangepi5",
+      "plan_role": "backend",
+      "platform": "orangepi5",
+      "ram_gb": "",
+      "reachable": [
+        "cli",
+        "gui",
+        "job",
+        "make",
+        "menu",
+        "worklist"
+      ],
+      "role": "backend"
+    },
+    {
+      "artifacts": [
+        "installer.iso",
+        "stage4.tar.xz"
+      ],
+      "board": "orange-pi-5",
+      "builder_role": "backend",
+      "channel_notes": {},
+      "channels": {
+        "cli": "yes",
+        "gui": "yes",
+        "job": "yes",
+        "make": "yes",
+        "menu": "yes",
+        "worklist": "yes"
+      },
+      "desktop": "",
+      "desktop_implied": false,
+      "envs": [
+        "test",
+        "prod"
+      ],
+      "flavor": "installer",
+      "gui_command": "sudo bash ./build-orangepi5-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --board orange-pi-5 --flavor installer --role backend --env test --superdomain hugmesh.internal --compress --resume",
+      "id": "mesh/orangepi5/backend/orange-pi-5/installer",
+      "image_class": "node",
+      "job_token": {
+        "HARDWARE_CLASS": "orangepi5.backend.orange-pi-5",
+        "IMAGE_TYPE": "primary",
+        "accepted_image_types": [
+          "primary",
+          "mesh-extension"
+        ]
+      },
+      "label": "Backend node (x86, Raspberry Pi 4/5, or Orange Pi 5 \u2014 EXPERIMENTAL)",
+      "make_target": "orangepi5-backend",
+      "make_vars": {
+        "ORANGEPI5_BOARD": "orange-pi-5"
+      },
+      "mode": "mesh",
+      "phantom": false,
+      "phantom_reason": "",
+      "plan_platform": "orangepi5",
+      "plan_role": "backend",
+      "platform": "orangepi5",
+      "ram_gb": "",
+      "reachable": [
+        "cli",
+        "gui",
+        "job",
+        "make",
+        "menu",
+        "worklist"
+      ],
+      "role": "backend"
+    },
+    {
+      "artifacts": [
+        "installer.iso",
+        "stage4.tar.xz"
+      ],
+      "board": "orange-pi-5-plus",
+      "builder_role": "frontend",
+      "channel_notes": {},
+      "channels": {
+        "cli": "yes",
+        "gui": "yes",
+        "job": "yes",
+        "make": "yes",
+        "menu": "yes",
+        "worklist": "yes"
+      },
+      "desktop": "",
+      "desktop_implied": false,
+      "envs": [
+        "test",
+        "prod"
+      ],
+      "flavor": "installer",
+      "gui_command": "sudo bash ./build-orangepi5-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --board orange-pi-5-plus --flavor installer --role frontend --env test --superdomain hugmesh.internal --compress --resume",
+      "id": "mesh/orangepi5/frontend/orange-pi-5-plus/installer",
+      "image_class": "node",
+      "job_token": {
+        "HARDWARE_CLASS": "orangepi5.frontend.orange-pi-5-plus",
+        "IMAGE_TYPE": "primary",
+        "accepted_image_types": [
+          "primary",
+          "mesh-extension"
+        ]
+      },
+      "label": "Frontend node (x86, Raspberry Pi 4/5, or Orange Pi 5 / 4 LTS \u2014 EXPERIMENTAL)",
+      "make_target": "orangepi5-frontend",
+      "make_vars": {
+        "ORANGEPI5_BOARD": "orange-pi-5-plus"
+      },
+      "mode": "mesh",
+      "phantom": false,
+      "phantom_reason": "",
+      "plan_platform": "orangepi5",
+      "plan_role": "frontend",
+      "platform": "orangepi5",
+      "ram_gb": "",
+      "reachable": [
+        "cli",
+        "gui",
+        "job",
+        "make",
+        "menu",
+        "worklist"
+      ],
+      "role": "frontend"
+    },
+    {
+      "artifacts": [
+        "installer.iso",
+        "stage4.tar.xz"
+      ],
+      "board": "orange-pi-5",
+      "builder_role": "frontend",
+      "channel_notes": {},
+      "channels": {
+        "cli": "yes",
+        "gui": "yes",
+        "job": "yes",
+        "make": "yes",
+        "menu": "yes",
+        "worklist": "yes"
+      },
+      "desktop": "",
+      "desktop_implied": false,
+      "envs": [
+        "test",
+        "prod"
+      ],
+      "flavor": "installer",
+      "gui_command": "sudo bash ./build-orangepi5-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --board orange-pi-5 --flavor installer --role frontend --env test --superdomain hugmesh.internal --compress --resume",
+      "id": "mesh/orangepi5/frontend/orange-pi-5/installer",
+      "image_class": "node",
+      "job_token": {
+        "HARDWARE_CLASS": "orangepi5.frontend.orange-pi-5",
+        "IMAGE_TYPE": "primary",
+        "accepted_image_types": [
+          "primary",
+          "mesh-extension"
+        ]
+      },
+      "label": "Frontend node (x86, Raspberry Pi 4/5, or Orange Pi 5 / 4 LTS \u2014 EXPERIMENTAL)",
+      "make_target": "orangepi5-frontend",
+      "make_vars": {
+        "ORANGEPI5_BOARD": "orange-pi-5"
+      },
+      "mode": "mesh",
+      "phantom": false,
+      "phantom_reason": "",
+      "plan_platform": "orangepi5",
+      "plan_role": "frontend",
+      "platform": "orangepi5",
+      "ram_gb": "",
+      "reachable": [
+        "cli",
+        "gui",
+        "job",
+        "make",
+        "menu",
+        "worklist"
+      ],
+      "role": "frontend"
+    },
+    {
+      "artifacts": [
+        "installer.iso",
+        "stage4.tar.xz"
+      ],
+      "board": "orange-pi-5-plus",
+      "builder_role": "omnibus",
+      "channel_notes": {},
+      "channels": {
+        "cli": "yes",
+        "gui": "yes",
+        "job": "yes",
+        "make": "yes",
+        "menu": "yes",
+        "worklist": "yes"
+      },
+      "desktop": "",
+      "desktop_implied": false,
+      "envs": [
+        "test",
+        "prod"
+      ],
+      "flavor": "installer",
+      "gui_command": "sudo bash ./build-orangepi5-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --board orange-pi-5-plus --flavor installer --role omnibus --ram-gb 16 --env test --superdomain hugmesh.internal --compress --resume",
+      "id": "mesh/orangepi5/omnibus/orange-pi-5-plus/installer",
+      "image_class": "node",
+      "job_token": {
+        "HARDWARE_CLASS": "orangepi5.omnibus.orange-pi-5-plus.16gb",
+        "IMAGE_TYPE": "primary",
+        "accepted_image_types": [
+          "primary",
+          "mesh-extension"
+        ]
+      },
+      "label": "Omnibus \u2014 every cluster role on one node (x86; Raspberry Pi 5 or Orange Pi 5 with 16 GB+ RAM; Jetson Orin / Orange Pi \u2014 EXPERIMENTAL)",
+      "make_target": "orangepi5-omnibus",
+      "make_vars": {
+        "ORANGEPI5_BOARD": "orange-pi-5-plus",
+        "RAM_GB": "16"
+      },
+      "mode": "mesh",
+      "phantom": false,
+      "phantom_reason": "",
+      "plan_platform": "orangepi5",
+      "plan_role": "omnibus",
+      "platform": "orangepi5",
+      "ram_gb": "16",
+      "reachable": [
+        "cli",
+        "gui",
+        "job",
+        "make",
+        "menu",
+        "worklist"
+      ],
+      "role": "omnibus"
+    },
+    {
+      "artifacts": [
+        "installer.iso",
+        "stage4.tar.xz"
+      ],
+      "board": "orange-pi-5",
+      "builder_role": "omnibus",
+      "channel_notes": {},
+      "channels": {
+        "cli": "yes",
+        "gui": "yes",
+        "job": "yes",
+        "make": "yes",
+        "menu": "yes",
+        "worklist": "yes"
+      },
+      "desktop": "",
+      "desktop_implied": false,
+      "envs": [
+        "test",
+        "prod"
+      ],
+      "flavor": "installer",
+      "gui_command": "sudo bash ./build-orangepi5-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --board orange-pi-5 --flavor installer --role omnibus --ram-gb 16 --env test --superdomain hugmesh.internal --compress --resume",
+      "id": "mesh/orangepi5/omnibus/orange-pi-5/installer",
+      "image_class": "node",
+      "job_token": {
+        "HARDWARE_CLASS": "orangepi5.omnibus.orange-pi-5.16gb",
+        "IMAGE_TYPE": "primary",
+        "accepted_image_types": [
+          "primary",
+          "mesh-extension"
+        ]
+      },
+      "label": "Omnibus \u2014 every cluster role on one node (x86; Raspberry Pi 5 or Orange Pi 5 with 16 GB+ RAM; Jetson Orin / Orange Pi \u2014 EXPERIMENTAL)",
+      "make_target": "orangepi5-omnibus",
+      "make_vars": {
+        "ORANGEPI5_BOARD": "orange-pi-5",
+        "RAM_GB": "16"
+      },
+      "mode": "mesh",
+      "phantom": false,
+      "phantom_reason": "",
+      "plan_platform": "orangepi5",
+      "plan_role": "omnibus",
+      "platform": "orangepi5",
+      "ram_gb": "16",
+      "reachable": [
+        "cli",
+        "gui",
+        "job",
+        "make",
+        "menu",
+        "worklist"
+      ],
+      "role": "omnibus"
+    },
+    {
+      "artifacts": [
+        "installer.iso",
+        "stage4.tar.xz"
+      ],
+      "board": "orange-pi-5-plus",
+      "builder_role": "pki",
+      "channel_notes": {},
+      "channels": {
+        "cli": "yes",
+        "gui": "yes",
+        "job": "yes",
+        "make": "yes",
+        "menu": "yes",
+        "worklist": "yes"
+      },
+      "desktop": "",
+      "desktop_implied": false,
+      "envs": [
+        "test",
+        "prod"
+      ],
+      "flavor": "installer",
+      "gui_command": "sudo bash ./build-orangepi5-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --board orange-pi-5-plus --flavor installer --role pki --env test --superdomain hugmesh.internal --compress --resume",
+      "id": "mesh/orangepi5/pki/orange-pi-5-plus/installer",
+      "image_class": "node",
+      "job_token": {
+        "HARDWARE_CLASS": "orangepi5.pki.orange-pi-5-plus",
+        "IMAGE_TYPE": "primary",
+        "accepted_image_types": [
+          "primary",
+          "mesh-extension"
+        ]
+      },
+      "label": "PKI node \u2014 cluster certificate authority (x86, Raspberry Pi 4/5, or Orange Pi 5 \u2014 EXPERIMENTAL)",
+      "make_target": "orangepi5-pki",
+      "make_vars": {
+        "ORANGEPI5_BOARD": "orange-pi-5-plus"
+      },
+      "mode": "mesh",
+      "phantom": false,
+      "phantom_reason": "",
+      "plan_platform": "orangepi5",
+      "plan_role": "pki",
+      "platform": "orangepi5",
+      "ram_gb": "",
+      "reachable": [
+        "cli",
+        "gui",
+        "job",
+        "make",
+        "menu",
+        "worklist"
+      ],
+      "role": "pki"
+    },
+    {
+      "artifacts": [
+        "installer.iso",
+        "stage4.tar.xz"
+      ],
+      "board": "orange-pi-5",
+      "builder_role": "pki",
+      "channel_notes": {},
+      "channels": {
+        "cli": "yes",
+        "gui": "yes",
+        "job": "yes",
+        "make": "yes",
+        "menu": "yes",
+        "worklist": "yes"
+      },
+      "desktop": "",
+      "desktop_implied": false,
+      "envs": [
+        "test",
+        "prod"
+      ],
+      "flavor": "installer",
+      "gui_command": "sudo bash ./build-orangepi5-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --board orange-pi-5 --flavor installer --role pki --env test --superdomain hugmesh.internal --compress --resume",
+      "id": "mesh/orangepi5/pki/orange-pi-5/installer",
+      "image_class": "node",
+      "job_token": {
+        "HARDWARE_CLASS": "orangepi5.pki.orange-pi-5",
+        "IMAGE_TYPE": "primary",
+        "accepted_image_types": [
+          "primary",
+          "mesh-extension"
+        ]
+      },
+      "label": "PKI node \u2014 cluster certificate authority (x86, Raspberry Pi 4/5, or Orange Pi 5 \u2014 EXPERIMENTAL)",
+      "make_target": "orangepi5-pki",
+      "make_vars": {
+        "ORANGEPI5_BOARD": "orange-pi-5"
+      },
+      "mode": "mesh",
+      "phantom": false,
+      "phantom_reason": "",
+      "plan_platform": "orangepi5",
+      "plan_role": "pki",
+      "platform": "orangepi5",
+      "ram_gb": "",
+      "reachable": [
+        "cli",
+        "gui",
+        "job",
+        "make",
+        "menu",
+        "worklist"
+      ],
+      "role": "pki"
     },
     {
       "artifacts": [
@@ -4342,7 +4910,7 @@
           "mesh-extension"
         ]
       },
-      "label": "Backend node (x86 or Raspberry Pi 4/5)",
+      "label": "Backend node (x86, Raspberry Pi 4/5, or Orange Pi 5 \u2014 EXPERIMENTAL)",
       "make_target": "rpi-backend",
       "make_vars": {
         "RPI_BOARD": "rpi4"
@@ -4353,6 +4921,7 @@
       "plan_platform": "rpi4",
       "plan_role": "backend",
       "platform": "rpi5",
+      "ram_gb": "",
       "reachable": [
         "cli",
         "gui",
@@ -4398,7 +4967,7 @@
           "mesh-extension"
         ]
       },
-      "label": "Backend node (x86 or Raspberry Pi 4/5)",
+      "label": "Backend node (x86, Raspberry Pi 4/5, or Orange Pi 5 \u2014 EXPERIMENTAL)",
       "make_target": "rpi-backend",
       "make_vars": {
         "RPI_BOARD": "rpi5"
@@ -4409,6 +4978,7 @@
       "plan_platform": "rpi5",
       "plan_role": "backend",
       "platform": "rpi5",
+      "ram_gb": "",
       "reachable": [
         "cli",
         "gui",
@@ -4454,7 +5024,7 @@
           "mesh-extension"
         ]
       },
-      "label": "Frontend node (x86 or Raspberry Pi 4/5)",
+      "label": "Frontend node (x86, Raspberry Pi 4/5, or Orange Pi 5 / 4 LTS \u2014 EXPERIMENTAL)",
       "make_target": "rpi-frontend",
       "make_vars": {
         "RPI_BOARD": "rpi4"
@@ -4465,6 +5035,7 @@
       "plan_platform": "rpi4",
       "plan_role": "frontend",
       "platform": "rpi5",
+      "ram_gb": "",
       "reachable": [
         "cli",
         "gui",
@@ -4510,7 +5081,7 @@
           "mesh-extension"
         ]
       },
-      "label": "Frontend node (x86 or Raspberry Pi 4/5)",
+      "label": "Frontend node (x86, Raspberry Pi 4/5, or Orange Pi 5 / 4 LTS \u2014 EXPERIMENTAL)",
       "make_target": "rpi-frontend",
       "make_vars": {
         "RPI_BOARD": "rpi5"
@@ -4521,6 +5092,7 @@
       "plan_platform": "rpi5",
       "plan_role": "frontend",
       "platform": "rpi5",
+      "ram_gb": "",
       "reachable": [
         "cli",
         "gui",
@@ -4530,6 +5102,64 @@
         "worklist"
       ],
       "role": "frontend"
+    },
+    {
+      "artifacts": [
+        "fs.tar.xz",
+        "img",
+        "stage4.tar.xz"
+      ],
+      "board": "rpi5",
+      "builder_role": "omnibus",
+      "channel_notes": {},
+      "channels": {
+        "cli": "yes",
+        "gui": "yes",
+        "job": "yes",
+        "make": "yes",
+        "menu": "yes",
+        "worklist": "yes"
+      },
+      "desktop": "",
+      "desktop_implied": false,
+      "envs": [
+        "test",
+        "prod"
+      ],
+      "flavor": "",
+      "gui_command": "sudo bash ./build-rpi5-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --role omnibus --board rpi5 --ram-gb 16 --env test --superdomain hugmesh.internal --compress --resume",
+      "id": "mesh/rpi5/omnibus/rpi5",
+      "image_class": "node",
+      "job_token": {
+        "HARDWARE_CLASS": "rpi5.omnibus.rpi5.16gb",
+        "IMAGE_TYPE": "primary",
+        "accepted_image_types": [
+          "primary",
+          "mesh-extension"
+        ]
+      },
+      "label": "Omnibus \u2014 every cluster role on one node (x86; Raspberry Pi 5 or Orange Pi 5 with 16 GB+ RAM; Jetson Orin / Orange Pi \u2014 EXPERIMENTAL)",
+      "make_target": "rpi-omnibus",
+      "make_vars": {
+        "RAM_GB": "16",
+        "RPI_BOARD": "rpi5"
+      },
+      "mode": "mesh",
+      "phantom": false,
+      "phantom_reason": "",
+      "plan_platform": "rpi5",
+      "plan_role": "omnibus",
+      "platform": "rpi5",
+      "ram_gb": "16",
+      "reachable": [
+        "cli",
+        "gui",
+        "job",
+        "make",
+        "menu",
+        "worklist"
+      ],
+      "role": "omnibus"
     },
     {
       "artifacts": [
@@ -4566,7 +5196,7 @@
           "mesh-extension"
         ]
       },
-      "label": "PKI node \u2014 cluster certificate authority (x86 or Raspberry Pi 4/5)",
+      "label": "PKI node \u2014 cluster certificate authority (x86, Raspberry Pi 4/5, or Orange Pi 5 \u2014 EXPERIMENTAL)",
       "make_target": "rpi-pki",
       "make_vars": {
         "RPI_BOARD": "rpi4"
@@ -4577,6 +5207,7 @@
       "plan_platform": "rpi4",
       "plan_role": "pki",
       "platform": "rpi5",
+      "ram_gb": "",
       "reachable": [
         "cli",
         "gui",
@@ -4622,7 +5253,7 @@
           "mesh-extension"
         ]
       },
-      "label": "PKI node \u2014 cluster certificate authority (x86 or Raspberry Pi 4/5)",
+      "label": "PKI node \u2014 cluster certificate authority (x86, Raspberry Pi 4/5, or Orange Pi 5 \u2014 EXPERIMENTAL)",
       "make_target": "rpi-pki",
       "make_vars": {
         "RPI_BOARD": "rpi5"
@@ -4633,6 +5264,7 @@
       "plan_platform": "rpi5",
       "plan_role": "pki",
       "platform": "rpi5",
+      "ram_gb": "",
       "reachable": [
         "cli",
         "gui",
@@ -4689,6 +5321,7 @@
       "plan_platform": "rpi3",
       "plan_role": "desktop",
       "platform": "rpi5",
+      "ram_gb": "",
       "reachable": [
         "cli",
         "gui",
@@ -4745,6 +5378,7 @@
       "plan_platform": "rpi4",
       "plan_role": "desktop",
       "platform": "rpi5",
+      "ram_gb": "",
       "reachable": [
         "cli",
         "gui",
@@ -4801,6 +5435,7 @@
       "plan_platform": "rpi5",
       "plan_role": "desktop",
       "platform": "rpi5",
+      "ram_gb": "",
       "reachable": [
         "cli",
         "gui",
@@ -4847,7 +5482,7 @@
           "mesh-extension"
         ]
       },
-      "label": "Backend node (x86 or Raspberry Pi 4/5)",
+      "label": "Backend node (x86, Raspberry Pi 4/5, or Orange Pi 5 \u2014 EXPERIMENTAL)",
       "make_target": "x86-backend",
       "make_vars": {},
       "mode": "mesh",
@@ -4856,6 +5491,7 @@
       "plan_platform": "x86",
       "plan_role": "backend",
       "platform": "x86",
+      "ram_gb": "",
       "reachable": [
         "cli",
         "gui",
@@ -4911,6 +5547,7 @@
       "plan_platform": "x86",
       "plan_role": "backend-gpu",
       "platform": "x86",
+      "ram_gb": "",
       "reachable": [
         "cli",
         "gui",
@@ -4969,6 +5606,7 @@
       "plan_platform": "x86",
       "plan_role": "chromebook",
       "platform": "x86",
+      "ram_gb": "",
       "reachable": [
         "cli",
         "gui",
@@ -5022,6 +5660,7 @@
       "plan_platform": "x86",
       "plan_role": "chromebook",
       "platform": "x86",
+      "ram_gb": "",
       "reachable": [
         "cli",
         "gui",
@@ -5077,6 +5716,7 @@
       "plan_platform": "x86",
       "plan_role": "desktop",
       "platform": "x86",
+      "ram_gb": "",
       "reachable": [
         "cli",
         "gui",
@@ -5134,6 +5774,7 @@
       "plan_platform": "x86",
       "plan_role": "desktop",
       "platform": "x86",
+      "ram_gb": "",
       "reachable": [
         "cli",
         "gui",
@@ -5186,6 +5827,7 @@
       "plan_platform": "x86",
       "plan_role": "edge-ai",
       "platform": "x86",
+      "ram_gb": "",
       "reachable": [
         "cli",
         "gui",
@@ -5232,7 +5874,7 @@
           "mesh-extension"
         ]
       },
-      "label": "Frontend node (x86 or Raspberry Pi 4/5)",
+      "label": "Frontend node (x86, Raspberry Pi 4/5, or Orange Pi 5 / 4 LTS \u2014 EXPERIMENTAL)",
       "make_target": "x86-frontend",
       "make_vars": {},
       "mode": "mesh",
@@ -5241,6 +5883,7 @@
       "plan_platform": "x86",
       "plan_role": "frontend",
       "platform": "x86",
+      "ram_gb": "",
       "reachable": [
         "cli",
         "gui",
@@ -5299,6 +5942,7 @@
       "plan_platform": "x86",
       "plan_role": "laptop",
       "platform": "x86",
+      "ram_gb": "",
       "reachable": [
         "cli",
         "gui",
@@ -5352,6 +5996,7 @@
       "plan_platform": "x86",
       "plan_role": "laptop",
       "platform": "x86",
+      "ram_gb": "",
       "reachable": [
         "cli",
         "gui",
@@ -5397,7 +6042,7 @@
           "mesh-extension"
         ]
       },
-      "label": "Omnibus \u2014 every cluster role on one node (x86, or Jetson Orin \u2014 EXPERIMENTAL)",
+      "label": "Omnibus \u2014 every cluster role on one node (x86; Raspberry Pi 5 or Orange Pi 5 with 16 GB+ RAM; Jetson Orin / Orange Pi \u2014 EXPERIMENTAL)",
       "make_target": "x86-omnibus",
       "make_vars": {},
       "mode": "mesh",
@@ -5406,6 +6051,7 @@
       "plan_platform": "x86",
       "plan_role": "omnibus",
       "platform": "x86",
+      "ram_gb": "",
       "reachable": [
         "cli",
         "gui",
@@ -5452,7 +6098,7 @@
           "mesh-extension"
         ]
       },
-      "label": "PKI node \u2014 cluster certificate authority (x86 or Raspberry Pi 4/5)",
+      "label": "PKI node \u2014 cluster certificate authority (x86, Raspberry Pi 4/5, or Orange Pi 5 \u2014 EXPERIMENTAL)",
       "make_target": "x86-pki",
       "make_vars": {},
       "mode": "mesh",
@@ -5461,6 +6107,7 @@
       "plan_platform": "x86",
       "plan_role": "pki",
       "platform": "x86",
+      "ram_gb": "",
       "reachable": [
         "cli",
         "gui",
@@ -5520,6 +6167,7 @@
       "plan_platform": "frite",
       "plan_role": "desktop",
       "platform": "frite",
+      "ram_gb": "",
       "reachable": [
         "cli",
         "gui",
@@ -5576,6 +6224,7 @@
       "plan_platform": "frite",
       "plan_role": "desktop",
       "platform": "frite",
+      "ram_gb": "",
       "reachable": [
         "cli",
         "gui",
@@ -5632,6 +6281,7 @@
       "plan_platform": "frite",
       "plan_role": "desktop",
       "platform": "frite",
+      "ram_gb": "",
       "reachable": [
         "cli",
         "gui",
@@ -5689,6 +6339,7 @@
       "plan_platform": "frite",
       "plan_role": "desktop",
       "platform": "frite",
+      "ram_gb": "",
       "reachable": [
         "cli",
         "gui",
@@ -5745,6 +6396,7 @@
       "plan_platform": "frite",
       "plan_role": "desktop",
       "platform": "frite",
+      "ram_gb": "",
       "reachable": [
         "cli",
         "gui",
@@ -5800,6 +6452,7 @@
       "plan_platform": "frite",
       "plan_role": "desktop",
       "platform": "frite",
+      "ram_gb": "",
       "reachable": [
         "cli",
         "gui",
@@ -5856,6 +6509,7 @@
       "plan_platform": "frite",
       "plan_role": "desktop",
       "platform": "frite",
+      "ram_gb": "",
       "reachable": [
         "cli",
         "gui",
@@ -5912,6 +6566,7 @@
       "plan_platform": "frite",
       "plan_role": "desktop",
       "platform": "frite",
+      "ram_gb": "",
       "reachable": [
         "cli",
         "gui",
@@ -5968,6 +6623,7 @@
       "plan_platform": "frite",
       "plan_role": "desktop",
       "platform": "frite",
+      "ram_gb": "",
       "reachable": [
         "cli",
         "gui",
@@ -6025,6 +6681,7 @@
       "plan_platform": "frite",
       "plan_role": "desktop",
       "platform": "frite",
+      "ram_gb": "",
       "reachable": [
         "cli",
         "gui",
@@ -6081,6 +6738,7 @@
       "plan_platform": "frite",
       "plan_role": "desktop",
       "platform": "frite",
+      "ram_gb": "",
       "reachable": [
         "cli",
         "gui",
@@ -6136,6 +6794,7 @@
       "plan_platform": "frite",
       "plan_role": "desktop",
       "platform": "frite",
+      "ram_gb": "",
       "reachable": [
         "cli",
         "gui",
@@ -6192,6 +6851,7 @@
       "plan_platform": "frite",
       "plan_role": "desktop",
       "platform": "frite",
+      "ram_gb": "",
       "reachable": [
         "cli",
         "gui",
@@ -6248,6 +6908,7 @@
       "plan_platform": "frite",
       "plan_role": "desktop",
       "platform": "frite",
+      "ram_gb": "",
       "reachable": [
         "cli",
         "gui",
@@ -6304,6 +6965,7 @@
       "plan_platform": "frite",
       "plan_role": "desktop",
       "platform": "frite",
+      "ram_gb": "",
       "reachable": [
         "cli",
         "gui",
@@ -6361,6 +7023,7 @@
       "plan_platform": "frite",
       "plan_role": "desktop",
       "platform": "frite",
+      "ram_gb": "",
       "reachable": [
         "cli",
         "gui",
@@ -6417,6 +7080,7 @@
       "plan_platform": "frite",
       "plan_role": "desktop",
       "platform": "frite",
+      "ram_gb": "",
       "reachable": [
         "cli",
         "gui",
@@ -6472,6 +7136,7 @@
       "plan_platform": "frite",
       "plan_role": "desktop",
       "platform": "frite",
+      "ram_gb": "",
       "reachable": [
         "cli",
         "gui",
@@ -6526,6 +7191,7 @@
       "plan_platform": "orangepi3-lts",
       "plan_role": "appliance",
       "platform": "orangepi3-lts",
+      "ram_gb": "",
       "reachable": [
         "cli",
         "gui",
@@ -6580,6 +7246,7 @@
       "plan_platform": "orangepi3-lts",
       "plan_role": "appliance",
       "platform": "orangepi3-lts",
+      "ram_gb": "",
       "reachable": [
         "cli",
         "gui",
@@ -6634,6 +7301,7 @@
       "plan_platform": "orangepi3-lts",
       "plan_role": "appliance",
       "platform": "orangepi3-lts",
+      "ram_gb": "",
       "reachable": [
         "cli",
         "gui",
@@ -6688,6 +7356,7 @@
       "plan_platform": "orangepi4-lts",
       "plan_role": "desktop",
       "platform": "orangepi4-lts",
+      "ram_gb": "",
       "reachable": [
         "cli",
         "gui",
@@ -6742,6 +7411,7 @@
       "plan_platform": "orangepi4-lts",
       "plan_role": "desktop",
       "platform": "orangepi4-lts",
+      "ram_gb": "",
       "reachable": [
         "cli",
         "gui",
@@ -6796,6 +7466,7 @@
       "plan_platform": "orangepi4-lts",
       "plan_role": "desktop",
       "platform": "orangepi4-lts",
+      "ram_gb": "",
       "reachable": [
         "cli",
         "gui",
@@ -6851,6 +7522,7 @@
       "plan_platform": "orangepi5",
       "plan_role": "desktop",
       "platform": "orangepi5",
+      "ram_gb": "",
       "reachable": [
         "cli",
         "gui",
@@ -6906,6 +7578,7 @@
       "plan_platform": "orangepi5",
       "plan_role": "desktop",
       "platform": "orangepi5",
+      "ram_gb": "",
       "reachable": [
         "cli",
         "gui",
@@ -6961,6 +7634,7 @@
       "plan_platform": "orangepi5",
       "plan_role": "desktop",
       "platform": "orangepi5",
+      "ram_gb": "",
       "reachable": [
         "cli",
         "gui",
@@ -7016,6 +7690,7 @@
       "plan_platform": "orangepi5",
       "plan_role": "desktop",
       "platform": "orangepi5",
+      "ram_gb": "",
       "reachable": [
         "cli",
         "gui",
@@ -7071,6 +7746,7 @@
       "plan_platform": "orangepi5",
       "plan_role": "desktop",
       "platform": "orangepi5",
+      "ram_gb": "",
       "reachable": [
         "cli",
         "gui",
@@ -7126,6 +7802,7 @@
       "plan_platform": "orangepi5",
       "plan_role": "desktop",
       "platform": "orangepi5",
+      "ram_gb": "",
       "reachable": [
         "cli",
         "gui",
@@ -7180,6 +7857,7 @@
       "plan_platform": "orangepizero2",
       "plan_role": "appliance",
       "platform": "orangepizero2",
+      "ram_gb": "",
       "reachable": [
         "cli",
         "gui",
@@ -7234,6 +7912,7 @@
       "plan_platform": "orangepizero2",
       "plan_role": "appliance",
       "platform": "orangepizero2",
+      "ram_gb": "",
       "reachable": [
         "cli",
         "gui",
@@ -7288,6 +7967,7 @@
       "plan_platform": "orangepizero2",
       "plan_role": "appliance",
       "platform": "orangepizero2",
+      "ram_gb": "",
       "reachable": [
         "cli",
         "gui",
@@ -7342,6 +8022,7 @@
       "plan_platform": "orangepizero2w",
       "plan_role": "appliance",
       "platform": "orangepizero2w",
+      "ram_gb": "",
       "reachable": [
         "cli",
         "gui",
@@ -7396,6 +8077,7 @@
       "plan_platform": "orangepizero2w",
       "plan_role": "appliance",
       "platform": "orangepizero2w",
+      "ram_gb": "",
       "reachable": [
         "cli",
         "gui",
@@ -7450,6 +8132,7 @@
       "plan_platform": "orangepizero2w",
       "plan_role": "appliance",
       "platform": "orangepizero2w",
+      "ram_gb": "",
       "reachable": [
         "cli",
         "gui",
@@ -7504,6 +8187,7 @@
       "plan_platform": "orangepizero3",
       "plan_role": "appliance",
       "platform": "orangepizero3",
+      "ram_gb": "",
       "reachable": [
         "cli",
         "gui",
@@ -7558,6 +8242,7 @@
       "plan_platform": "orangepizero3",
       "plan_role": "appliance",
       "platform": "orangepizero3",
+      "ram_gb": "",
       "reachable": [
         "cli",
         "gui",
@@ -7612,6 +8297,7 @@
       "plan_platform": "orangepizero3",
       "plan_role": "appliance",
       "platform": "orangepizero3",
+      "ram_gb": "",
       "reachable": [
         "cli",
         "gui",
@@ -7630,7 +8316,7 @@
       "channel_notes": {
         "job": "resolve_build_target rejects every IMAGE_TYPE for HARDWARE_CLASS=rpi5.generic.rpi4",
         "make": "`make rpi-generic` recipe omits --skip-mesh (standalone posture) (reachable only via STANDALONE_FLAGS)",
-        "menu": "role 'generic' (picker offers: pki, backend, frontend, desktop)"
+        "menu": "role 'generic' (picker offers: pki, backend, frontend, omnibus, desktop)"
       },
       "channels": {
         "cli": "yes",
@@ -7666,6 +8352,7 @@
       "plan_platform": "rpi4",
       "plan_role": "generic",
       "platform": "rpi5",
+      "ram_gb": "",
       "reachable": [
         "cli",
         "gui",
@@ -7684,7 +8371,7 @@
       "channel_notes": {
         "job": "resolve_build_target rejects every IMAGE_TYPE for HARDWARE_CLASS=rpi5.generic.rpi5",
         "make": "`make rpi-generic` recipe omits --skip-mesh (standalone posture) (reachable only via STANDALONE_FLAGS)",
-        "menu": "role 'generic' (picker offers: pki, backend, frontend, desktop)"
+        "menu": "role 'generic' (picker offers: pki, backend, frontend, omnibus, desktop)"
       },
       "channels": {
         "cli": "yes",
@@ -7720,6 +8407,7 @@
       "plan_platform": "rpi5",
       "plan_role": "generic",
       "platform": "rpi5",
+      "ram_gb": "",
       "reachable": [
         "cli",
         "gui",
@@ -7774,6 +8462,7 @@
       "plan_platform": "x86",
       "plan_role": "chromebook",
       "platform": "x86",
+      "ram_gb": "",
       "reachable": [
         "cli",
         "gui",
@@ -7829,6 +8518,7 @@
       "plan_platform": "x86",
       "plan_role": "chromebook",
       "platform": "x86",
+      "ram_gb": "",
       "reachable": [
         "cli",
         "gui",
@@ -7882,6 +8572,7 @@
       "plan_platform": "x86",
       "plan_role": "standalone-thick",
       "platform": "x86",
+      "ram_gb": "",
       "reachable": [
         "cli",
         "gui",
@@ -7937,6 +8628,7 @@
       "plan_platform": "x86",
       "plan_role": "standalone-thin",
       "platform": "x86",
+      "ram_gb": "",
       "reachable": [
         "cli",
         "gui",
@@ -7992,6 +8684,7 @@
       "plan_platform": "x86",
       "plan_role": "standalone-unaffiliated",
       "platform": "x86",
+      "ram_gb": "",
       "reachable": [
         "cli",
         "gui",
@@ -8003,43 +8696,43 @@
       "role": "standalone-unaffiliated"
     }
   ],
-  "matrix_cells": 150,
-  "matrix_distinct_cells": 67,
+  "matrix_cells": 170,
+  "matrix_distinct_cells": 77,
   "mode_counts": {
     "cloud": 48,
-    "mesh": 37,
+    "mesh": 47,
     "standalone": 46
   },
   "per_channel_counts": {
     "cli": {
       "escape-hatch": 0,
       "no": 0,
-      "yes": 131
+      "yes": 141
     },
     "gui": {
       "escape-hatch": 0,
       "no": 0,
-      "yes": 131
+      "yes": 141
     },
     "job": {
       "escape-hatch": 9,
       "no": 41,
-      "yes": 81
+      "yes": 91
     },
     "make": {
       "escape-hatch": 49,
       "no": 0,
-      "yes": 82
+      "yes": 92
     },
     "menu": {
       "escape-hatch": 40,
       "no": 9,
-      "yes": 82
+      "yes": 92
     },
     "worklist": {
       "escape-hatch": 0,
       "no": 0,
-      "yes": 131
+      "yes": 141
     }
   },
   "phantom_count": 0,
@@ -8048,12 +8741,12 @@
     "frite": 36,
     "jetson": 16,
     "orangepi3-lts": 6,
-    "orangepi4-lts": 6,
-    "orangepi5": 12,
+    "orangepi4-lts": 7,
+    "orangepi5": 20,
     "orangepizero2": 6,
     "orangepizero2w": 6,
     "orangepizero3": 6,
-    "rpi5": 14,
+    "rpi5": 15,
     "x86": 23
   },
   "schema": "hugmesh-image-inventory/v1",

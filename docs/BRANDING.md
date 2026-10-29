@@ -37,12 +37,11 @@ three — still live on adopter repos' and other meshes' disks, see
   and the escaped-dot jsonpath spelling; the API group in every spelling).
   `<sub>.hugmesh.net` as a HOST is not frozen — it rebrands to
   `<sub>.<CLUSTER_DOMAIN>`;
-* …and their RETIRED pre-rebrand spellings are BANNED, not merely un-frozen:
-  `scripts/tooling/tokens.json` `retired_protocol_constants` names them, and
-  `token-classifier.isFrozen()` refuses them at emit exactly like the live ones,
-  so the templating path can never re-introduce a dead protocol token. That
-  block and the drift guards are the only places in the tree licensed to spell
-  them out — a ban rule has to name what it bans;
+* …and their RETIRED pre-rebrand spellings are gone from the tree entirely: the
+  pre-rebrand brand may not appear anywhere in a hugmesh repository, and
+  `studio/tests/test_org_export_neutrality.py` fails if it comes back in any
+  tracked file (the guard spells the token from parts, so it never names it
+  whole);
 * `Makefile`, `tests/stack/compose.local.yaml` and the rest of the local-stack
   machinery — a tenant copy must keep `make stack-up` (building the local mesh)
   working byte-for-byte;

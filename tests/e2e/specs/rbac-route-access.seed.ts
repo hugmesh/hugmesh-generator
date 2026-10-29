@@ -12,8 +12,8 @@
 // /bff/user/** profile and password surface the real gateway ALLOWs.
 // Nothing is copied by hand any more.
 //
-// Rows: 157 total — hugmesh-be-gateway 60, hugmesh-fe-gateway 84, hugmesh-pki-gateway 4, hugmesh-superadmin-gateway 9
-// Pattern shapes: literal 24, prefix-glob 130, root-glob 1, segment-glob 2
+// Rows: 164 total — hugmesh-be-gateway 60, hugmesh-fe-gateway 91, hugmesh-pki-gateway 4, hugmesh-superadmin-gateway 9
+// Pattern shapes: literal 24, prefix-glob 137, root-glob 1, segment-glob 2
 //
 // Every seed row is UNSCOPED (no domain) and UNPINNED (no casdoor_user):
 // the INSERT names exactly (gateway, url_pattern, role, allow), which the
@@ -132,6 +132,13 @@ export const ROUTE_ACCESS_SEED: readonly RouteRule[] = [
   { gateway: 'hugmesh-fe-gateway', urlPattern: '/character-forge/**', role: 'ROLE_USER', allow: true },
   { gateway: 'hugmesh-fe-gateway', urlPattern: '/api-docs/**', role: 'ROLE_ADMIN', allow: true },
   { gateway: 'hugmesh-fe-gateway', urlPattern: '/games/admin/**', role: 'ROLE_GAMES_ADMIN', allow: true },
+  { gateway: 'hugmesh-fe-gateway', urlPattern: '/games/api/admin/**', role: 'ROLE_GAMES_ADMIN', allow: true },
+  { gateway: 'hugmesh-fe-gateway', urlPattern: '/games/api/**', role: 'ROLE_GAMES', allow: true },
+  { gateway: 'hugmesh-fe-gateway', urlPattern: '/games/api/**', role: 'ROLE_ADMIN', allow: true },
+  { gateway: 'hugmesh-fe-gateway', urlPattern: '/games/api/**', role: 'ROLE_MOD', allow: true },
+  { gateway: 'hugmesh-fe-gateway', urlPattern: '/games/**', role: 'ROLE_GAMES', allow: true },
+  { gateway: 'hugmesh-fe-gateway', urlPattern: '/games/**', role: 'ROLE_ADMIN', allow: true },
+  { gateway: 'hugmesh-fe-gateway', urlPattern: '/games/**', role: 'ROLE_MOD', allow: true },
   { gateway: 'hugmesh-fe-gateway', urlPattern: '/admin/games-services/**', role: 'ROLE_GAMES_SERVICES_ADMIN', allow: true },
   { gateway: 'hugmesh-fe-gateway', urlPattern: '/admin/games-services/**', role: 'ROLE_GAMES_SERVICES_RUNNER', allow: true },
   { gateway: 'hugmesh-fe-gateway', urlPattern: '/bff/public/announcements/**', role: 'PUBLIC', allow: true },

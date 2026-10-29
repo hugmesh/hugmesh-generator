@@ -51,7 +51,9 @@ def pairs(args):
 def test_the_pair_is_the_capability_table_entry_on_the_two_node_builders():
     assert VAULT_FIELDS == ("vault_addr", "vault_external_addr")
     for f in VAULT_FIELDS:
-        assert set(PLATFORM_FIELD_SUPPORT[f]) == {"x86", "rpi5"}, f
+        # x86 + rpi5, and the Orange Pi node boards (their NODE roles take --vault-addr;
+        # FIELD_SCOPE keeps it off the Orange Pi desktop).
+        assert set(PLATFORM_FIELD_SUPPORT[f]) == {"x86", "rpi5", "orangepi5", "orangepi4-lts"}, f
     # the two REMOVED fields (#285, decision 22 on #347) must not come back as a
     # capability-table entry either: an entry with no dataclass field and no builder
     # arm would make flag-coverage's REVERSE check demand a parser arm for a flag

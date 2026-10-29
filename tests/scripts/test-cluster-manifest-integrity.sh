@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # test-cluster-manifest-integrity.sh — static referential-integrity gate over
-# specs/cluster. Pure PyYAML + bash; no cluster, no kubectl, no network.
+# specs/cluster. Pure PyYAML + bash; no cluster, no network. kubectl is optional:
+# when it is on PATH, [image-pin] also renders every kustomization (see (21)).
 #
 # WHY THIS EXISTS. Three PRs landing into the same slug area in the same week
 # (#451 mesh-bff, #456 character-forge, the rebrand) produced a class of defect
@@ -184,6 +185,10 @@ fi
 # corresponding check to bite. Without these the whole gate could be a no-op.
 echo
 echo "-- negative controls: each injected defect must be caught --"
+# [image-pin]'s kubectl render cross-check is switched off for the controls: each
+# control must be caught by the STATIC reader alone (CI has no kubectl), and a
+# render per control would add minutes. (21-render) tests the render path itself.
+export HUGMESH_IMAGE_PIN_RENDER=0
 NEG_P=0; NEG_F=0
 neg_ok(){ echo "  PASS negative control: $*"; NEG_P=$((NEG_P+1)); }
 neg_bad(){ echo "  FAIL negative control: $*"; NEG_F=$((NEG_F+1)); }
@@ -944,16 +949,22 @@ open(p,"w",encoding="utf-8").write(s.replace(old,"""          - id: widget-ui
 """+old,1))
 SCPY
 '
-# (19b) BOTH discovery seeds killed at once (descriptor kind renamed AND both
-#       /remoteEntry.json probes retargeted). The tier can no longer be derived, so
-#       [remote-strip-prefix] must say so LOUDLY rather than report a clean pass over
-#       an empty set — the exact way this check was hollow before.
+# (19b) ALL discovery seeds killed at once (descriptor kind renamed AND every
+#       /remoteEntry.json probe retargeted — character-forge, character-studio and,
+#       since the games screens round, games-ui). The tier can no longer be derived,
+#       so [remote-strip-prefix] must say so LOUDLY rather than report a clean pass
+#       over an empty set — the exact way this check was hollow before. A probing
+#       workload added to the tree WITHOUT being listed here turns this control red
+#       (the tier stays derivable from the one probe left), which is the prompt to
+#       add it: the list must stay the complete set of probe-proven bundle roots.
 expect_catch "every remote-discovery seed removed (the tier check must not go vacuous)" "[remote-strip-prefix]" '
   sed -i "s/^kind: FederationModuleRegistration$/kind: FederationModuleRegistrationX/" \
       "$T/manifests/federation-api/register-superadmin-service-catalog.descriptor.yaml"
   sed -i "s|path: /remoteEntry.json|path: /healthz|g" \
-      "$T/manifests/character-forge/deployment.yaml" "$T/manifests/character-studio/deployment.yaml"
+      "$T/manifests/character-forge/deployment.yaml" "$T/manifests/character-studio/deployment.yaml" \
+      "$T/manifests/games-ui/deployment.yaml"
   ! grep -q "remoteEntry.json, port" "$T/manifests/character-forge/deployment.yaml"
+  ! grep -q "remoteEntry.json, port" "$T/manifests/games-ui/deployment.yaml"
 '
 # (19c) EVERY NetworkPolicy in the tree neutralised. With nothing default-denied there
 #       is nothing to admit, so [gateway-netpol] has no claim left — and must report
@@ -985,6 +996,921 @@ expect_catch "the matrix ServiceAccount cell renamed while the manifest keeps th
   grep -q "sa-catalog-console" "$WORK/mdocs/SECURITY.md"
   printf "%s" "$WORK/mdocs" > "$WORK/docsdir"
 '
+
+# ── (20) IMAGE PINS: no floating tag; a third-party image carries a digest ────
+# The shipped defect: owncast/kustomization.yaml said `newTag: latest` (rendered:
+# image: owncast/owncast:latest) and tube's nginx was a bare mutable tag; this gate
+# never read a kustomization's `images:` list. Every control below is one SPELLING of
+# the same hole, each asserting its own anchor so none can silently match nothing.
+imgswap() {  # <file under $T> <old, must occur exactly once> <new>
+  python3 - "$T/$1" "$2" "$3" <<"PY"
+import sys
+p, old, new = sys.argv[1:4]
+s = open(p, encoding="utf-8").read()
+assert s.count(old) == 1, "anchor %r matched %d times, not 1" % (old, s.count(old))
+open(p, "w", encoding="utf-8").write(s.replace(old, new, 1))
+PY
+}
+OC_PIN='newTag: 0.3.0, digest: sha256:0f35b568b1098d2badbde2dbf3c73a902009c95eb687c647edea04d6da079a78 }'
+NG_PIN='newTag: "1.27-alpine", digest: sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10 }'
+# (20a) THE EXACT SHIPPED DEFECT.
+expect_catch "owncast upstream image pinned to newTag: latest" "[image-pin]" '
+  imgswap manifests/owncast/kustomization.yaml "${OC_PIN}" "newTag: latest }"
+  grep -q "newTag: latest }" "$T/manifests/owncast/kustomization.yaml"
+'
+# (20b) case spelling of the same tag.
+expect_catch "owncast upstream image pinned to newTag: Latest (case)" "[image-pin]" '
+  imgswap manifests/owncast/kustomization.yaml "${OC_PIN}" "newTag: Latest }"
+'
+# (20c) :latest even WITH a digest is still refused (the tag is what a reader trusts).
+expect_catch "newTag: latest kept alongside a digest" "[image-pin]" '
+  imgswap manifests/owncast/kustomization.yaml "newTag: 0.3.0, digest" "newTag: latest, digest"
+'
+# (20d) empty tag, and (20e) no tag at all: both are an implicit :latest.
+expect_catch "owncast upstream image newTag empty" "[image-pin]" '
+  imgswap manifests/owncast/kustomization.yaml "${OC_PIN}" "newTag: \"\" }"
+'
+expect_catch "owncast upstream image has no newTag and no digest" "[image-pin]" '
+  imgswap manifests/owncast/kustomization.yaml ", ${OC_PIN}" " }"
+'
+# (20f) a version tag with no digest on a third-party image (the tube/nginx shape).
+expect_catch "tube nginx tag without a digest" "[image-pin]" '
+  imgswap manifests/tube/kustomization.yaml ", digest: sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10 }" " }"
+'
+# (20g) a digest that pins nothing: truncated, uppercase algorithm, placeholder.
+expect_catch "digest one hex character short" "[image-pin]" '
+  imgswap manifests/tube/kustomization.yaml "17a54ef4b76fb8e2f2a10 }" "17a54ef4b76fb8e2f2a1 }"
+'
+expect_catch "digest algorithm in upper case" "[image-pin]" '
+  imgswap manifests/tube/kustomization.yaml "digest: sha256:" "digest: SHA256:"
+'
+expect_catch "placeholder all-zero digest" "[image-pin]" '
+  imgswap manifests/tube/kustomization.yaml "sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10" "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+'
+# (20h) a floating NAME that is not a version, even with a digest.
+expect_catch "third-party tag is a floating name (stable) with a digest" "[image-pin]" '
+  imgswap manifests/owncast/kustomization.yaml "newTag: 0.3.0, digest" "newTag: stable, digest"
+'
+# (20i) YAML turns an unquoted 1.30 into the float 1.3 -> a different image.
+expect_catch "unquoted numeric newTag (YAML float)" "[image-pin]" '
+  imgswap manifests/tube/kustomization.yaml "newTag: \"1.27-alpine\"" "newTag: 1.27"
+'
+# (20j) a workload spelled :latest literally, behind a rewrite that would hide it
+#       from a check that only reads kustomizations.
+expect_catch "Deployment container image written :latest" "[image-pin]" '
+  imgswap manifests/tube/deployment.yaml "          image: nginx" "          image: nginx:latest"
+'
+# (20k) a bare third-party image no kustomization rewrites: implicit :latest.
+expect_catch "Deployment image untagged and not rewritten by any kustomization" "[image-pin]" '
+  imgswap manifests/owncast/deployment.yaml "          image: owncast/owncast" "          image: owncast/owncast-extra"
+'
+# (20l) the known-gaps list cannot outlive its gap: give coturn a digest and the
+#       entry must be reported stale.
+expect_catch "a KNOWN_GAPS entry that has gained a digest is reported stale" "[image-pin]" '
+  imgswap manifests/coturn/kustomization.yaml "newTag: 4.6.2 }" "newTag: 4.6.2, digest: sha256:1111111111111111111111111111111111111111111111111111111111111112 }"
+'
+# (20m) NOT VACUOUS: with every kustomize `images:` list neutralised the check has
+#       nothing to read and must say so rather than pass.
+expect_catch "every kustomize images: list neutralised (the pin check must not go vacuous)" "[image-pin]" '
+  python3 - "$T" <<"PY"
+import os, sys
+n = 0
+for dp, _d, fns in os.walk(sys.argv[1]):
+    for f in fns:
+        if f == "kustomization.yaml":
+            p = os.path.join(dp, f)
+            t = open(p, encoding="utf-8").read()
+            if "\nimages:" in t:
+                open(p, "w", encoding="utf-8").write(t.replace("\nimages:", "\nimagesX:"))
+                n += 1
+assert n > 0, "no kustomization with images: found"
+PY
+'
+
+# ── (21) IMAGE PINS, round 2: each place the checker lists as setting an image ──
+# A review got a mutable image past (20) three ways, each rendering a floating tag
+# with the gate green: a raw `image: owncast/owncast:stable`, a `kind: Component`
+# carrying `newTag: latest`, and a JSON6902 patch setting `owncast/owncast:develop`.
+# The negative controls run with HUGMESH_IMAGE_PIN_RENDER=0 (exported above), so each
+# one proves the STATIC reader alone catches it (the python:3-slim CI image has no
+# kubectl); (21-render) below proves the kubectl render cross-check catches the
+# same three on its own.
+OC_ENTRY='  - { name: owncast/owncast, newName: owncast/owncast, newTag: 0.3.0, digest: sha256:0f35b568b1098d2badbde2dbf3c73a902009c95eb687c647edea04d6da079a78 }
+'
+oc_drop_entry() { imgswap manifests/owncast/kustomization.yaml "${OC_ENTRY}" ""; }
+# Dropping the owncast entry also leaves the deployment's bare owncast/owncast
+# unrewritten, which (20) already refuses; a control that drops it must therefore
+# want its OWN finding line, or it would pass for that other reason.
+ipw() { printf '%-24s %s' '[image-pin]' "$1"; }
+# (21a) THE REPORTED EXPLOIT 1: a floating non-latest tag in a raw workload.
+for tag in stable edge mainline develop STABLE nightly 1.2-stable 6.6-24.04_edge; do
+expect_catch "raw workload image owncast/owncast:${tag} with the images: entry removed" "[image-pin]" "
+  oc_drop_entry
+  imgswap manifests/owncast/deployment.yaml '          image: owncast/owncast
+' '          image: owncast/owncast:${tag}
+'
+"
+done
+# (21b) raw :latest in any case, with a digest too (the tag is what a reader trusts).
+expect_catch "raw workload image owncast/owncast:Latest@digest" "[image-pin]" '
+  oc_drop_entry
+  imgswap manifests/owncast/deployment.yaml "          image: owncast/owncast
+" "          image: owncast/owncast:Latest@sha256:0f35b568b1098d2badbde2dbf3c73a902009c95eb687c647edea04d6da079a78
+"
+'
+# (21c) the digest ratchet: a NEW third-party ref with a version tag and no digest.
+expect_catch "raw workload image owncast/owncast:0.3.0 (version tag, no digest, not in the ratchet)" "[image-pin]" '
+  oc_drop_entry
+  imgswap manifests/owncast/deployment.yaml "          image: owncast/owncast
+" "          image: owncast/owncast:0.3.0
+"
+'
+# (21d) the shipped squid channel tag with its digest removed.
+expect_catch "egress-proxy squid channel tag _edge without its digest" "[image-pin]" '
+  imgswap manifests/egress-proxy/egress-proxy.yaml "6.6-24.04_edge@sha256:8a3baed477e2c282ab8aa5edad442f69873246964f225c5c2ae8364b6610963c" "6.6-24.04_edge"
+'
+# (21e) THE REPORTED EXPLOIT 2: a kustomize Component carrying newTag: latest.
+expect_catch "kind: Component images: entry newTag: latest, pulled in via components:" "[image-pin]" '
+  oc_drop_entry
+  imgswap manifests/owncast/deployment.yaml "          image: owncast/owncast
+" "          image: owncast/owncast:0.3.0
+"
+  mkdir "$T/manifests/owncast/pin"
+  printf "apiVersion: kustomize.config.k8s.io/v1alpha1\nkind: Component\nimages:\n  - {name: owncast/owncast, newName: owncast/owncast, newTag: latest}\n" > "$T/manifests/owncast/pin/kustomization.yaml"
+  printf "components:\n  - pin\n" >> "$T/manifests/owncast/kustomization.yaml"
+'
+# (21f) THE REPORTED EXPLOIT 3: an inline JSON6902 patch replacing the image.
+OC_JSONPATCH='patches:
+  - target: {kind: Deployment, name: hugmesh-owncast}
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/image
+        value: owncast/owncast:develop
+'
+expect_catch "inline JSON6902 patch replaces the owncast image with :develop" "$(ipw "manifests/owncast/kustomization.yaml (patch): image 'owncast/owncast:develop'")" '
+  oc_drop_entry
+  printf "%s" "${OC_JSONPATCH}" >> "$T/manifests/owncast/kustomization.yaml"
+'
+# (21g) the same op from a patch FILE (a JSON6902 file is a YAML list, not a doc).
+expect_catch "JSON6902 patch file sets owncast/owncast:latest" "[image-pin]" '
+  printf -- "- op: replace\n  path: /spec/template/spec/containers/0/image\n  value: owncast/owncast:latest\n" > "$T/manifests/owncast/img-patch.yaml"
+  printf "patches:\n  - target: {kind: Deployment, name: hugmesh-owncast}\n    path: img-patch.yaml\n" >> "$T/manifests/owncast/kustomization.yaml"
+'
+# (21h) a JSON6902 op that ADDS a whole container carrying a mutable image.
+expect_catch "JSON6902 add of a whole sidecar container on :latest" "[image-pin]" '
+  printf "patches:\n  - target: {kind: Deployment, name: hugmesh-owncast}\n    patch: |-\n      - op: add\n        path: /spec/template/spec/containers/-\n        value: {name: side, image: \"busybox:latest\"}\n" >> "$T/manifests/owncast/kustomization.yaml"
+'
+# (21i) a copy/move onto an image path takes its value from elsewhere: fail closed.
+expect_catch "JSON6902 copy onto an image path (unreadable value, fail closed)" "[image-pin]" '
+  printf "patches:\n  - target: {kind: Deployment, name: hugmesh-owncast}\n    patch: |-\n      - op: copy\n        from: /metadata/annotations/img\n        path: /spec/template/spec/containers/0/image\n" >> "$T/manifests/owncast/kustomization.yaml"
+'
+# (21j) an inline strategic-merge patch (patchesStrategicMerge string form).
+expect_catch "inline patchesStrategicMerge sets owncast/owncast:edge" "$(ipw "manifests/owncast/kustomization.yaml (patch): image 'owncast/owncast:edge'")" '
+  oc_drop_entry
+  printf "patchesStrategicMerge:\n  - |-\n    apiVersion: apps/v1\n    kind: Deployment\n    metadata: {name: hugmesh-owncast}\n    spec:\n      template:\n        spec:\n          containers:\n            - {name: owncast, image: \"owncast/owncast:edge\"}\n" >> "$T/manifests/owncast/kustomization.yaml"
+'
+# (21k) a patch file that does not exist cannot be checked: fail closed.
+expect_catch "patch by path to a file that is not there (fail closed)" "[image-pin]" '
+  printf "patches:\n  - target: {kind: Deployment, name: hugmesh-owncast}\n    path: no-such-patch.yaml\n" >> "$T/manifests/owncast/kustomization.yaml"
+'
+# (21l) replacements that write an image field: fail closed.
+expect_catch "replacements: target fieldPath names the container image (fail closed)" "$(ipw "manifests/owncast/kustomization.yaml: a \`replacements:\` entry writes an image field")" '
+  printf "replacements:\n  - source: {kind: ConfigMap, name: x, fieldPath: data.img}\n    targets:\n      - select: {kind: Deployment}\n        fieldPaths:\n          - \"spec.template.spec.containers.[name=owncast].image\"\n" >> "$T/manifests/owncast/kustomization.yaml"
+'
+# (21m) a transformer plugin (an ImageTagTransformer config, say): fail closed.
+expect_catch "kustomization uses transformers: (unreadable output, fail closed)" "[image-pin]" '
+  printf "transformers:\n  - tag.yaml\n" >> "$T/manifests/owncast/kustomization.yaml"
+'
+# (21n) an Argo Application kustomize.images override.
+expect_catch "Argo Application kustomize.images override to :latest" "[image-pin]" '
+  imgswap apps/12-cloudflared.yaml "    kustomize:
+" "    kustomize:
+      images: [\"owncast/owncast=owncast/owncast:latest\"]
+"
+'
+# (21o) a helm values image tag (the velero chart values).
+expect_catch "helm values image tag set to latest (velero)" "[image-pin]" '
+  imgswap apps/55-velero.yaml "          tag: v1.18.1" "          tag: latest"
+'
+# (21p) YAML embedded in a ConfigMap string: the local-path helper pod template.
+expect_catch "local-path helper-pod template back to an untagged busybox" "[image-pin]" '
+  imgswap manifests/local-path/local-path.yaml "image: busybox:1.37@sha256:bdf57e528e45e4433820e045b29b4597825a1c9e38353532d90a01445013f82e" "image: busybox"
+'
+# (21q) a variable substitution in an image cannot be read: fail closed.
+expect_catch "image ref built from a \$(VAR) substitution" "[image-pin]" '
+  imgswap manifests/media-poisoner/deployment.yaml "image: busybox:1.37" "image: busybox:\$(TAG)"
+'
+# (21r) another directory includes the owncast Deployment by file without the
+#       rewrite: the untagged owncast/owncast reaches a render unrewritten.
+expect_catch "foreign kustomization includes owncast/deployment.yaml without rewriting it" "[image-pin]" '
+  mkdir "$T/manifests/owncast-copy"
+  printf "apiVersion: kustomize.config.k8s.io/v1beta1\nkind: Kustomization\nresources:\n  - ../owncast/deployment.yaml\n" > "$T/manifests/owncast-copy/kustomization.yaml"
+'
+# (21s) the raw ratchet cannot outlive its gap: busybox:1.37 has one user; give it a
+#       digest and the RAW_DIGEST_KNOWN_GAPS entry must be reported stale.
+expect_catch "a RAW_DIGEST_KNOWN_GAPS entry nothing relies on any more is reported stale" "[image-pin]" '
+  imgswap manifests/media-poisoner/deployment.yaml "image: busybox:1.37" "image: busybox:1.37@sha256:bdf57e528e45e4433820e045b29b4597825a1c9e38353532d90a01445013f82e"
+'
+
+# (21t) kustomize also reads an extensionless `Kustomization` file: refused, not skipped.
+expect_catch "extensionless Kustomization file (unread by the static reader, fail closed)" "$(ipw "manifests/owncast/Kustomization: a kustomization in an extensionless")" '
+  printf "apiVersion: kustomize.config.k8s.io/v1beta1\nkind: Kustomization\nimages:\n  - {name: owncast/owncast, newTag: latest}\n" > "$T/manifests/owncast/Kustomization"
+'
+# (21u) a remote resource pulls images in from outside the tree (and ?ref= moves).
+expect_catch "remote git resource with ?ref=main (fail closed)" "$(ipw "manifests/owncast/kustomization.yaml: \`resources:\` pulls in the REMOTE")" '
+  imgswap manifests/owncast/kustomization.yaml "  - deployment.yaml
+" "  - deployment.yaml
+  - github.com/example/deploy//owncast?ref=main
+"
+'
+# (21v) a bare hugmesh/ entry with no newName pulls from Docker Hub: third-party rules.
+expect_catch "bare hugmesh/owncast-ui entry with no newName and a floating tag" "$(ipw "manifests/owncast/kustomization.yaml: image hugmesh/owncast-ui (third-party) has tag 'edge'")" '
+  imgswap manifests/owncast/kustomization.yaml "{ name: hugmesh/owncast-ui, newName: registry.hugmesh.net/hugmesh/hugmesh-owncast-ui, newTag: main }" "{ name: hugmesh/owncast-ui, newTag: edge }"
+'
+# (21w) an unrewritten bare hugmesh/ ref in a workload, same reason.
+expect_catch "unrewritten bare hugmesh/ workload image on :edge" "$(ipw "manifests/owncast/deployment.yaml: image 'hugmesh/owncast-ui-extra:edge'")" '
+  imgswap manifests/owncast/deployment.yaml "image: hugmesh/owncast-ui
+" "image: hugmesh/owncast-ui-extra:edge
+"
+'
+# (21x) nesting past the walker depth is a finding, not a silent stop.
+expect_catch "image nested deeper than the walker reads (fail closed)" "$(ipw "a document nests deeper than")" '
+  python3 - "$T/manifests/owncast/deep.yaml" <<"PY"
+import sys, yaml
+node = {"image": "owncast/owncast:latest"}
+for i in range(70):
+    node = {"k%d" % i: node}
+node.update({"apiVersion": "v1", "kind": "ConfigMap", "metadata": {"name": "deep"}})
+open(sys.argv[1], "w").write(yaml.safe_dump(node))
+PY
+'
+
+# ── (22) IMAGE PINS, round 3: four more ways a mutable image got past (21) ──────
+# A review got a mutable image past round 2 with the gate green, static AND render:
+#   (a) a ConfigMap value holding SINGLE-LINE JSON (local-path-provisioner reads
+#       helperPod.yaml as YAML, and YAML accepts JSON): the embedded-string reader
+#       only parsed strings containing a newline, and the render pass used the same
+#       reader; the same hole through a configMapGenerator literal;
+#   (b) IMAGE_DIGEST_KNOWN_GAPS was keyed by directory BASENAME and image name with
+#       no tag, so coturn could be retagged to the floating major "4", and any other
+#       directory named coturn inherited the exemption;
+#   (c) an Argo helm source's `parameters:` (applied on top of values) were never
+#       read, and a helm `image: {tag: latest}` with no repository was dropped.
+# Each control below is one of those inputs or another spelling of the same hole.
+lp_helper() {  # <replacement line for the helperPod.yaml key>: drop the block scalar
+  python3 - "$T/manifests/local-path/local-path.yaml" "$1" <<"PY"
+import sys
+p, new = sys.argv[1], sys.argv[2]
+s = open(p, encoding="utf-8").read()
+i = s.index("  helperPod.yaml: |-\n")
+lines = s[i:].split("\n")
+j = 1
+while j < len(lines) and (lines[j].startswith("    ") or lines[j] == ""):
+    j += 1
+assert j > 5, "helperPod.yaml block not found"
+open(p, "w", encoding="utf-8").write(s[:i] + new + "\n" + "\n".join(lines[j:]))
+PY
+}
+LP_WANT="$(ipw "manifests/local-path/local-path.yaml: image 'busybox:latest'")"
+# (22a) THE REPORTED EXPLOIT: single-line JSON pod template in the ConfigMap.
+expect_catch "single-line JSON helperPod.yaml with busybox:latest" "${LP_WANT}" '
+  lp_helper "  helperPod.yaml: '"'"'{\"apiVersion\":\"v1\",\"kind\":\"Pod\",\"metadata\":{\"name\":\"helper-pod\"},\"spec\":{\"containers\":[{\"name\":\"helper-pod\",\"image\":\"busybox:latest\"}]}}'"'"'"
+'
+# (22b) the key spelled with a JSON/YAML unicode escape, so the text never says "image".
+expect_catch "single-line JSON helperPod.yaml with an escaped \\u0069mage key" "${LP_WANT}" '
+  lp_helper "  helperPod.yaml: '"'"'{\"spec\":{\"containers\":[{\"name\":\"h\",\"\\u0069mage\":\"busybox:latest\"}]}}'"'"'"
+'
+# (22c) JSON with a tab between tokens: PyYAML refuses it, a JSON consumer does not.
+expect_catch "single-line JSON helperPod.yaml with a tab PyYAML cannot scan" "${LP_WANT}" '
+  lp_helper "  helperPod.yaml: \"{\\\"spec\\\":{\\\"containers\\\":[{\\\"name\\\":\\\"h\\\",\\t\\\"image\\\":\\\"busybox:latest\\\"}]}}\""
+'
+# (22d) a duplicated key: last-wins would show only the pinned value.
+expect_catch "embedded JSON with a duplicate image key (shadowed :latest)" "${LP_WANT}" '
+  lp_helper "  helperPod.yaml: '"'"'{\"spec\":{\"containers\":[{\"name\":\"h\",\"image\":\"busybox:latest\",\"image\":\"busybox:1.37@sha256:bdf57e528e45e4433820e045b29b4597825a1c9e38353532d90a01445013f82e\"}]}}'"'"'"
+'
+# (22e) a script in a ConfigMap value that pulls an image (text backstop).
+expect_catch "ConfigMap script value runs kubectl run --image=busybox:latest" "${LP_WANT}" '
+  imgswap manifests/local-path/local-path.yaml "  helperPod.yaml: |-
+" "  probe.sh: \"kubectl run probe --restart=Never --image=busybox:latest -- true\"
+  helperPod.yaml: |-
+"
+'
+GEN_POD='{"apiVersion":"v1","kind":"Pod","spec":{"containers":[{"name":"h","image":"busybox:latest"}]}}'
+export GEN_POD
+# (22f) THE REPORTED EXPLOIT, generator spelling: a configMapGenerator literal.
+expect_catch "configMapGenerator literal holds a pod spec on busybox:latest" "$(ipw "manifests/owncast/kustomization.yaml (configMapGenerator helper literal): image 'busybox:latest'")" '
+  printf "configMapGenerator:\n  - name: helper\n    literals:\n      - '"'"'helperPod.yaml=%s'"'"'\n" "${GEN_POD}" >> "$T/manifests/owncast/kustomization.yaml"
+'
+# (22g) the same through a generator FILE with an extension no YAML walk reads.
+expect_catch "configMapGenerator files: helper.json holds busybox:latest" "$(ipw "manifests/owncast/kustomization.yaml (configMapGenerator helper file helper.json): image 'busybox:latest'")" '
+  printf "%s\n" "${GEN_POD}" > "$T/manifests/owncast/helper.json"
+  printf "configMapGenerator:\n  - name: helper\n    files:\n      - helperPod.yaml=helper.json\n" >> "$T/manifests/owncast/kustomization.yaml"
+'
+# (22h) an envs file value, and (22i) a secretGenerator literal.
+expect_catch "configMapGenerator envs: value holds busybox:latest" "$(ipw "manifests/owncast/kustomization.yaml (configMapGenerator helper env file helper.env): image 'busybox:latest'")" '
+  printf "POD=%s\n" "${GEN_POD}" > "$T/manifests/owncast/helper.env"
+  printf "configMapGenerator:\n  - name: helper\n    envs:\n      - helper.env\n" >> "$T/manifests/owncast/kustomization.yaml"
+'
+expect_catch "secretGenerator literal holds busybox:latest" "$(ipw "manifests/owncast/kustomization.yaml (secretGenerator helper literal): image 'busybox:latest'")" '
+  printf "secretGenerator:\n  - name: helper\n    literals:\n      - '"'"'pod=%s'"'"'\n" "${GEN_POD}" >> "$T/manifests/owncast/kustomization.yaml"
+'
+# (22j) a generator file that is not there cannot be checked: fail closed.
+expect_catch "configMapGenerator file that does not exist (fail closed)" "$(ipw "manifests/owncast/kustomization.yaml: \`configMapGenerator\` file no-such.json cannot be read")" '
+  printf "configMapGenerator:\n  - name: helper\n    files:\n      - no-such.json\n" >> "$T/manifests/owncast/kustomization.yaml"
+'
+# (22k) THE REPORTED EXPLOIT: a known-gap entry retagged to a floating major.
+expect_catch "coturn retagged 4.6.2 -> \"4\" with no digest" "$(ipw "manifests/coturn/kustomization.yaml: image coturn/coturn (third-party) is pinned by tag '4' only")" '
+  imgswap manifests/coturn/kustomization.yaml "newTag: 4.6.2 }" "newTag: \"4\" }"
+'
+# (22l) another directory with the same basename does not inherit the gap entry.
+expect_catch "a second directory named coturn does not inherit the known-gap entry" "$(ipw "manifests/extra/coturn/kustomization.yaml: image coturn/coturn (third-party) is pinned by tag '4.6.2' only")" '
+  mkdir -p "$T/manifests/extra"; cp -r "$T/manifests/coturn" "$T/manifests/extra/coturn"
+'
+# (22m) THE REPORTED EXPLOIT: an Argo helm parameter overriding the tag.
+HP_ANCHOR='    helm:
+      releaseName: velero
+'
+expect_catch "Argo helm.parameters image.tag=latest (velero)" "$(ipw "apps/55-velero.yaml (helm.parameters override): image 'velero/velero:latest'")" '
+  imgswap apps/55-velero.yaml "${HP_ANCHOR}" "${HP_ANCHOR}      parameters:
+        - name: image.tag
+          value: latest
+"
+'
+# (22n) the list-index spelling of a parameter.
+expect_catch "Argo helm.parameters initContainers[0].image=...:latest" "$(ipw "apps/55-velero.yaml (helm.parameters override): image 'velero/velero-plugin-for-aws:latest'")" '
+  imgswap apps/55-velero.yaml "${HP_ANCHOR}" "${HP_ANCHOR}      parameters:
+        - name: initContainers[0].image
+          value: velero/velero-plugin-for-aws:latest
+"
+'
+# (22o) a parameter on an image path this check cannot apply: fail closed.
+expect_catch "Argo helm parameter with an unreadable image path (fail closed)" "$(ipw "apps/55-velero.yaml: helm parameter")" '
+  imgswap apps/55-velero.yaml "${HP_ANCHOR}" "${HP_ANCHOR}      parameters:
+        - name: \"image.tag[\"
+          value: latest
+"
+'
+# (22p) valueFiles / (22q) fileParameters: values from outside this tree, fail closed.
+expect_catch "Argo helm valueFiles (unread values, fail closed)" "$(ipw "apps/55-velero.yaml: an Argo helm source sets \`valueFiles:\`")" '
+  imgswap apps/55-velero.yaml "${HP_ANCHOR}" "${HP_ANCHOR}      valueFiles: [values-latest.yaml]
+"
+'
+expect_catch "Argo helm fileParameters (unread values, fail closed)" "$(ipw "apps/55-velero.yaml: an Argo helm source sets \`fileParameters:\`")" '
+  imgswap apps/55-velero.yaml "${HP_ANCHOR}" "${HP_ANCHOR}      fileParameters:
+        - {name: image.tag, path: tag.txt}
+"
+'
+# (22r) THE REPORTED EXPLOIT: a tag-only helm image map over a chart default.
+expect_catch "helm values kubectl: {image: {tag: latest}} with no repository" "$(ipw "apps/55-velero.yaml: a helm image map {'tag': 'latest'} sets a tag/digest but no repository")" '
+  imgswap apps/55-velero.yaml "        installCRDs: true
+" "        installCRDs: true
+        kubectl:
+          image:
+            tag: latest
+"
+'
+# (22s) the same tag-only override arriving through a parameter.
+expect_catch "Argo helm.parameters kubectl.image.tag (tag-only override, fail closed)" "$(ipw "apps/55-velero.yaml: a helm image map {'tag': 'v1.31.0'} sets a tag/digest but no repository")" '
+  imgswap apps/55-velero.yaml "${HP_ANCHOR}" "${HP_ANCHOR}      parameters:
+        - name: kubectl.image.tag
+          value: v1.31.0
+"
+'
+# (22t) a non-string helm tag (YAML reads 1.30 as 1.3).
+expect_catch "helm values image tag unquoted number" "$(ipw "apps/55-velero.yaml: a helm image map sets tag 1.3")" '
+  imgswap apps/55-velero.yaml "          tag: v1.18.1" "          tag: 1.30"
+'
+# (22u) a ref inside a STRING gets no `images:` rewrite exemption: kustomize rewrites
+#       container image fields, never text in a ConfigMap value, so a bare busybox in
+#       the helper-pod template is pulled as busybox:latest even when the directory's
+#       kustomization rewrites the name busybox. (22u-render) shows the render agrees.
+LP_REWRITE='printf "images:\n  - {name: busybox, newName: busybox, newTag: \"1.37\", digest: sha256:bdf57e528e45e4433820e045b29b4597825a1c9e38353532d90a01445013f82e}\n" >> "$T/manifests/local-path/kustomization.yaml"
+  imgswap manifests/local-path/local-path.yaml "image: busybox:1.37@sha256:bdf57e528e45e4433820e045b29b4597825a1c9e38353532d90a01445013f82e" "image: busybox"'
+expect_catch "bare busybox in a ConfigMap template behind an images: rewrite of busybox" "$(ipw "manifests/local-path/local-path.yaml: image 'busybox' has no tag")" "${LP_REWRITE}"
+
+# ── (23) IMAGE PINS, round 4: files and spellings round 3 never read ──────────
+# A review got a mutable image past round 3 with the gate green, static AND render:
+#   (a) `--image curlimages/curl:latest` (a SPACE, not `=`) in the prod-hygiene script
+#       that a configMapGenerator ships: kubectl reads it the same, the text backstop
+#       did not, and it reverted round 3's own curl pin;
+#   (b) the local-path helperPod.yaml moved from ConfigMap `data:` to `binaryData:`
+#       (base64): the kubelet projects the decoded file, nothing here decoded it;
+#   (c) a literal image in charts/hugmesh-gateway/templates: chart templates were
+#       skipped and helm was never rendered, yet apps/20-gateway-* ship that chart;
+#   (d) a new apps/*.json file: the apps root is `directory: recurse: true`, which
+#       applies .json, and only .yaml/.yml were read;
+#   (e) `image: !!binary <base64>`: PyYAML returns bytes and the walk dropped them;
+# plus two placeholder skips ({{ }} ApplicationSet values, and any ref containing the
+# word REPLACE_WITH_). Each control below is one of those inputs or another spelling.
+PH=manifests/prod-hygiene/validate-prod-hygiene.sh
+CURL_PIN='--image=curlimages/curl:8.10.1@sha256:d9b4541e214bcd85196d6e92e2753ac6d0ea699f0af5741f8c6cccbfcf00ef4b'
+ph_want() { ipw "manifests/prod-hygiene/kustomization.yaml (configMapGenerator prod-hygiene-script file validate-prod-hygiene.sh): image '$1'"; }
+# (23a) THE REPORTED EXPLOIT: the curl pin reverted with a space-separated --image.
+expect_catch "space-separated --image curlimages/curl:latest (round 3's pin reverted)" "$(ph_want curlimages/curl:latest)" '
+  imgswap "${PH}" "${CURL_PIN}" "--image curlimages/curl:latest"
+'
+# (23b) THE REPORTED EXPLOIT: a new kubectl run line with a space-separated --image.
+expect_catch "appended kubectl run --image busybox:latest" "$(ph_want busybox:latest)" '
+  printf "\nkubectl -n \"\$NS\" run r4-probe --image busybox:latest --restart=Never -- true\n" >> "$T/${PH}"
+'
+# (23c) a tab and double quotes; (23d) a backslash-newline continuation.
+expect_catch "--image<TAB>\"busybox:latest\"" "$(ph_want busybox:latest)" '
+  printf "\nkubectl run p --image\t\"busybox:latest\" -- true\n" >> "$T/${PH}"
+'
+expect_catch "--image split over a backslash-newline continuation" "$(ph_want busybox:latest)" '
+  printf "\nkubectl run p \\\\\n  --image \\\\\n  busybox:latest -- true\n" >> "$T/${PH}"
+'
+# (23e) a shell variable the check cannot expand: fail closed, not skipped.
+expect_catch "--image \"\$PROBE_IMG\" (unreadable variable, fail closed)" "$(ph_want '$PROBE_IMG') contains a variable substitution" '
+  printf "\nkubectl run p --image \"\$PROBE_IMG\" -- true\n" >> "$T/${PH}"
+'
+# (23f) kubectl set image, with a selector flag whose value is not an image.
+expect_catch "kubectl set image deploy/web -l app=web web=busybox:latest" "$(ph_want busybox:latest)" '
+  printf "\nkubectl -n x set image deploy/web -l app=web web=busybox:latest\n" >> "$T/${PH}"
+'
+# (23g) a valid mutable tag that merely contains the word REPLACE_WITH_.
+expect_catch "curlimages/curl:REPLACE_WITH_ANY is judged, not skipped as a placeholder" "$(ph_want curlimages/curl:REPLACE_WITH_ANY) is third-party with tag" '
+  imgswap "${PH}" "${CURL_PIN}" "--image=curlimages/curl:REPLACE_WITH_ANY"
+'
+lp_b64() {  # <mode: image|bad|binary>: move helperPod.yaml from data: into binaryData:
+  python3 - "$T/manifests/local-path/local-path.yaml" "$1" <<"PY"
+import base64, re, sys
+p, mode = sys.argv[1], sys.argv[2]
+s = open(p, encoding="utf-8").read()
+start = s.index("  helperPod.yaml: |-\n")
+end = len(s.rstrip("\n"))
+body = "\n".join(l[4:] for l in s[start:end].split("\n")[1:])
+new = re.sub(r"busybox:1\.37@sha256:[0-9a-f]{64}", "busybox:latest", body)
+assert new != body, "helper-pod image anchor not found"
+val = {"image": base64.b64encode(new.encode()).decode(),
+       "bad": "\"%%not-base64%%\"",
+       "binary": base64.b64encode(b"\xff\xfe\x00image: busybox:latest").decode()}[mode]
+open(p, "w", encoding="utf-8").write(s[:start] + "binaryData:\n  helperPod.yaml: " + val + "\n")
+PY
+}
+# (23h) THE REPORTED EXPLOIT: the helper pod base64-encoded in binaryData.
+expect_catch "ConfigMap binaryData helperPod.yaml (base64) on busybox:latest" "${LP_WANT}" 'lp_b64 image'
+# (23i) base64 that does not decode, and (23j) bytes that are not text: fail closed.
+expect_catch "ConfigMap binaryData that is not base64 (fail closed)" "$(ipw "manifests/local-path/local-path.yaml: ConfigMap binaryData key 'helperPod.yaml' is not valid base64")" 'lp_b64 bad'
+expect_catch "ConfigMap binaryData that is not UTF-8 text (fail closed)" "$(ipw "manifests/local-path/local-path.yaml: ConfigMap binaryData key 'helperPod.yaml' decodes to binary that is not UTF-8 text")" 'lp_b64 binary'
+# (23k) the same through a Secret's data (base64 by definition).
+expect_catch "Secret data (base64) holding a pod spec on busybox:latest" "$(ipw "apps/99-probe-secret.yaml: image 'busybox:latest'")" '
+  printf "apiVersion: v1\nkind: Secret\nmetadata: {name: probe, namespace: devops}\ndata:\n  pod.json: %s\n" "$(printf "%s" "${GEN_POD}" | base64 -w0)" > "$T/apps/99-probe-secret.yaml"
+'
+GW_TPL=charts/hugmesh-gateway/templates/deployment.yaml
+GW_IMG_LINE='          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command:'
+# (23l) THE REPORTED EXPLOIT: a literal image in an in-tree chart template.
+expect_catch "chart template literal image busybox:latest (charts/hugmesh-gateway)" "$(ipw "${GW_TPL} (chart file, read as text): image 'busybox:latest'")" '
+  python3 - "$T/${GW_TPL}" <<"PY"
+import sys
+p = sys.argv[1]; s = open(p, encoding="utf-8").read()
+old = "          image: \"{{ .Values.image.repository }}:{{ .Values.image.tag }}\""
+assert s.count(old) == 2, s.count(old)
+open(p, "w", encoding="utf-8").write(s.replace(old, "          image: \"busybox:latest\"", 1))
+PY
+'
+# (23m) a template expression on an image line that is not a values image map: refused.
+expect_catch "chart template image built from .Chart.AppVersion (fail closed)" "$(ipw "${GW_TPL} (chart file, read as text): image 'busybox:{{' contains a template expression")" '
+  python3 - "$T/${GW_TPL}" <<"PY"
+import sys
+p = sys.argv[1]; s = open(p, encoding="utf-8").read()
+old = "          image: \"{{ .Values.image.repository }}:{{ .Values.image.tag }}\""
+assert s.count(old) == 2, s.count(old)
+open(p, "w", encoding="utf-8").write(s.replace(old, "          image: \"busybox:{{ .Chart.AppVersion }}\"", 1))
+PY
+'
+# (23n) a chart's values.yaml is not a catalog descriptor: a string image there is judged.
+expect_catch "chart values.yaml top-level image: busybox:latest" "$(ipw "charts/hugmesh-gateway/values.yaml: image 'busybox:latest'")" '
+  imgswap charts/hugmesh-gateway/values.yaml "image:
+  repository: registry.hugmesh.net/hugmesh/hugmesh-gateway
+  tag: dev
+  pullPolicy: IfNotPresent
+" "image: busybox:latest
+"
+'
+# (23o) a file a template can embed with .Files.Get (not under templates/).
+expect_catch "chart files/probe.sh runs --image busybox:latest" "$(ipw "charts/hugmesh-gateway/files/probe.sh (chart file, read as text): image 'busybox:latest'")" '
+  mkdir -p "$T/charts/hugmesh-gateway/files"
+  printf "#!/bin/sh\nkubectl run p --image busybox:latest\n" > "$T/charts/hugmesh-gateway/files/probe.sh"
+'
+JOB_JSON='{"apiVersion":"batch/v1","kind":"Job","metadata":{"name":"r4-probe","namespace":"devops"},"spec":{"template":{"spec":{"restartPolicy":"Never","containers":[{"name":"p","image":"busybox:latest"}]}}}}'
+export JOB_JSON
+# (23p) THE REPORTED EXPLOIT: a .json manifest under the recurse:true apps root.
+expect_catch "apps/99-probe.json Job on busybox:latest" "$(ipw "apps/99-probe.json: image 'busybox:latest'")" '
+  printf "%s\n" "${JOB_JSON}" > "$T/apps/99-probe.json"
+'
+# (23q) a JSON array of objects, and (23r) an upper-case extension.
+expect_catch "apps/99-probe-list.json (a JSON array) Job on busybox:latest" "$(ipw "apps/99-probe-list.json: image 'busybox:latest'")" '
+  printf "[%s]\n" "${JOB_JSON}" > "$T/apps/99-probe-list.json"
+'
+expect_catch "apps/99-probe.YAML (upper-case extension) Job on busybox:latest" "$(ipw "apps/99-probe.YAML: image 'busybox:latest'")" '
+  printf "%s\n" "${JOB_JSON}" > "$T/apps/99-probe.YAML"
+'
+# (23s) JSON that does not parse, (23t) Jsonnet, (23u) a symlink: fail closed.
+expect_catch "apps/99-bad.json does not parse (fail closed)" "$(ipw "apps/99-bad.json: JSON that does not parse")" '
+  printf "{\"kind\": \"Job\",\n" > "$T/apps/99-bad.json"
+'
+expect_catch "apps/99-probe.jsonnet (fail closed)" "$(ipw "apps/99-probe.jsonnet: a Jsonnet file")" '
+  printf "{ kind: \"Job\" }\n" > "$T/apps/99-probe.jsonnet"
+'
+# The symlink itself is not a regular file, so the md5 guard cannot see it: the
+# injection also drops a note file next to it, which no check reads.
+expect_catch "apps/99-link.yaml is a symlink (fail closed)" "$(ipw "apps/99-link.yaml: a symlink")" '
+  ln -s ../manifests/owncast/deployment.yaml "$T/apps/99-link.yaml"
+  printf "symlink control\n" > "$T/apps/99-link.note"
+'
+# (23v) a kustomize resource file with an extension the walk does not read.
+expect_catch "kustomize resource probe.txt holds a Job on busybox:latest" "$(ipw "manifests/owncast/kustomization.yaml (resource manifests/owncast/probe.txt): image 'busybox:latest'")" '
+  printf "%s\n" "${JOB_JSON}" > "$T/manifests/owncast/probe.txt"
+  imgswap manifests/owncast/kustomization.yaml "  - deployment.yaml
+" "  - deployment.yaml
+  - probe.txt
+"
+'
+# (23w) an Argo source in this repo that applies a path outside specs/cluster, and
+# (23x) the same through an ApplicationSet list element.
+expect_catch "Argo Application path outside specs/cluster (fail closed)" "$(ipw "apps/99-outside.yaml: an Argo source in this repo applies 'templates/apps'")" '
+  printf "apiVersion: argoproj.io/v1alpha1\nkind: Application\nmetadata: {name: outside, namespace: devops}\nspec:\n  project: default\n  source: {repoURL: https://github.com/hugmesh/hugmesh-generator.git, targetRevision: main, path: templates/apps}\n  destination: {server: https://kubernetes.default.svc, namespace: devops}\n" > "$T/apps/99-outside.yaml"
+'
+expect_catch "ApplicationSet list element path outside specs/cluster (fail closed)" "$(ipw "apps/13a-optional-services.yaml: an Argo source in this repo applies 'templates/owncast'")" '
+  imgswap apps/13a-optional-services.yaml "path: specs/cluster/manifests/owncast," "path: templates/owncast,"
+'
+# (23y) THE REPORTED EXPLOIT: a !!binary image under apps/, and (23z) in a kustomize dir.
+expect_catch "image: !!binary (busybox:latest) in apps/" "$(ipw "apps/99-probe-bin.yaml: image 'busybox:latest'")" '
+  printf "apiVersion: batch/v1\nkind: Job\nmetadata: {name: p, namespace: devops}\nspec:\n  template:\n    spec:\n      restartPolicy: Never\n      containers:\n        - name: p\n          image: !!binary YnVzeWJveDpsYXRlc3Q=\n" > "$T/apps/99-probe-bin.yaml"
+'
+expect_catch "image: !!binary (busybox:latest) behind an images: rewrite (static mode)" "$(ipw "manifests/owncast/deployment.yaml: image 'busybox:latest'")" '
+  imgswap manifests/owncast/deployment.yaml "          image: hugmesh/owncast-ui
+" "          image: !!binary YnVzeWJveDpsYXRlc3Q=
+"
+'
+# (23aa) an image of any other type cannot be judged: fail closed.
+expect_catch "image: 42 (not a string, fail closed)" "$(ipw "manifests/owncast/deployment.yaml: an \`image:\` value 42 is a int")" '
+  imgswap manifests/owncast/deployment.yaml "          image: hugmesh/owncast-ui
+" "          image: 42
+"
+'
+# (23ab) THE REPORTED CONCERN: an ApplicationSet {{ }} value is refused, not skipped.
+expect_catch "ApplicationSet kustomize.images owncast/owncast={{ .img }} (fail closed)" "$(ipw "apps/99-probe-set.yaml (kustomize.images override 'owncast/owncast={{ .img }}'): image '{{ .img }}' contains a template expression")" '
+  printf "apiVersion: argoproj.io/v1alpha1\nkind: ApplicationSet\nmetadata: {name: p, namespace: devops}\nspec:\n  goTemplate: true\n  generators:\n    - list:\n        elements:\n          - {img: \"owncast/owncast:latest\"}\n  template:\n    metadata: {name: p}\n    spec:\n      project: default\n      source:\n        repoURL: https://github.com/hugmesh/hugmesh-generator.git\n        targetRevision: main\n        path: specs/cluster/manifests/owncast\n        kustomize:\n          images: [\"owncast/owncast={{ .img }}\"]\n      destination: {server: https://kubernetes.default.svc, namespace: hugmesh-owncast}\n" > "$T/apps/99-probe-set.yaml"
+'
+# (23ac) an embedded YAML image behind a tag PyYAML refuses (a consumer may not).
+expect_catch "embedded helperPod.yaml image: !custom busybox:latest (text backstop)" "${LP_WANT}" '
+  imgswap manifests/local-path/local-path.yaml "image: busybox:1.37@sha256:bdf57e528e45e4433820e045b29b4597825a1c9e38353532d90a01445013f82e" "image: !custom busybox:latest"
+'
+
+# (23ad) an image under a key not named `image`: CNPG-style imageName, (23ae) an env
+# entry named *_IMAGE, (23af) an env-style HELPER_IMAGE= assignment in a script.
+expect_catch "imageName: postgres:latest (a key not named image)" "$(ipw "apps/99-probe-cnpg.yaml: image 'postgres:latest'")" '
+  printf "apiVersion: postgresql.cnpg.io/v1\nkind: Cluster\nmetadata: {name: p, namespace: devops}\nspec:\n  instances: 1\n  imageName: postgres:latest\n" > "$T/apps/99-probe-cnpg.yaml"
+'
+expect_catch "env {name: HELPER_IMAGE, value: busybox:latest}" "$(ipw "manifests/owncast/deployment.yaml: image 'busybox:latest'")" '
+  imgswap manifests/owncast/deployment.yaml "          image: hugmesh/owncast-ui
+" "          image: hugmesh/owncast-ui
+          env:
+            - {name: HELPER_IMAGE, value: \"busybox:latest\"}
+"
+'
+expect_catch "script HELPER_IMAGE=busybox:latest (env-style assignment)" "$(ph_want busybox:latest)" '
+  printf "\nHELPER_IMAGE=busybox:latest\n" >> "$T/${PH}"
+'
+# ── (24) IMAGE PINS, round 5: what Argo renders, what Go's YAML reads, what a shell
+# joins ──────────────────────────────────────────────────────────────────────────
+# A review got a mutable image past round 4 with the gate green, static AND render:
+#   (a) an in-tree chart template whose key is split by an empty action
+#       (`ima{{""}}ge:`) or escaped (`"im\x61ge":`), inside an `if` on
+#       .Release.Namespace that the gate's own helm render (no --namespace) skipped;
+#   (b) a repository-only helm image map (`image: {repository: busybox}`), read as
+#       "no ref" though the chart's default tag is pulled for it; the same through a
+#       `./specs/cluster/...` path and an ApplicationSet, neither of which was rendered;
+#   (c) YAML under a tag PyYAML refuses (`!x`) and go-yaml accepts, which hid a whole
+#       helm values string or helper-pod spec from the walk;
+#   (d) kubectl `--overrides` / `--override-type`, `--ima""ge`, and `--image` and its
+#       value as two items of an args list;
+#   (e) Argo fields never read: kustomize.components outside the tree, a pinned
+#       targetRevision, a helm parameter NAME with a comma;
+#   (f) static-only: a CRD `container.image` credited to an `images:` rewrite that
+#       kustomize never applies to it, a Chart.yaml dependency, and remote kustomize
+#       resources spelled without `://`.
+R5_TPL=charts/hugmesh-gateway/templates/r5-probe.yaml
+r5tpl() {  # <container line(s)> [condition]: write a probe Pod template into the chart
+  { [ -n "${2:-}" ] && printf '{{- if %s }}\n' "$2"
+    printf 'apiVersion: v1\nkind: Pod\nmetadata:\n  name: r5-probe\nspec:\n  containers:\n    - name: p\n%s\n' "$1"
+    [ -n "${2:-}" ] && printf '{{- end }}\n'; true; } > "$T/${R5_TPL}"
+}
+ph_want_r5() { ipw "manifests/prod-hygiene/kustomization.yaml (configMapGenerator prod-hygiene-script file validate-prod-hygiene.sh): $1"; }
+tplw() { ipw "${R5_TPL} (chart template): line $1: $2"; }
+# (24a) THE REPORTED EXPLOIT n1: an action splitting the key, behind a namespace test.
+expect_catch "chart template key split by an empty action: ima{{\"\"}}ge" "$(tplw 8 'a template action joined to a word')" '
+  r5tpl "      ima{{\"\"}}ge: busybox:latest"
+'
+expect_catch "chart template key joined across a newline by {{- \"\" -}} trimming" "$(tplw 9 'a template action joined to a word')" '
+  r5tpl "      ima
+{{- \"\" -}}
+      ge: busybox:latest"
+'
+expect_catch "chart template branch on .Release.Namespace (render state the gate cannot reproduce)" "$(tplw 1 "the action '{{- if ne .Release.Namespace \"default\" }}' reads render state")" '
+  r5tpl "      image: registry.hugmesh.net/hugmesh/hugmesh-gateway:dev" "ne .Release.Namespace \"default\""
+'
+expect_catch "chart template branch on .Capabilities.APIVersions.Has" "$(tplw 1 "the action '{{- if .Capabilities.APIVersions.Has \"r5/v1\" }}' reads render state")" '
+  r5tpl "      image: registry.hugmesh.net/hugmesh/hugmesh-gateway:dev" ".Capabilities.APIVersions.Has \"r5/v1\""
+'
+# (24b) THE REPORTED EXPLOIT n2/n2b: a YAML-escaped key; the text read decodes it.
+expect_catch "chart template \"im\\x61ge\": busybox:latest (escape decoded)" "$(ipw "${R5_TPL} (chart file, read as text): image 'busybox:latest'")" '
+  r5tpl "      \"im\\x61ge\": \"busybox:latest\""
+'
+expect_catch "chart template key spelled with an escape (fail closed)" "$(tplw 8 'a YAML key spelled with a backslash escape')" '
+  r5tpl "      \"im\\x61ge\": \"registry.hugmesh.net/hugmesh/hugmesh-gateway:dev\""
+'
+# (24c) other ways a template assembles text: a key that IS an action, a function
+# outside the modelled set, printf joining two values, a literal carrying a colon.
+expect_catch "chart template key written by an action" "$(tplw 8 'a YAML key written by a template action')" '
+  r5tpl "      {{ .Values.instance.name }}: busybox:latest"
+'
+expect_catch "chart template function tpl (not modelled, fail closed)" "$(tplw 9 "template function 'tpl' is not one this check models")" '
+  r5tpl "      image: registry.hugmesh.net/hugmesh/hugmesh-gateway:dev
+      args: [{{ tpl .Values.instance.name . }}]"
+'
+expect_catch "chart template printf joining two values" "$(tplw 9 'print/printf joins more than one value')" '
+  r5tpl "      image: registry.hugmesh.net/hugmesh/hugmesh-gateway:dev
+      args: [{{ printf \"%s%s\" .Values.instance.name .Release.Name }}]"
+'
+expect_catch "chart template literal with a colon in an action" "$(tplw 9 "the string literal '\"ge: busybox\"' in a template action")" '
+  r5tpl "      image: registry.hugmesh.net/hugmesh/hugmesh-gateway:dev
+      args: [{{ print \"ge: busybox\" }}]"
+'
+# (24d) THE REPORTED EXPLOIT n3/n3b/n4: a repository-only helm image map.
+R5_REPO_ONLY='      values: |
+        image:
+          repository: busybox
+        instance:
+'
+expect_catch "Argo helm values image: {repository: busybox} with no tag (chart default tag)" "$(ipw "apps/20-gateway-pki.yaml: a helm image map sets repository 'busybox' but no tag or digest")" '
+  imgswap apps/20-gateway-pki.yaml "      values: |
+        instance:
+" "${R5_REPO_ONLY}"
+'
+export R5_REPO_ONLY
+R5_APPSET='apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata: {name: r5-probe, namespace: devops}
+spec:
+  goTemplate: true
+  generators:
+    - list:
+        elements:
+          - {slug: probe}
+  template:
+    metadata: {name: "r5-{{ .slug }}"}
+    spec:
+      project: default
+      source:
+        repoURL: https://github.com/hugmesh/hugmesh-generator.git
+        targetRevision: main
+        path: specs/cluster/charts/hugmesh-gateway
+        helm:
+          releaseName: r5-probe
+          valuesObject:
+            image: {repository: busybox}
+      destination: {server: https://kubernetes.default.svc, namespace: hugmesh-fe}
+'
+export R5_APPSET
+expect_catch "ApplicationSet over the in-tree chart, valuesObject image.repository busybox" "$(ipw "apps/99-r5-set.yaml: a helm image map sets repository 'busybox' but no tag or digest")" '
+  printf "%s" "${R5_APPSET}" > "$T/apps/99-r5-set.yaml"
+'
+expect_catch "ApplicationSet with a git generator over the in-tree chart (fail closed)" "$(ipw "apps/99-r5-set.yaml: ApplicationSet 'r5-probe' over this repo uses a generator other than \`list\`")" '
+  printf "%s" "${R5_APPSET}" | python3 -c "import sys; s=sys.stdin.read(); o=\"    - list:\n        elements:\n          - {slug: probe}\n\"; assert o in s; sys.stdout.write(s.replace(o, \"    - git: {repoURL: https://github.com/hugmesh/hugmesh-generator.git, revision: main, directories: [{path: x}]}\n\").replace(\"image: {repository: busybox}\", \"replicaCount: 1\"))" > "$T/apps/99-r5-set.yaml"
+'
+# (24e) THE REPORTED EXPLOIT n5: an unknown YAML tag no longer hides helm values.
+R5_VELERO='apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata: {name: r5-velero, namespace: devops}
+spec:
+  project: default
+  source:
+    repoURL: https://vmware-tanzu.github.io/helm-charts
+    chart: velero
+    targetRevision: 8.0.0
+    helm:
+      values: |
+        r5note: !x unread
+        image:
+          repository: velero/velero
+          tag: latest
+  destination: {server: https://kubernetes.default.svc, namespace: velero}
+'
+export R5_VELERO
+expect_catch "helm values string with an unknown !x tag (go-yaml reads it)" "$(ipw "apps/99-r5-velero.yaml: image 'velero/velero:latest'")" '
+  printf "%s" "${R5_VELERO}" > "$T/apps/99-r5-velero.yaml"
+'
+expect_catch "helm values string that does not parse (fail closed)" "$(ipw "apps/99-r5-velero.yaml: Argo helm.values does not parse")" '
+  printf "%s" "${R5_VELERO}" | sed "s/r5note: !x unread/r5note: [unclosed/" > "$T/apps/99-r5-velero.yaml"
+'
+expect_catch "ConfigMap values.yaml with an unknown !x tag over a helm image map (structure only)" "$(ipw "apps/99-r5-cm.yaml: image 'velero/velero:latest'")" '
+  printf "apiVersion: v1\nkind: ConfigMap\nmetadata: {name: r5-values, namespace: devops}\ndata:\n  values.yaml: |\n    r5note: !x unread\n    image:\n      repository: velero/velero\n      tag: latest\n" > "$T/apps/99-r5-cm.yaml"
+'
+# (24f) THE REPORTED EXPLOIT n9: helperPod.yaml with `metadata: !x` and an escaped key.
+expect_catch "helperPod.yaml metadata: !x with \"im\\x61ge\": busybox:latest" "${LP_WANT}" '
+  python3 - "$T/manifests/local-path/local-path.yaml" <<"PY"
+import re, sys
+p = sys.argv[1]; s = open(p, encoding="utf-8").read()
+i = s.index("  helperPod.yaml: |-\n"); blk = s[i:]
+new = re.sub(r"(\n\s*)image: (\S*busybox\S*)", lambda m: m.group(1) + "\"im\\x61ge\": \"busybox:latest\"", blk, count=1)
+a = "\n    metadata:\n      name: helper-pod\n"
+assert a in new and new != blk
+open(p, "w", encoding="utf-8").write(s[:i] + new.replace(a, "\n    metadata: !x\n      name: helper-pod\n", 1))
+PY
+'
+# (24g) THE REPORTED EXPLOITS n6/n7/n8: kubectl spellings in the prod-hygiene script.
+expect_catch "kubectl run --override-type=json --overrides (JSON patch onto the image)" "$(ph_want_r5 "a string passes kubectl --overrides")" '
+  printf "\nkubectl -n \"\$NS\" run r5-probe --restart=Never ${CURL_PIN} --override-type=json --overrides='"'"'[{\"op\":\"replace\",\"path\":\"/spec/containers/0/image\",\"value\":\"busybox:latest\"}]'"'"' -- true\n" >> "$T/${PH}"
+'
+expect_catch "kubectl run --overrides with a \\u0061 escape in the image key" "$(ph_want busybox:latest)" '
+  printf "\nkubectl -n x run r5-probe ${CURL_PIN} --overrides='"'"'{\"spec\":{\"containers\":[{\"name\":\"r5-probe\",\"im\\\\u0061ge\":\"busybox:latest\"}]}}'"'"' -- true\n" >> "$T/${PH}"
+'
+expect_catch "--ima\"\"ge=busybox:latest (shell joins the quotes)" "$(ph_want busybox:latest)" '
+  printf "\nkubectl -n x run r5-probe --restart=Never --ima\"\"ge=busybox:latest -- true\n" >> "$T/${PH}"
+'
+expect_catch "--\"\$F\"=busybox:latest (flag name from a variable, fail closed)" "$(ph_want_r5 "a string passes a command-line flag whose name is assembled")" '
+  printf "\nkubectl -n x run r5-probe --\"\$F\"=busybox:latest -- true\n" >> "$T/${PH}"
+'
+expect_catch "kubectl patch --type json onto a container image path (fail closed)" "$(ph_want_r5 "a string holds a JSON patch op onto an image path")" '
+  printf "\nkubectl -n x patch deploy/web --type json -p '"'"'[{\"op\":\"replace\",\"path\":\"/spec/template/spec/containers/0/image\",\"value\":\"busybox:latest\"}]'"'"'\n" >> "$T/${PH}"
+'
+# (24h) THE REPORTED EXPLOIT n13: --image and its value as two items of an args list.
+expect_catch "initContainer args [\"--image\", \"busybox:latest\"] (argv list)" "$(ipw "manifests/prod-hygiene/job.yaml: image 'busybox:latest'")" '
+  python3 - "$T/manifests/prod-hygiene/job.yaml" <<"PY"
+import sys
+p = sys.argv[1]; s = open(p, encoding="utf-8").read()
+a = "      containers:\n        - name: gate\n"
+assert s.count(a) == 1
+s = s.replace(a, "      initContainers:\n        - name: r5-probe\n          image: docker.io/bitnamilegacy/kubectl:1.31\n          command: [\"kubectl\"]\n          args: [\"-n\", \"hugmesh-system\", \"run\", \"r5-probe\", \"--restart=Never\", \"--image\", \"busybox:latest\", \"--\", \"true\"]\n" + a)
+open(p, "w", encoding="utf-8").write(s)
+PY
+'
+# (24i) THE REPORTED EXPLOITS n10/n11/n14: Argo fields the gate never read.
+R5_EDGE='apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata: {name: r5-edge-ai, namespace: devops}
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/hugmesh/hugmesh-generator.git
+    targetRevision: main
+    path: specs/cluster/manifests/edge-ai
+  destination: {server: https://kubernetes.default.svc, namespace: hugmesh-inference}
+'
+export R5_EDGE
+expect_catch "Argo kustomize.components outside specs/cluster (fail closed)" "$(ipw "apps/99-r5-comp.yaml: Argo kustomize component '../../../../tests/r5-comp' is not a directory under specs/cluster")" '
+  printf "%s    kustomize:\n      components: [../../../../tests/r5-comp]\n" "$(printf "%s" "${R5_EDGE}" | sed "/^  destination/d")
+" > "$T/apps/99-r5-comp.yaml"
+  printf "  destination: {server: https://kubernetes.default.svc, namespace: hugmesh-inference}\n" >> "$T/apps/99-r5-comp.yaml"
+'
+expect_catch "Argo kustomize key the check does not model (fail closed)" "$(ipw "apps/99-r5-comp.yaml: Argo kustomize key 'r5Unknown' is not one this check models")" '
+  printf "%s    kustomize:\n      r5Unknown: true\n" "$(printf "%s" "${R5_EDGE}" | sed "/^  destination/d")
+" > "$T/apps/99-r5-comp.yaml"
+  printf "  destination: {server: https://kubernetes.default.svc, namespace: hugmesh-inference}\n" >> "$T/apps/99-r5-comp.yaml"
+'
+expect_catch "Argo app on this repo with targetRevision ae585a51 (an old commit)" "$(ipw "apps/99-r5-rev.yaml: an Argo source in this repo pins targetRevision 'ae585a51'")" '
+  printf "%s" "${R5_EDGE}" | sed "s/targetRevision: main/targetRevision: ae585a51/" > "$T/apps/99-r5-rev.yaml"
+'
+expect_catch "helm parameter name image.tag=latest,image.pullPolicy (comma in the NAME)" "$(ipw "apps/55-velero.yaml: helm parameter name 'image.tag=latest,image.pullPolicy' holds an unescaped")" '
+  imgswap apps/55-velero.yaml "    helm:
+" "    helm:
+      parameters:
+        - name: \"image.tag=latest,image.pullPolicy\"
+          value: Always
+"
+'
+# (24j) static-only in round 4: a CRD field kustomize's images: never rewrites.
+expect_catch "WorkflowTemplate container.image ollama/ollama behind an images: entry it does not get" "$(ipw "manifests/edge-ai/r5-workflow.yaml: image 'ollama/ollama' has no tag")" '
+  printf "apiVersion: argoproj.io/v1alpha1\nkind: WorkflowTemplate\nmetadata: {name: r5-probe}\nspec:\n  entrypoint: main\n  templates:\n    - name: main\n      container: {image: ollama/ollama, command: [\"true\"]}\n" > "$T/manifests/edge-ai/r5-workflow.yaml"
+  imgswap manifests/edge-ai/kustomization.yaml "
+resources:
+" "
+resources:
+  - r5-workflow.yaml
+"
+'
+expect_catch "Chart.yaml dependencies: on a remote chart (fail closed)" "$(ipw "charts/hugmesh-gateway/Chart.yaml: declares chart \`dependencies:\`")" '
+  printf "dependencies:\n  - name: r5-sub\n    repository: https://charts.example.org/r5\n    version: \"*\"\n" >> "$T/charts/hugmesh-gateway/Chart.yaml"
+'
+expect_catch "kustomize resource git::github.com/... (remote without ://)" "$(ipw "manifests/edge-ai/kustomization.yaml: \`resources:\` pulls in the REMOTE 'git::github.com/kubernetes-sigs/kustomize//examples/helloWorld': it is not a file or directory")" '
+  imgswap manifests/edge-ai/kustomization.yaml "
+resources:
+" "
+resources:
+  - git::github.com/kubernetes-sigs/kustomize//examples/helloWorld
+"
+'
+expect_catch "kustomize resource github.com:org/repo//dir (remote, scp-style)" "$(ipw "manifests/edge-ai/kustomization.yaml: \`resources:\` pulls in the REMOTE 'github.com:kubernetes-sigs/kustomize//examples/helloWorld': it is not a file or directory")" '
+  imgswap manifests/edge-ai/kustomization.yaml "
+resources:
+" "
+resources:
+  - github.com:kubernetes-sigs/kustomize//examples/helloWorld
+"
+'
+
+# (21-render) the kubectl render cross-check catches the three reported exploits ON
+# ITS OWN: the staged tree is rendered and judged without the static reader.
+render_catch() {  # <label> <injection> [image name prefix, default owncast/owncast]
+  local label="$1" inject="$2" prefix="${3:-owncast/owncast}" T="${WORK}/tree"
+  rm -rf "${T}"; cp -r "${REPO}/specs/cluster" "${T}"
+  ( T="${T}"; eval "${inject}" ) || { neg_bad "${label} (injection failed)"; return; }
+  local out
+  if out="$(HUGMESH_IMAGE_PIN_RENDER=1 python3 - "$(dirname "${CHECKER}")" "${T}" "${prefix}" <<"PY" 2>&1
+import sys
+sys.path.insert(0, sys.argv[1])
+import cluster_manifest_integrity as m
+rendered, why = m._render_refs(sys.argv[2])
+assert rendered is not None, "render did not run: %s" % why
+bad = sorted({r for refs in rendered.values() for r in refs
+              if r.startswith(sys.argv[3]) and m._judge_ref(r, set())})
+assert bad, "no mutable %s ref in the render" % sys.argv[3]
+print(" ".join(bad))
+PY
+)"; then neg_ok "${label} -> render cross-check caught ${out}"
+  else neg_bad "${label} NOT caught by the render cross-check: ${out}"; fi
+}
+if command -v kubectl >/dev/null 2>&1; then
+  render_catch "render: raw owncast/owncast:stable" '
+    oc_drop_entry; imgswap manifests/owncast/deployment.yaml "          image: owncast/owncast
+" "          image: owncast/owncast:stable
+"'
+  render_catch "render: Component newTag latest" '
+    oc_drop_entry; mkdir "$T/manifests/owncast/pin"
+    printf "apiVersion: kustomize.config.k8s.io/v1alpha1\nkind: Component\nimages:\n  - {name: owncast/owncast, newName: owncast/owncast, newTag: latest}\n" > "$T/manifests/owncast/pin/kustomization.yaml"
+    printf "components:\n  - pin\n" >> "$T/manifests/owncast/kustomization.yaml"'
+  render_catch "render: JSON6902 patch :develop" '
+    oc_drop_entry; printf "%s" "${OC_JSONPATCH}" >> "$T/manifests/owncast/kustomization.yaml"'
+  # (22-render) round 3: a single-line JSON ConfigMap value and a generator literal.
+  render_catch "render: single-line JSON helperPod.yaml busybox:latest" '
+    lp_helper "  helperPod.yaml: '"'"'{\"apiVersion\":\"v1\",\"kind\":\"Pod\",\"metadata\":{\"name\":\"helper-pod\"},\"spec\":{\"containers\":[{\"name\":\"helper-pod\",\"image\":\"busybox:latest\"}]}}'"'"'"' busybox
+  render_catch "render: configMapGenerator literal busybox:latest" '
+    printf "configMapGenerator:\n  - name: helper\n    literals:\n      - '"'"'helperPod.yaml=%s'"'"'\n" "${GEN_POD}" >> "$T/manifests/owncast/kustomization.yaml"' busybox
+  render_catch "render: bare busybox in the helper-pod template is not rewritten by images:" "${LP_REWRITE}" busybox
+  # (23-render) round 4: the binaryData helper pod is decoded in the render pass too.
+  render_catch "render: ConfigMap binaryData helperPod.yaml busybox:latest" 'lp_b64 image' busybox
+else
+  echo "  NOTE (21-render) NOT run: kubectl is not on PATH, so the render cross-check is untested here"
+fi
+
+# (23-helm) with helm on PATH the in-tree chart is rendered with each Argo app's values
+# and the output judged, independently of the text read of its templates.
+helm_render_catch() {  # <label> <injection> <image name prefix>
+  local label="$1" inject="$2" prefix="$3" T="${WORK}/tree"
+  rm -rf "${T}"; cp -r "${REPO}/specs/cluster" "${T}"
+  ( T="${T}"; eval "${inject}" ) || { neg_bad "${label} (injection failed)"; return; }
+  local out
+  if out="$(HUGMESH_IMAGE_PIN_RENDER=1 python3 - "$(dirname "${CHECKER}")" "${T}" "${prefix}" <<"PY" 2>&1
+import sys
+sys.path.insert(0, sys.argv[1])
+import cluster_manifest_integrity as m
+rendered, why = m._helm_render_refs(sys.argv[2])
+assert rendered is not None, "helm render did not run: %s" % why
+bad = sorted({"%s: %s" % (k, r) for k, refs in rendered.items()
+              for r in refs if r.startswith(sys.argv[3]) and m._judge_ref(r, set())})
+assert bad, "no mutable %s ref in the helm render" % sys.argv[3]
+print("; ".join(bad))
+PY
+)"; then neg_ok "${label} -> helm render caught ${out}"
+  else neg_bad "${label} NOT caught by the helm render: ${out}"; fi
+}
+GW_LITERAL='python3 - "$T/${GW_TPL}" <<"PY"
+import sys
+p = sys.argv[1]; s = open(p, encoding="utf-8").read()
+old = "          image: \"{{ .Values.image.repository }}:{{ .Values.image.tag }}\""
+assert s.count(old) == 2, s.count(old)
+open(p, "w", encoding="utf-8").write(s.replace(old, "          image: \"busybox:latest\"", 1))
+PY'
+if command -v helm >/dev/null 2>&1; then
+  helm_render_catch "helm render: literal busybox:latest in the gateway chart template" "${GW_LITERAL}" busybox
+  helm_render_catch "helm render: an Argo app parameter image.tag=latest on the gateway chart" '
+    imgswap apps/20-gateway-pki.yaml "      releaseName: hugmesh-pki-gateway
+" "      releaseName: hugmesh-pki-gateway
+      parameters:
+        - {name: image.tag, value: latest}
+"' registry.hugmesh.net/hugmesh/hugmesh-gateway
+  # (24-helm) round 5: rendered the way Argo CD renders it. --namespace is the
+  # destination namespace (n1), a `./specs/cluster/...` path is the same chart (n3),
+  # and a list ApplicationSet is expanded and rendered per element (n4).
+  helm_render_catch "helm render: template behind if ne .Release.Namespace \"default\" (Argo passes --namespace)" '
+    r5tpl "      image: busybox:latest" "ne .Release.Namespace \"default\""' busybox
+  helm_render_catch "helm render: app path ./specs/cluster/charts/hugmesh-gateway + image.repository busybox" '
+    imgswap apps/20-gateway-pki.yaml "    path: specs/cluster/charts/hugmesh-gateway
+" "    path: ./specs/cluster/charts/hugmesh-gateway
+"
+    imgswap apps/20-gateway-pki.yaml "      values: |
+        instance:
+" "${R5_REPO_ONLY}"' busybox
+  helm_render_catch "helm render: list ApplicationSet over the in-tree chart, valuesObject image.repository busybox" '
+    printf "%s" "${R5_APPSET}" > "$T/apps/99-r5-set.yaml"' busybox
+else
+  echo "  NOTE (23-helm) NOT run: helm is not on PATH, so the helm render is untested here"
+fi
 
 echo
 echo "== negative controls: ${NEG_P} passed, ${NEG_F} failed =="

@@ -256,6 +256,29 @@ def agent_env(out):
     return env
 
 
+#: The project-context file the Studio writes when it starts this worker (studio
+#: core/agent_context.py: what HugMesh is and where every local source lives). Its text
+#: goes in front of an agent's brief; the plain mode (a diff from the model, no agent)
+#: is not an agent and keeps its tight prompt.
+CONTEXT_ENV = "HUGMESH_AGENT_CONTEXT"
+MAX_CONTEXT_CHARS = 12000
+
+
+def agent_context(environ=None):
+    """The context text to give an agent, or "" when the Studio wrote none."""
+    environ = os.environ if environ is None else environ
+    path = (environ.get(CONTEXT_ENV) or "").strip()
+    if not path:
+        return ""
+    try:
+        with open(path, encoding="utf-8") as fh:
+            text = fh.read(MAX_CONTEXT_CHARS)
+    except OSError:
+        return ""
+    return ("PROJECT CONTEXT (from the HugMesh Studio, also at " + path + ")\n"
+            + text.strip() + "\n\n")
+
+
 def run_agent(a, issue, cmd):
     say("running: " + " ".join(cmd[:6]) + " ...")
     try:
@@ -307,9 +330,10 @@ def main(argv):
                               "unset AGENT to use the plain mode, which needs nothing extra")
             return 1
         return run_agent(a, issue, ["ollama", "launch", "opencode", "--model", a.model,
-                                    "--", "run", BRIEF + issue[:MAX_ISSUE_CHARS]])
+                                    "--", "run",
+                                    agent_context() + BRIEF + issue[:MAX_ISSUE_CHARS]])
     return run_agent(a, issue, ["bash", os.path.join(HERE, "agent-explicit.sh"), a.agent,
-                                a.model, BRIEF + issue[:MAX_ISSUE_CHARS]])
+                                a.model, agent_context() + BRIEF + issue[:MAX_ISSUE_CHARS]])
 
 
 if __name__ == "__main__":

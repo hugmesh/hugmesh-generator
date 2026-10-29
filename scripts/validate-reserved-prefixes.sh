@@ -379,7 +379,7 @@ else:
 # ---- 6b) HALF-RENAME gate: hybrid names + the host shell's paired move -------
 # WHY THIS STAGE EXISTS
 # --------------------
-# The host shell was renamed `snapdragon-systems-web` -> `hugmesh-host-shell`, but
+# The host shell was renamed from its pre-rebrand name to `hugmesh-host-shell`, but
 # an intermediate sweep left it as `hugmesh-systems-web`. That hybrid carries NO
 # banned token — it is already `hugmesh-` prefixed — so every grep-driven rename
 # sweep since has reported the tree CLEAN while the cluster lane still pointed at

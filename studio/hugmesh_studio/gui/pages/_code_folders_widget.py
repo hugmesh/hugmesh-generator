@@ -22,6 +22,15 @@ Two rules this widget exists to keep (the lessons behind #647 and #656):
   and when nothing can be confirmed the note carries the path in a read-only field
   with a Copy button, so the operator is one paste away from the folder.
 
+COPIES FOR EACH DOMAIN (operator ask 2026-10-21). Under each domain's rows sits the
+domain's own folder of copies (:mod:`core.domain_workspaces`): one ``git clone`` per app
+that domain has, each named ``<app>.<domain>``, made on a worker thread by *Make N
+copies*. A row whose copy exists shows and opens the COPY. An app the domain no longer
+has (a service was un-ticked), and the folder of a domain that left the mesh, are
+listed as EXTRA; *Remove N extra folders* arms on the first click, showing per folder
+whether it holds edits, and acts on the second click only, after re-reading the disk.
+A copy that holds edits or commits found nowhere else is always kept.
+
 ``opener`` is injectable (``path -> OpenResult``) so a test can click every button
 and assert exactly which folder was handed over, with no subprocess and no desktop.
 Without one, the real openers run and ``host`` (a :class:`core.open_path.Host`)
@@ -31,11 +40,15 @@ window's own thread, and an opener that is the file manager never exits.
 """
 from __future__ import annotations
 
+import os
+import time
 from typing import Callable
 
-from ..qt import Qt, QtCore, QtGui, QtWidgets
+from ..qt import Qt, QtCore, QtGui, QtWidgets, Signal
 from ...core import code_folders
+from ...core import domain_workspaces as dw
 from ...core.open_path import OpenResult, open_folder, open_folders
+from ._widgets import own_probe, probe_running
 
 __all__ = ["CodeFoldersWidget", "ElidedLabel", "default_opener"]
 
@@ -100,6 +113,24 @@ def _grey(label: QtWidgets.QLabel) -> QtWidgets.QLabel:
     return label
 
 
+class _CopyJob(QtCore.QThread):
+    """Run one callable off the window's thread; ``progress`` carries a line while it
+    runs and ``result`` the value (or the exception) at the end. Never raises into Qt."""
+    progress = Signal(object)
+    result = Signal(object)
+
+    def __init__(self, fn: "Callable[[Callable[[str], None]], object]"):
+        super().__init__(None)
+        self._fn = fn
+
+    def run(self) -> None:                         # noqa: D401 — Qt's name
+        try:
+            value = self._fn(self.progress.emit)
+        except BaseException as exc:               # noqa: BLE001 — carried to the slot
+            value = exc
+        self.result.emit(value)
+
+
 class CodeFoldersWidget(QtWidgets.QGroupBox):
     """See the module docstring. ``refresh()`` is cheap to call often: it rebuilds
     the rows only when the map actually changed."""
@@ -119,22 +150,46 @@ class CodeFoldersWidget(QtWidgets.QGroupBox):
 
     def __init__(self, generator_dir: str,
                  opener: "Callable[[str], OpenResult] | None" = None, parent=None,
-                 host=None):
+                 host=None, git_runner=None, state_root: "str | None" = None):
         super().__init__("Code folders — the git checkout behind each app", parent)
         self.generator_dir = generator_dir
         self._opener = opener
         self._host = host
+        #: ``(argv, cwd) -> (code, output)``; None = the real git (core.local_agent)
+        self.git_runner = git_runner
+        self.state_root = state_root
         self.map: "code_folders.CodeFolderMap | None" = None
+        self.plan: "dw.WorkspacePlan | None" = None
+        self._inputs: tuple = ("clone", "", (), "")
         self.open_buttons: dict[tuple[str, str], QtWidgets.QPushButton] = {}
         self.open_all_buttons: dict[str, QtWidgets.QPushButton] = {}
         self.rows: dict[tuple[str, str], code_folders.AppFolder] = {}
+        #: the folder each row's Open button opens (the copy once there is one)
+        self.row_paths: dict[tuple[str, str], str] = {}
+        self.copy_labels: dict[str, QtWidgets.QLabel] = {}
+        self.clone_buttons: dict[str, QtWidgets.QPushButton] = {}
+        self.open_copies_buttons: dict[str, QtWidgets.QPushButton] = {}
+        self.extra_labels: dict[str, QtWidgets.QLabel] = {}
+        self.remove_buttons: dict[str, QtWidgets.QPushButton] = {}
+        self.cancel_buttons: dict[str, QtWidgets.QPushButton] = {}
+        #: domain -> the extra paths the FIRST click armed (the second acts on these)
+        self.armed: dict[str, tuple[str, ...]] = {}
+        self._armed_words: dict[str, str] = {}
+        #: the saved-mesh record the page's form was loaded from ("" = none): its stale
+        #: copy must not keep what the person just un-ticked (core.domain_workspaces)
+        self.record_id = ""
+        self.claimed_labels: dict[str, QtWidgets.QLabel] = {}
+        self._job = None
         self.last_results: list[OpenResult] = []
+        self.last_copy_results: list = []
 
         lay = QtWidgets.QVBoxLayout(self)
         intro = QtWidgets.QLabel(
             "Every domain below runs the platform apps (one set of images serves all "
-            "domains) plus the optional services chosen for it on the ‘Domain "
-            "services’ step. Each row is the folder compose builds that app from.")
+            "domains) plus the services chosen for it on the ‘Domain services’ step; "
+            "the apps of a service a domain did not choose are not listed under it. "
+            "Each row is the folder compose builds that app from, or this domain's "
+            "own copy once one is made.")
         intro.setWordWrap(True)
         lay.addWidget(_grey(intro))
 
@@ -157,6 +212,16 @@ class CodeFoldersWidget(QtWidgets.QGroupBox):
         self.notice = QtWidgets.QLabel("")
         self.notice.setWordWrap(True)
         lay.addWidget(_grey(self.notice))
+
+        # Where the per-domain copies live, and the one sentence about what they are.
+        copies_row = QtWidgets.QHBoxLayout()
+        copies_row.addWidget(QtWidgets.QLabel("Domain copies:"))
+        self.copies_root = ElidedLabel("")
+        copies_row.addWidget(self.copies_root, 1)
+        lay.addLayout(copies_row)
+        self.copies_note = QtWidgets.QLabel(dw.EDITS_NOTE)
+        self.copies_note.setWordWrap(True)
+        lay.addWidget(_grey(self.copies_note))
 
         self._domains_box = QtWidgets.QWidget()
         self._domains_lay = QtWidgets.QVBoxLayout(self._domains_box)
@@ -207,20 +272,60 @@ class CodeFoldersWidget(QtWidgets.QGroupBox):
         self.result_note.repaint()
 
     def refresh(self, source_mode: str, source_dir: str, domains,
-                own_name: str = "") -> "code_folders.CodeFolderMap":
+                own_name: str = "", record_id: "str | None" = None
+                ) -> "code_folders.CodeFolderMap":
         """Re-read the map for the current source choice and domain rows. With no
         domain rows yet (the single-page frame never seeds the Domains table) the
         mesh's own domain stands in, so the block is never empty."""
+        if record_id is not None:
+            self.record_id = record_id or ""
         rows = list(domains or ())
         if not rows and own_name:
             rows = [{"name": own_name, "optional_services": [], "idp": ""}]
+        self._inputs = (source_mode, source_dir, tuple(rows), own_name)
         new = code_folders.code_folder_map(self.generator_dir, source_mode,
                                           source_dir, rows)
-        if new == self.map:
+        # The domains, their services or the source changed (not a re-read after a
+        # copy or a removal, which clears ``self.map`` first): the last outcome line
+        # ("Made 20 copies for …") is about a mesh that is no longer on screen.
+        if self.map is not None and new != self.map and not self.busy():
+            self.clear_note()
+        plan = self._plan(new)
+        if new == self.map and plan == self.plan:
             return new
         self.map = new
+        self.plan = plan
         self._rebuild()
         return new
+
+    def clear_note(self) -> None:
+        """Hide the last outcome line (and its path and Copy button)."""
+        self.result_note.setText("")
+        self.result_note.setVisible(False)
+        self.result_path.setText("")
+        self.result_path.setVisible(False)
+        self.copy_btn.setVisible(False)
+
+    def _mesh_name(self) -> str:
+        return (self._inputs[3] or "").strip() or "mesh"
+
+    def _plan(self, folder_map=None) -> "dw.WorkspacePlan | None":
+        """The copies plan for the last inputs. Never raises: a plan that cannot be
+        read hides the copies part and says why, instead of breaking the step."""
+        mode, sdir, rows, _own = self._inputs
+        try:
+            return dw.plan_workspaces(self.generator_dir, mode, sdir, list(rows),
+                                      self._mesh_name(), state_root=self.state_root,
+                                      folder_map=folder_map, record_id=self.record_id)
+        except Exception as exc:                  # noqa: BLE001 — a block must not break the page
+            self._plan_error = f"{type(exc).__name__}: {exc}"
+            return None
+
+    def reread(self) -> None:
+        """Re-read the disk with the last inputs (after a copy or a removal)."""
+        self.map = None
+        mode, sdir, rows, own = self._inputs
+        self.refresh(mode, sdir, list(rows), own_name=own)
 
     # ── rendering ───────────────────────────────────────────────────────────────
     def _rebuild(self) -> None:
@@ -232,9 +337,11 @@ class CodeFoldersWidget(QtWidgets.QGroupBox):
             if w is not None:
                 w.setParent(None)
                 w.deleteLater()
-        self.open_buttons.clear()
-        self.open_all_buttons.clear()
-        self.rows.clear()
+        for d in (self.open_buttons, self.open_all_buttons, self.rows, self.row_paths,
+                  self.copy_labels, self.clone_buttons, self.open_copies_buttons,
+                  self.extra_labels, self.remove_buttons, self.cancel_buttons,
+                  self.claimed_labels):
+            d.clear()
 
         self.root_path.setText(m.root or m.root_reason)
         missing_root = bool(m.root) and not m.root_exists
@@ -244,10 +351,25 @@ class CodeFoldersWidget(QtWidgets.QGroupBox):
         self.open_root_btn.setToolTip(m.root if m.root_exists else m.root_reason)
         self.notice.setText(m.notice)
 
+        plan = self.plan
+        self.copies_root.setText(plan.root if plan else
+                                 "cannot be worked out: " + getattr(self, "_plan_error", ""))
+        spaces = {d.name: d for d in (plan.domains if plan else ()) if d.in_mesh}
+        # an arm survives a re-read only while every armed folder is still extra
+        extras_now = {x.path for x in (plan.extras() if plan else ())}
+        for name in list(self.armed):
+            if not set(self.armed[name]) <= extras_now:
+                self.armed.pop(name, None)
+                self._armed_words.pop(name, None)
         for dom in m.domains:
-            self._domains_lay.addWidget(self._domain_frame(dom))
+            self._domains_lay.addWidget(self._domain_frame(dom, spaces.get(dom.name)))
+        for ws in (plan.domains if plan else ()):
+            if not ws.in_mesh:
+                self._domains_lay.addWidget(self._gone_frame(ws))
+        self._sync_busy()
 
-    def _domain_frame(self, dom: "code_folders.DomainFolders") -> QtWidgets.QFrame:
+    def _domain_frame(self, dom: "code_folders.DomainFolders",
+                      ws: "dw.DomainWorkspace | None" = None) -> QtWidgets.QFrame:
         frame = QtWidgets.QFrame()
         frame.setFrameShape(QtWidgets.QFrame.Shape.StyledPanel)
         frame.setObjectName("code_folders_domain")
@@ -259,10 +381,6 @@ class CodeFoldersWidget(QtWidgets.QGroupBox):
         title.setFont(font)
         head.addWidget(title, 1)
         open_all = QtWidgets.QPushButton("Open all")
-        paths = dom.openable_paths()
-        open_all.setEnabled(bool(paths))
-        open_all.setToolTip(f"Open the {len(paths)} existing folder(s) of {dom.name}"
-                            if paths else f"No folder of {dom.name} exists yet")
         open_all.clicked.connect(lambda _=False, d=dom.name: self._open_all(d))
         head.addWidget(open_all)
         v.addLayout(head)
@@ -279,27 +397,390 @@ class CodeFoldersWidget(QtWidgets.QGroupBox):
         fm = self.fontMetrics()
         widest = max([fm.horizontalAdvance(self._row_title(a)) for a in dom.apps] or [0])
         grid.setColumnMinimumWidth(0, min(widest + 4, self._NAME_COLUMN_CAP))
+        copies = {r.app: r for r in (ws.repos if ws else ())}
         for r, app in enumerate(dom.apps):
+            copy = copies.get(app.name)
             name = ElidedLabel(self._row_title(app))
-            name.setToolTip(app.why())
-            where = ElidedLabel(app.path if app.exists else app.missing_reason)
+            if copy is not None and copy.cloned:
+                # The row now stands for this domain's COPY: that is the folder to
+                # work in. Where the build reads stays in the tooltip.
+                path, openable = copy.dest, os.path.isdir(copy.dest)
+                where = ElidedLabel(copy.dest)
+                name.setToolTip(app.why() + f" — this domain's copy; the mesh build "
+                                f"reads {app.path or app.missing_reason}")
+            else:
+                path, openable = app.path, app.openable
+                where = ElidedLabel(app.path if app.exists else app.missing_reason)
+                name.setToolTip(app.why())
             _grey(where)
             btn = QtWidgets.QPushButton("Open folder")
-            btn.setEnabled(app.openable)
-            btn.setToolTip(app.path if app.openable else app.missing_reason)
-            btn.clicked.connect(lambda _=False, d=dom.name, n=app.name, p=app.path:
+            btn.setEnabled(openable)
+            btn.setToolTip(path if openable else app.missing_reason)
+            btn.clicked.connect(lambda _=False, d=dom.name, n=app.name, p=path:
                                 self._open_one(d, n, p))
             grid.addWidget(name, r, 0)
             grid.addWidget(where, r, 1)
             grid.addWidget(btn, r, 2)
             self.open_buttons[(dom.name, app.name)] = btn
             self.rows[(dom.name, app.name)] = app
+            self.row_paths[(dom.name, app.name)] = path
         v.addLayout(grid)
+        paths = self._domain_paths(dom.name)
+        open_all.setEnabled(bool(paths))
+        open_all.setToolTip(f"Open the {len(paths)} existing folder(s) of {dom.name}"
+                            if paths else f"No folder of {dom.name} exists yet")
         for note in dom.notes:
             lab = QtWidgets.QLabel(note)
             lab.setWordWrap(True)
             v.addWidget(_grey(lab))
+        if ws is not None:
+            self._copies_part(v, ws)
         return frame
+
+    # ── the per-domain copies ───────────────────────────────────────────────────
+    def _copies_part(self, v: QtWidgets.QVBoxLayout, ws: "dw.DomainWorkspace") -> None:
+        """The copies line, *Make N copies*, *Open copies folder*, and the extras."""
+        made, missing = len(ws.cloned()), len(ws.missing())
+        total = len(ws.repos)
+        if ws.problem:
+            text = f"Copies for this domain: none can be made — {ws.problem}"
+        elif not ws.in_mesh:
+            text = f"Copies folder: {ws.folder}"
+        else:
+            blocked = total - made - missing
+            text = (f"Copies for this domain: {made} of {total} made, in "
+                    f"{os.path.basename(ws.folder)}/ (each "
+                    + ("is" if made else "will be") + f" named "
+                    f"<app>.{ws.slug}; its git remote ‘{dw.remote_name(ws.slug)}’ "
+                    "is the build checkout it was copied from)")
+            older = dw.older_remote_copies(ws)
+            if older:
+                names = sorted({r for _a, r in older})
+                text += (f". {len(older)} older cop{'y' if len(older) == 1 else 'ies'}"
+                         f" (made before that rule) still call"
+                         f"{'s' if len(older) == 1 else ''} it "
+                         + " / ".join(f"‘{n}’" for n in names) + ": "
+                         + ", ".join(a for a, _r in older[:4])
+                         + (" …" if len(older) > 4 else "")
+                         + f" — in those, push with git push {names[0]} "
+                         f"domain/{ws.slug}")
+            if blocked:
+                first = next(r for r in ws.repos if not r.cloned and r.reason)
+                text += (f". {blocked} cannot be made yet: {first.reason}")
+        lab = QtWidgets.QLabel(text)
+        lab.setWordWrap(True)
+        v.addWidget(lab)
+        self.copy_labels[ws.name] = lab
+
+        row = QtWidgets.QHBoxLayout()
+        if ws.in_mesh:
+            make = QtWidgets.QPushButton(f"Make {missing} cop{'y' if missing == 1 else 'ies'}"
+                                         if missing else "All copies made")
+            make.setEnabled(bool(missing))
+            make.setToolTip(f"git clone each missing app into {ws.folder}" if missing else
+                            (ws.problem or "Every app of this domain has its copy."))
+            make.clicked.connect(lambda _=False, d=ws.name: self._make_copies(d))
+            row.addWidget(make)
+            self.clone_buttons[ws.name] = make
+        openf = QtWidgets.QPushButton("Open copies folder")
+        exists = bool(ws.folder) and os.path.isdir(ws.folder) and not ws.problem
+        openf.setEnabled(exists)
+        openf.setToolTip(ws.folder if exists else "No copy has been made yet.")
+        openf.clicked.connect(lambda _=False, p=ws.folder: self._open_copies(p))
+        row.addWidget(openf)
+        self.open_copies_buttons[ws.name] = openf
+        row.addStretch(1)
+        v.addLayout(row)
+
+        if ws.foreign:
+            names = ", ".join(os.path.basename(p) for p in ws.foreign[:4])
+            more = len(ws.foreign) - min(4, len(ws.foreign))
+            note = QtWidgets.QLabel(
+                f"Not made by the Studio, left alone: {names}"
+                + (f", +{more} more" if more else ""))
+            note.setWordWrap(True)
+            v.addWidget(_grey(note))
+        if ws.claimed:
+            # one line per saved mesh: "Kept, the saved mesh ‘A’ still uses them: …"
+            by_why: dict[str, list[str]] = {}
+            for x in ws.claimed:
+                by_why.setdefault(x.why, []).append(os.path.basename(x.path))
+            lines = []
+            for why, names in sorted(by_why.items()):
+                if len(names) != 1:
+                    why = why[: -len(" it")] + " them" if why.endswith(" it") else why
+                shown = ", ".join(names[:6]) + (f", +{len(names) - 6} more"
+                                                if len(names) > 6 else "")
+                lines.append(f"Kept, {why}: {shown}.")
+            note = QtWidgets.QLabel("\n".join(lines))
+            note.setWordWrap(True)
+            v.addWidget(_grey(note))
+            self.claimed_labels[ws.name] = note
+        if ws.extras:
+            self._extras_part(v, ws)
+
+    def _extras_part(self, v: QtWidgets.QVBoxLayout, ws: "dw.DomainWorkspace") -> None:
+        n = len(ws.extras)
+        armed = ws.name in self.armed
+        if armed:
+            text = self._armed_words.get(ws.name, "")
+        else:
+            whys = sorted({x.why for x in ws.extras})
+            text = (f"{n} extra folder{'s' if n != 1 else ''}: " + "; ".join(whys)
+                    + ". Nothing is removed until you click Remove twice.")
+        lab = QtWidgets.QLabel(text)
+        lab.setWordWrap(True)
+        lab.setStyleSheet(f"color: {self._COLOUR['unverified']};")
+        v.addWidget(lab)
+        self.extra_labels[ws.name] = lab
+        row = QtWidgets.QHBoxLayout()
+        count = len(self.armed.get(ws.name, ())) if armed else n
+        # armed with nothing to remove (every extra holds work): say so, not "remove 0"
+        btn = QtWidgets.QPushButton(
+            ("Nothing to remove: all kept" if not count else
+             f"Click again to remove {count} folder{'s' if count != 1 else ''}") if armed
+            else f"Remove {n} extra folder{'s' if n != 1 else ''}…")
+        btn.setEnabled(not armed or bool(count))
+        btn.clicked.connect(lambda _=False, d=ws.name: self._remove_clicked(d))
+        row.addWidget(btn)
+        self.remove_buttons[ws.name] = btn
+        cancel = QtWidgets.QPushButton("Keep them")
+        cancel.setVisible(armed)
+        cancel.clicked.connect(lambda _=False, d=ws.name: self._disarm(d))
+        row.addWidget(cancel)
+        self.cancel_buttons[ws.name] = cancel
+        row.addStretch(1)
+        v.addLayout(row)
+
+    def _gone_frame(self, ws: "dw.DomainWorkspace") -> QtWidgets.QFrame:
+        """The folder of a domain that is no longer in this mesh."""
+        frame = QtWidgets.QFrame()
+        frame.setFrameShape(QtWidgets.QFrame.Shape.StyledPanel)
+        frame.setObjectName("code_folders_gone_domain")
+        v = QtWidgets.QVBoxLayout(frame)
+        title = ElidedLabel(f"Not a domain of this mesh: {ws.name}")
+        font = title.font()
+        font.setBold(True)
+        title.setFont(font)
+        v.addWidget(title)
+        shared = QtWidgets.QLabel(dw.SHARED_ROOT_NOTE)
+        shared.setWordWrap(True)
+        v.addWidget(_grey(shared))
+        self._copies_part(v, ws)
+        return frame
+
+    def _workspace(self, name: str) -> "dw.DomainWorkspace | None":
+        for ws in (self.plan.domains if self.plan else ()):
+            if ws.name == name:
+                return ws
+        return None
+
+    def busy(self) -> bool:
+        return probe_running(self, "_job")
+
+    def _sync_busy(self) -> None:
+        busy = self.busy()
+        for name, btn in self.clone_buttons.items():
+            ws = self._workspace(name)
+            btn.setEnabled(not busy and bool(ws and ws.missing()))
+        for name, btn in self.remove_buttons.items():
+            btn.setEnabled(not busy and (name not in self.armed or bool(self.armed[name])))
+
+    def _start(self, fn, working: str, done) -> bool:
+        if self.busy():
+            return False
+        job = own_probe(self, "_job", _CopyJob(fn))
+        # BOUND METHODS, not lambdas: a bound method of this widget carries the
+        # widget's thread, so both signals are queued onto the window's thread and
+        # no label is ever touched from the worker.
+        self._job_done = done
+        job.progress.connect(self._on_job_progress)
+        job.result.connect(self._on_job_result)
+        # ``result`` is queued while the thread is still winding down, so the buttons
+        # rebuilt by its slot can see "busy"; re-enable them once it has really ended.
+        job.finished.connect(self._on_job_finished)
+        self._say(working, "unverified")
+        job.start()
+        self._sync_busy()
+        return True
+
+    def _on_job_progress(self, line) -> None:
+        self._say(str(line), "unverified")
+
+    def _on_job_finished(self) -> None:
+        job = getattr(self, "_job", None)
+        if job is not None:
+            try:
+                job.wait(2000)
+            except RuntimeError:                   # its C++ object already went
+                pass
+        self._sync_busy()
+
+    def _on_job_result(self, value) -> None:
+        done, self._job_done = getattr(self, "_job_done", None), None
+        if done is not None:
+            done(value)
+
+    def _say(self, text: str, state: str) -> None:
+        self.result_note.setStyleSheet(f"color: {self._COLOUR[state]};")
+        self.result_note.setText(text)
+        self.result_note.setVisible(True)
+        self.result_path.setVisible(False)
+        self.copy_btn.setVisible(False)
+
+    def _make_copies(self, domain: str) -> None:
+        ws = self._workspace(domain)
+        if self.plan is None or ws is None or not ws.missing():
+            return
+        plan, runner, todo = self.plan, self.git_runner, len(ws.missing())
+
+        def work(emit):
+            return dw.clone_missing(
+                plan, domain, runner,
+                progress=lambda i, n, app: emit(f"Copying {i} of {n} for {domain}: {app}…"))
+
+        self._start(work, f"Copying {todo} app{'s' if todo != 1 else ''} for {domain}…",
+                    lambda value, d=domain: self._copies_done(d, value))
+
+    def _copies_done(self, domain: str, value) -> None:
+        if isinstance(value, BaseException):
+            self.last_copy_results = []
+            self._say(f"Copying for {domain} stopped: {type(value).__name__}: {value}",
+                      "failed")
+        else:
+            self.last_copy_results = list(value)
+            bad = [r for r in value if not r.ok]
+            good = len(value) - len(bad)
+            if bad:
+                self._say(f"Made {good} of {len(value)} copies for {domain}. "
+                          f"{bad[0].app}: {bad[0].message}", "failed")
+            else:
+                self._say(f"Made {good} cop{'y' if good == 1 else 'ies'} for {domain}.",
+                          "verified")
+        self.reread()
+        self._sync_busy()
+
+    def _open_copies(self, path: str) -> None:
+        if not path or not os.path.isdir(path):
+            return
+        self._show_working(1)
+        self._report(self._open_paths([path]))
+
+    # ── removing extra copies: arm, then act ─────────────────────────────────────
+    def _disarm(self, domain: str) -> None:
+        self.armed.pop(domain, None)
+        self._armed_words.pop(domain, None)
+        self.reread_now()
+
+    def reread_now(self) -> None:
+        self.plan = None          # force the rebuild even when the disk did not change
+        self.reread()
+
+    def _remove_clicked(self, domain: str) -> None:
+        if self.busy():
+            return
+        if domain not in self.armed:
+            self._arm(domain)
+            return
+        self._remove_armed(domain)
+
+    def _arm(self, domain: str) -> None:
+        """FIRST click: check each extra folder on the worker thread (several git
+        commands each, so never on the window's thread), then list exactly what would
+        go, and what will be kept and why. Nothing is removed here."""
+        ws = self._workspace(domain)
+        if ws is None or not ws.extras:
+            return
+        extras, runner = ws.extras, self.git_runner
+
+        def work(emit):
+            out = []
+            for i, x in enumerate(extras, 1):
+                emit(f"Checking {i} of {len(extras)} for {domain}: "
+                     f"{os.path.basename(x.path)}… (nothing is removed)")
+                out.append((x, dw.extra_status(x.path, runner)))
+            return out
+
+        n = len(extras)
+        self._start(work, f"Checking {n} extra folder{'s' if n != 1 else ''} for "
+                    f"{domain}… (nothing is removed)",
+                    lambda value, d=domain: self._checked(d, value))
+
+    def _checked(self, domain: str, value) -> None:
+        """The first click's check is back: arm exactly the folders that are still a
+        plain copy, and say what each one holds."""
+        if isinstance(value, BaseException):
+            self._say(f"Checking the extra folders of {domain} stopped: "
+                      f"{type(value).__name__}: {value}. Nothing was removed.", "failed")
+            self.reread_now()
+            self._sync_busy()
+            return
+        lines, ok = [], []
+        for x, st in value:
+            lines.append(f"{os.path.basename(x.path)} ({x.why}): {st.words()}")
+            if st.safe_to_remove:
+                ok.append(x.path)
+        head = (f"Click again to remove {len(ok)} folder{'s' if len(ok) != 1 else ''}; "
+                "‘Keep them’ cancels." if ok else
+                "Every extra folder holds work of its own, so none will be removed; "
+                "remove them yourself if you mean it.")
+        self.armed[domain] = tuple(ok)
+        self._armed_words[domain] = head + "\n" + "\n".join(lines)
+        self.result_note.setVisible(False)       # an older outcome is not this one
+        self.reread_now()
+        self._sync_busy()
+
+    def _remove_armed(self, domain: str) -> None:
+        """SECOND click: re-read the disk, then remove only folders that are STILL
+        extra and were armed; each removal re-checks everything (core)."""
+        armed = self.armed.pop(domain, ())
+        self._armed_words.pop(domain, None)
+        mode, sdir, rows, _own = self._inputs
+        runner, root_state = self.git_runner, self.state_root
+        gen, mesh, record_id = self.generator_dir, self._mesh_name(), self.record_id
+
+        def work(emit):
+            fresh = dw.plan_workspaces(gen, mode, sdir, list(rows), mesh,
+                                       state_root=root_state, record_id=record_id)
+            out = []
+            for x in fresh.extras():
+                if x.path in armed:
+                    emit(f"Removing {os.path.basename(x.path)}…")
+                    out.append(dw.remove_extra(x, fresh, runner))
+            gone = set(armed) - {x.path for x in fresh.extras()}
+            out.extend(dw.RemoveResult(p, False, "no longer an extra folder; kept")
+                       for p in sorted(gone))
+            return out
+
+        self._start(work, f"Removing {len(armed)} folder(s) for {domain}…",
+                    lambda value, d=domain: self._removed(d, value))
+
+    def _removed(self, domain: str, value) -> None:
+        if isinstance(value, BaseException):
+            self.last_copy_results = []
+            self._say(f"Removing for {domain} stopped: {type(value).__name__}: {value}",
+                      "failed")
+        else:
+            self.last_copy_results = list(value)
+            kept = [r for r in value if not r.removed]
+            done = len(value) - len(kept)
+            if kept:
+                self._say(f"Removed {done} of {len(value)} folders for {domain}. Kept "
+                          f"{os.path.basename(kept[0].path)}: {kept[0].message}", "failed")
+            else:
+                self._say(f"Removed {done} extra folder{'s' if done != 1 else ''} for "
+                          f"{domain}.", "verified")
+        self.reread_now()
+        self._sync_busy()
+
+    def wait_idle(self, timeout_s: float = 30.0) -> bool:
+        """Process events until no copy or removal is running. True when idle."""
+        end = time.monotonic() + timeout_s
+        while self.busy() and time.monotonic() < end:
+            QtWidgets.QApplication.processEvents()
+            QtCore.QThread.msleep(5)
+        QtWidgets.QApplication.processEvents()
+        return not self.busy()
 
     # ── opening ─────────────────────────────────────────────────────────────────
     def _open_root(self) -> None:
@@ -310,7 +791,8 @@ class CodeFoldersWidget(QtWidgets.QGroupBox):
 
     def _open_one(self, domain: str, name: str, path: str) -> None:
         app = self.rows.get((domain, name))
-        if app is None or not app.openable:
+        if app is None or self.row_paths.get((domain, name)) != path \
+                or not path or not os.path.isdir(path):
             return
         self._show_working(1)
         self._report(self._open_paths([path]))
@@ -318,12 +800,19 @@ class CodeFoldersWidget(QtWidgets.QGroupBox):
     def _open_all(self, domain: str) -> None:
         if self.map is None:
             return
-        for dom in self.map.domains:
-            if dom.name == domain:
-                paths = dom.openable_paths()
-                self._show_working(len(paths))
-                self._report(self._open_paths(paths))
-                return
+        paths = self._domain_paths(domain)
+        if paths:
+            self._show_working(len(paths))
+            self._report(self._open_paths(paths))
+
+    def _domain_paths(self, domain: str) -> "list[str]":
+        """Every existing folder the rows of ``domain`` open, once each, in row order:
+        the domain's copy where one is made, the build checkout otherwise."""
+        out: list[str] = []
+        for (d, _name), path in self.row_paths.items():
+            if d == domain and path and path not in out and os.path.isdir(path):
+                out.append(path)
+        return out
 
     def _report(self, results: list[OpenResult]) -> None:
         """Say what happened, inline. Several results (Open all) are summarised; any

@@ -282,9 +282,20 @@ def _after_system() -> str:
     return WIZARD_PAGE_SLUGS[WIZARD_PAGE_SLUGS.index("system") + 1]
 
 
+def _worklist_row(entry: str) -> str:
+    """The TUI worklist row NUMBER of an entry id (``pki.x86``), from the screen's own
+    enumeration (ROLE_CHOICES["mesh"], role-major) — so a platform joining a role (the
+    Orange Pi node rows, 2026-10-21) does not silently re-point a test at another row."""
+    scr = journey.WorklistScreen()
+    scr.enter(type("J", (), {"worklist_role_allow": None, "worklist": None})())
+    ids = [f"{r}.{p}" for r, p, _l in scr._rows]
+    return str(ids.index(entry) + 1)
+
+
 def _mesh_to_system(*rows: str) -> journey.Journey:
     """A mesh walk to the System identity step with the given worklist rows checked
-    (row NUMBERS on the TUI worklist: 1 = pki.x86, 2 = pki.rpi5, 3 = backend.x86 …)."""
+    (entry ids, e.g. ``pki.x86``, turned into the TUI worklist's row numbers)."""
+    rows = tuple(_worklist_row(r) for r in rows)
     j = _walk("", "3", "", *rows, "")       # mode, mesh, casdoor, rows, commit
     for _ in range(len(WIZARD_PAGE_SLUGS)):
         if j.slug == "system":
@@ -299,7 +310,7 @@ def test_system_step_is_hosted_and_names_each_image_of_a_mesh_worklist():
     pending stub), it lists one row per worklist image with the name each derives,
     and `N NAME` gives row N its OWN hostname — the value lands on that entry, the
     base stays blank, and each materialized image carries only its own -H."""
-    j = _mesh_to_system("1", "3")           # pki.x86 + backend.x86
+    j = _mesh_to_system("pki.x86", "backend.x86")
     assert not isinstance(j.screen_for("system"), journey.PendingStep)
     text = "\n".join(j.lines())
     assert "not yet ported" not in text.split("Timezone")[0]   # the hostname half is real
@@ -322,7 +333,7 @@ def test_system_step_is_hosted_and_names_each_image_of_a_mesh_worklist():
 
 
 def test_system_step_refuses_duplicate_and_malformed_hostnames_inline():
-    j = _mesh_to_system("1", "3")
+    j = _mesh_to_system("pki.x86", "backend.x86")
     j.feed("1 node")
     j.feed("2 node")
     assert j.worklist.entries[1].hostname == "" and "already" in j.status
@@ -354,7 +365,7 @@ def test_system_step_enter_refuses_a_collision_the_keystroke_check_cannot_see():
     keystroke was wrong on its own. Enter is the backstop, and it is the MODEL's check
     (duplicate_hostnames with the brand), so the TUI refuses precisely what --config on
     the CLI refuses. The rows here are pki.x86 + backend.x86."""
-    j = _mesh_to_system("1", "3")
+    j = _mesh_to_system("pki.x86", "backend.x86")
     j.feed("2 be-1")                        # explicit, no collision yet
     j.feed("1 hugmesh-backend")             # legal against an EXPLICIT be-1
     assert j.worklist.entries[0].hostname == "hugmesh-backend"
@@ -369,7 +380,7 @@ def test_system_step_enter_refuses_a_collision_the_keystroke_check_cannot_see():
 
 
 def test_system_step_names_persist_across_a_worklist_recommit_and_into_the_envelope(tmp_path):
-    j = _mesh_to_system("1", "3")
+    j = _mesh_to_system("pki.x86", "backend.x86")
     j.feed("1 ca-1")
     j.goto("worklist")                      # back to the worklist, re-commit it
     j.feed("")
@@ -465,3 +476,78 @@ def test_unknown_input_gets_an_inline_message_never_a_crash():
     j.feed("banana")
     assert "unrecognised" in j.status
     assert j.slug == "welcome" and not j.done
+
+
+# ── #654 / D8, D9: the superbrand step and the Brand settings sections ───────────────
+def _mesh_journey(tmp_path) -> journey.Journey:
+    (tmp_path / "brands").mkdir(exist_ok=True)
+    j = journey.Journey(str(tmp_path))
+    j.cfg.mode = "mesh"
+    return j
+
+
+def test_the_branding_step_opens_the_superbrand_step_and_comes_back_to_branding(tmp_path):
+    j = _mesh_journey(tmp_path)
+    j.goto("branding")
+    j.feed("s")
+    assert j.screen().slug == "superbrand" and j.overlay is not None
+    assert "*1. Create a new superbrand" in "\n".join(j.lines())
+    j.feed("")                                # Enter: nothing changed, back to Branding
+    assert j.overlay is None and j.slug == "branding"
+    j.feed("s")
+    j.feed("q")                               # q is BACK here, not quit-the-journey
+    assert j.overlay is None and j.slug == "branding" and not j.done
+
+
+def test_the_superbrand_step_is_not_offered_off_a_mesh(tmp_path):
+    j = _mesh_journey(tmp_path)
+    j.cfg.mode = "standalone"
+    j.goto("branding")
+    assert "Superbrand" not in "\n".join(j.lines())
+    j.feed("s")                               # not a command here: it just continues
+    assert j.overlay is None
+
+
+def test_a_walk_through_the_superbrand_step_leaves_it_in_the_configuration(tmp_path):
+    j = _mesh_journey(tmp_path)
+    j.goto("branding")
+    for line in ("s", "id acme", "title Acme Mesh", "public mesh.example", ""):
+        j.feed(line)
+    assert (j.cfg.brand, j.cfg.brand_title, j.cfg.cluster_domain) == (
+        "acme", "Acme Mesh", "mesh.example")
+    assert j.slug == "branding"
+
+
+def test_the_domain_services_step_carries_the_brand_sections_on_a_mesh(tmp_path):
+    j = _mesh_journey(tmp_path)
+    j.goto("domain_services")
+    top = "\n".join(j.lines())
+    assert "Brand settings:" in top and "*3. Services" in top
+    j.feed("open 4")
+    assert "Ways to reach it" in "\n".join(j.lines())
+    j.feed("open 3")
+    assert "Tor front door" in "\n".join(j.lines())
+
+
+def test_the_fleet_text_twin_reaches_the_superbrand_step_and_keeps_its_old_flow(tmp_path):
+    j = _mesh_journey(tmp_path)
+    j.goto("fleet")
+    j.feed("brand")
+    assert j.screen().stage == "brand"
+    j.feed("")
+    assert j.screen().stage == "options"
+    j.feed("")                                # Enter on the options is still Domains
+    assert j.screen().stage == "domains"
+    j.feed("b")
+    assert j.screen().stage == "options"
+
+
+def test_no_text_screen_of_the_brand_steps_asks_a_modal_question():
+    """The text screens never block on a dialog; a question is a line on the screen and
+    the answer the next line typed."""
+    import re
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    for name in ("superbrand_step.py", "brand_step.py"):
+        with open(os.path.join(root, "hugmesh_studio", "tui", name), encoding="utf-8") as fh:
+            code = fh.read()
+        assert not re.search(r"\binput\(|QMessageBox|exec\(", code), name

@@ -24,7 +24,7 @@ remote branch ref.
 | `chore/org-move-prep-hugmesh-net` | `22638ba9822e77e8b8be13c5a9e39e5a0a8d8292` | 7 | 259 | `90f5a87e` | none, ever |
 | `feat/local-mesh-bringup-and-credentials` | `5630b08bb2ed0b98cea868ee7c45901ad55686a4` | 10 | 247 | `844dc4b0` | none, ever |
 
-Every tip is authored `Claude <noreply@anthropic.com>`, dated
+Every tip has the same author, dated
 **2026-08-14T13:40:40-07:00**, with the identical subject
 `docs(tls-front): the self-signed CN follows the cluster domain, not a stale literal`.
 
@@ -40,7 +40,7 @@ docs(tls-front): the self-signed CN follows the cluster domain, not a stale lite
 refactor(casdoor): rename the systems realm namespace to platform
 fix(m2-bootstrap): repin shared artifacts to the migrated net.hugmesh coordinates
 fix(frontend): rename host-shell workload to hugmesh-systems-web; fold image match keys to hugmesh/
-chore(rename): games domain snapdragon.games -> hugmesh.games (resolves to games.hugmesh.net)
+chore(rename): games domain <pre-rebrand>.games -> hugmesh.games (resolves to games.hugmesh.net)
 chore: land in-flight tree work alongside the hugmesh.net rename
 chore(rename): eliminate .systems tokens in favour of hugmesh.net
 ```
@@ -58,15 +58,15 @@ PR #93 renamed `hugmesh-systems-web` → `hugmesh-host-shell`.
 
 - PR [#91](https://github.com/hugmesh/hugmesh-generator/pull/91) — merge
   `4e77ec2002d828d1e235a51455ed365cde933224`, merged 2026-08-20T08:12:17Z —
-  *chore: finish the Snapdragon -> HugMesh rename in the generator*
+  *chore: finish the pre-rebrand -> HugMesh rename in the generator*
 - PR [#93](https://github.com/hugmesh/hugmesh-generator/pull/93) — merge
   `6eae9e51e20f9d4fa8f9c2a52357d26ad141f043`, merged 2026-08-20T08:36:09Z —
   *chore: finish the host-shell rename in the cluster lane*
 
 ### The 3 extra commits on `feat/local-mesh-bringup-and-credentials`
 
-Below its rename series this branch carries three more — authored
-`Nin <nin@snapdragon.systems>` on 2026-08-12, unlike the seven above — none of
+Below its rename series this branch carries three more — authored under a
+different identity on 2026-08-12, unlike the seven above — none of
 which are ancestors of `main`:
 
 | Commit | Files touched | Subject |
@@ -114,7 +114,7 @@ into `origin/main` (`git merge-tree --write-tree`, no checkout) conflicts:
 
 And the retired tokens are still live on these branches:
 
-| Tree | files matching `snapdragon` (-i) | files matching `hugmesh-systems-web` |
+| Tree | files matching the pre-rebrand brand (-i) | files matching `hugmesh-systems-web` |
 |---|---:|---:|
 | `origin/main` | **36** | **1** |
 | `fix/route-access-api-docs-prefix` | 132 | 10 |

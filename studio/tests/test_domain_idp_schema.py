@@ -154,8 +154,10 @@ def test_manifest_v2_omits_default_and_carries_own(tmp_path):
     doms = WorklistDriver(str(tmp_path), wl, host=_host()).manifest_v2()["domains"]
     assert "idp" not in doms[0]
     assert doms[1]["idp"] == DOMAIN_IDP_OWN
-    # v2 keeps its own historical key order for the pre-existing keys
-    assert list(doms[0]) == ["name", "title", "optional_services", "images"]
+    # #654: v2 writes the SAME row shape as the v1 shim (config.manifest_domain_rows),
+    # so the two emitters agree key for key — v2's own historical order is gone.
+    assert list(doms[0]) == ["name", "title", "images", "optional_services"]
+    assert doms == base.mesh_manifest()["domains"]
 
 
 # ── 3. the compose lane: renderer + LocalStackNode threading ────────────────────

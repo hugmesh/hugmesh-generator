@@ -32,10 +32,25 @@ mesh node** from the system tray.
     nvidia-free / nvidia / amd-free / amd-pro / intel-free / intel-pro / none, or auto);
   - the **test|prod `--env` picker** on the Build page;
   - branding (boot screen, login, wallpaper, accent);
-  - the **web login theme**: primary and secondary colours, with every other token derived
-    at guaranteed WCAG-AA legibility; 7 system font stacks, or an uploaded face with its
+  - the **web login theme**, chosen per domain on the **Look** tab of each domain's Brand
+    settings (the Domain services step; row 0 is the mesh's own look and the only place it
+    is chosen): presets, primary and secondary colours with every other token derived at
+    guaranteed WCAG-AA legibility; 7 system font stacks, or an uploaded face with its
     licence and sha256 recorded; a live token board and a real-browser preview of the
     captured login page. It applies at container start, with no rebuild;
+  - **per-domain sign-in, Tor, VPN and egress** on the same tabs (Identity, Ways to reach
+    it): a domain signs in through the mesh, its own Casdoor, or its own Entra / Cognito /
+    OIDC provider; it can have its own onion, and records its own VPN and egress choice.
+    On the Docker mesh a domain's egress is APPLIED when that domain runs the mesh's one
+    Mastodon (the tuwunel service): the egress VPN carries only Mastodon's outbound
+    delivery, so those domains decide whether it runs and with which provider file (two
+    different files are refused at start). A per-domain VPN choice is applied by no
+    route, and the image, fleet and kind lanes apply neither; the Ways tab says which;
+  - the brand's **ID, title, organisation and public apex domain**: on a mesh they are set
+    in the superbrand step at the top of the Branding page and nowhere else. The Network
+    page shows them greyed, says where they are changed, and its **Go back to the
+    superbrand step** button takes you there (a value typed on Network would be put back
+    by Branding's next Next, so it is not offered). Off a mesh they are edited on Network;
   - Wi-Fi/BT, **kernel built-in vs modules**, egress VPN, home mode + eCryptfs, installer
     front-ends, cached/uncached;
   - the **cluster optional-services catalog** (+ games), client **desktop weight + Steam
@@ -66,14 +81,77 @@ mesh node** from the system tray.
   - the cold-build maven prerequisite (`make stack-m2-bootstrap`) as a button;
   - live **streamed** build output, with a **Cancel** that stops the whole process group;
   - cold-aware timeouts (a first build compiles ~28 images and is never killed at minute 30);
-  - an **Open web UI** shortcut to the running stack's front door.
+  - an **Open web UI** shortcut to the running stack's front door;
+  - a running-mesh table (*Running mesh — pods, addresses and doors*) whose **Domain**
+    column says which domain each pod or container serves. The domain is read, never
+    guessed: the `hugmesh.net/domain` label (written on each per-domain own Casdoor and
+    its database by the Studio's overlay, and on each per-domain Casdoor pod by the
+    casdoor-domains ApplicationSet), the onion key directory of a per-domain onion, or
+    the Studio's own Domain services choice when only one domain chose a service. Rows
+    that serve every domain say **All domains**. Under the table, pick a domain and
+    press **Start**, **Stop**, **Restart** or **Logs**: they act on that domain's rows
+    only (`docker start|stop|restart|logs <container>`, databases first on Start and
+    last on Stop), and each button's tooltip lists the rows it will touch. On the kind
+    lane, Restart replaces the pod (`kubectl delete pod`) and Start/Stop are refused
+    with the reason: ArgoCD self-heal owns the replica count, so use **Halt DevOps
+    lane**. Logs show inline under the table. **Tor addresses** lists every onion the
+    mesh publishes (the mesh's own, then one per Tor domain), each with its own **Open
+    in Tor Browser** (greyed, with the reason, when no Tor Browser launcher is on
+    PATH) and **Copy**.
+
+### Local mesh: saved meshes (on the "Saved meshes and the plan" step)
+
+The **Saved meshes** list opens with the **current mesh**: the one being set up in
+the steps before it. It names every domain and what is kept for it (sign-in, services,
+look, VPN and outbound traffic, its own Tor front door), and says whether the mesh is
+saved already, unchanged, or changed since (by field). **Save current mesh** writes a
+new record (named from the **Save as** box, or derived when the box is empty; a name
+another record has is refused, with Overwrite named as the way). **Overwrite
+selected** replaces the selected record, keeping its place: the first click arms it
+and says what is replaced, the second click saves. No dialogs, and nothing has to be
+running: a record is the configuration, plus what was true when it was saved (which
+lanes were up, the volume inventory, credential **pointers**, never a password). The
+Actions-row button saves the same way; its credential-copy box is offered only while a
+mesh is running. A record saved before the mesh's first bring-up restores through
+**Load into the form** and **Generate && start**; its Restore refuses before any
+preflight. Records live in `<Studio state dir>/meshes/<id>.json`
+(`python3 -m hugmesh_studio.core.saved_meshes list|show|delete`). A record saved while
+neither the Docker mesh nor the DevOps lane was up is a **draft** ("never ran"). The
+node-image flow ("Create nodes for local cloud", GUI and terminal) imports the newest
+record for the checkout whose mesh **ran**, with every domain's settings; a newer draft
+never replaces it. Its **Import from saved mesh** list (a number in the terminal) picks
+any other record of the checkout, a draft included, and the summary then says NEVER
+RAN. An **Overwrite** made while nothing runs files a configuration that has not run,
+but a record whose mesh ran keeps when it last did: it reads NOT RUN AS SAVED (with
+that date), never NEVER RAN, and the import lists it after the records that ran and
+before the true drafts. From the command line, `local_mesh_bootstrap mesh-save` saves
+with nothing running too (a draft), refuses `--copy-credentials` then and a name
+another record has, and `--overwrite ID` replaces a record the way Overwrite selected
+does. It records the DevOps lane as unknown, never as "not running", when its `kind
+get clusters` probe fails.
+
+### Local mesh: vaults and volumes (the panel's Local mesh tab, **Vaults & volumes…**)
+
+One window, two tabs. **Managed volumes** lists the running mesh's Docker volumes with
+their size and what holds each one; deleting one needs its own name typed in, never a
+pop-up. **Vault entries** reads the DevOps (kind) lane's `vault-0` through `kubectl
+exec`, with the token passed on stdin, never on a command line. When it cannot read
+them it says exactly why and what to do instead of showing an empty table: the lane is
+not up or is halted, Vault is sealed, or its token Secret is not readable (that last one
+names the context and the Secret). The fix for "the vault entries never show even with
+the kind lane up" is in this branch; the reason path was exercised against the live kind
+lane, but a full entry listing against a running, unsealed Vault has not been run yet.
 
 ### Local mesh: code folders (on the Repo source step)
 
 Under the Repo source cards, a **Code folders** block lists every domain from the
 Domains step and, under each, the apps that domain runs: the platform apps (one set
 of images serves every domain) plus the optional services chosen for it on the
-Domain services step, marked `[<slug>]`. Each row names the git checkout compose
+Domain services step, marked `[<slug>]`. The apps of a per-domain service the domain
+did NOT choose are not listed under it (owncast, tube, the two character apps, and
+the Matrix and Mastodon front ends of tuwunel/akkoma; `code_folders.service_owners`):
+compose still builds them for the whole mesh, and one note under the domain names
+what was left out. Each row names the git checkout compose
 builds that app from and has an **Open folder** button; every domain has **Open
 all**; the block has **Open source root**. The folder is the one the build reads —
 `<source dir>/hugmesh-<name>` with *Build from a source tree I already have*,
@@ -94,6 +172,64 @@ tuwunel, the databases) gets a note instead of a row. In *Download the source* m
 the block says that `make stack-clone` git-resets the checkouts under `.stack-src`
 (only ones holding local commits are kept), and that the other mode never touches
 yours.
+
+**Copies for each domain.** Under each domain's rows, the block gives that domain its
+own folder of git copies (`core/domain_workspaces.py`):
+`<state dir>/domain-code/<mesh>/<domain>/<app>.<domain>/`, one per app the domain has
+(only `hugmesh-<name>` checkouts; the games and Tor folders and stock images get
+none). **Make N copies** runs on a worker thread and `git clone`s each missing app from
+the build checkout above (local, no network, the exact commit the mesh compiles), then
+names the copy for its domain: branch `domain/<domain>`, `.git/description` "<app> for
+the domain <domain>", and `git config hugmesh.domain` / `hugmesh.app` /
+`hugmesh.mesh` / `hugmesh.remote`. Its git remote is named for the domain, not
+`origin` (`git push chat.example.org domain/chat.example.org`); the remote's URL is the
+build checkout it came from. A marker
+file, `.git/hugmesh-workspace.json`, is written last; only a folder carrying it is ever
+treated as the Studio's. Once a copy exists, its row shows and opens the copy (the
+build folder is in the row's tooltip). The copies do not change what the mesh builds:
+an edit reaches the mesh once it is in the build tree (push it, or pull it there), and
+the block says so.
+
+Domain names become folder names made safe (lower case, only `a-z 0-9 . -`, no `..`,
+no leading dot or dash); two domains that would share a folder are refused. Nothing is
+created or removed through a symbolic link, and no copy is ever made inside a
+`.stack-src`. When a service is un-ticked on a domain, its copies are listed as
+**extra**, and so is the folder of a domain that is not in the mesh. **Remove N extra
+folders…** removes nothing on the first click: it checks each folder (off the window's
+thread) and lists what it holds ("a plain copy: no edits, commits, stashes, ignored
+files, hooks or settings of its own, and the build checkout has every commit", or
+"holds 1 stashed change — it will be kept"); when every extra folder holds work, the
+button reads "Nothing to remove: all kept". The second click
+re-reads the disk and removes only the folders that the first click listed, that are
+still extra and still a plain copy; **Keep them** cancels. A copy is always kept when it
+has changed, untracked or ignored files (a `.env`, build output), commits on ANY of its
+branches or tags that no remote has, stashed changes, another working tree made from
+it, files git was told not to check for changes (skip-worktree, assume-unchanged),
+commits the build checkout it came from does not have NOW (checked in that checkout,
+not only against the copy's own remote refs, which go stale when the build checkout is
+reset or a branch there is deleted), or its own git hooks, `.git/config` or
+`.git/info` files changed since the Studio made it (a pre-commit hook, an added remote,
+an `info/exclude` line; what was there is recorded in the marker when the copy is made,
+and a copy made before that is judged by what a clone writes). The
+untracked-file check overrides `status.showUntrackedFiles`, so a new file is seen even
+when the copy's or the person's git config hides untracked files. Not seen: a commit no branch, tag or stash points to any more (only git's reflog
+has it). A folder the Studio did not make is listed as "left alone" and never offered.
+
+The copies folder is named for the mesh's own domain, and every test mesh has the same
+one, so meshes share it. A copy this mesh does not need but a **saved** mesh still has
+(same domain, same app) is listed as kept, with that mesh's name, and never offered
+for removal; the saved mesh the form was loaded from does not count, and neither do
+the EARLIER saves of that same mesh (each record lists the records it was saved after,
+so saving a mesh twice does not leave the first save keeping copies the second one
+dropped). An earlier save of a mesh that was saved again never counts, whatever the
+form holds (after a restart, and on the text interface, which loads no saved mesh). A
+newer save of the same mesh still counts. A mesh that was never saved
+cannot be checked, so save a mesh before removing another one's folders. The last
+outcome line ("Made 20 copies…") goes away when the domains or their services change.
+
+On the text interface the same screen is `f` on the Local Docker mesh review
+(`m N` / `m all` makes copies, `r N` lists extras, `yes` removes what `r` listed,
+anything else keeps them; `src PATH` copies from your own tree).
 
 Opening (`core/open_path.py`) uses `xdg-open`/`gio` on Linux, `explorer.exe` via
 `wslpath` on WSL2, `os.startfile` on Windows and `open` on macOS, with Qt's desktop
@@ -205,7 +341,8 @@ do must be a documented command; repo-root `make` fronts: `scan-hardware`,
   build is never deleted (exit 1). The artifact tree goes only on an explicit
   `--delete-artifacts` (core checks the workdir's shape first).
 
-- **Local AI** — the Local AI bar along the bottom of every Studio window, as text
+- **Local AI** — the local-assistant status of the Studio panel along the bottom of every
+  Studio window (see "The Studio panel" below), as text
   (`core/local_ai_status.py`: the Ollama server and model loaded, the queue and drafts
   that `scripts/local-ai.sh` keeps, the Studio's own running builds). Loopback only; no
   hosted service, no account, no key:
@@ -221,12 +358,64 @@ do must be a documented command; repo-root `make` fronts: `scan-hardware`,
   starts and feeds it is `scripts/local-ai.sh` (see `docs/LOCAL-AI-ASSISTANT.md`,
   section 11).
 
+## The Studio panel (bottom of every window)
+
+Every Studio window has one panel docked along its bottom. Collapsed it is one row: the
+local-AI status, what is running ("Mesh: Bootstrapping running · 1 image build running"),
+**Start local assistant**, **Current work** and **Pop out**. The chevron opens it on any
+page; **Pop out** moves it into a window of its own (close that window, or press **Put
+back**, to return it). Its tabs:
+
+- **Assistant** — the prompt line and the answer area, and beside them every option the
+  local assistant has:
+  - **Which Ollama the assistant uses**: the system Ollama (`$OLLAMA_HOST` or
+    `127.0.0.1:11434`), or **Ollama in Docker** — the Studio's own container
+    `hugmesh-studio-ollama`, from `ollama/ollama:0.40.0` pinned by digest, on the
+    loopback-only port `127.0.0.1:11435` (never 11434, so it can run beside a system
+    one; `HUGMESH_OLLAMA_DOCKER_PORT` moves it), models kept in the named volume
+    `hugmesh-studio-ollama-models`, and the GPU passed through only when Docker can
+    provide one (`--gpus all` with the NVIDIA runtime or a CDI spec, the ROCm image on an
+    AMD machine, otherwise CPU, said in words). The line under the choice says which
+    instance is in use and where. The choice is saved, and the text UI's Local AI screen
+    uses the same one (`ollama docker` / `ollama system` there). Every call the assistant
+    makes takes its address from this one choice: the status read, the prompt, Start, the
+    agent launcher's look at the machine and the agent it starts. Nothing starts until you
+    press **Start local assistant** (Docker mode starts the container first and waits for
+    it to answer; the first start downloads about 3.8 GB) or **Start Docker Ollama**.
+    **Stop Docker Ollama** stops the container and keeps the models.
+  - **Where your checkouts are**: the folder that holds your `hugmesh-*` checkouts
+    (empty = the folder that holds this generator checkout, or `$HUGMESH_REPOS_ROOT`).
+  - the **local AI agent launcher** described below.
+- **Local mesh** — the local-mesh Actions box (Generate & start, Stop mesh, Check
+  readiness, the DevOps lane, Add user, Save this mesh, …). The status line is copied
+  just above the buttons, so a press that is refused says why right there. Off the
+  local-mesh steps (the Welcome page, say) the first press of **Generate & start** only
+  arms it ("Press again to start"): the settings have not been reviewed yet.
+- **Running mesh** — every pod and container of both lanes, with addresses, doors and
+  replicas. It keeps refreshing on any page while it is on screen.
+- **Mesh run** — the stage tree and log of the local-mesh verb that is running. The panel
+  opens on it when a verb starts, wherever you are.
+- **Image builds** — every image build this Studio is running, and the mesh verb; the
+  picked build's log is followed live beside the list (its last 400 lines), and **Show
+  this build** brings its window, with the stages and packages, to the front (the tray's
+  door).
+
+These are the local-mesh page's own widgets, moved into the panel, so a verb keeps
+running and streaming whatever page you are on, with the panel collapsed or popped out.
+The Bring-up step now holds a note saying where they went and a **Show the panel** button;
+arriving at it opens the panel on its Local mesh tab, and while it is on screen the panel
+takes most of the window. A refusal from a button outside the Local mesh tab (a saved
+mesh's Start on the review step, the join step's Start, a pod row's Open) opens the panel
+on its Mesh run tab, where the status line is. The standalone single-page frame
+(`LocalMeshDialog`), which has no panel, still shows them on its page.
+
 ## Local mesh: work on it with a local AI agent (issue #695)
 
-On the **Bring-up** page of the local-mesh path (where both the Docker mesh and the
-kind DevOps lane end) the card **Work on this mesh with a local AI agent** starts a coding
-agent on a model that runs on this PC, in a copy of one app's repository. It does what
-[docs/LOCAL-AI-ASSISTANT.md](../docs/LOCAL-AI-ASSISTANT.md) tells a person to do by hand:
+In the **Assistant** tab of the Studio panel (it used to be a card on the Bring-up page of
+the local-mesh path; the operator moved it out of the build phase on 2026-10-21, with every
+option it had) the agent launcher **Start a local AI agent on this mesh's code** starts a
+coding agent on a model that runs on this PC, in a copy of one app's repository. It does
+what [docs/LOCAL-AI-ASSISTANT.md](../docs/LOCAL-AI-ASSISTANT.md) tells a person to do by hand:
 
 - The card names, in plain words, the first thing that is missing: Ollama not installed,
   the server not answering on `127.0.0.1:11434`, no pulled model with the **tools**
@@ -238,8 +427,7 @@ agent on a model that runs on this PC, in a copy of one app's repository. It doe
 - **Lane** follows the lane whose verb last ran on the page (Start DevOps lane sets it to
   the kind cluster, Generate & start to the Docker mesh) and only changes what the brief
   says about rebuilding a service; a lane you pick by hand stays until the next verb. The
-  **App** list follows the Repo source choice, in the stepped wizard and the single-page
-  frame alike.
+  **App** list follows the Repo source choice of the window's local-mesh page.
 - A press makes `<state dir>/agent-work/<mesh>/<repo>` with `git clone --no-hardlinks`,
   `git remote remove origin` and `git switch -c lm/<timestamp>` from the app's folder
   (`./.stack-src/hugmesh-<name>`, or your own tree), writes the brief beside it, and opens a
@@ -248,6 +436,15 @@ agent on a model that runs on this PC, in a copy of one app's repository. It doe
   uncommitted work, no remote and was cloned from the folder's current commit; otherwise a
   numbered one is made and nothing is deleted. Uncommitted edits in the real folder are not
   in the copy, and the card says so.
+- **Project context.** Every start (and every Copy command) writes
+  `HUGMESH-CONTEXT.md` fresh beside the brief (`core/agent_context.py`): what the hugmesh
+  org and each checked-out repository are, what the Studio is and where its parts live,
+  and where the sources are on this machine — the checkouts folder, the generator
+  checkout, the folder the mesh builds from and each domain's code folders. The brief
+  tells the agent to read it first and carries the same text inline. **Start local
+  assistant** writes it too, into the local-AI state folder, and hands the queue worker
+  `HUGMESH_AGENT_CONTEXT` and `HUGMESH_REPOS_ROOT`, so the worker's agents
+  (`AGENT=opencode`, or an explicit agent) start with the same context.
 - The model is `hugmesh-agent` when pulled, else the first model the doc names that is
   pulled with tools (`qwen3:8b` first), else the first with tools. Cloud models are never
   offered.
@@ -331,8 +528,10 @@ NO_TUI=1 python -m hugmesh_studio.tui              # the same, by environment
 
 The journey mirrors the GUI's flow. `hugmesh_studio/tui/journey.py` consumes
 `config.WIZARD_PAGE_SLUGS`, so both faces share one page order. It has the two-card welcome
-screen and the journey-ordered mode menu; the Themes screen (web login theme: colours,
-header/footer, background effect); the create-nodes-for-local-cloud abbreviated wizard (k8s
+screen and the journey-ordered mode menu; each domain's Brand settings sections on the
+Domain services step (1 Identity with its own sign-in, 2 Look — the theme, row 0's being the
+mesh's own — 3 Services, 4 Ways to reach it with Tor, VPN and egress); the
+create-nodes-for-local-cloud abbreviated wizard (k8s
 gate, identity import, laptop/node-only worklist); the whole-mesh emulation per-device status
 list (ssh and web access as copy-ready command hints); and the per-domain Sign-in choice on
 the domains step. Steps not ported yet say so and keep the config's defaults. The walk ends
@@ -410,7 +609,7 @@ hugmesh_studio/
   core/        config (flag mapping) · build_driver (native/docker) · hw_scan ·
                profiles · keyzip · mesh_node · platform_info ·
                local_ai_status (Local AI snapshot + prompt)      <- headless, unit-testable
-  gui/         qt shim (PySide6|PyQt6) · wizard (pages) · tray · Local AI bar (_local_ai_dock)
+  gui/         qt shim (PySide6|PyQt6) · wizard (pages) · tray · the Studio panel (_local_ai_dock)
   tui/         terminal UI (urwid, OPTIONAL — degrades to plain prompts)  <- headless, unit-testable
   app.py       entry point
 packaging/     PyInstaller spec, WiX (MSI) and Flatpak files

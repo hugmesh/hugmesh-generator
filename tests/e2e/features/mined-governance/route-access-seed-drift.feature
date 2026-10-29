@@ -50,8 +50,11 @@ Feature: The route-access mirror is measured against the seed the cluster loads
   # take it to 157: be 60, fe 84, pki 4, superadmin 9. The deny count was ALSO stale on
   # main (4, measured 5 since decision 28 = D put the fe games-services deny row back);
   # the new rows are allow rows, so 5 is main's number, not this change's.
+  # Re-measured 2026-10-29 after merging main 2b13b2f9 (#824 added the fe /games rows): main
+  # reads 162 (be 60, fe 89, pki 4, superadmin 9) while this line still said 154 there;
+  # with the two tube rows it is 164 (fe 91). Deny rows: still 5.
   Scenario: the cluster seed parses to the rows a gateway loads @layer:gateway
-    Then the cluster seed carries 157 route-access rows across 4 gateways
+    Then the cluster seed carries 164 route-access rows across 4 gateways
     And the cluster seed carries exactly 5 explicit deny rows
 
   # THE DIRECTION THAT MATTERS. A mirror row with no seed row behind it is a

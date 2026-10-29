@@ -49,8 +49,8 @@ _BRANDED_PI_NAMES = [
 #: the logs, so a fixture without them cannot show "3 of 3".
 _BRANDED_PI_LOGS = ["build-pki.rpi5.log", "build-be.rpi5.log", "build-fe.rpi5.log"]
 _BRANDED_PI_MANIFEST = {
-    "format": 2, "brand": "sdhm", "brand_title": "Snapdragon Hugmesh", "org": "sdhm",
-    "cluster_domain": "snapdragon.systems", "superdomain": "snapdragon.local",
+    "format": 2, "brand": "sdhm", "brand_title": "Example Hugmesh", "org": "sdhm",
+    "cluster_domain": "mesh.example", "superdomain": "example.local",
     "domains": [], "users": [],
     "images": [
         {"id": "pki.rpi5", "role": "pki", "platform": "rpi5", "board": "rpi5",
@@ -839,11 +839,11 @@ def test_a_hyphenated_brand_is_ended_by_name_not_by_position():
 
 
 def test_a_declared_brand_needs_the_trailing_hyphen_to_match():
-    """Brand "snap" must not swallow the head of ``snapdragon-…`` — the strip is
+    """Brand "exam" must not swallow the head of ``example-…`` — the strip is
     ``<brand>-``, not a bare prefix, or one brand truncates another's platform."""
-    name = "snapdragon-rpi5-arm64-pki-test-20260831T015954Z.img"
-    assert qt.parse_artifact_name(name, "snap") == ("rpi5", "arm64", "pki", "test")
-    assert qt.artifact_brand(name, "snap") == "snapdragon"
+    name = "example-rpi5-arm64-pki-test-20260831T015954Z.img"
+    assert qt.parse_artifact_name(name, "exam") == ("rpi5", "arm64", "pki", "test")
+    assert qt.artifact_brand(name, "exam") == "example"
 
 
 def test_a_hyphenated_brand_session_plans_the_right_devices(tmp_path):

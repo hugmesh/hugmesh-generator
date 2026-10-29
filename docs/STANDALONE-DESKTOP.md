@@ -151,11 +151,11 @@ vendor's proprietary/closed **compute + Vulkan** stack on top.
 
 | `--gpu-driver` | VIDEO_CARDS | adds |
 |---|---|---|
-| `all-free` *(default)* | amdgpu radeonsi intel iris nouveau | — (any GPU; NVIDIA = nouveau) |
+| `all-free` *(default)* | amdgpu radeonsi radeon intel iris nouveau | — (any GPU; NVIDIA = nouveau) |
 | `nvidia-free` | nouveau | — |
 | `nvidia` | nouveau nvidia | `x11-drivers/nvidia-drivers` (NVIDIA-r2 EULA); nouveau blacklisted; `--nvidia-cuda` adds CUDA |
 | `amd-free` (alias `ati-free`) | amdgpu radeonsi radeon | — |
-| `amd-pro` | amdgpu radeonsi | `amdgpu-pro-vulkan` + `amdgpu-pro-opencl` + AMF (AMD-GPU-PRO-EULA) |
+| `amd-pro` | amdgpu radeonsi radeon | `amdgpu-pro-vulkan` + `amdgpu-pro-opencl` + AMF (AMD-GPU-PRO-EULA) |
 | `intel-free` | intel iris | — |
 | `intel-pro` | intel iris | `intel-compute-runtime` + iHD media driver + `vpl-gpu-rt` |
 | `none` | — | headless |
@@ -256,8 +256,9 @@ The posture is also available as orthogonal flags on the `laptop`/`chromebook`/
 `--standalone`/`--local-user`/`--local-pass`/`--encrypt-root` are **not x86-only**.
 Every ARM builder **except Jetson** (see below) composes them onto its own
 desktop-shaped role. `build-rpi5-stage4.sh` takes `--role desktop --standalone`.
-Frite, Orange Pi 5 and Orange Pi 4 LTS have a single client-desktop role and no
-`--role` axis, so `--standalone` alone is enough:
+Frite has a single client-desktop role and no `--role` axis; on the Orange Pi 5
+and Orange Pi 4 LTS the default role is that desktop (their `--role` axis adds
+cluster node roles, which refuse `--standalone`). So `--standalone` alone is enough:
 
 ```sh
 ./build-frite-stage4.sh    --board la-frite --standalone --encrypt-root \

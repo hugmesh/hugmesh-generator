@@ -26,6 +26,10 @@ spec:
         image:
           registry: docker.io
           repository: bitnamilegacy/cassandra
+          # The tag chart 12.3.11 defaults to, written out so the image-pin gate can
+          # judge the ref this override pulls (a repository with no tag inherits a
+          # default the gate cannot see). Same render as before; bump with the chart.
+          tag: "5.0.5-debian-12-r7"
         replicaCount: 1
         # ── SUPERUSER: ESO-sourced, never chart-generated ────────────────────
         # Leaving dbUser.password empty makes the chart MINT a random password

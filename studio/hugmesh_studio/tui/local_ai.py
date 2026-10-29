@@ -11,7 +11,9 @@ and ``--local-ai-status`` read.
   **F2** in the urwid face, or by typing ``local-ai`` in either face. It takes a LIVE
   snapshot when it opens, shows the work list, and treats any line you type as a prompt
   for the local model. ``start`` starts the local Ollama and the queue worker,
-  ``r`` re-reads, ``q`` goes back.
+  ``r`` re-reads, ``q`` goes back. ``ollama docker`` / ``ollama system`` choose which
+  Ollama the assistant talks to — the same saved choice as the Studio panel's
+  (core/ollama_docker.py), so both faces always use one instance.
 * The key and the command are GLOBAL: they work on every screen of both faces, the
   previous-builds review included, and on the Local AI screen itself they re-read the
   state (:meth:`LocalAIScreen.reopen`) instead of opening a second screen or sending
@@ -23,6 +25,7 @@ Nothing here talks to anything but this machine.
 from __future__ import annotations
 
 from ..core import local_ai_status as lai
+from ..core import ollama_docker as odk
 
 __all__ = ["OPEN_COMMAND", "FOOTER_KEY", "LocalAIScreen", "Standalone", "status_line",
            "plain_status_line"]
@@ -51,6 +54,7 @@ def plain_status_line(env: dict | None = None) -> str:
 _HELP = [
     "type a question and press Enter to ask the local model (it stays on this machine)",
     "  start      start the local Ollama and the queue worker",
+    "  ollama docker | ollama system   which Ollama to use (Docker starts on 'start')",
     "  r          read the state again",
     "  clear      forget the conversation",
     "  q          back",
@@ -65,9 +69,14 @@ class LocalAIScreen:
     wants_q = True                       # q means BACK here, not quit-the-journey
 
     def __init__(self, *, snapshot_fn=None, prompt_fn=None, start_fn=None, generator_dir: str = "."):
-        self._snapshot_fn = snapshot_fn or (lambda: lai.read_snapshot())
-        self._prompt_fn = prompt_fn or (lambda text, history: lai.send_prompt(text, history=history))
-        self._start_fn = start_fn or (lambda: lai.start_assistant(generator_dir))
+        # Every default goes through the saved Ollama choice (system or Docker): the
+        # environment it names is the one the read, the prompt and the start all use.
+        self._snapshot_fn = snapshot_fn or (lambda: odk.adjust_snapshot(
+            lai.read_snapshot(env=odk.assistant_env(odk.current_mode())), odk.current_mode()))
+        self._prompt_fn = prompt_fn or (lambda text, history: lai.send_prompt(
+            text, history=history, env=odk.assistant_env(odk.current_mode())))
+        self._start_fn = start_fn or (lambda: odk.start_assistant(
+            generator_dir, odk.current_mode()))
         self.generator_dir = generator_dir
         self.snapshot = None
         self.history: list = []
@@ -87,7 +96,8 @@ class LocalAIScreen:
     def lines(self, j) -> list[str]:  # noqa: ARG002
         snap = self.snapshot
         out = lai.format_status(snap).split("\n") if snap is not None else ["(no snapshot)"]
-        cmds = lai.commands(self.generator_dir)
+        cmds = odk.commands_for(self.generator_dir)
+        out += ["", odk.describe(odk.current_mode())]
         out += ["", "Run it yourself:  " + cmds["todo"], "                  " + cmds["chat"], ""]
         if self.transcript:
             out += ["conversation:"] + [f"  {t}" for t in self.transcript[-12:]] + [""]
@@ -110,6 +120,22 @@ class LocalAIScreen:
         if low == "clear":
             self.history.clear()
             self.transcript.clear()
+            return
+        words = low.split()
+        # The mode command is the bare word ``ollama`` or ``ollama <one plain word>``
+        # (docker / system; anything else gets the hint). A sentence that merely
+        # STARTS with the word ("ollama keeps crashing, what should I check?") is a
+        # question for the model, as every non-command line always was.
+        if words and words[0] == "ollama" and (
+                len(words) == 1 or (len(words) == 2 and words[1].isalpha())):
+            want = words[1] if len(words) == 2 else ""
+            if want not in odk.MODES:
+                self.message = "Say: ollama docker, or ollama system."
+                return
+            odk.set_mode(want)
+            self.snapshot = self._snapshot_fn()
+            self.message = odk.describe(want) + (
+                "  Type start to start it." if want == odk.DOCKER else "")
             return
         if low == "start":
             res = self._start_fn()

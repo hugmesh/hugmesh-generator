@@ -263,7 +263,7 @@ def test_bootstrap_up_collects_config_and_runs(qapp, monkeypatch):
 
     dlg = localmesh_mod.LocalMeshDialog(GENERATOR_DIR)
     dlg.superadmin.setText("root-boss")
-    dlg.social.setChecked(True)
+    _choose_for_own_domain(dlg, "tuwunel")     # Matrix is a domain's service now
     dlg._bootstrap_up()
     _drain_worker(qapp, dlg.page)
     assert seen == {"env": "test", "superadmin": "root-boss", "social": True}
@@ -340,15 +340,36 @@ def _join_page_threads(dlg):
 
 # ---- the SERVICES picker (the local mesh's "which services" axis) ----
 
-def test_services_table_offers_every_locally_runnable_slug(qapp):
-    """One checkbox per slug core says the local mesh can genuinely run — and NONE
-    for the slugs it cannot, which are rendered as greyed rows carrying the reason.
-    Reading the registry from core is the point: a slug added there must appear here
-    with no GUI edit at all."""
+def _choose_for_own_domain(dlg, *slugs):
+    """What the Domain services step records when the mesh's own domain ticks
+    ``slugs``: a domain's services are chosen on its own page (the mesh-wide "Local
+    services" pick was retired on 2026-10-21), and the mesh runs the union."""
+    page = dlg.page
+    page._seed_domains()
+    md = page.mesh_domains
+    md.domains[0].optional_services = list(slugs)
+    # being on the domain's page is what records it as walked (the gate's question)
+    from hugmesh_studio.core.domain_services import record_reviewed
+    record_reviewed(md, {md.domains[0].name})
+    page._refresh_plan()
+
+
+def test_services_table_offers_only_the_mesh_infrastructure(qapp):
+    """One checkbox per slug the WHOLE mesh chooses (local_services.mesh_plane_slugs:
+    Tor, Anubis, the wiki, the AI services, the egress VPN) — and NONE for a slug a
+    DOMAIN chooses (Matrix, the forums, video, games, the character tools): those are
+    on each domain's own page now (operator, 2026-10-21: "The local services option
+    doesn't make any sense ... please remove it"). Greyed rows still carry their reason."""
     dlg = localmesh_mod.LocalMeshDialog(GENERATOR_DIR)
-    # local_slugs() is the SELECTABLE set, so this is also the guard that a row with
-    # no runnable mechanism on this lane never grows a checkbox.
-    assert set(dlg.service_boxes) == set(local_services.local_slugs())
+    # mesh_plane_slugs() is the SELECTABLE mesh-wide set, so this is also the guard
+    # that a row with no runnable mechanism on this lane never grows a checkbox.
+    assert set(dlg.service_boxes) == set(local_services.mesh_plane_slugs())
+    for slug in local_services.domain_local_slugs():
+        assert slug not in dlg.service_boxes, slug
+        assert slug not in dlg.page._svc_items, slug
+    box = dlg.page.findChild(localmesh_mod.QtWidgets.QGroupBox, "mesh_infra_box")
+    assert box is not None and box.title() == localmesh_mod.MESH_INFRA_TITLE
+    assert "Local services" not in box.title()
     for slug in local_services.UNAVAILABLE_LOCALLY:
         assert slug not in dlg.service_boxes
         item = dlg.page._svc_items[slug]
@@ -412,15 +433,18 @@ def test_devops_lane_rows_are_informational_and_carry_no_checkbox(qapp):
     _join_page_threads(dlg)
 
 
-def test_social_and_tor_rows_are_the_same_widgets_not_copies(qapp):
-    """The two historical toggles moved INTO the table as the rows for their slugs.
-    Aliases, never second checkboxes — a copy could disagree with its row, which is
-    the exact "one service, two spellings" bug the node wizard's table killed."""
+def test_tor_row_is_the_same_widget_and_social_follows_the_domains(qapp):
+    """Tor is the mesh's own: its historical toggle IS the table's row (an alias, never
+    a second checkbox that could disagree). Matrix is a domain's: there is no box for
+    it here at all, and ``social`` says whether any domain chose it."""
     dlg = localmesh_mod.LocalMeshDialog(GENERATOR_DIR)
-    assert dlg.social is dlg.service_boxes["tuwunel"]
+    assert not hasattr(dlg.page, "social")
     assert dlg.with_tor is dlg.service_boxes["tor"]
     dlg.service_boxes["tor"].setChecked(True)
     assert dlg.collect_bootstrap().with_tor is True
+    assert dlg.collect_bootstrap().social is False
+    _choose_for_own_domain(dlg, "tuwunel")
+    assert dlg.collect_bootstrap().social is True
 
 
 def test_untouched_services_picker_leaves_the_bring_up_byte_identical(qapp):
@@ -442,10 +466,11 @@ def test_ticking_a_federation_service_reaches_the_seeder_env(qapp):
     env pair `make stack-seed` reads, and the complement is exported too so the seeder
     can tell "leave it" from "turn it off"."""
     dlg = localmesh_mod.LocalMeshDialog(GENERATOR_DIR)
-    dlg.service_boxes["wiki"].setChecked(True)
-    dlg.service_boxes["owncast"].setChecked(True)
+    dlg.service_boxes["wiki"].setChecked(True)           # the mesh's own
+    _choose_for_own_domain(dlg, "owncast")               # a domain's
     cfg = dlg.collect_bootstrap()
-    assert cfg.services == ("wiki", "owncast")
+    assert cfg.services == ("wiki",)
+    assert set(cfg.effective_services()) == {"wiki", "owncast"}
     env = LocalMeshBootstrap(GENERATOR_DIR, cfg)._stack_node()._build_env()
     assert env[local_services.FEDERATION_ENABLE_ENV] == "wiki owncast"
     assert env[local_services.FEDERATION_DISABLE_ENV] == \
@@ -456,7 +481,7 @@ def test_ticking_a_federation_service_reaches_the_seeder_env(qapp):
 
 def test_ticking_a_profile_service_drives_the_compose_profile(qapp):
     dlg = localmesh_mod.LocalMeshDialog(GENERATOR_DIR)
-    dlg.service_boxes["tuwunel"].setChecked(True)
+    _choose_for_own_domain(dlg, "tuwunel")
     cfg = dlg.collect_bootstrap()
     assert cfg.effective_social() is True
     env = LocalMeshBootstrap(GENERATOR_DIR, cfg)._stack_node()._build_env()
@@ -469,7 +494,7 @@ def test_services_selection_shows_up_in_the_plan_preview(qapp):
     """Every other bootstrap control live-refreshes the confirm-before-run manifest;
     a services row that did not would leave the plan describing a different mesh."""
     dlg = localmesh_mod.LocalMeshDialog(GENERATOR_DIR)
-    dlg.service_boxes["tube"].setChecked(True)
+    _choose_for_own_domain(dlg, "tube")
     plan = dlg.plan_view.toPlainText()
     assert "[x] tube" in plan
     assert "[ ] wiki" in plan
@@ -486,14 +511,19 @@ def test_bootstrap_up_carries_the_services_selection(qapp, monkeypatch):
     monkeypatch.setattr(
         LocalMeshBootstrap, "up",
         lambda self, on_line=None, cancel=None:
-            seen.update(services=self.cfg.services) or (True, ["ok"]),
+            seen.update(services=self.cfg.services,
+                        effective=self.cfg.effective_services()) or (True, ["ok"]),
         raising=True)
     monkeypatch.setattr(LocalMeshNode, "status", lambda self: _stopped(), raising=True)
     dlg = localmesh_mod.LocalMeshDialog(GENERATOR_DIR)
-    dlg.service_boxes["character-forge"].setChecked(True)
+    dlg.service_boxes["anubis"].setChecked(True)
+    _choose_for_own_domain(dlg, "character-forge")
     dlg._bootstrap_up()
     _drain_worker(qapp, dlg.page)
-    assert seen["services"] == ("character-forge",)
+    # the mesh's own slugs ride ``services``; the domain's ride its row, and the mesh
+    # runs both (effective_services)
+    assert seen["services"] == ("anubis",)
+    assert set(seen["effective"]) == {"anubis", "character-forge"}
     _join_page_threads(dlg)
 
 

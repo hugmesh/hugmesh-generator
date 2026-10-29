@@ -139,8 +139,13 @@
 #                        standalone-unaffiliated (UNAFFILIATED plain Gentoo
 #                        desktop — no brand/theme/seed/mesh/SSO flags may
 #                        accompany it; the role presets the neutral identity)
-#   rpi5 node roles      (primary | mesh-extension): "<role>[.<board>]"; role =
-#                        pki | backend | frontend | desktop | standalone-desktop
+#   rpi5 node roles      (primary | mesh-extension): "<role>[.<board>[.<N>gb]]"; role =
+#                        pki | backend | frontend | omnibus | desktop | standalone-desktop.
+#                        The optional "<N>gb" field is the board's RAM (--ram-gb):
+#                        REQUIRED for omnibus and 16 GB or more (rpi5.omnibus.rpi5.16gb;
+#                        backend 8, pki/frontend 4; a Pi 4 is never an omnibus);
+#                        a node role below its floor, or omnibus without it, is a
+#                        clean FAILED ingest (the builder's own RAM gate).
 #                        (default: backend); board = rpi5 (default) | rpi4 |
 #                        rpi3. board=rpi3 is DESKTOP-ONLY (1 GB RAM has no
 #                        headroom for the k8s cluster-node stack) — role !=
@@ -363,8 +368,12 @@ its flags/tokens like this — the same four choices, one clarity layer:
   1. Mesh node — build server node image(s) for a mesh on dedicated hardware
        IMAGE_TYPE=primary|mesh-extension, HARDWARE_CLASS =
          x86.pki | x86.backend | x86.frontend | x86.backend-gpu | x86.omnibus | x86.edge-ai
-         | rpi5.<role>[.<board>] | jetson.<role>.<board>
+         | rpi5.<role>[.<board>[.<N>gb]] | jetson.<role>.<board>
+         | orangepi5.<role>[.<board>[.<N>gb]]   (pki|backend|frontend|omnibus; EXPERIMENTAL,
+                                                 installer ISO; omnibus needs <N>gb, 8+)
+         | orangepi4-lts.frontend[.<N>gb]        (its only node role; EXPERIMENTAL)
        make face: `make x86-<role>` / `make rpi-<role>` / `make jetson-<role>` /
+         `make orangepi5-<role>` / `make orangepi4-lts-frontend` (RAM_GB=N) /
          `make build-all` / `make build-everything` (the fleet + worklist).
 
   2. Local Docker mesh — run a mesh on THIS machine in Docker (no image built)
@@ -758,6 +767,9 @@ resolve_build_target() {
   ORANGEPIZERO3_STANDALONE=false
   ORANGEPI3LTS_STANDALONE=false
   ORANGEPI4LTS_STANDALONE=false
+  # --ram-gb for a Pi / Orange Pi NODE role: the optional LAST dotted field
+  # "<N>gb" (e.g. rpi5.omnibus.rpi5.16gb). REQUIRED for omnibus (16 GB+).
+  RAM_GB_OUT=""
 
   if [ -z "$HARDWARE_CLASS" ]; then
     case "$IMAGE_TYPE" in
@@ -817,8 +829,26 @@ resolve_build_target() {
               return 1
             fi ;;
         esac
-        RPI5_BOARD_OUT="${p3:-rpi5}"
+        # p3 = "<board>" or "<board>.<N>gb" (the RAM field; see RAM_GB_OUT above).
+        RPI5_BOARD_OUT="${p3%%.*}"
+        RPI5_BOARD_OUT="${RPI5_BOARD_OUT:-rpi5}"
+        case "$p3" in
+          *.*) RAM_GB_OUT="${p3#*.}" ;;
+        esac
         case "$RPI5_BOARD_OUT" in rpi5|rpi4|rpi3) ;; *) return 1 ;; esac
+        case "$RAM_GB_OUT" in
+          "") ;;
+          *gb) RAM_GB_OUT="${RAM_GB_OUT%gb}" ;;
+          *) return 1 ;;
+        esac
+        # The builder's RAM gate, silently (omnibus needs the RAM field and 16 GB+;
+        # backend needs 8 GB+ and pki/frontend 4 GB+ when it is given; a board not
+        # sold with the floor, e.g. a Pi 4 omnibus, is refused outright).
+        if [ "$BUILD_ROLE" != "desktop" ] && [ "$BUILD_ROLE" != "generic" ]; then
+          hugmesh_role_ram_check "$BUILD_ROLE" "$RAM_GB_OUT" "$RPI5_BOARD_OUT" 2>/dev/null || return 1
+        elif [ -n "$RAM_GB_OUT" ]; then
+          return 1
+        fi
         # board=rpi3 is DESKTOP-ONLY (1 GB RAM has no headroom for the k8s
         # cluster-node stack) — mirrors build-rpi5-stage4.sh's own hard-error.
         if [ "$RPI5_BOARD_OUT" = "rpi3" ] && [ "$BUILD_ROLE" != "desktop" ]; then
@@ -860,7 +890,24 @@ resolve_build_target() {
         PLATFORM="jetson"
         ;;
       orangepi5)
-        [ "$IMAGE_TYPE" != "client" ] && return 1
+        if [ "$IMAGE_TYPE" != "client" ]; then
+          # CLUSTER NODE (EXPERIMENTAL): "<role>.<board>[.<N>gb]" — role = pki |
+          # backend | frontend | omnibus (omnibus needs the RAM field, 16 GB+);
+          # board = orange-pi-5-plus (default) | orange-pi-5. Installer flavor only.
+          BUILD_ROLE="$(hugmesh_role_board_node_role orangepi5 "$p2" 2>/dev/null)" || return 1
+          ORANGEPI5_BOARD_OUT="${p3%%.*}"
+          ORANGEPI5_BOARD_OUT="${ORANGEPI5_BOARD_OUT:-orange-pi-5-plus}"
+          case "$p3" in *.*) RAM_GB_OUT="${p3#*.}" ;; esac
+          case "$RAM_GB_OUT" in
+            "") ;;
+            *gb) RAM_GB_OUT="${RAM_GB_OUT%gb}" ;;
+            *) return 1 ;;
+          esac
+          case "$ORANGEPI5_BOARD_OUT" in orange-pi-5-plus|orange-pi-5) ;; *) return 1 ;; esac
+          hugmesh_role_ram_check "$BUILD_ROLE" "$RAM_GB_OUT" "$ORANGEPI5_BOARD_OUT" 2>/dev/null || return 1
+          ORANGEPI5_FLAVOR_OUT="installer"
+          PLATFORM="orangepi5"
+        else
         ORANGEPI5_BOARD_OUT="${p2:-orange-pi-5-plus}"
         ORANGEPI5_FLAVOR_OUT="${p3:-installer}"
         case "$ORANGEPI5_BOARD_OUT" in orange-pi-5-plus|orange-pi-5) ;; *) return 1 ;; esac
@@ -877,6 +924,7 @@ resolve_build_target() {
           *) return 1 ;;
         esac
         PLATFORM="orangepi5"
+        fi
         ;;
       orangepizero2)
         [ "$IMAGE_TYPE" != "client" ] && return 1
@@ -943,7 +991,19 @@ resolve_build_target() {
         PLATFORM="orangepi3-lts"
         ;;
       orangepi4-lts)
-        [ "$IMAGE_TYPE" != "client" ] && return 1
+        if [ "$IMAGE_TYPE" != "client" ]; then
+          # CLUSTER NODE (EXPERIMENTAL): "frontend[.<N>gb]" — the one node role the
+          # 4 GB Orange Pi 4 LTS builds. Installer flavor only.
+          BUILD_ROLE="$(hugmesh_role_board_node_role orangepi4-lts "$p2" 2>/dev/null)" || return 1
+          case "$p3" in
+            "") ;;
+            *gb) RAM_GB_OUT="${p3%gb}" ;;
+            *) return 1 ;;
+          esac
+          hugmesh_role_ram_check "$BUILD_ROLE" "$RAM_GB_OUT" orange-pi-4-lts 2>/dev/null || return 1
+          ORANGEPI4LTS_FLAVOR_OUT="installer"
+          PLATFORM="orangepi4-lts"
+        else
         ORANGEPI4LTS_FLAVOR_OUT="${p2:-installer}"
         # "both" rejected for the same single-imageRef reason as frite above.
         case "$ORANGEPI4LTS_FLAVOR_OUT" in
@@ -957,6 +1017,7 @@ resolve_build_target() {
           *) return 1 ;;
         esac
         PLATFORM="orangepi4-lts"
+        fi
         ;;
       *)
         # Bare legacy token, no platform prefix -> x86 alias.
@@ -1237,6 +1298,7 @@ run_rpi5_build() {
     set -- "$@" --standalone
     [ -n "$TARGET_NAME" ] && set -- "$@" --local-user "$TARGET_NAME"
   fi
+  [ -n "$RAM_GB_OUT" ] && set -- "$@" --ram-gb "$RAM_GB_OUT"
   dispatch_node_builder ./build-rpi5-stage4.sh "$@"
 }
 
@@ -1265,6 +1327,9 @@ run_orangepi5_build() {
          --cluster-domain "$DOMAIN" -H "$HOSTNAME_OUT" \
          --board "$ORANGEPI5_BOARD_OUT" --flavor "$ORANGEPI5_FLAVOR_OUT"
   [ -n "$BRAND_FLAGS_CFG" ] && set -- "$@" --config "$BRAND_FLAGS_CFG"
+  # Cluster NODE role (EXPERIMENTAL): --role + the board's RAM.
+  [ -n "$BUILD_ROLE" ] && set -- "$@" --role "$BUILD_ROLE"
+  [ -n "$RAM_GB_OUT" ] && set -- "$@" --ram-gb "$RAM_GB_OUT"
   if [ "$ORANGEPI5_STANDALONE" = "true" ]; then
     set -- "$@" --standalone
     [ -n "$TARGET_NAME" ] && set -- "$@" --local-user "$TARGET_NAME"
@@ -1325,6 +1390,8 @@ run_orangepi4lts_build() {
          --cluster-domain "$DOMAIN" -H "$HOSTNAME_OUT" \
          --flavor "$ORANGEPI4LTS_FLAVOR_OUT"
   [ -n "$BRAND_FLAGS_CFG" ] && set -- "$@" --config "$BRAND_FLAGS_CFG"
+  [ -n "$BUILD_ROLE" ] && set -- "$@" --role "$BUILD_ROLE"
+  [ -n "$RAM_GB_OUT" ] && set -- "$@" --ram-gb "$RAM_GB_OUT"
   if [ "$ORANGEPI4LTS_STANDALONE" = "true" ]; then
     set -- "$@" --standalone
     [ -n "$TARGET_NAME" ] && set -- "$@" --local-user "$TARGET_NAME"

@@ -69,7 +69,7 @@ from ...core import emulation, emulation_save, mesh_emulation, qemu_devices, qem
 from ...core.domain_services import session_boot_gate_reason
 from ...core.local_stack_node import LocalStackNode
 from . import _emulation_common as common
-from ._mesh_monitor_widget import MeshMonitorSection
+from ._mesh_monitor_widget import MeshMonitorSection, emulation_hints
 from ._scroll import scrollable
 from ._widgets import label_finish_as_exit
 from .localmesh import _MeshWorker
@@ -475,7 +475,11 @@ class MeshEmulationPage(QtWidgets.QWizardPage):
             title="Running mesh — pods, containers and their addresses",
             scaling=True,
             what=("This reads the docker compose project and the kind cluster on THIS "
-                  "workstation — not the emulated guests in the table above."))
+                  "workstation — not the emulated guests in the table above."),
+            # the same domain names (and per-domain service picks) the local-mesh
+            # page's mount of this table uses, so a kind pod reads "acme.example"
+            # here too and not its slug
+            hints_fn=lambda: emulation_hints(self.wiz))
         # `make view` is the local-mesh page's session to own; this mount would be a
         # second launcher for one process-owner guard.
         self.monitor.monitor.hide_view_controls(
