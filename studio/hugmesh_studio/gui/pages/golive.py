@@ -44,6 +44,7 @@ from ...core.golive_domains import (NO_EXPORT_DOMAINS_NOTE, NO_EXTRA_DOMAINS_NOT
 from ...core.golive_driver import GoLiveDriver, GoLiveOptions, _NO_DOMAIN_MECHANISMS
 from ...core import org_export
 from ...core.progress_parse import ProgressParser, track_phases
+from ...tui import brand_step
 
 # exactly one page per slug, same order — mirrors WIZARD_PAGE_SLUGS' role for the
 # build wizard (tests pin each slug to its page class). "org-export" is the optional
@@ -1323,13 +1324,15 @@ class GoLiveWizard(QtWidgets.QWizard):
         return at <= GOLIVE_PAGE_SLUGS.index("inputs")
 
 
-#: the Public domain's hint when a brand's Ways tab filled it in
-FROM_WAYS_TAB_HINT = "filled in from the brand's ‘Ways to reach it’ tab"
+#: the Public domain's hint when a brand's Ways tab filled it in. The tab's title is
+#: brand_step.SECTIONS' — spelled once there, read here (B-WORDS: no screen module
+#: writes the brand words itself).
+FROM_WAYS_TAB_HINT = f"filled in from the brand's ‘{brand_step.SECTIONS[-1][1]}’ tab"
 
 
 def open_go_live(generator_dir: str, domain: str = "", current=None):
     """Show the Go-Live wizard with ``domain`` filled in, and return it — the receiver
-    of every Brand settings ‘Set up ways to reach this brand’ button (image, Docker
+    of every Brand settings ways button (``brand_step.WAYS_BUTTON``; image, Docker
     and Fleet routes alike).
 
     ``current`` is the wizard this caller opened last time, if any: while it is still
