@@ -44,6 +44,8 @@
 // seed is then measured by ONE scenario instead of being silently inherited by
 // all of them.
 
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 import { expect, request as playwrightRequest } from '@playwright/test';
 import type { APIRequestContext, APIResponse } from '@playwright/test';
 import { Given, When, Then, After } from './world';
@@ -267,13 +269,13 @@ async function apiAs(baseURL: string | undefined, handle: string): Promise<APIRe
   return client;
 }
 
-function api(world: { get<T>(k: string): T }): APIRequestContext {
+export function api(world: { get<T>(k: string): T }): APIRequestContext {
   return world.get<APIRequestContext>('api');
 }
 
 /** Record a response plus the call that produced it, so a failing status
  *  assertion names the verb and path instead of a bare number. */
-async function record(world: any, label: string, r: APIResponse): Promise<void> {
+export async function record(world: any, label: string, r: APIResponse): Promise<void> {
   world.set('response', r);
   world.set('responseLabel', label);
   world.set('responseBody', await r.text().catch(() => ''));
@@ -537,4 +539,214 @@ When('I upload an SVG as my avatar through the API client', async ({ world }) =>
 // report the wrong screen.
 When('I type the profile display name {string}', async ({ page }, value: string) => {
   await page.getByTestId('profile-displayName').fill(value);
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 3. THE API CLIENT'S WRITE VERBS + RESPONSE-SHAPE VOCABULARY  (identity lane,
+//    2026-09-23 — sign-out (#549/#569), the appeal surface (#480), /bff/me's
+//    status field (#311) and the register/provision legs (onboarding.steps.ts
+//    builds on these).
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// These sit beside `the API client GETs {string}` / `the response status is
+// {int}` above and read/write the SAME world keys ('api', 'response',
+// 'responseLabel', 'responseBody'), so a scenario can open its client with any
+// of the existing Givens (`I hold an API session as the persona for this
+// scenario`, `I hold an anonymous API client`, `an API client signed in as …`)
+// and assert with the steps already here. Every JSON assertion parses
+// world['responseBody'] — the text `record()` captured — rather than calling
+// r.json() a second time, so a body that was already read cannot surprise it.
+
+/** Parse a JSON step argument, naming the step on a typo instead of letting
+ *  Playwright serialise the raw string as the request body (which the BFF would
+ *  answer 400 to, and which would read like a server defect). */
+function parseJsonArg(label: string, raw: string): unknown {
+  try {
+    return JSON.parse(raw);
+  } catch (e) {
+    throw new Error(`${label}: the body argument is not valid JSON — ${(e as Error).message}\n${raw}`);
+  }
+}
+
+When('the API client POSTs {string}', async ({ world }, path: string) => {
+  await record(world, `POST ${path}`, await api(world).post(path, { data: {} }));
+});
+
+When('the API client POSTs {string} with body {string}',
+  async ({ world }, path: string, body: string) => {
+    const data = parseJsonArg(`POST ${path}`, body);
+    await record(world, `POST ${path} ${body}`, await api(world).post(path, { data }));
+  });
+
+When('the API client DELETEs {string}', async ({ world }, path: string) => {
+  await record(world, `DELETE ${path}`, await api(world).delete(path));
+});
+
+/** The recorded body as JSON, or a failure that shows the first 300 bytes of
+ *  what actually came back — a 502 HTML page is the usual reason this throws. */
+function responseJson(world: any): unknown {
+  const body = world.get('responseBody') as string;
+  try {
+    return JSON.parse(body);
+  } catch {
+    throw new Error(
+      `${world.get('responseLabel')} did not answer JSON: ${JSON.stringify(body).slice(0, 300)}`,
+    );
+  }
+}
+
+/** Walk a dotted path (`counts.byInterface.cli`) through a parsed body. */
+function fieldAt(root: unknown, dotted: string): { present: boolean; value: unknown } {
+  let cur: unknown = root;
+  for (const key of dotted.split('.')) {
+    if (cur === null || typeof cur !== 'object' || !(key in (cur as Record<string, unknown>))) {
+      return { present: false, value: undefined };
+    }
+    cur = (cur as Record<string, unknown>)[key];
+  }
+  return { present: true, value: cur };
+}
+
+Then('the response JSON field {string} is present', async ({ world }, field: string) => {
+  const json = responseJson(world);
+  expect(
+    fieldAt(json, field).present,
+    `${world.get<string>('responseLabel')} body has no '${field}' field. Body keys: `
+    + `${JSON.stringify(json && typeof json === 'object' ? Object.keys(json as object) : json)}`,
+  ).toBe(true);
+});
+
+// `Then the response JSON field {string} is {string}` is NOT defined here: main's
+// admin.steps.ts (domain-registry lane) defines the identical text over the same
+// world keys ('responseBody' / 'responseLabel'), and a second definition makes
+// bddgen fail with "Multiple definitions matched scenario step" for EVERY
+// feature that uses it. The features in this lane use that one.
+
+Then('the response body is a JSON array', async ({ world }) => {
+  const json = responseJson(world);
+  expect(
+    Array.isArray(json),
+    `${world.get<string>('responseLabel')} must answer a JSON array; got `
+    + `${JSON.stringify(json).slice(0, 200)}`,
+  ).toBe(true);
+});
+
+// ── the API client's cookie jar ──────────────────────────────────────────────
+//
+// Playwright's APIRequestContext keeps its own jar and honours Set-Cookie the way
+// a browser does, INCLUDING an expiry (Max-Age=0 drops the cookie). So "the
+// session cookie is gone after sign-out" is observable on the client, not only
+// inferred from the header — which is the half a header assertion cannot see:
+// a Set-Cookie whose attributes do not match the mint (name, Path, host-only)
+// is a no-op for the browser and would still "contain Max-Age=0".
+
+/** What the jar is being read AFTER. A cookie assertion is legal straight after
+ *  'I hold an API session as the persona for this scenario' — before any request
+ *  step has set world['responseLabel'] — and world.get() throws on an unset key
+ *  (by design), so reading the label unguarded turned that perfectly ordered
+ *  step into "world['responseLabel'] was never set" on every live run. */
+function jarMoment(world: any): string {
+  return world.has('responseLabel') ? world.get<string>('responseLabel') : 'the API session sign-in';
+}
+
+async function cookieNames(world: any): Promise<string[]> {
+  const state = await api(world).storageState();
+  return state.cookies.map((c) => c.name);
+}
+
+Then('the API client holds a cookie named {string}', async ({ world }, name: string) => {
+  expect(await cookieNames(world), `cookie jar after ${jarMoment(world)}`)
+    .toContain(name);
+});
+
+Then('the API client holds no cookie named {string}', async ({ world }, name: string) => {
+  expect(
+    await cookieNames(world),
+    `'${name}' is still in the jar after ${jarMoment(world)}. A sign-out `
+    + `that answers 204 but leaves the cookie alive is the exact no-op hugmesh-generator#549 `
+    + `fixed — the next GET /bff/session re-hydrates the session as if nothing happened.`,
+  ).not.toContain(name);
+});
+
+// ── decision 60 / hugmesh-generator#569: the BFFs' positive-swap cache is pinned OFF ──
+//
+// The gateway's own bff-exchange cache TTL was pinned to 0 by #398; admin-bff
+// and mod-bff carry a MIRROR of that cache (APP_BFF_EXCHANGE_CACHE_TTL_MS) which
+// used to default to 5 s — a five-second window in which a revoked or banned
+// session keeps swapping successfully. #569 pins it to "0" on BOTH lanes.
+// tests/scripts/test-fe-bff-route-lane-parity.sh guards the same value with a
+// mutation battery; this row makes the contract visible in the BDD lane under
+// its issue tag, reading the SAME committed artefacts (never a running pod).
+// The LIVE half — a revoked session loses its swap immediately — is
+// features/mined-identity/sign-out-ends-session.feature.
+
+const COMPOSE_YAML = 'tests/stack/compose.local.yaml';
+
+function repoFile(rel: string): string {
+  const abs = path.resolve(__dirname, '..', '..', '..', rel);
+  if (!fs.existsSync(abs)) throw new Error(`${rel} does not exist at ${abs}`);
+  return fs.readFileSync(abs, 'utf8');
+}
+
+/** The value of `name` under compose service `service` (top-level `services:`
+ *  key at two-space indent), or null when the block or the key is absent. */
+function composeEnvValue(service: string, name: string): string | null {
+  const text = repoFile(COMPOSE_YAML);
+  const lines = text.split('\n');
+  const start = lines.findIndex((l) => l === `  ${service}:`);
+  if (start < 0) throw new Error(`${COMPOSE_YAML} has no service block '  ${service}:'`);
+  for (let i = start + 1; i < lines.length; i += 1) {
+    const l = lines[i];
+    if (/^  [A-Za-z0-9_.-]+:\s*$/.test(l)) break;               // next service block
+    const m = l.match(new RegExp(`^\\s+${name}:\\s*"?([^"\\s]*)"?\\s*(#.*)?$`));
+    if (m) return m[1];
+  }
+  return null;
+}
+
+/** The value of env `name` in a cluster Deployment manifest, accepting both the
+ *  inline `- { name: X, value: "0" }` and the two-line `- name: X` / `value: "0"`
+ *  spellings — the two files use the former today, but a reformat must not read
+ *  as a dropped pin. */
+function clusterEnvValue(manifest: string, name: string): string | null {
+  const text = repoFile(manifest);
+  const inline = text.match(new RegExp(`\\{\\s*name:\\s*${name}\\s*,\\s*value:\\s*"?([^"}\\s]*)"?\\s*\\}`));
+  if (inline) return inline[1];
+  const twoLine = text.match(new RegExp(`-\\s*name:\\s*${name}\\s*\\n\\s*value:\\s*"?([^"\\s]*)"?`));
+  return twoLine ? twoLine[1] : null;
+}
+
+Then('the {string} lane pins the environment variable {string} to {string} for {string}',
+  async ({}, lane: string, name: string, expected: string, service: string) => {
+    let got: string | null;
+    let where: string;
+    if (lane === 'compose') {
+      where = `${COMPOSE_YAML} service '${service}'`;
+      got = composeEnvValue(service, name);
+    } else if (lane === 'cluster') {
+      const manifest = `specs/cluster/manifests/${service.replace(/^hugmesh-/, '')}/deployment.yaml`;
+      where = manifest;
+      got = clusterEnvValue(manifest, name);
+    } else {
+      throw new Error(`unknown lane '${lane}' — legal lanes: compose, cluster`);
+    }
+    expect(
+      got,
+      `${where} must pin ${name}="${expected}" explicitly. An ABSENT pin is not "0": the `
+      + `application default is what the pin exists to override, and a lane that drops the `
+      + `line silently reopens the positive-swap window decision 60 closed.`,
+    ).toBe(expected);
+  });
+
+/** The ABSENCE of a header, as its own step: `the response header X is "<absent>"`
+ *  reads as an Examples placeholder inside a Scenario Outline, and a gateway
+ *  refusal vs. an app-side refusal is told apart by exactly this header. */
+Then('the response carries no header {string}', async ({ world }, header: string) => {
+  const r = world.get<APIResponse>('response');
+  expect(
+    r.headers()[header.toLowerCase()],
+    `${world.get<string>('responseLabel')} carries ${header}=${r.headers()[header.toLowerCase()]}. `
+    + `For X-Route-Denied that means the GATEWAY refused the request and the BFF never saw `
+    + `it — a different refusal from the app-side one this scenario asserts.`,
+  ).toBeUndefined();
 });

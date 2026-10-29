@@ -43,3 +43,22 @@ Feature: Native login drives /bff/login and never browser-exposes Casdoor
     Then the POST to "/bff/login" was accepted
     And the browser holds an httpOnly cookie named "bff_session" whose value starts with "bff_"
     And no main-frame navigation reached a Casdoor origin
+
+  # ── hugmesh-generator#306, Family A ─────────────────────────────────────────
+  # The 2026-09-04 full run saw e2e-user's POST /bff/login start answering 401
+  # mid-run — with the CORRECT password (the page snapshot and the seed banner
+  # agree byte for byte) — and recover on its own eight minutes after the run.
+  # The leading hypothesis on the issue is Casdoor's own sign-in throttle (a
+  # 15-minute account freeze after a handful of WRONG passwords); what nothing
+  # had pinned is the shape a healthy stack must hold: the SAME persona signing
+  # in repeatedly, back to back, with the right password is accepted every time.
+  # tests/qemu/seed-accounts.sh pre-mints 32 password grants in a row on every
+  # seed, so a 401 inside this run is a real regression, never "expected
+  # throttling". Every attempt is its own context, exactly as every spec's
+  # setup is. Five is enough to see a window open and few enough not to
+  # spend the operator's stack on it.
+  @issue:generator-306 @env:docker @role:e2e-user
+  Scenario: back-to-back native sign-ins for the same persona are all accepted @role:e2e-user @service:login @layer:bff
+    When the API client signs in natively 5 times in a row as the persona for this scenario
+    Then every native sign-in in that run was accepted
+    And the API client session carries the role "user"
