@@ -522,6 +522,14 @@ jobs:
     # "shell suites (debian/python)", so a branch-protection rule that requires it
     # still matches. fail-fast is off so one red leg does not cancel the others and
     # hide a second failure.
+    # 2026-10-29: the cluster-manifest leg was CANCELLED at 25 min on most runs from
+    # 2026-10-22 on. Not a hang: every log shows it still passing controls when it
+    # was killed. The image-pin rounds took the suite from 60 negative controls to
+    # ~195, each a full checker run (~6.4 s on a fast runner, ~12.7 s on a slow
+    # one), so a serial pass took 21 min on a fast runner and >40 min on a slow
+    # one. The suite now runs its controls as a bounded parallel pool (nproc,
+    # capped at 8; CMI_JOBS=1 is the old serial run) and bounds every checker run,
+    # so the 25-minute limit stands; a run that nears it again is a regression.
     strategy:
       fail-fast: false
       matrix:
