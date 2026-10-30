@@ -113,7 +113,7 @@ EXCLUDED_HEADINGS: tuple[str, ...] = ("Current State", "Roadmap")
 #: how-tos are for a developer, and would teach the model commands to run; 12.11 lists
 #: the delete commands the warning is for, which the model must never be shown).
 EXCLUDED_IN_FILE: dict[str, tuple[str, ...]] = {
-    "docs/LOCAL-AI-ASSISTANT.md": ("6.", "7.", "12.11"),
+    "docs/LOCAL-AI-ASSISTANT.md": ("6.", "7.", "12.11", "12.12"),
 }
 
 #: Never indexed, whatever a future allowlist says (names and prefixes under docs/).

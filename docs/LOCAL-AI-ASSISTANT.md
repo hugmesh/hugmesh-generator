@@ -651,23 +651,9 @@ starts with the same text, so the two never describe the project differently. It
 under 600 tokens by test.
 
 The brief names the checkouts folder and the generator checkout by their paths; the
-assistant's primer never does. Asked to "wipe everything", qwen3:8b once answered with
-a command that deleted exactly those two folders. So the primer describes them in words, and every
-part of what the model is sent (primer, page facts, options, snippets, files, history)
-goes through `assistant_prompt.scrub_paths` first: a path under the generator checkout
-becomes relative to it (`docs/LOCAL-STACK.md`), one under the checkouts folder relative
-to that, one under the home folder starts with `~`, and the folders themselves become
-words ("the generator checkout", "the checkouts folder"). In everything the machine
-fills in (primer, page facts, options, history) ANY other absolute path of two or more
-parts keeps only its last two parts and never a user name: a build output folder on another disk
-(`/mnt/<disk>/hugmesh-out/sessions/<id>/build.log` becomes `…/<id>/build.log`),
-`/media/<user>/...` and `/run/media/<user>/...` sticks, portage's `/var/tmp/portage/...`
-log lines, `C:\Users\<user>\...`, other drive letters and `\\server\share\...` paths.
-The docs snippets and the files of a code edit are repo text, where a cut path would be
-a wrong answer or a diff that does not apply, so there only `/home`, `/Users`, `/root`,
-`/media` and `/run/media` paths are cut; documented paths such as `/etc/wireguard` and
-`-v ollama:/root/.ollama` reach the model whole. The person's own question is sent as
-typed.
+assistant's primer describes them in words, and every part of what the model is sent
+goes through `assistant_prompt.scrub_paths` first, so this machine's paths stay out of
+it (12.12).
 
 ### 12.2 Where you are
 
@@ -1047,3 +1033,27 @@ searched with the Stop & clean paragraph's own words added, and always gets that
 paragraph (STUDIO-WALKTHROUGH.md, Local Docker mesh traps) as its first snippet and
 LOCAL-STACK.md's `make stack-down` lines among the others (`RESET_ANCHORS`; a doc edit
 that drops either phrase fails `tests/test_assistant_docs.py`).
+
+### 12.12 This machine's paths stay out of the prompt
+
+(Not indexed for the assistant: `EXCLUDED_IN_FILE` in `core/assistant_docs.py` leaves
+this section out; it describes the prompt, not anything the person can do.)
+
+The coding-agent brief names the checkouts folder and the generator checkout by their
+paths; the assistant's primer never does. Asked to "wipe everything", qwen3:8b once answered with
+a command that deleted exactly those two folders. So the primer describes them in words, and every
+part of what the model is sent (primer, page facts, options, snippets, files, history)
+goes through `assistant_prompt.scrub_paths` first: a path under the generator checkout
+becomes relative to it (`docs/LOCAL-STACK.md`), one under the checkouts folder relative
+to that, one under the home folder starts with `~`, and the folders themselves become
+words ("the generator checkout", "the checkouts folder"). In everything the machine
+fills in (primer, page facts, options, history) ANY other absolute path of two or more
+parts keeps only its last two parts and never a user name: a build output folder on another disk
+(`/mnt/<disk>/hugmesh-out/sessions/<id>/build.log` becomes `…/<id>/build.log`),
+`/media/<user>/...` and `/run/media/<user>/...` sticks, portage's `/var/tmp/portage/...`
+log lines, `C:\Users\<user>\...`, other drive letters and `\\server\share\...` paths.
+The docs snippets and the files of a code edit are repo text, where a cut path would be
+a wrong answer or a diff that does not apply, so there only `/home`, `/Users`, `/root`,
+`/media` and `/run/media` paths are cut; documented paths such as `/etc/wireguard` and
+`-v ollama:/root/.ollama` reach the model whole. The person's own question is sent as
+typed.
