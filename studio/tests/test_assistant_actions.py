@@ -126,8 +126,10 @@ def test_validate_refuses_a_no_op_an_unknown_key_another_domain_and_the_own_row(
     assert "I can only change these on this page" in r.text
     r = aa.validate(aa.Proposal("blog.example", "tor", True), where(), t)
     assert "I only change the domain on screen (shop.example)" in r.text
-    ok = aa.validate(aa.Proposal("blog.example", "tor", True, "turn tor on for blog.example"), where(), t)
-    assert isinstance(ok, aa.Validated)
+    # naming the other domain does NOT let it through: the readers and writers act on
+    # the domain on screen, so the write would land on shop.example (PR #832 review)
+    r = aa.validate(aa.Proposal("blog.example", "tor", True, "turn tor on for blog.example"), where(), t)
+    assert r.text.startswith("I only change the domain on screen (shop.example). To change blog.example")
     own = FakeTarget(own=True)
     r = aa.validate(aa.Proposal("shop.example", "signin", "own"), where("identity"), own)
     assert "Identity provider page" in r.text
@@ -142,8 +144,14 @@ def test_egress_vpn_carries_the_pick_the_file_note_and_signin_fills_the_provider
     assert v.note == "pick the VPN file on the page" and v.after == "vpn"
     v = aa.validate(aa.Proposal("shop.example", "signin", "own"), where("identity"), t)
     assert v.extra == {"choice": "own", "provider": "casdoor", "issuer": "", "client_id": "", "jwks": ""}
-    v = aa.validate(aa.Proposal("shop.example", "provider", "entra"), where("identity"), t)
-    assert v.extra["choice"] == "own" and v.extra["provider"] == "entra" and "sign-in address" in v.note
+    # an external provider needs its sign-in address and client id first: the page's
+    # writer would refuse it, so the card says so instead of offering a dead Apply
+    r = aa.validate(aa.Proposal("shop.example", "provider", "entra"), where("identity"), t)
+    assert isinstance(r, aa.Refusal) and "sign-in address" in r.text and "Identity tab" in r.text
+    t2 = FakeTarget(signin={"choice": "own", "provider": "oidc", "issuer": "https://id.example",
+                            "client_id": "shop", "jwks": ""})
+    v = aa.validate(aa.Proposal("shop.example", "provider", "entra"), where("identity"), t2)
+    assert v.extra["choice"] == "own" and v.extra["provider"] == "entra" and v.before == "oidc"
     r = aa.validate(aa.Proposal("shop.example", "issuer", "https://x"), where("identity"), t)
     assert "choose the provider first" in r.text
     assert "superdomain" in [o.key for o in cat.options_for(where("identity"))] or True
@@ -393,3 +401,169 @@ def test_current_values_on_the_real_page_match_its_widgets(page):
     assert cur["tor"] == ("on" if body.brand_tabs.view.tor_on() else "off")
     mesh = dict(aa.current_values(aa.MeshTarget(pg)))
     assert "services" in mesh and "look.primary" not in mesh
+
+
+# ── PR #832 review: the domain on screen, exact undo, the way back from an external IdP ──
+@pytest.fixture
+def two(tmp_path, monkeypatch):
+    """The local-mesh page with shop.example and blog.example (both Tor off, both
+    [tuwunel, phpbb]: equal values, so only the domain guard can stop a wrong write)."""
+    monkeypatch.setenv("HUGMESH_STUDIO_STATE_DIR", str(tmp_path / "state"))
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication(["t"])
+    shim = types.SimpleNamespace(generator_dir=GENERATOR_DIR, localmesh_selected=True)
+    pg = lm_mod.LocalMeshPage(shim)
+    pg.resize(1100, 820)
+    pg.show()
+    pg.mount_brand()
+    pg._seed_domains()
+    md = pg.mesh_domains
+    md.domains.append(Domain(name="shop.example", title="Shop", optional_services=["tuwunel", "phpbb"]))
+    md.domains.append(Domain(name="blog.example", title="Blog", optional_services=["tuwunel", "phpbb"]))
+    pg.domain_services.load(md)
+    body = pg.domain_services
+    goto(body, "shop.example")
+    app.processEvents()
+    yield pg, body, app
+    pg.close()
+
+
+def goto(body, name):
+    """Next / Previous domain, as the person presses them."""
+    for delta in (1, -1):
+        for _ in range(10):
+            if body.current_domain() == name:
+                return
+            body._step(delta)
+    raise AssertionError(f"{name} not reachable with Next domain")
+
+
+def row_of(pg, name):
+    return next(d for d in pg.mesh_domains.domains if d.name == name)
+
+
+LW = where("ways", slug="localmesh_domain_services")
+LS = where("services", slug="localmesh_domain_services")
+
+
+def test_the_gui_targets_domain_follows_the_page(two):
+    pg, body, app = two
+    t = aa.GuiTabsTarget(body)
+    assert t.domain == "shop.example"
+    goto(body, "blog.example")
+    assert t.domain == "blog.example" and aa.live_domain(t) == "blog.example"
+    assert aa.undo_key(t) == "gui-tabs:blog.example"
+
+
+@pytest.mark.parametrize("field,to,check", [
+    ("tor", True, lambda body, name: body.tor_front_door(name)),
+    ("services", ["tuwunel"], lambda body, name: body.selected_slugs(name) == ["tuwunel"]),
+])
+def test_apply_after_next_domain_is_refused_and_touches_neither_domain(two, field, to, check, tmp_path):
+    pg, body, app = two
+    t = aa.GuiTabsTarget(body)
+    w = LW if field == "tor" else LS
+    v = aa.validate(aa.Proposal("shop.example", field, to, "please"), w, t)
+    assert isinstance(v, aa.Validated) and v.domain == "shop.example"
+    goto(body, "blog.example")                         # the card is still up; the page moved
+    app.processEvents()
+    r = aa.apply(v, w, t)
+    assert isinstance(r, aa.Refusal), r
+    assert r.text.startswith("This change is for shop.example, but the page now shows blog.example")
+    app.processEvents()
+    assert not check(body, "blog.example") and not check(body, "shop.example")
+    goto(body, "shop.example")                         # back on its own domain it applies
+    a = aa.apply(v, w, t)
+    assert isinstance(a, aa.Applied) and check(body, "shop.example")
+    assert not check(body, "blog.example")
+
+
+def test_undo_after_next_domain_is_refused_and_works_back_on_its_domain(two):
+    pg, body, app = two
+    t = aa.GuiTabsTarget(body)
+    v = aa.validate(aa.Proposal("shop.example", "services", ["tuwunel"], "forum off"), LS, t)
+    a = aa.apply(v, LS, t)
+    assert isinstance(a, aa.Applied) and a.target_id == "gui-tabs:shop.example"
+    goto(body, "blog.example")
+    r = aa.undo(a, LS, t)
+    assert isinstance(r, aa.Refusal) and "Go back to shop.example to undo it" in r.text
+    assert body.selected_slugs("blog.example") == ["tuwunel", "phpbb"]
+    assert body.selected_slugs("shop.example") == ["tuwunel"]
+    goto(body, "shop.example")
+    assert isinstance(aa.undo(a, LS, t), aa.Applied)
+    assert body.selected_slugs("shop.example") == ["tuwunel", "phpbb"]
+
+
+def test_a_proposal_naming_the_other_domain_writes_nothing(two):
+    pg, body, app = two
+    t = aa.GuiTabsTarget(body)
+    p = aa.parse_proposal('```change\n{"domain":"blog.example","field":"services",'
+                          '"to":["akkoma","games"]}\n```', "turn on games for blog.example")
+    r = aa.validate(p, LS, t)
+    assert isinstance(r, aa.Refusal) and "open its tabs (Next domain)" in r.text
+    assert body.selected_slugs("shop.example") == ["tuwunel", "phpbb"]
+    assert body.selected_slugs("blog.example") == ["tuwunel", "phpbb"]
+
+
+def test_undo_of_a_preset_restores_the_whole_look_record(two):
+    pg, body, app = two
+    body.brand_tabs.open_tab("Look")
+    t = aa.GuiTabsTarget(body)
+    w = where("look", slug="localmesh_domain_services")
+    m = body.brand_tabs.view.look_model()
+    assert m.record() == {}
+    v = aa.validate(aa.Proposal("shop.example", "look.preset", "ocean", "ocean look"), w, t)
+    a = aa.apply(v, w, t)
+    assert isinstance(a, aa.Applied)
+    assert set(m.record()) >= {"preset", "primary", "secondary"}      # a preset fills three
+    assert isinstance(aa.undo(a, w, t), aa.Applied)
+    assert m.record() == {} and not (row_of(pg, "shop.example").look or {})
+
+
+def test_undo_of_egress_puts_the_provider_file_back(two):
+    pg, body, app = two
+    t = aa.GuiTabsTarget(body)
+    view = body.brand_tabs.view
+    assert view.set_egress("vpn", "/srv/vpn/provider.conf") == []
+    assert view.egress_choice() == ("vpn", "/srv/vpn/provider.conf")
+    v = aa.validate(aa.Proposal("shop.example", "egress", "direct"), LW, t)
+    a = aa.apply(v, LW, t)
+    assert isinstance(a, aa.Applied) and view.egress_choice()[0] == "direct"
+    assert isinstance(aa.undo(a, LW, t), aa.Applied)
+    assert body.brand_tabs.view.egress_choice() == ("vpn", "/srv/vpn/provider.conf")
+    assert row_of(pg, "shop.example").ways["egress"] == {"mode": "vpn", "conf": "/srv/vpn/provider.conf"}
+
+
+@pytest.mark.parametrize("field,to,after", [
+    ("provider", "casdoor", ("own", "casdoor")),        # "switch this domain to its own Casdoor"
+    ("signin", "casdoor", ("own", "casdoor")),          # the same, as the model often spells it
+    ("signin", "superdomain", ("superdomain", "")),     # "use the mesh's sign-in"
+])
+def test_from_an_external_provider_back_to_casdoor_or_the_mesh_applies_and_undoes(two, field, to, after):
+    pg, body, app = two
+    body.brand_tabs.open_tab("Identity")
+    t = aa.GuiTabsTarget(body)
+    w = where("identity", slug="localmesh_domain_services")
+    view = body.brand_tabs.view
+    assert view.set_signin("entra", "https://login.example.com/t/v2.0", "shop-client", "") == []
+    v = aa.validate(aa.Proposal("shop.example", field, to, "switch back"), w, t)
+    assert isinstance(v, aa.Validated), v
+    a = aa.apply(v, w, t)
+    assert isinstance(a, aa.Applied), a
+    row = row_of(pg, "shop.example")
+    assert row.idp == after[0] and (row.idp_settings or {}).get("provider", "") in (after[1], "")
+    assert not (row.idp_settings or {}).get("issuer")
+    assert isinstance(aa.undo(a, w, t), aa.Applied)
+    row = row_of(pg, "shop.example")
+    assert row.idp == "own" and row.idp_settings == {"provider": "entra",
+                                                     "issuer": "https://login.example.com/t/v2.0",
+                                                     "client_id": "shop-client"}
+
+
+def test_the_text_ui_files_undo_under_the_domain(monkeypatch):
+    t1 = aa.TuiTarget(None, Domain(name="shop.example", optional_services=["tuwunel", "phpbb"]))
+    t2 = aa.TuiTarget(None, Domain(name="blog.example", optional_services=["tuwunel", "phpbb"]))
+    w = where()
+    a = aa.apply(aa.validate(aa.Proposal("shop.example", "services", ["tuwunel"]), w, t1), w, t1)
+    assert a.target_id == aa.undo_key(t1) != aa.undo_key(t2)
+    r = aa.undo(a, w, t2)                       # a face handed the wrong row: refused
+    assert isinstance(r, aa.Refusal) and t2.row.optional_services == ["tuwunel", "phpbb"]

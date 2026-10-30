@@ -28,7 +28,12 @@ the page's own functions and its widgets show the new value:
 
 Re-read at Apply: :func:`validate` runs again against fresh readers; a ``from`` that
 moved since the proposal is refused ("changed since I proposed this; ask again").
-:func:`undo` re-applies the before values through the same path. One level per target.
+ONLY THE DOMAIN ON SCREEN: a proposal naming another domain is refused, and Apply or
+Undo after the page moved to another domain is refused (the GUI target's ``domain`` is
+read live from the page, as its readers and writers are). :func:`undo` puts the page
+back exactly: look, egress and sign-in from a snapshot of the whole route taken before
+the write (a preset fills three look fields; egress carries its provider file), the
+rest by writing the before value back. One level per target AND domain (:func:`undo_key`).
 """
 from __future__ import annotations
 
@@ -46,7 +51,7 @@ __all__ = [
     "Proposal", "Validated", "Refusal", "Applied", "FIELD_ROUTES", "SYNONYMS", "parse_proposal",
     "normalise_value", "validate", "apply", "undo", "Target", "GuiTabsTarget", "TuiTarget",
     "MeshTarget", "RowTarget", "NO_BLOCK_HINT", "card_lines", "as_refusal", "current_values",
-    "secret_request_note",
+    "secret_request_note", "live_domain", "undo_key",
 ]
 
 NO_BLOCK_HINT = "Say which setting and which value and I will propose the change."
@@ -95,6 +100,9 @@ _SIGNIN_WORDS = {"mesh": "superdomain", "superdomain": "superdomain", "inherited
 _PROVIDER_WORDS = {"casdoor": "casdoor", "entra": "entra", "azure": "entra", "aws": "aws",
                    "cognito": "aws", "oidc": "oidc", "other": "oidc"}
 _FENCE_RE = re.compile(r"```change\s*\n(.*?)```", re.S)
+#: The providers that carry a sign-in address and client id (tui/brand_step SIGNIN_EXTERNAL:
+#: every IDP choice but Casdoor, which derives its own).
+_EXTERNAL_PROVIDERS = tuple(p for p in config.IDP_CHOICES if p != "casdoor")
 
 
 @dataclass(frozen=True)
@@ -133,8 +141,10 @@ class Applied:
     change: Validated
     before: Any
     after: Any
-    target_id: str
+    target_id: str                                  # undo_key(target): the target AND its domain
     time: float = field(default_factory=time.time)
+    snapshot: Any = None                            # the route's whole state before (see undo)
+    after_snapshot: Any = None                      # ... and right after the write
 
 
 def _words(v: Any) -> str:
@@ -328,7 +338,8 @@ def secret_request_note(question: str, where, answer: str = "") -> str:
 # ── validation ───────────────────────────────────────────────────────────────────────
 def validate(proposal: Proposal, where, target: "Target | None") -> "Validated | Refusal":
     """Check ``proposal`` against the catalogue, the page's validators and the target's
-    readers. ``where.question``/``proposal.question`` lets a named other domain through."""
+    readers. A proposal for any domain but the one on screen is refused (its readers and
+    writers act on the domain on screen)."""
     key = _route_key(proposal.field, where)
     allowed = _page_keys(where)
     shown = [k.replace("@mesh", "") for k in allowed]
@@ -341,12 +352,14 @@ def validate(proposal: Proposal, where, target: "Target | None") -> "Validated |
         return Refusal("Open this domain's tabs first." if scope == "domain" else
                        "Change this on the screen.")
     if scope == "domain":
-        on_screen = (getattr(target, "domain", "") or "").strip()
+        on_screen = live_domain(target)
         asked = (proposal.domain or "").strip()
-        question = (proposal.question or getattr(where, "question", "") or "").lower()
-        if asked and on_screen and asked.lower() != on_screen.lower() and asked.lower() not in question:
-            return Refusal(f"I only change the domain on screen ({on_screen}); name {asked} in "
-                           "your question if you mean that one.")
+        if asked and on_screen and asked.lower() != on_screen.lower():
+            # Never a write to a domain other than the one whose tabs are on screen:
+            # every reader and writer here follows the page, so a proposal for another
+            # row would land on this one (wrong-domain write, PR #832 review).
+            return Refusal(f"I only change the domain on screen ({on_screen}). To change "
+                           f"{asked}, open its tabs (Next domain) and ask there.")
         if getattr(target, "own", False) and route in ("signin", "tailnet", "egress"):
             return Refusal("The mesh's own sign-in and ways are set on the Identity provider "
                            "page and the mesh's own steps, not here.")
@@ -369,9 +382,20 @@ def validate(proposal: Proposal, where, target: "Target | None") -> "Validated |
                  "jwks": cur.get("jwks", "")}
         before = cur.get({"signin": "choice"}.get(key, key), "")
         if key == "signin":
-            extra["choice"] = value
-            if value == "superdomain":
-                extra["provider"] = "casdoor"
+            # "its own Casdoor" / "its own Entra": the word names the provider too
+            named = _PROVIDER_WORDS.get(str(proposal.to).strip().lower()) if value == "own" else None
+            if named and cur.get("choice") == "own" and cur.get("provider") != named:
+                # already its own sign-in, on another provider: the provider is what changes
+                key, before, value = "provider", cur.get("provider", ""), named
+                opt = acat.find("provider", scope)
+                label = opt.label if opt else "provider"
+                extra["provider"] = named
+            else:
+                extra["choice"] = value
+                if value == "superdomain":
+                    extra["provider"] = "casdoor"
+                elif named:
+                    extra["provider"] = named
         elif key == "provider":
             extra["choice"] = "own"
             extra["provider"] = value
@@ -381,14 +405,21 @@ def validate(proposal: Proposal, where, target: "Target | None") -> "Validated |
             if extra["provider"] == "casdoor":
                 return Refusal(f"{label} is only used by an external provider (entra, aws, oidc); "
                                "choose the provider first.")
-        probs = config.signin_problems(extra["provider"] if extra["choice"] == "own" else "casdoor",
-                                       extra["issuer"], extra["client_id"], extra["jwks"])
-        if probs and extra["choice"] == "own" and extra["provider"] != "casdoor" and key in ("signin", "provider"):
-            note = "then type the sign-in address and client id on the Identity tab"
-            probs = []
-        r = as_refusal(probs)
-        if r:
-            return r
+        ext = extra["choice"] == "own" and extra["provider"] in _EXTERNAL_PROVIDERS
+        if not ext:
+            # The page's writer (BrandView.set_signin -> config.set_domain_signin) drops
+            # the external values for the mesh's sign-in and for an own Casdoor; checking
+            # the stale ones here refused "switch back to Casdoor" (PR #832 review, D2).
+            extra.update(issuer="", client_id="", jwks="")
+        else:
+            # An external provider is checked with exactly the values the writer gets.
+            r = as_refusal(config.signin_problems(extra["provider"], extra["issuer"],
+                                                  extra["client_id"], extra["jwks"]))
+            if r:
+                if key in ("signin", "provider"):
+                    return Refusal(r.text + ". Type the sign-in address and client id on "
+                                   "the Identity tab first, then ask again.")
+                return r
     if route == "egress" and value == "vpn":
         note = "pick the VPN file on the page"
     if _words(before) == _words(value) and route != "signin":
@@ -411,16 +442,52 @@ def card_lines(v: "Validated | Refusal") -> "list[str]":
 
 
 # ── applying ─────────────────────────────────────────────────────────────────────────
+def live_domain(target) -> str:
+    """The domain the target's readers and writers act on NOW. The GUI target follows
+    the page ("Next domain" moves it), so this is read at every check, never cached."""
+    return str(getattr(target, "domain", "") or "").strip() if target is not None else ""
+
+
+def undo_key(target) -> str:
+    """The key a face files an :class:`Applied` under: the target AND its domain, so an
+    undo on another domain's tabs finds nothing (one level per domain)."""
+    return f"{getattr(target, 'id', '')}:{live_domain(target).lower()}"
+
+
+def _domain_moved(v: Validated, target, verb: str) -> Optional[Refusal]:
+    if v.scope != "domain" or not v.domain:
+        return None
+    now = live_domain(target)
+    if now.lower() != v.domain.lower():
+        return Refusal(f"This change is for {v.domain}, but the page now shows "
+                       f"{now or 'no domain'}. Go back to {v.domain} to {verb} it; "
+                       f"nothing was changed on {now or 'this page'}.")
+    return None
+
+
+def _snapshot(target, route: str, key: str):
+    fn = getattr(target, "snapshot", None)
+    if not callable(fn):
+        return None
+    try:
+        return fn(route, key)
+    except LookupError:
+        return None
+
+
 def apply(v: Validated, where, target: "Target") -> "Applied | Refusal":
     """Re-validate against fresh readers, then write through the target. The window
-    thread owns this call in the GUI."""
+    thread owns this call in the GUI. Refused when the page moved to another domain
+    since the proposal (the readers follow the page, so the write would land there)."""
+    moved = _domain_moved(v, target, "apply")
+    if moved:
+        return moved
     fresh = validate(Proposal(v.domain, v.key.replace("@mesh", ""), v.after, v.question), where, target)
     if isinstance(fresh, Refusal):
-        if fresh.text.startswith("Already set"):
-            return fresh
         return fresh
     if _words(fresh.before) != _words(v.before):
         return Refusal(f"{v.label} changed to {_words(fresh.before)} since I proposed this; ask again.")
+    snap = _snapshot(target, v.route, v.key)
     problems = target.write(v.route, v.key, v.after, fresh.extra)
     r = as_refusal(problems)
     if r:
@@ -429,14 +496,28 @@ def apply(v: Validated, where, target: "Target") -> "Applied | Refusal":
         target.refresh(v.route)
     except Exception:                        # noqa: BLE001 — the write stood; the refresh is cosmetic
         pass
-    return Applied(v, v.before, v.after, getattr(target, "id", ""))
+    return Applied(v, v.before, v.after, undo_key(target), snapshot=snap,
+                   after_snapshot=_snapshot(target, v.route, v.key))
 
 
 def undo(applied: Applied, where, target: "Target") -> "Applied | Refusal":
-    """Put the before value back through the same validators and setters."""
+    """Put the page back exactly as it was before the apply, through the same setters.
+    A route with a snapshot (look: the whole record, which a preset fills three fields
+    of; egress: the mode AND its provider file; sign-in: choice, provider and values)
+    is restored from it; the others write the before value back. Refused on another
+    domain's tabs and when the value moved since the apply."""
     v = applied.change
-    back = Proposal(v.domain, v.key.replace("@mesh", ""), applied.before, v.question)
-    if v.route == "signin":
+    moved = _domain_moved(v, target, "undo")
+    if moved:
+        return moved
+    if applied.snapshot is not None and callable(getattr(target, "restore", None)):
+        now = _snapshot(target, v.route, v.key)
+        if now is None:
+            return Refusal("Nothing to undo: open this domain's tabs first.")
+        if now != applied.after_snapshot:
+            return Refusal(f"{v.label} changed since I applied this; nothing undone.")
+        problems = target.restore(v.route, v.key, applied.snapshot)
+    elif v.route == "signin":
         extra = dict(v.extra)
         cur = target.read("signin", "signin")
         if not isinstance(cur, dict):
@@ -467,7 +548,7 @@ def undo(applied: Applied, where, target: "Target") -> "Applied | Refusal":
         pass
     undone = Validated(v.key, v.label, v.domain, v.scope, v.route, applied.after, applied.before,
                        v.extra, "", v.question)
-    return Applied(undone, applied.after, applied.before, getattr(target, "id", ""))
+    return Applied(undone, applied.after, applied.before, undo_key(target))
 
 
 def current_values(target, where=None) -> "tuple[tuple[str, str], ...]":
@@ -519,6 +600,13 @@ class Target:
     def refresh(self, route: str) -> None:
         pass
 
+    def snapshot(self, route: str, key: str):
+        """The route's whole state for an exact undo, or None (undo writes ``before``)."""
+        return None
+
+    def restore(self, route: str, key: str, snap):
+        return ["this target cannot restore"]
+
 
 def _signin_read(view) -> dict:
     choice = view.signin_choice()
@@ -557,6 +645,31 @@ def _look_write(view, key: str, value):
     if getattr(out, "ok", True):
         view.commit_look()
     return out
+
+
+_MISSING = object()
+
+
+def _look_restore(view, snap: dict):
+    """Put the look record back to ``snap`` through the model's own verbs: a field the
+    snapshot did not hold goes back to the superbrand's (``use_superbrand``), a field it
+    held is set again (``try_set``; the raw ``set`` only when an override equal to the
+    inherited value would otherwise be dropped). Then ``commit_look`` as after a click."""
+    m = view.look_model()
+    if m is None:
+        return ["this domain has no look to edit here"]
+    for fld in [f for f in m.record() if f not in snap]:
+        m.use_superbrand(fld)
+    for fld, val in snap.items():
+        if m.record().get(fld, _MISSING) == val:
+            continue
+        out = m.try_set(fld, val)
+        if not getattr(out, "ok", True):
+            return [getattr(out, "text", "") or f"{fld} could not be put back"]
+        if m.record().get(fld, _MISSING) != val:
+            m.set(fld, val)
+    view.commit_look()
+    return []
 
 
 class RowTarget(Target):
@@ -601,6 +714,28 @@ class RowTarget(Target):
             return _look_write(v, key, value)
         return [f"no writer for {key}"]
 
+    def snapshot(self, route: str, key: str):
+        v = self._view()
+        if route == "look":
+            m = v.look_model()
+            return dict(m.record()) if m is not None else None
+        if route == "egress":
+            return tuple(v.egress_choice())
+        if route == "signin":
+            return dict(_signin_read(v))
+        return None
+
+    def restore(self, route: str, key: str, snap):
+        v = self._view()
+        if route == "look":
+            return _look_restore(v, dict(snap))
+        if route == "egress":
+            mode, conf = snap
+            return v.set_egress(mode, conf)
+        if route == "signin":
+            return _signin_write(v, dict(snap))
+        return [f"no exact undo for {key}"]
+
 
 class GuiTabsTarget(RowTarget):
     """Over a ``DomainServicesBody`` with its brand tabs (see the module docstring)."""
@@ -610,7 +745,21 @@ class GuiTabsTarget(RowTarget):
     def __init__(self, body):
         self.body = body
         tabs = getattr(body, "brand_tabs", None)
-        super().__init__(getattr(tabs, "view", None), body.current_domain() if body is not None else "")
+        super().__init__(getattr(tabs, "view", None), "")
+
+    @property
+    def domain(self) -> str:
+        """LIVE: the domain the page shows now. Every reader and writer here follows the
+        page ("Next domain" moves them), so the domain they are checked against must too;
+        a copy taken at construction let Apply and Undo land on the next domain."""
+        try:
+            return (self.body.current_domain() or "") if self.body is not None else ""
+        except RuntimeError:                     # the page was closed
+            return ""
+
+    @domain.setter
+    def domain(self, _value) -> None:
+        pass                                     # RowTarget.__init__ assigns; the page decides
 
     def _view(self):
         tabs = getattr(self.body, "brand_tabs", None)

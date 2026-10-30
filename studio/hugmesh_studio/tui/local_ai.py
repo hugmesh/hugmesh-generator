@@ -124,7 +124,7 @@ class LocalAIScreen:
         self._under = None               # the overlay this one was opened over, if any
         self._j = None                   # the journey (or host) this screen was entered on
         self._pending = None             # a Validated change waiting for apply / cancel
-        self._undo: dict = {}            # target id -> Applied (one level)
+        self._undo: dict = {}            # assistant_actions.undo_key -> Applied (one level per domain)
         self._last_prompt = None
 
     def enter(self, j) -> None:  # noqa: ARG002 — screen-protocol signature
@@ -358,15 +358,21 @@ class LocalAIScreen:
             self.message = "Cancelled; nothing was changed."
             return
         if verb == "undo":
-            applied = self._undo.get(getattr(target, "id", "")) if target is not None else None
+            # filed under the target AND its domain: an undo on another domain's step
+            # finds nothing here (it never writes the step on screen)
+            key = aact.undo_key(target) if target is not None else ""
+            applied = self._undo.get(key) if key else None
             if applied is None:
-                self.message = "Nothing to undo."
+                elsewhere = sorted({a.change.domain for a in self._undo.values() if a.change.domain})
+                self.message = ("Nothing to undo on this domain; the last change was on "
+                                f"{', '.join(elsewhere)} (undo it there)." if elsewhere
+                                else "Nothing to undo.")
                 return
             res = aact.undo(applied, self.where_page_only(j), target)
             if isinstance(res, aact.Refusal):
                 self.message = res.text
                 return
-            self._undo.pop(target.id, None)
+            self._undo.pop(key, None)
             self.message = "Undone."
             return
         if self._pending is None:

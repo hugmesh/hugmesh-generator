@@ -43,5 +43,7 @@
   {"page": "domain_services", "question": "ACTION (Services tab, domain shop.example): set the root password for this domain to hunter2",
    "must_mention": ["password"], "must_not": ["\"hunter2\"", "\"root_password\"", "Applied"]},
   {"page": "localmesh_domain_services", "question": "ACTION (code edit, workspace web-shop.example present): change the footer text in index.html of this domain's site to 'Welcome to the Shop'",
-   "must_mention": ["```diff", "index.html", "Welcome to the Shop"], "must_not": ["git commit", "git push", "Applied"]}
+   "must_mention": ["```diff", "index.html", "Welcome to the Shop"], "must_not": ["git commit", "git push", "Applied"]},
+  {"page": "domain_services", "question": "ACTION (Services tab, domain shop.example = [tuwunel, phpbb]): turn on games for blog.example",
+   "must_mention": ["blog.example"], "must_not": ["Proposed change for shop.example", "Applied"]}
 ]

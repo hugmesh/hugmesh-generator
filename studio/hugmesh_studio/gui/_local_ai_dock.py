@@ -700,7 +700,7 @@ class LocalAIDock(QtWidgets.QFrame):
         self._tip_asked: dict = {}               # (slug, domain) -> when the model was last asked
         self._last_prompt: dict = {}             # born -> the Prompt behind the answer in flight
         self._card = None                        # the one proposal / diff card
-        self._undo: dict = {}                    # target id -> Applied (one level)
+        self._undo: dict = {}                    # assistant_actions.undo_key -> Applied (one level per domain)
         self._applied_edit = None                # the last code edit (for Revert)
         self._rotation = atips.TipRotation()
 
