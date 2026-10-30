@@ -66,6 +66,11 @@
          (0.3.0~beta.1 < 0.3.0); the app's own __version__ is 0.3.0-beta.1. The 1.0.0
          entry that used to be here was never published, and was withdrawn when the
          Studio moved to the org's beta scheme. -->
+    <release version="0.3.0~beta.2" date="2026-10-30" type="development">
+      <description>
+        <p>Studio 0.3.0-beta.2. See the GitHub release notes for what changed.</p>
+      </description>
+    </release>
     <release version="0.3.0~beta.1" date="2026-10-21" type="development">
       <description>
         <p>First beta.</p>
