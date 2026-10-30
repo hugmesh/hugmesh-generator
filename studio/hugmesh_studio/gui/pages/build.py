@@ -303,10 +303,13 @@ _JOBS_HELP = (
     "(native Windows or macOS — not WSL2, which has a real <tt>/proc/meminfo</tt> and "
     "takes the memory rule). <tt>HUGMESH_BUILD_JOBS</tt> overrides it outright, and a "
     "config you load keeps the number it was saved with.</p>"
-    "<p>Raising it costs CPU and a lot more RAM; lower it on a memory-tight host. A "
-    "docker build additionally runs under a container memory cap "
-    "(<tt>HUGMESH_BUILD_MEMORY</tt>) that protects the host; a native build has no such "
-    "ceiling.</p></qt>")
+    "<p>Raising it costs CPU and a lot more RAM; lower it on a memory-tight host. "
+    + ("The Windows Studio cannot read this PC's memory, so a docker build gets a "
+       "container memory cap only when <tt>HUGMESH_BUILD_MEMORY</tt> sets one; Docker "
+       "Desktop's own memory limit applies either way.</p></qt>" if os.name == "nt" else
+       "A docker build additionally runs under a container memory cap "
+       "(<tt>HUGMESH_BUILD_MEMORY</tt>) that protects the host; a native build has no "
+       "such ceiling.</p></qt>"))
 
 
 def _flag_check(text):

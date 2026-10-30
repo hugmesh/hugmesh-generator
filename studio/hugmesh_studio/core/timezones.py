@@ -93,6 +93,38 @@ def _from_localtime_symlink() -> str:
     return ""
 
 
+_WIN_TZ_KEY = r"SYSTEM\CurrentControlSet\Control\TimeZoneInformation"
+
+
+def _from_windows() -> str:
+    """Windows: the zone set in Settings, as an IANA name. "" off Windows or on failure.
+
+    Windows has no /etc/localtime, so the host default was UTC on every Windows PC. The
+    registry holds a WINDOWS zone name ("W. Europe Standard Time"); the map to IANA is
+    CLDR's, which Windows 10 1903+ ships in its own ICU (icu.dll) — asked here rather
+    than bundling a mapping table that could go stale."""
+    if os.name != "nt":
+        return ""
+    try:
+        import ctypes
+        import winreg
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, _WIN_TZ_KEY) as key:
+            win_id = str(winreg.QueryValueEx(key, "TimeZoneKeyName")[0]).strip()
+        if not win_id:
+            return ""
+        icu = ctypes.WinDLL("icu.dll")
+        fn = icu.ucal_getTimeZoneIDForWindowsID
+        fn.restype = ctypes.c_int32
+        fn.argtypes = [ctypes.c_wchar_p, ctypes.c_int32, ctypes.c_char_p,
+                       ctypes.c_wchar_p, ctypes.c_int32, ctypes.POINTER(ctypes.c_int)]
+        buf = ctypes.create_unicode_buffer(128)
+        status = ctypes.c_int(0)
+        n = fn(win_id, len(win_id), None, buf, len(buf), ctypes.byref(status))
+        return buf.value[:n] if status.value <= 0 and n > 0 else ""
+    except Exception:                       # noqa: BLE001 - a default, never a crash
+        return ""
+
+
 def host_timezone() -> str:
     """This build host's timezone as an IANA name, or ``"UTC"``.
 
@@ -113,7 +145,7 @@ def host_timezone() -> str:
             return tz
     except OSError:
         pass
-    return _from_localtime_symlink() or DEFAULT_TIMEZONE
+    return _from_localtime_symlink() or _from_windows() or DEFAULT_TIMEZONE
 
 
 def default_timezone() -> str:

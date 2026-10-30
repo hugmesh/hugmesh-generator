@@ -262,7 +262,9 @@ class CloudDeploy:
             else:
                 try:
                     mode = os.stat(cf).st_mode & 0o777
-                    if mode & 0o077:
+                    # POSIX only: Windows reports 0o666 for every writable file, so
+                    # this fired on every creds file there and chmod cannot change it
+                    if os.name == "posix" and mode & 0o077:
                         problems.append(
                             f"creds file {cf} is group/world-readable "
                             f"({mode:03o}) — chmod 600 it so only you can read it")

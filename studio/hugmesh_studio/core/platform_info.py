@@ -158,9 +158,18 @@ class HostInfo:
         """WHY flashing is unavailable, with the fix — never a bare 'unsupported'."""
         if self.can_flash_devices:
             return ""
+        if self.os == "windows":
+            # The usbipd steps used to be promised "(below)" and never shown.
+            return ("Writing an image to a device needs Linux block devices, which the "
+                    "Windows build of the Studio does not have. Run the Studio inside "
+                    "WSL2, then hand the drive to WSL from an ADMIN PowerShell:\n"
+                    "    winget install usbipd           # once\n"
+                    "    usbipd list                     # find the BUSID of your drive\n"
+                    "    usbipd bind --busid <BUSID>     # once per device\n"
+                    "    usbipd attach --wsl --busid <BUSID>")
         if self.os != "linux":
             return (f"Writing an image to a device needs Linux block devices; this is "
-                    f"{self.os}. Run the Studio under WSL2 and attach the drive (below).")
+                    f"{self.os}.")
         if self.is_wsl:
             return (
                 "WSL sees no USB devices until Windows hands one over. In an ADMIN "
