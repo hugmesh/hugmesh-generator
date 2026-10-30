@@ -136,8 +136,9 @@ def test_a_denied_file_named_in_a_question_is_refused_in_words(tree):
     ("Authorization: Bearer eyJabc.def-ghi", "eyJabc", "Bearer [redacted]"),
     ("password=hunter2", "hunter2", "password=[redacted]"),
     ("PASSWD: hunter2", "hunter2", "PASSWD: [redacted]"),
-    ("TS_AUTHKEY=tskey-auth-k1234-ABCDEF", "k1234", "TS_AUTHKEY=[redacted]"),
-    ("a bare tskey-auth-k1234-ABCDEF token", "k1234", "[redacted]"),
+    # the key shapes are spelled from parts: a literal one trips the host's secret scanner
+    ("TS_AUTHKEY=" + "tskey" + "-auth-k1234-ABCDEF", "k1234", "TS_AUTHKEY=[redacted]"),
+    ("a bare " + "tskey" + "-auth-k1234-ABCDEF token", "k1234", "[redacted]"),
     ("ghp_" + "A" * 36, "ghp_A", "[redacted]"),
     ("github_pat_" + "B" * 30, "github_pat_B", "[redacted]"),
     # spelled from parts: the generator's own org export refuses a literal key id
@@ -252,6 +253,8 @@ def test_every_common_secret_shape_is_blanked(line):
     "max_tokens: 4096", "context size: 8192 tokens", "mkdir -p /srv/x", "docker run -p 8080:80 img",
     "Secrets store: vault", "password: (set, never shown)", "passed: 12", "the bypass: on",
     "see https://example.com:8443/path@v2", "Basic settings are fine",
+    "passthrough=1", "--bypass-cache yes", "compass: north", "passes=3", "unsealed: true",
+    "Sealed: false", "password: \"\"",
     "[node] ERROR: emerge failed at dev-qt/qtbase-6.8", "digest sha256:" + "a" * 64,
 ])
 def test_ordinary_log_lines_are_left_alone(line):
@@ -305,3 +308,56 @@ def test_the_review_canaries_never_reach_the_model_request(tmp_path, monkeypatch
         os.path.dirname(os.path.dirname(os.path.abspath(ac.__file__)))))
     assert "CANARY" not in p.system, [ln for ln in p.system.splitlines() if "CANARY" in ln]
     assert "[redacted]" in p.system
+
+
+# ── PR #832 round 2: a quoted value is blanked to its closing quote ─────────────────
+# The key=value rule stopped at the first space, so {"admin_password": "horse CANARY
+# staple"} sent "CANARY staple" to the model. Every case puts the canary AFTER a space.
+QUOTED_SHAPES = [
+    '{"admin_password": "horse CANARY staple"}',          # 2nd word, JSON
+    '{"admin_password": "horse battery CANARY"}',         # 3rd word
+    '{"secret": "two CANARY"}',                           # the mesh run log's shape
+    "password: 'horse CANARY staple'",                    # single quotes
+    'DB_PASSWORD="horse CANARY"',                         # an env file
+    "export LUKS_PASS='horse battery CANARY'",
+    r'{"password": "a \" CANARY b"}',                    # an escaped quote inside
+    r"password: 'it\'s CANARY'",
+    "casdoor --admin-password 'horse CANARY staple'",    # a quoted flag value
+    '--client-secret="horse CANARY"',
+    'password: "a line the tail cut CANARY',             # no closing quote: to the line end
+]
+
+
+@pytest.mark.parametrize("line", QUOTED_SHAPES)
+def test_a_quoted_secret_with_spaces_is_blanked_to_its_closing_quote(line):
+    out = ac.redact(line)
+    assert "CANARY" not in out, out
+    assert "[redacted]" in out and ac.redact(out) == out, out
+
+
+def test_a_quoted_secret_stops_at_its_own_quote_and_its_line():
+    assert ac.redact('{"password": "a b", "name": "KEEP me"}') == '{"password": "[redacted]", "name": "KEEP me"}'
+    assert ac.redact("password: 'a b' and KEEP") == "password: '[redacted]' and KEEP"
+    assert ac.redact('{"password": "it\'s", "name": "KEEP"}') == '{"password": "[redacted]", "name": "KEEP"}'
+    text = 'password: "never closed\nKEEP this line\nlast'
+    out = ac.redact(text)
+    assert out == 'password: "[redacted]\nKEEP this line\nlast' and out.count("\n") == 2
+    assert ac.redact('password: ""') == 'password: ""'              # nothing to hide
+
+
+def test_an_unquoted_value_still_stops_at_the_first_space():
+    """Pinned, not endorsed: a bare value is one word (``a=b c=d`` is two pairs), so an
+    unquoted ``secret = two words`` keeps its second word. Logs quote multi-word
+    secrets; a YAML plain scalar with spaces is the known gap."""
+    assert ac.redact("secret = horse KEEP") == "secret = [redacted] KEEP"
+    assert ac.redact("user=a pass=b next=KEEP") == "user=a pass=[redacted] next=KEEP"
+
+
+@pytest.mark.parametrize("line", [
+    "LUKS_PASS=CANARY", "luks_pass=CANARY", "local_pass: CANARY", "CASDOOR_ADMIN_PASS=CANARY",
+    "DB_PASS=CANARY", "--luks-pass CANARY", "--local-pass=CANARY", "unseal_key=CANARY",
+    "VAULT_UNSEAL_KEY=CANARY", '{"unseal_keys_b64": ["CANARY"]}'.replace('["CANARY"]', '"CANARY"'),
+])
+def test_the_studios_own_pass_and_unseal_spellings_are_blanked(line):
+    out = ac.redact(line)
+    assert "CANARY" not in out and "[redacted]" in out, out

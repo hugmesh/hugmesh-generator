@@ -162,17 +162,45 @@ def is_denied_path(path: str, **kw) -> bool:
 
 
 # ── redaction ────────────────────────────────────────────────────────────────────────
+#: Secret words that are also the start or end of ordinary ones ("passed", "bypass",
+#: "passthrough", "unsealed"): matched only where no letter touches them, so the
+#: Studio's own spellings LUKS_PASS=, --luks-pass, local_pass=, unseal_key= and
+#: VAULT_UNSEAL_KEY= are caught and the ordinary words are not (PR #832 review).
+_WHOLE_WORDS = r"(?<![a-zA-Z])(?:pass|unseal)(?![a-zA-Z])"
 #: The words that make a key secret, wherever they sit in it: ``POSTGRES_PASSWORD``,
 #: ``CASDOOR_CLIENT_SECRET``, ``x-api-key``, ``PrivateKey``, ``aws_secret_access_key``.
 #: (``\b`` does NOT fire after ``_``, so a rule anchored on ``\bpassword`` skipped every
 #: prefixed env var: PR #832 review.)
 _SECRET_WORDS = (r"(?:password|passwd|passphrase|pwd|secret|token|api[_-]?key|apikey"
                  r"|auth[_-]?key|authkey|private[_-]?key|privkey|access[_-]?key|client[_-]?key"
-                 r"|preshared[_-]?key|credentials?|tskey)")
+                 r"|preshared[_-]?key|credentials?|tskey|" + _WHOLE_WORDS + r")")
 #: A key holding one of them (an optional quote around it, as JSON writes it); a plural
 #: "tokens" (a model's context size) is not a secret.
 _SECRET_KEY = r"[\w.-]*" + _SECRET_WORDS + r"[\w.-]*(?<![tT][oO][kK][eE][nN][sS])"
 _NOT_YET = r"(?!\[redacted|\(set,)"
+
+
+def _value(bare: str) -> str:
+    """A secret's value. QUOTED, it runs to the matching quote (a backslash escapes
+    one), spaces and all: a stop at the first space sent the rest of a passphrase such
+    as {"admin_password": "horse CANARY staple"} to the model (PR #832 review). An
+    unterminated quote runs to the end of the line, never past it (the line count
+    holds). BARE, it is ``bare``: it stops at whitespace (``a=b c=d`` is two pairs),
+    so an unquoted ``secret = two words`` loses only its first word."""
+    return (r"(?:(?P<q>[\"'])(?!\[redacted|\(set,)(?:\\.|(?!(?P=q))[^\\\n])+"
+            r"(?:(?P<close>(?P=q))|(?=\n)|$)|(?=[^\s\"'])" + bare + r")")
+
+
+_VALUE = _value(r"[^\s\"',;&}]+")
+
+
+def _blank(m: "re.Match") -> str:
+    """The [redacted] stand-in for a :data:`_VALUE` match, keeping its quotes."""
+    q = m.group("q")
+    if not q:
+        return "[redacted]"
+    return q + "[redacted]" + (m.group("close") or "")
+
 
 _REDACT_RULES: tuple[tuple[re.Pattern, Any], ...] = (
     # key blocks: whole, a BEGIN line on its own, and a bare base64 body line (a log
@@ -197,17 +225,18 @@ _REDACT_RULES: tuple[tuple[re.Pattern, Any], ...] = (
     (re.compile(r"(?i)\b([a-z][a-z0-9+.-]*://[^:/@\s]*:)" + _NOT_YET + r"[^@\s/]+@"), r"\1[redacted]@"),
     (re.compile(r"(r2dbc:[^\s:]*:[^@\s/]*?)(?<=:)" + _NOT_YET + r"[^@\s]+@"), r"\1[redacted]@"),
     # command-line flags: --password X, --admin-password=X, --client-secret X ...
-    (re.compile(r"(?i)(?<![\w-])(--?[\w-]*(?:password|passwd|passphrase|secret|token|api-?key|auth-?key)"
-                r"[\w-]*)(?<!tokens)([ \t]+|=)(?!-)" + _NOT_YET + r"[\"']?[^\s\"']+[\"']?"),
-     r"\1\2[redacted]"),
+    (re.compile(r"(?i)(?<![\w-])(--?[\w-]*(?:password|passwd|passphrase|secret|token|api-?key|auth-?key"
+                r"|" + _WHOLE_WORDS + r")[\w-]*)(?<!tokens)([ \t]+|=)(?!-)" + _NOT_YET +
+                _value(r"[^\s\"']+")),
+     lambda m: m.group(1) + m.group(2) + _blank(m)),
     (re.compile(r"(?i)\b(mysql|mariadb|mysqldump|mysqladmin)\b([^\n]*?[ \t])-p(?![ \t])" + _NOT_YET + r"\S+"),
      r"\1\2-p[redacted]"),
     # SQL a database init log echoes: CREATE ROLE x PASSWORD 'v', IDENTIFIED BY 'v'
     (re.compile(r"(?i)\b(password|identified[ \t]+by)([ \t]+)(['\"])" + _NOT_YET + r"[^'\"\n]*\3"),
      r"\1\2\3[redacted]\3"),
     # key = value, key: value, "key": "value", export KEY=value
-    (re.compile(r"(?i)([\"']?)(" + _SECRET_KEY + r")\1([ \t]*[=:][ \t]*)([\"']?)" + _NOT_YET +
-                r"(?=[^\s\"'])[^\s\"',;&}]+"), r"\1\2\1\3\4[redacted]"),
+    (re.compile(r"(?i)([\"']?)(" + _SECRET_KEY + r")\1([ \t]*[=:][ \t]*)" + _NOT_YET + _VALUE),
+     lambda m: m.group(1) + m.group(2) + m.group(1) + m.group(3) + _blank(m)),
     # token shapes on their own
     (re.compile(r"(?:tskey|hskey)-[a-z]+-[A-Za-z0-9\-]+"), "[redacted]"),
     (re.compile(r"gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}"), "[redacted]"),

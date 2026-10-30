@@ -710,9 +710,15 @@ for a code edit) goes through `redact`, which blanks:
   prefixed or quoted: `POSTGRES_PASSWORD=...`, `CASDOOR_CLIENT_SECRET=...`,
   `export GH_TOKEN=...`, `aws_secret_access_key = ...`, `{"admin_password": "..."}`,
   `x-api-key: ...`, WireGuard's `PrivateKey = ...`, a kubeconfig's `client-key-data:`
-  (a plural "tokens", such as a context size, is left alone);
+  (a plural "tokens", such as a context size, is left alone), and any key with `pass`
+  or `unseal` as a word of its own: `LUKS_PASS=...`, `local_pass: ...`,
+  `VAULT_UNSEAL_KEY=...` (not `passed`, `bypass`, `passthrough` or `unsealed`). A
+  QUOTED value is blanked up to its closing quote, spaces and all
+  (`{"admin_password": "horse battery staple"}` loses all three words; a backslash
+  escapes a quote; an unclosed quote runs to the end of its line). An unquoted value
+  is one word: `secret = two words` keeps its second word;
 - command-line flags such as `--password X`, `--admin-password=X`, `--client-secret X`,
-  and `mysql ... -pX` (a bare `-pX` is not touched: `mkdir -p`, `-pthread` and
+  `--luks-pass X` (a quoted value whole, as above), and `mysql ... -pX` (a bare `-pX` is not touched: `mkdir -p`, `-pthread` and
   `docker run -p 8080:80` print the same shape);
 - SQL a database's init log echoes: `PASSWORD '...'` and `IDENTIFIED BY '...'`;
 - the password in ANY `scheme://user:password@host` URL, and secret query parameters
