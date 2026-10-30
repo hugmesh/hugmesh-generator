@@ -239,6 +239,9 @@ def test_preflight_warns_with_exact_command_when_builder_image_absent(monkeypatc
     problems = d.preflight(cfg, "docker")
     expected_cmd = "docker build -f Dockerfile.build -t hugmesh-builder ."
     assert any(expected_cmd in p and "hugmesh-builder" in p for p in problems)
+    # The button is offered only where the build it runs can work (#827 group 2).
+    assert not d.builder_image_missing("docker")
+    (tmp_path / "Dockerfile.build").write_text("FROM scratch\n")
     assert d.builder_image_missing("docker")
 
 

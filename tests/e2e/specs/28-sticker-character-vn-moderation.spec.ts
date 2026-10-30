@@ -1,6 +1,6 @@
 import { test, expect, request } from '@playwright/test';
 import type { APIRequestContext } from '@playwright/test';
-import { SUPERADMIN_USERNAME, personaPassword } from './helpers';
+import { SUPERADMIN_USERNAME, personaPassword, describeLoginFailure } from './helpers';
 import { tags } from './report-tags';
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -78,7 +78,10 @@ async function loginAs(api: APIRequestContext, username: string): Promise<void> 
   // personaPassword, not LOGIN_PASSWORD: the superadmin's password is the minted
   // E2E_SUPERADMIN_PASSWORD on a studio-bootstrapped mesh (2026-08-14 failure).
   const r = await api.post('/bff/login', { data: { username, password: personaPassword(username) } });
-  expect(r.status(), `native login ${username}`).toBe(200);
+  // A refusal names WHY (hugmesh-generator#473: A1/A3/A4 all died here on
+  // 2026-09-04 with a bare "Received: 401", lockout and wrong password alike).
+  const why = r.status() === 200 ? '' : ` — ${describeLoginFailure(r.status(), await r.text().catch(() => ''))}`;
+  expect(r.status(), `native login ${username}${why}`).toBe(200);
 
   // ONBOARD (registration STAGE 2) — the same fix spec 29 already carries.
   //

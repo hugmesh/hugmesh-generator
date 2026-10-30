@@ -90,9 +90,10 @@ def cross_fde_rows(rows) -> list[str]:
 # ── the operator-facing text (one wording, used by the Home step AND the Review
 # summary, so the two can never say different things) ────────────────────────────────
 
-def cross_fde_note(ids: list[str], ready: bool) -> str:
+def cross_fde_note(ids: list[str], ready: bool, osname: str | None = None) -> str:
     """What ask 21 costs on the listed ARM rows, in the operator's terms. Empty when no
-    row is affected — this must never become blanket boilerplate on an all-x86 flow."""
+    row is affected — this must never become blanket boilerplate on an all-x86 flow.
+    ``osname`` is ``os.name`` unless a test passes another."""
     if not ids:
         return ""
     which = ", ".join(ids)
@@ -100,7 +101,14 @@ def cross_fde_note(ids: list[str], ready: bool) -> str:
             "produces the installer artifact for each of these (--encrypt-root forces "
             "it on), and the encrypted root needs an arm64 disk-boot initramfs built "
             "under a static qemu-aarch64.")
-    if ready:
+    if (osname or os.name) == "nt":
+        # There is no /proc here: the registration that counts lives in Docker
+        # Desktop's Linux VM, which this process cannot read, so "NO registration"
+        # (and "turn encryption off") was said on every Windows host.
+        tail = ("The registration that counts is in Docker Desktop's Linux VM, which the "
+                "Windows Studio cannot inspect: the builder's cross-dracut preflight "
+                "checks it when each of these rows starts, and says so if it is missing.")
+    elif ready:
         tail = ("This host has qemu-aarch64 registered for binfmt "
                 f"({qemu_interp()}), which the builder container shares — the "
                 "cross-dracut preflight should pass.")

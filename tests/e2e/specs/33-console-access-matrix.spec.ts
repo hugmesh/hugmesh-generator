@@ -1,5 +1,5 @@
 import { test, expect, Page } from '@playwright/test';
-import { onboard } from './helpers';
+import { onboard, SHELL_AFTER_PROVISION_MS } from './helpers';
 import { tags } from './report-tags';
 import { loginPassword } from './rbac-roles';
 
@@ -104,6 +104,38 @@ async function signInFailure(page: Page, username: string): Promise<string | nul
   }
 }
 
+/**
+ * Where a console entry lives once the shell has SETTLED (hugmesh-generator#473,
+ * box 3 of the #306 plan).
+ *
+ * After sign-in the shell lands every identity on the signed-in home, and on
+ * home host-shell HIDES the menubar and renders the same entries as service
+ * CARDS inside `home-services-nav`, each tagged `home-card-<entry testid>`
+ * (hugmesh-host-shell menu.component.html). The bar entry `nav-admin` exists
+ * only in the bar's brief first paint at '/' before roleHomeGuard resolves
+ * (spec 01 measured ~0.5s), so asserting or clicking it is a race:
+ *   - 2026-09-04, 33:110 attempt 0: "locator resolved to <a data-testid=nav-admin>
+ *     ... element was detached from the DOM, retrying" until the 90s timeout;
+ *   - 2026-10-29, re-run on the compose stack: "locator.click: Test timeout of
+ *     90000ms exceeded — waiting for getByTestId('nav-admin')", the page snapshot
+ *     showing the settled home with an "Admin — Administration console" CARD.
+ * So: wait for the settled home first (spec 01's own approach), then assert and
+ * click the card, and give the click its own timeout so a detach loop reports
+ * itself instead of eating the whole test budget.
+ */
+async function settledHome(page: Page): Promise<void> {
+  await expect(
+    page.getByTestId('home-services-nav'),
+    'the signed-in home must settle into its service cards before entries are asserted',
+  ).toBeVisible({ timeout: SHELL_AFTER_PROVISION_MS });
+}
+
+function consoleCard(page: Page, c: ConsoleExpectation) {
+  return page.getByTestId(`home-card-${c.navTestId}`);
+}
+
+const CLICK_TIMEOUT_MS = 20_000;
+
 test.describe('33 — console access matrix (discovery + reach, per identity)', () => {
   for (const persona of PERSONAS) {
     test(`${persona.username}: sees exactly its own consoles in the menubar `
@@ -113,17 +145,20 @@ test.describe('33 — console access matrix (discovery + reach, per identity)', 
         `${persona.username} could not sign in and is optional `
         + `(Studio-bootstrapped only) — ${why}`);
       expect(why, `${persona.username} must be able to sign in`).toBeNull();
+      // Settled FIRST: a toHaveCount(0) taken before the cards render would pass
+      // vacuously, and a toBeVisible() on the bar entry races the guard.
+      await settledHome(page);
 
       for (const c of persona.expects) {
         await expect(
-          page.getByTestId(c.navTestId),
+          consoleCard(page, c),
           `${persona.username} holds the role, so ${c.route} must be LISTED — `
           + 'a console reachable only by typing the URL is one the operator cannot find',
         ).toBeVisible();
       }
       for (const c of persona.denies) {
         await expect(
-          page.getByTestId(c.navTestId),
+          consoleCard(page, c),
           `${persona.username} lacks the role, so ${c.route} must NOT be listed`,
         ).toHaveCount(0);
       }
@@ -141,7 +176,8 @@ test.describe('33 — console access matrix (discovery + reach, per identity)', 
         // open, so the network is NEVER idle and that wait simply burns the whole
         // test timeout (observed: 45s timeouts with an empty page URL). waitForURL
         // is the assertion that actually models "the navigation happened".
-        await page.getByTestId(c.navTestId).click();
+        await settledHome(page);
+        await consoleCard(page, c).click({ timeout: CLICK_TIMEOUT_MS });
         await page.waitForURL(new RegExp(`${c.route}(/|$)`), { timeout: 20_000 });
 
         // Reach: we are ON the console, not bounced to /user (the shape of the

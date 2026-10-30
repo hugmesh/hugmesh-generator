@@ -109,6 +109,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import subprocess
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
@@ -512,8 +513,13 @@ def list_specs(generator_dir: str, timeout: int = LIST_TIMEOUT_SEC,
                          f"{e2e_dir} before the suite can be enumerated.")
         return listing
     run = runner or subprocess.run
+    argv = list(LIST_ARGV)
+    if os.name == "nt":
+        # npx is npx.cmd there, and CreateProcess does not try PATHEXT for a bare name:
+        # "npx not found" was said on machines that have Node.js
+        argv[0] = shutil.which(argv[0]) or argv[0]
     try:
-        proc = run(list(LIST_ARGV), cwd=e2e_dir, capture_output=True, text=True,
+        proc = run(argv, cwd=e2e_dir, capture_output=True, text=True,
                    timeout=timeout)
     except FileNotFoundError:
         listing.error = "npx not found on PATH — Node.js is required to enumerate the suite."

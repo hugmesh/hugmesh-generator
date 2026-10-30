@@ -158,9 +158,18 @@ class HostInfo:
         """WHY flashing is unavailable, with the fix — never a bare 'unsupported'."""
         if self.can_flash_devices:
             return ""
+        if self.os == "windows":
+            # The usbipd steps used to be promised "(below)" and never shown.
+            return ("Writing an image to a device needs Linux block devices, which the "
+                    "Windows build of the Studio does not have. Run the Studio inside "
+                    "WSL2, then hand the drive to WSL from an ADMIN PowerShell:\n"
+                    "    winget install usbipd           # once\n"
+                    "    usbipd list                     # find the BUSID of your drive\n"
+                    "    usbipd bind --busid <BUSID>     # once per device\n"
+                    "    usbipd attach --wsl --busid <BUSID>")
         if self.os != "linux":
             return (f"Writing an image to a device needs Linux block devices; this is "
-                    f"{self.os}. Run the Studio under WSL2 and attach the drive (below).")
+                    f"{self.os}.")
         if self.is_wsl:
             return (
                 "WSL sees no USB devices until Windows hands one over. In an ADMIN "
@@ -346,7 +355,8 @@ def wsl_docker_remedy(is_wsl: bool | None = None, wsl_version: int = 0,
             f"'docker' group.)")
 
 
-def native_windows_blocker(action: str, osname: str | None = None) -> str:
+def native_windows_blocker(action: str, osname: str | None = None,
+                           runs: str = "`make` and bash scripts") -> str:
     """WHY ``action`` cannot run in a NATIVE Windows Studio (the MSI), with the fix.
     "" anywhere else, WSL included.
 
@@ -356,10 +366,12 @@ def native_windows_blocker(action: str, osname: str | None = None) -> str:
     bash, and C:\\Windows\\System32\\bash.exe is the WSL launcher, which runs a script
     inside the Linux VM where a C:\\ checkout path means nothing. WSL2 is the supported
     Windows runtime (see the module docstring), so that is what the sentence says.
-    ``osname`` is ``os.name`` unless a test passes another."""
+    ``runs`` names what ``action`` actually needs (Go Live, cloud deploy and the phone
+    wizard are bash drivers with no `make` in them). ``osname`` is ``os.name`` unless a
+    test passes another."""
     if (osname or os.name) != "nt":
         return ""
-    return (f"{action} runs `make` and bash scripts from a hugmesh-generator checkout, "
+    return (f"{action} runs {runs} from a hugmesh-generator checkout, "
             f"which the Windows build of the Studio cannot run. On Windows, run the "
             f"Studio inside WSL2 instead: in a WSL2 distro (Ubuntu) with Docker Desktop's "
             f"WSL integration turned on for it, clone hugmesh-generator into ~ (not "
