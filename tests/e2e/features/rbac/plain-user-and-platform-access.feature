@@ -39,7 +39,7 @@ Feature: Plain members and per-platform access holders
       | e2e-user     | admin   | hugmesh-fe-gateway | /bff/admin/allowlist          | DENY     | BFF admin         |
       | e2e-user     | akkoma  | hugmesh-be-gateway | /api/v1/pleroma/admin/config  | DENY     | akkoma moderation |
       | e2e-user     | games   | hugmesh-fe-gateway | /games/admin/sessions         | DENY     | games admin UI    |
-      | e2e-user     | games   | hugmesh-be-gateway | /games/api/admin/role-grants  | DENY     | games admin API   |
+      | e2e-user     | games   | hugmesh-fe-gateway | /games/api/admin/role-grants  | DENY     | games admin API   |
       | e2e-user     | tuwunel | hugmesh-be-gateway | /_matrix/client/v3/sync       | DENY     | needs ROLE_MATRIX |
       | e2e-user     | akkoma  | hugmesh-be-gateway | /api/v1/timelines/home        | DENY     | needs MASTODON    |
 

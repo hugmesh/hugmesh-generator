@@ -543,7 +543,7 @@ export const GOVERNANCE_FUNCTIONS: GovernanceFunction[] = [
   },
   {
     id: 'games-admin-api', name: 'call the games-namespace admin API',
-    console: 'games-admin', gateway: 'hugmesh-be-gateway',
+    console: 'games-admin', gateway: 'hugmesh-fe-gateway',
     probePath: '/games/api/admin/role-grants', governingPattern: '/games/api/admin/**',
     keyedOn: ['ROLE_GAMES_ADMIN'],
     note: 'The API half of the same gate.',

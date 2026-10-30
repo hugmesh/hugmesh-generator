@@ -139,7 +139,7 @@ test.describe('RBAC: cross-realm issuer isolation (systems ⟂ games)', () => {
         { gw: 'hugmesh-fe-gateway', path: '/admin/usage' },
         { gw: 'hugmesh-be-gateway', path: '/api/admin/route-access' },
         { gw: 'hugmesh-fe-gateway', path: '/games/admin/sessions' },
-        { gw: 'hugmesh-be-gateway', path: '/games/api/admin/role-grants' },
+        { gw: 'hugmesh-fe-gateway', path: '/games/api/admin/role-grants' },
         { gw: SUPERADMIN_GATEWAY as Gateway, path: '/bff/superadmin/service-store/catalog' },
       ];
       for (const p of probes) {
