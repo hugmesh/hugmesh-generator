@@ -344,8 +344,10 @@ grep -qE '^config daq: pcap$' "${SNORT_CONF}" && grep -qE '^config daq_dir: /usr
 grep -qE '^config daq: afpacket' "${SNORT_CONF}" && bad "snort.conf selects afpacket, which cannot open the 'any' fallback" \
     || ok "snort.conf does not select afpacket (incompatible with the 'any' fallback)"
 # net-libs/daq rides the SAME gate as net-analyzer/snort (one PKGS line).
-sline="$(grep -E '^\$\{SNORT_IDS\}[[:space:]]+&& PKGS=' "${X86_BUILD}")"
-grep -q 'net-analyzer/snort' <<<"${sline}" && grep -qw 'net-libs/daq' <<<"${sline}" \
+# Only the quoted PKGS VALUE counts — the same line's `info` text also names
+# net-libs/daq, and a whole-line grep passed with the atom deleted (mutation-proven).
+sline="$(grep -E '^\$\{SNORT_IDS\}[[:space:]]+&& PKGS=' "${X86_BUILD}" | sed -nE 's/^[^"]*PKGS="([^"]*)".*/\1/p')"
+grep -qw 'net-analyzer/snort' <<<"${sline}" && grep -qw 'net-libs/daq' <<<"${sline}" \
     && ok "x86 builder: net-libs/daq is added on the SAME --snort gate as net-analyzer/snort" \
     || bad "x86 builder: the snort PKGS line does not carry net-libs/daq: ${sline:-<none>}"
 python3 - "${CATALOG_PY}" <<'PY' && ok "Studio package catalog: the snort option adds net-libs/daq too" || bad "Studio package catalog: snort adhoc atoms lack net-libs/daq (catalog drifts from the builder)"
