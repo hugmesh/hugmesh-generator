@@ -26,8 +26,10 @@
 # file; tests/stack/gen-route-access-env.sh writes the key, `make stack-up` and
 # scripts/stack-up.ps1 run it first and also pass the value explicitly). A hand-run
 # compose that adds `--env-file X` must also pass `--env-file tests/stack/.env`:
-# compose skips .env once any --env-file is given. With no value, route-access-db
-# refuses to initialise an empty volume and the gateways cannot log in.
+# compose skips .env once any --env-file is given. With no value, `up` stops with
+# "service route-access-env-check didn't complete successfully" (its log names the
+# fix) and the gateways refuse to start: run with an empty value they would enforce
+# NO route-access rules (measured; see route-access-env-check below).
 #
 # Service names are the in-compose DNS the services resolve each other by — they
 # replace the k8s <svc>.<ns>.svc.cluster.local FQDNs (e.g.
@@ -170,6 +172,50 @@ services:
   #  per-service Postgres instances are platform components defined here.
   # ════════════════════════════════════════════════════════════════════
 
+  # route-access-env-check — FAIL LOUD instead of running the gateways with an EMPTY
+  # route-access-db password. ROUTE_ACCESS_DB_PASSWORD is not spelled in this file (it
+  # comes from the gitignored tests/stack/.env, see route-access-db below), so a
+  # checkout where tests/stack/gen-route-access-env.sh never ran interpolates it as ''.
+  # On a NEW volume postgres then refuses to initialise, which is loud enough. On an
+  # EXISTING volume it starts fine (POSTGRES_PASSWORD is read only at initdb) and every
+  # gateway connects as `gateway:@route-access-db`, which the server rejects. MEASURED
+  # 2026-10-29 on the hugmesh-gateway image this stack builds (main 8dba76b): the
+  # gateway does not refuse to start, its health stays green, and when its Cassandra
+  # read-cache holds no rows yet (a fresh cassandra volume) the empty cache REPLACES
+  # the baked-in seed floor, so a plain ROLE_USER is forwarded to /bff/admin/**,
+  # /admin/**, /mod/** and every other governed path (fail OPEN). With a populated
+  # cache it enforces that stale snapshot instead (hugmesh-gateway#61). So the
+  # gateways must not start.
+  # This one-shot exits 1 with the command to run when the value is empty, and
+  # route-access-db plus all four ROUTE_ACCESS_R2DBC_URL consumers depend on it
+  # completing, so a hand-run `up` stops with "dependency failed to start" before any
+  # of them starts. It is a dependency, not `${VAR:?}`: a required variable breaks
+  # `docker compose ps/logs/down/exec` too (measured), while this keeps them working.
+  # It sees only whether the value is set (`:+`), never the value itself.
+  # A failed `up` still CREATES the dependents (not started) with the empty value
+  # baked in, and `docker start`, the Studio's Start button and `up --no-deps` skip
+  # depends_on: the JAVA_TOOL_OPTIONS start guard on the four consumers covers those.
+  # The fix after a failed `up` is the generator, then `up` again (it recreates them).
+  route-access-env-check:
+    <<: *amd64
+    image: postgres:16-alpine   # already pulled for route-access-db; only /bin/sh is used
+    restart: "no"
+    environment:
+      ROUTE_ACCESS_DB_PASSWORD_SET: ${ROUTE_ACCESS_DB_PASSWORD:+yes}
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        [ "$${ROUTE_ACCESS_DB_PASSWORD_SET}" = yes ] && exit 0
+        echo "route-access-env-check: ROUTE_ACCESS_DB_PASSWORD is EMPTY for this compose run." >&2
+        echo "  The gateways would run with no route-access-db password and, on a fresh" >&2
+        echo "  Cassandra cache, enforce NO route-access rules at all. Refusing to start them." >&2
+        echo "  Fix (from the repo root): bash tests/stack/gen-route-access-env.sh" >&2
+        echo "  (or make stack-up / scripts/stack-up.ps1, which run it), then re-run your" >&2
+        echo "  compose command. It writes ROUTE_ACCESS_DB_PASSWORD to tests/stack/.env," >&2
+        echo "  which compose loads by itself unless you pass --env-file (then also pass" >&2
+        echo "  --env-file tests/stack/.env) or export an empty ROUTE_ACCESS_DB_PASSWORD." >&2
+        exit 1
+
   # route-access-db — gateway_route_access source of truth (specs/cluster/
   # manifests/route-access). initdb/20-schema.sql seeds the table on first init.
   # The local stack connects every gateway as the OWNER `gateway` user (dev
@@ -186,6 +232,8 @@ services:
       POSTGRES_DB: gateway
       POSTGRES_USER: gateway
       POSTGRES_PASSWORD: ${ROUTE_ACCESS_DB_PASSWORD:-}
+    depends_on:
+      route-access-env-check: { condition: service_completed_successfully }
     volumes:
       - route-access-pg:/var/lib/postgresql/data
       - ../../specs/cluster/manifests/route-access/initdb/20-schema.sql:/docker-entrypoint-initdb.d/10-schema.sql:ro
@@ -391,6 +439,16 @@ services:
       # the process.
       SPRING_CASSANDRA_REQUEST_TIMEOUT: 20s
       ROUTE_ACCESS_R2DBC_URL: "r2dbc:postgresql://gateway:${ROUTE_ACCESS_DB_PASSWORD:-}@route-access-db:5432/gateway"
+      # START GUARD (see route-access-env-check): with ROUTE_ACCESS_DB_PASSWORD empty
+      # this renders `-XX:+ROUTE_ACCESS_DB_PASSWORD_REQUIRED…`, an option the JVM does
+      # not know, so the container exits 1 at start ("Unrecognized VM option
+      # 'ROUTE_ACCESS_DB_PASSWORD_REQUIRED.see.tests/stack/gen-route-access-env.sh'").
+      # That covers the starts that skip compose's depends_on: `docker start`, the
+      # Studio's Start button and `up --no-deps` on a container a failed `up` created.
+      # Set, it renders the same text behind `-Dhugmesh.guard.`, a no-op system
+      # property. Only `:+` is used, so the password itself never reaches this
+      # variable (the JVM prints JAVA_TOOL_OPTIONS on every start).
+      JAVA_TOOL_OPTIONS: "-${ROUTE_ACCESS_DB_PASSWORD:+Dhugmesh.guard.}XX:+ROUTE_ACCESS_DB_PASSWORD_REQUIRED.see.tests/stack/gen-route-access-env.sh"
       # ── MFA ENFORCEMENT (gateway) — ON for the local dev stack ────────────────
       # The gateway is what ENFORCES MFA at route level (GatewayRouteAccessFilter
       # .decide() honours gateway_route_access.mfa_required + the privileged floor);
@@ -445,6 +503,7 @@ services:
       casdoor: { condition: service_started }
       cassandra: { condition: service_healthy }
       cassandra-init: { condition: service_completed_successfully }
+      route-access-env-check: { condition: service_completed_successfully }
       route-access-db: { condition: service_healthy }
     healthcheck:
       # /actuator/** is role-gated by the gateway's own SecurityConfig (INFRA_PATHS ->
@@ -494,6 +553,8 @@ services:
       # the measurement, the verified property name and the 20s reasoning live.
       SPRING_CASSANDRA_REQUEST_TIMEOUT: 20s
       ROUTE_ACCESS_R2DBC_URL: "r2dbc:postgresql://gateway:${ROUTE_ACCESS_DB_PASSWORD:-}@route-access-db:5432/gateway"
+      # START GUARD: the same JAVA_TOOL_OPTIONS as hugmesh-pki-gateway's (reason there).
+      JAVA_TOOL_OPTIONS: "-${ROUTE_ACCESS_DB_PASSWORD:+Dhugmesh.guard.}XX:+ROUTE_ACCESS_DB_PASSWORD_REQUIRED.see.tests/stack/gen-route-access-env.sh"
       # BFF session introspection back-channel (BffSessionAuthFilter) — same fix the
       # fe-gateway block below carries: app.bff-session.bff-base-url defaults to the
       # cluster-DNS 'http://admin-bff:8080', unresolvable in compose, so any browser
@@ -513,6 +574,7 @@ services:
       casdoor: { condition: service_started }
       cassandra: { condition: service_healthy }
       cassandra-init: { condition: service_completed_successfully }
+      route-access-env-check: { condition: service_completed_successfully }
       route-access-db: { condition: service_healthy }
       hugmesh-federation-api: { condition: service_started }
       hugmesh-api: { condition: service_started }
@@ -598,6 +660,8 @@ services:
       # DDL overrun here takes the platform front door down, not one back-end hop.
       SPRING_CASSANDRA_REQUEST_TIMEOUT: 20s
       ROUTE_ACCESS_R2DBC_URL: "r2dbc:postgresql://gateway:${ROUTE_ACCESS_DB_PASSWORD:-}@route-access-db:5432/gateway"
+      # START GUARD: the same JAVA_TOOL_OPTIONS as hugmesh-pki-gateway's (reason there).
+      JAVA_TOOL_OPTIONS: "-${ROUTE_ACCESS_DB_PASSWORD:+Dhugmesh.guard.}XX:+ROUTE_ACCESS_DB_PASSWORD_REQUIRED.see.tests/stack/gen-route-access-env.sh"
       # BFF session introspection back-channel (BffSessionAuthFilter): the gateway swaps the
       # opaque bff_ cookie for the caller's identity/roles against admin-bff. The property
       # app.bff-session.bff-base-url defaults to the cluster-DNS 'http://admin-bff:8080', which
@@ -622,6 +686,7 @@ services:
       casdoor: { condition: service_started }
       cassandra: { condition: service_healthy }
       cassandra-init: { condition: service_completed_successfully }
+      route-access-env-check: { condition: service_completed_successfully }
       route-access-db: { condition: service_healthy }
       hugmesh-admin-bff-api: { condition: service_started }
       hugmesh-host-shell: { condition: service_started }
@@ -840,6 +905,8 @@ services:
       # honest NOT_WIRED warning, runtime capabilities reported absent.
       PLATFORM_CAPABILITIES_K8S_ENABLED: "false"
       ROUTE_ACCESS_R2DBC_URL: "r2dbc:postgresql://gateway:${ROUTE_ACCESS_DB_PASSWORD:-}@route-access-db:5432/gateway"
+      # START GUARD: the same JAVA_TOOL_OPTIONS as hugmesh-pki-gateway's (reason there).
+      JAVA_TOOL_OPTIONS: "-${ROUTE_ACCESS_DB_PASSWORD:+Dhugmesh.guard.}XX:+ROUTE_ACCESS_DB_PASSWORD_REQUIRED.see.tests/stack/gen-route-access-env.sh"
       # MANAGED backing service seam: default in-stack admin-bff-db; set
       # MANAGED_ADMIN_BFF_{R2DBC,LIQUIBASE}_URL (via STACK_ENV) to a hosted RDS/Azure-PG
       # endpoint to validate managed mode locally. UNSET = byte-identical default.
@@ -896,6 +963,7 @@ services:
     depends_on:
       admin-bff-db-init: { condition: service_completed_successfully }
       admin-bff-db: { condition: service_healthy }
+      route-access-env-check: { condition: service_completed_successfully }
       route-access-db: { condition: service_healthy }
       cassandra: { condition: service_healthy }
       cassandra-init: { condition: service_completed_successfully }

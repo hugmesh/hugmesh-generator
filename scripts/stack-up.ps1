@@ -119,6 +119,41 @@ function Read-RaKey([string]$Path) {
   if ($v.Length -ge 2 -and $v[0] -eq $v[-1] -and ('"', "'") -contains [string]$v[0]) { $v = $v.Substring(1, $v.Length - 2) }
   return $v
 }
+# A SYMLINKED tests\stack\.env (one file shared by several checkouts) stays a link:
+# resolve it (through a chain of links) and replace the TARGET atomically in its own
+# directory. WriteAllLines on the link would write through it but not atomically, and
+# a delete would break every other checkout's link. LinkTarget is PowerShell 7's
+# property; Windows PowerShell 5.1 exposes the same thing as .Target.
+function Resolve-EnvTarget([string]$Path) {
+  for ($i = 0; $i -lt 40; $i++) {
+    $item = Get-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
+    if (-not $item -or $item.LinkType -ne 'SymbolicLink') { return $Path }
+    $t = if ($item.PSObject.Properties['LinkTarget']) { $item.LinkTarget } else { @($item.Target)[0] }
+    if (-not [System.IO.Path]::IsPathRooted($t)) { $t = Join-Path (Split-Path -Parent $item.FullName) $t }
+    $Path = [System.IO.Path]::GetFullPath($t)
+  }
+  throw "tests\stack\.env: too many levels of symbolic links"
+}
+function Write-EnvAtomic([string]$Target, [string[]]$Lines) {
+  $dir = Split-Path -Parent $Target
+  if (-not (Test-Path -LiteralPath $dir -PathType Container)) {
+    throw "tests\stack\.env resolves to $Target, whose directory does not exist. Nothing was written."
+  }
+  $tmp = Join-Path $dir ('.' + (Split-Path -Leaf $Target) + '.tmp.' + [guid]::NewGuid().ToString('N'))
+  try {
+    [System.IO.File]::WriteAllLines($tmp, $Lines, $Utf8NoBom)
+    if (Test-Path -LiteralPath $Target) {
+      [System.IO.File]::Replace($tmp, $Target, [NullString]::Value)
+    } else {
+      [System.IO.File]::Move($tmp, $Target)
+    }
+  } finally {
+    if (Test-Path -LiteralPath $tmp) { Remove-Item -Force -LiteralPath $tmp -ErrorAction SilentlyContinue }
+  }
+}
+$DotEnvIsLink = [bool]((Get-Item -LiteralPath $DotEnv -Force -ErrorAction SilentlyContinue).LinkType -eq 'SymbolicLink')
+$DotEnv       = Resolve-EnvTarget $DotEnv
+
 function Get-LinesWithoutRaKey([string]$Path) {
   $keep = New-Object System.Collections.Generic.List[string]
   if (-not (Test-Path $Path)) { return ,$keep }
@@ -138,7 +173,9 @@ if ($Down) {
   if ($LASTEXITCODE -eq 0 -and (Test-Path $DotEnv)) {
     $rest = Get-LinesWithoutRaKey $DotEnv
     if (@($rest | Where-Object { $_.Trim() }).Count -gt 0) {
-      [System.IO.File]::WriteAllLines($DotEnv, [string[]]$rest, $Utf8NoBom)
+      Write-EnvAtomic $DotEnv ([string[]]$rest)
+    } elseif ($DotEnvIsLink) {
+      Write-EnvAtomic $DotEnv ([string[]]@())   # shared through a link: empty it, never delete
     } else {
       Remove-Item -Force $DotEnv
     }
@@ -210,7 +247,7 @@ if (-not $routeAccessPw) {
   $lines.Add("# $how")
   $lines.Add("$RaKey=$routeAccessPw")
   $lines.Add($RaEnd)
-  [System.IO.File]::WriteAllLines($DotEnv, [string[]]$lines, $Utf8NoBom)
+  Write-EnvAtomic $DotEnv ([string[]]$lines)
   if ($how -like 'migrated*') { Remove-Item -Force -ErrorAction SilentlyContinue $LegacyEnv }
 }
 if ($routeAccessPw -notmatch '^[A-Za-z0-9._~-]+$') {

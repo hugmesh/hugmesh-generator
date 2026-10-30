@@ -14,8 +14,11 @@
 # without `-p hugmesh-local`. So every caller gets the value, not only the ones
 # that know about it: `make stack-*`, the Studio's Mesh Monitor scale button
 # (`docker compose -p hugmesh-local -f … up --scale`), a hand-run
-# `docker compose -f tests/stack/compose.local.yaml up -d`. An empty value there
-# makes every new gateway container fail to load the route table, which is RBAC.
+# `docker compose -f tests/stack/compose.local.yaml up -d`. With an empty value a
+# gateway enforces no route-access rules at all on a fresh Cassandra cache (measured,
+# hugmesh-gateway#61), so compose.local.yaml refuses to start them: its
+# route-access-env-check one-shot fails the `up`, and a JAVA_TOOL_OPTIONS start guard
+# stops the JVMs on paths that skip depends_on. This script is the fix both name.
 # Two things defeat the auto-load, and the callers that hit them pass the value
 # explicitly instead: any `--env-file X` (compose then skips .env for the main
 # file; the Makefile's m2 registry adds one) and an EMPTY ROUTE_ACCESS_DB_PASSWORD
@@ -26,7 +29,9 @@
 # keep their own compose overrides in tests/stack/.env. Every write keeps every
 # other line as it is and only adds (or, with --remove, strips) this script's
 # marked block and any ROUTE_ACCESS_DB_PASSWORD line. The file is made mode 0600
-# because it now holds a credential, and it is gitignored.
+# because it now holds a credential, and it is gitignored. A SYMLINKED .env (one file
+# shared by several checkouts) stays a symlink: the link is resolved and its TARGET is
+# replaced atomically in the target's own directory, and --remove never deletes it.
 #
 # CREATE, NEVER ROTATE. The postgres image honours POSTGRES_PASSWORD only when it
 # initialises an EMPTY data dir. `make stack-halt` -> `make stack-up` keeps the
@@ -44,7 +49,9 @@
 #      a. from the project's route-access-db CONTAINER, running or stopped, when one
 #         exists: its POSTGRES_PASSWORD is what compose last created it with. This is
 #         what makes a SECOND checkout of the repo work against a stack the first
-#         checkout started (see MULTIPLE CHECKOUTS below).
+#         checkout started (see MULTIPLE CHECKOUTS below). A container created with
+#         an EMPTY value (a compose `up` that had no key, refused by the check) says
+#         nothing about the volume and is skipped, with a warning saying so.
 #      b. otherwise the owner role's name: every volume created before 2026-10-29
 #         was initialised with it. If the volume was in fact initialised from a
 #         random value (by another checkout, whose containers are gone), this guess
@@ -101,6 +108,21 @@ BEGIN_MARK="# >>> route-access-db owner password (tests/stack/gen-route-access-e
 END_MARK="# <<< route-access-db owner password <<<"
 ME=gen-route-access-env.sh
 
+# A symlinked env file: every write goes to the link's TARGET (resolved through any
+# chain of links), so the link survives and the shared file gets the key. A plain
+# `mv tmp link` would replace the link itself with a regular file.
+ENV_IS_LINK=0
+if [ -L "${ENV_FILE}" ]; then
+  ENV_IS_LINK=1
+  target="$(readlink -f -- "${ENV_FILE}" 2>/dev/null)" || target=""
+  if [ -z "${target}" ] || [ ! -d "$(dirname -- "${target}")" ]; then
+    echo "${ME}: ${ENV_FILE} is a symlink whose target directory does not exist;" >&2
+    echo "  fix or remove the link and retry. Nothing was written." >&2
+    exit 1
+  fi
+  ENV_FILE="${target}"
+fi
+
 mode=ensure
 case "${1:-}" in
   --print) mode=print ;;
@@ -131,11 +153,12 @@ without_key() {
 
 url_safe() { case "$1" in ""|*[!A-Za-z0-9._~-]*) return 1 ;; esac; }
 
-# replace_file <content-file>: atomic, 0600, in the target's own directory.
+# replace_file <content-file>: atomic, 0600, in the target's own directory
+# (ENV_FILE is already the resolved target when the configured path is a symlink).
 replace_file() {
   local tmp
-  tmp="${ENV_FILE}.tmp.$$"
-  ( umask 077; cat "$1" > "${tmp}" )
+  tmp="$(mktemp "${ENV_FILE}.tmp.XXXXXX")"
+  ( umask 077; cat "$1" > "${tmp}" ) || { rm -f "${tmp}"; return 1; }
   chmod 600 "${tmp}"
   mv -f "${tmp}" "${ENV_FILE}"
 }
@@ -159,6 +182,11 @@ if [ "${mode}" = remove ]; then
   if grep -q '[^[:space:]]' "${rest}"; then
     replace_file "${rest}"
     echo "==> Removed ${KEY} from ${ENV_FILE} (the operator's other lines kept)"
+  elif [ "${ENV_IS_LINK}" -eq 1 ]; then
+    # Shared through a symlink: deleting the target would break every other
+    # checkout's link, and deleting the link would leave the key behind. Empty it.
+    replace_file "${rest}"
+    echo "==> Removed ${KEY} from ${ENV_FILE} (symlinked; the file is kept, now empty)"
   else
     rm -f "${ENV_FILE}"
     echo "==> Removed ${ENV_FILE} (it held only ${KEY})"
@@ -187,8 +215,13 @@ probe_volume() {
   return 2
 }
 
-# container_password -> the POSTGRES_PASSWORD this project's route-access-db
-# container (running or stopped) was created with, or nothing.
+# container_password -> sets FROM_CTR to the POSTGRES_PASSWORD this project's
+# route-access-db container (running or stopped) was created with, or ''; sets
+# CTR_EXISTS=1 when such a container exists at all. One created by a compose run that
+# had no key carries an EMPTY value, which says nothing about what the volume holds.
+# Called directly, not in $(…), so both globals survive.
+FROM_CTR=""
+CTR_EXISTS=0
 container_password() {
   local cid
   cid="$("${DOCKER}" ps -a -q \
@@ -196,8 +229,9 @@ container_password() {
     --filter "label=com.docker.compose.service=route-access-db" 2>/dev/null)" || return 0
   cid="${cid%%$'\n'*}"
   [ -n "${cid}" ] || return 0
-  "${DOCKER}" inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "${cid}" 2>/dev/null \
-    | sed -n 's/^POSTGRES_PASSWORD=//p' | tail -1 || true
+  CTR_EXISTS=1
+  FROM_CTR="$("${DOCKER}" inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "${cid}" 2>/dev/null \
+    | sed -n 's/^POSTGRES_PASSWORD=//p' | tail -1)" || FROM_CTR=""
 }
 
 val="$(read_key "${ENV_FILE}")"
@@ -217,7 +251,8 @@ if [ -z "${val}" ]; then
       exit 1
     fi
     if [ "${pv}" -eq 0 ]; then
-      from_ctr="$(container_password)"
+      container_password
+      from_ctr="${FROM_CTR}"
       if [ -n "${from_ctr}" ]; then
         val="${from_ctr}"
         how=adopted
@@ -231,9 +266,14 @@ if [ -z "${val}" ]; then
         val="${OWNER_ROLE}"
         how=adopted
         origin="adopted: volume ${VOLUME} predates this file and has no container (assumed the pre-2026-10-29 compose default)"
+        if [ "${CTR_EXISTS}" -eq 1 ]; then
+          lead="its route-access-db container was created with an EMPTY value (a compose run without this key)"
+        else
+          lead="no route-access-db container is left to read its password from"
+        fi
         {
           echo "WARNING: ${KEY} was missing from ${ENV_FILE##*/} but volume ${VOLUME} exists"
-          echo "         and no route-access-db container is left to read its password from."
+          echo "         and ${lead}."
           echo "         Assuming the compose default before 2026-10-29 (the owner role's name)."
           echo "         If ANOTHER checkout created this volume, that guess is wrong: copy"
           echo "         ${KEY} from that checkout's tests/stack/.env into this one."

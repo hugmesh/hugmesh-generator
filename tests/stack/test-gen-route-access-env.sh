@@ -23,8 +23,14 @@
 #   (5) the file is SHARED: an operator's other lines survive every write, the mode
 #       is tightened to 0600, --remove strips only this key (and deletes the file only
 #       when nothing else is left);
+#   (5b) a SYMLINKED .env stays a symlink: the target gets the key (atomically, in
+#       its own directory) and --remove never deletes the shared target;
 #   (6) compose.local.yaml reads ${ROUTE_ACCESS_DB_PASSWORD:-} in all five places and
 #       spells no route-access-db password; tests/stack/.env is gitignored;
+#   (6b) an EMPTY value fails loud: the route-access-env-check one-shot (which
+#       route-access-db and all four URL consumers depend on) exits 1 naming the
+#       generator, and the JAVA_TOOL_OPTIONS start guard makes the four JVMs refuse
+#       to start; neither ever carries the value itself;
 #   (7) the Makefile: stack-up (the target that creates containers) depends on the
 #       stack-route-access-env ensure step and the read-only targets do not;
 #       BEHAVIOURALLY a generator failure stops make stack-up before compose runs, a
@@ -129,6 +135,9 @@ if grep -q 'adopted from the existing' "${E3a}" && grep -q WARNING "${WORK}/err3
 E3u="${WORK}/ctr-unsafe.env"
 out3u="$(STUB_CONTAINER_PW='ab+cd' gen "${E3u}" 1 --print 2>/dev/null)"; rc=$?
 if [ "${rc}" -ne 0 ] && [ -z "${out3u}" ] && [ ! -e "${E3u}" ]; then ok "an unsafe container value is refused, nothing written"; else bad "an unsafe container value was adopted (rc=${rc})"; fi
+E3e="${WORK}/ctr-empty.env"
+out3e="$(STUB_CONTAINER_PW= gen "${E3e}" 1 --print 2>"${WORK}/err3e")"; rc=$?
+if [ "${rc}" -eq 0 ] && [ "${out3e}" = "${owner}" ] && grep -q 'created with an EMPTY value' "${WORK}/err3e"; then ok "a container created with an EMPTY value (a failed hand-run up) is not adopted; the warning says why"; else bad "empty-valued container: rc=${rc}, got len ${#out3e}, stderr: $(head -2 "${WORK}/err3e" | tr '\n' '|')"; fi
 E3p="${WORK}/proj.env"; : > "${WORK}/log3p"
 STUB_LOG="${WORK}/log3p" ROUTE_ACCESS_DB_PROJECT=other-proj gen "${E3p}" 1 >/dev/null 2>&1
 if grep -q 'volume inspect other-proj_route-access-pg' "${WORK}/log3p" && grep -q 'com.docker.compose.project=other-proj' "${WORK}/log3p"; then ok "ROUTE_ACCESS_DB_PROJECT pins both the volume and the container probe"; else bad "the project pin did not reach the probes: $(tr '\n' '|' < "${WORK}/log3p")"; fi
@@ -185,6 +194,30 @@ s5k="$(sha256sum < "${E5k}")"
 out5k="$(gen "${E5k}" 1 --print 2>/dev/null)"
 if [ "${out5k}" = operatorchosen1 ] && [ "$(sha256sum < "${E5k}")" = "${s5k}" ]; then ok "an operator-set valid key is used and the file is not rewritten"; else bad "an operator-set key was replaced or the file rewritten"; fi
 
+echo "-- 5b) a symlinked .env stays a symlink; the shared target is updated --"
+mkdir -p "${WORK}/shared" "${WORK}/co"
+SL_T="${WORK}/shared/real.env"; SL="${WORK}/co/.env"
+printf 'FOO=1\n' > "${SL_T}"; cp "${SL_T}" "${WORK}/real.orig"
+ln -s ../shared/real.env "${SL}"
+v5b="$(gen "${SL}" 0 --print 2>/dev/null)"; rc=$?
+if [ "${rc}" -eq 0 ] && [ -L "${SL}" ] && [ "$(readlink "${SL}")" = ../shared/real.env ]; then ok "ensure keeps .env a symlink (same relative target)"; else bad "ensure replaced the symlink (rc=${rc}, $( [ -L "${SL}" ] && echo link || echo regular-file))"; fi
+if [ "$(file_val "${SL_T}")" = "${v5b}" ] && [ "$(head -1 "${SL_T}")" = FOO=1 ] && [ "$(stat -c %a "${SL_T}")" = 600 ]; then ok "the TARGET holds the key after the operator's line, mode 0600"; else bad "target not updated: mode $(stat -c %a "${SL_T}"), first line '$(head -1 "${SL_T}")'"; fi
+if find "${WORK}/shared" "${WORK}/co" -name '*.tmp.*' | grep . >/dev/null; then bad "a temp file was left behind"; else ok "no temp file left in either directory"; fi
+if [ "$(gen "${SL}" 0 --print 2>/dev/null)" = "${v5b}" ]; then ok "a second run through the link reads the same value (never rotated)"; else bad "a second run through the link rotated the value"; fi
+gen "${SL}" 0 --remove >/dev/null 2>&1
+if [ -L "${SL}" ] && cmp -s "${SL_T}" "${WORK}/real.orig"; then ok "--remove through the link strips only the key from the target, link kept"; else bad "--remove through the link: $( [ -L "${SL}" ] && echo link || echo NOT-a-link), target: $(tr '\n' '|' < "${SL_T}")"; fi
+: > "${SL_T}"; gen "${SL}" 0 >/dev/null 2>&1; gen "${SL}" 0 --remove >/dev/null 2>&1
+if [ -L "${SL}" ] && [ -e "${SL_T}" ] && ! grep '[^[:space:]]' "${SL_T}" >/dev/null; then ok "--remove of a key-only shared target empties it, never deletes it or the link"; else bad "--remove deleted the shared target or the link, or left the key"; fi
+CH="${WORK}/co/chain.env"; ln -s .env "${CH}"
+gen "${CH}" 0 >/dev/null 2>&1
+if [ -L "${CH}" ] && [ -L "${SL}" ] && [[ "$(file_val "${SL_T}")" =~ ^[0-9a-f]{48}$ ]]; then ok "a chain of links resolves to the final target"; else bad "a chain of links was not followed"; fi
+DG="${WORK}/co/dangling.env"; ln -s "${WORK}/nowhere/x.env" "${DG}"
+gen "${DG}" 0 >/dev/null 2>&1; rc=$?
+if [ "${rc}" -ne 0 ] && [ -L "${DG}" ] && [ ! -e "${WORK}/nowhere" ]; then ok "a link into a missing directory fails (rc=${rc}) and writes nothing"; else bad "dangling link into a missing dir: rc=${rc}"; fi
+DN="${WORK}/co/new.env"; ln -s ../shared/new.env "${DN}"
+gen "${DN}" 0 >/dev/null 2>&1; rc=$?
+if [ "${rc}" -eq 0 ] && [ -L "${DN}" ] && [ -f "${WORK}/shared/new.env" ]; then ok "a link to a not-yet-existing file creates the target, link kept"; else bad "link to a new file: rc=${rc}"; fi
+
 echo "-- 6) compose.local.yaml spells no route-access-db password --"
 n_ref="$(grep -c '\${ROUTE_ACCESS_DB_PASSWORD:-}' "${COMPOSE}")"
 if [ "${n_ref}" -eq 5 ]; then ok "5 references to \${ROUTE_ACCESS_DB_PASSWORD:-} (POSTGRES_PASSWORD + 4 gateway URLs)"; else bad "${n_ref} references, want 5"; fi
@@ -207,6 +240,60 @@ for f in tests/stack/.env tests/stack/.route-access-db.env; do
   if git -C "${REPO}" check-ignore -q "${f}"; then ok "${f} is gitignored"; else bad "${f} is NOT gitignored"; fi
 done
 if grep -q 'ROUTE_ACCESS_DB_ENV:-${HERE}/.env}' "${GEN}"; then ok "the generator's default file is tests/stack/.env (compose's auto-loaded file)"; else bad "the generator does not default to tests/stack/.env"; fi
+
+echo "-- 6b) an EMPTY value fails loud instead of running the gateways without it --"
+python3 - "${COMPOSE}" "${WORK}/check.sh" > "${WORK}/loud.kv" <<'PY'
+import re, sys
+s = open(sys.argv[1], encoding="utf-8").read()
+def block(name):
+    m = re.search(r"\n  " + re.escape(name) + r":\n(.*?)(?=\n  [A-Za-z0-9][A-Za-z0-9_.-]*:\n|\nvolumes:)", s, re.S)
+    return m.group(1) if m else ""
+# Code lines only: the comment block above the NEXT service sits inside this span.
+chk = "\n".join(l for l in block("route-access-env-check").splitlines()
+                if not l.lstrip().startswith("#"))
+print("check=" + ("yes" if chk else "no"))
+print("restart_no=" + ("yes" if re.search(r'^    restart:\s*"no"', chk, re.M) else "no"))
+print("set_only=" + ("yes" if "ROUTE_ACCESS_DB_PASSWORD_SET: ${ROUTE_ACCESS_DB_PASSWORD:+yes}" in chk
+                     and "${ROUTE_ACCESS_DB_PASSWORD:-" not in chk
+                     and "${ROUTE_ACCESS_DB_PASSWORD}" not in chk else "no"))
+names = re.findall(r"^  ([A-Za-z0-9][A-Za-z0-9_.-]*):\s*$", s, re.M)
+consumers = sorted(n for n in set(names) if "ROUTE_ACCESS_R2DBC_URL:" in block(n))
+print("consumers=" + ",".join(consumers))
+dep = "route-access-env-check: { condition: service_completed_successfully }"
+print("missing_dep=" + ",".join(n for n in consumers + ["route-access-db"] if dep not in block(n)))
+guard = ('JAVA_TOOL_OPTIONS: "-${ROUTE_ACCESS_DB_PASSWORD:+Dhugmesh.guard.}'
+         'XX:+ROUTE_ACCESS_DB_PASSWORD_REQUIRED.see.tests/stack/gen-route-access-env.sh"')
+print("missing_guard=" + ",".join(n for n in consumers if guard not in block(n)))
+print("guards=" + str(s.count(guard)))
+print("leaky=" + str(sum(1 for l in s.splitlines()
+                         if "JAVA_TOOL_OPTIONS:" in l and re.search(r"\$\{ROUTE_ACCESS_DB_PASSWORD(:?-|\})", l))))
+m = re.search(r"\n    command:\n      - \|\n((?:        [^\n]*\n)+)", chk)
+body = "".join(l[8:] + "\n" for l in (m.group(1).splitlines() if m else []))
+open(sys.argv[2], "w", encoding="utf-8").write(body.replace("$$", "$"))
+PY
+kv() { sed -n "s/^$1=//p" "${WORK}/loud.kv"; }
+if [ "$(kv check)" = yes ] && [ "$(kv restart_no)" = yes ]; then ok "a route-access-env-check one-shot (restart: \"no\") exists"; else bad "no route-access-env-check one-shot (check=$(kv check), restart_no=$(kv restart_no))"; fi
+if [ "$(kv set_only)" = yes ]; then ok "the check only sees whether the value is set (:+), never the value"; else bad "the check service can see the password value"; fi
+if [ "$(kv consumers)" = "hugmesh-admin-bff-api,hugmesh-be-gateway,hugmesh-fe-gateway,hugmesh-pki-gateway" ]; then ok "the four ROUTE_ACCESS_R2DBC_URL consumers are found"; else bad "consumers found: '$(kv consumers)'"; fi
+if [ -z "$(kv missing_dep)" ]; then ok "route-access-db and all four consumers depend on the check completing"; else bad "missing the check dependency: $(kv missing_dep)"; fi
+if [ -z "$(kv missing_guard)" ] && [ "$(kv guards)" = 4 ]; then ok "all four consumers carry the JAVA_TOOL_OPTIONS start guard"; else bad "start guard missing on: '$(kv missing_guard)' ($(kv guards) guards)"; fi
+if [ "$(kv leaky)" = 0 ]; then ok "no JAVA_TOOL_OPTIONS can carry the password (only :+ is used)"; else bad "$(kv leaky) JAVA_TOOL_OPTIONS line(s) interpolate the value itself"; fi
+ck_out="$(ROUTE_ACCESS_DB_PASSWORD_SET= sh "${WORK}/check.sh" 2>&1)"; rc=$?
+if [ "${rc}" -eq 1 ] && grep -F 'bash tests/stack/gen-route-access-env.sh' <<<"${ck_out}" >/dev/null; then ok "the check's script, value EMPTY: exits 1 and names the generator command"; else bad "check script with an empty value: rc=${rc}, out: $(head -2 <<<"${ck_out}" | tr '\n' '|')"; fi
+ROUTE_ACCESS_DB_PASSWORD_SET=yes sh "${WORK}/check.sh" >/dev/null 2>&1; rc=$?
+if [ "${rc}" -eq 0 ]; then ok "the check's script, value set: exits 0"; else bad "check script with a value: rc=${rc}"; fi
+if docker compose version >/dev/null 2>&1; then
+  # compose renders without a daemon. Empty: the four consumers get the failing JVM
+  # option. Set: the no-op property, and the value reaches neither guard.
+  r_empty="$(cd "${WORK}" && ROUTE_ACCESS_DB_PASSWORD= docker compose -p ra-guard-test -f "${COMPOSE}" config 2>/dev/null)"
+  r_set="$(cd "${WORK}" && ROUTE_ACCESS_DB_PASSWORD=feedc0de0123 docker compose -p ra-guard-test -f "${COMPOSE}" config 2>/dev/null)"
+  n_bad="$(grep -c 'JAVA_TOOL_OPTIONS: -XX:+ROUTE_ACCESS_DB_PASSWORD_REQUIRED' <<<"${r_empty}")"
+  n_ok="$(grep -c 'JAVA_TOOL_OPTIONS: -Dhugmesh.guard.XX:+ROUTE_ACCESS_DB_PASSWORD_REQUIRED' <<<"${r_set}")"
+  if [ "${n_bad}" = 4 ] && [ "${n_ok}" = 4 ]; then ok "compose renders the failing JVM option when empty (4) and the no-op property when set (4)"; else bad "rendered guards: empty ${n_bad}/4, set ${n_ok}/4"; fi
+  if grep -E 'JAVA_TOOL_OPTIONS|ROUTE_ACCESS_DB_PASSWORD_SET' <<<"${r_set}" | grep -F feedc0de0123 >/dev/null; then bad "the value leaked into JAVA_TOOL_OPTIONS or the check"; else ok "the set value reaches neither JAVA_TOOL_OPTIONS nor the check"; fi
+else
+  skip "docker compose is not installed: the guard was parsed, not rendered"
+fi
 
 echo "-- 7) Makefile wiring --"
 MK="${REPO}/Makefile"
@@ -342,6 +429,21 @@ EOF
   rm -f "${SD}/.env"
   o="$(pwsh -NoProfile -File "${WORK}/harness.ps1" -StackDir "${SD}" -Mode exists 2>&1)"
   if grep -qx "PW=${owner}" <<<"${o}"; then ok "pwsh: no container left -> the pre-2026-10-29 default"; else bad "pwsh role-name adoption: $(head -3 <<<"${o}" | tr '\n' '|')"; fi
+  # A symlinked .env (shared by checkouts): the TARGET gets the key, the link survives,
+  # -Down strips only the key and empties (never deletes) a key-only shared target.
+  rm -f "${SD}/.env"; mkdir -p "${WORK}/ps-shared"
+  printf '# shared\nPUBLIC_HOST_PORT=9999\n' > "${WORK}/ps-shared/real.env"; cp "${WORK}/ps-shared/real.env" "${WORK}/ps-shared.orig"
+  ln -s ../ps-shared/real.env "${SD}/.env"
+  o="$(pwsh -NoProfile -File "${WORK}/harness.ps1" -StackDir "${SD}" -Mode absent 2>&1)"
+  pv="$(file_val "${WORK}/ps-shared/real.env")"
+  if [ -L "${SD}/.env" ] && [ "$(readlink "${SD}/.env")" = ../ps-shared/real.env ] && [[ "${pv}" =~ ^[0-9a-f]{48}$ ]] && grep -qx "PW=${pv}" <<<"${o}"; then ok "pwsh: a symlinked .env stays a link and its target gets the key"; else bad "pwsh symlink: $( [ -L "${SD}/.env" ] && echo link || echo NOT-a-link), $(head -3 <<<"${o}" | tr '\n' '|')"; fi
+  if find "${SD}" "${WORK}/ps-shared" -name '*.tmp.*' | grep . >/dev/null; then bad "pwsh left a temp file behind"; else ok "pwsh leaves no temp file"; fi
+  pwsh -NoProfile -File "${WORK}/harness.ps1" -StackDir "${SD}" -Mode absent -Down >/dev/null 2>&1
+  if [ -L "${SD}/.env" ] && cmp -s <(tr -d '\r' < "${WORK}/ps-shared/real.env") "${WORK}/ps-shared.orig"; then ok "pwsh -Down through the link strips only the key, link kept"; else bad "pwsh -Down through the link: $( [ -L "${SD}/.env" ] && echo link || echo NOT-a-link)"; fi
+  : > "${WORK}/ps-shared/real.env"
+  pwsh -NoProfile -File "${WORK}/harness.ps1" -StackDir "${SD}" -Mode absent >/dev/null 2>&1
+  pwsh -NoProfile -File "${WORK}/harness.ps1" -StackDir "${SD}" -Mode absent -Down >/dev/null 2>&1
+  if [ -L "${SD}/.env" ] && [ -e "${WORK}/ps-shared/real.env" ] && ! grep '[^[:space:]]' "${WORK}/ps-shared/real.env" >/dev/null; then ok "pwsh -Down of a key-only shared target empties it, never deletes it"; else bad "pwsh -Down deleted the shared target or the link, or left the key"; fi
 else
   skip "pwsh is not installed: stack-up.ps1's block was only grepped, not run"
 fi

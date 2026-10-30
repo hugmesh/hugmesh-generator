@@ -2172,7 +2172,7 @@ stack-certs: ## mint the per-machine TLS CA + leaf for the https front door (ide
 # Ensure tests/stack/.env holds ROUTE_ACCESS_DB_PASSWORD (see STACK_ROUTE_ACCESS_ENV).
 # A prerequisite of stack-up, the target that creates containers: its exit status is
 # what stops compose from creating them with an empty route-access-db password.
-stack-route-access-env:
+stack-route-access-env: ## ensure tests/stack/.env holds ROUTE_ACCESS_DB_PASSWORD (create-if-missing; stack-up runs it first)
 	@bash tests/stack/gen-route-access-env.sh
 
 stack-build: stack-clone stack-certs stack-m2-check $(STACK_SOCIAL_DEP) ## build every service from its cloned repo (no run)

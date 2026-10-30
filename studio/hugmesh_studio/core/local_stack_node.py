@@ -1079,7 +1079,7 @@ class LocalStackNode:
             env["ROUTE_ACCESS_DB_PROJECT"] = project
         try:
             r = subprocess.run(["bash", script], cwd=self.generator_dir, env=env,
-                               capture_output=True, text=True, timeout=timeout)
+                               capture_output=True, text=True, **proc_text.TEXT_IO, timeout=timeout)
         except (OSError, subprocess.SubprocessError) as e:
             return False, f"{type(e).__name__}: {e}"
         err = (r.stderr or "").strip()

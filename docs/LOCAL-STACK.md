@@ -213,10 +213,11 @@ docker compose -f tests\stack\compose.local.yaml up -d
 (`ROUTE_ACCESS_DB_PASSWORD=<random hex>`); it is gitignored and per checkout, and compose
 loads it by itself for `-f tests\stack\compose.local.yaml`. `scripts/stack-up.ps1` and
 `bash tests/stack/gen-route-access-env.sh` write that one key (any other line you keep in
-the file stays). Run one of them before the first hand-run `up`: without the key a new
-route-access-pg volume refuses to initialise and the gateways cannot load their route
-table. If you add `--env-file <other>` to a compose call, also pass
-`--env-file tests\stack\.env`: compose skips `.env` once any `--env-file` is given.
+the file stays). Run one of them before the first hand-run `up`: without the key `up`
+stops with `service "route-access-env-check" didn't complete successfully: exit 1`
+(see "Without the key, `up` refuses" below). If you add `--env-file <other>` to a
+compose call, also pass `--env-file tests\stack\.env`: compose skips `.env` once any
+`--env-file` is given.
 
 ### Windows gotchas (handled)
 
@@ -613,6 +614,39 @@ paths, not a 404).
   on failure. It is never rotated, because the postgres image only reads
   `POSTGRES_PASSWORD` when it initialises an empty volume: `make stack-halt` keeps both,
   `make stack-down` drops the volume and then strips the key.
+- **Without the key, `up` refuses; it does not run the gateways without a password.**
+  What a gateway does with an EMPTY route-access-db password, measured 2026-10-29 on
+  the hugmesh-gateway image this stack builds (route-access code identical to main):
+  on an EXISTING route-access-pg volume `route-access-db` starts and is healthy (postgres
+  reads `POSTGRES_PASSWORD` only at initdb), every gateway's login is rejected, and the
+  gateway neither refuses to start nor reports unhealthy. Its rules then come from the
+  Cassandra read-cache: when that cache is EMPTY (a fresh cassandra volume) the empty
+  result REPLACES the built-in seed, and a plain signed-in user is forwarded to
+  `/bff/admin/**`, `/admin/**`, `/mod/**` and every other governed path (fail OPEN);
+  when it holds rows from an earlier good run, that stale snapshot is enforced. So
+  compose must not start them. Two guards in `compose.local.yaml`:
+  - the `route-access-env-check` one-shot exits 1 when the value is empty, and
+    `route-access-db` plus the four `ROUTE_ACCESS_R2DBC_URL` consumers (three gateways
+    and admin-bff-api) depend on it completing. A hand-run `up` therefore fails with
+    `service "route-access-env-check" didn't complete successfully: exit 1` and starts
+    none of them. `up -d` prints only that line; the fix is in
+    `docker compose -f tests/stack/compose.local.yaml logs route-access-env-check`:
+    run `bash tests/stack/gen-route-access-env.sh`, then the same `up` again (it
+    recreates the containers with the value). A failed `up` against a RUNNING stack
+    has already recreated `route-access-db` and those four services by then, so they
+    are left created but stopped until that second `up`. When the generator later
+    finds such a container it ignores its empty value and says so;
+  - `docker start`, the Studio's Start button and `up --no-deps` skip `depends_on`.
+    For those, the four consumers carry `JAVA_TOOL_OPTIONS` that, with an empty value,
+    names a JVM option that does not exist, so the container exits 1 at once with
+    `Unrecognized VM option 'ROUTE_ACCESS_DB_PASSWORD_REQUIRED.see.tests/stack/gen-route-access-env.sh'`.
+    With a value it is a no-op `-Dhugmesh.guard.…` property. Neither guard ever sees
+    the password itself (both use `${ROUTE_ACCESS_DB_PASSWORD:+…}`).
+  `docker compose ps`, `logs`, `exec` and `down` keep working with the value empty (a
+  required `${ROUTE_ACCESS_DB_PASSWORD:?}` would have broken all four). The first
+  `make stack-up` after this change recreates the three gateways and admin-bff-api
+  once (their environment gained `JAVA_TOOL_OPTIONS`); `route-access-db` is not
+  recreated. The gateway defect itself is hugmesh-gateway#61.
 - **A stack created before 2026-10-29 keeps working.** Its route-access-pg volume was
   initialised with the old compose default. When the key is missing and that volume
   exists, the generator adopts the password the project's `route-access-db` container
