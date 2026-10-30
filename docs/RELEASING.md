@@ -71,7 +71,7 @@ independently, so a cut is "each repository's current beta, released as its stab
 | `--studio <version>` / `--studio next` / `--no-studio` | release the Studio through `scripts/release-studio.sh` (see below; beta only for now) |
 | `--only <repo>` (repeatable) | act on these repositories only; every repository is still checked, and a stage with none of them is skipped |
 | `--from <phase>` | resume at a phase (re-running also skips DONE work by itself) |
-| `--expect <repo>=<version>` (repeatable) | refuse that repository unless main's version file says exactly this |
+| `--expect <repo>=<version>` (repeatable) | refuse that repository unless the version this run would release is exactly this (beta: main's version file; stable: the computed `X.Y.Z`) |
 | `--urls` | only list the packages that are not public yet, with their settings pages |
 
 ## Where versions come from, and what each state means
@@ -448,5 +448,5 @@ The rest already handles a plain `X.Y.Z`: `release_version.py` accepts it and
 - a mutation battery over those guards, beta and stable. Each guard is broken in a copy
   of the script, and the check that covers it must go red.
 
-It runs in the pre-merge `shell suites (debian/python)` job and in GitLab's
+It runs in the pre-merge `shell suites (debian/python, release)` job and in GitLab's
 `lint:release-beta`.
