@@ -10,6 +10,9 @@ They package **the same code**. Nothing is added or removed for a packaged build
 ["Cutting a release"](#cutting-a-release) below explains what it does and the one
 other way (a button in Actions). The first beta, `0.3.0-beta.1`, shipped on
 2026-10-22.
+A whole-org beta release (every library and image, then the Studio, then the site) calls
+this same script from `scripts/release-beta.sh --studio <version>`; see
+[`RELEASING.md`](RELEASING.md).
 
 | Artifact | Platform | Built by |
 |---|---|---|

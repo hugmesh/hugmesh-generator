@@ -2235,6 +2235,27 @@ lint:docs-command-coverage:
         - Makefile
         - tests/scripts/test-docs-command-coverage.sh
 
+# The one-command org beta release (scripts/release-beta.sh, docs/RELEASING.md),
+# executed against a recording gh stub: a dry run makes zero write calls, versions
+# parse from every version-file kind, DONE/READY/REFUSE/NEEDS-BUMP classification,
+# the --only fix, the tag-SHA re-check when main moves, the order of a full --apply,
+# and a four-mutation battery over those guards. bash + python3 + jq; no network.
+lint:release-beta:
+  stage: lint
+  image: debian:stable-slim
+  tags: [hugmesh-x86]
+  before_script:
+    - apt-get update -qq && apt-get install -y --no-install-recommends python3 jq >/dev/null
+  script:
+    - bash tests/scripts/test-release-beta.sh
+  rules:
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+    - changes:
+        - scripts/release-beta.sh
+        - scripts/release/repos.tsv
+        - scripts/release-studio.sh
+        - tests/scripts/test-release-beta.sh
+
 # ARM cross-dracut helper (scripts/_dracut-cross-lib.sh): the --encrypt-root
 # qemu-aarch64 binfmt registration + the availability predicate the fail-fast
 # preflight evaluates. Proves preflight_ok is FALSE when qemu-aarch64 is

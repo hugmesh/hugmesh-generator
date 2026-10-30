@@ -889,7 +889,20 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # and with ONLY shell-suites.yml's tests/stack/test-route-access-reconcile.sh SUITES line
 # removed: '202 of 244' + check 7 red naming that suite — so the +1/+1 is this branch's
 # one suite and nothing else.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-203}"
+# 203 -> 204 (denominator 244 -> 245, ungated SET unchanged at 41) on 2026-10-29 for the
+# one-command org beta release: tests/scripts/test-release-beta.sh (scripts/release-beta.sh
+# against a recording gh stub, with a four-mutation battery) landed on disk AND in
+# shell-suites.yml's DEBIAN job (python:3.12-slim: bash + python3 + jq, GNU date) and in
+# .gitlab-ci.yml's lint:release-beta. MEASURED by RUNNING this file on the branch over
+# origin/main 17a2ee3a (which carries #830's 203 of 244 above), GUARD_PREMERGE=0:
+#     204 of 245 suites are named by a pull_request-triggered workflow
+#     PASS the ungated SET matches its pin exactly (41 suite(s))
+# and with the suite on disk but its two CI lines absent: '203 of 245' + check 3 and
+# check 7 red naming it -- so the +1/+1 is this suite and nothing else.
+# Any other branch that also raises this line from 203 conflicts with this one by
+# construction: whichever lands second re-measures (expected 205 if both add one gated
+# suite) per the doctrine above, never keeps either number.
+PREMERGE_BASELINE="${GUARD_PREMERGE:-204}"
 
 # 182 -> 192 (denominator 205 -> 215) on 2026-09-30 for #385: the census gained a
 # THIRD spelling, bare `tests/*.sh` at depth 1, and the ten suites it exposed were
