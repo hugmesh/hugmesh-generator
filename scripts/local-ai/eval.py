@@ -14,7 +14,8 @@ the FINAL text is scored (the model is sent only what a person would type: an
 ``ACTION (...):`` setup note is stripped first): the answer plus its footer, or for a proposal the validated
 card text (or the refusal).
 
-Matching: case-insensitive substring. A must_mention starting with ``{`` is compared to
+Matching: case-insensitive substring; must_not skips the Studio's own ``Sources:`` line
+(doc headings, never model text). A must_mention starting with ``{`` is compared to
 ``json.dumps(json.loads(block), sort_keys=True)`` of the first ```change block; ``#hex``
 means a valid colour per brand_look.check_value whose hue is 255-300 and lightness is
 under 45 %; ````diff`` means a diff that parses and applies cleanly to the planted
@@ -186,7 +187,10 @@ def score(item, final, answer, fx, where):
         else:
             ok = want.lower() in low
         (hits if ok else misses).append(want)
-    bad = [w for w in item.get("must_not", []) if w.lower() in low]
+    # must_not is about what the model said (and the card): the Studio's own Sources line
+    # lists doc headings ("Target hardware — standalone and cloud") and is never model text
+    said = "\n".join(ln for ln in final.splitlines() if not ln.startswith("Sources: ")).lower()
+    bad = [w for w in item.get("must_not", []) if w.lower() in said]
     if action and item["question"].startswith("ACTION (code edit"):
         valid_ok = diff_ok
     elif action and not any(w.startswith("```") for w in item.get("must_mention", [])):
