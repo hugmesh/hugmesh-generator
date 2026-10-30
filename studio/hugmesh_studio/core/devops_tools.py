@@ -27,6 +27,8 @@ import shutil
 import stat
 import urllib.request
 
+from . import platform_info
+
 # Pinned upstream releases (both publish a per-artifact sha256 alongside).
 KIND_VERSION = "v0.23.0"
 KUBECTL_VERSION = "v1.30.2"
@@ -92,6 +94,9 @@ def install(generator_dir: str, tools: tuple[str, ...] | None = None,
         say(f"[devops-tools] FAILED: {msg}")
         return False, msg
 
+    blocker = platform_info.native_windows_blocker("The DevOps (Kubernetes) lane")
+    if blocker:
+        return fail(blocker)
     arch = _arch()
     if arch is None:
         return fail(f"Unsupported machine architecture "

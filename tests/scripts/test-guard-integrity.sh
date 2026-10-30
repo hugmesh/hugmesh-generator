@@ -845,6 +845,24 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # guard + the two games suites above): MEASURED by RUNNING this file on the merged tree:
 #     201 of 243 suites are named by a pull_request-triggered workflow
 #
+# 201 -> 202 (denominator 243 -> 243) on 2026-10-29 for tests/boot/test-gpu-worker-
+# node-labels.sh: it landed in 1abc9bf3 / 2ab3325f (2026-10-22) named by NOTHING —
+# check 3 and 7b both red on main — and it needs a docker daemon (it runs the real
+# keys-provision engine inside a kindest/node container), which none of the four
+# container jobs in shell-suites.yml has. It is now named by a NEW bare-runner job
+# there (`docker`, ubuntu-latest, no `container:`) and post-merge by .gitlab-ci.yml's
+# lint:gpu-worker-node-labels on the privileged runner. RUN on a Linux host with
+# docker and the pinned image before wiring: 17 passed / 0 failed, rc=0. MEASURED by
+# RUNNING this file: on the branch over origin/main 398b2327 it printed
+#     200 of 241 suites are named by a pull_request-triggered workflow
+# and, after merging origin/main 2b13b2f9 (which carries #824's two games suites and
+# its 201 of 243 above) into the branch, the merged tree printed
+#     202 of 243 suites are named by a pull_request-triggered workflow
+#     PASS the ungated SET matches its pin exactly (41 suite(s))
+# — '201 of 243' + check 3/7b red again with the one SUITES line removed. This line
+# CONFLICTED with #824's (both raised it from 199); resolved by re-measuring, per the
+# doctrine above, not by keeping either number.
+#
 # 201 -> 202 (denominator 243 -> 244) on 2026-10-29 for tests/stack/test-route-access-
 # reconcile.sh: the guard over the local stack's route-access reconcile (`make stack-up`
 # now re-applies specs/cluster/manifests/route-access/initdb/20-schema.sql to the running
@@ -863,7 +881,15 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # total, this branch +1 gated / +1 total — so the merged tree must be re-measured and is
 # expected to read 203 of 244; this line is a conflict with #826 by construction, resolved
 # by re-measuring per the doctrine above, never by keeping either number.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-202}"
+# 202 -> 203 (denominator 243 -> 244) in the merge of origin/main 31d76824 (which carries
+# #826's 202 of 243 above) into this branch. MEASURED by RUNNING this file on the merged
+# tree with GUARD_PREMERGE=0:
+#     203 of 244 suites are named by a pull_request-triggered workflow
+#     PASS the ungated SET matches its pin exactly (41 suite(s))
+# and with ONLY shell-suites.yml's tests/stack/test-route-access-reconcile.sh SUITES line
+# removed: '202 of 244' + check 7 red naming that suite — so the +1/+1 is this branch's
+# one suite and nothing else.
+PREMERGE_BASELINE="${GUARD_PREMERGE:-203}"
 
 # 182 -> 192 (denominator 205 -> 215) on 2026-09-30 for #385: the census gained a
 # THIRD spelling, bare `tests/*.sh` at depth 1, and the ten suites it exposed were

@@ -6,7 +6,7 @@
 # (operator-supplied image; SKIP-clean when absent so CI stays green).
 #
 # Enumeration is the SAME single source of truth every channel uses:
-# tests/build-matrix/matrix.tsv (150 cells; check.sh already walks it). We reuse
+# tests/build-matrix/matrix.tsv (170 cells today; check.sh already walks it). We reuse
 # check.sh's exact `while IFS=$'\t' read -r platform role env board flavor desktop`
 # parse so a new row is auto-covered. The JOB-channel pseudo-roles (rpi5
 # standalone-desktop; ARM flavor=standalone) are translated to their real
@@ -20,7 +20,7 @@
 #                        otherwise SKIP-clean (exit 0). Per row, a missing artifact is a
 #                        per-row SKIP (exit-0 accounting), never a FAIL.
 #
-# SCALE: 150 cells under TCG is many hours and the ARM rows have no KVM on an x86 host;
+# SCALE: 170 cells under TCG is many hours and the ARM rows have no KVM on an x86 host;
 # keep the full walk nightly/operator-only and use --only / MATRIX_FILTER for a subset.
 # EXPERIMENTAL boards (frite/jetson/orangepi) may be INCONCLUSIVE under -M virt (no
 # vendor firmware) — those are recorded as soft-pass, not FAIL.

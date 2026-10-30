@@ -1287,7 +1287,7 @@ if len(sys.argv) > 2 and os.path.isfile(sys.argv[2]):
 # exists to make impossible.
 # ── the runbook's quoted ROW COUNTS, read back against the replayed seed ─────────
 # The `verify` / `floor` blocks above are RUN, but the sentences that quote what they
-# return ("(14 rows)", "14 flipped, 15 carrying the floor") sit in §9 and the header,
+# return ("(16 rows)", "16 flipped, 17 carrying the floor") sit in §9 and the header,
 # away from the marker, and were pure prose. Decision 80b took the flip from 10 rows to
 # 14 (floor 11 -> 15) and §9 C3 / phase F / the 2026-10-14 header kept saying 10 and 11,
 # so an operator running the checklist's own C3 would see `(14 rows)` against a promise
@@ -2932,9 +2932,9 @@ s = s.replace(a, "    WHERE (url_pattern LIKE %s\n        OR url_pattern LIKE %s
     repr("/bff/admin%"), repr("/bff/superadmin%"), repr("/bff/%/admin/%"), repr("/bff/%/superadmin/%")), 1)'
 
 # Decision 80b: the runbook's verify query must carry the per-service arms too, or
-# it reports 10 of the 14 flipped rows and an operator reads the four consoles as
-# un-gated. Dropping them must move DOC_SQL_BAD.
-nd "the runbook's verification query loses the per-service console arms (it would show 10 of the 14 rows and hide the four consoles)" DOC_SQL_BAD 0 \
+# it reports 10 of the 16 flipped rows and an operator reads the six per-service
+# consoles (forum, wiki x2, owncast, tube x2) as un-gated. Dropping them must move DOC_SQL_BAD.
+nd "the runbook's verification query loses the per-service console arms (it would show 10 of the 16 rows and hide the six per-service consoles)" DOC_SQL_BAD 0 \
    'a = "\n        OR url_pattern LIKE %s\n        OR url_pattern LIKE %s)\n    ORDER BY 1, 2, 3;" % (repr("/bff/%/admin/%"), repr("/bff/%/superadmin/%"))
 anchor(a)
 s = s.replace(a, ")\n    ORDER BY 1, 2, 3;", 1)'
@@ -2945,22 +2945,23 @@ anchor(a)
 s = s.replace(a, "", 1)'
 
 # The row counts the runbook QUOTES for verify / floor (header, §9 C3, phase F) are read
-# back against the replayed seed. Each control reverts one of them to its pre-80b value
-# (10 / 11) or deletes the sentence: both must move DOC_COUNT_BAD.
-nd "the §9 C3 expectation reverts to (10 rows) for verify (a correct cluster would read as a failed seed)" DOC_COUNT_BAD 0 \
-   'a = "Expect `(14 rows)` for `verify`"
+# back against the replayed seed. Each control reverts one of them to its pre-tube value
+# (14 / 15: before the two /bff/tube/admin/... rows of 2026-10-15) or deletes the
+# sentence: both must move DOC_COUNT_BAD.
+nd "the §9 C3 expectation reverts to (14 rows) for verify (a correct cluster would read as a failed seed)" DOC_COUNT_BAD 0 \
+   'a = "Expect `(16 rows)` for `verify`"
 anchor(a)
-s = s.replace(a, "Expect `(10 rows)` for `verify`", 1)'
-nd "the phase F floor count reverts to (11 rows)" DOC_COUNT_BAD 0 \
-   'a = "block (still `(15 rows)`"
+s = s.replace(a, "Expect `(14 rows)` for `verify`", 1)'
+nd "the phase F floor count reverts to (15 rows)" DOC_COUNT_BAD 0 \
+   'a = "block (still `(17 rows)`"
 anchor(a)
-s = s.replace(a, "block (still `(11 rows)`", 1)'
-nd "the header's flipped + deny count reverts to 10 + 1" DOC_COUNT_BAD 0 \
-   'a = "(14 flipped + 1 deny row"
+s = s.replace(a, "block (still `(15 rows)`", 1)'
+nd "the header's flipped + deny count reverts to 14 + 1" DOC_COUNT_BAD 0 \
+   'a = "(16 flipped + 1 deny row"
 anchor(a)
-s = s.replace(a, "(10 flipped + 1 deny row", 1)'
+s = s.replace(a, "(14 flipped + 1 deny row", 1)'
 nd "the §9 C3 sentence is reworded so its counts are no longer read (a vanished claim is reported, not skipped)" DOC_COUNT_BAD 0 \
-   'a = "seeded rules are what §1.2 says** — 14 flipped, 15 carrying the floor."
+   'a = "seeded rules are what §1.2 says** — 16 flipped, 17 carrying the floor."
 anchor(a)
 s = s.replace(a, "seeded rules are what section 1.2 says** — see below.", 1)'
 

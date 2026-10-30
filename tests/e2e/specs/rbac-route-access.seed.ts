@@ -12,8 +12,8 @@
 // /bff/user/** profile and password surface the real gateway ALLOWs.
 // Nothing is copied by hand any more.
 //
-// Rows: 162 total — hugmesh-be-gateway 60, hugmesh-fe-gateway 89, hugmesh-pki-gateway 4, hugmesh-superadmin-gateway 9
-// Pattern shapes: literal 24, prefix-glob 135, root-glob 1, segment-glob 2
+// Rows: 164 total — hugmesh-be-gateway 60, hugmesh-fe-gateway 91, hugmesh-pki-gateway 4, hugmesh-superadmin-gateway 9
+// Pattern shapes: literal 24, prefix-glob 137, root-glob 1, segment-glob 2
 //
 // Every seed row is UNSCOPED (no domain) and UNPINNED (no casdoor_user):
 // the INSERT names exactly (gateway, url_pattern, role, allow), which the
@@ -173,6 +173,8 @@ export const ROUTE_ACCESS_SEED: readonly RouteRule[] = [
   { gateway: 'hugmesh-fe-gateway', urlPattern: '/bff/owncast/**', role: 'ROLE_OWNCAST', allow: true },
   { gateway: 'hugmesh-fe-gateway', urlPattern: '/bff/tube/**', role: 'ROLE_TUBE', allow: true },
   { gateway: 'hugmesh-be-gateway', urlPattern: '/tube/content/**', role: 'ROLE_TUBE', allow: true },
+  { gateway: 'hugmesh-fe-gateway', urlPattern: '/bff/tube/admin/access/**', role: 'ROLE_ADMIN', allow: true },
+  { gateway: 'hugmesh-fe-gateway', urlPattern: '/bff/tube/admin/storage-budget/**', role: 'ROLE_ADMIN', allow: true },
   { gateway: 'hugmesh-fe-gateway', urlPattern: '/wiki/**', role: 'ROLE_WIKI', allow: true },
   { gateway: 'hugmesh-fe-gateway', urlPattern: '/owncast/**', role: 'ROLE_OWNCAST', allow: true },
   { gateway: 'hugmesh-fe-gateway', urlPattern: '/tube/**', role: 'ROLE_TUBE', allow: true },

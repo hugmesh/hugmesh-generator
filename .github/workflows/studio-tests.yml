@@ -243,3 +243,58 @@ jobs:
           assert meta['tool']['setuptools']['dynamic']['version']['attr'] == 'hugmesh_studio.__version__'
           print('pyproject OK; version', version)
           "
+
+  windows:
+    # The MSI runs the Studio NATIVELY on Windows, and until 2026-10-29 no test had ever
+    # run there. The first run of the 0.3.0-beta.1 MSI on Windows 11 found: every run log
+    # written as a 0-byte *-FAILED.log (an unguarded os.fchmod), DER keys corrupted
+    # LF->CRLF (os.open without O_BINARY), crashed builds stuck "running" forever
+    # (os.kill(pid, 0) is not a probe on Windows), local-mesh and DevOps verbs failing
+    # with "make is required", every CLI flag printing nothing (a windowed exe has
+    # no stdout), and --print-specs itself exiting 2 because the default image login
+    # was the raw Windows account name ("Magus"), which the login allowlist refuses.
+    #
+    # NAMED FILES, NOT THE SUITE. The suite assumes POSIX throughout (bash fixtures,
+    # mode bits, os.geteuid at import) and does not finish on Windows: a test that calls
+    # os.kill(pid, 0) there sends Ctrl+C to the console group and kills pytest itself.
+    # These files are the Windows contract; a new Windows fix adds its test here.
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: studio/packaging/wix/windows-build-requirements.txt
+
+      - name: Install the MSI's locked packages, then pytest
+        # The same hash-locked set the MSI freezes (PySide6 included: the run-log test
+        # drives the real page code). pytest is a second install because a
+        # --require-hashes install refuses any line without a hash.
+        # Each native call is checked: pwsh does not stop on a failing exe, so without the
+        # checks a failed locked install was masked by a successful second one, and the
+        # run-log test below (importorskip on Qt) would SKIP and the job go green.
+        run: |
+          python -m pip install --require-hashes --only-binary=:all: -r studio/packaging/wix/windows-build-requirements.txt
+          if ($LASTEXITCODE -ne 0) { throw "the locked install failed ($LASTEXITCODE)" }
+          python -m pip install pytest PyYAML jsonschema
+          if ($LASTEXITCODE -ne 0) { throw "pip install pytest failed ($LASTEXITCODE)" }
+          python -c "import PySide6.QtCore as q; print('PySide6', q.qVersion())"
+          if ($LASTEXITCODE -ne 0) { throw "PySide6 does not import: the run-log test would skip" }
+
+      - name: Run the Windows contract
+        working-directory: studio
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: >-
+          python -m pytest -q
+          tests/test_native_windows_gates.py
+          tests/test_windows_binary_writes.py
+          tests/test_default_local_user.py
+          tests/test_no_console.py
+          tests/test_localmesh_run_log_private.py
+          tests/test_build_sessions.py
+          "tests/test_windows_packaging_files.py::test_the_spec_freezes_the_entry_shim_as_a_windowed_onedir"
+          "tests/test_windows_packaging_files.py::test_windows_also_freezes_a_console_twin_into_the_same_tree"

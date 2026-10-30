@@ -441,8 +441,12 @@ def test_a_question_that_starts_with_the_word_ollama_reaches_the_model(
 
 @pytest.fixture(scope="module")
 def qapp():
-    from hugmesh_studio.gui.qt import QtWidgets
-    return QtWidgets.QApplication.instance() or QtWidgets.QApplication(["t"])
+    # a skip, not an ERROR, on the Qt-free pull-request job (studio-tests.yml installs
+    # no binding on purpose); the panel tests below run under the Studio venv and
+    # GitLab's PySide6 job
+    qt = pytest.importorskip("hugmesh_studio.gui.qt",
+                             reason="no Qt binding (PySide6/PyQt6) installed")
+    return qt.QtWidgets.QApplication.instance() or qt.QtWidgets.QApplication(["t"])
 
 
 def test_the_agent_card_in_the_panel_probes_and_plans_with_the_chosen_instance(

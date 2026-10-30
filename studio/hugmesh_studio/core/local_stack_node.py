@@ -25,7 +25,7 @@ import urllib.request
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-from . import devops_tools, e2e_catalogue, own_casdoor, proc_group, proc_text
+from . import devops_tools, e2e_catalogue, own_casdoor, platform_info, proc_group, proc_text
 from . import brand_look, look_serving, resource_limits, stack_limits
 from .domain_services import TOR_SLUG_RE as _TOR_SLUG_RE_SHARED
 from .local_services import (KIND_ADDONS_ENV, KIND_ADDONS_NONE, federation_env,
@@ -585,6 +585,11 @@ class LocalStackNode:
         return urls.get(key) or urls.get(onion_slug(key), "")
 
     def available(self) -> tuple[bool, str]:
+        # FIRST, before the make check: on native Windows "make is required" sends the
+        # operator to install make, which still cannot run the bash recipes.
+        blocker = platform_info.native_windows_blocker("The local stack")
+        if blocker:
+            return False, blocker
         if not shutil.which("make"):
             return False, "make is required to run the local stack (make stack-up)."
         if not _compose_base():
@@ -1410,6 +1415,11 @@ class LocalStackNode:
         user-local tools dir (out/tools/bin), which the Install prerequisites
         verb fills and _build_env() prepends to PATH — so a lane started right
         after that install works without a shell restart."""
+        # The lane is `make kind-up` -> bootstrap-kind.sh: installing kind and kubectl
+        # natively would not make it runnable, so say the real blocker instead.
+        blocker = platform_info.native_windows_blocker("The DevOps (Kubernetes) lane")
+        if blocker:
+            return [blocker]
         problems: list[str] = []
         for tool, why in (("kind", "create the local Kubernetes cluster"),
                           ("kubectl", "apply the cluster's app tree")):

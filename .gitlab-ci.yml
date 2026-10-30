@@ -798,6 +798,22 @@ lint:kubelet-join-bootstrap:
   script:
     - bash tests/boot/test-kubelet-join-bootstrap.sh
 
+# GPU worker node labels (the keys-provision half of hugmesh.net/compute=gpu). A
+# WORKER provisioned from a KEYS stick must hand its .hugmesh.node_labels to the
+# kubelet BEFORE `kubeadm join`; only the control plane ever ran `kubectl label`.
+# The suite runs the REAL specs/etc/keys-provision/provision.sh inside a pinned
+# kindest/node container (bash, jq, a real kubelet) with kubeadm/kubectl/rc-service
+# stubbed, --network none, no privileges, and starts the real kubelet with the
+# resulting command line. Needs the host docker socket, hence no `image:` and the
+# privileged x86 runner (same idiom as casdoor-jwt-custom-gate / build:isos); it
+# exits 2 (red, never a skip) when docker or the image is absent. Pre-merge it is
+# gated by shell-suites.yml's `docker` job.
+lint:gpu-worker-node-labels:
+  stage: lint
+  tags: [hugmesh-x86, privileged]
+  script:
+    - bash tests/boot/test-gpu-worker-node-labels.sh
+
 # QEMU 3-node mesh-cluster lane (issue #48 PR B, the orchestration half on top of
 # the kubelet join fix above). NOTHING boots: qemu-system/qemu-img are PATH stubs
 # recording their argv and the orchestrator runs behind its MESH_*_CMD seams. Pins

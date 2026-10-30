@@ -668,7 +668,7 @@ build-x86-host-stage4.sh — hardened Gentoo amd64 k8s/GPU worker image.
                             primary). Baked to /etc/hugmesh/domains + filename tag.
   --domain-idp D=own|superdomain  (repeatable) Casdoor for domain D: own = a dedicated
                             instance, superdomain = the mesh's (default; bakes nothing).
-                            Only `own` is baked: /etc/hugmesh/domain-idp. D must be in
+                            Only 'own' is baked: /etc/hugmesh/domain-idp. D must be in
                             --domains when given. See docs/DOMAIN-IDP.md.
   --desktop WEIGHT          CLIENT only — thin (LXDE/openbox, default) | full (XFCE+).
   -H, --hostname NAME       Hostname. Default: derived from --role.
