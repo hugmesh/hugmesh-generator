@@ -844,7 +844,25 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # Both steps met in the merge of origin/main 398b2327 into #824 (199 from the live-ISO
 # guard + the two games suites above): MEASURED by RUNNING this file on the merged tree:
 #     201 of 243 suites are named by a pull_request-triggered workflow
-PREMERGE_BASELINE="${GUARD_PREMERGE:-201}"
+#
+# 201 -> 202 (denominator 243 -> 243) on 2026-10-29 for tests/boot/test-gpu-worker-
+# node-labels.sh: it landed in 1abc9bf3 / 2ab3325f (2026-10-22) named by NOTHING —
+# check 3 and 7b both red on main — and it needs a docker daemon (it runs the real
+# keys-provision engine inside a kindest/node container), which none of the four
+# container jobs in shell-suites.yml has. It is now named by a NEW bare-runner job
+# there (`docker`, ubuntu-latest, no `container:`) and post-merge by .gitlab-ci.yml's
+# lint:gpu-worker-node-labels on the privileged runner. RUN on a Linux host with
+# docker and the pinned image before wiring: 17 passed / 0 failed, rc=0. MEASURED by
+# RUNNING this file: on the branch over origin/main 398b2327 it printed
+#     200 of 241 suites are named by a pull_request-triggered workflow
+# and, after merging origin/main 2b13b2f9 (which carries #824's two games suites and
+# its 201 of 243 above) into the branch, the merged tree printed
+#     202 of 243 suites are named by a pull_request-triggered workflow
+#     PASS the ungated SET matches its pin exactly (41 suite(s))
+# — '201 of 243' + check 3/7b red again with the one SUITES line removed. This line
+# CONFLICTED with #824's (both raised it from 199); resolved by re-measuring, per the
+# doctrine above, not by keeping either number.
+PREMERGE_BASELINE="${GUARD_PREMERGE:-202}"
 
 # 182 -> 192 (denominator 205 -> 215) on 2026-09-30 for #385: the census gained a
 # THIRD spelling, bare `tests/*.sh` at depth 1, and the ten suites it exposed were
