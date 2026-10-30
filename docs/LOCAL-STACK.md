@@ -205,9 +205,14 @@ docker run --rm -v "%cd%\scripts:/scripts:ro" -v "%cd%\.stack-src:/stack-src" ^
 set STACK_SRC=../../.stack-src
 set CASDOOR_ISSUER_URI=http://localhost:8000
 set PUBLIC_HOST_PORT=8088
-docker compose -f tests\stack\compose.local.yaml build
-docker compose -f tests\stack\compose.local.yaml up -d
+docker compose --env-file tests\stack\.route-access-db.env -f tests\stack\compose.local.yaml build
+docker compose --env-file tests\stack\.route-access-db.env -f tests\stack\compose.local.yaml up -d
 ```
+
+`tests\stack\.route-access-db.env` holds the route-access-db owner password
+(`ROUTE_ACCESS_DB_PASSWORD=<random hex>`); it is gitignored and per checkout.
+`scripts/stack-up.ps1` and `bash tests/stack/gen-route-access-env.sh` create it; without
+it the database gets an EMPTY password and `up` fails.
 
 ### Windows gotchas (handled)
 
@@ -591,6 +596,15 @@ paths, not a 404).
   `/bff/admin` + `/bff/superadmin` converges back to `true` as the file documents.
   Both make targets always reach the compose `route-access-db`: a `POSTGRES_HOST`
   exported in your shell (e.g. for a seed replay) does not redirect them.
+- **route-access-db owner password is per checkout.** `compose.local.yaml` does not
+  spell it: `ROUTE_ACCESS_DB_PASSWORD` comes from the gitignored
+  `tests/stack/.route-access-db.env`, which `tests/stack/gen-route-access-env.sh` creates
+  (hex, so it survives the r2dbc URL) the first time any `make stack-*` target runs. It
+  is never rotated, because the postgres image only reads `POSTGRES_PASSWORD` when it
+  initialises an empty volume: `make stack-halt` keeps both, `make stack-down` deletes
+  both. A volume created before 2026-10-29 was initialised with the old compose default;
+  the generator keeps that value for it and warns, and `make stack-down` (which drops the
+  stack's data) is the way to a random one.
 - **Fragment fleet serves an empty set** until federation has enabled modules +
   a valid `app-fragment-sync` Casdoor client, so `/_fragments/**` is up but
   empty. It is the standalone sync image on `:8081` (in k8s it is nginx + a sync

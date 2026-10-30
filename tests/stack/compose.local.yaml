@@ -12,14 +12,20 @@
 # comes up WITHOUT them.
 #
 # Bring up with:  make stack-up         (clone -> build -> up -d)
-# or directly:    STACK_SRC=../../.stack-src docker compose -f compose.local.yaml up -d --build
+# or directly:    STACK_SRC=../../.stack-src docker compose --env-file .route-access-db.env \
+#                   -f compose.local.yaml up -d --build   (run ./gen-route-access-env.sh first)
 # Tear down:      make stack-down       (docker compose down -v)
 #
 # ── ENV=test vs prod (Makefile threads these in as the variables below) ──
 #   CASDOOR_ISSUER_URI  test: http://localhost:8000     prod: https://id.<domain>
 #   PUBLIC_HOST_PORT    the published port the host (fe-gateway) listens on
-# All other creds are DEV PLACEHOLDERS matching the cluster dev placeholders
-# (route-access-db password "gateway", etc.). NO real secrets live here.
+# All other creds are local DEV PLACEHOLDERS (or ${VAR:-default} dev defaults).
+# NO real secrets live here. The route-access-db OWNER password is the exception:
+# it is NOT spelled here at all. ROUTE_ACCESS_DB_PASSWORD comes from the
+# gitignored, per-checkout tests/stack/.route-access-db.env, which
+# tests/stack/gen-route-access-env.sh creates and the Makefile's STACK_ENV (or
+# scripts/stack-up.ps1) threads into every compose call. Its empty default makes
+# a hand-run `up` fail loudly instead of reusing a known password.
 #
 # Service names are the in-compose DNS the services resolve each other by — they
 # replace the k8s <svc>.<ns>.svc.cluster.local FQDNs (e.g.
@@ -167,15 +173,17 @@ services:
   # The local stack connects every gateway as the OWNER `gateway` user (dev
   # convenience), so it mounts ONLY the table DDL — NOT the cluster's
   # initdb/10-roles.sh per-machine-user role setup (that needs the per-user Secret
-  # passwords ESO injects in-cluster). The dev password "gateway" matches the
-  # cluster dev placeholder.
+  # passwords ESO injects in-cluster). The owner password is per checkout:
+  # ${ROUTE_ACCESS_DB_PASSWORD} from the gitignored tests/stack/.route-access-db.env
+  # (tests/stack/gen-route-access-env.sh; the Makefile threads it in). The cluster
+  # gets its own generated route-access-db-roles Secret (scripts/gen-cluster-secrets.sh).
   route-access-db:
     <<: *amd64
     image: postgres:16-alpine
     environment:
       POSTGRES_DB: gateway
       POSTGRES_USER: gateway
-      POSTGRES_PASSWORD: gateway
+      POSTGRES_PASSWORD: ${ROUTE_ACCESS_DB_PASSWORD:-}
     volumes:
       - route-access-pg:/var/lib/postgresql/data
       - ../../specs/cluster/manifests/route-access/initdb/20-schema.sql:/docker-entrypoint-initdb.d/10-schema.sql:ro
@@ -380,7 +388,7 @@ services:
       # changes is how long a stalled DDL is allowed to finish instead of killing
       # the process.
       SPRING_CASSANDRA_REQUEST_TIMEOUT: 20s
-      ROUTE_ACCESS_R2DBC_URL: "r2dbc:postgresql://gateway:gateway@route-access-db:5432/gateway"
+      ROUTE_ACCESS_R2DBC_URL: "r2dbc:postgresql://gateway:${ROUTE_ACCESS_DB_PASSWORD:-}@route-access-db:5432/gateway"
       # ── MFA ENFORCEMENT (gateway) — ON for the local dev stack ────────────────
       # The gateway is what ENFORCES MFA at route level (GatewayRouteAccessFilter
       # .decide() honours gateway_route_access.mfa_required + the privileged floor);
@@ -483,7 +491,7 @@ services:
       # the same 2s driver default this gateway shares with pki-gateway above, where
       # the measurement, the verified property name and the 20s reasoning live.
       SPRING_CASSANDRA_REQUEST_TIMEOUT: 20s
-      ROUTE_ACCESS_R2DBC_URL: "r2dbc:postgresql://gateway:gateway@route-access-db:5432/gateway"
+      ROUTE_ACCESS_R2DBC_URL: "r2dbc:postgresql://gateway:${ROUTE_ACCESS_DB_PASSWORD:-}@route-access-db:5432/gateway"
       # BFF session introspection back-channel (BffSessionAuthFilter) — same fix the
       # fe-gateway block below carries: app.bff-session.bff-base-url defaults to the
       # cluster-DNS 'http://admin-bff:8080', unresolvable in compose, so any browser
@@ -587,7 +595,7 @@ services:
       # the measurement, the verified property name and the 20s reasoning live. A
       # DDL overrun here takes the platform front door down, not one back-end hop.
       SPRING_CASSANDRA_REQUEST_TIMEOUT: 20s
-      ROUTE_ACCESS_R2DBC_URL: "r2dbc:postgresql://gateway:gateway@route-access-db:5432/gateway"
+      ROUTE_ACCESS_R2DBC_URL: "r2dbc:postgresql://gateway:${ROUTE_ACCESS_DB_PASSWORD:-}@route-access-db:5432/gateway"
       # BFF session introspection back-channel (BffSessionAuthFilter): the gateway swaps the
       # opaque bff_ cookie for the caller's identity/roles against admin-bff. The property
       # app.bff-session.bff-base-url defaults to the cluster-DNS 'http://admin-bff:8080', which
@@ -829,7 +837,7 @@ services:
       # reads as hung. Wire the NoopPlatformCapabilityProbe instead: instant response,
       # honest NOT_WIRED warning, runtime capabilities reported absent.
       PLATFORM_CAPABILITIES_K8S_ENABLED: "false"
-      ROUTE_ACCESS_R2DBC_URL: "r2dbc:postgresql://gateway:gateway@route-access-db:5432/gateway"
+      ROUTE_ACCESS_R2DBC_URL: "r2dbc:postgresql://gateway:${ROUTE_ACCESS_DB_PASSWORD:-}@route-access-db:5432/gateway"
       # MANAGED backing service seam: default in-stack admin-bff-db; set
       # MANAGED_ADMIN_BFF_{R2DBC,LIQUIBASE}_URL (via STACK_ENV) to a hosted RDS/Azure-PG
       # endpoint to validate managed mode locally. UNSET = byte-identical default.

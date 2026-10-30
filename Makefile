@@ -1971,7 +1971,17 @@ STACK_BRAND_B_ENV := $(if $(strip $(BRAND_B)),APP_TENANCY_ISSUERS='$(CASDOOR_ISS
 # a `:=` immediate assignment, so a variable referenced there but defined later
 # expands to EMPTY and the knob silently does nothing.
 STACK_POISONER_ENV := $(if $(strip $(POISONER)),MEDIA_POISONING_ENABLED='true' MEDIA_POISONING_WORKER_URL='http://hugmesh-media-poisoner:8080' MEDIA_POISONING_DEFAULT_MODE='$(POISON_MODE)' MEDIA_POISONING_FALLBACK_MODE='$(POISON_FALLBACK)' ,)
-STACK_ENV := $(STACK_BRAND_B_ENV)$(STACK_POISONER_ENV)$(STACK_OIDC_ENV)$(STACK_THEME_ENV)$(STACK_TOR_DOMAINS_ENV) \
+# route-access-db OWNER password (tests/stack/.route-access-db.env, gitignored).
+# compose.local.yaml no longer spells it: POSTGRES_PASSWORD and all four gateways'
+# ROUTE_ACCESS_R2DBC_URL read ${ROUTE_ACCESS_DB_PASSWORD:-}. The recipe SHELL runs
+# the generator on every compose call (create-if-missing, never rotate: the
+# volume keeps the password it was initialised with) and make echoes only this
+# command substitution, never the value — the Studio persists this output.
+# stack-down/stack-clean delete the file AFTER `down -v` drops the volume, so the
+# next stack-up initialises both afresh. Guard: tests/stack/test-gen-route-access-env.sh.
+STACK_ROUTE_ACCESS_ENV_FILE := tests/stack/.route-access-db.env
+STACK_ROUTE_ACCESS_ENV := ROUTE_ACCESS_DB_PASSWORD="$$(bash tests/stack/gen-route-access-env.sh --print)" 
+STACK_ENV := $(STACK_ROUTE_ACCESS_ENV)$(STACK_BRAND_B_ENV)$(STACK_POISONER_ENV)$(STACK_OIDC_ENV)$(STACK_THEME_ENV)$(STACK_TOR_DOMAINS_ENV) \
              STACK_SRC='$(STACK_SRC)' CASDOOR_ISSUER_URI='$(CASDOOR_ISSUER)' \
              PUBLIC_HOST_PORT='$(PUBLIC_HOST_PORT)' \
              PUBLIC_HTTPS_PORT='$(PUBLIC_HTTPS_PORT)' \
@@ -2223,6 +2233,7 @@ stack-down: ## stop the local stack and DROP ITS VOLUMES (destroys identity/room
 	# this invocation does not repeat, or `make stack-down` leaves the phpbb/
 	# akkoma containers and volumes orphaned while reporting success.
 	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) -f $(STACK_EGRESS_COMPOSE) -f $(STACK_TOR_DOMAINS_COMPOSE) --profile social --profile tor --profile anubis --profile phpbb --profile akkoma --profile games --profile brandb --profile edge-ai-tts --profile media-poisoner --profile egress-vpn $(STACK_OWN_CASDOOR_DOWN_FLAGS) down -v
+	rm -f $(STACK_ROUTE_ACCESS_ENV_FILE)
 
 # stack-down PLUS the disk: the ~28 images this stack BUILT (`--rmi local` — only
 # images with no registry name, i.e. ours; never the pulled postgres/cassandra/
@@ -2235,6 +2246,7 @@ stack-clean: ## stop the local stack AND remove the images it built + the m2 reg
 	@echo "==> Removing the local stack: containers, volumes, and the images IT built."
 	@echo "    Pulled base images (postgres/cassandra/mastodon/...) are KEPT."
 	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) -f $(STACK_EGRESS_COMPOSE) -f $(STACK_TOR_DOMAINS_COMPOSE) --profile social --profile tor --profile anubis --profile phpbb --profile akkoma --profile games --profile brandb --profile edge-ai-tts --profile media-poisoner --profile egress-vpn $(STACK_OWN_CASDOOR_DOWN_FLAGS) down -v --rmi local --remove-orphans
+	rm -f $(STACK_ROUTE_ACCESS_ENV_FILE)
 	@docker rm -f $(M2_REGISTRY_NAME) >/dev/null 2>&1 || true
 	@rm -f $(STACK_M2_ENV)
 	@echo '==> Clean. Next bring-up is a COLD build: run "make stack-m2-bootstrap", then "make stack-up".'

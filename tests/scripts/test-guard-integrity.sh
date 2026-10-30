@@ -889,7 +889,14 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # and with ONLY shell-suites.yml's tests/stack/test-route-access-reconcile.sh SUITES line
 # removed: '202 of 244' + check 7 red naming that suite — so the +1/+1 is this branch's
 # one suite and nothing else.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-203}"
+# 203 -> 204 (denominator 244 -> 245) on fix/secret-scan-20261029, which adds ONE suite,
+# tests/stack/test-gen-route-access-env.sh, and names it in shell-suites.yml's debian
+# leg. MEASURED by RUNNING this file with GUARD_PREMERGE=0 on that tree:
+#     204 of 245 suites are named by a pull_request-triggered workflow
+#     PASS the ungated SET matches its pin exactly (41 suite(s))
+# and with ONLY that SUITES line removed: '203 of 245' + check 7 red naming that
+# suite — so the +1/+1 is this branch's one suite and nothing else.
+PREMERGE_BASELINE="${GUARD_PREMERGE:-204}"
 
 # 182 -> 192 (denominator 205 -> 215) on 2026-09-30 for #385: the census gained a
 # THIRD spelling, bare `tests/*.sh` at depth 1, and the ten suites it exposed were
