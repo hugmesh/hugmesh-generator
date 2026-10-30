@@ -3,11 +3,14 @@
 # service time (sourced from /etc/conf.d/snort), never baked at build time.
 #
 # WHY: net-analyzer/snort ships /etc/conf.d/snort with SNORT_IFACE="eth1" — a
-# Gentoo example value. No hugmesh image has an eth1 (QEMU's single virtio NIC,
-# real boards' enp*/eno*/wl* predictable names), so `snort -i eth1` died on EVERY
-# fresh boot of every x86 image (2026-10-30 backend/frontend/backend-gpu ISOs:
-# "ERROR: snort failed to start"), and the package init script sends snort's own
-# stderr to /dev/null, so the console never said why.
+# Gentoo example value. These images have no eth1 (QEMU's single virtio NIC, real
+# boards' enp*/eno*/wl* predictable names), so `snort -i eth1` died on every fresh
+# boot ("ERROR: snort failed to start"), and the package init script sends snort's
+# own stderr to /dev/null, so the console never said why.
+#
+# Deliberately brand-neutral (path, state file, variables): snort is default-on for
+# EVERY image, including the unaffiliated plain desktop, which carries no
+# brand-named tooling.
 #
 # Resolution order (first hit wins; the answer is recorded in ${STATE}):
 #   1. an operator pin: $1 (SNORT_IFACE_PIN in /etc/conf.d/snort), unless "auto"/"";
@@ -25,9 +28,9 @@
 # Never fails and always prints exactly one token. POSIX sh (no bash in conf.d).
 
 PIN="${1:-}"
-STATE="${HUGMESH_SNORT_IFACE_STATE:-/run/hugmesh/snort.iface}"
-PIDDIR="${HUGMESH_SNORT_PIDDIR:-/var/run/snort}"
-SYSNET="${HUGMESH_SYSFS_NET:-/sys/class/net}"
+STATE="${SNORT_UPLINK_STATE:-/run/snort-uplink.iface}"
+PIDDIR="${SNORT_UPLINK_PIDDIR:-/var/run/snort}"
+SYSNET="${SNORT_UPLINK_SYSFS_NET:-/sys/class/net}"
 PATH="${PATH:+${PATH}:}/usr/sbin:/usr/bin:/sbin:/bin"
 
 # Overlay / tunnel / pod-plumbing devices: never "the uplink" even when a route

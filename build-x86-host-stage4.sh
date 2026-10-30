@@ -5057,7 +5057,7 @@ DESK
     info "Thin desktop staged: Sunshine (in-session XDG autostart) + hugmesh-sunshine-firewall (stream ports tailnet-only, web UI loopback-only) + WiVRn config stub"
 fi
 if ${SNORT_IDS}; then
-    mkdir -p "${SYSROOT}/etc/snort/rules" "${SYSROOT}/var/log/snort" "${SYSROOT}/etc/conf.d" "${SYSROOT}/usr/lib/hugmesh"
+    mkdir -p "${SYSROOT}/etc/snort/rules" "${SYSROOT}/var/log/snort" "${SYSROOT}/etc/conf.d" "${SYSROOT}/usr/libexec"
     cp "${SHARED_SPECS}/etc/snort/snort.conf"        "${SYSROOT}/etc/snort/snort.conf"
     cp "${SHARED_SPECS}/etc/snort/rules/local.rules" "${SYSROOT}/etc/snort/rules/local.rules"
     # The package's /etc/conf.d/snort hardcodes SNORT_IFACE="eth1" (a Gentoo
@@ -5065,9 +5065,11 @@ if ${SNORT_IDS}; then
     # boot. Ours resolves the node's real uplink when the service runs. Staged
     # BEFORE the payload emerge, so CONFIG_PROTECT keeps ours and parks the
     # package's copy as ._cfg0000_snort (same as conf.d/hostname, init.d/kubelet).
-    cp "${SHARED_SPECS}/etc/conf.d/snort"            "${SYSROOT}/etc/conf.d/snort"
-    cp "${SHARED_SPECS}/usr/lib/hugmesh/snort-uplink" "${SYSROOT}/usr/lib/hugmesh/snort-uplink"
-    chmod +x "${SYSROOT}/usr/lib/hugmesh/snort-uplink"
+    # Brand-NEUTRAL paths on purpose: snort is default-on for every role, including
+    # the --unaffiliated plain desktop, which must carry no hugmesh-named tooling.
+    cp "${SHARED_SPECS}/etc/conf.d/snort"        "${SYSROOT}/etc/conf.d/snort"
+    cp "${SHARED_SPECS}/usr/libexec/snort-uplink" "${SYSROOT}/usr/libexec/snort-uplink"
+    chmod +x "${SYSROOT}/usr/libexec/snort-uplink"
     SVCS+=(snort)
     info "Snort IDS staged (default-on; alert mode on HOME_NET; interface = the node's uplink, resolved at service start)"
 fi
