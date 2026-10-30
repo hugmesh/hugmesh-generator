@@ -43,13 +43,34 @@ def ws(tmp_path, monkeypatch):
     return ce.Workspace("shop", "shop.example", "web", os.path.realpath(str(folder))), state
 
 
-def test_find_workspaces_lists_marker_bearing_folders_only(tmp_path, monkeypatch, ws):
-    space, state = ws
-    folders = ce.find_workspaces(GENERATOR_DIR, "clone", "", [Domain(name="shop.example", optional_services=[])],
-                                 "shop", state_root=str(state))
-    # the plan may or may not map this domain to a "web" app; the folder is only
-    # returned when the plan names it AND the marker reads back
-    assert all(dw.read_marker(f.path) is not None for f in folders)
+def test_find_workspaces_lists_marker_bearing_folders_only(tmp_path):
+    """The plan's own folder with a valid marker is found; the same folder with no
+    marker, or a marker without its slug, is not. (This test once planted only a
+    slug-less marker, so the plan returned [] and ``all([])`` passed vacuously: PR #832
+    review.)"""
+    state = tmp_path / "state2"
+    rows = [Domain(name="shop.example", optional_services=["tuwunel", "phpbb"])]
+    plan = dw.plan_workspaces(GENERATOR_DIR, "clone", "", rows, "shop", state_root=str(state), claims={})
+    dests = [(d.name, r.app, r.dest) for d in plan.domains for r in d.repos if r.dest]
+    assert dests, "the plan names no folder for shop.example"
+    _name, app, dest = dests[0]
+
+    def found():
+        return ce.find_workspaces(GENERATOR_DIR, "clone", "", rows, "shop", state_root=str(state))
+    os.makedirs(os.path.join(dest, ".git"))
+    assert found() == []                                         # a folder with no marker
+    marker = os.path.join(dest, ".git", dw.MARKER)
+    good = {"app": app, "domain": "shop.example", "slug": os.path.basename(os.path.dirname(dest)),
+            "mesh": "shop", "source": "x", "schema": 1}
+    with open(marker, "w") as fh:
+        json.dump({k: v for k, v in good.items() if k != "slug"}, fh)
+    assert found() == []                                         # a marker without its slug
+    with open(marker, "w") as fh:
+        json.dump(good, fh)
+    got = found()
+    assert [(w.domain, w.app, w.path) for w in got] == [("shop.example", app, os.path.realpath(dest))]
+    assert ce.find_workspaces(GENERATOR_DIR, "clone", "", rows, "shop", state_root=str(state),
+                              only_domain="blog.example") == []
     assert ce.find_workspaces(GENERATOR_DIR, "clone", "", [], "none", state_root=str(state)) == []
 
 
@@ -220,3 +241,43 @@ def test_apply_refuses_when_the_file_was_edited_after_the_card_and_changes_nothi
     assert "nothing was changed" in r.text
     assert open(path).read() == edited
     assert ce.list_applied(str(state)) == []            # no before-copy, no manifest
+
+
+def test_two_applies_in_one_second_get_their_own_ids_and_revert_is_exact(ws, monkeypatch):
+    """PR #832 review (N9): the id was a per-second timestamp plus the pid, so two
+    applies in one second shared a before-copy folder; reverting the first then said
+    "" (Reverted) while the file kept the second edit's text."""
+    space, state = ws
+    monkeypatch.setattr(ce.time, "strftime", lambda fmt, *a: "20261029-120000")
+    path = os.path.join(space.path, "src", "index.html")
+    first = ce.apply(ce.parse_diff(DIFF, space), space, str(state))
+    after_first = open(path).read()
+    second_diff = ("```diff\n--- a/src/index.html\n+++ b/src/index.html\n@@ -4,1 +4,1 @@\n"
+                   "-  <p>Welcome to the Shop</p>\n+  <p>Welcome to THE Shop</p>\n```\n")
+    second = ce.apply(ce.parse_diff(second_diff, space), space, str(state))
+    assert isinstance(first, ce.Applied) and isinstance(second, ce.Applied)
+    assert first.id != second.id and first.before_dir != second.before_dir
+    assert sorted(ce.list_applied(str(state))) == sorted([first.id, second.id])
+    assert ce.list_applied(str(state)) == [first.id, second.id]       # the prune order holds
+    # the first edit's file changed after it (the second edit): it refuses, never lies
+    assert ce.revert(first) != ""
+    assert ce.revert(second) == "" and open(path).read() == after_first
+    assert ce.revert(first) == "" and open(path).read() == INDEX
+
+
+def test_a_file_that_is_not_utf8_is_refused_and_never_rewritten(ws):
+    """PR #832 review (N8): a non-UTF-8 byte on an unrelated line was decoded with
+    'replace' and written back as U+FFFD, a wider change than the diff on the card."""
+    space, state = ws
+    path = os.path.join(space.path, "src", "index.html")
+    data = INDEX.replace("</html>", "<!-- caf\xe9 -->\n</html>").encode("latin-1")
+    edits = ce.parse_diff(DIFF, space)            # made while the file was UTF-8
+    with open(path, "wb") as fh:
+        fh.write(data)
+    r = ce.apply(edits, space, str(state))
+    assert isinstance(r, ce.DiffProblem), r
+    assert r.text == ("src/index.html is not UTF-8 text (line 7 has a byte UTF-8 cannot read); "
+                      "I only edit UTF-8 files, so nothing was changed.")
+    assert open(path, "rb").read() == data and ce.list_applied(str(state)) == []
+    p = ce.parse_diff(DIFF, space)                # and no card is made from it either
+    assert isinstance(p, ce.DiffProblem) and p.text == r.text

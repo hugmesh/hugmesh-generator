@@ -317,7 +317,10 @@ def parse_diff(text: str, ws: Workspace) -> "list[FileEdit] | DiffProblem":
                 return DiffProblem(f"{raw} does not exist in {ws.name}")
             if b"\0" in data or len(data) > SCOPE["max_file_bytes"]:
                 return DiffProblem(f"{raw} is binary or too big to edit")
-            file_lines = data.decode("utf-8", "replace").split("\n")
+            text = _utf8(raw, data)
+            if isinstance(text, DiffProblem):
+                return text
+            file_lines = text.split("\n")
             i += 1
             continue
         hdr = _hunk_header(ln) if ln.startswith("@@") else None
@@ -404,14 +407,43 @@ def _sha(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+def _utf8(rel: str, data: bytes) -> "str | DiffProblem":
+    """``data`` as text, or the refusal: a lossy decode would write a replacement
+    character over every byte it could not read, a wider change than the diff on the
+    card (PR #832 review)."""
+    try:
+        return data.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        line = data[:exc.start].count(b"\n") + 1
+        return DiffProblem(f"{rel} is not UTF-8 text (line {line} has a byte UTF-8 cannot read); "
+                           "I only edit UTF-8 files, so nothing was changed.")
+
+
+def _reserve_id(state_dir: str) -> str:
+    """A new edit id whose folder this call created. Sorted by time (``_prune`` keeps
+    the newest by name); the microseconds, the pid and the retry count keep two applies
+    in one second apart, and the exclusive mkdir makes a shared folder impossible (two
+    once shared one, and revert of the first then reported success over the second's
+    text: PR #832 review)."""
+    root = edits_dir(state_dir)
+    os.makedirs(root, exist_ok=True)
+    t = time.time()
+    stamp = time.strftime("%Y%m%d-%H%M%S", time.localtime(t)) + f"-{int(t % 1 * 1_000_000):06d}"
+    for n in range(1000):
+        eid = f"{stamp}-{os.getpid() % 10000:04d}{n:03d}"
+        try:
+            os.mkdir(os.path.join(root, eid))
+        except FileExistsError:
+            continue
+        return eid
+    raise OSError("no free edit id")
+
+
 def apply(edits: "Iterable[FileEdit]", ws: Workspace, state_dir: str) -> "Applied | DiffProblem":
     edits = list(edits)
     reason = too_big_reason("", edits)
     if reason:
         return DiffProblem(handoff_text(reason))
-    eid = time.strftime("%Y%m%d-%H%M%S") + f"-{os.getpid() % 10000:04d}"
-    base = os.path.join(edits_dir(state_dir), eid)
-    before_dir = os.path.join(base, "before")
     files: list = []
     plan: list = []
     for e in edits:
@@ -426,15 +458,21 @@ def apply(edits: "Iterable[FileEdit]", ws: Workspace, state_dir: str) -> "Applie
         # The diff was checked when the card was made; the person may have edited the
         # file since. Check every hunk again on the bytes about to be written, or a
         # splice by line number would replace other text than the diff on the card.
-        lines = old.decode("utf-8", "replace").split("\n")
+        text = _utf8(e.path, old)
+        if isinstance(text, DiffProblem):
+            return text
+        lines = text.split("\n")
         for h in e.hunks:
             why = _mismatch(e.path, h.old_start, h.old_lines, lines)
             if why:
                 return DiffProblem(f"{e.path} changed since I proposed this edit ({why}); "
                                    "nothing was changed. Ask again for a fresh diff.")
-        new = e.new_text(old.decode("utf-8", "replace")).encode("utf-8")
+        new = e.new_text(text).encode("utf-8")
         plan.append((e.path, full, old, new))
     try:
+        eid = _reserve_id(state_dir)
+        base = os.path.join(edits_dir(state_dir), eid)
+        before_dir = os.path.join(base, "before")
         os.makedirs(before_dir, exist_ok=True)
         for rel, full, old, new in plan:
             dest = os.path.join(before_dir, rel.replace("/", os.sep))
