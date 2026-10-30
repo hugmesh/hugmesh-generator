@@ -141,7 +141,7 @@ Feature: Every media and games function is catalogued, gated and censused
     Examples: surfaces with a real seeded audience
       | service | function         | personas                                                                             |
       | owncast | grant            | admin@hugmesh.net, e2e-admin, e2e-adminonly, e2e-gamesadmin                           |
-      | games   | entry            | admin@hugmesh.net, e2e-admin, e2e-adminonly, e2e-gamesadmin, e2e-gamesonly, e2e-mod   |
+      | games   | entry            | admin@hugmesh.net, e2e-admin, e2e-adminonly, e2e-gamesadmin, e2e-gamesonly   |
       | games   | instance-console | admin@hugmesh.net, e2e-admin, e2e-adminonly, e2e-gamesadmin, e2e-mod                  |
 
   # games/admin is the row that would be misread as a gap. ROLE_GAMES_ADMIN is
@@ -154,7 +154,7 @@ Feature: Every media and games function is catalogued, gated and censused
   @service:games @function:admin @layer:gateway
   Scenario: no roster grants the DERIVED games-admin role directly @service:games @function:admin @layer:gateway
     Then the "admin" function is reachable by exactly the roster personas ""
-    And the "entry" function is reachable by exactly the roster personas "admin@hugmesh.net, e2e-admin, e2e-adminonly, e2e-gamesadmin, e2e-gamesonly, e2e-mod"
+    And the "entry" function is reachable by exactly the roster personas "admin@hugmesh.net, e2e-admin, e2e-adminonly, e2e-gamesadmin, e2e-gamesonly"
 
   # ── 4b. the complement, for the floor rows ────────────────────────────────
   #

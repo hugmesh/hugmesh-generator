@@ -586,9 +586,8 @@ INSERT INTO gateway_route_access (gateway, url_pattern, role, allow) VALUES
   -- the pre-existing /games/admin/** row keeps gating ONLY the admin HTML path —
   -- a ROLE_GAMES member loads the remote, and the host shell's gamesAdminGuard +
   -- this table's /games/api/admin/** row keep the admin screens and API closed.
-  -- Identical rows live in hugmesh-gateway CanonicalSeed.java fe() and
-  -- hugmesh-gateway compose/route-access-seed.sql (the three sources must stay
-  -- identical). ⚠ gate_optional_services REMOVES these rows when the games slug
+  -- hugmesh-gateway CanonicalSeed.java fe() and compose/route-access-seed.sql mirror
+  -- these rows and must follow this seed. ⚠ gate_optional_services REMOVES these rows when the games slug
   -- is deselected (optional-services.yaml games.routeAccessRows).
   ('hugmesh-fe-gateway',  '/games/api/admin/**',   'ROLE_GAMES_ADMIN', true),  -- games BFF admin API via the browser door (games + (admin|mod) ONLY)
   ('hugmesh-fe-gateway',  '/games/api/**',         'ROLE_GAMES',     true),  -- games BFF member API floor (games-access)

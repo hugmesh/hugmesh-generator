@@ -89,12 +89,10 @@ EXEMPT: dict[str, str] = {
     "hugmesh-character-studio-ui.hugmesh-frontend":
         "character-studio UI (apps/49b) not in the profile; /character-studio/** 503s on kind.",
     "hugmesh-games-ui.hugmesh-frontend":
-        "games `games` remote (manifests/games-ui, games slug — no Application syncs it yet, "
-        "and the games slug is not in the profile); /games/** 503s on kind.",
+        "games `games` remote (apps/50a-games-ui.yaml, games slug) not in the profile; "
+        "/games/** 503s on kind.",
     "hugmesh-games.hugmesh-games":
-        "games BFF (apps/50-games.yaml, games slug) not in the profile; /games/api/** 503s on kind "
-        "(and, once deployed, 401s until the cluster BFF is bridged to the systems issuer — "
-        "see apps/20-gateway-fe.yaml games-bff).",
+        "games BFF (apps/50-games.yaml, games slug) not in the profile; /games/api/** 503s on kind.",
     "hugmesh-api-docs.hugmesh-frontend":
         "api-docs (apps/48-api-docs.yaml) not in the profile; /api-docs/** 503s on kind.",
     "hugmesh-remote-fragment.hugmesh-frontend":
