@@ -706,7 +706,12 @@ def _runner_devices(generator_dir: str, work_dir: str) -> list[Device] | None:
     downgraded to stopped before it is printed, and only when the daemon actually
     answered. The subcommand boots nothing, so this is a file read plus one
     ``docker ps`` behind a short timeout.
+
+    On native Windows the runner is a bash script that cannot be executed (WinError
+    193), so it is not tried on every poll: None, and the registry answers instead.
     """
+    if qemu_tests.native_blocker():
+        return None
     try:
         proc = subprocess.run(_devices_argv(generator_dir, work_dir),
                               stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
@@ -877,7 +882,18 @@ def spawn(argv: list[str], cwd: str,
     this narrow is what lets every emulation screen be tested with no qemu, no
     docker and no ssh — tests replace THIS function and assert on the argv it
     received. mesh_emulation.spawn is an alias of this function until T4.
+
+    On native Windows a bash script is refused HERE, before Popen, with the WSL2
+    sentence and exit code 2 (QemuTestRunner's refusal). Every lane's argv[0] is one
+    (run-qemu-docker.sh, run-qemu-e2e.sh), and Popen of a .sh there fails with
+    WinError 193, which "could not run" reports truthfully but without the reason.
+    Only scripts are refused: a plain executable still runs.
     """
+    blocker = qemu_tests.native_blocker() if argv and argv[0].endswith(".sh") else ""
+    if blocker:
+        if on_line:
+            on_line(f"!! {blocker}")
+        return 2
     try:
         proc = subprocess.Popen(argv, cwd=cwd, stdout=subprocess.PIPE,
                                 stderr=subprocess.STDOUT, text=True, bufsize=1,
@@ -1162,6 +1178,14 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     # save-mesh
+    # Without run= the save execs run-qemu-docker.sh --save-device through
+    # emulation_save's own subprocess.call, not spawn(), so spawn's refusal does not
+    # reach it: on native Windows that would come back as "could not run ...: WinError
+    # 193" instead of the reason.
+    blocker = qemu_tests.native_blocker()
+    if blocker:
+        print(f"REFUSED: {blocker}", file=sys.stderr)
+        return 2
     pl = plan(gen, sess, EmulationMode.DEPLOY, env, work_dir=args.work, epoch="")
     try:
         report = save_mesh(pl, session=args.save_session, overwrite=args.overwrite)

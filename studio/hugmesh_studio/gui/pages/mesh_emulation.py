@@ -619,6 +619,16 @@ class MeshEmulationPage(QtWidgets.QWizardPage):
         self._docker_paint((bool(ok), str(why)))
 
     def _docker_paint(self, answer):
+        blocker = qemu_tests.native_blocker()
+        if blocker:
+            # Docker Desktop being up says nothing here: every verb is a bash script
+            # (QemuPage's gate, for the same reason). _docker_ok also greys Start,
+            # each row's Start and the replicas "+".
+            self.docker_note.setText(
+                f'<span style="color:{WARN}">{html.escape(blocker)}</span>')
+            self._docker_ok = False
+            self._sync_controls()
+            return
         self.docker_note.setText(common.docker_note_html(answer))
         self._docker_ok = bool(answer and answer[0])
         self._sync_controls()

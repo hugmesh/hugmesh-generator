@@ -11,9 +11,12 @@ Resolution order, first hit wins:
   1. ``--generator-dir`` (the caller passes it; argparse default is :func:`resolve`)
   2. ``$HUGMESH_GENERATOR_DIR``
   3. the checkout this source tree lives in (a source run)
-  4. the folder the operator last picked in the GUI, saved under the Studio state dir
-  5. the working directory
-Steps 3 and 4 only count when the folder really is a checkout (:func:`is_checkout`).
+  4. the working directory, when it is a checkout (``cd checkout && hugmesh-studio``)
+  5. the folder the operator last picked in the GUI, saved under the Studio state dir
+  6. the working directory
+Steps 2 to 5 only count when the folder really is a checkout (:func:`is_checkout`). A
+stale ``$HUGMESH_GENERATOR_DIR`` would otherwise outrank a good source tree and a saved
+pick, and flake.nix ``cd``s into a relative value before Python resolves it again.
 """
 from __future__ import annotations
 
@@ -58,17 +61,26 @@ def resolve(source_repo: str = "") -> str:
     derives from its own ``__file__`` (the GUI and TUI entry points sit at different
     depths)."""
     env = os.environ.get(ENV, "").strip()
-    if env:
+    if env and is_checkout(os.path.abspath(env)):
         return os.path.abspath(env)
     if is_checkout(source_repo):
         return source_repo
+    cwd = os.getcwd()
+    if is_checkout(cwd):
+        return cwd                  # the saved pick is for the MSI's install-folder start
     picked = saved()
     if is_checkout(picked):
         return picked
-    return os.getcwd()
+    return cwd
 
 
-def not_a_checkout_message(path: str) -> str:
+def not_a_checkout_message(path: str, osname: str | None = None) -> str:
+    # The picker runs wherever the Studio is not inside a checkout. On Windows that is the
+    # MSI; on Linux it can be pip, Flatpak, the release tarball, or a source run handed a
+    # --generator-dir that is no checkout, so say what holds for all of them.
+    installed = ("the Windows installer does not include them"
+                 if (osname or os.name) == "nt"
+                 else "the Studio itself does not include them")
     return (f"{path} is not a hugmesh-generator checkout (it has no {MARKER}). The Studio "
-            f"runs that checkout's scripts, and the Windows installer does not include "
-            f"them. Choose the folder you cloned hugmesh-generator into.")
+            f"runs that checkout's scripts, and {installed}. Choose the folder you cloned "
+            f"hugmesh-generator into.")

@@ -64,6 +64,8 @@ import json
 import os
 import re
 import shutil
+import stat
+import sys
 from dataclasses import dataclass
 from typing import Callable, Optional
 
@@ -936,6 +938,33 @@ class RemoveResult:
     message: str
 
 
+def _rmtree(path: str, osname: Optional[str] = None) -> None:
+    """``shutil.rmtree`` that also deletes READ-ONLY files on native Windows. git writes a
+    clone's objects read-only and Windows refuses to delete such a file, so a plain
+    rmtree stopped half-way: the hooks were already gone, the next look at the copy
+    counted them as changed git settings, and the copy could never be removed again.
+    Elsewhere a delete depends on the folder, not on the file, so the plain rmtree
+    stays (core/org_export.py has the same helper for its work folders)."""
+    if (osname or os.name) != "nt":
+        shutil.rmtree(path)
+        return
+
+    def clear_and_retry(func, p, exc):
+        if isinstance(exc, tuple):                 # onerror passes sys.exc_info()
+            exc = exc[1]
+        # Only a refused DELETE is retried, and never through a link: chmod follows it,
+        # so it would make the file the link points at writable.
+        if (func not in (os.unlink, os.remove, os.rmdir)
+                or not isinstance(exc, PermissionError) or _is_link(p)):
+            raise exc
+        os.chmod(p, stat.S_IWRITE)
+        func(p)
+    if sys.version_info >= (3, 12):
+        shutil.rmtree(path, onexc=clear_and_retry)
+    else:                                          # pragma: no cover - older Pythons
+        shutil.rmtree(path, onerror=clear_and_retry)
+
+
 def remove_extra(extra: ExtraFolder, plan: WorkspacePlan,
                  runner: Optional[GitRunner] = None) -> RemoveResult:
     """Remove ONE extra copy, re-checking everything first: it is still listed as extra
@@ -967,7 +996,7 @@ def remove_extra(extra: ExtraFolder, plan: WorkspacePlan,
     if not status.safe_to_remove:
         return RemoveResult(path, False, status.words())
     try:
-        shutil.rmtree(path)
+        _rmtree(path)
     except OSError as exc:
         return RemoveResult(path, False, f"could not remove it: {exc}")
     # An emptied folder of a domain that left the mesh goes too (never a folder with
