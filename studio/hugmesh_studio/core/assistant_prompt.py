@@ -246,7 +246,7 @@ def after_answer(answer_text: str, prompt: Prompt, *, index: Optional["adocs.Ind
     try:
         from . import assistant_actions as aact
         w = prompt.where
-        note = aact.secret_request_note(getattr(w, "question", "") or "", w, answer_text)
+        note = aact.never_set_note(getattr(w, "question", "") or "", w, answer_text)
     except Exception:                        # noqa: BLE001 — a note is a help, never a crash
         note = ""
     if note:

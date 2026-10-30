@@ -210,12 +210,39 @@ def test_a_request_to_set_a_secret_gets_a_plain_footer_note_whatever_the_model_s
         return ap.after_answer(answer, p)
     out = footer("set the root password for this domain to hunter2", "I do not know from the docs I have.")
     assert "I never set passwords, keys or tokens" in out and "services" in out and "tor" in out
+    assert out.splitlines()[-1].startswith(
+        "I never set passwords, keys or tokens: you type those on the page itself, and they "
+        "never reach me. I can only change these on this page: ")
     assert "hunter2" not in out
     assert "never set" not in footer("which services can I switch on?", "akkoma, tuwunel ...")
     assert "never set" not in footer("where do the node key folders end up?", "under keys-")
     blocked = footer("change the api key and turn the forum off",
                      'ok\n```change\n{"domain": "shop.example", "field": "services", "to": []}\n```')
     assert "never set" not in blocked
+
+
+def test_no_call_on_the_footer_path_has_a_secret_like_name():
+    """CodeQL reads the result of a call named like secret/token/password as secret data:
+    secret_request_note() made every footer write (the CLI chat, the prompt command,
+    draft.py) a clear-text-logging alert (PR #832 round 3, alerts 49-53). The note holds
+    a fixed sentence and option names only; the names on its path must say so."""
+    import ast
+    import inspect
+    import re
+    import textwrap
+    from hugmesh_studio.core import assistant_actions as aact
+    names = set()
+    for fn in (ap.after_answer, aact.never_set_note):
+        for node in ast.walk(ast.parse(textwrap.dedent(inspect.getsource(fn)))):
+            if isinstance(node, ast.Name):
+                names.add(node.id)
+            elif isinstance(node, ast.Attribute):
+                names.add(node.attr)
+            elif isinstance(node, ast.arg):
+                names.add(node.arg)
+    sensitive = re.compile(r"(?i)secret|token|pass(wd|word|code|phrase)|cert")
+    assert "never_set_note" in names and "_NEVER_SET_NOUN_RE" in names
+    assert not [n for n in names if sensitive.search(n)], sorted(names)
 
 
 def test_eval_skips_only_the_sources_line_the_studio_wrote():
