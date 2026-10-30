@@ -17,6 +17,9 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 FIXTURES = os.path.join(HERE, "fixtures", "org_export")
 SOURCES = os.path.join(FIXTURES, "sources")
 
+#: How the fixture writes its text files, on every OS (see make_world).
+_TEXT = {"encoding": "utf-8", "newline": "\n"}
+
 COMPOSE_LOCAL = """\
 # a slice of the real compose.local.yaml: one first-party platform app, one stock
 # image, one profile-gated service — the shape core/code_folders reads
@@ -140,10 +143,12 @@ def make_world(tmp_path) -> dict:
     runner, plus the config that ties them together."""
     gen = tmp_path / "generator"
     (gen / "tests" / "stack").mkdir(parents=True)
-    (gen / "tests" / "stack" / "compose.local.yaml").write_text(COMPOSE_LOCAL)
+    # UTF-8 and LF on every OS: a bare write_text() on Windows writes the code page
+    # (the compose file's em dash became 0x97) and CRLF
+    (gen / "tests" / "stack" / "compose.local.yaml").write_text(COMPOSE_LOCAL, **_TEXT)
     # the fake generator is a git checkout too, so a config that keeps
     # include_generator (the saved-mesh door's default) exports it as well
-    (gen / "README.md").write_text("a stand-in for hugmesh-generator in tests\n")
+    (gen / "README.md").write_text("a stand-in for hugmesh-generator in tests\n", **_TEXT)
     git(str(gen), "init", "-q", "-b", "main")
     git(str(gen), "add", "-A")
     git(str(gen), "-c", "commit.gpgsign=false", "commit", "-q", "-m", "fixture generator")
@@ -159,13 +164,13 @@ def make_world(tmp_path) -> dict:
         # a copy of the parent would hide the generated build's wrapper assumption
         shutil.copytree(os.path.join(SOURCES, "hugmesh-build-config" if name.endswith("config")
                                      else "hugmesh-parent"), str(src / name))
-        (src / name / "STAND-IN.md").write_text(f"a stand-in for {name} in tests\n")
+        (src / name / "STAND-IN.md").write_text(f"a stand-in for {name} in tests\n", **_TEXT)
         git(str(src / name), "init", "-q", "-b", "main")
         git(str(src / name), "add", "-A")
         git(str(src / name), "-c", "commit.gpgsign=false", "commit", "-q", "-m", name)
     stray = src / "hugmesh-stray"
     stray.mkdir()
-    (stray / "README.md").write_text("not in any compose file\n")
+    (stray / "README.md").write_text("not in any compose file\n", **_TEXT)
     git(str(stray), "init", "-q", "-b", "main")
     git(str(stray), "add", "-A")
     git(str(stray), "-c", "commit.gpgsign=false", "commit", "-q", "-m", "stray")
@@ -174,7 +179,7 @@ def make_world(tmp_path) -> dict:
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
     gh = fake_bin / "gh"
-    gh.write_text(FAKE_GH)
+    gh.write_text(FAKE_GH, **_TEXT)
     gh.chmod(gh.stat().st_mode | stat.S_IXUSR)
     runner = RecordingRunner(str(fake_bin), str(gh_root), str(tmp_path / "gh.log"))
     cfg = oe.ExportConfig(

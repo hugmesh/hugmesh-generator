@@ -54,6 +54,8 @@ import threading
 from collections.abc import Callable
 from dataclasses import dataclass
 
+from . import platform_info
+
 # The env override point the ncurses deploy_screen honours and the deploy tests override:
 # SNAP_CLOUD_DEPLOY_CMD wins over the in-repo specs/usr/sbin/hugmesh-cloud-deploy.
 ENV_DRIVER = "SNAP_CLOUD_DEPLOY_CMD"
@@ -171,9 +173,18 @@ class CloudDeploy:
         return os.environ.get(ENV_DRIVER) or os.path.join(self.generator_dir, *DRIVER_REL)
 
     # ── availability + registry ──────────────────────────────────────────────────
+    @staticmethod
+    def _windows_blocker() -> str:
+        return platform_info.native_windows_blocker("Cloud deploy", runs="bash scripts")
+
     def available(self) -> tuple[bool, str]:
         """True when the driver exists and is executable. The actionable message
-        names the resolved path (the phone_screen guard's shape)."""
+        names the resolved path (the phone_screen guard's shape). On native Windows
+        os.access(X_OK) is true for any file and the driver is bash, so spawning it
+        failed with WinError 193 after this had said yes."""
+        blocker = self._windows_blocker()
+        if blocker:
+            return False, blocker
         p = self.driver_path
         if not (os.path.isfile(p) and os.access(p, os.X_OK)):
             return False, (f"cloud-deploy driver not found or not executable: {p}\n"
@@ -251,7 +262,9 @@ class CloudDeploy:
             else:
                 try:
                     mode = os.stat(cf).st_mode & 0o777
-                    if mode & 0o077:
+                    # POSIX only: Windows reports 0o666 for every writable file, so
+                    # this fired on every creds file there and chmod cannot change it
+                    if os.name == "posix" and mode & 0o077:
                         problems.append(
                             f"creds file {cf} is group/world-readable "
                             f"({mode:03o}) — chmod 600 it so only you can read it")
@@ -428,6 +441,11 @@ class CloudDeploy:
         tempfile the wrapper shreds at session end. Returns (launched, message);
         with no emulator, the exact command to run by hand is returned instead
         (the creds stay in their 0600 file)."""
+        # Refused BEFORE any staging: on native Windows there is no terminal to shred
+        # the file, so pasted creds were left in %TEMP% beside a POSIX-only command line.
+        blocker = self._windows_blocker()
+        if blocker:
+            return False, blocker
         inner = self.command(verb)
         credsfile = ""
         if self.opts.creds.strip():

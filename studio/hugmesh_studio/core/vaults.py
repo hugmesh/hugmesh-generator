@@ -43,6 +43,8 @@ import os
 import subprocess
 from dataclasses import dataclass, field
 
+from . import proc_text
+
 #: The compose project a Studio-started local mesh uses.
 DEFAULT_PROJECT = "hugmesh-local"
 
@@ -105,12 +107,21 @@ class Capability:
 def _run(args: list[str], *, env: dict[str, str] | None = None,
          stdin: str | None = None, timeout: int = _DOCKER_TIMEOUT):
     """One docker/CLI call. Never raises on a non-zero exit — callers turn a failure into
-    an honest Capability rather than a traceback in a dialog."""
+    an honest Capability rather than a traceback in a dialog.
+
+    BYTES on the pipes, decoded here: a text-mode stdin on Windows writes every "\\n" as
+    "\\r\\n", so the token line the in-pod shell reads ended in "\\r" and every Vault call
+    over the kind route was refused as a bad token."""
     try:
-        return subprocess.run(
-            args, capture_output=True, text=True, timeout=timeout,
-            input=stdin, env={**os.environ, **(env or {})},
+        r = subprocess.run(
+            args, capture_output=True, timeout=timeout,
+            input=None if stdin is None else stdin.encode("utf-8"),
+            env={**os.environ, **(env or {})},
         )
+        def text(b: bytes) -> str:        # what text=True's universal newlines did
+            return b.decode(**proc_text.TEXT_IO).replace("\r\n", "\n").replace("\r", "\n")
+        return subprocess.CompletedProcess(args, r.returncode, text(r.stdout),
+                                           text(r.stderr))
     except (OSError, subprocess.SubprocessError) as e:
         return subprocess.CompletedProcess(args, 1, "", f"{type(e).__name__}: {e}")
 

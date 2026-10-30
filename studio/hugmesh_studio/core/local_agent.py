@@ -388,9 +388,13 @@ def diagnose(pr: Probe, agent: str = "claude", model: str = "",
         out.append(Problem(
             "server_down",
             f"The Ollama server is not answering on {pr.server}{why}.",
-            "Start it on this machine only: OLLAMA_HOST=127.0.0.1:11434 "
-            "OLLAMA_CONTEXT_LENGTH=32768 setsid ollama serve >~/.cache/ollama-serve.log "
-            "2>&1 &  (docs section 3), then press Re-check.",
+            # setsid, ~/.cache and `&` are POSIX shell; on Windows the Ollama app
+            # runs the server itself
+            ("Start the Ollama app from the Start menu (or run `ollama serve` in a "
+             "terminal) (docs section 3), then press Re-check." if os.name == "nt" else
+             "Start it on this machine only: OLLAMA_HOST=127.0.0.1:11434 "
+             "OLLAMA_CONTEXT_LENGTH=32768 setsid ollama serve >~/.cache/ollama-serve.log "
+             "2>&1 &  (docs section 3), then press Re-check."),
             _doc("3-start-the-server")))
     else:
         local = pr.local_models

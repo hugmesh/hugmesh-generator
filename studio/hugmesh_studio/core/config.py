@@ -39,7 +39,7 @@ from typing import Any, NamedTuple
 
 import sys
 
-from . import roles
+from . import json_files, roles
 from .branding_themes import PREMADE_THEMES, is_valid_theme
 from .host_resources import default_jobs
 from .validate import (
@@ -4065,8 +4065,7 @@ class ImageConfig:
 
     @classmethod
     def load(cls, path: str) -> "ImageConfig":
-        with open(path, encoding="utf-8") as fh:
-            data = json.load(fh)
+        data = json_files.load(path)      # Notepad/PowerShell saves (BOM, UTF-16) too
         # A worklist envelope carries an explicit `schema` discriminator; from_dict would
         # silently DEGRADE it to a default config (it drops unknown top-level keys). Fail
         # loudly so callers route it through the envelope loader instead.

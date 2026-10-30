@@ -34,7 +34,7 @@ from dataclasses import dataclass, field
 from types import SimpleNamespace
 from typing import Any
 
-from . import roles
+from . import json_files, roles
 
 from .config import (
     BUILTIN_DEFAULT_SERVICES,
@@ -619,8 +619,7 @@ def load_any(path: str) -> tuple[ImageConfig, "WorklistConfig | None"]:
     The single loader both UIs and the headless ``--print-commands`` path share, so the
     118 matrix flat configs and all user saves keep loading unchanged while an envelope
     is never silently degraded (ImageConfig.load raises on the same discriminator)."""
-    with open(path, encoding="utf-8") as fh:
-        data = json.load(fh)
+    data = json_files.load(path)          # Notepad/PowerShell saves (BOM, UTF-16) too
     if isinstance(data, dict) and "schema" in data:
         wl = WorklistConfig.from_dict(data)
         return wl.base, wl

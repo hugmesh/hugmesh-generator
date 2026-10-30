@@ -714,6 +714,14 @@ class QemuPage(QtWidgets.QWizardPage):
         self._docker_answered_paint((bool(ok), str(why)))
 
     def _docker_answered_paint(self, answer):
+        blocker = qemu_tests.native_blocker()
+        if blocker:
+            # Docker Desktop being up says nothing here: the lanes are bash scripts.
+            self.docker_note.setText(
+                f'<span style="color:{WARN}">{html.escape(blocker)}</span>')
+            self._docker_ok = False
+            self._sync_controls()
+            return
         self.docker_note.setText(common.docker_note_html(answer))
         # While the answer is unknown the buttons stay DISABLED: offering a run that
         # is about to fail at spawn is the courtesy this note exists to extend, and
@@ -1166,7 +1174,8 @@ class QemuPage(QtWidgets.QWizardPage):
         # host launchers directly (that is exactly why it needs root and the
         # containerized lane does not). Gating it on the docker probe would grey out
         # a listing that works fine on a machine with no daemon at all.
-        pw_row = bool(self.pw_row.currentData())
+        # ...but it is bash too, so native Windows greys it out with the other lanes.
+        pw_row = bool(self.pw_row.currentData()) and not qemu_tests.native_blocker()
         for w in (self.pw_list_btn, self.pw_preview_btn):
             w.setEnabled(idle and planned and pw_row)
         self.pw_run_btn.setEnabled(idle and planned and pw_row and boots

@@ -34,7 +34,7 @@ import subprocess
 import tempfile
 import threading
 
-from . import proc_text
+from . import platform_info, proc_text
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
@@ -237,7 +237,16 @@ class GoLiveDriver:
         return self.tor_domain_onions().get(slug, "") if slug else ""
 
     # ---- provider registry (via the driver's `list` — the source of truth) ----
+    def blocker(self) -> str:
+        """WHY the driver cannot run here, "" when it can. Native Windows only: every
+        verb is ``bash ./specs/usr/sbin/hugmesh-go-live``, and the bash found there is
+        the WSL launcher, so `list` printed nothing and the wizard offered no provider
+        at all instead of saying why."""
+        return platform_info.native_windows_blocker("Go Live", runs="bash scripts")
+
     def providers(self) -> list[GoLiveProvider]:
+        if self.blocker():
+            return []
         if self._providers is None:
             self._providers = self._load_providers()
         return self._providers
@@ -299,6 +308,11 @@ class GoLiveDriver:
         read-only, posture-safe emit), calling on_line per output line
         (stdout+stderr merged). Returns the exit code. Blocking — callers run it on
         a worker thread (the GUI uses a QThread)."""
+        blocker = self.blocker()
+        if blocker:
+            if on_line:
+                on_line(f"!! {blocker}")
+            return 2
         self._cancel.clear()
         self._proc = subprocess.Popen(
             self.command(subcommand, opts), cwd=self.generator_dir,
@@ -320,6 +334,9 @@ class GoLiveDriver:
 
     def status_text(self) -> str:
         """The driver's own `status` report (read-only, cheap), for display."""
+        blocker = self.blocker()
+        if blocker:
+            return blocker
         try:
             r = subprocess.run(["bash", f"./{DRIVER_REL}", "status"],
                                cwd=self.generator_dir, env=self._driver_env(),

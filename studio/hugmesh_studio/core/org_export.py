@@ -92,11 +92,13 @@ import re
 import shlex
 import shutil
 import subprocess
+import sys
 import tarfile
 import tempfile
 import zlib
 from dataclasses import asdict, dataclass, field
 
+from . import json_files
 from .config import OPTIONAL_SERVICES_CHOICES, Domain, github_org_problem
 
 __all__ = [
@@ -486,8 +488,7 @@ def load_rename_map(path: str) -> dict:
     test script holding an example token is excluded, never published). Both are
     fnmatch globs on the repository-relative path, with ``<repo>:<glob>`` scoping a
     rule to one source repository."""
-    with open(path, encoding="utf-8") as fh:
-        data = json.load(fh)
+    data = json_files.load(path)          # Notepad/PowerShell saves (BOM, UTF-16) too
     if not isinstance(data, dict):
         raise ValueError("rename map must be a JSON object")
     unknown = sorted(set(data) - {"repos", "tokens", "skip_rewrite", "exclude"})
@@ -874,6 +875,11 @@ class RepoPlan:
     rewrites: dict = field(default_factory=dict)      # path -> replacements
     banned: list[str] = field(default_factory=list)   # "path: marker"
     notes: list[str] = field(default_factory=list)
+    #: native Windows only: kept files whose tar mode is executable (restored in the
+    #: index at commit; the Windows folder cannot hold the bit) ...
+    executables: list[str] = field(default_factory=list)
+    #: ... and entries a Windows folder cannot hold at all ("path: why")
+    windows_lost: list[str] = field(default_factory=list)
 
     @property
     def target_full(self) -> str:
@@ -888,9 +894,14 @@ class RepoPlan:
 #: claims the repository exists nor that it does not (apply looks at it for real).
 NOT_LOOKED_AT = "not looked at"
 
+#: A repository holding a symlink or a name Windows cannot hold: a Windows work folder
+#: would publish a DIFFERENT tree (a link became a copy, a file went missing).
+REFUSED_ON_WINDOWS = "refused: cannot be exported from Windows"
+
 ACTIONS = ("create", "update (empty repository)", "exists (compared at apply)",
            NOT_LOOKED_AT,
            "update via branch", "unchanged", "refused: banned marker",
+           REFUSED_ON_WINDOWS,
            "refused: existing non-empty repository", "missing source")
 
 
@@ -1213,21 +1224,72 @@ def _resolve_ref(runner: Runner, path: str, wanted: str) -> tuple[str, str]:
     return "", ""
 
 
-def _snapshot(runner: Runner, path: str, ref: str, workdir: str) -> list[str]:
-    """``git archive`` the ref into ``workdir`` (emptied first); returns the files."""
+def _rmtree(path: str) -> None:
+    """shutil.rmtree that also removes READ-ONLY files: git writes its objects read-only,
+    and on Windows that refuses the delete, so a second plan for the same domain crashed
+    emptying the work folder it had made the first time."""
+    def clear_and_retry(func, p, _exc):
+        os.chmod(p, 0o700)
+        func(p)
+    if sys.version_info >= (3, 12):
+        shutil.rmtree(path, onexc=clear_and_retry)
+    else:                                      # pragma: no cover - older Pythons
+        shutil.rmtree(path, onerror=clear_and_retry)
+
+
+#: Characters and device names a Windows path component cannot hold.
+_WIN_BAD_CHARS = re.compile(r'[<>:"\\|?*\x00-\x1f]')
+_WIN_DEVICES = re.compile(r"(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?", re.IGNORECASE)
+
+
+def _windows_cannot_hold(name: str) -> bool:
+    return any(_WIN_BAD_CHARS.search(part) or part.endswith((".", " "))
+               or _WIN_DEVICES.fullmatch(part) for part in name.split("/") if part)
+
+
+def _studio_cli() -> list[str]:
+    """How a person runs this Studio's CLI from a terminal: the MSI's console twin
+    beside the frozen exe (the windowed one prints nothing), else the module."""
+    if getattr(sys, "frozen", False):
+        return [os.path.join(os.path.dirname(sys.executable), "hugmesh-studio-cli.exe")]
+    return ["python3", "-m", "hugmesh_studio"]
+
+
+def _snapshot(runner: Runner, path: str, ref: str, workdir: str,
+              meta: dict | None = None, osname: str | None = None) -> list[str]:
+    """``git archive`` the ref into ``workdir`` (emptied first); returns the files.
+
+    On native Windows (``osname`` is ``os.name`` unless a test passes another) the folder
+    cannot hold everything a tar can: ``meta`` then receives ``executables`` (the
+    files whose mode has an x bit, restored in the index at commit) and ``lost`` (links
+    and names Windows cannot hold, which are not extracted and refuse the repository)."""
+    windows = (osname or os.name) == "nt"
     if os.path.isdir(workdir):
-        shutil.rmtree(workdir)
+        _rmtree(workdir)
     os.makedirs(workdir)
-    r = runner.run(["git", "archive", "--format=tar", ref], cwd=path, timeout=1800)
+    # the bytes as committed: Git for Windows defaults core.autocrlf=true, which made
+    # git archive hand every text file over with CRLF line endings
+    r = runner.run(["git", "-c", "core.autocrlf=false", "-c", "core.eol=lf",
+                    "archive", "--format=tar", ref], cwd=path, timeout=1800)
     if r.returncode != 0:
         raise RuntimeError(f"git archive {ref} failed in {path}: {r.err.strip()}")
     files: list[str] = []
+    executables: list[str] = []
+    lost: list[tuple[str, str]] = []          # (name, why)
     with tarfile.open(fileobj=io.BytesIO(r.stdout), mode="r:") as tf:
         for member in tf.getmembers():
             if not (member.isfile() or member.isdir() or member.issym()):
                 continue
             if not _member_stays_inside(workdir, member):
                 continue
+            if windows and member.issym():
+                lost.append((member.name, "a symbolic link (Windows would copy it)"))
+                continue
+            if windows and _windows_cannot_hold(member.name):
+                lost.append((member.name, "a name Windows cannot hold"))
+                continue
+            if windows and member.isfile() and member.mode & 0o111:
+                executables.append(member.name)
             try:
                 try:
                     tf.extract(member, workdir, filter="data")
@@ -1244,6 +1306,9 @@ def _snapshot(runner: Runner, path: str, ref: str, workdir: str) -> list[str]:
             # the exclusion rules and the scan like a file
             if member.isfile() or member.issym():
                 files.append(member.name)
+    if meta is not None:
+        meta["executables"] = executables
+        meta["lost"] = lost
     return sorted(files)
 
 
@@ -1293,8 +1358,12 @@ def _prepare_repo(runner: Runner, name: str, cfg: ExportConfig, rules, out_dir: 
         rp.notes.append(f"{rp.source_path}: no origin/HEAD, origin/main or HEAD to export")
         return rp
     rp.workdir = workdir
-    files = _snapshot(runner, rp.source_path, rp.ref, rp.workdir)
+    meta: dict = {}
+    files = _snapshot(runner, rp.source_path, rp.ref, rp.workdir, meta)
     exclude_globs = list(cfg.rename_map.get("exclude") or [])
+    # an entry the rename map drops anyway is no loss
+    rp.windows_lost = [f"{rel}: {why}" for rel, why in meta.get("lost") or []
+                       if not _glob_matches(rel, name, exclude_globs)]
     kept: list[str] = []
     for rel in files:
         why = _excluded_reason(rel, rp.workdir)
@@ -1308,11 +1377,16 @@ def _prepare_repo(runner: Runner, name: str, cfg: ExportConfig, rules, out_dir: 
                 pass
             continue
         kept.append(rel)
+    executable = set(meta.get("executables") or [])
+    rp.executables = [rel for rel in kept if rel in executable]
     # drop the directories the exclusions emptied (and the excluded dirs themselves)
     for dirpath, dirnames, _files in os.walk(rp.workdir, topdown=True):
         for d in list(dirnames):
             if d in EXCLUDED_DIRS:
-                shutil.rmtree(os.path.join(dirpath, d), ignore_errors=True)
+                try:
+                    _rmtree(os.path.join(dirpath, d))
+                except OSError:
+                    pass
                 dirnames.remove(d)
     for dirpath, dirnames, filenames in os.walk(rp.workdir, topdown=False):
         if not dirnames and not filenames and dirpath != rp.workdir:
@@ -1352,7 +1426,9 @@ def _prepare_repo(runner: Runner, name: str, cfg: ExportConfig, rules, out_dir: 
             unrewritten.append(rel)
             continue
         rp.rewrites[rel] = n
-        with open(full, "w", encoding="utf-8") as fh:
+        # newline="": the text keeps its own line endings (a text-mode write on
+        # Windows turned every LF into CRLF, and a CRLF into CR CR LF)
+        with open(full, "w", encoding="utf-8", newline="") as fh:
             fh.write(new)
     if unrewritten:
         shown = ", ".join(unrewritten[:5]) + (" ..." if len(unrewritten) > 5 else "")
@@ -1370,6 +1446,14 @@ def _prepare_repo(runner: Runner, name: str, cfg: ExportConfig, rules, out_dir: 
         rp.notes.append("remove the marker from the source repository, or drop the "
                         "file from the snapshot with the rename map's exclude list "
                         f"(\"{name}:<path>\") — the export never publishes it")
+    elif rp.windows_lost:
+        rp.action = REFUSED_ON_WINDOWS
+        shown = "; ".join(rp.windows_lost[:5]) + (" ..." if len(rp.windows_lost) > 5 else "")
+        rp.notes.append(f"{len(rp.windows_lost)} file(s) or link(s) cannot be written to a Windows "
+                        f"folder as they are, so the published repository would differ "
+                        f"from the source: {shown}. Export it from the Studio inside WSL2 "
+                        f"(or Linux), or exclude them with the rename map's exclude list "
+                        f"(\"{name}:<path>\").")
     if settings_note:
         rp.notes.append(settings_note)
     return rp
@@ -1503,7 +1587,7 @@ def _prepare_site(cfg: ExportConfig, repos: list[RepoPlan], out_dir: str,
                     action="", kind="site")
     site.workdir = os.path.join(out_dir, "work", cfg.site_repo)
     if os.path.isdir(site.workdir):
-        shutil.rmtree(site.workdir)
+        _rmtree(site.workdir)
     os.makedirs(os.path.join(site.workdir, ".github", "workflows"))
     exported = [r for r in repos if not r.blocked]
     rows = [{"name": r.target, "source": r.source, "build": _build_word(r.kind),
@@ -1523,10 +1607,12 @@ def _prepare_site(cfg: ExportConfig, repos: list[RepoPlan], out_dir: str,
     written: list[str] = []
     for dst, template in TEMPLATES:
         text = _render(template, values)
-        with open(os.path.join(site.workdir, dst), "w", encoding="utf-8") as fh:
+        with open(os.path.join(site.workdir, dst), "w", encoding="utf-8",
+                  newline="") as fh:            # published: LF on every OS
             fh.write(text)
         written.append(dst)
-    with open(os.path.join(site.workdir, "repos.json"), "w", encoding="utf-8") as fh:
+    with open(os.path.join(site.workdir, "repos.json"), "w", encoding="utf-8",
+              newline="") as fh:
         json.dump(repos_json, fh, indent=2)
     written.append("repos.json")
     site.files = len(written)
@@ -1611,6 +1697,18 @@ def _no_replace(env: dict[str, str]) -> dict[str, str]:
     return {**env, "GIT_NO_REPLACE_OBJECTS": "1"}
 
 
+def _restore_executables(runner, calls, rp: RepoPlan, wd: str, env) -> None:
+    """Native Windows: put back the x bits the folder could not hold (``rp.executables``,
+    from the tar headers) in the index, before the commit is made and scanned. Without
+    this ./mvnw and every script was published as 100644."""
+    for i in range(0, len(rp.executables), 200):
+        argv = ["git", "update-index", "--chmod=+x", "--", *rp.executables[i:i + 200]]
+        r = _run_checked(runner, calls, argv, cwd=wd, env=env)
+        if r.returncode != 0:
+            raise RuntimeError(f"git update-index --chmod=+x failed in {wd}: "
+                               f"{r.err.strip()[:160]}: nothing is pushed")
+
+
 def _commit_snapshot(runner, calls, rp: RepoPlan, cfg: ExportConfig, stamp: str,
                      message: str, push_dir: str) -> tuple[str, str]:
     """One fresh commit in the work tree, copied object by object into ``push_dir``
@@ -1620,7 +1718,7 @@ def _commit_snapshot(runner, calls, rp: RepoPlan, cfg: ExportConfig, stamp: str,
     env = _git_env(cfg, stamp)
     wd = rp.workdir
     if os.path.isdir(os.path.join(wd, ".git")):
-        shutil.rmtree(os.path.join(wd, ".git"))
+        _rmtree(os.path.join(wd, ".git"))
     for argv in (["git", "init", "-q", "-b", "main"],
                  # --force: no ignore rule may apply. The snapshot's own .gitignore and
                  # the person's global core.excludesFile would otherwise leave tracked
@@ -1631,6 +1729,8 @@ def _commit_snapshot(runner, calls, rp: RepoPlan, cfg: ExportConfig, stamp: str,
         r = _run_checked(runner, calls, argv, cwd=wd, env=env, stage="add" in argv)
         if r.returncode != 0:
             raise RuntimeError(f"{shlex.join(argv)} failed in {wd}: {r.err.strip()}")
+        if "add" in argv:
+            _restore_executables(runner, calls, rp, wd, env)
     # the commit is pinned by its sha NOW, before anything reads it: every check below
     # and the push read that sha, never HEAD. The folder is an ordinary directory, so a
     # writer to it can move HEAD between this scan and the push; a push of HEAD would
@@ -1716,7 +1816,10 @@ def _push_one(runner, calls, rp: RepoPlan, cfg: ExportConfig, stamp: str,
                                                 push_dir)
         return _send(runner, calls, rp, cfg, stamp, create_missing, res, url, push_dir)
     finally:
-        shutil.rmtree(push_dir, ignore_errors=True)
+        try:
+            _rmtree(push_dir)              # git's objects are read-only
+        except OSError:
+            pass
 
 
 def _send(runner, calls, rp: RepoPlan, cfg: ExportConfig, stamp: str,
@@ -1973,7 +2076,7 @@ def cli_command(cfg: ExportConfig, verb: str = "PLAN", config_path: str = "",
     repositories, plan folder, brand, remote base) is then emitted as a flag ONLY
     where it differs from what the file alone would give, so the line stays short
     for the ordinary case and exact for every other."""
-    argv = ["python3", "-m", "hugmesh_studio", "--org-export", verb]
+    argv = [*_studio_cli(), "--org-export", verb]
     base: ExportConfig | None = None
     if config_path:
         # --domain picks the row when the file carries several; harmless otherwise

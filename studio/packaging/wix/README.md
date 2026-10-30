@@ -122,15 +122,13 @@ The Studio is a front end over scripts in a `hugmesh-generator` checkout (`build
   Qt-free commands never import it, so `--print-specs` alone does not). The timezone list needs
   the bundled tzdata (checked present, not exercised).
 * **From the code:** building an image, cluster and go-live actions and e2e runs need a
-  checkout. The default `--generator-dir` is `os.getcwd()` when the repo root cannot be
-  derived, and `BuildDriver.preflight` then reports `builder script build-x86-host-stage4.sh
-  not found in <dir>` (measured by running that code against an empty folder).
-* **From the code: there is no way to point it at a checkout from the GUI.** `--generator-dir`
-  is the only switch; no dialog in the GUI chooses the generator directory (the one picker that
-  mentions a checkout seeds home code). The Start Menu shortcut sets the working directory to
-  the install folder, which has no scripts, and passes no arguments. So the release notes'
-  "point it at one on first run" has no GUI behind it. Not changed here: it is application
-  code, and `Package.wxs`'s shortcut is the other half.
+  checkout. The Start Menu shortcut starts in the install folder, which has no scripts, and
+  passes no arguments.
+* **Choosing the checkout (#827):** `--generator-dir` wins, then `$HUGMESH_GENERATOR_DIR`, then
+  the folder last picked in the GUI (saved as `generator-dir.txt` in the Studio state dir,
+  `%USERPROFILE%\.hugmesh\studio`). When none of those is a checkout, the GUI says so on start
+  and opens a folder picker; a cancel keeps the install folder, and the pages then say what is
+  missing. See `core/generator_dir.py`.
 * **From the code:** `core/build_driver.py` writes a `sudo` askpass helper that runs
   `sys.executable -m hugmesh_studio --askpass-gui`, which cannot work in a frozen exe. It only
   serves native `sudo` builds on Linux, which Windows never does; noted, not a Windows defect.
