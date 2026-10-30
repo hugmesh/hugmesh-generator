@@ -141,6 +141,22 @@ def test_ensure_refuses_when_docker_cannot_answer(tmp_path, monkeypatch):
     assert not os.path.exists(os.path.join(gen, "tests", "stack", ".env"))
 
 
+def test_ensure_with_a_key_already_present_spawns_nothing(tmp_path, monkeypatch):
+    gen = _gen_dir(tmp_path, f"{KEY}=abc123\n", with_script=True)
+
+    def _no_spawn(*a, **k):
+        raise AssertionError("ensure spawned a process although the key is present")
+    monkeypatch.setattr(lsn.subprocess, "run", _no_spawn)
+    assert LocalStackNode(gen).ensure_route_access_env(project="hugmesh-local") == (True, "")
+
+
+def test_ensure_with_an_unsafe_key_still_runs_the_generator_and_refuses(tmp_path, monkeypatch):
+    monkeypatch.setenv("DOCKER", _docker_stub(tmp_path, "absent"))
+    gen = _gen_dir(tmp_path, f"{KEY}=ab+cd\n", with_script=True)
+    ok, note = LocalStackNode(gen).ensure_route_access_env(project="hugmesh-local")
+    assert ok is False and "URL-unreserved" in note
+
+
 def test_ensure_on_an_older_checkout_without_the_script_is_a_no_op(tmp_path):
     ok, note = LocalStackNode(_gen_dir(tmp_path)).ensure_route_access_env()
     assert (ok, note) == (True, "")

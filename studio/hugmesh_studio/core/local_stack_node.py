@@ -1062,9 +1062,15 @@ class LocalStackNode:
         Every `make stack-*` target already runs it (the Makefile's
         stack-route-access-env prerequisite). A generator checkout older than the
         script spells the password in its compose file, so there is nothing to
-        ensure and the answer is ``(True, "")``. ``project`` pins the compose
+        ensure and the answer is ``(True, "")``; so is a tree whose tests/stack/.env
+        already holds a valid key (nothing is spawned). ``project`` pins the compose
         project whose volume and container the generator probes (the scale passes
         its ``-p``)."""
+        # The key is already there and valid (any `make stack-*` or stack-up.ps1 run
+        # wrote it): _build_env carries it, so no bash is spawned per click — which
+        # also keeps a scale working where bash is absent (a stack-up.ps1 box).
+        if route_access_password(self.generator_dir):
+            return True, ""
         script = os.path.join(self.generator_dir, _ROUTE_ACCESS_GEN)
         if not os.path.exists(script):
             return True, ""
