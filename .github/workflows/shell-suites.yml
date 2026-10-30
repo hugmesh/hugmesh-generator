@@ -569,6 +569,7 @@ jobs:
               tests/scripts/test-first-run-lib.sh
               tests/scripts/test-fragment-route-target.sh
               tests/scripts/test-games-screens-wiring.sh
+              tests/scripts/test-games-two-realms.sh
               tests/scripts/test-gitlab-ci-wellformed.sh
               tests/scripts/test-headscale-oidc-secret-staging.sh
               tests/scripts/test-mfa-raw-jwt-posture.sh

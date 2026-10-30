@@ -60,7 +60,7 @@ test.describe('RBAC: plain user surfaces (contract)', () => {
     { gw: 'hugmesh-fe-gateway', path: '/bff/admin/allowlist', what: 'BFF admin' },
     { gw: 'hugmesh-be-gateway', path: '/api/v1/pleroma/admin/config', what: 'akkoma moderation' },
     { gw: 'hugmesh-fe-gateway', path: '/games/admin/sessions', what: 'games admin UI' },
-    { gw: 'hugmesh-be-gateway', path: '/games/api/admin/role-grants', what: 'games admin API' },
+    { gw: 'hugmesh-fe-gateway', path: '/games/api/admin/role-grants', what: 'games admin API' },
     // Homeserver BACKEND surfaces — REMOVED from the ROLE_USER floor by commit
     // 0100d3b; a plain member without the platform-access role is now denied.
     { gw: 'hugmesh-be-gateway', path: '/_matrix/client/v3/sync', what: 'Matrix C-S API (needs ROLE_MATRIX)' },

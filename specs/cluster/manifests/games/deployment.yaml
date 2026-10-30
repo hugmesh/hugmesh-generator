@@ -26,36 +26,100 @@ spec:
           image: hugmesh/hugmesh.games-backend:dev
           ports: [{ name: http, containerPort: 8080 }]
           env:
-            # GAMES-realm Casdoor (casdoor-games, org "threewizards") — the SEPARATE,
-            # INDEPENDENT games identity provider, NOT the systems Casdoor. The games
-            # BFF reads these exact env var names (see hugmesh.games
-            # backend/src/main/resources/application.yml): CASDOOR_ENDPOINT drives both
-            # the JWKS endpoint (${CASDOOR_ENDPOINT}/.well-known/jwks) and casdoor.endpoint.
+            # TWO REALMS, ONE BFF (operator decision 2026-10-30). A games player signs
+            # in with a games-realm account (casdoor-games, org "threewizards") and need
+            # not be a mesh user; a mesh user with ROLE_GAMES / ROLE_GAMES_ADMIN arrives
+            # through the mesh shell carrying the SYSTEMS custody JWT the fe-gateway
+            # forwards (iss https://id.hugmesh.net). Both must validate here, and a token
+            # from any other issuer must not.
+            #
+            # These three variables are read by hugmesh-games AFTER its two-realm change
+            # (app.tenancy.issuers exists today; app.tenancy.jwks-uris and
+            # app.security.games-realm-issuers land with that change). Do not run them
+            # on an older image: it would look keys up through OIDC discovery on the
+            # public host, and would treat a mesh ROLE_ADMIN as a games admin.
+            #
+            # APP_TENANCY_ISSUERS: issuer=domain. Both map to ONE domain, so the domain
+            # stamp on an upload and the per-domain role check do not depend on which
+            # realm the caller signed in through. On a multi-brand cluster map both to
+            # that brand's domain. APP_TENANCY_DOMAIN stays unset: the domain comes from
+            # the validated `iss`.
+            - { name: APP_TENANCY_ISSUERS, value: "https://id.hugmesh.games=default,https://id.hugmesh.net=default" }
+            # APP_TENANCY_JWKS_URIS: issuer=in-cluster JWKS. The public issuer hosts need
+            # not resolve in the cluster, so nothing here may fall back to discovery.
+            # The systems half needs networkpolicy/casdoor-jwks-ingress.yaml
+            # (games-bff-to-casdoor-jwks); tests/scripts/test-bff-jwks-in-cluster.sh
+            # judges every entry.
+            - { name: APP_TENANCY_JWKS_URIS, value: "https://id.hugmesh.games=http://casdoor-games.hugmesh-games.svc.cluster.local:8000/.well-known/jwks,https://id.hugmesh.net=http://casdoor.hugmesh-pki.svc.cluster.local:8000/.well-known/jwks" }
+            # Only THIS issuer's `admin` role makes a games admin. A mesh ROLE_ADMIN is
+            # not a games admin; a mesh user needs ROLE_GAMES_ADMIN.
+            - { name: APP_SECURITY_GAMES_REALM_ISSUERS, value: "https://id.hugmesh.games" }
+            # The games-realm Casdoor back-channel: password grant and user directory.
+            # The BFF reads these exact names (hugmesh-games backend application.yml).
             - { name: CASDOOR_ENDPOINT, value: "http://casdoor-games.hugmesh-games.svc.cluster.local:8000" }
             - { name: CASDOOR_ORGANIZATION, value: "threewizards" }
             # threewizards-app OAuth2 client — clientId/clientSecret from the ESO-
             # materialized casdoor-games-app Secret (Vault secret/<brand>/casdoor-games).
             - { name: CASDOOR_CLIENT_ID,     valueFrom: { secretKeyRef: { name: casdoor-games-app, key: clientId } } }
             - { name: CASDOOR_CLIENT_SECRET, valueFrom: { secretKeyRef: { name: casdoor-games-app, key: clientSecret } } }
-            # Public issuer of the games realm — the value the games BFF enforces
-            # as the expected `iss`. Parameterized on GAMES_DOMAIN by
-            # parameterize_games_domain() in the stage4 builders (id.hugmesh.games
-            # -> id.${GAMES_DOMAIN}); MUST match casdoor-games origin above or the
-            # iss-strict JwtIssuerValidator rejects every games token.
+            # Public issuer of the games realm. Every https://id.hugmesh.games on this
+            # page is rewritten in lockstep by parameterize_games_domain() in the stage4
+            # builders; it MUST match casdoor-games' origin (app-conf-configmap.yaml) or
+            # every games-realm token is rejected on its `iss`.
             - { name: CASDOOR_ISSUER_URI, value: "https://id.hugmesh.games" }
+            # The BFF's own stores. application.yml defaults to localhost:5432 and
+            # cassandra:9042 with a blank password, and Liquibase runs at startup, so
+            # without these the pod cannot come up for EITHER realm.
+            - { name: DB_HOST, value: games-bff-db }
+            - { name: DB_NAME, value: threewizards }
+            - { name: DB_USER, valueFrom: { secretKeyRef: { name: games-bff-db, key: username } } }
+            - { name: DB_PASS, valueFrom: { secretKeyRef: { name: games-bff-db, key: password } } }
+            - { name: CASSANDRA_CONTACT_POINTS, value: "games-cassandra:9042" }
+            - { name: CASSANDRA_KEYSPACE, value: threewizards }
+            - { name: CASSANDRA_LOCAL_DC, value: datacenter1 }
+            # Refuse to boot on a blank client secret or DB password.
+            - { name: APP_SECURITY_REQUIRE_MANAGED_SECRETS, value: "true" }
+            - { name: APP_UPLOADS_GAMES_DIR, value: /var/hugmesh/games }
             # Mesa picks the best installed driver; force SW only if no GPU.
             - { name: LIBGL_ALWAYS_SOFTWARE, value: "0" }
           resources:
             requests: { cpu: 500m, memory: 1Gi }
             limits:   { cpu: "4",  memory: 4Gi }
+          # /actuator/health is permitAll in the BFF's SecurityConfig. The JVM,
+          # Liquibase and the Cassandra session take a while on first boot.
+          readinessProbe:
+            httpGet: { path: /actuator/health, port: http }
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            failureThreshold: 30
+          livenessProbe:
+            httpGet: { path: /actuator/health, port: http }
+            initialDelaySeconds: 180
+            periodSeconds: 20
+            failureThreshold: 5
           volumeMounts:
             - { name: dri, mountPath: /dev/dri }
+            - { name: uploads, mountPath: /var/hugmesh/games }
           securityContext:
             # /dev/dri render node access for unprivileged GPU use.
             seccompProfile: { type: RuntimeDefault }
       volumes:
         - name: dri
           hostPath: { path: /dev/dri, type: Directory }
+        # Uploaded game bundles (app.uploads.storage=filesystem).
+        - name: uploads
+          persistentVolumeClaim: { claimName: games-bff-uploads }
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: games-bff-uploads
+  namespace: hugmesh-games
+  labels: { app: hugmesh-games, app.kubernetes.io/part-of: hugmesh.games }
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: hugmesh-local
+  resources: { requests: { storage: 20Gi } }
 ---
 apiVersion: v1
 kind: Service

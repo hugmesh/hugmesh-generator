@@ -26,11 +26,11 @@ Feature: Cross-realm role authz — systems, games and superadmin tiers stay iso
     Examples: the games-namespace AND-gate — neither half alone earns ROLE_GAMES_ADMIN
       | role           | gateway            | decision | path                         |
       | e2e-gamesadmin | hugmesh-fe-gateway | ALLOW    | /games/admin/sessions        |
-      | e2e-gamesadmin | hugmesh-be-gateway | ALLOW    | /games/api/admin/role-grants |
+      | e2e-gamesadmin | hugmesh-fe-gateway | ALLOW    | /games/api/admin/role-grants |
       | e2e-gamesonly  | hugmesh-fe-gateway | DENY     | /games/admin/sessions        |
-      | e2e-gamesonly  | hugmesh-be-gateway | DENY     | /games/api/admin/role-grants |
+      | e2e-gamesonly  | hugmesh-fe-gateway | DENY     | /games/api/admin/role-grants |
       | e2e-adminonly  | hugmesh-fe-gateway | DENY     | /games/admin/sessions        |
-      | e2e-adminonly  | hugmesh-be-gateway | DENY     | /games/api/admin/role-grants |
+      | e2e-adminonly  | hugmesh-fe-gateway | DENY     | /games/api/admin/role-grants |
 
     Examples: own-realm positive controls — each tier reaches its own resources
       | role      | gateway            | decision | path                           |
@@ -41,7 +41,7 @@ Feature: Cross-realm role authz — systems, games and superadmin tiers stay iso
     Examples: the games-admin surfaces are not reachable from the plain admin tier
       | role      | gateway            | decision | path                         |
       | e2e-admin | hugmesh-fe-gateway | DENY     | /games/admin/sessions        |
-      | e2e-mod   | hugmesh-be-gateway | DENY     | /games/api/admin/role-grants |
+      | e2e-mod   | hugmesh-fe-gateway | DENY     | /games/api/admin/role-grants |
 
   Scenario: the systems and games realms are minted by distinct issuers @layer:casdoor
     Then the systems realm issuer differs from the games realm issuer
@@ -64,7 +64,7 @@ Feature: Cross-realm role authz — systems, games and superadmin tiers stay iso
       | /api/v1/timelines/home                | hugmesh-be-gateway         |
       | /_matrix/client/v3/sync               | hugmesh-be-gateway         |
       | /games/admin/sessions                 | hugmesh-fe-gateway         |
-      | /games/api/admin/role-grants          | hugmesh-be-gateway         |
+      | /games/api/admin/role-grants          | hugmesh-fe-gateway         |
       | /bff/superadmin/service-store/catalog | hugmesh-superadmin-gateway |
 
   # ROLE_SUPERADMIN reaches the tailnet-only cross-realm infra surface, and a

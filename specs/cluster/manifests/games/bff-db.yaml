@@ -1,0 +1,65 @@
+# games-bff-db — the games BFF's own Postgres (db "threewizards"): players,
+# characters, game catalog, grants. Separate from casdoor-games-pg, which holds only
+# the games realm's identity data. Same shape as manifests/casdoor-games/pg.yaml.
+# Credentials come from the ESO Secret games-bff-db (Vault secret/<brand>/games-bff).
+# db-ingress.yaml admits only the BFF.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: games-bff-db-data
+  namespace: hugmesh-games
+  labels: { app: games-bff-db, app.kubernetes.io/part-of: hugmesh.games }
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: hugmesh-local
+  resources: { requests: { storage: 10Gi } }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: games-bff-db
+  namespace: hugmesh-games
+  labels: { app: games-bff-db, app.kubernetes.io/part-of: hugmesh.games }
+spec:
+  replicas: 1
+  strategy: { type: Recreate }
+  selector: { matchLabels: { app: games-bff-db } }
+  template:
+    metadata: { labels: { app: games-bff-db } }
+    spec:
+      nodeSelector: { hugmesh.net/games: "true" }
+      securityContext:
+        seLinuxOptions:
+          type: container_t
+          level: "s0:c89"
+      containers:
+        - name: pg
+          image: postgres:16-alpine
+          ports: [{ name: pg, containerPort: 5432 }]
+          env:
+            - { name: POSTGRES_DB, value: threewizards }
+            - { name: POSTGRES_USER,     valueFrom: { secretKeyRef: { name: games-bff-db, key: username } } }
+            - { name: POSTGRES_PASSWORD, valueFrom: { secretKeyRef: { name: games-bff-db, key: password } } }
+            # Use a subdir so the volume root (lost+found) doesn't upset initdb.
+            - { name: PGDATA, value: /var/lib/postgresql/data/pgdata }
+          readinessProbe:
+            exec: { command: ["pg_isready", "-U", "threewizards", "-d", "threewizards"] }
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits:   { cpu: "1",  memory: 1Gi }
+          volumeMounts: [{ name: data, mountPath: /var/lib/postgresql/data }]
+      volumes:
+        - name: data
+          persistentVolumeClaim: { claimName: games-bff-db-data }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: games-bff-db
+  namespace: hugmesh-games
+  labels: { app: games-bff-db, app.kubernetes.io/part-of: hugmesh.games }
+spec:
+  selector: { app: games-bff-db }
+  ports: [{ name: pg, port: 5432, targetPort: pg }]

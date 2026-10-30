@@ -3109,35 +3109,50 @@ parameterize_games_domain() {
     local tree="${SYSROOT}/var/lib/hugmesh/cluster"
     [ -d "${tree}" ] || return 0
     local f n=0
+    # The games-realm issuer host. A GAMES_DOMAIN in its own zone gets id.<GAMES_DOMAIN>.
+    # The default games.<primary> gets the single-label games-id.<primary>, because
+    # id.games.<primary> is two labels deep: the *.<primary> wildcard certificate does
+    # not cover it and no wildcard route or tunnel rule matches it.
+    local gid
+    case "${GAMES_DOMAIN}" in
+        games.hugmesh.net|"games.${CLUSTER_DOMAIN:-hugmesh.net}") gid="games-id.${GAMES_DOMAIN#games.}" ;;
+        *) gid="id.${GAMES_DOMAIN}" ;;
+    esac
     # GAMES_DOMAIN is allowlisted ([a-z0-9.-]) at parse; escape it against the sed
     # replacement metacharacters (\ & |) for defense-in-depth — matching how every other
     # rendered field is handled, so this stays injection-proof if the validator is ever
     # loosened. (The '#'-delimited sink below is also safe: the allowlist excludes '#'.)
     local gd_e; gd_e="$(_sed_rep_escape "${GAMES_DOMAIN}")"
+    local gid_e; gid_e="$(_sed_rep_escape "${gid}")"
     # URL-SCHEME-ANCHORED: only rewrite hugmesh.games when it is a HOST (right
     # after the // of https://...), so the games-realm origin/issuer/redirect/website
     # URLs flip to ${GAMES_DOMAIN} while the canonical IMAGE repo paths
     # (hugmesh/hugmesh.games-backend, .../hugmesh.games/backend) are
-    # left untouched. id.hugmesh.games -> id.${GAMES_DOMAIN}; bare host -> ${GAMES_DOMAIN}.
+    # left untouched. id.hugmesh.games -> the issuer host above; bare host -> ${GAMES_DOMAIN}.
     while IFS= read -r -d '' f; do
-        if grep -q '//id\.hugmesh\.games\|//hugmesh\.games' "${f}" 2>/dev/null; then
+        if grep -q '//id\.hugmesh\.games\|//hugmesh\.games\|: id\.hugmesh\.games$' "${f}" 2>/dev/null; then
             sed -i -E \
-                -e "s|//id\\.hugmesh\\.games|//id.${gd_e}|g" \
+                -e "s|//id\\.hugmesh\\.games|//${gid_e}|g" \
+                -e "s#^([[:space:]-]*(host|hostname): )id\\.hugmesh\\.games\$#\\1${gid_e}#" \
                 -e "s|//hugmesh\\.games|//${gd_e}|g" \
                 "${f}"
             n=$((n+1))
         fi
     done < <(find "${tree}" -type f \( -name '*.yaml' -o -name '*.yml' -o -name '*.sql' \) -print0 2>/dev/null)
     info "Games domain: parameterized games host URLs -> ${GAMES_DOMAIN} in ${n} file(s)"
-    # The games PUBLIC host literal (gateway-be route host + ingress extraHost) is
+    # The games PUBLIC host literal (the portal Ingress + the tunnel rule) is
     # "games.hugmesh.net" so it composes with the hugmesh.net ->
     # CLUSTER_DOMAIN rebrand into games.<CLUSTER_DOMAIN> = the DEFAULT GAMES_DOMAIN.
     # If the operator set a CUSTOM GAMES_DOMAIN (e.g. the real <brand>.games TLD),
     # the host must follow it instead of the subdomain default — rewrite it here,
     # BEFORE rebrand (which would otherwise only map the hugmesh.net suffix).
     if [ "${GAMES_DOMAIN}" != "games.hugmesh.net" ]; then
-        local be="${tree}/apps/20-gateway-be.yaml"
-        [ -f "${be}" ] && sed -i -E "s#games\\.hugmesh\\.net#${gd_e}#g" "${be}"
+        local hf
+        for hf in "${tree}/manifests/games-portal/ingress.yaml" "${tree}/manifests/cloudflared/configmap.yaml"; do
+            if [ -f "${hf}" ]; then
+                sed -i -E "s#games\\.hugmesh\\.net#${gd_e}#g" "${hf}"
+            fi
+        done
         info "Games domain: custom GAMES_DOMAIN — games host rewritten to ${GAMES_DOMAIN}"
     fi
 }
@@ -3195,6 +3210,13 @@ gate_env_apps() {
             [ -f "${gw}" ] && sed -i -E 's/^([[:space:]]*className: )nginx$/\1nginx-internal/' "${gw}"
         done
         info "RELEASE_STATE=internal: be/fe gateways repointed className nginx -> nginx-internal"
+        # The games portal and the games-realm issuer have their own Ingresses.
+        local gi
+        for gi in "${cluster}/manifests/games-portal/ingress.yaml" "${cluster}/manifests/casdoor-games/ingress.yaml"; do
+            if [ -f "${gi}" ]; then
+                sed -i -E 's/^([[:space:]]*ingressClassName: )nginx$/\1nginx-internal/' "${gi}"
+            fi
+        done
 
         # c) tier-ingress.yaml's backend/frontend admit-lists currently let
         #    the PUBLIC ingress-nginx namespace in; with the public

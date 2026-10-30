@@ -3,16 +3,24 @@ kind: Kustomization
 namespace: hugmesh-games
 resources:
   - deployment.yaml
+  - bff-db.yaml
+  - cassandra.yaml
+  - cassandra-init.yaml
+  # The standalone games portal (its Ingress is the games.<GAMES_DOMAIN> host).
+  - ../games-portal
 
-# First-party images now pull from the in-cluster Harbor container registry
+# Image names are the hugmesh-games release workflow's published set
+# (ghcr.io/hugmesh/hugmesh-games/<image>, scripts/release/repos.tsv) under the Harbor
+# host. First-party images now pull from the in-cluster Harbor container registry
 # (registry.hugmesh.net = inherited from GitLab's chart hosts.domain default, kept as-is; now served by Harbor (apps/03a-harbor.yaml), project
 # path = <group>/<repo>). The CI in each repo pushes :<branch> + :<sha>; we track
 # the moving :main here for dev. Pulls need the harbor-registry imagePullSecret
 # (ESO-materialized, see manifests/external-secrets).
 images:
-  - { name: hugmesh/hugmesh.games-backend, newName: registry.hugmesh.net/hugmesh/hugmesh.games/backend, newTag: main }
+  - { name: hugmesh/hugmesh.games-backend, newName: registry.hugmesh.net/hugmesh/hugmesh-games/backend, newTag: main }
 patches:
-  - target: { kind: Deployment }
+  # Only the two first-party images come from Harbor; the stores are stock images.
+  - target: { kind: Deployment, name: "^hugmesh-games(-portal)?$" }
     patch: |
       - op: add
         path: /spec/template/spec/imagePullSecrets

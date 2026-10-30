@@ -2187,15 +2187,25 @@ parameterize_games_domain() {
     local tree="${SYSROOT}/var/lib/hugmesh/cluster"
     [ -d "${tree}" ] || return 0
     local f n=0
+    # The games-realm issuer host. A GAMES_DOMAIN in its own zone gets id.<GAMES_DOMAIN>.
+    # The default games.<primary> gets the single-label games-id.<primary>, because
+    # id.games.<primary> is two labels deep: the *.<primary> wildcard certificate does
+    # not cover it and no wildcard route or tunnel rule matches it.
+    local gid
+    case "${GAMES_DOMAIN}" in
+        games.hugmesh.net|"games.${CLUSTER_DOMAIN:-hugmesh.net}") gid="games-id.${GAMES_DOMAIN#games.}" ;;
+        *) gid="id.${GAMES_DOMAIN}" ;;
+    esac
     # URL-SCHEME-ANCHORED: only rewrite hugmesh.games when it is a HOST (right
     # after the // of https://...), so the games-realm origin/issuer/redirect/website
     # URLs flip to ${GAMES_DOMAIN} while the canonical IMAGE repo paths
     # (hugmesh/hugmesh.games-backend, .../hugmesh.games/backend) are
     # left untouched.
     while IFS= read -r -d '' f; do
-        if grep -q '//id\.hugmesh\.games\|//hugmesh\.games' "${f}" 2>/dev/null; then
+        if grep -q '//id\.hugmesh\.games\|//hugmesh\.games\|: id\.hugmesh\.games$' "${f}" 2>/dev/null; then
             sed -i -E \
-                -e "s|//id\\.hugmesh\\.games|//id.${GAMES_DOMAIN}|g" \
+                -e "s|//id\\.hugmesh\\.games|//${gid}|g" \
+                -e "s#^([[:space:]-]*(host|hostname): )id\\.hugmesh\\.games\$#\\1${gid}#" \
                 -e "s|//hugmesh\\.games|//${GAMES_DOMAIN}|g" \
                 "${f}"
             n=$((n+1))
@@ -2203,11 +2213,15 @@ parameterize_games_domain() {
     done < <(find "${tree}" -type f \( -name '*.yaml' -o -name '*.yml' -o -name '*.sql' \) -print0 2>/dev/null)
     info "Games domain: parameterized games host URLs -> ${GAMES_DOMAIN} in ${n} file(s)"
     # If the operator set a CUSTOM GAMES_DOMAIN (e.g. the real <brand>.games TLD),
-    # the games PUBLIC host (gateway-be route host + ingress extraHost) must follow
+    # the games PUBLIC host (the portal Ingress + the tunnel rule) must follow
     # it; the default "games.hugmesh.net" otherwise composes with rebrand.
     if [ "${GAMES_DOMAIN}" != "games.hugmesh.net" ]; then
-        local be="${tree}/apps/20-gateway-be.yaml"
-        [ -f "${be}" ] && sed -i -E "s#games\\.hugmesh\\.net#${GAMES_DOMAIN}#g" "${be}"
+        local hf
+        for hf in "${tree}/manifests/games-portal/ingress.yaml" "${tree}/manifests/cloudflared/configmap.yaml"; do
+            if [ -f "${hf}" ]; then
+                sed -i -E "s#games\\.hugmesh\\.net#${GAMES_DOMAIN}#g" "${hf}"
+            fi
+        done
         info "Games domain: custom GAMES_DOMAIN — games host rewritten to ${GAMES_DOMAIN}"
     fi
 }
@@ -2264,6 +2278,13 @@ gate_env_apps() {
             [ -f "${gw}" ] && sed -i -E 's/^([[:space:]]*className: )nginx$/\1nginx-internal/' "${gw}"
         done
         info "RELEASE_STATE=internal: be/fe gateways repointed className nginx -> nginx-internal"
+        # The games portal and the games-realm issuer have their own Ingresses.
+        local gi
+        for gi in "${cluster}/manifests/games-portal/ingress.yaml" "${cluster}/manifests/casdoor-games/ingress.yaml"; do
+            if [ -f "${gi}" ]; then
+                sed -i -E 's/^([[:space:]]*ingressClassName: )nginx$/\1nginx-internal/' "${gi}"
+            fi
+        done
 
         # c) tier-ingress.yaml's backend/frontend admit-lists currently let
         #    the PUBLIC ingress-nginx namespace in; with the public

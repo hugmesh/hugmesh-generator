@@ -915,7 +915,7 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # test-gen-route-access-env.sh) merged origin/main 626664c0, which carries test-release-beta.sh (block
 # below). Both add one gated suite, so the merged tree is +2 over #830's 203. MEASURED by RUNNING this
 # file on the merged tree: '205 of 246 suites are named by a pull_request-triggered workflow'.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-205}"
+PREMERGE_BASELINE="${GUARD_PREMERGE:-206}"
 
 # 182 -> 192 (denominator 205 -> 215) on 2026-09-30 for #385: the census gained a
 # THIRD spelling, bare `tests/*.sh` at depth 1, and the ten suites it exposed were

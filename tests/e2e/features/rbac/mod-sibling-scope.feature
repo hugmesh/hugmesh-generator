@@ -56,7 +56,9 @@ Feature: ROLE_MOD reaches moderation and nothing else
       | gateway | hugmesh-be-gateway | /infra/vault/secret           | NO_RULE  |
       | gateway | hugmesh-be-gateway | /infra/logs                   | NO_RULE  |
       | games   | hugmesh-fe-gateway | /games/admin/sessions         | DENY     |
-      | games   | hugmesh-be-gateway | /games/api/admin/role-grants  | DENY     |
+      | games   | hugmesh-fe-gateway | /games/api/admin/role-grants  | DENY     |
+      | games   | hugmesh-fe-gateway | /games/api/games/chess/launch | DENY     |
+      | games   | hugmesh-fe-gateway | /games/play/chess             | DENY     |
 
   # Same path, opposite outcome — which proves the deny is about the ROLE and not
   # about the path, and that admin (a superset of moderation) also reaches the

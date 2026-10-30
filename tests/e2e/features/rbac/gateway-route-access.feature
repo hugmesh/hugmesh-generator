@@ -77,9 +77,9 @@ Feature: Gateway route-access ALLOW/DENY across the systems role matrix
       | e2e-gamesonly  | games   | hugmesh-fe-gateway | /games/admin/sessions         | DENY     |
       | e2e-adminonly  | games   | hugmesh-fe-gateway | /games/admin/sessions         | DENY     |
       | e2e-mod        | games   | hugmesh-fe-gateway | /games/admin/sessions         | DENY     |
-      | e2e-gamesadmin | games   | hugmesh-be-gateway | /games/api/admin/role-grants  | ALLOW    |
-      | e2e-gamesonly  | games   | hugmesh-be-gateway | /games/api/admin/role-grants  | DENY     |
-      | e2e-adminonly  | games   | hugmesh-be-gateway | /games/api/admin/role-grants  | DENY     |
+      | e2e-gamesadmin | games   | hugmesh-fe-gateway | /games/api/admin/role-grants  | ALLOW    |
+      | e2e-gamesonly  | games   | hugmesh-fe-gateway | /games/api/admin/role-grants  | DENY     |
+      | e2e-adminonly  | games   | hugmesh-fe-gateway | /games/api/admin/role-grants  | DENY     |
 
     # NO RULE AT ALL — which is NOT default-deny, and the difference is the whole
     # posture of the gate. /infra appears nowhere in the seed, so

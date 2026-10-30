@@ -1198,13 +1198,13 @@ def check_hpa_replicas(root):
 
 def check_games_origin(root):
     """The matrix-ui Deployment must STATE the chat3d games origin, and it must be
-    the host the gateway really routes to the games portal (hugmesh-generator#470).
+    the host the games portal Ingress really serves (hugmesh-generator#470).
 
     chat3d-bridge.ts reads `__HUG_GAMES_URL__` and otherwise silently falls back to
     its built-in default, so nothing in the cluster manifests said which origin the
     deployed matrix remote iframes. The manifest now declares it as the env
     `HUG_GAMES_URL` on hugmesh-matrix-ui. Two defects are checked, as a PAIR:
-    the env is absent, or it names a host other than the be-gateway `games` route's
+    the env is absent, or it names a host other than the games portal Ingress's
     `host:` (so an edit of one without the other in the repo tree is caught).
 
     Conditioned on apps/50-games.yaml, the file the builders' optional-service gate
@@ -1214,8 +1214,8 @@ def check_games_origin(root):
 
     This proves only that the repo-tree manifest declares the origin consistently.
     It does not prove the browser receives it (that needs an image-side consumer),
-    and it cannot see a build-time rewrite: the stage4 builders rewrite the gateway
-    route for a custom GAMES_DOMAIN in the baked tree, while ArgoCD serves this
+    and it cannot see a build-time rewrite: the stage4 builders rewrite the portal
+    Ingress for a custom GAMES_DOMAIN in the baked tree, while ArgoCD serves this
     Deployment from git, so the live env is not moved by that rewrite.
     """
     check = "[games-origin]"
@@ -1223,13 +1223,15 @@ def check_games_origin(root):
         ok(check, "apps/50-games.yaml absent: this profile does not install games, "
                   "no games origin required")
         return
-    hosts = sorted({(r or {}).get("host") for routes in _gateways(root).values()
-                    for r in routes if (r or {}).get("id") == "games"
-                    and (r or {}).get("host")})
+    ingress = os.path.join(root, "manifests", "games-portal", "ingress.yaml")
+    hosts = sorted({rule.get("host") for doc in docs_of(ingress)
+                    if doc.get("kind") == "Ingress"
+                    for rule in ((doc.get("spec") or {}).get("rules") or [])
+                    if rule.get("host")}) if os.path.isfile(ingress) else []
     if len(hosts) != 1:
-        fail(check, "apps/50-games.yaml is present but the gateway Applications carry "
-                    "%d distinct host(s) for a route with id `games` (%s); the games "
-                    "origin cannot be checked against anything" % (len(hosts), hosts))
+        fail(check, "apps/50-games.yaml is present but manifests/games-portal/ingress.yaml "
+                    "carries %d distinct host(s) (%s); the games origin cannot be "
+                    "checked against anything" % (len(hosts), hosts))
         return
     route_host = hosts[0]
     found = []
@@ -1255,11 +1257,11 @@ def check_games_origin(root):
     want = "https://%s" % route_host
     for v in values:
         if v != want:
-            fail(check, "%s: HUG_GAMES_URL=%r but the be-gateway `games` route serves "
+            fail(check, "%s: HUG_GAMES_URL=%r but the games portal Ingress serves "
                         "host %r (want exactly %r)" % (rel, v, route_host, want))
             return
-    ok(check, "hugmesh-matrix-ui HUG_GAMES_URL == https://%s, the be-gateway games "
-              "route host" % route_host)
+    ok(check, "hugmesh-matrix-ui HUG_GAMES_URL == https://%s, the games portal "
+              "Ingress host" % route_host)
 
 
 def _hpa_min(root, key):

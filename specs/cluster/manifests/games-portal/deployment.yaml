@@ -1,0 +1,60 @@
+# hugmesh-games-portal — the standalone games site at games.<GAMES_DOMAIN>, where a
+# player signs in with a games-realm (threewizards) account and need not be a mesh
+# user. This is hugmesh-games/frontend, the portal-host image, in the shape of that
+# repo's compose.prod.yml `frontend` service. Its nginx serves the Angular host and
+# proxies /api/** to the games BFF, which enforces auth for this path (the systems
+# gateways are not on it; see ingress.yaml).
+#
+# STILL NEEDS IMAGES FROM hugmesh-games: its release workflow publishes `frontend`
+# but not the login / registration / admin / mod / publisher remotes this host loads
+# from /_remotes/**. Until those are published and deployed here the shell loads and
+# the catalog proxies, but sign-in has no remote to load. service.yaml names them.
+#
+# ROOT, DELIBERATELY: the image is stock nginx:1.27 with no USER, so its master starts
+# as root and drops to the nginx user. Measured with a throwaway container running the
+# portal's own nginx.conf: CHOWN + SETUID + SETGID with no-new-privileges is enough to
+# boot and answer 200.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hugmesh-games-portal
+  namespace: hugmesh-games
+  labels:
+    app: hugmesh-games-portal
+    app.kubernetes.io/part-of: hugmesh.games
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: hugmesh-games-portal }
+  template:
+    metadata:
+      labels: { app: hugmesh-games-portal }
+    spec:
+      nodeSelector: { hugmesh.net/games: "true" }
+      securityContext:
+        seccompProfile: { type: RuntimeDefault }
+        seLinuxOptions:
+          # Unique MCS level (docs/SECURITY.md §3 matrix).
+          type: container_t
+          level: "s0:c91"
+      containers:
+        - name: web
+          # PLACEHOLDER image, rewritten by the kustomization `images:` transform.
+          image: hugmesh/games-portal:dev
+          ports: [{ name: http, containerPort: 8080 }]
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+              add: ["CHOWN", "SETUID", "SETGID"]
+          resources:
+            requests: { cpu: 50m, memory: 128Mi }
+            limits:   { cpu: 500m, memory: 256Mi }
+          readinessProbe:
+            httpGet: { path: /, port: http }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /, port: http }
+            initialDelaySeconds: 10
+            periodSeconds: 20

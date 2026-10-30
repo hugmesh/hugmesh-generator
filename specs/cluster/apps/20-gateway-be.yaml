@@ -59,13 +59,6 @@ spec:
           # headscale-forward route) so external tailscale clients never hit pki direct.
           extraHosts:
             - scale.hugmesh.net
-            # games.<GAMES_DOMAIN> — the games portal host. Default GAMES_DOMAIN =
-            # games.<CLUSTER_DOMAIN>, so this literal rebrands with the primary
-            # domain; a custom GAMES_DOMAIN (e.g. the real .games TLD) is rewritten
-            # by parameterize_games_domain() in the stage4 builders. The host route
-            # is the `games` route below; the federation manifest greys it out when
-            # the games slug is omitted (gate_optional_services prunes the route).
-            - games.hugmesh.net
             # ai.<CLUSTER_DOMAIN> — the edge-AI inference host (the edge-ai,
             # edge-ai-analysis and edge-ai-tts routes below match on it). Without an
             # exact rule here ingress-nginx hands ai.<domain> to the fe-gateway's
@@ -173,20 +166,8 @@ spec:
           - id: matrix
             host: matrix.hugmesh.net
             uri: https://tuwunel-proxy.hugmesh-backend.svc.cluster.local:4443
-          # --- HugMesh Games (games.<GAMES_DOMAIN>) ---
-          # Host route for the games portal. Default GAMES_DOMAIN =
-          # games.<CLUSTER_DOMAIN> so this literal rebrands with the primary domain
-          # and rides the *.<primary> wildcard (CoreDNS in test, cloudflared in
-          # prod) with NO new DNS/cert; a custom GAMES_DOMAIN (the real .games TLD)
-          # is rewritten by parameterize_games_domain() in the stage4 builders.
-          # ⚠ OPTIONAL slug `games`: gate_optional_services REMOVES this route (and
-          # the extraHost above + the games route-access rows) when games is
-          # deselected, so a games-less build does not 502 on games.<domain>.
-          # TODO(gateway wave): keep CanonicalSeed.java (hugmesh-gateway repo)
-          # + cloudflared games hostname in sync — see docs/OPTIONAL-SERVICES.md.
-          - id: games
-            host: games.hugmesh.net
-            uri: http://hugmesh-games.hugmesh-games.svc.cluster.local:8080
+          # The games portal host (games.<GAMES_DOMAIN>) is NOT routed here. It has
+          # its own Ingress, manifests/games-portal/ingress.yaml, which explains why.
           # --- Games app-store per-instance HTTP CONSOLES (PR7) ---
           # /games/servers/<slug>/<name>/** path-routes to the per-instance HTTP console
           # Services in hugmesh-games-instances. Raw L4 game protocols do NOT come here
@@ -196,8 +177,7 @@ spec:
           # ROLE_GAMES_SERVICES at the route-access DB (manifests/route-access, PR3); the
           # console dispatcher Service resolves the <slug>/<name> path segment to the
           # matching per-instance Service (rendered by apps/13c from the admin-bff
-          # ConfigMaps). MORE SPECIFIC than the games host route above — declared after it
-          # but on a distinct path prefix, so no collision.
+          # ConfigMaps).
           # ⚠ OPTIONAL slug `games`: gate_optional_services REMOVES this route + its
           # route-access rows when games is deselected (PR10).
           - id: games-servers-console

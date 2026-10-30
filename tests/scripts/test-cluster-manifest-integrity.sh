@@ -600,23 +600,23 @@ expect_catch "a Deployment re-pins replicas the HPA owns" "[hpa-replicas]" '
 '
 
 # ── (11b) THE CHAT3D GAMES ORIGIN (hugmesh-generator#470) ────────────────────
-# The matrix-ui Deployment states HUG_GAMES_URL, and it must be the host the be
-# gateway routes to the games portal. Two defects, one control each, plus a control
+# The matrix-ui Deployment states HUG_GAMES_URL, and it must be the host the
+# games portal Ingress serves. Two defects, one control each, plus a control
 # that the check does not bite a profile that does not install games.
 expect_catch "matrix-ui HUG_GAMES_URL env deleted while games is installed" "[games-origin]" '
   sed -i "/name: HUG_GAMES_URL/d" "$T/manifests/social-ui/deployment.yaml"
   ! grep -qE "^[[:space:]]*- \{ name: HUG_GAMES_URL" "$T/manifests/social-ui/deployment.yaml"
 '
-expect_catch "HUG_GAMES_URL names a different host than the gateway games route" "[games-origin]" '
+expect_catch "HUG_GAMES_URL names a different host than the games portal Ingress" "[games-origin]" '
   sed -i "s#value: \"https://games.hugmesh.net\" }#value: \"https://games.elsewhere.example\" }#" \
       "$T/manifests/social-ui/deployment.yaml"
   grep -q "games.elsewhere.example" "$T/manifests/social-ui/deployment.yaml"
 '
 # The gateway host moved but the manifest literal did not (a repo-tree edit of one
 # side only; this checks the tree, not what a builder bakes or what ArgoCD serves).
-expect_catch "gateway games host rewritten while the matrix-ui literal is left behind" "[games-origin]" '
-  sed -i "s#games\\.hugmesh\\.net#games.acme.example#g" "$T/apps/20-gateway-be.yaml"
-  grep -q "host: games.acme.example" "$T/apps/20-gateway-be.yaml"
+expect_catch "portal Ingress host rewritten while the matrix-ui literal is left behind" "[games-origin]" '
+  sed -i "s#games\\.hugmesh\\.net#games.acme.example#g" "$T/manifests/games-portal/ingress.yaml"
+  grep -q "host: games.acme.example" "$T/manifests/games-portal/ingress.yaml"
 '
 # NOT vacuous the other way: a profile with no games Application is not asked for
 # an origin. Stage it, drop 50-games.yaml and the env, and require a clean verdict.
