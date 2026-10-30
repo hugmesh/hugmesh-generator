@@ -63,7 +63,7 @@ from .qemu_devices import Device, qmp_argv, ssh_argv              # noqa: F401
 from .qemu_devices import device_save_argv as save_device_argv    # noqa: F401
 from .qemu_tests import (BuildSession, DeviceRow, QemuRunOptions,
                          runner_command)
-from . import proc_group
+from . import platform_info, proc_group
 
 #: The SELinux AVC workout (issue #45): boots ONE row through the launchers,
 #: drives the confined workloads and harvests every AVC into a narrowing report.
@@ -571,7 +571,14 @@ def playwright_root_blocker() -> str:
     interactive sudo prompt and MUST NOT try — so this states the fact, names the
     containerized route the device-test lane already uses for exactly this constraint,
     and leaves ``--list``/``--dry-run`` (which need no root) enabled.
+
+    Native Windows has no root and no bash at all, so there the sentence is the WSL2
+    one: the Linux advice and the "work now" for List/Preview were both untrue.
     """
+    blocker = platform_info.native_windows_blocker("The Playwright lane",
+                                                   runs="bash scripts")
+    if blocker:
+        return blocker
     if hasattr(os, "geteuid") and os.geteuid() == 0:
         return ""
     return (
