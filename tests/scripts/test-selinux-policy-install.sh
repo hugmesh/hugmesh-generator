@@ -524,6 +524,11 @@ else
     { echo '#!/usr/bin/env bash'
       echo 'have(){ command -v "$1" >/dev/null 2>&1; }'
       echo 'warn(){ :; }'
+      echo 'log(){ :; }'
+      # A DISK root, explicitly: since #503 an overlay root (the live ISO) skips the
+      # full walk, and a CI job's own container root IS overlay — so the host's real
+      # findmnt would steer this harness into the skip branch and call nothing.
+      echo 'findmnt(){ echo "${C3E_ROOT_FS:-ext4}"; }'
       echo 'type=mcs; relabel_ok=1'
       sed -n '/# restorecon IS THE RELABELER/,/^    fi$/p' "${PROV}" | head -40
     } > "${C3E}/harness.sh"
@@ -538,6 +543,13 @@ else
         grep -qx 'setfiles' "${C3E}/called" 2>/dev/null \
             && bad "C3e setfiles ran even though restorecon was available" \
             || ok "C3e setfiles is not run when restorecon exists"
+        # #503: on an overlay root (live ISO) NEITHER full-tree relabeler runs — the
+        # squashfs is labelled at build time and a full walk copies every file up.
+        rm -f "${C3E}/called"
+        ( C3E_ROOT_FS=overlay PATH="${C3E}/bin:${PATH}" bash "${C3E}/harness.sh" >/dev/null 2>&1 )
+        [ ! -s "${C3E}/called" ] \
+            && ok "C3e an overlay root runs no full-tree relabel (build-time labels; no copy-up storm)" \
+            || bad "C3e an overlay root still ran: $(tr '\n' ' ' < "${C3E}/called")"
     fi
 fi
 
