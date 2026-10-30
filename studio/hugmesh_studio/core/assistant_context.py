@@ -181,25 +181,52 @@ _NOT_YET = r"(?!\[redacted|\(set,)"
 
 
 def _value(bare: str) -> str:
-    """A secret's value. QUOTED, it runs to the matching quote (a backslash escapes
-    one), spaces and all: a stop at the first space sent the rest of a passphrase such
-    as {"admin_password": "horse CANARY staple"} to the model (PR #832 review). An
+    """A secret's value, in one of three spellings.
+
+    ESCAPED (JSON inside a string, as a log or ``kubectl`` prints it): ``\\"...\\"``,
+    with any run of backslashes before the quote. It runs to the SAME run and quote; a
+    longer or shorter run before a quote is the value's own escaped quote, so it goes
+    on. ``msg="{\\"password\\": \\"a b\\"}"`` sent its whole value to the model
+    before (PR #832 review).
+
+    QUOTED (``$'..'`` too), it runs to the matching quote (a backslash escapes one),
+    spaces and all: a stop at the first space sent the rest of a passphrase such as
+    {"admin_password": "horse CANARY staple"} to the model (PR #832 review). An
     unterminated quote runs to the end of the line, never past it (the line count
-    holds). BARE, it is ``bare``: it stops at whitespace (``a=b c=d`` is two pairs),
-    so an unquoted ``secret = two words`` loses only its first word."""
-    return (r"(?:(?P<q>[\"'])(?!\[redacted|\(set,)(?:\\.|(?!(?P=q))[^\\\n])+"
-            r"(?:(?P<close>(?P=q))|(?=\n)|$)|(?=[^\s\"'])" + bare + r")")
+    holds), and a backslash that is the line's last character is part of the value: a
+    log line cut after one sent its whole secret (PR #832 round 3).
+
+    BARE, it is ``bare``: it stops at whitespace (``a=b c=d`` is two pairs), so an
+    unquoted ``secret = two words`` loses only its first word. A bare value may hold a
+    quote after its first character and a backslash-escaped space (``printf %q``)."""
+    return (r"(?:(?P<bs>\\+)(?P<eq>[\"'])(?!\[redacted|\(set,)"
+            r"(?:(?!(?P=bs)(?P=eq))\\+[\"']|\\+(?![\\\"'])|[^\\\n])+"
+            r"(?:(?P<eclose>(?P=bs)(?P=eq))|(?=\n)|$)"
+            r"|(?P<pre>\$?)(?P<q>[\"'])(?!\[redacted|\(set,)"
+            r"(?:\\[^\n]|\\(?=\n|$)|(?!(?P=q))[^\\\n])+"
+            r"(?:(?P<close>(?P=q))|(?=\n)|$)"
+            r"|(?![\\$]*[\"'])(?=[^\s\"'])" + bare + r")")
 
 
-_VALUE = _value(r"[^\s\"',;&}]+")
+#: A bare value: one word. A backslash takes the next character with it (``horse\ x``
+#: from ``printf %q``), and one that ends the line is still the value's.
+_VALUE = _value(r"(?:\\[^\n]?|[^\s,;&}\\])+")
 
 
 def _blank(m: "re.Match") -> str:
     """The [redacted] stand-in for a :data:`_VALUE` match, keeping its quotes."""
+    if m.group("eq"):
+        return m.group("bs") + m.group("eq") + "[redacted]" + (m.group("eclose") or "")
     q = m.group("q")
     if not q:
         return "[redacted]"
-    return q + "[redacted]" + (m.group("close") or "")
+    return (m.group("pre") or "") + q + "[redacted]" + (m.group("close") or "")
+
+
+def _blank_block(m: "re.Match") -> str:
+    """A YAML block scalar under a secret key: every line of it, keeping the count."""
+    body = re.sub(r"(?m)^([ \t]*)\S[^\n]*", r"\1[redacted]", m.group(4))
+    return m.group(1) + m.group(2) + "[redacted]" + m.group(3) + body
 
 
 _REDACT_RULES: tuple[tuple[re.Pattern, Any], ...] = (
@@ -220,22 +247,30 @@ _REDACT_RULES: tuple[tuple[re.Pattern, Any], ...] = (
     (re.compile(r"(?i)(authorization:[ \t]*basic)[ \t]+" + _NOT_YET + r"\S+"), r"\1 [redacted]"),
     (re.compile(r"(?i)\b((?:set-)?cookie:[ \t]*)(?![ \t])" + _NOT_YET + r"[^\n]+"), r"\1[redacted]"),
     # Vault's init output
-    (re.compile(r"(?i)\b(unseal key[ \t]*\d*[ \t]*:[ \t]*)" + _NOT_YET + r"\S+"), r"\1[redacted]"),
+    (re.compile(r"(?i)\b(unseal key[ \t]*\d*[ \t]*(?:\([^)\n]*\)[ \t]*)?:[ \t]*)" + _NOT_YET + r"\S+"),
+     r"\1[redacted]"),
+    (re.compile(r"(?i)\b(vault[ \t]+operator[ \t]+unseal\b(?:[ \t]+-[\w-]+(?:=\S*)?)*[ \t]+)(?!-)"
+                + _NOT_YET + r"\S+"), r"\1[redacted]"),
     # credentials in any URL (postgres, redis, mongodb, https, ...)
     (re.compile(r"(?i)\b([a-z][a-z0-9+.-]*://[^:/@\s]*:)" + _NOT_YET + r"[^@\s/]+@"), r"\1[redacted]@"),
     (re.compile(r"(r2dbc:[^\s:]*:[^@\s/]*?)(?<=:)" + _NOT_YET + r"[^@\s]+@"), r"\1[redacted]@"),
     # command-line flags: --password X, --admin-password=X, --client-secret X ...
     (re.compile(r"(?i)(?<![\w-])(--?[\w-]*(?:password|passwd|passphrase|secret|token|api-?key|auth-?key"
                 r"|" + _WHOLE_WORDS + r")[\w-]*)(?<!tokens)([ \t]+|=)(?!-)" + _NOT_YET +
-                _value(r"[^\s\"']+")),
+                _value(r"(?:\\[^\n]?|[^\s\\])+")),
      lambda m: m.group(1) + m.group(2) + _blank(m)),
     (re.compile(r"(?i)\b(mysql|mariadb|mysqldump|mysqladmin)\b([^\n]*?[ \t])-p(?![ \t])" + _NOT_YET + r"\S+"),
      r"\1\2-p[redacted]"),
     # SQL a database init log echoes: CREATE ROLE x PASSWORD 'v', IDENTIFIED BY 'v'
-    (re.compile(r"(?i)\b(password|identified[ \t]+by)([ \t]+)(['\"])" + _NOT_YET + r"[^'\"\n]*\3"),
+    (re.compile(r"(?i)\b(password|identified[ \t]+by)([ \t]+)(['\"])" + _NOT_YET +
+                r"(?:\3\3|\\[^\n]|\\(?=\n|$)|(?!\3)[^\\\n])*(?:\3|(?=\n)|$)"),
      r"\1\2\3[redacted]\3"),
+    # a YAML block scalar under a secret key (``secret: |`` and its indented lines)
+    (re.compile(r"(?im)^([ \t]*)((?:-[ \t]+)?[\"']?" + _SECRET_KEY + r"[\"']?[ \t]*:[ \t]*)"
+                r"[|>][-+0-9]*[ \t]*(?:#[^\n]*)?(\n|$)((?:[ \t]*\n|\1[ \t]+[^\n]*(?:\n|$))*)"),
+     _blank_block),
     # key = value, key: value, "key": "value", export KEY=value
-    (re.compile(r"(?i)([\"']?)(" + _SECRET_KEY + r")\1([ \t]*[=:][ \t]*)" + _NOT_YET + _VALUE),
+    (re.compile(r"(?i)(\\*[\"']|)(" + _SECRET_KEY + r")\1([ \t]*[=:][ \t]*)" + _NOT_YET + _VALUE),
      lambda m: m.group(1) + m.group(2) + m.group(1) + m.group(3) + _blank(m)),
     # token shapes on their own
     (re.compile(r"(?:tskey|hskey)-[a-z]+-[A-Za-z0-9\-]+"), "[redacted]"),

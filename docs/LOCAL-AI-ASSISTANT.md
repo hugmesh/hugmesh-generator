@@ -707,7 +707,7 @@ for a code edit) goes through `redact`, which blanks:
 
 - any key that CONTAINS password, passwd, passphrase, pwd, secret, token, api key, auth
   key, private key, access key, client key, preshared key or credential, however it is
-  prefixed or quoted: `POSTGRES_PASSWORD=...`, `CASDOOR_CLIENT_SECRET=...`,
+  prefixed, quoted or JSON-escaped: `POSTGRES_PASSWORD=...`, `CASDOOR_CLIENT_SECRET=...`,
   `export GH_TOKEN=...`, `aws_secret_access_key = ...`, `{"admin_password": "..."}`,
   `x-api-key: ...`, WireGuard's `PrivateKey = ...`, a kubeconfig's `client-key-data:`
   (a plural "tokens", such as a context size, is left alone), and any key with `pass`
@@ -715,16 +715,25 @@ for a code edit) goes through `redact`, which blanks:
   `VAULT_UNSEAL_KEY=...` (not `passed`, `bypass`, `passthrough` or `unsealed`). A
   QUOTED value is blanked up to its closing quote, spaces and all
   (`{"admin_password": "horse battery staple"}` loses all three words; a backslash
-  escapes a quote; an unclosed quote runs to the end of its line). An unquoted value
-  is one word: `secret = two words` keeps its second word;
+  escapes the next character; an unclosed quote, and a value whose last character
+  before the line end is a backslash, run to the end of the line; bash's `$'..'`
+  counts as quoted). JSON inside a string, as a log or `kubectl` prints it
+  (`msg="{\"password\": \"a b\"}"`, at any depth), is blanked to its own escaped
+  closing quote. An unquoted value is one word: `secret = two words` keeps its second
+  word; inside that word a quote and a backslash-escaped space (`printf %q`'s
+  `horse\ battery`) are part of it;
+- a YAML block scalar under a secret key (`secret: |` or `>-`): every indented line
+  of it;
 - command-line flags such as `--password X`, `--admin-password=X`, `--client-secret X`,
   `--luks-pass X` (a quoted value whole, as above), and `mysql ... -pX` (a bare `-pX` is not touched: `mkdir -p`, `-pthread` and
   `docker run -p 8080:80` print the same shape);
-- SQL a database's init log echoes: `PASSWORD '...'` and `IDENTIFIED BY '...'`;
+- SQL a database's init log echoes: `PASSWORD '...'` and `IDENTIFIED BY '...'` (SQL's
+  doubled quote `''` and the other quote kind stay inside the value);
 - the password in ANY `scheme://user:password@host` URL, and secret query parameters
   (`?access_token=...`, `&password=...`);
 - `Authorization: Bearer|Basic ...`, `Cookie:` and `Set-Cookie:` values, Vault's
-  `Unseal Key N:` and `Initial Root Token:` lines;
+  `Unseal Key N:` (and its `Unseal Key (will be hidden):` prompt) and
+  `Initial Root Token:` lines, and the key in `vault operator unseal KEY`;
 - private-key blocks, a bare base64 key-body line, and every base64-only line that runs
   up to an END line however short (a key printed line by line, or a tail that cut its
   BEGIN line off): a build's error tail is redacted as ONE text per
@@ -737,6 +746,24 @@ for a code edit) goes through `redact`, which blanks:
 asserts none reaches any rendered text, runs every shape above through `redact` (and
 ordinary log lines that must stay as they are), and plants the shapes in a failed
 build's tail and the mesh log and asserts none reaches the system text the model gets.
+A seeded fuzz (24,000 cases) puts the canary inside a value in every quote and
+backslash spelling (escapes, unclosed quotes, a trailing backslash, `$'..'`, JSON
+escaped up to three deep, Python reprs, a quote inside a bare word) after every secret
+key and flag spelling, and asserts it never comes out.
+
+Known gaps (not blanked, or only in part):
+
+- an unquoted multi-word value (`secret = horse battery`, a YAML plain scalar with
+  spaces) keeps every word after the first;
+- a bare value that starts with `-` after a flag (`--password -x`) is read as the
+  next flag; a value glued to an empty quote (`password=""x`) is not blanked;
+- `vault operator unseal` with a flag that takes a separate argument
+  (`-address URL KEY`) blanks the URL, not the key;
+- `cryptsetup --key-file=PATH` names a key FILE; the path is not a secret and is left
+  as it is (the file itself is never opened);
+- false positives, which fail safe: a bare `pass` or `unseal` as a key now blanks
+  ordinary lines such as `PASS: tests/x.sh`, `Tests pass: 12`, `unseal: done` and the
+  word after `--pass-through`.
 
 ### 12.7 The option catalogue (from the code)
 

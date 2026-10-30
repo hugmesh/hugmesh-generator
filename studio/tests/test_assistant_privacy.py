@@ -361,3 +361,173 @@ def test_an_unquoted_value_still_stops_at_the_first_space():
 def test_the_studios_own_pass_and_unseal_spellings_are_blanked(line):
     out = ac.redact(line)
     assert "CANARY" not in out and "[redacted]" in out, out
+
+
+# ── PR #832 round 3: a backslash, an escaped quote and the other spellings ──────────
+# Round 3 found the quoted rule falling through to "nothing blanked" when the value's
+# last character before the line end was a backslash ('"password": "CANARY\' as a
+# log line cut there): the whole secret was sent. Every case below leaked on e3127adb.
+TRAILING_BACKSLASH = [
+    '"password": "CANARY\\',                       # at the end of the text
+    '"password": "horse CANARY\\\nKEEP',            # at the end of a line
+    '--password "CANARY\\',
+    "LUKS_PASS='CANARY\\",
+    '"password": "CANARY\\\\\\',                   # a pair, then a lone one
+    "password: 'never closed CANARY",              # an unclosed single quote
+    "password: 'never closed CANARY\nKEEP",
+]
+
+
+@pytest.mark.parametrize("text", TRAILING_BACKSLASH)
+def test_a_trailing_backslash_or_open_quote_never_ends_a_secret(text):
+    out = ac.redact(text)
+    assert "CANARY" not in out and "[redacted]" in out, out
+    assert out.count("\n") == text.count("\n") and ac.redact(out) == out, out
+    if "KEEP" in text:
+        assert out.endswith("\nKEEP"), out                  # never past its line
+
+
+def test_a_backslash_pair_is_one_character_and_the_quote_after_it_closes():
+    assert ac.redact('"password": "a\\\\" KEEP') == '"password": "[redacted]" KEEP'
+    assert ac.redact("password: 'a\\\\' KEEP") == "password: '[redacted]' KEEP"
+    assert ac.redact('"password": "a\\\\\\" CANARY" KEEP') == '"password": "[redacted]" KEEP'
+
+
+@pytest.mark.parametrize("line, want", [
+    ('msg="{\\"password\\": \\"horse CANARY\\", \\"user\\": \\"KEEP\\"}"',
+     'msg="{\\"password\\": \\"[redacted]\\", \\"user\\": \\"KEEP\\"}"'),
+    ('{\\"data\\":{\\"DB_PASSWORD\\":\\"CANARY x\\",\\"user\\":\\"KEEP\\"}}',
+     '{\\"data\\":{\\"DB_PASSWORD\\":\\"[redacted]\\",\\"user\\":\\"KEEP\\"}}'),
+    # two levels deep, and a quote inside the value (a longer run before it)
+    ('"{\\\\\\"password\\\\\\": \\\\\\"a \\\\\\\\\\\\\\" CANARY\\\\\\", \\\\\\"u\\\\\\": 1}"',
+     '"{\\\\\\"password\\\\\\": \\\\\\"[redacted]\\\\\\", \\\\\\"u\\\\\\": 1}"'),
+    ('password=\\"a CANARY\\" KEEP=1', 'password=\\"[redacted]\\" KEEP=1'),       # logfmt
+])
+def test_a_json_escaped_key_and_value_are_blanked(line, want):
+    """Round 3: a key quoted with \\" was invisible to the key rule, so the WHOLE value
+    of msg="{\\"password\\": ...}" and of kubectl's escaped JSON reached the model.
+    seed-e2e.sh, seed-accounts.sh and verify-seeded-identities.sh build that shape."""
+    out = ac.redact(line)
+    assert out == want and ac.redact(out) == out, out
+
+
+@pytest.mark.parametrize("text, want", [
+    ("password=$'horse CANARY'", "password=$'[redacted]'"),                      # bash $'..'
+    ("password=horse\\ CANARY next=KEEP", "password=[redacted] next=KEEP"),        # printf %q
+    ('password=abc"CANARY" KEEP', "password=[redacted] KEEP"),                    # a quote mid-word
+    ("secret: |\n  CANARY one\n  CANARY two\nKEEP: 1",
+     "secret: [redacted]\n  [redacted]\n  [redacted]\nKEEP: 1"),                  # YAML block scalar
+    ("  - client_secret: >-\n      CANARY\n  - name: KEEP", "  - client_secret: [redacted]\n      [redacted]\n  - name: KEEP"),
+    ("Unseal Key (will be hidden): CANARY", "Unseal Key (will be hidden): [redacted]"),
+    ("vault operator unseal CANARY", "vault operator unseal [redacted]"),
+    ("vault operator unseal -address=https://v:8200 CANARY", "vault operator unseal -address=https://v:8200 [redacted]"),
+    ("CREATE ROLE x PASSWORD 'a\"CANARY'", "CREATE ROLE x PASSWORD '[redacted]'"),   # the other quote inside
+    ("CREATE ROLE x PASSWORD 'it''s CANARY';", "CREATE ROLE x PASSWORD '[redacted]';"),  # SQL's doubled quote
+])
+def test_the_other_round_3_spellings_are_blanked(text, want):
+    out = ac.redact(text)
+    assert out == want and ac.redact(out) == out, out
+
+
+# The fuzz: a secret key, then a value in every quote and backslash spelling, with the
+# canary INSIDE the value by that spelling's own rules (an escape takes the next
+# character; an unclosed quote runs to the line end; a bare word stops at whitespace
+# and at , ; & }). Seeded, so a failure names a reproducible case.
+_FUZZ_CAN = "CNRY" + "q7Zx"
+_FUZZ_PRINT = "".join(c for c in __import__("string").printable if c not in "\n\r\x0b\x0c")
+_FUZZ_KEYS = ["password", "admin_password", "DB_PASSWORD", "CASDOOR_CLIENT_SECRET", "LUKS_PASS",
+              "luks_pass", "unseal_key", "VAULT_UNSEAL_KEY", "api_key", "token", "passphrase", "secret"]
+_FUZZ_FORMS = ["{k}={v}", "{k}: {v}", '"{k}": {v}', "'{k}': {v}", "export {k}={v}", "  {k} = {v}",
+               '{{"{k}":{v}', "--password {v}", "--admin-password={v}", "--luks-pass {v}",
+               "--client-secret={v}", "-pass {v}"]
+_FUZZ_LEADS = ["", "auth failed ", "[node] ERROR: ", "msg=", "  ", "x | "]
+
+
+def _fz_char(rng, exclude=""):
+    while True:
+        c = rng.choice(_FUZZ_PRINT + "\"'\\ \t$" * 6)          # quotes and backslashes, often
+        if c not in exclude:
+            return c
+
+
+def _fz_quoted(rng):
+    q = rng.choice("\"'")
+    pre = "$" if q == "'" and rng.random() < 0.2 else ""
+    toks = [("\\" + _fz_char(rng)) if rng.random() < 0.35 else _fz_char(rng, q + "\\")
+            for _ in range(rng.randint(0, 7))]
+    toks.insert(rng.randint(0, len(toks)), _FUZZ_CAN)
+    tail = rng.choice([q + "".join(_fz_char(rng) for _ in range(rng.randint(0, 6))), q,
+                       "\nKEEP", "", "\\\nKEEP", "\\"])
+    return pre + q + "".join(toks) + tail
+
+
+def _fz_bare(rng):
+    import string
+    toks = [rng.choice(string.ascii_letters + string.digits)]
+    toks += [("\\" + _fz_char(rng)) if rng.random() < 0.25 else _fz_char(rng, " \t,;&}\\")
+             for _ in range(rng.randint(0, 6))]
+    toks.insert(rng.randint(1, len(toks)), _FUZZ_CAN)
+    return "".join(toks) + rng.choice(["", "\\", " KEEP", "\nKEEP"])
+
+
+def _fz_escaped(rng):
+    import json
+    pw = "".join(_fz_char(rng) for _ in range(rng.randint(0, 6)))
+    i = rng.randint(0, len(pw))
+    pw = pw[:i] + _FUZZ_CAN + pw[i:]
+    obj = rng.choice([{"password": pw, "user": "KEEP"}, {"data": {"DB_PASSWORD": pw}},
+                      {"admin_password": pw}, {"luks_pass": pw, "n": 1}])
+    if rng.random() < 0.25:
+        s = repr(obj) if rng.random() < 0.5 else repr(repr(obj))
+    else:
+        s = json.dumps(obj, ensure_ascii=rng.random() < 0.5)
+        for _ in range(rng.randint(0, 3)):                    # JSON in a string, up to 3 deep
+            s = json.dumps(s)
+    return rng.choice(["msg=", "body: ", "level=error msg=", "", "kubectl: "]) + s
+
+
+def _fz_case(rng):
+    kind = rng.choice(["quoted", "quoted", "bare", "escaped"])
+    if kind == "escaped":
+        line = _fz_escaped(rng)
+    else:
+        v = _fz_quoted(rng) if kind == "quoted" else _fz_bare(rng)
+        line = rng.choice(_FUZZ_LEADS) + rng.choice(_FUZZ_FORMS).format(k=rng.choice(_FUZZ_KEYS), v=v)
+    return rng.choice(["", "ok line\n", "first\nsecond\n"]) + line
+
+
+@pytest.mark.parametrize("seed", range(8))
+def test_fuzz_no_quote_or_backslash_spelling_lets_the_canary_through(seed):
+    """3,000 cases per seed. On e3127adb this battery leaked about 40 % of its cases
+    (a trailing backslash, $'..', JSON in a string, a quote or escape inside a bare
+    word); none may leak now, through redact or redact_lines, and the output is
+    idempotent and keeps the line count."""
+    import random
+    rng = random.Random(832_000 + seed)
+    for _ in range(3000):
+        text = _fz_case(rng)
+        out = ac.redact(text)
+        assert _FUZZ_CAN not in out, (text, out)
+        assert ac.redact(out) == out and out.count("\n") == text.count("\n"), (text, out)
+        assert _FUZZ_CAN not in "\n".join(ac.redact_lines(text.split("\n"))), text
+
+
+def test_a_trailing_backslash_secret_never_reaches_the_build_or_mesh_rows(tmp_path, monkeypatch):
+    """Round 3's end-to-end witnesses: the canary after a trailing backslash as the LAST
+    error-tail line (the line a ' | ' join puts nothing after) and as the mesh log's
+    last line. An unclosed quote earlier in the tail no longer swallows the lines after
+    it (the tail is redacted line by line before the join)."""
+    import json
+    state = tmp_path / "state"
+    (state / "sessions").mkdir(parents=True)
+    tail = ["step one", 'auth failed "password": "horse CANARYa \\', "MARK-after-open",
+            'auth failed "password": "horse CANARYb\\']
+    (state / "sessions" / "s.json").write_text(json.dumps(
+        {"id": "s", "label": "b", "status": "failed", "images": ["node"], "error_tail": {"node": tail}}))
+    (state / "logs").mkdir()
+    (state / "logs" / "run.log").write_text('start\n"password": "CANARYc\\')
+    monkeypatch.setenv("HUGMESH_STUDIO_STATE_DIR", str(state))
+    text = dict(ac.build_rows(str(state)))["last error lines (redacted)"]
+    assert "CANARY" not in text and "MARK-after-open" in text, text
+    row = dict(ac.mesh_rows(str(state)))["local mesh log"]
+    assert "CANARY" not in row and "[redacted]" in row, row
