@@ -616,9 +616,14 @@ _PARG = r"(?:[ \t]+(?![A-Z])[A-Za-z0-9_./:@\-=~$*{}()\"'+%]+(?<![.;,]))*"
 _GIT_VERBS = ("clone|pull|push|commit|checkout|reset|rebase|merge|fetch|add|status|log|diff|"
               "init|clean|stash|branch|remote|config|switch|restore|rm|mv|tag|worktree|"
               "submodule|cherry-pick|revert|show|gc|prune|filter-branch|update-ref")
+# "make sure you have a backup" is English, not a make target (a footer once listed
+# "make sure" as a command the docs lack)
+_MAKE_PROSE = ("sure", "certain", "it", "this", "that", "these", "those", "them", "the", "a",
+               "an", "your", "you", "any", "all", "one", "some", "changes", "use",
+               "sense", "room", "space", "note", "everything", "things", "copies", "backups")
 _CMD_RE = re.compile(
     r"(?:(?<=^)|(?<=[\s`$>]))"
-    r"((?:make\s+[a-z0-9_.\-]+(?<![.;,]))"
+    r"((?:make\s+(?!(?:" + "|".join(_MAKE_PROSE) + r")\b)[a-z0-9_.\-]+(?<![.;,]))"
     r"|(?:\./scripts/[A-Za-z0-9_./\-]+(?<![.;,])" + _ARG + r")"
     r"|(?:scripts/[A-Za-z0-9_./\-]+(?<![.;,])" + _ARG + r")"
     r"|(?:\./[A-Za-z0-9_.\-][A-Za-z0-9_./\-]*\.(?:sh|py)" + _ARG + r")"

@@ -701,9 +701,8 @@ docs do not, or a word the brand screens never show, is dropped.
 The model is asked with: `# HugMesh primer`, `# Rules` (answer from the snippets, the
 page facts and the primer only; say "I do not know from the docs I have" otherwise;
 never a command that is not in a snippet; never claim to have changed anything; never
-invent a shell command, and for a wipe, reset or start-fresh question point to the
-Studio's Stop mesh and Stop & clean Docker… buttons and `make stack-halt` /
-`make stack-down`, never a command that deletes files, containers, images or volumes),
+invent a shell command, and point to the Studio's own buttons and the documented make
+targets rather than spell a command that deletes anything; 12.11 has the details),
 `# Where the person is`, `# Options on this page`, `# Snippets` and, on a page with
 proposable settings, `# Change format`. Each part has a cap and the whole stays under
 the context size minus 6000 tokens for the answer; when it cannot, the options, the
@@ -881,13 +880,17 @@ I can turn the forum off for shop.example.
 ```
 
 The example the model itself is shown is made up on purpose:
-`{"domain": "example.invalid", "field": "example.setting", "to": true}`, marked as
-never to be copied. The old one named a real field of the domain on screen (shop.example,
+`{"domain": "example.invalid", "field": "example.setting", "to": true}`, under
+"Example (made up; never copy it):" (that wording is measured: a longer "made up and
+always refused" note broke every code-edit diff qwen3:8b wrote). The old one named a real field of the domain on screen (shop.example,
 `tor`, `true`), and qwen3:8b copied it word for word into a "turn off the forum" answer:
 its card offered an onion front door nobody asked for. `validate` now refuses the
 example block, and any block with its `.invalid` domain or its `example.setting` field,
 with "That block is the format's made-up example, not a change for this page; nothing
-was proposed."
+was proposed." A services list that switches on or off a service the request does not
+name is refused too ("I don't want phpBB" once came back as `[tuwunel, games]`): "Not
+proposed: that list would also switch on games, which you did not ask for. Name each
+service to switch on or off." A request that names no service is judged by the card.
 
 (For `services` the value is the whole new list, built from the `current:` list the
 model is shown; the card always says `from -> to` before anything is applied.)
@@ -980,9 +983,9 @@ carry a delete command are counted as well ("warned"). **Wrong change cards**: a
 `Proposed change` card for an item with `card_must_be` (or a JSON must-mention) whose
 block is anything else; no card or a refusal is not wrong. `model_mention_any` asks for
 one of several phrases in the model's own words; the Studio's warning and Sources lines
-never count as the model's. The wipe/reset items ask for the Stop & clean Docker…
-button or `make stack-down`/`stack-halt` and forbid any `/home/` path; the forum-off
-items accept only the phpbb-off block.
+never count as the model's. The items that ask how to start over want the documented
+button or make target (12.11) and forbid any `/home/` path; the forum-off items accept
+only the phpbb-off block.
 
 ### 12.11 Delete commands get a warning, always
 

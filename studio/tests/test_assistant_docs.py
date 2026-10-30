@@ -312,6 +312,12 @@ def test_inline_code_that_names_a_tool_or_a_value_is_not_a_command():
                                                                                  "./scripts/x.sh"]
 
 
+def test_make_in_english_is_not_a_make_target():
+    text = "Make sure you have a backup, make it quick, and make the changes; then run make stack-down."
+    assert ad.commands_in(text) == {"make stack-down"}
+    assert ad.unverified_commands("Remember to make sure the mesh is stopped.", []) == []
+
+
 def test_prose_after_a_command_is_not_part_of_it():
     assert "docker volume ls" in ad.commands_in("Then docker volume ls is what you want.")
     assert ad.commands_in("make stack-up in the generator checkout") == {"make stack-up"}
