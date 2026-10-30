@@ -899,6 +899,8 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 #     PASS the ungated SET matches its pin exactly (41 suite(s))
 # and with the suite on disk but its two CI lines absent: '203 of 245' + check 3 and
 # check 7 red naming it -- so the +1/+1 is this suite and nothing else.
+# Re-measured after merging origin/main 68c19492 (#837, no suite added): the same
+# '204 of 245', ungated SET 41.
 # Any other branch that also raises this line from 203 conflicts with this one by
 # construction: whichever lands second re-measures (expected 205 if both add one gated
 # suite) per the doctrine above, never keeps either number.
