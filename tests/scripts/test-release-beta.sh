@@ -41,7 +41,7 @@ set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "${HERE}/../.." && pwd)"
-SCRIPT="${REPO}/scripts/release-beta.sh"
+SCRIPT="${REPO}/scripts/release.sh"
 
 pass=0; fail=0
 ok()  { echo "  PASS $*"; pass=$((pass+1)); }
