@@ -12,7 +12,7 @@ import shutil
 import subprocess
 from dataclasses import dataclass
 
-from . import resource_limits
+from . import proc_text, resource_limits
 
 #: The compose overlay that carries the operator's Resource limits setting onto the
 #: mesh node. Written next to the staged template on every start(), REMOVED when the
@@ -175,7 +175,7 @@ class MeshNode:
             return False, f"could not write the resource-limits overlay: {e}"
         try:
             r = subprocess.run(self._compose("up", "-d"), cwd=self.workdir, env=self._env(),
-                               capture_output=True, text=True, timeout=600)
+                               capture_output=True, text=True, **proc_text.TEXT_IO, timeout=600)
             return (r.returncode == 0), (r.stderr or r.stdout).strip()
         except (OSError, subprocess.SubprocessError) as e:
             return False, str(e)
@@ -194,7 +194,7 @@ class MeshNode:
             return True, "mesh overlay not started — nothing to stop"
         try:
             r = subprocess.run(self._compose("down"), cwd=self.workdir, env=self._env(),
-                               capture_output=True, text=True, timeout=300)
+                               capture_output=True, text=True, **proc_text.TEXT_IO, timeout=300)
             return (r.returncode == 0), (r.stderr or r.stdout).strip()
         except (OSError, subprocess.SubprocessError) as e:
             return False, str(e)
@@ -205,7 +205,7 @@ class MeshNode:
             return MeshStatus(running=False, detail="not started")
         try:
             r = subprocess.run(self._compose("ps", "-q"), cwd=self.workdir, env=self._env(),
-                               capture_output=True, text=True, timeout=30)
+                               capture_output=True, text=True, **proc_text.TEXT_IO, timeout=30)
             ids = [x for x in r.stdout.splitlines() if x.strip()]
             return MeshStatus(running=bool(ids), detail=f"{len(ids)} container(s)")
         except (OSError, subprocess.SubprocessError) as e:
@@ -215,7 +215,7 @@ class MeshNode:
         try:
             r = subprocess.run(self._compose("logs", "--tail", str(tail)),
                                cwd=self.workdir, env=self._env(),
-                               capture_output=True, text=True, timeout=30)
+                               capture_output=True, text=True, **proc_text.TEXT_IO, timeout=30)
             return r.stdout
         except (OSError, subprocess.SubprocessError) as e:
             return str(e)

@@ -97,6 +97,7 @@ import tempfile
 import zlib
 from dataclasses import asdict, dataclass, field
 
+from . import json_files
 from .config import OPTIONAL_SERVICES_CHOICES, Domain, github_org_problem
 
 __all__ = [
@@ -486,8 +487,7 @@ def load_rename_map(path: str) -> dict:
     test script holding an example token is excluded, never published). Both are
     fnmatch globs on the repository-relative path, with ``<repo>:<glob>`` scoping a
     rule to one source repository."""
-    with open(path, encoding="utf-8") as fh:
-        data = json.load(fh)
+    data = json_files.load(path)          # Notepad/PowerShell saves (BOM, UTF-16) too
     if not isinstance(data, dict):
         raise ValueError("rename map must be a JSON object")
     unknown = sorted(set(data) - {"repos", "tokens", "skip_rewrite", "exclude"})
