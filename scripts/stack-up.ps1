@@ -171,8 +171,13 @@ if ($LASTEXITCODE -ne 0) { throw 'docker compose up failed.' }
 # The postgres image runs /docker-entrypoint-initdb.d ONLY on the volume's first
 # init, so an existing stack never receives a route row added since. Re-apply the
 # canonical seed in one transaction (additive: an admin's row edits survive, a
-# deleted seed row comes back) and print counts only. The file is bind-mounted
-# into the container, so this needs no psql on the host.
+# deleted seed row comes back) and print counts only. Needs no psql on the host.
+# The seed is COPIED in from the checkout, never read from the container's
+# single-file bind mount: that mount pins the inode it had at container start, and
+# `git pull` replaces 20-schema.sql with a new file, so a container that kept
+# running across the pull would re-apply the OLD seed and report success. It is
+# copied, not piped: Windows PowerShell 5.1 re-encodes a pipeline to a native
+# command with $OutputEncoding (ASCII), and the seed is not ASCII.
 # NO double quote inside any `sh -c` argument below: Windows PowerShell 5.1 (and
 # pwsh 7.0-7.2, "Legacy" native argument passing) does not escape an embedded `"`
 # when it builds docker's command line, so `-c "SELECT 1"` reached sh as
@@ -203,8 +208,13 @@ try {
 }
 if (-not $ready) { throw 'route-access-db did not become reachable within 120s.' }
 $before = docker compose -f $Compose exec -T route-access-db sh -c 'PGPASSWORD=$POSTGRES_PASSWORD psql -X -q -tA -h 127.0.0.1 -U gateway -d gateway -v ON_ERROR_STOP=1 -c ''SELECT count(*) FROM gateway_route_access'''
-docker compose -f $Compose exec -T route-access-db sh -c 'PGPASSWORD=$POSTGRES_PASSWORD psql -X -q -h 127.0.0.1 -U gateway -d gateway -v ON_ERROR_STOP=1 -1 -f /docker-entrypoint-initdb.d/10-schema.sql'
-if ($LASTEXITCODE -ne 0) { throw 'route-access reconcile FAILED (transaction rolled back, table unchanged).' }
+$SeedSql = Join-Path $RepoRoot 'specs\cluster\manifests\route-access\initdb\20-schema.sql'
+docker compose -f $Compose cp $SeedSql route-access-db:/tmp/route-access-seed.sql
+if ($LASTEXITCODE -ne 0) { throw 'route-access reconcile: copying the seed into route-access-db failed.' }
+docker compose -f $Compose exec -T route-access-db sh -c 'PGPASSWORD=$POSTGRES_PASSWORD psql -X -q -h 127.0.0.1 -U gateway -d gateway -v ON_ERROR_STOP=1 -1 -f /tmp/route-access-seed.sql'
+$applyExit = $LASTEXITCODE
+docker compose -f $Compose exec -T route-access-db sh -c 'rm -f /tmp/route-access-seed.sql' | Out-Null
+if ($applyExit -ne 0) { throw 'route-access reconcile FAILED (transaction rolled back, table unchanged).' }
 $after = docker compose -f $Compose exec -T route-access-db sh -c 'PGPASSWORD=$POSTGRES_PASSWORD psql -X -q -tA -h 127.0.0.1 -U gateway -d gateway -v ON_ERROR_STOP=1 -c ''SELECT count(*) FROM gateway_route_access'''
 Write-Host "    route-access reconcile: $before -> $after rows"
 
