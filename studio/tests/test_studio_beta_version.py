@@ -171,6 +171,8 @@ def test_every_job_is_github_hosted():
     assert jobs["linux"]["runs-on"] == "ubuntu-24.04"
     # flatpak installs its tooling with `sudo apt-get`; the local runner is Gentoo.
     assert jobs["flatpak"]["runs-on"] == "ubuntu-latest"
+    # The aarch64 twin: GitHub's hosted arm64 image, free for public repositories.
+    assert jobs["flatpak-aarch64"]["runs-on"] == "ubuntu-24.04-arm"
     text = _read(WORKFLOW)
     assert not re.search(r"vars\.RUNS_ON", text), (
         "the release workflow reads a RUNS_ON* variable, which can move the build or the "

@@ -38,7 +38,8 @@ VERSION = "0.3.0-beta.1"
 TAG = f"studio-v{VERSION}"
 IDENTITY = f"https://github.com/{REPO}/.github/workflows/studio-release.yml@refs/tags/{TAG}"
 ISSUER = "https://token.actions.githubusercontent.com"
-HOSTED = {"ubuntu-latest", "ubuntu-24.04", "windows-latest"}
+HOSTED = {"ubuntu-latest", "ubuntu-24.04", "ubuntu-24.04-arm", "windows-latest"}
+FLATPAK_ARCHES = ("x86_64", "aarch64")
 
 
 def _text() -> str:
@@ -189,8 +190,8 @@ def test_release_uploads_every_signed_file_and_stays_a_prerelease():
     assert release["with"]["make_latest"] == "${{ contains(env.VERSION, '-') && 'false' || 'true' }}"
 
 
-def test_publish_needs_all_three_builds_and_collect_requires_all_three_files(tmp_path):
-    assert set(_jobs()["publish"]["needs"]) == {"version", "msi", "linux", "flatpak"}
+def test_publish_needs_all_four_builds_and_collect_requires_all_four_files(tmp_path):
+    assert set(_jobs()["publish"]["needs"]) == {"version", "msi", "linux", "flatpak", "flatpak-aarch64"}
     script = _step("publish", "Collect the installers")["run"]
     art = tmp_path / "artifacts"
     (art / "msi").mkdir(parents=True)
@@ -199,11 +200,21 @@ def test_publish_needs_all_three_builds_and_collect_requires_all_three_files(tmp
     (art / "flatpak" / f"hugmesh-studio-{VERSION}-x86_64.flatpak").write_bytes(b"fp")
     env = {"PATH": "/usr/bin:/bin", "VERSION": VERSION}
     proc = _run_bash(script, env, tmp_path)
+    assert proc.returncode != 0 and f"hugmesh-studio-{VERSION}-aarch64.flatpak is missing" in proc.stdout, proc
+    # The aarch64 bundle arrives in its own artifact directory (upload name flatpak-aarch64).
+    (art / "flatpak-aarch64").mkdir()
+    (art / "flatpak-aarch64" / f"hugmesh-studio-{VERSION}-aarch64.flatpak").write_bytes(b"fp-arm")
+    proc = _run_bash(script, env, tmp_path)
     assert proc.returncode != 0 and "linux-x86_64.tar.gz is missing" in proc.stdout, proc
     (art / "linux").mkdir()
     (art / "linux" / f"hugmesh-studio-{VERSION}-linux-x86_64.tar.gz").write_bytes(b"tgz")
     proc = _run_bash(script, env, tmp_path)
     assert proc.returncode == 0, (proc.stdout, proc.stderr)
+    collected = sorted(f.name for f in (tmp_path / "release").iterdir())
+    assert collected == sorted([f"hugmesh-studio-{VERSION}-x64.msi",
+                                f"hugmesh-studio-{VERSION}-x86_64.flatpak",
+                                f"hugmesh-studio-{VERSION}-aarch64.flatpak",
+                                f"hugmesh-studio-{VERSION}-linux-x86_64.tar.gz"]), collected
 
 
 def test_sha256sums_lists_installers_and_sboms_and_tolerates_a_missing_sbom(tmp_path):
@@ -211,15 +222,20 @@ def test_sha256sums_lists_installers_and_sboms_and_tolerates_a_missing_sbom(tmp_
     rel = tmp_path / "release"
     rel.mkdir()
     for name in (f"hugmesh-studio-{VERSION}-x64.msi", f"hugmesh-studio-{VERSION}-x86_64.flatpak",
+                 f"hugmesh-studio-{VERSION}-aarch64.flatpak",
                  f"hugmesh-studio-{VERSION}-linux-x86_64.tar.gz"):
         (rel / name).write_bytes(name.encode())
     proc = _run_bash(script, {"PATH": "/usr/bin:/bin"}, rel)
     assert proc.returncode == 0, (proc.stdout, proc.stderr)
-    assert len((rel / "SHA256SUMS").read_text().splitlines()) == 3
+    lines = (rel / "SHA256SUMS").read_text().splitlines()
+    assert len(lines) == 4, lines
+    # Both Flatpaks are in the signed list: the aarch64 bundle is verified like the rest.
+    for arch in FLATPAK_ARCHES:
+        assert any(l.endswith(f"  hugmesh-studio-{VERSION}-{arch}.flatpak") for l in lines), (arch, lines)
     (rel / f"hugmesh-studio-{VERSION}-linux-x86_64.spdx.json").write_text("{}")
     proc = _run_bash(script, {"PATH": "/usr/bin:/bin"}, rel)
     lines = (rel / "SHA256SUMS").read_text().splitlines()
-    assert len(lines) == 4 and any(l.endswith(".spdx.json") for l in lines), lines
+    assert len(lines) == 5 and any(l.endswith(".spdx.json") for l in lines), lines
 
 
 # ── Linux tarball ──────────────────────────────────────────────────────────────────
@@ -294,6 +310,12 @@ def test_release_notes_carry_verify_commands_with_the_signing_identity(tmp_path,
     assert f"--source-ref refs/tags/{TAG} \\" in notes
     assert "--deny-self-hosted-runners" in notes
     assert ("not code-signed" in notes) == (signed == "false")
+    # Both Flatpaks are named, each with its install line; the aarch64 one is not a
+    # footnote to the x86_64 paragraph.
+    for arch in FLATPAK_ARCHES:
+        assert f"`hugmesh-studio-{VERSION}-{arch}.flatpak`" in notes, arch
+        assert f"flatpak install --user ./hugmesh-studio-{VERSION}-{arch}.flatpak" in notes, arch
+    assert "**Linux aarch64**" in notes and "**Linux x86_64**" in notes
     assert "(beta, pre-release)" in notes
     regexp = re.search(r"--certificate-identity-regexp '([^']+)'", notes).group(1)
     assert re.fullmatch(regexp, IDENTITY), regexp
@@ -305,11 +327,12 @@ def test_release_notes_carry_verify_commands_with_the_signing_identity(tmp_path,
 
 
 @pytest.mark.parametrize("signed", ["true", "false"])
-def test_releases_json_lists_all_three_packages_and_the_signature_material(tmp_path, signed):
+def test_releases_json_lists_all_four_packages_and_the_signature_material(tmp_path, signed):
     script = _step("publish", "Generate releases.json for the documentation site")["run"]
     rel = tmp_path / "release"
     rel.mkdir()
     for name in (f"hugmesh-studio-{VERSION}-x64.msi", f"hugmesh-studio-{VERSION}-x86_64.flatpak",
+                 f"hugmesh-studio-{VERSION}-aarch64.flatpak",
                  f"hugmesh-studio-{VERSION}-linux-x86_64.tar.gz",
                  f"hugmesh-studio-{VERSION}-linux-x86_64.spdx.json", "SHA256SUMS"):
         (rel / name).write_bytes(b"x" * 2048)
@@ -322,6 +345,16 @@ def test_releases_json_lists_all_three_packages_and_the_signature_material(tmp_p
     assert data["version"] == VERSION and data["notesUrl"].endswith(f"/releases/tag/{TAG}")
     kinds = {(i["platform"], i["kind"]) for i in data["installers"]}
     assert kinds == {("windows", "msi"), ("linux", "flatpak"), ("linux", "tarball")}
+    assert len(data["installers"]) == 4, [i["file"] for i in data["installers"]]
+    # One Flatpak per architecture, told apart by file, label and the "arch" field.
+    flatpaks = {i["arch"]: i for i in data["installers"] if i["kind"] == "flatpak"}
+    assert set(flatpaks) == set(FLATPAK_ARCHES), flatpaks
+    for arch, item in flatpaks.items():
+        assert item["file"] == f"hugmesh-studio-{VERSION}-{arch}.flatpak"
+        assert item["label"] == f"Flatpak bundle ({arch})"
+        assert arch in item["notes"]
+    assert len({i["label"] for i in data["installers"]}) == 4, "two installers share a label"
+    assert all("arch" not in i for i in data["installers"] if i["kind"] != "flatpak")
     for item in data["installers"]:
         assert set(item) >= {"platform", "kind", "label", "file", "url", "size", "sha256", "notes"}
         assert item["url"] == f"https://github.com/{REPO}/releases/download/{TAG}/{item['file']}"
@@ -335,6 +368,96 @@ def test_releases_json_lists_all_three_packages_and_the_signature_material(tmp_p
     assert data["signature"]["issuer"] == ISSUER
     assert data["signature"]["bundle"].endswith("/SHA256SUMS.sigstore.json")
     assert data["checksums"].endswith("/SHA256SUMS")
+
+
+def test_releases_json_refuses_a_flatpak_of_an_unknown_architecture(tmp_path):
+    # The label is derived from the file name, so a bundle named for an architecture
+    # nobody builds (a typo in a job, a stray file in an artifact) stops the publish
+    # instead of being listed under an invented label.
+    script = _step("publish", "Generate releases.json for the documentation site")["run"]
+    rel = tmp_path / "release"
+    rel.mkdir()
+    (rel / f"hugmesh-studio-{VERSION}-riscv64.flatpak").write_bytes(b"x" * 2048)
+    env = {"PATH": "/usr/bin:/bin", "VERSION": VERSION, "GITHUB_REPOSITORY": REPO,
+           "AUTHENTICODE": "false"}
+    proc = _run_bash(script, env, tmp_path)
+    assert proc.returncode != 0 and "riscv64.flatpak: not a bundle of a known architecture" in proc.stderr, proc
+    assert not (rel / "releases.json").exists()
+
+
+# ── the aarch64 Flatpak job ────────────────────────────────────────────────────────
+def test_flatpak_aarch64_job_is_the_x86_64_job_on_the_arm_runner():
+    """The aarch64 bundle comes from a twin of the proven x86_64 job: the same manifest,
+    the same flatpak-builder and build-bundle commands and the same runtime branch, on
+    GitHub's hosted arm64 runner, read-only like every build job, and uploaded under
+    its own artifact name so the publish job can collect both bundles."""
+    jobs = _jobs()
+    x86, arm = jobs["flatpak"], jobs["flatpak-aarch64"]
+    assert arm["runs-on"] == "ubuntu-24.04-arm"
+    assert "permissions" not in arm
+    assert arm["env"]["ARCH"] == "aarch64"
+    assert arm["needs"] == x86["needs"] == "version"
+
+    def runs(job):
+        return "\n".join(s.get("run", "") for s in job["steps"])
+    for command in ("flatpak-builder --user --disable-rofiles-fuse --force-clean",
+                    "--repo=repo build-dir org.hugmesh.ImageStudio.yml",
+                    "flatpak install --user -y flathub org.kde.Platform//6.11 org.kde.Sdk//6.11",
+                    "flatpak build-bundle --runtime-repo=https://dl.flathub.org/repo/flathub.flatpakrepo repo",
+                    "desktop-file-validate org.hugmesh.ImageStudio.desktop",
+                    "appstreamcli validate --no-net org.hugmesh.ImageStudio.metainfo.xml",
+                    "--print-specs > specs.json"):
+        assert command in runs(x86), command
+        assert command in runs(arm), command
+    # The bundle's name says aarch64, derived from the one ARCH variable.
+    assert 'build-bundle --runtime-repo=https://dl.flathub.org/repo/flathub.flatpakrepo repo "hugmesh-studio-${VERSION}-${ARCH}.flatpak"' in runs(arm)
+    assert "x86_64" not in runs(arm), "the aarch64 job names the other architecture somewhere"
+    # The runner's architecture is checked before anything is built.
+    names = [s.get("name") for s in arm["steps"]]
+    assert names.index("The runner must really be aarch64") < names.index("Build the Flatpak")
+    assert "flatpak --default-arch" in _step("flatpak-aarch64", "The runner must really be aarch64")["run"]
+    # Qt is started inside the installed bundle: --print-specs never imports PySide6.
+    qt = _step("flatpak-aarch64", "Smoke-test the bundle (Qt starts offscreen on the aarch64 wheels)")["run"]
+    assert "QT_QPA_PLATFORM=offscreen" in qt and "--nofilesystem=host" in qt
+    assert 'BINDING != "PySide6"' in qt and "platform.machine()" in qt
+    assert names.index("Smoke-test the bundle (--print-specs, the Qt-free path)") < names.index(
+        "Smoke-test the bundle (Qt starts offscreen on the aarch64 wheels)")
+    upload = next(s for s in arm["steps"] if s.get("uses", "").startswith("actions/upload-artifact@"))
+    assert upload["with"]["name"] == "flatpak-aarch64"
+    assert "studio/packaging/flatpak/hugmesh-studio-*-aarch64.flatpak" in upload["with"]["path"]
+    assert upload["with"]["if-no-files-found"] == "error"
+    x86_upload = next(s for s in x86["steps"] if s.get("uses", "").startswith("actions/upload-artifact@"))
+    assert x86_upload["with"]["name"] != upload["with"]["name"], "two artifacts of one name: the second upload fails"
+
+
+def test_the_arch_check_and_the_qt_smoke_test_refuse_what_they_must(tmp_path):
+    """Run the two aarch64-only steps with fake tools: the arch check stops on an x86_64
+    runner, and the Qt step fails on a sandbox whose Python did not report qt-ok for
+    aarch64 (a PyQt6 fallback, an x86_64 wheel, Qt not starting at all)."""
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    env = {"PATH": f"{bindir}:/usr/bin:/bin", "ARCH": "aarch64", "VERSION": VERSION}
+    arch = _step("flatpak-aarch64", "The runner must really be aarch64")["run"]
+    (bindir / "flatpak").write_text("#!/bin/sh\necho x86_64\n")
+    (bindir / "flatpak").chmod(0o755)
+    proc = _run_bash(arch, env, tmp_path)
+    assert proc.returncode != 0 and "default arch on this runner is x86_64" in proc.stdout, proc
+    (bindir / "flatpak").write_text("#!/bin/sh\necho aarch64\n")
+    proc = _run_bash(arch, env, tmp_path)
+    assert proc.returncode == 0, proc
+
+    qt = _step("flatpak-aarch64", "Smoke-test the bundle (Qt starts offscreen on the aarch64 wheels)")["run"]
+    for answer in ("", "qt-ok binding=PyQt6 qt=6.11.2 platform=offscreen machine=aarch64",
+                   "qt-ok binding=PySide6 qt=6.11.2 platform=offscreen machine=x86_64",
+                   "Traceback: ImportError: libQt6Core.so.6: wrong ELF class"):
+        (bindir / "flatpak").write_text(f"#!/bin/sh\ncat >/dev/null\nprintf '%s\\n' '{answer}'\n")
+        proc = _run_bash(qt, env, tmp_path)
+        assert proc.returncode != 0, (answer, proc.stdout)
+        assert "did not report qt-ok on aarch64" in proc.stdout, (answer, proc.stdout)
+    good = "qt-ok binding=PySide6 qt=6.11.2 platform=offscreen machine=aarch64 grab=120x40"
+    (bindir / "flatpak").write_text(f"#!/bin/sh\ncat >/dev/null\nprintf '%s\\n' '{good}'\n")
+    proc = _run_bash(qt, env, tmp_path)
+    assert proc.returncode == 0, proc
 
 
 # ── site notification ──────────────────────────────────────────────────────────────
