@@ -20,8 +20,9 @@ scripts/release-beta.sh --studio 0.3.0-beta.2   # dry run, including the Studio 
 
 `--apply` runs the phases in order and asks `y/N` before every phase that writes: a
 merge, a tag, a re-run, a dispatch. `--yes` answers those prompts for you, and each
-action is still printed. Two things always wait for you: the two web-UI steps (gateway
-package access and package visibility) and the Studio's own `Proceed?`.
+action is still printed, and it is passed on to `release-studio.sh`, so the Studio's
+`Proceed?` is skipped too. Only the two web-UI steps (gateway package access and package
+visibility) always wait for Enter.
 
 The script is [`scripts/release-beta.sh`](../scripts/release-beta.sh). The list of what
 gets released is [`scripts/release/repos.tsv`](../scripts/release/repos.tsv): 38
