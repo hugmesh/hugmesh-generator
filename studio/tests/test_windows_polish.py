@@ -130,21 +130,42 @@ def test_on_windows_the_device_tests_box_is_greyed(studio):
 
 
 # ── the Go-Live export step's hand-over line ─────────────────────────────────────────
-def test_the_heading_names_powershell_only_on_windows():
+def _gui_golive():
+    """The GUI Go-Live module, or a skip: it imports a Qt binding at module level,
+    and the Linux ``pytest`` CI job runs this file with no binding on purpose."""
+    pytest.importorskip("hugmesh_studio.gui.qt",
+                        reason="no Qt binding (PySide6/PyQt6) installed")
     from hugmesh_studio.gui.pages import golive as gui_golive
+    return gui_golive
+
+
+def test_the_heading_names_powershell_only_on_windows():
     assert tui_golive.same_line_heading("nt") == "The same in PowerShell:"
     assert tui_golive.same_line_heading("posix") == "The same from a terminal:"
+
+
+def test_the_gui_row_name_names_powershell_only_on_windows():
+    gui_golive = _gui_golive()
     assert gui_golive._shell_name("nt") == "PowerShell"
     assert gui_golive._shell_name("posix") == "Terminal"
 
 
-def test_the_label_and_the_line_agree_on_this_host():
-    """Whatever this host is, the heading names PowerShell exactly when the line is
-    PowerShell's (its ``&`` call operator)."""
-    from hugmesh_studio.gui.pages import golive as gui_golive
-    powershell = org_export._terminal_line(["x"]).startswith("& ")
+def _line_is_powershell():
+    return org_export._terminal_line(["x"]).startswith("& ")
+
+
+def test_the_heading_and_the_line_agree_on_this_host():
+    """Whatever this host is, the TUI heading names PowerShell exactly when the line
+    is PowerShell's (its ``&`` call operator)."""
+    powershell = _line_is_powershell()
     assert powershell == (os.name == "nt")
     assert ("PowerShell" in tui_golive.same_line_heading()) == powershell
+
+
+def test_the_gui_label_and_the_line_agree_on_this_host():
+    gui_golive = _gui_golive()
+    powershell = _line_is_powershell()
+    assert powershell == (os.name == "nt")
     assert (gui_golive._shell_name() == "PowerShell") == powershell
 
 
