@@ -1,7 +1,10 @@
-# Releasing a HugMesh beta
+# Releasing HugMesh: beta and stable
 
-The whole org release is one command, run from a checkout of `hugmesh-generator` on
-`main`:
+The whole org release is one script, [`scripts/release.sh`](../scripts/release.sh), run
+from a checkout of `hugmesh-generator` on `main`. `--channel beta` (the default) releases
+every repository's `main`; `--channel stable` releases each repository's own
+`release/X.Y` branch ([Stable releases](#stable-releases)). The beta one-liner is
+unchanged, because `scripts/release-beta.sh` is `scripts/release.sh --channel beta`:
 
 ```bash
 git pull --ff-only && scripts/release-beta.sh --apply --studio <studio version>
@@ -31,18 +34,41 @@ its settings page (see [the manual steps](#the-two-manual-steps-and-why-they-are
 The dry-run text names files relative to the checkout, never with a local path, so it
 can be pasted into a PR or a chat as it is.
 
-The script is [`scripts/release-beta.sh`](../scripts/release-beta.sh). The list of what
-gets released is [`scripts/release/repos.tsv`](../scripts/release/repos.tsv): 38
-repositories in nine dependency stages. That list holds **no version numbers**.
+The script is [`scripts/release.sh`](../scripts/release.sh);
+[`scripts/release-beta.sh`](../scripts/release-beta.sh) only runs it with `--channel beta`.
+The list of what gets released is [`scripts/release/repos.tsv`](../scripts/release/repos.tsv):
+38 repositories in nine dependency stages. That list holds **no version numbers**.
+
+## How channels work
+
+The **tag decides the channel**. A tag with `-beta.N` is a beta; a plain `X.Y.Z` is
+stable. Each repository's release workflow reads the tag and publishes accordingly; this
+script decides which commit gets which tag.
+
+| | Beta | Stable cut | Stable patch |
+|---|---|---|---|
+| Released from | `main` | the repo's `release/X.Y`, which the cut creates from `main` | the existing `release/X.Y`, after the fix is cherry-picked there |
+| Version | `main`'s version file: `X.Y.Z-beta.N` | `main`'s beta without `-beta.N`: `X.Y.Z` | `--version X.Y.(Z+1)` |
+| Git tag | `vX.Y.Z-beta.N` on `main` | `vX.Y.Z` on `release/X.Y` | `vX.Y.(Z+1)` on `release/X.Y` |
+| Image tags | `:X.Y.Z-beta.N` and the floating `:beta` | `:X.Y.Z`, the floating `:X.Y`, and `:latest` | `:X.Y.(Z+1)` and `:X.Y`; `:latest` only if `X.Y` is the newest stable line |
+| GitHub Release | prerelease, never marked Latest | full release, marked Latest | marked Latest only if `X.Y` is the newest stable line |
+| Never moves | `:X.Y.Z-beta.N` | `:X.Y.Z` | `:X.Y.(Z+1)` |
+| Afterwards | the next beta bumps `main` | the `next` phase opens PRs moving `main` to `X.(Y+1).0-beta.1` | `main` is not touched |
+
+Every pushed image tag is signed, the floating ones included. Each repository has its own
+`X.Y`: build-config, parent, commons, auth-core, the gateway and the UIs are versioned
+independently, so a cut is "each repository's current beta, released as its stable".
 
 ## Options
 
 | Option | Meaning |
 |---|---|
+| `--channel beta` (default) / `--channel stable` | release `main` as betas / each repository's `release/X.Y` as stables ([Stable releases](#stable-releases)) |
+| `--version X.Y.Z` | stable only, with `--only`: a patch release on the existing `release/X.Y` |
 | `--dry-run` (default) / `--apply` | read-only plan / do it |
 | `--yes` | answer `y` to every `y/N` except "Did you grant Read?" (web-UI pauses still wait for Enter) |
 | `--merge <repo>#<n>` (repeatable) | before releasing: `gh pr ready` (when draft) and `gh pr merge --squash --delete-branch`, then wait for the new main push run (if none appears, it stops there) |
-| `--studio <version>` / `--studio next` / `--no-studio` | release the Studio through `scripts/release-studio.sh` (see below) |
+| `--studio <version>` / `--studio next` / `--no-studio` | release the Studio through `scripts/release-studio.sh` (see below; beta only for now) |
 | `--only <repo>` (repeatable) | act on these repositories only; every repository is still checked, and a stage with none of them is skipped |
 | `--from <phase>` | resume at a phase (re-running also skips DONE work by itself) |
 | `--expect <repo>=<version>` (repeatable) | refuse that repository unless main's version file says exactly this |
@@ -259,11 +285,154 @@ appears in, or "not listed".
 - **`release-studio.sh` stops with "already exists".** That Studio version is out. Pick
   a later one, or use `--no-studio`.
 
+## Stable releases
+
+```bash
+scripts/release.sh --channel stable                  # dry run: every repo's state and the plan
+scripts/release.sh --channel stable --apply          # cut, bump PRs, tag in stage order, next-beta PRs
+scripts/release.sh --channel stable --version 0.3.1 --only hugmesh-admin-ui --apply   # a patch
+```
+
+A stable release is the tag `vX.Y.Z` on the repository's own `release/X.Y` branch, never
+on `main`. The flow takes more than one run, because the version-bump PRs it opens have
+to be merged by a person:
+
+1. **Run 1** cuts the release branches and opens the bump PRs, then stops at the first
+   stage whose PR is not merged yet.
+2. **Merge the bump PRs in stage order.** A downstream PR goes green only once the stable
+   it pins is published, exactly like the beta cascade.
+3. **Run again.** Every merged stage is tagged and watched. A red release-branch push run
+   is re-run in the `rerun` phase once its dependency stages are out. After a stable is
+   published, the `next` phase opens one PR per repository moving `main` to
+   `X.(Y+1).0-beta.1`.
+
+The stable phases are the beta ones with three more: `preflight cut bump merge maven apps
+rerun gateway gateway-access overlays java studio visibility site next verify`. `cut`,
+`bump` and `next` ask `y/N` like every other writing phase, `--from` resumes at any of
+them, and `--merge <repo>#<n>` merges a bump PR and waits for the push run on the PR's
+base branch (`release/X.Y`), not `main`.
+
+### Stable states
+
+| State | Meaning | What to do |
+|---|---|---|
+| `NEEDS-CUT` | `release/X.Y` does not exist yet, and `main`'s beta `X.Y.Z-beta.N` is `DONE` | the `cut` phase creates the branch at `main`'s checked SHA |
+| `NEEDS-PR` | `release/X.Y` exists but its version file is not `X.Y.Z` yet | the `bump` phase opens the PR; merge it, then run again |
+| `READY` | everything below holds; this run tags `release/X.Y` | nothing |
+| `DONE` | `vX.Y.Z` exists and its run is green | nothing. If `release/X.Y` moved since, the row says which `--version` the patch is |
+| `REFUSE` | the reason and the next step are printed | fix it, run again |
+
+A repository is `READY` for stable only if all of these hold, read from the GitHub API:
+
+- **its release workflow supports channels**, read at the ref that would be tagged
+  (`release/X.Y`, or `main` before the cut). Two markers must both be there:
+  - `on.push.branches` lists a `release/` glob (`release/**`), so a release branch gets
+    the same push run that the script checks on `main`;
+  - the literal line `hugmesh-release-channels: beta+stable` (a comment next to the
+    channel logic).
+
+  Without them the repository is refused, with the open "Release channels: beta from
+  main, stable from release/X.Y" PR to merge. If the branch was cut before the PR
+  merged, cherry-pick it into `release/X.Y`;
+- `release/X.Y`'s version file says `X.Y.Z`;
+- no `net.hugmesh` pin, `<hugmesh-*.version>` property or overlay `FROM` pin on
+  `release/X.Y` is still a `-beta.N`;
+- `X.Y.Z` is later than every stable tag (a cut), or exactly the next patch after the
+  newest `vX.Y.*` (a patch);
+- the beta checks also pass on `release/X.Y`: signing, no private `DOCKER_CONFIG`, the
+  required secrets, and the latest **`release/X.Y` push run** is green at its HEAD;
+- every dependency stage is published at its stable (a patch has no dependency stages:
+  its pins are already stable).
+
+### What stops a stable run
+
+- **A selected repository whose `main` is `NEEDS-BUMP`.** It has commits that no
+  published beta carries, so its "current beta" is not what `main` is. `cut` and `bump`
+  stop for every selected repository until that beta is released (`scripts/release-beta.sh`)
+  or the repository is left out with `--only`.
+- **A cut over a beta that is not `DONE`.** The cut releases what the beta released.
+- **A bump that is not mechanical.** If any selected repository would keep a beta pin
+  that no row of `repos.tsv` publishes, or a file is not in the shape the rules expect,
+  the `bump` phase opens **no PR at all** and lists what to fix.
+- **A branch that moved.** `main` is read again right before the cut creates
+  `release/X.Y`, and `release/X.Y` right before it is tagged. If either moved, nothing is
+  created and the run stops with the resume command.
+- **A published version is never re-tagged.** A stable tag whose run failed after
+  publishing is fixed forward with `--version X.Y.(Z+1)`.
+
+### The version bump, mechanically
+
+Each bump is one commit on the branch `bump/stable-X.Y.Z` and one **draft** PR into
+`release/X.Y`. Its head branch is deliberately not under `release/`: every
+channel-aware workflow runs on pushes to `release/**`. The PR is opened from the
+release branch's current HEAD, and a re-run finds the open PR instead of opening a
+second one. What moves:
+
+| File | Rule |
+|---|---|
+| `pom.xml` | the project's own `<version>`; every `<parent>`, dependency, plugin or extension with `groupId` `net.hugmesh` whose artifact a row of `repos.tsv` publishes, to that artifact's stable from the same run; every `<artifact>.version` property of such an artifact. Found by element, never by line number. Comments are left alone |
+| `package.json` | `version`, and its `package-lock.json` (`version` and `packages[""].version`) |
+| `composer.json`, `VERSION` | the version |
+| `repos.tsv` `mirrors` column | `frontend/package.json` (character-forge), `README.md:Version` and `CHANGELOG.md:heading` (auth-core), `gateway-pin` (the be/fe/pki `PINNED_GATEWAY_IMAGE` / `GATEWAY_IMAGE_PIN`, to the gateway's stable) |
+
+Left for a person, and said in the PR: auth-core's `CHANGELOG.md` gets a `## X.Y.Z`
+heading with a TODO line where the release notes go (its metadata test needs the prose),
+and comments or docs that still name a beta.
+
+The `next` phase uses the same rules on `main`: the version moves to
+`X.(Y+1).0-beta.1`, and every org pin to its upstream's next beta, so the beta channel
+picks up where it left off.
+
+### Patch releases
+
+1. Fix it on `main` first.
+2. Cherry-pick the fix into the repository's `release/X.Y` in a PR. The bump to
+   `X.Y.(Z+1)` can be part of that PR, or `--apply` opens it.
+3. Run `scripts/release.sh --channel stable --version X.Y.(Z+1) --only <repo> --apply`.
+
+`--version` needs `--only`, because each repository has its own version line. It is
+refused when `X.Y.(Z+1)` is not the next patch after the newest `vX.Y.*`, or when
+`release/X.Y` does not exist. A patch on an older line moves `:X.Y` and never
+`:latest`; the repository's release workflow decides that from its own tags.
+
+### The Studio on the stable channel
+
+The Studio is not released by a stable run yet. `--channel stable --studio <version>` is
+refused, with what is missing:
+
+1. `scripts/release-studio.sh` needs a `--final` (or `--channel stable`) that takes
+   `release_version.py next --final`. Today it only proposes the next beta, and its
+   usage line and "a wrong build gets a new beta N" say so.
+2. `scripts/release.sh` then calls it with that flag, keeping its type-back
+   confirmation.
+3. Cosmetic: the `studio-release.yml` and `studio-release-cut.yml` headers still say
+   "beta scheme" and "next beta N".
+
+The rest already handles a plain `X.Y.Z`: `release_version.py` accepts it and
+`studio-release.yml` marks it as a full release.
+
+### Before the first stable cut
+
+1. Merge each repository's "Release channels" PR (the dry run lists those still
+   missing).
+2. Release a beta, so every `main` is `DONE`.
+3. Run `scripts/release.sh --channel stable` and read the plan: zero `REFUSE` before
+   `--apply`.
+
 ## Testing the script
 
 `tests/scripts/test-release-beta.sh` runs it against a recording `gh` stub. It proves:
 
-- a dry run makes zero write calls;
+- a dry run makes zero write calls, on both channels. That is checked twice: the stub
+  refuses every write (exit 97) whenever the script runs without `--apply`, and the call
+  log is searched for writes afterwards;
+- `scripts/release-beta.sh` classifies every row exactly like `release.sh --channel beta`;
+- the stable channel: every state (`NEEDS-CUT`, `NEEDS-PR`, `READY`, `DONE`, `REFUSE`), the
+  channel-marker refusal with the PR to merge, the beta-pin refusal, the cut at the
+  checked `main` SHA (and its refusal over a `NEEDS-BUMP` main or a `main` that moved),
+  the bump's rewrite rules and its idempotence, a bump that is not mechanical opening
+  nothing, the tag on the release branch's re-read SHA, the patch rules, the next-beta
+  PR, and the Studio refusal;
 - the version parsing and the classification;
 - the `--only` fix: `--apply --only <a UI>` tags it while a Maven stage is unpublished,
   and `--only <a Java image>` still stops at its own stage;
@@ -276,8 +445,8 @@ appears in, or "not listed".
   settings page. Without `--yes` it is asked;
 - the dry-run text carries no checkout or temp paths;
 - the stage order of a full `--apply`;
-- a mutation battery over those guards. Each guard is broken in a copy of the script,
-  and the check that covers it must go red.
+- a mutation battery over those guards, beta and stable. Each guard is broken in a copy
+  of the script, and the check that covers it must go red.
 
 It runs in the pre-merge `shell suites (debian/python)` job and in GitLab's
 `lint:release-beta`.

@@ -1,7 +1,7 @@
-# scripts/release/repos.tsv: every artifact a HugMesh org beta release publishes, read by
-# scripts/release-beta.sh (docs/RELEASING.md). One row per repository:
+# scripts/release/repos.tsv: every artifact a HugMesh org release publishes (beta and
+# stable), read by scripts/release.sh (docs/RELEASING.md). One row per repository:
 #
-#   stage|repo|kind|version file|tag prefix|workflow|packages
+#   stage|repo|kind|version file|tag prefix|workflow|packages[|mirrors]
 #
 # stage    dependency order. 1-4 the Maven chain (build-config -> parent -> commons ->
 #          auth-core), 5 the gateway base image, 6 its be/fe/pki overlays (FROM the
@@ -14,17 +14,25 @@
 #          file in a PR and the next run picks it up.
 # packages space-separated package names (GHCR image names without ghcr.io/hugmesh/,
 #          or Maven groupId.artifactId).
+# mirrors  optional, comma-separated: what a STABLE version bump moves besides the version
+#          file (the bump PR into release/X.Y, and main's next-beta PR). A path names
+#          another version file (a package.json also moves its package-lock.json);
+#          <file>:Version is a "**Version X.Y.Z**" line; <file>:heading is a new
+#          "## X.Y.Z" changelog heading (stable only, prose left to a human);
+#          gateway-pin is the PINNED_GATEWAY_IMAGE / GATEWAY_IMAGE_PIN in the workflow.
+#          Every pom's own version, <parent>, net.hugmesh dependencies and
+#          <hugmesh-*.version> properties move without being listed here.
 #
 # Not here: the Studio (scripts/release-studio.sh, its own tag prefix studio-v), the
 # Pages site hugmesh.github.io, and .github / .github-private (no package).
 1|hugmesh-build-config|mvn|pom.xml|v|release.yml|net.hugmesh.hugmesh-build-config
 2|hugmesh-parent|mvn|pom.xml|v|release.yml|net.hugmesh.hugmesh-parent
 3|hugmesh-commons|mvn|pom.xml|v|release.yml|net.hugmesh.hugmesh-commons
-4|hugmesh-auth-core|mvn|pom.xml|v|release.yml|net.hugmesh.hugmesh-auth-core
+4|hugmesh-auth-core|mvn|pom.xml|v|release.yml|net.hugmesh.hugmesh-auth-core|README.md:Version,CHANGELOG.md:heading
 5|hugmesh-gateway|img|pom.xml|v|release.yml|hugmesh-gateway
-6|hugmesh-be-gateway|img|VERSION|v|release.yml|hugmesh-be-gateway
-6|hugmesh-fe-gateway|img|VERSION|v|release.yml|hugmesh-fe-gateway
-6|hugmesh-pki-gateway|img|VERSION|v|release.yml|hugmesh-pki-gateway
+6|hugmesh-be-gateway|img|VERSION|v|release.yml|hugmesh-be-gateway|gateway-pin
+6|hugmesh-fe-gateway|img|VERSION|v|release.yml|hugmesh-fe-gateway|gateway-pin
+6|hugmesh-pki-gateway|img|VERSION|v|release.yml|hugmesh-pki-gateway|gateway-pin
 7|hugmesh-admin-bff-api|img|pom.xml|v|release.yml|hugmesh-admin-bff-api
 7|hugmesh-user-bff-api|img|pom.xml|v|release.yml|hugmesh-user-bff-api
 7|hugmesh-federation-api|img|pom.xml|v|release.yml|hugmesh-federation-api
@@ -34,7 +42,7 @@
 7|hugmesh-tube-bff-api|img|pom.xml|v|release.yml|hugmesh-tube-bff-api
 7|hugmesh-owncast-bff-api|img|pom.xml|v|release.yml|hugmesh-owncast-bff-api
 7|hugmesh-mesh-bff-api|img|pom.xml|v|release.yml|hugmesh-mesh-bff-api
-7|hugmesh-character-forge-bff-api|img|pom.xml|v|release.yml|hugmesh-character-forge-bff-api
+7|hugmesh-character-forge-bff-api|img|pom.xml|v|release.yml|hugmesh-character-forge-bff-api|frontend/package.json
 7|hugmesh-actions|img|pom.xml|v|release.yml|hugmesh-actions
 7|hugmesh-remote-fragment|img|pom.xml|v|release.yml|hugmesh-remote-fragment hugmesh-remote-fragment/nginx
 8|hugmesh-host-shell|img|package.json|v|release.yml|hugmesh-host-shell
