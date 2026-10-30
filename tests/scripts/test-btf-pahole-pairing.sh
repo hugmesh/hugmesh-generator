@@ -85,6 +85,36 @@ def dockerfile_final_stage_has_pahole():
             return True
     return False
 
+def rpi5_pahole_checked_before_configure():
+    """build-rpi5-stage4.sh links the kernel on the build host, so pahole must be on
+    PATH there BEFORE the first Kconfig run (the board defconfig). The Dockerfile line
+    alone does not prove that: a builder image built before it lacks pahole, and the
+    post-olddefconfig guard only notices after the whole cross @stage4. Pin a
+    function that fails on a missing pahole, called (|| exit 1) both in the t=0
+    prerequisites and before `make ... "${RPI_DEFCONFIG}"`."""
+    t = code(read("build-rpi5-stage4.sh") or "")
+    name = None
+    for m in re.finditer(r"^(\w+)\(\)\s*\{\n(.*?)^\}", t, re.M | re.S):
+        body = m.group(2)
+        if re.search(r"if command -v pahole\b[^\n]*; then\s*\n\s*return 0", body) \
+                and "return 1" in body and "make docker-image" in body:
+            name = m.group(1); break
+    if name is None:
+        return False, "no function that returns 1 (naming make docker-image) when pahole is missing"
+    calls = [c.start() for c in re.finditer(r"^\s*%s \|\| exit 1\s*$" % re.escape(name), t, re.M)]
+    prereq = re.search(r'^banner "Verifying prerequisites"', t, re.M)
+    defcfg = re.search(r'^\s*make ARCH=arm64 [^\n]*"\$\{RPI_DEFCONFIG\}"\s*$', t, re.M)
+    sysroot = re.search(r"^\s*KERNEL_SRC=", t, re.M)
+    if not (prereq and defcfg and sysroot):
+        return False, "cannot find the prerequisites banner, KERNEL_SRC= or the board defconfig make"
+    early = [c for c in calls if prereq.start() < c < sysroot.start()]
+    late = [c for c in calls if sysroot.start() < c < defcfg.start()]
+    if not early:
+        return False, "%s is not called (|| exit 1) in the prerequisites block" % name
+    if not late:
+        return False, "%s is not called (|| exit 1) between KERNEL_SRC= and the board defconfig make" % name
+    return True, name
+
 def guard_ok(btext):
     """The builder's post-olddefconfig loop must name both BTF symbols, exit 1 and
     explain pahole, so a dropped symbol stops the build instead of shipping."""
@@ -128,6 +158,12 @@ for board, frag, builder, where in BOARDS:
     else:
         provided = dockerfile_final_stage_has_pahole()
         what = "Dockerfile.build final-stage emerge"
+    if where == "host" and btf_on:
+        good, why = rpi5_pahole_checked_before_configure()
+        if good:
+            ok("%s: %s checks pahole (fails, names make docker-image) at t=0 and before the board defconfig" % (board, builder))
+        else:
+            bad("%s: %s does not fail early on a missing pahole: %s" % (board, builder, why))
     if btf_on and not provided:
         bad("%s: BTF is enabled but pahole is not provided by %s" % (board, what))
     elif provided and not btf_on:
