@@ -236,6 +236,14 @@ def test_start_on_native_windows_says_the_refusal_and_no_command_to_run():
     s.enter(j)
     s.feed(j, "start")
     assert s.message == said.message and "WSL2" in s.message and "Run it yourself" not in s.message
+    # the panel's note shows this same sentence, whole (test_local_ai_dock_context)
+    assert said.message == lai.windows_refusal("nt") and said.message in s.lines(j)
+    s3 = tla.LocalAIScreen(snapshot_fn=snapshot, generator_dir=GENERATOR_DIR, start_fn=lambda: lai.StartResult(
+        False, "Could not start it: no bash. Run it yourself: /x/local-ai.sh start", "/x/local-ai.sh start"))
+    s3._under = j.overlay
+    s3.enter(j)
+    s3.feed(j, "start")
+    assert s3.message.count("Run it yourself") == 1, s3.message     # named once, not twice
     s2 = tla.LocalAIScreen(snapshot_fn=snapshot, generator_dir=GENERATOR_DIR,
                            start_fn=lambda: lai.StartResult(False, "It is missing.", "/x/local-ai.sh start"))
     s2._under = j.overlay

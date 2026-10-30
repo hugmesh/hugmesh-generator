@@ -268,7 +268,7 @@ class LocalAIScreen:
             return
         if low == "start":
             res = self._start_fn()
-            self.message = (res.message if res.ok or not res.command
+            self.message = (res.message if res.ok or not res.command or res.command in res.message
                             else f"{res.message} Run it yourself: {res.command}")
             return
         if low in ("tips on", "tips off"):

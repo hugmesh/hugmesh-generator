@@ -1047,18 +1047,23 @@ class LocalAIDock(QtWidgets.QFrame):
             h = max(h, self.card_need())
         return h
 
+    def _note_shown(self) -> bool:
+        return bool(self.note.text()) and not self.note.isHidden()
+
     def card_need(self) -> int:
         """How tall the docked panel must be to show the whole card (its text and its
-        button row) above a 36 px answer area, or 0 with no card on the Assistant tab.
-        The usual cap (38 % of the window) has no room for a card at the netbook default
-        942x552: its Apply / Close / Undo row fell below the window edge (PR #832
-        review). While a card is up the panel grows to fit it; _DockMount still leaves
-        the page at least 120 px."""
+        button row) and the whole note line above a 36 px answer area, or 0 with no
+        card and no note on the Assistant tab. The usual cap (38 % of the window) has no
+        room for a card at the netbook default 942x552: its Apply / Close / Undo row
+        fell below the window edge (PR #832 review); nor for a long note, such as the
+        native Windows start refusal, which showed 41 of its 140 px there (round 4).
+        While either is up the panel grows to fit it; _DockMount still leaves the page
+        at least 120 px."""
         card = self._card
-        if card is None or self.current_tab() != "assistant":
+        if self.current_tab() != "assistant" or (card is None and not self._note_shown()):
             return 0
         try:
-            chat = card.parentWidget()
+            chat = card.parentWidget() if card is not None else self.note.parentWidget()
             if chat is None:
                 return 0
             if self.body.isVisible() and chat.isVisible():
@@ -2177,6 +2182,10 @@ class LocalAIDock(QtWidgets.QFrame):
             self.start_btn.setEnabled(True)
             self.start_btn.setText("Start local assistant")
             res = value if error is None else None
+            # what came of it is said in the note, on the Assistant tab: open the panel
+            # there, or a press on the collapsed strip shows nothing at all (round 4:
+            # the native Windows refusal opens no work window, so it was never seen)
+            self.show_tab("assistant")
             if res is not None and res.ok:
                 self._say(res.message, 20)
                 QtCore.QTimer.singleShot(1500, self.refresh)
@@ -2187,8 +2196,10 @@ class LocalAIDock(QtWidgets.QFrame):
                 cmd = (res.command if res is not None
                        else odk.commands_for(self.generator_dir, self.ollama_mode)["start"])
                 why = res.message if res is not None else str(error)
-                # no command (native Windows): the script is not a thing to run there
-                self._say(f"{why} Run it yourself: {cmd}" if cmd else why, 60, warn=True)
+                # no command (native Windows): the script is not a thing to run there; a
+                # message that already names the command is not told it twice
+                self._say(f"{why} Run it yourself: {cmd}" if cmd and cmd not in why else why,
+                          60, warn=True)
                 if cmd:
                     self.show_current_work()
 

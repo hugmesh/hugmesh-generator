@@ -23,6 +23,7 @@ from hugmesh_studio.core import assistant_context as actxt                      
 from hugmesh_studio.core import assistant_settings                                # noqa: E402
 from hugmesh_studio.core import assistant_tips as atips                           # noqa: E402
 from hugmesh_studio.core import local_ai_status as lai                            # noqa: E402
+from hugmesh_studio.core import ollama_docker as odk                              # noqa: E402
 from hugmesh_studio.core.config import Domain                                     # noqa: E402
 from hugmesh_studio.core.platform_info import HostInfo                            # noqa: E402
 from hugmesh_studio.gui import _local_ai_dock as dock_mod                         # noqa: E402
@@ -35,6 +36,8 @@ GENERATOR_DIR = os.path.dirname(STUDIO_ROOT)
 HOST = HostInfo(os="linux", is_gentoo=True, has_docker=True, has_bash=True, has_kvm=False,
                 is_root=False, builder_image="hugmesh-builder")
 BAR_HEIGHT_ON_MAIN = 35
+#: the real start, kept before the autouse fixture swaps it for one that raises
+_REAL_START = lai.start_assistant
 SIZES = ((1280, 800), (1024, 700))
 
 
@@ -914,3 +917,146 @@ def test_collapse_expand_and_pop_out_put_back_with_a_card_up_relayout_the_window
         assert_mount_agrees(wiz, dock, f"{kind}-chevron-put-back-{t}")
         assert_card_in_window(wiz, dock, card, f"{kind}-chevron-put-back-{t}", tmp_path)
     print("PNGs in", tmp_path)
+
+
+# ── PR #832 round 4 (WINDOWS): a start pressed on the collapsed strip is seen ─────────
+#: The sizes the round-4 skeptic measured the note at, and the 800x800 screen's.
+NOTE_SIZES = ((942, 552), (800, 600), (1024, 700), (1280, 800), (736, 736))
+_NO_BASH = "the bash start script was spawned"
+
+
+def _no_bash_spawn(monkeypatch):
+    import subprocess
+    real = subprocess.Popen
+
+    def guard(args, *a, **k):
+        if any("bash" in str(x) or "local-ai" in str(x) for x in (args if isinstance(args, (list, tuple)) else [args])):
+            raise AssertionError(_NO_BASH)
+        return real(args, *a, **k)
+    monkeypatch.setattr(subprocess, "Popen", guard)
+
+
+def _start_case(case, monkeypatch):
+    """Route the dock's own start (odk.start_assistant -> lai.start_assistant) through the
+    REAL code, as native Windows (osname="nt") or as Linux with a spawn that fails.
+    Returns the sentence the person must be shown whole."""
+    monkeypatch.setattr(lai, "start_assistant", _REAL_START)
+    real_odk = odk.start_assistant
+    if case == "nt-system":
+        monkeypatch.setattr(odk, "start_assistant",
+                            lambda gen, mode, **k: real_odk(gen, odk.SYSTEM, osname="nt", **k))
+        return lai.windows_refusal("nt")
+    if case == "nt-docker":
+        monkeypatch.setattr(odk, "start_assistant", lambda gen, mode, **k: real_odk(
+            gen, odk.DOCKER, osname="nt", starter=lambda runner, environ=None: odk.StartOutcome(True, "up"),
+            ready=lambda env, timeout: True, **k))
+        return None                                  # the Docker sentence names its own endpoint
+
+    def no_bash(*a, **k):
+        raise OSError(2, "No such file or directory", "bash")
+    monkeypatch.setattr(odk, "start_assistant",
+                        lambda gen, mode, **k: _REAL_START(gen, spawn=no_bash))
+    return None
+
+
+@pytest.mark.parametrize("case", ["nt-system", "nt-docker", "linux-fail"])
+@pytest.mark.parametrize("size", NOTE_SIZES, ids=lambda s: f"{s[0]}x{s[1]}")
+def test_start_from_the_collapsed_strip_opens_the_panel_and_shows_the_whole_note(
+        mesh_window, qapp, tmp_path, size, case, monkeypatch):
+    """Round 4 (WINDOWS): on native Windows, Start local assistant pressed on the
+    COLLAPSED strip (the wizard's default) showed nothing: the refusal has no command,
+    so no work window opens, and the note it went to is hidden with the panel. Expanded,
+    the note showed 41 of its 140 px at 942x552 and 46 of 168 at 800x600, cut off before
+    the native Windows way on. Now the panel opens on the Assistant tab and grows to
+    show the whole note, the page above it still placed exactly; the Linux failure note
+    is not clipped either. Nothing runs bash. PNGs in tmp_path."""
+    wiz, dock, body = mesh_window
+    _no_bash_spawn(monkeypatch)
+    want = _start_case(case, monkeypatch)
+    dock.set_expanded(False)
+    wiz.resize(*size)
+    pump(qapp)
+    assert (wiz.width(), wiz.height()) == size and not dock.expanded
+    assert dock.start_btn.isVisible()                       # the button is on the strip
+    t = f"{case}-{size[0]}x{size[1]}"
+    dock.start_btn.click()
+    assert wait_for(qapp, lambda: dock.start_btn.isEnabled() and dock.note.text())
+    pump(qapp)
+    pump(qapp)
+    note = dock.note
+    text = note.text()
+    if case == "nt-system":
+        assert text == want and "127.0.0.1:11434" in text and "Run it yourself" not in text
+    elif case == "nt-docker":
+        assert "queue worker was not started" in text and "WSL2" in text and "Run it yourself" not in text
+    else:
+        assert "Could not start it" in text and text.count("Run it yourself") == 1, text
+    assert dock.expanded and dock.current_tab() == "assistant", t
+    assert note.isVisible(), t
+    assert note.height() >= note.heightForWidth(note.width()), (t, note.height(), note.heightForWidth(note.width()))
+    win = QtCore.QRect(0, 0, wiz.width(), wiz.height())
+    r = rect_in(wiz, note)
+    assert win.contains(r) and rect_in(wiz, dock).contains(r), (t, r.getRect(), rect_in(wiz, dock).getRect())
+    # nothing else in the chat column is pushed out: the prompt and the answer floor
+    assert rect_in(wiz, dock.prompt).bottom() < wiz.height() and dock.answer.height() >= 36, t
+    assert_mount_agrees(wiz, dock, t)
+    assert wiz.height() - dock.height() >= 120, t           # the page keeps its floor
+    if case.startswith("nt"):
+        assert dock.work_window is None, t                  # its commands are the bash script
+    else:
+        assert dock.work_window is not None and dock.work_window.isVisible(), t
+        dock.work_window.close()
+    wiz.grab().save(str(tmp_path / f"{t}.png"))
+    dock._unsay(dock._message_token)                        # the note times out
+    assert wait_for(qapp, lambda: not note.isVisible())
+    assert_mount_agrees(wiz, dock, f"{t}-after")             # and the panel is back to its cap
+    assert dock.height() == dock_mod.dock_height_for(wiz.height(), True, dock.bar_height(), dock.tall), t
+
+
+@pytest.mark.parametrize("before", ["expanded", "builds-tab", "popped", "said-while-collapsed"])
+@pytest.mark.parametrize("size", ((942, 552), (800, 600)), ids=lambda s: f"{s[0]}x{s[1]}")
+def test_the_windows_note_is_whole_whatever_the_panel_was_doing(
+        mesh_window, qapp, tmp_path, size, before, monkeypatch):
+    """The same refusal when the panel was already open (the note's own change must
+    re-place the panel: no expand happens), on another tab (the note lives on the
+    Assistant tab), popped out (its window is raised, not the docked strip opened),
+    and a long note said while collapsed and then opened with the chevron."""
+    wiz, dock, body = mesh_window
+    _no_bash_spawn(monkeypatch)
+    want = _start_case("nt-system", monkeypatch)
+    wiz.resize(*size)
+    dock.set_expanded(before == "expanded")
+    if before == "builds-tab":
+        dock.tabs.setCurrentIndex(dock._tab_index["builds"])
+    if before == "popped":
+        dock.pop_out()
+    if before == "expanded":
+        dock._say("Starting.")                     # a one-line note first: only its text changes
+    pump(qapp)
+    t = f"{before}-{size[0]}x{size[1]}"
+    if before == "said-while-collapsed":
+        dock._say(want, 60, warn=True)
+        pump(qapp)
+        assert not dock.note.isVisible()
+        dock.chevron.click()
+    else:
+        dock.start_btn.click()
+        assert wait_for(qapp, lambda: dock.start_btn.isEnabled() and dock.note.text())
+    pump(qapp)
+    pump(qapp)
+    note = dock.note
+    assert note.text() == want and note.isVisible() and dock.current_tab() == "assistant", t
+    assert note.height() >= note.heightForWidth(note.width()), (t, note.height(), note.heightForWidth(note.width()))
+    if before == "popped":
+        win = dock.panel_window
+        assert dock.popped and win.isVisible(), t
+        r = QtCore.QRect(note.mapTo(win, QtCore.QPoint(0, 0)), note.size())
+        assert QtCore.QRect(0, 0, win.width(), win.height()).contains(r), (t, r.getRect(), win.size())
+        win.grab().save(str(tmp_path / f"{t}.png"))
+        dock.put_back()
+        return
+    assert dock.expanded, t
+    r = rect_in(wiz, note)
+    assert QtCore.QRect(0, 0, wiz.width(), wiz.height()).contains(r) and rect_in(wiz, dock).contains(r), t
+    assert_mount_agrees(wiz, dock, t)
+    wiz.grab().save(str(tmp_path / f"{t}.png"))
