@@ -126,6 +126,10 @@ def test_the_change_formats_example_is_never_a_change(monkeypatch):
     import json as _json
     block = "```change\n" + _json.dumps(aa.EXAMPLE_PROPOSAL) + "\n```"
     assert block in ap.CHANGE_FORMAT and aa.EXAMPLE_SENTENCE in ap.CHANGE_FORMAT
+    # the wording is measured: this marker kept the code-edit diffs whole on qwen3:8b,
+    # a longer "made up and always refused" note broke every one of them
+    assert ap.CHANGE_FORMAT.endswith("Example (made up; never copy it):\n" + aa.EXAMPLE_SENTENCE
+                                     + "\n" + block)
     assert "shop.example" not in ap.CHANGE_FORMAT and '"tor"' not in ap.CHANGE_FORMAT
     copies = [
         aa.EXAMPLE_SENTENCE + "\n" + block,
@@ -165,6 +169,8 @@ def test_a_services_list_that_changes_a_service_nobody_named_is_refused():
         assert "which you did not ask for" in v.text
     v = check("I don't want phpBB on this domain any more", ["tuwunel", "games"])
     assert "switch on games" in v.text and "phpbb" not in v.text
+    v = check("switch the forums off", ["tuwunel", "games"])          # "forums" names phpbb
+    assert isinstance(v, aa.Refusal) and "switch on games" in v.text
     for q, to in (("turn off the forum for this domain", ["tuwunel"]),
                   ("switch the forums off", ["tuwunel"]),
                   ("add the games service", ["tuwunel", "phpbb", "games"]),
