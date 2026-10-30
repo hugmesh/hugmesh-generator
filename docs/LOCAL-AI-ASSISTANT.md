@@ -71,10 +71,11 @@ macOS and Windows use the installer from <https://ollama.com/download>.
 
 In the native Windows build of the Studio (the MSI), **Start local assistant** does not
 run `scripts/local-ai.sh`: it is a bash script, and `bash` there is the WSL launcher. It
-says so and offers two ways on: start Ollama for Windows yourself (the panel asks it on
-`127.0.0.1:11434`), or pick **Ollama in Docker**, which the button still starts and
-waits for (only the queue worker stays off). For the queue worker too, run the Studio
-inside WSL2.
+opens the panel on its Assistant tab (also when you pressed it on the collapsed strip)
+and says so there, the whole sentence, with two ways on: start Ollama for Windows
+yourself (the panel asks it on `127.0.0.1:11434`), or pick **Ollama in Docker**, which
+the button still starts and waits for (only the queue worker stays off). For the queue
+worker too, run the Studio inside WSL2. Section 3 has the commands.
 
 Check it:
 
@@ -123,6 +124,36 @@ curl -s 127.0.0.1:11434/api/tags | head -c 200     # answers with the pulled mod
 
 Stop it with `pkill -x ollama` (the weights stay on disk). `ollama stop <model>`
 unloads one model and keeps the server up.
+
+### On native Windows
+
+The Studio's panel only talks to Ollama over HTTP, so in the Windows build (the MSI) any
+Ollama that answers on loopback serves it. Pick one:
+
+- **Ollama for Windows.** The installer from <https://ollama.com/download> starts it in
+  the tray, already serving on `127.0.0.1:11434`; the panel's **System Ollama** is that
+  address. To start it yourself with the settings above, quit the tray app first, then
+  in PowerShell:
+
+  ```powershell
+  $env:OLLAMA_HOST = "127.0.0.1:11434"; $env:OLLAMA_CONTEXT_LENGTH = "32768"
+  $env:OLLAMA_FLASH_ATTENTION = "1"; $env:OLLAMA_KV_CACHE_TYPE = "q8_0"
+  ollama serve
+  ```
+
+  and check it from a second window with `curl.exe -s http://127.0.0.1:11434/api/tags`.
+  Stop it with Ctrl+C there (or quit the tray app).
+- **The Studio's own Ollama in Docker.** With Docker Desktop running, choose **Ollama in
+  Docker** in the panel and press **Start local assistant**: the Studio starts its
+  container (on `127.0.0.1:11435` unless you changed it) and waits until it answers.
+
+Either way the panel answers questions, but `scripts/local-ai.sh` (the queue worker,
+`todo`, `chat`) is a bash script and does not run in the Windows build. For it, run the
+Studio inside WSL2: in a WSL2 distro (Ubuntu) with Docker Desktop's WSL integration on
+for it, clone hugmesh-generator into `~` (not `/mnt/c`), start the Linux build of the
+Studio from that checkout, and follow the Linux commands above inside the distro
+(`bash scripts/local-ai.sh start` starts the distro's own Ollama, installed there as in
+section 2, when none answers).
 
 ## 4. Pick a model
 
