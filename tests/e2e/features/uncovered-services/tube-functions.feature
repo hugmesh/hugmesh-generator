@@ -25,8 +25,10 @@
 #
 # ONE CONTRACT ASYMMETRY WORTH NOTING, pinned in the matrix feature rather than
 # here: owncast has a dedicated /bff/owncast/admin/** -> ROLE_ADMIN route-access
-# row; tube has NO /bff/tube/admin/** row at all and its management consoles ride
-# the gateway admin-bypass instead. Both work. Only one is legible from the seed.
+# row; tube has no blanket /bff/tube/admin/** row. Since 2026-10-15 it does have two
+# ROLE_ADMIN rows for its two management consoles (/bff/tube/admin/access/** and
+# /bff/tube/admin/storage-budget/**), both mfa_required; an admin still rides the
+# gateway admin-bypass, so the rows bite only through the privileged MFA floor.
 @service:tube @layer:ui
 Feature: What each role can actually do inside the Tube console
 

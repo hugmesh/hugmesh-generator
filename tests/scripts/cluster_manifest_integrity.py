@@ -214,11 +214,16 @@ def check_yaml(root):
         scanned += 1
         rel = os.path.relpath(path, root)
         try:
-            list(yaml.safe_load_all(open(path, encoding="utf-8")))
+            docs = list(yaml.safe_load_all(open(path, encoding="utf-8")))
         except Exception as exc:
             parse_bad += 1
+            _DOC_CACHE.setdefault(path, [])
             fail("[yaml-parse]", "%s does not parse: %s" % (rel, str(exc).replace("\n", " ")[:200]))
             continue
+        # The same parse docs_of() would do (safe_load_all, dicts kept): seed its
+        # cache so the later checks do not parse every file a third time. YAML
+        # parsing is most of a checker run, and the suite runs the checker ~200 times.
+        _DOC_CACHE.setdefault(path, [d for d in docs if isinstance(d, dict)])
         try:
             list(yaml.load_all(open(path, encoding="utf-8"), DupKeyLoader))
         except yaml.constructor.ConstructorError as exc:
@@ -601,7 +606,7 @@ def check_pki_roles(root):
         open(sp, "w", encoding="utf-8").write(script)
         open(ro, "w").close()
         env = dict(os.environ, SCRIPT_PATH=sp, ROLE_OUT=ro)
-        proc = subprocess.run(["bash", "-c", VAULT_STUB], env=env,
+        proc = subprocess.run(["bash", "-c", VAULT_STUB], env=env, stdin=subprocess.DEVNULL,
                               capture_output=True, text=True, timeout=60)
         created = [line.strip() for line in open(ro, encoding="utf-8") if line.strip()]
     if not created:
@@ -3676,6 +3681,50 @@ def _helm_override_refs(blk, where):
     return [r for r in _image_refs(merged, 1) if r not in before]
 
 
+# The renders below are OFFLINE BY CONSTRUCTION. `kubectl kustomize` fetches a remote
+# `resources:` entry (git or https) and `helm` can reach a chart repository; measured
+# 2026-10-29, a remote resource on an unroutable address held ONE kustomize render for
+# 30-57 s, and the gate renders ~90 directories. The static reader already refuses a
+# remote resource, so the render has nothing to gain from the network: every proxy
+# variable points at a closed loopback port (the Go and git HTTP clients refuse in
+# milliseconds), git may use only the file transport, nothing prompts, and KUBECONFIG
+# is the null device so neither tool can ever reach whatever cluster the caller's
+# context names (on a dev box that is a live cluster).
+_OFFLINE_PROXY = "http://127.0.0.1:9"
+# What a refused fetch prints: the proxy dial (Go) and git's transport refusal.
+_OFFLINE_MARKERS = ("proxyconnect", "127.0.0.1:9", "not allowed")
+RENDER_TIMEOUT = 60
+
+
+def _offline_env():
+    env = dict(os.environ)
+    for k in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy",
+              "all_proxy"):
+        env[k] = _OFFLINE_PROXY
+    env.update(NO_PROXY="", no_proxy="", GIT_ALLOW_PROTOCOL="file", GIT_TERMINAL_PROMPT="0",
+               GIT_CONFIG_NOSYSTEM="1", KUBECONFIG=os.devnull)
+    return env
+
+
+def _render_failure(tool, label, exc_or_stderr):
+    """One clear [image-pin] finding for a render that failed or did not finish."""
+    if isinstance(exc_or_stderr, subprocess.TimeoutExpired):
+        why = ("did not finish within %ds; the render is offline, so this is a hang, not "
+               "a slow network" % RENDER_TIMEOUT)
+    elif isinstance(exc_or_stderr, Exception):
+        why = "did not run (%s)" % exc_or_stderr
+    else:
+        text = " ".join(exc_or_stderr.split())
+        hit = min([i for i in (text.find(t) for t in _OFFLINE_MARKERS) if i >= 0], default=-1)
+        if hit >= 0:
+            why = ("failed: it reached for the NETWORK (a remote resource or chart "
+                   "repository), which the render refuses by policy; vendor it into the "
+                   "tree. (%s)" % text[max(0, hit - 160):hit + 80])
+        else:
+            why = "failed: %s" % (exc_or_stderr.strip().splitlines() or ["?"])[-1][-300:]
+    fail("[image-pin]", "%s: `%s` %s, so what it ships cannot be checked" % (label, tool, why))
+
+
 def _render_refs(root):
     """(refs-by-dir, reason-not-run). Renders every Kustomization directory with kubectl."""
     if os.environ.get("HUGMESH_IMAGE_PIN_RENDER", "1") == "0":
@@ -3689,18 +3738,16 @@ def _render_refs(root):
                 doc.get("kind") == "Component" for doc in docs_of(path)):
             dirs.add(os.path.dirname(path))
     out = {}
+    env = _offline_env()
     for d in sorted(dirs):
         try:
             r = subprocess.run([kubectl, "kustomize", d], capture_output=True, text=True,
-                               timeout=120)
+                               timeout=RENDER_TIMEOUT, env=env, stdin=subprocess.DEVNULL)
         except Exception as exc:
-            fail("[image-pin]", "%s: `kubectl kustomize` did not run (%s)"
-                 % (os.path.relpath(d, root), exc))
+            _render_failure("kubectl kustomize", os.path.relpath(d, root), exc)
             continue
         if r.returncode != 0:
-            fail("[image-pin]", "%s: `kubectl kustomize` failed, so what it ships cannot be "
-                 "checked: %s" % (os.path.relpath(d, root),
-                                  (r.stderr.strip().splitlines() or ["?"])[-1]))
+            _render_failure("kubectl kustomize", os.path.relpath(d, root), r.stderr)
             continue
         refs = []
         _WHERE[0] = "%s (rendered by kubectl kustomize)" % os.path.relpath(d, root)
@@ -4175,6 +4222,7 @@ def _helm_render_refs(root):
                 runs.append(("%s (helm template via %s)" % (spath, rel), charts[spath],
                              release, vals, sets, ns or None))
     out = {}
+    env = _offline_env()
     with tempfile.TemporaryDirectory() as tmp:
         for i, (label, d, release, vals, sets, ns) in enumerate(runs):
             cmd = [helm, "template", release, d]
@@ -4187,13 +4235,13 @@ def _helm_render_refs(root):
                 cmd += ["-f", vf]
             cmd += sets
             try:
-                r = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+                r = subprocess.run(cmd, capture_output=True, text=True, timeout=RENDER_TIMEOUT,
+                                   env=env, stdin=subprocess.DEVNULL)
             except Exception as exc:
-                fail("[image-pin]", "%s: `helm template` did not run (%s)" % (label, exc))
+                _render_failure("helm template", label, exc)
                 continue
             if r.returncode != 0:
-                fail("[image-pin]", "%s: `helm template` failed, so what it ships cannot be "
-                     "checked: %s" % (label, (r.stderr.strip().splitlines() or ["?"])[-1]))
+                _render_failure("helm template", label, r.stderr)
                 continue
             refs = []
             _WHERE[0] = label

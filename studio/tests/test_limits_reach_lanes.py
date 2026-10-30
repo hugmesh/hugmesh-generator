@@ -166,9 +166,19 @@ def _sentences(text: str) -> list[str]:
     return [s for s in re.split(r"(?<=[.!?])\s+|\n", text) if s.strip()]
 
 
+def _limits_dialog():
+    """gui/limits_dialog imports Qt at module level (it is the dialog, not only its
+    text), so these wording pins can run only where a binding is installed: the
+    Studio venv and GitLab's PySide6 job, not the Qt-free pull-request job. A skip,
+    not an error — the same rule every other GUI-reading test file states."""
+    return pytest.importorskip("hugmesh_studio.gui.limits_dialog",
+                               reason="no Qt binding (PySide6/PyQt6) installed")
+
+
 def _user_facing_limits_text() -> list[str]:
     """Every sentence the tray + dialog show about where the limit applies."""
-    from hugmesh_studio.gui import limits_dialog, tray
+    limits_dialog = _limits_dialog()
+    from hugmesh_studio.gui import tray
     lines = []
     lines += _sentences(limits_dialog.BLURB)
     lines += _sentences(tray.LIMITS_SAVED_NOTICE)
@@ -190,14 +200,14 @@ def test_dialog_never_claims_a_lane_that_has_no_consumer(lane):
 
 
 def test_dialog_names_the_lanes_it_does_not_reach():
-    from hugmesh_studio.gui import limits_dialog
+    limits_dialog = _limits_dialog()
     text = " ".join(limits_dialog.describe_effect(rl.ResourceLimits(cpus=2.0)))
     assert "emulated devices" in text.lower() and "kind" in text.lower()
     assert "not limited" in text.lower()
 
 
 def test_dialog_states_the_mesh_node_cap():
-    from hugmesh_studio.gui import limits_dialog
+    limits_dialog = _limits_dialog()
     lines = limits_dialog.describe_effect(rl.ResourceLimits(cpus=2.0, memory="1g"))
     assert any("mesh node" in l and "2 CPU" in l and "1g" in l for l in lines), lines
 

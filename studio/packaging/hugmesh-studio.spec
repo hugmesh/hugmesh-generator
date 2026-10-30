@@ -7,7 +7,9 @@ tarball built from the same spec.
 
 Output: ``dist/hugmesh-studio/hugmesh-studio.exe`` plus its ``_internal/`` tree (a
 "onedir" bundle: the MSI wraps the whole folder, and a onefile exe would unpack ~200 MB
-into %TEMP% on every start). It is a WINDOWED executable (no console window). On Linux
+into %TEMP% on every start). It is a WINDOWED executable (no console window); beside it
+``hugmesh-studio-cli.exe`` is the same app as a CONSOLE executable, for the
+command-line flags (see the comment above COLLECT). On Linux
 the same command (without HUGMESH_STUDIO_ICON) writes ``dist/hugmesh-studio/hugmesh-studio``,
 which the release workflow's ``linux`` job packs into
 ``hugmesh-studio-<version>-linux-x86_64.tar.gz``.
@@ -35,6 +37,7 @@ checkout (build-*.sh, scripts/, specs/, tests/), and none of those are bundled. 
 """
 import glob
 import os
+import sys
 
 from PyInstaller.utils.hooks import collect_all
 
@@ -158,8 +161,31 @@ exe = EXE(  # noqa: F821
     icon=icon,
 )
 
+# WINDOWS ONLY: a CONSOLE twin for the command-line flags. A windowed (GUI-subsystem)
+# exe started from cmd or PowerShell gets no standard handles, so sys.stdout is None:
+# --print-specs, --list-sessions, --scan-hardware, every "error: ..." line and --help
+# printed NOTHING, the shell did not wait for an exit code, and --local-ai-prompt
+# crashed on its first chunk (measured on Windows 11 with the 0.3.0-beta.1 MSI). Same
+# Analysis, same _internal tree; only the subsystem differs. Linux has no subsystem
+# split, so the tarball keeps its one executable.
+executables = [exe]
+if sys.platform == "win32":
+    executables.append(EXE(  # noqa: F821
+        pyz,
+        a.scripts,
+        [],
+        exclude_binaries=True,
+        name=NAME + "-cli",
+        debug=False,
+        bootloader_ignore_signals=False,
+        strip=False,
+        upx=False,
+        console=True,
+        icon=icon,
+    ))
+
 coll = COLLECT(  # noqa: F821
-    exe,
+    *executables,
     a.binaries,
     a.datas,
     strip=False,

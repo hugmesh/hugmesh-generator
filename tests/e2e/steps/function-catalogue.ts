@@ -194,8 +194,11 @@ export const FUNCTIONS: MeshFunction[] = [
     driveability: 'ui', blockedBy: '',
     note: 'TUBE_MANAGE = admin | superadmin at the in-remote guard. NOTE the asymmetry '
         + 'with owncast: owncast has a dedicated /bff/owncast/admin/** -> ROLE_ADMIN seed '
-        + 'row, tube has NO /bff/tube/admin/** row and rides the gateway admin-bypass '
-        + 'instead. Both work; only one is legible from the seed. tube-access-user / '
+        + 'row; tube has no blanket /bff/tube/admin/** row, but since 2026-10-15 it has two '
+        + 'ROLE_ADMIN rows for exactly this console (/bff/tube/admin/access/** and '
+        + '/bff/tube/admin/storage-budget/**), both mfa_required. An admin still rides the '
+        + 'gateway admin-bypass in decide(); the rows bite only through the privileged MFA '
+        + 'floor, and refuse a plain ROLE_TUBE holder at the door. tube-access-user / '
         + '-action-* / -submit.',
   },
   {

@@ -1125,6 +1125,28 @@ INSERT INTO gateway_route_access (gateway, url_pattern, role, allow) VALUES
   -- tube-bff are the domain enforcement; the gateway only checks role.
   ('hugmesh-fe-gateway',  '/bff/tube/**',          'ROLE_TUBE',    true),  -- tube BFF (tube-access floor)
   ('hugmesh-be-gateway',  '/tube/content/**',       'ROLE_TUBE',    true),  -- tube media serving (signed URL)
+  -- Tube ADMIN write surfaces (tube-bff TubeAccessController + TubeStorageBudgetController,
+  -- both under /bff/tube/admin/**, hasAnyRole('ADMIN','SUPERADMIN') in tube-bff's own
+  -- SecurityConfig). Governed here at ROLE_ADMIN so a plain ROLE_TUBE holder -- who passes
+  -- the /bff/tube/** floor above -- is refused AT THE DOOR (403 + X-Route-Denied) instead of
+  -- one layer down in tube-bff. Both carry mfa_required=true via the blanket flip at the
+  -- end of this file: its per-service console arm `LIKE '/bff/%/admin/%'` (operator
+  -- decision 80b, hugmesh-generator#329) matches both patterns, so they need no
+  -- row-scoped UPDATE of their own (operator decision 2026-10-15, hugmesh-tube-ui#19 /
+  -- hugmesh-wiki-ui#25: the GATEWAY sends X-Step-Up-Required on the mfa_required deny).
+  -- ⚠ HONEST SCOPE. ROLE_ADMIN and ROLE_SUPERADMIN return from GatewayRouteAccessFilter
+  -- BEFORE decide() is consulted, so for the callers tube-bff actually admits these rows
+  -- bite ONLY through the PRIVILEGED floor (app.mfa.enforce-privileged-floor), which reads
+  -- isMfaRequiredSurface(). app.mfa.enabled alone gates nothing for an admin here. Both
+  -- flags stay OFF on every cluster (docs/MFA-ROLLOUT.md); on a mesh with the floor ON, an
+  -- admin without a fresh second factor gets 403 + X-Step-Up-Required (hugmesh-gateway),
+  -- which hugmesh-tube-ui turns into the inline MFA challenge.
+  -- `/**` (not `/*`) on purpose: AntPathMatcher's `*` is ONE segment, so `/access/*` would
+  -- miss the DELETE revoke at /access/{type}/{user} and let it fall back to the ungated
+  -- /bff/tube/** floor. `/storage-budget/**` also matches the bare path and fails closed on
+  -- any sub-path or trailing-slash spelling.
+  ('hugmesh-fe-gateway',  '/bff/tube/admin/access/**',          'ROLE_ADMIN',   true),  -- tube use-access overlay (grant/timeout/ban/revoke)
+  ('hugmesh-fe-gateway',  '/bff/tube/admin/storage-budget/**',  'ROLE_ADMIN',   true),  -- tube per-user storage budget
   -- ── Wiki / Owncast / Tube UI MOUNT rows (pre-existing gap, filled here) ─────
   -- The wiki-ui/owncast-ui/tube-ui repos' own Dockerfiles document the intended
   -- gateway gate ("Serves on :8080 to MATCH the federation-api <slug> module

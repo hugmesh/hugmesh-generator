@@ -6,6 +6,7 @@ no Qt required.
 """
 import getpass
 import json
+import re
 
 import pytest
 
@@ -70,8 +71,12 @@ ALL_TAIL = ["--compress", "--resume"]
 # INDEPENDENTLY of config.default_local_user() (same getpass call, different site) so
 # the golden lists still pin the emission rather than echo the implementation. Was the
 # literal "magus" — an operator name baked into the goldens, incidental to what these
-# tests assert.
-DEFAULT_LOCAL_USER = getpass.getuser()
+# tests assert. FOLDED into a legal login the same way (lowercase, [a-z0-9_-] only, no
+# leading digit or dash, 32 chars, else "user"): an account like "Magus" or "jane.doe"
+# is not a login the image can carry (tests/test_default_local_user.py).
+DEFAULT_LOCAL_USER = (re.sub(r"^[^a-z_]+", "", re.sub(r"[^a-z0-9_-]", "",
+                                                     getpass.getuser().strip().lower()))[:32]
+                      or "user")
 
 
 def pairs(args):

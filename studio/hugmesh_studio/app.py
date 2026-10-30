@@ -29,7 +29,7 @@ import argparse
 import os
 import sys
 
-from .core import crashlog
+from .core import crashlog, no_console
 
 
 def _default_generator_dir() -> str:
@@ -56,6 +56,9 @@ def main(argv=None) -> int:
     # nowhere to print — which is why the 2026-07-29 GUI crash had to be
     # reconstructed from build artifacts and file mtimes. See core/crashlog.py.
     crashlog.install()
+    # Second, before anything can spawn a process: the windowed Windows exe would
+    # otherwise flash a console window for every docker/kubectl/git probe.
+    no_console.install()
     ap = argparse.ArgumentParser(description="HugMesh Image Studio")
     ap.add_argument("--generator-dir", default=_default_generator_dir(),
                     help="path to the hugmesh-generator checkout")
@@ -459,6 +462,11 @@ def main(argv=None) -> int:
             # not sent. Exit 2 is "bad input", the code the other flags use for it.
             print('usage: python -m hugmesh_studio --local-ai-prompt "question"',
                   file=sys.stderr)
+            return 2
+        # sys.stdout is None in the WINDOWED exe (hugmesh-studio.exe, console=False):
+        # writing to it raised AttributeError on the first chunk. The console exe
+        # (hugmesh-studio-cli.exe) has one; without it the answer has nowhere to go.
+        if sys.stdout is None:
             return 2
         try:
             lai.send_prompt(args.local_ai_prompt,

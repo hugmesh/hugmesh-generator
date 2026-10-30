@@ -346,6 +346,27 @@ def wsl_docker_remedy(is_wsl: bool | None = None, wsl_version: int = 0,
             f"'docker' group.)")
 
 
+def native_windows_blocker(action: str, osname: str | None = None) -> str:
+    """WHY ``action`` cannot run in a NATIVE Windows Studio (the MSI), with the fix.
+    "" anywhere else, WSL included.
+
+    The MSI runs the Studio as a Win32 program, but every local-mesh and DevOps verb is
+    a `make` target whose recipes are bash scripts. Without this the operator was told
+    "make is required", and installing make does not help: the recipes still need
+    bash, and C:\\Windows\\System32\\bash.exe is the WSL launcher, which runs a script
+    inside the Linux VM where a C:\\ checkout path means nothing. WSL2 is the supported
+    Windows runtime (see the module docstring), so that is what the sentence says.
+    ``osname`` is ``os.name`` unless a test passes another."""
+    if (osname or os.name) != "nt":
+        return ""
+    return (f"{action} runs `make` and bash scripts from a hugmesh-generator checkout, "
+            f"which the Windows build of the Studio cannot run. On Windows, run the "
+            f"Studio inside WSL2 instead: in a WSL2 distro (Ubuntu) with Docker Desktop's "
+            f"WSL integration turned on for it, clone hugmesh-generator into ~ (not "
+            f"/mnt/c) and start the Linux build of the Studio from that checkout; WSLg "
+            f"shows its window on the Windows desktop.")
+
+
 def _unescape_mount(field: str) -> str:
     """/proc/mounts octal-escapes space, tab, newline and backslash in path fields."""
     for esc, ch in (("\\040", " "), ("\\011", "\t"), ("\\012", "\n"), ("\\134", "\\")):
