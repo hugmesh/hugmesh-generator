@@ -17,7 +17,9 @@ WHAT THE MODEL EMITS. One sentence and one fenced ```diff block, unified, paths
 relative to the workspace root (``a/<path>``, ``b/<path>``), made from a prompt that
 holds the exact current text of the files the person named (:func:`files_mentioned`).
 :func:`parse_diff` is a small unified-diff parser: every context and minus line must
-match the current file exactly or the hunk is refused with the first mismatching line.
+match the current file exactly or the hunk is refused with the first mismatching line;
+:func:`apply` checks them AGAIN on the bytes it is about to replace (the person may
+have edited the file after the card appeared) and changes nothing on a mismatch.
 
 APPLY AND REVERT. :func:`apply` writes byte copies of each file to
 ``<state>/assistant-edits/<id>/before/<path>`` plus a ``manifest.json`` (workspace,
@@ -267,6 +269,18 @@ def _diff_body(text: str) -> str:
     return m.group(1) if m else (text or "")
 
 
+def _mismatch(path: str, old_start: int, olds, file_lines: list) -> str:
+    """"" when ``file_lines`` hold ``olds`` (context + minus lines) at ``old_start``;
+    else the first line that differs, in words."""
+    olds = list(olds)
+    have = file_lines[old_start - 1: old_start - 1 + len(olds)] if old_start >= 1 else []
+    for n, (want, got) in enumerate(zip(olds, have + [None] * (len(olds) - len(have)))):
+        if want != got:
+            return (f"{path} line {old_start + n}: the file says "
+                    f"{(got if got is not None else '(end of file)')!r}, the diff expects {want!r}")
+    return ""
+
+
 def parse_diff(text: str, ws: Workspace) -> "list[FileEdit] | DiffProblem":
     """Parse a unified diff against the files in ``ws``; every hunk's context and minus
     lines must match the current file exactly."""
@@ -337,11 +351,9 @@ def parse_diff(text: str, ws: Workspace) -> "list[FileEdit] | DiffProblem":
                 i += 1
             if len(olds) != old_n and old_n != 1:
                 pass                                      # counts are advisory; the match below rules
-            have = file_lines[old_start - 1: old_start - 1 + len(olds)]
-            for n, (want, got) in enumerate(zip(olds, have + [None] * (len(olds) - len(have)))):
-                if want != got:
-                    return DiffProblem(f"{cur_path} line {old_start + n}: the file says "
-                                       f"{(got if got is not None else '(end of file)')!r}, the diff expects {want!r}")
+            why = _mismatch(cur_path, old_start, olds, file_lines)
+            if why:
+                return DiffProblem(why)
             if cur_hunks and old_start <= cur_hunks[-1].old_start + len(cur_hunks[-1].old_lines) - 1:
                 return DiffProblem(f"{cur_path}: hunks overlap")
             cur_hunks.append(Hunk(old_start, tuple(olds), tuple(news), added, removed))
@@ -406,8 +418,20 @@ def apply(edits: "Iterable[FileEdit]", ws: Workspace, state_dir: str) -> "Applie
         full, why = safe_path(ws, e.path)
         if why:
             return DiffProblem(why)
-        with open(full, "rb") as fh:
-            old = fh.read()
+        try:
+            with open(full, "rb") as fh:
+                old = fh.read()
+        except OSError:
+            return DiffProblem(f"{e.path} is gone from {ws.name}; nothing was changed")
+        # The diff was checked when the card was made; the person may have edited the
+        # file since. Check every hunk again on the bytes about to be written, or a
+        # splice by line number would replace other text than the diff on the card.
+        lines = old.decode("utf-8", "replace").split("\n")
+        for h in e.hunks:
+            why = _mismatch(e.path, h.old_start, h.old_lines, lines)
+            if why:
+                return DiffProblem(f"{e.path} changed since I proposed this edit ({why}); "
+                                   "nothing was changed. Ask again for a fresh diff.")
         new = e.new_text(old.decode("utf-8", "replace")).encode("utf-8")
         plan.append((e.path, full, old, new))
     try:

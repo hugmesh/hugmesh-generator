@@ -201,3 +201,22 @@ def test_a_diff_that_changes_nothing_is_refused_not_applied(ws):
                  "--- a/src/index.html\n+++ b/src/index.html\n@@ -3,1 +3,1 @@\n <footer>\n"):
         out = ce.parse_diff("x\n```diff\n" + body + "```\n", space)
         assert isinstance(out, ce.DiffProblem) and "changes nothing" in out.text, out
+
+
+def test_apply_refuses_when_the_file_was_edited_after_the_card_and_changes_nothing(ws):
+    """PR #832 review (C2): the card's diff was checked at parse time; two lines added at
+    the top before Apply moved every line, and a splice by line number replaced the
+    person's <body>. Apply checks the hunks again and writes nothing."""
+    space, state = ws
+    edits = ce.parse_diff(DIFF, space)
+    assert not isinstance(edits, ce.DiffProblem)
+    path = os.path.join(space.path, "src", "index.html")
+    edited = "<!-- one -->\n<!-- two -->\n" + INDEX
+    with open(path, "w") as fh:
+        fh.write(edited)
+    r = ce.apply(edits, space, str(state))
+    assert isinstance(r, ce.DiffProblem), r
+    assert r.text.startswith("src/index.html changed since I proposed this edit (")
+    assert "nothing was changed" in r.text
+    assert open(path).read() == edited
+    assert ce.list_applied(str(state)) == []            # no before-copy, no manifest
