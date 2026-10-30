@@ -158,7 +158,7 @@ def test_preflight_never_fabricates_readiness_when_probes_error(monkeypatch):
 def test_probe_env_is_the_make_env(monkeypatch):
     seen = {}
 
-    def _fake_run(cmd, env=None, capture_output=None, text=None, timeout=None):
+    def _fake_run(cmd, env=None, capture_output=None, text=None, timeout=None, **_kw):
         seen["cmd"], seen["env"] = cmd, env
 
         class _R:

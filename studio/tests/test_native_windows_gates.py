@@ -10,6 +10,7 @@ gate here is core code, and the GUI refusal is the same sentence.
 from __future__ import annotations
 
 import functools
+import ntpath
 import os
 import subprocess
 import types
@@ -143,7 +144,7 @@ def test_windows_keys_run_in_the_builder_container():
     cmd = WorklistDriver._genkeys_command(_wl("docker"), "ignored", "acme", args,
                                           osname="nt")
     assert cmd[:4] == ["docker", "run", "--rm", "--init"]
-    assert f"{os.path.dirname(out)}:/keys" in cmd and "BRAND=acme" in cmd
+    assert f"{ntpath.dirname(out)}:/keys" in cmd and "BRAND=acme" in cmd
     i = cmd.index("hugmesh-builder")
     assert cmd[i + 1:] == ["bash", "./" + GENKEYS_SCRIPT.replace(os.sep, "/"),
                            "--role", "host", "--out", "/keys/keys-node1", "--random",

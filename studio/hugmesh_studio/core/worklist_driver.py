@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import getpass
 import json
+import ntpath
 import os
 import shlex
 import shutil
@@ -414,7 +415,9 @@ class WorklistDriver:
             return [script, *args]
         args = list(args)
         i = args.index("--out") + 1
-        parent, name = os.path.split(os.path.abspath(args[i]))
+        # ntpath, not os.path: this branch only runs for native Windows, and a test on
+        # Linux must split a C:\ path the way Windows does.
+        parent, name = ntpath.split(ntpath.abspath(args[i]))
         args[i] = f"/keys/{name}"
         return ["docker", "run", "--rm", "--init",
                 "-v", f"{self.generator_dir}:/src", "-v", f"{parent}:/keys",
