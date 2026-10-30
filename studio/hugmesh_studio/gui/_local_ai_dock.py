@@ -2183,8 +2183,10 @@ class LocalAIDock(QtWidgets.QFrame):
                 cmd = (res.command if res is not None
                        else odk.commands_for(self.generator_dir, self.ollama_mode)["start"])
                 why = res.message if res is not None else str(error)
-                self._say(f"{why} Run it yourself: {cmd}", 60, warn=True)
-                self.show_current_work()
+                # no command (native Windows): the script is not a thing to run there
+                self._say(f"{why} Run it yourself: {cmd}" if cmd else why, 60, warn=True)
+                if cmd:
+                    self.show_current_work()
 
 
 class _Card(QtWidgets.QFrame):

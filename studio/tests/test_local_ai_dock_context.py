@@ -825,3 +825,22 @@ def test_a_diff_card_left_up_after_next_domain_neither_applies_nor_reverts_there
     assert card.status.text() == "Reverted."
     with open(index, "rb") as fh:
         assert fh.read() == original
+
+
+def test_a_native_windows_start_refusal_names_no_command_and_opens_no_window(qapp):
+    """The Windows refusal comes with no command (the script is bash there): the panel
+    says the sentence alone and does not open the work window, whose commands are the
+    same bash script. A refusal WITH a command still opens it (test_local_ai_dock)."""
+    said = lai.StartResult(False, lai.windows_refusal("nt"), "")   # what start_assistant returns there
+    dock = dock_mod.LocalAIDock(GENERATOR_DIR, snapshot_fn=make_snapshot, start_fn=lambda: said,
+                                auto_poll=False, expanded=True)
+    dock.show()
+    try:
+        dock.start_btn.click()
+        assert wait_for(qapp, lambda: dock.start_btn.isEnabled() and "WSL2" in dock.note.text())
+        assert "Run it yourself" not in dock.note.text() and dock.note.text().startswith(
+            "Starting the local assistant runs the bash script")
+        assert dock.work_window is None
+    finally:
+        dock.close()
+        dock.deleteLater()

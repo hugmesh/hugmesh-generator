@@ -51,7 +51,7 @@ __all__ = [
     "DEFAULT_HOST", "DEFAULT_MODEL", "DOC", "STALE_AFTER", "LocalAIError", "NotLoopback",
     "Job", "Snapshot", "StartResult", "state_dir", "ollama_host", "base_url",
     "read_snapshot", "summary_line", "send_prompt", "pick_model", "write_status",
-    "start_assistant", "chat_loop", "format_status", "commands", "GROUNDED_ENV",
+    "start_assistant", "windows_refusal", "chat_loop", "format_status", "commands", "GROUNDED_ENV",
 ]
 
 STATE_ENV = "HUGMESH_LOCAL_AI_DIR"
@@ -775,15 +775,41 @@ class StartResult:
     command: str = ""
 
 
+#: What a native Windows Studio can do instead of the bash script: the panel talks to
+#: Ollama over HTTP, so an Ollama started any other way answers it.
+WINDOWS_NATIVE_PATH = ("Or keep this Windows build: start Ollama for Windows yourself (it "
+                       "answers on 127.0.0.1:11434), or choose the Studio's own Ollama in "
+                       "Docker, and the panel asks it directly; only the queue worker needs "
+                       "the script.")
+
+
+def windows_refusal(osname: str | None = None) -> str:
+    """Why ``scripts/local-ai.sh start`` cannot run in a NATIVE Windows Studio (the
+    MSI), with both ways forward; "" anywhere else, WSL included. ``bash`` there is
+    System32's WSL launcher, which runs the script inside the Linux VM where a C:\\
+    checkout path means nothing (#827 group 1, the same gate as the other bash
+    drivers). ``osname`` is ``os.name`` unless a test passes another."""
+    from . import platform_info
+    said = platform_info.native_windows_blocker(
+        "Starting the local assistant", osname=osname,
+        runs="the bash script scripts/local-ai.sh")
+    return f"{said} {WINDOWS_NATIVE_PATH}" if said else ""
+
+
 def start_assistant(generator_dir: str, *, env: dict | None = None,
-                    spawn: Callable | None = None) -> StartResult:
+                    spawn: Callable | None = None, osname: str | None = None) -> StartResult:
     """Start the loopback Ollama and the queue worker, detached, and return at once.
 
     Runs ``scripts/local-ai.sh start``. The caller does not wait: the snapshot shows the
     server come up. This is the server-and-worker half only: the local-agent card
     (hugmesh-generator#695, merged as PR 749, ``core/local_agent.py``) owns "open an
-    agent chat in a terminal".
+    agent chat in a terminal". On native Windows it refuses in words and spawns
+    nothing (:func:`windows_refusal`); its command is "" there, because the script is
+    not something that Studio's person can run.
     """
+    refusal = windows_refusal(osname)
+    if refusal:
+        return StartResult(False, refusal, "")
     env = dict(os.environ if env is None else env)
     script = os.path.join(generator_dir, "scripts", "local-ai.sh")
     cmd = commands(generator_dir)["start"]

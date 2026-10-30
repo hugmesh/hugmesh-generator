@@ -53,14 +53,14 @@ def plant(root: str) -> dict:
            "log_path": os.path.join(workdir, "build.log"), "workdir": workdir,
            "error_tail": {"backend.x86": ["emerge: failed to build dev-lang/rust", "TS_AUTHKEY=tskey-auth-CANARY123",
                                           "password=CANARY-PW", "see build.log"]}}
-    with open(os.path.join(state, "sessions", "s1.json"), "w") as fh:
+    with open(os.path.join(state, "sessions", "s1.json"), "w", encoding="utf-8") as fh:
         json.dump(rec, fh)
     ws = os.path.join(state, "domain-code", "shop", "web-shop.example")
     os.makedirs(os.path.join(ws, ".git"))
     os.makedirs(os.path.join(ws, "src"))
-    with open(os.path.join(ws, ".git", "hugmesh-workspace.json"), "w") as fh:
+    with open(os.path.join(ws, ".git", "hugmesh-workspace.json"), "w", encoding="utf-8") as fh:
         json.dump({"app": "web", "domain": "shop.example", "mesh": "shop", "source": "x", "schema": 1}, fh)
-    with open(os.path.join(ws, "src", "index.html"), "w") as fh:
+    with open(os.path.join(ws, "src", "index.html"), "w", encoding="utf-8") as fh:
         fh.write("<html>\n<body>\n<footer>\n  <p>Welcome to shop</p>\n</footer>\n</body>\n</html>\n")
     return {"state": state, "home": home, "workspace": ws}
 

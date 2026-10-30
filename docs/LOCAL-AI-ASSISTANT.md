@@ -69,6 +69,13 @@ then talks to that port (`OLLAMA_HOST=127.0.0.1:11435`).
 
 macOS and Windows use the installer from <https://ollama.com/download>.
 
+In the native Windows build of the Studio (the MSI), **Start local assistant** does not
+run `scripts/local-ai.sh`: it is a bash script, and `bash` there is the WSL launcher. It
+says so and offers two ways on: start Ollama for Windows yourself (the panel asks it on
+`127.0.0.1:11434`), or pick **Ollama in Docker**, which the button still starts and
+waits for (only the queue worker stays off). For the queue worker too, run the Studio
+inside WSL2.
+
 Check it:
 
 ```bash

@@ -574,6 +574,34 @@ def test_start_assistant_says_what_is_wrong_instead_of_raising(tmp_path, env):
     assert not res.ok and "no bash" in res.message and res.command in res.message
 
 
+def test_start_assistant_on_native_windows_refuses_in_words_and_spawns_nothing(tmp_path, env,
+                                                                                monkeypatch):
+    """#827 group 1's gate, on the line it left to this branch: on the MSI, bash is
+    System32's WSL launcher and the script's C:\\ path means nothing inside the VM. It
+    refuses with both ways forward (WSL2, or an Ollama the panel asks directly) and a
+    blank command (there is nothing to run yourself). WSL2 and Linux are unchanged."""
+    gen = tmp_path / "gen"
+    (gen / "scripts").mkdir(parents=True)
+    (gen / "scripts" / "local-ai.sh").write_text("#!/bin/sh\n")
+    calls = []
+
+    def spawn(cmd, **kw):
+        calls.append(cmd)
+    res = lai.start_assistant(str(gen), env=env, spawn=spawn, osname="nt")
+    assert not res.ok and calls == [] and res.command == ""
+    assert res.message.startswith("Starting the local assistant runs the bash script "
+                                  "scripts/local-ai.sh from a hugmesh-generator checkout")
+    assert "run the Studio inside WSL2" in res.message
+    assert res.message.endswith(lai.WINDOWS_NATIVE_PATH) and "127.0.0.1:11434" in res.message
+    assert lai.windows_refusal("posix") == ""
+    assert lai.start_assistant(str(gen), env=env, spawn=spawn, osname="posix").ok and len(calls) == 1
+    # the default reads os.name at call time, as the Windows build would see it
+    monkeypatch.setattr(os, "name", "nt")
+    res = lai.start_assistant(str(gen), env=env, spawn=spawn)
+    monkeypatch.undo()
+    assert not res.ok and "WSL2" in res.message and len(calls) == 1
+
+
 # ── the prompt loop and the command line ────────────────────────────────────────────
 def test_chat_loop_keeps_history_until_cleared(fake, env):
     out = io.StringIO()

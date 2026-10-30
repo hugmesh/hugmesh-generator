@@ -222,3 +222,23 @@ def test_apply_and_undo_act_only_on_the_domain_they_were_made_on(monkeypatch):
     go("shop.example")
     s.feed(j, "undo")
     assert s.message == "Undone." and tor() == {"shop.example": False, "blog.example": False}
+
+
+def test_start_on_native_windows_says_the_refusal_and_no_command_to_run():
+    """A native Windows refusal has no command (the script is bash): the screen shows
+    the sentence alone, not "Run it yourself: " with nothing after it; a refusal that
+    has a command still names it."""
+    j = Journey()
+    said = lai.start_assistant(GENERATOR_DIR, osname="nt", spawn=lambda *a, **k: (_ for _ in ()).throw(
+        AssertionError("spawned on Windows")))
+    s = tla.LocalAIScreen(snapshot_fn=snapshot, start_fn=lambda: said, generator_dir=GENERATOR_DIR)
+    s._under = j.overlay
+    s.enter(j)
+    s.feed(j, "start")
+    assert s.message == said.message and "WSL2" in s.message and "Run it yourself" not in s.message
+    s2 = tla.LocalAIScreen(snapshot_fn=snapshot, generator_dir=GENERATOR_DIR,
+                           start_fn=lambda: lai.StartResult(False, "It is missing.", "/x/local-ai.sh start"))
+    s2._under = j.overlay
+    s2.enter(j)
+    s2.feed(j, "start")
+    assert s2.message == "It is missing. Run it yourself: /x/local-ai.sh start"
