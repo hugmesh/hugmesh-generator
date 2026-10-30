@@ -197,35 +197,40 @@ class WarnGate:
 # (PR #832, round 6), and once repeated a build log path on another disk back to the
 # person (round 7). Each absolute path under the generator checkout becomes relative
 # to it, one under the checkouts folder relative to that, one under the home folder
-# starts with ~, and the folders themselves become words. STRICT (every part the
-# machine fills in: primer, page facts, options, files, history): ANY other absolute
-# path — /mnt/<disk>/..., /media/<user>/..., /run/media/<user>/..., /var/tmp/portage/...,
-# C:\Users\<user>\..., \\server\share\... — keeps only its last two parts, never a
-# user name. NOT strict (the docs snippets: the repo's own text, the same on every
-# machine): only /home, /Users, /var/home, /root, /media and /run/media paths are cut,
-# so documented paths such as /etc/wireguard and `-v ollama:/root/.ollama` reach the
-# model whole.
+# starts with ~, and the folders themselves become words. STRICT (what the machine
+# fills in: primer, page facts, options, history): ANY other absolute path of two or
+# more parts — /mnt/<disk>/..., /media/<user>/..., /run/media/<user>/...,
+# /var/tmp/portage/..., C:\Users\<user>\..., \\server\share\... — keeps only its last
+# two parts, never a user name; a one-part path (/superdomain, a route in an option's
+# text) has nothing more to cut. NOT strict (the docs snippets and the files of a code
+# edit: repo text, where a cut route or path would be a wrong answer or a diff that does
+# not apply): only /home, /Users, /var/home, /root, /media and /run/media paths are
+# cut, so documented paths such as /etc/wireguard and `-v ollama:/root/.ollama` reach
+# the model whole.
 _PATH_CHARS = r"[^\s`'\"<>()\[\]{},;|]"
+# a folder name with a space: the next word belongs to the path when it holds a separator
+# (/mnt/big disk/out/build.log, C:\Users\Jane Doe\x), and is not a URL or and/or
+_PATH_CONT = (r"(?:[ ]+(?!and/or\b)(?![^\s]*://)(?![/\\])" + _PATH_CHARS + r"*[\\/]"
+              + _PATH_CHARS + r"*)*")
 _ABS_PATH_RE = re.compile(
-    r"(?P<posix>(?<![\w.~/\\\-])/" + _PATH_CHARS + r"+)"
-    r"|(?P<drive>(?<![\w\\/])[A-Za-z]:[\\/]" + _PATH_CHARS + r"*)"
-    r"|(?P<unc>(?<![\w\\])\\\\[^\s`'\"<>()\[\]{},;|\\]+\\" + _PATH_CHARS + r"*)")
+    r"(?P<posix>(?<![\w.~/\\\-])/" + _PATH_CHARS + r"+" + _PATH_CONT + r")"
+    r"|(?P<drive>(?<![\w\\/])[A-Za-z]:[\\/]" + _PATH_CHARS + r"*" + _PATH_CONT + r")"
+    r"|(?P<unc>(?<![\w\\])\\\\[^\s`'\"<>()\[\]{},;|\\]+\\" + _PATH_CHARS + r"*" + _PATH_CONT + r")")
 _HOME_LIKE_RE = re.compile(r"^/(?:home|Users|root|var/home|media|run/media)(?:/|$)")
 
 
 def _user_slot(parts: "list[str]") -> int:
     """The index of the user-name component of a path split into ``parts`` (/home/<u>,
-    /Users/<u>, /var/home/<u>, /media/<u>, /run/media/<u>, /mnt/c/Users/<u>,
-    C:/Users/<u>), else -1."""
+    /Users/<u>, /var/home/<u>, /mnt/c/Users/<u>, /cygdrive/c/Users/<u>, C:/Users/<u>,
+    /media/<u>, /run/media/<u>), else -1."""
     low = [p.lower() for p in parts]
-    if low[:1] in (["home"], ["users"], ["media"]) and len(parts) > 1:
+    if low[:1] == ["media"] and len(parts) > 1:
         return 1
-    if low[:2] in (["var", "home"], ["run", "media"]) and len(parts) > 2:
+    if low[:2] == ["run", "media"] and len(parts) > 2:
         return 2
-    if low[:1] == ["mnt"] and len(parts) > 3 and len(parts[1]) == 1 and low[2] == "users":
-        return 3
-    if parts and re.fullmatch(r"[A-Za-z]:", parts[0]) and len(parts) > 2 and low[1] == "users":
-        return 2
+    for i, p in enumerate(low[:3]):
+        if p in ("home", "users") and i + 1 < len(parts):
+            return i + 1
     return -1
 
 
@@ -293,7 +298,10 @@ def scrub_paths(text: str, *, generator_dir: str = "", checkouts_root: str = "",
             if n.startswith(b + "/"):
                 rest = tok.replace("\\", "/")[len(b) + 1:]   # n, with its case
                 return "~/" + rest if kind == "home" else rest
-        if strict or _HOME_LIKE_RE.match(tok):
+        if _HOME_LIKE_RE.match(tok):
+            return _tail(tok, users=users)
+        # a one-part path (a route in an option's text) has nothing more to cut
+        if strict and len([p for p in re.split(r"[\\/]+", tok) if p]) > 1:
             return _tail(tok, users=users)
         return tok
 
@@ -436,7 +444,7 @@ def build(question: str, where: Optional[Where], history: "list[dict] | None" = 
 
     parts = {"primer": scrub(primer), "rules": rules_block, "where": scrub(where_text),
              "options": scrub(options_text), "snippets": scrub(snippets_text, strict=False),
-             "files": scrub(files_block)}
+             "files": scrub(files_block, strict=False)}
     dropped: list = []
     fixed = tokens(question) + 20
 

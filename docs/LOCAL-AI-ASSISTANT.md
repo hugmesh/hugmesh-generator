@@ -658,14 +658,16 @@ goes through `assistant_prompt.scrub_paths` first: a path under the generator ch
 becomes relative to it (`docs/LOCAL-STACK.md`), one under the checkouts folder relative
 to that, one under the home folder starts with `~`, and the folders themselves become
 words ("the generator checkout", "the checkouts folder"). In everything the machine
-fills in (primer, page facts, options, files, history) ANY other absolute path keeps
-only its last two parts and never a user name: a build output folder on another disk
+fills in (primer, page facts, options, history) ANY other absolute path of two or more
+parts keeps only its last two parts and never a user name: a build output folder on another disk
 (`/mnt/<disk>/hugmesh-out/sessions/<id>/build.log` becomes `…/<id>/build.log`),
 `/media/<user>/...` and `/run/media/<user>/...` sticks, portage's `/var/tmp/portage/...`
 log lines, `C:\Users\<user>\...`, other drive letters and `\\server\share\...` paths.
-The docs snippets are the repo's own text, the same on every machine, so there only
-`/home`, `/Users`, `/root`, `/media` and `/run/media` paths are cut; documented paths
-such as `/etc/wireguard` and `-v ollama:/root/.ollama` reach the model whole.
+The docs snippets and the files of a code edit are repo text, where a cut path would be
+a wrong answer or a diff that does not apply, so there only `/home`, `/Users`, `/root`,
+`/media` and `/run/media` paths are cut; documented paths such as `/etc/wireguard` and
+`-v ollama:/root/.ollama` reach the model whole. The person's own question is sent as
+typed.
 
 ### 12.2 Where you are
 
@@ -1011,12 +1013,12 @@ not the face is grounded. The commands, by kind (`assistant_docs.destructive_kin
 | WSL | `wsl --unregister` |
 | disk | `dd of=`, `mkfs`, `wipefs`, `blkdiscard`, `sgdisk --zap`, `Format-Volume`, `Clear-Disk` |
 | files | `rm -r`/`rm -f` or `rm` of a path, `xargs rm`, `find -delete`, `shred`, `truncate`, `Remove-Item`, `rd /s`/`rmdir /s`, `del /s` |
-| Docker | any `docker`/`podman` prune, `docker rm`/`rmi`, `docker`/`podman volume rm`, `podman system reset`, compose `down -v`/`--volumes`/`--rmi` |
+| Docker | any `docker`/`podman` prune, `docker rm`/`rmi`, `docker`/`podman volume rm`, `podman system reset`, compose `rm` and `down -v`/`--volumes`/`--rmi` |
 | Kubernetes | `kubectl delete`, `helm uninstall`, `kind delete`, `minikube delete` |
-| database | `dropdb`, `DROP DATABASE`/`SCHEMA`/`TABLE` |
+| database | `dropdb`, `mysqladmin drop`, `DROP DATABASE`/`SCHEMA`/`TABLE`, `TRUNCATE TABLE`, `DELETE FROM` |
 | model | `ollama rm` |
-| app data | `flatpak uninstall --delete-data` |
-| git | `git clean`, `git reset --hard`, `git push --force`, `git checkout -f`, `git branch -D` |
+| app data | `flatpak uninstall --delete-data`, `snap remove --purge` |
+| git | `git clean`, `git reset --hard`, `git push --force`, `git checkout -f`, `git branch -D`, `git stash drop`/`clear` |
 
 The warning (`assistant_prompt.danger_banner`) starts with `DESTRUCTIVE_WARNING` ("do
 not run them before you know exactly what each one removes") and adds one sentence per

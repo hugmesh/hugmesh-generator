@@ -446,6 +446,14 @@ STRICT = [
     ("/etc/wireguard/wg0.conf", "…/wireguard/wg0.conf"),
     ("file:///home/someone/x/y.html", "file://…/x/y.html"),
     ("see https://hugmesh.github.io/docs/a and docs/A.md", "see https://hugmesh.github.io/docs/a and docs/A.md"),
+    # a folder name with a space is one path, and never leaves the rest of a name behind
+    ("log /mnt/big disk/hugmesh out/build.log", "log …/hugmesh out/build.log"),
+    ("C:\\Users\\someone else\\hugmesh\\out\\build.log", "…\\out\\build.log"),
+    ("/cygdrive/c/Users/someone/x/y", "…/x/y"),
+    ("/mnt/a/b.log and/or docs/A.md", "…/a/b.log and/or docs/A.md"),
+    ("/mnt/a/b.log see https://hugmesh.github.io/x/y", "…/a/b.log see https://hugmesh.github.io/x/y"),
+    # a one-part path has nothing more to cut (routes in an option's text)
+    ("the /superdomain and /character-forge pages", "the /superdomain and /character-forge pages"),
 ]
 
 
@@ -468,6 +476,17 @@ def test_doc_snippets_keep_their_documented_paths():
     assert ap.scrub_paths("/home/someone/x/y", **kw) == "…/x/y"
     assert ap.scrub_paths("/run/media/someone/USB/x.img", **kw) == "…/USB/x.img"
     assert ap.scrub_paths("/h/u/G/gen/docs/A.md", **kw) == "docs/A.md"
+
+
+def test_the_files_of_a_code_edit_keep_their_routes_and_paths(tmp_path, monkeypatch):
+    """A cut route in a file the model is editing makes a diff that does not apply."""
+    body = "[file: src/a.ts in web-x]\nfetch('/api/foo/bar'); const logo = '/assets/img/logo.png';"
+    home = tmp_path / "home" / "someone"
+    home.mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+    p = ap.build("change the fetch url", ac.Where(slug="localmesh", title="x"), [], env=dict(os.environ),
+                 generator_dir=GENERATOR_DIR, ctx_tokens=16384, files_block=body + f" /* {home}/x/y */")
+    assert body in p.system and str(home) not in p.system and "~/x/y" in p.system
 
 
 def test_a_build_output_folder_on_another_disk_never_reaches_the_model(tmp_path, monkeypatch):

@@ -819,6 +819,7 @@ _DESTRUCTIVE_KINDS = (
     ("mesh", _PRE + r"podman\s+system\s+reset\b"),
     ("mesh", _PRE + r"(?:docker\s+compose|docker-compose|podman-compose|podman\s+compose)\b[^\n`]*?\bdown\b[^\n`]*?(?<!\S)(?:-v|--volumes|--rmi)\b"),
     ("mesh", _PRE + r"(?:docker\s+compose|docker-compose|podman-compose|podman\s+compose)\b[^\n`]*?(?<!\S)(?:-v|--volumes)\b[^\n`]*?\bdown\b"),
+    ("mesh", _PRE + r"(?:docker\s+compose|docker-compose|podman-compose|podman\s+compose)\b[^\n`]*?\srm\b"),
     ("cluster", _PRE + r"kubectl\s+(?:[^\n`]*\s)?delete\b"),
     ("cluster", _PRE + r"helm\s+(?:uninstall|delete)\b"),
     ("cluster", _PRE + r"kind\s+delete\b"),
@@ -826,9 +827,12 @@ _DESTRUCTIVE_KINDS = (
     ("model", _PRE + r"ollama\s+(?:rm|remove)(?![\w-])"),
     ("wsl", r"(?i:" + _PRE + r"wsl(?:\.exe)?\s+(?:[^\n`]*\s)?--unregister\b)"),
     ("app", _PRE + r"flatpak\s+(?:uninstall|remove)\b[^\n`]*--delete-data\b"),
+    ("app", _PRE + r"snap\s+remove\b[^\n`]*--purge\b"),
     ("database", _CMDPOS + r"dropdb\s+" + _NOT_PROSE + r"\S"),
     ("database", _PRE + r"dropdb\s+-\S"),
     ("database", r"(?i:\bdrop\s+(?:database|schema|table)\b)"),
+    ("database", r"\b(?:TRUNCATE\s+TABLE|DELETE\s+FROM)\b"),   # upper case: SQL, not "delete from the list"
+    ("database", _PRE + r"mysqladmin\s+[^\n`]*\bdrop\b"),
     ("disk", _PRE + r"dd\s+[^\n`]*\bof="),
     ("disk", _PRE + r"(?:mkfs(?:\.[a-z0-9]+)?|wipefs|blkdiscard)\s+[^\n`]*?(?:/dev/|<\w|\$\w)"),
     ("disk", _CMDPOS + r"(?:mkfs(?:\.[a-z0-9]+)?|wipefs|blkdiscard)\s+" + _NOT_PROSE + r"\S"),
@@ -843,7 +847,7 @@ _DESTRUCTIVE_KINDS = (
     # PowerShell and cmd.exe: Remove-Item (and its aliases) of anything, rd/rmdir /s,
     # del/erase /s
     ("files", r"(?i:" + _PRE + r"Remove-Item\s+(?:-|[$\"'~./\\]|[a-z]:))"),
-    ("files", r"(?i:" + _CMDPOS + r"Remove-Item\s+" + _NOT_PROSE + r"\S)"),
+    ("files", r"(?i:" + _CMDPOS + r"Remove-Item(?:\s+" + _NOT_PROSE + r"\S|\s*$|\s*`))"),
     ("files", r"(?i:" + _PRE + r"(?:ri|rm|del|erase|rmdir|rd)\s+[^\n`]*?(?<!\S)-(?:Recurse|Force)\b)"),
     ("files", r"(?i:" + _PRE + r"(?:rmdir|rd)\s+(?:/[a-z]\s+)*/s\b)"),
     ("files", r"(?i:" + _PRE + r"(?:del|erase)\s+(?:/[a-z]\s+)*/[sq]\b)"),
@@ -856,6 +860,7 @@ _DESTRUCTIVE_KINDS = (
     ("git", _PRE + r"git\s+push\s+(?:[^\n`]*\s)?(?:-f|--force|--force-with-lease|--mirror)\b"),
     ("git", _PRE + r"git\s+checkout\s+(?:-f\b|--\s+\.)"),
     ("git", _PRE + r"git\s+branch\s+-D\b"),
+    ("git", _PRE + r"git\s+stash\s+(?:drop|clear)\b"),
 )
 _DESTRUCTIVE_RES = tuple((kind, re.compile(x, re.M)) for kind, x in _DESTRUCTIVE_KINDS)
 #: The order the warning names them in.
@@ -863,15 +868,23 @@ DESTRUCTIVE_KIND_ORDER = ("wsl", "disk", "files", "mesh", "cluster", "database",
                           "app", "git")
 
 
+# `docker rm -f x` is a Docker command, not a file one: its warning names the Docker ways
+_TOOL_BEFORE_RE = re.compile(r"(?:docker|podman|compose|docker-compose|podman-compose|volume|"
+                             r"image|container|network|pod)\s+$")
+
+
 def _destructive_hits(text: str) -> "list[tuple[str, str]]":
     """``(kind, fragment)`` for each line or code span of ``text`` that deletes data."""
     out: list = []
-    for line in (text or "").split("\n"):
+    # a command continued on the next line is one line here
+    joined = re.sub(r"[ \t]*\\\r?\n[ \t]*", " ", text or "")
+    for line in joined.split("\n"):
         done: set = set()               # one fragment per kind per line, every kind
         for kind, rx in _DESTRUCTIVE_RES:
             if kind in done:
                 continue
-            m = rx.search(line)
+            m = next((x for x in rx.finditer(line)
+                      if not (kind == "files" and _TOOL_BEFORE_RE.search(line[:x.start()]))), None)
             if not m:
                 continue
             done.add(kind)

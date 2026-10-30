@@ -352,6 +352,14 @@ DELETES = [
     ("mkfs -t vfat /dev/sdc1", "disk"),
     ("dd if=hugmesh.img of=/dev/sdb bs=4M", "disk"),
     ("Format-Volume -DriveLetter E -FileSystem exFAT", "disk"),
+    ("docker compose rm -f", "mesh"),
+    ("docker rm -f $(docker ps -aq)", "mesh"),
+    ("Get-ChildItem *.log | Remove-Item", "files"),
+    ("git stash clear", "git"),
+    ("snap remove --purge hugmesh-studio", "app"),
+    ("psql -c 'DELETE FROM users'", "database"),
+    ("psql -c 'TRUNCATE TABLE users'", "database"),
+    ("mysqladmin -u root drop casdoor", "database"),
 ]
 #: Ordinary text (and safe commands) with the same words: no warning.
 NOT_DELETES = [
@@ -366,6 +374,8 @@ NOT_DELETES = [
     "mkfs is the tool that formats a disk", "The Flash (DESTRUCTIVE) verb asks for the serial.",
     "Press Stop & clean Docker… on the Local Docker mesh step, or run make stack-down.",
     "make kind-down deletes the kind cluster; make kind-halt keeps it.",
+    "Remove it from the list, then delete from the list any domain you dropped.",
+    "git stash list", "snap remove hugmesh-studio", "docker compose ps",
 ]
 
 
@@ -409,6 +419,13 @@ def test_an_inline_code_span_that_starts_with_a_program_is_a_command():
         "Remove-Item -Recurse $HOME\\x", "ollama rm qwen3:8b"]
     # a cmdlet runs on its own; a bare tool name in a span names it and runs nothing
     assert ad.code_commands("`Get-ChildItem` lists it; `wsl` alone names the tool.") == ["Get-ChildItem"]
+
+
+def test_a_docker_rm_is_only_a_docker_command_and_a_continued_line_is_one_line():
+    assert ad.destructive_kinds("docker rm -f x\npodman volume rm y\ndocker compose rm -f") == ["mesh"]
+    assert ad.destructive_kinds("git rm -rf docs/") == ["files"]
+    for text in ("```bash\nrm \\\n  -rf /x\n```", "```bash\ndocker system \\\n  prune -a\n```"):
+        assert ad.destructive_commands(text), text
 
 
 def test_one_line_with_two_kinds_reports_both():

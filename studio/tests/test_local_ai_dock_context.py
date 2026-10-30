@@ -1203,6 +1203,44 @@ def test_the_warning_is_rewritten_in_place_when_a_later_command_deletes_somethin
     assert above.count(ap.DESTRUCTIVE_WARNING) == 1 and full in above   # the full one, once
 
 
+def test_a_build_output_folder_on_another_disk_stays_out_of_the_real_system_message(shell, qapp, monkeypatch):
+    """Round 6: the real dock, progress page, with the build output folder on /mnt: the
+    system message held `log /mnt/bigdisk/...`, and the model repeated the path back."""
+    import json as _json
+    sent = {}
+
+    def fake(text, *a, **k):
+        sent.update(k)
+        return "See the log."
+    monkeypatch.setattr(lai, "send_prompt", fake)
+    out = "/mnt/bigdisk/hugmesh-out"
+    work = f"{out}/sessions/20261030-014500-ab12cd"
+    state = os.environ["HUGMESH_STUDIO_STATE_DIR"]
+    os.makedirs(os.path.join(state, "sessions"), exist_ok=True)
+    with open(os.path.join(state, "sessions", "s1.json"), "w", encoding="utf-8") as fh:
+        _json.dump({"id": "s1", "label": "mesh backend x86", "status": "failed", "images": ["backend.x86"],
+                    "log_path": work + "/build.log", "workdir": work,
+                    "error_tail": {"backend.x86": [
+                        " * The complete build log is located at '/var/tmp/portage/dev-lang/rust-1.80.0/temp/build.log'.",
+                        "dd: failed to open '/run/media/someone/STICK/hugmesh.img'",
+                        "see /media/someone/USB/log.txt"]}}, fh)
+    wiz = open_at(shell, qapp)
+    wiz.cfg.output_dir = out
+    go(wiz, qapp, "progress")
+    dock = wiz.local_ai_dock
+    dock.set_expanded(True)
+    dock.prompt.setText("Why did my build fail, and where is the full log?")
+    assert dock.send()
+    assert wait_for(qapp, lambda: not dock._busy)
+    pump(qapp)
+    system = sent["system"]
+    assert "last failed build" in system                     # the fact itself did arrive
+    for leak in ("/mnt/", "bigdisk", "hugmesh-out", "/var/tmp", "/run/media", "/media/", "someone"):
+        assert leak not in system, leak
+    assert "…/20261030-014500-ab12cd/build.log" in system and "…/temp/build.log" in system
+    assert "…/STICK/hugmesh.img" in system and "…/USB/log.txt" in system
+
+
 def test_a_delete_command_in_one_unstreamed_answer_still_gets_the_warning_above_it(mesh_window, qapp):
     from hugmesh_studio.core import assistant_prompt as ap
     wiz, dock, body = mesh_window
