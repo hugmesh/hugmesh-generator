@@ -216,3 +216,23 @@ def test_a_request_to_set_a_secret_gets_a_plain_footer_note_whatever_the_model_s
     blocked = footer("change the api key and turn the forum off",
                      'ok\n```change\n{"domain": "shop.example", "field": "services", "to": []}\n```')
     assert "never set" not in blocked
+
+
+def test_eval_skips_only_the_sources_line_the_studio_wrote():
+    """scripts/local-ai/eval.py scores must_not on what the MODEL said: the Studio's own
+    Sources line (doc headings) is skipped, a line the model began with "Sources: " is
+    not (the filter once dropped every such line), and the card stays scored."""
+    import importlib.util
+    path = os.path.join(GENERATOR_DIR, "scripts", "local-ai", "eval.py")
+    spec = importlib.util.spec_from_file_location("hugmesh_local_ai_eval", path)
+    ev = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(ev)
+    answer = "Nothing leaves this machine.\nSources: the cloud docs, I made this up"
+    final = (answer + "\n\nSources: STUDIO-WALKTHROUGH.md (Target hardware — standalone and cloud)"
+             "\nCommands not found in the docs I read: make cloud\nProposed change — x")
+    said = ev.model_said(final, answer)
+    assert said == (answer + "\n\nCommands not found in the docs I read: make cloud\nProposed change — x")
+    assert "STUDIO-WALKTHROUGH" not in said and "I made this up" in said
+    assert ev.model_said(answer + "\n\nSources: a.md", answer) == answer + "\n\n"
+    assert ev.model_said("[error: refused]", "") == "[error: refused]"
+    assert ev.model_said("plain", "plain") == "plain"

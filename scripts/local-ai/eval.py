@@ -14,8 +14,9 @@ the FINAL text is scored (the model is sent only what a person would type: an
 ``ACTION (...):`` setup note is stripped first): the answer plus its footer, or for a proposal the validated
 card text (or the refusal).
 
-Matching: case-insensitive substring; must_not skips the Studio's own ``Sources:`` line
-(doc headings, never model text). A must_mention starting with ``{`` is compared to
+Matching: case-insensitive substring; must_not skips the one ``Sources:`` line the
+Studio writes under the answer (doc headings, never model text; :func:`model_said`).
+A must_mention starting with ``{`` is compared to
 ``json.dumps(json.loads(block), sort_keys=True)`` of the first ```change block; ``#hex``
 means a valid colour per brand_look.check_value whose hue is 255-300 and lightness is
 under 45 %; ````diff`` means a diff that parses and applies cleanly to the planted
@@ -158,6 +159,21 @@ def hex_ok(block_text: str) -> bool:
     return 255 <= h * 360 <= 300 and l < 0.45
 
 
+def model_said(final: str, answer: str) -> str:
+    """``final`` without the ONE Sources line the Studio wrote under ``answer``: that
+    line lists doc headings ("Target hardware — standalone and cloud") and is never
+    model text, so must_not skips it. A line the MODEL began with "Sources: " is still
+    scored (the filter once dropped every such line)."""
+    if not final.startswith(answer):
+        return final
+    rest = final[len(answer):]
+    footer = rest.lstrip("\n")
+    if footer.startswith("Sources: "):
+        cut = footer.find("\n")
+        rest = rest[:len(rest) - len(footer)] + (footer[cut + 1:] if cut >= 0 else "")
+    return answer + rest
+
+
 def score(item, final, answer, fx, where):
     from hugmesh_studio.core import assistant_actions as aa
     low = final.lower()
@@ -187,9 +203,7 @@ def score(item, final, answer, fx, where):
         else:
             ok = want.lower() in low
         (hits if ok else misses).append(want)
-    # must_not is about what the model said (and the card): the Studio's own Sources line
-    # lists doc headings ("Target hardware — standalone and cloud") and is never model text
-    said = "\n".join(ln for ln in final.splitlines() if not ln.startswith("Sources: ")).lower()
+    said = model_said(final, answer).lower()
     bad = [w for w in item.get("must_not", []) if w.lower() in said]
     if action and item["question"].startswith("ACTION (code edit"):
         valid_ok = diff_ok
