@@ -44,7 +44,7 @@ SUNSHINE="${REPO}/specs/usr/sbin/hugmesh-sunshine-firewall"
 VPNMARK="${REPO}/specs/usr/sbin/hugmesh-vpn-mark"
 GATE_INIT="${REPO}/specs/etc/init.d/hugmesh-firewall-reconcile"
 COTURN_INIT="${REPO}/specs/etc/init.d/hugmesh-coturn-firewall"
-UPLINK="${REPO}/specs/usr/lib/hugmesh/snort-uplink"
+UPLINK="${REPO}/specs/usr/libexec/snort-uplink"
 SNORT_CONFD="${REPO}/specs/etc/conf.d/snort"
 SNORT_CONF="${REPO}/specs/etc/snort/snort.conf"
 ROLES_LIB="${REPO}/scripts/_roles-lib.sh"
@@ -301,7 +301,7 @@ chmod +x "${SN}/bin/ip"
 mknic(){ mkdir -p "${SN}/sys/$1"; echo "$2" > "${SN}/sys/$1/operstate"; [ "${3:-phys}" = phys ] && mkdir -p "${SN}/sys/$1/device"; return 0; }
 upl(){ # $1 = pin, rest = VAR=val
     local pin="$1"; shift
-    env HUGMESH_SNORT_IFACE_STATE="${SN}/iface" HUGMESH_SNORT_PIDDIR="${SN}/pid" HUGMESH_SYSFS_NET="${SN}/sys" \
+    env SNORT_UPLINK_STATE="${SN}/iface" SNORT_UPLINK_PIDDIR="${SN}/pid" SNORT_UPLINK_SYSFS_NET="${SN}/sys" \
         PATH="${SN}/bin:${SYS}" "$@" sh "${UPLINK}" "${pin}" 2>/dev/null
 }
 mknic lo unknown virt; mknic enp0s2 up; mknic tailscale0 up virt; mknic eno1 down
@@ -329,9 +329,9 @@ rm -f "${SN}/pid/snort_enp0s2.pid"
 got="$(upl auto IP_V4_DEFAULT=eno1)"
 [ "${got}" = eno1 ] && ok "uplink: once stopped (no pidfile) the recorded name is not reused" || bad "uplink: stale record => '${got}' (want eno1)"
 # The shipped conf.d, sourced the way openrc-run sources it.
-confd_copy="${W}/confd"; sed "s|/usr/lib/hugmesh/snort-uplink|${UPLINK}|" "${SNORT_CONFD}" > "${confd_copy}"
+confd_copy="${W}/confd"; sed "s|/usr/libexec/snort-uplink|${UPLINK}|" "${SNORT_CONFD}" > "${confd_copy}"
 rm -f "${SN}/iface"
-got="$(env HUGMESH_SNORT_IFACE_STATE="${SN}/iface" HUGMESH_SNORT_PIDDIR="${SN}/pid" HUGMESH_SYSFS_NET="${SN}/sys" \
+got="$(env SNORT_UPLINK_STATE="${SN}/iface" SNORT_UPLINK_PIDDIR="${SN}/pid" SNORT_UPLINK_SYSFS_NET="${SN}/sys" \
        IP_V4_DEFAULT=enp0s2 PATH="${SN}/bin:${SYS}" sh -c '. "$1"; printf "%s|%s" "${SNORT_IFACE}" "${SNORT_CONF}"' _ "${confd_copy}")"
 [ "${got}" = "enp0s2|/etc/snort/snort.conf" ] && ok "conf.d/snort (sourced): SNORT_IFACE=enp0s2, SNORT_CONF=/etc/snort/snort.conf" \
     || bad "conf.d/snort sourced => '${got}'"
@@ -358,10 +358,19 @@ assert m and "net-libs/daq" in m.group(1) and "net-analyzer/snort" in m.group(1)
 PY
 # ...and the builder stages our conf.d + the helper inside the snort block.
 sblock="$(awk '/^if \$\{SNORT_IDS\}; then$/{g=1} g{print} g&&/^fi$/{exit}' "${X86_BUILD}")"
-grep -q 'etc/conf.d/snort"' <<<"${sblock}" && grep -q 'usr/lib/hugmesh/snort-uplink"' <<<"${sblock}" \
-    && grep -q 'chmod +x "${SYSROOT}/usr/lib/hugmesh/snort-uplink"' <<<"${sblock}" \
+grep -q 'etc/conf.d/snort"' <<<"${sblock}" && grep -q 'usr/libexec/snort-uplink"' <<<"${sblock}" \
+    && grep -q 'chmod +x "${SYSROOT}/usr/libexec/snort-uplink"' <<<"${sblock}" \
     && ok "x86 builder: the snort block stages conf.d/snort + an executable snort-uplink" \
     || bad "x86 builder: the snort block does not stage conf.d/snort and snort-uplink"
+# Snort is default-on for EVERY x86 role, including the --unaffiliated plain desktop,
+# whose contract is "no hugmesh-* tooling". What this change stages into that image
+# must therefore carry no brand-named path, state file, variable or wording.
+leak=""
+grep -qi 'hugmesh' "${UPLINK}"      && leak="${leak} snort-uplink"
+grep -qi 'hugmesh' "${SNORT_CONFD}" && leak="${leak} conf.d/snort"
+grep -i 'hugmesh' <<<"${sblock}" | grep -v '^[[:space:]]*#' | grep -v 'info "' >/dev/null && leak="${leak} builder-snort-block"
+[ -z "${leak}" ] && ok "snort staging is brand-neutral (no hugmesh path/state/wording) — safe on the --unaffiliated image" \
+    || bad "snort staging names hugmesh in:${leak} (it ships on the --unaffiliated image too)"
 
 # ═════════════════════════════════════════════════════════════════════════════
 echo "== D) every x86 cluster node bakes its ROLE as the hostname =="
