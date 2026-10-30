@@ -577,7 +577,6 @@ jobs:
               tests/scripts/test-pki-role-san-coverage.sh
               tests/scripts/test-provision-keys-escrow-guard.sh
               tests/scripts/test-python-targets-seed.sh
-              tests/scripts/test-release-beta.sh
               tests/scripts/test-run-ungated-lane.sh
               tests/scripts/test-url-embedded-credentials.sh
               tests/scripts/test-docs-command-coverage.sh
@@ -596,6 +595,12 @@ jobs:
           - part: ', tor-flip'
             suites: |
               tests/stack/test-tor-flip-wiring.sh
+          # 2026-10-30: the org release suite (scripts/release.sh, beta and stable, with
+          # 29 mutations) takes ~8 min serially; with it, the first leg (17 min on
+          # PR #839 with the beta-only suite) would near its 25-minute limit.
+          - part: ', release'
+            suites: |
+              tests/scripts/test-release-beta.sh
     container:
       image: python:3.12-slim
     steps:
