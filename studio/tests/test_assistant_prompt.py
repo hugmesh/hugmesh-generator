@@ -280,20 +280,59 @@ def test_the_rules_forbid_invented_commands_and_name_the_documented_reset():
 
 
 def test_the_warning_names_the_documented_ways_and_never_repeats_a_delete_command():
-    w = ap.DESTRUCTIVE_WARNING
-    assert w.startswith("WARNING:") and "Do not run them" in w
+    w = ap.danger_banner(WIPE_ANSWER)
+    assert w.startswith(ap.DESTRUCTIVE_WARNING) and ap.DESTRUCTIVE_WARNING.startswith("WARNING:")
+    assert "Do not run them" in w and "\n" not in w
     assert "Stop & clean Docker…" in w and "make stack-down" in w and "STUDIO-WALKTHROUGH.md" in w \
         and "LOCAL-STACK.md" in w and "make stack-halt" in w
+    assert w == " ".join([ap.DESTRUCTIVE_WARNING, ap.DANGER_SENTENCES["files"], ap.DANGER_SENTENCES["mesh"]])
     assert ad.destructive_commands(w) == [] and ad.destructive_commands(ap.DANGER_NOTE) == []
-    assert ap.danger_banner(WIPE_ANSWER) == w
     assert ap.danger_banner("Press Stop & clean Docker…, or run make stack-down.") == ""
+
+
+#: (answer, words its warning must carry, words it must NOT carry): the warning fits the
+#: command. Round 6 pointed an `ollama rm` answer at the Docker button.
+FITTED = [
+    ("Run:\n```bash\nollama rm qwen3:8b\n```", ("Ollama model", "downloading it again"),
+     ("Stop & clean", "stack-down", "WSL")),
+    ("Unregister it with `wsl --unregister <distro-name>`.", ("WSL distro", "your checkouts", "Nothing undoes it"),
+     ("Stop & clean", "Ollama")),
+    ("```powershell\nRemove-Item -Recurse -Force $env:USERPROFILE\\hugmesh-generator\n```",
+     ("files and folders", "check every path"), ("Stop & clean", "Ollama", "WSL")),
+    ("```bash\nsudo dd if=hugmesh.img of=/dev/sdb bs=4M\n```", ("whole disk", "Flash (DESTRUCTIVE)"),
+     ("Stop & clean",)),
+    ("```bash\nkind delete cluster --name hugmesh\n```", ("make kind-down", "make kind-halt"),
+     ("Stop & clean",)),
+    ("```sql\nDROP DATABASE casdoor;\n```", ("database",), ("Stop & clean",)),
+    ("```bash\ngit reset --hard origin/main\n```", ("not committed",), ("Stop & clean",)),
+    ("```bash\nflatpak uninstall --delete-data org.hugmesh.Studio\n```", ("app's settings",), ("Stop & clean",)),
+    ("```bash\ndocker system prune -a --volumes\n```", ("Stop & clean Docker…", "make stack-down"), ("Ollama",)),
+]
+
+
+@pytest.mark.parametrize("answer,want,never", FITTED)
+def test_the_warning_fits_the_command(answer, want, never):
+    w = ap.danger_banner(answer)
+    assert w.startswith(ap.DESTRUCTIVE_WARNING), answer
+    for words in want:
+        assert words in w, (answer, words)
+    for words in never:
+        assert words not in w, (answer, words)
+    assert ad.destructive_commands(w) == [], w          # never spells a command itself
+
+
+def test_no_kind_sentence_spells_a_command_and_every_kind_has_one():
+    assert set(ap.DANGER_SENTENCES) == set(ad.DESTRUCTIVE_KIND_ORDER)
+    for kind, sentence in ap.DANGER_SENTENCES.items():
+        assert ad.destructive_commands(sentence) == [], kind
+        assert ad.destructive_kinds(ap.danger_banner("", [kind])) == [], kind
 
 
 def test_after_answer_puts_the_warning_first_and_lists_every_invented_command():
     p = ap.Prompt("", [], [ad.Chunk("x", "docs/X.md", "X", "make stack-down # stop + drop volumes", 1.0, 5)], {})
     foot = ap.after_answer(WIPE_ANSWER, p)
     lines = foot.split("\n")
-    assert lines[0] == ap.DESTRUCTIVE_WARNING and lines[1].startswith("Sources: ")
+    assert lines[0] == ap.danger_banner(WIPE_ANSWER) and lines[1].startswith("Sources: ")
     bad = next(ln for ln in lines if ln.startswith("Commands not found in the docs I read: "))
     for cmd in ("docker-compose down", "rm -rf ~/.hugmesh-checkouts", "docker system prune -a"):
         assert cmd in bad, cmd
@@ -310,7 +349,12 @@ def test_the_gate_prints_the_warning_before_the_first_delete_line_whatever_the_c
         text = "".join(shown)
         assert gate.warned and text.count(ap.DESTRUCTIVE_WARNING) == 1
         assert text.index(ap.DESTRUCTIVE_WARNING) < text.index("rm -rf")
-        assert text.replace("\n" + ap.DESTRUCTIVE_WARNING + "\n\n", "") == WIPE_ANSWER
+        # the first delete block is rm -rf: the file sentence comes first, the Docker
+        # one is added above the prune block that follows
+        first = "\n" + ap.danger_banner("", ["files"]) + "\n\n"
+        also = "\nWARNING, also: " + ap.DANGER_SENTENCES["mesh"] + "\n\n"
+        assert text.index(first) < text.index("rm -rf") < text.index(also) < text.index("docker system prune")
+        assert text.replace(first, "").replace(also, "") == WIPE_ANSWER
     shown = []
     gate = ap.WarnGate(shown.append)
     gate.feed("No delete here.\n```bash\nmake stack-halt\n```\nand a tail without newline")
@@ -332,7 +376,7 @@ def test_a_grounded_stream_shows_the_warning_above_the_command(monkeypatch):
         fake.close()
     shown = "".join(pieces)
     assert shown.index(ap.DESTRUCTIVE_WARNING) < shown.index("rm -rf")
-    assert "\n\n" + ap.DESTRUCTIVE_WARNING + "\nSources: " in shown   # and first in the footer
+    assert "\n\n" + ap.danger_banner(WIPE_ANSWER) + "\nSources: " in shown   # and first in the footer
     assert out.startswith(WIPE_ANSWER)                                 # the answer itself, unchanged
 
 
@@ -379,10 +423,80 @@ def test_scrub_paths_rewrites_each_kind_of_machine_path():
     assert ap.scrub_paths("`/h/u/G`", **kw) == "`the checkouts folder`"
     assert ap.scrub_paths("/h/u/G/hugmesh-ui/src/a.ts", **kw) == "hugmesh-ui/src/a.ts"
     assert ap.scrub_paths("/h/u/.cache/x", **kw) == "~/.cache/x"
-    assert ap.scrub_paths("/home/z/a/b/c.log and /Users/z/q", **kw) == "…/b/c.log and …/z/q"
-    assert ap.scrub_paths("/etc/wireguard/wg0.conf, /var/lib/docker", **kw) == \
-        "/etc/wireguard/wg0.conf, /var/lib/docker"                     # documented paths stay
+    # never a user name, even when the path is short
+    assert ap.scrub_paths("/home/z/a/b/c.log and /Users/z/q", **kw) == "…/b/c.log and …/q"
     assert ap.scrub_paths("https://example.org/home/x/y", **kw) == "https://example.org/home/x/y"
+
+
+#: (machine text, what reaches the model): STRICT, every part the machine fills in.
+#: Round 6: a build output folder on another disk reached the model whole.
+STRICT = [
+    ("log /mnt/bigdisk/hugmesh-out/sessions/20261030-014500-ab12cd/build.log",
+     "log …/20261030-014500-ab12cd/build.log"),
+    ("flash to /media/someone/USB-STICK", "flash to …/USB-STICK"),
+    ("/media/someone", "…"),
+    ("/run/media/someone/SD/hugmesh.img", "…/SD/hugmesh.img"),
+    ("located at '/var/tmp/portage/dev-lang/rust-1.80.0/temp/build.log'.", "located at '…/temp/build.log'."),
+    ("C:\\Users\\someone\\hugmesh-out\\sessions\\s1\\build.log", "…\\s1\\build.log"),
+    ("C:\\Users\\someone", "…"),
+    ("D:/hugmesh-out/s1/build.log", "…/s1/build.log"),
+    ("\\\\nas\\share\\someone\\out\\build.log", "…\\out\\build.log"),
+    ("/mnt/c/Users/someone/Github/hugmesh-generator", "…/Github/hugmesh-generator"),
+    ("/tmp/c832-xyz/state/w1/build.log", "…/w1/build.log"),
+    ("/etc/wireguard/wg0.conf", "…/wireguard/wg0.conf"),
+    ("file:///home/someone/x/y.html", "file://…/x/y.html"),
+    ("see https://hugmesh.github.io/docs/a and docs/A.md", "see https://hugmesh.github.io/docs/a and docs/A.md"),
+]
+
+
+@pytest.mark.parametrize("text,want", STRICT)
+def test_strict_scrub_cuts_every_other_absolute_path_to_its_last_two_parts(text, want):
+    kw = dict(generator_dir="/h/u/G/gen", checkouts_root="/h/u/G", home="/h/u")
+    got = ap.scrub_paths(text, **kw)
+    assert got == want, (text, got)
+    assert "someone" not in got and "bigdisk" not in got and "portage" not in got
+
+
+def test_doc_snippets_keep_their_documented_paths():
+    """The snippets are the repo's own text (the same on every machine): only home-like
+    paths are cut there, so a documented command reaches the model whole (round 6 sent
+    `-v ollama:…/root/.ollama`)."""
+    kw = dict(generator_dir="/h/u/G/gen", checkouts_root="/h/u/G", home="/h/u", strict=False)
+    for text in ("/etc/wireguard/wg0.conf, /var/lib/docker", "docker run -d -v ollama:/root/.ollama ollama/ollama",
+                 "/mnt/c is the Windows drive", "/dev/sdX"):
+        assert ap.scrub_paths(text, **kw) == text, text
+    assert ap.scrub_paths("/home/someone/x/y", **kw) == "…/x/y"
+    assert ap.scrub_paths("/run/media/someone/USB/x.img", **kw) == "…/USB/x.img"
+    assert ap.scrub_paths("/h/u/G/gen/docs/A.md", **kw) == "docs/A.md"
+
+
+def test_a_build_output_folder_on_another_disk_never_reaches_the_model(tmp_path, monkeypatch):
+    """Round 6: cfg.output_dir on /mnt put `log /mnt/bigdisk/...` and the error tail's
+    /var/tmp/portage and /media/<user> paths into the system message unchanged."""
+    import json as _json
+    home = tmp_path / "home" / "someone"
+    state = tmp_path / "state"
+    (state / "sessions").mkdir(parents=True)
+    home.mkdir(parents=True)
+    work = "/mnt/bigdisk/hugmesh-out/sessions/20261030-014500-ab12cd"
+    (state / "sessions" / "s1.json").write_text(_json.dumps({
+        "id": "s1", "label": "mesh backend x86", "status": "failed", "images": ["backend.x86"],
+        "log_path": work + "/build.log", "workdir": work,
+        "error_tail": {"backend.x86": [
+            "emerge: failed to build dev-lang/rust",
+            " * The complete build log is located at '/var/tmp/portage/dev-lang/rust-1.80.0/temp/build.log'.",
+            "cp: cannot stat '/run/media/someone/STICK/hugmesh.img'",
+            "see /media/someone/USB/log.txt"]}}))
+    monkeypatch.setenv("HOME", str(home))
+    rows = ac.build_rows(str(state))
+    assert any(work in v for _, v in rows)                    # the facts DO carry it ...
+    w = ac.Where(slug="progress", title="Build progress", state=tuple(rows))
+    p = ap.build("Why did my build fail, and where is the full log?", w, [], env=dict(os.environ),
+                 generator_dir=GENERATOR_DIR, ctx_tokens=16384)
+    sent = p.system + "\n".join(m["content"] for m in p.history)
+    for leak in ("/mnt/", "bigdisk", "hugmesh-out", "/var/tmp", "portage/dev-lang", "/media/", "someone"):
+        assert leak not in sent, leak                         # ... the model never sees it
+    assert "…/20261030-014500-ab12cd/build.log" in sent and "…/temp/build.log" in sent
 
 
 def _eval_module():

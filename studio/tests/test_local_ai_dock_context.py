@@ -1166,6 +1166,43 @@ def test_a_delete_command_puts_the_warning_above_the_answer_in_bold(shell, qapp,
     assert ap.DESTRUCTIVE_WARNING not in text2 and dock.note.text() != ap.DANGER_NOTE
 
 
+@pytest.mark.parametrize("size", [(942, 552), (1280, 800)])
+def test_the_warning_of_a_second_answer_is_in_view_too(shell, qapp, tmp_path, size):
+    """Round 6 regression lens: the dock scrolled by blockNumber(), but the scroll bar of
+    a QPlainTextEdit counts VISUAL lines, so after an earlier answer with wrapped lines
+    the warning of the next one sat off screen (measured at 942x552 and 1280x800)."""
+    from hugmesh_studio.core import assistant_prompt as ap
+    wiz = open_at(shell, qapp, size)
+    dock = wiz.local_ai_dock
+    long_para = ("The local mesh runs every service of the mesh in Docker on this machine, and "
+                 "the Studio starts it, stops it and shows its log on this step. ") * 3
+    _stream(dock, qapp, "\n\n".join([long_para] * 8), pieces=97, question="what is the local mesh?")
+    text = _stream(dock, qapp, WIPE + "\n" + "More words about it.\n" * 20)
+    assert text.count(ap.DESTRUCTIVE_WARNING) == 1
+    warn_at = text.index(ap.DESTRUCTIVE_WARNING)
+    assert text.index("You: wipe the local mesh and start fresh") < warn_at < text.index("To wipe it:")
+    pump(qapp)
+    wiz.grab().save(str(tmp_path / f"warn-second-{size[0]}x{size[1]}.png"))
+    c = dock.answer.textCursor()
+    c.setPosition(warn_at)
+    r = dock.answer.cursorRect(c)
+    assert dock.answer.viewport().rect().contains(r.center()), (size, r, dock.answer.viewport().rect())
+
+
+def test_the_warning_is_rewritten_in_place_when_a_later_command_deletes_something_else(shell, qapp):
+    from hugmesh_studio.core import assistant_prompt as ap
+    wiz = open_at(shell, qapp)
+    dock = wiz.local_ai_dock
+    answer = ("First the model:\n```bash\nollama rm qwen3:8b\n```\nThen the distro:\n"
+              "```powershell\nwsl --unregister Ubuntu\n```\n")
+    text = _stream(dock, qapp, answer, pieces=5, question="remove the model and the distro")
+    full = ap.danger_banner(answer)
+    assert ap.DANGER_SENTENCES["wsl"] in full and ap.DANGER_SENTENCES["model"] in full
+    assert "Stop & clean" not in text
+    above = text[:text.index("First the model:")]
+    assert above.count(ap.DESTRUCTIVE_WARNING) == 1 and full in above   # the full one, once
+
+
 def test_a_delete_command_in_one_unstreamed_answer_still_gets_the_warning_above_it(mesh_window, qapp):
     from hugmesh_studio.core import assistant_prompt as ap
     wiz, dock, body = mesh_window
@@ -1181,6 +1218,6 @@ def test_a_delete_command_in_one_unstreamed_answer_still_gets_the_warning_above_
     assert text.index(ap.DESTRUCTIVE_WARNING) < text.index("docker volume prune")
     # the footer repeats it first, then Sources and the not-in-the-docs line
     tail = text[text.index("rm -rf ~/x`.") :]
-    assert ap.DESTRUCTIVE_WARNING + "\nSources: " in tail
+    assert ap.danger_banner("Run `docker volume prune` then `rm -rf ~/x`.") + "\nSources: " in tail
     assert "Commands not found in the docs I read: " in tail and "docker volume prune" in tail
     assert dock.note.text() == ap.DANGER_NOTE

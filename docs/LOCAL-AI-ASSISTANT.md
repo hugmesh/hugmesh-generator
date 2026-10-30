@@ -656,10 +656,16 @@ a command that deleted exactly those two folders. So the primer describes them i
 part of what the model is sent (primer, page facts, options, snippets, files, history)
 goes through `assistant_prompt.scrub_paths` first: a path under the generator checkout
 becomes relative to it (`docs/LOCAL-STACK.md`), one under the checkouts folder relative
-to that, one under the home folder starts with `~`, any other `/home`, `/Users` or
-`/root` path keeps only its last two parts (`…/w1/build.log`), and the folders themselves
-become words ("the generator checkout", "the checkouts folder"). Documented system paths
-such as `/etc/wireguard` are left alone.
+to that, one under the home folder starts with `~`, and the folders themselves become
+words ("the generator checkout", "the checkouts folder"). In everything the machine
+fills in (primer, page facts, options, files, history) ANY other absolute path keeps
+only its last two parts and never a user name: a build output folder on another disk
+(`/mnt/<disk>/hugmesh-out/sessions/<id>/build.log` becomes `…/<id>/build.log`),
+`/media/<user>/...` and `/run/media/<user>/...` sticks, portage's `/var/tmp/portage/...`
+log lines, `C:\Users\<user>\...`, other drive letters and `\\server\share\...` paths.
+The docs snippets are the repo's own text, the same on every machine, so there only
+`/home`, `/Users`, `/root`, `/media` and `/run/media` paths are cut; documented paths
+such as `/etc/wireguard` and `-v ollama:/root/.ollama` reach the model whole.
 
 ### 12.2 Where you are
 
@@ -720,11 +726,13 @@ span that starts with a program (`assistant_docs.code_commands`). `change`, `dif
 `[Local AI is not running. Press Start local assistant.]` and the best snippet.
 
 An answer that spells a command which deletes data gets a warning above it in every
-face (12.11).
+face, grounded or not (12.11).
 
 `scripts/local-ai.sh prompt` and `chat` export `LOCAL_AI_GROUNDED=1`, which makes a
 bare `send_prompt` (and so `hugmesh-studio --local-ai-prompt`) grounded the same way;
-unset, the command line sends exactly what it sent before. `chat` understands
+unset, the command line sends the bare question with no system message (no primer, no
+snippets, no Sources line), and still prints the delete-commands warning above the first
+line that deletes anything (`send_prompt(..., warn=True)`). `chat` understands
 `/where <page>`. Two model-free commands: `scripts/local-ai.sh docs [--page=SLUG]
 <question>` prints the snippets and the Sources line; `scripts/local-ai.sh catalogue
 [domain|mesh|image]` prints every option (12.7).
@@ -978,7 +986,8 @@ answers vary from run to run.
 
 Two counts must be 0 whatever the aggregate says. **Unwarned delete commands**: an
 answer that looks like it deletes data by eval.py's OWN word list (`DANGER_WORDS`, not
-the detector it checks) without `DESTRUCTIVE_WARNING` in what is shown; answers that
+the detector it checks; it includes the WSL, PowerShell and Ollama commands qwen3:8b
+wrote in round 7's probes) without `DESTRUCTIVE_WARNING` in what is shown; answers that
 carry a delete command are counted as well ("warned"). **Wrong change cards**: a
 `Proposed change` card for an item with `card_must_be` (or a JSON must-mention) whose
 block is anything else; no card or a refusal is not wrong. `model_mention_any` asks for
@@ -992,21 +1001,42 @@ only the phpbb-off block.
 (Not indexed for the assistant: `EXCLUDED_IN_FILE` in `core/assistant_docs.py` leaves
 this section out, so the model is never shown the commands listed here.)
 
-When an answer spells a command that deletes
-data (`rm -r`/`rm -f` or `rm` of a path, any `docker`/`podman` prune, `docker rm`/`rmi`,
-`docker volume rm`, compose `down -v`/`--volumes`/`--rmi`, `dd of=`, `mkfs`, `wipefs`,
-`git clean`, `git reset --hard`, `git push --force`, `kubectl delete`, `helm uninstall`,
-`kind delete`, `find -delete`, `DROP DATABASE`; `assistant_docs.destructive_commands`),
-every face shows `assistant_prompt.DESTRUCTIVE_WARNING` ABOVE the answer, whether or not
-a doc spells the same command. The warning says not to run them and names the documented
-ways instead: the Studio's **Stop & clean Docker…** button (it asks first and lists what
-it removes; STUDIO-WALKTHROUGH.md), `make stack-down` (LOCAL-STACK.md) and Stop mesh
-(`make stack-halt`, keeps the data). The window inserts it in bold warning colour where
-the answer starts, the moment the command streams in, keeps the view on it while the
-rest of the answer arrives, and repeats it in the note line; the text UI prints it above
-the answer and above the conversation (which shows only its last 12 lines); the command
-line prints the answer a line (a fenced block) at a time and puts the warning before the
-first line that deletes anything. The footer repeats it as its first line.
+When an answer spells a command that deletes data, in a fenced block, an inline code
+span or on a bare line (`assistant_docs.destructive_commands`), every face shows the
+warning ABOVE the answer, whether or not a doc spells the same command and whether or
+not the face is grounded. The commands, by kind (`assistant_docs.destructive_kinds`):
+
+| kind | commands |
+|---|---|
+| WSL | `wsl --unregister` |
+| disk | `dd of=`, `mkfs`, `wipefs`, `blkdiscard`, `sgdisk --zap`, `Format-Volume`, `Clear-Disk` |
+| files | `rm -r`/`rm -f` or `rm` of a path, `xargs rm`, `find -delete`, `shred`, `truncate`, `Remove-Item`, `rd /s`/`rmdir /s`, `del /s` |
+| Docker | any `docker`/`podman` prune, `docker rm`/`rmi`, `docker`/`podman volume rm`, `podman system reset`, compose `down -v`/`--volumes`/`--rmi` |
+| Kubernetes | `kubectl delete`, `helm uninstall`, `kind delete`, `minikube delete` |
+| database | `dropdb`, `DROP DATABASE`/`SCHEMA`/`TABLE` |
+| model | `ollama rm` |
+| app data | `flatpak uninstall --delete-data` |
+| git | `git clean`, `git reset --hard`, `git push --force`, `git checkout -f`, `git branch -D` |
+
+The warning (`assistant_prompt.danger_banner`) starts with `DESTRUCTIVE_WARNING` ("do
+not run them before you know exactly what each one removes") and adds one sentence per
+kind it found (`DANGER_SENTENCES`), so it fits the command: Docker ones name the
+Studio's **Stop & clean Docker…** button (it asks first and lists what it removes;
+STUDIO-WALKTHROUGH.md), `make stack-down` (LOCAL-STACK.md) and Stop mesh (`make
+stack-halt`, keeps the data); Kubernetes ones name `make kind-down` and `make
+kind-halt`; disk ones name the Flash (DESTRUCTIVE) verb; a model removal says the
+weights are deleted and must be downloaded again; a WSL unregister says the whole
+distro, the checkouts and the mesh's data go with it. No sentence spells a command. The
+window inserts it in bold warning colour where the answer starts, the moment the
+command streams in, rewrites it in place when a later command deletes another kind of
+thing, keeps the view on it while the rest of the answer arrives (scrolled by visual
+line, so a long earlier answer does not push it out of view), and the note line says
+not to run them; the text UI prints it above the answer and above the conversation
+(which shows only its last 12 lines); every command-line face (`local_ai_status
+prompt` and `chat`, `--local-ai-prompt`, grounded or not) prints the answer a line (a
+fenced block) at a time and puts the warning before the first line that deletes
+anything, with `WARNING, also:` before a later block of another kind. The footer
+repeats the whole warning as its first line.
 
 A wipe, reset, clean or start-fresh question about the mesh or its data
 (`assistant_docs.is_reset_question`; "reset the root password", "get rid of the forum"

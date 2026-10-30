@@ -271,7 +271,7 @@ def test_the_text_screen_shows_the_warning_above_the_answer_and_above_the_conver
     # the screen keeps only the last 12 transcript lines: the warning is ALSO above them
     out = s.lines(j)
     conv = out.index("conversation:")
-    assert any(ln == "!! " + ap.DESTRUCTIVE_WARNING for ln in out[:conv])
+    assert any(ln == "!! " + ap.danger_banner(WIPE) for ln in out[:conv])
     assert s.message == ap.DANGER_NOTE
     # and first in the footer under the answer
     foot = next(i for i, ln in enumerate(t) if ln.startswith("     ") and ap.DESTRUCTIVE_WARNING in ln)
@@ -299,7 +299,7 @@ def test_chat_loop_prints_the_warning_before_the_delete_command(monkeypatch):
         assert rc == 0
         text = out.getvalue()
         assert text.index(ap.DESTRUCTIVE_WARNING) < text.index("rm -rf")
-        assert ap.DESTRUCTIVE_WARNING + "\nSources: " in text           # and first in the footer
+        assert ap.danger_banner(WIPE) + "\nSources: " in text           # and first in the footer
         assert "Commands not found in the docs I read: " in text
         assert "That removes everything." in text                      # the gate flushed the rest
     finally:

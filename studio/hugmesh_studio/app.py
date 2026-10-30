@@ -509,7 +509,7 @@ def main(argv=None) -> int:
         if sys.stdout is None:
             return 2
         try:
-            lai.send_prompt(args.local_ai_prompt,
+            lai.send_prompt(args.local_ai_prompt, warn=True,   # the delete-commands warning
                             on_chunk=lambda c: (sys.stdout.write(c), sys.stdout.flush()))
         except lai.LocalAIError as exc:
             print(f"error: {exc}", file=sys.stderr)

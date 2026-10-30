@@ -658,7 +658,7 @@ def send_prompt(text: str, model: str | None = None, *, env: dict | None = None,
                 on_chunk: Callable[[str], None] | None = None,
                 history: list | None = None, system: str | None = None,
                 should_stop: Callable[[], bool] | None = None,
-                options: dict | None = None) -> str:
+                options: dict | None = None, warn: bool = False) -> str:
     """Ask the loopback Ollama and return the whole answer.
 
     The answer streams: ``on_chunk`` gets each piece as it arrives, so a screen can show
@@ -666,6 +666,11 @@ def send_prompt(text: str, model: str | None = None, *, env: dict | None = None,
     ``total_timeout`` the longest the whole answer may take. ``should_stop`` is polled
     between pieces; when it turns true the partial answer is returned. Thinking mode is
     off: the person asked a question, not for the model's notes.
+
+    A grounded call, and any call with ``warn=True`` (every command-line face, grounded
+    or not), streams through :class:`assistant_prompt.WarnGate`: a line (a fenced block)
+    at a time, with the delete-commands warning printed ABOVE the first line that
+    deletes data. The window and the text UI place their own warning and pass neither.
 
     :raises LocalAIError: with a sentence that says what to do (down, no such model,
         refused host, timeout, a ``LOCAL_AI_CTX`` that is not a number). :raises NotLoopback: for a non-loopback ``OLLAMA_HOST``.
@@ -700,9 +705,11 @@ def send_prompt(text: str, model: str | None = None, *, env: dict | None = None,
                                  {"Content-Type": "application/json"})
     deadline = time.monotonic() + total_timeout
     gate = None
-    if grounded is not None and on_chunk is not None:
-        # a grounded stream is printed a line (a fenced block) at a time, so the
-        # delete-commands warning lands ABOVE the command (assistant_prompt.WarnGate)
+    if (grounded is not None or warn) and on_chunk is not None:
+        # a command-line stream is printed a line (a fenced block) at a time, so the
+        # delete-commands warning lands ABOVE the command (assistant_prompt.WarnGate),
+        # grounded or not: the bare --local-ai-prompt once printed seven prune commands
+        # with no warning (PR #832, round 6)
         from . import assistant_prompt as ap
         gate = ap.WarnGate(on_chunk)
         on_chunk = gate.feed
@@ -902,7 +909,7 @@ def chat_loop(inp, out, env: dict | None = None, model: str | None = None) -> in
                 if footer:
                     out.write("\n" + footer)
             else:
-                answer = send_prompt(line, model, env=env, history=history,
+                answer = send_prompt(line, model, env=env, history=history, warn=True,
                                      on_chunk=lambda c: (out.write(c), out.flush()))
         except LocalAIError as exc:
             print(f"\n{exc}", file=out)
@@ -936,7 +943,8 @@ def main(argv: list | None = None, *, out=None, err=None, inp=None) -> int:
             print("usage: prompt TEXT", file=err)
             return 2
         try:
-            send_prompt(text, model, on_chunk=lambda c: (out.write(c), out.flush()))
+            send_prompt(text, model, warn=True,
+                        on_chunk=lambda c: (out.write(c), out.flush()))
         except LocalAIError as exc:
             print(str(exc), file=err)
             return 1

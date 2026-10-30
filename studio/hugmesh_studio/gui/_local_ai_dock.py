@@ -653,6 +653,7 @@ class LocalAIDock(QtWidgets.QFrame):
         self._answer_at = 0                     # where the current answer starts in the area
         self._streamed = ""                     # the current answer so far (for the warning)
         self._warned = False                    # the delete-commands warning is showing
+        self._warn_span = None
         self._message = ""                      # a transient line (waiting, started, failed)
         self._message_warn = False
         self._message_token = 0
@@ -1628,6 +1629,7 @@ class LocalAIDock(QtWidgets.QFrame):
         self.prompt.clear()
         self._busy = True
         self._warned = False                    # a new answer scrolls again
+        self._warn_span = None
         self._stop = threading.Event()
         stop, alive = self._stop, self._alive
         self._answered = False
@@ -1722,6 +1724,7 @@ class LocalAIDock(QtWidgets.QFrame):
         self._clears += 1
         self._history.clear()
         self._warned = False
+        self._warn_span = None
         self.answer.clear()
         self._last_prompt.clear()
         self._undo.clear()
@@ -1755,29 +1758,49 @@ class LocalAIDock(QtWidgets.QFrame):
         self.answer.verticalScrollBar().setValue(self.answer.verticalScrollBar().maximum())
 
     def _warn_if_destructive(self, answer_text: str) -> bool:
-        """Put :data:`aprompt.DESTRUCTIVE_WARNING` ABOVE the answer, in bold warning
-        colour, the moment the answer spells a command that deletes data (once per
-        answer, while it is still streaming). True when the warning is showing."""
-        if getattr(self, "_warned", False):
-            return True
+        """Put the delete-commands warning (:func:`aprompt.danger_banner`) ABOVE the
+        answer, in bold warning colour, the moment the answer spells a command that
+        deletes data (once per answer, while it is still streaming; it is rewritten in
+        place when a later command deletes another kind of thing). True when the warning
+        is showing."""
         banner = aprompt.danger_banner(answer_text)
+        placed = getattr(self, "_warn_span", None)
+        if getattr(self, "_warned", False):
+            if banner and placed is not None and banner != placed[1]:
+                start, old = placed
+                cur = self.answer.textCursor()
+                cur.setPosition(start)
+                cur.setPosition(start + len(old), QtGui.QTextCursor.MoveMode.KeepAnchor)
+                cur.insertText(banner, self._warn_format())
+                self._warn_span = (start, banner)
+            return True
         if not banner:
             return False
         self._warned = True
         at = min(getattr(self, "_answer_at", 0), self._end_position())
         cur = self.answer.textCursor()
         cur.setPosition(at)
-        fmt = QtGui.QTextCharFormat()
-        fmt.setFontWeight(QtGui.QFont.Weight.Bold)
-        fmt.setForeground(QtGui.QBrush(QtGui.QColor(styles.WARN)))
-        cur.insertText("\n" + banner, fmt)
+        cur.insertText("\n", QtGui.QTextCharFormat())
+        start = cur.position()
+        cur.insertText(banner, self._warn_format())
         cur.insertText("\n\n", QtGui.QTextCharFormat())
-        # scroll the question and the warning to the top of the view and keep them there
+        self._warn_span = (start, banner)
+        # scroll the question and the warning to the top of the view and keep them there.
+        # The scroll bar of a QPlainTextEdit counts VISUAL lines, not blocks: every
+        # wrapped line above would park the view too high (round 6 measured the warning
+        # off screen for every answer but the first).
         doc = self.answer.document()
-        first = doc.findBlock(max(0, at - 1)).blockNumber()
+        first = doc.findBlock(max(0, at - 1)).firstLineNumber()
         self.answer.verticalScrollBar().setValue(first)
         self._say(aprompt.DANGER_NOTE, 0, warn=True)
         return True
+
+    @staticmethod
+    def _warn_format():
+        fmt = QtGui.QTextCharFormat()
+        fmt.setFontWeight(QtGui.QFont.Weight.Bold)
+        fmt.setForeground(QtGui.QBrush(QtGui.QColor(styles.WARN)))
+        return fmt
 
     def _finish_prompt(self) -> None:
         self._busy = False

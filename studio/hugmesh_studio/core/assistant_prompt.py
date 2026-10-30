@@ -40,7 +40,7 @@ __all__ = [
     "Prompt", "RULES", "CHANGE_FORMAT", "DIFF_FORMAT", "CAPS", "ANSWER_RESERVE", "build",
     "answer", "after_answer", "trim_history", "tokens", "GROUNDED_ENV", "primer_for",
     "FACTS_DROPPED", "NOT_RUNNING", "fallback_line", "RULES_BLOCK_CAP", "DESTRUCTIVE_WARNING",
-    "danger_banner", "WarnGate", "scrub_paths", "DANGER_NOTE",
+    "danger_banner", "WarnGate", "scrub_paths", "DANGER_NOTE", "DANGER_SENTENCES",
 ]
 
 GROUNDED_ENV = "LOCAL_AI_GROUNDED"
@@ -88,26 +88,58 @@ DIFF_FORMAT = (
     "120 changed lines. Never suggest git."
 )
 
-#: Shown above an answer (and first in its footer) that spells a command which deletes
-#: data. It never repeats the command itself; it names the documented ways instead
-#: (docs/STUDIO-WALKTHROUGH.md § Local Docker mesh, docs/LOCAL-STACK.md).
-DESTRUCTIVE_WARNING = (
-    "WARNING: this answer contains commands that delete data (files, containers, images "
-    "or volumes, some beyond this mesh). Do not run them. The documented ways: the "
-    "Studio's Stop & clean Docker… button on the Local Docker mesh step (it asks first and "
-    "lists what it removes; STUDIO-WALKTHROUGH.md), or make stack-down in the generator "
-    "checkout (stops the local stack and drops its volumes; LOCAL-STACK.md). Stop mesh "
-    "(make stack-halt) stops it and keeps the data."
-)
-#: The one-line form for a status line.
-DANGER_NOTE = ("Do not run the delete commands in this answer: use Stop & clean Docker… or "
-               "make stack-down instead.")
+#: The first words of the warning shown above an answer (and first in its footer) that
+#: spells a command which deletes data. :func:`danger_banner` adds one sentence per KIND
+#: of delete command (assistant_docs.destructive_kinds), so the warning fits the
+#: command: the Docker button for a docker prune, what is lost for an Ollama model or a
+#: WSL distro. No sentence ever spells a command itself (a small model copies what it
+#: is shown, and the footer must never list the warning's own words).
+DESTRUCTIVE_WARNING = ("WARNING: this answer contains commands that delete data. Do not "
+                       "run them before you know exactly what each one removes.")
+#: One sentence per kind, in assistant_docs.DESTRUCTIVE_KIND_ORDER.
+DANGER_SENTENCES = {
+    "wsl": ("Unregistering a WSL distro deletes that whole Linux system and every file in "
+            "it: your checkouts, the Studio's settings and the mesh's data. Nothing undoes it."),
+    "disk": ("The disk ones erase a whole disk or partition, and a wrong device name erases "
+             "the wrong one. To write an image to a USB stick or SD card use the Studio's "
+             "Flash (DESTRUCTIVE) verb, which checks the device and asks you to type its "
+             "serial first (STUDIO-WALKTHROUGH.md)."),
+    "files": ("The file ones delete files and folders for good, with no recycle bin; check "
+              "every path first."),
+    "mesh": ("The Docker ones remove containers, images or volumes, some beyond this mesh. "
+             "The documented ways: the Studio's Stop & clean Docker… button on the Local "
+             "Docker mesh step (it asks first and lists what it removes; "
+             "STUDIO-WALKTHROUGH.md), or make stack-down in the generator checkout (stops the "
+             "local stack and drops its volumes; LOCAL-STACK.md). Stop mesh (make stack-halt) "
+             "stops it and keeps the data."),
+    "cluster": ("The Kubernetes ones delete a cluster or what runs in it, data included. For "
+                "the local kind lane the documented control is make kind-down (the next "
+                "bring-up comes back empty); make kind-halt stops it and keeps everything "
+                "(STUDIO-WALKTHROUGH.md)."),
+    "database": "The database ones delete a database and every row in it.",
+    "model": ("Removing an Ollama model deletes its downloaded weights from this machine (5 "
+              "to 25 GB each, LOCAL-AI-ASSISTANT.md); getting it back means downloading it "
+              "again."),
+    "app": "Uninstalling an app with its data deletes that app's settings and files too.",
+    "git": ("The git ones throw away work that is not committed, or rewrite what is on the "
+            "server; commit or stash first."),
+}
+#: The one-line form for a status line: generic, the warning above says which.
+DANGER_NOTE = ("Do not run the delete commands in this answer before you know what each "
+               "one removes: read the warning above it.")
 
 
-def danger_banner(answer_text: str) -> str:
-    """:data:`DESTRUCTIVE_WARNING` when ``answer_text`` spells a command that deletes data
-    (assistant_docs.destructive_commands), else ``""``. Whether or not a doc spells it."""
-    return DESTRUCTIVE_WARNING if adocs.destructive_commands(answer_text or "") else ""
+def danger_banner(answer_text: str, kinds: "Optional[list]" = None) -> str:
+    """The warning for ``answer_text`` when it spells a command that deletes data
+    (assistant_docs.destructive_commands), else ``""``: :data:`DESTRUCTIVE_WARNING` and
+    one sentence per kind of delete command it holds. One line. Whether or not a doc
+    spells the command. ``kinds`` (assistant_docs.destructive_kinds) overrides."""
+    if kinds is None:
+        kinds = adocs.destructive_kinds(answer_text or "")
+    if not kinds:
+        return ""
+    return " ".join([DESTRUCTIVE_WARNING] + [DANGER_SENTENCES[k] for k in kinds
+                                              if k in DANGER_SENTENCES])
 
 
 class WarnGate:
@@ -121,6 +153,7 @@ class WarnGate:
     def __init__(self, emit: Callable[[str], None]):
         self.emit = emit
         self.warned = False
+        self.kinds: list = []
         self._buf = ""
         self._held = ""
         self._fence = False
@@ -128,9 +161,16 @@ class WarnGate:
     def _release(self, text: str) -> None:
         if not text:
             return
-        if not self.warned and danger_banner(text):
-            self.warned = True
-            self.emit("\n" + DESTRUCTIVE_WARNING + "\n\n")
+        kinds = adocs.destructive_kinds(text)
+        new = [k for k in kinds if k not in self.kinds]
+        if new:
+            self.kinds += new
+            if not self.warned:
+                self.warned = True
+                self.emit("\n" + danger_banner(text, new) + "\n\n")
+            else:                       # a later block deletes something else: say so too
+                self.emit("\nWARNING, also: " + " ".join(DANGER_SENTENCES[k] for k in new)
+                          + "\n\n")
         self.emit(text)
 
     def feed(self, chunk: str) -> None:
@@ -154,57 +194,108 @@ class WarnGate:
 
 # Machine paths never reach the model: it once answered "wipe everything" with
 # rm -rf of the checkouts folder and the generator checkout the primer had named
-# (PR #832, round 6). Each absolute path under the generator checkout becomes relative
-# to it, one under the checkouts folder relative to that, one under the home
-# folder starts with ~, and any other /home, /Users or /root path keeps only its last
-# two parts. The folders themselves become words.
-_ABS_PATH_RE = re.compile(r"(?<![\w.~/\-])(/[^\s`'\"<>()\[\]{},;]+)")
-_HOME_LIKE_RE = re.compile(r"^/(?:home|Users|root|var/home)(?:/|$)")
+# (PR #832, round 6), and once repeated a build log path on another disk back to the
+# person (round 7). Each absolute path under the generator checkout becomes relative
+# to it, one under the checkouts folder relative to that, one under the home folder
+# starts with ~, and the folders themselves become words. STRICT (every part the
+# machine fills in: primer, page facts, options, files, history): ANY other absolute
+# path — /mnt/<disk>/..., /media/<user>/..., /run/media/<user>/..., /var/tmp/portage/...,
+# C:\Users\<user>\..., \\server\share\... — keeps only its last two parts, never a
+# user name. NOT strict (the docs snippets: the repo's own text, the same on every
+# machine): only /home, /Users, /var/home, /root, /media and /run/media paths are cut,
+# so documented paths such as /etc/wireguard and `-v ollama:/root/.ollama` reach the
+# model whole.
+_PATH_CHARS = r"[^\s`'\"<>()\[\]{},;|]"
+_ABS_PATH_RE = re.compile(
+    r"(?P<posix>(?<![\w.~/\\\-])/" + _PATH_CHARS + r"+)"
+    r"|(?P<drive>(?<![\w\\/])[A-Za-z]:[\\/]" + _PATH_CHARS + r"*)"
+    r"|(?P<unc>(?<![\w\\])\\\\[^\s`'\"<>()\[\]{},;|\\]+\\" + _PATH_CHARS + r"*)")
+_HOME_LIKE_RE = re.compile(r"^/(?:home|Users|root|var/home|media|run/media)(?:/|$)")
 
 
-def _tail(path: str, n: int = 2) -> str:
-    parts = [p for p in path.split("/") if p]
-    return "…/" + "/".join(parts[-n:]) if parts else "…"
+def _user_slot(parts: "list[str]") -> int:
+    """The index of the user-name component of a path split into ``parts`` (/home/<u>,
+    /Users/<u>, /var/home/<u>, /media/<u>, /run/media/<u>, /mnt/c/Users/<u>,
+    C:/Users/<u>), else -1."""
+    low = [p.lower() for p in parts]
+    if low[:1] in (["home"], ["users"], ["media"]) and len(parts) > 1:
+        return 1
+    if low[:2] in (["var", "home"], ["run", "media"]) and len(parts) > 2:
+        return 2
+    if low[:1] == ["mnt"] and len(parts) > 3 and len(parts[1]) == 1 and low[2] == "users":
+        return 3
+    if parts and re.fullmatch(r"[A-Za-z]:", parts[0]) and len(parts) > 2 and low[1] == "users":
+        return 2
+    return -1
+
+
+def _tail(path: str, n: int = 2, users: "frozenset" = frozenset()) -> str:
+    """``…/`` and the last ``n`` parts of ``path``, never its user-name part."""
+    sep = "\\" if "\\" in path and "/" not in path.lstrip("/") else "/"
+    parts = [p for p in re.split(r"[\\/]+", path) if p]
+    slot = _user_slot(parts)
+    if slot >= 0:
+        parts = parts[slot + 1:]
+    parts = [p for p in parts if p not in users]
+    return "…" + sep + sep.join(parts[-n:]) if parts else "…"
+
+
+def _norm(path: str) -> str:
+    p = path.replace("\\", "/").rstrip("/")
+    return p.lower() if re.match(r"^[A-Za-z]:/", p) else p
 
 
 def scrub_paths(text: str, *, generator_dir: str = "", checkouts_root: str = "",
-                home: str = "") -> str:
-    """``text`` with this machine's absolute paths made relative or descriptive."""
+                home: str = "", strict: bool = True) -> str:
+    """``text`` with this machine's absolute paths made relative or descriptive (see the
+    comment above: ``strict`` for what the machine fills in, not for doc snippets)."""
     if not text:
         return text
     roots = []
+    users = set()
     for base, word, kind in ((generator_dir, "the generator checkout", "gen"),
                              (checkouts_root, "the checkouts folder", "root"),
                              (home, "the home folder", "home")):
         if not base:
             continue
-        for b in {os.path.abspath(base), os.path.realpath(base)}:
-            b = b.rstrip("/")
-            if b and b != "/":
+        for b in {os.path.abspath(base), os.path.realpath(base), base}:
+            b = _norm(b)
+            if b and b != "/" and not re.fullmatch(r"[a-z]:", b):
                 roots.append((b, word, kind))
+        if kind == "home":
+            users.add(os.path.basename(os.path.normpath(base.replace("\\", "/"))))
+    for var in ("USER", "LOGNAME", "USERNAME"):
+        if os.environ.get(var):
+            users.add(os.environ[var])
+    users = frozenset(u for u in users if u and len(u) > 1)
     roots.sort(key=lambda r: -len(r[0]))
 
     def one(m) -> str:
-        tok = m.group(1)
+        tok = m.group(0)
         trail = ""
         while tok and tok[-1] in ".:!?":
             trail = tok[-1] + trail
             tok = tok[:-1]
         if not tok:
             return m.group(0)
+        if m.group("posix") is not None and m.start() > 0 and text[m.start() - 1] == ":":
+            if tok.startswith("///"):            # file:///home/<user>/...
+                return "//" + one_path(tok[2:]) + trail
+            if tok.startswith("//") or not strict:
+                return m.group(0)    # a URL (https://...), or a doc's name:/path volume
+        return one_path(tok) + trail
+
+    def one_path(tok: str) -> str:
+        n = _norm(tok)
         for b, word, kind in roots:
-            if tok == b:
-                return word + trail
-            if tok.startswith(b + "/"):
-                rest = tok[len(b) + 1:]
-                if kind == "gen":
-                    return rest + trail
-                if kind == "home":
-                    return "~/" + rest + trail
-                return rest + trail               # relative to the checkouts folder
-        if _HOME_LIKE_RE.match(tok):
-            return _tail(tok) + trail
-        return m.group(0)
+            if n == b:
+                return word
+            if n.startswith(b + "/"):
+                rest = tok.replace("\\", "/")[len(b) + 1:]   # n, with its case
+                return "~/" + rest if kind == "home" else rest
+        if strict or _HOME_LIKE_RE.match(tok):
+            return _tail(tok, users=users)
+        return tok
 
     return _ABS_PATH_RE.sub(one, text)
 
@@ -339,11 +430,12 @@ def build(question: str, where: Optional[Where], history: "list[dict] | None" = 
     home = env.get("HOME") or os.path.expanduser("~")
     root = checkouts_root_for(gen, env)
 
-    def scrub(text: str) -> str:
-        return scrub_paths(text, generator_dir=gen, checkouts_root=root, home=home)
+    def scrub(text: str, strict: bool = True) -> str:
+        return scrub_paths(text, generator_dir=gen, checkouts_root=root, home=home,
+                           strict=strict)
 
     parts = {"primer": scrub(primer), "rules": rules_block, "where": scrub(where_text),
-             "options": scrub(options_text), "snippets": scrub(snippets_text),
+             "options": scrub(options_text), "snippets": scrub(snippets_text, strict=False),
              "files": scrub(files_block)}
     dropped: list = []
     fixed = tokens(question) + 20

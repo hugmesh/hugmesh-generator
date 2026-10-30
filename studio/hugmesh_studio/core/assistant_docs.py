@@ -661,7 +661,7 @@ _BOUND = frozenset(("Run", "The", "Then", "Use", "and", "or", "to", "then", "whe
 
 #: The first words that make a code span or a fenced line a command a person could paste.
 COMMAND_WORDS = frozenset("""
-rm rmdir sudo su doas docker docker-compose podman podman-compose kubectl helm kind k3s
+rm rmdir sudo su doas docker docker-compose podman podman-compose kubectl helm kind k3s minikube
 git make systemctl rc-service rc-update service dd wipefs shred fdisk parted sgdisk
 blkdiscard mount umount losetup chmod chown chattr mv cp ln curl wget pip pip3 pipx
 python python3 npm npx yarn pnpm apt apt-get dnf yum zypper pacman emerge brew winget
@@ -669,6 +669,7 @@ choco snap flatpak ollama tailscale headscale vault kill pkill killall reboot sh
 poweroff iptables nft ufw firewall-cmd ssh scp rsync tar find truncate cd export source
 bash sh zsh journalctl openssl gh cargo go java mvn gradle tor qemu-img virsh crontab
 passwd useradd usermod userdel mkdir touch tee xargs eval exec setfacl ip
+wsl wsl.exe rd del erase dropdb createdb psql mysql powershell pwsh cmd diskpart
 """.split())
 _SHELL_TAGS = frozenset(("", "sh", "bash", "shell", "console", "zsh", "fish", "terminal",
                          "shell-session", "shellsession", "cmd", "bat", "powershell", "ps1",
@@ -689,11 +690,16 @@ def _first_word(seg: str) -> str:
     return words[0] if words else ""
 
 
+#: a PowerShell cmdlet (Remove-Item, Format-Volume, Stop-Service): Verb-Noun
+_CMDLET_RE = re.compile(r"^[A-Z][a-z]+-[A-Z][A-Za-z]+$")
+
+
 def _is_program(word: str) -> bool:
     w = word.strip("\"'")
     if not w:
         return False
-    return (w in COMMAND_WORDS or w.startswith("mkfs") or w.startswith("./")
+    return (w in COMMAND_WORDS or w.lower() in COMMAND_WORDS or w.startswith("mkfs")
+            or w.startswith("./") or bool(_CMDLET_RE.match(w))
             or w.endswith(".sh") or w.startswith("scripts/") or w.startswith("~/")
             or (w.startswith("/") and "/bin/" in w))
 
@@ -797,44 +803,78 @@ def commands_in(text: str) -> "set[str]":
 # a warning whether or not a doc spells the same command: an answer that tells a person
 # to delete things gets the warning, always.
 _PRE = r"(?<![\w./\-])"
-_DESTRUCTIVE_RES = tuple(re.compile(x) for x in (
-    _PRE + r"find\s+[^\n`]*\s-(?:delete\b|exec\s+rm\b)",
-    _PRE + r"(?:docker|podman)(?:\s+(?:system|volume|image|container|network|builder|buildx))?\s+prune\b",
-    _PRE + r"(?:docker|podman)\s+(?:volume|image|container|network)\s+rm\b",
-    _PRE + r"(?:docker|podman)\s+(?:rm|rmi)\b",
-    _PRE + r"(?:docker\s+compose|docker-compose|podman-compose|podman\s+compose)\b[^\n`]*?\bdown\b[^\n`]*?(?<!\S)(?:-v|--volumes|--rmi)\b",
-    _PRE + r"(?:docker\s+compose|docker-compose|podman-compose|podman\s+compose)\b[^\n`]*?(?<!\S)(?:-v|--volumes)\b[^\n`]*?\bdown\b",
-    _PRE + r"rm\s+(?:-[A-Za-z]*[rRf][A-Za-z]*|--recursive|--force|--no-preserve-root)\b",
-    _PRE + r"rm\s+(?:-[A-Za-z]+\s+)*[~/$.*]",
-    # rm in command position (a line, a code span, after && ; | or sudo) on a path
-    r"(?:^[ \t]*(?:[$#>%][ \t]+)?|[`;&|(][ \t]*|\bsudo[ \t]+)rm[ \t]+(?:-|[~/.$*]|[^\s`]*[/.])",
-    _PRE + r"dd\s+[^\n`]*\bof=",
-    _PRE + r"(?:mkfs(?:\.[a-z0-9]+)?|wipefs|shred|blkdiscard)\b(?=\s+\S)",
-    _PRE + r"sgdisk\s+[^\n`]*(?:-Z|--zap)",
-    _PRE + r"git\s+clean\s+(?:-[a-z]*[fdx][a-z]*)",
-    _PRE + r"git\s+reset\s+(?:[^\n`]*\s)?--hard\b",
-    _PRE + r"git\s+push\s+(?:[^\n`]*\s)?(?:-f|--force|--force-with-lease|--mirror)\b",
-    _PRE + r"git\s+checkout\s+(?:-f\b|--\s+\.)",
-    _PRE + r"git\s+branch\s+-D\b",
-    _PRE + r"kubectl\s+(?:[^\n`]*\s)?delete\b",
-    _PRE + r"helm\s+(?:uninstall|delete)\b",
-    _PRE + r"kind\s+delete\b",
-    _PRE + r"truncate\s+-s\s*0\b",
-)) + (re.compile(r"\bdrop\s+(?:database|schema|table)\b", re.I),)
+# a program in command position: a line (after a prompt), a code span, after && ; | (
+# or sudo; prose ("shred the notes", "truncate the log") is not a command
+_CMDPOS = r"(?:^[ \t]*(?:[$#>%][ \t]+)?|[`;&|(][ \t]*|\bsudo[ \t]+)"
+# ... and its argument is not the next word of a sentence ("mkfs is the tool ...")
+_NOT_PROSE = (r"(?!(?:is|are|was|were|the|a|an|and|or|to|can|will|would|tool|command|"
+              r"program|utility|deletes?|removes?|erases?|formats?|cmdlet)\b)")
+#: (kind, pattern): each kind gets its own sentence in the warning
+#: (assistant_prompt.danger_banner), so an answer that removes an Ollama model is not
+#: pointed at the Docker button.
+_DESTRUCTIVE_KINDS = (
+    ("mesh", _PRE + r"(?:docker|podman)(?:\s+(?:system|volume|image|container|network|builder|buildx|pod))?\s+prune\b"),
+    ("mesh", _PRE + r"(?:docker|podman)\s+(?:volume|image|container|network|pod)\s+rm\b"),
+    ("mesh", _PRE + r"(?:docker|podman)\s+(?:rm|rmi)\b"),
+    ("mesh", _PRE + r"podman\s+system\s+reset\b"),
+    ("mesh", _PRE + r"(?:docker\s+compose|docker-compose|podman-compose|podman\s+compose)\b[^\n`]*?\bdown\b[^\n`]*?(?<!\S)(?:-v|--volumes|--rmi)\b"),
+    ("mesh", _PRE + r"(?:docker\s+compose|docker-compose|podman-compose|podman\s+compose)\b[^\n`]*?(?<!\S)(?:-v|--volumes)\b[^\n`]*?\bdown\b"),
+    ("cluster", _PRE + r"kubectl\s+(?:[^\n`]*\s)?delete\b"),
+    ("cluster", _PRE + r"helm\s+(?:uninstall|delete)\b"),
+    ("cluster", _PRE + r"kind\s+delete\b"),
+    ("cluster", _PRE + r"minikube\s+delete\b"),
+    ("model", _PRE + r"ollama\s+(?:rm|remove)(?![\w-])"),
+    ("wsl", r"(?i:" + _PRE + r"wsl(?:\.exe)?\s+(?:[^\n`]*\s)?--unregister\b)"),
+    ("app", _PRE + r"flatpak\s+(?:uninstall|remove)\b[^\n`]*--delete-data\b"),
+    ("database", _CMDPOS + r"dropdb\s+" + _NOT_PROSE + r"\S"),
+    ("database", _PRE + r"dropdb\s+-\S"),
+    ("database", r"(?i:\bdrop\s+(?:database|schema|table)\b)"),
+    ("disk", _PRE + r"dd\s+[^\n`]*\bof="),
+    ("disk", _PRE + r"(?:mkfs(?:\.[a-z0-9]+)?|wipefs|blkdiscard)\s+[^\n`]*?(?:/dev/|<\w|\$\w)"),
+    ("disk", _CMDPOS + r"(?:mkfs(?:\.[a-z0-9]+)?|wipefs|blkdiscard)\s+" + _NOT_PROSE + r"\S"),
+    ("disk", _PRE + r"sgdisk\s+[^\n`]*(?:-Z|--zap)"),
+    ("disk", r"(?i:" + _PRE + r"(?:Format-Volume|Clear-Disk|Initialize-Disk)\b)"),
+    ("files", _PRE + r"find\s+[^\n`]*\s-(?:delete\b|exec\s+rm\b)"),
+    ("files", _PRE + r"xargs\s+(?:-\S+\s+)*(?:sudo\s+)?rm\b"),
+    ("files", _PRE + r"rm\s+(?:-[A-Za-z]*[rRf][A-Za-z]*|--recursive|--force|--no-preserve-root)\b"),
+    ("files", _PRE + r"rm\s+(?:-[A-Za-z]+\s+)*[~/$.*]"),
+    # rm in command position on a path
+    ("files", _CMDPOS + r"rm[ \t]+(?:-|[~/.$*]|[^\s`]*[/.])"),
+    # PowerShell and cmd.exe: Remove-Item (and its aliases) of anything, rd/rmdir /s,
+    # del/erase /s
+    ("files", r"(?i:" + _PRE + r"Remove-Item\s+(?:-|[$\"'~./\\]|[a-z]:))"),
+    ("files", r"(?i:" + _CMDPOS + r"Remove-Item\s+" + _NOT_PROSE + r"\S)"),
+    ("files", r"(?i:" + _PRE + r"(?:ri|rm|del|erase|rmdir|rd)\s+[^\n`]*?(?<!\S)-(?:Recurse|Force)\b)"),
+    ("files", r"(?i:" + _PRE + r"(?:rmdir|rd)\s+(?:/[a-z]\s+)*/s\b)"),
+    ("files", r"(?i:" + _PRE + r"(?:del|erase)\s+(?:/[a-z]\s+)*/[sq]\b)"),
+    ("files", _PRE + r"shred\s+(?:-\S|[/~$<]|\S*/)"),
+    ("files", _CMDPOS + r"shred\s+" + _NOT_PROSE + r"\S"),
+    ("files", _PRE + r"truncate\s+(?:-s|--size)(?:\s*|=)\S"),
+    ("files", _CMDPOS + r"truncate\s+" + _NOT_PROSE + r"\S"),
+    ("git", _PRE + r"git\s+clean\s+(?:-[a-z]*[fdx][a-z]*)"),
+    ("git", _PRE + r"git\s+reset\s+(?:[^\n`]*\s)?--hard\b"),
+    ("git", _PRE + r"git\s+push\s+(?:[^\n`]*\s)?(?:-f|--force|--force-with-lease|--mirror)\b"),
+    ("git", _PRE + r"git\s+checkout\s+(?:-f\b|--\s+\.)"),
+    ("git", _PRE + r"git\s+branch\s+-D\b"),
+)
+_DESTRUCTIVE_RES = tuple((kind, re.compile(x, re.M)) for kind, x in _DESTRUCTIVE_KINDS)
+#: The order the warning names them in.
+DESTRUCTIVE_KIND_ORDER = ("wsl", "disk", "files", "mesh", "cluster", "database", "model",
+                          "app", "git")
 
 
-def destructive_commands(text: str) -> "list[str]":
-    """The lines (or code spans) of ``text`` that run a command which deletes data:
-    rm -r/-f or rm of a path, find -delete, every docker/podman prune, docker rm/rmi,
-    compose down -v, dd of=, mkfs/wipefs/shred, git clean/reset --hard/push --force,
-    kubectl delete, helm uninstall, kind delete, DROP DATABASE. Each is returned once,
-    trimmed to its line, in order of appearance."""
+def _destructive_hits(text: str) -> "list[tuple[str, str]]":
+    """``(kind, fragment)`` for each line or code span of ``text`` that deletes data."""
     out: list = []
     for line in (text or "").split("\n"):
-        for rx in _DESTRUCTIVE_RES:
+        done: set = set()               # one fragment per kind per line, every kind
+        for kind, rx in _DESTRUCTIVE_RES:
+            if kind in done:
+                continue
             m = rx.search(line)
             if not m:
                 continue
+            done.add(kind)
             # the command from where it starts to the end of its code span or line
             start = m.start()
             pre = re.search(r"(?:sudo|doas)\s+$", line[:start])
@@ -843,10 +883,32 @@ def destructive_commands(text: str) -> "list[str]":
             frag = " ".join((tail[:cut] if cut > 0 else tail).split()).rstrip(".,;:")
             if len(frag) > 90:
                 frag = frag[:89] + "…"
-            if frag and frag not in out:
-                out.append(frag)
-            break
+            if frag and all(frag != f for _, f in out):
+                out.append((kind, frag))
+            elif frag and kind not in (k for k, _ in out):
+                out.append((kind, ""))      # the same text, a second kind: counted, not listed
     return out
+
+
+def destructive_commands(text: str) -> "list[str]":
+    """The lines (or code spans) of ``text`` that run a command which deletes data,
+    fenced, in a code span or on a bare line: rm -r/-f or rm of a path, xargs rm,
+    find -delete, shred, truncate, PowerShell Remove-Item, rd/rmdir /s, del /s, every
+    docker/podman prune, docker rm/rmi, docker/podman volume rm, podman system reset,
+    compose down -v, kubectl delete, helm uninstall, kind delete, minikube delete,
+    ollama rm, wsl --unregister, flatpak uninstall --delete-data, dropdb, DROP DATABASE,
+    dd of=, mkfs, wipefs, Format-Volume, git clean/reset --hard/push --force. Each is
+    returned once, trimmed to its line, in order of appearance."""
+    return [f for _, f in _destructive_hits(text) if f]
+
+
+def destructive_kinds(text: str) -> "list[str]":
+    """What the delete commands in ``text`` delete, in :data:`DESTRUCTIVE_KIND_ORDER`:
+    ``wsl`` (a whole WSL distro), ``disk``, ``files``, ``mesh`` (Docker/Podman
+    containers, images, volumes), ``cluster`` (Kubernetes), ``database``, ``model``
+    (an Ollama model), ``app`` (an app's data), ``git`` (uncommitted work)."""
+    seen = {k for k, _ in _destructive_hits(text)}
+    return [k for k in DESTRUCTIVE_KIND_ORDER if k in seen]
 
 
 def unverified_commands(answer: str, chunks: Iterable[Chunk], primer: str = "") -> "list[str]":

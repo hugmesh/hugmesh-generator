@@ -312,6 +312,110 @@ def test_inline_code_that_names_a_tool_or_a_value_is_not_a_command():
                                                                                  "./scripts/x.sh"]
 
 
+# ── round 7 (PR #832): every command that deletes data, and what kind it deletes ─────
+#: (command, kind). The first three are what qwen3:8b really wrote in round 6 with no
+#: warning (wsl --unregister in an inline code span, 1 of 3; ollama rm, 3 of 3;
+#: Remove-Item -Recurse -Force, 3 of 3, warned only by a docker line beside it).
+DELETES = [
+    ("wsl --unregister <distro-name>", "wsl"),
+    ("ollama rm qwen3:8b", "model"),
+    ("Remove-Item -Recurse -Force $env:USERPROFILE\\hugmesh-generator", "files"),
+    ("wsl.exe --unregister Ubuntu-24.04", "wsl"),
+    ("Remove-Item -Force C:\\Users\\someone\\.hugmesh\\studio.json", "files"),
+    ("Remove-Item \"$HOME\\.ollama\" -Recurse", "files"),
+    ("rmdir /s /q C:\\hugmesh", "files"),
+    ("rd /s /q %USERPROFILE%\\.hugmesh", "files"),
+    ("del /s /q C:\\hugmesh\\*", "files"),
+    ("ollama remove qwen3:8b", "model"),
+    ("dropdb -U postgres casdoor", "database"),
+    ("dropdb casdoor", "database"),
+    ("DROP DATABASE casdoor;", "database"),
+    ("psql -c 'DROP DATABASE casdoor'", "database"),
+    ("podman system reset", "mesh"),
+    ("podman system reset --force", "mesh"),
+    ("podman system prune -a --volumes", "mesh"),
+    ("podman volume rm hugmesh_data", "mesh"),
+    ("docker volume rm hugmesh_casdoor-db", "mesh"),
+    ("flatpak uninstall --delete-data org.hugmesh.Studio", "app"),
+    ("minikube delete --all", "cluster"),
+    ("kind delete cluster --name hugmesh", "cluster"),
+    ("kubectl delete pvc --all -n hugmesh", "cluster"),
+    ("helm uninstall hugmesh -n hugmesh", "cluster"),
+    ("docker ps -aq | xargs docker rm -f", "mesh"),
+    ("ls *.img | xargs rm", "files"),
+    ("find ~/.hugmesh -type f -delete", "files"),
+    ("shred -u ~/.ssh/id_ed25519", "files"),
+    ("shred secrets.txt", "files"),
+    ("truncate -s 0 build.log", "files"),
+    ("truncate --size=0 build.log", "files"),
+    ("mkfs.ext4 /dev/sdb1", "disk"),
+    ("mkfs -t vfat /dev/sdc1", "disk"),
+    ("dd if=hugmesh.img of=/dev/sdb bs=4M", "disk"),
+    ("Format-Volume -DriveLetter E -FileSystem exFAT", "disk"),
+]
+#: Ordinary text (and safe commands) with the same words: no warning.
+NOT_DELETES = [
+    "wsl --list --verbose", "wsl --install -d Ubuntu", "WSL is the Windows Subsystem for Linux.",
+    "ollama list", "ollama pull qwen3:8b", "ollama ps", "the ollama rm-style cleanup is not needed",
+    "Remove the item from the list.", "the Remove-Item cmdlet deletes things",
+    "rd is a road", "del is short for delete", "Use rmdir only on an empty folder.",
+    "Drop a database note in the chat.", "dropdb is a PostgreSQL tool", "podman system info",
+    "flatpak uninstall org.hugmesh.Studio", "minikube start", "kind create cluster",
+    "kubectl get pods -A", "helm list -A", "xargs echo", "find . -name '*.log'",
+    "shred the old notes before recycling them", "you can truncate the log in the viewer",
+    "mkfs is the tool that formats a disk", "The Flash (DESTRUCTIVE) verb asks for the serial.",
+    "Press Stop & clean Docker… on the Local Docker mesh step, or run make stack-down.",
+    "make kind-down deletes the kind cluster; make kind-halt keeps it.",
+]
+
+
+def _round7_shapes(cmd):
+    """A fenced bash block, an indented fence in a list item, an untagged fence, a
+    PowerShell fence, a console prompt, an inline code span mid-sentence, a bare line."""
+    return [
+        f"Do this:\n```bash\n{cmd}\n```\n",
+        f"1. **Remove it:**\n   ```bash\n   {cmd}\n   ```\n",
+        f"```\n{cmd}\n```",
+        f"```powershell\n{cmd}\n```",
+        f"```console\n$ {cmd}\n```",
+        f"To start over, run `{cmd}` and then reinstall.",
+        f"To start over:\n{cmd}\nthen reinstall.",
+    ]
+
+
+@pytest.mark.parametrize("cmd,kind", DELETES)
+def test_every_delete_command_is_found_with_its_kind_wherever_it_appears(cmd, kind):
+    for text in _round7_shapes(cmd):
+        got = ad.destructive_commands(text)
+        assert got, (cmd, text)
+        assert kind in ad.destructive_kinds(text), (cmd, text, ad.destructive_kinds(text))
+        # and the footer lists it as a command (the round-6 WSL span returned nothing)
+        assert ad.unverified_commands(text, []), (cmd, text)
+
+
+@pytest.mark.parametrize("text", NOT_DELETES)
+def test_ordinary_text_with_the_same_words_is_not_a_delete_command(text):
+    assert ad.destructive_commands(text) == [], text
+    assert ad.destructive_kinds(text) == [], text
+
+
+def test_an_inline_code_span_that_starts_with_a_program_is_a_command():
+    """Round 6 claimed it, and code_commands() returned [] for the real answer."""
+    real = ("If you want to start over completely, you can unregister the distro with "
+            "`wsl --unregister <distro-name>` and then install it again from the Microsoft Store.")
+    assert ad.code_commands(real) == ["wsl --unregister <distro-name>"]
+    assert ad.destructive_kinds(real) == ["wsl"]
+    assert ad.code_commands("Then `Remove-Item -Recurse $HOME\\x` and `ollama rm qwen3:8b`.") == [
+        "Remove-Item -Recurse $HOME\\x", "ollama rm qwen3:8b"]
+    # a cmdlet runs on its own; a bare tool name in a span names it and runs nothing
+    assert ad.code_commands("`Get-ChildItem` lists it; `wsl` alone names the tool.") == ["Get-ChildItem"]
+
+
+def test_one_line_with_two_kinds_reports_both():
+    line = "Run `wsl --unregister Ubuntu` and `ollama rm qwen3:8b`, then `docker system prune -a`."
+    assert ad.destructive_kinds(line) == ["wsl", "mesh", "model"]
+
+
 def test_make_in_english_is_not_a_make_target():
     text = "Make sure you have a backup, make it quick, and make the changes; then run make stack-down."
     assert ad.commands_in(text) == {"make stack-down"}

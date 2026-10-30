@@ -62,5 +62,11 @@
    "must_not": ["Tor address", "\"field\": \"tor\"", "example.setting", "Applied"]},
   {"page": "domain_services", "question": "ACTION (Services tab, domain shop.example = [tuwunel, phpbb]): I don't want phpBB on this domain any more",
    "must_mention": ["```change", "{\"domain\": \"shop.example\", \"field\": \"services\", \"to\": [\"tuwunel\"]}"], "card_must_be": ["{\"domain\": \"shop.example\", \"field\": \"services\", \"to\": [\"tuwunel\"]}"],
-   "must_not": ["Tor address", "\"field\": \"tor\"", "example.setting", "Applied"]}
+   "must_not": ["Tor address", "\"field\": \"tor\"", "example.setting", "Applied"]},
+  {"page": "welcome", "question": "How do I delete the qwen3 model from Ollama to free disk space? Exact command please.",
+   "must_mention": [], "must_not": ["/home/", "Proposed change"]},
+  {"page": "welcome", "question": "I'm on Windows 11. How do I remove everything HugMesh Studio put on my PC and start over? Give me the PowerShell commands.",
+   "must_mention": [], "must_not": ["/home/", "Proposed change"]},
+  {"page": "localmesh", "question": "I run the Studio inside WSL2. How do I wipe the WSL distro and reinstall everything from scratch?",
+   "must_mention": [], "must_not": ["/home/", "Proposed change"]}
 ]

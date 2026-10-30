@@ -190,3 +190,54 @@ def test_the_shell_script_lists_the_new_verbs_and_grounds_prompt_and_chat():
     assert "LOCAL_AI_GROUNDED=1 la_py chat" in sh and 'LOCAL_AI_GROUNDED=1 la_py prompt "$@"' in sh
     assert 'docs)          shift; la_py docs "$@" ;;' in sh and 'catalogue)     shift; la_py catalogue "$@" ;;' in sh
     assert "scripts/local-ai.sh docs" in sh and "scripts/local-ai.sh catalogue" in sh
+
+
+# ── round 7 (PR #832): every command-line face warns, grounded or not ────────────────
+#: What the bare --local-ai-prompt printed in round 6 for "Docker is eating my drive",
+#: with no warning (it was not grounded, and only the grounded path had the gate).
+PRUNE = ("To free space:\n```bash\ndocker container prune\ndocker volume prune\n"
+         "docker image prune -a\n```\nThen check `docker system df`.\n")
+
+
+def _ungrounded(env, fake):
+    env.setenv("OLLAMA_HOST", fake.host)
+    env.delenv("LOCAL_AI_GROUNDED", raising=False)
+    fake.chunks = [PRUNE[i:i + 6] for i in range(0, len(PRUNE), 6)]
+
+
+def _warned_above(out):
+    from hugmesh_studio.core import assistant_prompt as ap
+    assert out.count(ap.DESTRUCTIVE_WARNING) == 1, out
+    assert out.index(ap.DESTRUCTIVE_WARNING) < out.index("docker container prune"), out
+    assert "Stop & clean Docker…" in out and "Ollama model" not in out
+    assert out.replace("\n" + ap.danger_banner(PRUNE) + "\n\n", "").rstrip("\n") == PRUNE.rstrip("\n")
+
+
+def test_the_bare_prompt_flag_prints_the_warning_above_a_delete_command(fake, env, capsys):
+    _ungrounded(env, fake)
+    rc, out, err = cli(["--local-ai-prompt", "How do I free up disk space? Docker is eating my drive."], capsys)
+    assert rc == 0 and err == ""
+    _warned_above(out)
+    body = [r for r in fake.requests if r[1] == "/api/chat"][-1][2]
+    assert [m["role"] for m in body["messages"]] == ["user"]      # still bare: no system message
+
+
+def test_local_ai_status_prompt_and_chat_warn_when_not_grounded(fake, env, capsys):
+    import io
+    from hugmesh_studio.core import local_ai_status as lai
+    _ungrounded(env, fake)
+    out = io.StringIO()
+    assert lai.main(["prompt", "free up disk space"], out=out, err=io.StringIO()) == 0
+    _warned_above(out.getvalue())
+    out = io.StringIO()
+    assert lai.chat_loop(io.StringIO("free up disk space\n/quit\n"), out, dict(os.environ)) == 0
+    text = out.getvalue()
+    _warned_above(text.split("> ", 1)[1].rsplit("> ", 1)[0])   # what one answer printed
+
+
+def test_a_harmless_bare_answer_streams_unchanged(fake, env, capsys):
+    env.setenv("OLLAMA_HOST", fake.host)
+    env.delenv("LOCAL_AI_GROUNDED", raising=False)
+    fake.chunks = ["Press Stop & clean ", "Docker… on the Local", " Docker mesh step."]
+    rc, out, err = cli(["--local-ai-prompt", "how do I start over?"], capsys)
+    assert rc == 0 and out == "Press Stop & clean Docker… on the Local Docker mesh step.\n"
