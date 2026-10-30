@@ -712,13 +712,16 @@ for a code edit) goes through `redact`, which blanks:
   `x-api-key: ...`, WireGuard's `PrivateKey = ...`, a kubeconfig's `client-key-data:`
   (a plural "tokens", such as a context size, is left alone);
 - command-line flags such as `--password X`, `--admin-password=X`, `--client-secret X`,
-  and `mysql ... -pX`;
+  and `mysql ... -pX` (a bare `-pX` is not touched: `mkdir -p`, `-pthread` and
+  `docker run -p 8080:80` print the same shape);
+- SQL a database's init log echoes: `PASSWORD '...'` and `IDENTIFIED BY '...'`;
 - the password in ANY `scheme://user:password@host` URL, and secret query parameters
   (`?access_token=...`, `&password=...`);
 - `Authorization: Bearer|Basic ...`, `Cookie:` and `Set-Cookie:` values, Vault's
   `Unseal Key N:` and `Initial Root Token:` lines;
-- private-key blocks, and a bare base64 key-body line (a key printed line by line, or a
-  tail that cut its BEGIN line off): a build's error tail is redacted as ONE text per
+- private-key blocks, a bare base64 key-body line, and every base64-only line that runs
+  up to an END line however short (a key printed line by line, or a tail that cut its
+  BEGIN line off): a build's error tail is redacted as ONE text per
   image before it is cut, so a block that spans lines is caught whole;
 - Tailscale and headscale keys, GitHub, AWS, Vault, Slack and `sk-` tokens, JWTs, the
   local-only folder's path, the e2e `user / secret` shape and the retired `e2e-pass`

@@ -180,6 +180,11 @@ _REDACT_RULES: tuple[tuple[re.Pattern, Any], ...] = (
     (re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY(?: BLOCK)?-----.*?-----END [A-Z ]*PRIVATE KEY(?: BLOCK)?-----",
                 re.S), lambda m: "[redacted private key]" + "\n" * m.group(0).count("\n")),
     (re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY(?: BLOCK)?-----[^\n]*"), "[redacted private key]"),
+    # a tail that starts inside a key: every base64-only line (any length, so the short
+    # last body line too) that runs up to an END line
+    (re.compile(r"(?m)^[ \t]*[A-Za-z0-9+/]{4,}={0,2}[ \t]*$"
+                r"(?=\n(?:[ \t]*[A-Za-z0-9+/]{4,}={0,2}[ \t]*\n)*-----END [A-Z ]*PRIVATE KEY)"),
+     "[redacted key material]"),
     (re.compile(r"(?m)^(\[[^\]\n]*\][ \t]*)?[ \t]*(?=[^\n]*[A-Z])(?=[^\n]*[a-z])(?=[^\n]*[0-9])"
                 r"[A-Za-z0-9+/]{40,}={0,2}[ \t]*$"), r"\1[redacted key material]"),
     # headers
@@ -197,6 +202,9 @@ _REDACT_RULES: tuple[tuple[re.Pattern, Any], ...] = (
      r"\1\2[redacted]"),
     (re.compile(r"(?i)\b(mysql|mariadb|mysqldump|mysqladmin)\b([^\n]*?[ \t])-p(?![ \t])" + _NOT_YET + r"\S+"),
      r"\1\2-p[redacted]"),
+    # SQL a database init log echoes: CREATE ROLE x PASSWORD 'v', IDENTIFIED BY 'v'
+    (re.compile(r"(?i)\b(password|identified[ \t]+by)([ \t]+)(['\"])" + _NOT_YET + r"[^'\"\n]*\3"),
+     r"\1\2\3[redacted]\3"),
     # key = value, key: value, "key": "value", export KEY=value
     (re.compile(r"(?i)([\"']?)(" + _SECRET_KEY + r")\1([ \t]*[=:][ \t]*)([\"']?)" + _NOT_YET +
                 r"(?=[^\s\"'])[^\s\"',;&}]+"), r"\1\2\1\3\4[redacted]"),

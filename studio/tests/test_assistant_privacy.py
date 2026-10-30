@@ -214,6 +214,8 @@ def test_docs_section_12_names_every_proposal_key_and_every_deny_entry():
 _PEM_BEGIN = "-----BEGIN " + "PRIVATE KEY-----"
 _PEM_END = "-----END " + "PRIVATE KEY-----"
 _B64 = "MIIEvQIBADANBgkqhkiG9w0BAQEFAASC" + "BKcwggSjAgEAAoIBAQC7Zq"
+_SHORT = "q9ZxTm4w" + "Lk2PvR8s=="
+_SHORT2 = "Hn3cYw" + "Qe7uJb=="
 
 LEAK_SHAPES = [
     "DB_PASSWORD=CANARY", "POSTGRES_PASSWORD=CANARY", "CASDOOR_DB_PASSWORD=CANARY",
@@ -234,6 +236,8 @@ LEAK_SHAPES = [
     "Cookie: hug.session=CANARY", "hskey-auth-CANARY", "hvs.CANARY",
     "gh" + "s_CANARY" + "A" * 20, "eyJhbGciOi.eyJzdWIiOi.CANARYsig",
     "login as admin with e2e-pass CANARY",
+    "statement: CREATE ROLE casdoor WITH LOGIN PASSWORD 'CANARY'",
+    "ALTER USER app WITH PASSWORD \"CANARY\";", "CREATE USER 'a'@'%' IDENTIFIED BY 'CANARY';",
 ]
 
 
@@ -261,13 +265,17 @@ def test_a_private_key_printed_line_by_line_never_reaches_the_build_rows(tmp_pat
     import json
     state = tmp_path / "state"
     (state / "sessions").mkdir(parents=True)
-    tails = {"node": ["ok", _PEM_BEGIN, _B64, _B64[::-1], _PEM_END, "done"],
-             "desk": [_B64, _PEM_END]}
+    # _SHORT is a key's last body line: under the 40-character body-line rule, so only
+    # redacting the tail as one text (BEGIN..END together) or the run-up-to-END rule
+    # blanks it
+    tails = {"node": ["ok", _PEM_BEGIN, _B64, _B64[::-1], _SHORT, _PEM_END, "done"],
+             "desk": [_B64, _SHORT2, _PEM_END]}
     (state / "sessions" / "s.json").write_text(json.dumps(
         {"id": "s", "label": "b", "status": "failed", "images": ["node", "desk"], "error_tail": tails}))
     monkeypatch.setenv("HUGMESH_STUDIO_STATE_DIR", str(state))
     text = dict(ac.build_rows(str(state)))["last error lines (redacted)"]
     assert _B64[:20] not in text and _B64[::-1][:20] not in text, text
+    assert _SHORT not in text and _SHORT2 not in text, text
     assert "[redacted private key]" in text and "done" in text
     (state / "logs").mkdir()
     (state / "logs" / "run.log").write_text("start\n" + _PEM_BEGIN + "\n" + _B64 + "\n")
