@@ -490,9 +490,22 @@ RESET_EXPANSION = ("stop clean docker destructive volumes images removes confirm
                    "stack-down stack-halt drop volumes keeps identity rooms accounts")
 
 
+#: ... about the mesh or its data as a whole: "reset the root password", "get rid of
+#: the forum" and "clean up old build sessions" are not, and pinning the destructive
+#: button's paragraph first would point them at it.
+RESET_SCOPE = re.compile(
+    r"\b(?:mesh|docker|stack|containers?|volumes?|images?|everything|all (?:of )?(?:its |the |my )?"
+    r"data|whole|setup|from scratch|fresh|start(?:ing)? (?:over|again)|completely|entirely)\b", re.I)
+RESET_NOT = re.compile(
+    r"\b(?:pass(?:word|phrase)s?|keys?|tokens?|secrets?|colou?rs?|themes?|services?|forums?|"
+    r"chat|sign-?in|logo|brand(?:ing)?|look|tips?|settings? for (?:this|the) domain)\b", re.I)
+
+
 def is_reset_question(question: str) -> bool:
-    """True for a wipe/reset/clean/start-fresh question (see :data:`RESET_WORDS`)."""
-    return bool(RESET_WORDS.search(question or ""))
+    """True for a wipe/reset/clean/start-fresh question about the mesh or its data
+    (:data:`RESET_WORDS` and :data:`RESET_SCOPE`, never :data:`RESET_NOT`)."""
+    q = question or ""
+    return bool(RESET_WORDS.search(q) and RESET_SCOPE.search(q) and not RESET_NOT.search(q))
 
 
 def scored(idx: Index, question: str, where=None) -> "list[tuple[float, Chunk]]":

@@ -1008,7 +1008,9 @@ the answer and above the conversation (which shows only its last 12 lines); the 
 line prints the answer a line (a fenced block) at a time and puts the warning before the
 first line that deletes anything. The footer repeats it as its first line.
 
-A wipe, reset, clean or start-fresh question (`assistant_docs.is_reset_question`) is
+A wipe, reset, clean or start-fresh question about the mesh or its data
+(`assistant_docs.is_reset_question`; "reset the root password", "get rid of the forum"
+and "clean up old build sessions" are not) is
 searched with the Stop & clean paragraph's own words added, and always gets that
 paragraph (STUDIO-WALKTHROUGH.md, Local Docker mesh traps) as its first snippet and
 LOCAL-STACK.md's `make stack-down` lines among the others (`RESET_ANCHORS`; a doc edit

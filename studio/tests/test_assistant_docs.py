@@ -354,6 +354,18 @@ def test_a_wipe_or_reset_question_always_retrieves_the_documented_ways(question,
 @pytest.mark.parametrize("question", [
     "What services can I switch on for this domain?", "Where is the build log?",
     "How do I stop the DevOps lane without deleting the cluster?", "Which model are you running on?",
+    "How do I reset the root password for this domain?", "How do I get rid of the forum on this domain?",
+    "How do I clean up old build sessions?", "How do I reset the colours to the defaults?",
+    "Can I wipe the sign-in settings for this domain and start fresh?",
 ])
-def test_an_ordinary_question_is_not_a_reset_question(question):
+def test_an_ordinary_question_is_not_a_reset_question(question, tmp_path, monkeypatch):
+    """Round 6 review: a password, a service or a build session is not the mesh; the
+    destructive button's paragraph must not be pinned first for them."""
     assert not ad.is_reset_question(question)
+    monkeypatch.setenv("HUGMESH_STUDIO_STATE_DIR", str(tmp_path / "state"))
+    idx = ad.load_index(GENERATOR_DIR)
+
+    class W:
+        slug, title = "domain_services", ad.TITLE_ALIASES.get("domain_services", "domain_services")
+    got = ad.retrieve(question, W, index=idx)
+    assert not got or ad.RESET_ANCHORS[0] not in " ".join(got[0].text.split())
