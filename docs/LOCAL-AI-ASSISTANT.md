@@ -765,8 +765,13 @@ for a code edit) goes through `redact`, which blanks:
 - a YAML block scalar under a secret key (`secret: |` or `>-`): every indented line
   of it;
 - command-line flags such as `--password X`, `--admin-password=X`, `--client-secret X`,
-  `--luks-pass X` (a quoted value whole, as above), and `mysql ... -pX` (a bare `-pX` is not touched: `mkdir -p`, `-pthread` and
-  `docker run -p 8080:80` print the same shape);
+  `--luks-pass X` (a quoted value whole, as above), and a `-pX` glued to its value on
+  a line that names `mysql`, `mariadb`, `mysqldump` or `mysqladmin`: because the rules
+  run until nothing changes, EVERY glued `-pX` after that word on the line is blanked,
+  not only the client's own (`mysql -u root -pX && mkdir -pv /x && gcc -pthread a.c`
+  becomes `-p[redacted]` three times). A line without one of those words keeps its
+  `-pthread` and `mkdir -pv`, and a `-p` with a space after it (`mysql -p`,
+  `docker run -p 8080:80`) is never touched;
 - SQL a database's init log echoes: `PASSWORD '...'` and `IDENTIFIED BY '...'` (SQL's
   doubled quote `''` and the other quote kind stay inside the value);
 - the password in ANY `scheme://user:password@host` URL, and secret query parameters
@@ -820,7 +825,9 @@ Known gaps (not blanked, or only in part):
   is read as a bare word;
 - false positives, which fail safe: a bare `pass` or `unseal` as a key now blanks
   ordinary lines such as `PASS: tests/x.sh`, `Tests pass: 12`, `unseal: done` and the
-  word after `--pass-through`.
+  word after `--pass-through`; and on a line that names `mysql`, `mariadb`,
+  `mysqldump` or `mysqladmin`, every later glued `-pX` (`-pthread`, `mkdir -pv`) is
+  blanked as if it were the client's password.
 
 ### 12.7 The option catalogue (from the code)
 
