@@ -122,7 +122,7 @@ IN_CLUSTER = re.compile(
 WORKLOADS = ("Deployment", "StatefulSet", "DaemonSet")
 JWKS_PATH = "/.well-known/jwks"
 # The IdP that signs every systems-realm token. A first-party pod's key URL must name
-# THIS Service (rule 3b); the games realm has its own Casdoor, see EXEMPT.
+# THIS Service (rule 3b); the games BFF also trusts its own realm's Casdoor, see EXEMPT.
 SYSTEMS_CASDOOR = ("casdoor", "hugmesh-pki")
 
 # ── EXEMPTIONS ───────────────────────────────────────────────────────────────
@@ -141,6 +141,18 @@ EXEMPT = {
                   "CASDOOR_ISSUER_URI (https://id.hugmesh.games) is the iss string only.",
         "jwks_from": "CASDOOR_ENDPOINT",
         "expect": ("casdoor-games", "hugmesh-games"),
+        # The two-realm BFF: tokens from BOTH issuers are accepted, each decoded with
+        # its own in-cluster JWKS. Every entry of the map is judged under rules (2)-(4)
+        # against the IdP that signs that issuer, so the netpol path to the SYSTEMS
+        # Casdoor (networkpolicy/casdoor-jwks-ingress.yaml) is load-bearing here too.
+        "issuer_map": {
+            "env": "APP_TENANCY_JWKS_URIS",
+            "issuers_env": "APP_TENANCY_ISSUERS",
+            "expect": {
+                "https://id.hugmesh.games": ("casdoor-games", "hugmesh-games"),
+                "https://id.hugmesh.net": SYSTEMS_CASDOOR,
+            },
+        },
     },
 }
 
@@ -401,6 +413,28 @@ for path, doc, ns in workloads:
             print("     exempt: %s" % key)
             print("             %s" % ex["reason"])
             judge(label + " via " + ex["jwks_from"], str(base).rstrip("/") + JWKS_PATH, ns, pod_labels, ex["expect"])
+            im = ex.get("issuer_map")
+            if im:
+                twice_m = [nm for nm in (im["env"], im["issuers_env"]) if len(env_all(c, nm)) > 1]
+                mp = env_entry(c, im["env"])
+                tr = env_entry(c, im["issuers_env"])
+                if twice_m:
+                    bad("%s: %s listed more than once — Kubernetes runs the LAST entry and this gate would read the first; keep one" % (label, ", ".join(twice_m)))
+                elif mp is None or mp.get("value") is None or tr is None or tr.get("value") is None:
+                    bad("%s: the two-realm BFF needs literal %s and %s; without them only one realm's tokens validate" % (label, im["env"], im["issuers_env"]))
+                else:
+                    uris = dict(p.split("=", 1) for p in str(mp["value"]).split(",") if "=" in p)
+                    issuers = [p.split("=", 1)[0] for p in str(tr["value"]).split(",") if "=" in p]
+                    domains = {p.split("=", 1)[1] for p in str(tr["value"]).split(",") if "=" in p}
+                    if len(domains) != 1:
+                        bad("%s: %s maps the issuers to %d domains %s — uploads get stamped per realm and each realm's admins lose the other's games; map every issuer to ONE domain" % (label, im["issuers_env"], len(domains), sorted(domains)))
+                    if set(issuers) != set(uris):
+                        bad("%s: %s names %s but %s names %s — a trusted issuer without a JWKS entry has no in-cluster key path" % (label, im["issuers_env"], sorted(issuers), im["env"], sorted(uris)))
+                    if set(uris) != set(im["expect"]):
+                        bad("%s: %s covers %s, the gate expects exactly %s" % (label, im["env"], sorted(uris), sorted(im["expect"])))
+                    for iss, want in sorted(im["expect"].items()):
+                        if iss in uris:
+                            judge("%s %s[%s]" % (label, im["env"], iss), uris[iss], ns, pod_labels, want)
             continue
         if jwks is None:
             bad("%s: sets CASDOOR_ISSUER_URI but no CASDOOR_JWKS_URI — the key fetch goes to the public issuer host, which need not resolve in-cluster (and on kind does not)" % label)
@@ -626,6 +660,18 @@ expect_red "(12) games stops setting CASDOOR_ISSUER_URI (exemption orphaned)" "n
   sed -i "/name: CASDOOR_ISSUER_URI, value: \"https:\/\/id.hugmesh.games\"/d" "$T/'"${GM}"'"'
 expect_red "(13) games CASDOOR_ENDPOINT moved to the public host (exemption reason false)" "not an in-cluster URL" '
   sed -i "s#http://casdoor-games.hugmesh-games.svc.cluster.local:8000#https://id.hugmesh.games#" "$T/'"${GM}"'"'
+expect_red "(11a) games-bff JWKS admit rule dropped from the auto-sync netpol" "APP_TENANCY_JWKS_URIS[https://id.hugmesh.net]" '
+  python3 - "$T/'"${NP}"'/casdoor-jwks-ingress.yaml" <<EOF
+import sys; p=sys.argv[1]; t=open(p).read()
+i=t.index("# Games BFF -> systems Casdoor :8000")
+open(p,"w").write(t[:i].rstrip()[:-3].rstrip()+"\n")
+EOF'
+expect_red "(11b) games JWKS map loses the systems issuer" "a trusted issuer without a JWKS entry" '
+  sed -i "s#,https://id.hugmesh.net=http://casdoor.hugmesh-pki.svc.cluster.local:8000/.well-known/jwks##" "$T/'"${GM}"'"'
+expect_red "(11c) systems issuer keys pointed at the games Casdoor" "validates tokens signed by casdoor.hugmesh-pki" '
+  sed -i "s#https://id.hugmesh.net=http://casdoor.hugmesh-pki#https://id.hugmesh.net=http://casdoor-games.hugmesh-games#" "$T/'"${GM}"'"'
+expect_red "(11d) the realms stamped with two domains" "map every issuer to ONE domain" '
+  sed -i "s#https://id.hugmesh.net=default#https://id.hugmesh.net=mesh#" "$T/'"${GM}"'"'
 expect_red "(14) chart values jwksUri pointed at the public host" "chart hugmesh-gateway" '
   sed -i "s#jwksUri: '"${INC}"'#jwksUri: '"${PUB}"'#" "$T/'"${CH}"'/values.yaml"'
 expect_red "(15) chart template loses its CASDOOR_JWKS_URI env" "no CASDOOR_JWKS_URI env" '

@@ -322,15 +322,9 @@ spec:
           # routes when the slug is deselected (optional-services.yaml
           # games.gatewayRouteIds).
           #
-          # DEFERRED, stated honestly: on the CLUSTER the games BFF behind this
-          # route still validates the GAMES-realm Casdoor (casdoor-games,
-          # manifests/games/deployment.yaml CASDOOR_ISSUER_URI), while the
-          # fe-gateway's bff-exchange mints the SYSTEMS custody JWT. Until the
-          # cluster BFF is bridged to the systems issuer (or the exchange learns
-          # the games realm) every /games/api/** call through this route answers
-          # 401 on kind — the remote surfaces that as its "gateway did not
-          # accept your session" panel rather than a blank screen. The compose
-          # lane (compose.games.yaml) runs the BFF on the systems issuer today.
+          # AUTH: this route forwards the SYSTEMS custody JWT. The cluster games BFF
+          # accepts it alongside games-realm tokens (manifests/games/deployment.yaml
+          # APP_TENANCY_ISSUERS); keep its role semantics in step with the rows above.
           - id: games-bff
             uri: http://hugmesh-games.hugmesh-games.svc.cluster.local:8080
             path: /games/api/**
