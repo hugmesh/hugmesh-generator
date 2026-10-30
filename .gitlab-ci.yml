@@ -3797,7 +3797,7 @@ selinux-policy-verify:
   tags: [hugmesh-x86]
   before_script:
     - apt-get update -qq
-    - apt-get install -y -qq --no-install-recommends make m4 gawk checkpolicy semodule-utils
+    - apt-get install -y -qq --no-install-recommends make m4 gawk checkpolicy semodule-utils attr
     # tar/gzip/sha256sum belong here for the same reason as the rest: D-real reaches
     # its header tree by digest-checking and unpacking the pinned fixture, and if any
     # of the three vanished from the base image the leg would go back to SKIPping —
@@ -3805,6 +3805,9 @@ selinux-policy-verify:
     - for t in bash make m4 gawk checkmodule semodule_package tar gzip sha256sum; do command -v "$t" >/dev/null || { echo "TOOLCHAIN MISSING:$t — this job's image cannot run the SELinux policy gate"; exit 1; }; done
   script:
     - bash tests/scripts/test-selinux-policy-install.sh
+    # Build-time labels (#503): the label gates executed against fixtures with a
+    # stubbed getfattr; the real-xattr lane SKIPS loudly here (no CAP_SYS_ADMIN).
+    - bash tests/scripts/test-selinux-sysroot-labels.sh
   rules:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
     - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
