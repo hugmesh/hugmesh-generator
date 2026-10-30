@@ -189,3 +189,36 @@ def test_chat_loop_where_sets_the_page_for_grounded_answers(monkeypatch):
         assert body["messages"][0]["role"] == "system" and "- page: Vault" in body["messages"][0]["content"]
     finally:
         fake.close()
+
+
+def test_apply_and_undo_act_only_on_the_domain_they_were_made_on(monkeypatch):
+    """PR #832 review (U2): after moving to another domain, ``apply`` and ``undo`` wrote
+    that domain. Both domains hold the same values, so only the domain guard can stop it."""
+    j = Journey()
+    j.cfg.domains = [Domain(name="shop.example", optional_services=["tuwunel"]),
+                     Domain(name="blog.example", optional_services=["tuwunel"])]
+    monkeypatch.setattr(lai, "send_prompt", lambda *a, **k:
+                        'ok\n```change\n{"domain": "shop.example", "field": "tor", "to": true}\n```')
+    s = open_screen(j)
+
+    def go(name):
+        j.step.index = next(i for i, d in enumerate(j.step.domains(j)) if d.name == name)
+
+    def tor():
+        return {d.name: bool(d.tor) for d in j.cfg.domains}
+    s.feed(j, "give this domain its own tor address")
+    go("blog.example")
+    s.feed(j, "apply")
+    assert s.message.startswith("This change is for shop.example, but the page now shows blog.example")
+    assert tor() == {"shop.example": False, "blog.example": False}
+    go("shop.example")
+    s.feed(j, "apply")
+    assert s.message.startswith("Applied.") and tor() == {"shop.example": True, "blog.example": False}
+    go("blog.example")
+    s.feed(j, "undo")
+    assert s.message == ("Nothing to undo on this domain; the last change was on shop.example "
+                         "(undo it there).")
+    assert tor() == {"shop.example": True, "blog.example": False}
+    go("shop.example")
+    s.feed(j, "undo")
+    assert s.message == "Undone." and tor() == {"shop.example": False, "blog.example": False}

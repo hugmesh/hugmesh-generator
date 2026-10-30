@@ -339,6 +339,56 @@ def test_a_change_block_becomes_a_card_and_apply_undo_go_through_the_page(mesh_w
     assert dock.tip_row.isVisibleTo(dock)                # and the tip line is back
 
 
+def test_a_card_left_up_after_next_domain_neither_applies_nor_undoes_there(mesh_window, qapp, tmp_path):
+    """PR #832 review (D1/U1): the card stayed up after Next domain and Apply wrote the
+    domain on screen (blog.example), while the card named shop.example. Both domains hold
+    the same services here, so only the domain guard can stop it."""
+    wiz, dock, body = mesh_window
+    page = wiz.localmesh_page
+    page.mesh_domains.domains.append(Domain(name="blog.example", optional_services=["tuwunel", "phpbb"]))
+    page.domain_services.load(page.mesh_domains)
+
+    def step_to(name):
+        """Next / Previous domain as the person presses them (never wraps)."""
+        for delta in (1, -1):
+            for _ in range(10):
+                if body.current_domain() == name:
+                    pump(qapp)
+                    return
+                body._step(delta)
+        raise AssertionError(name)
+    step_to("shop.example")
+    from hugmesh_studio.core import assistant_prompt as ap
+    dock._last_prompt[dock._clears] = ap.Prompt("sys", [], [], {}, dock._page_where())
+    dock._handle("done", (dock._clears, "turn off the forum", 'ok\n```change\n'
+                          '{"domain": "shop.example", "field": "services", "to": ["tuwunel"]}\n```'), None)
+    card = dock._card
+    assert card.title.text() == "Proposed change — shop.example"
+    step_to("blog.example")
+    card.apply_btn.click()
+    pump(qapp)
+    assert card.status.text().startswith("This change is for shop.example, but the page now shows blog.example")
+    assert body.selected_slugs("blog.example") == body.selected_slugs("shop.example") == ["tuwunel", "phpbb"]
+    assert card.apply_btn.isVisible()                    # back on shop.example it can still apply
+    assert_card_fits(wiz, dock, card)
+    wiz.grab().save(str(tmp_path / "card-after-next-domain.png"))
+    step_to("shop.example")
+    card.apply_btn.click()
+    pump(qapp)
+    assert card.status.text() == "Applied. The page shows the new value."
+    assert body.selected_slugs("shop.example") == ["tuwunel"]
+    step_to("blog.example")
+    card.undo_btn.click()
+    pump(qapp)
+    assert "Go back to shop.example to undo it" in card.status.text()
+    assert body.selected_slugs("blog.example") == ["tuwunel", "phpbb"]
+    assert body.selected_slugs("shop.example") == ["tuwunel"]
+    step_to("shop.example")
+    card.undo_btn.click()
+    pump(qapp)
+    assert card.status.text() == "Undone." and body.selected_slugs("shop.example") == ["tuwunel", "phpbb"]
+
+
 def test_an_answer_shows_its_sources_line_at_both_widths(mesh_window, qapp, tmp_path):
     """An answered question as the person sees it: the bare answer, then the Sources
     line the code (never the model) writes from the docs it retrieved."""
