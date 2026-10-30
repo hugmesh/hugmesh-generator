@@ -114,7 +114,9 @@ def test_list_specs_runs_playwright_in_tests_e2e_with_the_json_reporter(tmp_path
     root = _e2e_tree(tmp_path)
     list_specs(root, runner=runner)
     argv, kwargs = runner.calls[0]
-    assert argv == ec.LIST_ARGV
+    # on Windows argv[0] is npx resolved to its full npx.cmd path (#827 group 6)
+    assert argv[1:] == list(ec.LIST_ARGV[1:])
+    assert os.path.splitext(os.path.basename(argv[0]))[0].lower() == ec.LIST_ARGV[0]
     assert "--list" in argv and "--reporter=json" in argv
     assert kwargs["cwd"] == os.path.join(root, "tests", "e2e")
 

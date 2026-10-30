@@ -87,10 +87,12 @@ import hashlib
 import html
 import io
 import json
+import ntpath
 import os
 import re
 import shlex
 import shutil
+import stat
 import subprocess
 import sys
 import tarfile
@@ -652,8 +654,8 @@ def candidates_from_file(path: str, generator_dir: str = "") -> list[ExportCandi
     * a saved-mesh record (``{"config": {"domains": [...], ...}}``) — the same, read
       RAW off the record (so a key the bootstrap loader does not know still counts).
     """
-    with open(path, encoding="utf-8") as fh:
-        data = json.load(fh)
+    # Notepad/PowerShell saves (BOM, UTF-16) too: Load config already reads them
+    data = json_files.load(path)
     if not isinstance(data, dict):
         raise ValueError(f"{path}: not a JSON object")
     where = f"config file {os.path.basename(path)}"
@@ -719,8 +721,7 @@ def load_config(path: str, generator_dir: str = "", domain: str = "",
     """An :class:`ExportConfig` from a JSON file (any of the three shapes
     :func:`candidates_from_file` reads). ``domain``/``org`` pick a row from an image
     config or a record with several, and override a generic config's values."""
-    with open(path, encoding="utf-8") as fh:
-        data = json.load(fh)
+    data = json_files.load(path)          # Notepad/PowerShell saves (BOM, UTF-16) too
     if not isinstance(data, dict):
         raise ValueError(f"{path}: not a JSON object")
     if "org" in data and "domain" in data:
@@ -1224,13 +1225,29 @@ def _resolve_ref(runner: Runner, path: str, wanted: str) -> tuple[str, str]:
     return "", ""
 
 
-def _rmtree(path: str) -> None:
-    """shutil.rmtree that also removes READ-ONLY files: git writes its objects read-only,
-    and on Windows that refuses the delete, so a second plan for the same domain crashed
-    emptying the work folder it had made the first time."""
-    def clear_and_retry(func, p, _exc):
-        os.chmod(p, 0o700)
-        func(p)
+def _rmtree(path: str, *, ignore_errors: bool = False, osname: str | None = None) -> None:
+    """shutil.rmtree that also removes READ-ONLY files on native Windows: git writes its
+    objects read-only, and Windows refuses that delete, so a second plan for the same
+    domain crashed emptying the work folder it had made the first time.
+
+    Elsewhere it IS shutil.rmtree: a read-only file in a writable folder deletes fine
+    there, and a chmod on a failing path would follow a link to whatever it names."""
+    if (osname or os.name) != "nt":
+        shutil.rmtree(path, ignore_errors=ignore_errors)
+        return
+
+    def clear_and_retry(func, p, exc):
+        err = exc[1] if isinstance(exc, tuple) else exc
+        try:
+            # a link is never chmodded (that would change its target) and a link given
+            # as the folder itself is refused, as shutil.rmtree refuses it
+            if func is os.path.islink or os.path.islink(p):
+                raise err
+            os.chmod(p, stat.S_IWRITE)         # clears the read-only attribute only
+            func(p)
+        except OSError:
+            if not ignore_errors:
+                raise
     if sys.version_info >= (3, 12):
         shutil.rmtree(path, onexc=clear_and_retry)
     else:                                      # pragma: no cover - older Pythons
@@ -1247,12 +1264,38 @@ def _windows_cannot_hold(name: str) -> bool:
                or _WIN_DEVICES.fullmatch(part) for part in name.split("/") if part)
 
 
-def _studio_cli() -> list[str]:
-    """How a person runs this Studio's CLI from a terminal: the MSI's console twin
-    beside the frozen exe (the windowed one prints nothing), else the module."""
+#: NTFS's upcase table on ASCII: a-z to A-Z, nothing else.
+_ASCII_UPPER = str.maketrans("abcdefghijklmnopqrstuvwxyz", "ABCDEFGHIJKLMNOPQRSTUVWXYZ")
+
+
+def _case_clash(held: dict[str, str], name: str) -> str:
+    """The path written earlier that ``name``, or one of its folders, is the same as on
+    a case-blind Windows folder, or "" (and ``name`` and its folders are then recorded
+    in ``held``). Only ASCII letters are folded: there that is exactly what NTFS does,
+    while Python's upper() differs from the volume's table both ways beyond it (µ and
+    Μ, ı and I are two names on NTFS; ᾳ and ᾼ are one). _snapshot asks the volume
+    itself about the rest."""
+    parts = name.split("/")
+    for i in range(1, len(parts) + 1):
+        path = "/".join(parts[:i])
+        key = path.translate(_ASCII_UPPER)
+        if held.setdefault(key, path) != path:
+            return held[key]
+    return ""
+
+
+def _studio_cli(osname: str | None = None) -> list[str]:
+    """How a person runs this Studio's CLI from a terminal. Frozen: the MSI's console
+    twin beside the exe on Windows (the windowed one prints nothing), the Linux
+    tarball's one executable elsewhere (it has no twin, and no hugmesh_studio module
+    for a python3 to find). Unfrozen: the module, under the interpreter running it on
+    Windows, where ``python3`` is usually the Microsoft Store alias."""
+    windows = (osname or os.name) == "nt"
     if getattr(sys, "frozen", False):
-        return [os.path.join(os.path.dirname(sys.executable), "hugmesh-studio-cli.exe")]
-    return ["python3", "-m", "hugmesh_studio"]
+        if windows:                     # ntpath: the exe's path is a Windows one
+            return [ntpath.join(ntpath.dirname(sys.executable), "hugmesh-studio-cli.exe")]
+        return [sys.executable]
+    return [sys.executable if windows else "python3", "-m", "hugmesh_studio"]
 
 
 def _snapshot(runner: Runner, path: str, ref: str, workdir: str,
@@ -1261,8 +1304,11 @@ def _snapshot(runner: Runner, path: str, ref: str, workdir: str,
 
     On native Windows (``osname`` is ``os.name`` unless a test passes another) the folder
     cannot hold everything a tar can: ``meta`` then receives ``executables`` (the
-    files whose mode has an x bit, restored in the index at commit) and ``lost`` (links
-    and names Windows cannot hold, which are not extracted and refuse the repository)."""
+    files whose mode has an x bit, restored in the index at commit) and ``lost`` (links,
+    names Windows cannot hold, names that differ from an earlier one only in case, and
+    anything the extraction could not write: none is extracted, each refuses the
+    repository). The count apply checks is taken from the folder, so a member missing
+    from it unrecorded here would be published missing, with no word said."""
     windows = (osname or os.name) == "nt"
     if os.path.isdir(workdir):
         _rmtree(workdir)
@@ -1276,20 +1322,51 @@ def _snapshot(runner: Runner, path: str, ref: str, workdir: str,
     files: list[str] = []
     executables: list[str] = []
     lost: list[tuple[str, str]] = []          # (name, why)
+    held: dict[str, str] = {}                 # Windows: case-blind path -> the one written
+    merged: set[str] = set()                  # Windows: folders the volume made one
     with tarfile.open(fileobj=io.BytesIO(r.stdout), mode="r:") as tf:
         for member in tf.getmembers():
             if not (member.isfile() or member.isdir() or member.issym()):
                 continue
-            if not _member_stays_inside(workdir, member):
-                continue
+            # the Windows checks come BEFORE the inside check: ntpath reads "a:b" as a
+            # drive and "a\..\..\x" as climbing out, two ordinary names in a git tree
+            # that the inside check below would otherwise drop without a word
             if windows and member.issym():
                 lost.append((member.name, "a symbolic link (Windows would copy it)"))
                 continue
             if windows and _windows_cannot_hold(member.name):
                 lost.append((member.name, "a name Windows cannot hold"))
                 continue
-            if windows and member.isfile() and member.mode & 0o111:
-                executables.append(member.name)
+            if not _member_stays_inside(workdir, member):
+                if windows and not member.isdir():
+                    lost.append((member.name, "a path that leaves the work folder here"))
+                continue
+            if windows:
+                clash = _case_clash(held, member.name.rstrip("/"))
+                if clash:
+                    # NTFS folds case: README and readme are one file there (the second
+                    # overwrote the first), Docs and docs/ cannot both exist. A
+                    # directory's own entry says nothing: its files are each reported
+                    if not member.isdir():
+                        lost.append((member.name, f"differs from {clash} only in case "
+                                                  "(one name on Windows)"))
+                    continue
+                # beyond ASCII the volume's own table decides: git archive never
+                # repeats a path and writes a folder before what is in it, so a
+                # destination already there, or a folder already merged into another,
+                # is two names the volume holds as one
+                into = next((d for d in merged if member.name.startswith(d + "/")), "")
+                if into or os.path.lexists(os.path.join(workdir, member.name)):
+                    if member.isdir():
+                        merged.add(member.name.rstrip("/"))
+                    elif into:
+                        lost.append((member.name, f"in {into}/, a folder that differs only "
+                                                  "in case from one written before it "
+                                                  "(one name on Windows)"))
+                    else:
+                        lost.append((member.name, "differs only in case from a path "
+                                                  "written before it (one name on Windows)"))
+                    continue
             try:
                 try:
                     tf.extract(member, workdir, filter="data")
@@ -1298,10 +1375,17 @@ def _snapshot(runner: Runner, path: str, ref: str, workdir: str,
                     # filter; _member_stays_inside above (name, parent folder and
                     # link target, all resolved) is what keeps the write inside
                     tf.extract(member, workdir)
-            except (tarfile.FilterError, OSError):
+            except (tarfile.FilterError, OSError) as exc:
                 # a link that points outside the tree, or a name the filter
-                # refuses: left out of the snapshot rather than written anywhere
+                # refuses: left out of the snapshot rather than written anywhere.
+                # On Windows also a path past MAX_PATH (long paths are off by
+                # default) or a file another program holds open: recorded, as the
+                # published tree would lack it
+                if windows and not member.isdir():
+                    lost.append((member.name, f"could not be written here ({exc})"))
                 continue
+            if windows and member.isfile() and member.mode & 0o111:
+                executables.append(member.name)
             # a link is published too (its target is its content): it goes through
             # the exclusion rules and the scan like a file
             if member.isfile() or member.issym():
@@ -1334,8 +1418,20 @@ def _member_stays_inside(workdir: str, member: tarfile.TarInfo) -> bool:
     return True
 
 
+def _dropped_by_name(rel: str) -> bool:
+    """True when the exclusion rules drop ``rel`` whatever it holds: an entry Windows
+    could not write was never extracted, so the two rules that read the bytes
+    (``.npmrc``, ``*.asc``) cannot be asked and do not count as dropping it."""
+    parts = rel.split("/")
+    if any(p in EXCLUDED_DIRS for p in parts):
+        return True
+    if parts[-1] == ".npmrc" or fnmatch.fnmatch(parts[-1], "*.asc"):
+        return False
+    return bool(_excluded_reason(rel))
+
+
 def _prepare_repo(runner: Runner, name: str, cfg: ExportConfig, rules, out_dir: str,
-                  skip_globs) -> RepoPlan:
+                  skip_globs, osname: str | None = None) -> RepoPlan:
     target = repo_target_name(name, cfg)
     # the target names a folder that _snapshot empties and a repository gh creates,
     # so it must be a plain name that stays under <out>/work, whatever fed it
@@ -1359,13 +1455,24 @@ def _prepare_repo(runner: Runner, name: str, cfg: ExportConfig, rules, out_dir: 
         return rp
     rp.workdir = workdir
     meta: dict = {}
-    files = _snapshot(runner, rp.source_path, rp.ref, rp.workdir, meta)
+    files = _snapshot(runner, rp.source_path, rp.ref, rp.workdir, meta, osname=osname)
     exclude_globs = list(cfg.rename_map.get("exclude") or [])
-    # an entry the rename map drops anyway is no loss
-    rp.windows_lost = [f"{rel}: {why}" for rel, why in meta.get("lost") or []
-                       if not _glob_matches(rel, name, exclude_globs)]
+    # an entry the export drops anyway (CLAUDE.md as a link to AGENTS.md, a link
+    # under node_modules/, anything the rename map excludes) is no loss: Linux does
+    # not publish it either, and lists it as excluded, as the plan here does too
+    dropped: dict[str, str] = {}
+    for rel, why in meta.get("lost") or []:
+        if _dropped_by_name(rel):
+            dropped[rel] = _excluded_reason(rel)   # by name: reads no bytes
+        elif _glob_matches(rel, name, exclude_globs):
+            dropped[rel] = "excluded by the rename map"
+        else:
+            rp.windows_lost.append(f"{rel}: {why}")
     kept: list[str] = []
-    for rel in files:
+    for rel in sorted([*files, *dropped]):
+        if rel in dropped:                     # never written here: nothing to unlink
+            rp.excluded.append(f"{rel}: {dropped[rel]}")
+            continue
         why = _excluded_reason(rel, rp.workdir)
         if not why and _glob_matches(rel, name, exclude_globs):
             why = "excluded by the rename map"
@@ -1383,10 +1490,7 @@ def _prepare_repo(runner: Runner, name: str, cfg: ExportConfig, rules, out_dir: 
     for dirpath, dirnames, _files in os.walk(rp.workdir, topdown=True):
         for d in list(dirnames):
             if d in EXCLUDED_DIRS:
-                try:
-                    _rmtree(os.path.join(dirpath, d))
-                except OSError:
-                    pass
+                _rmtree(os.path.join(dirpath, d), ignore_errors=True)
                 dirnames.remove(d)
     for dirpath, dirnames, filenames in os.walk(rp.workdir, topdown=False):
         if not dirnames and not filenames and dirpath != rp.workdir:
@@ -1528,11 +1632,12 @@ def _probe(runner: Runner, rp: RepoPlan, cfg: ExportConfig) -> None:
 
 
 def plan(cfg: ExportConfig, runner: Runner | None = None, *, probe: bool = True,
-         stamp: str = "") -> Plan:
+         stamp: str = "", osname: str | None = None) -> Plan:
     """The read-only half: the repository set, one snapshot per repository under
     ``<out>/work/``, the rewrites and exclusions per file, the banned-marker scan,
     the generated site repository, and the plan files. Nothing is created or
-    pushed; with ``probe`` the target repositories are LOOKED AT through ``gh``."""
+    pushed; with ``probe`` the target repositories are LOOKED AT through ``gh``.
+    ``osname`` (``os.name`` by default) picks the native-Windows snapshot rules."""
     runner = runner or SubprocessRunner()
     problems = cfg.problems()
     if problems:
@@ -1548,7 +1653,7 @@ def plan(cfg: ExportConfig, runner: Runner | None = None, *, probe: bool = True,
     skip_globs = list(cfg.rename_map.get("skip_rewrite") or [])
     repos: list[RepoPlan] = []
     for name in names:
-        rp = _prepare_repo(runner, name, cfg, rules, out_dir, skip_globs)
+        rp = _prepare_repo(runner, name, cfg, rules, out_dir, skip_globs, osname=osname)
         if not rp.action:
             if probe:
                 _probe(runner, rp, cfg)
@@ -1700,9 +1805,12 @@ def _no_replace(env: dict[str, str]) -> dict[str, str]:
 def _restore_executables(runner, calls, rp: RepoPlan, wd: str, env) -> None:
     """Native Windows: put back the x bits the folder could not hold (``rp.executables``,
     from the tar headers) in the index, before the commit is made and scanned. Without
-    this ./mvnw and every script was published as 100644."""
+    this ./mvnw and every script was published as 100644. Each path goes in as
+    ``./<path>``: the never-force check reads every word, ``--`` or not, so a file at
+    the top named ``+build.sh`` or ``-f`` refused the repository at apply."""
     for i in range(0, len(rp.executables), 200):
-        argv = ["git", "update-index", "--chmod=+x", "--", *rp.executables[i:i + 200]]
+        argv = ["git", "update-index", "--chmod=+x", "--",
+                *("./" + rel for rel in rp.executables[i:i + 200])]
         r = _run_checked(runner, calls, argv, cwd=wd, env=env)
         if r.returncode != 0:
             raise RuntimeError(f"git update-index --chmod=+x failed in {wd}: "
@@ -1816,10 +1924,7 @@ def _push_one(runner, calls, rp: RepoPlan, cfg: ExportConfig, stamp: str,
                                                 push_dir)
         return _send(runner, calls, rp, cfg, stamp, create_missing, res, url, push_dir)
     finally:
-        try:
-            _rmtree(push_dir)              # git's objects are read-only
-        except OSError:
-            pass
+        _rmtree(push_dir, ignore_errors=True)      # git's objects are read-only
 
 
 def _send(runner, calls, rp: RepoPlan, cfg: ExportConfig, stamp: str,
@@ -2061,8 +2166,26 @@ def result_lines(res: Result) -> list[str]:
     return out
 
 
+#: A word PowerShell hands a program exactly as written (no quote, $, `, ;, comma,
+#: brace, paren or @ for it to read as code).
+_PS_BARE = re.compile(r"[A-Za-z0-9_./\\:=+-]+")
+
+
+def _terminal_line(argv: list[str], osname: str | None = None) -> str:
+    """``argv`` as one line a person pastes into a terminal. On native Windows that is
+    PowerShell (the Windows Terminal's and the Start menu's shell): POSIX quoting put
+    every path with a backslash in single quotes, and a quoted first word is a string
+    expression there, not a command. So a word PowerShell would read as code goes in
+    its single quotes ('' for a quote inside) and the line starts with the call
+    operator, which runs a quoted program path."""
+    if (osname or os.name) != "nt":
+        return " ".join(shlex.quote(a) for a in argv)
+    return "& " + " ".join(a if _PS_BARE.fullmatch(a) else "'" + a.replace("'", "''") + "'"
+                           for a in argv)
+
+
 def cli_command(cfg: ExportConfig, verb: str = "PLAN", config_path: str = "",
-                rename_map_path: str = "") -> str:
+                rename_map_path: str = "", osname: str | None = None) -> str:
     """The exact terminal command for this export (what the GUI and TUI hand over):
     :func:`config_from_args` of its parse is ``cfg`` again, which a test pins.
 
@@ -2075,8 +2198,9 @@ def cli_command(cfg: ExportConfig, verb: str = "PLAN", config_path: str = "",
     face lets a person change over the file (source folder, visibility, existing
     repositories, plan folder, brand, remote base) is then emitted as a flag ONLY
     where it differs from what the file alone would give, so the line stays short
-    for the ordinary case and exact for every other."""
-    argv = [*_studio_cli(), "--org-export", verb]
+    for the ordinary case and exact for every other. On native Windows the line is
+    PowerShell's (:func:`_terminal_line`)."""
+    argv = [*_studio_cli(osname), "--org-export", verb]
     base: ExportConfig | None = None
     if config_path:
         # --domain picks the row when the file carries several; harmless otherwise
@@ -2108,7 +2232,7 @@ def cli_command(cfg: ExportConfig, verb: str = "PLAN", config_path: str = "",
         argv += ["--remote-base", cfg.remote_base]
     if verb == "APPLY":
         argv += ["--apply"]
-    return " ".join(shlex.quote(a) for a in argv)
+    return _terminal_line(argv, osname)
 
 
 # ── the CLI ────────────────────────────────────────────────────────────────────────

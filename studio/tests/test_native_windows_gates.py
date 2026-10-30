@@ -4,8 +4,10 @@ Measured on Windows 11 with the 0.3.0-beta.1 MSI (2026-10-23): "Bootstrapping",
 "Building maven prerequisites" and "Installing DevOps prerequisites" all failed. The
 first two said "make is required" (installing make would not help: the recipes are
 bash, and System32\\bash.exe is the WSL launcher); the third said "Automatic install
-covers Linux only". None named WSL2, the supported Windows runtime. Qt-free: every
-gate here is core code, and the GUI refusal is the same sentence.
+covers Linux only". None named WSL2, the supported Windows runtime. The gates are
+core code, and the GUI refusal is the same sentence; the page tests at the end
+(skipped without a Qt binding) pin that each page actually asks, because a core gate
+on a path no page takes protects nobody.
 """
 from __future__ import annotations
 
@@ -17,24 +19,33 @@ import types
 
 import pytest
 
-from hugmesh_studio.core import devops_tools, platform_info, qemu_tests
-from hugmesh_studio.core import local_stack_node as lsn
-from hugmesh_studio.core.build_driver import BuildDriver
-from hugmesh_studio.core.cloud_deploy import CloudDeploy, CloudDeployOptions
-from hugmesh_studio.core.config import ImageConfig
-from hugmesh_studio.core.golive_driver import GoLiveDriver
-from hugmesh_studio.core.phone_wizard import PhoneWizard
-from hugmesh_studio.core.platform_info import HostInfo
-from hugmesh_studio.core.worklist_driver import GENKEYS_SCRIPT, WorklistDriver
+# must be set BEFORE the first QApplication is created (the page tests below)
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+from hugmesh_studio.core import devops_tools, emulation, mesh_emulation  # noqa: E402
+from hugmesh_studio.core import platform_info, qemu_tests                # noqa: E402
+from hugmesh_studio.core import local_stack_node as lsn                  # noqa: E402
+from hugmesh_studio.core.build_driver import BuildDriver                 # noqa: E402
+from hugmesh_studio.core.cloud_deploy import CloudDeploy, CloudDeployOptions  # noqa: E402
+from hugmesh_studio.core.config import ImageConfig                       # noqa: E402
+from hugmesh_studio.core.golive_driver import GoLiveDriver               # noqa: E402
+from hugmesh_studio.core.phone_wizard import PhoneWizard                 # noqa: E402
+from hugmesh_studio.core.platform_info import HostInfo                   # noqa: E402
+from hugmesh_studio.core.worklist_driver import GENKEYS_SCRIPT, WorklistDriver  # noqa: E402
+
+_REAL_BLOCKER = platform_info.native_windows_blocker
+
+
+def _answer_as(monkeypatch, osname):
+    monkeypatch.setattr(platform_info, "native_windows_blocker",
+                        functools.partial(_REAL_BLOCKER, osname=osname))
 
 
 @pytest.fixture
 def as_native_windows(monkeypatch):
     """Answer as the Windows build would, without changing os.name for the process
     (pathlib and subprocess read it too)."""
-    monkeypatch.setattr(platform_info, "native_windows_blocker",
-                        functools.partial(platform_info.native_windows_blocker,
-                                          osname="nt"))
+    _answer_as(monkeypatch, "nt")
 
 
 def test_the_sentence_names_wsl2_and_nothing_elsewhere():
@@ -121,6 +132,58 @@ def test_qemu_lanes_refuse_before_spawning(as_native_windows, no_spawn, tmp_path
     assert rc == 2 and said and "WSL2" in said[0], said
 
 
+def test_the_emulation_spawn_refuses_a_script_before_popen(as_native_windows, no_spawn,
+                                                           tmp_path):
+    """The pages run their lanes through emulation.spawn, not QemuTestRunner; there the
+    WinError 193 used to come back as "!! could not run ...run-qemu-docker.sh"."""
+    runner = os.path.join(str(tmp_path), qemu_tests.RUNNER_SCRIPT)
+    for spawn in (emulation.spawn, mesh_emulation.spawn):       # the alias, too
+        said: list[str] = []
+        assert spawn([runner, "--keep-alive"], str(tmp_path), on_line=said.append) == 2
+        assert said and "WSL2" in said[0] and "could not run" not in said[0], said
+
+
+def test_the_cli_save_mesh_refuses_before_its_own_exec(as_native_windows, no_spawn,
+                                                       tmp_path, monkeypatch, capsys):
+    """save-mesh without run= execs the runner through emulation_save, not spawn()."""
+    from hugmesh_studio.core import emulation_save
+    monkeypatch.setattr(emulation_save, "_run_argv",
+                        lambda argv: pytest.fail(f"ran {argv[0]}"))
+    sess = tmp_path / "out" / "sessions" / "20260819-101010-mesh00"
+    sess.mkdir(parents=True)
+    (sess / "hugmesh-x86-amd64-be-test-20260819T101010Z.img").write_bytes(b"\0")
+    rc = emulation.main(["save-mesh", "--generator-dir", str(tmp_path)])
+    err = capsys.readouterr().err
+    assert rc == 2 and "WSL2" in err and "could not run" not in err, err
+
+
+def test_the_device_poll_does_not_exec_the_runner(as_native_windows, no_spawn, tmp_path):
+    # None is the documented "runner did not answer": the registry answers instead.
+    assert emulation._runner_devices(str(tmp_path), str(tmp_path)) is None
+
+
+def _docker_info_exits(monkeypatch, rc=1, raises=None):
+    def run(*_a, **_k):
+        if raises:
+            raise raises
+        return subprocess.CompletedProcess(["docker", "info"], rc, None, "refused")
+    monkeypatch.setattr(qemu_tests.subprocess, "run", run)
+    monkeypatch.setattr(qemu_tests, "wsl_docker_remedy", lambda: "")   # not under WSL
+
+
+def test_docker_down_on_windows_says_start_docker_desktop(monkeypatch):
+    """Windows has no 'docker' group (Docker Desktop's is docker-users): the daemon IS
+    Docker Desktop, so starting it is the whole fix."""
+    _docker_info_exits(monkeypatch)
+    ok, why = qemu_tests.docker_available(osname="nt")
+    assert not ok and "start Docker Desktop" in why and "'docker' group" not in why, why
+    ok, why = qemu_tests.docker_available(osname="posix")
+    assert not ok and "'docker' group" in why, why                       # unchanged
+    _docker_info_exits(monkeypatch, raises=FileNotFoundError("docker"))
+    assert "Install Docker Desktop" in qemu_tests.docker_available(osname="nt")[1]
+    assert qemu_tests.docker_available(osname="posix")[1] == "docker was not found on PATH."
+
+
 def test_a_native_build_is_refused_even_with_windows_sudo(as_native_windows, tmp_path):
     host = HostInfo(os="windows", is_gentoo=False, has_docker=True, has_bash=True,
                     has_kvm=False, is_root=False, builder_image="hugmesh-builder")
@@ -139,7 +202,9 @@ def _wl(backend):
 
 
 def test_windows_keys_run_in_the_builder_container():
-    out = r"C:\out\sessions\s1\keys-node1"
+    # Spelled with the HOST's path rules: _genkeys_command splits with os.path, and a
+    # literal C:\ path on the Linux job is one relative name with no parent.
+    out = os.path.join(os.path.abspath(os.sep), "out", "sessions", "s1", "keys-node1")
     args = ["--role", "host", "--out", out, "--random", "--superdomain", "acme.internal"]
     cmd = WorklistDriver._genkeys_command(_wl("docker"), "ignored", "acme", args,
                                           osname="nt")
@@ -157,3 +222,132 @@ def test_keys_argv_is_unchanged_off_windows():
     for osname, backend in (("posix", "docker"), ("posix", "native"), ("nt", "native")):
         assert WorklistDriver._genkeys_command(_wl(backend), "/g/s.sh", "b", args,
                                                osname=osname) == ["/g/s.sh", *args]
+
+
+# ── the pages ask too ──────────────────────────────────────────────────────────────
+# Each test answers once as Linux (the control: the same call arms the control there)
+# and once as the MSI, so it means the same thing on either CI job.
+_GENERATOR_DIR = os.path.dirname(os.path.dirname(os.path.dirname(
+    os.path.abspath(__file__))))
+
+
+def _host(os_name):
+    # a canned host so wizard construction never probes the machine (docker info &c.)
+    return HostInfo(os=os_name, is_gentoo=os_name == "linux", has_docker=False,
+                    has_bash=True, has_kvm=False, is_root=False,
+                    builder_image="hugmesh-builder")
+
+
+@pytest.fixture(scope="session")
+def qapp():
+    pytest.importorskip("hugmesh_studio.gui.qt",
+                        reason="no Qt binding (PySide6/PyQt6) installed")
+    from hugmesh_studio.gui.qt import QtWidgets
+    return (QtWidgets.QApplication.instance()
+            or QtWidgets.QApplication(["hugmesh-studio-tests"]))
+
+
+@pytest.fixture
+def studio(qapp, monkeypatch):
+    from hugmesh_studio.gui import wizard as wizard_mod
+    monkeypatch.setattr(wizard_mod, "detect",
+                        lambda builder_image="hugmesh-builder": _host("linux"))
+    monkeypatch.setattr(qemu_tests, "docker_available",
+                        lambda *_a, **_k: (True, "docker is available."))
+    w = wizard_mod.StudioWizard(_GENERATOR_DIR)
+    yield w
+    w.close()
+    w.deleteLater()
+
+
+def _page(wiz, cls):
+    for pid in wiz.pageIds():
+        if isinstance(wiz.page(pid), cls):
+            return wiz.page(pid)
+    raise AssertionError(f"no {cls.__name__} in the wizard")
+
+
+def test_the_qemu_page_greys_every_lane_with_docker_up(studio, monkeypatch):
+    from hugmesh_studio.gui.pages.qemu import QemuPage
+    page = _page(studio, QemuPage)
+    page.plan = types.SimpleNamespace(rows=["x86/be"])     # something to run
+    page.pw_row.blockSignals(True)                          # no command preview
+    page.pw_row.clear()
+    page.pw_row.addItem("x86/be", "x86/be")
+    page.pw_row.blockSignals(False)
+    _answer_as(monkeypatch, "posix")
+    page._docker_answered_paint((True, "docker is available."))
+    assert page.run_btn.isEnabled() and page.pw_list_btn.isEnabled()
+    _answer_as(monkeypatch, "nt")
+    page._docker_answered_paint((True, "docker is available."))
+    assert not page.run_btn.isEnabled() and not page.list_btn.isEnabled()
+    assert not page.pw_list_btn.isEnabled() and not page.pw_run_btn.isEnabled()
+    assert "WSL2" in page.docker_note.text()
+
+
+def test_the_mesh_emulation_page_does_not_arm_start_on_docker_alone(studio, monkeypatch):
+    from hugmesh_studio.gui.pages.mesh_emulation import MeshEmulationPage
+    page = _page(studio, MeshEmulationPage)
+    _answer_as(monkeypatch, "posix")
+    page._docker_paint((True, "docker is available."))
+    assert page._docker_ok                       # Start, row Start and "+" read this
+    _answer_as(monkeypatch, "nt")
+    page._docker_paint((True, "docker is available."))
+    assert not page._docker_ok and not page.start_btn.isEnabled()
+    assert "WSL2" in page.docker_note.text()
+    assert "docker group" not in page.docker_note.text()
+
+
+def test_the_build_page_offers_no_native_backend_on_windows(studio):
+    from hugmesh_studio.gui.pages.build import BuildPage
+    combo = _page(studio, BuildPage).backend
+    items = [combo.itemText(i) for i in range(combo.count())]
+    assert ("native" in items) == (os.name != "nt"), items
+
+
+def test_go_live_preflight_will_not_lead_to_an_empty_provider_page(qapp, monkeypatch,
+                                                                   tmp_path):
+    from hugmesh_studio.gui.pages import golive as golive_mod
+    monkeypatch.setattr(golive_mod.GoLiveDriver, "status_text", lambda self: "status")
+    _answer_as(monkeypatch, "nt")                # built as the MSI: providers() stays put
+    w = golive_mod.GoLiveWizard(str(tmp_path))
+    try:
+        preflight = w.page(w.pageIds()[0])
+        assert isinstance(preflight, golive_mod.GoLivePreflightPage)
+        assert not preflight.isComplete()
+        _answer_as(monkeypatch, "posix")
+        assert preflight.isComplete()
+    finally:
+        w.close()
+        w.deleteLater()
+
+
+def test_post_build_qemu_tests_refuse_instead_of_reporting_failures(studio, monkeypatch,
+                                                                    as_native_windows):
+    """The runner used to be handed to _FlashWorker anyway, and the WinError 193 came
+    back as "QEMU device tests reported failures" for tests that never ran."""
+    from hugmesh_studio.gui.pages import progress
+    page = studio.page(studio._page_ids["progress"])
+    monkeypatch.setattr(progress, "_FlashWorker",
+                        lambda *_a, **_k: pytest.fail("spawned the runner"))
+    monkeypatch.setattr(studio.cfg, "qemu_device_tests", True)
+    page._maybe_qemu_tests()
+    log = page.log.toPlainText()
+    assert "WSL2" in log and "reported failures" not in log, log
+    assert page.qemu_worker is None
+
+
+def test_the_flash_panel_says_why_it_never_appears(studio, monkeypatch):
+    from hugmesh_studio.core import flash_targets
+    page = studio.page(studio._page_ids["progress"])
+    monkeypatch.setattr(flash_targets, "list_targets", lambda: [])
+    monkeypatch.setattr(page, "_run_all_ok", lambda: True)
+    page._all_terminal = True
+    monkeypatch.setattr(studio, "host", _host("linux"))
+    page._refresh_flash_targets()
+    assert page.flash_blocked_note.isHidden()    # Linux, no stick: the old silence
+    monkeypatch.setattr(studio, "host", _host("windows"))
+    page._refresh_flash_targets()
+    assert not page.flash_blocked_note.isHidden() and page.flash_group.isHidden()
+    said = page.flash_blocked_note.text()
+    assert "WSL2" in said and "usbipd attach" in said, said

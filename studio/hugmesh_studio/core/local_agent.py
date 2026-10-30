@@ -371,11 +371,13 @@ def _doc(anchor: str) -> str:
 
 
 def diagnose(pr: Probe, agent: str = "claude", model: str = "",
-             source: "Optional[SourceInfo]" = None) -> "list[Problem]":
+             source: "Optional[SourceInfo]" = None,
+             osname: Optional[str] = None) -> "list[Problem]":
     """Every reason a start cannot happen, first prerequisite first. Empty = ready.
 
     The order is the order a person fixes them in: the program, then the server, then
-    a model, then the agent, then the folder."""
+    a model, then the agent, then the folder. ``osname`` defaults to ``os.name``."""
+    osname = os.name if osname is None else osname
     out: list[Problem] = []
     if not pr.ollama_path:
         out.append(Problem(
@@ -389,9 +391,14 @@ def diagnose(pr: Probe, agent: str = "claude", model: str = "",
             "server_down",
             f"The Ollama server is not answering on {pr.server}{why}.",
             # setsid, ~/.cache and `&` are POSIX shell; on Windows the Ollama app
-            # runs the server itself
-            ("Start the Ollama app from the Start menu (or run `ollama serve` in a "
-             "terminal) (docs section 3), then press Re-check." if os.name == "nt" else
+            # runs the server itself. Both keep the 32768 context: the agent's own
+            # instructions are large, and Re-check cannot see a server's context, so
+            # a default-context server passes it and then truncates the prompt.
+            ("Start it on this machine only: in PowerShell run "
+             "`$env:OLLAMA_HOST='127.0.0.1:11434'; $env:OLLAMA_CONTEXT_LENGTH=32768; "
+             "ollama serve`, or start the Ollama app from the Start menu with "
+             "Settings > Context length at 32k (docs section 3), then press Re-check."
+             if osname == "nt" else
              "Start it on this machine only: OLLAMA_HOST=127.0.0.1:11434 "
              "OLLAMA_CONTEXT_LENGTH=32768 setsid ollama serve >~/.cache/ollama-serve.log "
              "2>&1 &  (docs section 3), then press Re-check."),
