@@ -1380,8 +1380,9 @@ on a bad/placeholder key). See [`docs/DEVOPS.md`](docs/DEVOPS.md).
 > | [`studio-release-cut.yml`](.github/workflows/studio-release-cut.yml) | **The one way to release the Studio**: `scripts/release-studio.sh <version>` (or Actions > "Cut a Studio release") bumps `__version__` on main, creates the tag on GitHub and starts the signed build. See [`docs/STUDIO-INSTALLERS.md`](docs/STUDIO-INSTALLERS.md). |
 >
 > **Releasing the whole org** (every Maven library, image, the mesh node, the Studio and the
-> site) is one command, `scripts/release-beta.sh` (a read-only dry run unless given
-> `--apply`). See [`docs/RELEASING.md`](docs/RELEASING.md).
+> site) is one command, `scripts/release.sh --channel beta|stable` (`scripts/release-beta.sh`
+> is the beta one; a read-only dry run unless given `--apply`). See
+> [`docs/RELEASING.md`](docs/RELEASING.md).
 >
 > **Never target `[self-hosted, hugmesh-x86]` from a GitHub workflow.** No self-hosted
 > runners are registered against this org, so such a job queues for 24 hours and then
