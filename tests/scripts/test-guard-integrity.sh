@@ -891,7 +891,7 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # one suite and nothing else.
 # 203 -> 204 (denominator 244 -> 245, ungated SET unchanged at 41) on 2026-10-29 for the
 # one-command org beta release: tests/scripts/test-release-beta.sh (scripts/release-beta.sh
-# against a recording gh stub, with a four-mutation battery) landed on disk AND in
+# against a recording gh stub, with a mutation battery) landed on disk AND in
 # shell-suites.yml's DEBIAN job (python:3.12-slim: bash + python3 + jq, GNU date) and in
 # .gitlab-ci.yml's lint:release-beta. MEASURED by RUNNING this file on the branch over
 # origin/main 17a2ee3a (which carries #830's 203 of 244 above), GUARD_PREMERGE=0:

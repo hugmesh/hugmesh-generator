@@ -16,11 +16,16 @@
 #   C  DONE / READY / REFUSE / NEEDS-BUMP / RUNNING classification, including the paths
 #      filter that keeps mesh-node DONE while main moves on elsewhere;
 #   D  the --only fix: selecting one downstream repo does not block its own stage when the
-#      unselected dependency stages are already DONE;
+#      unselected dependency stages are already DONE; a stage with no selected row is
+#      skipped (so --apply --only <a stage-8 UI> tags it while a Maven link is unpublished,
+#      rc 0); a selected repo whose dependency stage is unpublished still stops there;
 #   E  the tag-SHA re-check: when main moves between the check and the tag, nothing is tagged;
 #   F  stage ordering of a full --apply: Maven chain, apps, re-runs, gateway, overlays, Java;
 #   G  a red main run older than 30 days is never re-run;
-#   M  three guards are mutation-tested: each is broken in a copy of the script, the check
+#   H  check 7 is about main's HEAD: a green push run at an OLDER commit refuses the repo
+#      (no paths filter), or not (paths filter, nothing since it under those paths); and a
+#      --merge whose push run never appears stops before anything is tagged;
+#   M  the guards are mutation-tested: each is broken in a copy of the script, the check
 #      that covers it must go red, and the copy must really differ from the original.
 #
 # Needs bash, python3, jq. No network, no docker, no gh login.
@@ -223,6 +228,7 @@ if pos[:1] == ["pr"]:
         pr["state"] = "MERGED"; pr["mergeCommit"] = {"oid": new}
         r["main"] = [new]; r["main_i"] = 0
         r.setdefault("commit_files", {})[new] = pr.get("files", [])
+        if pr.get("no_run"): save(); sys.exit(0)      # Actions lagging: the push run has not appeared
         r.setdefault("runs", []).append({"databaseId": next_id(), "workflow": r.get("tag_workflow", "release.yml"), "headBranch": "main",
                                          "headSha": new, "event": "push", "status": "completed", "conclusion": "success", "createdAt": now()})
         save(); sys.exit(0)
@@ -476,6 +482,28 @@ check_only() { # script -> 0 when --only fx-lib-b (stage 2) is not blocked by it
   [ "$(writes "$d/calls" | grep -ac 'git/refs')" = 1 ]                          # and nothing else tagged
 }
 if check_only "$SCRIPT"; then ok "--only fx-lib-b: stage 2 not blocked by the unselected but DONE stage 1 (plan and --apply; only it is tagged)"; else bad "--only blocks its own stage"; fi
+check_only_downstream() { # script -> 0 when --only <a stage-8 UI> is tagged although stage 2 and stage 5 are unpublished
+  local s=$1 d="$TMP/dd.$RANDOM"
+  fixture mixed "$d"; run_script "$s" "$d" --only fx-ui-ready --no-studio
+  grep -a 'would tag: fx-ui-ready v0.3.0-beta.2' "$d/out" >/dev/null || return 1
+  ! grep -a 'would stop here' "$d/out" >/dev/null || return 1
+  fixture mixed "$d"; run_script "$s" "$d" --apply --yes --only fx-ui-ready --no-studio   # no --from
+  [ "$(cat "$d/rc")" = 0 ] || return 1
+  ! grep -a 'Stopped in phase' "$d/out" >/dev/null || return 1
+  writes "$d/calls" | grep -a 'repos/hugmesh/fx-ui-ready/git/refs' | grep -a 'ref=refs/tags/v0.3.0-beta.2' >/dev/null || return 1
+  [ "$(writes "$d/calls" | grep -ac 'git/refs')" = 1 ] || return 1                # nothing else tagged
+  [ -z "$(writes "$d/calls" | grep -a 'run rerun')" ]                               # nor re-run
+}
+if check_only_downstream "$SCRIPT"; then ok "--apply --only fx-ui-ready (stage 8) tags it with stage 2 and stage 5 unpublished: rc 0, one tag, no re-run"
+else bad "--only <stage-8 UI> did not reach its stage"; fi
+check_only_blocked() { # script -> 0 when --only <a Java image> stops at its own stage while its Maven deps are unpublished
+  local s=$1 d="$TMP/db.$RANDOM"
+  fixture release "$d"; run_script "$s" "$d" --apply --yes --only fx-api --from java --no-studio
+  grep -a 'stage 7 is BLOCKED: dependency stage(s) 1 2 not published' "$d/out" >/dev/null || return 1
+  [ -z "$(writes "$d/calls")" ] && [ "$(cat "$d/rc")" = 1 ]
+}
+if check_only_blocked "$SCRIPT"; then ok "--only fx-api (stage 7) still stops at its own stage while stages 1-2 are unpublished, zero writes"
+else bad "--only let a Java image past unpublished Maven stages"; fi
 D="$TMP/d2"; fixture mixed "$D"; run_script "$SCRIPT" "$D" --only fx-lib-b --no-studio
 grep -a 'would tag: fx-ui-ready' "$D/out" >/dev/null && bad "--only acted on an unselected repo" || ok "--only: unselected READY rows are not planned"
 D="$TMP/d3"; fixture mixed "$D"; run_script "$SCRIPT" "$D" --only no-such-repo
@@ -499,6 +527,62 @@ PY
   [ "$(cat "$d/rc")" = 1 ]
 }
 if check_main_move "$SCRIPT"; then ok "main moved after the check: STOP, no tag created, rc 1, resume command printed"; else bad "main move was tagged anyway"; fi
+
+# ── H: check 7 is about main's HEAD ──────────────────────────────────────────
+echo "== H the latest main push run must be at main's HEAD"
+check_head_run() { # script -> 0 when a green push run at an older commit only passes through a paths filter
+  local s=$1 d="$TMP/h.$RANDOM"
+  fixture release "$d"
+  python3 - "$d/state.json" <<'PY'
+import json, sys
+p = sys.argv[1]; st = json.load(open(p))
+st["repos"]["fx-ui"]["main"] = ["m-fx-ui-new"]                     # run 801 is green at m-fx-ui
+g = st["repos"]["hugmesh-generator"]; g["main"] = ["m-gen-new"]     # run 911 is green at m-hugmesh-generator
+g["compare"] = {"m-hugmesh-generator": {"ahead_by": 2, "commits": ["g1", "g2"]}}
+g["path_commits"] = {"clients/docker-mesh-node": ["older"]}         # neither g1 nor g2 touches the paths
+json.dump(st, open(p, "w"))
+PY
+  run_script "$s" "$d" --apply --yes --only fx-ui --only hugmesh-generator --from apps --no-studio
+  [ "$(state_of "$d/out" fx-ui)" = REFUSE ] || return 1
+  grep -a 'fx-ui' "$d/out" | grep -a "main's HEAD has no push run yet" >/dev/null || return 1
+  [ "$(state_of "$d/out" hugmesh-generator)" = READY ] || return 1
+  if writes "$d/calls" | grep -a 'fx-ui/git/refs' >/dev/null; then return 1; fi
+  writes "$d/calls" | grep -a 'hugmesh-generator/git/refs' >/dev/null || return 1   # the paths-filter case is tagged
+  [ "$(cat "$d/rc")" = 1 ] || return 1
+  # the same generator with ONE commit under its paths since the green run: refused
+  fixture release "$d"
+  python3 - "$d/state.json" <<'PY'
+import json, sys
+p = sys.argv[1]; st = json.load(open(p))
+g = st["repos"]["hugmesh-generator"]; g["main"] = ["m-gen-new"]
+g["compare"] = {"m-hugmesh-generator": {"ahead_by": 2, "commits": ["g1", "g2"]}}
+g["path_commits"] = {"clients/docker-mesh-node": ["g2", "older"]}
+json.dump(st, open(p, "w"))
+PY
+  run_script "$s" "$d" --only hugmesh-generator --no-studio
+  [ "$(state_of "$d/out" hugmesh-generator)" = REFUSE ] || return 1
+  grep -a 'hugmesh-generator' "$d/out" | grep -a '1 commit(s) under clients/docker-mesh-node/\*\* since m-hugmes' >/dev/null
+}
+if check_head_run "$SCRIPT"; then ok "green push run at an older commit: REFUSE without a paths filter (never tagged), READY with one when nothing since touches its paths, REFUSE when something does"
+else bad "check 7 accepted a push run that is not at main's HEAD"; fi
+check_merge_no_run() { # script -> 0 when a --merge whose push run never appears tags nothing
+  local s=$1 d="$TMP/hm.$RANDOM"
+  fixture release "$d"
+  python3 - "$d/state.json" <<'PY'
+import json, sys
+p = sys.argv[1]; st = json.load(open(p))
+st["repos"]["fx-ui"]["prs"]["7"]["no_run"] = True
+json.dump(st, open(p, "w"))
+PY
+  run_script "$s" "$d" --apply --yes --merge fx-ui#7 --only fx-ui --no-studio
+  grep -a '"pr", "merge", "7"' "$d/calls" >/dev/null || return 1
+  ! grep -a 'git/refs' "$d/calls" | grep -a POST >/dev/null || return 1
+  grep -a "STOP fx-ui#7: no new release.yml push run appeared" "$d/out" >/dev/null || return 1
+  grep -a "Stopped in phase 'merge'" "$d/out" >/dev/null || return 1   # stops there, not later at check 7
+  [ "$(cat "$d/rc")" = 1 ]
+}
+if check_merge_no_run "$SCRIPT"; then ok "--merge whose push run never appears: STOP in the merge phase, the merge commit is not tagged"
+else bad "--merge tagged a merge commit with no push run"; fi
 
 # ── F: a full --apply, stage ordering ────────────────────────────────────────
 echo "== F full apply ordering"
@@ -552,8 +636,18 @@ mutate main-recheck 's/if \[ "\$cur" != "\$sha" \]; then/if false; then/' check_
 mutate only-fix 's/^stage_published() { local r; for r in \$(rows_in_stage "\$1"); do published "\$r" || return 1; done; return 0; }/stage_published() { local r; for r in $(rows_in_stage "$1"); do { published "$r" \&\& selected "$r"; } || return 1; done; return 0; }/' check_only
 # M2b the same fix in the dry-run plan
 mutate only-fix-plan 's/^    published "\$r" \&\& continue$/    published "$r" \&\& selected "$r" \&\& continue/' check_only
-# M3 the NEEDS-BUMP boundary: commits since the tag stop counting
-mutate needs-bump 's/if \[ "\$n" = 0 \]; then/if true; then/' check_classification
+# M3 the NEEDS-BUMP boundary: commits since the tag stop counting (the FIRST `n = 0` test)
+mutate needs-bump '0,/if \[ "\$n" = 0 \]; then/s//if true; then/' check_classification
+# M4 a stage with no selected row is no longer skipped
+mutate only-skip 's/^  if ! stage_has_selected "\$st"; then$/  if false; then/' check_only_downstream
+# M5 a stage's verdict is taken over ALL its rows again, not the selected ones
+mutate only-verdict 's/^  \[ "\$rc" = 0 \] \&\& stage_sel_published "\$st"$/  [ "$rc" = 0 ] \&\& stage_published "$st"/' check_only_downstream
+# M6 check 7 accepts a green push run at any commit again
+mutate head-run 's/^    elif \[ "\$rsha" != "\$sha" \]; then$/    elif false; then/' check_head_run
+# M7 the paths-filter half of check 7 stops counting the commits since the green run
+mutate head-run-paths 's/^        if \[ "\$n" = 0 \]; then$/        if true; then/' check_head_run
+# M8 a --merge whose push run never appears no longer stops
+mutate merge-wait '/STOP \$m: no new/,/return 1/s/return 1/:/' check_merge_no_run
 
 echo
 echo "== test-release-beta.sh: $pass passed, $fail failed"

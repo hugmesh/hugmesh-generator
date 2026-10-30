@@ -6,7 +6,8 @@
 #                                                   # run every phase in order, asking y/N before each write
 #   scripts/release-beta.sh --apply --merge hugmesh-games#50 --studio next
 #   scripts/release-beta.sh --apply --from java     # resume at a phase (re-running skips DONE work anyway)
-#   scripts/release-beta.sh --apply --only hugmesh-admin-ui   # act on these repos only (repeatable)
+#   scripts/release-beta.sh --apply --only hugmesh-admin-ui   # act on these repos only (repeatable);
+#                                                   # stages with none of them are skipped, never a stop
 #   scripts/release-beta.sh --urls                  # only list the packages that are not public yet
 #
 # Options: --dry-run (default) | --apply   --yes (answer y to every y/N; each action is still printed)
@@ -135,13 +136,18 @@ stage_deps() {
 rows_in_stage() { local r; for r in "${ROWS[@]}"; do [ "${T_STAGE[$r]}" = "$1" ] && echo "$r"; done; return 0; }
 
 # --only selects what this run ACTS on. It never changes what a row IS: every row is
-# classified, and a dependency stage counts as published when its rows are DONE, whether
-# or not they were selected. (release-all-20261022.sh marked every unselected row not-OK,
-# so `--only <one downstream repo>` blocked its own stage.)
+# classified, and a dependency stage counts as published when ALL its rows are DONE,
+# whether or not they were selected. (release-all-20261022.sh marked every unselected row
+# not-OK, so `--only <one downstream repo>` blocked its own stage.) A stage with no
+# selected row is reported and skipped, never a stop; a stage with selected rows succeeds
+# when its SELECTED rows are published. So `--only <a UI>` tags that UI whatever state the
+# Maven chain is in, and `--only <a Java image>` still stops at its own stage when a Maven
+# link it builds on is not published.
 selected() {
   [ ${#ONLY[@]} -eq 0 ] && return 0
   local o; for o in "${ONLY[@]}"; do [ "$o" = "$1" ] && return 0; done; return 1
 }
+stage_has_selected() { local r; for r in $(rows_in_stage "$1"); do selected "$r" && return 0; done; return 1; }
 
 # ── version helpers ──────────────────────────────────────────────────────────
 is_beta() { [[ "$1" =~ ^[0-9]+\.[0-9]+\.[0-9]+-beta\.[0-9]+$ ]]; }
@@ -282,12 +288,14 @@ tag_commit() {
   printf '%s' "$out" | head -1 | cut -c1-120; return 2
 }
 
-# commits_since repo tag paths... -> number of main commits since the tag that the workflow
-# would build (all of them when it has no paths filter)
+# commits_since repo base paths... -> number of main commits since base (a tag or a commit
+# sha) that the workflow would build (all of them when it has no paths filter)
 commits_since() {
-  local repo=$1 tag=$2; shift 2
+  local repo=$1
+  local base=$2
+  shift 2
   local cmp ahead shas p pfx rel n=0 s
-  cmp=$(ghq api "repos/$ORG/$repo/compare/$tag...main" --jq '(.ahead_by|tostring), .commits[].sha') || { echo "?"; return 1; }
+  cmp=$(ghq api "repos/$ORG/$repo/compare/$base...main" --jq '(.ahead_by|tostring), .commits[].sha') || { echo "?"; return 1; }
   ahead=$(printf '%s\n' "$cmp" | head -1)
   if [ $# -eq 0 ]; then echo "$ahead"; return 0; fi
   shas=$(printf '%s\n' "$cmp" | tail -n +2)
@@ -312,7 +320,7 @@ classify() {
   local vfile=${T_VFILE[$repo]}
   local prefix=${T_PREFIX[$repo]}
   local wf=${T_WF[$repo]}
-  local sha ver tag tc rc wft facts pushmain run rid rsha rst rcon rcreated reasons=() s where t pin age
+  local sha ver tag tc rc wft facts pushmain run rid rsha rst rcon rcreated reasons=() s where t pin age n
   local -a paths=()
   S_STATE[$repo]=REFUSE; S_REASON[$repo]=""; S_NOTE[$repo]=""; S_SHA[$repo]=""; S_VER[$repo]=""; S_TAG[$repo]=""
   S_RERUN[$repo]=""; S_BUSY[$repo]=""; S_TAGRUN[$repo]=""; S_OLD[$repo]=""
@@ -354,7 +362,6 @@ classify() {
     if [ "$tc" = "$sha" ]; then
       S_STATE[$repo]=DONE; S_NOTE[$repo]="tag $tag at main ${sha:0:12}, run $rid green"; return
     fi
-    local n
     n=$(commits_since "$repo" "$tag" "${paths[@]}" || true)
     if [ "$n" = 0 ]; then
       S_STATE[$repo]=DONE; S_NOTE[$repo]="tag $tag (${tc:0:12}) run $rid green; main has no commit since it that $wf builds (paths: ${paths[*]})"
@@ -416,7 +423,20 @@ classify() {
         reasons+=("last main push run $rid (${rsha:0:8}) is $rcon: fix the cause, then gh run rerun $rid --failed -R $ORG/$repo (the rerun phase does this)")
       fi
     elif [ "$rsha" != "$sha" ]; then
-      S_NOTE[$repo]="last main push run $rid green at ${rsha:0:8} (main is ${sha:0:8}; no push run for it, paths filter)"
+      # main's HEAD has no push run of its own. Without a paths filter that run is still to
+      # come (just merged, Actions lagging, a [skip ci] commit): tagging now would publish a
+      # commit whose release workflow never ran on main. With a paths filter it is fine only
+      # when nothing since the green run touches those paths.
+      if [ ${#paths[@]} -eq 0 ]; then
+        reasons+=("main is ${sha:0:8} but the latest main push run of $wf ($rid, green) is at ${rsha:0:8}: main's HEAD has no push run yet (just merged, Actions lagging, or [skip ci]). Wait for it (https://github.com/$ORG/$repo/actions); if none ever comes, push a commit to main")
+      else
+        n=$(commits_since "$repo" "$rsha" "${paths[@]}" || true)
+        if [ "$n" = 0 ]; then
+          S_NOTE[$repo]="last main push run $rid green at ${rsha:0:8} (main is ${sha:0:8}; no commit since it under ${paths[*]}, so no push run is due)"
+        else
+          reasons+=("main is ${sha:0:8} and has ${n} commit(s) under ${paths[*]} since ${rsha:0:8}, where the latest main push run $rid is green; their push run has not appeared yet: wait for it (https://github.com/$ORG/$repo/actions)")
+        fi
+      fi
     else
       S_NOTE[$repo]="last main push run $rid green at HEAD"
     fi
@@ -440,6 +460,26 @@ stage_plan_ok() {
   for r in $(rows_in_stage "$1"); do
     published "$r" && continue
     selected "$r" || return 1
+    case "${S_STATE[$r]:-}" in READY|RUNNING) continue ;; esac
+    [ -n "${S_RERUN[$r]:-}" ] || [ -n "${S_BUSY[$r]:-}" ] || return 1
+  done
+  return 0
+}
+# The same two verdicts over the rows --only selected (all rows without --only): what a
+# stage that ACTS has to achieve. A dependency stage is always judged on all its rows.
+stage_sel_published() {
+  local r
+  for r in $(rows_in_stage "$1"); do
+    selected "$r" || continue
+    published "$r" || return 1
+  done
+  return 0
+}
+stage_sel_plan_ok() {
+  local r
+  for r in $(rows_in_stage "$1"); do
+    selected "$r" || continue
+    if published "$r"; then continue; fi
     case "${S_STATE[$r]:-}" in READY|RUNNING) continue ;; esac
     [ -n "${S_RERUN[$r]:-}" ] || [ -n "${S_BUSY[$r]:-}" ] || return 1
   done
@@ -570,6 +610,9 @@ tag_stage() {
   say "  -- stage $st: $(stage_title "$st")"
   classify_stage "$st"
   for r in $(rows_in_stage "$st"); do row_line "$r"; done
+  if ! stage_has_selected "$st"; then
+    say "  >> stage $st: none of its repositories is selected by --only; skipped"; return 0
+  fi
   if [ "$MODE" = dry ]; then
     blk=$(blocked_by "$st" plan)
     if [ -n "$blk" ]; then say "  >> stage $st would be BLOCKED: stage(s) $blk will not be published by this run"; return 1; fi
@@ -587,8 +630,8 @@ tag_stage() {
     esac
   done
   if [ ${#ready[@]} -eq 0 ]; then
-    if stage_published "$st"; then say "  >> stage $st: everything DONE"; return 0; fi
-    if [ "$MODE" = dry ] && stage_plan_ok "$st"; then
+    if stage_sel_published "$st"; then say "  >> stage $st: everything$([ ${#ONLY[@]} -gt 0 ] && printf ' selected') DONE"; return 0; fi
+    if [ "$MODE" = dry ] && stage_sel_plan_ok "$st"; then
       for r in $(rows_in_stage "$st"); do
         [ -n "${S_RERUN[$r]:-}${S_BUSY[$r]:-}" ] && selected "$r" && say "  would tag: $r ${S_TAG[$r]} once its main push run is green (rerun phase), at main as it is then"
       done
@@ -598,7 +641,7 @@ tag_stage() {
   fi
   if [ "$MODE" = dry ]; then
     for r in "${ready[@]}"; do say "  would tag: $r ${S_TAG[$r]} at ${S_SHA[$r]:0:12}, then watch its ${T_WF[$r]} run"; done
-    stage_plan_ok "$st"; return
+    stage_sel_plan_ok "$st"; return
   fi
   if ! confirm "Tag ${#ready[@]} repo(s) in stage $st (${ready[*]})?"; then
     say "  stage $st skipped by the operator. next: $(resume_cmd "$CUR_PHASE")"; return 1
@@ -608,12 +651,12 @@ tag_stage() {
     tag_and_watch "$r" || { rc=1; [ "$st" -le 5 ] && { say "  STOP: a Maven/gateway chain link failed; later chain stages would fail the same way"; break; }; }
   done
   classify_stage "$st"
-  [ "$rc" = 0 ] && stage_published "$st"
+  [ "$rc" = 0 ] && stage_sel_published "$st"
 }
 
 # rerun_red stage... : re-run the red main push runs whose only fault is that run
 rerun_red() {
-  local st r todo=() rc=0 blk
+  local st r todo=() rc=0 blk has
   for st in "$@"; do
     for r in $(rows_in_stage "$st"); do
       selected "$r" || continue
@@ -628,6 +671,9 @@ rerun_red() {
   done
   [ ${#todo[@]} -gt 0 ] || { say "  nothing to re-run"; return "$rc"; }
   for st in "$@"; do
+    has=0
+    for r in "${todo[@]}"; do [ "${T_STAGE[$r]}" = "$st" ] && has=1; done
+    [ "$has" = 1 ] || continue
     if [ "$MODE" = dry ]; then blk=$(blocked_by "$st" plan); else blk=$(blocked_by "$st" real); fi
     if [ -n "$blk" ]; then
       say "  >> not re-running stage $st yet: its dependency stage(s) $blk are not published, so the runs would fail again for the same reason"
@@ -812,7 +858,9 @@ phase_merge() {
     if id=$(find_new_run "$repo" "${T_WF[$repo]}" main push "${pre:-0}"); then
       watch_run "$repo" "$id" || say "  (the release checks below will report it)"
     else
-      say "  no new ${T_WF[$repo]} push run appeared within $((TRIES * POLL)) s: https://github.com/$ORG/$repo/actions"
+      say "  STOP $m: no new ${T_WF[$repo]} push run appeared within $((TRIES * POLL)) s, so $repo cannot be released yet: https://github.com/$ORG/$repo/actions"
+      say "    Wait for it, then: $(resume_cmd merge)   (a merged PR is skipped)"
+      return 1
     fi
   done
   say "  re-checking every repo after the merges"
@@ -898,7 +946,7 @@ phase_site() {
 }
 
 phase_verify() {
-  local r p st=0 vis cont
+  local r p st=0 vis cont what=artifact
   load_site_map
   cont=$(ghq api "/orgs/$ORG/packages?package_type=container&per_page=100" --paginate --jq '.[]|.name+"="+.visibility' || true)
   say "  state      repo                                   release                where"
@@ -913,11 +961,12 @@ phase_verify() {
         printf '             %-52s %s\n' "maven $p:${S_VER[$r]:-?}" "$(site_where "$r" "$p")"
       fi
     done
-    [ "${S_STATE[$r]}" = DONE ] || st=1
+    if selected "$r" && [ "${S_STATE[$r]}" != DONE ]; then st=1; fi
   done
   studio_facts
   say "  The Studio shows at the top of hugmesh.net/downloads."
-  if [ "$st" = 0 ]; then say "== every artifact is DONE"; return 0; fi
+  [ ${#ONLY[@]} -eq 0 ] || what="selected artifact"
+  if [ "$st" = 0 ]; then say "== every $what is DONE"; return 0; fi
   [ "$MODE" = dry ] && return 0
   say "== not everything is DONE (rows above). Re-run: $(resume_cmd preflight)"
   return 1

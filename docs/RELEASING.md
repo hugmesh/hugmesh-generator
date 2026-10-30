@@ -34,9 +34,9 @@ repositories in nine dependency stages. That list holds **no version numbers**.
 |---|---|
 | `--dry-run` (default) / `--apply` | read-only plan / do it |
 | `--yes` | answer `y` to every `y/N` (web-UI pauses still wait for Enter) |
-| `--merge <repo>#<n>` (repeatable) | before releasing: `gh pr ready` (when draft) and `gh pr merge --squash --delete-branch`, then wait for the new main push run |
+| `--merge <repo>#<n>` (repeatable) | before releasing: `gh pr ready` (when draft) and `gh pr merge --squash --delete-branch`, then wait for the new main push run (if none appears, it stops there) |
 | `--studio <version>` / `--studio next` / `--no-studio` | release the Studio through `scripts/release-studio.sh` (see below) |
-| `--only <repo>` (repeatable) | act on these repositories only; every repository is still checked |
+| `--only <repo>` (repeatable) | act on these repositories only; every repository is still checked, and a stage with none of them is skipped |
 | `--from <phase>` | resume at a phase (re-running also skips DONE work by itself) |
 | `--expect <repo>=<version>` (repeatable) | refuse that repository unless main's version file says exactly this |
 | `--urls` | only list the packages that are not public yet, with their settings pages |
@@ -69,7 +69,11 @@ never from a local checkout:
 - the release workflow on main signs (`cosign sign` and `actions/attest-build-provenance`);
 - the workflow does not write a private `DOCKER_CONFIG`;
 - every required secret is set;
-- the **latest push run of the release workflow on main** is green.
+- the **latest push run of the release workflow on main** is green, and it ran on
+  main's current commit. If main has moved past it (a merge seconds ago, Actions lagging,
+  a `[skip ci]` commit), the repository is `REFUSE` until that commit's own push run
+  appears. The one exception is a workflow with a `paths:` filter (mesh-node): there the
+  green run counts when no commit since it touches those paths, because none is coming.
 
 For `NEEDS-BUMP`, "commits since the tag" respects the workflow's `paths:` filter. The
 mesh-node image only counts commits under `clients/docker-mesh-node/`, so the
@@ -128,9 +132,16 @@ Enter, and checks again.
 - **A failed tag run** stops the release, and that beta number stays as it is. A
   published beta is never re-tagged. Read `gh run view <id> --log-failed -R
   hugmesh/<repo>`, fix it on main, bump the version file to `-beta.N+1` and run again.
-- **`--only`** never changes what a stage *is*. A stage whose repositories are already
-  DONE counts as published even when you did not select them. (The old tooling marked
-  them not-OK and blocked the stage.)
+- **`--only`** never changes what a repository *is*: every row is still checked and
+  printed. It changes what a stage has to achieve:
+  - A stage with none of your repositories is reported and skipped. It is never a stop.
+    So `--apply --only hugmesh-admin-ui` tags that UI even while a Maven link is red.
+  - A stage with some of your repositories succeeds when *those* are published. Other
+    rows in it that are not ready do not stop the run.
+  - A **dependency** stage is still judged on all its rows. A stage whose repositories
+    are all DONE counts as published even when you did not select them. (The old
+    tooling marked them not-OK and blocked the stage.) But `--only hugmesh-admin-bff-api`
+    stops at stage 7 while any Maven link it builds on is not published.
 
 ## Bumping a version for the next beta
 
@@ -182,6 +193,13 @@ appears in, or "not listed".
   package is still private. See the manual steps above.
 - **"main moved ... nothing was tagged".** Something merged between the check and the
   tag. Wait for the new push run, then run the printed `--from` command.
+- **"main's HEAD has no push run yet".** Main moved past the last green push run, and
+  the run for the new commit has not appeared. Usually a merge landed a moment ago, so
+  wait for it and run again. If it never comes (a `[skip ci]` commit, or Actions
+  disabled), push a commit to main.
+- **"STOP <repo>#<n>: no new ... push run appeared".** The `--merge` went through, but
+  its push run did not start within five minutes. Watch the printed Actions page, then
+  run the printed `--from merge` command. The merged PR is skipped on that run.
 - **A merge does not seem to start a run.** Workflows with a `paths:` filter (mesh-node)
   only run for commits that touch those paths. The merge phase says so, and does not
   wait.
@@ -201,9 +219,13 @@ appears in, or "not listed".
 `tests/scripts/test-release-beta.sh` runs it against a recording `gh` stub. It proves:
 
 - a dry run makes zero write calls;
-- the version parsing, the classification, the `--only` fix and the main-moved re-check;
+- the version parsing and the classification;
+- the `--only` fix: `--apply --only <a UI>` tags it while a Maven stage is unpublished,
+  and `--only <a Java image>` still stops at its own stage;
+- the main-moved re-check, the "push run at main's HEAD" check (with and without a
+  `paths:` filter), and a `--merge` whose push run never appears;
 - the stage order of a full `--apply`;
-- a four-mutation battery over those guards.
+- a nine-mutation battery over those guards.
 
 It runs in the pre-merge `shell suites (debian/python)` job and in GitLab's
 `lint:release-beta`.
