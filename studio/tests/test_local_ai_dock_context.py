@@ -1060,3 +1060,49 @@ def test_the_windows_note_is_whole_whatever_the_panel_was_doing(
     assert QtCore.QRect(0, 0, wiz.width(), wiz.height()).contains(r) and rect_in(wiz, dock).contains(r), t
     assert_mount_agrees(wiz, dock, t)
     wiz.grab().save(str(tmp_path / f"{t}.png"))
+
+
+def test_a_plain_start_success_on_the_collapsed_strip_opens_nothing(mesh_window, qapp):
+    """Only a result the note alone can say opens the panel: a Linux start that
+    succeeded (it has its command) leaves the strip collapsed and the tab as it was."""
+    wiz, dock, body = mesh_window
+    dock.tabs.setCurrentIndex(dock._tab_index["builds"])
+    dock.set_expanded(False)
+    dock._start_fn, dock._custom_start = (lambda: lai.StartResult(
+        True, "Starting the local assistant; the status line updates.", "x start")), True
+    pump(qapp)
+    dock.start_btn.click()
+    assert wait_for(qapp, lambda: dock.start_btn.isEnabled() and dock.note.text())
+    pump(qapp)
+    assert not dock.expanded and dock.current_tab() == "builds" and dock.work_window is None
+    assert dock.height() == dock.bar_height()
+
+
+@pytest.mark.parametrize("size", ((942, 552), (800, 600)), ids=lambda s: f"{s[0]}x{s[1]}")
+def test_a_long_standing_problem_note_is_whole_and_the_panel_returns_to_its_cap(
+        mesh_window, qapp, tmp_path, size):
+    """The panel grows for the note whatever wrote it: the snapshot's own problem line
+    (Ollama not answering, with its fix) is shown whole too, and once the snapshot is
+    clean again the panel is back to dock_height_for()."""
+    wiz, dock, body = mesh_window
+    wiz.resize(*size)
+    pump(qapp)
+    t = f"problem-{size[0]}x{size[1]}"
+    dock.apply_snapshot(make_snapshot(
+        ollama_up=False, loaded=[], problem="The Ollama server is not answering on 127.0.0.1:11434.",
+        fix=("Start it on this machine only: OLLAMA_HOST=127.0.0.1:11434 OLLAMA_CONTEXT_LENGTH=32768 "
+             "setsid ollama serve >~/.cache/ollama-serve.log 2>&1 &, or choose the Studio's own "
+             "Ollama in Docker, then press Start local assistant."),
+        doc="docs/LOCAL-AI-ASSISTANT.md section 3"))
+    pump(qapp)
+    pump(qapp)
+    note = dock.note
+    assert note.isVisible() and "not answering" in note.text(), t
+    assert note.height() >= note.heightForWidth(note.width()), (t, note.height(), note.heightForWidth(note.width()))
+    assert rect_in(wiz, dock).contains(rect_in(wiz, note)), t
+    assert_mount_agrees(wiz, dock, t)
+    wiz.grab().save(str(tmp_path / f"{t}.png"))
+    dock.apply_snapshot(make_snapshot())
+    assert wait_for(qapp, lambda: not note.isVisible())
+    assert_mount_agrees(wiz, dock, f"{t}-clean")
+    assert dock.height() == dock_mod.dock_height_for(wiz.height(), True, dock.bar_height(), dock.tall), t

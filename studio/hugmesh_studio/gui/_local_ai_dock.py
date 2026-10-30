@@ -2182,10 +2182,13 @@ class LocalAIDock(QtWidgets.QFrame):
             self.start_btn.setEnabled(True)
             self.start_btn.setText("Start local assistant")
             res = value if error is None else None
-            # what came of it is said in the note, on the Assistant tab: open the panel
-            # there, or a press on the collapsed strip shows nothing at all (round 4:
-            # the native Windows refusal opens no work window, so it was never seen)
-            self.show_tab("assistant")
+            # a failure, or a start with no command (native Windows: the refusal, or the
+            # Docker Ollama up with the queue worker off), is said ONLY in the note, on
+            # the Assistant tab: open the panel there, or a press on the collapsed strip
+            # shows nothing at all (round 4). A plain success opens nothing uninvited;
+            # the status line says it.
+            if res is None or not res.ok or not res.command:
+                self.show_tab("assistant")
             if res is not None and res.ok:
                 self._say(res.message, 20)
                 QtCore.QTimer.singleShot(1500, self.refresh)
