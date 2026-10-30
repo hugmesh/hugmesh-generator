@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Write studio/hugmesh_studio/core/assistant_catalogue_pages.json: which wizard page
+"""Write studio/hugmesh_studio/core/assistant_catalogue_pages.py: which wizard page
 reads which ImageConfig field (``cfg.<field>`` in gui/pages/<page>.py), so the local
 assistant's option catalogue can say where a setting is edited.
 
@@ -9,7 +9,6 @@ assistant's option catalogue can say where a setting is edited.
 Stdlib only; a test regenerates and compares the file, so a page that starts editing
 a new field fails the test, not the person.
 """
-import json
 import os
 import sys
 
@@ -22,7 +21,7 @@ from hugmesh_studio.core import assistant_catalogue as cat  # noqa: E402
 
 def main(argv):
     computed = cat.compute_pages()
-    text = json.dumps(computed, indent=1, sort_keys=True) + "\n"
+    text = cat.pages_module_text(computed)
     if "--check" in argv:
         try:
             with open(cat.PAGES_FILE, encoding="utf-8") as fh:

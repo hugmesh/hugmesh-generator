@@ -37,6 +37,13 @@ def big_history(n_messages=40, kb=20):
 def test_the_primer_is_the_first_part_of_the_coding_agent_context_and_under_its_cap():
     primer = actx.primer_text(GENERATOR_DIR, "/home/someone/Github")
     assert ac.tokens(primer) <= ap.CAPS["primer"]
+    # under the cap wherever the checkout lives: CI's path is longer than this box's,
+    # and 602 > 600 there once (PR #832). A 100-character generator path and a
+    # 40-character checkouts folder still fit.
+    gen = "/" + "/".join(["checkout-folder"] * 5) + "/" + "x" * 2 + "/hugmesh-generator"
+    root = "/home/a-rather-long-user-name/Github-all"
+    assert len(gen) >= 100 and len(root) >= 40
+    assert ac.tokens(actx.primer_text(gen, root)) <= ap.CAPS["primer"]
     ctx = actx.render_context(generator_dir=GENERATOR_DIR, checkouts_root="/home/someone/Github", checkouts=[])
     assert primer in ctx and ctx.index(primer) < ctx.index("## Rules")
     for words in ("## What HugMesh is", "## The Studio", "Casdoor", "akkoma", "phpbb", "Tor",

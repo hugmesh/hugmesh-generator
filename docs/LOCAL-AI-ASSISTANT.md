@@ -703,11 +703,31 @@ A question that names one gets "That file holds secrets; I do not read it." Ever
 value whose key looks secret (password, token, auth_key, api_key, private, unseal,
 kubeconfig, luks, client_secret, cookie, session_id) is rendered as
 `(set, never shown)`, and every free-text line (error tails, run logs, file texts shown
-for a code edit) goes through `redact`: private-key blocks, bearer tokens,
-`password=...`, Tailscale, GitHub, AWS and Vault tokens, JWTs, database URLs with
-credentials, the local-only folder's path and the e2e `user / secret` shape are
-blanked. `studio/tests/test_assistant_privacy.py` plants a canary in every denied path
-and asserts none reaches any rendered text.
+for a code edit) goes through `redact`, which blanks:
+
+- any key that CONTAINS password, passwd, passphrase, pwd, secret, token, api key, auth
+  key, private key, access key, client key, preshared key or credential, however it is
+  prefixed or quoted: `POSTGRES_PASSWORD=...`, `CASDOOR_CLIENT_SECRET=...`,
+  `export GH_TOKEN=...`, `aws_secret_access_key = ...`, `{"admin_password": "..."}`,
+  `x-api-key: ...`, WireGuard's `PrivateKey = ...`, a kubeconfig's `client-key-data:`
+  (a plural "tokens", such as a context size, is left alone);
+- command-line flags such as `--password X`, `--admin-password=X`, `--client-secret X`,
+  and `mysql ... -pX`;
+- the password in ANY `scheme://user:password@host` URL, and secret query parameters
+  (`?access_token=...`, `&password=...`);
+- `Authorization: Bearer|Basic ...`, `Cookie:` and `Set-Cookie:` values, Vault's
+  `Unseal Key N:` and `Initial Root Token:` lines;
+- private-key blocks, and a bare base64 key-body line (a key printed line by line, or a
+  tail that cut its BEGIN line off): a build's error tail is redacted as ONE text per
+  image before it is cut, so a block that spans lines is caught whole;
+- Tailscale and headscale keys, GitHub, AWS, Vault, Slack and `sk-` tokens, JWTs, the
+  local-only folder's path, the e2e `user / secret` shape and the retired `e2e-pass`
+  literal.
+
+`studio/tests/test_assistant_privacy.py` plants a canary in every denied path and
+asserts none reaches any rendered text, runs every shape above through `redact` (and
+ordinary log lines that must stay as they are), and plants the shapes in a failed
+build's tail and the mesh log and asserts none reaches the system text the model gets.
 
 ### 12.7 The option catalogue (from the code)
 
@@ -715,8 +735,9 @@ and asserts none reaches any rendered text.
 offers — from `config.Domain`, `LocalMeshBootstrapConfig` and `ImageConfig` and the
 `*_CHOICES` tables, the theme presets, modes, styles, decorations and background
 effects, the font presets, the reach choices — with its valid values, default, the
-page it is edited on (`assistant_catalogue_pages.json`, written by
-`scripts/local-ai/catalogue-pages.py` and checked by a test) and whether the
+page it is edited on (`assistant_catalogue_pages.py`, a generated module so it ships
+wherever the package does, written by `scripts/local-ai/catalogue-pages.py` and checked
+by a test) and whether the
 assistant may propose a change to it. The slice for the page on screen goes into every
 prompt as `# Options on this page`. `scripts/local-ai.sh catalogue domain` lists the
 domain scope: `services`, `signin` (and `provider`, `issuer`, `client_id`, `jwks`),
@@ -743,17 +764,27 @@ model is shown; the card always says `from -> to` before anything is applied.)
 `core/assistant_actions.parse_proposal` reads the block; `validate` checks the field
 against the catalogue and the page's own validators (`brand_look.check_value`,
 `domain_reach`, `config.signin_problems`), reads the current value from the page —
-never from the model — and refuses a no-op ("Already set to ..."), another domain
-than the one on screen unless the question named it, or a field this page does not
-edit ("I can only change these on this page: ... Valid values for <key>: ..."). The
+never from the model — and refuses a no-op ("Already set to ..."), any domain but the
+one on screen ("I only change the domain on screen (shop.example). To change
+blog.example, open its tabs (Next domain) and ask there." — even when the question
+names the other domain: the page's readers and writers act on the domain on screen),
+or a field this page does not edit ("I can only change these on this page: ... Valid
+values for <key>: ..."). Switching sign-in back to the mesh's or to an own Casdoor is
+handed to the page's own writer, which drops the external provider's values; an
+external provider is checked with exactly the values that writer gets, and without a
+sign-in address and client id the card says to type them on the Identity tab first. The
 window shows a card `Proposed change — <domain>` with `<label>: <from> -> <to>`,
 Apply and Cancel; the text UI prints the same block and takes `apply`, `cancel` and
 later `undo`. Apply re-reads the page first (a value that moved since the proposal is
-refused: "changed to <x> since I proposed this; ask again") and then writes through
+refused: "changed to <x> since I proposed this; ask again"; a card left up after Next
+domain is refused: "This change is for shop.example, but the page now shows
+blog.example. Go back to shop.example to apply it") and then writes through
 the page's own functions — the `BrandView` setters, the look model, the Ways tab's
 Tor signal, the Services tab's check boxes — so the visible widgets show the new value
-exactly as after a click; Undo puts the before value back the same way (one level per
-page). The keys the assistant may propose (`FIELD_ROUTES`): `services`, `tor`,
+exactly as after a click; Undo puts the page back EXACTLY the same way — the look's
+whole record (a preset fills the preset and both colours), the egress mode with its
+provider file, the sign-in choice with its provider values — one level per domain, and
+only on that domain's tabs. The keys the assistant may propose (`FIELD_ROUTES`): `services`, `tor`,
 `signin`, `provider`, `issuer`, `client_id`, `jwks`, `tailnet`, `egress` (`vpn` is
 proposed as a mode only — "pick the VPN file on the page"), `look.preset`,
 `look.mode`, `look.primary`, `look.secondary`, `look.font`, `look.style`,
@@ -779,12 +810,34 @@ small unified-diff parser: every context line must match the file exactly, a hun
 header only needs a readable start line (`@@ -3 ...`), and a diff that would change
 nothing is refused rather than "applied". The window
 shows `Proposed edit — <app>-<domain>` with View diff (the Current work window's
-viewer), Apply and Cancel, then Revert. Apply writes byte copies of the files to
-`<state>/assistant-edits/<id>/before/` with a manifest (sha256 before and after), then
-the files; Revert restores the copies after checking the file still has the applied
-sha. Limits: text files only, at most 3 files and 120 changed lines, 64 KiB per file,
+viewer), Apply and Cancel, then Revert. Apply first checks every hunk AGAIN against
+the file as it is at that moment — a file edited after the card appeared is refused
+("changed since I proposed this edit ... nothing was changed. Ask again for a fresh
+diff."), so the diff applied is always the diff on the card — then writes byte copies
+of the files to `<state>/assistant-edits/<id>/before/` with a manifest (sha256 before
+and after), then the files; Revert restores the copies after checking the file still
+has the applied sha. Limits: text files only, at most 3 files and 120 changed lines, 64 KiB per file,
 never a secret-shaped name, never through a symlink or outside the folder, never the
 build source root. Nothing is committed, pushed or run. Anything bigger ("refactor",
 "add a feature", more files) is handed to the coding-agent launcher: "That is more
 than a small edit (...). Open a coding session with the Launch button — your request
 is in the brief."
+
+### 12.10 Measuring it against a real model: `scripts/local-ai/eval.py`
+
+`scripts/local-ai/eval.py` asks the local model the questions in
+`scripts/local-ai/eval-items.json`, one at a time, against a THROWAWAY state (a temp
+`HOME` and Studio state folder with a planted brand, two domains, a failed build whose
+error tail carries canaries, and a code folder), and scores what the faces would show:
+the answer with its Sources line, or for a change request the validated card (or its
+refusal). It never starts, stops or pulls a model; Ollama must already be serving on
+the loopback address.
+
+```
+LOCAL_AI_MODEL=qwen3:8b python3 -I scripts/local-ai/eval.py scripts/local-ai/eval-items.json
+```
+
+It prints a table and exits 1 below its thresholds (80 % of the must-mention items,
+every must-not item, every change block parsing and validating). The scores are
+advisory: a small model's answers vary from run to run.
+

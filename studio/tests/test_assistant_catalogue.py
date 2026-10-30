@@ -2,7 +2,6 @@
 regenerates identically.
 """
 import dataclasses
-import json
 import os
 import subprocess
 import sys
@@ -58,10 +57,11 @@ def test_choices_come_from_the_code_tables():
     assert all(o.choices for o in cat.catalogue() if o.kind == "enum")
 
 
-def test_the_pages_json_regenerates_identically_and_names_real_pages():
-    with open(cat.PAGES_FILE, encoding="utf-8") as fh:
-        have = json.load(fh)
-    assert have == cat.compute_pages()
+def test_the_pages_module_regenerates_identically_and_names_real_pages():
+    from hugmesh_studio.core import assistant_catalogue_pages as pages_mod
+    have = pages_mod.PAGES
+    assert have == cat.compute_pages() == cat.load_pages()
+    assert cat.PAGES_FILE.endswith(".py")             # ships with the package, no package-data line
     assert "role" in have["mode"] and "domains" in have["domains"]
     r = subprocess.run([sys.executable, os.path.join(GENERATOR_DIR, "scripts", "local-ai", "catalogue-pages.py"),
                         "--check"], capture_output=True, text=True)
@@ -115,3 +115,14 @@ def test_catalogue_text_lists_the_eight_domain_keys_the_operator_asked_for():
         assert f"\n- {key} (" in text, key
     assert "the assistant can propose a change" in text and "set on the page, never shown" in cat.catalogue_text("mesh")
     assert cat.catalogue_text("nope").startswith("no such scope")
+
+
+def test_the_image_route_pages_keep_their_options_when_installed():
+    """PR #832 review: an installed Studio shipped without the .json, load_pages()
+    returned {} and network/branding/system lost every option. The map is a module now;
+    these pages have options from it."""
+    for slug in ("network", "branding", "system"):
+        class W:
+            tab = ""
+        W.slug = slug
+        assert cat.options_for(W), slug

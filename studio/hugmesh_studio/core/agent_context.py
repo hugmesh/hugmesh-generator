@@ -173,8 +173,10 @@ def primer_text(generator_dir: str, checkouts_root: str = "", *, source_root: st
         "Tor address, a VPN choice and an egress choice (direct or vpn).",
         "",
         "## The Studio",
-        f"- The HugMesh Studio (`{os.path.join(gen, 'studio')}`: `hugmesh_studio/gui`, "
-        "`hugmesh_studio/tui`, shared core `hugmesh_studio/core`) walks a "
+        # the generator path is named ONCE, in the sources block: twice made the
+        # primer's size depend on where the checkout lives (CI's path is longer)
+        "- The HugMesh Studio (`studio/hugmesh_studio/gui`, `.../tui`, shared "
+        "`.../core`) walks a "
         "person through building an image (Mesh node, Mesh desktop client, Standalone "
         "desktop) or running a Local Docker mesh (compose, or the kind lane); the other "
         "mode cards (MDM phone/Quest, Cloud deploy, e2e, QEMU, Mesh emulation, Local "
