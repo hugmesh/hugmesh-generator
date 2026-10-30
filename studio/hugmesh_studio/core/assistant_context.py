@@ -184,10 +184,12 @@ def _value(bare: str) -> str:
     """A secret's value, in one of three spellings.
 
     ESCAPED (JSON inside a string, as a log or ``kubectl`` prints it): ``\\"...\\"``,
-    with any run of backslashes before the quote. It runs to the SAME run and quote; a
-    longer or shorter run before a quote is the value's own escaped quote, so it goes
-    on. ``msg="{\\"password\\": \\"a b\\"}"`` sent its whole value to the model
-    before (PR #832 review).
+    with any run of backslashes before the quote. It runs to the SAME run and quote,
+    or to that run after any number of the value's own escaped backslashes (at depth
+    one ``\\\\\\\\\\"``: a value that ENDS in a backslash); any other run before a quote
+    is the value's own escaped quote, so it goes on. ``msg="{\\"password\\": \\"a b\\"}"``
+    sent its whole value to the model before (PR #832 review), and a value ending in a
+    backslash ran on into the next key and sent that key's secret (round 4).
 
     QUOTED (``$'..'`` too), it runs to the matching quote (a backslash escapes one),
     spaces and all: a stop at the first space sent the rest of a passphrase such as
@@ -200,8 +202,8 @@ def _value(bare: str) -> str:
     unquoted ``secret = two words`` loses only its first word. A bare value may hold a
     quote after its first character and a backslash-escaped space (``printf %q``)."""
     return (r"(?:(?P<bs>\\+)(?P<eq>[\"'])(?!\[redacted|\(set,)"
-            r"(?:(?!(?P=bs)(?P=eq))\\+[\"']|\\+(?![\\\"'])|[^\\\n])+"
-            r"(?:(?P<eclose>(?P=bs)(?P=eq))|(?=\n)|$)"
+            r"(?:(?!(?:(?P=bs)\\(?P=bs)\\)*(?P=bs)(?P=eq))\\+[\"']|\\+(?![\\\"'])|[^\\\n])+"
+            r"(?:(?P<eclose>(?:(?P=bs)\\(?P=bs)\\)*(?P=bs)(?P=eq))|(?=\n)|$)"
             r"|(?P<pre>\$?)(?P<q>[\"'])(?!\[redacted|\(set,)"
             r"(?:\\[^\n]|\\(?=\n|$)|(?!(?P=q))[^\\\n])+"
             r"(?:(?P<close>(?P=q))|(?=\n)|$)"
@@ -216,7 +218,10 @@ _VALUE = _value(r"(?:\\[^\n]?|[^\s,;&}\\])+")
 def _blank(m: "re.Match") -> str:
     """The [redacted] stand-in for a :data:`_VALUE` match, keeping its quotes."""
     if m.group("eq"):
-        return m.group("bs") + m.group("eq") + "[redacted]" + (m.group("eclose") or "")
+        # the close is written back as the opening run alone: a value's own trailing
+        # escaped backslashes are the value's, and say nothing once it is blanked
+        close = m.group("bs") + m.group("eq") if m.group("eclose") else ""
+        return m.group("bs") + m.group("eq") + "[redacted]" + close
     q = m.group("q")
     if not q:
         return "[redacted]"
@@ -299,13 +304,26 @@ def redact_lines(lines: Iterable) -> "list[str]":
     return [ln for ln, was in zip(out, lines) if ln.strip() or not was.strip()]
 
 
+#: How many times redact() runs its rules at most: until a pass changes nothing.
+REDACT_PASSES = 6
+
+
 def redact(text: str) -> str:
-    """Blank every secret shape in ``text``. Idempotent; keeps the line count."""
+    """Blank every secret shape in ``text``. Idempotent; keeps the line count.
+
+    The rules run again until a pass changes nothing (at most :data:`REDACT_PASSES`),
+    so a caller that redacts ONCE (a code edit's file text, the options block) gets
+    the same text as the Where rows, which are redacted on every hop (PR #832 round
+    4: a value that overran its close was caught only by a second pass)."""
     if not text:
         return text or ""
     out = text
-    for rx, repl in _REDACT_RULES:
-        out = rx.sub(repl, out)
+    for _ in range(REDACT_PASSES):
+        before = out
+        for rx, repl in _REDACT_RULES:
+            out = rx.sub(repl, out)
+        if out == before:
+            break
     if out.count("\n") != text.count("\n"):
         # a multi-line key block was collapsed: pad so callers that count lines agree
         out += "\n" * (text.count("\n") - out.count("\n"))

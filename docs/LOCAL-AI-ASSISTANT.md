@@ -723,12 +723,14 @@ for a code edit) goes through `redact`, which blanks:
   QUOTED value is blanked up to its closing quote, spaces and all
   (`{"admin_password": "horse battery staple"}` loses all three words; a backslash
   escapes the next character; an unclosed quote, and a value whose last character
-  before the line end is a backslash, run to the end of the line; bash's `$'..'`
-  counts as quoted). JSON inside a string, as a log or `kubectl` prints it
-  (`msg="{\"password\": \"a b\"}"`, at any depth), is blanked to its own escaped
-  closing quote. An unquoted value is one word: `secret = two words` keeps its second
-  word; inside that word a quote and a backslash-escaped space (`printf %q`'s
-  `horse\ battery`) are part of it;
+  before the line end is a backslash, run to the end of the line when no other quote
+  of that kind follows on it (see the known gaps); bash's `$'..'` counts as quoted).
+  JSON inside a string, as a log or `kubectl` prints it (`msg="{\"password\": \"a b\"}"`,
+  a logfmt `msg="token=\"..\""`, at any depth), is blanked to its own escaped closing
+  quote, also when the value ENDS in a backslash (at depth one that close is five
+  backslashes and the quote, and it no longer runs on into the next key). An unquoted
+  value is one word: `secret = two words` keeps its second word; inside that word a
+  quote and a backslash-escaped space (`printf %q`'s `horse\ battery`) are part of it;
 - a YAML block scalar under a secret key (`secret: |` or `>-`): every indented line
   of it;
 - command-line flags such as `--password X`, `--admin-password=X`, `--client-secret X`,
@@ -749,6 +751,10 @@ for a code edit) goes through `redact`, which blanks:
   local-only folder's path, the e2e `user / secret` shape and the retired `e2e-pass`
   literal.
 
+`redact` runs these rules again until a pass changes nothing (at most six passes), so
+the file text a code edit shows and the options block, which are redacted once, get
+the same result as the Where rows, which are redacted on every hop.
+
 `studio/tests/test_assistant_privacy.py` plants a canary in every denied path and
 asserts none reaches any rendered text, runs every shape above through `redact` (and
 ordinary log lines that must stay as they are), and plants the shapes in a failed
@@ -756,7 +762,11 @@ build's tail and the mesh log and asserts none reaches the system text the model
 A seeded fuzz (24,000 cases) puts the canary inside a value in every quote and
 backslash spelling (escapes, unclosed quotes, a trailing backslash, `$'..'`, JSON
 escaped up to three deep, Python reprs, a quote inside a bare word) after every secret
-key and flag spelling, and asserts it never comes out.
+key and flag spelling, and asserts it never comes out. A second one (8,000 cases)
+puts two to four SECRET keys in one object, side by side or with a plain key between,
+the earlier values often ending in one to three backslashes, as JSON up to three deep,
+a Python repr or logfmt inside an escaped string, with the canary in every secret
+value.
 
 Known gaps (not blanked, or only in part):
 
@@ -768,6 +778,15 @@ Known gaps (not blanked, or only in part):
   (`-address URL KEY`) blanks the URL, not the key;
 - `cryptsetup --key-file=PATH` names a key FILE; the path is not a secret and is left
   as it is (the file itself is never opened);
+- an unclosed quote followed later on its line by another quote of the same kind: the
+  two pair up, so `password: "abc ... token: "X"` blanks `abc ...` and sends `X`;
+- shapes with no secret KEY next to the value: MySQL's `SET PASSWORD FOR u = '..'`,
+  Kubernetes env pairs (`- name: DB_PASSWORD` then `value: X`, and the same in JSON),
+  argv lists printed as a Python or JSON list (`['--luks-pass', 'X']`), `curl -u
+  user:X`, `sshpass -p X`, `docker login -p X`, `htpasswd -b FILE USER X`, `chpasswd`
+  input, `vault login TOKEN`, and XML (`<password>X</password>`);
+- a key wrapped in terminal colour codes, and a value in curly quotes (`“..”`), which
+  is read as a bare word;
 - false positives, which fail safe: a bare `pass` or `unseal` as a key now blanks
   ordinary lines such as `PASS: tests/x.sh`, `Tests pass: 12`, `unseal: done` and the
   word after `--pass-through`.

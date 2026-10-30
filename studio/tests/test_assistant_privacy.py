@@ -6,6 +6,7 @@ tree and none of them may contain any canary. Each DENY entry is shown to match 
 least one planted path (dropping any one of them is a red test). Each redaction
 pattern has its own case, and redact() is idempotent and keeps the line count.
 """
+import json
 import os
 import re
 
@@ -531,3 +532,124 @@ def test_a_trailing_backslash_secret_never_reaches_the_build_or_mesh_rows(tmp_pa
     assert "CANARY" not in text and "MARK-after-open" in text, text
     row = dict(ac.mesh_rows(str(state)))["local mesh log"]
     assert "CANARY" not in row and "[redacted]" in row, row
+
+
+# ── PR #832 round 4: a value that ENDS in a backslash, inside escaped JSON ──────────
+# A literal backslash at the end of an escaped value closes with a LONGER run than the
+# opening one (at depth 1, four backslashes and then \"), and the escaped branch read
+# that run as the value's own escaped quote: it ran on to the next key's opening \" and
+# that key's secret was sent. The PR's fuzz had one secret key per object, so an
+# overrun ate only a non-secret neighbour. Every case below leaked on e75771a0.
+_D1 = 'msg="{\\"client_secret\\": \\"abc\\\\\\\\\\", \\"password\\": \\"CANARY two\\"}"'
+# two dumps deep inside a string: {"token": "x\\", "password": "CANARY"}
+_D2 = json.dumps(json.dumps(json.dumps({"token": "x\\", "password": "CANARY"})))
+_LOGFMT = 'level=error msg="login token=\\"abc\\\\\\\\\\" password=\\"CANARY\\""'
+
+
+@pytest.mark.parametrize("line, want", [
+    (_D1, 'msg="{\\"client_secret\\": \\"[redacted]\\", \\"password\\": \\"[redacted]\\"}"'),
+    (_D2, '"\\"{\\\\\\"token\\\\\\": \\\\\\"[redacted]\\\\\\", '
+          '\\\\\\"password\\\\\\": \\\\\\"[redacted]\\\\\\"}\\""'),
+    (_LOGFMT, 'level=error msg="login token=\\"[redacted]\\" password=\\"[redacted]\\""'),
+], ids=["depth-1", "depth-2", "logfmt"])
+def test_an_escaped_value_ending_in_a_backslash_does_not_run_into_the_next_key(line, want):
+    out = ac.redact(line)
+    assert out == want and ac.redact(out) == out, out
+
+
+def test_the_logfmt_overrun_never_reaches_the_build_rows_or_the_rendered_where(tmp_path, monkeypatch):
+    """Round 4's end-to-end witness: the logfmt line as the LAST line of a failed
+    build's error tail reached all four captured /api/chat bodies on e75771a0."""
+    state = tmp_path / "state"
+    (state / "sessions").mkdir(parents=True)
+    (state / "sessions" / "s.json").write_text(json.dumps(
+        {"id": "s", "label": "b", "status": "failed", "images": ["x86"],
+         "error_tail": {"x86": ["step", _LOGFMT]}}))
+    monkeypatch.setenv("HUGMESH_STUDIO_STATE_DIR", str(state))
+    rows = ac.build_rows(str(state))
+    tail = dict(rows)["last error lines (redacted)"]
+    assert "CANARY" not in tail and "password=\\\"[redacted]" in tail, tail
+    text = ac.render_where(ac.Where(slug="build", title="Build").with_state(rows))
+    assert "CANARY" not in text and "login token=" in text, text
+
+
+def test_a_workspace_file_with_the_overrun_shape_is_blanked_by_file_text(tmp_path):
+    """file_text redacts ONCE and the files block is sent as it is: round 4 leaked the
+    second key of a kubectl-style escaped object, and the same shape in a JS string."""
+    from hugmesh_studio.core import assistant_code_edits as ce
+    root = tmp_path / "ws"
+    (root / "fixtures").mkdir(parents=True)
+    (root / "src").mkdir()
+    (root / "fixtures" / "secret.json").write_text(
+        '{"kind":"Secret","last":"{\\"client_secret\\": \\"abc\\\\\\\\\\", \\"password\\": \\"CANARYa\\"}"}\n')
+    (root / "src" / "config.js").write_text(
+        'const seed = "{\\"admin_password\\": \\"x\\\\\\\\\\", \\"api_key\\": \\"CANARYb more\\"}";\n')
+    ws = ce.Workspace("shop", "shop.example", "web", os.path.realpath(str(root)))
+    for rel in ("fixtures/secret.json", "src/config.js"):
+        body, why = ce.file_text(ws, rel)
+        assert why == "" and body, (rel, why)
+        assert "CANARY" not in body and body.count("[redacted]") == 2, (rel, body)
+
+
+# The fuzz again, with what the first one lacked: 2 to 4 SECRET keys in one object,
+# side by side or with a non-secret key between, the earlier values often ending in
+# 1 to 3 literal backslashes, dumped 0 to 3 deep (or as a Python repr) and in logfmt
+# inside an escaped string. Every secret value carries the canary. On e75771a0
+# 4,833 of these 8,000 cases leaked.
+_FZ_SECRET_KEYS = ["password", "DB_PASSWORD", "token", "client_secret", "api_key", "luks_pass",
+                   "admin_password", "secret", "unseal_key"]
+
+
+def _fz_multi(rng):
+    keys = rng.sample(_FZ_SECRET_KEYS, rng.randint(2, 4))
+    pairs = []
+    for j, k in enumerate(keys):
+        v = "".join(_fz_char(rng) for _ in range(rng.randint(0, 5)))
+        i = rng.randint(0, len(v))
+        v = v[:i] + _FUZZ_CAN + str(j) + v[i:]
+        if j < len(keys) - 1 and rng.random() < 0.7:
+            v += "\\" * rng.randint(1, 3)                 # ends in literal backslashes
+        pairs.append((k, v))
+        if rng.random() < 0.2:
+            pairs.append(("user", "KEEP\\" if rng.random() < 0.5 else "KEEP"))
+    depth = rng.randint(0, 3)
+    if rng.random() < 0.3:                                # logfmt inside an escaped string
+        s = " ".join(f'{k}="' + v.replace("\\", "\\\\").replace('"', '\\"') + '"' for k, v in pairs)
+        for _ in range(max(1, depth)):
+            s = json.dumps(s, ensure_ascii=rng.random() < 0.5)
+        lead = rng.choice(["level=error msg=", "msg=", ""])
+    else:
+        obj = dict(pairs)
+        if rng.random() < 0.3:
+            obj = {"data": obj, "kind": "Secret"}
+        if rng.random() < 0.15:
+            s = repr(obj) if rng.random() < 0.5 else repr(repr(obj))
+        else:
+            s = json.dumps(obj, ensure_ascii=rng.random() < 0.5)
+            for _ in range(depth):
+                s = json.dumps(s, ensure_ascii=rng.random() < 0.5)
+        lead = rng.choice(["msg=", "last-applied: ", "body: ", "kubectl: ", ""])
+    return rng.choice(["", "ok line\n"]) + lead + s
+
+
+@pytest.mark.parametrize("seed", range(4))
+def test_fuzz_several_secret_keys_in_one_object_none_lets_its_canary_through(seed):
+    """2,000 cases per seed, through redact and redact_lines; idempotent, line count kept."""
+    import random
+    rng = random.Random(832_400 + seed)
+    for _ in range(2000):
+        text = _fz_multi(rng)
+        out = ac.redact(text)
+        assert _FUZZ_CAN not in out, (text, out)
+        assert ac.redact(out) == out and out.count("\n") == text.count("\n"), (text, out)
+        assert _FUZZ_CAN not in "\n".join(ac.redact_lines(text.split("\n"))), text
+
+
+def test_redact_runs_its_rules_until_nothing_changes_and_no_more_than_the_cap(monkeypatch):
+    """A rule whose output is a fresh match for a rule (here itself) is run again, so
+    a single-pass caller (file_text, the options block) gets the same text as the
+    Where rows, which pass through redact on every hop; and the loop is bounded."""
+    import re as _re
+    monkeypatch.setattr(ac, "_REDACT_RULES", ((_re.compile("aa"), "a"),))
+    assert ac.redact("a" * 8) == "a"                       # 8 -> 4 -> 2 -> 1, then a quiet pass
+    assert ac.redact("a" * 2 ** (ac.REDACT_PASSES + 2)) == "a" * 4   # capped, never endless
