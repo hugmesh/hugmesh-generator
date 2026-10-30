@@ -67,19 +67,59 @@ spec:
             # builders; it MUST match casdoor-games' origin (app-conf-configmap.yaml) or
             # every games-realm token is rejected on its `iss`.
             - { name: CASDOOR_ISSUER_URI, value: "https://id.hugmesh.games" }
+            # The BFF's own stores. application.yml defaults to localhost:5432 and
+            # cassandra:9042 with a blank password, and Liquibase runs at startup, so
+            # without these the pod cannot come up for EITHER realm.
+            - { name: DB_HOST, value: games-bff-db }
+            - { name: DB_NAME, value: threewizards }
+            - { name: DB_USER, valueFrom: { secretKeyRef: { name: games-bff-db, key: username } } }
+            - { name: DB_PASS, valueFrom: { secretKeyRef: { name: games-bff-db, key: password } } }
+            - { name: CASSANDRA_CONTACT_POINTS, value: "games-cassandra:9042" }
+            - { name: CASSANDRA_KEYSPACE, value: threewizards }
+            - { name: CASSANDRA_LOCAL_DC, value: datacenter1 }
+            # Refuse to boot on a blank client secret or DB password.
+            - { name: APP_SECURITY_REQUIRE_MANAGED_SECRETS, value: "true" }
+            - { name: APP_UPLOADS_GAMES_DIR, value: /var/hugmesh/games }
             # Mesa picks the best installed driver; force SW only if no GPU.
             - { name: LIBGL_ALWAYS_SOFTWARE, value: "0" }
           resources:
             requests: { cpu: 500m, memory: 1Gi }
             limits:   { cpu: "4",  memory: 4Gi }
+          # /actuator/health is permitAll in the BFF's SecurityConfig. The JVM,
+          # Liquibase and the Cassandra session take a while on first boot.
+          readinessProbe:
+            httpGet: { path: /actuator/health, port: http }
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            failureThreshold: 30
+          livenessProbe:
+            httpGet: { path: /actuator/health, port: http }
+            initialDelaySeconds: 180
+            periodSeconds: 20
+            failureThreshold: 5
           volumeMounts:
             - { name: dri, mountPath: /dev/dri }
+            - { name: uploads, mountPath: /var/hugmesh/games }
           securityContext:
             # /dev/dri render node access for unprivileged GPU use.
             seccompProfile: { type: RuntimeDefault }
       volumes:
         - name: dri
           hostPath: { path: /dev/dri, type: Directory }
+        # Uploaded game bundles (app.uploads.storage=filesystem).
+        - name: uploads
+          persistentVolumeClaim: { claimName: games-bff-uploads }
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: games-bff-uploads
+  namespace: hugmesh-games
+  labels: { app: hugmesh-games, app.kubernetes.io/part-of: hugmesh.games }
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: hugmesh-local
+  resources: { requests: { storage: 20Gi } }
 ---
 apiVersion: v1
 kind: Service

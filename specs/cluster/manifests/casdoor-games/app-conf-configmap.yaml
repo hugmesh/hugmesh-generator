@@ -41,9 +41,10 @@ data:
     logPostOnly = true
     # Public issuer (OIDC `iss` origin) of the games realm. Parameterized on
     # GAMES_DOMAIN by parameterize_games_domain() in the stage4 builders: the
-    # literal id.hugmesh.games is rewritten to id.${GAMES_DOMAIN} so the iss
-    # the Casdoor stamps into every games JWT matches the actual games host (the
-    # default GAMES_DOMAIN=games.<CLUSTER_DOMAIN> -> id.games.<CLUSTER_DOMAIN>).
+    # literal id.hugmesh.games is rewritten so the iss the Casdoor stamps into every
+    # games JWT matches the published host: a GAMES_DOMAIN in its own zone gets
+    # id.${GAMES_DOMAIN}, and the default subdomain gets the single-label
+    # games-id.<CLUSTER_DOMAIN> so the one-label *.<CLUSTER_DOMAIN> wildcard covers it.
     # Leaving it as hugmesh.games would break iss-strict JWT validation on the
     # subdomain default — see docs/OPTIONAL-SERVICES.md "Games subdomain".
     origin = "https://id.hugmesh.games"

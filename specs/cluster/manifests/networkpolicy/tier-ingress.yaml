@@ -135,9 +135,9 @@ metadata:
   name: tier-ingress
   namespace: hugmesh-games
 spec:
-  # EXCLUDES casdoor-games-pg from this BROAD namespace+backend+frontend admittance
-  # — it is isolated per-pod by db-ingress.yaml (db-ingress-casdoor-games-pg,
-  # reachable only from the casdoor-games pod). k8s NetworkPolicy is additive with
+  # EXCLUDES the games stores from this BROAD namespace+backend+frontend admittance
+  # — they are isolated per-pod by db-ingress.yaml (casdoor-games-pg reachable only
+  # from the casdoor-games pod; games-bff-db and games-cassandra only from the BFF). k8s NetworkPolicy is additive with
   # no exclude, so leaving the bare `podSelector: {}` here would re-admit the whole
   # from-set to the games identity database and the per-pod policy would bite
   # nothing. Keep this NotIn in sync with db-ingress.yaml. (`NotIn` also matches
@@ -147,7 +147,7 @@ spec:
     matchExpressions:
       - key: app
         operator: NotIn
-        values: [casdoor-games-pg]
+        values: [casdoor-games-pg, games-bff-db, games-cassandra]
   policyTypes: [Ingress]
   ingress:
     # hugmesh-games also hosts the GAMES-realm Casdoor (casdoor-games) + its
@@ -157,7 +157,30 @@ spec:
     # ROLE_GAMES_ADMIN -> admin sync job -> casdoor-games. Egress is left open
     # (see header), so casdoor-games reaching its Postgres needs no egress rule.
     - from:
-        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: hugmesh-games } }      # self (games BFF -> casdoor-games; casdoor-games -> casdoor-games-pg)
-        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: hugmesh-backend } }    # be-gateway -> games workloads; hugmesh-actions sync -> casdoor-games
-        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: hugmesh-frontend } }   # fe-gateway -> games UI
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: hugmesh-games } }      # self (games BFF -> casdoor-games; casdoor-games -> casdoor-games-pg; portal -> BFF)
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: hugmesh-backend } }    # hugmesh-actions sync -> casdoor-games
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: hugmesh-frontend } }   # fe-gateway -> games BFF
         - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: devops } }                # ArgoCD reconcile
+---
+# The two games hosts with their own Ingress: the portal and the games-realm issuer.
+# ingress-nginx reaches ONLY these two pods, on their http ports, so the BFF and the
+# game stores stay off the door. A separate policy rather than a namespace added to the
+# broad from-set above. Kept in this file because RELEASE_STATE=internal rewrites the
+# ingress-nginx namespace name here.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: games-ingress-doors
+  namespace: hugmesh-games
+  labels: { app.kubernetes.io/part-of: hugmesh.games }
+spec:
+  podSelector:
+    matchExpressions:
+      - { key: app, operator: In, values: [casdoor-games, hugmesh-games-portal] }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: ingress-nginx } }   # public facade
+      ports:
+        - { protocol: TCP, port: 8000 }
+        - { protocol: TCP, port: 8080 }

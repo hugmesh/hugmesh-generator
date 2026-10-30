@@ -3,10 +3,14 @@
 # address. Operator DECISION 34a (one ConfigMap PER NAMESPACE). Contract:
 # endpoints-hugmesh-backend.yaml.
 #
-# WHY `data` IS EMPTY — measured 2026-09-17 against specs/cluster on origin/main.
-# The only Postgres address in hugmesh-games is casdoor-games
-# (manifests/casdoor-games/app-conf-configmap.yaml:31, `host=casdoor-games-pg`), and
-# it fails BOTH halves of the key contract:
+# WHY `data` IS EMPTY. The games BFF now has its own Postgres (DB_HOST=games-bff-db in
+# manifests/games/deployment.yaml), and it has no registry id either: the key contract
+# is the SPRING_R2DBC_URL + SPRING_LIQUIBASE_URL pair, and this BFF composes both URLs
+# from DB_HOST in its application.yml, so there is no literal to seed. The rest was
+# measured 2026-09-17 against specs/cluster on origin/main.
+# casdoor-games' Postgres address
+# (manifests/casdoor-games/app-conf-configmap.yaml:31, `host=casdoor-games-pg`)
+# fails BOTH halves of the key contract:
 #   * it has NO specs/cluster/backing-services.yaml id, and the key prefix is the
 #     registry id verbatim. Minting an id is a REGISTRY decision (tier, dbName,
 #     esoSecret, vaultPath, the managed AWS/Azure target) that nobody has made —

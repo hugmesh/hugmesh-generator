@@ -317,8 +317,8 @@ spec:
           # route above (its path list carries /games/**) so an HTML navigation
           # boots the shell while remoteEntry.json/chunks/fetch() fall through
           # here. Route-access rows (20-schema.sql): /games/api/admin/**
-          # ROLE_GAMES_ADMIN; /games/api/** and /games/** ROLE_GAMES|ROLE_ADMIN|
-          # ROLE_MOD. OPTIONAL slug `games`: gate_optional_services REMOVES both
+          # ROLE_GAMES_ADMIN; /games/api/** and /games/** ROLE_GAMES|ROLE_ADMIN.
+          # OPTIONAL slug `games`: gate_optional_services REMOVES both
           # routes when the slug is deselected (optional-services.yaml
           # games.gatewayRouteIds).
           #

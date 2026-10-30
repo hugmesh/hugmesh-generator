@@ -1,0 +1,24 @@
+# hugmesh-games-ui — the `games` native-federation remote the host shell mounts at
+# /games and /games/admin. A separate Application because it lives in hugmesh-frontend,
+# not in the games namespace. Without it the fe-gateway games-ui route had no Service
+# behind it on any cluster. OPTIONAL slug `games`: gate_optional_services removes this
+# file with the rest of the slug.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: hugmesh-games-ui
+  namespace: devops
+  annotations:
+    argocd.argoproj.io/sync-wave: "2"
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/hugmesh/hugmesh-generator.git
+    targetRevision: main
+    path: specs/cluster/manifests/games-ui
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: hugmesh-frontend
+  syncPolicy:
+    automated: { prune: true, selfHeal: true }
+    syncOptions: [CreateNamespace=true]

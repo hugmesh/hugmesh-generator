@@ -1,0 +1,183 @@
+# Services for hugmesh-games-portal.
+#
+# THE NAMES BELOW ARE THE PORTAL'S OWN UPSTREAMS. frontend/nginx.conf in hugmesh-games
+# hard-codes `proxy_pass http://<name>:8080`, and nginx resolves every upstream at
+# startup: one unresolvable name and it exits with `host not found in upstream`
+# (measured: the portal's nginx.conf fails `nginx -t` without them and boots with
+# them). Keeping the names resolvable lets the image run its own nginx.conf, with its
+# security headers and rate limits, instead of a copy of it in a ConfigMap that would
+# drift.
+#
+# `api` is the games BFF. Every other Service selects a workload that does not exist
+# yet, so it has no endpoints and that location answers 502 or 503 rather than taking
+# the portal down. Adding the Deployment later, with the label already named here,
+# needs no change to this file.
+apiVersion: v1
+kind: Service
+metadata:
+  name: hugmesh-games-portal
+  namespace: hugmesh-games
+  labels: { app: hugmesh-games-portal, app.kubernetes.io/part-of: hugmesh.games }
+spec:
+  selector: { app: hugmesh-games-portal }
+  ports: [{ name: http, port: 8080, targetPort: http }]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: api
+  namespace: hugmesh-games
+  labels: { app.kubernetes.io/component: games-portal-upstream, app.kubernetes.io/part-of: hugmesh.games }
+spec:
+  selector: { app: hugmesh-games }
+  ports: [{ name: http, port: 8080, targetPort: http }]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: login
+  namespace: hugmesh-games
+  labels: { app.kubernetes.io/component: games-portal-upstream, app.kubernetes.io/part-of: hugmesh.games }
+spec:
+  selector: { app: games-portal-login }
+  ports: [{ name: http, port: 8080, targetPort: 8080 }]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: registration
+  namespace: hugmesh-games
+  labels: { app.kubernetes.io/component: games-portal-upstream, app.kubernetes.io/part-of: hugmesh.games }
+spec:
+  selector: { app: games-portal-registration }
+  ports: [{ name: http, port: 8080, targetPort: 8080 }]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: producer-registration
+  namespace: hugmesh-games
+  labels: { app.kubernetes.io/component: games-portal-upstream, app.kubernetes.io/part-of: hugmesh.games }
+spec:
+  selector: { app: games-portal-producer-registration }
+  ports: [{ name: http, port: 8080, targetPort: 8080 }]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: banned
+  namespace: hugmesh-games
+  labels: { app.kubernetes.io/component: games-portal-upstream, app.kubernetes.io/part-of: hugmesh.games }
+spec:
+  selector: { app: games-portal-banned }
+  ports: [{ name: http, port: 8080, targetPort: 8080 }]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: admin
+  namespace: hugmesh-games
+  labels: { app.kubernetes.io/component: games-portal-upstream, app.kubernetes.io/part-of: hugmesh.games }
+spec:
+  selector: { app: games-portal-admin }
+  ports: [{ name: http, port: 8080, targetPort: 8080 }]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mod
+  namespace: hugmesh-games
+  labels: { app.kubernetes.io/component: games-portal-upstream, app.kubernetes.io/part-of: hugmesh.games }
+spec:
+  selector: { app: games-portal-mod }
+  ports: [{ name: http, port: 8080, targetPort: 8080 }]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: publisher
+  namespace: hugmesh-games
+  labels: { app.kubernetes.io/component: games-portal-upstream, app.kubernetes.io/part-of: hugmesh.games }
+spec:
+  selector: { app: games-portal-publisher }
+  ports: [{ name: http, port: 8080, targetPort: 8080 }]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: api-docs
+  namespace: hugmesh-games
+  labels: { app.kubernetes.io/component: games-portal-upstream, app.kubernetes.io/part-of: hugmesh.games }
+spec:
+  selector: { app: games-portal-api-docs }
+  ports: [{ name: http, port: 8080, targetPort: 8080 }]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: games-three-wizards
+  namespace: hugmesh-games
+  labels: { app.kubernetes.io/component: games-portal-upstream, app.kubernetes.io/part-of: hugmesh.games }
+spec:
+  selector: { app: games-portal-games-three-wizards }
+  ports: [{ name: http, port: 8080, targetPort: 8080 }]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: games-dodecahedron
+  namespace: hugmesh-games
+  labels: { app.kubernetes.io/component: games-portal-upstream, app.kubernetes.io/part-of: hugmesh.games }
+spec:
+  selector: { app: games-portal-games-dodecahedron }
+  ports: [{ name: http, port: 8080, targetPort: 8080 }]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: games-rpg-maker
+  namespace: hugmesh-games
+  labels: { app.kubernetes.io/component: games-portal-upstream, app.kubernetes.io/part-of: hugmesh.games }
+spec:
+  selector: { app: games-portal-games-rpg-maker }
+  ports: [{ name: http, port: 8080, targetPort: 8080 }]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: games-vn-maker
+  namespace: hugmesh-games
+  labels: { app.kubernetes.io/component: games-portal-upstream, app.kubernetes.io/part-of: hugmesh.games }
+spec:
+  selector: { app: games-portal-games-vn-maker }
+  ports: [{ name: http, port: 8080, targetPort: 8080 }]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: rpg-builder
+  namespace: hugmesh-games
+  labels: { app.kubernetes.io/component: games-portal-upstream, app.kubernetes.io/part-of: hugmesh.games }
+spec:
+  selector: { app: games-portal-rpg-builder }
+  ports: [{ name: http, port: 8080, targetPort: 8080 }]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: vn-builder
+  namespace: hugmesh-games
+  labels: { app.kubernetes.io/component: games-portal-upstream, app.kubernetes.io/part-of: hugmesh.games }
+spec:
+  selector: { app: games-portal-vn-builder }
+  ports: [{ name: http, port: 8080, targetPort: 8080 }]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: wasm-fragment
+  namespace: hugmesh-games
+  labels: { app.kubernetes.io/component: games-portal-upstream, app.kubernetes.io/part-of: hugmesh.games }
+spec:
+  selector: { app: games-portal-wasm-fragment }
+  ports: [{ name: http, port: 8080, targetPort: 8080 }]

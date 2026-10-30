@@ -1,0 +1,73 @@
+# games-cassandra — the BFF's cross-pod session and counter store (keyspace
+# threewizards). The BFF cannot start without it.
+#
+# ITS OWN NODE, NOT THE SHARED ONE IN hugmesh-pki. The shared node's roles and grants
+# are a fixed set (manifests/cassandra-init), it refuses anonymous clients, and the BFF
+# configures no Cassandra credentials. Keeping this store here also means the games
+# slug prunes it whole with no edit to a platform datastore.
+#
+# NO CASSANDRA AUTH, DELIBERATELY: the stock image defaults to AllowAllAuthenticator,
+# and db-ingress.yaml admits only the BFF and the schema Job to :9042. The only data
+# here is ephemeral (TTLed session leases and counters); Postgres holds game state.
+# CASSANDRA_LOCAL_DC on the BFF must be `datacenter1`, what this image's SimpleSnitch
+# advertises (measured in tests/stack/compose.games.yaml).
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: games-cassandra-data
+  namespace: hugmesh-games
+  labels: { app: games-cassandra, app.kubernetes.io/part-of: hugmesh.games }
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: hugmesh-local
+  resources: { requests: { storage: 5Gi } }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: games-cassandra
+  namespace: hugmesh-games
+  labels: { app: games-cassandra, app.kubernetes.io/part-of: hugmesh.games }
+spec:
+  replicas: 1
+  strategy: { type: Recreate }
+  selector: { matchLabels: { app: games-cassandra } }
+  template:
+    metadata: { labels: { app: games-cassandra } }
+    spec:
+      nodeSelector: { hugmesh.net/games: "true" }
+      securityContext:
+        fsGroup: 999
+        seLinuxOptions:
+          type: container_t
+          level: "s0:c90"
+      containers:
+        - name: cassandra
+          image: cassandra:5.0.9@sha256:ee178b38a2746a8e15a115bd038ad1f864391d04a84162a018cb0dd79511709a
+          ports: [{ name: cql, containerPort: 9042 }]
+          env:
+            - { name: MAX_HEAP_SIZE, value: 512M }
+            - { name: HEAP_NEWSIZE,  value: 128M }
+            - { name: CASSANDRA_CLUSTER_NAME, value: games }
+          readinessProbe:
+            exec: { command: ["cqlsh", "-e", "DESCRIBE KEYSPACES"] }
+            initialDelaySeconds: 40
+            periodSeconds: 15
+            timeoutSeconds: 10
+          resources:
+            requests: { cpu: 200m, memory: 1Gi }
+            limits:   { cpu: "2",  memory: 2Gi }
+          volumeMounts: [{ name: data, mountPath: /var/lib/cassandra }]
+      volumes:
+        - name: data
+          persistentVolumeClaim: { claimName: games-cassandra-data }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: games-cassandra
+  namespace: hugmesh-games
+  labels: { app: games-cassandra, app.kubernetes.io/part-of: hugmesh.games }
+spec:
+  selector: { app: games-cassandra }
+  ports: [{ name: cql, port: 9042, targetPort: cql }]

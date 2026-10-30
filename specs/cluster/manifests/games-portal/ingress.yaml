@@ -1,0 +1,30 @@
+# The games portal host, served straight from ingress-nginx rather than through the
+# systems be-gateway. That gateway validates only the systems issuer and floors on
+# authenticated(), so it would 401 both a games-realm token and the anonymous catalog
+# browse; and its route-access table is keyed by path, so the platform /api/** rows
+# would decide this host. Trusting the games issuer there is not a fix: a games-realm
+# `admin` would become ROLE_ADMIN, which the gateway forwards past route-access.
+#
+# The BFF's own SecurityConfig enforces auth for this path. An exact host here wins
+# over the fe-gateway's *.<domain> wildcard. className nginx is the public posture;
+# RELEASE_STATE=internal rewrites it to nginx-internal in gate_env_apps(). The host
+# composes with rebrand_sysroot, and parameterize_games_domain() rewrites a custom
+# GAMES_DOMAIN.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: hugmesh-games-portal
+  namespace: hugmesh-games
+  labels: { app: hugmesh-games-portal, app.kubernetes.io/part-of: hugmesh.games }
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: games.hugmesh.net
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: hugmesh-games-portal
+                port: { name: http }

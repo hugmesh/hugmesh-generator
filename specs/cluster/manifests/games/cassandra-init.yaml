@@ -1,0 +1,252 @@
+# games-cassandra-init — the BFF's keyspace and tables. Spring Data runs with
+# schema-action NONE, so nothing else creates them. The CQL below is a copy of
+# hugmesh-games docker/cassandra-init.cql (main at 34a3a32); every statement is
+# IF NOT EXISTS, so a re-run is a no-op. A new table in that file needs copying here.
+#
+# ArgoCD PostSync hook, the idiom of manifests/cassandra-init/bootstrap-job.yaml: it
+# re-runs on every sync and a failure fails the sync. The script also waits for CQL
+# itself. Same image as the node so cqlsh matches the server.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: games-cassandra-init
+  namespace: hugmesh-games
+  labels: { app: games-cassandra-init, app.kubernetes.io/part-of: hugmesh.games }
+data:
+  init.cql: |
+    -- Cassandra keyspace + tables for cross-pod state sync.
+    -- Reactive Spring Data Cassandra binds to this from the api container.
+    --
+    -- Why Cassandra alongside Postgres?
+    --   • Postgres holds authoritative game state (characters, chapters, quests).
+    --   • Cassandra holds high-write ephemeral data: per-pod session leases,
+    --     active-controller arbitration, the aggregate counters the admin
+    --     /api/admin/stream serves. Linear-scalable across pods + tunable
+    --     consistency for the "good-enough" reads admin dashboards need.
+
+    CREATE KEYSPACE IF NOT EXISTS threewizards
+      WITH REPLICATION = { 'class': 'SimpleStrategy', 'replication_factor': 1 };
+
+    USE threewizards;
+
+    -- One row per active session across the entire fleet of api pods.
+    -- TTL'd at 60 s; pods refresh their own rows every 15 s as a heartbeat.
+    -- A stale row that drops off TTL means that pod is gone.
+    CREATE TABLE IF NOT EXISTS active_sessions (
+        casdoor_id     text,
+        session_token  text,
+        character_id   bigint,
+        pod_id         text,
+        is_controller  boolean,
+        connected_at   timestamp,
+        last_ping      timestamp,
+        PRIMARY KEY (casdoor_id)
+    ) WITH default_time_to_live = 60;
+
+    -- Cluster-wide controller arbitration. Single partition; LWT writes ensure
+    -- only one pod thinks it owns the controller for a given character.
+    CREATE TABLE IF NOT EXISTS controller_lease (
+        character_id   bigint,
+        casdoor_id     text,
+        pod_id         text,
+        granted_at     timestamp,
+        PRIMARY KEY (character_id)
+    ) WITH default_time_to_live = 30;
+
+    -- Counters for the admin live stream — incremented on session events from
+    -- any pod, read aggregated at admin-stream tick time.
+    CREATE TABLE IF NOT EXISTS aggregate_counters (
+        metric         text,
+        pod_id         text,
+        value          counter,
+        PRIMARY KEY (metric, pod_id)
+    );
+
+    -- Per-pod heartbeat so admins can see how many api pods are online.
+    CREATE TABLE IF NOT EXISTS pod_heartbeats (
+        pod_id         text,
+        last_ping      timestamp,
+        started_at     timestamp,
+        version        text,
+        PRIMARY KEY (pod_id)
+    ) WITH default_time_to_live = 30;
+
+    -- Per-(character, chapter) position cache. Postgres remains the source of
+    -- truth (player_positions) for durability + analytics; this Cassandra
+    -- table is the cross-pod read cache that lets pod B see a position
+    -- updated on pod A within the round-trip of the SSE fan-out.
+    --
+    -- Composite partition key (character_id, chapter_id) so a player walking
+    -- cave → field → cave finds their cave coordinates exactly where they
+    -- left them (the prior single-row schema overwrote across chapters).
+    --
+    -- 5-minute TTL so a long-idle character doesn't pin a row that the
+    -- player abandoned; durable storage in Postgres backs the cache when
+    -- it expires.
+    CREATE TABLE IF NOT EXISTS character_position_cache (
+        character_id   bigint,
+        chapter_id     bigint,
+        pos_x          double,
+        pos_y          double,
+        pos_z          double,
+        rotation_y     double,
+        last_action    text,
+        last_pressed   boolean,
+        pod_id         text,
+        updated_at     timestamp,
+        tick           bigint,
+        PRIMARY KEY ((character_id, chapter_id))
+    ) WITH default_time_to_live = 300;
+
+    -- Per-chapter membership index: which characters are currently present
+    -- in a given chapter. Used by GameStateService.emitWorldState to scope
+    -- broadcasts so a player in cave doesn't see a player in field. The
+    -- TTL is shorter than the position cache because membership is more
+    -- volatile (a character rapidly traversing chapters needs prompt
+    -- invalidation), and a single missed write reverses on the next
+    -- movement tick.
+    CREATE TABLE IF NOT EXISTS chapter_membership (
+        chapter_id     bigint,
+        character_id   bigint,
+        pod_id         text,
+        last_seen      timestamp,
+        PRIMARY KEY (chapter_id, character_id)
+    ) WITH default_time_to_live = 60;
+
+    -- Per-session presence index: which casdoor users are currently in a given
+    -- multiplayer session, on which pod, and in which slot. Postgres
+    -- (session_members) is the source of truth for membership history;
+    -- this Cassandra table is the cross-pod heartbeat used by the admin SSE
+    -- stream and the session-picker presence indicator.
+    --
+    -- 30-second TTL; each pod refreshes the rows of its own connected members
+    -- on every SSE keepalive tick so a pod crash drops the rows naturally.
+    CREATE TABLE IF NOT EXISTS session_membership (
+        session_id     text,
+        casdoor_id     text,
+        slot_index     int,
+        character_id   bigint,
+        pod_id         text,
+        joined_at      timestamp,
+        last_ping      timestamp,
+        PRIMARY KEY ((session_id), casdoor_id)
+    ) WITH default_time_to_live = 30;
+
+    -- Per-(session, slot) ring of recent player-view egress events. The Rust
+    -- GDExtension's view_egress signal pushes a small camera+orientation
+    -- payload at ~10 Hz; the BFF persists it here so admins joining the
+    -- per-session view stream see the most recent view immediately instead
+    -- of waiting for the next tick. 60-second TTL is enough for a brief
+    -- replay window without growing unbounded.
+    --
+    -- Clustering by occurred_at DESC so the most recent row is the cheap
+    -- read; LIMIT 1 lookup is the common path.
+    CREATE TABLE IF NOT EXISTS session_view_state (
+        session_id     text,
+        slot_index     int,
+        occurred_at    timestamp,
+        payload_json   text,
+        pod_id         text,
+        PRIMARY KEY ((session_id, slot_index), occurred_at)
+    ) WITH CLUSTERING ORDER BY (occurred_at DESC)
+       AND default_time_to_live = 60;
+
+    -- Cross-pod rate-limit event log. RateLimitFilter writes one row per
+    -- gated request keyed by `(bucket_key, event_id)` where bucket_key
+    -- is "<remote-ip>|<path-prefix>" and event_id is a TimeUUID. To
+    -- decide whether to throttle, the filter counts rows for the bucket
+    -- in the last RATE_LIMIT_WINDOW; rows older than the TTL fall off
+    -- naturally so the count is implicitly window-scoped.
+    --
+    -- Why an append-row log and not a counter table:
+    --   • Counter tables don't compose with TTL — there's no way to
+    --     auto-evict old window state, and writes aren't idempotent
+    --     (timeouts can double-count). Cassandra's docs explicitly call
+    --     this anti-pattern out for rate limiting.
+    --   • Append-with-TTL gives free window cleanup + idempotent writes,
+    --     and the count-rows read is bounded by MAX_PER_WINDOW so it
+    --     stays a single-partition scan.
+    --
+    -- 90-second TTL is RATE_LIMIT_WINDOW (60 s) plus a 30 s grace so the
+    -- count read is never racing with a freshly-evicted row.
+    CREATE TABLE IF NOT EXISTS rate_limit_events (
+        bucket_key     text,
+        event_id       timeuuid,
+        pod_id         text,
+        PRIMARY KEY ((bucket_key), event_id)
+    ) WITH CLUSTERING ORDER BY (event_id DESC)
+       AND default_time_to_live = 90;
+
+    -- Server-authoritative real-time truth (P2, decision-017 extension — see
+    -- docs/realtime-server-authoritative-design.md). Per-match authoritative
+    -- KEYFRAMES: the full sim snapshot at every keyframe interval, clustered
+    -- newest-first so the recovery read (latest keyframe) is the cheap LIMIT 1.
+    -- Postgres (realtime_matches) keeps the durable match record + final
+    -- result; these rows only need to outlive a pod failure, so a 24 h TTL
+    -- bounds growth without risking an in-flight match.
+    CREATE TABLE IF NOT EXISTS realtime_keyframes (
+        session_id     text,
+        tick           bigint,
+        state_json     text,
+        PRIMARY KEY ((session_id), tick)
+    ) WITH CLUSTERING ORDER BY (tick DESC)
+       AND default_time_to_live = 86400;
+
+    -- The ordered per-match input/command log — the authoritative truth AND a
+    -- perfect deterministic replay (same seed + same (for_tick, seq)-ordered
+    -- log reproduces the match bit-exactly). Recovery restores the latest
+    -- keyframe and re-queues every command with for_tick > keyframe tick;
+    -- natural ASC clustering on (for_tick, seq) IS the replay order. Same
+    -- 24 h TTL rationale as realtime_keyframes.
+    CREATE TABLE IF NOT EXISTS realtime_command_log (
+        session_id     text,
+        for_tick       bigint,
+        seq            int,
+        player_id      text,
+        payload_json   text,
+        PRIMARY KEY ((session_id), for_tick, seq)
+    ) WITH default_time_to_live = 86400;
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: games-cassandra-init
+  namespace: hugmesh-games
+  labels: { app: games-cassandra-init, app.kubernetes.io/part-of: hugmesh.games }
+  annotations:
+    argocd.argoproj.io/hook: PostSync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+spec:
+  backoffLimit: 4
+  ttlSecondsAfterFinished: 600
+  template:
+    metadata:
+      labels: { app: games-cassandra-init }
+    spec:
+      restartPolicy: OnFailure
+      nodeSelector: { hugmesh.net/games: "true" }
+      securityContext:
+        seLinuxOptions:
+          type: container_t
+          level: "s0:c92"
+      containers:
+        - name: init
+          image: cassandra:5.0.9@sha256:ee178b38a2746a8e15a115bd038ad1f864391d04a84162a018cb0dd79511709a
+          command:
+            - bash
+            - -ec
+            - |
+              for i in $(seq 1 60); do
+                cqlsh games-cassandra 9042 -e 'DESCRIBE KEYSPACES' >/dev/null 2>&1 && break
+                [ "$i" -lt 60 ] || { echo "games-cassandra never answered CQL" >&2; exit 1; }
+                sleep 5
+              done
+              cqlsh games-cassandra 9042 -f /init/init.cql
+              cqlsh games-cassandra 9042 -e 'DESCRIBE TABLES' -k threewizards
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits:   { cpu: "1",  memory: 512Mi }
+          volumeMounts: [{ name: cql, mountPath: /init, readOnly: true }]
+      volumes:
+        - name: cql
+          configMap: { name: games-cassandra-init }

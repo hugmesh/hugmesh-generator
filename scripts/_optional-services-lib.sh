@@ -139,12 +139,13 @@ gate_optional_services() {
                     '/api/forum/admin/**'
                 ;;
             games)
-                rm -f "${apps}/06-casdoor-games.yaml" "${apps}/50-games.yaml"
-                rm -rf "${tree}/manifests/games" "${tree}/manifests/casdoor-games"
-                _opt_drop_route     "${apps}/20-gateway-be.yaml" games
-                _opt_drop_extrahost "${apps}/20-gateway-be.yaml" games.
-                _opt_drop_rows  "${tree}/manifests/route-access/initdb/20-schema.sql" hugmesh-be-gateway \
-                    '/games/api/admin/**' '/games/**'
+                rm -f "${apps}/06-casdoor-games.yaml" "${apps}/50-games.yaml" "${apps}/50a-games-ui.yaml"
+                rm -rf "${tree}/manifests/games" "${tree}/manifests/casdoor-games" "${tree}/manifests/games-portal"
+                # The portal + issuer hostnames in the tunnel config (3-line rules).
+                if [ -f "${tree}/manifests/cloudflared/configmap.yaml" ]; then
+                    sed -i -E '/^[[:space:]]*- hostname: (games\.hugmesh\.net|id\.hugmesh\.games)$/,+2d' \
+                        "${tree}/manifests/cloudflared/configmap.yaml"
+                fi
                 # ── the shell-mounted games SCREENS (2026-10-28) — degrade with games ──
                 # The `games` federation remote (manifests/games-ui) + the two fe-gateway
                 # path routes that reach it and the games BFF (games-bff /games/api/**,

@@ -12,6 +12,7 @@ resources:
   - app-conf-configmap.yaml    # Casdoor app.conf pointing at casdoor-games-pg
   - deployment.yaml
   - service.yaml
+  - ingress.yaml               # the public issuer host (signup/login UI + GitHub callback)
   - init-data-configmap.yaml   # declarative threewizards org / role catalog / app shell
   - init-job.yaml              # threewizards-app client-secret + GitHub provider seed
 # The "casdoor-games-github" Secret (clientId / clientSecret) is materialized by

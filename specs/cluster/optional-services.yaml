@@ -311,6 +311,9 @@ spec:
       apps:
         - apps/06-casdoor-games.yaml
         - apps/50-games.yaml
+        # The `games` federation remote lives in hugmesh-frontend, so it has its own
+        # Application.
+        - apps/50a-games-ui.yaml
         # GAMES APP-STORE (games-services control plane) rides the games slug: it needs
         # the games namespace up, so it is pruned/installed WITH games (gate_optional_
         # services games) case + _opt_render_installed_services flips 13c's installed flag).
@@ -327,24 +330,25 @@ spec:
         # shell mounts at /games + /games/admin — frontend-namespace manifests,
         # pruned with the slug like the two above (2026-10-28).
         - manifests/games-ui
+        # The standalone games portal at games.<GAMES_DOMAIN>, for games-realm players.
+        - manifests/games-portal
       esoFile: null
-      esoKeys: [casdoor-games-db, casdoor-games-app]
+      esoKeys: [casdoor-games-db, casdoor-games-app, games-bff-db]
       # NOTE: the games host is GAMES_DOMAIN (parameterized below), NOT a
-      # hugmesh.net subdomain literal — see gamesDomain.
-      gatewayHost: games.${GAMES_DOMAIN}
-      # games = the games portal host route; games-servers-console = the games app-store
-      # per-instance HTTP console path-route; games-bff + games-ui = the fe-gateway
-      # path routes for the shell-mounted games screens (/games/api/** -> the games
-      # BFF, /games/** -> the `games` remote; apps/20-gateway-fe.yaml). All four are
-      # pruned when games is deselected.
-      gatewayRouteIds: [games, games-servers-console, games-bff, games-ui]
+      # hugmesh.net subdomain literal — see gamesDomain. It is served by the Ingress in
+      # manifests/games-portal, not by a gateway route.
+      gatewayHost: ${GAMES_DOMAIN}
+      # games-servers-console = the games app-store per-instance HTTP console
+      # path-route; games-bff + games-ui = the fe-gateway path routes for the
+      # shell-mounted games screens (/games/api/** -> the games BFF, /games/** -> the
+      # `games` remote; apps/20-gateway-fe.yaml). All three are pruned when games is
+      # deselected.
+      gatewayRouteIds: [games-servers-console, games-bff, games-ui]
       routeAccessRows:
-        - { gateway: hugmesh-be-gateway, urlPattern: /games/api/admin/** }
-        - { gateway: hugmesh-be-gateway, urlPattern: /games/** }
         - { gateway: hugmesh-fe-gateway, urlPattern: /games/admin/** }
         # ── games member + admin SCREENS via the browser door (2026-10-28) ──
         # /games/api/admin/** ROLE_GAMES_ADMIN; /games/api/** and /games/**
-        # ROLE_GAMES|ROLE_ADMIN|ROLE_MOD (paired supersets, see 20-schema.sql).
+        # ROLE_GAMES|ROLE_ADMIN (paired superset, see 20-schema.sql).
         - { gateway: hugmesh-fe-gateway, urlPattern: /games/api/admin/** }
         - { gateway: hugmesh-fe-gateway, urlPattern: /games/api/** }
         - { gateway: hugmesh-fe-gateway, urlPattern: /games/** }
