@@ -2154,13 +2154,17 @@ stack-build: stack-clone stack-certs stack-m2-check $(STACK_SOCIAL_DEP) ## build
 # table ONCE, so an existing stack never saw a route row added since — 2026-10-29:
 # 1 of 8 fe /games rows present, every games member 403 until a hand re-apply.
 # The reconcile fails the target loudly on a SQL error and prints counts only.
+# POSTGRES_HOST= ROUTE_ACCESS_CONTAINER= pin it to THIS stack's compose service:
+# the script honours both as target overrides (for its guard and CI), and a
+# POSTGRES_HOST the operator exported for a seed replay (docs/MFA-ROLLOUT.md)
+# would otherwise send the seed to that server and leave this table stale.
 # stack-halt -> stack-up is the resume path, so this covers it (and the Studio,
 # which shells out to `make stack-up`). Guard: tests/stack/test-route-access-reconcile.sh.
 stack-up: stack-clone stack-certs stack-m2-check $(STACK_SOCIAL_DEP) ## clone -> build -> run the FULL stack (ENV=test|prod; SOCIAL=1 adds matrix/mastodon)
 	@echo "==> Local stack: ENV=$(ENV), issuer=$(CASDOOR_ISSUER), host port=$(PUBLIC_HOST_PORT), social=$(if $(strip $(SOCIAL)),on,off)$(if $(strip $(MFA)), mfa=ON(explicit),)$(if $(strip $(MFA_FLOOR)), mfa-floor=ON,)$(if $(wildcard $(STACK_M2_ENV)), m2-registry=on,)"
 	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_M2_FLAGS) $(STACK_PROFILE) $(STACK_ALT_PROFILE) $(STACK_TOR_PROFILE) $(STACK_GAMES_PROFILE) $(STACK_BRAND_B_PROFILE) $(STACK_OWN_CASDOOR_FLAGS) $(STACK_LIMITS_FLAGS) $(STACK_LOOKS_FLAGS) $(STACK_EGRESS_FLAGS) build
 	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_M2_FLAGS) $(STACK_PROFILE) $(STACK_ALT_PROFILE) $(STACK_TOR_PROFILE)$(STACK_TOR_DOMAINS_FLAGS) $(STACK_GAMES_PROFILE) $(STACK_BRAND_B_PROFILE) $(STACK_OWN_CASDOOR_FLAGS) $(STACK_LIMITS_FLAGS) $(STACK_LOOKS_FLAGS) $(STACK_EGRESS_FLAGS) up -d
-	$(STACK_ENV) COMPOSE_CMD='$(COMPOSE_CMD)' STACK_COMPOSE='$(STACK_COMPOSE)' bash tests/stack/route-access-reconcile.sh
+	$(STACK_ENV) POSTGRES_HOST= ROUTE_ACCESS_CONTAINER= COMPOSE_CMD='$(COMPOSE_CMD)' STACK_COMPOSE='$(STACK_COMPOSE)' bash tests/stack/route-access-reconcile.sh
 	@echo "==> Up. Front door: http://localhost:$(PUBLIC_HOST_PORT)  |  https://localhost:$(PUBLIC_HTTPS_PORT)  | Casdoor: http://localhost:8000"
 	@echo "    (https uses the per-machine CA $(STACK_TLS_DIR)/ca.crt - import it to trust, or accept the browser warning)"
 	@echo "    Logs: make stack-logs   Down: make stack-down"
@@ -2417,9 +2421,10 @@ stack-ps: ## list the local stack's containers + status
 # to an existing row survive; a seed row an admin DELETED comes back — seed is
 # the floor), plus its documented mfa_required convergence under /bff/admin and
 # /bff/superadmin. stack-up runs this automatically; it is exposed for a stack
-# that is already up. Guard: tests/stack/test-route-access-reconcile.sh.
+# that is already up; like stack-up it blanks POSTGRES_HOST/ROUTE_ACCESS_CONTAINER
+# so a shell export cannot redirect it. Guard: tests/stack/test-route-access-reconcile.sh.
 stack-route-access-reconcile: ## re-apply the route-access seed to the running stack's route-access-db (stack-up does this itself)
-	$(STACK_ENV) COMPOSE_CMD='$(COMPOSE_CMD)' STACK_COMPOSE='$(STACK_COMPOSE)' bash tests/stack/route-access-reconcile.sh
+	$(STACK_ENV) POSTGRES_HOST= ROUTE_ACCESS_CONTAINER= COMPOSE_CMD='$(COMPOSE_CMD)' STACK_COMPOSE='$(STACK_COMPOSE)' bash tests/stack/route-access-reconcile.sh
 
 # ── The Gherkin (BDD) e2e lane ───────────────────────────────────────────────
 # SEPARATE targets on purpose: the `stack-e2e` recipe above is edited by other

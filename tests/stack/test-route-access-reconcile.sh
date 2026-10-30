@@ -130,6 +130,27 @@ else
   bad "stack-route-access-reconcile is not in .PHONY — a file of that name would silence the target"
 fi
 
+# check_pin <Makefile> <target>: the target's reconcile invocation blanks
+# POSTGRES_HOST and ROUTE_ACCESS_CONTAINER. The reconciler honours both as target
+# overrides (this guard and CI use them), and make passes the operator's shell
+# environment through: a POSTGRES_HOST exported for a seed replay
+# (docs/MFA-ROLLOUT.md) would send stack-up's seed to THAT server and leave the
+# stack's own table stale — the incident this target exists to close.
+check_pin() {
+  local line
+  line="$(dry_run "$1" "$2" | grep 'route-access-reconcile\.sh' | head -n 1)"
+  [ -n "${line}" ] || return 1
+  printf '%s\n' "${line}" | grep -E '(^| )POSTGRES_HOST= ' >/dev/null || return 1
+  printf '%s\n' "${line}" | grep -E '(^| )ROUTE_ACCESS_CONTAINER= ' >/dev/null || return 1
+}
+for t in stack-up stack-route-access-reconcile; do
+  if check_pin "${REPO}/Makefile" "${t}"; then
+    ok "make ${t} blanks POSTGRES_HOST and ROUTE_ACCESS_CONTAINER on the reconcile line (a shell export cannot redirect it off the compose stack)"
+  else
+    bad "make ${t}'s reconcile line does not blank POSTGRES_HOST= ROUTE_ACCESS_CONTAINER= — an exported POSTGRES_HOST redirects the seed to another server"
+  fi
+done
+
 # The reconciler's apply line: ONE transaction + stop on first error.
 APPLY_LINE="$(grep -n '<"\${SQL}"' "${SCRIPT}" | head -n 1)"
 if [ -n "${APPLY_LINE}" ] && printf '%s' "${APPLY_LINE}" | grep -- '-v ON_ERROR_STOP=1' >/dev/null && printf '%s' "${APPLY_LINE}" | grep -E -- ' -1 ' >/dev/null; then
@@ -200,20 +221,24 @@ else
   bad "scripts/stack-up.ps1's readiness probe is not wrapped in ErrorActionPreference 'Continue' + restore — under 'Stop' the first not-ready probe ends the script on PowerShell 5.1"
 fi
 
-# The ps1 applies the seed by its IN-CONTAINER name, which must be the name
-# compose.local.yaml mounts 20-schema.sql under (the bash reconciler pipes the
-# host file instead, so only this check covers the ps1's path).
-COMPOSE_LOCAL="${REPO}/tests/stack/compose.local.yaml"
-ps1_path_ok() {  # ps1_path_ok <ps1> <compose>
-  local target
-  target="$(sed -n 's#.*route-access/initdb/20-schema\.sql:\(/docker-entrypoint-initdb\.d/[^:[:space:]]*\).*#\1#p' "$2" | head -n 1)"
-  [ -n "${target}" ] || return 1
-  grep -E -- "ON_ERROR_STOP=1 -1 -f ${target//./\\.}'" "$1" >/dev/null
+# The ps1 must apply the CHECKOUT's seed, not the container's bind mount. A
+# single-file bind mount pins the inode it had at container start; `git pull`
+# replaces 20-schema.sql with a new file, so a container that kept running would
+# re-apply the OLD seed and report success (ultrareview finding, 2026-10-29). So:
+# the ps1 copies the host seed in (`compose cp`) and the apply's -f names exactly
+# the copy's in-container path — never a /docker-entrypoint-initdb.d name.
+ps1_path_ok() {  # ps1_path_ok <ps1>
+  local dest
+  dest="$(grep -v '^[[:space:]]*#' "$1" | grep -E "route-access[\\/]initdb[\\/]20-schema\.sql" >/dev/null && \
+          grep -v '^[[:space:]]*#' "$1" | sed -n 's#^docker compose .* cp \$SeedSql route-access-db:\([^[:space:]]*\).*#\1#p' | head -n 1)"
+  [ -n "${dest}" ] || return 1
+  grep -v '^[[:space:]]*#' "$1" | grep -E -- "ON_ERROR_STOP=1 -1 -f ${dest//./\\.}'" >/dev/null || return 1
+  ! grep -v '^[[:space:]]*#' "$1" | grep -E -- 'ON_ERROR_STOP=1 -1 -f /docker-entrypoint-initdb\.d/' >/dev/null
 }
-if ps1_path_ok "${PS1_SCRIPT}" "${COMPOSE_LOCAL}"; then
-  ok "scripts/stack-up.ps1 applies the seed by the in-container name compose.local.yaml mounts it under"
+if ps1_path_ok "${PS1_SCRIPT}"; then
+  ok "scripts/stack-up.ps1 copies the checkout's 20-schema.sql into route-access-db and applies that copy (a git pull under a running container cannot leave it re-applying the old seed)"
 else
-  bad "scripts/stack-up.ps1's -f path is not the in-container name compose.local.yaml mounts 20-schema.sql under"
+  bad "scripts/stack-up.ps1 does not apply a fresh copy of the checkout's seed (it reads the bind mount, whose inode a git pull leaves stale)"
 fi
 
 # ── Static MUTATIONS on staged copies: each must go RED, and each is proven to
@@ -239,6 +264,8 @@ elif how == 'before':
     l = lines.pop(rec); lines.insert(up, l)
 elif how == 'ignore':
     lines[rec] = '\t-' + lines[rec][1:]
+elif how == 'unpinned':
+    lines[rec] = lines[rec].replace('POSTGRES_HOST= ROUTE_ACCESS_CONTAINER= ', '')
 else:
     raise SystemExit('unknown mutation ' + how)
 open(dst, 'w').write(s.replace(body, '\n'.join(lines)))
@@ -255,6 +282,14 @@ for m in remove before ignore; do
     fi
   fi
 done
+
+if mutate_make unpinned unpinned; then
+  if check_pin "${W}/Makefile.unpinned" stack-up; then
+    bad "mutation 'unpinned' (POSTGRES_HOST= ROUTE_ACCESS_CONTAINER= stripped from stack-up) still reads as pinned — the check cannot fail"
+  else
+    ok "mutation 'unpinned' goes RED (stack-up reconcile line no longer blanks POSTGRES_HOST/ROUTE_ACCESS_CONTAINER)"
+  fi
+fi
 
 # no-target mutation: drop the standalone target
 python3 - "${REPO}/Makefile" "${W}/Makefile.notarget" <<'PY'
@@ -304,7 +339,9 @@ ps1_mut() {  # ps1_mut <name> <sed-expr> <check-fn> [extra arg]
 }
 ps1_mut no-continue "/^[[:space:]]*\$ErrorActionPreference = 'Continue'/d" ps1_eap_ok
 ps1_mut no-restore  "/^[[:space:]]*\$ErrorActionPreference = \$savedEap/d"  ps1_eap_ok
-ps1_mut wrong-path  "s#-f /docker-entrypoint-initdb.d/10-schema.sql#-f /docker-entrypoint-initdb.d/20-schema.sql#" ps1_path_ok "${COMPOSE_LOCAL}"
+ps1_mut bind-mount  "s#-f /tmp/route-access-seed.sql'#-f /docker-entrypoint-initdb.d/10-schema.sql'#" ps1_path_ok
+ps1_mut no-copy     "/ cp \$SeedSql route-access-db:/d" ps1_path_ok
+ps1_mut wrong-dest  "s#-1 -f /tmp/route-access-seed.sql#-1 -f /tmp/other.sql#" ps1_path_ok
 
 # Script-flag mutations (static half; the engine half below proves the behaviour)
 sed 's/ -v ON_ERROR_STOP=1 -1 </ -1 </' "${SCRIPT}" > "${W}/reconcile.no-stop.sh"

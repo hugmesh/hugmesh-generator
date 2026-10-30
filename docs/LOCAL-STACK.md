@@ -589,6 +589,8 @@ paths, not a 404).
   transaction, counts only): an admin's edits to an existing row survive, a seed
   row an admin deleted comes back (seed is the floor), and `mfa_required` under
   `/bff/admin` + `/bff/superadmin` converges back to `true` as the file documents.
+  Both make targets always reach the compose `route-access-db`: a `POSTGRES_HOST`
+  exported in your shell (e.g. for a seed replay) does not redirect them.
 - **Fragment fleet serves an empty set** until federation has enabled modules +
   a valid `app-fragment-sync` Casdoor client, so `/_fragments/**` is up but
   empty. It is the standalone sync image on `:8081` (in k8s it is nginx + a sync

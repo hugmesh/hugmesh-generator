@@ -49,6 +49,9 @@
 #   POSTGRES_HOST=<host>              psql -h <host> (a CI `services:` postgres)
 #   (default)                         docker compose -f tests/stack/compose.local.yaml
 #                                     exec -T route-access-db psql
+# `make stack-up` and `make stack-route-access-reconcile` blank both overrides,
+# so they always reach the compose service whatever the shell exports (a
+# POSTGRES_HOST set for a seed replay must not redirect a bring-up).
 # ROUTE_ACCESS_SQL overrides the seed file; ROUTE_ACCESS_WAIT_SECS the readiness
 # wait (default 120). Exit 1 on any SQL error (the transaction is rolled back,
 # the table is untouched) or if the database never becomes reachable.
