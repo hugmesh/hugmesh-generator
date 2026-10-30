@@ -699,6 +699,13 @@ def send_prompt(text: str, model: str | None = None, *, env: dict | None = None,
     req = urllib.request.Request(url + "/api/chat", body,
                                  {"Content-Type": "application/json"})
     deadline = time.monotonic() + total_timeout
+    gate = None
+    if grounded is not None and on_chunk is not None:
+        # a grounded stream is printed a line (a fenced block) at a time, so the
+        # delete-commands warning lands ABOVE the command (assistant_prompt.WarnGate)
+        from . import assistant_prompt as ap
+        gate = ap.WarnGate(on_chunk)
+        on_chunk = gate.feed
     out: list[str] = []
     finished = False                   # a ``done`` line arrived, or the caller said stop
     cut = ("The connection to Ollama was cut off before the answer finished "
@@ -747,6 +754,10 @@ def send_prompt(text: str, model: str | None = None, *, env: dict | None = None,
             raise LocalAIError(f"No answer for {int(timeout)} seconds; the model may still "
                                "be loading. Try again in a minute.") from None
         raise LocalAIError(_down_message(env)) from None
+    finally:
+        if gate is not None:
+            gate.finish()                # whatever arrived is shown, cut or not
+            on_chunk = gate.emit
     if not finished:
         # The stream died BETWEEN chunks: http.client's readline sees a clean end of file
         # and raises nothing. Ollama ends every answer with a ``done`` line, so a stream
@@ -879,8 +890,14 @@ def chat_loop(inp, out, env: dict | None = None, model: str | None = None) -> in
                 from . import assistant_prompt as ap
                 where = ap.Where(face="cli", slug=slug, title=slug.replace("_", " ").title()
                                  if slug else "", question=line)
-                answer, prompt = ap.answer(line, where, history, env=dict(env), model=model,
-                                           on_chunk=lambda c: (out.write(c), out.flush()))
+                # a line (a fenced block) at a time: the delete-commands warning is
+                # printed ABOVE the command it is about (assistant_prompt.WarnGate)
+                gate = ap.WarnGate(lambda c: (out.write(c), out.flush()))
+                try:
+                    answer, prompt = ap.answer(line, where, history, env=dict(env),
+                                               model=model, on_chunk=gate.feed)
+                finally:
+                    gate.finish()
                 footer = ap.after_answer(answer, prompt)
                 if footer:
                     out.write("\n" + footer)

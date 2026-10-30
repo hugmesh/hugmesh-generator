@@ -199,3 +199,153 @@ def test_the_real_corpus_indexes_fast_and_finds_each_pages_section(tmp_path, mon
         W.slug, W.title = slug, ad.TITLE_ALIASES.get(slug, slug)
         got = [c.label for c in ad.retrieve(question, W, index=idx)]
         assert any(g.startswith(want) for g in got), (question, got)
+
+
+# ── round 6 (PR #832): invented and destructive commands ─────────────────────────────
+#: What qwen3:8b really wrote when asked to wipe the local mesh (2026-10-29/30), with the
+#: machine paths replaced. Every one must be flagged, and every one gets the warning.
+INVENTED_WIPE = [
+    "rm -rf /home/someone/.checkouts",
+    "rm -rf ~/.hugmesh-checkouts",
+    "sudo rm -rf /var/lib/docker",
+    "rm -f ~/.hugmesh/studio/sessions/s1.json",
+    "docker system prune -a",
+    "docker system prune -af --volumes",
+    "docker volume prune",
+    "docker image prune -a",
+    "docker container prune -f",
+    "docker network prune",
+    "docker builder prune",
+    "docker rm -f $(docker ps -a -q)",
+    "docker rmi -f $(docker images -q)",
+    "docker volume rm hugmesh_casdoor-db",
+    "docker-compose down -v",
+    "docker-compose down --volumes",
+    "docker compose -f tests/stack/compose.local.yaml down -v",
+    "docker compose down --rmi all",
+    "podman system prune -a",
+    "dd if=/dev/zero of=/dev/sda bs=1M",
+    "mkfs.ext4 /dev/sdb1",
+    "wipefs -a /dev/sdb",
+    "git clean -fdx",
+    "git reset --hard origin/main",
+    "kubectl delete namespace hugmesh",
+    "kubectl -n argocd delete pod --all",
+    "helm uninstall hugmesh",
+    "kind delete cluster --name hugmesh",
+    "find . -name '*.db' -delete",
+]
+#: Commands and words that delete nothing (or are the documented ways): no warning.
+SAFE_TEXT = [
+    "make stack-down", "make stack-halt", "make stack-clean", "docker compose ps", "docker ps -a",
+    "docker compose down", "git status", "git log", "kubectl get pods", "helm list",
+    "Press Stop & clean Docker… on the Local Docker mesh step.", "rm is the Unix remove tool",
+    "Stop mesh keeps the data.", "the confirm -f flag", "Use the Remove button.",
+    "I can switch the made-up example.setting on for example.invalid.",
+]
+
+
+def _shapes(cmd):
+    """The ways a model writes one command: a fenced bash block, an indented fence in a
+    list item, an untagged fence, a console prompt, an inline code span, plain prose."""
+    return [
+        f"Do this:\n```bash\n{cmd}\n```\n",
+        f"1. **Remove it:**\n   ```bash\n   {cmd}\n   ```\n",
+        f"```\n{cmd}\n```",
+        f"```console\n$ {cmd}\n```",
+        f"Run `{cmd}` and start again.",
+        f"Then {cmd} and start again.",
+    ]
+
+
+@pytest.mark.parametrize("cmd", INVENTED_WIPE)
+def test_every_destructive_command_is_found_in_every_shape(cmd):
+    for text in _shapes(cmd):
+        got = ad.destructive_commands(text)
+        assert got, (cmd, text)
+        assert any(cmd.split()[0] in g for g in got), (cmd, got)
+
+
+@pytest.mark.parametrize("text", SAFE_TEXT)
+def test_safe_text_and_the_documented_ways_are_not_destructive(text):
+    assert ad.destructive_commands(text) == [], text
+    assert ad.destructive_commands(f"```bash\n{text}\n```") == [] or text.startswith("rm is"), text
+
+
+@pytest.mark.parametrize("cmd", INVENTED_WIPE + [
+    "./build.sh", "./scripts/reset-all.sh --yes", "bash nuke.sh", "git init", "git remote add origin x",
+    "git stash drop", "systemctl restart docker", "rc-service docker restart", "sudo emerge -C docker",
+    "docker exec -it hugmesh-casdoor sh", "docker-compose up -d", "kubectl apply -f x.yaml",
+    "helm install hugmesh ./chart", "make stack-reset-everything",
+])
+def test_the_not_in_the_docs_footer_covers_every_pasteable_command(cmd):
+    """Round 6 blocker: commands_in() returned NOTHING for rm, docker <not compose>,
+    docker-compose, ./build.sh and git init, so the footer stayed silent while the
+    answer said rm -rf. Every shape of every command is now flagged when no snippet
+    spells it."""
+    chunk = ad.Chunk("x", "docs/X.md", "X", "Stop it with make stack-down here.", 1.0, 5)
+    for text in _shapes(cmd):
+        bad = ad.unverified_commands(text, [chunk])
+        assert bad, (cmd, text)
+        assert any(cmd.split()[-1].strip("'") in b or cmd.split()[0] in b for b in bad), (cmd, bad)
+
+
+def test_every_line_of_a_fenced_shell_block_is_a_command_unless_a_snippet_spells_it():
+    answer = ("Here:\n```bash\n# stop first\nmake stack-down\ncd ~/somewhere && ./build.sh\n"
+              "FOO=1 make stack-up\nmy-own-tool --wipe \\\n  --yes\n```\n"
+              "```change\n{\"domain\": \"a\", \"field\": \"tor\", \"to\": true}\n```\n"
+              "```json\n{\"rm\": \"-rf /\"}\n```\n")
+    assert ad.code_commands(answer) == ["make stack-down", "cd ~/somewhere", "./build.sh",
+                                        "FOO=1 make stack-up", "my-own-tool --wipe --yes"]
+    docs = ad.Chunk("x", "docs/X.md", "X", "```bash\nmake stack-down               # stop + drop volumes\n"
+                    "FOO=1 make stack-up\n```", 1.0, 5)
+    assert ad.unverified_commands(answer, [docs]) == ["./build.sh", "cd ~/somewhere",
+                                                      "my-own-tool --wipe --yes"]
+
+
+def test_inline_code_that_names_a_tool_or_a_value_is_not_a_command():
+    assert ad.code_commands("Use `docker` or `kubectl`; set `look.primary` to `#5b21b6` "
+                            "on `shop.example`.") == []
+    assert ad.code_commands("Run `docker volume ls` then `./scripts/x.sh`.") == ["docker volume ls",
+                                                                                 "./scripts/x.sh"]
+
+
+def test_prose_after_a_command_is_not_part_of_it():
+    assert "docker volume ls" in ad.commands_in("Then docker volume ls is what you want.")
+    assert ad.commands_in("make stack-up in the generator checkout") == {"make stack-up"}
+
+
+@pytest.mark.parametrize("question", [
+    "Everything is broken. Give me the exact commands to wipe the local mesh and all its data and start completely fresh",
+    "How do I reset the local mesh completely?",
+    "How do I delete everything and start over?",
+    "I want to clean up all the docker stuff the mesh made",
+    "how do I start from scratch?",
+    "nuke the mesh, I want a fresh start",
+    "how do I tear everything down and erase the data",
+])
+def test_a_wipe_or_reset_question_always_retrieves_the_documented_ways(question, tmp_path, monkeypatch):
+    """Round 6: the model invented rm -rf because the Stop & clean paragraph
+    (STUDIO-WALKTHROUGH.md, Local Docker mesh traps) and LOCAL-STACK.md's stack-down
+    line were not in the snippets. On any page, both are, and the paragraph reads first."""
+    monkeypatch.setenv("HUGMESH_STUDIO_STATE_DIR", str(tmp_path / "state"))
+    assert ad.is_reset_question(question)
+    idx = ad.load_index(GENERATOR_DIR)
+    for slug in ("localmesh", "welcome", "domain_services", ""):
+        class W:
+            pass
+        W.slug, W.title = slug, ad.TITLE_ALIASES.get(slug, slug)
+        got = ad.retrieve(question, W, index=idx, budget_tokens=3500)
+        texts = [" ".join(c.text.split()) for c in got]
+        for anchor in ad.RESET_ANCHORS:
+            assert any(anchor in t for t in texts), (slug, anchor, [c.label for c in got])
+        assert ad.RESET_ANCHORS[0] in texts[0], (slug, [c.label for c in got])
+        assert sum(c.tokens for c in got) <= 3500
+
+
+@pytest.mark.parametrize("question", [
+    "What services can I switch on for this domain?", "Where is the build log?",
+    "How do I stop the DevOps lane without deleting the cluster?", "Which model are you running on?",
+])
+def test_an_ordinary_question_is_not_a_reset_question(question):
+    assert not ad.is_reset_question(question)

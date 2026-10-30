@@ -263,3 +263,179 @@ def test_eval_skips_only_the_sources_line_the_studio_wrote():
     assert ev.model_said(answer + "\n\nSources: a.md", answer) == answer + "\n\n"
     assert ev.model_said("[error: refused]", "") == "[error: refused]"
     assert ev.model_said("plain", "plain") == "plain"
+
+
+# ── round 6 (PR #832): no invented commands, a warning for delete commands, no paths ──
+WIPE_ANSWER = ("To wipe it:\n1. **Stop:**\n   ```bash\n   docker-compose down\n   ```\n"
+               "2. **Remove the data:**\n   ```bash\n   rm -rf ~/.hugmesh-checkouts\n   ```\n"
+               "3. **Clean Docker:**\n   ```bash\n   docker system prune -a\n   ```\n")
+
+
+def test_the_rules_forbid_invented_commands_and_name_the_documented_reset():
+    for words in ("Never invent a shell command", "Stop & clean Docker…", "Stop mesh keeps the data",
+                  "make stack-halt", "make stack-down", "never a command that deletes"):
+        assert words in ap.RULES, words
+    # the rules never spell a delete command a small model could copy
+    assert ad.destructive_commands(ap.RULES) == [] and ad.destructive_commands(ap.CHANGE_FORMAT) == []
+
+
+def test_the_warning_names_the_documented_ways_and_never_repeats_a_delete_command():
+    w = ap.DESTRUCTIVE_WARNING
+    assert w.startswith("WARNING:") and "Do not run them" in w
+    assert "Stop & clean Docker…" in w and "make stack-down" in w and "STUDIO-WALKTHROUGH.md" in w \
+        and "LOCAL-STACK.md" in w and "make stack-halt" in w
+    assert ad.destructive_commands(w) == [] and ad.destructive_commands(ap.DANGER_NOTE) == []
+    assert ap.danger_banner(WIPE_ANSWER) == w
+    assert ap.danger_banner("Press Stop & clean Docker…, or run make stack-down.") == ""
+
+
+def test_after_answer_puts_the_warning_first_and_lists_every_invented_command():
+    p = ap.Prompt("", [], [ad.Chunk("x", "docs/X.md", "X", "make stack-down # stop + drop volumes", 1.0, 5)], {})
+    foot = ap.after_answer(WIPE_ANSWER, p)
+    lines = foot.split("\n")
+    assert lines[0] == ap.DESTRUCTIVE_WARNING and lines[1].startswith("Sources: ")
+    bad = next(ln for ln in lines if ln.startswith("Commands not found in the docs I read: "))
+    for cmd in ("docker-compose down", "rm -rf ~/.hugmesh-checkouts", "docker system prune -a"):
+        assert cmd in bad, cmd
+    assert ap.after_answer("Press Stop & clean Docker….", p).startswith("Sources: ")
+
+
+def test_the_gate_prints_the_warning_before_the_first_delete_line_whatever_the_chunking():
+    for size in (1, 3, 7, 50, len(WIPE_ANSWER)):
+        shown = []
+        gate = ap.WarnGate(shown.append)
+        for i in range(0, len(WIPE_ANSWER), size):
+            gate.feed(WIPE_ANSWER[i:i + size])
+        gate.finish()
+        text = "".join(shown)
+        assert gate.warned and text.count(ap.DESTRUCTIVE_WARNING) == 1
+        assert text.index(ap.DESTRUCTIVE_WARNING) < text.index("rm -rf")
+        assert text.replace("\n" + ap.DESTRUCTIVE_WARNING + "\n\n", "") == WIPE_ANSWER
+    shown = []
+    gate = ap.WarnGate(shown.append)
+    gate.feed("No delete here.\n```bash\nmake stack-halt\n```\nand a tail without newline")
+    gate.finish()
+    assert not gate.warned and "".join(shown).endswith("a tail without newline")
+
+
+def test_a_grounded_stream_shows_the_warning_above_the_command(monkeypatch):
+    fake = FakeOllama()
+    fake.chunks = [WIPE_ANSWER[i:i + 9] for i in range(0, len(WIPE_ANSWER), 9)]
+    pieces = []
+    try:
+        monkeypatch.setenv("OLLAMA_HOST", fake.host)
+        monkeypatch.setenv(lai.GROUNDED_ENV, "1")
+        env = dict(os.environ)
+        env["HUGMESH_GENERATOR_DIR"] = GENERATOR_DIR
+        out = lai.send_prompt("wipe everything and start fresh", env=env, on_chunk=pieces.append)
+    finally:
+        fake.close()
+    shown = "".join(pieces)
+    assert shown.index(ap.DESTRUCTIVE_WARNING) < shown.index("rm -rf")
+    assert "\n\n" + ap.DESTRUCTIVE_WARNING + "\nSources: " in shown   # and first in the footer
+    assert out.startswith(WIPE_ANSWER)                                 # the answer itself, unchanged
+
+
+def test_no_absolute_home_path_reaches_the_model(tmp_path, monkeypatch):
+    """Round 6: the primer named the checkouts folder and the generator checkout, and the
+    model answered "wipe everything" with rm -rf of both. No part of the system message,
+    and no history message, carries the home folder, the checkouts folder or the
+    generator checkout as an absolute path."""
+    home = tmp_path / "home" / "someone"
+    root = home / "Github"
+    gen = root / "hugmesh-generator"
+    (gen / "docs").mkdir(parents=True)
+    (gen / "docs" / "STUDIO-WALKTHROUGH.md").write_text("# W\n\n### Local Docker mesh\n\nPress Stop mesh.\n")
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("HUGMESH_REPOS_ROOT", str(root))
+    log = home / ".hugmesh" / "studio" / "w1" / "build.log"
+    w = ac.Where(slug="localmesh", title="Local Docker mesh", mode="docker",
+                 state=(("build", f"failed; log {log}"), ("code", f"{root}/hugmesh-auth-ui/src"),
+                        ("elsewhere", "/home/other/x/y/z.txt")))
+    hist = [{"role": "user", "content": f"is {gen} right?"},
+            {"role": "assistant", "content": f"yes, {gen}/scripts/local-ai.sh and {root}"}]
+    p = ap.build("How do I reset the local mesh completely?", w, hist, env=dict(os.environ),
+                 generator_dir=str(gen), ctx_tokens=16384,
+                 files_block=f"[file: src/index.html in {root}/web/x]\n<p>hi</p>")
+    sent = p.system + "\n".join(m["content"] for m in p.history)
+    for path in (str(home), str(root), str(gen), "/home/other"):
+        assert path not in sent, path
+    assert "~/.hugmesh/studio/w1/build.log" in sent and "hugmesh-auth-ui/src" in sent
+    assert "scripts/local-ai.sh" in sent and "…/y/z.txt" in sent
+    assert "## Where the local sources are" in p.primer and "checkouts folder" in p.primer
+    # the coding-agent brief still names both folders: it is the person's own file
+    assert str(root) in actx.render_context(generator_dir=str(gen), checkouts_root=str(root), checkouts=[])
+
+
+def test_scrub_paths_rewrites_each_kind_of_machine_path():
+    kw = dict(generator_dir="/h/u/G/gen", checkouts_root="/h/u/G", home="/h/u")
+    assert ap.scrub_paths("/h/u/G/gen", **kw) == "the generator checkout"
+    assert ap.scrub_paths("in /h/u/G/gen/docs/A.md.", **kw) == "in docs/A.md."
+    assert ap.scrub_paths("`/h/u/G`", **kw) == "`the checkouts folder`"
+    assert ap.scrub_paths("/h/u/G/hugmesh-ui/src/a.ts", **kw) == "hugmesh-ui/src/a.ts"
+    assert ap.scrub_paths("/h/u/.cache/x", **kw) == "~/.cache/x"
+    assert ap.scrub_paths("/home/z/a/b/c.log and /Users/z/q", **kw) == "…/b/c.log and …/z/q"
+    assert ap.scrub_paths("/etc/wireguard/wg0.conf, /var/lib/docker", **kw) == \
+        "/etc/wireguard/wg0.conf, /var/lib/docker"                     # documented paths stay
+    assert ap.scrub_paths("https://example.org/home/x/y", **kw) == "https://example.org/home/x/y"
+
+
+def _eval_module():
+    import importlib.util
+    path = os.path.join(GENERATOR_DIR, "scripts", "local-ai", "eval.py")
+    spec = importlib.util.spec_from_file_location("hugmesh_local_ai_eval", path)
+    ev = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(ev)
+    return ev
+
+
+def test_eval_scores_the_model_not_the_warning_and_counts_wrong_cards_and_unwarned_deletes():
+    """Round 6: eval.py must catch the two final-round blockers by itself. The warning's
+    own words (Stop & clean Docker…, make stack-down) never count as the model's; its
+    delete-command check uses its OWN word list; a forum-off item whose card is the Tor
+    example is a WRONG CARD and FAILs, whatever the aggregate says."""
+    ev = _eval_module()
+    p = ap.Prompt("", [], [], {})
+    foot = ap.after_answer(WIPE_ANSWER, p)
+    final = WIPE_ANSWER + "\n\n" + foot
+    said = ev.model_said(final, WIPE_ANSWER)
+    assert ap.DESTRUCTIVE_WARNING not in said and "Stop & clean" not in said
+    assert ev.looks_destructive(WIPE_ANSWER) and ap.DESTRUCTIVE_WARNING in final
+    for word in ev.DANGER_WORDS:                       # independent of assistant_docs ...
+        assert word.strip() and word not in ("prune", "delete")
+    for safe in ("Press Stop & clean Docker…, then Generate & start.", "make stack-down",
+                 "ArgoCD auto-sync prunes and self-heals.", "Delete DevOps lane removes the cluster."):
+        assert not ev.looks_destructive(safe), safe
+    from hugmesh_studio.core import assistant_actions as aact
+    with open(os.path.join(GENERATOR_DIR, "scripts", "local-ai", "eval-items.json"), encoding="utf-8") as fh:
+        items = json.load(fh)
+    forum = [it for it in items if "forum" in it["question"] or "phpBB" in it["question"]]
+    assert len(forum) >= 3 and all(it.get("card_must_be") for it in forum)
+    wipes = [it for it in items if it.get("model_mention_any")]
+    assert len(wipes) >= 5 and all("/home/" in it["must_not"] for it in wipes)
+    item = forum[0]
+    w = ac.Where(face="gui", slug="domain_services", title="Domain services", domain="shop.example",
+                 tab="services")
+
+    class Reader:
+        id, domain, own = "eval", "shop.example", False
+
+        def read(self, route, key):
+            return {"services": ["tuwunel", "phpbb"], "tor": False}[route]
+
+    import types
+    fx = types.SimpleNamespace()                       # score() reads no fixture for these
+    real = ev.ReaderTarget
+    ev.ReaderTarget = lambda _fx: Reader()
+    try:
+        tor = 'I can give shop.example its own Tor address.\n```change\n{"domain": "shop.example", "field": "tor", "to": true}\n```'
+        *_, card, wrong = ev.score(item, tor, tor, fx, w)
+        assert card.startswith("Proposed change") and wrong
+        ok = 'Unticking phpbb.\n```change\n{"domain": "shop.example", "field": "services", "to": ["tuwunel"]}\n```'
+        *_, card, wrong = ev.score(item, ok, ok, fx, w)
+        assert card.startswith("Proposed change") and not wrong
+        copied = "x\n```change\n" + json.dumps(aact.EXAMPLE_PROPOSAL) + "\n```"
+        *_, card, wrong = ev.score(item, copied, copied, fx, w)
+        assert not card.startswith("Proposed change") and not wrong     # refused: no card, not wrong
+    finally:
+        ev.ReaderTarget = real

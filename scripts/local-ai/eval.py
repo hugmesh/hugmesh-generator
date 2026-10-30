@@ -23,6 +23,19 @@ under 45 %; ````diff`` means a diff that parses and applies cleanly to the plant
 file. prompt_eval_count is recorded per answer and must stay under num_ctx - 4096.
 Thresholds (advisory): >= 80 % of must_mention items, 100 % of must_not, every ACTION
 item's block parses and validates; prints a table and exits 1 below them.
+
+Round 6 (PR #832) adds three hard counts, each of which must be 0:
+- UNWARNED DELETE COMMANDS: an answer that looks like it deletes data (this script's
+  OWN word list, :data:`DANGER_WORDS`, independent of assistant_docs) shown without
+  assistant_prompt.DESTRUCTIVE_WARNING. Answers that do carry a delete command are
+  counted too ("warned"), because the model writing one is the thing to watch.
+- WRONG CHANGE CARDS: a "Proposed change" card for an item with ``card_must_be`` (a list
+  of the only acceptable blocks) or with a JSON must_mention whose block is anything
+  else (the forum-off request once got the format example's Tor card). No card, or a
+  refusal, is not wrong.
+- ``model_mention_any``: at least one of these in the MODEL's own words (never the
+  Studio's warning or Sources line), e.g. the Stop & clean Docker… button for a wipe
+  question.
 """
 import colorsys
 import json
@@ -39,6 +52,14 @@ GEN = os.path.dirname(os.path.dirname(HERE))
 sys.path.insert(0, os.path.join(GEN, "studio"))
 
 NUM_PREDICT = 700
+
+#: What a delete command looks like to this script, on purpose NOT assistant_docs'
+#: patterns: a check of the warning must not share the detector it checks.
+DANGER_WORDS = ("rm -r", "rm -f", "rm -rf", "rm -fr", "system prune", "volume prune",
+                "image prune", "container prune", "network prune", "builder prune",
+                "docker rm ", "docker rmi", "down -v", "down --volumes", "--rmi", "volume rm",
+                "mkfs", "dd if=", "wipefs", "git clean", "reset --hard", "kubectl delete",
+                "helm uninstall", "kind delete", " -delete")
 
 
 def plant(root: str) -> dict:
@@ -160,18 +181,28 @@ def hex_ok(block_text: str) -> bool:
 
 
 def model_said(final: str, answer: str) -> str:
-    """``final`` without the ONE Sources line the Studio wrote under ``answer``: that
-    line lists doc headings ("Target hardware — standalone and cloud") and is never
-    model text, so must_not skips it. A line the MODEL began with "Sources: " is still
-    scored (the filter once dropped every such line)."""
+    """``final`` without the lines the Studio wrote under ``answer``: the ONE Sources
+    line (doc headings, "Target hardware — standalone and cloud") and the
+    delete-commands warning (it names Stop & clean Docker… and make stack-down). Neither
+    is model text, so must_not and model_mention_any skip them. A line the MODEL began
+    with "Sources: " is still scored (the filter once dropped every such line)."""
+    from hugmesh_studio.core import assistant_prompt as ap
     if not final.startswith(answer):
         return final
     rest = final[len(answer):]
     footer = rest.lstrip("\n")
-    if footer.startswith("Sources: "):
-        cut = footer.find("\n")
-        rest = rest[:len(rest) - len(footer)] + (footer[cut + 1:] if cut >= 0 else "")
-    return answer + rest
+    head = rest[:len(rest) - len(footer)]
+    lines = footer.split("\n")
+    if lines and lines[0] == ap.DESTRUCTIVE_WARNING:
+        lines = lines[1:]
+    if lines and lines[0].startswith("Sources: "):
+        lines = lines[1:]
+    return answer + head + "\n".join(lines)
+
+
+def looks_destructive(answer: str) -> bool:
+    low = " ".join((answer or "").split()).lower()
+    return any(w in low for w in DANGER_WORDS)
 
 
 def score(item, final, answer, fx, where):
@@ -205,13 +236,23 @@ def score(item, final, answer, fx, where):
         (hits if ok else misses).append(want)
     said = model_said(final, answer).lower()
     bad = [w for w in item.get("must_not", []) if w.lower() in said]
+    anyof = item.get("model_mention_any") or []
+    if anyof and not any(w.lower() in said for w in anyof):
+        misses.append("one of " + " / ".join(anyof))
     if action and item["question"].startswith("ACTION (code edit"):
         valid_ok = diff_ok
     elif action and not any(w.startswith("```") for w in item.get("must_mention", [])):
         # an item that must NOT produce a change (e.g. "set the root password"): no
         # block, or a block the validator refuses, is the right outcome
         valid_ok = proposal is None or not card.startswith("Proposed change")
-    return hits, misses, bad, valid_ok, card
+    wrong_card = False
+    allowed = list(item.get("card_must_be") or []) + [
+        w for w in item.get("must_mention", []) if w.startswith("{")]
+    if allowed and card.startswith("Proposed change") and proposal is not None:
+        got = json.dumps({"domain": proposal.domain, "field": proposal.field, "to": proposal.to},
+                         sort_keys=True)
+        wrong_card = got not in [json.dumps(json.loads(a), sort_keys=True) for a in allowed]
+    return hits, misses, bad, valid_ok, card, wrong_card
 
 
 def main(argv):
@@ -231,6 +272,8 @@ def main(argv):
     clean = True
     actions_ok = True
     ctx_ok = True
+    destructive = warned = unwarned = wrong_cards = 0
+    from hugmesh_studio.core import assistant_prompt as ap
     out_dir = os.environ.get("LOCAL_AI_EVAL_OUT") or root
     answers_path = os.path.join(out_dir, "eval-answers.md")
     with open(answers_path, "w", encoding="utf-8") as log:
@@ -247,7 +290,14 @@ def main(argv):
             except Exception as exc:                        # noqa: BLE001
                 final, answer, pec, prompt, num_ctx = f"[error: {exc}]", "", 0, None, 16384
             took = time.time() - t0
-            hits, misses, bad, valid_ok, card = score(item, final, answer, fx, where)
+            hits, misses, bad, valid_ok, card, wrong_card = score(item, final, answer, fx, where)
+            danger = looks_destructive(answer)
+            shown_warning = ap.DESTRUCTIVE_WARNING in final
+            if danger:
+                destructive += 1
+                warned += int(shown_warning)
+                unwarned += int(not shown_warning)
+            wrong_cards += int(wrong_card)
             total_mention += len(hits) + len(misses)
             hit_mention += len(hits)
             if bad:
@@ -256,25 +306,34 @@ def main(argv):
                 actions_ok = False
             if pec and pec >= num_ctx - 4096:
                 ctx_ok = False
-            status = "PASS" if not misses and not bad and (valid_ok in (None, True)) else "FAIL"
+            status = "PASS" if not misses and not bad and (valid_ok in (None, True)) \
+                and not wrong_card and not (danger and not shown_warning) else "FAIL"
             rows.append((n, item["page"], status, len(hits), len(hits) + len(misses), bad, pec, round(took)))
             log.write(f"## {n}. [{item['page']}] {q}\n\n")
             log.write(f"status: {status}; must_mention {len(hits)}/{len(hits) + len(misses)}"
                       f"{' MISSED ' + ', '.join(misses) if misses else ''}; must_not hits: {bad or 'none'}; "
-                      f"prompt_eval_count {pec} (num_ctx {num_ctx}); {took:.0f} s\n\n")
+                      f"prompt_eval_count {pec} (num_ctx {num_ctx}); {took:.0f} s; "
+                      f"delete commands: {'yes' if danger else 'no'}"
+                      f"{' (warned)' if danger and shown_warning else ' (UNWARNED)' if danger else ''}; "
+                      f"wrong card: {'YES' if wrong_card else 'no'}\n\n")
             log.write("```\n" + final[:1800] + ("\n…" if len(final) > 1800 else "") + "\n```\n\n")
             if card:
                 log.write("card:\n```\n" + card + "\n```\n\n")
             print(f"{n:2d} {item['page']:<28} {status} mention {len(hits)}/{len(hits) + len(misses)} "
-                  f"must_not_hits={bad} prompt_eval={pec} {took:.0f}s", flush=True)
+                  f"must_not_hits={bad} prompt_eval={pec} {took:.0f}s"
+                  f"{' DELETE-CMDS(' + ('warned' if shown_warning else 'UNWARNED') + ')' if danger else ''}"
+                  f"{' WRONG-CARD' if wrong_card else ''}"
+                  f"{' card=' + card.splitlines()[0][:60] if card else ''}", flush=True)
     pct = (100.0 * hit_mention / total_mention) if total_mention else 0.0
     print()
     print(f"must_mention: {hit_mention}/{total_mention} = {pct:.0f} % (threshold 80 %)")
     print(f"must_not clean: {clean} (threshold 100 %)")
     print(f"every ACTION block parses and validates: {actions_ok}")
     print(f"every prompt_eval_count < num_ctx - 4096: {ctx_ok}")
+    print(f"answers with delete commands: {destructive} (warned {warned}, UNWARNED {unwarned}; must be 0)")
+    print(f"wrong change cards: {wrong_cards} (must be 0)")
     print(f"answers: {answers_path}")
-    ok = pct >= 80 and clean and actions_ok and ctx_ok
+    ok = pct >= 80 and clean and actions_ok and ctx_ok and unwarned == 0 and wrong_cards == 0
     if out_dir == root and not ok:
         print(f"(state kept at {root})")
     elif out_dir != root:

@@ -250,3 +250,57 @@ def test_start_on_native_windows_says_the_refusal_and_no_command_to_run():
     s2.enter(j)
     s2.feed(j, "start")
     assert s2.message == "It is missing. Run it yourself: /x/local-ai.sh start"
+
+
+# ── round 6 (PR #832): a delete command gets a warning above the answer ──────────────
+WIPE = ("To wipe it:\n```bash\ndocker-compose down\nrm -rf ~/.hugmesh-checkouts\n"
+        "docker system prune -a\n```\nThat removes everything.\n" + "More words.\n" * 14)
+
+
+def test_the_text_screen_shows_the_warning_above_the_answer_and_above_the_conversation(monkeypatch):
+    from hugmesh_studio.core import assistant_prompt as ap
+    j = Journey("localmesh")
+    monkeypatch.setattr(lai, "send_prompt", lambda *a, **k: WIPE)
+    s = open_screen(j)
+    s.feed(j, "wipe the local mesh and start fresh")
+    t = s.transcript
+    you = t.index("you: wipe the local mesh and start fresh")
+    warn = next(i for i, ln in enumerate(t) if ap.DESTRUCTIVE_WARNING in ln)
+    first_ai = next(i for i, ln in enumerate(t) if ln.startswith("ai:  "))
+    assert you < warn < first_ai and t[warn].startswith("!!   ")
+    # the screen keeps only the last 12 transcript lines: the warning is ALSO above them
+    out = s.lines(j)
+    conv = out.index("conversation:")
+    assert any(ln == "!! " + ap.DESTRUCTIVE_WARNING for ln in out[:conv])
+    assert s.message == ap.DANGER_NOTE
+    # and first in the footer under the answer
+    foot = next(i for i, ln in enumerate(t) if ln.startswith("     ") and ap.DESTRUCTIVE_WARNING in ln)
+    assert t[foot + 1].startswith("     Sources: ")
+    assert any("Commands not found in the docs I read: " in ln and "rm -rf ~/.hugmesh-checkouts" in ln for ln in t)
+    # a harmless next answer clears it
+    monkeypatch.setattr(lai, "send_prompt", lambda *a, **k: "Press Stop & clean Docker….")
+    s.feed(j, "and the safe way?")
+    assert not any(ln.startswith("!! ") for ln in s.lines(j)) and s.message != ap.DANGER_NOTE
+
+
+def test_chat_loop_prints_the_warning_before_the_delete_command(monkeypatch):
+    from _local_ai_fake import FakeOllama
+    from hugmesh_studio.core import assistant_prompt as ap
+    fake = FakeOllama()
+    fake.chunks = [WIPE[i:i + 5] for i in range(0, len(WIPE), 5)]
+    try:
+        monkeypatch.setenv("OLLAMA_HOST", fake.host)
+        monkeypatch.setenv(lai.GROUNDED_ENV, "1")
+        monkeypatch.setenv("HUGMESH_GENERATOR_DIR", GENERATOR_DIR)
+        monkeypatch.setattr(lai, "send_prompt", REAL_SEND_PROMPT)
+        out = io.StringIO()
+        rc = lai.chat_loop(io.StringIO("/where localmesh\nwipe it all and start fresh\n/quit\n"), out,
+                           dict(os.environ))
+        assert rc == 0
+        text = out.getvalue()
+        assert text.index(ap.DESTRUCTIVE_WARNING) < text.index("rm -rf")
+        assert ap.DESTRUCTIVE_WARNING + "\nSources: " in text           # and first in the footer
+        assert "Commands not found in the docs I read: " in text
+        assert "That removes everything." in text                      # the gate flushed the rest
+    finally:
+        fake.close()

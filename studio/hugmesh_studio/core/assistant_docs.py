@@ -29,10 +29,19 @@ takes well under two seconds; the dock does it on its worker thread, the text UI
 the command line on first use.
 
 COMMANDS THE DOCS DO NOT CONTAIN. :func:`commands_in` pulls every ``make <target>``,
-``scripts/<x>``, ``ollama ...``, ``docker compose ...`` and ``git <verb>`` out of a
-text; :func:`unverified_commands` lists those in an answer that no retrieved snippet
-(and not the primer) spells. The faces print them after the Sources line, so an
-invented command is flagged in words, not trusted.
+``scripts/<x>``, ``./x.sh``, ``ollama ...``, ``docker``/``docker-compose``/``podman``
+with any subcommand, ``kubectl``, ``helm``, ``kind``, ``systemctl``/``rc-service``,
+``sudo``, ``rm``, ``dd``, ``mkfs`` and ``git <verb>`` out of prose, plus EVERY line of a
+fenced shell block and every inline code span that starts with a program
+(:func:`code_commands`); :func:`unverified_commands` lists those in an answer that no
+retrieved snippet (and not the primer) spells. The faces print them after the Sources
+line, so an invented command is flagged in words, not trusted.
+
+COMMANDS THAT DELETE DATA. :func:`destructive_commands` finds rm -r/-f, every docker
+prune, docker rm/rmi, compose down -v, dd of=, mkfs, git clean/reset --hard, kubectl
+delete and the like in the raw answer; the faces put assistant_prompt's
+DESTRUCTIVE_WARNING above such an answer whatever the docs say. A wipe/reset question
+(:func:`is_reset_question`) always retrieves the documented ways (RESET_ANCHORS).
 """
 from __future__ import annotations
 
@@ -51,7 +60,8 @@ __all__ = [
     "ALLOWLIST", "EXCLUDE", "README_SECTIONS", "TITLE_ALIASES", "Chunk", "Index",
     "generator_dir", "chunk_markdown", "build_index", "load_index", "retrieve",
     "sources_line", "commands_in", "unverified_commands", "NO_DOCS_SOURCES",
-    "NO_CHUNKS_SOURCES", "cache_path", "fallback_text",
+    "NO_CHUNKS_SOURCES", "cache_path", "fallback_text", "code_commands",
+    "destructive_commands", "COMMAND_WORDS", "RESET_WORDS", "RESET_ANCHORS", "is_reset_question",
 ]
 
 GENERATOR_ENV = "HUGMESH_GENERATOR_DIR"
@@ -100,9 +110,10 @@ README_SECTIONS: tuple[str, ...] = ("Quick start", "Images", "Build ENV", "Rebra
 #: Headings never indexed, in any file (section-level filter, case-insensitive prefix).
 EXCLUDED_HEADINGS: tuple[str, ...] = ("Current State", "Roadmap")
 #: docs/LOCAL-AI-ASSISTANT.md sections left out (the code-assistant and GPU-node
-#: how-tos are for a developer, and would teach the model commands to run).
+#: how-tos are for a developer, and would teach the model commands to run; 12.11 lists
+#: the delete commands the warning is for, which the model must never be shown).
 EXCLUDED_IN_FILE: dict[str, tuple[str, ...]] = {
-    "docs/LOCAL-AI-ASSISTANT.md": ("6.", "7."),
+    "docs/LOCAL-AI-ASSISTANT.md": ("6.", "7.", "12.11"),
 }
 
 #: Never indexed, whatever a future allowlist says (names and prefixes under docs/).
@@ -457,9 +468,38 @@ def _headings_for(where) -> "list[str]":
     return out
 
 
+#: A question about wiping, resetting or cleaning the local mesh. Its answer is in the
+#: docs (the Studio's Stop & clean Docker… and Stop mesh buttons, make stack-down and
+#: stack-halt), but a "wipe everything" question shares few words with that paragraph,
+#: so a small model left without it invented rm -rf and docker system prune (PR #832,
+#: round 6). Such a question is searched with the paragraph's own words added.
+RESET_WORDS = re.compile(
+    r"\b(?:wip(?:e|es|ed|ing)|reset(?:s|ting)?|clean(?:s|ed|ing|up)?|clear(?:s|ed|ing)? out|"
+    r"purg(?:e|es|ed|ing)|nuk(?:e|es|ed|ing)|eras(?:e|es|ed|ing)|destroy(?:s|ed|ing)?|"
+    r"tear(?:s|ing)? (?:it |everything |the \w+ )?down|teardown|start(?:ing)? (?:over|again|"
+    r"(?:completely |totally |all )?(?:fresh|from scratch|clean))|from scratch|fresh start|"
+    r"blow (?:it |everything )?away|get rid of|delete (?:it all|everything|all)|remove "
+    r"(?:it all|everything|all)|factory)\b", re.I)
+#: For such a question, the chunks holding these words are always sent: the paragraph
+#: that names the destructive button (STUDIO-WALKTHROUGH.md, Local Docker mesh traps)
+#: and the documented stack-down line (LOCAL-STACK.md). A doc edit that drops either
+#: phrase fails tests/test_assistant_docs.py rather than silently losing the answer.
+RESET_ANCHORS = ("Stop & clean Docker…** is the destructive one",
+                 "make stack-down # stop + drop volumes")
+RESET_EXPANSION = ("stop clean docker destructive volumes images removes confirms "
+                   "stack-down stack-halt drop volumes keeps identity rooms accounts")
+
+
+def is_reset_question(question: str) -> bool:
+    """True for a wipe/reset/clean/start-fresh question (see :data:`RESET_WORDS`)."""
+    return bool(RESET_WORDS.search(question or ""))
+
+
 def scored(idx: Index, question: str, where=None) -> "list[tuple[float, Chunk]]":
     """Every chunk with its score, best first (deterministic: ties by id)."""
     query = _words(question)
+    if is_reset_question(question):
+        query += _words(RESET_EXPANSION)
     page_headings = {h.lower() for h in _headings_for(where)}
     qwords = set(query)
     rows = []
@@ -513,8 +553,30 @@ def retrieve(question: str, where=None, *, index: Optional[Index] = None,
         if (c.file, c.heading) in seen and c.part:
             out.append(c)
             used += c.tokens
-    # the page's own section reads first: a small model weighs the first snippet most
-    out.sort(key=lambda c: 0 if c.heading.lower() in page_headings else 1)
+    if is_reset_question(question):
+        # the documented ways to wipe the mesh, always (see RESET_ANCHORS)
+        for anchor in RESET_ANCHORS:
+            if any(anchor in " ".join(c.text.split()) for c in out):
+                continue
+            pick = next((c for _s, c in ranked if anchor in " ".join(c.text.split())), None) or \
+                next((c for c in idx.chunks if anchor in " ".join(c.text.split())), None)
+            if pick is None:
+                continue
+            while out and (len(out) >= k or used + pick.tokens > budget_tokens):
+                used -= out[-1].tokens
+                out.pop()
+            if used + pick.tokens <= budget_tokens:
+                out.append(pick)
+                used += pick.tokens
+    # the page's own section reads first: a small model weighs the first snippet most;
+    # for a wipe/reset question the destructive-button paragraph reads before it
+    reset = is_reset_question(question)
+
+    def order(c):
+        if reset and any(a in " ".join(c.text.split()) for a in RESET_ANCHORS[:1]):
+            return 0
+        return 1 if c.heading.lower() in page_headings else 2
+    out.sort(key=order)
     return out
 
 
@@ -549,20 +611,152 @@ def fallback_text(chunks: Iterable[Chunk], primer: str = "", *, index: Optional[
 
 # ── commands ─────────────────────────────────────────────────────────────────────────
 _ARG = r"(?:[ \t]+(?![A-Z])[A-Za-z0-9_./:@\-=]+(?<![.;,]))*"
+# a destructive line's arguments: paths with ~ and $, globs, $(...) substitutions
+_PARG = r"(?:[ \t]+(?![A-Z])[A-Za-z0-9_./:@\-=~$*{}()\"'+%]+(?<![.;,]))*"
+_GIT_VERBS = ("clone|pull|push|commit|checkout|reset|rebase|merge|fetch|add|status|log|diff|"
+              "init|clean|stash|branch|remote|config|switch|restore|rm|mv|tag|worktree|"
+              "submodule|cherry-pick|revert|show|gc|prune|filter-branch|update-ref")
 _CMD_RE = re.compile(
     r"(?:(?<=^)|(?<=[\s`$>]))"
     r"((?:make\s+[a-z0-9_.\-]+(?<![.;,]))"
     r"|(?:\./scripts/[A-Za-z0-9_./\-]+(?<![.;,])" + _ARG + r")"
     r"|(?:scripts/[A-Za-z0-9_./\-]+(?<![.;,])" + _ARG + r")"
+    r"|(?:\./[A-Za-z0-9_.\-][A-Za-z0-9_./\-]*\.(?:sh|py)" + _ARG + r")"
+    r"|(?:(?:bash|sh)\s+[A-Za-z0-9_./\-]+\.sh" + _ARG + r")"
     r"|(?:ollama\s+(?:pull|run|serve|list|ps|rm|stop|show|create)(?:[ \t]+[A-Za-z0-9_.:\-]+(?<![.;,]))?)"
-    r"|(?:docker\s+compose" + _ARG + r")"
-    r"|(?:git\s+(?:clone|pull|push|commit|checkout|reset|rebase|merge|fetch|add|status|log|diff)"
-    + _ARG + r"))", re.M)
-_BOUND = ("Run", "The", "Then", "Use", "and", "or", "to", "then", "when", "if")
+    r"|(?:(?:docker|podman)(?:-compose)?\s+[a-z][a-z\-]*" + _PARG + r")"
+    r"|(?:(?:kubectl|helm)\s+-{0,2}[a-z][a-z\-]*" + _PARG + r")"
+    r"|(?:kind\s+(?:create|delete|get|load|export)" + _PARG + r")"
+    r"|(?:(?:systemctl|rc-service|rc-update|service)\s+[A-Za-z0-9_.@\-]+" + _PARG + r")"
+    r"|(?:sudo\s+[A-Za-z0-9_./\-]+" + _PARG + r")"
+    r"|(?:rm\s+(?:-[A-Za-z]+|--[a-z\-]+|[~/.$])" + r"[^\s`]*" + _PARG + r")"
+    r"|(?:dd\s+(?:if|of|bs)=\S+" + _PARG + r")"
+    r"|(?:(?:mkfs(?:\.[a-z0-9]+)?|wipefs|shred|sgdisk|blkdiscard)\s+\S+" + _PARG + r")"
+    r"|(?:git\s+(?:" + _GIT_VERBS + r")" + _ARG + r"))", re.M)
+# a sentence that follows the command is not part of it: these words end it
+_BOUND = frozenset(("Run", "The", "Then", "Use", "and", "or", "to", "then", "when", "if",
+                    "it", "is", "are", "the", "a", "an", "that", "this", "these", "those",
+                    "they", "you", "your", "will", "would", "can", "which", "with", "for",
+                    "in", "on", "of", "from", "by", "as", "so", "but", "not", "be", "was",
+                    "we", "its", "their", "first", "after", "before", "again", "also",
+                    "command", "commands", "button", "page", "step"))
+
+#: The first words that make a code span or a fenced line a command a person could paste.
+COMMAND_WORDS = frozenset("""
+rm rmdir sudo su doas docker docker-compose podman podman-compose kubectl helm kind k3s
+git make systemctl rc-service rc-update service dd wipefs shred fdisk parted sgdisk
+blkdiscard mount umount losetup chmod chown chattr mv cp ln curl wget pip pip3 pipx
+python python3 npm npx yarn pnpm apt apt-get dnf yum zypper pacman emerge brew winget
+choco snap flatpak ollama tailscale headscale vault kill pkill killall reboot shutdown
+poweroff iptables nft ufw firewall-cmd ssh scp rsync tar find truncate cd export source
+bash sh zsh journalctl openssl gh cargo go java mvn gradle tor qemu-img virsh crontab
+passwd useradd usermod userdel mkdir touch tee xargs eval exec setfacl ip
+""".split())
+_SHELL_TAGS = frozenset(("", "sh", "bash", "shell", "console", "zsh", "fish", "terminal",
+                         "shell-session", "shellsession", "cmd", "bat", "powershell", "ps1",
+                         "pwsh", "ps"))
+_TEXT_TAGS = frozenset(("text", "txt", "plaintext", "plain", "output"))
+_FENCE_RE = re.compile(r"^[ \t]*(`{3,}|~{3,})[ \t]*([A-Za-z0-9_+.\-]*)[ \t]*$")
+_SPAN_RE = re.compile(r"(?<!`)`([^`\n]+)`(?!`)")
+_SEG_SPLIT_RE = re.compile(r"\s*(?:&&|\|\||;|(?<![|])\|(?![|]))\s*")
+_ENV_ASSIGN_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=\S*$")
+
+
+def _first_word(seg: str) -> str:
+    """The program a segment runs: past ``sudo`` and ``VAR=value`` prefixes."""
+    words = seg.split()
+    while words and (words[0] in ("sudo", "doas", "env", "exec", "time", "nohup")
+                     or _ENV_ASSIGN_RE.match(words[0])):
+        words = words[1:]
+    return words[0] if words else ""
+
+
+def _is_program(word: str) -> bool:
+    w = word.strip("\"'")
+    if not w:
+        return False
+    return (w in COMMAND_WORDS or w.startswith("mkfs") or w.startswith("./")
+            or w.endswith(".sh") or w.startswith("scripts/") or w.startswith("~/")
+            or (w.startswith("/") and "/bin/" in w))
+
+
+def _segments(line: str) -> "list[str]":
+    out = []
+    for seg in _SEG_SPLIT_RE.split(line):
+        seg = " ".join(seg.split())
+        if seg:
+            out.append(seg)
+    return out
+
+
+def code_commands(text: str) -> "list[str]":
+    """Every command a person could paste from the CODE in ``text``: each line of a
+    fenced shell block (untagged, sh, bash, console, ...; a ``text`` fence only where
+    the line starts with a known program), split at ``&&``, ``||``, ``;`` and ``|``,
+    and each inline code span that starts with a known program. Comments, prompts
+    (``$ ``) and line continuations are handled; change/diff/json/yaml fences are not
+    commands. In order of appearance, whitespace-normalised."""
+    out: list = []
+
+    def add(seg: str, strict: bool) -> None:
+        seg = seg.strip()
+        if not seg or seg in out:
+            return
+        first = _first_word(seg)
+        if strict and not _is_program(first):
+            return
+        if not strict and (not first or first.startswith("#")):
+            return
+        out.append(seg)
+
+    lines = (text or "").split("\n")
+    fence = None                                  # (marker, tag) while inside a block
+    pending = ""
+    for raw in lines:
+        m = _FENCE_RE.match(raw)
+        if fence is None:
+            if m:
+                fence = (m.group(1)[0], m.group(2).lower())
+                pending = ""
+                continue
+            for sm in _SPAN_RE.finditer(raw):
+                span = sm.group(1).strip()
+                if span.startswith("$ "):
+                    span = span[2:]
+                if len(span.split()) < 2 and not _is_program(span.split()[0] if span.split() else ""):
+                    continue
+                if len(span.split()) < 2 and _first_word(span) in COMMAND_WORDS:
+                    continue                      # `docker` alone names a tool, it runs nothing
+                for seg in _segments(span):
+                    add(seg, True)
+            continue
+        if m and m.group(1)[0] == fence[0] and not m.group(2):
+            fence = None
+            continue
+        tag = fence[1]
+        if tag not in _SHELL_TAGS and tag not in _TEXT_TAGS:
+            continue
+        line = raw.strip()
+        if pending:
+            line = pending + " " + line
+            pending = ""
+        if line.endswith("\\"):
+            pending = line[:-1].strip()
+            continue
+        if line.startswith("$ ") or line.startswith("> ") or line.startswith("% "):
+            line = line[2:].strip()
+        elif line.startswith("#"):
+            continue                              # a comment (or a root prompt: never mind)
+        line = re.sub(r"\s+#\s.*$", "", line)   # a trailing comment
+        for seg in _segments(line):
+            add(seg, tag in _TEXT_TAGS)
+    return out
 
 
 def commands_in(text: str) -> "set[str]":
-    """Every command-looking token sequence in ``text``, whitespace-normalised."""
+    """Every command-looking token sequence in ``text``, whitespace-normalised: the
+    command patterns anywhere in prose, plus every command in code
+    (:func:`code_commands`)."""
     out = set()
     for m in _CMD_RE.finditer(text or ""):
         words = m.group(1).split()
@@ -572,19 +766,85 @@ def commands_in(text: str) -> "set[str]":
         for w in words[1:]:
             if w in _BOUND or (w[:1].isupper() and len(kept) > 1):
                 break
-            kept.append(w.rstrip(".,;:)"))
+            kept.append(w.rstrip(".,;:)") if not w.endswith("))") and "$(" not in w else w)
         out.add(" ".join(kept))
+    out.update(code_commands(text))
+    out.update(destructive_commands(text))  # a delete command is always a command
+    return out
+
+
+# ── commands that destroy data ───────────────────────────────────────────────────────
+# Checked on the RAW answer, never through commands_in (whose argument rules stop at a
+# ``$(`` or a capital and would cut ``docker rm -f $(docker ps -aq)`` short). Shown with
+# a warning whether or not a doc spells the same command: an answer that tells a person
+# to delete things gets the warning, always.
+_PRE = r"(?<![\w./\-])"
+_DESTRUCTIVE_RES = tuple(re.compile(x) for x in (
+    _PRE + r"find\s+[^\n`]*\s-(?:delete\b|exec\s+rm\b)",
+    _PRE + r"(?:docker|podman)(?:\s+(?:system|volume|image|container|network|builder|buildx))?\s+prune\b",
+    _PRE + r"(?:docker|podman)\s+(?:volume|image|container|network)\s+rm\b",
+    _PRE + r"(?:docker|podman)\s+(?:rm|rmi)\b",
+    _PRE + r"(?:docker\s+compose|docker-compose|podman-compose|podman\s+compose)\b[^\n`]*?\bdown\b[^\n`]*?(?<!\S)(?:-v|--volumes|--rmi)\b",
+    _PRE + r"(?:docker\s+compose|docker-compose|podman-compose|podman\s+compose)\b[^\n`]*?(?<!\S)(?:-v|--volumes)\b[^\n`]*?\bdown\b",
+    _PRE + r"rm\s+(?:-[A-Za-z]*[rRf][A-Za-z]*|--recursive|--force|--no-preserve-root)\b",
+    _PRE + r"rm\s+(?:-[A-Za-z]+\s+)*[~/$.*]",
+    # rm in command position (a line, a code span, after && ; | or sudo) on a path
+    r"(?:^[ \t]*(?:[$#>%][ \t]+)?|[`;&|(][ \t]*|\bsudo[ \t]+)rm[ \t]+(?:-|[~/.$*]|[^\s`]*[/.])",
+    _PRE + r"dd\s+[^\n`]*\bof=",
+    _PRE + r"(?:mkfs(?:\.[a-z0-9]+)?|wipefs|shred|blkdiscard)\b(?=\s+\S)",
+    _PRE + r"sgdisk\s+[^\n`]*(?:-Z|--zap)",
+    _PRE + r"git\s+clean\s+(?:-[a-z]*[fdx][a-z]*)",
+    _PRE + r"git\s+reset\s+(?:[^\n`]*\s)?--hard\b",
+    _PRE + r"git\s+push\s+(?:[^\n`]*\s)?(?:-f|--force|--force-with-lease|--mirror)\b",
+    _PRE + r"git\s+checkout\s+(?:-f\b|--\s+\.)",
+    _PRE + r"git\s+branch\s+-D\b",
+    _PRE + r"kubectl\s+(?:[^\n`]*\s)?delete\b",
+    _PRE + r"helm\s+(?:uninstall|delete)\b",
+    _PRE + r"kind\s+delete\b",
+    _PRE + r"truncate\s+-s\s*0\b",
+)) + (re.compile(r"\bdrop\s+(?:database|schema|table)\b", re.I),)
+
+
+def destructive_commands(text: str) -> "list[str]":
+    """The lines (or code spans) of ``text`` that run a command which deletes data:
+    rm -r/-f or rm of a path, find -delete, every docker/podman prune, docker rm/rmi,
+    compose down -v, dd of=, mkfs/wipefs/shred, git clean/reset --hard/push --force,
+    kubectl delete, helm uninstall, kind delete, DROP DATABASE. Each is returned once,
+    trimmed to its line, in order of appearance."""
+    out: list = []
+    for line in (text or "").split("\n"):
+        for rx in _DESTRUCTIVE_RES:
+            m = rx.search(line)
+            if not m:
+                continue
+            # the command from where it starts to the end of its code span or line
+            start = m.start()
+            pre = re.search(r"(?:sudo|doas)\s+$", line[:start])
+            tail = line[pre.start() if pre else start:].lstrip("`;&|( \t$#>%")
+            cut = tail.find("`")
+            frag = " ".join((tail[:cut] if cut > 0 else tail).split()).rstrip(".,;:")
+            if len(frag) > 90:
+                frag = frag[:89] + "…"
+            if frag and frag not in out:
+                out.append(frag)
+            break
     return out
 
 
 def unverified_commands(answer: str, chunks: Iterable[Chunk], primer: str = "") -> "list[str]":
     """Commands in ``answer`` that no retrieved chunk nor the primer spells verbatim."""
-    allowed_text = " ".join(" ".join(c.text.split()) for c in chunks) + " " + " ".join((primer or "").split())
+    raw = [c.text for c in chunks] + [primer or ""]
+    allowed_text = " ".join(" ".join(t.split()) for t in raw)
     allowed = commands_in(allowed_text)
+    for t in raw:                       # the docs' own fenced lines, with their newlines
+        allowed.update(code_commands(t))
+    padded = f" {allowed_text} "
     out = []
     for cmd in sorted(commands_in(answer)):
         if cmd in allowed or any(a.startswith(cmd + " ") or cmd.startswith(a + " ") for a in allowed):
             continue
+        if f" {cmd} " in padded or f"`{cmd}`" in padded or f" {cmd}`" in padded:
+            continue                    # spelled verbatim in a snippet or the primer
         if cmd not in out:
             out.append(cmd)
     return out

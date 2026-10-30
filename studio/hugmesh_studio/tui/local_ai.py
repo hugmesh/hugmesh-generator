@@ -121,6 +121,7 @@ class LocalAIScreen:
         self.history: list = []
         self.transcript: list[str] = []
         self.message = ""
+        self.warning = ""                # the delete-commands warning of the last answer
         self._under = None               # the overlay this one was opened over, if any
         self._j = None                   # the journey (or host) this screen was entered on
         self._pending = None             # a Validated change waiting for apply / cancel
@@ -218,6 +219,10 @@ class LocalAIScreen:
         cmds = odk.commands_for(self.generator_dir)
         out += ["", odk.describe(odk.current_mode())]
         out += ["", "Run it yourself:  " + cmds["todo"], "                  " + cmds["chat"], ""]
+        if getattr(self, "warning", ""):
+            # above the conversation: the transcript shows only its last 12 lines, and a
+            # long answer would push a warning above the answer out of view
+            out += [f"!! {self.warning}", ""]
         if self.transcript:
             out += ["conversation:"] + [f"  {t}" for t in self.transcript[-12:]] + [""]
         if self.message:
@@ -237,6 +242,7 @@ class LocalAIScreen:
 
     def feed(self, j, line: str) -> None:
         self.message = ""
+        self.warning = ""
         low = line.strip().lower()
         if low in ("q", "quit", "exit", "back", "b"):
             j.overlay = self._under
@@ -304,7 +310,15 @@ class LocalAIScreen:
         self.history += [{"role": "user", "content": line.strip()},
                          {"role": "assistant", "content": answer}]
         del self.history[:-40]
-        self.transcript += [f"you: {line.strip()}"] + [f"ai:  {ln}" for ln in answer.strip().split("\n")]
+        self.transcript.append(f"you: {line.strip()}")
+        banner = aprompt.danger_banner(answer)
+        if banner:
+            # ABOVE the answer, never only in the footer: it spells a command that
+            # deletes data (assistant_docs.destructive_commands)
+            self.transcript += [f"!!   {ln}" for ln in banner.split("\n")]
+            self.message = aprompt.DANGER_NOTE
+            self.warning = banner
+        self.transcript += [f"ai:  {ln}" for ln in answer.strip().split("\n")]
         prompt = self._last_prompt
         if prompt is not None:
             footer = aprompt.after_answer(answer, prompt)

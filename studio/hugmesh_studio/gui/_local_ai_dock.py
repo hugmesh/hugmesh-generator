@@ -650,6 +650,9 @@ class LocalAIDock(QtWidgets.QFrame):
         self._stop = threading.Event()
         self._alive = threading.Event()         # set when the dock is destroyed
         self._answered = False
+        self._answer_at = 0                     # where the current answer starts in the area
+        self._streamed = ""                     # the current answer so far (for the warning)
+        self._warned = False                    # the delete-commands warning is showing
         self._message = ""                      # a transient line (waiting, started, failed)
         self._message_warn = False
         self._message_token = 0
@@ -1624,12 +1627,16 @@ class LocalAIDock(QtWidgets.QFrame):
             return False
         self.prompt.clear()
         self._busy = True
+        self._warned = False                    # a new answer scrolls again
         self._stop = threading.Event()
         stop, alive = self._stop, self._alive
         self._answered = False
         self.send_btn.setText("Stop")
         self.send_btn.setToolTip("Stop the answer")
         self._append(f"You: {text}\nLocal AI: ")
+        # where this answer starts: a warning about delete commands goes HERE, above it
+        self._answer_at = self._end_position()
+        self._streamed = ""
         self._say("Waiting for the model. The first answer after a pause can take a minute "
                   "while it loads.")
         history = list(self._history)
@@ -1688,7 +1695,9 @@ class LocalAIDock(QtWidgets.QFrame):
                     parts.append(f"[file: {rel} in {ws.name}]\n" + (body if not why else f"({why})"))
                 files_block = "\n\n".join(parts)
             elif code.get("wants_edit"):
-                files_block = (f"[code folder {ws.name} at {ws.path}; the person named no "
+                # the folder's NAME only: an absolute path in the prompt is a target
+                # a small model will happily put after rm -rf (PR #832, round 6)
+                files_block = (f"[code folder {ws.name}; the person named no "
                                "file — ask which file to change]")
         prompt = aprompt.build(text, where, history, env=env, generator_dir=self.generator_dir,
                                files_block=files_block)
@@ -1712,6 +1721,7 @@ class LocalAIDock(QtWidgets.QFrame):
     def clear(self) -> None:
         self._clears += 1
         self._history.clear()
+        self._warned = False
         self.answer.clear()
         self._last_prompt.clear()
         self._undo.clear()
@@ -1724,12 +1734,50 @@ class LocalAIDock(QtWidgets.QFrame):
             # able to ask again at once; what it eventually sends back is dropped.
             self._finish_prompt()
 
-    def _append(self, text: str) -> None:
+    def _end_position(self) -> int:
         cur = self.answer.textCursor()
         cur.movePosition(QtGui.QTextCursor.MoveOperation.End)
+        return cur.position()
+
+    def _append(self, text: str) -> None:
+        if self._warned:
+            # an answer with a delete-commands warning: the view stays on the warning
+            # (it would otherwise scroll it away as the answer grows under it)
+            cur = QtGui.QTextCursor(self.answer.document())
+            cur.movePosition(QtGui.QTextCursor.MoveOperation.End)
+            cur.insertText(text, QtGui.QTextCharFormat())
+            return
+        cur = self.answer.textCursor()
+        cur.movePosition(QtGui.QTextCursor.MoveOperation.End)
+        cur.setCharFormat(QtGui.QTextCharFormat())   # never the warning's bold colour
         cur.insertText(text)
         self.answer.setTextCursor(cur)
         self.answer.verticalScrollBar().setValue(self.answer.verticalScrollBar().maximum())
+
+    def _warn_if_destructive(self, answer_text: str) -> bool:
+        """Put :data:`aprompt.DESTRUCTIVE_WARNING` ABOVE the answer, in bold warning
+        colour, the moment the answer spells a command that deletes data (once per
+        answer, while it is still streaming). True when the warning is showing."""
+        if getattr(self, "_warned", False):
+            return True
+        banner = aprompt.danger_banner(answer_text)
+        if not banner:
+            return False
+        self._warned = True
+        at = min(getattr(self, "_answer_at", 0), self._end_position())
+        cur = self.answer.textCursor()
+        cur.setPosition(at)
+        fmt = QtGui.QTextCharFormat()
+        fmt.setFontWeight(QtGui.QFont.Weight.Bold)
+        fmt.setForeground(QtGui.QBrush(QtGui.QColor(styles.WARN)))
+        cur.insertText("\n" + banner, fmt)
+        cur.insertText("\n\n", QtGui.QTextCharFormat())
+        # scroll the question and the warning to the top of the view and keep them there
+        doc = self.answer.document()
+        first = doc.findBlock(max(0, at - 1)).blockNumber()
+        self.answer.verticalScrollBar().setValue(first)
+        self._say(aprompt.DANGER_NOTE, 0, warn=True)
+        return True
 
     def _finish_prompt(self) -> None:
         self._busy = False
@@ -2133,12 +2181,15 @@ class LocalAIDock(QtWidgets.QFrame):
                 self._answered = True
                 self._say("")
             self._append(piece)
+            self._streamed = getattr(self, "_streamed", "") + piece
+            self._warn_if_destructive(self._streamed)
         elif tag == "done":
             born, _text, answer = value
             if born == self._clears:
                 prompt = self._last_prompt.pop(born, None)
                 if answer.strip() and not self._answered:
                     self._append(answer)             # a prompt that did not stream still shows
+                warned = self._warn_if_destructive(answer)
                 if answer.strip():
                     # history keeps the BARE answer; the footer is shown, never remembered
                     self._history += [{"role": "user", "content": _text},
@@ -2150,6 +2201,8 @@ class LocalAIDock(QtWidgets.QFrame):
                         self._append("\n\n" + footer)        # a blank line: the footer is not the answer
                 self._append("\n\n")
                 self._finish_prompt()
+                if warned:                        # _finish_prompt cleared the note line
+                    self._say(aprompt.DANGER_NOTE, 0, warn=True)
                 self._drop_card()                 # a new answer replaces any pending card
                 if prompt is not None:
                     self._offer_card(answer, _text, prompt)

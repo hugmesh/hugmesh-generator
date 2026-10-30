@@ -115,6 +115,40 @@ def test_validate_takes_from_from_the_reader_never_from_the_model():
     assert v.row_text() == "services this domain runs: tuwunel, phpbb -> tuwunel"
 
 
+def test_the_change_formats_example_is_never_a_change(monkeypatch):
+    """Round 6 (PR #832): qwen3:8b answered "turn off the forum" by copying the format's
+    example word for word, and because that example named a real field of the domain on
+    screen (shop.example, tor, true) its card offered an onion front door. The example is
+    now made up, the prompt carries exactly it, and every copy of it is refused: the
+    block itself, the block with the domain on screen swapped in, and its domain with a
+    real field, on every page and tab."""
+    from hugmesh_studio.core import assistant_prompt as ap
+    import json as _json
+    block = "```change\n" + _json.dumps(aa.EXAMPLE_PROPOSAL) + "\n```"
+    assert block in ap.CHANGE_FORMAT and aa.EXAMPLE_SENTENCE in ap.CHANGE_FORMAT
+    assert "shop.example" not in ap.CHANGE_FORMAT and '"tor"' not in ap.CHANGE_FORMAT
+    copies = [
+        aa.EXAMPLE_SENTENCE + "\n" + block,
+        'ok\n```change\n{"domain": "shop.example", "field": "example.setting", "to": true}\n```',
+        'ok\n```change\n{"domain": "example.invalid", "field": "tor", "to": true}\n```',
+        'ok\n```change\n{"domain": "example.invalid", "field": "services", "to": ["tuwunel"]}\n```',
+        'ok\n```change\n{"domain": "blog.invalid", "field": "egress", "to": "vpn"}\n```',
+    ]
+    for tab in ("services", "ways", "identity", "look", ""):
+        for slug in ("domain_services", "localmesh_domain_services"):
+            for text in copies:
+                p = aa.parse_proposal(text, "turn off the forum for this domain")
+                assert p is not None and aa.is_format_example(p), text
+                t = FakeTarget()
+                v = aa.validate(p, where(tab, slug=slug), t)
+                assert isinstance(v, aa.Refusal) and v.text == aa.EXAMPLE_REFUSAL, (tab, slug, text, v)
+                assert aa.card_lines(v) == [aa.EXAMPLE_REFUSAL] and t.writes == []
+    # a real block next to it still validates
+    v = aa.validate(aa.parse_proposal(BLOCK), where(), FakeTarget())
+    assert isinstance(v, aa.Validated) and v.after == ["tuwunel"]
+    assert not aa.is_format_example(aa.parse_proposal(BLOCK))
+
+
 def test_validate_refuses_a_no_op_an_unknown_key_another_domain_and_the_own_row():
     t = FakeTarget()
     r = aa.validate(aa.Proposal("shop.example", "services", ["tuwunel", "phpbb"]), where(), t)

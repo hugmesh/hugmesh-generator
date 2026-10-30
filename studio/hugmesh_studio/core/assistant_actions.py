@@ -51,10 +51,23 @@ __all__ = [
     "Proposal", "Validated", "Refusal", "Applied", "FIELD_ROUTES", "SYNONYMS", "parse_proposal",
     "normalise_value", "validate", "apply", "undo", "Target", "GuiTabsTarget", "TuiTarget",
     "MeshTarget", "RowTarget", "NO_BLOCK_HINT", "card_lines", "as_refusal", "current_values",
-    "never_set_note", "live_domain", "undo_key",
+    "never_set_note", "live_domain", "undo_key", "EXAMPLE_PROPOSAL", "EXAMPLE_SENTENCE",
+    "EXAMPLE_REFUSAL", "is_format_example",
 ]
 
 NO_BLOCK_HINT = "Say which setting and which value and I will propose the change."
+
+#: The change format's example (assistant_prompt.CHANGE_FORMAT renders it). It is made
+#: un-applicable on purpose: a small model copied the old example word for word into a
+#: "turn off the forum" answer, and because the old one named a real field on the domain
+#: on screen (shop.example, tor, true) its card offered an onion front door nobody asked
+#: for (PR #832, round 6). ``.invalid`` is a reserved TLD (RFC 2606) no mesh can serve,
+#: and ``example.setting`` is no field of any page, so :func:`validate` refuses it even
+#: when the model swaps in the domain on screen.
+EXAMPLE_PROPOSAL = {"domain": "example.invalid", "field": "example.setting", "to": True}
+EXAMPLE_SENTENCE = "I can switch the made-up example.setting on for example.invalid."
+EXAMPLE_REFUSAL = ("That block is the format's made-up example, not a change for this "
+                   "page; nothing was proposed. " + NO_BLOCK_HINT)
 
 #: key -> (scope, apply route). The allowlist of what the assistant may propose.
 FIELD_ROUTES: dict = {
@@ -341,10 +354,25 @@ def never_set_note(question: str, where, answer: str = "") -> str:
 
 
 # ── validation ───────────────────────────────────────────────────────────────────────
+def is_format_example(proposal: Proposal) -> bool:
+    """True for a block that copies the format's example: the same JSON, or its
+    made-up domain or field anywhere in it."""
+    if proposal is None:
+        return False
+    same = {"domain": proposal.domain, "field": proposal.field, "to": proposal.to}
+    if json.dumps(same, sort_keys=True) == json.dumps(EXAMPLE_PROPOSAL, sort_keys=True):
+        return True
+    dom = (proposal.domain or "").strip().lower().rstrip(".")
+    return (dom == EXAMPLE_PROPOSAL["domain"] or dom.endswith(".invalid")
+            or (proposal.field or "").strip().lower() == EXAMPLE_PROPOSAL["field"])
+
+
 def validate(proposal: Proposal, where, target: "Target | None") -> "Validated | Refusal":
     """Check ``proposal`` against the catalogue, the page's validators and the target's
     readers. A proposal for any domain but the one on screen is refused (its readers and
-    writers act on the domain on screen)."""
+    writers act on the domain on screen), and so is a copy of the format's example."""
+    if is_format_example(proposal):
+        return Refusal(EXAMPLE_REFUSAL)
     key = _route_key(proposal.field, where)
     allowed = _page_keys(where)
     shown = [k.replace("@mesh", "") for k in allowed]

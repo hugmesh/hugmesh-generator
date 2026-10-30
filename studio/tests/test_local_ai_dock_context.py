@@ -1106,3 +1106,81 @@ def test_a_long_standing_problem_note_is_whole_and_the_panel_returns_to_its_cap(
     assert wait_for(qapp, lambda: not note.isVisible())
     assert_mount_agrees(wiz, dock, f"{t}-clean")
     assert dock.height() == dock_mod.dock_height_for(wiz.height(), True, dock.bar_height(), dock.tall), t
+
+
+# ── round 6 (PR #832): a delete command gets a warning ABOVE the answer ──────────────
+WIPE = ("To wipe it:\n```bash\ndocker-compose down\nrm -rf ~/.hugmesh-checkouts\n"
+        "docker system prune -a\n```\nThat removes everything.")
+
+
+def _stream(dock, qapp, answer, pieces=7, question="wipe the local mesh and start fresh"):
+    def fn(text, history, on_chunk, should_stop):
+        for i in range(0, len(answer), pieces):
+            on_chunk(answer[i:i + pieces])
+            time.sleep(0.002)
+        return answer
+    dock._prompt_fn = fn
+    dock.set_expanded(True)
+    dock.prompt.setText(question)
+    assert dock.send()
+    assert wait_for(qapp, lambda: not dock._busy)
+    pump(qapp)
+    return dock.answer.toPlainText()
+
+
+def test_a_delete_command_puts_the_warning_above_the_answer_in_bold(shell, qapp, tmp_path):
+    from hugmesh_studio.core import assistant_prompt as ap
+    from hugmesh_studio.gui.qt import QtGui
+    wiz = open_at(shell, qapp)
+    dock = wiz.local_ai_dock
+    text = _stream(dock, qapp, WIPE)
+    start = text.index("Local AI: ") + len("Local AI: ")
+    warn_at = text.index(ap.DESTRUCTIVE_WARNING)
+    assert start <= warn_at < text.index("To wipe it:") < text.index("rm -rf")
+    assert text.count(ap.DESTRUCTIVE_WARNING) == 1                   # once, however it streamed
+    # bold, in the warning colour; the answer after it is plain
+    cur = dock.answer.textCursor()
+    cur.setPosition(warn_at + 3)
+    fmt = cur.charFormat()
+    assert fmt.fontWeight() >= QtGui.QFont.Weight.Bold.value if hasattr(QtGui.QFont.Weight.Bold, "value") \
+        else fmt.fontWeight() >= QtGui.QFont.Weight.Bold
+    assert fmt.foreground().color().name().lower() == dock_mod.styles.WARN.lower()
+    cur.setPosition(text.index("rm -rf") + 2)
+    assert cur.charFormat().foreground().color().name().lower() != dock_mod.styles.WARN.lower()
+    # and the note line above the prompt says it, after the answer finished
+    assert dock.note.isVisible() and dock.note.text() == ap.DANGER_NOTE
+    for size in SIZES:
+        wiz.resize(*size)
+        pump(qapp)
+        wiz.grab().save(str(tmp_path / f"wipe-warning-{size[0]}x{size[1]}.png"))
+        a = rect_in(wiz, dock.answer)
+        assert QtCore.QRect(0, 0, wiz.width(), wiz.height()).contains(a)
+        # the warning's first line is IN VIEW: the growing answer did not scroll it away
+        c = dock.answer.textCursor()
+        c.setPosition(warn_at)
+        r = dock.answer.cursorRect(c)
+        assert dock.answer.viewport().rect().contains(r.center()), (size, r)
+    # the next, harmless answer has no warning and clears the note
+    dock.clear()
+    text2 = _stream(dock, qapp, "Press Stop & clean Docker… on the Local Docker mesh step.")
+    assert ap.DESTRUCTIVE_WARNING not in text2 and dock.note.text() != ap.DANGER_NOTE
+
+
+def test_a_delete_command_in_one_unstreamed_answer_still_gets_the_warning_above_it(mesh_window, qapp):
+    from hugmesh_studio.core import assistant_prompt as ap
+    wiz, dock, body = mesh_window
+    dock._append("You: wipe it\nLocal AI: ")
+    dock._answer_at = dock._end_position()
+    dock._streamed, dock._warned, dock._answered = "", False, False
+    q = "wipe it"
+    dock._last_prompt[dock._clears] = ap.build(q, dock._page_where(question=q), [],
+                                               generator_dir=GENERATOR_DIR, ctx_tokens=16384)
+    dock._handle("done", (dock._clears, q, "Run `docker volume prune` then `rm -rf ~/x`."), None)
+    pump(qapp)
+    text = dock.answer.toPlainText()
+    assert text.index(ap.DESTRUCTIVE_WARNING) < text.index("docker volume prune")
+    # the footer repeats it first, then Sources and the not-in-the-docs line
+    tail = text[text.index("rm -rf ~/x`.") :]
+    assert ap.DESTRUCTIVE_WARNING + "\nSources: " in tail
+    assert "Commands not found in the docs I read: " in tail and "docker volume prune" in tail
+    assert dock.note.text() == ap.DANGER_NOTE
