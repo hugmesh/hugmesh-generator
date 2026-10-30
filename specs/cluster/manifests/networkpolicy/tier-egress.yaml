@@ -83,6 +83,11 @@ spec:
     - to:
         - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: hugmesh-frontend } }
         - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: hugmesh-backend } }
+    # 2a. fe-gateway -> the games BFF (the games-bff route, a mesh user's /games/api/**).
+    - to:
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: hugmesh-games } }
+      ports:
+        - { protocol: TCP, port: 8080 }
     # 3. route-access-db (:5432) + Cassandra (:9042) live in hugmesh-pki; fe-gateway
     #    reads route-access + Cassandra. Pin the namespace + ports.
     - to:
@@ -158,6 +163,13 @@ spec:
     #    already constrained by tier-ingress/db-ingress/homeserver-isolation).
     - to:
         - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: hugmesh-backend } }
+    # 2a. hugmesh-games — hugmesh-actions' GM sync -> casdoor-games (:8000) and the
+    #     games BFF (:8080).
+    - to:
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: hugmesh-games } }
+      ports:
+        - { protocol: TCP, port: 8000 }
+        - { protocol: TCP, port: 8080 }
     # 3. hugmesh-pki — route-access-db (:5432), Cassandra (:9042), Casdoor (JWT
     #    validation, :8000), headscale (tailnet). The be-gateway + admin-bff-api +
     #    federation-api reach route-access-db/Cassandra/Casdoor here.
@@ -245,9 +257,10 @@ spec:
         - { protocol: TCP, port: 6443 }
 ---
 # ── hugmesh-games — default-deny egress ────────────────────────────────────
-# Games BFF -> casdoor-games (self, JWT) -> casdoor-games-pg (self); games
-# workloads reached FROM backend (ingress side). Egress: DNS + self + backend
-# (hugmesh-actions sync handle) + the games-realm Casdoor stays intra-namespace.
+# Games BFF -> casdoor-games (self, JWT) -> casdoor-games-pg (self); portal -> BFF
+# (self); BFF -> games-bff-db + games-cassandra (self). Egress: DNS + self + backend
+# (hugmesh-actions sync handle) + the BFF's systems-issuer key fetch. casdoor-games
+# gets its one public path from casdoor-games-public-egress below.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -268,6 +281,12 @@ spec:
     - to:
         - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: hugmesh-games } }
         - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: hugmesh-backend } }
+    # 2a. The BFF's systems-realm JWKS fetch -> casdoor.hugmesh-pki:8000 (a mesh user's
+    #     token). The matching Ingress rule is games-bff-to-casdoor-jwks.
+    - to:
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: hugmesh-pki } }
+      ports:
+        - { protocol: TCP, port: 8000 }
     # 3. kube-apiserver — TCP/6443 to the NODE network CIDRs. REPLACES the broken
     #    `ipBlock: 10.96.0.1/32` (:443) ClusterIP carve-out (kube-proxy DNATs the
     #    apiserver ClusterIP to the control-plane node IP:6443; Calico evaluates egress
@@ -280,6 +299,30 @@ spec:
         - ipBlock: { cidr: 100.64.0.0/10 }
       ports:
         - { protocol: TCP, port: 6443 }
+---
+# casdoor-games -> github.com:443, the GitHub provider's token and user calls. Only this
+# pod, only 443, world MINUS the cluster-internal CIDRs (the egress-proxy-egress
+# carve-outs). The rest of the namespace stays without a public path.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: casdoor-games-public-egress
+  namespace: hugmesh-games
+  labels: { app.kubernetes.io/part-of: hugmesh.games }
+spec:
+  podSelector:
+    matchLabels: { app: casdoor-games }
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.244.0.0/16   # pod CIDR  (cluster-internal — stays intra-cluster)
+              - 10.96.0.0/12    # service CIDR (cluster-internal — stays intra-cluster)
+              - 100.64.0.0/10   # tailnet/CGNAT (control plane — direct)
+      ports:
+        - { protocol: TCP, port: 443 }
 ---
 # ── devops — default-deny egress (ArgoCD + observability) ─────────────────────
 # devops carries ArgoCD (self-reconcile loop) + the OTel collector path. ArgoCD
