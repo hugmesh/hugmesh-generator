@@ -141,6 +141,11 @@ class GoLivePreflightPage(QtWidgets.QWizardPage):
     def _refresh(self):
         self.status.setPlainText(self.wiz.driver.status_text())
 
+    def isComplete(self):
+        # Native Windows: status_text() is the WSL2 sentence, and Next would lead to a
+        # provider page with nothing on it.
+        return not self.wiz.driver.blocker() and super().isComplete()
+
 
 class GoLiveExposurePage(QtWidgets.QWizardPage):
     def __init__(self, wiz):

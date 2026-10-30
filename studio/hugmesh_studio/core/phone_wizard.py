@@ -43,7 +43,7 @@ import subprocess
 import tempfile
 import threading
 
-from . import proc_text
+from . import platform_info, proc_text
 from collections.abc import Callable
 from dataclasses import dataclass
 
@@ -216,7 +216,13 @@ class PhoneWizard:
     # ── availability + catalog ───────────────────────────────────────────────────
     def available(self) -> tuple[bool, str]:
         """True when the driver exists and is executable (the phone_screen guard,
-        build-menu.sh:1746-1749). The actionable message names the resolved path."""
+        build-menu.sh:1746-1749). The actionable message names the resolved path.
+        Native Windows is refused first: X_OK is true for any file there, and the bash
+        driver then failed to spawn (WinError 193)."""
+        blocker = platform_info.native_windows_blocker("The MDM phone wizard",
+                                                       runs="bash scripts")
+        if blocker:
+            return False, blocker
         p = self.driver_path
         if not (os.path.isfile(p) and os.access(p, os.X_OK)):
             return False, (f"MDM phone driver not found or not executable: {p}\n"

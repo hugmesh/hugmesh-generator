@@ -455,13 +455,13 @@ class LocalStackNode:
         try:
             r = subprocess.run(
                 ["docker", "ps", "-q", "--no-trunc", *_TOR_PS_FILTERS],
-                capture_output=True, text=True, timeout=5)
+                capture_output=True, text=True, **proc_text.TEXT_IO, timeout=5)
             ids = r.stdout.split() if r.returncode == 0 else []
             if not ids:
                 return None
             r = subprocess.run(
                 ["docker", "inspect", "-f", "{{.State.Running}} {{.State.StartedAt}}",
-                 ids[0]], capture_output=True, text=True, timeout=5)
+                 ids[0]], capture_output=True, text=True, **proc_text.TEXT_IO, timeout=5)
         except (OSError, subprocess.SubprocessError):
             return None
         running, _, started = r.stdout.strip().partition(" ")
@@ -480,14 +480,14 @@ class LocalStackNode:
             return False
         try:
             r = subprocess.run(["docker", "ps", "-q", "--no-trunc", *_TOR_PS_FILTERS],
-                               capture_output=True, text=True, timeout=5)
+                               capture_output=True, text=True, **proc_text.TEXT_IO, timeout=5)
             ids = r.stdout.split() if r.returncode == 0 else []
             if not ids:
                 return False
             r = subprocess.run(
                 ["docker", "inspect", "-f",
                  "{{range .Config.Env}}{{println .}}{{end}}", ids[0]],
-                capture_output=True, text=True, timeout=5)
+                capture_output=True, text=True, **proc_text.TEXT_IO, timeout=5)
         except (OSError, subprocess.SubprocessError):
             return False
         if r.returncode != 0:
@@ -641,7 +641,7 @@ class LocalStackNode:
     def _probe(self, cmd: list[str], timeout: int = 15) -> tuple[int, str]:
         try:
             r = subprocess.run(cmd, env=self._build_env(write_overlays=False),
-                               capture_output=True, text=True, timeout=timeout)
+                               capture_output=True, text=True, **proc_text.TEXT_IO, timeout=timeout)
             return r.returncode, (r.stdout or r.stderr).strip()
         except (OSError, subprocess.SubprocessError) as e:
             return 1, str(e)
@@ -1129,7 +1129,7 @@ class LocalStackNode:
         if on_line is None and cancel is None:
             try:
                 r = subprocess.run(argv, cwd=self.generator_dir, env=env,
-                                   capture_output=True, text=True, timeout=timeout)
+                                   capture_output=True, text=True, **proc_text.TEXT_IO, timeout=timeout)
                 out = (r.stderr or r.stdout).strip()
                 return (r.returncode == 0), (f"{looks_note}\n{out}" if looks_note else out)
             except (OSError, subprocess.SubprocessError) as e:
@@ -1307,14 +1307,14 @@ class LocalStackNode:
             r = subprocess.run([*base, "-f", self.compose_file, "ps", "-q",
                                 "hugmesh-fe-gateway"],
                                cwd=self.generator_dir, capture_output=True,
-                               text=True, timeout=30)
+                               text=True, **proc_text.TEXT_IO, timeout=30)
             cid = r.stdout.strip().splitlines()[0].strip() if r.stdout.strip() else ""
             if not cid:
                 return ""
             r = subprocess.run(
                 ["docker", "inspect", "-f",
                  "{{range .Config.Env}}{{println .}}{{end}}", cid],
-                capture_output=True, text=True, timeout=30)
+                capture_output=True, text=True, **proc_text.TEXT_IO, timeout=30)
             for ln in r.stdout.splitlines():
                 if ln.startswith("CASDOOR_ISSUER_URI="):
                     issuer = ln.partition("=")[2]
@@ -1855,7 +1855,8 @@ class LocalStackNode:
             return StackStatus(running=False, detail="not started")
         try:
             r = subprocess.run([*base, "-f", self.compose_file, "ps", "-q"],
-                               cwd=self.generator_dir, capture_output=True, text=True, timeout=30)
+                               cwd=self.generator_dir, capture_output=True, text=True,
+                               **proc_text.TEXT_IO, timeout=30)
             ids = [x for x in r.stdout.splitlines() if x.strip()]
             return StackStatus(running=bool(ids), detail=f"{len(ids)} container(s)")
         except (OSError, subprocess.SubprocessError) as e:
@@ -1867,7 +1868,8 @@ class LocalStackNode:
             return "docker compose not available"
         try:
             r = subprocess.run([*base, "-f", self.compose_file, "logs", "--tail", str(tail)],
-                               cwd=self.generator_dir, capture_output=True, text=True, timeout=30)
+                               cwd=self.generator_dir, capture_output=True, text=True,
+                               **proc_text.TEXT_IO, timeout=30)
             return r.stdout
         except (OSError, subprocess.SubprocessError) as e:
             return str(e)

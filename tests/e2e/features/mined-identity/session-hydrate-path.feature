@@ -41,3 +41,24 @@ Feature: The cookie-only session hydrate path stays reachable
   Scenario: the JWT-authenticated sibling /bff/me IS governed @service:login @layer:gateway
     Then the route-access seed grants "ROLE_USER" at "/bff/me/**" on the fe gateway
     And the route-access seed decides "DENY" for a principal holding only "ROLE_ANONYMOUS" at "/bff/me"
+
+  # ── decision 60 / hugmesh-generator#569: the BFFs' positive-swap cache is OFF ──
+  # The gateway's bff-exchange cache TTL is pinned to 0 (#398). admin-bff and
+  # mod-bff hold a MIRROR of that cache, APP_BFF_EXCHANGE_CACHE_TTL_MS, which
+  # defaulted to 5 s — five seconds in which a session this hydrate path just
+  # revoked (POST /bff/sessionOut) or a ban just curtailed keeps swapping. #569
+  # pins it to "0" on both lanes; tests/scripts/test-fe-bff-route-lane-parity.sh
+  # guards the value with a mutation battery. This row reads the SAME
+  # committed artefacts so the contract is visible here, under its issue, and
+  # the live consequence — a revoked session is 401 on the very next request —
+  # is sign-out-ends-session.feature.
+  @issue:generator-569
+  Scenario Outline: the <lane> lane pins <service>'s positive-swap cache TTL to 0 @service:admin @layer:bff
+    Then the "<lane>" lane pins the environment variable "APP_BFF_EXCHANGE_CACHE_TTL_MS" to "0" for "<service>"
+
+    Examples:
+      | lane    | service               |
+      | compose | hugmesh-admin-bff-api |
+      | compose | hugmesh-mod-bff-api   |
+      | cluster | hugmesh-admin-bff-api |
+      | cluster | hugmesh-mod-bff-api   |

@@ -55,3 +55,27 @@ Feature: The service-only internal ingest surfaces are explicitly denied at the 
     Then the route-access seed DENIES "ROLE_USER" at "/bff/internal/**" on the fe gateway
     And the route-access seed decides "DENY" for a principal holding only "ROLE_USER" at "/bff/internal/accounts"
     And the route-access seed decides "DENY" for a principal holding only "ROLE_ADMIN" at "/bff/internal/accounts"
+
+  # ── the two internal onboarding legs of the registration cutover ──────────
+  # hugmesh-admin-bff-api#84 asks for POST /bff/internal/accounts/{id}/restart-onboarding
+  # (the reset user-bff's register legs could not perform on 2026-09-23) and #85 adds
+  # POST /bff/internal/usage (decision 55 = yes, landed by
+  # hugmesh-admin-bff-api PR #104 on 2026-09-23). Both are ROLE_SERVICE surfaces with
+  # no persona caller. The contract a persona-driven suite owns is that neither
+  # is reachable from the front door: the explicit /bff/internal/** deny row
+  # decides for them the moment they exist, because it is a pattern, not a
+  # list. Pinned per path so a future carve-out of either one is a decision
+  # somebody makes here, by name. The live rows are
+  # onboarding/register-provider-paths.feature.
+  @issue:admin-bff-api-84 @issue:admin-bff-api-85
+  Scenario Outline: the internal onboarding leg <path> is denied to <role> by the seed @layer:gateway
+    Then the route-access seed decides "DENY" for a principal holding only "<role>" at "<path>"
+
+    Examples:
+      | role           | path                                                     |
+      | ROLE_USER      | /bff/internal/accounts/casdoor:nobody/restart-onboarding |
+      | ROLE_MOD       | /bff/internal/accounts/casdoor:nobody/restart-onboarding |
+      | ROLE_ANONYMOUS | /bff/internal/accounts/casdoor:nobody/restart-onboarding |
+      | ROLE_USER      | /bff/internal/usage                                      |
+      | ROLE_MOD       | /bff/internal/usage                                      |
+      | ROLE_ANONYMOUS | /bff/internal/usage                                      |

@@ -59,6 +59,7 @@ Feature: Every Matrix function is gated for every seeded persona as the catalogu
       | external-client-login    | solo  |
       | external-client-register | solo  |
       | shell-route              | solo  |
+      | provision-account        | solo  |
       | federate-remote-join     | pair  |
 
   # The same sweep in ONE scenario, so a run that lost the rows above still

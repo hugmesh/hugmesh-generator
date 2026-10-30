@@ -50,3 +50,29 @@ Feature: A blocked account is told it is blocked, not that its password is wrong
   Scenario: the sign-in error is announced, not merely displayed @role:e2e-user @service:login @layer:ui
     When I attempt native sign-in as the unprovisioned identity "e2e-user-wrong-password"
     Then the element with test id "login-error" is an assertive live region
+
+  # ── hugmesh-generator#311, step 17: the status gate has nothing to read ──────
+  # The curtailed-member plan measured (2026-09-05, this stack) that the host
+  # shell's status-gate banner never renders and roleHomeGuard never
+  # short-circuits to /login/appeal, because GET /bff/me routes to user-bff here
+  # (application-routes.yml exact-path list) and user-bff's session view is
+  # ["handle","id","provider","registrationComplete","roles"] — no `status`.
+  # hugmesh-host-shell's AccountStatusService fails OPEN to 'active' on an
+  # absent field, so session.curtailed() is false for a banned member and the
+  # wall the persona is defined by cannot appear. The plan files it as "a wiring
+  # gap, not a stack fault"; this is the fence for it. @fixme: no landing on
+  # user-bff origin/main (666ab2f) or host-shell adds the field. e2e-user is
+  # the control row — an ACTIVE member's view must carry the field too, or the
+  # gate would have to infer "active" from its absence, which is the fail-open
+  # this issue names.
+  @issue:generator-311 @fixme
+  Scenario Outline: <role>'s session view carries an account status for the shell's status gate @role:<role> @service:login @layer:bff
+    Given I hold an API session as the persona for this scenario
+    When the API client GETs "/bff/me"
+    Then the response status is 200
+    And the response JSON field "status" is present
+
+    Examples:
+      | role       |
+      | e2e-user   |
+      | e2e-banned |

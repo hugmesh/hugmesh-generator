@@ -40,7 +40,15 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from .platform_info import wsl_docker_remedy
-from . import proc_group
+from . import platform_info, proc_group
+
+
+def native_blocker() -> str:
+    """WHY the QEMU lanes cannot run in a native Windows Studio, "" elsewhere. Every
+    lane is a bash script (run-qemu-docker.sh, run-qemu-e2e.sh); the page used to gate
+    them on Docker alone, so on Windows the buttons were live and failed at spawn."""
+    return platform_info.native_windows_blocker(
+        "QEMU device tests and mesh emulation", runs="bash scripts")
 
 #: Where the builders drop per-session artifact dirs, relative to the generator repo.
 SESSIONS_SUBDIR = os.path.join("out", "sessions")
@@ -707,6 +715,11 @@ class QemuTestRunner:
     def run(self, opts: QemuRunOptions,
             on_line: Callable[[str], None] | None = None) -> int:
         """Run the matrix, calling ``on_line`` per output line. Returns the exit code."""
+        blocker = native_blocker()
+        if blocker:
+            if on_line:
+                on_line(f"!! {blocker}")
+            return 2
         cmd = runner_command(self.generator_dir, opts)
         if on_line:
             on_line(f"$ {command_string(self.generator_dir, opts)}")

@@ -31,7 +31,7 @@ import shutil
 import subprocess
 from dataclasses import dataclass, field
 
-from . import devops_tools
+from . import devops_tools, proc_text
 from .local_stack_node import _kind_cluster_name
 from .mesh_monitor import CONTROL_VERBS, MeshUnit
 
@@ -189,7 +189,7 @@ def _run(node, argv: list[str], timeout: int) -> tuple[int, str]:
         env = None
     try:
         r = subprocess.run(argv, env=env, stdout=subprocess.PIPE,
-                           stderr=subprocess.STDOUT, text=True, timeout=timeout)
+                           stderr=subprocess.STDOUT, text=True, **proc_text.TEXT_IO, timeout=timeout)
         return r.returncode, r.stdout or ""
     except subprocess.TimeoutExpired:
         return 124, f"timed out after {timeout}s"

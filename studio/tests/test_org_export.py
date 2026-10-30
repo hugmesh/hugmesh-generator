@@ -2914,12 +2914,14 @@ def test_a_url_rewrite_in_the_work_folder_cannot_report_a_push_that_never_happen
         (r.action, r.skipped, held.stdout.strip(), r.commit)
 
 
+# POSIX only: these are raw-byte names, which os.fsdecode cannot even spell on Windows
+# (it decodes strictly there), so building this list made the whole module fail to import
 _ODD_SPELLINGS = [
     ("link-cp037", {"ok.txt": b"x"}, {"link": os.fsdecode(_GH_TOKEN.decode().encode("cp037"))}),
     ("link-robot16", {"ok.txt": b"x"}, {"link": os.fsdecode(_ROBOT.encode("utf-16-le"))}),
     ("name-cp037", {os.fsdecode(_GH_TOKEN.decode().encode("cp037")) + ".txt": b"x"}, None),
     ("name-robot16", {os.fsdecode(_ROBOT.encode("utf-16-le")) + ".txt": b"x"}, None),
-]
+] if os.name == "posix" else []
 
 
 @pytest.mark.parametrize("name,files,links", _ODD_SPELLINGS,
