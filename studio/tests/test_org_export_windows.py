@@ -531,3 +531,12 @@ def test_a_member_that_fails_part_way_leaves_no_partial_file(tmp_path, monkeypat
     assert not os.path.lexists(wd / ".env"), "a half-written .env would be published"
     if osname == "nt":
         assert [n for n, _why in meta["lost"]] == [".env"]
+
+
+def test_tree_entries_and_findings_use_git_spelling(tmp_path):
+    """A plan finding is a path someone copies into the rename map's exclude list,
+    which matches "/" paths: on Windows it read "tests\\fake-token.sh"."""
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests" / "fake-token.sh").write_text("x\n", encoding="utf-8")
+    assert oe._tree_entries(str(tmp_path)) == ["tests/fake-token.sh"]
+    assert all("\\" not in f for f in oe._scan_entries(str(tmp_path)))

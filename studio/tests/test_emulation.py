@@ -708,11 +708,26 @@ def test_every_run_envelope_field_is_routed_somewhere_on_purpose(session):
 
 # ── the honest refusal (no sudo, ever) ───────────────────────────────────────────────
 
-def test_root_blocker_names_the_container_and_never_reaches_for_sudo():
+def _linux_host(monkeypatch, euid):
+    """Pin a Linux host with this euid, so both branches run on any CI box instead
+    of whichever one the runner's account happens to reach. The real
+    native_windows_blocker still runs, told osname="posix" (the native-Windows
+    sentence is test_windows_sentences'); os.geteuid is absent on Windows, hence
+    raising=False."""
+    real = em.platform_info.native_windows_blocker
+    monkeypatch.setattr(em.platform_info, "native_windows_blocker",
+                        lambda action, osname=None, **kw: real(action, "posix", **kw))
+    monkeypatch.setattr(os, "geteuid", lambda: euid, raising=False)
+
+
+def test_root_blocker_is_silent_for_root(monkeypatch):
+    _linux_host(monkeypatch, 0)
+    assert em.playwright_root_blocker() == ""
+
+
+def test_root_blocker_names_the_container_and_never_reaches_for_sudo(monkeypatch):
+    _linux_host(monkeypatch, 1000)
     blocker = em.playwright_root_blocker()
-    if os.geteuid() == 0:
-        assert blocker == ""
-        pytest.skip("running as root: the non-root refusal cannot be exercised here")
     assert "--privileged" in blocker and "hugmesh-qemu-runner" in blocker
     assert "root" in blocker
     # It must never TELL the operator (or a caller) to sudo: the Studio cannot

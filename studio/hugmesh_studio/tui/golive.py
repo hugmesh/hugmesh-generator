@@ -22,6 +22,8 @@ them. The screen says so and hands over the command.
 """
 from __future__ import annotations
 
+import os
+
 from ..core import org_export
 from ..core.golive_domains import (NO_EXPORT_DOMAINS_NOTE, NO_EXTRA_DOMAINS_NOTE,
                                    baked_domains, export_candidates,
@@ -29,6 +31,15 @@ from ..core.golive_domains import (NO_EXPORT_DOMAINS_NOTE, NO_EXTRA_DOMAINS_NOTE
 from ..core.golive_driver import GoLiveDriver, GoLiveOptions, _NO_DOMAIN_MECHANISMS
 
 __all__ = ["GoLiveScreen"]
+
+
+def same_line_heading(osname: str | None = None) -> str:
+    """The heading over the export's hand-over line. On native Windows
+    org_export.cli_command writes that line for PowerShell (the ``&`` call operator,
+    '' quoting), which cmd.exe would not run, so the heading names the shell."""
+    if (osname or os.name) == "nt":
+        return "The same in PowerShell:"
+    return "The same from a terminal:"
 
 
 class GoLiveScreen:
@@ -267,7 +278,7 @@ class GoLiveScreen:
             cfg = None
             out += ["", f"rename map {self.export_rename_map}: {exc}"]
         if cfg is not None:
-            out += ["", "The same from a terminal:", "  " + self._cli_command(j, cfg, "PLAN")]
+            out += ["", same_line_heading(), "  " + self._cli_command(j, cfg, "PLAN")]
         out += ["", "commands: NUMBER=pick · c FILE=add a config file · r FILE|-=rename "
                 "map (exclude a refused file, extra rules) · v private|public|"
                 "internal=visibility · u refuse|branch=existing repositories · p=plan "

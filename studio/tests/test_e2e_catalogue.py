@@ -1049,9 +1049,22 @@ def test_safe_spec_args_refuses_anything_a_shell_could_read_as_more_than_a_path(
                         "specs/../../etc/passwd"}
 
 
-def test_spec_path_does_not_prefix_specs_twice():
-    assert ec.spec_path("/g", "01-x.spec.ts") == "/g/tests/e2e/specs/01-x.spec.ts"
-    assert ec.spec_path("/g", "specs/01-x.spec.ts") == "/g/tests/e2e/specs/01-x.spec.ts"
+def test_spec_path_does_not_prefix_specs_twice(tmp_path):
+    # spec_path is a FILESYSTEM path, so on Windows it carries native separators (what
+    # Playwright gets is spec_run_arg's, pinned to '/' above). Folding os.sep back to
+    # '/' is a no-op on POSIX, so there this is the same literal check it always was.
+    def _posix(p):
+        return p.replace(os.sep, "/")
+    assert _posix(ec.spec_path("/g", "01-x.spec.ts")) == "/g/tests/e2e/specs/01-x.spec.ts"
+    assert _posix(ec.spec_path("/g", "specs/01-x.spec.ts")) == "/g/tests/e2e/specs/01-x.spec.ts"
+    # Playwright on Windows reports the file with a backslash; still one specs/
+    assert _posix(ec.spec_path("/g", "specs\\01-x.spec.ts")) == "/g/tests/e2e/specs/01-x.spec.ts"
+    # and the path is one this host can actually open, whichever spelling came in
+    spec = tmp_path / "tests" / "e2e" / "specs" / "01-x.spec.ts"
+    spec.parent.mkdir(parents=True)
+    spec.write_text("// x\n")
+    for name in ("01-x.spec.ts", "specs/01-x.spec.ts", "specs\\01-x.spec.ts"):
+        assert os.path.isfile(ec.spec_path(str(tmp_path), name)), name
 
 
 def test_stack_src_is_never_writable():

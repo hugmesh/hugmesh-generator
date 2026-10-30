@@ -1156,16 +1156,23 @@ def _parse_cat_file_batch(raw: bytes) -> dict[str, tuple[bytes, bytes]]:
 
 def _tree_entries(workdir: str) -> list[str]:
     """Every file and link under ``workdir`` (not ``.git``) — what ``git add`` of the
-    folder must hold. A link to a directory is one entry and is not entered."""
+    folder must hold. A link to a directory is one entry and is not entered.
+
+    Spelled with "/", git's own spelling, on every OS: on Windows relpath gives "\\",
+    so a finding read "tests\\fake-token.sh" while the rename map's exclude rules (and
+    the published tree) use "tests/fake-token.sh", and a rule copied from the plan never
+    matched. ("/" is os.sep on Linux, so nothing changes there.)"""
+    def rel(p: str) -> str:
+        return os.path.relpath(p, workdir).replace(os.sep, "/")
     out: list[str] = []
     for dirpath, dirnames, filenames in os.walk(workdir):
         if dirpath == workdir and ".git" in dirnames:
             dirnames.remove(".git")
         for d in list(dirnames):
             if os.path.islink(os.path.join(dirpath, d)):
-                out.append(os.path.relpath(os.path.join(dirpath, d), workdir))
+                out.append(rel(os.path.join(dirpath, d)))
                 dirnames.remove(d)
-        out.extend(os.path.relpath(os.path.join(dirpath, f), workdir) for f in filenames)
+        out.extend(rel(os.path.join(dirpath, f)) for f in filenames)
     return sorted(out)
 
 

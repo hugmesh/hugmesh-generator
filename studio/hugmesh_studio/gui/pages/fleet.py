@@ -788,7 +788,11 @@ class FleetPage(QtWidgets.QWidget):
         number past the C int QSpinBox.setValue takes raises OverflowError, an
         ArithmeticError that the earlier two did not cover) — is shown through the
         same pane and the record is not pinned, so no record can abort the Studio
-        from this slot; the lenient path is never widened."""
+        from this slot; the lenient path is never widened. A setter that refuses
+        part-way through ``apply`` has already written the fields before it, so the
+        window's own configuration (and its domain-services state object) is put back
+        before the refusal says nothing was applied."""
+        before, before_domains, applying = self.collect(), self.fleet_domains, False
         try:
             raw = getattr(s, "backend", None)
             backend = "auto" if raw in (None, "") else raw
@@ -796,17 +800,39 @@ class FleetPage(QtWidgets.QWidget):
                 raise IdentityValidationError(
                     f"fleet record: backend must be text, not {type(backend).__name__}")
             cfg = FleetConfig.from_dict(s.config)
+            applying = True
             self.apply(cfg)
         except (IdentityValidationError, ValueError, TypeError, OverflowError) as e:
+            restored = True
+            if applying:
+                # collect() read these values off the widgets a moment ago, so every
+                # setter takes them back; if one still refuses, the pane says so
+                # rather than claiming a clean window
+                try:
+                    self.apply(before)
+                except (IdentityValidationError, ValueError, TypeError, OverflowError):
+                    restored = False
+                self.fleet_domains = before_domains
+            kept = (
+                "Nothing from that record was applied: the steps, the command below "
+                "and ‘Build fleet now’ keep the configuration this window already "
+                "showed, not the record you clicked." if restored else
+                "Part of that record may already be in the steps: check every step "
+                "and the command below before ‘Build fleet now’.")
+            reason = str(e).strip()
+            if not reason and isinstance(e, OverflowError):
+                # PySide6, the binding the Studio ships, raises a BARE OverflowError()
+                # from a setter (PyQt6 says "argument 1 overflowed"), so the refusal
+                # gave no reason at all after the colon.
+                reason = "a number in the record overflowed the field it fills"
             self.pending_session_id = None
             self._goto(STEP_REVIEW)
             self.problems.setPlainText(
-                f"Cannot restart fleet record {getattr(s, 'id', '?')}: {e}\n"
+                f"Cannot restart fleet record {getattr(s, 'id', '?')}: "
+                f"{reason or type(e).__name__}\n"
                 "Its saved config is damaged. Fix the record's JSON under the Studio "
                 "state directory, or start this fleet again from the first step. "
-                "Nothing from that record was applied: the steps, the command below "
-                "and ‘Build fleet now’ keep the configuration this window already "
-                "showed, not the record you clicked.")
+                + kept)
             return
         self.backend.setCurrentText(backend)
         self.pending_session_id = s.id if pin else None

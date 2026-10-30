@@ -743,14 +743,23 @@ def test_an_overflow_from_a_setter_inside_apply_stays_inside_the_slot(page, monk
     C int ``QSpinBox.setValue`` takes raises OverflowError, an ArithmeticError that is
     neither ValueError nor TypeError. With from_dict's range check bypassed (a future
     loader that forgets it), the REAL ``apply`` on the REAL spin box raises it, and the
-    slot still shows it inline and pins nothing."""
+    slot still shows it inline and pins nothing.
+
+    PySide6 (the shipped binding) raises a BARE ``OverflowError()``, so the reason is
+    the pane's own words, not the binding's. ``apply`` had already written every field
+    before ``jobs`` when the setter refused; the pane says nothing was applied, so
+    those fields must be back to what the window showed."""
     big = _cfg(); big.jobs = 2 ** 40
     monkeypatch.setattr(fleet_mod.FleetConfig, "from_dict", staticmethod(lambda _d: big))
-    page.jobs.setValue(5)
+    page.cluster_domain.setText("keep.example"); page.jobs.setValue(5)
+    domains_before = page.fleet_domains
     page.load_from_session(_DamagedSession({"jobs": 2 ** 40}), pin=True)
     text = page.problems.toPlainText()
     assert "Cannot restart fleet record fleet-damaged-1" in text
     assert "overflowed" in text, text
+    assert "Nothing from that record was applied" in text, text
+    assert page.cluster_domain.text() == "keep.example" and page.jobs.value() == 5
+    assert page.fleet_domains is domains_before
     assert page.pending_session_id != "fleet-damaged-1"
     assert page.runs == [] and page.worker is None
 
@@ -766,5 +775,9 @@ def test_a_setter_refusing_a_value_inside_apply_stays_inside_the_slot(page, monk
     text = page.problems.toPlainText()
     assert "Cannot restart fleet record fleet-damaged-1" in text
     assert "unexpected type 'int'" in text
+    # this apply refuses the window's own values too, so the restore could not run:
+    # the pane must not claim the window is untouched
+    assert "Nothing from that record was applied" not in text, text
+    assert "Part of that record may already be in the steps" in text, text
     assert page.pending_session_id != "fleet-damaged-1"
     assert page.runs == [] and page.worker is None
