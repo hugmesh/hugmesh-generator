@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { systemsUser, passwordFor } from './rbac-roles';
-import { shot } from './helpers';
+import { shot, describeLoginFailure } from './helpers';
 
 // 27 — NATIVE LOGIN coverage (the direct successor to the deleted social-login).
 //
@@ -46,7 +46,11 @@ test.describe('native login: our own form drives /bff/login (Casdoor never brows
     await page.getByTestId('login-submit').click();
 
     const resp = await loginPost;
-    expect(resp.status(), 'POST /bff/login succeeds').toBeLessThan(400);
+    // On a refusal, name WHY (a Casdoor lockout reads differently from a wrong
+    // password — hugmesh-generator#473); this test's own failure on 2026-09-04
+    // said only "Received: 401".
+    const why = resp.status() < 400 ? '' : ` — ${describeLoginFailure(resp.status(), await resp.text().catch(() => ''))}`;
+    expect(resp.status(), `POST /bff/login succeeds${why}`).toBeLessThan(400);
 
     // The opaque session cookie was minted SERVER-SIDE: httpOnly `bff_session`,
     // whose value is the raw `bff_` token. The browser holds no JWT/access token.
