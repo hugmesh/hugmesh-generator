@@ -170,12 +170,30 @@ export HUGMESH_TEMPLATES_DIR="${REPO}/templates"
 [ -f "${HUGMESH_DOCS_DIR}/SECURITY.md" ] || {
   echo "  FAIL cannot find ${HUGMESH_DOCS_DIR}/SECURITY.md — [mcs-documented] has no authority to compare against"; exit 1; }
 
+# EVERY checker run is bounded. The checker is offline by construction (its kubectl
+# / helm renders run with the network pointed at a closed port, see _offline_env in
+# the checker), so a run that outlives the bound is a defect to name, not a slow
+# network to wait out. 2026-10-29: the job was CANCELLED at its 25-minute limit with
+# no line saying where it was; the bound turns that into a FAIL naming the control.
+# One run takes ~6 s on a CI runner and ~13 s on a slow one; the bound is ~100x
+# that and still ends a hung run well inside the job limit. On a starved dev box
+# (2026-10-29: IO pressure "full" ~59%, one control took 10 min) a run can outlive
+# it with no defect at all, which is why the FAIL prints the load average;
+# CMI_RUN_TIMEOUT=0 removes the bound.
+CMI_RUN_TIMEOUT="${CMI_RUN_TIMEOUT:-600}"
+case "${CMI_RUN_TIMEOUT}" in ''|*[!0-9]*) echo "  FAIL CMI_RUN_TIMEOUT must be a whole number of seconds, got '${CMI_RUN_TIMEOUT}'"; exit 1 ;; esac
+TO=()
+[ "${CMI_RUN_TIMEOUT}" -gt 0 ] && command -v timeout >/dev/null 2>&1 && TO=(timeout -k 10 "${CMI_RUN_TIMEOUT}")
+timed_out(){ [ "${#TO[@]}" -gt 0 ] && { [ "$1" -eq 124 ] || [ "$1" -eq 137 ]; }; }
+hung_msg(){ echo "the checker did not finish within ${CMI_RUN_TIMEOUT}s (rc=$1; load average then: $(cut -d' ' -f1-3 /proc/loadavg 2>/dev/null || echo unknown)) — it hung, or this machine is starved (CMI_RUN_TIMEOUT=0 removes the bound)"; }
+
 echo "== cluster manifest referential-integrity gate =="
 echo "-- positive: the repo's own specs/cluster must pass every check --"
-python3 "${CHECKER}" "${REPO}/specs/cluster"
+"${TO[@]}" python3 "${CHECKER}" "${REPO}/specs/cluster" </dev/null
 RC=$?
 if [ "${RC}" -ne 0 ]; then
   echo
+  timed_out "${RC}" && echo "  FAIL positive run: $(hung_msg "${RC}")"
   echo "== cluster manifest integrity: FAIL (see above) =="
   exit 1
 fi
@@ -190,14 +208,69 @@ echo "-- negative controls: each injected defect must be caught --"
 # render per control would add minutes. (21-render) tests the render path itself.
 export HUGMESH_IMAGE_PIN_RENDER=0
 NEG_P=0; NEG_F=0
-neg_ok(){ echo "  PASS negative control: $*"; NEG_P=$((NEG_P+1)); }
-neg_bad(){ echo "  FAIL negative control: $*"; NEG_F=$((NEG_F+1)); }
+# A control runs in a forked job (see pool_run), so it only PRINTS its verdict;
+# pool_flush counts the verdict lines. Exactly one per control, or it is a FAIL.
+neg_ok(){ echo "  PASS negative control: $*"; }
+neg_bad(){ echo "  FAIL negative control: $*"; }
 
-WORK="$(mktemp -d)"; trap 'rm -rf "${WORK}"' EXIT
+WORK="$(mktemp -d)"
+trap 'kill $(jobs -p) 2>/dev/null; rm -rf "${WORK}"' EXIT
+
+# ── PARALLEL CONTROL POOL ────────────────────────────────────────────────────
+# WHY. Each control stages a fresh copy of specs/cluster and runs the WHOLE checker
+# on it (~5-6 s on a CI runner, ~2 s of it YAML parsing). 60 controls ran serially in
+# 7m34s on 2026-10-07; the image-pin rounds (88dc442b, b87ba9bc, a7701a3f) took that
+# to ~195, i.e. ~21 min on a fast runner and >40 min on a slow one, against a
+# 25-minute job limit — runs were CANCELLED mid-control, still passing. Controls are
+# independent (each has its own staged tree), so they run as a bounded pool: every
+# job gets its own ${WORK}, its output is captured whole, and pool_flush prints the
+# outputs in SUBMISSION order, so the log reads exactly as a serial run would.
+# CMI_JOBS overrides the width; CMI_JOBS=1 is the old serial run.
+if [ -z "${CMI_JOBS:-}" ]; then
+  CMI_JOBS="$(nproc 2>/dev/null || echo 2)"
+  [ "${CMI_JOBS}" -gt 8 ] 2>/dev/null && CMI_JOBS=8
+fi
+case "${CMI_JOBS}" in ''|*[!0-9]*|0) echo "  FAIL CMI_JOBS must be a positive integer, got '${CMI_JOBS}'"; exit 1 ;; esac
+POOL="${WORK}/pool"; mkdir -p "${POOL}"
+POOL_SEQ=0; POOL_NEXT=1
+pool_flush() {  # print (and count) every finished job, in submission order
+  local id n
+  while :; do
+    id="$(printf %05d "${POOL_NEXT}")"
+    [ -f "${POOL}/${id}.done" ] || return 0
+    cat "${POOL}/${id}.out"
+    n="$(grep -c -e '^  PASS negative control: ' -e '^  FAIL negative control: ' "${POOL}/${id}.out")"
+    if [ "${n}" -ne 1 ]; then
+      echo "  FAIL negative control #${POOL_NEXT} printed ${n} verdict lines, not 1 (killed, or a harness defect)"
+      NEG_F=$((NEG_F+1))
+    elif grep -q '^  PASS negative control: ' "${POOL}/${id}.out"; then
+      NEG_P=$((NEG_P+1))
+    else
+      NEG_F=$((NEG_F+1))
+    fi
+    rm -rf "${POOL}/${id}.w"
+    POOL_NEXT=$((POOL_NEXT+1))
+  done
+}
+pool_run() {  # <function> <args...>: run one control as a pool job with its own ${WORK}
+  local id
+  while [ "$(jobs -rp | wc -l)" -ge "${CMI_JOBS}" ]; do
+    wait -n 2>/dev/null
+    pool_flush
+  done
+  POOL_SEQ=$((POOL_SEQ+1))
+  id="$(printf %05d "${POOL_SEQ}")"
+  mkdir -p "${POOL}/${id}.w"
+  { ( WORK="${POOL}/${id}.w"; "$@" ) >"${POOL}/${id}.out" 2>&1 </dev/null
+    : > "${POOL}/${id}.done"; } &
+  pool_flush
+}
+pool_drain() { wait; pool_flush; }
 
 # $1 = human label, $2 = expected check-id substring in the failure output,
 # $3 = a shell snippet run with $T = the staged tree root, which injects the defect.
-expect_catch() {
+expect_catch() { pool_run expect_catch_job "$@"; }
+expect_catch_job() {
   local label="$1" want="$2" inject="$3"
   local T="${WORK}/tree"
   rm -rf "${T}"; cp -r "${REPO}/specs/cluster" "${T}"
@@ -222,7 +295,11 @@ expect_catch() {
     return
   fi
   local out rc
-  out="$(HUGMESH_DOCS_DIR="${docs}" HUGMESH_TEMPLATES_DIR="${tpl}" python3 "${CHECKER}" "${T}" 2>&1)"; rc=$?
+  out="$(HUGMESH_DOCS_DIR="${docs}" HUGMESH_TEMPLATES_DIR="${tpl}" "${TO[@]}" python3 "${CHECKER}" "${T}" 2>&1)"; rc=$?
+  if timed_out "${rc}"; then
+    neg_bad "${label} — $(hung_msg "${rc}")"
+    return
+  fi
   # -F: the check ids contain [] and -, which grep would read as a bracket range.
   if [ "${rc}" -ne 0 ] && grep -qF "  FAIL ${want}" <<<"${out}"; then
     neg_ok "${label} -> caught by ${want}"
@@ -543,11 +620,12 @@ expect_catch "gateway games host rewritten while the matrix-ui literal is left b
 '
 # NOT vacuous the other way: a profile with no games Application is not asked for
 # an origin. Stage it, drop 50-games.yaml and the env, and require a clean verdict.
-{
-  T="${WORK}/tree"; rm -rf "${T}"; cp -r "${REPO}/specs/cluster" "${T}"
+games_absent_job() {
+  local T="${WORK}/tree" out
+  rm -rf "${T}"; cp -r "${REPO}/specs/cluster" "${T}"
   rm -f "${T}/apps/50-games.yaml"
   sed -i "/name: HUG_GAMES_URL/d" "${T}/manifests/social-ui/deployment.yaml"
-  out="$(HUGMESH_DOCS_DIR="${HUGMESH_DOCS_DIR}" HUGMESH_TEMPLATES_DIR="${HUGMESH_TEMPLATES_DIR}" python3 "${CHECKER}" "${T}" 2>&1 || true)"
+  out="$(HUGMESH_DOCS_DIR="${HUGMESH_DOCS_DIR}" HUGMESH_TEMPLATES_DIR="${HUGMESH_TEMPLATES_DIR}" "${TO[@]}" python3 "${CHECKER}" "${T}" 2>&1 || true)"
   if grep -qF "  PASS [games-origin]" <<<"${out}" && ! grep -qF "  FAIL [games-origin]" <<<"${out}"; then
     neg_ok "no games Application and no env -> [games-origin] passes (not asked for an origin)"
   else
@@ -555,6 +633,7 @@ expect_catch "gateway games host rewritten while the matrix-ui literal is left b
     grep -F "[games-origin]" <<<"${out}" | sed 's/^/        /'
   fi
 }
+pool_run games_absent_job
 
 # ── (12) THE SUPERADMIN SERVICE CATALOG CHAIN ────────────────────────────────
 # (12a) THE SHIPPED DEFECT, re-injected: the console's Service deleted. Before this
@@ -1816,12 +1895,13 @@ resources:
 
 # (21-render) the kubectl render cross-check catches the three reported exploits ON
 # ITS OWN: the staged tree is rendered and judged without the static reader.
-render_catch() {  # <label> <injection> [image name prefix, default owncast/owncast]
+render_catch() { pool_run render_catch_job "$@"; }
+render_catch_job() {  # <label> <injection> [image name prefix, default owncast/owncast]
   local label="$1" inject="$2" prefix="${3:-owncast/owncast}" T="${WORK}/tree"
   rm -rf "${T}"; cp -r "${REPO}/specs/cluster" "${T}"
   ( T="${T}"; eval "${inject}" ) || { neg_bad "${label} (injection failed)"; return; }
   local out
-  if out="$(HUGMESH_IMAGE_PIN_RENDER=1 python3 - "$(dirname "${CHECKER}")" "${T}" "${prefix}" <<"PY" 2>&1
+  if out="$(HUGMESH_IMAGE_PIN_RENDER=1 "${TO[@]}" python3 - "$(dirname "${CHECKER}")" "${T}" "${prefix}" <<"PY" 2>&1
 import sys
 sys.path.insert(0, sys.argv[1])
 import cluster_manifest_integrity as m
@@ -1834,6 +1914,31 @@ print(" ".join(bad))
 PY
 )"; then neg_ok "${label} -> render cross-check caught ${out}"
   else neg_bad "${label} NOT caught by the render cross-check: ${out}"; fi
+}
+render_offline_job() {
+  local label="render: remote kustomize resource on an unroutable address fails fast, offline"
+  # A tree holding ONLY the remote kustomization, so the time measured is that one
+  # render, not ~90 healthy ones on a loaded runner.
+  local T="${WORK}/tree" out
+  rm -rf "${T}"; mkdir -p "${T}/manifests/zz-blackhole"
+  printf "resources:\n  - https://192.0.2.1/hugmesh/blackhole//base?ref=v1\n  - https://192.0.2.1/blackhole.yaml\n" \
+    > "${T}/manifests/zz-blackhole/kustomization.yaml"
+  if out="$(HUGMESH_IMAGE_PIN_RENDER=1 "${TO[@]}" python3 - "$(dirname "${CHECKER}")" "${T}" <<"PY" 2>&1
+import sys, time
+sys.path.insert(0, sys.argv[1])
+import cluster_manifest_integrity as m
+t = time.monotonic()
+rendered, why = m._render_refs(sys.argv[2])
+took = time.monotonic() - t
+assert rendered is not None, "render did not run: %s" % why
+hits = [msg for chk, msg in m.failures if chk == "[image-pin]"
+        and msg.startswith("manifests/zz-blackhole:") and "reached for the NETWORK" in msg]
+assert hits, "no network-refusal finding for manifests/zz-blackhole: %r" % m.failures
+assert took < 25, "rendering one blackholed remote took %.1fs (it waited on the network)" % took
+print("refused in %.2fs: %s" % (took, hits[0][:150]))
+PY
+)"; then neg_ok "${label} -> ${out}"
+  else neg_bad "${label} NOT met: ${out}"; fi
 }
 if command -v kubectl >/dev/null 2>&1; then
   render_catch "render: raw owncast/owncast:stable" '
@@ -1854,18 +1959,28 @@ if command -v kubectl >/dev/null 2>&1; then
   render_catch "render: bare busybox in the helper-pod template is not rewritten by images:" "${LP_REWRITE}" busybox
   # (23-render) round 4: the binaryData helper pod is decoded in the render pass too.
   render_catch "render: ConfigMap binaryData helperPod.yaml busybox:latest" 'lp_b64 image' busybox
+  # (25-offline) the render never waits on the network. A remote kustomize resource
+  # on an unroutable address (TEST-NET-1) held one `kubectl kustomize` for 30-57 s
+  # before the render was made offline; it must now be refused as an [image-pin]
+  # finding that says it reached for the network. That finding is the proof; the
+  # time bound only backs it up: 0.04 s idle, but 8.25 s on a dev box at load
+  # average ~100-500 (2026-10-29), so the bound sits below the network wait's floor
+  # (Go's 30 s dial timeout), not near the idle figure.
+  pool_run render_offline_job
 else
+  pool_drain  # a NOTE is not a pool job: print it after the controls before it
   echo "  NOTE (21-render) NOT run: kubectl is not on PATH, so the render cross-check is untested here"
 fi
 
 # (23-helm) with helm on PATH the in-tree chart is rendered with each Argo app's values
 # and the output judged, independently of the text read of its templates.
-helm_render_catch() {  # <label> <injection> <image name prefix>
+helm_render_catch() { pool_run helm_render_catch_job "$@"; }
+helm_render_catch_job() {  # <label> <injection> <image name prefix>
   local label="$1" inject="$2" prefix="$3" T="${WORK}/tree"
   rm -rf "${T}"; cp -r "${REPO}/specs/cluster" "${T}"
   ( T="${T}"; eval "${inject}" ) || { neg_bad "${label} (injection failed)"; return; }
   local out
-  if out="$(HUGMESH_IMAGE_PIN_RENDER=1 python3 - "$(dirname "${CHECKER}")" "${T}" "${prefix}" <<"PY" 2>&1
+  if out="$(HUGMESH_IMAGE_PIN_RENDER=1 "${TO[@]}" python3 - "$(dirname "${CHECKER}")" "${T}" "${prefix}" <<"PY" 2>&1
 import sys
 sys.path.insert(0, sys.argv[1])
 import cluster_manifest_integrity as m
@@ -1909,9 +2024,15 @@ if command -v helm >/dev/null 2>&1; then
   helm_render_catch "helm render: list ApplicationSet over the in-tree chart, valuesObject image.repository busybox" '
     printf "%s" "${R5_APPSET}" > "$T/apps/99-r5-set.yaml"' busybox
 else
+  pool_drain  # a NOTE is not a pool job: print it after the controls before it
   echo "  NOTE (23-helm) NOT run: helm is not on PATH, so the helm render is untested here"
 fi
 
+pool_drain
+if [ $((NEG_P+NEG_F)) -ne "${POOL_SEQ}" ]; then
+  echo "  FAIL ${POOL_SEQ} controls were started but $((NEG_P+NEG_F)) reported — the pool lost a job"
+  NEG_F=$((NEG_F+1))
+fi
 echo
 echo "== negative controls: ${NEG_P} passed, ${NEG_F} failed =="
 [ "${NEG_F}" -eq 0 ] || exit 1
