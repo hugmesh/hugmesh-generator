@@ -229,6 +229,21 @@ class TestMountTableReading:
         m = write_mounts(tmp_path, ("/", "ext4"), ("/mnt/my\\040drive", "9p"))
         assert platform_info.mount_for("/mnt/my drive/repo", m) == ("/mnt/my drive", "9p")
 
+    def test_the_lookup_uses_linux_path_rules_whatever_the_interpreter(self, tmp_path,
+                                                                        monkeypatch):
+        """The mount table is the Linux kernel's, so the path matched against it is a
+        Linux path. Resolved through the host's os.path, a Windows interpreter turned
+        '/mnt/c/...' into 'C:\\mnt\\c\\...', which matched no mountpoint and silenced
+        every /mnt/c warning. The module's os.path is swapped for ntpath so the guard
+        also runs on Linux CI, where os.path IS posixpath and patching it would patch
+        the fix too (on Windows ntpath is os.path already)."""
+        import ntpath
+        import types
+        m = write_mounts(tmp_path, ("/", "ext4"), ("/mnt/c", "9p"))
+        monkeypatch.setattr(platform_info, "os", types.SimpleNamespace(path=ntpath))
+        assert platform_info.mount_for("/mnt/c/Users/me/repo", m) == ("/mnt/c", "9p")
+        assert platform_info.mount_for("/mnt/cache/repo", m) == ("/", "ext4")
+
     def test_an_unreadable_mount_table_reports_nothing_rather_than_guessing(self, tmp_path):
         assert platform_info.read_mounts(str(tmp_path / "absent")) == []
         assert platform_info.mount_for("/anywhere", str(tmp_path / "absent")) == ("", "")

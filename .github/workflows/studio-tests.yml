@@ -31,6 +31,11 @@ on:
       # here (`systems/hugmesh` -> `net/hugmesh` did exactly that) touches no studio
       # path, so without this line the guard would not run on the change it exists for.
       - 'tests/stack/m2-bootstrap.sh'
+      # Same reason again. studio/tests/test_route_access_env.py RUNS this script: the
+      # Mesh Monitor's compose scale calls it before `up --scale` and reads the
+      # tests/stack/.env key it writes. A change to its file name, flags or file format
+      # lands only here.
+      - 'tests/stack/gen-route-access-env.sh'
       # Same reason a third time, and the one this unit added. The spec -> persona
       # index (studio/hugmesh_studio/core/e2e_personas.py) is DERIVED from these six
       # files and from nothing in studio/: the typed RBAC catalogue and the specs that
@@ -302,5 +307,6 @@ jobs:
           tests/test_org_export_windows.py
           tests/test_windows_fleet.py
           tests/test_windows_load_and_cleanup.py
+          tests/test_windows_polish.py
           "tests/test_windows_packaging_files.py::test_the_spec_freezes_the_entry_shim_as_a_windowed_onedir"
           "tests/test_windows_packaging_files.py::test_windows_also_freezes_a_console_twin_into_the_same_tree"

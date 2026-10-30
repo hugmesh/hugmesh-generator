@@ -44,6 +44,7 @@ from __future__ import annotations
 
 import os
 import platform
+import posixpath
 import shutil
 import subprocess
 from dataclasses import dataclass
@@ -413,16 +414,34 @@ def mount_for(path: str, mounts_path: str = MOUNTS_PATH) -> tuple[str, str]:
     whole reason this reads the filesystem type instead of the path spelling.
     ``("", "")`` when the mount table is unreadable.
     """
-    try:
-        target = os.path.realpath(path or ".")
-    except OSError:
-        target = os.path.abspath(path or ".")
+    mounts = read_mounts(mounts_path)
+    if not mounts:
+        # Checked before resolving: on native Windows (the MSI) there is no
+        # /proc/mounts, and a C:\ path has no business going through POSIX rules.
+        return ("", "")
+    target = _resolve_linux_path(path)
     best = ("", "")
-    for mountpoint, fstype in read_mounts(mounts_path):
+    for mountpoint, fstype in mounts:
         if target == mountpoint or target.startswith(mountpoint.rstrip("/") + "/"):
             if len(mountpoint) >= len(best[0]):
                 best = (mountpoint, fstype)
     return best
+
+
+def _resolve_linux_path(path: str) -> str:
+    """``realpath`` for a path that is matched against the Linux kernel's mount table.
+
+    A path rooted at ``/`` is a Linux path, so it is resolved under POSIX rules even on
+    a Windows interpreter, where ``ntpath`` would turn ``/mnt/c/…`` into
+    ``C:\\mnt\\c\\…``, match no mountpoint and silence the warning. Anything else is
+    the host's own spelling and goes through ``os.path``. On Linux and WSL
+    ``posixpath`` IS ``os.path``, so nothing changes there.
+    """
+    pathmod = posixpath if (path or "").startswith("/") else os.path
+    try:
+        return pathmod.realpath(path or ".")
+    except OSError:
+        return pathmod.abspath(path or ".")
 
 
 def _looks_like_windows_drive_path(path: str) -> bool:
@@ -431,7 +450,7 @@ def _looks_like_windows_drive_path(path: str) -> bool:
     Never the primary test: WSL's automount root is configurable and a bind mount or
     symlink hides the shape entirely, which is why :func:`mount_for` exists.
     """
-    parts = os.path.realpath(path or ".").split("/")
+    parts = _resolve_linux_path(path).split("/")
     return len(parts) > 2 and parts[1] == "mnt" and len(parts[2]) == 1 and parts[2].isalpha()
 
 

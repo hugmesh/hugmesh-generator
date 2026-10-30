@@ -314,6 +314,54 @@ def test_rmtree_ignore_errors(tmp_path, osname):
         oe._rmtree(str(tmp_path / "gone"), osname=osname)
 
 
+def test_off_windows_rmtree_is_the_plain_one(monkeypatch):
+    # elsewhere a read-only file in a writable folder deletes fine, and a retry's chmod
+    # could only follow a link: nothing but shutil.rmtree runs there
+    seen = []
+    monkeypatch.setattr(oe.shutil, "rmtree", lambda path, **kw: seen.append((path, kw)))
+    oe._rmtree("x", osname="posix")
+    oe._rmtree("y", ignore_errors=True, osname="posix")
+    assert seen == [("x", {"ignore_errors": False}), ("y", {"ignore_errors": True})]
+
+
+def _handler_of(monkeypatch):
+    """The onexc handler oe._rmtree installs on native Windows, captured unrun."""
+    got = {}
+
+    def fake_rmtree(path, onexc=None, onerror=None):
+        got["h"] = onexc or (lambda f, p, e: onerror(f, p, (type(e), e, None)))
+    monkeypatch.setattr(oe.shutil, "rmtree", fake_rmtree)
+    oe._rmtree("ignored", osname="nt")
+    return got["h"]
+
+
+def test_a_refused_delete_of_a_link_inside_the_tree_is_not_chmodded_through(
+        tmp_path, monkeypatch):
+    # a link INSIDE the folder fails in os.unlink, not in os.path.islink (that is only
+    # the folder itself), so only the os.path.islink(p) half of the guard stops the
+    # chmod from following it to whatever it names
+    target = tmp_path / "elsewhere"
+    target.mkdir()
+    os.chmod(target, 0o755)
+    before = stat.S_IMODE(os.stat(target).st_mode)
+    (tmp_path / "work").mkdir()
+    link = tmp_path / "work" / "inner"
+    try:
+        os.symlink(target, link, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("this host cannot make a symbolic link")
+    handler = _handler_of(monkeypatch)
+    refused = PermissionError(13, "denied", str(link))
+    try:
+        with pytest.raises(PermissionError) as got:
+            handler(os.unlink, str(link), refused)
+        assert got.value is refused
+        assert stat.S_IMODE(os.stat(target).st_mode) == before
+        assert os.path.islink(link)                     # not deleted on a retry either
+    finally:
+        os.chmod(target, 0o755)
+
+
 # ── the Terminal line ────────────────────────────────────────────────────────────────
 MSI_EXE = r"C:\Users\pat\AppData\Local\HugMesh\Image Studio\hugmesh-studio.exe"
 
@@ -344,6 +392,55 @@ def test_the_windows_terminal_line_runs_in_powershell(monkeypatch):
                     "--domain shop.example --apply")
     assert oe._terminal_line(["x", r"C:\a\b.json", "a b"], "posix") \
         == "x 'C:\\a\\b.json' 'a b'"
+
+
+def test_a_folder_on_the_windows_line_loses_its_trailing_separators(monkeypatch):
+    # Windows PowerShell 5.1 double-quotes a word with a space for the program, so
+    # 'C:\My Exports\' arrived as "C:\My Exports\": the backslash escaped the closing
+    # quote and --apply became part of an illegal folder name
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "executable", MSI_EXE)
+    cfg = oe.ExportConfig(domain="shop.example", org="acme", out_dir="C:\\My Exports\\",
+                          source_mode="existing", source_dir="D:\\code\\my src/\\")
+    line = oe.cli_command(cfg, "APPLY", osname="nt")
+    assert ("--source-dir 'D:\\code\\my src' --source-mode existing" in line
+            and line.endswith("--out 'C:\\My Exports' --apply")), line
+    # POSIX shells take a trailing separator as typed: that line is unchanged
+    posix = oe.cli_command(cfg, "APPLY", osname="posix")
+    assert "--out 'C:\\My Exports\\' --apply" in posix, posix
+
+
+@pytest.mark.parametrize("typed, handed", [
+    ("C:\\My Exports\\", "C:\\My Exports"),
+    ("C:\\My Exports\\\\/", "C:\\My Exports"),
+    ("C:\\", "C:\\"),                       # the drive's root, which C: is not
+    ("C:/", "C:/"),
+    ("\\", "\\"),
+    ("\\\\srv\\my share\\", "\\\\srv\\my share"),   # a share is named without one
+    ("\\\\srv\\my share\\sub dir\\", "\\\\srv\\my share\\sub dir"),
+    ("C:", "C:"),
+    ("rel dir/", "rel dir"),
+])
+def test_a_windows_folder_keeps_only_a_roots_separator(typed, handed):
+    assert oe._line_dir(typed, "nt") == handed
+    assert oe._line_dir(typed, "posix") == typed
+
+
+@pytest.mark.skipif(os.name != "nt" or not shutil.which("powershell"),
+                    reason="needs Windows PowerShell")
+def test_a_folder_ending_in_a_backslash_does_not_swallow_the_next_word(tmp_path):
+    """Windows PowerShell 5.1, the one every Windows has: the folder and the word after
+    it reach the program as two words."""
+    words = ["-c", "import sys, json; print(json.dumps(sys.argv[1:]))",
+             "--out", oe._line_dir("C:\\My Exports\\", "nt"), "--apply"]
+    line = oe._terminal_line([sys.executable, *words], osname="nt")
+    script = tmp_path / "line.ps1"
+    script.write_text(line + "\n", encoding="utf-8-sig")
+    out = subprocess.run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
+                          "-File", str(script)], capture_output=True, timeout=60)
+    text = out.stdout.decode("utf-8", "replace")
+    assert json.loads(text.strip().splitlines()[-1]) == \
+        ["--out", "C:\\My Exports", "--apply"], text
 
 
 @pytest.mark.skipif(os.name != "nt", reason="needs Windows PowerShell")
@@ -434,3 +531,12 @@ def test_a_member_that_fails_part_way_leaves_no_partial_file(tmp_path, monkeypat
     assert not os.path.lexists(wd / ".env"), "a half-written .env would be published"
     if osname == "nt":
         assert [n for n, _why in meta["lost"]] == [".env"]
+
+
+def test_tree_entries_and_findings_use_git_spelling(tmp_path):
+    """A plan finding is a path someone copies into the rename map's exclude list,
+    which matches "/" paths: on Windows it read "tests\\fake-token.sh"."""
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests" / "fake-token.sh").write_text("x\n", encoding="utf-8")
+    assert oe._tree_entries(str(tmp_path)) == ["tests/fake-token.sh"]
+    assert all("\\" not in f for f in oe._scan_entries(str(tmp_path)))

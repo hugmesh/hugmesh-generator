@@ -20,6 +20,7 @@ from hugmesh_studio.core import org_export as oe
 from hugmesh_studio.core.golive_domains import NO_EXPORT_DOMAINS_NOTE
 from hugmesh_studio.core.local_mesh_domains import bootstrap_domain_records
 from hugmesh_studio.tui import domains_step, journey, localmesh
+from hugmesh_studio.tui.golive import same_line_heading
 
 from _org_export_helpers import (
     bare_log, make_world, parse_terminal_line, saved_mesh_naming_the_org)
@@ -159,12 +160,21 @@ def test_x_is_offered_only_when_a_domain_names_an_org(world):
     assert screen.stage == "export"
     text = "\n".join(j.lines())
     assert "1. mesh.example -> exampleorg  (saved mesh exported mesh)  <- picked" in text
-    assert "python3 -m hugmesh_studio --org-export PLAN" in text
+    # on Windows the line is PowerShell's: & '<python.exe>' -m hugmesh_studio ...
+    assert ("python3 -m hugmesh_studio --org-export PLAN" if os.name != "nt"
+            else "-m hugmesh_studio --org-export PLAN") in text
     assert "apply ORG=apply (type the org name)" in text
     j.feed("b")
     assert screen.stage == "plan"
 
 
+#: The offline "GitHub" answers through a fake `gh` that is a bash script
+#: (_org_export_helpers.FAKE_GH): native Windows cannot run it, so every apply is skipped.
+_FAKE_GH_IS_BASH = pytest.mark.skipif(os.name == "nt",
+                                      reason="the fake gh is a bash script")
+
+
+@_FAKE_GH_IS_BASH
 def test_export_plans_through_the_runner_and_applies_only_on_the_typed_org(world):
     saved_mesh_naming_the_org(world)
     j, screen = _golive_at_plan(world)
@@ -196,6 +206,7 @@ def test_export_plans_through_the_runner_and_applies_only_on_the_typed_org(world
     assert "visibility must be one of" in j.status
 
 
+@_FAKE_GH_IS_BASH
 def test_one_apply_per_plan_a_second_apply_is_refused_until_the_person_plans_again(world):
     """The GUI turns Apply off after a run and a re-typed name does not arm it again;
     the text-mode front end behaves the same: `apply ORG` on a plan that was already
@@ -259,7 +270,7 @@ def test_the_tui_terminal_line_hands_the_saved_mesh_over_and_parses_back_to_its_
     (c,) = screen.export_candidates(j)
     assert c.config is None
     lines = [ln.strip() for ln in j.lines()]
-    at = lines.index("The same from a terminal:")
+    at = lines.index(same_line_heading())          # names PowerShell on Windows
     line = lines[at + 1]
     assert f"--config {c.path} --domain mesh.example" in line and "--org " not in line
     assert f"--remote-base file://{world['gh_root']}/" in line     # the stand-in's, not the default
@@ -273,7 +284,7 @@ def test_the_tui_terminal_line_hands_the_saved_mesh_over_and_parses_back_to_its_
     j.feed("v public")
     j.feed("u branch")
     lines = [ln.strip() for ln in j.lines()]
-    line = lines[lines.index("The same from a terminal:") + 1]
+    line = lines[lines.index(same_line_heading()) + 1]
     assert "--visibility public" in line and "--update branch" in line
     assert parse_terminal_line(line, GENERATOR_DIR) == screen.export_config(j)
 

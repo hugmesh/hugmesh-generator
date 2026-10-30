@@ -238,11 +238,46 @@ def studio_parser():
     return ap
 
 
+def _powershell_words(line: str) -> list[str]:
+    """The words of a line org_export._terminal_line wrote for PowerShell (native
+    Windows): ``& `` then bare words or single-quoted ones, where a doubled quote
+    character stands for one. Only that shape, which is all the Studio writes."""
+    quotes = "'‘’‚‛"
+    assert line.startswith("& "), line
+    words, i, s = [], 0, line[2:]
+    while i < len(s):
+        if s[i] == " ":
+            i += 1
+            continue
+        if s[i] in quotes:
+            i, word = i + 1, ""
+            while True:
+                if s[i] in quotes:
+                    if i + 1 < len(s) and s[i + 1] in quotes:
+                        word, i = word + s[i], i + 2
+                        continue
+                    i += 1
+                    break
+                word, i = word + s[i], i + 1
+        else:
+            end = s.find(" ", i)
+            end = len(s) if end < 0 else end
+            word, i = s[i:end], end
+        words.append(word)
+    return words
+
+
 def parse_terminal_line(line: str, generator_dir: str) -> "oe.ExportConfig":
     """``config_from_args`` of a Terminal line the GUI and the TUI show (``python3 -m
-    hugmesh_studio ...``): the config the CLI would plan from that line."""
+    hugmesh_studio ...``, or its PowerShell form on Windows): the config the CLI would
+    plan from that line."""
     import shlex
-    words = shlex.split(line)
+    if line.startswith("& "):
+        words = _powershell_words(line)
+        assert words[1:3] == ["-m", "hugmesh_studio"], words
+        words = ["python3", *words[1:]]
+    else:
+        words = shlex.split(line)
     assert words[:3] == ["python3", "-m", "hugmesh_studio"], words
     args = studio_parser().parse_args(words[3:])
     return oe.config_from_args(args, args.generator_dir or generator_dir)

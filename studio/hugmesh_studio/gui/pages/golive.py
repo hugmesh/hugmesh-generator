@@ -635,6 +635,13 @@ _UPDATE_LABELS = (
 )
 
 
+def _shell_name(osname: str | None = None) -> str:
+    """What the hand-over row is labelled. On native Windows org_export.cli_command
+    writes a PowerShell line (the ``&`` call operator, '' quoting), which cmd.exe would
+    not run, so the label names the shell; everywhere else it stays "Terminal"."""
+    return "PowerShell" if (osname or os.name) == "nt" else "Terminal"
+
+
 class GoLiveOrgExportPage(QtWidgets.QWizardPage):
     """The optional step: export a domain's repositories to its GitHub org.
 
@@ -750,8 +757,10 @@ class GoLiveOrgExportPage(QtWidgets.QWizardPage):
         lay.addWidget(self.plan_text)
         self.cmd = QtWidgets.QLineEdit()
         self.cmd.setReadOnly(True)
-        self.cmd.setToolTip("The same export from a terminal.")
-        lay.addWidget(_row("Terminal", self.cmd))
+        shell = _shell_name()
+        self.cmd.setToolTip("The same export in PowerShell." if shell == "PowerShell"
+                            else "The same export from a terminal.")
+        lay.addWidget(_row(shell, self.cmd))
         self.candidates: list = []
         self.plan = None
         self.result = None

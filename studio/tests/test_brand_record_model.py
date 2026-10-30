@@ -270,7 +270,9 @@ def test_record_problems_refuses_a_duplicate_id_and_a_port_on_a_superbrand_signi
 
 # ── the secret scan (D5) ───────────────────────────────────────────────────────────
 @pytest.mark.parametrize("planted,why", [
-    ("tskey-auth-k1234567890abcdefXYZ-rest", "token-shaped"),
+    # two pieces so secret scanners stop reporting this FAKE; the joined value is what
+    # the save sees, and it must still read as token-shaped
+    ("tskey-" + "auth-k1234567890abcdefXYZ-rest", "token-shaped"),
     ("ghp_" + "a" * 36, "token-shaped"),
     ("-----BEGIN PRIVATE KEY-----\nMIIE...\n-----END PRIVATE KEY-----", "PEM block"),
     ("== ed25519v1-secret: type0 ==", "Tor key line"),

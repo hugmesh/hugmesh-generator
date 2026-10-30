@@ -889,6 +889,13 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # and with ONLY shell-suites.yml's tests/stack/test-route-access-reconcile.sh SUITES line
 # removed: '202 of 244' + check 7 red naming that suite — so the +1/+1 is this branch's
 # one suite and nothing else.
+# 203 -> 204 (denominator 244 -> 245) on fix/secret-scan-20261029, which adds ONE suite,
+# tests/stack/test-gen-route-access-env.sh, and names it in shell-suites.yml's debian
+# leg. MEASURED by RUNNING this file with GUARD_PREMERGE=0 on that tree:
+#     204 of 245 suites are named by a pull_request-triggered workflow
+#     PASS the ungated SET matches its pin exactly (41 suite(s))
+# and with ONLY that SUITES line removed: '203 of 245' + check 7 red naming that
+# suite — so the +1/+1 is this branch's one suite and nothing else.
 # 203 -> 204 (denominator 244 -> 245, ungated SET unchanged at 41) on 2026-10-29 for the
 # one-command org beta release: tests/scripts/test-release-beta.sh (scripts/release-beta.sh
 # against a recording gh stub, with a mutation battery) landed on disk AND in
@@ -904,7 +911,11 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # Any other branch that also raises this line from 203 conflicts with this one by
 # construction: whichever lands second re-measures (expected 205 if both add one gated
 # suite) per the doctrine above, never keeps either number.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-204}"
+# 204 -> 205 (denominator 245 -> 246) on 2026-10-30 when fix/secret-scan-20261029 (its block above,
+# test-gen-route-access-env.sh) merged origin/main 626664c0, which carries test-release-beta.sh (block
+# below). Both add one gated suite, so the merged tree is +2 over #830's 203. MEASURED by RUNNING this
+# file on the merged tree: '205 of 246 suites are named by a pull_request-triggered workflow'.
+PREMERGE_BASELINE="${GUARD_PREMERGE:-205}"
 
 # 182 -> 192 (denominator 205 -> 215) on 2026-09-30 for #385: the census gained a
 # THIRD spelling, bare `tests/*.sh` at depth 1, and the ten suites it exposed were

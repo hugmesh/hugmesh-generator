@@ -2235,11 +2235,13 @@ lint:docs-command-coverage:
         - Makefile
         - tests/scripts/test-docs-command-coverage.sh
 
-# The one-command org beta release (scripts/release-beta.sh, docs/RELEASING.md),
-# executed against a recording gh stub: a dry run makes zero write calls, versions
+# The one-command org release (scripts/release.sh --channel beta|stable, with
+# scripts/release-beta.sh as the beta wrapper; docs/RELEASING.md), executed against a
+# recording gh stub: a dry run makes zero write calls (the stub refuses them), versions
 # parse from every version-file kind, DONE/READY/REFUSE/NEEDS-BUMP classification,
 # the --only fix, the tag-SHA re-check when main moves, the order of a full --apply,
-# and a mutation battery over those guards. bash + python3 + jq; no network.
+# the stable cut/bump/tag/patch/next-beta rules and refusals, and a mutation battery
+# over those guards. bash + python3 + jq; no network.
 lint:release-beta:
   stage: lint
   image: debian:stable-slim
@@ -2251,6 +2253,7 @@ lint:release-beta:
   rules:
     - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
     - changes:
+        - scripts/release.sh
         - scripts/release-beta.sh
         - scripts/release/repos.tsv
         - scripts/release-studio.sh

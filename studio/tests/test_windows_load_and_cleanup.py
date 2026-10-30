@@ -121,14 +121,23 @@ def test_with_the_real_git_an_extra_copy_is_removed_whole(tmp_path):
 
 
 # ── "Load config" ───────────────────────────────────────────────────────────────
-@pytest.fixture
-def page(tmp_path, monkeypatch):
+@pytest.fixture(scope="session")
+def qapp():
+    """One QApplication, HELD for every page test. A discarded one is freed at once
+    under PyQt6, and the QWizardPage built next aborts the whole process (SIGABRT),
+    so none of the page tests ran there; PySide6 happened to keep it alive."""
     pytest.importorskip("hugmesh_studio.gui.qt",
                         reason="no Qt binding (PySide6/PyQt6) installed")
+    from hugmesh_studio.gui.qt import QtWidgets
+    return (QtWidgets.QApplication.instance()
+            or QtWidgets.QApplication(["hugmesh-studio-tests"]))
+
+
+@pytest.fixture
+def page(qapp, tmp_path, monkeypatch):
     from hugmesh_studio.gui.pages import sessions
     from hugmesh_studio.gui.qt import QtWidgets
 
-    QtWidgets.QApplication.instance() or QtWidgets.QApplication(["hugmesh-studio-tests"])
     monkeypatch.setenv("HUGMESH_STUDIO_STATE_DIR", str(tmp_path / "state"))
     said = []
     for kind in ("information", "warning", "critical"):

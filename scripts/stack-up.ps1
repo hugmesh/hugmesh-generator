@@ -91,11 +91,170 @@ $env:PUBLIC_HOST_PORT   = "$PublicHostPort"
 # to the compose file's dir: tests/stack/ -> repo-root .stack-src is ../../).
 $env:STACK_SRC = '../../.stack-src'
 
+# route-access-db OWNER password: compose.local.yaml reads ${ROUTE_ACCESS_DB_PASSWORD:-}
+# and no longer spells it. Twin of tests/stack/gen-route-access-env.sh (which every
+# `make stack-up` runs first); same contract, read that script's header:
+#  - the value lives in tests\stack\.env, compose's OWN auto-loaded env file, so a
+#    hand-run `docker compose -f tests\stack\compose.local.yaml ...` gets it too;
+#  - this script owns ONE key there: every other line an operator keeps is kept;
+#  - created once, NEVER rotated (postgres honours POSTGRES_PASSWORD only when it
+#    initialises an empty volume); -Down strips the key after `down -v`;
+#  - key missing: migrate tests\stack\.route-access-db.env (an earlier revision's
+#    file); else, if the route-access-pg volume EXISTS, adopt the password the
+#    project's route-access-db container was created with, or failing that the owner
+#    role's name (the compose default before 2026-10-29), with a warning; docker
+#    that cannot answer writes nothing and stops; no volume mints a random value.
+$DotEnv        = Join-Path $StackDir '.env'
+$LegacyEnv     = Join-Path $StackDir '.route-access-db.env'
+$RaKey         = 'ROUTE_ACCESS_DB_PASSWORD'
+$RaBegin       = '# >>> route-access-db owner password (tests/stack/gen-route-access-env.sh) >>>'
+$RaEnd         = '# <<< route-access-db owner password <<<'
+$RaLineRe      = '^\s*(export\s+)?' + $RaKey + '\s*=\s*(.*?)\s*$'
+$Utf8NoBom     = New-Object System.Text.UTF8Encoding $false
+
+function Read-RaKey([string]$Path) {
+  if (-not (Test-Path $Path)) { return '' }
+  $v = ''
+  foreach ($l in [System.IO.File]::ReadAllLines($Path)) { if ($l -match $RaLineRe) { $v = $Matches[2] } }
+  if ($v.Length -ge 2 -and $v[0] -eq $v[-1] -and ('"', "'") -contains [string]$v[0]) { $v = $v.Substring(1, $v.Length - 2) }
+  return $v
+}
+# A SYMLINKED tests\stack\.env (one file shared by several checkouts) stays a link:
+# resolve it (through a chain of links) and replace the TARGET atomically in its own
+# directory. WriteAllLines on the link would write through it but not atomically, and
+# a delete would break every other checkout's link. LinkTarget is PowerShell 7's
+# property; Windows PowerShell 5.1 exposes the same thing as .Target.
+function Resolve-EnvTarget([string]$Path) {
+  for ($i = 0; $i -lt 40; $i++) {
+    $item = Get-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
+    if (-not $item -or $item.LinkType -ne 'SymbolicLink') { return $Path }
+    $t = if ($item.PSObject.Properties['LinkTarget']) { $item.LinkTarget } else { @($item.Target)[0] }
+    if (-not [System.IO.Path]::IsPathRooted($t)) { $t = Join-Path (Split-Path -Parent $item.FullName) $t }
+    $Path = [System.IO.Path]::GetFullPath($t)
+  }
+  throw "tests\stack\.env: too many levels of symbolic links"
+}
+function Write-EnvAtomic([string]$Target, [string[]]$Lines) {
+  $dir = Split-Path -Parent $Target
+  if (-not (Test-Path -LiteralPath $dir -PathType Container)) {
+    throw "tests\stack\.env resolves to $Target, whose directory does not exist. Nothing was written."
+  }
+  $tmp = Join-Path $dir ('.' + (Split-Path -Leaf $Target) + '.tmp.' + [guid]::NewGuid().ToString('N'))
+  try {
+    [System.IO.File]::WriteAllLines($tmp, $Lines, $Utf8NoBom)
+    if (Test-Path -LiteralPath $Target) {
+      [System.IO.File]::Replace($tmp, $Target, [NullString]::Value)
+    } else {
+      [System.IO.File]::Move($tmp, $Target)
+    }
+  } finally {
+    if (Test-Path -LiteralPath $tmp) { Remove-Item -Force -LiteralPath $tmp -ErrorAction SilentlyContinue }
+  }
+}
+$DotEnvIsLink = [bool]((Get-Item -LiteralPath $DotEnv -Force -ErrorAction SilentlyContinue).LinkType -eq 'SymbolicLink')
+$DotEnv       = Resolve-EnvTarget $DotEnv
+
+function Get-LinesWithoutRaKey([string]$Path) {
+  $keep = New-Object System.Collections.Generic.List[string]
+  if (-not (Test-Path $Path)) { return ,$keep }
+  $skip = $false
+  foreach ($l in [System.IO.File]::ReadAllLines($Path)) {
+    if ($l -eq $RaBegin) { $skip = $true; continue }
+    if ($skip) { if ($l -eq $RaEnd) { $skip = $false }; continue }
+    if ($l -match $RaLineRe) { continue }
+    $keep.Add($l)
+  }
+  return ,$keep
+}
+
 if ($Down) {
   Write-Host '==> Tearing down the local stack (docker compose down -v)'
   docker compose -f $Compose --profile social --profile tor down -v
+  if ($LASTEXITCODE -eq 0 -and (Test-Path $DotEnv)) {
+    $rest = Get-LinesWithoutRaKey $DotEnv
+    if (@($rest | Where-Object { $_.Trim() }).Count -gt 0) {
+      Write-EnvAtomic $DotEnv ([string[]]$rest)
+    } elseif ($DotEnvIsLink) {
+      Write-EnvAtomic $DotEnv ([string[]]@())   # shared through a link: empty it, never delete
+    } else {
+      Remove-Item -Force $DotEnv
+    }
+  }
   return
 }
+
+$routeAccessPw = Read-RaKey $DotEnv
+if (-not $routeAccessPw) {
+  $project = if ($env:COMPOSE_PROJECT_NAME) { $env:COMPOSE_PROJECT_NAME } else { 'hugmesh-local' }
+  $how = ''
+  $legacy = Read-RaKey $LegacyEnv
+  if ($legacy) {
+    $routeAccessPw = $legacy
+    $how = "migrated from .route-access-db.env $((Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ'))"
+  } else {
+    $savedEap = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+      $probe = (docker volume inspect "${project}_route-access-pg" 2>&1 | Out-String)
+      $volumeExists = ($LASTEXITCODE -eq 0)
+    } finally { $ErrorActionPreference = $savedEap }
+    # "docker could not say" (daemon down, wrong context) is NOT "no volume": a fresh
+    # value written then would lock an existing volume's gateways out.
+    if (-not $volumeExists -and $probe -notmatch '(?i)no such volume') {
+      throw "docker could not say whether volume ${project}_route-access-pg exists, so $RaKey was NOT written to tests\stack\.env. Start Docker Desktop and retry."
+    }
+    if ($volumeExists) {
+      $fromCtr = ''
+      $savedEap = $ErrorActionPreference
+      $ErrorActionPreference = 'Continue'
+      try {
+        $cid = @(docker ps -a -q --filter "label=com.docker.compose.project=$project" --filter 'label=com.docker.compose.service=route-access-db' 2>$null) | Select-Object -First 1
+        if ($cid) {
+          $envLine = @(docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' $cid 2>$null) |
+            Where-Object { $_ -like 'POSTGRES_PASSWORD=*' } | Select-Object -Last 1
+          if ($envLine) { $fromCtr = $envLine.Substring('POSTGRES_PASSWORD='.Length) }
+        }
+      } finally { $ErrorActionPreference = $savedEap }
+      if ($fromCtr) {
+        $routeAccessPw = $fromCtr
+        $how = "adopted from the existing $project route-access-db container (volume ${project}_route-access-pg predates this file)"
+        Write-Warning "$RaKey was missing from tests\stack\.env but volume ${project}_route-access-pg exists; adopted the password its route-access-db container was created with."
+      } else {
+        $routeAccessPw = 'gateway'   # route-access-db's POSTGRES_USER: the compose default before 2026-10-29
+        $how = "adopted: volume ${project}_route-access-pg predates this file and has no container (assumed the pre-2026-10-29 compose default)"
+        Write-Warning ("$RaKey was missing from tests\stack\.env but volume ${project}_route-access-pg exists and no " +
+          "route-access-db container is left; assuming the compose default before 2026-10-29 (the owner role's name). " +
+          "If ANOTHER checkout created this volume, copy $RaKey from that checkout's tests\stack\.env instead.")
+      }
+      Write-Warning 'Rotate it with -Down (DROPS the stack''s data), or ALTER ROLE in the container and edit tests\stack\.env.'
+    } else {
+      $bytes = New-Object byte[] 24
+      [System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
+      $routeAccessPw = -join ($bytes | ForEach-Object { $_.ToString('x2') })
+      $how = "generated $((Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ'))"
+    }
+  }
+  if ($routeAccessPw -notmatch '^[A-Za-z0-9._~-]+$') {
+    throw "The $how value for $RaKey is not URL-unreserved; the r2dbc URL would decode it differently. Nothing was written."
+  }
+  # Keep every other line of an operator-made .env; UTF-8 WITHOUT a BOM (a BOM
+  # would glue itself onto the first key compose reads).
+  $lines = Get-LinesWithoutRaKey $DotEnv
+  $lines.Add($RaBegin)
+  $lines.Add('# GENERATED, gitignored, never commit. Must match what the route-access-pg volume')
+  $lines.Add('# was initialised with: do not edit or delete it while that volume exists')
+  $lines.Add('# (-Down / make stack-down removes both). Other lines in this file are yours and are kept.')
+  $lines.Add("# $how")
+  $lines.Add("$RaKey=$routeAccessPw")
+  $lines.Add($RaEnd)
+  Write-EnvAtomic $DotEnv ([string[]]$lines)
+  if ($how -like 'migrated*') { Remove-Item -Force -ErrorAction SilentlyContinue $LegacyEnv }
+}
+if ($routeAccessPw -notmatch '^[A-Za-z0-9._~-]+$') {
+  throw "$RaKey in tests\stack\.env holds a character that is not URL-unreserved; the r2dbc URL would decode it differently. Fix the file."
+}
+# Passed explicitly as well: an inherited (even empty) variable would beat .env.
+$env:ROUTE_ACCESS_DB_PASSWORD = $routeAccessPw
 
 # ── 1. Clone / update all repos ────────────────────────────────────────────
 Write-Host "==> Cloning all repos into $StackSrc (base=$GitBase ref=$GitRef)"

@@ -6,13 +6,14 @@ fixture on a tmpdir; the one impure function (``spawn``) is exercised against a
 plain /bin/echo-style child, which is a subprocess, not an emulator.
 """
 import os
+import subprocess
 import sys
 import threading
 
 import pytest
 
 from hugmesh_studio.core import mesh_emulation as me
-from hugmesh_studio.core import qemu_devices, qemu_tests
+from hugmesh_studio.core import proc_group, qemu_devices, qemu_tests
 
 
 # ---- the 3-device session fixture ---------------------------------------------------
@@ -285,6 +286,76 @@ def test_spawn_cancel_terminates_the_process_group(tmp_path):
     t.join(15)
     assert not t.is_alive(), "spawn() did not return after cancel"
     assert done["rc"] != 0
+
+
+def test_spawn_cancel_reaches_a_grandchild_holding_the_pipe(tmp_path):
+    """The real lanes are trees (a script that runs docker), and spawn() reads until
+    the pipe closes: a cancel that stops only the direct child leaves the grandchild
+    holding stdout and spawn() never returns."""
+    cancel = threading.Event()
+    lines = []
+    done = {}
+    child = ("import subprocess, sys, time\n"
+             "subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])\n"
+             "print('up', flush=True)\n"
+             "time.sleep(60)\n")
+
+    def _run():
+        done["rc"] = me.spawn([sys.executable, "-u", "-c", child], str(tmp_path),
+                              on_line=lines.append, cancel=cancel)
+
+    t = threading.Thread(target=_run, daemon=True)
+    t.start()
+    deadline = 15
+    while "up" not in lines and deadline > 0:
+        t.join(0.1)
+        deadline -= 0.1
+    assert "up" in lines, "the child never started"
+    cancel.set()
+    t.join(20)
+    assert not t.is_alive(), "spawn() did not return: the grandchild outlived the cancel"
+    assert done["rc"] != 0
+
+
+class _LiveProc:
+    pid = 4242
+
+    def poll(self):
+        return None
+
+
+def _taskkill_spy(monkeypatch, rcs):
+    """Drive proc_group's Windows branch on any host: no killpg, and taskkill
+    answering with ``rcs`` in turn."""
+    calls = []
+
+    def _run(args, **_kw):
+        calls.append(args)
+        return subprocess.CompletedProcess(args, rcs[len(calls) - 1])
+    monkeypatch.setattr(proc_group, "_HAS_KILLPG", False)
+    monkeypatch.setattr(proc_group.subprocess, "run", _run)
+    return calls
+
+
+def test_windows_terminate_forces_a_tree_the_polite_taskkill_could_not_stop(monkeypatch):
+    # 128 is what taskkill /T says for a windowless console process: "can only be
+    # terminated forcefully". Reporting that as stopped was a Cancel that did nothing.
+    calls = _taskkill_spy(monkeypatch, [128, 0])
+    assert proc_group.terminate_group(_LiveProc())
+    assert calls == [["taskkill", "/PID", "4242", "/T"],
+                     ["taskkill", "/PID", "4242", "/T", "/F"]]
+
+
+def test_windows_terminate_stays_polite_when_polite_worked(monkeypatch):
+    calls = _taskkill_spy(monkeypatch, [0])
+    assert proc_group.terminate_group(_LiveProc())
+    assert calls == [["taskkill", "/PID", "4242", "/T"]]
+
+
+def test_windows_kill_goes_straight_to_force(monkeypatch):
+    calls = _taskkill_spy(monkeypatch, [0])
+    assert proc_group.kill_group(_LiveProc())
+    assert calls == [["taskkill", "/PID", "4242", "/T", "/F"]]
 
 
 # ══════════════════════════════════════════════════════════════════════════════════

@@ -56,6 +56,7 @@ from ._scroll import scrollable
 from ...core import build_sessions
 from ...core import cross_dracut
 from ...core import flash_targets
+from ...core import qemu_tests
 from ...core import root_size_floor
 from ...core import secret_files
 from ...core import worklist as worklist_mod
@@ -974,7 +975,8 @@ class BuildPage(QtWidgets.QWizardPage):
         # Gated on --env test: a prod build has the in-cluster test runner pruned out
         # of its ArgoCD app tree, so booting one would assert against a stack that was
         # deliberately removed. Greyed rather than hidden, because the reason is a
-        # decision the operator made one dropdown above and can reverse.
+        # decision the operator made one dropdown above and can reverse. A native
+        # Windows Studio greys it on either env (the runner is bash; see the gate).
         # THE LABEL NAMES THE LANE. It used to be reachable as "the e2e suite", which
         # is a DIFFERENT harness (tests/qemu/run-qemu-e2e.sh drives Playwright against
         # a booted image's UI; this box drives tests/qemu/run-qemu-docker.sh's in-guest
@@ -1350,7 +1352,18 @@ class BuildPage(QtWidgets.QWizardPage):
         emulated-device assertions would be checking for a stack the build removed on
         purpose. Greying (not hiding) keeps the reason legible: the operator set --env
         one row above and can set it back. Unticking on the way out stops a config
-        saved as prod from carrying a flag its own env forbids."""
+        saved as prod from carrying a flag its own env forbids.
+
+        A native Windows Studio (the MSI) greys it on either env: the runner is a bash
+        script, so ProgressPage could only skip it after the build with the WSL2
+        sentence, and offering it here promised a run that cannot happen. That sentence
+        is the tooltip instead, and a loaded config's tick is dropped as prod drops it."""
+        blocker = qemu_tests.native_blocker()
+        if blocker:
+            self.qemu_device_tests.setEnabled(False)
+            self.qemu_device_tests.setChecked(False)
+            self.qemu_device_tests.setToolTip(blocker)
+            return
         is_test = self.env.currentText() == "test"
         self.qemu_device_tests.setEnabled(is_test)
         if not is_test:
@@ -1499,9 +1512,11 @@ class BuildPage(QtWidgets.QWizardPage):
         c.seed_url = self.seed_url.text().strip()
         c.pentest = self.pentest.isChecked()
         # Only a test-env build can carry the post-build device tests (see the gate);
-        # collecting the raw checkbox would let a test->prod switch strand a True.
+        # collecting the raw checkbox would let a test->prod switch strand a True. A
+        # native Windows Studio carries none on either env: the runner is a bash script.
         c.qemu_device_tests = (self.qemu_device_tests.isChecked()
-                               and self.env.currentText() == "test")
+                               and self.env.currentText() == "test"
+                               and not qemu_tests.native_blocker())
         c.extra_flags = self.extra_flags.text().strip()
         # the greyed (platform-unsupported) widgets were still collected above —
         # reset those fields to their defaults so a value picked while another

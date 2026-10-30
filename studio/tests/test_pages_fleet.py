@@ -121,6 +121,11 @@ def _sessions_page(wiz):
 # unchanged collect() -> FleetConfig -> FleetDriver.command translation) with
 # generator_dir=/gen and the pinned HOST above. Byte-identical argv is the fleet's
 # emission contract — do NOT regenerate these to make a refactor pass.
+#
+# BuildDriver.__init__ resolves generator_dir with os.path.abspath, so the /src bind
+# mount carries the resolved form: exactly "/gen" on Linux (the captured golden), and
+# "<drive of the cwd>:\gen" on Windows, which Docker Desktop mounts the same way.
+GEN = os.path.abspath("/gen")
 GOLDEN_CHOICES = {
     "defaults": dict(output_dir="/fleet-out"),
     "everything": dict(
@@ -182,7 +187,7 @@ _MIXED_ENV = [
 
 
 def _docker_golden(env_pairs, inner):
-    cmd = ["docker", "run", "--rm", "--privileged", "-v", "/gen:/src",
+    cmd = ["docker", "run", "--rm", "--privileged", "-v", f"{GEN}:/src",
            "-v", "/fleet-out:/out"]
     for kv in env_pairs:
         cmd += ["-e", kv]
@@ -275,7 +280,7 @@ def test_docker_argv_carries_the_resource_limit_wrapper(qapp, monkeypatch):
     assert cmd[:4] == ["docker", "run", "--rm", "--privileged"]
     assert cmd[4:12] == ["--cpus", "6", "--memory", "8g", "--memory-swap", "8g",
                          "--gpus", "all"], cmd[:14]
-    assert cmd[12:14] == ["-v", "/gen:/src"], "limits must precede the bind mounts"
+    assert cmd[12:14] == ["-v", f"{GEN}:/src"], "limits must precede the bind mounts"
     # and with them off the argv is the pre-limit one, byte for byte
     for k in (rl.CPUS_ENV, hr.MEMORY_ENV, rl.GPUS_ENV):
         monkeypatch.setenv(k, "0")

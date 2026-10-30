@@ -43,7 +43,8 @@ def terminate_group(proc: "subprocess.Popen[object]") -> bool:
     Never raises: a cancel path that can throw turns "the user pressed Cancel" into
     "the GUI reported an error", and by the time we are here the caller has already
     decided the process should die. A process that has ALREADY exited counts as
-    stopped and returns True — that race is normal, not a failure.
+    stopped and returns True — that race is normal, not a failure. On Windows a
+    windowless console tree cannot be asked, only forced, so there it is forced.
     """
     return _signal_group(proc, signal.SIGTERM, hard=False)
 
@@ -69,23 +70,31 @@ def _signal_group(proc: "subprocess.Popen[object]", sig: int, *, hard: bool) -> 
     else:
         # Windows: taskkill /T walks the child tree that POSIX would have reached
         # through the process group. /F is the SIGKILL equivalent.
-        args = ["taskkill", "/PID", str(proc.pid), "/T"]
-        if hard:
-            args.append("/F")
-        try:
-            subprocess.run(
-                args,
-                check=False,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                # A cancel must not itself hang. If taskkill has not returned in
-                # 10 s something is badly wrong and the direct-child fallback below
-                # is a better use of the time.
-                timeout=10,
-            )
-            return True
-        except (OSError, subprocess.SubprocessError):
-            pass  # taskkill missing or hung — fall through
+        #
+        # A polite taskkill only reaches a process that owns a WINDOW. Everything
+        # spawned here (bash, docker, node, python) is a windowless console process,
+        # for which plain /T exits 128 with "can only be terminated forcefully" and
+        # the whole tree runs on, so a polite attempt that stopped nothing escalates
+        # to /F at once. Returning True on that 128 was a Cancel that did nothing.
+        # Popen.terminate() on Windows is TerminateProcess for the same reason:
+        # there is no SIGTERM to send.
+        for force in ((True,) if hard else (False, True)):
+            args = ["taskkill", "/PID", str(proc.pid), "/T"] + (["/F"] if force else [])
+            try:
+                done = subprocess.run(
+                    args,
+                    check=False,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    # A cancel must not itself hang. If taskkill has not returned in
+                    # 10 s something is badly wrong and the direct-child fallback
+                    # below is a better use of the time.
+                    timeout=10,
+                )
+            except (OSError, subprocess.SubprocessError):
+                break  # taskkill missing or hung — fall through
+            if done.returncode == 0 or proc.poll() is not None:
+                return True
 
     # Last resort: the direct child only. Leaves grandchildren behind, which is
     # worse than a group kill and better than nothing.
