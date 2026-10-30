@@ -274,6 +274,9 @@ def test_authenticode_is_gated_on_its_secret_and_signs_before_the_checksum():
             < names.index("Build the MSI") < names.index("Authenticode — sign the MSI")
             < names.index("Checksum"))
     assert _step("msi", "Authenticode — sign the MSI")["env"]["TARGET"] == "hugmesh-studio-${{ env.VERSION }}-x64.msi"
+    # Both executables the spec freezes on Windows: the console twin ships in the MSI too.
+    assert _step("msi", "Authenticode — sign the executable")["env"]["TARGETS"].split(";") == [
+        r"dist\hugmesh-studio\hugmesh-studio.exe", r"dist\hugmesh-studio\hugmesh-studio-cli.exe"]
 
 
 # ── release notes and releases.json, by running the workflow's own scripts ────────

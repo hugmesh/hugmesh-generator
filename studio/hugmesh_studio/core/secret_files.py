@@ -294,7 +294,10 @@ class MaterializedSecretFiles:
 def _write_0600(path: str, data: bytes) -> None:
     # O_EXCL: the file must not pre-exist — we just minted the private dir, so a
     # pre-existing name would mean something else is writing here; fail loudly.
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    # O_BINARY (Windows only): without it the CRT's text mode turns every 0x0A into
+    # 0x0D 0x0A, corrupting a DER key and giving a PEM CRLF endings.
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL
+                 | getattr(os, "O_BINARY", 0), 0o600)
     try:
         os.write(fd, data)
     finally:

@@ -137,6 +137,20 @@ The Studio is a front end over scripts in a `hugmesh-generator` checkout (`build
 * **Measured (warn file):** `cryptography` is not bundled (it is not a dependency), so a base
   CA certificate file is accepted on its PEM framing alone, without an X.509 parse.
 * Building images on Windows needs Docker Desktop.
+* **Measured on Windows 11 (2026-10-29):** `hugmesh-studio.exe` is a windowed program, so
+  started from cmd or PowerShell it has no stdout: every command-line flag printed nothing
+  and the shell did not wait for its exit code. The MSI therefore also installs
+  `hugmesh-studio-cli.exe`, the same app frozen as a console program, for the flags
+  (`hugmesh-studio-cli.exe --print-specs`, `--list-sessions`, `--help`, ...). The Start
+  Menu shortcut still opens the windowed one.
+* **Measured on Windows 11 (2026-10-29):** the local-mesh and DevOps lanes (`make` targets
+  whose recipes are bash) cannot run natively. They now refuse with one sentence that
+  names WSL2, the supported way to run the Studio on Windows, instead of "make is
+  required" (`core/platform_info.native_windows_blocker`).
+* Building the MSI by hand on Windows from a deep folder fails inside WiX's cabinet
+  helper ("The pipe has been ended"): the deepest PySide6 file passes 260 characters and
+  `wixnative.exe` is not long-path aware. Build from a short path; the hosted runner's
+  `D:\a\...` checkout is short enough.
 
 ## Per-user install
 

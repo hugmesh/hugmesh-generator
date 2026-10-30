@@ -49,6 +49,21 @@ def _mode(path):
     return stat.S_IMODE(os.stat(path).st_mode)
 
 
+#: Windows has no POSIX mode bits (every file stats 0o666 or 0o444), so the 0600/0700
+#: half of #362 can only be asserted on POSIX. The log's CONTENT is asserted everywhere.
+posix_modes = pytest.mark.skipif(os.name != "posix", reason="POSIX mode bits only")
+
+
+def test_run_log_has_its_output_on_every_os(tmp_path, monkeypatch):
+    """The Windows MSI wrote every run log as a 0-byte *-FAILED.log: an unguarded
+    os.fchmod (absent on Windows before Python 3.13) raised after os.open had created
+    the file, and the bare except swallowed it, so the run's output never reached disk."""
+    path = _save(tmp_path, monkeypatch, ["[boot] hello", "[boot] the reason it failed"])
+    body = open(path, encoding="utf-8").read()
+    assert "[boot] hello" in body and "[boot] the reason it failed" in body, body
+
+
+@posix_modes
 def test_run_log_is_private_and_its_directory_too(tmp_path, monkeypatch):
     old = os.umask(0o022)   # the operator's umask: the default that leaked
     try:
@@ -60,6 +75,7 @@ def test_run_log_is_private_and_its_directory_too(tmp_path, monkeypatch):
     assert "[boot] hello" in open(path, encoding="utf-8").read()
 
 
+@posix_modes
 def test_a_preexisting_loose_dir_and_file_are_tightened(tmp_path, monkeypatch):
     logs = tmp_path / "logs"
     logs.mkdir()
