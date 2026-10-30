@@ -47,6 +47,7 @@ desktop terminal, and ``emulation.status``'s two shell-outs (the runner's --devi
 probe and ``docker ps``) are stubbed off so the registry on disk is the only source.
 """
 import dataclasses
+import functools
 import inspect
 import json
 import os
@@ -63,6 +64,7 @@ pytest.importorskip("hugmesh_studio.gui.qt",
                     reason="no Qt binding (PySide6/PyQt6) installed")
 
 from hugmesh_studio.core import emulation, qemu_devices, qemu_tests  # noqa: E402
+from hugmesh_studio.core import platform_info                       # noqa: E402
 from hugmesh_studio.core.platform_info import HostInfo               # noqa: E402
 from hugmesh_studio.gui import wizard as wizard_mod                  # noqa: E402
 from hugmesh_studio.gui.pages import _emulation_common as common     # noqa: E402
@@ -77,6 +79,23 @@ GENERATOR_DIR = os.path.dirname(STUDIO_ROOT)
 # a canned host so wizard construction never probes the machine (docker info &c.)
 HOST = HostInfo(os="linux", is_gentoo=True, has_docker=False, has_bash=True,
                 has_kvm=False, is_root=False, builder_image="hugmesh-builder")
+
+_REAL_BLOCKER = platform_info.native_windows_blocker
+
+#: The tests that read a STUB's echo need the stub to RUN, and every stub here is a
+#: bash script that ``emulation.spawn`` Popens directly by its shebang. Native Windows
+#: has neither (the WSL2 refusal those lanes give there is pinned, host-independently,
+#: in test_native_windows_gates.py).
+_RUNS_BASH_STUB = pytest.mark.skipif(
+    os.name == "nt",
+    reason="spawns the bash stub scripts under tests/qemu/ as real child processes "
+           "(exec by #!/usr/bin/env bash); native Windows has no bash to run them")
+#: ...and the cancel tests also signal the stub's POSIX process GROUP, which is the
+#: thing they discriminate (a sleep in a child holds the pipe open otherwise).
+_SIGNALS_A_BASH_PROCESS_GROUP = pytest.mark.skipif(
+    os.name == "nt",
+    reason="spawns a bash stub whose child sleeps, and cancels it through its POSIX "
+           "process group (start_new_session + killpg); native Windows has neither")
 
 #: The stub runner. It echoes its own argv — that echo is what the assertions below
 #: read, so they are about the argv a CHILD received. ``--list`` and a plain run are
@@ -116,6 +135,11 @@ exit 0
 def _pinned_host(monkeypatch):
     monkeypatch.setattr(wizard_mod, "detect",
                         lambda builder_image="hugmesh-builder": HOST)
+    # The fake host above is Linux; the WSL2 refusal reads the REAL os.name, so on a
+    # Windows host every lane (and BuildPage's opt-in) would refuse. Answer as the
+    # pinned host does — test_pages_mesh_emulation.py's twin fixture does the same.
+    monkeypatch.setattr(platform_info, "native_windows_blocker",
+                        functools.partial(_REAL_BLOCKER, osname="posix"))
 
 
 @pytest.fixture(autouse=True)
@@ -401,11 +425,13 @@ def test_qemu_previews_the_command_the_facade_authors(wiz, fake_generator):
     page = _qemu_page(wiz)
     cmd = page.cmd_view.toPlainText()
     assert "run-qemu-docker.sh" in cmd
-    assert f"--artifacts {full}" in cmd          # pinned, never the runner's guess
+    # pinned, never the runner's guess (quoted as the preview quotes it: a Windows
+    # tmp path has backslashes, which shlex.quote wraps; a POSIX one is left bare)
+    assert f"--artifacts {shlex.quote(str(full))}" in cmd
     assert "--jobs 2" in cmd and "--list" not in cmd
     assert "--keep-alive" not in cmd, "the TEST lane never leaves guests up"
     # the preview IS emulation.run_argv — not a second spelling that agrees today
-    assert cmd.split() == emulation.run_argv(page.plan)
+    assert shlex.split(cmd) == emulation.run_argv(page.plan)
 
 
 def test_qemu_default_envelope_adds_nothing_to_the_command(wiz):
@@ -443,6 +469,7 @@ def test_qemu_extra_users_field_tolerates_either_separator(wiz):
     assert page._envelope().extra_users == ("alice",)         # no empty --extra-user
 
 
+@_RUNS_BASH_STUB
 def test_qemu_new_knobs_reach_the_SPAWNED_runner(wiz, qapp):
     """The end of the chain: what the CHILD PROCESS was given.
 
@@ -463,6 +490,7 @@ def test_qemu_new_knobs_reach_the_SPAWNED_runner(wiz, qapp):
 
 # ---- running -----------------------------------------------------------------------
 
+@_RUNS_BASH_STUB
 def test_qemu_list_devices_streams_the_stub_runner(wiz, qapp):
     page = _qemu_page(wiz)
     page._launch(list_only=True)
@@ -499,6 +527,7 @@ def test_qemu_run_counts_every_bucket_it_finds(wiz, qapp, results):
     assert "1 passed" in log and "1 failed" in log
 
 
+@_SIGNALS_A_BASH_PROCESS_GROUP
 def test_qemu_cancel_stays_armed_so_a_second_press_re_signals(wiz, qapp,
                                                               monkeypatch):
     """Cancel sends SIGTERM and nothing escalates to SIGKILL.
@@ -533,6 +562,7 @@ def test_qemu_cancel_stays_armed_so_a_second_press_re_signals(wiz, qapp,
     assert page.isComplete()
 
 
+@_SIGNALS_A_BASH_PROCESS_GROUP
 def test_qemu_a_cancelled_run_does_not_accuse_its_rows_of_no_result(
         wiz, qapp, monkeypatch):
     """NO-RESULT means "the run finished and this row produced nothing". A cancel is
@@ -672,6 +702,7 @@ def test_qemu_page_offers_no_modal_dialogs_at_all():
 
 # ---- the SELinux AVC workout (issue #45) --------------------------------------------
 
+@_RUNS_BASH_STUB
 def test_qemu_avc_button_runs_the_workout_over_ONE_planned_row(wiz, qapp,
                                                                fake_generator):
     _gen, full, _abort = fake_generator
@@ -899,6 +930,7 @@ def test_qemu_opt_out_on_buildpage_survives_a_page_revisit(real_wiz):
 
 # ---- ProgressPage: the post-build hook ----------------------------------------------
 
+@_RUNS_BASH_STUB
 def test_progress_runs_the_device_tests_after_an_all_ok_build(wiz, fake_generator,
                                                               qapp):
     _gen, full, _abort = fake_generator
@@ -965,6 +997,7 @@ def test_qemu_playwright_row_picker_offers_only_launchable_rows(wiz, fake_genera
     assert "jetson/edge-ai" in avc
 
 
+@_RUNS_BASH_STUB
 def test_qemu_playwright_list_button_runs_the_e2e_script_not_the_docker_runner(
         wiz, qapp, fake_generator):
     """THE naming test. If the envelope were aimed at run-qemu-docker.sh — the
@@ -986,6 +1019,7 @@ def test_qemu_playwright_list_button_runs_the_e2e_script_not_the_docker_runner(
     assert "--list" in line                          # the enumerate verb, not a boot
 
 
+@_RUNS_BASH_STUB
 def test_qemu_playwright_list_carries_the_ports_and_the_spec_filter(wiz, qapp):
     """The ports and the passthrough travel through the OPTIONS/ENVELOPE, so what
     the preview shows and what the child gets are one value."""
@@ -1005,6 +1039,7 @@ def test_qemu_playwright_list_carries_the_ports_and_the_spec_filter(wiz, qapp):
     assert argv[-3:] == ["--", "--grep", "@smoke"], argv
 
 
+@_RUNS_BASH_STUB
 def test_qemu_playwright_preview_is_a_dry_run_and_never_a_boot(wiz, qapp):
     page = _qemu_page(wiz)
     page.pw_preview_btn.click()
@@ -1016,7 +1051,7 @@ def test_qemu_playwright_preview_is_a_dry_run_and_never_a_boot(wiz, qapp):
 def test_qemu_playwright_run_refuses_without_root_and_spawns_nothing(wiz):
     """The Studio must never reach for sudo. The refusal is stated BEFORE the spawn,
     inline (no modal), and names the containerized route."""
-    if os.geteuid() == 0:
+    if hasattr(os, "geteuid") and os.geteuid() == 0:
         pytest.skip("running as root: the non-root refusal cannot be exercised here")
     page = _qemu_page(wiz)
     assert not page.pw_run_btn.isEnabled(), "the Run button was live without root"
@@ -1031,6 +1066,7 @@ def test_qemu_playwright_run_refuses_without_root_and_spawns_nothing(wiz):
     assert page.pw_list_btn.isEnabled() and page.pw_preview_btn.isEnabled()
 
 
+@_RUNS_BASH_STUB
 def test_qemu_playwright_real_run_argv_when_root_is_available(wiz, qapp, monkeypatch,
                                                               fake_generator):
     """The BOOT argv, asserted on the child — with the root gate stubbed open at its
@@ -1057,6 +1093,7 @@ def test_qemu_playwright_real_run_argv_when_root_is_available(wiz, qapp, monkeyp
         assert flag in line, f"{flag} missing from the boot argv"
 
 
+@_RUNS_BASH_STUB
 def test_qemu_playwright_preview_matches_what_the_child_receives(wiz, qapp):
     """The printed command is the spawned command. A preview that can drift from the
     run is the failure mode the Run-envelope box's own docstring exists to prevent."""
