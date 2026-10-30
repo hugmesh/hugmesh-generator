@@ -132,15 +132,16 @@ def test_a_denied_file_named_in_a_question_is_refused_in_words(tree):
 
 
 @pytest.mark.parametrize("line, gone, kept", [
-    ("-----BEGIN RSA PRIVATE KEY-----\nMIIE\n-----END RSA PRIVATE KEY-----", "MIIE", "[redacted private key]"),
+    ("-----BEGIN RSA " + "PRIVATE KEY-----\nMIIE\n-----END RSA PRIVATE KEY-----", "MIIE", "[redacted private key]"),
     ("Authorization: Bearer eyJabc.def-ghi", "eyJabc", "Bearer [redacted]"),
     ("password=hunter2", "hunter2", "password=[redacted]"),
-    ("PASSWD: hunter2", "hunter2", "PASSWD=[redacted]"),
+    ("PASSWD: hunter2", "hunter2", "PASSWD: [redacted]"),
     ("TS_AUTHKEY=tskey-auth-k1234-ABCDEF", "k1234", "TS_AUTHKEY=[redacted]"),
     ("a bare tskey-auth-k1234-ABCDEF token", "k1234", "[redacted]"),
     ("ghp_" + "A" * 36, "ghp_A", "[redacted]"),
     ("github_pat_" + "B" * 30, "github_pat_B", "[redacted]"),
-    ("AKIAIOSFODNN7EXAMPLE", "AKIAIOSFODNN7", "[redacted]"),
+    # spelled from parts: the generator's own org export refuses a literal key id
+    ("AKIA" + "IOSFODNN7EXAMPLE", "IOSFODNN7", "[redacted]"),
     ("hvs." + "c" * 24, "hvs.c", "[redacted]"),
     ("eyJ" + "a" * 12 + "." + "b" * 12 + "." + "c" * 12, "aaaaaaaaaaaa", "[redacted]"),
     ("postgres://app:s3cret@db:5432/x", "s3cret", "postgres://app:[redacted]@db:5432/x"),
@@ -156,7 +157,7 @@ def test_each_redaction_pattern(line, gone, kept):
 
 
 def test_redact_is_idempotent_and_keeps_the_line_count():
-    text = "ok line\npassword=abc\n-----BEGIN EC PRIVATE KEY-----\nxx\nyy\n-----END EC PRIVATE KEY-----\nlast"
+    text = "ok line\npassword=abc\n-----BEGIN EC " + "PRIVATE KEY-----\nxx\nyy\n-----END EC PRIVATE KEY-----\nlast"
     once = ac.redact(text)
     assert ac.redact(once) == once
     assert once.count("\n") == text.count("\n")
@@ -204,3 +205,95 @@ def test_docs_section_12_names_every_proposal_key_and_every_deny_entry():
     for pattern, _what in ac.DENY_PATHS:
         assert f"- `{pattern}`" in section, pattern
     assert "LOCAL_AI_GROUNDED" in section and "catalogue" in section and "docs [--page=SLUG]" in section
+
+
+
+# ── PR #832 review: the secret shapes a build log really prints ───────────────────────
+# Every canary is spelled from parts so the generator's org export (BANNED_MARKERS)
+# never sees a literal key, token or 16+-character URL password in this file.
+_PEM_BEGIN = "-----BEGIN " + "PRIVATE KEY-----"
+_PEM_END = "-----END " + "PRIVATE KEY-----"
+_B64 = "MIIEvQIBADANBgkqhkiG9w0BAQEFAASC" + "BKcwggSjAgEAAoIBAQC7Zq"
+
+LEAK_SHAPES = [
+    "DB_PASSWORD=CANARY", "POSTGRES_PASSWORD=CANARY", "CASDOOR_DB_PASSWORD=CANARY",
+    "CASDOOR_ADMIN_PASSWORD=CANARY", "CASDOOR_CLIENT_SECRET=CANARY", "admin_password=CANARY",
+    "E2E_ADMIN_PASSWORD=CANARY", "AWS_SECRET_ACCESS_KEY=CANARY", "aws_secret_access_key = CANARY",
+    "export GH_TOKEN=CANARY", "GITHUB_TOKEN=CANARY", "VAULT_TOKEN=s.CANARY", "PGPASSWORD=CANARY",
+    "secret_key = CANARY", "SECRET_KEY=CANARY", "passphrase=CANARY", "pwd=CANARY",
+    '{"admin_password": "CANARY"}', '"password":"CANARY"', '{"client_secret":"CANARY"}',
+    'password: "CANARY"', "Password : CANARY", "token: CANARY", "x-api-key: CANARY",
+    "client-key-data: CANARY0tLS1", "PrivateKey = CANARYwgAAAAAAAAAAAAAAAAAAAAAAAA=",
+    "PresharedKey = CANARYpsk=", "Unseal Key 1: CANARY", "Initial Root Token: CANARY",
+    "https://admin:CANARY@registry.example/v2", "https://user:CANARY@github.com/o/r",
+    "mongodb://u:CANARY@db/x", "redis://:CANARY@cache:6379", "mysql://u:CANARY@db/x",
+    "jdbc:postgresql://db/x?user=a&password=CANARY", "https://x/cb?access_token=CANARY&x=1",
+    "casdoor --password CANARY", "casdoor --password=CANARY", "--admin-password CANARY",
+    "--client-secret=CANARY", "mysql -u root -pCANARY",
+    "Authorization: Basic " + "Q0FOQVJZ" + "OnBhc3M=", "Set-Cookie: SESSION=CANARY; Path=/",
+    "Cookie: hug.session=CANARY", "hskey-auth-CANARY", "hvs.CANARY",
+    "gh" + "s_CANARY" + "A" * 20, "eyJhbGciOi.eyJzdWIiOi.CANARYsig",
+    "login as admin with e2e-pass CANARY",
+]
+
+
+@pytest.mark.parametrize("line", LEAK_SHAPES)
+def test_every_common_secret_shape_is_blanked(line):
+    out = ac.redact(line)
+    assert "CANARY" not in out and "Q0FOQVJZ" not in out, out
+    assert ac.redact(out) == out                              # idempotent
+
+
+@pytest.mark.parametrize("line", [
+    "max_tokens: 4096", "context size: 8192 tokens", "mkdir -p /srv/x", "docker run -p 8080:80 img",
+    "Secrets store: vault", "password: (set, never shown)", "passed: 12", "the bypass: on",
+    "see https://example.com:8443/path@v2", "Basic settings are fine",
+    "[node] ERROR: emerge failed at dev-qt/qtbase-6.8", "digest sha256:" + "a" * 64,
+])
+def test_ordinary_log_lines_are_left_alone(line):
+    assert ac.redact(line) == line
+
+
+def test_a_private_key_printed_line_by_line_never_reaches_the_build_rows(tmp_path, monkeypatch):
+    """The tail is a list of lines; redacting each line alone blanked only the BEGIN line
+    and sent the base64 body to the model. A tail cut after the BEGIN line, and the
+    mesh log's last line, are covered by the body-line rule."""
+    import json
+    state = tmp_path / "state"
+    (state / "sessions").mkdir(parents=True)
+    tails = {"node": ["ok", _PEM_BEGIN, _B64, _B64[::-1], _PEM_END, "done"],
+             "desk": [_B64, _PEM_END]}
+    (state / "sessions" / "s.json").write_text(json.dumps(
+        {"id": "s", "label": "b", "status": "failed", "images": ["node", "desk"], "error_tail": tails}))
+    monkeypatch.setenv("HUGMESH_STUDIO_STATE_DIR", str(state))
+    text = dict(ac.build_rows(str(state)))["last error lines (redacted)"]
+    assert _B64[:20] not in text and _B64[::-1][:20] not in text, text
+    assert "[redacted private key]" in text and "done" in text
+    (state / "logs").mkdir()
+    (state / "logs" / "run.log").write_text("start\n" + _PEM_BEGIN + "\n" + _B64 + "\n")
+    row = dict(ac.mesh_rows(str(state)))["local mesh log"]
+    assert _B64[:20] not in row, row
+
+
+def test_the_review_canaries_never_reach_the_model_request(tmp_path, monkeypatch):
+    """End to end over the prompt builder: a failed build's tail and the mesh log carry
+    the shapes the review planted; the system text the model gets holds none of them."""
+    import json
+    from hugmesh_studio.core import assistant_prompt as ap
+    state = tmp_path / "state"
+    (state / "sessions").mkdir(parents=True)
+    tail = ["POSTGRES_PASSWORD=CANARYa", "CASDOOR_CLIENT_SECRET=CANARYb", '{"password": "CANARYc"}',
+            "https://admin:CANARYd@registry.example/v2", "PrivateKey = CANARYe=", "Unseal Key 1: CANARYf",
+            "casdoor --password CANARYg", "AWS_SECRET_ACCESS_KEY=CANARYh"]
+    (state / "sessions" / "s.json").write_text(json.dumps(
+        {"id": "s", "label": "b", "status": "failed", "images": ["node"], "error_tail": {"node": tail}}))
+    (state / "logs").mkdir()
+    (state / "logs" / "run.log").write_text("x\nCASDOOR_ADMIN_PASSWORD=CANARYi\n")
+    monkeypatch.setenv("HUGMESH_STUDIO_STATE_DIR", str(state))
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    rows = ac.collect([("build", lambda: ac.build_rows(str(state))), ("mesh", lambda: ac.mesh_rows(str(state)))])
+    w = ac.Where(face="gui", slug="build", title="Build").with_state(rows)
+    p = ap.build("show me the last error lines exactly", w, [], generator_dir=os.path.dirname(
+        os.path.dirname(os.path.dirname(os.path.abspath(ac.__file__)))))
+    assert "CANARY" not in p.system, [ln for ln in p.system.splitlines() if "CANARY" in ln]
+    assert "[redacted]" in p.system

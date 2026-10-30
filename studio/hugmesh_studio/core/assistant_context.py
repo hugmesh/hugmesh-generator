@@ -37,7 +37,7 @@ from dataclasses import dataclass, field, replace
 from typing import Any, Callable, Iterable, Optional
 
 __all__ = [
-    "Where", "Row", "tokens", "render_where", "redact", "scrub_rows", "DENY_PATHS",
+    "Where", "Row", "tokens", "render_where", "redact", "redact_lines", "scrub_rows", "DENY_PATHS",
     "DENY_BASENAME_GLOBS", "SECRET_KEY_RE", "is_denied_path", "denied_reason",
     "build_rows", "mesh_rows", "assistant_rows", "code_rows", "collect", "COLLECT_BUDGET_S",
     "FACE_WORDS", "UNAVAILABLE", "domain_rows_from", "brand_rows_from",
@@ -162,24 +162,69 @@ def is_denied_path(path: str, **kw) -> bool:
 
 
 # ── redaction ────────────────────────────────────────────────────────────────────────
-_REDACT_RULES: tuple[tuple[re.Pattern, str], ...] = (
-    (re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----",
-                re.S), "[redacted private key]"),
-    (re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----[^\n]*"), "[redacted private key]"),
-    (re.compile(r"Bearer [A-Za-z0-9._\-]+"), "Bearer [redacted]"),
-    (re.compile(r"(?i)\b(password|passwd|secret|token|api[_-]?key|auth[_-]?key|authkey"
-                r"|client_secret|ts_authkey|tskey)\s*[=:]\s*(?!\[redacted\]|\(set,)\S+"),
-     r"\1=[redacted]"),
-    (re.compile(r"tskey-[a-z]+-[A-Za-z0-9\-]+"), "[redacted]"),
-    (re.compile(r"ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}"), "[redacted]"),
+#: The words that make a key secret, wherever they sit in it: ``POSTGRES_PASSWORD``,
+#: ``CASDOOR_CLIENT_SECRET``, ``x-api-key``, ``PrivateKey``, ``aws_secret_access_key``.
+#: (``\b`` does NOT fire after ``_``, so a rule anchored on ``\bpassword`` skipped every
+#: prefixed env var: PR #832 review.)
+_SECRET_WORDS = (r"(?:password|passwd|passphrase|pwd|secret|token|api[_-]?key|apikey"
+                 r"|auth[_-]?key|authkey|private[_-]?key|privkey|access[_-]?key|client[_-]?key"
+                 r"|preshared[_-]?key|credentials?|tskey)")
+#: A key holding one of them (an optional quote around it, as JSON writes it); a plural
+#: "tokens" (a model's context size) is not a secret.
+_SECRET_KEY = r"[\w.-]*" + _SECRET_WORDS + r"[\w.-]*(?<![tT][oO][kK][eE][nN][sS])"
+_NOT_YET = r"(?!\[redacted|\(set,)"
+
+_REDACT_RULES: tuple[tuple[re.Pattern, Any], ...] = (
+    # key blocks: whole, a BEGIN line on its own, and a bare base64 body line (a log
+    # printed line by line, or a tail that cut the BEGIN line off)
+    (re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY(?: BLOCK)?-----.*?-----END [A-Z ]*PRIVATE KEY(?: BLOCK)?-----",
+                re.S), lambda m: "[redacted private key]" + "\n" * m.group(0).count("\n")),
+    (re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY(?: BLOCK)?-----[^\n]*"), "[redacted private key]"),
+    (re.compile(r"(?m)^(\[[^\]\n]*\][ \t]*)?[ \t]*(?=[^\n]*[A-Z])(?=[^\n]*[a-z])(?=[^\n]*[0-9])"
+                r"[A-Za-z0-9+/]{40,}={0,2}[ \t]*$"), r"\1[redacted key material]"),
+    # headers
+    (re.compile(r"Bearer [A-Za-z0-9._\-+/=]+"), "Bearer [redacted]"),
+    (re.compile(r"(?i)(authorization:[ \t]*basic)[ \t]+" + _NOT_YET + r"\S+"), r"\1 [redacted]"),
+    (re.compile(r"(?i)\b((?:set-)?cookie:[ \t]*)(?![ \t])" + _NOT_YET + r"[^\n]+"), r"\1[redacted]"),
+    # Vault's init output
+    (re.compile(r"(?i)\b(unseal key[ \t]*\d*[ \t]*:[ \t]*)" + _NOT_YET + r"\S+"), r"\1[redacted]"),
+    # credentials in any URL (postgres, redis, mongodb, https, ...)
+    (re.compile(r"(?i)\b([a-z][a-z0-9+.-]*://[^:/@\s]*:)" + _NOT_YET + r"[^@\s/]+@"), r"\1[redacted]@"),
+    (re.compile(r"(r2dbc:[^\s:]*:[^@\s/]*?)(?<=:)" + _NOT_YET + r"[^@\s]+@"), r"\1[redacted]@"),
+    # command-line flags: --password X, --admin-password=X, --client-secret X ...
+    (re.compile(r"(?i)(?<![\w-])(--?[\w-]*(?:password|passwd|passphrase|secret|token|api-?key|auth-?key)"
+                r"[\w-]*)(?<!tokens)([ \t]+|=)(?!-)" + _NOT_YET + r"[\"']?[^\s\"']+[\"']?"),
+     r"\1\2[redacted]"),
+    (re.compile(r"(?i)\b(mysql|mariadb|mysqldump|mysqladmin)\b([^\n]*?[ \t])-p(?![ \t])" + _NOT_YET + r"\S+"),
+     r"\1\2-p[redacted]"),
+    # key = value, key: value, "key": "value", export KEY=value
+    (re.compile(r"(?i)([\"']?)(" + _SECRET_KEY + r")\1([ \t]*[=:][ \t]*)([\"']?)" + _NOT_YET +
+                r"(?=[^\s\"'])[^\s\"',;&}]+"), r"\1\2\1\3\4[redacted]"),
+    # token shapes on their own
+    (re.compile(r"(?:tskey|hskey)-[a-z]+-[A-Za-z0-9\-]+"), "[redacted]"),
+    (re.compile(r"gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}"), "[redacted]"),
     (re.compile(r"AKIA[0-9A-Z]{16}"), "[redacted]"),
-    (re.compile(r"hvs\.[A-Za-z0-9]{20,}"), "[redacted]"),
-    (re.compile(r"eyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}"), "[redacted]"),
-    (re.compile(r"(postgres(?:ql)?://[^:/\s]+:)[^@\s]+@"), r"\1[redacted]@"),
-    (re.compile(r"(r2dbc:[^\s:]*:[^@\s/]*?)(?<=:)[^@\s]+@"), r"\1[redacted]@"),
+    (re.compile(r"\bhv[sbr]\.[A-Za-z0-9_-]{4,}"), "[redacted]"),
+    (re.compile(r"xox[baprs]-[A-Za-z0-9-]{10,}"), "[redacted]"),
+    (re.compile(r"\bsk-[A-Za-z0-9_-]{20,}"), "[redacted]"),
+    (re.compile(r"eyJ[A-Za-z0-9_\-]{5,}\.[A-Za-z0-9_\-]{5,}\.[A-Za-z0-9_\-]{3,}"), "[redacted]"),
     (re.compile(r"/home/[^/\s]+/\.local/share/hugmesh-local-only[^\s]*"), "[redacted path]"),
-    (re.compile(r"\b(e2e-[a-z0-9_-]+)\s*/\s*\S+"), r"\1 / [redacted]"),
+    (re.compile(r"\b(e2e-[a-z0-9_-]+)\s*/\s*" + _NOT_YET + r"\S+"), r"\1 / [redacted]"),
+    (re.compile(r"\be2e-pass\b(?:[ \t]+\S+)?"), "[redacted]"),
 )
+
+
+def redact_lines(lines: Iterable) -> "list[str]":
+    """Redact a run of log lines AS ONE TEXT, then split it again: a private key printed
+    line by line has its BEGIN, body and END on separate lines, and a per-line pass
+    blanked only the BEGIN line (PR #832 review)."""
+    lines = [str(x) for x in lines]
+    if not lines:
+        return []
+    out = redact("\n".join(lines)).split("\n")
+    # a blanked key block keeps its line breaks (redact keeps the line count): those
+    # now-empty lines carry nothing, so they are dropped here
+    return [ln for ln, was in zip(out, lines) if ln.strip() or not was.strip()]
 
 
 def redact(text: str) -> str:
@@ -426,12 +471,13 @@ def _load_sessions_at(state_dir: str) -> list:
 def _error_tail(session) -> "list[str]":
     tail = getattr(session, "error_tail", None) or {}
     lines: list = []
+    # each image's lines are redacted as ONE text before the tail is cut (redact_lines)
     if isinstance(tail, dict):
         for image, ls in tail.items():
-            for ln in (ls or [])[-_TAIL_LINES:]:
+            for ln in redact_lines(ls or [])[-_TAIL_LINES:]:
                 lines.append(f"[{image}] {ln}")
     elif isinstance(tail, list):
-        lines = [str(x) for x in tail]
+        lines = redact_lines(tail)
     lines = lines[-_TAIL_LINES:]
     return [redact(str(ln))[:_TAIL_CHARS] for ln in lines]
 
@@ -470,7 +516,8 @@ def mesh_rows(state_dir: str) -> "list[tuple[str, str]]":
     try:
         with open(path, "rb") as fh:
             fh.seek(max(0, os.path.getsize(path) - 4096))
-            data = fh.read().decode("utf-8", "replace").strip().splitlines()
+            # the whole read redacted as one text (a key block spans lines), then the last
+            data = redact(fh.read().decode("utf-8", "replace")).strip().splitlines()
             line = data[-1] if data else ""
     except OSError:
         pass
