@@ -638,8 +638,10 @@ paths, not a 404).
     finds such a container it ignores its empty value and says so;
   - `docker start`, the Studio's Start button and `up --no-deps` skip `depends_on`.
     For those, the four consumers carry `JAVA_TOOL_OPTIONS` that, with an empty value,
-    names a JVM option that does not exist, so the container exits 1 at once with
-    `Unrecognized VM option 'ROUTE_ACCESS_DB_PASSWORD_REQUIRED.see.tests/stack/gen-route-access-env.sh'`.
+    names a JVM option that does not exist, so the JVM exits 1 before the app starts
+    with `Unrecognized VM option 'ROUTE_ACCESS_DB_PASSWORD_REQUIRED.see.tests/stack/gen-route-access-env.sh'`
+    (the services' `restart: on-failure:5` retries that five times, then the
+    container stays down).
     With a value it is a no-op `-Dhugmesh.guard.…` property. Neither guard ever sees
     the password itself (both use `${ROUTE_ACCESS_DB_PASSWORD:+…}`).
   `docker compose ps`, `logs`, `exec` and `down` keep working with the value empty (a
