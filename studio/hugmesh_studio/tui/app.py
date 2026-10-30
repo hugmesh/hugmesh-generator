@@ -55,12 +55,10 @@ def _load_session(session_id: str) -> build_sessions.BuildSession | None:
 
 def _default_generator_dir() -> str:
     # studio/ lives inside the generator repo; default to the repo root (the
-    # same derivation the GUI entry point uses).
+    # same derivation, and the same fallbacks, the GUI entry point uses).
+    from ..core import generator_dir
     here = os.path.dirname(os.path.abspath(__file__))
-    repo = os.path.abspath(os.path.join(here, "..", "..", ".."))
-    if os.path.exists(os.path.join(repo, "build-x86-host-stage4.sh")):
-        return repo
-    return os.getcwd()
+    return generator_dir.resolve(os.path.abspath(os.path.join(here, "..", "..", "..")))
 
 
 def main(argv=None, *, inp=None, out=None) -> int:

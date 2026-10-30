@@ -753,9 +753,13 @@ class BuildDriver:
 
     def builder_image_missing(self, backend: str | None = None) -> bool:
         """True iff backend is docker, the daemon is reachable, but the builder image has
-        not been built yet — exactly the condition the GUI should offer to fix."""
+        not been built yet — exactly the condition the GUI should offer to fix. Only when
+        the generator dir HAS a Dockerfile.build: from a folder that is not a checkout
+        (the Windows install folder, before #827) the offered build could only fail."""
         backend = backend or self.host.default_backend
-        return backend == "docker" and self.host.has_docker and not self._image_present()
+        return (backend == "docker" and self.host.has_docker
+                and os.path.isfile(os.path.join(self.generator_dir, "Dockerfile.build"))
+                and not self._image_present())
 
     def preflight(self, cfg: ImageConfig, backend: str | None = None) -> list[str]:
         """Return a list of human-readable problems that would stop a build (empty = OK)."""

@@ -33,12 +33,36 @@ from .core import crashlog, no_console
 
 
 def _default_generator_dir() -> str:
-    # studio/ lives inside the generator repo; default to the repo root.
+    # studio/ lives inside the generator repo; a source run defaults to the repo root.
+    # The frozen exe has none, so see core/generator_dir for the rest of the order.
+    from .core import generator_dir
     here = os.path.dirname(os.path.abspath(__file__))
-    repo = os.path.abspath(os.path.join(here, "..", ".."))
-    if os.path.exists(os.path.join(repo, "build-x86-host-stage4.sh")):
-        return repo
-    return os.getcwd()
+    return generator_dir.resolve(os.path.abspath(os.path.join(here, "..", "..")))
+
+
+def _choose_generator_dir(current: str, QtWidgets) -> str:  # noqa: N803
+    """Ask for the checkout when ``current`` is not one, and remember the answer. A
+    cancel keeps ``current``: the pages then say what is missing, as they always did."""
+    from .core import generator_dir
+    while not generator_dir.is_checkout(current):
+        box = QtWidgets.QMessageBox(QtWidgets.QMessageBox.Icon.Information,
+                                    "Choose your hugmesh-generator folder",
+                                    generator_dir.not_a_checkout_message(current))
+        ok = box.addButton("Choose folder…", QtWidgets.QMessageBox.ButtonRole.AcceptRole)
+        box.addButton(QtWidgets.QMessageBox.StandardButton.Cancel)
+        box.exec()
+        if box.clickedButton() is not ok:       # exec()'s return differs by binding
+            return current
+        picked = QtWidgets.QFileDialog.getExistingDirectory(
+            None, "hugmesh-generator folder", os.path.expanduser("~"))
+        if not picked:
+            return current
+        current = os.path.abspath(picked)
+    try:
+        generator_dir.save(current)
+    except OSError:
+        pass                                   # remembered next time or not: never fatal
+    return current
 
 
 def _env_flag(name: str) -> bool:
@@ -593,6 +617,7 @@ def main(argv=None) -> int:
             instance.send(instance.CMD_RESET)
         return 0
 
+    args.generator_dir = _choose_generator_dir(args.generator_dir, QtWidgets)
     shell = shell_mod.StudioShell(
         args.generator_dir,
         remember_roles_for_passwordless_login=args.remember_roles_for_passwordless_login,
