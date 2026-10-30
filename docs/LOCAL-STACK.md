@@ -606,9 +606,10 @@ paths, not a 404).
   Monitor scale button and a hand-run `docker compose -f tests/stack/compose.local.yaml`
   all get it. `tests/stack/gen-route-access-env.sh` writes it (hex, so it survives the
   r2dbc URL) and owns only that key: other lines you keep in `tests/stack/.env` are left
-  alone. Every `make stack-*` target that runs compose runs the generator first as its
-  own step (`stack-route-access-env`), so a generator failure stops make instead of
-  starting containers with an empty password; the Studio's scale runs it too and refuses
+  alone. `make stack-up` runs the generator first as its own step
+  (`stack-route-access-env`), so a generator failure stops make instead of creating
+  containers with an empty password (targets that create nothing, such as `stack-ps`,
+  only read the key); the Studio's scale runs it too and refuses
   on failure. It is never rotated, because the postgres image only reads
   `POSTGRES_PASSWORD` when it initialises an empty volume: `make stack-halt` keeps both,
   `make stack-down` drops the volume and then strips the key.

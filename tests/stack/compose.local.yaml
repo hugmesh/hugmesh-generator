@@ -23,7 +23,7 @@
 # NO real secrets live here. The route-access-db OWNER password is the exception:
 # it is NOT spelled here at all. ROUTE_ACCESS_DB_PASSWORD lives in the
 # gitignored, per-checkout tests/stack/.env (compose loads it by itself for this
-# file; tests/stack/gen-route-access-env.sh writes the key, `make stack-*` and
+# file; tests/stack/gen-route-access-env.sh writes the key, `make stack-up` and
 # scripts/stack-up.ps1 run it first and also pass the value explicitly). A hand-run
 # compose that adds `--env-file X` must also pass `--env-file tests/stack/.env`:
 # compose skips .env once any --env-file is given. With no value, route-access-db

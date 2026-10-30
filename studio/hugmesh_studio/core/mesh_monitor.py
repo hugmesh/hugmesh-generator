@@ -1922,8 +1922,8 @@ def scale(generator_dir: str, node, unit: MeshUnit, replicas: int, *,
     # A compose `up --scale` CREATES containers outside make, so the route-access-db
     # owner password must already be in tests/stack/.env (compose.local.yaml no
     # longer spells it): a new gateway replica created with an empty one cannot load
-    # the route table that drives RBAC. The generator is the same one every
-    # `make stack-*` target runs first; a failure refuses the scale with its reason.
+    # the route table that drives RBAC. The generator is the same one
+    # `make stack-up` runs first; a failure refuses the scale with its reason.
     note = ""
     if unit.scale.kind == "compose-service":
         ensure = getattr(node, "ensure_route_access_env", None)

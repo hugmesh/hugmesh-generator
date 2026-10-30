@@ -93,7 +93,7 @@ $env:STACK_SRC = '../../.stack-src'
 
 # route-access-db OWNER password: compose.local.yaml reads ${ROUTE_ACCESS_DB_PASSWORD:-}
 # and no longer spells it. Twin of tests/stack/gen-route-access-env.sh (which every
-# `make stack-*` target runs first); same contract, read that script's header:
+# `make stack-up` runs first); same contract, read that script's header:
 #  - the value lives in tests\stack\.env, compose's OWN auto-loaded env file, so a
 #    hand-run `docker compose -f tests\stack\compose.local.yaml ...` gets it too;
 #  - this script owns ONE key there: every other line an operator keeps is kept;

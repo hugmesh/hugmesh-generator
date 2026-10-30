@@ -72,8 +72,12 @@
 #
 # Usage: gen-route-access-env.sh            ensure the key exists (quiet when it does)
 #        gen-route-access-env.sh --print    ensure, then print ONLY the value on stdout
-#                                           (for STACK_ENV's command substitution;
-#                                           make echoes the substitution, not the value)
+#        gen-route-access-env.sh --read     READ ONLY: print the value if the file holds
+#                                           one, else nothing; never probes docker, never
+#                                           writes (STACK_ENV's command substitution: make
+#                                           echoes the substitution, not the value, and a
+#                                           read-only target such as stack-ps must not
+#                                           mint or adopt anything)
 #        gen-route-access-env.sh --remove   strip this script's block and key from the
 #                                           file; delete the file if nothing else is left
 # Env:   ROUTE_ACCESS_DB_ENV          the file (default tests/stack/.env)
@@ -100,6 +104,7 @@ ME=gen-route-access-env.sh
 mode=ensure
 case "${1:-}" in
   --print) mode=print ;;
+  --read) mode=read ;;
   --remove) mode=remove ;;
   "") ;;
   *) echo "${ME}: unknown argument: $1" >&2; exit 2 ;;
@@ -134,6 +139,18 @@ replace_file() {
   chmod 600 "${tmp}"
   mv -f "${tmp}" "${ENV_FILE}"
 }
+
+if [ "${mode}" = read ]; then
+  val="$(read_key "${ENV_FILE}")"
+  [ -n "${val}" ] || exit 0
+  if ! url_safe "${val}"; then
+    echo "${ME}: ${KEY} in ${ENV_FILE} holds a character that is not" >&2
+    echo "  URL-unreserved; the r2dbc URL would decode it differently. Fix the file." >&2
+    exit 1
+  fi
+  printf '%s' "${val}"
+  exit 0
+fi
 
 if [ "${mode}" = remove ]; then
   [ -f "${ENV_FILE}" ] || exit 0

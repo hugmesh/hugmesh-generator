@@ -25,9 +25,11 @@
 #       when nothing else is left);
 #   (6) compose.local.yaml reads ${ROUTE_ACCESS_DB_PASSWORD:-} in all five places and
 #       spells no route-access-db password; tests/stack/.env is gitignored;
-#   (7) the Makefile: every target that expands $(STACK_ENV) depends on the
-#       stack-route-access-env ensure step, and BEHAVIOURALLY a generator failure
-#       stops make before compose runs while success hands compose the file's value;
+#   (7) the Makefile: stack-up (the target that creates containers) depends on the
+#       stack-route-access-env ensure step and the read-only targets do not;
+#       BEHAVIOURALLY a generator failure stops make stack-up before compose runs, a
+#       read-only target neither writes the file nor asks docker, and a present key
+#       reaches compose even over an exported empty variable;
 #       stack-down/stack-clean strip the key only AFTER `down -v`;
 #   (8) scripts/stack-up.ps1 (the Windows path) follows the same contract; with pwsh
 #       on PATH (GitHub's ubuntu runners have it) its block is RUN against a stub.
@@ -156,6 +158,14 @@ E4e="${WORK}/empty.env"; printf 'FOO=1\nROUTE_ACCESS_DB_PASSWORD=\n' > "${E4e}"
 out4e="$(gen "${E4e}" 0 --print 2>/dev/null)"; rc=$?
 if [ "${rc}" -eq 0 ] && [[ "${out4e}" =~ ^[0-9a-f]{48}$ ]] && [ "$(n_keys "${E4e}")" -eq 1 ]; then ok "an EMPTY key is filled in place (one key line left, not two)"; else bad "empty key: rc=${rc}, $(n_keys "${E4e}") key lines"; fi
 
+E4r="${WORK}/read-none.env"; : > "${WORK}/log4r"
+out4r="$(STUB_LOG="${WORK}/log4r" gen "${E4r}" 1 --read 2>/dev/null)"; rc=$?
+if [ "${rc}" -eq 0 ] && [ -z "${out4r}" ] && [ ! -e "${E4r}" ] && [ ! -s "${WORK}/log4r" ]; then ok "--read with no key prints nothing, writes nothing, never asks docker"; else bad "--read with no key: rc=${rc}, file $( [ -e "${E4r}" ] && echo WRITTEN || echo absent), docker calls $(wc -l < "${WORK}/log4r")"; fi
+out4r2="$(gen "${E4q}" 0 --read 2>/dev/null)"
+if [ "${out4r2}" = deadbeef42 ]; then ok "--read prints an existing key"; else bad "--read did not print the existing key"; fi
+gen "${E4}" 0 --read >/dev/null 2>&1; rc=$?
+if [ "${rc}" -ne 0 ]; then ok "--read refuses an unsafe key (rc=${rc})"; else bad "--read passed an unsafe key on"; fi
+
 echo "-- 5) the file is shared: the operator's lines survive --"
 E5="${WORK}/operator.env"
 printf '# my overrides\nPUBLIC_HOST_PORT=9999\nCOMPOSE_PROFILES=social\n\nHUG_WEB_LOCALES="de,fr"\n' > "${E5}"
@@ -200,29 +210,40 @@ if grep -q 'ROUTE_ACCESS_DB_ENV:-${HERE}/.env}' "${GEN}"; then ok "the generator
 
 echo "-- 7) Makefile wiring --"
 MK="${REPO}/Makefile"
-# Static: every target whose recipe expands $(STACK_ENV) lists the ensure step.
-missing="$(python3 - "${MK}" <<'PY'
+# Static: a target whose recipe CREATES containers (`compose … up`) depends on the
+# ensure step; a target that only reads (ps, logs, halt, down, …) must NOT, so that
+# looking at a stack never mints or adopts a password (or probes docker for one).
+wiring="$(python3 - "${MK}" <<'PY'
 import re, sys
 s = open(sys.argv[1], encoding="utf-8").read()
-out, users = [], 0
+creators, missing, readers, extra = 0, [], 0, []
 for m in re.finditer(r"^([A-Za-z0-9_.-]+):([^=\n][^\n]*)\n((?:\t[^\n]*\n|[ \t]*#[^\n]*\n)*)", s, re.M):
-    name, prereqs, body = m.group(1), m.group(2).split("##")[0], m.group(3)
+    name, prereqs, body = m.group(1), m.group(2).split("##")[0].split(), m.group(3)
     if name.startswith("."):
         continue
-    if any("$(STACK_ENV)" in ln for ln in body.splitlines() if ln.startswith("\t")):
-        users += 1
-        if "stack-route-access-env" not in prereqs.split():
-            out.append(name)
-print(users)
-print(" ".join(out))
+    rec = [ln for ln in body.splitlines() if ln.startswith("\t")]
+    if not any("$(STACK_ENV)" in ln for ln in rec):
+        continue
+    if any(re.search(r"\$\(COMPOSE_CMD\).*\s(up|run|create)(\s|$)", ln) for ln in rec):
+        creators += 1
+        if "stack-route-access-env" not in prereqs:
+            missing.append(name)
+    else:
+        readers += 1
+        if "stack-route-access-env" in prereqs:
+            extra.append(name)
+print(creators, readers)
+print(" ".join(missing))
+print(" ".join(extra))
 PY
 )"
-n_users="$(sed -n 1p <<<"${missing}")"; miss="$(sed -n 2p <<<"${missing}")"
-if [ "${n_users:-0}" -ge 9 ] && [ -z "${miss}" ]; then ok "all ${n_users} targets that expand \$(STACK_ENV) depend on stack-route-access-env"; else bad "${n_users:-0} STACK_ENV targets; missing the ensure prerequisite: ${miss:-?}"; fi
+counts="$(sed -n 1p <<<"${wiring}")"; miss="$(sed -n 2p <<<"${wiring}")"; extra="$(sed -n 3p <<<"${wiring}")"
+if [ "${counts%% *}" -ge 1 ] && [ -z "${miss}" ]; then ok "every container-creating STACK_ENV target (${counts%% *}) depends on stack-route-access-env"; else bad "creating targets: ${counts%% *}; missing the ensure prerequisite: ${miss:-?}"; fi
+if [ "${counts##* }" -ge 7 ] && [ -z "${extra}" ]; then ok "none of the ${counts##* } read-only STACK_ENV targets runs the generator"; else bad "read-only targets: ${counts##* }; run the generator anyway: ${extra:-?}"; fi
 if grep -qE '^stack-route-access-env:' "${MK}" && awk '/^stack-route-access-env:/{s=1;next} s&&/^\t/{sub(/^\t/,"");print;exit}' "${MK}" | grep -E '^@?bash tests/stack/gen-route-access-env\.sh$' >/dev/null; then ok "the ensure step runs the generator as its own (status-checked) recipe line"; else bad "stack-route-access-env does not run the generator as a plain recipe line"; fi
 if command -v make >/dev/null 2>&1; then
   up="$(cd "${REPO}" && timeout 60 make -n -o stack-clone -o stack-certs -o stack-m2-check -o stack-mastodon-env stack-up 2>/dev/null)"
-  sub='ROUTE_ACCESS_DB_PASSWORD="$(bash tests/stack/gen-route-access-env.sh --print)"'
+  sub='ROUTE_ACCESS_DB_PASSWORD="$(bash tests/stack/gen-route-access-env.sh --read)"'
   n_compose="$(grep -c ' compose -f tests/stack/compose.local.yaml' <<<"${up}")"
   n_sub="$(grep ' compose -f tests/stack/compose.local.yaml' <<<"${up}" | grep -cF "${sub}")"
   if [ "${n_compose}" -ge 2 ] && [ "${n_sub}" -eq "${n_compose}" ]; then ok "every compose line of stack-up (${n_compose}) passes the value explicitly"; else bad "${n_sub} of ${n_compose} stack-up compose lines pass the value"; fi
@@ -249,15 +270,22 @@ printf '%s\n' "${ROUTE_ACCESS_DB_PASSWORD-<unset>}" >> "${COMPOSE_STUB_LOG}"
 EOF
   chmod +x "${WORK}/bin/compose-stub"
   E7="${WORK}/make.env"; L7="${WORK}/compose.log"; : > "${L7}"
-  (cd "${REPO}" && ROUTE_ACCESS_DB_ENV="${E7}" ROUTE_ACCESS_DB_LEGACY_ENV="${E7}.legacy" \
-     DOCKER="${WORK}/bin/docker" STUB_VOLUME_EXISTS=down COMPOSE_STUB_LOG="${L7}" \
-     timeout 60 make --no-print-directory stack-ps COMPOSE_CMD="${WORK}/bin/compose-stub" >/dev/null 2>&1); rc=$?
-  if [ "${rc}" -ne 0 ] && [ ! -s "${L7}" ] && [ ! -e "${E7}" ]; then ok "generator failure (daemon unreachable) STOPS make (rc=${rc}) before compose runs"; else bad "generator failure: make rc=${rc}, compose ran $(wc -l < "${L7}") time(s)"; fi
-  (cd "${REPO}" && ROUTE_ACCESS_DB_ENV="${E7}" ROUTE_ACCESS_DB_LEGACY_ENV="${E7}.legacy" \
-     DOCKER="${WORK}/bin/docker" STUB_VOLUME_EXISTS=0 COMPOSE_STUB_LOG="${L7}" ROUTE_ACCESS_DB_PASSWORD= \
-     timeout 60 make --no-print-directory stack-ps COMPOSE_CMD="${WORK}/bin/compose-stub" >"${WORK}/make7.out" 2>&1); rc=$?
+  mk7() { # mk7 <volume-state> <make args…> : real make, env file in WORK, stubs only
+    local v="$1"; shift
+    (cd "${REPO}" && ROUTE_ACCESS_DB_ENV="${E7}" ROUTE_ACCESS_DB_LEGACY_ENV="${E7}.legacy" \
+       DOCKER="${WORK}/bin/docker" STUB_VOLUME_EXISTS="${v}" COMPOSE_STUB_LOG="${L7}" ROUTE_ACCESS_DB_PASSWORD= \
+       timeout 60 make --no-print-directory "$@" COMPOSE_CMD="${WORK}/bin/compose-stub")
+  }
+  mk7 down -o stack-clone -o stack-certs -o stack-m2-check -o stack-mastodon-env stack-up >/dev/null 2>&1; rc=$?
+  if [ "${rc}" -ne 0 ] && [ ! -s "${L7}" ] && [ ! -e "${E7}" ]; then ok "generator failure (daemon unreachable) STOPS make stack-up (rc=${rc}) before compose runs"; else bad "generator failure: make stack-up rc=${rc}, compose ran $(wc -l < "${L7}") time(s)"; fi
+  : > "${WORK}/log7"
+  STUB_LOG="${WORK}/log7" mk7 1 stack-ps >/dev/null 2>&1; rc=$?
+  if [ "${rc}" -eq 0 ] && [ ! -e "${E7}" ] && [ ! -s "${WORK}/log7" ] && [ "$(cat "${L7}")" = "" ]; then ok "a read-only target (stack-ps) with no key: no file written, docker never asked, compose ran with an empty value"; else bad "stack-ps with no key: rc=${rc}, file $( [ -e "${E7}" ] && echo WRITTEN || echo absent), docker calls $(wc -l < "${WORK}/log7")"; fi
+  : > "${L7}"
+  mk7 0 stack-route-access-env >/dev/null 2>&1
+  mk7 0 stack-ps >"${WORK}/make7.out" 2>&1; rc=$?
   v7="$(file_val "${E7}" 2>/dev/null)"
-  if [ "${rc}" -eq 0 ] && [[ "${v7}" =~ ^[0-9a-f]{48}$ ]] && [ "$(cat "${L7}")" = "${v7}" ]; then ok "success: compose got exactly the file's value, even with an EMPTY one exported in the shell"; else bad "success path: rc=${rc}, compose saw len $(head -c 200 "${L7}" | wc -c), file len ${#v7}"; fi
+  if [ "${rc}" -eq 0 ] && [[ "${v7}" =~ ^[0-9a-f]{48}$ ]] && [ "$(cat "${L7}")" = "${v7}" ]; then ok "with the key present, compose got exactly the file's value, even with an EMPTY one exported in the shell"; else bad "key present: rc=${rc}, compose saw len $(head -c 200 "${L7}" | wc -c), file len ${#v7}"; fi
   if grep -qF "${v7:-no-value}" "${WORK}/make7.out"; then bad "make's output echoes the password value"; else ok "make's own output never contains the value"; fi
 else
   bad "make is not installed — section 7 asserted nothing"

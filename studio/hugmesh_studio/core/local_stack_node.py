@@ -1059,14 +1059,14 @@ class LocalStackNode:
         the volume exists, an unsafe value); ``text`` on success is its stderr, the
         adoption warning when it adopted an existing volume's value, else "".
 
-        Every `make stack-*` target already runs it (the Makefile's
+        `make stack-up` already runs it (the Makefile's
         stack-route-access-env prerequisite). A generator checkout older than the
         script spells the password in its compose file, so there is nothing to
         ensure and the answer is ``(True, "")``; so is a tree whose tests/stack/.env
         already holds a valid key (nothing is spawned). ``project`` pins the compose
         project whose volume and container the generator probes (the scale passes
         its ``-p``)."""
-        # The key is already there and valid (any `make stack-*` or stack-up.ps1 run
+        # The key is already there and valid (any `make stack-up` or stack-up.ps1 run
         # wrote it): _build_env carries it, so no bash is spawned per click — which
         # also keeps a scale working where bash is absent (a stack-up.ps1 box).
         if route_access_password(self.generator_dir):

@@ -2,7 +2,7 @@
 
 compose.local.yaml no longer spells that password: it reads
 ``${ROUTE_ACCESS_DB_PASSWORD:-}``, and the value is the one key
-tests/stack/gen-route-access-env.sh owns in tests/stack/.env. ``make stack-*`` runs
+tests/stack/gen-route-access-env.sh owns in tests/stack/.env. ``make stack-up`` runs
 the generator first, but the Mesh Monitor's scale button runs
 ``docker compose -p hugmesh-local -f … up --scale`` DIRECTLY. Without these two
 pieces a scaled gateway replica was created with an empty password and could not
