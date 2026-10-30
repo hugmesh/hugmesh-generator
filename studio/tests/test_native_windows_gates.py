@@ -202,9 +202,7 @@ def _wl(backend):
 
 
 def test_windows_keys_run_in_the_builder_container():
-    # Spelled with the HOST's path rules: _genkeys_command splits with os.path, and a
-    # literal C:\ path on the Linux job is one relative name with no parent.
-    out = os.path.join(os.path.abspath(os.sep), "out", "sessions", "s1", "keys-node1")
+    out = r"C:\out\sessions\s1\keys-node1"
     args = ["--role", "host", "--out", out, "--random", "--superdomain", "acme.internal"]
     cmd = WorklistDriver._genkeys_command(_wl("docker"), "ignored", "acme", args,
                                           osname="nt")

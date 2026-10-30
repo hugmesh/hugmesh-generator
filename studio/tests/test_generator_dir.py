@@ -173,7 +173,7 @@ class _Recorder:
         self.events = []
 
 
-def _fake_gui(monkeypatch, rec, *, primary=True):
+def _fake_gui(monkeypatch, rec, *, primary=True, tray=False):
     """Fake the modules main() imports for its GUI section, and record the order of the
     instance handshake, the folder question and the shell it builds."""
     import hugmesh_studio.gui as gui_pkg
@@ -192,11 +192,14 @@ def _fake_gui(monkeypatch, rec, *, primary=True):
 
     qtwidgets = types.SimpleNamespace(
         QApplication=QApplication,
-        QSystemTrayIcon=types.SimpleNamespace(isSystemTrayAvailable=lambda: False))
+        QSystemTrayIcon=types.SimpleNamespace(isSystemTrayAvailable=lambda: tray))
 
     class Shell:
         def __init__(self, folder, **_kw):
             rec.events.append(("shell", folder))
+
+        def install_tray(self, **_kw):
+            return types.SimpleNamespace(show=lambda: rec.events.append("tray"))
 
         def __getattr__(self, _name):           # install_quit_guard, open_or_raise, ...
             return lambda *a, **k: None
@@ -249,7 +252,27 @@ def test_a_second_default_launch_is_never_asked(elsewhere, monkeypatch):
 @pytest.mark.parametrize("flag", ["--tray", "--stack-tray"])
 def test_a_tray_only_launch_never_blocks_on_the_question(elsewhere, monkeypatch, flag):
     rec = _Recorder()
-    _fake_gui(monkeypatch, rec)
+    _fake_gui(monkeypatch, rec, tray=True)
     assert app.main([flag, "--generator-dir", elsewhere]) == 0
     assert ("shell", elsewhere) in rec.events
     assert not any(isinstance(e, tuple) and e[0] == "choose" for e in rec.events)
+
+
+@pytest.mark.parametrize("flag", ["--tray", "--stack-tray"])
+def test_a_tray_only_launch_with_no_tray_asks_before_its_wizard(elsewhere, monkeypatch,
+                                                               flag):
+    # no tray means main() opens the wizard instead, and that window needs the checkout
+    rec = _Recorder()
+    _fake_gui(monkeypatch, rec, tray=False)
+    assert app.main([flag, "--generator-dir", elsewhere]) == 0
+    assert ("choose", elsewhere) in rec.events
+    assert ("shell", elsewhere + "-picked") in rec.events
+
+
+@pytest.mark.parametrize("tray_only,tray_available,asks", [
+    (False, True, True), (False, False, True),
+    (True, True, False),          # an autostart tray launch is never blocked by a modal
+    (True, False, True),          # ...but with no tray main() opens the wizard: ask
+])
+def test_who_is_asked_for_the_checkout(tray_only, tray_available, asks):
+    assert app._asks_for_the_checkout(tray_only, tray_available) is asks

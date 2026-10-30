@@ -1376,6 +1376,17 @@ def _snapshot(runner: Runner, path: str, ref: str, workdir: str,
                     # link target, all resolved) is what keeps the write inside
                     tf.extract(member, workdir)
             except (tarfile.FilterError, OSError) as exc:
+                # tarfile leaves a member that failed part-way (a full disk, a file
+                # held open) half-written. That file would be counted, committed and
+                # published, while the plan lists it as dropped: remove it, on every
+                # OS (unlink removes a link itself, never its target).
+                if not member.isdir():
+                    partial = os.path.join(workdir, *member.name.split("/"))
+                    try:
+                        if os.path.lexists(partial):
+                            os.unlink(partial)
+                    except OSError:
+                        pass
                 # a link that points outside the tree, or a name the filter
                 # refuses: left out of the snapshot rather than written anywhere.
                 # On Windows also a path past MAX_PATH (long paths are off by
@@ -2168,6 +2179,11 @@ def result_lines(res: Result) -> list[str]:
 
 #: A word PowerShell hands a program exactly as written (no quote, $, `, ;, comma,
 #: brace, paren or @ for it to read as code).
+#: PowerShell ends a single-quoted string at ANY of these, not only the ASCII one, so
+#: each is doubled inside one: a value with a typographic apostrophe (a folder
+#: named "Magus’ projects", or a brand read from a config someone sent) could
+#: otherwise close the quote and run what followed as a command.
+_PS_QUOTE = re.compile("(['\u2018\u2019\u201a\u201b])")
 _PS_BARE = re.compile(r"[A-Za-z0-9_./\\:=+-]+")
 
 
@@ -2180,7 +2196,7 @@ def _terminal_line(argv: list[str], osname: str | None = None) -> str:
     operator, which runs a quoted program path."""
     if (osname or os.name) != "nt":
         return " ".join(shlex.quote(a) for a in argv)
-    return "& " + " ".join(a if _PS_BARE.fullmatch(a) else "'" + a.replace("'", "''") + "'"
+    return "& " + " ".join(a if _PS_BARE.fullmatch(a) else "'" + _PS_QUOTE.sub(r"\1\1", a) + "'"
                            for a in argv)
 
 

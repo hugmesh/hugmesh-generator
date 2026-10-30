@@ -40,6 +40,14 @@ def _default_generator_dir() -> str:
     return generator_dir.resolve(os.path.abspath(os.path.join(here, "..", "..")))
 
 
+def _asks_for_the_checkout(tray_only: bool, tray_available: bool) -> bool:
+    """Whether this launch shows the checkout chooser. A tray-only launch may be
+    unattended (an autostart entry) and a modal before its icon exists would block it,
+    so it keeps what resolve() found, but only when a tray will really appear: with
+    none, main() opens the wizard instead, and that window needs the checkout."""
+    return not tray_only or not tray_available
+
+
 def _choose_generator_dir(current: str, QtWidgets) -> str:  # noqa: N803
     """Ask for the checkout when ``current`` is not one, and remember the answer. A
     cancel keeps ``current``: the pages then say what is missing, as they always did.
@@ -628,9 +636,9 @@ def main(argv=None) -> int:
     tray_only = args.tray or args.stack_tray
     # After the handshake, so a second DEFAULT launch is never asked. --go-live/--fleet
     # skip the handshake and still ask: their window runs the checkout's scripts and the
-    # operator is right there. A tray-only launch may be unattended (an autostart entry),
-    # and a modal before its icon exists would block it, so it keeps what resolve() found.
-    if not tray_only:
+    # operator is right there. See _asks_for_the_checkout for the tray-only case.
+    if _asks_for_the_checkout(tray_only,
+                              QtWidgets.QSystemTrayIcon.isSystemTrayAvailable()):
         args.generator_dir = _choose_generator_dir(args.generator_dir, QtWidgets)
     shell = shell_mod.StudioShell(
         args.generator_dir,

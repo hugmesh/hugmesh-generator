@@ -194,3 +194,44 @@ def test_a_config_that_loads_still_says_loaded(page, tmp_path):
     said = page.choose(good)
     assert said == [("information", "Loaded", f"Loaded {good}")]
     assert page.wiz.restarted == 1
+
+
+def _handler_of(monkeypatch):
+    """The onexc handler dw._rmtree installs on native Windows, captured unrun."""
+    got = {}
+
+    def fake_rmtree(path, onexc=None, onerror=None):
+        got["h"] = onexc or (lambda f, p, e: onerror(f, p, (type(e), e, None)))
+    monkeypatch.setattr(dw.shutil, "rmtree", fake_rmtree)
+    dw._rmtree("ignored", osname="nt")
+    return got["h"]
+
+
+def test_a_refused_delete_of_a_link_is_not_chmodded_through(tmp_path, monkeypatch):
+    target = tmp_path / "target"
+    target.mkdir()
+    os.chmod(target, stat.S_IREAD | stat.S_IEXEC)
+    link = tmp_path / "link"
+    try:
+        os.symlink(target, link, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("this host cannot make a symlink")
+    before = os.stat(target).st_mode
+    handler = _handler_of(monkeypatch)
+    refused = PermissionError(13, "denied", str(link))
+    with pytest.raises(PermissionError):
+        handler(os.unlink, str(link), refused)
+    assert os.stat(target).st_mode == before
+    os.chmod(target, stat.S_IWRITE | stat.S_IREAD | stat.S_IEXEC)
+
+
+def test_an_error_that_is_not_a_refusal_is_raised_as_it_is(tmp_path, monkeypatch):
+    f = tmp_path / "f"
+    f.write_bytes(b"x")
+    os.chmod(f, stat.S_IREAD)
+    handler = _handler_of(monkeypatch)
+    gone = FileNotFoundError(2, "gone", str(f))
+    with pytest.raises(FileNotFoundError):
+        handler(os.unlink, str(f), gone)
+    assert f.exists() and not os.access(f, os.W_OK)       # no chmod, no retry
+    os.chmod(f, stat.S_IWRITE | stat.S_IREAD)

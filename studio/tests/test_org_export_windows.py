@@ -376,3 +376,61 @@ def test_the_export_reads_json_whatever_windows_saved_it_as(tmp_path, encoding):
     rm = tmp_path / "rename-map.json"
     rm.write_bytes(json.dumps({"repos": {"hugmesh-a": "acme-a"}}).encode(encoding))
     assert oe.load_rename_map(str(rm))["repos"] == {"hugmesh-a": "acme-a"}
+
+
+def test_every_powershell_quote_is_doubled_inside_a_quoted_word():
+    word = "brand\u2019; Write-Host INJECTED; \u2018x\u201a\u201b'"
+    line = oe._terminal_line(["C:\\x\\cli.exe", word], osname="nt")
+    inner = line.split(" ", 2)[2]
+    assert inner.startswith("'") and inner.endswith("'")
+    body = inner[1:-1]
+    for q in "'\u2018\u2019\u201a\u201b":
+        assert body.count(q) == 2 * word.count(q), (q, line)
+
+
+@pytest.mark.skipif(os.name != "nt" or not shutil.which("powershell"),
+                    reason="needs Windows PowerShell")
+def test_the_powershell_line_hands_over_exactly_its_words(tmp_path):
+    """Run the line in real PowerShell against python, and read back what it got."""
+    import subprocess
+    words = ["-c", "import sys, json; print(json.dumps(sys.argv[1:]))",
+             "brand\u2019; Write-Host INJECTED; \u2019x", "Magus\u2019 projects", "a'b"]
+    line = oe._terminal_line([sys.executable, *words], osname="nt")
+    script = tmp_path / "line.ps1"
+    script.write_text("[Console]::OutputEncoding = [Text.Encoding]::UTF8\n" + line + "\n",
+                      encoding="utf-8-sig")
+    out = subprocess.run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
+                          "-File", str(script)], capture_output=True, timeout=60)
+    text = out.stdout.decode("utf-8", "replace")
+    # an injected Write-Host would print INJECTED on a line of its own
+    assert "INJECTED" not in [ln.strip() for ln in text.splitlines()], text
+    import json
+    # PowerShell 5.1 re-quotes native arguments itself; the words that reach the
+    # program are what counts
+    assert json.loads(text.strip().splitlines()[-1]) == words[2:], text
+
+
+@pytest.mark.parametrize("osname", ["posix", "nt"])
+def test_a_member_that_fails_part_way_leaves_no_partial_file(tmp_path, monkeypatch, osname):
+    real = tarfile.copyfileobj
+
+    def half_then_full_disk(src, dst, length=None, *a, **k):
+        dst.write(src.read(4))
+        raise OSError(28, "No space left on device")
+    tar = _tar([("README.md", "file", b"hi\n", 0o644),
+                (".env", "file", b"DB_PASSWORD=hunter2\n", 0o644)])
+    calls = {"n": 0}
+
+    def copy(src, dst, length=None, *a, **k):
+        calls["n"] += 1
+        if calls["n"] == 2:                               # the second member: .env
+            return half_then_full_disk(src, dst, length)
+        return real(src, dst, length, *a, **k)
+    monkeypatch.setattr(tarfile, "copyfileobj", copy)
+    wd = tmp_path / "w"
+    meta: dict = {}
+    files = oe._snapshot(_Runner(tar), str(tmp_path), "HEAD", str(wd), meta, osname=osname)
+    assert files == ["README.md"]
+    assert not os.path.lexists(wd / ".env"), "a half-written .env would be published"
+    if osname == "nt":
+        assert [n for n, _why in meta["lost"]] == [".env"]
