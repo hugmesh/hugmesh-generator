@@ -1379,6 +1379,10 @@ on a bad/placeholder key). See [`docs/DEVOPS.md`](docs/DEVOPS.md).
 > | [`studio-release.yml`](.github/workflows/studio-release.yml) | Builds the Studio's Windows MSI, Linux Flatpak and tarball, signs them, and publishes them as a GitHub Release when run on a `studio-v*` tag. |
 > | [`studio-release-cut.yml`](.github/workflows/studio-release-cut.yml) | **The one way to release the Studio**: `scripts/release-studio.sh <version>` (or Actions > "Cut a Studio release") bumps `__version__` on main, creates the tag on GitHub and starts the signed build. See [`docs/STUDIO-INSTALLERS.md`](docs/STUDIO-INSTALLERS.md). |
 >
+> **Releasing the whole org** (every Maven library, image, the mesh node, the Studio and the
+> site) is one command, `scripts/release-beta.sh` (a read-only dry run unless given
+> `--apply`). See [`docs/RELEASING.md`](docs/RELEASING.md).
+>
 > **Never target `[self-hosted, hugmesh-x86]` from a GitHub workflow.** No self-hosted
 > runners are registered against this org, so such a job queues for 24 hours and then
 > is cancelled. Use `ubuntu-latest` / `windows-latest`.
