@@ -30,6 +30,7 @@
 set -euo pipefail
 
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+ROOT=$(cd "$HERE/.." && pwd)
 ORG="${RELEASE_BETA_ORG:-hugmesh}"
 TABLE="${RELEASE_BETA_TABLE:-$HERE/release/repos.tsv}"
 STUDIO_SCRIPT="${RELEASE_BETA_STUDIO_SCRIPT:-$HERE/release-studio.sh}"
@@ -71,15 +72,27 @@ GH() { env -u GH_TOKEN -u GITHUB_TOKEN gh "$@" </dev/null; }
 # other error (a secondary rate limit, a dropped connection) is retried twice, because an
 # empty answer here reads as "no run" / "no tag" and would misreport a repo's state.
 RETRY_SLEEP="${RELEASE_BETA_RETRY_SLEEP:-5}"
-ghq() {
+# ghs: ghq with the 404 told apart: rc 0 data, rc 4 "not found" (HTTP 404, release not
+# found), rc 1 anything else (after the retries). For checks that must fail closed.
+ghs() {
   local o e i
   e=$(mktemp "${TMPDIR:-/tmp}/release-beta.XXXXXX")
   for i in 1 2 3; do
     if o=$(GH "$@" 2>"$e"); then rm -f "$e"; printf '%s' "$o"; return 0; fi
-    if grep -a 'HTTP 404' "$e" >/dev/null || grep -a 'release not found' "$e" >/dev/null; then break; fi
+    if grep -a 'HTTP 404' "$e" >/dev/null || grep -a 'release not found' "$e" >/dev/null; then rm -f "$e"; return 4; fi
     [ "$i" = 3 ] || sleep "$RETRY_SLEEP"
   done
   rm -f "$e"; return 1
+}
+ghq() { ghs "$@" || return 1; }
+
+# A path as it is safe to paste into a PR or a chat: relative to this checkout, or just
+# its file name when it lies outside it (never a home directory).
+shown() {
+  case "$1" in
+    "$ROOT"/*) printf '%s' "${1#"$ROOT"/}" ;;
+    *) printf '%s (outside the checkout)' "$(basename "$1")" ;;
+  esac
 }
 
 # The exact command that resumes this run at a phase.
@@ -273,8 +286,9 @@ secret_present() {
 # ── classification (read-only) ───────────────────────────────────────────────
 # Per repo: S_STATE DONE|READY|REFUSE|NEEDS-BUMP|RUNNING, S_REASON, S_NOTE, S_SHA (main),
 # S_VER, S_TAG, S_RERUN (id of a red main push run that a re-run can fix, when that is the
-# ONLY reason), S_BUSY (id of a main push run still in flight), S_TAGRUN (the tag's run).
-declare -A S_STATE=() S_REASON=() S_NOTE=() S_SHA=() S_VER=() S_TAG=() S_RERUN=() S_BUSY=() S_TAGRUN=() S_OLD=()
+# ONLY reason), S_BUSY (id of a main push run still in flight), S_TAGRUN (the tag's run),
+# S_TAGRERUN (id of a red TAG run that published nothing, so re-running it is the fix).
+declare -A S_STATE=() S_REASON=() S_NOTE=() S_SHA=() S_VER=() S_TAG=() S_RERUN=() S_BUSY=() S_TAGRUN=() S_OLD=() S_TAGRERUN=()
 
 # tag_commit repo tag -> prints the COMMIT sha; rc 0 found, 1 absent, 2 cannot tell
 tag_commit() {
@@ -315,15 +329,84 @@ run_age_days() { # ISO-8601 -> whole days ago
   echo $(( (now - t) / 86400 ))
 }
 
+# pkg_has_version kind package version -> rc 0 listed, 1 absent (no such version, or no such
+# package), 2 cannot tell. kind is the repos.tsv kind (img = GHCR image, mvn = Maven).
+pkg_has_version() {
+  local enc typ jq out rc=0
+  enc=$(printf '%s' "$2" | sed 's#/#%2F#g')
+  if [ "$1" = img ]; then typ=container; jq='.[].metadata.container.tags[]'; else typ=maven; jq='.[].name'; fi
+  out=$(ghs api "/orgs/$ORG/packages/$typ/$enc/versions?per_page=100" --paginate --jq "$jq") || rc=$?
+  case "$rc" in
+    0) printf '%s\n' "$out" | grep -axF -- "$3" >/dev/null && return 0; return 1 ;;
+    4) return 1 ;;
+  esac
+  return 2
+}
+
+# A step that publishes something: a registry push, a package deploy, an attestation or a
+# GitHub Release. A tag run that got past one of these has burned its beta number.
+PUBLISH_STEP_RE='publish|push|upload|deploy|attest|release'
+# A step that checks the world around the commit, not the commit: the version job, the
+# cross-repo package-read preflight, the base-image pull check, checkout and setup. Its
+# failure is fixed by a re-run once the world is right (an upstream package published).
+# A failed test or build step is the tagged commit's own fault, and a re-run repeats it.
+PREFLIGHT_JOB_RE='^(version|preflight)'
+PREFLIGHT_STEP_RE='preflight|version|cross-repo|package read|pull|set up job|check ?out|log ?in'
+# tag_run_unpublished repo run-id created-at -> rc 0 when the tag's run failed in a preflight
+# step BEFORE it published anything (no publish step succeeded or failed, no package carries
+# the version, there is no GitHub Release for the tag, and it is the run's first attempt),
+# so `gh run rerun --failed` is the fix and no bump is needed. Prints the evidence, or why
+# not. Anything it cannot read means "no" (the bump advice stays).
+tag_run_unpublished() {
+  local repo=$1 rid=$2 created=$3 facts att=1 failed="" fjob="" fstep="" pubstep="" con job step p rc age
+  local ver=${S_VER[$1]} tag=${S_TAG[$1]}
+  age=$(run_age_days "$created")
+  if [ "$age" -ge "$RERUN_MAX_DAYS" ]; then echo "it is $age days old, and GitHub cannot re-run it"; return 1; fi
+  facts=$(ghq run view "$rid" -R "$ORG/$repo" --json attempt,jobs \
+          -q '"attempt\t\(.attempt // 1)", (.jobs[] as $j | $j.steps[]? | "\(.conclusion // "")\t\($j.name)\t\(.name)")') \
+    || { echo "its jobs are unreadable"; return 1; }
+  while IFS=$'\t' read -r con job step; do
+    if [ "$con" = attempt ]; then att=$job; continue; fi
+    case "$con" in
+      failure|timed_out|cancelled)
+        if [[ "${step,,}" =~ $PUBLISH_STEP_RE ]]; then echo "it failed in the publish step '$job / $step'"; return 1; fi
+        [ -n "$failed" ] || { failed="$job / $step"; fjob=$job; fstep=$step; } ;;
+      success)
+        [[ "${step,,}" =~ $PUBLISH_STEP_RE ]] && pubstep="$job / $step" ;;
+    esac
+  done <<<"$facts"
+  if [ -n "$pubstep" ]; then echo "its step '$pubstep' succeeded"; return 1; fi
+  if [ -z "$failed" ]; then echo "no failed step is recorded"; return 1; fi
+  if [ "${att:-1}" != 1 ]; then echo "it failed in '$failed' again on attempt $att, so a re-run does not fix it"; return 1; fi
+  for p in ${T_PKGS[$repo]}; do
+    rc=0; pkg_has_version "${T_KIND[$repo]}" "$p" "$ver" || rc=$?
+    case "$rc" in
+      0) echo "$p:$ver is published"; return 1 ;;
+      2) echo "cannot tell whether $p:$ver was published"; return 1 ;;
+    esac
+  done
+  rc=0; ghs release view "$tag" -R "$ORG/$repo" --json tagName >/dev/null || rc=$?
+  case "$rc" in
+    0) echo "GitHub Release $tag exists"; return 1 ;;
+    4) ;;
+    *) echo "cannot tell whether GitHub Release $tag exists"; return 1 ;;
+  esac
+  if ! [[ "${fjob,,}" =~ $PREFLIGHT_JOB_RE ]] && ! [[ "${fstep,,}" =~ $PREFLIGHT_STEP_RE ]]; then
+    echo "it published nothing, but it failed in '$failed', a test or build of the tagged commit itself, which a re-run repeats (if it was a flake: gh run rerun $rid --failed -R $ORG/$repo)"
+    return 1
+  fi
+  echo "failed in '$failed' before it published anything (no ${T_PKGS[$repo]// /, } $ver, no GitHub Release $tag)"
+}
+
 classify() {
   local repo=$1
   local vfile=${T_VFILE[$repo]}
   local prefix=${T_PREFIX[$repo]}
   local wf=${T_WF[$repo]}
-  local sha ver tag tc rc wft facts pushmain run rid rsha rst rcon rcreated reasons=() s where t pin age n
+  local sha ver tag tc rc wft facts pushmain run rid rsha rst rcon rcreated reasons=() s where t pin age n why
   local -a paths=()
   S_STATE[$repo]=REFUSE; S_REASON[$repo]=""; S_NOTE[$repo]=""; S_SHA[$repo]=""; S_VER[$repo]=""; S_TAG[$repo]=""
-  S_RERUN[$repo]=""; S_BUSY[$repo]=""; S_TAGRUN[$repo]=""; S_OLD[$repo]=""
+  S_RERUN[$repo]=""; S_BUSY[$repo]=""; S_TAGRUN[$repo]=""; S_OLD[$repo]=""; S_TAGRERUN[$repo]=""
 
   sha=$(ghq api "repos/$ORG/$repo/git/ref/heads/main" --jq .object.sha || true)
   if [ -z "$sha" ]; then S_REASON[$repo]="cannot read main: gh api repos/$ORG/$repo/git/ref/heads/main"; return; fi
@@ -346,8 +429,8 @@ classify() {
   if [ "$rc" = 0 ]; then
     # Published (or being published). A published beta is never re-tagged.
     run=$(ghq run list -R "$ORG/$repo" --workflow "$wf" --branch "$tag" --limit 1 \
-          --json databaseId,status,conclusion -q '.[]|[(.databaseId|tostring),.status,(.conclusion//"")]|join("|")' || true)
-    IFS='|' read -r rid rst rcon <<<"${run:-}"
+          --json databaseId,status,conclusion,createdAt -q '.[]|[(.databaseId|tostring),.status,(.conclusion//""),.createdAt]|join("|")' || true)
+    IFS='|' read -r rid rst rcon rcreated <<<"${run:-}"
     if [ -z "${rid:-}" ]; then
       S_REASON[$repo]="tag $tag exists (${tc:0:12}) but no $wf run for it was found: look at https://github.com/$ORG/$repo/actions"; return
     fi
@@ -356,7 +439,13 @@ classify() {
       S_STATE[$repo]=RUNNING; S_NOTE[$repo]="tag $tag run $rid is $rst: gh run watch $rid -R $ORG/$repo"; return
     fi
     if [ "$rcon" != success ]; then
-      S_REASON[$repo]="tag $tag exists and its run $rid is '$rcon'. A published beta is never re-tagged: read gh run view $rid --log-failed -R $ORG/$repo, fix it on main, bump $vfile to $(next_beta "$ver") and run this again"
+      if why=$(tag_run_unpublished "$repo" "$rid" "${rcreated:-}"); then
+        # Nothing went out, so the beta number is not burned: re-run the run, do not bump.
+        S_TAGRERUN[$repo]=$rid
+        S_REASON[$repo]="tag $tag exists and its run $rid is '$rcon', but it $why. The beta number is not burned, so do NOT bump: gh run rerun $rid --failed -R $ORG/$repo (this stage offers it). That fixes a cause outside the tagged commit (a package that was not published yet, a flaky step); if the cause is in the commit itself, the re-run fails the same way: then fix it on main and bump $vfile to $(next_beta "$ver")"
+      else
+        S_REASON[$repo]="tag $tag exists and its run $rid is '$rcon' (no re-run: $why). A published beta is never re-tagged: read gh run view $rid --log-failed -R $ORG/$repo, fix it on main, bump $vfile to $(next_beta "$ver") and run this again"
+      fi
       return
     fi
     if [ "$tc" = "$sha" ]; then
@@ -461,7 +550,7 @@ stage_plan_ok() {
     published "$r" && continue
     selected "$r" || return 1
     case "${S_STATE[$r]:-}" in READY|RUNNING) continue ;; esac
-    [ -n "${S_RERUN[$r]:-}" ] || [ -n "${S_BUSY[$r]:-}" ] || return 1
+    [ -n "${S_RERUN[$r]:-}" ] || [ -n "${S_BUSY[$r]:-}" ] || [ -n "${S_TAGRERUN[$r]:-}" ] || return 1
   done
   return 0
 }
@@ -481,7 +570,7 @@ stage_sel_plan_ok() {
     selected "$r" || continue
     if published "$r"; then continue; fi
     case "${S_STATE[$r]:-}" in READY|RUNNING) continue ;; esac
-    [ -n "${S_RERUN[$r]:-}" ] || [ -n "${S_BUSY[$r]:-}" ] || return 1
+    [ -n "${S_RERUN[$r]:-}" ] || [ -n "${S_BUSY[$r]:-}" ] || [ -n "${S_TAGRERUN[$r]:-}" ] || return 1
   done
   return 0
 }
@@ -603,9 +692,32 @@ tag_and_watch() {
   print_artifacts "$repo" "${S_VER[$repo]}"
 }
 
+# rerun_tag_run repo: re-run the failed jobs of a tag run that published nothing
+# (S_TAGRERUN), watch it, re-classify. 0 when the repo is published afterwards.
+rerun_tag_run() {
+  local r=$1
+  local id=${S_TAGRERUN[$1]}
+  local before now i
+  before=$(ghq run view "$id" -R "$ORG/$r" --json attempt -q '.attempt // 1' || echo 1)
+  say "  -> gh run rerun $id --failed -R $ORG/$r (tag ${S_TAG[$r]})"
+  if ! GH run rerun "$id" --failed -R "$ORG/$r"; then
+    say "  STOP $r: the re-run of $id was refused: https://github.com/$ORG/$r/actions/runs/$id"; return 1
+  fi
+  # wait for the new attempt, so the watch does not read the old attempt's result
+  for i in $(seq 1 "$TRIES"); do
+    now=$(ghq run view "$id" -R "$ORG/$r" --json attempt,status -q '"\(.attempt // 1) \(.status)"' || true)
+    [ "${now%% *}" != "${before:-1}" ] || [ "${now#* }" != completed ] && break
+    sleep "$POLL"
+  done
+  watch_run "$r" "$id" || { classify "$r"; return 1; }
+  classify "$r"; row_line "$r"
+  published "$r" || return 1
+  print_artifacts "$r" "${S_VER[$r]}"
+}
+
 # tag_stage stage -> 0 when every row of the stage is published afterwards (or would be)
 tag_stage() {
-  local st=$1 r blk ready=() rc=0
+  local st=$1 r blk ready=() tagrr=() rc=0
   say
   say "  -- stage $st: $(stage_title "$st")"
   classify_stage "$st"
@@ -622,6 +734,7 @@ tag_stage() {
   fi
   for r in $(rows_in_stage "$st"); do
     selected "$r" || continue
+    [ -n "${S_TAGRERUN[$r]:-}" ] && tagrr+=("$r")
     case "${S_STATE[$r]}" in
       READY) ready+=("$r") ;;
       RUNNING)
@@ -629,6 +742,21 @@ tag_stage() {
         else watch_run "$r" "${S_TAGRUN[$r]}" || rc=1; fi ;;
     esac
   done
+  # A tag whose run failed before it published anything: re-run that run (no bump needed).
+  if [ ${#tagrr[@]} -gt 0 ]; then
+    if [ "$MODE" = dry ]; then
+      for r in "${tagrr[@]}"; do say "  would: gh run rerun ${S_TAGRERUN[$r]} --failed -R $ORG/$r (tag ${S_TAG[$r]}: its run published nothing), then watch it"; done
+    else
+      if ! confirm "Re-run the failed jobs of ${#tagrr[@]} tag run(s) that published nothing (${tagrr[*]})?"; then
+        say "  stage $st skipped by the operator. next: $(resume_cmd "$CUR_PHASE")"; return 1
+      fi
+      for r in "${tagrr[@]}"; do
+        rerun_tag_run "$r" && continue
+        rc=1
+        if [ "$st" -le 5 ]; then say "  STOP: a Maven/gateway chain link failed; later chain stages would fail the same way"; return 1; fi
+      done
+    fi
+  fi
   if [ ${#ready[@]} -eq 0 ]; then
     if stage_sel_published "$st"; then say "  >> stage $st: everything$([ ${#ONLY[@]} -gt 0 ] && printf ' selected') DONE"; return 0; fi
     if [ "$MODE" = dry ] && stage_sel_plan_ok "$st"; then
@@ -791,7 +919,7 @@ FAILED=0
 
 phase_preflight() {
   local st r blk pub cnt
-  say "release-beta.sh: mode=$MODE  $(date -u +%FT%TZ)  table=$TABLE  rows=${#ROWS[@]}"
+  say "release-beta.sh: mode=$MODE  $(date -u +%FT%TZ)  table=$(shown "$TABLE")  rows=${#ROWS[@]}"
   [ ${#ONLY[@]} -gt 0 ] && say "  --only: ${ONLY[*]} (every row is still checked; only these are acted on)"
   [ ${#EXPECT[@]} -gt 0 ] && say "  --expect: $(for r in "${!EXPECT[@]}"; do printf '%s=%s ' "$r" "${EXPECT[$r]}"; done)"
   GH auth status >/dev/null 2>&1 || die "gh is not logged in (GH_TOKEN/GITHUB_TOKEN are unset for every call): gh auth login"
@@ -892,6 +1020,13 @@ phase_gateway_access() {
   pause_for "Do that now." || { say "  stopped. next: $(resume_cmd gateway-access)"; return 1; }
   if probe_gateway; then say "  OK: published and public"; return 0; fi
   say "  Still not public. Read access granted through Manage Actions access cannot be checked by any API."
+  # --yes never answers this one: it is a click in the web UI that nothing here can see.
+  if [ "$YES" = true ]; then
+    say "  STOP (--yes does not answer this question): open https://github.com/orgs/$ORG/packages/container/$GW_PKG/settings"
+    say "    and make it Public, or add $(overlay_names) with Read under Manage Actions access."
+    say "    If you have already granted Read there, go on with: $(resume_cmd overlays)"
+    return 1
+  fi
   if confirm "Did you grant Read to $(overlay_names)?"; then return 0; fi
   say "  next: $(resume_cmd gateway-access)"; return 1
 }
@@ -908,7 +1043,7 @@ phase_studio() {
     say "  DONE: release studio-v$v exists"; return 0
   fi
   if [ "$MODE" = dry ]; then
-    say "  $STUDIO_SCRIPT ${v/next/} --dry-run:"
+    say "  $(shown "$STUDIO_SCRIPT") ${v/next/} --dry-run:"
     if [ "$v" = next ]; then "$STUDIO_SCRIPT" --dry-run --yes 2>&1 | sed 's/^/    | /' || rc=$?
     else "$STUDIO_SCRIPT" "$v" --dry-run 2>&1 | sed 's/^/    | /' || rc=$?; fi
     return "$rc"

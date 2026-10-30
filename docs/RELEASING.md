@@ -1,9 +1,10 @@
 # Releasing a HugMesh beta
 
-The whole org release is one command:
+The whole org release is one command, run from a checkout of `hugmesh-generator` on
+`main`:
 
 ```bash
-cd ~/Github/hugmesh-generator && git pull --ff-only && scripts/release-beta.sh --apply --studio <studio version>
+git pull --ff-only && scripts/release-beta.sh --apply --studio <studio version>
 ```
 
 On 2026-10-29 that was `--studio 0.3.0-beta.2`. Use `--studio next` to take the next
@@ -21,8 +22,14 @@ scripts/release-beta.sh --studio 0.3.0-beta.2   # dry run, including the Studio 
 `--apply` runs the phases in order and asks `y/N` before every phase that writes: a
 merge, a tag, a re-run, a dispatch. `--yes` answers those prompts for you, and each
 action is still printed, and it is passed on to `release-studio.sh`, so the Studio's
-`Proceed?` is skipped too. Only the two web-UI steps (gateway package access and package
-visibility) always wait for Enter.
+`Proceed?` is skipped too. The two web-UI steps (gateway package access and package
+visibility) always wait for Enter. `--yes` never answers the gateway step's "Did you
+grant Read?" question either: that is a click in the web UI that no API can see, so under
+`--yes` the script checks the package again and, if it is still not public, stops with
+its settings page (see [the manual steps](#the-two-manual-steps-and-why-they-are-manual)).
+
+The dry-run text names files relative to the checkout, never with a local path, so it
+can be pasted into a PR or a chat as it is.
 
 The script is [`scripts/release-beta.sh`](../scripts/release-beta.sh). The list of what
 gets released is [`scripts/release/repos.tsv`](../scripts/release/repos.tsv): 38
@@ -33,7 +40,7 @@ repositories in nine dependency stages. That list holds **no version numbers**.
 | Option | Meaning |
 |---|---|
 | `--dry-run` (default) / `--apply` | read-only plan / do it |
-| `--yes` | answer `y` to every `y/N` (web-UI pauses still wait for Enter) |
+| `--yes` | answer `y` to every `y/N` except "Did you grant Read?" (web-UI pauses still wait for Enter) |
 | `--merge <repo>#<n>` (repeatable) | before releasing: `gh pr ready` (when draft) and `gh pr merge --squash --delete-branch`, then wait for the new main push run (if none appears, it stops there) |
 | `--studio <version>` / `--studio next` / `--no-studio` | release the Studio through `scripts/release-studio.sh` (see below) |
 | `--only <repo>` (repeatable) | act on these repositories only; every repository is still checked, and a stage with none of them is skipped |
@@ -58,7 +65,7 @@ The version must be `MAJOR.MINOR.PATCH-beta.N`. The release is the tag
 |---|---|---|
 | `DONE` | the tag exists and its release run is green; main has nothing since it that the workflow builds | nothing |
 | `READY` | the tag is free and every check passed; this run will tag it | nothing |
-| `REFUSE` | something would make the release fail or burn the beta number; the reason and the next command are printed | fix that, run again |
+| `REFUSE` | something would make the release fail or burn the beta number; the reason and the next command are printed | fix that, run again. One `REFUSE` fixes itself: a tag whose run failed in a preflight step before it published anything says "do NOT bump", and its stage re-runs that run (see [Resume and recovery](#resume-and-recovery)) |
 | `NEEDS-BUMP` | the tag for main's version is already published, but main has *N* commits since it | merge a PR that bumps the version file to `-beta.N+1`, then run again |
 | `RUNNING` | the tag's run is in progress | the script watches it |
 
@@ -81,21 +88,28 @@ generator's other work never makes it look stale.
 
 ## The phases
 
-| # | Phase | What it does |
-|---|---|---|
-| 1 | `preflight` | checks the login, org secrets and `RUNS_ON_PUBLISH`, classifies every repository, prints the Studio's state; always runs, read-only |
-| 2 | `merge` | the `--merge` PRs: ready, squash-merge, wait for the new push run on main, re-check everything |
-| 3 | `maven` | stages 1-4, the Maven chain build-config -> parent -> commons -> auth-core, one at a time (a failed link stops the chain) |
-| 4 | `apps` | stage 8 (Angular UIs) and stage 9 (games, forum-api, mesh-node); no Maven dependency |
-| 5 | `rerun` | the gateway's and the Java images' red **main push runs**: `gh run rerun --failed`, watched. They went red only because commons/auth-core were not published yet |
-| 6 | `gateway` | tags the gateway base image (stage 5) |
-| 7 | `gateway-access` | **pause**: the be/fe/pki overlays build `FROM ghcr.io/hugmesh/hugmesh-gateway:<pinned version>`; see below |
-| 8 | `overlays` | re-runs the overlays' red main runs, then tags them (stage 6) |
-| 9 | `java` | tags the Java BFF/API images, actions and remote-fragment (stage 7) |
-| 10 | `studio` | `scripts/release-studio.sh <version>` |
-| 11 | `visibility` | **pause**: lists every package that is not public, waits, re-checks |
-| 12 | `site` | `gh workflow run pages.yml -R hugmesh/hugmesh.github.io`, watched |
-| 13 | `verify` | every artifact with its state, image visibility, and where it shows on hugmesh.net |
+The last column is what declining does. **Stops** means: nothing more is written, the
+script exits 1 and prints the `--from` command that resumes there (and the one that goes
+on with the next phase). **Goes on** means the run continues with the next phase.
+
+| # | Phase | What it does | `n` at its `y/N`, or `q` at its pause |
+|---|---|---|---|
+| 1 | `preflight` | checks the login, org secrets and `RUNS_ON_PUBLISH`, classifies every repository, prints the Studio's state; always runs, read-only | (no prompt) |
+| 2 | `merge` | the `--merge` PRs: ready, squash-merge, wait for the new push run on main, re-check everything | `n`: stops |
+| 3 | `maven` | stages 1-4, the Maven chain build-config -> parent -> commons -> auth-core, one at a time (a failed link stops the chain) | `n`: stops |
+| 4 | `apps` | stage 8 (Angular UIs) and stage 9 (games, forum-api, mesh-node); no Maven dependency | `n`: stops |
+| 5 | `rerun` | the gateway's and the Java images' red **main push runs**: `gh run rerun --failed`, watched. They went red only because commons/auth-core were not published yet | `n`: stops |
+| 6 | `gateway` | tags the gateway base image (stage 5) | `n`: stops |
+| 7 | `gateway-access` | **pause**: the be/fe/pki overlays build `FROM ghcr.io/hugmesh/hugmesh-gateway:<pinned version>`; see below | `q`: stops. `n` at "Did you grant Read?": stops. Under `--yes`, a package still not public after Enter: stops, with its settings page |
+| 8 | `overlays` | re-runs the overlays' red main runs, then tags them (stage 6) | `n` (either prompt): stops |
+| 9 | `java` | tags the Java BFF/API images, actions and remote-fragment (stage 7) | `n`: stops |
+| 10 | `studio` | `scripts/release-studio.sh <version>` | `n`: stops. No at `release-studio.sh`'s own `Proceed?` (asked only without `--yes`): **goes on**, because it exits 0 with "Nothing done." |
+| 11 | `visibility` | **pause**: lists every package that is not public, waits, re-checks | `q`: **goes on** (packages left private stay listed; nothing to undo) |
+| 12 | `site` | `gh workflow run pages.yml -R hugmesh/hugmesh.github.io`, watched | `n`: **goes on** (the site's cron refreshes it within the hour) |
+| 13 | `verify` | every artifact with its state, image visibility, and where it shows on hugmesh.net | (no prompt) |
+
+In phases 3, 4, 6, 8 and 9 the same `n` also declines the re-run of a tag run that
+published nothing (below); that stops too.
 
 Every tag is created with the git refs API on the main SHA that was checked. Right
 before the tag, main is read again. If main moved, nothing is tagged and the script
@@ -115,8 +129,12 @@ Enter, and checks again.
    - or, on the same page, open **Manage Actions access** and add `hugmesh-be-gateway`,
      `hugmesh-fe-gateway` and `hugmesh-pki-gateway` with **Read**.
 
-   The script can see public visibility but cannot see Actions access, so for the
-   second route it asks you to confirm.
+   The script can see public visibility but cannot see Actions access. After you press
+   Enter it checks again. If the package is still not public it asks "Did you grant Read
+   to ...?"; `y` goes on, `n` stops. Under `--yes` it does **not** answer that question
+   for you: it stops with the settings page. Once you have made the package public, or
+   granted Read, run the printed `--from gateway-access` command (or `--from overlays`
+   when you granted Read, which the script cannot see).
 2. **Package visibility** (phase 11). Every new GHCR package is created private. The
    Downloads page cannot show an image nobody can pull. Making a package public
    **cannot be undone**, so it is one click per package on its settings page. Phase 11
@@ -128,10 +146,29 @@ Enter, and checks again.
 - **Run it again.** DONE work is skipped, and a tag run still in progress is watched,
   not re-tagged. Every stop prints the exact `--from <phase>` command. It also prints
   the command that leaves the problem and goes on with the next phase.
-- **Answering `n`** stops at that phase and changes nothing.
-- **A failed tag run** stops the release, and that beta number stays as it is. A
-  published beta is never re-tagged. Read `gh run view <id> --log-failed -R
-  hugmesh/<repo>`, fix it on main, bump the version file to `-beta.N+1` and run again.
+- **Answering `n` or `q`** stops the run at that phase without writing anything, except
+  in two phases where it goes on: `q` at the visibility pause and `n` at the site
+  rebuild. The table in [The phases](#the-phases) lists each one.
+- **A tag run that failed before it published anything** is re-run, not bumped. This
+  happens, for example, when commons' tag run fails in "Preflight - cross-repo package
+  read" because build-config/parent were not readable yet. The repository then shows
+  `REFUSE` with "do NOT bump: gh run rerun <id> --failed", and its stage asks to re-run
+  it, watches it and goes on. All of these must hold:
+  - the failed step is a preflight step (the `version` job, a preflight, a base-image
+    pull check, checkout or setup);
+  - no publish, push, upload, deploy, attest or release step ran;
+  - no package carries the version;
+  - there is no GitHub Release for the tag;
+  - it is the run's first attempt;
+  - it is younger than 30 days.
+
+  If any of these is unreadable, the script falls back to the bump advice.
+- **Any other failed tag run** stops the release, and that beta number stays as it is.
+  A published beta is never re-tagged. This includes a failed test or build step, which
+  is the tagged commit's own fault and which a re-run repeats. Read `gh run view <id>
+  --log-failed -R hugmesh/<repo>`, fix it on main, bump the version file to `-beta.N+1`
+  and run again. The reason says when the run published nothing, so a flaky test can
+  still be re-run by hand.
 - **`--only`** never changes what a repository *is*: every row is still checked and
   printed. It changes what a stage has to achieve:
   - A stage with none of your repositories is reported and skipped. It is never a stop.
@@ -191,6 +228,14 @@ appears in, or "not listed".
   count: only push runs do, because only they publish what the tag run builds on.
 - **Overlays fail with a pull error on the gateway image.** Phase 7 was skipped or the
   package is still private. See the manual steps above.
+- **"tag vX exists and its run N is 'failure', but it failed in '... / Preflight ...'
+  before it published anything".** This is the 2026-10-29 commons case: the tag run
+  started before its Maven parents were readable. Do not bump. Run the release again
+  (or `--from <phase>`), and that stage offers `gh run rerun N --failed`. When the
+  reason instead says "a re-run does not fix it" or "is published", bump.
+- **"STOP (--yes does not answer this question)" in gateway-access.** The gateway
+  package is still private after the pause. Make it public, or grant the overlays Read
+  under Manage Actions access, then run the printed `--from` command.
 - **"main moved ... nothing was tagged".** Something merged between the check and the
   tag. Wait for the new push run, then run the printed `--from` command.
 - **"main's HEAD has no push run yet".** Main moved past the last green push run, and
@@ -224,8 +269,15 @@ appears in, or "not listed".
   and `--only <a Java image>` still stops at its own stage;
 - the main-moved re-check, the "push run at main's HEAD" check (with and without a
   `paths:` filter), and a `--merge` whose push run never appears;
+- a tag run that failed in a preflight step with nothing published is re-run, not
+  bumped. When the run did publish, has a Release, failed in a publish or test step, or
+  already failed a re-run, it keeps the bump advice;
+- under `--yes` the gateway-access question is never answered: the run stops with the
+  settings page. Without `--yes` it is asked;
+- the dry-run text carries no checkout or temp paths;
 - the stage order of a full `--apply`;
-- a nine-mutation battery over those guards.
+- a mutation battery over those guards. Each guard is broken in a copy of the script,
+  and the check that covers it must go red.
 
 It runs in the pre-merge `shell suites (debian/python)` job and in GitLab's
 `lint:release-beta`.

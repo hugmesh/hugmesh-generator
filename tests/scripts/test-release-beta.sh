@@ -25,6 +25,14 @@
 #   H  check 7 is about main's HEAD: a green push run at an OLDER commit refuses the repo
 #      (no paths filter), or not (paths filter, nothing since it under those paths); and a
 #      --merge whose push run never appears stops before anything is tagged;
+#   I  a tag run that failed BEFORE it published anything (a preflight step; no package
+#      version, no GitHub Release, first attempt) is re-run with `gh run rerun --failed`
+#      instead of asking for a version bump; one that published, has a Release, failed in
+#      a publish step or already failed a re-run still gets the bump advice;
+#   J  under --yes the "Did you grant Read" question about the gateway's Actions access is
+#      never answered for the operator: with the package still private after the pause the
+#      run stops with the settings URL, and nothing is built FROM the gateway;
+#   K  the printed text (dry-run header, Studio line) carries no checkout or temp paths;
 #   M  the guards are mutation-tested: each is broken in a copy of the script, the check
 #      that covers it must go red, and the copy must really differ from the original.
 #
@@ -196,12 +204,13 @@ if pos[:1] == ["run"]:
     run = next((x for x in runs if x["databaseId"] == rid), None)
     if run is None: notfound()
     if sub == "view":
-        run.setdefault("jobs", [])
+        run.setdefault("jobs", []); run.setdefault("attempt", 1)
         out(jsonsel(run))
     if sub == "watch":
         sys.exit(0 if run["conclusion"] == "success" else 1)
     if sub == "rerun":
-        run["status"] = "completed"; run["conclusion"] = r.get("rerun_result", "success"); save(); sys.exit(0)
+        run["status"] = "completed"; run["conclusion"] = r.get("rerun_result", "success")
+        run["attempt"] = run.get("attempt", 1) + 1; save(); sys.exit(0)
     sys.exit(1)
 
 if pos[:2] == ["secret", "list"]:
@@ -469,6 +478,15 @@ D="$TMP/s"; fixture mixed "$D"; run_script "$SCRIPT" "$D" --from studio --studio
 if grep -a 'Dry run: stopping here' "$D/out" >/dev/null && [ -z "$(writes "$D/calls")" ] && grep -a '"release", "view", "studio-v0.9.0-beta.2"' "$D/calls" >/dev/null; then
   ok "--studio 0.9.0-beta.2 runs release-studio.sh --dry-run, zero writes"
 else bad "studio dry run"; sed 's/^/      /' "$D/out" | grep -a -A12 'phase 10' | head -20; fi
+check_no_paths() { # script -> 0 when a dry run's text names no checkout or temp path (it gets pasted into PRs)
+  local s=$1 d="$TMP/k.$RANDOM"
+  fixture mixed "$d"; run_script "$s" "$d" --studio 0.9.0-beta.2
+  grep -a 'table=repos.tsv (outside the checkout)' "$d/out" >/dev/null || return 1
+  grep -a '^  scripts/release-studio.sh 0.9.0-beta.2 --dry-run:' "$d/out" >/dev/null || return 1
+  ! grep -aF -- "$REPO/" "$d/out" >/dev/null && ! grep -aF -- "$TMP/" "$d/out" >/dev/null
+}
+if check_no_paths "$SCRIPT"; then ok "K: the dry-run text names the table and release-studio.sh without a checkout or temp path"
+else bad "K: the dry-run text carries a local path"; fi
 
 # ── D: the --only fix ────────────────────────────────────────────────────────
 echo "== D --only"
@@ -584,12 +602,106 @@ PY
 if check_merge_no_run "$SCRIPT"; then ok "--merge whose push run never appears: STOP in the merge phase, the merge commit is not tagged"
 else bad "--merge tagged a merge commit with no push run"; fi
 
-# ── F: a full --apply, stage ordering ────────────────────────────────────────
-echo "== F full apply ordering"
-D="$TMP/f"; fixture release "$D"
-printf '\n\n\n\n\n\n\n\n' > "$TMP/enters"
-STDIN_FILE="$TMP/enters" run_script "$SCRIPT" "$D" --apply --yes --merge fx-ui#7 --no-studio
-order=$(python3 - "$D/calls" <<'PY'
+# ── I: a tag run that published nothing is re-run, not bumped ────────────────
+echo "== I a failed tag run that published nothing"
+# tag_fixture <dir> <variant>: the release fixture with stage 1 published and fx-lib-b's tag
+# v2.0.0-beta.1 run 201 red in "Preflight - cross-repo package read" (the 2026-10-29 commons
+# case). Variants: unpublished (nothing went out), published (its Maven version is listed),
+# released (a GitHub Release exists), pubstep (it failed in a publish step, inside the
+# version job so that only the publish-step test can refuse it), pubok (a publish step
+# succeeded before the preflight failed), second (a re-run already failed: attempt 2),
+# test (nothing published, but it failed in "Build and test", the commit's own fault).
+tag_fixture() {
+  fixture release "$1"
+  python3 - "$1/state.json" "$2" <<'PY'
+import json, sys, time
+p, v = sys.argv[1], sys.argv[2]; st = json.load(open(p))
+now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+def run(i, br, sha, concl, **kw):
+    d = {"databaseId": i, "workflow": "release.yml", "headBranch": br, "headSha": sha, "event": "push",
+         "status": "completed", "conclusion": concl, "createdAt": now}
+    d.update(kw); return d
+a = st["repos"]["fx-lib-a"]; a["tags"] = {"v1.0.0-beta.1": "m-fx-lib-a"}; a["runs"] = [run(101, "v1.0.0-beta.1", "m-fx-lib-a", "success")]
+pre, pub, bt = "failure", "skipped", "skipped"
+if v == "test": pre, bt = "success", "failure"
+vsteps = [{"name": "Read version from pom.xml", "conclusion": "success"}]
+if v == "pubstep": pre = "skipped"; vsteps.append({"name": "Publish the version manifest", "conclusion": "failure"})
+if v == "pubok": vsteps.append({"name": "Publish the version manifest", "conclusion": "success"})
+jobs = [{"name": "version", "conclusion": "failure" if v == "pubstep" else "success", "steps": vsteps},
+        {"name": "build-and-publish", "conclusion": "failure", "steps": [
+            {"name": "Checkout", "conclusion": "success"},
+            {"name": "Preflight - cross-repo package read", "conclusion": pre},
+            {"name": "Build and test", "conclusion": bt},
+            {"name": "Publish jar and tests classifier to GitHub Packages", "conclusion": pub},
+            {"name": "Attest build provenance for every published file", "conclusion": "skipped"}]},
+        {"name": "github-release", "conclusion": "skipped", "steps": []}]
+b = st["repos"]["fx-lib-b"]; b["tags"] = {"v2.0.0-beta.1": "m-fx-lib-b"}
+b["runs"] = [run(201, "v2.0.0-beta.1", "m-fx-lib-b", "failure", jobs=jobs, attempt=2 if v == "second" else 1)]
+if v == "published": st["packages"]["maven"]["net.fx.lib-b"] = {"visibility": "private", "versions": [{"name": "2.0.0-beta.1"}]}
+if v == "released": b["releases"] = ["v2.0.0-beta.1"]
+json.dump(st, open(p, "w"))
+PY
+}
+check_tag_rerun() { # script -> 0 when the unpublished tag run is planned and done as a re-run, never a bump or a new tag
+  local s=$1 d="$TMP/i.$RANDOM"
+  tag_fixture "$d" unpublished; run_script "$s" "$d" --only fx-lib-b --no-studio
+  [ "$(state_of "$d/out" fx-lib-b)" = REFUSE ] || return 1
+  grep -a 'fx-lib-b' "$d/out" | grep -a 'do NOT bump: gh run rerun 201 --failed -R hugmesh/fx-lib-b' >/dev/null || return 1
+  grep -a "failed in 'build-and-publish / Preflight - cross-repo package read' before it published anything" "$d/out" >/dev/null || return 1
+  grep -a 'would: gh run rerun 201 --failed -R hugmesh/fx-lib-b' "$d/out" >/dev/null || return 1
+  ! grep -a 'would stop here' "$d/out" >/dev/null || return 1
+  [ -z "$(writes "$d/calls")" ] || return 1
+  tag_fixture "$d" unpublished; run_script "$s" "$d" --apply --yes --only fx-lib-b --from maven --no-studio
+  writes "$d/calls" | grep -a '^gh run rerun 201 --failed -R hugmesh/fx-lib-b' >/dev/null || return 1
+  ! writes "$d/calls" | grep -a 'git/refs' >/dev/null || return 1
+  [ "$(cat "$d/rc")" = 0 ] && grep -a '== every selected artifact is DONE' "$d/out" >/dev/null
+}
+if check_tag_rerun "$SCRIPT"; then ok "I: a tag run red in a preflight step with nothing published: REFUSE 'do NOT bump', planned and done as gh run rerun 201 --failed, rc 0, DONE, no new tag"
+else bad "I: the unpublished tag run was not offered as a re-run"; fi
+check_tag_rerun_negatives() { # script -> 0 when every variant that DID publish (or a re-run cannot fix) keeps the bump advice
+  local s=$1 d="$TMP/in.$RANDOM" v
+  for v in published released pubstep pubok second test; do
+    tag_fixture "$d" "$v"; run_script "$s" "$d" --only fx-lib-b --no-studio
+    grep -a 'fx-lib-b' "$d/out" | grep -a 'bump pom.xml to 2.0.0-beta.2 and run this again' >/dev/null || { echo "      $v: no bump advice"; return 1; }
+    ! grep -a 'would: gh run rerun 201' "$d/out" >/dev/null || { echo "      $v: re-run planned"; return 1; }
+  done
+  tag_fixture "$d" published; run_script "$s" "$d" --apply --yes --only fx-lib-b --from maven --no-studio
+  [ -z "$(writes "$d/calls")" ] && [ "$(cat "$d/rc")" = 1 ]
+}
+if check_tag_rerun_negatives "$SCRIPT"; then ok "I: published version, existing Release, failed publish step, succeeded publish step, failed re-run, failed test step: each keeps the bump advice and is never re-run"
+else bad "I: a tag run that published (or cannot be re-run) was offered a re-run"; fi
+
+# ── J: --yes never answers the Actions-access question ───────────────────────
+printf '\n\n\n\n\n\n\n\n\n\n\n\n' > "$TMP/enters"
+check_gateway_yes() { # script [dir] -> 0 when a full --apply --yes stops at gateway-access with the URL while the package is private
+  local s=$1 d=${2:-"$TMP/j.$RANDOM"}
+  fixture release "$d"
+  STDIN_FILE="$TMP/enters" run_script "$s" "$d" --apply --yes --merge fx-ui#7 --no-studio
+  [ "$(cat "$d/rc")" = 1 ] || return 1
+  grep -a "Stopped in phase 'gateway-access'" "$d/out" >/dev/null || return 1
+  grep -a 'STOP (--yes does not answer this question): open https://github.com/orgs/hugmesh/packages/container/hugmesh-gateway/settings' "$d/out" >/dev/null || return 1
+  ! grep -a 'Did you grant Read' "$d/out" >/dev/null || return 1
+  writes "$d/calls" | grep -a 'hugmesh-gateway/git/refs' >/dev/null || return 1        # the gateway itself was released
+  ! writes "$d/calls" | grep -aE 'fx-be/git/refs|hugmesh/fx-be$' >/dev/null           # nothing FROM it
+}
+
+# ── J then F: a full --apply --yes stops at gateway-access; then the stage ordering ──
+echo "== J gateway access under --yes"
+D="$TMP/f"
+if check_gateway_yes "$SCRIPT" "$D"; then ok "J: --apply --yes stops at gateway-access with the settings URL (package still private), never answers 'Did you grant Read', builds nothing FROM the gateway"
+else bad "J: --yes went past the Actions-access question"; grep -a -A8 'phase 7/' "$D/out" | sed 's/^/      /'; fi
+echo "== F full apply ordering (the J run, then the package made public and --from gateway-access)"
+cp "$D/calls" "$D/calls.1"
+# the operator makes the package public in the web UI, then runs the printed --from command
+python3 - "$D/state.json" <<'PY'
+import json, sys
+p = sys.argv[1]; st = json.load(open(p))
+st["packages"]["container"]["hugmesh-gateway"]["visibility"] = "public"
+json.dump(st, open(p, "w"))
+PY
+STDIN_FILE="$TMP/enters" run_script "$SCRIPT" "$D" --apply --yes --merge fx-ui#7 --no-studio --from gateway-access
+cat "$D/calls.1" "$D/calls" > "$D/calls.all"
+order=$(python3 - "$D/calls.all" <<'PY'
 import json, sys
 ev = []
 for line in open(sys.argv[1]):
@@ -604,16 +716,21 @@ print(" ".join(ev))
 PY
 )
 want_order="pr-ready:fx-ui pr-merge:fx-ui tag:fx-lib-a tag:fx-lib-b tag:fx-ui tag:hugmesh-generator rerun:hugmesh-gateway rerun:fx-api tag:hugmesh-gateway rerun:fx-be tag:fx-be tag:fx-api workflow-run:hugmesh.github.io"
-if [ "$order" = "$want_order" ]; then ok "merge, Maven 1->2, apps, re-runs, gateway, overlay re-run+tag, Java, site: in that order"
+if [ "$order" = "$want_order" ]; then ok "merge, Maven 1->2, apps, re-runs, gateway, (stop; package made public; --from gateway-access) overlay re-run+tag, Java, site: in that order"
 else bad "write order"; echo "      want: $want_order"; echo "      got:  $order"; fi
 [ "$(cat "$D/rc")" = 0 ] && grep -a '== every artifact is DONE' "$D/out" >/dev/null && ok "the final verification reads every artifact DONE (rc 0)" \
   || { bad "final verify: rc $(cat "$D/rc")"; tail -25 "$D/out" | sed 's/^/      /'; }
-grep -a 'Manage Actions access' "$D/out" >/dev/null && grep -a 'Did you grant Read' "$D/out" >/dev/null \
-  && ok "gateway-access paused for the private base image and asked about Actions access" || bad "gateway-access pause"
+grep -a 'OK: the pinned gateway image is published and public' "$D/out" >/dev/null \
+  && ok "after the package is made public, --from gateway-access finds it public and goes on" || bad "gateway-access re-probe after the package went public"
 grep -a 'tag:fx-be' <<<"$order" >/dev/null && [[ "$order" == *"tag:hugmesh-gateway"*"tag:fx-be"* ]] && ok "the overlay is tagged only after the gateway it builds FROM" || bad "overlay before gateway"
+# Without --yes every prompt and pause is answered at the keyboard, Actions access included.
 D="$TMP/f2"; fixture release "$D"
-STDIN_FILE="$TMP/enters" run_script "$SCRIPT" "$D" --apply --yes --no-studio
-n1=$(grep -ac POST "$D/calls"); STDIN_FILE="$TMP/enters" run_script "$SCRIPT" "$D" --apply --yes --no-studio
+for i in $(seq 1 60); do echo y; done > "$TMP/ys"
+STDIN_FILE="$TMP/ys" run_script "$SCRIPT" "$D" --apply --no-studio
+n1=$(grep -ac POST "$D/calls"); rc1=$(cat "$D/rc"); cp "$D/out" "$D/out.1"
+if [ "$rc1" = 0 ] && grep -a 'Did you grant Read to fx-be? \[y/N\]' "$D/out.1" >/dev/null; then ok "without --yes, the Actions-access question is asked and a y goes on (rc 0)"
+else bad "interactive gateway-access: rc $rc1"; grep -a -A8 'phase 7/' "$D/out.1" | sed 's/^/      /'; fi
+STDIN_FILE="$TMP/ys" run_script "$SCRIPT" "$D" --apply --no-studio
 if [ -z "$(writes "$D/calls" | grep -v 'workflow run pages.yml')" ] && [ "$(cat "$D/rc")" = 0 ] && [ "$n1" -gt 0 ]; then ok "resumable: a second --apply finds everything DONE and writes nothing but the site refresh"
 else bad "second apply wrote: $(writes "$D/calls" | head -3)"; fi
 D="$TMP/f3"; fixture release "$D"; printf 'n\n' > "$TMP/no"
@@ -648,6 +765,19 @@ mutate head-run 's/^    elif \[ "\$rsha" != "\$sha" \]; then$/    elif false; th
 mutate head-run-paths 's/^        if \[ "\$n" = 0 \]; then$/        if true; then/' check_head_run
 # M8 a --merge whose push run never appears no longer stops
 mutate merge-wait '/STOP \$m: no new/,/return 1/s/return 1/:/' check_merge_no_run
+# M9 an unpublished red tag run is no longer offered as a re-run (back to "bump")
+mutate tagrerun-offer 's/^        S_TAGRERUN\[\$repo\]=\$rid$/        :/' check_tag_rerun
+# M10-M15 each "it did publish / a re-run cannot fix it" test in tag_run_unpublished dropped
+mutate tagrerun-package 's/^      0) echo "\$p:\$ver is published"; return 1 ;;$/      0) ;;/' check_tag_rerun_negatives
+mutate tagrerun-release 's/^    0) echo "GitHub Release \$tag exists"; return 1 ;;$/    0) ;;/' check_tag_rerun_negatives
+mutate tagrerun-pubstep 's/^        if \[\[ "\${step,,}" =~ \$PUBLISH_STEP_RE \]\]; then echo/        if false; then echo/' check_tag_rerun_negatives
+mutate tagrerun-pubok 's/^        \[\[ "\${step,,}" =~ \$PUBLISH_STEP_RE \]\] \&\& pubstep=/        false \&\& pubstep=/' check_tag_rerun_negatives
+mutate tagrerun-attempt 's/^  if \[ "\${att:-1}" != 1 \]; then/  if false; then/' check_tag_rerun_negatives
+mutate tagrerun-preflight 's/^  if ! \[\[ "\${fjob,,}" =~ \$PREFLIGHT_JOB_RE \]\] \&\& /  if false \&\& /' check_tag_rerun_negatives
+# M16 --yes answers the Actions-access question again
+mutate gateway-yes 's/^  if \[ "\$YES" = true \]; then$/  if false; then/' check_gateway_yes
+# M17 the dry-run header prints the table's full path again
+mutate no-paths 's/table=\$(shown "\$TABLE")/table=$TABLE/' check_no_paths
 
 echo
 echo "== test-release-beta.sh: $pass passed, $fail failed"
