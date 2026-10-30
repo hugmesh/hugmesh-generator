@@ -7232,7 +7232,7 @@ rm -f "${SYSROOT}/tmp/hugmesh-patch-portage-file-copy.py"
 # gains the hugmesh .fc rules once the .pp are in the store.
 SLX_PROBE_TABLE="${BUILD_ROOT}/selinux-label-probes.tsv"
 SLX_TYPE="$(slx_policy_type "${SYSROOT}")"
-banner "Labelling the sysroot (SELinux ${SLX_TYPE}: store install -> config -> setfiles -> gate)"
+info "Labelling the sysroot (SELinux ${SLX_TYPE}: store install -> config -> setfiles -> gate)"
 slx_store_install_modules "${SYSROOT}" "${SLX_TYPE}" chroot \
     && slx_write_selinux_config "${SYSROOT}" "${SLX_TYPE}" \
     && slx_label_tree "${SYSROOT}" "${SLX_TYPE}" \
