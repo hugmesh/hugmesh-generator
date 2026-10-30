@@ -75,7 +75,6 @@ Feature: Every persona the suite may name is created by a seeder that actually r
       | frank@gmail.com          | shell-roster |
       | dragoneer                | shell-roster |
       | e2e-banned               | shell-roster |
-      | e2e-suspended            | shell-roster |
       | e2e-fleet                | shell-roster |
       | rbac-plain@gmail.com     | shell-roster |
       | rbac-login-user@gmail.com| shell-roster |

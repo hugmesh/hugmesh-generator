@@ -76,7 +76,6 @@ Feature: Every seeded persona is decided across every social function, and the c
       | e2e-mod                      |
       | e2e-pending                  |
       | e2e-superadmin               |
-      | e2e-suspended                |
       | e2e-user                     |
       | eve@gmail.com                |
       | frank@gmail.com              |

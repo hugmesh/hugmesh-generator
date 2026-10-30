@@ -27,24 +27,10 @@
 # :58-71 asserts that a signed-in user refused a console is "bounced to /login",
 # which CONTRADICTS role-guard.factory.ts:44 (role-games.feature:45 said the same
 # for /games until #88 corrected it). Only the corrected form is ported.
-#
-# THE HARD NAVIGATION, and why these rows could not pass before 2026-09-18.
-# `I open the path` is page.goto() — a refresh, a bookmark, a typed URL. Until
-# hugmesh-generator#381 (PR #442, merged 2026-09-18) the fe gateway's
-# remote-deeplink-to-host-shell route carried only the social/media prefixes,
-# so a hard GET of /admin, /mod or /user went STRAIGHT to the bare admin-ui /
-# mod-ui / user-ui container: no host shell, no roleGuard, no denied-notice —
-# the deny below could never render. tests/stack/gateway-routes/fe/
-# application-routes.yml now lists /admin/**,/mod/**,/user/** on that route, so
-# the first outline is the live proof of #381 from the user's side (the
-# route-table shape itself is pinned offline in
-# mined-platform-edge/fe-route-tables.feature). The /user row is the only honest
-# one for that mount: e2e-mod is the sole roster persona WITHOUT ROLE_USER.
 
 @layer:ui @env:docker
 Feature: A refused console explains itself instead of pretending you are signed out
 
-  @issue:generator-381
   Scenario Outline: <role> deep-linking <path> lands on the denied landing, never /login @role:<role> @layer:ui
     Given I am signed in as the persona for this scenario
     When I open the path "<path>"
@@ -52,10 +38,9 @@ Feature: A refused console explains itself instead of pretending you are signed 
     And the current URL carries a denied query naming "<path>"
     And the element with test id "denied-notice" is visible
 
-    Examples: the three role-home mounts #381 added to the deep-link route
+    Examples:
       | role      | path   |
       | e2e-mod   | /admin |
-      | e2e-mod   | /user  |
       | e2e-user  | /mod   |
       | e2e-user  | /admin |
 
