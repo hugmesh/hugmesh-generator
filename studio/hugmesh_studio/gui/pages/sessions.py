@@ -21,6 +21,18 @@ from ..qt import QtWidgets
 from .sessions_widget import PreviousBuildsWidget
 
 
+def load_problem(path: str, exc: BaseException) -> str:
+    """The sentence "Load config" shows when ``path`` did not load. A file that is not
+    UTF-8 gets a fix as well as the codec's words: Windows PowerShell 5.1's
+    ``Set-Content`` writes the ANSI code page, which a hostname with an accent breaks.
+    It names what json_files.decode accepts, not "UTF-16": a UTF-16 file without a byte
+    order mark is read as UTF-8 too, and fails here with an accent in it."""
+    if isinstance(exc, UnicodeDecodeError):
+        return (f"{path} could not be loaded: it is not UTF-8 text, nor UTF-16 with a "
+                f"byte order mark ({exc}). Save it again as UTF-8 and load it once more.")
+    return f"{path} could not be loaded: {exc}"
+
+
 class SessionsPage(QtWidgets.QWizardPage):
     def __init__(self, wiz):
         super().__init__()
@@ -73,7 +85,14 @@ class SessionsPage(QtWidgets.QWizardPage):
             # Load EITHER a flat config OR a worklist envelope through the one loader both
             # UIs share (StudioWizard.load_config -> worklist.load_any); restart() so each
             # page's initializePage() re-reads the freshly loaded config.
-            self.wiz.load_config(p)
+            try:
+                self.wiz.load_config(p)
+            except Exception as exc:            # noqa: BLE001 — said, not raised
+                # An exception that leaves a slot reaches only the crash log (PyQt6
+                # without crashlog's hook aborts the process), and the windowed Windows
+                # Studio has no console: a bad file used to show nothing at all.
+                QtWidgets.QMessageBox.warning(self, "Could not load", load_problem(p, exc))
+                return
             QtWidgets.QMessageBox.information(self, "Loaded", f"Loaded {p}")
 
     def _save(self):

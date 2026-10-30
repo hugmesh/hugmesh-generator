@@ -40,10 +40,22 @@ def _default_generator_dir() -> str:
     return generator_dir.resolve(os.path.abspath(os.path.join(here, "..", "..")))
 
 
+def _asks_for_the_checkout(tray_only: bool, tray_available: bool) -> bool:
+    """Whether this launch shows the checkout chooser. A tray-only launch may be
+    unattended (an autostart entry) and a modal before its icon exists would block it,
+    so it keeps what resolve() found, but only when a tray will really appear: with
+    none, main() opens the wizard instead, and that window needs the checkout."""
+    return not tray_only or not tray_available
+
+
 def _choose_generator_dir(current: str, QtWidgets) -> str:  # noqa: N803
     """Ask for the checkout when ``current`` is not one, and remember the answer. A
-    cancel keeps ``current``: the pages then say what is missing, as they always did."""
+    cancel keeps ``current``: the pages then say what is missing, as they always did.
+    Only a folder picked here is saved: a ``--generator-dir`` or source-tree value that
+    is already a checkout was not chosen in the GUI and must not become later launches'
+    default."""
     from .core import generator_dir
+    picked_here = False
     while not generator_dir.is_checkout(current):
         box = QtWidgets.QMessageBox(QtWidgets.QMessageBox.Icon.Information,
                                     "Choose your hugmesh-generator folder",
@@ -58,10 +70,14 @@ def _choose_generator_dir(current: str, QtWidgets) -> str:  # noqa: N803
         if not picked:
             return current
         current = os.path.abspath(picked)
-    try:
-        generator_dir.save(current)
-    except OSError:
-        pass                                   # remembered next time or not: never fatal
+        picked_here = True
+    if picked_here:
+        try:
+            generator_dir.save(current)
+        # ValueError: a folder name that is not valid UTF-8 (a lone surrogate) cannot be
+        # written; RuntimeError: state_paths found no state dir.
+        except (OSError, RuntimeError, ValueError):
+            pass                               # remembered next time or not: never fatal
     return current
 
 
@@ -617,7 +633,13 @@ def main(argv=None) -> int:
             instance.send(instance.CMD_RESET)
         return 0
 
-    args.generator_dir = _choose_generator_dir(args.generator_dir, QtWidgets)
+    tray_only = args.tray or args.stack_tray
+    # After the handshake, so a second DEFAULT launch is never asked. --go-live/--fleet
+    # skip the handshake and still ask: their window runs the checkout's scripts and the
+    # operator is right there. See _asks_for_the_checkout for the tray-only case.
+    if _asks_for_the_checkout(tray_only,
+                              QtWidgets.QSystemTrayIcon.isSystemTrayAvailable()):
+        args.generator_dir = _choose_generator_dir(args.generator_dir, QtWidgets)
     shell = shell_mod.StudioShell(
         args.generator_dir,
         remember_roles_for_passwordless_login=args.remember_roles_for_passwordless_login,
@@ -655,7 +677,6 @@ def main(argv=None) -> int:
     else:
         open_main = open_studio
 
-    tray_only = args.tray or args.stack_tray
     # --tray/--stack-tray each mean "only this one" in isolation; neither (default) or
     # both means "show everything relevant" — but ALWAYS as exactly ONE tray icon.
     # (The old code appended a MeshTray AND a StackTray on the default path, so the user

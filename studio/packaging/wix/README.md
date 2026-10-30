@@ -125,10 +125,16 @@ The Studio is a front end over scripts in a `hugmesh-generator` checkout (`build
   checkout. The Start Menu shortcut starts in the install folder, which has no scripts, and
   passes no arguments.
 * **Choosing the checkout (#827):** `--generator-dir` wins, then `$HUGMESH_GENERATOR_DIR`, then
-  the folder last picked in the GUI (saved as `generator-dir.txt` in the Studio state dir,
-  `%USERPROFILE%\.hugmesh\studio`). When none of those is a checkout, the GUI says so on start
-  and opens a folder picker; a cancel keeps the install folder, and the pages then say what is
-  missing. See `core/generator_dir.py`.
+  the working directory, then the folder last picked in the GUI (saved as `generator-dir.txt`
+  in the Studio state dir, `%USERPROFILE%\.hugmesh\studio`); the variable, the working
+  directory and the saved folder count only when they are a checkout. When none is, the GUI
+  says so on start and opens a folder picker; a cancel keeps the install folder, and the pages
+  then say what is missing. Only a folder picked there is saved. The default launch asks after
+  the already-running check, so a second default launch never asks; `--go-live` and `--fleet`
+  skip that check and do ask, and `--tray`/`--stack-tray` never ask. The same picker appears
+  on Linux for a pip, Flatpak or release-tarball install started outside a checkout, and for
+  a source run given a `--generator-dir` that is no checkout; there it says the Studio itself
+  does not include the scripts. See `core/generator_dir.py`.
 * **From the code:** `core/build_driver.py` writes a `sudo` askpass helper that runs
   `sys.executable -m hugmesh_studio --askpass-gui`, which cannot work in a frozen exe. It only
   serves native `sudo` builds on Linux, which Windows never does; noted, not a Windows defect.

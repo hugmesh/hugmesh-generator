@@ -114,7 +114,7 @@ import subprocess
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 
-from . import local_services
+from . import local_services, proc_group, proc_text
 from .seeded_credentials import Roster, load_roster
 
 # ── where everything lives, relative to a generator checkout ─────────────────────
@@ -492,6 +492,34 @@ class SpecListing:
 
 Runner = Callable[..., subprocess.CompletedProcess]
 
+#: How long a timed-out listing may take to let go of its pipes once its tree is killed.
+_REAP_SEC = 5
+
+
+def _run_whole_tree(argv: Sequence[str], *, timeout: float, capture_output: bool = True,
+                    **kw) -> subprocess.CompletedProcess:
+    """``subprocess.run`` for the Windows listing, where the child is a process TREE.
+
+    npx.cmd runs under cmd.exe, which starts node, which starts playwright, and all of
+    them inherit the output pipes. On a timeout ``subprocess.run`` kills cmd.exe alone
+    and then, on Windows only, reads the pipes with NO timeout, so it waits for the
+    node grandchildren to exit by themselves: measured, a 2 s timeout returned after
+    12 s, and a hung ``--list`` would hang the catalogue probe for good. ``taskkill /T``
+    (:func:`proc_group.kill_group`) reaches the grandchildren too."""
+    if capture_output:
+        kw["stdout"] = kw["stderr"] = subprocess.PIPE
+    proc = subprocess.Popen(list(argv), **kw)
+    try:
+        out, err = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        proc_group.kill_group(proc)
+        try:
+            proc.communicate(timeout=_REAP_SEC)
+        except subprocess.TimeoutExpired:
+            pass        # taskkill missed one: leak its reader threads, never the caller
+        raise subprocess.TimeoutExpired(argv, timeout) from None
+    return subprocess.CompletedProcess(argv, proc.returncode, out, err)
+
 
 def list_specs(generator_dir: str, timeout: int = LIST_TIMEOUT_SEC,
                runner: Runner | None = None) -> SpecListing:
@@ -518,9 +546,15 @@ def list_specs(generator_dir: str, timeout: int = LIST_TIMEOUT_SEC,
         # npx is npx.cmd there, and CreateProcess does not try PATHEXT for a bare name:
         # "npx not found" was said on machines that have Node.js
         argv[0] = shutil.which(argv[0]) or argv[0]
+        # ...and that .cmd is a tree subprocess.run's timeout cannot stop (see
+        # _run_whole_tree). On POSIX run() waits only for npx itself after the kill.
+        run = runner or _run_whole_tree
     try:
+        # Spec titles carry em dashes, and Playwright writes UTF-8: decoded with the
+        # Windows code page they no longer match report.json's titles, and a byte
+        # cp1252 leaves undefined made stdout None.
         proc = run(argv, cwd=e2e_dir, capture_output=True, text=True,
-                   timeout=timeout)
+                   **proc_text.TEXT_IO, timeout=timeout)
     except FileNotFoundError:
         listing.error = "npx not found on PATH — Node.js is required to enumerate the suite."
         return listing
@@ -538,7 +572,7 @@ def list_specs(generator_dir: str, timeout: int = LIST_TIMEOUT_SEC,
                          f"{(proc.stderr or proc.stdout or '').strip()[:2000]}")
         return listing
     try:
-        payload = json.loads(proc.stdout)
+        payload = json.loads(proc.stdout or "")
     except ValueError as e:
         listing.error = f"could not parse --list JSON: {e}"
         return listing

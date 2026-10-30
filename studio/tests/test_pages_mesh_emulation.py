@@ -65,6 +65,7 @@ not answer" so the on-disk registry is the only source. Desktop-side launches
 windows on the developer's desktop mid-test.
 """
 import dataclasses
+import functools
 import inspect
 import json
 import os
@@ -83,6 +84,7 @@ from hugmesh_studio.core import emulation, emulation_save              # noqa: E
 from hugmesh_studio.core import mesh_emulation as me                   # noqa: E402
 from hugmesh_studio.core import mesh_monitor as mm                     # noqa: E402
 from hugmesh_studio.core import qemu_devices, qemu_tests               # noqa: E402
+from hugmesh_studio.core import platform_info                          # noqa: E402
 from hugmesh_studio.core.platform_info import HostInfo                 # noqa: E402
 from hugmesh_studio.gui import wizard as wizard_mod                    # noqa: E402
 from hugmesh_studio.gui.pages import _emulation_common as common       # noqa: E402
@@ -97,11 +99,17 @@ HOST = HostInfo(os="linux", is_gentoo=True, has_docker=False, has_bash=True,
 
 GIB = 1024 ** 3
 
+_REAL_BLOCKER = platform_info.native_windows_blocker
+
 
 @pytest.fixture(autouse=True)
 def _pinned_host(monkeypatch):
     monkeypatch.setattr(wizard_mod, "detect",
                         lambda builder_image="hugmesh-builder": HOST)
+    # The fake host above is Linux; the WSL2 refusal reads the REAL os.name, so on a
+    # Windows host every lane would refuse. Answer as the pinned host does.
+    monkeypatch.setattr(platform_info, "native_windows_blocker",
+                        functools.partial(_REAL_BLOCKER, osname="posix"))
 
 
 @pytest.fixture(autouse=True)

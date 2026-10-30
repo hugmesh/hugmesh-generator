@@ -465,5 +465,5 @@ class TestTheWarningsActuallyReachTheOperator:
         monkeypatch.setattr(platform_info, "detect_wsl", lambda: (False, 0))
         monkeypatch.setattr(qemu_tests.subprocess, "run",
                             lambda *a, **k: sp.CompletedProcess(a[0], 1, None, "conn refused"))
-        ok, why = qemu_tests.docker_available()
+        ok, why = qemu_tests.docker_available(osname="posix")   # the Linux advice
         assert ok is False and "'docker' group" in why and "WSL Integration" not in why

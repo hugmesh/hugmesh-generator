@@ -641,7 +641,8 @@ def results_summary(results: list[dict]) -> tuple[int, int, int]:
 DOCKER_PROBE_TIMEOUT_S = 4.0
 
 
-def docker_available(timeout_s: float = 15.0) -> tuple[bool, str]:
+def docker_available(timeout_s: float = 15.0,
+                     osname: str | None = None) -> tuple[bool, str]:
     """Whether this host can run the containerized harness at all.
 
     The Studio must say so up-front rather than let the operator configure a run
@@ -652,20 +653,28 @@ def docker_available(timeout_s: float = 15.0) -> tuple[bool, str]:
     daemon on the Windows side and exposes it per distro through a checkbox. So the
     WSL remedy REPLACES the generic advice rather than being appended to it — sending
     the operator to `systemctl start docker` in a distro that has no such unit is how
-    an unhelpful message becomes a wrong one.
+    an unhelpful message becomes a wrong one. Native Windows is the same trap one
+    level up: the daemon IS Docker Desktop, and Windows has no 'docker' group to join
+    (Docker Desktop's is docker-users), so it gets its own sentence. ``osname`` is
+    ``os.name`` unless a test passes another.
     """
+    native = (osname or os.name) == "nt"
     try:
         proc = subprocess.run(["docker", "info"], stdout=subprocess.DEVNULL,
                               stderr=subprocess.PIPE, text=True, timeout=timeout_s)
     except FileNotFoundError:
-        wsl = wsl_docker_remedy()
-        return False, ("docker was not found on PATH." + (" " + wsl if wsl else ""))
+        fix = wsl_docker_remedy() or ("Install Docker Desktop and start it."
+                                      if native else "")
+        return False, ("docker was not found on PATH." + (" " + fix if fix else ""))
     except (OSError, subprocess.SubprocessError) as exc:
         return False, f"could not run docker: {exc}"
     if proc.returncode != 0:
         wsl = wsl_docker_remedy()
         if wsl:
             return False, "cannot talk to the docker daemon. " + wsl
+        if native:
+            return False, ("cannot talk to the docker daemon: start Docker Desktop and "
+                           "wait until it says it is running.")
         return False, ("cannot talk to the docker daemon — is it running, and is "
                        "your user in the 'docker' group?")
     return True, "docker is available."

@@ -711,7 +711,7 @@ def test_restarting_a_record_whose_backend_is_not_text_is_refused_inline(page, b
     RESTART / REDO slot. It is checked first, before anything is applied, named, and
     the config next to it is not applied either."""
     page.cluster_domain.setText("keep.example"); page.jobs.setValue(5)
-    page.backend.setCurrentText("native")
+    page.backend.setCurrentText("docker")      # "native" is not offered on Windows
     s = _DamagedSession(dict(_cfg().to_dict(), cluster_domain="evil.example"))
     s.backend = backend
     page.load_from_session(s, pin=True)
@@ -721,7 +721,7 @@ def test_restarting_a_record_whose_backend_is_not_text_is_refused_inline(page, b
     assert f"backend must be text, not {type(backend).__name__}" in text, text
     assert page.pending_session_id != "fleet-damaged-1"
     assert page.cluster_domain.text() == "keep.example" and page.jobs.value() == 5
-    assert page.backend.currentText() == "native"
+    assert page.backend.currentText() == "docker"
     assert page.runs == [] and page.worker is None
 
 
@@ -729,7 +729,7 @@ def test_restarting_a_record_whose_backend_is_not_text_is_refused_inline(page, b
 def test_a_record_with_no_backend_still_loads_as_auto(page, backend):
     """The lenient case stays lenient: an absent backend (an old record) is ‘auto’,
     and the record IS applied and pinned."""
-    page.backend.setCurrentText("native")
+    page.backend.setCurrentText("docker")
     s = _DamagedSession(dict(_cfg().to_dict(), cluster_domain="rec.example"))
     s.backend = backend
     page.load_from_session(s, pin=True)

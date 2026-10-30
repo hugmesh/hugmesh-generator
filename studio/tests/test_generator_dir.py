@@ -8,6 +8,7 @@ could choose another folder.
 from __future__ import annotations
 
 import os
+import sys
 import types
 
 import pytest
@@ -56,9 +57,48 @@ def test_the_saved_choice_is_used_only_while_it_is_a_checkout(elsewhere, tmp_pat
     assert generator_dir.resolve("") == elsewhere
 
 
+def test_a_working_directory_that_is_a_checkout_beats_the_saved_choice(tmp_path, monkeypatch):
+    # `cd checkout-B && hugmesh-studio-cli --print-command ...` drove B before the saved
+    # pick existed; a folder picked once for the MSI shortcut must not take that over.
+    monkeypatch.delenv(generator_dir.ENV, raising=False)
+    generator_dir.save(_checkout(tmp_path / "A"))
+    b = _checkout(tmp_path / "B")
+    monkeypatch.chdir(b)
+    assert generator_dir.resolve(str(tmp_path / "no-repo")) == b
+
+
+def test_an_environment_value_that_is_no_checkout_is_ignored(elsewhere, tmp_path, monkeypatch):
+    repo = _checkout(tmp_path / "repo")
+    monkeypatch.setenv(generator_dir.ENV, str(tmp_path / "gone"))     # stale profile value
+    assert generator_dir.resolve(repo) == repo
+    # ... and it does not hide the folder the picker saved, or the picker would come
+    # back on every start
+    picked = _checkout(tmp_path / "picked")
+    generator_dir.save(picked)
+    assert generator_dir.resolve("") == picked
+
+
+def test_a_relative_environment_value_after_the_nix_cd_falls_back_to_the_source_tree(
+        tmp_path, monkeypatch):
+    # flake.nix: cd "${HUGMESH_GENERATOR_DIR:-$PWD}" and exec Python with it still set, so
+    # a relative "hg" is resolved again inside hg/ and names hg/hg.
+    repo = _checkout(tmp_path / "hg")
+    monkeypatch.chdir(repo)
+    monkeypatch.setenv(generator_dir.ENV, "hg")
+    assert generator_dir.resolve(repo) == repo
+
+
 def test_the_message_says_what_is_missing():
     said = generator_dir.not_a_checkout_message(r"C:\Program Files\HugMesh")
     assert generator_dir.MARKER in said and "hugmesh-generator" in said
+
+
+def test_the_message_names_the_install_the_operator_runs():
+    # the picker also runs on Linux (pip, Flatpak, the release tarball, a source run given
+    # a --generator-dir that is no checkout), none of which is the Windows installer
+    assert "Windows installer" in generator_dir.not_a_checkout_message("x", osname="nt")
+    linux = generator_dir.not_a_checkout_message("/home/u", osname="posix")
+    assert "Windows" not in linux and "the Studio itself does not include them" in linux
 
 
 class _FakeQt:
@@ -108,7 +148,131 @@ def test_a_cancel_keeps_the_folder_and_saves_nothing(elsewhere):
     assert generator_dir.saved() == ""
 
 
-def test_a_checkout_is_never_asked_about(tmp_path):
+def test_a_checkout_is_never_asked_about_and_not_saved(tmp_path):
+    # a --generator-dir or source-tree checkout was not picked in the GUI; saving it would
+    # make a one-off flag the default of every later non-source launch
     good = _checkout(tmp_path / "repo")
     qt = _FakeQt([], [])
     assert app._choose_generator_dir(good, qt) == good and qt.shown == []
+    assert generator_dir.saved() == ""
+
+
+def test_a_folder_name_that_cannot_be_saved_still_starts_the_gui(elsewhere, tmp_path):
+    # Non-UTF-8 bytes in a Linux path decode to a lone surrogate (an unpaired one on
+    # Windows); the UTF-8 save raises UnicodeEncodeError, a ValueError, not an OSError.
+    odd = _checkout(tmp_path / "g\udcff")
+    qt = _FakeQt(["pick"], [odd])
+    assert app._choose_generator_dir(elsewhere, qt) == odd
+    assert generator_dir.saved() == ""
+
+
+# ── main()'s wiring, with every Qt piece faked so this file stays Qt-free ──────────────
+
+class _Recorder:
+    def __init__(self):
+        self.events = []
+
+
+def _fake_gui(monkeypatch, rec, *, primary=True, tray=False):
+    """Fake the modules main() imports for its GUI section, and record the order of the
+    instance handshake, the folder question and the shell it builds."""
+    import hugmesh_studio.gui as gui_pkg
+    from hugmesh_studio.core import instance
+
+    class QApplication:
+        def __init__(self, _argv):
+            pass
+
+        def __getattr__(self, _name):           # setApplicationName and friends
+            return lambda *a, **k: None
+
+        def exec(self):
+            rec.events.append("exec")
+            return 0
+
+    qtwidgets = types.SimpleNamespace(
+        QApplication=QApplication,
+        QSystemTrayIcon=types.SimpleNamespace(isSystemTrayAvailable=lambda: tray))
+
+    class Shell:
+        def __init__(self, folder, **_kw):
+            rec.events.append(("shell", folder))
+
+        def install_tray(self, **_kw):
+            return types.SimpleNamespace(show=lambda: rec.events.append("tray"))
+
+        def __getattr__(self, _name):           # install_quit_guard, open_or_raise, ...
+            return lambda *a, **k: None
+
+    def ask():
+        rec.events.append("ask-already-running")
+        return "nothing"
+
+    fakes = {
+        "qt": types.SimpleNamespace(QtWidgets=qtwidgets, BINDING="fake"),
+        "branding_icon": types.SimpleNamespace(brand_icon=lambda: None),
+        "shell": types.SimpleNamespace(StudioShell=Shell, ask_already_running=ask,
+                                       CHOICE_NEW_WINDOW="new", CHOICE_RESET="reset"),
+    }
+    for name, module in fakes.items():
+        monkeypatch.setitem(sys.modules, f"hugmesh_studio.gui.{name}", module)
+        monkeypatch.setattr(gui_pkg, name, module, raising=False)
+
+    class Server:
+        def start(self):
+            rec.events.append("handshake")
+            return primary
+
+    monkeypatch.setattr(instance, "InstanceServer", Server)
+    monkeypatch.setattr(instance, "send", lambda *a: None)
+
+    def choose(current, _qt):
+        rec.events.append(("choose", current))
+        return current + "-picked"
+
+    monkeypatch.setattr(app, "_choose_generator_dir", choose)
+
+
+def test_main_asks_after_the_handshake_and_builds_the_shell_on_the_answer(
+        elsewhere, monkeypatch):
+    rec = _Recorder()
+    _fake_gui(monkeypatch, rec)
+    assert app.main(["--generator-dir", elsewhere]) == 0
+    assert rec.events[:3] == ["handshake", ("choose", elsewhere),
+                              ("shell", elsewhere + "-picked")]
+
+
+def test_a_second_default_launch_is_never_asked(elsewhere, monkeypatch):
+    rec = _Recorder()
+    _fake_gui(monkeypatch, rec, primary=False)
+    assert app.main(["--generator-dir", elsewhere]) == 0
+    assert rec.events == ["handshake", "ask-already-running"]
+
+
+@pytest.mark.parametrize("flag", ["--tray", "--stack-tray"])
+def test_a_tray_only_launch_never_blocks_on_the_question(elsewhere, monkeypatch, flag):
+    rec = _Recorder()
+    _fake_gui(monkeypatch, rec, tray=True)
+    assert app.main([flag, "--generator-dir", elsewhere]) == 0
+    assert ("shell", elsewhere) in rec.events
+    assert not any(isinstance(e, tuple) and e[0] == "choose" for e in rec.events)
+
+
+@pytest.mark.parametrize("flag", ["--tray", "--stack-tray"])
+def test_a_tray_only_launch_with_no_tray_asks_before_its_wizard(elsewhere, monkeypatch,
+                                                               flag):
+    # no tray means main() opens the wizard instead, and that window needs the checkout
+    rec = _Recorder()
+    _fake_gui(monkeypatch, rec, tray=False)
+    assert app.main([flag, "--generator-dir", elsewhere]) == 0
+    assert ("choose", elsewhere) in rec.events
+    assert ("shell", elsewhere + "-picked") in rec.events
+
+
+@pytest.mark.parametrize("tray_only,tray_available,asks", [
+    (False, True, True), (False, False, True),
+    (True, True, False),          # an autostart tray launch is never blocked by a modal
+    (True, False, True),          # ...but with no tray main() opens the wizard: ask
+])
+def test_who_is_asked_for_the_checkout(tray_only, tray_available, asks):
+    assert app._asks_for_the_checkout(tray_only, tray_available) is asks

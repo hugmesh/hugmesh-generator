@@ -711,6 +711,15 @@ class ProgressPage(QtWidgets.QWizardPage):
         fg.addWidget(self.flash_check_out)
         self.flash_group.setVisible(False)
         lay.addWidget(self.flash_group)          # below the splitter, beside the action bar
+        # Where flashing cannot work on this host (native Windows; WSL with no USB
+        # attached) there are never any targets, so the group above never appears.
+        # After an all-ok run this note takes its place and says why, with the fix.
+        self.flash_blocked_note = QtWidgets.QLabel()
+        self.flash_blocked_note.setWordWrap(True)
+        self.flash_blocked_note.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.flash_blocked_note.setVisible(False)
+        lay.addWidget(self.flash_blocked_note)
 
         # ── post-build FLASH PLAN table (#415, mesh / multi-entry) ────────────────
         # The Review page plans entry -> device. Until #415 the IMAGE half of that was
@@ -1364,6 +1373,7 @@ class ProgressPage(QtWidgets.QWizardPage):
         self.flash_plan_table.setRowCount(0)
         self.flash_plan_box.setVisible(False)
         self.flash_group.setVisible(False)        # only an all-ok finish reveals it
+        self.flash_blocked_note.setVisible(False)  # ... or, where flashing cannot work, this
         self.total_bar.setRange(0, 100)
         self.total_bar.setValue(0)
         # put the chunk back to blue: a prior all-ok run turned it green, and a second
@@ -3054,8 +3064,16 @@ class ProgressPage(QtWidgets.QWizardPage):
         busy = self.flash_worker is not None and self.flash_worker.isRunning()
         self.flash_btn.setEnabled(bool(targets) and not busy)
         # only reveal post-build on an all-ok run (never before completion, never on fail)
-        if self._all_terminal and self._run_all_ok() and targets:
+        settled_ok = self._all_terminal and self._run_all_ok()
+        if settled_ok and targets:
             self.flash_group.setVisible(True)
+        # No targets because this host cannot flash at all: say so rather than nothing.
+        # flash_blocker() is "" on a Linux host that can flash, where a missing stick
+        # keeps the old silence (plug one in and the timer reveals the group).
+        host = getattr(self.wiz, "host", None)
+        blocker = "" if targets or host is None else host.flash_blocker()
+        self.flash_blocked_note.setText(blocker)
+        self.flash_blocked_note.setVisible(bool(settled_ok and blocker))
 
     def _selected_target(self):
         path = self.flash_combo.currentData()
@@ -3450,6 +3468,12 @@ class ProgressPage(QtWidgets.QWizardPage):
         the blast radius, not the opt-in: this boots images in a container and writes no
         block device, so there is nothing to destroy."""
         if not getattr(self.wiz.cfg, "qemu_device_tests", False):
+            return
+        blocker = qemu_tests.native_blocker()
+        if blocker:
+            # The runner is a bash script: on native Windows the spawn IS the failure,
+            # and _qemu_tests_done would then blame "failures" for tests that never ran.
+            self.log.appendPlainText(f"QEMU device tests: skipped. {blocker}")
             return
         workdir = self._session.workdir if self._session is not None else ""
         if not workdir or not os.path.isdir(workdir):
