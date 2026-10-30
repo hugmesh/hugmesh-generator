@@ -49,7 +49,7 @@ def test_hand_edited_json_loads_whatever_windows_saved_it_as(tmp_path, encoding)
 
 #: The modules group 4 named. Every text-mode subprocess call in them must pin the
 #: decoding (``**proc_text.TEXT_IO`` or an explicit ``encoding=``).
-PINNED = ["mesh_controls.py", "mesh_node.py", "local_stack_node.py"]
+PINNED = ["mesh_controls.py", "mesh_node.py", "local_stack_node.py", "e2e_catalogue.py"]
 
 
 @pytest.mark.parametrize("name", PINNED)

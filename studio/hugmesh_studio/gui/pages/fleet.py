@@ -104,6 +104,15 @@ _STEP_TITLES = ("Platforms", "Roles & boards", "Shared options",
                 "Domain services", "Review", "Run")
 
 
+def _backend_choices(osname: str | None = None) -> list[str]:
+    """The Backend combo's items. No "native" on Windows, as on BuildPage: it is sudo +
+    bash on a Gentoo host, which the MSI cannot run, and FleetDriver.preflight refuses it
+    there anyway. ``osname`` is ``os.name`` unless a test passes another."""
+    if (osname or os.name) == "nt":
+        return ["auto", "docker"]
+    return ["auto", "native", "docker"]
+
+
 class _FleetBrandOptions:
     """The two FleetConfig fields the superbrand step reads and writes — the Cluster
     domain and the brand profile — as attributes over the page's own line edits, so the
@@ -473,7 +482,7 @@ class FleetPage(QtWidgets.QWidget):
         # the same range FleetConfig.validate enforces for the TUI's `set jobs N`
         self.jobs = QtWidgets.QSpinBox(); self.jobs.setRange(*JOBS_RANGE); self.jobs.setValue(8)
         sl.addWidget(_row("Jobs", self.jobs))
-        self.backend = QtWidgets.QComboBox(); self.backend.addItems(["auto", "native", "docker"])
+        self.backend = QtWidgets.QComboBox(); self.backend.addItems(_backend_choices())
         sl.addWidget(_row("Backend", self.backend))
         self.extra_flags = QtWidgets.QLineEdit()
         self.extra_flags.setPlaceholderText("extra pass-through builder flags, appended verbatim")

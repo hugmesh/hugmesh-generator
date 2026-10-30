@@ -305,5 +305,7 @@ jobs:
           tests/test_generator_dir.py
           tests/test_windows_sentences.py
           tests/test_org_export_windows.py
+          tests/test_windows_fleet.py
+          tests/test_windows_load_and_cleanup.py
           "tests/test_windows_packaging_files.py::test_the_spec_freezes_the_entry_shim_as_a_windowed_onedir"
           "tests/test_windows_packaging_files.py::test_windows_also_freezes_a_console_twin_into_the_same_tree"

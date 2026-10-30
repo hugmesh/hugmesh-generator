@@ -41,7 +41,7 @@ import shlex
 from dataclasses import MISSING, asdict, dataclass, field, fields
 from typing import Any, ClassVar
 
-from . import build_driver
+from . import build_driver, platform_info
 from .build_driver import BuildDriver
 from .config import (Domain, IdentityValidationError, ImageConfig,
                      domain_rows_to_dict, validate_domain_name)
@@ -601,7 +601,15 @@ class FleetDriver(BuildDriver):
             problems.append(
                 f"Docker builder image '{self.host.builder_image}' not found — build it "
                 f"first: {' '.join(self.builder_image_build_command())}")
-        if backend == "native" and not self.host.is_root:
+        if backend == "native" and platform_info.native_windows_blocker("A native fleet build"):
+            # BuildDriver.preflight's refusal, which this override never reached. is_root
+            # is always False on Windows (no geteuid), so the root sentence below was the
+            # one shown there, and no Administrator shell could ever clear it.
+            problems.append(
+                "A native fleet build runs sudo and bash on a Gentoo host, which the "
+                "Windows build of the Studio cannot do. Choose the docker backend (Docker "
+                "Desktop), or run the Studio inside WSL2.")
+        elif backend == "native" and not self.host.is_root:
             problems.append("Native build needs root (the Studio will prepend sudo).")
         if cfg.brand_profile and not os.path.exists(
                 os.path.join(self.generator_dir, cfg.brand_profile)

@@ -12,6 +12,7 @@ The docs for the image/infra layer. State key used throughout:
 - [`FIRST-RUN.md`](FIRST-RUN.md) — the one-time, advisory bootstrap of the first Studio or CLI run: per-user `~/.local/bin` links, a `properties.json`, and a doctor pass (✅).
 - [`NIXOS-STEAMOS.md`](NIXOS-STEAMOS.md) — the Studio wizard and ncurses menu on NixOS / SteamOS (Steam Deck) / Arch / Debian / Fedora: the additive Nix flake (`flake.nix`/`shell.nix`) and the portable bash launcher (`scripts/studio-launch.sh`), for hosts without `python3`/`make`/FHS (✅).
 - [`LOCAL-TESTING.md`](LOCAL-TESTING.md) — LAN `.test` fleet testing.
+- [`RELEASING.md`](RELEASING.md) — **how to release a beta of the whole org with one command**, `scripts/release-beta.sh`: the dependency order (Maven chain, gateway, overlays, Java images, UIs, games, mesh node, Studio, site), the two web-UI-only steps, resume and recovery, bumping a version, and troubleshooting (✅).
 - [`STUDIO-INSTALLERS.md`](STUDIO-INSTALLERS.md) — the Studio's **Windows MSI** and **Linux Flatpak**: what they package, what they still need from the host, and how a release is cut (✅).
 - [`RESOURCE-LIMITS.md`](RESOURCE-LIMITS.md) — cap the **CPU / memory / GPU** that builds, the local stack, emulated meshes and kind nodes may use, so the machine stays usable (✅).
 - [`LOCAL-STACK.md`](LOCAL-STACK.md) — `make stack-up` local-dev compose stack (opt-in upstream tuwunel/Mastodon for dev only).

@@ -28,6 +28,7 @@ Proves the REQUIREMENT set headlessly:
     reaches driver.cancel() and the record lands ``stopped``, never faked
     ``complete``.
 """
+import functools
 import os
 import threading
 import time
@@ -41,7 +42,10 @@ pytest.importorskip("hugmesh_studio.gui.qt",
 
 from hugmesh_studio.core import build_sessions as bs                # noqa: E402
 from hugmesh_studio.core.fleet import FleetConfig, FleetDriver      # noqa: E402
+from hugmesh_studio.core import platform_info                       # noqa: E402
 from hugmesh_studio.core.platform_info import HostInfo              # noqa: E402
+
+_REAL_BLOCKER = platform_info.native_windows_blocker
 from hugmesh_studio.core import host_resources as hr                # noqa: E402
 from hugmesh_studio.core import resource_limits as rl               # noqa: E402
 from hugmesh_studio.gui import wizard as wizard_mod                 # noqa: E402
@@ -59,6 +63,10 @@ HOST = HostInfo(os="linux", is_gentoo=True, has_docker=True, has_bash=True,
 def _pinned_host(monkeypatch):
     monkeypatch.setattr(wizard_mod, "detect",
                         lambda builder_image="hugmesh-builder": HOST)
+    # The fake host above is Linux; the WSL2 refusal reads the REAL os.name, so on a
+    # Windows host every lane would refuse. Answer as the pinned host does.
+    monkeypatch.setattr(platform_info, "native_windows_blocker",
+                        functools.partial(_REAL_BLOCKER, osname="posix"))
 
 
 @pytest.fixture(autouse=True)
