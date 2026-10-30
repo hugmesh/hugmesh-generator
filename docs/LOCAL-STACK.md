@@ -209,6 +209,16 @@ docker compose -f tests\stack\compose.local.yaml build
 docker compose -f tests\stack\compose.local.yaml up -d
 ```
 
+`tests\stack\.env` holds the route-access-db owner password
+(`ROUTE_ACCESS_DB_PASSWORD=<random hex>`); it is gitignored and per checkout, and compose
+loads it by itself for `-f tests\stack\compose.local.yaml`. `scripts/stack-up.ps1` and
+`bash tests/stack/gen-route-access-env.sh` write that one key (any other line you keep in
+the file stays). Run one of them before the first hand-run `up`: without the key `up`
+stops with `service "route-access-env-check" didn't complete successfully: exit 1`
+(see "Without the key, `up` refuses" below). If you add `--env-file <other>` to a
+compose call, also pass `--env-file tests\stack\.env`: compose skips `.env` once any
+`--env-file` is given.
+
 ### Windows gotchas (handled)
 
 - **CRLF:** `.gitattributes` forces **LF** on all `*.sh` / `*.yaml` / `*.conf` /
@@ -591,6 +601,72 @@ paths, not a 404).
   `/bff/admin` + `/bff/superadmin` converges back to `true` as the file documents.
   Both make targets always reach the compose `route-access-db`: a `POSTGRES_HOST`
   exported in your shell (e.g. for a seed replay) does not redirect them.
+- **route-access-db owner password is per checkout.** `compose.local.yaml` does not
+  spell it: `ROUTE_ACCESS_DB_PASSWORD` is a key in the gitignored `tests/stack/.env`
+  (mode 0600), the env file compose loads by itself, so `make stack-*`, the Studio's Mesh
+  Monitor scale button and a hand-run `docker compose -f tests/stack/compose.local.yaml`
+  all get it. `tests/stack/gen-route-access-env.sh` writes it (hex, so it survives the
+  r2dbc URL) and owns only that key: other lines you keep in `tests/stack/.env` are left
+  alone. `make stack-up` runs the generator first as its own step
+  (`stack-route-access-env`), so a generator failure stops make instead of creating
+  containers with an empty password (targets that create nothing, such as `stack-ps`,
+  only read the key); the Studio's scale runs it too and refuses
+  on failure. It is never rotated, because the postgres image only reads
+  `POSTGRES_PASSWORD` when it initialises an empty volume: `make stack-halt` keeps both,
+  `make stack-down` drops the volume and then strips the key.
+- **Without the key, `up` refuses; it does not run the gateways without a password.**
+  What a gateway does with an EMPTY route-access-db password, measured 2026-10-29 on
+  the hugmesh-gateway image this stack builds (route-access code identical to main):
+  on an EXISTING route-access-pg volume `route-access-db` starts and is healthy (postgres
+  reads `POSTGRES_PASSWORD` only at initdb), every gateway's login is rejected, and the
+  gateway neither refuses to start nor reports unhealthy. Its rules then come from the
+  Cassandra read-cache: when that cache is EMPTY (a fresh cassandra volume) the empty
+  result REPLACES the built-in seed, and a plain signed-in user is forwarded to
+  `/bff/admin/**`, `/admin/**`, `/mod/**` and every other governed path (fail OPEN);
+  when it holds rows from an earlier good run, that stale snapshot is enforced. So
+  compose must not start them. Two guards in `compose.local.yaml`:
+  - the `route-access-env-check` one-shot exits 1 when the value is empty, and
+    `route-access-db` plus the four `ROUTE_ACCESS_R2DBC_URL` consumers (three gateways
+    and admin-bff-api) depend on it completing. A hand-run `up` therefore fails with
+    `service "route-access-env-check" didn't complete successfully: exit 1` and starts
+    none of them. `up -d` prints only that line; the fix is in
+    `docker compose -f tests/stack/compose.local.yaml logs route-access-env-check`:
+    run `bash tests/stack/gen-route-access-env.sh`, then the same `up` again (it
+    recreates the containers with the value). A failed `up` against a RUNNING stack
+    has already recreated `route-access-db` and those four services by then, so they
+    are left created but stopped until that second `up`. When the generator later
+    finds such a container it ignores its empty value and says so;
+  - `docker start`, the Studio's Start button and `up --no-deps` skip `depends_on`.
+    For those, the four consumers carry `JAVA_TOOL_OPTIONS` that, with an empty value,
+    names a JVM option that does not exist, so the JVM exits 1 before the app starts
+    with `Unrecognized VM option 'ROUTE_ACCESS_DB_PASSWORD_REQUIRED.see.tests/stack/gen-route-access-env.sh'`
+    (the services' `restart: on-failure:5` retries that five times, then the
+    container stays down).
+    With a value it is a no-op `-Dhugmesh.guard.…` property. Neither guard ever sees
+    the password itself (both use `${ROUTE_ACCESS_DB_PASSWORD:+…}`).
+  `docker compose ps`, `logs`, `exec` and `down` keep working with the value empty (a
+  required `${ROUTE_ACCESS_DB_PASSWORD:?}` would have broken all four). The first
+  `make stack-up` after this change recreates the three gateways and admin-bff-api
+  once (their environment gained `JAVA_TOOL_OPTIONS`); `route-access-db` is not
+  recreated. The gateway defect itself is hugmesh-gateway#61.
+- **A stack created before 2026-10-29 keeps working.** Its route-access-pg volume was
+  initialised with the old compose default. When the key is missing and that volume
+  exists, the generator adopts the password the project's `route-access-db` container
+  was created with, or, when no container is left (after `stack-halt`), the old default,
+  and warns on stderr. The running stack is not recreated: the containers get the same
+  value they already have. `make stack-down` (which DROPS the stack's data) is the way
+  to a random value; `ALTER ROLE` inside the container plus editing `tests/stack/.env`
+  rotates it in place.
+- **Several checkouts share ONE route-access-db volume.** `compose.local.yaml` and every
+  file it includes say `name: hugmesh-local`, so all checkouts on one machine drive the
+  same project and volume, while `tests/stack/.env` is per checkout. A second checkout
+  adopts the first one's value while the first one's `route-access-db` container exists
+  (running or stopped). After `make stack-halt` (containers removed) it cannot see it and
+  falls back to the pre-2026-10-29 default, which is WRONG for a volume the first checkout
+  minted: copy `ROUTE_ACCESS_DB_PASSWORD` from the first checkout's `tests/stack/.env`, or
+  set a different `COMPOSE_PROJECT_NAME` for the second checkout. `make stack-down` in
+  one checkout drops the shared volume and strips only its own key; the next stack-up
+  from any checkout initialises the new volume with that checkout's value.
 - **Fragment fleet serves an empty set** until federation has enabled modules +
   a valid `app-fragment-sync` Casdoor client, so `/_fragments/**` is up but
   empty. It is the standalone sync image on `:8081` (in k8s it is nginx + a sync

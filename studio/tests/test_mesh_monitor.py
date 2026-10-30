@@ -765,13 +765,14 @@ def test_compose_oneshot_scan_reads_restart_no_services_only(tmp_path):
     assert mm._compose_oneshot_services("") == frozenset()
 
 
-def test_the_real_compose_file_names_exactly_its_two_one_shots():
+def test_the_real_compose_file_names_exactly_its_three_one_shots():
     """The scan is text over a committed file: pin it against the REAL one, so a change
-    to how the file spells `restart: "no"` (or a third one-shot) is noticed here rather
-    than as a mesh that reads 41/43 again."""
+    to how the file spells `restart: "no"` (or a fourth one-shot) is noticed here rather
+    than as a mesh that reads 41/43 again. route-access-env-check (2026-10-29) is the
+    third: it exits 0 when ROUTE_ACCESS_DB_PASSWORD is set, so it is finished work too."""
     real = os.path.join(GENERATOR_DIR, "tests", "stack", "compose.local.yaml")
     assert mm._compose_oneshot_services(real) == frozenset(
-        {"cassandra-init", "admin-bff-db-init"})
+        {"cassandra-init", "admin-bff-db-init", "route-access-env-check"})
 
 
 def test_an_exit_zero_compose_one_shot_is_completed_but_a_service_that_stopped_is_not(
