@@ -743,6 +743,9 @@ def test_card_labels_show_markup_as_written(two_domains, qapp, tmp_path, monkeyp
     full = ("src/index.html changed since I proposed this edit (src/index.html line 3: the file says "
             "'<body>', the diff expects '<footer>'); nothing was changed. Ask again for a fresh diff.")
     assert full in dock.answer.toPlainText()                   # the full text, where it can scroll
+    card.apply_btn.click()                                     # pressed again: said once
+    pump(qapp)
+    assert dock.answer.toPlainText().count(full) == 1
     shown = card.status.text()
     assert "'<body>'" in shown or shown.endswith("(the full list is in the answer above)")
     assert "&lt;body&gt;" in card.status.toolTip() or "<body>" in card.status.toolTip()

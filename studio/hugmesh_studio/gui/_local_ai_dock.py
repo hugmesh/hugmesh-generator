@@ -2242,11 +2242,13 @@ class _Card(QtWidgets.QFrame):
         shown = self.compact(text)
         self.status.setText(shown)
         self.status.setToolTip(plain_tip(detail or (text if shown != text else "")))
-        if shown != text:
+        if shown != text and getattr(self, "_appended", "") != text:
             # the card promises "the full list is in the answer above": keep that promise
+            # (once: a second press of the same refused Apply adds nothing)
             dock = getattr(self, "dock", None)
             if dock is not None:
                 dock._append(text + "\n\n")
+                self._appended = text
         self._fit()
 
     def _fit(self) -> None:
