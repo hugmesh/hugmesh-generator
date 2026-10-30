@@ -246,8 +246,13 @@ def test_apply_refuses_when_the_file_was_edited_after_the_card_and_changes_nothi
 def test_two_applies_in_one_second_get_their_own_ids_and_revert_is_exact(ws, monkeypatch):
     """PR #832 review (N9): the id was a per-second timestamp plus the pid, so two
     applies in one second shared a before-copy folder; reverting the first then said
-    "" (Reverted) while the file kept the second edit's text."""
+    "" (Reverted) while the file kept the second edit's text. The clock is pinned to
+    one instant (time.time AND strftime), so the microseconds and the pid are the
+    same for both applies and only the exclusive mkdir and its retry count can keep
+    them apart (round 3: with strftime alone pinned, the microseconds did the work and
+    makedirs(exist_ok=True) in place of mkdir stayed green)."""
     space, state = ws
+    monkeypatch.setattr(ce.time, "time", lambda: 1793270400.25)
     monkeypatch.setattr(ce.time, "strftime", lambda fmt, *a: "20261029-120000")
     path = os.path.join(space.path, "src", "index.html")
     first = ce.apply(ce.parse_diff(DIFF, space), space, str(state))
@@ -257,6 +262,8 @@ def test_two_applies_in_one_second_get_their_own_ids_and_revert_is_exact(ws, mon
     second = ce.apply(ce.parse_diff(second_diff, space), space, str(state))
     assert isinstance(first, ce.Applied) and isinstance(second, ce.Applied)
     assert first.id != second.id and first.before_dir != second.before_dir
+    stamp = f"20261029-120000-250000-{os.getpid() % 10000:04d}"
+    assert (first.id, second.id) == (stamp + "000", stamp + "001")    # only the retry count differs
     assert sorted(ce.list_applied(str(state))) == sorted([first.id, second.id])
     assert ce.list_applied(str(state)) == [first.id, second.id]       # the prune order holds
     # the first edit's file changed after it (the second edit): it refuses, never lies
