@@ -63,6 +63,7 @@ functions (core/assistant_actions, core/assistant_code_edits), never without the
 """
 from __future__ import annotations
 
+import html
 import os
 import queue
 import sys
@@ -123,6 +124,24 @@ def _log_swallowed(where: str) -> None:
     traceback.print_exc(file=sys.stderr)
 
 
+def plain(label: "QtWidgets.QLabel") -> "QtWidgets.QLabel":
+    """``label`` shows its text as written. Qt's default (AutoText) reads text that
+    looks like markup as rich text, so a card quoting a file's ``<body>`` line showed
+    "the file says ''" (PR #832 review); every label that shows model, file or log
+    text goes through here."""
+    label.setTextFormat(Qt.TextFormat.PlainText)
+    return label
+
+
+def plain_tip(text: str) -> str:
+    """A tooltip that shows ``text`` as written: tooltips have no text format of their
+    own and read markup-looking text as rich text, so such text is escaped."""
+    text = text or ""
+    if "<" not in text and "&" not in text:
+        return text
+    return "<p style='white-space:pre-wrap'>" + html.escape(text) + "</p>"
+
+
 def dock_height_for(window_height: int, expanded: bool, bar_px: int,
                     tall: bool = False) -> int:
     """How tall the dock may be in a window of ``window_height`` — a pure function so
@@ -162,10 +181,11 @@ class _ElidedLabel(QtWidgets.QLabel):
         self.setSizePolicy(QtWidgets.QSizePolicy.Policy.Ignored,
                            QtWidgets.QSizePolicy.Policy.Preferred)
         self.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
+        plain(self)
 
     def set_full_text(self, text: str) -> None:
         self._full = text
-        self.setToolTip(text)
+        self.setToolTip(plain_tip(text))
         self._elide()
 
     def full_text(self) -> str:
@@ -721,13 +741,13 @@ class LocalAIDock(QtWidgets.QFrame):
         chat_lay = QtWidgets.QVBoxLayout(chat)
         chat_lay.setContentsMargins(0, 3, 0, 0)
         chat_lay.setSpacing(3)
-        self.note = QtWidgets.QLabel("")
+        self.note = plain(QtWidgets.QLabel(""))
         self.note.setWordWrap(True)
         self.note.setStyleSheet(styles.muted())
         self.note.setVisible(False)
         tip_row = QtWidgets.QHBoxLayout()
         tip_row.setSpacing(4)
-        self.tip_line = QtWidgets.QLabel("")
+        self.tip_line = plain(QtWidgets.QLabel(""))
         self.tip_line.setObjectName("assistant_tip_line")
         self.tip_line.setWordWrap(True)
         self.tip_line.setStyleSheet(styles.muted())
@@ -1021,8 +1041,56 @@ class LocalAIDock(QtWidgets.QFrame):
         return max(MIN_CLICK_PX, self.bar.sizeHint().height()) + 7
 
     def preferred_height(self, window_height: int) -> int:
-        return dock_height_for(window_height, self.expanded and not self.popped,
-                               self.bar_height(), self.tall)
+        h = dock_height_for(window_height, self.expanded and not self.popped,
+                            self.bar_height(), self.tall)
+        if self.expanded and not self.popped:
+            h = max(h, self.card_need())
+        return h
+
+    def card_need(self) -> int:
+        """How tall the docked panel must be to show the whole card (its text and its
+        button row) above a 36 px answer area, or 0 with no card on the Assistant tab.
+        The usual cap (38 % of the window) has no room for a card at the netbook default
+        942x552: its Apply / Close / Undo row fell below the window edge (PR #832
+        review). While a card is up the panel grows to fit it; _DockMount still leaves
+        the page at least 120 px."""
+        card = self._card
+        if card is None or self.current_tab() != "assistant":
+            return 0
+        try:
+            chat = card.parentWidget()
+            if chat is None:
+                return 0
+            if self.body.isVisible() and chat.isVisible():
+                top = chat.mapTo(self, QtCore.QPoint(0, 0)).y()
+            else:
+                m = self._outer.contentsMargins()
+                top = (m.top() + self.bar.sizeHint().height() + self._outer.spacing()
+                       + self.tabs.tabBar().sizeHint().height())
+            need = chat.minimumSizeHint().height()
+            if self.note.isVisibleTo(chat) and self.note.text():
+                # a wrapped label's minimum is one line; what it shows is its full height
+                w = max(50, self.note.width())
+                need += max(0, self.note.heightForWidth(w) - self.note.minimumSizeHint().height())
+            return top + need + self._outer.contentsMargins().bottom() + 2
+        except RuntimeError:                     # a card on its way out
+            return 0
+
+    def _card_resized(self) -> None:
+        """The card's height changed (a longer status, a new width): place the panel
+        again on the next turn of the event loop. Synchronously it would land inside
+        _DockMount.relayout, which ignores a call made while it is placing."""
+        if getattr(self, "_card_relayout_due", False):
+            return
+        self._card_relayout_due = True
+
+        def again():
+            try:
+                self._card_relayout_due = False
+                self.layout_changed.emit()
+            except RuntimeError:                 # the dock was destroyed first
+                pass
+        QtCore.QTimer.singleShot(0, again)
 
     def set_tall(self, on: bool) -> None:
         """Let the panel take most of the window (the Bring-up step is on screen) or go
@@ -1088,6 +1156,8 @@ class LocalAIDock(QtWidgets.QFrame):
             key = self.current_tab()
             assistant_settings.update(tab=key)
             self._sync_tall()
+            if self._card is not None:
+                self.layout_changed.emit()        # the card's height counts on one tab only
             self._tab_shown(key)
         except Exception:
             _log_swallowed("LocalAIDock._on_tab_changed")
@@ -1834,7 +1904,7 @@ class LocalAIDock(QtWidgets.QFrame):
         self.tip.set_full_text(("Tip: " + text) if text else "")
         self.tip_line.setText(("Tip: " + text) if text else "")
         if model:
-            self.tip.setToolTip("Tip: " + text + "\n(from the local model)")
+            self.tip.setToolTip(plain_tip("Tip: " + text + "\n(from the local model)"))
 
     def refresh_tip(self, force: bool = False) -> None:
         """The curated tip for the page on screen (a dict lookup); then, when a model is
@@ -2128,17 +2198,17 @@ class _Card(QtWidgets.QFrame):
         lay = QtWidgets.QVBoxLayout(self)
         lay.setContentsMargins(8, 6, 8, 6)
         lay.setSpacing(4)
-        self.title = QtWidgets.QLabel(title)
+        self.title = plain(QtWidgets.QLabel(title))
         f = self.title.font()
         f.setBold(True)
         self.title.setFont(f)
         self.title.setWordWrap(True)
         lay.addWidget(self.title)
-        self.rows = QtWidgets.QLabel("")
+        self.rows = plain(QtWidgets.QLabel(""))
         self.rows.setWordWrap(True)
         self.rows.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         lay.addWidget(self.rows)
-        self.status = QtWidgets.QLabel("")
+        self.status = plain(QtWidgets.QLabel(""))
         self.status.setWordWrap(True)
         self.status.setStyleSheet(styles.muted())
         lay.addWidget(self.status)
@@ -2171,7 +2241,12 @@ class _Card(QtWidgets.QFrame):
         self.status.setStyleSheet(f"color: {styles.WARN};" if warn else styles.muted())
         shown = self.compact(text)
         self.status.setText(shown)
-        self.status.setToolTip(detail or (text if shown != text else ""))
+        self.status.setToolTip(plain_tip(detail or (text if shown != text else "")))
+        if shown != text:
+            # the card promises "the full list is in the answer above": keep that promise
+            dock = getattr(self, "dock", None)
+            if dock is not None:
+                dock._append(text + "\n\n")
         self._fit()
 
     def _fit(self) -> None:
@@ -2183,6 +2258,9 @@ class _Card(QtWidgets.QFrame):
         need = self._lay.totalHeightForWidth(w)
         if need > 0 and need != self.minimumHeight():
             self.setMinimumHeight(need)
+            dock = getattr(self, "dock", None)
+            if dock is not None:
+                dock._card_resized()
 
     def resizeEvent(self, event) -> None:       # noqa: N802 — Qt override
         super().resizeEvent(event)
@@ -2212,9 +2290,7 @@ class _ProposalCard(_Card):
         self.swatch = None
         if isinstance(v, aact.Refusal):
             self.rows.setText("")
-            self.refused(v.text)
-            if self.compact(v.text) != v.text:      # the whole list, where it can scroll
-                dock._append(v.text + "\n\n")
+            self.refused(v.text)                     # a long one also goes to the answer area
             return
         self.rows.setText(v.row_text() + (f"\n({v.note})" if v.note else ""))
         if v.key in ("look.primary", "look.secondary") and isinstance(v.after, str):
@@ -2227,6 +2303,7 @@ class _ProposalCard(_Card):
         # focus order: after Send (the prompt row) comes the card
         QtWidgets.QWidget.setTabOrder(dock.clear_btn, self.apply_btn)
         QtWidgets.QWidget.setTabOrder(self.apply_btn, self.cancel_btn)
+        QtWidgets.QWidget.setTabOrder(self.cancel_btn, self.undo_btn)    # Undo, right after Apply
 
     def _cancel(self) -> None:
         self.dock._drop_card()
@@ -2286,6 +2363,24 @@ class _DiffCard(_Card):
         self.apply_btn.clicked.connect(self._apply)
         self.undo_btn.clicked.connect(self._revert)
         self.say("Local only: nothing is committed, pushed or run.")
+        QtWidgets.QWidget.setTabOrder(dock.clear_btn, self.view_btn)
+        QtWidgets.QWidget.setTabOrder(self.view_btn, self.apply_btn)
+        QtWidgets.QWidget.setTabOrder(self.apply_btn, self.cancel_btn)
+        QtWidgets.QWidget.setTabOrder(self.cancel_btn, self.undo_btn)
+
+    def _domain_moved(self, verb: str) -> str:
+        """The refusal when the page no longer shows this folder's domain, else "".
+        The proposal card refuses the same way; a diff card left up after Next domain
+        once applied to the folder it names while another domain was on screen."""
+        mine = self.workspace.domain or ""
+        try:
+            now = self.dock._page_where().domain or ""
+        except Exception:                       # noqa: BLE001 — unreadable page: refuse
+            now = ""
+        if now.lower() == mine.lower():
+            return ""
+        return (f"This edit is for {mine}, but the page now shows {now or 'no domain'}. "
+                f"Go back to {mine} to {verb} it; nothing was changed.")
 
     def preview_text(self) -> str:
         return aedit.preview(self.edits)
@@ -2295,6 +2390,10 @@ class _DiffCard(_Card):
 
     def _apply(self) -> None:
         try:
+            moved = self._domain_moved("apply")
+            if moved:
+                self.say(moved, warn=True)
+                return
             res = aedit.apply(self.edits, self.workspace, self.dock._state_dir())
             if isinstance(res, aedit.DiffProblem):
                 self.say(res.text, warn=True)
@@ -2314,6 +2413,10 @@ class _DiffCard(_Card):
     def _revert(self) -> None:
         try:
             if self.applied is None:
+                return
+            moved = self._domain_moved("revert")
+            if moved:
+                self.say(moved, warn=True)
                 return
             why = aedit.revert(self.applied)
             if why:
