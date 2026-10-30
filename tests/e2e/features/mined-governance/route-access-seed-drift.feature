@@ -45,9 +45,17 @@ Feature: The route-access mirror is measured against the seed the cluster loads
   # The generated header prints the total and the per-gateway split. This
   # scenario exists to make a row landing VISIBLE here rather than absorbed, so a
   # bump is the correct fix; deleting the number is not.
+  # Re-measured 2026-10-15: main already read 155 here (the scenario still said 154),
+  # and the two tube ADMIN rows (/bff/tube/admin/access/**, /bff/tube/admin/storage-budget/**)
+  # take it to 157: be 60, fe 84, pki 4, superadmin 9. The deny count was ALSO stale on
+  # main (4, measured 5 since decision 28 = D put the fe games-services deny row back);
+  # the new rows are allow rows, so 5 is main's number, not this change's.
+  # Re-measured 2026-10-29 after merging main 2b13b2f9 (#824 added the fe /games rows): main
+  # reads 162 (be 60, fe 89, pki 4, superadmin 9) while this line still said 154 there;
+  # with the two tube rows it is 164 (fe 91). Deny rows: still 5.
   Scenario: the cluster seed parses to the rows a gateway loads @layer:gateway
-    Then the cluster seed carries 154 route-access rows across 4 gateways
-    And the cluster seed carries exactly 4 explicit deny rows
+    Then the cluster seed carries 164 route-access rows across 4 gateways
+    And the cluster seed carries exactly 5 explicit deny rows
 
   # THE DIRECTION THAT MATTERS. A mirror row with no seed row behind it is a
   # test asserting a permission production never grants — a green that means

@@ -29,9 +29,10 @@ that.** Seeding the `mfa_required` rules (below) is inert until *you* flip a fla
 > and the cluster still ships `false` deliberately.
 >
 > **Re-measured 2026-10-14 on `main` (c0c46601).** Nothing code-side is left to land:
-> the chart block, the rendered env, the `mfa_required` rows (14 flipped + 1 deny row
-> carrying the floor; `main` at that commit had 10 + 1, and the four per-service
-> console rows of decision 80b are what take it to 14 + 1) and the posture gates are
+> the chart block, the rendered env, the `mfa_required` rows (16 flipped + 1 deny row
+> carrying the floor; `main` at that commit had 10 + 1, the four per-service
+> console rows of decision 80b take it to 14 + 1, and the two tube admin rows of
+> 2026-10-15 to 16 + 1) and the posture gates are
 > all present and green. What is left
 > is the operator's live flip, and **§9 is the checklist for it, with the exact
 > commands.** Two things in the older text were wrong and are corrected below rather
@@ -138,7 +139,7 @@ The final `OR` is the **per-domain arm** (issue #47 × the casdoor-choice
 schema): list a `url_pattern` in its `IN (…)` and every **domain-scoped** row
 carrying it gets the same re-apply convergence the two blanket prefixes get.
 It is **empty today** — the empty-string element matches no pattern, so the
-flip set is exactly the 14 rows below — and §1.2a explains when (and when not)
+flip set is exactly the 16 rows below — and §1.2a explains when (and when not)
 to widen it.
 
 The `/bff/admin…` and `/bff/superadmin…` arms are the two original prefixes; the
@@ -147,7 +148,7 @@ shape** added by operator decision 80b = B (hugmesh-generator#329, 2026-09-23). 
 spans any characters, `/` included, so a later `/bff/<service>/admin/…` row is
 picked up with no edit to the `UPDATE`.
 
-That flips **14 rows** (as of this writing) across three gateways:
+That flips **16 rows** (as of this writing) across three gateways:
 
 | gateway | url_pattern | role |
 |---|---|---|
@@ -158,13 +159,31 @@ That flips **14 rows** (as of this writing) across three gateways:
 | `hugmesh-fe-gateway` | `/bff/wiki/admin/**` | `ROLE_ADMIN` |
 | `hugmesh-fe-gateway` | `/bff/wiki/superadmin/**` | `ROLE_SUPERADMIN` |
 | `hugmesh-fe-gateway` | `/bff/owncast/admin/**` | `ROLE_ADMIN` |
+| `hugmesh-fe-gateway` | `/bff/tube/admin/access/**` | `ROLE_ADMIN` |
+| `hugmesh-fe-gateway` | `/bff/tube/admin/storage-budget/**` | `ROLE_ADMIN` |
 | `hugmesh-be-gateway` | `/bff/admin/workloads/**` | `ROLE_ADMIN` |
 | `hugmesh-be-gateway` | `/bff/superadmin/**` | `ROLE_SUPERADMIN` |
 | `hugmesh-be-gateway` | `/bff/superadmin/games-services/**` | `ROLE_SUPERADMIN` |
 | `hugmesh-be-gateway` | `/bff/superadmin/workloads/**` | `ROLE_SUPERADMIN` |
 | `hugmesh-superadmin-gateway` | `/bff/superadmin/**` | `ROLE_SUPERADMIN` |
 
-A **fifteenth** row ends up at `mfa_required = true` without being flipped by this
+The two `/bff/tube/admin/…` rows are the **tube ADMIN write surfaces** (operator
+decision 2026-10-15, hugmesh-tube-ui#19 / hugmesh-wiki-ui#25: the gateway sends
+`X-Step-Up-Required` on an `mfa_required` deny). They need no statement of their own:
+the per-service `/bff/%/admin/%` arm flips them like the forum, wiki and owncast
+consoles. `/**` and not `/*`: the revoke is `DELETE /access/{type}/{user}`, two
+segments down, and `*` is one segment in AntPathMatcher, so `/access/*` would leave
+revoke on the ungated `/bff/tube/**` floor. `/storage-budget/**` also matches the
+bare path. **What they do and do not do:** tube-bff admits only `ADMIN` and
+`SUPERADMIN` on `/bff/tube/admin/**`, and `GatewayRouteAccessFilter` forwards both
+before `decide()` runs, so for those callers the rows bite **only through the
+privileged floor** (§3 step 7); `app.mfa.enabled` alone gates nothing for a tube
+admin. Their one effect inside `decide()` is on a non-admin: a plain `ROLE_TUBE`
+holder now gets 403 + `X-Route-Denied` at the gateway door for these paths instead
+of a refusal one layer down in tube-bff. The rest of `/bff/tube/**` stays on the
+ungated `ROLE_TUBE` floor.
+
+A **seventeenth** row ends up at `mfa_required = true` without being flipped by this
 `UPDATE`: the `hugmesh-fe-gateway` `/bff/superadmin/games-services/**` **DENY** row,
 which the blanket flip cannot reach (`WHERE allow = true`) and which is seeded by its
 own row-scoped `UPDATE` immediately before it. It is not in the table above because
@@ -202,9 +221,11 @@ hugmesh-generator#329, answered 2026-09-23) the **per-service console shape**:
 every allow row matching `/bff/%/admin/%` or `/bff/%/superadmin/%`, i.e. the admin
 consoles that live behind a service-BFF's own prefix (today forum, wiki and
 owncast: `/bff/forum/admin/**`, `/bff/wiki/admin/**`, `/bff/wiki/superadmin/**`,
-`/bff/owncast/admin/**`). The operator chose that deliberately over the narrower
-superadmin-only match, knowing it is the larger-lockout-risk option: the §3 step-7
-floor now also needs a fresh second factor to reach those four consoles. It is
+`/bff/owncast/admin/**`; and since 2026-10-15 the two tube admin write surfaces
+`/bff/tube/admin/access/**` and `/bff/tube/admin/storage-budget/**`). The operator
+chose that deliberately over the narrower superadmin-only match, knowing it is the
+larger-lockout-risk option: the §3 step-7 floor now also needs a fresh second factor
+to reach those six consoles. It is
 still not "every admin surface", and the difference matters if you are reasoning
 about what an attacker can still reach with a stolen session and no second factor.
 Three other admin-ish `/bff/` rows are deliberately left `mfa_required=false`:
@@ -654,18 +675,18 @@ today** — steps 6–7 were gated on the companion change from §0, which has m
     ORDER BY 1, 2, 3;
    ```
 
-   Expect the 14 rows in §1.2 at `true` — and read what this query does **not**
+   Expect the 16 rows in §1.2 at `true` — and read what this query does **not**
    show you before you act on it. The `allow = true` clause is not cosmetic: it is
    the **same predicate the flip `UPDATE` uses**, so this query and that `UPDATE`
    agree on scope by construction rather than by coincidence. Since 2026-09-17 that
    scoping also **hides one row**. The seed now carries an `allow = false` row under
    the superadmin prefix — `hugmesh-fe-gateway` `/bff/superadmin/games-services/**`,
    reinstated by operator decision 28 = **D** (hugmesh-generator#347) — and that row
-   carries the floor **too**. **Fifteen** rows end up at `mfa_required = true`; this
-   query returns fourteen of them. A deny row denies at the longest match regardless of
+   carries the floor **too**. **Seventeen** rows end up at `mfa_required = true`; this
+   query returns sixteen of them. A deny row denies at the longest match regardless of
    MFA, which is why the flip leaves it alone, and why an operator reading an
    un-filtered result would see a `false` under a "fully flipped" prefix and think
-   the rollout had failed. Do not now make the opposite mistake: the fifteenth row is
+   the rollout had failed. Do not now make the opposite mistake: the seventeenth row is
    **not** missing from the rollout, and the step-up floor is **not** off for the
    games app-store subtree. To audit the **floor** rather than the flip, use:
 
@@ -678,7 +699,7 @@ today** — steps 6–7 were gated on the companion change from §0, which has m
     ORDER BY allow, 1, 2, 3;
    ```
 
-   Expect **15** rows: the 14 above at `allow = true`, plus the one `allow = false`
+   Expect **17** rows: the 16 above at `allow = true`, plus the one `allow = false`
    row in the table below. That row **keeps** the floor over its whole subtree
    rather than removing it, because the gateway computes the privileged step-up
    floor with `GatewayRouteAccessService.isMfaRequiredSurface()` — longest matching
@@ -718,7 +739,7 @@ today** — steps 6–7 were gated on the companion change from §0, which has m
    > `integrate/superadmin` branch also wrote "every row" in place of "the 10 rows"
    > here, predating the count becoming 10 under the same ACCEPT.
 
-   To see the **scope boundary** instead — the 14 gated rows *and* the three §1.2a
+   To see the **scope boundary** instead — the 16 gated rows *and* the three §1.2a
    rows that are `false` by design — use this, which is the same admin-ish
    enumeration the gate itself performs (path segment `admin`/`superadmin` **or**
    an `*_ADMIN`/`SUPERADMIN` role, which is how the three role-privileged
@@ -735,7 +756,7 @@ today** — steps 6–7 were gated on the companion change from §0, which has m
     ORDER BY mfa_required, 1, 2, 3;
    ```
 
-   Expect **17** rows: the 14 at `true`, then the 3 §1.2a exclusions at `false`.
+   Expect **19** rows: the 16 at `true`, then the 3 §1.2a exclusions at `false`.
    ⚠ Do **not** use `LIKE '/bff/%admin%'` for this — an earlier revision of this
    runbook said that form "also returns the six §1.2a rows". It does not: it
    returns **none** of the three that remain (and returned only four of the then
@@ -835,7 +856,12 @@ today** — steps 6–7 were gated on the companion change from §0, which has m
    (`mfa.enforcePrivilegedFloor`), also available today. This is the step that
    actually gates admins and superadmins. Expect 503s during each gateway's
    cold-start priming window, and keep a second authenticated superadmin session open
-   on another browser as a canary.
+   on another browser as a canary. **Blast radius includes tube admins since
+   2026-10-15:** every `ADMIN` / `SUPERADMIN` who grants, times out, bans or revokes
+   Tube access or sets a Tube storage budget now needs a fresh second factor too (the
+   two `/bff/tube/admin/…` rows in §1.2). They get 403 + `X-Step-Up-Required` and an
+   inline challenge in hugmesh-tube-ui; a tube admin who has not enrolled is locked out
+   of those two consoles, the same way as every other privileged surface.
 
    ⚠ **Pin rule, measured the same way (2026-10-14: `mfa.enforcePrivilegedFloor:
    true` alone).** Two suites go red; `test-mfa-flip-wiring.sh` and
@@ -883,7 +909,7 @@ today** — steps 6–7 were gated on the companion change from §0, which has m
 
 With `enabled=true` but `enforce-privileged-floor=false` — the recommended
 intermediate state — `ROLE_SUPERADMIN`, `ROLE_ADMIN` and `ROLE_GAME-MASTER`
-short-circuit in `GatewayRouteAccessFilter` **before** `decide()` runs. So of the 10
+short-circuit in `GatewayRouteAccessFilter` **before** `decide()` runs. So of the 16
 flipped rows, the only one that changes behaviour is
 **`/bff/admin/phone-fleet/** → ROLE_FLEET_ADMIN`**: a pure fleet owner is not
 privileged, so it reaches `decide()`, and without a fresh `MFA_SATISFIED` marker it
@@ -1020,6 +1046,12 @@ privileged plane out on the bare floor. Role gating still applies (and the seed 
 closed-by-default for an unknown gateway name), but **the second-factor requirement
 silently disappears for the duration of the outage**. Accept it or change it in
 `hugmesh-gateway`; it cannot be fixed from this repo.
+
+The two tube ADMIN rows of §1.2 are **not** in that baked floor at all: `CanonicalSeed`
+carries no tube row (a grep for `tube` over it on `hugmesh-gateway` `main` finds nothing,
+the `/bff/tube/**` floor included), so during the same outage `/bff/tube/**` is
+ungoverned at the gateway (NO_RULE, forwarded on the coarse authenticated floor), and
+tube-bff's own role gates are the only wall. Closing that is a `hugmesh-gateway` change.
 
 ---
 
@@ -1313,7 +1345,7 @@ domain, and never `localhost`), `true` on the third, and `0` from the grep (the 
 guard's banner, §4.3 — absence is only meaningful if that image carries the guard; the
 trailing `|| true` is there because `grep -c` exits 1 when the count is 0).
 
-**C3. The seeded rules are what §1.2 says** — 14 flipped, 15 carrying the floor. Run
+**C3. The seeded rules are what §1.2 says** — 16 flipped, 17 carrying the floor. Run
 the two runbook blocks, unmodified, against the route-access database
 (`deploy/route-access-db`, namespace `hugmesh-pki`, database and owner role
 `gateway`, password from the pod's own `POSTGRES_PASSWORD`, per
@@ -1327,7 +1359,7 @@ $ for b in verify floor; do
   done
 ```
 
-Expect `(14 rows)` for `verify`, all `mfa_required = t`, and `(15 rows)` for `floor`
+Expect `(16 rows)` for `verify`, all `mfa_required = t`, and `(17 rows)` for `floor`
 (the extra one is the `allow = f` games-services row, §3 step 4). If the cluster was
 upgraded in place and these come back short, re-apply `20-schema.sql` (§3 step 4);
 do **not** hand-edit rows (§5).
@@ -1555,7 +1587,7 @@ read from the manifests only.
 
 ### Phase F — after each flip
 
-Re-run phase B, the C3 `floor` block (still `(15 rows)` — a flip must not move data),
+Re-run phase B, the C3 `floor` block (still `(17 rows)` — a flip must not move data),
 and the C5/C5b/C6 queries. Watch the four gateways' logs for a burst of `403` /
 `X-Route-Denied` from principals you did not expect; each is either an operator who
 missed C6 or a caller the §2.4 census did not know about.
