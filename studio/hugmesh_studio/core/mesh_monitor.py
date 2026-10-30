@@ -1919,6 +1919,24 @@ def scale(generator_dir: str, node, unit: MeshUnit, replicas: int, *,
     argv, refused = scale_argv(unit, replicas, generator_dir=generator_dir, node=node)
     if refused:
         return False, refused
+    # A compose `up --scale` CREATES containers outside make, so the route-access-db
+    # owner password must already be in tests/stack/.env (compose.local.yaml no
+    # longer spells it): a new gateway replica created with an empty one cannot load
+    # the route table that drives RBAC. The generator is the same one every
+    # `make stack-*` target runs first; a failure refuses the scale with its reason.
+    note = ""
+    if unit.scale.kind == "compose-service":
+        ensure = getattr(node, "ensure_route_access_env", None)
+        if callable(ensure):
+            try:
+                ready, note = ensure(project=_COMPOSE_PROJECT)
+            except Exception as exc:                  # noqa: BLE001 — folded on purpose
+                ready, note = False, f"{type(exc).__name__}: {exc}"
+            if not ready:
+                return False, (f"scaling {unit.scale.describe()} to {replicas} refused: "
+                               f"the route-access-db password could not be prepared "
+                               f"(tests/stack/gen-route-access-env.sh): "
+                               f"{(note or 'no output')[:400]}")
     rc, out = _probe(node, argv, max(1, int(timeout_s)))
     what = unit.scale.describe()
     text = (out or "").strip()
@@ -1939,7 +1957,8 @@ def scale(generator_dir: str, node, unit: MeshUnit, replicas: int, *,
         return False, why
     if unit.scale.kind == "compose-service":
         return True, (f"compose scaled {what} to {replicas}"
-                      + (f" — {text.splitlines()[-1][:200]}" if text else ""))
+                      + (f" — {text.splitlines()[-1][:200]}" if text else "")
+                      + (f" ({note.splitlines()[0][:200]})" if note else ""))
     return True, (f"asked for {replicas} replica(s) of {what}; the table shows how "
                   f"many are actually up on the next refresh"
                   + (f" ({text.splitlines()[-1][:200]})" if text else ""))

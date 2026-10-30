@@ -34,6 +34,39 @@ from .local_services import (KIND_ADDONS_ENV, KIND_ADDONS_NONE, federation_env,
 
 _COMPOSE_FILE = os.path.join("tests", "stack", "compose.local.yaml")
 
+#: compose's OWN auto-loaded env file for compose.local.yaml (it sits next to it).
+#: tests/stack/gen-route-access-env.sh owns ONE key in it, ROUTE_ACCESS_DB_PASSWORD:
+#: the route-access-db owner password the compose file no longer spells. Any other
+#: line is the operator's.
+_STACK_DOTENV = os.path.join("tests", "stack", ".env")
+_ROUTE_ACCESS_KEY = "ROUTE_ACCESS_DB_PASSWORD"
+_ROUTE_ACCESS_GEN = os.path.join("tests", "stack", "gen-route-access-env.sh")
+_ROUTE_ACCESS_LINE_RE = re.compile(
+    r"^\s*(?:export\s+)?" + _ROUTE_ACCESS_KEY + r"\s*=\s*(.*?)\s*$")
+_URL_UNRESERVED_RE = re.compile(r"^[A-Za-z0-9._~-]+$")
+
+
+def route_access_password(generator_dir: str) -> str:
+    """The ROUTE_ACCESS_DB_PASSWORD tests/stack/.env holds, or "" — READ ONLY.
+
+    Parsed the way compose's dotenv reads it (last assignment wins, an optional
+    ``export``, one pair of matching quotes) and returned only when URL-unreserved,
+    since it is interpolated into r2dbc URLs. Anything else is "" so the caller
+    adds nothing rather than handing compose a value the generator would refuse."""
+    try:
+        with open(os.path.join(generator_dir, _STACK_DOTENV), encoding="utf-8") as fh:
+            lines = fh.read().splitlines()
+    except (OSError, UnicodeDecodeError):
+        return ""
+    value = ""
+    for line in lines:
+        m = _ROUTE_ACCESS_LINE_RE.match(line)
+        if m:
+            value = m.group(1)
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+        value = value[1:-1]
+    return value if _URL_UNRESERVED_RE.match(value) else ""
+
 # Where the OPT-IN hugmesh-tor service copies the minted v3 .onion hostname
 # (PUBLIC — never the key) for the host/GUI to read. Bind-mounted from ./tor-onion
 # in the compose file; written ~30s after `make stack-up TOR=1`.
@@ -999,12 +1032,55 @@ class LocalStackNode:
         # registry ships — so the untouched bring-up's env is byte-identical, which is
         # what tests/test_local_mesh_tor.py's env-equality guard rests on.
         env.update(federation_env(self.services))
+        # The route-access-db OWNER password, from tests/stack/.env (read only; the
+        # generator writes it). compose would load that file by itself, but not
+        # under the legacy `docker-compose` fallback (it reads .env from the CWD)
+        # and not when the inherited env carries the variable, even EMPTY — an
+        # environment variable beats .env. Every docker call made with this dict
+        # (the Mesh Monitor's `up --scale` included) therefore gets the value the
+        # route-access-pg volume was initialised with. Set only when the file holds
+        # one, so a tree without it keeps the env byte-identical.
+        _ra_pw = route_access_password(self.generator_dir)
+        if _ra_pw:
+            env[_ROUTE_ACCESS_KEY] = _ra_pw
         # extra_env carries per-target overrides (e.g. the bridged
         # E2E_SUPERADMIN_PASSWORD for `stack-seed`). Values ride the subprocess env
         # only — never argv — mirroring the golive/token-file secret discipline.
         if extra_env:
             env.update(extra_env)
         return env
+
+    def ensure_route_access_env(self, project: str = "", timeout: int = 60
+                                ) -> tuple[bool, str]:
+        """Run tests/stack/gen-route-access-env.sh so tests/stack/.env holds
+        ROUTE_ACCESS_DB_PASSWORD before a compose call that CREATES containers
+        outside make (the Mesh Monitor's `up --scale`). ``(ok, text)``: ``ok`` False
+        is a refusal with the generator's own reason (docker could not say whether
+        the volume exists, an unsafe value); ``text`` on success is its stderr, the
+        adoption warning when it adopted an existing volume's value, else "".
+
+        Every `make stack-*` target already runs it (the Makefile's
+        stack-route-access-env prerequisite). A generator checkout older than the
+        script spells the password in its compose file, so there is nothing to
+        ensure and the answer is ``(True, "")``. ``project`` pins the compose
+        project whose volume and container the generator probes (the scale passes
+        its ``-p``)."""
+        script = os.path.join(self.generator_dir, _ROUTE_ACCESS_GEN)
+        if not os.path.exists(script):
+            return True, ""
+        env = self._build_env(write_overlays=False)
+        if project:
+            env["ROUTE_ACCESS_DB_PROJECT"] = project
+        try:
+            r = subprocess.run(["bash", script], cwd=self.generator_dir, env=env,
+                               capture_output=True, text=True, timeout=timeout)
+        except (OSError, subprocess.SubprocessError) as e:
+            return False, f"{type(e).__name__}: {e}"
+        err = (r.stderr or "").strip()
+        if r.returncode != 0:
+            return False, (err or (r.stdout or "").strip()
+                           or f"gen-route-access-env.sh exited {r.returncode}")[:600]
+        return True, err[:600]
 
     def _make(self, target: str, timeout: int,
               extra_env: dict[str, str] | None = None,

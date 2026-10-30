@@ -12,8 +12,8 @@
 # comes up WITHOUT them.
 #
 # Bring up with:  make stack-up         (clone -> build -> up -d)
-# or directly:    STACK_SRC=../../.stack-src docker compose --env-file .route-access-db.env \
-#                   -f compose.local.yaml up -d --build   (run ./gen-route-access-env.sh first)
+# or directly:    bash gen-route-access-env.sh   (once; writes .env, see below)
+#                 STACK_SRC=../../.stack-src docker compose -f compose.local.yaml up -d --build
 # Tear down:      make stack-down       (docker compose down -v)
 #
 # ── ENV=test vs prod (Makefile threads these in as the variables below) ──
@@ -21,11 +21,13 @@
 #   PUBLIC_HOST_PORT    the published port the host (fe-gateway) listens on
 # All other creds are local DEV PLACEHOLDERS (or ${VAR:-default} dev defaults).
 # NO real secrets live here. The route-access-db OWNER password is the exception:
-# it is NOT spelled here at all. ROUTE_ACCESS_DB_PASSWORD comes from the
-# gitignored, per-checkout tests/stack/.route-access-db.env, which
-# tests/stack/gen-route-access-env.sh creates and the Makefile's STACK_ENV (or
-# scripts/stack-up.ps1) threads into every compose call. Its empty default makes
-# a hand-run `up` fail loudly instead of reusing a known password.
+# it is NOT spelled here at all. ROUTE_ACCESS_DB_PASSWORD lives in the
+# gitignored, per-checkout tests/stack/.env (compose loads it by itself for this
+# file; tests/stack/gen-route-access-env.sh writes the key, `make stack-*` and
+# scripts/stack-up.ps1 run it first and also pass the value explicitly). A hand-run
+# compose that adds `--env-file X` must also pass `--env-file tests/stack/.env`:
+# compose skips .env once any --env-file is given. With no value, route-access-db
+# refuses to initialise an empty volume and the gateways cannot log in.
 #
 # Service names are the in-compose DNS the services resolve each other by — they
 # replace the k8s <svc>.<ns>.svc.cluster.local FQDNs (e.g.
@@ -174,7 +176,7 @@ services:
   # convenience), so it mounts ONLY the table DDL — NOT the cluster's
   # initdb/10-roles.sh per-machine-user role setup (that needs the per-user Secret
   # passwords ESO injects in-cluster). The owner password is per checkout:
-  # ${ROUTE_ACCESS_DB_PASSWORD} from the gitignored tests/stack/.route-access-db.env
+  # ${ROUTE_ACCESS_DB_PASSWORD} from the gitignored tests/stack/.env
   # (tests/stack/gen-route-access-env.sh; the Makefile threads it in). The cluster
   # gets its own generated route-access-db-roles Secret (scripts/gen-cluster-secrets.sh).
   route-access-db:

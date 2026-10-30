@@ -1,32 +1,36 @@
 #!/usr/bin/env bash
 # test-gen-route-access-env.sh — the local stack's route-access-db OWNER password
-# is generated per checkout, never spelled in a committed file.
+# is generated per checkout, never spelled in a committed file, and reaches EVERY
+# compose caller.
 #
 # Until 2026-10-29 compose.local.yaml set route-access-db's POSTGRES_PASSWORD and
 # all four gateways' ROUTE_ACCESS_R2DBC_URL to the owner role's own name, the same
-# word the cluster manifest shipped for a week in June. Now the value lives in the
-# gitignored tests/stack/.route-access-db.env, which tests/stack/gen-route-access-env.sh
-# creates and the Makefile's STACK_ENV threads into every compose call.
+# word the cluster manifest shipped for a week in June. Now the value is the
+# ROUTE_ACCESS_DB_PASSWORD key of the gitignored tests/stack/.env (compose's own
+# auto-loaded env file), which tests/stack/gen-route-access-env.sh writes.
 #
-# Proves, with no docker, no network and no compose run (a docker STUB answers the
-# one volume probe):
+# Proves, with no docker daemon, no network and no real compose run (a docker STUB
+# answers the volume and container probes, a compose STUB records what make runs):
 #   (1) a fresh checkout gets a 48-hex value in a 0600 file, and --print emits
 #       exactly that value and nothing else;
-#   (2) CREATE, NEVER ROTATE: a second run keeps the value (the volume keeps the
-#       password it was initialised with);
-#   (3) a missing file next to an EXISTING route-access-pg volume adopts the old
-#       default instead of locking the gateways out, and says so on stderr only;
-#       docker that cannot answer (daemon down) writes nothing and fails;
-#   (4) a hand-edited value that is not URL-unreserved is refused (it would be
-#       URL-decoded differently inside the r2dbc URL);
-#   (5) compose.local.yaml reads ${ROUTE_ACCESS_DB_PASSWORD:-} in all five places
-#       (POSTGRES_PASSWORD + four gateway URLs) and spells no route-access-db
-#       password; the file is gitignored;
-#   (6) the Makefile wiring: `make -n stack-up` carries the generator's command
-#       substitution on the compose lines (and therefore never a value), and
-#       stack-down/stack-clean delete the file only AFTER `down -v`;
-#   (7) scripts/stack-up.ps1 (the Windows path, which calls compose directly)
-#       exports the same variable from the same file.
+#   (2) CREATE, NEVER ROTATE: a second run keeps the value;
+#   (3) a missing key next to an EXISTING route-access-pg volume adopts the value
+#       the project's route-access-db container was created with, or the old default
+#       when no container is left, and says so on stderr only; docker that cannot
+#       answer writes nothing and fails; the old .route-access-db.env is migrated;
+#   (4) a value the r2dbc URL would decode differently is refused; dotenv quoting
+#       and `export` are read the way compose reads them;
+#   (5) the file is SHARED: an operator's other lines survive every write, the mode
+#       is tightened to 0600, --remove strips only this key (and deletes the file only
+#       when nothing else is left);
+#   (6) compose.local.yaml reads ${ROUTE_ACCESS_DB_PASSWORD:-} in all five places and
+#       spells no route-access-db password; tests/stack/.env is gitignored;
+#   (7) the Makefile: every target that expands $(STACK_ENV) depends on the
+#       stack-route-access-env ensure step, and BEHAVIOURALLY a generator failure
+#       stops make before compose runs while success hands compose the file's value;
+#       stack-down/stack-clean strip the key only AFTER `down -v`;
+#   (8) scripts/stack-up.ps1 (the Windows path) follows the same contract; with pwsh
+#       on PATH (GitHub's ubuntu runners have it) its block is RUN against a stub.
 set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -34,35 +38,50 @@ REPO="$(cd "${HERE}/../.." && pwd)"
 GEN="${HERE}/gen-route-access-env.sh"
 COMPOSE="${HERE}/compose.local.yaml"
 
-P=0; F=0
-ok()  { echo "  ok   $*"; P=$((P + 1)); }
-bad() { echo "  FAIL $*"; F=$((F + 1)); }
+P=0; F=0; S=0
+ok()   { echo "  ok   $*"; P=$((P + 1)); }
+bad()  { echo "  FAIL $*"; F=$((F + 1)); }
+skip() { echo "  SKIP $*"; S=$((S + 1)); }
 
 WORK="$(mktemp -d)"
 trap 'rm -rf "${WORK}"' EXIT
 
-# A docker stub for the one volume probe: STUB_VOLUME_EXISTS=1 the volume exists,
-# 0 docker answers "no such volume" (the real CLI's wording), down = the daemon
-# cannot be reached.
+# A docker stub. STUB_VOLUME_EXISTS=1 the volume exists, 0 docker answers "no such
+# volume" (the real CLI's wording), down = the daemon cannot be reached.
+# STUB_CONTAINER_PW set = a route-access-db container exists, created with that
+# POSTGRES_PASSWORD. Every call is logged to STUB_LOG when set.
 mkdir -p "${WORK}/bin"
 cat > "${WORK}/bin/docker" <<'EOF'
 #!/usr/bin/env bash
-[ "$1 $2" = "volume inspect" ] || exit 99
-case "${STUB_VOLUME_EXISTS:-0}" in
-  1) echo '[{"Name": "x"}]' ;;
-  down) echo "Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?" >&2; exit 1 ;;
-  *) echo "Error response from daemon: get $3: no such volume" >&2; exit 1 ;;
+[ -z "${STUB_LOG:-}" ] || echo "docker $*" >> "${STUB_LOG}"
+if [ "${STUB_VOLUME_EXISTS:-0}" = down ]; then
+  echo "Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?" >&2; exit 1
+fi
+case "$1 $2" in
+  "volume inspect")
+    [ "${STUB_VOLUME_EXISTS:-0}" = 1 ] && { echo '[{"Name": "x"}]'; exit 0; }
+    echo "Error response from daemon: get $3: no such volume" >&2; exit 1 ;;
+  "ps -a")
+    case "$*" in *"com.docker.compose.service=route-access-db"*) ;; *) exit 98 ;; esac
+    [ -z "${STUB_CONTAINER_PW+x}" ] || echo "c0ffee000001"
+    exit 0 ;;
+  "inspect -f")
+    printf 'PATH=/usr/bin\nPOSTGRES_DB=gateway\nPOSTGRES_PASSWORD=%s\nPOSTGRES_USER=gateway\n' "${STUB_CONTAINER_PW}"
+    exit 0 ;;
 esac
+exit 99
 EOF
 chmod +x "${WORK}/bin/docker"
 
-gen() { # gen <env-file> <volume-exists 0|1> [--print] -> runs the generator
+gen() { # gen <env-file> <volume-exists 0|1|down> [args] -> runs the generator
   local f="$1" v="$2"; shift 2
-  ROUTE_ACCESS_DB_ENV="${f}" DOCKER="${WORK}/bin/docker" STUB_VOLUME_EXISTS="${v}" bash "${GEN}" "$@"
+  ROUTE_ACCESS_DB_ENV="${f}" ROUTE_ACCESS_DB_LEGACY_ENV="${f}.legacy" \
+    DOCKER="${WORK}/bin/docker" STUB_VOLUME_EXISTS="${v}" bash "${GEN}" "$@"
 }
 file_val() { sed -n 's/^ROUTE_ACCESS_DB_PASSWORD=//p' "$1" | tail -1; }
+n_keys() { grep -c 'ROUTE_ACCESS_DB_PASSWORD' "$1"; }
 
-echo "== route-access-db owner password: generated, never committed =="
+echo "== route-access-db owner password: generated, never committed, every caller =="
 
 echo "-- 1) fresh checkout: a random URL-safe value in a 0600 file --"
 E1="${WORK}/fresh.env"
@@ -77,14 +96,13 @@ E1b="${WORK}/fresh2.env"; gen "${E1b}" 0 >/dev/null 2>&1
 if [ "$(file_val "${E1b}")" != "${v1}" ]; then ok "two checkouts get different values"; else bad "two fresh runs minted the SAME value"; fi
 
 echo "-- 2) create, never rotate --"
+sum_before="$(sha256sum < "${E1}")"
 out2="$(gen "${E1}" 0 --print 2>/dev/null)"
-if [ "${out2}" = "${v1}" ] && [ "$(file_val "${E1}")" = "${v1}" ]; then ok "second run keeps the value"; else bad "second run ROTATED the password (a kept volume would lock the gateways out)"; fi
-out2b="$(gen "${E1}" 1 --print 2>/dev/null)"
-if [ "${out2b}" = "${v1}" ]; then ok "an existing file wins over the legacy-volume path"; else bad "an existing file was replaced because a volume exists"; fi
+if [ "${out2}" = "${v1}" ] && [ "$(sha256sum < "${E1}")" = "${sum_before}" ]; then ok "second run keeps the value and leaves the file byte-identical"; else bad "second run ROTATED or rewrote the password"; fi
+out2b="$(STUB_CONTAINER_PW=other gen "${E1}" 1 --print 2>/dev/null)"
+if [ "${out2b}" = "${v1}" ]; then ok "an existing key wins over the volume/container adoption path"; else bad "an existing key was replaced because a volume exists"; fi
 
-echo "-- 3) a volume older than the file keeps its old password --"
-E3="${WORK}/legacy.env"
-out3="$(gen "${E3}" 1 --print 2>"${WORK}/err3")"; rc=$?
+echo "-- 3) a volume older than the key keeps the password it was initialised with --"
 # The old compose default was the route-access-db service's own POSTGRES_USER.
 owner="$(python3 - "${COMPOSE}" <<'PY'
 import re, sys
@@ -94,26 +112,70 @@ u = re.search(r"POSTGRES_USER:\s*(\S+)", m.group(1)) if m else None
 print(u.group(1) if u else "")
 PY
 )"
+E3="${WORK}/legacy.env"
+out3="$(gen "${E3}" 1 --print 2>"${WORK}/err3")"; rc=$?
 if [ -z "${owner}" ]; then
   bad "could not read route-access-db's POSTGRES_USER from compose.local.yaml"
-elif [ "${rc}" -eq 0 ] && [ "${out3}" = "${owner}" ]; then ok "adopted the owner role's name for a pre-existing volume"; else bad "rc=${rc}: did not adopt the pre-existing volume's password"; fi
-if grep -q 'WARNING' "${WORK}/err3" && ! grep -q 'WARNING' <<<"${out3}"; then ok "the adoption warning goes to stderr, never into the value"; else bad "adoption warning missing from stderr or leaked into stdout"; fi
+elif [ "${rc}" -eq 0 ] && [ "${out3}" = "${owner}" ]; then ok "no container left: adopted the owner role's name (the pre-2026-10-29 default)"; else bad "rc=${rc}: did not adopt the pre-existing volume's password"; fi
+if grep -q 'WARNING' "${WORK}/err3" && grep -q 'ANOTHER checkout' "${WORK}/err3" && ! grep -q 'WARNING' <<<"${out3}"; then ok "the warning (naming the other-checkout risk) goes to stderr, never into the value"; else bad "adoption warning missing from stderr or leaked into stdout"; fi
 if grep -q '^# adopted' "${E3}"; then ok "the file records that it was adopted"; else bad "file does not record the adoption"; fi
+E3a="${WORK}/ctr.env"
+ctr_pw="a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718"
+out3a="$(STUB_CONTAINER_PW="${ctr_pw}" gen "${E3a}" 1 --print 2>"${WORK}/err3a")"; rc=$?
+if [ "${rc}" -eq 0 ] && [ "${out3a}" = "${ctr_pw}" ] && [ "$(file_val "${E3a}")" = "${ctr_pw}" ]; then ok "a route-access-db container exists: adopted ITS password (a second checkout of a random-valued stack)"; else bad "rc=${rc}: did not adopt the existing container's password"; fi
+if grep -q 'adopted from the existing' "${E3a}" && grep -q WARNING "${WORK}/err3a" && ! grep -qF "${ctr_pw}" "${WORK}/err3a"; then ok "container adoption is recorded and warned about without echoing the value"; else bad "container adoption not recorded/warned, or the value was echoed on stderr"; fi
+E3u="${WORK}/ctr-unsafe.env"
+out3u="$(STUB_CONTAINER_PW='ab+cd' gen "${E3u}" 1 --print 2>/dev/null)"; rc=$?
+if [ "${rc}" -ne 0 ] && [ -z "${out3u}" ] && [ ! -e "${E3u}" ]; then ok "an unsafe container value is refused, nothing written"; else bad "an unsafe container value was adopted (rc=${rc})"; fi
+E3p="${WORK}/proj.env"; : > "${WORK}/log3p"
+STUB_LOG="${WORK}/log3p" ROUTE_ACCESS_DB_PROJECT=other-proj gen "${E3p}" 1 >/dev/null 2>&1
+if grep -q 'volume inspect other-proj_route-access-pg' "${WORK}/log3p" && grep -q 'com.docker.compose.project=other-proj' "${WORK}/log3p"; then ok "ROUTE_ACCESS_DB_PROJECT pins both the volume and the container probe"; else bad "the project pin did not reach the probes: $(tr '\n' '|' < "${WORK}/log3p")"; fi
 
 echo "-- 3b) docker that cannot answer is not read as 'no volume' --"
 E3b="${WORK}/down.env"
 out3b="$(gen "${E3b}" down --print 2>"${WORK}/err3b")"; rc=$?
 if [ "${rc}" -ne 0 ] && [ -z "${out3b}" ] && [ ! -e "${E3b}" ]; then ok "daemon unreachable: fails (rc=${rc}), prints nothing, writes no file"; else bad "daemon unreachable: rc=${rc}, file $( [ -e "${E3b}" ] && echo WRITTEN || echo absent)"; fi
 E3c="${WORK}/nocli.env"
-out3c="$(ROUTE_ACCESS_DB_ENV="${E3c}" DOCKER="${WORK}/no-such-docker" bash "${GEN}" --print 2>/dev/null)"; rc=$?
+out3c="$(ROUTE_ACCESS_DB_ENV="${E3c}" ROUTE_ACCESS_DB_LEGACY_ENV="${E3c}.legacy" DOCKER="${WORK}/no-such-docker" bash "${GEN}" --print 2>/dev/null)"; rc=$?
 if [ "${rc}" -eq 0 ] && [[ "${out3c}" =~ ^[0-9a-f]{48}$ ]]; then ok "no docker CLI at all (a CI runner): mints a fresh value"; else bad "no docker CLI: rc=${rc}, no fresh value"; fi
 
-echo "-- 4) a value the r2dbc URL would decode differently is refused --"
+echo "-- 3c) the earlier revision's .route-access-db.env is migrated, not re-minted --"
+E3m="${WORK}/mig.env"; legacy_pw="0123456789abcdef0123456789abcdef0123456789abcdef"
+printf '# old\nROUTE_ACCESS_DB_PASSWORD=%s\n' "${legacy_pw}" > "${E3m}.legacy"
+out3m="$(gen "${E3m}" 1 --print 2>/dev/null)"; rc=$?
+if [ "${rc}" -eq 0 ] && [ "${out3m}" = "${legacy_pw}" ] && [ ! -e "${E3m}.legacy" ]; then ok "legacy value moved into .env and the old file deleted (no volume guess)"; else bad "legacy migration: rc=${rc}, legacy file $( [ -e "${E3m}.legacy" ] && echo KEPT || echo gone)"; fi
+
+echo "-- 4) values compose and the r2dbc URL would read differently --"
 E4="${WORK}/bad.env"; printf 'ROUTE_ACCESS_DB_PASSWORD=ab+cd/ef\n' > "${E4}"
 out4="$(gen "${E4}" 0 --print 2>/dev/null)"; rc=$?
 if [ "${rc}" -ne 0 ] && [ -z "${out4}" ]; then ok "a '+' or '/' in the file fails loudly (rc=${rc}) and prints nothing"; else bad "an unsafe value was passed on (rc=${rc})"; fi
+E4q="${WORK}/quoted.env"; printf 'export ROUTE_ACCESS_DB_PASSWORD = "deadbeef42"\r\n' > "${E4q}"
+out4q="$(gen "${E4q}" 0 --print 2>/dev/null)"; rc=$?
+if [ "${rc}" -eq 0 ] && [ "${out4q}" = deadbeef42 ]; then ok "export prefix, spaces, quotes and CRLF are read like compose's dotenv"; else bad "dotenv spelling misread: rc=${rc} got '${out4q}'"; fi
+E4e="${WORK}/empty.env"; printf 'FOO=1\nROUTE_ACCESS_DB_PASSWORD=\n' > "${E4e}"
+out4e="$(gen "${E4e}" 0 --print 2>/dev/null)"; rc=$?
+if [ "${rc}" -eq 0 ] && [[ "${out4e}" =~ ^[0-9a-f]{48}$ ]] && [ "$(n_keys "${E4e}")" -eq 1 ]; then ok "an EMPTY key is filled in place (one key line left, not two)"; else bad "empty key: rc=${rc}, $(n_keys "${E4e}") key lines"; fi
 
-echo "-- 5) compose.local.yaml spells no route-access-db password --"
+echo "-- 5) the file is shared: the operator's lines survive --"
+E5="${WORK}/operator.env"
+printf '# my overrides\nPUBLIC_HOST_PORT=9999\nCOMPOSE_PROFILES=social\n\nHUG_WEB_LOCALES="de,fr"\n' > "${E5}"
+chmod 644 "${E5}"
+cp "${E5}" "${WORK}/operator.orig"
+v5="$(gen "${E5}" 0 --print 2>/dev/null)"
+if head -c "$(stat -c %s "${WORK}/operator.orig")" "${E5}" | cmp -s - "${WORK}/operator.orig"; then ok "every operator line is kept verbatim, the key is appended after them"; else bad "the operator's lines were changed"; fi
+if [ "$(stat -c %a "${E5}")" = 600 ]; then ok "an operator-made 0644 .env is tightened to 0600 once it holds the credential"; else bad "mode is $(stat -c %a "${E5}"), want 600"; fi
+if [ "$(file_val "${E5}")" = "${v5}" ] && [ "$(n_keys "${E5}")" -eq 1 ]; then ok "exactly one key line, holding the printed value"; else bad "$(n_keys "${E5}") key lines"; fi
+gen "${E5}" 0 --remove >/dev/null 2>&1
+if cmp -s "${E5}" "${WORK}/operator.orig"; then ok "--remove gives the operator's file back byte for byte"; else bad "--remove left the operator's file different: $(diff "${WORK}/operator.orig" "${E5}" | head -3 | tr '\n' '|')"; fi
+gen "${E1}" 0 --remove >/dev/null 2>&1
+if [ ! -e "${E1}" ]; then ok "--remove deletes a file that held only this key"; else bad "--remove left a file that held only this key"; fi
+if gen "${WORK}/never.env" 0 --remove >/dev/null 2>&1 && [ ! -e "${WORK}/never.env" ]; then ok "--remove with no file is a quiet no-op"; else bad "--remove with no file failed or created one"; fi
+E5k="${WORK}/own-key.env"; printf 'ROUTE_ACCESS_DB_PASSWORD=operatorchosen1\nX=1\n' > "${E5k}"; chmod 600 "${E5k}"
+s5k="$(sha256sum < "${E5k}")"
+out5k="$(gen "${E5k}" 1 --print 2>/dev/null)"
+if [ "${out5k}" = operatorchosen1 ] && [ "$(sha256sum < "${E5k}")" = "${s5k}" ]; then ok "an operator-set valid key is used and the file is not rewritten"; else bad "an operator-set key was replaced or the file rewritten"; fi
+
+echo "-- 6) compose.local.yaml spells no route-access-db password --"
 n_ref="$(grep -c '\${ROUTE_ACCESS_DB_PASSWORD:-}' "${COMPOSE}")"
 if [ "${n_ref}" -eq 5 ]; then ok "5 references to \${ROUTE_ACCESS_DB_PASSWORD:-} (POSTGRES_PASSWORD + 4 gateway URLs)"; else bad "${n_ref} references, want 5"; fi
 n_url="$(grep -c 'ROUTE_ACCESS_R2DBC_URL: "r2dbc:postgresql://gateway:\${ROUTE_ACCESS_DB_PASSWORD:-}@route-access-db:5432/gateway"' "${COMPOSE}")"
@@ -131,37 +193,130 @@ PY
 )"
 if [ "$(sed -n 1p <<<"${lit}")" = 0 ]; then ok "no route-access-db URL carries a literal password"; else bad "$(sed -n 1p <<<"${lit}") route-access-db URL(s) carry a literal password"; fi
 if [ "$(sed -n 2p <<<"${lit}")" = '${ROUTE_ACCESS_DB_PASSWORD:-}' ]; then ok "route-access-db POSTGRES_PASSWORD is the variable"; else bad "route-access-db POSTGRES_PASSWORD is not the variable"; fi
-if git -C "${REPO}" check-ignore -q tests/stack/.route-access-db.env; then ok "tests/stack/.route-access-db.env is gitignored"; else bad "tests/stack/.route-access-db.env is NOT gitignored"; fi
+for f in tests/stack/.env tests/stack/.route-access-db.env; do
+  if git -C "${REPO}" check-ignore -q "${f}"; then ok "${f} is gitignored"; else bad "${f} is NOT gitignored"; fi
+done
+if grep -q 'ROUTE_ACCESS_DB_ENV:-${HERE}/.env}' "${GEN}"; then ok "the generator's default file is tests/stack/.env (compose's auto-loaded file)"; else bad "the generator does not default to tests/stack/.env"; fi
 
-echo "-- 6) Makefile wiring (make -n: the recipe make would run, nothing executed) --"
+echo "-- 7) Makefile wiring --"
+MK="${REPO}/Makefile"
+# Static: every target whose recipe expands $(STACK_ENV) lists the ensure step.
+missing="$(python3 - "${MK}" <<'PY'
+import re, sys
+s = open(sys.argv[1], encoding="utf-8").read()
+out, users = [], 0
+for m in re.finditer(r"^([A-Za-z0-9_.-]+):([^=\n][^\n]*)\n((?:\t[^\n]*\n|[ \t]*#[^\n]*\n)*)", s, re.M):
+    name, prereqs, body = m.group(1), m.group(2).split("##")[0], m.group(3)
+    if name.startswith("."):
+        continue
+    if any("$(STACK_ENV)" in ln for ln in body.splitlines() if ln.startswith("\t")):
+        users += 1
+        if "stack-route-access-env" not in prereqs.split():
+            out.append(name)
+print(users)
+print(" ".join(out))
+PY
+)"
+n_users="$(sed -n 1p <<<"${missing}")"; miss="$(sed -n 2p <<<"${missing}")"
+if [ "${n_users:-0}" -ge 9 ] && [ -z "${miss}" ]; then ok "all ${n_users} targets that expand \$(STACK_ENV) depend on stack-route-access-env"; else bad "${n_users:-0} STACK_ENV targets; missing the ensure prerequisite: ${miss:-?}"; fi
+if grep -qE '^stack-route-access-env:' "${MK}" && awk '/^stack-route-access-env:/{s=1;next} s&&/^\t/{sub(/^\t/,"");print;exit}' "${MK}" | grep -E '^@?bash tests/stack/gen-route-access-env\.sh$' >/dev/null; then ok "the ensure step runs the generator as its own (status-checked) recipe line"; else bad "stack-route-access-env does not run the generator as a plain recipe line"; fi
 if command -v make >/dev/null 2>&1; then
   up="$(cd "${REPO}" && timeout 60 make -n -o stack-clone -o stack-certs -o stack-m2-check -o stack-mastodon-env stack-up 2>/dev/null)"
   sub='ROUTE_ACCESS_DB_PASSWORD="$(bash tests/stack/gen-route-access-env.sh --print)"'
   n_compose="$(grep -c ' compose -f tests/stack/compose.local.yaml' <<<"${up}")"
   n_sub="$(grep ' compose -f tests/stack/compose.local.yaml' <<<"${up}" | grep -cF "${sub}")"
-  if [ "${n_compose}" -ge 2 ] && [ "${n_sub}" -eq "${n_compose}" ]; then ok "every compose line of stack-up (${n_compose}) carries the generator substitution"; else bad "${n_sub} of ${n_compose} stack-up compose lines carry the generator substitution"; fi
+  if [ "${n_compose}" -ge 2 ] && [ "${n_sub}" -eq "${n_compose}" ]; then ok "every compose line of stack-up (${n_compose}) passes the value explicitly"; else bad "${n_sub} of ${n_compose} stack-up compose lines pass the value"; fi
+  first_gen="$(grep -n '^bash tests/stack/gen-route-access-env.sh$' <<<"${up}" | head -1 | cut -d: -f1)"
+  first_cmp="$(grep -n ' compose -f tests/stack/compose.local.yaml' <<<"${up}" | head -1 | cut -d: -f1)"
+  if [ -n "${first_gen}" ] && [ -n "${first_cmp}" ] && [ "${first_gen}" -lt "${first_cmp}" ]; then ok "make -n stack-up runs the ensure step before the first compose call"; else bad "ensure step at '${first_gen:-none}', first compose at '${first_cmp:-none}'"; fi
   if grep 'route-access-reconcile.sh' <<<"${up}" | grep -F "${sub}" >/dev/null; then ok "the route-access reconcile step carries it too"; else bad "the reconcile step does not carry ROUTE_ACCESS_DB_PASSWORD"; fi
   if grep -qE 'ROUTE_ACCESS_DB_PASSWORD=[0-9a-f]{16,}' <<<"${up}"; then bad "make -n prints a password VALUE"; else ok "make -n prints the substitution, never a value"; fi
   for tgt in stack-down stack-clean; do
     rec="$(cd "${REPO}" && timeout 60 make -n "${tgt}" 2>/dev/null)"
     dv="$(grep -n 'down -v' <<<"${rec}" | head -1 | cut -d: -f1)"
-    rm_="$(grep -n 'rm -f tests/stack/.route-access-db.env' <<<"${rec}" | head -1 | cut -d: -f1)"
-    if [ -n "${dv}" ] && [ -n "${rm_}" ] && [ "${rm_}" -gt "${dv}" ]; then ok "${tgt} deletes the file after down -v"; else bad "${tgt}: down -v at '${dv:-none}', rm at '${rm_:-none}'"; fi
+    rm_="$(grep -n 'gen-route-access-env.sh --remove' <<<"${rec}" | head -1 | cut -d: -f1)"
+    if [ -n "${dv}" ] && [ -n "${rm_}" ] && [ "${rm_}" -gt "${dv}" ]; then ok "${tgt} strips the key (--remove) after down -v"; else bad "${tgt}: down -v at '${dv:-none}', --remove at '${rm_:-none}'"; fi
   done
+  if grep -q 'rm -f tests/stack/.env' <<<"${rec}"; then bad "stack-clean deletes tests/stack/.env wholesale (an operator's other lines)"; else ok "nothing deletes tests/stack/.env wholesale"; fi
   halt="$(cd "${REPO}" && timeout 60 make -n stack-halt 2>/dev/null)"
-  if grep -q 'rm -f tests/stack/.route-access-db.env' <<<"${halt}"; then bad "stack-halt deletes the file (it keeps the volume)"; else ok "stack-halt keeps the file (it keeps the volume)"; fi
+  if grep -q -- '--remove' <<<"${halt}"; then bad "stack-halt strips the key (it keeps the volume)"; else ok "stack-halt keeps the key (it keeps the volume)"; fi
+
+  # Behavioural: run REAL make on stack-ps with a recording compose stub and the
+  # docker stub, the env file redirected into WORK. Nothing reaches a daemon.
+  cat > "${WORK}/bin/compose-stub" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "${ROUTE_ACCESS_DB_PASSWORD-<unset>}" >> "${COMPOSE_STUB_LOG}"
+EOF
+  chmod +x "${WORK}/bin/compose-stub"
+  E7="${WORK}/make.env"; L7="${WORK}/compose.log"; : > "${L7}"
+  (cd "${REPO}" && ROUTE_ACCESS_DB_ENV="${E7}" ROUTE_ACCESS_DB_LEGACY_ENV="${E7}.legacy" \
+     DOCKER="${WORK}/bin/docker" STUB_VOLUME_EXISTS=down COMPOSE_STUB_LOG="${L7}" \
+     timeout 60 make --no-print-directory stack-ps COMPOSE_CMD="${WORK}/bin/compose-stub" >/dev/null 2>&1); rc=$?
+  if [ "${rc}" -ne 0 ] && [ ! -s "${L7}" ] && [ ! -e "${E7}" ]; then ok "generator failure (daemon unreachable) STOPS make (rc=${rc}) before compose runs"; else bad "generator failure: make rc=${rc}, compose ran $(wc -l < "${L7}") time(s)"; fi
+  (cd "${REPO}" && ROUTE_ACCESS_DB_ENV="${E7}" ROUTE_ACCESS_DB_LEGACY_ENV="${E7}.legacy" \
+     DOCKER="${WORK}/bin/docker" STUB_VOLUME_EXISTS=0 COMPOSE_STUB_LOG="${L7}" ROUTE_ACCESS_DB_PASSWORD= \
+     timeout 60 make --no-print-directory stack-ps COMPOSE_CMD="${WORK}/bin/compose-stub" >"${WORK}/make7.out" 2>&1); rc=$?
+  v7="$(file_val "${E7}" 2>/dev/null)"
+  if [ "${rc}" -eq 0 ] && [[ "${v7}" =~ ^[0-9a-f]{48}$ ]] && [ "$(cat "${L7}")" = "${v7}" ]; then ok "success: compose got exactly the file's value, even with an EMPTY one exported in the shell"; else bad "success path: rc=${rc}, compose saw len $(head -c 200 "${L7}" | wc -c), file len ${#v7}"; fi
+  if grep -qF "${v7:-no-value}" "${WORK}/make7.out"; then bad "make's output echoes the password value"; else ok "make's own output never contains the value"; fi
 else
-  bad "make is not installed — section 6 asserted nothing"
+  bad "make is not installed — section 7 asserted nothing"
 fi
 
-echo "-- 7) Windows path (scripts/stack-up.ps1) --"
+echo "-- 8) Windows path (scripts/stack-up.ps1) --"
 PS1="${REPO}/scripts/stack-up.ps1"
-if grep -q "Join-Path \$StackDir '.route-access-db.env'" "${PS1}" && grep -q '\$env:ROUTE_ACCESS_DB_PASSWORD = \$routeAccessPw' "${PS1}"; then
-  ok "stack-up.ps1 exports ROUTE_ACCESS_DB_PASSWORD from tests\\stack\\.route-access-db.env"
+if grep -q "Join-Path \$StackDir '.env'" "${PS1}" && grep -q '\$env:ROUTE_ACCESS_DB_PASSWORD = \$routeAccessPw' "${PS1}"; then
+  ok "stack-up.ps1 reads tests\\stack\\.env and exports ROUTE_ACCESS_DB_PASSWORD"
 else
-  bad "stack-up.ps1 does not thread ROUTE_ACCESS_DB_PASSWORD (compose would get an empty password)"
+  bad "stack-up.ps1 does not thread ROUTE_ACCESS_DB_PASSWORD from tests\\stack\\.env"
 fi
 if grep -q 'RandomNumberGenerator' "${PS1}"; then ok "stack-up.ps1 mints with a CSPRNG"; else bad "stack-up.ps1 does not use a CSPRNG"; fi
+if grep -qF "$(sed -n 's/^BEGIN_MARK="\(.*\)"$/\1/p' "${GEN}")" "${PS1}" && grep -qF "$(sed -n 's/^END_MARK="\(.*\)"$/\1/p' "${GEN}")" "${PS1}"; then ok "stack-up.ps1 writes the same block markers as the generator"; else bad "stack-up.ps1's block markers drifted from the generator's"; fi
+if command -v pwsh >/dev/null 2>&1; then
+  # Run the ps1's route-access block (from its first line to the clone step) with
+  # docker replaced by a PowerShell function, in a scratch StackDir.
+  python3 - "${PS1}" "${WORK}/ra-block.ps1" <<'PY'
+import sys
+s = open(sys.argv[1], encoding="utf-8").read().replace("\r\n", "\n")
+a = s.index("# route-access-db OWNER password: compose.local.yaml reads")
+b = s.index("# ── 1. Clone / update all repos")
+open(sys.argv[2], "w", encoding="utf-8").write(s[a:b])
+PY
+  cat > "${WORK}/harness.ps1" <<'EOF'
+param([string]$StackDir, [string]$Mode, [string]$CtrPw, [switch]$Down)
+$ErrorActionPreference = 'Stop'
+$Compose = Join-Path $StackDir 'compose.local.yaml'
+function docker {
+  $a = $args -join ' '
+  if ($a -like 'volume inspect*') {
+    if ($Mode -eq 'exists') { $global:LASTEXITCODE = 0; return '[{}]' }
+    $global:LASTEXITCODE = 1; return 'Error response from daemon: get x: no such volume'
+  }
+  if ($a -like 'ps -a*') { $global:LASTEXITCODE = 0; if ($CtrPw) { return 'c0ffee' }; return }
+  if ($a -like 'inspect -f*') { $global:LASTEXITCODE = 0; return @('PATH=/x', "POSTGRES_PASSWORD=$CtrPw") }
+  if ($a -like 'compose*down -v') { $global:LASTEXITCODE = 0; return }
+  throw "unexpected docker $a"
+}
+. (Join-Path $PSScriptRoot 'ra-block.ps1')
+if (-not $Down) { Write-Output "PW=$env:ROUTE_ACCESS_DB_PASSWORD" }
+EOF
+  SD="${WORK}/ps-stack"; mkdir -p "${SD}"
+  printf '# mine\nPUBLIC_HOST_PORT=9999\n' > "${SD}/.env"; cp "${SD}/.env" "${WORK}/ps.orig"
+  o="$(pwsh -NoProfile -File "${WORK}/harness.ps1" -StackDir "${SD}" -Mode absent 2>&1)"
+  pv="$(file_val "${SD}/.env")"
+  if [[ "${pv}" =~ ^[0-9a-f]{48}$ ]] && grep -qx "PW=${pv}" <<<"${o}" && head -2 "${SD}/.env" | cmp -s - "${WORK}/ps.orig"; then ok "pwsh: fresh value merged after the operator's lines and exported"; else bad "pwsh fresh: $(head -3 <<<"${o}" | tr '\n' '|')"; fi
+  if head -c3 "${SD}/.env" | od -An -tx1 | grep 'ef bb bf' >/dev/null; then bad "pwsh wrote a UTF-8 BOM (compose would misread the first key)"; else ok "pwsh writes no BOM"; fi
+  pwsh -NoProfile -File "${WORK}/harness.ps1" -StackDir "${SD}" -Mode absent -Down >/dev/null 2>&1
+  if cmp -s <(tr -d '\r' < "${SD}/.env") "${WORK}/ps.orig"; then ok "pwsh -Down strips only the key"; else bad "pwsh -Down left: $(tr '\n' '|' < "${SD}/.env")"; fi
+  rm -f "${SD}/.env"
+  o="$(pwsh -NoProfile -File "${WORK}/harness.ps1" -StackDir "${SD}" -Mode exists -CtrPw "${ctr_pw}" 2>&1)"
+  if grep -qx "PW=${ctr_pw}" <<<"${o}"; then ok "pwsh: adopts the existing container's password"; else bad "pwsh container adoption: $(head -3 <<<"${o}" | tr '\n' '|')"; fi
+  rm -f "${SD}/.env"
+  o="$(pwsh -NoProfile -File "${WORK}/harness.ps1" -StackDir "${SD}" -Mode exists 2>&1)"
+  if grep -qx "PW=${owner}" <<<"${o}"; then ok "pwsh: no container left -> the pre-2026-10-29 default"; else bad "pwsh role-name adoption: $(head -3 <<<"${o}" | tr '\n' '|')"; fi
+else
+  skip "pwsh is not installed: stack-up.ps1's block was only grepped, not run"
+fi
 
-echo "== RESULT: ${P} passed, ${F} failed =="
+echo "== RESULT: ${P} passed, ${F} failed, ${S} skipped =="
 [ "${F}" -eq 0 ]
