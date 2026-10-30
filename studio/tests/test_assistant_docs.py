@@ -209,6 +209,8 @@ INVENTED_WIPE = [
     "rm -rf ~/.hugmesh-checkouts",
     "sudo rm -rf /var/lib/docker",
     "rm -f ~/.hugmesh/studio/sessions/s1.json",
+    "rm -rf build",
+    "rm --force data",
     "docker system prune -a",
     "docker system prune -af --volumes",
     "docker volume prune",

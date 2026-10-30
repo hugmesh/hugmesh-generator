@@ -363,6 +363,11 @@ def test_no_absolute_home_path_reaches_the_model(tmp_path, monkeypatch):
     assert "~/.hugmesh/studio/w1/build.log" in sent and "hugmesh-auth-ui/src" in sent
     assert "scripts/local-ai.sh" in sent and "…/y/z.txt" in sent
     assert "## Where the local sources are" in p.primer and "checkouts folder" in p.primer
+    # the primer itself names neither folder (not merely scrubbed later) and is whole
+    primer = ap.primer_for(str(gen), dict(os.environ))
+    assert str(gen) not in primer and str(root) not in primer and "`" + str(root) not in primer
+    assert not primer.endswith("…") and ap.tokens(primer) <= ap.CAPS["primer"]
+    assert primer.rstrip().endswith("or start with ~.")
     # the coding-agent brief still names both folders: it is the person's own file
     assert str(root) in actx.render_context(generator_dir=str(gen), checkouts_root=str(root), checkouts=[])
 

@@ -72,8 +72,11 @@ CHANGE_FORMAT = (
     "hex colour). For services, to is the whole new list: start from its current list, "
     "then add or remove. A colour described in words is a hex value in look.primary or "
     "look.secondary, never a preset. If the setting is not under Options (a password, "
-    "a key, a path), write no block; say so and list the Options keys. The example's "
-    "domain and field are made up and always refused: never copy it.\n"
+    "a key, a path), write no block; say so and list the Options keys. "
+    # The wording is measured, not decorative: "Example (made up; never copy it):" over
+    # a plain sentence kept the code-edit answers' diffs whole (4/4 on qwen3:8b), where a
+    # longer "made up and always refused" note broke all of them (0/4; PR #832 round 6).
+    "Example (made up; never copy it):\n"
     + aact.EXAMPLE_SENTENCE + "\n"
     "```change\n" + json.dumps(aact.EXAMPLE_PROPOSAL) + "\n```"
 )
@@ -225,10 +228,8 @@ class Prompt:
 #: assistant's primer never does (see scrub_paths).
 PRIMER_SOURCES = (
     "\n\n## Where the local sources are\n"
-    "- The person's checkouts sit in one checkouts folder (a Studio setting); the "
-    "generator checkout the Studio runs from is where scripts/ and docs/ live. Paths "
-    "here are relative to the generator checkout or start with ~. Never tell the person "
-    "to delete either folder."
+    "- The checkouts folder (a Studio setting) holds the person's checkouts; paths here "
+    "are relative to the generator checkout (scripts/, docs/) or start with ~."
 )
 
 

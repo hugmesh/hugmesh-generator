@@ -237,8 +237,8 @@ def score(item, final, answer, fx, where):
     said = model_said(final, answer).lower()
     bad = [w for w in item.get("must_not", []) if w.lower() in said]
     anyof = item.get("model_mention_any") or []
-    if anyof and not any(w.lower() in said for w in anyof):
-        misses.append("one of " + " / ".join(anyof))
+    if anyof:
+        (hits if any(w.lower() in said for w in anyof) else misses).append("one of " + " / ".join(anyof))
     if action and item["question"].startswith("ACTION (code edit"):
         valid_ok = diff_ok
     elif action and not any(w.startswith("```") for w in item.get("must_mention", [])):

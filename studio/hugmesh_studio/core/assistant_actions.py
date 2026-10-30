@@ -52,7 +52,7 @@ __all__ = [
     "normalise_value", "validate", "apply", "undo", "Target", "GuiTabsTarget", "TuiTarget",
     "MeshTarget", "RowTarget", "NO_BLOCK_HINT", "card_lines", "as_refusal", "current_values",
     "never_set_note", "live_domain", "undo_key", "EXAMPLE_PROPOSAL", "EXAMPLE_SENTENCE",
-    "EXAMPLE_REFUSAL", "is_format_example",
+    "EXAMPLE_REFUSAL", "is_format_example", "services_named",
 ]
 
 NO_BLOCK_HINT = "Say which setting and which value and I will propose the change."
@@ -65,7 +65,7 @@ NO_BLOCK_HINT = "Say which setting and which value and I will propose the change
 #: and ``example.setting`` is no field of any page, so :func:`validate` refuses it even
 #: when the model swaps in the domain on screen.
 EXAMPLE_PROPOSAL = {"domain": "example.invalid", "field": "example.setting", "to": True}
-EXAMPLE_SENTENCE = "I can switch the made-up example.setting on for example.invalid."
+EXAMPLE_SENTENCE = "I can give example.invalid its own example setting."
 EXAMPLE_REFUSAL = ("That block is the format's made-up example, not a change for this "
                    "page; nothing was proposed. " + NO_BLOCK_HINT)
 
@@ -354,6 +354,45 @@ def never_set_note(question: str, where, answer: str = "") -> str:
 
 
 # ── validation ───────────────────────────────────────────────────────────────────────
+def services_named(question: str) -> "set[str]":
+    """The service slugs a request names, by slug or by :data:`SYNONYMS` ("the forum")."""
+    out: set = set()
+    for w in re.findall(r"[a-z][a-z0-9\-]*", (question or "").lower()):
+        for cand in (w, w[:-1] if w.endswith("s") else w):
+            if cand in config.OPTIONAL_SERVICES_CHOICES:
+                out.add(cand)
+            elif cand in SYNONYMS:
+                out.update(SYNONYMS[cand])
+    return out
+
+
+def _unasked_services(proposal: Proposal, target) -> "Optional[Refusal]":
+    """A services list that switches on or off a service the request does not name is
+    refused: "I don't want phpBB" once came back as [tuwunel, games], a card that would
+    have added games nobody asked for (PR #832, round 6). Only when the request names a
+    service at all; a request that names none is judged by the card alone."""
+    named = services_named(proposal.question)
+    if not named:
+        return None
+    value, _ = normalise_value("services", proposal.to)
+    try:
+        before = list(target.read("services", "services") or [])
+    except Exception:                        # noqa: BLE001 — the reader's own refusal follows
+        return None
+    added = [s for s in (value or []) if s not in before]
+    removed = [s for s in before if s not in (value or [])]
+    extra = [s for s in added + removed if s not in named]
+    if not extra:
+        return None
+    verbs = []
+    if [s for s in added if s in extra]:
+        verbs.append("switch on " + ", ".join(s for s in added if s in extra))
+    if [s for s in removed if s in extra]:
+        verbs.append("switch off " + ", ".join(s for s in removed if s in extra))
+    return Refusal("Not proposed: that list would also " + " and ".join(verbs) + ", which you "
+                   "did not ask for. Name each service to switch on or off.")
+
+
 def is_format_example(proposal: Proposal) -> bool:
     """True for a block that copies the format's example: the same JSON, or its
     made-up domain or field anywhere in it."""
@@ -399,6 +438,10 @@ def validate(proposal: Proposal, where, target: "Target | None") -> "Validated |
     value, problem = normalise_value(key, proposal.to)
     if problem:
         return Refusal(problem)
+    if route == "services":
+        r = _unasked_services(proposal, target)
+        if r is not None:
+            return r
     opt = acat.find(key.replace("@mesh", ""), scope)
     label = opt.label if opt else key
     try:

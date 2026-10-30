@@ -149,6 +149,33 @@ def test_the_change_formats_example_is_never_a_change(monkeypatch):
     assert not aa.is_format_example(aa.parse_proposal(BLOCK))
 
 
+def test_a_services_list_that_changes_a_service_nobody_named_is_refused():
+    """Round 6: "I don't want phpBB on this domain any more" came back from qwen3:8b as
+    [tuwunel, games], a card that would have switched games on. A list that switches on
+    or off a service the request does not name is refused; one that changes only the
+    named ones goes through; a request that names no service is judged by the card."""
+    def check(question, to):
+        return aa.validate(aa.Proposal("shop.example", "services", to, question), where(), FakeTarget())
+    for q, to in (("I don't want phpBB on this domain any more", ["tuwunel", "games"]),
+                  ("turn off the forum for this domain", ["games"]),
+                  ("add the games service", ["tuwunel", "games"]),
+                  ("turn off the chat", ["phpbb", "akkoma"])):
+        v = check(q, to)
+        assert isinstance(v, aa.Refusal) and v.text.startswith("Not proposed: that list would also"), (q, v)
+        assert "which you did not ask for" in v.text
+    v = check("I don't want phpBB on this domain any more", ["tuwunel", "games"])
+    assert "switch on games" in v.text and "phpbb" not in v.text
+    for q, to in (("turn off the forum for this domain", ["tuwunel"]),
+                  ("switch the forums off", ["tuwunel"]),
+                  ("add the games service", ["tuwunel", "phpbb", "games"]),
+                  ("turn off the chat and the forum", []),
+                  ("switch on video", ["tuwunel", "phpbb", "owncast", "tube"]),
+                  ("make this domain smaller", ["tuwunel"]),          # names no service
+                  ("", ["tuwunel"])):
+        v = check(q, to)
+        assert isinstance(v, aa.Validated), (q, v)
+
+
 def test_validate_refuses_a_no_op_an_unknown_key_another_domain_and_the_own_row():
     t = FakeTarget()
     r = aa.validate(aa.Proposal("shop.example", "services", ["tuwunel", "phpbb"]), where(), t)
