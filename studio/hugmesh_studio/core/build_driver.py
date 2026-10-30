@@ -24,7 +24,8 @@ import threading
 import uuid
 from collections.abc import Callable, Iterator
 
-from . import askpass, host_resources, proc_text, resource_limits, secret_files, state_paths
+from . import askpass, host_resources, platform_info, proc_text, resource_limits
+from . import secret_files, state_paths
 from .config import PLATFORM_FIELD_SUPPORT, ImageConfig, scope_violations
 from .platform_info import HostInfo, detect
 
@@ -781,7 +782,14 @@ class BuildDriver:
         # helper exists at all (a real dead end). The advisory itself lives in
         # preflight_warnings(). Never widen this back into "not root => block": a GUI Studio
         # is never root, and that blocked every native build.
-        if backend == "native" and not self.host.is_root and not self._can_elevate():
+        if backend == "native" and platform_info.native_windows_blocker("A native build"):
+            # Windows 11 ships sudo.exe, so the elevation check below passed there and
+            # the build failed after dispatch. The docker backend does work natively.
+            problems.append(
+                "A native build runs sudo and bash on a Gentoo host, which the Windows "
+                "build of the Studio cannot do. Choose the docker backend (Docker "
+                "Desktop), or run the Studio inside WSL2.")
+        elif backend == "native" and not self.host.is_root and not self._can_elevate():
             problems.append(
                 "Native build needs root and no elevation helper is available — install "
                 "sudo or pkexec (polkit), or run the Studio as root.")

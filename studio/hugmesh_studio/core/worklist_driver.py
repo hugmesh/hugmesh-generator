@@ -400,6 +400,27 @@ class WorklistDriver:
 
         return self.summary_exit_code()
 
+    def _genkeys_command(self, script: str, brand: str, args: list[str],
+                         osname: str | None = None) -> list[str]:
+        """argv for ``gen-provision-keys.sh <args>`` (``args`` carries ``--out DIR``).
+
+        On native Windows the script cannot be executed directly (WinError 193: it is
+        bash), so every mesh build there ended FAILED at its keys step. With the docker
+        backend it runs in the builder image instead, which is where the image build
+        already runs the same script and which carries its tools (jq, openssl,
+        ssh-keygen, python3); only the ``--out`` value changes, to the mounted folder.
+        ``osname`` is ``os.name`` unless a test passes another."""
+        if (osname or os.name) != "nt" or self.backend != "docker":
+            return [script, *args]
+        args = list(args)
+        i = args.index("--out") + 1
+        parent, name = os.path.split(os.path.abspath(args[i]))
+        args[i] = f"/keys/{name}"
+        return ["docker", "run", "--rm", "--init",
+                "-v", f"{self.generator_dir}:/src", "-v", f"{parent}:/keys",
+                "-e", f"BRAND={brand}", "-w", "/src", self.host.builder_image,
+                "bash", "./" + GENKEYS_SCRIPT.replace(os.sep, "/"), *args]
+
     def _generate_keys(self, i: int, entry: WorklistEntry,
                        on_line: Callable[[int, str], None] | None,
                        on_keys: Callable[[int, str, bool], None] | None) -> None:
@@ -426,9 +447,10 @@ class WorklistDriver:
             # one file every node reads to join the mesh. --superdomain is the
             # script's own flag; BRAND is its env knob (and the brands/<BRAND>.conf
             # profile selector the builders use for the same images).
-            cmd = [script, "--role", key_profile(entry.role, entry.platform),
-                   "--out", keys_dir_, "--random",
-                   "--superdomain", base.effective_superdomain()]
+            cmd = self._genkeys_command(script, base.brand, [
+                "--role", key_profile(entry.role, entry.platform),
+                "--out", keys_dir_, "--random",
+                "--superdomain", base.effective_superdomain()])
             env = dict(os.environ)
             env["BRAND"] = base.brand
             proc = subprocess.Popen(cmd, cwd=self.generator_dir, env=env,

@@ -497,7 +497,10 @@ class BuildPage(QtWidgets.QWizardPage):
         # The row wrappers are kept as attributes only where a later gate touches them;
         # these four are ungated, so the tooltip set here is the one that survives.
         self.backend = QtWidgets.QComboBox()
-        self.backend.addItems(["auto", "native", "docker"])
+        # No "native" on Windows: it is sudo + bash on a Gentoo host, and Windows 11's
+        # own sudo.exe made the elevation preflight pass before the build failed.
+        self.backend.addItems(["auto", "docker"] if os.name == "nt"
+                              else ["auto", "native", "docker"])
         self.backend.setToolTip(_BACKEND_HELP)
         backend_row = _row("Backend", self.backend)
         backend_row.setToolTip(_BACKEND_HELP)

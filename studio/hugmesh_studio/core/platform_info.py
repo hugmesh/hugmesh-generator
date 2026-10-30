@@ -346,7 +346,8 @@ def wsl_docker_remedy(is_wsl: bool | None = None, wsl_version: int = 0,
             f"'docker' group.)")
 
 
-def native_windows_blocker(action: str, osname: str | None = None) -> str:
+def native_windows_blocker(action: str, osname: str | None = None,
+                           runs: str = "`make` and bash scripts") -> str:
     """WHY ``action`` cannot run in a NATIVE Windows Studio (the MSI), with the fix.
     "" anywhere else, WSL included.
 
@@ -356,10 +357,12 @@ def native_windows_blocker(action: str, osname: str | None = None) -> str:
     bash, and C:\\Windows\\System32\\bash.exe is the WSL launcher, which runs a script
     inside the Linux VM where a C:\\ checkout path means nothing. WSL2 is the supported
     Windows runtime (see the module docstring), so that is what the sentence says.
-    ``osname`` is ``os.name`` unless a test passes another."""
+    ``runs`` names what ``action`` actually needs (Go Live, cloud deploy and the phone
+    wizard are bash drivers with no `make` in them). ``osname`` is ``os.name`` unless a
+    test passes another."""
     if (osname or os.name) != "nt":
         return ""
-    return (f"{action} runs `make` and bash scripts from a hugmesh-generator checkout, "
+    return (f"{action} runs {runs} from a hugmesh-generator checkout, "
             f"which the Windows build of the Studio cannot run. On Windows, run the "
             f"Studio inside WSL2 instead: in a WSL2 distro (Ubuntu) with Docker Desktop's "
             f"WSL integration turned on for it, clone hugmesh-generator into ~ (not "
