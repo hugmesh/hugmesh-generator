@@ -182,11 +182,24 @@ if ($LASTEXITCODE -ne 0) { throw 'docker compose up failed.' }
 # in a `VAR=value cmd` prefix is an assignment word, so sh never field-splits it.
 # tests/stack/test-route-access-reconcile.sh pins this.
 Write-Host '==> Reconciling gateway_route_access from the canonical seed'
+# The readiness probe is EXPECTED to fail while the database starts, and it
+# redirects the native command's output (*> $null). In Windows PowerShell 5.1 and
+# pwsh 7.0/7.1 a redirected stderr line becomes an error record, so under this
+# script's $ErrorActionPreference = 'Stop' the FIRST not-ready probe ended the
+# whole script instead of retrying (reproduced with pwsh 7.1.5). The loop runs
+# with 'Continue' and restores the caller's preference in `finally`; the loud
+# failure is the throw below, after the full wait.
 $ready = $false
-for ($i = 0; $i -lt 60; $i++) {
-  docker compose -f $Compose exec -T route-access-db sh -c 'PGPASSWORD=$POSTGRES_PASSWORD psql -X -q -h 127.0.0.1 -U gateway -d gateway -v ON_ERROR_STOP=1 -c ''SELECT 1''' *> $null
-  if ($LASTEXITCODE -eq 0) { $ready = $true; break }
-  Start-Sleep -Seconds 2
+$savedEap = $ErrorActionPreference
+$ErrorActionPreference = 'Continue'
+try {
+  for ($i = 0; $i -lt 60; $i++) {
+    docker compose -f $Compose exec -T route-access-db sh -c 'PGPASSWORD=$POSTGRES_PASSWORD psql -X -q -h 127.0.0.1 -U gateway -d gateway -v ON_ERROR_STOP=1 -c ''SELECT 1''' *> $null
+    if ($LASTEXITCODE -eq 0) { $ready = $true; break }
+    Start-Sleep -Seconds 2
+  }
+} finally {
+  $ErrorActionPreference = $savedEap
 }
 if (-not $ready) { throw 'route-access-db did not become reachable within 120s.' }
 $before = docker compose -f $Compose exec -T route-access-db sh -c 'PGPASSWORD=$POSTGRES_PASSWORD psql -X -q -tA -h 127.0.0.1 -U gateway -d gateway -v ON_ERROR_STOP=1 -c ''SELECT count(*) FROM gateway_route_access'''

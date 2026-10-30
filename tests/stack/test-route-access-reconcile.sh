@@ -17,7 +17,9 @@
 #      line; `make -n stack-route-access-reconcile` must exist; scripts/stack-up.ps1
 #      (the Windows bring-up, which never goes through make) must carry the same
 #      step after its `up -d`, with no `"` inside any of its `docker … sh -c`
-#      arguments (Windows PowerShell 5.1 splits `-c "SELECT 1"`); and the reconciler's apply line must carry BOTH
+#      arguments (Windows PowerShell 5.1 splits `-c "SELECT 1"`), its readiness probe
+#      under ErrorActionPreference Continue (restored before the apply), and its -f
+#      path equal to compose.local.yaml's mount target; and the reconciler's apply line must carry BOTH
 #      `-v ON_ERROR_STOP=1` and `-1`. Every assertion is mutation-tested on a
 #      staged copy (line removed / moved before `up -d` / `-` ignore-error prefix /
 #      flag stripped) and must go RED, with the mutation's landing proven by diff.
@@ -174,6 +176,46 @@ else
   bad "scripts/stack-up.ps1's reconcile step has a \" inside a docker \`sh -c\` argument (or fewer than 4 such calls) — Windows PowerShell 5.1 mangles it"
 fi
 
+# The readiness probe is EXPECTED to fail while the DB starts, and it redirects
+# the native command (`*> $null`). Under the script's $ErrorActionPreference =
+# 'Stop', Windows PowerShell 5.1 and pwsh 7.0/7.1 turn that redirected stderr into
+# a terminating error: the first not-ready probe ended the script instead of
+# retrying (reproduced 2026-10-29 with pwsh 7.1.5 and a stub docker that fails
+# twice). So the probe must sit after a `$ErrorActionPreference = 'Continue'` and
+# the preference must be restored before the apply line.
+ps1_eap_ok() {
+  awk '
+    /^# ── 3b\./ { s = 1; next }
+    s && /route-access reconcile: \$before/ { s = 0 }
+    s && /^[[:space:]]*#/ { next }
+    s && /^[[:space:]]*\$ErrorActionPreference = .Continue./ && !cont { cont = NR }
+    s && /\*> \$null/ && !probe { probe = NR }
+    s && probe && /^[[:space:]]*\$ErrorActionPreference = \$/ && !restore { restore = NR }
+    s && /ON_ERROR_STOP=1 -1 / && !apply { apply = NR }
+    END { exit (cont && probe && restore && apply && cont < probe && probe < restore && restore < apply) ? 0 : 1 }' "$1"
+}
+if ps1_eap_ok "${PS1_SCRIPT}"; then
+  ok "scripts/stack-up.ps1 runs its readiness probe under ErrorActionPreference 'Continue' and restores the preference before the apply (a not-ready probe retries instead of ending the script)"
+else
+  bad "scripts/stack-up.ps1's readiness probe is not wrapped in ErrorActionPreference 'Continue' + restore — under 'Stop' the first not-ready probe ends the script on PowerShell 5.1"
+fi
+
+# The ps1 applies the seed by its IN-CONTAINER name, which must be the name
+# compose.local.yaml mounts 20-schema.sql under (the bash reconciler pipes the
+# host file instead, so only this check covers the ps1's path).
+COMPOSE_LOCAL="${REPO}/tests/stack/compose.local.yaml"
+ps1_path_ok() {  # ps1_path_ok <ps1> <compose>
+  local target
+  target="$(sed -n 's#.*route-access/initdb/20-schema\.sql:\(/docker-entrypoint-initdb\.d/[^:[:space:]]*\).*#\1#p' "$2" | head -n 1)"
+  [ -n "${target}" ] || return 1
+  grep -E -- "ON_ERROR_STOP=1 -1 -f ${target//./\\.}'" "$1" >/dev/null
+}
+if ps1_path_ok "${PS1_SCRIPT}" "${COMPOSE_LOCAL}"; then
+  ok "scripts/stack-up.ps1 applies the seed by the in-container name compose.local.yaml mounts it under"
+else
+  bad "scripts/stack-up.ps1's -f path is not the in-container name compose.local.yaml mounts 20-schema.sql under"
+fi
+
 # ── Static MUTATIONS on staged copies: each must go RED, and each is proven to
 #    have landed (diff non-empty) before its verdict counts.
 mutate_make() {  # mutate_make <name> <python-transform>
@@ -246,6 +288,23 @@ elif ps1_quotes_ok "${W}/stack-up.ps1.dquote"; then
 else
   ok "ps1 dquote mutation goes RED (-c \"SELECT 1\" inside the sh -c argument)"
 fi
+# ps1 mutations: the EAP wrap removed (either half), and the -f path renamed
+ps1_mut() {  # ps1_mut <name> <sed-expr> <check-fn> [extra arg]
+  local name="$1"
+  local expr="$2"
+  local fn="$3"
+  local dst="${W}/stack-up.ps1.${name}"
+  sed "${expr}" "${PS1_SCRIPT}" > "${dst}"
+  if diff -q "${PS1_SCRIPT}" "${dst}" >/dev/null; then bad "ps1 ${name} mutation did NOT land"; return; fi
+  if "${fn}" "${dst}" "${@:4}"; then
+    bad "ps1 ${name} mutation still passes — the check cannot fail"
+  else
+    ok "ps1 ${name} mutation goes RED"
+  fi
+}
+ps1_mut no-continue "/^[[:space:]]*\$ErrorActionPreference = 'Continue'/d" ps1_eap_ok
+ps1_mut no-restore  "/^[[:space:]]*\$ErrorActionPreference = \$savedEap/d"  ps1_eap_ok
+ps1_mut wrong-path  "s#-f /docker-entrypoint-initdb.d/10-schema.sql#-f /docker-entrypoint-initdb.d/20-schema.sql#" ps1_path_ok "${COMPOSE_LOCAL}"
 
 # Script-flag mutations (static half; the engine half below proves the behaviour)
 sed 's/ -v ON_ERROR_STOP=1 -1 </ -1 </' "${SCRIPT}" > "${W}/reconcile.no-stop.sh"
@@ -417,11 +476,18 @@ else
   bad "mutation no-stop did not change the outcome (rc=${rc}) — the fail-loud assertion cannot fail"
 fi
 
-# Restore and prove convergence once more after the failures.
-out="$(reconcile "${SCRIPT}" 2>&1)"; rc=$?
+# Restore and prove convergence once more after the failures — this time with
+# ROUTE_ACCESS_SQL UNSET, so the reconciler's OWN default seed path is what runs
+# (`make stack-up` never sets it; every call above passes the file explicitly).
+# A default that names any file without the fe /games rows leaves them missing.
+if [ "${MODE}" = docker ]; then
+  out="$(env -u ROUTE_ACCESS_SQL ROUTE_ACCESS_CONTAINER="${CONTAINER}" timeout 300 bash "${SCRIPT}" 2>&1)"; rc=$?
+else
+  out="$(env -u ROUTE_ACCESS_SQL timeout 300 bash "${SCRIPT}" 2>&1)"; rc=$?
+fi
 [ "${rc}" -eq 0 ] && [ "$(games)" -eq "${G}" ] && [ "$(total)" = "${EXPECT_AFTER}" ] \
-  && ok "after the failed applies a normal reconcile converges again (${G} /games rows, ${EXPECT_AFTER} total)" \
-  || bad "post-failure reconcile did not converge (rc=${rc}): ${out}"
+  && ok "after the failed applies a reconcile on the reconciler's DEFAULT seed path (ROUTE_ACCESS_SQL unset) converges again (${G} /games rows, ${EXPECT_AFTER} total)" \
+  || bad "post-failure reconcile on the default seed path did not converge (rc=${rc}, /games rows $(games), total $(total)): ${out}"
 
 echo "passed=${P} failed=${F}"
 [ "${F}" -eq 0 ] && [ "${P}" -ge 25 ] || exit 1
