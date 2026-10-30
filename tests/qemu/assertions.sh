@@ -797,6 +797,25 @@ else
         'command -v nft'
     check "hugmesh-firewall-reconcile service started (nftables backstop reconciled)" \
         'rc-service hugmesh-firewall-reconcile status 2>/dev/null | grep -qi started'
+    # "started" is not "enforcing". Until 2026-10-30 the reconcilers exited 0 when nft
+    # refused every ruleset, so the oneshot read "started" on x86 images whose kernel
+    # lacked CONFIG_NF_TABLES_INET and had NO host firewall at all. Ask the kernel.
+    check "host firewall: table inet hugmesh_release_gate is LOADED in the kernel (not merely 'started')" \
+        'nft list table inet hugmesh_release_gate'
+    if ls /etc/runlevels/*/hugmesh-coturn-firewall >/dev/null 2>&1; then
+        check "host firewall: table inet hugmesh_coturn_relay is LOADED in the kernel" \
+            'nft list table inet hugmesh_coturn_relay'
+    fi
+    check "host firewall: no table is marked UNPROTECTED (/run/hugmesh/firewall-health/*.unprotected)" \
+        '! ls /run/hugmesh/firewall-health/*.unprotected'
+fi
+# Snort is default-on on x86; the stock conf.d named an eth1 no image has, and the
+# binary could not load without net-libs/daq. A runlevel link is a promise to run.
+if ls /etc/runlevels/*/snort >/dev/null 2>&1; then
+    check "snort (default-on IDS) is started — on the node's uplink, not the stock eth1" \
+        'rc-service snort status 2>/dev/null | grep -qi started'
+else
+    skip "snort — not in any runlevel on this image"
 fi
 
 echo "-- SELinux node policy (build manifest -> kernel module store) --"
