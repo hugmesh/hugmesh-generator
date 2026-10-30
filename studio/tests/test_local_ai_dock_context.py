@@ -844,3 +844,73 @@ def test_a_native_windows_start_refusal_names_no_command_and_opens_no_window(qap
     finally:
         dock.close()
         dock.deleteLater()
+
+
+def assert_mount_agrees(wiz, dock, name):
+    """The wizard's content ends exactly where the panel starts, and the panel is the
+    height the mount computes NOW (round 3: after collapse and re-expand with a card
+    up, the content kept 332 px over a panel whose top was 317 at 942x552, so the
+    About / Back / Next / Cancel row ran under the panel)."""
+    qapp = QtWidgets.QApplication.instance()
+    pump(qapp)
+    pump(qapp)
+    mount = wiz._local_ai_mount
+    want = min(mount.strip_height(), max(0, wiz.height() - 120))
+    assert mount.container.height() == dock.y(), (name, mount.container.height(), dock.y())
+    assert dock.y() + dock.height() == wiz.height() and dock.height() == want, \
+        (name, dock.geometry().getRect(), want, wiz.size())
+    nxt = wiz.button(QtWidgets.QWizard.WizardButton.NextButton)
+    if nxt.isVisible():
+        assert rect_in(wiz, nxt).bottom() < dock.y(), (name, rect_in(wiz, nxt).getRect(), dock.y())
+
+
+@pytest.mark.parametrize("size", CARD_SIZES + ((800, 600),), ids=lambda s: f"{s[0]}x{s[1]}")
+def test_collapse_expand_and_pop_out_put_back_with_a_card_up_relayout_the_window(
+        two_domains, qapp, tmp_path, size, monkeypatch):
+    """Round 3 (LOOK): collapsing and re-expanding the panel, or putting back a
+    popped-out panel, while a card was up left the wizard content at a stale height
+    under the panel. Each gesture, on a proposal card and on a diff card, at the three
+    sizes: the content and the panel agree and every card button is in the window."""
+    wiz, dock, body, step_to = two_domains
+    wiz.resize(*size)
+    pump(qapp)
+    assert (wiz.width(), wiz.height()) == size
+    t = f"{size[0]}x{size[1]}"
+    change = 'ok\n```change\n{"domain": "shop.example", "field": "services", "to": ["tuwunel"]}\n```'
+    card = _answer(dock, qapp, "turn off the forum", change)
+    card.apply_btn.click()
+    assert card.status.text() == "Applied. The page shows the new value."
+    _plant_workspace(dock, monkeypatch)
+    for kind in ("proposal", "diff"):
+        if kind == "diff":
+            card = _answer(dock, qapp, "change the footer text in index.html", DIFF_ANSWER)
+            assert isinstance(card, dock_mod._DiffCard)
+        assert_card_in_window(wiz, dock, card, f"{kind}-before-{t}", tmp_path)
+        assert_mount_agrees(wiz, dock, f"{kind}-before-{t}")
+        dock.chevron.click()                                   # collapse
+        assert not dock.expanded
+        assert_mount_agrees(wiz, dock, f"{kind}-collapsed-{t}")
+        dock.chevron.click()                                   # and open again
+        assert dock.expanded
+        assert_mount_agrees(wiz, dock, f"{kind}-reexpanded-{t}")
+        assert_card_in_window(wiz, dock, card, f"{kind}-reexpanded-{t}", tmp_path)
+        dock.pop_btn.click()                                   # pop out: the panel window has the card
+        assert dock.popped
+        assert_mount_agrees(wiz, dock, f"{kind}-popped-{t}")
+        win = dock.panel_window
+        pump(qapp)
+        for b in (card.apply_btn, card.cancel_btn):
+            if b.isVisible():
+                r = QtCore.QRect(b.mapTo(win, QtCore.QPoint(0, 0)), b.size())
+                assert QtCore.QRect(0, 0, win.width(), win.height()).contains(r), (kind, b.text(), r.getRect())
+        dock.pop_btn.click()                                   # put back ("Put back")
+        assert not dock.popped
+        assert_mount_agrees(wiz, dock, f"{kind}-put-back-{t}")
+        assert_card_in_window(wiz, dock, card, f"{kind}-put-back-{t}", tmp_path)
+        dock.pop_out()
+        pump(qapp)
+        dock.chevron.click()                                   # the chevron also puts it back
+        assert not dock.popped and dock.expanded
+        assert_mount_agrees(wiz, dock, f"{kind}-chevron-put-back-{t}")
+        assert_card_in_window(wiz, dock, card, f"{kind}-chevron-put-back-{t}", tmp_path)
+    print("PNGs in", tmp_path)

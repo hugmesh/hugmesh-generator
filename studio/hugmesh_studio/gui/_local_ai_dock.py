@@ -1133,6 +1133,10 @@ class LocalAIDock(QtWidgets.QFrame):
                                 else "Show the panel")
         if notify:
             self.layout_changed.emit()
+            if self._card is not None:
+                # the body was just shown or moved: card_need() measured it before its
+                # layout ran, so place the panel once more when it has
+                self._card_resized()
 
     # ---- tabs -----------------------------------------------------------------------
     def current_tab(self) -> str:
@@ -2494,9 +2498,12 @@ class _DockMount(QtCore.QObject):
                     self.relayout()
                 elif obj is self.wizard:
                     # QWizard resizes its content AFTER this filter; the container filter
-                    # above then corrects it. Place the dock now so it never lags a frame.
-                    self.dock.setGeometry(0, self.wizard.height() - self.strip_height(),
-                                          self.wizard.width(), self.strip_height())
+                    # above then corrects it. Place the dock AND the content now, from one
+                    # height: placing the dock alone left the content at the height an
+                    # earlier pass computed, under the panel, whenever the card's height
+                    # changed in between (collapse and re-expand or put back with a card
+                    # up: content 332 over a panel top of 317 at 942x552, PR #832 round 3).
+                    self.relayout()
         except Exception:
             _log_swallowed("_DockMount.eventFilter")
         return False
