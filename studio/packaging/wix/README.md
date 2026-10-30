@@ -131,7 +131,8 @@ The Studio is a front end over scripts in a `hugmesh-generator` checkout (`build
   says so on start and opens a folder picker; a cancel keeps the install folder, and the pages
   then say what is missing. Only a folder picked there is saved. The default launch asks after
   the already-running check, so a second default launch never asks; `--go-live` and `--fleet`
-  skip that check and do ask, and `--tray`/`--stack-tray` never ask. The same picker appears
+  skip that check and do ask, and `--tray`/`--stack-tray` do not ask when a system tray
+  exists; with none, the wizard opens instead and they ask first. The same picker appears
   on Linux for a pip, Flatpak or release-tarball install started outside a checkout, and for
   a source run given a `--generator-dir` that is no checkout; there it says the Studio itself
   does not include the scripts. See `core/generator_dir.py`.

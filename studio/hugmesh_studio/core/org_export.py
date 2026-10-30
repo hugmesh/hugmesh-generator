@@ -2200,6 +2200,25 @@ def _terminal_line(argv: list[str], osname: str | None = None) -> str:
                            for a in argv)
 
 
+def _line_dir(path: str, osname: str | None = None) -> str:
+    """A folder as the terminal line hands it over. On native Windows its trailing
+    separators go: Windows PowerShell 5.1 wraps a word with a space in double quotes
+    for the program, so 'C:\\My Exports\\' reached it as "C:\\My Exports\\" and that
+    last backslash escaped the closing quote, which swallowed every word after it
+    (--apply included) into an illegal folder name. A root keeps its separator:
+    'C:\\' is the drive's root and 'C:' is not, and a share is named by
+    '\\\\server\\share' alone. Elsewhere the folder is handed over as typed."""
+    if (osname or os.name) != "nt":
+        return path
+    drive, rest = ntpath.splitdrive(path)
+    tail = rest.rstrip("\\/")
+    if tail or not rest:
+        return drive + tail
+    if drive[:1] in ("\\", "/"):        # a share's root: \\server\share
+        return drive
+    return drive + rest[0]               # C:\ or \ : the root itself
+
+
 def cli_command(cfg: ExportConfig, verb: str = "PLAN", config_path: str = "",
                 rename_map_path: str = "", osname: str | None = None) -> str:
     """The exact terminal command for this export (what the GUI and TUI hand over):
@@ -2215,7 +2234,9 @@ def cli_command(cfg: ExportConfig, verb: str = "PLAN", config_path: str = "",
     repositories, plan folder, brand, remote base) is then emitted as a flag ONLY
     where it differs from what the file alone would give, so the line stays short
     for the ordinary case and exact for every other. On native Windows the line is
-    PowerShell's (:func:`_terminal_line`)."""
+    PowerShell's (:func:`_terminal_line`), and a folder there loses its trailing
+    separators (:func:`_line_dir`): the same folder, spelled so Windows PowerShell 5.1
+    cannot run it into the next word."""
     argv = [*_studio_cli(osname), "--org-export", verb]
     base: ExportConfig | None = None
     if config_path:
@@ -2231,13 +2252,14 @@ def cli_command(cfg: ExportConfig, verb: str = "PLAN", config_path: str = "",
         base = ExportConfig(domain=cfg.domain, org=cfg.org, generator_dir=cfg.generator_dir)
     if (cfg.source_dir or "") != (base.source_dir or "") or cfg.source_mode != base.source_mode:
         if cfg.source_dir:
-            argv += ["--source-dir", cfg.source_dir, "--source-mode", cfg.source_mode]
+            argv += ["--source-dir", _line_dir(cfg.source_dir, osname),
+                     "--source-mode", cfg.source_mode]
         else:
             argv += ["--source-mode", cfg.source_mode]   # clone: the file's folder is dropped
     if rename_map_path:
         argv += ["--rename-map", rename_map_path]
     if cfg.out_dir and cfg.out_dir != base.out_dir:
-        argv += ["--out", cfg.out_dir]
+        argv += ["--out", _line_dir(cfg.out_dir, osname)]
     if cfg.visibility != base.visibility:
         argv += ["--visibility", cfg.visibility]
     if cfg.update != base.update:
