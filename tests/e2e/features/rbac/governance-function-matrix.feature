@@ -77,7 +77,7 @@ Feature: Governance functions — every seeded identity against every console fu
       # banned, the un-onboarded and the role-less included — because the gate is
       # what happens after the door. This row is also the identity-side drift
       # guard: adding a persona to either seeder and not to this list fails here.
-      | login         | admin@hugmesh.net,alice@gmail.com,bob@gmail.com,carol@gmail.com,dave@gmail.com,dragoneer,e2e-admin,e2e-adminonly,e2e-banned,e2e-denied,e2e-fleet,e2e-forum,e2e-gamesadmin,e2e-gamesonly,e2e-mastodon,e2e-mastodon-domainlocked,e2e-mastodon-external-client,e2e-matrix,e2e-matrix-domainlocked,e2e-matrix-external-client,e2e-matrix-groupchat,e2e-mod,e2e-pending,e2e-superadmin,e2e-suspended,e2e-swarm-admin-0,e2e-swarm-mod-0,e2e-swarm-user-000,e2e-user,eve@gmail.com,frank@gmail.com,rbac-approved@gmail.com,rbac-login-user@gmail.com,rbac-pending@gmail.com,rbac-plain@gmail.com |
+      | login         | admin@hugmesh.net,alice@gmail.com,bob@gmail.com,carol@gmail.com,dave@gmail.com,dragoneer,e2e-admin,e2e-adminonly,e2e-banned,e2e-denied,e2e-fleet,e2e-forum,e2e-gamesadmin,e2e-gamesonly,e2e-mastodon,e2e-mastodon-domainlocked,e2e-mastodon-external-client,e2e-matrix,e2e-matrix-domainlocked,e2e-matrix-external-client,e2e-matrix-groupchat,e2e-mod,e2e-pending,e2e-superadmin,e2e-swarm-admin-0,e2e-swarm-mod-0,e2e-swarm-user-000,e2e-user,eve@gmail.com,frank@gmail.com,rbac-approved@gmail.com,rbac-login-user@gmail.com,rbac-pending@gmail.com,rbac-plain@gmail.com |
 
   # ═════════════════════════════════════════════════════════════════════════
   # THE NAMED ROWS — two per catalogued function, the diagnostic pair.
