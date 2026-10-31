@@ -5470,25 +5470,6 @@ live_root_gate() {
     fi
     info "Live-root gate: /${LIVE_ROOT_MOUNTPOINTS// / /} present and /etc/fstab is the live one"
 }
-
-# live_label_gate <squashfs.img> — refuse to ship a live root without SELinux labels
-# (#503). Reads the PACKED image: a full unsquashfs into a scratch dir (13 s for the
-# 1.9 GB backend squashfs), then slx_label_gate's exact-type probes and its >= 99%
-# census. Unlike live_root_gate this has NO "cannot look, return 0" branch: with no
-# unsquashfs on the host it FAILS — an unverified label set is the exact state that
-# shipped every live ISO before this gate existed (1,124 labelled of 159,376).
-live_label_gate() {
-    local sq="$1" tmp rc=0
-    [ -s "${sq}" ] || { err "live-label gate: ${sq} is missing or empty"; return 1; }
-    command -v unsquashfs >/dev/null || { err "live-label gate: no unsquashfs on this host — cannot read ${sq}'s labels, refusing to ship it unverified"; return 1; }
-    tmp="$(mktemp -d "${BUILD_ROOT}/live-label-gate.XXXXXX")" || return 1
-    if ! unsquashfs -no-progress -f -d "${tmp}" "${sq}" >/dev/null; then
-        err "live-label gate: unsquashfs could not extract ${sq}"; rm -rf "${tmp}"; return 1
-    fi
-    slx_label_gate "${tmp}" squashfs "${SLX_PROBE_TABLE}" --census || rc=1
-    rm -rf "${tmp}"
-    return "${rc}"
-}
 umount_chroot() {
     # Detach exactly what mount_chroot attached in THIS run — each flag below is
     # set by the matching mount above — and nothing else: a mount somebody else
@@ -6744,11 +6725,11 @@ for must in CONFIG_SECURITY_SELINUX CONFIG_STACKPROTECTOR_STRONG CONFIG_FORTIFY_
 done
 # BOOT-CRITICAL (live ISO + SELinux enforcing): SQUASHFS_XATTR must survive olddefconfig.
 # The live squashfs pack PRESERVES security.selinux xattrs (mksquashfs by default, the
-# tar2sqfs fallback via tar --xattrs), and since #503 the sysroot is LABELLED at build
-# time: slx_label_tree (scripts/_selinux-policy-lib.sh) runs setfiles into it before
-# the stage4 tar and again before the squash, and live_label_gate reads the packed
-# image back. Nothing relies on a first-boot relabel any more (that one needs KEYS).
-# SQUASHFS_XATTR is therefore load-bearing: without it the kernel drops the labels ("squashfs: Xattrs in
+# tar2sqfs fallback via tar --xattrs) — but note the sysroot is UNLABELED at pack time
+# today: nothing runs setfiles into it, so the packed image carries only whatever
+# labels happen to exist, and real labeling happens at FIRST BOOT when
+# provision_selinux() relabels onto the live overlay. SQUASHFS_XATTR is still required:
+# without it the kernel drops any labels that ARE present ("squashfs: Xattrs in
 # filesystem, these will be ignored") — and on a labeled squashfs that unlabels the
 # live root and the enforcing boot DEADLOCKS at OpenRC init-early (proven via QEMU:
 # enforcing hangs, enforcing=0 reaches agetty). SQUASHFS_XATTR depends on SQUASHFS,
@@ -7219,27 +7200,6 @@ pcs_unquiet_sendfile_noise "${SYSROOT}"
 # left in ${SYSROOT}/tmp rides into the ISO's rootfs.
 rm -f "${SYSROOT}/tmp/hugmesh-patch-portage-file-copy.py"
 
-# ── BUILD-TIME SELINUX LABELS (#503) ─────────────────────────────────────────
-# Labels and the hugmesh modules are BUILD ARTIFACTS: every carrier below (stage4,
-# .img, fs.tar, live squashfs) inherits them, and each hop has its own fail-closed
-# gate. Before this, nothing labelled the sysroot and the only relabeler was the
-# KEYS-gated first boot, so a live ISO, a disk installed without a KEYS USB and every
-# UNAFFILIATED client ran with every process kernel_t. See the lib's "BUILD-TIME
-# LABELS" block for the Step 0 measurements.
-# HERE, not earlier: after pcs_unquiet_sendfile_noise restored the pristine portage
-# files (so they are labelled) and after the patcher left /tmp; before ANY packing.
-# The order store -> config -> setfiles -> gate is mandatory: file_contexts only
-# gains the hugmesh .fc rules once the .pp are in the store.
-SLX_PROBE_TABLE="${BUILD_ROOT}/selinux-label-probes.tsv"
-SLX_TYPE="$(slx_policy_type "${SYSROOT}")"
-info "Labelling the sysroot (SELinux ${SLX_TYPE}: store install -> config -> setfiles -> gate)"
-slx_store_install_modules "${SYSROOT}" "${SLX_TYPE}" chroot \
-    && slx_write_selinux_config "${SYSROOT}" "${SLX_TYPE}" \
-    && slx_label_tree "${SYSROOT}" "${SLX_TYPE}" \
-    && slx_write_probe_table "${SYSROOT}" "${SLX_TYPE}" "${SLX_PROBE_TABLE}" \
-    && slx_label_gate "${SYSROOT}" sysroot "${SLX_PROBE_TABLE}" --census \
-    || { err "SELinux build-time labelling failed (see above) — refusing to pack an unlabelled image (every process would run kernel_t)."; exit 1; }
-
 banner "Packaging stage4 tarball"
 # The role tag IS the role. It only ever translated because `be+gpu` carried a `+`
 # that is illegal in a filename-ish token; `backend-gpu` is filename-safe, so the
@@ -7267,17 +7227,14 @@ STAGE4="${WORK_DIR}/${BRAND}-x86-amd64-${ROLE_TAG}-${ENV}-${BUILD_TS}.stage4.tar
 # carries any --local-user override, :1621) is created by firstboot, so any
 # build-time content under it is host leakage — was hard-coded './home/magus',
 # which only worked when the operator WAS magus.
-# ONE tar, xattrs ON, failure FATAL. The old `2>/dev/null || tar ...` fallback re-ran
-# the pack WITHOUT xattrs on any error and said nothing: the stage4 (and the .img and
-# fs.tar built from it) then shipped with every security.selinux label stripped.
-tar -C "${SYSROOT}" --xattrs --xattrs-include='*.*' --numeric-owner \
+tar -C "${SYSROOT}" --xattrs-include='*.*' --numeric-owner \
     --exclude='./proc/*' --exclude='./sys/*' --exclude='./dev/*' --exclude='./run/*' \
-    --exclude='./var/cache' --exclude='./tmp/*' --exclude='./usr/src' --exclude="./home/${DEFAULT_USER}" -cpf - . \
+    --exclude='./var/cache' --exclude='./tmp/*' --exclude='./usr/src' --exclude="./home/${DEFAULT_USER}" -cpf - . 2>/dev/null \
     | xz -T0 -6 > "${STAGE4}" \
-    || { err "stage4 tar (with xattrs) failed — not falling back to an unlabelled tarball"; exit 1; }
+  || tar -C "${SYSROOT}" --numeric-owner \
+    --exclude='./proc/*' --exclude='./sys/*' --exclude='./dev/*' --exclude='./run/*' \
+    --exclude='./var/cache' --exclude='./tmp/*' --exclude='./usr/src' --exclude="./home/${DEFAULT_USER}" -cpf - . | xz -T0 -6 > "${STAGE4}"
 info "Stage4: ${STAGE4} ($(du -sh "${STAGE4}" | cut -f1))"
-slx_tar_label_gate "${STAGE4}" stage4 "${SLX_PROBE_TABLE}" \
-    || { err "stage4 label gate failed — ${STAGE4} lost its SELinux labels"; exit 1; }
 
 # ── 10. Raw .img (DEFAULT deliverable) ─────────────────────────────
 # UEFI GPT image mirroring the rpi5 build_img, adapted MBR->GPT + a GRUB-EFI
@@ -7406,9 +7363,8 @@ build_img() {
     mount "${root_part}" "${root_mnt}"
 
     info "Extracting stage4 into ${root_mnt}"
-    # xattrs ON, failure FATAL (no silent label-stripping fallback; see the stage4 tar).
-    tar -C "${root_mnt}" --xattrs --xattrs-include='*.*' -xpf "${STAGE4}" \
-        || { err ".img: extracting ${STAGE4} (with xattrs) failed"; exit 1; }
+    tar -C "${root_mnt}" --xattrs-include='*.*' -xpf "${STAGE4}" 2>/dev/null || \
+    tar -C "${root_mnt}" -xpf "${STAGE4}"
 
     # HARD anti-hollow assert: the extraction must have produced a real rootfs.
     # Without this a future mount/extract failure ships an empty image silently
@@ -7578,31 +7534,12 @@ build_img() {
             echo "    # WARNING: no vmlinuz found under /boot at build time"
         fi
         echo "}"
-        # SELinux permissive rescue (APPENDED: default=0 is unchanged). On a UKI image
-        # this is the non-UKI linux entry — the signed UKI's cmdline is fixed, so the
-        # only way to boot it permissive is this unsigned-kernel path (Secure Boot off).
-        if [ -n "${vmlinuz}" ]; then
-            echo "menuentry \"${BRAND_TITLE} (${ROLE}) — SELinux permissive rescue\" {"
-            echo "    search --no-floppy --fs-uuid --set=root ${root_fsuuid}"
-            echo "    linux /boot/${vmlinuz} root=PARTUUID=${root_uuid} ro ${cmdline} enforcing=0"
-            [ -n "${initrd}" ] && echo "    initrd /boot/${initrd}"
-            echo "}"
-        fi
     } > "${root_mnt}/boot/grub/grub.cfg"
 
     # Drop a per-device-editable growfs.conf on the ESP so an operator can retune
     # the first-boot grow (fill|none|<size>) on a flashed disk WITHOUT a rebuild.
     # growroot reads /boot/efi/growfs.conf ahead of the baked /etc copy.
     write_growfs_conf "${root_mnt}/boot/efi/growfs.conf"
-
-    # ── SELinux labels on the .img root (#503) ──
-    # AFTER every write into root_mnt (the PARTUUID fstab sed -i makes a NEW inode with
-    # no label, grub.cfg and the grub module tree are new files) and BEFORE fs.tar and
-    # the umount. The ESP is FAT (no xattrs) and is excluded from both the pass and the
-    # gate's census.
-    slx_label_tree "${root_mnt}" "${SLX_TYPE}" boot/efi \
-        && slx_label_gate "${root_mnt}" img "${SLX_PROBE_TABLE}" --census --exclude boot/efi \
-        || { err ".img root label pass/gate failed"; exit 1; }
 
     # ── Filesystem tarball ────────────────────────────────────────────
     # Capture the FULLY-MOUNTED tree (ext4 root with the FAT ESP mounted at
@@ -7615,9 +7552,9 @@ build_img() {
     if ${BUILD_TAR}; then
         local fs_tar="${WORK_DIR}/${BRAND}-x86-amd64-${ROLE_TAG}-${ENV}-${BUILD_TS}.fs.tar.xz"
         info "Filesystem tarball (mounted tree) -> ${fs_tar}"
-        tar -C "${root_mnt}" --xattrs --xattrs-include='*.*' --numeric-owner -cpf - . \
+        tar -C "${root_mnt}" --xattrs --xattrs-include='*.*' --numeric-owner -cpf - . 2>/dev/null \
             | xz -T0 -6 > "${fs_tar}" \
-            || { err "fs.tar (with xattrs) failed — not falling back to an unlabelled tarball"; exit 1; }
+          || tar -C "${root_mnt}" --numeric-owner -cpf - . | xz -T0 -6 > "${fs_tar}"
         FS_TAR_PATH="${fs_tar}"
     fi
 
@@ -7699,12 +7636,6 @@ CHROOT
             mkdir -p "${ISO_DIR}/boot/grub/themes/${BRAND_GRUB_THEME_NAME}"
             cp -r "${BRAND_GRUB_THEME_STAGED}/." "${ISO_DIR}/boot/grub/themes/${BRAND_GRUB_THEME_NAME}/" 2>/dev/null || true
         fi
-        # Re-label the sysroot for the live pack (#503): the live dracut chroot above wrote
-        # boot/initramfs-live.img and var/tmp state after the stage4 pass. Cheap on an
-        # already-labelled tree (~1 s). live_fstab_swap_in below rewrites /etc/fstab IN
-        # PLACE (same inode, label kept); live_label_gate probes it on the packed image.
-        slx_label_tree "${SYSROOT}" "${SLX_TYPE}" \
-            || { err "live pack: SELinux label pass failed — not squashing an unlabelled root"; exit 1; }
         rm -f "${ISO_DIR}/LiveOS/squashfs.img"
         # The live root must NOT carry the installed image's fstab (see the live-ISO
         # root pack helpers next to umount_chroot): swap it for the live one for the
@@ -7759,7 +7690,6 @@ CHROOT
         # Fail closed on what the pack must have produced: the four kernel-filesystem
         # mount points and a live /etc/fstab. Reads the image, not the argv.
         live_root_gate "${ISO_DIR}/LiveOS/squashfs.img" || exit 1
-        live_label_gate "${ISO_DIR}/LiveOS/squashfs.img" || exit 1
         info "Live rootfs squashed: ${sq_mib} MiB (-comp ${sq_comp:-xz})"
         # Unify the cmdline with the .img: source GRUB_CMDLINE_LINUX from the same
         # grub defaults (full KSPP/LSM/audit/cgroup hardening), not a short literal.
@@ -7813,18 +7743,6 @@ CHROOT
             echo "}"
             echo "menuentry \"Install ${BRAND_TITLE} (text / ncurses installer)\" {"
             echo "    linux /boot/vmlinuz ${_LBASE} ${INSTALL_CMDLINE_KEY}=ncurses ${LIVE_CMDLINE}"
-            echo "    initrd /boot/initramfs.img"
-            echo "}"
-            # SELinux opt-in entries, APPENDED so default=0 stays the plain live boot.
-            # enforcing=N on the cmdline is honoured because the kernel carries
-            # CONFIG_SECURITY_SELINUX_DEVELOP=y (specs-x86/kernel/hardened-k8s.config);
-            # /etc/selinux/config stays SELINUX=permissive either way.
-            echo "menuentry \"${BRAND_TITLE} ${ROLE} (live — SELinux enforcing (test))\" {"
-            echo "    linux /boot/vmlinuz ${_LBASE} ${LIVE_CMDLINE} enforcing=1"
-            echo "    initrd /boot/initramfs.img"
-            echo "}"
-            echo "menuentry \"${BRAND_TITLE} ${ROLE} (live — SELinux permissive rescue)\" {"
-            echo "    linux /boot/vmlinuz ${_LBASE} ${LIVE_CMDLINE} enforcing=0"
             echo "    initrd /boot/initramfs.img"
             echo "}"
         } > "${ISO_DIR}/boot/grub/grub.cfg"

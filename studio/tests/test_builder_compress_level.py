@@ -39,8 +39,7 @@ for _p, _f in BUILDER_SCRIPTS.items():
         _TEXT[_p] = _fh.read()
 
 # The always-on archive compressions, which --compress-level deliberately does NOT own.
-# x86: stage4 + fs.tar, one each since their silent no-xattr tar fallbacks went (#503).
-_ALWAYS_ON_XZ6 = {"x86": 2, "rpi5": 2}          # stage4 + fs.tar / fs.tar x2
+_ALWAYS_ON_XZ6 = {"x86": 4, "rpi5": 2}          # stage4 x2 + fs.tar x2 / fs.tar x2
 
 
 def test_every_builder_parses_compress_level():

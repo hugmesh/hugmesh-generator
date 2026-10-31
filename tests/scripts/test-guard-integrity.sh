@@ -922,14 +922,7 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 #     206 of 247 suites are named by a pull_request-triggered workflow
 # A branch that also raises this from 205 conflicts here by construction; whichever lands
 # second re-measures (expected 207) per the doctrine above.
-# 206 -> 207 (denominator 247 -> 248) on 2026-10-30 for fix/selinux-enforcing-20261030, which
-# carries fix/x86-boot-firewall-snort-20261030 (206 of 247 above, merged first) and adds ONE gated
-# suite: tests/scripts/test-selinux-sysroot-labels.sh (wired in shell-suites.yml's extras job AND
-# .gitlab-ci.yml selinux-policy-verify). MEASURED by RUNNING this file with GUARD_PREMERGE=0 on
-# that tree: '207 of 248 suites are named by a pull_request-triggered workflow', ungated SET 41;
-# and with the suite on disk but its shell-suites.yml line absent: '206 of 248' + check 3 and
-# check 7 red naming it -- so the +1/+1 is this suite and nothing else.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-207}"
+PREMERGE_BASELINE="${GUARD_PREMERGE:-206}"
 
 # 182 -> 192 (denominator 205 -> 215) on 2026-09-30 for #385: the census gained a
 # THIRD spelling, bare `tests/*.sh` at depth 1, and the ten suites it exposed were

@@ -524,11 +524,6 @@ else
     { echo '#!/usr/bin/env bash'
       echo 'have(){ command -v "$1" >/dev/null 2>&1; }'
       echo 'warn(){ :; }'
-      echo 'log(){ :; }'
-      # A DISK root, explicitly: since #503 an overlay root (the live ISO) skips the
-      # full walk, and a CI job's own container root IS overlay — so the host's real
-      # findmnt would steer this harness into the skip branch and call nothing.
-      echo 'findmnt(){ echo "${C3E_ROOT_FS:-ext4}"; }'
       echo 'type=mcs; relabel_ok=1'
       sed -n '/# restorecon IS THE RELABELER/,/^    fi$/p' "${PROV}" | head -40
     } > "${C3E}/harness.sh"
@@ -543,13 +538,6 @@ else
         grep -qx 'setfiles' "${C3E}/called" 2>/dev/null \
             && bad "C3e setfiles ran even though restorecon was available" \
             || ok "C3e setfiles is not run when restorecon exists"
-        # #503: on an overlay root (live ISO) NEITHER full-tree relabeler runs — the
-        # squashfs is labelled at build time and a full walk copies every file up.
-        rm -f "${C3E}/called"
-        ( C3E_ROOT_FS=overlay PATH="${C3E}/bin:${PATH}" bash "${C3E}/harness.sh" >/dev/null 2>&1 )
-        [ ! -s "${C3E}/called" ] \
-            && ok "C3e an overlay root runs no full-tree relabel (build-time labels; no copy-up storm)" \
-            || bad "C3e an overlay root still ran: $(tr '\n' ' ' < "${C3E}/called")"
     fi
 fi
 
@@ -1210,32 +1198,6 @@ else
     bad "(autorelabel consumption)"; bad "(policy-loaded postcondition)"
     bad "(selinux-load-failed pair)"; bad "(selinux-built pair)"
 fi
-
-# ── F) the store is now populated AT BUILD TIME (#503) ───────────────────────
-# slx_stage_node_policy still only compiles + stages the .pp; the x86 builder then
-# installs them into the store (slx_store_install_modules) BEFORE labelling, so a
-# live ISO / a no-KEYS install / an UNAFFILIATED client carries the hugmesh modules
-# and labels without ever reaching provision_selinux(). Execution coverage of the
-# new functions lives in tests/scripts/test-selinux-sysroot-labels.sh; this pins the
-# contract between the two halves.
-echo "-- F) store populated at build time --"
-X86B="${GEN}/build-x86-host-stage4.sh"
-st_ln="$(grep -n '^slx_stage_node_policy "\${SYSROOT}"' "${X86B}" | head -1 | cut -d: -f1)"
-in_ln="$(grep -n '^slx_store_install_modules "\${SYSROOT}"' "${X86B}" | head -1 | cut -d: -f1)"
-{ [ -n "${st_ln}" ] && [ -n "${in_ln}" ] && [ "${st_ln}" -lt "${in_ln}" ]; } \
-    && ok "x86: the build-time store install (line ${in_ln}) follows the compile/stage step (line ${st_ln})" \
-    || bad "x86: slx_store_install_modules missing or before slx_stage_node_policy (stage=${st_ln:-none} install=${in_ln:-none})"
-grep -q "builder now installs them into the \${type} store at build time" "${LIB}" \
-    && ok "slx_stage_node_policy's closing message names the build-time store install (no stale 'first boot loads them')" \
-    || bad "slx_stage_node_policy still says only first boot loads the modules"
-grep -q 'selinux-modules.build-status' "${LIB}" && grep -q 'selinux-modules.build-status' "${GEN}/tests/qemu/assertions.sh" \
-    && ok "selinux-modules.build-status is a matched pair (lib writes it, the QEMU assertions fall back to it without KEYS)" \
-    || bad "selinux-modules.build-status halves diverged"
-# Same '<module> loaded|failed' grammar as provision's status file, so the one
-# assertion reads either.
-grep -q 'echo "${m} loaded"' "${LIB}" && grep -q 'echo "${m} failed"' "${LIB}" \
-    && ok "build-status uses provision's '<module> loaded|failed' format" \
-    || bad "build-status format diverged from selinux-modules.status"
 
 echo "== selinux-policy-install: ${P} passed, ${F} failed =="
 [ "${F}" -eq 0 ]

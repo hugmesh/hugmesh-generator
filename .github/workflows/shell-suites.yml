@@ -817,7 +817,7 @@ jobs:
       - run: |
           apt-get update -qq
           apt-get install -y --no-install-recommends git jq openssl curl ca-certificates \
-            make m4 checkpolicy semodule-utils policycoreutils selinux-policy-dev attr
+            make m4 checkpolicy semodule-utils policycoreutils selinux-policy-dev
           pip install --quiet pyyaml
           # Pinned. An unpinned "latest" here would change what these suites assert
           # without a commit ever saying so.
@@ -861,7 +861,6 @@ jobs:
         run: |
           SUITES="
             tests/scripts/test-selinux-policy-install.sh
-            tests/scripts/test-selinux-sysroot-labels.sh
             tests/scripts/test-selinux-auditallow-generator.sh
             tests/stack/test-gateway-mfa-env.sh
             tests/stack/test-mdm-manifests-render.sh

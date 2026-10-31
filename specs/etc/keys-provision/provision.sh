@@ -3066,12 +3066,6 @@ EOF
     # ── END hugmesh node-policy load ──
     log "Relabelling filesystem (this can take a while)"
     local relabel_ok=1
-    # LIVE OVERLAY ROOT: SKIP THE FULL WALK (#503, D3). On the live ISO / is a tmpfs
-    # overlay over the squashfs, and the kernel has no OVERLAY_FS_METACOPY, so every
-    # file restorecon relabels is COPIED UP into RAM — a multi-GB copy-up storm on a
-    # 4 GiB node. The squashfs is labelled at build time (slx_label_tree, gated by
-    # live_label_gate), so there is nothing to walk; the #152 probe postcondition
-    # below still asks restorecon whether /bin/sh, /etc/passwd and /usr/bin are right.
     # restorecon IS THE RELABELER. setfiles used to be tried first with restorecon
     # as an `||` fallback, and that combination is what left the fleet kernel_t.
     #
@@ -3094,9 +3088,7 @@ EOF
     # correct labels — including repairing paths setfiles had already corrupted.
     # So: restorecon first, always. setfiles remains only for an image with no
     # restorecon at all, and the postcondition below catches it when it lies.
-    if have findmnt && [ "$(findmnt -no FSTYPE / 2>/dev/null)" = overlay ]; then
-        log "Live overlay root: labels were written at build time — skipping the full relabel (copy-up storm); probing instead"
-    elif have restorecon; then
+    if have restorecon; then
         restorecon -RF / 2>/dev/null || { relabel_ok=0; warn "restorecon -RF / failed"; }
     elif have setfiles && [ -f "/etc/selinux/${type}/contexts/files/file_contexts" ]; then
         warn "no restorecon on this image — falling back to setfiles, which has been"
