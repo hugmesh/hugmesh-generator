@@ -14,8 +14,11 @@
 #   scripts/local-ai.sh queue                  what is waiting and running
 #   scripts/local-ai.sh worker [--foreground]  the queue worker (detached by default)
 #   scripts/local-ai.sh stop [--server]        stop the worker (and an Ollama we started)
-#   scripts/local-ai.sh chat                   a prompt loop against the local model
-#   scripts/local-ai.sh prompt TEXT...         one question, one answer
+#   scripts/local-ai.sh chat                   a prompt loop against the local model (grounded:
+#                                              the HugMesh primer + the docs; /where PAGE)
+#   scripts/local-ai.sh prompt TEXT...         one question, one answer (grounded, with Sources)
+#   scripts/local-ai.sh docs [--page=SLUG] TEXT...   what the docs say, no model needed
+#   scripts/local-ai.sh catalogue [domain|mesh|image]   every Studio option, from the code
 #   scripts/local-ai.sh watch                  the live dashboard (refreshes every 5 s)
 #
 # The one line for a spare terminal:   scripts/local-ai.sh todo 6 --watch
@@ -216,8 +219,10 @@ case "${1:-help}" in
   queue)         shift; cmd_queue "$@" ;;
   worker)        shift; cmd_worker "$@" ;;
   stop)          shift; cmd_stop "$@" ;;
-  chat)          shift; la_py chat ;;
-  prompt)        shift; la_py prompt "$@" ;;
+  chat)          shift; LOCAL_AI_GROUNDED=1 la_py chat ;;
+  prompt)        shift; LOCAL_AI_GROUNDED=1 la_py prompt "$@" ;;
+  docs)          shift; la_py docs "$@" ;;
+  catalogue)     shift; la_py catalogue "$@" ;;
   watch)         shift; cmd_watch ;;
   help|-h|--help) usage ;;
   *)             echo "unknown command: $1" >&2; usage >&2; exit 2 ;;

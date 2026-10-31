@@ -44,19 +44,46 @@ WHERE IT SITS. QWizard keeps all its content in one child widget and exposes no 
 slot, so :func:`mount_dock` shortens that child by the dock's height and puts the dock
 in the strip below it. The child is watched rather than the wizard because QWizard
 resizes it in its own ``resizeEvent``, after any filter on the wizard has run.
+
+WHERE THE PERSON IS. ``mount_dock`` connects the wizard's native ``currentIdChanged``
+to :meth:`LocalAIDock.on_page_changed`, which maps the page id back to its slug through
+``wizard._page_ids`` (a private attribute of gui/wizard.py, which this file must not
+edit: accepted, and ``test_the_dock_knows_every_wizard_page_by_its_slug`` fails loudly
+if that map ever stops covering ``pageIds()``). A window with no such signal (the
+Fleet window, the standalone local-mesh dialog) announces the slug ``mount_dock`` was
+given as ``page_slug``. The domain and tab on screen are re-read at use time from the
+page's own ``current_domain()`` and ``brand_tabs.bar``, never cached: "Next domain"
+does not change the page id. A ``Tip: ...`` for the page sits in the collapsed bar and
+above the answer area (core/assistant_tips: curated, no model needed; a running model
+may replace it with one sentence for the same page). Every question goes out with the
+primer, the page facts, the page's options and the docs snippets (core/assistant_prompt);
+the answer gets a Sources footer, and a proposed setting change or code edit becomes an
+inline card with Apply / Cancel and then Undo / Revert — applied through the page's own
+functions (core/assistant_actions, core/assistant_code_edits), never without the press.
 """
 from __future__ import annotations
 
+import html
 import os
 import queue
 import sys
 import threading
+import time
 import traceback
+import weakref
 
 from ..core import agent_context as actx
+from ..core import assistant_actions as aact
+from ..core import assistant_catalogue as acat
+from ..core import assistant_code_edits as aedit
+from ..core import assistant_context as actxt
+from ..core import assistant_docs as adocs
+from ..core import assistant_prompt as aprompt
 from ..core import assistant_settings
+from ..core import assistant_tips as atips
 from ..core import local_ai_status as lai
 from ..core import ollama_docker as odk
+from ..core import plain_words
 from . import styles
 from .qt import Qt, QtCore, QtGui, QtWidgets, Signal
 
@@ -78,6 +105,8 @@ EXPANDED_FRACTION = 0.38
 #: the window instead. The page's title, note and the wizard's buttons keep the rest.
 TALL_FRACTION = 0.62
 MIN_CLICK_PX = 28
+#: How long a page must have been on screen before the model is asked for a tip.
+MODEL_TIP_SETTLE_S = 4.0
 _SETTINGS = assistant_settings.FILE_NAME
 #: Tabs that get the TALL height while they are open in the docked panel. The Running
 #: mesh tab holds the pod table (at least six rows), the domain strip and the Tor list;
@@ -93,6 +122,24 @@ TABS = (("assistant", "Assistant"), ("mesh", "Local mesh"), ("pods", "Running me
 def _log_swallowed(where: str) -> None:
     print(f"local-ai dock: swallowed exception in {where}", file=sys.stderr)
     traceback.print_exc(file=sys.stderr)
+
+
+def plain(label: "QtWidgets.QLabel") -> "QtWidgets.QLabel":
+    """``label`` shows its text as written. Qt's default (AutoText) reads text that
+    looks like markup as rich text, so a card quoting a file's ``<body>`` line showed
+    "the file says ''" (PR #832 review); every label that shows model, file or log
+    text goes through here."""
+    label.setTextFormat(Qt.TextFormat.PlainText)
+    return label
+
+
+def plain_tip(text: str) -> str:
+    """A tooltip that shows ``text`` as written: tooltips have no text format of their
+    own and read markup-looking text as rich text, so such text is escaped."""
+    text = text or ""
+    if "<" not in text and "&" not in text:
+        return text
+    return "<p style='white-space:pre-wrap'>" + html.escape(text) + "</p>"
 
 
 def dock_height_for(window_height: int, expanded: bool, bar_px: int,
@@ -134,10 +181,11 @@ class _ElidedLabel(QtWidgets.QLabel):
         self.setSizePolicy(QtWidgets.QSizePolicy.Policy.Ignored,
                            QtWidgets.QSizePolicy.Policy.Preferred)
         self.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
+        plain(self)
 
     def set_full_text(self, text: str) -> None:
         self._full = text
-        self.setToolTip(text)
+        self.setToolTip(plain_tip(text))
         self._elide()
 
     def full_text(self) -> str:
@@ -602,6 +650,10 @@ class LocalAIDock(QtWidgets.QFrame):
         self._stop = threading.Event()
         self._alive = threading.Event()         # set when the dock is destroyed
         self._answered = False
+        self._answer_at = 0                     # where the current answer starts in the area
+        self._streamed = ""                     # the current answer so far (for the warning)
+        self._warned = False                    # the delete-commands warning is showing
+        self._warn_span = None
         self._message = ""                      # a transient line (waiting, started, failed)
         self._message_warn = False
         self._message_token = 0
@@ -639,13 +691,42 @@ class LocalAIDock(QtWidgets.QFrame):
         self.pop_btn = _styled_button("Pop out", "Open this panel in a window of its own "
                                                  "(close that window to put it back)")
         self.pop_btn.clicked.connect(self.toggle_pop)
+        # THE TIP for the page the person is on (core/assistant_tips). Hidden, it and
+        # its button take no width and the activity line regains the space.
+        self.tip = _ElidedLabel()
+        self.tip.setObjectName("assistant_tip")
+        self.tip.setMinimumHeight(MIN_CLICK_PX)
+        self.tip.setStyleSheet(styles.muted())
+        self.tip_hide = QtWidgets.QToolButton()
+        self.tip_hide.setText("\u00d7")
+        self.tip_hide.setToolTip("Hide tips")
+        self.tip_hide.setAccessibleName("Hide tips")
+        self.tip_hide.setAutoRaise(True)
+        self.tip_hide.setFixedSize(MIN_CLICK_PX, MIN_CLICK_PX)
+        self.tip_hide.clicked.connect(lambda: self.set_tips_hidden(True))
         bar.addWidget(self.chevron)
         bar.addWidget(self.summary, 3)
         bar.addWidget(self.activity, 2)
+        bar.addWidget(self.tip, 3)
+        bar.addWidget(self.tip_hide)
         bar.addWidget(self.start_btn)
         bar.addWidget(self.work_btn)
         bar.addWidget(self.pop_btn)
         outer.addWidget(self.bar)
+        # page awareness (see the module docstring): set by on_page_changed / mount_dock
+        self._wizard_ref = None
+        self._page_slug = ""
+        self._page_title = ""
+        self._page_subtitle = ""
+        self._page_id = None
+        self._tip_text = ""
+        self._tip_born = None                   # (clears, slug, domain) of the tip request in flight
+        self._tip_asked: dict = {}               # (slug, domain) -> when the model was last asked
+        self._last_prompt: dict = {}             # born -> the Prompt behind the answer in flight
+        self._card = None                        # the one proposal / diff card
+        self._undo: dict = {}                    # assistant_actions.undo_key -> Applied (one level per domain)
+        self._applied_edit = None                # the last code edit (for Revert)
+        self._rotation = atips.TipRotation()
 
         # the expanded part: the tabs
         self.body = QtWidgets.QWidget()
@@ -664,10 +745,29 @@ class LocalAIDock(QtWidgets.QFrame):
         chat_lay = QtWidgets.QVBoxLayout(chat)
         chat_lay.setContentsMargins(0, 3, 0, 0)
         chat_lay.setSpacing(3)
-        self.note = QtWidgets.QLabel("")
+        self.note = plain(QtWidgets.QLabel(""))
         self.note.setWordWrap(True)
         self.note.setStyleSheet(styles.muted())
         self.note.setVisible(False)
+        tip_row = QtWidgets.QHBoxLayout()
+        tip_row.setSpacing(4)
+        self.tip_line = plain(QtWidgets.QLabel(""))
+        self.tip_line.setObjectName("assistant_tip_line")
+        self.tip_line.setWordWrap(True)
+        self.tip_line.setStyleSheet(styles.muted())
+        self.tip_line.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.tip_hide2 = QtWidgets.QToolButton()
+        self.tip_hide2.setText("\u00d7")
+        self.tip_hide2.setToolTip("Hide tips")
+        self.tip_hide2.setAccessibleName("Hide tips")
+        self.tip_hide2.setAutoRaise(True)
+        self.tip_hide2.setFixedSize(MIN_CLICK_PX, MIN_CLICK_PX)
+        self.tip_hide2.clicked.connect(lambda: self.set_tips_hidden(True))
+        tip_row.addWidget(self.tip_line, 1)
+        tip_row.addWidget(self.tip_hide2, 0, Qt.AlignmentFlag.AlignTop)
+        self.tip_row = QtWidgets.QWidget()
+        self.tip_row.setLayout(tip_row)
+        tip_row.setContentsMargins(0, 0, 0, 0)
         row = QtWidgets.QHBoxLayout()
         row.setSpacing(6)
         self.prompt = _PromptLine()
@@ -689,8 +789,13 @@ class LocalAIDock(QtWidgets.QFrame):
         self.answer.setPlaceholderText("The model's answer appears here.")
         self.answer.setAccessibleName("Answer from the local model")
         chat_lay.addWidget(self.note)
+        chat_lay.addWidget(self.tip_row)
         chat_lay.addLayout(row)
         chat_lay.addWidget(self.answer, 1)
+        # the one card for a proposed change or code edit (none until an answer has one)
+        self.card_host = QtWidgets.QVBoxLayout()
+        self.card_host.setContentsMargins(0, 0, 0, 0)
+        chat_lay.addLayout(self.card_host)
 
         options = QtWidgets.QWidget()
         opt = QtWidgets.QVBoxLayout(options)
@@ -757,6 +862,12 @@ class LocalAIDock(QtWidgets.QFrame):
         cb.addWidget(self.checkouts_edit)
         cb.addWidget(self.checkouts_note)
         opt.addWidget(self.checkouts_box)
+
+        self.tips_show_btn = _styled_button("Show tips", "Show the tip for each page again")
+        self.tips_show_btn.setFlat(True)
+        self.tips_show_btn.clicked.connect(lambda: self.set_tips_hidden(False))
+        self.tips_show_btn.setVisible(False)
+        opt.addWidget(self.tips_show_btn)
 
         self.agent_card = None
         if agent_card:
@@ -878,6 +989,7 @@ class LocalAIDock(QtWidgets.QFrame):
         alive = self._alive
         self.destroyed.connect(lambda *_: alive.set())      # a request outliving its window stops
         self._render_instance()
+        self._apply_tips_hidden(bool(assistant_settings.get("tips_hidden", False)))
         self.refresh_activity()
         self._apply_expanded(notify=False)
 
@@ -933,8 +1045,61 @@ class LocalAIDock(QtWidgets.QFrame):
         return max(MIN_CLICK_PX, self.bar.sizeHint().height()) + 7
 
     def preferred_height(self, window_height: int) -> int:
-        return dock_height_for(window_height, self.expanded and not self.popped,
-                               self.bar_height(), self.tall)
+        h = dock_height_for(window_height, self.expanded and not self.popped,
+                            self.bar_height(), self.tall)
+        if self.expanded and not self.popped:
+            h = max(h, self.card_need())
+        return h
+
+    def _note_shown(self) -> bool:
+        return bool(self.note.text()) and not self.note.isHidden()
+
+    def card_need(self) -> int:
+        """How tall the docked panel must be to show the whole card (its text and its
+        button row) and the whole note line above a 36 px answer area, or 0 with no
+        card and no note on the Assistant tab. The usual cap (38 % of the window) has no
+        room for a card at the netbook default 942x552: its Apply / Close / Undo row
+        fell below the window edge (PR #832 review); nor for a long note, such as the
+        native Windows start refusal, which showed 41 of its 140 px there (round 4).
+        While either is up the panel grows to fit it; _DockMount still leaves the page
+        at least 120 px."""
+        card = self._card
+        if self.current_tab() != "assistant" or (card is None and not self._note_shown()):
+            return 0
+        try:
+            chat = card.parentWidget() if card is not None else self.note.parentWidget()
+            if chat is None:
+                return 0
+            if self.body.isVisible() and chat.isVisible():
+                top = chat.mapTo(self, QtCore.QPoint(0, 0)).y()
+            else:
+                m = self._outer.contentsMargins()
+                top = (m.top() + self.bar.sizeHint().height() + self._outer.spacing()
+                       + self.tabs.tabBar().sizeHint().height())
+            need = chat.minimumSizeHint().height()
+            if self.note.isVisibleTo(chat) and self.note.text():
+                # a wrapped label's minimum is one line; what it shows is its full height
+                w = max(50, self.note.width())
+                need += max(0, self.note.heightForWidth(w) - self.note.minimumSizeHint().height())
+            return top + need + self._outer.contentsMargins().bottom() + 2
+        except RuntimeError:                     # a card on its way out
+            return 0
+
+    def _card_resized(self) -> None:
+        """The card's height changed (a longer status, a new width): place the panel
+        again on the next turn of the event loop. Synchronously it would land inside
+        _DockMount.relayout, which ignores a call made while it is placing."""
+        if getattr(self, "_card_relayout_due", False):
+            return
+        self._card_relayout_due = True
+
+        def again():
+            try:
+                self._card_relayout_due = False
+                self.layout_changed.emit()
+            except RuntimeError:                 # the dock was destroyed first
+                pass
+        QtCore.QTimer.singleShot(0, again)
 
     def set_tall(self, on: bool) -> None:
         """Let the panel take most of the window (the Bring-up step is on screen) or go
@@ -977,6 +1142,10 @@ class LocalAIDock(QtWidgets.QFrame):
                                 else "Show the panel")
         if notify:
             self.layout_changed.emit()
+            if self._card is not None:
+                # the body was just shown or moved: card_need() measured it before its
+                # layout ran, so place the panel once more when it has
+                self._card_resized()
 
     # ---- tabs -----------------------------------------------------------------------
     def current_tab(self) -> str:
@@ -1000,6 +1169,8 @@ class LocalAIDock(QtWidgets.QFrame):
             key = self.current_tab()
             assistant_settings.update(tab=key)
             self._sync_tall()
+            if self._card is not None:
+                self.layout_changed.emit()        # the card's height counts on one tab only
             self._tab_shown(key)
         except Exception:
             _log_swallowed("LocalAIDock._on_tab_changed")
@@ -1084,6 +1255,7 @@ class LocalAIDock(QtWidgets.QFrame):
             from .pages import _local_agent_widget as law
             law.follow_page(self.agent_card, page)
         self.refresh_activity()
+        self.refresh_tip()
         return True
 
     def _on_mesh_changed(self) -> None:
@@ -1116,6 +1288,7 @@ class LocalAIDock(QtWidgets.QFrame):
             build_words = (f"{len(builds)} image build{'s' if len(builds) != 1 else ''} running"
                            if builds else "no image build running")
             self.activity.set_full_text(f"{mesh_words} · {build_words}")
+            self.refresh_tip()
             if self.current_tab() == "builds" or self.builds_tree.topLevelItemCount() != (
                     len(builds) + (1 if mesh_running else 0)):
                 self._fill_builds(builds, mesh_running, mesh_label)
@@ -1455,12 +1628,17 @@ class LocalAIDock(QtWidgets.QFrame):
             return False
         self.prompt.clear()
         self._busy = True
+        self._warned = False                    # a new answer scrolls again
+        self._warn_span = None
         self._stop = threading.Event()
         stop, alive = self._stop, self._alive
         self._answered = False
         self.send_btn.setText("Stop")
         self.send_btn.setToolTip("Stop the answer")
         self._append(f"You: {text}\nLocal AI: ")
+        # where this answer starts: a warning about delete commands goes HERE, above it
+        self._answer_at = self._end_position()
+        self._streamed = ""
         self._say("Waiting for the model. The first answer after a pause can take a minute "
                   "while it loads.")
         history = list(self._history)
@@ -1468,13 +1646,24 @@ class LocalAIDock(QtWidgets.QFrame):
         born = self._clears
         env = self._env()
         default = self._prompt_fn == self._default_prompt
+        # the page half of "where", read HERE on the window thread (widgets); the state
+        # half (files) is collected on the worker below
+        where = self._page_where(question=text) if default else None
+        if where is not None:
+            try:                                # the values on screen, through Apply's own readers
+                where = where.with_page(current=aact.current_values(self._target_for(where)))
+            except Exception:                   # noqa: BLE001 — "current:" is a help, never a crash
+                _log_swallowed("LocalAIDock.current_values")
+        code = self._code_context(where, text) if default else None
+        self._stop_tip()                        # the model answers one thing at a time
 
         def work():
             try:
                 chunk = lambda c: q.put("chunk", (born, c))          # noqa: E731
                 stopping = lambda: stop.is_set() or alive.is_set()     # noqa: E731
                 if default:
-                    answer = self._default_prompt(text, history, chunk, stopping, env=env)
+                    answer = self._grounded_prompt(text, history, chunk, stopping, env=env,
+                                                   where=where, born=born, code=code)
                 else:
                     answer = self._prompt_fn(text, history, chunk, stopping)
                 q.put("done", (born, text, answer))
@@ -1482,6 +1671,48 @@ class LocalAIDock(QtWidgets.QFrame):
                 q.put("error", (born, str(exc) or exc.__class__.__name__))
         threading.Thread(target=work, name="local-ai-prompt", daemon=True).start()
         return True
+
+    def _grounded_prompt(self, text, history, on_chunk, should_stop, *, env, where, born,
+                         code=None):
+        """The default prompt, grounded: collect the state rows (files only, 1 s each),
+        build the Prompt, keep it for the footer, then ask the model. Worker thread."""
+        state_dir = self._state_dir()
+        collectors = [("build", lambda: actxt.build_rows(state_dir)),
+                      ("local mesh log", lambda: actxt.mesh_rows(state_dir)),
+                      ("assistant", lambda: actxt.assistant_rows(env))]
+        ctx = code.get("ctx") if code else None
+        if ctx is not None and getattr(ctx, "mesh", ""):
+            collectors.append(("code folders", lambda: actxt.code_rows(
+                self.generator_dir, ctx.source_mode, ctx.source_dir, ctx.domain_rows, ctx.mesh,
+                state_root=state_dir)))
+        rows = actxt.collect(collectors)
+        where = where.with_state(rows)
+        files_block = ""
+        if code and code.get("workspace") is not None:
+            ws = code["workspace"]
+            if code.get("files"):
+                parts = []
+                for rel in code["files"]:
+                    body, why = aedit.file_text(ws, rel)
+                    parts.append(f"[file: {rel} in {ws.name}]\n" + (body if not why else f"({why})"))
+                files_block = "\n\n".join(parts)
+            elif code.get("wants_edit"):
+                # the folder's NAME only: an absolute path in the prompt is a target
+                # a small model will happily put after rm -rf (PR #832, round 6)
+                files_block = (f"[code folder {ws.name}; the person named no "
+                               "file — ask which file to change]")
+        prompt = aprompt.build(text, where, history, env=env, generator_dir=self.generator_dir,
+                               files_block=files_block)
+        self._last_prompt[born] = prompt
+        return lai.send_prompt(text, env=env, history=prompt.history, system=prompt.system,
+                               on_chunk=on_chunk, should_stop=should_stop)
+
+    def _state_dir(self) -> str:
+        try:
+            from ..core import state_paths
+            return state_paths.state_dir()
+        except Exception:                       # noqa: BLE001 — no state dir: no state rows
+            return ""
 
     def _send_or_stop(self) -> None:
         if self._busy:
@@ -1492,7 +1723,13 @@ class LocalAIDock(QtWidgets.QFrame):
     def clear(self) -> None:
         self._clears += 1
         self._history.clear()
+        self._warned = False
+        self._warn_span = None
         self.answer.clear()
+        self._last_prompt.clear()
+        self._undo.clear()
+        self._applied_edit = None
+        self._drop_card()
         if self._busy:
             self._stop.set()
             # Release the dock now. The old request may sit in the model's load for up to
@@ -1500,18 +1737,385 @@ class LocalAIDock(QtWidgets.QFrame):
             # able to ask again at once; what it eventually sends back is dropped.
             self._finish_prompt()
 
-    def _append(self, text: str) -> None:
+    def _end_position(self) -> int:
         cur = self.answer.textCursor()
         cur.movePosition(QtGui.QTextCursor.MoveOperation.End)
+        return cur.position()
+
+    def _append(self, text: str) -> None:
+        if self._warned:
+            # an answer with a delete-commands warning: the view stays on the warning
+            # (it would otherwise scroll it away as the answer grows under it)
+            cur = QtGui.QTextCursor(self.answer.document())
+            cur.movePosition(QtGui.QTextCursor.MoveOperation.End)
+            cur.insertText(text, QtGui.QTextCharFormat())
+            return
+        cur = self.answer.textCursor()
+        cur.movePosition(QtGui.QTextCursor.MoveOperation.End)
+        cur.setCharFormat(QtGui.QTextCharFormat())   # never the warning's bold colour
         cur.insertText(text)
         self.answer.setTextCursor(cur)
         self.answer.verticalScrollBar().setValue(self.answer.verticalScrollBar().maximum())
+
+    def _warn_if_destructive(self, answer_text: str) -> bool:
+        """Put the delete-commands warning (:func:`aprompt.danger_banner`) ABOVE the
+        answer, in bold warning colour, the moment the answer spells a command that
+        deletes data (once per answer, while it is still streaming; it is rewritten in
+        place when a later command deletes another kind of thing). True when the warning
+        is showing."""
+        banner = aprompt.danger_banner(answer_text)
+        placed = getattr(self, "_warn_span", None)
+        if getattr(self, "_warned", False):
+            if banner and placed is not None and banner != placed[1]:
+                start, old = placed
+                cur = self.answer.textCursor()
+                cur.setPosition(start)
+                cur.setPosition(start + len(old), QtGui.QTextCursor.MoveMode.KeepAnchor)
+                cur.insertText(banner, self._warn_format())
+                self._warn_span = (start, banner)
+            return True
+        if not banner:
+            return False
+        self._warned = True
+        at = min(getattr(self, "_answer_at", 0), self._end_position())
+        cur = self.answer.textCursor()
+        cur.setPosition(at)
+        cur.insertText("\n", QtGui.QTextCharFormat())
+        start = cur.position()
+        cur.insertText(banner, self._warn_format())
+        cur.insertText("\n\n", QtGui.QTextCharFormat())
+        self._warn_span = (start, banner)
+        # scroll the question and the warning to the top of the view and keep them there.
+        # The scroll bar of a QPlainTextEdit counts VISUAL lines, not blocks: every
+        # wrapped line above would park the view too high (round 6 measured the warning
+        # off screen for every answer but the first).
+        doc = self.answer.document()
+        first = doc.findBlock(max(0, at - 1)).firstLineNumber()
+        self.answer.verticalScrollBar().setValue(first)
+        self._say(aprompt.DANGER_NOTE, 0, warn=True)
+        return True
+
+    @staticmethod
+    def _warn_format():
+        fmt = QtGui.QTextCharFormat()
+        fmt.setFontWeight(QtGui.QFont.Weight.Bold)
+        fmt.setForeground(QtGui.QBrush(QtGui.QColor(styles.WARN)))
+        return fmt
 
     def _finish_prompt(self) -> None:
         self._busy = False
         self.send_btn.setText("Send")
         self.send_btn.setToolTip("")
         self._say("")
+
+    # ---- where the person is -----------------------------------------------------------
+    def set_page_slug(self, slug: str, title: str = "", subtitle: str = "") -> None:
+        """A window with no page signal names its one page (fleet, localmesh)."""
+        self._page_slug = slug or ""
+        self._page_title = title or atips.TIPS.get(slug, ("",))[0][:0] or slug.replace("_", " ").title()
+        self._page_subtitle = subtitle or ""
+        self.refresh_tip(force=True)
+
+    def on_page_changed(self, page_id) -> None:
+        """The wizard turned to ``page_id``: remember its slug and title; the tip follows."""
+        try:
+            wiz = self._wizard_ref() if self._wizard_ref is not None else None
+            if wiz is None:
+                return
+            ids = getattr(wiz, "_page_ids", {}) or {}
+            slug = {v: k for k, v in ids.items()}.get(page_id, "")
+            page = wiz.page(page_id) if page_id is not None and page_id >= 0 else None
+            self._page_id = page_id
+            self._page_slug = slug
+            self._page_title = (page.title() if page is not None else "") or slug.replace("_", " ").title()
+            self._page_subtitle = page.subTitle() if page is not None else ""
+            self._stop_tip()
+            self._drop_card()                     # a proposal is about the page it was made on
+            self.refresh_tip(force=True)
+        except RuntimeError:
+            pass
+        except Exception:
+            _log_swallowed("LocalAIDock.on_page_changed")
+
+    def _page_body(self):
+        """The domain-services body on screen, or None: the Docker route's step holds
+        the local-mesh page's widget; the image route's page IS the body."""
+        slug = self._page_slug
+        if slug == "localmesh_domain_services" and self.mesh_page is not None:
+            return getattr(self.mesh_page, "domain_services", None)
+        if slug == "domain_services":
+            wiz = self._wizard_ref() if self._wizard_ref is not None else None
+            if wiz is not None and self._page_id is not None:
+                page = wiz.page(self._page_id)
+                if page is not None and hasattr(page, "current_domain") and hasattr(page, "brand_tabs"):
+                    return page
+        return None
+
+    def _page_where(self, question: str = "") -> "actxt.Where":
+        """The PAGE half of ``Where``: attribute reads only (window thread)."""
+        slug = self._page_slug
+        wiz = self._wizard_ref() if self._wizard_ref is not None else None
+        cfg = getattr(wiz, "cfg", None) if wiz is not None else None
+        mode = str(getattr(cfg, "mode", "") or "") if cfg is not None else ""
+        route = "image"
+        if slug.startswith("localmesh") or (self.mesh_page is not None and slug in ("", "localmesh")):
+            mode, route = "docker", "docker"
+        elif slug == "fleet":
+            route = "fleet"
+        step_index = step_total = 0
+        try:
+            from ..core.config import MODE_SKIPPED_PAGES
+            ids = getattr(wiz, "_page_ids", {}) if wiz is not None else {}
+            skipped = set(MODE_SKIPPED_PAGES.get(mode, ())) if mode in MODE_SKIPPED_PAGES else set()
+            visited = [k for k in ids if k not in skipped]
+            if route == "docker":
+                visited = [k for k in visited if k.startswith("localmesh")]
+            elif route == "image":
+                visited = [k for k in visited if not k.startswith("localmesh")]
+            if slug in visited:
+                step_index, step_total = visited.index(slug) + 1, len(visited)
+        except Exception:                       # noqa: BLE001 — a step number is decoration
+            pass
+        domain, own, tab = "", False, ""
+        body = self._page_body()
+        if body is not None:
+            try:
+                domain = body.current_domain() or ""
+                view = getattr(getattr(body, "brand_tabs", None), "view", None)
+                own = bool(getattr(view, "own", False)) if view is not None else False
+                bar = getattr(getattr(body, "brand_tabs", None), "bar", None)
+                if bar is not None:
+                    tab = {0: "identity", 1: "look", 2: "services", 3: "ways"}.get(bar.currentIndex(), "")
+            except Exception:                   # noqa: BLE001
+                pass
+        brand, domains, activity = (), (), []
+        try:
+            if route == "docker" and self.mesh_page is not None:
+                md = getattr(self.mesh_page, "mesh_domains", None)
+                own_name = str(getattr(md, "own_name", "") or "")
+                domains = actxt.domain_rows_from(getattr(md, "domains", ()) or (), own_name=own_name)
+                block = {}
+                fn = getattr(self.mesh_page, "_superbrand_block", None)
+                if callable(fn):
+                    block = fn() or {}
+                combo = getattr(self.mesh_page, "brand", None)
+                brand = actxt.brand_rows_from(block or {"id": combo.currentText().strip() if combo else ""})
+            elif cfg is not None:
+                domains = actxt.domain_rows_from(getattr(cfg, "domains", ()) or ())
+                brand = actxt.brand_rows_from({"id": getattr(cfg, "brand", ""),
+                                               "title": getattr(cfg, "brand_title", "")})
+            page = self.mesh_page
+            if page is not None:
+                up = getattr(page, "_mesh_up", None)
+                running = bool(getattr(page, "_running", False))
+                label = str(getattr(page, "_running_label", "") or "")
+                activity.append(("local mesh", "up" if up else ("down" if up is False else "not checked")))
+                activity.append(("running now", label or "a verb" if running else "nothing"))
+            builds = self._running_builds()
+            if builds:
+                activity.append(("builds running", ", ".join(getattr(b, "label", "?") for b in builds)))
+        except Exception:                       # noqa: BLE001 — facts, never a crash
+            pass
+        return actxt.Where(face="gui", slug=slug, title=self._page_title, subtitle=self._page_subtitle,
+                           mode=mode or "docker", step_index=step_index, step_total=step_total,
+                           domain=domain, own_domain=own, tab=tab, route=route, brand=brand,
+                           domains=domains, activity=tuple(actxt.scrub_rows(activity)),
+                           question=question)
+
+    def _target_for(self, where):
+        """The apply target for the page on screen (window thread), or None."""
+        body = self._page_body()
+        if body is not None:
+            return aact.GuiTabsTarget(body)
+        if where.slug in acat.MESH_PAGES and self.mesh_page is not None:
+            return aact.MeshTarget(self.mesh_page)
+        return None
+
+    def _code_context(self, where, question: str) -> dict:
+        """What a code-edit question needs: the domain's workspace (if any) and the files
+        it names. Reads the agent context (widgets) here; the folder walk is small."""
+        out: dict = {"ctx": None, "workspace": None, "files": [], "wants_edit": False}
+        try:
+            ctx = self._agent_context()
+            out["ctx"] = ctx
+            low = question.lower()
+            wants = any(w in low for w in ("change", "edit", "replace", "rename", "fix", "update",
+                                            "set the", "make the", "footer", "text in", ".html",
+                                            ".css", ".ts", ".md", ".json"))
+            out["wants_edit"] = wants
+            if not wants or not getattr(ctx, "mesh", "") or not where.domain:
+                return out
+            spaces = aedit.find_workspaces(self.generator_dir, ctx.source_mode, ctx.source_dir,
+                                           ctx.domain_rows, ctx.mesh, state_root=self._state_dir(),
+                                           only_domain=where.domain)
+            if not spaces:
+                return out
+            named = [ws for ws in spaces if aedit.files_mentioned(question, ws)]
+            ws = named[0] if named else spaces[0]
+            out["workspace"] = ws
+            out["files"] = aedit.files_mentioned(question, ws)
+        except Exception:                       # noqa: BLE001
+            _log_swallowed("LocalAIDock._code_context")
+        return out
+
+    # ---- the tip -------------------------------------------------------------------------
+    def set_tips_hidden(self, hidden: bool) -> None:
+        assistant_settings.update(tips_hidden=bool(hidden))
+        self._apply_tips_hidden(bool(hidden))
+        self.layout_changed.emit()
+
+    def tips_hidden(self) -> bool:
+        return not self.tip.isVisibleTo(self) if hasattr(self, "tip") else False
+
+    def _apply_tips_hidden(self, hidden: bool) -> None:
+        for w in (self.tip, self.tip_hide):
+            w.setVisible(not hidden)
+        # the expanded tip line steps aside while a card is up (the bar above keeps the
+        # tip): at 1024x700 the two together pushed the card's buttons off the window
+        self.tip_row.setVisible(not hidden and getattr(self, "_card", None) is None)
+        self.tips_show_btn.setVisible(hidden)
+
+    def _set_tip_text(self, text: str, model: bool = False) -> None:
+        # the strip is a brand screen too: a word the screens never show stays off it
+        low = (text or "").lower()
+        if any(w in low for w in plain_words.FORBIDDEN_ON_SCREENS):
+            text = ""
+        self._tip_text = text
+        self.tip.set_full_text(("Tip: " + text) if text else "")
+        self.tip_line.setText(("Tip: " + text) if text else "")
+        if model:
+            self.tip.setToolTip(plain_tip("Tip: " + text + "\n(from the local model)"))
+
+    def refresh_tip(self, force: bool = False) -> None:
+        """The curated tip for the page on screen (a dict lookup); then, when a model is
+        loaded and the dock is idle, one request for a better sentence."""
+        try:
+            where = self._page_where()
+            if not where.slug and not force:
+                return
+            text = atips.tip_for(where, rotation=self._rotation) if where.slug else ""
+            key = (where.slug, where.domain, where.tab)
+            if force or key != getattr(self, "_tip_key", None):
+                self._tip_key = key
+                self._page_since = time.monotonic()
+                self._set_tip_text(text)
+                if force:
+                    assistant_settings.update(last_tip_slug=where.slug)
+            self._maybe_model_tip(where)
+        except RuntimeError:
+            pass
+        except Exception:
+            _log_swallowed("LocalAIDock.refresh_tip")
+
+    def _maybe_model_tip(self, where) -> None:
+        """One request for a model-written tip, and only when the person has settled on
+        a page: a loaded model, the dock idle and visible, nothing in flight, the same
+        page for MODEL_TIP_SETTLE_S, and not again for the same page and domain within
+        ten minutes. The curated tip is already on screen either way."""
+        snap = self.snapshot
+        if (self._busy or self._tip_born is not None or snap is None or not snap.ok
+                or not snap.loaded or not where.slug or self.tips_hidden()
+                or not self.isVisible()
+                or time.monotonic() - getattr(self, "_page_since", 0.0) < MODEL_TIP_SETTLE_S):
+            return
+        key = (where.slug, where.domain)
+        last = self._tip_asked.get(key, 0.0)
+        if time.monotonic() - last < 600:
+            return
+        self._tip_asked[key] = time.monotonic()
+        born = (self._clears, where.slug, where.domain)
+        self._tip_born = born
+        env = self._env()
+        alive = self._alive
+        dock = weakref.ref(self)
+
+        def changed() -> bool:
+            d = dock()
+            if d is None or alive.is_set():
+                return True
+            try:
+                return d._tip_born != born
+            except RuntimeError:
+                return True
+        self._threads.submit("tip", atips.model_tip, where, env, should_stop=changed,
+                             generator_dir=self.generator_dir)
+
+    def _stop_tip(self) -> None:
+        self._tip_born = None
+
+    # ---- cards: a proposed change or code edit ------------------------------------------
+    def _drop_card(self) -> None:
+        if self._card is not None:
+            self.card_host.removeWidget(self._card)
+            self._card.setParent(None)
+            self._card.deleteLater()
+            self._card = None
+            self._apply_tips_hidden(not self.tip_hide.isVisibleTo(self))
+            self.layout_changed.emit()
+
+    def _show_card(self, card) -> None:
+        self._drop_card()
+        self._card = card
+        self.card_host.addWidget(card)
+        self.tip_row.setVisible(False)
+        card.show()
+        card._fit()
+        self.layout_changed.emit()
+
+    def _offer_card(self, answer: str, question: str, prompt) -> None:
+        """A ```change block becomes a proposal card; a ```diff block a diff card."""
+        try:
+            where = prompt.where if prompt is not None else self._page_where(question)
+            proposal = aact.parse_proposal(answer, question)
+            if proposal is not None:
+                target = self._target_for(where)
+                where = where.with_page(question=question)
+                v = aact.validate(proposal, where, target)
+                self._show_card(_ProposalCard(self, v, where, target))
+                return
+            if "```diff" in answer:
+                self._offer_diff(answer, question, where)
+            elif "```change" in answer:
+                self._append(aact.NO_BLOCK_HINT + "\n\n")
+        except Exception:
+            _log_swallowed("LocalAIDock._offer_card")
+
+    def _offer_diff(self, answer: str, question: str, where) -> None:
+        code = self._code_context(where, question)
+        ws = code.get("workspace")
+        if ws is None:
+            self._append("That domain has no code folder yet; the Code folders block on the "
+                         "page makes one.\n\n")
+            return
+        reason = aedit.too_big_reason(question)
+        if reason:
+            self._handoff(question, reason)
+            return
+        edits = aedit.parse_diff(answer, ws)
+        if isinstance(edits, aedit.DiffProblem):
+            self._append(f"Not applied: {edits.text}\n\n")
+            return
+        reason = aedit.too_big_reason(question, edits)
+        if reason:
+            self._handoff(question, reason)
+            return
+        self._show_card(_DiffCard(self, ws, edits))
+
+    def _handoff(self, question: str, reason: str) -> None:
+        self._append(aedit.handoff_text(reason) + "\n\n")
+        if self.agent_card is not None:
+            try:
+                self.agent_card.set_first_task(question)
+            except Exception:                   # noqa: BLE001
+                _log_swallowed("LocalAIDock._handoff")
+
+    def open_diff_viewer(self, text: str) -> None:
+        """Show a diff in the Current work window's viewer (non-modal)."""
+        win = self.show_current_work()
+        try:
+            win.diff_view.setPlainText(text)
+        except Exception:                       # noqa: BLE001
+            pass
 
     # ---- the buttons ----------------------------------------------------------------
     def _worker_env(self, ctx) -> dict:
@@ -1600,27 +2204,67 @@ class LocalAIDock(QtWidgets.QFrame):
                 self._answered = True
                 self._say("")
             self._append(piece)
+            self._streamed = getattr(self, "_streamed", "") + piece
+            self._warn_if_destructive(self._streamed)
         elif tag == "done":
             born, _text, answer = value
             if born == self._clears:
-                self._append("\n\n")
+                prompt = self._last_prompt.pop(born, None)
+                if answer.strip() and not self._answered:
+                    self._append(answer)             # a prompt that did not stream still shows
+                warned = self._warn_if_destructive(answer)
                 if answer.strip():
+                    # history keeps the BARE answer; the footer is shown, never remembered
                     self._history += [{"role": "user", "content": _text},
                                       {"role": "assistant", "content": answer}]
                     del self._history[:-40]
+                if prompt is not None:
+                    footer = aprompt.after_answer(answer, prompt)
+                    if footer:
+                        self._append("\n\n" + footer)        # a blank line: the footer is not the answer
+                self._append("\n\n")
                 self._finish_prompt()
+                if warned:                        # _finish_prompt cleared the note line
+                    self._say(aprompt.DANGER_NOTE, 0, warn=True)
+                self._drop_card()                 # a new answer replaces any pending card
+                if prompt is not None:
+                    self._offer_card(answer, _text, prompt)
         elif tag == "error":
             born, message = value
             if born != self._clears:
                 return                       # Clear already released the dock; a newer question may own it
-            self._append(f"\n[{message}]\n\n")
+            prompt = self._last_prompt.pop(born, None)
+            self._append(f"\n[{message}]\n")
+            if prompt is not None and "not answering" in str(message) or (
+                    prompt is not None and "not running" in str(message).lower()):
+                self._append(aprompt.NOT_RUNNING + "\n")
+            if prompt is not None:
+                fallback = aprompt.fallback_line(prompt)
+                if fallback:
+                    self._append(fallback + "\n")
+            self._append("\n")
             self._finish_prompt()
             self._say(str(message), 30, warn=True)
             self.refresh()
+        elif tag == "tip":
+            if error is None and value and self._tip_born is not None:
+                born, slug, domain = self._tip_born
+                now = self._page_where()
+                if born == self._clears and (slug, domain) == (now.slug, now.domain) \
+                        and not self._busy:
+                    self._set_tip_text(str(value), model=True)
+            self._tip_born = None
         elif tag == "start":
             self.start_btn.setEnabled(True)
             self.start_btn.setText("Start local assistant")
             res = value if error is None else None
+            # a failure, or a start with no command (native Windows: the refusal, or the
+            # Docker Ollama up with the queue worker off), is said ONLY in the note, on
+            # the Assistant tab: open the panel there, or a press on the collapsed strip
+            # shows nothing at all (round 4). A plain success opens nothing uninvited;
+            # the status line says it.
+            if res is None or not res.ok or not res.command:
+                self.show_tab("assistant")
             if res is not None and res.ok:
                 self._say(res.message, 20)
                 QtCore.QTimer.singleShot(1500, self.refresh)
@@ -1631,8 +2275,257 @@ class LocalAIDock(QtWidgets.QFrame):
                 cmd = (res.command if res is not None
                        else odk.commands_for(self.generator_dir, self.ollama_mode)["start"])
                 why = res.message if res is not None else str(error)
-                self._say(f"{why} Run it yourself: {cmd}", 60, warn=True)
-                self.show_current_work()
+                # no command (native Windows): the script is not a thing to run there; a
+                # message that already names the command is not told it twice
+                self._say(f"{why} Run it yourself: {cmd}" if cmd and cmd not in why else why,
+                          60, warn=True)
+                if cmd:
+                    self.show_current_work()
+
+
+class _Card(QtWidgets.QFrame):
+    """A framed block under the answer area with a title, rows and a button row.
+    Never a dialog: it lives in the dock's layout and only its buttons act."""
+
+    def __init__(self, title: str, parent=None):
+        super().__init__(parent)
+        self.setObjectName("assistant_card")
+        self.setFrameShape(QtWidgets.QFrame.Shape.StyledPanel)
+        lay = QtWidgets.QVBoxLayout(self)
+        lay.setContentsMargins(8, 6, 8, 6)
+        lay.setSpacing(4)
+        self.title = plain(QtWidgets.QLabel(title))
+        f = self.title.font()
+        f.setBold(True)
+        self.title.setFont(f)
+        self.title.setWordWrap(True)
+        lay.addWidget(self.title)
+        self.rows = plain(QtWidgets.QLabel(""))
+        self.rows.setWordWrap(True)
+        self.rows.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        lay.addWidget(self.rows)
+        self.status = plain(QtWidgets.QLabel(""))
+        self.status.setWordWrap(True)
+        self.status.setStyleSheet(styles.muted())
+        lay.addWidget(self.status)
+        self.buttons = QtWidgets.QHBoxLayout()
+        self.buttons.setSpacing(6)
+        lay.addLayout(self.buttons)
+        self.apply_btn = _styled_button("Apply")
+        self.cancel_btn = _styled_button("Cancel")
+        self.undo_btn = _styled_button("Undo")
+        self.undo_btn.setVisible(False)
+        self.buttons.addWidget(self.apply_btn)
+        self.buttons.addWidget(self.cancel_btn)
+        self.buttons.addWidget(self.undo_btn)
+        self.buttons.addStretch(1)
+        self._lay = lay
+
+    STATUS_CHARS = 170                          # about three lines at the narrow width
+
+    @classmethod
+    def compact(cls, text: str) -> str:
+        """``text`` cut at a list comma under STATUS_CHARS (the card is a few lines;
+        the full text goes to the tooltip and the answer area)."""
+        if len(text) <= cls.STATUS_CHARS:
+            return text
+        cut = text.rfind(", ", 0, cls.STATUS_CHARS)
+        cut = cut if cut > 40 else cls.STATUS_CHARS
+        return text[:cut].rstrip(" ,") + ", … (the full list is in the answer above)"
+
+    def say(self, text: str, warn: bool = False, detail: str = "") -> None:
+        self.status.setStyleSheet(f"color: {styles.WARN};" if warn else styles.muted())
+        shown = self.compact(text)
+        self.status.setText(shown)
+        self.status.setToolTip(plain_tip(detail or (text if shown != text else "")))
+        if shown != text and getattr(self, "_appended", "") != text:
+            # the card promises "the full list is in the answer above": keep that promise
+            # (once: a second press of the same refused Apply adds nothing)
+            dock = getattr(self, "dock", None)
+            if dock is not None:
+                dock._append(text + "\n\n")
+                self._appended = text
+        self._fit()
+
+    def _fit(self) -> None:
+        """Never squeezed below its wrapped text: the answer area above gives way
+        instead (a long status line was once clipped top and bottom)."""
+        self.rows.setVisible(bool(self.rows.text()))
+        self.status.setVisible(bool(self.status.text()))
+        w = self.width() if self.width() > 50 else self.sizeHint().width()
+        need = self._lay.totalHeightForWidth(w)
+        if need > 0 and need != self.minimumHeight():
+            self.setMinimumHeight(need)
+            dock = getattr(self, "dock", None)
+            if dock is not None:
+                dock._card_resized()
+
+    def resizeEvent(self, event) -> None:       # noqa: N802 — Qt override
+        super().resizeEvent(event)
+        self._fit()
+
+    def refused(self, text: str) -> None:
+        self.say(text, warn=True)
+        self.apply_btn.setVisible(False)
+        self.undo_btn.setVisible(False)
+        self.cancel_btn.setText("Close")
+
+
+class _ProposalCard(_Card):
+    """``Proposed change — <domain>`` with ``<label>: <from> -> <to>``, Apply / Cancel,
+    then Undo. Apply goes through assistant_actions.apply on the window thread."""
+
+    def __init__(self, dock: "LocalAIDock", validated, where, target):
+        self.dock, self.where, self.target = dock, where, target
+        self.validated = validated
+        self.applied = None
+        v = validated
+        dom = getattr(v, "domain", "") or getattr(where, "domain", "") or "this mesh"
+        super().__init__(f"Proposed change \u2014 {dom}", dock)
+        self.cancel_btn.clicked.connect(self._cancel)
+        self.apply_btn.clicked.connect(self._apply)
+        self.undo_btn.clicked.connect(self._undo)
+        self.swatch = None
+        if isinstance(v, aact.Refusal):
+            self.rows.setText("")
+            self.refused(v.text)                     # a long one also goes to the answer area
+            return
+        self.rows.setText(v.row_text() + (f"\n({v.note})" if v.note else ""))
+        if v.key in ("look.primary", "look.secondary") and isinstance(v.after, str):
+            self.swatch = QtWidgets.QLabel("")
+            self.swatch.setObjectName("assistant_swatch")
+            self.swatch.setFixedSize(16, 16)
+            self.swatch.setStyleSheet(f"background: {v.after}; border: 1px solid #888;")
+            self.swatch.setToolTip(v.after)
+            self.buttons.insertWidget(0, self.swatch)
+        # focus order: after Send (the prompt row) comes the card
+        QtWidgets.QWidget.setTabOrder(dock.clear_btn, self.apply_btn)
+        QtWidgets.QWidget.setTabOrder(self.apply_btn, self.cancel_btn)
+        QtWidgets.QWidget.setTabOrder(self.cancel_btn, self.undo_btn)    # Undo, right after Apply
+
+    def _cancel(self) -> None:
+        self.dock._drop_card()
+
+    def _apply(self) -> None:
+        try:
+            if isinstance(self.validated, aact.Refusal) or self.target is None:
+                return
+            res = aact.apply(self.validated, self.where, self.target)
+            if isinstance(res, aact.Refusal):
+                self.say(res.text, warn=True)
+                if "since I proposed" in res.text or res.text.startswith("Already set"):
+                    self.apply_btn.setVisible(False)
+                return
+            self.applied = res
+            self.dock._undo[res.target_id] = res
+            self.say("Applied. The page shows the new value.")
+            self.apply_btn.setVisible(False)
+            self.undo_btn.setVisible(True)
+            self.cancel_btn.setText("Close")
+        except Exception as exc:                # noqa: BLE001 — said on the card
+            self.say(f"Not applied: {exc.__class__.__name__}: {exc}", warn=True)
+            _log_swallowed("_ProposalCard._apply")
+
+    def _undo(self) -> None:
+        try:
+            if self.applied is None or self.target is None:
+                self.say("Nothing to undo.", warn=True)
+                return
+            res = aact.undo(self.applied, self.where, self.target)
+            if isinstance(res, aact.Refusal):
+                self.say(res.text, warn=True)
+                return
+            self.dock._undo.pop(self.applied.target_id, None)
+            self.applied = None
+            self.say("Undone.")
+            self.undo_btn.setVisible(False)
+        except Exception as exc:                # noqa: BLE001
+            self.say(f"Not undone: {exc.__class__.__name__}: {exc}", warn=True)
+            _log_swallowed("_ProposalCard._undo")
+
+
+class _DiffCard(_Card):
+    """``Proposed edit — <app>-<domain>``: file list, View diff, Apply / Cancel, Revert."""
+
+    def __init__(self, dock: "LocalAIDock", workspace, edits):
+        self.dock, self.workspace, self.edits = dock, workspace, list(edits)
+        self.applied = None
+        super().__init__(f"Proposed edit \u2014 {workspace.name}", dock)
+        n, m = len(self.edits), sum(e.changed for e in self.edits)
+        self.rows.setText(f"{n} file(s), {m} changed lines: " + ", ".join(e.path for e in self.edits))
+        self.view_btn = _styled_button("View diff", "Show the diff in the Current work window")
+        self.view_btn.clicked.connect(self._view)
+        self.buttons.insertWidget(0, self.view_btn)
+        self.undo_btn.setText("Revert")
+        self.cancel_btn.clicked.connect(lambda: dock._drop_card())
+        self.apply_btn.clicked.connect(self._apply)
+        self.undo_btn.clicked.connect(self._revert)
+        self.say("Local only: nothing is committed, pushed or run.")
+        QtWidgets.QWidget.setTabOrder(dock.clear_btn, self.view_btn)
+        QtWidgets.QWidget.setTabOrder(self.view_btn, self.apply_btn)
+        QtWidgets.QWidget.setTabOrder(self.apply_btn, self.cancel_btn)
+        QtWidgets.QWidget.setTabOrder(self.cancel_btn, self.undo_btn)
+
+    def _domain_moved(self, verb: str) -> str:
+        """The refusal when the page no longer shows this folder's domain, else "".
+        The proposal card refuses the same way; a diff card left up after Next domain
+        once applied to the folder it names while another domain was on screen."""
+        mine = self.workspace.domain or ""
+        try:
+            now = self.dock._page_where().domain or ""
+        except Exception:                       # noqa: BLE001 — unreadable page: refuse
+            now = ""
+        if now.lower() == mine.lower():
+            return ""
+        return (f"This edit is for {mine}, but the page now shows {now or 'no domain'}. "
+                f"Go back to {mine} to {verb} it; nothing was changed.")
+
+    def preview_text(self) -> str:
+        return aedit.preview(self.edits)
+
+    def _view(self) -> None:
+        self.dock.open_diff_viewer(self.preview_text())
+
+    def _apply(self) -> None:
+        try:
+            moved = self._domain_moved("apply")
+            if moved:
+                self.say(moved, warn=True)
+                return
+            res = aedit.apply(self.edits, self.workspace, self.dock._state_dir())
+            if isinstance(res, aedit.DiffProblem):
+                self.say(res.text, warn=True)
+                return
+            self.applied = res
+            self.dock._applied_edit = res
+            self.say(f"Applied to {os.path.basename(res.workspace.rstrip(os.sep))}. Not committed; "
+                     "Revert puts the old text back.",
+                     detail=f"Folder: {res.workspace}\nBefore-copies: {res.before_dir}")
+            self.apply_btn.setVisible(False)
+            self.undo_btn.setVisible(True)
+            self.cancel_btn.setText("Close")
+        except Exception as exc:                # noqa: BLE001
+            self.say(f"Not applied: {exc.__class__.__name__}: {exc}", warn=True)
+            _log_swallowed("_DiffCard._apply")
+
+    def _revert(self) -> None:
+        try:
+            if self.applied is None:
+                return
+            moved = self._domain_moved("revert")
+            if moved:
+                self.say(moved, warn=True)
+                return
+            why = aedit.revert(self.applied)
+            if why:
+                self.say(why, warn=True)
+                return
+            self.say("Reverted.")
+            self.undo_btn.setVisible(False)
+            self.dock._applied_edit = None
+        except Exception as exc:                # noqa: BLE001
+            self.say(f"Not reverted: {exc.__class__.__name__}: {exc}", warn=True)
+            _log_swallowed("_DiffCard._revert")
 
 
 class _SessionRef:
@@ -1661,6 +2554,8 @@ class _DockMount(QtCore.QObject):
     @staticmethod
     def _find_container(wizard):
         """The direct child of the wizard that holds the page and the buttons."""
+        if not hasattr(wizard, "button"):           # a plain window: nothing to shorten
+            return None
         probe = wizard.button(QtWidgets.QWizard.WizardButton.NextButton)
         w = probe
         while w is not None and w.parentWidget() is not wizard:
@@ -1693,9 +2588,12 @@ class _DockMount(QtCore.QObject):
                     self.relayout()
                 elif obj is self.wizard:
                     # QWizard resizes its content AFTER this filter; the container filter
-                    # above then corrects it. Place the dock now so it never lags a frame.
-                    self.dock.setGeometry(0, self.wizard.height() - self.strip_height(),
-                                          self.wizard.width(), self.strip_height())
+                    # above then corrects it. Place the dock AND the content now, from one
+                    # height: placing the dock alone left the content at the height an
+                    # earlier pass computed, under the panel, whenever the card's height
+                    # changed in between (collapse and re-expand or put back with a card
+                    # up: content 332 over a panel top of 317 at 942x552, PR #832 round 3).
+                    self.relayout()
         except Exception:
             _log_swallowed("_DockMount.eventFilter")
         return False
@@ -1708,6 +2606,7 @@ def mount_dock(wizard, generator_dir: str, **kw) -> LocalAIDock:
     existing = getattr(wizard, "local_ai_dock", None)
     if existing is not None:
         return existing
+    page_slug = kw.pop("page_slug", "")
     dock = LocalAIDock(generator_dir, parent=wizard, **kw)
     wizard.local_ai_dock = dock
     wizard._local_ai_mount = _DockMount(wizard, dock)
@@ -1715,6 +2614,19 @@ def mount_dock(wizard, generator_dir: str, **kw) -> LocalAIDock:
         dock.attach_mesh_page(getattr(wizard, "localmesh_page", None))
     except Exception:
         _log_swallowed("mount_dock(attach_mesh_page)")
+    # THE PAGE HOOK: the wizard's own signal says which page is on screen; a window
+    # without one (fleet, the standalone local-mesh dialog) is told its one slug.
+    try:
+        dock._wizard_ref = weakref.ref(wizard)
+        sig = getattr(wizard, "currentIdChanged", None)
+        if sig is not None and hasattr(wizard, "pageIds"):
+            sig.connect(dock.on_page_changed)
+            dock.on_page_changed(wizard.currentId())      # announce the page it is already on
+        if not dock._page_slug:
+            dock.set_page_slug(page_slug or ("localmesh" if getattr(wizard, "localmesh_page", None)
+                                             is not None else ""))
+    except Exception:
+        _log_swallowed("mount_dock(page hook)")
     wizard._local_ai_mount.relayout()
     dock.show()
     return dock

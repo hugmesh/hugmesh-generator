@@ -1,0 +1,492 @@
+"""core/assistant_docs: chunking, ranking, cache, sources and command checks.
+
+A planted docs tree pins the mechanics; the real corpus pins that the walkthrough's
+page sections are found for each eval question (slow, but part of the gate) and that
+a generator dir with NO docs folder still works and says so.
+"""
+import os
+import time
+
+import pytest
+
+from hugmesh_studio.core import assistant_context as ac
+from hugmesh_studio.core import assistant_docs as ad
+
+STUDIO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+GENERATOR_DIR = os.path.dirname(STUDIO_ROOT)
+
+
+def _gen(tmp_path, **files):
+    gen = tmp_path / "gen"
+    for rel, text in files.items():
+        p = gen / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(text)
+    return gen
+
+
+WALK = """# Walkthrough
+
+## Getting in
+
+Start the Studio.
+
+### Domain services
+
+Tick the services this domain runs: akkoma, tuwunel, phpbb. The Ways to reach it tab
+holds the Tor address.
+
+### Review
+
+Nothing starts here. Continue commits nothing.
+
+## Current State
+
+Old notes that must never be indexed.
+"""
+
+
+def test_chunks_follow_headings_and_carry_file_heading_and_weight(tmp_path):
+    gen = _gen(tmp_path, **{"docs/STUDIO-WALKTHROUGH.md": WALK})
+    idx = ad.build_index(str(gen))
+    ids = [c.id for c in idx.chunks]
+    assert "docs/STUDIO-WALKTHROUGH.md#Domain services" in ids
+    assert "docs/STUDIO-WALKTHROUGH.md#Review" in ids
+    assert not any("Current State" in i for i in ids)
+    c = next(c for c in idx.chunks if c.heading == "Domain services")
+    assert c.file == "docs/STUDIO-WALKTHROUGH.md" and c.weight == 1.0 and c.tokens == ac.tokens(c.text)
+    assert c.label == "STUDIO-WALKTHROUGH.md § Domain services"
+
+
+def test_a_long_section_is_split_on_blank_lines_into_parts_of_the_same_heading(tmp_path):
+    paras = "\n\n".join(f"Paragraph {i} " + "word " * 150 for i in range(12))
+    gen = _gen(tmp_path, **{"docs/STUDIO-WALKTHROUGH.md": "## Big\n\n" + paras + "\n"})
+    idx = ad.build_index(str(gen))
+    parts = [c for c in idx.chunks if c.heading == "Big"]
+    assert len(parts) >= 2
+    assert all(300 <= c.tokens <= 700 for c in parts[:-1]), [c.tokens for c in parts]
+    assert all(c.tokens <= 700 for c in parts)
+    assert [c.part for c in parts] == list(range(len(parts)))
+    assert parts[0].id.endswith("(part 1)")
+
+
+def test_excluded_files_and_readme_sections_are_never_indexed(tmp_path):
+    gen = _gen(tmp_path, **{
+        "docs/STUDIO-WALKTHROUGH.md": "## A\n\nok\n",
+        "docs/HANDOFF.md": "## Secret plans\n\nnever\n",
+        "docs/ROADMAP.md": "## Roadmap\n\nnever\n",
+        "docs/manual-test-evidence/x.md": "## Evidence\n\nnever\n",
+        "README.md": "## Quick start\n\nyes\n\n## Current State\n\nnever\n\n## Contributing\n\nnever\n",
+    })
+    idx = ad.build_index(str(gen))
+    text = " ".join(c.text for c in idx.chunks)
+    assert "never" not in text and "yes" in text and "ok" in text
+    assert [c.heading for c in idx.chunks if c.file == "README.md"] == ["Quick start"]
+    assert ad._excluded_file("docs/HANDOFF.md") and ad._excluded_file("docs/BINPKG-x.md")
+    assert not ad._excluded_file("docs/STUDIO-WALKTHROUGH.md")
+
+
+def test_bm25_ranks_the_matching_section_first_and_the_title_boost_adds(tmp_path):
+    gen = _gen(tmp_path, **{"docs/STUDIO-WALKTHROUGH.md": WALK})
+    idx = ad.build_index(str(gen))
+    top = ad.retrieve("which services can I tick for this domain", index=idx)
+    assert top[0].heading == "Domain services"
+    # on the Review page, a vague question still brings the page's own section along
+    class W:
+        title, slug = "Review", "build"
+    got = ad.retrieve("what happens next", W, index=idx)
+    assert any(c.heading == "Review" for c in got)
+    scores = {c.heading: s for s, c in ad.scored(idx, "what happens next", W)}
+    assert scores["Review"] >= 1.5
+
+
+def test_the_cache_is_rebuilt_only_when_a_file_changes(tmp_path, monkeypatch):
+    gen = _gen(tmp_path, **{"docs/STUDIO-WALKTHROUGH.md": WALK})
+    state = tmp_path / "state"
+    monkeypatch.setenv("HUGMESH_STUDIO_STATE_DIR", str(state))
+    calls = []
+    real = ad.build_index
+    monkeypatch.setattr(ad, "build_index", lambda g=None: calls.append(g) or real(g))
+    ad.load_index(str(gen))
+    ad.load_index(str(gen))
+    assert len(calls) == 1 and os.path.isfile(ad.cache_path(str(state)))
+    time.sleep(1.1)
+    (gen / "docs" / "STUDIO-WALKTHROUGH.md").write_text(WALK + "\n### More\n\nnew words here\n")
+    idx = ad.load_index(str(gen))
+    assert len(calls) == 2 and any(c.heading == "More" for c in idx.chunks)
+
+
+def test_sources_line_dedupes_in_rank_order_and_says_none_in_words():
+    a = ad.Chunk("f#A", "docs/A.md", "A", "x", 1.0, 1)
+    b = ad.Chunk("f#B (part 2)", "docs/B.md", "B", "y", 1.0, 1, 1)
+    assert ad.sources_line([a, b, a]) == "Sources: A.md § A; B.md § B"
+    assert ad.sources_line([]) == ad.NO_CHUNKS_SOURCES
+    assert ad.sources_line([], index=ad.Index()) == ad.NO_DOCS_SOURCES
+
+
+def test_commands_in_and_unverified_commands():
+    text = ("Run `make stack-up` then scripts/local-ai.sh start. Then ollama pull qwen3:8b and "
+            "docker compose up -d; never git push origin main.")
+    assert ad.commands_in(text) == {"make stack-up", "scripts/local-ai.sh start", "ollama pull qwen3:8b",
+                                    "docker compose up -d", "git push origin main"}
+    chunk = ad.Chunk("x", "docs/X.md", "X", "Start it with  make stack-up  and watch.", 1.0, 5)
+    bad = ad.unverified_commands(text, [chunk], primer="scripts/local-ai.sh start is the launcher")
+    assert bad == ["docker compose up -d", "git push origin main", "ollama pull qwen3:8b"]
+    assert ad.unverified_commands("no commands here", [chunk]) == []
+
+
+def test_fallback_text_shows_the_best_chunk_or_the_primer():
+    c = ad.Chunk("f#Review", "docs/W.md", "Review", "Nothing starts here. " * 30, 1.0, 10)
+    out = ad.fallback_text([c])
+    assert out.startswith("Without a model I can still show the docs: W.md § Review — “Nothing starts here.")
+    assert len(out) < 420
+    assert ad.fallback_text([], "The primer.\n\nMore.", index=ad.Index()).endswith("The primer.")
+
+
+def test_no_docs_folder_is_a_working_configuration(tmp_path, monkeypatch):
+    gen = tmp_path / "empty"
+    gen.mkdir()
+    monkeypatch.setenv("HUGMESH_STUDIO_STATE_DIR", str(tmp_path / "state"))
+    idx = ad.load_index(str(gen))
+    assert idx.empty and "docs/STUDIO-WALKTHROUGH.md" in idx.missing
+    assert ad.retrieve("what is hugmesh", index=idx) == []
+    assert ad.sources_line([], index=idx) == "Sources: none (no docs folder on this machine)"
+
+
+def test_generator_dir_env_wins_over_the_package_location(tmp_path, monkeypatch):
+    monkeypatch.setenv(ad.GENERATOR_ENV, str(tmp_path))
+    assert ad.generator_dir("/somewhere/else") == str(tmp_path)
+    monkeypatch.delenv(ad.GENERATOR_ENV)
+    assert ad.generator_dir() == GENERATOR_DIR
+
+
+# ── the real corpus (slow, in the gate) ──────────────────────────────────────────────
+EXPECTED = [
+    ("welcome", "What is HugMesh, and what does this Studio actually do for me?",
+     "STUDIO-WALKTHROUGH.md § Welcome"),
+    ("mode", "Which of these cards actually build an image and which are just tools?",
+     "STUDIO-WALKTHROUGH.md § What do you want to build?"),
+    ("domain_services", "What services can I switch on for this domain?",
+     "STUDIO-WALKTHROUGH.md § Domain services"),
+    ("domain_services", "How do I give this domain its own Tor address?",
+     "STUDIO-WALKTHROUGH.md § Domain services"),
+    ("localmesh", "How do I stop the DevOps lane without deleting the cluster?",
+     "STUDIO-WALKTHROUGH.md § Stopping the DevOps lane without deleting it"),
+    ("review", "Does pressing Continue on this page start the build?",
+     "STUDIO-WALKTHROUGH.md § Review"),
+    ("progress", "My build failed. Where is the log and what went wrong?",
+     "STUDIO-WALKTHROUGH.md § Building"),
+    ("sessions", "Where do I see my previous builds and their errors?",
+     "STUDIO-WALKTHROUGH.md § Prior sessions"),
+    ("vault", "Do I have to fill in a KV mount or a base path on this Secrets store page?",
+     "STUDIO-WALKTHROUGH.md § Secrets store"),
+    ("localmesh_env", "What is the difference between test and prod here?",
+     "LOCAL-STACK.md § ENV = test vs prod"),
+]
+
+
+@pytest.mark.slow
+def test_the_real_corpus_indexes_fast_and_finds_each_pages_section(tmp_path, monkeypatch):
+    monkeypatch.setenv("HUGMESH_STUDIO_STATE_DIR", str(tmp_path / "state"))
+    t0 = time.monotonic()
+    idx = ad.load_index(GENERATOR_DIR)
+    assert time.monotonic() - t0 < 2.0
+    assert len(idx.chunks) > 300 and not idx.missing
+    assert all(c.tokens <= 700 for c in idx.chunks)
+    for slug, question, want in EXPECTED:
+        class W:
+            pass
+        W.slug, W.title = slug, ad.TITLE_ALIASES.get(slug, slug)
+        got = [c.label for c in ad.retrieve(question, W, index=idx)]
+        assert any(g.startswith(want) for g in got), (question, got)
+
+
+# ── round 6 (PR #832): invented and destructive commands ─────────────────────────────
+#: What qwen3:8b really wrote when asked to wipe the local mesh (2026-10-29/30), with the
+#: machine paths replaced. Every one must be flagged, and every one gets the warning.
+INVENTED_WIPE = [
+    "rm -rf /home/someone/.checkouts",
+    "rm -rf ~/.hugmesh-checkouts",
+    "sudo rm -rf /var/lib/docker",
+    "rm -f ~/.hugmesh/studio/sessions/s1.json",
+    "rm -rf build",
+    "rm --force data",
+    "docker system prune -a",
+    "docker system prune -af --volumes",
+    "docker volume prune",
+    "docker image prune -a",
+    "docker container prune -f",
+    "docker network prune",
+    "docker builder prune",
+    "docker rm -f $(docker ps -a -q)",
+    "docker rmi -f $(docker images -q)",
+    "docker volume rm hugmesh_casdoor-db",
+    "docker-compose down -v",
+    "docker-compose down --volumes",
+    "docker compose -f tests/stack/compose.local.yaml down -v",
+    "docker compose down --rmi all",
+    "podman system prune -a",
+    "dd if=/dev/zero of=/dev/sda bs=1M",
+    "mkfs.ext4 /dev/sdb1",
+    "wipefs -a /dev/sdb",
+    "git clean -fdx",
+    "git reset --hard origin/main",
+    "kubectl delete namespace hugmesh",
+    "kubectl -n argocd delete pod --all",
+    "helm uninstall hugmesh",
+    "kind delete cluster --name hugmesh",
+    "find . -name '*.db' -delete",
+]
+#: Commands and words that delete nothing (or are the documented ways): no warning.
+SAFE_TEXT = [
+    "make stack-down", "make stack-halt", "make stack-clean", "docker compose ps", "docker ps -a",
+    "docker compose down", "git status", "git log", "kubectl get pods", "helm list",
+    "Press Stop & clean Docker… on the Local Docker mesh step.", "rm is the Unix remove tool",
+    "Stop mesh keeps the data.", "the confirm -f flag", "Use the Remove button.",
+    "I can switch the made-up example.setting on for example.invalid.",
+]
+
+
+def _shapes(cmd):
+    """The ways a model writes one command: a fenced bash block, an indented fence in a
+    list item, an untagged fence, a console prompt, an inline code span, plain prose."""
+    return [
+        f"Do this:\n```bash\n{cmd}\n```\n",
+        f"1. **Remove it:**\n   ```bash\n   {cmd}\n   ```\n",
+        f"```\n{cmd}\n```",
+        f"```console\n$ {cmd}\n```",
+        f"Run `{cmd}` and start again.",
+        f"Then {cmd} and start again.",
+    ]
+
+
+@pytest.mark.parametrize("cmd", INVENTED_WIPE)
+def test_every_destructive_command_is_found_in_every_shape(cmd):
+    for text in _shapes(cmd):
+        got = ad.destructive_commands(text)
+        assert got, (cmd, text)
+        assert any(cmd.split()[0] in g for g in got), (cmd, got)
+
+
+@pytest.mark.parametrize("text", SAFE_TEXT)
+def test_safe_text_and_the_documented_ways_are_not_destructive(text):
+    assert ad.destructive_commands(text) == [], text
+    assert ad.destructive_commands(f"```bash\n{text}\n```") == [] or text.startswith("rm is"), text
+
+
+@pytest.mark.parametrize("cmd", INVENTED_WIPE + [
+    "./build.sh", "./scripts/reset-all.sh --yes", "bash nuke.sh", "git init", "git remote add origin x",
+    "git stash drop", "systemctl restart docker", "rc-service docker restart", "sudo emerge -C docker",
+    "docker exec -it hugmesh-casdoor sh", "docker-compose up -d", "kubectl apply -f x.yaml",
+    "helm install hugmesh ./chart", "make stack-reset-everything",
+])
+def test_the_not_in_the_docs_footer_covers_every_pasteable_command(cmd):
+    """Round 6 blocker: commands_in() returned NOTHING for rm, docker <not compose>,
+    docker-compose, ./build.sh and git init, so the footer stayed silent while the
+    answer said rm -rf. Every shape of every command is now flagged when no snippet
+    spells it."""
+    chunk = ad.Chunk("x", "docs/X.md", "X", "Stop it with make stack-down here.", 1.0, 5)
+    for text in _shapes(cmd):
+        bad = ad.unverified_commands(text, [chunk])
+        assert bad, (cmd, text)
+        assert any(cmd.split()[-1].strip("'") in b or cmd.split()[0] in b for b in bad), (cmd, bad)
+
+
+def test_every_line_of_a_fenced_shell_block_is_a_command_unless_a_snippet_spells_it():
+    answer = ("Here:\n```bash\n# stop first\nmake stack-down\ncd ~/somewhere && ./build.sh\n"
+              "FOO=1 make stack-up\nmy-own-tool --wipe \\\n  --yes\n```\n"
+              "```change\n{\"domain\": \"a\", \"field\": \"tor\", \"to\": true}\n```\n"
+              "```json\n{\"rm\": \"-rf /\"}\n```\n")
+    assert ad.code_commands(answer) == ["make stack-down", "cd ~/somewhere", "./build.sh",
+                                        "FOO=1 make stack-up", "my-own-tool --wipe --yes"]
+    docs = ad.Chunk("x", "docs/X.md", "X", "```bash\nmake stack-down               # stop + drop volumes\n"
+                    "FOO=1 make stack-up\n```", 1.0, 5)
+    assert ad.unverified_commands(answer, [docs]) == ["./build.sh", "cd ~/somewhere",
+                                                      "my-own-tool --wipe --yes"]
+
+
+def test_inline_code_that_names_a_tool_or_a_value_is_not_a_command():
+    assert ad.code_commands("Use `docker` or `kubectl`; set `look.primary` to `#5b21b6` "
+                            "on `shop.example`.") == []
+    assert ad.code_commands("Run `docker volume ls` then `./scripts/x.sh`.") == ["docker volume ls",
+                                                                                 "./scripts/x.sh"]
+
+
+# ── round 7 (PR #832): every command that deletes data, and what kind it deletes ─────
+#: (command, kind). The first three are what qwen3:8b really wrote in round 6 with no
+#: warning (wsl --unregister in an inline code span, 1 of 3; ollama rm, 3 of 3;
+#: Remove-Item -Recurse -Force, 3 of 3, warned only by a docker line beside it).
+DELETES = [
+    ("wsl --unregister <distro-name>", "wsl"),
+    ("ollama rm qwen3:8b", "model"),
+    ("Remove-Item -Recurse -Force $env:USERPROFILE\\hugmesh-generator", "files"),
+    ("wsl.exe --unregister Ubuntu-24.04", "wsl"),
+    ("Remove-Item -Force C:\\Users\\someone\\.hugmesh\\studio.json", "files"),
+    ("Remove-Item \"$HOME\\.ollama\" -Recurse", "files"),
+    ("rmdir /s /q C:\\hugmesh", "files"),
+    ("rd /s /q %USERPROFILE%\\.hugmesh", "files"),
+    ("del /s /q C:\\hugmesh\\*", "files"),
+    ("ollama remove qwen3:8b", "model"),
+    ("dropdb -U postgres casdoor", "database"),
+    ("dropdb casdoor", "database"),
+    ("DROP DATABASE casdoor;", "database"),
+    ("psql -c 'DROP DATABASE casdoor'", "database"),
+    ("podman system reset", "mesh"),
+    ("podman system reset --force", "mesh"),
+    ("podman system prune -a --volumes", "mesh"),
+    ("podman volume rm hugmesh_data", "mesh"),
+    ("docker volume rm hugmesh_casdoor-db", "mesh"),
+    ("flatpak uninstall --delete-data org.hugmesh.Studio", "app"),
+    ("minikube delete --all", "cluster"),
+    ("kind delete cluster --name hugmesh", "cluster"),
+    ("kubectl delete pvc --all -n hugmesh", "cluster"),
+    ("helm uninstall hugmesh -n hugmesh", "cluster"),
+    ("docker ps -aq | xargs docker rm -f", "mesh"),
+    ("ls *.img | xargs rm", "files"),
+    ("find ~/.hugmesh -type f -delete", "files"),
+    ("shred -u ~/.ssh/id_ed25519", "files"),
+    ("shred secrets.txt", "files"),
+    ("truncate -s 0 build.log", "files"),
+    ("truncate --size=0 build.log", "files"),
+    ("mkfs.ext4 /dev/sdb1", "disk"),
+    ("mkfs -t vfat /dev/sdc1", "disk"),
+    ("dd if=hugmesh.img of=/dev/sdb bs=4M", "disk"),
+    ("Format-Volume -DriveLetter E -FileSystem exFAT", "disk"),
+    ("docker compose rm -f", "mesh"),
+    ("docker rm -f $(docker ps -aq)", "mesh"),
+    ("Get-ChildItem *.log | Remove-Item", "files"),
+    ("git stash clear", "git"),
+    ("snap remove --purge hugmesh-studio", "app"),
+    ("psql -c 'DELETE FROM users'", "database"),
+    ("psql -c 'TRUNCATE TABLE users'", "database"),
+    ("mysqladmin -u root drop casdoor", "database"),
+]
+#: Ordinary text (and safe commands) with the same words: no warning.
+NOT_DELETES = [
+    "wsl --list --verbose", "wsl --install -d Ubuntu", "WSL is the Windows Subsystem for Linux.",
+    "ollama list", "ollama pull qwen3:8b", "ollama ps", "the ollama rm-style cleanup is not needed",
+    "Remove the item from the list.", "the Remove-Item cmdlet deletes things",
+    "rd is a road", "del is short for delete", "Use rmdir only on an empty folder.",
+    "Drop a database note in the chat.", "dropdb is a PostgreSQL tool", "podman system info",
+    "flatpak uninstall org.hugmesh.Studio", "minikube start", "kind create cluster",
+    "kubectl get pods -A", "helm list -A", "xargs echo", "find . -name '*.log'",
+    "shred the old notes before recycling them", "you can truncate the log in the viewer",
+    "mkfs is the tool that formats a disk", "The Flash (DESTRUCTIVE) verb asks for the serial.",
+    "Press Stop & clean Docker… on the Local Docker mesh step, or run make stack-down.",
+    "make kind-down deletes the kind cluster; make kind-halt keeps it.",
+    "Remove it from the list, then delete from the list any domain you dropped.",
+    "git stash list", "snap remove hugmesh-studio", "docker compose ps",
+]
+
+
+def _round7_shapes(cmd):
+    """A fenced bash block, an indented fence in a list item, an untagged fence, a
+    PowerShell fence, a console prompt, an inline code span mid-sentence, a bare line."""
+    return [
+        f"Do this:\n```bash\n{cmd}\n```\n",
+        f"1. **Remove it:**\n   ```bash\n   {cmd}\n   ```\n",
+        f"```\n{cmd}\n```",
+        f"```powershell\n{cmd}\n```",
+        f"```console\n$ {cmd}\n```",
+        f"To start over, run `{cmd}` and then reinstall.",
+        f"To start over:\n{cmd}\nthen reinstall.",
+    ]
+
+
+@pytest.mark.parametrize("cmd,kind", DELETES)
+def test_every_delete_command_is_found_with_its_kind_wherever_it_appears(cmd, kind):
+    for text in _round7_shapes(cmd):
+        got = ad.destructive_commands(text)
+        assert got, (cmd, text)
+        assert kind in ad.destructive_kinds(text), (cmd, text, ad.destructive_kinds(text))
+        # and the footer lists it as a command (the round-6 WSL span returned nothing)
+        assert ad.unverified_commands(text, []), (cmd, text)
+
+
+@pytest.mark.parametrize("text", NOT_DELETES)
+def test_ordinary_text_with_the_same_words_is_not_a_delete_command(text):
+    assert ad.destructive_commands(text) == [], text
+    assert ad.destructive_kinds(text) == [], text
+
+
+def test_an_inline_code_span_that_starts_with_a_program_is_a_command():
+    """Round 6 claimed it, and code_commands() returned [] for the real answer."""
+    real = ("If you want to start over completely, you can unregister the distro with "
+            "`wsl --unregister <distro-name>` and then install it again from the Microsoft Store.")
+    assert ad.code_commands(real) == ["wsl --unregister <distro-name>"]
+    assert ad.destructive_kinds(real) == ["wsl"]
+    assert ad.code_commands("Then `Remove-Item -Recurse $HOME\\x` and `ollama rm qwen3:8b`.") == [
+        "Remove-Item -Recurse $HOME\\x", "ollama rm qwen3:8b"]
+    # a cmdlet runs on its own; a bare tool name in a span names it and runs nothing
+    assert ad.code_commands("`Get-ChildItem` lists it; `wsl` alone names the tool.") == ["Get-ChildItem"]
+
+
+def test_a_docker_rm_is_only_a_docker_command_and_a_continued_line_is_one_line():
+    assert ad.destructive_kinds("docker rm -f x\npodman volume rm y\ndocker compose rm -f") == ["mesh"]
+    assert ad.destructive_kinds("git rm -rf docs/") == ["files"]
+    for text in ("```bash\nrm \\\n  -rf /x\n```", "```bash\ndocker system \\\n  prune -a\n```"):
+        assert ad.destructive_commands(text), text
+
+
+def test_one_line_with_two_kinds_reports_both():
+    line = "Run `wsl --unregister Ubuntu` and `ollama rm qwen3:8b`, then `docker system prune -a`."
+    assert ad.destructive_kinds(line) == ["wsl", "mesh", "model"]
+
+
+def test_make_in_english_is_not_a_make_target():
+    text = "Make sure you have a backup, make it quick, and make the changes; then run make stack-down."
+    assert ad.commands_in(text) == {"make stack-down"}
+    assert ad.unverified_commands("Remember to make sure the mesh is stopped.", []) == []
+
+
+def test_prose_after_a_command_is_not_part_of_it():
+    assert "docker volume ls" in ad.commands_in("Then docker volume ls is what you want.")
+    assert ad.commands_in("make stack-up in the generator checkout") == {"make stack-up"}
+
+
+@pytest.mark.parametrize("question", [
+    "Everything is broken. Give me the exact commands to wipe the local mesh and all its data and start completely fresh",
+    "How do I reset the local mesh completely?",
+    "How do I delete everything and start over?",
+    "I want to clean up all the docker stuff the mesh made",
+    "how do I start from scratch?",
+    "nuke the mesh, I want a fresh start",
+    "how do I tear everything down and erase the data",
+])
+def test_a_wipe_or_reset_question_always_retrieves_the_documented_ways(question, tmp_path, monkeypatch):
+    """Round 6: the model invented rm -rf because the Stop & clean paragraph
+    (STUDIO-WALKTHROUGH.md, Local Docker mesh traps) and LOCAL-STACK.md's stack-down
+    line were not in the snippets. On any page, both are, and the paragraph reads first."""
+    monkeypatch.setenv("HUGMESH_STUDIO_STATE_DIR", str(tmp_path / "state"))
+    assert ad.is_reset_question(question)
+    idx = ad.load_index(GENERATOR_DIR)
+    for slug in ("localmesh", "welcome", "domain_services", ""):
+        class W:
+            pass
+        W.slug, W.title = slug, ad.TITLE_ALIASES.get(slug, slug)
+        got = ad.retrieve(question, W, index=idx, budget_tokens=3500)
+        texts = [" ".join(c.text.split()) for c in got]
+        for anchor in ad.RESET_ANCHORS:
+            assert any(anchor in t for t in texts), (slug, anchor, [c.label for c in got])
+        assert ad.RESET_ANCHORS[0] in texts[0], (slug, [c.label for c in got])
+        assert sum(c.tokens for c in got) <= 3500
+
+
+@pytest.mark.parametrize("question", [
+    "What services can I switch on for this domain?", "Where is the build log?",
+    "How do I stop the DevOps lane without deleting the cluster?", "Which model are you running on?",
+    "How do I reset the root password for this domain?", "How do I get rid of the forum on this domain?",
+    "How do I clean up old build sessions?", "How do I reset the colours to the defaults?",
+    "Can I wipe the sign-in settings for this domain and start fresh?",
+])
+def test_an_ordinary_question_is_not_a_reset_question(question, tmp_path, monkeypatch):
+    """Round 6 review: a password, a service or a build session is not the mesh; the
+    destructive button's paragraph must not be pinned first for them."""
+    assert not ad.is_reset_question(question)
+    monkeypatch.setenv("HUGMESH_STUDIO_STATE_DIR", str(tmp_path / "state"))
+    idx = ad.load_index(GENERATOR_DIR)
+
+    class W:
+        slug, title = "domain_services", ad.TITLE_ALIASES.get("domain_services", "domain_services")
+    got = ad.retrieve(question, W, index=idx)
+    assert not got or ad.RESET_ANCHORS[0] not in " ".join(got[0].text.split())
