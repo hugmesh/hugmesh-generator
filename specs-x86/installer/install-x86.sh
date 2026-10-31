@@ -18,6 +18,30 @@
 # and this installer rewrites the target's authoritative sshd drop-in. Admin access is
 # otherwise the non-root KEYS user, so disabling root never locks you out.
 set -euo pipefail
+
+# extract_stage4_labelled <target> — the stage4 carries the SELinux labels written at
+# build time (#503). ONE tar with xattrs, stderr visible, failure ABORTS: the old
+# `2>/dev/null || tar -xJf` fallback silently re-extracted WITHOUT xattrs, leaving an
+# installed disk on which every process runs kernel_t (and nothing relabels it without
+# a KEYS USB). Then read one label back: /usr/bin/init must be init_exec_t.
+extract_stage4_labelled() {
+    local tgt="$1" lab=""
+    tar -C "${tgt}" --xattrs --xattrs-include='*.*' -xJf "${STAGE4}" \
+        || { echo "ERROR: extracting ${STAGE4} with its SELinux labels (xattrs) failed — aborting the install rather than writing an unlabelled system." >&2; exit 1; }
+    if command -v getfattr >/dev/null 2>&1; then
+        lab="$(getfattr -h --absolute-names --only-values -n security.selinux "${tgt}/usr/bin/init" 2>/dev/null | tr -d '\000' || true)"
+    fi
+    if [ -z "${lab}" ] && command -v python3 >/dev/null 2>&1; then
+        lab="$(python3 -c 'import os,sys
+try: print(os.getxattr(sys.argv[1], "security.selinux", follow_symlinks=False).rstrip(b"\0").decode())
+except OSError: pass' "${tgt}/usr/bin/init" 2>/dev/null || true)"
+    fi
+    case "${lab}" in
+        *:init_exec_t:*) echo "==> SELinux labels present (/usr/bin/init ${lab})" ;;
+        *) echo "ERROR: ${tgt}/usr/bin/init carries '${lab:-no SELinux label}', want init_exec_t — the stage4 or the target filesystem lost the labels; aborting." >&2
+           exit 1 ;;
+    esac
+}
 PERMIT_ROOT_LOGIN="${PERMIT_ROOT_LOGIN:-no}"
 
 if [ "$(id -u)" -ne 0 ]; then echo "ERROR: run as root: sudo $0 $*" >&2; exit 1; fi
@@ -189,8 +213,7 @@ if ${ENCRYPT}; then
     mount "${ROOT_DM}" /mnt/sdhost
     mkdir -p /mnt/sdhost/boot
     mount "${P}1" /mnt/sdhost/boot
-    tar -C /mnt/sdhost --xattrs-include='*.*' -xJf "${STAGE4}" 2>/dev/null || \
-        tar -C /mnt/sdhost -xJf "${STAGE4}"
+    extract_stage4_labelled /mnt/sdhost
 
     LUKS_UUID="$(blkid -s UUID -o value "${P}2")"
     ESP_PARTUUID="$(blkid -s PARTUUID -o value "${P}1")"
@@ -246,8 +269,7 @@ else
     mount "${P}2" /mnt/sdhost
     mkdir -p /mnt/sdhost/boot/efi
     mount "${P}1" /mnt/sdhost/boot/efi
-    tar -C /mnt/sdhost --xattrs-include='*.*' -xJf "${STAGE4}" 2>/dev/null || \
-        tar -C /mnt/sdhost -xJf "${STAGE4}"
+    extract_stage4_labelled /mnt/sdhost
 
     # PARTUUID identity, matching the .img builder. Prefer the fstab carried in the
     # stage4 (specs-x86/etc/fstab tokens); fall back to the bundled template.
