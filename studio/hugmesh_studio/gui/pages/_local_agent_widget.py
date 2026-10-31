@@ -97,6 +97,8 @@ class _Snapshot:
     #: the environment of the Ollama in use (core/ollama_docker.assistant_env), read on
     #: the GUI thread; None = the Studio's own environment
     env: "Optional[dict]" = None
+    #: the assistant's hand-off (set_first_task), appended to the brief's context
+    first_task: str = ""
 
 
 @dataclass(frozen=True)
@@ -316,6 +318,10 @@ class LocalAgentWidget(QtWidgets.QGroupBox):
         self._context = context or (lambda: AgentContext())
         self._environ = environ
         self._context_text = context_text
+        #: A first task the assistant hands over ("That is more than a small edit"):
+        #: appended to the project context as ``## First task`` so the brief carries it.
+        #: The Launch button still needs the person's press.
+        self._first_task = ""
         # The default probe asks the Ollama the assistant uses: in Docker mode that is
         # the container's port, never the system 11434.
         self._prober = prober or (lambda: la.probe(environ=self._env()))
@@ -592,7 +598,19 @@ class LocalAgentWidget(QtWidgets.QGroupBox):
         callable reads the page's widgets (and Re-check rebuilds the app list), and Qt
         widgets are GUI-thread only: a worker that touched them can abort the Studio."""
         lane, app, agent, model = self.selection()
-        return _Snapshot(lane, app, agent, model, self.ctx(), self.probe, self._env())
+        return _Snapshot(lane, app, agent, model, self.ctx(), self.probe, self._env(),
+                         self._first_task)
+
+    def set_first_task(self, text: str) -> None:
+        """The assistant's hand-off: the request it would not do as a small edit becomes
+        the first task in the next brief. Nothing starts here."""
+        self._first_task = (text or "").strip()
+        if self._first_task:
+            self._show_note("Your request is in the next brief as its first task; press "
+                            "Launch to open a coding session on it.", _AMBER)
+
+    def first_task(self) -> str:
+        return self._first_task
 
     def _prepare_plan(self, snap: "_Snapshot") -> "la.Plan":
         """Pure on the snapshot: touches no widget, so it may run on a worker."""
@@ -606,6 +624,9 @@ class LocalAgentWidget(QtWidgets.QGroupBox):
             except Exception as exc:               # noqa: BLE001 — said in the brief, not raised
                 context_text = (f"(The Studio could not gather the project context: "
                                 f"{type(exc).__name__}: {exc})")
+        if snap.first_task:
+            context_text = (context_text.rstrip() + "\n\n" if context_text else "") \
+                + "## First task\n" + snap.first_task + "\n"
         return la.prepare(
             lane=lane, mesh=ctx.mesh, domains=list(ctx.domains),
             doors=list(ctx.doors.get(lane, ())), repo=app.name, source=app.path,

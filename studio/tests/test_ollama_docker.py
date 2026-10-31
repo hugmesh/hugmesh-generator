@@ -257,7 +257,7 @@ def test_starting_in_docker_mode_runs_the_container_first_then_the_worker_agains
 
     real = lai.start_assistant
     try:
-        lai.start_assistant = lambda gen, env=None, spawn=None: order.append(
+        lai.start_assistant = lambda gen, env=None, spawn=None, **kw: order.append(
             ("worker", env["OLLAMA_HOST"], env.get("HUGMESH_AGENT_CONTEXT"))) or lai.StartResult(True, "s")
         res = odk.start_assistant(GENERATOR_DIR, odk.DOCKER, environ={"PATH": "/bin"},
                                   extra_env={"HUGMESH_AGENT_CONTEXT": "/x/ctx.md"},
@@ -503,7 +503,7 @@ def test_the_panel_start_button_gives_the_worker_the_chosen_instance_and_the_con
         ("container", k["environ"]["OLLAMA_HOST"])) or odk.StartOutcome(True, "ok", ["docker"]))
     monkeypatch.setattr(odk, "wait_ready", lambda env, t: calls.append(
         ("ready", env["OLLAMA_HOST"])) or True)
-    monkeypatch.setattr(lai, "start_assistant", lambda gen, env=None, spawn=None: calls.append(
+    monkeypatch.setattr(lai, "start_assistant", lambda gen, env=None, spawn=None, **kw: calls.append(
         ("worker", dict(env or {}))) or lai.StartResult(True, "started", "cmd"))
     monkeypatch.setattr(odk, "state", lambda runner=None: odk.DockerState(True))
     monkeypatch.setattr(odk, "detect_gpu", lambda runner=None, **k: odk.GpuChoice(
@@ -566,3 +566,79 @@ def test_the_run_it_yourself_lines_name_the_chosen_instance(qapp, monkeypatch, t
     finally:
         win.close()
     assert "OLLAMA_HOST=" not in "\n".join(screen.lines(None))
+
+
+# ── native Windows (#827 groups 1 and 4, in this PR's files) ───────────────────────────
+def test_on_native_windows_docker_mode_starts_the_container_and_no_bash(monkeypatch):
+    """On the MSI the worker script is bash (System32's bash.exe is the WSL launcher):
+    Docker mode starts and waits for the container, then says the panel can use it and
+    the worker stays off. System mode refuses in words and starts nothing."""
+    order = []
+    monkeypatch.setattr(lai, "start_assistant", lambda *a, **k: (_ for _ in ()).throw(
+        AssertionError("the bash script was started on Windows")))
+
+    def starter(runner, environ):
+        order.append("container")
+        return odk.StartOutcome(True, "ok", ["docker", "run"])
+    res = odk.start_assistant(GENERATOR_DIR, odk.DOCKER, environ={}, starter=starter,
+                              ready=lambda e, t: order.append("ready") or True, osname="nt")
+    assert res.ok and order == ["container", "ready"] and res.command == ""
+    assert "answering on 127.0.0.1:11435" in res.message and "the panel asks it directly" in res.message
+    assert "WSL2" in res.message and "queue worker was not started" in res.message
+    monkeypatch.undo()
+    res = odk.start_assistant(GENERATOR_DIR, odk.SYSTEM, environ={}, osname="nt",
+                              starter=lambda *a, **k: order.append("container!"))
+    assert not res.ok and res.command == "" and "container!" not in order
+    assert "WSL2" in res.message and "Ollama for Windows" in res.message
+
+
+def test_on_linux_and_wsl_docker_mode_still_starts_the_worker(monkeypatch):
+    seen = []
+    monkeypatch.setattr(lai, "start_assistant",
+                        lambda gen, env=None, **kw: seen.append(kw) or lai.StartResult(True, "s"))
+    res = odk.start_assistant(GENERATOR_DIR, odk.DOCKER, environ={}, osname="posix",
+                              starter=lambda r, environ: odk.StartOutcome(True, "ok", ["docker"]),
+                              ready=lambda e, t: True)
+    assert res.ok and res.message == "s" and seen == [{"osname": "posix"}]
+
+
+def test_docker_output_is_utf8_with_replacement_never_the_code_page(monkeypatch):
+    """A real child writes UTF-8 and a byte no codec maps: _run returns text and never
+    raises (text=True alone decoded with the locale, cp1252 on Windows, and the strict
+    decode raised past its "never raises" promise)."""
+    import sys
+    code = "import sys; sys.stdout.buffer.write(b'caf\\xc3\\xa9 \\xff\\r\\nok\\n')"
+    rc, out = odk._run([sys.executable, "-c", code])
+    assert rc == 0 and out == "caf\u00e9 \ufffd\nok\n", repr(out)
+    seen = {}
+
+    def fake_run(argv, **kw):                     # a fake takes the decoding kwargs too
+        seen.update(kw)
+        import subprocess
+        return subprocess.CompletedProcess(argv, 0, "x", "")
+    monkeypatch.setattr(odk.subprocess, "run", fake_run)
+    assert odk._run(["docker", "ps"]) == (0, "x")
+    assert seen["encoding"] == "utf-8" and seen["errors"] == "replace"
+
+
+def test_no_text_mode_call_in_the_assistant_modules_decodes_with_the_code_page():
+    """The same AST check as test_windows_text_io, over this PR's modules."""
+    import ast
+    import pathlib
+    core = pathlib.Path(odk.__file__).resolve().parent
+    names = ["ollama_docker.py", "local_ai_status.py", "agent_context.py", "assistant_actions.py",
+             "assistant_catalogue.py", "assistant_code_edits.py", "assistant_context.py",
+             "assistant_docs.py", "assistant_prompt.py", "assistant_tips.py",
+             "../gui/_local_ai_dock.py", "../tui/local_ai.py"]
+    bare = []
+    for name in names:
+        tree = ast.parse((core / name).read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            kws = {k.arg for k in node.keywords}
+            text = any(k.arg in ("text", "universal_newlines") and isinstance(k.value, ast.Constant)
+                       and k.value.value for k in node.keywords)
+            if text and "encoding" not in kws and None not in kws:
+                bare.append(f"{name}:{node.lineno}")
+    assert not bare, bare
