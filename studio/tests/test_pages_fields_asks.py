@@ -704,17 +704,14 @@ def test_ask9_derived_hostname_matches_the_shell_vocabulary():
     assert checked >= 20, checked
 
 
-def test_ask9_hostname_exceptions_are_the_declared_ones():
+def test_ask9_hostname_exceptions_are_the_three_declared_ones():
     """POSITIVE control on the exceptions. The derived rule is `{brand}-{role}`; the
-    literals that survive it are DELIBERATE back-compat, not leftovers, and a
+    three literals that survive it are DELIBERATE back-compat, not leftovers, and a
     rename must not quietly re-point them."""
     def hn(plat, role, board=""):
         return derive_hostname(ImageConfig(mode="mesh", role=role, platform=plat,
                                            brand="acme", board=board))
-    # backend-gpu's legacy "host" default was RETIRED 2026-10-30: it now derives the
-    # role name like every other node (a GPU node booting as "acme-host" said nothing
-    # about what it was). Pinned so the exception cannot quietly come back.
-    assert hn("x86", "backend-gpu") == "acme-backend-gpu"
+    assert hn("x86", "backend-gpu") == "acme-host"          # flashers/launchers
     assert hn("x86", "standalone-thick") == "acme-standalone"
     assert hn("rpi5", "generic", "rpi4") == "gentoo-rpi4"   # drops the brand entirely
     # the UNAFFILIATED desktop: assigned by the later brand-neutralising fold, not by

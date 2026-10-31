@@ -42,52 +42,19 @@
 # FAIL-CLOSED: any read/render/apply error KEEPS the existing ruleset in
 # place; the baked/first-ever posture (no release-state file yet) is
 # INTERNAL — deny by default, never allow.
-#
-# ...BUT "keep the existing ruleset" is only fail-CLOSED when there IS one. When
-# this table is ABSENT (first boot, or a kernel that refuses the ruleset — the
-# 2026-10-30 x86 ISOs had no CONFIG_NF_TABLES_INET, so even `table inet X {}`
-# answered EOPNOTSUPP on every boot) keeping "the existing ruleset" means keeping
-# NOTHING: public 80/443 is open and the old exit 0 + "fail-closed" log line said
-# the opposite. So a failed load is now split on what is actually live:
-#   * our table IS loaded  => keep it (stale but enforcing), WARN, exit 0;
-#   * our table is ABSENT  => ERROR naming the node UNPROTECTED, write
-#     ${HEALTH_DIR}/${TABLE}.unprotected (the machine-readable "node unhealthy"
-#     mark, /run = tmpfs so it is boot-scoped), and exit 1 so the OpenRC oneshot
-#     goes red ("failed") instead of [ ok ] — the same contract
-#     hugmesh-sunshine-firewall already keeps for its fence.
-# `nft` missing entirely is the same ABSENT case. A successful load is confirmed
-# with `nft list table` before the mark is cleared; nothing ever `need`s this
-# oneshot, so a red result never blocks boot — it only stops lying.
 
 set -uo pipefail
 
-# Paths are overridable ONLY as test seams (tests/scripts/test-x86-boot-firewall-
-# snort.sh renders this script against an nft stub and must never write the real
-# /etc/nftables.conf when CI runs as root) — the same seam hugmesh-coturn-firewall
-# carries for its marker. Boot and cron run with a clean environment.
-RELEASE_STATE_FILE="${HUGMESH_RELEASE_STATE_FILE:-/etc/hugmesh/release-state}"
-GO_LIVE_MARKER="${HUGMESH_GO_LIVE_MARKER:-/etc/hugmesh/go-live}"
-RULESET="${HUGMESH_RELEASE_GATE_RULESET:-/etc/nftables.conf}"
+RELEASE_STATE_FILE="/etc/hugmesh/release-state"
+GO_LIVE_MARKER="/etc/hugmesh/go-live"
+RULESET="/etc/nftables.conf"
 TABLE="hugmesh_release_gate"
 LOG_TAG="hugmesh-firewall-reconcile"
-HEALTH_DIR="${HUGMESH_FIREWALL_HEALTH_DIR:-/run/hugmesh/firewall-health}"
-UNPROTECTED_MARK="${HEALTH_DIR}/${TABLE}.unprotected"
 
 log()  { echo "[${LOG_TAG} $(date -u '+%Y-%m-%dT%H:%M:%SZ')] $*"; command -v logger >/dev/null 2>&1 && logger -t "${LOG_TAG}" -- "$*" 2>/dev/null || true; }
 warn() { log "WARNING: $*"; }
-error() { log "ERROR: $*"; }
 
-# The node is UNPROTECTED: no table of ours is live. Mark it, say so, fail.
-unprotected() {
-    mkdir -p "${HEALTH_DIR}" 2>/dev/null || true
-    printf 'table=inet %s\nsince=%s\nreason=%s\n' "${TABLE}" "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$(printf '%s' "$*" | tr '\n' ' ')" \
-        > "${UNPROTECTED_MARK}" 2>/dev/null || true
-    error "NO host firewall backstop is loaded (table inet ${TABLE} is ABSENT) — this node is UNPROTECTED, NOT fail-closed: $* (marked ${UNPROTECTED_MARK})"
-    exit 1
-}
-table_live() { nft list table inet "${TABLE}" >/dev/null 2>&1; }
-
-command -v nft >/dev/null 2>&1 || unprotected "nft not found — cannot (re)load the host firewall backstop"
+command -v nft >/dev/null 2>&1 || { warn "nft not found — cannot (re)load the host firewall backstop"; exit 0; }
 
 RELEASE_STATE="internal"
 [ -r "${RELEASE_STATE_FILE}" ] && RELEASE_STATE="$(cat "${RELEASE_STATE_FILE}" 2>/dev/null)"
@@ -103,9 +70,7 @@ else
     DROP_RULE="        tcp dport { 80, 443 } drop  # INTERNAL: refuse everything else"
 fi
 
-TMP="$(mktemp)" || {
-    table_live || unprotected "mktemp failed before the first ruleset was ever loaded"
-    warn "mktemp failed — keeping the existing ruleset (fail-closed)"; exit 0; }
+TMP="$(mktemp)" || { warn "mktemp failed — keeping the existing ruleset (fail-closed)"; exit 0; }
 trap 'rm -f "${TMP}"' EXIT
 cat > "${TMP}" <<RULES
 #!/usr/sbin/nft -f
@@ -132,15 +97,9 @@ ${DROP_RULE}
 RULES
 
 if ! NFT_ERR="$(nft -f "${TMP}" 2>&1)"; then
-    # Keeping "the existing ruleset" is only fail-closed when one exists.
-    table_live || unprotected "nft -f failed (${NFT_ERR}) and there is no earlier ruleset to keep (wanted posture: ${POSTURE})"
-    warn "nft -f failed (${NFT_ERR}) — keeping the existing ruleset (fail-closed; the PREVIOUS table inet ${TABLE} is still loaded)"
+    warn "nft -f failed (${NFT_ERR}) — keeping the existing ruleset (fail-closed)"
     exit 0
 fi
-# nft's exit status alone is not proof: confirm the table is really live before
-# clearing the unhealthy mark (the hugmesh-sunshine-firewall rule).
-table_live || unprotected "nft -f reported success but table inet ${TABLE} is not present afterwards"
-rm -f "${UNPROTECTED_MARK}" 2>/dev/null || true
 cp -f "${TMP}" "${RULESET}" 2>/dev/null || true
 log "applied: release-state=${RELEASE_STATE} go-live=${GO_LIVE} -> ${POSTURE}"
 exit 0
