@@ -21,9 +21,7 @@ command_background=false
 start() {
     ebegin "Reconciling the RELEASE_STATE host nftables backstop (fail-closed to the existing ruleset on error)"
     "${command}"
-    # Non-zero ONLY when no hugmesh_release_gate table is live (a failed reload over
-    # an existing table keeps it and exits 0): say UNPROTECTED, never "preserved".
-    eend $? "NO RELEASE_STATE backstop is loaded (table inet hugmesh_release_gate absent) — this node is UNPROTECTED; see the ERROR above and /run/hugmesh/firewall-health/"
+    eend $? "firewall reconcile reported an unexpected error (existing ruleset preserved)"
 }
 
 stop() {

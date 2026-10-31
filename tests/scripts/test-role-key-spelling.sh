@@ -338,6 +338,7 @@ done
 #      guard, not a table edit nobody reads.
 #      The rule: "${BRAND}-${ROLE}", with these documented exceptions and no others.
 HOSTNAME_EXCEPTIONS="
+x86:backend-gpu=hugmesh-host
 x86:standalone-thick=hugmesh-standalone
 jetson:edge-ai=hugmesh-jetson-edge-ai
 jetson:backend-gpu=hugmesh-jetson-gpu

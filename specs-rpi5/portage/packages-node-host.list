@@ -10,9 +10,8 @@
 # covers the Pi base list minus its Raspberry Pi hardware atoms, so an atom added to
 # the Pi base list and missing here fails that test.
 
-# Host firewall: hugmesh-firewall-reconcile loads its release-state rules with nft.
-# Without nft no rules ever load; the reconcile then marks the node UNPROTECTED
-# (/run/hugmesh/firewall-health/) and exits 1, so its boot oneshot shows red.
+# Host firewall: hugmesh-firewall-reconcile loads its release-state rules with nft
+# and exits 0 (rules never loaded) when nft is absent.
 net-firewall/nftables
 net-firewall/conntrack-tools
 

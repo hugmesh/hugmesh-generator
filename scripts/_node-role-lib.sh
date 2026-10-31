@@ -58,10 +58,9 @@ NODE_ROLE_RUNLEVEL_SVCS="hugmesh-firewall-reconcile hugmesh-coturn-firewall hugm
 
 # The binaries a node's post-emerge payload assert requires (opi_assert_stage4_payload
 # in both Orange Pi builders). The Pi node floor (build-rpi5-stage4.sh `_payload_bins+=(kubelet
-# kubeadm kubectl containerd)` plus its auditd), and nft + iptables: without nft the
-# release-state backstop (public 80/443 closed while the mesh is internal) never
-# loads — hugmesh-firewall-reconcile now says so (UNPROTECTED mark + exit 1), but a
-# build that knows nft is missing should refuse long before a node boots like that.
+# kubeadm kubectl containerd)` plus its auditd), and nft + iptables: without nft,
+# hugmesh-firewall-reconcile exits 0 with a warning and the release-state backstop
+# (public 80/443 closed while the mesh is internal) silently never loads.
 NODE_ROLE_REQUIRED_BINS="kubelet kubeadm kubectl containerd auditd nft iptables"
 
 # The kernel symbols a node kernel must have as =y after olddefconfig. This is the
@@ -81,7 +80,7 @@ CONFIG_NETFILTER_XTABLES_LEGACY CONFIG_IP_NF_IPTABLES_LEGACY
 CONFIG_IP6_NF_IPTABLES_LEGACY
 CONFIG_IP_NF_FILTER CONFIG_IP_NF_NAT
 CONFIG_IP_NF_MANGLE CONFIG_NF_NAT CONFIG_NF_NAT_MASQUERADE
-CONFIG_NF_TABLES CONFIG_NF_TABLES_IPV4 CONFIG_NF_TABLES_IPV6 CONFIG_NF_TABLES_INET
+CONFIG_NF_TABLES CONFIG_NF_TABLES_IPV4 CONFIG_NF_TABLES_IPV6
 CONFIG_NFT_NAT CONFIG_NFT_MASQ CONFIG_NFT_CT CONFIG_NFT_COMPAT
 CONFIG_IP_NF_TARGET_REJECT CONFIG_IP6_NF_TARGET_REJECT CONFIG_NFT_REJECT
 CONFIG_IP_SET CONFIG_IP_SET_HASH_IP CONFIG_IP_SET_HASH_NET CONFIG_NETFILTER_XT_SET

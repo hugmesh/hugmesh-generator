@@ -169,21 +169,15 @@ standalone-desktop=desktop:standalone=true
 # ── HOSTNAME DEFAULTS ──────────────────────────────────────────────────────────
 # The default is DERIVED: "${BRAND}-${ROLE}". Only genuine exceptions are listed,
 # `<platform>:<role>=<suffix>` (the part after "${BRAND}-").
-# The two x86/legacy exceptions are retained ON PURPOSE — a rename must not
+# The three x86/legacy exceptions are retained ON PURPOSE — a rename must not
 # re-point a default, only re-spell one:
+#   backend-gpu  -> ${BRAND}-host       legacy; flashers/launchers/gen-keys examples
 #   standalone-thick -> ${BRAND}-standalone
 #   rpi5 generic -> gentoo-${BOARD}     the ONE role that drops the brand entirely
 #                                       (not expressible here; see hugmesh_role_hostname)
-# x86 backend-gpu USED to be a third (${BRAND}-host, the pre-role-split name). It
-# was retired 2026-10-30 as a deliberate DECISION, not a rename side effect: it was
-# the only cluster node that booted under a name saying nothing about its role
-# (the backend/frontend/pki ISOs of the same run booted as hugmesh-backend/-frontend/
-# -pki; backend-gpu booted as hugmesh-host). It now derives ${BRAND}-backend-gpu like
-# every other node. Nothing keys on the baked default: a provisioned node takes its
-# hostname from the KEYS manifest (tests/qemu/assertions.sh pins exactly that), and
-# the launchers' `hugmesh-host-*` globs match ARTIFACT names, not hostnames.
 # The jetson names keep their platform prefix exactly as the builder had them.
 HUGMESH_ROLE_HOSTNAME_SUFFIX="
+x86:backend-gpu=host
 x86:standalone-thick=standalone
 jetson:edge-ai=jetson-edge-ai
 jetson:backend-gpu=jetson-gpu

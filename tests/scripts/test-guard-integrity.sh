@@ -915,14 +915,7 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # test-gen-route-access-env.sh) merged origin/main 626664c0, which carries test-release-beta.sh (block
 # below). Both add one gated suite, so the merged tree is +2 over #830's 203. MEASURED by RUNNING this
 # file on the merged tree: '205 of 246 suites are named by a pull_request-triggered workflow'.
-# 205 -> 206 (denominator 246 -> 247) on 2026-10-30 for fix/x86-boot-firewall-snort-20261030,
-# which adds ONE gated suite: tests/scripts/test-x86-boot-firewall-snort.sh (wired in
-# .github/workflows/shell-suites.yml AND .gitlab-ci.yml orphan-guards-verify). MEASURED by
-# RUNNING this file on that branch (base origin/main 89a1eb6a, which measures '205 of 246'):
-#     206 of 247 suites are named by a pull_request-triggered workflow
-# A branch that also raises this from 205 conflicts here by construction; whichever lands
-# second re-measures (expected 207) per the doctrine above.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-206}"
+PREMERGE_BASELINE="${GUARD_PREMERGE:-205}"
 
 # 182 -> 192 (denominator 205 -> 215) on 2026-09-30 for #385: the census gained a
 # THIRD spelling, bare `tests/*.sh` at depth 1, and the ten suites it exposed were

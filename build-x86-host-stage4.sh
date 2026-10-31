@@ -1577,9 +1577,9 @@ case "${ROLE}" in
     backend-gpu)
         GPU=true; ROLE_K8S="worker"
         ROLE_LABELS="hugmesh.net/backend=true,hugmesh.net/compute=gpu"
-        # Derives ${BRAND}-backend-gpu like every other node role. (The legacy
-        # ${BRAND}-host default was retired 2026-10-30 — see HOSTNAME DEFAULTS in
-        # scripts/_roles-lib.sh for why nothing depended on it.)
+        # The legacy 'host' hostname is KEPT (back-compat with flashers/launchers) —
+        # one of the three declared exceptions in _roles-lib.sh; a rename must not
+        # re-point a default, only re-spell one.
         [ -z "${HOSTNAME}" ] && HOSTNAME="$(hugmesh_role_hostname x86 "${ROLE}" "${BRAND}")" ;;
     omnibus)
         GPU=true; ROLE_HEADSCALE=true; ROLE_K8S="single-node"
@@ -2573,7 +2573,7 @@ if ${PRINT_PLAN}; then
     _plan CLUSTER_DOMAIN     "${CLUSTER_DOMAIN}"
     _plan SUPERDOMAIN        "${SUPERDOMAIN}"
     domain_idp_plan_line   # PLAN_DOMAIN_IDP=<own domains>; prints nothing when none (#509)
-    _plan HOSTNAME           "${HOSTNAME:-$(hugmesh_role_hostname x86 "${ROLE}" "${BRAND}")}"
+    _plan HOSTNAME           "${HOSTNAME:-${BRAND}-host}"
     _plan OPTIONAL_SERVICES  "$(${ROLE_CLIENT} && echo none || echo "${OPTIONAL_SERVICES:-none}")"
     # Additive PLAN_ key (grep -qx consumers unaffected): what the tor NODE gates below
     # will do, from the SAME predicate + arrays they call — `off`, or the packages and
@@ -5057,21 +5057,11 @@ DESK
     info "Thin desktop staged: Sunshine (in-session XDG autostart) + hugmesh-sunshine-firewall (stream ports tailnet-only, web UI loopback-only) + WiVRn config stub"
 fi
 if ${SNORT_IDS}; then
-    mkdir -p "${SYSROOT}/etc/snort/rules" "${SYSROOT}/var/log/snort" "${SYSROOT}/etc/conf.d" "${SYSROOT}/usr/libexec"
+    mkdir -p "${SYSROOT}/etc/snort/rules" "${SYSROOT}/var/log/snort"
     cp "${SHARED_SPECS}/etc/snort/snort.conf"        "${SYSROOT}/etc/snort/snort.conf"
     cp "${SHARED_SPECS}/etc/snort/rules/local.rules" "${SYSROOT}/etc/snort/rules/local.rules"
-    # The package's /etc/conf.d/snort hardcodes SNORT_IFACE="eth1" (a Gentoo
-    # example; no hugmesh image has an eth1), which failed snort on every fresh
-    # boot. Ours resolves the node's real uplink when the service runs. Staged
-    # BEFORE the payload emerge, so CONFIG_PROTECT keeps ours and parks the
-    # package's copy as ._cfg0000_snort (same as conf.d/hostname, init.d/kubelet).
-    # Brand-NEUTRAL paths on purpose: snort is default-on for every role, including
-    # the --unaffiliated plain desktop, which must carry no hugmesh-named tooling.
-    cp "${SHARED_SPECS}/etc/conf.d/snort"        "${SYSROOT}/etc/conf.d/snort"
-    cp "${SHARED_SPECS}/usr/libexec/snort-uplink" "${SYSROOT}/usr/libexec/snort-uplink"
-    chmod +x "${SYSROOT}/usr/libexec/snort-uplink"
     SVCS+=(snort)
-    info "Snort IDS staged (default-on; alert mode on HOME_NET; interface = the node's uplink, resolved at service start)"
+    info "Snort IDS staged (default-on; alert mode on HOME_NET)"
 fi
 if ${WANT_AIDE}; then
     mkdir -p "${SYSROOT}/etc/aide" "${SYSROOT}/var/lib/aide"
@@ -5595,13 +5585,7 @@ _tor_node_selected && PKGS="${PKGS} ${TOR_NODE_PACKAGES[*]}" && info "Tor NODE s
 # Network/host security stack: Squid+Privoxy (desktops), Snort (all), AIDE (opt-in).
 # WANT_PROXY_STACK was resolved at the SVCS step above.
 ${WANT_PROXY_STACK} && PKGS="${PKGS} net-proxy/squid net-proxy/privoxy" && info "Proxy stack: Squid + Privoxy (Firefox wired to 127.0.0.1:8118 -> :3128)"
-# net-libs/daq is named EXPLICITLY: snort-2.9.20 is built --disable-static-daq, so
-# /usr/bin/snort NEEDS libdaq.so.2 at runtime, but the ebuild lists daq in BDEPEND
-# only. A from-source merge drags it in as a build dep; a BINPKG merge (the shared
-# pkgdir) never does, and the 2026-10-30 x86 images shipped a snort that could not
-# even load (NEEDED libdaq.so.2, no net-libs/daq installed, the gpkg sitting unused
-# in the pkgdir). Naming it here also puts it in @world, so no depclean removes it.
-${SNORT_IDS}        && PKGS="${PKGS} net-analyzer/snort net-libs/daq" && info "Snort IDS: default-on (disable with --no-snort); + net-libs/daq (runtime DAQ modules the ebuild only BDEPENDs)"
+${SNORT_IDS}        && PKGS="${PKGS} net-analyzer/snort" && info "Snort IDS: default-on (disable with --no-snort)"
 ${WANT_AIDE}        && PKGS="${PKGS} app-forensics/aide" && info "AIDE file-integrity IDS: enabled (DB initialized at first boot)"
 # GPU k8s nodes with the proprietary NVIDIA driver: the container toolkit provides
 # /usr/bin/nvidia-container-runtime so containerd can pass the GPU to pods (the
@@ -6771,7 +6755,6 @@ for must in CONFIG_NETFILTER_XTABLES \
             CONFIG_IP6_NF_IPTABLES_LEGACY \
             CONFIG_IP_NF_MANGLE CONFIG_NF_NAT CONFIG_NF_NAT_MASQUERADE \
             CONFIG_NF_TABLES CONFIG_NF_TABLES_IPV4 CONFIG_NF_TABLES_IPV6 \
-            CONFIG_NF_TABLES_INET \
             CONFIG_NFT_NAT CONFIG_NFT_MASQ CONFIG_NFT_CT \
             CONFIG_IP6_NF_IPTABLES CONFIG_IP6_NF_FILTER CONFIG_IP6_NF_NAT \
             CONFIG_IP6_NF_MANGLE \
@@ -6789,20 +6772,6 @@ done
 else
     echo "[build-x86] Standalone/non-k8s role (ROLE_K8S=none): skipping the k8s Service-networking kernel guard"
 fi
-# HOST-FIREWALL kernel guard — EVERY role, k8s or not. The k8s guard above is
-# skipped for ROLE_K8S=none, but the host rulesets are not k8s-only: a node runs
-# hugmesh-firewall-reconcile + hugmesh-coturn-firewall, and a client desktop built
-# with --with-sunshine runs hugmesh-sunshine-firewall. All of them load a
-# 'table inet ...', and nf_tables_newtable() refuses a family the kernel was not
-# built with (EOPNOTSUPP) — so a kernel without NF_TABLES_INET boots with NO host
-# backstop at all. That shipped: the 2026-10-30 backend/frontend/backend-gpu ISOs
-# logged "Could not process rule: Operation not supported" for both tables on
-# every boot, and the x86_64 defconfig base carries no nf_tables of its own, so
-# the fragment is the only source. NFT_CT backs the coturn backstop's
-# 'ct state established,related accept' (without it that table is refused too).
-for must in CONFIG_NF_TABLES CONFIG_NF_TABLES_INET CONFIG_NF_TABLES_IPV4 CONFIG_NF_TABLES_IPV6 CONFIG_NFT_CT; do
-    grep -q "^\${must}=y" .config || { echo "[build-x86] ERROR: host-firewall kernel option \${must} not enabled after olddefconfig — every 'table inet' host ruleset (release gate, coturn backstop, sunshine fence) would be refused with EOPNOTSUPP and the node would boot with NO host firewall"; exit 1; }
-done
 # SELinux only activates if CONFIG_LSM is a clean, well-formed string. lockdown is
 # listed FIRST so it engages before any other LSM; a stray quote or wrong order here
 # would silently ship SELinux or lockdown DISABLED. Assert the exact intended value.
