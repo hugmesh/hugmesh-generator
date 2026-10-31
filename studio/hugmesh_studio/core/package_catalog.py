@@ -306,7 +306,9 @@ ADHOC_ADDS: tuple[AdhocAdd, ...] = (
              lambda cfg: bool(_egress(cfg)) and not _egress(cfg).endswith(".ovpn")),
     AdhocAdd("tor", "Tor onion service (net-vpn/tor)", ("net-vpn/tor",),
              _tor_selected),
-    AdhocAdd("snort", "Snort IDS", ("net-analyzer/snort",),
+    # net-libs/daq rides with snort: the ebuild only BDEPENDs it, but the binary
+    # NEEDS libdaq.so.2 (--disable-static-daq), so the x86 builder names it too.
+    AdhocAdd("snort", "Snort IDS", ("net-analyzer/snort", "net-libs/daq"),
              lambda cfg: bool(getattr(cfg, "snort", False))),
     AdhocAdd("nvidia-container-toolkit", "NVIDIA container runtime",
              ("app-containers/nvidia-container-toolkit",),

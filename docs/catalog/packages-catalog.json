@@ -34,7 +34,8 @@
     },
     "snort": {
       "atoms": [
-        "net-analyzer/snort"
+        "net-analyzer/snort",
+        "net-libs/daq"
       ],
       "label": "Snort IDS"
     },

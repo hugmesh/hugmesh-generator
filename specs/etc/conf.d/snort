@@ -1,0 +1,19 @@
+# /etc/conf.d/snort — replaces net-analyzer/snort's stock file, whose
+# SNORT_IFACE="eth1" is a Gentoo example value that this image does not have
+# (QEMU's virtio NIC and real boards use predictable enp*/eno*/wl* names), so the
+# stock file made `rc-service snort start` fail on every fresh boot.
+#
+# This file is SOURCED by OpenRC for every snort command (start, stop, reload,
+# and dependency-cache generation), so the interface is resolved at service time
+# from the machine's real uplink — see /usr/libexec/snort-uplink for the order
+# (running instance > IPv4/IPv6 default-route device > first UP physical NIC >
+# the libpcap "any" pseudo-device, which still starts).
+
+# Pin an interface by name (e.g. "enp3s0", or "any" for every interface).
+# Empty or "auto" = resolve the uplink automatically.
+SNORT_IFACE_PIN="auto"
+
+SNORT_IFACE="$(/usr/libexec/snort-uplink "${SNORT_IFACE_PIN}" 2>/dev/null)"
+[ -n "${SNORT_IFACE}" ] || SNORT_IFACE="any"
+
+SNORT_CONF="/etc/snort/snort.conf"

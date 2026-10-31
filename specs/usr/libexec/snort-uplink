@@ -1,0 +1,95 @@
+#!/bin/sh
+# snort-uplink — print the interface Snort should sniff on THIS node, resolved at
+# service time (sourced from /etc/conf.d/snort), never baked at build time.
+#
+# WHY: net-analyzer/snort ships /etc/conf.d/snort with SNORT_IFACE="eth1" — a
+# Gentoo example value. These images have no eth1 (QEMU's single virtio NIC, real
+# boards' enp*/eno*/wl* predictable names), so `snort -i eth1` died on every fresh
+# boot ("ERROR: snort failed to start"), and the package init script sends snort's
+# own stderr to /dev/null, so the console never said why.
+#
+# Deliberately brand-neutral (path, state file, variables): snort is default-on for
+# EVERY image, including the unaffiliated plain desktop, which carries no
+# brand-named tooling.
+#
+# Resolution order (first hit wins; the answer is recorded in ${STATE}):
+#   1. an operator pin: $1 (SNORT_IFACE_PIN in /etc/conf.d/snort), unless "auto"/"";
+#   2. the interface a RUNNING snort was started on — the recorded answer, but only
+#      while its pidfile (${PIDDIR}/snort_<iface>.pid) exists, so `rc-service snort
+#      stop`/`reload` address the instance that is actually running even if the
+#      default route has moved since it started;
+#   3. the device of the main-table IPv4 default route, then the IPv6 one — the
+#      node's real uplink — skipping overlay/tunnel devices;
+#   4. the first UP physical interface (has a /sys/class/net/<if>/device link);
+#   5. "any" — the libpcap pseudo-device (snort.conf pins `config daq: pcap`, which
+#      supports it): degraded (cooked headers, every interface) but it STARTS, so a
+#      node with no route yet still gets an IDS instead of a red service.
+#
+# Never fails and always prints exactly one token. POSIX sh (no bash in conf.d).
+
+PIN="${1:-}"
+STATE="${SNORT_UPLINK_STATE:-/run/snort-uplink.iface}"
+PIDDIR="${SNORT_UPLINK_PIDDIR:-/var/run/snort}"
+SYSNET="${SNORT_UPLINK_SYSFS_NET:-/sys/class/net}"
+PATH="${PATH:+${PATH}:}/usr/sbin:/usr/bin:/sbin:/bin"
+
+# Overlay / tunnel / pod-plumbing devices: never "the uplink" even when a route
+# names them (tailscale exit node, wg egress, CNI bridges, kube-proxy IPVS dummy).
+is_virtual() {
+    case "$1" in
+        ''|lo|tailscale*|wg*|tun*|tap*|cni*|cali*|flannel*|vxlan*|veth*|kube-*|docker*|virbr*|dummy*|nodelocaldns) return 0 ;;
+    esac
+    return 1
+}
+
+# A token we are willing to hand to `snort -i` (and to embed in a pidfile name).
+valid_name() {
+    case "$1" in
+        any) return 0 ;;
+        ''|*[!A-Za-z0-9_.:@-]*) return 1 ;;
+    esac
+    [ "${#1}" -le 15 ]
+}
+
+answer() {
+    mkdir -p "$(dirname "${STATE}")" 2>/dev/null || true
+    printf '%s\n' "$1" > "${STATE}" 2>/dev/null || true
+    printf '%s\n' "$1"
+    exit 0
+}
+
+# 1. operator pin
+case "${PIN}" in
+    ''|auto) ;;
+    *) valid_name "${PIN}" && answer "${PIN}" ;;
+esac
+
+# 2. the instance that is running now
+if [ -r "${STATE}" ]; then
+    _cur="$(head -n1 "${STATE}" 2>/dev/null)"
+    if valid_name "${_cur}" && [ -e "${PIDDIR}/snort_${_cur}.pid" ]; then
+        answer "${_cur}"
+    fi
+fi
+
+# 3. the default-route device (v4, then v6)
+for _fam in -4 -6; do
+    # `ip route show default` prints e.g. "default via 10.0.2.2 dev enp0s2 proto dhcp ..."
+    for _dev in $(ip "${_fam}" route show default 2>/dev/null \
+                  | awk '{for (i = 1; i < NF; i++) if ($i == "dev") print $(i + 1)}'); do
+        is_virtual "${_dev}" && continue
+        valid_name "${_dev}" && answer "${_dev}"
+    done
+done
+
+# 4. the first UP physical interface
+for _p in "${SYSNET}"/*; do
+    _dev="${_p##*/}"
+    is_virtual "${_dev}" && continue
+    [ -e "${_p}/device" ] || continue
+    [ "$(cat "${_p}/operstate" 2>/dev/null)" = up ] || continue
+    valid_name "${_dev}" && answer "${_dev}"
+done
+
+# 5. degrade, never fail
+answer any
