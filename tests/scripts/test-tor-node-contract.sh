@@ -106,6 +106,7 @@ EOF
 cat > "${STUB}/tor" <<'EOF'
 #!/bin/bash
 echo "$*" >> "${STATE_DIR}/tor.log"
+echo "tor $*" >> "${STATE_DIR}/seq.log"
 exit "$(cat "${STATE_DIR}/verify" 2>/dev/null || echo 0)"
 EOF
 cat > "${STUB}/id" <<'EOF'
@@ -113,7 +114,9 @@ cat > "${STUB}/id" <<'EOF'
 [ -f "${STATE_DIR}/no-tor-user" ] && exit 1
 exit 0
 EOF
-printf '#!/bin/bash\nexit 0\n' > "${STUB}/chown"
+# chown: records its argv in the shared sequence log (with tor's), so a leg can
+# tell WHAT was handed to tor:tor and whether that happened BEFORE the verify.
+printf '#!/bin/bash\necho "chown $*" >> "${STATE_DIR}/seq.log"\nexit 0\n' > "${STUB}/chown"
 # sleep: logs each call; with $STATE_DIR/mint-at = N and $STATE_DIR/mint-file = PATH,
 # the Nth sleep writes ONION_LATE into PATH — tor minting a key mid-wait.
 cat > "${STUB}/sleep" <<'EOF'
@@ -193,6 +196,22 @@ ls "${R}/etc/tor/" | grep -F 'torrc.hugmesh.' >/dev/null && bad "A1 a candidate 
 [ "$(mode_of "${R}/var/lib/tor/hugmesh-onion")" = 700 ] && [ "$(mode_of "${R}/var/lib/tor/data")" = 700 ] \
     && ok "A1 HiddenServiceDir + DataDirectory are 0700 (Tor refuses a group/world-readable HS dir)" \
     || bad "A1 state dir modes: hs='$(mode_of "${R}/var/lib/tor/hugmesh-onion")' data='$(mode_of "${R}/var/lib/tor/data")', want 700"
+
+# A1b — the DataDirectory's PARENT. An ARM image packed with every owner forced to
+# root shipped /var/lib/tor root:root 0750; tor setuids to `tor` before checking its
+# DataDirectory, so `tor --verify-config` failed and tor never started (2026-11-04,
+# reproduced with the image's own tor under qemu-user). The agent must hand
+# /var/lib/tor to tor:tor at the ebuild's 0750, and do it BEFORE the verify.
+_seq="$(cat "${STATE_DIR}/seq.log" 2>/dev/null)"
+_n_own="$(printf '%s\n' "${_seq}" | grep -n -x -F "chown tor:tor ${R}/var/lib/tor" | head -1 | cut -d: -f1)"
+_n_ver="$(printf '%s\n' "${_seq}" | grep -n -F -- "tor --verify-config" | head -1 | cut -d: -f1)"
+[ -n "${_n_own}" ] && ok "A1b /var/lib/tor itself (the DataDirectory's parent) is chowned tor:tor" \
+    || { bad "A1b /var/lib/tor was never chowned tor:tor — a root-owned parent makes tor refuse its DataDirectory"; printf '%s\n' "${_seq}" | sed 's/^/      | /'; }
+[ -n "${_n_own}" ] && [ -n "${_n_ver}" ] && [ "${_n_own}" -lt "${_n_ver}" ] \
+    && ok "A1b ...and before the candidate is verified (the verify runs as tor and needs it)" \
+    || bad "A1b the /var/lib/tor chown (line ${_n_own:-none}) does not precede the verify (line ${_n_ver:-none})"
+[ "$(mode_of "${R}/var/lib/tor")" = 750 ] && ok "A1b /var/lib/tor is 0750 (net-vpn/tor's fperms)" \
+    || bad "A1b /var/lib/tor mode is '$(mode_of "${R}/var/lib/tor")', want 750"
 
 # A2 — the same node again, tor running, nothing changed: a pure no-op.
 : > "${STATE_DIR}/rc.log"; echo 0 > "${STATE_DIR}/status"

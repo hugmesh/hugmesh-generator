@@ -929,7 +929,19 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # that tree: '207 of 248 suites are named by a pull_request-triggered workflow', ungated SET 41;
 # and with the suite on disk but its shell-suites.yml line absent: '206 of 248' + check 3 and
 # check 7 red naming it -- so the +1/+1 is this suite and nothing else.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-207}"
+# 207 -> 208 (denominator 248 -> 249) on 2026-11-04 for fix/emulated-mesh-tailscale-tor-20261104,
+# which adds ONE gated suite: tests/scripts/test-stage4-pack-ownership.sh (the ARM stage4
+# tarball's owners, executed per builder; wired in shell-suites.yml's alpine job AND
+# .gitlab-ci.yml orphan-guards-verify). MEASURED by RUNNING this file on that branch (base
+# origin/main 8ed37a3c): '208 of 249 suites are named by a pull_request-triggered workflow'.
+# A branch that also raises this from 207 conflicts here by construction; whichever lands
+# second re-measures (expected 209) per the doctrine above.
+# 208 -> 209 (denominator 249 -> 250) on the same branch: tests/qemu/mesh_client_test.sh (the
+# emulated mesh client's KEYS payload, its manifest-following grade and the fleet's
+# control-first boot order; wired in shell-suites.yml's alpine job beside
+# mesh-cluster_test.sh). MEASURED by RUNNING this file on that branch:
+# '209 of 250 suites are named by a pull_request-triggered workflow'.
+PREMERGE_BASELINE="${GUARD_PREMERGE:-209}"
 
 # 182 -> 192 (denominator 205 -> 215) on 2026-09-30 for #385: the census gained a
 # THIRD spelling, bare `tests/*.sh` at depth 1, and the ten suites it exposed were

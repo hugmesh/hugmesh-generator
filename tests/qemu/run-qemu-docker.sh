@@ -150,6 +150,7 @@ IDENTITIES=""                  # the planner's identity file
 # docker network, and the operator's live stack has networks of its own.
 MESH_NAME_PREFIX="hugmesh-qemu-mesh-"
 MESH_NET_NAME=""               # resolved from the session hash at start time
+MESH_RENDEZVOUS_REL=""         # <work>-relative mesh-client rendezvous, set at fleet start
 # Extra wheel logins to add to the guest payload. Empty by default so a run with
 # no --extra-user forwards nothing and the payload stays exactly what it is today.
 EXTRA_USERS=()
@@ -1916,6 +1917,20 @@ platform_rank() {
         *)              echo 1 ;;
     esac
 }
+# row_rank PLATFORM ROLE — the sort key. Without --mesh-net it IS platform_rank, so
+# every other run orders exactly as before. On a shared L2 the control roles (the
+# ones that run headscale) go FIRST within their platform: the other rows wait for
+# the control node's mesh key before they can even write their KEYS stick, and the
+# role-name sort used to put pki LAST (backend < frontend < pki).
+row_rank() {
+    local pr
+    pr="$(platform_rank "$1")"
+    if [ -z "${MESH_NET}" ]; then echo "${pr}"; return 0; fi
+    case "$(hugmesh_role_canonicalize "$2" 2>/dev/null || printf '%s' "$2")" in
+        pki|generic|omnibus) echo $((pr * 10)) ;;
+        *)                   echo $((pr * 10 + 1)) ;;
+    esac
+}
 
 # row_matches_filters PLATFORM ROLE — every row filter in one place. --only
 # stays a SUBSTRING on the label (the human spelling); --only-exact is full
@@ -1935,7 +1950,7 @@ ROWS=()
 while IFS=$'\t' read -r platform role env img; do
     [ -n "${platform}" ] || continue
     row_matches_filters "${platform}" "${role}" || continue
-    ROWS+=("$(platform_rank "${platform}")|${platform}|${role}|${env}|${img}")
+    ROWS+=("$(row_rank "${platform}" "${role}")|${platform}|${role}|${env}|${img}")
 done < <(discover_rows | collapse_rows)
 
 [ "${#ROWS[@]}" -gt 0 ] || die "no runnable rows found in ${ARTIFACTS} (filters: platform='${PLATFORM_FILTER}' role='${ROLE_FILTER}' only='${ONLY}' only-exact='${ONLY_EXACT}')"
@@ -2264,6 +2279,19 @@ start_device_row() {
                    -e MESH_MAC="${mesh_mac}"
                    -e MESH_IP="${mesh_ip}"
                    -e MESH_PREFIX_LEN="${mesh_plen}")
+        # The fleet's mesh-client rendezvous (docker-entrypoint.sh MESH_RENDEZVOUS):
+        # one directory per shared L2, so a worker started on its own later (a
+        # per-device Start) still finds the RUNNING control node's key. A control
+        # row starting clears what is there first: its headscale database is new
+        # (the overlay is throwaway), so an earlier key would be refused, and rows
+        # after it must wait for the fresh one instead of reading the stale one.
+        if [ -n "${MESH_RENDEZVOUS_REL}" ]; then
+            case "$(hugmesh_role_canonicalize "${role}" 2>/dev/null || printf '%s' "${role}")" in
+                pki|generic|omnibus)
+                    rm -f "${WORK}/${MESH_RENDEZVOUS_REL}/authkey" "${WORK}/${MESH_RENDEZVOUS_REL}/login_server" 2>/dev/null || true ;;
+            esac
+            mesh_args+=(-e MESH_RENDEZVOUS="/work/${MESH_RENDEZVOUS_REL}")
+        fi
     fi
 
     while IFS= read -r port; do
@@ -2565,6 +2593,10 @@ if ${KEEP_ALIVE}; then
         mesh_network_ensure "${MESH_NET_NAME}" \
             || die "could not create the shared mesh network ${MESH_NET_NAME} — the devices would have no L2 to meet on"
         info "mesh L2: docker bridge ${MESH_NET_NAME} carrying qemu socket netdev ${MESH_NET}; identities from ${IDENTITIES}"
+        MESH_RENDEZVOUS_REL="mesh/${MESH_NET_NAME}"
+        mkdir -p "${WORK}/${MESH_RENDEZVOUS_REL}" && chmod 0700 "${WORK}/${MESH_RENDEZVOUS_REL}" \
+            || die "could not create the mesh-client rendezvous ${WORK}/${MESH_RENDEZVOUS_REL}"
+        info "mesh client: control rows publish a reusable preauth key in ${WORK}/${MESH_RENDEZVOUS_REL}; the other rows wait for it and join that tailnet"
     fi
     if [ "${JOBS}" -gt 0 ]; then
         info "boot admission: at most ${JOBS} device(s) mid-boot at once — a row admits the next when its registry record appears, or after ${ADMIT_STAGGER}s (--jobs 0 for the old ungated all-at-once fan-out)"

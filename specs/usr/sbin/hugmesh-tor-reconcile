@@ -188,6 +188,17 @@ fi
 chown "${TOR_USER}:${TOR_USER}" "${_owned[@]}" 2>/dev/null || true
 chmod 0700 "${_owned[@]}" 2>/dev/null || true
 chmod 0700 "${R}${EXPORT_DIR}" 2>/dev/null || true
+# The PARENT of every directory above, at net-vpn/tor's own `fowners tor:tor` +
+# `fperms 750`. Tor setuids to ${TOR_USER} BEFORE it checks its DataDirectory, so a
+# root:root 0750 /var/lib/tor makes `tor --verify-config` (the candidate check
+# below, and OpenRC's checkconfig) fail with "Couldn't access private data
+# directory" — the reconcile then keeps the stock torrc and tor never starts.
+# Every ARM image shipped exactly that until 2026-11-04: its stage4 tarball forced
+# every owner to root (hmr_pack_owner_args in scripts/_builder-resume-lib.sh).
+# Re-asserted on every run so an image packed that way still converges.
+mkdir -p "${R}$(dirname "${DATA_DIR}")" 2>/dev/null || true
+chown "${TOR_USER}:${TOR_USER}" "${R}$(dirname "${DATA_DIR}")" 2>/dev/null || true
+chmod 0750 "${R}$(dirname "${DATA_DIR}")" 2>/dev/null || true
 
 # 2) Render the managed torrc to a CANDIDATE, verify it, install only if it differs.
 _cand="$(mktemp "${R}${TORRC}.hugmesh.XXXXXX" 2>/dev/null)" || {

@@ -91,7 +91,9 @@ source "${SCRIPT_DIR}/scripts/_shared-assets-lib.sh"
 # with `aarch64-unknown-linux-gnu-gcc -print-sysroot` on the host and in the
 # builder image), never against ${SYSROOT}, whose stripped *.a files are
 # therefore never on the link path; and its image is filled from a tarball
-# forced to --owner=0 --group=0, so a user-owned sysroot cannot leak into it.
+# packed by hmr_pack_owner_args, which forces every owner to root on a sysroot
+# that is not root-owned at its top and maps every uid/gid the target does not
+# define to root otherwise, so a user-owned sysroot cannot leak into it.
 # shellcheck source=scripts/_builder-resume-lib.sh
 source "${SCRIPT_DIR}/scripts/_builder-resume-lib.sh"
 # Signed-kernel artifact cache (G4): a cross-compiled kernel + module tree + DTBs is
@@ -4835,17 +4837,23 @@ banner "Packaging stage4 tarball"
 
 STAGE4_TARBALL="${WORK_DIR}/${BRAND}-${BOARD}-arm64-${ROLE}-${ENV}-${BUILD_TS}.stage4.tar.xz"
 
-# Force root ownership in the archive (--owner/--group=0): a non-root build owns
-# the sysroot as the build user, but the installed system must be root-owned.
+# Owners in the archive: the TARGET's own accounts are preserved (tor:tor
+# /var/lib/tor, portage, shadow, ...) and any uid/gid the target does not define
+# (a build user) is mapped to root; a build system that is not root-owned at its
+# top falls back to forcing everything to root:root. hmr_pack_owner_args in
+# scripts/_builder-resume-lib.sh has the measurement behind this — the old
+# unconditional owner-0 flatten shipped a root:root /var/lib/tor that tor
+# refuses, so tor never started on a tor-selected node.
+hmr_pack_owner_args "${SYSROOT}"
 tar -C "${SYSROOT}" \
     --xattrs-include='*.*' \
-    --numeric-owner --owner=0 --group=0 \
+    "${HMR_PACK_OWNER_ARGS[@]}" \
     --exclude='./usr/src' \
     --exclude='./var/cache' \
     --exclude='./tmp/*' \
     -cJf "${STAGE4_TARBALL}" . 2>/dev/null || \
 tar -C "${SYSROOT}" \
-    --numeric-owner --owner=0 --group=0 \
+    "${HMR_PACK_OWNER_ARGS[@]}" \
     --exclude='./usr/src' \
     --exclude='./var/cache' \
     --exclude='./tmp/*' \

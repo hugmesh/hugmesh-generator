@@ -75,6 +75,101 @@ hmr_owner_gate() {
     return 0
 }
 
+# ── 1b. The owners a stage4 TARBALL carries ───────────────────────────────────
+# hmr_pack_owner_args <sysroot> — sets the array HMR_PACK_OWNER_ARGS to the owner
+# flags of the `tar -c` that packs <sysroot> into the stage4 tarball. Every ARM
+# builder fills its .img / installer / live medium FROM that tarball.
+#
+# WHY (2026-11-04). The ARM builders packed with `--numeric-owner --owner=0
+# --group=0`, which rewrites EVERY member to root:root. The sysroot itself was
+# right — measured on the 2026-10-31 rpi5 pki build system: /var/lib/tor 43:43
+# 0750, as net-vpn/tor's `fowners tor:tor /var/lib/tor` asks — but all 49,958
+# members of its stage4 tarball, and so every file of the .img, were 0/0. Tor
+# then refuses its own DataDirectory: the daemon setuids to `tor` and cannot
+# traverse a root:root 0750 /var/lib/tor, so `tor --verify-config` fails, the
+# reconcile keeps the stock torrc and OpenRC's checkconfig stops tor on every
+# boot (reproduced with the image's own tor binary under qemu-user, both ways).
+# The same rewrite drops every other package owner (portage, shadow, cron,
+# utmp, mail, the stage3's own non-root entries listed above).
+#
+# The flatten existed for a reason this function keeps: a build system that was
+# handed to the invoking user (reason 2 at the top of this file) must not leak
+# that user's uid into an image. So:
+#   * hmr_owner_gate fails (the tree's top directories are not root's: it was
+#     chown -R'd) -> the old flatten, unchanged, and a warning. Such a tree has
+#     lost the information needed to do better (see hmr_owner_gate).
+#   * otherwise -> --numeric-owner, preserving every owner the TARGET defines,
+#     plus --owner-map / --group-map sending every uid / gid the target's own
+#     etc/passwd / etc/group does NOT define to root:0. A stray build-user file
+#     therefore still lands root-owned, exactly as before, while tor:tor stays
+#     tor:tor. (--numeric-owner also leaves uname/gname empty, so the installers'
+#     plain `tar -x` as root restores the uid, never a same-named host account.)
+# The map files live in a fresh mktemp -d (never the user-writable build root —
+# a planted symlink there would be followed by a root `>`); HMR_PACK_MAP_DIR
+# names it. The census walks the WHOLE sysroot (no -xdev), so it sees every
+# member tar will archive; mapping an id tar then excludes is harmless.
+HMR_PACK_OWNER_ARGS=()
+HMR_PACK_MAP_DIR=""
+hmr_pack_owner_args() {
+    local sysroot="${1:?sysroot}"
+    local um gm nu ng kept census members
+    sysroot="${sysroot%/}"
+    HMR_PACK_OWNER_ARGS=(--numeric-owner --owner=0 --group=0)
+    HMR_PACK_MAP_DIR=""
+    if ! hmr_owner_gate "${sysroot}" >/dev/null 2>&1; then
+        _hmr_warn "stage4 ownership: ${sysroot} is not root-owned at its top (a chown -R'd build system), so every packed file is forced to root:root — package owners such as tor:tor /var/lib/tor are LOST and tor will not start; rebuild WITHOUT --resume as root"
+        return 0
+    fi
+    if [ ! -r "${sysroot}/etc/passwd" ] || [ ! -r "${sysroot}/etc/group" ]; then
+        _hmr_warn "stage4 ownership: ${sysroot}/etc/passwd or etc/group is unreadable, so the target's accounts are unknown — forcing every packed file to root:root"
+        return 0
+    fi
+    HMR_PACK_MAP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/hmr-pack.XXXXXX")" || {
+        HMR_PACK_MAP_DIR=""
+        _hmr_warn "stage4 ownership: mktemp -d failed — forcing every packed file to root:root"
+        return 0
+    }
+    um="${HMR_PACK_MAP_DIR}/owner-map"
+    gm="${HMR_PACK_MAP_DIR}/group-map"
+    # The census: one "uid gid" line per member, via `find -exec stat` because
+    # busybox find (the CI job's) has neither -printf nor -uid. One awk pass reads
+    # the target's defined ids (passwd/group field 3) and turns every census id the
+    # target does not define into a "+ID root:0" map line; it prints
+    # "<members> <non-root-owned members>" for the checks and the log below.
+    census="$({ find "${sysroot}" \( -path "${sysroot}/proc" -o -path "${sysroot}/sys" -o -path "${sysroot}/dev" \) -prune \
+                  -o -exec stat -c '%u %g' {} + 2>/dev/null || true; } \
+      | awk -v pw="${sysroot}/etc/passwd" -v gr="${sysroot}/etc/group" -v um="${um}" -v gm="${gm}" '
+          BEGIN {
+            while ((getline l < pw) > 0) { split(l, f, ":"); if (f[3] ~ /^[0-9]+$/) U[f[3]] = 1 }
+            while ((getline l < gr) > 0) { split(l, f, ":"); if (f[3] ~ /^[0-9]+$/) G[f[3]] = 1 }
+            printf "" > um; printf "" > gm
+          }
+          $1 ~ /^[0-9]+$/ && $2 ~ /^[0-9]+$/ {
+            n++; if ($1 != 0 || $2 != 0) k++
+            if (!($1 in U) && !($1 in SU)) { SU[$1] = 1; print "+" $1 " root:0" > um }
+            if (!($2 in G) && !($2 in SG)) { SG[$2] = 1; print "+" $2 " root:0" > gm }
+          }
+          END { close(um); close(gm); print n + 0, k + 0 }')"
+    members="${census%% *}"
+    kept="${census##* }"
+    # FAIL CLOSED: a census that read nothing (find or stat missing, a tree tar
+    # cannot see either) must not be mistaken for "no foreign ids" — that would
+    # preserve a build user's uid. Fall back to the flatten.
+    case "${members}" in ''|0|*[!0-9]*)
+        _hmr_warn "stage4 ownership: could not take an owner census of ${sysroot} (find/stat produced nothing) — forcing every packed file to root:root"
+        return 0 ;;
+    esac
+    [ -f "${um}" ] || : > "${um}"
+    [ -f "${gm}" ] || : > "${gm}"
+    nu="$(wc -l < "${um}" | tr -d '[:space:]')"
+    ng="$(wc -l < "${gm}" | tr -d '[:space:]')"
+    HMR_PACK_OWNER_ARGS=(--numeric-owner)
+    if [ "${nu}" -gt 0 ]; then HMR_PACK_OWNER_ARGS+=("--owner-map=${um}"); fi
+    if [ "${ng}" -gt 0 ]; then HMR_PACK_OWNER_ARGS+=("--group-map=${gm}"); fi
+    _hmr_info "stage4 ownership: preserving the target's package owners (${kept} of ${members} entries are not root:root); ${nu} uid(s) / ${ng} gid(s) the target does not define are mapped to root"
+    return 0
+}
+
 # ── 2. Which seed a build system came from ────────────────────────────────────
 # The marker lives BESIDE the sysroot (<build root>/sysroot.seed), never inside
 # it: nothing inside the sysroot survives the clean step or stays out of the

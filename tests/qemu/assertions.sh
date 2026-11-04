@@ -106,6 +106,17 @@ _hs_src=""
 # the only place the KEYS media is mounted.
 _slx_mode_want=""
 _slx_mode_src=""
+# Third consumer: what the manifest asked of the MESH CLIENT (2026-11-04).
+# provision_tailscale() DELETES tailscaled from the default runlevel when
+# .tailscale.enabled is not true, so the runlevel check in assert_role_topology and
+# the join checks in the mesh-client section must follow the manifest, not assume.
+# _ts_key says what the node could join WITH — never the key itself:
+#   authkey  the stick carries a non-empty tailscale auth key (joins someone's tailnet)
+#   preauth  the manifest declares headscale preauth keys (a control node self-joins)
+#   none     neither: tailscaled runs but there is nothing to join with
+_ts_want=unknown
+_ts_src=""
+_ts_key=none
 _hs_dev="$(blkid -L "${KEYS_LABEL:-KEYS}" 2>/dev/null || true)"
 if [ -n "${_hs_dev}" ] && command -v jq >/dev/null 2>&1; then
     _hs_mnt="$(mktemp -d 2>/dev/null || echo '')"
@@ -130,6 +141,19 @@ if [ -n "${_hs_dev}" ] && command -v jq >/dev/null 2>&1; then
             # yields the mode provisioning actually applied.
             _slx_mode_want="$(jq -r '.selinux.mode // "permissive"' "${_hs_m}" 2>/dev/null)"
             [ -n "${_slx_mode_want}" ] && [ "${_slx_mode_want}" != "null" ] && _slx_mode_src="KEYS manifest"
+            # provision_tailscale(): `jqm '.tailscale.enabled // false'` != "true" => off.
+            case "$(jq -r '.tailscale.enabled | tostring' "${_hs_m}" 2>/dev/null)" in
+                true) _ts_want=true;  _ts_src="KEYS manifest" ;;
+                *)    _ts_want=false; _ts_src="KEYS manifest" ;;
+            esac
+            _ts_akf="$(jq -r '.tailscale.authkey_file // "tailscale/authkey"' "${_hs_m}" 2>/dev/null)"
+            case "${_ts_akf}" in /*|*..*) _ts_akf="" ;; esac
+            if [ -n "${_ts_akf}" ] && [ -s "$(dirname "${_hs_m}")/${_ts_akf}" ]; then
+                _ts_key=authkey
+            elif [ "$(jq -r '(.headscale.preauthkeys // []) | length' "${_hs_m}" 2>/dev/null)" -gt 0 ] 2>/dev/null \
+                 && [ "${_hs_want}" = true ]; then
+                _ts_key=preauth
+            fi
             break
         done
         umount "${_hs_mnt}" 2>/dev/null || true
@@ -143,6 +167,13 @@ if [ "${_hs_want}" = unknown ] && [ -f /var/log/keys-provision.log ]; then
         "")                                 ;;
         *"headscale disabled in manifest"*) _hs_want=false; _hs_src="provision-log manifest decision" ;;
         *)                                  _hs_want=true;  _hs_src="provision-log manifest decision" ;;
+    esac
+fi
+if [ "${_ts_want}" = unknown ] && [ -f /var/log/keys-provision.log ]; then
+    case "$(grep -aE 'tailscale disabled in manifest|tailscale up (succeeded|failed)|Using locally-minted headscale preauth key' /var/log/keys-provision.log 2>/dev/null | tail -1)" in
+        "")                                  ;;
+        *"tailscale disabled in manifest"*)  _ts_want=false; _ts_src="provision-log manifest decision" ;;
+        *)                                   _ts_want=true;  _ts_src="provision-log manifest decision" ;;
     esac
 fi
 if [ "${_hs_want}" = true ]; then
@@ -343,6 +374,11 @@ assert_role_topology() {  # $1 = root prefix ("" on the live guest; a fixture ro
         fi
     elif [ ! -e "${_R}/usr/sbin/tailscaled" ]; then
         skip "role ${_role}: tailscaled — no /usr/sbin/tailscaled in this image, so no mesh client was built into it (--skip-mesh / --skip-tailscale); NOT evidence the mesh posture is right"
+    elif [ "${_ts_want:-unknown}" = false ]; then
+        # provision_tailscale() rc-update del's tailscaled when the manifest says
+        # .tailscale.enabled != true — by design. The build-time link can no longer be
+        # seen from here, so this is neither a pass nor a defect.
+        skip "role ${_role}: tailscaled unlinked by keys-provision because the ${_ts_src:-KEYS manifest} set tailscale.enabled=false (provision_tailscale, by design); NOT evidence the image wired it"
     else
         bad "role ${_role}: /usr/sbin/tailscaled is installed but tailscaled is MISSING from the default runlevel — a mesh client that never starts"
     fi
@@ -446,6 +482,68 @@ assert_role_topology() {  # $1 = root prefix ("" on the live guest; a fixture ro
 }
 
 assert_role_topology ""
+
+echo "-- mesh client (tailscale) --"
+# The emulated mesh has to FORM, not merely have tailscaled scheduled: a control node
+# self-joins its own headscale with the preauth key keys-provision minted, and a
+# fleet worker joins the control node's tailnet with the key on its stick and must
+# reach a peer over it. Graded against what the manifest asked (_ts_want/_ts_key).
+# A function with a root prefix (only the binary probe uses it) so
+# tests/qemu/mesh_client_test.sh drives it against fixtures with tailscale,
+# rc-service and sleep stubbed on PATH, the assert_tor_node_contract pattern.
+assert_mesh_client() {  # $1 = root prefix ("" on the live guest)
+    local _R _ts_state _ts_i _ts_ip _ts_peer _ts_pip
+    _R="${1-}"
+    if [ ! -x "${_R}/usr/sbin/tailscaled" ]; then
+        skip "mesh client — no /usr/sbin/tailscaled in this image (no mesh client was built in)"
+    elif [ "${_ts_want}" != true ]; then
+        skip "mesh client — not asked for (tailscale.enabled=${_ts_want}, ${_ts_src:-no source})"
+    else
+        if rc-service tailscaled status >/dev/null 2>&1; then
+            ok "tailscaled service started (asked for by ${_ts_src})"
+        else
+            bad "tailscaled service NOT started although ${_ts_src} asked for the mesh client"
+        fi
+        if [ "${_ts_key}" = none ]; then
+            skip "mesh join — the KEYS stick carries no auth key and declares no preauth key, so tailscaled runs with nothing to join (a worker emulated without its control node)"
+        else
+            _ts_state=""
+            for _ts_i in 1 2 3 4 5 6 7 8 9 10 11 12; do
+                _ts_state="$(tailscale status --json 2>/dev/null | jq -r '.BackendState // ""' 2>/dev/null)"
+                [ "${_ts_state}" = Running ] && break
+                sleep 5
+            done
+            if [ "${_ts_state}" = Running ]; then
+                ok "mesh join — tailscale is Running on the tailnet (${_ts_key} key)"
+            else
+                bad "mesh join — tailscale BackendState is '${_ts_state:-none}', not Running, with a ${_ts_key} key on the stick (see /var/log/keys-provision.log: 'tailscale up')"
+            fi
+            _ts_ip="$(tailscale ip -4 2>/dev/null | head -1)"
+            if [[ "${_ts_ip}" =~ ^100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\.[0-9]+\.[0-9]+$ ]]; then
+                ok "mesh join — this node holds tailnet address ${_ts_ip}"
+            else
+                bad "mesh join — no tailnet (100.64.0.0/10) address ('${_ts_ip}')"
+            fi
+            _ts_peer="$(tailscale status --json 2>/dev/null \
+                | jq -r '[(.Peer // {})[] | select((.TailscaleIPs // []) | length > 0)] | .[0] | if . == null then "" else "\(.HostName) \(.TailscaleIPs[0])" end' 2>/dev/null)"
+            if [ -z "${_ts_peer}" ]; then
+                if [ "${_ts_key}" = authkey ]; then
+                    bad "mesh peers — joined with a fleet key but sees NO peer: the control node it joined is not in its netmap"
+                else
+                    skip "mesh peers — none yet (a control node asserts before its fleet's workers join)"
+                fi
+            else
+                _ts_pip="${_ts_peer##* }"
+                if tailscale ping -c 10 --timeout 5s "${_ts_pip}" 2>&1 | grep 'pong from' >/dev/null; then
+                    ok "mesh peers — reaches ${_ts_peer% *} (${_ts_pip}) over the mesh client (tailscale ping: pong)"
+                else
+                    bad "mesh peers — ${_ts_peer% *} (${_ts_pip}) is in the netmap but does not answer tailscale ping"
+                fi
+            fi
+        fi
+    fi
+}
+assert_mesh_client ""
 
 # ── TOR NODE CONTRACT (hugmesh-generator#583, decision 70 = B on #347) ──────────
 # One tor selection on a cluster-node role produces FOUR artefacts together, from one
