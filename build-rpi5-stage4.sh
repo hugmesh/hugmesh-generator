@@ -4833,6 +4833,26 @@ slx_stage_node_policy "${SYSROOT}" "${SHARED_SPECS}" \
     || { err "SELinux node-policy staging failed (see above) — refusing to ship an image whose policy modules did not build."; exit 1; }
 # ── END shared block: SELinux node-policy modules ─────────────────────────────
 
+# ── NetworkManager: wait for the link before handing over `net` (cluster nodes) ──
+# Written HERE, after every emerge, so net-misc/networkmanager's own conf.d (which
+# ships INACTIVE_TIMEOUT=1) cannot overwrite it. With a 1s `nm-online` window a slow
+# boot (an emulated TCG node; a loaded or cold board) marks NetworkManager INACTIVE,
+# and the dispatcher hook that should flip it to started later did not (observed on
+# the 2026-11-04 QEMU rpi5 runs: nmcli `connected/full`, OpenRC still `inactive`
+# minutes later). Every `need net` service — containerd, kubelet, the host-firewall
+# reconcile, hugmesh-tor-reconcile — then silently never starts that boot. A cluster
+# node is useless without its network, so it waits for it; a client desktop keeps
+# the stock 1s (an offline laptop must not stall its boot).
+if ! ${ROLE_CLIENT}; then
+    mkdir -p "${SYSROOT}/etc/conf.d"
+    printf '%s\n' \
+        '# Written by the HugMesh builder (cluster-node roles): wait up to 60s for a' \
+        '# connection before marking NetworkManager started, so every `need net` service' \
+        '# (containerd, kubelet, the host firewall, tor) starts on a slow boot too.' \
+        'INACTIVE_TIMEOUT=60' > "${SYSROOT}/etc/conf.d/NetworkManager"
+    info "NetworkManager: INACTIVE_TIMEOUT=60 (cluster node — need-net services wait for the link)"
+fi
+
 banner "Packaging stage4 tarball"
 
 STAGE4_TARBALL="${WORK_DIR}/${BRAND}-${BOARD}-arm64-${ROLE}-${ENV}-${BUILD_TS}.stage4.tar.xz"

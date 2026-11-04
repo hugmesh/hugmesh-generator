@@ -187,6 +187,23 @@ else
     skip "headscale port :8080 — INTENT UNVERIFIED (see above)"
 fi
 
+echo "-- network --"
+# NetworkManager PROVIDES `net`. Left `inactive` (nm-online gave up inside
+# INACTIVE_TIMEOUT and the dispatcher never flipped it), OpenRC defers EVERY
+# `need net` service for the whole boot — containerd, kubelet, the host-firewall
+# reconcile, hugmesh-tor-reconcile — while nmcli itself reports the link up. Seen
+# on the 2026-11-04 QEMU rpi5 runs; the builders now give cluster nodes 60s.
+if [ -e /etc/runlevels/default/NetworkManager ] || [ -L /etc/runlevels/default/NetworkManager ]; then
+    _nm_st="$(rc-service NetworkManager status 2>&1)"
+    case "${_nm_st}" in
+        *started*)  ok "NetworkManager service is started (provides net to every need-net service)" ;;
+        *inactive*) bad "NetworkManager is INACTIVE although it is running — every need-net service (containerd, kubelet, host firewall, tor) was deferred this boot ($(nmcli -t -f STATE general 2>/dev/null | head -1))" ;;
+        *)          bad "NetworkManager service is not started ('${_nm_st}')" ;;
+    esac
+else
+    skip "NetworkManager — not in the default runlevel"
+fi
+
 echo "-- kubernetes stack --"
 check "containerd present"                         'command -v containerd'
 check "kubelet present"                            'command -v kubelet'

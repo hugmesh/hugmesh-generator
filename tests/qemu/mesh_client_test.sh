@@ -308,6 +308,32 @@ prov provision_tailscale "$(printf '%s' "${TSM}" | jq -c '.tailscale.up_args="--
 [ "$(grep '^tailscale up ' "${CALLS}" | grep -o -- '--timeout' | wc -l)" -eq 1 ] \
     && _ok "E4 an explicit --timeout in up_args wins (no second --timeout)" || _bad "E4 duplicate timeout: $(grep '^tailscale up ' "${CALLS}")"
 
+# ═══════ F. NetworkManager must hand over `net` on a slow boot (cluster nodes) ═══════
+echo "══ F. NetworkManager INACTIVE_TIMEOUT (builders) + the in-guest NM grade ══"
+for b in build-rpi5-stage4.sh build-x86-host-stage4.sh; do
+    f="${REPO}/${b}"
+    n_w="$(grep -n -F "'INACTIVE_TIMEOUT=60' > \"\${SYSROOT}/etc/conf.d/NetworkManager\"" "${f}" | head -1 | cut -d: -f1)"
+    # the LAST emerge command line of the builder (cross or native chroot)
+    n_e="$(grep -n -E '^[[:space:]]*(if ! )?(cross_emerge|emerge) --' "${f}" | tail -1 | cut -d: -f1)"
+    n_p="$(grep -n -F 'banner "Packaging stage4 tarball"' "${f}" | cut -d: -f1)"
+    n_g="$(awk -v w="${n_w:-0}" 'NR<w && /^if ! \$\{ROLE_CLIENT\}; then$/ {l=NR} END{print l+0}' "${f}")"
+    if [ -n "${n_w}" ] && [ -n "${n_p}" ] && [ "${n_w}" -lt "${n_p}" ] && [ "${n_w}" -gt "${n_e:-0}" ] && [ "${n_g}" -gt 0 ] && [ $((n_w - n_g)) -le 8 ]; then
+        _ok "F1 ${b}: cluster nodes get INACTIVE_TIMEOUT=60, written after the payload emerge (line ${n_w} > ${n_e:-?}) and before packaging"
+    else
+        _bad "F1 ${b}: NetworkManager conf.d write missing, before the emerge that would overwrite it, or not cluster-gated (write ${n_w:-none}, emerge ${n_e:-none}, pack ${n_p:-none}, gate ${n_g})"
+    fi
+done
+NLIB="${WORK}/nm.sh"
+head -4 "${LIB}" > "${NLIB}"
+sed -n '/^echo "-- network --"$/,/^echo "-- kubernetes stack --"$/p' "${ASSERT}" | sed '$d' \
+    | sed 's|/etc/runlevels/default/NetworkManager|${FIXTURE_ROOT}/etc/runlevels/default/NetworkManager|g' >> "${NLIB}"
+grep -F 'NetworkManager is INACTIVE' "${NLIB}" >/dev/null || { echo "could not extract the network section" >&2; exit 2; }
+mkdir -p "${FX}/etc/runlevels/default"; ln -sf /etc/init.d/NetworkManager "${FX}/etc/runlevels/default/NetworkManager"
+printf '#!/bin/bash\necho " * status: ${NM_STATE}"\n' > "${STUB}/rc-service"; printf '#!/bin/bash\necho connected\n' > "${STUB}/nmcli"; chmod +x "${STUB}/rc-service" "${STUB}/nmcli"
+nmgrade() { FIXTURE_ROOT="${FX}" NM_STATE="$1" PATH="${STUB}:${PATH}" bash -c 'set -u; . "$1"' _ "${NLIB}" 2>&1; }
+nmgrade started | grep -F 'PASS  NetworkManager service is started' >/dev/null && _ok "F2 NM started -> PASS" || _bad "F2 NM started: $(nmgrade started)"
+nmgrade inactive | grep -F 'FAIL  NetworkManager is INACTIVE' >/dev/null && _ok "F2 NM inactive (the silent need-net cascade) -> FAIL" || _bad "F2 NM inactive: $(nmgrade inactive)"
+
 echo
 echo "== RESULT: ${PASS} passed, ${FAIL} failed =="
 [ "${FAIL}" -eq 0 ]
