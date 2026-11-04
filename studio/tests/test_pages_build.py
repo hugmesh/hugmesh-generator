@@ -673,7 +673,10 @@ def test_build_secure_boot_key_paths_persist_to_saved_configs(wiz, tmp_path):
     build._preview()
     path = tmp_path / "cfg.json"
     warnings = wiz.cfg.save(str(path))
-    assert warnings == []
+    # The standalone walk typed a login password (HomePage requires one), and a
+    # password is exactly what is NOT persisted: that warning is expected. Nothing
+    # about the key PATH may warn.
+    assert [w for w in warnings if not w.startswith("local-pass was NOT saved")] == []
     from hugmesh_studio.core.config import ImageConfig
     assert ImageConfig.load(str(path)).secureboot_key == "/media/KEYS/Keys/kernel_key.pem"
 
