@@ -26,7 +26,7 @@ from collections.abc import Callable, Iterator
 
 from . import askpass, host_resources, platform_info, proc_text, resource_limits
 from . import secret_files, state_paths
-from .config import PLATFORM_FIELD_SUPPORT, ImageConfig, scope_violations
+from .config import PLATFORM_FIELD_SUPPORT, ImageConfig, scope_violations, unaffiliated_image
 from .platform_info import HostInfo, detect
 
 # Config fields holding a HOST path that the builder must be able to READ. Under the docker
@@ -57,6 +57,20 @@ DOCKER_ASSET_FIELDS: tuple[str, ...] = (
     "secureboot_key", "secureboot_cert", "keys_usb", "distdir",
 )
 
+# More host-path flags the docker backend must translate or mount, kept OUT of
+# DOCKER_ASSET_FIELDS because that list also derives _PATH_MUST_EXIST. These are emitted
+# under more conditions than the platform table knows (the brand args are dropped for an
+# unaffiliated image; home flags are x86-only), so a stale value riding a loaded, saved or
+# restarted config would false-block a build that never receives it. They are checked —
+# and mounted — only when this config's argv really carries them (_emitted_path_fields).
+# Operator session 20261031-104549 (docker backend) is why brand_profile is here: every
+# image died on "config file not found" for a brands/*.conf the native backend read fine.
+# Their /assets/<i>/ index continues after DOCKER_ASSET_FIELDS; append at the END.
+DOCKER_EXTRA_ASSET_FIELDS: tuple[str, ...] = (
+    "grub_theme", "brand_profile", "home_seed_code_from", "include_home_archive",
+    "seed_packages_from",
+)
+
 # Path-valued fields that must EXIST on the host or the build is stopped BEFORE dispatch.
 # Derived from DOCKER_ASSET_FIELDS because the two lists are siblings and drifted together:
 # the same four fields were missing from BOTH, so a mistyped signing key was neither mounted
@@ -71,6 +85,49 @@ _PATH_MUST_EXIST: tuple[str, ...] = tuple(
 _PATH_ADVISORY: tuple[str, ...] = ("distdir",)
 # Labels that are NOT just the field name kebab-cased (which is also the flag spelling).
 _PATH_LABELS: dict[str, str] = {"keyzip": "key-zip"}
+# The builder flag each path field rides; the kebab-cased field name unless listed.
+_PATH_FLAG_OVERRIDES: dict[str, str] = {"brand_profile": "--config"}
+
+
+def _path_flag(field: str) -> str:
+    return _PATH_FLAG_OVERRIDES.get(field, "--" + field.replace("_", "-"))
+
+
+def _emitted_path_fields(cfg: ImageConfig) -> set[str] | None:
+    """The path fields this config's builder argv REALLY carries — the flag followed by
+    the field's own value — read from ``to_cli_args()`` itself, so no second copy of the
+    emission rules (unaffiliated drops the brand args, ARM never gets the x86 flags, ...)
+    can drift from the one that builds the argv. ``extra_flags`` is blanked first: a
+    hand-typed flag there is the operator's own and is never rewritten. None when the
+    config's argv cannot be built at all (preflight reports that separately)."""
+    import copy
+    try:
+        probe = copy.copy(cfg)
+        probe.extra_flags = ""
+        argv = probe.to_cli_args()
+    except Exception:  # noqa: BLE001 — "cannot tell" is the answer, not a crash
+        return None
+    out: set[str] = set()
+    for field in DOCKER_ASSET_FIELDS + DOCKER_EXTRA_ASSET_FIELDS:
+        val = getattr(cfg, field, "")
+        flag = _path_flag(field)
+        if val and any(argv[k] == flag and argv[k + 1] == val
+                       for k in range(len(argv) - 1)):
+            out.add(field)
+    return out
+
+
+def _path_emitted(field: str, cfg: ImageConfig, emitted: set[str] | None) -> bool:
+    """Does the builder receive ``field`` for this cfg? keyzip is host-side, so always.
+    When the argv could not be built, fall back to the platform table plus the one rule
+    it cannot express (an unaffiliated image never gets --config)."""
+    if field == "keyzip":
+        return True
+    if emitted is not None:
+        return field in emitted
+    if field == "brand_profile" and unaffiliated_image(cfg):
+        return False
+    return _path_field_emitted(field, cfg)
 
 
 def _path_label(field: str) -> str:
@@ -512,23 +569,73 @@ class BuildDriver:
         host = os.path.abspath(self.shared_assets or shared_assets_root(out))
         return ["-v", f"{host}:/shared"], ["--shared-assets", "/shared"]
 
+    def _host_path(self, p: str) -> str:
+        """Where a path field's value points ON THE HOST. A relative value means relative
+        to the generator checkout — the cwd every build runs in (native ``cwd=``, docker
+        ``-w /src``) — never the Studio process's own cwd, which under a desktop launcher
+        is usually $HOME. Typed ``brands/example.conf`` is the case this exists for."""
+        return os.path.normpath(p if os.path.isabs(p) else os.path.join(self.generator_dir, p))
+
+    def _docker_path(self, value: str, index: int) -> tuple[list[str], str | None]:
+        """One host path value -> (extra docker args, its in-container value), or
+        ``([], None)`` when it must be left exactly as it is.
+
+        Decided on the REAL path (symlinks resolved on both sides, case-folded where the
+        OS folds case): a link that lives in the checkout but points outside it is under
+        /src by spelling only and would dangle in the container, so it is mounted like
+        any other outside path. "Inside" needs the separator: a sibling such as
+        ``hugmesh-generator-sibling/`` shares the checkout's name as a prefix and is not
+        under it.
+
+          * inside the checkout -> ``/src/<relative path>``; the repo is already mounted.
+          * outside, and present -> bind-mounted read-only at ``/assets/<i>/<basename>``
+            (the basename the operator gave, so a theme dir keeps its name).
+          * outside, and missing -> left alone. ``docker run -v`` would CREATE the
+            missing source as an empty root-owned directory on the host; the builder's
+            own guard reports the bad path instead (and preflight already blocks one
+            that must exist)."""
+        host = self._host_path(value)
+        real = os.path.realpath(host)
+        real_gen = os.path.realpath(self.generator_dir)
+        nc = os.path.normcase
+        if nc(real) == nc(real_gen) or nc(real).startswith(nc(real_gen.rstrip(os.sep)) + os.sep):
+            if not os.path.isabs(value) and nc(host) == nc(real):
+                # A plain relative spelling (no symlink on the way) already resolves
+                # under the container's -w /src; keep it, so the argv reads as typed.
+                return [], value.replace(os.sep, "/")
+            rel = os.path.relpath(real, real_gen)
+            return [], ("/src" if rel == os.curdir else "/src/" + rel.replace(os.sep, "/"))
+        if not os.path.exists(real):
+            return [], None
+        cpath = f"/assets/{index}/{os.path.basename(host.rstrip(os.sep))}"
+        return ["-v", f"{real}:{cpath}:ro"], cpath
+
     def _remap_assets_for_docker(self, cfg: ImageConfig) -> tuple[list[str], ImageConfig]:
         """Mount external asset paths into the container and return (mount-args, a config
-        whose asset flags point at the in-container paths)."""
+        whose asset flags point at the in-container paths).
+
+        Only a field this config's argv REALLY carries is touched (_emitted_path_fields):
+        a stale x86-only value on an ARM config, or a brand profile on an unaffiliated
+        image, is never emitted, so it is neither mounted nor rewritten. Each emitted one
+        goes through :meth:`_docker_path`.
+
+        The path under the checkout used to be left as the HOST path ("already under
+        /src, reachable"), which it is not — the container sees the repo at /src. That is
+        the "config file not found" every docker image of session 20261031-104549 died
+        on, for a brands/*.conf the native backend read fine."""
         import copy
         dcfg = copy.deepcopy(cfg)
         mounts: list[str] = []
-        gen = self.generator_dir + os.sep
-        for i, field in enumerate(DOCKER_ASSET_FIELDS):
+        emitted = _emitted_path_fields(cfg)
+        for i, field in enumerate(DOCKER_ASSET_FIELDS + DOCKER_EXTRA_ASSET_FIELDS):
             p = getattr(dcfg, field, "")
-            if not p:
+            if not p or not _path_emitted(field, cfg, emitted):
                 continue
-            ap = os.path.abspath(p)
-            if ap.startswith(gen):
-                continue  # already under /src, reachable in-container
-            cpath = f"/assets/{i}/{os.path.basename(ap.rstrip(os.sep))}"
-            mounts += ["-v", f"{ap}:{cpath}:ro"]
-            setattr(dcfg, field, cpath)
+            extra, cval = self._docker_path(p, i)
+            if cval is None:
+                continue
+            mounts += extra
+            setattr(dcfg, field, cval)
         return mounts, dcfg
 
     def command_string(self, cfg: ImageConfig, backend: str | None = None) -> str:
@@ -797,12 +904,14 @@ class BuildDriver:
             problems.append(
                 "Native build needs root and no elevation helper is available — install "
                 "sudo or pkexec (polkit), or run the Studio as root.")
-        for field in _PATH_MUST_EXIST:
+        emitted = _emitted_path_fields(cfg)
+        for field in _PATH_MUST_EXIST + DOCKER_EXTRA_ASSET_FIELDS:
             path = getattr(cfg, field, "")
             # Only a path the builder will actually RECEIVE can be a problem. Without this
             # gate a stale x86-only value (secureboot_key, wallpaper, ...) riding an ARM
-            # config would BLOCK a build over a flag that platform never emits.
-            if not path or not _path_field_emitted(field, cfg):
+            # config — or a stale brand profile on an unaffiliated image — would BLOCK a
+            # build over a flag that config never emits.
+            if not path or not _path_emitted(field, cfg, emitted):
                 continue
             # A vault-held selection satisfies the check even when the origin path is
             # GONE (the KEYS USB was unplugged): run() consumes the held in-memory
@@ -814,7 +923,7 @@ class BuildDriver:
                 held = secret_files.vault().get(field)
                 if held is not None and held.origin == path:
                     continue
-            if not os.path.exists(path):
+            if not os.path.exists(self._host_path(path)):
                 problems.append(f"{_path_label(field)} path does not exist: {path}")
         # Out-of-scope values the BUILDER ITSELF hard-errors on (today: rpi5 + --standalone
         # + a node role). Catching them here turns a post-dispatch dead-end into a second-0
@@ -875,9 +984,11 @@ class BuildDriver:
         # --config half: x86 + --standalone + a node role). Never blocked — the builder has
         # no such constraint and inventing one would be its own lie.
         out: list[str] = list(scope_violations(cfg)[1])
+        emitted = _emitted_path_fields(cfg)
         for field in _PATH_ADVISORY:
             path = getattr(cfg, field, "")
-            if path and _path_field_emitted(field, cfg) and not os.path.exists(path):
+            if (path and _path_emitted(field, cfg, emitted)
+                    and not os.path.exists(self._host_path(path))):
                 # Mirrors build-x86-host-stage4.sh's own --distdir warning: an unusable cache
                 # is silently dropped for the /media/* auto-detect scan. Correct artifact,
                 # just a full re-download — so it warns here rather than blocking.

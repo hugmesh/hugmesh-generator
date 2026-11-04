@@ -192,6 +192,12 @@ GITOPS_REPO_URL = "https://github.com/hugmesh/hugmesh-generator.git"
 #: The kind cluster bootstrap-kind.sh creates, and the name every probe below asks
 #: about. ONE reader of the override so a probe can never disagree with the verb.
 KIND_CLUSTER_DEFAULT = "hugmesh-local"
+#: scripts/kind-halt.sh's refusal for a cluster that ALREADY holds a completed halt
+#: record: its die() prints `REFUSED (exit <code>): <message>`, and this is the one
+#: exit-4 message `halt` emits (the other exit 4 belongs to `resume`). Pinned against
+#: the script's text by tests/test_devops_halt_already_halted.py.
+_KIND_HALT_ALREADY_HALTED = re.compile(
+    r"REFUSED \(exit 4\): cluster '[^'\n]*' is ALREADY halted")
 # Read-only seeded-stack probe (verified live 2026-08-14): seed-e2e.sh leg 1
 # creates org 'hugmesh' + persona e2e-admin, and Casdoor answers this GET
 # WITHOUT auth — data.name == "<user>" when seeded, data: null when not.
@@ -1814,9 +1820,33 @@ class LocalStackNode:
 
         The cluster, its PVCs, its Vault KV and its Casdoor identities are all KEPT.
         Streams, because it names every Application it suspends and the sync/health
-        state each was in when it froze — that list is the output's whole point."""
-        return self._make("kind-halt", timeout=900,
-                          on_line=on_line, cancel=cancel)
+        state each was in when it froze — that list is the output's whole point.
+
+        ALREADY HALTED IS THE GOAL, NOT A FAILURE. kind-halt.sh refuses (exit 4) when
+        the cluster already holds a COMPLETED halt record, and that refusal is right:
+        a second halt would file the zeroed cluster as its own 'before' and lose the
+        real replica counts. But the operator asked for a halted lane and has one, so
+        the Studio reports the run as done and says so, instead of filing it as
+        FAILED (operator log 20261030-060710). Only that exact refusal is mapped: an
+        INCOMPLETE record is finished by the script itself (exit 0), an unreadable
+        record is exit 5, and both of those stay what they are. The script's own
+        refusal is used rather than a separate status read first, because it is the
+        one answer taken atomically with the decision and it alone distinguishes a
+        completed record from an interrupted one."""
+        ok, msg = self._make("kind-halt", timeout=900,
+                             on_line=on_line, cancel=cancel)
+        if ok or (cancel is not None and cancel.is_set()):
+            return ok, msg
+        if not _KIND_HALT_ALREADY_HALTED.search(msg or ""):
+            return ok, msg
+        note = ("[devops] already halted — nothing to do. The lane holds a completed "
+                "halt record, so its workloads are already at 0 and ArgoCD auto-sync "
+                "is already suspended. The record was left untouched (it holds the "
+                "pre-halt replica counts). Resume DevOps lane undoes it; "
+                "`make kind-halt-status` shows what it froze.")
+        if on_line is not None:
+            on_line(note)
+        return True, f"{msg}\n{note}"
 
     def devops_resume(self, on_line=None, cancel=None) -> tuple[bool, str]:
         """`make kind-resume` — undo ``devops_halt``, restoring EXACTLY what it

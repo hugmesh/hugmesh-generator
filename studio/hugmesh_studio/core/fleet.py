@@ -569,6 +569,21 @@ class FleetDriver(BuildDriver):
             return ((["sudo"] if not self.host.is_root else [])
                     + env_wrap + ["bash", *inner])
         if backend == "docker":
+            # --config forwarded to every builder IN THE CONTAINER: the host spelling of
+            # a brands/*.conf does not exist there (the repo is at /src), which is the
+            # "config file not found" the single-image lane hit in session
+            # 20261031-104549. Same translation/mount rule as BuildDriver, same index.
+            asset_mounts: list[str] = []
+            if cfg.brand_profile:
+                import copy
+                idx = (build_driver.DOCKER_ASSET_FIELDS
+                       + build_driver.DOCKER_EXTRA_ASSET_FIELDS).index("brand_profile")
+                asset_mounts, cval = self._docker_path(cfg.brand_profile, idx)
+                if cval is not None:
+                    dcfg = copy.deepcopy(cfg)
+                    dcfg.brand_profile = cval
+                    inner = [f"./{FLEET_SCRIPT}", "-w", "/out", "-j", str(cfg.jobs),
+                             *dcfg.to_cli_args()]
             env_args: list[str] = []
             for k, v in penv.items():
                 env_args += ["-e", f"{k}={v}"]
@@ -582,6 +597,7 @@ class FleetDriver(BuildDriver):
                 *build_driver.docker_limit_args(),
                 "-v", f"{self.generator_dir}:/src",
                 "-v", f"{out}:/out",
+                *asset_mounts,
                 *env_args,
                 "-w", "/src", self.host.builder_image,
                 "bash", "-c", shlex.join(inner),

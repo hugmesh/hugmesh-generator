@@ -130,6 +130,19 @@ def _tail(msg: str, limit: int = 600) -> str:
     return msg if len(msg) <= limit else "…" + msg[-limit:]
 
 
+def _cancel_requested(cancel) -> bool:
+    """Has the operator pressed Cancel? ``cancel`` is None (not cancellable), the GUI's
+    ``threading.Event`` (read with ``is_set()``, the shape every verb receives), or a
+    zero-argument predicate. Never calls an Event: that was the
+    "'Event' object is not callable" crash at the end of a good bring-up."""
+    if cancel is None:
+        return False
+    is_set = getattr(cancel, "is_set", None)
+    if callable(is_set):
+        return bool(is_set())
+    return bool(cancel())
+
+
 def discover_brands(generator_dir: str) -> list[str]:
     """Brand slugs with a real shell profile at brands/<slug>.conf — the ONLY files
     gen-cluster-secrets.sh:36-38 and the builders ever source. DEFAULT_BRAND leads even
@@ -1935,11 +1948,17 @@ class LocalMeshBootstrap:
     def _await_onion(self, stack, note, cancel, timeout_s: int = 45) -> str:
         """Poll the stack for the published .onion URL, up to ``timeout_s`` (tor
         needs ~30s to bootstrap + upload the v3 descriptor). Returns the URL, or ""
-        if it has not appeared yet / was cancelled. Cancel-aware; 1s granularity."""
+        if it has not appeared yet / was cancelled. Cancel-aware; 1s granularity.
+
+        ``cancel`` is the GUI's ``threading.Event`` (gui/pages/localmesh.py ``_launch``),
+        the same handle LocalStackNode._make reads with ``.is_set()``. This line used to
+        CALL it, so every Tor-on bring-up from the GUI died here with "TypeError:
+        'Event' object is not callable" right after a successful seed (operator log
+        20261031-101210). :func:`_cancel_requested` reads either shape."""
         deadline = time.monotonic() + timeout_s
         announced = False
         while time.monotonic() < deadline:
-            if cancel is not None and cancel():
+            if _cancel_requested(cancel):
                 return ""
             url = stack.onion_url()
             if url:
