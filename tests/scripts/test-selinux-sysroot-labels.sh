@@ -449,10 +449,30 @@ else
     grep -i hugmesh "${HOOK}" >/dev/null && bad "hook carries the brand name (it ships on unaffiliated images too)" || ok "hook: brand-neutral"
 fi
 l_lrinst="$(ln_of 'install -D -m 0755 "\$\{SHARED_SPECS\}/usr/libexec/live-overlay-relabel"')"
-l_lrsed="$(ln_of "sed -i 's\\\|\\^si::sysinit:\\\|lr::sysinit:/usr/libexec/live-overlay-relabel")"
-{ [ -n "${l_lrinst}" ] && [ -n "${l_lrsed}" ] && [ "${l_lrinst}" -lt "${l_sto}" ] && [ "${l_lrsed}" -lt "${l_sto}" ]; } \
-    && ok "builder installs the hook and puts it before OpenRC's sysinit line, before the label pass labels both" \
-    || bad "builder wiring for live-overlay-relabel missing (install=${l_lrinst:-?} inittab=${l_lrsed:-?} store=${l_sto:-?})"
+[ -n "${l_lrinst}" ] && [ "${l_lrinst}" -lt "${l_sto}" ] \
+    && ok "builder installs the hook before the label pass (so it is labelled)" \
+    || bad "builder does not install live-overlay-relabel before the label pass (install=${l_lrinst:-none} store=${l_sto:-?})"
+# The inittab wiring, EXECUTED: cut the builder's own block (hook install .. its order
+# guard) and run it on a fixture sysroot. A static grep of the sed line cannot tell
+# "inserted before si::" from "appended after it"; running it can.
+lr_blk="$(awk '/^install -D -m 0755 "\$\{SHARED_SPECS\}\/usr\/libexec\/live-overlay-relabel"/{f=1} f{print} f&&/live-overlay-relabel is not the sysinit line before OpenRC/{exit}' "${X86}")"
+if [ -z "${lr_blk}" ]; then
+    bad "could not cut the inittab wiring block out of the builder"
+else
+    LS="${TMP}/lrsys"; mkdir -p "${LS}/etc"
+    printf 'id:3:initdefault:\nsi::sysinit:/usr/bin/openrc sysinit\nrc::bootwait:/usr/bin/openrc boot\n' > "${LS}/etc/inittab"
+    lr_run() { SYSROOT="${LS}" SHARED_SPECS="${REPO}/specs" bash -c 'err() { echo "ERR $*"; }; eval "$1"' _ "${lr_blk}" > "${TMP}/lr.out" 2>&1; }
+    lr_run; rc=$?
+    l1="$(grep -n '^lr::sysinit:/usr/libexec/live-overlay-relabel$' "${LS}/etc/inittab" | cut -d: -f1)"; l2="$(grep -n '^si::sysinit:' "${LS}/etc/inittab" | cut -d: -f1)"
+    [ "${rc}" = 0 ] && [ -n "${l1}" ] && [ -n "${l2}" ] && [ "${l1}" -lt "${l2}" ] && [ -x "${LS}/usr/libexec/live-overlay-relabel" ] \
+        && ok "builder block, executed: hook installed, lr::sysinit lands BEFORE si::sysinit (OpenRC)" \
+        || bad "builder block, executed: rc=${rc} lr=${l1:-none} si=${l2:-none}: $(cat "${TMP}/lr.out") / $(cat "${LS}/etc/inittab")"
+    lr_run
+    [ "$(grep -c '^lr::sysinit:' "${LS}/etc/inittab")" = 1 ] && ok "builder block is idempotent (a second run adds no second lr:: line)" || bad "builder block duplicated the lr:: line"
+    printf 'id:3:initdefault:\nrc::bootwait:/usr/bin/openrc boot\n' > "${LS}/etc/inittab"
+    lr_run && bad "builder block PASSED an inittab with no si::sysinit line (the hook would never run)" \
+        || { grep -q 'ERR .*not the sysinit line before OpenRC' "${TMP}/lr.out" && ok "builder block refuses an inittab without si::sysinit (exit 1, says why)" || bad "no-si case wrong reason: $(cat "${TMP}/lr.out")"; }
+fi
 
 echo "-- H) grub-mkconfig rescue snippet (EXECUTED against a stand-in 10_linux) + login records --"
 GD="${REPO}/specs-x86/etc/grub.d/11_selinux_permissive_rescue"
