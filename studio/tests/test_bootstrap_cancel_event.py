@@ -107,3 +107,18 @@ def test_await_onion_reads_an_event_and_still_accepts_a_predicate(tmp_path, monk
     ev.set()
     assert b._await_onion(stack, lambda _l: None, ev, timeout_s=30) == ""
     assert b._await_onion(stack, lambda _l: None, lambda: True, timeout_s=30) == ""
+
+
+def test_a_plain_predicate_is_honoured_not_just_tolerated(tmp_path, monkeypatch):
+    """The onion IS published here, so only a cancel that is actually READ can make the
+    wait return "": an implementation that ignored a predicate would return the URL."""
+    monkeypatch.setattr(lmb.time, "sleep", lambda _s: None)
+    monkeypatch.setattr(LocalStackNode, "onion_url", lambda self: ONION)
+    b = LocalMeshBootstrap(GENERATOR_DIR, LocalMeshBootstrapConfig(out_dir=str(tmp_path)))
+    stack = LocalStackNode(str(tmp_path))
+    assert b._await_onion(stack, lambda _l: None, lambda: True, timeout_s=30) == ""
+    assert b._await_onion(stack, lambda _l: None, lambda: False, timeout_s=30) == ONION
+    ev = threading.Event()
+    assert b._await_onion(stack, lambda _l: None, ev, timeout_s=30) == ONION
+    ev.set()
+    assert b._await_onion(stack, lambda _l: None, ev, timeout_s=30) == ""
