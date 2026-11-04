@@ -2060,6 +2060,47 @@ def local_login_applies(cfg: "ImageConfig") -> bool:
             or field_in_scope("standalone", cfg))
 
 
+def standalone_login_required(cfg) -> bool:
+    """Is the build-time local password the ONLY way into this image?
+
+    True exactly where the builder sets ``STANDALONE=true``: the x86 standalone-*
+    desktop roles (their builder arm presets it, ``role_presets_standalone``) and any
+    image carrying the composable ``--standalone`` flag. That image has no KEYS stick,
+    no SSO and a LOCKED root, and its first boot (specs/etc/local.d/
+    01-firstboot.start.tmpl, standalone block) creates ``--local-user`` with the hash
+    of ``--local-pass``. With no password it mints a random one-time password whose
+    banner nobody sees on a graphical desktop, so the image cannot be logged in to.
+
+    Tolerant ``getattr``: pages hand this ImageConfigs and worklist rows alike."""
+    return (role_presets_standalone(getattr(cfg, "role", "") or "")
+            or bool(getattr(cfg, "standalone", False)))
+
+
+def standalone_login_problem(cfg) -> str:
+    """Why this config must not be BUILT as it stands, or "" when it may.
+
+    The blocking half of ``standalone_login_required``: a standalone image with no
+    local user or no local password would boot to a greeter nobody can pass (the
+    2026-10-30 standalone-thick x86 session, whose password was lost on top of this,
+    is the operator report this guards). Rendered by HomePage inline and returned by
+    BuildDriver.preflight(), which is what the Review page's Continue button and
+    ProgressPage's dispatch both refuse on — so a config loaded from disk, whose
+    ``local_pass`` was blanked when it was saved (SECRET_FIELDS), is refused too."""
+    if not standalone_login_required(cfg):
+        return ""
+    if not (getattr(cfg, "local_user", "") or "").strip():
+        return ("This standalone image has no login account: set Local User on the "
+                "'Home Folder, Encryption, and Login' step. Root is locked and there is no KEYS stick "
+                "or SSO, so that account is the only way in.")
+    if not getattr(cfg, "local_pass", ""):
+        return ("Set the Login Password on the 'Home Folder, Encryption, and Login' step: it is the "
+                "password you log in with on this standalone image. It is not saved "
+                "with the config, so a reloaded config needs it typed again. Root is "
+                "locked and there is no KEYS stick or SSO, so without it nobody can "
+                "log in.")
+    return ""
+
+
 def external_media_applies(cfg: "ImageConfig") -> bool:
     """Whether the external media-data device group (Steam library + gocryptfs Vaults)
     applies to THIS image.

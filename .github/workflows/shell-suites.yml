@@ -575,6 +575,7 @@ jobs:
               tests/scripts/test-mfa-raw-jwt-posture.sh
               tests/scripts/test-mfa-required-rules.sh
               tests/scripts/test-passhash-lib.sh
+              tests/scripts/test-standalone-login-firstboot.sh
               tests/scripts/test-pki-role-san-coverage.sh
               tests/scripts/test-provision-keys-escrow-guard.sh
               tests/scripts/test-python-targets-seed.sh

@@ -3904,6 +3904,9 @@ mkdir -p "${SYSROOT}/etc/local.d"
     err "missing first-boot finaliser template: ${SHARED_SPECS}/etc/local.d/01-firstboot.start.tmpl"; exit 1; }
 render_template "${SHARED_SPECS}/etc/local.d/01-firstboot.start.tmpl" "${SYSROOT}/etc/local.d/01-firstboot.start"
 chmod +x "${SYSROOT}/etc/local.d/01-firstboot.start"
+# Root-only: the finaliser carries the crypt(3) hash of --local-pass, and a
+# world-readable copy in the image (and on the live ISO) is an offline-crack target.
+chmod go-rwx "${SYSROOT}/etc/local.d/01-firstboot.start"
 
 # Hostname, timezone, locale
 echo "${HOSTNAME}" > "${SYSROOT}/etc/hostname"

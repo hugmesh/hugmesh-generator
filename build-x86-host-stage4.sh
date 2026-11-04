@@ -4257,6 +4257,9 @@ fi   # ! UNAFFILIATED (Layer-B/Layer-A/domain/tor/brand-repo-generator block)
 
 render_template "${SHARED_SPECS}/etc/local.d/01-firstboot.start.tmpl" "${SYSROOT}/etc/local.d/01-firstboot.start"
 chmod +x "${SYSROOT}/etc/local.d/01-firstboot.start"
+# Root-only: the finaliser carries the crypt(3) hash of --local-pass, and a
+# world-readable copy in the image (and on the live ISO) is an offline-crack target.
+chmod go-rwx "${SYSROOT}/etc/local.d/01-firstboot.start"
 # UNAFFILIATED: the shared firstboot loads k8s modules and prints a k8s/headscale/
 # KEYS banner — none of which exists on a plain desktop. Strip those sections from
 # the RENDERED file (anchored ranges; `sysctl --system` and the NVMe note survive)

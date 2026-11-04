@@ -929,7 +929,15 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # that tree: '207 of 248 suites are named by a pull_request-triggered workflow', ungated SET 41;
 # and with the suite on disk but its shell-suites.yml line absent: '206 of 248' + check 3 and
 # check 7 red naming it -- so the +1/+1 is this suite and nothing else.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-207}"
+# 207 -> 208 (denominator 248 -> 249) on 2026-11-04 for fix/standalone-login-password-20261104
+# (base origin/main 8ed37a3c), which adds ONE gated suite:
+# tests/scripts/test-standalone-login-firstboot.sh, wired in shell-suites.yml's debian job
+# beside test-passhash-lib.sh. MEASURED by RUNNING this file on that tree:
+# '208 of 249 suites are named by a pull_request-triggered workflow', with only this
+# baseline line red. The suite was first run in python:3.12-slim (the debian job's image,
+# openssl + passwd installed as that job does, GITHUB_ACTIONS=true so its libpam layer is
+# REQUIRED): 43 passed, 0 failed.
+PREMERGE_BASELINE="${GUARD_PREMERGE:-208}"
 
 # 182 -> 192 (denominator 205 -> 215) on 2026-09-30 for #385: the census gained a
 # THIRD spelling, bare `tests/*.sh` at depth 1, and the ten suites it exposed were
