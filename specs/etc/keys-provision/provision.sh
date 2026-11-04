@@ -536,10 +536,17 @@ provision_network() {
     mkdir -p "${nm_dir}"
 
     # Copy any *.nmconnection profiles verbatim
+    local _nm_ids=() _nm_f _nm_id
     if ls "${BASE}/network/"*.nmconnection >/dev/null 2>&1; then
         cp -f "${BASE}/network/"*.nmconnection "${nm_dir}/"
         chmod 0600 "${nm_dir}/"*.nmconnection
         log "Installed NetworkManager connection profile(s)"
+        for _nm_f in "${BASE}/network/"*.nmconnection; do
+            _nm_id="$(sed -n 's/^id=//p' "${_nm_f}" 2>/dev/null | head -1)"
+            # A profile that opts out of autoconnect is staged, not activated.
+            grep -qix 'autoconnect=false' "${_nm_f}" 2>/dev/null && continue
+            [ -n "${_nm_id}" ] && _nm_ids+=("${_nm_id}")
+        done
     fi
 
     # Convenience: synthesise a Wi-Fi profile from JSON
@@ -603,6 +610,31 @@ EOF
         fi
         log "Configured Wi-Fi for SSID ${ssid}"
     fi
+    nm_apply_profiles "${_nm_ids[@]+"${_nm_ids[@]}"}"
+}
+
+# nm_apply_profiles [ID...] — make the profiles just written LIVE on this boot.
+# NetworkManager is already running by now (keys-provision `use net`), and it does
+# NOT watch keyfiles (NM 1.58 in the image): a profile copied above was invisible
+# until the next reboot. The headscale join and the kubeadm join run later in THIS
+# boot over exactly such a KEYS-supplied static profile (a mesh NIC on an L2 with no
+# DHCP), so a worker dialled a control server through a NIC with no address — and
+# `tailscale up` waited on it forever, before sshd. Reload, then bring each profile
+# up, bounded (an absent interface must not stall provisioning). Best-effort.
+nm_apply_profiles() {
+    have nmcli || return 0
+    nmcli general status >/dev/null 2>&1 || return 0
+    nmcli connection reload 2>/dev/null \
+        && log "NetworkManager reloaded its connection profiles" \
+        || { warn "nmcli connection reload failed — new profiles apply at next boot"; return 0; }
+    local _id
+    for _id in "$@"; do
+        if nmcli --wait 20 connection up id "${_id}" >/dev/null 2>&1; then
+            log "NetworkManager profile '${_id}' is up"
+        else
+            warn "NetworkManager profile '${_id}' did not come up within 20s (no such interface yet?) — left to autoconnect"
+        fi
+    done
 }
 
 # ── Arbitrary certificates / files ─────────────────────────────────
@@ -984,6 +1016,14 @@ provision_tailscale() {
     up_args="$(jqm '.tailscale.up_args // ""')"
     if [ -n "${authkey}" ]; then
         local cmd=(tailscale up --authkey "${authkey}")
+        # BOUNDED. keys-provision runs before sshd, and `tailscale up` with no
+        # --timeout blocks until the node is Running — so a control server that is
+        # unreachable at first boot (down, or a NIC not yet up) froze the whole boot
+        # with no way in. tailscaled keeps the prefs and keeps trying after this
+        # returns. .tailscale.up_timeout overrides; an explicit --timeout in up_args wins.
+        local ts_to; ts_to="$(jqm '.tailscale.up_timeout // "120s"')"
+        [[ "${ts_to}" =~ ^[0-9]+[smh]$ ]] || ts_to="120s"
+        [[ " ${up_args} " == *" --timeout"* ]] || cmd+=(--timeout "${ts_to}")
         [ -n "${login}" ] && [ "${login}" != "null" ] && cmd+=(--login-server "${login}")
         # shellcheck disable=SC2206
         [ -n "${up_args}" ] && [ "${up_args}" != "null" ] && cmd+=(${up_args})

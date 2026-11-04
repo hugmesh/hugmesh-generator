@@ -250,6 +250,64 @@ n_l="$(grep -n -F 'mv -f "${MESH_RENDEZVOUS}/.login_server.part" "${MESH_RENDEZV
     && _ok "D3 the control side publishes authkey then login_server (atomic renames, reader keys on both)" \
     || _bad "D3 publish order: authkey line ${n_k:-none}, login_server line ${n_l:-none}"
 
+# ═══════════════ E. provision.sh: the join cannot hang the boot ═════════════════
+echo "══ E. provision.sh: KEYS network profiles go live, tailscale up is bounded ══"
+PROV="${REPO}/specs/etc/keys-provision/provision.sh"
+PLIB="${WORK}/prov.sh"
+{
+    echo 'log()  { echo "LOG $*"; }; warn() { echo "WARN $*"; }; have() { command -v "$1" >/dev/null 2>&1; }'
+    echo 'jqm()  { jq -r "$1" "${MANIFEST}" 2>/dev/null; }'
+} > "${PLIB}"
+# provision_network writes /etc/NetworkManager — re-rooted into the sandbox here.
+sed -n '/^provision_network() {/,/^}/p' "${PROV}" | sed "s|/etc/NetworkManager|\${NMROOT}/etc/NetworkManager|g; s|/etc/conf.d|\${NMROOT}/etc/conf.d|g" >> "${PLIB}"
+extract "${PROV}" nm_apply_profiles "${PLIB}"
+extract "${PROV}" provision_tailscale "${PLIB}"
+grep -F 'provision_network() {' "${PLIB}" >/dev/null || { echo "could not extract provision_network" >&2; exit 2; }
+PSTUB="${WORK}/pstub"; mkdir -p "${PSTUB}"
+# nmcli: logs argv; `general status` fails when NM_DOWN=1.
+printf '#!/bin/bash\necho "nmcli $*" >> "${CALLS}"\n[ "$1 $2" = "general status" ] && [ "${NM_DOWN:-0}" = 1 ] && exit 8\nexit 0\n' > "${PSTUB}/nmcli"
+printf '#!/bin/bash\necho "tailscale $*" >> "${CALLS}"\nexit 0\n' > "${PSTUB}/tailscale"
+printf '#!/bin/bash\n:\n' > "${PSTUB}/tailscaled"
+for t in rc-update rc-service sleep; do printf '#!/bin/bash\n:\n' > "${PSTUB}/${t}"; done
+chmod +x "${PSTUB}"/*
+prov() {  # FUNC MANIFEST-JSON -> CALLS file content; BASE + NMROOT in the sandbox
+    local d; d="${WORK}/prov-$RANDOM"; mkdir -p "${d}/keys/network" "${d}/keys/tailscale" "${d}/root"
+    printf '%s\n' "$2" > "${d}/keys/provision.json"
+    printf '[connection]\nid=mesh0\ntype=ethernet\nautoconnect=true\n' > "${d}/keys/network/mesh0.nmconnection"
+    printf '[connection]\nid=spare\ntype=ethernet\nautoconnect=false\n' > "${d}/keys/network/spare.nmconnection"
+    printf 'tskey-fixture-0123\n' > "${d}/keys/tailscale/authkey"
+    CALLS="${d}/calls"; : > "${CALLS}"
+    POUT="$(CALLS="${CALLS}" NM_DOWN="${NM_DOWN:-0}" BASE="${d}/keys" MANIFEST="${d}/keys/provision.json" NMROOT="${d}/root" \
+            PATH="${PSTUB}:${PATH}" bash -c 'set -u; . "$1"; mkdir() { command mkdir "$@" 2>/dev/null || true; }; "$2"' _ "${PLIB}" "$1" 2>&1)"
+}
+prov provision_network '{}'
+c="$(cat "${CALLS}")"
+n_r="$(printf '%s\n' "${c}" | grep -n -x 'nmcli connection reload' | cut -d: -f1)"
+n_u="$(printf '%s\n' "${c}" | grep -n -x 'nmcli --wait 20 connection up id mesh0' | cut -d: -f1)"
+[ -n "${n_r}" ] && [ -n "${n_u}" ] && [ "${n_r}" -lt "${n_u}" ] \
+    && _ok "E1 a KEYS-supplied profile is made LIVE this boot: nmcli reload, then a bounded 'connection up' (NM does not watch keyfiles)" \
+    || _bad "E1 profiles not applied: $(printf '%s' "${c}" | tr '\n' ';') :: ${POUT}"
+printf '%s\n' "${c}" | grep -F 'up id spare' >/dev/null && _bad "E1 an autoconnect=false profile was forced up" \
+    || _ok "E1 ...but a profile that opts out of autoconnect is only staged"
+NM_DOWN=1 prov provision_network '{}'
+printf '%s' "$(cat "${CALLS}")" | grep -F 'connection' >/dev/null && _bad "E2 NM not running but nmcli reload/up was attempted" \
+    || _ok "E2 NetworkManager not running -> no reload/up attempted (nothing to stall)"
+TSM='{"tailscale":{"enabled":true,"authkey_file":"tailscale/authkey","login_server":"http://10.77.0.13:8080","up_args":"--accept-routes"},"headscale":{"enabled":false}}'
+prov provision_tailscale "${TSM}"
+up="$(grep '^tailscale up ' "${CALLS}")"
+case " ${up} " in
+    *" --timeout 120s "*) _ok "E3 'tailscale up' is BOUNDED by default (--timeout 120s): an unreachable control server can no longer freeze keys-provision before sshd" ;;
+    *) _bad "E3 tailscale up has no default timeout: '${up}'" ;;
+esac
+case " ${up} " in *" --login-server http://10.77.0.13:8080 "*) _ok "E3 ...and still joins the manifest's login server" ;; *) _bad "E3 login server lost: '${up}'" ;; esac
+prov provision_tailscale "$(printf '%s' "${TSM}" | jq -c '.tailscale.up_timeout="45s"')"
+case " $(grep '^tailscale up ' "${CALLS}") " in *" --timeout 45s "*) _ok "E4 .tailscale.up_timeout overrides the bound" ;; *) _bad "E4 up_timeout ignored: $(grep '^tailscale up ' "${CALLS}")" ;; esac
+prov provision_tailscale "$(printf '%s' "${TSM}" | jq -c '.tailscale.up_timeout="1d;reboot"')"
+case " $(grep '^tailscale up ' "${CALLS}") " in *" --timeout 120s "*) _ok "E4 a malformed up_timeout falls back to 120s (never reaches the argv)" ;; *) _bad "E4 malformed up_timeout: $(grep '^tailscale up ' "${CALLS}")" ;; esac
+prov provision_tailscale "$(printf '%s' "${TSM}" | jq -c '.tailscale.up_args="--accept-routes --timeout=30s"')"
+[ "$(grep '^tailscale up ' "${CALLS}" | grep -o -- '--timeout' | wc -l)" -eq 1 ] \
+    && _ok "E4 an explicit --timeout in up_args wins (no second --timeout)" || _bad "E4 duplicate timeout: $(grep '^tailscale up ' "${CALLS}")"
+
 echo
 echo "== RESULT: ${PASS} passed, ${FAIL} failed =="
 [ "${FAIL}" -eq 0 ]
