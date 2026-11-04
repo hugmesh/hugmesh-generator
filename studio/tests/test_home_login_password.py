@@ -13,8 +13,9 @@ pinned here:
     is no KEYS stick or SSO — an image nobody can log in to.
 
 HomePage refuses both with an inline label (never a modal: validatePage runs headless
-here), and BuildDriver.preflight() refuses the second for a config that never passed
-HomePage (a reloaded config, whose local_pass was blanked when it was saved).
+here). The Qt-free rule, and BuildDriver.preflight() refusing a config that never
+passed HomePage, are pinned in test_standalone_login_rule.py (which the Qt-free CI job
+runs; this file needs a Qt binding).
 
 The page is rendered offscreen and grabbed to a PNG; the geometry of the confirm row and
 the refusal label is asserted, so "the field exists" cannot mean "the field is invisible".
@@ -28,10 +29,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 pytest.importorskip("hugmesh_studio.gui.qt",
                     reason="no Qt binding (PySide6/PyQt6) installed")
 
-from hugmesh_studio.core.build_driver import BuildDriver  # noqa: E402
-from hugmesh_studio.core.config import (  # noqa: E402
-    UNAFFILIATED_ROLE, ImageConfig, standalone_login_problem, standalone_login_required,
-)
+from hugmesh_studio.core.config import UNAFFILIATED_ROLE  # noqa: E402
 from hugmesh_studio.core.platform_info import HostInfo  # noqa: E402
 from hugmesh_studio.gui import wizard as wizard_mod  # noqa: E402
 from hugmesh_studio.gui.qt import QtWidgets  # noqa: E402
@@ -167,40 +165,3 @@ def test_rendered_login_group_shows_confirm_row_and_refusal(wiz, tmp_path):
     png = os.environ.get("HUGMESH_TEST_PNG_OUT") or str(tmp_path / "home-login.png")
     assert login.grab().save(png), "could not render the login group"
     assert os.path.getsize(png) > 1000
-
-
-# ── the Qt-free rule and the build preflight ──────────────────────────────────
-
-@pytest.mark.parametrize("cfg_kw,required", [
-    (dict(mode="standalone", role="standalone-thick", platform="x86"), True),
-    (dict(mode="standalone", role="standalone-thin", platform="x86"), True),
-    (dict(mode="standalone", role=UNAFFILIATED_ROLE, platform="x86"), True),
-    (dict(mode="standalone", role="rpi5-desktop", platform="rpi5", standalone=True), True),
-    (dict(mode="cloud", role="client", platform="x86"), False),
-    (dict(mode="mesh", role="pki", platform="x86"), False),
-])
-def test_standalone_login_required_matches_the_builder_posture(cfg_kw, required):
-    assert standalone_login_required(ImageConfig(**cfg_kw)) is required
-
-
-def test_problem_text_names_the_missing_piece():
-    c = ImageConfig(mode="standalone", role=UNAFFILIATED_ROLE, platform="x86",
-                    local_user="magus", local_pass="")
-    assert "Login Password" in standalone_login_problem(c)
-    c.local_pass = PW
-    assert standalone_login_problem(c) == ""
-    c.local_user = "  "
-    assert "Local User" in standalone_login_problem(c)
-    assert standalone_login_problem(ImageConfig(mode="cloud", role="client",
-                                                platform="x86")) == ""
-
-
-def test_build_preflight_refuses_a_standalone_image_with_no_password():
-    drv = BuildDriver(GENERATOR_DIR, HOST)
-    c = ImageConfig(mode="standalone", role=UNAFFILIATED_ROLE, platform="x86",
-                    local_user="magus", local_pass="")
-    msg = standalone_login_problem(c)
-    assert msg and msg in drv.preflight(c, backend="native")
-    c.local_pass = PW
-    assert msg not in drv.preflight(c, backend="native")
-    assert not any("Login Password" in p for p in drv.preflight(c, backend="native"))
