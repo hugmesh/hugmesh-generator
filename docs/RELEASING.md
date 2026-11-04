@@ -419,6 +419,31 @@ The rest already handles a plain `X.Y.Z`: `release_version.py` accepts it and
 3. Run `scripts/release.sh --channel stable` and read the plan: zero `REFUSE` before
    `--apply`.
 
+### The mesh-node image on both channels
+
+`.github/workflows/mesh-node-release.yml` takes its channel from the tag. The rules are
+in `scripts/mesh-node-release-channel.sh`, which the workflow runs in its version job, in
+the image job right before the push, and right before `gh release create`:
+
+- a beta `mesh-node-vX.Y.Z-beta.N` must be on `main`. It pushes `:X.Y.Z-beta.N`,
+  `:beta` and `:sha-<12>`, and creates a GitHub prerelease.
+- a stable `mesh-node-vX.Y.Z` must be on `release/X.Y`, the same repository-wide branch
+  name every row uses, with X.Y from `clients/docker-mesh-node/VERSION` (so
+  `release/0.1` for the 0.1 line).
+  - It pushes `:X.Y.Z` and `:sha-<12>`.
+  - It adds `:X.Y` unless a newer published `mesh-node-vX.Y.*` exists.
+  - It adds `:latest` unless a newer published `mesh-node-vA.B.C` exists. `studio-v*`
+    tags never count.
+- a push to `release/X.Y` that touches the mesh-node paths pushes `:sha-<12>` only. That
+  is the push run the stable checks read.
+
+The GitHub release of a mesh-node stable is a full release, but it is never marked
+Latest. The repository has one Latest slot, and the Studio owns it.
+
+The rules are tested by `scripts/test-mesh-node-release-channel.sh`, which the version
+job runs before anything else. Run it locally with
+`bash scripts/test-mesh-node-release-channel.sh` (no network, no docker).
+
 ## Testing the script
 
 `tests/scripts/test-release-beta.sh` runs it against a recording `gh` stub. It proves:
