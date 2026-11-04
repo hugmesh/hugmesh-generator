@@ -57,6 +57,7 @@ from ..core import agent_context as actx
 from ..core import assistant_settings
 from ..core import local_ai_status as lai
 from ..core import ollama_docker as odk
+from ..tui import local_ai as tui_lai
 from . import styles
 from .qt import Qt, QtCore, QtGui, QtWidgets, Signal
 
@@ -411,6 +412,11 @@ class LocalWorkWindow(QtWidgets.QWidget):
     def _set_commands(self) -> None:
         """The run-it-yourself line, for the Ollama the assistant uses NOW (Docker mode
         puts that instance's OLLAMA_HOST in front of each command)."""
+        note = tui_lai.native_windows_note()
+        if note:
+            # every one of those lines is a .sh script PowerShell cannot run
+            self.commands.setText(note)
+            return
         try:
             cmds = odk.commands_for(self._generator_dir)
         except Exception:                        # noqa: BLE001 — a label never raises
@@ -422,6 +428,7 @@ class LocalWorkWindow(QtWidgets.QWidget):
     def show_snapshot(self, snap) -> None:
         """Render a snapshot now (the dock hands over the one it already has)."""
         self._set_commands()
+        snap.fix = tui_lai.windows_advice(snap.fix)
         self.snapshot = snap
         self.summary.setText(snap.summary)
         if snap.problem:
@@ -632,6 +639,10 @@ class LocalAIDock(QtWidgets.QFrame):
                                         "Start the local Ollama and the queue worker "
                                         "(runs scripts/local-ai.sh start; in Docker mode it "
                                         "starts the Studio's Ollama container first)")
+        if tui_lai.native_windows_note():
+            # the worker half of Start is scripts/local-ai.sh: say so where it is pressed
+            self.start_btn.setToolTip(self.start_btn.toolTip() + "\n\n"
+                                      + tui_lai.native_windows_note())
         self.start_btn.clicked.connect(self.start_assistant)
         self.work_btn = _styled_button("Current work",
                                        "Open a window with the queue, the drafts and the running builds")
@@ -872,7 +883,12 @@ class LocalAIDock(QtWidgets.QFrame):
         self._activity_timer.timeout.connect(self.refresh_activity)
         try:
             from . import build_supervisor
-            build_supervisor.supervisor().changed.connect(self.refresh_activity)
+            # QUEUED, not direct: adopt() emits `changed` BEFORE the page calls
+            # worker.start() (progress.py), and refresh_activity reads running(),
+            # which reaps every row whose thread is not running yet — a direct call
+            # dropped the build it was told about, window pin and Quit cancel with it.
+            build_supervisor.supervisor().changed.connect(
+                self.refresh_activity, Qt.ConnectionType.QueuedConnection)
         except Exception:                        # pragma: no cover - no QApplication
             _log_swallowed("LocalAIDock(supervisor)")
         alive = self._alive
@@ -1318,6 +1334,13 @@ class LocalAIDock(QtWidgets.QFrame):
         self.docker_stop_btn.setVisible(docker)
         st, gpu = self.docker_state, self.gpu
         if not docker:
+            if tui_lai.native_windows_note():
+                # Ollama for Windows is a native app; the .sh line below is Linux-only
+                self.docker_label.setText(
+                    "The Studio does not start or stop the system Ollama from here: "
+                    "Ollama for Windows runs in the background once installed (start "
+                    "it from the Start menu if it is not running).")
+                return
             self.docker_label.setText(
                 "The Studio does not start or stop the system Ollama from here: Start "
                 "local assistant runs scripts/local-ai.sh start, which starts it only if "
@@ -1394,6 +1417,7 @@ class LocalAIDock(QtWidgets.QFrame):
                 self._threads.submit("gpu", odk.detect_gpu)
 
     def apply_snapshot(self, snap) -> None:
+        snap.fix = tui_lai.windows_advice(snap.fix)
         self.snapshot = snap
         line = snap.summary
         if self.ollama_mode == odk.DOCKER and line.startswith("Local AI:"):
@@ -1615,7 +1639,7 @@ class LocalAIDock(QtWidgets.QFrame):
                 return                       # Clear already released the dock; a newer question may own it
             self._append(f"\n[{message}]\n\n")
             self._finish_prompt()
-            self._say(str(message), 30, warn=True)
+            self._say(tui_lai.windows_advice(str(message)), 30, warn=True)
             self.refresh()
         elif tag == "start":
             self.start_btn.setEnabled(True)
@@ -1631,7 +1655,9 @@ class LocalAIDock(QtWidgets.QFrame):
                 cmd = (res.command if res is not None
                        else odk.commands_for(self.generator_dir, self.ollama_mode)["start"])
                 why = res.message if res is not None else str(error)
-                self._say(f"{why} Run it yourself: {cmd}", 60, warn=True)
+                note = tui_lai.native_windows_note()
+                self._say(f"{tui_lai.windows_advice(why)} {note}" if note
+                          else f"{why} Run it yourself: {cmd}", 60, warn=True)
                 self.show_current_work()
 
 

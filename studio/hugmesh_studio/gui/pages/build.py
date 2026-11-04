@@ -53,6 +53,7 @@ import os
 from ..qt import Qt, QtCore, QtWidgets, Signal
 from .. import console
 from ._scroll import scrollable
+from ...core import ansi
 from ...core import build_sessions
 from ...core import cross_dracut
 from ...core import flash_targets
@@ -380,6 +381,20 @@ def _picker_row(parent, line_edit, caption, file_filter="All files (*)", directo
     h.addWidget(line_edit, 1)
     h.addWidget(btn)
     return w
+
+
+def hold_error_text(e: Exception, osname: str | None = None) -> str:
+    """A refused hold's reason, with the path as the user would type it.
+
+    str(OSError) embeds repr(filename), so on Windows every separator of the path read
+    back doubled ('C:\\\\Users\\\\...'). There the message is rebuilt from strerror and
+    the bare filename; a POSIX path has no backslashes, so Linux keeps str(e).
+    ``osname`` is ``os.name`` unless a test passes another."""
+    if ((osname or os.name) == "nt" and isinstance(e, OSError)
+            and e.filename is not None and e.strerror):
+        names = [str(e.filename)] + ([str(e.filename2)] if e.filename2 is not None else [])
+        return f"{e.strerror}: " + " -> ".join(names)
+    return str(e)
 
 
 class _BuilderImageWorker(QtCore.QThread):
@@ -1032,6 +1047,11 @@ class BuildPage(QtWidgets.QWizardPage):
         self.log = console.attach(QtWidgets.QPlainTextEdit()); self.log.setReadOnly(True)
         lay.addWidget(self.log, 1)
         self.image_worker = None
+        # the last "Build builder image now" run, kept above every later preflight text
+        # (see _set_log): it streams into self.log only and no file records it
+        self._builder_image_lines: list[str] = []
+        # why _preview could not assemble a command at all ("" = it could)
+        self._no_backend = ""
         # ── off-thread docker-probe plumbing (freeze fix) ──────────────────────────
         # _preview() splits into an INSTANT part (widgets -> cfg + command pane, no
         # daemon touch) and an OFF-THREAD part (the two docker probes) run by a
@@ -1101,7 +1121,7 @@ class BuildPage(QtWidgets.QWizardPage):
         except (OSError, ValueError) as e:
             secret_files.vault().drop(field)
             line_edit.setText(path)
-            self._refresh_held_labels(hold_errors={field: str(e)})
+            self._refresh_held_labels(hold_errors={field: hold_error_text(e)})
             self._preview()
             return
         line_edit.setText(entry.origin)     # abspath — keeps origin == collected cfg path
@@ -1558,9 +1578,23 @@ class BuildPage(QtWidgets.QWizardPage):
             self.cmd.setPlainText("")
             self._clear_wl_cmd()    # a build we just called unassemblable owes no argv
             self.summary.setText(f"Cannot assemble this build: {e}")
-            self.log.setPlainText(f"Command error: {e}")
+            self._set_log(f"Command error: {e}")
             self._set_problems([str(e)])
             return
+        except RuntimeError as e:
+            # No usable backend (BuildDriver.command): "auto" resolved to "none", e.g.
+            # Docker Desktop installed but not running on Windows. There is no argv to
+            # show, but the rest of the review still is, and the preflight below names
+            # the remedy and holds Continue. Escaping here left the page blank with
+            # Continue enabled, and every click raised again out of validatePage.
+            self._no_backend = str(e)
+            self.cmd.setPlainText("")
+            self._clear_wl_cmd()
+            self._refresh_summary()
+            self._set_problems([f"Cannot assemble this build: {e}"])
+            self._schedule_recompute()
+            return
+        self._no_backend = ""
         self.cmd.setPlainText(cmdline)
         # An option edit re-renders the WHOLE config's argv, which invalidates any per-row
         # argv still on screen: it was assembled from the PREVIOUS values, by a _wl_driver
@@ -1648,7 +1682,7 @@ class BuildPage(QtWidgets.QWizardPage):
         Build button's busy state until the worker returns."""
         self._recompute_gen += 1
         self._set_busy(True)
-        self.log.setPlainText("Checking Docker availability…")
+        self._set_log("Checking Docker availability…")
         self._recompute_timer.start()
 
     def _run_recompute(self) -> None:
@@ -1692,7 +1726,7 @@ class BuildPage(QtWidgets.QWizardPage):
         if warns:
             text += ("\nWarnings (advisory — the build is not blocked):\n  - "
                      + "\n  - ".join(warns))
-        self.log.setPlainText(text)
+        self._set_log(text)
         self._set_busy(False)
 
     def _set_busy(self, busy: bool) -> None:
@@ -1800,7 +1834,7 @@ class BuildPage(QtWidgets.QWizardPage):
             self._materialized = []
             self._clear_wl_cmd()
             self.worklist_table.setRowCount(0)
-            self.log.setPlainText(f"Cannot assemble the worklist: {e}")
+            self._set_log(f"Cannot assemble the worklist: {e}")
             return
         # Every rebuild re-materializes the rows, so an argv rendered for the PREVIOUS
         # set can now belong to a row that moved or no longer exists. Clearing here is
@@ -1907,16 +1941,35 @@ class BuildPage(QtWidgets.QWizardPage):
         if self.image_worker and self.image_worker.isRunning():
             return
         self.build_image_btn.setEnabled(False)
-        console.write(self.log, "\n=== building the docker builder image ===")
+        head = "=== building the docker builder image ==="
+        self._builder_image_lines = [head]
+        console.write(self.log, "\n" + head)
         self.image_worker = _BuilderImageWorker(self.wiz.driver)
-        self.image_worker.line.connect(lambda s: console.write(self.log, s))
+        self.image_worker.line.connect(self._builder_image_line)
         self.image_worker.done.connect(self._builder_image_finished)
         self.image_worker.start()
 
+    def _builder_image_line(self, s: str) -> None:
+        self._builder_image_lines.append(ansi.strip_ansi(ansi.collapse_carriage_returns(s)))
+        console.write(self.log, s)
+
     def _builder_image_finished(self, code):
-        console.write(self.log, f"=== builder image build exited {code} ===")
+        tail = f"=== builder image build exited {code} ==="
+        self._builder_image_lines.append(tail)
+        console.write(self.log, tail)
         self.build_image_btn.setEnabled(True)
         self._preview()
+
+    def _set_log(self, text: str) -> None:
+        """Replace the log pane's status text, keeping the builder-image transcript.
+
+        Every preflight pass rewrites this pane, and the one that follows "Build builder
+        image now" (via _preview) used to erase that build's whole output and exit code
+        the moment it finished: possibly twenty minutes of docker output, and the only
+        record of why it failed. The transcript stays on top; the status goes below."""
+        if self._builder_image_lines:
+            text = "\n".join(self._builder_image_lines) + "\n\n" + text
+        self.log.setPlainText(text)
 
     # ---- commit -----------------------------------------------------------------
     def isComplete(self) -> bool:
@@ -1930,6 +1983,8 @@ class BuildPage(QtWidgets.QWizardPage):
         """Commit the WorklistConfig and stash the run parameters ProgressPage reads, then
         advance (commit) to the terminal ProgressPage."""
         self._preview()
+        if self._no_backend:
+            return False                # nothing could run it; the preflight says why
         self.wiz.worklist = self._current_worklist()
         # Refuse an explicit root size below the builder's own derived payload
         # floor (core/root_size_floor.py mirrors the builder tables) — otherwise

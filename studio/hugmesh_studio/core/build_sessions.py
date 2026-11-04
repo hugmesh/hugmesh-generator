@@ -34,6 +34,8 @@ import json
 import os
 import shutil
 import socket
+import stat
+import sys
 import uuid
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
@@ -234,6 +236,17 @@ class BuildSession:
             v = vals[k]
             if not isinstance(v, str):
                 vals[k] = "" if v is None else str(v)
+        # Every presenter (session_haystack, session_row, format_session_line, the
+        # Sessions page) reads each image row with .get(), so one row that is not an
+        # object ended every listing in a traceback. Such a record is unreadable, like
+        # a top level that is not an object: scan() surfaces it and never rewrites it.
+        # A null list is the field's own default, as for the str fields.
+        if "images" in vals:
+            if vals["images"] is None:
+                vals["images"] = []
+            if not (isinstance(vals["images"], list)
+                    and all(isinstance(row, dict) for row in vals["images"])):
+                raise ValueError("session record 'images' must be a list of objects")
         # CANONICALIZE THE ROLE ON READ, never rewrite the record. `images` rows are
         # {id, role, platform, status, ...} and the role is persisted with no schema
         # version and no load-time validation, so a session written before the role
@@ -552,7 +565,42 @@ def _is_session_workdir(path: str, session_id: str) -> bool:
             and os.path.basename(os.path.dirname(norm)) == "sessions")
 
 
-def delete(s: BuildSession, *, remove_artifacts: bool = False) -> bool:
+def _rmtree(path: str, *, osname: str | None = None) -> bool:
+    """Best-effort ``shutil.rmtree(ignore_errors=True)`` that also removes READ-ONLY
+    files on native Windows, and says whether the tree is gone.
+
+    A Docker build writes the session tree through a bind mount, and every file the
+    container left without a write bit (git objects, ``chmod 400`` keys, a sysroot's
+    0444/0555 files) arrives with the Windows read-only attribute. Windows refuses to
+    delete such a file, so a plain rmtree stopped at the first one and the swallowed
+    error left the tree behind. Elsewhere a delete depends on the folder, not the file,
+    so the plain rmtree stays (domain_workspaces/org_export have the same helper).
+    Only a refused delete is retried, and never through a link: chmod follows it and
+    would make the file it names writable. Whatever is still refused (a file another
+    program holds open) is left, as before, and the False return says so."""
+    if (osname or os.name) != "nt":
+        shutil.rmtree(path, ignore_errors=True)
+        return not os.path.lexists(path)
+
+    def clear_and_retry(func, p, exc):
+        err = exc[1] if isinstance(exc, tuple) else exc   # onerror passes exc_info
+        if (func not in (os.unlink, os.remove, os.rmdir)
+                or not isinstance(err, PermissionError) or os.path.islink(p)):
+            return
+        try:
+            os.chmod(p, stat.S_IWRITE)     # clears the read-only attribute only
+            func(p)
+        except OSError:
+            pass                           # still refused: the lexists below says so
+    if sys.version_info >= (3, 12):
+        shutil.rmtree(path, onexc=clear_and_retry)
+    else:                                  # pragma: no cover - older Pythons
+        shutil.rmtree(path, onerror=clear_and_retry)
+    return not os.path.lexists(path)
+
+
+def delete(s: BuildSession, *, remove_artifacts: bool = False,
+           osname: str | None = None) -> bool:
     """Delete a session record — and, only when asked, its artifact tree. Refuses an
     ACTIVE (in-progress) session: returns False, nothing touched.
 
@@ -560,16 +608,28 @@ def delete(s: BuildSession, *, remove_artifacts: bool = False) -> bool:
     try/except (an already-gone file is success, never a crash). The artifact dir is
     rmtree'd ONLY when ``remove_artifacts`` is set AND ``s.workdir`` passes the
     :func:`_is_session_workdir` shape-check, so a poisoned workdir can never rmtree an
-    arbitrary path. Returns True once the record is gone."""
+    arbitrary path. Returns True once the record is gone.
+
+    On native Windows the tree goes FIRST, and when part of it cannot be removed (a
+    file another program holds open) the record is KEPT and False is returned: every
+    caller then says "not deleted" instead of "and its artifacts", and the session
+    stays listed, so the leftover tree is still reachable for a retry rather than
+    orphaned with nothing in the Studio pointing at it. ``is_active(s)`` tells this
+    refusal from the in-progress one; :func:`artifact_paths` names what is left."""
     if is_active(s):
         return False
+    wants_tree = (remove_artifacts and _is_session_workdir(s.workdir, s.id)
+                  and os.path.isdir(s.workdir))
+    if (osname or os.name) == "nt":
+        if wants_tree and not _rmtree(s.workdir, osname=osname):
+            return False
+        wants_tree = False
     try:
         os.remove(s.path())
     except OSError:
         pass
-    if (remove_artifacts and _is_session_workdir(s.workdir, s.id)
-            and os.path.isdir(s.workdir)):
-        shutil.rmtree(s.workdir, ignore_errors=True)
+    if wants_tree:
+        _rmtree(s.workdir, osname=osname)
     return True
 
 
@@ -582,22 +642,26 @@ def delete_path(path: str) -> None:
         pass
 
 
-def delete_unmanaged(u: UnmanagedBuild, *, remove_tree: bool = True) -> bool:
+def delete_unmanaged(u: UnmanagedBuild, *, remove_tree: bool = True,
+                     osname: str | None = None) -> bool:
     """Delete a discovered pre-session ``wl-*`` build tree (they accumulate identically
     to session dirs). Guarded by the same shape discipline: rmtree runs only when the
     basename is a ``wl-*`` dir that exists — never the shared out dir or a forged path.
-    Returns True on removal, False when the guard refuses or ``remove_tree`` is off."""
+    Returns True on removal, False when the guard refuses, ``remove_tree`` is off, or
+    (native Windows) part of the tree could not be removed."""
     if (remove_tree and os.path.basename(os.path.normpath(u.path)).startswith("wl-")
             and os.path.isdir(u.path)):
-        shutil.rmtree(u.path, ignore_errors=True)
-        return True
+        gone = _rmtree(u.path, osname=osname)
+        # Linux keeps its old answer: True once the rmtree ran.
+        return gone or (osname or os.name) != "nt"
     return False
 
 
 def prune(*, remove_artifacts: bool = False) -> tuple[int, int]:
     """Bulk-delete every NON-active session record (powers "Delete all finished"):
     iterate the readable records, skip each active (in-progress) one, pass every other
-    to :func:`delete`. Returns ``(deleted, skipped_active)``."""
+    to :func:`delete`. Returns ``(deleted, skipped_active)``; a session :func:`delete`
+    kept because its tree could not be removed (native Windows) is in neither count."""
     deleted = skipped = 0
     for s in load_all():
         if is_active(s):

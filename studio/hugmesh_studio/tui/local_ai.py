@@ -26,14 +26,49 @@ from __future__ import annotations
 
 from ..core import local_ai_status as lai
 from ..core import ollama_docker as odk
+from ..core import platform_info
 
 __all__ = ["OPEN_COMMAND", "FOOTER_KEY", "LocalAIScreen", "Standalone", "status_line",
-           "plain_status_line"]
+           "plain_status_line", "native_windows_note", "windows_advice"]
 
 #: Typed into either face, it opens the screen. Hyphenated so it cannot collide with a
 #: value a journey step asks for.
 OPEN_COMMAND = "local-ai"
 FOOTER_KEY = "F2"
+
+
+def native_windows_note(osname: str | None = None) -> str:
+    """WHY the run-it-yourself lines do not apply in a native Windows Studio, "" elsewhere.
+
+    The queue worker, ``chat`` and ``todo`` are all scripts/local-ai.sh, a bash script
+    a PowerShell prompt cannot run (and the WSL bash cannot reach a C:\\ checkout path).
+    The Studio window's panel shows the same sentence (gui/_local_ai_dock.py)."""
+    return platform_info.native_windows_blocker(
+        "The local assistant's queue worker (scripts/local-ai.sh)", osname=osname,
+        runs="bash scripts")
+
+
+#: core/local_ai_status's bash-only remedies and what is true on native Windows, where
+#: Ollama for Windows is a native app that runs in the background once installed.
+#: test_windows_sweep_c4.py checks each left side is still spelled that way in core.
+WINDOWS_ADVICE = (
+    ("Install it (see the link), then run: scripts/local-ai.sh up",
+     "Install Ollama for Windows (see the link); it then runs in the background."),
+    ("Start it with: scripts/local-ai.sh up",
+     "Start Ollama from the Start menu, or run: ollama serve"),
+    ("Start it with scripts/local-ai.sh up",
+     "Start Ollama from the Start menu, or run ollama serve"),
+)
+
+
+def windows_advice(text: str, osname: str | None = None) -> str:
+    """``text`` with its scripts/local-ai.sh remedies replaced by Windows-valid ones on
+    native Windows; unchanged anywhere else."""
+    if not text or not native_windows_note(osname):
+        return text
+    for linux, windows in WINDOWS_ADVICE:
+        text = text.replace(linux, windows)
+    return text
 
 
 def status_line(env: dict | None = None, *, key_hint: bool = True) -> str:
@@ -95,10 +130,18 @@ class LocalAIScreen:
 
     def lines(self, j) -> list[str]:  # noqa: ARG002
         snap = self.snapshot
+        if snap is not None:
+            snap.fix = windows_advice(snap.fix)
         out = lai.format_status(snap).split("\n") if snap is not None else ["(no snapshot)"]
-        cmds = odk.commands_for(self.generator_dir)
         out += ["", odk.describe(odk.current_mode())]
-        out += ["", "Run it yourself:  " + cmds["todo"], "                  " + cmds["chat"], ""]
+        note = native_windows_note()
+        if note:
+            # a .sh line PowerShell cannot run is not a hand-over
+            out += ["", note, ""]
+        else:
+            cmds = odk.commands_for(self.generator_dir)
+            out += ["", "Run it yourself:  " + cmds["todo"],
+                    "                  " + cmds["chat"], ""]
         if self.transcript:
             out += ["conversation:"] + [f"  {t}" for t in self.transcript[-12:]] + [""]
         if self.message:
@@ -139,12 +182,17 @@ class LocalAIScreen:
             return
         if low == "start":
             res = self._start_fn()
-            self.message = res.message if res.ok else f"{res.message} Run it yourself: {res.command}"
+            if res.ok:
+                self.message = res.message
+            else:
+                note = native_windows_note()
+                self.message = (f"{windows_advice(res.message)} {note}" if note
+                                else f"{res.message} Run it yourself: {res.command}")
             return
         try:
             answer = self._prompt_fn(line.strip(), list(self.history))
         except lai.LocalAIError as exc:
-            self.message = str(exc)
+            self.message = windows_advice(str(exc))
             return
         except Exception as exc:            # noqa: BLE001 — shown on the screen, never out of the loop
             # ``send_prompt`` wraps what it knows about; this is for what it does not. An
