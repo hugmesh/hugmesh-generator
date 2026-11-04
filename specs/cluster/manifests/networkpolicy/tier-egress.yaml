@@ -163,13 +163,10 @@ spec:
     #    already constrained by tier-ingress/db-ingress/homeserver-isolation).
     - to:
         - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: hugmesh-backend } }
-    # 2a. hugmesh-games — hugmesh-actions' GM sync -> casdoor-games (:8000) and the
-    #     games BFF (:8080).
-    - to:
-        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: hugmesh-games } }
-      ports:
-        - { protocol: TCP, port: 8000 }
-        - { protocol: TCP, port: 8080 }
+    # No path to hugmesh-games. The only backend consumer of that namespace was
+    # hugmesh-actions' GM sync, which is off (manifests/hugmesh-apis/deployment.yaml);
+    # a mesh user's /games/api/** goes through the fe-gateway (hugmesh-frontend above).
+    # Re-add `hugmesh-games` :8000 here when the sync is turned on.
     # 3. hugmesh-pki — route-access-db (:5432), Cassandra (:9042), Casdoor (JWT
     #    validation, :8000), headscale (tailnet). The be-gateway + admin-bff-api +
     #    federation-api reach route-access-db/Cassandra/Casdoor here.
@@ -259,8 +256,9 @@ spec:
 # ── hugmesh-games — default-deny egress ────────────────────────────────────
 # Games BFF -> casdoor-games (self, JWT) -> casdoor-games-pg (self); portal -> BFF
 # (self); BFF -> games-bff-db + games-cassandra (self). Egress: DNS + self + backend
-# (hugmesh-actions sync handle) + the BFF's systems-issuer key fetch. casdoor-games
-# gets its one public path from casdoor-games-public-egress below.
+# + the BFF's systems-issuer key fetch. casdoor-games gets its one public path from
+# casdoor-games-public-egress below. (The GM sync is backend -> games and its replies
+# are connection state, so nothing here exists for it.)
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -277,7 +275,7 @@ spec:
       ports:
         - { protocol: UDP, port: 53 }
         - { protocol: TCP, port: 53 }
-    # 2. self (games BFF -> casdoor-games -> casdoor-games-pg) + backend (sync).
+    # 2. self (games BFF -> casdoor-games -> casdoor-games-pg) + backend.
     - to:
         - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: hugmesh-games } }
         - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: hugmesh-backend } }

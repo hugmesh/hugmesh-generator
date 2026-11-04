@@ -13,11 +13,26 @@ resources:
 # (ghcr.io/hugmesh/hugmesh-games/<image>, scripts/release/repos.tsv) under the Harbor
 # host. First-party images now pull from the in-cluster Harbor container registry
 # (registry.hugmesh.net = inherited from GitLab's chart hosts.domain default, kept as-is; now served by Harbor (apps/03a-harbor.yaml), project
-# path = <group>/<repo>). The CI in each repo pushes :<branch> + :<sha>; we track
-# the moving :main here for dev. Pulls need the harbor-registry imagePullSecret
-# (ESO-materialized, see manifests/external-secrets).
+# path = <group>/<repo>). The CI in each repo pushes :<branch> + :<sha>; the portal
+# (games-portal/kustomization.yaml) tracks the moving :main for dev, the backend is
+# pinned (below). Pulls need the harbor-registry imagePullSecret (ESO-materialized,
+# see manifests/external-secrets).
+#
+# THE BACKEND IS PINNED, NOT TRACKING :main. deployment.yaml hands this image the
+# two-realm environment (APP_TENANCY_JWKS_URIS, APP_SECURITY_GAMES_REALM_ISSUERS). An
+# image built before hugmesh/hugmesh-games#52 ignores both names: both issuers collapse
+# into one domain behind a single jwk-set-uri, every mesh token answers 401, and a token
+# that claims iss=mesh but is signed by the games key is accepted. So the tag here must
+# name a build that carries #52, and until one exists it names NOTHING: the placeholder
+# below resolves to no manifest, the pod stays in ImagePullBackOff, and no pre-#52 image
+# can start with this environment. The hugmesh-games Release workflow tags every main
+# build `sha-<first 12 of the commit>`; once #52 is on main, replace the placeholder with
+# that tag (and, preferably, add its `digest:`). tests/scripts/test-games-two-realms.sh
+# refuses `main` and any other floating tag here, accepts the placeholder, and for a
+# `sha-` tag fetches that commit's application.yml from the public repo to prove it reads
+# both names.
 images:
-  - { name: hugmesh/hugmesh.games-backend, newName: registry.hugmesh.net/hugmesh/hugmesh-games/backend, newTag: main }
+  - { name: hugmesh/hugmesh.games-backend, newName: registry.hugmesh.net/hugmesh/hugmesh-games/backend, newTag: needs-hugmesh-games-pr52 }
 patches:
   # Only the two first-party images come from Harbor; the stores are stock images.
   - target: { kind: Deployment, name: "^hugmesh-games(-portal)?$" }

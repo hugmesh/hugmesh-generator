@@ -1284,8 +1284,10 @@ services:
       CASDOOR_GAMES_ORG: threewizards
       CASDOOR_GAMES_CLIENT_ID: dev-games-client
       CASDOOR_GAMES_CLIENT_SECRET: dev-games-secret
-      GM_SYNC_SYSTEMS_ROLE: ROLE_GAMES_ADMIN
-      GM_SYNC_GAMES_ROLE: admin
+      # The GM sync is OFF here as in the cluster (specs/cluster/manifests/hugmesh-apis):
+      # the image has no enable flag, so its first tick is scheduled 100 years out. No
+      # games role is named: hugmesh-actions#21 refuses a role the realm owns (`admin`).
+      GM_SYNC_INITIAL_DELAY_MS: "3153600000000"
     depends_on:
       casdoor: { condition: service_started }
     # hugmesh-actions' Dockerfile EXPOSEs 8090 (unlike every other Spring

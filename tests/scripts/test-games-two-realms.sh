@@ -18,7 +18,14 @@
 #                and the registry agree; both stores are off the broad from-set.
 #   egress       tier-egress carries the paths both realms need, before anyone carves
 #                it into the manual overlay.
-#   images       the kustomize image names are the published set.
+#   images       the kustomize image names are the published set; the backend tag is
+#                pinned to a build that carries hugmesh-games#52 (or to the placeholder
+#                that resolves to nothing), never a floating name. For a sha-/release
+#                tag, that commit's application.yml is fetched from the public repo.
+#   sync         hugmesh-actions' GM mirror into the games realm is OFF: no games-side
+#                client in the pod, first tick 100 years out, no backend -> games
+#                egress, no `mesh-*` role seeded, every seeded description fits
+#                Casdoor's varchar(100).
 #   builders     parameterize_games_domain(), run for real over a scratch tree from
 #                BOTH builders; the RELEASE_STATE=internal Ingress class rewrite; the
 #                games-deselected prune.
@@ -29,7 +36,9 @@
 # Negative controls: each mutation goes on a scratch copy, the copy must really differ,
 # and the analyser must go RED naming the planted defect.
 #
-# Offline: bash + python3 + PyYAML. No cluster, no docker, no network.
+# Offline, except the pinned-build proof: bash + python3 + PyYAML. No cluster, no
+# docker. The one network call (raw.githubusercontent.com) is REQUIRED in CI and
+# reported as NOT VERIFIED offline; a placeholder tag needs no call.
 # =============================================================================
 set -uo pipefail
 
@@ -204,8 +213,11 @@ def allows(ns, peer, port):
             if ports is None or any(x.get("port") == port for x in ports):
                 return True
     return False
+def reaches(ns, peer):
+    return any(peer in [p.get("namespaceSelector", {}).get("matchLabels", {}).get("kubernetes.io/metadata.name") for p in r.get("to", [])]
+               for r in rules(ns))
 check(allows("hugmesh-frontend", "hugmesh-games", 8080), "[egress] fe-gateway -> games BFF :8080")
-check(allows("hugmesh-backend", "hugmesh-games", 8000) and allows("hugmesh-backend", "hugmesh-games", 8080), "[egress] backend -> casdoor-games :8000 + games :8080")
+check(not reaches("hugmesh-backend", "hugmesh-games"), "[egress] backend has no path to hugmesh-games (the sync is off; a mesh user's /games goes through the fe-gateway)")
 check(allows("hugmesh-games", "hugmesh-pki", 8000), "[egress] games -> systems Casdoor :8000 (key fetch)")
 pub = next((x for x in te if x["metadata"]["namespace"] == "hugmesh-games" and x["metadata"]["name"] == "casdoor-games-public-egress"), None)
 if pub is None:
@@ -241,13 +253,47 @@ for name, want in (("hugmesh/hugmesh.games-backend", "hugmesh-games/backend"), (
     check(new == PFX + want and want in published, f"[images] {name} -> {new} is in the published set")
 check(imgs.get("hugmesh/games-ui") == PFX + "hugmesh-games/games-ui", "[images] games-ui is named under the repo's image path (publishing it is a hugmesh-games change)")
 
+# ── the backend image is pinned to a build that carries hugmesh-games#52 ─────
+PLACEHOLDER = "needs-hugmesh-games-pr52"
+SHA_TAG = re.compile(r"^sha-[0-9a-f]{12}$")
+RELEASE_TAG = re.compile(r"^\d+\.\d+\.\d+(-[0-9A-Za-z.]+)?$")
+bi = next((i for i in pk.get("images", []) if i.get("name") == "hugmesh/hugmesh.games-backend"), None)
+tag = str((bi or {}).get("newTag") or "")
+check(tag == PLACEHOLDER or SHA_TAG.match(tag) is not None or RELEASE_TAG.match(tag) is not None,
+      f"[image] backend tag {tag!r}: the fail-closed placeholder, a sha-<12> or a release, never a floating name (main moves under the cluster and a pre-#52 build accepts a mesh-iss token signed by the games key)")
+
+# ── the GM sync is off ───────────────────────────────────────────────────────
+ad = next(d for d in docs(f"{M}/hugmesh-apis/deployment.yaml") if d["kind"] == "Deployment")
+ac = next(c for c in ad["spec"]["template"]["spec"]["containers"] if c["name"] == "api")
+aenv = {e["name"]: e for e in ac["env"]}
+check(not [k for k in aenv if k.startswith("CASDOOR_GAMES_")], "[sync] hugmesh-api is handed no games-realm client (CASDOOR_GAMES_*)")
+check("casdoor-sync-games" not in uncommented(f"{M}/hugmesh-apis/deployment.yaml"), "[sync] no container reads the casdoor-sync-games Secret")
+delay = str((aenv.get("GM_SYNC_INITIAL_DELAY_MS") or {}).get("value") or "")
+check(delay.isdigit() and int(delay) >= 10 * 365 * 24 * 3600 * 1000, f"[sync] the first tick is at least ten years out (GM_SYNC_INITIAL_DELAY_MS={delay or 'unset'}; the image has no enable flag)")
+grole = (aenv.get("GM_SYNC_GAMES_ROLE") or {}).get("value")
+check(grole is None or str(grole).startswith("mesh-"), f"[sync] no games role the realm owns is named as the mirror target (GM_SYNC_GAMES_ROLE={grole!r})")
+for k in ("CASDOOR_PLATFORM_URL", "CASDOOR_PLATFORM_CLIENT_SECRET"):
+    check(k in aenv, f"[sync] the systems side ({k}) stays: it also backs the actions resource server")
+
+# ── the games realm's catalog: its own roles, each inside Casdoor's columns ──
+import json
+init = json.loads(docs(f"{M}/casdoor-games/init-data-configmap.yaml")[0]["data"]["init_data.json"])
+seeded = init.get("roles", []) + init.get("permissions", [])
+check(seeded and all(len(str(o.get("description", ""))) <= 100 and len(str(o.get("displayName", ""))) <= 100 for o in seeded),
+      "[issuer] every seeded role/permission description and displayName fits Casdoor's varchar(100) (a 247-char one made Casdoor exit 2)")
+check(not [r for r in init.get("roles", []) if str(r.get("name", "")).startswith("mesh-")],
+      "[issuer] no mesh-* role is seeded: games-realm admin comes only from the realm's own `admin`")
+
 # ── comments that used to describe a system that does not exist ──────────────
 for rel, phrase in (("tests/stack/compose.games.yaml", "two-realm portal"),
                     ("tests/stack/compose.games.yaml", "hasRole ADMIN"),
                     ("specs/cluster/manifests/games-ui/deployment.yaml", "two-realm portal"),
                     ("specs/cluster/manifests/games-ui/deployment.yaml", "DEFERRED"),
                     ("specs/cluster/apps/20-gateway-fe.yaml", "DEFERRED, stated honestly: on the CLUSTER the games BFF"),
-                    ("specs/cluster/manifests/games/deployment.yaml", "iss-strict JwtIssuerValidator")):
+                    ("specs/cluster/manifests/games/deployment.yaml", "iss-strict JwtIssuerValidator"),
+                    ("specs/cluster/manifests/hugmesh-apis/deployment.yaml", "The single automatic mirror"),
+                    ("specs/cluster/manifests/casdoor-games/kustomization.yaml", "mirror is the scheduled hugmesh-actions"),
+                    ("specs/cluster/manifests/networkpolicy/tier-egress.yaml", "hugmesh-actions sync handle")):
     check(phrase not in text(os.path.join(root, rel)), f"[docs] {rel} no longer says {phrase!r}")
 
 print(f"== analyser: {F} failure(s) ==")
@@ -260,6 +306,53 @@ bad(){ N=$((N+1)); echo "  FAIL $*"; }
 
 echo "== static wiring =="
 python3 "${ANALYSER}" "${REPO}" && ok "the analyser is green on this tree" || bad "the analyser is red on this tree"
+
+# ── the pinned backend build carries hugmesh-games#52 ───────────────────────
+# A tag names a commit of the public hugmesh-games repo: sha-<12> is that commit, a
+# release N.N.N is git tag vN.N.N. The build carries #52 iff its application.yml binds
+# both names deployment.yaml sets. Required in CI (no network there is a failure, not
+# a skip); offline it is reported, loudly, as not verified.
+echo "== the pinned backend build =="
+build_ref_carries_52(){ # $1 git ref -> 0 carries, 1 lacks, 2 unreachable; prints why
+  python3 - "$1" <<'PY'
+import sys, urllib.request
+ref = sys.argv[1]
+url = f"https://raw.githubusercontent.com/hugmesh/hugmesh-games/{ref}/backend/src/main/resources/application.yml"
+try:
+    body = urllib.request.urlopen(url, timeout=20).read().decode("utf-8", "replace")
+except Exception as e:
+    print(f"unreachable: {url}: {e}"); sys.exit(2)
+missing = [k for k in ("APP_TENANCY_JWKS_URIS", "APP_SECURITY_GAMES_REALM_ISSUERS") if k not in body]
+if missing:
+    print(f"{ref}: application.yml does not bind {', '.join(missing)}"); sys.exit(1)
+print(f"{ref}: application.yml binds both two-realm names"); sys.exit(0)
+PY
+}
+TAG="$(python3 -c 'import sys, yaml; k = yaml.safe_load(open(sys.argv[1])); print(next((i.get("newTag") or "") for i in k.get("images", []) if i.get("name") == "hugmesh/hugmesh.games-backend"))' "${REPO}/specs/cluster/manifests/games/kustomization.yaml")"
+case "${TAG}" in
+  needs-hugmesh-games-pr52)
+    ok "backend tag is the placeholder: it names no image, so no pre-#52 build can start with the two-realm environment (replace it with the sha- tag of the first main build after #52)";;
+  sha-????????????) REF="${TAG#sha-}";;
+  [0-9]*) REF="v${TAG}";;
+  *) bad "backend tag '${TAG}' is a floating name"; REF="";;
+esac
+if [ -n "${REF:-}" ]; then
+  why="$(build_ref_carries_52 "${REF}")"; rc=$?
+  case "${rc}" in
+    0) ok "backend tag ${TAG}: ${why}";;
+    1) bad "backend tag ${TAG} is a PRE-#52 build: ${why}";;
+    *) if [ -n "${CI:-}" ]; then bad "cannot prove what build ${TAG} is (${why}); CI must reach the public repo"; else echo "  NOT VERIFIED (offline): ${why}"; fi;;
+  esac
+fi
+# The verifier itself, against two known commits: the last pre-#52 main build and the
+# #52 head. A verifier that cannot tell them apart proves nothing.
+for pair in "f111cfe3382d|1|the 0.2.0-beta.3 build (pre-#52) is reported as lacking the names" "b557b3944d8e|0|the #52 head is reported as carrying them"; do
+  IFS='|' read -r ref want label <<<"${pair}"
+  why="$(build_ref_carries_52 "${ref}")"; rc=$?
+  if [ "${rc}" -eq 2 ]; then
+    if [ -n "${CI:-}" ]; then bad "verifier control: ${why}"; else echo "  NOT VERIFIED (offline): verifier control ${ref}"; fi
+  elif [ "${rc}" -eq "${want}" ]; then ok "verifier control: ${label}"; else bad "verifier control: ${label} -- got: ${why}"; fi
+done
 
 # ── the builders, for real ───────────────────────────────────────────────────
 echo "== parameterize_games_domain(), run from each builder =="
@@ -429,6 +522,17 @@ expect_red "the public egress widened to all ports" "the public path is :443 onl
 expect_red "the ESO key renamed" "games-bff-db reads" 'rep(M+"external-secrets/secretstore.yaml", "key: hugmesh/games-bff", "key: hugmesh/games-bff-renamed")'
 expect_red "the dotted image name returns" "is in the published set" 'rep(M+"games/kustomization.yaml", "hugmesh/hugmesh-games/backend", "hugmesh/hugmesh.games/backend")'
 expect_red "the stale comment returns" "no longer says" 'rep("tests/stack/compose.games.yaml", "the standalone games-realm portal", "the standalone two-realm portal")'
+expect_red "the backend tracks :main again" "never a floating name" 'rep(M+"games/kustomization.yaml", "newTag: needs-hugmesh-games-pr52", "newTag: main")'
+expect_red "the backend pinned to a branch tag" "never a floating name" 'rep(M+"games/kustomization.yaml", "newTag: needs-hugmesh-games-pr52", "newTag: fix-games-two-realms")'
+expect_red "the games-side client handed back to hugmesh-api" "no games-realm client" 'rep(M+"hugmesh-apis/deployment.yaml", "            - { name: GM_SYNC_INITIAL_DELAY_MS, value: \"3153600000000\" }\n", "            - { name: CASDOOR_GAMES_URL, value: \"http://casdoor-games.hugmesh-games.svc.cluster.local:8000\" }\n            - { name: GM_SYNC_INITIAL_DELAY_MS, value: \"3153600000000\" }\n")'
+expect_red "the sync Secret mounted again" "casdoor-sync-games" 'rep(M+"hugmesh-apis/deployment.yaml", "            - { name: GM_SYNC_INITIAL_DELAY_MS, value: \"3153600000000\" }\n", "            - { name: GAMES_SECRET, valueFrom: { secretKeyRef: { name: casdoor-sync-games, key: clientSecret } } }\n            - { name: GM_SYNC_INITIAL_DELAY_MS, value: \"3153600000000\" }\n")'
+expect_red "the initial delay dropped" "ten years out" 'rep(M+"hugmesh-apis/deployment.yaml", "            - { name: GM_SYNC_INITIAL_DELAY_MS, value: \"3153600000000\" }\n", "")'
+expect_red "the initial delay back to a minute" "ten years out" 'rep(M+"hugmesh-apis/deployment.yaml", "GM_SYNC_INITIAL_DELAY_MS, value: \"3153600000000\"", "GM_SYNC_INITIAL_DELAY_MS, value: \"60000\"")'
+expect_red "the realm admin role named as the mirror target" "no games role the realm owns" 'rep(M+"hugmesh-apis/deployment.yaml", "            - { name: GM_SYNC_INITIAL_DELAY_MS, value: \"3153600000000\" }\n", "            - { name: GM_SYNC_GAMES_ROLE, value: \"admin\" }\n            - { name: GM_SYNC_INITIAL_DELAY_MS, value: \"3153600000000\" }\n")'
+expect_red "the backend egress to hugmesh-games returns" "no path to hugmesh-games" 'rep(M+"networkpolicy/tier-egress.yaml", "    # No path to hugmesh-games.", "    - to:\n        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: hugmesh-games } }\n      ports:\n        - { protocol: TCP, port: 8000 }\n    # No path to hugmesh-games.")'
+expect_red "a 101-char description seeded" "varchar(100)" 'rep(M+"casdoor-games/init-data-configmap.yaml", "\"description\": \"Standard player; can access the portal and play unlocked levels.\"", "\"description\": \"" + "x" * 101 + "\"")'
+expect_red "a mesh-games-admin role seeded" "no mesh-* role" 'rep(M+"casdoor-games/init-data-configmap.yaml", "{ \"owner\": \"threewizards\", \"name\": \"player\",", "{ \"owner\": \"threewizards\", \"name\": \"mesh-games-admin\", \"displayName\": \"Mesh games admin\", \"description\": \"synced\", \"users\": [], \"roles\": [], \"domains\": [], \"isEnabled\": true },\n        { \"owner\": \"threewizards\", \"name\": \"player\",")'
+expect_red "the mirror comment returns" "no longer says" 'rep(M+"hugmesh-apis/deployment.yaml", "Two-Casdoor sync (GameMasterAdminSyncAction): OFF", "The single automatic mirror: ROLE_GAMES_ADMIN(systems) -> admin(games)")'
 
 echo
 echo "== test-games-two-realms: ${P} passed, ${N} failed =="

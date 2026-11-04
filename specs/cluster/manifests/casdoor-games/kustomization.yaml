@@ -4,9 +4,13 @@ namespace: hugmesh-games
 # casdoor-games — the SEPARATE, INDEPENDENT GAMES-realm Casdoor (org "threewizards"),
 # mirroring the canonical hugmesh.games Casdoor. Same instance shape as the systems
 # manifests/casdoor/ (pg / app-conf / deployment / service / init-data / init-job) but
-# with the games role catalog and a GitHub OAuth provider. The cross-realm
-# ROLE_GAMES_ADMIN(systems) -> admin(games) mirror is the scheduled hugmesh-actions
-# job (manifests/hugmesh-apis), NOT part of this kustomization.
+# with the games role catalog and a GitHub OAuth provider. Games-realm admin comes
+# ONLY from this realm's own `admin` role: the hugmesh-actions mirror into the games
+# realm is OFF (manifests/hugmesh-apis/deployment.yaml), and this catalog seeds no
+# `mesh-*` role for it. A mesh games admin uses the mesh token through the fe-gateway.
+# Every role/permission description and displayName here must fit Casdoor's
+# varchar(100) columns (a 247-char description made Casdoor exit 2 at init);
+# tests/scripts/test-games-two-realms.sh measures them.
 resources:
   - pg.yaml                    # external Postgres backing casdoor-games (db threewizards)
   - app-conf-configmap.yaml    # Casdoor app.conf pointing at casdoor-games-pg
