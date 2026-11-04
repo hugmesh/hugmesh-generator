@@ -28,6 +28,12 @@
 #      opt-in entries appended (default=0 unchanged); no silent no-xattr tar
 #      fallback on any x86 pack hop or in install-x86.sh; Makefile forwards the
 #      knobs; provision.sh skips the full relabel on an overlay root.
+#   G  specs/usr/libexec/live-overlay-relabel EXECUTED (restorecon stubbed): on an
+#      overlay root it relabels exactly the upper layer (merged spellings) + /dev;
+#      on a disk root it does nothing.
+#   H  specs-x86/etc/grub.d/11_selinux_permissive_rescue EXECUTED against a stand-in
+#      10_linux: one flat enforcing=0 entry per kernel, never the default; installed
+#      by the builder. /var/log/wtmp + lastlog exist before the label pass.
 #
 # Offline, no network. bash + coreutils + findutils + awk (gawk or mawk) + GNU tar
 # (+ setfattr for D, + CAP_SYS_ADMIN for E).
@@ -40,6 +46,8 @@ INST="${REPO}/specs-x86/installer/install-x86.sh"
 PROV="${REPO}/specs/etc/keys-provision/provision.sh"
 MK="${REPO}/Makefile"
 GRUBDEF="${REPO}/specs-x86/etc/default/grub"
+GRUBD="${REPO}/specs-x86/etc/grub.d/11_selinux_permissive_rescue"
+LRHOOK="${REPO}/specs/usr/libexec/live-overlay-relabel"
 
 P=0; F=0; S=0
 ok()   { echo "  PASS $*"; P=$((P+1)); }
@@ -51,7 +59,8 @@ trap 'rm -rf "${TMP}"' EXIT
 
 # A file with a NUL byte makes grep treat it as binary and a "no match" becomes
 # indistinguishable from a real miss (grep fails OPEN). Refuse such inputs first.
-for f in "${LIB}" "${X86}" "${INST}" "${PROV}" "${MK}" "${GRUBDEF}"; do
+for f in "${LIB}" "${X86}" "${INST}" "${PROV}" "${MK}" "${GRUBDEF}" "${GRUBD}" "${LRHOOK}"; do
+    [ -f "${f}" ] || continue   # a missing file is reported by its own section
     if [ "$(tr -d '\000' < "${f}" | wc -c)" -ne "$(wc -c < "${f}")" ]; then
         bad "${f#"${REPO}"/} contains a NUL byte — every grep below would fail open on it"
     fi
@@ -212,7 +221,7 @@ semodule() {
 }
 setfiles() {
   echo "setfiles $*" >> "${SR_ROOT}/setfiles.calls"
-  case " $* " in *" -n "*) local i; for i in $(seq 1 "${DRY:-0}"); do echo "Relabeled /x${i} from a to b"; done; return 0 ;; esac
+  case " $* " in *" -n "*) local i; for i in $(seq 1 "${DRY:-0}"); do echo "Relabeled /x${i} from a to b"; done; return "${DRYRC:-0}" ;; esac
   return "${SETFILES_RC:-0}"
 }
 EOS
@@ -235,9 +244,9 @@ MODE=good bash -c '. "$1"; . "$2"; slx_store_install_modules "$3" mcs chroot' _ 
 mk_sysroot "${SR}"; rm "${SR}/usr/share/selinux/mcs/hugmesh_vpn.pp"
 MODE=good bash -c '. "$1"; . "$2"; slx_store_install_modules "$3" mcs chroot' _ "${LIB}" "${STUB}/c-stubs.sh" "${SR}" >/dev/null 2>&1 \
     && bad "a manifest module with no .pp PASSED" || ok "a manifest module with no .pp fails"
-label() { # label <DRY> <SETFILES_RC>
+label() { # label <DRY> <SETFILES_RC> [<DRYRC>]
     mk_sysroot "${SR}"
-    DRY="$1" SETFILES_RC="$2" bash -c '. "$1"; . "$2"; slx_label_tree "$3" mcs' _ "${LIB}" "${STUB}/c-stubs.sh" "${SR}" > "${TMP}/c.out" 2>&1
+    DRY="$1" SETFILES_RC="$2" DRYRC="${3:-0}" bash -c '. "$1"; . "$2"; slx_label_tree "$3" mcs' _ "${LIB}" "${STUB}/c-stubs.sh" "${SR}" > "${TMP}/c.out" 2>&1
 }
 label 0 0 && grep -q -- '^setfiles -m -F -c /etc/selinux/mcs/policy/policy.35 -e /proc -e /sys -e /dev -e /run /etc/selinux/mcs/contexts/files/file_contexts /$' "${SR}/setfiles.calls" \
     && ok "label: in-chroot setfiles -m -F -c policy.35 with root-relative excludes (the Step 0 argv)" || bad "label argv: $(cat "${SR}/setfiles.calls" 2>&1) $(cat "${TMP}/c.out")"
@@ -245,6 +254,10 @@ grep -q '^setfiles -n -v' "${SR}/setfiles.calls" && ok "label: a dry run is the 
 label 49 0 && ok "label: 49 remaining changes pass (< 50)" || bad "label: 49 remaining failed"
 label 50 0 && bad "label: 50 remaining changes PASSED" || ok "label: 50 remaining changes fail (setfiles no-op'd)"
 label 0 1 && bad "label: setfiles rc=1 PASSED" || ok "label: a failing setfiles fails"
+# The dry run is a postcondition only if it can fail: one that errors out prints no
+# "Relabeled" line, and counting that silence as "0 remaining" passed (audit 11-04).
+label 0 0 1 && bad "label: a dry run that ERRORED (rc=1, no output) PASSED as '0 remaining'" \
+    || { grep -q 'dry-run postcondition .* itself failed' "${TMP}/c.out" && ok "label: a failing dry run fails the label pass (cannot count = cannot pass)" || bad "label: failing dry run, wrong reason: $(cat "${TMP}/c.out")"; }
 mk_sysroot "${SR}"; rm -f "${SR}/usr/sbin/setfiles"
 DRY=0 bash -c '. "$1"; . "$2"; slx_label_tree "$3" mcs' _ "${LIB}" "${STUB}/c-stubs.sh" "${SR}" >/dev/null 2>&1 \
     && bad "label with no setfiles in the sysroot PASSED" || ok "label: no setfiles inside the sysroot fails (never falls back to the host)"
@@ -260,10 +273,16 @@ if command -v setfattr >/dev/null && : > "${TD}/probe" && setfattr -n user.t -v 
     mk_fixture "${TD}" "${MAP}" 50 0; fix_root_label "${TD}" "${MAP}"
     while read -r f; do setfattr -h -n user.t -v 1 "${f}"; done < <(find "${TD}" \( -type f -o -type d \))
     tar -C "${TD}" --xattrs --xattrs-include='*' -cf "${TMP}/good.tar.xz" .   # uncompressed: CI images may lack xz
-    PATH="${STUB}:${PATH}" STUB_MAP="${MAP}" bash -c '. "$1"; slx_tar_label_gate "$2" stage4 "$3"' _ "${LIB}" "${TMP}/good.tar.xz" "${TD}.table" > "${TMP}/t.out" 2>&1 \
-        && grep -q 'archive census' "${TMP}/t.out" && ok "stage4 gate: xattr tarball passes (probes extracted, census from tar -tv)" || bad "stage4 good: $(cat "${TMP}/t.out")"
+    # CI cannot write security.*, so this lane names user.t as the census attribute.
+    SLX_TAR_CENSUS_XATTR=user.t PATH="${STUB}:${PATH}" STUB_MAP="${MAP}" bash -c '. "$1"; slx_tar_label_gate "$2" stage4 "$3"' _ "${LIB}" "${TMP}/good.tar.xz" "${TD}.table" > "${TMP}/t.out" 2>&1 \
+        && grep -q 'archive census [0-9]*/[0-9]* files+dirs carry user.t' "${TMP}/t.out" && ok "stage4 gate: xattr tarball passes (probes extracted, census by attribute name from tar -tvv)" || bad "stage4 good: $(cat "${TMP}/t.out")"
+    # The SAME tarball under the shipped default (security.selinux): every entry has
+    # an xattr, none has a label. A '*'-marker census passed this (audit 11-04).
+    PATH="${STUB}:${PATH}" STUB_MAP="${MAP}" bash -c 'unset SLX_TAR_CENSUS_XATTR; . "$1"; slx_tar_label_gate "$2" stage4 "$3"' _ "${LIB}" "${TMP}/good.tar.xz" "${TD}.table" > "${TMP}/t.out" 2>&1 \
+        && bad "stage4 gate PASSED a tarball whose entries carry xattrs but NO security.selinux" \
+        || { grep -q 'archive census 0/[0-9]* files+dirs carry security.selinux' "${TMP}/t.out" && ok "stage4 gate: xattrs that are not security.selinux count for nothing (census 0)" || bad "other-xattr tar, wrong reason: $(cat "${TMP}/t.out")"; }
     tar -C "${TD}" -cf "${TMP}/bare.tar.xz" .
-    PATH="${STUB}:${PATH}" STUB_MAP="${MAP}" bash -c '. "$1"; slx_tar_label_gate "$2" stage4 "$3"' _ "${LIB}" "${TMP}/bare.tar.xz" "${TD}.table" > "${TMP}/t.out" 2>&1 \
+    SLX_TAR_CENSUS_XATTR=user.t PATH="${STUB}:${PATH}" STUB_MAP="${MAP}" bash -c '. "$1"; slx_tar_label_gate "$2" stage4 "$3"' _ "${LIB}" "${TMP}/bare.tar.xz" "${TD}.table" > "${TMP}/t.out" 2>&1 \
         && bad "stage4 gate PASSED a tarball packed WITHOUT --xattrs" || { grep -q 'archive census 0/' "${TMP}/t.out" && ok "stage4 gate fails a tarball packed without xattrs (census 0)" || bad "bare tar wrong reason: $(cat "${TMP}/t.out")"; }
 else
     skip "D: this filesystem refuses user.* xattrs (or no setfattr) — the tar census case did not run"
@@ -399,6 +418,97 @@ l_pr="$(grep -n 'restorecon -nv "\${_relabel_probe}"' <<<"${pb}" | head -1 | cut
 [ -n "${l_ov}" ] && [ -n "${l_rc}" ] && [ -n "${l_pr}" ] && [ "${l_ov}" -lt "${l_rc}" ] && [ "${l_rc}" -lt "${l_pr}" ] \
     && ok "provision.sh: an overlay root skips 'restorecon -RF /' (copy-up storm) and still runs the #152 probe postcondition" \
     || bad "provision.sh overlay skip missing or misplaced (overlay=${l_ov:-?} restorecon=${l_rc:-?} probe=${l_pr:-?})"
+
+echo "-- G) live overlay relabel hook, executed --"
+HOOK="${REPO}/specs/usr/libexec/live-overlay-relabel"
+if [ ! -x "${HOOK}" ]; then
+    bad "specs/usr/libexec/live-overlay-relabel is missing or not executable"
+else
+    HK="${TMP}/hook"; mkdir -p "${HK}/bin" "${HK}/upper/etc/selinux" "${HK}/upper/usr/libexec"
+    : > "${HK}/upper/etc/inittab"
+    printf '#!/bin/sh\necho "$*" >> "%s/called"\n' "${HK}" > "${HK}/bin/restorecon"; chmod +x "${HK}/bin/restorecon"
+    run_hook() { # run_hook <mounts file> -> ${HK}/called
+        rm -f "${HK}/called"
+        # the hook's PATH puts /usr/sbin first; a restorecon stub must win, so run a copy with the stub dir prepended
+        sed "s|^PATH=/usr/sbin|PATH=${HK}/bin:/usr/sbin|" "${HOOK}" > "${HK}/hook.sh"
+        PROC_MOUNTS="$1" sh "${HK}/hook.sh" >/dev/null 2>&1
+    }
+    printf 'LiveOS_rootfs / overlay rw,seclabel,relatime,lowerdir=/run/rootfsbase,upperdir=%s/upper,workdir=/run/ovlwork,uuid=on 0 0\n' "${HK}" > "${HK}/m.overlay"
+    printf '/dev/sda2 / ext4 rw,seclabel,relatime 0 0\n' > "${HK}/m.disk"
+    run_hook "${HK}/m.overlay"
+    called="$(tr '\n' ' ' < "${HK}/called" 2>/dev/null)"
+    case " ${called} " in *" -RFx /dev "*) ok "hook: relabels /dev without crossing into its submounts" ;; *) bad "hook: no 'restorecon -RFx /dev' (got: ${called})" ;; esac
+    grep -E -- '^-F ' "${HK}/called" 2>/dev/null > "${HK}/up"
+    for w in / /etc /etc/inittab /etc/selinux /usr /usr/libexec; do
+        grep -- " ${w}\( \|\$\)" "${HK}/up" >/dev/null && ok "hook: relabels upper-layer path ${w} (merged-path spelling)" || bad "hook: did not relabel ${w} (got: $(cat "${HK}/up"))"
+    done
+    grep -- "${HK}/upper" "${HK}/up" >/dev/null && bad "hook: passed an UPPER path to restorecon, not the merged path" || ok "hook: never passes the raw upper path to restorecon"
+    run_hook "${HK}/m.disk"
+    [ ! -e "${HK}/called" ] && ok "hook: a disk root is a no-op" || bad "hook: ran restorecon on a disk root: $(cat "${HK}/called")"
+    grep -vE '^[[:space:]]*#' "${HOOK}" | grep -- '-R[^ ]* /\( \|$\)' >/dev/null && bad "hook: a recursive walk of / (copy-up storm)" || ok "hook: no recursive walk of / (it only touches the upper layer)"
+    grep -i hugmesh "${HOOK}" >/dev/null && bad "hook carries the brand name (it ships on unaffiliated images too)" || ok "hook: brand-neutral"
+fi
+l_lrinst="$(ln_of 'install -D -m 0755 "\$\{SHARED_SPECS\}/usr/libexec/live-overlay-relabel"')"
+l_lrsed="$(ln_of "sed -i 's\\\|\\^si::sysinit:\\\|lr::sysinit:/usr/libexec/live-overlay-relabel")"
+{ [ -n "${l_lrinst}" ] && [ -n "${l_lrsed}" ] && [ "${l_lrinst}" -lt "${l_sto}" ] && [ "${l_lrsed}" -lt "${l_sto}" ]; } \
+    && ok "builder installs the hook and puts it before OpenRC's sysinit line, before the label pass labels both" \
+    || bad "builder wiring for live-overlay-relabel missing (install=${l_lrinst:-?} inittab=${l_lrsed:-?} store=${l_sto:-?})"
+
+echo "-- H) grub-mkconfig rescue snippet (EXECUTED against a stand-in 10_linux) + login records --"
+GD="${REPO}/specs-x86/etc/grub.d/11_selinux_permissive_rescue"
+if [ ! -x "${GD}" ]; then
+    bad "specs-x86/etc/grub.d/11_selinux_permissive_rescue is missing or not executable"
+else
+    GT="${TMP}/grubd"; mkdir -p "${GT}"; cp "${GD}" "${GT}/"
+    # Stand-in for the image's 10_linux: honours the same variables the real one reads
+    # (submenu, recovery, savedefault, both cmdline halves) and prints its stderr chatter.
+    cat > "${GT}/10_linux" <<'EOS'
+#!/bin/sh
+echo "Found linux image: /boot/vmlinuz-6.18.52-gentoo" >&2
+for k in 6.18.52-gentoo 6.18.51-gentoo; do
+  if [ "${GRUB_DISABLE_SUBMENU}" != true ] && [ "${k}" = 6.18.52-gentoo ]; then
+    echo "menuentry 'Gentoo GNU/Linux' --class os \$menuentry_id_option 'gnulinux-simple-abc' {"
+    echo "	linux /boot/vmlinuz-${k} root=UUID=abc ro ${GRUB_CMDLINE_LINUX} ${GRUB_CMDLINE_LINUX_DEFAULT}"; echo "}"
+    echo "submenu 'Advanced options for Gentoo GNU/Linux' \$menuentry_id_option 'gnulinux-advanced-abc' {"
+  fi
+  echo "menuentry 'Gentoo GNU/Linux, with Linux ${k}' --class os \$menuentry_id_option 'gnulinux-${k}-advanced-abc' {"
+  [ "${GRUB_SAVEDEFAULT}" = true ] && echo "	savedefault"
+  echo "	linux /boot/vmlinuz-${k} root=UUID=abc ro ${GRUB_CMDLINE_LINUX} ${GRUB_CMDLINE_LINUX_DEFAULT}"; echo "}"
+  [ "${GRUB_DISABLE_RECOVERY}" != true ] && { echo "menuentry 'Gentoo GNU/Linux, with Linux ${k} (recovery mode)' {"; echo "	linux /boot/vmlinuz-${k} single"; echo "}"; }
+done
+[ "${GRUB_DISABLE_SUBMENU}" != true ] && echo "}"
+exit 0
+EOS
+    chmod +x "${GT}/10_linux"
+    GRUB_CMDLINE_LINUX="selinux=1 audit=1 enforcing=1" GRUB_CMDLINE_LINUX_DEFAULT="quiet" GRUB_SAVEDEFAULT=true \
+        sh "${GT}/11_selinux_permissive_rescue" > "${GT}/out" 2> "${GT}/err"
+    n_me="$(grep -c '^menuentry ' "${GT}/out")"; n_lin="$(grep -c '^[[:space:]]*linux ' "${GT}/out")"
+    n_res="$(grep -c "^menuentry '[^']* (SELinux permissive rescue)' .*-selinux-permissive-rescue' {" "${GT}/out")"
+    [ "${n_me}" = 2 ] && [ "${n_res}" = 2 ] && ok "grub.d: one rescue entry per kernel 10_linux boots (2/2), each titled and id'd as rescue" \
+        || bad "grub.d: want 2 rescue entries, got menuentry=${n_me} rescue-titled=${n_res}: $(cat "${GT}/out")"
+    [ "${n_lin}" = 2 ] && [ "$(grep -c -- ' enforcing=0$' "${GT}/out")" = 2 ] \
+        && ok "grub.d: every rescue linux line ENDS in enforcing=0 (after GRUB_CMDLINE_LINUX's enforcing=1 — the kernel takes the last)" \
+        || bad "grub.d: enforcing=0 not last on every linux line: $(grep 'linux ' "${GT}/out")"
+    grep -q 'selinux=1 audit=1' "${GT}/out" && grep -q 'quiet' "${GT}/out" && ok "grub.d: keeps the image's own cmdline (both halves)" || bad "grub.d: lost the image cmdline"
+    grep -Eq '^submenu|recovery mode|savedefault|gnulinux-simple' "${GT}/out" \
+        && bad "grub.d: emitted a submenu / recovery / savedefault / the plain simple entry" || ok "grub.d: flat rescue entries only (no submenu, recovery, savedefault or a duplicate default entry)"
+    [ ! -s "${GT}/err" ] && ok "grub.d: does not repeat 10_linux's 'Found linux image' chatter" || bad "grub.d: stderr: $(cat "${GT}/err")"
+    rm "${GT}/10_linux"
+    sh "${GT}/11_selinux_permissive_rescue" > "${GT}/out" 2>&1; rc=$?
+    [ "${rc}" = 0 ] && [ ! -s "${GT}/out" ] && ok "grub.d: no 10_linux -> prints nothing, exits 0 (grub-mkconfig never fails on it)" || bad "grub.d: without 10_linux rc=${rc} out=$(cat "${GT}/out")"
+    case "${GD##*/}" in 1[1-9]_*|[2-9][0-9]_*) ok "grub.d: sorts after 10_linux, so default=0 stays the normal entry" ;; *) bad "grub.d: ${GD##*/} does not sort after 10_linux" ;; esac
+    grep -i hugmesh "${GD}" >/dev/null && bad "grub.d snippet carries the brand name (it ships on unaffiliated images too)" || ok "grub.d: brand-neutral"
+fi
+l_gdi="$(ln_of 'install -D -m 0755 "\$\{SPECS_DIR\}/etc/grub.d/11_selinux_permissive_rescue"')"
+[ -n "${l_gdi}" ] && [ "${l_gdi}" -lt "${l_sto}" ] && ok "builder installs the grub.d rescue snippet into the sysroot (before the label pass)" \
+    || bad "builder does not install etc/grub.d/11_selinux_permissive_rescue (line=${l_gdi:-none} store=${l_sto:-?})"
+# login records: pre-created before the label pass, and pinned as a gate probe
+l_wtmp="$(ln_of '\[ -e "\$\{SYSROOT\}/var/log/\$\{_lrec\}" \] \|\| : > "\$\{SYSROOT\}/var/log/\$\{_lrec\}"')"
+l_wtl="$(ln_of '^[0-9]+:for _lrec in wtmp lastlog; do$')"
+[ -n "${l_wtmp}" ] && [ -n "${l_wtl}" ] && [ "${l_wtmp}" -lt "${l_sto}" ] \
+    && ok "builder creates /var/log/wtmp and /var/log/lastlog before the label pass (else bootmisc/login make them var_log_t)" \
+    || bad "login records not pre-created before the label pass (create=${l_wtmp:-none} loop=${l_wtl:-none} store=${l_sto:-?})"
+grep -q '^    "/var/log/wtmp:wtmp_t"' "${LIB}" && ok "the label gates pin /var/log/wtmp as wtmp_t at every hop" || bad "/var/log/wtmp:wtmp_t is not a core probe"
 
 echo
 echo "== selinux sysroot labels: ${P} passed, ${F} failed, ${S} skipped (skips are NOT passes) =="

@@ -1,0 +1,33 @@
+#!/bin/sh
+# live-overlay-relabel — first sysinit line in /etc/inittab, after pid 1 loaded the
+# policy and before OpenRC starts anything. No-op unless / is an overlay (live ISO).
+#
+# WHY. The squashfs is labelled at build time (slx_label_tree), but dracut assembles
+# the live root BEFORE the policy is loaded: everything it copies up, and the
+# overlay's own root, is a tmpfs inode the kernel labels tmpfs_t once the policy
+# arrives (SELinux discards security.selinux on copy-up and has no policy to honour a
+# create context yet). Measured on the 2026-10-30 backend live ISO: / /etc
+# /etc/ld.so.cache /etc/resolv.conf were all tmpfs_t, so every confined domain was
+# denied { search } on "/" and the type_transition rules for tmpfs parents made new
+# /etc files user_tmpfs_t/initrc_state_t. Under enforcing nothing would run.
+# Copy-ups AFTER the policy loads keep their label, so this pass only has to cover
+# what is in the upper layer right now — a few dozen paths, not a tree walk.
+#
+# init_t and initrc_t are files_unconfined_type, so restorecon needs no new policy
+# here. Never fails the boot: an unlabelled path is logged by the kernel as an AVC,
+# which is the signal; a non-zero exit from a sysinit line would only hide it.
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+: "${PROC_MOUNTS:=/proc/mounts}"
+[ "$(awk '$2=="/"{f=$3} END{print f}' "${PROC_MOUNTS}")" = overlay ] || exit 0
+command -v restorecon >/dev/null 2>&1 || exit 0
+upper="$(awk '$2=="/" && $3=="overlay"{print $4}' "${PROC_MOUNTS}" | tr ',' '\n' | sed -n 's/^upperdir=//p' | tail -1)"
+[ -n "${upper}" ] && [ -d "${upper}" ] || exit 0
+# /dev too: devtmpfs nodes the initramfs made carry device_t until something relabels
+# them, and the first redirection to /dev/null by a confined domain is denied. -x: not
+# /dev/shm or /dev/pts (their own mounts).
+restorecon -RFx /dev 2>/dev/null
+n="$(cd "${upper}" && find . -xdev | wc -l)"
+( cd "${upper}" && find . -xdev -print0 ) | sed -z 's#^\.##; s#^$#/#' | xargs -0 -r restorecon -F
+printf 'live-overlay-relabel: relabelled %s upper-layer path(s) under %s\n' "${n}" "${upper}" > /dev/kmsg 2>/dev/null
+exit 0

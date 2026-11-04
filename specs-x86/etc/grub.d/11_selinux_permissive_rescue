@@ -1,0 +1,30 @@
+#!/bin/sh
+# 11_selinux_permissive_rescue — grub-mkconfig snippet: one "SELinux permissive
+# rescue" entry (enforcing=0) for every kernel 10_linux boots.
+#
+# WHY A grub.d SNIPPET. The .img's hand-written grub.cfg and the live ISO menu carry
+# a rescue entry, but every grub.cfg that grub-mkconfig writes did not: the
+# installer (install-x86.sh, both install paths) and the first-boot branding hook
+# (on client roles built with branding flags) regenerate grub.cfg
+# from /etc/grub.d, and nothing there knew about SELinux. Once enforcing becomes the
+# default, a node whose policy breaks the boot needs this entry to come back.
+#
+# HOW. Run the image's own 10_linux again with the same environment grub-mkconfig
+# exported, so the kernels, root=, LUKS tokens and initrds are exactly the normal
+# entries', and change only three things:
+#   - GRUB_CMDLINE_LINUX_DEFAULT gains a trailing enforcing=0 (the kernel takes the
+#     LAST enforcing=, and libselinux lets the cmdline override /etc/selinux/config);
+#   - flat entries (no submenu, no recovery), each titled "... (SELinux permissive
+#     rescue)" with its own menuentry id and no savedefault, so neither GRUB_DEFAULT
+#     nor a saved entry can land on one;
+#   - 10_linux's own "Found linux image" lines are not repeated on stderr.
+# The snippet sorts after 10_linux, so the default entry is unchanged. When
+# 10_linux finds no kernel it prints nothing, and so does this.
+set -e
+lin="$(dirname "$0")/10_linux"
+[ -x "${lin}" ] || exit 0
+GRUB_DISABLE_SUBMENU=true GRUB_DISABLE_RECOVERY=true GRUB_TOP_LEVEL='' GRUB_ACTUAL_DEFAULT='' GRUB_SAVEDEFAULT='' \
+GRUB_CMDLINE_LINUX_DEFAULT="${GRUB_CMDLINE_LINUX_DEFAULT:-} enforcing=0" \
+    "${lin}" 2>/dev/null \
+    | sed -e "s/^\([[:space:]]*menuentry '[^']*\)'/\1 (SELinux permissive rescue)'/" \
+          -e "s/\([$]menuentry_id_option '[^']*\)'/\1-selinux-permissive-rescue'/"

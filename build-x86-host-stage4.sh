@@ -4062,6 +4062,12 @@ mkdir -p "${SYSROOT}/etc/default"
 cp "${SPECS_DIR}/etc/default/grub"                    "${SYSROOT}/etc/default/grub"
 grep -q '^GRUB_DISABLE_OS_PROBER=' "${SYSROOT}/etc/default/grub" || \
     echo 'GRUB_DISABLE_OS_PROBER=true' >> "${SYSROOT}/etc/default/grub"
+# SELinux permissive rescue entry in EVERY grub.cfg grub-mkconfig writes (installer,
+# first-boot branding regeneration), not only the hand-written .img and live menus.
+# It re-runs the image's own 10_linux with enforcing=0 appended, so it exists for
+# exactly the kernels the normal entries boot and always sorts after them.
+install -D -m 0755 "${SPECS_DIR}/etc/grub.d/11_selinux_permissive_rescue" \
+    "${SYSROOT}/etc/grub.d/11_selinux_permissive_rescue"
 
 # PARTUUID-token fstab (mounts / + /boot/efi by PARTUUID, plus hardening tmpfs).
 # The .img builder and install-x86.sh substitute __ROOT_PARTUUID__/__ESP_PARTUUID__.
@@ -4920,6 +4926,17 @@ if grep -qE '^#\s*s0:12345:respawn:/sbin/agetty -L [0-9]+ ttyS0 ' "${SYSROOT}/et
     sed -i -E 's|^#\s*(s0:12345:respawn:/sbin/agetty -L )[0-9]+( ttyS0 vt100)|\1115200\2|' "${SYSROOT}/etc/inittab"
     info "Activated ttyS0 serial getty (115200) in /etc/inittab for serial-console access"
 fi
+# SELinux on the live overlay: pid 1 has just loaded the policy, and dracut already
+# copied paths up (and made the overlay root) with no policy to honour, so they are
+# tmpfs_t and every confined domain is denied { search } on "/". The first sysinit line
+# relabels exactly the upper layer; a disk root is a no-op. See the script's header.
+install -D -m 0755 "${SHARED_SPECS}/usr/libexec/live-overlay-relabel" "${SYSROOT}/usr/libexec/live-overlay-relabel"
+if ! grep -q '^lr::sysinit:/usr/libexec/live-overlay-relabel$' "${SYSROOT}/etc/inittab"; then
+    sed -i 's|^si::sysinit:|lr::sysinit:/usr/libexec/live-overlay-relabel\nsi::sysinit:|' "${SYSROOT}/etc/inittab"
+fi
+_lr="$(grep -n '^lr::sysinit:' "${SYSROOT}/etc/inittab" | head -1 | cut -d: -f1)"; _si="$(grep -n '^si::sysinit:' "${SYSROOT}/etc/inittab" | head -1 | cut -d: -f1)"
+[ -n "${_lr}" ] && [ -n "${_si}" ] && [ "${_lr}" -lt "${_si}" ] \
+    || { err "/etc/inittab: live-overlay-relabel is not the sysinit line before OpenRC (lr=${_lr:-none} si=${_si:-none})"; exit 1; }
 echo "${TIMEZONE}" > "${SYSROOT}/etc/timezone"
 echo "en_US.UTF-8 UTF-8" > "${SYSROOT}/etc/locale.gen"
 # CNI + keys-provision state dirs are platform machinery — none on unaffiliated.
@@ -7230,6 +7247,20 @@ rm -f "${SYSROOT}/tmp/hugmesh-patch-portage-file-copy.py"
 # files (so they are labelled) and after the patcher left /tmp; before ANY packing.
 # The order store -> config -> setfiles -> gate is mandatory: file_contexts only
 # gains the hugmesh .fc rules once the .pp are in the store.
+# Login records exist BEFORE the label pass, so setfiles gives them their own types
+# (wtmp_t, lastlog_t). Otherwise OpenRC's bootmisc creates wtmp at boot
+# (`[ -e /var/log/wtmp ] || mkutmp /var/log/wtmp`, as initrc_t in a var_log_t dir, so
+# it inherits var_log_t) and login creates lastlog the same way. Measured on the
+# 2026-10-30 backend live ISO under enforcing=1: agetty was denied { write } on
+# /var/log/wtmp (var_log_t) at every respawn, and login was denied creating lastlog
+# in /var/log. getty_t may append wtmp_t and pam may write lastlog_t, so the labels
+# alone fix both. bootmisc keeps an existing wtmp, and so does logrotate's `create`.
+for _lrec in wtmp lastlog; do
+    [ -e "${SYSROOT}/var/log/${_lrec}" ] || : > "${SYSROOT}/var/log/${_lrec}"
+done
+chmod 0664 "${SYSROOT}/var/log/wtmp"; chmod 0644 "${SYSROOT}/var/log/lastlog"
+chroot "${SYSROOT}" chgrp utmp /var/log/wtmp 2>/dev/null \
+    || warn "/var/log/wtmp: no 'utmp' group in the sysroot — left root:root (mkutmp would have set utmp)"
 SLX_PROBE_TABLE="${BUILD_ROOT}/selinux-label-probes.tsv"
 SLX_TYPE="$(slx_policy_type "${SYSROOT}")"
 info "Labelling the sysroot (SELinux ${SLX_TYPE}: store install -> config -> setfiles -> gate)"

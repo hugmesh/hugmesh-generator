@@ -71,7 +71,8 @@ BUILDERS=(build-frite-stage4.sh build-jetson-stage4.sh
           build-orangepi-zero3-stage4.sh build-orangepi3-lts-stage4.sh
           build-orangepi4-lts-stage4.sh build-orangepi5-stage4.sh
           build-rpi5-stage4.sh build-x86-host-stage4.sh)
-# The 6 modules that install on EVERY image: they reference base-refpolicy types
+# The 7 modules that install on EVERY image (hugmesh_bootpath reaches foreign
+# domains only inside optional_policy blocks, so it has no upstream dependency): they reference base-refpolicy types
 # only, so nothing beyond selinux-base has to be merged for them to LOAD.
 #
 # hugmesh_tor USED TO BE LISTED HERE and that was wrong, proven by booting
@@ -80,7 +81,7 @@ BUILDERS=(build-frite-stage4.sh build-jetson-stage4.sh
 # it compiled fine and then died on load with
 #     Failed to resolve typeattributeset ... hugmesh_tor/cil:11
 # It is a DEPENDENT module, not a mandatory one.
-MANDATORY=(hugmesh_authkeys hugmesh_device_registry_sync hugmesh_domain_reconcile
+MANDATORY=(hugmesh_authkeys hugmesh_bootpath hugmesh_device_registry_sync hugmesh_domain_reconcile
            hugmesh_node_storage hugmesh_policy_sync hugmesh_vpn)
 # Modules that need an upstream policy MODULE (a .pp in the store) — not merely
 # an interface in the headers. selinux-base ships the WHOLE refpolicy include
@@ -138,6 +139,11 @@ n_te="$(find "${SRC}" -maxdepth 1 -name '*.te' | wc -l)"
 n_fc="$(find "${SRC}" -maxdepth 1 -name '*.fc' | wc -l)"
 [ "${n_te}" -ge 9 ] && ok "specs/selinux carries ${n_te} .te modules (>=9)" \
                     || bad "specs/selinux has only ${n_te} .te modules"
+# Every module is classified: MANDATORY (7) + DEPENDENT (3) = 10 = the .te count, so a
+# new .te cannot ship without this suite saying whether it installs on every image.
+[ "${n_te}" -eq $(( ${#MANDATORY[@]} + ${#DEPENDENT[@]} )) ] \
+    && ok "every .te is classified MANDATORY or DEPENDENT (${#MANDATORY[@]} + ${#DEPENDENT[@]} = ${n_te})" \
+    || bad "${n_te} .te modules but MANDATORY (${#MANDATORY[@]}) + DEPENDENT (${#DEPENDENT[@]}) = $(( ${#MANDATORY[@]} + ${#DEPENDENT[@]} )) — classify the new module"
 orphan=""
 for fc in "${SRC}"/*.fc; do
     [ -e "${fc}" ] || continue
@@ -322,7 +328,7 @@ out="$(run_lib "${S}" "${SP}")"; rc=$?
 if [ "${rc}" -eq 0 ]; then ok "no-container image: lib succeeds (rc=0)"; else bad "no-container image: rc=${rc}"$'\n'"${out}"; fi
 missing=""
 for m in "${MANDATORY[@]}"; do [ -f "${S}/usr/share/selinux/mcs/${m}.pp" ] || missing="${missing} ${m}"; done
-[ -z "${missing}" ] && ok "all 6 mandatory .pp installed into the policy store" \
+[ -z "${missing}" ] && ok "all ${#MANDATORY[@]} mandatory .pp installed into the policy store" \
                     || bad "mandatory .pp missing from the store:${missing}"
 extra=""
 for m in "${EXEMPLARS[@]}"; do [ -f "${S}/usr/share/selinux/mcs/${m}.pp" ] && extra="${extra} ${m}"; done
@@ -375,17 +381,17 @@ fi
 # C-fedora: the second-choice layout still works.
 S2="${TMP}/cfed/sysroot"; SP2="${TMP}/cfed/specs"; mk_sysroot_fedora "${S2}" stub no-container; mk_specs "${SP2}"
 out2="$(run_lib "${S2}" "${SP2}")"; rc2=$?
-{ [ "${rc2}" -eq 0 ] && [ "$(n_mods "${S2}")" -eq 6 ]; } \
-    && ok "Fedora devel/ layout (devel/Makefile + devel/include) still compiles all 6" \
+{ [ "${rc2}" -eq 0 ] && [ "$(n_mods "${S2}")" -eq "${#MANDATORY[@]}" ]; } \
+    && ok "Fedora devel/ layout (devel/Makefile + devel/include) still compiles all ${#MANDATORY[@]}" \
     || bad "Fedora layout regressed: rc=${rc2} installed=$(n_mods "${S2}")"$'\n'"${out2}"
 
-# C3: with container headers -> all 9.
+# C3: with container headers -> every module: MANDATORY + DEPENDENT (7 + 3 = 10).
 S="${TMP}/c3/sysroot"; SP="${TMP}/c3/specs"; mk_sysroot "${S}" stub with-container; mk_specs "${SP}"
 out="$(run_lib "${S}" "${SP}")"; rc=$?
 n_pp="$(n_mods "${S}")"
-{ [ "${rc}" -eq 0 ] && [ "${n_pp}" -eq 9 ]; } \
-    && ok "container-capable image: all 9 modules installed (incl. both k8s exemplars)" \
-    || bad "container-capable image: rc=${rc} installed=${n_pp} (want rc=0, 9)"$'\n'"${out}"
+{ [ "${rc}" -eq 0 ] && [ "${n_pp}" -eq $(( ${#MANDATORY[@]} + ${#DEPENDENT[@]} )) ]; } \
+    && ok "container-capable image: all $(( ${#MANDATORY[@]} + ${#DEPENDENT[@]} )) modules installed (incl. both k8s exemplars)" \
+    || bad "container-capable image: rc=${rc} installed=${n_pp} (want rc=0, $(( ${#MANDATORY[@]} + ${#DEPENDENT[@]} )))"$'\n'"${out}"
 
 # C3b: THE REGRESSION THIS MODEL EXISTS FOR — headers PRESENT, .pp ABSENT.
 # The old gate asked "is the container_domain_template interface in the headers?"
