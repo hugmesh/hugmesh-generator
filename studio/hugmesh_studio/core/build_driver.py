@@ -55,6 +55,13 @@ DOCKER_ASSET_FIELDS: tuple[str, ...] = (
     "wallpaper", "grub_background", "login_background",
     "brand_logo", "color_scheme", "branding_dir", "egress_vpn",
     "secureboot_key", "secureboot_cert", "keys_usb", "distdir",
+    # Appended 2026-11-04 (operator session 20261031-104549, docker backend): the brand
+    # profile (`--config`, SOURCED by every builder, which hard-errors "config file not
+    # found" when it is unreachable) failed every image of a docker worklist while the
+    # native backend read the same file. The x86 home/seed inputs and the GRUB theme dir
+    # are the same class: host paths the builder reads, missing from this list.
+    "brand_profile", "grub_theme", "home_seed_code_from", "include_home_archive",
+    "seed_packages_from",
 )
 
 # Path-valued fields that must EXIST on the host or the build is stopped BEFORE dispatch.
@@ -512,20 +519,45 @@ class BuildDriver:
         host = os.path.abspath(self.shared_assets or shared_assets_root(out))
         return ["-v", f"{host}:/shared"], ["--shared-assets", "/shared"]
 
+    def _host_path(self, p: str) -> str:
+        """Where a path field's value points ON THE HOST. A relative value means relative
+        to the generator checkout — the cwd every build runs in (native ``cwd=``, docker
+        ``-w /src``) — never the Studio process's own cwd, which under a desktop launcher
+        is usually $HOME. Typed ``brands/example.conf`` is the case this exists for."""
+        return os.path.normpath(p if os.path.isabs(p) else os.path.join(self.generator_dir, p))
+
     def _remap_assets_for_docker(self, cfg: ImageConfig) -> tuple[list[str], ImageConfig]:
         """Mount external asset paths into the container and return (mount-args, a config
-        whose asset flags point at the in-container paths)."""
+        whose asset flags point at the in-container paths).
+
+        Every path field gets an IN-CONTAINER value, by one of two routes:
+
+          * under the generator checkout -> ``/src/<relative path>``. The repo is already
+            mounted at /src, so no new mount is needed — but the FLAG must still be
+            rewritten. It used to be left as the HOST path ("already under /src,
+            reachable"), which it is not: ``/home/<u>/…/hugmesh-generator/brands/x.conf``
+            does not exist in a container that sees the repo at ``/src``. That is the
+            "config file not found" every docker image of session 20261031-104549 died
+            on, for a brands/*.conf that the native backend read fine.
+          * anywhere else -> bind-mounted read-only at ``/assets/<i>/<basename>``.
+
+        A RELATIVE value is resolved against the generator checkout, the cwd a native
+        build runs in (and the container's ``-w /src``), never against the Studio
+        process's own cwd."""
         import copy
         dcfg = copy.deepcopy(cfg)
         mounts: list[str] = []
-        gen = self.generator_dir + os.sep
+        gen = os.path.normpath(os.path.abspath(self.generator_dir))
         for i, field in enumerate(DOCKER_ASSET_FIELDS):
             p = getattr(dcfg, field, "")
             if not p:
                 continue
-            ap = os.path.abspath(p)
-            if ap.startswith(gen):
-                continue  # already under /src, reachable in-container
+            ap = self._host_path(p)
+            if ap == gen or ap.startswith(gen + os.sep):
+                rel = os.path.relpath(ap, gen)
+                setattr(dcfg, field, "/src" if rel == os.curdir
+                        else "/src/" + rel.replace(os.sep, "/"))
+                continue
             cpath = f"/assets/{i}/{os.path.basename(ap.rstrip(os.sep))}"
             mounts += ["-v", f"{ap}:{cpath}:ro"]
             setattr(dcfg, field, cpath)
@@ -814,7 +846,7 @@ class BuildDriver:
                 held = secret_files.vault().get(field)
                 if held is not None and held.origin == path:
                     continue
-            if not os.path.exists(path):
+            if not os.path.exists(self._host_path(path)):
                 problems.append(f"{_path_label(field)} path does not exist: {path}")
         # Out-of-scope values the BUILDER ITSELF hard-errors on (today: rpi5 + --standalone
         # + a node role). Catching them here turns a post-dispatch dead-end into a second-0
@@ -877,7 +909,8 @@ class BuildDriver:
         out: list[str] = list(scope_violations(cfg)[1])
         for field in _PATH_ADVISORY:
             path = getattr(cfg, field, "")
-            if path and _path_field_emitted(field, cfg) and not os.path.exists(path):
+            if (path and _path_field_emitted(field, cfg)
+                    and not os.path.exists(self._host_path(path))):
                 # Mirrors build-x86-host-stage4.sh's own --distdir warning: an unusable cache
                 # is silently dropped for the /media/* auto-detect scan. Correct artifact,
                 # just a full re-download — so it warns here rather than blocking.

@@ -51,7 +51,12 @@ GENERATOR_DIR = os.path.dirname(STUDIO_ROOT)
 _HOST_PATH_FIELDS = {
     "wallpaper", "grub_background", "login_background", "brand_logo", "color_scheme",
     "branding_dir", "egress_vpn", "secureboot_key", "secureboot_cert", "keys_usb", "distdir",
+    # 2026-11-04: the brand profile (`--config`, sourced by every builder) and the x86
+    # home/seed inputs + GRUB theme dir were path flags missing from the mount list.
+    "brand_profile", "grub_theme", "home_seed_code_from", "include_home_archive",
+    "seed_packages_from",
 }
+_DIR_FIELDS = {"distdir", "keys_usb", "branding_dir", "grub_theme", "home_seed_code_from"}
 
 
 def _driver(backend: str = "docker") -> BuildDriver:
@@ -84,7 +89,7 @@ def test_every_host_path_field_is_mounted_under_docker(tmp_path):
     secureboot_key/_cert/keys_usb/distdir were emitted as raw host paths and silently
     ignored in-container."""
     for field in sorted(_HOST_PATH_FIELDS):
-        if field == "distdir" or field == "keys_usb" or field == "branding_dir":
+        if field in _DIR_FIELDS:
             p = tmp_path / f"{field}_dir"
             p.mkdir()
         else:
@@ -114,16 +119,74 @@ def test_mount_list_has_no_duplicates_and_indices_are_stable():
                                        "egress_vpn")
 
 
-def test_paths_already_under_the_generator_dir_are_not_mounted(tmp_path):
-    """/src is already mounted — re-mounting a path under it would be redundant (and could
-    shadow the repo). Pins the existing early-continue."""
+def test_paths_already_under_the_generator_dir_are_translated_to_src_not_mounted(tmp_path):
+    """/src is already mounted, so a path under the checkout needs no new mount (one
+    could shadow the repo) — but its FLAG still has to name the IN-CONTAINER path.
+
+    This test used to pin the opposite ("emitted verbatim, reachable via /src"), and that
+    was the bug: the container sees the repo at /src, not at the host's absolute path, so
+    the verbatim value names a file that does not exist in-container."""
     # NB: a branding field would be the obvious probe but is desktop-class, so it never
     # reaches argv on this mesh/be config at all. secureboot_key does.
     inside = os.path.join(GENERATOR_DIR, "keys-template", "kernel_key.pem")
     cfg = _docker_cfg(tmp_path, secureboot_key=inside)
     cmd = _driver().command(cfg, backend="docker")
-    assert inside in _inner(cmd)               # emitted verbatim, reachable via /src
-    assert not any(a.startswith(f"{inside}:/assets") for a in cmd)
+    assert inside not in _inner(cmd), "the HOST path does not exist in-container"
+    assert "--secureboot-key /src/keys-template/kernel_key.pem" in _inner(cmd)
+    assert not any(a.startswith(f"{inside}:") for a in cmd)
+
+
+# ── the brand profile (operator session 20261031-104549, backend docker) ────────────────
+_EXAMPLE_CONF = os.path.join(GENERATOR_DIR, "brands", "example.conf")
+
+
+def test_brands_example_conf_exists_in_the_checkout():
+    """The file the failed session named is a real, committed profile — so the failure
+    was the path translation, not a missing file."""
+    assert os.path.isfile(_EXAMPLE_CONF)
+
+
+def test_brand_profile_under_the_checkout_reaches_the_container_as_src_path():
+    """THE REGRESSION. The session's worklist carried the HOST absolute path of
+    brands/example.conf for three rpi5 images; every one died in the builder with
+    `config file not found: <host path>` while the native backend read the same file."""
+    cfg = ImageConfig(platform="rpi5", role="backend", mode="mesh", env="test")
+    cfg.brand_profile = _EXAMPLE_CONF
+    inner = _inner(_driver().command(cfg, backend="docker"))
+    assert _EXAMPLE_CONF not in inner, "host path handed to the container"
+    assert "--config /src/brands/example.conf" in inner
+
+
+def test_relative_brand_profile_resolves_against_the_checkout(tmp_path, monkeypatch):
+    """A typed `brands/example.conf` means the checkout's file (native builds run with
+    cwd = the checkout), whatever the Studio process's own cwd is."""
+    monkeypatch.chdir(tmp_path)
+    cfg = ImageConfig(platform="rpi5", role="backend", mode="mesh", env="test")
+    cfg.brand_profile = "brands/example.conf"
+    d = _driver()
+    assert "--config /src/brands/example.conf" in _inner(d.command(cfg, backend="docker"))
+    assert not [p for p in d.preflight(cfg, backend="docker") if "brand-profile" in p]
+
+
+def test_brand_profile_outside_the_checkout_is_mounted_read_only(tmp_path):
+    prof = tmp_path / "acme.conf"
+    prof.write_text('BRAND="acme"\n')
+    cfg = ImageConfig(platform="rpi5", role="backend", mode="mesh", env="test")
+    cfg.brand_profile = str(prof)
+    cmd = _driver().command(cfg, backend="docker")
+    mounts = [a for a in cmd if a.startswith(f"{prof}:")]
+    assert len(mounts) == 1 and mounts[0].endswith("/acme.conf:ro"), mounts
+    cpath = mounts[0][len(f"{prof}:"):-len(":ro")]
+    assert f"--config {cpath}" in _inner(cmd)
+    assert str(prof) not in _inner(cmd)
+
+
+def test_missing_brand_profile_blocks_before_dispatch(tmp_path):
+    """Every builder hard-errors on a --config it cannot find; say so at second 0."""
+    cfg = ImageConfig(platform="rpi5", role="backend", mode="mesh", env="test")
+    cfg.brand_profile = str(tmp_path / "nope.conf")
+    problems = _driver().preflight(cfg, backend="docker")
+    assert any("brand-profile" in p and "does not exist" in p for p in problems)
 
 
 def test_native_backend_never_remaps(tmp_path):
