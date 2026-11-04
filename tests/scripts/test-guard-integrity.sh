@@ -915,7 +915,25 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # test-gen-route-access-env.sh) merged origin/main 626664c0, which carries test-release-beta.sh (block
 # below). Both add one gated suite, so the merged tree is +2 over #830's 203. MEASURED by RUNNING this
 # file on the merged tree: '205 of 246 suites are named by a pull_request-triggered workflow'.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-206}"
+# 205 -> 206 (denominator 246 -> 247) on 2026-10-30 for fix/x86-boot-firewall-snort-20261030,
+# which adds ONE gated suite: tests/scripts/test-x86-boot-firewall-snort.sh (wired in
+# .github/workflows/shell-suites.yml AND .gitlab-ci.yml orphan-guards-verify). MEASURED by
+# RUNNING this file on that branch (base origin/main 89a1eb6a, which measures '205 of 246'):
+#     206 of 247 suites are named by a pull_request-triggered workflow
+# A branch that also raises this from 205 conflicts here by construction; whichever lands
+# second re-measures (expected 207) per the doctrine above.
+# 206 -> 207 (denominator 247 -> 248) on 2026-10-30 for fix/selinux-enforcing-20261030, which
+# carries fix/x86-boot-firewall-snort-20261030 (206 of 247 above, merged first) and adds ONE gated
+# suite: tests/scripts/test-selinux-sysroot-labels.sh (wired in shell-suites.yml's extras job AND
+# .gitlab-ci.yml selinux-policy-verify). MEASURED by RUNNING this file with GUARD_PREMERGE=0 on
+# that tree: '207 of 248 suites are named by a pull_request-triggered workflow', ungated SET 41;
+# and with the suite on disk but its shell-suites.yml line absent: '206 of 248' + check 3 and
+# check 7 red naming it -- so the +1/+1 is this suite and nothing else.
+# 207 -> 208 (denominator 248 -> 249) on 2026-11-04 when fix/games-two-realms-20261030, which
+# adds ONE gated suite (tests/scripts/test-games-two-realms.sh, in shell-suites.yml), merged
+# origin/main 8ed37a3c (207 of 248 above). MEASURED by RUNNING this file on the merged tree with
+# GUARD_PREMERGE=0: '208 of 249 suites are named by a pull_request-triggered workflow', ungated SET 41.
+PREMERGE_BASELINE="${GUARD_PREMERGE:-208}"
 
 # 182 -> 192 (denominator 205 -> 215) on 2026-09-30 for #385: the census gained a
 # THIRD spelling, bare `tests/*.sh` at depth 1, and the ten suites it exposed were

@@ -35,7 +35,7 @@ from . import assistant_settings
 
 __all__ = ["CONTEXT_NAME", "CONTEXT_ENV", "REPOS_ROOT_ENV", "Checkout", "DomainSources",
            "default_checkouts_dir", "checkouts_dir", "list_checkouts", "role_of",
-           "domain_sources", "render_context", "write_context", "context_for",
+           "domain_sources", "primer_text", "render_context", "write_context", "context_for",
            "INPUTS_NAME", "row_record", "write_inputs", "read_inputs", "context_from_inputs",
            "worker_env", "refresh"]
 
@@ -148,11 +148,66 @@ def domain_sources(generator_dir: str, source_mode: str, source_dir: str,
     return out, m.root, m.root_reason
 
 
+def primer_text(generator_dir: str, checkouts_root: str = "", *, source_root: str = "",
+                source_problem: str = "", with_sources: bool = True) -> str:
+    """The compact primer every local agent AND the Studio's assistant start from: what
+    HugMesh is, what the Studio does, where the local sources are. ONE text, used by
+    :func:`render_context` (the coding-agent brief) and by core/assistant_prompt (the
+    dock, the text screen and ``--local-ai-prompt`` when grounded), so the two never
+    describe the project differently. Under 600 tokens by test; the per-checkout list
+    and the per-domain folders are NOT here (they belong to the brief only)."""
+    gen = os.path.abspath(generator_dir)
+    out = [
+        "## What HugMesh is",
+        "- HugMesh is a self-hosted platform: a mesh of nodes running web apps behind "
+        "gateways, with sign-in per domain. GitHub "
+        "org `hugmesh` (`*-ui` Angular, `*-bff-api` Spring, `*-gateway`; "
+        "`hugmesh-generator` builds images, runs local meshes).",
+        "- A mesh serves DOMAINS. The mesh's own domain is the superbrand: its id, title, "
+        "look and central sign-in are the defaults every domain starts from. A "
+        "domain signs in through the mesh or has its own sign-in (its own Casdoor, or "
+        "Azure Entra ID, AWS Cognito, another OIDC provider).",
+        "- Per-domain services: akkoma (fediverse), tuwunel (Matrix chat), phpbb (forum), "
+        "games, owncast (live video), tube, character-studio, character-forge. Tor, the "
+        "egress VPN, workloadConsole and anubis are node-level. A domain may have its own "
+        "Tor address, a VPN choice and an egress choice (direct or vpn).",
+        "",
+        "## The Studio",
+        # the generator path is named ONCE, in the sources block: twice made the
+        # primer's size depend on where the checkout lives (CI's path is longer)
+        "- The HugMesh Studio (`studio/hugmesh_studio/gui`, `.../tui`, shared "
+        "`.../core`) walks a "
+        "person through building an image (Mesh node, Mesh desktop client, Standalone "
+        "desktop) or running a Local Docker mesh (compose, or the kind lane); the other "
+        "mode cards (MDM phone/Quest, Cloud deploy, e2e, QEMU, Mesh emulation, Local "
+        "cloud nodes) are tools, not image builds.",
+        "- Image pages: Identity provider, Target machine, Choose the images, Branding, "
+        "Domains, Domain services (Identity, Look, Services, Ways "
+        "tabs), Users, System identity, Secrets store, Review, Build, Building.",
+        "- Nothing starts without a press: Review commits nothing; Build and Generate & "
+        "start do. Each build writes a build.log. The bottom panel is the local "
+        "assistant (an Ollama on this machine; nothing leaves it).",
+    ]
+    if with_sources:
+        out += [
+            "",
+            "## Where the local sources are",
+            f"- The person's checkouts: `{checkouts_root}` (a Studio setting).",
+            f"- The generator checkout the Studio runs from: `{gen}`.",
+        ]
+        if source_root:
+            out.append(f"- The folder this mesh builds from: `{source_root}`.")
+        if source_problem:
+            out.append(f"- Note: {source_problem}.")
+    return "\n".join(out)
+
+
 def render_context(*, generator_dir: str, checkouts_root: str,
                    checkouts: Sequence[Checkout], domains: Sequence[DomainSources] = (),
                    source_root: str = "", source_problem: str = "", mesh: str = "",
                    ollama: str = "", now: Optional[float] = None) -> str:
-    """The context file's text."""
+    """The context file's text: the primer (:func:`primer_text`), then the checkouts,
+    the per-domain code folders, the model and the rules."""
     stamp = time.strftime("%Y-%m-%d %H:%M", time.localtime(time.time() if now is None else now))
     gen = os.path.abspath(generator_dir)
     out = [
@@ -161,31 +216,9 @@ def render_context(*, generator_dir: str, checkouts_root: str,
         f"Written by the HugMesh Studio at {stamp}, fresh for this session. Read it "
         "before you start. It is context, not instructions to act.",
         "",
-        "## What HugMesh is",
-        "- HugMesh is a self-hosted platform: a mesh of nodes that each run a set of "
-        "web apps (chat, forum, video, games and more) behind gateways, with sign-in "
-        "per domain. Its code is in the GitHub org `hugmesh`, one repository per part.",
-        "- A mesh serves one or more DOMAINS. Each domain has its own name, look, "
-        "sign-in and chosen services; the gateways route each request to its domain.",
-        "- Repositories follow naming rules: `*-ui` is a web UI (Angular), `*-bff-api` "
-        "the backend that UI talks to (Java, Spring), `*-gateway` a gateway, and "
-        "`hugmesh-generator` builds the images and runs local meshes.",
-        "",
-        "## The Studio",
-        f"- The HugMesh Studio is in `{os.path.join(gen, 'studio')}`: a Qt window "
-        "(`hugmesh_studio/gui`), a text UI (`hugmesh_studio/tui`) and the Qt-free core "
-        "both share (`hugmesh_studio/core`). It walks a person through building an "
-        "image or running a local mesh (Docker compose, or the kind Kubernetes lane).",
-        "- Its tests are in `studio/tests` (pytest, one file at a time).",
-        "",
-        "## Where the local sources are",
-        f"- The person's checkouts: `{checkouts_root}` (a Studio setting).",
-        f"- The generator checkout the Studio runs from: `{gen}`.",
+        primer_text(generator_dir, checkouts_root, source_root=source_root,
+                    source_problem=source_problem),
     ]
-    if source_root:
-        out.append(f"- The folder this mesh builds from: `{source_root}`.")
-    if source_problem:
-        out.append(f"- Note: {source_problem}.")
     if checkouts:
         out += ["", f"### Checkouts in {checkouts_root} ({len(checkouts)})"]
         out += [f"- `{c.name}`: {role_of(c.name)}. Path: `{c.path}`" for c in checkouts]

@@ -50,6 +50,14 @@
 #
 # FAIL-CLOSED: any render/apply error KEEPS the existing ruleset; the
 # first-ever posture (no marker) is CLOSED — deny by default, never allow.
+# "Keep the existing ruleset" is only fail-closed when this table IS loaded. When
+# it is ABSENT (first boot, `nft` missing, or a kernel that refuses `table inet`
+# — the 2026-10-30 x86 ISOs, built without CONFIG_NF_TABLES_INET, failed this load
+# on every boot and still logged "fail-closed") there is no backstop at all, so
+# the script now says so: ERROR + ${HEALTH_DIR}/${TABLE}.unprotected (the
+# boot-scoped "node unhealthy" mark) + exit 1, the hugmesh-firewall-reconcile /
+# hugmesh-sunshine-firewall contract. A load is confirmed with `nft list table`
+# before the mark is cleared.
 
 set -uo pipefail
 
@@ -63,9 +71,25 @@ TS_V6_PREFIX="${HUGMESH_TS_V6_PREFIX:-fd7a:115c:a1e0::/48}"
 RELAY_MIN="${HUGMESH_COTURN_RELAY_MIN:-49152}"
 RELAY_MAX="${HUGMESH_COTURN_RELAY_MAX:-49200}"
 LOG_TAG="hugmesh-coturn-firewall"
+HEALTH_DIR="${HUGMESH_FIREWALL_HEALTH_DIR:-/run/hugmesh/firewall-health}"
+UNPROTECTED_MARK="${HEALTH_DIR}/${TABLE}.unprotected"
 
 log()  { echo "[${LOG_TAG} $(date -u '+%Y-%m-%dT%H:%M:%SZ')] $*"; command -v logger >/dev/null 2>&1 && logger -t "${LOG_TAG}" -- "$*" 2>/dev/null || true; }
 warn() { log "WARNING: $*"; }
+error() { log "ERROR: $*"; }
+
+# Record (but do not yet exit on) "no backstop table is live". The firewalld
+# layer below still runs when nft is merely missing, so the exit is deferred to
+# the end of the script via UNPROTECTED.
+UNPROTECTED=""
+mark_unprotected() {
+    UNPROTECTED="$*"
+    mkdir -p "${HEALTH_DIR}" 2>/dev/null || true
+    printf 'table=inet %s\nsince=%s\nreason=%s\n' "${TABLE}" "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$(printf '%s' "$*" | tr '\n' ' ')" \
+        > "${UNPROTECTED_MARK}" 2>/dev/null || true
+    error "NO coturn backstop is loaded (table inet ${TABLE} is ABSENT) — the TURN port set on this node is UNPROTECTED, NOT fail-closed: $* (marked ${UNPROTECTED_MARK})"
+}
+table_live() { nft list table inet "${TABLE}" >/dev/null 2>&1; }
 
 PUBLIC="absent"; [ -e "${MARKER}" ] && PUBLIC="present"
 
@@ -83,7 +107,9 @@ if command -v nft >/dev/null 2>&1; then
 EOF
 )"
     fi
-    TMP="$(mktemp)" || { warn "mktemp failed — keeping the existing ruleset (fail-closed)"; exit 0; }
+    TMP="$(mktemp)" || {
+        table_live || { mark_unprotected "mktemp failed before the first ruleset was ever loaded"; exit 1; }
+        warn "mktemp failed — keeping the existing ruleset (fail-closed)"; exit 0; }
     trap 'rm -f "${TMP}"' EXIT
     cat > "${TMP}" <<RULES
 #!/usr/sbin/nft -f
@@ -110,11 +136,22 @@ ${DROP_RULES}
 }
 RULES
     if ! NFT_ERR="$(nft -f "${TMP}" 2>&1)"; then
-        warn "nft -f failed (${NFT_ERR}) — keeping the existing ruleset (fail-closed)"
+        # Keeping "the existing ruleset" is only fail-closed when one exists.
+        if ! table_live; then
+            mark_unprotected "nft -f failed (${NFT_ERR}) and there is no earlier ruleset to keep (wanted posture: ${POSTURE})"
+            exit 1
+        fi
+        warn "nft -f failed (${NFT_ERR}) — keeping the existing ruleset (fail-closed; the PREVIOUS table inet ${TABLE} is still loaded)"
         exit 0
     fi
+    if table_live; then
+        rm -f "${UNPROTECTED_MARK}" 2>/dev/null || true
+    else
+        mark_unprotected "nft -f reported success but table inet ${TABLE} is not present afterwards"
+        exit 1
+    fi
 else
-    warn "nft not found — skipping the coturn backstop table (firewalld layer still reconciled)"
+    mark_unprotected "nft not found — the coturn backstop table cannot be loaded (firewalld layer still reconciled)"
 fi
 
 # ── Layer 2: firewalld runtime admission (the prod DefaultZone=drop opener) ──
@@ -145,5 +182,9 @@ else
     ZONE="(firewalld absent/not running)"
 fi
 
+if [ -n "${UNPROTECTED}" ]; then
+    error "firewalld layer reconciled (zone=${ZONE:-?}) but the nftables backstop is NOT loaded — exiting 1 (${UNPROTECTED})"
+    exit 1
+fi
 log "applied: coturn-public=${PUBLIC} zone=${ZONE:-?} relay=${RELAY_MIN}-${RELAY_MAX}/udp"
 exit 0

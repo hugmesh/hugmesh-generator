@@ -639,10 +639,12 @@ fi
 # PASSes are not evidence; they are the shape evidence would have.
 #
 # So establish the precondition FIRST, and let it be the thing that fails.
-# Note this asserts the POSTCONDITION, not the tar: labels can legitimately
-# arrive either from the extraction's xattrs or from provision_selinux()'s
-# first-boot `restorecon -RF /` (specs/etc/keys-provision/provision.sh:2880).
-# Either route is fine. Neither having worked is what must be loud.
+# Note this asserts the POSTCONDITION, not the tar. It does NOT depend on KEYS:
+# since #503 the labels are BUILD ARTIFACTS (slx_label_tree in
+# scripts/_selinux-policy-lib.sh, gated at every pack hop), so an image booted with
+# no KEYS media at all must already pass here. provision_selinux()'s first-boot
+# relabel only runs when KEYS media is found, and a pass that needed it would be
+# hiding a build that shipped unlabelled.
 #
 # Reader ladder, strongest first — all three read the same on-disk xattr:
 #   1. getfattr (sys-apps/attr), which names the attribute explicitly;
@@ -797,6 +799,25 @@ else
         'command -v nft'
     check "hugmesh-firewall-reconcile service started (nftables backstop reconciled)" \
         'rc-service hugmesh-firewall-reconcile status 2>/dev/null | grep -qi started'
+    # "started" is not "enforcing". Until 2026-10-30 the reconcilers exited 0 when nft
+    # refused every ruleset, so the oneshot read "started" on x86 images whose kernel
+    # lacked CONFIG_NF_TABLES_INET and had NO host firewall at all. Ask the kernel.
+    check "host firewall: table inet hugmesh_release_gate is LOADED in the kernel (not merely 'started')" \
+        'nft list table inet hugmesh_release_gate'
+    if ls /etc/runlevels/*/hugmesh-coturn-firewall >/dev/null 2>&1; then
+        check "host firewall: table inet hugmesh_coturn_relay is LOADED in the kernel" \
+            'nft list table inet hugmesh_coturn_relay'
+    fi
+    check "host firewall: no table is marked UNPROTECTED (/run/hugmesh/firewall-health/*.unprotected)" \
+        '! ls /run/hugmesh/firewall-health/*.unprotected'
+fi
+# Snort is default-on on x86; the stock conf.d named an eth1 no image has, and the
+# binary could not load without net-libs/daq. A runlevel link is a promise to run.
+if ls /etc/runlevels/*/snort >/dev/null 2>&1; then
+    check "snort (default-on IDS) is started — on the node's uplink, not the stock eth1" \
+        'rc-service snort status 2>/dev/null | grep -qi started'
+else
+    skip "snort — not in any runlevel on this image"
 fi
 
 echo "-- SELinux node policy (build manifest -> kernel module store) --"
@@ -824,7 +845,10 @@ if [ -f "${_slx_manifest}" ]; then
     # provision_selinux()'s own per-module verdict must agree: the status file
     # is written on every provision run since the #45 per-module layer, one
     # '<module> loaded|failed|missing-pp' line per manifest module.
+    # Without KEYS there is no provision run, so fall back to the BUILD-TIME verdict
+    # (#503: slx_store_install_modules writes the same '<module> loaded|failed' format).
     _slx_status="${SELINUX_MODULES_STATUS:-/var/lib/keys-provision/selinux-modules.status}"
+    [ -f "${_slx_status}" ] || _slx_status="${SELINUX_MODULES_BUILD_STATUS:-/usr/share/hugmesh/selinux-modules.build-status}"
     if [ -f "${_slx_status}" ]; then
         check "provision recorded every manifest module as loaded (${_slx_status})" \
             '! grep -qE " (failed|missing-pp)$" "${_slx_status}"'

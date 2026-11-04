@@ -69,6 +69,14 @@ then talks to that port (`OLLAMA_HOST=127.0.0.1:11435`).
 
 macOS and Windows use the installer from <https://ollama.com/download>.
 
+In the native Windows build of the Studio (the MSI), **Start local assistant** does not
+run `scripts/local-ai.sh`: it is a bash script, and `bash` there is the WSL launcher. It
+opens the panel on its Assistant tab (also when you pressed it on the collapsed strip)
+and says so there, the whole sentence, with two ways on: start Ollama for Windows
+yourself (the panel asks it on `127.0.0.1:11434`), or pick **Ollama in Docker**, which
+the button still starts and waits for (only the queue worker stays off). For the queue
+worker too, run the Studio inside WSL2. Section 3 has the commands.
+
 Check it:
 
 ```bash
@@ -116,6 +124,36 @@ curl -s 127.0.0.1:11434/api/tags | head -c 200     # answers with the pulled mod
 
 Stop it with `pkill -x ollama` (the weights stay on disk). `ollama stop <model>`
 unloads one model and keeps the server up.
+
+### On native Windows
+
+The Studio's panel only talks to Ollama over HTTP, so in the Windows build (the MSI) any
+Ollama that answers on loopback serves it. Pick one:
+
+- **Ollama for Windows.** The installer from <https://ollama.com/download> starts it in
+  the tray, already serving on `127.0.0.1:11434`; the panel's **System Ollama** is that
+  address. To start it yourself with the settings above, quit the tray app first, then
+  in PowerShell:
+
+  ```powershell
+  $env:OLLAMA_HOST = "127.0.0.1:11434"; $env:OLLAMA_CONTEXT_LENGTH = "32768"
+  $env:OLLAMA_FLASH_ATTENTION = "1"; $env:OLLAMA_KV_CACHE_TYPE = "q8_0"
+  ollama serve
+  ```
+
+  and check it from a second window with `curl.exe -s http://127.0.0.1:11434/api/tags`.
+  Stop it with Ctrl+C there (or quit the tray app).
+- **The Studio's own Ollama in Docker.** With Docker Desktop running, choose **Ollama in
+  Docker** in the panel and press **Start local assistant**: the Studio starts its
+  container (on `127.0.0.1:11435` unless you changed it) and waits until it answers.
+
+Either way the panel answers questions, but `scripts/local-ai.sh` (the queue worker,
+`todo`, `chat`) is a bash script and does not run in the Windows build. For it, run the
+Studio inside WSL2: in a WSL2 distro (Ubuntu) with Docker Desktop's WSL integration on
+for it, clone hugmesh-generator into `~` (not `/mnt/c`), start the Linux build of the
+Studio from that checkout, and follow the Linux commands above inside the distro
+(`bash scripts/local-ai.sh start` starts the distro's own Ollama, installed there as in
+section 2, when none answers).
 
 ## 4. Pick a model
 
@@ -328,7 +366,9 @@ can hold, at the price of the prompt leaving your PC for a machine you run.
   `gh` is logged in if you cannot watch every command. The no-remote clone of section
   6.1 helps; it is not a sandbox.
 * **No secrets in prompts.** `.e2e-credentials`, vault files and `.env` files stay out
-  of what you paste or let it read.
+  of what you paste or let it read. The Studio's assistant enforces this with a
+  deny-list (section 12.6): a file on it is never opened, and every log line it quotes
+  is redacted first.
 * **Review every diff.** A small model invents function names and reports tests it did
   not run.
 * **No auto-approval of tools**, and no `sudo` in a session you cannot watch.
@@ -594,3 +634,426 @@ shown failing against a doctored copy of the code it covers.
 
 *Measured on 2026-10-07 with Ollama 0.21.2. Model data from the Ollama library pages
 of the same day; re-check them before relying on a size, a context window or a tag.*
+
+## 12. What the assistant knows and can do
+
+Since 2026-10-29 the bottom panel of every Studio window, the text UI's Local AI
+screen (F2 / `local-ai`) and `scripts/local-ai.sh prompt|chat` are one grounded
+assistant. It is still the same local model on the same loopback Ollama; what changed
+is what it is told before every question. Everything below is Qt-free code under
+`studio/hugmesh_studio/core/assistant_*.py`.
+
+### 12.1 The primer
+
+One text, `core/agent_context.primer_text`, says what HugMesh is, what the Studio
+does and where the local sources are. The coding-agent brief (`HUGMESH-CONTEXT.md`)
+starts with the same text, so the two never describe the project differently. It is
+under 600 tokens by test.
+
+The brief names the checkouts folder and the generator checkout by their paths; the
+assistant's primer describes them in words, and every part of what the model is sent
+goes through `assistant_prompt.scrub_paths` first, so this machine's paths stay out of
+it (12.12).
+
+### 12.2 Where you are
+
+Every question carries the page the person is on (`core/assistant_context.Where`):
+the face (window, terminal, command line), the page title and its step number for
+the mode, the domain on screen and which of its tabs (Identity, Look, Services, Ways)
+is open, the brand, one line per domain (services, sign-in, Tor, VPN and egress
+choices), whether the local mesh is up and which verb runs, the running build or the
+last failed one with its last error lines (redacted), the model and context size, and
+the per-domain code folders. The window reads its page facts on the window thread
+(attribute reads only) and collects the file-based facts on the worker, each
+collector under a one-second budget; a slow one yields "(unavailable)", never a stall.
+
+### 12.3 The docs it reads
+
+`core/assistant_docs` splits an allowlist of this checkout's Markdown (the Studio
+walkthrough and wizard flow, the studio README, the per-feature docs; `README.md` by
+its user-facing headings only) on `##`/`###` headings and ranks the sections with
+BM25 (stdlib, offline). The index is cached under `<state dir>/assistant/docs-index.json`
+and rebuilt only when a file's mtime or size changes. Hand-offs, roadmaps, audits and
+machine-written inventories are never indexed. An installed Studio without a `docs/`
+folder still works; every answer then ends with
+`Sources: none (no docs folder on this machine)`.
+
+### 12.4 Tips along the bottom
+
+`core/assistant_tips` holds one to three short tips for every page (the wizard's
+slugs with the local-mesh steps expanded, plus the text UI's screens). The collapsed
+bar shows `Tip: ...` with a `×` (Hide tips; a per-viewer setting, `tips_hidden` in
+`local-ai-dock.json`, with a `Show tips` button in the panel's options column); the
+expanded panel shows the same line above the answer area; the text UI prints it under
+the status and `tips on|off` toggles it. A running model may replace the curated tip
+with one sentence for the same page (60 tokens, 20 s, never while an answer is in
+flight, once per page and domain in ten minutes); a sentence that names a command the
+docs do not, or a word the brand screens never show, is dropped.
+
+### 12.5 Answers and their Sources line
+
+The model is asked with: `# HugMesh primer`, `# Rules` (answer from the snippets, the
+page facts and the primer only; say "I do not know from the docs I have" otherwise;
+never a command that is not in a snippet; never claim to have changed anything; never
+invent a shell command, and point to the Studio's own buttons and the documented make
+targets rather than spell a command that deletes anything; 12.11 has the details),
+`# Where the person is`, `# Options on this page`, `# Snippets` and, on a page with
+proposable settings, `# Change format`. Each part has a cap and the whole stays under
+the context size minus 6000 tokens for the answer; when it cannot, the options, the
+snippets, the page facts and the history are dropped in that order and the answer
+says `(page facts left out: the question is long)`. After every answer the face
+prints `Sources: STUDIO-WALKTHROUGH.md § Domain services; ...` — made by the code
+from what was retrieved, never by the model — and, when the answer spells a command no
+snippet contains, `Commands not found in the docs I read: ...`. A command is any `make`
+target, `scripts/...`, `./x.sh`, `ollama`, `docker`/`docker-compose`/`podman` with any
+subcommand, `kubectl`, `helm`, `kind`, `systemctl`/`rc-service`, `sudo`, `rm`, `dd`,
+`mkfs` or `git` verb in the text, plus EVERY line of a fenced shell block (untagged,
+`bash`, `sh`, `console`, ...; split at `&&`, `||`, `;` and `|`) and every inline code
+span that starts with a program (`assistant_docs.code_commands`). `change`, `diff`,
+`json` and other data fences are not commands. With no model running the face shows
+`[Local AI is not running. Press Start local assistant.]` and the best snippet.
+
+An answer that spells a command which deletes data gets a warning above it in every
+face, grounded or not (12.11).
+
+`scripts/local-ai.sh prompt` and `chat` export `LOCAL_AI_GROUNDED=1`, which makes a
+bare `send_prompt` (and so `hugmesh-studio --local-ai-prompt`) grounded the same way;
+unset, the command line sends the bare question with no system message (no primer, no
+snippets, no Sources line), and still prints the delete-commands warning above the first
+line that deletes anything (`send_prompt(..., warn=True)`). `chat` understands
+`/where <page>`. Two model-free commands: `scripts/local-ai.sh docs [--page=SLUG]
+<question>` prints the snippets and the Sources line; `scripts/local-ai.sh catalogue
+[domain|mesh|image]` prints every option (12.7).
+
+### 12.6 Privacy: the deny-list and redaction
+
+Nothing leaves the machine. Files that hold secrets are never opened by the
+assistant — not by the docs index, not by a code edit, not by a state collector
+(`core/assistant_context.DENY_PATHS`):
+
+- `<generator>/keys-out/**` — generated node keys
+- `<generator>/keys-*/` — generated node keys (any keys-* folder)
+- `<generator>/.e2e-credentials` — e2e account credentials
+- `<generator>/tests/stack/.env` — the local stack's environment
+- `~/.hugmesh/mesh-node/.env` — the mesh node's environment
+- `~/.hugmesh/keyzip/**` — admin key-zips
+- `~/.config/hugmesh-studio/local-login/roles.json` — local sign-in roles
+- `<state>/**/secrets.json` — a build's secrets
+- `<workdir>/secrets.json` — a build's secrets
+- `<workdir>/report.json` — a build's report (carries seeded credentials)
+- `<workdir>/.cli.json` — a build's argv (carries secrets)
+- `**/vault/token` — a Vault token
+- `**/vault/unseal-key` — a Vault unseal key
+- `*.kubeconfig` — a cluster credential
+- `$KUBECONFIG` — the cluster credential the shell names
+- `**/*.pem` — key or certificate material
+- `**/*.key` — key material
+- `**/id_*` — SSH keys
+- `**/.env` — an environment file
+- `~/.local/share/hugmesh-local-only/**` — the operator's local-only folder
+- `<secret_files>/**` — a secret-files staging folder
+- `<egress_vpn_conf>` — the egress VPN provider file
+
+A question that names one gets "That file holds secrets; I do not read it." Every
+value whose key looks secret (password, token, auth_key, api_key, private, unseal,
+kubeconfig, luks, client_secret, cookie, session_id) is rendered as
+`(set, never shown)`, and every free-text line (error tails, run logs, file texts shown
+for a code edit) goes through `redact`, which blanks:
+
+- any key that CONTAINS password, passwd, passphrase, pwd, secret, token, api key, auth
+  key, private key, access key, client key, preshared key or credential, however it is
+  prefixed, quoted or JSON-escaped: `POSTGRES_PASSWORD=...`, `CASDOOR_CLIENT_SECRET=...`,
+  `export GH_TOKEN=...`, `aws_secret_access_key = ...`, `{"admin_password": "..."}`,
+  `x-api-key: ...`, WireGuard's `PrivateKey = ...`, a kubeconfig's `client-key-data:`
+  (a plural "tokens", such as a context size, is left alone), and any key with `pass`
+  or `unseal` as a word of its own: `LUKS_PASS=...`, `local_pass: ...`,
+  `VAULT_UNSEAL_KEY=...` (not `passed`, `bypass`, `passthrough` or `unsealed`). A
+  QUOTED value is blanked up to its closing quote, spaces and all
+  (`{"admin_password": "horse battery staple"}` loses all three words; a backslash
+  escapes the next character; an unclosed quote, and a value whose last character
+  before the line end is a backslash, run to the end of the line when no other quote
+  of that kind follows on it (see the known gaps); bash's `$'..'` counts as quoted).
+  JSON inside a string, as a log or `kubectl` prints it (`msg="{\"password\": \"a b\"}"`,
+  a logfmt `msg="token=\"..\""`, at any depth), is blanked to its own escaped closing
+  quote, also when the value ENDS in a backslash (at depth one that close is five
+  backslashes and the quote, and it no longer runs on into the next key). An unquoted
+  value is one word: `secret = two words` keeps its second word; inside that word a
+  quote and a backslash-escaped space (`printf %q`'s `horse\ battery`) are part of it;
+- a YAML block scalar under a secret key (`secret: |` or `>-`): every indented line
+  of it;
+- command-line flags such as `--password X`, `--admin-password=X`, `--client-secret X`,
+  `--luks-pass X` (a quoted value whole, as above), and a `-pX` glued to its value on
+  a line that names `mysql`, `mariadb`, `mysqldump` or `mysqladmin`: because the rules
+  run until nothing changes, EVERY glued `-pX` after that word on the line is blanked,
+  not only the client's own (`mysql -u root -pX && mkdir -pv /x && gcc -pthread a.c`
+  becomes `-p[redacted]` three times). A line without one of those words keeps its
+  `-pthread` and `mkdir -pv`, and a `-p` with a space after it (`mysql -p`,
+  `docker run -p 8080:80`) is never touched;
+- SQL a database's init log echoes: `PASSWORD '...'` and `IDENTIFIED BY '...'` (SQL's
+  doubled quote `''` and the other quote kind stay inside the value);
+- the password in ANY `scheme://user:password@host` URL, and secret query parameters
+  (`?access_token=...`, `&password=...`);
+- `Authorization: Bearer|Basic ...`, `Cookie:` and `Set-Cookie:` values, Vault's
+  `Unseal Key N:` (and its `Unseal Key (will be hidden):` prompt) and
+  `Initial Root Token:` lines, and the key in `vault operator unseal KEY`;
+- private-key blocks, a bare base64 key-body line, and every base64-only line that runs
+  up to an END line however short (a key printed line by line, or a tail that cut its
+  BEGIN line off): a build's error tail is redacted as ONE text per
+  image before it is cut, so a block that spans lines is caught whole;
+- Tailscale and headscale keys, GitHub, AWS, Vault, Slack and `sk-` tokens, JWTs, the
+  local-only folder's path, the e2e `user / secret` shape and the retired `e2e-pass`
+  literal.
+
+`redact` runs these rules again until a pass changes nothing (at most six passes), so
+the file text a code edit shows and the options block, which are redacted once, get
+the same result as the Where rows, which are redacted on every hop.
+
+`studio/tests/test_assistant_privacy.py` plants a canary in every denied path and
+asserts none reaches any rendered text, runs every shape above through `redact` (and
+ordinary log lines that must stay as they are), and plants the shapes in a failed
+build's tail and the mesh log and asserts none reaches the system text the model gets.
+A seeded fuzz (24,000 cases) puts the canary inside a value in every quote and
+backslash spelling (escapes, unclosed quotes, a trailing backslash, `$'..'`, JSON
+escaped up to three deep, Python reprs, a quote inside a bare word) after every secret
+key and flag spelling, and asserts it never comes out. A second one (8,000 cases)
+puts two to four SECRET keys in one object, side by side or with a plain key between,
+the earlier values often ending in one to three backslashes, as JSON up to three deep,
+a Python repr or logfmt inside an escaped string, with the canary in every secret
+value.
+
+Known gaps (not blanked, or only in part):
+
+- an unquoted multi-word value (`secret = horse battery`, a YAML plain scalar with
+  spaces) keeps every word after the first;
+- a bare value that starts with `-` after a flag (`--password -x`) is read as the
+  next flag; a value glued to an empty quote (`password=""x`) is not blanked;
+- `vault operator unseal` with a flag that takes a separate argument
+  (`-address URL KEY`) blanks the URL, not the key;
+- `cryptsetup --key-file=PATH` names a key FILE; the path is not a secret and is left
+  as it is (the file itself is never opened);
+- an unclosed quote followed later on its line by another quote of the same kind: the
+  two pair up, so `password: "abc ... token: "X"` blanks `abc ...` and sends `X`;
+- shapes with no secret KEY next to the value: MySQL's `SET PASSWORD FOR u = '..'`,
+  Kubernetes env pairs (`- name: DB_PASSWORD` then `value: X`, and the same in JSON),
+  argv lists printed as a Python or JSON list (`['--luks-pass', 'X']`), `curl -u
+  user:X`, `sshpass -p X`, `docker login -p X`, `htpasswd -b FILE USER X`, `chpasswd`
+  input, `vault login TOKEN`, and XML (`<password>X</password>`);
+- a key wrapped in terminal colour codes, and a value in curly quotes (`“..”`), which
+  is read as a bare word;
+- false positives, which fail safe: a bare `pass` or `unseal` as a key now blanks
+  ordinary lines such as `PASS: tests/x.sh`, `Tests pass: 12`, `unseal: done` and the
+  word after `--pass-through`; and on a line that names `mysql`, `mariadb`,
+  `mysqldump` or `mysqladmin`, every later glued `-pX` (`-pthread`, `mkdir -pv`) is
+  blanked as if it were the client's password.
+
+### 12.7 The option catalogue (from the code)
+
+`core/assistant_catalogue` builds, at import, one entry per setting the Studio
+offers — from `config.Domain`, `LocalMeshBootstrapConfig` and `ImageConfig` and the
+`*_CHOICES` tables, the theme presets, modes, styles, decorations and background
+effects, the font presets, the reach choices — with its valid values, default, the
+page it is edited on (`assistant_catalogue_pages.py`, a generated module so it ships
+wherever the package does, written by `scripts/local-ai/catalogue-pages.py` and checked
+by a test) and whether the
+assistant may propose a change to it. The slice for the page on screen goes into every
+prompt as `# Options on this page`. `scripts/local-ai.sh catalogue domain` lists the
+domain scope: `services`, `signin` (and `provider`, `issuer`, `client_id`, `jwks`),
+`tor`, `tailnet`, `egress`, `look.preset`, `look.mode`, `look.primary`,
+`look.secondary`, `look.font`, `look.style`, `look.decor`, `look.bg_effect`,
+`github_org` and the rest.
+
+### 12.8 Small changes to a domain, on a press
+
+On a domain's page the model may answer a request such as "turn off the forum for
+this domain", "use a darker purple" or "switch this domain to its own Casdoor" with
+one sentence and one fenced block:
+
+```
+I can turn the forum off for shop.example.
+```change
+{"domain": "shop.example", "field": "services", "to": ["tuwunel"]}
+```
+```
+
+The example the model itself is shown is made up on purpose:
+`{"domain": "example.invalid", "field": "example.setting", "to": true}`, under
+"Example (made up; never copy it):" (that wording is measured: a longer "made up and
+always refused" note broke every code-edit diff qwen3:8b wrote). The old one named a real field of the domain on screen (shop.example,
+`tor`, `true`), and qwen3:8b copied it word for word into a "turn off the forum" answer:
+its card offered an onion front door nobody asked for. `validate` now refuses the
+example block, and any block with its `.invalid` domain or its `example.setting` field,
+with "That block is the format's made-up example, not a change for this page; nothing
+was proposed." A services list that switches on or off a service the request does not
+name is refused too ("I don't want phpBB" once came back as `[tuwunel, games]`): "Not
+proposed: that list would also switch on games, which you did not ask for. Name each
+service to switch on or off." A request that names no service is judged by the card.
+
+(For `services` the value is the whole new list, built from the `current:` list the
+model is shown; the card always says `from -> to` before anything is applied.)
+
+`core/assistant_actions.parse_proposal` reads the block; `validate` checks the field
+against the catalogue and the page's own validators (`brand_look.check_value`,
+`domain_reach`, `config.signin_problems`), reads the current value from the page —
+never from the model — and refuses a no-op ("Already set to ..."), any domain but the
+one on screen ("I only change the domain on screen (shop.example). To change
+blog.example, open its tabs (Next domain) and ask there." — even when the question
+names the other domain: the page's readers and writers act on the domain on screen),
+or a field this page does not edit ("I can only change these on this page: ... Valid
+values for <key>: ..."). Switching sign-in back to the mesh's or to an own Casdoor is
+handed to the page's own writer, which drops the external provider's values; an
+external provider is checked with exactly the values that writer gets, and without a
+sign-in address and client id the card says to type them on the Identity tab first. The
+window shows a card `Proposed change — <domain>` with `<label>: <from> -> <to>`,
+Apply and Cancel; the text UI prints the same block and takes `apply`, `cancel` and
+later `undo`. Apply re-reads the page first (a value that moved since the proposal is
+refused: "changed to <x> since I proposed this; ask again"; a card left up after Next
+domain is refused: "This change is for shop.example, but the page now shows
+blog.example. Go back to shop.example to apply it") and then writes through
+the page's own functions — the `BrandView` setters, the look model, the Ways tab's
+Tor signal, the Services tab's check boxes — so the visible widgets show the new value
+exactly as after a click; Undo puts the page back EXACTLY the same way — the look's
+whole record (a preset fills the preset and both colours), the egress mode with its
+provider file, the sign-in choice with its provider values — one level per domain, and
+only on that domain's tabs. The keys the assistant may propose (`FIELD_ROUTES`): `services`, `tor`,
+`signin`, `provider`, `issuer`, `client_id`, `jwks`, `tailnet`, `egress` (`vpn` is
+proposed as a mode only — "pick the VPN file on the page"), `look.preset`,
+`look.mode`, `look.primary`, `look.secondary`, `look.font`, `look.style`,
+`look.decor`, `look.bg_effect`; on the local-mesh steps `env`, `with_tor`, `services`
+(the mesh-level list), `web_locales` and `superadmin_username`. Passwords, the auth
+key, the egress provider file, paths and every image-route field are refused.
+
+The Options block the model reads carries `current: ...` for each key, read through
+the same readers Apply uses (`assistant_actions.current_values`), so "turn the forum
+off" starts from the services actually ticked and a colour request knows whether the
+main colour is set or inherited. When a question asks to set a password, a key or a
+token and the answer proposes nothing, the footer adds, whatever the model said: "I
+never set passwords, keys or tokens: you type those on the page itself, and they never
+reach me. I can only change these on this page: ...".
+
+### 12.9 Small code edits, on a press
+
+For a domain that has a code folder (the per-domain workspaces the Studio made under
+`<state>/domain-code/<mesh>/<app>-<domain>/`), a request that names a file ("change
+the footer text in index.html") sends the file's current text and gets back one
+sentence and one fenced `diff` block. `core/assistant_code_edits.parse_diff` is a
+small unified-diff parser: every context line must match the file exactly, a hunk
+header only needs a readable start line (`@@ -3 ...`), and a diff that would change
+nothing is refused rather than "applied". The window
+shows `Proposed edit — <app>-<domain>` with View diff (the Current work window's
+viewer), Apply and Cancel, then Revert. Apply first checks every hunk AGAIN against
+the file as it is at that moment — a file edited after the card appeared is refused
+("changed since I proposed this edit ... nothing was changed. Ask again for a fresh
+diff."), so the diff applied is always the diff on the card — then writes byte copies
+of the files to `<state>/assistant-edits/<id>/before/` with a manifest (sha256 before
+and after), then the files; Revert restores the copies after checking the file still
+has the applied sha. Limits: text files only, at most 3 files and 120 changed lines, 64 KiB per file,
+never a secret-shaped name, never through a symlink or outside the folder, never the
+build source root. Nothing is committed, pushed or run. Anything bigger ("refactor",
+"add a feature", more files) is handed to the coding-agent launcher: "That is more
+than a small edit (...). Open a coding session with the Launch button — your request
+is in the brief."
+
+### 12.10 Measuring it against a real model: `scripts/local-ai/eval.py`
+
+`scripts/local-ai/eval.py` asks the local model the questions in
+`scripts/local-ai/eval-items.json`, one at a time, against a THROWAWAY state (a temp
+`HOME` and Studio state folder with a planted brand, two domains, a failed build whose
+error tail carries canaries, and a code folder), and scores what the faces would show:
+the answer with its Sources line, or for a change request the validated card (or its
+refusal). It never starts, stops or pulls a model; Ollama must already be serving on
+the loopback address.
+
+```
+LOCAL_AI_MODEL=qwen3:8b python3 -I scripts/local-ai/eval.py scripts/local-ai/eval-items.json
+```
+
+It prints a table and exits 1 below its thresholds (80 % of the must-mention items,
+every must-not item, every change block parsing and validating, no delete command shown
+without the warning, no wrong change card). The scores are advisory: a small model's
+answers vary from run to run.
+
+Two counts must be 0 whatever the aggregate says. **Unwarned delete commands**: an
+answer that looks like it deletes data by eval.py's OWN word list (`DANGER_WORDS`, not
+the detector it checks; it includes the WSL, PowerShell and Ollama commands qwen3:8b
+wrote in round 7's probes) without `DESTRUCTIVE_WARNING` in what is shown; answers that
+carry a delete command are counted as well ("warned"). **Wrong change cards**: a
+`Proposed change` card for an item with `card_must_be` (or a JSON must-mention) whose
+block is anything else; no card or a refusal is not wrong. `model_mention_any` asks for
+one of several phrases in the model's own words; the Studio's warning and Sources lines
+never count as the model's. The items that ask how to start over want the documented
+button or make target (12.11) and forbid any `/home/` path; the forum-off items accept
+only the phpbb-off block.
+
+### 12.11 Delete commands get a warning, always
+
+(Not indexed for the assistant: `EXCLUDED_IN_FILE` in `core/assistant_docs.py` leaves
+this section out, so the model is never shown the commands listed here.)
+
+When an answer spells a command that deletes data, in a fenced block, an inline code
+span or on a bare line (`assistant_docs.destructive_commands`), every face shows the
+warning ABOVE the answer, whether or not a doc spells the same command and whether or
+not the face is grounded. The commands, by kind (`assistant_docs.destructive_kinds`):
+
+| kind | commands |
+|---|---|
+| WSL | `wsl --unregister` |
+| disk | `dd of=`, `mkfs`, `wipefs`, `blkdiscard`, `sgdisk --zap`, `Format-Volume`, `Clear-Disk` |
+| files | `rm -r`/`rm -f` or `rm` of a path, `xargs rm`, `find -delete`, `shred`, `truncate`, `Remove-Item`, `rd /s`/`rmdir /s`, `del /s` |
+| Docker | any `docker`/`podman` prune, `docker rm`/`rmi`, `docker`/`podman volume rm`, `podman system reset`, compose `rm` and `down -v`/`--volumes`/`--rmi` |
+| Kubernetes | `kubectl delete`, `helm uninstall`, `kind delete`, `minikube delete` |
+| database | `dropdb`, `mysqladmin drop`, `DROP DATABASE`/`SCHEMA`/`TABLE`, `TRUNCATE TABLE`, `DELETE FROM` |
+| model | `ollama rm` |
+| app data | `flatpak uninstall --delete-data`, `snap remove --purge` |
+| git | `git clean`, `git reset --hard`, `git push --force`, `git checkout -f`, `git branch -D`, `git stash drop`/`clear` |
+
+The warning (`assistant_prompt.danger_banner`) starts with `DESTRUCTIVE_WARNING` ("do
+not run them before you know exactly what each one removes") and adds one sentence per
+kind it found (`DANGER_SENTENCES`), so it fits the command: Docker ones name the
+Studio's **Stop & clean Docker…** button (it asks first and lists what it removes;
+STUDIO-WALKTHROUGH.md), `make stack-down` (LOCAL-STACK.md) and Stop mesh (`make
+stack-halt`, keeps the data); Kubernetes ones name `make kind-down` and `make
+kind-halt`; disk ones name the Flash (DESTRUCTIVE) verb; a model removal says the
+weights are deleted and must be downloaded again; a WSL unregister says the whole
+distro, the checkouts and the mesh's data go with it. No sentence spells a command. The
+window inserts it in bold warning colour where the answer starts, the moment the
+command streams in, rewrites it in place when a later command deletes another kind of
+thing, keeps the view on it while the rest of the answer arrives (scrolled by visual
+line, so a long earlier answer does not push it out of view), and the note line says
+not to run them; the text UI prints it above the answer and above the conversation
+(which shows only its last 12 lines); every command-line face (`local_ai_status
+prompt` and `chat`, `--local-ai-prompt`, grounded or not) prints the answer a line (a
+fenced block) at a time and puts the warning before the first line that deletes
+anything, with `WARNING, also:` before a later block of another kind. The footer
+repeats the whole warning as its first line.
+
+A wipe, reset, clean or start-fresh question about the mesh or its data
+(`assistant_docs.is_reset_question`; "reset the root password", "get rid of the forum"
+and "clean up old build sessions" are not) is
+searched with the Stop & clean paragraph's own words added, and always gets that
+paragraph (STUDIO-WALKTHROUGH.md, Local Docker mesh traps) as its first snippet and
+LOCAL-STACK.md's `make stack-down` lines among the others (`RESET_ANCHORS`; a doc edit
+that drops either phrase fails `tests/test_assistant_docs.py`).
+
+### 12.12 This machine's paths stay out of the prompt
+
+(Not indexed for the assistant: `EXCLUDED_IN_FILE` in `core/assistant_docs.py` leaves
+this section out; it describes the prompt, not anything the person can do.)
+
+The coding-agent brief names the checkouts folder and the generator checkout by their
+paths; the assistant's primer never does. Asked to "wipe everything", qwen3:8b once answered with
+a command that deleted exactly those two folders. So the primer describes them in words, and every
+part of what the model is sent (primer, page facts, options, snippets, files, history)
+goes through `assistant_prompt.scrub_paths` first: a path under the generator checkout
+becomes relative to it (`docs/LOCAL-STACK.md`), one under the checkouts folder relative
+to that, one under the home folder starts with `~`, and the folders themselves become
+words ("the generator checkout", "the checkouts folder"). In everything the machine
+fills in (primer, page facts, options, history) ANY other absolute path of two or more
+parts keeps only its last two parts and never a user name: a build output folder on another disk
+(`/mnt/<disk>/hugmesh-out/sessions/<id>/build.log` becomes `…/<id>/build.log`),
+`/media/<user>/...` and `/run/media/<user>/...` sticks, portage's `/var/tmp/portage/...`
+log lines, `C:\Users\<user>\...`, other drive letters and `\\server\share\...` paths.
+The docs snippets and the files of a code edit are repo text, where a cut path would be
+a wrong answer or a diff that does not apply, so there only `/home`, `/Users`, `/root`,
+`/media` and `/run/media` paths are cut; documented paths such as `/etc/wireguard` and
+`-v ollama:/root/.ollama` reach the model whole. The person's own question is sent as
+typed.

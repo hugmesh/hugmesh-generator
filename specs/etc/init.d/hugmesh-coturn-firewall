@@ -21,7 +21,9 @@ command_background=false
 start() {
     ebegin "Reconciling the coturn public-TURN node firewall (fail-closed to the existing ruleset on error)"
     "${command}"
-    eend $? "coturn firewall reconcile reported an unexpected error (existing ruleset preserved)"
+    # Non-zero ONLY when no hugmesh_coturn_relay table is live (a failed reload over
+    # an existing table keeps it and exits 0): say UNPROTECTED, never "preserved".
+    eend $? "NO coturn backstop is loaded (table inet hugmesh_coturn_relay absent) — the TURN ports are NOT fail-closed; see the ERROR above and /run/hugmesh/firewall-health/"
 }
 
 stop() {

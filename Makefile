@@ -249,10 +249,15 @@ endif
 # Launch the builder image: privileged (build_img needs /dev/loop + mount),
 # repo at /src, output at /out, and the invoking uid/gid forwarded so the
 # in-container NATIVE build can chown artifacts back to the host user.
+# The four HUGMESH_SELINUX_* knobs (scripts/_selinux-policy-lib.sh) are forwarded by
+# NAME: `-e VAR` passes the host value when set and nothing when unset, so the lib's
+# defaults (permissive, modules on, type autodetected, gate inert) still apply.
+# Without these, `HUGMESH_SELINUX_MODE=enforcing make x86-...` silently built permissive.
 DOCKER_RUN := docker run --rm --privileged \
   -v $(CURDIR):/src -v $(WORK_DIR):/out -w /src \
   -e HOST_UID=$(HOST_UID) -e HOST_GID=$(HOST_GID) \
   -e STANDALONE_FLAGS \
+  -e HUGMESH_SELINUX_MODE -e HUGMESH_SELINUX_MODULES -e HUGMESH_SELINUX_TYPE -e HUGMESH_SELINUX_ENFORCE_GATE \
   $(CA_DOCKER_MOUNTS) $(CA_DOCKER_ENV) $(IMAGE)
 
 # ensure-image — auto-build the builder image if it is missing.

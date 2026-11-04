@@ -42,7 +42,7 @@ import urllib.request
 from dataclasses import dataclass, field
 from typing import Callable, Optional, Sequence
 
-from . import assistant_settings
+from . import assistant_settings, proc_text
 
 __all__ = [
     "SYSTEM", "DOCKER", "MODES", "MODE_WORDS", "IMAGE", "IMAGE_ROCM", "IMAGE_VERSION",
@@ -89,8 +89,11 @@ Runner = Callable[[Sequence[str], float], "tuple[int, str]"]
 def _run(argv: Sequence[str], timeout: float = 30.0) -> "tuple[int, str]":
     """Run a docker command; ``(exit code, stdout + stderr)``. Never raises."""
     try:
+        # UTF-8 with replacement, never the code page: on native Windows text=True alone
+        # decodes docker's output as cp1252, and a byte it cannot map raised past the
+        # "never raises" promise (#827 group 4)
         p = subprocess.run(list(argv), capture_output=True, text=True, timeout=timeout,
-                           stdin=subprocess.DEVNULL)
+                           stdin=subprocess.DEVNULL, **proc_text.TEXT_IO)
     except FileNotFoundError:
         return 127, f"{argv[0]}: command not found"
     except subprocess.TimeoutExpired:
@@ -371,7 +374,7 @@ def adjust_snapshot(snap, mode: str, generator_dir: str = "."):
 
 def start_assistant(generator_dir: str, mode: str, *, environ=None, extra_env=None,
                     runner: Optional[Runner] = None, starter=None, ready=None,
-                    ready_timeout: float = 90.0):
+                    ready_timeout: float = 90.0, osname: Optional[str] = None):
     """Start the local assistant against the instance ``mode`` names. Blocking: call it
     off the window thread. Returns a :class:`..local_ai_status.StartResult`.
 
@@ -379,8 +382,13 @@ def start_assistant(generator_dir: str, mode: str, *, environ=None, extra_env=No
     ``scripts/local-ai.sh start`` as system mode with ``OLLAMA_HOST`` pointing at the
     container: that script's ``up`` sees an Ollama answering and starts none of its
     own, and the queue worker it starts inherits the address. ``extra_env`` carries the
-    agent context and the checkouts folder (core/agent_context.py) to the worker."""
+    agent context and the checkouts folder (core/agent_context.py) to the worker.
+
+    On native Windows the script cannot run (it is bash): System mode refuses in words,
+    and Docker mode starts the container, waits for it, and says the panel can use it
+    while the queue worker stays off."""
     from . import local_ai_status as lai
+    windows = bool(lai.windows_refusal(osname))
     env = assistant_env(mode, environ)
     env.update(extra_env or {})
     if mode == DOCKER:
@@ -393,7 +401,13 @@ def start_assistant(generator_dir: str, mode: str, *, environ=None, extra_env=No
                 False, f"The Docker Ollama was started but did not answer on "
                        f"{endpoint(DOCKER, env)} within {int(ready_timeout)} seconds "
                        f"(see: docker logs {CONTAINER}).", f"docker logs {CONTAINER}")
-    res = lai.start_assistant(generator_dir, env=env)
+        if windows:
+            return lai.StartResult(
+                True, f"The Studio's own Ollama is answering on {endpoint(DOCKER, env)}, and "
+                      f"the panel asks it directly. The queue worker was not started: it is "
+                      f"the bash script scripts/local-ai.sh, which the Windows build of the "
+                      f"Studio cannot run (run the Studio inside WSL2 for it).", "")
+    res = lai.start_assistant(generator_dir, env=env, osname=osname)
     if mode == DOCKER and not res.ok:
         # the "run it yourself" line must name the Docker instance, not the system one
         res = lai.StartResult(res.ok, res.message.replace(
