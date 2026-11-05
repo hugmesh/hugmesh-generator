@@ -555,9 +555,31 @@ class _LoopbackAuthServer(ThreadingHTTPServer):
         return True
 
 
-def make_server(agent: LocalLoginAgent, host: str = BIND_HOST, port: int = PORT) -> ThreadingHTTPServer:
-    """Bind the loopback server. Raises OSError if the bind fails (caller exits)."""
-    httpd = _LoopbackAuthServer((host, port), _Handler)
+def make_server(agent: LocalLoginAgent, host: str = BIND_HOST, port: int = PORT,
+                *, osname: str | None = None) -> ThreadingHTTPServer:
+    """Bind the loopback server. Raises OSError if the bind fails (caller exits).
+
+    ``osname`` is ``os.name`` unless a test passes another."""
+    if (osname or os.name) == "nt":
+        # HTTPServer sets SO_REUSEADDR, which on Windows (unlike Linux) lets a second
+        # socket bind a port that is already LISTENING: a second agent then logged
+        # "listening" and served nothing, run()'s bind-failed -> exit 1 -> password-form
+        # fallback never fired, and any local process could sit on the credential
+        # handoff port beside us. So no SO_REUSEADDR (the two may not be combined) and
+        # SO_EXCLUSIVEADDRUSE, which also refuses a later SO_REUSEADDR binder.
+        httpd = _LoopbackAuthServer((host, port), _Handler, bind_and_activate=False)
+        httpd.allow_reuse_address = False
+        try:
+            exclusive = getattr(socket, "SO_EXCLUSIVEADDRUSE", None)
+            if exclusive is not None:
+                httpd.socket.setsockopt(socket.SOL_SOCKET, exclusive, 1)
+            httpd.server_bind()
+            httpd.server_activate()
+        except BaseException:
+            httpd.server_close()
+            raise
+    else:
+        httpd = _LoopbackAuthServer((host, port), _Handler)
     httpd.agent = agent                                    # type: ignore[attr-defined]
     # Expected Host = the loopback literal + the ACTUAL bound port (0 -> ephemeral in tests).
     httpd.expected_host = f"{host}:{httpd.server_address[1]}"   # type: ignore[attr-defined]

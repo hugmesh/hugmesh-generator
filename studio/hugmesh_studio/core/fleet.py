@@ -607,12 +607,25 @@ class FleetDriver(BuildDriver):
     def preflight(self, cfg: FleetConfig, backend: str | None = None) -> list[str]:  # type: ignore[override]
         backend = backend or self.host.default_backend
         problems: list[str] = []
+        # BuildDriver.preflight's Windows remedy, which this override never reached: on
+        # the MSI the "none" backend is almost always an installed but stopped Docker
+        # Desktop, and "install Docker ... or run on a Gentoo host" was untrue there. The
+        # host lends its probe result, so a busy engine (timeout) is not told to start.
+        win_docker = build_driver.windows_docker_remedy(
+            host=self.host) if self.host.os == "windows" and (
+            backend == "none" or (backend == "docker" and not self.host.has_docker)) else ""
         if backend == "none":
-            problems.append("No build backend: install Docker (any OS) or run on a Gentoo host.")
+            problems.append(("No build backend: " + win_docker) if win_docker else
+                            "No build backend: install Docker (any OS) or run on a Gentoo host.")
         if not os.path.exists(os.path.join(self.generator_dir, FLEET_SCRIPT)):
             problems.append(f"fleet script {FLEET_SCRIPT} not found in {self.generator_dir}")
         if backend == "docker" and not self.host.has_docker:
-            problems.append("Docker selected but the Docker daemon is not reachable.")
+            # as BuildDriver.preflight: a timed-out probe is "slow", not "unreachable",
+            # and its remedy states the symptom itself
+            slow = win_docker and self.host.docker_state == platform_info.DOCKER_TIMEOUT
+            problems.append("Docker selected. " + win_docker if slow else
+                            "Docker selected but the Docker daemon is not reachable."
+                            + (" " + win_docker if win_docker else ""))
         elif backend == "docker" and not self._image_present():
             problems.append(
                 f"Docker builder image '{self.host.builder_image}' not found — build it "

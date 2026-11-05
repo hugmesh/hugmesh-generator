@@ -49,6 +49,31 @@ from ..qt import Qt, QtGui, QtWidgets
 from ...core import e2e_catalogue as ec
 from ...core.seeded_credentials import Roster
 
+
+def read_source(path: str) -> tuple[str, str]:
+    """(text, newline) of a source file: the text with LF line breaks, as the editor
+    holds it, and the line ending the file itself uses (CRLF only when most of its
+    lines end that way).
+
+    Read with newline="" because the ending is what Save must write back: a
+    text-mode write turns every LF into CRLF on Windows, so saving one edit
+    rewrote a LF .feature/.spec.ts (the repo's `eol=lf`) as CRLF throughout."""
+    with open(path, encoding="utf-8", newline="") as fh:
+        raw = fh.read()
+    crlf = raw.count("\r\n")
+    newline = "\r\n" if crlf and crlf * 2 > raw.count("\n") else "\n"
+    return raw.replace("\r\n", "\n").replace("\r", "\n"), newline
+
+
+def write_source(path: str, text: str, newline: str = "\n") -> int:
+    """Write the editor's LF ``text`` with the file's own ``newline``; returns the
+    number of bytes written (what the status line reports)."""
+    data = (text.replace("\n", newline) if newline != "\n" else text).encode("utf-8")
+    with open(path, "wb") as fh:
+        fh.write(data)
+    return len(data)
+
+
 # Group headers, in tree order. Gherkin sits FIRST because the operator asked for it
 # by name; the specs follow; the two "what this suite does not do" groups are last so
 # they read as the tail of the story rather than as noise between features.
@@ -137,6 +162,7 @@ class E2ETreeDialog(QtWidgets.QDialog):
         self._open_path = ""
         self._open_text = ""
         self._open_readonly = True
+        self._open_newline = "\n"    # the open file's own line ending (Save keeps it)
 
         root = QtWidgets.QVBoxLayout(self)
         root.addWidget(self._header())
@@ -697,9 +723,8 @@ class E2ETreeDialog(QtWidgets.QDialog):
         readonly = ec.is_readonly_source(path)
         self._open_readonly = readonly
         try:
-            with open(path, encoding="utf-8") as fh:
-                text = fh.read()
-        except OSError as e:
+            text, newline = read_source(path)
+        except (OSError, UnicodeDecodeError) as e:
             self._open_text = ""
             self.source_edit.setPlainText("")
             self.source_edit.setReadOnly(True)
@@ -709,6 +734,7 @@ class E2ETreeDialog(QtWidgets.QDialog):
             self.source_status.setText(f"Could not read this file: {e}")
             return
         self._open_text = text
+        self._open_newline = newline
         self.source_edit.setPlainText(text)
         self.source_edit.setReadOnly(readonly)
         self.save_btn.setEnabled(not readonly)
@@ -731,12 +757,12 @@ class E2ETreeDialog(QtWidgets.QDialog):
         if not self._open_path:
             return
         try:
-            with open(self._open_path, encoding="utf-8") as fh:
-                text = fh.read()
-        except OSError as e:
+            text, newline = read_source(self._open_path)
+        except (OSError, UnicodeDecodeError) as e:
             self.source_status.setText(f"Could not re-read this file: {e}")
             return
         self._open_text = text
+        self._open_newline = newline
         self.source_edit.setPlainText(text)
         self.source_status.setText("Reloaded from disk; unsaved edits were discarded.")
 
@@ -762,9 +788,8 @@ class E2ETreeDialog(QtWidgets.QDialog):
         try:
             # Read back first: if the file moved under us, say so rather than
             # writing over whatever is there now.
-            with open(path, encoding="utf-8") as fh:
-                on_disk = fh.read()
-        except OSError as e:
+            on_disk, _ = read_source(path)
+        except (OSError, UnicodeDecodeError) as e:
             self.source_status.setText(f"Not saved — cannot read {path}: {e}")
             return
         if on_disk != self._open_text:
@@ -774,13 +799,12 @@ class E2ETreeDialog(QtWidgets.QDialog):
                 f"edits), then re-apply them.")
             return
         try:
-            with open(path, "w", encoding="utf-8") as fh:
-                fh.write(new)
+            written = write_source(path, new, self._open_newline)
         except OSError as e:
             self.source_status.setText(f"Not saved — {e}")
             return
         self._open_text = new
-        self.source_status.setText(f"Saved {path} ({len(new)} bytes).")
+        self.source_status.setText(f"Saved {path} ({written} bytes).")
 
     # -- screenshots --
     def _load_shots(self, node: dict, item) -> None:

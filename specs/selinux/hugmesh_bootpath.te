@@ -2,7 +2,8 @@
 # hugmesh_bootpath.te
 # Narrow grants for denials MEASURED on the boot path of an x86 image booted
 # enforcing (2026-10-30 backend live ISO, "SELinux enforcing (test)" entry, with
-# the live-overlay relabel hook in place). Each block names the AVC it answers.
+# the live-overlay relabel hook in place; re-measured 2026-11-04 on the #852 image:
+# 25 AVCs, all pre-login, all permissive=0). Each block names the AVC it answers.
 # Nothing here is inferred: a rule is added only for a denial that was logged, and
 # every grant is on the domain's own objects or one named target type.
 #
@@ -11,19 +12,23 @@
 # absent is dropped at link time, not failed. That is why this module has no entry
 # in _SLX_MODULE_DEPS and is installed on every role.
 #
-# Denials deliberately NOT answered here (recorded in the PR, not silently allowed):
-#   local_login_t { search } /root default_t   — the store maps /root to nothing
-#       (seusers has no root entry, so genhomedircon emits no /root line); fixing
-#       the mapping is a policy-store decision, not a grant. Root login still works.
-#   udev_t getattr on the live medium (iso9660_t squashfs.img) and nsfs_t — live-ISO
-#       only, read-only metadata, no service failed.
-#   systemd_tmpfiles_t creating /var/tmp/portage (and writing "/") — a build-tool
-#       directory; the tmpfiles.d entry is portage's, not a service's.
-#   NetworkManager_t { sys_admin } capability and { perfmon } capability2 —
-#       granting sys_admin would hand NetworkManager most of root; it needs its own
-#       investigation (which call wants it, and whether NM degrades without it).
+# Denials answered OUTSIDE this module (a label or a file, not a rule):
+#   local_login_t { search } /root default_t (x3) — root had no login mapping in
+#       the store (seusers carried only __default__), so genhomedircon never
+#       emitted the /root lines and /root fell to default_t. slx_map_root_login
+#       (scripts/_selinux-policy-lib.sh) adds the mapping before the label pass;
+#       /root is user_home_dir_t and every pack-hop gate pins it (_SLX_CORE_PROBES).
+#   systemd_tmpfiles_t { write } "/" root_t (x2) and { create } portage_tmp_t (x2) —
+#       `q /srv` (systemd's home.conf) found no /srv in the image, and portage's
+#       portage-tmpdir.conf asked for /var/tmp/portage on a node that never runs
+#       portage. The x86 builder ships /srv and masks portage-tmpdir.conf in
+#       /etc/tmpfiles.d; systemd-tmpfiles-setup then has nothing to create, which
+#       is also why it no longer fails to start under enforcing.
+#
+# Denials deliberately NOT granted (dontaudit, with the proof nothing needs them):
+#   NetworkManager_t { sys_admin } capability + { perfmon } capability2 — block 8.
 ################################################################
-policy_module(hugmesh_bootpath, 1.0.0)
+policy_module(hugmesh_bootpath, 1.1.0)
 
 require {
 	type initrc_t;
@@ -134,4 +139,50 @@ optional_policy(`
 	')
 	fs_manage_tmpfs_files(entropyd_t)
 	allow entropyd_t tmpfs_t:file map;
+')
+
+########################################
+# 8. NetworkManager loads eBPF socket filters (nettools' n-acd, the IPv4 address
+#    conflict detector NM runs for every address it configures). The policy
+#    already grants NetworkManager_t capability2 { bpf }, so the load is
+#    permitted; the verifier then asks perfmon_capable() for its privileged
+#    modes (allow_ptr_leaks, bypass_spec_v1/v4), and the kernel spells that as
+#    capable(CAP_PERFMON) || capable(CAP_SYS_ADMIN): a { perfmon } and a
+#    { sys_admin } denial per check, all on the audit serial of the one bpf().
+#    Measured on the #852 image, "SELinux enforcing (test)" entry, 2026-11-04
+#    (tmp/zero-avc/old-enf, ausearch -i): TWO bpf() syscalls, audit serials 12
+#    and 13, each `syscall=bpf success=yes exit=23` (the program's fd), each
+#    carrying four sys_admin + four perfmon pairs = the 8 + 8 denials; the
+#    uplink then held its DHCP address, default route and DNS under enforcing.
+#    Neither capability is needed: perfmon would let the daemon read kernel
+#    memory through tracing programs, sys_admin is most of root. Both are
+#    silenced, never granted; an allow of either is pinned red by
+#    tests/scripts/test-selinux-policy-install.sh.
+########################################
+optional_policy(`
+	gen_require(`
+		type NetworkManager_t;
+	')
+	dontaudit NetworkManager_t self:capability sys_admin;
+	dontaudit NetworkManager_t self:capability2 perfmon;
+')
+
+########################################
+# 9. udev on a live ISO. Measured on the same boot, one each, both EACCES:
+#      udev_t { getattr } nsfs_t:file   — systemd-udevd, syscall=newfstatat on
+#          path="pid:[...]": its own pid-namespace handle, to learn whether it
+#          runs in the initial namespace
+#      udev_t { getattr } iso9660_t:file — (udev-worker), syscall=ioctl on the
+#          loop device: LOOP_GET_STATUS stats the backing file, which is
+#          /run/initramfs/live/LiveOS/squashfs.img on the live medium
+#    Both are metadata reads (udev_t already holds getattr on every
+#    filesystem); the refpolicy interfaces are the narrowest spelling: one
+#    class, one permission, one target type each.
+########################################
+optional_policy(`
+	gen_require(`
+		type udev_t;
+	')
+	fs_getattr_nsfs_files(udev_t)
+	fs_getattr_iso9660_files(udev_t)
 ')

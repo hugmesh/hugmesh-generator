@@ -32,7 +32,8 @@
 # release/X.Y branch as X.Y.Z, where X.Y.Z is main's beta with the -beta.N dropped (a cut)
 # or --version (a patch). Every repo is reported as DONE (tag exists and its run is
 # green), READY, REFUSE (with the reason and the next command), NEEDS-BUMP (beta: the
-# published tag IS main's version but main has commits since it), RUNNING (its tag run is
+# published tag IS main's version but main has commits since it, or a stable X.Y.Z at or
+# above main's beta line is already out), RUNNING (its tag run is
 # in flight), and on the stable channel NEEDS-CUT (release/X.Y does not exist yet: the
 # cut phase creates it) or NEEDS-PR (release/X.Y does not carry X.Y.Z yet: the bump phase
 # opens the version-bump PR).
@@ -207,7 +208,27 @@ vercmp() {
   done
   echo eq
 }
-next_beta() { echo "${1%.*}.$(( ${1##*.} + 1 ))"; }
+# next_beta X.Y.Z-beta.N [newest stable X.Y.Z] -> the version to advise. X.Y.Z-beta.(N+1), unless a
+# stable at or above X.Y.Z is published: then a pre-release of a shipped version is never
+# advised, and the next beta is the next minor after that stable (what the stable channel's
+# `next` phase moves main to).
+next_beta() {
+  local nb stable
+  nb="${1%.*}.$(( ${1##*.} + 1 ))"; stable=${2:-}
+  if [ -n "$stable" ] && [ "$(vercmp "$nb" "$stable")" != gt ]; then next_minor_beta "$stable"; return; fi
+  echo "$nb"
+}
+# newest_stable <tag refs, one per line> <prefix> -> the newest X.Y.Z among them, or nothing
+newest_stable() {
+  local t v best=""
+  for t in $1; do
+    v=${t#refs/tags/$2}
+    is_stable "$v" || continue
+    if [ -z "$best" ] || [ "$(vercmp "$v" "$best")" = gt ]; then best=$v; fi
+  done
+  [ -n "$best" ] && echo "$best"
+  return 0
+}
 is_stable() { [[ "$1" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; }
 
 # b64-decoded file at a ref, via the contents API
@@ -441,7 +462,7 @@ classify_beta() {
   local prefix=${T_PREFIX[$repo]}
   local wf=${T_WF[$repo]}
   local ref=main
-  local sha ver tag tc rc wft facts pushref run rid rsha rst rcon rcreated reasons=() s where t pin age n why
+  local sha ver tag tc rc wft facts pushref run rid rsha rst rcon rcreated reasons=() s where t pin age n why tags stable
   local -a paths=()
   S_REF[$repo]=main
   S_STATE[$repo]=REFUSE; S_REASON[$repo]=""; S_NOTE[$repo]=""; S_SHA[$repo]=""; S_VER[$repo]=""; S_TAG[$repo]=""
@@ -457,6 +478,12 @@ classify_beta() {
   pin=""; [ "$CHANNEL" = stable ] || pin=${EXPECT[$repo]:-}
   if [ -n "$pin" ] && [ "$pin" != "$ver" ]; then S_REASON[$repo]="--expect $repo=$pin, but main's $vfile says $ver"; return; fi
   tag="$prefix$ver"; S_TAG[$repo]=$tag
+  # Every tag under the prefix, once: the beta ordering check below reads the betas, and the
+  # newest stable X.Y.Z decides whether main's beta line has already shipped (#855). A failed
+  # read is REFUSE, never "no tags": an empty listing would skip both checks and read READY.
+  # (No tags under the prefix is an empty 200, which is a success here.)
+  tags=$(ghq api "repos/$ORG/$repo/git/matching-refs/tags/$prefix" --jq '.[].ref') || { S_REASON[$repo]="cannot read tags: gh api repos/$ORG/$repo/git/matching-refs/tags/$prefix"; return; }
+  stable=$(newest_stable "$tags" "$prefix")
 
   wft=$(file_at "$repo" "$sha" ".github/workflows/$wf" || true)
   facts=$(printf '%s\n' "$wft" | wf_facts)
@@ -481,9 +508,9 @@ classify_beta() {
       if why=$(tag_run_unpublished "$repo" "$rid" "${rcreated:-}"); then
         # Nothing went out, so the beta number is not burned: re-run the run, do not bump.
         S_TAGRERUN[$repo]=$rid
-        S_REASON[$repo]="tag $tag exists and its run $rid is '$rcon', but it $why. The beta number is not burned, so do NOT bump: gh run rerun $rid --failed -R $ORG/$repo (this stage offers it). That fixes a cause outside the tagged commit (a package that was not published yet, a flaky step); if the cause is in the commit itself, the re-run fails the same way: then fix it on main and bump $vfile to $(next_beta "$ver")"
+        S_REASON[$repo]="tag $tag exists and its run $rid is '$rcon', but it $why. The beta number is not burned, so do NOT bump: gh run rerun $rid --failed -R $ORG/$repo (this stage offers it). That fixes a cause outside the tagged commit (a package that was not published yet, a flaky step); if the cause is in the commit itself, the re-run fails the same way: then fix it on main and bump $vfile to $(next_beta "$ver" "$stable")"
       else
-        S_REASON[$repo]="tag $tag exists and its run $rid is '$rcon' (no re-run: $why). A published beta is never re-tagged: read gh run view $rid --log-failed -R $ORG/$repo, fix it on main, bump $vfile to $(next_beta "$ver") and run this again"
+        S_REASON[$repo]="tag $tag exists and its run $rid is '$rcon' (no re-run: $why). A published beta is never re-tagged: read gh run view $rid --log-failed -R $ORG/$repo, fix it on main, bump $vfile to $(next_beta "$ver" "$stable") and run this again"
       fi
       return
     fi
@@ -495,14 +522,21 @@ classify_beta() {
       S_STATE[$repo]=DONE; S_NOTE[$repo]="tag $tag (${tc:0:12}) run $rid green; main has no commit since it that $wf builds (paths: ${paths[*]})"
     else
       S_STATE[$repo]=NEEDS-BUMP
-      S_REASON[$repo]="$tag is published and main's $vfile still says $ver, but main has ${n} commit(s) since it$([ ${#paths[@]} -gt 0 ] && printf ' under %s' "${paths[*]}"): merge a PR that bumps $vfile to $(next_beta "$ver"), then run this again"
+      S_REASON[$repo]="$tag is published and main's $vfile still says $ver, but main has ${n} commit(s) since it$([ ${#paths[@]} -gt 0 ] && printf ' under %s' "${paths[*]}"): merge a PR that bumps $vfile to $(next_beta "$ver" "$stable"), then run this again"
     fi
     return
   fi
 
-  # Not tagged yet: every check that decides whether tagging main now would publish cleanly.
-  local tags old
-  tags=$(ghq api "repos/$ORG/$repo/git/matching-refs/tags/$prefix" --jq '.[].ref' || true)
+  # Not tagged yet. A stable X.Y.Z at or above the beta's X.Y.Z means that line has shipped:
+  # tagging X.Y.Z-beta.N now would publish a pre-release of a released version, so main must
+  # move past the newest stable first (#855).
+  if [ -n "$stable" ] && [ "$(vercmp "$ver" "$stable")" != gt ]; then
+    S_STATE[$repo]=NEEDS-BUMP
+    S_REASON[$repo]="stable tag $prefix$stable is published, so main's $vfile=$ver is a pre-release of a version that has already shipped and is never tagged: merge a PR that bumps $vfile to $(next_beta "$ver" "$stable"), then run this again"
+    return
+  fi
+  # Every check that decides whether tagging main now would publish cleanly.
+  local old
   for t in $tags; do
     old=${t#refs/tags/$prefix}
     is_beta "$old" || continue
@@ -1661,7 +1695,7 @@ phase_preflight() {
   fi
   say "== Summary: DONE=${COUNT[DONE]} READY=${COUNT[READY]} REFUSE=${COUNT[REFUSE]} NEEDS-BUMP=${COUNT[NEEDS-BUMP]} RUNNING=${COUNT[RUNNING]}"
   if [ "${COUNT[NEEDS-BUMP]}" -gt 0 ]; then
-    say "   NEEDS-BUMP repos are published at main's version but have unreleased commits; this run leaves them alone. Merge a version bump in each to release them."
+    say "   NEEDS-BUMP repos are published at main's version but have unreleased commits, or a stable at or above main's beta line is out; this run leaves them alone. Merge a version bump in each to release them."
   fi
 }
 

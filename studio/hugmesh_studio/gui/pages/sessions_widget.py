@@ -719,7 +719,9 @@ class PreviousBuildsWidget(QtWidgets.QGroupBox):
             box.setCheckBox(cb)
             if box.exec() != QtWidgets.QMessageBox.StandardButton.Ok:
                 return
-            build_sessions.delete(s, remove_artifacts=cb.isChecked())
+            if not build_sessions.delete(s, remove_artifacts=cb.isChecked()):
+                QtWidgets.QMessageBox.warning(self, "Delete refused",
+                                              build_sessions.not_deleted_reason(s))
         elif r.kind == "unmanaged":
             if QtWidgets.QMessageBox.question(
                     self, "Delete build tree",

@@ -29,6 +29,7 @@ import getpass
 import json
 import ntpath
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -409,7 +410,8 @@ class WorklistDriver:
         bash), so every mesh build there ended FAILED at its keys step. With the docker
         backend it runs in the builder image instead, which is where the image build
         already runs the same script and which carries its tools (jq, openssl,
-        ssh-keygen, python3); only the ``--out`` value changes, to the mounted folder.
+        ssh-keygen, python3, and keytool for the pki keystores); only the ``--out``
+        value changes, to the mounted folder.
         ``osname`` is ``os.name`` unless a test passes another."""
         if (osname or os.name) != "nt" or self.backend != "docker":
             return [script, *args]
@@ -424,9 +426,41 @@ class WorklistDriver:
                 "-e", f"BRAND={brand}", "-w", "/src", self.host.builder_image,
                 "bash", "./" + GENKEYS_SCRIPT.replace(os.sep, "/"), *args]
 
+    def _genkeys_line(self, line: str, out: str, osname: str | None = None) -> str:
+        """One line of ``gen-provision-keys.sh`` output as the operator should read it.
+
+        In the builder container (:meth:`_genkeys_command`) the script only knows the
+        mounted ``/keys/<name>``, and its closing "Next:" advice is a Linux ``sudo
+        ./scripts/make-keys-usb.sh /dev/sdX ...``: the log on Windows named a folder
+        that exists only in the container and a command that cannot run there. The
+        container path becomes the real folder (``out``), and the make-keys-usb step
+        becomes what to do on Windows. Elsewhere the script ran on the host with the
+        host path, so its lines are already true and pass unchanged."""
+        if (osname or os.name) != "nt" or self.backend != "docker":
+            return line
+        host = ntpath.abspath(out)
+        if "make-keys-usb.sh" in line and "/dev/sd" in line:
+            step = re.match(r"\s*(?:\d+\.\s+)?", line).group(0)
+            # make-keys-usb.sh partitions and formats a block device with parted and
+            # mkfs.vfat -F 32, copies the folder, and leaves vault-seed/ off the stick;
+            # the node finds the stick by its KEYS label. FAT32 only, never exFAT:
+            # only the x86 and rpi5 kernels carry exFAT, so a jetson/frite/orangepi
+            # node would not mount it and would come up unprovisioned. Windows'
+            # Format dialog offers FAT32 only up to 32 GB, hence the size.
+            return (f"{step}Make the KEYS stick: format a USB stick of 32 GB or less "
+                    f"as FAT32 (not exFAT or NTFS, which some nodes cannot mount) "
+                    f"with the volume label KEYS and copy everything in {host} onto "
+                    f"it except its vault-seed folder (that is for Vault only, never "
+                    f"the stick). make-keys-usb.sh does this on Linux; it cannot run "
+                    f"on Windows.")
+        name = re.escape(ntpath.basename(host))
+        return re.sub(r"(?<![\w./-])/keys/" + name + r"((?:/[^\s'\"(),]*)?)",
+                      lambda m: host + m.group(1).replace("/", "\\"), line)
+
     def _generate_keys(self, i: int, entry: WorklistEntry,
                        on_line: Callable[[int, str], None] | None,
-                       on_keys: Callable[[int, str, bool], None] | None) -> None:
+                       on_keys: Callable[[int, str, bool], None] | None,
+                       osname: str | None = None) -> None:
         """Generate the per-node KEYS folder (mesh, node-class, opt-in). A failure is
         recorded (keys_ok=False) and the partial folder removed — mirroring
         build-all-roles.sh, where a half-written keys-<role> must never look like a
@@ -453,7 +487,7 @@ class WorklistDriver:
             cmd = self._genkeys_command(script, base.brand, [
                 "--role", key_profile(entry.role, entry.platform),
                 "--out", keys_dir_, "--random",
-                "--superdomain", base.effective_superdomain()])
+                "--superdomain", base.effective_superdomain()], osname)
             env = dict(os.environ)
             env["BRAND"] = base.brand
             proc = subprocess.Popen(cmd, cwd=self.generator_dir, env=env,
@@ -461,10 +495,20 @@ class WorklistDriver:
                                     stderr=subprocess.STDOUT, text=True, bufsize=1,
                                     **proc_text.TEXT_IO)
             assert proc.stdout is not None
+            no_keytool = False
             for line in proc.stdout:
+                no_keytool = no_keytool or line.strip() == "ERROR: need keytool"
                 if on_line:
-                    on_line(i, line.rstrip("\n"))
+                    on_line(i, self._genkeys_line(line.rstrip("\n"), keys_dir_, osname))
             code = proc.wait()
+            if code != 0 and no_keytool and cmd[:2] == ["docker", "run"] and on_line:
+                # A builder image made before Dockerfile.build carried a JDK has no
+                # keytool, which the pki node's keystores (gen-keystores.sh) need.
+                on_line(i, f"!! the builder image {self.host.builder_image} has no "
+                           f"keytool (a JDK tool the pki keystores need). Rebuild it from "
+                           f"this checkout's Dockerfile.build, which installs one: docker "
+                           f"build -f Dockerfile.build -t {self.host.builder_image} . in "
+                           f"{self.generator_dir}")
         except (OSError, roles.RoleVocabularyError) as e:
             if on_line:
                 on_line(i, f"!! keys generation could not start: {e}")
