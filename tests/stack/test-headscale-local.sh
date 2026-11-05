@@ -613,7 +613,7 @@ PY
     control "the knob made unconditional (profile on every bring-up)" Makefile \
         'STACK_HEADSCALE_PROFILE := $(if $(strip $(HEADSCALE)), --profile headscale,)' 'STACK_HEADSCALE_PROFILE := --profile headscale'
     control "stack-down stops reaping the profile" Makefile \
-        '-f $(STACK_TOR_DOMAINS_COMPOSE) --profile social --profile tor --profile headscale --profile anubis --profile phpbb --profile akkoma --profile games --profile brandb --profile edge-ai-tts --profile media-poisoner --profile egress-vpn $(STACK_OWN_CASDOOR_DOWN_FLAGS) down -v'"${NL}" \
+        '-f $(STACK_TOR_DOMAINS_COMPOSE) --profile social --profile tor --profile anubis --profile phpbb --profile akkoma --profile games --profile brandb --profile edge-ai-tts --profile media-poisoner --profile egress-vpn --profile headscale $(STACK_OWN_CASDOOR_DOWN_FLAGS) down -v'"${NL}" \
         '-f $(STACK_TOR_DOMAINS_COMPOSE) --profile social --profile tor --profile anubis --profile phpbb --profile akkoma --profile games --profile brandb --profile edge-ai-tts --profile media-poisoner --profile egress-vpn $(STACK_OWN_CASDOOR_DOWN_FLAGS) down -v'"${NL}"
     control "HUGMESH_DOMAIN decoupled from stack-certs' domain" Makefile \
         'STACK_HUGMESH_DOMAIN := $(if $(strip $(DOMAIN)),$(DOMAIN),hugmesh.net)' 'STACK_HUGMESH_DOMAIN := hugmesh.net'

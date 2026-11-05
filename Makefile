@@ -1736,7 +1736,7 @@ TOR_SOCKS_HOST_PORT ?= 9050
 # TOR=1, and a TOR=1 stack with no Tor domain is the one-onion stack it always was.
 TOR_ONION_DOMAINS ?=
 # HEADSCALE=1 — a tailnet control server for the LOCAL docker mesh, so it can mint
-# pre-auth keys and issue HugMesh tokens (docs/HUGMESH-TOKEN.md) from the web admin
+# pre-auth keys and issue HugMesh tokens (the v1 format of generator PR #862) from the web admin
 # UI and the Studio (docs/LOCAL-MESH-HEADSCALE.md). Adds compose.local.yaml's
 # `headscale` profile (hugmesh-headscale: headscale 0.23.0, policy mode file from
 # the DEVICE template, login server https://hs.<domain>:$(PUBLIC_HTTPS_PORT) through
@@ -2205,7 +2205,7 @@ stack-certs: ## mint the per-machine TLS CA + leaf for the https front door (ide
 	fi
 
 .PHONY: stack-mesh-token-key
-# The local mesh's HugMesh-token ISSUER key (docs/HUGMESH-TOKEN.md "Trust"): an
+# The local mesh's HugMesh-token ISSUER key (the token format's "Trust" rule, PR #862): an
 # ed25519 OpenSSH key in tests/stack/.mesh-token/issuer, gitignored, 0600, mounted
 # read-only into admin-bff ONLY (tests/stack/compose.headscale.yaml). The stack-certs
 # shape: minted once, kept after that, so the fingerprint the trays were told to
@@ -2306,14 +2306,14 @@ stack-halt: ## stop the local stack but KEEP its data (identity, rooms, accounts
 	# whole mesh, so restarting left them unable to log in, post, or open the
 	# forum until a full re-seed. Containers and images still go; only the data
 	# survives, so `make stack-up` brings the same mesh back.
-	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) -f $(STACK_EGRESS_COMPOSE) --profile social --profile tor --profile headscale --profile anubis --profile phpbb --profile akkoma --profile games --profile brandb --profile edge-ai-tts --profile media-poisoner --profile egress-vpn $(STACK_OWN_CASDOOR_DOWN_FLAGS) down
+	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) -f $(STACK_EGRESS_COMPOSE) --profile social --profile tor --profile anubis --profile phpbb --profile akkoma --profile games --profile brandb --profile edge-ai-tts --profile media-poisoner --profile egress-vpn --profile headscale $(STACK_OWN_CASDOOR_DOWN_FLAGS) down
 
 stack-down: ## stop the local stack and DROP ITS VOLUMES (destroys identity/rooms/accounts — use stack-halt to keep them)
 	# Every profile is listed UNCONDITIONALLY (not via the PHPBB=1/AKKOMA=1
 	# knobs): `down` must reap containers started by an EARLIER `up` whose knobs
 	# this invocation does not repeat, or `make stack-down` leaves the phpbb/
 	# akkoma containers and volumes orphaned while reporting success.
-	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) -f $(STACK_EGRESS_COMPOSE) -f $(STACK_TOR_DOMAINS_COMPOSE) --profile social --profile tor --profile headscale --profile anubis --profile phpbb --profile akkoma --profile games --profile brandb --profile edge-ai-tts --profile media-poisoner --profile egress-vpn $(STACK_OWN_CASDOOR_DOWN_FLAGS) down -v
+	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) -f $(STACK_EGRESS_COMPOSE) -f $(STACK_TOR_DOMAINS_COMPOSE) --profile social --profile tor --profile anubis --profile phpbb --profile akkoma --profile games --profile brandb --profile edge-ai-tts --profile media-poisoner --profile egress-vpn --profile headscale $(STACK_OWN_CASDOOR_DOWN_FLAGS) down -v
 	bash tests/stack/gen-route-access-env.sh --remove
 
 # stack-down PLUS the disk: the ~28 images this stack BUILT (`--rmi local` — only
@@ -2326,7 +2326,7 @@ stack-down: ## stop the local stack and DROP ITS VOLUMES (destroys identity/room
 stack-clean: ## stop the local stack AND remove the images it built + the m2 registry/cache
 	@echo "==> Removing the local stack: containers, volumes, and the images IT built."
 	@echo "    Pulled base images (postgres/cassandra/mastodon/...) are KEPT."
-	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) -f $(STACK_EGRESS_COMPOSE) -f $(STACK_TOR_DOMAINS_COMPOSE) --profile social --profile tor --profile headscale --profile anubis --profile phpbb --profile akkoma --profile games --profile brandb --profile edge-ai-tts --profile media-poisoner --profile egress-vpn $(STACK_OWN_CASDOOR_DOWN_FLAGS) down -v --rmi local --remove-orphans
+	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) -f $(STACK_EGRESS_COMPOSE) -f $(STACK_TOR_DOMAINS_COMPOSE) --profile social --profile tor --profile anubis --profile phpbb --profile akkoma --profile games --profile brandb --profile edge-ai-tts --profile media-poisoner --profile egress-vpn --profile headscale $(STACK_OWN_CASDOOR_DOWN_FLAGS) down -v --rmi local --remove-orphans
 	bash tests/stack/gen-route-access-env.sh --remove
 	@docker rm -f $(M2_REGISTRY_NAME) >/dev/null 2>&1 || true
 	@rm -f $(STACK_M2_ENV)

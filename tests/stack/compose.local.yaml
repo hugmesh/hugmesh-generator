@@ -1929,7 +1929,7 @@ services:
 
   # ── hugmesh-headscale — the local mesh's tailnet control server (OPT-IN) ──
   # The local docker mesh had no headscale at all, so nothing could mint the
-  # pre-auth key a HugMesh token carries (docs/HUGMESH-TOKEN.md) and no tray
+  # pre-auth key a HugMesh token carries (token format: generator PR #862) and no tray
   # node could join it. OPT-IN behind the `headscale` profile, the tor/anubis
   # precedent: `make stack-up HEADSCALE=1` (or `--profile headscale`); a default
   # stack never creates it, so the unprofiled bring-up stays byte-identical

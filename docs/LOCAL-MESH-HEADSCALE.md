@@ -2,7 +2,8 @@
 
 The local docker mesh (`make stack-up`, [LOCAL-STACK.md](LOCAL-STACK.md)) had no tailnet
 control server, so it could not mint the headscale pre-auth key a HugMesh token carries
-([HUGMESH-TOKEN.md](HUGMESH-TOKEN.md)), and no tray node could join it.
+(the HugMesh token format, `docs/HUGMESH-TOKEN.md` from generator PR #862), and no tray node could
+join it.
 `make stack-up HEADSCALE=1` adds one. With it, admin-bff and the Studio can issue tokens for
 the local mesh, and a tray node can join through the stack's HTTPS front door.
 
@@ -126,7 +127,7 @@ mode, so the rendered device template stays in force.
 The file is gitignored and 0600, and its directory is 0700. `stack-up HEADSCALE=1` runs the
 target first. The target prints only the key's `SHA256:` fingerprint (as `ssh-keygen -lf`
 prints it), which is what a tray asks the operator to confirm the first time
-([HUGMESH-TOKEN.md](HUGMESH-TOKEN.md) "Trust").
+(the token format's "Trust" rule).
 
 Like `stack-certs`, the key is minted once and kept after that. `stack-down` does not remove
 it, so the fingerprint that trays trust stays the same across rebuilds of the mesh. To rotate
@@ -205,7 +206,7 @@ The guard's probe does exactly this: host networking, `--add-host hs.<domain>:12
 
 `tests/stack/test-headscale-local.sh` has a static leg, which runs in CI with no docker:
 compose, overlay, door, Makefile argv, the key target run for real, the entrypoint's render and
-the image pin. Thirty negative controls each break one of those and must turn the guard red.
+the image pin. Thirty-one negative controls each break one of those and must turn the guard red.
 
 `HUGMESH_HEADSCALE_LIVE=1` adds a live leg. It runs a throwaway compose project with a unique
 name, a free high port and its own CA in a temp dir, and never touches `hugmesh-local`. It
