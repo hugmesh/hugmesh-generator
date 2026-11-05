@@ -70,7 +70,9 @@ from __future__ import annotations
 import datetime
 import json
 import os
+import shlex
 import shutil
+import tempfile
 from dataclasses import dataclass, field
 
 # ONE terminal list for the whole app. cloud_deploy.py already picked this order
@@ -84,6 +86,32 @@ from hugmesh_studio.core.cloud_deploy import TERMINALS
 # live, and a second spelling of "out/sessions" would go stale the day the builders move.
 from hugmesh_studio.core.qemu_tests import (DEFAULT_WORK_SUBDIR, RUNNER_SCRIPT,
                                             SESSIONS_SUBDIR)
+
+#: The SPICE viewers ``display_argv`` can open, most-preferred first — kept here,
+#: beside the TERMINALS import, for the same reason that list is imported rather
+#: than copied: ONE place decides the order. (cloud_deploy.py is where TERMINALS
+#: lives, but it has no display to open, so the list stays with the module that
+#: builds the argv.) Each entry is ``(binary, auto_pick)``:
+#:
+#: * ``remote-viewer`` (virt-viewer) takes a ``.vv`` connection file — the password
+#:   rides a 0600 file that deletes itself, never argv — and sends a monitors-config
+#:   when its window is resized, so a guest that can follow it re-lays out.
+#: * ``spicy`` (spice-gtk's demo client) resizes the same way but takes the password
+#:   on argv (``-w``) or prompts for it. It is never auto-picked: a secret on argv is
+#:   a secret in ``ps``. Asked for explicitly it is spelled WITHOUT ``-w`` and prompts.
+VIEWERS = (
+    ("remote-viewer", True),
+    ("spicy", False),
+)
+
+#: How a browser gets opened on the noVNC fallback, first match wins. ``xdg-open``
+#: is the Linux desktop's; ``open`` is macOS; ``cmd /c start`` is a native Windows
+#: Studio. Each entry is the whole argv prefix the URL is appended to.
+BROWSER_OPENERS = (
+    ("xdg-open",),
+    ("open",),
+    ("cmd", "/c", "start", ""),
+)
 
 #: Where docker-entrypoint.sh writes one JSON record per live device, under the
 #: runner's ``--work`` dir (the same dir that already holds runs/ and results/).
@@ -101,6 +129,34 @@ SSH_OPTIONS = ("-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/
 
 #: Root shell via wheel + sudo (see the module docstring: root ssh stays disabled).
 SUPERUSER_COMMAND = "sudo -i"
+
+#: The display door is published to LOOPBACK ONLY, like ssh (the runner's
+#: ``docker -p 127.0.0.1:P:5930``). An IP LITERAL on purpose, never ``localhost``:
+#: the gateway pins HSTS on ``localhost`` and a self-signed cert turns that into a
+#: non-bypassable Chrome block, while HSTS cannot apply to an IP literal — so the
+#: noVNC fallback URL below can never be caught by that pin.
+DISPLAY_HOST = "127.0.0.1"
+
+#: The only display protocol this module can open. A record saying anything else
+#: (or nothing) has no door this module knows how to reach.
+DISPLAY_PROTOCOL_SPICE = "spice"
+
+#: ``Device.display_resize`` values: what the GUEST is known to do when the viewer
+#: window changes size. "guest" = the desktop re-lays out at the new resolution;
+#: "scale" (and "", the conservative default) = the viewer scales the bitmap to fit.
+DISPLAY_RESIZE_GUEST = "guest"
+DISPLAY_RESIZE_SCALE = "scale"
+
+#: ``display_argv``'s ``viewer`` spellings. "auto" tries ``VIEWERS`` in order (the
+#: auto-pickable ones), then the browser fallback, then gives up with a hint.
+DISPLAY_VIEWERS = ("auto", "remote-viewer", "spicy", "browser")
+
+#: What to install when no viewer exists at all. Named per platform because the
+#: Studio runs on Gentoo, Debian-family desktops and inside WSL2 (where the Windows
+#: build of virt-viewer can open the same ``.vv`` file through the localhost forward).
+VIEWER_INSTALL_HINT = ("Install a SPICE viewer: Gentoo `emerge net-misc/virt-viewer`, "
+                       "Debian/Ubuntu `apt install virt-viewer`, Windows: the virt-viewer "
+                       "MSI (remote-viewer.exe) from virt-manager.org.")
 
 #: QMP verbs the runner accepts for ``--qmp LABEL CMD``. The GUI should build its
 #: buttons FROM this tuple rather than hardcoding strings, so adding a verb is a
@@ -180,6 +236,15 @@ class Device:
     #: refuses to fall back to the runner's newest-session guess).
     artifacts: str = ""                              # HOST path to the artifacts dir
     image: str = ""                                  # basename of the booted image
+    #: The graphical DISPLAY door (records written by a display-mode keep-alive run):
+    #: SPICE on host loopback, protected by a per-run secret. All TOLERANT — a record
+    #: from a serial-only run (or an older writer) has none of them, and the display
+    #: button is then simply disabled with a reason (``display_blocker``).
+    display_protocol: str = ""                       # "spice" or ""
+    display_port: int = 0                            # host port on 127.0.0.1; 0 = no door
+    display_web_port: int = 0                        # noVNC host port on 127.0.0.1; 0 = none
+    display_password_file: str = ""                  # HOST path to the secret, NEVER the value
+    display_resize: str = ""                         # "guest" | "scale" — what this image does
 
     @property
     def is_running(self) -> bool:
@@ -210,6 +275,14 @@ def _device_from_record(raw: object) -> Device | None:
         port = int(raw.get("ssh_host_port") or 0)
     except (TypeError, ValueError):
         port = 0
+    try:
+        display_port = int(raw.get("display_port") or 0)
+    except (TypeError, ValueError):
+        display_port = 0
+    try:
+        display_web_port = int(raw.get("display_web_port") or 0)
+    except (TypeError, ValueError):
+        display_web_port = 0
     return Device(
         label=label,
         platform=str(raw.get("platform") or ""),
@@ -225,6 +298,11 @@ def _device_from_record(raw: object) -> Device | None:
         started_at=str(raw.get("started_at") or ""),
         artifacts=str(raw.get("artifacts") or ""),
         image=str(raw.get("image") or ""),
+        display_protocol=str(raw.get("display_protocol") or ""),
+        display_port=display_port,
+        display_web_port=display_web_port,
+        display_password_file=str(raw.get("display_password_file") or ""),
+        display_resize=str(raw.get("display_resize") or ""),
     )
 
 
@@ -328,6 +406,254 @@ def terminal_argv(cmd_argv: list[str]) -> list[str] | None:
         if shutil.which(binary):
             return [binary, *exec_args, *cmd_argv]
     return None
+
+
+# ── The display door ─────────────────────────────────────────────────────────────
+#
+# ONE door: SPICE over TCP on host loopback, protected by a per-run secret, opened by
+# a native viewer that resizes the guest. The record names the door (port) and the
+# secret's PATH; this module reads the secret only to write it into a 0600 viewer
+# file that deletes itself, and never puts it on argv, in a URL, in a hint or in a
+# log line — every string this section returns to a caller is safe to print.
+
+def display_blocker(dev: Device) -> str:
+    """Why ``dev``'s display cannot be opened right now, or "" when it can.
+
+    A reason STRING, like ``save_blocker``, because the GUI has to say why the
+    button is grey. Three conditions, in the order an operator can act on them:
+
+    * the device is RUNNING — SPICE is served by the device's own QEMU, so a
+      stopped row has nothing listening (a PAUSED one does: the frame freezes but
+      the door is up, so pausing is deliberately NOT a blocker);
+    * the record names a DISPLAY PORT — 0 means the run published no door. Today
+      that is every board whose kernel lacks virtio-gpu (all ARM boards), and the
+      wording says so rather than "scale": there is no picture to scale;
+    * the record names the SECRET FILE — the door REQUIRES the per-run password
+      (inside the container it listens on the mesh docker network, where other
+      containers can reach it), so a record without one is a door this module
+      refuses to open unauthenticated rather than one it opens open.
+    """
+    if not dev.is_running:
+        return (f"{dev.label} is not running (state {dev.state or 'unknown'}); "
+                "start it again with --keep-alive before opening its display")
+    if dev.display_port <= 0:
+        return (f"serial only: {dev.label} published no display (the record says "
+                "display_port 0 — a desktop image gets one in keep-alive mode; a "
+                "board whose kernel lacks virtio-gpu never does)")
+    if dev.display_protocol and dev.display_protocol != DISPLAY_PROTOCOL_SPICE:
+        return (f"{dev.label} publishes a {dev.display_protocol!r} display, which "
+                "this Studio cannot open (only spice)")
+    if not dev.display_password_file:
+        return (f"{dev.label}'s record names no display secret file, so the door "
+                "cannot be opened: it requires the per-run password")
+    return ""
+
+
+def can_display(dev: Device) -> bool:
+    """Is the display door openable for this device at all? The GUI's predicate."""
+    return not display_blocker(dev)
+
+
+def display_resize_text(dev: Device) -> str:
+    """The tooltip's honest half-sentence: what the window does to the guest."""
+    if dev.display_resize == DISPLAY_RESIZE_GUEST:
+        return "resizes with the window (the guest re-lays out at the new resolution)"
+    return "scales to the window (the picture is fitted; the guest keeps its resolution)"
+
+
+def _read_secret(path: str) -> str:
+    """The secret's VALUE, for the one caller allowed to use it (``write_vv_file``).
+
+    Stripped of whitespace only: the writer emits 48 hex chars and a trailing
+    newline would otherwise become part of the password. Raises OSError for an
+    unreadable file and ValueError for an empty one — both are the caller's to
+    show inline, with the PATH, never the content.
+    """
+    with open(path, encoding="utf-8") as fh:
+        secret = fh.read().strip()
+    if not secret:
+        raise ValueError(f"the display secret file {path} is empty")
+    return secret
+
+
+def vv_basename(label: str) -> str:
+    """``hugmesh-<safe label>.vv`` — the viewer file's name prefix in the runtime dir."""
+    return f"hugmesh-{safe_label(label)}"
+
+
+def write_vv_file(dev: Device, runtime_dir: str) -> str:
+    """Write the virt-viewer connection file for ``dev`` and return its path.
+
+    The file is the ONLY place the secret's value goes: ``remote-viewer FILE`` reads
+    the password from it, so argv carries a path and ``ps`` shows a path.
+    ``mkstemp`` creates it 0600 and O_EXCL (a shared tmp cannot be pre-seeded with a
+    symlink), ``delete-this-file=1`` makes remote-viewer unlink it once read, and
+    ``runtime_dir`` is meant to be ``$XDG_RUNTIME_DIR`` (per-user, tmpfs, 0700) so a
+    file the viewer never opened does not outlive the login either.
+
+    ``host`` is the loopback literal, never the record's idea of a host: the record
+    names a PORT the runner published on 127.0.0.1, and nothing else is reachable.
+    """
+    blocker = display_blocker(dev)
+    if blocker:
+        raise ValueError(blocker)
+    secret = _read_secret(dev.display_password_file)
+    os.makedirs(runtime_dir, mode=0o700, exist_ok=True)
+    fd, path = tempfile.mkstemp(dir=runtime_dir, prefix=vv_basename(dev.label) + "-",
+                                suffix=".vv")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write("[virt-viewer]\n"
+                     "type=spice\n"
+                     f"host={DISPLAY_HOST}\n"
+                     f"port={dev.display_port}\n"
+                     f"password={secret}\n"
+                     "delete-this-file=1\n"
+                     f"title=hugmesh {dev.label}\n")
+    except BaseException:
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+        raise
+    os.chmod(path, 0o600)
+    return path
+
+
+def display_url(dev: Device) -> str:
+    """The noVNC fallback URL, or "" when the run published no web port.
+
+    An IP literal (see DISPLAY_HOST) and NO password in it: noVNC prompts, and a
+    URL is logged by browsers, proxies and shell histories. ``resize=scale`` is
+    stated rather than ``remote`` because whether QEMU's VNC server honours a
+    client SetDesktopSize is unverified; the browser path is scale-to-fit only.
+    """
+    if dev.display_web_port <= 0:
+        return ""
+    port = dev.display_web_port
+    return (f"http://{DISPLAY_HOST}:{port}/vnc.html?host={DISPLAY_HOST}&port={port}"
+            "&resize=scale&autoconnect=1")
+
+
+def _viewer_binary(name: str) -> str | None:
+    """``shutil.which`` behind one seam, so tests can decide what is installed."""
+    return shutil.which(name)
+
+
+def _browser_argv(url: str) -> list[str] | None:
+    for opener in BROWSER_OPENERS:
+        if _viewer_binary(opener[0]):
+            return [*opener, url]
+    return None
+
+
+def display_hint(dev: Device, vv_path: str = "") -> str:
+    """The copy-ready, SECRET-FREE line an operator can act on without the Studio:
+    what to run, and where the password is. Every branch of ``display_argv``
+    returns one, so the inline note always says how to open the display by hand."""
+    parts = []
+    if vv_path:
+        parts.append(f"remote-viewer {shlex.quote(vv_path)}")
+    else:
+        parts.append(f"spice {DISPLAY_HOST}:{dev.display_port} "
+                     f"(password in {dev.display_password_file})")
+    url = display_url(dev)
+    if url:
+        parts.append(f"browser (scale-to-fit only): {url}")
+    return " — ".join(parts)
+
+
+def display_argv(dev: Device, viewer: str = "auto", runtime_dir: str = "",
+                 ) -> tuple[list[str] | None, str]:
+    """``(argv, hint)`` for opening ``dev``'s display — argv None when nothing here
+    can open it, and ``hint`` ALWAYS a copy-ready, secret-free line.
+
+    ``viewer``:
+
+    * ``auto`` — the first auto-pickable entry of ``VIEWERS`` (remote-viewer), else
+      the browser on the noVNC URL when the run published one, else None with the
+      install hint. The order is the resize order: remote-viewer can resize the
+      guest, the browser only scales.
+    * ``remote-viewer`` — that viewer or None. Writes the ``.vv`` file into
+      ``runtime_dir`` (the secret's only destination; see ``write_vv_file``).
+    * ``spicy`` — explicit opt-in only. Spelled WITHOUT ``-w``: spicy prompts for
+      the password, and the hint names the secret file's path to paste from. A
+      ``-w SECRET`` would be a secret in the process table.
+    * ``browser`` — the noVNC URL through ``BROWSER_OPENERS``, or None when the run
+      published no web port or no opener exists.
+
+    Raises ValueError for an unknown ``viewer`` or a blocked device (the GUI's
+    button is grey then; this is the belt to those braces), and lets the secret
+    file's OSError/ValueError through for the caller to show inline — with the
+    path, never the content.
+    """
+    choice = (viewer or "auto").strip().lower()
+    if choice not in DISPLAY_VIEWERS:
+        raise ValueError(f"unknown display viewer {viewer!r}; expected one of "
+                         + "|".join(DISPLAY_VIEWERS))
+    blocker = display_blocker(dev)
+    if blocker:
+        raise ValueError(blocker)
+    runtime_dir = runtime_dir or default_runtime_dir()
+
+    if choice in ("auto", "remote-viewer"):
+        for binary, auto_pick in VIEWERS:
+            if choice == "auto" and not auto_pick:
+                continue
+            if choice == "remote-viewer" and binary != "remote-viewer":
+                continue
+            if _viewer_binary(binary):
+                vv = write_vv_file(dev, runtime_dir)
+                return [binary, vv], display_hint(dev, vv)
+        if choice == "remote-viewer":
+            return None, f"{VIEWER_INSTALL_HINT} Then: {display_hint(dev)}"
+
+    if choice == "spicy":
+        if _viewer_binary("spicy"):
+            return (["spicy", "-h", DISPLAY_HOST, "-p", str(dev.display_port)],
+                    f"spicy prompts for the password: it is in "
+                    f"{dev.display_password_file}")
+        return None, f"{VIEWER_INSTALL_HINT} Then: {display_hint(dev)}"
+
+    # auto (no native viewer) or browser
+    url = display_url(dev)
+    if url:
+        argv = _browser_argv(url)
+        if argv is not None:
+            return argv, display_hint(dev)
+        return None, f"Open this in a browser (noVNC prompts for the password): {url}"
+    if choice == "browser":
+        return None, (f"{dev.label} published no noVNC web port (the run was not "
+                      f"started with --display-web). {display_hint(dev)}")
+    return None, f"{VIEWER_INSTALL_HINT} Then: {display_hint(dev)}"
+
+
+def default_runtime_dir() -> str:
+    """Where the ``.vv`` file goes: ``$XDG_RUNTIME_DIR`` (per-user tmpfs, 0700,
+    gone at logout) when the session set one, else a private dir under the temp
+    root. The file is 0600 either way; the runtime dir only adds "gone at logout"."""
+    xdg = os.environ.get("XDG_RUNTIME_DIR", "").strip()
+    if xdg and os.path.isdir(xdg):
+        return xdg
+    who = os.getuid() if hasattr(os, "getuid") else os.environ.get("USERNAME", "user")
+    return os.path.join(tempfile.gettempdir(), f"hugmesh-display-{who}")
+
+
+def wsl_display_hint(is_wsl: bool, wsl_version: int = 0) -> str:
+    """How the display opens from Windows when the Studio runs inside WSL2: Docker
+    (in WSL2) publishes 127.0.0.1:P, WSL forwards localhost to Windows, and the
+    Linux viewer opens through WSLg — without WSLg the same ``.vv`` file opens in
+    the Windows virt-viewer, and the browser URL opens in a Windows browser. "" off
+    WSL (a native Windows Studio follows platform_info's existing WSL route)."""
+    if not is_wsl:
+        return ""
+    if wsl_version == 1:
+        return ("This is WSL1: no WSLg and no Docker daemon, so there is no display "
+                "to open from here.")
+    return ("Under WSL2 the viewer opens through WSLg. Without WSLg, open the .vv "
+            "file with the Windows virt-viewer (remote-viewer.exe), or the browser "
+            "URL in a Windows browser — Docker publishes 127.0.0.1:PORT in WSL2 and "
+            "Windows reaches it through the localhost forward.")
 
 
 def _runner(generator_dir: str) -> str:

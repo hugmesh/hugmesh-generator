@@ -366,10 +366,18 @@ class HomePage(QtWidgets.QWizardPage):
         self.standalone_helper.setWordWrap(True)
         self.standalone_helper.setStyleSheet("color: gray;")
         ll.addWidget(self.standalone_helper)
+        # What the Login Password does, said truthfully for every image this group is
+        # shown on (local_login_applies). The old line ("a customized name or password
+        # renames/hashes the image's default account") described a hash that first
+        # boot threw away on every non-standalone image.
         self.local_note = QtWidgets.QLabel(
-            "User/password below also compose WITHOUT Standalone: on ARM a "
-            "customized name or password renames/hashes the image's default account; "
-            "x86 always bakes the local user.")
+            "The Login Password works on every image built here — standalone, "
+            "tailnet-only and mesh: first boot creates Local User with it. When a KEYS "
+            "stick provisions the image's users, this account is made IN ADDITION to "
+            "them and is not an administrator unless 'May use sudo' is ticked (a KEYS "
+            "account with the same name keeps its KEYS password). Left blank on a "
+            "non-standalone image, a keyless first boot makes Local User with a random "
+            "one-time password shown on the console.")
         self.local_note.setWordWrap(True)
         ll.addWidget(self.local_note)
         self.local_user = QtWidgets.QLineEdit()
@@ -397,6 +405,17 @@ class HomePage(QtWidgets.QWizardPage):
         self.show_pass = QtWidgets.QCheckBox("Show password")
         self.show_pass.toggled.connect(self._toggle_show_pass)
         ll.addWidget(self.show_pass)
+        # --local-admin: only matters where KEYS provisioning created the image's users
+        # (there the local account is otherwise a plain user). A standalone or keyless
+        # image's local account is the only login and is in wheel regardless.
+        self.local_admin = QtWidgets.QCheckBox(
+            "May use sudo on a KEYS-provisioned image (--local-admin)")
+        self.local_admin.setToolTip(
+            "On a mesh image whose users come from a KEYS stick, the local account is "
+            "an extra, unprivileged login unless this is ticked; ticked, it may sudo "
+            "(granted through /etc/sudoers.d, not the wheel group). Standalone and "
+            "keyless images: the local account is the only login and may always sudo.")
+        ll.addWidget(self.local_admin)
         # Inline refusal (never a modal: validatePage runs headless in tests). Says
         # why Next is refused: a mismatch, or a standalone image with no password.
         self.login_err = QtWidgets.QLabel("")
@@ -600,6 +619,7 @@ class HomePage(QtWidgets.QWizardPage):
         self.local_user.setText(c.local_user)
         self.local_pass.setText(c.local_pass)
         self.local_pass_confirm.setText(c.local_pass)
+        self.local_admin.setChecked(bool(c.local_admin))
         self.login_err.setVisible(False)
         # ask 21: a STATEMENT, re-asserted every visit. Reading the box back off cfg
         # would let a loaded config that predates this posture (encrypt_root=false)
@@ -822,6 +842,7 @@ class HomePage(QtWidgets.QWizardPage):
             self.login_err.setVisible(True)
             return False
         c.local_pass = self.local_pass.text() if login_ok else ""
+        c.local_admin = self.local_admin.isChecked() if login_ok else False
         # A standalone image's only way in is this account (root locked, no KEYS
         # stick, no SSO). Refuse here, where the fields are, rather than let the
         # build produce an image nobody can log in to. BuildDriver.preflight()
