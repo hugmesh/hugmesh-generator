@@ -56,6 +56,10 @@ LIMITS_APPLIED_NOTE = " The running mesh node was restarted under them."
 #: The mesh section's entry for importing a shared, signed HugMesh token.
 TOKEN_LABEL = "HugMesh token…"
 
+#: How often the tray re-checks that a token-run node may still run. Cheap when no
+#: token record exists (one small file read); a token-run node adds a status probe.
+ENFORCE_EVERY_MS = 60_000
+
 
 def limits_menu_label(limits=None) -> str:
     """The tray label for the current limits, e.g. "Resource limits: 7 CPU, 23808m…"."""
@@ -259,6 +263,7 @@ class _Section:
             open_mesh_token_dialog()
         except Exception:            # pragma: no cover - never let a dialog kill the tray
             _log_swallowed("_open_token")
+        self.enforce()               # a Forget stops a node running under that token
         self.tray._refresh()
 
     def grant_note(self, running: bool) -> tuple[str, str]:
@@ -293,11 +298,22 @@ class _Section:
         lay.addWidget(te)
         dlg.exec()
 
-    def refresh(self) -> None:
+    def enforce(self) -> bool:
+        """Stop the node if the token it runs under no longer allows it (see
+        GrantedMeshNode.enforce); True when it did something worth a refresh."""
         enforce = getattr(self.node, "enforce", None)
-        stopped = enforce() if enforce is not None else ""
-        if stopped:
-            self.tray._notify(self.label, stopped)
+        if enforce is None:
+            return False
+        try:
+            done = enforce()
+        except Exception:            # pragma: no cover - a timer slot must never raise
+            _log_swallowed("_Section.enforce")
+            return False
+        if done:
+            self.tray._notify(self.label, done)
+        return bool(done)
+
+    def refresh(self) -> None:
         st = self.node.status()
         note, why = self.grant_note(st.running)
         self.status_act.setText(
@@ -368,6 +384,19 @@ class _ControlTray(QtWidgets.QSystemTrayIcon):
         self._poll.timeout.connect(self._poll_build_status)
         self._poll.start()
         self._poll_build_status()
+        # Token enforcement (an expired or forgotten token stops its node) on a timer,
+        # not only on clicks: Docker's restart policy revives a stopped-by-reboot node
+        # with no tray action at all. The first pass is queued, so it runs once the event
+        # loop does — after app.py has shown the icon its notice is posted on.
+        self._enforcer = QtCore.QTimer(self)
+        self._enforcer.setInterval(ENFORCE_EVERY_MS)
+        self._enforcer.timeout.connect(self._enforce)
+        self._enforcer.start()
+        QtCore.QTimer.singleShot(0, self._enforce)
+
+    def _enforce(self) -> None:
+        if any([s.enforce() for s in self.sections]):
+            self._refresh()
 
     def _notify(self, title, msg) -> None:
         self.showMessage(title, msg, _brand_icon(), 4000)

@@ -313,8 +313,8 @@ def test_a_new_grant_registers_afresh_instead_of_reusing_the_old_identity(compos
     holder = {"g": _grant(role="admin", shell=True)}
     node = _node(tmp_path, lambda: holder["g"])
     assert node.start()[0]
-    assert not _downs(compose)                                 # first start: nothing to drop
-    compose.clear()
+    assert len(_downs(compose)) == 1                           # first token run: state of
+    compose.clear()                                            # unknown origin is dropped
     assert node.start()[0]
     assert not _downs(compose)                                 # same grant: keep the identity
     holder["g"] = _grant(role="user", shell=False, auth_key="another-key")
@@ -365,6 +365,7 @@ def test_the_tray_shows_what_the_running_node_was_started_with(compose, tmp_path
 
 @pytest.mark.real_stack_probes
 def test_a_forgotten_or_expired_token_stops_its_running_node(compose, tmp_path):
+    mt.trust_issuer("ssh-ed25519 AAAA")
     holder = {"g": _grant()}
     node = _node(tmp_path, lambda: holder["g"])
     assert node.start()[0]
@@ -408,3 +409,73 @@ def test_hostname_is_a_valid_label_for_any_domain():
         name = g.hostname(host)
         assert 1 <= len(name) <= 63 and name[0] != "-" and name[-1] != "-", name
         assert set(name) <= set("abcdefghijklmnopqrstuvwxyz0123456789-")
+
+
+# ── review round 2 (#862) ────────────────────────────────────────────────────────
+@pytest.mark.real_stack_probes
+def test_a_deleted_workdir_still_drops_the_old_identity(compose, tmp_path, monkeypatch):
+    """The tsstate volume belongs to the compose PROJECT, not the workdir."""
+    monkeypatch.setenv("TS_AUTHKEY", "operator-key")
+    node = _node(tmp_path, lambda: None)
+    assert node.start()[0]
+    shutil.rmtree(node.workdir)
+    node._load = lambda: _grant()
+    compose.clear()
+    assert node.start()[0]
+    assert len(_downs(compose)) == 1
+
+
+@pytest.mark.real_stack_probes
+def test_the_token_a_node_runs_under_is_enforced_not_the_stored_one(compose, tmp_path):
+    mt.trust_issuer("ssh-ed25519 AAAA")
+    started = _grant()
+    holder = {"g": started}
+    node = _node(tmp_path, lambda: holder["g"])
+    assert node.start()[0]
+    holder["g"] = _grant(auth_key="token-b", expires=started.expires + 86400)
+    assert node.enforce(now=started.expires - 1) == ""         # A still valid: keep running
+    compose.clear()
+    done = node.enforce(now=started.expires)                   # A expired, B valid: stop
+    assert done.startswith("Stopped the mesh node: the HugMesh token it was started with "
+                           "expired")
+    assert [a for a, _ in compose if a[-1] == "down"]
+
+
+@pytest.mark.real_stack_probes
+def test_a_distrusted_issuer_stops_the_node_it_started(compose, tmp_path):
+    mt.trust_issuer("ssh-ed25519 AAAA")
+    node = _node(tmp_path, lambda: _grant())
+    assert node.start()[0]
+    mt.distrust_issuer("ssh-ed25519 AAAA")
+    assert "no longer trusted" in node.enforce()
+
+
+@pytest.mark.real_stack_probes
+def test_a_passing_verification_failure_never_stops_a_node(compose, tmp_path):
+    mt.trust_issuer("ssh-ed25519 AAAA")
+    holder = {"g": _grant()}
+    node = _node(tmp_path, lambda: holder["g"])
+    assert node.start()[0]
+
+    def keygen_gone():
+        raise mt.TokenError("tool", "ssh-keygen timed out")
+    node._load = keygen_gone
+    compose.clear()
+    assert node.enforce() == ""
+    assert not [a for a, _ in compose if "down" in a]          # probed, never stopped
+
+
+@pytest.mark.real_stack_probes
+def test_any_other_start_drops_the_trays_record(compose, tmp_path, monkeypatch):
+    """LocalMeshNode shares the workdir and project; its start must not inherit the
+    tray's description of what the node runs under."""
+    mt.trust_issuer("ssh-ed25519 AAAA")
+    node = _node(tmp_path, lambda: _grant())
+    assert node.start()[0] and node.recorded()
+    monkeypatch.setenv("TS_AUTHKEY", "operator-key")
+    assert mesh_node.MeshNode(str(GENERATOR), node.workdir).start()[0]
+    assert node.recorded() == {}
+    note, tip = node.tray_note(True)
+    assert note == " — started outside this tray (restart to apply)" and tip
+    ok, why = node.apply_limits()
+    assert not ok and "not started from this tray" in why
