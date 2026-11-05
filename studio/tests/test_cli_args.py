@@ -1834,6 +1834,7 @@ _FIELD_PROBE = {
     "release_state": {"release_state": "public"}, "person_role": {"person_role": "admin"},
     "domains": {"domains": [Domain(name="probe.example")]},
     "local_user": {"local_user": "alice"}, "local_pass": {"local_pass": "pw"},
+    "local_admin": {"local_pass": "pw", "local_admin": True},
     "user_password": {"user_password": "pw"}, "root_password": {"root_password": "pw"},
     "standalone": {"standalone": True}, "capable": {"capable": True},
     # tailscale/sso are MODE-AWARE tri-states: the cloud/mesh baselines resolve
@@ -2429,3 +2430,14 @@ def test_strip_platform_unsupported_noop_on_x86_baseline():
     cleared = strip_platform_unsupported(cfg)
     assert cfg.theme == "dark"        # theme IS x86-supported
     assert "theme" not in cleared
+
+
+def test_local_admin_rides_the_login_password_on_every_platform():
+    # --local-admin only means something with a Login Password (it says whether that
+    # extra local account may sudo on a KEYS-provisioned image), so it is emitted
+    # exactly when a password is, on every builder.
+    for platform, base in _BASELINES.items():
+        with_pw = ImageConfig(**base, local_pass="pw", local_admin=True).to_cli_args()
+        assert "--local-admin" in with_pw, platform
+        assert "--local-admin" not in ImageConfig(**base, local_admin=True).to_cli_args(), platform
+        assert "--local-admin" not in ImageConfig(**base, local_pass="pw").to_cli_args(), platform

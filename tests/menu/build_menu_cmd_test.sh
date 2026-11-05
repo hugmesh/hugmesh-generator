@@ -16,6 +16,11 @@ REPO_DIR="$(cd "${TEST_DIR}/../.." && pwd)"
 # leaks into (or gets clobbered by) the assertions.
 SNAP_MENU_STATE="$(mktemp -d)"; export SNAP_MENU_STATE
 trap 'rm -rf "${SNAP_MENU_STATE}"' EXIT
+# _stage_login_pass writes under ${REPO_DIR}/.hugmesh-secrets (a $(...) caller can
+# make a dir the parent never learns about), so the run removes every login.* dir it
+# did not find there — explicitly at the end, because a sourced screen re-traps EXIT.
+_SECRETS_PREEXISTED=no; [ -d "${REPO_DIR}/.hugmesh-secrets" ] && _SECRETS_PREEXISTED=yes
+_SECRETS_BEFORE="$(ls -1d "${REPO_DIR}"/.hugmesh-secrets/login.* 2>/dev/null || true)"
 export NO_TUI=1
 
 # shellcheck disable=SC1091
@@ -42,6 +47,20 @@ assert_one_flags() {
     local n=0 e
     for e in "${RUN_MAKE[@]}"; do case "${e}" in STANDALONE_FLAGS=*) n=$((n+1)) ;; esac; done
     [ "${n}" -le 1 ] && _ok || _bad "$1: ${n} STANDALONE_FLAGS elements (want <=1)"
+}
+# assert_pass_file NAME SECRET — the login password rides --local-pass-file: RUN_MAKE
+# carries a checkout-relative 0600 file holding exactly SECRET, and never SECRET itself.
+assert_pass_file() {
+    local e rel=""
+    for e in "${RUN_MAKE[@]}"; do
+        case "${e}" in *"$2"*) _bad "$1: the password itself is on the make argv"; return 1 ;; esac
+        case "${e}" in *"--local-pass-file .hugmesh-secrets/"*)
+            rel="${e#*--local-pass-file }"; rel="${rel%% *}" ;; esac
+    done
+    [ -n "${rel}" ] || { _bad "$1: no --local-pass-file .hugmesh-secrets/… on the make argv"; return 1; }
+    [ "$(cat "${REPO_DIR}/${rel}" 2>/dev/null)" = "$2" ] || { _bad "$1: ${rel} does not hold the password"; return 1; }
+    [ "$(stat -c %a "${REPO_DIR}/${rel}")" = 600 ] && [ "$(stat -c %a "$(dirname "${REPO_DIR}/${rel}")")" = 700 ] \
+        && _ok || _bad "$1: ${rel} (or its dir) is not private"
 }
 # assert_eq NAME GOT WANT
 assert_eq() { [ "$2" = "$3" ] && _ok || { FAIL=$((FAIL+1)); printf 'FAIL %s: got %q want %q\n' "$1" "$2" "$3" >&2; }; }
@@ -315,30 +334,31 @@ assert_not "everything: extra NOT doubled" "IMG_FLAGS=--no-iso --enable-wifi"
 # block further below for why.
 reset_opts; ARM_LOCAL_PASS="Sup3rSecret!" ARM_LUKS_PASS="Unlock123"
 build_make_cmd rpi-desktop "pi desktop, arm secrets" 1
-assert_has "rpi-role: ARM_LOCAL_PASS threads"   "--local-pass 'Sup3rSecret!'"
+assert_pass_file "rpi-role: ARM_LOCAL_PASS threads" "Sup3rSecret!"
 assert_has "rpi-role: ARM_LUKS_PASS threads"    "--luks-pass 'Unlock123'"
 assert_one_flags "rpi-role: arm secrets"
 build_make_cmd frite "frite, arm secrets" 1
-assert_has "frite: ARM_LOCAL_PASS threads"      "--local-pass 'Sup3rSecret!'"
+assert_pass_file "frite: ARM_LOCAL_PASS threads" "Sup3rSecret!"
 build_make_cmd jetson-desktop "jetson desktop, arm secrets" 1
-assert_has "jetson-role: ARM_LOCAL_PASS threads" "--local-pass 'Sup3rSecret!'"
+assert_pass_file "jetson-role: ARM_LOCAL_PASS threads" "Sup3rSecret!"
 build_make_cmd orangepi5 "orangepi5, arm secrets" 1
-assert_has "orangepi5: ARM_LOCAL_PASS threads"  "--local-pass 'Sup3rSecret!'"
+assert_pass_file "orangepi5: ARM_LOCAL_PASS threads" "Sup3rSecret!"
 build_make_cmd orangepizero2 "orangepizero2, arm secrets" 1
-assert_has "orangepizero2: ARM_LOCAL_PASS threads" "--local-pass 'Sup3rSecret!'"
+assert_pass_file "orangepizero2: ARM_LOCAL_PASS threads" "Sup3rSecret!"
 build_make_cmd orangepizero2w "orangepizero2w, arm secrets" 1
-assert_has "orangepizero2w: ARM_LOCAL_PASS threads" "--local-pass 'Sup3rSecret!'"
+assert_pass_file "orangepizero2w: ARM_LOCAL_PASS threads" "Sup3rSecret!"
 build_make_cmd orangepizero3 "orangepizero3, arm secrets" 1
-assert_has "orangepizero3: ARM_LOCAL_PASS threads" "--local-pass 'Sup3rSecret!'"
+assert_pass_file "orangepizero3: ARM_LOCAL_PASS threads" "Sup3rSecret!"
 build_make_cmd orangepi3-lts "orangepi3-lts, arm secrets" 1
-assert_has "orangepi3-lts: ARM_LOCAL_PASS threads" "--local-pass 'Sup3rSecret!'"
+assert_pass_file "orangepi3-lts: ARM_LOCAL_PASS threads" "Sup3rSecret!"
 
 # ordering: ARM_LOCAL_PASS/ARM_LUKS_PASS come BEFORE the freeform extra-flags
 # field, so an operator can still override via Extra builder flags if needed —
 # same convention as x86's `bf` string (extra flags always LAST).
 reset_opts; ARM_LOCAL_PASS="Sup3rSecret!" OPT_EXTRA_FLAGS="--enable-wifi"
 build_make_cmd rpi-desktop "pi desktop, arm secrets + extra" 1
-assert_has "rpi-role: combined secrets+extra" "STANDALONE_FLAGS=--local-pass 'Sup3rSecret!' --enable-wifi"
+assert_has "rpi-role: combined secrets+extra" "STANDALONE_FLAGS=--local-pass-file .hugmesh-secrets/"
+assert_has "rpi-role: extra flags still LAST" "/local-pass --enable-wifi"
 
 # a plain build with no secrets set must NOT emit an empty/bogus --local-pass —
 # STANDALONE_FLAGS should only appear when there's something to say.
@@ -358,15 +378,15 @@ assert_not "rpi-role: no secrets -> no luks-pass"  "--luks-pass"
 # must contain the value byte-for-byte, self-quoted, never bare.
 reset_opts; ARM_LOCAL_PASS="pw; touch /tmp/pwned; echo done" ARM_LUKS_PASS='it'"'"'s a $(secret) `here`'
 build_make_cmd rpi-desktop "pi desktop, metachar secrets" 1
-assert_has "rpi-role: semicolon/cmdsub password self-quoted" \
-    "--local-pass 'pw; touch /tmp/pwned; echo done'"
+assert_pass_file "rpi-role: semicolon/cmdsub password never reaches make (file)" \
+    "pw; touch /tmp/pwned; echo done"
 assert_has "rpi-role: embedded-quote passphrase escaped"     \
     "--luks-pass 'it'\\''s a \$(secret) \`here\`'"
 
 reset_opts; SA_LOCAL_PASS="pw; touch /tmp/pwned; echo done" OPT_SA_USER="it's-alice"
 build_make_cmd x86-standalone-thin "x86 standalone, metachar secrets" 1
-assert_has "x86: semicolon/cmdsub password self-quoted" \
-    "--local-pass 'pw; touch /tmp/pwned; echo done'"
+assert_pass_file "x86: semicolon/cmdsub password never reaches make (file)" \
+    "pw; touch /tmp/pwned; echo done"
 assert_has "x86: embedded-quote username escaped" \
     "--local-user 'it'\\''s-alice'"
 
@@ -1149,7 +1169,44 @@ reset_opts; SA_LOCAL_PASS="s3cret pw"; rm -f "${LAUNCHED}"
 printf '%s\n' build >"${_UI_MENU_Q}"
 standalone_screen standalone-unaffiliated >/dev/null 2>&1
 [ -e "${LAUNCHED}" ] && _ok || _bad "standalone_screen: refused to build WITH a password set"
+# ── desktop arm_secrets_prompt: a blank login password is refused ─────────────
+# rpi5/jetson desktop, frite (with a desktop), orangepi5 and orangepi4-lts boot to a
+# graphical greeter; their local account is the login on every image, so "done"
+# with no password asks to go back, and "No" means do not build (rc 1).
+ui_yesno() { _q_pop "${_UI_YESNO_Q}"; [ "$(cat "${SNAP_MENU_STATE}/yn")" = y ]; }
+_UI_YESNO_Q="${SNAP_MENU_STATE}/yesno.q"; : >"${_UI_YESNO_Q}"
+reset_opts; ARM_LOCAL_PASS=""; : >"${PW_LOG}"; echo n >"${SNAP_MENU_STATE}/yn"
+printf '%s\n' done >"${_UI_MENU_Q}"
+if arm_secrets_prompt "Pi desktop (rpi5)" required >/dev/null 2>&1; then
+    _bad "arm_secrets_prompt required: accepted a blank login password"
+else _ok; fi
+grep -q 'msg:Login required' "${PW_LOG}" && _ok || _bad "arm_secrets_prompt required: no 'Login required' refusal shown"
+# ...going back and setting it builds
+reset_opts; ARM_LOCAL_PASS=""; echo y >"${SNAP_MENU_STATE}/yn"
+printf '%s\n' done pass done >"${_UI_MENU_Q}"
+printf '%s\n' "s3cret pw" "s3cret pw" >"${_UI_PASSWORD_Q}"
+arm_secrets_prompt "Pi desktop (rpi5)" required >/dev/null 2>&1 \
+    && [ "${ARM_LOCAL_PASS}" = "s3cret pw" ] && _ok || _bad "arm_secrets_prompt required: set-then-done did not return 0 with the password"
+# a headless appliance keeps blank = console one-time password
+reset_opts; ARM_LOCAL_PASS=""; printf '%s\n' done >"${_UI_MENU_Q}"
+arm_secrets_prompt "Orange Pi Zero 2 headless appliance" >/dev/null 2>&1 && _ok \
+    || _bad "arm_secrets_prompt (appliance): refused a blank password"
+# every desktop caller passes 'required'; the appliances do not
+for lbl in '"Pi ${role} (${OPT_RPI_BOARD})" required' '"Jetson ${role} (${OPT_JETSON_BOARD})" required' \
+           '"Orange Pi 5 ${board}" required' '"Orange Pi 4 LTS light desktop" required' '"Frite ${board}" required'; do
+    grep -qF "arm_secrets_prompt ${lbl} || return 0" "${MENU_SH}" && _ok || _bad "desktop caller not required: ${lbl}"
+done
+grep -qE 'arm_secrets_prompt "Orange Pi Zero 2 headless appliance" *(required)' "${MENU_SH}" \
+    && _bad "appliance caller requires a password" || _ok
+unset -f ui_yesno
+
 unset -f launch_build save_conf ui_msg ui_password
+
+for _d in "${REPO_DIR}"/.hugmesh-secrets/login.*; do
+    [ -d "${_d}" ] || continue
+    printf '%s\n' "${_SECRETS_BEFORE}" | grep -qxF "${_d}" || rm -rf -- "${_d}"
+done
+[ "${_SECRETS_PREEXISTED}" = no ] && rmdir "${REPO_DIR}/.hugmesh-secrets" 2>/dev/null
 
 printf '\n%d passed, %d failed\n' "${PASS}" "${FAIL}"
 [ "${FAIL}" -eq 0 ]

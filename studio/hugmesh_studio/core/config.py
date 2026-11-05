@@ -1320,6 +1320,7 @@ _FIELD_PLATFORMS: dict[str, tuple[str, ...]] = {
     "superdomain": _ALL_PLATFORMS,
     # local account (compose without --standalone on ARM too, G28).
     "local_user": _ALL_PLATFORMS, "local_pass": _ALL_PLATFORMS,
+    "local_admin": _ALL_PLATFORMS,
     # node fallback creds (x86 only; rpi5's are deprecated no-ops).
     "user_password": _X86, "root_password": _X86,
     # standalone / capable / unaffiliated.
@@ -3564,6 +3565,7 @@ class ImageConfig:
     user: str = ""                     # -u/--user baked default account name (all; distinct from --local-user)
     local_user: str = field(default_factory=default_local_user)  # the INVOKING user, not a baked operator name
     local_pass: str = ""               # --local-pass (SECRET — never saved; live cmd only)
+    local_admin: bool = False          # --local-admin: the local account may sudo on a KEYS-provisioned image
     user_password: str = ""            # --user-password node FALLBACK cred (SECRET; x86)
     root_password: str = ""            # --root-password node FALLBACK cred (SECRET; x86)
     standalone: bool = False           # --standalone (arm64 only; x86 gets it via role name)
@@ -4831,6 +4833,8 @@ class ImageConfig:
             a += ["--local-user", self.local_user]
             if self.local_pass:
                 a += ["--local-pass", self.local_pass]
+                if self.local_admin:
+                    a += ["--local-admin"]
         if self.enable_wifi:
             a += ["--enable-wifi"]
         if self.enable_bluetooth:
@@ -5264,8 +5268,12 @@ class ImageConfig:
         a: list[str] = ["--role", roles.builder_role(self.role, "x86"),
                         "--env", self.env, "--local-user", self.local_user]
         if self.local_pass:
-            # plaintext ONLY on the live command line — never persisted (SECRET_FIELDS)
+            # plaintext ONLY on the live command line — never persisted (SECRET_FIELDS).
+            # A Studio/TUI DISPATCH moves it to a 0600 file (--local-pass-file); see
+            # build_driver._swap_local_pass.
             a += ["--local-pass", self.local_pass]
+            if self.local_admin:
+                a += ["--local-admin"]
         a += self._identity_args()
         if not unaffiliated:
             a += self._brand_args()

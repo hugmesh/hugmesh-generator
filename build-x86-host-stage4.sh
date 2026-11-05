@@ -1242,7 +1242,7 @@ while [[ $# -gt 0 ]]; do
         --capable) CAPABLE=true; shift ;;
         --local-user) LOCAL_USER="$2"; shift 2 ;;
         --local-pass|--local-user-password) LOCAL_USER_PASS="$2"; shift 2 ;;
-        --local-pass-file)    LOCAL_PASS_FILE="$2"; shift 2 ;;
+        --local-pass-file)    LOCAL_PASS_FILE="$2"; case "$2" in /*) ;; *) LOCAL_PASS_FILE="${PWD}/$2" ;; esac; shift 2 ;;
         --local-admin)        LOCAL_ADMIN=true; shift ;;
         # ── GPU driver matrix (all common cards; free default) ──
         --gpu-driver) GPU_DRIVER="$2"; shift 2 ;;

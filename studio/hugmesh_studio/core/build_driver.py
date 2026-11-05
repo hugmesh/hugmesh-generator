@@ -94,6 +94,27 @@ def _path_flag(field: str) -> str:
     return _PATH_FLAG_OVERRIDES.get(field, "--" + field.replace("_", "-"))
 
 
+# The login password rides a 0600 FILE at dispatch, never argv (secret_files.
+# stage_local_pass says why). ImageConfig.to_cli_args() keeps emitting
+# `--local-pass PASS` — the CLI/--print-cmd channel and every argv pin depend on it —
+# and run()/iter_run() swap that one pair for `--local-pass-file PATH` on the argv
+# they actually spawn. Under docker the file is bind-mounted read-only here.
+DOCKER_LOCAL_PASS_PATH = "/assets/local-pass/local-pass"
+
+
+def _swap_local_pass(argv: list[str], secret: str, path: str) -> list[str]:
+    """``argv`` with its structured ``--local-pass <secret>`` pair replaced by
+    ``--local-pass-file <path>``. Only the FIRST pair carrying exactly ``secret`` is
+    the structured emission (``extra_flags`` comes last and is the operator's own),
+    so that is the one swapped."""
+    out = list(argv)
+    for k in range(len(out) - 1):
+        if out[k] == "--local-pass" and out[k + 1] == secret:
+            out[k:k + 2] = ["--local-pass-file", path]
+            break
+    return out
+
+
 def _emitted_path_fields(cfg: ImageConfig) -> set[str] | None:
     """The path fields this config's builder argv REALLY carries — the flag followed by
     the field's own value — read from ``to_cli_args()`` itself, so no second copy of the
@@ -475,7 +496,13 @@ class BuildDriver:
             env["HUGMESH_QEMU_E2E"] = "1"
         return env
 
-    def command(self, cfg: ImageConfig, backend: str | None = None) -> list[str]:
+    def command(self, cfg: ImageConfig, backend: str | None = None,
+                local_pass_file: str | None = None) -> list[str]:
+        """The builder invocation for ``cfg``. ``local_pass_file`` (dispatch only —
+        run()/iter_run() stage it) moves the login password off argv: the argv's
+        ``--local-pass PASS`` becomes ``--local-pass-file PATH`` (docker: the file
+        is mounted read-only at DOCKER_LOCAL_PASS_PATH). The preview channel passes
+        nothing and is unchanged."""
         backend = backend or self.host.default_backend
         out = self.workdir or cfg.output_dir or os.path.join(self.generator_dir, "out")
         # cfg.platform picks the builder (x86/rpi5/frite/jetson); all four scripts sit
@@ -490,6 +517,8 @@ class BuildDriver:
         # asset root are build-PHASE plumbing; everything after describes the image.
         inner = [script, "-w", "/out" if backend == "docker" else out,
                  "-j", str(cfg.jobs), *self._shared_assets_args(out), *cfg.to_cli_args()]
+        if local_pass_file and cfg.local_pass:
+            inner = _swap_local_pass(inner, cfg.local_pass, local_pass_file)
         penv = self._passthrough_env(cfg)
         if backend == "native":
             # run in the generator dir; needs root for the chroot/loop ops.
@@ -505,6 +534,12 @@ class BuildDriver:
             shared_mounts, shared_args = self._shared_assets_docker(out)
             dinner = [script, "-w", "/out", "-j", str(cfg.jobs), *shared_args,
                       *dcfg.to_cli_args()]
+            if local_pass_file and cfg.local_pass:
+                swapped = _swap_local_pass(dinner, dcfg.local_pass, DOCKER_LOCAL_PASS_PATH)
+                if swapped != dinner:
+                    dinner = swapped
+                    asset_mounts = [*asset_mounts, "-v",
+                                    f"{local_pass_file}:{DOCKER_LOCAL_PASS_PATH}:ro"]
             env_args: list[str] = []
             for k, v in penv.items():
                 env_args += ["-e", f"{k}={v}"]
@@ -760,9 +795,16 @@ class BuildDriver:
                 if askpass.looks_like_auth_failure(line):
                     auth_failed = True
                 _sink(line)
+        # The login password: a private 0600 file for this run, never argv.
+        pass_file: str | None = None
+        cleanup_pass: Callable[[], None] = lambda: None  # noqa: E731
         try:
-            code = self._stream(self.command(run_cfg, backend), watched_on_line, backend)
+            if run_cfg.local_pass:
+                pass_file, cleanup_pass = secret_files.stage_local_pass(run_cfg.local_pass)
+            code = self._stream(self.command(run_cfg, backend, local_pass_file=pass_file),
+                                watched_on_line, backend)
         finally:
+            cleanup_pass()
             cleanup_held()
         if (graphical_native and code != 0 and on_line is not None
                 and auth_failed and not self._cancel.is_set()):
@@ -805,10 +847,17 @@ class BuildDriver:
         backend = backend or self.host.default_backend
         out = self.workdir or cfg.output_dir or os.path.join(self.generator_dir, "out")
         os.makedirs(out, exist_ok=True)
-        proc = self._spawn(self.command(cfg, backend), backend)
-        assert proc.stdout is not None
-        yield from (line.rstrip("\n") for line in proc.stdout)
-        proc.wait()
+        pass_file: str | None = None
+        cleanup_pass: Callable[[], None] = lambda: None  # noqa: E731
+        try:
+            if cfg.local_pass:
+                pass_file, cleanup_pass = secret_files.stage_local_pass(cfg.local_pass)
+            proc = self._spawn(self.command(cfg, backend, local_pass_file=pass_file), backend)
+            assert proc.stdout is not None
+            yield from (line.rstrip("\n") for line in proc.stdout)
+            proc.wait()
+        finally:
+            cleanup_pass()
 
     def _docker_kill(self) -> None:
         subprocess.run(["docker", "kill", self._container_name],
