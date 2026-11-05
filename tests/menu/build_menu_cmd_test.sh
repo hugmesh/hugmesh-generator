@@ -1113,5 +1113,43 @@ _got="$(HOME=/home/u _word '~/wall.png')"
 _got="$(HOME='/home/my user' _word '~/a b.png')"
 [ "${_got}" = '"/home/my user/a b.png"' ] && _ok || _bad "_word: ~ with spaces -> ${_got}"
 
+# ── standalone login password: typed twice, and REQUIRED to build ─────────────
+# The 2026-10-30 standalone image could not be logged in to with the password the
+# operator typed. Two menu-side holes fed that: a single masked entry (a typo is
+# baked in silently) and "blank = random one-time at first boot", whose banner
+# OpenRC's `local` service discards. ui_password_confirmed asks twice and keeps the
+# old value on a mismatch; the standalone screen refuses to build with no password.
+PW_LOG="${SNAP_MENU_STATE}/pw.log"; : >"${PW_LOG}"
+_UI_PASSWORD_Q="${SNAP_MENU_STATE}/ui-password2.q"
+ui_password() { _q_pop "${_UI_PASSWORD_Q}"; }
+ui_msg()      { echo "msg:$1:$2" >>"${PW_LOG}"; }
+printf '%s\n' "s3cret pw" "s3cret pw" >"${_UI_PASSWORD_Q}"
+assert_eq "confirmed password: matching pair is accepted" \
+    "$(ui_password_confirmed T X old)" "s3cret pw"
+printf '%s\n' "s3cret pw" "s3cret pq" >"${_UI_PASSWORD_Q}"
+assert_eq "confirmed password: a mismatch keeps the previous value" \
+    "$(ui_password_confirmed T X old)" "old"
+grep -q 'did not match' "${PW_LOG}" && _ok || _bad "confirmed password: mismatch not reported"
+# the standalone screen's password item goes through the confirmed prompt
+grep -F 'pass)    SA_LOCAL_PASS="$(ui_password_confirmed ' "${MENU_SH}" >/dev/null \
+    && _ok || _bad "standalone_screen: Local password is not typed twice"
+grep -F 'pass) ARM_LOCAL_PASS="$(ui_password_confirmed ' "${MENU_SH}" >/dev/null \
+    && _ok || _bad "arm_secrets_prompt: Local password is not typed twice"
+# build with NO password: refused, nothing launched
+LAUNCHED="${SNAP_MENU_STATE}/launched"; rm -f "${LAUNCHED}"
+launch_build() { echo launched >"${LAUNCHED}"; }
+save_conf() { :; }
+reset_opts; SA_LOCAL_PASS=""
+printf '%s\n' build back >"${_UI_MENU_Q}"
+standalone_screen standalone-unaffiliated >/dev/null 2>&1
+[ -e "${LAUNCHED}" ] && _bad "standalone_screen: built with NO login password" || _ok
+grep -q 'msg:Login required' "${PW_LOG}" && _ok || _bad "standalone_screen: no 'Login required' refusal shown"
+# ...and with one: it builds
+reset_opts; SA_LOCAL_PASS="s3cret pw"; rm -f "${LAUNCHED}"
+printf '%s\n' build >"${_UI_MENU_Q}"
+standalone_screen standalone-unaffiliated >/dev/null 2>&1
+[ -e "${LAUNCHED}" ] && _ok || _bad "standalone_screen: refused to build WITH a password set"
+unset -f launch_build save_conf ui_msg ui_password
+
 printf '\n%d passed, %d failed\n' "${PASS}" "${FAIL}"
 [ "${FAIL}" -eq 0 ]

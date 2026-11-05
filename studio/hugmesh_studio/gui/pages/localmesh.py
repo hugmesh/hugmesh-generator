@@ -255,18 +255,34 @@ class _StatusLine(QtWidgets.QLabel):
     mirrors (the line just above the Actions buttons), so the reason is written next
     to the button that was pressed. A mirror shows itself only while the panel holds
     the actions and there is something to say; see LocalMeshPage._sync_action_status.
+
+    The node probe writes through :meth:`set_probe`, never :meth:`setText`: its
+    "Status: …" line lands a few seconds after page entry and after every verb, and
+    as a plain setText it erased the WSL2 refusal or the verb's FAILED line (with
+    its saved-log path) before anyone read it. A probe line is shown UNDER the last
+    message instead, which stays until the next press writes a new one.
     """
 
     def __init__(self, text: str = ""):
         super().__init__(text)
         self._mirrors: list = []
         self.on_text = None                       # the page's hook, called after each set
+        self._held = text                         # the last message (not a probe line)
 
     def add_mirror(self, label: "QtWidgets.QLabel") -> None:
         self._mirrors.append(label)
         label.setText(self.text())
 
     def setText(self, text) -> None:              # noqa: N802 (Qt)
+        self._held = text
+        self._show(text)
+
+    def set_probe(self, text: str) -> None:
+        """The node-status line: below the held message, never instead of it."""
+        held = self._held
+        self._show(f"{held}\n{text}" if held else text)
+
+    def _show(self, text) -> None:
         super().setText(text)
         for m in self._mirrors:
             try:
@@ -3396,14 +3412,14 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         Stop is left exactly as it was. Rendering "stopped" while the probe is still out
         would be a claim about the mesh that nothing has established."""
         if not probe_running(self, "_node_probe"):   # in flight = its answer is coming
-            self.status.setText("Status: checking…")
+            self.status.set_probe("Status: checking…")
             probe = own_probe(self, "_node_probe", _StatusProbe(self.node, parent=self))
             probe.result.connect(self._on_node_status)
             probe.start()
         self._sync_e2e_gate()
 
     def _on_node_status(self, running: bool, detail: str):
-        self.status.setText(f"Status: {'running' if running else 'stopped'} ({detail})")
+        self.status.set_probe(f"Status: {'running' if running else 'stopped'} ({detail})")
         if not self._running:
             self.stop_btn.setEnabled(running)
 
@@ -3776,6 +3792,12 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         """Stop AND reclaim disk. Destructive and slow to undo (the next start is a
         cold build), so it confirms first — and the confirmation says exactly what
         is removed and what is NOT, rather than a generic 'are you sure?'."""
+        # On native Windows clean() refuses anyway: say so BEFORE asking the operator
+        # to confirm a removal that can never run.
+        blocker = LocalMeshBootstrap.teardown_refusal()
+        if blocker:
+            self._refuse(blocker)
+            return
         if QtWidgets.QMessageBox.question(
                 self, "Stop and clean Docker?",
                 "This stops the local mesh and then REMOVES:\n"
