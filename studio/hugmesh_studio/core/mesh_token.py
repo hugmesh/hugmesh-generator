@@ -722,11 +722,25 @@ def _self_check(key: str, keygen: str, osname: str, runner=subprocess.run) -> No
 
 # ── a pre-auth key from the mesh's own headscale ────────────────────────────────────
 #: Tags a minted pre-auth key asks for by default: none. Role and domain are labels;
-#: the mesh decides what this node may do. The pre-auth key only lets it join.
+#: the mesh decides what this node may do. The pre-auth key only lets it join. In the
+#: mesh's headscale policy (specs/etc/headscale/policy.hujson.tmpl, rendered by
+#: gen-headscale-policy.sh) the membership user "hugmesh" owns only the membership tags
+#: (tag:hugmesh and the role tags), and the tags that gate access (tag:superadmin,
+#: tag:mesh_*, tag:dev_*, tag:dom_*) are owned by NO user and SERVER-FORCED at approval
+#: by hugmesh-headscale-forcetags. So no tag is asked for, and the server tags the node.
 DEFAULT_MINT_TAGS: tuple[str, ...] = ()
 
+#: Tags a minted key may never carry. headscale 0.23 turns a pre-auth key's tags into
+#: FORCED tags on the node that joins with it, and forced tags bypass tagOwners, so a
+#: key minted with one of these hands its holder the access that tag grants
+#: (tag:superadmin is the SSH source of the superadmin rule on every node). Only the
+#: control node's force-tag pass assigns them.
+SECURITY_TAG_RE = re.compile(r"^tag:(?:superadmin$|mesh_|dev_|dom_)")
+
 #: What every face says when minting has no headscale user. There is no default user:
-#: the admin names it every time (the role is not a headscale user either).
+#: the admin names it every time (the role is not a headscale user either). The user
+#: HugMesh's headscale provisioning creates for this is the membership user "hugmesh"
+#: (keys-template/provision.json "users"), which owns nothing that grants access.
 NAME_MINT_USER = "Name the headscale user your mesh sets aside for joining devices."
 
 #: One tag per entry: no comma, so a value cannot add a second tag to ``--tags a,b``.
@@ -791,6 +805,12 @@ def mint_preauth_key(*, user: str, tags=DEFAULT_MINT_TAGS, lifetime_s: int,
     if bad:
         raise TokenError("invalid", f"{', '.join(map(repr, bad))} is not a headscale tag "
                                     "(tag:name, lower-case).")
+    forced = [t for t in tags if SECURITY_TAG_RE.match(t)]
+    if forced:
+        raise TokenError("invalid", f"{', '.join(map(repr, forced))} grants access, so a "
+                                    "pre-auth key may not carry it: the key's tags are "
+                                    "forced on whoever joins with it. The mesh's control "
+                                    "node assigns access tags itself.")
     if not 0 < int(lifetime_s) <= MAX_LIFETIME_S:
         raise TokenError("invalid", "A pre-auth key's lifetime must be between a moment and "
                                     f"{MAX_LIFETIME_S // 86400} days.")
@@ -1441,9 +1461,11 @@ def main(argv: list[str] | None = None) -> int:
     i.add_argument("--headscale-container", default="", help="with --mint: the headscale "
                    "container (default: the one running container named like headscale)")
     i.add_argument("--headscale-user", default="", help="with --mint, required: the "
-                   "headscale user the key is for (no default). " + NAME_MINT_USER)
+                   "headscale user the key is for (no default; never a user that owns an "
+                   "access tag). " + NAME_MINT_USER)
     i.add_argument("--tag", action="append", default=[], help="with --mint: a tag the key "
-                   "asks for (repeatable, one tag each; default none)")
+                   "asks for (repeatable, one tag each; default none, the server tags the "
+                   "node; access tags such as tag:superadmin are refused)")
     i.add_argument("--node-name", default="")
     i.add_argument("--expires", type=_lifetime, default=_lifetime("7d"),
                    help="lifetime such as 12h or 7d (default 7d, at most 90d)")

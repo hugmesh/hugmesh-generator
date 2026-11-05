@@ -21,6 +21,13 @@
     // For preauth-key joins that is the headscale user the key was minted under
     // ("hugmesh"). For OIDC joins you may instead use a group, e.g.
     // "group:headscale" mapped from the Casdoor /headscale group.
+    //
+    // Only MEMBERSHIP/role tags belong to that principal. If you add a tag that
+    // grants access (tag:superadmin, tag:mesh_*, tag:dev_*, tag:dom_*), give it
+    // an EMPTY owner list ("tag:superadmin": []) and let the control node force
+    // it: headscale 0.23 grants a node every advertised tag its user owns on
+    // top of its forced tags, so an owned access tag is one any key holder can
+    // claim. keys-provision refuses to load an override that does this.
     "tag:hugmesh": ["hugmesh"],
     "tag:pki": ["hugmesh"],
     "tag:be": ["hugmesh"],
