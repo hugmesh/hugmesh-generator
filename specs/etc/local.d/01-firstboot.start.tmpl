@@ -41,35 +41,86 @@ env-update && source /etc/profile
 # ── STANDALONE desktop: a normal LOCAL USER with a build-set password ─────────
 # A standalone hardened desktop has NO KEYS USB, NO Casdoor/OIDC SSO and NO mesh.
 # The user logs in at the lightdm greeter with the password supplied at build time
-# (--local-pass, hashed here as @@LOCAL_PASSHASH@@). If no password was supplied the
-# block below falls through to the keyless random-password path. wheel = the sudo
-# escalation path (no SSO desktop-sudo governance on a standalone box).
+# (--local-pass, hashed here as @@LOCAL_PASSHASH@@). If no password was supplied a
+# RANDOM one-time password is minted instead. wheel = the sudo escalation path (no
+# SSO desktop-sudo governance on a standalone box).
+#
+# EVERY STEP IS CHECKED, and the 2026-10-30 standalone-thick x86 image is why. This
+# block used to run `useradd -G wheel,audio,video,usb,plugdev,games` unchecked. That
+# image has no `games` group (no acct-group/games exists in ::gentoo), so useradd
+# exited 6 and created NOBODY; `chpasswd -e` then had no user to put the Studio's
+# hash on, the "ready" line printed anyway, and `touch users.created` failed because
+# /var/lib/keys-provision did not exist either. The keyless fallback below then
+# created the user with a RANDOM password whose banner OpenRC's `local` service sent
+# to /dev/null, and the script deleted itself. The password typed in the Studio
+# could never log in. Now: missing supplementary groups are created first (the same
+# move keys-provision makes, provision.sh), success is marked only when the account
+# exists AND its password landed, and on failure the script says so on the console
+# and stays in place so the next boot retries.
+#
+# The hash is tested in SINGLE quotes: inside double quotes its `$y$`/`$6$` salt
+# segments are parameter expansions, and a hash whose tail happened to be all word
+# characters would expand to "" and silently take the random-password branch.
+SA_RETRY=false
 if [ "@@STANDALONE@@" = "true" ] && [ ! -f /var/lib/keys-provision/users.created ]; then
+    SA_OK=false
+    SA_GROUPS=""
+    for g in wheel audio video usb plugdev games; do
+        getent group "${g}" >/dev/null 2>&1 || groupadd -r "${g}" >/dev/null 2>&1 || true
+        getent group "${g}" >/dev/null 2>&1 && SA_GROUPS="${SA_GROUPS:+${SA_GROUPS},}${g}"
+    done
     if ! id "@@DEFAULT_USER@@" &>/dev/null; then
-        useradd -m -G wheel,audio,video,usb,plugdev,games -s /bin/bash "@@DEFAULT_USER@@"
+        if [ -n "${SA_GROUPS}" ]; then
+            useradd -m -G "${SA_GROUPS}" -s /bin/bash "@@DEFAULT_USER@@"
+        else
+            useradd -m -s /bin/bash "@@DEFAULT_USER@@"
+        fi
     fi
-    grep -q '^%wheel ALL=(ALL) ALL' /etc/sudoers || echo "%wheel ALL=(ALL) ALL" >> /etc/sudoers
-    if [ -n "@@LOCAL_PASSHASH@@" ]; then
-        # Apply the build-time crypt(3) hash (NOT plaintext) to /etc/shadow.
-        # chpasswd -e takes the hash verbatim ($y$ and $6$ both land as-is).
-        echo '@@DEFAULT_USER@@:@@LOCAL_PASSHASH@@' | chpasswd -e
-        echo "Standalone desktop: local user @@DEFAULT_USER@@ ready (password set at build time)."
+    if id "@@DEFAULT_USER@@" &>/dev/null; then
+        grep -q '^%wheel ALL=(ALL) ALL' /etc/sudoers || echo "%wheel ALL=(ALL) ALL" >> /etc/sudoers
+        if [ -n '@@LOCAL_PASSHASH@@' ]; then
+            # Apply the build-time crypt(3) hash (NOT plaintext) to /etc/shadow.
+            # chpasswd -e takes the hash verbatim ($y$ and $6$ both land as-is).
+            if echo '@@DEFAULT_USER@@:@@LOCAL_PASSHASH@@' | chpasswd -e; then
+                SA_OK=true
+                echo "Standalone desktop: local user @@DEFAULT_USER@@ ready (password set at build time)."
+            fi
+        else
+            if command -v openssl >/dev/null 2>&1; then FB_PW="$(openssl rand -base64 18)"; else FB_PW="$(head -c 18 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 24)"; fi
+            if echo "@@DEFAULT_USER@@:${FB_PW}" | chpasswd; then
+                SA_OK=true
+                chage -d 0 "@@DEFAULT_USER@@" 2>/dev/null || true
+                # OpenRC's `local` service discards this script's stdout unless
+                # rc_verbose=yes, so the one-time password goes to the console too.
+                {
+                    echo ""; echo "############################################################"
+                    echo "#  STANDALONE desktop — no --local-pass was set at build."
+                    echo "#    user: @@DEFAULT_USER@@   pass: ${FB_PW}   (CHANGE IT)"
+                    echo "############################################################"; echo ""
+                } | tee /dev/console 2>/dev/null || true
+            fi
+            unset FB_PW
+        fi
+    fi
+    if ${SA_OK}; then
+        passwd -l root
+        mkdir -p /var/lib/keys-provision
+        touch /var/lib/keys-provision/users.created   # don't also run the keyless fallback below
     else
-        if command -v openssl >/dev/null 2>&1; then FB_PW="$(openssl rand -base64 18)"; else FB_PW="$(head -c 18 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 24)"; fi
-        echo "@@DEFAULT_USER@@:${FB_PW}" | chpasswd
-        chage -d 0 "@@DEFAULT_USER@@" 2>/dev/null || true
-        echo ""; echo "############################################################"
-        echo "#  STANDALONE desktop — no --local-pass was set at build."
-        echo "#    user: @@DEFAULT_USER@@   pass: ${FB_PW}   (CHANGE IT)"
-        echo "############################################################"; echo ""
-        unset FB_PW
+        SA_RETRY=true
+        {
+            echo "STANDALONE desktop: FAILED to set up local user @@DEFAULT_USER@@ (groups: ${SA_GROUPS:-none})."
+            echo "  First boot will retry on the next boot."
+        } | tee /dev/console 2>/dev/null || true
     fi
-    passwd -l root
-    touch /var/lib/keys-provision/users.created   # don't also run the keyless fallback below
 fi
 
 # ── Fallback user (only when KEYS provisioning created none) ───────
-if [ ! -f /var/lib/keys-provision/users.created ]; then
+# Not after a FAILED standalone setup: that would replace the password typed at
+# build time with a random one (exactly what the 2026-10-30 image did).
+if ${SA_RETRY}; then
+    echo "Standalone local user setup failed — fallback user NOT created; retrying next boot"
+elif [ ! -f /var/lib/keys-provision/users.created ]; then
     echo "No users provisioned from KEYS — creating fallback @@DEFAULT_USER@@ with a RANDOM one-time password"
     if ! id "@@DEFAULT_USER@@" &>/dev/null; then
         useradd -m -G wheel,audio,video,usb -s /bin/bash "@@DEFAULT_USER@@"
@@ -90,13 +141,15 @@ if [ ! -f /var/lib/keys-provision/users.created ]; then
         chage -d 0 "@@DEFAULT_USER@@" 2>/dev/null || passwd -e "@@DEFAULT_USER@@" 2>/dev/null || true
         echo "%wheel ALL=(ALL) ALL" >> /etc/sudoers
         echo ""
-        echo "###############################################################"
-        echo "#  KEYLESS BOOT — random one-time login (CHANGE IT IMMEDIATELY) "
-        echo "#    user: @@DEFAULT_USER@@"
-        echo "#    pass: ${FB_PW}"
-        echo "#  root is LOCKED. This password is shown ONCE and not stored.  "
-        echo "###############################################################"
-        echo ""
+        {
+            echo "###############################################################"
+            echo "#  KEYLESS BOOT — random one-time login (CHANGE IT IMMEDIATELY) "
+            echo "#    user: @@DEFAULT_USER@@"
+            echo "#    pass: ${FB_PW}"
+            echo "#  root is LOCKED. This password is shown ONCE and not stored.  "
+            echo "###############################################################"
+            echo ""
+        } | tee /dev/console 2>/dev/null || true
         unset FB_PW
     fi
 else
@@ -206,4 +259,6 @@ echo "  If you booted WITHOUT a KEYS stick, log in as the fallback user above"
 echo "  and CHANGE ALL DEFAULT PASSWORDS IMMEDIATELY."
 echo "========================================================"
 
-rm -f /etc/local.d/01-firstboot.start
+# Stay in place when the standalone account could not be made, so the next boot
+# retries instead of leaving an image nobody can log in to.
+${SA_RETRY} || rm -f /etc/local.d/01-firstboot.start

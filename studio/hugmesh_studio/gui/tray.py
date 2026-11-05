@@ -27,7 +27,7 @@ import webbrowser
 from .qt import Qt, QtCore, QtGui, QtWidgets
 from .branding_icon import (
     ICON_PX as _ICON_PX, brand_icon as _brand_icon, brand_pixmap as _brand_pixmap)
-from ..core import build_sessions
+from ..core import build_sessions, platform_info
 from ..core import resource_limits as _resource_limits
 from ..core.mesh_token import GrantedMeshNode
 from ..core.local_stack_node import LocalStackNode
@@ -236,10 +236,13 @@ class _Section:
     Start/Stop/View-logs (+ optional Open-web-UI) actions and a status line, and knows how
     to refresh them from ``node.status()``. Its owning tray is injected by _ControlTray."""
 
-    def __init__(self, node, *, label: str, web_url: str | None = None):
+    def __init__(self, node, *, label: str, web_url: str | None = None, blocker=None):
         self.node = node
         self.label = label
         self.web_url = web_url
+        # () -> WHY this node cannot run on this host ("" when it can). Asked on every
+        # refresh, so Start is never offered where it can only fail.
+        self.blocker = blocker or (lambda: "")
         self.tray: _ControlTray | None = None
         self.status_act = None
         self.start_act = None
@@ -289,6 +292,9 @@ class _Section:
         webbrowser.open(self.web_url)
 
     def _start(self) -> None:
+        if self.blocker():
+            self.tray._refresh()        # the disabled action's tooltip says why
+            return
         ok, why = self.node.start()
         self.tray._notify(self.label, "Started." if ok else f"Failed: {why}")
         self.tray._refresh()
@@ -326,6 +332,17 @@ class _Section:
         return bool(done)
 
     def refresh(self) -> None:
+        blocker = self.blocker()
+        if blocker:
+            # The whole sentence goes on the actions' tooltips, NOT through a balloon:
+            # Windows cuts a tray notification at 255 characters, which dropped the
+            # "what to do" half of the WSL2 refusal mid-word.
+            self.status_act.setText(f"{self.label}: needs WSL2 on Windows (hover for why)")
+            for act in (self.status_act, self.start_act, self.stop_act):
+                act.setToolTip(blocker)
+            self.start_act.setEnabled(False)
+            self.stop_act.setEnabled(False)
+            return
         st = self.node.status()
         note, why = self.grant_note(st.running)
         self.status_act.setText(
@@ -359,7 +376,8 @@ class _ControlTray(QtWidgets.QSystemTrayIcon):
         self._generator_dir = generator_dir
         self.setToolTip(tooltip)
         menu = QtWidgets.QMenu()
-        # the mesh section's status line explains an unusable token in its tooltip
+        # the mesh section's status line explains an unusable token in its tooltip, and a
+        # section that cannot run here explains itself in its actions' tooltips
         menu.setToolTipsVisible(True)
         for i, s in enumerate(self.sections):
             if i:
@@ -545,9 +563,12 @@ def _mesh_section(generator_dir: str) -> _Section:
     return _Section(GrantedMeshNode(generator_dir), label="mesh node")
 
 
-def _stack_section(generator_dir: str) -> _Section:
+def _stack_section(generator_dir: str, osname: str | None = None) -> _Section:
     node = LocalStackNode(generator_dir)
-    return _Section(node, label="local stack", web_url=node.web_url)
+    # the same sentence LocalStackNode.available() refuses with on native Windows
+    return _Section(node, label="local stack", web_url=node.web_url,
+                    blocker=lambda: platform_info.native_windows_blocker(
+                        "The local stack", osname=osname))
 
 
 class MeshTray(_ControlTray):
