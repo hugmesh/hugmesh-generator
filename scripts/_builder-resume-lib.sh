@@ -137,14 +137,18 @@ hmr_pack_owner_args() {
     # target does not define into a "+ID root:0" map line; it prints
     # "<members> <non-root-owned members>" for the checks and the log below.
     # It walks what the ARCHIVE will carry: every ARM builder's pack lines exclude
-    # ./usr/src, ./var/cache and ./tmp/* (and proc/sys/dev are never packed), so
-    # those are pruned here too. Before this prune the log said "45 of 49203
-    # entries are not root:root" for an rpi5 tarball whose members numbered 49190
-    # with 36 non-root among them (2026-11-04 proof run): the nine extra were
-    # portage-owned entries under var/cache that tar never archived. The number
-    # in the log is now the number a `tar -tv --numeric-owner` of the tarball
-    # gives back (tests/scripts/test-stage4-pack-ownership.sh pins the identity).
-    census="$({ find "${sysroot}" \( -path "${sysroot}/proc" -o -path "${sysroot}/sys" -o -path "${sysroot}/dev" \
+    # ./usr/src, ./var/cache and ./tmp/*, so those are pruned here too. Before this
+    # prune the log said "45 of 49203 entries are not root:root" for an rpi5 tarball
+    # whose members numbered 49190 with 36 non-root among them (2026-11-04 proof
+    # run): the extra were portage-owned entries under var/cache that tar never
+    # archived. proc, sys and dev ARE archived, as the empty mount-point directories
+    # they are at pack time (a rebuilt rpi5 pki tarball lists ./proc/ ./sys/ ./dev/
+    # and nothing under them), so only what is under them is pruned: pruning the
+    # directories themselves left the logged total three short of the listing
+    # ("35 of the 49186" for a 49189-member tarball). The numbers in the log are the
+    # numbers a `tar -tv --numeric-owner` of the tarball gives back
+    # (tests/scripts/test-stage4-pack-ownership.sh pins the identity).
+    census="$({ find "${sysroot}" \( -path "${sysroot}/proc/*" -o -path "${sysroot}/sys/*" -o -path "${sysroot}/dev/*" \
                                      -o -path "${sysroot}/usr/src" -o -path "${sysroot}/var/cache" \
                                      -o -path "${sysroot}/tmp/*" \) -prune \
                   -o -exec stat -c '%u %g' {} + 2>/dev/null || true; } \

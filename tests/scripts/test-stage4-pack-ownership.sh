@@ -230,7 +230,10 @@ else
     # Here: a fixture with members under the three excluded paths, packed with the
     # builders' own excludes; the census line and the listing must agree exactly.
     U4="${WORK}/u-excl"; mk_userfix "${U4}" yes
-    mkdir -p "${U4}/var/cache/distfiles" "${U4}/usr/src/linux" "${U4}/tmp/portage"
+    # proc, sys and dev are the empty mount points a real build system packs (./proc/
+    # ./sys/ ./dev/ with nothing under them): tar archives the directories, so the
+    # census must count them (pruning them left a real log three short, 2026-11-04).
+    mkdir -p "${U4}/var/cache/distfiles" "${U4}/usr/src/linux" "${U4}/tmp/portage" "${U4}/proc" "${U4}/sys" "${U4}/dev"
     : > "${U4}/var/cache/distfiles/a.tar"; : > "${U4}/usr/src/linux/Makefile"; : > "${U4}/tmp/portage/x"
     o="$(argsof "${WORK}/bin-gate" "${U4}")"
     flags="$(printf '%s\n' "${o}" | sed -n 's/^ARG //p')"
