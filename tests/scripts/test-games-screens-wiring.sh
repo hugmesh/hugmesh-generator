@@ -10,8 +10,10 @@
 #     StripPrefix=1), games-bff BEFORE games-ui, both after the deep-link route
 #     (whose Path list carries /games/**) and before frontend-host.
 #   * route-access, fe gateway: /games/api/admin/** ROLE_GAMES_ADMIN;
-#     /games/api/** and /games/** each ROLE_GAMES + ROLE_ADMIN + ROLE_MOD; the
-#     pre-existing /games/admin/** ROLE_GAMES_ADMIN row untouched; be rows untouched.
+#     /games/api/** and /games/** each ROLE_GAMES + ROLE_ADMIN and NOT ROLE_MOD (a
+#     platform mod without ROLE_GAMES is not a games user, matching gamesGuard); the
+#     pre-existing /games/admin/** ROLE_GAMES_ADMIN row untouched; no be /games or
+#     /games/api/admin rows (the portal host is not on the be-gateway).
 #   * optional-services.yaml games: routeAccessRows carries the three fe
 #     patterns, gatewayRouteIds carries games-ui + games-bff, extraManifestPaths
 #     carries manifests/games-ui — so a games-DESELECTED build prunes all of it,
@@ -31,7 +33,7 @@
 # NEGATIVE CONTROLS (in-process, on parsed COPIES — the files on disk are never
 # modified): each of the mutations below must trip at least one check, and
 # each is PROVEN to have changed the copy before it is run:
-#   drop one of the seven SQL rows; flip a row to allow=false; drop /games/**
+#   drop one of the five SQL rows; flip a row to allow=false; drop /games/**
 #   from the compose deep-link list; drop it from the kind deep-link list;
 #   swap games-ui above games-bff (compose); move games-ui below frontend-host;
 #   change games-ui's StripPrefix; drop games-ui from gatewayRouteIds; drop a
@@ -70,8 +72,8 @@ PRUNE_LIB  = f"{root}/scripts/_optional-services-lib.sh"
 FE = "hugmesh-fe-gateway"
 WANT_ROWS = {
     ("/games/api/admin/**", "ROLE_GAMES_ADMIN"),
-    ("/games/api/**", "ROLE_GAMES"), ("/games/api/**", "ROLE_ADMIN"), ("/games/api/**", "ROLE_MOD"),
-    ("/games/**", "ROLE_GAMES"), ("/games/**", "ROLE_ADMIN"), ("/games/**", "ROLE_MOD"),
+    ("/games/api/**", "ROLE_GAMES"), ("/games/api/**", "ROLE_ADMIN"),
+    ("/games/**", "ROLE_GAMES"), ("/games/**", "ROLE_ADMIN"),
 }
 WANT_FE_PATTERNS = {"/games/api/admin/**", "/games/api/**", "/games/**"}
 BFF_ENV = {
@@ -201,9 +203,9 @@ def check_sql(rows):
     if not extra: ok("[sql] no extra role at the three new fe patterns (ROLE_USER etc. would widen the floor)")
     else: bad(f"[sql] unexpected fe rows {sorted(extra)}"); n += 1
     be = {(r["pat"], r["role"]) for r in rows if r["gw"] == "hugmesh-be-gateway" and r["pat"].startswith("/games/")}
-    for want in (("/games/api/admin/**", "ROLE_GAMES_ADMIN"), ("/games/**", "ROLE_GAMES"), ("/games/**", "ROLE_ADMIN"), ("/games/**", "ROLE_MOD")):
-        if want in be: ok(f"[sql] be row {want} untouched")
-        else: bad(f"[sql] be row {want} missing"); n += 1
+    for gone in (("/games/api/admin/**", "ROLE_GAMES_ADMIN"), ("/games/**", "ROLE_GAMES"), ("/games/**", "ROLE_ADMIN"), ("/games/**", "ROLE_MOD")):
+        if gone in be: bad(f"[sql] be row {gone} is back; the be-gateway does not serve the games portal"); n += 1
+        else: ok(f"[sql] be row {gone} retired")
     return n
 
 def check_opt(g):
@@ -359,7 +361,8 @@ def drop_route(rid):
 
 control("sql: ('/games/**','ROLE_GAMES') row dropped", sql_rows, drop_row("/games/**", "ROLE_GAMES"), check_sql)
 control("sql: ('/games/api/admin/**','ROLE_GAMES_ADMIN') row dropped", sql_rows, drop_row("/games/api/admin/**", "ROLE_GAMES_ADMIN"), check_sql)
-control("sql: ('/games/api/**','ROLE_MOD') flipped to allow=false", sql_rows, flip_row("/games/api/**", "ROLE_MOD"), check_sql)
+control("sql: ('/games/api/**','ROLE_ADMIN') flipped to allow=false", sql_rows, flip_row("/games/api/**", "ROLE_ADMIN"), check_sql)
+control("sql: a ROLE_MOD row added at /games/api/** (a platform mod is not a games user)", sql_rows, lambda rows: rows.append({"gw": FE, "pat": "/games/api/**", "role": "ROLE_MOD", "allow": True}), check_sql)
 control("sql: a ROLE_USER row added at /games/** (floor widened)", sql_rows, lambda rows: rows.append({"gw": FE, "pat": "/games/**", "role": "ROLE_USER", "allow": True}), check_sql)
 control("compose: /games/** dropped from the deep-link list", compose_routes, drop_dl, lambda rs: check_routes("neg", rs))
 control("kind: /games/** dropped from the deep-link list", cluster_routes, drop_dl, lambda rs: check_routes("neg", rs))

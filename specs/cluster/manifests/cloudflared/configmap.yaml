@@ -39,6 +39,17 @@ data:
       - hostname: mastodon.hugmesh.net
         service: https://ingress-nginx-controller.ingress-nginx.svc.cluster.local:443
         originRequest: { noTLSVerify: true }
+      # The games portal + games-realm issuer (OPTIONAL slug `games`; pruned when it
+      # is deselected). parameterize_games_domain() rewrites both for GAMES_DOMAIN. On
+      # the default subdomain the wildcard below would also catch them; a custom
+      # domain needs these rules, plus its own DNS records and a public hostname in
+      # the Cloudflare tunnel for the TUNNEL_TOKEN path.
+      - hostname: games.hugmesh.net
+        service: https://ingress-nginx-controller.ingress-nginx.svc.cluster.local:443
+        originRequest: { noTLSVerify: true }
+      - hostname: id.hugmesh.games
+        service: https://ingress-nginx-controller.ingress-nginx.svc.cluster.local:443
+        originRequest: { noTLSVerify: true }
       # VANITY SUBDOMAINS: *.hugmesh.net -> the same in-cluster ingress.
       # MUST come AFTER the reserved service hosts above (id./api./matrix./
       # mastodon./scale.) — cloudflared matches ingress rules TOP-DOWN and the

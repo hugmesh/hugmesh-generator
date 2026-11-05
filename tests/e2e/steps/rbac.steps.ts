@@ -222,14 +222,14 @@ Then('no single granted role reaches the games-admin surfaces on either gateway'
   for (const single of ['ROLE_GAMES', 'ROLE_ADMIN', 'ROLE_MOD', 'ROLE_USER']) {
     expect(gatewayDecision('hugmesh-fe-gateway', '/games/admin/x', [single]),
       `${single} alone must NOT reach /games/admin`).toBe('DENY');
-    expect(gatewayDecision('hugmesh-be-gateway', '/games/api/admin/x', [single]),
+    expect(gatewayDecision('hugmesh-fe-gateway', '/games/api/admin/x', [single]),
       `${single} alone must NOT reach /games/api/admin`).toBe('DENY');
   }
 });
 
 Then('only the derived role {string} reaches both games-admin surfaces', async ({}, derived: string) => {
   expect(gatewayDecision('hugmesh-fe-gateway', '/games/admin/x', [derived])).toBe('ALLOW');
-  expect(gatewayDecision('hugmesh-be-gateway', '/games/api/admin/x', [derived])).toBe('ALLOW');
+  expect(gatewayDecision('hugmesh-fe-gateway', '/games/api/admin/x', [derived])).toBe('ALLOW');
 });
 
 Then('every seeded persona derives games-admin exactly when the intersection rule says so', async ({}) => {
@@ -295,7 +295,7 @@ Then('no games-realm identity reaches any privileged systems route', async ({}) 
     { gw: 'hugmesh-fe-gateway', path: '/admin/usage' },
     { gw: 'hugmesh-be-gateway', path: '/api/admin/route-access' },
     { gw: 'hugmesh-fe-gateway', path: '/games/admin/sessions' },
-    { gw: 'hugmesh-be-gateway', path: '/games/api/admin/role-grants' },
+    { gw: 'hugmesh-fe-gateway', path: '/games/api/admin/role-grants' },
     { gw: SUPERADMIN_GATEWAY as Gateway, path: '/bff/superadmin/service-store/catalog' },
   ];
   for (const g of GAMES_SEED_USERS) {

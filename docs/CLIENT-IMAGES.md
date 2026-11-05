@@ -331,6 +331,37 @@ What each flag needs before it does anything:
    been built. The SSO-sudo leg also stays inert until the SSO token producer
    (FD-07 increment 2, written but never run against a live Casdoor) has run on one.
 
+## Emulated desktop display (QEMU runner `--display spice`)
+
+When the containerised QEMU runner (`tests/qemu/run-qemu-docker.sh`, or the
+Studio's emulate-a-device page) boots a desktop image with a SPICE display, the
+native viewer (`remote-viewer` / `spicy`) sends a monitors-config on every window
+resize. For the guest to **re-lay-out** at the new resolution rather than show a
+scaled bitmap, every desktop image carries three guest-side pieces; all three
+are inert on real hardware.
+
+| Piece | Where | Why |
+|---|---|---|
+| `app-emulation/spice-vdagent` + `sec-policy/selinux-vdagent` | every desktop package list; the ARM boards accept vdagent `~arm64` (the policy module is **not** keyworded — its stable version is arm64-stable, and a `~arm64` line would wall frite/orangepi) | agent mouse, clipboard, and the XRandR path when QEMU hands the config to the agent |
+| `CONFIG_VIRTIO_CONSOLE`, `CONFIG_INPUT_MISC`, `CONFIG_INPUT_UINPUT` | the guest kernel fragments, guarded by `tests/scripts/test-virtual-display-kernel.sh` (x86_64 and arm64 defconfig already carry `VIRTIO_CONSOLE` and `INPUT_MISC`; `INPUT_UINPUT` comes from the desktop fragments) | the `com.redhat.spice.0` channel and `/dev/uinput`; the ebuild's `CONFIG_CHECK` is warn-only, so without them the daemon ships inert |
+| `/usr/libexec/hugmesh/vm-autofit` (+ `/etc/xdg/autostart/hugmesh-vm-autofit.desktop`) | `specs/usr/libexec/hugmesh/`, copied by each desktop builder; neutral names on the unaffiliated x86 image | polls the virtio-gpu/qxl connector's preferred mode in sysfs and runs `xrandr --output <name> --auto` when it changes. The LXDE/openbox session has no output daemon of its own; XFCE/KDE apply hotplug themselves, and the applier skips when the X server is already on the preferred mode, so it is harmless there |
+| `/etc/local.d/20-spice-vdagent.start` | `specs/etc/local.d/`, copied by each desktop builder | starts `spice-vdagentd` **only** when the SPICE virtio port exists. The stock OpenRC script returns 1 without it, so an unconditional `rc-update add` would print a failed service on every physical boot and every non-display QEMU run |
+
+Honest status of the resize path, per stack:
+
+- **x86 (virtio-vga)** — the kernel side is complete. Whether QEMU 7.2 turns the
+  viewer's monitors-config into a virtio-gpu `ui_info` hotplug (the applier's
+  path) or hands it to `spice-vdagent` (the agent's XRandR path) is **not yet
+  measured** on a built image; both paths are shipped. The runner's device record
+  keeps `display_resize=scale` until that measurement lands.
+- **ARM boards (rpi5, frite, orangepi5, orangepi4-lts)** — no `DRM_VIRTIO_GPU`
+  in their kernels today, so there is **no display at all** in the emulator
+  ("serial only"), not a scaling one. The packages and files are staged so the
+  five desktop images stay 1:1; the applier exits at once without a virtual GPU.
+
+`tests/scripts/test-vm-display-guest.sh` pins the wiring and executes both sh
+scripts against a fixture sysfs and PATH stubs (with a built-in mutation battery).
+
 ## Provisioning manifest additions (keys-provision)
 
 ```jsonc
