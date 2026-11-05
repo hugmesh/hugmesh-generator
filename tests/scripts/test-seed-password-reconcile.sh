@@ -34,8 +34,11 @@
 #      old fixed string pointed every zero-mint at the grant config.
 #   3. LEG-1C HONESTY: tests/stack/seed-e2e.sh run for real against the stubs;
 #      when EVERY attempted onboard fails the seed must exit non-zero and name
-#      the credential-mismatch cause; a PARTIAL failure stays non-fatal but
-#      must never print under an "OK" label.
+#      the credential-mismatch cause (and must NOT also label the run PARTIAL);
+#      a PARTIAL failure is labelled PARTIAL, never OK, and since #473 (box 4)
+#      it ALSO stops the seed non-zero — an e2e run must not start against a
+#      half-seeded stack (tests/stack/test-seed-e2e-lockout.sh pins the exit
+#      code and the lockout classification in detail).
 #   4. THE HINT: `make -n stack-seed` (behaviour: make's real expansion, no
 #      execution) must show the "Re-run with SEED_COMPLETE_REGISTRATION=1"
 #      hint ONLY when the flag is absent — in BOTH spellings (command line and
@@ -411,14 +414,23 @@ if run_seed_e2e_fresh "${OLD_PW}"; then
     grep -q "leg 1c OK" "${WORK}/seedout" \
         && bad "(5a) 'leg 1c OK' still printed on a total failure" \
         || ok "(5a) no 'OK' label anywhere near the failure"
+    # A total failure must stop at its OWN exit: falling through to the PARTIAL
+    # branch would still exit non-zero (that branch stops the seed too, since
+    # #473) but would mislabel "nothing signs in" as "these N did not".
+    grep -q "leg 1c PARTIAL" "${WORK}/seedout" \
+        && bad "(5a) a TOTAL failure also printed 'leg 1c PARTIAL' — the exit 3 was swallowed" \
+        || ok "(5a) ...and no PARTIAL label either: the total-failure exit fired"
 fi
 
-# (5b) PARTIAL: one persona 401s, the rest onboard → non-fatal, but labelled
-# PARTIAL, never OK.
+# (5b) PARTIAL: one persona 401s, the rest onboard → labelled PARTIAL, never
+# OK, and the seed STOPS non-zero (#473 box 4: the identities are seeded and
+# stamped either way, so a re-run costs nothing, while continuing would start
+# an e2e run against a half-seeded stack). Distinct from 5a's exit 3 so a
+# caller can tell "nothing signs in" from "these N did not".
 if run_seed_e2e_fresh "${NEW_PW}" "e2e-admin"; then
-    [ "${RC}" -eq 0 ] \
-        && ok "(5b) a partial onboard failure stays non-fatal (identities are seeded; the operator can finish in the UI)" \
-        || bad "(5b) a single failed persona now kills the whole seed (rc=${RC}) — over-correction: $(tail -3 "${WORK}/seedout")"
+    [ "${RC}" -ne 0 ] && [ "${RC}" -ne 3 ] \
+        && ok "(5b) a partial onboard failure stops the seed non-zero (rc=${RC}, not the total-failure 3)" \
+        || bad "(5b) a PARTIAL onboard failure exited rc=${RC} — the e2e run would continue against a half-seeded stack: $(tail -3 "${WORK}/seedout")"
     grep -q "leg 1c PARTIAL" "${WORK}/seedout" && ! grep -q "leg 1c OK" "${WORK}/seedout" \
         && ok "(5b) ...and is labelled PARTIAL, not OK" \
         || bad "(5b) partial failure mislabelled: $(grep -E 'leg 1c (OK|PARTIAL)' "${WORK}/seedout" | tail -1 || echo '(no label)')"

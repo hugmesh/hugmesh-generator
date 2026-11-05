@@ -12,9 +12,31 @@ even before the WorklistPage/ProgressPage classes land in their own workstreams.
 """
 from __future__ import annotations
 
-from hugmesh_studio.core.config import WIZARD_PAGE_SLUGS
+from hugmesh_studio.core.config import WIZARD_PAGE_SLUGS, standalone_login_required
 from hugmesh_studio.gui import wizard as wizard_mod
 from hugmesh_studio.gui.qt import Qt
+
+
+#: What a test "types" as the login password when it walks a standalone flow past the
+#: Home step. Not a credential: offscreen wizard fixtures only.
+TEST_LOGIN_PASSWORD = "test-login-pw"
+
+
+def type_login_password(page, pw: str = TEST_LOGIN_PASSWORD) -> None:
+    """Do what a person does on the Home step: type the login password, twice.
+
+    HomePage refuses a standalone image with no login password (root is locked and there
+    is no KEYS stick or SSO, so that account is the only way in) and a confirmation that
+    does not match — tests/test_home_login_password.py pins both refusals. A test that
+    only walks THROUGH a standalone flow's page therefore types one, exactly as the
+    operator must; on any other flow nothing is invented (it would change the argv). A
+    password the test already typed is kept, and typed into the confirmation too."""
+    if not isinstance(page, wizard_mod.HomePage):
+        return
+    if not page.local_pass.text() and standalone_login_required(page.wiz.cfg):
+        page.local_pass.setText(pw)
+    if not page.local_pass_confirm.text():
+        page.local_pass_confirm.setText(page.local_pass.text())
 
 
 def advance_to(wiz, page_cls):
@@ -25,6 +47,7 @@ def advance_to(wiz, page_cls):
         if isinstance(page, page_cls):
             return page
         before = wiz.currentId()
+        type_login_password(page)
         wiz.next()
         assert wiz.currentId() != before, \
             f"flow stuck on {type(page).__name__} (validatePage rejected?)"

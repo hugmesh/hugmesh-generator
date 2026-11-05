@@ -497,6 +497,120 @@ Tray-only (mesh-node controller):
 python -m hugmesh_studio --tray
 ```
 
+### Sharing a mesh with a signed HugMesh token
+
+A mesh admin can hand someone a single line of text, a **HugMesh token**, that lets that
+person's tray run a mesh node as it says: an **access domain**, a **role** (user, mod,
+admin or superadmin) and whether **shell access** is granted. Shell access means the
+node accepts SSH sessions from the mesh (Tailscale SSH), as the mesh's SSH policy
+allows; it does not give the holder a shell on other machines. The token carries the headscale pre-auth key and login server and is signed with the admin's
+`ssh-ed25519` key through OpenSSH (`ssh-keygen -Y`). OpenSSH ships with Windows 10/11,
+macOS and Linux, so nothing extra is installed.
+
+#### Issuing a token for a mesh you created here
+
+The admin of a mesh created with the Studio can issue tokens from the window, the text
+interface or the command line, the same way on Linux, Windows and macOS. All three go
+through `core/mesh_token.py`, and every field is checked before anything is created or
+minted, so a typo never leaves a pre-auth key behind on the server.
+
+- **The Studio's issuer key.** You need no SSH key of your own. The first token for a
+  mesh creates an `ssh-ed25519` issuer key for it in the Studio state dir
+  (`mesh-issuers/<mesh>/issuer_ed25519`, no passphrase; mode 0600 on Linux and macOS,
+  and on Windows narrowed to your account if OpenSSH finds it readable by others) and
+  trusts it on this computer, so your own tray accepts the tokens it signs. Every issued
+  token is shown with that key's `SHA256:` **fingerprint**: send it to the recipient
+  separately from the token, because their tray asks them to compare it.
+- **The pre-auth key** is pasted (the window), read from a file (the text interface and
+  `--authkey-file`), or **minted** in the mesh's running headscale container with
+  `docker exec <container> headscale preauthkeys create --user <user> --expiration
+  <token lifetime>`: a single-use key that expires with the token. Pasting a key or
+  reading it from a file always works; minting needs a running headscale container,
+  and the Studio's local Docker mesh does not run one yet. The container is the
+  running container named like `headscale` (when several match, the one that is
+  headscale itself, such as `hugmesh-headscale` beside `headscale-ui`). The headscale
+  user has no default and must be named every time: name the headscale user your mesh
+  sets aside for joining devices. No tags are asked for. The issuer key signs once
+  before the key is minted, and a key minted for a token that then fails to sign is
+  expired straight away. A minted key is read from headscale's output, never put on a
+  command line or in a log; expiring an unused one passes it to the container on
+  stdin, but inside the container it is an argument of `headscale preauthkeys expire`
+  for a moment, so it briefly shows in the docker host's process list.
+
+**In the window.** **Issue a HugMesh token…** is in the tray's mesh menu and in the Local
+mesh Actions box (the panel's Local mesh tab). From the Local mesh page it opens with the
+brand as the mesh name, the mesh's own domain as the access domain, and the page's
+**Login server** when one is typed. Pick the role, shell access (admin and superadmin
+only), the lifetime (up to 90 days) and the pre-auth key: a hidden paste field, cleared
+once the token is issued, or **Mint from the local headscale**, offered for the
+container under **Headscale container** (the running headscale container the dialog
+found, one picked from several, or a name you type) once **Headscale user** is filled
+in: it is required, and Mint stays off until it is. **Issue** shows the token, **Copy
+token** and the issuer fingerprint.
+
+**In the text interface.** `t` on the Local Docker mesh screen (its first screen and its
+review) opens the same form: `m NAME`, `d DOMAIN`, `r ROLE`, `s` (shell), `l URL`,
+`e 7d`, `k PATH` (the file holding the pre-auth key, which is never typed on screen),
+`i` signs, `w PATH` saves the token to a file (mode 0600 on Linux and macOS). `mint`
+does not start docker from the screen: it prints the `--mesh-token issue --mint`
+command line, ready to paste into a terminal, once `u USER` names the headscale user
+(required; `c NAME` sets its headscale container).
+
+**On the command line** (Qt-free):
+
+```sh
+# this Studio's issuer key for the mesh, and its fingerprint (created on first use)
+python -m hugmesh_studio.core.mesh_token issuer --mesh west
+# mint a single-use pre-auth key in a running headscale container, sign with the Studio
+# issuer key (--headscale-user is required with --mint)
+python -m hugmesh_studio.core.mesh_token issue --mesh west --domain example.org \
+  --role admin --shell --login-server https://hs.example.org --mint \
+  --headscale-user <user> --expires 7d
+# or bring your own issuer key and pre-auth key (read from a file, never the command line)
+python -m hugmesh_studio.core.mesh_token issue --key ~/.ssh/mesh_issuer \
+  --mesh west --domain example.org --role admin --shell \
+  --login-server https://hs.example.org --authkey-file key.txt --expires 7d
+```
+
+The Studio's own command forwards everything after `--mesh-token` to the same CLI:
+`python -m hugmesh_studio --mesh-token issue …`, `hugmesh-studio --mesh-token issue …`
+when installed with pip, and on Windows the MSI's console twin
+`hugmesh-studio-cli.exe --mesh-token issue …` (the windowed `hugmesh-studio.exe` prints
+nothing). `--mesh-token issue --help` lists every option; `--headscale-container`,
+`--headscale-user` (required there) and `--tag` go with `--mint`.
+
+**On the mesh.** An issuer in the mesh's web admin UI is being added on the mesh side.
+It signs the same v1 format ([`docs/HUGMESH-TOKEN.md`](../docs/HUGMESH-TOKEN.md)), so
+the tray treats its tokens the same way.
+
+#### Using a token
+
+Send the token, and separately send the issuer fingerprint. In the
+tray, **HugMesh token…** imports it. The first token from a new issuer asks you to
+compare that fingerprint before it is trusted. After that, **Start mesh node** runs the
+node only as the token allows:
+
+- the token is checked again at every start (signature, trusted issuer, not expired);
+- the login server must be inside the token's domain;
+- only admin and superadmin can hold shell access, and the node's Tailscale SSH server is
+  on (`--ssh`) only when it is granted, otherwise explicitly off;
+- the `tailscale up` arguments come from the token alone, so a `TS_EXTRA_ARGS` in the
+  environment cannot widen it;
+- a node whose token expires, is forgotten, or whose issuer is no longer trusted is
+  stopped (the tray checks every minute).
+
+The tray's status line shows the grant (for example *admin in example.org, SSH in*).
+Without a token, the tray still runs a node on `TS_AUTHKEY`.
+
+**Role and domain are labels; the mesh decides what this node may do. The pre-auth key
+only lets it join.** The mesh's `ssh` policy decides who may open a shell where. The
+token makes this tray run the node exactly as granted and refuses an edited token, but
+whoever holds a token holds a real pre-auth key, so issue tokens only to people you
+would give that key to.
+
+**Resource limits** saved from the tray apply to a token-run node too. If the mesh node
+is running when you save them, the tray restarts it under the new limits straight away.
+
 Fleet builds (every role for the selected platforms in one run; the GUI front-end to
 `scripts/build-all-roles.sh`). The wizard's Prior-sessions page also reaches it, but that
 button shows only when `HUGMESH_STUDIO_ADVANCED` is set:
@@ -596,6 +710,75 @@ driven by `tests/e2e/studio-org-export-driver.py` (the real wizards offscreen ov
 stand-ins; run as the Code folders ones above, with `-g "exports a domain's repositories"`). The
 full flow, the rename map's format and what a person still has to set up are in
 [docs/GOLIVE-ORG-EXPORT.md](../docs/GOLIVE-ORG-EXPORT.md).
+
+## QEMU for Windows (WHPX)
+
+Every emulation lane of the Studio (the QEMU device tests, the AVC workout, the Playwright
+suite, whole-mesh emulation) is a bash script driving QEMU inside Docker, so a native
+Windows Studio refuses them with the WSL2 sentence. QEMU for Windows is the one lane that
+runs there with no bash, Docker or WSL2: QEMU's own Windows build, accelerated by the
+Windows Hypervisor Platform (`-accel whpx`), driven from Python (`core/qemu_windows.py`).
+
+**Install** once, then restart Windows:
+
+```bat
+winget install --id SoftwareFreedomConservancy.QEMU -e
+REM in an administrator terminal:
+DISM /Online /Enable-Feature /FeatureName:HypervisorPlatform /All
+```
+
+The QEMU installer records its folder in the registry and does not touch `PATH`; the
+Studio looks there (then in `%ProgramFiles%\qemu`, then on `PATH`) for
+`qemu-system-x86_64.exe`, `qemu-img.exe` and the bundled x86 UEFI firmware. Until both are
+in place every face says which one is missing and prints its command.
+
+**What it boots.** ONE x86 device at a time, a thin desktop image or a single node, from a
+build session's `.img` or `.img.xz` (an `.xz` is unpacked once into
+`<work>/native-images`; `<work>` is `<generator>/out/qemu-runs` unless `--work` says
+otherwise). Each start gets a fresh qcow2 overlay, so the image itself is never written.
+The guest has 2 GiB of memory and 2 CPUs by default, and a start is refused when free
+memory cannot hold the guest plus 768 MiB kept for Windows. Ports are forwarded on
+`127.0.0.1` only: **2222** -> ssh, **8443** -> 443, **8080** -> 80. **Headless** (the
+default) writes the serial console to `console.log` in the device's run folder
+(`<work>/native-runs/<label>`); **window** opens the guest's screen in a QEMU window, for
+a thin desktop. Stop powers the guest off over QMP (ACPI power-off, then quit, then a
+kill) and deletes the overlay unless it was kept.
+
+- **GUI:** the **Mesh emulation** page's **Emulation backend** chooser, with **Show
+  desktop window** and **Memory** beside it. Each x86 row's Start, Stop and SSH then use
+  this backend. A native Windows Studio opens on it when QEMU and the hypervisor platform
+  are ready; everywhere else the default stays Docker, and choosing QEMU for Windows on
+  Linux shows why it is not offered there. The QEMU device tests page points here from
+  its WSL2 note.
+- **TUI:** start the journey (`python -m hugmesh_studio.tui`), pick **Start building**,
+  then the **Mesh emulation** card, and press **b** there to switch backend
+  (`--meshemu SESSION` only prints the Docker plan and exits; it has no backend key).
+  The screen spawns nothing: an x86 row shows what a start runs and the CLI line to
+  paste into a Windows terminal.
+- **CLI** (Qt-free; from the MSI use `hugmesh-studio-cli.exe`, the console twin):
+
+```bat
+hugmesh-studio --qemu-windows check
+hugmesh-studio --qemu-windows rows   --session SESSION
+hugmesh-studio --qemu-windows plan   --session SESSION --row x86/standalone-thin
+hugmesh-studio --qemu-windows start  --session SESSION --row x86/standalone-thin --window
+hugmesh-studio --qemu-windows status
+hugmesh-studio --qemu-windows stop   --row x86/standalone-thin
+python -m hugmesh_studio.core.qemu_windows start --img path\to\image.img.xz --mem 2048
+```
+
+`plan` prints exactly what `start` runs. Other options: `--ssh-port`, `--ui-port`,
+`--http-port`, `--smp`, `--work`, `--keep` (keep the overlay after stop), `--json`, and
+`--tcg` (no acceleration, very slow; only when the hypervisor platform cannot be turned
+on). A refusal exits 2 and prints `REFUSED:` with its sentence.
+
+**What stays refused, and why.** ARM and Raspberry Pi rows: WHPX accelerates only x86_64
+guests on an x64 PC, and those rows boot a kernel taken out of the image. Whole-mesh start
+and stop, and a second device while one runs: this backend boots one device at a time.
+The QMP console, the web tunnel, and saving a device's disk or the whole mesh: those are
+the Docker backend's runner. The QEMU device tests, the AVC workout and the Playwright
+suite: they boot and assert through bash scripts. All of these run on Linux, or in a
+Studio inside WSL2, on the Docker backend.
 
 ## Package a Windows .exe
 

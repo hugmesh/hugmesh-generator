@@ -27,6 +27,7 @@ from hugmesh_studio.core.config import (   # noqa: E402  (after the importorskip
 from hugmesh_studio.core.local_login_agent import load_manifest  # noqa: E402
 from hugmesh_studio.core.platform_info import HostInfo
 from hugmesh_studio.gui import wizard as wizard_mod
+from _helpers import type_login_password  # noqa: E402
 from hugmesh_studio.gui.pages.network import _AI_GROUP
 from hugmesh_studio.gui.qt import Qt, QtWidgets
 
@@ -80,6 +81,7 @@ def advance_to(wiz, page_cls):
         if isinstance(page, page_cls):
             return page
         before = wiz.currentId()
+        type_login_password(page)   # a standalone Home step refuses no password
         wiz.next()
         assert wiz.currentId() != before, \
             f"flow stuck on {type(page).__name__} (validatePage rejected?)"
@@ -335,6 +337,7 @@ def test_standalone_flow_skips_admin_pages(wiz):
         seen.append(type(wiz.currentPage()).__name__)
         if isinstance(wiz.currentPage(), wizard_mod.BuildPage):
             break
+        type_login_password(wiz.currentPage())
         wiz.next()
     assert seen == ["WelcomePage", "ModePage", "RolePage", "HardwarePage",
                     "BrandingPage", "NetworkPage", "SystemPage", "HomePage",
