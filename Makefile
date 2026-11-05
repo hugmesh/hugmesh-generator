@@ -1489,6 +1489,12 @@ kind-halt-status: ## read-only: is the DevOps lane halted, and what did the halt
 kind-halt-check: ## offline: prove kind-halt's refusals bite (stubbed kind/docker/kubectl; touches no cluster)
 	bash tests/scripts/test-kind-halt.sh
 
+# Offline guard for bootstrap-kind.sh's halt-record read (#529): `make kind-up`
+# over a halted cluster must refuse and name `make kind-resume`, an unreadable
+# record must refuse too, and only NotFound may take the reuse path.
+kind-up-halt-check: ## offline: prove kind-up refuses a HALTED cluster (stubbed kind/kubectl/docker; touches no cluster)
+	bash tests/scripts/test-kind-up-halted-refusal.sh
+
 # kind-doctor — the standing "can this cluster actually run the mesh?" check.
 #
 # hugmesh-generator#349: on 2026-09-10 this lane had been dead for two days

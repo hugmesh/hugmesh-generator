@@ -936,7 +936,13 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 #     208 of 249 suites are named by a pull_request-triggered workflow
 # and with the suite on disk but its shell-suites.yml line absent: '207 of 249' + check 3 and
 # check 7 red naming it -- so the +1/+1 is this suite and nothing else. Ungated SET stays 41.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-208}"
+# 208 -> 209 (denominator 249 -> 250) on 2026-11-04 for fix/kind-up-halted-refusal-20261104
+# (#529), which adds ONE gated suite: tests/scripts/test-kind-up-halted-refusal.sh (wired in
+# shell-suites.yml next to test-kind-halt.sh AND the Makefile kind-up-halt-check target).
+# MEASURED by RUNNING this file on that branch (base origin/main b1b50db4): with the suite on
+# disk but unwired, '208 of 250' + check 3 and check 7 red naming it; with its shell-suites.yml
+# line added, '209 of 250' -- so the +1/+1 is this suite and nothing else. Ungated SET stays 41.
+PREMERGE_BASELINE="${GUARD_PREMERGE:-209}"
 
 # 182 -> 192 (denominator 205 -> 215) on 2026-09-30 for #385: the census gained a
 # THIRD spelling, bare `tests/*.sh` at depth 1, and the ten suites it exposed were
