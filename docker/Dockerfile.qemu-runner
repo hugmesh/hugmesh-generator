@@ -21,7 +21,41 @@
 # container. tests/qemu/launch-pi.sh forwards host :8080 -> guest :80 and the
 # developer's live hugmesh-local stack already owns :8080 on the host. Because
 # the assertions SSH from inside this container to its OWN localhost, we never
-# publish those ports and therefore never collide with a running stack.
+# publish those ports and therefore never collide with a running stack. The ONE
+# exception is the display door below, and run-qemu-docker.sh publishes that to
+# 127.0.0.1 only (`-p 127.0.0.1:P:...`), never to 0.0.0.0.
+#
+# DISPLAY DOOR (2026-11-04): a kept-alive DESKTOP device can be opened in a
+# window on the host. What this image contributes to that, and what it does
+# not:
+#   * Native SPICE needs NOTHING added here. Bookworm's qemu-system-x86 and
+#     qemu-system-arm (7.2) already ship the SPICE server and the display
+#     devices as modules — PROBED in the built image, not read off a package
+#     list: ui-spice-core.so, chardev-spice.so, audio-spice.so,
+#     hw-display-virtio-vga.so, hw-display-virtio-gpu-pci.so, hw-display-qxl.so.
+#     That is why qemu-system-gui is NOT installed: it would add GTK/SDL front
+#     ends (and their X/Wayland library tree) for a container that renders to
+#     no local display at all (-display none stays).
+#   * The BROWSER FALLBACK (noVNC) is the only thing the apt line below adds:
+#     `novnc` for the static client under /usr/share/novnc, and `websockify`
+#     for /usr/bin/websockify (Debian splits that binary out of
+#     python3-websockify, which ships the module only). The entrypoint, in
+#     display-web mode, runs websockify against QEMU's VNC unix socket; it is
+#     opt-in because VNC auth is 8-char DES and only scales the picture, while
+#     SPICE resizes the guest.
+#   * Where it LISTENS is not decided here. Inside the container the SPICE and
+#     websockify sockets bind the container's own network namespace; what the
+#     host sees is run-qemu-docker.sh's decision and is loopback-only. The
+#     per-run password is a QEMU secret object read from a 0600 file under
+#     /work — never an argv, never an ENV in this image.
+#   * Side effects of those two packages, stated so nobody is surprised:
+#     python3 is now present (websockify needs it). The QMP client in
+#     run-qemu-docker.sh stays perl on purpose — perl is Essential and works
+#     with every runner image already on every machine, python3 only with
+#     images built from this Dockerfile onward. Debian's novnc also Depends on
+#     nodejs; that is NOT the Node the Playwright lane needs (no node_modules,
+#     no chromium), so run-qemu-e2e.sh's "the container ships no usable Node"
+#     refusal stays true in substance.
 #
 # Build:
 #   docker build -f docker/Dockerfile.qemu-runner -t hugmesh-qemu-runner:latest .
@@ -56,6 +90,13 @@ FROM debian:bookworm-slim
 #                    would put back a rootfs nobody checks.
 # xz-utils         : the artifacts ship as .img.xz / .stage4.tar.xz.
 # openssh-client   : the assertions are driven over ssh into the guest.
+# novnc            : the browser-fallback display client (static files under
+#                    /usr/share/novnc, served by websockify --web). See DISPLAY
+#                    DOOR above; the native SPICE path needs no package here.
+# websockify       : /usr/bin/websockify, the WebSocket-to-VNC bridge noVNC
+#                    talks to. It Depends on python3-websockify (the module),
+#                    which is listed too so the split is visible in this file
+#                    rather than discovered the day Debian re-cuts the package.
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
         qemu-system-arm \
@@ -69,6 +110,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         mtools \
         xz-utils \
         openssh-client \
+        novnc \
+        websockify \
+        python3-websockify \
         iproute2 \
         procps \
         jq \

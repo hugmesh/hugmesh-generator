@@ -1,0 +1,44 @@
+#%PAM-1.0
+# /etc/pam.d/lightdm — HugMesh desktop images (x86 + the ARM boards).
+#
+# Replaces the stock x11-misc/lightdm stack (pamd_mimic system-local-login: four
+# bare `include system-local-login` lines) with the SAME stack plus the SSO
+# login path in front of it. Baked BEFORE the payload emerge so CONFIG_PROTECT
+# keeps it (the builders assert the marker below survived; see
+# scripts/_desktop-sso-lib.sh). hugmesh-sso-greeter-stack
+#
+# How it reads, top to bottom, for one greeter attempt:
+#   1. pam_echo   shows the hint (how to sign in with SSO, or why SSO is off, and
+#                 where a first-boot one-time password went). Local facts only;
+#                 written by `sso-greeter probe` (greeter-setup-script) and
+#                 refreshed by every attempt. Missing file => nothing shown.
+#   2. pam_exec   prompts "Password:" ONCE (expose_authtok; the answer is passed
+#                 to the helper on stdin and stays in PAM_AUTHTOK for pam_unix's
+#                 try_first_pass, so the user is never asked twice). The helper
+#                 streams its lines to the greeter (stdout). Exit 0 => SSO signed
+#                 the user in: `success=done` ends the auth stack here. Any other
+#                 exit => `default=ignore`: the local path below decides, exactly
+#                 as if this line did not exist. The helper never consumes a
+#                 typed password for a local account.
+#   3. the stock  system-local-login -> system-login -> system-auth chain
+#                 (pam_nologin, faillock, pam_unix, pam_ecryptfs where wired).
+#
+# What `success=done` skips for an SSO login: pam_nologin (so /etc/nologin does
+# not block an SSO sign-in — put a `pam_nologin.so` line above the exec line if
+# that matters on an image), faillock (SSO attempts are bounded by the IdP, not
+# the local tally) and pam_ecryptfs unwrap (there is no password to unwrap with:
+# an SSO-managed home is plaintext on the LUKS root; --home-encrypted is a
+# local-account feature).
+#
+# Session: after pam_elogind (inside the include) has created XDG_RUNTIME_DIR,
+# the helper moves the verified access token parked at auth time into
+# /run/user/<uid>/hugmesh/oidc-token.src, the drop the desktop-governance chain
+# (hugmesh-sso-token --if-needed, oidc-token-deposit, the desktop-sudo mapper)
+# already reads. Nothing to hand off => no-op; never fails a session.
+auth		optional	pam_echo.so file=/run/hugmesh/sso-greeter/hint
+auth		[success=done default=ignore]	pam_exec.so quiet stdout expose_authtok /usr/lib/hugmesh/sso-greeter pam-auth
+auth		include		system-local-login
+account		include		system-local-login
+password	include		system-local-login
+session		include		system-local-login
+session		optional	pam_exec.so quiet /usr/lib/hugmesh/sso-greeter pam-session

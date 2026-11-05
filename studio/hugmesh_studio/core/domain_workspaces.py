@@ -61,6 +61,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import ntpath
 import os
 import re
 import shutil
@@ -100,6 +101,14 @@ SHARED_ROOT_NOTE = ("Every mesh with this own domain name shares this copies fol
                     "mesh before you remove another one's folders.")
 
 _MAX_NAME = 100
+
+#: Native Windows: the longest path the Win32 calls take without the ``\\?\`` prefix
+#: (MAX_PATH is 260 with the closing NUL). git is told ``core.longpaths`` there and goes
+#: past it; the Studio's own reads and writes inside a copy's ``.git`` (the marker,
+#: ``description``, ``hooks/fsmonitor-watchman.sample``) do not, and need this many
+#: characters below the copy's folder.
+_WIN_MAX_PATH = 259
+_WIN_GIT_RESERVE = 40
 
 
 # ── names ────────────────────────────────────────────────────────────────────────
@@ -247,6 +256,69 @@ def _links_below(root: str, path: str) -> str:
     return ""
 
 
+def _windows_path_problem(dest: str, osname: Optional[str] = None) -> str:
+    """Why a copy at ``dest`` cannot be made on native Windows because the path is too
+    long, or "". The domain's folder name is in the path twice (``<domain>\\<app>.
+    <domain>``), so a long domain name went past Windows' 260-character limit and git
+    stopped with "Filename too long". Elsewhere there is no such limit: always ""."""
+    if (osname or os.name) != "nt" or not dest:
+        return ""
+    longest = _WIN_MAX_PATH - _WIN_GIT_RESERVE
+    if len(dest) <= longest:
+        return ""
+    return (f"the copy's folder {dest} is {len(dest)} characters long; on Windows a "
+            f"copy's folder can be at most {longest} (Windows limits a path to 260 "
+            "characters, and the Studio writes inside the copy's .git folder). Use a "
+            "shorter domain name or mesh domain name, or set HUGMESH_STUDIO_STATE_DIR "
+            "to a shorter folder")
+
+
+def _git_for(osname: Optional[str] = None) -> GitRunner:
+    """The real git for making a copy. On native Windows it is told ``core.longpaths``:
+    the domain is in every path of a copy two or three times (its folder, the copy's
+    folder, ``.git/refs/remotes/<domain>``), and Git for Windows otherwise stops at 260
+    characters with "Filename too long". ``clone -c`` also writes the setting into the
+    new copy before anything is checked out, so every later git call in it (the
+    Studio's checks, the person's own work) has it too. Elsewhere: plain git."""
+    if (osname or os.name) != "nt":
+        return _run_git
+
+    def run(args, cwd):
+        args = list(args)
+        if args[:1] == ["clone"]:
+            args[1:1] = ["-c", "core.longpaths=true"]
+        return _run_git(["-c", "core.longpaths=true", *args], cwd)
+    return run
+
+
+def _git_tail(out: str, osname: Optional[str] = None, limit: int = 300) -> str:
+    """The end of git's output for a message. On native Windows git's lines carry the
+    long paths, so a plain last-300-characters slice started mid-word ("uld not create
+    work tree dir") and could cut off the line that says what went wrong; there whole
+    lines are kept, the first one that does not fit is cut at a space and marked "…",
+    and a "Filename too long" gets the remedy. Elsewhere the slice is unchanged."""
+    if (osname or os.name) != "nt":
+        return out[-limit:]
+    kept: list[str] = []
+    room = limit
+    for ln in reversed([ln.strip() for ln in out.splitlines() if ln.strip()]):
+        if len(ln) <= room:
+            kept.insert(0, ln)
+            room -= len(ln) + 1
+            continue
+        if room >= 40:                             # enough left to read its end
+            cut = ln[-(room - 1):]
+            space = cut.find(" ")
+            kept.insert(0, "…" + (cut[space + 1:] if 0 <= space < len(cut) // 2
+                                  else cut))
+        break
+    text = "\n".join(kept)
+    if "Filename too long" in out:
+        text += (" (a path in the copy is longer than Windows allows: a shorter domain "
+                 "name or mesh domain name makes every path in it shorter)")
+    return text
+
+
 def read_marker(folder: str) -> "dict | None":
     """The marker of a copy, or None. Nothing is followed through a link: the folder,
     its ``.git`` and the marker itself must all be real."""
@@ -385,7 +457,8 @@ def plan_workspaces(generator_dir: str, source_mode: str, source_dir: str, domai
                     mesh: str, *, state_root: Optional[str] = None,
                     environ=None, folder_map: "cf.CodeFolderMap | None" = None,
                     record_id: str = "",
-                    claims: "dict[tuple[str, str], str] | None" = None
+                    claims: "dict[tuple[str, str], str] | None" = None,
+                    osname: Optional[str] = None
                     ) -> WorkspacePlan:
     """The whole picture, read-only: for every domain row, the copies it should have,
     which exist, which cannot be made and why, and what is EXTRA. ``folder_map`` is the
@@ -395,7 +468,7 @@ def plan_workspaces(generator_dir: str, source_mode: str, source_dir: str, domai
     on that domain (:func:`saved_mesh_claims`, read only when there is such a copy);
     otherwise it is CLAIMED and never offered for removal. ``record_id`` is the saved
     record this mesh was loaded from (left out of the claims); ``claims`` replaces the
-    saved-mesh read (tests)."""
+    saved-mesh read (tests); ``osname`` is ``os.name`` unless a test passes another."""
     root = workspace_root(mesh, state_root)
     _claims: "list[dict[tuple[str, str], str]]" = [claims] if claims is not None else []
 
@@ -455,6 +528,8 @@ def plan_workspaces(generator_dir: str, source_mode: str, source_dir: str, domai
                 elif dest and os.path.lexists(dest):
                     reason = (f"{dest} already exists and was not made by the Studio; "
                               "move it away to make a fresh copy")
+                else:
+                    reason = _windows_path_problem(dest, osname)
             remote = ""
             if cloned:
                 got = marker.get("remote")
@@ -555,13 +630,17 @@ def _refuse(repo: WorkspaceRepo, root: str) -> str:
 
 
 def clone_repo(repo: WorkspaceRepo, domain: DomainWorkspace, mesh: str, root: str,
-               runner: Optional[GitRunner] = None) -> CloneResult:
+               runner: Optional[GitRunner] = None,
+               osname: Optional[str] = None) -> CloneResult:
     """``git clone`` the build checkout into the domain's folder, then name it for the
     domain: branch ``domain/<domain>``, ``.git/description``, ``hugmesh.*`` config, and
     the marker LAST (a copy whose naming failed has no marker, so it is never mistaken
-    for a finished one and never offered for removal)."""
-    run = runner or _run_git
-    why = _refuse(repo, root)
+    for a finished one and never offered for removal).
+
+    On native Windows the real git runs with ``core.longpaths`` (:func:`_git_for`).
+    ``osname`` is ``os.name`` unless a test passes another."""
+    run = runner or _git_for(osname)
+    why = _refuse(repo, root) or _windows_path_problem(repo.dest, osname)
     if why:
         return CloneResult(repo.app, repo.dest, False, why)
     try:
@@ -576,7 +655,7 @@ def clone_repo(repo: WorkspaceRepo, domain: DomainWorkspace, mesh: str, root: st
                      repo.dest], None)
     if code != 0:
         return CloneResult(repo.app, repo.dest, False,
-                           f"git clone failed: {out[-300:] or 'no output'}")
+                           f"git clone failed: {_git_tail(out, osname) or 'no output'}")
     for step in (["switch", "-c", f"domain/{domain.slug}"],
                  ["config", "hugmesh.domain", domain.name],
                  ["config", "hugmesh.app", repo.app],
@@ -586,7 +665,8 @@ def clone_repo(repo: WorkspaceRepo, domain: DomainWorkspace, mesh: str, root: st
         if code != 0:
             return CloneResult(repo.app, repo.dest, False,
                                f"git {' '.join(step[:2])} failed in {repo.dest}: "
-                               f"{out[-300:]}. The copy was left as it is, unmarked.")
+                               f"{_git_tail(out, osname)}. The copy was left as it is, "
+                               "unmarked.")
     git_dir = os.path.join(repo.dest, ".git")
     if _is_link(git_dir) or not os.path.isdir(git_dir):
         return CloneResult(repo.app, repo.dest, False,
@@ -615,7 +695,8 @@ def clone_repo(repo: WorkspaceRepo, domain: DomainWorkspace, mesh: str, root: st
 
 def clone_missing(plan: WorkspacePlan, domain_name: str,
                   runner: Optional[GitRunner] = None,
-                  progress: Optional[Callable[[int, int, str], None]] = None
+                  progress: Optional[Callable[[int, int, str], None]] = None,
+                  osname: Optional[str] = None
                   ) -> "list[CloneResult]":
     """Clone every copy ``domain_name`` is missing, one after another."""
     dom = next((d for d in plan.domains if d.name == domain_name and d.in_mesh), None)
@@ -626,7 +707,7 @@ def clone_missing(plan: WorkspacePlan, domain_name: str,
     for i, repo in enumerate(todo, 1):
         if progress:
             progress(i, len(todo), repo.app)
-        out.append(clone_repo(repo, dom, plan.mesh, plan.root, runner))
+        out.append(clone_repo(repo, dom, plan.mesh, plan.root, runner, osname))
     return out
 
 
@@ -944,10 +1025,22 @@ def _rmtree(path: str, osname: Optional[str] = None) -> None:
     rmtree stopped half-way: the hooks were already gone, the next look at the copy
     counted them as changed git settings, and the copy could never be removed again.
     Elsewhere a delete depends on the folder, not on the file, so the plain rmtree
-    stays (core/org_export.py has the same helper for its work folders)."""
+    stays (core/org_export.py has the same helper for its work folders).
+
+    On native Windows the tree is also removed through its ``\\\\?\\`` path: git made
+    the copy with ``core.longpaths`` (:func:`_git_for`), so its objects can lie past 260
+    characters, where a plain delete fails half-way the same way. A failure still names
+    the plain path."""
     if (osname or os.name) != "nt":
         shutil.rmtree(path)
         return
+    plain = ntpath.abspath(path)
+    if plain.startswith("\\\\?\\"):
+        prefix, long_path = "", plain
+    elif plain.startswith("\\\\"):                 # \\server\share\... (a UNC path)
+        prefix, long_path = "\\\\?\\UNC\\", "\\\\?\\UNC\\" + plain[2:]
+    else:
+        prefix, long_path = "\\\\?\\", "\\\\?\\" + plain
 
     def clear_and_retry(func, p, exc):
         if isinstance(exc, tuple):                 # onerror passes sys.exc_info()
@@ -959,10 +1052,18 @@ def _rmtree(path: str, osname: Optional[str] = None) -> None:
             raise exc
         os.chmod(p, stat.S_IWRITE)
         func(p)
-    if sys.version_info >= (3, 12):
-        shutil.rmtree(path, onexc=clear_and_retry)
-    else:                                          # pragma: no cover - older Pythons
-        shutil.rmtree(path, onerror=clear_and_retry)
+    try:
+        if sys.version_info >= (3, 12):
+            shutil.rmtree(long_path, onexc=clear_and_retry)
+        else:                                      # pragma: no cover - older Pythons
+            shutil.rmtree(long_path, onerror=clear_and_retry)
+    except OSError as exc:
+        for attr in ("filename", "filename2"):
+            name = getattr(exc, attr, None)
+            if prefix and isinstance(name, str) and name.startswith(prefix):
+                setattr(exc, attr, ("\\\\" if prefix.endswith("UNC\\") else "")
+                        + name[len(prefix):])
+        raise
 
 
 def remove_extra(extra: ExtraFolder, plan: WorkspacePlan,

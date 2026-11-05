@@ -322,6 +322,21 @@ RUN emerge --verbose --noreplace \
         sys-libs/libselinux \
         sys-apps/policycoreutils \
         '>=dev-python/gpep517-23'
+# keytool for the mesh KEYS step: the Studio on native Windows runs
+# scripts/gen-provision-keys.sh in THIS image (worklist_driver._genkeys_command), and
+# for the pki role that calls scripts/gen-keystores.sh, which refuses without keytool
+# ("ERROR: need keytool") — so every Windows mesh with a pki node ended keys FAILED.
+#   dev-java/openjdk-bin — the prebuilt JDK (no hours-long JDK compile); headless-awt
+#                          drops the X11/ALSA/CUPS deps a keytool-only image never uses.
+#                          java-config's /usr/bin/keytool runs the system VM, which the
+#                          first JDK merged becomes.
+# Its own layer, AFTER the emerge above, so adding it invalidates nothing cached; the
+# `command -v keytool` makes an image without it fail here, not at a keys step.
+RUN mkdir -p /etc/portage/package.use && \
+    printf '%s\n' 'dev-java/openjdk-bin headless-awt' \
+      > /etc/portage/package.use/hugmesh-keytool && \
+    emerge --verbose --noreplace dev-java/openjdk-bin && \
+    command -v keytool
 # ── Host-safety marker (belt-and-braces) ───────────────────────────────────────
 # scripts/_host-guard-lib.sh refuses to seed /etc/portage or run a host emerge
 # unless it can PROVE this root is disposable. Under Docker /.dockerenv (created
