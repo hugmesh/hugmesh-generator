@@ -60,6 +60,14 @@
 #                     `headscale nodes tag -t`) bypass tagOwners and still apply.
 #                     So the SSH source tag:superadmin and the SSH destinations
 #                     tag:mesh_/tag:dev_ are non-forgeable.
+#                     approval and rendered with an EMPTY owner list in
+#                     tagOwners. headscale 0.23 grants a node its forced tags
+#                     PLUS every advertised tag its user owns (a forced tag does
+#                     not cancel a different advertised one), so an owner here
+#                     that any pre-auth key is minted for would let that key's
+#                     holder self-assign the tag. No owner => an advertised
+#                     security tag is always invalid; only `headscale nodes tag`
+#                     (hugmesh-headscale-forcetags) can assign one.
 #   [FIX-DROPMESHRULE] the rendered acls[] DROPS the any-to-any
 #                     tag:hugmesh->tag:hugmesh:* rule and KEEPS only the
 #                     10.244/10.96 CIDR data-plane rule (k8s, not SSH).
@@ -239,12 +247,18 @@ render_policy() {
     fps="$(jq -r '[ .body.operators[]?.machineKeyFp // empty ] | unique | .[]' "${export_json}" 2>/dev/null)"
 
     # tagOwners dynamic suffix (leading comma + newline so it slots after the
-    # static tag:superadmin entry in the template). Owners are [] throughout.
+    # static tag:superadmin entry in the template). Every entry it emits is a
+    # SECURITY tag and gets an EMPTY owner list: no user, so no pre-auth key's
+    # node can self-advertise it (see [FIX-SERVERTAG]). tag:mesh_<MESH_ID> is
+    # declared too: it is the dst of the always-emitted SUPERADMIN rule, and
+    # headscale 0.23 cannot build ANY node's map while a policy names a tag that
+    # has neither a tagOwners entry nor a node already forced to carry it.
     local to_suffix=""
     local seen_tags=""
-    [ -n "${MESH_TAG#tag:mesh_}" ] || { warn "empty mesh tag — keeping current policy"; return 1; }
-    to_suffix=",
+    if [ -n "${MESH_TAG:-}" ]; then
+        to_suffix=",
     \"${MESH_TAG}\": []"
+    fi
     while IFS= read -r fp; do
         [ -n "${fp}" ] || continue
         short="$(dev_tag_for_fp "${fp}")"

@@ -28,7 +28,13 @@ id "${USER_NAME}" >/dev/null 2>&1 || { echo "hugmesh-home-setup: user ${USER_NAM
 USER_HOME="$(getent passwd "${USER_NAME}" | cut -d: -f6)"
 USER_HOME="${USER_HOME:-/home/${USER_NAME}}"
 
-log(){ echo "  [home-setup] $*"; }
+# Every line ALSO goes to the console. This runs from OpenRC's `local` service,
+# which discards stdout unless rc_verbose=yes, so a stdout-only log() never reached
+# the operator — including the one instruction they must act on ("run
+# ecryptfs-migrate-home -u <user> as root"). Same shape as 01-firstboot's banners.
+log() {
+    echo "  [home-setup] $*" | tee /dev/console 2>/dev/null || true
+}
 
 # ── 1. Per-user ecryptfs: wire pam_ecryptfs (idempotent) ─────────────────────
 # wire_pam_ecryptfs FILE — add pam_ecryptfs after the LAST line of each of the

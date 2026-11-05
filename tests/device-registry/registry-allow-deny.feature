@@ -26,8 +26,7 @@
 #     rendered ssh[] under headscale default-deny SSH semantics. [REAL-LAYER-A]
 #   * NEEDS-LIVE-MESH (called out per scenario, never hidden): the live kill of an
 #     ALREADY-ESTABLISHED session, that a booted sshd with AuthorizedKeysFile none
-#     ignores any stale baked key, that a LIVE headscale REJECTS a forged
-#     --advertise-tags (forced tag wins), genuine :22 unreachability, and that
+#     ignores any stale baked key, genuine :22 unreachability, and that
 #     MOD/USER keys are refused at a real :22. These are MODELED here against
 #     constructed device/license/export/node state. [MODEL]
 
@@ -143,10 +142,11 @@ Feature: The device-license registry compiles to a default-deny ALLOW+DENY SSH b
     # cross-mesh reach requires being force-tagged tag:superadmin on THAT mesh's control node
 
   Scenario: Server-forced destination tags are not self-applyable (forged-tag DENY) [REAL-LAYER-A]
-    Then tag:dev_* and tag:superadmin are listed in tagOwners with the EMPTY owner list []
-    # every node registers as the "hugmesh" user, so an owner of ["hugmesh"] is every node
-    And a forged --advertise-tags lands in invalid_tags while forced tags still apply
-    # the live rejection is proven against headscale 0.23.0 by test-headscale-tag-ownership.sh
+    Then tag:dev_* and tag:superadmin are listed in tagOwners with an EMPTY owner list
+    And no preauth key lets a node self-advertise them
+    # the live REJECTION of a forged --advertise-tags is proven by
+    # test-headscale-security-tag-live.sh (a forced tag does NOT cancel a different
+    # advertised one; only the empty owner list refuses it)
 
   # ── MOD / USER ──
 

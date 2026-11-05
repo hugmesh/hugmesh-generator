@@ -945,6 +945,15 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 #     208 of 249 suites are named by a pull_request-triggered workflow
 # and with the suite on disk but its shell-suites.yml line absent: '207 of 249' + check 3 and
 # check 7 red naming it -- so the +1/+1 is this suite and nothing else. Ungated SET stays 41.
+# 208 -> 209 (denominator 249 -> 250) on 2026-11-04 for ci/qemu-bdd-spike-20261104 (the
+# operator-approved QEMU-on-Actions trial), which adds ONE gated suite:
+# tests/qemu/actions-kvm-smoke_test.sh, the runner for tests/qemu/features/actions-kvm-smoke.feature,
+# wired in its OWN pull_request workflow .github/workflows/qemu-bdd-spike.yml (it needs KVM and
+# a downloaded ISO, so it is not a shell-suites.yml job). MEASURED by RUNNING this file on that
+# branch (base origin/main db6ec282):
+#     209 of 250 suites are named by a pull_request-triggered workflow
+# and with the suite on disk but qemu-bdd-spike.yml absent: '208 of 250' + check 3 and check 7
+# red naming it -- so the +1/+1 is this suite and nothing else. Ungated SET stays 41.
 # 207 -> 208 (denominator 248 -> 249) on 2026-11-04 for fix/standalone-login-password-20261104
 # (base origin/main 8ed37a3c), which adds ONE gated suite:
 # tests/scripts/test-standalone-login-firstboot.sh, wired in shell-suites.yml's debian job
@@ -961,8 +970,17 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # re-measures per the doctrine above.
 # MERGED (origin/main with #473 + #860 + this branch): 207 + 1 (#473) + 1 (#860) + 2 (this branch)
 # = 211 of 252, MEASURED by running this file on the merged tree.
-# MERGED (origin/main 3396828f into feat/mesh-token-g5-generator-device-headscal-20261104): 212 of 253, MEASURED by running this file on the merged tree.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-212}"
+# MERGED (origin/main 3396828f into ci/qemu-bdd-spike-20261104): 212 of 253, MEASURED by running this file on the merged tree.
+# 208 -> 210 (denominator 249 -> 251) on 2026-11-04 for fix/headscale-security-tag-owners-20261104,
+# which adds TWO gated suites: tests/device-registry/test-headscale-security-tag-owners.sh
+# (shell-suites.yml debian leg 1) and tests/device-registry/test-headscale-security-tag-live.sh
+# (shell-suites.yml host-docker job). MEASURED by RUNNING this file with GUARD_PREMERGE=0 on
+# that branch (base origin/main b1b50db4): '210 of 251 suites are named by a
+# pull_request-triggered workflow', ungated SET stays 41.
+# MERGED (origin/main fbe7f940 at 211 of 252 + this branch's 2) = 213 of 254, MEASURED by
+# running this file with GUARD_PREMERGE=0 on the merged tree; ungated SET stays 41.
+# MERGED (origin/main 3f3ed7bb into ci/qemu-bdd-spike-20261104): 214 of 255, MEASURED by running this file on the merged tree.
+PREMERGE_BASELINE="${GUARD_PREMERGE:-214}"
 
 # 182 -> 192 (denominator 205 -> 215) on 2026-09-30 for #385: the census gained a
 # THIRD spelling, bare `tests/*.sh` at depth 1, and the ten suites it exposed were

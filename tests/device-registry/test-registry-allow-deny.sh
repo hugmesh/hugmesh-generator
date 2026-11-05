@@ -361,18 +361,18 @@ if ssh_allowed "tag:superadmin" "superadmin" "tag:mesh_west-02 tag:hugmesh"; the
     bad "superadmin must NOT reach a node outside its mesh"
 else ok "node lacks tag:mesh_east-01 -> superadmin DENIED (mesh-membership is the precondition)"; fi
 
-echo "-- Case 18: FORGED TAG — server-assigned tags are owned by nobody, not self-applyable [REAL-LAYER-A] --"
-# A node self-advertising tag:dev_<otherfp> or tag:superadmin cannot win: those tags
-# carry the EMPTY owner list []. Every node registers as the "hugmesh" headscale user,
-# so an owner of ["hugmesh"] would have let ANY node claim them. The LIVE rejection
-# (invalid_tags, forced tags still applied) is proven against a real headscale by
-# tests/device-registry/test-headscale-tag-ownership.sh; the policy shape is asserted here.
+echo "-- Case 18: FORGED TAG — security tags are owned by NO user, so not self-applyable [REAL-LAYER-A] --"
+# A node self-advertising tag:dev_<otherfp> or tag:superadmin cannot win ONLY because
+# no user owns those tags: headscale 0.23 grants a node its forced tags PLUS every
+# advertised tag its own user owns, so a forced tag does not cancel a different
+# advertised one. Every pre-auth key is minted for "hugmesh"; had "hugmesh" owned
+# these, any key holder could claim them. The live rejection is proven by
+# tests/device-registry/test-headscale-security-tag-live.sh.
 ownerok=1
 strip "${LA_RENDERED}" | jq -e --arg t "${TAG_A}" '.tagOwners[$t] == []' >/dev/null 2>&1 || ownerok=0
 strip "${LA_RENDERED}" | jq -e '.tagOwners["tag:superadmin"] == []' >/dev/null 2>&1 || ownerok=0
-[ "${ownerok}" = 1 ] && ok "tag:dev_<fpA> + tag:superadmin have the EMPTY owner list -> no node can self-advertise a forged tag" \
-                     || bad "server-forced tags must have the EMPTY owner list [] (an owner of [\"hugmesh\"] is every node)"
-echo "   (live headscale proof: tests/device-registry/test-headscale-tag-ownership.sh)"
+[ "${ownerok}" = 1 ] && ok "tag:dev_<fpA> + tag:superadmin have an EMPTY owner list -> no node can self-advertise them" \
+                     || bad "security tags must have an EMPTY owner list in tagOwners (an owner is a user whose key holders can claim the tag)"
 
 # ───────────────────────────────────────────────────────────────────────────────
 echo

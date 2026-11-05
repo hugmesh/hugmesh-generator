@@ -549,6 +549,7 @@ jobs:
           - part: ''
             suites: |
               tests/auto-update/test-builder-opt-in.sh
+              tests/device-registry/test-headscale-security-tag-owners.sh
               tests/egress-vpn/test-vpn-reconcile-verify.sh
               tests/keystores/test-keystores-multidomain.sh
               tests/managed-services/test-managed-services-gate.sh
@@ -927,6 +928,13 @@ jobs:
     # tag:dev_*, tag:mesh_*, tag:dom_*) while forced tags still apply. Missing
     # docker or an image is a FAIL (exit 1), never a skip. MEASURED 2026-11-04 on
     # a Linux host with docker: 25 passed / 0 failed in about 60 s.
+    # tests/device-registry/test-headscale-security-tag-live.sh runs the PINNED
+    # headscale (headscale/headscale:<HEADSCALE_VERSION>) and stock
+    # tailscale/tailscale:v<TAILSCALE_VERSION> clients on a private --internal
+    # network and proves a membership pre-auth key cannot self-assign
+    # tag:superadmin; it exits 2 (a failure here) when docker or an image is
+    # unavailable. MEASURED 2026-11-04 on a Linux host with docker: 13 passed /
+    # 0 failed in ~8 s, and 6 failed against the unfixed policy.
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
@@ -942,6 +950,7 @@ jobs:
           SUITES="
             tests/boot/test-gpu-worker-node-labels.sh
             tests/device-registry/test-headscale-tag-ownership.sh
+            tests/device-registry/test-headscale-security-tag-live.sh
           "
           rc=0; failed=""; ran=0
           for t in $SUITES; do

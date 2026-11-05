@@ -11,9 +11,11 @@
 # the default-deny that ship NOW, which is the real Layer-A hardening.
 #
 # NOT covered here (needs a LIVE headscale + a running admin-bff /export — see the
-# NEEDS-HEADSCALE matrix in the PR body): that a real control node REJECTS a node
-# self-advertising tag:dev_<otherfp>/tag:dom_<other> (forced-tag override), and
-# that :22 is genuinely unreachable on a booted node for a denied edge.
+# NEEDS-HEADSCALE matrix in the PR body): that :22 is genuinely unreachable on a
+# booted node for a denied edge. That a real headscale REJECTS a self-advertised
+# security tag (because it has no owner — a forced tag does NOT override a
+# different advertised one) is proven against the pinned headscale by
+# test-headscale-security-tag-live.sh.
 
 Feature: Layer-A headscale SSH ACL is generated from the signed device-license export
 
