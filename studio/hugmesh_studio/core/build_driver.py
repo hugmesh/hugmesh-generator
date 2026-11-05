@@ -26,7 +26,8 @@ from collections.abc import Callable, Iterator
 
 from . import askpass, host_resources, platform_info, proc_text, resource_limits
 from . import secret_files, state_paths
-from .config import PLATFORM_FIELD_SUPPORT, ImageConfig, scope_violations, unaffiliated_image
+from .config import (PLATFORM_FIELD_SUPPORT, ImageConfig, scope_violations,
+                     standalone_login_problem, unaffiliated_image)
 from .platform_info import HostInfo, detect
 
 # Config fields holding a HOST path that the builder must be able to READ. Under the docker
@@ -91,6 +92,27 @@ _PATH_FLAG_OVERRIDES: dict[str, str] = {"brand_profile": "--config"}
 
 def _path_flag(field: str) -> str:
     return _PATH_FLAG_OVERRIDES.get(field, "--" + field.replace("_", "-"))
+
+
+# The login password rides a 0600 FILE at dispatch, never argv (secret_files.
+# stage_local_pass says why). ImageConfig.to_cli_args() keeps emitting
+# `--local-pass PASS` — the CLI/--print-cmd channel and every argv pin depend on it —
+# and run()/iter_run() swap that one pair for `--local-pass-file PATH` on the argv
+# they actually spawn. Under docker the file is bind-mounted read-only here.
+DOCKER_LOCAL_PASS_PATH = "/assets/local-pass/local-pass"
+
+
+def _swap_local_pass(argv: list[str], secret: str, path: str) -> list[str]:
+    """``argv`` with its structured ``--local-pass <secret>`` pair replaced by
+    ``--local-pass-file <path>``. Only the FIRST pair carrying exactly ``secret`` is
+    the structured emission (``extra_flags`` comes last and is the operator's own),
+    so that is the one swapped."""
+    out = list(argv)
+    for k in range(len(out) - 1):
+        if out[k] == "--local-pass" and out[k + 1] == secret:
+            out[k:k + 2] = ["--local-pass-file", path]
+            break
+    return out
 
 
 def _emitted_path_fields(cfg: ImageConfig) -> set[str] | None:
@@ -173,6 +195,38 @@ def _host_tool_present(*names: str) -> bool:
         if any(os.access(os.path.join(d, n), os.X_OK) for d in _SBIN_DIRS):
             return True
     return False
+
+
+def windows_docker_remedy(osname: str | None = None, docker_cli: bool | None = None,
+                          host: HostInfo | None = None) -> str:
+    """How to get a build backend on the native Windows Studio (the MSI), "" elsewhere.
+
+    Docker is its only backend, and Docker Desktop does not start with Windows by
+    default, so the usual cause is an installed but stopped Docker Desktop: the generic
+    "install Docker ... or run on a Gentoo host" told that user to install what they
+    have, plus a host the MSI cannot use. ``host`` lends its probe result (down / timeout
+    have their own wording in HostInfo.docker_remedy); ``docker_cli`` is whether
+    docker.exe is on PATH (probed when None); ``osname`` is ``os.name`` unless a test
+    passes another."""
+    if (osname or os.name) != "nt":
+        return ""
+    alt = ("Or run the Linux build of the Studio inside WSL2, with Docker Desktop's WSL "
+           "integration turned on for that distro.")
+    state = getattr(host, "docker_state", "")
+    if host is not None and state in (platform_info.DOCKER_DOWN, platform_info.DOCKER_TIMEOUT):
+        return host.docker_remedy() + " " + alt
+    if docker_cli is None:
+        docker_cli = (state != platform_info.DOCKER_MISSING
+                      and shutil.which("docker") is not None)
+    # Docker is probed once, at Studio start (wizard.host), and nothing re-asks before a
+    # restart: "check again" alone would show the same blocker forever.
+    if docker_cli:
+        return ("docker.exe is installed but the Docker engine does not answer: start "
+                "Docker Desktop, wait until it says the engine is running, then restart "
+                "the Studio so it checks again. " + alt)
+    return ("docker.exe was not found: install Docker Desktop "
+            "(https://www.docker.com/products/docker-desktop/), start it, then restart "
+            "the Studio so it checks again. " + alt)
 
 
 def docker_limit_args() -> list[str]:
@@ -474,7 +528,13 @@ class BuildDriver:
             env["HUGMESH_QEMU_E2E"] = "1"
         return env
 
-    def command(self, cfg: ImageConfig, backend: str | None = None) -> list[str]:
+    def command(self, cfg: ImageConfig, backend: str | None = None,
+                local_pass_file: str | None = None) -> list[str]:
+        """The builder invocation for ``cfg``. ``local_pass_file`` (dispatch only —
+        run()/iter_run() stage it) moves the login password off argv: the argv's
+        ``--local-pass PASS`` becomes ``--local-pass-file PATH`` (docker: the file
+        is mounted read-only at DOCKER_LOCAL_PASS_PATH). The preview channel passes
+        nothing and is unchanged."""
         backend = backend or self.host.default_backend
         out = self.workdir or cfg.output_dir or os.path.join(self.generator_dir, "out")
         # cfg.platform picks the builder (x86/rpi5/frite/jetson); all four scripts sit
@@ -489,6 +549,8 @@ class BuildDriver:
         # asset root are build-PHASE plumbing; everything after describes the image.
         inner = [script, "-w", "/out" if backend == "docker" else out,
                  "-j", str(cfg.jobs), *self._shared_assets_args(out), *cfg.to_cli_args()]
+        if local_pass_file and cfg.local_pass:
+            inner = _swap_local_pass(inner, cfg.local_pass, local_pass_file)
         penv = self._passthrough_env(cfg)
         if backend == "native":
             # run in the generator dir; needs root for the chroot/loop ops.
@@ -504,6 +566,12 @@ class BuildDriver:
             shared_mounts, shared_args = self._shared_assets_docker(out)
             dinner = [script, "-w", "/out", "-j", str(cfg.jobs), *shared_args,
                       *dcfg.to_cli_args()]
+            if local_pass_file and cfg.local_pass:
+                swapped = _swap_local_pass(dinner, dcfg.local_pass, DOCKER_LOCAL_PASS_PATH)
+                if swapped != dinner:
+                    dinner = swapped
+                    asset_mounts = [*asset_mounts, "-v",
+                                    f"{local_pass_file}:{DOCKER_LOCAL_PASS_PATH}:ro"]
             env_args: list[str] = []
             for k, v in penv.items():
                 env_args += ["-e", f"{k}={v}"]
@@ -759,9 +827,16 @@ class BuildDriver:
                 if askpass.looks_like_auth_failure(line):
                     auth_failed = True
                 _sink(line)
+        # The login password: a private 0600 file for this run, never argv.
+        pass_file: str | None = None
+        cleanup_pass: Callable[[], None] = lambda: None  # noqa: E731
         try:
-            code = self._stream(self.command(run_cfg, backend), watched_on_line, backend)
+            if run_cfg.local_pass:
+                pass_file, cleanup_pass = secret_files.stage_local_pass(run_cfg.local_pass)
+            code = self._stream(self.command(run_cfg, backend, local_pass_file=pass_file),
+                                watched_on_line, backend)
         finally:
+            cleanup_pass()
             cleanup_held()
         if (graphical_native and code != 0 and on_line is not None
                 and auth_failed and not self._cancel.is_set()):
@@ -804,10 +879,17 @@ class BuildDriver:
         backend = backend or self.host.default_backend
         out = self.workdir or cfg.output_dir or os.path.join(self.generator_dir, "out")
         os.makedirs(out, exist_ok=True)
-        proc = self._spawn(self.command(cfg, backend), backend)
-        assert proc.stdout is not None
-        yield from (line.rstrip("\n") for line in proc.stdout)
-        proc.wait()
+        pass_file: str | None = None
+        cleanup_pass: Callable[[], None] = lambda: None  # noqa: E731
+        try:
+            if cfg.local_pass:
+                pass_file, cleanup_pass = secret_files.stage_local_pass(cfg.local_pass)
+            proc = self._spawn(self.command(cfg, backend, local_pass_file=pass_file), backend)
+            assert proc.stdout is not None
+            yield from (line.rstrip("\n") for line in proc.stdout)
+            proc.wait()
+        finally:
+            cleanup_pass()
 
     def _docker_kill(self) -> None:
         subprocess.run(["docker", "kill", self._container_name],
@@ -872,8 +954,13 @@ class BuildDriver:
         """Return a list of human-readable problems that would stop a build (empty = OK)."""
         backend = backend or self.host.default_backend
         problems: list[str] = []
+        # Only for a host detected as Windows: a WSL host keeps its own remedy (the
+        # per-distro WSL-integration checkbox), and Linux keeps the generic sentence.
+        win_docker = windows_docker_remedy(host=self.host) if self.host.os == "windows" and (
+            backend == "none" or (backend == "docker" and not self.host.has_docker)) else ""
         if backend == "none":
-            problems.append("No build backend: install Docker (any OS) or run on a Gentoo host.")
+            problems.append(("No build backend: " + win_docker) if win_docker else
+                            "No build backend: install Docker (any OS) or run on a Gentoo host.")
         if not os.path.exists(os.path.join(self.generator_dir, cfg.builder_script)):
             problems.append(f"builder script {cfg.builder_script} not found in {self.generator_dir}"
                             + (" (Jetson support is EXPERIMENTAL — hardware validation pending)"
@@ -883,8 +970,12 @@ class BuildDriver:
             # daemon on the Windows side and exposes it per distro, so `docker info`
             # fails with a bare connection error that names neither Docker Desktop nor
             # the WSL-integration checkbox that actually caused it.
-            problems.append("Docker selected but the Docker daemon is not reachable. "
-                            + self.host.docker_remedy())
+            # A timed-out probe is "slow", not "unreachable": its remedy states the
+            # symptom itself (as HostInfo.docker_blocker does).
+            slow = win_docker and self.host.docker_state == platform_info.DOCKER_TIMEOUT
+            problems.append(("Docker selected. " if slow else
+                             "Docker selected but the Docker daemon is not reachable. ")
+                            + (win_docker or self.host.docker_remedy()))
         elif backend == "docker" and not self._image_present():
             problems.append(
                 f"Docker builder image '{self.host.builder_image}' not found — build it "
@@ -929,6 +1020,11 @@ class BuildDriver:
         # + a node role). Catching them here turns a post-dispatch dead-end into a second-0
         # message; the accepted-but-wrong shapes warn instead (see _config_warnings).
         problems += scope_violations(cfg)[0]
+        # A standalone image whose only login was never given a password: the build
+        # would succeed and produce an image nobody can log in to.
+        login = standalone_login_problem(cfg)
+        if login:
+            problems.append(login)
         return problems
 
     def preflight_warnings(self, cfg: ImageConfig, backend: str | None = None) -> list[str]:

@@ -84,6 +84,7 @@ from ..core import assistant_tips as atips
 from ..core import local_ai_status as lai
 from ..core import ollama_docker as odk
 from ..core import plain_words
+from ..tui import local_ai as tui_lai
 from . import styles
 from .qt import Qt, QtCore, QtGui, QtWidgets, Signal
 
@@ -475,6 +476,7 @@ class LocalWorkWindow(QtWidgets.QWidget):
     def show_snapshot(self, snap) -> None:
         """Render a snapshot now (the dock hands over the one it already has)."""
         self._set_commands()
+        snap.fix = tui_lai.windows_advice(snap.fix, odk.current_mode())
         self.snapshot = snap
         self.summary.setText(snap.summary)
         if snap.problem:
@@ -1600,6 +1602,7 @@ class LocalAIDock(QtWidgets.QFrame):
                 self._threads.submit("gpu", odk.detect_gpu)
 
     def apply_snapshot(self, snap) -> None:
+        snap.fix = tui_lai.windows_advice(snap.fix, self.ollama_mode)
         self.snapshot = snap
         line = snap.summary
         if self.ollama_mode == odk.DOCKER and line.startswith("Local AI:"):
@@ -2151,7 +2154,7 @@ class LocalAIDock(QtWidgets.QFrame):
             pass
 
     # ---- the buttons ----------------------------------------------------------------
-    def _worker_env(self, ctx) -> dict:
+    def _worker_env(self, ctx, osname: str | None = None) -> dict:
         """What the queue worker is started with beyond the Ollama address: the checkouts
         folder (draft.sh's HUGMESH_REPOS_ROOT) and the project-context file its agents
         read (HUGMESH_AGENT_CONTEXT, written fresh here with this mesh's domains, and
@@ -2159,6 +2162,12 @@ class LocalAIDock(QtWidgets.QFrame):
         `local-ai.sh start` makes when the text UI or a terminal starts the worker.
         Runs on the start thread."""
         env = self._env()
+        if lai.windows_refusal(osname) and not env.get(lai.STATE_ENV):
+            # The context is written into lai.state_dir(), the bash script's XDG rule:
+            # on native Windows that is %USERPROFILE%\.local\state, outside the Studio
+            # state dir (and the worker it is for cannot start there anyway).
+            from ..core import state_paths
+            env[lai.STATE_ENV] = os.path.join(state_paths.state_dir(), "local-ai")
         return actx.worker_env(self.generator_dir, ollama=odk.describe(self.ollama_mode),
                                source_mode=ctx.source_mode, source_dir=ctx.source_dir,
                                rows=ctx.domain_rows, mesh=ctx.mesh, environ=env)
@@ -2168,13 +2177,13 @@ class LocalAIDock(QtWidgets.QFrame):
         :meth:`start_assistant` (it must read the page on the window thread)."""
         return self._make_default_start()()
 
-    def _make_default_start(self):
+    def _make_default_start(self, osname: str | None = None):
         ctx = self._agent_context()               # widgets: read HERE, on the window thread
         mode = self.ollama_mode
         gen = self.generator_dir
 
         def run():
-            extra = self._worker_env(ctx)
+            extra = self._worker_env(ctx, osname)
             return odk.start_assistant(gen, mode, extra_env=extra)
         return run
 
@@ -2264,6 +2273,8 @@ class LocalAIDock(QtWidgets.QFrame):
                     self._offer_card(answer, _text, prompt)
         elif tag == "error":
             born, message = value
+            # "Start it with scripts/local-ai.sh up" is bash advice (native Windows)
+            message = tui_lai.windows_advice(str(message), self.ollama_mode)
             if born != self._clears:
                 return                       # Clear already released the dock; a newer question may own it
             prompt = self._last_prompt.pop(born, None)

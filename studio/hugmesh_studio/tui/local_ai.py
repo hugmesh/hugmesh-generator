@@ -43,9 +43,10 @@ from ..core import assistant_prompt as aprompt
 from ..core import assistant_tips as atips
 from ..core import local_ai_status as lai
 from ..core import ollama_docker as odk
+from ..core import platform_info
 
 __all__ = ["OPEN_COMMAND", "FOOTER_KEY", "LocalAIScreen", "Standalone", "status_line",
-           "plain_status_line"]
+           "plain_status_line", "native_windows_note", "windows_advice"]
 
 #: Typed into either face, it opens the screen. Hyphenated so it cannot collide with a
 #: value a journey step asks for.
@@ -85,6 +86,51 @@ def status_line(env: dict | None = None, *, key_hint: bool = True, slug: str = "
 def plain_status_line(env: dict | None = None, slug: str = "") -> str:
     """The plain face's line, printed above each prompt."""
     return f"[{lai.quick_line(env)} | type {OPEN_COMMAND}]" + _footer_tip(slug)
+
+
+def native_windows_note(osname: str | None = None) -> str:
+    """What replaces the run-it-yourself ``scripts/local-ai.sh`` lines in a NATIVE
+    Windows Studio (the MSI); "" anywhere else, WSL included. Shared with the Studio
+    window's panel, so both faces say the same.
+
+    Every one of those lines (start, todo, chat) is the bash script, which PowerShell
+    cannot run and System32's bash runs inside the Linux VM where a C:\\ path means
+    nothing; the panel's own questions go to Ollama over HTTP and need none of it."""
+    said = platform_info.native_windows_blocker(
+        "The local assistant's queue worker", osname=osname,
+        runs="the bash script scripts/local-ai.sh")
+    return f"{said} {lai.WINDOWS_NATIVE_PATH}" if said else ""
+
+
+#: core/local_ai_status's "bring Ollama up" advice names the bash script. In a native
+#: Windows Studio the system Ollama is Ollama for Windows, a native app; in Docker mode
+#: it is the Studio's own container. (old, system-mode new, Docker-mode new)
+_WINDOWS_UP = (
+    (", then run: scripts/local-ai.sh up",
+     "; Ollama for Windows then runs in the background on its own",
+     "; or start the Studio's Ollama container (Start local assistant, or start in the "
+     "text UI)"),
+    ("Start it with: scripts/local-ai.sh up",
+     "Start Ollama for Windows from the Start menu.",
+     "Start the Studio's Ollama container (Start local assistant, or start in the text "
+     "UI)."),
+    ("Start it with scripts/local-ai.sh up",
+     "Start Ollama for Windows from the Start menu",
+     "Start the Studio's Ollama container (Start local assistant, or start in the text "
+     "UI)"),
+)
+
+
+def windows_advice(text: str, mode: str = "", osname: str | None = None) -> str:
+    """``text`` (a snapshot's fix, or the not-answering message) with its
+    ``scripts/local-ai.sh up`` advice replaced by what works in a native Windows
+    Studio; unchanged anywhere else. ``mode`` is the Ollama in use (odk.SYSTEM /
+    odk.DOCKER): in Docker mode the container, not Ollama for Windows, is the fix."""
+    if not text or not native_windows_note(osname):
+        return text
+    for old, system, docker in _WINDOWS_UP:
+        text = text.replace(old, docker if mode == odk.DOCKER else system)
+    return text
 
 
 _HELP = [
@@ -301,7 +347,7 @@ class LocalAIScreen:
         try:
             answer = self._ask(j, line.strip())
         except lai.LocalAIError as exc:
-            self.message = str(exc)
+            self.message = windows_advice(str(exc), odk.current_mode())
             if self._last_prompt is not None:
                 fb = aprompt.fallback_line(self._last_prompt)
                 if fb:

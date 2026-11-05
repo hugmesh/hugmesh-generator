@@ -90,6 +90,14 @@ def _pinned(monkeypatch, tmp_path):
 
 
 @pytest.fixture
+def posix_sentences(monkeypatch):
+    """Pin the Linux/WSL wording on any host. On native Windows the panel replaces its
+    scripts/local-ai.sh lines and advice with what runs there (see
+    test_windows_sweep_c4.py); these tests are about the scripts/local-ai.sh wording."""
+    monkeypatch.setattr(tui_local_ai, "native_windows_note", lambda osname=None: "")
+
+
+@pytest.fixture
 def shell(qapp):
     sh = shell_mod.StudioShell(GENERATOR_DIR)
     yield sh
@@ -277,6 +285,7 @@ def test_a_long_status_shortens_itself_and_pushes_nothing_out(shell, qapp):
     assert dock.sizeHint().width() < 700 and dock.minimumSizeHint().width() < TINY.width()
 
 
+@pytest.mark.usefixtures("posix_sentences")
 def test_a_problem_is_shown_in_words_with_the_fix(shell, qapp):
     wiz = open_at(shell, qapp, SMALLEST)
     dock = wiz.local_ai_dock
@@ -669,6 +678,7 @@ def test_stop_ends_a_running_answer(qapp):
     dock.close()
 
 
+@pytest.mark.usefixtures("posix_sentences")
 def test_a_failed_prompt_says_why_and_the_dock_stays_usable(qapp):
     def prompt_fn(text, history, on_chunk, should_stop):
         raise lai.LocalAIError("Ollama is not answering on 127.0.0.1:11434. Start it with scripts/local-ai.sh up")
@@ -703,6 +713,7 @@ def test_start_runs_off_the_window_thread_and_reports_inline(qapp):
     dock.close()
 
 
+@pytest.mark.usefixtures("posix_sentences")
 def test_when_it_cannot_start_the_work_window_opens_with_the_exact_command(qapp):
     def start_fn():
         return lai.StartResult(False, "scripts/local-ai.sh is missing.", "/x/scripts/local-ai.sh start")

@@ -499,6 +499,13 @@ def _probe(env: dict | None, timeout: float) -> tuple[bool, list, list, str]:
     return True, models, loaded, ""
 
 
+def _native_windows(osname: str | None) -> bool:
+    """A NATIVE Windows Studio (the MSI, or a source run under PowerShell), where
+    ``scripts/local-ai.sh`` is a bash script nobody can run and the doc path is not on
+    disk. ``osname`` is ``os.name`` unless a test passes another."""
+    return (os.name if osname is None else osname) == "nt"
+
+
 def read_snapshot(env: dict | None = None, *, now: float | None = None,
                   probe: Callable[[], tuple] | None = None,
                   builds: Callable[[], list] | None = None,

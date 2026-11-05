@@ -58,6 +58,15 @@ def assert_up_advice(text):
 
 
 @pytest.fixture
+def posix_sentences(monkeypatch):
+    """Pin the Linux/WSL wording on any host. On native Windows the status read and the
+    not-answering message name Ollama for Windows instead of scripts/local-ai.sh (see
+    test_windows_sweep_c4.py and c10); these tests are about the scripts/local-ai.sh
+    sentence."""
+    monkeypatch.setattr(lai, "_native_windows", lambda osname=None: False)
+
+
+@pytest.fixture
 def worker_proc():
     """A live process whose command line contains ``local-ai`` (what the heartbeat rule
     looks for), standing in for scripts/local-ai/worker.sh."""
@@ -330,6 +339,7 @@ def test_active_studio_build_sessions_come_from_the_session_records(fake, env, t
     assert [j.id for j in snap.of_kind("build")] == [s.id]
 
 
+@pytest.mark.usefixtures("posix_sentences")
 def test_ollama_down_names_the_fix_and_the_doc(env, monkeypatch, tmp_path):
     env = dict(env, OLLAMA_HOST="127.0.0.1:1")                 # nothing listens on port 1
     monkeypatch.setattr(lai.shutil, "which", lambda name: "/usr/bin/ollama")
@@ -566,6 +576,7 @@ def half_dead(fake, how):
 
 
 @pytest.mark.parametrize("how", list(NOT_WELL))
+@pytest.mark.usefixtures("posix_sentences")
 def test_a_server_that_dies_mid_reply_reads_as_not_answering_and_never_raises(fake, env, monkeypatch, how):
     half_dead(fake, how)
     monkeypatch.setattr(lai.shutil, "which", lambda name: "/usr/bin/ollama")
@@ -624,6 +635,7 @@ def test_a_ps_lookup_that_is_unwell_reads_as_up_with_nothing_loaded(fake, env, w
 
 
 @pytest.mark.parametrize("how", list(NOT_WELL))
+@pytest.mark.usefixtures("posix_sentences")
 def test_every_command_reports_a_half_dead_server_in_words(fake, env, monkeypatch, capsys, how):
     half_dead(fake, how)
     monkeypatch.setattr(lai.shutil, "which", lambda name: "/usr/bin/ollama")
@@ -713,6 +725,7 @@ def test_chat_loop_keeps_history_until_cleared(fake, env):
     assert len(bodies) == 2 and len(bodies[1]["messages"]) == 1       # /clear dropped the first exchange
 
 
+@pytest.mark.usefixtures("posix_sentences")
 def test_chat_loop_when_down_returns_one_with_the_fix():
     out = io.StringIO()
     assert lai.chat_loop(io.StringIO(""), out, env={"OLLAMA_HOST": "127.0.0.1:1"}) == 1
@@ -732,6 +745,7 @@ def test_main_status_exit_codes_and_json(fake, env, monkeypatch, capsys):
     assert lai.main(["ping"]) == 1
 
 
+@pytest.mark.usefixtures("posix_sentences")
 def test_main_prompt_prints_the_answer_or_a_sentence_on_stderr(fake, env, monkeypatch, capsys):
     for k, v in env.items():
         monkeypatch.setenv(k, v)

@@ -21,7 +21,8 @@ What is deliberately different:
   would spawn a container is printed as a copy-ready command). With ``mint`` the screen
   prints the ``--mesh-token issue --mint`` line that mints the single-use pre-auth key in
   the mesh's running headscale container and signs, in one run, on the command line.
-  Signing alone (``ssh-keygen -Y sign``, a second or so) does run here.
+  The line is printed only once a headscale user is named (``u USER``): there is no
+  default user. Signing alone (``ssh-keygen -Y sign``, a second or so) does run here.
 * THE PRE-AUTH KEY is never typed into this screen: the line would stay on the screen
   and in the terminal's scrollback. It is read from a file (``k PATH``), as the CLI's
   ``--authkey-file`` reads it, at the moment of signing, and is not kept afterwards.
@@ -36,7 +37,7 @@ from typing import Callable, Optional
 from ..core import mesh_token as mt
 
 __all__ = ["MeshTokenScreen", "TITLE", "FINGERPRINT_NOTE", "SHELL_ONLY_TIP",
-           "NO_KEY", "MINT_NOTE", "lifetime_text", "mint_argv", "mint_line"]
+           "NO_KEY", "MINT_NOTE", "NAME_USER", "lifetime_text", "mint_argv", "mint_line"]
 
 #: The dialog's title, word for word (test_tui_gui_parity pins it).
 TITLE = "Issue a HugMesh token"
@@ -58,8 +59,11 @@ NO_KEY = ("Give the file holding the headscale pre-auth key the token should car
 MINT_NOTE = ("This screen does not start docker. Run this line in a terminal: it mints a "
              "single-use pre-auth key in the mesh's running headscale container (the one "
              "named like headscale unless c NAME names it), expiring with the token, for "
-             f"the headscale user {mt.DEFAULT_MINT_USER} unless u USER names another, and "
-             "prints the signed token. Nothing secret is on it.")
+             "the headscale user named with u USER, and prints the signed token. Nothing "
+             "secret is on it.")
+
+#: Said instead of the mint line until a headscale user is named (there is no default).
+NAME_USER = f"Not ready: a headscale user must be named (u USER). {mt.NAME_MINT_USER}"
 
 DEFAULT_LIFETIME_S = 7 * 86400
 
@@ -200,7 +204,7 @@ class MeshTokenScreen:
                f"{mt.MAX_LIFETIME_S // 86400}d)",
                f"  pre-auth key   {key}"]
         if self.source == "mint":
-            out.append(f"  headscale user {self.hs_user or mt.DEFAULT_MINT_USER}")
+            out.append(f"  headscale user {self.hs_user or '(required: u USER)'}")
             out.append(f"  headscale container "
                        f"{self.hs_container or '(the running one named like headscale)'}")
         out.append("")
@@ -208,6 +212,8 @@ class MeshTokenScreen:
             why = self.problem()
             if why:
                 out += [f"Not ready: {why}", ""]
+            elif not self.hs_user:
+                out += [NAME_USER, ""]
             else:
                 out += [MINT_NOTE, "  " + mint_line(self.fields(), user=self.hs_user,
                                                     container=self.hs_container), ""]
@@ -308,7 +314,7 @@ class MeshTokenScreen:
     def _issue(self, j) -> None:
         self._clear_result()
         if self.source == "mint":
-            why = self.problem()
+            why = self.problem() or (NAME_USER if not self.hs_user else "")
             j.status = (why or "This screen does not start docker: run the line above in "
                                "a terminal to mint the key and sign.")
             return
@@ -355,8 +361,7 @@ class MeshTokenScreen:
             + ("" if existed else " (this issuer key was created now; this computer "
                                   "trusts it)"),
             FINGERPRINT_NOTE, "",
-            f"Issued: {grant}. The server still decides: the pre-auth key's tags and "
-            "the headscale ssh policy set what the node may reach. The token carries "
+            f"Issued: {grant}. {mt.SERVER_DECIDES} The token carries "
             f"the pre-auth key now, so {self.key_file} is not needed for this token; a "
             "reusable key stays valid until it expires or is expired in headscale."]
 

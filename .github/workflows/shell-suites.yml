@@ -364,6 +364,7 @@ jobs:
             tests/desktop-governance/test-desktop-sudo-mapper.sh
             tests/desktop-governance/test-gen-sso-session-start.sh
             tests/desktop-governance/test-provision-desktop-governance.sh
+            tests/desktop-governance/test-sso-greeter.sh
             tests/device-registry/test-registry-allow-deny.sh
             tests/device-registry/test-self-report.sh
             tests/domain-registry/test-domain-reconcile-verify.sh
@@ -414,6 +415,7 @@ jobs:
             tests/scripts/test-catalog-discovery-gate.sh
             tests/scripts/test-cloud-package.sh
             tests/scripts/test-container-image-tags.sh
+            tests/scripts/test-desktop-sso-bake.sh
             tests/scripts/test-download-verify.sh
             tests/scripts/test-dracut-cross-lib.sh
             tests/scripts/test-e2e-persona-catalogue.sh
@@ -547,6 +549,7 @@ jobs:
           - part: ''
             suites: |
               tests/auto-update/test-builder-opt-in.sh
+              tests/device-registry/test-headscale-security-tag-owners.sh
               tests/egress-vpn/test-vpn-reconcile-verify.sh
               tests/keystores/test-keystores-multidomain.sh
               tests/managed-services/test-managed-services-gate.sh
@@ -563,6 +566,7 @@ jobs:
               tests/scripts/test-client-connect-routes.sh
               tests/scripts/test-db-connection-budget.sh
               tests/scripts/test-deeplink-remote-coverage.sh
+              tests/desktop-governance/test-sso-greeter.sh
               tests/scripts/test-e2e-shell-nav-entry.sh
               tests/scripts/test-e2e-spec-symbol-resolution.sh
               tests/scripts/test-eso-provider-refs.sh
@@ -576,6 +580,7 @@ jobs:
               tests/scripts/test-mfa-raw-jwt-posture.sh
               tests/scripts/test-mfa-required-rules.sh
               tests/scripts/test-passhash-lib.sh
+              tests/scripts/test-standalone-login-firstboot.sh
               tests/scripts/test-pki-role-san-coverage.sh
               tests/scripts/test-provision-keys-escrow-guard.sh
               tests/scripts/test-python-targets-seed.sh
@@ -916,6 +921,13 @@ jobs:
     # one suite on disk that nothing ran (check 3 and check 7b of
     # tests/scripts/test-guard-integrity.sh both named it): it landed in 1abc9bf3 /
     # 2ab3325f with neither this file nor .gitlab-ci.yml naming it.
+    # tests/device-registry/test-headscale-security-tag-live.sh runs the PINNED
+    # headscale (headscale/headscale:<HEADSCALE_VERSION>) and stock
+    # tailscale/tailscale:v<TAILSCALE_VERSION> clients on a private --internal
+    # network and proves a membership pre-auth key cannot self-assign
+    # tag:superadmin; it exits 2 (a failure here) when docker or an image is
+    # unavailable. MEASURED 2026-11-04 on a Linux host with docker: 13 passed /
+    # 0 failed in ~8 s, and 6 failed against the unfixed policy.
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
@@ -930,6 +942,7 @@ jobs:
         run: |
           SUITES="
             tests/boot/test-gpu-worker-node-labels.sh
+            tests/device-registry/test-headscale-security-tag-live.sh
           "
           rc=0; failed=""; ran=0
           for t in $SUITES; do

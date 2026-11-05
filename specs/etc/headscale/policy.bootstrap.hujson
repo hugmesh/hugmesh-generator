@@ -26,27 +26,27 @@
   // CIDR rule + route auto-approval); the mesh-join flow (preauth key,
   // --advertise-tags=tag:hugmesh) is UNTOUCHED by Layer-A.
   //
-  // The SECURITY tags below — tag:dev_*, tag:dom_*, tag:mesh_*, tag:superadmin —
-  // are owned by the "hugmesh" control user ONLY and are SERVER-FORCED via
-  // `headscale nodes tag` at approval (hugmesh-headscale-forcetags). A node
-  // CANNOT self-advertise them; that is the FIX-SERVERTAG hardening that makes
-  // the SSH dst non-forgeable. They appear in the bootstrap tagOwners so the
-  // policy parses and forced-tag assignment is permitted even before the first
-  // export render. NOTE: headscale tagOwners keys must be exact tag strings;
-  // the per-node/per-domain tags are minted dynamically by the renderer, so the
-  // bootstrap file lists only the STATIC tags (tag:superadmin) + leaves the
-  // dynamic families to the rendered policy. tag:dev_*/tag:dom_*/tag:mesh_* are
-  // force-assigned by the control node, which already owns every node, so a
-  // forced tag does not require a tagOwners entry to be APPLIED — tagOwners only
-  // gates SELF-advertisement, which we forbid by never minting a preauth key for
-  // these tags. (See FORCETAGS note in gen-headscale-policy.sh.)
+  // The SECURITY tags — tag:superadmin, tag:mesh_*, tag:dev_*, tag:dom_* — are
+  // owned by NO user (empty owner list) and are SERVER-FORCED via
+  // `headscale nodes tag` at approval (hugmesh-headscale-forcetags). headscale
+  // 0.23 gives a node its forced tags PLUS every advertised tag its own user
+  // owns; a forced tag does not cancel a different advertised one. Every
+  // pre-auth key is minted for the MEMBERSHIP user "hugmesh", so if "hugmesh"
+  // owned tag:superadmin, any key holder could advertise it and get SSH as the
+  // privileged user on every node. With an empty owner list an advertised
+  // security tag is always invalid, while a forced one still applies (forcing
+  // does not consult tagOwners). Never give these tags an owner.
+  //
+  // headscale tagOwners keys must be exact tag strings, so only the STATIC
+  // tag:superadmin is listed here; the rendered policy adds tag:mesh_<id> and
+  // the per-node tag:dev_<fp> entries, also with empty owner lists.
   "tagOwners": {
     "tag:hugmesh": ["hugmesh"],
     "tag:pki": ["hugmesh"],
     "tag:be": ["hugmesh"],
     "tag:fe": ["hugmesh"],
     "tag:host": ["hugmesh"],
-    "tag:superadmin": ["hugmesh"]
+    "tag:superadmin": []
   },
 
   // ── Subnet-route auto-approval (UNCHANGED from #66) ───────────────────────

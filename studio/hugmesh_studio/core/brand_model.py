@@ -1082,7 +1082,7 @@ def _append_ways(lines: list[str], effects) -> None:
 
 
 # ── the generated builder profile (D5) ───────────────────────────────────────────────
-#: The one character set a profile value may hold: letters, digits, space and a few
+#: The one character set a profile value may hold: ASCII letters, digits, space and a few
 #: punctuation marks that mean nothing to a shell inside single quotes AND nothing to
 #: sed (= carries the slug=tenant pairs of TOR_BRANDS). Everything else — quotes, $, backticks, backslash, braces, ;|&<>*?!# — is
 #: refused, so a title like $(touch x) never reaches a file a builder sources.
@@ -1116,9 +1116,11 @@ def _profile_values(record: BrandRecord) -> dict[str, str]:
 def _profile_value_problems(record: BrandRecord) -> list[str]:
     """Every profile value that holds a character the generated profile may not carry,
     one sentence each. The one rule :func:`builder_profile` refuses on and
-    :func:`record_problems` reports, so ``validate`` and ``profile`` cannot disagree."""
+    :func:`record_problems` reports, so ``validate`` and ``profile`` cannot disagree.
+    The sentence says ASCII: PROFILE_SAFE_RE refuses ö or é, and "letters" alone made
+    the refusal of a title like Jörg Mesh contradict itself."""
     return [f"{k}: ‘{v}’ holds a character a generated profile may not "
-            "carry (letters, digits, space and . _ : / @ + , = - only)"
+            "carry (ASCII letters A-Z a-z, digits, space and . _ : / @ + , = - only)"
             for k, v in _profile_values(record).items()
             if not PROFILE_SAFE_RE.fullmatch(v)]
 

@@ -84,6 +84,7 @@ pages and BuildDriver consume it; the pure-core tests drive it directly.
 from __future__ import annotations
 
 import hashlib
+import ntpath
 import os
 import shutil
 import tempfile
@@ -180,6 +181,17 @@ def _read_capped(path: str) -> bytes:
         return fh.read()
 
 
+def _dir_display_name(path: str, osname: str | None = None) -> str:
+    """The name a held keys_usb dir is shown and recorded by: its basename. On native
+    Windows a KEYS stick is usually a drive's root (``E:\\`` holds ``Keys\\``), whose
+    basename is "", so the held row and the restart prompt named nothing; there the
+    root itself (``E:\\``, ``\\\\server\\share\\``) is the name. A Linux mount point
+    always has a basename. ``osname`` is ``os.name`` unless a test passes another."""
+    if (osname or os.name) != "nt":
+        return os.path.basename(path.rstrip(os.sep))
+    return ntpath.basename(path.rstrip("\\/")) or path
+
+
 class SecretFileVault:
     """The in-memory store, keyed by config field. Thread-safe: the GUI thread
     holds/drops while the worklist worker thread consumes (build_driver.run)."""
@@ -228,7 +240,7 @@ class SecretFileVault:
                 f"{KEYS_USB_MEMBERS[1]} — nothing to hold in memory (the builder "
                 f"reads exactly those; it would find no Secure Boot key here)")
         m = tuple(members)
-        return HeldSecretFile(field="keys_usb", name=os.path.basename(path.rstrip(os.sep)),
+        return HeldSecretFile(field="keys_usb", name=_dir_display_name(path),
                               origin=path, members=m, sha256=_digest(m))
 
     # ---- queries / lifecycle -------------------------------------------------
@@ -326,6 +338,30 @@ def materialize(entries) -> MaterializedSecretFiles:
         shutil.rmtree(root, ignore_errors=True)
         raise
     return MaterializedSecretFiles(root, paths)
+
+
+def stage_local_pass(password: str) -> tuple[str, "Callable[[], None]"]:
+    """Write the build-time LOGIN password to a private 0600 file for ONE build run
+    and return ``(path, cleanup)``; the builder reads it with ``--local-pass-file``.
+
+    Why a file: ``--local-pass PASS`` put the plaintext on the process list for the
+    whole build — ``sudo env … bash ./build-*.sh … --local-pass PASS`` natively, and
+    ``docker run … bash -c '… --local-pass PASS'`` under docker, where it also sits
+    in ``docker inspect`` for the container's lifetime. argv is world-readable in
+    /proc/<pid>/cmdline. An env var would move it to /proc/<pid>/environ and the
+    container config instead. A 0600 file under a 0700 ``mkdtemp`` dir is readable
+    only by its owner and root (the builder runs as root), and the caller's cleanup
+    removes it when the run ends — success, failure or cancel alike. Same dir/perm
+    contract as :func:`materialize`, never under the build workdir."""
+    root = tempfile.mkdtemp(prefix="hugmesh-login-")
+    os.chmod(root, 0o700)
+    path = os.path.join(root, "local-pass")
+    try:
+        _write_0600(path, password.encode("utf-8"))
+    except BaseException:
+        shutil.rmtree(root, ignore_errors=True)
+        raise
+    return path, (lambda: shutil.rmtree(root, ignore_errors=True))
 
 
 # ── restart support ──────────────────────────────────────────────────────────────────

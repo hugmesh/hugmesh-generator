@@ -178,6 +178,7 @@ def test_issue_signs_with_the_studio_issuer_and_shows_token_and_fingerprint(
     assert s.token in text and f"Issuer fingerprint: {fp}" in text
     assert "created now; this computer trusts it" in text
     assert step.FINGERPRINT_NOTE in text and g.describe() in text
+    assert mt.SERVER_DECIDES in text and "tags" not in text
     # the key file's content is never shown on its own line, and is not kept
     assert KEY not in text.replace(s.token, "")
     assert KEY not in repr(vars(s))
@@ -260,8 +261,13 @@ def test_mint_prints_the_cli_line_and_runs_nothing(at_token):
     _fill(j)
     j.feed("mint")
     text = _text(j)
-    assert "headscale user hugmesh" in text and "(the running one named like" in text
-    assert "--headscale-" not in text
+    assert "headscale user (required: u USER)" in text
+    assert "(the running one named like" in text
+    # no default headscale user: no line to run until one is named, and it says so
+    assert step.NAME_USER in text and mt.NAME_MINT_USER in text
+    assert "--mesh-token" not in text and "--headscale-" not in text
+    j.feed("i")
+    assert j.status == step.NAME_USER and s.token == ""
     j.feed("u ops")
     j.feed("c hugmesh-headscale")
     j.feed("i")
@@ -280,6 +286,9 @@ def test_mint_prints_the_cli_line_and_runs_nothing(at_token):
     assert "not a container name" in j.status and s.hs_container == "hugmesh-headscale"
     j.feed("c -")
     assert s.hs_container == "" and "--headscale-container" not in _text(j)
+    assert "--headscale-user ops" in _text(j)
+    j.feed("u -")
+    assert s.hs_user == "" and "--mesh-token" not in _text(j) and step.NAME_USER in _text(j)
     assert not os.path.exists(mt.issuer_dir("west"))
 
 
@@ -296,7 +305,9 @@ def test_the_printed_mint_line_is_one_the_cli_accepts(at_token, monkeypatch, cap
     _fill(j)
     j.feed("e 2d")
     j.feed("mint")
-    argv = step.mint_argv(s.fields())
+    j.feed("u joiners")
+    argv = step.mint_argv(s.fields(), user=s.hs_user)
+    assert step.mint_line(s.fields(), user=s.hs_user) in _text(j)
     seen = {}
     monkeypatch.setattr(mt, "find_headscale_container", lambda runner=None: "hs")
     monkeypatch.setattr(mt, "check_signing", lambda *a, **k: None)
@@ -313,7 +324,7 @@ def test_the_printed_mint_line_is_one_the_cli_accepts(at_token, monkeypatch, cap
         login_server="https://hs.example.org", auth_key=KEY, expires=2, issued=1,
         issuer="ssh-ed25519 AAAA"), b"", b""))
     assert mt.main(argv[argv.index("--mesh-token") + 1:]) == 0
-    assert seen["mint"]["user"] == "hugmesh" and seen["mint"]["lifetime_s"] == 2 * 86400
+    assert seen["mint"]["user"] == "joiners" and seen["mint"]["lifetime_s"] == 2 * 86400
     signed = {k: seen["issue"][k] for k in s.fields()}
     assert signed == s.fields()
 
