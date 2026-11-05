@@ -10,8 +10,8 @@
 #      matrix-ui's chat3d bridge and the games member Play screen's iframe both
 #      address). Unchanged.
 #   2. hugmesh-games-ui — the native-federation REMOTE `games` (hugmesh-games/
-#      games-ui, NOT hugmesh-games/frontend, which stays the standalone two-realm
-#      portal). It exposes './routes' (GAMES_ROUTES, the member catalog + play
+#      games-ui, NOT hugmesh-games/frontend, the standalone games-realm portal,
+#      which signs in only threewizards accounts). It exposes './routes' (GAMES_ROUTES, the member catalog + play
 #      screens the host mounts at /games) and './admin-routes'
 #      (GAMES_ADMIN_ROUTES, the admin screens the host mounts at /games/admin).
 #      Served by nginx-unprivileged on :8080, built with --base-href=/games/, so
@@ -28,10 +28,11 @@
 #      password-grant credentials the BFF's config requires to be non-empty.
 #      Reached ONLY through the fe route `games-bff` (Path=/games/api/**,
 #      StripPrefix=1 -> /api/** on the BFF); the route-access rows for
-#      /games/api/** (ROLE_GAMES|ROLE_ADMIN|ROLE_MOD) and /games/api/admin/**
+#      /games/api/** (ROLE_GAMES|ROLE_ADMIN) and /games/api/admin/**
 #      (ROLE_GAMES_ADMIN) gate it at the gateway, and the BFF's own
-#      SecurityConfig (/api/admin/** = hasRole ADMIN, player paths =
-#      authenticated()) gates it again inside.
+#      SecurityConfig (/api/admin/** = hasRole GAMES_ADMIN, player paths =
+#      authenticated()) gates it again inside. On this lane only the systems issuer
+#      exists; the cluster BFF trusts both realms (manifests/games/deployment.yaml).
 #   4. games-bff-db + games-cassandra-init — the BFF's own Postgres
 #      (threewizards) and a one-shot that creates the `threewizards` keyspace +
 #      tables on the PLATFORM cassandra (the BFF shares the core node; the
@@ -123,8 +124,8 @@ services:
       # The fe-gateway's bff-exchange mints the custody JWT against this same
       # Casdoor (HUGMESH_GATEWAY_BFF_EXCHANGE_ENABLED=true in compose.local.yaml),
       # so its `roles` claim is the systems role set CasdoorAuthorities maps to
-      # ROLE_GAMES / ROLE_ADMIN / ROLE_MOD / ROLE_USER (+ ROLE_ADMIN for a
-      # GAMES_ADMIN holder — the derived systems role IS the games admin here).
+      # ROLE_GAMES / ROLE_ADMIN / ROLE_MOD / ROLE_USER (+ ROLE_GAMES_ADMIN for a
+      # holder of the derived systems role; a bare ROLE_ADMIN is not a games admin).
       CASDOOR_ENDPOINT: http://casdoor:8000
       CASDOOR_ORGANIZATION: hugmesh
       # UNUSED password-grant client (no games-realm login exists on this lane);
