@@ -67,8 +67,9 @@ left WITHOUT them on purpose:
   silicon; nothing in `tegra234.config` is virt-aware, and the kernel is tuned
   for a Tegra234 DTB that QEMU's `virt` machine does not provide;
 * the L4T flavor is a hard error today, so there is no second kernel to equip;
-* no Jetson image has ever been booted, on hardware or in QEMU, from this repo —
-  adding a display stack here would advertise a capability nobody can verify.
+* no Jetson DISPLAY has ever been verified from this repo (launch-arm.sh can boot
+  the image on `-M virt` serial-only; no hardware boot is recorded) — adding a
+  display stack here would advertise a capability nobody has checked.
 
 So under the runner a Jetson desktop image is **serial only**: the runner attaches
 no display device, the device record carries no `display_port`, and the UI says
