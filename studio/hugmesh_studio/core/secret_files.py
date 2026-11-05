@@ -340,6 +340,30 @@ def materialize(entries) -> MaterializedSecretFiles:
     return MaterializedSecretFiles(root, paths)
 
 
+def stage_local_pass(password: str) -> tuple[str, "Callable[[], None]"]:
+    """Write the build-time LOGIN password to a private 0600 file for ONE build run
+    and return ``(path, cleanup)``; the builder reads it with ``--local-pass-file``.
+
+    Why a file: ``--local-pass PASS`` put the plaintext on the process list for the
+    whole build — ``sudo env … bash ./build-*.sh … --local-pass PASS`` natively, and
+    ``docker run … bash -c '… --local-pass PASS'`` under docker, where it also sits
+    in ``docker inspect`` for the container's lifetime. argv is world-readable in
+    /proc/<pid>/cmdline. An env var would move it to /proc/<pid>/environ and the
+    container config instead. A 0600 file under a 0700 ``mkdtemp`` dir is readable
+    only by its owner and root (the builder runs as root), and the caller's cleanup
+    removes it when the run ends — success, failure or cancel alike. Same dir/perm
+    contract as :func:`materialize`, never under the build workdir."""
+    root = tempfile.mkdtemp(prefix="hugmesh-login-")
+    os.chmod(root, 0o700)
+    path = os.path.join(root, "local-pass")
+    try:
+        _write_0600(path, password.encode("utf-8"))
+    except BaseException:
+        shutil.rmtree(root, ignore_errors=True)
+        raise
+    return path, (lambda: shutil.rmtree(root, ignore_errors=True))
+
+
 # ── restart support ──────────────────────────────────────────────────────────────────
 def missing_for_restart(held_records, v: SecretFileVault | None = None) -> list[dict]:
     """The subset of a session record's ``held_secret_files`` entries NOT currently in
