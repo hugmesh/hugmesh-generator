@@ -30,6 +30,9 @@ PW = "correct horse battery"
     (dict(mode="standalone", role="standalone-thin", platform="x86"), True),
     (dict(mode="standalone", role=UNAFFILIATED_ROLE, platform="x86"), True),
     (dict(mode="standalone", role="rpi5-desktop", platform="rpi5", standalone=True), True),
+    # headless appliance: its serial console shows the one-time password, a usable login
+    (dict(mode="standalone", role="orangepizero2", platform="orangepizero2",
+          standalone=True), False),
     (dict(mode="cloud", role="client", platform="x86"), False),
     (dict(mode="mesh", role="pki", platform="x86"), False),
 ])

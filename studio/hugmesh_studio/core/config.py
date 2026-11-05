@@ -2063,17 +2063,25 @@ def local_login_applies(cfg: "ImageConfig") -> bool:
 def standalone_login_required(cfg) -> bool:
     """Is the build-time local password the ONLY way into this image?
 
-    True exactly where the builder sets ``STANDALONE=true``: the x86 standalone-*
-    desktop roles (their builder arm presets it, ``role_presets_standalone``) and any
-    image carrying the composable ``--standalone`` flag. That image has no KEYS stick,
-    no SSO and a LOCKED root, and its first boot (specs/etc/local.d/
+    True where the builder sets ``STANDALONE=true`` on a DESKTOP: the x86 standalone-*
+    roles (their builder arm presets it, ``role_presets_standalone``) and a
+    desktop-class image carrying the composable ``--standalone`` flag. That image has
+    no KEYS stick, no SSO and a LOCKED root, and its first boot (specs/etc/local.d/
     01-firstboot.start.tmpl, standalone block) creates ``--local-user`` with the hash
-    of ``--local-pass``. With no password it mints a random one-time password whose
-    banner nobody sees on a graphical desktop, so the image cannot be logged in to.
+    of ``--local-pass``. With no password it mints a random one-time password and
+    prints it to /dev/console — behind the graphical greeter, where nobody reads it —
+    so the image cannot be logged in to.
+
+    NOT the headless ``--standalone`` appliances (orangepizero2/-2w/-zero3/-3-lts):
+    their console IS the login surface (serial), so the one-time password printed
+    there is a usable first login and they keep building without one.
 
     Tolerant ``getattr``: pages hand this ImageConfigs and worklist rows alike."""
-    return (role_presets_standalone(getattr(cfg, "role", "") or "")
-            or bool(getattr(cfg, "standalone", False)))
+    role = getattr(cfg, "role", "") or ""
+    if role_presets_standalone(role):
+        return True
+    return (bool(getattr(cfg, "standalone", False))
+            and image_class(getattr(cfg, "mode", "") or "", role) == "desktop")
 
 
 def standalone_login_problem(cfg) -> str:

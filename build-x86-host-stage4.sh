@@ -4283,7 +4283,7 @@ fi
 # 01-firstboot user is created) and read by the installer for adopt/restore.
 # UNAFFILIATED: same functional machinery under NEUTRAL names — the conf moves to
 # /etc/gentoo/home.conf, the helper installs as /usr/sbin/home-setup, and its
-# internal hugmesh-* literals (conf path, first-login-encrypt dotfile) are
+# internal hugmesh-* literals (conf path; the first-login-encrypt rename is now a no-op) are
 # rewritten on the staged copy. install-x86.sh's staged copy gets the matching
 # conf-path rewrite where the installer ISO is built (below).
 if ${UNAFFILIATED}; then
