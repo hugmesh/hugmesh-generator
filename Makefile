@@ -1740,6 +1740,21 @@ TOR_SOCKS_HOST_PORT ?= 9050
 # (`ls tests/stack/tor-onion/` -> hostname + brandb.hostname). Does nothing without
 # TOR=1, and a TOR=1 stack with no Tor domain is the one-onion stack it always was.
 TOR_ONION_DOMAINS ?=
+# HEADSCALE=1 — a tailnet control server for the LOCAL docker mesh, so it can mint
+# pre-auth keys and issue HugMesh tokens (docs/HUGMESH-TOKEN.md) from the web admin
+# UI and the Studio (docs/LOCAL-MESH-HEADSCALE.md). Adds compose.local.yaml's
+# `headscale` profile (hugmesh-headscale: headscale 0.23.0, policy mode file from
+# the DEVICE template, login server https://hs.<domain>:$(PUBLIC_HTTPS_PORT) through
+# the HTTPS front door, no new port) and the tests/stack/compose.headscale.yaml
+# overlay that hands admin-bff the API key + the issuer key and turns its
+# mesh-token endpoint on. Off by default, the tor/anubis shape: a plain stack-up's
+# env and compose argv are byte-identical to before. stack-up mints the issuer key
+# first (stack-mesh-token-key). Guard: tests/stack/test-headscale-local.sh.
+#   make stack-up HEADSCALE=1        then  make stack-mesh-token-key  (prints the fingerprint)
+# HEADSCALE_MESH_ID is the mesh id the tokens name and the policy's superadmin ssh
+# rule targets (tag:mesh_<id>); ^[a-z0-9][a-z0-9-]{0,62}$.
+HEADSCALE       ?=
+HEADSCALE_MESH_ID ?= hugmesh-local
 # TTS=1 — edge-ai-tts (Piper TTS + visemes; compose.edge-ai-tts.yaml, DEFAULT-OFF)
 TTS             ?=
 # POISONER=1 — the AI MEDIA CLOAK worker (hugmesh-media-poisoner;
@@ -2002,8 +2017,26 @@ STACK_POISONER_ENV := $(if $(strip $(POISONER)),MEDIA_POISONING_ENABLED='true' M
 # stack-down/stack-clean strip the key (--remove, which keeps any other line an
 # operator keeps in tests/stack/.env) AFTER `down -v` drops the volume, so the next
 # stack-up initialises both afresh. Guard: tests/stack/test-gen-route-access-env.sh.
+# HEADSCALE=1 wiring (the knob is documented above). The domain is the SAME
+# expression stack-certs mints the leaf for, so hs.<domain> is always a name the
+# front door's certificate covers. Everything is EMPTY without HEADSCALE=1, so a
+# plain bring-up's STACK_ENV and compose argv do not change (each non-empty value
+# carries its own leading space and is spliced in with none, the
+# STACK_TOR_DOMAINS_FLAGS spelling, so the empty case adds no byte). They sit after
+# $(STACK_BRAND_B_PROFILE), not next to the tor profile: the tor guards and the Studio's
+# tests anchor on the exact spelling around $(STACK_TOR_PROFILE) and $(STACK_EGRESS_FLAGS). The overlay -f goes on
+# build/up/logs/ps only: down/halt/clean reap with `--profile headscale` alone (the
+# overlay adds no container or volume of its own, and it names the issuer key file,
+# which a down must not require).
+STACK_HUGMESH_DOMAIN := $(if $(strip $(DOMAIN)),$(DOMAIN),hugmesh.net)
+STACK_MESH_TOKEN_DIR := tests/stack/.mesh-token
+STACK_HEADSCALE_COMPOSE := tests/stack/compose.headscale.yaml
+STACK_HEADSCALE_PROFILE := $(if $(strip $(HEADSCALE)), --profile headscale,)
+STACK_HEADSCALE_FLAGS := $(if $(strip $(HEADSCALE)), -f $(STACK_HEADSCALE_COMPOSE),)
+STACK_HEADSCALE_ENV := $(if $(strip $(HEADSCALE)), HUGMESH_DOMAIN='$(STACK_HUGMESH_DOMAIN)' HEADSCALE_MESH_ID='$(HEADSCALE_MESH_ID)',)
+STACK_HEADSCALE_DEP := $(if $(strip $(HEADSCALE)),stack-mesh-token-key,)
 STACK_ROUTE_ACCESS_ENV := ROUTE_ACCESS_DB_PASSWORD="$$(bash tests/stack/gen-route-access-env.sh --read)" 
-STACK_ENV := $(STACK_ROUTE_ACCESS_ENV)$(STACK_BRAND_B_ENV)$(STACK_POISONER_ENV)$(STACK_OIDC_ENV)$(STACK_THEME_ENV)$(STACK_TOR_DOMAINS_ENV) \
+STACK_ENV := $(STACK_ROUTE_ACCESS_ENV)$(STACK_BRAND_B_ENV)$(STACK_POISONER_ENV)$(STACK_OIDC_ENV)$(STACK_THEME_ENV)$(STACK_TOR_DOMAINS_ENV)$(STACK_HEADSCALE_ENV) \
              STACK_SRC='$(STACK_SRC)' CASDOOR_ISSUER_URI='$(CASDOOR_ISSUER)' \
              PUBLIC_HOST_PORT='$(PUBLIC_HOST_PORT)' \
              PUBLIC_HTTPS_PORT='$(PUBLIC_HTTPS_PORT)' \
@@ -2178,6 +2211,31 @@ stack-certs: ## mint the per-machine TLS CA + leaf for the https front door (ide
 	  echo "==> stack-certs: $(STACK_TLS_DIR)/server.crt present - keeping it (rm -rf $(STACK_TLS_DIR) to re-mint)"; \
 	fi
 
+.PHONY: stack-mesh-token-key
+# The local mesh's HugMesh-token ISSUER key (docs/HUGMESH-TOKEN.md "Trust"): an
+# ed25519 OpenSSH key in tests/stack/.mesh-token/issuer, gitignored, 0600, mounted
+# read-only into admin-bff ONLY (tests/stack/compose.headscale.yaml). The stack-certs
+# shape: minted once, kept after that, so the fingerprint the trays were told to
+# trust stays the same across stack-down (down -v drops volumes, never this file);
+# `rm -rf tests/stack/.mesh-token` rotates it. Prints the fingerprint and nothing
+# else about the key. ssh-keygen runs ONLY when the file is absent, with stdin
+# closed: an existing file would make it ask "Overwrite (y/n)?" and hang.
+stack-mesh-token-key: ## mint the local mesh's HugMesh-token issuer key (ed25519, idempotent; prints only its SHA256 fingerprint)
+	@d='$(STACK_MESH_TOKEN_DIR)'; k="$$d/issuer"; \
+	if [ -d "$$k" ]; then \
+	  echo "stack-mesh-token-key: $$k is a DIRECTORY (Docker creates one for a bind mount whose file is missing); remove it and re-run" >&2; exit 1; \
+	fi; \
+	if [ ! -f "$$k" ]; then \
+	  command -v ssh-keygen >/dev/null 2>&1 || { echo "stack-mesh-token-key: ssh-keygen not found (install openssh-client)" >&2; exit 1; }; \
+	  mkdir -p "$$d" && chmod 0700 "$$d" || exit 1; \
+	  ( umask 077 && ssh-keygen -q -t ed25519 -N '' -C '' -f "$$k" </dev/null >/dev/null ) || { echo "stack-mesh-token-key: ssh-keygen failed" >&2; exit 1; }; \
+	  echo "==> stack-mesh-token-key: minted $$k"; \
+	fi; \
+	chmod 0600 "$$k" || exit 1; \
+	fp="$$(ssh-keygen -lf "$$k" </dev/null 2>/dev/null | awk '{print $$2}')"; \
+	case "$$fp" in SHA256:?*) ;; *) echo "stack-mesh-token-key: $$k is not a readable ssh key" >&2; exit 1 ;; esac; \
+	echo "==> mesh-token issuer fingerprint: $$fp"
+
 .PHONY: stack-route-access-env
 # Ensure tests/stack/.env holds ROUTE_ACCESS_DB_PASSWORD (see STACK_ROUTE_ACCESS_ENV).
 # A prerequisite of stack-up, the target that creates containers: its exit status is
@@ -2185,8 +2243,8 @@ stack-certs: ## mint the per-machine TLS CA + leaf for the https front door (ide
 stack-route-access-env: ## ensure tests/stack/.env holds ROUTE_ACCESS_DB_PASSWORD (create-if-missing; stack-up runs it first)
 	@bash tests/stack/gen-route-access-env.sh
 
-stack-build: stack-clone stack-certs stack-m2-check $(STACK_SOCIAL_DEP) ## build every service from its cloned repo (no run)
-	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_M2_FLAGS) $(STACK_PROFILE) $(STACK_ALT_PROFILE) $(STACK_TOR_PROFILE) $(STACK_GAMES_PROFILE) $(STACK_BRAND_B_PROFILE) $(STACK_OWN_CASDOOR_FLAGS) $(STACK_LIMITS_FLAGS) $(STACK_LOOKS_FLAGS) $(STACK_EGRESS_FLAGS) build
+stack-build: stack-clone stack-certs stack-m2-check $(STACK_SOCIAL_DEP) $(STACK_HEADSCALE_DEP) ## build every service from its cloned repo (no run)
+	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_M2_FLAGS) $(STACK_PROFILE) $(STACK_ALT_PROFILE) $(STACK_TOR_PROFILE) $(STACK_GAMES_PROFILE) $(STACK_BRAND_B_PROFILE)$(STACK_HEADSCALE_PROFILE)$(STACK_HEADSCALE_FLAGS) $(STACK_OWN_CASDOOR_FLAGS) $(STACK_LIMITS_FLAGS) $(STACK_LOOKS_FLAGS) $(STACK_EGRESS_FLAGS) build
 
 # stack-up's LAST step reconciles gateway_route_access (the line right after
 # `up -d`, see stack-route-access-reconcile below): the volume's initdb seeds the
@@ -2199,14 +2257,15 @@ stack-build: stack-clone stack-certs stack-m2-check $(STACK_SOCIAL_DEP) ## build
 # would otherwise send the seed to that server and leave this table stale.
 # stack-halt -> stack-up is the resume path, so this covers it (and the Studio,
 # which shells out to `make stack-up`). Guard: tests/stack/test-route-access-reconcile.sh.
-stack-up: stack-route-access-env stack-clone stack-certs stack-m2-check $(STACK_SOCIAL_DEP) ## clone -> build -> run the FULL stack (ENV=test|prod; SOCIAL=1 adds matrix/mastodon)
+stack-up: stack-route-access-env stack-clone stack-certs stack-m2-check $(STACK_SOCIAL_DEP) $(STACK_HEADSCALE_DEP) ## clone -> build -> run the FULL stack (ENV=test|prod; SOCIAL=1 adds matrix/mastodon)
 	@echo "==> Local stack: ENV=$(ENV), issuer=$(CASDOOR_ISSUER), host port=$(PUBLIC_HOST_PORT), social=$(if $(strip $(SOCIAL)),on,off)$(if $(strip $(MFA)), mfa=ON(explicit),)$(if $(strip $(MFA_FLOOR)), mfa-floor=ON,)$(if $(wildcard $(STACK_M2_ENV)), m2-registry=on,)"
-	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_M2_FLAGS) $(STACK_PROFILE) $(STACK_ALT_PROFILE) $(STACK_TOR_PROFILE) $(STACK_GAMES_PROFILE) $(STACK_BRAND_B_PROFILE) $(STACK_OWN_CASDOOR_FLAGS) $(STACK_LIMITS_FLAGS) $(STACK_LOOKS_FLAGS) $(STACK_EGRESS_FLAGS) build
-	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_M2_FLAGS) $(STACK_PROFILE) $(STACK_ALT_PROFILE) $(STACK_TOR_PROFILE)$(STACK_TOR_DOMAINS_FLAGS) $(STACK_GAMES_PROFILE) $(STACK_BRAND_B_PROFILE) $(STACK_OWN_CASDOOR_FLAGS) $(STACK_LIMITS_FLAGS) $(STACK_LOOKS_FLAGS) $(STACK_EGRESS_FLAGS) up -d
+	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_M2_FLAGS) $(STACK_PROFILE) $(STACK_ALT_PROFILE) $(STACK_TOR_PROFILE) $(STACK_GAMES_PROFILE) $(STACK_BRAND_B_PROFILE)$(STACK_HEADSCALE_PROFILE)$(STACK_HEADSCALE_FLAGS) $(STACK_OWN_CASDOOR_FLAGS) $(STACK_LIMITS_FLAGS) $(STACK_LOOKS_FLAGS) $(STACK_EGRESS_FLAGS) build
+	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_M2_FLAGS) $(STACK_PROFILE) $(STACK_ALT_PROFILE) $(STACK_TOR_PROFILE)$(STACK_TOR_DOMAINS_FLAGS) $(STACK_GAMES_PROFILE) $(STACK_BRAND_B_PROFILE)$(STACK_HEADSCALE_PROFILE)$(STACK_HEADSCALE_FLAGS) $(STACK_OWN_CASDOOR_FLAGS) $(STACK_LIMITS_FLAGS) $(STACK_LOOKS_FLAGS) $(STACK_EGRESS_FLAGS) up -d
 	$(STACK_ENV) POSTGRES_HOST= ROUTE_ACCESS_CONTAINER= COMPOSE_CMD='$(COMPOSE_CMD)' STACK_COMPOSE='$(STACK_COMPOSE)' bash tests/stack/route-access-reconcile.sh
 	@echo "==> Up. Front door: http://localhost:$(PUBLIC_HOST_PORT)  |  https://localhost:$(PUBLIC_HTTPS_PORT)  | Casdoor: http://localhost:8000"
 	@echo "    (https uses the per-machine CA $(STACK_TLS_DIR)/ca.crt - import it to trust, or accept the browser warning)"
 	@echo "    Logs: make stack-logs   Down: make stack-down"
+	$(if $(strip $(HEADSCALE)),@echo "    Tailnet control server (HEADSCALE=1): https://hs.$(STACK_HUGMESH_DOMAIN):$(PUBLIC_HTTPS_PORT)  |  token issuer fingerprint: make stack-mesh-token-key",)
 
 # The post-seed registration note, chosen at PARSE time by
 # SEED_COMPLETE_REGISTRATION (a command-line assignment and an environment
@@ -2254,14 +2313,14 @@ stack-halt: ## stop the local stack but KEEP its data (identity, rooms, accounts
 	# whole mesh, so restarting left them unable to log in, post, or open the
 	# forum until a full re-seed. Containers and images still go; only the data
 	# survives, so `make stack-up` brings the same mesh back.
-	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) -f $(STACK_EGRESS_COMPOSE) --profile social --profile tor --profile anubis --profile phpbb --profile akkoma --profile games --profile brandb --profile edge-ai-tts --profile media-poisoner --profile egress-vpn $(STACK_OWN_CASDOOR_DOWN_FLAGS) down
+	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) -f $(STACK_EGRESS_COMPOSE) --profile social --profile tor --profile anubis --profile phpbb --profile akkoma --profile games --profile brandb --profile edge-ai-tts --profile media-poisoner --profile egress-vpn --profile headscale $(STACK_OWN_CASDOOR_DOWN_FLAGS) down
 
 stack-down: ## stop the local stack and DROP ITS VOLUMES (destroys identity/rooms/accounts — use stack-halt to keep them)
 	# Every profile is listed UNCONDITIONALLY (not via the PHPBB=1/AKKOMA=1
 	# knobs): `down` must reap containers started by an EARLIER `up` whose knobs
 	# this invocation does not repeat, or `make stack-down` leaves the phpbb/
 	# akkoma containers and volumes orphaned while reporting success.
-	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) -f $(STACK_EGRESS_COMPOSE) -f $(STACK_TOR_DOMAINS_COMPOSE) --profile social --profile tor --profile anubis --profile phpbb --profile akkoma --profile games --profile brandb --profile edge-ai-tts --profile media-poisoner --profile egress-vpn $(STACK_OWN_CASDOOR_DOWN_FLAGS) down -v
+	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) -f $(STACK_EGRESS_COMPOSE) -f $(STACK_TOR_DOMAINS_COMPOSE) --profile social --profile tor --profile anubis --profile phpbb --profile akkoma --profile games --profile brandb --profile edge-ai-tts --profile media-poisoner --profile egress-vpn --profile headscale $(STACK_OWN_CASDOOR_DOWN_FLAGS) down -v
 	bash tests/stack/gen-route-access-env.sh --remove
 
 # stack-down PLUS the disk: the ~28 images this stack BUILT (`--rmi local` — only
@@ -2274,7 +2333,7 @@ stack-down: ## stop the local stack and DROP ITS VOLUMES (destroys identity/room
 stack-clean: ## stop the local stack AND remove the images it built + the m2 registry/cache
 	@echo "==> Removing the local stack: containers, volumes, and the images IT built."
 	@echo "    Pulled base images (postgres/cassandra/mastodon/...) are KEPT."
-	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) -f $(STACK_EGRESS_COMPOSE) -f $(STACK_TOR_DOMAINS_COMPOSE) --profile social --profile tor --profile anubis --profile phpbb --profile akkoma --profile games --profile brandb --profile edge-ai-tts --profile media-poisoner --profile egress-vpn $(STACK_OWN_CASDOOR_DOWN_FLAGS) down -v --rmi local --remove-orphans
+	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) -f $(STACK_EGRESS_COMPOSE) -f $(STACK_TOR_DOMAINS_COMPOSE) --profile social --profile tor --profile anubis --profile phpbb --profile akkoma --profile games --profile brandb --profile edge-ai-tts --profile media-poisoner --profile egress-vpn --profile headscale $(STACK_OWN_CASDOOR_DOWN_FLAGS) down -v --rmi local --remove-orphans
 	bash tests/stack/gen-route-access-env.sh --remove
 	@docker rm -f $(M2_REGISTRY_NAME) >/dev/null 2>&1 || true
 	@rm -f $(STACK_M2_ENV)
@@ -2445,10 +2504,10 @@ stack-tor-mechanism-check: ## OPT-IN, needs the public Tor network + a host tor 
 	HUGMESH_TOR_E2E=1 bash tests/stack/test-tor-onion-mechanism.sh
 
 stack-logs: ## tail logs from the running local stack
-	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_PROFILE) $(STACK_ALT_PROFILE) $(STACK_TOR_PROFILE) $(STACK_GAMES_PROFILE) $(STACK_BRAND_B_PROFILE) $(STACK_OWN_CASDOOR_FLAGS) $(STACK_LIMITS_FLAGS) $(STACK_LOOKS_FLAGS) $(STACK_EGRESS_FLAGS) logs -f --tail=100
+	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_PROFILE) $(STACK_ALT_PROFILE) $(STACK_TOR_PROFILE) $(STACK_GAMES_PROFILE) $(STACK_BRAND_B_PROFILE)$(STACK_HEADSCALE_PROFILE)$(STACK_HEADSCALE_FLAGS) $(STACK_OWN_CASDOOR_FLAGS) $(STACK_LIMITS_FLAGS) $(STACK_LOOKS_FLAGS) $(STACK_EGRESS_FLAGS) logs -f --tail=100
 
 stack-ps: ## list the local stack's containers + status
-	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_PROFILE) $(STACK_ALT_PROFILE) $(STACK_TOR_PROFILE) $(STACK_GAMES_PROFILE) $(STACK_BRAND_B_PROFILE) $(STACK_OWN_CASDOOR_FLAGS) $(STACK_LIMITS_FLAGS) $(STACK_LOOKS_FLAGS) $(STACK_EGRESS_FLAGS) ps
+	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_PROFILE) $(STACK_ALT_PROFILE) $(STACK_TOR_PROFILE) $(STACK_GAMES_PROFILE) $(STACK_BRAND_B_PROFILE)$(STACK_HEADSCALE_PROFILE)$(STACK_HEADSCALE_FLAGS) $(STACK_OWN_CASDOOR_FLAGS) $(STACK_LIMITS_FLAGS) $(STACK_LOOKS_FLAGS) $(STACK_EGRESS_FLAGS) ps
 
 # Re-apply the canonical route-access seed (specs/cluster/manifests/route-access/
 # initdb/20-schema.sql) to the RUNNING stack's route-access-db, in one transaction

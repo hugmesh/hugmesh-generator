@@ -1932,6 +1932,67 @@ services:
         condition: service_started
     restart: unless-stopped
 
+  # ── hugmesh-headscale — the local mesh's tailnet control server (OPT-IN) ──
+  # The local docker mesh had no headscale at all, so nothing could mint the
+  # pre-auth key a HugMesh token carries (docs/HUGMESH-TOKEN.md) and no tray
+  # node could join it. OPT-IN behind the `headscale` profile, the tor/anubis
+  # precedent: `make stack-up HEADSCALE=1` (or `--profile headscale`); a default
+  # stack never creates it, so the unprofiled bring-up stays byte-identical
+  # (tests/stack/test-headscale-local.sh compares the rendered config). The
+  # profile is not called "mesh": the Studio's node project is already
+  # `hugmesh-mesh`, and MESH_ID/superdomain mean other things.
+  #
+  # Built from ./headscale: alpine + the fleet-pinned headscale 0.23.0 binary.
+  # Its entrypoint renders the config (server_url https://hs.<domain>:<port>,
+  # the HTTPS front door's hs. virtual host; embedded DERP, region 999, no public
+  # DERP map) and the policy, from the DEVICE template mounted read-only below
+  # with no dynamic owners and only the superadmin ssh rule, so the local mesh
+  # enforces the device rules: tag:hugmesh is what a key may carry, and the
+  # dom_/mesh_/dev_/superadmin tags are server-forced. It creates the user
+  # `hugmesh`, and keeps admin-bff's API key in the headscale-admin-key volume
+  # (0600, written atomically, rotated before it expires, never printed).
+  # admin-bff mounts that volume read-only through tests/stack/compose.headscale.yaml,
+  # which the Makefile adds only under HEADSCALE=1: admin-bff is an unprofiled
+  # service, so any mount or env on it here would change every plain bring-up.
+  #
+  # NO host port: the door is hugmesh-https-front (tls-front/default.conf,
+  # `server_name ~^hs\.`), on the same published ${PUBLIC_HTTPS_PORT}. The
+  # per-machine leaf from `make stack-certs` already carries DNS:*.<domain>, so
+  # hs.<domain> is covered. NO network alias hs.<domain> either: the login
+  # server is https://hs.<domain>:<PUBLIC_HTTPS_PORT>, and inside this network
+  # that name would resolve to a container serving plain :8080, so an in-network
+  # client following the token would be refused instead of reaching the door.
+  # In-network callers (admin-bff, nginx) use the service name.
+  #
+  # The labels are what the Studio's auto-detect reads (its tray mints keys for
+  # the user and tags named here). login-server and domain follow the same
+  # HUGMESH_DOMAIN / PUBLIC_HTTPS_PORT the entrypoint renders from.
+  hugmesh-headscale:
+    profiles: ["headscale"]
+    build:
+      context: ./headscale
+    environment:
+      HUGMESH_DOMAIN: ${HUGMESH_DOMAIN:-hugmesh.net}
+      PUBLIC_HTTPS_PORT: ${PUBLIC_HTTPS_PORT:-8488}
+      HEADSCALE_MESH_ID: ${HEADSCALE_MESH_ID:-hugmesh-local}
+    labels:
+      net.hugmesh.role: headscale
+      net.hugmesh.headscale.user: hugmesh
+      net.hugmesh.headscale.login-server: https://hs.${HUGMESH_DOMAIN:-hugmesh.net}:${PUBLIC_HTTPS_PORT:-8488}
+      net.hugmesh.headscale.domain: ${HUGMESH_DOMAIN:-hugmesh.net}
+      net.hugmesh.headscale.key-tags: tag:hugmesh
+    volumes:
+      - ../../specs/etc/headscale/policy.hujson.tmpl:/etc/hugmesh/headscale/policy.hujson.tmpl:ro
+      - headscale-data:/var/lib/headscale
+      - headscale-admin-key:/run/hugmesh-headscale
+    healthcheck:
+      test: ["CMD-SHELL", "headscale users list -o json >/dev/null 2>&1 && [ -s /run/hugmesh-headscale/admin-bff.apikey ]"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 10s
+    restart: unless-stopped
+
 volumes:
   route-access-pg:
   federation-pg:
@@ -1951,3 +2012,9 @@ volumes:
   # Persisting the key keeps the .onion address stable across restarts; only the
   # PUBLIC hostname is ever copied out (to ./tor-onion) — the key never leaves here.
   tor-onion-keys:
+  # The OPT-IN hugmesh-headscale service (`--profile headscale`): its sqlite
+  # database + noise/DERP keys, and admin-bff's API key (the only copy; admin-bff
+  # mounts it read-only via compose.headscale.yaml). `stack-down` (down -v) drops
+  # both, so the next HEADSCALE=1 up is a fresh tailnet with a fresh key.
+  headscale-data:
+  headscale-admin-key:
