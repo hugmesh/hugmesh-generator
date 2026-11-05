@@ -43,8 +43,6 @@ import os
 import re
 from dataclasses import dataclass
 
-from . import platform_info
-
 # ── the channel ──────────────────────────────────────────────────────────────
 
 #: The ONE variable that carries the operator's environment choice into a run.
@@ -397,6 +395,9 @@ def plan(env_id: str, extra_env: "dict[str, str] | None" = None,
     """
     env_def = environment(env_id)
     refusals: "list[str]" = []
+    # Imported here, not at the top: tests/scripts/test-e2e-docker-base-url-parity.sh
+    # loads this file on its own, outside the package, where a relative import fails.
+    from . import platform_info
     # osname only when given: the suite pins the host by swapping in
     # partial(native_windows_blocker, osname=...), which an explicit None would undo.
     blocker = (platform_info.native_windows_blocker("The e2e suite", osname=osname)
