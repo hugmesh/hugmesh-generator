@@ -526,7 +526,10 @@ model is loaded, because nobody has asked.
 
 **Where the state lives** — one directory, read by the Studio as well:
 `$HUGMESH_LOCAL_AI_DIR`, else `$XDG_STATE_HOME/hugmesh/local-ai`, else
-`~/.local/state/hugmesh/local-ai`:
+`~/.local/state/hugmesh/local-ai`. In the native Windows build (the MSI), where the
+script does not run, it is `local-ai` in the Studio's own state folder:
+`$HUGMESH_LOCAL_AI_DIR`, else `%HUGMESH_STUDIO_STATE_DIR%\local-ai`, else
+`%USERPROFILE%\.hugmesh\studio\local-ai` (the Studio keeps its agent context there):
 
 ```text
 queue/{pending,running,done,logs}

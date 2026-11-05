@@ -262,22 +262,15 @@ class LocalAIScreen:
                     out += ["", "Tip: " + atips.tip_for(self.where_page_only(j))]
         except Exception:                # noqa: BLE001
             pass
-        mode = odk.current_mode()
-        if snap is not None and snap.fix:
-            # format_status printed the fix verbatim: swap the bash advice in place
-            fix = windows_advice(snap.fix, mode)
-            if fix != snap.fix:
-                out = [ln.replace(snap.fix, fix) for ln in out]
-        out += ["", odk.describe(mode)]
-        note = native_windows_note()
+        out += ["", odk.describe(odk.current_mode())]
+        note = lai.windows_worker_note()
         if note:
-            # the .sh lines below are bash: PowerShell cannot run them (an unquoted
-            # path with spaces besides), so say what is true here instead
+            # the lines below are the bash script: PowerShell cannot run them (an
+            # unquoted path with spaces besides), so say what is true here instead
             out += ["", note, ""]
         else:
             cmds = odk.commands_for(self.generator_dir)
-            out += ["", "Run it yourself:  " + cmds["todo"],
-                    "                  " + cmds["chat"], ""]
+            out += ["", "Run it yourself:  " + cmds["todo"], "                  " + cmds["chat"], ""]
         if getattr(self, "warning", ""):
             # above the conversation: the transcript shows only its last 12 lines, and a
             # long answer would push a warning above the answer out of view

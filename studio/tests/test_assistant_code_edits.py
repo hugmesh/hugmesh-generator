@@ -38,8 +38,10 @@ def ws(tmp_path, monkeypatch):
     (folder / ".git" / dw.MARKER).write_text(json.dumps(
         {"app": "web", "domain": "shop.example", "mesh": "shop", "source": "x", "schema": 1}))
     (folder / "src").mkdir()
-    (folder / "src" / "index.html").write_text(INDEX)
-    (folder / "src" / "styles.css").write_text("body { color: red; }\n")
+    # newline="": LF bytes on every OS (text mode writes CRLF on Windows); the CRLF
+    # checkout Git for Windows makes has its own test below
+    (folder / "src" / "index.html").write_text(INDEX, newline="")
+    (folder / "src" / "styles.css").write_text("body { color: red; }\n", newline="")
     return ce.Workspace("shop", "shop.example", "web", os.path.realpath(str(folder))), state
 
 
@@ -270,6 +272,37 @@ def test_two_applies_in_one_second_get_their_own_ids_and_revert_is_exact(ws, mon
     assert ce.revert(first) != ""
     assert ce.revert(second) == "" and open(path).read() == after_first
     assert ce.revert(first) == "" and open(path).read() == INDEX
+
+
+def test_a_crlf_file_is_edited_and_keeps_crlf_on_every_line(ws):
+    """Windows: Git for Windows (core.autocrlf) checks a workspace out with CRLF line
+    ends and the model writes its diff with plain newlines. Every hunk was refused
+    ("the file says '<footer>\\r'"); now the lines match, the file keeps CRLF on every
+    line, the before-copy is the exact bytes and revert restores them. A file with
+    MIXED endings is still compared byte for byte (and refused)."""
+    space, state = ws
+    path = os.path.join(space.path, "src", "index.html")
+    crlf = INDEX.replace("\n", "\r\n").encode()
+    with open(path, "wb") as fh:
+        fh.write(crlf)
+    text, why = ce.file_text(space, "src/index.html")
+    assert why == "" and "\r" not in text and "<footer>\n  <p>Welcome to shop</p>" in text
+    edits = ce.parse_diff(DIFF, space)
+    assert not isinstance(edits, ce.DiffProblem), edits
+    a = ce.apply(edits, space, str(state))
+    assert isinstance(a, ce.Applied), a
+    with open(path, "rb") as fh:
+        assert fh.read() == crlf.replace(b"Welcome to shop", b"Welcome to the Shop")
+    with open(os.path.join(a.before_dir, "src", "index.html"), "rb") as fh:
+        assert fh.read() == crlf
+    assert ce.revert(a) == ""
+    with open(path, "rb") as fh:
+        assert fh.read() == crlf
+    mixed = crlf.replace(b"</footer>\r\n", b"</footer>\n")
+    with open(path, "wb") as fh:
+        fh.write(mixed)
+    prob = ce.parse_diff(DIFF, space)
+    assert isinstance(prob, ce.DiffProblem) and "src/index.html line 3" in prob.text
 
 
 def test_a_file_that_is_not_utf8_is_refused_and_never_rewritten(ws):
