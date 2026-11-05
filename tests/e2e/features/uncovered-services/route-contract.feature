@@ -136,16 +136,14 @@ Feature: Every uncovered service is routed, gated and mounted consistently
   # proxied by the fe gateway (routes games-ui / games-bff). Until this round the
   # fe side had NO /games/** row at all — /games was a host-shell placeholder the
   # gateway never proxied, and the absence was pinned here. Now a games member
-  # (ROLE_GAMES) must reach both, with admins and mods as paired supersets — the
-  # same trio shape the be-gateway /games/** floor has carried since the portal.
+  # (ROLE_GAMES) must reach both, with admins as a paired superset. A platform mod
+  # without ROLE_GAMES is not a games member, so ROLE_MOD has no row here.
   @service:games @layer:gateway
   Scenario: a games member reaches the games remote and its member API through the browser door @layer:gateway @service:games
     Then the route-access seed grants "ROLE_GAMES" at "/games/**" on the fe gateway
     And the route-access seed grants "ROLE_ADMIN" at "/games/**" on the fe gateway
-    And the route-access seed grants "ROLE_MOD" at "/games/**" on the fe gateway
     And the route-access seed grants "ROLE_GAMES" at "/games/api/**" on the fe gateway
     And the route-access seed grants "ROLE_ADMIN" at "/games/api/**" on the fe gateway
-    And the route-access seed grants "ROLE_MOD" at "/games/api/**" on the fe gateway
     And the fe gateway routes "/games/api/**" to the "hugmesh-games-bff" upstream
     And the fe gateway routes "/games/**" to the "hugmesh-games-ui" upstream
     And the fe gateway route for "/games/api/**" to the "hugmesh-games-bff" upstream strips 1 path segment

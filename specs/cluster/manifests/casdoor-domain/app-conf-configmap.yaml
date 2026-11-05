@@ -1,27 +1,27 @@
-# casdoor-domain app.conf override — points a domain's own Casdoor (issue #47,
+# casdoor-domain app.conf TEMPLATE — points a domain's own Casdoor (issue #47,
 # Domain.idp=own) at its dedicated Postgres (casdoor-domain-pg) and carries the
-# per-domain issuer via ENV interpolation. Mounted over the image's conf/app.conf.
-# NO secrets here — DB user/password are interpolated at startup from env
-# (CASDOOR_DB_USER / CASDOOR_DB_PASSWORD <- ESO Secret casdoor-domain-db), and the
+# per-domain issuer. Rendered into the real conf/app.conf by the "render-app-conf"
+# initContainer in deployment.yaml (a literal awk replacement of the __TOKEN__
+# placeholders below; the DB user and password are percent-encoded into the
+# postgres:// URL by the renderer): DB user/password from the ESO Secret casdoor-domain-db, the
 # issuer from CASDOOR_ORIGIN (<- the casdoor-domain-params ConfigMap, patched per
-# domain by the casdoor-domains ApplicationSet).
+# domain by the casdoor-domains ApplicationSet). NO secrets here.
 #
-# !!! Casdoor's app.conf keys and the beego "${ENV||default}" interpolation are
-# !!! version-specific (the same warning manifests/casdoor-games carries). The
-# !!! dataSourceName interpolation is the proven casdoor-games shape; the `origin`
-# !!! interpolation below is the SAME mechanism but MUST be validated against the
-# !!! deployed casbin/casdoor:3.80.0 before the first idp=own domain goes live.
-# !!! FALLBACK if `origin` turns out not to interpolate on that image: have the
-# !!! casdoor-domains ApplicationSet strategic-merge-patch this ConfigMap's whole
-# !!! app.conf data key per domain (the value surface is already per-Application,
-# !!! so only the patch mechanics change — no manifest redesign).
+# NOTE: casbin/casdoor does NOT expand beego's "${ENV||default}" syntax inside a
+# value (beego expands it only when the WHOLE value is one such expression), so the
+# earlier `user=${CASDOOR_DB_USER||casdoor} ...` dataSourceName could never connect:
+# both pinned images exit 2 with `pq: password authentication failed for user
+# "${CASDOOR_DB_USER||...}"` (measured on casdoor-games 2026-11-05; the systems Casdoor
+# had the same fix in #263). `origin` is rendered the same way rather than relying on
+# the whole-value expansion, so no app.conf key here depends on in-app interpolation.
+# tests/scripts/test-games-two-realms.sh refuses a `${` in any Casdoor dataSourceName.
 apiVersion: v1
 kind: ConfigMap
 metadata:
   name: casdoor-domain-app-conf
   labels: { app: casdoor-domain, app.kubernetes.io/part-of: hugmesh.net }
 data:
-  app.conf: |
+  app.conf.template: |
     appname = casdoor
     httpport = 8000
     runmode = prod
@@ -29,10 +29,10 @@ data:
     SessionOn = true
     # Dedicated Postgres (casdoor-domain-pg, db "casdoor"). For the postgres
     # driver Casdoor uses the dataSourceName verbatim (it only appends dbName for
-    # MySQL), so dbname= must be set inline here. Credentials come from env (ESO
-    # Secret casdoor-domain-db).
+    # MySQL), so dbname= must be set inline here. Credentials rendered in by the
+    # initContainer (ESO Secret casdoor-domain-db).
     driverName = postgres
-    dataSourceName = "user=${CASDOOR_DB_USER||casdoor} password=${CASDOOR_DB_PASSWORD||} host=casdoor-domain-pg port=5432 sslmode=disable dbname=casdoor"
+    dataSourceName = "postgres://__CASDOOR_DB_USER__:__CASDOOR_DB_PASSWORD__@casdoor-domain-pg:5432/casdoor?sslmode=disable"
     dbName = casdoor
     tableNamePrefix =
     showSql = false
@@ -43,12 +43,12 @@ data:
     verificationCodeTimeout = 10
     initScore = 0
     logPostOnly = true
-    # Public issuer (OIDC `iss` origin) of THIS domain's realm — interpolated
-    # from CASDOOR_ORIGIN (Deployment env <- casdoor-domain-params, patched to
+    # Public issuer (OIDC `iss` origin) of THIS domain's realm — rendered by the
+    # initContainer from CASDOOR_ORIGIN (<- casdoor-domain-params, patched to
     # https://id.<clusterDomain> per domain). The compose.brand-b.yaml contract:
     # issuer = the PUBLISHED URL; in-network consumers fetch JWKS from the
-    # Service URL. The default matches the params-configmap placeholder only.
-    origin = "${CASDOOR_ORIGIN||https://id.hugmesh.net}"
+    # Service URL. The placeholder params-configmap value is https://id.hugmesh.net.
+    origin = "__CASDOOR_ORIGIN__"
     enableGzip = true
     # ── NO declarative seed — DELIBERATE (differs from casdoor/casdoor-games) ─
     # A static init_data.json would be per-domain CONTENT baked into this shared

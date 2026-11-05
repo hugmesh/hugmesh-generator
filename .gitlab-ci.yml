@@ -2803,6 +2803,30 @@ casdoor-jwt-custom-gate:
     # it can ship (the live flip happens off main).
     - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
 
+# verify — every Casdoor (systems, games, domain) boots on the conf its render-app-conf
+# initContainer produces from a password an operator could really have put in Vault
+# (| & / \ ' " $ % # ; ? @ a tab, and a newline via ALTER USER). The first renderer was a
+# sed expression and broke silently on three of those bytes (hugmesh-generator#848).
+# Same idiom as casdoor-jwt-custom-gate: the host docker socket on the privileged x86
+# runner, throwaway containers with unique names, removed on exit. The suite exits 2
+# (never 0) without a daemon, so a runner that lost docker FAILS here rather than
+# passing. Pre-merge, the hermetic half of the same check runs inside
+# tests/scripts/test-games-two-realms.sh (shell-suites.yml, tool-heavy job).
+casdoor-render-boot-gate:
+  stage: verify
+  tags: [hugmesh-x86, privileged]
+  script:
+    - bash tests/casdoor/test-casdoor-render-boot.sh
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      changes:
+        - specs/cluster/manifests/casdoor/**/*
+        - specs/cluster/manifests/casdoor-games/**/*
+        - specs/cluster/manifests/casdoor-domain/**/*
+        - tests/casdoor/test-casdoor-render-boot.sh
+        - .gitlab-ci.yml
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+
 # Domain-registry -> brand-repo bridge (#4) consumer test: the OFFLINE verify +
 # emit matrix for the signed #118 cross-domain export (byte-exact canonical bytes;
 # genuine ACCEPT; tampered/unsigned/foreign/rollback REJECT; defaults INERT). Needs
@@ -3731,6 +3755,7 @@ orphan-guards-verify:
         tests/node-storage/test-bake-coverage.sh
         tests/scripts/test-anubis-env-gate.sh
         tests/scripts/test-appstore-effector-flags.sh
+        tests/scripts/test-arm-desktop-package-sets.sh
         tests/scripts/test-arm-ro-distdir.sh
         tests/scripts/test-binpkg-pool-fingerprint.sh
         tests/scripts/test-builder-log-paths.sh
