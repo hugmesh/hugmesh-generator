@@ -245,10 +245,12 @@ class GoLiveDriver:
         return platform_info.native_windows_blocker("Go Live", runs="bash scripts")
 
     def providers(self) -> list[GoLiveProvider]:
-        if self.blocker():
-            return []
         if self._providers is None:
-            self._providers = self._load_providers()
+            # Where the driver cannot run (native Windows), read the SAME registry
+            # file its `list` prints, so the wizard still offers the real providers and
+            # previews a plan; only the verbs that execute it are refused.
+            self._providers = (self._registry_providers() if self.blocker()
+                               else self._load_providers())
         return self._providers
 
     def provider(self, provider_id: str) -> GoLiveProvider | None:
@@ -288,6 +290,45 @@ class GoLiveDriver:
             out.append(GoLiveProvider(
                 id=pid, title=desc, mechanism=mech, status=state,
                 model=_MECH_MODEL[mech], inputs=list(req), optional=list(opt)))
+        return out
+
+    def _registry_providers(self) -> list[GoLiveProvider]:
+        """The providers `hugmesh-go-live list` would print, read straight from the
+        registry (specs/usr/lib/hugmesh/go-live-providers.sh) without bash.
+
+        The registry is declarative: ``GO_LIVE_PROVIDER_IDS=(…)`` in listing order and
+        ``declare -gA GO_LIVE_{LABEL,MECH,STATUS}=( [id]="value" … )``. ``cmd_list``
+        prints exactly id, ``glp_mechanism`` (default ``instructions``), ``full``/``stub``
+        and ``glp_label`` (default the id) — the same defaults are applied here, and the
+        same row filter as :meth:`_load_providers`. A test pins this reader to the
+        driver's own `list` on a host that can run it."""
+        try:
+            with open(self.registry_path, encoding="utf-8") as f:
+                text = f.read()
+        except OSError:
+            return []
+        ids_m = re.search(r"^GO_LIVE_PROVIDER_IDS=\(([^)]*)\)", text, re.M)
+        if not ids_m:
+            return []
+
+        def table(name: str) -> dict[str, str]:
+            m = re.search(rf"^declare -gA {name}=\((.*?)^\)", text, re.M | re.S)
+            if not m:
+                return {}
+            return dict(re.findall(r'^\s*\[([^\]]+)\]="([^"]*)"', m.group(1), re.M))
+
+        label, mech, status = (table("GO_LIVE_LABEL"), table("GO_LIVE_MECH"),
+                               table("GO_LIVE_STATUS"))
+        out: list[GoLiveProvider] = []
+        for pid in ids_m.group(1).split():
+            m = mech.get(pid, "instructions")
+            state = "full" if status.get(pid, "stub") == "full" else "stub"
+            if m not in _MECH_MODEL:
+                continue
+            req, opt = _MECH_INPUTS.get(m, ([], []))
+            out.append(GoLiveProvider(
+                id=pid, title=label.get(pid, pid), mechanism=m, status=state,
+                model=_MECH_MODEL[m], inputs=list(req), optional=list(opt)))
         return out
 
     # ---- command assembly ----------------------------------------------------

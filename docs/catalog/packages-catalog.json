@@ -160,6 +160,13 @@
           },
           {
             "atoms": [
+              "dev-lang/python",
+              "sys-auth/polkit"
+            ],
+            "title": "Greeter SSO + desktop governance runtime (STATED contract, as on x86)"
+          },
+          {
+            "atoms": [
               "media-gfx/feh",
               "app-editors/nano",
               "www-client/netsurf"
@@ -1616,6 +1623,7 @@
         ],
         "removable": [
           "app-emulation/spice-vdagent",
+          "dev-lang/python",
           "gui-libs/display-manager-init",
           "lxde-base/lxappearance",
           "lxde-base/lxpanel",
@@ -1624,6 +1632,7 @@
           "media-fonts/noto",
           "media-gfx/feh",
           "sec-policy/selinux-vdagent",
+          "sys-auth/polkit",
           "www-client/netsurf",
           "x11-apps/setxkbmap",
           "x11-apps/xrandr",

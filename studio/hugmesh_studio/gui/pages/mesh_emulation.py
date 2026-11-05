@@ -50,6 +50,18 @@ emulating devices" path, so the tunnel is not a side effect of a button: its sta
 is on the page, its reuse is stated when it is reused, and it is torn down when the
 gateway stops, when the mesh stops, and when this page is left.
 
+QEMU FOR WINDOWS (WHPX)
+-----------------------
+Every verb above is the Docker backend's bash runner, which a native Windows Studio
+cannot run (the WSL2 sentence). The backend chooser beside the availability note
+offers the one lane that DOES run there, ``core.qemu_windows``: ONE x86 device at a
+time — a thin desktop or a single node — booted by QEMU's own Windows build. Under it
+the note is that module's ``blocker()`` (or its ready line), each row's Start/Stop/SSH
+call ``qemu_windows.start``/``stop``/``ssh_argv`` off the GUI thread through the same
+worker slot, liveness is ``qemu_windows.running``, and the whole-mesh verbs, the QMP
+console, saves and the replica strip are greyed with the reason on each. The default
+stays Docker everywhere except a native Windows Studio whose QEMU is ready.
+
 Modeless throughout: every refusal is inline (note + log), never a dialog — a modal
 in page logic hangs the headless tests (the no-modals rule).
 """
@@ -65,7 +77,8 @@ import threading
 from ..qt import Qt, QtCore, QtGui, QtWidgets
 from .. import console
 from ..styles import MUTED, WARN
-from ...core import emulation, emulation_save, mesh_emulation, qemu_devices, qemu_tests
+from ...core import (emulation, emulation_save, mesh_emulation, qemu_devices,
+                     qemu_tests, qemu_windows)
 from ...core.domain_services import session_boot_gate_reason
 from ...core.local_stack_node import LocalStackNode
 from . import _emulation_common as common
@@ -198,6 +211,38 @@ _POLL_MS = 4000
 #: Row states that mean "this is still happening" — the poll runs while any planned
 #: row is in one of them (or while a verb of this page's own is in flight).
 _UNSETTLED_STATES = frozenset({emulation.STATE_BOOTING, emulation.STATE_ASSERTIONS})
+
+#: The row controls' Docker-backend tooltips, spelled once: the QEMU for Windows
+#: backend replaces them with its own reasons, and switching back puts these back.
+_ROW_STOP_TIP = ("Stop this device through the runner, which owns the container name. "
+                 "The row stays listed — it is planned.")
+_REPLICAS_MINUS_TIP = "Target 0 — stop this device through the runner."
+_REPLICAS_PLUS_TIP = "Target 1 — boot this device through the runner."
+
+#: Why a control is greyed under QEMU for Windows (WHPX) — one sentence per reason,
+#: so a greyed button always names its own. Every one of these verbs is the Docker
+#: backend's runner; core.qemu_windows has no whole-mesh, QMP-console or save verb.
+_WHPX_ONE_AT_A_TIME = ("Disabled on QEMU for Windows (WHPX): this backend boots ONE "
+                       "x86 device at a time — use that row's own Start and Stop.")
+_WHPX_NO_CANCEL = ("A QEMU for Windows start or stop has no cancel point; it ends on "
+                   "its own (Stop waits up to a minute for the guest to power off).")
+_WHPX_REFRESH = ("Re-read which QEMU for Windows device is running "
+                 "(qemu_windows.running). Reads only — starts nothing, stops nothing; "
+                 "this backend has no assertion verdicts.")
+#: The Verdict cell under WHPX: an explicit non-verdict, not "pending" — this backend
+#: runs no assertions, so no grade is owed.
+_WHPX_NO_VERDICT = "n/a"
+
+
+def _whpx_not_here(what: str) -> str:
+    return (f"Not available on QEMU for Windows (WHPX): {what} is offered on the "
+            "Docker backend only.")
+
+
+def _qmp_tooltip(command: str) -> str:
+    return _QMP_TOOLTIPS.get(
+        command, f"Send the QMP verb “{command}” to this guest's monitor socket, "
+                 "through the runner.")
 
 
 class _Row:
@@ -347,8 +392,68 @@ class MeshEmulationPage(QtWidgets.QWizardPage):
         #: Called on the GUI thread when the verb in flight finishes, with
         #: (ok, cancelled); may return an inline note to show after the repaint.
         self._verb_finished = None
+        #: The Docker probe's last answer, kept so switching back from QEMU for
+        #: Windows repaints it without probing again.
+        self._docker_answer = None
+        #: QEMU for Windows' own state: why it cannot boot here ("" when it can), the
+        #: install it found, and label -> live registry record (qemu_windows.running).
+        self._whpx_why = ""
+        self._whpx_install: qemu_windows.QemuInstall | None = None
+        self._native: dict[str, dict] = {}
+        #: What the native verb in flight returned, or the sentence it failed with —
+        #: written by the worker, read by its finished() on the GUI thread.
+        self._native_result = None
+        self._native_error = ""
 
         lay = scrollable(self)
+
+        # ── which backend boots the devices (QEMU for Windows beside Docker) ─────
+        backend_row = QtWidgets.QHBoxLayout()
+        backend_row.addWidget(QtWidgets.QLabel("Emulation backend:"))
+        self.backend_combo = QtWidgets.QComboBox()
+        for key, text in qemu_windows.BACKENDS:
+            self.backend_combo.addItem(text, key)
+        self.backend_combo.setToolTip(
+            "Docker container: the full lanes — every device of the mesh, the QMP "
+            "console, saves — through the bash runner (Linux, or the Studio inside "
+            "WSL2). QEMU for Windows (WHPX): ONE x86 device at a time — a thin desktop "
+            "or a single node — with no bash, Docker or WSL2.")
+        backend_row.addWidget(self.backend_combo)
+        # The options for the NEXT QEMU for Windows start; shown only on that backend.
+        self.whpx_opts = QtWidgets.QWidget()
+        wo = QtWidgets.QHBoxLayout(self.whpx_opts)
+        wo.setContentsMargins(0, 0, 0, 0)
+        self.whpx_window = QtWidgets.QCheckBox("Show desktop window")
+        self.whpx_window.setToolTip(
+            "Open the guest's screen in a QEMU window (a virtio GPU shown through "
+            "SDL) — for a thin desktop image. Off: headless, with the serial console "
+            "written to console.log in the device's run folder. Used by the next "
+            "Start.")
+        self.whpx_window.toggled.connect(lambda *_: self._sync_controls())
+        wo.addWidget(self.whpx_window)
+        wo.addWidget(QtWidgets.QLabel("Memory:"))
+        self.whpx_mem = QtWidgets.QSpinBox()
+        self.whpx_mem.setRange(512, 65536)
+        self.whpx_mem.setSingleStep(256)
+        self.whpx_mem.setSuffix(" MiB")
+        self.whpx_mem.setValue(qemu_windows.DEFAULT_MEM_MB)
+        self.whpx_mem.setToolTip(
+            "Guest memory for the next Start. The start is refused when the free "
+            f"memory cannot hold this plus {qemu_windows.HOST_RESERVE_MB} MiB kept "
+            "for Windows itself.")
+        self.whpx_mem.valueChanged.connect(lambda *_: self._sync_controls())
+        wo.addWidget(self.whpx_mem)
+        backend_row.addWidget(self.whpx_opts)
+        backend_row.addStretch(1)
+        lay.addLayout(backend_row)
+        # Docker everywhere, as before. A native Windows Studio — where the Docker lane
+        # is refused with the WSL2 sentence — opens on QEMU for Windows, but only when
+        # it can actually boot something; otherwise its refusal is one click away.
+        default = (qemu_windows.BACKEND_WHPX
+                   if qemu_tests.native_blocker() and not qemu_windows.blocker()
+                   else qemu_windows.BACKEND_DOCKER)
+        self.backend_combo.setCurrentIndex(max(0, self.backend_combo.findData(default)))
+        self.whpx_opts.setVisible(self._whpx)
 
         # ── docker availability, probed OFF the GUI thread ───────────────────────
         self.docker_note = QtWidgets.QLabel()
@@ -548,6 +653,14 @@ class MeshEmulationPage(QtWidgets.QWizardPage):
         if finished is not None:
             finished.connect(lambda *_: self._close_tunnels("the Studio is closing"))
 
+        # The page-wide controls' Docker-backend tooltips, put back when the backend
+        # switches back from QEMU for Windows (which replaces them with its reasons).
+        self._docker_tips = {w: w.toolTip() for w in (
+            self.start_btn, self.stop_btn, self.refresh_btn, self.cancel_btn,
+            self.mesh_save_btn, self.mesh_save_arm)}
+        # Connected last: a switch repaints every control built above.
+        self.backend_combo.currentIndexChanged.connect(self._backend_changed)
+
     # ── wizard-flow contract (mirrors QemuPage) ─────────────────────────────────
     def nextId(self) -> int:
         return -1                       # terminal side-flow: nothing to build next
@@ -619,19 +732,62 @@ class MeshEmulationPage(QtWidgets.QWizardPage):
         self._docker_paint((bool(ok), str(why)))
 
     def _docker_paint(self, answer):
-        blocker = qemu_tests.native_blocker()
-        if blocker:
-            # Docker Desktop being up says nothing here: every verb is a bash script
-            # (QemuPage's gate, for the same reason). _docker_ok also greys Start,
-            # each row's Start and the replicas "+".
+        self._docker_answer = answer
+        # Docker Desktop being up says nothing on native Windows: every verb is a bash
+        # script (QemuPage's gate, for the same reason). _docker_ok also greys Start,
+        # each row's Start and the replicas "+".
+        self._docker_ok = (not qemu_tests.native_blocker()
+                           and bool(answer and answer[0]))
+        self._paint_note()
+
+    def _paint_note(self):
+        """The availability note for the CHOSEN backend, then re-arm everything."""
+        if self._whpx:
+            self._paint_whpx_note()
+        else:
+            blocker = qemu_tests.native_blocker()
             self.docker_note.setText(
-                f'<span style="color:{WARN}">{html.escape(blocker)}</span>')
-            self._docker_ok = False
-            self._sync_controls()
-            return
-        self.docker_note.setText(common.docker_note_html(answer))
-        self._docker_ok = bool(answer and answer[0])
+                f'<span style="color:{WARN}">{html.escape(blocker)}</span>' if blocker
+                else common.docker_note_html(self._docker_answer))
         self._sync_controls()
+
+    # ── QEMU for Windows (WHPX) ─────────────────────────────────────────────────
+    @property
+    def _whpx(self) -> bool:
+        return self.backend_combo.currentData() == qemu_windows.BACKEND_WHPX
+
+    def _paint_whpx_note(self):
+        """qemu_windows.blocker() verbatim, or the ready line naming QEMU's folder.
+
+        Read on the GUI thread on purpose: it is a registry read and a few file
+        checks, with no process started, so there is nothing to wait for."""
+        install = qemu_windows.find_qemu()
+        self._whpx_install = install
+        self._whpx_why = qemu_windows.blocker(install=install or False)
+        if self._whpx_why:
+            self.docker_note.setText(
+                f'<span style="color:{WARN}">{html.escape(self._whpx_why)}</span>')
+            return
+        self.docker_note.setText(
+            f"QEMU for Windows is ready in "
+            f"<tt>{html.escape(install.dir if install else '?')}</tt>, with "
+            "WHPX acceleration. This backend boots <b>one x86 device at a time</b> — "
+            "a thin desktop or a single node — from its row's Start. ARM rows, the "
+            "whole-mesh start, the QMP console and saves are not available on it.")
+
+    def _backend_changed(self, *_):
+        whpx = self._whpx
+        self.whpx_opts.setVisible(whpx)
+        if whpx:
+            # A whole-mesh save preview belongs to the Docker backend's runner.
+            self._mesh_save_preview = None
+            self.mesh_save_arm.setChecked(False)
+            self.mesh_save_note.setText("")
+        else:
+            self._native = {}
+        self._paint_note()
+        self._paint_plan()
+        self._refresh_reality()
 
     # ── population ──────────────────────────────────────────────────────────────
     def _reload_sessions(self):
@@ -683,15 +839,37 @@ class MeshEmulationPage(QtWidgets.QWizardPage):
                 f"{exc}</span>")
             self._sync_controls()
             return
-        mesh = self.plan.mesh
-        gw = mesh.gateway if mesh else None
-        self.plan_label.setText(
-            f"<b>{len(self.plan.rows)} emulated device(s)</b> planned. Front "
-            f"door: <tt>{gw.label if gw else '?'}</tt> &rarr; "
-            f"<tt>{self.plan.front_door}</tt> (via an ssh tunnel over the device's "
-            "published port).")
         self._build_table()
+        self._paint_plan()
         self._refresh_reality()
+
+    def _paint_plan(self):
+        """The plan line and each label's tooltip, for the CHOSEN backend.
+
+        The front door, the planned ssh port, the mesh identity and the KEYS stick are
+        the Docker runner's plan: QEMU for Windows forwards ssh on its own port (the
+        SSH column, once a device is up) and attaches no KEYS stick, so under it they
+        are left out rather than shown as facts that do not hold."""
+        if self.plan is None or self.plan.mesh is None:
+            return
+        whpx = self._whpx
+        gw = self.plan.mesh.gateway
+        self.plan_label.setText(
+            f"<b>{len(self.plan.rows)} emulated device(s)</b> planned."
+            + ("" if whpx else
+               f" Front door: <tt>{gw.label if gw else '?'}</tt> &rarr; "
+               f"<tt>{self.plan.front_door}</tt> (via an ssh tunnel over the "
+               "device's published port)."))
+        for r, planned in enumerate(self.plan.mesh.devices):
+            item = self.devices.item(r, _MCOL_LABEL)
+            if item is None:
+                continue
+            tip = [f"image {os.path.basename(planned.image)}"]
+            if not whpx:
+                tip += [f"planned ssh 127.0.0.1:{planned.ssh_port}",
+                        f"planned mesh identity {planned.mac} / {planned.ip}",
+                        f"USB KEYS stick {planned.keys_image}"]
+            item.setToolTip("\n".join(tip))
 
     def _build_table(self):
         """One row per PLANNED device — the plan is the row set, reality only
@@ -705,11 +883,7 @@ class MeshEmulationPage(QtWidgets.QWizardPage):
             for col, text in {_MCOL_LABEL: planned.label, _MCOL_ROLE: planned.role,
                               _MCOL_ARCH: planned.arch}.items():
                 common.set_cell(self.devices, r, col, str(text))
-            self.devices.item(r, _MCOL_LABEL).setToolTip(
-                f"image {os.path.basename(planned.image)}\n"
-                f"planned ssh 127.0.0.1:{planned.ssh_port}\n"
-                f"planned mesh identity {planned.mac} / {planned.ip}\n"
-                f"USB KEYS stick {planned.keys_image}")
+            # the label's tooltip is _paint_plan's: it depends on the backend
             for col in (_MCOL_STATE, _MCOL_VERDICT, _MCOL_SSH):
                 common.set_cell(self.devices, r, col, "")
 
@@ -732,8 +906,7 @@ class MeshEmulationPage(QtWidgets.QWizardPage):
             start = QtWidgets.QPushButton("Start")
             start.clicked.connect(lambda _=False, i=r: self._start_device(i))
             stop = QtWidgets.QPushButton("Stop")
-            stop.setToolTip("Stop this device through the runner, which owns the "
-                            "container name. The row stays listed — it is planned.")
+            stop.setToolTip(_ROW_STOP_TIP)
             stop.clicked.connect(lambda _=False, i=r: self._stop_device(i))
             self.devices.setCellWidget(
                 r, _MCOL_ACTIONS, common.button_strip(start, stop, ssh_btn))
@@ -743,9 +916,7 @@ class MeshEmulationPage(QtWidgets.QWizardPage):
             for command in qemu_devices.QMP_COMMANDS:
                 b = QtWidgets.QPushButton(
                     _QMP_LABELS.get(command, command.capitalize()))
-                b.setToolTip(_QMP_TOOLTIPS.get(
-                    command, f"Send the QMP verb “{command}” to this guest's "
-                             "monitor socket, through the runner."))
+                b.setToolTip(_qmp_tooltip(command))
                 if command in _QMP_ENDS_GUEST:
                     b.setStyleSheet(f"color: {WARN};")
                 b.clicked.connect(
@@ -780,8 +951,8 @@ class MeshEmulationPage(QtWidgets.QWizardPage):
             replicas = common.ReplicaStrip(
                 planned.label, ceiling=1,
                 what=f"the emulated device {planned.label}",
-                minus_tip="Target 0 — stop this device through the runner.",
-                plus_tip="Target 1 — boot this device through the runner.",
+                minus_tip=_REPLICAS_MINUS_TIP,
+                plus_tip=_REPLICAS_PLUS_TIP,
                 apply_tip=_REPLICAS_APPLY_TIP)
             replicas.widget.setToolTip(_REPLICAS_TIP)
             replicas.minus.clicked.connect(
@@ -809,6 +980,9 @@ class MeshEmulationPage(QtWidgets.QWizardPage):
         if self.plan is None:
             self._sync_controls()
             return
+        if self._whpx:
+            self._refresh_native()
+            return
         self.status = emulation.status(self.plan)
         live = {row.label: row for row in self.status.rows}
         work = self.plan.work_dir
@@ -824,6 +998,24 @@ class MeshEmulationPage(QtWidgets.QWizardPage):
         self._sync_controls()
         self._sync_poll()
 
+    def _refresh_native(self):
+        """Reality under QEMU for Windows: ITS registry, graded by pid liveness
+        (``qemu_windows.running`` — a record left by a crash or a reboot is not
+        running). The Docker registry says nothing about these guests, so no row
+        carries a Docker status, run-state or save set on this backend."""
+        assert self.plan is not None
+        self._paint_whpx_note()
+        self.status = None
+        self._native = {rec["label"]: rec
+                        for rec in qemu_windows.running(self.plan.work_dir)}
+        for i, row in enumerate(self._rows):
+            row.status = None
+            row.run_state = ""
+            row.saves = []
+            self._paint_row(i, row)
+        self._sync_controls()
+        self._sync_poll()
+
     def _poll_tick(self):
         """One timed re-read. Skipped while a verb owns the page: the verb's own
         completion re-reads anyway, and a poll landing mid-stream would repaint from
@@ -833,15 +1025,22 @@ class MeshEmulationPage(QtWidgets.QWizardPage):
         self._refresh_reality()
 
     def _sync_poll(self):
-        """Poll only while something is still moving — see ``_Row.settled``."""
+        """Poll only while something is still moving — see ``_Row.settled``. A QEMU
+        for Windows device counts while it is up: it can end on its own (its window
+        closed, a shutdown inside the guest), and its row must say so."""
         want = self.plan is not None and (
-            self._running or any(not row.settled for row in self._rows))
+            self._running or any(not row.settled for row in self._rows)
+            or (self._whpx and bool(self._native)))
         if want and not self.poll.isActive():
             self.poll.start()
         elif not want and self.poll.isActive():
             self.poll.stop()
 
     def _paint_row(self, r: int, row: _Row):
+        if self._whpx:
+            self._paint_native_row(r, row)
+            return
+        row.user.setEditable(False)
         st = row.status
         state_text, state_tip, state_colour = self._state_cell(row)
         common.set_cell(self.devices, r, _MCOL_STATE, state_text,
@@ -899,6 +1098,69 @@ class MeshEmulationPage(QtWidgets.QWizardPage):
                 if row.user.itemData(i) == want:
                     row.user.setCurrentIndex(i)
                     break
+        row.user.blockSignals(False)
+
+    def _paint_native_row(self, r: int, row: _Row):
+        """One row under QEMU for Windows: its registry record or nothing.
+
+        No verdict and only a boot section: this backend boots a device and runs no
+        assertions, so anything more would be a grade nobody made."""
+        rec = self._native.get(row.label)
+        refusal = qemu_windows.row_refusal(row.planned.platform)
+        if rec:
+            shown = ("desktop window" if rec.get("display") == "window"
+                     else "headless")
+            common.set_cell(
+                self.devices, r, _MCOL_STATE, emulation.STATE_RUNNING,
+                tooltip=(f"Running under QEMU for Windows (pid {rec['pid']}, "
+                         f"{rec.get('mem_mb', '?')} MiB, {shown})."),
+                colour=common.state_colour(emulation.STATE_RUNNING))
+        else:
+            common.set_cell(
+                self.devices, r, _MCOL_STATE, emulation.STATE_PLANNED,
+                tooltip=(refusal or "Not running under QEMU for Windows."),
+                colour=common.state_colour(emulation.STATE_PLANNED))
+        common.set_cell(
+            self.devices, r, _MCOL_VERDICT, _WHPX_NO_VERDICT,
+            tooltip="QEMU for Windows boots the device and runs no assertions, so "
+                    "there is no verdict on this backend.")
+        common.set_cell(
+            self.devices, r, _MCOL_SSH,
+            f"127.0.0.1:{rec['ssh_port']}" if rec else "",
+            tooltip=("Forwarded by QEMU to the guest's :22, on 127.0.0.1 only."
+                     if rec else "Not running under QEMU for Windows."))
+
+        row.sections.blockSignals(True)
+        row.sections.clear()
+        row.sections.addItem("boot: running" if rec else "boot: not running", "boot")
+        row.sections.setItemData(
+            0, "The other sections are graded by the Docker backend's assertion run, "
+               "which QEMU for Windows does not perform.", Qt.ItemDataRole.ToolTipRole)
+        row.sections.blockSignals(False)
+
+        # QEMU for Windows adds no account to the guest, so the dropdown offers the
+        # configured people as suggestions and takes a typed login — what this image
+        # was actually built with is the guest's to answer.
+        names = []
+        for user in self.wiz.cfg.users or ():
+            name = str(getattr(user, "username", "") or "").strip()
+            if name and name not in names:
+                names.append(name)
+        # Rebuilt only when the suggestions changed, and never under the operator: the
+        # poll runs every few seconds for as long as a device is up, and clearing the
+        # combo would empty an open popup and jump a half-typed login's caret.
+        have = [row.user.itemData(i) for i in range(row.user.count())]
+        if row.user.isEditable() and (have == names or row.user.hasFocus()
+                                      or row.user.view().isVisible()):
+            return
+        want = row.user.currentText()
+        row.user.blockSignals(True)
+        row.user.setEditable(True)
+        row.user.clear()
+        for name in names:
+            row.user.addItem(name, name)
+        if want:
+            row.user.setEditText(want)
         row.user.blockSignals(False)
 
     def _state_cell(self, row: _Row) -> tuple[str, str, str]:
@@ -966,6 +1228,14 @@ class MeshEmulationPage(QtWidgets.QWizardPage):
 
     def _sync_controls(self):
         idle = not self._running
+        # One backend per verb: switching under a verb in flight would arm the other
+        # backend's controls against work this one is still doing.
+        self.backend_combo.setEnabled(idle)
+        if self._whpx:
+            self._sync_controls_native(idle)
+            return
+        for widget, tip in getattr(self, "_docker_tips", {}).items():
+            widget.setToolTip(tip)
         planned = self.plan is not None and bool(self._rows)
         self.start_btn.setEnabled(idle and planned and self._docker_ok
                                   and not self._boot_refusal)
@@ -978,9 +1248,112 @@ class MeshEmulationPage(QtWidgets.QWizardPage):
         self._sync_web(idle)
         self.completeChanged.emit()
 
+    def _sync_controls_native(self, idle: bool):
+        """Arm the page for QEMU for Windows: per-row Start/Stop/SSH only, every
+        Docker-runner verb greyed with the reason ON it."""
+        planned = self.plan is not None and bool(self._rows)
+        for b in (self.start_btn, self.stop_btn):
+            b.setEnabled(False)
+            b.setToolTip(_WHPX_ONE_AT_A_TIME)
+        self.refresh_btn.setEnabled(idle and planned)
+        self.refresh_btn.setToolTip(_WHPX_REFRESH)
+        self.cancel_btn.setEnabled(False)
+        self.cancel_btn.setToolTip(_WHPX_NO_CANCEL)
+        for row in self._rows:
+            self._arm_row_native(row, idle)
+        self.mesh_save_btn.setEnabled(False)
+        self.mesh_save_btn.setToolTip(_whpx_not_here("Saving the whole mesh"))
+        self.mesh_save_arm.setChecked(False)
+        self.mesh_save_arm.setEnabled(False)
+        self.mesh_save_arm.setToolTip(_whpx_not_here("Saving the whole mesh"))
+        self._sync_web_native()
+        self.completeChanged.emit()
+
+    def _native_busy(self) -> dict | None:
+        """The QEMU for Windows device that is up, if any — this backend runs one."""
+        return next(iter(self._native.values()), None)
+
+    def _arm_row_native(self, row: _Row, idle: bool):
+        rec = self._native.get(row.label)
+        busy = self._native_busy()
+        refusal = qemu_windows.row_refusal(row.planned.platform)
+        row.start.setEnabled(idle and not rec and not busy and not refusal
+                             and not self._whpx_why and not self._boot_refusal)
+        how = ("in a desktop window" if self.whpx_window.isChecked() else "headless")
+        row.start.setToolTip(
+            f"Disabled: {row.label} is already running." if rec else
+            f"Disabled: {refusal}" if refusal else
+            f"Disabled: {self._whpx_why}" if self._whpx_why else
+            f"Disabled: {busy['label']} is running, and this backend runs one device "
+            "at a time — stop it first." if busy else
+            "Disabled: this session's configuration names a domain with no recorded "
+            "service configuration — see the note under the session picker."
+            if self._boot_refusal else
+            f"Boot {row.label} under QEMU for Windows (WHPX) with "
+            f"{self.whpx_mem.value()} MiB, {how}: a fresh overlay over this session's "
+            "image, which is never written. ssh, https and http are forwarded on "
+            "127.0.0.1 only.")
+        row.stop.setEnabled(idle and bool(rec))
+        row.stop.setToolTip(
+            f"Power {row.label} off: the ACPI power button first, then QEMU's quit, "
+            "then a hard kill. Its overlay is deleted; the session's image is "
+            "untouched." if rec else
+            f"Disabled: {row.label} is not running under QEMU for Windows.")
+        row.user.setEnabled(idle and bool(rec))
+        row.ssh_btn.setEnabled(idle and bool(rec))
+        row.ssh_btn.setToolTip(
+            f"Open Windows' ssh to the login beside it at 127.0.0.1:{rec['ssh_port']}, "
+            "in a new console window. QEMU for Windows adds no account to the guest: "
+            "pick a configured user or type a login this image was built with."
+            if rec else f"Disabled: {row.label} is not running under QEMU for Windows.")
+        qmp_why = _whpx_not_here("The QMP console")
+        for button in row.qmp.values():
+            button.setEnabled(False)
+            button.setToolTip(qmp_why)
+        row.arm_reset.setChecked(False)
+        row.arm_reset.setEnabled(False)
+        save_why = _whpx_not_here("Saving a device's disk")
+        for w in (row.save, row.overwrite, row.arm_save):
+            w.setEnabled(False)
+            w.setToolTip(save_why)
+        row.arm_save.setChecked(False)
+        strip = row.replicas
+        if strip is not None:
+            observed = 1 if rec else 0
+            if not strip.pending:
+                strip.target = observed
+            strip.paint(observed, busy=True)       # greys -, + and Apply alike
+            for b in (strip.minus, strip.plus, strip.apply):
+                b.setToolTip(_WHPX_ONE_AT_A_TIME)
+
+    def _sync_web_native(self):
+        self.web_btn.setEnabled(False)
+        self.web_btn.setToolTip(
+            "Not available on QEMU for Windows (WHPX): the web tunnel rides the Docker "
+            "backend's published ssh port. This backend forwards a running device's "
+            "https port to 127.0.0.1 itself — the address is beside this button.")
+        self.tunnel_close_btn.setEnabled(bool(self._tunnels))
+        rec = self._native_busy()
+        if self.plan is None:
+            self.web_note.setText("")
+        elif rec:
+            console_log = os.path.join(str(rec.get("run_dir", "")), "console.log")
+            self.web_note.setText(
+                f"<tt>{html.escape(str(rec['label']))}</tt>: its :443 is forwarded to "
+                f"<tt>https://127.0.0.1:{rec['ui_port']}/</tt> (self-signed TLS, if it "
+                f"serves one); serial console <tt>{html.escape(console_log)}</tt>")
+        else:
+            self.web_note.setText(
+                f'<span style="color:{MUTED}">No QEMU for Windows device is '
+                "running.</span>")
+        self._sync_tunnel_note()
+
     def _arm_row(self, row: _Row, idle: bool):
         up = row.up
         live = up and idle
+        row.stop.setToolTip(_ROW_STOP_TIP)
+        for verb, button in row.qmp.items():
+            button.setToolTip(_qmp_tooltip(verb))
         row.start.setEnabled(idle and not up and self._docker_ok
                              and not self._boot_refusal)
         row.start.setToolTip(
@@ -1020,6 +1393,9 @@ class MeshEmulationPage(QtWidgets.QWizardPage):
         strip = row.replicas
         if strip is None:
             return
+        strip.minus.setToolTip(_REPLICAS_MINUS_TIP)
+        strip.plus.setToolTip(_REPLICAS_PLUS_TIP)
+        strip.apply.setToolTip(_REPLICAS_APPLY_TIP)
         observed = 1 if up else 0
         if not strip.pending:
             strip.target = observed
@@ -1047,7 +1423,7 @@ class MeshEmulationPage(QtWidgets.QWizardPage):
         """
         row = self._rows[index]
         strip = row.replicas
-        if strip is None or self._running:
+        if strip is None or self._running or self._refuse_on_whpx(_WHPX_ONE_AT_A_TIME):
             return
         observed = 1 if row.up else 0
         if strip.target == observed:
@@ -1346,8 +1722,18 @@ class MeshEmulationPage(QtWidgets.QWizardPage):
         console.write(self.log, f"!! refused: {self._boot_refusal}")
         return True
 
+    def _refuse_on_whpx(self, why: str) -> bool:
+        """The same defence in depth for a Docker-runner verb reached under QEMU for
+        Windows: its button is greyed with ``why``, and the slot says it too."""
+        if not self._whpx:
+            return False
+        self.note.setText(f'<span style="color:{WARN}">{html.escape(why)}</span>')
+        console.write(self.log, f"!! refused: {why}")
+        return True
+
     def _start_mesh(self):
-        if self.plan is None or self._refuse_boot():
+        if (self.plan is None or self._refuse_on_whpx(_WHPX_ONE_AT_A_TIME)
+                or self._refuse_boot()):
             return
         console.write(self.log,
                       "[mesh] booting every planned device with --keep-alive — "
@@ -1355,7 +1741,7 @@ class MeshEmulationPage(QtWidgets.QWizardPage):
         self._run_verb("start mesh", emulation.run_argv(self.plan))
 
     def _stop_mesh(self):
-        if self.plan is None:
+        if self.plan is None or self._refuse_on_whpx(_WHPX_ONE_AT_A_TIME):
             return
         # BEFORE the stop, not after: a tunnel pointed at a device that is going away
         # would keep a loopback port bound and answer the browser with a hang.
@@ -1380,6 +1766,9 @@ class MeshEmulationPage(QtWidgets.QWizardPage):
         if self.plan is None or self._refuse_boot():
             return
         row = self._rows[index]
+        if self._whpx:
+            self._start_native(row)
+            return
         try:
             argv = emulation.start_device_argv(self.plan, row.label)
         except ValueError as exc:
@@ -1391,6 +1780,9 @@ class MeshEmulationPage(QtWidgets.QWizardPage):
         if self.plan is None:
             return
         row = self._rows[index]
+        if self._whpx:
+            self._stop_native(row)
+            return
         if row.label == self.plan.gateway_label:
             self._close_tunnels("the gateway device is stopping", [row.label])
         self._run_verb(f"stop {row.label}",
@@ -1400,6 +1792,131 @@ class MeshEmulationPage(QtWidgets.QWizardPage):
     def _forget_row_state(self, row: _Row):
         row.run_state = ""
         return None
+
+    # ── QEMU for Windows verbs (core.qemu_windows, off the GUI thread) ──────────
+    def _run_native(self, label: str, fn, *, finished=None):
+        """One ``qemu_windows`` start/stop off the GUI thread.
+
+        The page's ONE worker slot, log and ``_verb_done`` — exactly a runner verb's
+        path, with ``fn(on_line)`` in place of ``emulation.spawn``. A
+        :class:`qemu_windows.NativeError` is already the operator's sentence; an
+        OSError (a full disk under the overlay) or a subprocess error is worded the
+        same way, so ``finished`` always has a sentence to report.
+        """
+        if self._running:
+            return
+        self._cancel = threading.Event()
+        self._verb_finished = finished
+        self._native_result, self._native_error = None, ""
+        self._set_running(True)
+
+        def verb(on_line, _cancel):
+            try:
+                self._native_result = fn(on_line)
+            except (qemu_windows.NativeError, OSError, subprocess.SubprocessError) as exc:
+                self._native_error = str(exc)
+                on_line(f"REFUSED: {exc}")
+                return False, []
+            return True, []
+
+        self.worker = _MeshWorker(verb, parent=self, stream=True)
+        self.worker.line.connect(self._on_line)
+        self.worker.done.connect(lambda ok, lbl=label: self._verb_done(ok, lbl))
+        self.worker.start()
+
+    def _native_failed(self, what: str) -> str:
+        return (f'<span style="color:{WARN}">{html.escape(what)} failed: '
+                f"{html.escape(self._native_error or 'see the log.')}</span>")
+
+    def _start_native(self, row: _Row):
+        """Boot this row under QEMU for Windows with the options beside the chooser.
+
+        ``options_for_row`` refuses an ARM row with its sentence, and
+        ``qemu_windows.start`` re-checks everything else (QEMU, WHPX, one device at a
+        time, free memory, ports) — the greyed button is a courtesy, not the gate."""
+        assert self.plan is not None
+        try:
+            opts = qemu_windows.options_for_row(
+                row.planned, self.plan.work_dir, mem_mb=self.whpx_mem.value(),
+                display="window" if self.whpx_window.isChecked() else "none")
+        except qemu_windows.NativeError as exc:
+            self.note.setText(f'<span style="color:{WARN}">{html.escape(str(exc))}'
+                              "</span>")
+            console.write(self.log, f"!! refused: {exc}")
+            return
+        how = "in a desktop window" if opts.display == "window" else "headless"
+        console.write(self.log,
+                      f"[whpx] booting {row.label} under QEMU for Windows with "
+                      f"{opts.mem_mb} MiB, {how} — one device at a time.")
+
+        def finished(ok, _cancelled, label=row.label):
+            rec = self._native_result
+            if not ok or not isinstance(rec, dict):
+                return self._native_failed(f"Starting {label}")
+            console_log = os.path.join(str(rec.get("run_dir", "")), "console.log")
+            return (f"Started <tt>{html.escape(label)}</tt> under QEMU for Windows: "
+                    f"ssh <tt>127.0.0.1:{rec.get('ssh_port')}</tt>, web "
+                    f"<tt>https://127.0.0.1:{rec.get('ui_port')}/</tt>, serial console "
+                    f"<tt>{html.escape(console_log)}</tt>.")
+
+        self._run_native(f"start {row.label}",
+                         lambda on_line: qemu_windows.start(opts, on_line=on_line),
+                         finished=finished)
+
+    def _stop_native(self, row: _Row):
+        assert self.plan is not None
+        work, label = self.plan.work_dir, row.label
+
+        def finished(ok, _cancelled):
+            if not ok:
+                return self._native_failed(f"Stopping {label}")
+            return html.escape(str(self._native_result or f"{label}: stopped."))
+
+        def stop(on_line):
+            said = qemu_windows.stop(work, label)
+            on_line(said)
+            return said
+
+        console.write(self.log, f"[whpx] stopping {label} — ACPI power-off first, "
+                                "a hard kill only if it does not go.")
+        self._run_native(f"stop {label}", stop, finished=finished)
+
+    def _open_native_shell(self, row: _Row):
+        """Windows' own OpenSSH, in a NEW console window, into the forwarded port.
+
+        Detached like the Docker backend's terminal: the session is the operator's
+        from here on. Off Windows (only a test gets here — the backend refuses to
+        boot there) the desktop-terminal helper stands in."""
+        rec = self._native.get(row.label)
+        login = row.user.currentText().strip()
+        if rec is None or not login:
+            self.note.setText(
+                f'<span style="color:{WARN}">{html.escape(row.label)} has no ssh '
+                "login to open</span> — it is not running under QEMU for Windows, or "
+                "no login is picked or typed beside the button.")
+            return
+        argv = qemu_windows.ssh_argv(rec, login)
+        if os.name == "nt":
+            cmd = subprocess.list2cmdline(argv)
+            try:
+                subprocess.Popen(argv, creationflags=getattr(
+                    subprocess, "CREATE_NEW_CONSOLE", 0x10))
+            except OSError as exc:
+                self.note.setText(
+                    f'<span style="color:{WARN}">Could not open a console: '
+                    f"{html.escape(str(exc))}</span> Run this yourself: "
+                    f"<tt>{html.escape(cmd)}</tt>")
+                console.write(self.log, f"!! could not open a console: {exc}")
+                return
+            console.write(self.log, f"[whpx] {cmd}")
+        else:
+            opened, note, log_line = common.open_terminal(argv)
+            console.write(self.log, f"[whpx] {log_line}")
+            if not opened:
+                self.note.setText(note)
+                return
+        self.note.setText(f"Opened ssh to <tt>{html.escape(row.label)}</tt> as "
+                          f"<tt>{html.escape(login)}</tt>.")
 
     # ── the QMP console ─────────────────────────────────────────────────────────
     def _reset_armed(self, index: int, armed: bool):
@@ -1416,6 +1933,8 @@ class MeshEmulationPage(QtWidgets.QWizardPage):
             # Returning first keeps the status watch below from being armed for a
             # verb that never starts, which would then attribute an unrelated line
             # to this row.
+            return
+        if self._refuse_on_whpx(_whpx_not_here("The QMP console")):
             return
         row = self._rows[index]
         if command == _QMP_ARMED and not row.arm_reset.isChecked():
@@ -1466,6 +1985,8 @@ class MeshEmulationPage(QtWidgets.QWizardPage):
         pixels. It is checked before the argv is built, so an unarmed overwrite never
         becomes a command that exists.
         """
+        if self._refuse_on_whpx(_whpx_not_here("Saving a device's disk")):
+            return
         row = self._rows[index]
         if not row.up:
             self.note.setText(
@@ -1588,7 +2109,8 @@ class MeshEmulationPage(QtWidgets.QWizardPage):
         ``.partial``, and — measured on this workstation — can take the live mesh's
         own volumes down with a full filesystem.
         """
-        if self.plan is None or self._running:
+        if (self.plan is None or self._running
+                or self._refuse_on_whpx(_whpx_not_here("Saving the whole mesh"))):
             return
         if self._mesh_save_preview is None or not self.mesh_save_arm.isChecked():
             self._preview_mesh_save()
@@ -1736,6 +2258,9 @@ class MeshEmulationPage(QtWidgets.QWizardPage):
     def _open_shell(self, index: int):
         """Desktop terminal on that device as the selected login — DETACHED."""
         row = self._rows[index]
+        if self._whpx:
+            self._open_native_shell(row)
+            return
         if not row.can_shell:
             # The button is disabled in this state, so this is the belt to that
             # braces — it exists because "ssh -p 0" is the one failure the operator
@@ -1769,6 +2294,8 @@ class MeshEmulationPage(QtWidgets.QWizardPage):
         this page can say whether it started one or reused one, and can take it down
         when the device it points at goes away.
         """
+        if self._refuse_on_whpx(_whpx_not_here("The web tunnel")):
+            return
         row = self._gateway_row()
         if not self._can_tunnel(row):
             self.note.setText(

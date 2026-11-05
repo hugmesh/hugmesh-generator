@@ -461,6 +461,23 @@ ui_password() {
     printf '%s' "${val:-${def}}"
 }
 
+# ui_password_confirmed TITLE TEXT [DEFAULT] -> a LOGIN password, typed twice.
+# A single masked entry bakes a typo in silently: the image then refuses the
+# password the operator believes they set. On a mismatch nothing changes (DEFAULT
+# is returned) and the operator is told so. Cancel on either box = DEFAULT.
+ui_password_confirmed() {
+    local title="$1" text="$2" def="${3:-}" p1 p2 none=$'\001'
+    p1="$(ui_password "${title}" "${text}" "${none}")"
+    [ "${p1}" = "${none}" ] && { printf '%s' "${def}"; return 0; }
+    p2="$(ui_password "${title}" "Type the same password again to confirm" "${none}")"
+    [ "${p2}" = "${none}" ] && { printf '%s' "${def}"; return 0; }
+    if [ "${p1}" != "${p2}" ]; then
+        ui_msg "${title}" "The two passwords did not match. Nothing was changed." >&2
+        printf '%s' "${def}"; return 0
+    fi
+    printf '%s' "${p1}"
+}
+
 # arm_secrets_prompt LABEL — masked, non-persisted --local-pass/--luks-pass
 # entry point for the 8 platforms whose --standalone posture has no dedicated
 # screen of its own (rpi5 desktop / frite / jetson desktop / orangepi5 /
@@ -476,7 +493,7 @@ arm_secrets_prompt() {
             luks "Unattended LUKS pass $([ -n "${ARM_LUKS_PASS}" ] && echo '(set — advanced)' || echo '(prompts at build/install — recommended)')" \
             done "‹ done")" || return 0
         case "${choice}" in
-            pass) ARM_LOCAL_PASS="$(ui_password "Password" "Local login password (blank = random one-time at first boot)" "${ARM_LOCAL_PASS}")" ;;
+            pass) ARM_LOCAL_PASS="$(ui_password_confirmed "Password" "Local login password (blank = random one-time at first boot, shown once on the console)" "${ARM_LOCAL_PASS}")" ;;
             luks) ARM_LUKS_PASS="$(ui_password "Unattended LUKS" "Bake an unattended LUKS passphrase (ADVANCED; blank = prompt at build/install)" "${ARM_LUKS_PASS}")" ;;
             *) return 0 ;;
         esac
@@ -1921,7 +1938,7 @@ standalone_screen() {
         [ "${unaff}" = yes ] && home_l="mode=${OPT_HOME_MODE:-default} enc=${OPT_HOME_ENCRYPTED}   (no source seed)"
         local -a items=(
             user    "Local user ......... ${OPT_SA_USER}"
-            pass    "Local password ..... $([ -n "${SA_LOCAL_PASS}" ] && echo '(set)' || echo '(unset → random at first boot)')"
+            pass    "Local password ..... $([ -n "${SA_LOCAL_PASS}" ] && echo '(set)' || echo '(unset — REQUIRED to build)')"
             gpu     "GPU driver ......... ${OPT_SA_GPU}"
             steam   "Steam delivery ..... ${OPT_SA_STEAM}  (library on /media/Steam)"
             media   "Media data ......... ${media_l}"
@@ -1947,7 +1964,7 @@ standalone_screen() {
         choice="$(ui_menu "Standalone ${weight}" "${prompt}" "${items[@]}")" || return 0
         case "${choice}" in
             user)    OPT_SA_USER="$(ui_input "User" "Local login user name" "${OPT_SA_USER}")" ;;
-            pass)    SA_LOCAL_PASS="$(ui_password "Password" "Password for ${OPT_SA_USER} (blank = random one-time at first boot)" "${SA_LOCAL_PASS}")" ;;
+            pass)    SA_LOCAL_PASS="$(ui_password_confirmed "Password" "Login password for ${OPT_SA_USER} (you log in with this at the desktop greeter; hashed at build time, never saved)" "${SA_LOCAL_PASS}")" ;;
             gpu)     OPT_SA_GPU="$(ui_menu "GPU driver" "Video card / driver (FREE = open, no EULA — the default):" \
                          all-free "All free (any GPU; NVIDIA=nouveau) — default" \
                          nvidia-free "NVIDIA free (nouveau)" \
@@ -1982,6 +1999,13 @@ standalone_screen() {
             egress)  OPT_SA_EGRESS="$(ui_input "Egress VPN" "Path to a WireGuard .conf / OpenVPN .ovpn (empty = none)" "${OPT_SA_EGRESS}")" ;;
             luks)    SA_LUKS_PASS="$(ui_password "Unattended LUKS" "Bake an unattended LUKS passphrase into the installer ISO (ADVANCED; blank = installer prompts at install)" "${SA_LUKS_PASS}")" ;;
             build)   save_conf
+                     # A standalone image has no KEYS stick and no SSO: this password
+                     # IS the only way in (root is locked). Refuse rather than build an
+                     # image whose login is a random one-time password on a console.
+                     if [ -z "${OPT_SA_USER}" ] || [ -z "${SA_LOCAL_PASS}" ]; then
+                         ui_msg "Login required" "Set the local user and its password (the 'Local password' item) before building. A standalone image has no other login: root is locked and there is no KEYS stick or SSO."
+                         continue
+                     fi
                      if [ "${unaff}" = yes ]; then
                          build_make_cmd "x86-${role}" "x86 ${role} UNAFFILIATED plain Gentoo desktop (${OPT_PATH}, ENV=${OPT_ENV})" 1
                      else
