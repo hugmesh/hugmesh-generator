@@ -952,7 +952,15 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # re-measures per the doctrine above.
 # MERGED (origin/main with #473 + #860 + this branch): 207 + 1 (#473) + 1 (#860) + 2 (this branch)
 # = 211 of 252, MEASURED by running this file on the merged tree.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-211}"
+# 208 -> 210 (denominator 249 -> 251) on 2026-11-04 for fix/headscale-security-tag-owners-20261104,
+# which adds TWO gated suites: tests/device-registry/test-headscale-security-tag-owners.sh
+# (shell-suites.yml debian leg 1) and tests/device-registry/test-headscale-security-tag-live.sh
+# (shell-suites.yml host-docker job). MEASURED by RUNNING this file with GUARD_PREMERGE=0 on
+# that branch (base origin/main b1b50db4): '210 of 251 suites are named by a
+# pull_request-triggered workflow', ungated SET stays 41.
+# MERGED (origin/main fbe7f940 at 211 of 252 + this branch's 2) = 213 of 254, MEASURED by
+# running this file with GUARD_PREMERGE=0 on the merged tree; ungated SET stays 41.
+PREMERGE_BASELINE="${GUARD_PREMERGE:-213}"
 
 # 182 -> 192 (denominator 205 -> 215) on 2026-09-30 for #385: the census gained a
 # THIRD spelling, bare `tests/*.sh` at depth 1, and the ten suites it exposed were
