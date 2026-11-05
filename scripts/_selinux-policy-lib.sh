@@ -50,10 +50,13 @@
 # against the refpolicy version the image will actually load them into.
 #
 # MANDATORY vs CONDITIONAL MODULES (the honest split).
-# The 7 hugmesh_* modules call only BASE refpolicy interfaces (auth_/corecmd_/
-# corenet_/dev_/files_/fs_/init_/kernel_/logging_/modutils_/storage_/sysnet_ plus
-# the *_pattern macros), all shipped by sec-policy/selinux-base — so wherever the
-# header tree exists they MUST compile, and a failure is a real defect: hard fail.
+# The hugmesh_* modules (all but hugmesh_tor, below) call only BASE refpolicy
+# interfaces (auth_/corecmd_/corenet_/dev_/files_/fs_/init_/kernel_/logging_/
+# modutils_/storage_/sysnet_ plus the *_pattern macros), all shipped by
+# sec-policy/selinux-base — so wherever the header tree exists they MUST compile,
+# and a failure is a real defect: hard fail. hugmesh_bootpath also names snort,
+# kubelet, dockerd, cron, tmpfiles, hwclock and entropyd domains, but only inside
+# optional_policy blocks, which are dropped at link time on an image without them.
 # localpath_provisioner and otel_collector call container_domain_template /
 # kubernetes_container / container_list_log_dirs / container_search_logs, which
 # come from the CONTAINER policy headers (sec-policy/selinux-container) that only
@@ -625,8 +628,8 @@ CONFD
 #     which also matters because the live pack runs them while the builder's own
 #     `trap live_fstab_restore EXIT` is armed, and a trap here would replace it.
 #   * `chroot <root> matchpathcon <path>` works without selinuxfs, so expected
-#     types are DERIVED FROM THE POLICY (slx_write_probe_table), with the six
-#     core types also pinned in _SLX_CORE_PROBES so a policy that silently stops
+#     types are DERIVED FROM THE POLICY (slx_write_probe_table), with the core
+#     types (plus /var/log/wtmp) also pinned in _SLX_CORE_PROBES so a policy that silently stops
 #     mapping /usr/bin/init to init_exec_t fails the build instead of the boot.
 #   * the -e excludes are spelled root-relative in-chroot (/proc, not
 #     <root>/proc): proc/sys/dev/run came out with no label.
@@ -647,6 +650,9 @@ _SLX_CORE_PROBES=(
     "/usr/bin/openrc:rc_exec_t"
     "/etc/shadow:shadow_t"
     "/etc/fstab:etc_t"
+    "/var/log/wtmp:wtmp_t"   # pre-created by the x86 builder so bootmisc never makes it var_log_t
+    "/root:user_home_dir_t"  # slx_map_root_login: without the root login mapping this is default_t
+    "/srv:var_t"             # shipped by the x86 builder so systemd-tmpfiles' `q /srv` never mkdirs in "/"
 )
 SLX_CENSUS_MIN_PCT="${SLX_CENSUS_MIN_PCT:-99}"
 SLX_DRYRUN_MAX="${SLX_DRYRUN_MAX:-50}"
@@ -770,6 +776,50 @@ slx_store_install_modules() {
     return "${rc}"
 }
 
+# ── slx_map_root_login <sysroot> <type> [chroot] ─────────────────────────────
+# THE /root LABEL IS A STORE DECISION, NOT A FILE-CONTEXT LINE. refpolicy labels
+# every home directory through genhomedircon: the store's seusers names a login,
+# libsemanage expands the HOME_DIR template for that login's passwd home into
+# file_contexts.homedirs. The image's seusers carried ONLY `__default__` (the
+# selinux-base default with USE=unconfined), so no /root line was ever written,
+# /root fell through to default_t, and local_login_t was denied { search } on it
+# three times per login under enforcing (measured 2026-11-04). Mapping root to
+# the same SELinux user and range `__default__` already maps everyone to adds
+# the /root lines and changes nothing about who root is. Must run AFTER
+# slx_store_install_modules (the store exists) and BEFORE slx_label_tree (so
+# setfiles reads the regenerated .homedirs). Postconditions are read from the
+# store's outputs (seusers, .homedirs, matchpathcon), never from an exit code.
+slx_map_root_login() {
+    local sysroot="${1:?slx_map_root_login: sysroot required}" type="${2:?type required}" runner="${3:-chroot}"
+    local seusers="${sysroot}/etc/selinux/${type}/seusers"
+    local homedirs="${sysroot}/etc/selinux/${type}/contexts/files/file_contexts.homedirs"
+    local def seuser range out got
+    [ "${runner}" = chroot ] || { _slx_fail "root login mapping: only the chroot runner is supported (got '${runner}')"; return 1; }
+    [ -r "${seusers}" ] || { _slx_fail "root login mapping: ${seusers} missing — is the ${type} store built?"; return 1; }
+    def="$(grep -E '^__default__:' "${seusers}" | head -1)"
+    [ -n "${def}" ] || { _slx_fail "root login mapping: ${seusers} has no __default__ line — cannot tell which SELinux user to map root to"; return 1; }
+    seuser="$(printf '%s' "${def}" | cut -d: -f2)"; range="$(printf '%s' "${def}" | cut -d: -f3-)"
+    [ -n "${seuser}" ] || { _slx_fail "root login mapping: malformed __default__ line '${def}'"; return 1; }
+    if grep -E '^root:' "${seusers}" >/dev/null; then
+        _slx_say "root login mapping: already present ($(grep -E '^root:' "${seusers}" | head -1))"
+    else
+        [ -x "${sysroot}/usr/sbin/semanage" ] || [ -x "${sysroot}/usr/bin/semanage" ] \
+            || { _slx_fail "root login mapping: no semanage inside ${sysroot} (policycoreutils[python] not merged?)"; return 1; }
+        _slx_say "root login mapping: chroot semanage login -S ${type} -N -a -s ${seuser} -r ${range:-s0} root"
+        out="$(chroot "${sysroot}" semanage login -S "${type}" -N -a -s "${seuser}" -r "${range:-s0}" root 2>&1)" || {
+            _slx_fail "root login mapping: semanage failed:"; printf '%s\n' "${out}" | tail -n 10 >&2; return 1; }
+    fi
+    grep -E "^root:${seuser}:" "${seusers}" >/dev/null \
+        || { _slx_fail "root login mapping: ${seusers} still has no 'root:${seuser}:' line after semanage"; return 1; }
+    [ -r "${homedirs}" ] || { _slx_fail "root login mapping: ${homedirs} missing — genhomedircon did not run"; return 1; }
+    grep -E '^/root[[:space:]]' "${homedirs}" >/dev/null \
+        || { _slx_fail "root login mapping: ${homedirs} carries no /root line — genhomedircon ignored the mapping"; return 1; }
+    got="$(chroot "${sysroot}" matchpathcon -n /root 2>/dev/null | cut -d: -f3)" || got=""
+    [ "${got}" = user_home_dir_t ] \
+        || { _slx_fail "root login mapping: matchpathcon /root -> '${got:-<nothing>}', expected user_home_dir_t"; return 1; }
+    _slx_say "root login mapping: /root -> user_home_dir_t ($(grep -cE '^/root' "${homedirs}") .homedirs line(s))"
+}
+
 # ── slx_write_selinux_config <sysroot> <type> ────────────────────────────────
 # The image's /etc/selinux/config is OURS, not the stock selinux-base file.
 # SELINUX=${HUGMESH_SELINUX_MODE:-permissive}; only enforcing|permissive accepted
@@ -822,7 +872,13 @@ slx_label_tree() {
         chroot "${root}" setfiles -m -F -c "${pol}" "${fc}" "/${a}" >/dev/null 2>&1 || true
     done
     # In THIS shell (not bash -c) so the same chroot/setfiles the pass used answer.
-    n="$({ chroot "${root}" setfiles -n -v -m -F -c "${pol}" "${ex[@]}" "${fc}" / 2>&1 || true; } | { grep -ci relabel || true; })"
+    # The dry run's OWN exit status is checked: a dry run that errors out prints no
+    # "Relabeled" line, and counting its output would read as "0 remaining" — the
+    # postcondition would pass precisely when it could not look.
+    out="$(chroot "${root}" setfiles -n -v -m -F -c "${pol}" "${ex[@]}" "${fc}" / 2>&1)" || {
+        _slx_fail "label: the dry-run postcondition (setfiles -n -v) itself failed on ${root} — cannot count what is left, refusing to pass:"
+        printf '%s\n' "${out}" | tail -n 20 >&2; return 1; }
+    n="$(printf '%s\n' "${out}" | { grep -ci relabel || true; })"
     n="${n//[!0-9]/}"; n="${n:-0}"
     if [ "${n}" -ge "${SLX_DRYRUN_MAX}" ]; then
         _slx_fail "label: after setfiles, a dry run still wants to relabel ${n} path(s) in ${root} (limit ${SLX_DRYRUN_MAX})"
@@ -933,10 +989,15 @@ slx_label_gate() {
 
 # ── slx_tar_label_gate <tarball> <tag> <probe-table> ─────────────────────────
 # Extract the probe paths from an xattr tarball (stage4) into a scratch dir and
-# gate them, plus a census of the archive listing: GNU tar -tv marks an entry
-# carrying xattrs with '*' after the mode, so '*'-marked regular files + dirs /
-# all regular files + dirs must be >= SLX_CENSUS_MIN_PCT. (Unlabelled entries
-# carry no xattr at all; the exact types come from the probes.)
+# gate them, plus a census of the archive listing. The census counts entries that
+# carry security.selinux BY NAME: `tar --xattrs -tvv` prints one '  x: <len> <name>'
+# line under every entry per stored xattr. (The '*' after the mode in plain -tv
+# only says "has SOME xattr" — a stage4 whose files carry user.* or
+# security.capability and no label would pass a '*' census.) Labelled regular
+# files + dirs / all regular files + dirs must be >= SLX_CENSUS_MIN_PCT.
+# SLX_TAR_CENSUS_XATTR names the attribute; only the offline test overrides it
+# (CI containers cannot write security.*). The exact types come from the probes.
+SLX_TAR_CENSUS_XATTR="${SLX_TAR_CENSUS_XATTR:-security.selinux}"
 slx_tar_label_gate() {
     local tb="${1:?}" tag="${2:?}" table="${3:?}" scratch rel members=() rc=0 tot lab_n
     [ -s "${tb}" ] || { _slx_fail "label gate [${tag}]: ${tb} missing"; return 1; }
@@ -947,26 +1008,17 @@ slx_tar_label_gate() {
     fi
     slx_label_gate "${scratch}" "${tag}" "${table}" || rc=1
     rm -rf "${scratch}"
-    read -r tot lab_n < <(tar --xattrs --xattrs-include='*' -tvf "${tb}" 2>/dev/null \
-        | awk '$1 ~ /^[-d]/ {t++; if (substr($1, 11, 1) == "*") l++} END {print t+0, l+0}')
+    # Entry lines start in column 1; xattr lines are indented '  x: <len> <name>'.
+    # cur=1 while inside a regular-file/dir entry not yet counted as labelled.
+    read -r tot lab_n < <(tar --xattrs --xattrs-include='*' -tvvf "${tb}" 2>/dev/null \
+        | awk -v want="${SLX_TAR_CENSUS_XATTR}" '
+            /^[^ ]/ { cur = ($1 ~ /^[-d]/); if (cur) t++; next }
+            cur && $1 == "x:" && $3 == want { l++; cur = 0 }
+            END { print t+0, l+0 }')
     if [ "${tot:-0}" -eq 0 ] || [ $(( ${lab_n:-0} * 100 )) -lt $(( tot * SLX_CENSUS_MIN_PCT )) ]; then
-        _slx_fail "label gate [${tag}]: archive census ${lab_n:-0}/${tot:-0} files+dirs carry xattrs — below ${SLX_CENSUS_MIN_PCT}%"; rc=1
+        _slx_fail "label gate [${tag}]: archive census ${lab_n:-0}/${tot:-0} files+dirs carry ${SLX_TAR_CENSUS_XATTR} — below ${SLX_CENSUS_MIN_PCT}%"; rc=1
     else
-        _slx_say "label gate [${tag}]: archive census ${lab_n}/${tot} files+dirs carry xattrs"
+        _slx_say "label gate [${tag}]: archive census ${lab_n}/${tot} files+dirs carry ${SLX_TAR_CENSUS_XATTR}"
     fi
     return "${rc}"
-}
-
-# ── slx_build_labels <sysroot> <type> <probe-table-out> ──────────────────────
-# The B1 sequence, in its one legal order: store -> config -> setfiles -> probe
-# table -> gate with census. Each step is checked; the caller wraps this in
-# `|| { err ...; exit 1; }` (errexit is OFF inside an && / || list, so every step
-# here tests its own status).
-slx_build_labels() {
-    local sysroot="${1:?}" type="${2:?}" table="${3:?}"
-    slx_store_install_modules "${sysroot}" "${type}" chroot || return 1
-    slx_write_selinux_config "${sysroot}" "${type}" || return 1
-    slx_label_tree "${sysroot}" "${type}" || return 1
-    slx_write_probe_table "${sysroot}" "${type}" "${table}" || return 1
-    slx_label_gate "${sysroot}" sysroot "${table}" --census || return 1
 }

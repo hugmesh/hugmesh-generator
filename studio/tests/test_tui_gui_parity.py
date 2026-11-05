@@ -181,6 +181,28 @@ def test_qemu_flow_survives_the_card_removal_on_both_faces(wiz):
     assert j.flags["qemu_selected"] is True
 
 
+def test_the_emulation_backend_choices_are_one_tuple_on_every_face(wiz):
+    """QEMU for Windows beside Docker: the GUI page's chooser, the TUI screen's
+    BACKEND_KEY and the CLI all choose from ``qemu_windows.BACKENDS`` — the same ids,
+    the same labels, in the same order. The CLI side: the WHPX lines the TUI prints
+    name the flag ``qemu_windows.add_cli_arguments`` defines, and that very module."""
+    import argparse
+    from hugmesh_studio.core import qemu_windows as qw
+    from hugmesh_studio.tui import meshemu as tui_meshemu
+    combo = wiz.page(wiz._page_ids["meshemu"]).backend_combo
+    gui = tuple((combo.itemData(i), combo.itemText(i)) for i in range(combo.count()))
+    tui, backend = [], qw.BACKENDS[0][0]
+    for _ in qw.BACKENDS:
+        tui.append((backend, tui_meshemu.backend_label(backend)))
+        backend = tui_meshemu.next_backend(backend)
+    assert gui == tuple(tui) == qw.BACKENDS
+    studio, module = tui_meshemu.WHPX_CLI_PREFIXES
+    ap = argparse.ArgumentParser()
+    qw.add_cli_arguments(ap)
+    assert ap.parse_args([studio[1], "status"]).qemu_windows == ["status"]
+    assert module[-1] == qw.__name__
+
+
 def test_qemu_session_completeness_words_come_from_the_session_itself():
     """Both pickers describe an aborted build with the SESSION's own badge — the
     GUI combo renders ``BuildSession.summary()`` (which embeds it), the TUI
@@ -795,3 +817,59 @@ def test_where_a_domains_own_look_shows_is_one_sentence_on_both_faces(
     assert gui == want
     assert want in text
     ed.deleteLater()
+
+
+# ── HugMesh tokens (operator ask 2026-11-04): issuing from the window, text, CLI ───────
+def test_issuing_a_token_offers_the_same_roles_shell_rule_and_lifetime_on_every_face(
+        qapp, monkeypatch, capsys):
+    """The window's "Issue a HugMesh token…" dialog, the text screen and the CLI offer
+    the core's roles, shell access exactly for its shell roles, and the core's longest
+    lifetime — and both faces say the same fingerprint and shell sentences."""
+    import time
+
+    from hugmesh_studio.core import mesh_token as mt
+    from hugmesh_studio.gui import mesh_token_issue_dialog as dmod
+    from hugmesh_studio.tui import mesh_token_step as tstep
+
+    def no_container(runner=None):
+        raise mt.TokenError("tool", "No running headscale container was found.")
+    monkeypatch.setattr(mt, "find_headscale_container", no_container)
+    dlg = dmod.IssueTokenDialog()
+    try:
+        deadline = time.monotonic() + 30
+        while dmod.probe_running(dlg, "_probe") and time.monotonic() < deadline:
+            dlg._probe.wait(100)
+            qapp.processEvents()
+        qapp.processEvents()
+        # roles: the dialog's combo, the screen, the CLI's --role choices, the core
+        gui_roles = tuple(dlg.role.itemText(i) for i in range(dlg.role.count()))
+        with pytest.raises(SystemExit):
+            mt.main(["issue", "--help"])
+        help_text = capsys.readouterr().out
+        cli_roles = tuple(help_text.split("--role {", 1)[1].split("}", 1)[0].split(","))
+        assert gui_roles == tstep.MeshTokenScreen.roles() == cli_roles == mt.ROLES
+        # shell: the dialog's tick box is enabled exactly where the screen allows it,
+        # and both are the core's SHELL_ROLES (the CLI refuses the rest: check_fields)
+        for role in mt.ROLES:
+            dlg.role.setCurrentText(role)
+            assert dlg.shell.isEnabled() is tstep.MeshTokenScreen.shell_allowed(role) \
+                is (role in mt.SHELL_ROLES)
+        assert tuple(mt.SHELL_ROLES) == ("admin", "superadmin")
+        # the longest lifetime: every unit of the dialog tops out at the core's maximum
+        for unit, size in dmod.UNITS:
+            dlg.unit.setCurrentText(unit)
+            assert dlg.lifetime.maximum() * size == mt.MAX_LIFETIME_S
+        j = journey.Journey(GENERATOR_DIR)
+        screen = tstep.MeshTokenScreen()
+        j.open_overlay(screen)
+        days = mt.MAX_LIFETIME_S // 86400
+        j.feed(f"e {days}d")
+        assert screen.lifetime_s == mt.MAX_LIFETIME_S and not j.status
+        j.feed(f"e {days + 1}d")
+        assert screen.lifetime_s == mt.MAX_LIFETIME_S and j.status
+        # the sentences both faces show
+        assert (tstep.TITLE, tstep.FINGERPRINT_NOTE, tstep.SHELL_ONLY_TIP) == \
+            (dmod.TITLE, dmod.FINGERPRINT_NOTE, dmod.SHELL_ONLY_TIP)
+    finally:
+        dlg.close()
+        dlg.deleteLater()

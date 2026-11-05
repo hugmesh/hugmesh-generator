@@ -275,10 +275,18 @@ appears in, or "not listed".
   only run for commits that touch those paths. The merge phase says so, and does not
   wait.
 - **A stray non-conforming tag** such as host-shell's `v0.3.1-beta` (its run failed) is
-  ignored by the ordering check. Only `X.Y.Z-beta.N` tags count.
-- **Everything shows REFUSE "cannot read main" or flips between runs.** That is GitHub's
-  secondary rate limit, or the egress tunnel is down. Reads retry twice on any error
-  other than a 404. Wait a minute and run again.
+  ignored by the ordering check. Only `X.Y.Z-beta.N` and stable `X.Y.Z` tags count.
+- **NEEDS-BUMP "stable tag vX.Y.Z is published"** (beta channel). The line main's beta
+  belongs to has already shipped as a stable, so `X.Y.Z-beta.N` is never tagged and the
+  advised next beta is the next minor past the newest stable (`X.(Y+1).0-beta.1`), the
+  same move the stable channel's `next` phase makes. Merge that bump on main. A stable
+  counts as shipped as soon as its tag exists, even if that tag's own run failed and
+  published nothing: the version number is burned either way.
+- **Everything shows REFUSE "cannot read main" / "cannot read tags" or flips between
+  runs.** That is GitHub's secondary rate limit, or the egress tunnel is down. Reads
+  retry twice on any error other than a 404. Wait a minute and run again. A repository
+  whose tag listing cannot be read is never tagged: an unreadable listing would hide a
+  published stable and a later beta.
 - **The `RUNS_ON_PUBLISH` warning.** That org variable sends release jobs to a
   self-hosted runner, which public repositories cannot use, so the jobs queue forever.
   Unset it before releasing.
@@ -418,6 +426,31 @@ The rest already handles a plain `X.Y.Z`: `release_version.py` accepts it and
 2. Release a beta, so every `main` is `DONE`.
 3. Run `scripts/release.sh --channel stable` and read the plan: zero `REFUSE` before
    `--apply`.
+
+### The mesh-node image on both channels
+
+`.github/workflows/mesh-node-release.yml` takes its channel from the tag. The rules are
+in `scripts/mesh-node-release-channel.sh`, which the workflow runs in its version job, in
+the image job right before the push, and right before `gh release create`:
+
+- a beta `mesh-node-vX.Y.Z-beta.N` must be on `main`. It pushes `:X.Y.Z-beta.N`,
+  `:beta` and `:sha-<12>`, and creates a GitHub prerelease.
+- a stable `mesh-node-vX.Y.Z` must be on `release/X.Y`, the same repository-wide branch
+  name every row uses, with X.Y from `clients/docker-mesh-node/VERSION` (so
+  `release/0.1` for the 0.1 line).
+  - It pushes `:X.Y.Z` and `:sha-<12>`.
+  - It adds `:X.Y` unless a newer published `mesh-node-vX.Y.*` exists.
+  - It adds `:latest` unless a newer published `mesh-node-vA.B.C` exists. `studio-v*`
+    tags never count.
+- a push to `release/X.Y` that touches the mesh-node paths pushes `:sha-<12>` only. That
+  is the push run the stable checks read.
+
+The GitHub release of a mesh-node stable is a full release, but it is never marked
+Latest. The repository has one Latest slot, and the Studio owns it.
+
+The rules are tested by `scripts/test-mesh-node-release-channel.sh`, which the version
+job runs before anything else. Run it locally with
+`bash scripts/test-mesh-node-release-channel.sh` (no network, no docker).
 
 ## Testing the script
 

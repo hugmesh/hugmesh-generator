@@ -192,6 +192,12 @@ GITOPS_REPO_URL = "https://github.com/hugmesh/hugmesh-generator.git"
 #: The kind cluster bootstrap-kind.sh creates, and the name every probe below asks
 #: about. ONE reader of the override so a probe can never disagree with the verb.
 KIND_CLUSTER_DEFAULT = "hugmesh-local"
+#: scripts/kind-halt.sh's refusal for a cluster that ALREADY holds a completed halt
+#: record: its die() prints `REFUSED (exit <code>): <message>`, and this is the one
+#: exit-4 message `halt` emits (the other exit 4 belongs to `resume`). Pinned against
+#: the script's text by tests/test_devops_halt_already_halted.py.
+_KIND_HALT_ALREADY_HALTED = re.compile(
+    r"REFUSED \(exit 4\): cluster '[^'\n]*' is ALREADY halted")
 # Read-only seeded-stack probe (verified live 2026-08-14): seed-e2e.sh leg 1
 # creates org 'hugmesh' + persona e2e-admin, and Casdoor answers this GET
 # WITHOUT auth — data.name == "<user>" when seeded, data: null when not.
@@ -630,6 +636,22 @@ class LocalStackNode:
         if not os.path.exists(self.compose_file):
             return False, f"stack compose file missing: {self.compose_file}"
         return True, ""
+
+    def _native_windows_refusal(self, action: str, on_line=None) -> str:
+        """The WSL2 sentence for ``action`` on native Windows ("" anywhere else),
+        streamed to ``on_line`` too: the GUI's streaming worker drops a returned
+        message, so a reason that is only returned never reaches the log.
+
+        Every make verb asks this BEFORE :meth:`_make`, not only start/devops_up:
+        without it Stop, clean, seed, the DevOps teardown verbs and the e2e run
+        wrote the limits overlay into the checkout and then failed with a bare
+        "[WinError 2]", which names neither make nor WSL2. It sits on the verbs
+        rather than inside _make, so _make stays the plain mechanism its own
+        streaming/timeout tests drive."""
+        blocker = platform_info.native_windows_blocker(action)
+        if blocker and on_line is not None:
+            on_line(blocker)
+        return blocker
 
     # ---- cold-build preflight ----------------------------------------------------
     # Each probe is a tiny method so tests can mock it both ways; every docker call
@@ -1276,6 +1298,9 @@ class LocalStackNode:
         flag off by default because the e2e suite needs personas that are still
         gated (spec 17 drives the pending-registration UI); an explicit caller
         override in ``extra_env`` still wins."""
+        blocker = self._native_windows_refusal("The local stack", on_line)
+        if blocker:
+            return False, blocker
         env = {"SEED_COMPLETE_REGISTRATION": "1"}
         env.update(extra_env or {})
         return self._make("stack-seed", timeout=timeout, extra_env=env,
@@ -1287,6 +1312,9 @@ class LocalStackNode:
         registry container. This is the action preflight's "run `make
         stack-m2-bootstrap` first" hint names — callable from the GUI so a
         from-scratch bring-up never needs a terminal."""
+        blocker = self._native_windows_refusal("The local stack", on_line)
+        if blocker:
+            return False, blocker
         return self._make("stack-m2-bootstrap", timeout=M2_BOOTSTRAP_TIMEOUT_S,
                           on_line=on_line, cancel=cancel)
 
@@ -1375,6 +1403,13 @@ class LocalStackNode:
         is how they come to disagree."""
         from . import e2e_environments as _e2e_env
         env_def = _e2e_env.environment(environment)   # raises on an unknown id
+        # The run is `make stack-e2e-*`, so on native Windows this is the one true
+        # blocker for every environment: the checks below would say "Ready" (kind)
+        # or advise `make playwright-deps` / bringing the stack up, none of which
+        # the Windows build can do. Before them, so no docker probe runs either.
+        blocker = platform_info.native_windows_blocker("The e2e suite")
+        if blocker:
+            return [blocker]
         problems: list[str] = []
         e2e_dir = os.path.join(self.generator_dir, "tests", "e2e")
         if not os.path.isdir(e2e_dir):
@@ -1797,6 +1832,9 @@ class LocalStackNode:
     def devops_down(self, on_line=None, cancel=None) -> tuple[bool, str]:
         """`make kind-down` — delete the local Kubernetes cluster. Destructive for
         the DevOps lane ONLY: the docker mesh and its volumes are untouched."""
+        blocker = self._native_windows_refusal("The DevOps (Kubernetes) lane", on_line)
+        if blocker:
+            return False, blocker
         return self._make("kind-down", timeout=600,
                           on_line=on_line, cancel=cancel)
 
@@ -1814,9 +1852,36 @@ class LocalStackNode:
 
         The cluster, its PVCs, its Vault KV and its Casdoor identities are all KEPT.
         Streams, because it names every Application it suspends and the sync/health
-        state each was in when it froze — that list is the output's whole point."""
-        return self._make("kind-halt", timeout=900,
-                          on_line=on_line, cancel=cancel)
+        state each was in when it froze — that list is the output's whole point.
+
+        ALREADY HALTED IS THE GOAL, NOT A FAILURE. kind-halt.sh refuses (exit 4) when
+        the cluster already holds a COMPLETED halt record, and that refusal is right:
+        a second halt would file the zeroed cluster as its own 'before' and lose the
+        real replica counts. But the operator asked for a halted lane and has one, so
+        the Studio reports the run as done and says so, instead of filing it as
+        FAILED (operator log 20261030-060710). Only that exact refusal is mapped: an
+        INCOMPLETE record is finished by the script itself (exit 0), an unreadable
+        record is exit 5, and both of those stay what they are. The script's own
+        refusal is used rather than a separate status read first, because it is the
+        one answer taken atomically with the decision and it alone distinguishes a
+        completed record from an interrupted one."""
+        blocker = self._native_windows_refusal("The DevOps (Kubernetes) lane", on_line)
+        if blocker:
+            return False, blocker
+        ok, msg = self._make("kind-halt", timeout=900,
+                             on_line=on_line, cancel=cancel)
+        if ok or (cancel is not None and cancel.is_set()):
+            return ok, msg
+        if not _KIND_HALT_ALREADY_HALTED.search(msg or ""):
+            return ok, msg
+        note = ("[devops] already halted — nothing to do. The lane holds a completed "
+                "halt record, so its workloads are already at 0 and ArgoCD auto-sync "
+                "is already suspended. The record was left untouched (it holds the "
+                "pre-halt replica counts). Resume DevOps lane undoes it; "
+                "`make kind-halt-status` shows what it froze.")
+        if on_line is not None:
+            on_line(note)
+        return True, f"{msg}\n{note}"
 
     def devops_resume(self, on_line=None, cancel=None) -> tuple[bool, str]:
         """`make kind-resume` — undo ``devops_halt``, restoring EXACTLY what it
@@ -1825,6 +1890,9 @@ class LocalStackNode:
         was never the halt's to touch and stays suspended. The record lives in a
         ConfigMap inside the cluster, so this works whether or not the Studio that
         pressed Halt is still running."""
+        blocker = self._native_windows_refusal("The DevOps (Kubernetes) lane", on_line)
+        if blocker:
+            return False, blocker
         return self._make("kind-resume", timeout=900,
                           on_line=on_line, cancel=cancel)
 
@@ -1838,6 +1906,9 @@ class LocalStackNode:
         used to leave the operator unable to log in, post or open the forum after a
         restart, because their whole identity tier had been wiped and never
         re-seeded. `clean()` below remains the destructive one, and says so."""
+        blocker = self._native_windows_refusal("The local stack")
+        if blocker:
+            return False, blocker
         return self._make("stack-halt", timeout=300)
 
     def clean(self, on_line=None, cancel=None) -> tuple[bool, str]:
@@ -1847,6 +1918,9 @@ class LocalStackNode:
         images (postgres/cassandra/mastodon/…) that other projects may share are
         KEPT, and no `docker system prune` is ever issued. Streams like the other
         long actions — removing ~28 images is not instant."""
+        blocker = self._native_windows_refusal("The local stack", on_line)
+        if blocker:
+            return False, blocker
         return self._make("stack-clean", timeout=900, on_line=on_line, cancel=cancel)
 
     def status(self) -> StackStatus:

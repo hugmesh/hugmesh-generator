@@ -53,6 +53,11 @@ source "${SCRIPT_DIR}/scripts/_download-lib.sh"
 source "${SCRIPT_DIR}/scripts/_passhash-lib.sh"
 # shellcheck source=scripts/_domain-idp-lib.sh
 source "${SCRIPT_DIR}/scripts/_domain-idp-lib.sh"
+# Greeter SSO login path (desktop_sso_bake / desktop_sso_verify): the same
+# /etc/pam.d/lightdm stack and helper every desktop image bakes. See
+# scripts/_desktop-sso-lib.sh and docs/DESKTOP-LOGIN-SSO.md.
+# shellcheck source=scripts/_desktop-sso-lib.sh
+source "${SCRIPT_DIR}/scripts/_desktop-sso-lib.sh"
 # THE role vocabulary (scripts/_roles-lib.sh) — the SAME declaration the x86, jetson
 # and Studio channels read. rpi5 already spelled the node roles long; what it gains
 # here is accepting `be`/`fe` (the Studio persisted `be/rpi5` and `fe/rpi5` entry ids,
@@ -421,6 +426,15 @@ HEADSCALE_VERSION="0.23.0"
 TAILSCALE_VERSION="1.78.1"
 SKIP_MESH=false
 SKIP_TAILSCALE=false
+# --with-tailscale keeps the tailnet client on a --standalone desktop (situation 2
+# of docs/DESKTOP-LOGIN-SSO.md: on a tailnet, never mesh-associated); --skip-mesh
+# drops it. "" = the posture default (mesh desktop ON, --standalone OFF).
+MESH_FORCED=""
+# Greeter SSO (the Casdoor/OIDC device-flow sign-in at lightdm). ON for a mesh
+# desktop; --standalone turns it OFF unless --with-sso / --sso-issuer.
+SKIP_SSO=false
+SSO_FORCED=""
+SSO_ISSUER=""
 
 # --print-plan: resolve + validate everything, print the machine-greppable build
 # plan (one PLAN_KEY=VALUE per line) and exit 0 BEFORE any mutation (no root, no
@@ -790,6 +804,21 @@ OPTIONS
 
     --skip-tailscale
         Install headscale only; omit the tailscale client.
+
+    --with-tailscale
+        Keep the tailnet client on a --standalone desktop (which drops it
+        by default), so the greeter SSO can reach an IdP over a tailnet.
+        The image stays standalone: no mesh association, ungoverned.
+
+    --with-sso | --no-sso | --skip-sso
+        Greeter SSO sign-in (Casdoor/OIDC device flow) ON/OFF for --role desktop.
+        Default ON; --standalone turns it off unless --with-sso. The local
+        password login is always kept; with SSO off the greeter says so.
+
+    --sso-issuer URL
+        The IdP for the greeter SSO sign-in (https://HOST[/PATH]; default
+        https://id.<domain>). Implies --with-sso. Changeable later by an
+        admin: sso-greeter configure.
 
     --skip-mesh
         Do not install headscale or tailscale at all.
@@ -1201,8 +1230,12 @@ while [[ $# -gt 0 ]]; do
         # fail-closed below (_validate_vault), baked by bake_vault_conf on node roles.
         --vault-addr)         VAULT_ADDR="$2";        shift 2 ;;
         --vault-external-addr) VAULT_EXTERNAL_ADDR="$2"; shift 2 ;;
-        --skip-mesh)          SKIP_MESH=true;          shift   ;;
+        --skip-mesh)          SKIP_MESH=true; MESH_FORCED=off; shift   ;;
         --skip-tailscale)     SKIP_TAILSCALE=true;     shift   ;;
+        --with-tailscale)     SKIP_MESH=false; SKIP_TAILSCALE=false; MESH_FORCED=on; shift ;;
+        --skip-sso|--no-sso)  SKIP_SSO=true;  SSO_FORCED=off; shift ;;
+        --with-sso)           SKIP_SSO=false; SSO_FORCED=on;  shift ;;
+        --sso-issuer)         SSO_ISSUER="${2:-}";        shift 2 ;;
         --skip-kernel)        SKIP_KERNEL=true;        shift   ;;
         --img)                BUILD_IMG=true;          shift   ;;
         --no-img)             BUILD_IMG=false;         shift   ;;
@@ -1490,13 +1523,33 @@ fi
 
 # ── STANDALONE posture (composable onto --role desktop only — every OTHER
 # --role is a k8s cluster node, so this hard-errors on those) ──────────────
+# --sso-issuer names the IdP, so it means SSO ON (also on a standalone desktop,
+# whose default is off); with --no-sso/--skip-sso it is a contradiction.
+if [ -n "${SSO_ISSUER}" ]; then
+    [ "${SSO_FORCED}" = off ] && { err "--sso-issuer conflicts with --no-sso/--skip-sso"; exit 1; }
+    [[ "${SSO_ISSUER}" =~ ^https://[A-Za-z0-9.-]+(:[0-9]{1,5})?(/[A-Za-z0-9._~/-]*)?$ ]] \
+        || { err "--sso-issuer must be https://HOST[:PORT][/PATH] (got '${SSO_ISSUER}')"; exit 1; }
+    SSO_FORCED=on; SKIP_SSO=false
+fi
 if ${STANDALONE}; then
     ${ROLE_CLIENT} || { err "--standalone only composes onto --role desktop (got --role ${ROLE})"; exit 1; }
-    SKIP_MESH=true
-    SKIP_TAILSCALE=true
+    # Default posture is mesh-OFF. --with-tailscale keeps the tailnet client
+    # (the mesh binaries + tailscaled) so the greeter SSO can reach an IdP over a
+    # tailnet. It does NOT associate the device with a mesh: the SSO posture stays
+    # standalone (ungoverned), and the device joins a tailnet only when an admin
+    # runs `tailscale up --login-server=...` (or a KEYS stick provisions it).
+    if [ "${MESH_FORCED}" = on ]; then
+        ${SKIP_TAILSCALE} && { err "--with-tailscale conflicts with --skip-tailscale"; exit 1; }
+    else
+        SKIP_MESH=true
+        SKIP_TAILSCALE=true
+    fi
+    # SSO off by default on a standalone box; --with-sso / --sso-issuer keeps the
+    # greeter sign-in (it then needs the IdP reachable, e.g. over a tailnet).
+    [ "${SSO_FORCED}" = on ] || SKIP_SSO=true
     ENCRYPT_ROOT=true        # guarantee the installer artifact (the FDE path)
     [ -z "${LOCAL_USER}" ] && LOCAL_USER="${DEFAULT_USER}"
-    info "STANDALONE desktop: no mesh; local user '${LOCAL_USER}'; LUKS2-encrypted root (installer ISO)"
+    info "STANDALONE desktop: $([ "${MESH_FORCED}" = on ] && echo 'tailnet client kept (--with-tailscale), no mesh association' || echo 'no mesh'); local user '${LOCAL_USER}'; LUKS2-encrypted root (installer ISO)"
 fi
 
 # --encrypt-root independent of --standalone: forces the installer ISO, since
@@ -2732,6 +2785,8 @@ if ${PRINT_PLAN}; then
     _plan IDP_CLIENT_ID      "${IDP_CLIENT_ID:-none}"
     _plan IDP_JWKS           "${IDP_JWKS:-none}"
     _plan STANDALONE         "${STANDALONE}"
+    _plan SSO                "$(${SKIP_SSO} && echo off || echo casdoor-oidc)"
+    _plan SSO_ISSUER         "$(${SKIP_SSO} && echo none || echo "${SSO_ISSUER:-https://id.${CLUSTER_DOMAIN}}")"
     _plan LOCAL_USER         "${LOCAL_USER:-$DEFAULT_USER}"
     _plan LOCAL_PASS         "$([ -n "${LOCAL_PASSHASH}" ] && echo REDACTED || echo none)"
     _plan ENCRYPT_ROOT       "${ENCRYPT_ROOT}"
@@ -3906,6 +3961,9 @@ mkdir -p "${SYSROOT}/etc/local.d"
     err "missing first-boot finaliser template: ${SHARED_SPECS}/etc/local.d/01-firstboot.start.tmpl"; exit 1; }
 render_template "${SHARED_SPECS}/etc/local.d/01-firstboot.start.tmpl" "${SYSROOT}/etc/local.d/01-firstboot.start"
 chmod +x "${SYSROOT}/etc/local.d/01-firstboot.start"
+# Root-only: the finaliser carries the crypt(3) hash of --local-pass, and a
+# world-readable copy in the image (and on the live ISO) is an offline-crack target.
+chmod go-rwx "${SYSROOT}/etc/local.d/01-firstboot.start"
 
 # Hostname, timezone, locale
 echo "${HOSTNAME}" > "${SYSROOT}/etc/hostname"
@@ -3954,6 +4012,14 @@ else
 greeter-session=lightdm-gtk-greeter
 user-session=LXDE
 LIGHTDM
+    # Greeter SSO login path (scripts/_desktop-sso-lib.sh): /etc/pam.d/lightdm with
+    # the device-flow helper in front of the local password path, the greeter hint
+    # and (SSO on, mesh posture) the baked desktop-governance templates. Staged
+    # pre-emerge so CONFIG_PROTECT keeps the stack; asserted after the emerge.
+    desktop_sso_bake "${SYSROOT}" "${SHARED_SPECS}" \
+        "$(${SKIP_SSO} && echo false || echo true)" "${CLUSTER_DOMAIN}" "${BRAND_TITLE}" \
+        "$(${STANDALONE} && echo standalone || echo mesh)" "${SSO_ISSUER}" \
+        || { err "greeter SSO bake failed (see above)"; exit 1; }
 fi
 # Opt-in host-binary auto-update: link the boot oneshot + cadence cron into the
 # default runlevel as PLUMBING (every node), but the poller is DEFAULT-OFF / INERT —
@@ -4220,6 +4286,11 @@ if [ "${DESKTOP}" = "light" ] && [ ! -e "${SYSROOT}/etc/init.d/display-manager" 
     err "DESKTOP=light enables the 'display-manager' service but ${SYSROOT}/etc/init.d/display-manager is missing"
     err "       (gui-libs/display-manager-init did not emerge) — the desktop would boot to a console. Aborting."
     exit 1
+fi
+# Greeter SSO stack: x11-misc/lightdm's own /etc/pam.d/lightdm must have been
+# parked by CONFIG_PROTECT, not swapped in (scripts/_desktop-sso-lib.sh).
+if [ "${DESKTOP}" = "light" ]; then
+    desktop_sso_verify "${SYSROOT}" || { err "greeter SSO stack did not survive the payload emerge — refusing to ship a greeter with no SSO path"; exit 1; }
 fi
 info "Stage4 payload verified (${_payload_bins[*]})"
 

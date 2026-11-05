@@ -141,7 +141,8 @@ POSTURE="$(awk '/^# ── STANDALONE posture/ {on=1} on && /^if \$\{STANDALONE\
 [ -n "${POSTURE}" ] || bad "could not slice the STANDALONE posture block"
 run_posture() {  # MESH_FORCED -> "SKIP_MESH SKIP_TAILSCALE"
     ( STANDALONE=true; MESH_FORCED="$1"; SKIP_MESH=false; SKIP_TAILSCALE=false; LOCAL_USER=""; DEFAULT_USER=u; ENCRYPT_ROOT=false; BUILD_INSTALLER=false
-      info() { :; }
+      SSO_FORCED=""; SKIP_SSO=false   # the greeter-SSO posture (#878) shares this block
+      info() { :; }; err() { :; }
       eval "${POSTURE}"; echo "${SKIP_MESH} ${SKIP_TAILSCALE} ${ENCRYPT_ROOT} ${BUILD_INSTALLER}" )
 }
 [ "$(run_posture "")" = "true true true true" ] \
@@ -150,7 +151,7 @@ run_posture() {  # MESH_FORCED -> "SKIP_MESH SKIP_TAILSCALE"
 [ "$(run_posture on)" = "false false true true" ] \
     && ok "--standalone --with-tailscale: tailnet stays ON (situation 2: tailnet, no mesh association), FDE + installer still forced" \
     || bad "--standalone --with-tailscale gave '$(run_posture on)' (want 'false false true true')"
-grep -E -q -- '--with-tailscale\|--with-mesh\) SKIP_MESH=false; SKIP_TAILSCALE=false; MESH_FORCED=on' "${BUILDER}" \
+grep -E -q -- '--with-tailscale\)[[:space:]]+SKIP_MESH=false; SKIP_TAILSCALE=false; MESH_FORCED=on' "${BUILDER}" \
     && ok "--with-tailscale is parsed (MESH_FORCED=on, x86 parity)" || bad "--with-tailscale is not parsed as MESH_FORCED=on"
 
 # The post-build hint: detection, never a hard-coded device.

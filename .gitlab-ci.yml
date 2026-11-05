@@ -3010,11 +3010,30 @@ desktop-governance-verify:
     # local fake issuer, then its output through the REAL deposit and the REAL
     # mapper. Same tool set (python3 + openssl); hard-fails without them.
     - bash tests/desktop-governance/test-sso-token-producer.sh
+    # The greeter SSO login path: the REAL /usr/lib/hugmesh/sso-greeter helper against
+    # the fake issuer (device flow, RS256 verification, least-privilege account
+    # mapping, bounded + revocable offline cache, session hand-off), the REAL
+    # /etc/pam.d/lightdm through libpam where available, and a mutation battery.
+    - bash tests/desktop-governance/test-sso-greeter.sh
+    # The bake: builders call desktop_sso_bake/desktop_sso_verify from SKIP_SSO, the
+    # lib executed against a fake sysroot, the stack's structure, negative controls.
+    - bash tests/scripts/test-desktop-sso-bake.sh
   rules:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
       changes:
         - specs/etc/keys-provision/provision.sh
         - specs/etc/hugmesh/desktop-governance/**/*
+        - specs/etc/pam.d/lightdm
+        - specs/usr/lib/hugmesh/sso-greeter
+        - scripts/_desktop-sso-lib.sh
+        - build-x86-host-stage4.sh
+        - build-frite-stage4.sh
+        - build-rpi5-stage4.sh
+        - build-jetson-stage4.sh
+        - build-orangepi4-lts-stage4.sh
+        - build-orangepi5-stage4.sh
+        - specs-frite/portage/packages-light-desktop.list
+        - tests/scripts/test-desktop-sso-bake.sh
         - keys-template/desktop-governance/**/*
         - tests/desktop-governance/**/*
         - specs/cluster/manifests/admin-bff-api/deployment.yaml
@@ -3562,6 +3581,7 @@ lint:seed-password-reconcile:
   script:
     - bash tests/scripts/test-seed-password-reconcile.sh
     - bash tests/scripts/seed_password_reconcile_mutations.sh
+    - bash tests/stack/test-seed-e2e-lockout.sh
 
 # The e2e password ROTATES per run (2026-10-15): the contract said "random per
 # run", but nothing ever started a new value — the operator's credentials file

@@ -36,7 +36,8 @@ import os
 import re
 
 from hugmesh_studio.core.build_driver import (
-    DOCKER_ASSET_FIELDS, _PATH_ADVISORY, _PATH_MUST_EXIST, BuildDriver,
+    DOCKER_ASSET_FIELDS, DOCKER_EXTRA_ASSET_FIELDS, _PATH_ADVISORY, _PATH_MUST_EXIST,
+    BuildDriver,
 )
 from hugmesh_studio.core.config import PLATFORM_FIELD_SUPPORT, ImageConfig
 from hugmesh_studio.core.platform_info import HostInfo
@@ -52,6 +53,14 @@ _HOST_PATH_FIELDS = {
     "wallpaper", "grub_background", "login_background", "brand_logo", "color_scheme",
     "branding_dir", "egress_vpn", "secureboot_key", "secureboot_cert", "keys_usb", "distdir",
 }
+# 2026-11-04: the brand profile (`--config`, sourced by every builder) and the x86
+# home/seed inputs + GRUB theme dir were path flags missing from the mount list. They are
+# mounted, but kept out of _PATH_MUST_EXIST (checked only when emitted).
+_EXTRA_HOST_PATH_FIELDS = {
+    "brand_profile", "grub_theme", "home_seed_code_from", "include_home_archive",
+    "seed_packages_from",
+}
+_DIR_FIELDS = {"distdir", "keys_usb", "branding_dir", "grub_theme", "home_seed_code_from"}
 
 
 def _driver(backend: str = "docker") -> BuildDriver:
@@ -83,8 +92,8 @@ def test_every_host_path_field_is_mounted_under_docker(tmp_path):
     must be bind-mounted and its flag rewritten to the in-container path. Before the fix
     secureboot_key/_cert/keys_usb/distdir were emitted as raw host paths and silently
     ignored in-container."""
-    for field in sorted(_HOST_PATH_FIELDS):
-        if field == "distdir" or field == "keys_usb" or field == "branding_dir":
+    for field in sorted(_HOST_PATH_FIELDS | _EXTRA_HOST_PATH_FIELDS):
+        if field in _DIR_FIELDS:
             p = tmp_path / f"{field}_dir"
             p.mkdir()
         else:
@@ -102,6 +111,8 @@ def test_every_host_path_field_is_mounted_under_docker(tmp_path):
 def test_mount_list_covers_every_host_path_field():
     """Completeness, so a NEW path field cannot silently rejoin the ignore club."""
     assert set(DOCKER_ASSET_FIELDS) == _HOST_PATH_FIELDS
+    assert set(DOCKER_EXTRA_ASSET_FIELDS) == _EXTRA_HOST_PATH_FIELDS
+    assert not set(DOCKER_ASSET_FIELDS) & set(DOCKER_EXTRA_ASSET_FIELDS)
 
 
 def test_mount_list_has_no_duplicates_and_indices_are_stable():
@@ -114,16 +125,77 @@ def test_mount_list_has_no_duplicates_and_indices_are_stable():
                                        "egress_vpn")
 
 
-def test_paths_already_under_the_generator_dir_are_not_mounted(tmp_path):
-    """/src is already mounted — re-mounting a path under it would be redundant (and could
-    shadow the repo). Pins the existing early-continue."""
+def test_paths_already_under_the_generator_dir_are_translated_to_src_not_mounted(tmp_path):
+    """/src is already mounted, so a path under the checkout needs no new mount (one
+    could shadow the repo) — but its FLAG still has to name the IN-CONTAINER path.
+
+    This test used to pin the opposite ("emitted verbatim, reachable via /src"), and that
+    was the bug: the container sees the repo at /src, not at the host's absolute path, so
+    the verbatim value names a file that does not exist in-container."""
     # NB: a branding field would be the obvious probe but is desktop-class, so it never
     # reaches argv on this mesh/be config at all. secureboot_key does.
     inside = os.path.join(GENERATOR_DIR, "keys-template", "kernel_key.pem")
     cfg = _docker_cfg(tmp_path, secureboot_key=inside)
     cmd = _driver().command(cfg, backend="docker")
-    assert inside in _inner(cmd)               # emitted verbatim, reachable via /src
-    assert not any(a.startswith(f"{inside}:/assets") for a in cmd)
+    assert inside not in _inner(cmd), "the HOST path does not exist in-container"
+    assert "--secureboot-key /src/keys-template/kernel_key.pem" in _inner(cmd)
+    assert not any(a.startswith(f"{inside}:") for a in cmd)
+
+
+# ── the brand profile (operator session 20261031-104549, backend docker) ────────────────
+_EXAMPLE_CONF = os.path.join(GENERATOR_DIR, "brands", "example.conf")
+
+
+def test_brands_example_conf_exists_in_the_checkout():
+    """The file the failed session named is a real, committed profile — so the failure
+    was the path translation, not a missing file."""
+    assert os.path.isfile(_EXAMPLE_CONF)
+
+
+def test_brand_profile_under_the_checkout_reaches_the_container_as_src_path():
+    """THE REGRESSION. The session's worklist carried the HOST absolute path of
+    brands/example.conf for three rpi5 images; every one died in the builder with
+    `config file not found: <host path>` while the native backend read the same file."""
+    cfg = ImageConfig(platform="rpi5", role="backend", mode="mesh", env="test")
+    cfg.brand_profile = _EXAMPLE_CONF
+    inner = _inner(_driver().command(cfg, backend="docker"))
+    assert _EXAMPLE_CONF not in inner, "host path handed to the container"
+    assert "--config /src/brands/example.conf" in inner
+
+
+def test_relative_brand_profile_resolves_against_the_checkout(tmp_path, monkeypatch):
+    """A typed `brands/example.conf` means the checkout's file (native builds run with
+    cwd = the checkout), whatever the Studio process's own cwd is. In the container the
+    builder's cwd is /src, so the relative spelling is kept as typed."""
+    monkeypatch.chdir(tmp_path)
+    cfg = ImageConfig(platform="rpi5", role="backend", mode="mesh", env="test")
+    cfg.brand_profile = "brands/example.conf"
+    d = _driver()
+    cmd = d.command(cfg, backend="docker")
+    assert "--config brands/example.conf" in _inner(cmd)
+    assert not any(":/assets/" in a for a in cmd), "a checkout file needs no mount"
+    assert not [p for p in d.preflight(cfg, backend="docker") if "brand-profile" in p]
+
+
+def test_brand_profile_outside_the_checkout_is_mounted_read_only(tmp_path):
+    prof = tmp_path / "acme.conf"
+    prof.write_text('BRAND="acme"\n')
+    cfg = ImageConfig(platform="rpi5", role="backend", mode="mesh", env="test")
+    cfg.brand_profile = str(prof)
+    cmd = _driver().command(cfg, backend="docker")
+    mounts = [a for a in cmd if a.startswith(f"{prof}:")]
+    assert len(mounts) == 1 and mounts[0].endswith("/acme.conf:ro"), mounts
+    cpath = mounts[0][len(f"{prof}:"):-len(":ro")]
+    assert f"--config {cpath}" in _inner(cmd)
+    assert str(prof) not in _inner(cmd)
+
+
+def test_missing_brand_profile_blocks_before_dispatch(tmp_path):
+    """Every builder hard-errors on a --config it cannot find; say so at second 0."""
+    cfg = ImageConfig(platform="rpi5", role="backend", mode="mesh", env="test")
+    cfg.brand_profile = str(tmp_path / "nope.conf")
+    problems = _driver().preflight(cfg, backend="docker")
+    assert any("brand-profile" in p and "does not exist" in p for p in problems)
 
 
 def test_native_backend_never_remaps(tmp_path):
@@ -290,3 +362,198 @@ def test_builder_distdir_warns_rather_than_erring():
     assert m, "build-x86 lost its --distdir advisory"
     tail = body[m.end():m.end() + 400]
     assert "warn " in tail and "exit 1" not in tail.split("fi")[0]
+
+
+# ── refutation round (PR #851): only an EMITTED flag is checked or mounted ─────────────
+def _fake_checkout(tmp_path):
+    """A generator dir of our own, so symlinks and siblings can be laid next to it."""
+    gen = tmp_path / "hugmesh-generator"
+    (gen / "brands").mkdir(parents=True)
+    return gen
+
+
+def _gen_driver(gen) -> BuildDriver:
+    host = HostInfo(os="linux", is_gentoo=True, has_docker=True, has_bash=True,
+                    has_kvm=False, is_root=True, builder_image="hugmesh-builder")
+    return BuildDriver(str(gen), host)
+
+
+def _unaffiliated(**kw) -> ImageConfig:
+    cfg = ImageConfig(platform="x86", role="standalone-unaffiliated", mode="standalone",
+                      env="test")
+    for k, v in kw.items():
+        setattr(cfg, k, v)
+    return cfg
+
+
+def test_stale_brand_profile_on_an_unaffiliated_image_never_blocks(tmp_path):
+    """FALSE-BLOCK GUARD. The unaffiliated role bakes zero brand, so _x86_args never emits
+    --config. A stale profile riding a loaded/saved/restarted config (worklist.materialize
+    deep-copies it as-is) must not block, on either backend, a build that never reads it."""
+    cfg = _unaffiliated(brand_profile=str(tmp_path / "old-brand.conf"))
+    assert "--config" not in cfg.to_cli_args()
+    for backend in ("docker", "native"):
+        assert not [p for p in _driver().preflight(cfg, backend=backend)
+                    if "brand-profile" in p], backend
+
+
+def test_stale_brand_profile_on_an_unaffiliated_image_is_not_mounted(tmp_path):
+    """Missing OR present: a flag that is not emitted gets no mount either way."""
+    stale = tmp_path / "old-brand.conf"
+    for present in (False, True):
+        if present:
+            stale.write_text('BRAND="old"\n')
+        cfg = _unaffiliated(brand_profile=str(stale))
+        cmd = _driver().command(cfg, backend="docker")
+        assert not any(a.startswith(f"{stale}:") for a in cmd), present
+
+
+def test_present_x86_only_paths_on_an_arm_config_are_not_mounted(tmp_path):
+    """The flag is not emitted for rpi5, so even an EXISTING path gets no mount: the
+    container must not be handed host files its builder will never be told about."""
+    theme = tmp_path / "theme"
+    theme.mkdir()
+    cfg = ImageConfig(platform="rpi5", role="backend", mode="mesh", env="test")
+    cfg.grub_theme = str(theme)
+    cmd = _driver().command(cfg, backend="docker")
+    assert not any(a.startswith(f"{theme}:") for a in cmd)
+
+
+def test_stale_x86_only_paths_on_an_arm_config_are_not_mounted(tmp_path):
+    """rpi5 never receives --grub-theme / --home-seed-code-from / --secureboot-key; a stale
+    value must not become a `-v` of a missing path (docker creates the source as an empty
+    ROOT-owned directory on the host)."""
+    cfg = ImageConfig(platform="rpi5", role="backend", mode="mesh", env="test")
+    cfg.grub_theme = str(tmp_path / "gone-theme")
+    cfg.home_seed_code_from = str(tmp_path / "gone-src")
+    cfg.secureboot_key = str(tmp_path / "gone.pem")
+    cmd = _driver().command(cfg, backend="docker")
+    assert not any(str(tmp_path) in a for a in cmd[:-1]), \
+        [a for a in cmd if str(tmp_path) in a]
+    assert not [p for p in _driver().preflight(cfg, backend="docker")
+                if str(tmp_path) in p]
+
+
+def test_an_emitted_but_missing_outside_path_is_never_bind_mounted(tmp_path):
+    """distdir only WARNS when missing, so the build proceeds: a `-v` of the missing path
+    would make docker create it on the host as root. Leave it unmounted; the builder's own
+    [ -d ] guard then reports it as ignored."""
+    gone = tmp_path / "no-distfiles"
+    cfg = _docker_cfg(tmp_path, distdir=str(gone))
+    cmd = _driver().command(cfg, backend="docker")
+    assert not any(a.startswith(f"{gone}:") for a in cmd)
+
+
+def test_an_emitted_missing_extra_path_still_blocks(tmp_path):
+    """The gate removes FALSE blocks only: an emitted --grub-theme that is missing would
+    hard-fail the x86 builder hours in, so preflight still says so at second 0."""
+    cfg = _docker_cfg(tmp_path, grub_theme=str(tmp_path / "nope-theme"))
+    assert "--grub-theme" in cfg.to_cli_args()
+    problems = _driver().preflight(cfg, backend="docker")
+    assert any("grub-theme" in p and "does not exist" in p for p in problems)
+
+
+def test_a_symlink_in_the_checkout_to_outside_is_mounted_not_src_rewritten(tmp_path):
+    """brands/link.conf -> /elsewhere/acme.conf is under the checkout by SPELLING only: in
+    the container /src/brands/link.conf dangles. Its target must be mounted read-only."""
+    gen = _fake_checkout(tmp_path)
+    outside = tmp_path / "elsewhere"
+    outside.mkdir()
+    target = outside / "acme.conf"
+    target.write_text('BRAND="acme"\n')
+    link = gen / "brands" / "link.conf"
+    os.symlink(target, link)
+    cfg = ImageConfig(platform="rpi5", role="backend", mode="mesh", env="test")
+    cfg.brand_profile = str(link)
+    cmd = _gen_driver(gen).command(cfg, backend="docker")
+    assert "/src/brands/link.conf" not in _inner(cmd)
+    mounts = [a for a in cmd if a.startswith(f"{target}:")]
+    assert len(mounts) == 1 and mounts[0].endswith(":ro"), cmd
+    cpath = mounts[0][len(f"{target}:"):-len(":ro")]
+    assert f"--config {cpath}" in _inner(cmd)
+
+
+def test_a_symlink_in_the_checkout_to_inside_maps_to_its_real_src_path(tmp_path):
+    gen = _fake_checkout(tmp_path)
+    real = gen / "brands" / "real.conf"
+    real.write_text('BRAND="x"\n')
+    link = gen / "brands" / "alias.conf"
+    os.symlink(real, link)
+    cfg = ImageConfig(platform="rpi5", role="backend", mode="mesh", env="test")
+    cfg.brand_profile = str(link)
+    cmd = _gen_driver(gen).command(cfg, backend="docker")
+    assert "--config /src/brands/real.conf" in _inner(cmd)
+    assert not any(a.startswith(f"{real}:") for a in cmd)
+
+
+def test_a_sibling_directory_is_not_inside_the_checkout(tmp_path):
+    """hugmesh-generator-sibling/ shares the checkout's name as a PREFIX. A separator-less
+    startswith would call it inside and emit /src/../hugmesh-generator-sibling/x.conf."""
+    gen = _fake_checkout(tmp_path)
+    sib = tmp_path / "hugmesh-generator-sibling"
+    sib.mkdir()
+    prof = sib / "x.conf"
+    prof.write_text('BRAND="x"\n')
+    cfg = ImageConfig(platform="rpi5", role="backend", mode="mesh", env="test")
+    cfg.brand_profile = str(prof)
+    cmd = _gen_driver(gen).command(cfg, backend="docker")
+    assert "/src/" not in _inner(cmd).split("--config", 1)[1].split()[0]
+    assert ".." not in _inner(cmd)
+    assert any(a.startswith(f"{prof}:/assets/") and a.endswith(":ro") for a in cmd)
+
+
+# ── the fleet lane: FleetDriver forwards --config to every builder in the container ────
+def test_fleet_docker_brand_profile_under_the_checkout_is_a_src_path(tmp_path):
+    from hugmesh_studio.core.fleet import FleetConfig, FleetDriver
+    host = HostInfo(os="linux", is_gentoo=True, has_docker=True, has_bash=True,
+                    has_kvm=False, is_root=True, builder_image="hugmesh-builder")
+    cfg = FleetConfig(brand_profile=_EXAMPLE_CONF, output_dir=str(tmp_path / "out"))
+    inner = _inner(FleetDriver(GENERATOR_DIR, host).command(cfg, "docker"))
+    assert _EXAMPLE_CONF not in inner
+    assert "--config /src/brands/example.conf" in inner
+
+
+def test_fleet_docker_brand_profile_outside_the_checkout_is_mounted(tmp_path):
+    from hugmesh_studio.core.fleet import FleetConfig, FleetDriver
+    prof = tmp_path / "acme.conf"
+    prof.write_text('BRAND="acme"\n')
+    host = HostInfo(os="linux", is_gentoo=True, has_docker=True, has_bash=True,
+                    has_kvm=False, is_root=True, builder_image="hugmesh-builder")
+    cfg = FleetConfig(brand_profile=str(prof), output_dir=str(tmp_path / "out"))
+    cmd = FleetDriver(GENERATOR_DIR, host).command(cfg, "docker")
+    mounts = [a for a in cmd if a.startswith(f"{prof}:")]
+    assert len(mounts) == 1 and mounts[0].endswith(":ro"), cmd
+    assert str(prof) not in _inner(cmd)
+
+
+def test_fleet_native_brand_profile_is_untouched(tmp_path):
+    from hugmesh_studio.core.fleet import FleetConfig, FleetDriver
+    host = HostInfo(os="linux", is_gentoo=True, has_docker=True, has_bash=True,
+                    has_kvm=False, is_root=True, builder_image="hugmesh-builder")
+    cfg = FleetConfig(brand_profile=_EXAMPLE_CONF, output_dir=str(tmp_path / "out"))
+    cmd = FleetDriver(GENERATOR_DIR, host).command(cfg, "native")
+    assert _EXAMPLE_CONF in cmd
+
+
+def test_a_relative_symlink_spelling_is_resolved_to_its_real_src_path(tmp_path, monkeypatch):
+    """A relative value that goes through a link whose target is an ABSOLUTE host path
+    inside the checkout would dangle in the container if kept as typed; it is resolved."""
+    gen = _fake_checkout(tmp_path)
+    real = gen / "brands" / "real.conf"
+    real.write_text('BRAND="x"\n')
+    os.symlink(str(real), gen / "brands" / "abs-alias.conf")   # absolute target
+    monkeypatch.chdir(tmp_path)
+    cfg = ImageConfig(platform="rpi5", role="backend", mode="mesh", env="test")
+    cfg.brand_profile = "brands/abs-alias.conf"
+    assert "--config /src/brands/real.conf" in _inner(_gen_driver(gen).command(cfg, "docker"))
+
+
+def test_the_fallback_emission_rule_when_argv_cannot_be_built():
+    """When to_cli_args() refuses a config, preflight still has to decide; the fallback is
+    the platform table plus the unaffiliated rule the table cannot express."""
+    from hugmesh_studio.core.build_driver import _path_emitted
+    assert _path_emitted("brand_profile", _unaffiliated(brand_profile="/x.conf"), None) is False
+    arm = ImageConfig(platform="rpi5", role="backend", mode="mesh", env="test")
+    assert _path_emitted("grub_theme", arm, None) is False
+    assert _path_emitted("brand_profile", arm, None) is True
+    assert _path_emitted("keyzip", arm, set()) is True
