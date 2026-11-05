@@ -333,6 +333,8 @@ DEFAULT_USER="orangepi3lts"
 STANDALONE=false        # --standalone : local user, no mesh, LUKS2 FDE on install
 LOCAL_USER=""           # --local-user NAME : the standalone local login account
 LOCAL_USER_PASS=""      # --local-pass PASS : plaintext; hashed at build, never baked raw
+LOCAL_PASS_FILE=""      # --local-pass-file FILE : the same password read from a file (keeps it off argv)
+LOCAL_ADMIN=false       # --local-admin : the local account may sudo on a KEYS-provisioned image too
 ENCRYPT_ROOT=false      # --encrypt-root : installer LUKS2-encrypts the target root; auto-on for --standalone
 LUKS_PASS=""            # --luks-pass : OPTIONAL unattended passphrase (lands on the installer ISO — warned)
 
@@ -604,6 +606,8 @@ while [[ $# -gt 0 ]]; do
         --standalone)         STANDALONE=true;            shift   ;;
         --local-user)         LOCAL_USER="$2";             shift 2 ;;
         --local-pass|--local-user-password) LOCAL_USER_PASS="$2"; shift 2 ;;
+        --local-pass-file)    LOCAL_PASS_FILE="$2"; shift 2 ;;
+        --local-admin)        LOCAL_ADMIN=true; shift ;;
         --encrypt-root)       ENCRYPT_ROOT=true;          shift   ;;
         --luks-pass|--root-unlock-pass) LUKS_PASS="$2";   shift 2 ;;
         # DEPRECATED no-ops: images no longer bake a fallback password (random
@@ -691,6 +695,12 @@ ${ENCRYPT_ROOT} && BUILD_INSTALLER=true
 
 # ── Standalone local-user password → build-time hash (never baked in plaintext,
 # mirrors build-x86-host-stage4.sh / build-frite-stage4.sh / build-orangepi5-stage4.sh) ──
+# --local-pass-file: the login password arrives in a 0600 file (Studio/TUI), never
+# on argv. Read it here, before hashing; the file itself is the caller's to remove.
+if [ -n "${LOCAL_PASS_FILE}" ]; then
+    LOCAL_USER_PASS="$(ph_read_pass_file "${LOCAL_PASS_FILE}")" \
+        || { err "--local-pass-file ${LOCAL_PASS_FILE}: missing, unreadable or larger than 4096 bytes"; exit 1; }
+fi
 LOCAL_PASSHASH=""
 if ${STANDALONE} || [ -n "${LOCAL_USER}" ] || [ -n "${LOCAL_USER_PASS}" ]; then
     [ -n "${LOCAL_USER}" ] && DEFAULT_USER="${LOCAL_USER}"
@@ -873,6 +883,7 @@ render_template() {
         -e "s|@@DEFAULT_USER@@|$(_sed_rep_escape "${DEFAULT_USER}")|g" \
         -e "s|@@STANDALONE@@|$(_sed_rep_escape "${STANDALONE}")|g" \
         -e "s|@@LOCAL_PASSHASH@@|$(_sed_rep_escape "${LOCAL_PASSHASH}")|g" \
+        -e "s|@@LOCAL_ADMIN@@|$(_sed_rep_escape "${LOCAL_ADMIN}")|g" \
         -e "s|@@BRAND@@|$(_sed_rep_escape "${BRAND}")|g" \
         -e "s|@@BRAND_TITLE@@|$(_sed_rep_escape "${BRAND_TITLE}")|g" \
         -e "s|@@DOMAIN@@|$(_sed_rep_escape "${CLUSTER_DOMAIN}")|g" \
