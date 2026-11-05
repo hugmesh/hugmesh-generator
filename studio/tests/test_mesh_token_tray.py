@@ -92,4 +92,4 @@ def test_a_failed_restart_is_reported_not_hidden(qapp, monkeypatch):
                         lambda self: mesh_node.MeshStatus(True, "1 container(s)"))
     monkeypatch.setattr(type(sec.node), "apply_limits",
                         lambda self: (False, "docker said no"))
-    assert "failed: docker said no" in tray.apply_limits_now()
+    assert "not restarted under them: docker said no" in tray.apply_limits_now()

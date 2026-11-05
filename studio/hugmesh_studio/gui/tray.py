@@ -261,18 +261,12 @@ class _Section:
             _log_swallowed("_open_token")
         self.tray._refresh()
 
-    def grant_note(self) -> tuple[str, str]:
-        """(menu suffix, tooltip) for the node's HugMesh token: " — admin in
-        example.org, shell" for a usable one; a short flag plus the whole reason when
-        the imported token cannot be used; ("", "") without one."""
-        if not hasattr(self.node, "grant"):
+    def grant_note(self, running: bool) -> tuple[str, str]:
+        """(menu suffix, tooltip) for a node that can run under a HugMesh token — see
+        GrantedMeshNode.tray_note; ("", "") for any other node."""
+        if not hasattr(self.node, "tray_note"):
             return "", ""
-        g, why = self.node.grant()
-        if why:
-            return " — token unusable (hover for why)", why
-        if g is None:
-            return "", ""
-        return f" — {g.role} in {g.domain}, {'shell' if g.shell else 'no shell'}", ""
+        return self.node.tray_note(running)
 
     def _open_web_ui(self) -> None:
         webbrowser.open(self.web_url)
@@ -300,8 +294,12 @@ class _Section:
         dlg.exec()
 
     def refresh(self) -> None:
+        enforce = getattr(self.node, "enforce", None)
+        stopped = enforce() if enforce is not None else ""
+        if stopped:
+            self.tray._notify(self.label, stopped)
         st = self.node.status()
-        note, why = self.grant_note()
+        note, why = self.grant_note(st.running)
         self.status_act.setText(
             f"{self.label}: {'running' if st.running else 'stopped'} ({st.detail}){note}")
         self.status_act.setToolTip(why)
@@ -333,6 +331,8 @@ class _ControlTray(QtWidgets.QSystemTrayIcon):
         self._generator_dir = generator_dir
         self.setToolTip(tooltip)
         menu = QtWidgets.QMenu()
+        # the mesh section's status line explains an unusable token in its tooltip
+        menu.setToolTipsVisible(True)
         for i, s in enumerate(self.sections):
             if i:
                 menu.addSeparator()
@@ -412,7 +412,7 @@ class _ControlTray(QtWidgets.QSystemTrayIcon):
             except Exception as e:   # pragma: no cover - the notice must still be shown
                 ok, why = False, str(e)
             notes.append(LIMITS_APPLIED_NOTE if ok else
-                         f" Restarting the running {s.label} under them failed: {why}")
+                         f" The running {s.label} was not restarted under them: {why}")
         return "".join(notes)
 
     # ---- ASK 16: running-builds submenu -------------------------------------------

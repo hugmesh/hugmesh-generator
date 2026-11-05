@@ -4,8 +4,8 @@ tray's mesh node runs with exactly the access domain, role and shell access it g
 
 Trust is never implied: a token from an issuer this computer has not trusted is
 refused until the operator compares the issuer's fingerprint with the one the issuer
-gave them and confirms it. The import flow itself is Qt-free
-(:func:`import_token`), so tests drive it without a dialog.
+gave them and confirms it. The flow itself is Qt-free (:func:`core.mesh_token.
+import_token`), so tests drive it without a dialog.
 """
 from __future__ import annotations
 
@@ -22,41 +22,13 @@ TRUST_QUESTION = (
     "Trust this issuer?")
 
 
-def import_token(text: str, confirm_trust) -> tuple[mt.MeshGrant | None, str]:
-    """Verify and keep ``text``. ``confirm_trust(fingerprint) -> bool`` is asked only
-    when the issuer is unknown. Returns (grant, "") or (None, the reason)."""
-    try:
-        return mt.save_token(text), ""
-    except mt.TokenError as e:
-        if e.kind != "untrusted":
-            return None, str(e)
-        if not confirm_trust(mt.fingerprint(e.issuer)):
-            return None, "Not imported: the issuer was not trusted."
-        mt.trust_issuer(e.issuer)
-    try:
-        return mt.save_token(text), ""
-    except mt.TokenError as e:
-        return None, str(e)
-
-
-def current_summary() -> str:
-    """What the tray is running under now, as one sentence."""
-    if not mt.stored_token():
-        return "No HugMesh token imported. The mesh node uses TS_AUTHKEY, if it is set."
-    try:
-        g = mt.load_grant()
-    except mt.TokenError as e:
-        return f"The imported token cannot be used: {e}"
-    return f"Imported: {g.describe()}. Issuer {mt.fingerprint(g.issuer)}."
-
-
 class MeshTokenDialog(QtWidgets.QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle(TITLE)
         self.resize(560, 300)
         lay = QtWidgets.QVBoxLayout(self)
-        self.summary = QtWidgets.QLabel(current_summary())
+        self.summary = QtWidgets.QLabel(mt.summary())
         self.summary.setWordWrap(True)
         lay.addWidget(self.summary)
         lay.addWidget(QtWidgets.QLabel("Paste a token you were given:"))
@@ -88,20 +60,20 @@ class MeshTokenDialog(QtWidgets.QDialog):
         return answer == QtWidgets.QMessageBox.StandardButton.Yes
 
     def _import(self) -> None:
-        g, why = import_token(self.paste.toPlainText(), self._confirm_trust)
+        g, why = mt.import_token(self.paste.toPlainText(), self._confirm_trust)
         self.result.setText(
             f"Imported. The mesh node will run as {g.describe()}. Restart it if it is "
             f"running." if g else why)
         if g:
             self.paste.clear()
-        self.summary.setText(current_summary())
+        self.summary.setText(mt.summary())
         self.forget_btn.setEnabled(bool(mt.stored_token()))
 
     def _forget(self) -> None:
         mt.forget_token()
-        self.result.setText("The token was removed from this computer. A node that is "
-                            "already running keeps running until you stop it.")
-        self.summary.setText(current_summary())
+        self.result.setText("The token was removed from this computer. A mesh node "
+                            "running under it is stopped when the tray next refreshes.")
+        self.summary.setText(mt.summary())
         self.forget_btn.setEnabled(False)
 
 
@@ -109,5 +81,4 @@ def open_mesh_token_dialog(parent=None) -> None:
     MeshTokenDialog(parent).exec()
 
 
-__all__ = ["MeshTokenDialog", "open_mesh_token_dialog", "import_token", "current_summary",
-           "TRUST_QUESTION"]
+__all__ = ["MeshTokenDialog", "open_mesh_token_dialog", "TRUST_QUESTION"]

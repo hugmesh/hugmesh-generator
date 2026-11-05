@@ -88,12 +88,17 @@ MAX_LIFETIME_S = 90 * 24 * 3600
 #: Clock skew tolerated on ``issued`` (the issuer's clock may run ahead).
 _SKEW_S = 300
 
+#: No real token was issued before this (2020-01-01 UTC).
+_EARLIEST = 1577836800
+
 _DOMAIN_RE = re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$")
 _MESH_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}$")
 _ISSUER_RE = re.compile(r"^ssh-ed25519 [A-Za-z0-9+/]+={0,2}$")
 
 TOKEN_FILE = "mesh-token"
 ISSUERS_FILE = "mesh-token-issuers"
+#: Beside the staged compose project: which credentials the node was started with.
+IDENTITY_FILE = "mesh-identity.json"
 
 ENV_EXTRA_ARGS = "TS_EXTRA_ARGS"
 ENV_NODE_NAME = "HUGMESH_NODE_NAME"
@@ -129,23 +134,43 @@ class MeshGrant:
     def describe(self) -> str:
         """One line for menus and the CLI — never the auth key."""
         shell = "shell access" if self.shell else "no shell access"
-        when = time.strftime("%Y-%m-%d %H:%M", time.localtime(self.expires))
         return (f"{self.role} in {self.domain} (mesh {self.mesh}), {shell}, "
-                f"expires {when}")
+                f"expires {_when(self.expires)}")
+
+    def short(self) -> str:
+        """The few words the tray's status line has room for."""
+        return f"{self.role} in {self.domain}, {'shell' if self.shell else 'no shell'}"
+
+    def identity(self) -> str:
+        """What the node's tailnet identity was created from. Two grants with the same
+        identity can share the saved tailscale state; any other change (new key, role,
+        domain, server, issuer) needs a fresh registration."""
+        parts = (_issuer_key(self.issuer), self.mesh, self.domain, self.role,
+                 self.login_server, self.id, self.auth_key)
+        return "token:" + hashlib.sha256("\0".join(parts).encode()).hexdigest()[:24]
 
     def hostname(self, host: str | None = None) -> str:
         """The tailnet hostname: the token's node name, else this machine's name,
         with the access domain's first label appended. Lowercase ``[a-z0-9-]``,
-        at most 63 characters (a DNS label)."""
+        at most 63 characters (a DNS label), never starting or ending with ``-``."""
+        suffix = "-" + (_label(self.domain.split(".", 1)[0])[:20].strip("-") or "mesh")
         base = _label(self.node_name or host or socket.gethostname()) or "hugmesh-node"
-        suffix = "-" + _label(self.domain.split(".", 1)[0])
-        return (base[:63 - len(suffix)].rstrip("-") + suffix)[:63]
+        return base[:63 - len(suffix)].strip("-") + suffix
 
     def extra_args(self) -> str:
         """The ``tailscale up`` arguments for this grant, and nothing else."""
         args = [f"--login-server={self.login_server}", "--accept-routes",
                 "--ssh" if self.shell else "--ssh=false"]
         return " ".join(args)
+
+
+def _when(ts: int) -> str:
+    """A local date for a token time. A signed but absurd time (negative, far future)
+    must not crash: Windows' localtime() raises OSError for anything before 1970."""
+    try:
+        return time.strftime("%Y-%m-%d %H:%M", time.localtime(ts))
+    except (OSError, OverflowError, ValueError):
+        return f"{ts} (Unix time)"
 
 
 def _label(text: str) -> str:
@@ -213,6 +238,9 @@ def check_fields(g: MeshGrant, *, now: float | None = None) -> None:
         raise TokenError("invalid", "The token carries no usable pre-auth key.")
     if not _ISSUER_RE.match(_issuer_key(g.issuer)):
         raise TokenError("invalid", "The token's issuer is not an ssh-ed25519 public key.")
+    if g.issued < _EARLIEST:
+        raise TokenError("invalid", "The token's issue time is before 2020, so it is not a "
+                                    "real token.")
     if g.expires - g.issued > MAX_LIFETIME_S or g.expires <= g.issued:
         raise TokenError("invalid", "The token's lifetime is not between a moment and "
                                     f"{MAX_LIFETIME_S // 86400} days.")
@@ -220,9 +248,8 @@ def check_fields(g: MeshGrant, *, now: float | None = None) -> None:
         raise TokenError("invalid", "The token was issued in the future; check this "
                                     "computer's clock.")
     if now >= g.expires:
-        when = time.strftime("%Y-%m-%d %H:%M", time.localtime(g.expires))
-        raise TokenError("expired", f"The HugMesh token expired at {when}. Ask its issuer "
-                                    f"for a new one.")
+        raise TokenError("expired", f"The HugMesh token expired at {_when(g.expires)}. Ask "
+                                    f"its issuer for a new one.")
     if g.node_name and not _label(g.node_name):
         raise TokenError("invalid", f"The token's node name {g.node_name!r} is not usable.")
 
@@ -431,6 +458,37 @@ def load_grant() -> MeshGrant | None:
     return verify(token) if token else None
 
 
+def import_token(text: str, confirm_trust) -> tuple[MeshGrant | None, str]:
+    """Verify and keep ``text`` (the tray dialog's Import). ``confirm_trust(fingerprint)
+    -> bool`` is asked only when the issuer is unknown. Returns (grant, "") or (None,
+    the reason). Never raises, so a Qt slot can call it directly."""
+    try:
+        try:
+            return save_token(text), ""
+        except TokenError as e:
+            if e.kind != "untrusted":
+                return None, str(e)
+            if not confirm_trust(fingerprint(e.issuer)):
+                return None, "Not imported: the issuer was not trusted."
+            trust_issuer(e.issuer)
+        return save_token(text), ""
+    except TokenError as e:
+        return None, str(e)
+    except Exception as e:
+        return None, f"The token could not be imported: {e}"
+
+
+def summary() -> str:
+    """What the tray runs a mesh node under now, as one sentence."""
+    if not stored_token():
+        return "No HugMesh token imported. The mesh node uses TS_AUTHKEY, if it is set."
+    try:
+        g = load_grant()
+    except Exception as e:
+        return f"The imported token cannot be used: {e}"
+    return f"Imported: {g.describe()}. Issuer {fingerprint(g.issuer)}."
+
+
 # ── the tray's mesh node ─────────────────────────────────────────────────────────────
 class GrantedMeshNode(MeshNode):
     """The tray's mesh node. With an imported token it runs ONLY as the token allows
@@ -443,13 +501,55 @@ class GrantedMeshNode(MeshNode):
         self._active: MeshGrant | None = None
 
     def grant(self) -> tuple[MeshGrant | None, str]:
-        """(grant, "") for a usable stored token, (None, "") for none, (None, why)."""
+        """(grant, "") for a usable stored token, (None, "") for none, (None, why).
+        Never raises: the tray asks this while it builds its menu."""
         try:
             return self._load(), ""
         except TokenError as e:
             return None, str(e)
-        except OSError as e:
+        except Exception as e:           # a broken state dir must not take the tray down
             return None, f"The stored HugMesh token could not be read: {e}"
+
+    # ── which credentials the node's tailnet identity came from ──────────────────
+    # The tailscale container keeps its registration in the compose volume `tsstate`,
+    # and a registered node ignores a NEW auth key (and refuses a new --login-server)
+    # on the next `tailscale up`. So the credentials a node was started with are
+    # recorded beside it, and starting with different ones drops that state first.
+    def _identity_path(self) -> str:
+        return os.path.join(self.workdir, IDENTITY_FILE)
+
+    def _identity(self, g: MeshGrant | None) -> str:
+        if g is not None:
+            return g.identity()
+        key = MeshNode._authkey(self)
+        return "ts_authkey:" + hashlib.sha256(key.encode()).hexdigest()[:24] if key else ""
+
+    def recorded(self) -> dict:
+        """{"identity", "summary"} the running/last node was started with, or {}."""
+        try:
+            with open(self._identity_path(), encoding="utf-8") as fh:
+                data = json.load(fh)
+            return data if isinstance(data, dict) and data.get("identity") else {}
+        except (OSError, ValueError):
+            return {}
+
+    def _record(self, g: MeshGrant | None) -> None:
+        _write_private(self._identity_path(), json.dumps({
+            "identity": self._identity(g),
+            "summary": g.short() if g else "TS_AUTHKEY",
+            "token": g is not None}))
+
+    def _reset_state(self) -> tuple[bool, str]:
+        """`compose down -v` on this node's own project: removes its container and
+        its tsstate volume, so the next `up` registers afresh."""
+        if not os.path.exists(os.path.join(self.workdir, "docker-compose.mesh.yml")):
+            return True, ""
+        try:
+            r = subprocess.run(self._compose("down", "-v"), cwd=self.workdir, env=self._env(),
+                               capture_output=True, text=True, **proc_text.TEXT_IO, timeout=300)
+            return r.returncode == 0, (r.stderr or r.stdout).strip()
+        except (OSError, subprocess.SubprocessError) as e:
+            return False, str(e)
 
     def start(self) -> tuple[bool, str]:
         g, why = self.grant()
@@ -458,19 +558,68 @@ class GrantedMeshNode(MeshNode):
         if g is None and not super()._authkey():
             return False, ("Import a HugMesh token first (tray menu > HugMesh token…), "
                            "or set TS_AUTHKEY to a tailnet/headscale auth key.")
+        had = self.recorded().get("identity")
+        staged = os.path.exists(os.path.join(self.workdir, "docker-compose.mesh.yml"))
+        # Different credentials than the saved state was made with (or a token run
+        # over state of unknown origin): register afresh, or the old grant stays.
+        if staged and (had != self._identity(g) if had else g is not None):
+            ok, out = self._reset_state()
+            if not ok:
+                return False, f"Could not clear the node's previous tailnet identity: {out}"
         self._active = g
         try:
-            return super().start()
+            ok, out = super().start()
         finally:
             self._active = None
+        if ok:
+            self._record(g)
+        return ok, out
 
     def apply_limits(self) -> tuple[bool, str]:
         """Re-apply the Resource limits to a RUNNING node now (compose recreates the
         container with the rewritten overlay). A stopped node picks them up at its
-        next start, so there is nothing to do."""
+        next start, so there is nothing to do. A node started under OTHER credentials
+        than the tray holds now is not restarted behind the operator's back."""
         if not self.status().running:
             return True, "not running"
+        g, why = self.grant()
+        if why or self.recorded().get("identity") != self._identity(g):
+            return False, ("it was started under other credentials than the tray holds "
+                           "now; stop and start it to apply the limits and the token")
         return self.start()
+
+    def tray_note(self, running: bool) -> tuple[str, str]:
+        """(status-line suffix, tooltip). A running node shows what it was STARTED
+        with, and says when the stored token differs; a stopped one shows the stored
+        token (or why it cannot be used)."""
+        g, why = self.grant()
+        rec = self.recorded() if running else {}
+        if rec:
+            suffix = f" — {rec.get('summary', '')}"
+            if why or rec.get("identity") != self._identity(g):
+                return (suffix + " (restart to apply the current token)",
+                        why or "The tray holds other credentials than this node was "
+                               "started with. Stop and start it to apply them.")
+            return suffix, ""
+        if why:
+            return " — token unusable (hover for why)", why
+        return (f" — {g.short()}", "") if g else ("", "")
+
+    def enforce(self) -> str:
+        """Stop a RUNNING node that was started under a token which has since been
+        forgotten, expired or lost its issuer's trust. Docker's restart policy can
+        bring such a node back (after a reboot) without the tray's start-time check,
+        so the tray calls this whenever it refreshes. Returns what it did, or ""."""
+        rec = self.recorded()
+        if not rec.get("token"):
+            return ""
+        g, why = self.grant()
+        if g is not None or not self.status().running:
+            return ""
+        ok, out = self.stop()
+        reason = why or "The HugMesh token it was started with has been forgotten."
+        return (f"Stopped the mesh node: {reason}" if ok
+                else f"The mesh node should stop ({reason}) but stopping failed: {out}")
 
     def _authkey(self) -> str:
         if self._active is not None:

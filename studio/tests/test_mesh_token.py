@@ -165,12 +165,11 @@ def test_save_keeps_nothing_when_the_token_is_refused(issuer):
 
 @needs_keygen
 def test_import_flow_asks_before_trusting(issuer):
-    from hugmesh_studio.gui import mesh_token_dialog as d  # Qt-free function
     token = _issue(issuer)
     asked = []
-    g, why = d.import_token(token, lambda fp: asked.append(fp) or False)
+    g, why = mt.import_token(token, lambda fp: asked.append(fp) or False)
     assert g is None and "not trusted" in why and mt.trusted_issuers() == set()
-    g, why = d.import_token(token, lambda fp: True)
+    g, why = mt.import_token(token, lambda fp: True)
     assert g is not None and why == "" and len(asked) == 1
 
 
@@ -300,3 +299,112 @@ def test_a_checked_signature_is_not_rechecked_but_trust_and_expiry_are(issuer, t
     with pytest.raises(mt.TokenError) as e:
         mt.verify(token, keygen=missing)
     assert e.value.kind == "untrusted"
+
+
+# ── review round 1 (#862): identity, enforcement, hardening ──────────────────────
+def _downs(calls):
+    return [a for a, _ in calls if a[-2:] == ["down", "-v"]]
+
+
+@pytest.mark.real_stack_probes
+def test_a_new_grant_registers_afresh_instead_of_reusing_the_old_identity(compose, tmp_path):
+    """tailscale ignores a new auth key once registered, so a changed grant must drop
+    the node's saved state (compose down -v) before it starts."""
+    holder = {"g": _grant(role="admin", shell=True)}
+    node = _node(tmp_path, lambda: holder["g"])
+    assert node.start()[0]
+    assert not _downs(compose)                                 # first start: nothing to drop
+    compose.clear()
+    assert node.start()[0]
+    assert not _downs(compose)                                 # same grant: keep the identity
+    holder["g"] = _grant(role="user", shell=False, auth_key="another-key")
+    compose.clear()
+    assert node.start()[0]
+    assert len(_downs(compose)) == 1                           # downgrade: fresh registration
+    assert node.recorded()["summary"] == "user in example.org, no shell"
+
+
+@pytest.mark.real_stack_probes
+def test_switching_from_ts_authkey_to_a_token_drops_the_old_identity(compose, tmp_path,
+                                                                     monkeypatch):
+    monkeypatch.setenv("TS_AUTHKEY", "operator-key")
+    holder = {"g": None}
+    node = _node(tmp_path, lambda: holder["g"])
+    assert node.start()[0] and node.recorded()["summary"] == "TS_AUTHKEY"
+    holder["g"] = _grant()
+    compose.clear()
+    assert node.start()[0]
+    assert len(_downs(compose)) == 1
+
+
+@pytest.mark.real_stack_probes
+def test_limits_never_restart_a_node_under_credentials_it_was_not_started_with(
+        compose, tmp_path):
+    holder = {"g": _grant()}
+    node = _node(tmp_path, lambda: holder["g"])
+    assert node.start()[0]
+    holder["g"] = _grant(role="superadmin", auth_key="new-key")
+    compose.clear()
+    ok, why = node.apply_limits()
+    assert not ok and "other credentials" in why
+    assert not [a for a, _ in compose if "up" in a]
+
+
+@pytest.mark.real_stack_probes
+def test_the_tray_shows_what_the_running_node_was_started_with(compose, tmp_path):
+    holder = {"g": _grant(role="admin", shell=True)}
+    node = _node(tmp_path, lambda: holder["g"])
+    assert node.start()[0]
+    assert node.tray_note(True) == (" — admin in example.org, shell", "")
+    holder["g"] = _grant(role="user", shell=False, auth_key="k2")
+    note, tip = node.tray_note(True)
+    assert note == " — admin in example.org, shell (restart to apply the current token)"
+    assert "Stop and start" in tip
+    assert node.tray_note(False)[0] == " — user in example.org, no shell"
+
+
+@pytest.mark.real_stack_probes
+def test_a_forgotten_or_expired_token_stops_its_running_node(compose, tmp_path):
+    holder = {"g": _grant()}
+    node = _node(tmp_path, lambda: holder["g"])
+    assert node.start()[0]
+    assert node.enforce() == ""                                # still valid: leave it
+    holder["g"] = None                                         # Forget token
+    compose.clear()
+    assert node.enforce().startswith("Stopped the mesh node")
+    assert [a for a, _ in compose if a[-1] == "down"]
+
+
+@pytest.mark.real_stack_probes
+def test_a_ts_authkey_node_is_never_stopped_by_enforcement(compose, tmp_path, monkeypatch):
+    monkeypatch.setenv("TS_AUTHKEY", "operator-key")
+    node = _node(tmp_path, lambda: None)
+    assert node.start()[0]
+    compose.clear()
+    assert node.enforce() == "" and not compose
+
+
+def test_an_unexpected_error_reading_the_token_never_escapes_grant(tmp_path):
+    def broken():
+        raise RuntimeError("state dir exploded")
+    g, why = _node(tmp_path, broken).grant()
+    assert g is None and "state dir exploded" in why
+
+
+@pytest.mark.parametrize("issued,expires", [(-1000, -10), (0, 3600), (100, 200)])
+def test_absurd_times_are_refused_not_crashed_on(issued, expires):
+    g = _grant(issued=issued, expires=expires)
+    with pytest.raises(mt.TokenError) as e:
+        mt.check_fields(g)
+    assert e.value.kind == "invalid"
+    assert mt._when(-10)                                       # Windows localtime() raises here
+
+
+def test_hostname_is_a_valid_label_for_any_domain():
+    long_label = "a" * 63
+    for g, host in ((_grant(domain=f"{long_label}.org"), "DESKTOP-ABC"),
+                    (_grant(domain="example.org", node_name="x" * 80), None),
+                    (_grant(domain="example.org"), "---")):
+        name = g.hostname(host)
+        assert 1 <= len(name) <= 63 and name[0] != "-" and name[-1] != "-", name
+        assert set(name) <= set("abcdefghijklmnopqrstuvwxyz0123456789-")
