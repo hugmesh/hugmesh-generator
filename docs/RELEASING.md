@@ -279,10 +279,14 @@ appears in, or "not listed".
 - **NEEDS-BUMP "stable tag vX.Y.Z is published"** (beta channel). The line main's beta
   belongs to has already shipped as a stable, so `X.Y.Z-beta.N` is never tagged and the
   advised next beta is the next minor past the newest stable (`X.(Y+1).0-beta.1`), the
-  same move the stable channel's `next` phase makes. Merge that bump on main.
-- **Everything shows REFUSE "cannot read main" or flips between runs.** That is GitHub's
-  secondary rate limit, or the egress tunnel is down. Reads retry twice on any error
-  other than a 404. Wait a minute and run again.
+  same move the stable channel's `next` phase makes. Merge that bump on main. A stable
+  counts as shipped as soon as its tag exists, even if that tag's own run failed and
+  published nothing: the version number is burned either way.
+- **Everything shows REFUSE "cannot read main" / "cannot read tags" or flips between
+  runs.** That is GitHub's secondary rate limit, or the egress tunnel is down. Reads
+  retry twice on any error other than a 404. Wait a minute and run again. A repository
+  whose tag listing cannot be read is never tagged: an unreadable listing would hide a
+  published stable and a later beta.
 - **The `RUNS_ON_PUBLISH` warning.** That org variable sends release jobs to a
   self-hosted runner, which public repositories cannot use, so the jobs queue forever.
   Unset it before releasing.

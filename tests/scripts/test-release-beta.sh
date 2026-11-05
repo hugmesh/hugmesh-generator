@@ -215,6 +215,8 @@ if pos and pos[0] == "api":
         notfound()
     if rest[:3] == ["git", "matching-refs", "tags"]:
         p = "/".join(rest[3:])
+        if r.get("tags_fail"):                         # a non-404 error (rate limit, egress drop), every retry
+            sys.stderr.write("gh: Bad Gateway (HTTP 502)\n"); sys.exit(1)
         out([{"ref": "refs/tags/" + t} for t in sorted(r.get("tags", {})) if t.startswith(p)])
     if rest == ["git", "refs"] and method == "POST" and fields["ref"].startswith("refs/heads/"):
         b = fields["ref"][len("refs/heads/"):]
@@ -970,8 +972,6 @@ EOF
 if check_stable_tags "$SCRIPT"; then ok "T: v0.2.0 published -> main's 0.2.0-beta.3 is NEEDS-BUMP (untagged, moved, and under a v0.2.1 patch), advised past the stable (0.3.0-beta.1, never 0.2.0-beta.4); a stable below the line (0.2.1-beta.1 over v0.2.0) stays READY"
 else bad "T: stable tags on the beta channel"; fi
 
-# ── S: the stable channel ────────────────────────────────────────────────────
-echo "== S stable channel"
 pyset() { # <state.json> <python statements on st>: edit a fixture in place
   python3 - "$1" "$2" <<'PY'
 import json, sys
@@ -980,6 +980,36 @@ exec(sys.argv[2])
 json.dump(st, open(p, "w"), indent=1)
 PY
 }
+check_tags_unreadable() { # script -> 0 when a failed tag listing is REFUSE, never read as "no tags"
+  local s=$1 d="$TMP/tu.$RANDOM" r want got rc=0
+  fixture stabletag "$d"
+  pyset "$d/state.json" 'for n in ("fx-stable-untagged", "fx-stable-moved", "fx-stable-patch"): R[n]["tags_fail"] = True'
+  run_script "$s" "$d" --no-studio
+  while read -r r want; do
+    got=$(state_of "$d/out" "$r")
+    if [ "$got" != "$want" ]; then echo "      $r: want $want, got '${got:-<no row>}'"; rc=1; fi
+  done <<'EOF'
+fx-stable-untagged REFUSE
+fx-stable-moved REFUSE
+fx-stable-patch REFUSE
+fx-stable-below READY
+EOF
+  for r in fx-stable-untagged fx-stable-moved fx-stable-patch; do
+    grep -aF "cannot read tags: gh api repos/hugmesh/$r/git/matching-refs/tags/v" "$d/out" >/dev/null \
+      || { echo "      $r: the reason must say the tag listing could not be read: $(grep -a "$r" "$d/out" | head -1)"; rc=1; }
+  done
+  if grep -aE 'would tag: fx-stable-(untagged|moved|patch) ' "$d/out" >/dev/null; then echo "      a repo whose tags could not be read would be tagged"; rc=1; fi
+  if grep -a '0\.2\.0-beta\.4' "$d/out" >/dev/null; then echo "      0.2.0-beta.4 is advised or planned"; rc=1; fi
+  grep -a 'would tag: fx-stable-below v0.2.1-beta.1 ' "$d/out" >/dev/null \
+    || { echo "      fx-stable-below (tags readable) must still be planned"; rc=1; }
+  if [ -n "$(writes "$d/calls")" ]; then echo "      the dry run wrote something"; rc=1; fi
+  return "$rc"
+}
+if check_tags_unreadable "$SCRIPT"; then ok "T: a tag listing that fails (non-404, every retry) is REFUSE 'cannot read tags', never READY or tagged; a readable neighbour is untouched"
+else bad "T: an unreadable tag listing must fail closed"; fi
+
+# ── S: the stable channel ────────────────────────────────────────────────────
+echo "== S stable channel"
 check_stable_classification() { # script -> 0 when every stable fixture row classifies as expected, with zero writes
   local s=$1 d="$TMP/sc.$RANDOM" r want got rc=0
   fixture stable "$d"; run_script "$s" "$d" --channel stable --no-studio
@@ -1264,6 +1294,10 @@ mutate stable-bump-pins 's/^        if art in pins:$/        if False:/' check_s
 mutate beta-stable-guard 's/^  if \[ -n "\$stable" \] \&\& \[ "\$(vercmp "\$ver" "\$stable")" != gt \]; then$/  if false; then/' check_stable_tags
 # T-M2 next_beta advises X.Y.Z-beta.(N+1) below the newest stable again
 mutate beta-stable-advice 's/^  if \[ -n "\$stable" \] \&\& \[ "\$(vercmp "\$nb" "\$stable")" != gt \]; then next_minor_beta "\$stable"; return; fi$/  :/' check_stable_tags
+# T-M3 a failed tag listing is read as "no tags" again (the refute of #864): the stable guard is skipped
+mutate tags-fail-open '/cannot read tags/s/) || {.*}$/ || true)/' check_tags_unreadable
+# T-M4 the failed read is noted but classification goes on with an empty listing
+mutate tags-fail-noreturn '/cannot read tags/s/; return; }$/; }/' check_tags_unreadable
 
 echo
 echo "== test-release-beta.sh: $pass passed, $fail failed"

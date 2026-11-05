@@ -479,8 +479,10 @@ classify_beta() {
   if [ -n "$pin" ] && [ "$pin" != "$ver" ]; then S_REASON[$repo]="--expect $repo=$pin, but main's $vfile says $ver"; return; fi
   tag="$prefix$ver"; S_TAG[$repo]=$tag
   # Every tag under the prefix, once: the beta ordering check below reads the betas, and the
-  # newest stable X.Y.Z decides whether main's beta line has already shipped (#855).
-  tags=$(ghq api "repos/$ORG/$repo/git/matching-refs/tags/$prefix" --jq '.[].ref' || true)
+  # newest stable X.Y.Z decides whether main's beta line has already shipped (#855). A failed
+  # read is REFUSE, never "no tags": an empty listing would skip both checks and read READY.
+  # (No tags under the prefix is an empty 200, which is a success here.)
+  tags=$(ghq api "repos/$ORG/$repo/git/matching-refs/tags/$prefix" --jq '.[].ref') || { S_REASON[$repo]="cannot read tags: gh api repos/$ORG/$repo/git/matching-refs/tags/$prefix"; return; }
   stable=$(newest_stable "$tags" "$prefix")
 
   wft=$(file_at "$repo" "$sha" ".github/workflows/$wf" || true)
