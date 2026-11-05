@@ -302,6 +302,11 @@ ALLOW_UNCOMPILED=(
   "tests/device-registry/registry-allow-deny.feature|tests/device-registry/test-registry-allow-deny.sh"
   "tests/device-registry/layer-a-headscale-ssh-acl.feature|tests/device-registry/test-layer-a-headscale-acl.sh"
   "tests/pentest/nuclei/template-fixtures.feature|tests/pentest/nuclei/test-templates.sh"
+  # Not prose with a companion: this one IS executed, by its own small Gherkin
+  # interpreter (a QEMU boot has no page for playwright-bdd to drive). The runner
+  # fails any step it has no definition for, and .github/workflows/qemu-bdd-spike.yml
+  # runs it on a GitHub-hosted runner with KVM.
+  "tests/qemu/features/actions-kvm-smoke.feature|tests/qemu/actions-kvm-smoke_test.sh"
 )
 
 echo

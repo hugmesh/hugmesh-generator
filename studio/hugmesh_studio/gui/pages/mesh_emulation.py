@@ -77,8 +77,8 @@ import threading
 from ..qt import Qt, QtCore, QtGui, QtWidgets
 from .. import console
 from ..styles import MUTED, WARN
-from ...core import (emulation, emulation_save, mesh_emulation, qemu_devices,
-                     qemu_tests, qemu_windows)
+from ...core import (emulation, emulation_save, mesh_emulation, platform_info,
+                     qemu_devices, qemu_tests, qemu_windows)
 from ...core.domain_services import session_boot_gate_reason
 from ...core.local_stack_node import LocalStackNode
 from . import _emulation_common as common
@@ -254,7 +254,7 @@ class _Row:
     """
 
     def __init__(self, planned, user, sections, ssh_btn, start, stop, qmp, arm_reset,
-                 save, overwrite, arm_save, replicas=None):
+                 save, overwrite, arm_save, replicas=None, display_btn=None):
         self.planned = planned          # mesh_emulation.PlannedDevice
         self.status = None              # emulation.DeviceStatus | None
         self.user = user                # QComboBox
@@ -270,6 +270,10 @@ class _Row:
         #: The -/+/Apply strip (_emulation_common.ReplicaStrip), 0..1. Defaulted so a
         #: caller that predates the column still builds a row.
         self.replicas = replicas
+        #: The Display button beside SSH (the SPICE door a display-mode keep-alive
+        #: run publishes on loopback). Defaulted like ``replicas``, for callers that
+        #: predate the control.
+        self.display_btn = display_btn
         #: This device's existing saves, newest first, as of the last refresh.
         #: Cached rather than re-scanned inside the arming pass, which runs on every
         #: poll tick, while the set of files can only change when a save finishes.
@@ -324,6 +328,18 @@ class _Row:
         dev = self.dev
         return bool(self.up and not self.paused and dev.ssh_host_port > 0
                     and dev.ssh_key)
+
+    @property
+    def can_display(self) -> bool:
+        """Whether the display door is openable for this row.
+
+        RUNNING and a published ``display_port`` — the record's two facts — plus the
+        secret file the door requires, all judged by ``qemu_devices.display_blocker``
+        so this page and the argv builder can never disagree about the same button.
+        PAUSED is deliberately not a condition: SPICE is served by QEMU itself, so
+        the door answers while the guest's vCPUs are frozen (the picture just stops).
+        """
+        return bool(self.up and qemu_devices.can_display(self.dev))
 
     @property
     def can_save(self) -> bool:
@@ -903,13 +919,16 @@ class MeshEmulationPage(QtWidgets.QWizardPage):
 
             ssh_btn = QtWidgets.QPushButton("SSH")
             ssh_btn.clicked.connect(lambda _=False, i=r: self._open_shell(i))
+            display_btn = QtWidgets.QPushButton("Display")
+            display_btn.clicked.connect(lambda _=False, i=r: self._open_display(i))
             start = QtWidgets.QPushButton("Start")
             start.clicked.connect(lambda _=False, i=r: self._start_device(i))
             stop = QtWidgets.QPushButton("Stop")
             stop.setToolTip(_ROW_STOP_TIP)
             stop.clicked.connect(lambda _=False, i=r: self._stop_device(i))
             self.devices.setCellWidget(
-                r, _MCOL_ACTIONS, common.button_strip(start, stop, ssh_btn))
+                r, _MCOL_ACTIONS,
+                common.button_strip(start, stop, ssh_btn, display_btn))
 
             # ── the QMP console — BUILT FROM the exported verb tuple ────────────
             qmp: dict[str, QtWidgets.QPushButton] = {}
@@ -965,7 +984,7 @@ class MeshEmulationPage(QtWidgets.QWizardPage):
 
             self._rows.append(_Row(planned, user, sections, ssh_btn, start, stop,
                                    qmp, arm_reset, save, overwrite, arm_save,
-                                   replicas))
+                                   replicas, display_btn))
         self.devices.resizeColumnsToContents()
 
     # ── plan vs reality ─────────────────────────────────────────────────────────
@@ -1368,6 +1387,9 @@ class MeshEmulationPage(QtWidgets.QWizardPage):
         row.user.setEnabled(row.can_shell and idle)
         row.ssh_btn.setEnabled(row.can_shell and idle)
         row.ssh_btn.setToolTip(self._shell_tooltip(row))
+        if row.display_btn is not None:
+            row.display_btn.setEnabled(row.can_display and idle)
+            row.display_btn.setToolTip(self._display_tooltip(row))
         for verb, button in row.qmp.items():
             button.setEnabled(live and (verb != _QMP_ARMED
                                         or row.arm_reset.isChecked()))
@@ -1453,6 +1475,28 @@ class MeshEmulationPage(QtWidgets.QWizardPage):
                     "out. Resume first.")
         return ("Open the desktop terminal on this device as the login selected "
                 f"beside it ({qemu_devices.SSH_HOST}:{dev.ssh_host_port}).")
+
+    def _display_tooltip(self, row: _Row) -> str:
+        """Why Display is grey, or what the window does to the guest when it is not.
+
+        The second half is HONEST per image: the record's ``display_resize`` says
+        whether this guest re-lays out at the window's resolution or only has its
+        picture scaled, and the tooltip repeats that rather than promising resize
+        for every board.
+        """
+        if not row.up:
+            state = row.status.state if row.status is not None else "planned"
+            return (f"Disabled: {row.label} is not running (state: {state}). Start "
+                    "it first.")
+        blocker = qemu_devices.display_blocker(row.dev)
+        if blocker:
+            return f"Disabled: {blocker}."
+        dev = row.dev
+        return (f"Open this device's screen in a window that "
+                f"{qemu_devices.display_resize_text(dev)} — SPICE on "
+                f"{qemu_devices.DISPLAY_HOST}:{dev.display_port}, password from the "
+                "run's secret file, via remote-viewer; a browser (noVNC, scale-to-fit) "
+                "is the fallback.")
 
     def _arm_pause(self, row: _Row, live: bool):
         """Make Pause/Resume agree with what the emulator last said.
@@ -2285,6 +2329,66 @@ class MeshEmulationPage(QtWidgets.QWizardPage):
         who = f"{login} + sudo -i" if superuser else login
         self.note.setText(f"Opened a terminal on <tt>{html.escape(row.label)}</tt> "
                           f"as <tt>{html.escape(who)}</tt>.")
+
+    def _open_display(self, index: int):
+        """The device's screen in a viewer window — DETACHED, like a terminal.
+
+        The Qt-free core picks the viewer (remote-viewer, then the browser on the
+        noVNC URL, then nothing) and builds the argv; this page only spawns it and
+        says what happened INLINE. The secret never comes through here: argv names
+        a 0600 ``.vv`` file (or a password-free URL), and the log line is that argv,
+        so nothing this page writes to its log or its note can carry the password.
+        """
+        row = self._rows[index]
+        blocker = (qemu_devices.display_blocker(row.dev) if row.up
+                   else f"{row.label} is not running")
+        if blocker:
+            # Belt to the disabled button's braces, as for SSH.
+            self.note.setText(
+                f'<span style="color:{WARN}">{html.escape(row.label)} has no display '
+                f"to open</span> — {html.escape(blocker)}.")
+            return
+        dev = row.dev
+        wsl = qemu_devices.wsl_display_hint(*platform_info.detect_wsl())
+        try:
+            argv, hint = qemu_devices.display_argv(
+                dev, "auto", qemu_devices.default_runtime_dir())
+        except (OSError, ValueError) as exc:
+            self.note.setText(
+                f'<span style="color:{WARN}">Could not prepare the display for '
+                f"{html.escape(row.label)}: {html.escape(str(exc))}</span>")
+            console.write(self.log, f"[mesh] !! display {row.label}: {exc}")
+            return
+        if argv is None:
+            self.note.setText(
+                f'<span style="color:{WARN}">No SPICE viewer found on this '
+                f"desktop.</span> {html.escape(hint)}"
+                + (f" {html.escape(wsl)}" if wsl else ""))
+            console.write(self.log, f"[mesh] no display viewer — {hint}")
+            return
+        try:
+            subprocess.Popen(argv, start_new_session=True)
+        except OSError as exc:
+            # ``delete-this-file=1`` only fires when a viewer READS the .vv file; a
+            # viewer that never started leaves a 0600 file holding the password in
+            # the runtime dir. Remove it here, and hand back the path-less hint
+            # (the one that names the secret file, not the file just removed).
+            for leftover in (a for a in argv if a.endswith(".vv")):
+                try:
+                    os.unlink(leftover)
+                except OSError:
+                    pass
+            self.note.setText(
+                f'<span style="color:{WARN}">Could not open the display viewer: '
+                f"{html.escape(str(exc))}</span> Run it yourself: "
+                f"<tt>{html.escape(qemu_devices.display_hint(dev))}</tt>")
+            console.write(self.log, f"[mesh] !! could not open the display viewer: {exc}")
+            return
+        console.write(self.log, f"[mesh] display: {shlex.join(argv)}")
+        self.note.setText(
+            f"Opened the display of <tt>{html.escape(row.label)}</tt> — it "
+            f"{html.escape(qemu_devices.display_resize_text(dev))}."
+            + (f" {html.escape(wsl)}" if wsl else ""))
 
     def _open_web_ui(self):
         """Tunnel to the gateway's :443 and open the URL — stating the REUSE.
