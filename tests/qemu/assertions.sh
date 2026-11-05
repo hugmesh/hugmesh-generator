@@ -509,7 +509,7 @@ echo "-- mesh client (tailscale) --"
 # tests/qemu/mesh_client_test.sh drives it against fixtures with tailscale,
 # rc-service and sleep stubbed on PATH, the assert_tor_node_contract pattern.
 assert_mesh_client() {  # $1 = root prefix ("" on the live guest)
-    local _R _ts_state _ts_i _ts_ip _ts_peer _ts_pip
+    local _R _ts_state _ts_i _ts_ip _ts_peer _ts_pip _ts_others
     _R="${1-}"
     if [ ! -x "${_R}/usr/sbin/tailscaled" ]; then
         skip "mesh client — no /usr/sbin/tailscaled in this image (no mesh client was built in)"
@@ -543,11 +543,35 @@ assert_mesh_client() {  # $1 = root prefix ("" on the live guest)
             fi
             _ts_peer="$(tailscale status --json 2>/dev/null \
                 | jq -r '[(.Peer // {})[] | select((.TailscaleIPs // []) | length > 0)] | .[0] | if . == null then "" else "\(.HostName) \(.TailscaleIPs[0])" end' 2>/dev/null)"
+            # A CONTROL node is graded against its own registry: what headscale has
+            # registered besides this node is what must be in its netmap. Its assertions
+            # run as soon as its sshd answers, minutes before a fleet's workers boot and
+            # join, so it waits — bounded by HUGMESH_ASSERT_PEER_WAIT seconds, 0 unless
+            # the runner streams a budget ahead of this script for a rendezvous fleet —
+            # for a peer to appear; a registered node that never reaches the netmap is a
+            # FAIL (2026-11-04: it SKIPped "none yet" for ever, even re-run after the
+            # worker had joined). No registration at all stays a SKIP, never a pass.
+            _ts_others=""
+            if [ "${_ts_key}" = preauth ] && [ -z "${_ts_peer}" ]; then
+                _ts_i=0
+                while :; do
+                    _ts_others="$(headscale nodes list -o json 2>/dev/null \
+                        | jq -r --arg h "$(hostname | tr 'A-Z' 'a-z')" '[.[] | select(((.name // "") | ascii_downcase) != $h and ((.given_name // "") | ascii_downcase) != $h) | (.given_name // .name // "?")] | join(",")' 2>/dev/null)"
+                    _ts_peer="$(tailscale status --json 2>/dev/null \
+                        | jq -r '[(.Peer // {})[] | select((.TailscaleIPs // []) | length > 0)] | .[0] | if . == null then "" else "\(.HostName) \(.TailscaleIPs[0])" end' 2>/dev/null)"
+                    [ -n "${_ts_peer}" ] && break
+                    [ "${_ts_i}" -ge "${HUGMESH_ASSERT_PEER_WAIT:-0}" ] 2>/dev/null && break
+                    sleep 10
+                    _ts_i=$((_ts_i + 10))
+                done
+            fi
             if [ -z "${_ts_peer}" ]; then
                 if [ "${_ts_key}" = authkey ]; then
                     bad "mesh peers — joined with a fleet key but sees NO peer: the control node it joined is not in its netmap"
+                elif [ -n "${_ts_others}" ]; then
+                    bad "mesh peers — ${_ts_others} registered on this control node's headscale but none is in its netmap after ${_ts_i}s (routes not approved, tags not valid, or this node's own control session is dead: see 'headscale routes list', 'headscale nodes list -t', 'tailscale status')"
                 else
-                    skip "mesh peers — none yet (a control node asserts before its fleet's workers join)"
+                    skip "mesh peers — no fleet node has registered on this control node's headscale within ${_ts_i}s (a control node asserts before its fleet's workers join; re-run once they have, or stream HUGMESH_ASSERT_PEER_WAIT)"
                 fi
             else
                 _ts_pip="${_ts_peer##* }"
@@ -673,11 +697,23 @@ assert_tor_node_contract() {  # $1 = root prefix ("" on the live guest); $2 = "l
     else
         bad "role ${_role}: /etc/tor/torrc has no managed 'HiddenServicePort 443 host:port' line — the reconcile never wrote it"
     fi
-    _h="$(tr -d '[:space:]' < "${_R}/var/lib/hugmesh/tor/hostname" 2>/dev/null)"
+    # Bounded wait, 30 x 2 s. These assertions start the moment sshd answers, which on a
+    # cold boot can be before tor has started; the product's boot oneshot leaves an
+    # export waiter behind (hugmesh-tor-reconcile --export-wait) that writes the hostname
+    # within seconds of tor minting it, so 60 s is generous for that path and still
+    # SHORTER than the old first export (the @reboot cron after `sleep 90`, which is what
+    # graded both rpi5 nodes "nothing was minted or exported" on 2026-11-04): a product
+    # regression back to the cron-only export stays red here.
+    _h=""
+    for _n in $(seq 1 30); do
+        _h="$(tr -d '[:space:]' < "${_R}/var/lib/hugmesh/tor/hostname" 2>/dev/null)"
+        [[ "${_h}" =~ ^[a-z2-7]{56}\.onion$ ]] && break
+        sleep 2
+    done
     if [[ "${_h}" =~ ^[a-z2-7]{56}\.onion$ ]]; then
         ok "role ${_role}: a v3 onion hostname is exported (${_h})"
     else
-        bad "role ${_role}: /var/lib/hugmesh/tor/hostname holds no v3 onion ('${_h}') — nothing was minted or exported"
+        bad "role ${_role}: /var/lib/hugmesh/tor/hostname holds no v3 onion ('${_h}') after a 60s wait — nothing was minted or exported (the boot oneshot's export waiter should have written it within seconds of tor starting; see /var/log/hugmesh-tor-reconcile.log)"
     fi
     # #614: the onion must be an Ingress host, or the edge answers 404. Only a
     # control-plane node (admin.conf) can admit it; the agent's own `status` asks the

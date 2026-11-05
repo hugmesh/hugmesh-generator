@@ -91,6 +91,10 @@ for t in basename cat chmod cmp cp date dirname install mkdir mktemp mv rm sort 
     p="$(command -v "${t}")" || { echo "FAIL host lacks ${t}"; exit 1; }
     ln -s "${p}" "${TOOLS}/${t}"
 done
+# setsid (util-linux) is what the boot oneshot detaches its export waiter with; the
+# agent falls back to a trap+exec subshell without it, and the legs below hold
+# either way.
+p="$(command -v setsid 2>/dev/null)" && ln -s "${p}" "${TOOLS}/setsid"
 STUB="${WORK}/stub"; mkdir -p "${STUB}"
 # rc-service: logs its argv; `status` exits with the code in $STATE_DIR/status,
 # `reload` with the one in $STATE_DIR/reload (default 0), everything else 0.
@@ -328,14 +332,52 @@ n_other="$(grep -c -v -F -- '--verify-config' "${STATE_DIR}/tor.log" 2>/dev/null
 
 # A11 — BOOT ONESHOT, first boot (tor stopped, no key yet): write the torrc, but never
 # `rc-service tor start` (a nested start waits on this oneshot's own OpenRC lock for
-# 60 s — tor is `iafter` it) and never wait for a hostname a stopped tor cannot mint.
-fresh_cold a11; echo 3 > "${STATE_DIR}/status"; run_boot
+# 60 s — tor is `iafter` it) and never wait IN the oneshot for a hostname a stopped
+# tor cannot mint. Instead it leaves a detached export WAITER behind (2026-11-04:
+# before it, the first export was the @reboot cron's run after `sleep 90`, and the
+# QEMU proof run graded both rpi5 nodes "no v3 onion" for their first minutes).
+# The waiter polls through the same stubbed `sleep`; mint-at=2 makes the second poll
+# mint the key, so a deterministic "tor minted it while the waiter was polling".
+# The oneshot's own exit must not wait on it: its sleeps happen AFTER run_boot
+# returns (the waiter is still running when the oneshot's rc is read).
+fresh_cold a11; echo 3 > "${STATE_DIR}/status"
+echo 2 > "${STATE_DIR}/mint-at"; echo "${R}/var/lib/tor/hugmesh-onion/hostname" > "${STATE_DIR}/mint-file"
+HUGMESH_TOR_EXPORT_WAIT_TRIES=6 run_boot
 [ "${AGENT_RC}" -eq 0 ] && has "$(torrc)" "HiddenServicePort 443 ${REG_UP}" && ok "A11 boot oneshot: verified torrc written, exit 0" || bad "A11 boot oneshot: rc=${AGENT_RC}, torrc missing"
 [ "$(rc_log)" = "tor status" ] && ok "A11 boot oneshot + stopped tor -> only 'rc-service tor status' (no nested start: OpenRC starts tor next)" \
     || bad "A11 boot oneshot made service calls: $(rc_log | tr '\n' ';')"
-[ ! -e "${STATE_DIR}/sleep.log" ] && ok "A11 boot oneshot: no hostname wait on a stopped tor (no 20 s on the boot path)" || bad "A11 boot oneshot slept $(grep -c . "${STATE_DIR}/sleep.log") time(s) on a stopped tor"
 has "$(agent_log)" "leaves the start to OpenRC" && ok "A11 boot oneshot logs why it did not start tor" || bad "A11 no log line for the deferred start"
-[ ! -e "${R}/var/lib/hugmesh/tor/hostname" ] && ok "A11 nothing exported before a key exists (the @reboot cron run exports it)" || bad "A11 exported a hostname that does not exist"
+has "$(agent_log)" "export waiter pid" && ok "A11 boot oneshot leaves a detached export waiter behind and logs its pid + bound" || bad "A11 no export waiter spawned on a cold first boot"
+_wp="$(tr -d '[:space:]' < "${R}/run/hugmesh-tor-export-wait.pid" 2>/dev/null)"
+_exp=""; for _i in $(seq 1 50); do _exp="$(cat "${R}/var/lib/hugmesh/tor/hostname" 2>/dev/null)"; [ -n "${_exp}" ] && break; /bin/sleep 0.1; done
+[ "${_exp}" = "${ONION_LATE}" ] && ok "A11 the key tor mints after the oneshot exited is exported by the waiter (no second agent run, no cron)" \
+    || bad "A11 first-boot export missing or wrong: '${_exp}' (waiter pid '${_wp}', log: $(agent_log | tr '\n' ';'))"
+for _i in $(seq 1 50); do [ -e "${R}/run/hugmesh-tor-export-wait.pid" ] || break; /bin/sleep 0.1; done
+[ ! -e "${R}/run/hugmesh-tor-export-wait.pid" ] && has "$(agent_log)" "export waiter: first-boot hostname(s) exported after" \
+    && ok "A11 the waiter exits once exported (pidfile removed, export logged)" || bad "A11 waiter did not finish: pidfile $( [ -e "${R}/run/hugmesh-tor-export-wait.pid" ] && echo present || echo gone ), log: $(agent_log | tr '\n' ';')"
+[ "$(rc_log)" = "tor status" ] && [ "$(grep -c -v -F -- '--verify-config' "${STATE_DIR}/tor.log" 2>/dev/null)" -eq 0 ] \
+    && ok "A11 the waiter touched neither the service nor tor (one 'tor status', from the oneshot)" || bad "A11 the waiter made service/tor calls: $(rc_log | tr '\n' ';') / $(cat "${STATE_DIR}/tor.log" 2>/dev/null | tr '\n' ';')"
+# A11b — the waiter is BOUNDED: tor never mints -> it gives up after
+# HUGMESH_TOR_EXPORT_WAIT_TRIES polls, logs that, exports nothing, and the pidfile goes.
+fresh_cold a11b; echo 3 > "${STATE_DIR}/status"
+HUGMESH_TOR_EXPORT_WAIT_TRIES=3 run_boot
+for _i in $(seq 1 50); do [ -e "${R}/run/hugmesh-tor-export-wait.pid" ] || break; /bin/sleep 0.1; done
+[ "$(grep -c . "${STATE_DIR}/sleep.log" 2>/dev/null)" = 3 ] && [ ! -e "${R}/var/lib/hugmesh/tor/hostname" ] \
+    && has "$(agent_log)" "export waiter: tor did not mint every onion hostname within 6s" && [ ! -e "${R}/run/hugmesh-tor-export-wait.pid" ] \
+    && ok "A11b a key that never appears: the waiter polls HUGMESH_TOR_EXPORT_WAIT_TRIES times (3), gives up loudly, exports nothing, cleans its pidfile" \
+    || bad "A11b waiter bound: sleeps=$(grep -c . "${STATE_DIR}/sleep.log" 2>/dev/null) export=$( [ -e "${R}/var/lib/hugmesh/tor/hostname" ] && echo present || echo none ) pidfile=$( [ -e "${R}/run/hugmesh-tor-export-wait.pid" ] && echo present || echo gone ) log: $(agent_log | tr '\n' ';')"
+# A11c — one waiter at a time: a live pidfile is respected, a stale one is not.
+fresh_cold a11c; echo 3 > "${STATE_DIR}/status"; mkdir -p "${R}/run"
+( trap '' TERM; while [ ! -e "${STATE_DIR}/release" ]; do /bin/sleep 0.1; done ) & _live=$!
+echo "${_live}" > "${R}/run/hugmesh-tor-export-wait.pid"
+HUGMESH_TOR_EXPORT_WAIT_TRIES=3 run_boot
+has "$(agent_log)" "already running — not starting another" && [ "$(tr -d '[:space:]' < "${R}/run/hugmesh-tor-export-wait.pid")" = "${_live}" ] \
+    && ok "A11c a live export waiter is not duplicated (pidfile ${_live} respected)" || bad "A11c duplicated or clobbered a live waiter: $(agent_log | tr '\n' ';')"
+touch "${STATE_DIR}/release"; wait "${_live}" 2>/dev/null
+fresh_cold a11d; echo 3 > "${STATE_DIR}/status"; mkdir -p "${R}/run"; echo 999999 > "${R}/run/hugmesh-tor-export-wait.pid"
+HUGMESH_TOR_EXPORT_WAIT_TRIES=3 run_boot
+has "$(agent_log)" "export waiter pid" && ok "A11c a STALE pidfile (dead pid) does not block a new waiter" || bad "A11c stale pidfile blocked the waiter: $(agent_log | tr '\n' ';')"
+for _i in $(seq 1 50); do [ -e "${R}/run/hugmesh-tor-export-wait.pid" ] || break; /bin/sleep 0.1; done
 
 # A12 — BOOT ONESHOT, OpenRC says crashed: no nested restart either.
 fresh_root a12; echo 32 > "${STATE_DIR}/status"; run_boot
@@ -609,6 +651,8 @@ grep -E '^assert_tor_node_contract "" live$' "${ASSERTIONS}" >/dev/null \
     && ok "D assertions.sh CALLS assert_tor_node_contract \"\" live on the guest" || bad "D assertions.sh never calls the tor block live"
 DSTUB="${WORK}/dstub"; mkdir -p "${DSTUB}"
 printf '#!/bin/bash\nexit "$(cat "${TOR_STATUS_FILE}" 2>/dev/null || echo 0)"\n' > "${DSTUB}/rc-service"; chmod +x "${DSTUB}/rc-service"
+# sleep: instant, counted (the hostname wait is bounded, and the count is the bound).
+printf '#!/bin/bash\necho sleep >> "${DSLEEP_LOG}"\n' > "${DSTUB}/sleep"; chmod +x "${DSTUB}/sleep"
 has_v() { printf '%s\n' "$1" | grep -F -- "$2" | grep -F -- "$3" >/dev/null; }   # OUT VERDICT MSG
 fx() {  # NAME ROLE ARTEFACTS... -> fixture root in FX
     local a
@@ -643,7 +687,8 @@ fx() {  # NAME ROLE ARTEFACTS... -> fixture root in FX
 }
 run_fx() {  # [live] [status-rc]
     echo "${2:-0}" > "${WORK}/tor-status"
-    TOR_STATUS_FILE="${WORK}/tor-status" PATH="${DSTUB}:${PATH}" bash -c '
+    DSLEEP_LOG="${WORK}/dsleep.log"; : > "${DSLEEP_LOG}"
+    TOR_STATUS_FILE="${WORK}/tor-status" DSLEEP_LOG="${DSLEEP_LOG}" PATH="${DSTUB}:${PATH}" bash -c '
         set -u; source "$1/scripts/_roles-lib.sh"; source "$2"; assert_tor_node_contract "$3" "$4"' _ "${REPO}" "${EXT}" "${FX}" "${1:-}" 2>&1
 }
 FULL=(package initd agent admit tor-linked reconcile-linked cron)
@@ -706,6 +751,18 @@ fx live-torrc backend "${LIVE_OK[@]}"; printf 'HiddenServicePort 80 127.0.0.1:80
 has_v "${o}" FAIL "no managed 'HiddenServicePort 443" && ok "D live: torrc without the 443 stanza -> FAIL" || { bad "D torrc not caught"; echo "${o}" | sed 's/^/      | /'; }
 fx live-host backend "${LIVE_OK[@]}"; echo "not-an-onion" > "${FX}/var/lib/hugmesh/tor/hostname"; o="$(run_fx live 0)"
 has_v "${o}" FAIL "holds no v3 onion" && ok "D live: garbage exported hostname -> FAIL" || { bad "D hostname not caught"; echo "${o}" | sed 's/^/      | /'; }
+# The exported hostname is WAITED for, bounded: 30 polls x 2 s. Shorter than the old
+# first export (the @reboot cron after sleep 90), so a product regression to the
+# cron-only export stays a FAIL here; long enough for the oneshot's export waiter.
+arts=(); for a in "${LIVE_OK[@]}"; do [ "${a}" = hostname ] || arts+=("${a}"); done
+fx live-nohost backend "${arts[@]}"; o="$(run_fx live 0)"
+n_sl="$(grep -c . "${WORK}/dsleep.log" 2>/dev/null)"
+has_v "${o}" FAIL "holds no v3 onion" && has_v "${o}" FAIL "after a 60s wait" && [ "${n_sl}" -eq 30 ] \
+    && ok "D live: no exported hostname -> waits 30 x 2 s (bounded), then FAIL names the wait and the export waiter" \
+    || { bad "D live no-hostname wait: ${n_sl} sleep(s), want 30"; echo "${o}" | sed 's/^/      | /'; }
+fx live-ok2 backend "${LIVE_OK[@]}"; o="$(run_fx live 0)"
+[ "$(grep -c . "${WORK}/dsleep.log" 2>/dev/null)" -eq 0 ] && has_v "${o}" PASS "v3 onion hostname is exported" \
+    && ok "D live: an exported hostname is graded at once (no wait)" || { bad "D live: waited $(grep -c . "${WORK}/dsleep.log") time(s) with the hostname present"; echo "${o}" | sed 's/^/      | /'; }
 # #614: the live admission leg (only a control-plane node, which holds admin.conf, can admit)
 has_v "$(fx live-worker backend "${LIVE_OK[@]}"; run_fx live 0)" SKIP "a worker cannot admit its onion" \
     && ok "D live: no admin.conf -> the admission leg SKIPs (never a PASS it did not measure)" || bad "D live worker admission not skipped"

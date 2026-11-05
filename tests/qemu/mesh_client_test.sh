@@ -173,27 +173,40 @@ echo 'assert_mesh_client "${FIXTURE_ROOT}"; echo "RESULT: ${PASS} passed, ${FAIL
 STUB="${WORK}/stub"; mkdir -p "${STUB}"
 # tailscale: `status --json` prints $TS_JSON; `ip -4` prints $TS_IP; `ping` prints a
 # pong unless TS_PONG=no. rc-service exits $RC_TS. sleep is instant.
+# status: prints $TS_JSON, or $TS_JSON_LATE from the $TS_LATE_AT-th status call on
+# (a peer that reaches the netmap while the control node waits). headscale: prints
+# $HS_JSON (the control node's registry). sleep: instant, counted in $SLEEP_LOG.
 cat > "${STUB}/tailscale" <<'EOF'
 #!/bin/bash
 case "$1" in
-    status) printf '%s\n' "${TS_JSON}" ;;
+    status) n=0; [ -n "${TS_COUNT:-}" ] && { n="$(cat "${TS_COUNT}" 2>/dev/null || echo 0)"; n=$((n + 1)); echo "${n}" > "${TS_COUNT}"; }
+            if [ -n "${TS_JSON_LATE:-}" ] && [ "${n}" -ge "${TS_LATE_AT:-999}" ]; then printf '%s\n' "${TS_JSON_LATE}"; else printf '%s\n' "${TS_JSON}"; fi ;;
     ip)     printf '%s\n' "${TS_IP}" ;;
     ping)   [ "${TS_PONG:-yes}" = yes ] && echo "pong from peer (${3:-?}) via 10.87.72.11:41641 in 2ms" || { echo "timeout"; false; } ;;
 esac
 EOF
 printf '#!/bin/bash\nexit "${RC_TS:-0}"\n' > "${STUB}/rc-service"
-printf '#!/bin/bash\n:\n' > "${STUB}/sleep"
+printf '#!/bin/bash\n[ -n "${SLEEP_LOG:-}" ] && echo "sleep $*" >> "${SLEEP_LOG}"\n:\n' > "${STUB}/sleep"
+printf '#!/bin/bash\nprintf "%%s\\n" "${HS_JSON:-[]}"\n' > "${STUB}/headscale"
 chmod +x "${STUB}"/*
 RUN_JSON='{"BackendState":"Running","Peer":{}}'
 PEER_JSON='{"BackendState":"Running","Peer":{"nodekey:a":{"HostName":"hugmesh-pki-qemu","TailscaleIPs":["100.64.0.1","fd7a::1"]}}}'
-mesh() {  # WANT KEY JSON IP [PONG] [RC]
+WPEER_JSON='{"BackendState":"Running","Peer":{"nodekey:b":{"HostName":"hugmesh-backend-qemu","TailscaleIPs":["100.64.0.2","fd7a::2"]}}}'
+HS_SELF="[{\"name\":\"$(hostname)\",\"given_name\":\"$(hostname)\",\"ip_addresses\":[\"100.64.0.1\"]}]"
+HS_FLEET="[{\"name\":\"$(hostname)\",\"given_name\":\"$(hostname)\",\"ip_addresses\":[\"100.64.0.1\"]},{\"name\":\"hugmesh-backend-qemu\",\"given_name\":\"hugmesh-backend-qemu\",\"ip_addresses\":[\"100.64.0.2\"]}]"
+# mesh() runs inside a $(...) capture, so its sleep log is a FIXED path the caller reads.
+SLEEP_LOG="${WORK}/sleep.log"; TS_COUNT="${WORK}/tscount"
+mesh() {  # WANT KEY JSON IP [PONG] [RC]   (env: HS_JSON PEER_WAIT TS_JSON_LATE TS_LATE_AT)
+    : > "${SLEEP_LOG}"; : > "${TS_COUNT}"
     FIXTURE_ROOT="${FX}" _ts_want="$1" _ts_src="KEYS manifest" _ts_key="$2" TS_JSON="$3" TS_IP="$4" TS_PONG="${5:-yes}" RC_TS="${6:-0}" \
-        PATH="${STUB}:${PATH}" bash -c 'set -u; . "$1"' _ "${MLIB}" 2>&1
+        HS_JSON="${HS_JSON:-${HS_SELF}}" HUGMESH_ASSERT_PEER_WAIT="${PEER_WAIT:-0}" TS_JSON_LATE="${TS_JSON_LATE:-}" TS_LATE_AT="${TS_LATE_AT:-999}" \
+        SLEEP_LOG="${SLEEP_LOG}" TS_COUNT="${TS_COUNT}" PATH="${STUB}:${PATH}" bash -c 'set -u; . "$1"' _ "${MLIB}" 2>&1
 }
 o="$(mesh true preauth "${RUN_JSON}" 100.64.0.1)"
 printf '%s' "${o}" | grep -F 'PASS  mesh join — tailscale is Running' >/dev/null && printf '%s' "${o}" | grep -F 'tailnet address 100.64.0.1' >/dev/null \
-    && printf '%s' "${o}" | grep -F 'SKIP  mesh peers — none yet' >/dev/null && printf '%s' "${o}" | grep -F 'RESULT: 3 passed, 0 failed' >/dev/null \
-    && _ok "C1 a self-joined control node: Running + 100.x address PASS, no peers yet is a SKIP" || _bad "C1: ${o}"
+    && printf '%s' "${o}" | grep -F 'SKIP  mesh peers — no fleet node has registered' >/dev/null && printf '%s' "${o}" | grep -F 'RESULT: 3 passed, 0 failed' >/dev/null \
+    && _ok "C1 a self-joined control node with nothing else registered: Running + 100.x address PASS, no peers yet is a SKIP" || _bad "C1: ${o}"
+[ "$(grep -c . "${SLEEP_LOG}")" -eq 0 ] && _ok "C1 ...and with no HUGMESH_ASSERT_PEER_WAIT budget it does not wait" || _bad "C1 waited $(grep -c . "${SLEEP_LOG}") time(s) with no budget"
 o="$(mesh true authkey "${PEER_JSON}" 100.64.0.2)"
 printf '%s' "${o}" | grep -F 'PASS  mesh peers — reaches hugmesh-pki-qemu (100.64.0.1)' >/dev/null && printf '%s' "${o}" | grep -F ', 0 failed' >/dev/null \
     && _ok "C2 a fleet worker that sees and pings its control node PASSES (the mesh formed)" || _bad "C2: ${o}"
@@ -215,6 +228,26 @@ printf '%s' "${o}" | grep -F 'SKIP  mesh client — not asked for' >/dev/null &&
 o="$(mesh true preauth "${RUN_JSON}" 100.64.0.1 yes 3)"
 printf '%s' "${o}" | grep -F 'FAIL  tailscaled service NOT started' >/dev/null \
     && _ok "C8 asked for but the service is down -> FAIL" || _bad "C8: ${o}"
+# C9-C12 — a CONTROL node is graded against its own headscale registry (2026-11-04:
+# it SKIPped "none yet" for ever, re-run after the worker had joined included).
+o="$(HS_JSON="${HS_FLEET}" mesh true preauth "${RUN_JSON}" 100.64.0.1)"
+printf '%s' "${o}" | grep -F 'FAIL  mesh peers — hugmesh-backend-qemu registered on this control node' >/dev/null && printf '%s' "${o}" | grep -F 'none is in its netmap after 0s' >/dev/null \
+    && _ok "C9 a worker registered on the control node's headscale but absent from its netmap -> FAIL (names the node and what to look at)" || _bad "C9: ${o}"
+o="$(HS_JSON="${HS_FLEET}" mesh true preauth "${WPEER_JSON}" 100.64.0.1)"
+printf '%s' "${o}" | grep -F 'PASS  mesh peers — reaches hugmesh-backend-qemu (100.64.0.2)' >/dev/null \
+    && _ok "C10 the registered worker in the netmap and answering ping -> PASS (the control node graded after its fleet joined)" || _bad "C10: ${o}"
+o="$(HS_JSON="${HS_FLEET}" PEER_WAIT=30 TS_JSON_LATE="${WPEER_JSON}" TS_LATE_AT=5 mesh true preauth "${RUN_JSON}" 100.64.0.1)"
+printf '%s' "${o}" | grep -F 'PASS  mesh peers — reaches hugmesh-backend-qemu (100.64.0.2)' >/dev/null && [ "$(grep -c -x 'sleep 10' "${SLEEP_LOG}")" -eq 2 ] \
+    && _ok "C11 with a budget the control node WAITS (10 s polls) for the worker to reach its netmap, then grades it: PASS after 2 polls" || _bad "C11: sleeps=$(grep -c . "${SLEEP_LOG}") :: ${o}"
+o="$(HS_JSON="${HS_FLEET}" PEER_WAIT=25 mesh true preauth "${RUN_JSON}" 100.64.0.1)"
+printf '%s' "${o}" | grep -F 'FAIL  mesh peers — hugmesh-backend-qemu registered' >/dev/null && printf '%s' "${o}" | grep -F 'after 30s' >/dev/null && [ "$(grep -c -x 'sleep 10' "${SLEEP_LOG}")" -eq 3 ] \
+    && _ok "C12 the wait is BOUNDED by HUGMESH_ASSERT_PEER_WAIT (25 -> 3 polls) and ends in the FAIL, not a SKIP, when the worker stays out of the netmap" || _bad "C12: sleeps=$(grep -c . "${SLEEP_LOG}") :: ${o}"
+o="$(PEER_WAIT=15 mesh true preauth "${RUN_JSON}" 100.64.0.1)"
+printf '%s' "${o}" | grep -F 'SKIP  mesh peers — no fleet node has registered' >/dev/null && printf '%s' "${o}" | grep -F 'within 20s' >/dev/null \
+    && _ok "C12 ...and with nothing registered after the budget it is still a SKIP that says how long it waited" || _bad "C12 skip-after-wait: ${o}"
+o="$(HS_JSON="${HS_FLEET}" PEER_WAIT=30 mesh true authkey "${RUN_JSON}" 100.64.0.2)"
+printf '%s' "${o}" | grep -F 'FAIL  mesh peers — joined with a fleet key but sees NO peer' >/dev/null && [ "$(grep -c . "${SLEEP_LOG}")" -eq 0 ] \
+    && _ok "C12 a WORKER never waits on the registry (its control node joined first by construction)" || _bad "C12 worker waited: ${o}"
 
 # ═════════════════════ D. fleet boot order on a shared L2 ═════════════════════
 echo "══ D. run-qemu-docker.sh boots control roles first on a shared L2 ══"
@@ -249,6 +282,13 @@ n_l="$(grep -n -F 'mv -f "${MESH_RENDEZVOUS}/.login_server.part" "${MESH_RENDEZV
 [ -n "${n_k}" ] && [ -n "${n_l}" ] && [ "${n_k}" -lt "${n_l}" ] \
     && _ok "D3 the control side publishes authkey then login_server (atomic renames, reader keys on both)" \
     || _bad "D3 publish order: authkey line ${n_k:-none}, login_server line ${n_l:-none}"
+# D4 — the control row of a rendezvous fleet gets a peer-wait budget streamed AHEAD of
+# assertions.sh (sudo bash -s drops the environment); every other row gets 0.
+n_g="$(grep -n -F 'if [ "${HS_ENABLED}" = true ] && [ -n "${MESH_RENDEZVOUS}" ]; then ASSERT_PEER_WAIT="${ASSERT_PEER_WAIT_FLEET:-600}"; fi' "${ENTRY}" | cut -d: -f1)"
+n_s="$(grep -n -F "< <(printf 'HUGMESH_ASSERT_PEER_WAIT=%s\\n' \"\${ASSERT_PEER_WAIT}\"; cat \"\${QEMU_DIR}/../../scripts/_roles-lib.sh\" \"\${QEMU_DIR}/assertions.sh\")" "${ENTRY}" | cut -d: -f1)"
+[ -n "${n_g}" ] && [ -n "${n_s}" ] && [ "${n_g}" -lt "${n_s}" ] && grep -F 'ASSERT_PEER_WAIT=0' "${ENTRY}" >/dev/null \
+    && _ok "D4 docker-entrypoint.sh streams HUGMESH_ASSERT_PEER_WAIT (600 s for a rendezvous control row, else 0) as the first line of the assertion script" \
+    || _bad "D4 peer-wait prelude: gate line ${n_g:-none}, stream line ${n_s:-none}"
 
 # ═══════════════ E. provision.sh: the join cannot hang the boot ═════════════════
 echo "══ E. provision.sh: KEYS network profiles go live, tailscale up is bounded ══"

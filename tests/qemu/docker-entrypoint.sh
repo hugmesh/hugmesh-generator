@@ -1397,13 +1397,24 @@ if ${KEEP_ALIVE}; then write_device_record assertions; fi
 # always the last attempt's. ConnectTimeout is raised to 15s for this one ssh,
 # and it goes BEFORE ${SSH_OPTS[@]}: ssh keeps the FIRST value it obtains for
 # an option, so appended after the array it would silently lose to the 5.
+# A fleet's CONTROL row asserts minutes before its workers boot and join. Its
+# "mesh peers" check waits, bounded by this many seconds, for a fleet node to
+# register on its headscale and reach its netmap (assertions.sh assert_mesh_client);
+# every other row gets 0 (no wait). `sudo bash -s` drops the environment, so the
+# budget rides as the first line of the streamed script. 600 s sits inside the
+# 900 s assertion wall clock with the rest of the suite's own waits to spare, and
+# a worker on TCG aarch64 joins ~4-5 min after the control row answers ssh
+# (2026-11-04 proof run: control ssh 02:15, worker joined 02:18:58).
+ASSERT_PEER_WAIT=0
+if [ "${HS_ENABLED}" = true ] && [ -n "${MESH_RENDEZVOUS}" ]; then ASSERT_PEER_WAIT="${ASSERT_PEER_WAIT_FLEET:-600}"; fi
+[[ "${ASSERT_PEER_WAIT}" =~ ^[0-9]+$ ]] || ASSERT_PEER_WAIT=0
 set +e
 ASSERT_ATTEMPTS=0
 while :; do
     ASSERT_ATTEMPTS=$((ASSERT_ATTEMPTS + 1))
     timeout -k 30 "${ASSERT_TIMEOUT}" \
         ssh -o ConnectTimeout=15 "${SSH_OPTS[@]}" "${SSH_USER}@localhost" 'sudo bash -s' \
-        < <(cat "${QEMU_DIR}/../../scripts/_roles-lib.sh" "${QEMU_DIR}/assertions.sh") \
+        < <(printf 'HUGMESH_ASSERT_PEER_WAIT=%s\n' "${ASSERT_PEER_WAIT}"; cat "${QEMU_DIR}/../../scripts/_roles-lib.sh" "${QEMU_DIR}/assertions.sh") \
         2>&1 | tee "${RUN_DIR}/assertions.log"
     ARC=${PIPESTATUS[0]}
     [ "${ARC}" -eq 255 ] || break
