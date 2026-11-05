@@ -23,7 +23,7 @@
 #        be requested in a fragment) are intact: USB_XHCI_HCD=y requested, and no
 #        `is not set` for PCI / USB_PCI / USB_XHCI_HCD / USB_XHCI_PCI / USB_STORAGE;
 #     3) no `is not set` for a dependency of the emulation block (MMC, MMC_SDHCI, DRM,
-#        VIRTIO, VIRTIO_MENU, INPUT, PCI);
+#        VIRTIO, VIRTIO_MENU, INPUT, PCI, PCI_HOST_GENERIC);
 #     4) build-frite-stage4.sh really consumes THIS fragment through merge_config.sh
 #        (the consumer is read, never edited here).
 #   resolution (when a clean kernel SOURCE tree is at hand: $1, $KSRC, or the newest
@@ -62,12 +62,16 @@ bad(){ echo "  FAIL $*"; F=$((F+1)); }
 #   VIRTIO_PCI     transport for the two above
 #   PCI, MMC_SDHCI dependencies of the three *_PCI symbols (defconfig sets them;
 #                  pinned so a --defconfig override cannot prune the block)
+#   PCI_HOST_GENERIC the ECAM host controller behind `-M virt`'s PCIe bus: with it
+#                  off there is NO bus for any *_PCI driver to probe, every other
+#                  symbol here stays =y, and only a direct check can see it
 EMU_SYMBOLS=(
   CONFIG_MMC_SDHCI_PCI
   CONFIG_DRM_VIRTIO_GPU
   CONFIG_VIRTIO_INPUT
   CONFIG_VIRTIO_PCI
   CONFIG_PCI
+  CONFIG_PCI_HOST_GENERIC
   CONFIG_MMC_SDHCI
 )
 # Derived after olddefconfig (promptless / default y on the symbols above).
@@ -78,6 +82,7 @@ DERIVED_SYMBOLS=(
 # Must never be negated in the fragment: inputs of USB_XHCI_PCI and of the block.
 NEVER_UNSET=(
   CONFIG_PCI
+  CONFIG_PCI_HOST_GENERIC
   CONFIG_USB_PCI
   CONFIG_USB_XHCI_HCD
   CONFIG_USB_XHCI_PCI

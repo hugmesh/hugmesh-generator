@@ -934,8 +934,8 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # must keep) the sdhci-pci / virtio-gpu / virtio-input symbols that let the Frite
 # installer be proven in QEMU (install to an emulated eMMC, boot it to the greeter).
 # MEASURED in alpine:3 with the alpine job's apk set, checkout read-only, --network=none:
-# 22 passed / 0 failed, rc=0 (static tier; the resolution tier reports itself SKIPPED
-# there, no kernel tree), and its 27-mutation battery on a Gentoo host 27 caught / 0
+# 24 passed / 0 failed, rc=0 (static tier; the resolution tier reports itself SKIPPED
+# there, no kernel tree), and its 30-mutation battery on a Gentoo host 30 caught / 0
 # survived. Ungated SET pin unchanged.
 PREMERGE_BASELINE="${GUARD_PREMERGE:-208}"
 
