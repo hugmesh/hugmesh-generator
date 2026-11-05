@@ -286,6 +286,9 @@ def test_the_qemu_page_greys_every_lane_with_docker_up(studio, monkeypatch):
 def test_the_mesh_emulation_page_does_not_arm_start_on_docker_alone(studio, monkeypatch):
     from hugmesh_studio.gui.pages.mesh_emulation import MeshEmulationPage
     page = _page(studio, MeshEmulationPage)
+    # The DOCKER backend's gate. A Windows host whose QEMU for Windows is ready opens
+    # this page on that backend instead (test_pages_mesh_emulation_whpx.py).
+    page.backend_combo.setCurrentIndex(page.backend_combo.findData("docker"))
     _answer_as(monkeypatch, "posix")
     page._docker_paint((True, "docker is available."))
     assert page._docker_ok                       # Start, row Start and "+" read this
