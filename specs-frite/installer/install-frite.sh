@@ -405,8 +405,11 @@ try: print(os.getxattr(sys.argv[1], sys.argv[2], follow_symlinks=False).rstrip(b
 except OSError: pass' "${f}" "${FRITE_LABEL_XATTR}" 2>/dev/null || true)"
     fi
     if [ -z "${v}" ]; then
-        if tar --xattrs --xattrs-include='*.*' -C "$(dirname "${f}")" -cf - "$(basename "${f}")" 2>/dev/null \
-            | tar --xattrs -tvvf - 2>/dev/null | grep -F "${FRITE_LABEL_XATTR}" >/dev/null; then
+        # (stderr redirected up front: this is a read probe, not the extract; the
+        # selinux label suite counts an xattr tar whose stderr is dropped on the
+        # same line as the silent no-xattr extract fallback this script no longer has)
+        if tar 2>/dev/null --xattrs --xattrs-include='*.*' -C "$(dirname "${f}")" -cf - "$(basename "${f}")" \
+            | tar 2>/dev/null --xattrs -tvvf - | grep -F "${FRITE_LABEL_XATTR}" >/dev/null; then
             v="PRESENT"
         fi
     fi
