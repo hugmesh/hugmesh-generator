@@ -319,7 +319,7 @@ fi
 # operator explicitly asked for the ISO twin. That shape is pinned below.
 if [ -f "${GEN}/build-frite-stage4.sh" ]; then
     if awk '/^if \$\{MEDIUM_ISO\}; then$/ {on=1} on {print} on && /^fi$/ {exit}' "${GEN}/build-frite-stage4.sh" \
-         | grep -qE '^[[:space:]]*hostguard_require_host_tools "the --medium-iso ISO9660 twin" "dev-libs/libisoburn" \\$' \
+         | grep -E '^[[:space:]]*hostguard_require_host_tools "the --medium-iso ISO9660 twin" "dev-libs/libisoburn" \\$' >/dev/null \
        && ! grep -qE 'hostguard_require_host_tools "the LIVE ISO"' "${GEN}/build-frite-stage4.sh"; then
         ok "build-frite-stage4.sh: xorriso is preflighted HARD only under --medium-iso (the raw .img media need no xorriso)"
     else
