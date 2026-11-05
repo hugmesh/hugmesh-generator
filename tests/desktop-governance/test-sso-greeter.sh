@@ -36,8 +36,27 @@
 #              the local path untouched, an empty password with the issuer down
 #              shows the reason and fails, an empty password with the issuer up
 #              signs in and `success=done` short-circuits a pam_deny local path.
+#   ORDER      the stack over #860's wired include chain (system-local-login ->
+#              system-login -> system-auth with pam_ecryptfs after the LAST line):
+#              local login prompted once and reaches the unwrap line; SSO ends at
+#              success=done before it; the pre-#860 placement breaks local login.
+#   ACCOUNTS   root / daemon / an account SSO did not create are refused before any
+#              request; the managed registry outlives `revoke`; a replaced uid is
+#              refused.
+#   NETWORK    a sys.addaudithook logs every connect / lookup to ANY host: zero on
+#              the standalone conf (every subcommand), zero with SSO disabled but
+#              an issuer set, zero for probe and typed passwords with SSO on; the
+#              opt-in sign-in IS logged (control).
+#   CONFIGURE  the runtime admin surface: enable / issuer / offline bound / admin
+#              role / disable, in place, no network; refusals leave the conf alone.
 #   MUTATION   five defects planted in a copy of the helper, each verified to have
 #              changed the file, each caught by a check above.
+#   GUARDS     the named guards (no wheel without the admin role, no token in
+#              output, cache expiry, fallback with a visible reason, zero network
+#              until opt-in, no system/unmanaged account, config validation) as
+#              check functions: green on the real helper, red on 18 planted
+#              defects (each verified to change the file and still parse), plus
+#              3 planted control-flag defects in the PAM stack (libpam).
 set -uo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -48,6 +67,11 @@ for f in "${HELPER_SRC}" "${STACK_SRC}"; do
 done
 command -v python3 >/dev/null || { echo "  FAIL python3 required"; exit 1; }
 command -v openssl >/dev/null || { echo "  FAIL openssl required"; exit 1; }
+
+# The libpam legs (STACK, PAM ORDER, the stack battery) are REQUIRED on the
+# Debian CI job (python:3.12-slim ships libpam-modules) and with
+# HUGMESH_REQUIRE_LIBPAM=1; elsewhere (the Alpine job has no linux-pam) they NOTE.
+if [ "${GITHUB_ACTIONS:-}" = true ] && [ -f /etc/debian_version ]; then HUGMESH_REQUIRE_LIBPAM=1; fi
 
 P=0; F=0
 ok(){ echo "  PASS $*"; P=$((P+1)); }
@@ -150,6 +174,30 @@ TOK_WRONG_ISS="$(mint "$(payload alice '["ROLE_USER"]' 3600 https://id.other.exa
 TOK_WRONG_AUD="$(mint "$(payload alice '["ROLE_USER"]' 3600 "${ISSUER}" '["something-else"]')")"
 TOK_NONE="$(mint "$(payload alice)" "${WORK}/key.pem" '{"alg":"none","typ":"JWT"}')"
 MYUID="$(id -u)"; MYGID="$(id -g)"
+# The uid the account shims hand out. The helper never signs in to uid 0 (nor
+# below UID_MIN), so under root (CI containers) the test accounts get 4242,
+# which root can chown to; otherwise our own uid, which we can.
+TUID="${MYUID}"; [ "${TUID}" -eq 0 ] && TUID=4242
+# UID_MIN the helper is told (HSG_UID_MIN): 1 so a CI runner's own uid counts as a
+# person's; the SYSTEM case sets 1000 explicitly.
+UIDMIN=1
+# Network audit: every socket connect / name lookup the helper makes is logged
+# (sys.addaudithook in a sitecustomize on PYTHONPATH) to ${CASE}/net.log. This
+# sees ANY destination, not only the fake issuer.
+mkdir -p "${WORK}/netaudit"
+cat > "${WORK}/netaudit/sitecustomize.py" <<'NETPY'
+import os, sys
+_LOG = os.environ.get("HSG_NETLOG", "")
+if _LOG:
+    def _hook(event, args):
+        if event in ("socket.connect", "socket.getaddrinfo", "socket.gethostbyname", "socket.sendto"):
+            try:
+                with open(_LOG, "a") as f:
+                    f.write("%s %r\n" % (event, args[1:] if event == "socket.connect" else args[:2]))
+            except OSError:
+                pass
+    sys.addaudithook(_hook)
+NETPY
 
 # ── Per-case sandbox: conf, state, run, passwd/shadow, shims ────────────────
 new_case() {  # $1=enabled true|false  $2=issuer  [$3=governed]
@@ -186,7 +234,7 @@ EOF
 echo "useradd \$*" >> "${CASE}/log"
 g=""; while [ \$# -gt 1 ]; do case "\$1" in -G) g="\$2"; shift ;; -s|-c|-u) shift ;; esac; shift; done
 n="\$1"
-printf '%s:x:%s:%s:SSO user:/home/%s:/bin/bash\n' "\${n}" "${MYUID}" "${MYGID}" "\${n}" >> "${CASE}/etc/passwd"
+printf '%s:x:%s:%s:SSO user:/home/%s:/bin/bash\n' "\${n}" "${TUID}" "${MYGID}" "\${n}" >> "${CASE}/etc/passwd"
 printf '%s:!:19000:0:99999:7:::\n' "\${n}" >> "${CASE}/etc/shadow"
 printf '%s:%s\n' "\${n}" "\${g}" >> "${CASE}/etc/groups"
 EOF
@@ -213,7 +261,7 @@ EOF
 }
 # add_local NAME [HASH] [LASTCHG] — a local account with a usable password hash.
 add_local() {
-    printf '%s:x:%s:%s:%s:/home/%s:/bin/bash\n' "$1" "${MYUID}" "${MYGID}" "$1" "$1" >> "${CASE}/etc/passwd"
+    printf '%s:x:%s:%s:%s:/home/%s:/bin/bash\n' "$1" "${TUID}" "${MYGID}" "$1" "$1" >> "${CASE}/etc/passwd"
     printf '%s:%s:%s:0:99999:7:::\n' "$1" "${2:-\$y\$j9T\$abc\$def}" "${3:-19000}" >> "${CASE}/etc/shadow"
     printf '%s:wheel,audio\n' "$1" >> "${CASE}/etc/groups"
 }
@@ -224,6 +272,7 @@ auth() {
         HSG_INSECURE_TEST=1 HSG_CONF="${CASE}/conf" HSG_STATE_DIR="${CASE}/state" HSG_RUN_DIR="${CASE}/run" \
         HSG_GOV_DIR="${GOV}" HSG_PASSWD="${CASE}/etc/passwd" HSG_SHADOW="${CASE}/etc/shadow" \
         HSG_RUNTIME_BASE="${CASE}/runtime" HSG_USERS_CREATED="${CASE}/users.created" HSG_POLL_SCALE=0.05 \
+        HSG_UID_MIN="${UIDMIN}" HSG_NETLOG="${CASE}/net.log" PYTHONPATH="${WORK}/netaudit" \
         timeout 60 python3 "${helper}" pam-auth > "${CASE}/out" 2> "${CASE}/err"
 }
 helper_cmd() {  # HELPER subcommand... (operator commands / pam-session), same seams
@@ -231,12 +280,13 @@ helper_cmd() {  # HELPER subcommand... (operator commands / pam-session), same s
     PATH="${CASE}/bin:${PATH}" HSG_INSECURE_TEST=1 HSG_CONF="${CASE}/conf" HSG_STATE_DIR="${CASE}/state" \
         HSG_RUN_DIR="${CASE}/run" HSG_GOV_DIR="${GOV}" HSG_PASSWD="${CASE}/etc/passwd" HSG_SHADOW="${CASE}/etc/shadow" \
         HSG_RUNTIME_BASE="${CASE}/runtime" HSG_USERS_CREATED="${CASE}/users.created" \
+        HSG_UID_MIN="${UIDMIN}" HSG_NETLOG="${CASE}/net.log" PYTHONPATH="${WORK}/netaudit" \
         timeout 60 python3 "${helper}" "$@" > "${CASE}/out" 2> "${CASE}/err"
 }
 nreq(){ [ -f "${SRV}/requests.log" ] && wc -l < "${SRV}/requests.log" || echo 0; }
 mode(){ stat -c '%a' "$1" 2>/dev/null; }
 CACHE(){ echo "${CASE}/state/users/$1.json"; }
-PARK(){ echo "${CASE}/run/handoff/${MYUID}"; }
+PARK(){ echo "${CASE}/run/handoff/${TUID}"; }
 no_secret_in_output() {  # the token (and any typed password) must never reach the greeter/log
     ! grep -qF "${TOK_ALICE}" "${CASE}/out" "${CASE}/err" 2>/dev/null \
     && ! grep -qF "${TOK_ALICE_ADMIN}" "${CASE}/out" "${CASE}/err" 2>/dev/null
@@ -291,13 +341,13 @@ grep -q 'GET /jwks' "${SRV}/requests.log" && [ -f "${CASE}/state/jwks.json" ] \
 grep -q 'type an offline password next time' "${CASE}/out" && ok "ONLINE: the greeter explains how to enable offline sign-in" || bad "ONLINE: no offline hint: $(cat "${CASE}/out")"
 
 # ── SESSION hand-off ────────────────────────────────────────────────────────
-mkdir -p "${CASE}/runtime/${MYUID}"
+mkdir -p "${CASE}/runtime/${TUID}"
 helper_cmd "${HELPER}" pam-session; : # PAM_TYPE unset => no-op
 [ -e "$(PARK)" ] && ok "SESSION: no PAM_TYPE => park untouched" || bad "SESSION: park consumed without open_session"
 PAM_USER=alice PAM_TYPE=open_session helper_cmd "${HELPER}" pam-session; rc=$?
-DROP="${CASE}/runtime/${MYUID}/hugmesh/oidc-token.src"
+DROP="${CASE}/runtime/${TUID}/hugmesh/oidc-token.src"
 [ "${rc}" -eq 0 ] && [ "$(cat "${DROP}" 2>/dev/null)" = "${TOK_ALICE}" ] && [ "$(mode "${DROP}")" = 600 ] \
-    && [ "$(mode "${CASE}/runtime/${MYUID}/hugmesh")" = 700 ] && [ ! -e "$(PARK)" ] \
+    && [ "$(mode "${CASE}/runtime/${TUID}/hugmesh")" = 700 ] && [ ! -e "$(PARK)" ] \
     && ok "SESSION: open_session moved the token to <runtime>/<uid>/hugmesh/oidc-token.src (0600 in 0700) and removed the park" \
     || bad "SESSION: rc ${rc}, drop='$(head -c 20 "${DROP}" 2>/dev/null)' mode $(mode "${DROP}") park=$([ -e "$(PARK)" ] && echo present || echo gone)"
 mkdir -p "${CASE}/run/handoff"; printf 'stale' > "$(PARK)"
@@ -364,7 +414,7 @@ new_case true "${ISSUER}"; printf 'pending,pending,pending,pending,pending,pendi
     HSG_INSECURE_TEST=1 HSG_CONF="${CASE}/conf" HSG_STATE_DIR="${CASE}/state" HSG_RUN_DIR="${CASE}/run" \
     HSG_GOV_DIR="${GOV}" HSG_PASSWD="${CASE}/etc/passwd" HSG_SHADOW="${CASE}/etc/shadow" \
     HSG_RUNTIME_BASE="${CASE}/runtime" HSG_USERS_CREATED="${CASE}/users.created" HSG_POLL_SCALE=0.05 \
-    python3 "${HELPER}" pam-auth > "${CASE}/out" 2> "${CASE}/err" & sleep 0.3 )   # the subshell IS the parent for 0.3 s, like pam_exec's session child until Cancel; no `timeout` wrapper (it would stay the parent)
+    HSG_UID_MIN="${UIDMIN}" python3 "${HELPER}" pam-auth > "${CASE}/out" 2> "${CASE}/err" & sleep 0.3 )   # the subshell IS the parent for 0.3 s, like pam_exec's session child until Cancel; no `timeout` wrapper (it would stay the parent)
 for _ in $(seq 1 100); do grep -q 'greeter gone\|Signed in' "${CASE}/err" "${CASE}/out" 2>/dev/null && break; sleep 0.1; done
 sleep 0.5
 grep -q 'greeter gone (cancelled)' "${CASE}/err" && ! grep -q useradd "${CASE}/log" && [ ! -e "$(CACHE alice)" ] && [ ! -e "$(PARK)" ] \
@@ -438,7 +488,8 @@ grep -q "'fallback' has a ONE-TIME password that the keyless first boot printed 
 touch "${CASE}/users.created"; helper_cmd "${HELPER}" probe
 grep -q 'standalone first boot printed' "${H}" && ok "HINT: with users.created the notice names the standalone first boot" || bad "HINT: standalone wording missing"
 new_case false "${ISSUER}"; helper_cmd "${HELPER}" probe
-grep -q 'SSO sign-in is not enabled on this image' "${CASE}/run/hint" && ok "HINT: SSO off => the hint says so" || bad "HINT off: $(cat "${CASE}/run/hint")"
+grep -q 'SSO sign-in is not enabled on this device' "${CASE}/run/hint" && grep -q 'sso-greeter configure' "${CASE}/run/hint" \
+    && ok "HINT: SSO off => the hint says so and how an administrator turns it on" || bad "HINT off: $(cat "${CASE}/run/hint")"
 
 # ── STACK: the real /etc/pam.d/lightdm through libpam with the real helper ──
 echo "== STACK: specs/etc/pam.d/lightdm executed through libpam =="
@@ -497,12 +548,16 @@ HSG_SHADOW=${CASE}/etc/shadow
 HSG_RUNTIME_BASE=${CASE}/runtime
 HSG_USERS_CREATED=${CASE}/users.created
 HSG_POLL_SCALE=0.05
+HSG_UID_MIN=${UIDMIN}
 EOF
 }
 new_case true "${ISSUER}"; envfile
 PO="${CASE}/pam.out"
-python3 "${PAMPY}" "$(stack probe pam_permit.so)" lightdm "x" "${CASE}/env" > "${PO}" 2>/dev/null
+python3 "${PAMPY}" "$(stack probe pam_permit.so)" lightdm "x" "${CASE}/env" > "${PO}" 2>&1
+probe_out="$(tr '\n' '|' < "${PO}")"
+PAM_OK=false
 if grep -q '^RC 0$' "${PO}"; then
+    PAM_OK=true
     # (a) a typed password: the helper steps aside, the local stand-in (permit) decides
     new_case true "${ISSUER}"; add_local alice; envfile
     PO="${CASE}/pam.out"; python3 "${PAMPY}" "$(stack a pam_permit.so)" lightdm "hunter2" "${CASE}/env" > "${PO}" 2>/dev/null
@@ -541,10 +596,255 @@ EOF
         || bad "STACK (c): $(tr '\n' '|' < "${PO}")"
     ! grep -qF "${TOK_ALICE}" "${PO}" && ok "STACK: the token never reached the conversation" || bad "STACK: token in the conversation"
 elif [ "${HUGMESH_REQUIRE_LIBPAM:-0}" = 1 ]; then
-    bad "libpam execution unavailable here (probe='${probe_out}') and HUGMESH_REQUIRE_LIBPAM=1"
+    bad "libpam execution unavailable here (probe='${probe_out}') and HUGMESH_REQUIRE_LIBPAM=1 (implied on the Debian CI job)"
 else
-    echo "  NOTE libpam execution layer not runnable here (probe='$(printf '%s' "${probe_out}" | tail -1)'); the helper checks above are the gate"
+    echo "  NOTE libpam execution layer not runnable here (probe tail: '${probe_out: -160}'); the helper checks above are the gate"
 fi
+
+# ── PAM ORDER with #860: the lightdm stack over the REAL include chain ────────
+# #860 wires pam_ecryptfs after the LAST line of each system-auth stack (never
+# right after pambase's `[success=1 ...] pam_unix.so`, whose jump would then land
+# on `[default=die] pam_faillock.so authfail`). The greeter stack `include`s
+# system-local-login -> system-login -> system-auth and never edits system-auth,
+# so the two compose. Executed here: the real stack file, an include chain built
+# from #860's pambase fixture, wired by #860's OWN wire_pam_ecryptfs (lifted from
+# specs/usr/sbin/hugmesh-home-setup), with stand-ins only for what needs root:
+# pam_unix -> a pam_exec password checker (same [success=1 ...] control),
+# faillock authfail -> pam_deny (same [default=die]: reaching it kills the
+# attempt), pam_ecryptfs unwrap -> a pam_exec marker that records it ran.
+echo "== PAM ORDER: greeter stack + #860's wired system-auth through libpam =="
+PAMFIX="${REPO}/tests/scripts/fixtures/pam/system-auth.gentoo-pambase"
+HOMESETUP="${REPO}/specs/usr/sbin/hugmesh-home-setup"
+order_confdir() {  # $1=label $2=lightdm-stack-file $3=system-auth-file -> confdir
+    local d="${CASE}/order-$1"; mkdir -p "${d}"
+    # Includes are spelled as ABSOLUTE paths into the confdir: Debian's libpam
+    # (1.7.0-5) resolves a bare `include NAME` against /etc/pam.d even under
+    # pam_start_confdir, where Gentoo's resolves it in the confdir. An absolute
+    # include is the same stack on both.
+    sed -e "s#/usr/lib/hugmesh/sso-greeter#${HELPER}#g" -e "s#/run/hugmesh/sso-greeter/hint#${CASE}/run/hint#" \
+        -e "s#^\([a-z]*[[:space:]]*include[[:space:]]*\)system-local-login#\1${d}/system-local-login#" "$2" > "${d}/lightdm"
+    grep -q "include[[:space:]]*${d}/system-local-login" "${d}/lightdm" || echo "  NOTE order_confdir: no include rewritten in $2" >&2
+    printf 'auth\t\tinclude\t\t%s/system-login\naccount\t\tinclude\t\t%s/system-login\npassword\tinclude\t\t%s/system-login\nsession\t\tinclude\t\t%s/system-login\n' "${d}" "${d}" "${d}" "${d}" > "${d}/system-local-login"
+    printf 'auth\t\tinclude\t\t%s/system-auth\naccount\t\tinclude\t\t%s/system-auth\npassword\tinclude\t\t%s/system-auth\nsession\t\tinclude\t\t%s/system-auth\n' "${d}" "${d}" "${d}" "${d}" > "${d}/system-login"
+    sed -e "s#pam_unix\.so .*#pam_exec.so quiet expose_authtok ${WORK}/pw-check#" \
+        -e 's#pam_faillock\.so preauth#pam_permit.so#' -e 's#pam_faillock\.so authfail#pam_deny.so#' \
+        -e 's#pam_env\.so#pam_permit.so#' -e 's#pam_cap\.so#pam_permit.so#' \
+        -e "s#pam_ecryptfs\.so unwrap#pam_exec.so quiet ${WORK}/ecryptfs-marker#" "$3" > "${d}/system-auth"
+    echo "${d}"
+}
+cat > "${WORK}/pw-check" <<'EOF'
+#!/usr/bin/env python3
+import sys
+sys.exit(0 if sys.stdin.buffer.read().rstrip(b"\0\n") == b"hunter2" else 1)
+EOF
+cat > "${WORK}/ecryptfs-marker" <<EOF
+#!/usr/bin/env bash
+echo "ecryptfs-unwrap-reached" >> "\${HSG_ORDER_MARK:-/dev/null}"
+exit 0
+EOF
+chmod +x "${WORK}/pw-check" "${WORK}/ecryptfs-marker"
+WFN="$(sed -n '/^wire_pam_ecryptfs() {/,/^}/p' "${HOMESETUP}" 2>/dev/null)"
+if [ -f "${PAMFIX}" ] && [ -n "${WFN}" ] && ${PAM_OK}; then
+    eval "${WFN}"
+    cp "${PAMFIX}" "${WORK}/system-auth.wired"; wire_pam_ecryptfs "${WORK}/system-auth.wired"
+    la="$(grep -n '^auth' "${WORK}/system-auth.wired" | tail -1)"
+    case "${la}" in *pam_ecryptfs.so\ unwrap*) ok "ORDER: #860's wiring put auth pam_ecryptfs on the LAST auth line of system-auth" ;;
+                    *) bad "ORDER: last auth line is not pam_ecryptfs: ${la}" ;; esac
+    order_env() { envfile; printf 'HSG_ORDER_MARK=%s\n' "${CASE}/order.mark" >> "${CASE}/env"; : > "${CASE}/order.mark"; }
+    # L1: a LOCAL user with the right password: one prompt, authenticated, and
+    # the ecryptfs unwrap line IS reached (a local encrypted home unwraps).
+    new_case true "${ISSUER}"; add_local alice; order_env
+    PO="${CASE}/pam.out"; python3 "${PAMPY}" "$(order_confdir l1 "${STACK_SRC}" "${WORK}/system-auth.wired")" lightdm "hunter2" "${CASE}/env" > "${PO}" 2>/dev/null
+    grep -q '^RC 0$' "${PO}" && [ "$(grep -c 'MSG style=1 ' "${PO}")" -eq 1 ] && grep -q ecryptfs-unwrap-reached "${CASE}/order.mark" && [ "$(nreq)" -eq 0 ] \
+        && ok "ORDER: local password through the real include chain => ONE prompt, rc 0, pam_ecryptfs unwrap reached, no request" \
+        || bad "ORDER L1: $(tr '\n' '|' < "${PO}") mark='$(cat "${CASE}/order.mark")' requests $(nreq)"
+    # L2: wrong local password: denied (the helper grants nothing, faillock path dies).
+    new_case true "${ISSUER}"; add_local alice; order_env
+    PO="${CASE}/pam.out"; python3 "${PAMPY}" "$(order_confdir l2 "${STACK_SRC}" "${WORK}/system-auth.wired")" lightdm "wrong" "${CASE}/env" > "${PO}" 2>/dev/null
+    grep -q '^RC [1-9]' "${PO}" && ok "ORDER: wrong local password through the chain => denied" || bad "ORDER L2: $(tr '\n' '|' < "${PO}")"
+    # S1: an SSO sign-in: success=done ends auth BEFORE system-auth, so neither the
+    # password check nor faillock nor the ecryptfs unwrap runs for it.
+    new_case true "${ISSUER}"; order_env
+    PO="${CASE}/pam.out"; python3 "${PAMPY}" "$(order_confdir s1 "${STACK_SRC}" "${WORK}/system-auth.wired")" lightdm "" "${CASE}/env" > "${PO}" 2>/dev/null
+    grep -q '^RC 0$' "${PO}" && ! grep -q ecryptfs-unwrap-reached "${CASE}/order.mark" && grep -q useradd "${CASE}/log" \
+        && ok "ORDER: SSO sign-in through the chain => rc 0, account created, system-auth (faillock, ecryptfs) never reached" \
+        || bad "ORDER S1: $(tr '\n' '|' < "${PO}") mark='$(cat "${CASE}/order.mark")'"
+    # Control: the pre-#860 placement (ecryptfs right after pam_unix) breaks the
+    # local login through this same chain — the leg can see PAM order.
+    sed '/^auth.*pam_unix\.so/a auth\t\toptional\tpam_ecryptfs.so unwrap' "${PAMFIX}" > "${WORK}/system-auth.old"
+    new_case true "${ISSUER}"; add_local alice; order_env
+    PO="${CASE}/pam.out"; python3 "${PAMPY}" "$(order_confdir ctl "${STACK_SRC}" "${WORK}/system-auth.old")" lightdm "hunter2" "${CASE}/env" > "${PO}" 2>/dev/null
+    grep -q '^RC [1-9]' "${PO}" && ok "ORDER control: the pre-#860 wiring rejects a correct local password through the greeter stack (the leg sees order)" \
+        || bad "ORDER control: pre-#860 wiring accepted — this leg cannot see PAM order"
+elif [ "${HUGMESH_REQUIRE_LIBPAM:-0}" = 1 ]; then
+    bad "PAM ORDER leg not runnable (fixture/wire function/libpam missing) and HUGMESH_REQUIRE_LIBPAM=1"
+else
+    echo "  NOTE PAM ORDER leg skipped (libpam layer not runnable here)"
+fi
+
+# ── ACCOUNTS: never root, a daemon, or an account SSO did not create ─────────
+echo "== ACCOUNTS: system and unmanaged accounts are never adopted =="
+chk_system_account() {  # HELPER -> 0 iff an IdP user named root/daemon is refused before any request
+    local h="$1" rc
+    new_case true "${ISSUER}"; printf '%s' "$(mint "$(payload root)")" > "${SRV}/access"
+    auth "${h}" root ""; rc=$?
+    [ "${rc}" -eq 1 ] && grep -q 'system account' "${CASE}/out" && [ "$(nreq)" -eq 0 ] && ! grep -q 'usermod\|useradd' "${CASE}/log" || return 1
+    printf 'daemon:x:2:2:daemon:/sbin:/sbin/nologin\n' >> "${CASE}/etc/passwd"; printf 'daemon:*:19000:0:99999:7:::\n' >> "${CASE}/etc/shadow"
+    printf '%s' "$(mint "$(payload daemon)")" > "${SRV}/access"
+    UIDMIN=1000 auth "${h}" daemon ""; rc=$?
+    [ "${rc}" -eq 1 ] && grep -q 'system account' "${CASE}/out" && [ "$(nreq)" -eq 0 ] && ! grep -q 'usermod\|useradd' "${CASE}/log"
+}
+chk_unmanaged_account() {  # HELPER -> 0 iff a locked account SSO did not create is refused, no request
+    local h="$1" rc
+    new_case true "${ISSUER}"
+    printf 'keysuser:x:%s:%s:KEYS user:/home/keysuser:/bin/bash\n' "${TUID}" "${MYGID}" >> "${CASE}/etc/passwd"
+    printf 'keysuser:!:19000:0:99999:7:::\n' >> "${CASE}/etc/shadow"
+    printf '%s' "$(mint "$(payload keysuser)")" > "${SRV}/access"
+    auth "${h}" keysuser ""; rc=$?
+    [ "${rc}" -eq 1 ] && grep -q 'not an SSO account' "${CASE}/out" && [ "$(nreq)" -eq 0 ] && ! grep -q 'usermod\|useradd\|gpasswd' "${CASE}/log"
+}
+chk_system_account "${HELPER}" && ok "ACCOUNTS: an IdP user named root (uid 0) or daemon (uid < UID_MIN) => refused, rc 1, NO request, no account change" \
+    || bad "ACCOUNTS: system account: rc ${rc:-?}; out: $(cat "${CASE}/out"); requests $(nreq)"
+chk_unmanaged_account "${HELPER}" && ok "ACCOUNTS: a locked account SSO did not create (e.g. a KEYS user) => refused, rc 1, NO request, groups untouched" \
+    || bad "ACCOUNTS: unmanaged: out: $(cat "${CASE}/out"); requests $(nreq); log: $(tr '\n' '|' < "${CASE}/log")"
+new_case true "${ISSUER}"
+auth "${HELPER}" alice "" && [ "$(cat "${CASE}/state/managed/alice" 2>/dev/null)" = "${TUID}" ] && [ "$(mode "${CASE}/state/managed/alice")" = 600 ] \
+    && ok "ACCOUNTS: an SSO-created account is recorded (managed/<name> = its uid, 0600)" || bad "ACCOUNTS: managed registry: '$(cat "${CASE}/state/managed/alice" 2>/dev/null)'"
+helper_cmd "${HELPER}" revoke alice; rm -f "${SRV}/n" "${SRV}/requests.log"
+auth "${HELPER}" alice ""; rc=$?
+[ "${rc}" -eq 0 ] && ok "ACCOUNTS: after 'revoke' (offline cache gone) the SSO user can still sign in ONLINE (the registry is kept)" || bad "ACCOUNTS: revoked user locked out online: $(cat "${CASE}/out")"
+printf '99999\n' > "${CASE}/state/managed/alice"; rm -f "${SRV}/n" "${SRV}/requests.log"
+auth "${HELPER}" alice ""; rc=$?
+[ "${rc}" -eq 1 ] && [ "$(nreq)" -eq 0 ] && ok "ACCOUNTS: registry uid != the account's uid (account replaced) => refused, no request" || bad "ACCOUNTS: uid mismatch rc ${rc}"
+
+# ── NETWORK: a standalone image contacts nothing until SSO is opted in ───────
+# The audit hook (sitecustomize) logs EVERY socket connect / name lookup, to any
+# host. Opt-in = SSO enabled with an issuer AND the user leaving the password
+# empty at the greeter. Everything else must log nothing.
+echo "== NETWORK: zero connections until SSO is opted in =="
+standalone_case() {  # the conf the bake writes for a standalone image (SSO off, no issuer)
+    new_case false ""
+    sed -i -e 's/^POSTURE=.*/POSTURE=standalone/' "${CASE}/conf"
+}
+net_quiet() { [ ! -s "${CASE}/net.log" ] && [ "$(nreq)" -eq 0 ]; }
+chk_net_standalone() {  # HELPER -> 0 iff the standalone conf makes no connection on any path
+    local h="$1"
+    standalone_case; add_local localuser
+    helper_cmd "${h}" probe; helper_cmd "${h}" status; helper_cmd "${h}" list
+    auth "${h}" localuser "hunter2"; auth "${h}" localuser ""; auth "${h}" alice ""; auth "${h}" alice "typed"
+    PAM_USER=alice PAM_TYPE=open_session helper_cmd "${h}" pam-session
+    helper_cmd "${h}" configure --issuer https://id.example.org
+    auth "${h}" alice ""
+    grep -q 'not enabled' "${CASE}/out" && net_quiet
+}
+chk_net_disabled_with_issuer() {  # HELPER -> 0 iff SSO_ENABLED=false with a live issuer still contacts nothing
+    local h="$1"
+    new_case false "${ISSUER}"
+    auth "${h}" alice ""; auth "${h}" alice "typed"; helper_cmd "${h}" probe
+    net_quiet
+}
+chk_net_probe_on() {  # HELPER -> 0 iff, with SSO ON, the greeter start + typed passwords contact nothing
+    local h="$1"
+    new_case true "${ISSUER}"; add_local localuser
+    helper_cmd "${h}" probe; auth "${h}" localuser "hunter2"; auth "${h}" localuser ""; auth "${h}" stranger "typed"
+    net_quiet
+}
+chk_net_standalone "${HELPER}" && ok "NETWORK: standalone conf (SSO off, no issuer): probe/status/list/pam-auth/pam-session/configure => ZERO connections or lookups" \
+    || bad "NETWORK standalone: net.log: $(head -3 "${CASE}/net.log" 2>/dev/null | tr '\n' '|') requests $(nreq) out: $(cat "${CASE}/out")"
+chk_net_disabled_with_issuer "${HELPER}" && ok "NETWORK: SSO disabled with a reachable issuer configured => ZERO connections" \
+    || bad "NETWORK disabled+issuer: $(head -3 "${CASE}/net.log" 2>/dev/null | tr '\n' '|')"
+chk_net_probe_on "${HELPER}" && ok "NETWORK: SSO on — greeter start (probe), typed local passwords, an unknown user's typed password => ZERO connections" \
+    || bad "NETWORK SSO-on quiet paths: $(head -3 "${CASE}/net.log" 2>/dev/null | tr '\n' '|')"
+new_case true "${ISSUER}"; auth "${HELPER}" alice ""
+grep -q "socket.connect .*127.0.0.1" "${CASE}/net.log" 2>/dev/null \
+    && ok "NETWORK control: the opt-in gesture (empty password, SSO on) IS logged by the audit hook — the hook is not blind" \
+    || bad "NETWORK control: the audit hook saw nothing on a real sign-in (vacuous)"
+
+# ── CONFIGURE: the runtime admin surface ─────────────────────────────────────
+echo "== CONFIGURE: sso-greeter configure (root) =="
+standalone_case; printf '# kept comment\nUNKNOWN_KEY=kept\n' >> "${CASE}/conf"
+helper_cmd "${HELPER}" configure --enable --issuer "${ISSUER}/" --offline-days 3 --admin-role ops-admin; rc=$?
+[ "${rc}" -eq 0 ] && grep -q '^SSO_ENABLED=true$' "${CASE}/conf" && grep -q "^ISSUER=${ISSUER}$" "${CASE}/conf" \
+    && grep -q '^OFFLINE_MAX_AGE_DAYS=3$' "${CASE}/conf" && grep -q '^ADMIN_ROLE=ops-admin$' "${CASE}/conf" \
+    && grep -q '^# kept comment$' "${CASE}/conf" && grep -q '^UNKNOWN_KEY=kept$' "${CASE}/conf" && [ "$(grep -c '^ISSUER=' "${CASE}/conf")" -eq 1 ] \
+    && [ "$(mode "${CASE}/conf")" = 644 ] \
+    && ok "CONFIGURE: --enable --issuer --offline-days --admin-role rewrite the conf in place (comments, unknown keys, 0644 kept; trailing / dropped)" \
+    || bad "CONFIGURE: rc ${rc}: $(tr '\n' '|' < "${CASE}/conf") err: $(cat "${CASE}/err")"
+grep -q 'Leave the password empty to sign in with' "${CASE}/run/hint" && ok "CONFIGURE: the greeter hint is refreshed (SSO now offered)" || bad "CONFIGURE: hint not refreshed: $(cat "${CASE}/run/hint" 2>/dev/null)"
+net_quiet && ok "CONFIGURE: contacts nothing" || bad "CONFIGURE: made a connection"
+auth "${HELPER}" alice ""; rc=$?
+[ "${rc}" -eq 0 ] && ok "CONFIGURE: a standalone image opted in at runtime signs an SSO user in" || bad "CONFIGURE: sign-in after configure rc ${rc}: $(cat "${CASE}/out")"
+grep -q '"offline_until"' "$(CACHE alice)" && python3 -c "import json,sys,time; r=json.load(open(sys.argv[1])); sys.exit(0 if 2*86400 < r['offline_until']-time.time() <= 3*86400 else 1)" "$(CACHE alice)" \
+    && ok "CONFIGURE: --offline-days 3 bounds the offline cache to 3 days" || bad "CONFIGURE: offline bound not 3 days"
+helper_cmd "${HELPER}" configure --disable; rc=$?
+auth "${HELPER}" alice ""; rc2=$?
+[ "${rc}" -eq 0 ] && [ "${rc2}" -eq 1 ] && grep -q 'not enabled' "${CASE}/out" && grep -q 'local password' "${CASE}/out" \
+    && ok "CONFIGURE: --disable turns SSO off; the greeter says so and points at the local password" || bad "CONFIGURE --disable: rc ${rc}/${rc2}: $(cat "${CASE}/out")"
+cfg_refused() {  # $1=label, rest=args -> must exit 2 and leave the conf unchanged
+    local label="$1"; shift
+    cp "${CASE}/conf" "${CASE}/conf.before"
+    helper_cmd "${HELPER}" configure "$@"; local r=$?
+    [ "${r}" -eq 2 ] && cmp -s "${CASE}/conf" "${CASE}/conf.before" && ok "CONFIGURE refuses ${label} (rc 2, conf unchanged)" || bad "CONFIGURE accepted ${label} (rc ${r})"
+}
+standalone_case
+cfg_refused "--enable with no issuer" --enable
+cfg_refused "a non-URL issuer" --issuer 'ftp://id.example.org'
+cfg_refused "an issuer with a query" --issuer 'https://id.example.org/?x=1'
+cfg_refused "an issuer carrying a newline (KEY=VALUE injection)" --issuer "$(printf 'https://id.example.org\nSSO_ENABLED=true')"
+cfg_refused "--offline-days 999" --offline-days 999
+cfg_refused "an unknown option" --frobnicate
+cfg_refused "a client id with a space" --client-id 'a b'
+if [ "${MYUID}" -ne 0 ]; then
+    ( cd "${CASE}" && env -u HSG_INSECURE_TEST python3 "${HELPER}" configure --disable > "${CASE}/out" 2> "${CASE}/err" ); rc=$?
+    [ "${rc}" -eq 1 ] && grep -q 'run as root' "${CASE}/err" && ok "CONFIGURE: refused for a non-root caller on a real image (no seams)" || bad "CONFIGURE non-root: rc ${rc} err: $(cat "${CASE}/err")"
+fi
+
+# ── GUARDS named by the requirement, as reusable checks (the battery re-runs them) ─
+echo "== GUARDS =="
+chk_no_wheel_without_admin() {  # HELPER -> 0 iff no wheel without the admin role (ungoverned), and never when governed
+    local h="$1"
+    new_case true "${ISSUER}"; printf '%s' "${TOK_ALICE}" > "${SRV}/access"
+    auth "${h}" alice "" || return 1
+    grep -q '^useradd ' "${CASE}/log" && ! grep -q '^useradd .*wheel' "${CASE}/log" && ! sed -n 's/^alice://p' "${CASE}/etc/groups" | grep -q wheel || return 1
+    new_case true "${ISSUER}" governed; printf '%s' "${TOK_ALICE_ADMIN}" > "${SRV}/access"
+    auth "${h}" alice "" || return 1
+    ! sed -n 's/^alice://p' "${CASE}/etc/groups" | grep -q wheel
+}
+chk_no_token_in_logs() {  # HELPER -> 0 iff an online sign-in + session hand-off never print the token or the typed password
+    local h="$1"
+    new_case true "${ISSUER}"
+    auth "${h}" alice "" || return 1
+    cat "${CASE}/out" "${CASE}/err" > "${CASE}/all"
+    auth "${h}" alice "my-offline-secret" || return 1
+    cat "${CASE}/out" "${CASE}/err" >> "${CASE}/all"
+    mkdir -p "${CASE}/runtime/${TUID}"
+    PAM_USER=alice PAM_TYPE=open_session helper_cmd "${h}" pam-session
+    cat "${CASE}/out" "${CASE}/err" >> "${CASE}/all"
+    helper_cmd "${h}" status alice; cat "${CASE}/out" "${CASE}/err" >> "${CASE}/all"
+    helper_cmd "${h}" list; cat "${CASE}/out" "${CASE}/err" >> "${CASE}/all"
+    ! grep -qF "${TOK_ALICE}" "${CASE}/all" && ! grep -qF "$(printf '%s' "${TOK_ALICE}" | cut -d. -f3)" "${CASE}/all" \
+        && ! grep -qF 'my-offline-secret' "${CASE}/all" && ! grep -qF 'DEVCODE123' "${CASE}/all"
+}
+chk_cache_expiry() {  # HELPER -> 0 iff an expired offline record does not sign in (issuer down)
+    local h="$1"
+    new_case true "${ISSUER}"; auth "${h}" alice "" || return 1; auth "${h}" alice "pw1" || return 1
+    python3 -c "import json,sys,time; p=sys.argv[1]; r=json.load(open(p)); r['offline_until']=int(time.time())-5; json.dump(r,open(p,'w'))" "$(CACHE alice)"
+    sed -i "s#^ISSUER=.*#ISSUER=${DOWN}#" "${CASE}/conf"
+    ! auth "${h}" alice "pw1" && grep -q 'expired' "${CASE}/out"
+}
+chk_fallback_reason() {  # HELPER -> 0 iff issuer down => rc 1, the reason AND the local-password pointer on the greeter, fast
+    local h="$1" t0 t1
+    new_case true "${DOWN}"
+    t0="$(date +%s)"; auth "${h}" alice ""; local rc=$?; t1="$(date +%s)"
+    [ "${rc}" -eq 1 ] && grep -q 'SSO sign-in unavailable: cannot reach' "${CASE}/out" \
+        && grep -q 'Sign in with your local password instead' "${CASE}/out" && [ $((t1 - t0)) -le 15 ] || return 1
+    new_case false ""
+    auth "${h}" alice ""; rc=$?
+    [ "${rc}" -eq 1 ] && grep -q 'not enabled' "${CASE}/out" && grep -q 'local password' "${CASE}/out"
+}
+for g in no_wheel_without_admin no_token_in_logs cache_expiry fallback_reason; do
+    "chk_${g}" "${HELPER}" && ok "GUARD ${g}: holds on the real helper" || bad "GUARD ${g}: FAILS on the real helper (out: $(head -c 300 "${CASE}/out"))"
+done
 
 # ── MUTATION battery: each defect planted in a copy must be caught ──────────
 echo "== MUTATION: planted defects in a helper copy =="
@@ -552,6 +852,9 @@ mutate() {  # $1=label $2=sed-expr -> path of the mutated copy (fails if nothing
     local m="${WORK}/mut-$1"
     sed -e "$2" "${HELPER}" > "${m}"; chmod 0755 "${m}"
     if cmp -s "${HELPER}" "${m}"; then bad "MUTATION $1: the plant changed nothing (vacuous control)"; return 1; fi
+    # a plant that breaks the syntax would go red for the wrong reason
+    python3 -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' "${m}" 2>/dev/null \
+        || { bad "MUTATION $1: the plant does not parse (a red here would prove nothing)"; return 1; }
     echo "${m}"
 }
 if m="$(mutate sig 's/if not any(rsa_verify(k, signing_input, sig) for k in keys):/if False:/')"; then
@@ -574,7 +877,7 @@ if m="$(mutate bound 's/if rec.get("pin") and now < float(rec.get("offline_until
     [ "${rc}" -eq 0 ] && ok "MUTATION bound: without the offline_until check an expired record signs in — the OFFLINE bound check catches it" \
         || bad "MUTATION bound: mutated helper still refused (rc ${rc})"
 fi
-if m="$(mutate local 's/if local and rec is None:/if False:/')"; then
+if m="$(mutate local 's/if local and rec is None:/if False:/;s/^    if entry is not None and not is_managed(user, entry):$/    if False:/')"; then
     new_case true "${ISSUER}"; add_local alice
     auth "${m}" alice ""; rc=$?
     [ "${rc}" -eq 0 ] && ok "MUTATION local: without the local-account guard SSO takes over a local account — the LOCAL check catches it" \
@@ -585,6 +888,73 @@ if m="$(mutate pin 's/^def pin_matches(rec, password):/def pin_matches(rec, pass
     auth "${m}" alice "wrong"; rc=$?
     [ "${rc}" -eq 0 ] && ok "MUTATION pin: a helper that accepts any offline password signs in with a wrong one — the OFFLINE wrong-password check catches it" \
         || bad "MUTATION pin: mutated helper still refused (rc ${rc})"
+fi
+
+# ── GUARD battery: every guard the requirement names, re-run against a planted
+# defect. Each plant must change the file (else the control is vacuous) and the
+# SAME check function that is green on the real helper must go red on it.
+echo "== GUARD battery: the named guards against planted defects =="
+chk_cfg_validation() {  # HELPER -> 0 iff configure refuses a non-https issuer and a KEY=VALUE injection
+    local h="$1"
+    standalone_case; cp "${CASE}/conf" "${CASE}/conf.before"
+    helper_cmd "${h}" configure --issuer 'ftp://id.example.org'; [ $? -eq 2 ] || return 1
+    helper_cmd "${h}" configure --issuer "$(printf 'https://id.example.org\nSSO_ENABLED=true')"; [ $? -eq 2 ] || return 1
+    cmp -s "${CASE}/conf" "${CASE}/conf.before"
+}
+chk_cfg_validation "${HELPER}" && ok "GUARD cfg_validation: holds on the real helper" || bad "GUARD cfg_validation: FAILS on the real helper"
+guard_mut() {  # $1=label $2=sed-expr $3=check-function
+    local m
+    m="$(mutate "$1" "$2")" || return
+    if "$3" "${m}"; then
+        bad "GUARD battery $1: ${3} stayed GREEN on the planted defect (the guard is not what it claims)"
+    else
+        ok "GUARD battery $1: ${3} goes red on the planted defect"
+    fi
+}
+guard_mut wheel-always   's/wants_wheel = (not is_governed()) and has_role(roles, conf.get("ADMIN_ROLE", ""))/wants_wheel = True/' chk_no_wheel_without_admin
+guard_mut wheel-governed 's/wants_wheel = (not is_governed()) and /wants_wheel = /' chk_no_wheel_without_admin
+guard_mut role-any       's/^def has_role(roles, role):/def has_role(roles, role):\n    return True/' chk_no_wheel_without_admin
+guard_mut token-handoff-log 's/^        token = read_private(src)$/&\n        log("handing off %s" % token)/' chk_no_token_in_logs
+guard_mut token-park-log 's/^def park_handoff(uid, token):/&\n    log("parking %s" % token)/' chk_no_token_in_logs
+guard_mut typed-pw-log   's/^    if typed.endswith("\\n"):/    log("typed %s" % typed)\n&/' chk_no_token_in_logs
+guard_mut cache-no-expiry 's/if rec.get("pin") and now < float(rec.get("offline_until", 0)):/if rec.get("pin"):/' chk_cache_expiry
+guard_mut fallback-accepts 's/^        if result != "SSO sign-in cancelled.":/        return 0\n&/' chk_fallback_reason
+guard_mut fallback-no-reason 's/^        say(result)$/        pass/' chk_fallback_reason
+guard_mut fallback-no-pointer 's/^            say(FALLBACK_LINE)$/            pass/' chk_fallback_reason
+guard_mut off-no-reason  's/^            say(off_reason(conf) + " " + FALLBACK_LINE)$/            pass/' chk_fallback_reason
+guard_mut reach-bypass   's/^    ok, why = reachable(conf, timeout)$/    ok, why = True, ""/' chk_fallback_reason
+guard_mut net-off-gate   's/^    if not enabled(conf) or not issuer_ok(conf):$/    if not issuer_ok(conf):/' chk_net_disabled_with_issuer
+guard_mut net-probe      '/^def cmd_probe/,/return 0/ s/^    write_hint(conf)$/    reachable(conf, 1)\n    write_hint(conf)/' chk_net_probe_on
+guard_mut net-typed      's/^    if typed != "" and rec is None:$/    if typed != "" and rec is None and not reachable(conf, 1)[0]:/' chk_net_probe_on
+guard_mut system-guards  's/^    if entry is not None and is_system_account(entry):$/    if False:/;s/^    if entry is not None and not is_managed(user, entry):$/    if False:/' chk_system_account
+guard_mut managed-guard  's/^    if entry is not None and not is_managed(user, entry):$/    if False:/' chk_unmanaged_account
+guard_mut cfg-any-issuer 's/^            if not valid_issuer(v):$/            if False:/' chk_cfg_validation
+
+# The STACK half of "fallback to local": the control flags on the exec line.
+if ${PAM_OK}; then
+    chk_stack_fallback() {  # STACKFILE -> 0 iff typed local password passes a permitting local path AND SSO short-circuits a denying one
+        local sf="$1" d
+        new_case true "${ISSUER}"; add_local alice; envfile
+        d="${CASE}/cd-chk-a"; mkdir -p "${d}"
+        sed -e "s#/usr/lib/hugmesh/sso-greeter#${HELPER}#g" -e "s#/run/hugmesh/sso-greeter/hint#${CASE}/run/hint#" \
+            -e "s#include\t\tsystem-local-login#required\tpam_permit.so#" "${sf}" > "${d}/lightdm"
+        python3 "${PAMPY}" "${d}" lightdm "hunter2" "${CASE}/env" 2>/dev/null | grep -q '^RC 0$' || return 1
+        new_case true "${ISSUER}"; envfile
+        d="${CASE}/cd-chk-c"; mkdir -p "${d}"
+        sed -e "s#/usr/lib/hugmesh/sso-greeter#${HELPER}#g" -e "s#/run/hugmesh/sso-greeter/hint#${CASE}/run/hint#" \
+            -e "s#include\t\tsystem-local-login#required\tpam_deny.so#" "${sf}" > "${d}/lightdm"
+        python3 "${PAMPY}" "${d}" lightdm "" "${CASE}/env" 2>/dev/null | grep -q '^RC 0$'
+    }
+    stack_mut() {  # $1=label $2=sed-expr
+        local m="${WORK}/stackmut-$1"
+        sed -e "$2" "${STACK_SRC}" > "${m}"
+        if cmp -s "${STACK_SRC}" "${m}"; then bad "STACK battery $1: the plant changed nothing (vacuous control)"; return; fi
+        chk_stack_fallback "${m}" && bad "STACK battery $1: stayed GREEN on the planted stack" || ok "STACK battery $1: chk_stack_fallback goes red"
+    }
+    chk_stack_fallback "${STACK_SRC}" && ok "GUARD stack_fallback: holds on the real stack" || bad "GUARD stack_fallback: FAILS on the real stack"
+    stack_mut exec-required 's/\[success=done default=ignore\]\tpam_exec/required\tpam_exec/'
+    stack_mut exec-die      's/\[success=done default=ignore\]/[success=done default=die]/'
+    stack_mut no-done       's/\[success=done default=ignore\]/[success=ok default=ignore]/'
 fi
 
 echo

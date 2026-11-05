@@ -287,6 +287,7 @@ SKIP_TAILSCALE=false
 # otherwise (same posture rule as build-x86-host-stage4.sh SSO_FORCED).
 SKIP_SSO=false
 SSO_FORCED=""
+SSO_ISSUER=""           # --sso-issuer URL (https); default https://id.<cluster domain>
 
 # --print-plan: resolve + validate everything, print the machine-greppable build
 # plan (one PLAN_KEY=VALUE per line) and exit 0 BEFORE any mutation (no root, no
@@ -380,6 +381,9 @@ OPTIONS
                           KEYS-provisioned image is then GOVERNED: sudo via the
                           desktop-sudo SSO claim). The local password login is
                           always kept; with SSO off the greeter says so.
+    --sso-issuer URL      The IdP for the greeter SSO sign-in (https://HOST[/PATH];
+                          default https://id.<domain>). Implies --with-sso. An
+                          admin can change it later: sso-greeter configure.
 
   Standalone (local user, no mesh, LUKS2 FDE on install)
     --standalone         No mesh; a local user logs in with a build-time
@@ -531,6 +535,7 @@ while [[ $# -gt 0 ]]; do
         --skip-tailscale)     SKIP_TAILSCALE=true;        shift   ;;
         --skip-sso|--no-sso)  SKIP_SSO=true;  SSO_FORCED=off; shift ;;
         --with-sso)           SKIP_SSO=false; SSO_FORCED=on;  shift ;;
+        --sso-issuer)         SSO_ISSUER="${2:-}";        shift 2 ;;
         --skip-kernel)        SKIP_KERNEL=true;           shift   ;;
         --image-only)         IMAGE_ONLY=true; SKIP_KERNEL=true; shift ;;
         --img-size)           ROOT_MiB="$2";              shift 2 ;;
@@ -629,6 +634,14 @@ fi
 # cluster tree, so --standalone only needs to turn mesh off, set up a local
 # user, and force disk encryption + the installer flavor — mirrors
 # build-x86-host-stage4.sh's STANDALONE posture block exactly) ─────────────
+# --sso-issuer names the IdP, so it means SSO ON (also on a standalone desktop,
+# whose default is off); with --no-sso/--skip-sso it is a contradiction.
+if [ -n "${SSO_ISSUER}" ]; then
+    [ "${SSO_FORCED}" = off ] && { err "--sso-issuer conflicts with --no-sso/--skip-sso"; exit 1; }
+    [[ "${SSO_ISSUER}" =~ ^https://[A-Za-z0-9.-]+(:[0-9]{1,5})?(/[A-Za-z0-9._~/-]*)?$ ]] \
+        || { err "--sso-issuer must be https://HOST[:PORT][/PATH] (got '${SSO_ISSUER}')"; exit 1; }
+    SSO_FORCED=on; SKIP_SSO=false
+fi
 if ${STANDALONE}; then
     SKIP_MESH=true
     SKIP_TAILSCALE=true
@@ -1056,6 +1069,7 @@ if ${PRINT_PLAN}; then
     _plan MESH               "$(${SKIP_MESH} && echo skip || echo "headscale=${HEADSCALE_VERSION},tailscale=$(${SKIP_TAILSCALE} && echo skip || echo "${TAILSCALE_VERSION}")")"
     _plan STANDALONE         "${STANDALONE}"
     _plan SSO                "$(${SKIP_SSO} && echo off || echo casdoor-oidc)"
+    _plan SSO_ISSUER         "$(${SKIP_SSO} && echo none || echo "${SSO_ISSUER:-https://id.${CLUSTER_DOMAIN}}")"
     _plan ENCRYPT_ROOT       "${ENCRYPT_ROOT}"
     _plan LUKS_PASS          "$([ -n "${LUKS_PASS}" ] && echo REDACTED || echo none)"
     _plan LOCAL_USER         "${LOCAL_USER:-$DEFAULT_USER}"
@@ -1797,7 +1811,7 @@ LIGHTDM
     # pre-emerge so CONFIG_PROTECT keeps the stack; asserted after the emerge.
     desktop_sso_bake "${SYSROOT}" "${SHARED_SPECS}" \
         "$(${SKIP_SSO} && echo false || echo true)" "${CLUSTER_DOMAIN}" "${BRAND_TITLE}" \
-        "$(${STANDALONE} && echo standalone || echo mesh)" \
+        "$(${STANDALONE} && echo standalone || echo mesh)" "${SSO_ISSUER}" \
         || { err "greeter SSO bake failed (see above)"; exit 1; }
 fi
 for svc in "${DEFAULT_SVCS[@]}"; do

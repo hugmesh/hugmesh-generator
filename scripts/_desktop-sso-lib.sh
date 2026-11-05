@@ -5,7 +5,7 @@
 # build-frite-stage4.sh --desktop light; the other ARM desktop builders call the
 # same two functions when they adopt it). Two entry points:
 #
-#   desktop_sso_bake SYSROOT SHARED_SPECS ENABLED DOMAIN BRAND_TITLE POSTURE
+#   desktop_sso_bake SYSROOT SHARED_SPECS ENABLED DOMAIN BRAND_TITLE POSTURE [ISSUER]
 #       Run BEFORE the payload emerge (CONFIG_PROTECT then keeps our
 #       /etc/pam.d/lightdm over the package's). Installs:
 #         /usr/lib/hugmesh/sso-greeter        the PAM helper (specs/usr/lib/hugmesh)
@@ -15,13 +15,22 @@
 #                                                greeter-show-manual-login (a new
 #                                                SSO user types their name)
 #         /etc/hugmesh/desktop-governance/    the governance templates, baked
-#                                             (ENABLED only: baking the dir is what
-#                                             makes provisioning treat the image as
+#                                             (ENABLED and POSTURE=mesh only:
+#                                             baking the dir is what makes
+#                                             provisioning treat the image as
 #                                             GOVERNED — sudo via the desktop-sudo
-#                                             claim, wheel stripped from KEYS users)
+#                                             claim, wheel stripped from KEYS users.
+#                                             A standalone image has no KEYS chain
+#                                             to run the mapper, so it stays
+#                                             ungoverned: an SSO user gets wheel
+#                                             only with the IdP admin role.)
 #       ENABLED=false (--skip-sso) bakes the stack and the helper with
-#       SSO_ENABLED=false: the greeter then SAYS SSO is off and the local path is
-#       untouched; nothing is ever contacted. No governance dir => ungoverned.
+#       SSO_ENABLED=false: the greeter then SAYS SSO is off (and how an admin turns
+#       it on: `sso-greeter configure`) and the local path is untouched; nothing
+#       is ever contacted. No governance dir => ungoverned.
+#       ISSUER (optional, --sso-issuer): the IdP URL, https only; default
+#       https://id.<DOMAIN>. Given with ENABLED=false it is still written, so an
+#       admin's later `sso-greeter configure --enable` has it.
 #
 #   desktop_sso_verify SYSROOT
 #       Run AFTER the payload emerge. Fails (return 1) when the stack lost its
@@ -41,6 +50,7 @@ DESKTOP_SSO_MARKER="hugmesh-sso-greeter-stack"
 
 desktop_sso_bake() {
     local sysroot="$1" shared="$2" enabled="$3" domain="$4" brand_title="$5" posture="$6"
+    local issuer_override="${7:-}"
     local helper_src pam_src conf issuer
     helper_src="${shared}/usr/lib/hugmesh/sso-greeter"
     pam_src="${shared}/etc/pam.d/lightdm"
@@ -53,7 +63,16 @@ desktop_sso_bake() {
     # The issuer is the per-domain IdP. A domain that is not a plain hostname
     # cannot be an https host and must not be interpolated: bake SSO off, loudly.
     issuer=""
-    if [ "${enabled}" = true ]; then
+    if [ -n "${issuer_override}" ]; then
+        # https://HOST[:PORT][/PATH], nothing a KEY=VALUE line or a URL could be
+        # bent by (no quotes, spaces, '?', '#', '@').
+        if [[ "${issuer_override}" =~ ^https://[A-Za-z0-9.-]+(:[0-9]{1,5})?(/[A-Za-z0-9._~/-]*)?$ ]]; then
+            issuer="${issuer_override%/}"
+        else
+            _dsso_err "desktop-sso: --sso-issuer must be https://HOST[:PORT][/PATH] (got '${issuer_override}')"
+            return 1
+        fi
+    elif [ "${enabled}" = true ]; then
         if [[ "${domain}" =~ ^[a-z0-9.-]+$ ]]; then
             issuer="https://id.${domain}"
         else
@@ -98,7 +117,7 @@ desktop_sso_bake() {
         } >> "${sysroot}/etc/lightdm/lightdm.conf"
     fi
 
-    if [ "${enabled}" = true ]; then
+    if [ "${enabled}" = true ] && [ "${posture}" = mesh ]; then
         [ -d "${shared}/etc/hugmesh/desktop-governance" ] \
             || { _dsso_err "desktop-sso: governance templates missing: ${shared}/etc/hugmesh/desktop-governance"; return 1; }
         rm -rf "${sysroot}/etc/hugmesh/desktop-governance"
@@ -107,8 +126,12 @@ desktop_sso_bake() {
         find "${sysroot}/etc/hugmesh/desktop-governance" -type f -exec chmod 0644 {} +
         chmod 0755 "${sysroot}/etc/hugmesh/desktop-governance/autostart/session-install.sh.tmpl"
         _dsso_say "desktop-sso: greeter SSO ON (issuer ${issuer}, posture ${posture}); governance templates baked (image is GOVERNED: sudo via the desktop-sudo claim)"
+    elif [ "${enabled}" = true ]; then
+        rm -rf "${sysroot}/etc/hugmesh/desktop-governance"
+        _dsso_say "desktop-sso: greeter SSO ON (issuer ${issuer}, posture standalone); no governance dir (ungoverned: wheel only for the IdP's desktop-admin role)"
     else
-        _dsso_say "desktop-sso: greeter SSO OFF (--skip-sso); stack baked so the greeter says so; no governance dir (ungoverned: wheel sudo stays)"
+        rm -rf "${sysroot}/etc/hugmesh/desktop-governance"
+        _dsso_say "desktop-sso: greeter SSO OFF (--skip-sso); stack baked so the greeter says so (sso-greeter configure turns it on later); no governance dir (ungoverned: wheel sudo stays)"
     fi
     return 0
 }

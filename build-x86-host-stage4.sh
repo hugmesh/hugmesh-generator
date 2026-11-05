@@ -278,6 +278,9 @@ SKIP_TAILSCALE=false
 # Empty = "use the role default"; 'on'/'off' = the user chose explicitly.
 MESH_FORCED=""
 SSO_FORCED=""
+# --sso-issuer URL: the IdP the greeter SSO sign-in uses (https only). Default
+# https://id.<cluster domain>. Implies --with-sso; conflicts with --no-sso.
+SSO_ISSUER=""
 SKIP_KERNEL=false
 SKIP_CLEAN=false
 RESUME=false
@@ -964,6 +967,9 @@ build-x86-host-stage4.sh — hardened Gentoo amd64 k8s/GPU worker image.
       --home-seed-code-from PATH  Source the repos from a dir/tar (else clone at runtime).
       --with-tailscale | --no-tailscale   Force the tailnet agent ON/OFF (any role).
       --with-sso | --no-sso               Force the Casdoor/OIDC login ON/OFF (any role).
+      --sso-issuer URL      The IdP for the greeter SSO sign-in (https://HOST[/PATH];
+                            default https://id.<domain>). Implies --with-sso. An
+                            admin can change it later: sso-greeter configure.
       --distdir DIR         Reuse a Gentoo distfiles cache from a mounted drive
                             (default: auto-detect /media/*; speeds rebuilds / offline).
       --shared-assets DIR   Fleet-wide asset root: the amd64 stage3 seed cache
@@ -1191,6 +1197,7 @@ while [[ $# -gt 0 ]]; do
         # Composable SSO toggle (wins over a role's default).
         --with-sso) SKIP_SSO=false; SSO_FORCED=on; shift ;;
         --no-sso) SKIP_SSO=true; SSO_FORCED=off; shift ;;
+        --sso-issuer) SSO_ISSUER="${2:-}"; shift 2 ;;
         # ── Home directory: mode + per-user ecryptfs + dockerized stack code ──
         --home-mode) HOME_MODE="$2"; shift 2 ;;
         --home-device) HOME_DEVICE="$2"; shift 2 ;;
@@ -1742,6 +1749,7 @@ if ${UNAFFILIATED}; then
     [ "${HOME_SEED_CODE}" != none ] && { err "--unaffiliated conflicts with --home-seed-code (seeds the HugMesh stack into the home)"; exit 1; }
     [ "${MESH_FORCED}" = on ] && { err "--unaffiliated conflicts with --with-tailscale (the tailnet is HugMesh platform machinery)"; exit 1; }
     [ "${SSO_FORCED}" = on ] && { err "--unaffiliated conflicts with --with-sso (Casdoor SSO is HugMesh platform machinery)"; exit 1; }
+    [ -z "${SSO_ISSUER}" ] || { err "--unaffiliated conflicts with --sso-issuer (Casdoor SSO is HugMesh platform machinery)"; exit 1; }
     { [ -n "${PERSON_ROLE}" ] || [ -n "${DOMAINS}" ]; } && { err "--unaffiliated conflicts with --person-role/--domains (person-device identity is platform machinery)"; exit 1; }
     [ -z "${DOMAIN_IDP_SPECS}" ] || { err "--unaffiliated conflicts with --domain-idp (an unaffiliated desktop has no identity provider to choose)"; exit 1; }
     BUNDLE_SOURCE=false
@@ -1758,6 +1766,15 @@ if ${UNAFFILIATED}; then
     # tooling — default it OFF (an explicit --media-data keeps it, neutral-named).
     [ "${MEDIA_DATA_FORCED}" = on ] || MEDIA_DATA=false
     info "UNAFFILIATED plain desktop: no brand identity, no hugmesh-* tooling, no bundled source, no k8s/mesh payload"
+fi
+
+# --sso-issuer names the IdP, so it means SSO ON (also on a standalone desktop,
+# whose default is off); with --no-sso/--skip-sso it is a contradiction.
+if [ -n "${SSO_ISSUER}" ]; then
+    [ "${SSO_FORCED}" = off ] && { err "--sso-issuer conflicts with --no-sso/--skip-sso"; exit 1; }
+    [[ "${SSO_ISSUER}" =~ ^https://[A-Za-z0-9.-]+(:[0-9]{1,5})?(/[A-Za-z0-9._~/-]*)?$ ]] \
+        || { err "--sso-issuer must be https://HOST[:PORT][/PATH] (got '${SSO_ISSUER}')"; exit 1; }
+    SSO_FORCED=on; SKIP_SSO=false
 fi
 
 # ── STANDALONE posture (composable: --standalone onto any client role, or the
@@ -2587,6 +2604,7 @@ if ${PRINT_PLAN}; then
     _plan TOR_ONION          "$(_tor_node_selected && echo "on packages=${TOR_NODE_PACKAGES[*]} services=${TOR_NODE_SERVICES[*]}" || echo off)"
     _plan MESH               "$(${SKIP_MESH} && echo skip || echo "headscale=${HEADSCALE_VERSION},tailscale=$(${SKIP_TAILSCALE} && echo skip || echo "${TAILSCALE_VERSION}")")"
     _plan SSO                "$(${SKIP_SSO} && echo off || echo casdoor-oidc)"
+    _plan SSO_ISSUER         "$(${SKIP_SSO} && echo none || echo "${SSO_ISSUER:-https://id.${CLUSTER_DOMAIN}}")"
     _plan IDP                "${IDP}"
     _plan IDP_ISSUER         "${IDP_ISSUER:-none}"
     _plan IDP_CLIENT_ID      "${IDP_CLIENT_ID:-none}"
@@ -5001,7 +5019,7 @@ LIGHTDM
     if ! ${UNAFFILIATED}; then
         desktop_sso_bake "${SYSROOT}" "${SHARED_SPECS}" \
             "$(${SKIP_SSO} && echo false || echo true)" "${CLUSTER_DOMAIN}" "${BRAND_TITLE}" \
-            "$(${STANDALONE} && echo standalone || echo mesh)" \
+            "$(${STANDALONE} && echo standalone || echo mesh)" "${SSO_ISSUER}" \
             || { err "greeter SSO bake failed (see above)"; exit 1; }
     fi
     # External media-data device (Steam library + gocryptfs Vaults). Default ON,

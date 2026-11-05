@@ -175,8 +175,11 @@ mainline and are not built.
 the password (yescrypt `$y$` where the build host's libcrypt supports it,
 SHA-512 crypt `$6$` otherwise). **The plaintext is never baked.** With no
 `--local-pass`, first boot mints a random one-time password and prints it once to
-`/dev/console`. `wheel` is the sudo path. `--skip-sso` removes the Casdoor/OIDC
-desktop login from any client image (auto-on for standalone).
+`/dev/console`. `wheel` is the sudo path. `--skip-sso` bakes the Casdoor/OIDC
+greeter sign-in OFF on any client image (auto-on for standalone); the greeter then
+says so, and an administrator can turn it on later with `sso-greeter configure
+--enable --issuer https://...` (see `docs/DESKTOP-LOGIN-SSO.md`). Nothing is
+contacted until that happens and a user chooses SSO at the greeter.
 
 The Studio and the TUI ask for this password twice, and refuse to build a
 standalone image without one: root is locked and there is no KEYS stick or SSO,
@@ -403,7 +406,8 @@ stack locally (`stack`) or join a tailnet as a dockerized mesh node (`mesh`):
   `--with/--no-sso` now bakes the greeter SSO path (`/etc/pam.d/lightdm` +
   `/usr/lib/hugmesh/sso-greeter`, `SSO_ENABLED` in `/etc/hugmesh/sso-greeter.conf`)
   instead of only changing a plan line; with SSO off the greeter says so and the
-  local password login is untouched. The Frite builder takes the same flags. See
+  local password login is untouched. The Frite, RPi5, Jetson and Orange Pi 4 LTS / 5
+  builders take the same flags, plus `--sso-issuer URL` to name the IdP. See
   `docs/DESKTOP-LOGIN-SSO.md` for the user flow, the offline cache and what a boot
   must still prove.
 - `--distdir DIR` (or auto-detect `/media/*`) — reuse a Gentoo distfiles cache from a mounted drive (safe on a read-only USB), to skip re-downloads or build offline.

@@ -38,10 +38,13 @@
 #
 # ACCOUNT MAPPING (least privilege). The IdP `name` claim must equal the user
 # name selected at the greeter (the same binding the desktop-sudo mapper uses).
-# A matching LOCAL account that has a usable password hash is NOT taken over:
-# SSO logs into accounts the IdP owns (created here with `useradd -m`, password
-# locked, groups audio/video/usb/plugdev) or accounts this helper already
-# mapped. `wheel` is never granted on a desktop-governance-GOVERNED image (sudo
+# A matching LOCAL account that has a usable password hash is NOT taken over,
+# and neither is any account this helper did not create itself: SSO logs into
+# accounts it created (`useradd -m`, password locked, groups
+# audio/video/usb/plugdev; the uid is recorded under
+# /var/lib/hugmesh/sso-greeter/managed/<name>, which `revoke` keeps) and never
+# into root, nobody or any uid below login.defs UID_MIN, whatever the IdP calls
+# its user. `wheel` is never granted on a desktop-governance-GOVERNED image (sudo
 # there is the JWKS-verified `desktop-sudo` claim via polkit), and on an
 # ungoverned image only while the verified token carries ADMIN_ROLE; group
 # membership is re-synced on every online sign-in, so a role removed at the IdP
@@ -69,7 +72,12 @@
 # STANDALONE images never phone home: with SSO_ENABLED=false nothing is contacted;
 # with SSO on, the only network traffic is the IdP at authentication time, after
 # the user left the password empty (an opt-in gesture). `probe` (the lightdm
-# greeter-setup-script) is local-only and writes the hint file.
+# greeter-setup-script) and `configure` are local-only.
+#
+# CONFIGURATION. Build time: the builders' --with-sso / --no-sso / --sso-issuer
+# write /etc/hugmesh/sso-greeter.conf. Runtime (root): `sso-greeter configure
+# --enable --issuer https://id.example.org` (or --disable, --client-id,
+# --offline-days, --admin-role) rewrites it in place and refreshes the hint.
 #
 # NEVER printed, logged or exported: the typed password, any token. stdout goes
 # to the greeter (pam_exec `stdout`), stderr to lightdm's log.
@@ -115,9 +123,12 @@ SHADOW = seam("HSG_SHADOW", "/etc/shadow")
 RUNTIME_BASE = seam("HSG_RUNTIME_BASE", "/run/user")
 USERS_CREATED = seam("HSG_USERS_CREATED", "/var/lib/keys-provision/users.created")
 POLL_SCALE = float(seam("HSG_POLL_SCALE", "1"))
+LOGIN_DEFS = seam("HSG_LOGIN_DEFS", "/etc/login.defs")
+UID_MIN_OVERRIDE = seam("HSG_UID_MIN", "")
 HINT_FILE = os.path.join(RUN_DIR, "hint")
 HANDOFF_DIR = os.path.join(RUN_DIR, "handoff")
 USERS_DIR = os.path.join(STATE_DIR, "users")
+MANAGED_DIR = os.path.join(STATE_DIR, "managed")
 JWKS_CACHE = os.path.join(STATE_DIR, "jwks.json")
 
 DEVICE_GRANT = "urn:ietf:params:oauth:grant-type:device_code"
@@ -269,6 +280,47 @@ def has_local_password(name):
     return bool(h) and not h.startswith(("!", "*"))
 
 
+def uid_min():
+    """The first uid of a person's account (login.defs UID_MIN, default 1000)."""
+    if UID_MIN_OVERRIDE:
+        try:
+            return int(UID_MIN_OVERRIDE)
+        except ValueError:
+            pass
+    try:
+        with open(LOGIN_DEFS) as f:
+            for line in f:
+                p = line.split()
+                if len(p) >= 2 and p[0] == "UID_MIN":
+                    return int(p[1])
+    except (OSError, ValueError):
+        pass
+    return 1000
+
+
+def is_system_account(entry):
+    """root, nobody and every uid below UID_MIN: never an SSO login target."""
+    uid = entry["uid"]
+    return uid == 0 or uid == 65534 or uid < uid_min()
+
+
+def managed_path(name):
+    return os.path.join(MANAGED_DIR, name)
+
+
+def is_managed(name, entry):
+    """True when THIS helper created NAME (the registry records the uid it got).
+    The registry outlives `revoke` (which only ends offline sign-in), so a revoked
+    SSO user can still come back online; a pre-existing account the helper did not
+    create is never adopted, whatever the IdP calls its user."""
+    raw = read_private(managed_path(name)).strip()
+    return bool(raw) and raw == str(entry["uid"])
+
+
+def mark_managed(name, uid):
+    write_private(managed_path(name), "%d\n" % uid)
+
+
 def one_time_password_pending(name):
     """True when first boot minted a random one-time password for NAME: a usable
     hash whose last-change day is 0 (chage -d 0 / passwd -e)."""
@@ -313,6 +365,10 @@ def sync_account(name, roles, conf):
         if r is None or r.returncode != 0:
             return False, "useradd failed (%s)" % (r.returncode if r else "no tool")
         log("created SSO-managed account %s (groups: %s)" % (name, ",".join(groups) or "none"))
+        entry = lookup_user(name)
+        if entry is None:
+            return False, "the account %s does not exist after creation" % name
+        mark_managed(name, entry["uid"])
         return True, "created"
     have = user_groups(name)
     for g in groups:
@@ -597,13 +653,25 @@ def reachable(conf, timeout):
 
 
 # ── hint file (pam_echo, before the password box; local facts only) ──────────
+FALLBACK_LINE = "Sign in with your local password instead."
+
+
+def off_reason(conf):
+    """Why SSO is not offered, in one line, with what an administrator can do."""
+    if enabled(conf) and not conf.get("ISSUER"):
+        return "SSO sign-in is not enabled on this device: no identity provider is configured (an administrator runs: sso-greeter configure --issuer https://...)."
+    if enabled(conf):
+        return "SSO sign-in is not enabled on this device: the configured identity provider is not an https URL (an administrator runs: sso-greeter configure --issuer https://...)."
+    return "SSO sign-in is not enabled on this device (an administrator can turn it on: sso-greeter configure --enable --issuer https://...)."
+
+
 def compose_hint(conf, user=None):
     lines = []
     brand = conf.get("BRAND_TITLE") or "HugMesh"
     if enabled(conf) and issuer_ok(conf):
         lines.append("Leave the password empty to sign in with %s SSO (%s); or type your local password." % (brand, issuer_host(conf)))
     else:
-        lines.append("SSO sign-in is not enabled on this image. Sign in with your local password.")
+        lines.append(off_reason(conf) + " Sign in with your local password.")
     # First boot minted a random one-time password and printed it on the text
     # console, which the greeter on VT7 hides: say where it is. The password
     # itself is never written here.
@@ -764,7 +832,7 @@ def cmd_pam_auth():
     write_hint(conf, user if valid_username(user) else None)
     if not enabled(conf) or not issuer_ok(conf):
         if typed == "":
-            say("SSO sign-in is not enabled on this image (built with --skip-sso). Type your local password.")
+            say(off_reason(conf) + " " + FALLBACK_LINE)
         return 1
     if not valid_username(user):
         if typed == "":
@@ -775,6 +843,18 @@ def cmd_pam_auth():
     if local and rec is None:
         if typed == "":
             say("%s is a local account on this device: type its password (SSO does not take over local accounts)." % user)
+        return 1
+    entry = lookup_user(user)
+    if entry is not None and is_system_account(entry):
+        # root, daemons, nobody: never, whatever name the IdP hands out.
+        if typed == "":
+            say("%s is a system account: SSO never signs in to it. Type a local password." % user)
+        return 1
+    if entry is not None and not is_managed(user, entry):
+        # An account SSO did not create (a KEYS user, a locked local account):
+        # not adopted. A typed password is pam_unix's business, silently.
+        if typed == "":
+            say("%s exists on this device but is not an SSO account: type its local password." % user)
         return 1
     if typed != "" and rec is None:
         # A typed password for an account SSO does not manage: local path only.
@@ -797,6 +877,8 @@ def cmd_pam_auth():
         say(result)
         if typed != "" and rec is not None and rec.get("pin"):
             say("The offline password only works while the SSO cache is valid; no cache change was made.")
+        if result != "SSO sign-in cancelled.":
+            say(FALLBACK_LINE)
         return 1
     return finish_online(user, conf, token, result, typed if typed != "" else None)
 
@@ -870,6 +952,110 @@ def cmd_status(args):
     return 0
 
 
+# configure: the RUNTIME admin surface (root). Edits /etc/hugmesh/sso-greeter.conf
+# in place (other keys and comments kept), refreshes the greeter hint, contacts
+# nothing. The build-time surface is --with-sso/--no-sso/--sso-issuer on the
+# builders; this is how an administrator opts a standalone device in later, points
+# it at another IdP (e.g. one reachable over a tailnet joined by hand), or turns
+# SSO off again.
+ISSUER_RE = re.compile(r"^https://[A-Za-z0-9.-]+(:[0-9]{1,5})?(/[A-Za-z0-9._~/-]*)?$")
+TOKEN_RE = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
+CONFIGURE_USAGE = ("usage: sso-greeter configure [--enable|--disable] [--issuer https://HOST[/PATH]] "
+                   "[--client-id ID] [--offline-days N] [--admin-role ROLE]")
+
+
+def valid_issuer(url):
+    if ISSUER_RE.match(url):
+        return True
+    return INSECURE_TEST and re.match(r"^http://[A-Za-z0-9.-]+(:[0-9]{1,5})?(/[A-Za-z0-9._~/-]*)?$", url) is not None
+
+
+def write_conf(changes):
+    try:
+        with open(CONF, encoding="utf-8", errors="replace") as f:
+            lines = f.read().splitlines()
+    except OSError:
+        lines = ["# /etc/hugmesh/sso-greeter.conf — strict KEY=VALUE (sso-greeter configure)."]
+    seen = set()
+    out = []
+    for line in lines:
+        m = re.match(r"^([A-Z][A-Z0-9_]*)=", line.strip())
+        if m and m.group(1) in changes:
+            if m.group(1) in seen:
+                continue
+            out.append("%s=%s" % (m.group(1), changes[m.group(1)]))
+            seen.add(m.group(1))
+        else:
+            out.append(line)
+    for k in sorted(changes):
+        if k not in seen:
+            out.append("%s=%s" % (k, changes[k]))
+    d = os.path.dirname(CONF) or "."
+    tmp = os.path.join(d, ".sso-greeter.conf.%d.tmp" % os.getpid())
+    old = os.umask(0o022)
+    try:
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
+        with os.fdopen(fd, "w") as f:
+            f.write("\n".join(out) + "\n")
+        os.replace(tmp, CONF)
+    finally:
+        os.umask(old)
+
+
+def cmd_configure(args):
+    if os.geteuid() != 0 and not INSECURE_TEST:
+        print("sso-greeter configure: run as root", file=sys.stderr)
+        return 1
+    if not args:
+        print(CONFIGURE_USAGE, file=sys.stderr)
+        return 2
+    changes = {}
+    i = 0
+    while i < len(args):
+        a = args[i]
+        if a == "--enable":
+            changes["SSO_ENABLED"] = "true"
+            i += 1
+            continue
+        if a == "--disable":
+            changes["SSO_ENABLED"] = "false"
+            i += 1
+            continue
+        if a not in ("--issuer", "--client-id", "--offline-days", "--admin-role") or i + 1 >= len(args):
+            print(CONFIGURE_USAGE, file=sys.stderr)
+            return 2
+        v = args[i + 1]
+        i += 2
+        if a == "--issuer":
+            v = v.rstrip("/") if v.count("/") > 2 else v
+            if not valid_issuer(v):
+                print("sso-greeter configure: --issuer must be an https URL (https://HOST[:PORT][/PATH]), got %r" % v, file=sys.stderr)
+                return 2
+            changes["ISSUER"] = v
+        elif a == "--offline-days":
+            if not re.match(r"^[0-9]{1,3}$", v) or int(v) > 365:
+                print("sso-greeter configure: --offline-days must be 0..365", file=sys.stderr)
+                return 2
+            changes["OFFLINE_MAX_AGE_DAYS"] = str(int(v))
+        else:
+            if not TOKEN_RE.match(v):
+                print("sso-greeter configure: %s must match [A-Za-z0-9._-]+" % a, file=sys.stderr)
+                return 2
+            changes["CLIENT_ID" if a == "--client-id" else "ADMIN_ROLE"] = v
+    merged = load_conf()
+    merged.update(changes)
+    if enabled(merged) and not (merged.get("ISSUER") and issuer_ok(merged)):
+        print("sso-greeter configure: SSO cannot be enabled without an https --issuer", file=sys.stderr)
+        return 2
+    write_conf(changes)
+    conf = load_conf()
+    write_hint(conf)
+    print("sso=%s issuer=%s client_id=%s offline_days=%s admin_role=%s" % (
+        "enabled" if enabled(conf) else "disabled", conf.get("ISSUER") or "-", conf.get("CLIENT_ID"),
+        conf.get("OFFLINE_MAX_AGE_DAYS"), conf.get("ADMIN_ROLE")))
+    return 0
+
+
 def cmd_list():
     try:
         names = sorted(n[:-5] for n in os.listdir(USERS_DIR) if n.endswith(".json"))
@@ -919,7 +1105,7 @@ def main(argv):
     # subprocess would otherwise fall back to /bin:/usr/bin.
     os.environ.setdefault("PATH", "/usr/sbin:/usr/bin:/sbin:/bin")
     if not argv or argv[0] in ("-h", "--help"):
-        print("usage: sso-greeter pam-auth | pam-session | probe | status [USER] | list | revoke USER|--all", file=sys.stderr)
+        print("usage: sso-greeter pam-auth | pam-session | probe | status [USER] | list | revoke USER|--all | configure ...", file=sys.stderr)
         return 2
     cmd, rest = argv[0], argv[1:]
     try:
@@ -935,6 +1121,8 @@ def main(argv):
             return cmd_list()
         if cmd == "revoke":
             return cmd_revoke(rest)
+        if cmd == "configure":
+            return cmd_configure(rest)
     except Exception as e:  # never a traceback on the greeter, never a hang
         log("failed: %s: %s" % (e.__class__.__name__, e))
         if cmd == "pam-auth":
