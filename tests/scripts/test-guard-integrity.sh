@@ -929,7 +929,18 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # that tree: '207 of 248 suites are named by a pull_request-triggered workflow', ungated SET 41;
 # and with the suite on disk but its shell-suites.yml line absent: '206 of 248' + check 3 and
 # check 7 red naming it -- so the +1/+1 is this suite and nothing else.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-207}"
+# 207 -> 208 (denominator 248 -> 249) on 2026-11-04 for feat/mesh-token-g4-generator-cluster-
+# wiring--20261104, which adds ONE gated suite: tests/scripts/test-admin-bff-mesh-token-secret-
+# refs.sh (wired in shell-suites.yml's ALPINE job, next to test-outbound-mtls-client.sh, AND
+# .gitlab-ci.yml lint:admin-bff-mesh-token-secret-refs). MEASURED by RUNNING this file on that
+# branch (base origin/main db240811, which measures '207 of 248'):
+#     208 of 249 suites are named by a pull_request-triggered workflow
+#     PASS the ungated SET matches its pin exactly (41 suite(s))
+# and with the suite on disk but its shell-suites.yml line absent: '207 of 249' + red naming it
+# as a new suite outside the gate -- so the +1/+1 is this suite and nothing else. A branch that
+# also raises this from 207 conflicts here by construction; whichever lands second re-measures
+# (expected 209) per the doctrine above, never keeps either number.
+PREMERGE_BASELINE="${GUARD_PREMERGE:-208}"
 
 # 182 -> 192 (denominator 205 -> 215) on 2026-09-30 for #385: the census gained a
 # THIRD spelling, bare `tests/*.sh` at depth 1, and the ten suites it exposed were

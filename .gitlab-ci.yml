@@ -1544,6 +1544,22 @@ lint:outbound-mtls-client:
   script:
     - bash tests/scripts/test-outbound-mtls-client.sh
 
+# admin-bff's mesh-token issuer reads two FILES from Secret admin-bff-mesh-token
+# (ExternalSecret in external-secrets/secretstore.yaml, mounted at
+# /run/secrets/mesh-token/). The feature ships dark and the volume is optional, so
+# a wrong Secret name, key, mount or an unlisted ExternalSecret starts a healthy
+# pod whose issuer file does not exist; nothing says so until the flag flips. This
+# gate ties the Deployment's path env, mount and volume to the ExternalSecret's
+# keys and Vault paths, with a fifteen-mutation control battery. Needs PyYAML.
+lint:admin-bff-mesh-token-secret-refs:
+  stage: lint
+  image: python:3-slim
+  tags: [hugmesh-x86]
+  before_script:
+    - pip install --quiet pyyaml
+  script:
+    - bash tests/scripts/test-admin-bff-mesh-token-secret-refs.sh
+
 # For a raw-JWT carrier the mfa_satisfied_at claim is a Casdoor USER Property, so it
 # enters a token only at MINT time. Whether that matters depends on WHO HOLDS the
 # token: a human client that can re-mint (refresh_token / device_code / password)

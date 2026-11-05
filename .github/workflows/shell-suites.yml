@@ -401,6 +401,7 @@ jobs:
             tests/qemu/verdict_test.sh
             tests/qemu/qemu-e2e-lane_test.sh
             tests/requested-atoms-resolvable.sh
+            tests/scripts/test-admin-bff-mesh-token-secret-refs.sh
             tests/scripts/test-anubis-env-gate.sh
             tests/scripts/test-arm-ro-distdir.sh
             tests/scripts/test-binpkg-pool-fingerprint.sh
