@@ -550,6 +550,7 @@ jobs:
           - part: ''
             suites: |
               tests/auto-update/test-builder-opt-in.sh
+              tests/device-registry/test-headscale-security-tag-owners.sh
               tests/egress-vpn/test-vpn-reconcile-verify.sh
               tests/keystores/test-keystores-multidomain.sh
               tests/managed-services/test-managed-services-gate.sh
@@ -921,6 +922,13 @@ jobs:
     # one suite on disk that nothing ran (check 3 and check 7b of
     # tests/scripts/test-guard-integrity.sh both named it): it landed in 1abc9bf3 /
     # 2ab3325f with neither this file nor .gitlab-ci.yml naming it.
+    # tests/device-registry/test-headscale-security-tag-live.sh runs the PINNED
+    # headscale (headscale/headscale:<HEADSCALE_VERSION>) and stock
+    # tailscale/tailscale:v<TAILSCALE_VERSION> clients on a private --internal
+    # network and proves a membership pre-auth key cannot self-assign
+    # tag:superadmin; it exits 2 (a failure here) when docker or an image is
+    # unavailable. MEASURED 2026-11-04 on a Linux host with docker: 13 passed /
+    # 0 failed in ~8 s, and 6 failed against the unfixed policy.
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
@@ -935,6 +943,7 @@ jobs:
         run: |
           SUITES="
             tests/boot/test-gpu-worker-node-labels.sh
+            tests/device-registry/test-headscale-security-tag-live.sh
           "
           rc=0; failed=""; ran=0
           for t in $SUITES; do
