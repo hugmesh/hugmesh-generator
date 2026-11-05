@@ -62,6 +62,11 @@ frite --target — host-side cross-toolchain plumbing, deliberately not a GUI kn
 frite --role — undocumented marker-only escape hatch (no real role axis on this builder)
 frite --live — pure alias of '--flavor live' (the fielded axis)
 frite --installer — pure alias of '--flavor installer' (the fielded axis)
+frite --with-tailscale — x86 MESH_FORCED parity (--standalone --with-tailscale = a local-login desktop on a tailnet with no mesh association); the Studio's `tailscale` field is x86-only in PLATFORM_FIELD_SUPPORT, so widening it to frite is a Studio follow-up, not a builder gap
+frite --with-mesh — alias of --with-tailscale (same arm)
+frite --no-tailscale — the explicit OFF twin of --with-tailscale (x86 parity); same Studio follow-up
+frite --no-mesh — alias of --no-tailscale (same arm)
+frite --medium-iso — build-phase opt-in that ADDS the legacy ISO9660 twin next to the raw .img media for a consumer that explicitly wants one; it never changes the bootable artifact, so it is not an ImageConfig field (same class as --no-kernel-cache)
 jetson --user-password — deprecated no-op on this builder (warn+ignore)
 jetson --root-password — deprecated no-op on this builder (warn+ignore)
 jetson --specs-dir — host-side build plumbing, deliberately not a GUI knob
