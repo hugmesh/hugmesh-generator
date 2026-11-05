@@ -26,7 +26,7 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LAUNCHER="${HERE}/launch-arm.sh"
 [ -f "${LAUNCHER}" ] || { echo "cannot find ${LAUNCHER}" >&2; exit 2; }
 
-PASS=0; FAIL=0
+PASS=0; FAIL=0; SKIP=0
 _ok()  { PASS=$((PASS+1)); printf '  ok   %s\n' "$1"; }
 _bad() { FAIL=$((FAIL+1)); printf '  FAIL %s\n' "$1" >&2; }
 
@@ -214,7 +214,18 @@ run "${TMP}/e2" --medium "${ISO}" --emmc "${EMMC}" --emmc-rpmb-size 131072 \
     && argv_has "${TMP}/e2" "emmc,drive=emmc,boot-partition-size=4194304,rpmb-partition-size=131072" \
     && _ok "--emmc-rpmb-size lands on the device" || _bad "rpmb size not passed"
 grep -q 'user area at +8519680' "${TMP}/e2.log" && _ok "user-area offset includes the RPMB" || _bad "offset ignores rpmb"
-run "${TMP}/e3" --medium "${ISO}" --emmc "${EMMC_RO}" && _bad "a read-only eMMC file was accepted (QEMU rejects it on the sd-bus)" || _ok "read-only eMMC file refused"
+# chmod 0444 makes a file unwritable to everyone EXCEPT root (CAP_DAC_OVERRIDE):
+# as root `[ -w ]` is true and QEMU really can open it read-write, so the
+# launcher is right to accept it and the case cannot be built. The CI leg runs
+# as root in alpine:3; this case runs on any non-root run (and in
+# frite_emmc_mutations.sh, which kills L12 there). Said by name, never silent.
+if [ -w "${EMMC_RO}" ]; then
+    SKIP=$((SKIP+1))
+    printf '  SKIP read-only eMMC refusal: running as uid %s, chmod 0444 cannot make a file unwritable to it\n' "$(id -u)" >&2
+else
+    run "${TMP}/e3" --medium "${ISO}" --emmc "${EMMC_RO}" && _bad "a read-only eMMC file was accepted (QEMU rejects it on the sd-bus)" || _ok "read-only eMMC file refused"
+    grep -q 'is not writable' "${TMP}/e3.log" && _ok "...refused by the writability preflight, by name" || _bad "read-only eMMC refused, but not by the writability check: $(grep ERROR "${TMP}/e3.log" || true)"
+fi
 # 131584 = 128K + 512: keeps the user area 512-aligned, so ONLY the 128K rule can refuse it.
 run "${TMP}/e4" --medium "${ISO}" --emmc "${EMMC}" --emmc-boot-size 131584 && _bad "boot size 131584 (not a 128K multiple) accepted" || _ok "boot size not a 128K multiple refused"
 grep -q 'multiple of 128K' "${TMP}/e4.log" && _ok "...by the 128K rule, by name" || _bad "refused, but not by the 128K rule: $(grep ERROR "${TMP}/e4.log" || true)"
@@ -263,6 +274,11 @@ grep -q "^socket,id=ser0,path=${TMP}/run-s/serial.sock,server=on,wait=off,logfil
 argv_has "${TMP}/s1" "chardev:ser0" && _ok "-serial chardev:ser0" || _bad "-serial not on the chardev"
 grep -q '^file:' "${TMP}/a1" && _ok "without --serial-sock the serial is still -serial file:" || _bad "default serial changed"
 
+# A skip is legitimate ONLY as root; anywhere else it is lost coverage.
+if [ "${SKIP}" -gt 0 ] && [ "$(id -u)" != 0 ]; then
+    _bad "${SKIP} case(s) skipped while running as uid $(id -u): only root may skip the read-only eMMC case"
+fi
+
 echo
-echo "== RESULT: ${PASS} passed, ${FAIL} failed =="
+echo "== RESULT: ${PASS} passed, ${FAIL} failed, ${SKIP} skipped (named above) =="
 [ "${FAIL}" -eq 0 ]
