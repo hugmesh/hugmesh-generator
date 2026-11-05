@@ -343,6 +343,8 @@ DEFAULT_USER="pi"
 STANDALONE=false        # --standalone : local user, no mesh, LUKS2-encrypted root
 LOCAL_USER=""           # --local-user NAME : the standalone local login account
 LOCAL_USER_PASS=""      # --local-pass PASS : plaintext; hashed at build, never baked raw
+LOCAL_PASS_FILE=""      # --local-pass-file FILE : the same password read from a file (keeps it off argv)
+LOCAL_ADMIN=false       # --local-admin : the local account may sudo on a KEYS-provisioned image too
 ROLE_CLIENT=false       # true for --role desktop; false for the k8s cluster-node roles
 # ── LUKS2 root encryption — independently triggerable from --standalone,
 # same as build-x86-host-stage4.sh/build-frite-stage4.sh: encrypts the ROOT of
@@ -1188,6 +1190,8 @@ while [[ $# -gt 0 ]]; do
         --standalone)         STANDALONE=true;         shift   ;;
         --local-user)         LOCAL_USER="$2";          shift 2 ;;
         --local-pass|--local-user-password) LOCAL_USER_PASS="$2"; shift 2 ;;
+        --local-pass-file)    LOCAL_PASS_FILE="$2"; case "$2" in /*) ;; *) LOCAL_PASS_FILE="${PWD}/$2" ;; esac; shift 2 ;;
+        --local-admin)        LOCAL_ADMIN=true; shift ;;
         --encrypt-root)       ENCRYPT_ROOT=true;       shift   ;;
         --luks-pass|--root-unlock-pass) LUKS_PASS="$2"; shift 2 ;;
         # DEPRECATED no-ops: images no longer bake a fallback password (random
@@ -1569,6 +1573,12 @@ fi
 
 # ── Standalone local-user password → build-time hash (never baked in plaintext,
 # mirrors build-x86-host-stage4.sh) ─────────────────────────────────────────
+# --local-pass-file: the login password arrives in a 0600 file (Studio/TUI), never
+# on argv. Read it here, before hashing; the file itself is the caller's to remove.
+if [ -n "${LOCAL_PASS_FILE}" ]; then
+    LOCAL_USER_PASS="$(ph_read_pass_file "${LOCAL_PASS_FILE}")" \
+        || { err "--local-pass-file ${LOCAL_PASS_FILE}: missing, unreadable or larger than 4096 bytes"; exit 1; }
+fi
 LOCAL_PASSHASH=""
 if ${STANDALONE} || [ -n "${LOCAL_USER}" ] || [ -n "${LOCAL_USER_PASS}" ]; then
     [ -n "${LOCAL_USER}" ] && DEFAULT_USER="${LOCAL_USER}"
@@ -1584,7 +1594,7 @@ if ${STANDALONE} || [ -n "${LOCAL_USER}" ] || [ -n "${LOCAL_USER_PASS}" ]; then
             *)      info "Standalone local user '${DEFAULT_USER}': password hashed at build time (SHA-512 crypt fallback — build-host libcrypt lacks yescrypt; plaintext not baked)." ;;
         esac
     else
-        ${STANDALONE} && warn "Standalone build with no --local-pass: a RANDOM one-time password is minted at first boot (printed once to console)."
+        ${STANDALONE} && warn "Standalone build with no --local-pass: a real build refuses this on a desktop (no login would exist behind the greeter)."
     fi
 fi
 
@@ -1900,6 +1910,7 @@ render_template() {
         -e "s|@@DEFAULT_USER@@|$(_sed_rep_escape "${DEFAULT_USER}")|g" \
         -e "s|@@STANDALONE@@|$(_sed_rep_escape "${STANDALONE}")|g" \
         -e "s|@@LOCAL_PASSHASH@@|$(_sed_rep_escape "${LOCAL_PASSHASH}")|g" \
+        -e "s|@@LOCAL_ADMIN@@|$(_sed_rep_escape "${LOCAL_ADMIN}")|g" \
         -e "s|@@BRAND@@|$(_sed_rep_escape "${BRAND}")|g" \
         -e "s|@@BRAND_TITLE@@|$(_sed_rep_escape "${BRAND_TITLE}")|g" \
         -e "s|@@DOMAIN@@|$(_sed_rep_escape "${CLUSTER_DOMAIN}")|g" \
@@ -2806,6 +2817,17 @@ if ${PRINT_PLAN}; then
     _plan KERNEL             "raspberrypi-arm64 (defconfig=${RPI_DEFCONFIG} + ${_kernel_plan_desc})"
     _plan FLAGS_EFFECTIVE    "env=${ENV} img=${BUILD_IMG} iso=${BUILD_ISO} tar=${BUILD_TAR} img_size=${ROOT_MiB} grow=${GROW_POLICY} sd_only=${SD_ONLY} compress=${COMPRESS_IMG} compress_level=${COMPRESS_LEVEL} resume=${RESUME} skip_kernel=${SKIP_KERNEL} skip_mesh=${SKIP_MESH} skip_tailscale=${SKIP_TAILSCALE} pcie_gen3=${PCIE_GEN3} permit_root_login=${PERMIT_ROOT_LOGIN} enable_wifi=${ENABLE_WIFI} enable_bluetooth=${ENABLE_BLUETOOTH} enable_games=${ENABLE_GAMES} standalone=${STANDALONE} encrypt_root=${ENCRYPT_ROOT}"
     exit 0
+fi
+
+# ── A standalone DESKTOP needs its login password (real builds only) ──────────
+# Root is locked and there is no KEYS stick or SSO, so the --local-pass account is
+# the only way in, and its first-boot random one-time password goes to a console
+# that sits behind the graphical greeter. The Studio and the TUI refuse this
+# before dispatch; this is the same refusal for the CLI/Makefile path. After
+# --print-plan, so the plan channel (and matrix.tsv) still describe the config.
+if ${STANDALONE} && ${ROLE_CLIENT} && [ -z "${LOCAL_PASSHASH}" ]; then
+    err "--standalone desktop build with no --local-pass/--local-pass-file: the image would boot to a greeter nobody can log in to (root is locked; no KEYS stick, no SSO). Pass --local-pass-file FILE (preferred: keeps the password off the process list) or --local-pass PASS."
+    exit 1
 fi
 
 # ── Stage4 package-set resolver (single source of truth) ──────────────────────
@@ -4010,6 +4032,9 @@ else
 [LightDM]
 [Seat:*]
 greeter-session=lightdm-gtk-greeter
+# lightdm falls back to a compiled-in "lightdm-session" wrapper that Gentoo does not ship;
+# without this line every login authenticates and then the session exits (rc 1) back to the greeter.
+session-wrapper=/etc/lightdm/Xsession
 user-session=LXDE
 LIGHTDM
     # Greeter SSO login path (scripts/_desktop-sso-lib.sh): /etc/pam.d/lightdm with

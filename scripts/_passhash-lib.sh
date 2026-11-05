@@ -84,3 +84,19 @@ ph_crypt_hash() {
     # caller. -stdin keeps the plaintext out of openssl's argv.
     printf '%s\n' "${pw}" | openssl passwd -6 -stdin
 }
+
+# ph_read_pass_file FILE — print the password held in FILE: the --local-pass-file
+# form of --local-pass. The Studio (and the TUI) hand the login password to the
+# builder through a 0600 file instead of argv, because argv is world-readable in
+# /proc/<pid>/cmdline for the whole build, and under docker it also sits in
+# `docker inspect`. Trailing newlines are dropped (`$(...)` strips them); an empty
+# file means "no password", so the caller's own no-password rule still applies.
+# Returns 1 when FILE is missing/unreadable, 2 when it is implausibly large.
+ph_read_pass_file() {
+    local f="$1"
+    local n
+    { [ -f "${f}" ] && [ -r "${f}" ]; } || return 1
+    n="$(wc -c < "${f}")" || return 1
+    [ "${n}" -le 4096 ] || return 2
+    cat -- "${f}"
+}

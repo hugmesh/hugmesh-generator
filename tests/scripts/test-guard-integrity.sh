@@ -952,6 +952,15 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 #     208 of 249 suites are named by a pull_request-triggered workflow
 # and with the suite on disk but its shell-suites.yml line absent: '207 of 249' + check 3 and
 # check 7 red naming it -- so the +1/+1 is this suite and nothing else. Ungated SET stays 41.
+# 208 -> 209 (denominator 249 -> 250) on 2026-11-04 for ci/qemu-bdd-spike-20261104 (the
+# operator-approved QEMU-on-Actions trial), which adds ONE gated suite:
+# tests/qemu/actions-kvm-smoke_test.sh, the runner for tests/qemu/features/actions-kvm-smoke.feature,
+# wired in its OWN pull_request workflow .github/workflows/qemu-bdd-spike.yml (it needs KVM and
+# a downloaded ISO, so it is not a shell-suites.yml job). MEASURED by RUNNING this file on that
+# branch (base origin/main db6ec282):
+#     209 of 250 suites are named by a pull_request-triggered workflow
+# and with the suite on disk but qemu-bdd-spike.yml absent: '208 of 250' + check 3 and check 7
+# red naming it -- so the +1/+1 is this suite and nothing else. Ungated SET stays 41.
 # 207 -> 208 (denominator 248 -> 249) on 2026-11-04 for fix/standalone-login-password-20261104
 # (base origin/main 8ed37a3c), which adds ONE gated suite:
 # tests/scripts/test-standalone-login-firstboot.sh, wired in shell-suites.yml's debian job

@@ -438,6 +438,23 @@ for e in "${TS_BUILDERS[@]}"; do
     tailnet_control "${n}-keeps-skip-ts" "${b}" 's/--with-tailscale)     SKIP_MESH=false; SKIP_TAILSCALE=false;/--with-tailscale)     SKIP_MESH=false;/' "${x}"
 done
 
+echo "== W. every lightdm.conf a builder writes names the Xsession wrapper =="
+# lightdm's compiled-in default wrapper is "lightdm-session", which Gentoo does not ship. A
+# builder-written lightdm.conf without session-wrapper= makes every login authenticate and then
+# exit back to the greeter (measured 2026-11-04 on x86 laptop and standalone-thin images).
+w_check() {  # $1 = file to judge, $2 = label
+    local f="$1" l="$2" body=""
+    body="$(awk '/\/etc\/lightdm\/lightdm\.conf" <</{on=1;next} on&&/^LIGHTDM$/{exit} on{print}' "$f")"
+    if [ -z "$body" ]; then bad "${l}: no lightdm.conf heredoc found"; return; fi
+    if printf '%s\n' "$body" | grep -E '^session-wrapper=/etc/lightdm/Xsession$' >/dev/null; then ok "${l}: session-wrapper=/etc/lightdm/Xsession"; else bad "${l}: lightdm.conf heredoc lacks session-wrapper=/etc/lightdm/Xsession"; fi
+}
+W_BUILDERS=(build-x86-host-stage4.sh build-jetson-stage4.sh build-frite-stage4.sh build-orangepi5-stage4.sh build-orangepi4-lts-stage4.sh build-rpi5-stage4.sh)
+for b in "${W_BUILDERS[@]}"; do w_check "${REPO}/${b}" "${b}"; done
+w_tmp="$(mktemp)"; sed '/^session-wrapper=\/etc\/lightdm\/Xsession$/d' "${REPO}/build-x86-host-stage4.sh" > "${w_tmp}"
+w_before=${F}; w_check "${w_tmp}" "control (wrapper removed)" >/dev/null
+if [ "${F}" -gt "${w_before}" ]; then F=${w_before}; ok "control: the check goes red when the wrapper line is removed"; else bad "control: the check stayed green with the wrapper line removed"; fi
+rm -f "${w_tmp}"
+
 echo
 echo "== RESULT: ${P} passed, ${F} failed =="
 [ "${F}" -eq 0 ]
