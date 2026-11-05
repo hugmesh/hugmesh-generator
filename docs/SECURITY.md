@@ -118,6 +118,10 @@ columns are the design target; see the status note under the table.
 | `edge-ai-analysis` (task-oriented analysis API in front of edge-ai — optional, default-off) | per-app SA | `s0:c87` | — | (non-Java: no JKS) |
 | `character-studio` (ui) | per-app SA | `s0:c74` | — | — |
 | `games-ui` (the `games` federation remote — optional, games slug) | per-app SA | `s0:c88` | — | — |
+| `games-bff-db` (the games BFF's Postgres — optional, games slug) | (pod default SA) | `s0:c89` | (DB) | (non-Java: PEM, no JKS) |
+| `games-cassandra` (the games BFF's session store — optional, games slug) | (pod default SA) | `s0:c90` | (DB) | (non-Java: PEM, no JKS) |
+| `games-portal` (the standalone games site — optional, games slug) | (pod default SA) | `s0:c91` | — | — |
+| `games-cassandra-init` (the keyspace Job for games-cassandra — optional, games slug) | (pod default SA) | `s0:c92` | — | — |
 | `image-builder` (app-image Kaniko build pods) | (per-build) | `s0:c75` | (build pod) | (non-Java: no JKS) |
 | `edge-ai-tts` (Piper TTS) | per-app SA | `s0:c72` | — | (non-Java: no JKS) |
 | meshbridge (Meshtastic ↔ Matrix bridge — optional, default-off) | `sa-meshbridge` | `s0:c76` | (Casdoor machine client — manual, see meshbridge ESO) | (non-Java: no JKS) |

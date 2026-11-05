@@ -54,8 +54,8 @@ Feature: LIVE gateway route-access enforcement
       | e2e-gamesonly  | games   | hugmesh-fe-gateway | /games/admin/sessions         |
       | e2e-adminonly  | games   | hugmesh-fe-gateway | /games/admin/sessions         |
       | e2e-mod        | games   | hugmesh-fe-gateway | /games/admin/sessions         |
-      | e2e-gamesadmin | games   | hugmesh-be-gateway | /games/api/admin/role-grants  |
-      | e2e-gamesonly  | games   | hugmesh-be-gateway | /games/api/admin/role-grants  |
-      | e2e-adminonly  | games   | hugmesh-be-gateway | /games/api/admin/role-grants  |
+      | e2e-gamesadmin | games   | hugmesh-fe-gateway | /games/api/admin/role-grants  |
+      | e2e-gamesonly  | games   | hugmesh-fe-gateway | /games/api/admin/role-grants  |
+      | e2e-adminonly  | games   | hugmesh-fe-gateway | /games/api/admin/role-grants  |
       | e2e-admin      | gateway | hugmesh-be-gateway | /infra/logs                   |
       | e2e-mod        | gateway | hugmesh-be-gateway | /infra/logs                   |

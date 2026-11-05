@@ -123,6 +123,20 @@ SERIAL_SOCK=""                 # optional unix socket for the guest UART (--seri
 MESH_NET=""                    # ADDR:PORT (mcast) | mcast=A:P | listen=H:P | connect=H:P
 MESH_MAC=""                    # explicit MAC for the mesh NIC (unique per node on the L2)
 MESH_ID=""                     # small node index 1..255 deriving the default MAC
+# ── Display door (opt-in) — all default-off ──────────────────────────────────
+# --display spice opens ONE door: SPICE over TCP on DISPLAY_LISTEN:SPICE_PORT,
+# protected by a per-run password that QEMU reads from a FILE as a secret OBJECT.
+# Never password= : that shows in `ps` and in the tee'd launch.log. Without
+# --display the QEMU argv stays byte-identical (tests/qemu/display_argv_test.sh).
+DISPLAY_MODE="none"            # none | spice
+DISPLAY_LISTEN="127.0.0.1"     # -spice addr=; 0.0.0.0 is only sane INSIDE the runner container
+SPICE_PORT=""                  # -spice port= (required with --display spice)
+DISPLAY_SECRET=""              # FILE holding the per-run password (required with --display spice)
+VNC_SOCK=""                    # optional -vnc unix:PATH browser (noVNC) fallback, same secret
+# --virt-dtb omits -dtb so QEMU generates the virt machine's own DTB. A board DTB
+# describes the board's SoC, not virt's PCIe root and the virtio devices on it,
+# so a display-mode boot (virtio-gpu, xhci, virtio-serial) needs the generated one.
+VIRT_DTB=false
 
 usage() {
 cat <<EOF
@@ -189,6 +203,20 @@ Mesh (multi-node) networking — issue #48; all default-off:
       --mesh-id N      Node index 1..255 deriving the default MAC
                        52:54:00:6d:65:NN. Give --mesh-mac OR --mesh-id, not both.
 
+Display door (a window that RESIZES the guest; all default-off):
+      --display MODE   none (default) | spice. spice adds virtio-gpu-pci,edid=on,
+                       the vdagent virtserialport, qemu-xhci + usb-tablet +
+                       usb-kbd, and the SPICE server. Open it with remote-viewer.
+      --display-listen ADDR  -spice addr=. Default: ${DISPLAY_LISTEN} (0.0.0.0 is
+                       for the runner container's OWN netns only).
+      --spice-port N   -spice port= (required with --display spice).
+      --display-secret FILE  File holding the per-run password, handed to QEMU
+                       as a secret OBJECT (required; never on the command line).
+      --vnc-socket PATH  Also serve VNC on the unix socket PATH (noVNC browser
+                       fallback: scale-only, 8-char DES auth from the same file).
+      --virt-dtb       Omit -dtb so QEMU generates the virt DTB (a board DTB
+                       cannot describe virt's PCIe/virtio; display mode needs this).
+
 Port forwards (host -> guest): --ssh-port/--ui-port/--http-port/--api-port/--hs-port
 Lifecycle: -t/--timeout SEC, --keys-img FILE, --foreground, --keep, -h/--help
       --qmp PATH       Listen for QMP on the unix socket PATH (pause/resume/reset/
@@ -247,6 +275,12 @@ while [[ $# -gt 0 ]]; do
         --mesh-id)         MESH_ID="$2"; shift 2 ;;
         --qmp)             QMP_SOCK="$2"; shift 2 ;;
         --serial-sock)     SERIAL_SOCK="$2"; shift 2 ;;
+        --display)         DISPLAY_MODE="$2"; shift 2 ;;
+        --display-listen)  DISPLAY_LISTEN="$2"; shift 2 ;;
+        --spice-port)      SPICE_PORT="$2"; shift 2 ;;
+        --display-secret)  DISPLAY_SECRET="$2"; shift 2 ;;
+        --vnc-socket)      VNC_SOCK="$2"; shift 2 ;;
+        --virt-dtb)        VIRT_DTB=true; shift ;;
         --foreground)      FOREGROUND=true; shift ;;
         --keep)            KEEP=true; shift ;;
         -h|--help)         usage 0 ;;
@@ -473,6 +507,22 @@ fi
 if [ -n "${DTB}" ]; then
     [ -f "${DTB}" ] || die "DTB not found: ${DTB} (--dtb is an explicit opt-in; the default is QEMU's own virt device tree)"
     warn "--dtb ${DTB}: this REPLACES QEMU's -M virt device tree. A board DTB (${BOARD_DTB}) describes none of virt's hardware — expect no console/disk/NIC unless this DTB really describes virt."
+# ── Resolve the DTB. The compiled .dtb lives beside the kernel under boot/dtbs/. ──
+# --virt-dtb skips all of this: QEMU -M virt generates a DTB that describes the
+# machine it actually models (PCIe root, virtio-gpu/xhci/serial), which no board
+# DTB can. An explicit --dtb alongside it is a contradiction, not a preference.
+if ${VIRT_DTB}; then
+    [ "${DTB}" = "${DEF_DTB}" ] || die "--dtb and --virt-dtb contradict each other (got --dtb ${DTB})"
+    DTB=""
+else
+    if [ ! -f "${DTB}" ]; then
+        kdir="$(dirname "${KERNEL}")"
+        for c in "${kdir}/dtbs/${DTB}" "${kdir}/${DTB}" "${kdir}/dtbs/$(basename "${DTB}")"; do
+            [ -f "${c}" ] && { DTB="${c}"; break; }
+        done
+    fi
+    [ -f "${DTB}" ] || die \
+        "DTB not found: ${DTB} (pass --dtb; expected the board's compiled .dtb beside the kernel under boot/dtbs/)."
 fi
 
 # ── eMMC target preflight (hw/sd/sd.c rules, checked HERE where the caller sees them) ──
@@ -505,6 +555,7 @@ info "img    : ${IMG:-<none>}"
 info "kernel : ${KERNEL}"
 info "initrd : ${INITRD:-<none>}"
 info "dtb    : ${DTB:-<none: QEMU virt DT> (board FDT name: ${BOARD_DTB})}"
+info "dtb    : ${DTB:-<none: QEMU generates the virt DTB (--virt-dtb)>}"
 info "run dir: ${RUN_DIR}"
 
 # ── Per-run qcow2 overlay (keeps the golden .img pristine) ───────────────────
@@ -583,6 +634,12 @@ HOSTFWD+=",hostfwd=tcp::${HTTP_PORT}-:80"
 HOSTFWD+=",hostfwd=tcp::${API_PORT}-:6443"
 HOSTFWD+=",hostfwd=tcp::${HS_PORT}-:8080"
 
+# -dtb is present exactly when a board DTB was resolved; --virt-dtb leaves it out
+# so QEMU generates virt's own (the default argv keeps -dtb, byte for byte).
+KERNEL_ARGS=(-kernel "${KERNEL}" -append "${CMDLINE}")
+if [ -n "${DTB}" ]; then
+    KERNEL_ARGS=(-kernel "${KERNEL}" -dtb "${DTB}" -append "${CMDLINE}")
+fi
 QEMU_ARGS=(
     -machine "${QEMU_MACHINE}" -cpu "${QEMU_CPU}" -smp "${SMP}" -m "${MEM}"
     -no-reboot
@@ -596,6 +653,9 @@ if [ -n "${IMG}" ]; then
                 -device virtio-blk-pci,drive=hd0)
 fi
 QEMU_ARGS+=(
+    "${KERNEL_ARGS[@]}"
+    -drive "file=${OVERLAY},format=qcow2,if=none,id=hd0"
+    -device virtio-blk-pci,drive=hd0
     -netdev "${HOSTFWD}"
     -device virtio-net-pci,netdev=net0
     -pidfile "${PIDFILE}"
@@ -629,6 +689,58 @@ if [ -n "${KEYS_IMG}" ]; then
                 -device virtio-blk-pci,drive=keys)
     info "keys   : ${KEYS_IMG} (attached as a virtio KEYS disk)"
 fi
+# Optional display door. ONE door: SPICE over TCP on DISPLAY_LISTEN:SPICE_PORT,
+# protected by a per-run password that QEMU reads from DISPLAY_SECRET as a secret
+# OBJECT (-object secret,file=), so the password never appears in argv, ps, the
+# launch log or this script's output — only the file's PATH is printed. The
+# vdagent virtserialport is what lets remote-viewer / spicy RESIZE the guest to
+# the window (monitors-config); -vnc unix: is the opt-in browser (noVNC)
+# fallback, which only scales. The daemonized launch below keeps -display none:
+# SPICE/VNC are servers, not a local -display. x86 gets -vga none + virtio-vga
+# (VGA-compatible, so OVMF GOP and GRUB render too); aarch64 gets
+# virtio-gpu-pci,edid=on. Default-off: without --display the QEMU argv is
+# byte-identical to before these flags existed (tests/qemu/display_argv_test.sh).
+# Identical across launch-x86.sh / launch-arm.sh / launch-pi.sh apart from
+# DISPLAY_GPU_ARGS, which is the per-platform line right above the case.
+DISPLAY_GPU_ARGS=(-device virtio-gpu-pci,edid=on)
+case "${DISPLAY_MODE}" in
+    none)
+        [ -z "${SPICE_PORT}" ] && [ -z "${DISPLAY_SECRET}" ] && [ -z "${VNC_SOCK}" ] \
+            || die "--spice-port/--display-secret/--vnc-socket make no sense without --display spice"
+        ;;
+    spice)
+        [[ "${SPICE_PORT}" =~ ^[0-9]+$ ]] && [ "${SPICE_PORT}" -ge 1 ] && [ "${SPICE_PORT}" -le 65535 ] \
+            || die "--display spice needs --spice-port N (1..65535; got: '${SPICE_PORT}')"
+        [ -n "${DISPLAY_SECRET}" ] \
+            || die "--display spice needs --display-secret FILE (the per-run password lives in a file, never on the command line)"
+        [ -s "${DISPLAY_SECRET}" ] || die "--display-secret file is missing or empty: ${DISPLAY_SECRET}"
+        # spice-server's ticket is at most 60 bytes and QEMU 7.2 ignores the
+        # set-ticket return, so a longer file would leave the door with NO ticket
+        # and every connection refused, silently. Size only; the bytes are never read.
+        [ "$(wc -c < "${DISPLAY_SECRET}")" -le 60 ] \
+            || die "--display-secret file is longer than SPICE's 60-byte ticket limit: ${DISPLAY_SECRET}"
+        [ -n "${DISPLAY_LISTEN}" ] || die "--display-listen must not be empty"
+        QEMU_ARGS+=(-object "secret,id=hmdisp,file=${DISPLAY_SECRET},format=raw"
+                    -spice "port=${SPICE_PORT},addr=${DISPLAY_LISTEN},password-secret=hmdisp,agent-mouse=on"
+                    -device virtio-serial-pci
+                    -chardev spicevmc,id=vdagent,name=vdagent
+                    -device virtserialport,chardev=vdagent,name=com.redhat.spice.0
+                    -device qemu-xhci -device usb-tablet -device usb-kbd
+                    "${DISPLAY_GPU_ARGS[@]}")
+        info "display: spice on ${DISPLAY_LISTEN}:${SPICE_PORT} (password in ${DISPLAY_SECRET})"
+        if [ -n "${VNC_SOCK}" ]; then
+            mkdir -p "$(dirname "${VNC_SOCK}")" || die "cannot create the --vnc-socket dir for ${VNC_SOCK}"
+            # Same AF_UNIX sun_path limit as --qmp below: QEMU rejects longer paths
+            # and, daemonized, the error would only ever reach the launch log.
+            [ "${#VNC_SOCK}" -le 107 ] || die \
+                "--vnc-socket path is ${#VNC_SOCK} bytes; AF_UNIX allows at most 107: ${VNC_SOCK}"
+            QEMU_ARGS+=(-object "secret,id=hmvnc,file=${DISPLAY_SECRET},format=raw"
+                        -vnc "unix:${VNC_SOCK},password-secret=hmvnc")
+            info "display: vnc fallback on unix:${VNC_SOCK} (first 8 chars of the same password; scale-only)"
+        fi
+        ;;
+    *) die "--display must be none or spice (got: ${DISPLAY_MODE})" ;;
+esac
 # Optional shared mesh L2 (issue #48) — a SECOND virtio NIC on a QEMU socket
 # netdev so several emulated nodes form one broadcast domain (kubeadm init on one
 # node, kubeadm join from the others; tests/qemu/mesh-cluster.sh is the 3-node

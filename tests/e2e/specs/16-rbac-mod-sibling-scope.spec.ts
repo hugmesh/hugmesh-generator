@@ -55,7 +55,9 @@ test.describe('RBAC: ROLE_MOD sibling scope (reaches moderation, denied infra/ad
     // enforced by admin-room membership (tuwunel-admin-sync), not an HTTP surface
     // gated by a route row.
     { gw: 'hugmesh-fe-gateway', path: '/games/admin/sessions', what: 'games admin UI (mod alone ≠ games-admin)' },
-    { gw: 'hugmesh-be-gateway', path: '/games/api/admin/role-grants', what: 'games admin API (mod alone ≠ games-admin)' },
+    { gw: 'hugmesh-fe-gateway', path: '/games/api/admin/role-grants', what: 'games admin API (mod alone ≠ games-admin)' },
+    { gw: 'hugmesh-fe-gateway', path: '/games/api/games/chess/launch', what: 'games member API (a platform mod without ROLE_GAMES is not a games user)' },
+    { gw: 'hugmesh-fe-gateway', path: '/games/play/chess', what: 'games screens (same; matches the host gamesGuard)' },
   ];
   for (const c of MOD_DENIED) {
     test(`mod DENIED ${c.path} (${c.what})`, async () => {

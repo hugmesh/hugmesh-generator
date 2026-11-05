@@ -353,6 +353,15 @@ jobs:
           # tests/scripts/test-builder-unmount-real.sh needs `unshare -Urm` and exits
           # 2 SKIPPED-LOUDLY in this image (measured the same way), so it is NOT
           # listed: see PREMERGE_UNGATED and `make builder-unmount-real-check`.
+          # tests/qemu/display_argv_test.sh (2026-11-04): the launchers' opt-in
+          # display door (--display spice / --display-secret / --vnc-socket /
+          # --virt-dtb). Hermetic: qemu-system-* and qemu-img are PATH stubs that
+          # record argv; it pins the no-flag argv of all three launchers to a
+          # golden, element for element, and proves the per-run password reaches
+          # QEMU only as a secret OBJECT (never argv, never stdout). MEASURED,
+          # 2026-11-04, in alpine:3 with this job's apk set (checkout copied in;
+          # busybox grep/sed/diff/cmp): 134 passed / 0 failed. Mutation-tested
+          # on a Gentoo host: 23 planted defects, 23 caught.
           SUITES="
             tests/api/test-bff-admin.sh
             tests/auto-update/test-provision-update.sh
@@ -410,8 +419,10 @@ jobs:
             tests/qemu/save_test.sh
             tests/qemu/verdict_test.sh
             tests/qemu/qemu-e2e-lane_test.sh
+            tests/qemu/display_argv_test.sh
             tests/requested-atoms-resolvable.sh
             tests/scripts/test-anubis-env-gate.sh
+            tests/scripts/test-arm-desktop-package-sets.sh
             tests/scripts/test-arm-ro-distdir.sh
             tests/scripts/test-binpkg-pool-fingerprint.sh
             tests/scripts/test-brand-path-validation.sh
@@ -432,8 +443,10 @@ jobs:
             tests/scripts/test-edge-ai-ollama-pin.sh
             tests/scripts/test-fetch-retry-hardening.sh
             tests/scripts/test-frite-builder-input-validation.sh
+            tests/scripts/test-frite-installer.sh
             tests/scripts/test-frite-install-layout.sh
             tests/scripts/test-github-auth-lib.sh
+            tests/scripts/test-frite-kernel-emulation-symbols.sh
             tests/scripts/test-guard-integrity.sh
             tests/scripts/test-harbor-robots-ownership.sh
             tests/scripts/test-host-accept-keywords.sh
@@ -484,6 +497,8 @@ jobs:
             tests/scripts/test-tools-path-lib.sh
             tests/scripts/test-tor-export-sync.sh
             tests/scripts/test-tor-node-contract.sh
+            tests/scripts/test-vm-display-guest.sh
+            tests/scripts/test-virtual-display-kernel.sh
             tests/scripts/test-x86-boot-firewall-snort.sh
             tests/scripts/test-x86-fetchcommand-bound.sh
             tests/scripts/test-x86-identity-injection.sh
@@ -843,12 +858,31 @@ jobs:
             | tar -xz -C /tmp linux-amd64/helm
           mv /tmp/linux-amd64/helm /usr/local/bin/helm
           curl -fsSLo /usr/local/bin/kubectl https://dl.k8s.io/release/v1.31.0/bin/linux/amd64/kubectl
+          # The binary's checksum is pinned HERE, not fetched next to it: a mirror that
+          # served a different v1.31.0 would otherwise verify against its own .sha256.
+          # (sha256 of kubectl v1.31.0 linux/amd64, dl.k8s.io/release/v1.31.0/bin/linux/amd64/kubectl.sha256,
+          # re-measured 2026-11-05 on the downloaded binary.)
+          echo "7c27adc64a84d1c0cc3dcf7bf4b6e916cc00f3f576a2dbac51b318d926032437  /usr/local/bin/kubectl" | sha256sum -c -
           chmod +x /usr/local/bin/kubectl
       - uses: actions/checkout@v4
       - name: trust the workspace
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
       - name: preflight
         run: |
+          # tests/scripts/test-games-two-realms.sh (hugmesh-generator#848) is here, and
+          # NOT in the debian/python job, for curl + kubectl: it asks ghcr.io for the
+          # pinned backend tag's manifest and clones the hugmesh-games commit graph
+          # (curl), renders manifests/games the way ArgoCD will (kubectl kustomize) and
+          # runs the Casdoor render script (awk). In python:3.12-slim with the debian
+          # job's apt line it exits 2 on `FATAL: curl required` before asserting
+          # anything (run 41950923587, job 126994785328), so its online pin verifier had
+          # never once executed in CI. It also needs helm: it renders EVERY Application
+          # reachable from the roots the way argocd-repo-server would (kubectl kustomize,
+          # helm template for this repository's chart), nested and generated ones too,
+          # and judges the union by rendered namespace; it exits 2 without helm.
+          # MEASURED 2026-11-05 on a Linux host (helm v3.16.3, kubectl, curl, awk):
+          # 121 passed / 0 failed, rc=0, the online verifier and its five controls
+          # among them; the render cache keeps each negative control to one warm walk.
           # kubectl matters MORE than usual here: without it
           # tests/stack/test-mdm-manifests-render.sh exits 0 having rendered and
           # asserted nothing. If the download above ever silently fails, this job
@@ -870,7 +904,7 @@ jobs:
           # it renders the fe-gateway chart with `vanityDomains[i]` parameters exactly
           # as ArgoCD does, and FAILS (never skips) without helm.
           missing=""
-          for b in bash jq openssl python3 git helm kubectl checkpolicy make; do command -v "$b" >/dev/null 2>&1 || missing="$missing $b"; done
+          for b in bash jq openssl python3 git helm kubectl checkpolicy make curl awk; do command -v "$b" >/dev/null 2>&1 || missing="$missing $b"; done
           [ -z "$missing" ] || { echo "::error::preflight: missing$missing — suites would silently skip"; exit 1; }
           python3 -c "import yaml" || { echo "::error::pyyaml missing"; exit 1; }
           echo "preflight ok"
@@ -888,6 +922,7 @@ jobs:
             tests/scripts/test-tor-onion-ingress.sh
             tests/scripts/test-optional-netpol-autosync.sh
             tests/scripts/test-gateway-vanity-domains.sh
+            tests/scripts/test-games-two-realms.sh
           "
           rc=0; failed=""; ran=0
           for t in $SUITES; do

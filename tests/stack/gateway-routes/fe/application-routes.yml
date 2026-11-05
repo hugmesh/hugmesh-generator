@@ -443,7 +443,7 @@ spring:
             #
             # Route-access rows (optional-services.yaml games.routeAccessRows +
             # 20-schema.sql): /games/api/admin/** ROLE_GAMES_ADMIN;
-            # /games/api/** and /games/** ROLE_GAMES|ROLE_ADMIN|ROLE_MOD. The
+            # /games/api/** and /games/** ROLE_GAMES|ROLE_ADMIN. The
             # remote's bundle bytes live under /games/, never /games/admin/, so
             # the pre-existing /games/admin/** ROLE_GAMES_ADMIN row keeps gating
             # only the admin HTML path. The id MUST stay `games-ui`:
