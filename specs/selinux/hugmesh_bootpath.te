@@ -147,15 +147,16 @@ optional_policy(`
 #    already grants NetworkManager_t capability2 { bpf }, so the load is
 #    permitted; the verifier then asks perfmon_capable() for its privileged
 #    modes (allow_ptr_leaks, bypass_spec_v1/v4), and the kernel spells that as
-#    capable(CAP_PERFMON) || capable(CAP_SYS_ADMIN): one { perfmon } and one
-#    { sys_admin } denial per bpf(BPF_PROG_LOAD), both at the same audit serial.
-#    Measured on the 2026-11-04 enforcing boot: 8 x { sys_admin } capability and
-#    8 x { perfmon } capability2, all comm="NetworkManager", all pre-login,
-#    permissive=0 — and the SYSCALL records of those serials say success=yes
-#    (the program loads in the unprivileged verifier mode) while the uplink got
-#    its address and route. Neither capability is needed: perfmon would let the
-#    daemon read kernel memory through tracing programs, sys_admin is most of
-#    root. Both are silenced, never granted; an allow of either is pinned red by
+#    capable(CAP_PERFMON) || capable(CAP_SYS_ADMIN): a { perfmon } and a
+#    { sys_admin } denial per check, all on the audit serial of the one bpf().
+#    Measured on the #852 image, "SELinux enforcing (test)" entry, 2026-11-04
+#    (tmp/zero-avc/old-enf, ausearch -i): TWO bpf() syscalls, audit serials 12
+#    and 13, each `syscall=bpf success=yes exit=23` (the program's fd), each
+#    carrying four sys_admin + four perfmon pairs = the 8 + 8 denials; the
+#    uplink then held its DHCP address, default route and DNS under enforcing.
+#    Neither capability is needed: perfmon would let the daemon read kernel
+#    memory through tracing programs, sys_admin is most of root. Both are
+#    silenced, never granted; an allow of either is pinned red by
 #    tests/scripts/test-selinux-policy-install.sh.
 ########################################
 optional_policy(`
@@ -167,14 +168,16 @@ optional_policy(`
 ')
 
 ########################################
-# 9. udev on a live ISO. Measured, one each, comm="systemd-udevd" / "(udev-worker)":
-#      udev_t { getattr } nsfs_t:file   — path="pid:[...]": udevd stats its own
-#          pid-namespace handle to learn whether it runs in the initial namespace
-#      udev_t { getattr } iso9660_t:file — the loop device's backing file,
-#          /run/initramfs/live/LiveOS/squashfs.img, on the live medium
-#    Both are stat() on metadata (udev_t already holds getattr on every
-#    filesystem); the refpolicy interfaces are the narrowest spelling: one class,
-#    one permission, one target type each.
+# 9. udev on a live ISO. Measured on the same boot, one each, both EACCES:
+#      udev_t { getattr } nsfs_t:file   — systemd-udevd, syscall=newfstatat on
+#          path="pid:[...]": its own pid-namespace handle, to learn whether it
+#          runs in the initial namespace
+#      udev_t { getattr } iso9660_t:file — (udev-worker), syscall=ioctl on the
+#          loop device: LOOP_GET_STATUS stats the backing file, which is
+#          /run/initramfs/live/LiveOS/squashfs.img on the live medium
+#    Both are metadata reads (udev_t already holds getattr on every
+#    filesystem); the refpolicy interfaces are the narrowest spelling: one
+#    class, one permission, one target type each.
 ########################################
 optional_policy(`
 	gen_require(`
