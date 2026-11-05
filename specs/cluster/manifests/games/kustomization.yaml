@@ -40,7 +40,8 @@ resources:
 # `sha-<12>` or a release, never `main` or another floating name; and for a sha-/release
 # tag the public registry is asked, anonymously, for that tag's manifest: a pinned
 # digest must equal it, and the image's org.opencontainers.image.revision label must be
-# a commit on hugmesh-games main at or after 3ae21def. A re-push of the tag therefore
+# a hugmesh-games commit descending from 3ae21def (main or a release/X.Y branch). A
+# re-push of the tag therefore
 # turns CI red on purpose: re-verify and update both fields together.
 #
 # To move the pin: newTag = sha-<12 of the main commit>, digest = the Docker-Content-

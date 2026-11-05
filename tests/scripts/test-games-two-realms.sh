@@ -26,7 +26,7 @@
 #                and ignores the tag), never a floating name. For a sha-/release tag the
 #                public registry is asked for the tag's manifest: a pinned digest must
 #                equal it, and the image's revision label must be a hugmesh-games main
-#                commit at or after #52's merge (3ae21def).
+#                commit descending from #52's merge (3ae21def; a release branch counts).
 #   stores (2)   the keyspace Job is a Sync-phase hook in a wave between the stores and
 #                the BFF: a PostSync hook in the same Application as the pod that needs
 #                the keyspace never runs.
@@ -415,8 +415,9 @@ python3 "${ANALYSER}" "${REPO}" && ok "the analyser is green on this tree" || ba
 # registry (anonymous pull token): a pinned digest must equal the tag's manifest digest
 # (what a runtime pulls; the tag is ignored next to a digest), and the amd64 image's
 # org.opencontainers.image.revision label (the Release workflow writes the commit) must
-# be a commit on hugmesh-games main at or after #52's merge commit, 3ae21def. The commit
-# graph comes from a commit-only clone (--filter=tree:0, no trees, no blobs). Required
+# be a hugmesh-games commit that descends from #52's merge commit, 3ae21def (a release
+# is cut from release/X.Y, so every branch is fetched, commit objects only:
+# --filter=tree:0, no trees, no blobs, under a megabyte). Required
 # in CI (no network there is a failure, not a skip); offline it is reported, loudly, as
 # not verified.
 echo "== the pinned backend build =="
@@ -424,7 +425,7 @@ PR52_MERGE=3ae21def10e8a09c4a8bb86b4fcbccacdba6549d
 GRAPH="${WORK}/hugmesh-games.git"
 have_graph(){
   [ -d "${GRAPH}" ] && return 0
-  git clone -q --bare --filter=tree:0 --single-branch --branch main --no-tags https://github.com/hugmesh/hugmesh-games.git "${GRAPH}" >/dev/null 2>&1
+  git clone -q --bare --filter=tree:0 --no-tags https://github.com/hugmesh/hugmesh-games.git "${GRAPH}" >/dev/null 2>&1
 }
 verify_pin(){ # $1 tag, $2 digest ("" = none) -> 0 ok, 1 refused, 2 unreachable; prints why
   python3 - "$1" "$2" "${PR52_MERGE}" "${GRAPH}" <<'PY'
@@ -485,9 +486,9 @@ except Exception as e:
 if not re.match(r"^[0-9a-f]{40}$", rev):
     print(f"{tag}: image {pulled[:19]}... carries no org.opencontainers.image.revision label (not a Release-workflow build)"); sys.exit(1)
 if subprocess.run(["git", "-C", graph, "cat-file", "-e", f"{rev}^{{commit}}"], capture_output=True).returncode != 0:
-    print(f"{tag}: revision {rev[:12]} is not a commit on hugmesh-games main"); sys.exit(1)
+    print(f"{tag}: revision {rev[:12]} is not a commit on any hugmesh-games branch"); sys.exit(1)
 if subprocess.run(["git", "-C", graph, "merge-base", "--is-ancestor", floor, rev], capture_output=True).returncode != 0:
-    print(f"{tag}: revision {rev[:12]} is BEFORE #52's merge {floor[:12]} on main (a pre-#52 build)"); sys.exit(1)
+    print(f"{tag}: revision {rev[:12]} does not descend from #52's merge {floor[:12]} (a pre-#52 build)"); sys.exit(1)
 print(f"{tag}: manifest {dtag[:19]}..., revision {rev[:12]} is at or after #52's merge {floor[:12]}" + (" and the pinned digest equals the tag's" if digest else " (no digest pinned)")); sys.exit(0)
 PY
 }
