@@ -69,9 +69,14 @@ Feature: Layer-A headscale SSH ACL is generated from the signed device-license e
     And it has a single conservative @@TS_SSH_USER@@ ssh accept for the bootstrap window
 
   Scenario: Server-forced destination tags are not self-applyable (FIX-SERVERTAG)
-    Then tag:dev_*, tag:superadmin (and tag:mesh_*/tag:dom_* when present) are listed in tagOwners as owned by the control "hugmesh" user only
-    And no preauth key is minted that would let a node self-advertise them
-    # the live-rejection of a forged advertise-tags is a NEEDS-HEADSCALE assertion
+    Then tag:superadmin, tag:mesh_<id> and every tag:dev_* are listed in tagOwners with the EMPTY owner list []
+    And tag:dom_* is not listed at all
+    And only tag:hugmesh and the role tags pki/be/fe/host are owned by the "hugmesh" user
+    # every node registers as the "hugmesh" user, so an owner of ["hugmesh"] is every node
+    And a node that self-advertises tag:superadmin gets it in invalid_tags, not valid_tags
+    And a forced tag (preauth-key tags, `headscale nodes tag -t`) still applies
+    And a self-advertised tag:superadmin is not an SSH principal of the superadmin rule
+    # proven live against headscale 0.23.0 by test-headscale-tag-ownership.sh
 
   # ── COMPILE-SIDE RECONCILIATION (added 2026-07-30) ─────────────────────────
   # Layer-A has TWO would-be writers of one headscale policy: the node-side
@@ -96,7 +101,7 @@ Feature: Layer-A headscale SSH ACL is generated from the signed device-license e
   Scenario: The compiled policy keeps superadmin's reach to the core nodes
     When the BFF compiles an export that (by design) omits the core nodes
     Then ssh[] still carries src:[tag:superadmin] dst:[tag:mesh_<id>]
-    And every dst tag it names is declared control-owned in tagOwners
+    And every dst tag it names is listed in tagOwners with the EMPTY owner list []
     And no src names a group:op-<operator> principal headscale does not know
 
   Scenario: A file-mode vs DB-mode push mismatch fails loudly, not silently

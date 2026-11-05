@@ -361,18 +361,18 @@ if ssh_allowed "tag:superadmin" "superadmin" "tag:mesh_west-02 tag:hugmesh"; the
     bad "superadmin must NOT reach a node outside its mesh"
 else ok "node lacks tag:mesh_east-01 -> superadmin DENIED (mesh-membership is the precondition)"; fi
 
-echo "-- Case 18: FORGED TAG — server-assigned dst tags are control-owned, not self-applyable [REAL-LAYER-A] --"
-# A node self-advertising tag:dev_<otherfp> cannot win: the dst tags live in
-# tagOwners under the control 'hugmesh' user only; the LIVE override (forced tag
-# beats --advertise-tags) is a NEEDS-HEADSCALE assertion, but the policy ENCODES
-# the non-self-applyability here.
+echo "-- Case 18: FORGED TAG — server-assigned tags are owned by nobody, not self-applyable [REAL-LAYER-A] --"
+# A node self-advertising tag:dev_<otherfp> or tag:superadmin cannot win: those tags
+# carry the EMPTY owner list []. Every node registers as the "hugmesh" headscale user,
+# so an owner of ["hugmesh"] would have let ANY node claim them. The LIVE rejection
+# (invalid_tags, forced tags still applied) is proven against a real headscale by
+# tests/device-registry/test-headscale-tag-ownership.sh; the policy shape is asserted here.
 ownerok=1
-strip "${LA_RENDERED}" | jq -e --arg t "${TAG_A}" '.tagOwners[$t] == ["hugmesh"]' >/dev/null 2>&1 || ownerok=0
-strip "${LA_RENDERED}" | jq -e '.tagOwners["tag:superadmin"] == ["hugmesh"]' >/dev/null 2>&1 || ownerok=0
-[ "${ownerok}" = 1 ] && ok "tag:dev_<fpA> + tag:superadmin owned by control 'hugmesh' only -> a node cannot self-advertise a forged dst" \
-                     || bad "server-forced dst tags must be control-owned in tagOwners"
-echo "   ([MODEL] that a LIVE headscale REJECTS a forged --advertise-tags and the"
-echo "    forced tag WINS is NEEDS-HEADSCALE; the non-self-applyable ownership is asserted here.)"
+strip "${LA_RENDERED}" | jq -e --arg t "${TAG_A}" '.tagOwners[$t] == []' >/dev/null 2>&1 || ownerok=0
+strip "${LA_RENDERED}" | jq -e '.tagOwners["tag:superadmin"] == []' >/dev/null 2>&1 || ownerok=0
+[ "${ownerok}" = 1 ] && ok "tag:dev_<fpA> + tag:superadmin have the EMPTY owner list -> no node can self-advertise a forged tag" \
+                     || bad "server-forced tags must have the EMPTY owner list [] (an owner of [\"hugmesh\"] is every node)"
+echo "   (live headscale proof: tests/device-registry/test-headscale-tag-ownership.sh)"
 
 # ───────────────────────────────────────────────────────────────────────────────
 echo

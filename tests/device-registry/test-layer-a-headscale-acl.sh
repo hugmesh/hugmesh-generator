@@ -170,11 +170,21 @@ echo "-- Scenario: tag:hugmesh is no longer an SSH dst --"
 strip "${RENDERED}" | jq -e '[.ssh[] | select(.dst[0]? == "tag:hugmesh")] | length == 0' >/dev/null \
     && ok "tag:hugmesh removed as an ssh dst (only tag:dev_/tag:mesh_ remain)" || bad "tag:hugmesh still an ssh dst"
 
-echo "-- Scenario: server-forced dst tags are control-owned (FIX-SERVERTAG) --"
-strip "${RENDERED}" | jq -e '.tagOwners["tag:superadmin"] == ["hugmesh"]' >/dev/null \
-    && ok "tag:superadmin owned by control 'hugmesh' user only" || bad "tag:superadmin owner wrong"
-strip "${RENDERED}" | jq -e --arg t "${TAG_A}" '.tagOwners[$t] == ["hugmesh"]' >/dev/null \
-    && ok "tag:dev_<fpA> owned by control 'hugmesh' user only (not self-applyable)" || bad "tag:dev owner wrong"
+echo "-- Scenario: server-forced tags are owned by NOBODY (FIX-SERVERTAG) --"
+# Every node registers as the "hugmesh" headscale user, and headscale 0.23 accepts a
+# self-advertised tag whose owners include the node's user, so an owner of ["hugmesh"]
+# would let any node claim these. [] is the only owner list no node can satisfy; the
+# live proof is tests/device-registry/test-headscale-tag-ownership.sh.
+strip "${RENDERED}" | jq -e '.tagOwners["tag:superadmin"] == []' >/dev/null \
+    && ok "tag:superadmin has the EMPTY owner list (not self-advertisable)" || bad "tag:superadmin owner is not [] — any node could self-advertise it"
+strip "${RENDERED}" | jq -e --arg t "${TAG_A}" '.tagOwners[$t] == []' >/dev/null \
+    && ok "tag:dev_<fpA> has the EMPTY owner list (not self-advertisable)" || bad "tag:dev owner is not [] — any node could self-advertise it"
+strip "${RENDERED}" | jq -e --arg t "${MESH_TAG}" '.tagOwners[$t] == []' >/dev/null \
+    && ok "${MESH_TAG} is listed with the EMPTY owner list (the superadmin rule's dst resolves before any node is force-tagged)" \
+    || bad "${MESH_TAG} is not listed with [] — headscale 0.23 fails every map update while no node carries it as forced"
+strip "${RENDERED}" | jq -e '[.tagOwners | to_entries[] | select(.value != []) | .key] | sort == ["tag:be","tag:fe","tag:host","tag:hugmesh","tag:pki"]' >/dev/null \
+    && ok "only tag:hugmesh + the role tags (pki/be/fe/host) are owned (self-applied by design)" \
+    || bad "an owned tagOwners entry other than tag:hugmesh/pki/be/fe/host — that tag is self-advertisable by every node"
 
 echo "-- Scenario: EMPTY export still emits the SUPERADMIN mesh rule (never all-deny-superadmin) --"
 EEMPTY="$(mktemp)"; printf '%s' '{"signed":true,"signature":"x","body":{"meshId":"east-01","generation":12,"operators":[]}}' > "${EEMPTY}"

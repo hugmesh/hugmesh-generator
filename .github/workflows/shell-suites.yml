@@ -915,6 +915,13 @@ jobs:
     # one suite on disk that nothing ran (check 3 and check 7b of
     # tests/scripts/test-guard-integrity.sh both named it): it landed in 1abc9bf3 /
     # 2ab3325f with neither this file nor .gitlab-ci.yml naming it.
+    # tests/device-registry/test-headscale-tag-ownership.sh starts throwaway
+    # headscale 0.23.0 + tailscale 1.78.1 containers (and curlimages/curl as a
+    # LocalAPI client) on one private docker network, no published ports, and
+    # proves a node cannot self-advertise a server-forced tag (tag:superadmin,
+    # tag:dev_*, tag:mesh_*, tag:dom_*) while forced tags still apply. Missing
+    # docker or an image is a FAIL (exit 1), never a skip. MEASURED 2026-11-04 on
+    # a Linux host with docker: 25 passed / 0 failed in about 60 s.
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
@@ -929,6 +936,7 @@ jobs:
         run: |
           SUITES="
             tests/boot/test-gpu-worker-node-labels.sh
+            tests/device-registry/test-headscale-tag-ownership.sh
           "
           rc=0; failed=""; ran=0
           for t in $SUITES; do
