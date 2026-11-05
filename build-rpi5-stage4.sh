@@ -424,6 +424,10 @@ HEADSCALE_VERSION="0.23.0"
 TAILSCALE_VERSION="1.78.1"
 SKIP_MESH=false
 SKIP_TAILSCALE=false
+# --with-tailscale keeps the tailnet client on a --standalone desktop (situation 2
+# of docs/DESKTOP-LOGIN-SSO.md: on a tailnet, never mesh-associated); --skip-mesh
+# drops it. "" = the posture default (mesh desktop ON, --standalone OFF).
+MESH_FORCED=""
 # Greeter SSO (the Casdoor/OIDC device-flow sign-in at lightdm). ON for a mesh
 # desktop; --standalone turns it OFF unless --with-sso / --sso-issuer.
 SKIP_SSO=false
@@ -798,6 +802,11 @@ OPTIONS
 
     --skip-tailscale
         Install headscale only; omit the tailscale client.
+
+    --with-tailscale
+        Keep the tailnet client on a --standalone desktop (which drops it
+        by default), so the greeter SSO can reach an IdP over a tailnet.
+        The image stays standalone: no mesh association, ungoverned.
 
     --with-sso | --no-sso | --skip-sso
         Greeter SSO sign-in (Casdoor/OIDC device flow) ON/OFF for --role desktop.
@@ -1219,8 +1228,9 @@ while [[ $# -gt 0 ]]; do
         # fail-closed below (_validate_vault), baked by bake_vault_conf on node roles.
         --vault-addr)         VAULT_ADDR="$2";        shift 2 ;;
         --vault-external-addr) VAULT_EXTERNAL_ADDR="$2"; shift 2 ;;
-        --skip-mesh)          SKIP_MESH=true;          shift   ;;
+        --skip-mesh)          SKIP_MESH=true; MESH_FORCED=off; shift   ;;
         --skip-tailscale)     SKIP_TAILSCALE=true;     shift   ;;
+        --with-tailscale)     SKIP_MESH=false; SKIP_TAILSCALE=false; MESH_FORCED=on; shift ;;
         --skip-sso|--no-sso)  SKIP_SSO=true;  SSO_FORCED=off; shift ;;
         --with-sso)           SKIP_SSO=false; SSO_FORCED=on;  shift ;;
         --sso-issuer)         SSO_ISSUER="${2:-}";        shift 2 ;;
@@ -1521,14 +1531,23 @@ if [ -n "${SSO_ISSUER}" ]; then
 fi
 if ${STANDALONE}; then
     ${ROLE_CLIENT} || { err "--standalone only composes onto --role desktop (got --role ${ROLE})"; exit 1; }
-    SKIP_MESH=true
-    SKIP_TAILSCALE=true
+    # Default posture is mesh-OFF. --with-tailscale keeps the tailnet client
+    # (the mesh binaries + tailscaled) so the greeter SSO can reach an IdP over a
+    # tailnet. It does NOT associate the device with a mesh: the SSO posture stays
+    # standalone (ungoverned), and the device joins a tailnet only when an admin
+    # runs `tailscale up --login-server=...` (or a KEYS stick provisions it).
+    if [ "${MESH_FORCED}" = on ]; then
+        ${SKIP_TAILSCALE} && { err "--with-tailscale conflicts with --skip-tailscale"; exit 1; }
+    else
+        SKIP_MESH=true
+        SKIP_TAILSCALE=true
+    fi
     # SSO off by default on a standalone box; --with-sso / --sso-issuer keeps the
     # greeter sign-in (it then needs the IdP reachable, e.g. over a tailnet).
     [ "${SSO_FORCED}" = on ] || SKIP_SSO=true
     ENCRYPT_ROOT=true        # guarantee the installer artifact (the FDE path)
     [ -z "${LOCAL_USER}" ] && LOCAL_USER="${DEFAULT_USER}"
-    info "STANDALONE desktop: no mesh; local user '${LOCAL_USER}'; LUKS2-encrypted root (installer ISO)"
+    info "STANDALONE desktop: $([ "${MESH_FORCED}" = on ] && echo 'tailnet client kept (--with-tailscale), no mesh association' || echo 'no mesh'); local user '${LOCAL_USER}'; LUKS2-encrypted root (installer ISO)"
 fi
 
 # --encrypt-root independent of --standalone: forces the installer ISO, since

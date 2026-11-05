@@ -331,6 +331,10 @@ HEADSCALE_VERSION="0.23.0"
 TAILSCALE_VERSION="1.78.1"
 SKIP_MESH=false
 SKIP_TAILSCALE=false
+# --with-tailscale keeps the tailnet client on a --standalone desktop (situation 2
+# of docs/DESKTOP-LOGIN-SSO.md: on a tailnet, never mesh-associated); --skip-mesh
+# drops it. "" = the posture default (mesh desktop ON, --standalone OFF).
+MESH_FORCED=""
 # Greeter SSO (the Casdoor/OIDC device-flow sign-in at lightdm). ON for a mesh
 # desktop; --standalone turns it OFF unless --with-sso / --sso-issuer.
 SKIP_SSO=false
@@ -430,6 +434,9 @@ OPTIONS
 
   Mesh / radios  (same as the Frite/Pi5 builders)
     --headscale-version / --tailscale-version / --skip-mesh / --skip-tailscale
+    --with-tailscale      Keep the tailnet client on a --standalone desktop (dropped
+                          by default) so the greeter SSO can reach an IdP over a
+                          tailnet; the image stays standalone (ungoverned).
     --with-sso | --no-sso | --skip-sso   Greeter SSO sign-in (Casdoor/OIDC) ON/OFF.
                           Default ON; --standalone turns it off unless --with-sso.
                           The local password login is always kept.
@@ -588,8 +595,9 @@ while [[ $# -gt 0 ]]; do
         --enable-wifi)        ENABLE_WIFI=true;           shift   ;;
         --enable-bluetooth)   ENABLE_BLUETOOTH=true;      shift   ;;
         --permit-root-login)  PERMIT_ROOT_LOGIN="$2";     shift 2 ;;
-        --skip-mesh)          SKIP_MESH=true;             shift   ;;
+        --skip-mesh)          SKIP_MESH=true; MESH_FORCED=off; shift   ;;
         --skip-tailscale)     SKIP_TAILSCALE=true;        shift   ;;
+        --with-tailscale)     SKIP_MESH=false; SKIP_TAILSCALE=false; MESH_FORCED=on; shift ;;
         --skip-sso|--no-sso)  SKIP_SSO=true;  SSO_FORCED=off; shift ;;
         --with-sso)           SKIP_SSO=false; SSO_FORCED=on;  shift ;;
         --sso-issuer)         SSO_ISSUER="${2:-}";        shift 2 ;;
@@ -749,15 +757,24 @@ if [ -n "${SSO_ISSUER}" ]; then
     SSO_FORCED=on; SKIP_SSO=false
 fi
 if ${STANDALONE}; then
-    SKIP_MESH=true
-    SKIP_TAILSCALE=true
+    # Default posture is mesh-OFF. --with-tailscale keeps the tailnet client
+    # (the mesh binaries + tailscaled) so the greeter SSO can reach an IdP over a
+    # tailnet. It does NOT associate the device with a mesh: the SSO posture stays
+    # standalone (ungoverned), and the device joins a tailnet only when an admin
+    # runs `tailscale up --login-server=...` (or a KEYS stick provisions it).
+    if [ "${MESH_FORCED}" = on ]; then
+        ${SKIP_TAILSCALE} && { err "--with-tailscale conflicts with --skip-tailscale"; exit 1; }
+    else
+        SKIP_MESH=true
+        SKIP_TAILSCALE=true
+    fi
     # SSO off by default on a standalone box; --with-sso / --sso-issuer keeps the
     # greeter sign-in (it then needs the IdP reachable, e.g. over a tailnet).
     [ "${SSO_FORCED}" = on ] || SKIP_SSO=true
     [ -z "${LOCAL_USER}" ] && LOCAL_USER="${DEFAULT_USER}"
     ENCRYPT_ROOT=true           # the INSTALLED system is LUKS2 full-disk encrypted
     BUILD_INSTALLER=true        # guarantee the installer artifact (the FDE path)
-    info "STANDALONE desktop: no mesh; local user '${LOCAL_USER}'; LUKS2 FDE on install"
+    info "STANDALONE desktop: $([ "${MESH_FORCED}" = on ] && echo 'tailnet client kept (--with-tailscale), no mesh association' || echo 'no mesh'); local user '${LOCAL_USER}'; LUKS2 FDE on install"
 fi
 # --encrypt-root composed onto a plain (non-standalone) build also needs the
 # installer flavor — LUKS is laid down by install-orangepi5.sh, not the live medium.

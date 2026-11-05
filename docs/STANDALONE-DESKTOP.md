@@ -282,6 +282,10 @@ cluster node roles, which refuse `--standalone`). So `--standalone` alone is eno
 
 `--standalone` cascades `SKIP_MESH=true SKIP_TAILSCALE=true` on every platform,
 as on x86. Neither route depends on a mesh, tailnet or Casdoor SSO.
+`--with-tailscale` keeps the tailnet client on a standalone desktop, as on x86, so
+the greeter SSO can reach an IdP over a tailnet (situation 2 in
+[DESKTOP-LOGIN-SSO.md](DESKTOP-LOGIN-SSO.md#situations)). The image stays
+standalone and ungoverned.
 
 ### LUKS2 install model: cross-host vs. on-device
 

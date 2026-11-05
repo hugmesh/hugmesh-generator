@@ -181,19 +181,39 @@ tailnet state so the admin can see which step is missing. The per-domain
 
 | situation | local | SSO |
 |-----------|-------|-----|
-| (1) standalone, never associated (`--standalone`, SSO off by default) | yes | greeter says "not enabled" and how an admin turns it on; with `--with-sso`/`--sso-issuer` at build, or `sso-greeter configure --enable --issuer` later, works whenever that IdP is reachable (public, or over a tailnet joined by hand), otherwise says why. Nothing is contacted until SSO is on AND a user leaves the password empty |
-| (2) on a tailnet, not mesh-associated | yes | yes, if the IdP is reachable over that tailnet; the reason names the tailnet state otherwise |
+| (1) standalone, never associated (`--standalone`, SSO off by default) | yes | greeter says "not enabled" and how an admin turns it on; with `--with-sso`/`--sso-issuer` at build, or `sso-greeter configure --enable --issuer` later, works whenever that IdP is reachable (public, or over a tailnet: build with `--with-tailscale`, then `tailscale up`), otherwise says why. Nothing is contacted until SSO is on AND a user leaves the password empty |
+| (2) on a tailnet, not mesh-associated | yes | yes, if the IdP is reachable over that tailnet; the reason names the tailnet state otherwise. A standalone image carries the tailnet agent only when built with `--with-tailscale` (every desktop builder); without it the reason reads "no tailnet agent on this image" |
 | (3) mesh-associated (KEYS) | yes (users.json) | yes; governed image, sudo via the `desktop-sudo` claim; the greeter token is handed to the session chain |
 
-Adjacent, not fixed here: the Frite `--standalone` still forces
-`SKIP_TAILSCALE` with no `--with-tailscale` override (x86 has `MESH_FORCED`), so
-situation (2) on a standalone Frite needs the tailnet joined by hand.
+**Situation (2) on a standalone image needs the tailnet client baked.**
+`--standalone` drops it by default on every builder. `--with-tailscale` keeps
+it: x86 has had the flag (`MESH_FORCED`), and the ARM desktop builders (rpi5,
+Frite, Orange Pi 4 LTS, Orange Pi 5, Jetson) now take it too. Jetson still
+refuses `--standalone` itself, for its LUKS layout. The flag keeps the tailnet
+binaries and puts `tailscaled` in the default runlevel. On ARM the one mesh
+install step also lands the headscale *binary*, as it does on a mesh desktop;
+the headscale *service* stays off (role-gated). The image stays standalone: it is
+UNGOVERNED, the SSO posture is `standalone`, and SSO stays off unless
+`--with-sso`/`--sso-issuer` says otherwise. The device joins a tailnet only when
+an admin runs `tailscale up --login-server=...` (or a KEYS stick provisions it).
+With the flag, "contacts nothing" holds for the greeter helper, not for the
+image: `tailscaled` is the admin's opt-in, and it runs whatever its own defaults
+contact. Without the flag, a standalone image ships no tailnet agent at all.
+
+    ./build-rpi5-stage4.sh --role desktop --standalone --with-tailscale \
+        --sso-issuer https://id.tail1234.ts.net --local-pass ...
+
+Studio: an ARM build gets `--skip-mesh` when its tailscale field is off, and no
+`--with-tailscale` when it is on, so a Studio standalone ARM build keeps the
+no-tailnet default. Emitting the flag is a Studio follow-up.
 
 ## Proven offline / to prove on a boot
 
 Offline (`tests/desktop-governance/test-sso-greeter.sh`, 126 checks;
-`tests/scripts/test-desktop-sso-bake.sh`, 144 checks incl. 21 negative
-controls): everything in this document except the greeter's rendering. The
+`tests/scripts/test-desktop-sso-bake.sh`, 214 checks incl. 41 negative
+controls; its section H RUNS the four ARM desktop builders' `--print-plan` for
+the `--standalone --with-tailscale` matrix, and 20 builder plants turn it red):
+everything in this document except the greeter's rendering. The
 libpam legs run the real `/etc/pam.d/lightdm` with the real helper through
 `pam_start_confdir`, alone and over #860's wired include chain.
 

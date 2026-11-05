@@ -43,6 +43,13 @@
 #   G. CONTROLS   every static pin in A/A2/B/C is re-run against a copy with the
 #                 line removed and must go red (each plant verified to change the
 #                 file).
+#   H. TAILNET    rpi5 / frite / orangepi4-lts / orangepi5 --print-plan, EXECUTED:
+#                 --standalone --with-tailscale keeps the tailnet client (situation
+#                 2: on a tailnet, never mesh-associated) and leaves SSO to its own
+#                 flags; plain --standalone still drops it; --skip-tailscale with it
+#                 is refused. Five plants per builder (flag dropped, override
+#                 ignored, conflict dropped, default flipped, tailscale left
+#                 skipped), each run from a mirror tree, must turn the legs red.
 #
 # Pure static + sandboxed execution. No root, no emerge, no network.
 set -uo pipefail
@@ -324,6 +331,97 @@ for b in "${ARM_DESKTOP_BUILDERS[@]}"; do
 done
 control list-no-polkit "${FRITE_LIST}" '/^sys-auth\/polkit$/d' pin_list_q
 control prov-no-install "${PROV}" '/session-install\.sh\.tmpl"; then/d' pin_prov_q
+
+# ── H. tailnet on a standalone ARM desktop (EXECUTED --print-plan) ───────────
+# Situation (2) of docs/DESKTOP-LOGIN-SSO.md — on a tailnet, never mesh-associated
+# — needs the tailnet client on a --standalone image. Before this leg every ARM
+# desktop builder forced SKIP_MESH/SKIP_TAILSCALE under --standalone with no
+# override (x86 had --with-tailscale), so a standalone ARM desktop could not reach
+# an IdP over a tailnet at all. Each builder is RUN (--print-plan: no root, no
+# fetch, no files) and its PLAN_MESH / PLAN_SSO / PLAN_SSO_ISSUER lines read.
+echo "== H. --with-tailscale on a --standalone ARM desktop (executed --print-plan) =="
+mkdir -p "${WORK}/cwd"
+# plan_lines BUILDER ARGS... -> "rc=N" then the PLAN_MESH/SSO/SSO_ISSUER lines and
+# any ERROR line, colour codes stripped (no grep -q under pipefail: here-strings).
+plan_lines() {
+    local out rc
+    out="$(cd "${WORK}/cwd" && timeout 120 bash "$@" --print-plan 2>&1)"; rc=$?
+    out="$(sed 's/\x1b\[[0-9;]*m//g' <<< "${out}")"
+    echo "rc=${rc}"
+    grep -E '^PLAN_(MESH|SSO|SSO_ISSUER)=|ERROR' <<< "${out}"
+}
+# has LABEL HAYSTACK ERE — one line of HAYSTACK matches ERE
+has(){ if grep -Eq "$3" <<< "$2"; then ok "$1"; else bad "$1 (no line matching: $3)"; fi; }
+TS_ISSUER="https://id.example.test"
+# tailnet_legs BUILDER-PATH NAME EXTRA-ARGS...
+tailnet_legs() {
+    local b="$1" n="$2"; shift 2
+    local o
+    o="$(plan_lines "${b}" "$@" --standalone --local-pass x)"
+    has "${n}: plain --standalone still drops the tailnet (MESH=skip)" "${o}" '^PLAN_MESH=skip$'
+    o="$(plan_lines "${b}" "$@" --standalone --with-tailscale --local-pass x)"
+    has "${n}: --standalone --with-tailscale builds" "${o}" '^rc=0$'
+    has "${n}: --standalone --with-tailscale keeps the tailnet client" "${o}" '^PLAN_MESH=headscale=[^,]+,tailscale=[0-9]'
+    has "${n}: --with-tailscale alone leaves standalone SSO off" "${o}" '^PLAN_SSO=off$'
+    o="$(plan_lines "${b}" "$@" --standalone --with-tailscale --with-sso --local-pass x)"
+    has "${n}: --standalone --with-tailscale --with-sso: tailnet kept" "${o}" '^PLAN_MESH=headscale=[^,]+,tailscale=[0-9]'
+    has "${n}: --standalone --with-tailscale --with-sso: greeter SSO on" "${o}" '^PLAN_SSO=casdoor-oidc$'
+    o="$(plan_lines "${b}" "$@" --standalone --with-tailscale --sso-issuer "${TS_ISSUER}" --local-pass x)"
+    has "${n}: --standalone --with-tailscale --sso-issuer: the issuer reaches the plan" "${o}" "^PLAN_SSO_ISSUER=${TS_ISSUER}\$"
+    has "${n}: --standalone --with-tailscale --sso-issuer: tailnet kept" "${o}" '^PLAN_MESH=headscale=[^,]+,tailscale=[0-9]'
+    o="$(plan_lines "${b}" "$@" --standalone --with-tailscale --skip-tailscale --local-pass x)"
+    has "${n}: --with-tailscale + --skip-tailscale is refused" "${o}" '^rc=[1-9]'
+    has "${n}: the refusal names the conflict" "${o}" 'conflicts with --skip-tailscale'
+    o="$(plan_lines "${b}" "$@" --standalone --skip-tailscale --with-tailscale --local-pass x)"
+    has "${n}: a later --with-tailscale wins over an earlier --skip-tailscale" "${o}" '^PLAN_MESH=headscale=[^,]+,tailscale=[0-9]'
+    o="$(plan_lines "${b}" "$@")"
+    has "${n}: a mesh desktop (no --standalone) keeps its tailnet" "${o}" '^PLAN_MESH=headscale=[^,]+,tailscale=[0-9]'
+}
+# The four ARM desktop builders whose --standalone builds (jetson refuses
+# --standalone outright: its single boot+root partition cannot take LUKS).
+TS_BUILDERS=("build-rpi5-stage4.sh|--role desktop" "build-frite-stage4.sh|--desktop light"
+             "build-orangepi4-lts-stage4.sh|" "build-orangepi5-stage4.sh|")
+for e in "${TS_BUILDERS[@]}"; do
+    b="${e%%|*}"; x="${e#*|}"; n="${b#build-}"; n="${n%-stage4.sh}"
+    # shellcheck disable=SC2086  # x is a fixed word list above
+    tailnet_legs "${REPO}/${b}" "${n}" ${x}
+done
+# jetson carries the same parser and conflict rule (its --standalone is refused
+# later, for LUKS; the conflict check runs first).
+o="$(plan_lines "${REPO}/build-jetson-stage4.sh" --role desktop --standalone --with-tailscale --skip-tailscale --local-pass x)"
+has "jetson: --with-tailscale + --skip-tailscale is refused" "${o}" 'conflicts with --skip-tailscale'
+o="$(plan_lines "${REPO}/build-jetson-stage4.sh" --role desktop --with-tailscale)"
+has "jetson: --with-tailscale parses on a mesh desktop" "${o}" '^PLAN_MESH=headscale=[^,]+,tailscale=[0-9]'
+
+# H controls: each plant goes into a copy of ONE builder inside a mirror tree
+# (every other top-level entry symlinked to the repo, so SCRIPT_DIR resolves the
+# real scripts/ and specs), and the same legs must go red.
+MTREE="${WORK}/mtree"
+mkdir -p "${MTREE}"
+for e in "${REPO}"/* "${REPO}"/.[!.]*; do
+    [ -e "${e}" ] || continue
+    case "$(basename "${e}")" in build-*-stage4.sh) continue ;; esac
+    ln -s "${e}" "${MTREE}/$(basename "${e}")"
+done
+tailnet_control() {  # $1=label $2=builder basename $3=sed-expr $4=extra args (word list)
+    local src="${REPO}/$2" m="${MTREE}/$2" n out
+    n="${2#build-}"; n="${n%-stage4.sh}"
+    sed -e "$3" "${src}" > "${m}"
+    if cmp -s "${src}" "${m}"; then bad "control $1: plant changed nothing"; rm -f "${m}"; return; fi
+    if ! bash -n "${m}" 2>/dev/null; then bad "control $1: plant does not parse"; rm -f "${m}"; return; fi
+    # shellcheck disable=SC2086
+    out="$(P=0; F=0; tailnet_legs "${m}" "${n}" $4 2>&1)"
+    rm -f "${m}"
+    if grep -q 'FAIL' <<< "${out}"; then ok "control $1: the tailnet legs go red"; else bad "control $1: tailnet legs stayed green over the mutated copy"; fi
+}
+for e in "${TS_BUILDERS[@]}"; do
+    b="${e%%|*}"; x="${e#*|}"; n="${b#build-}"; n="${n%-stage4.sh}"
+    tailnet_control "${n}-no-flag"      "${b}" '/^        --with-tailscale)/d' "${x}"
+    tailnet_control "${n}-override-ignored" "${b}" 's/^    if \[ "\${MESH_FORCED}" = on \]; then$/    if false; then/' "${x}"
+    tailnet_control "${n}-no-conflict"  "${b}" '/conflicts with --skip-tailscale/s/.*/        :/' "${x}"
+    tailnet_control "${n}-default-on"   "${b}" 's/^MESH_FORCED=""$/MESH_FORCED=on/' "${x}"
+    tailnet_control "${n}-keeps-skip-ts" "${b}" 's/--with-tailscale)     SKIP_MESH=false; SKIP_TAILSCALE=false;/--with-tailscale)     SKIP_MESH=false;/' "${x}"
+done
 
 echo
 echo "== RESULT: ${P} passed, ${F} failed =="
