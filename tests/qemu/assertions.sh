@@ -106,6 +106,21 @@ _hs_src=""
 # the only place the KEYS media is mounted.
 _slx_mode_want=""
 _slx_mode_src=""
+# Third consumer: what the manifest asked of the MESH CLIENT (2026-11-04).
+# provision_tailscale() DELETES tailscaled from the default runlevel when
+# .tailscale.enabled is not true, so the runlevel check in assert_role_topology and
+# the join checks in the mesh-client section must follow the manifest, not assume.
+# _ts_key says what the node could join WITH — never the key itself:
+#   authkey  the stick carries a non-empty tailscale auth key (joins someone's tailnet)
+#   preauth  the manifest declares headscale preauth keys (a control node self-joins)
+#   none     neither: tailscaled runs but there is nothing to join with
+_ts_want=unknown
+_ts_src=""
+_ts_key=none
+# _ts_routes: the routes this node ADVERTISES (--advertise-routes in .tailscale.up_args),
+# comma-separated; empty for a client that only accepts routes. assert_mesh_client grades
+# that every one of them is served on the tailnet.
+_ts_routes=""
 _hs_dev="$(blkid -L "${KEYS_LABEL:-KEYS}" 2>/dev/null || true)"
 if [ -n "${_hs_dev}" ] && command -v jq >/dev/null 2>&1; then
     _hs_mnt="$(mktemp -d 2>/dev/null || echo '')"
@@ -130,6 +145,21 @@ if [ -n "${_hs_dev}" ] && command -v jq >/dev/null 2>&1; then
             # yields the mode provisioning actually applied.
             _slx_mode_want="$(jq -r '.selinux.mode // "permissive"' "${_hs_m}" 2>/dev/null)"
             [ -n "${_slx_mode_want}" ] && [ "${_slx_mode_want}" != "null" ] && _slx_mode_src="KEYS manifest"
+            # provision_tailscale(): `jqm '.tailscale.enabled // false'` != "true" => off.
+            case "$(jq -r '.tailscale.enabled | tostring' "${_hs_m}" 2>/dev/null)" in
+                true) _ts_want=true;  _ts_src="KEYS manifest" ;;
+                *)    _ts_want=false; _ts_src="KEYS manifest" ;;
+            esac
+            _ts_routes="$(jq -r '.tailscale.up_args // ""' "${_hs_m}" 2>/dev/null | tr ' ' '\n' | sed -n 's/^--advertise-routes=//p' | head -1)"
+            [[ "${_ts_routes}" =~ ^[0-9./,:a-fA-F]*$ ]] || _ts_routes=""
+            _ts_akf="$(jq -r '.tailscale.authkey_file // "tailscale/authkey"' "${_hs_m}" 2>/dev/null)"
+            case "${_ts_akf}" in /*|*..*) _ts_akf="" ;; esac
+            if [ -n "${_ts_akf}" ] && [ -s "$(dirname "${_hs_m}")/${_ts_akf}" ]; then
+                _ts_key=authkey
+            elif [ "$(jq -r '(.headscale.preauthkeys // []) | length' "${_hs_m}" 2>/dev/null)" -gt 0 ] 2>/dev/null \
+                 && [ "${_hs_want}" = true ]; then
+                _ts_key=preauth
+            fi
             break
         done
         umount "${_hs_mnt}" 2>/dev/null || true
@@ -145,6 +175,13 @@ if [ "${_hs_want}" = unknown ] && [ -f /var/log/keys-provision.log ]; then
         *)                                  _hs_want=true;  _hs_src="provision-log manifest decision" ;;
     esac
 fi
+if [ "${_ts_want}" = unknown ] && [ -f /var/log/keys-provision.log ]; then
+    case "$(grep -aE 'tailscale disabled in manifest|tailscale up (succeeded|failed)|Using locally-minted headscale preauth key' /var/log/keys-provision.log 2>/dev/null | tail -1)" in
+        "")                                  ;;
+        *"tailscale disabled in manifest"*)  _ts_want=false; _ts_src="provision-log manifest decision" ;;
+        *)                                   _ts_want=true;  _ts_src="provision-log manifest decision" ;;
+    esac
+fi
 if [ "${_hs_want}" = true ]; then
     check "headscale service started (asked for by ${_hs_src})"       'rc-service headscale status'
     check "headscale listening on :8080 (asked for by ${_hs_src})"    'ss -ltn 2>/dev/null | grep -q ":8080"'
@@ -154,6 +191,23 @@ elif [ "${_hs_want}" = false ]; then
 else
     skip "headscale service — INTENT UNVERIFIED: no readable KEYS manifest and no manifest decision in the provision log. NOT evidence that headscale is healthy or unwanted."
     skip "headscale port :8080 — INTENT UNVERIFIED (see above)"
+fi
+
+echo "-- network --"
+# NetworkManager PROVIDES `net`. Left `inactive` (nm-online gave up inside
+# INACTIVE_TIMEOUT and the dispatcher never flipped it), OpenRC defers EVERY
+# `need net` service for the whole boot — containerd, kubelet, the host-firewall
+# reconcile, hugmesh-tor-reconcile — while nmcli itself reports the link up. Seen
+# on the 2026-11-04 QEMU rpi5 runs; the builders now give cluster nodes 60s.
+if [ -e /etc/runlevels/default/NetworkManager ] || [ -L /etc/runlevels/default/NetworkManager ]; then
+    _nm_st="$(rc-service NetworkManager status 2>&1)"
+    case "${_nm_st}" in
+        *started*)  ok "NetworkManager service is started (provides net to every need-net service)" ;;
+        *inactive*) bad "NetworkManager is INACTIVE although it is running — every need-net service (containerd, kubelet, host firewall, tor) was deferred this boot ($(nmcli -t -f STATE general 2>/dev/null | head -1))" ;;
+        *)          bad "NetworkManager service is not started ('${_nm_st}')" ;;
+    esac
+else
+    skip "NetworkManager — not in the default runlevel"
 fi
 
 echo "-- kubernetes stack --"
@@ -343,6 +397,11 @@ assert_role_topology() {  # $1 = root prefix ("" on the live guest; a fixture ro
         fi
     elif [ ! -e "${_R}/usr/sbin/tailscaled" ]; then
         skip "role ${_role}: tailscaled — no /usr/sbin/tailscaled in this image, so no mesh client was built into it (--skip-mesh / --skip-tailscale); NOT evidence the mesh posture is right"
+    elif [ "${_ts_want:-unknown}" = false ]; then
+        # provision_tailscale() rc-update del's tailscaled when the manifest says
+        # .tailscale.enabled != true — by design. The build-time link can no longer be
+        # seen from here, so this is neither a pass nor a defect.
+        skip "role ${_role}: tailscaled unlinked by keys-provision because the ${_ts_src:-KEYS manifest} set tailscale.enabled=false (provision_tailscale, by design); NOT evidence the image wired it"
     else
         bad "role ${_role}: /usr/sbin/tailscaled is installed but tailscaled is MISSING from the default runlevel — a mesh client that never starts"
     fi
@@ -446,6 +505,145 @@ assert_role_topology() {  # $1 = root prefix ("" on the live guest; a fixture ro
 }
 
 assert_role_topology ""
+
+echo "-- mesh client (tailscale) --"
+# The emulated mesh has to FORM, not merely have tailscaled scheduled: a control node
+# self-joins its own headscale with the preauth key keys-provision minted, and a
+# fleet worker joins the control node's tailnet with the key on its stick and must
+# reach a peer over it. Graded against what the manifest asked (_ts_want/_ts_key).
+# A function with a root prefix (only the binary probe uses it) so
+# tests/qemu/mesh_client_test.sh drives it against fixtures with tailscale,
+# rc-service and sleep stubbed on PATH, the assert_tor_node_contract pattern.
+assert_mesh_client() {  # $1 = root prefix ("" on the live guest)
+    local _R _ts_state _ts_i _ts_ip _ts_peer _ts_pip _ts_others _ts_online _ts_hs_online _ts_r _ts_by
+    _R="${1-}"
+    if [ ! -x "${_R}/usr/sbin/tailscaled" ]; then
+        skip "mesh client — no /usr/sbin/tailscaled in this image (no mesh client was built in)"
+    elif [ "${_ts_want}" != true ]; then
+        skip "mesh client — not asked for (tailscale.enabled=${_ts_want}, ${_ts_src:-no source})"
+    else
+        if rc-service tailscaled status >/dev/null 2>&1; then
+            ok "tailscaled service started (asked for by ${_ts_src})"
+        else
+            bad "tailscaled service NOT started although ${_ts_src} asked for the mesh client"
+        fi
+        if [ "${_ts_key}" = none ]; then
+            skip "mesh join — the KEYS stick carries no auth key and declares no preauth key, so tailscaled runs with nothing to join (a worker emulated without its control node)"
+        else
+            _ts_state=""
+            for _ts_i in 1 2 3 4 5 6 7 8 9 10 11 12; do
+                _ts_state="$(tailscale status --json 2>/dev/null | jq -r '.BackendState // ""' 2>/dev/null)"
+                [ "${_ts_state}" = Running ] && break
+                sleep 5
+            done
+            if [ "${_ts_state}" = Running ]; then
+                ok "mesh join — tailscale is Running on the tailnet (${_ts_key} key)"
+            else
+                bad "mesh join — tailscale BackendState is '${_ts_state:-none}', not Running, with a ${_ts_key} key on the stick (see /var/log/keys-provision.log: 'tailscale up')"
+            fi
+            _ts_ip="$(tailscale ip -4 2>/dev/null | head -1)"
+            if [[ "${_ts_ip}" =~ ^100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\.[0-9]+\.[0-9]+$ ]]; then
+                ok "mesh join — this node holds tailnet address ${_ts_ip}"
+            else
+                bad "mesh join — no tailnet (100.64.0.0/10) address ('${_ts_ip}')"
+            fi
+            # The node's own map session. Running + a 100.x address both survive a dead
+            # session: proof B's control node (2026-11-04) read Running and 100.64.0.1 for
+            # six minutes while its tailscaled logged 35x "PollNetMap ... context deadline
+            # exceeded" after keys-provision restarted headscale, headscale listed it with
+            # online=null, and its worker's netmap stayed empty. Self.Online is the control
+            # server's view of this node's live map poll; a control node is also asked its
+            # own headscale. Bounded: keys-provision already waited for the regain.
+            _ts_online=""
+            for _ts_i in 1 2 3 4 5 6 7 8 9 10 11 12; do
+                _ts_online="$(tailscale status --json 2>/dev/null | jq -r '.Self.Online // false' 2>/dev/null)"
+                [ "${_ts_online}" = true ] && break
+                sleep 5
+            done
+            if [ "${_ts_online}" = true ]; then
+                ok "mesh session — this node's map session is live on its control server (Self.Online)"
+            else
+                bad "mesh session — Self.Online is '${_ts_online:-none}' after 60s: the node holds a tailnet address but no live map session, so no peer sees it (a control node's own client stranded by a headscale restart: see /var/log/keys-provision.log 'mesh client' and /var/log/tailscaled.log 'PollNetMap')"
+            fi
+            if [ "${_ts_key}" = preauth ]; then
+                _ts_hs_online="$(headscale nodes list -o json 2>/dev/null \
+                    | jq -r --arg h "$(hostname | tr 'A-Z' 'a-z')" '[.[] | select(((.name // "") | ascii_downcase) == $h or ((.given_name // "") | ascii_downcase) == $h) | (.online // false)] | if length == 0 then "unregistered" else (.[0] | tostring) end' 2>/dev/null)"
+                if [ "${_ts_hs_online}" = true ]; then
+                    ok "mesh session — this control node's own headscale lists it online"
+                else
+                    bad "mesh session — this control node's own headscale lists it online=${_ts_hs_online:-unknown}, not true (its own mesh client is not polling the server it runs)"
+                fi
+            fi
+            _ts_peer="$(tailscale status --json 2>/dev/null \
+                | jq -r '[(.Peer // {})[] | select((.TailscaleIPs // []) | length > 0)] | .[0] | if . == null then "" else "\(.HostName) \(.TailscaleIPs[0])" end' 2>/dev/null)"
+            # A CONTROL node is graded against its own registry: what headscale has
+            # registered besides this node is what must be in its netmap. Its assertions
+            # run as soon as its sshd answers, minutes before a fleet's workers boot and
+            # join, so it waits — bounded by HUGMESH_ASSERT_PEER_WAIT seconds, 0 unless
+            # the runner streams a budget ahead of this script for a rendezvous fleet —
+            # for a peer to appear; a registered node that never reaches the netmap is a
+            # FAIL (2026-11-04: it SKIPped "none yet" for ever, even re-run after the
+            # worker had joined). No registration at all stays a SKIP, never a pass.
+            _ts_others=""
+            if [ "${_ts_key}" = preauth ] && [ -z "${_ts_peer}" ]; then
+                _ts_i=0
+                while :; do
+                    _ts_others="$(headscale nodes list -o json 2>/dev/null \
+                        | jq -r --arg h "$(hostname | tr 'A-Z' 'a-z')" '[.[] | select(((.name // "") | ascii_downcase) != $h and ((.given_name // "") | ascii_downcase) != $h) | (.given_name // .name // "?")] | join(",")' 2>/dev/null)"
+                    _ts_peer="$(tailscale status --json 2>/dev/null \
+                        | jq -r '[(.Peer // {})[] | select((.TailscaleIPs // []) | length > 0)] | .[0] | if . == null then "" else "\(.HostName) \(.TailscaleIPs[0])" end' 2>/dev/null)"
+                    [ -n "${_ts_peer}" ] && break
+                    [ "${_ts_i}" -ge "${HUGMESH_ASSERT_PEER_WAIT:-0}" ] 2>/dev/null && break
+                    sleep 10
+                    _ts_i=$((_ts_i + 10))
+                done
+            fi
+            if [ -z "${_ts_peer}" ]; then
+                if [ "${_ts_key}" = authkey ]; then
+                    bad "mesh peers — joined with a fleet key but sees NO peer: the control node it joined is not in its netmap"
+                elif [ -n "${_ts_others}" ]; then
+                    bad "mesh peers — ${_ts_others} registered on this control node's headscale but none is in its netmap after ${_ts_i}s (routes not approved, tags not valid, or this node's own control session is dead: see 'headscale routes list', 'headscale nodes list -t', 'tailscale status')"
+                else
+                    skip "mesh peers — no fleet node has registered on this control node's headscale within ${_ts_i}s (a control node asserts before its fleet's workers join; re-run once they have, or stream HUGMESH_ASSERT_PEER_WAIT)"
+                fi
+            else
+                _ts_pip="${_ts_peer##* }"
+                # tailscale ping is a DISCO ping: it proves the peer is in the netmap and the
+                # path is live, not that the packet filter passes traffic to it.
+                if tailscale ping -c 10 --timeout 5s "${_ts_pip}" 2>&1 | grep 'pong from' >/dev/null; then
+                    ok "mesh peers — reaches ${_ts_peer% *} (${_ts_pip}) over the mesh client (tailscale ping: pong)"
+                else
+                    bad "mesh peers — ${_ts_peer% *} (${_ts_pip}) is in the netmap but does not answer tailscale ping"
+                fi
+                # Recorded, not graded: the product ACL (bootstrap and rendered alike) grants
+                # tag:hugmesh only dst 10.244.0.0/16:* and 10.96.0.0/12:*, never a node's own
+                # 100.64 address, so an ICMP ping through the filter is expected to time out.
+                if tailscale ping --icmp -c 3 --timeout 5s "${_ts_pip}" 2>&1 | grep 'pong from' >/dev/null; then
+                    echo "  INFO  mesh peers — ICMP through the packet filter to ${_ts_pip}: pong (the ACL admits node-to-node traffic)"
+                else
+                    echo "  INFO  mesh peers — ICMP through the packet filter to ${_ts_pip}: no pong (expected: the product ACL grants only the pod/service CIDRs)"
+                fi
+            fi
+            # What the product policy DOES grant: tag:hugmesh -> the pod/service CIDRs. A
+            # fleet node is in another's netmap only through an enabled, primary route of
+            # those (headscale 0.23 CanAccess), so every route this node advertises must be
+            # a primary route of some node in its netmap — this one or a peer (headscale
+            # moves the primary to a peer when the first advertiser goes offline).
+            if [ -n "${_ts_routes:-}" ]; then
+                for _ts_r in ${_ts_routes//,/ }; do
+                    _ts_by="$(tailscale status --json 2>/dev/null \
+                        | jq -r --arg r "${_ts_r}" '[(.Self // {}), ((.Peer // {})[])] | map(select(any((.PrimaryRoutes // [])[]; . == $r)) | (.HostName // "?")) | join(",")' 2>/dev/null)"
+                    if [ -n "${_ts_by}" ]; then
+                        ok "mesh routes — ${_ts_r} is served on the tailnet by ${_ts_by} (primary route: the ACL's only grant, and what puts fleet nodes in each other's netmap)"
+                    else
+                        bad "mesh routes — no node in this netmap serves ${_ts_r} as a primary route (not approved, or its only advertiser is offline: see 'headscale routes list' on the control node)"
+                    fi
+                done
+            fi
+        fi
+    fi
+}
+assert_mesh_client ""
 
 # ── TOR NODE CONTRACT (hugmesh-generator#583, decision 70 = B on #347) ──────────
 # One tor selection on a cluster-node role produces FOUR artefacts together, from one
@@ -558,11 +756,23 @@ assert_tor_node_contract() {  # $1 = root prefix ("" on the live guest); $2 = "l
     else
         bad "role ${_role}: /etc/tor/torrc has no managed 'HiddenServicePort 443 host:port' line — the reconcile never wrote it"
     fi
-    _h="$(tr -d '[:space:]' < "${_R}/var/lib/hugmesh/tor/hostname" 2>/dev/null)"
+    # Bounded wait, 30 x 2 s. These assertions start the moment sshd answers, which on a
+    # cold boot can be before tor has started; the product's boot oneshot leaves an
+    # export waiter behind (hugmesh-tor-reconcile --export-wait) that writes the hostname
+    # within seconds of tor minting it, so 60 s is generous for that path and still
+    # SHORTER than the old first export (the @reboot cron after `sleep 90`, which is what
+    # graded both rpi5 nodes "nothing was minted or exported" on 2026-11-04): a product
+    # regression back to the cron-only export stays red here.
+    _h=""
+    for _n in $(seq 1 30); do
+        _h="$(tr -d '[:space:]' < "${_R}/var/lib/hugmesh/tor/hostname" 2>/dev/null)"
+        [[ "${_h}" =~ ^[a-z2-7]{56}\.onion$ ]] && break
+        sleep 2
+    done
     if [[ "${_h}" =~ ^[a-z2-7]{56}\.onion$ ]]; then
         ok "role ${_role}: a v3 onion hostname is exported (${_h})"
     else
-        bad "role ${_role}: /var/lib/hugmesh/tor/hostname holds no v3 onion ('${_h}') — nothing was minted or exported"
+        bad "role ${_role}: /var/lib/hugmesh/tor/hostname holds no v3 onion ('${_h}') after a 60s wait — nothing was minted or exported (the boot oneshot's export waiter should have written it within seconds of tor starting; see /var/log/hugmesh-tor-reconcile.log)"
     fi
     # #614: the onion must be an Ingress host, or the edge answers 404. Only a
     # control-plane node (admin.conf) can admit it; the agent's own `status` asks the
