@@ -14,16 +14,26 @@ then `.hugmesh.cluster_domain`. It then **renders** the NAMED config templates
 into their live system locations and replaces the `@@CLUSTER_DOMAIN@@`
 placeholder with the node's domain.
 
-> **Delivery note (corrected).** The `provision_desktop_governance()` function
-> renders only its *named* templates through `render_gov`. It has **no generic
-> loop** and does **not** touch `/etc/xdg/autostart`. Neither the function nor
-> the x86 builder (`build-x86-host-stage4.sh`) currently *bakes* this directory
-> into the sysroot. Today the only working delivery is the **KEYS-USB
-> fallback**: put `KEYS/desktop-governance/` on the (read-only) KEYS stick, and
-> `provision_desktop_governance()` finds it through its
-> `${BASE}/desktop-governance` branch. (A ready copy of the templates is in
-> `keys-template/desktop-governance/`.) The earlier claim that "the build copies
-> this whole dir into the sysroot" was stale and false.
+> **Delivery note (2026-11-04).** The desktop builders now **bake** this
+> directory into the sysroot whenever the greeter SSO path is ON
+> (`scripts/_desktop-sso-lib.sh` `desktop_sso_bake`, called by
+> `build-x86-host-stage4.sh` for the client roles and by `build-frite-stage4.sh`
+> for `--desktop light`; `--skip-sso` / `--no-sso` bakes nothing here and the
+> image stays ungoverned). `provision_desktop_governance()` still renders only
+> its *named* templates through `render_gov`, and at its end it now runs the
+> baked `autostart/session-install.sh.tmpl`, which renders the GEN-SSO pieces
+> (producer, deposit, session wrapper, XDG autostart). The **KEYS-USB fallback**
+> (`KEYS/desktop-governance/`, found through `${BASE}/desktop-governance`; a
+> ready copy is in `keys-template/desktop-governance/`) and the KEYS `run[]`
+> hook keep working and are idempotent beside the baked path.
+>
+> **The login itself** (SSO at the lightdm greeter, offline cache, account
+> mapping) is a separate, always-baked piece: `specs/etc/pam.d/lightdm` +
+> `specs/usr/lib/hugmesh/sso-greeter`, documented in
+> `docs/DESKTOP-LOGIN-SSO.md`. Its verified token is handed to this chain's
+> drop (`${XDG_RUNTIME_DIR}/hugmesh/oidc-token.src`) at session open, so
+> `hugmesh-sso-token login --if-needed` finds it and no second device prompt
+> appears in the session.
 
 The host is resolved at first boot from the baked domain marker. The config is
 therefore correctly domain-parameterized whether or not `rebrand_sysroot` ran at

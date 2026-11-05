@@ -387,6 +387,12 @@ stack locally (`stack`) or join a tailnet as a dockerized mesh node (`mesh`):
 ## Mesh / SSO toggles, distfiles, live ISO
 
 - `--with/--no-tailscale`, `--with/--no-sso` — force the tailnet agent or the Casdoor login ON or OFF on any role.
+  `--with/--no-sso` now bakes the greeter SSO path (`/etc/pam.d/lightdm` +
+  `/usr/lib/hugmesh/sso-greeter`, `SSO_ENABLED` in `/etc/hugmesh/sso-greeter.conf`)
+  instead of only changing a plan line; with SSO off the greeter says so and the
+  local password login is untouched. The Frite builder takes the same flags. See
+  `docs/DESKTOP-LOGIN-SSO.md` for the user flow, the offline cache and what a boot
+  must still prove.
 - `--distdir DIR` (or auto-detect `/media/*`) — reuse a Gentoo distfiles cache from a mounted drive (safe on a read-only USB), to skip re-downloads or build offline.
 - `--live-toram` (default) — the live ISO gets a **Copy to RAM (removable)** boot entry, so you can pull the stick after boot.
 

@@ -40,6 +40,12 @@ source "${SCRIPT_DIR}/scripts/_roles-lib.sh"
 # drop a requested artifact hours in. See scripts/_host-guard-lib.sh.
 # shellcheck source=scripts/_host-guard-lib.sh
 source "${SCRIPT_DIR}/scripts/_host-guard-lib.sh"
+# Greeter SSO login path for the client roles (desktop_sso_bake / desktop_sso_verify):
+# the lightdm PAM stack with the device-flow helper, the greeter hint, and the baked
+# desktop-governance templates. --skip-sso / --no-sso bake it OFF (the greeter says
+# so); this is what makes SKIP_SSO do something. See scripts/_desktop-sso-lib.sh.
+# shellcheck source=scripts/_desktop-sso-lib.sh
+source "${SCRIPT_DIR}/scripts/_desktop-sso-lib.sh"
 # Per-board binpkg-pool fingerprint guard (shared-binpkg track): the load-bearing
 # SIGILL safety net over directory isolation — REFUSES --usepkg reuse of a pool
 # whose (CHOST + exact CFLAGS/-mcpu + profile) fingerprint != this build's.
@@ -4982,6 +4988,19 @@ if ${ROLE_CLIENT}; then
 greeter-session=lightdm-gtk-greeter
 user-session=${_user_session}
 LIGHTDM
+    # Greeter SSO login path (scripts/_desktop-sso-lib.sh): /etc/pam.d/lightdm with
+    # the Casdoor/OIDC device-flow helper in front of the local password path, the
+    # hint the greeter shows, and (SSO on) the baked desktop-governance templates
+    # (a KEYS-provisioned image is then GOVERNED). SKIP_SSO (--skip-sso / --no-sso /
+    # standalone default) bakes SSO_ENABLED=false: the greeter says SSO is off and
+    # the local password login is untouched. UNAFFILIATED: nothing (plain Gentoo).
+    # Staged pre-emerge so CONFIG_PROTECT keeps the stack; asserted post-emerge.
+    if ! ${UNAFFILIATED}; then
+        desktop_sso_bake "${SYSROOT}" "${SHARED_SPECS}" \
+            "$(${SKIP_SSO} && echo false || echo true)" "${CLUSTER_DOMAIN}" "${BRAND_TITLE}" \
+            "$(${STANDALONE} && echo standalone || echo mesh)" \
+            || { err "greeter SSO bake failed (see above)"; exit 1; }
+    fi
     # External media-data device (Steam library + gocryptfs Vaults). Default ON,
     # configurable + optional. Render the config + install the boot-time detector
     # that finds the SEPARATE data disk by LABEL or by the marker dirs and mounts
@@ -7187,6 +7206,13 @@ else
     # --skip-clean but printed nothing, so the Clean-sysroot rung silently
     # vanished from the operator's ladder instead of reporting itself skipped.
     banner "SKIPPED sysroot clean (--skip-clean)"
+fi
+
+# ── Greeter SSO stack survived the payload emerge? ─────────────────────────────
+# x11-misc/lightdm installs its own /etc/pam.d/lightdm; CONFIG_PROTECT must have
+# parked it (._cfg0000_lightdm, removed here), not replaced ours. Client roles only.
+if ${ROLE_CLIENT} && ! ${UNAFFILIATED}; then
+    desktop_sso_verify "${SYSROOT}" || { err "greeter SSO stack did not survive the payload emerge — refusing to ship a greeter with no SSO path"; exit 1; }
 fi
 
 # ── 9. Stage4 tarball ──────────────────────────────────────────────
