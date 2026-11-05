@@ -14,7 +14,9 @@
 #      accept — a wall hours into a build. (NEGATIVE control below.)
 #   2. the kernel channel: VIRTIO_CONSOLE (/dev/virtio-ports/com.redhat.spice.0)
 #      and INPUT_UINPUT under INPUT_MISC (/dev/uinput). The ebuild's CONFIG_CHECK
-#      is `~` (warn-only), so emerge goes green and the daemon ships inert.
+#      is `~` (warn-only), so emerge goes green and the daemon ships inert. Those
+#      fragments are guarded by tests/scripts/test-virtual-display-kernel.sh,
+#      not here.
 #   3. the session-side applier specs/usr/libexec/hugmesh/vm-autofit and its
 #      xdg autostart entry, plus the conditional spice-vdagentd starter in
 #      local.d — COPIED by each desktop builder (nothing copies specs/ wholesale,
@@ -98,10 +100,10 @@ else
   echo "  SKIP tree check (no /var/db/repos/gentoo on this host)"
 fi
 
-KCFG=specs-x86/kernel/desktop.config
-for sym in CONFIG_VIRTIO_CONSOLE CONFIG_INPUT_MISC CONFIG_INPUT_UINPUT; do
-  has_line "$KCFG" "^enable ${sym}$" && ok "$KCFG enables ${sym}" || bad "$KCFG does not enable ${sym}"
-done
+# The guest KERNEL side (virtio-gpu, virtio-input, uinput under INPUT_MISC, and
+# VIRTIO_CONSOLE for the vdagent port) is owned and guarded by
+# tests/scripts/test-virtual-display-kernel.sh across all five boards; only the
+# one x86 line this suite's resize claim leans on is restated here.
 has_line specs-x86/kernel/hardened-k8s.config '^enable CONFIG_DRM_VIRTIO_GPU$' && ok "x86 base fragment keeps CONFIG_DRM_VIRTIO_GPU (the resizable display)" || bad "x86 base fragment lost CONFIG_DRM_VIRTIO_GPU"
 
 for f in "$AUTOFIT" "$STARTER"; do
@@ -270,7 +272,7 @@ try_mut "qxl no longer matched"                            "$AUTOFIT" 's/virtio_
 try_mut "current-mode skip removed (racing mode-sets)"     "$AUTOFIT" 's/\[ "$(current_mode "${out}")" = "${mode}" \] \&\& return 0/:/' battery
 try_mut "connected check removed"                          "$AUTOFIT" 's/= "connected" \] || continue/= "nonsense" ] || :/'      battery
 try_mut "--auto dropped from the xrandr call"              "$AUTOFIT" 's/--output "${out}" --auto/--output "${out}"/'            battery
-try_mut "DISPLAY guard removed (loops with no X server)"  "$AUTOFIT" 's/^\[ -n "${DISPLAY:-}" \] || \[ -n "${ONCE}" \] || exit 0$/:/' no_display_exits
+try_mut "DISPLAY guard removed (loops with no X server)"  "$AUTOFIT" '/^\[ -n "${DISPLAY:-}" \] ||/d'                  no_display_exits
 try_mut "starter: char-device gate removed"                "$STARTER" 's/^\[ -c "${PORT}" \] ||/true ||/'                        starter_battery
 try_mut "starter: starts nothing"                          "$STARTER" 's/^rc-service --ifnotstarted spice-vdagent start$/:/'    starter_battery
 echo "  mutations: ${caught} caught / ${survived} survived"
