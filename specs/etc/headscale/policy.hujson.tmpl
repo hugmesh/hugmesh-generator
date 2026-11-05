@@ -15,9 +15,9 @@
   // strings appear EXACTLY ONCE each (at their splice point) — they are NOT
   // repeated in prose (an awk gsub would otherwise corrupt these comments). The
   // two markers are:
-  //   * the tagOwners-dynamic marker — the per-node tag:dev_<fp> + per-domain
-  //       tag:dom_<domain> owners (all owned by the control "hugmesh" user;
-  //       NEVER self-applyable — they are SERVER-FORCED via
+  //   * the tagOwners-dynamic marker — tag:mesh_<MESH_ID> plus one
+  //       tag:dev_<fp> per export node, each with an EMPTY owner list (no user
+  //       may self-apply them; they are SERVER-FORCED via
   //       hugmesh-headscale-forcetags at approval).
   //   * the ssh-edges marker — EXACTLY the predicate-permitted ssh accepts (one
   //       per export node: src=advisory tag:hugmesh, dst=tag:dev_<fp>,
@@ -26,8 +26,9 @@
   //       users:[<ssh user>]).
   //
   // The FOUR FIXES embodied here:
-  //   [FIX-SERVERTAG]  security dst tags are server-forced, listed as control-
-  //                    owned in tagOwners (no node self-advertises them).
+  //   [FIX-SERVERTAG]  security tags are server-forced and OWNED BY NO USER in
+  //                    tagOwners (empty owner list), so no node can self-
+  //                    advertise them. See "Who may apply which tags" below.
   //   [FIX-DROPMESHRULE] the any-to-any tag:hugmesh -> tag:hugmesh:* rule
   //                    is ABSENT; only the 10.244/10.96 CIDR data-plane rule is
   //                    kept (k8s, not SSH).
@@ -41,17 +42,34 @@
   // hujson = JSON + comments + trailing commas; headscale parses it natively.
 
   // ── Who may apply which tags ──────────────────────────────────────────────
-  // tag:hugmesh stays self-applied (data-plane membership: CIDR rule + route
-  // auto-approval ONLY; it is NO LONGER a :22 src/dst). tag:superadmin is
-  // control-owned + force-assigned to superadmin OPERATOR identities only. The
-  // dynamic per-node/per-domain tag owners are spliced at the marker below.
+  // Two classes, and they must never share an owner:
+  //
+  //   MEMBERSHIP tags — tag:hugmesh + the role tags tag:pki/be/fe/host. Owned
+  //   by "hugmesh", the MEMBERSHIP user every pre-auth key is minted for
+  //   (keys-provision, the Studio's --mint, the web issuer). A node self-applies
+  //   them at join. tag:hugmesh is data-plane membership only (CIDR rule + route
+  //   auto-approval; it is NOT a :22 dst).
+  //
+  //   SECURITY tags — tag:superadmin, tag:mesh_*, tag:dev_*, tag:dom_*. Owned by
+  //   NO user (empty owner list). headscale 0.23 gives a node the UNION of its
+  //   forced tags and every requested tag whose owner is the node's user; a
+  //   forced tag does NOT cancel a different advertised one. So if the
+  //   membership user owned a security tag, any holder of a pre-auth key could
+  //   advertise it and be granted it. With no owner, an advertised security
+  //   tag is always invalid, and the only way a node gets one is
+  //   `headscale nodes tag` on the control node (hugmesh-headscale-forcetags),
+  //   which does not consult tagOwners. Never put a user or group here.
+  //
+  // tag:superadmin is force-assigned only to machine keys listed in
+  // /etc/hugmesh/registry/superadmin-machines.txt. tag:mesh_<id> and the
+  // per-node tag:dev_<fp> owners are spliced at the marker below.
   "tagOwners": {
     "tag:hugmesh": ["hugmesh"],
     "tag:pki": ["hugmesh"],
     "tag:be": ["hugmesh"],
     "tag:fe": ["hugmesh"],
     "tag:host": ["hugmesh"],
-    "tag:superadmin": ["hugmesh"]@@HUGMESH_TAGOWNERS_DYNAMIC@@
+    "tag:superadmin": []@@HUGMESH_TAGOWNERS_DYNAMIC@@
   },
 
   // ── Subnet-route auto-approval (UNCHANGED) ────────────────────────────────
