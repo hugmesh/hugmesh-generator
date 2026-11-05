@@ -45,7 +45,8 @@ import time
 from dataclasses import asdict, dataclass, field, fields
 from typing import NamedTuple
 
-from . import brand_model, domain_reach, look_serving, own_casdoor, reach_apply, theme
+from . import (brand_model, domain_reach, look_serving, own_casdoor, platform_info,
+               reach_apply, theme)
 from .config import DOMAIN_FIELDS, IDP_CHOICES, IDP_LABELS, _IDP_CLIENT_ID_RE, _IDP_URL_RE, \
     domain_signin_problems, effective_signin, github_org_problem, has_external_signin, \
     idp_effective_jwks
@@ -982,6 +983,16 @@ class LocalMeshBootstrap:
         return bool(os.environ.get("KUBERNETES_SERVICE_HOST")) or \
             os.path.exists("/var/run/secrets/kubernetes.io")
 
+    @staticmethod
+    def teardown_refusal(osname: str | None = None) -> str:
+        """Why Stop / 'Stop && clean Docker' / Restore cannot run in a NATIVE Windows
+        Studio (the MSI): the WSL2 sentence 'Generate && start' already gives ("" anywhere
+        else). Those three never reached guard_host_local, so they failed with a raw
+        "[WinError 2]" (or advised 'Generate && start', which refuses there too). Public
+        so the page can ask BEFORE its destructive confirmation. ``osname`` is
+        ``os.name`` unless a test passes another."""
+        return platform_info.native_windows_blocker("The local stack", osname=osname)
+
     def guard_host_local(self) -> tuple[bool, str]:
         """Refuse unless this is a host-local run with docker/compose/make present.
         Reuses LocalStackNode.available() (make + compose + stack file) and, when the
@@ -1856,7 +1867,8 @@ class LocalMeshBootstrap:
                   f"| Casdoor issuer: {self.cfg.issuer()}")
         return ok, log
 
-    def restore(self, rec, on_line=None, cancel=None) -> tuple[bool, list[str]]:
+    def restore(self, rec, on_line=None, cancel=None,
+                osname: str | None = None) -> tuple[bool, list[str]]:
         """The COLD restore (saved-mesh case 2: volumes gone, after 'Stop && clean
         Docker'): the :meth:`up` sequence MINUS ``generate_creds``.
 
@@ -1875,6 +1887,13 @@ class LocalMeshBootstrap:
             log.append(line)
             if on_line is not None:
                 on_line(line)
+        # FIRST on native Windows, as start_saved does: the checks below end in advice
+        # ('Generate && start') that refuses there too, and _prepare (the only other
+        # place restore meets guard_host_local) comes after them.
+        blocker = self.teardown_refusal(osname)
+        if blocker:
+            _note(blocker)
+            return False, log
         missing = [p for p in rec.credential_copies() if not os.path.isfile(p)]
         if missing:
             _note("[restore] refused — this record declares saved credential files "
@@ -1950,11 +1969,16 @@ class LocalMeshBootstrap:
             time.sleep(1)
         return stack.onion_url()
 
-    def down(self) -> tuple[bool, list[str]]:
+    def down(self, osname: str | None = None) -> tuple[bool, list[str]]:
         """Stop BOTH composed projects: the stack (``make stack-halt`` — the
         volumes are KEPT, see LocalStackNode.stop) + the mesh overlay
         (LocalMeshNode.stop()). ``clean()`` is the one that drops volumes."""
         log: list[str] = []
+        blocker = self.teardown_refusal(osname)
+        if blocker:
+            # One sentence, nothing touched: a mesh seen here was started from the WSL2
+            # Studio on the same Docker engine, and that Studio is the one to stop it.
+            return False, [blocker]
         stack = self._stack_node()
         # WHAT the stop did, in words. `make stack-down` echoes its whole STACK_ENV
         # command line and compose says nothing when there is nothing to remove, so a
@@ -1973,12 +1997,21 @@ class LocalMeshBootstrap:
         log.append(f"[mesh-overlay down] {'ok' if ok_mesh else 'FAILED'}: {_tail(msg)}")
         return (ok_stack and ok_mesh), log
 
-    def clean(self, on_line=None, cancel=None) -> tuple[bool, list[str]]:
+    def clean(self, on_line=None, cancel=None,
+              osname: str | None = None) -> tuple[bool, list[str]]:
         """Tear down AND reclaim disk: the mesh overlay stops, then `make stack-clean`
         removes the stack's containers, volumes and the images it built. DESTRUCTIVE
         by design (every caller confirms first) — the next bring-up is a cold build.
         Never touches images this stack did not build."""
         log: list[str] = []
+        blocker = self.teardown_refusal(osname)
+        if blocker:
+            # Before the overlay stop too: half a teardown (overlay down, stack left)
+            # is worse than none. Streamed as well, since a streaming caller drops the
+            # returned log.
+            if on_line is not None:
+                on_line(blocker)
+            return False, [blocker]
         ok_mesh, msg = self._mesh_node().stop()
         log.append(f"[mesh-overlay down] {'ok' if ok_mesh else 'FAILED'}: {_tail(msg)}")
         ok_stack, msg = self._stack_node().clean(on_line=on_line, cancel=cancel)
@@ -2594,4 +2627,8 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
+    # UTF-8 stdout/stderr on native Windows, as app.main() does: a redirected cp1252
+    # stream raised UnicodeEncodeError on a checkout path such as C:\Users\Łukasz.
+    from ..app import utf8_stdio
+    utf8_stdio()
     raise SystemExit(main())

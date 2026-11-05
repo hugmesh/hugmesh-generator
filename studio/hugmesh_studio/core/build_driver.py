@@ -57,6 +57,18 @@ DOCKER_ASSET_FIELDS: tuple[str, ...] = (
     "secureboot_key", "secureboot_cert", "keys_usb", "distdir",
 )
 
+# More host-path flags the docker backend must mount, kept OUT of DOCKER_ASSET_FIELDS
+# because that list also feeds preflight's BLOCKING existence check (_PATH_MUST_EXIST):
+# these flags are emitted under more conditions than the platform table knows (brand args
+# are dropped for the unaffiliated role, home flags ride home mode), so a stale value would
+# false-block a build that never receives it. A missing one is refused by the builder's
+# own preflight instead. Their /assets/<i>/ index continues after DOCKER_ASSET_FIELDS;
+# append at the END for the same reason.
+DOCKER_EXTRA_ASSET_FIELDS: tuple[str, ...] = (
+    "grub_theme", "brand_profile", "home_seed_code_from", "include_home_archive",
+    "seed_packages_from",
+)
+
 # Path-valued fields that must EXIST on the host or the build is stopped BEFORE dispatch.
 # Derived from DOCKER_ASSET_FIELDS because the two lists are siblings and drifted together:
 # the same four fields were missing from BOTH, so a mistyped signing key was neither mounted
@@ -116,6 +128,38 @@ def _host_tool_present(*names: str) -> bool:
         if any(os.access(os.path.join(d, n), os.X_OK) for d in _SBIN_DIRS):
             return True
     return False
+
+
+def windows_docker_remedy(osname: str | None = None, docker_cli: bool | None = None,
+                          host: HostInfo | None = None) -> str:
+    """How to get a build backend on the native Windows Studio (the MSI), "" elsewhere.
+
+    Docker is its only backend, and Docker Desktop does not start with Windows by
+    default, so the usual cause is an installed but stopped Docker Desktop: the generic
+    "install Docker ... or run on a Gentoo host" told that user to install what they
+    have, plus a host the MSI cannot use. ``host`` lends its probe result (down / timeout
+    have their own wording in HostInfo.docker_remedy); ``docker_cli`` is whether
+    docker.exe is on PATH (probed when None); ``osname`` is ``os.name`` unless a test
+    passes another."""
+    if (osname or os.name) != "nt":
+        return ""
+    alt = ("Or run the Linux build of the Studio inside WSL2, with Docker Desktop's WSL "
+           "integration turned on for that distro.")
+    state = getattr(host, "docker_state", "")
+    if host is not None and state in (platform_info.DOCKER_DOWN, platform_info.DOCKER_TIMEOUT):
+        return host.docker_remedy() + " " + alt
+    if docker_cli is None:
+        docker_cli = (state != platform_info.DOCKER_MISSING
+                      and shutil.which("docker") is not None)
+    # Docker is probed once, at Studio start (wizard.host), and nothing re-asks before a
+    # restart: "check again" alone would show the same blocker forever.
+    if docker_cli:
+        return ("docker.exe is installed but the Docker engine does not answer: start "
+                "Docker Desktop, wait until it says the engine is running, then restart "
+                "the Studio so it checks again. " + alt)
+    return ("docker.exe was not found: install Docker Desktop "
+            "(https://www.docker.com/products/docker-desktop/), start it, then restart "
+            "the Studio so it checks again. " + alt)
 
 
 def docker_limit_args() -> list[str]:
@@ -518,14 +562,27 @@ class BuildDriver:
         import copy
         dcfg = copy.deepcopy(cfg)
         mounts: list[str] = []
-        gen = self.generator_dir + os.sep
-        for i, field in enumerate(DOCKER_ASSET_FIELDS):
+        # normcase: on Windows "c:\..." and "C:/..." name the same checkout file.
+        gen = os.path.normcase(self.generator_dir + os.sep)
+        for i, field in enumerate(DOCKER_ASSET_FIELDS + DOCKER_EXTRA_ASSET_FIELDS):
             p = getattr(dcfg, field, "")
             if not p:
                 continue
+            # Resolved against the Studio's cwd, the same base preflight's existence check
+            # uses, so the file preflight approved is the file the container gets.
             ap = os.path.abspath(p)
-            if ap.startswith(gen):
-                continue  # already under /src, reachable in-container
+            if os.path.normcase(ap).startswith(gen):
+                # Reachable through the /src mount, but NOT at its host spelling (on
+                # Windows that is not even a POSIX path), so the builder's [ -f ] guard
+                # would skip it.
+                rel = os.path.relpath(ap, self.generator_dir)
+                setattr(dcfg, field, "/src/" + rel.replace(os.sep, "/"))
+                continue
+            if field in DOCKER_EXTRA_ASSET_FIELDS and not os.path.exists(ap):
+                # Not preflight-checked (see DOCKER_EXTRA_ASSET_FIELDS), and `docker run -v`
+                # with a missing source creates an empty dir there. Leave the value as is
+                # for the builder's own "not found" refusal.
+                continue
             cpath = f"/assets/{i}/{os.path.basename(ap.rstrip(os.sep))}"
             mounts += ["-v", f"{ap}:{cpath}:ro"]
             setattr(dcfg, field, cpath)
@@ -765,8 +822,13 @@ class BuildDriver:
         """Return a list of human-readable problems that would stop a build (empty = OK)."""
         backend = backend or self.host.default_backend
         problems: list[str] = []
+        # Only for a host detected as Windows: a WSL host keeps its own remedy (the
+        # per-distro WSL-integration checkbox), and Linux keeps the generic sentence.
+        win_docker = windows_docker_remedy(host=self.host) if self.host.os == "windows" and (
+            backend == "none" or (backend == "docker" and not self.host.has_docker)) else ""
         if backend == "none":
-            problems.append("No build backend: install Docker (any OS) or run on a Gentoo host.")
+            problems.append(("No build backend: " + win_docker) if win_docker else
+                            "No build backend: install Docker (any OS) or run on a Gentoo host.")
         if not os.path.exists(os.path.join(self.generator_dir, cfg.builder_script)):
             problems.append(f"builder script {cfg.builder_script} not found in {self.generator_dir}"
                             + (" (Jetson support is EXPERIMENTAL — hardware validation pending)"
@@ -776,8 +838,12 @@ class BuildDriver:
             # daemon on the Windows side and exposes it per distro, so `docker info`
             # fails with a bare connection error that names neither Docker Desktop nor
             # the WSL-integration checkbox that actually caused it.
-            problems.append("Docker selected but the Docker daemon is not reachable. "
-                            + self.host.docker_remedy())
+            # A timed-out probe is "slow", not "unreachable": its remedy states the
+            # symptom itself (as HostInfo.docker_blocker does).
+            slow = win_docker and self.host.docker_state == platform_info.DOCKER_TIMEOUT
+            problems.append(("Docker selected. " if slow else
+                             "Docker selected but the Docker daemon is not reachable. ")
+                            + (win_docker or self.host.docker_remedy()))
         elif backend == "docker" and not self._image_present():
             problems.append(
                 f"Docker builder image '{self.host.builder_image}' not found — build it "

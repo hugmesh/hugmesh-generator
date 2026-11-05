@@ -45,7 +45,7 @@ from ...core.config import (
     MODE_DEFAULT_ROLE, ROLE_CHOICES, User, enter_mesh_defaults, image_class,
     normalize_user_roles,
 )
-from ...core import saved_meshes
+from ...core import platform_info, saved_meshes
 from ...core.local_mesh_bootstrap import (
     LocalMeshBootstrap, LocalMeshIdentity, localcloud_tor_note, saved_mesh_choice_text,
     saved_mesh_source,
@@ -169,12 +169,30 @@ def local_k8s_running(generator_dir: str) -> bool:
     return LocalMeshBootstrap(generator_dir)._stack_node().devops_running()
 
 
+def k8s_teardown_blocker(osname: str | None = None) -> str:
+    """WHY this page cannot delete the cluster itself, "" where it can.
+
+    Native Windows only: `make kind-down` is a make recipe running bash, so the spawn
+    failed with a raw WinError 2. A native kind.exe CAN still see a cluster on the
+    shared Docker Desktop engine (one created from WSL2, say), so the gate is armed
+    there and the page must say how to get past it instead of offering a button
+    that can only fail."""
+    return platform_info.native_windows_blocker(
+        "Deleting the local Kubernetes cluster", osname=osname)
+
+
 def local_k8s_teardown(generator_dir: str, on_line=None,
                        cancel=None) -> tuple[bool, str]:
     """`make kind-down` — delete the local Kubernetes cluster. Destructive for the
     DevOps lane ONLY: the docker mesh and every one of its volumes are untouched.
     Same single-symbol override point as ``local_k8s_running``; streams and cancels because it
     is always run off the GUI thread (see LocalCloudNodesPage._stop_k8s)."""
+    blocker = k8s_teardown_blocker()
+    if blocker:
+        # the page already disables the button; this is the refusal for any other caller
+        if on_line is not None:
+            on_line(blocker)
+        return False, blocker
     return LocalMeshBootstrap(generator_dir)._stack_node().devops_down(
         on_line=on_line, cancel=cancel)
 
@@ -373,7 +391,8 @@ class LocalCloudNodesPage(QtWidgets.QWizardPage):
         start and end) routes through here, so the button, the sentence under it and
         whether Next is available can never disagree with each other."""
         acked = self.confirm.isChecked()
-        self.down_btn.setEnabled(acked and self._k8s_up is True and not self._running)
+        self.down_btn.setEnabled(acked and self._k8s_up is True and not self._running
+                                 and not self._teardown_blocker())
         self.gate_note.setText(self._gate_text())
         self.completeChanged.emit()
 
@@ -385,11 +404,28 @@ class LocalCloudNodesPage(QtWidgets.QWizardPage):
         if self._k8s_up is None:
             return "Checking whether the local Kubernetes (DevOps) lane is running…"
         if self._k8s_up:
+            blocker = self._teardown_blocker()
+            if blocker:
+                # The button cannot run here, so the way past the gate is to delete
+                # the cluster where `make` runs and re-enter (initializePage re-probes).
+                return (f"The local Kubernetes (DevOps) lane is RUNNING. {blocker} "
+                        "To continue here, delete the cluster from WSL2 (`make "
+                        "kind-down` in a hugmesh-generator checkout there), then press "
+                        "Back and Next — this page checks again on entry, and Next "
+                        "stays disabled until the cluster is gone.")
             return ("The local Kubernetes (DevOps) lane is RUNNING. Confirm above, "
-                    "then press “Stop Kubernetes now” — Next stays disabled "
-                    "until the cluster is gone.")
+                    "then press “Delete the Kubernetes cluster now” — Next stays "
+                    "disabled until the cluster is gone.")
         return ("No local Kubernetes cluster is running — there is nothing to stop. "
                 "Next stays disabled until you confirm.")
+
+    def _teardown_blocker(self) -> str:
+        """k8s_teardown_blocker for the host the WIZARD detected (native Windows is
+        os "windows"; WSL reports "linux"), so a test that pins the host pins this too."""
+        host = getattr(self.wiz, "host", None)
+        if host is None:
+            return k8s_teardown_blocker()
+        return k8s_teardown_blocker("nt" if host.os == "windows" else "posix")
 
     def _start_k8s_probe(self):
         if probe_running(self, "_k8s_probe"):
@@ -412,6 +448,9 @@ class LocalCloudNodesPage(QtWidgets.QWizardPage):
     def _stop_k8s(self):
         if self._running or not self.confirm.isChecked():
             return                           # never without the explicit consent
+        if self._teardown_blocker():
+            self._sync_gate()                # the note already says why and what to do
+            return
         self._running = True
         self.log.clear()
         self.log.setVisible(True)

@@ -71,6 +71,11 @@ DEFAULT_CTX = 16384
 STALE_AFTER = 30.0
 
 DOC = "docs/LOCAL-AI-ASSISTANT.md"
+#: The same doc where a native Windows Studio can open it: the MSI ships no checkout,
+#: so the relative path above names a file that is not on that machine.
+DOC_URL = "https://github.com/hugmesh/hugmesh-generator/blob/main/docs/LOCAL-AI-ASSISTANT.md"
+#: Where Ollama for Windows comes from (the doc's own "macOS and Windows" line).
+OLLAMA_DOWNLOAD = "https://ollama.com/download"
 
 
 class LocalAIError(RuntimeError):
@@ -421,15 +426,23 @@ def _probe(env: dict | None, timeout: float) -> tuple[bool, list, list, str]:
     return True, models, loaded, ""
 
 
+def _native_windows(osname: str | None) -> bool:
+    """A NATIVE Windows Studio (the MSI, or a source run under PowerShell), where
+    ``scripts/local-ai.sh`` is a bash script nobody can run and the doc path is not on
+    disk. ``osname`` is ``os.name`` unless a test passes another."""
+    return (os.name if osname is None else osname) == "nt"
+
+
 def read_snapshot(env: dict | None = None, *, now: float | None = None,
                   probe: Callable[[], tuple] | None = None,
                   builds: Callable[[], list] | None = None,
-                  timeout: float = 2.0) -> Snapshot:
+                  timeout: float = 2.0, osname: str | None = None) -> Snapshot:
     """Read the local-AI state directory, ask the loopback Ollama what it has loaded
     and list the Studio's running builds. Never raises.
 
     ``probe`` and ``builds`` replace the two outside lookups (tests, and callers that
-    already hold the answer); ``now`` pins the clock for the heartbeat rule.
+    already hold the answer); ``now`` pins the clock for the heartbeat rule; ``osname``
+    is ``os.name`` unless a test passes another (it picks the Windows sentences).
     """
     env = os.environ if env is None else env
     now = time.time() if now is None else now
@@ -466,14 +479,26 @@ def read_snapshot(env: dict | None = None, *, now: float | None = None,
     snap.counts = counts
     snap.jobs = queue_jobs + drafts + list(builds_rows)
 
+    windows = _native_windows(osname)
+    if windows:
+        snap.doc = DOC_URL
     if not snap.problem:
         if not snap.ollama_up:
-            if snap.ollama_installed:
+            # On native Windows the bash script is not runnable (the MSI has no checkout
+            # and no bash) and the CLI prints no link for "see the link": name the
+            # Windows installer itself, which starts Ollama in the background. In Docker
+            # mode the Studio's container is the fix, whatever is installed.
+            fix = _windows_up_fix(snap.host, env, snap.ollama_installed) if windows else ""
+            if fix == _WINDOWS_CONTAINER:
+                snap.problem = f"The Studio's Ollama container is not answering on {snap.host}."
+                snap.fix = fix
+            elif snap.ollama_installed:
                 snap.problem = f"Ollama is installed but is not answering on {snap.host}."
-                snap.fix = "Start it with: scripts/local-ai.sh up"
+                snap.fix = fix or "Start it with: scripts/local-ai.sh up"
             else:
                 snap.problem = "Ollama is not installed on this machine."
-                snap.fix = ("Install it (see the link), then run: scripts/local-ai.sh up")
+                snap.fix = (_WINDOWS_INSTALL if windows else
+                            "Install it (see the link), then run: scripts/local-ai.sh up")
         elif not snap.models:
             snap.problem = "Ollama is running but no model is pulled."
             snap.fix = f"Pull one: ollama pull {DEFAULT_MODEL}"
@@ -631,10 +656,37 @@ def pick_model(env: dict | None = None, available: Iterable[str] | None = None) 
     return (usable or names)[0]
 
 
-def _down_message(env: dict | None) -> str:
+#: The not-installed fix on native Windows: the installer starts Ollama in the
+#: background, so there is no second step to run.
+_WINDOWS_INSTALL = (f"Install Ollama for Windows from {OLLAMA_DOWNLOAD}; it then runs "
+                    f"in the background and answers on {DEFAULT_HOST}.")
+_WINDOWS_START = "Start Ollama for Windows from the Start menu."
+_WINDOWS_CONTAINER = ("Start the Studio's Ollama container (Start local assistant, or "
+                      "start in the text UI).")
+
+
+def _windows_up_fix(host: str, env, installed: bool) -> str:
+    """How to bring up the Ollama at ``host`` in a native Windows Studio. The status
+    read and the not-answering message both use it, so they cannot drift apart. The
+    Studio's Docker Ollama is told apart by its port (OLLAMA_HOST is pointed at it in
+    Docker mode): there Ollama for Windows, installed or not, is not the fix."""
+    from . import ollama_docker as odk
+    if host == odk.endpoint(odk.DOCKER, env if env is not None else os.environ):
+        return _WINDOWS_CONTAINER
+    return _WINDOWS_START if installed else _WINDOWS_INSTALL
+
+
+def _down_message(env: dict | None, osname: str | None = None) -> str:
     host = _hostport(*ollama_host(env))
-    return (f"Ollama is not answering on {host}. Start it with scripts/local-ai.sh up "
-            f"(see {DOC}).")
+    if not _native_windows(osname):
+        return (f"Ollama is not answering on {host}. Start it with scripts/local-ai.sh up "
+                f"(see {DOC}).")
+    # Native Windows: no bash script, and "Start it" was said even when the status
+    # check had just reported Ollama as not installed.
+    fix = _windows_up_fix(host, env, shutil.which("ollama") is not None)
+    if fix == _WINDOWS_INSTALL:
+        fix = f"Ollama is not installed on this machine. {fix}"
+    return f"Ollama is not answering on {host}. {fix} (See {DOC_URL}.)"
 
 
 def _context_size(env: dict) -> int:
@@ -1007,4 +1059,8 @@ def main(argv: list | None = None, *, out=None, err=None, inp=None) -> int:
 
 
 if __name__ == "__main__":
+    # UTF-8 stdout/stderr on native Windows, as app.main() does: a redirected cp1252
+    # stream raised UnicodeEncodeError on a checkout path such as C:\Users\Łukasz.
+    from ..app import utf8_stdio
+    utf8_stdio()
     raise SystemExit(main())

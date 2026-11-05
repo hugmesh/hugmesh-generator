@@ -1121,7 +1121,7 @@ def _der_parse_error(der: bytes) -> str:
     return ""
 
 
-def ca_cert_error(path: str) -> str:
+def ca_cert_error(path: str, osname: str | None = None) -> str:
     """The ONE fail-closed rule for ONE base CA certificate file: "" when the file is
     a PEM certificate, else a LAY-USER sentence naming what is wrong.
 
@@ -1135,9 +1135,18 @@ def ca_cert_error(path: str) -> str:
     importable (see :func:`_der_parse_error`). Without that optional wheel a
     well-framed non-certificate is accepted, and the row then reads "could not read
     its fields" instead — honest, but weaker. It is never a TRUST decision either
-    way: nothing here copies the PEM into an image."""
+    way: nothing here copies the PEM into an image.
+
+    ``osname`` is ``os.name`` unless a test passes another."""
     if not path:
         return "no certificate file given"
+    if (osname or os.name) == "nt" and '"' in path:
+        # Explorer's "Copy as path" wraps the path in quotes. A Windows file name
+        # cannot hold one, so the sentence below ("moved, or a directory") was untrue
+        # for a file that is right there; name the quotes instead.
+        return (f"{os.path.basename(path.replace(chr(34), '')) or path}: the path has "
+                "quote marks around it (as Explorer's Copy as path adds); a Windows "
+                "path cannot contain them, so give it without the quotes")
     if not os.path.isfile(path):
         return (f"{os.path.basename(path) or path}: not a readable file "
                 "(moved, or a directory)")
@@ -1169,12 +1178,14 @@ def ca_cert_error(path: str) -> str:
             "(a DER/.der or PKCS#12 file needs converting to PEM first)")
 
 
-def describe_ca_cert(path: str) -> str:
+def describe_ca_cert(path: str, *, osname: str | None = None,
+                     frozen: bool | None = None) -> str:
     """A one-line 'subject · expires YYYY-MM-DD' for a PEM the caller already checked
     with :func:`ca_cert_error`, or a short honest stand-in when it cannot be read.
 
     python-cryptography is OPTIONAL (not in studio/requirements.txt): without it the
-    PEM is still structurally verified and the line says so instead of guessing."""
+    PEM is still structurally verified and the line says so instead of guessing.
+    ``osname``/``frozen`` are ``os.name``/``sys.frozen`` unless a test passes others."""
     try:
         with open(path, "rb") as fh:
             blocks = _pem_der_blocks(fh.read(CA_CERT_MAX_BYTES + 1)
@@ -1187,6 +1198,15 @@ def describe_ca_cert(path: str) -> str:
     try:
         from cryptography import x509                      # optional, see docstring
     except ImportError:
+        if frozen is None:
+            frozen = bool(getattr(sys, "frozen", False))
+        if frozen and (osname or os.name) == "nt":
+            # The MSI is a PyInstaller freeze without cryptography, and a frozen exe
+            # never imports from a Python the user could pip-install into, so
+            # "install python-cryptography" was advice nobody could follow there.
+            return f"PEM certificate, {len(blocks[0])} bytes DER{extra} " \
+                   "(this Windows build of the Studio does not include " \
+                   "python-cryptography, so it cannot show subject and expiry)"
         return f"PEM certificate, {len(blocks[0])} bytes DER{extra} " \
                "(install python-cryptography to show subject and expiry)"
     try:
