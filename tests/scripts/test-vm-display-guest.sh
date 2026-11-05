@@ -206,10 +206,30 @@ n="$(count_apply < "${log}")"
 [ "${n}" -eq 1 ] && ok "vm-autofit loop: a later preferred-mode change is applied exactly once" || bad "vm-autofit loop: expected 1 apply after the change, saw ${n}"
 
 # No DISPLAY and not ONCE: must exit at once even on a virtual GPU (nothing to drive).
-mk_sysfs "${root}" virtio_gpu Virtual-1 connected 1280x720
-( env -u DISPLAY VM_AUTOFIT_SYSFS="${root}" VM_AUTOFIT_XRANDR="${T}/xrandr" STUB_LOG="${log}" sh "${AUTOFIT}" >/dev/null 2>&1 & echo $! > "${T}/pid" )
-sleep 1
-if kill -0 "$(cat "${T}/pid")" 2>/dev/null; then bad "vm-autofit without DISPLAY keeps running"; kill "$(cat "${T}/pid")" 2>/dev/null; else ok "vm-autofit without DISPLAY exits"; fi
+# Exit is observed through a marker the SUT's own parent writes after `wait`,
+# NOT `kill -0 <pid>`: in a CI job container PID 1 is `tail -f /dev/null`, which
+# never reaps, so an orphaned SUT that exited stays a zombie and `kill -0` on it
+# SUCCEEDS (measured in alpine:3 — this check read "keeps running" for a script
+# that had exited). Polls up to 5 s, then kills the loop it started.
+no_display_exits(){ # SUT -> 0 when it exits by itself with rc 0
+  local sut="$1" i=0 root="${T}/sysfs-nd"
+  mk_sysfs "${root}" virtio_gpu Virtual-1 connected 1280x720
+  rm -f "${T}/nd.exited" "${T}/nd.pid"
+  ( env -u DISPLAY VM_AUTOFIT_SYSFS="${root}" VM_AUTOFIT_XRANDR="${T}/xrandr" VM_AUTOFIT_INTERVAL=1 STUB_LOG="${T}/nd.log" \
+      sh "${sut}" >/dev/null 2>&1 &
+    echo $! > "${T}/nd.pid"; wait $!; echo $? > "${T}/nd.exited" ) &
+  local sub=$!
+  while [ ! -s "${T}/nd.exited" ] && [ "$i" -lt 50 ]; do sleep 0.1; i=$((i+1)); done
+  if [ -s "${T}/nd.exited" ]; then
+    wait "$sub" 2>/dev/null
+    [ "$(cat "${T}/nd.exited")" -eq 0 ] || { echo "    no DISPLAY: exited rc=$(cat "${T}/nd.exited"), expected 0"; return 1; }
+    return 0
+  fi
+  echo "    no DISPLAY: still running after 5 s (a polling loop with no X server to drive)"
+  kill "$(cat "${T}/nd.pid")" 2>/dev/null; wait "$sub" 2>/dev/null
+  return 1
+}
+if no_display_exits "${AUTOFIT}"; then ok "vm-autofit without DISPLAY exits 0"; else bad "vm-autofit without DISPLAY keeps running (see above)"; fi
 
 echo "== C) behaviour: the local.d starter only inside a SPICE VM =="
 mkdir -p "${T}/bin"; cat > "${T}/bin/rc-service" <<'STUB'
@@ -250,6 +270,7 @@ try_mut "qxl no longer matched"                            "$AUTOFIT" 's/virtio_
 try_mut "current-mode skip removed (racing mode-sets)"     "$AUTOFIT" 's/\[ "$(current_mode "${out}")" = "${mode}" \] \&\& return 0/:/' battery
 try_mut "connected check removed"                          "$AUTOFIT" 's/= "connected" \] || continue/= "nonsense" ] || :/'      battery
 try_mut "--auto dropped from the xrandr call"              "$AUTOFIT" 's/--output "${out}" --auto/--output "${out}"/'            battery
+try_mut "DISPLAY guard removed (loops with no X server)"  "$AUTOFIT" 's/^\[ -n "${DISPLAY:-}" \] || \[ -n "${ONCE}" \] || exit 0$/:/' no_display_exits
 try_mut "starter: char-device gate removed"                "$STARTER" 's/^\[ -c "${PORT}" \] ||/true ||/'                        starter_battery
 try_mut "starter: starts nothing"                          "$STARTER" 's/^rc-service --ifnotstarted spice-vdagent start$/:/'    starter_battery
 echo "  mutations: ${caught} caught / ${survived} survived"
