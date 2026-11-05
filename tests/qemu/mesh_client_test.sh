@@ -473,6 +473,76 @@ nmgrade() { FIXTURE_ROOT="${FX}" NM_STATE="$1" PATH="${STUB}:${PATH}" bash -c 's
 nmgrade started | grep -F 'PASS  NetworkManager service is started' >/dev/null && _ok "F2 NM started -> PASS" || _bad "F2 NM started: $(nmgrade started)"
 nmgrade inactive | grep -F 'FAIL  NetworkManager is INACTIVE' >/dev/null && _ok "F2 NM inactive (the silent need-net cascade) -> FAIL" || _bad "F2 NM inactive: $(nmgrade inactive)"
 
+# ═══════ G. mesh routes are APPROVED on the control node (peers exist only through them) ═══════
+# headscale 0.23 lists a node in a peer's netmap only through an ENABLED route
+# (CanAccess); the product's policy names no node address. The proof run's worker
+# saw peers=0. provision.sh's backfill called `headscale nodes approve-routes`,
+# which 0.23.0 does not have (0.25 added it). gen-headscale-policy.sh now approves
+# every advertised-but-not-enabled mesh route of a tag:hugmesh node on every tick,
+# with the CLI the running headscale has, and provision.sh calls it.
+echo "══ G. gen-headscale-policy.sh approve_mesh_routes (0.23 routes table; 0.25 node routes) ══"
+GEN="${REPO}/specs/usr/sbin/gen-headscale-policy.sh"
+GLIB="${WORK}/routes.sh"
+{
+    echo 'log()  { echo "LOG $*"; }; warn() { echo "WARN $*"; }; have() { command -v "$1" >/dev/null 2>&1; }'
+    sed -n '/^MESH_ROUTES=/p' "${GEN}"
+} > "${GLIB}"
+extract "${GEN}" approve_mesh_routes "${GLIB}"
+GSTUB="${WORK}/gstub"; mkdir -p "${GSTUB}"
+cat > "${GSTUB}/headscale" <<'EOF'
+#!/bin/bash
+echo "headscale $*" >> "${CALLS}"
+case "$*" in
+    "nodes list -o json")  printf '%s\n' "${NODES_JSON}" ;;
+    "routes list -o json") [ "${HS_NO_ROUTES:-0}" = 1 ] && exit 1; printf '%s\n' "${ROUTES_JSON}" ;;
+    "routes enable -r "*)  [ "${ENABLE_FAIL:-}" = "$4" ] && exit 1 ;;
+esac
+exit 0
+EOF
+chmod +x "${GSTUB}/headscale"
+NODES_JSON='[{"id":1,"name":"hugmesh-pki-qemu","given_name":"hugmesh-pki-qemu","valid_tags":["tag:hugmesh","tag:pki"],"forced_tags":[]},
+ {"id":2,"name":"hugmesh-backend-qemu","given_name":"hugmesh-backend-qemu","valid_tags":[],"forced_tags":["tag:hugmesh","tag:be"]},
+ {"id":3,"name":"rogue","given_name":"rogue","valid_tags":[],"forced_tags":[]}]'
+ROUTES_JSON='[{"id":"11","node":{"id":1,"given_name":"hugmesh-pki-qemu"},"prefix":"10.244.0.0/16","advertised":true,"enabled":false},
+ {"id":"12","node":{"id":1,"given_name":"hugmesh-pki-qemu"},"prefix":"10.96.0.0/12","advertised":true,"enabled":true},
+ {"id":"13","node":{"id":2,"given_name":"hugmesh-backend-qemu"},"prefix":"10.244.0.0/16","advertised":true,"enabled":false},
+ {"id":"14","node":{"id":2,"given_name":"hugmesh-backend-qemu"},"prefix":"192.168.5.0/24","advertised":true,"enabled":false},
+ {"id":"15","node":{"id":3,"given_name":"rogue"},"prefix":"10.244.0.0/16","advertised":true,"enabled":false},
+ {"id":"16","node":{"id":2,"given_name":"hugmesh-backend-qemu"},"prefix":"10.96.0.0/12","advertised":false,"enabled":false}]'
+groutes() {  # -> CALLS + GOUT
+    CALLS="${WORK}/gcalls"; : > "${CALLS}"
+    GOUT="$(CALLS="${CALLS}" NODES_JSON="${NODES_JSON}" ROUTES_JSON="${ROUTES_JSON}" HS_NO_ROUTES="${HS_NO_ROUTES:-0}" ENABLE_FAIL="${ENABLE_FAIL:-}" \
+            PATH="${GSTUB}:${PATH}" bash -c 'set -u; . "$1"; approve_mesh_routes' _ "${GLIB}" 2>&1)"
+}
+groutes
+en="$(grep '^headscale routes enable -r ' "${CALLS}" | awk '{print $5}' | sort | tr '\n' ' ')"
+[ "${en}" = "11 13 " ] && _ok "G1 0.23: exactly the advertised, not-enabled MESH routes of tag:hugmesh nodes are enabled (11 pki 10.244/16, 13 backend 10.244/16); an enabled one, a non-mesh prefix, an untagged node and a withdrawn route are left alone" \
+    || _bad "G1 enabled '${en}' (want '11 13 '): $(tr '\n' ';' < "${CALLS}") :: ${GOUT}"
+printf '%s' "${GOUT}" | grep -F 'approved mesh route 10.244.0.0/16 for hugmesh-backend-qemu (route 13)' >/dev/null && _ok "G1 ...and each approval is logged with prefix, node and route id" || _bad "G1 log: ${GOUT}"
+! grep -F 'approve-routes' "${CALLS}" >/dev/null && _ok "G1 ...never calling the 0.25 'nodes approve-routes' on a headscale that has a routes table" || _bad "G1 called approve-routes on 0.23: $(tr '\n' ';' < "${CALLS}")"
+ENABLE_FAIL=11 groutes
+printf '%s' "${GOUT}" | grep -F 'WARN could not enable route 11' >/dev/null && grep -F 'routes enable -r 13' "${CALLS}" >/dev/null \
+    && _ok "G1 a route headscale refuses is warned about and the rest are still enabled" || _bad "G1 enable failure: ${GOUT} :: $(tr '\n' ';' < "${CALLS}")"
+HS_NO_ROUTES=1 groutes
+ap="$(grep '^headscale nodes approve-routes -i ' "${CALLS}" | awk '{print $5}' | sort | tr '\n' ' ')"
+[ "${ap}" = "1 2 " ] && grep -F -- '-r 10.244.0.0/16,10.96.0.0/12' "${CALLS}" >/dev/null && ! grep -F 'routes enable' "${CALLS}" >/dev/null \
+    && _ok "G2 0.25+ (no routes table): 'nodes approve-routes' for the tag:hugmesh nodes only (1, 2; never the untagged 3), with the mesh CIDRs" \
+    || _bad "G2 approve-routes ids '${ap}' (want '1 2 '): $(tr '\n' ';' < "${CALLS}")"
+# G3 — wired: every renderer tick approves BEFORE the export gate (_init's fail-closed
+# exit), `--approve-routes` is a standalone entry, and provision.sh runs it after the
+# control node's own join (and no longer calls the 0.25-only subcommand itself).
+n_ap="$(grep -n -x '    approve_mesh_routes' "${GEN}" | head -1 | cut -d: -f1)"
+n_in="$(grep -n -F '    _init || exit 0' "${GEN}" | head -1 | cut -d: -f1)"
+[ -n "${n_ap}" ] && [ -n "${n_in}" ] && [ "${n_ap}" -lt "${n_in}" ] && grep -F -- '--approve-routes) approve_mesh_routes; exit 0' "${GEN}" >/dev/null \
+    && _ok "G3 gen-headscale-policy.sh: approve_mesh_routes runs every tick BEFORE the fail-closed export gate (line ${n_ap} < ${n_in}); --approve-routes is a standalone entry" \
+    || _bad "G3 renderer wiring: approve line ${n_ap:-none}, _init line ${n_in:-none}"
+n_rg="$(grep -n -x '        control_client_regain' "${PROV}" | head -1 | cut -d: -f1)"
+n_ar="$(grep -n -x '        approve_mesh_routes_now' "${PROV}" | head -1 | cut -d: -f1)"
+[ -n "${n_rg}" ] && [ -n "${n_ar}" ] && [ "${n_ar}" -eq $((n_rg + 1)) ] && grep -F -- '/usr/sbin/gen-headscale-policy.sh --approve-routes' "${PROV}" >/dev/null \
+    && ! grep -F 'headscale nodes approve-routes' "${PROV}" >/dev/null \
+    && _ok "G3 provision.sh: the control node approves routes right after its own join is regained, through the renderer, and never calls the 0.25-only subcommand itself" \
+    || _bad "G3 provision wiring: regain ${n_rg:-none}, approve ${n_ar:-none}, direct approve-routes: $(grep -c 'headscale nodes approve-routes' "${PROV}")"
+
 echo
 echo "== RESULT: ${PASS} passed, ${FAIL} failed =="
 [ "${FAIL}" -eq 0 ]

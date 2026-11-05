@@ -630,8 +630,63 @@ retry_pending() {
     return 0
 }
 
+# ── Mesh route approval (every tick, BEFORE the export gate) ───────────────────
+# The fleet's k8s data plane rides approved subnet routes: every node advertises
+# the pod + service CIDRs (10.244.0.0/16, 10.96.0.0/12) and the policy's
+# autoApprovers approve them for tag:hugmesh. headscale 0.23 shows a node to a peer
+# ONLY through an enabled route (types.Node.CanAccess appends enabled route
+# prefixes to the reachable set; the ACL names no node address), so a node whose
+# routes are not enabled is a node nobody has in its netmap. Auto-approval runs
+# once, at the map request that first advertises the routes — and the control
+# node restarts headscale during provisioning (the policy load, then the CP DNS
+# record), so a node that advertised into a server mid-restart, or before the
+# policy was loaded, stays unapproved for good. provision.sh's backfill for that
+# case called `headscale nodes approve-routes`, a subcommand headscale 0.25 added;
+# on the 0.23.0 the fleet ships it does not exist and the backfill silently did
+# nothing. This converges it every minute: every advertised, not-yet-enabled mesh
+# route of a node that carries tag:hugmesh (valid or forced) is enabled, with the
+# CLI the running headscale has (0.23: `routes list` / `routes enable -r ID`;
+# 0.25+: `nodes approve-routes`). Independent of the signed export: it runs before
+# _init's fail-closed exit, so a bootstrap-policy fleet converges too.
+MESH_ROUTES="${HUGMESH_MESH_ROUTES:-10.244.0.0/16,10.96.0.0/12}"
+approve_mesh_routes() {
+    have headscale || return 0
+    have jq || return 0
+    local nodes_json mesh_ids routes_json todo id prefix name
+    nodes_json="$(headscale nodes list -o json 2>/dev/null)" || return 0
+    mesh_ids="$(printf '%s' "${nodes_json}" | jq -r '[.[]? | select(((.valid_tags // []) + (.forced_tags // [])) | index("tag:hugmesh") != null) | (.id | tostring)] | join(" ")' 2>/dev/null)"
+    [ -n "${mesh_ids}" ] || return 0
+    if routes_json="$(headscale routes list -o json 2>/dev/null)"; then
+        # 0.23: the routes table. One line per mesh route to enable: "ID PREFIX NODE".
+        todo="$(printf '%s' "${routes_json}" | jq -r --arg want ",${MESH_ROUTES}," --arg ids " ${mesh_ids} " \
+            '.[]? | select((.advertised // false) and ((.enabled // false) | not))
+                  | (.prefix // "") as $p | ((.node.id // "") | tostring) as $n
+                  | select($want | contains("," + $p + ","))
+                  | select($ids | contains(" " + $n + " "))
+                  | "\(.id) \(.prefix) \(.node.given_name // .node.name // "?")"' 2>/dev/null)"
+        [ -n "${todo}" ] || return 0
+        while read -r id prefix name; do
+            [ -n "${id}" ] || continue
+            if headscale routes enable -r "${id}" >/dev/null 2>&1; then
+                log "approved mesh route ${prefix} for ${name} (route ${id}) — it was advertised but not enabled"
+            else
+                warn "could not enable route ${id} (${prefix} for ${name})"
+            fi
+        done <<< "${todo}"
+    else
+        # 0.25+: routes live on the node; approve-routes is idempotent.
+        for id in ${mesh_ids}; do
+            headscale nodes approve-routes -i "${id}" -r "${MESH_ROUTES}" >/dev/null 2>&1 \
+                && log "approved mesh routes ${MESH_ROUTES} for node ${id}" || true
+        done
+    fi
+    return 0
+}
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 main() {
+    case "${1:-}" in --approve-routes) approve_mesh_routes; exit 0 ;; esac
+    approve_mesh_routes
     _init || exit 0   # fail-closed: any unmet precondition keeps the current policy
     retry_pending
     local fetched; fetched="$(mktemp 2>/dev/null)" || { raise_alarm "mktemp failed: no export can be fetched, so no revocation is propagating"; exit 0; }

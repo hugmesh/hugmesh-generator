@@ -895,15 +895,21 @@ provision_headscale() {
     # that registered before the policy was loaded. autoApprovers makes this a
     # no-op for nodes that join afterwards. Routes/CIDRs mirror
     # kubernetes/kubeadm-config.yaml (podSubnet/serviceSubnet).
-    local mesh_routes id
+    # The approval itself lives in gen-headscale-policy.sh (approve_mesh_routes:
+    # headscale 0.23 has `routes list`/`routes enable -r ID`, not the 0.25
+    # `nodes approve-routes` this used to call, which silently did nothing on the
+    # shipped version), and the same function runs on the 60s policy-sync cron,
+    # so a node that advertised while headscale was mid-restart converges too.
+    approve_mesh_routes_now
+}
+
+# Run the renderer's mesh-route approval once, now (see provision_headscale).
+approve_mesh_routes_now() {
+    local mesh_routes
     mesh_routes="$(jqm '.tailscale.mesh_routes // "10.244.0.0/16,10.96.0.0/12"')"
     [ -n "${mesh_routes}" ] && [ "${mesh_routes}" != "null" ] || mesh_routes="10.244.0.0/16,10.96.0.0/12"
-    if headscale nodes list -o json >/dev/null 2>&1; then
-        for id in $(headscale nodes list -o json 2>/dev/null | jq -r '.[].id' 2>/dev/null); do
-            [ -n "${id}" ] && [ "${id}" != "null" ] || continue
-            headscale nodes approve-routes -i "${id}" -r "${mesh_routes}" 2>/dev/null \
-                && log "Approved routes ${mesh_routes} for headscale node ${id}" || true
-        done
+    if [ -x /usr/sbin/gen-headscale-policy.sh ]; then
+        HUGMESH_MESH_ROUTES="${mesh_routes}" /usr/sbin/gen-headscale-policy.sh --approve-routes 2>/dev/null || true
     fi
 }
 
@@ -1134,6 +1140,7 @@ provision_tailscale() {
     if [ "$(jqm '.headscale.enabled // false')" = "true" ] && have headscale; then
         publish_cp_dns_record
         control_client_regain
+        approve_mesh_routes_now
         # Layer-A: wire the headscale-policy renderer + server-forced-tag pass +
         # boot/cron sync (CENTRALIZED on the control node ONLY). The socket + mesh
         # are up now, so the first best-effort render can apply immediately if the
