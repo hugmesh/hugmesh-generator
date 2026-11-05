@@ -37,6 +37,12 @@
 #                        this fleet is OpenRC (-systemd is global)
 #   pambase[elogind]   — registers pam_elogind so lightdm sessions get a logind
 #                        seat (the lightdm[elogind] leg USE-depends on it)
+#   polkit[elogind]    — session tracking. Without USE=elogind the ebuild falls
+#                        back to ConsoleKit (never installed here), so polkit
+#                        sees no local/active session and the desktop-governance
+#                        `desktop-sudo` gate (packages-desktop.list) can
+#                        authorize nobody. rpi5/frite/orangepi get this from
+#                        their global elogind; jetson must pin it per-package.
 #
 # Mirrors specs-rpi5/portage/package.use/desktop + specs-x86's desktop file.
 # Entries for packages a role doesn't pull are ignored by portage.
@@ -52,3 +58,4 @@ media-libs/freetype harfbuzz
 net-libs/libdom xml
 x11-misc/lightdm elogind
 sys-auth/pambase elogind
+sys-auth/polkit elogind

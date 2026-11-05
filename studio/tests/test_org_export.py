@@ -2039,8 +2039,20 @@ def test_a_url_with_a_literal_password_is_banned_but_placeholders_are_not():
                # runtime so secret scanners do not read it as a live database URL
                "r2dbc:postgresql://gateway:" + "gateway" + "@route-access-db:5432/gateway",
                "r2dbc:postgresql://gateway:${ROUTE_ACCESS_DB_PASSWORD:-}@route-access-db:5432/gateway",
-               "https://user:<password>@host/", "https://user:{{PASSWORD}}@host/"):
+               "https://user:<password>@host/", "https://user:{{PASSWORD}}@host/",
+               # a render-time token, filled in by an initContainer (a Casdoor app.conf)
+               "postgres://__CASDOOR_DB_USER__:__CASDOOR_DB_PASSWORD__@casdoor-games-pg:5432/x",
+               "postgres://casdoor:__CASDOOR_DB_PASSWORD__@casdoor-pg:5432/casdoor"):
         assert hit(ok) == [], ok
+    # ...but only a WHOLE upper-case token is a placeholder: a literal password behind a
+    # token user, a token glued to a literal, and a lower-case look-alike all still trip
+    # (each spelled from parts so this file itself carries no hit)
+    lit = "hunter2" + "hunter2" + "hunter2"
+    for bad in ("postgres://__CASDOOR_DB_USER__:" + lit + "@casdoor-pg:5432/casdoor",
+                "postgres://u:__CASDOOR_DB_PASSWORD__" + lit + "@h:5432/d",
+                "postgres://u:__CASDOOR_DB_" + "PASSWORD__x@h:5432/d",
+                "postgres://u:__" + "casdoor_db_password" + "__@h:5432/d"):
+        assert hit(bad) == ["URL with a literal password"], bad
 
 
 @pytest.mark.parametrize("line", [

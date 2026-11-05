@@ -79,7 +79,7 @@ const LIVE_PROBES: { gw: Gateway; path: string; users: string[] }[] = [
   { gw: 'hugmesh-be-gateway', path: '/_matrix/client/v3/sync', users: ['e2e-mod', 'e2e-matrix', 'e2e-user'] },
   { gw: 'hugmesh-be-gateway', path: '/api/v1/timelines/home', users: ['e2e-mod', 'e2e-mastodon', 'e2e-user'] },
   { gw: 'hugmesh-fe-gateway', path: '/games/admin/sessions', users: ['e2e-gamesadmin', 'e2e-gamesonly', 'e2e-adminonly', 'e2e-mod'] },
-  { gw: 'hugmesh-be-gateway', path: '/games/api/admin/role-grants', users: ['e2e-gamesadmin', 'e2e-gamesonly', 'e2e-adminonly'] },
+  { gw: 'hugmesh-fe-gateway', path: '/games/api/admin/role-grants', users: ['e2e-gamesadmin', 'e2e-gamesonly', 'e2e-adminonly'] },
   { gw: 'hugmesh-be-gateway', path: '/infra/logs', users: ['e2e-admin', 'e2e-mod'] }, // default-deny for all
 ];
 

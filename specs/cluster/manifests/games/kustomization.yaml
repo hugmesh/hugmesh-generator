@@ -3,16 +3,63 @@ kind: Kustomization
 namespace: hugmesh-games
 resources:
   - deployment.yaml
+  - bff-db.yaml
+  - cassandra.yaml
+  - cassandra-init.yaml
+  # The standalone games portal (its Ingress is the games.<GAMES_DOMAIN> host).
+  - ../games-portal
 
-# First-party images now pull from the in-cluster Harbor container registry
+# Image names are the hugmesh-games release workflow's published set
+# (ghcr.io/hugmesh/hugmesh-games/<image>, scripts/release/repos.tsv) under the Harbor
+# host. First-party images now pull from the in-cluster Harbor container registry
 # (registry.hugmesh.net = inherited from GitLab's chart hosts.domain default, kept as-is; now served by Harbor (apps/03a-harbor.yaml), project
-# path = <group>/<repo>). The CI in each repo pushes :<branch> + :<sha>; we track
-# the moving :main here for dev. Pulls need the harbor-registry imagePullSecret
-# (ESO-materialized, see manifests/external-secrets).
+# path = <group>/<repo>). The CI in each repo pushes :<branch> + :<sha>; the portal
+# (games-portal/kustomization.yaml) tracks the moving :main for dev, the backend is
+# pinned (below). Pulls need the harbor-registry imagePullSecret (ESO-materialized,
+# see manifests/external-secrets).
+#
+# THE BACKEND IS PINNED, NOT TRACKING :main. deployment.yaml hands this image the
+# two-realm environment (APP_TENANCY_JWKS_URIS, APP_SECURITY_GAMES_REALM_ISSUERS). An
+# image built before hugmesh/hugmesh-games#52 ignores both names: both issuers collapse
+# into one domain behind a single jwk-set-uri, every mesh token answers 401, and a token
+# that claims iss=mesh but is signed by the games key is accepted. So the tag here must
+# name a build at or after #52's merge commit, 3ae21def10e8a09c4a8bb86b4fcbccacdba6549d.
+#
+# The pin is the TAG AND THE DIGEST, and the digest is what the cluster pulls: a
+# runtime resolves `name:tag@digest` by the digest and ignores the tag. The tag is the
+# hugmesh-games Release workflow's `sha-<first 12 of the commit>` for a main build; the
+# digest is that tag's manifest (index) digest on ghcr.io/hugmesh/hugmesh-games/backend,
+# the same bytes registry.hugmesh.net serves once it holds the image (a content-addressed
+# copy keeps the digest; a re-push of one platform manifest would not).
+#
+# tests/scripts/test-games-two-realms.sh judges what ARGOCD DEPLOYS, not this field:
+# apps/50-games.yaml must render exactly this directory (no spec.source.kustomize
+# images/patches/namePrefix, which argocd-repo-server applies before the build, and no
+# other path), and in `kubectl kustomize` of this directory the backend image must run
+# in exactly one container (Deployment hugmesh-games/games) with the two-realm
+# environment handed to that container only, no second workload under app=hugmesh-games,
+# nothing pulled from ghcr.io. That one rendered string must be exactly what this entry
+# composes (a JSON6902 or strategic patch on the container image is refused), the tag
+# must be the fail-closed placeholder `needs-hugmesh-games-pr52` (resolves to no image;
+# no digest may ride along with it, because the digest would be pulled), a `sha-<12>`
+# or a release, never `main` or another floating name; and for a sha-/release tag the
+# public registry is asked, anonymously, for that RENDERED tag's manifest: a pinned
+# digest must equal it, and the image's org.opencontainers.image.revision label must be
+# a hugmesh-games commit descending from 3ae21def (main or a release/X.Y branch). A
+# re-push of the tag therefore turns CI red on purpose: re-verify and update both
+# fields together.
+#
+# To move the pin: newTag = sha-<12 of the main commit>, digest = the Docker-Content-
+# Digest of GET /v2/hugmesh/hugmesh-games/backend/manifests/<tag> on ghcr.io.
 images:
-  - { name: hugmesh/hugmesh.games-backend, newName: registry.hugmesh.net/hugmesh/hugmesh.games/backend, newTag: main }
+  - name: hugmesh/hugmesh.games-backend
+    newName: registry.hugmesh.net/hugmesh/hugmesh-games/backend
+    # hugmesh-games main 3ae21def (#52 merged 2026-11-04), Release run 41944667036.
+    newTag: sha-3ae21def10e8
+    digest: sha256:f2142f61a782c1801de91d986182cb7eddd4b8d1a9ce1c6359ca0dd7dea3bcc9
 patches:
-  - target: { kind: Deployment }
+  # Only the two first-party images come from Harbor; the stores are stock images.
+  - target: { kind: Deployment, name: "^hugmesh-games(-portal)?$" }
     patch: |
       - op: add
         path: /spec/template/spec/imagePullSecrets

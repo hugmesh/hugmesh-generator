@@ -189,6 +189,32 @@ SAVE_JOB="hugmesh-save"
 # save path needs a much longer one for the same client.
 QMP_TIMEOUT=15
 
+# ── Display door knobs (2026-11-04) ─────────────────────────────────────────
+# Forwarded to docker-entrypoint.sh as DISPLAY_MODE: auto = a SPICE door for every
+# --keep-alive DESKTOP row (the entrypoint reads its own kubernetes.role "none"
+# classification), spice = every row, none = no row. The door is published on
+# loopback as <ssh port>+DISPLAY_PORT_OFFSET, so 22400-22499 — still a private
+# range with nothing of the live stack in it — and the noVNC fallback, OPT-IN via
+# --display-web, as <ssh port>+WEB_PORT_OFFSET (22500-22599). Deriving both from
+# the ssh port means one claim/retry loop and one row = one triple of ports.
+DISPLAY_MODE="auto"
+DISPLAY_WEB=false
+DISPLAY_PORT_OFFSET=100
+WEB_PORT_OFFSET=200
+# In-container ports the entrypoint's launcher/websockify listen on (0.0.0.0 in
+# the CONTAINER's namespace; the host only ever sees the 127.0.0.1 publish).
+GUEST_SPICE_PORT=5930
+GUEST_WEB_PORT=6080
+# --open-display: which viewer. auto = remote-viewer, else spicy, else the
+# browser (when a web port exists), else print.
+DEV_VIEWER="auto"
+# What the images of THIS run are known to do on a viewer resize, forwarded to
+# every row's record as display_resize: "scale" (the picture scales to the
+# window) until an image's guest-side resize is proven, then DISPLAY_RESIZE=guest
+# in the environment flips it for the run. Environment only — it is a statement
+# about the images, not a per-row option, and nothing here can measure it.
+DISPLAY_RESIZE="${DISPLAY_RESIZE:-scale}"
+
 # Host ports published for keep-alive devices. Loopback ONLY, and a private range
 # with nothing else in it: the operator runs a live hugmesh stack on this machine
 # and the container header (docker/Dockerfile.qemu-runner "NETWORKING NOTE") is
@@ -261,6 +287,14 @@ Usage: $0 [OPTIONS]
                     the container payload. Root ssh stays off (assertions.sh
                     asserts PermitRootLogin no), so a superuser shell is one of
                     these logins plus 'sudo -i'.
+  --display MODE    auto (default) | spice | none. A SPICE display door for each
+                    --keep-alive device, published on 127.0.0.1:<ssh port>+${DISPLAY_PORT_OFFSET}
+                    and locked with a per-run random password FILE (0600, named
+                    in the record, never printed). auto = desktop rows only.
+  --display-web     also publish a noVNC browser fallback on 127.0.0.1:<ssh
+                    port>+${WEB_PORT_OFFSET} (scale-to-fit only; VNC auth is weak, so
+                    opt-in; skipped with a WARN if the runner image has no
+                    websockify).
   -h, --help
 
 Shared-L2 mesh (--keep-alive only; both flags off by default, and a run without
@@ -305,6 +339,21 @@ delta on top of the golden's data). The golden build artifact is NEVER written:
                         It never means writing into the golden image.
   --save-timeout SEC    wall clock for the copy. Default: ${DEV_SAVE_TIMEOUT}
   --list-saves LABEL    print the saves that exist for LABEL, as a JSON array
+
+Open a device's display (desktop images; the door is on from the moment qemu
+launches, so the firmware and boot are visible too):
+  --open-display LABEL  open LABEL's SPICE door in a window. With remote-viewer
+                        the GUEST follows the window size when the image
+                        supports it (record field display_resize "guest");
+                        otherwise the picture scales to the window.
+  --viewer V            auto (default) | remote-viewer | spicy | browser | print.
+                        remote-viewer gets a 0600 .vv file that deletes itself
+                        (the password never touches argv); spicy is started
+                        without a password and prompts for it; browser opens the
+                        noVNC URL on an IP literal (never 'localhost': the
+                        gateway's HSTS pin cannot apply to 127.0.0.1) and noVNC
+                        asks for the password; print just shows the endpoint
+                        and the password file's path.
 EOF
 exit "${1:-0}"
 }
@@ -355,6 +404,13 @@ while [[ $# -gt 0 ]]; do
         --save-timeout) [ $# -ge 2 ] || { echo "--save-timeout needs a number of seconds" >&2; usage 1; }
                         DEV_SAVE_TIMEOUT="$2"; shift 2 ;;
         --overwrite)    DEV_SAVE_OVERWRITE=true; shift ;;
+        --display)      [ $# -ge 2 ] || { echo "--display needs auto, spice or none" >&2; usage 1; }
+                        DISPLAY_MODE="$2"; shift 2 ;;
+        --display-web)  DISPLAY_WEB=true; shift ;;
+        --open-display) [ $# -ge 2 ] || { echo "--open-display needs a device label" >&2; usage 1; }
+                        DEV_ACTION="open-display"; DEV_LABEL="$2"; shift 2 ;;
+        --viewer)       [ $# -ge 2 ] || { echo "--viewer needs auto, remote-viewer, spicy, browser or print" >&2; usage 1; }
+                        DEV_VIEWER="$2"; shift 2 ;;
         -h|--help)      usage 0 ;;
         *)              echo "Unknown arg: $1" >&2; usage 1 ;;
     esac
@@ -380,6 +436,22 @@ done
     || die "--cache-max-gb must be a whole number of GiB (0 = unbounded), got '${CACHE_MAX_GB}'"
 [[ "${JOBS}" =~ ^[0-9]+$ ]] \
     || die "--jobs must be a whole number (0 = ungated in --keep-alive mode), got '${JOBS}'"
+
+# The display knobs reach the container as environment and the derived ports
+# reach `docker run -p`: a typo would be one ERROR row per container, or a bind of
+# the wrong thing. Refused here, by name.
+case "${DISPLAY_MODE}" in
+    auto|spice|none) ;;
+    *) die "--display must be auto, spice or none, got '${DISPLAY_MODE}'" ;;
+esac
+case "${DEV_VIEWER}" in
+    auto|remote-viewer|spicy|browser|print) ;;
+    *) die "--viewer must be auto, remote-viewer, spicy, browser or print, got '${DEV_VIEWER}'" ;;
+esac
+case "${DISPLAY_RESIZE}" in
+    guest|scale) ;;
+    *) die "DISPLAY_RESIZE must be guest or scale, got '${DISPLAY_RESIZE}'" ;;
+esac
 
 # Same reasoning one step further: an --extra-user value is not just an argv item
 # here, it becomes a LOGIN NAME created on the guest. Reject anything useradd
@@ -855,11 +927,18 @@ release_port() {
 
 # The claim belonging to a device record, released when that device is stopped.
 release_port_for_record() {
-    local rec="$1" port
-    port="$(record_field "${rec}" ssh_host_port)"
-    [[ "${port}" =~ ^[0-9]+$ ]] || return 0
-    [ "${port}" -gt 0 ] || return 0            # 0 = the device published nothing
-    release_port "${port}" "$(record_field "${rec}" container)"
+    local rec="$1" port owner field
+    owner="$(record_field "${rec}" container)"
+    # The ssh port and the display door's two derived ports are three claims
+    # held by one container; a record older than the display lane simply has no
+    # display_* fields, which record_field reports as "" and the guard skips.
+    for field in ssh_host_port display_port display_web_port; do
+        port="$(record_field "${rec}" "${field}")"
+        [[ "${port}" =~ ^[0-9]+$ ]] || continue
+        [ "${port}" -gt 0 ] || continue        # 0 = the device published nothing
+        release_port "${port}" "${owner}"
+    done
+    return 0
 }
 
 # Drop every port claim whose owner container no longer exists. claim_port
@@ -1722,6 +1801,114 @@ sys.stdout.write("\n")
 PYLIST
 }
 
+# ── --open-display ──────────────────────────────────────────────────────────
+# Opens a device's SPICE door in a window on THIS workstation. It reads the
+# record and nothing else: no docker, no boot. The password is read from the
+# file the record names, into a 0600 .vv file for remote-viewer (which deletes
+# it), and it is never placed on any argv, never printed, never logged.
+#
+# RESIZE, stated per path rather than promised: remote-viewer and spicy send a
+# monitors-config when the window is resized; whether the GUEST re-lays out at
+# that size depends on the image (virtio-gpu + an in-guest applier), which the
+# record states in display_resize ("guest" or "scale"). noVNC is scale-to-fit.
+display_viewer_hint() {
+    cat >&2 <<EOF
+  install a viewer:  Gentoo: emerge net-misc/virt-viewer   Debian/Ubuntu: apt install virt-viewer
+                     Windows: the virt-viewer MSI (remote-viewer.exe opens the .vv file)
+  WSL2: run this from the WSL side with WSLg, or open the .vv/URL on Windows — Docker's
+        127.0.0.1 publish is reachable from Windows through WSL's loopback forwarding.
+EOF
+}
+
+cmd_open_display() {
+    local label="$1" viewer="$2" rec proto port web pwfile state resize how vv dir rc=0
+    rec="$(device_record_path "${label}")" \
+        || die "no device record for '${label}' under ${DEVICES_DIR} (--devices to list what is there)"
+    proto="$(record_field "${rec}" display_protocol)"
+    port="$(record_field "${rec}" display_port)"
+    web="$(record_field "${rec}" display_web_port)"
+    pwfile="$(record_field "${rec}" display_password_file)"
+    state="$(record_field "${rec}" state)"
+    resize="$(record_field "${rec}" display_resize)"
+    [ "${state}" != "stopped" ] \
+        || die "device '${label}' is stopped; start it again with --keep-alive --only-exact '${label}'"
+    { [ "${proto}" = "spice" ] && [[ "${port}" =~ ^[0-9]+$ ]] && [ "${port}" -gt 0 ]; } \
+        || die "device '${label}' has no display door (a test run, --display none, a non-desktop row in auto mode, or a launcher without the display flags — see the row's docker logs)"
+    [[ "${web}" =~ ^[0-9]+$ ]] || web=0
+    [ -n "${pwfile}" ] && [ -r "${pwfile}" ] \
+        || die "the display password file for '${label}' is not readable here: '${pwfile}' (the record names a HOST path; the entrypoint hands it to HOST_UID when the record is written)"
+    case "${resize}" in
+        guest) how="the desktop re-lays out to the window size" ;;
+        *)     how="the picture scales to the window (this image has no guest-side resize yet)" ;;
+    esac
+    if [ "${viewer}" = "auto" ]; then
+        if command -v remote-viewer >/dev/null 2>&1; then viewer="remote-viewer"
+        elif command -v spicy >/dev/null 2>&1; then viewer="spicy"
+        elif [ "${web}" -gt 0 ]; then viewer="browser"
+        else viewer="print"
+        fi
+    fi
+    case "${viewer}" in
+        remote-viewer)
+            command -v remote-viewer >/dev/null 2>&1 \
+                || { display_viewer_hint; die "remote-viewer is not installed (--viewer print shows the endpoint)"; }
+            # XDG_RUNTIME_DIR is per-user, tmpfs and 0700; the fallback is a fresh
+            # 0700 directory. The file is created under umask 077 and told to
+            # delete itself; it is removed here too in case the viewer never read it.
+            dir="${XDG_RUNTIME_DIR:-}"
+            if [ -z "${dir}" ] || [ ! -d "${dir}" ] || [ ! -w "${dir}" ]; then
+                dir="$(mktemp -d "${TMPDIR:-/tmp}/hugmesh-display.XXXXXX")" || die "cannot create a private dir for the .vv file"
+            fi
+            vv="$(umask 077; mktemp "${dir}/hugmesh-$(safe_label "${label}").XXXXXX.vv")" || die "cannot create the .vv file"
+            ( umask 077
+              {
+                printf '[virt-viewer]\ntype=spice\nhost=127.0.0.1\nport=%s\n' "${port}"
+                printf 'password=%s\n' "$(cat "${pwfile}")"
+                printf 'delete-this-file=1\ntitle=%s\n' "hugmesh ${label} (emulated)"
+              } > "${vv}" ) || { rm -f "${vv}"; die "cannot write the .vv file"; }
+            chmod 600 "${vv}" 2>/dev/null || true
+            info "opening ${label}: spice 127.0.0.1:${port} in remote-viewer — ${how}"
+            remote-viewer "${vv}"; rc=$?
+            rm -f "${vv}" 2>/dev/null || true
+            return "${rc}" ;;
+        spicy)
+            command -v spicy >/dev/null 2>&1 \
+                || { display_viewer_hint; die "spicy (spice-gtk) is not installed"; }
+            # No --password: spice-gtk would put it on argv. spicy prompts on the
+            # auth failure instead; the value is in the file below.
+            info "opening ${label}: spice 127.0.0.1:${port} in spicy — ${how}"
+            info "  spicy asks for the password: it is the contents of ${pwfile}"
+            spicy -h 127.0.0.1 -p "${port}" ;;
+        browser)
+            [ "${web}" -gt 0 ] \
+                || die "device '${label}' has no noVNC port (start it with --display-web; SPICE is at 127.0.0.1:${port})"
+            # An IP literal, never 'localhost': the product's gateway pins HSTS on
+            # localhost and Chrome then hard-blocks every http://localhost door;
+            # HSTS cannot attach to 127.0.0.1. resize=scale: VNC only scales.
+            local url="http://127.0.0.1:${web}/vnc.html?host=127.0.0.1&port=${web}&resize=scale&autoconnect=1"
+            info "opening ${label} in the browser (noVNC, scale-to-fit): ${url}"
+            info "  noVNC asks for the password: the FIRST 8 characters of ${pwfile} (VNC auth is 8-char DES)"
+            if command -v xdg-open >/dev/null 2>&1; then xdg-open "${url}" >/dev/null 2>&1 &
+            elif command -v wslview >/dev/null 2>&1; then wslview "${url}" >/dev/null 2>&1 &
+            elif command -v cmd.exe >/dev/null 2>&1; then cmd.exe /c start "" "${url}" >/dev/null 2>&1 &
+            else warn "no xdg-open/wslview here — open the URL above yourself"
+            fi ;;
+        print)
+            echo "display : spice 127.0.0.1:${port}  (${how})"
+            echo "password: in ${pwfile}  (0600; never on argv or in a log)"
+            echo "viewer  : $(basename "$0") --work '${WORK}' --open-display '${label}' --viewer remote-viewer"
+            echo "          spicy -h 127.0.0.1 -p ${port}   (it prompts for the password)"
+            if [ "${web}" -gt 0 ]; then
+                echo "browser : http://127.0.0.1:${web}/vnc.html?host=127.0.0.1&port=${web}&resize=scale&autoconnect=1  (scale-to-fit; password = first 8 chars)"
+            else
+                echo "browser : none (start with --display-web for a noVNC fallback)"
+            fi
+            command -v remote-viewer >/dev/null 2>&1 || command -v spicy >/dev/null 2>&1 || display_viewer_hint ;;
+        *) die "internal: unknown viewer '${viewer}'" ;;
+    esac
+    return 0
+}
+
 if [ -n "${DEV_ACTION}" ]; then
     # These run BEFORE artifact resolution and before the docker-daemon probe on
     # purpose. Artifact resolution die()s when the newest session holds no image,
@@ -1746,6 +1933,7 @@ if [ -n "${DEV_ACTION}" ]; then
         qmp)        cmd_qmp "${DEV_LABEL}" "${DEV_QMP_CMD}" ;;
         save)       cmd_save_device "${DEV_LABEL}" ;;
         list-saves) cmd_list_saves "${DEV_LABEL}" ;;
+        open-display) cmd_open_display "${DEV_LABEL}" "${DEV_VIEWER}" ;;
         *)          die "internal: unknown device action '${DEV_ACTION}'" ;;
     esac
     exit $?
@@ -2225,6 +2413,65 @@ candidate_ports() {
     done
 }
 
+# ── Display door ports: derived from the ssh port, claimed with it ──────────
+# claim_display_ports SSHPORT NAME — claim <ssh+100> (SPICE) and, with
+# --display-web, <ssh+200> (noVNC) for container NAME. Each derived port gets the
+# same three exclusions as the ssh port (this run's picks, docker's publishes, a
+# host listener) plus the atomic mkdir claim; on ANY failure every claim this
+# call made is released and it returns 1, so the caller moves the WHOLE row to
+# the next ssh port — a row is one triple, never a mix of two rows' ports.
+# With --display none it claims nothing and returns 0.
+claim_display_ports() {
+    local sshport="$1" owner="$2" p busy
+    [ "${DISPLAY_MODE}" != "none" ] || return 0
+    busy=" ${DEV_PORTS_TAKEN[*]-} $(docker_published_ports | tr '\n' ' ') "
+    for p in $(display_ports_for "${sshport}"); do
+        case "${busy}" in *" ${p} "*) release_display_ports "${sshport}" "${owner}"; return 1 ;; esac
+        port_free "${p}" || { release_display_ports "${sshport}" "${owner}"; return 1; }
+        claim_port "${p}" "${owner}" || { release_display_ports "${sshport}" "${owner}"; return 1; }
+    done
+    return 0
+}
+
+# display_ports_for SSHPORT — the derived ports this run would publish for a row
+# on SSHPORT, one per line: the SPICE door, then the noVNC port only when asked.
+display_ports_for() {
+    [ "${DISPLAY_MODE}" != "none" ] || return 0
+    printf '%s\n' "$(( $1 + DISPLAY_PORT_OFFSET ))"
+    ${DISPLAY_WEB} && printf '%s\n' "$(( $1 + WEB_PORT_OFFSET ))"
+    return 0
+}
+
+# release_display_ports SSHPORT NAME — drop the derived claims (only NAME's).
+release_display_ports() {
+    local p
+    for p in $(display_ports_for "$1"); do release_port "${p}" "$2"; done
+    return 0
+}
+
+# display_publish_args SSHPORT -> the `docker run` additions for the door, on
+# stdout one per line. THE HOST SIDE IS 127.0.0.1 AND NOTHING ELSE: an emulated
+# desktop is never reachable off this workstation, exactly like its ssh. The env
+# halves tell the entrypoint which host numbers to write into the record — it
+# cannot see them from inside — and which mode the operator chose.
+display_publish_args() {
+    local sshport="$1"
+    if [ "${DISPLAY_MODE}" = "none" ]; then
+        printf '%s\n' "-e" "DISPLAY_MODE=none"
+        return 0
+    fi
+    printf '%s\n' "-e" "DISPLAY_MODE=${DISPLAY_MODE}"
+    printf '%s\n' "-e" "DISPLAY_RESIZE=${DISPLAY_RESIZE}"
+    printf '%s\n' "-p" "127.0.0.1:$(( sshport + DISPLAY_PORT_OFFSET )):${GUEST_SPICE_PORT}"
+    printf '%s\n' "-e" "DISPLAY_HOST_PORT=$(( sshport + DISPLAY_PORT_OFFSET ))"
+    if ${DISPLAY_WEB}; then
+        printf '%s\n' "-p" "127.0.0.1:$(( sshport + WEB_PORT_OFFSET )):${GUEST_WEB_PORT}"
+        printf '%s\n' "-e" "DISPLAY_WEB_PORT=$(( sshport + WEB_PORT_OFFSET ))"
+        printf '%s\n' "-e" "DISPLAY_WEB=1"
+    fi
+    return 0
+}
+
 # --extra-user has no environment spelling, so it has to be argv. That is safe
 # for the entrypoint that will actually run: docker/Dockerfile.qemu-runner's shim
 # prefers the bind-mounted /src copy, which is THIS checkout's, over the baked
@@ -2246,6 +2493,9 @@ start_device_row() {
     # ONE place below. Empty unless --mesh-net was given, which is what keeps a
     # normal run's docker argv byte-for-byte what it has always been.
     local mesh_args=()
+    # The display door's -p/-e lines, filled per candidate port (they derive
+    # from it). Empty only with --display none.
+    local display_args=()
 
     if docker ps --format '{{.Names}}' 2>/dev/null | grep -xF "${name}" >/dev/null; then
         warn "${label} is already up as ${name} — leaving it alone (--stop-device '${label}' first to replace it)"
@@ -2303,6 +2553,10 @@ start_device_row() {
             warn "refusing to publish out-of-range port ${port}"; continue
         fi
         claim_port "${port}" "${name}" || continue
+        # The door's derived ports ride the same claim: if <ssh+100> (or <ssh+200>)
+        # is taken, this ssh port is given back and the whole row moves on.
+        claim_display_ports "${port}" "${name}" || { release_port "${port}" "${name}"; continue; }
+        mapfile -t display_args < <(display_publish_args "${port}")
 
         # THE PORT GOES IN TWICE, and both halves are load-bearing:
         #   -p 127.0.0.1:<port>:2222  makes it reachable from the host, loopback
@@ -2346,6 +2600,7 @@ start_device_row() {
             -e SSH_HOST_PORT="${port}" \
             -e CONTAINER_NAME="${name}" \
             "${mesh_args[@]}" \
+            "${display_args[@]}" \
             -p "127.0.0.1:${port}:${GUEST_SSH_PORT}" \
             -v "${REPO_DIR}":/src:ro \
             -v "${ARTIFACTS}":/artifacts:ro \
@@ -2368,6 +2623,7 @@ start_device_row() {
             break
         fi
         release_port "${port}" "${name}"
+        release_display_ports "${port}" "${name}"
 
         # A bind failure is the one outcome worth retrying: something took the
         # port between the probe and the bind. Anything else is a real error and
@@ -2397,13 +2653,21 @@ start_device_row() {
         warn "${label}: container ${name} exited immediately. Its last words:"
         docker logs --tail 20 "${name}" 2>&1 | sed 's/^/    /' >&2
         release_port "${chosen}" "${name}"
+        release_display_ports "${chosen}" "${name}"
         return 1
     fi
+    # The display column names the host door (desktop rows only get one in auto
+    # mode; the record is the authority once the entrypoint has classified the
+    # row) and the one command that opens it.
+    local display_col="-"
+    if [ "${DISPLAY_MODE}" != "none" ]; then
+        display_col="127.0.0.1:$(( chosen + DISPLAY_PORT_OFFSET )) (open: $(basename "$0") --open-display ${label})"
+    fi
     if [ -n "${MESH_NET}" ]; then
-        printf '%-24s %-32s %-22s %s\n' "${label}" "${name}" \
-            "127.0.0.1:${chosen}" "${mesh_ip}/${mesh_plen} ${mesh_mac}"
+        printf '%-24s %-32s %-22s %-28s %s\n' "${label}" "${name}" \
+            "127.0.0.1:${chosen}" "${mesh_ip}/${mesh_plen} ${mesh_mac}" "${display_col}"
     else
-        printf '%-24s %-32s %s\n' "${label}" "${name}" "127.0.0.1:${chosen}"
+        printf '%-24s %-32s %-16s %s\n' "${label}" "${name}" "127.0.0.1:${chosen}" "${display_col}"
     fi
     return 0
 }
@@ -2604,9 +2868,9 @@ if ${KEEP_ALIVE}; then
         info "--jobs 0: starting all ${#ROWS[@]} devices at once, ungated"
     fi
     if [ -n "${MESH_NET}" ]; then
-        printf '%-24s %-32s %-22s %s\n' "LABEL" "CONTAINER" "SSH" "MESH"
+        printf '%-24s %-32s %-22s %-28s %s\n' "LABEL" "CONTAINER" "SSH" "MESH" "DISPLAY"
     else
-        printf '%-24s %-32s %s\n' "LABEL" "CONTAINER" "SSH"
+        printf '%-24s %-32s %-16s %s\n' "LABEL" "CONTAINER" "SSH" "DISPLAY"
     fi
     STARTED=0; DEV_FAILED=0
     for r in "${ROWS[@]}"; do
@@ -2628,6 +2892,9 @@ if ${KEEP_ALIVE}; then
     echo "Devices are BOOTING; records land in ${DEVICES_DIR} as each row's qemu launches (state \"booting\"), and turn \"running\" when the guest answers ssh."
     echo "  $0 --work '${WORK}' --devices"
     echo "  $0 --work '${WORK}' --qmp <label> status"
+    if [ "${DISPLAY_MODE}" != "none" ]; then
+        echo "  $0 --work '${WORK}' --open-display <label>     (desktop rows: a window on the guest's display)"
+    fi
     echo "  $0 --work '${WORK}' --stop-all-devices"
     [ "${DEV_FAILED}" -eq 0 ]
     exit $?
