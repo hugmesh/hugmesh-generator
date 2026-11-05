@@ -51,6 +51,24 @@
 #                no .argocd-source*.yaml anywhere under specs/ (argocd-repo-server's
 #                parameter overrides; `kubectl kustomize` ignores them); no kustomization
 #                outside manifests/games pulls that directory in.
+#   rendered     ArgoCD places a resource at its RENDERED metadata.namespace, so the
+#                fields above are not the whole story: every Application reachable from
+#                the roots is RENDERED as argocd-repo-server would (helm template,
+#                kubectl kustomize with spec.source.kustomize applied, or the directory's
+#                YAML), nested app-of-apps and ApplicationSet-generated Applications
+#                included (list, matrix of lists and the service catalog's scmProvider
+#                over this repository are evaluated; any other generator, a template
+#                construct beyond `{{ .key }}`, a templatePatch, a plugin, jsonnet, a
+#                remote base or a render error FAILS), symlinked paths resolved. Over the
+#                union of every rendered document, keyed by effective namespace (rendered
+#                metadata.namespace, else the destination; a workload with neither
+#                FAILS): every workload in hugmesh-games is one this suite names, by kind
+#                and name, owned by its own Application, rendered identically everywhere,
+#                the BFF on the pinned image; the backend image and the two-realm
+#                environment (env, the casdoor-games-app client, envFrom resolved) appear
+#                in no other container, workload or namespace. Sources in other
+#                repositories (third-party charts) may not deploy into the games
+#                namespace or be handed the backend or the two-realm environment.
 #
 # THREAT MODEL of the merge-order pin (the backend image must be a build at or after
 # hugmesh-games#52, 3ae21def, whenever the two-realm environment is set): the guard
@@ -58,8 +76,12 @@
 # would deploy an older backend with the two-realm env through any mechanism ArgoCD
 # honours from THIS repository: kustomize images/patches/components, an Application's
 # spec.source.kustomize, .argocd-source*.yaml override files, a second Application or
-# ApplicationSet at the games path or in the games namespace, and any workload kind
-# carrying a pod template. BOUNDS, not defended: a malicious committer (who can edit
+# ApplicationSet at the games path or in the games namespace, any Application whose
+# RENDER lands a workload in the games namespace or the backend anywhere (a copied
+# directory that sets the namespace itself, an existing Application's directory, a
+# nested app-of-apps, a generated Application, a symlinked path), and any workload kind
+# carrying a pod template. Remote kustomize bases are refused outright (nothing offline
+# can say what they render or where). BOUNDS, not defended: a malicious committer (who can edit
 # this suite too); admission-time mutation (Kyverno mutate rules, webhooks), which a
 # render-time check cannot see; registry tag re-pointing beyond the digest check (a
 # pinned digest is verified, a tag alone is only as good as the registry); and the
@@ -96,7 +118,7 @@
 # and the analyser must go RED naming the planted defect.
 #
 # bash + python3 + PyYAML + kubectl (for `kubectl kustomize`; no cluster, no docker) +
-# curl + awk (the Casdoor render). Offline, except the pinned-build proof: ghcr.io
+# helm (`helm template` of this repository's charts) + curl + awk (the Casdoor render). Offline, except the pinned-build proof: ghcr.io
 # (anonymous manifest reads) and a commit-graph-only clone of the public hugmesh-games
 # repo. Both are REQUIRED in CI and reported as NOT VERIFIED offline; a placeholder tag
 # needs no call. In .github/workflows/shell-suites.yml this suite is in the tool-heavy
@@ -112,12 +134,17 @@ command -v python3 >/dev/null 2>&1 || { echo "FATAL: python3 required (refusing 
 command -v curl >/dev/null 2>&1 || { echo "FATAL: curl required for the registry reads (refusing to skip)" >&2; exit 2; }
 python3 -c 'import yaml' 2>/dev/null || { echo "FATAL: PyYAML required (refusing to skip)" >&2; exit 2; }
 command -v kubectl >/dev/null 2>&1 || { echo "FATAL: kubectl required for kubectl kustomize (refusing to skip)" >&2; exit 2; }
+command -v helm >/dev/null 2>&1 || { echo "FATAL: helm required to render this repository's charts the way ArgoCD does (refusing to skip)" >&2; exit 2; }
 command -v awk >/dev/null 2>&1 || { echo "FATAL: awk required to run the Casdoor render (refusing to skip)" >&2; exit 2; }
 export KUBECONFIG=/dev/null
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/games-two-realms.XXXXXX")"
 trap 'rm -rf "${WORK}"' EXIT
 ANALYSER="${WORK}/analyser.py"
+# Renders keyed by everything a build can read (see "every way in" below); the cache
+# lives and dies with this run's scratch dir, so a negative control re-renders only what
+# its mutation can change.
+export GAMES_RENDER_CACHE="${WORK}/render-cache"
 
 cat > "${ANALYSER}" <<'PY'
 import os, re, subprocess, sys
@@ -132,7 +159,8 @@ def bad(m):
     global F
     F += 1
     print("  FAIL " + m)
-def docs(p): return [d for d in yaml.safe_load_all(open(p)) if d]
+SAFE = getattr(yaml, "CSafeLoader", yaml.SafeLoader)  # libyaml when present: the analyser runs once per negative control
+def docs(p): return [d for d in yaml.load_all(open(p), Loader=SAFE) if d]
 def text(p): return open(p, errors="replace").read()
 def uncommented(p): return "\n".join(l for l in text(p).splitlines() if not l.lstrip().startswith("#"))
 def check(cond, m):
@@ -425,7 +453,11 @@ for p in app_files():
         if d["kind"] == "Application":
             srcs = ([spec["source"]] if spec.get("source") else []) + list(spec.get("sources") or [])
             dest_ns = (spec.get("destination") or {}).get("namespace")
-            hit = dest_ns == GAMES_NS or any(npath(s.get("path", "")) == GAMES_PATH for s in srcs if isinstance(s, dict))
+            # a symlinked path is the directory it points at (argocd-repo-server follows
+            # an in-repository link), so the path is compared resolved, not as a string
+            hit = dest_ns == GAMES_NS or any(npath(s.get("path", "")) == GAMES_PATH
+                                             or os.path.realpath(os.path.join(root, npath(s.get("path", "")))) == os.path.realpath(os.path.join(root, GAMES_PATH))
+                                             for s in srcs if isinstance(s, dict) and s.get("path"))
             if not hit:
                 continue
             games_apps.append((rel, name))
@@ -504,7 +536,7 @@ BACKEND_NAME = re.compile(r"hugmesh[-.]games[-/]backend|hugmesh\.games-backend")
 TWO_REALM_ENV = {"APP_TENANCY_ISSUERS", "APP_TENANCY_JWKS_URIS", "APP_SECURITY_GAMES_REALM_ISSUERS"}
 KNOWN_WORKLOADS = {"Deployment", "StatefulSet", "DaemonSet", "Job", "CronJob"}
 def render(path):
-    return [d for d in yaml.safe_load_all(subprocess.run(["kubectl", "kustomize", path], check=True, capture_output=True, text=True, env={**os.environ, "KUBECONFIG": "/dev/null"}).stdout) if d]
+    return [d for d in yaml.load_all(subprocess.run(["kubectl", "kustomize", path], check=True, capture_output=True, text=True, env={**os.environ, "KUBECONFIG": "/dev/null"}).stdout, Loader=SAFE) if d]
 def pod_specs(d):
     """[(pod spec, pod labels)] at the four places a pod template lives, for ANY kind."""
     spec = d.get("spec") if isinstance(d.get("spec"), dict) else {}
@@ -607,6 +639,523 @@ if tag == PLACEHOLDER:
     check(not digest, f"[image] no digest rides with the placeholder (rendered {rendered!r}: a runtime pulls by digest and ignores the tag, so the placeholder would resolve to a real, unverified image)")
 else:
     check(not digest or DIGEST.match(digest) is not None, f"[image] the pinned digest {digest!r} is sha256:<64 hex>")
+
+# ── every way in, as ArgoCD renders it ───────────────────────────────────────
+# The checks above read Application FIELDS (destination.namespace, source.path) and
+# render two directories. ArgoCD does not deploy fields: it places every resource at its
+# RENDERED metadata.namespace (falling back to destination.namespace), project `default`
+# has no destination limits, and an Application can be generated by an ApplicationSet or
+# rendered out of another Application's path. So this walk RENDERS: starting from the two
+# roots (app-of-apps.yaml and every document under apps/, the tree bootstrap.sh applies),
+# every Application is rendered the way argocd-repo-server would (source type as ArgoCD
+# infers it: Chart.yaml -> `helm template` with the Application's helm block, a
+# kustomization -> `kubectl kustomize` with spec.source.kustomize applied as an overlay,
+# otherwise the directory's YAML/JSON, recursed only under directory.recurse); every
+# Application or ApplicationSet that a render or a generator produces is walked again
+# (nested app-of-apps), paths are resolved through symlinks and must stay inside the
+# repository, and every generator element is generated (selected or not: the admin-bff
+# reconciler flips `installed` at runtime). Anything this check cannot evaluate FAILS:
+# a generator other than list/matrix/scmProvider, a template construct other than
+# `{{ .key }}`, a templatePatch, a plugin or jsonnet source, a helm/kustomize option it
+# does not apply, a remote base (kustomize fetches it at sync time: hugmesh-games is never
+# rendered from outside this repository), a multi-source Application, or a render error.
+# A source in ANOTHER repository (a third-party chart, the service catalog's other repos)
+# renders content this repository does not control: outside the threat model, but its
+# inline values may not name the backend, the two-realm environment or the games
+# namespace, and it may not deploy into that namespace.
+# Then, over the UNION of every rendered document, keyed by its effective namespace:
+#   (1) every workload in hugmesh-games is one of GAMES_WORKLOADS below, by exact kind and
+#       name, owned by the Application(s) named there, rendered identically wherever it
+#       is rendered twice, and Deployment hugmesh-games runs the pinned image;
+#   (2) the backend image and the two-realm environment appear NOWHERE else: not in
+#       another container, another workload or another namespace (a deep scan of every
+#       document for `image:` and env entries, envFrom resolved against the union);
+#   (3) a remote base anywhere in a rendered kustomization FAILS (see above).
+# Renders are cached by content (GAMES_RENDER_CACHE, set by the suite inside its own
+# scratch dir): the key is every file a build can read plus the options, so a mutation
+# misses exactly the renders it can change.
+import hashlib, json as _json, tempfile as _tempfile, concurrent.futures
+from collections import defaultdict
+REPO_REAL = os.path.realpath(root)
+GAMES_REAL = os.path.realpath(os.path.join(root, GAMES_PATH))
+CACHE = os.environ.get("GAMES_RENDER_CACHE") or ""
+KFILES = ("kustomization.yaml", "kustomization.yml", "Kustomization")
+# every workload ArgoCD may place in hugmesh-games, and the Applications allowed to own it
+# (optional-games: the optional-services element, which renders the same tree while its
+# template carries no override; see the [app] checks above)
+GAMES_OWNERS = {"hugmesh-games", "optional-games"}
+GAMES_WORKLOADS = {
+    ("Deployment", "hugmesh-games"): GAMES_OWNERS,
+    ("Deployment", "hugmesh-games-portal"): GAMES_OWNERS,
+    ("Deployment", "games-bff-db"): GAMES_OWNERS,
+    ("Deployment", "games-cassandra"): GAMES_OWNERS,
+    ("Job", "games-cassandra-init"): GAMES_OWNERS,
+    ("Deployment", "casdoor-games"): {"casdoor-games"},
+    ("Deployment", "casdoor-games-pg"): {"casdoor-games"},
+    ("Job", "casdoor-games-init"): {"casdoor-games"},
+}
+class Unsupported(Exception):
+    pass
+def this_repo(url):
+    u = str(url or "").strip().lower().rstrip("/")
+    u = u[:-4] if u.endswith(".git") else u
+    return u.replace(":", "/").split("/")[-2:] == ["hugmesh", "hugmesh-generator"]
+def repo_dir(path):
+    p = os.path.realpath(os.path.join(REPO_REAL, str(path or "").strip().lstrip("/")))
+    return p if p == REPO_REAL or p.startswith(REPO_REAL + os.sep) else None
+def walk_tree(d, out, seen):
+    for dp, dn, fn in os.walk(d, followlinks=True):
+        rp = os.path.realpath(dp)
+        if rp in seen:
+            dn[:] = []
+            continue
+        seen.add(rp)
+        dn.sort()
+        out.extend(os.path.join(dp, f) for f in sorted(fn))
+def kustomize_closure(d):
+    """(every file a build of d can read -- a superset --, the remote references in it)"""
+    files, seen, remote, queue = [], set(), [], [d]
+    while queue:
+        x = queue.pop()
+        if os.path.realpath(x) in seen:
+            continue
+        n0 = len(files)
+        walk_tree(x, files, seen)
+        for f in files[n0:]:
+            if os.path.basename(f) not in KFILES:
+                continue
+            try:
+                k = yaml.safe_load(open(f)) or {}
+            except Exception:
+                continue  # the build itself fails on it, and a failed build is red
+            if not isinstance(k, dict):
+                continue
+            base, rel = os.path.dirname(f), os.path.relpath(f, REPO_REAL)
+            for key in ("resources", "components", "bases"):
+                for r in k.get(key) or []:
+                    if isinstance(r, str) and ("://" in r or r.startswith("git@") or "?ref=" in r or not os.path.exists(os.path.join(base, r))):
+                        remote.append(f"{rel}: {key} {r}")
+                    elif isinstance(r, str) and repo_dir(os.path.relpath(os.path.realpath(os.path.join(base, r)), REPO_REAL)) is None:
+                        remote.append(f"{rel}: {key} {r} (leaves the repository)")
+            if k.get("helmCharts") or k.get("helmGlobals"):
+                remote.append(f"{rel}: helmCharts (a chart kustomize fetches)")
+            # every other string that names a file or directory in the repository widens
+            # the cache key (a superset is safe; JSON pointers like `/spec` are not paths)
+            for s in all_strings(k):
+                if "\n" in s or len(s) > 512:
+                    continue
+                for cand in {s, s.split("=", 1)[-1]}:
+                    if cand.startswith("/") or not cand:
+                        continue
+                    t = os.path.join(base, cand)
+                    if repo_dir(os.path.relpath(os.path.realpath(t), REPO_REAL)) is None:
+                        continue
+                    if os.path.isdir(t):
+                        queue.append(t)
+                    elif os.path.isfile(t):
+                        files.append(t)
+    return sorted(set(files)), remote
+def files_digest(files):
+    h = hashlib.sha256()
+    for f in files:
+        h.update(os.path.relpath(f, REPO_REAL).encode() + b"\0")
+        try:
+            h.update(hashlib.sha256(open(f, "rb").read()).digest())
+        except OSError as e:
+            h.update(str(e).encode())
+        h.update(b"\n")
+    return h.hexdigest()
+_MEMO = {}
+def cached(key):
+    if key in _MEMO:
+        return _MEMO[key]
+    p = os.path.join(CACHE, key + ".yaml") if CACHE else ""
+    if p and os.path.isfile(p):
+        _MEMO[key] = open(p).read()
+        return _MEMO[key]
+    return None
+def store(key, out):
+    _MEMO[key] = out
+    if CACHE:
+        os.makedirs(CACHE, exist_ok=True)
+        tmp = os.path.join(CACHE, f"{key}.{os.getpid()}.tmp")
+        open(tmp, "w").write(out)
+        os.replace(tmp, os.path.join(CACHE, key + ".yaml"))
+def run(cmd, cwd=None, env=None):
+    r = subprocess.run(cmd, capture_output=True, text=True, cwd=cwd, env={**os.environ, "KUBECONFIG": "/dev/null", **(env or {})})
+    if r.returncode != 0:
+        raise RuntimeError(f"{' '.join(cmd[:2])} exited {r.returncode}: {(r.stderr or r.stdout).strip()[:300]}")
+    return r.stdout
+KUSTOMIZE_OPTS = {"images", "namePrefix", "nameSuffix", "namespace", "commonLabels", "commonAnnotations",
+                  "forceCommonLabels", "forceCommonAnnotations", "patches", "components", "replicas", "version"}
+def argo_image(s):
+    old, eq, new = str(s).partition("=")
+    if not eq:
+        old, new = "", old
+    name, tag, digest = split_ref(new)
+    e = {"name": split_ref(old)[0] if old else name, "newName": name}
+    if tag:
+        e["newTag"] = tag
+    if digest:
+        e["digest"] = digest
+    return e
+def plan_kustomize(d, opts):
+    """(cache key, thunk) for `kubectl kustomize` of d with spec.source.kustomize applied"""
+    extra = sorted(set(opts) - KUSTOMIZE_OPTS)
+    if extra:
+        raise Unsupported(f"spec.source.kustomize carries {extra}, which this check does not apply")
+    comps = [os.path.realpath(os.path.join(d, c)) for c in opts.get("components") or []]
+    files, remote = kustomize_closure(d)
+    for c in comps:
+        f2, r2 = kustomize_closure(c)
+        files, remote = sorted(set(files) | set(f2)), remote + r2
+    if remote:
+        raise Unsupported(f"a remote or out-of-repository base ({remote[:3]}): kustomize fetches it at sync time, so nothing here can say what it renders or into which namespace")
+    key = hashlib.sha256(("kustomize\0" + os.path.relpath(d, REPO_REAL) + "\0" + _json.dumps(opts, sort_keys=True, default=str) + "\0" + files_digest(files)).encode()).hexdigest()
+    def thunk():
+        if not opts:
+            return run(["kubectl", "kustomize", d])
+        with _tempfile.TemporaryDirectory() as td:
+            k = {"apiVersion": "kustomize.config.k8s.io/v1beta1", "kind": "Kustomization", "resources": [os.path.relpath(d, td)]}
+            for f in ("namePrefix", "nameSuffix", "namespace"):
+                if opts.get(f):
+                    k[f] = opts[f]
+            labels = {**(opts.get("commonLabels") or {})}
+            if labels:
+                k["commonLabels"] = labels
+            if opts.get("commonAnnotations"):
+                k["commonAnnotations"] = dict(opts["commonAnnotations"])
+            if opts.get("images"):
+                k["images"] = [argo_image(i) for i in opts["images"]]
+            if opts.get("patches"):
+                k["patches"] = opts["patches"]
+            if comps:
+                k["components"] = [os.path.relpath(c, td) for c in comps]
+            if opts.get("replicas"):
+                k["replicas"] = opts["replicas"]
+            open(os.path.join(td, "kustomization.yaml"), "w").write(yaml.safe_dump(k))
+            return run(["kubectl", "kustomize", "--load-restrictor", "LoadRestrictionsNone", td])
+    return key, thunk
+HELM_OPTS = {"releaseName", "values", "valuesObject", "valueFiles", "parameters", "skipCrds", "ignoreMissingValueFiles", "passCredentials", "version"}
+def plan_helm(d, h, release, ns):
+    extra = sorted(set(h) - HELM_OPTS)
+    if extra:
+        raise Unsupported(f"spec.source.helm carries {extra}, which this check does not apply")
+    files = []
+    walk_tree(d, files, set())
+    vfiles = []
+    for vf in h.get("valueFiles") or []:
+        p = repo_dir(os.path.relpath(os.path.join(d, str(vf)), REPO_REAL)) if not str(vf).startswith("$") and "://" not in str(vf) else None
+        if p is None:
+            raise Unsupported(f"a helm valueFile outside this repository ({vf})")
+        if not os.path.isfile(p):
+            if h.get("ignoreMissingValueFiles"):
+                continue
+            raise Unsupported(f"a missing helm valueFile ({vf})")
+        vfiles.append(p)
+    files = sorted(set(files) | set(vfiles))
+    key = hashlib.sha256(("helm\0" + os.path.relpath(d, REPO_REAL) + "\0" + release + "\0" + str(ns) + "\0" + _json.dumps(h, sort_keys=True, default=str) + "\0" + files_digest(files)).encode()).hexdigest()
+    def thunk():
+        with _tempfile.TemporaryDirectory() as td:
+            cmd = ["helm", "template", release, d, "--namespace", ns or "default"]
+            if not h.get("skipCrds"):
+                cmd.append("--include-crds")
+            for p in vfiles:
+                cmd += ["-f", p]
+            vo = h.get("valuesObject")
+            if vo is not None or h.get("values"):
+                vp = os.path.join(td, "values.yaml")
+                open(vp, "w").write(yaml.safe_dump(vo) if vo is not None else str(h["values"]))
+                cmd += ["-f", vp]
+            for prm in h.get("parameters") or []:
+                cmd += ["--set-string" if prm.get("forceString") else "--set", f"{prm.get('name')}={prm.get('value')}"]
+            return run(cmd, env={"HELM_CACHE_HOME": td, "HELM_CONFIG_HOME": td, "HELM_DATA_HOME": td})
+    return key, thunk
+def directory_docs(d, opts):
+    extra = sorted(set(opts) - {"recurse", "include", "exclude"})
+    if extra:
+        raise Unsupported(f"spec.source.directory carries {extra} (jsonnet is not evaluated here)")
+    files = []
+    if opts.get("recurse"):
+        walk_tree(d, files, set())
+    else:
+        files = [os.path.join(d, f) for f in sorted(os.listdir(d)) if os.path.isfile(os.path.join(d, f))]
+    # include/exclude are NOT applied: reading more than ArgoCD reads can only add a red
+    out = []
+    for f in files:
+        if f.endswith((".jsonnet", ".libsonnet")):
+            raise Unsupported(f"a jsonnet file ({os.path.relpath(f, REPO_REAL)}) ArgoCD would evaluate")
+        if f.endswith((".yaml", ".yml", ".json")):
+            out += [x for x in yaml.load_all(open(f), Loader=SAFE) if x]
+    return out
+TPL_ANY = re.compile(r"\{\{(.*?)\}\}", re.S)
+GO_FIELD = re.compile(r"\.[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*")
+def flatten(o, pfx=""):
+    out = {}
+    for k, v in (o or {}).items():
+        if isinstance(v, dict):
+            out.update(flatten(v, f"{pfx}{k}."))
+        else:
+            out[f"{pfx}{k}"] = v
+    return out
+def scalar(v, expr):
+    if isinstance(v, bool):
+        return "true" if v else "false"
+    if isinstance(v, (dict, list)) or v is None:
+        raise Unsupported(f"template {expr!r} renders a {type(v).__name__}, not a string")
+    return str(v)
+def tfill(s, params, gotpl):
+    def sub(m):
+        inner = m.group(1).strip()
+        if gotpl:
+            inner = inner.lstrip("-").rstrip("-").strip()
+            if not GO_FIELD.fullmatch(inner):
+                raise Unsupported(f"template construct {{{{{m.group(1)}}}}} (only {{{{ .key }}}} is evaluated here)")
+            v = params
+            for part in inner[1:].split("."):
+                if not isinstance(v, dict) or part not in v:
+                    raise Unsupported(f"template key {inner} that no generated element carries")
+                v = v[part]
+            return scalar(v, inner)
+        flat = flatten(params)
+        if inner not in flat:
+            raise Unsupported(f"template key {{{{{inner}}}}} that no generated element carries")
+        return scalar(flat[inner], inner)
+    return TPL_ANY.sub(sub, s)
+def tfill_all(o, params, gotpl):
+    if isinstance(o, dict):
+        return {k: tfill_all(v, params, gotpl) for k, v in o.items()}
+    if isinstance(o, list):
+        return [tfill_all(v, params, gotpl) for v in o]
+    if isinstance(o, str):
+        return tfill(o, params, gotpl)
+    return o
+SCM_PARAMS = {"organization": "hugmesh", "repository": "hugmesh-generator", "url": THIS_REPO, "branch": "main",
+              "branchNormalized": "main", "sha": "", "short_sha": "", "short_sha_7": ""}
+def gen_params(g, ctx, gotpl):
+    kinds = sorted(set(g) - {"selector"})
+    if kinds == ["list"]:
+        L = g["list"] or {}
+        if set(L) - {"elements", "elementsYaml", "template"} or L.get("template"):
+            raise Unsupported(f"a list generator carrying {sorted(set(L) - {'elements', 'elementsYaml'})}")
+        els = list(L.get("elements") or [])
+        if L.get("elementsYaml"):
+            els += yaml.safe_load(tfill(str(L["elementsYaml"]), ctx, gotpl)) or []
+        if not all(isinstance(e, dict) for e in els):
+            raise Unsupported("a list element that is not a map")
+        return [dict(e) for e in els]
+    if kinds == ["matrix"]:
+        gens = (g["matrix"] or {}).get("generators") or []
+        if len(gens) != 2 or set(g["matrix"]) - {"generators", "template"} or g["matrix"].get("template"):
+            raise Unsupported("a matrix generator that is not exactly two child generators")
+        return [{**p1, **p2} for p1 in gen_params(gens[0], ctx, gotpl) for p2 in gen_params(gens[1], {**ctx, **p1}, gotpl)]
+    if kinds == ["scmProvider"]:
+        # Only THIS repository is in scope: the provider lists the org's repositories,
+        # and this one (or its Forgejo mirror) is generated when a filter matches it.
+        # Conditions that need the provider's API (labels, branches) count as matching.
+        s = g["scmProvider"] or {}
+        def match(f):
+            for k, v in (f or {}).items():
+                if k == "repositoryMatch" and not re.search(str(v), SCM_PARAMS["repository"]):
+                    return False
+                if k == "pathsExist" and not all(os.path.lexists(os.path.join(REPO_REAL, str(p))) for p in v or []):
+                    return False
+                if k == "pathsDoNotExist" and any(os.path.lexists(os.path.join(REPO_REAL, str(p))) for p in v or []):
+                    return False
+            return True
+        return [dict(SCM_PARAMS)] if any(match(f) for f in (s.get("filters") or [{}])) else []
+    raise Unsupported(f"a {kinds} generator, which this check cannot evaluate (supported: list, matrix of two, scmProvider)")
+def generate(appset):
+    spec = appset.get("spec") or {}
+    if spec.get("templatePatch"):
+        raise Unsupported("a templatePatch, which this check cannot evaluate")
+    gotpl = bool(spec.get("goTemplate"))
+    out = []
+    for g in spec.get("generators") or []:
+        for params in gen_params(g, {}, gotpl):
+            t = tfill_all(spec.get("template") or {}, params, gotpl)
+            md = dict(t.get("metadata") or {})
+            md.setdefault("namespace", (appset.get("metadata") or {}).get("namespace"))
+            out.append({"apiVersion": "argoproj.io/v1alpha1", "kind": "Application", "metadata": md, "spec": t.get("spec") or {}})
+    return out
+LEAK_WORDS = [GAMES_NS, GAMES_PATH] + sorted(TWO_REALM_ENV)
+OWNER_ORIGINS = {"50-games.yaml doc 1 Application hugmesh-games", "06-casdoor-games.yaml doc 1 Application casdoor-games",
+                 "13a-optional-services.yaml doc 1 ApplicationSet optional-services -> generates Application optional-games"}
+external, rendered_apps, generated_n, nested_n, union, seen_apps = [], 0, 0, 0, [], set()
+queue = []
+for p in app_files():
+    rel = os.path.relpath(p, os.path.join(C, "apps")) if os.path.dirname(p) != C else os.path.relpath(p, C)
+    if not p.endswith((".yaml", ".yml", ".json")):
+        continue
+    try:
+        fdocs = docs(p)
+    except Exception:
+        continue  # already red above
+    for i, d in enumerate(fdocs):
+        if isinstance(d, dict) and d.get("kind") in ("Application", "ApplicationSet"):
+            queue.append((f"{rel} doc {i + 1} {d['kind']} {(d.get('metadata') or {}).get('name')}", d, 0, "root"))
+depth_cap = 6
+while queue:
+    level, queue, plans = queue, [], []
+    for where, d, depth, how in level:
+        ck = _json.dumps(d, sort_keys=True, default=str)
+        if ck in seen_apps:
+            continue
+        seen_apps.add(ck)
+        if depth > depth_cap:
+            bad(f"[ways] {where}: nested more than {depth_cap} Applications deep; a walk that stops is one that cannot vouch for what lies below")
+            continue
+        name = (d.get("metadata") or {}).get("name")
+        spec = d.get("spec") or {}
+        if d.get("kind") == "ApplicationSet":
+            try:
+                for a in generate(d):
+                    generated_n += 1
+                    queue.append((f"{where} -> generates Application {(a.get('metadata') or {}).get('name')}", a, depth + 1, "generated"))
+            except (Unsupported, yaml.YAMLError) as e:
+                bad(f"[ways] {where}: {e}; an ApplicationSet whose Applications this check cannot generate is one it cannot vouch for")
+            continue
+        # An owner is named bare only at the exact origin the [app] checks above vouch for
+        # (apps/50-games.yaml doc 1, apps/06-casdoor-games.yaml doc 1, the optional-services
+        # element); anything else carries where it came from, so it can never pass as one.
+        owner = name if where in OWNER_ORIGINS else f"{name} [{how}: {where.split(' ')[0]}]"
+        if how != "root":
+            nested_n += how == "nested"
+            srcs = ([spec["source"]] if spec.get("source") else []) + list(spec.get("sources") or [])
+            dest = (spec.get("destination") or {}).get("namespace")
+            hits = [s.get("path") for s in srcs if isinstance(s, dict) and this_repo(s.get("repoURL")) and s.get("path") and repo_dir(s["path"]) == GAMES_REAL]
+            if (hits or dest == GAMES_NS) and owner != "optional-games":
+                bad(f"[ways] {where} ({how}) reaches the games path or the {GAMES_NS} namespace (path {hits}, destination {dest!r}); only apps/50-games.yaml's hugmesh-games may")
+        if "sources" in spec:
+            bad(f"[ways] {where}: a multi-source Application, which this check does not render")
+            continue
+        src = spec.get("source") or {}
+        dest_ns = (spec.get("destination") or {}).get("namespace") or None
+        if not this_repo(src.get("repoURL")):
+            leaks = sorted({w for s in all_strings(src) for w in LEAK_WORDS if w in s} | {s for s in all_strings(src) if BACKEND_NAME.search(s)})
+            external.append((where, src.get("repoURL"), dest_ns, leaks))
+            continue
+        if "plugin" in src:
+            bad(f"[ways] {where}: a config-management plugin source, which this check cannot render")
+            continue
+        dpath = repo_dir(src.get("path", ""))
+        if dpath is None or not os.path.isdir(dpath):
+            bad(f"[ways] {where}: spec.source.path {src.get('path')!r} is not a directory inside this repository")
+            continue
+        ovr = sorted(f for f in os.listdir(dpath) if f.startswith(".argocd-source"))
+        if ovr:
+            bad(f"[ways] {where}: {ovr} in {os.path.relpath(dpath, REPO_REAL)}: argocd-repo-server merges a parameter override file into spec.source before the build")
+        explicit = [k for k in ("helm", "kustomize", "directory") if k in src]
+        typ = explicit[0] if len(explicit) == 1 else ("helm" if os.path.isfile(os.path.join(dpath, "Chart.yaml"))
+                                                      else "kustomize" if any(os.path.isfile(os.path.join(dpath, k)) for k in KFILES) else "directory")
+        try:
+            if len(explicit) > 1:
+                raise Unsupported(f"more than one source type ({explicit})")
+            if typ == "directory":
+                plans.append((where, owner, dest_ns, depth, None, directory_docs(dpath, src.get("directory") or {})))
+            elif typ == "helm":
+                plans.append((where, owner, dest_ns, depth, plan_helm(dpath, src.get("helm") or {}, (src.get("helm") or {}).get("releaseName") or name, dest_ns), None))
+            else:
+                plans.append((where, owner, dest_ns, depth, plan_kustomize(dpath, src.get("kustomize") or {}), None))
+        except (Unsupported, yaml.YAMLError, OSError) as e:
+            bad(f"[ways] {where}: {e}")
+    todo = {}
+    for p in plans:
+        if p[4] is not None and cached(p[4][0]) is None:
+            todo[p[4][0]] = p[4][1]
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max(2, min(8, os.cpu_count() or 2))) as ex:
+        futs = {k: ex.submit(t) for k, t in todo.items()}
+        failed = {}
+        for k, f in futs.items():
+            try:
+                store(k, f.result())
+            except Exception as e:
+                failed[k] = e
+    for where, owner, dest_ns, depth, plan, ddocs in plans:
+        if plan is not None:
+            if plan[0] in failed:
+                bad(f"[ways] {where}: the render failed ({failed[plan[0]]}); an Application this check cannot render is one it cannot vouch for")
+                continue
+            try:
+                ddocs = [x for x in yaml.load_all(cached(plan[0]), Loader=SAFE) if x]
+            except yaml.YAMLError as e:
+                bad(f"[ways] {where}: the render does not parse ({e})")
+                continue
+        rendered_apps += 1
+        # a v1 List (or any *List with items) is unpacked into its items, as on apply
+        ddocs = [i for x in ddocs for i in ((x.get("items") or []) if isinstance(x, dict) and str(x.get("kind", "")).endswith("List") and isinstance(x.get("items"), list) else [x])]
+        for x in ddocs:
+            if not isinstance(x, dict):
+                continue
+            ns = (x.get("metadata") or {}).get("namespace") or dest_ns
+            union.append((owner, where, ns, x))
+            if x.get("kind") in ("Application", "ApplicationSet"):
+                queue.append((f"{where} -> renders {x['kind']} {(x.get('metadata') or {}).get('name')}", x, depth + 1, "nested"))
+check(rendered_apps > 80 and len(union) > 500,
+      f"[ways] the walk rendered {rendered_apps} Applications from this repository ({generated_n} generated, {nested_n} reached through another Application's render; {len(external)} sources in other repositories) into {len(union)} documents (a walk that renders nothing proves nothing)")
+ext_bad = [f"{w} ({u}, destination {n!r}, values naming {l})" for w, u, n, l in external if l or n == GAMES_NS]
+check(not ext_bad,
+      f"[ways] the {len(external)} sources in other repositories (third-party charts) neither deploy into {GAMES_NS} nor are handed the backend, the two-realm environment or the games path in their inline values (found {ext_bad})")
+# envFrom is resolved against the ConfigMaps and Secrets the union puts in that namespace
+envsrc = {}
+for owner, where, ns, x in union:
+    if x.get("kind") in ("ConfigMap", "Secret"):
+        keys = set((x.get("data") or {})) | set((x.get("stringData") or {}))
+        envsrc.setdefault((ns, x["kind"], (x.get("metadata") or {}).get("name")), set()).update(keys)
+def leaks_in(o, ns, path=""):
+    """every backend image and every two-realm env entry in a document, with its path"""
+    out = []
+    if isinstance(o, dict):
+        img = o.get("image")
+        if isinstance(img, str) and BACKEND_NAME.search(img):
+            out.append((path, "image " + img))
+        if o.get("name") in TWO_REALM_ENV and ("value" in o or "valueFrom" in o):
+            out.append((path, "env " + o["name"]))
+        if (((o.get("valueFrom") or {}).get("secretKeyRef") or {}).get("name") == "casdoor-games-app") if isinstance(o.get("valueFrom"), dict) else False:
+            out.append((path, "env from the casdoor-games-app client Secret"))
+        for ref, kind in (("configMapRef", "ConfigMap"), ("secretRef", "Secret")):
+            r = o.get(ref)
+            if isinstance(r, dict):
+                got = envsrc.get((ns, kind, r.get("name")), set()) & TWO_REALM_ENV
+                if got or r.get("name") == "casdoor-games-app":
+                    out.append((path, f"envFrom {kind} {r.get('name')} ({sorted(got)})"))
+        for k, v in o.items():
+            out += leaks_in(v, ns, f"{path}/{k}")
+    elif isinstance(o, list):
+        for i, v in enumerate(o):
+            out += leaks_in(v, ns, f"{path}/{i}")
+    return out
+games_wl, leaks, no_ns, pinned_seen = defaultdict(list), [], [], []
+for owner, where, ns, x in union:
+    kind, wname = x.get("kind"), (x.get("metadata") or {}).get("name")
+    carries = bool(pod_specs(x)) or bool(stray_containers(x, []))
+    if carries and not ns:
+        no_ns.append(f"{where}: {kind}/{wname}")
+    if carries and ns == GAMES_NS:
+        games_wl[(kind, wname)].append((owner, where, x))
+    for path, what in leaks_in(x, ns):
+        m = re.match(r"^/spec/template/spec/containers/(\d+)/", path + "/")
+        if (ns == GAMES_NS and kind == "Deployment" and wname == "hugmesh-games" and owner in GAMES_OWNERS and m
+                and ((((x.get("spec") or {}).get("template") or {}).get("spec") or {}).get("containers") or [{}])[int(m.group(1))].get("name") == "games"):
+            if what.startswith("image "):
+                pinned_seen.append((owner, what[6:]))
+            continue
+        leaks.append(f"{ns}/{kind}/{wname}{path} [{owner}]: {what}")
+check(not no_ns, f"[ways] every workload has an effective namespace (its rendered metadata.namespace, else its Application's destination; found none for {no_ns})")
+check(not leaks, f"[ways] the backend image and the two-realm environment appear nowhere in what ArgoCD deploys but Deployment {GAMES_NS}/hugmesh-games container games (found {leaks})")
+stray_wl = sorted(f"{k[0]}/{k[1]} [{', '.join(sorted({o for o, _, _ in v}))}]" for k, v in games_wl.items() if k not in GAMES_WORKLOADS)
+check(not stray_wl, f"[ways] every workload ArgoCD places in {GAMES_NS} is one this suite names (unexpected: {stray_wl})")
+missing_wl = sorted(f"{k[0]}/{k[1]}" for k in GAMES_WORKLOADS if k not in games_wl)
+check(not missing_wl, f"[ways] every workload this suite names in {GAMES_NS} is rendered (missing: {missing_wl}; a walk that misses the BFF proves nothing about it)")
+for k, v in sorted(games_wl.items()):
+    if k not in GAMES_WORKLOADS:
+        continue
+    owners = sorted({o for o, _, _ in v})
+    check(set(owners) <= GAMES_WORKLOADS[k], f"[ways] {GAMES_NS} {k[0]}/{k[1]} is owned only by {sorted(GAMES_WORKLOADS[k])} (rendered by {owners})")
+    variants = {_json.dumps(x, sort_keys=True, default=str) for _, _, x in v}
+    check(len(variants) == 1, f"[ways] {GAMES_NS} {k[0]}/{k[1]} renders identically everywhere it is rendered ({len(variants)} variants across {[w for _, w, _ in v]})")
+check(bool(pinned_seen) and all(img == composed for _, img in pinned_seen),
+      f"[ways] Deployment {GAMES_NS}/hugmesh-games container games runs the pinned image {composed!r} in every render that places it (found {sorted(set(pinned_seen))})")
 
 # ── every nodeSelector in the games tier is a label some role actually sets ──────
 # A pair nobody sets is a pod Pending forever, and nothing on a cluster says why. The
@@ -1053,7 +1602,9 @@ expect_red(){ # $1 label, $2 string the failure must name, $3 python mutation (p
   cp "${REPO}/keys-template/examples/provision.host.json" "${T}/keys-template/examples/"
   cp "${REPO}/build-x86-host-stage4.sh" "${T}/"
   local before after out
-  before="$(cd "${T}" && find . -type f -exec cat {} + | sha256sum)"
+  # names, symlink targets and contents: a control that only adds a symlink must count
+  fingerprint(){ (cd "${T}" && { find . \( -type f -o -type l \) -printf '%p %l\n' | sort; find . -type f -exec cat {} +; } | sha256sum); }
+  before="$(fingerprint)"
   python3 - "${T}" <<PYM || { bad "${label}: the mutation script failed"; return; }
 import os, sys
 root = sys.argv[1]
@@ -1069,9 +1620,31 @@ SHADOW = ("apiVersion: argoproj.io/v1alpha1\nkind: Application\nmetadata:\n  nam
           "    path: specs/cluster/manifests/games\n    kustomize:\n      namePrefix: shadow-\n      images:\n"
           "        - registry.hugmesh.net/hugmesh/hugmesh-games/backend=ghcr.io/hugmesh/hugmesh-games/backend:main\n"
           "  destination:\n    server: https://kubernetes.default.svc\n    namespace: hugmesh-games\n")
+def app(name, path, ns=None, extra=""):
+    return ("apiVersion: argoproj.io/v1alpha1\nkind: Application\nmetadata:\n  name: " + name + "\n  namespace: devops\nspec:\n  project: default\n"
+            "  source:\n    repoURL: https://github.com/hugmesh/hugmesh-generator.git\n    targetRevision: main\n    path: " + path + "\n" + extra +
+            "  destination:\n    server: https://kubernetes.default.svc\n" + ("    namespace: " + ns + "\n" if ns else ""))
+def canary(new_name, new_tag, d="games-canary"):
+    # the refuter's p1 family: the BFF copied into its own directory, which sets the
+    # games namespace itself, re-pinned, with an Application of its own
+    import shutil
+    os.makedirs(os.path.join(root, M, d))
+    shutil.copy(os.path.join(root, M, "games/deployment.yaml"), os.path.join(root, M, d, "deployment.yaml"))
+    open(os.path.join(root, M, d, "kustomization.yaml"), "w").write(
+        "apiVersion: kustomize.config.k8s.io/v1beta1\nkind: Kustomization\nnamespace: hugmesh-games\nnameSuffix: -canary\nresources:\n  - deployment.yaml\n"
+        "images:\n  - name: hugmesh/hugmesh.games-backend\n    newName: " + new_name + "\n    newTag: " + new_tag + "\n")
+PRE52 = "registry.hugmesh.net/hugmesh/hugmesh-games/backend:sha-73a5bc2c6d09"
+TWO_REALM = "            - { name: APP_TENANCY_ISSUERS, value: \"https://id.hugmesh.games=default,https://id.hugmesh.net=default\" }\n"
+def deployment(name, ns, image, env=TWO_REALM, extra=""):
+    return ("apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: " + name + "\n" + ("  namespace: " + ns + "\n" if ns else "") +
+            "spec:\n  selector: { matchLabels: { app: " + name + " } }\n  template:\n    metadata: { labels: { app: " + name + " } }\n    spec:\n"
+            "      containers:\n        - name: games\n          image: " + image + "\n" + ("          env:\n" + env if env else "") + extra)
+def add_to(kdir, fname, body):
+    rep(M + kdir + "/kustomization.yaml", "resources:\n", "resources:\n  - " + fname + "\n")
+    open(os.path.join(root, M, kdir, fname), "w").write(body)
 ${mut}
 PYM
-  after="$(cd "${T}" && find . -type f -exec cat {} + | sha256sum)"
+  after="$(fingerprint)"
   if [ "${before}" = "${after}" ]; then bad "${label}: the mutation changed nothing (the control is vacuous)"; return; fi
   out="$(python3 "${ANALYSER}" "${T}" 2>&1)"
   if [ $? -eq 0 ]; then bad "${label}: the analyser stayed GREEN"; return; fi
@@ -1136,6 +1709,53 @@ expect_red "n11: a custom resource carrying its own container list (no pod templ
 open(os.path.join(root, M, "games/runner.yaml"), "w").write("apiVersion: example.net/v1\nkind: GamesRunner\nmetadata:\n  name: shadow\n  namespace: hugmesh-games\nspec:\n  runner:\n    containers:\n      - name: games\n        image: docker.io/library/alpine:3.20\n")'
 expect_red "n12: the casdoor-games render (same namespace) gains a backend container" "the casdoor-games render (same namespace) runs no backend image" 'rep(M+"casdoor-games/kustomization.yaml", "resources:\n", "resources:\n  - shadow.yaml\n")
 open(os.path.join(root, M, "casdoor-games/shadow.yaml"), "w").write("apiVersion: apps/v1\nkind: Deployment\nmetadata: { name: shadow, namespace: hugmesh-games }\nspec:\n  selector: { matchLabels: { app: shadow } }\n  template:\n    metadata: { labels: { app: shadow } }\n    spec:\n      containers:\n        - { name: games, image: ghcr.io/hugmesh/hugmesh-games/backend:main }\n")'
+# Round 5 (refuter's p1, p1b, p1c, p3, p3b, p4, p5, p5b, p6, p7) and their siblings:
+# ArgoCD places a resource at its RENDERED namespace, so every way in is judged by
+# what it renders, not by the fields of the Application that carries it.
+expect_red "p1c: a copied BFF directory sets namespace hugmesh-games itself, pre-#52 Harbor tag, its Application names no destination namespace" "hugmesh-games/Deployment/hugmesh-games-canary/spec/template/spec/containers/0" 'canary("registry.hugmesh.net/hugmesh/hugmesh-games/backend", "sha-73a5bc2c6d09")
+open(os.path.join(root, A, "50c-games-canary.yaml"), "w").write(app("hugmesh-games-canary", "specs/cluster/manifests/games-canary"))'
+expect_red "p1: the same copy re-pinned to ghcr :main" "unexpected: ['Deployment/hugmesh-games-canary" 'canary("ghcr.io/hugmesh/hugmesh-games/backend", "main")
+open(os.path.join(root, A, "50c-games-canary.yaml"), "w").write(app("hugmesh-games-canary", "specs/cluster/manifests/games-canary"))'
+expect_red "p1b: the same copy, its Application naming hugmesh-frontend (the kustomization namespace wins)" "Deployment/hugmesh-games-canary [hugmesh-games-canary [root: 50c-games-canary.yaml]]" 'canary("ghcr.io/hugmesh/hugmesh-games/backend", "main")
+open(os.path.join(root, A, "50c-games-canary.yaml"), "w").write(app("hugmesh-games-canary", "specs/cluster/manifests/games-canary", "hugmesh-frontend"))'
+expect_red "p7: a pre-#52 Deployment with metadata.namespace hugmesh-games added to an existing Application (networkpolicy)" "Deployment/hugmesh-games-canary [networkpolicy [root: 08-networkpolicy.yaml]]" 'add_to("networkpolicy", "games-backend-canary.yaml", deployment("hugmesh-games-canary", "hugmesh-games", PRE52))'
+expect_red "p7b: the BFF's own name, pre-#52, rendered into hugmesh-games by another Application" "hugmesh-games Deployment/hugmesh-games is owned only by" 'add_to("networkpolicy", "games-backend.yaml", deployment("hugmesh-games", "hugmesh-games", PRE52))'
+expect_red "p4: a nested app-of-apps (apps/99-extra.yaml -> specs/cluster/apps-extra/) carries an Application at the games path" "renders Application hugmesh-games-main (nested) reaches the games path" 'os.makedirs(os.path.join(root, "specs/cluster/apps-extra"))
+open(os.path.join(root, A, "99-extra.yaml"), "w").write(app("hugmesh-extra", "specs/cluster/apps-extra", "devops"))
+open(os.path.join(root, "specs/cluster/apps-extra/50-games-main.yaml"), "w").write(SHADOW)'
+expect_red "p4b: the nested app-of-apps carries the p1c copy instead (no games path, no games destination)" "[nested: 99-extra.yaml]" 'os.makedirs(os.path.join(root, "specs/cluster/apps-extra"))
+canary("registry.hugmesh.net/hugmesh/hugmesh-games/backend", "sha-73a5bc2c6d09")
+open(os.path.join(root, A, "99-extra.yaml"), "w").write(app("hugmesh-extra", "specs/cluster/apps-extra", "devops"))
+open(os.path.join(root, "specs/cluster/apps-extra/50-games-canary.yaml"), "w").write(app("hugmesh-games-canary", "specs/cluster/manifests/games-canary"))'
+expect_red "p5: an ApplicationSet with a clusters generator carrying values" "a ['clusters'] generator, which this check cannot evaluate" 'open(os.path.join(root, A, "13f-per-cluster.yaml"), "w").write("apiVersion: argoproj.io/v1alpha1\nkind: ApplicationSet\nmetadata: { name: per-cluster, namespace: devops }\nspec:\n  generators:\n    - clusters: { selector: {}, values: { svc: games } }\n  template:\n    metadata: { name: \"per-cluster-{{values.svc}}\" }\n    spec:\n      project: default\n      source: { repoURL: \"https://github.com/hugmesh/hugmesh-generator.git\", targetRevision: main, path: \"specs/cluster/manifests/{{values.svc}}\", kustomize: { namePrefix: shadow- } }\n      destination: { server: \"{{server}}\", namespace: \"hugmesh-{{values.svc}}\" }\n")'
+expect_red "p5b: a list ApplicationSet whose goTemplate pipes the element through a function" "template construct {{ .svc | lower }}" 'open(os.path.join(root, A, "13f-per-svc.yaml"), "w").write("apiVersion: argoproj.io/v1alpha1\nkind: ApplicationSet\nmetadata: { name: per-svc, namespace: devops }\nspec:\n  goTemplate: true\n  generators:\n    - list: { elements: [ { svc: Games } ] }\n  template:\n    metadata: { name: \"per-svc-{{ .svc | lower }}\" }\n    spec:\n      project: default\n      source: { repoURL: \"https://github.com/hugmesh/hugmesh-generator.git\", targetRevision: main, path: \"specs/cluster/manifests/{{ .svc | lower }}\", kustomize: { namePrefix: shadow- } }\n      destination: { server: https://kubernetes.default.svc, namespace: \"hugmesh-{{ .svc | lower }}\" }\n")'
+expect_red "p5c: a list ApplicationSet (evaluated) generating the p1c copy with no destination namespace" "[generated: 13f-canaries.yaml]" 'canary("registry.hugmesh.net/hugmesh/hugmesh-games/backend", "sha-73a5bc2c6d09")
+open(os.path.join(root, A, "13f-canaries.yaml"), "w").write("apiVersion: argoproj.io/v1alpha1\nkind: ApplicationSet\nmetadata: { name: canaries, namespace: devops }\nspec:\n  goTemplate: true\n  generators:\n    - list: { elements: [ { svc: games-canary } ] }\n  template:\n    metadata: { name: \"c-{{ .svc }}\" }\n    spec:\n      project: default\n      source: { repoURL: \"https://github.com/hugmesh/hugmesh-generator.git\", targetRevision: main, path: \"specs/cluster/manifests/{{ .svc }}\" }\n      destination: { server: https://kubernetes.default.svc }\n")'
+expect_red "p6: manifests/games-next is a symlink to games; its Application re-pins the image with no destination namespace" "hugmesh-games/Deployment/next-hugmesh-games/spec/template/spec/containers/0" 'os.symlink("games", os.path.join(root, M, "games-next"))
+open(os.path.join(root, A, "50c-games-next.yaml"), "w").write(app("hugmesh-games-next", "specs/cluster/manifests/games-next", None, "    kustomize:\n      namePrefix: next-\n      images:\n        - registry.hugmesh.net/hugmesh/hugmesh-games/backend=ghcr.io/hugmesh/hugmesh-games/backend:main\n"))'
+expect_red "p6b: the symlinked path, no override: the path is compared resolved" "50c-games-next.yaml doc 1 Application hugmesh-games-next reaches the games path" 'os.symlink("games", os.path.join(root, M, "games-next"))
+open(os.path.join(root, A, "50c-games-next.yaml"), "w").write(app("hugmesh-games-next", "specs/cluster/manifests/games-next"))'
+expect_red "p3: a remote base of this repository re-pinned, its Application naming no destination namespace" "a remote or out-of-repository base" 'os.makedirs(os.path.join(root, M, "games-canary"))
+open(os.path.join(root, M, "games-canary/kustomization.yaml"), "w").write("apiVersion: kustomize.config.k8s.io/v1beta1\nkind: Kustomization\nresources:\n  - https://github.com/hugmesh/hugmesh-generator//specs/cluster/manifests/games?ref=main\nimages:\n  - name: registry.hugmesh.net/hugmesh/hugmesh-games/backend\n    newName: ghcr.io/hugmesh/hugmesh-games/backend\n    newTag: main\n")
+open(os.path.join(root, A, "50c-games-canary.yaml"), "w").write(app("hugmesh-games-canary", "specs/cluster/manifests/games-canary"))'
+expect_red "p3b: an in-repository directory reached only through a path that leaves the repository" "leaves the repository" 'os.makedirs(os.path.join(root, M, "games-canary"))
+open(os.path.join(root, M, "games-canary/kustomization.yaml"), "w").write("apiVersion: kustomize.config.k8s.io/v1beta1\nkind: Kustomization\nresources:\n  - ../../../../../../../../../../../../../../../../../../../../tmp\n")
+open(os.path.join(root, A, "50c-games-canary.yaml"), "w").write(app("hugmesh-games-canary", "specs/cluster/manifests/games-canary"))'
+expect_red "w1: the backend image (no two-realm env) in another namespace, through an existing Application" "hugmesh-backend/Deployment/games-cache" 'add_to("hugmesh-apis", "games-cache.yaml", deployment("games-cache", None, PRE52, None))'
+expect_red "w2: the two-realm environment handed through envFrom to a non-backend image in another namespace" "envFrom ConfigMap games-realms" 'add_to("hugmesh-apis", "games-realms.yaml", "apiVersion: v1\nkind: ConfigMap\nmetadata: { name: games-realms }\ndata: { APP_TENANCY_ISSUERS: x }\n---\n" + deployment("realms-reader", None, "docker.io/library/alpine:3.20", None, "          envFrom:\n            - configMapRef: { name: games-realms }\n"))'
+expect_red "w3: a workload with no metadata.namespace in an Application with no destination namespace" "every workload has an effective namespace" 'add_to("networkpolicy", "nowhere.yaml", deployment("nowhere", None, "docker.io/library/alpine:3.20", None))'
+expect_red "w4: a third-party chart handed the backend image in its inline values" "sources in other repositories" 'open(os.path.join(root, A, "57-ext.yaml"), "w").write("apiVersion: argoproj.io/v1alpha1\nkind: Application\nmetadata: { name: ext, namespace: devops }\nspec:\n  project: default\n  source:\n    repoURL: https://charts.example.net\n    chart: anything\n    targetRevision: 1.0.0\n    helm:\n      values: |\n        image: registry.hugmesh.net/hugmesh/hugmesh-games/backend:sha-73a5bc2c6d09\n  destination: { server: https://kubernetes.default.svc, namespace: hugmesh-backend }\n")'
+expect_red "w5: this repository's gateway chart handed the backend image as a helm parameter (helm template, rendered)" "[hugmesh-gateway-be [root: 20-gateway-be.yaml]]: image" 'rep(A + "20-gateway-be.yaml", "      releaseName: hugmesh-be-gateway\n", "      releaseName: hugmesh-be-gateway\n      parameters:\n        - { name: image.repository, value: registry.hugmesh.net/hugmesh/hugmesh-games/backend }\n")'
+expect_red "w6: a deploy/ directory at the repository root, which the service catalog scmProvider generates from this repository" "[generated: 13-service-catalog.yaml]" 'os.makedirs(os.path.join(root, "deploy"))
+open(os.path.join(root, "hugmesh-deploy.yaml"), "w").write("name: x\n")
+open(os.path.join(root, "deploy/games.yaml"), "w").write(deployment("hugmesh-games-catalog", "hugmesh-games", PRE52))'
+expect_red "w7: a v1 List in a directory-type Application wraps a Deployment into hugmesh-games" "unexpected: ['Deployment/games-in-a-list" 'open(os.path.join(root, M, "binhost/games-list.yaml"), "w").write("apiVersion: v1\nkind: List\nitems:\n  - apiVersion: apps/v1\n    kind: Deployment\n    metadata: { name: games-in-a-list, namespace: hugmesh-games }\n    spec:\n      selector: { matchLabels: { app: x } }\n      template:\n        metadata: { labels: { app: x } }\n        spec: { containers: [ { name: c, image: docker.io/library/alpine:3.20 } ] }\n")'
+expect_red "w8: an Application handed kustomize.namespace hugmesh-games by an existing app (rendered with the override)" "[hugmesh-apis [root: 30-hugmesh-apis.yaml]]" 'rep(A + "30-hugmesh-apis.yaml", "    path: specs/cluster/manifests/hugmesh-apis\n", "    path: specs/cluster/manifests/hugmesh-apis\n    kustomize:\n      namespace: hugmesh-games\n")'
+expect_red "w9: .argocd-source-<app>.yaml in an Application source directory outside the games tree" "argocd-repo-server merges a parameter override file" 'open(os.path.join(root, M, "hugmesh-apis/.argocd-source-hugmesh-apis.yaml"), "w").write("kustomize:\n  namePrefix: x-\n")'
+expect_red "v1: the optional-services template re-pins the image (same names, an allowed owner)" "renders identically everywhere it is rendered" 'rep(A+"13a-optional-services.yaml", "        path: \"{{ .path }}\"\n", "        path: \"{{ .path }}\"\n        kustomize:\n          images:\n            - registry.hugmesh.net/hugmesh/hugmesh-games/backend=registry.hugmesh.net/hugmesh/hugmesh-games/backend:sha-73a5bc2c6d09\n")'
+expect_red "v2: the same re-pin is judged against the pin in every render that places the BFF" "runs the pinned image" 'rep(A+"13a-optional-services.yaml", "        path: \"{{ .path }}\"\n", "        path: \"{{ .path }}\"\n        kustomize:\n          images:\n            - registry.hugmesh.net/hugmesh/hugmesh-games/backend=registry.hugmesh.net/hugmesh/hugmesh-games/backend:sha-73a5bc2c6d09\n")'
+expect_red "v3: apps/06-casdoor-games.yaml removed: a named workload the walk no longer renders" "missing: ['Deployment/casdoor-games'" 'os.remove(os.path.join(root, A, "06-casdoor-games.yaml"))'
+expect_red "v4: a multi-source Application, which the walk does not render" "a multi-source Application" 'open(os.path.join(root, A, "57-multi.yaml"), "w").write("apiVersion: argoproj.io/v1alpha1\nkind: Application\nmetadata: { name: multi, namespace: devops }\nspec:\n  project: default\n  sources:\n    - { repoURL: https://github.com/hugmesh/hugmesh-generator.git, targetRevision: main, path: specs/cluster/manifests/binhost }\n  destination: { server: https://kubernetes.default.svc, namespace: devops }\n")'
 expect_red "a nodeSelector label no role sets" "the host KEYS profile sets" 'rep(M+"games/bff-db.yaml", "nodeSelector: { hugmesh.net/games: \"true\" }", "nodeSelector: { hugmesh.net/games-tier: \"true\" }")'
 expect_red "the backend-gpu keys hint loses the games label" "its keys hint says" 'rep("build-x86-host-stage4.sh", ", hugmesh.net/games: \x5c\x22true\x5c\x22 }\x22 ;;", " }\x22 ;;")'
 expect_red "the games render handed a raw (unencoded) DB password" "reads back byte for byte through the URL" 'rep(M+"casdoor-games/deployment.yaml", "enc(ENVIRON[\"CASDOOR_DB_PASSWORD\"])", "ENVIRON[\"CASDOOR_DB_PASSWORD\"]")'

@@ -843,9 +843,13 @@ jobs:
           # runs the Casdoor render script (awk). In python:3.12-slim with the debian
           # job's apt line it exits 2 on `FATAL: curl required` before asserting
           # anything (run 41950923587, job 126994785328), so its online pin verifier had
-          # never once executed in CI. MEASURED 2026-11-05 in python:3.12-slim with THIS
-          # job's apt line + helm + the checksum-verified kubectl, CI=1: 77 passed /
-          # 0 failed, rc=0, the online verifier and its five controls among them.
+          # never once executed in CI. It also needs helm: it renders EVERY Application
+          # reachable from the roots the way argocd-repo-server would (kubectl kustomize,
+          # helm template for this repository's chart), nested and generated ones too,
+          # and judges the union by rendered namespace; it exits 2 without helm.
+          # MEASURED 2026-11-05 on a Linux host (helm v3.16.3, kubectl, curl, awk):
+          # 116 passed / 0 failed, rc=0, the online verifier and its five controls
+          # among them; the render cache keeps each negative control to one warm walk.
           # kubectl matters MORE than usual here: without it
           # tests/stack/test-mdm-manifests-render.sh exits 0 having rendered and
           # asserted nothing. If the download above ever silently fails, this job
