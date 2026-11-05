@@ -60,6 +60,7 @@ import argparse
 import base64
 import binascii
 import dataclasses
+import functools
 import getpass
 import hashlib
 import json
@@ -159,7 +160,7 @@ class MeshGrant:
         domain, server, issuer) needs a fresh registration."""
         parts = (_issuer_key(self.issuer), self.mesh, self.domain, self.role,
                  self.login_server, self.id, self.auth_key)
-        return "token:" + hashlib.sha256("\0".join(parts).encode()).hexdigest()[:24]
+        return "token:" + secret_digest("\0".join(parts))
 
     def hostname(self, host: str | None = None) -> str:
         """The tailnet hostname: the token's node name, else this machine's name,
@@ -183,6 +184,36 @@ def _when(ts: int) -> str:
         return time.strftime("%Y-%m-%d %H:%M", time.localtime(ts))
     except (OSError, OverflowError, ValueError):
         return f"{ts} (Unix time)"
+
+
+#: A random per-install salt for :func:`secret_digest`, in the Studio state dir.
+SALT_FILE = "mesh-identity-salt"
+
+
+def secret_digest(secret: str) -> str:
+    """A short comparable digest of a value that contains a pre-auth key, for the
+    identity record beside the node. Never a fast plain hash of the secret: PBKDF2 with
+    a per-install random salt, so the record (which only has to tell "same credentials"
+    from "different credentials" on this computer) gives nothing to brute-force with."""
+    path = os.path.join(state_dir(), SALT_FILE)
+    try:
+        with open(path, encoding="ascii") as fh:
+            salt = bytes.fromhex(fh.read().strip())
+    except (OSError, ValueError):
+        salt = b""
+    if len(salt) < 16:
+        salt = secrets.token_bytes(32)
+        try:
+            _write_private(path, salt.hex() + "\n")
+        except OSError:
+            pass                 # an unwritable state dir: the digest still compares in-process
+    return _pbkdf2(secret, salt)
+
+
+@functools.lru_cache(maxsize=16)
+def _pbkdf2(secret: str, salt: bytes) -> str:
+    # cached: the tray compares identities on every menu refresh
+    return hashlib.pbkdf2_hmac("sha256", secret.encode(), salt, 100_000).hex()[:32]
 
 
 def _label(text: str) -> str:
@@ -917,7 +948,7 @@ class GrantedMeshNode(MeshNode):
         if g is not None:
             return g.identity()
         key = MeshNode._authkey(self)
-        return "ts_authkey:" + hashlib.sha256(key.encode()).hexdigest()[:24] if key else ""
+        return "ts_authkey:" + secret_digest(key) if key else ""
 
     def recorded(self) -> dict:
         """What the running/last node was started with, or {} when this tray did not

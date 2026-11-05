@@ -524,3 +524,16 @@ def test_the_grant_wording_says_ssh_in_not_a_shell_elsewhere():
     assert _grant(shell=True).short() == "admin in example.org, SSH in"
     assert "accepts SSH from the mesh" in _grant(shell=True).describe()
     assert "accepts no SSH from the mesh" in _grant(shell=False).describe()
+
+
+@pytest.mark.real_stack_probes
+def test_the_identity_record_holds_no_key_and_no_plain_hash_of_it(compose, tmp_path):
+    import hashlib
+    g = _grant(auth_key="hskey-secret-value")
+    node = _node(tmp_path, lambda: g)
+    assert node.start()[0]
+    text = open(os.path.join(node.workdir, mesh_node.IDENTITY_FILE), encoding="utf-8").read()
+    assert "hskey-secret-value" not in text
+    plain = hashlib.sha256("hskey-secret-value".encode()).hexdigest()
+    assert plain[:16] not in text
+    assert mt.secret_digest("a") == mt.secret_digest("a") != mt.secret_digest("b")
