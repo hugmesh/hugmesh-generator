@@ -960,6 +960,14 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 #     208 of 249 suites are named by a pull_request-triggered workflow
 # and with the suite on disk but its shell-suites.yml line absent: '207 of 249' + check 3 and
 # check 7 red naming it -- so the +1/+1 is this suite and nothing else. Ungated SET stays 41.
+# 208 -> 209 (denominator 249 -> 250) on 2026-11-04 for feat/mesh-token-g3-generator-local-stack-hea-20261104
+# (#889), which adds ONE gated suite: tests/stack/test-headscale-local.sh (the HEADSCALE=1
+# local-mesh headscale guard, wired in shell-suites.yml's debian job). It was written against
+# db240811 as 207 -> 208, then main took the seed-lockout block above, so it was RE-MEASURED
+# on the merge with origin/main by RUNNING this file with GUARD_PREMERGE=0:
+#     209 of 250 suites are named by a pull_request-triggered workflow
+# and with the suite on disk but its shell-suites.yml line absent: '208 of 250' + check 3 and
+# check 7 red naming it -- so the +1/+1 is this suite and nothing else. Ungated SET stays 41.
 # 208 -> 209 (denominator 249 -> 250) on 2026-11-04 for ci/qemu-bdd-spike-20261104 (the
 # operator-approved QEMU-on-Actions trial), which adds ONE gated suite:
 # tests/qemu/actions-kvm-smoke_test.sh, the runner for tests/qemu/features/actions-kvm-smoke.feature,
@@ -986,6 +994,7 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # MERGED (origin/main with #473 + #860 + this branch): 207 + 1 (#473) + 1 (#860) + 2 (this branch)
 # = 211 of 252, MEASURED by running this file on the merged tree.
 # MERGED (origin/main 3396828f into fix/desktop-b-frite-kernel-fragment-for-em-20261104): 212 of 253, MEASURED by running this file on the merged tree.
+# MERGED (origin/main 3396828f into feat/mesh-token-g3-generator-local-stack-hea-20261104): 212 of 253, MEASURED by running this file on the merged tree.
 # MERGED (origin/main 3396828f into ci/qemu-bdd-spike-20261104): 212 of 253, MEASURED by running this file on the merged tree.
 # MERGED (origin/main 3f3ed7bb into fix/emulated-mesh-tailscale-tor-20261104): 214 of 255, MEASURED by running this file on the merged tree.
 # 208 -> 210 (denominator 249 -> 251) on 2026-11-04 for fix/headscale-security-tag-owners-20261104,
