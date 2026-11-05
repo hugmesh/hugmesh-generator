@@ -312,8 +312,21 @@ if [ -f "${GEN}/build-x86-host-stage4.sh" ]; then
         && ok "x86: --installer-iso preflight is --soft (tree fallback survives)" \
         || bad "x86: --installer-iso preflight lost --soft — a missing xorriso now KILLS a build that used to leave a tree"
 fi
-# ...and the ARM LIVE-only xorriso sites likewise leave a tree.
-for s in build-frite-stage4.sh build-orangepi5-stage4.sh build-orangepi-zero2-stage4.sh build-orangepi-zero2w-stage4.sh build-orangepi-zero3-stage4.sh build-orangepi3-lts-stage4.sh build-orangepi4-lts-stage4.sh; do
+# ...and the ARM LIVE-only xorriso sites likewise leave a tree. NOT the frite
+# builder any more: its media are raw MBR+FAT32 .img files assembled rootless
+# (build_frite_medium — no xorriso in the path), and xorriso is required, HARD,
+# only behind --medium-iso, where a missing tool must fail fast because the
+# operator explicitly asked for the ISO twin. That shape is pinned below.
+if [ -f "${GEN}/build-frite-stage4.sh" ]; then
+    if awk '/^if \$\{MEDIUM_ISO\}; then$/ {on=1} on {print} on && /^fi$/ {exit}' "${GEN}/build-frite-stage4.sh" \
+         | grep -qE '^[[:space:]]*hostguard_require_host_tools "the --medium-iso ISO9660 twin" "dev-libs/libisoburn" \\$' \
+       && ! grep -qE 'hostguard_require_host_tools "the LIVE ISO"' "${GEN}/build-frite-stage4.sh"; then
+        ok "build-frite-stage4.sh: xorriso is preflighted HARD only under --medium-iso (the raw .img media need no xorriso)"
+    else
+        bad "build-frite-stage4.sh: xorriso preflight is not the --medium-iso-gated hard check (or a LIVE ISO site came back)"
+    fi
+fi
+for s in build-orangepi5-stage4.sh build-orangepi-zero2-stage4.sh build-orangepi-zero2w-stage4.sh build-orangepi-zero3-stage4.sh build-orangepi3-lts-stage4.sh build-orangepi4-lts-stage4.sh; do
     f="${GEN}/${s}"; [ -f "${f}" ] || continue
     grep -qE '^[[:space:]]*hostguard_require_host_tools "the LIVE ISO" "dev-libs/libisoburn" --soft \\$' "${f}" \
         && ok "${s}: LIVE-only xorriso preflight is --soft (tree fallback survives)" \

@@ -54,7 +54,7 @@ LIB="${REPO}/scripts/_builder-resume-lib.sh"
 # shellcheck source=../lib/guard-preflight.sh
 . "${REPO}/tests/lib/guard-preflight.sh"
 guard_require_tools bash awk sed grep tar xz sfdisk blkid mkfs.vfat mcopy mdir mtype mlabel \
-    mke2fs debugfs parted getfattr setfattr du dd truncate stat cmp od head cut sort
+    mke2fs debugfs parted getfattr setfattr du dd truncate stat od head cut sort sha256sum
 for f in "${BUILDER}" "${INSTALLER}" "${FSTAB}" "${TMPL}" "${LIB}"; do
     [ -f "${f}" ] || { echo "  FAIL missing: ${f}"; exit 1; }
 done
@@ -268,8 +268,10 @@ done
 FDT_IN_CONF="$(mtype -i "${IMG}@@${P1_OFF}" ::/extlinux/extlinux.conf 2>/dev/null | awk '$1 == "FDT" {print $2}')"
 [ "${FDT_IN_CONF}" = "/dtb/${DTB}" ] && ok "extlinux FDT line names the staged DTB (${FDT_IN_CONF})" || bad "extlinux FDT line: '${FDT_IN_CONF}'"
 # u-boot in the user area, u-boot doc/board/amlogic order: sectors from 1, then 444 bytes.
-cmp -s -n 444 "${UBOOT}" "${IMG}" && ok "u-boot: first 444 bytes of the blob are at offset 0" || bad "u-boot: first 444 bytes differ"
-cmp -s -i 512:512 -n $(( 700000 - 512 )) "${UBOOT}" "${IMG}" && ok "u-boot: blob from sector 1 is at sector 1" || bad "u-boot: sector-1 payload differs"
+# byte-range digests (busybox cmp has no -i/-n; sha256sum is in both userlands)
+dig() { dd if="$1" bs=1 skip="$2" count="$3" 2>/dev/null | sha256sum | cut -d' ' -f1; }
+[ "$(dig "${UBOOT}" 0 444)" = "$(dig "${IMG}" 0 444)" ] && ok "u-boot: first 444 bytes of the blob are at offset 0" || bad "u-boot: first 444 bytes differ"
+[ "$(dig "${UBOOT}" 512 $(( 700000 - 512 )))" = "$(dig "${IMG}" 512 $(( 700000 - 512 )))" ] && ok "u-boot: blob from sector 1 is at sector 1" || bad "u-boot: sector-1 payload differs"
 [ "$(od -An -tx1 -j 510 -N 2 "${IMG}" | tr -d ' ')" = "55aa" ] && printf '%s' "$(sfdisk -d "${IMG}" 2>/dev/null | grep -E '^[^ ]+1 :')" | grep "start= *$(( P1_OFF / 512 ))," >/dev/null \
     && ok "partition table + signature survived the u-boot write" || bad "u-boot write damaged the MBR"
 [ 700000 -lt "${P1_OFF}" ] && ok "u-boot blob (700000 B) ends below p1 (${P1_OFF} B)" || bad "fixture blob overlaps p1"
