@@ -280,6 +280,10 @@ jobs:
       # MEASURED 2026-09-30 in this image WITHOUT it: that suite exits 2
       # "SKIPPED-LOUDLY: /usr/libexec/git-core/git-http-backend is absent ... This
       # guard checked NOTHING", which this job's runner rightly counts as a failure.
+      # binutils (strings), file, xorriso: tests/scripts/test-verify-artifact-neutrality-frite.sh
+      # runs scripts/verify-artifact-neutrality.sh, whose host preflight FAILs closed
+      # without all three; the suite builds its frite FAT media with mtools (already here).
+      - run: apk add --no-cache attr bash binutils coreutils curl e2fsprogs-extra file flock gawk git git-daemon helm jq make mtools nodejs openjdk17-jre-headless openjdk21-jre-headless openssh-keygen openssl py3-yaml python3 tar util-linux xorriso xz
       # xorriso: tests/qemu/launch_arm_medium_test.sh builds a real ISO9660 Frite
       # medium fixture with it (the launcher reads such media with xorriso or
       # bsdtar); without it that suite exits 2 "SKIPPING LOUDLY", a red job.
@@ -306,6 +310,7 @@ jobs:
           # suite exits 2 with a named reason when they are absent rather than
           # exiting 0, so it cannot go quietly inert — but a missing package here
           # would still cost the whole job that suite, so name it at the door.
+          for b in bash jq openssl python3 git make flock gawk mcopy minfo mformat sfdisk cmp strings file xorriso; do command -v "$b" >/dev/null 2>&1 || missing="$missing $b"; done
           # xorriso + mdir/mtype + mke2fs/debugfs: tests/qemu/launch_arm_medium_test.sh and
           # tests/qemu/frite_emmc_layout_test.sh build their media / eMMC layouts with them.
           for b in bash jq openssl python3 git make flock gawk mcopy minfo mformat mdir mtype sfdisk cmp xorriso mke2fs debugfs; do command -v "$b" >/dev/null 2>&1 || missing="$missing $b"; done
@@ -315,7 +320,7 @@ jobs:
           # package is git-daemon, which the install step names.
           [ -x "$(git --exec-path)/git-http-backend" ] || missing="$missing git-http-backend(apk:git-daemon)"
           [ -z "$missing" ] || { echo "::error::preflight: missing$missing — suites would silently skip"; exit 1; }
-          echo "preflight ok: bash jq openssl python3 git make flock gawk mcopy minfo mformat sfdisk cmp git-http-backend"
+          echo "preflight ok: bash jq openssl python3 git make flock gawk mcopy minfo mformat sfdisk cmp strings file xorriso git-http-backend"
       - name: run suites
         shell: bash
         run: |
@@ -500,6 +505,7 @@ jobs:
             tests/scripts/test-tools-path-lib.sh
             tests/scripts/test-tor-export-sync.sh
             tests/scripts/test-tor-node-contract.sh
+            tests/scripts/test-verify-artifact-neutrality-frite.sh
             tests/scripts/test-vm-display-guest.sh
             tests/scripts/test-virtual-display-kernel.sh
             tests/scripts/test-x86-boot-firewall-snort.sh

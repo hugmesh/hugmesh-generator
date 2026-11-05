@@ -1071,6 +1071,15 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # re-measures per the doctrine above.
 # MERGED (origin/main with #473 + #860 + this branch): 207 + 1 (#473) + 1 (#860) + 2 (this branch)
 # = 211 of 252, MEASURED by running this file on the merged tree.
+# 211 -> 212 (denominator 252 -> 253) on 2026-11-05 for fix/frite-img-media-consumers-20261105
+# (follow-up to #881, which made the frite media raw MBR+FAT32 .live.img/.installer.img),
+# which adds ONE gated suite: tests/scripts/test-verify-artifact-neutrality-frite.sh, wired
+# in shell-suites.yml's alpine job (binutils, file and xorriso added to its apk line for
+# the gate's host preflight) AND .gitlab-ci.yml lint:artifact-neutrality-frite. MEASURED by
+# RUNNING this file with GUARD_PREMERGE=0 on that tree (base origin/main 3396828f, pinned
+# at 211): '212 of 253 suites are named by a pull_request-triggered workflow', ungated
+# SET 41; and with the suite on disk but its CI lines absent: '211 of
+# 253' + check 3 and check 7 red naming it -- so the +1/+1 is this suite and nothing else.
 # MERGED (origin/main 3396828f into feat/mesh-token-g4-generator-cluster-wiring--20261104): 212 of 253, MEASURED by running this file on the merged tree.
 # MERGED (origin/main 3396828f into fix/viewer-harness-entrypoint-runner-20261104): 212 of 253, MEASURED by running this file on the merged tree.
 # MERGED (origin/main 3396828f into fix/desktop-d-arm-qemu-harness-for-frite-h-20261104): 213 of 254, MEASURED by running this file on the merged tree.
