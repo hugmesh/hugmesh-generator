@@ -157,6 +157,11 @@ source "${SCRIPT_DIR}/scripts/_download-lib.sh"
 source "${SCRIPT_DIR}/scripts/_passhash-lib.sh"
 # shellcheck source=scripts/_domain-idp-lib.sh
 source "${SCRIPT_DIR}/scripts/_domain-idp-lib.sh"
+# Greeter SSO login path (desktop_sso_bake / desktop_sso_verify): the same
+# /etc/pam.d/lightdm stack and helper every desktop image bakes. See
+# scripts/_desktop-sso-lib.sh and docs/DESKTOP-LOGIN-SSO.md.
+# shellcheck source=scripts/_desktop-sso-lib.sh
+source "${SCRIPT_DIR}/scripts/_desktop-sso-lib.sh"
 # THE role vocabulary (scripts/_roles-lib.sh). This board has a NODE axis: a
 # --role that names a node role in its platform set builds a cluster node
 # (hugmesh_role_board_node_role), one it does not build is refused with the reason,
@@ -400,6 +405,15 @@ HEADSCALE_VERSION="0.23.0"
 TAILSCALE_VERSION="1.78.1"
 SKIP_MESH=false
 SKIP_TAILSCALE=false
+# --with-tailscale keeps the tailnet client on a --standalone desktop (situation 2
+# of docs/DESKTOP-LOGIN-SSO.md: on a tailnet, never mesh-associated); --skip-mesh
+# drops it. "" = the posture default (mesh desktop ON, --standalone OFF).
+MESH_FORCED=""
+# Greeter SSO (the Casdoor/OIDC device-flow sign-in at lightdm). ON for a mesh
+# desktop; --standalone turns it OFF unless --with-sso / --sso-issuer.
+SKIP_SSO=false
+SSO_FORCED=""
+SSO_ISSUER=""
 
 # --print-plan: resolve + validate everything, print the machine-greppable build
 # plan (one PLAN_KEY=VALUE per line) and exit 0 BEFORE any mutation (no root, no
@@ -499,6 +513,14 @@ OPTIONS
 
   Mesh / radios  (same as the Frite/Pi5 builders)
     --headscale-version / --tailscale-version / --skip-mesh / --skip-tailscale
+    --with-tailscale      Keep the tailnet client on a --standalone desktop (dropped
+                          by default) so the greeter SSO can reach an IdP over a
+                          tailnet; the image stays standalone (ungoverned).
+    --with-sso | --no-sso | --skip-sso   Greeter SSO sign-in (Casdoor/OIDC) ON/OFF.
+                          Default ON; --standalone turns it off unless --with-sso.
+                          The local password login is always kept.
+    --sso-issuer URL      The IdP for the greeter SSO sign-in (https://HOST[/PATH];
+                          default https://id.<domain>). Implies --with-sso.
     --enable-wifi / --enable-bluetooth   (off by default; see the header note
                                           on WiFi's rough mainline status here)
 
@@ -660,8 +682,12 @@ while [[ $# -gt 0 ]]; do
         --enable-wifi)        ENABLE_WIFI=true;           shift   ;;
         --enable-bluetooth)   ENABLE_BLUETOOTH=true;      shift   ;;
         --permit-root-login)  PERMIT_ROOT_LOGIN="$2";     shift 2 ;;
-        --skip-mesh)          SKIP_MESH=true;             shift   ;;
+        --skip-mesh)          SKIP_MESH=true; MESH_FORCED=off; shift   ;;
         --skip-tailscale)     SKIP_TAILSCALE=true;        shift   ;;
+        --with-tailscale)     SKIP_MESH=false; SKIP_TAILSCALE=false; MESH_FORCED=on; shift ;;
+        --skip-sso|--no-sso)  SKIP_SSO=true;  SSO_FORCED=off; shift ;;
+        --with-sso)           SKIP_SSO=false; SSO_FORCED=on;  shift ;;
+        --sso-issuer)         SSO_ISSUER="${2:-}";        shift 2 ;;
         --skip-kernel)        SKIP_KERNEL=true;           shift   ;;
         --image-only)         IMAGE_ONLY=true; SKIP_KERNEL=true; shift ;;
         --img-size)           ROOT_MiB="$2"; IMG_SIZE_SET=true; shift 2 ;;
@@ -808,13 +834,33 @@ fi
 # cluster tree, so --standalone only needs to turn mesh off, set up a local
 # user, and force disk encryption + the installer flavor — mirrors
 # build-frite-stage4.sh's STANDALONE posture block exactly) ─────────────
+# --sso-issuer names the IdP, so it means SSO ON (also on a standalone desktop,
+# whose default is off); with --no-sso/--skip-sso it is a contradiction.
+if [ -n "${SSO_ISSUER}" ]; then
+    [ "${SSO_FORCED}" = off ] && { err "--sso-issuer conflicts with --no-sso/--skip-sso"; exit 1; }
+    [[ "${SSO_ISSUER}" =~ ^https://[A-Za-z0-9.-]+(:[0-9]{1,5})?(/[A-Za-z0-9._~/-]*)?$ ]] \
+        || { err "--sso-issuer must be https://HOST[:PORT][/PATH] (got '${SSO_ISSUER}')"; exit 1; }
+    SSO_FORCED=on; SKIP_SSO=false
+fi
 if ${STANDALONE}; then
-    SKIP_MESH=true
-    SKIP_TAILSCALE=true
+    # Default posture is mesh-OFF. --with-tailscale keeps the tailnet client
+    # (the mesh binaries + tailscaled) so the greeter SSO can reach an IdP over a
+    # tailnet. It does NOT associate the device with a mesh: the SSO posture stays
+    # standalone (ungoverned), and the device joins a tailnet only when an admin
+    # runs `tailscale up --login-server=...` (or a KEYS stick provisions it).
+    if [ "${MESH_FORCED}" = on ]; then
+        ${SKIP_TAILSCALE} && { err "--with-tailscale conflicts with --skip-tailscale"; exit 1; }
+    else
+        SKIP_MESH=true
+        SKIP_TAILSCALE=true
+    fi
+    # SSO off by default on a standalone box; --with-sso / --sso-issuer keeps the
+    # greeter sign-in (it then needs the IdP reachable, e.g. over a tailnet).
+    [ "${SSO_FORCED}" = on ] || SKIP_SSO=true
     [ -z "${LOCAL_USER}" ] && LOCAL_USER="${DEFAULT_USER}"
     ENCRYPT_ROOT=true           # the INSTALLED system is LUKS2 full-disk encrypted
     BUILD_INSTALLER=true        # guarantee the installer artifact (the FDE path)
-    info "STANDALONE desktop: no mesh; local user '${LOCAL_USER}'; LUKS2 FDE on install"
+    info "STANDALONE desktop: $([ "${MESH_FORCED}" = on ] && echo 'tailnet client kept (--with-tailscale), no mesh association' || echo 'no mesh'); local user '${LOCAL_USER}'; LUKS2 FDE on install"
 fi
 # --encrypt-root composed onto a plain (non-standalone) build also needs the
 # installer flavor — LUKS is laid down by install-orangepi4-lts.sh, not the live medium.
@@ -1258,6 +1304,8 @@ if ${PRINT_PLAN}; then
     fi
     _plan MESH               "$(${SKIP_MESH} && echo skip || echo "headscale=${HEADSCALE_VERSION},tailscale=$(${SKIP_TAILSCALE} && echo skip || echo "${TAILSCALE_VERSION}")")"
     _plan STANDALONE         "${STANDALONE}"
+    _plan SSO                "$(${SKIP_SSO} && echo off || echo casdoor-oidc)"
+    _plan SSO_ISSUER         "$(${SKIP_SSO} && echo none || echo "${SSO_ISSUER:-https://id.${CLUSTER_DOMAIN}}")"
     _plan ENCRYPT_ROOT       "${ENCRYPT_ROOT}"
     _plan LUKS_PASS          "$([ -n "${LUKS_PASS}" ] && echo REDACTED || echo none)"
     _plan LOCAL_USER         "${LOCAL_USER:-$DEFAULT_USER}"
@@ -2088,6 +2136,14 @@ cat > "${SYSROOT}/etc/lightdm/lightdm.conf" <<'LIGHTDM'
 greeter-session=lightdm-gtk-greeter
 user-session=LXDE
 LIGHTDM
+    # Greeter SSO login path (scripts/_desktop-sso-lib.sh): /etc/pam.d/lightdm with
+    # the device-flow helper in front of the local password path, the greeter hint
+    # and (SSO on, mesh posture) the baked desktop-governance templates. Staged
+    # pre-emerge so CONFIG_PROTECT keeps the stack; asserted after the emerge.
+    desktop_sso_bake "${SYSROOT}" "${SHARED_SPECS}" \
+        "$(${SKIP_SSO} && echo false || echo true)" "${CLUSTER_DOMAIN}" "${BRAND_TITLE}" \
+        "$(${STANDALONE} && echo standalone || echo mesh)" "${SSO_ISSUER}" \
+        || { err "greeter SSO bake failed (see above)"; exit 1; }
 fi
 for svc in "${DEFAULT_SVCS[@]}"; do
     ln -sf "/etc/init.d/${svc}" "${SYSROOT}/etc/runlevels/default/${svc}" 2>/dev/null || true
@@ -2269,6 +2325,11 @@ opi_assert_stage4_payload() {
         err "The 'display-manager' service is enabled in the runlevel but ${SYSROOT}/etc/init.d/display-manager is missing"
         err "       (gui-libs/display-manager-init did not emerge) — the desktop would boot to a console. Aborting."
         exit 1
+    fi
+    # Greeter SSO stack: x11-misc/lightdm's own /etc/pam.d/lightdm must have been
+    # parked by CONFIG_PROTECT, not swapped in (scripts/_desktop-sso-lib.sh).
+    if ! ${NODE_ROLE}; then
+        desktop_sso_verify "${SYSROOT}" || { err "greeter SSO stack did not survive the payload emerge — refusing to ship a greeter with no SSO path"; exit 1; }
     fi
     info "stage4 payload assert OK (${#REQUIRED_BINS[@]} role binaries present)."
 }

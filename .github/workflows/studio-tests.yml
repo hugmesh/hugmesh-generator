@@ -306,7 +306,30 @@ jobs:
           tests/test_windows_sentences.py
           tests/test_org_export_windows.py
           tests/test_windows_fleet.py
+          tests/test_docker_asset_mounts.py
+          tests/test_windows_sweep_c1.py
+          tests/test_windows_sweep_c2.py
+          tests/test_windows_sweep_c3.py
+          tests/test_windows_sweep_c4.py
+          tests/test_windows_sweep_c5.py
+          tests/test_windows_sweep_c6.py
+          tests/test_windows_sweep_c7.py
+          tests/test_windows_sweep_c8.py
+          tests/test_windows_sweep_c9.py
+          tests/test_windows_sweep_c10.py
           tests/test_windows_load_and_cleanup.py
           tests/test_windows_polish.py
+          tests/test_mesh_token.py
+          tests/test_mesh_token_tray.py
+          tests/test_mesh_token_issue.py
+          tests/test_mesh_token_issue_dialog.py
+          tests/test_tui_mesh_token.py
+          tests/test_qemu_windows.py
+          tests/test_qemu_windows_cli.py
+          tests/test_pages_mesh_emulation_whpx.py
+          tests/test_tui_meshemu_whpx.py
+          "tests/test_tui_gui_parity.py::test_the_emulation_backend_choices_are_one_tuple_on_every_face"
+          tests/test_golive_registry.py
+          "tests/test_tui_gui_parity.py::test_go_live_offers_and_plans_the_same_domains_on_both_faces"
           "tests/test_windows_packaging_files.py::test_the_spec_freezes_the_entry_shim_as_a_windowed_onedir"
           "tests/test_windows_packaging_files.py::test_windows_also_freezes_a_console_twin_into_the_same_tree"

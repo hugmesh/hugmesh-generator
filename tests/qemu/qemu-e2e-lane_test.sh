@@ -233,6 +233,81 @@ else
     say "  SKIPPED the refusal legs (already counted as a FAILURE above)"
 fi
 
+say "── the runner image the refusal points at carries the browser display fallback ──"
+# The refusal above sends people to `make qemu-docker-image`. Since 2026-11-04 that
+# image is also what opens a kept-alive DESKTOP device in a window: native SPICE
+# needs nothing beyond the qemu modules bookworm already ships, but the noVNC
+# browser fallback needs TWO packages — `novnc` (the static client) and
+# `websockify` (the /usr/bin/websockify bridge; Debian ships the MODULE in
+# python3-websockify and the BINARY in websockify, so listing the module alone
+# would build an image whose entrypoint dies with "websockify: not found").
+# What is asserted is the INSTALL LIST, comments stripped: a package named only in
+# the header prose must not satisfy this. The twin rule is that qemu-system-gui
+# (GTK/SDL front ends for a container that renders to no local display) stays OUT.
+DOCKERFILE="${REPO}/docker/Dockerfile.qemu-runner"
+# apt_tokens FILE — the whitespace-separated tokens of every `RUN apt-get ...
+# install` block up to its closing `rm -rf /var/lib/apt/lists`, with full-line
+# comments dropped. One token per line, so `has` cannot match a substring of a
+# longer package name (python3-websockify must never stand in for websockify).
+apt_tokens() {
+    sed -n '/^RUN apt-get update/,/rm -rf \/var\/lib\/apt\/lists/p' "$1" \
+        | grep -v '^[[:space:]]*#' \
+        | tr -s ' \t\\' '\n' \
+        | grep -v '^$' || true
+}
+# has_token TOKEN TEXT — whole-line match of a token list.
+has_token() { case "$2" in "$1"|"$1
+"*|*"
+$1
+"*|*"
+$1") return 0;; *) return 1;; esac; }
+ok_has_token() { if has_token "$1" "$2"; then _ok; else _bad "install list lacks package: $1"; fi; }
+ok_not_token() { if has_token "$1" "$2"; then _bad "install list must NOT carry package: $1"; else _ok; fi; }
+
+if [ -f "${DOCKERFILE}" ]; then
+    toks="$(apt_tokens "${DOCKERFILE}")"
+    ok_has_token "novnc" "${toks}"
+    ok_has_token "websockify" "${toks}"
+    ok_has_token "python3-websockify" "${toks}"
+    ok_has_token "--no-install-recommends" "${toks}"
+    ok_not_token "qemu-system-gui" "${toks}"
+    # The header must say where the door is published, and that it is loopback.
+    hdr="$(sed -n '1,/^FROM /p' "${DOCKERFILE}")"
+    ok_has "DISPLAY DOOR" "${hdr}"
+    ok_has "127.0.0.1" "${hdr}"
+    ok_not "0.0.0.0:" "${hdr}"
+
+    # NEGATIVE CONTROLS — each assertion above must be able to FAIL on a planted
+    # defect in a copy of the real file, or it is a comment with an exit code.
+    mut="${work}/Dockerfile.mut"
+    #  (a) drop the binary package: the module alone must NOT satisfy "websockify"
+    sed '/^[[:space:]]*websockify \\$/d' "${DOCKERFILE}" > "${mut}"
+    mt="$(apt_tokens "${mut}")"
+    if has_token "websockify" "${mt}"; then _bad "mutant (a): deleting the websockify line went unnoticed"; else _ok; fi
+    ok_has_token "python3-websockify" "${mt}"   # the module line survived, as intended
+    #  (b) move novnc into a comment on the install line: prose must not count
+    sed 's/^\([[:space:]]*\)novnc \\$/\1# novnc \\/' "${DOCKERFILE}" > "${mut}"
+    mt="$(apt_tokens "${mut}")"
+    if has_token "novnc" "${mt}"; then _bad "mutant (b): a commented-out novnc still counted as installed"; else _ok; fi
+    #  (c) plant qemu-system-gui on the install list
+    #      (awk, not a sed `\n` replacement: busybox sed in the alpine job differs there)
+    awk '{print} /^[[:space:]]*novnc \\$/ {print "        qemu-system-gui \\"}' "${DOCKERFILE}" > "${mut}"
+    mt="$(apt_tokens "${mut}")"
+    if has_token "qemu-system-gui" "${mt}"; then _ok; else _bad "mutant (c): a planted qemu-system-gui was not seen"; fi
+    #  (d) drop --no-install-recommends
+    sed 's/ --no-install-recommends//' "${DOCKERFILE}" > "${mut}"
+    mt="$(apt_tokens "${mut}")"
+    if has_token "--no-install-recommends" "${mt}"; then _bad "mutant (d): removing --no-install-recommends went unnoticed"; else _ok; fi
+    #  (e) the mutants really differed from the original (a sed that matched nothing
+    #      would make (a), (b) and (d) vacuous)
+    sed '/^[[:space:]]*websockify \\$/d' "${DOCKERFILE}" | cmp -s - "${DOCKERFILE}" \
+        && _bad "mutant (a) did not change the file" || _ok
+    sed 's/ --no-install-recommends//' "${DOCKERFILE}" | cmp -s - "${DOCKERFILE}" \
+        && _bad "mutant (d) did not change the file" || _ok
+else
+    _bad "docker/Dockerfile.qemu-runner is missing — the refusal points at an image nobody can build"
+fi
+
 say "── the script's own help does not lead with sudo ──"
 help="$(bash "${SCRIPT}" --help 2>&1)"
 ok_not "Usage: sudo" "${help}"

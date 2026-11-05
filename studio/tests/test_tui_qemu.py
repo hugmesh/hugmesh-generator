@@ -19,6 +19,7 @@ What these pins are actually protecting:
 * the TUI spawns NOTHING — a test replaces the facade's one process boundary
   with a landmine and walks the whole screen over it.
 """
+import functools
 import json
 import os
 import shlex
@@ -26,6 +27,7 @@ import shlex
 import pytest
 
 from hugmesh_studio.core import emulation as em
+from hugmesh_studio.core import platform_info
 from hugmesh_studio.core import qemu_devices as qd
 from hugmesh_studio.core import qemu_tests as qt
 from hugmesh_studio.tui import e2e as tui_e2e
@@ -39,6 +41,15 @@ PARTIAL = "20260819-125930-89bb8e"       # newer, build aborted mid-fleet
 @pytest.fixture(autouse=True)
 def _isolated_state_dir(tmp_path, monkeypatch):
     monkeypatch.setenv("HUGMESH_STUDIO_STATE_DIR", str(tmp_path / "state"))
+
+
+@pytest.fixture(autouse=True)
+def _answer_as_linux(monkeypatch):
+    """These pins are the Docker lane's hints, which a native Windows Studio replaces
+    with the WSL2 sentence (test_tui_meshemu_whpx.py); answer as Linux on any host."""
+    real = platform_info.native_windows_blocker
+    monkeypatch.setattr(platform_info, "native_windows_blocker",
+                        functools.partial(real, osname="posix"))
 
 
 @pytest.fixture(autouse=True)

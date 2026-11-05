@@ -1,0 +1,77 @@
+#!/bin/sh
+# live-overlay-relabel — first sysinit line in /etc/inittab, after pid 1 loaded the
+# policy and before OpenRC starts anything. No-op unless / is an overlay (live ISO).
+#
+# WHY. The squashfs is labelled at build time (slx_label_tree), but dracut assembles
+# the live root BEFORE the policy is loaded: everything it copies up, and the
+# overlay's own root, is a tmpfs inode the kernel labels tmpfs_t once the policy
+# arrives (SELinux discards security.selinux on copy-up and has no policy to honour a
+# create context yet). Measured on the 2026-10-30 backend live ISO: / /etc
+# /etc/ld.so.cache /etc/resolv.conf were all tmpfs_t, so every confined domain was
+# denied { search } on "/" and the type_transition rules for tmpfs parents made new
+# /etc files user_tmpfs_t/initrc_state_t. Under enforcing nothing would run.
+# Copy-ups AFTER the policy loads keep their label, so this pass only has to cover
+# what is in the upper layer right now — a few dozen paths, not a tree walk.
+#
+# init_t and initrc_t are files_unconfined_type, so restorecon needs no new policy
+# here. LOUD ON FAILURE: every reason this script stops short of a relabel is one
+# kmsg line that says so (sysvinit ignores a sysinit line's exit status, so the
+# status alone would be invisible), and the exit status is non-zero for anything
+# the serial log or a probe can grep. The success line is the only line that
+# starts with "relabelled"; a failure line never does, so "relabelled N" on the
+# console means the pass ran and restorecon returned 0.
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+: "${PROC_MOUNTS:=/proc/mounts}"
+: "${KMSG:=/dev/kmsg}"
+
+say() {
+    # kmsg if it is there (it is, on the real boot path); stderr otherwise, so a
+    # test harness and an initramfs shell both see the same words.
+    if ! printf 'live-overlay-relabel: %s\n' "$*" >> "${KMSG}" 2>/dev/null; then
+        printf 'live-overlay-relabel: %s\n' "$*" >&2
+    fi
+}
+fail() { say "FAILED: $*"; exit 1; }
+
+root_fs="$(awk '$2=="/"{f=$3} END{print f}' "${PROC_MOUNTS}" 2>/dev/null)" \
+    || fail "cannot read ${PROC_MOUNTS} (no awk, or no mount table)"
+if [ "${root_fs}" != overlay ]; then
+    say "/ is ${root_fs:-unknown}, not an overlay: nothing to relabel (disk root)"
+    exit 0
+fi
+command -v restorecon >/dev/null 2>&1 || fail "/ is an overlay but there is no restorecon on PATH — the upper layer stays tmpfs_t"
+command -v awk >/dev/null 2>&1 || fail "no awk on PATH — cannot parse the overlay's upperdir"
+upper="$(awk '$2=="/" && $3=="overlay"{print $4}' "${PROC_MOUNTS}" | tr ',' '\n' | sed -n 's/^upperdir=//p' | tail -1)"
+[ -n "${upper}" ] || fail "no upperdir= in the overlay mount options of / (${PROC_MOUNTS})"
+[ -d "${upper}" ] || fail "upperdir ${upper} is not a directory from here"
+# /dev too: devtmpfs nodes the initramfs made carry device_t until something relabels
+# them, and the first redirection to /dev/null by a confined domain is denied. -x: not
+# /dev/shm or /dev/pts (their own mounts).
+rc_dev=0
+restorecon -RFx /dev 2>/dev/null || rc_dev=$?
+# The upper layer's paths, spelled as merged paths ("./etc" -> "/etc", "." -> "/").
+# The list goes through a file so find's own status is seen, not swallowed by a
+# pipe; /run is the initramfs tmpfs, writable this early on every live boot.
+list_dir="${LIST_DIR:-}"
+if [ -z "${list_dir}" ]; then
+    for d in /run /tmp /dev/shm; do
+        [ -d "${d}" ] && [ -w "${d}" ] && { list_dir="${d}"; break; }
+    done
+fi
+[ -n "${list_dir}" ] || fail "no writable directory for the path list (tried /run /tmp /dev/shm) — nothing was relabelled"
+list="${list_dir}/live-overlay-relabel.$$"
+: > "${list}" 2>/dev/null || fail "cannot write ${list} — nothing was relabelled"
+if ! ( cd "${upper}" && find . -xdev -print0 ) > "${list}" 2>/dev/null; then
+    rm -f "${list}"
+    fail "find failed in ${upper} — nothing was relabelled"
+fi
+n="$(tr -cd '\000' < "${list}" | wc -c)"
+rc_up=0
+sed -z 's#^\.##; s#^$#/#' "${list}" | xargs -0 -r restorecon -F || rc_up=$?
+rm -f "${list}"
+if [ "${rc_up}" -ne 0 ] || [ "${rc_dev}" -ne 0 ]; then
+    fail "restorecon returned ${rc_up} on the ${n} upper-layer path(s) under ${upper} (xargs status; 123 = at least one batch failed) and ${rc_dev} on /dev"
+fi
+say "relabelled ${n} upper-layer path(s) under ${upper} and /dev"
+exit 0

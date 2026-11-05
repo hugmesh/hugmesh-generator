@@ -177,8 +177,11 @@ libcrypt supports it, SHA-512 crypt `$6$` otherwise). **The plaintext is never
 baked.** `--local-pass-file` reads it from a file, which keeps it off every
 process argv (`ps`, `/proc/<pid>/cmdline`, `docker inspect`); the Studio and the
 TUI always pass it that way, through a private 0600 file removed when the build
-ends. `wheel` is the sudo path. `--skip-sso` removes the Casdoor/OIDC desktop
-login from any client image (auto-on for standalone).
+ends. `wheel` is the sudo path. `--skip-sso` bakes the Casdoor/OIDC greeter
+sign-in OFF on any client image (auto-on for standalone); the greeter then says
+so, and an administrator can turn it on later with `sso-greeter configure
+--enable --issuer https://...` (see `docs/DESKTOP-LOGIN-SSO.md`). Nothing is
+contacted until that happens and a user chooses SSO at the greeter.
 
 **The same Login Password works on every image, not only standalone.** First boot
 applies the hash on standalone, tailnet-only and mesh images alike:
@@ -299,6 +302,10 @@ cluster node roles, which refuse `--standalone`). So `--standalone` alone is eno
 
 `--standalone` cascades `SKIP_MESH=true SKIP_TAILSCALE=true` on every platform,
 as on x86. Neither route depends on a mesh, tailnet or Casdoor SSO.
+`--with-tailscale` keeps the tailnet client on a standalone desktop, as on x86, so
+the greeter SSO can reach an IdP over a tailnet (situation 2 in
+[DESKTOP-LOGIN-SSO.md](DESKTOP-LOGIN-SSO.md#situations)). The image stays
+standalone and ungoverned.
 
 ### LUKS2 install model: cross-host vs. on-device
 
@@ -420,6 +427,13 @@ stack locally (`stack`) or join a tailnet as a dockerized mesh node (`mesh`):
 ## Mesh / SSO toggles, distfiles, live ISO
 
 - `--with/--no-tailscale`, `--with/--no-sso` — force the tailnet agent or the Casdoor login ON or OFF on any role.
+  `--with/--no-sso` now bakes the greeter SSO path (`/etc/pam.d/lightdm` +
+  `/usr/lib/hugmesh/sso-greeter`, `SSO_ENABLED` in `/etc/hugmesh/sso-greeter.conf`)
+  instead of only changing a plan line; with SSO off the greeter says so and the
+  local password login is untouched. The Frite, RPi5, Jetson and Orange Pi 4 LTS / 5
+  builders take the same flags, plus `--sso-issuer URL` to name the IdP. See
+  `docs/DESKTOP-LOGIN-SSO.md` for the user flow, the offline cache and what a boot
+  must still prove.
 - `--distdir DIR` (or auto-detect `/media/*`) — reuse a Gentoo distfiles cache from a mounted drive (safe on a read-only USB), to skip re-downloads or build offline.
 - `--live-toram` (default) — the live ISO gets a **Copy to RAM (removable)** boot entry, so you can pull the stick after boot.
 
