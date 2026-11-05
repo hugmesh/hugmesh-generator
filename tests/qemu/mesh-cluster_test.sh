@@ -312,10 +312,16 @@ cat > "${work}/ssh-stub.sh" <<'EOF'
 argv="$*"
 case "${argv}" in
     *"kubectl get nodes"*)
-        n="${STUB_NODES:-3}"
-        echo "hugmesh-mesh-cp   Ready      control-plane   2m    v1.30.0"
-        [ "${n}" -ge 2 ] && echo "hugmesh-mesh-w2   NotReady   <none>          20s   v1.30.0"
-        [ "${n}" -ge 3 ] && echo "hugmesh-mesh-w3   NotReady   <none>          10s   v1.30.0"
+        # STUB_READY = how many of the listed nodes report Ready (default 1: the
+        # CP Ready, both workers NotReady — the no-CNI picture every leg before
+        # the Ready gate was written against). STUB_CORDON=1 spells the CP
+        # "Ready,SchedulingDisabled", which still counts as Ready.
+        n="${STUB_NODES:-3}"; r="${STUB_READY:-1}"
+        st() { if [ "$1" -le "${r}" ]; then echo Ready; else echo NotReady; fi; }
+        cp_st="$(st 1)"; [ "${STUB_CORDON:-0}" = 1 ] && [ "${cp_st}" = Ready ] && cp_st="Ready,SchedulingDisabled"
+        printf 'hugmesh-mesh-cp   %-10s control-plane   2m    v1.30.0\n' "${cp_st}"
+        [ "${n}" -ge 2 ] && printf 'hugmesh-mesh-w2   %-10s <none>          20s   v1.30.0\n' "$(st 2)"
+        [ "${n}" -ge 3 ] && printf 'hugmesh-mesh-w3   %-10s <none>          10s   v1.30.0\n' "$(st 3)"
         exit 0 ;;
     *poweroff*) exit 0 ;;
     *) exit 0 ;;
@@ -385,6 +391,77 @@ echo "${out}" | grep -q 'node3-join' && ok "driver: NAMES the failed joiner" || 
 out="$(STUB_NODES=2 run_driver run-short)"; rc=$?
 [ "${rc}" -ne 0 ] && ok "driver: a missing registration fails the run" || bad "MUTATION missed: 2/3 nodes did not fail the driver"
 echo "${out}" | grep -q 'node-count:2' && ok "driver: NAMES the node-count shortfall" || bad "driver: node-count shortfall not named"
+
+echo "== [ready-gate] MESH_CLUSTER_GATE_READY=1 gates Ready; the default only reports it (issue #516) =="
+# Default (gate unset): registered-but-not-Ready is still today's PASS, and says
+# it did not gate.
+out="$(STUB_READY=0 run_driver run-ready-default)"; rc=$?
+[ "${rc}" -eq 0 ] && ok "ready-gate: OFF by default — 3 registered / 0 Ready still passes (report-only kept)" \
+    || { bad "ready-gate: the default run went red on 0 Ready (rc=${rc})"; echo "${out}" | tail -10 | sed 's/^/    | /' >&2; }
+echo "${out}" | grep -q 'Ready: 0/3 (Ready needs a CNI — reported, not gated' \
+    && ok "ready-gate: the default run REPORTS the Ready count and says it was not gated" \
+    || bad "ready-gate: default Ready report line missing"
+# Gate ON + 3 registered + 0 Ready -> red, and the verdict names the shortfall.
+out="$(MESH_CLUSTER_GATE_READY=1 STUB_READY=0 run_driver run-ready-0 --ready-timeout 3)"; rc=$?
+[ "${rc}" -ne 0 ] && ok "ready-gate: ON + 3 registered / 0 Ready FAILS the run" \
+    || bad "ready-gate: ON + 0 Ready passed"
+echo "${out}" | grep -q 'ready-count:0/3' && ok "ready-gate: the FAIL names 'ready-count:0/3'" \
+    || bad "ready-gate: the FAIL does not name the Ready shortfall"
+echo "${out}" | grep -q 'MESH-CLUSTER RESULT: PASS' && bad "ready-gate: a PASS verdict printed beside the gate failure" \
+    || ok "ready-gate: no PASS verdict on a gated 0-Ready run"
+# Gate ON + 2 of 3 Ready -> still red (the gate is 3, not "some").
+out="$(MESH_CLUSTER_GATE_READY=1 STUB_READY=2 run_driver run-ready-2 --ready-timeout 3)"; rc=$?
+[ "${rc}" -ne 0 ] && echo "${out}" | grep -q 'ready-count:2/3' \
+    && ok "ready-gate: ON + 2/3 Ready fails and names 'ready-count:2/3'" || bad "ready-gate: 2/3 Ready was accepted"
+# Gate ON + 3 Ready -> green.
+out="$(MESH_CLUSTER_GATE_READY=1 STUB_READY=3 run_driver run-ready-3 --ready-timeout 3)"; rc=$?
+[ "${rc}" -eq 0 ] && ok "ready-gate: ON + 3/3 Ready PASSES" \
+    || { bad "ready-gate: ON + 3 Ready went red (rc=${rc})"; echo "${out}" | tail -10 | sed 's/^/    | /' >&2; }
+echo "${out}" | grep -q 'registered AND Ready' && ok "ready-gate: the PASS says Ready was gated" \
+    || bad "ready-gate: PASS wording does not say Ready was gated"
+# A cordoned-but-Ready node is Ready; NotReady never is.
+out="$(MESH_CLUSTER_GATE_READY=1 STUB_READY=3 STUB_CORDON=1 run_driver run-ready-cordon --ready-timeout 3)"; rc=$?
+[ "${rc}" -eq 0 ] && ok "ready-gate: 'Ready,SchedulingDisabled' counts as Ready" || bad "ready-gate: a cordoned Ready node was not counted"
+# The opt-in is spelled exactly 1: "true" does not silently turn it on (or off).
+out="$(MESH_CLUSTER_GATE_READY=true STUB_READY=0 run_driver run-ready-true --ready-timeout 3)"; rc=$?
+[ "${rc}" -eq 0 ] && ok "ready-gate: only '1' opts in ('true' keeps report-only)" || bad "ready-gate: a non-1 value changed the verdict"
+# The plan says which mode it is in.
+bash "${HERE}/mesh-cluster.sh" --dry-run 2>&1 | grep -q '^ready  : reported only' \
+    && ok "ready-gate: the default plan says Ready is reported only" || bad "ready-gate: default plan does not state the Ready mode"
+MESH_CLUSTER_GATE_READY=1 bash "${HERE}/mesh-cluster.sh" --dry-run 2>&1 | grep -q '^ready  : GATED' \
+    && ok "ready-gate: the gated plan says Ready is GATED" || bad "ready-gate: gated plan does not state the Ready mode"
+# NEGATIVE CONTROL: strip the gate from a copy; the 0-Ready leg must then pass,
+# i.e. the leg above is what catches a removed gate. The copies live in the
+# checkout MIRROR (the driver sources mesh-identities.sh from its own dir), so a
+# copy that dies on a missing source cannot pass for a caught regression.
+cp "${HERE}/mesh-identities.sh" "${mutrepo}/tests/qemu/"
+m="${mutrepo}/tests/qemu/mut-driver-noready.sh"
+sed -e 's|^\[ "\${MESH_CLUSTER_GATE_READY:-0}" = "1" \] && GATE_READY=true$|: gate removed|' \
+    "${HERE}/mesh-cluster.sh" > "${m}"
+if cmp -s "${m}" "${HERE}/mesh-cluster.sh"; then
+    bad "control[drop-ready-gate]: sed matched nothing"
+else
+    HUGMESH_QEMU_MESH=1 MESH_CLUSTER_GATE_READY=1 STUB_READY=0 \
+    MESH_LAUNCH_CMD="bash ${work}/launch-stub.sh" MESH_SSH_CMD="bash ${work}/ssh-stub.sh" \
+    MESH_KEYS_CMD="bash ${work}/keys-stub.sh" MESH_POLL_INTERVAL=1 MESH_VERIFY_INTERVAL=1 \
+    STUB_CALLS="${work}/mut-noready.calls" \
+        bash "${m}" --run-dir "${work}/mut-noready" -t 20 --join-timeout 5 --ready-timeout 3 >/dev/null 2>&1 \
+        && ok "control[drop-ready-gate]: with the gate removed a 0-Ready cluster passes — the leg above goes red on it" \
+        || bad "control[drop-ready-gate]: the gate-less copy still failed 0 Ready (the leg proves nothing)"
+fi
+m="${mutrepo}/tests/qemu/mut-driver-noreadyfail.sh"
+sed -e '/FAILED="${FAILED} ready-count:/d' "${HERE}/mesh-cluster.sh" > "${m}"
+if cmp -s "${m}" "${HERE}/mesh-cluster.sh"; then
+    bad "control[drop-ready-fail]: sed matched nothing"
+else
+    HUGMESH_QEMU_MESH=1 MESH_CLUSTER_GATE_READY=1 STUB_READY=0 \
+    MESH_LAUNCH_CMD="bash ${work}/launch-stub.sh" MESH_SSH_CMD="bash ${work}/ssh-stub.sh" \
+    MESH_KEYS_CMD="bash ${work}/keys-stub.sh" MESH_POLL_INTERVAL=1 MESH_VERIFY_INTERVAL=1 \
+    STUB_CALLS="${work}/mut-noreadyfail.calls" \
+        bash "${m}" --run-dir "${work}/mut-noreadyfail" -t 20 --join-timeout 5 --ready-timeout 3 >/dev/null 2>&1 \
+        && ok "control[drop-ready-fail]: a gate that warns but never fails passes 0 Ready — caught above" \
+        || bad "control[drop-ready-fail]: the copy still failed (the leg proves nothing)"
+fi
 
 echo "== [driver] NEGATIVE CONTROLS: staged regressions must go red =="
 m="${work}/mut-driver-nogate.sh"
@@ -671,6 +748,189 @@ else
     echo "  note: python3 absent — the planner/driver contract legs did not run"
 fi
 
+echo "== [mirror] registry-mirror.sh: the image set the guests' CNI comes from (issue #516) =="
+MIRROR="${HERE}/registry-mirror.sh"
+CALICO_SPEC="${REPO}/specs/cluster/apps/01-calico.yaml"
+ARGO_BOOT="${REPO}/specs/cluster/bootstrap/bootstrap.sh"
+bash -n "${MIRROR}" && ok "bash -n registry-mirror.sh" || bad "bash -n registry-mirror.sh"
+# --dry-run must touch NOTHING: every tool that could pull, push or fetch is a
+# PATH stub that records a call, and the state dir must not appear.
+mstub="${work}/mirror-stub"; mkdir -p "${mstub}"
+for t in docker skopeo crane helm curl wget; do
+    printf '#!/usr/bin/env bash\necho "%s $*" >> "${MIRROR_STUB_LOG:?}"\nexit 0\n' "${t}" > "${mstub}/${t}"
+    chmod +x "${mstub}/${t}"
+done
+: > "${work}/mirror-dry.log"
+out="$(PATH="${mstub}:${PATH}" MIRROR_STUB_LOG="${work}/mirror-dry.log" \
+       bash "${MIRROR}" --dry-run --state-dir "${work}/mirror-dry-state" 2>&1)"; rc=$?
+[ "${rc}" -eq 0 ] && ok "mirror: --dry-run exits 0" || { bad "mirror: --dry-run exited ${rc}"; echo "${out}" | tail -5 | sed 's/^/    | /' >&2; }
+echo "${out}" | grep -q '^RESULT:  DRY-RUN ' && ok "mirror: --dry-run prints a RESULT: DRY-RUN verdict" || bad "mirror: no DRY-RUN verdict"
+[ ! -s "${work}/mirror-dry.log" ] && ok "mirror: --dry-run invoked no docker/skopeo/crane/helm/curl/wget" \
+    || bad "mirror: --dry-run called a tool: $(head -1 "${work}/mirror-dry.log")"
+[ ! -e "${work}/mirror-dry-state" ] && ok "mirror: --dry-run wrote nothing (no state dir)" || bad "mirror: --dry-run created its state dir"
+echo "${out}" | grep -q 'guests dial 10.0.2.2:5000' && ok "mirror: names the guest-side address (user-mode NIC -> host 10.0.2.2)" \
+    || bad "mirror: guest address missing from the plan"
+echo "${out}" | grep -q 'NOT reachable over it' && ok "mirror: says plainly that --mesh-net cannot reach it yet" \
+    || bad "mirror: the --mesh-net limitation is not stated"
+
+# THE GUARD: the served Calico images match the version 01-calico.yaml pins.
+# Derived HERE, independently of the script's own check, from the spec itself.
+rev="$(sed -n 's/^[[:space:]]*targetRevision:[[:space:]]*//p' "${CALICO_SPEC}" | head -n 1)"
+case "${rev}" in
+    v*.x) want_prefix="${rev%x}" ;;            # v3.29.x -> "v3.29."
+    v*)   want_prefix="${rev}" ;;
+    *)    want_prefix="UNPARSEABLE:${rev}" ;;
+esac
+cal_tags="$(echo "${out}" | sed -n 's|^IMAGE  docker\.io/calico/[a-z0-9-]*:\([^ ]*\).*|\1|p' | sort -u)"
+[ -n "${cal_tags}" ] && ok "mirror: lists docker.io/calico/* images" || bad "mirror: no Calico images in the list"
+[ "$(printf '%s\n' "${cal_tags}" | grep -c .)" -eq 1 ] && ok "mirror: every Calico image carries ONE version (${cal_tags})" \
+    || bad "mirror: Calico images at mixed versions: $(echo ${cal_tags})"
+case "${cal_tags}" in
+    "${want_prefix}"*) ok "mirror: Calico ${cal_tags} matches 01-calico.yaml's pinned targetRevision ${rev}" ;;
+    *) bad "mirror: Calico ${cal_tags} does NOT match 01-calico.yaml's pinned targetRevision ${rev}" ;;
+esac
+for comp in node cni kube-controllers typha pod2daemon-flexvol csi node-driver-registrar apiserver; do
+    echo "${out}" | grep -q "^IMAGE  docker.io/calico/${comp}:${cal_tags} " \
+        && ok "mirror: serves calico/${comp}" || bad "mirror: calico/${comp} missing from the set"
+done
+echo "${out}" | grep -q "^IMAGE  quay.io/tigera/operator:v" && ok "mirror: serves the Tigera operator image" || bad "mirror: no tigera/operator image"
+echo "${out}" | grep -q "^CHART  tigera-operator ${cal_tags} " && ok "mirror: serves the tigera-operator chart at the same version" \
+    || bad "mirror: chart missing or at another version"
+argo="$(sed -n 's/^ARGOCD_VERSION="\${ARGOCD_VERSION:-\([^}]*\)}".*/\1/p' "${ARGO_BOOT}" | head -n 1)"
+echo "${out}" | grep -q "^IMAGE  quay.io/argoproj/argocd:${argo} " \
+    && ok "mirror: serves ArgoCD at bootstrap.sh's pinned ${argo}" || bad "mirror: ArgoCD image not at bootstrap.sh's ${argo}"
+# One registry namespace: no two images may land on one mirror path.
+[ -z "$(echo "${out}" | sed -n 's|^IMAGE .* -> [^/]*/\([^:]*\):.*|\1|p' | sort | uniq -d)" ] \
+    && ok "mirror: no two images share a mirror path" || bad "mirror: two images collapse onto one mirror path"
+
+# NEGATIVE CONTROLS on COPIES: each drift must make the script REFUSE (every mode).
+mspec="${work}/calico-v330.yaml"
+sed -e 's/targetRevision: v3\.29\.x/targetRevision: v3.30.x/' "${CALICO_SPEC}" > "${mspec}"
+if cmp -s "${mspec}" "${CALICO_SPEC}"; then bad "control[calico-spec-bump]: sed matched nothing"
+else
+    mout="$(bash "${MIRROR}" --dry-run --calico-spec "${mspec}" 2>&1)"; rc=$?
+    [ "${rc}" -ne 0 ] && echo "${mout}" | grep -q 'Calico drift' \
+        && ok "control[calico-spec-bump]: spec bumped to v3.30.x -> the mirror refuses (names 'Calico drift')" \
+        || bad "control[calico-spec-bump]: a v3.30.x spec was served from a v3.29 set"
+fi
+m="${work}/mut-mirror-ver.sh"
+sed -e 's/^CALICO_VERSION="v3\.29\.[0-9]*"$/CALICO_VERSION="v3.30.0"/' "${MIRROR}" > "${m}"
+if cmp -s "${m}" "${MIRROR}"; then bad "control[mirror-version-bump]: sed matched nothing"
+else
+    mout="$(bash "${m}" --dry-run --calico-spec "${CALICO_SPEC}" --argocd-bootstrap "${ARGO_BOOT}" 2>&1)"; rc=$?
+    [ "${rc}" -ne 0 ] && echo "${mout}" | grep -q 'Calico drift' \
+        && ok "control[mirror-version-bump]: the mirror at v3.30.0 vs a v3.29.x spec refuses" \
+        || bad "control[mirror-version-bump]: a mirror outside the spec's range was accepted"
+fi
+m="${work}/mut-mirror-component.sh"
+sed -e 's|"docker.io/calico/${c}:${CALICO_VERSION}"|"docker.io/calico/${c}:v3.29.6"|' "${MIRROR}" > "${m}"
+if cmp -s "${m}" "${MIRROR}"; then bad "control[component-tag]: sed matched nothing"
+else
+    mout="$(bash "${m}" --dry-run --calico-spec "${CALICO_SPEC}" --argocd-bootstrap "${ARGO_BOOT}" 2>&1)"; rc=$?
+    [ "${rc}" -ne 0 ] && echo "${mout}" | grep -q 'is not at' \
+        && ok "control[component-tag]: a Calico component tag off CALICO_VERSION refuses" \
+        || bad "control[component-tag]: a component tag off CALICO_VERSION was accepted"
+fi
+mboot="${work}/bootstrap-argo-bump.sh"
+sed -e 's/^ARGOCD_VERSION="\${ARGOCD_VERSION:-v[0-9.]*}"/ARGOCD_VERSION="${ARGOCD_VERSION:-v9.9.9}"/' "${ARGO_BOOT}" > "${mboot}"
+if cmp -s "${mboot}" "${ARGO_BOOT}"; then bad "control[argocd-bump]: sed matched nothing"
+else
+    mout="$(bash "${MIRROR}" --dry-run --argocd-bootstrap "${mboot}" 2>&1)"; rc=$?
+    [ "${rc}" -ne 0 ] && echo "${mout}" | grep -q 'ArgoCD drift' \
+        && ok "control[argocd-bump]: bootstrap.sh bumping ArgoCD makes the mirror refuse until re-resolved" \
+        || bad "control[argocd-bump]: an ArgoCD bump was served from the old set"
+fi
+
+echo "== [mirror] hosts-toml: the guest-side containerd stanzas =="
+bash "${MIRROR}" hosts-toml "${work}/certs.d" --port 5099 >/dev/null 2>&1 \
+    && ok "mirror: hosts-toml exits 0" || bad "mirror: hosts-toml failed"
+for reg in docker.io quay.io ghcr.io public.ecr.aws; do
+    [ -f "${work}/certs.d/${reg}/hosts.toml" ] && grep -q '^\[host."http://10.0.2.2:5099"\]' "${work}/certs.d/${reg}/hosts.toml" \
+        && ok "mirror: ${reg}/hosts.toml points at the guest-side mirror" || bad "mirror: ${reg}/hosts.toml missing or wrong"
+done
+grep -q '^server = "https://registry-1.docker.io"' "${work}/certs.d/docker.io/hosts.toml" 2>/dev/null \
+    && ok "mirror: docker.io falls back to registry-1.docker.io" || bad "mirror: docker.io upstream server wrong"
+
+echo "== [mirror] up: the fill path against stubs (no docker, no network) =="
+# A fixture chart whose values.yaml names the baked operator version, and a copy
+# of the script re-pinned to the fixture's sha256 (the real tarball is not
+# fetchable here). Everything else in the copy is the shipped script.
+fx="${work}/mirror-fx"; mkdir -p "${fx}/chart/tigera-operator" "${fx}/bin"
+opv="$(sed -n 's/^TIGERA_OPERATOR_VERSION="\(.*\)"$/\1/p' "${MIRROR}")"
+printf 'installation:\n  enabled: true\ntigeraOperator:\n  image: tigera/operator\n  version: %s\n  registry: quay.io\n' "${opv}" \
+    > "${fx}/chart/tigera-operator/values.yaml"
+( cd "${fx}/chart" && tar czf "${fx}/chart.tgz" tigera-operator )
+fxsha="$(sha256sum "${fx}/chart.tgz" | awk '{print $1}')"
+printf '        image: quay.io/argoproj/argocd:%s\n        image: ghcr.io/dexidp/dex:v2.45.1\n        image: public.ecr.aws/docker/library/redis:8.2.3-alpine\n' "${argo}" \
+    > "${fx}/install.yaml"
+cat > "${fx}/bin/fetch" <<'EOF'
+#!/usr/bin/env bash
+case "$1" in *.tgz) cp "${FX_CHART:?}" "$2" ;; *install.yaml) cp "${FX_INSTALL:?}" "$2" ;;
+            http://localhost:*/v2/) echo "fetch $1" >> "${FX_LOG:?}"; : > "$2" ;; *) exit 1 ;; esac
+EOF
+cat > "${fx}/bin/rec" <<'EOF'
+#!/usr/bin/env bash
+echo "$(basename "$0") $*" >> "${FX_LOG:?}"
+if [ "$(basename "$0")" = docker ] && [ "$1" = inspect ]; then
+    [ -n "${FX_FOREIGN:-}" ] || exit 1          # no such container
+    case "$*" in *Labels*) echo "" ;; esac       # exists, but NOT labelled ours
+    exit 0
+fi
+exit 0
+EOF
+for t in docker helm copy; do cp "${fx}/bin/rec" "${fx}/bin/${t}"; done
+chmod +x "${fx}/bin/"*
+m="${work}/mut-mirror-fxsha.sh"
+sed -e "s/^CALICO_CHART_SHA256=\".*\"$/CALICO_CHART_SHA256=\"${fxsha}\"/" "${MIRROR}" > "${m}"
+mirror_up() { # <script> <log> [extra env assignments via caller]
+    local script="$1" log="$2"; shift 2
+    : > "${log}"
+    FX_LOG="${log}" FX_CHART="${FX_CHART:-${fx}/chart.tgz}" FX_INSTALL="${FX_INSTALL:-${fx}/install.yaml}" \
+    MIRROR_FETCH_CMD="${fx}/bin/fetch" MIRROR_DOCKER_CMD="${fx}/bin/docker" \
+    MIRROR_HELM_CMD="${fx}/bin/helm" MIRROR_COPY_CMD="${fx}/bin/copy" \
+        bash "${script}" up --calico-spec "${CALICO_SPEC}" --argocd-bootstrap "${ARGO_BOOT}" \
+            --state-dir "${work}/mirror-state" "$@" 2>&1
+}
+out="$(mirror_up "${m}" "${work}/mirror-up.log")"; rc=$?
+[ "${rc}" -eq 0 ] && ok "mirror up: fills against stubs (exit 0)" || { bad "mirror up: exited ${rc}"; echo "${out}" | tail -5 | sed 's/^/    | /' >&2; }
+dry_n="$(bash "${MIRROR}" --dry-run 2>/dev/null | grep -c '^IMAGE ')"
+[ "$(grep -c '^copy ' "${work}/mirror-up.log")" -eq "${dry_n}" ] \
+    && ok "mirror up: copies exactly the ${dry_n} images --dry-run lists" || bad "mirror up: copy count != the listed set"
+grep -q '^copy docker.io/calico/node:[^ ]* localhost:5000/calico/node:' "${work}/mirror-up.log" \
+    && ok "mirror up: pushes to the host-stripped path containerd's mirror asks for" || bad "mirror up: wrong destination path"
+grep -q -- '--label hugmesh-qemu-mirror=1' "${work}/mirror-up.log" && grep -q -- '-p 127.0.0.1:5000:5000' "${work}/mirror-up.log" \
+    && ok "mirror up: the registry container is labelled and bound to loopback" || bad "mirror up: container label/bind wrong"
+awk '/^docker run/ {r=NR} /^fetch http:\/\/localhost:5000\/v2\// {p=NR} /^copy / && !c {c=NR} END {exit !(r && p && c && r < p && p < c)}' "${work}/mirror-up.log" \
+    && ok "mirror up: waits for the registry's /v2/ between starting it and the first copy" || bad "mirror up: copies start without a readiness probe"
+grep -q '^helm push .*tigera-operator-.*\.tgz oci://localhost:5000/charts' "${work}/mirror-up.log" \
+    && ok "mirror up: the chart is pushed into the same registry (OCI)" || bad "mirror up: chart not pushed"
+# Fill-time drift: the shipped script (real sha) must refuse the fixture chart.
+out="$(mirror_up "${MIRROR}" "${work}/mirror-up-sha.log")"; rc=$?
+[ "${rc}" -ne 0 ] && echo "${out}" | grep -q 'chart sha256' \
+    && ok "mirror up: a chart that is not the pinned tarball is refused (sha256)" || bad "mirror up: an unpinned chart was accepted"
+grep -qE '^(copy |docker run)' "${work}/mirror-up-sha.log" && bad "mirror up: container started or images copied before the chart check" \
+    || ok "mirror up: no container started and nothing copied once the chart check failed"
+sed -e "s/version: ${opv}/version: v0.0.1/" "${fx}/chart/tigera-operator/values.yaml" > "${fx}/values-bad.yaml"
+mkdir -p "${fx}/chart-bad/tigera-operator"; cp "${fx}/values-bad.yaml" "${fx}/chart-bad/tigera-operator/values.yaml"
+( cd "${fx}/chart-bad" && tar czf "${fx}/chart-bad.tgz" tigera-operator )
+badsha="$(sha256sum "${fx}/chart-bad.tgz" | awk '{print $1}')"
+sed -e "s/^CALICO_CHART_SHA256=\".*\"$/CALICO_CHART_SHA256=\"${badsha}\"/" "${MIRROR}" > "${work}/mut-mirror-badop.sh"
+out="$(FX_CHART="${fx}/chart-bad.tgz" mirror_up "${work}/mut-mirror-badop.sh" "${work}/mirror-up-op.log")"; rc=$?
+[ "${rc}" -ne 0 ] && echo "${out}" | grep -q "names operator 'v0.0.1'" \
+    && ok "mirror up: a chart naming another operator version is refused" || bad "mirror up: operator drift in the chart was accepted"
+{ cat "${fx}/install.yaml"; echo '        image: quay.io/argoproj/argo-extra:v1'; } > "${fx}/install-extra.yaml"
+out="$(FX_INSTALL="${fx}/install-extra.yaml" mirror_up "${m}" "${work}/mirror-up-extra.log")"; rc=$?
+[ "${rc}" -ne 0 ] && echo "${out}" | grep -q 'argo-extra:v1' \
+    && ok "mirror up: an ArgoCD install.yaml image the set lacks is refused, by name" || bad "mirror up: an unmirrored ArgoCD image was accepted"
+# down never removes a container it does not own.
+out="$(FX_FOREIGN=1 FX_LOG="${work}/mirror-down.log" MIRROR_DOCKER_CMD="${fx}/bin/docker" bash "${MIRROR}" down 2>&1)"; rc=$?
+: >> "${work}/mirror-down.log"
+[ "${rc}" -ne 0 ] && ! grep -q '^docker rm' "${work}/mirror-down.log" \
+    && ok "mirror down: a same-named container WITHOUT the label is left alone" || bad "mirror down: removed (or tried to) a foreign container"
+out="$(FX_FOREIGN=1 mirror_up "${m}" "${work}/mirror-up-foreign.log")"; rc=$?
+[ "${rc}" -ne 0 ] && ! grep -q '^docker run' "${work}/mirror-up-foreign.log" \
+    && ok "mirror up: refuses to reuse a same-named container that is not the mirror" || bad "mirror up: adopted a foreign container"
+
 echo "== [wiring] make targets + CI + check.sh =="
 grep -qE '^qemu-mesh:' "${REPO}/Makefile" && ok "Makefile: qemu-mesh target" || bad "Makefile: qemu-mesh target missing"
 grep -qE '^qemu-mesh-enumerate:' "${REPO}/Makefile" && ok "Makefile: qemu-mesh-enumerate target" || bad "Makefile: qemu-mesh-enumerate target missing"
@@ -684,6 +944,12 @@ grep -qE '^lint:qemu-mesh-cluster:' "${REPO}/.gitlab-ci.yml" \
     && ok "CI: lint:qemu-mesh-cluster job exists" || bad "CI: lint:qemu-mesh-cluster job missing"
 grep -q 'tests/qemu/mesh-cluster_test.sh' "${REPO}/.gitlab-ci.yml" \
     && ok "CI: the job runs this gate" || bad "CI: gate not wired into the job"
+sed -n '/^qemu-mirror-list:/,/^$/p' "${REPO}/Makefile" | grep -q 'tests/qemu/registry-mirror.sh --dry-run' \
+    && ok "Makefile: qemu-mirror-list is the mirror's --dry-run" || bad "Makefile: qemu-mirror-list missing or not --dry-run"
+sed -n '/^qemu-mirror:/,/^$/p' "${REPO}/Makefile" | grep -q 'tests/qemu/registry-mirror.sh up' \
+    && ok "Makefile: qemu-mirror fills the mirror" || bad "Makefile: qemu-mirror target missing"
+grep -qE '^\s+qemu-mirror qemu-mirror-list qemu-mirror-down\b' "${REPO}/Makefile" \
+    && ok "Makefile: the mirror targets are .PHONY" || bad "Makefile: mirror targets not .PHONY"
 grep -q 'qemu-mesh-cluster:.*mesh-cluster_test.sh' "${REPO}/tests/build-matrix/check.sh" \
     && ok "check.sh: gate registered in the smoke walk" || bad "check.sh: gate not registered"
 
