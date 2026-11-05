@@ -44,6 +44,19 @@ def no_builds():
     return []
 
 
+#: Native Windows (the MSI) has no bash and no checkout: there "bring Ollama up" names
+#: Ollama for Windows. Linux, macOS and WSL keep the script.
+WINDOWS_HOST = os.name == "nt"
+
+
+def assert_up_advice(text):
+    """``text`` says how to bring Ollama up, in the words that are true on this host."""
+    if WINDOWS_HOST:
+        assert "Ollama for Windows" in text and "local-ai.sh" not in text, text
+    else:
+        assert "scripts/local-ai.sh up" in text, text
+
+
 @pytest.fixture
 def worker_proc():
     """A live process whose command line contains ``local-ai`` (what the heartbeat rule
@@ -82,9 +95,28 @@ def put_draft(env, name, status, diff="", issue="# A title\n\nbody"):
 # ── the state directory ─────────────────────────────────────────────────────────────
 def test_state_dir_rules(tmp_path):
     assert lai.state_dir({"HUGMESH_LOCAL_AI_DIR": "/x/y"}) == "/x/y"
-    assert lai.state_dir({"XDG_STATE_HOME": "/s"}) == "/s/hugmesh/local-ai"
-    assert lai.state_dir({"XDG_STATE_HOME": "", "HUGMESH_LOCAL_AI_DIR": ""}).endswith(
+    # the bash script's rule (Linux, macOS, WSL), pinned on any host
+    assert lai.state_dir({"XDG_STATE_HOME": "/s"}, osname="posix") == os.path.join(
+        "/s", "hugmesh", "local-ai")
+    assert lai.state_dir({"XDG_STATE_HOME": "", "HUGMESH_LOCAL_AI_DIR": ""},
+                         osname="posix").endswith(
         os.path.join(".local", "state", "hugmesh", "local-ai"))
+
+
+def test_on_native_windows_the_state_dir_is_in_the_studio_state_folder(tmp_path, monkeypatch):
+    """The XDG rule gave C:\\Users\\<you>\\.local\\state\\hugmesh\\local-ai on the MSI, a
+    folder no Windows program uses, and the Local AI screen printed it. There the
+    script never runs, so the folder sits beside the rest of the Studio's state."""
+    studio = str(tmp_path / "studio")
+    assert lai.state_dir({"HUGMESH_STUDIO_STATE_DIR": studio, "XDG_STATE_HOME": "/s"},
+                         osname="nt") == os.path.join(studio, "local-ai")
+    monkeypatch.setenv("HUGMESH_STUDIO_STATE_DIR", studio)      # what the Studio itself reads
+    assert lai.state_dir({}, osname="nt") == os.path.join(studio, "local-ai")
+    assert lai.state_dir({"HUGMESH_LOCAL_AI_DIR": "/x/y"}, osname="nt") == "/x/y"
+    snap = lai.read_snapshot({"OLLAMA_HOST": "127.0.0.1:1"}, builds=no_builds, osname="nt",
+                             probe=lambda: (False, [], [], ""))
+    assert snap.state_dir == os.path.join(studio, "local-ai")
+    assert f"state    {snap.state_dir}" in lai.format_status(snap)
 
 
 # ── the loopback rule ───────────────────────────────────────────────────────────────
@@ -301,11 +333,58 @@ def test_active_studio_build_sessions_come_from_the_session_records(fake, env, t
 def test_ollama_down_names_the_fix_and_the_doc(env, monkeypatch, tmp_path):
     env = dict(env, OLLAMA_HOST="127.0.0.1:1")                 # nothing listens on port 1
     monkeypatch.setattr(lai.shutil, "which", lambda name: "/usr/bin/ollama")
-    snap = lai.read_snapshot(env, builds=no_builds, timeout=0.5)
+    snap = lai.read_snapshot(env, builds=no_builds, timeout=0.5, osname="posix")
     assert not snap.ok and not snap.ollama_up
     assert "not answering" in snap.problem and "scripts/local-ai.sh up" in snap.fix
     assert snap.doc.endswith("LOCAL-AI-ASSISTANT.md")
     assert snap.summary.startswith("Local AI: Ollama is installed but is not answering")
+
+
+@pytest.mark.parametrize("installed", [True, False])
+def test_on_native_windows_ollama_down_names_ollama_for_windows_and_a_doc_url(
+        env, monkeypatch, installed):
+    """The MSI has no bash and no checkout: "scripts/local-ai.sh up" was advice nobody
+    there can follow, "see the link" named no link, and docs/... is not on that disk."""
+    env = dict(env, OLLAMA_HOST="127.0.0.1:1")
+    monkeypatch.setattr(lai.shutil, "which", lambda name: "C:\\ollama.exe" if installed else None)
+    snap = lai.read_snapshot(env, builds=no_builds, osname="nt",
+                             probe=lambda: (False, [], [], ""))
+    assert not snap.ok and "local-ai.sh" not in snap.fix and "local-ai.sh" not in snap.problem
+    assert snap.doc == lai.DOC_URL and snap.doc.startswith("https://")
+    if installed:
+        assert snap.problem == "Ollama is installed but is not answering on 127.0.0.1:1."
+        assert snap.fix == "Start Ollama for Windows from the Start menu."
+    else:
+        assert snap.problem == "Ollama is not installed on this machine."
+        assert lai.OLLAMA_DOWNLOAD in snap.fix and "Ollama for Windows" in snap.fix
+    assert "local-ai.sh" not in lai.format_status(snap)
+
+
+def test_on_native_windows_the_docker_ollama_down_names_the_container(env, monkeypatch):
+    from hugmesh_studio.core import ollama_docker as odk
+    monkeypatch.setattr(lai.shutil, "which", lambda name: "C:\\ollama.exe")
+    host = odk.endpoint(odk.DOCKER, {})
+    snap = lai.read_snapshot(dict(env, OLLAMA_HOST=host), builds=no_builds, osname="nt",
+                             probe=lambda: (False, [], [], ""))
+    assert "container" in snap.problem and "container" in snap.fix
+    assert "Ollama for Windows" not in snap.fix
+    said = lai._down_message({"OLLAMA_HOST": host}, osname="nt")
+    assert "container" in said and "local-ai.sh" not in said
+
+
+def test_the_not_answering_message_on_each_platform(monkeypatch):
+    env = {"OLLAMA_HOST": "127.0.0.1:1"}
+    linux = lai._down_message(env, osname="posix")
+    assert linux == ("Ollama is not answering on 127.0.0.1:1. Start it with "
+                     "scripts/local-ai.sh up (see docs/LOCAL-AI-ASSISTANT.md).")
+    monkeypatch.setattr(lai.shutil, "which", lambda name: None)
+    absent = lai._down_message(env, osname="nt")
+    assert absent.startswith("Ollama is not answering on 127.0.0.1:1. Ollama is not "
+                             "installed on this machine. Install Ollama for Windows from "
+                             "https://ollama.com/download")
+    assert lai.DOC_URL in absent and "local-ai.sh" not in absent
+    monkeypatch.setattr(lai.shutil, "which", lambda name: "C:\\ollama.exe")
+    assert "Start Ollama for Windows from the Start menu." in lai._down_message(env, osname="nt")
 
 
 def test_ollama_not_installed_says_install_it(env, monkeypatch):
@@ -394,8 +473,26 @@ def test_send_prompt_reports_a_model_error_line(fake, env):
 
 
 def test_send_prompt_when_ollama_is_down_says_how_to_start_it():
-    with pytest.raises(lai.LocalAIError, match=r"scripts/local-ai\.sh up"):
+    # timeout=1 is shorter than Windows takes to refuse a loopback port (about 2 s): the
+    # answer must still be "not answering", never "the model may still be loading"
+    with pytest.raises(lai.LocalAIError, match="not answering") as info:
         lai.send_prompt("hi", "qwen3:8b", env={"OLLAMA_HOST": "127.0.0.1:1"}, timeout=1)
+    assert_up_advice(str(info.value))
+
+
+def test_a_connect_that_times_out_is_not_answering_not_a_model_loading(monkeypatch):
+    """urllib wraps only a failure while connecting and sending: a timeout there is a
+    server that never accepted. A timeout after it (the stream) keeps its own sentence."""
+    import socket
+    import urllib.error
+
+    class _Opener:
+        def open(self, *_a, **_k):
+            raise urllib.error.URLError(socket.timeout("timed out"))
+    monkeypatch.setattr(lai, "_opener", lambda: _Opener())
+    with pytest.raises(lai.LocalAIError, match="not answering") as info:
+        lai.send_prompt("hi", "qwen3:8b", env={"OLLAMA_HOST": "127.0.0.1:1"}, timeout=1)
+    assert "may still be loading" not in str(info.value)
 
 
 def test_send_prompt_times_out_with_a_plain_sentence(fake, env):
@@ -474,7 +571,8 @@ def test_a_server_that_dies_mid_reply_reads_as_not_answering_and_never_raises(fa
     monkeypatch.setattr(lai.shutil, "which", lambda name: "/usr/bin/ollama")
     snap = lai.read_snapshot(env, builds=no_builds, timeout=2)
     assert snap.ollama_up is False and not snap.ok
-    assert "not answering" in snap.problem and "scripts/local-ai.sh up" in snap.fix
+    assert "not answering" in snap.problem
+    assert_up_advice(snap.fix)
     assert snap.summary.startswith("Local AI: Ollama is installed but is not answering")
 
 
@@ -538,10 +636,11 @@ def test_every_command_reports_a_half_dead_server_in_words(fake, env, monkeypatc
     assert lai.main(["ping"]) == 1
     out = io.StringIO()
     assert lai.chat_loop(io.StringIO(""), out, env=env) == 1
-    assert "local-ai.sh up" in out.getvalue()
+    assert_up_advice(out.getvalue())
     # a prompt with no model named asks /api/tags first: that lookup must fail in words too
-    with pytest.raises(lai.LocalAIError, match=r"scripts/local-ai\.sh up"):
+    with pytest.raises(lai.LocalAIError, match="not answering") as info:
         lai.send_prompt("hi", None, env=env)
+    assert_up_advice(str(info.value))
 
 
 # ── starting the assistant ──────────────────────────────────────────────────────────
@@ -553,7 +652,9 @@ def test_start_assistant_runs_the_script_detached(tmp_path, env):
 
     def spawn(cmd, **kw):
         calls.append((cmd, kw))
-    res = lai.start_assistant(str(gen), env=env, spawn=spawn)
+    # the script's own platforms (Linux, macOS, WSL), pinned on any host: native Windows
+    # refuses before this (test_start_assistant_on_native_windows_refuses_...)
+    res = lai.start_assistant(str(gen), env=env, spawn=spawn, osname="posix")
     assert res.ok and res.command.endswith("local-ai.sh start")
     cmd, kw = calls[0]
     assert cmd == ["bash", str(gen / "scripts" / "local-ai.sh"), "start"]
@@ -562,7 +663,8 @@ def test_start_assistant_runs_the_script_detached(tmp_path, env):
 
 
 def test_start_assistant_says_what_is_wrong_instead_of_raising(tmp_path, env):
-    res = lai.start_assistant(str(tmp_path / "nothing"), env=env)
+    # osname="posix": the script's platforms, pinned on any host (Windows refuses first)
+    res = lai.start_assistant(str(tmp_path / "nothing"), env=env, osname="posix")
     assert not res.ok and "missing" in res.message and "start" in res.command
     gen = tmp_path / "gen"
     (gen / "scripts").mkdir(parents=True)
@@ -570,7 +672,7 @@ def test_start_assistant_says_what_is_wrong_instead_of_raising(tmp_path, env):
 
     def spawn(cmd, **kw):
         raise OSError("no bash")
-    res = lai.start_assistant(str(gen), env=env, spawn=spawn)
+    res = lai.start_assistant(str(gen), env=env, spawn=spawn, osname="posix")
     assert not res.ok and "no bash" in res.message and res.command in res.message
 
 
@@ -614,7 +716,7 @@ def test_chat_loop_keeps_history_until_cleared(fake, env):
 def test_chat_loop_when_down_returns_one_with_the_fix():
     out = io.StringIO()
     assert lai.chat_loop(io.StringIO(""), out, env={"OLLAMA_HOST": "127.0.0.1:1"}) == 1
-    assert "local-ai.sh up" in out.getvalue()
+    assert_up_advice(out.getvalue())
 
 
 def test_main_status_exit_codes_and_json(fake, env, monkeypatch, capsys):
@@ -638,7 +740,7 @@ def test_main_prompt_prints_the_answer_or_a_sentence_on_stderr(fake, env, monkey
     assert [r[2]["messages"][-1]["content"] for r in fake.requests if r[1] == "/api/chat"] == ["say hi"]
     monkeypatch.setenv("OLLAMA_HOST", "127.0.0.1:1")
     assert lai.main(["prompt", "x"]) == 1
-    assert "local-ai.sh up" in capsys.readouterr().err
+    assert_up_advice(capsys.readouterr().err)
     monkeypatch.setenv("OLLAMA_HOST", "10.9.9.9")
     assert lai.main(["host"]) == 2
     assert "loopback" in capsys.readouterr().err
@@ -646,8 +748,13 @@ def test_main_prompt_prints_the_answer_or_a_sentence_on_stderr(fake, env, monkey
 
 def test_the_module_runs_as_a_command_without_qt(fake, env):
     """scripts/local-ai.sh runs it this way; it must import with no Qt and no display."""
+    # Windows cannot open a socket in a process with no SYSTEMROOT (WinError 10106: the
+    # Winsock providers are found through it), so the probe read "not installed"; POSIX
+    # needs nothing beyond PATH. The child gets the one variable, nothing else.
+    host = {k: os.environ[k] for k in ("SYSTEMROOT",) if WINDOWS_HOST and k in os.environ}
     r = subprocess.run([sys.executable, "-m", "hugmesh_studio.core.local_ai_status", "status", "--brief"],
-                       env={**env, "PYTHONPATH": os.path.dirname(os.path.dirname(os.path.abspath(__file__)))},
+                       env={**env, **host,
+                            "PYTHONPATH": os.path.dirname(os.path.dirname(os.path.abspath(__file__)))},
                        capture_output=True, text=True, timeout=30)
     assert r.returncode == 0 and r.stdout.startswith("Local AI: ready"), r.stderr
     assert "PySide6" not in r.stderr and "PyQt6" not in r.stderr
@@ -696,6 +803,7 @@ def test_on_windows_the_pid_probe_never_sends_a_signal(monkeypatch):
     monkeypatch.setattr(lai.os, "kill", lambda *a: (_ for _ in ()).throw(
         AssertionError(f"os.kill{a} was called on the Windows path")))
     monkeypatch.setattr(lai, "_pid_alive_windows", lambda pid: asked.append(pid) or True)
+    monkeypatch.setattr(lai, "_cmdline_windows", lambda pid: "bash scripts/local-ai/worker.sh")
     assert lai._pid_alive(4242, "local-ai", os_name="nt") is True
     assert asked == [4242]
     monkeypatch.setattr(lai, "_pid_alive_windows", lambda pid: asked.append(pid) or False)
@@ -712,9 +820,33 @@ def test_on_posix_the_pid_probe_still_uses_the_zero_signal(monkeypatch):
     assert sent == [(os.getpid(), 0)]
 
 
-def test_the_windows_probe_fails_closed_where_there_is_no_windows_api():
-    # on this (non-Windows) host ctypes has no windll: a dead answer, never an exception
+def test_on_windows_a_live_pid_that_is_not_ours_is_not_our_worker(monkeypatch):
+    """The pid-reuse rule /proc gives Linux: a live pid whose command line does not name
+    the worker (or cannot be read at all) is not it."""
+    monkeypatch.setattr(lai, "_pid_alive_windows", lambda pid: True)
+    monkeypatch.setattr(lai, "_cmdline_windows", lambda pid: "C:\\Windows\\notepad.exe")
+    assert lai._pid_alive(4242, "local-ai", os_name="nt") is False
+    assert lai._pid_alive(4242, os_name="nt") is True             # no needle: alive is alive
+    monkeypatch.setattr(lai, "_cmdline_windows", lambda pid: None)
+    assert lai._pid_alive(4242, "draft.sh", os_name="nt") is False
+
+
+def test_the_windows_probe_fails_closed_where_there_is_no_windows_api(monkeypatch):
+    # where ctypes has no Windows API (any POSIX host; taken away here on Windows):
+    # a dead answer and no command line, never an exception
+    import ctypes
+    monkeypatch.delattr(ctypes, "windll", raising=False)
+    monkeypatch.delattr(ctypes, "WinDLL", raising=False)
     assert lai._pid_alive_windows(os.getpid()) is False
+    assert lai._cmdline_windows(os.getpid()) is None
+
+
+@pytest.mark.skipif(not WINDOWS_HOST, reason="asks the real Windows process API")
+def test_the_windows_command_line_reader_sees_a_real_process(worker_proc):
+    assert "pytest" in lai._cmdline_windows(os.getpid())
+    assert "local-ai-worker" in lai._cmdline_windows(worker_proc.pid)
+    assert lai._pid_alive(worker_proc.pid, "local-ai") is True
+    assert lai._pid_alive(os.getpid(), "draft.sh") is False        # alive, not a draft
 
 
 def test_the_real_os_name_is_used_when_none_is_injected(monkeypatch):

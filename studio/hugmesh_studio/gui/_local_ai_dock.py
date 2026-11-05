@@ -459,6 +459,11 @@ class LocalWorkWindow(QtWidgets.QWidget):
     def _set_commands(self) -> None:
         """The run-it-yourself line, for the Ollama the assistant uses NOW (Docker mode
         puts that instance's OLLAMA_HOST in front of each command)."""
+        note = lai.windows_worker_note()
+        if note:
+            # every one of those lines is the bash script: not a thing to run here
+            self.commands.setText(note)
+            return
         try:
             cmds = odk.commands_for(self._generator_dir)
         except Exception:                        # noqa: BLE001 — a label never raises
@@ -684,6 +689,14 @@ class LocalAIDock(QtWidgets.QFrame):
                                         "Start the local Ollama and the queue worker "
                                         "(runs scripts/local-ai.sh start; in Docker mode it "
                                         "starts the Studio's Ollama container first)")
+        if lai.windows_worker_note():
+            # that tooltip names the bash script, which this build cannot run: say what
+            # the button does here, where it is pressed
+            self.start_btn.setToolTip(
+                "In Docker mode: start the Studio's Ollama container and wait until it "
+                "answers. With the system Ollama there is nothing to start from here: "
+                "Ollama for Windows runs in the background once installed.\n\n"
+                + lai.windows_worker_note())
         self.start_btn.clicked.connect(self.start_assistant)
         self.work_btn = _styled_button("Current work",
                                        "Open a window with the queue, the drafts and the running builds")
@@ -983,7 +996,13 @@ class LocalAIDock(QtWidgets.QFrame):
         self._activity_timer.timeout.connect(self.refresh_activity)
         try:
             from . import build_supervisor
-            build_supervisor.supervisor().changed.connect(self.refresh_activity)
+            # QUEUED, not direct: adopt() emits `changed` BEFORE the page starts the
+            # worker, and refresh_activity reads supervisor().running(), which reaps a
+            # row whose thread is not running yet. A direct call dropped every build
+            # from the roster the moment it was dispatched (window pin and Quit's
+            # cancel with it); on the next turn of the event loop the thread runs.
+            build_supervisor.supervisor().changed.connect(
+                self.refresh_activity, Qt.ConnectionType.QueuedConnection)
         except Exception:                        # pragma: no cover - no QApplication
             _log_swallowed("LocalAIDock(supervisor)")
         alive = self._alive
@@ -1081,6 +1100,12 @@ class LocalAIDock(QtWidgets.QFrame):
                 # a wrapped label's minimum is one line; what it shows is its full height
                 w = max(50, self.note.width())
                 need += max(0, self.note.heightForWidth(w) - self.note.minimumSizeHint().height())
+            if self.tip_row.isVisibleTo(chat):
+                # the tip line wraps too and its minimum is the 28 px hide button: a tip
+                # that takes two lines (Windows' wider font at 942x552) took its extra
+                # 4 px from the note above it, which lost the end of its last line
+                w = max(50, self.tip_row.width())
+                need += max(0, self.tip_row.heightForWidth(w) - self.tip_row.minimumSizeHint().height())
             return top + need + self._outer.contentsMargins().bottom() + 2
         except RuntimeError:                     # a card on its way out
             return 0
@@ -1491,6 +1516,14 @@ class LocalAIDock(QtWidgets.QFrame):
         self.docker_stop_btn.setVisible(docker)
         st, gpu = self.docker_state, self.gpu
         if not docker:
+            if lai.windows_worker_note():
+                # the .sh line below cannot run here; Ollama for Windows is a native app
+                self.docker_label.setText(
+                    "The Studio does not start or stop the system Ollama from here: "
+                    "Ollama for Windows runs in the background once installed (start it "
+                    f"from the Start menu when it is not answering; get it from "
+                    f"{lai.OLLAMA_DOWNLOAD}).")
+                return
             self.docker_label.setText(
                 "The Studio does not start or stop the system Ollama from here: Start "
                 "local assistant runs scripts/local-ai.sh start, which starts it only if "
@@ -2273,6 +2306,7 @@ class LocalAIDock(QtWidgets.QFrame):
                 # Could not start it from here: open the work window, which shows the
                 # exact command to run yourself.
                 cmd = (res.command if res is not None
+                       else "" if lai.windows_worker_note()      # bash: nothing to run here
                        else odk.commands_for(self.generator_dir, self.ollama_mode)["start"])
                 why = res.message if res is not None else str(error)
                 # no command (native Windows): the script is not a thing to run there; a

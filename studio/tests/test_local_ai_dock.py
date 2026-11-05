@@ -712,7 +712,12 @@ def test_when_it_cannot_start_the_work_window_opens_with_the_exact_command(qapp)
     dock.start_btn.click()
     assert wait_for(qapp, lambda: dock.work_window is not None and dock.work_window.isVisible())
     assert "/x/scripts/local-ai.sh start" in dock.note.text()
-    assert "local-ai.sh start" in dock.work_window.commands.text()
+    if os.name == "nt":
+        # native Windows: the window's run-it-yourself lines are the bash script, which
+        # that build cannot run; it says so (and what works) instead of listing them
+        assert lai.windows_worker_note() == dock.work_window.commands.text()
+    else:
+        assert "local-ai.sh start" in dock.work_window.commands.text()
     dock.work_window.close()
     dock.close()
 
@@ -726,7 +731,13 @@ def test_a_start_that_raises_is_reported_not_swallowed(qapp):
     dock.start_btn.click()
     assert wait_for(qapp, lambda: dock.start_btn.isEnabled())
     assert "boom" in dock.note.text()
-    dock.work_window.close()
+    if os.name == "nt":
+        # no command to run yourself there (start is the bash script): none is named and
+        # no window opens to show one, as when the start refuses in words
+        assert "local-ai.sh" not in dock.note.text() and dock.work_window is None
+    else:
+        assert "local-ai.sh start" in dock.note.text()
+        dock.work_window.close()
     dock.close()
 
 

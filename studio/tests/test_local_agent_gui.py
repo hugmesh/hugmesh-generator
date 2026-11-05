@@ -28,6 +28,7 @@ Set LOCAL_AGENT_SHOTS=<dir> to save a PNG of the card in each state.
 import ast
 import inspect
 import os
+import shlex
 import subprocess
 import threading
 from types import SimpleNamespace
@@ -690,7 +691,8 @@ def test_when_no_terminal_takes_the_request_the_exact_lines_are_shown(
     seen = tmp_path / "agent-ran.txt"
     (bindir / "ollama").write_text(f'#!/bin/sh\necho "$PWD $*" > {seen}\n')
     (bindir / "ollama").chmod(0o755)
-    monkeypatch.setenv("PATH", f"{bindir}:{os.environ.get('PATH', '/usr/bin:/bin')}")
+    monkeypatch.setenv("PATH", os.pathsep.join(
+        [str(bindir), os.environ.get("PATH", os.pathsep.join(["/usr/bin", "/bin"]))]))
     plans = []
 
     def no_terminal(plan):
@@ -710,6 +712,15 @@ def test_when_no_terminal_takes_the_request_the_exact_lines_are_shown(
     assert shown.rstrip("\n") == plan.after_copy_text.rstrip("\n")
     assert "git clone" not in shown and "git remote remove" not in shown
     assert os.path.isdir(plan.cwd), "the copy exists even though no window opened"
+    if os.name == "nt":
+        # Everything above is the card's own behaviour and holds here. What follows runs
+        # the lines (POSIX sh, for the "linux" host this test fakes) through bash with a
+        # #!/bin/sh stand-in `ollama`: native Windows has no POSIX shell for them (`bash`
+        # is the WSL launcher, which cannot cd into a C:\ path) and cannot execute that
+        # stand-in. The Windows launch itself is pinned in test_local_agent.py
+        # (test_windows_and_macos_say_plainly_that_the_window_is_not_offered).
+        pytest.skip("runs the POSIX launch lines through bash with a #!/bin/sh stand-in; "
+                    "native Windows has no POSIX shell to run them")
     proc = subprocess.run(["bash", "--noprofile", "--norc", "-c", shown],
                           capture_output=True, text=True, timeout=60)
     assert proc.returncode == 0, proc.stderr
@@ -799,7 +810,10 @@ def test_copy_is_always_available_and_copies_the_lines_when_ready(wiz, src_tree)
     assert launch.plans == [], "Copy must not start anything"
     assert card.copied_text.startswith("git clone --no-hardlinks -- ")
     assert "git remote remove origin" in card.copied_text and "env -i " in card.copied_text
-    assert os.path.isfile(card.copied_text.split("$(cat ")[1].split(")")[0])    # the brief
+    # the brief: the path is shell-quoted as the line writes it (a bare word for a POSIX
+    # temp path, single-quoted for a Windows one with backslashes and a drive colon)
+    (brief,) = shlex.split(card.copied_text.split("$(cat ")[1].split(")")[0])
+    assert os.path.isfile(brief), brief
     assert "Copied the lines" in card.note.text()
 
 
@@ -901,6 +915,10 @@ def _shot(card, ctl, name):
     card.grab().save(os.path.join(SHOTS, f"local-agent-{name}.png"))
 
 
+#: The longest deep source path built on Windows: MAX_PATH (260) less room for a
+#: repository folder name and git's own files inside it.
+_WINDOWS_DEEP_MAX = 160
+
 STATES = ["ready", "ollama-missing", "server-down", "no-tools-model", "no-agent",
           "launch-failed", "launched", "everything-missing", "not-a-repo"]
 
@@ -927,7 +945,13 @@ def test_every_state_is_drawn_whole_at_the_window_sizes(wiz, tmp_path, state, si
     # a deep path and a long mesh name: neither may push a control out of the card
     deep = tmp_path
     for i in range(6):
-        deep = deep / f"a-rather-long-directory-name-{i}"
+        nxt = deep / f"a-rather-long-directory-name-{i}"
+        # Windows: CreateProcess refuses a working folder past MAX_PATH (260) and git
+        # needs room under the repository for .git/objects/xx/<38 hex>, so the tree stops
+        # short of that there; it is still far wider than the card (asserted below)
+        if os.name == "nt" and len(str(nxt)) > _WINDOWS_DEEP_MAX:
+            break
+        deep = nxt
     deep = deep / "source-tree"
     for name in (APP, "hugmesh-gateway"):
         d = deep / name
@@ -943,6 +967,8 @@ def test_every_state_is_drawn_whole_at_the_window_sizes(wiz, tmp_path, state, si
                                "exited 3; this reason is long on purpose, to wrap)")
     ctl, card, _p, _l = _to_bringup(wiz, launcher=launcher, source_dir=str(deep), size=size)
     assert wiz.size() == QtCore.QSize(*size)
+    assert card.fontMetrics().horizontalAdvance(str(deep)) > card.width(), \
+        "the deep path must be wider than the card, or eliding it is not tested"
     _into_state(card, state, launcher)
     if state in ("launched", "launch-failed"):
         card.start_btn.click()
