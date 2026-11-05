@@ -117,8 +117,16 @@ eq "$(stat -c %a "${S1}" 2>/dev/null || stat -f %Lp "${S1}")" 600 "a pre-existin
 # ══ 3. entrypoint: the launcher flags ═══════════════════════════════════════
 echo
 echo "display_launcher_args — the secret goes by FILE, the listen address is the container's, --virt-dtb only off-Pi ARM"
+# The listen address and ports come from the entrypoint's OWN defaults, not from
+# this file: inside the container SPICE must listen on 0.0.0.0 or docker's
+# loopback publish has nothing to forward to (a 127.0.0.1 default would make
+# the door unreachable while every host-side check still passed).
+eval "$(grep -E '^DISPLAY_(LISTEN|SPICE_PORT|WEB_LISTEN_PORT)=' "${ENTRYPOINT}")"
+eq "${DISPLAY_LISTEN:-unset}" "0.0.0.0" "the entrypoint's in-container listen default is 0.0.0.0 (the container namespace; the host side is the runner's 127.0.0.1 publish)"
+eq "${DISPLAY_SPICE_PORT:-unset}" 5930 "the entrypoint's in-container SPICE port is the one the runner maps (5930)"
+eq "${DISPLAY_WEB_LISTEN_PORT:-unset}" 6080 "the entrypoint's in-container noVNC port is the one the runner maps (6080)"
 args_for() { ( PLATFORM="$1"; VNC_SOCK="${2:-}"; DISPLAY_SECRET="/work/runs/x/launch/display.secret"
-               DISPLAY_LISTEN="0.0.0.0"; DISPLAY_SPICE_PORT=5930; DISPLAY_ARGS=()
+               DISPLAY_ARGS=()
                display_launcher_args; printf '%s\n' "${DISPLAY_ARGS[@]}" ); }
 x86="$(args_for x86)"
 has "${x86}" $'--display\nspice' "x86: --display spice"
@@ -438,19 +446,25 @@ eq "$(cat "${TMP}/xdg.argv" 2>/dev/null)" "http://127.0.0.1:22510/vnc.html?host=
 lacks "${out}" "${SENTINEL}" "browser: no password in the URL or the output"
 lacks "${out}" "password=" "browser: no password= query parameter"
 # Refusals.
-cat > "${DEVICES_DIR}/stopped.json" <<EOF
+cat > "${DEVICES_DIR}/x86_stopped.json" <<EOF
 {"label":"x86/stopped","container":"hugmesh-qemu-dev-x86_stopped","display_protocol":"spice","display_port":22412,"display_password_file":"${TMP}/run/launch/display.secret","state":"stopped"}
 EOF
 ( cmd_open_display x86/stopped print >/dev/null 2>&1 ) && _bad "a stopped device opened" || _ok "a stopped device is refused"
-cat > "${DEVICES_DIR}/nodoor.json" <<'EOF'
-{"label":"rpi5/pki","container":"hugmesh-qemu-dev-rpi5_pki","display_protocol":"","display_port":0,"state":"running"}
+cat > "${DEVICES_DIR}/rpi5_nodoor.json" <<'EOF'
+{"label":"rpi5/nodoor","container":"hugmesh-qemu-dev-rpi5_nodoor","display_protocol":"","display_port":0,"state":"running"}
 EOF
-( cmd_open_display rpi5/pki print >/dev/null 2>&1 ) && _bad "a device with no door opened" || _ok "a device with no door is refused, by name"
-cat > "${DEVICES_DIR}/nopw.json" <<EOF
+( cmd_open_display rpi5/nodoor print >/dev/null 2>&1 ) && _bad "a device with no door opened" || _ok "a device with no door is refused, by name"
+cat > "${DEVICES_DIR}/x86_nopw.json" <<EOF
 {"label":"x86/nopw","container":"hugmesh-qemu-dev-x86_nopw","display_protocol":"spice","display_port":22413,"display_password_file":"${TMP}/missing.secret","state":"running"}
 EOF
 ( cmd_open_display x86/nopw print >/dev/null 2>&1 ) && _bad "an unreadable password file was accepted" || _ok "an unreadable password file is refused"
 ( cmd_open_display no/such print >/dev/null 2>&1 ) && _bad "a missing record opened" || _ok "a missing record is refused"
+# Positive control for the refusals above: the same record shapes, made valid,
+# DO open — so each refusal was the named check and not "record not found".
+cat > "${DEVICES_DIR}/x86_stopped.json" <<EOF
+{"label":"x86/stopped","container":"hugmesh-qemu-dev-x86_stopped","display_protocol":"spice","display_port":22412,"display_password_file":"${TMP}/run/launch/display.secret","state":"running"}
+EOF
+( cmd_open_display x86/stopped print >/dev/null 2>&1 ) && _ok "control: the stopped-record shape opens once its state is running" || _bad "control: the stopped-record shape does not open even when running (the refusal above proved nothing)"
 
 # ══ 7. the runner's own wiring, read once ═══════════════════════════════════
 echo
