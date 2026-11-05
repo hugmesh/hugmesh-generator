@@ -139,6 +139,48 @@ MESH_NET="${MESH_NET:-}"
 MESH_MAC="${MESH_MAC:-}"
 MESH_IP="${MESH_IP:-}"
 MESH_PREFIX_LEN="${MESH_PREFIX_LEN:-24}"
+# ── Display door (2026-11-04): a SPICE window onto an emulated DESKTOP ───────
+# One door: qemu's SPICE server, on the container's own network namespace, behind
+# a per-run random password held in a FILE (a qemu `secret` object — never
+# `password=` on argv, which would show in ps and in the tee'd launch.log). What
+# the HOST sees is decided by run-qemu-docker.sh alone: it publishes the door as
+# `-p 127.0.0.1:<ssh+100>:5930` and hands the host port down in DISPLAY_HOST_PORT
+# so the device record can name it, exactly like SSH_HOST_PORT. Nothing in here
+# binds a host port and nothing in here prints the secret.
+#   auto  : spice when this is a --keep-alive DESKTOP (kubernetes.role "none",
+#           the desktop|laptop|chromebook|standalone-* classification below) and
+#           the platform's launcher knows the display flags; otherwise none, so a
+#           test run's launcher argv stays byte-identical.
+#   spice : always (a launcher without the flags is an ERROR row, by design).
+#   none  : never.
+DISPLAY_MODE="${DISPLAY_MODE:-auto}"
+# noVNC browser fallback (websockify in front of a VNC unix socket). OPT-IN and
+# loopback only: VNC auth is 8-char DES, and the runner image ships no websockify
+# unless docker/Dockerfile.qemu-runner grows one, so this warns and skips rather
+# than failing a row.
+DISPLAY_WEB="${DISPLAY_WEB:-0}"
+# Host-side ports the RUNNER published for the door and the browser fallback; 0 =
+# nothing published. Recorded, never bound here (same contract as SSH_HOST_PORT).
+DISPLAY_HOST_PORT="${DISPLAY_HOST_PORT:-0}"
+DISPLAY_WEB_PORT="${DISPLAY_WEB_PORT:-0}"
+# What this image is KNOWN to do when the viewer window is resized: "guest" =
+# the desktop re-lays out at the new resolution (virtio-gpu + an in-guest agent
+# that applies the preferred mode), "scale" = the picture is scaled to fit. It is
+# "scale" until an image's guest-side proof lands; the runner may pass the proven
+# value per row. Nothing here can measure it, so nothing here guesses.
+DISPLAY_RESIZE="${DISPLAY_RESIZE:-scale}"
+# Resolved by display_setup once the role is classified. In-container listen
+# address/ports are fixed: 0.0.0.0 is THIS container's namespace only (reachable
+# by the runner's loopback publish and, on a --mesh-net bridge, by the sibling
+# containers — which is exactly why the password is required, not optional).
+DISPLAY_PROTOCOL=""
+DISPLAY_SECRET=""
+DISPLAY_LISTEN="0.0.0.0"
+DISPLAY_SPICE_PORT=5930
+DISPLAY_WEB_LISTEN_PORT=6080
+VNC_SOCK=""
+WEBSOCKIFY_PID=""
+DISPLAY_ARGS=()
 
 RED=$'\033[0;31m'; GREEN=$'\033[0;32m'; CYAN=$'\033[0;36m'; YEL=$'\033[0;33m'; RST=$'\033[0m'
 info() { echo "${GREEN}[qemu-docker]${RST} $*"; }
@@ -193,6 +235,19 @@ Interactive devices (golden mode only; everything below is off by default):
   --qmp PATH       qemu QMP unix socket, passed through to the launcher.
                    Implied by --keep-alive; without either, qemu keeps
                    -monitor none and the launcher argv is unchanged.
+  --display MODE   auto (default) | spice | none. A SPICE display door for the
+                   guest, behind a per-run random password file. auto = spice
+                   only for a --keep-alive DESKTOP row (kubernetes.role none)
+                   whose launcher knows the display flags; a test run's qemu
+                   argv is unchanged. Env: DISPLAY_MODE.
+  --display-web    also run websockify/noVNC in front of a VNC unix socket, for
+                   a browser fallback (scale-to-fit only). Opt-in: VNC auth is
+                   8-char DES. Skipped with a WARN when the runner image has no
+                   websockify. Env: DISPLAY_WEB=1.
+  --display-host-port P / --display-web-port P
+                   loopback host ports the runner published the door and the
+                   browser fallback on; recorded verbatim, never bound here.
+                   0 = not published. Env: DISPLAY_HOST_PORT / DISPLAY_WEB_PORT.
 
 Mesh L2 (issue #48 phase 4; all default-off, all from the planner's identity
 file — this container never invents an identity):
@@ -230,6 +285,10 @@ while [[ $# -gt 0 ]]; do
         --ssh-host-port) SSH_HOST_PORT="$2"; shift 2 ;;
         --container)     CONTAINER_NAME="$2"; shift 2 ;;
         --qmp)           QMP_SOCK="$2"; shift 2 ;;
+        --display)       DISPLAY_MODE="$2"; shift 2 ;;
+        --display-web)   DISPLAY_WEB=1; shift ;;
+        --display-host-port) DISPLAY_HOST_PORT="$2"; shift 2 ;;
+        --display-web-port)  DISPLAY_WEB_PORT="$2"; shift 2 ;;
         --mesh-net)      MESH_NET="$2"; shift 2 ;;
         --mesh-mac)      MESH_MAC="$2"; shift 2 ;;
         --mesh-ip)       MESH_IP="$2"; shift 2 ;;
@@ -445,6 +504,16 @@ write_device_record() {
             "${SSHKEY}" "${SSHKEY}.pub" 2>/dev/null || true
         chmod 600 "${SSHKEY}" 2>/dev/null || true
     fi
+    # The display password file, same reasoning and same moment: the record
+    # advertises its HOST path and a viewer on the host must be able to read it
+    # the instant the record says the door exists. 0600 to the operator — qemu
+    # already read it into its secret object at launch, and no other account
+    # has business with it. `:-` because this function is extracted and driven
+    # under `set -u` by verdict_test.sh with only the fields it names.
+    if [ -n "${HOST_UID}" ] && [ -n "${DISPLAY_SECRET:-}" ] && [ -f "${DISPLAY_SECRET}" ]; then
+        chown "${HOST_UID}:${HOST_GID:-${HOST_UID}}" "${DISPLAY_SECRET}" 2>/dev/null || true
+        chmod 600 "${DISPLAY_SECRET}" 2>/dev/null || true
+    fi
     # `|| warn` is load-bearing, not decoration. The prologue is `set -uo
     # pipefail` with no -e, so the call sites before the assertions run with
     # errexit OFF — but golden mode switches it ON right after the assertion
@@ -470,6 +539,11 @@ write_device_record() {
   "mesh_net": $(json_str "${MESH_NET:-}"),
   "mesh_mac": $(json_str "${MESH_MAC:-}"),
   "mesh_ip": $(json_str "${MESH_IP:-}"),
+  "display_protocol": $(json_str "${DISPLAY_PROTOCOL:-}"),
+  "display_port": ${DISPLAY_HOST_PORT:-0},
+  "display_web_port": ${DISPLAY_WEB_PORT:-0},
+  "display_password_file": $(json_str "$(host_path "${DISPLAY_SECRET:-}")"),
+  "display_resize": $(json_str "${DISPLAY_RESIZE:-scale}"),
   "state": $(json_str "${state}"),
   "started_at": $(json_str "${STARTED_AT}")
 }
@@ -536,6 +610,97 @@ EOF
 SSH_HOST_PORT=$((10#${SSH_HOST_PORT}))
 [ "${SSH_HOST_PORT}" -le 65535 ] \
     || die "--ssh-host-port must be 0-65535, got '${SSH_HOST_PORT}'"
+
+# ── Display door: inputs checked, helpers defined ───────────────────────────
+# Both ports are emitted as BARE JSON numbers in the device record, so they get
+# the same numeric + base-10 + range treatment as ssh_host_port above.
+case "${DISPLAY_MODE}" in
+    auto|spice|none) ;;
+    *) die "--display must be auto, spice or none, got '${DISPLAY_MODE}'" ;;
+esac
+case "${DISPLAY_WEB}" in 0|1) ;; *) die "DISPLAY_WEB must be 0 or 1, got '${DISPLAY_WEB}'" ;; esac
+case "${DISPLAY_RESIZE}" in
+    guest|scale) ;;
+    *) die "DISPLAY_RESIZE must be guest or scale, got '${DISPLAY_RESIZE}'" ;;
+esac
+for _dp in DISPLAY_HOST_PORT DISPLAY_WEB_PORT; do
+    [[ "${!_dp}" =~ ^[0-9]+$ ]] || die "${_dp} must be a whole number, got '${!_dp}'"
+    printf -v "${_dp}" '%d' "$((10#${!_dp}))"
+    [ "${!_dp}" -le 65535 ] || die "${_dp} must be 0-65535, got '${!_dp}'"
+done
+unset _dp
+
+# display_wanted — does THIS row get a display door? Reads the KEEP_ALIVE and
+# K8S_ROLE classification instead of repeating the role case (the desktop roles
+# are exactly the ones provision.json files under kubernetes.role "none"), so
+# the role vocabulary stays declared in ONE place.
+display_wanted() {
+    case "${DISPLAY_MODE:-auto}" in
+        none)  return 1 ;;
+        spice) return 0 ;;
+        auto)  ${KEEP_ALIVE:-false} && [ "${K8S_ROLE:-}" = "none" ] ;;
+        *)     return 1 ;;
+    esac
+}
+
+# launcher_supports_display FILE — the launcher's own argv loop ends in `Unknown
+# arg -> usage 1`, so handing it a flag it lacks is a dead row. The flags land in
+# a separate change; until it is on the mounted /src this probe keeps `auto` from
+# killing every desktop row, and `spice` says why it refused.
+launcher_supports_display() {
+    grep -q -- '--display-secret' "$1" 2>/dev/null \
+        && grep -q -- '--display-listen' "$1" 2>/dev/null
+}
+
+# make_display_secret FILE — 48 hex chars from /dev/urandom into FILE, created
+# under umask 077. 48 hex: under SPICE's 60-char ticket limit, no base64 '+'
+# (which has already broken one URL-embedded credential in this product), and
+# od|tr reads a fixed 24 bytes so there is no tr|head SIGPIPE under pipefail.
+# The value lives in a variable for one printf and is never echoed.
+make_display_secret() {
+    local f="$1" hex
+    hex="$(od -An -tx1 -N24 /dev/urandom | tr -d ' \n')"
+    [[ "${hex}" =~ ^[0-9a-f]{48}$ ]] || return 1
+    rm -f "${f}" 2>/dev/null || true
+    ( umask 077; printf '%s' "${hex}" > "${f}" ) || return 1
+    chmod 600 "${f}" 2>/dev/null || true
+    return 0
+}
+
+# display_launcher_args — the flags handed to launch-{pi,arm,x86}.sh when the
+# door is on. The launcher turns them into the qemu `-object secret` + `-spice
+# password-secret=` pair (never password=), the virtio display, the SPICE agent
+# channel and the usb tablet/keyboard. Non-Pi ARM boards also get --virt-dtb: a
+# board DTB cannot describe the `virt` machine's PCIe, so with it the virtio-gpu
+# would be invisible to the guest; without -dtb qemu generates the virt DTB.
+display_launcher_args() {
+    DISPLAY_ARGS=(--display spice
+                  --display-listen "${DISPLAY_LISTEN}"
+                  --spice-port "${DISPLAY_SPICE_PORT}"
+                  --display-secret "${DISPLAY_SECRET}")
+    [ -z "${VNC_SOCK:-}" ] || DISPLAY_ARGS+=(--vnc-socket "${VNC_SOCK}")
+    case "${PLATFORM}" in
+        rpi5|x86) ;;
+        *)        DISPLAY_ARGS+=(--virt-dtb) ;;
+    esac
+    return 0
+}
+
+# display_announce — the one line a human needs, and only paths: the password
+# VALUE never reaches stdout, launch.log, docker logs or the Studio log.
+display_announce() {
+    [ "${DISPLAY_PROTOCOL:-}" = "spice" ] || return 0
+    if [ "${DISPLAY_HOST_PORT}" -gt 0 ]; then
+        info "  display: spice on 127.0.0.1:${DISPLAY_HOST_PORT} (password in $(host_path "${DISPLAY_SECRET}"); resize: ${DISPLAY_RESIZE})"
+        info "           open: run-qemu-docker.sh --open-display ${LABEL}"
+    else
+        info "  display: spice on container port ${DISPLAY_SPICE_PORT} — NOT published (password in $(host_path "${DISPLAY_SECRET}"))"
+    fi
+    if [ "${DISPLAY_WEB_PORT}" -gt 0 ]; then
+        info "  browser: http://127.0.0.1:${DISPLAY_WEB_PORT}/vnc.html (noVNC, scale-to-fit; it asks for the password — VNC uses its first 8 characters)"
+    fi
+    return 0
+}
 
 # ── Mesh identity: all three parts, or none ─────────────────────────────────
 # Validated HERE, before anything is built or booted, and fail-closed in both
@@ -1111,6 +1276,46 @@ if ${KEEP_ALIVE} && [ -z "${QMP_SOCK}" ]; then
     QMP_SOCK="${LAUNCH_RUN_DIR}/qmp.sock"
 fi
 
+# ── Display door: decide, mint the secret, build the launcher flags ─────────
+# Everything below is skipped — DISPLAY_ARGS stays empty and the launcher argv
+# is character-for-character what it was — unless this row gets a door.
+case "${PLATFORM}" in
+    rpi5) DISPLAY_LAUNCHER="${QEMU_DIR}/launch-pi.sh" ;;
+    x86)  DISPLAY_LAUNCHER="${QEMU_DIR}/launch-x86.sh" ;;
+    *)    DISPLAY_LAUNCHER="${QEMU_DIR}/launch-arm.sh" ;;
+esac
+if display_wanted; then
+    if ! launcher_supports_display "${DISPLAY_LAUNCHER}"; then
+        if [ "${DISPLAY_MODE}" = "spice" ]; then
+            die "--display spice: $(basename "${DISPLAY_LAUNCHER}") on the mounted /src does not know --display-secret/--display-listen (the launcher half of the display door is not in this tree)"
+        fi
+        warn "display: none — $(basename "${DISPLAY_LAUNCHER}") on /src lacks the display flags, so this desktop boots headless (serial + ssh only)"
+    else
+        DISPLAY_SECRET="${LAUNCH_RUN_DIR}/display.secret"
+        make_display_secret "${DISPLAY_SECRET}" \
+            || die "could not generate the display password file ${DISPLAY_SECRET}"
+        DISPLAY_PROTOCOL="spice"
+        if [ "${DISPLAY_WEB}" = "1" ]; then
+            if command -v websockify >/dev/null 2>&1 && [ -d /usr/share/novnc ] \
+               && grep -q -- '--vnc-socket' "${DISPLAY_LAUNCHER}" 2>/dev/null; then
+                VNC_SOCK="${LAUNCH_RUN_DIR}/vnc.sock"
+            else
+                warn "display-web: no websockify + /usr/share/novnc in this runner image (or the launcher lacks --vnc-socket) — no browser fallback; SPICE still works"
+                DISPLAY_WEB_PORT=0
+            fi
+        else
+            DISPLAY_WEB_PORT=0
+        fi
+        display_launcher_args
+    fi
+fi
+if [ "${DISPLAY_PROTOCOL}" != "spice" ]; then
+    # No door => the record must not advertise a port the runner published for
+    # one: a viewer pointed at it would meet a refused connection, not a desktop.
+    DISPLAY_HOST_PORT=0
+    DISPLAY_WEB_PORT=0
+fi
+
 step "Booting ${PLATFORM}/${ROLE} (mem=${MEM}M smp=${SMP})"
 case "${PLATFORM}" in
     rpi5)
@@ -1120,7 +1325,8 @@ case "${PLATFORM}" in
             --mem "${MEM}" --smp "${SMP}" \
             --ssh-port "${SSH_PORT}" --ui-port "${UI_PORT}" \
             --timeout "${TIMEOUT}" ${QMP_SOCK:+--qmp "${QMP_SOCK}"} \
-            ${MESH_NET:+--mesh-net "${MESH_NET}"} ${MESH_MAC:+--mesh-mac "${MESH_MAC}"} 2>&1 | tee "${RUN_DIR}/launch.log"
+            ${MESH_NET:+--mesh-net "${MESH_NET}"} ${MESH_MAC:+--mesh-mac "${MESH_MAC}"} \
+            "${DISPLAY_ARGS[@]}" 2>&1 | tee "${RUN_DIR}/launch.log"
         lrc=${PIPESTATUS[0]}
         ;;
     x86)
@@ -1132,7 +1338,8 @@ case "${PLATFORM}" in
             --mem "${MEM}" --smp "${SMP}" \
             --ssh-port "${SSH_PORT}" --ui-port "${UI_PORT}" \
             --timeout "${TIMEOUT}" ${QMP_SOCK:+--qmp "${QMP_SOCK}"} \
-            ${MESH_NET:+--mesh-net "${MESH_NET}"} ${MESH_MAC:+--mesh-mac "${MESH_MAC}"} 2>&1 | tee "${RUN_DIR}/launch.log"
+            ${MESH_NET:+--mesh-net "${MESH_NET}"} ${MESH_MAC:+--mesh-mac "${MESH_MAC}"} \
+            "${DISPLAY_ARGS[@]}" 2>&1 | tee "${RUN_DIR}/launch.log"
         lrc=${PIPESTATUS[0]}
         ;;
     *)
@@ -1143,11 +1350,24 @@ case "${PLATFORM}" in
             --mem "${MEM}" --smp "${SMP}" \
             --ssh-port "${SSH_PORT}" --ui-port "${UI_PORT}" \
             --timeout "${TIMEOUT}" ${QMP_SOCK:+--qmp "${QMP_SOCK}"} \
-            ${MESH_NET:+--mesh-net "${MESH_NET}"} ${MESH_MAC:+--mesh-mac "${MESH_MAC}"} 2>&1 | tee "${RUN_DIR}/launch.log"
+            ${MESH_NET:+--mesh-net "${MESH_NET}"} ${MESH_MAC:+--mesh-mac "${MESH_MAC}"} \
+            "${DISPLAY_ARGS[@]}" 2>&1 | tee "${RUN_DIR}/launch.log"
         lrc=${PIPESTATUS[0]}
         ;;
 esac
 [ "${lrc}" -eq 0 ] || die "launcher exited ${lrc} (see ${RUN_DIR}/launch.log)"
+
+# The browser fallback: websockify bridges the container's :6080 (published by
+# the runner on loopback as DISPLAY_WEB_PORT) to qemu's VNC unix socket. It
+# connects to the socket per client, so it can start before the guest draws.
+# Its log holds client addresses only; the VNC password is in qemu's secret
+# object, never on this command line.
+if [ -n "${VNC_SOCK}" ]; then
+    websockify --web /usr/share/novnc "0.0.0.0:${DISPLAY_WEB_LISTEN_PORT}" \
+        --unix-target "${VNC_SOCK}" > "${LAUNCH_RUN_DIR}/websockify.log" 2>&1 &
+    WEBSOCKIFY_PID=$!
+    info "noVNC  : websockify on container port ${DISPLAY_WEB_LISTEN_PORT} -> ${VNC_SOCK}"
+fi
 
 # NB: this REPLACES the earlier `trap reown EXIT`, so it must call reown itself —
 # otherwise the run's artifacts stay root-owned on the host.
@@ -1161,6 +1381,7 @@ cleanup() {
         write_device_record stopped
     fi
     [ -f "${PIDFILE}" ] && kill "$(cat "${PIDFILE}")" 2>/dev/null || true
+    [ -n "${WEBSOCKIFY_PID}" ] && kill "${WEBSOCKIFY_PID}" 2>/dev/null || true
     ${KEEP} || rm -f "${RUN_DIR}"/launch/run.qcow2 2>/dev/null || true
     reown
 }
@@ -1176,6 +1397,10 @@ trap cleanup EXIT
 if ${KEEP_ALIVE}; then
     write_device_record booting
     info "device record (booting): ${DEVICE_JSON}"
+    # The door is open from this moment (qemu serves SPICE from launch, so the
+    # firmware and the boot splash are visible), which is why it is announced
+    # here and not when ssh answers.
+    display_announce
 fi
 
 # ── Wait for the guest, then assert ─────────────────────────────────────────
