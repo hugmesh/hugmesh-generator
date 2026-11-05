@@ -1037,11 +1037,15 @@ pin_arm() {   # <builder> -> 0 when every pin holds
     [ -n "${n_ref}" ] && [ -n "${n_skip}" ] && [ "${n_ref}" -lt "${n_skip}" ] || rc=1
     case "$(basename "$b")" in
         build-rpi5-stage4.sh)
-            # Every owner in its stage4 tarball is forced to 0 and its .img is filled
-            # FROM that tarball: a user-owned tree cannot reach the image, so no gate.
-            # Both halves of that evidence are pinned; if either moves, re-measure.
+            # Its .img is filled FROM its stage4 tarball, packed by hmr_pack_owner_args:
+            # a tree that is not root-owned at its top is flattened to root, and any
+            # uid the target does not define is mapped to root otherwise — so a
+            # user-owned tree still cannot reach the image, and no extract-time gate
+            # is needed. (Until 2026-11-04 every owner was forced to 0 unconditionally,
+            # which shipped tor's /var/lib/tor root:root; test-stage4-pack-ownership.sh
+            # executes the pack.) Both halves pinned; if either moves, re-measure.
             grep -a -F 'hmr_owner_gate' "$b" >/dev/null 2>&1 && rc=1
-            has "$b" '--numeric-owner --owner=0 --group=0' || rc=1
+            has "$b" 'hmr_pack_owner_args "${SYSROOT}"' || rc=1
             has "$b" '-xpf "${STAGE4_TARBALL}"' || rc=1 ;;
         *)
             # The gate, for a ROOT build only — the line right above it is the id -u

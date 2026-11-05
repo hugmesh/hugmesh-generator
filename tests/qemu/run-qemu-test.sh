@@ -215,13 +215,17 @@ case "${ROLE}" in
     pki|generic|omnibus) HS_ENABLED=true ;;
 esac
 
+# tailscale.enabled=true, as every product KEYS stick says (keys-template/provision.json):
+# provision_tailscale() DELETES tailscaled from the runlevel when it is not true, which
+# made assertions.sh grade a correct image's mesh client as "never starts" (2026-11-04;
+# docker-entrypoint.sh carries the full join payload — this stage4 lane has no fleet).
 cat > "${KEYS_SRC}/provision.json" <<EOF
 {
   "version": 1,
   "hostname": "hugmesh-test",
   "timezone": "UTC",
   "headscale": { "enabled": ${HS_ENABLED}, "config_file": "headscale/config.yaml" },
-  "tailscale": { "enabled": false },
+  "tailscale": { "enabled": true },
   "kubernetes": { "role": "control-plane", "bootstrap": false },
   "hugmesh": { "role": "${ROLE}", "cluster_domain": "hugmesh.local",
                   "gitops": { "enabled": false } }
