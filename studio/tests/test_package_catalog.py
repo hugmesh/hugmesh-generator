@@ -13,6 +13,10 @@ from hugmesh_studio.core.config import ImageConfig, ROLE_CHOICES, image_class
 _GEN = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # raw (non-deduped) per-platform atom totals — pinned to the tree (design 2.8 counts).
+# x86 153 / rpi5 75 / frite 54 / orangepi5 73 since the emulated-desktop display work
+# (fix/viewer-guest-packages-20261104) added app-emulation/spice-vdagent and
+# sec-policy/selinux-vdagent to every desktop list (+2 each; jetson and the zero boards
+# have no such list). The catalog JSON was re-emitted in the same change.
 # x86 = 151 since #530 (desktop-gov SSSD) added dev-lang/python and sys-auth/polkit to
 # specs-x86/portage/packages-desktop.list. It was 149 before that, when the boot-chain
 # work (#307) added sys-apps/systemd-utils to packages.list.
@@ -26,8 +30,8 @@ _GEN = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 # orangepi5 = 53 + 8 + 10: its cluster NODE roles (EXPERIMENTAL) read the Raspberry Pi
 # k8s node set (specs-rpi5/portage/packages-k8s.list, 8 atoms) and the node host list
 # (specs-rpi5/portage/packages-node-host.list, 10 atoms) rather than a copy.
-_RAW_TOTALS = {"x86": 151, "rpi5": 73, "jetson": 66, "frite": 52,
-               "orangepi5": 71, "orangepizero2": 32, "orangepizero2w": 32}
+_RAW_TOTALS = {"x86": 153, "rpi5": 75, "jetson": 66, "frite": 54,
+               "orangepi5": 73, "orangepizero2": 32, "orangepizero2w": 32}
 
 _CONFIGS = [
     ("x86 omnibus node", ImageConfig(mode="mesh", role="omnibus", platform="x86")),

@@ -172,6 +172,13 @@
               "media-fonts/noto"
             ],
             "title": "Fonts (so the lean desktop is legible out of the box)"
+          },
+          {
+            "atoms": [
+              "app-emulation/spice-vdagent",
+              "sec-policy/selinux-vdagent"
+            ],
+            "title": "Emulated-desktop display agent (QEMU runner --display spice)"
           }
         ]
       },
@@ -559,6 +566,13 @@
               "media-fonts/noto"
             ],
             "title": "Fonts (so the lean desktop is legible out of the box)"
+          },
+          {
+            "atoms": [
+              "app-emulation/spice-vdagent",
+              "sec-policy/selinux-vdagent"
+            ],
+            "title": "Emulated-desktop display agent (QEMU runner --display spice)"
           }
         ]
       },
@@ -742,6 +756,13 @@
               "media-fonts/noto"
             ],
             "title": "Fonts (so the lean desktop is legible out of the box)"
+          },
+          {
+            "atoms": [
+              "app-emulation/spice-vdagent",
+              "sec-policy/selinux-vdagent"
+            ],
+            "title": "Emulated-desktop display agent (QEMU runner --display spice)"
           }
         ]
       },
@@ -1190,6 +1211,13 @@
               "media-fonts/noto"
             ],
             "title": "Fonts (so the lean desktop is legible out of the box)"
+          },
+          {
+            "atoms": [
+              "app-emulation/spice-vdagent",
+              "sec-policy/selinux-vdagent"
+            ],
+            "title": "Emulated-desktop display agent (QEMU runner --display spice)"
           }
         ]
       },
@@ -1347,6 +1375,13 @@
               "dev-lang/python"
             ],
             "title": ""
+          },
+          {
+            "atoms": [
+              "app-emulation/spice-vdagent",
+              "sec-policy/selinux-vdagent"
+            ],
+            "title": "Emulated-desktop display agent (QEMU runner --display spice)"
           }
         ]
       },
@@ -1580,6 +1615,7 @@
           "x11-wm/openbox"
         ],
         "removable": [
+          "app-emulation/spice-vdagent",
           "gui-libs/display-manager-init",
           "lxde-base/lxappearance",
           "lxde-base/lxpanel",
@@ -1587,6 +1623,7 @@
           "media-fonts/dejavu",
           "media-fonts/noto",
           "media-gfx/feh",
+          "sec-policy/selinux-vdagent",
           "www-client/netsurf",
           "x11-apps/setxkbmap",
           "x11-apps/xrandr",
@@ -1936,6 +1973,7 @@
     "orangepi4-lts": {
       "frontend": {
         "available": [
+          "app-emulation/spice-vdagent",
           "gui-libs/display-manager-init",
           "lxde-base/lxappearance",
           "lxde-base/lxpanel",
@@ -1943,6 +1981,7 @@
           "media-fonts/dejavu",
           "media-fonts/noto",
           "media-gfx/feh",
+          "sec-policy/selinux-vdagent",
           "sys-kernel/dracut",
           "www-client/netsurf",
           "x11-apps/setxkbmap",
@@ -2073,6 +2112,7 @@
           "x11-wm/openbox"
         ],
         "removable": [
+          "app-emulation/spice-vdagent",
           "gui-libs/display-manager-init",
           "lxde-base/lxappearance",
           "lxde-base/lxpanel",
@@ -2080,6 +2120,7 @@
           "media-fonts/dejavu",
           "media-fonts/noto",
           "media-gfx/feh",
+          "sec-policy/selinux-vdagent",
           "www-client/netsurf",
           "x11-apps/setxkbmap",
           "x11-apps/xrandr",
@@ -2094,6 +2135,7 @@
     "orangepi5": {
       "backend": {
         "available": [
+          "app-emulation/spice-vdagent",
           "gui-libs/display-manager-init",
           "lxde-base/lxappearance",
           "lxde-base/lxpanel",
@@ -2101,6 +2143,7 @@
           "media-fonts/dejavu",
           "media-fonts/noto",
           "media-gfx/feh",
+          "sec-policy/selinux-vdagent",
           "sys-kernel/dracut",
           "www-client/netsurf",
           "x11-apps/setxkbmap",
@@ -2172,6 +2215,7 @@
       },
       "frontend": {
         "available": [
+          "app-emulation/spice-vdagent",
           "gui-libs/display-manager-init",
           "lxde-base/lxappearance",
           "lxde-base/lxpanel",
@@ -2179,6 +2223,7 @@
           "media-fonts/dejavu",
           "media-fonts/noto",
           "media-gfx/feh",
+          "sec-policy/selinux-vdagent",
           "sys-kernel/dracut",
           "www-client/netsurf",
           "x11-apps/setxkbmap",
@@ -2250,6 +2295,7 @@
       },
       "omnibus": {
         "available": [
+          "app-emulation/spice-vdagent",
           "gui-libs/display-manager-init",
           "lxde-base/lxappearance",
           "lxde-base/lxpanel",
@@ -2257,6 +2303,7 @@
           "media-fonts/dejavu",
           "media-fonts/noto",
           "media-gfx/feh",
+          "sec-policy/selinux-vdagent",
           "sys-kernel/dracut",
           "www-client/netsurf",
           "x11-apps/setxkbmap",
@@ -2387,6 +2434,7 @@
           "x11-wm/openbox"
         ],
         "removable": [
+          "app-emulation/spice-vdagent",
           "gui-libs/display-manager-init",
           "lxde-base/lxappearance",
           "lxde-base/lxpanel",
@@ -2394,6 +2442,7 @@
           "media-fonts/dejavu",
           "media-fonts/noto",
           "media-gfx/feh",
+          "sec-policy/selinux-vdagent",
           "www-client/netsurf",
           "x11-apps/setxkbmap",
           "x11-apps/xrandr",
@@ -2406,6 +2455,7 @@
       },
       "pki": {
         "available": [
+          "app-emulation/spice-vdagent",
           "gui-libs/display-manager-init",
           "lxde-base/lxappearance",
           "lxde-base/lxpanel",
@@ -2413,6 +2463,7 @@
           "media-fonts/dejavu",
           "media-fonts/noto",
           "media-gfx/feh",
+          "sec-policy/selinux-vdagent",
           "sys-kernel/dracut",
           "www-client/netsurf",
           "x11-apps/setxkbmap",
@@ -2609,6 +2660,7 @@
     "rpi5": {
       "backend": {
         "available": [
+          "app-emulation/spice-vdagent",
           "gui-libs/display-manager-init",
           "lxde-base/lxappearance",
           "lxde-base/lxpanel",
@@ -2616,6 +2668,7 @@
           "media-fonts/dejavu",
           "media-fonts/noto",
           "media-gfx/feh",
+          "sec-policy/selinux-vdagent",
           "www-client/netsurf",
           "x11-apps/setxkbmap",
           "x11-apps/xrandr",
@@ -2688,6 +2741,7 @@
       },
       "frontend": {
         "available": [
+          "app-emulation/spice-vdagent",
           "gui-libs/display-manager-init",
           "lxde-base/lxappearance",
           "lxde-base/lxpanel",
@@ -2695,6 +2749,7 @@
           "media-fonts/dejavu",
           "media-fonts/noto",
           "media-gfx/feh",
+          "sec-policy/selinux-vdagent",
           "www-client/netsurf",
           "x11-apps/setxkbmap",
           "x11-apps/xrandr",
@@ -2767,6 +2822,7 @@
       },
       "generic": {
         "available": [
+          "app-emulation/spice-vdagent",
           "gui-libs/display-manager-init",
           "lxde-base/lxappearance",
           "lxde-base/lxpanel",
@@ -2774,6 +2830,7 @@
           "media-fonts/dejavu",
           "media-fonts/noto",
           "media-gfx/feh",
+          "sec-policy/selinux-vdagent",
           "www-client/netsurf",
           "x11-apps/setxkbmap",
           "x11-apps/xrandr",
@@ -2846,6 +2903,7 @@
       },
       "omnibus": {
         "available": [
+          "app-emulation/spice-vdagent",
           "gui-libs/display-manager-init",
           "lxde-base/lxappearance",
           "lxde-base/lxpanel",
@@ -2853,6 +2911,7 @@
           "media-fonts/dejavu",
           "media-fonts/noto",
           "media-gfx/feh",
+          "sec-policy/selinux-vdagent",
           "www-client/netsurf",
           "x11-apps/setxkbmap",
           "x11-apps/xrandr",
@@ -2925,6 +2984,7 @@
       },
       "pki": {
         "available": [
+          "app-emulation/spice-vdagent",
           "gui-libs/display-manager-init",
           "lxde-base/lxappearance",
           "lxde-base/lxpanel",
@@ -2932,6 +2992,7 @@
           "media-fonts/dejavu",
           "media-fonts/noto",
           "media-gfx/feh",
+          "sec-policy/selinux-vdagent",
           "www-client/netsurf",
           "x11-apps/setxkbmap",
           "x11-apps/xrandr",
@@ -3065,6 +3126,7 @@
           "x11-wm/openbox"
         ],
         "removable": [
+          "app-emulation/spice-vdagent",
           "gui-libs/display-manager-init",
           "lxde-base/lxappearance",
           "lxde-base/lxpanel",
@@ -3072,6 +3134,7 @@
           "media-fonts/dejavu",
           "media-fonts/noto",
           "media-gfx/feh",
+          "sec-policy/selinux-vdagent",
           "www-client/netsurf",
           "x11-apps/setxkbmap",
           "x11-apps/xrandr",
@@ -3092,6 +3155,7 @@
           "app-crypt/gocryptfs",
           "app-editors/neovim",
           "app-editors/vim",
+          "app-emulation/spice-vdagent",
           "app-office/libreoffice",
           "dev-lang/go",
           "dev-lang/python",
@@ -3148,6 +3212,7 @@
           "media-video/wireplumber",
           "net-im/neochat",
           "net-print/cups",
+          "sec-policy/selinux-vdagent",
           "sys-apps/dbus",
           "sys-apps/flatpak",
           "sys-auth/elogind",
@@ -3239,6 +3304,7 @@
           "app-crypt/gocryptfs",
           "app-editors/neovim",
           "app-editors/vim",
+          "app-emulation/spice-vdagent",
           "app-office/libreoffice",
           "dev-lang/go",
           "dev-lang/python",
@@ -3291,6 +3357,7 @@
           "media-video/wireplumber",
           "net-im/neochat",
           "net-print/cups",
+          "sec-policy/selinux-vdagent",
           "sys-apps/dbus",
           "sys-apps/flatpak",
           "sys-auth/elogind",
@@ -3495,6 +3562,7 @@
         ],
         "removable": [
           "app-crypt/gocryptfs",
+          "app-emulation/spice-vdagent",
           "dev-lang/python",
           "dev-util/vulkan-tools",
           "gnome-extra/nm-applet",
@@ -3509,6 +3577,7 @@
           "media-libs/libva",
           "media-libs/mesa",
           "media-libs/vulkan-loader",
+          "sec-policy/selinux-vdagent",
           "sys-apps/dbus",
           "sys-apps/flatpak",
           "sys-auth/elogind",
@@ -3643,6 +3712,7 @@
         ],
         "removable": [
           "app-crypt/gocryptfs",
+          "app-emulation/spice-vdagent",
           "dev-lang/python",
           "dev-util/vulkan-tools",
           "gnome-extra/nm-applet",
@@ -3657,6 +3727,7 @@
           "media-libs/libva",
           "media-libs/mesa",
           "media-libs/vulkan-loader",
+          "sec-policy/selinux-vdagent",
           "sys-apps/dbus",
           "sys-apps/flatpak",
           "sys-auth/elogind",
@@ -3683,6 +3754,7 @@
           "app-crypt/gocryptfs",
           "app-editors/neovim",
           "app-editors/vim",
+          "app-emulation/spice-vdagent",
           "app-office/libreoffice",
           "dev-lang/go",
           "dev-lang/python",
@@ -3735,6 +3807,7 @@
           "media-video/wireplumber",
           "net-im/neochat",
           "net-print/cups",
+          "sec-policy/selinux-vdagent",
           "sys-apps/dbus",
           "sys-apps/flatpak",
           "sys-auth/elogind",
@@ -3831,6 +3904,7 @@
           "app-crypt/gocryptfs",
           "app-editors/neovim",
           "app-editors/vim",
+          "app-emulation/spice-vdagent",
           "app-office/libreoffice",
           "dev-lang/go",
           "dev-lang/python",
@@ -3887,6 +3961,7 @@
           "media-video/wireplumber",
           "net-im/neochat",
           "net-print/cups",
+          "sec-policy/selinux-vdagent",
           "sys-apps/dbus",
           "sys-apps/flatpak",
           "sys-auth/elogind",
@@ -4086,6 +4161,7 @@
         ],
         "removable": [
           "app-crypt/gocryptfs",
+          "app-emulation/spice-vdagent",
           "dev-lang/python",
           "dev-util/vulkan-tools",
           "gnome-extra/nm-applet",
@@ -4100,6 +4176,7 @@
           "media-libs/libva",
           "media-libs/mesa",
           "media-libs/vulkan-loader",
+          "sec-policy/selinux-vdagent",
           "sys-apps/dbus",
           "sys-apps/flatpak",
           "sys-auth/elogind",
@@ -4126,6 +4203,7 @@
           "app-crypt/gocryptfs",
           "app-editors/neovim",
           "app-editors/vim",
+          "app-emulation/spice-vdagent",
           "app-office/libreoffice",
           "dev-lang/go",
           "dev-lang/python",
@@ -4178,6 +4256,7 @@
           "media-video/wireplumber",
           "net-im/neochat",
           "net-print/cups",
+          "sec-policy/selinux-vdagent",
           "sys-apps/dbus",
           "sys-apps/flatpak",
           "sys-auth/elogind",
@@ -4274,6 +4353,7 @@
           "app-crypt/gocryptfs",
           "app-editors/neovim",
           "app-editors/vim",
+          "app-emulation/spice-vdagent",
           "app-office/libreoffice",
           "dev-lang/go",
           "dev-lang/python",
@@ -4330,6 +4410,7 @@
           "media-video/wireplumber",
           "net-im/neochat",
           "net-print/cups",
+          "sec-policy/selinux-vdagent",
           "sys-apps/dbus",
           "sys-apps/flatpak",
           "sys-auth/elogind",
@@ -4529,6 +4610,7 @@
         ],
         "removable": [
           "app-crypt/gocryptfs",
+          "app-emulation/spice-vdagent",
           "dev-lang/python",
           "dev-util/vulkan-tools",
           "gnome-extra/nm-applet",
@@ -4543,6 +4625,7 @@
           "media-libs/libva",
           "media-libs/mesa",
           "media-libs/vulkan-loader",
+          "sec-policy/selinux-vdagent",
           "sys-apps/dbus",
           "sys-apps/flatpak",
           "sys-auth/elogind",
@@ -4677,6 +4760,7 @@
         ],
         "removable": [
           "app-crypt/gocryptfs",
+          "app-emulation/spice-vdagent",
           "dev-lang/python",
           "dev-util/vulkan-tools",
           "gnome-extra/nm-applet",
@@ -4691,6 +4775,7 @@
           "media-libs/libva",
           "media-libs/mesa",
           "media-libs/vulkan-loader",
+          "sec-policy/selinux-vdagent",
           "sys-apps/dbus",
           "sys-apps/flatpak",
           "sys-auth/elogind",
@@ -4825,6 +4910,7 @@
         ],
         "removable": [
           "app-crypt/gocryptfs",
+          "app-emulation/spice-vdagent",
           "dev-lang/python",
           "dev-util/vulkan-tools",
           "gnome-extra/nm-applet",
@@ -4839,6 +4925,7 @@
           "media-libs/libva",
           "media-libs/mesa",
           "media-libs/vulkan-loader",
+          "sec-policy/selinux-vdagent",
           "sys-apps/dbus",
           "sys-apps/flatpak",
           "sys-auth/elogind",
