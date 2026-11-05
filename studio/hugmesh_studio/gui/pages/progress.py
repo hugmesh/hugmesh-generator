@@ -94,6 +94,33 @@ def _display_safe(line: str) -> str:
     return _C0_RE.sub("", strip_ansi(line))
 
 
+# PowerShell treats all four of these as a single quote inside a '...' string, and a
+# quote in that string is escaped by doubling it (CodeGeneration's own rule).
+_PS_SINGLE_QUOTES = "'\u2018\u2019\u201a\u201b"
+
+
+def powershell_quote(text: str) -> str:
+    """``text`` as a PowerShell single-quoted literal: nothing in it expands ($name,
+    backtick escapes), unlike the double-quoted form."""
+    return "'" + "".join(ch * 2 if ch in _PS_SINGLE_QUOTES else ch for ch in text) + "'"
+
+
+def powershell_follow_command(path: str, *, exists: bool = True) -> str:
+    """The Windows twin of ``tail -F -n +1 PATH`` for the log help and its Copy button.
+
+    -LiteralPath, not the positional -Path: -Path is a wildcard, so an output dir such
+    as ``D:\\Builds [2026]`` resolved to nothing and PowerShell then even rejected -Wait
+    ("A parameter cannot be found that matches parameter name 'Wait'"). Get-Content
+    also fails on a file that does not exist yet, where tail -F waits for it; a queued
+    image's log is created only when its build starts, so that case waits first."""
+    q = powershell_quote(path)
+    follow = f"Get-Content -LiteralPath {q} -Wait -Tail 50"
+    if exists:
+        return follow
+    return (f"while (-not (Test-Path -LiteralPath {q})) {{ Start-Sleep -Seconds 1 }}; "
+            + follow)
+
+
 # THE flash confirmation (#337). A module-level override point on purpose: headless tests
 # monkeypatch this name, so the one destructive gate the GUI owns is exercised by the
 # suite instead of being stubbed away with _start_flash. It is called from
@@ -1066,11 +1093,12 @@ class ProgressPage(QtWidgets.QWizardPage):
         `tail -F`, not `tail -f`: a queued/pre-dispatch job has no log file yet, and
         `tail -f` exits on a missing file while `-F` retries by name — so the command is
         copy-paste-correct BEFORE the job starts. `-n +1` starts at the top, so the
-        terminal shows the same stream from the beginning. Windows has no tail at all.
+        terminal shows the same stream from the beginning. Windows has no tail at all:
+        see powershell_follow_command.
         """
         host = getattr(self.wiz, "host", None)
         if getattr(host, "os", "linux") == "windows":
-            return f'Get-Content -Wait -Tail 50 "{path}"'
+            return powershell_follow_command(path, exists=os.path.isfile(path))
         return f"tail -F -n +1 {shlex.quote(path)}"
 
     def _refresh_log_help(self) -> None:

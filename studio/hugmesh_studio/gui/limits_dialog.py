@@ -18,8 +18,10 @@ a modal deadlocks the headless tests. :func:`limits_summary` and
 from __future__ import annotations
 
 import os
+import re
+import threading
 
-from .qt import Qt, QtCore, QtWidgets
+from .qt import Qt, QtCore, QtWidgets, Signal
 from ..core import resource_limits as rl
 from ..core import stack_limits as sl
 
@@ -38,6 +40,71 @@ BLURB = (
 #: The lanes the setting does NOT reach yet, stated in the per-lane effect list.
 NOT_YET_LIMITED = ("Not limited by this setting yet: emulated devices (QEMU) and "
                    "Kubernetes (kind) nodes.")
+
+
+#: Docker's smallest accepted ``--memory`` (the daemon refuses anything below 6 MiB).
+_MIN_MEMORY_BYTES = 6 * 1024 ** 2
+
+# The intersection of what docker (go-units RAMInBytes) and the compose overlay's
+# stack_limits.parse_size both read: digits, an optional fraction, one optional unit
+# letter. Docker alone would also take "16 GB", which parse_size cannot divide across
+# services, so that spelling would silently drop the stack's memory cap.
+_MEMORY_RE = re.compile(r"\d+(\.\d+)?[bkmgt]?", re.IGNORECASE)
+
+
+def memory_error(text: str) -> str:
+    """Why ``text`` cannot be saved as the memory limit, or "" when it can.
+
+    The value is handed verbatim to ``docker run --memory`` and the compose overlay,
+    so an unreadable one used to be saved without a word and every later build and
+    stack start then failed on docker's "invalid size". Empty means no limit."""
+    raw = text.strip()
+    if not raw:
+        return ""
+    if not _MEMORY_RE.fullmatch(raw):
+        # Not "Docker cannot read it": Docker also takes "16 GB" and "16GiB". The same
+        # value feeds the mesh stack's compose overlay, which reads only the short form.
+        return (f"Memory '{raw}' is not a size the Studio can apply to both Docker and "
+                "the mesh stack: write a number with an optional single-letter unit "
+                "and no space, e.g. 16g, 8192m or 1.5g, or leave it empty for no limit.")
+    size = sl.parse_size(raw) or 0
+    if size == 0:
+        # Docker reads 0 as no limit, but the dialog would show it as a 0-byte cap.
+        return (f"Memory '{raw}' means no limit to Docker: leave the field empty for "
+                "no limit, or write a size such as 16g or 8192m.")
+    if size < _MIN_MEMORY_BYTES:
+        return (f"Memory '{raw}' is below Docker's 6 MiB minimum (a bare number is "
+                "bytes): use e.g. 16g or 8192m, or leave it empty for no limit.")
+    return ""
+
+
+#: Shown on native Windows instead of the runtime probe's result. Docker Desktop
+#: delivers ``--gpus`` through its WSL 2 engine without registering an "nvidia"
+#: runtime, so the probe always said "no GPU runtime" and sent the user to the Linux
+#: NVIDIA Container Toolkit, which Docker Desktop does not use.
+WINDOWS_GPU_NOTE = (
+    "On Windows, Docker Desktop gives a container a GPU only with its WSL 2 engine "
+    "and an NVIDIA GPU on a current NVIDIA Windows driver; Docker cannot report this "
+    "in advance, so a build asked for a GPU without one fails to start.")
+
+
+def gpu_messages(limits: rl.ResourceLimits, runtime: bool | None,
+                 osname: str | None = None) -> list[str]:
+    """The GPU advisory for ``limits``. ``runtime`` is the probe's answer, None while
+    it is still running (nothing is claimed yet). ``osname`` is ``os.name`` unless a
+    test passes another."""
+    if limits.gpus is None:
+        return []
+    if (osname or os.name) == "nt":
+        return [WINDOWS_GPU_NOTE]
+    if runtime is None:
+        return []
+    return rl.gpu_warnings(limits, probe=lambda: runtime)
+
+
+class _GpuProbeBridge(QtCore.QObject):
+    """Carries the off-thread GPU probe's answer back to the GUI thread (queued)."""
+    done = Signal(bool)
 
 
 def limits_summary(limits: rl.ResourceLimits) -> str:
@@ -98,10 +165,20 @@ class LimitsDialog(QtWidgets.QDialog):
     """Collect a :class:`~hugmesh_studio.core.resource_limits.ResourceLimits`."""
 
     def __init__(self, parent=None, *, generator_dir: str = "",
-                 settings_path: str | None = None):
+                 settings_path: str | None = None, gpu_probe=None,
+                 osname: str | None = None):
         super().__init__(parent)
         self.setWindowTitle("HugMesh — resource limits")
         self._settings_path = settings_path
+        self._osname = osname
+        # `docker info` takes seconds (8-20 s against a busy Docker Desktop) and its
+        # answer cannot change while the dialog is open: ask once, off the GUI thread,
+        # never per keystroke. None = not asked yet / still running.
+        self._gpu_probe = gpu_probe or rl.gpu_runtime_available
+        self._gpu_runtime: bool | None = None
+        self._gpu_probe_started = False
+        self._gpu_bridge = _GpuProbeBridge(self)
+        self._gpu_bridge.done.connect(self._on_gpu_probed)
         self._service_count = _stack_service_count(generator_dir)
         self._cores = os.cpu_count() or 2
 
@@ -151,6 +228,14 @@ class LimitsDialog(QtWidgets.QDialog):
         self.warning.setVisible(False)
         layout.addWidget(self.warning)
 
+        # The memory refusal sits apart from the GPU advisory: this one blocks Save.
+        self.mem_error = QtWidgets.QLabel()
+        self.mem_error.setWordWrap(True)
+        self.mem_error.setTextFormat(Qt.TextFormat.PlainText)
+        self.mem_error.setStyleSheet("color: #c5221f;")
+        self.mem_error.setVisible(False)
+        layout.addWidget(self.mem_error)
+
         if env_pinned:
             pinned = QtWidgets.QLabel(
                 "Note: " + ", ".join(env_pinned) + " is set in the environment and "
@@ -165,6 +250,7 @@ class LimitsDialog(QtWidgets.QDialog):
         reset = buttons.addButton("Recommended for this machine",
                                   QtWidgets.QDialogButtonBox.ButtonRole.ResetRole)
         reset.clicked.connect(self._apply_recommended)
+        self._save_btn = buttons.button(QtWidgets.QDialogButtonBox.StandardButton.Save)
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
@@ -194,14 +280,52 @@ class LimitsDialog(QtWidgets.QDialog):
 
     def _refresh(self) -> None:
         limits = self.limits()
-        self.effect.setText("\n".join(
-            f"• {line}" for line in describe_effect(limits, service_count=self._service_count)))
+        err = memory_error(self.mem_edit.text())
+        self.mem_error.setText(err)
+        self.mem_error.setVisible(bool(err))
+        self._save_btn.setEnabled(not err)
+        if err:
+            # describe_effect would echo the unreadable value back as a real cap.
+            self.effect.setText("• The memory value has to be fixed before these "
+                                "limits can be saved.")
+        else:
+            self.effect.setText("\n".join(
+                f"• {line}"
+                for line in describe_effect(limits, service_count=self._service_count)))
 
-        messages = rl.gpu_warnings(limits)
+        if limits.gpus is not None and (self._osname or os.name) != "nt":
+            self._start_gpu_probe()
+        messages = gpu_messages(limits, self._gpu_runtime, self._osname)
         self.warning.setText(" ".join(messages))
         self.warning.setVisible(bool(messages))
 
+    def _start_gpu_probe(self) -> None:
+        if self._gpu_probe_started:
+            return
+        self._gpu_probe_started = True
+        probe, bridge = self._gpu_probe, self._gpu_bridge
+
+        def run() -> None:
+            try:
+                ok = bool(probe())
+            except Exception:
+                ok = False
+            try:
+                bridge.done.emit(ok)
+            except RuntimeError:
+                pass                    # the dialog (and its bridge) closed first
+
+        # A daemon thread, not a QThread: a QThread still running when a cancelled
+        # dialog is destroyed aborts the process; this one just finishes unheard.
+        threading.Thread(target=run, name="limits-gpu-probe", daemon=True).start()
+
+    def _on_gpu_probed(self, ok: bool) -> None:
+        self._gpu_runtime = ok
+        self._refresh()
+
     def accept(self) -> None:
+        if memory_error(self.mem_edit.text()):
+            return                      # Save is greyed; Enter must not save it either
         rl.save(self.limits(), self._settings_path)
         super().accept()
 

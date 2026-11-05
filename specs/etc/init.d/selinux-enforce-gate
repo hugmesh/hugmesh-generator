@@ -106,8 +106,44 @@ check_modules() {
     return 0
 }
 
+# Where the AVC record is read from, in order of preference. Variables for the
+# same reason as the paths above: the D-run leg of test-selinux-policy-install.sh
+# points them at fixtures to execute every branch, including the fail-closed one.
+: "${AUSEARCH:=ausearch}"
+: "${AUDIT_LOG:=/var/log/audit/audit.log}"
+: "${DMESG:=dmesg}"
+
+# avc_records — print this node's AVC/USER_AVC records on stdout, or return 1
+# when NO source can be read. Sources, best first:
+#   ausearch -ts boot     this boot only (the check the gate was written for);
+#   audit.log             every boot auditd ever logged here — STRICTER than
+#                         "this boot", which is the right way to be wrong;
+#   dmesg                 the kernel ring buffer (auditd absent): no boot window
+#                         either, and it can have wrapped, so it is the last resort.
+# Used to be `command -v ausearch || return 0`: an image without audit tools
+# passed the AVC check by construction. Now such an image refuses to flip.
+avc_records() {
+    local out rc
+    if command -v "${AUSEARCH}" >/dev/null 2>&1; then
+        # ausearch: 0 = matches, 1 = "<no matches>" (a clean boot), >1 = error.
+        out="$("${AUSEARCH}" -m AVC,USER_AVC -ts boot 2>/dev/null)"; rc=$?
+        if [ "${rc}" -le 1 ]; then printf '%s\n' "${out}"; return 0; fi
+        ewarn "flip-gate: ${AUSEARCH} failed (rc=${rc}); falling back to ${AUDIT_LOG}"
+    fi
+    if [ -r "${AUDIT_LOG}" ]; then
+        ewarn "flip-gate: reading ${AUDIT_LOG} directly (no ausearch): every boot's AVCs count, not just this one"
+        grep -E '^type=(AVC|USER_AVC) ' "${AUDIT_LOG}"
+        return 0
+    fi
+    if command -v "${DMESG}" >/dev/null 2>&1 && out="$("${DMESG}" 2>/dev/null)"; then
+        ewarn "flip-gate: reading AVCs from the kernel ring buffer (no ausearch, no ${AUDIT_LOG}): it may have wrapped"
+        printf '%s\n' "${out}" | grep -E 'avc: +(denied|granted)'
+        return 0
+    fi
+    return 1
+}
+
 check_avc_clean() {
-    command -v ausearch >/dev/null 2>&1 || return 0
     local d='container_t|container_runtime_t|spc_t|kernel_t|init_t|otel_collector_t|localpath_provisioner_t|localpath_provisioner_helper_t'
     # The hugmesh host domains this wiring now actually loads — an AVC against any
     # of them is exactly the signal the INFERRED-WIDE rules must be narrowed
@@ -115,7 +151,14 @@ check_avc_clean() {
     d="${d}|hugmesh_authkeys_t|hugmesh_device_registry_sync_t|hugmesh_domain_reconcile_t"
     d="${d}|hugmesh_node_storage_t|hugmesh_policy_sync_t|hugmesh_tor_reconcile_t"
     d="${d}|hugmesh_vpn_runner_t|hugmesh_vpn_reconcile_t"
-    if ausearch -m AVC,USER_AVC -ts boot 2>/dev/null | grep -Eq "(scontext|tcontext)=[^ ]*:(${d}):"; then
+    local recs
+    if ! recs="$(avc_records)"; then
+        ewarn "flip-gate: no ${AUSEARCH}, no readable ${AUDIT_LOG}, no ${DMESG} — the AVC record cannot be read, refusing to flip"
+        return 1
+    fi
+    # Drain to /dev/null rather than `| grep -q`: a -q that exits on the first
+    # match can SIGPIPE the writer and, under pipefail, turn a FOUND into a miss.
+    if printf '%s\n' "${recs}" | grep -E "(scontext|tcontext)=[^ ]*:(${d}):" >/dev/null; then
         ewarn "flip-gate: outstanding AVCs for core/custom domains — staying permissive"
         return 1
     fi

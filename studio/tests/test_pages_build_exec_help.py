@@ -58,6 +58,7 @@ pytest.importorskip("hugmesh_studio.gui.qt",
 
 from hugmesh_studio.core.platform_info import HostInfo            # noqa: E402
 from hugmesh_studio.gui import wizard as wizard_mod               # noqa: E402
+from _helpers import type_login_password  # noqa: E402
 from hugmesh_studio.gui.qt import QtWidgets                       # noqa: E402
 from hugmesh_studio.gui.pages import build as build_mod           # noqa: E402
 
@@ -99,6 +100,7 @@ def advance_to(wiz, page_cls):
         if isinstance(page, page_cls):
             return page
         before = wiz.currentId()
+        type_login_password(page)   # a standalone Home step refuses no password
         wiz.next()
         assert wiz.currentId() != before, \
             f"flow stuck on {type(page).__name__} (validatePage rejected?)"

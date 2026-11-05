@@ -38,6 +38,11 @@ What is the same as the GUI, by construction:
   never opened.
 
 Choice default is ``join`` by id, as the GUI page's is.
+
+SHARING THE MESH (2026-11-04): ``t`` on the first screen and on the review opens
+``tui/mesh_token_step.MeshTokenScreen``, the twin of the window's "Issue a HugMesh
+token…" button: the mesh's admin signs a HugMesh token for someone's tray, pre-filled
+with the brand as the mesh name and the own domain as the access domain.
 """
 from __future__ import annotations
 
@@ -58,6 +63,7 @@ from . import model
 from .code_folders_step import CodeFoldersScreen
 from .domain_services_step import DomainServicesScreen
 from .domains_step import IDP_LABELS, OWN_IDP, set_github_org
+from .mesh_token_step import MeshTokenScreen
 from .superbrand_step import CREATE_KEY, BrandSession, SuperbrandScreen, session_for
 
 __all__ = ["LocalMeshScreen", "LOCALMESH_CHOICES", "LOCALMESH_DEFAULT_CHOICE",
@@ -273,6 +279,18 @@ class LocalMeshScreen:
         md.own_name = own
         record_reviewed(md, md.domain_services_reviewed)
 
+    # ── sharing the mesh: a HugMesh token (the window's "Issue a HugMesh token…") ──
+    def token_prefill(self, j) -> dict:
+        """What the token screen opens with — the window's ``issue_token_prefill``: the
+        mesh named after the brand (when that is a valid mesh name) and the mesh's own
+        domain. The login server is not known on this route, so it is typed."""
+        brand = (self.boot(j).brand or "").strip().lower()
+        return {"mesh": brand if MeshTokenScreen.valid_mesh(brand) else "",
+                "domain": self.state(j).own_name, "login_server": ""}
+
+    def _open_token(self, j) -> None:
+        j.open_overlay(MeshTokenScreen(prefill=self.token_prefill))
+
     def _goto(self, j, stage: str) -> None:
         if stage == "services":
             # the services screen walks the named rows; a blank prod apex is not one
@@ -308,11 +326,15 @@ class LocalMeshScreen:
         for i, (cid, title) in enumerate(LOCALMESH_CHOICES, 1):
             mark = " (default)" if cid == LOCALMESH_DEFAULT_CHOICE else ""
             out.append(f"  {i}. {title}{mark}")
-        out += ["", "commands: NUMBER=pick · Enter=the default"]
+        out += ["", "commands: NUMBER=pick · Enter=the default · t=share a mesh you "
+                "created here: issue a HugMesh token"]
         return out
 
     def _feed_choice(self, j, line: str) -> None:
         ids = [cid for cid, _ in LOCALMESH_CHOICES]
+        if line.lower() == "t":
+            self._open_token(j)
+            return
         if line == "":
             pick = LOCALMESH_DEFAULT_CHOICE
         else:
@@ -492,7 +514,8 @@ class LocalMeshScreen:
         if refusal:
             return [refusal, "",
                     "commands: b=back to the Domain services step · f=code copies "
-                    "for each domain · Enter=back to the menu of choices"]
+                    "for each domain · t=issue a HugMesh token for this mesh · "
+                    "Enter=back to the menu of choices"]
         out = ["Domains and their services are configured.", ""]
         headers = ["domain", "sign-in", "services (what this mesh runs)"]
         rows = [[d.name, IDP_LABELS.get(d.idp, d.idp),
@@ -516,7 +539,8 @@ class LocalMeshScreen:
                 "per-domain services have no CLI flag — the GUI records them with the "
                 "saved mesh.",
                 "", "commands: b=back to the Domain services step · f=code copies "
-                "for each domain · Enter=back to the menu of choices"]
+                "for each domain · t=issue a HugMesh token for this mesh · "
+                "Enter=back to the menu of choices"]
         return out
 
     def records(self, j) -> tuple[dict, ...]:
@@ -531,6 +555,9 @@ class LocalMeshScreen:
             return
         if line.lower() == "f":
             self.stage = "folders"
+            return
+        if line.lower() == "t":
+            self._open_token(j)
             return
         if line == "":
             j.goto("mode")

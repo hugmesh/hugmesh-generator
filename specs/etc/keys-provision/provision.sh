@@ -2356,6 +2356,20 @@ provision_desktop_governance() {
     render_gov "${tpl}/discover/bearer-forward.sh.tmpl" \
                "${tpl}/bearer-forward.sh" 0755
 
+    # ── 4. GEN-SSO session-start from the BAKED templates ─────────────────────
+    # The desktop builders bake the whole template dir (scripts/_desktop-sso-lib.sh),
+    # so the token producer, deposit, session wrapper and XDG autostart no longer
+    # depend on a KEYS run[] hook. session-install.sh.tmpl is runnable as shipped
+    # (its placeholder sits in a comment), resolves the domain the same way this
+    # function does and is idempotent, so a KEYS run[] copy may still run after it.
+    if [ -f "${tpl}/autostart/session-install.sh.tmpl" ]; then
+        if KEYS_BASE="${BASE}" bash "${tpl}/autostart/session-install.sh.tmpl"; then
+            log "desktop-governance: GEN-SSO session-start installed from the baked templates"
+        else
+            warn "desktop-governance: session-install returned non-zero — session-start not installed (sudo claim stays dark)"
+        fi
+    fi
+
     log "desktop-governance: done (domain ${dom}; store empty until admin curates; sudo only for the verified desktop-sudo SSO claim)"
 }
 

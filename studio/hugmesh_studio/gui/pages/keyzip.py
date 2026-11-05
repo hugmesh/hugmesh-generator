@@ -18,6 +18,7 @@ import zipfile
 
 from ..qt import QtCore, QtWidgets, Signal
 from ...core import keyzip
+from ...core import local_login_agent
 from ._widgets import _file_picker, _row, own_probe
 
 # Schemes the "Fetch from link" button will follow. file:// is included ON PURPOSE so
@@ -70,6 +71,35 @@ def _fetch_to_zip(url: str, dest_path: str) -> str:
     with open(dest_path, "wb") as fh:
         fh.write(data)
     return dest_path
+
+
+# The pre-existing wording, kept byte-for-byte for the default Linux location.
+_LINUX_DEFAULT_MANIFEST_SHOWN = "~/.config/hugmesh-studio/local-login/roles.json"
+
+
+def remember_roles_help(manifest_path: str | None = None,
+                        osname: str | None = None) -> str:
+    """The remember-roles help, naming the file the import will REALLY write.
+
+    The text used to be a constant naming ~/.config/... whatever --login-manifest,
+    $HUGMESH_LOCAL_LOGIN_MANIFEST or $XDG_CONFIG_HOME said, and promising "mode 0600"
+    on Windows too, where os.chmod only toggles the read-only attribute: the file gets
+    whatever access its folder's ACL grants. ``osname`` is ``os.name`` unless a test
+    passes another."""
+    path = manifest_path or local_login_agent.default_manifest_path()
+    if (osname or os.name) == "nt":
+        where = (f"{path}; it is not encrypted, and Windows gives it the same access as "
+                 "the folder it is in")
+    else:
+        # Any of default_manifest_path's inputs moves the file; with none of them set
+        # it is the ~/.config default, so the help keeps its original wording.
+        moved = manifest_path or any(os.environ.get(v) for v in (
+            "HUGMESH_LOCAL_LOGIN_MANIFEST", "XDG_CONFIG_HOME"))
+        shown = path if moved else _LINUX_DEFAULT_MANIFEST_SHOWN
+        where = f"{shown}, mode 0600"
+    return ("Remembers human-loginable roles (e.g. platform superadmin) from this "
+            f"key-zip and writes real login credentials to local disk ({where}). "
+            "Never DB passwords or other machine secrets.")
 
 
 class _FetchWorker(QtCore.QThread):
@@ -156,11 +186,8 @@ class KeyZipPage(QtWidgets.QWizardPage):
         self.remember_roles.setChecked(
             bool(getattr(wiz, "remember_roles_for_passwordless_login", False)))
         lay.addWidget(self.remember_roles)
-        remember_help = QtWidgets.QLabel(
-            "Remembers human-loginable roles (e.g. platform superadmin) from this "
-            "key-zip and writes real login credentials to local disk "
-            "(~/.config/hugmesh-studio/local-login/roles.json, mode 0600). "
-            "Never DB passwords or other machine secrets.")
+        self.remember_help = remember_help = QtWidgets.QLabel(
+            remember_roles_help(getattr(wiz, "login_manifest_path", None)))
         remember_help.setWordWrap(True)
         remember_help.setStyleSheet("color: gray;")
         lay.addWidget(remember_help)
@@ -171,6 +198,9 @@ class KeyZipPage(QtWidgets.QWizardPage):
         lay.addStretch(1)
 
     def initializePage(self):
+        # re-read on each visit: the env-derived default can change after construction
+        self.remember_help.setText(
+            remember_roles_help(getattr(self.wiz, "login_manifest_path", None)))
         # Path-aware clarity — the page is only visited for cloud (mesh desktop client)
         # and mesh (superadmin node); standalone skips it (MODE_SKIPPED_PAGES).
         if self.wiz.cfg.mode == "cloud":

@@ -940,7 +940,31 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # as a new suite outside the gate -- so the +1/+1 is this suite and nothing else. A branch that
 # also raises this from 207 conflicts here by construction; whichever lands second re-measures
 # (expected 209) per the doctrine above, never keeps either number.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-208}"
+# 207 -> 208 (denominator 248 -> 249) on 2026-11-04 for fix/seed-lockout-473-20261104
+# (#473, seed side), which adds ONE gated suite: tests/stack/test-seed-e2e-lockout.sh (wired
+# in shell-suites.yml's alpine job AND .gitlab-ci.yml lint:seed-password-reconcile). MEASURED
+# by RUNNING this file on that branch (base origin/main db240811, which measures '207 of 248'):
+#     208 of 249 suites are named by a pull_request-triggered workflow
+# and with the suite on disk but its shell-suites.yml line absent: '207 of 249' + check 3 and
+# check 7 red naming it -- so the +1/+1 is this suite and nothing else. Ungated SET stays 41.
+# 207 -> 208 (denominator 248 -> 249) on 2026-11-04 for fix/standalone-login-password-20261104
+# (base origin/main 8ed37a3c), which adds ONE gated suite:
+# tests/scripts/test-standalone-login-firstboot.sh, wired in shell-suites.yml's debian job
+# beside test-passhash-lib.sh. MEASURED by RUNNING this file on that tree:
+# '208 of 249 suites are named by a pull_request-triggered workflow', with only this
+# baseline line red. The suite was first run in python:3.12-slim (the debian job's image,
+# openssl + passwd installed as that job does, GITHUB_ACTIONS=true so its libpam layer is
+# REQUIRED): 43 passed, 0 failed.
+# 207 -> 209 (denominator 248 -> 250) on 2026-11-04 for fix/desktop-f-greeter-sso-offline-cache,
+# which adds TWO gated suites: tests/desktop-governance/test-sso-greeter.sh (shell-suites.yml alpine
+# + debian jobs, .gitlab-ci.yml desktop-governance-verify) and tests/scripts/test-desktop-sso-bake.sh
+# (alpine job + the same gitlab job). MEASURED by RUNNING this file on that tree: '209 of 250 suites
+# are named by a pull_request-triggered workflow', ungated SET 41. A branch landing beside it
+# re-measures per the doctrine above.
+# MERGED (origin/main with #473 + #860 + this branch): 207 + 1 (#473) + 1 (#860) + 2 (this branch)
+# = 211 of 252, MEASURED by running this file on the merged tree.
+# MERGED (origin/main 3396828f into feat/mesh-token-g4-generator-cluster-wiring--20261104): 212 of 253, MEASURED by running this file on the merged tree.
+PREMERGE_BASELINE="${GUARD_PREMERGE:-212}"
 
 # 182 -> 192 (denominator 205 -> 215) on 2026-09-30 for #385: the census gained a
 # THIRD spelling, bare `tests/*.sh` at depth 1, and the ten suites it exposed were
