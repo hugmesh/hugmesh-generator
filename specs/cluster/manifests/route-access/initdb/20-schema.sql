@@ -137,6 +137,17 @@ DELETE FROM gateway_route_access
  WHERE gateway = 'hugmesh-fe-gateway'
    AND url_pattern = '/apidocs/**';
 
+-- Retire the games rows an earlier apply seeded. The be-gateway no longer routes the
+-- games portal host, and its /games rows never matched what that host served (/api/**).
+-- A platform mod without ROLE_GAMES no longer reaches the games screens or member API.
+DELETE FROM gateway_route_access
+ WHERE gateway = 'hugmesh-be-gateway'
+   AND url_pattern IN ('/games/api/admin/' || '**', '/games/' || '**');
+DELETE FROM gateway_route_access
+ WHERE gateway = 'hugmesh-fe-gateway'
+   AND url_pattern IN ('/games/api/' || '**', '/games/' || '**')
+   AND role = 'ROLE_MOD';
+
 -- Canonical seed — one allow row per (gateway, url_pattern, role) in the routing
 -- contract. Role semantics (mirroring the hugmesh.games SecurityConfig
 -- casdoorAuthoritiesConverter):
@@ -303,28 +314,9 @@ INSERT INTO gateway_route_access (gateway, url_pattern, role, allow) VALUES
   ('hugmesh-be-gateway',  '/bff/image-builds/**',      'ROLE_IMAGE_BUILDER', true),  -- mesh-workload builds: image_builder (admins granted it)
   ('hugmesh-be-gateway',  '/bff/superadmin/**',        'ROLE_SUPERADMIN',    true),  -- superadmin infra console (tailnet) — ORPHANED: no /bff route on be
   ('hugmesh-be-gateway',  '/api/admin/**',         'ROLE_ADMIN',     true),  -- hugmesh admin API (NOT ROLE_MOD)
-  -- hugmesh-games NAMESPACE admin (games BFF /api/admin/** surface, namespaced
-  -- under /games/** so it does NOT collide with the platform /api/admin/** row
-  -- above). The requirement is games + (admin|mod): nobody reaches this surface
-  -- unless they hold ROLE_GAMES AND (ROLE_ADMIN OR ROLE_MOD). That AND is
-  -- materialized in Casdoor as the DERIVED role ROLE_GAMES_ADMIN (membership =
-  -- ROLE_GAMES intersect (ROLE_ADMIN union ROLE_MOD), reconciled by games-admin-sync
-  -- — see manifests/casdoor/init-data-configmap.yaml). This is the SINGLE allow
-  -- row for the surface and keys on ROLE_GAMES_ADMIN ONLY — NOT ROLE_GAMES,
-  -- ROLE_ADMIN, or ROLE_MOD individually — so the gateway's OR-of-allow-rows table
-  -- still yields the AND, and any single role is default-deny. More specific than
-  -- the /api/** ROLE_USER floor, so it wins the most-specific match.
-  ('hugmesh-be-gateway',  '/games/api/admin/**',   'ROLE_GAMES_ADMIN', true),  -- games namespace admin API (games + (admin|mod) ONLY)
-  -- ── OPTIONAL slug `games` — games portal floor on the games.<GAMES_DOMAIN> host ──
-  -- The games BFF/portal surface under /games/** (games members reach the portal;
-  -- the more-specific /games/api/admin/** row above wins for the admin API). Keyed
-  -- on the network-wide ROLE_GAMES access role; a games BAN is role removal ->
-  -- governed-but-ungranted -> DENY. ADMIN/MOD paired so they keep reaching it.
-  -- ⚠ gate_optional_services REMOVES these rows + the games host route when the
-  -- games slug is deselected (see optional-services.yaml games.routeAccessRows).
-  ('hugmesh-be-gateway',  '/games/**',             'ROLE_GAMES',     true),  -- games portal floor (games-access)
-  ('hugmesh-be-gateway',  '/games/**',             'ROLE_ADMIN',     true),  -- (admins superset)
-  ('hugmesh-be-gateway',  '/games/**',             'ROLE_MOD',       true),  -- (mods superset)
+  -- The games portal host (games.<GAMES_DOMAIN>) has no rows here: it is served by its
+  -- own Ingress, not by this gateway (manifests/games-portal/ingress.yaml says why).
+  -- The games-namespace admin AND-gate lives on the fe rows below.
   -- ── GAMES APP-STORE (games-services control plane) — admin-bff surfaces ──────────
   -- The per-domain FOSS game-server app-store control plane (catalog + offers +
   -- instances) lives in the admin-bff under /bff/superadmin/games-services/** (global
@@ -575,31 +567,33 @@ INSERT INTO gateway_route_access (gateway, url_pattern, role, allow) VALUES
   -- The `games` native-federation remote (hugmesh-games/games-ui) is mounted by
   -- the host shell at /games (member catalog + play) and /games/admin (admin
   -- surfaces), and talks ONLY to the games BFF through the fe-gateway route
-  -- games-bff (Path=/games/api/**, StripPrefix=1). Three rows, longest pattern
-  -- wins, PAIRED SUPERSETS exactly like the be-gateway /games/** trio above:
+  -- games-bff (Path=/games/api/**, StripPrefix=1). Three patterns, longest wins:
   --   /games/api/admin/** -> ROLE_GAMES_ADMIN only (the derived composite — the
   --                          admin API is games AND (admin|mod), same AND as the
-  --                          /games/admin/** HTML row above and the be-gateway
-  --                          /games/api/admin/** row);
-  --   /games/api/**       -> ROLE_GAMES floor + ROLE_ADMIN/ROLE_MOD supersets
+  --                          /games/admin/** HTML row above). Nobody reaches it
+  --                          unless they hold ROLE_GAMES AND (ROLE_ADMIN OR
+  --                          ROLE_MOD); that AND is materialized in Casdoor as
+  --                          ROLE_GAMES_ADMIN by games-admin-sync, so the
+  --                          OR-of-allow-rows table still yields it;
+  --   /games/api/**       -> ROLE_GAMES floor + ROLE_ADMIN superset
   --                          (the member API: catalog, launch, launches);
-  --   /games/**           -> ROLE_GAMES floor + ROLE_ADMIN/ROLE_MOD supersets
+  --   /games/**           -> ROLE_GAMES floor + ROLE_ADMIN superset
   --                          (remoteEntry.json + chunks + the member HTML path).
+  -- ROLE_MOD is deliberately NOT a superset here: a platform mod without ROLE_GAMES is
+  -- not a games user. It matches the host shell's gamesGuard (games|admin|superadmin),
+  -- and a mod who plays holds ROLE_GAMES like anyone else.
   -- The remote's bundle bytes live under /games/, never under /games/admin/, so
   -- the pre-existing /games/admin/** row keeps gating ONLY the admin HTML path —
   -- a ROLE_GAMES member loads the remote, and the host shell's gamesAdminGuard +
   -- this table's /games/api/admin/** row keep the admin screens and API closed.
-  -- Identical rows live in hugmesh-gateway CanonicalSeed.java fe() and
-  -- hugmesh-gateway compose/route-access-seed.sql (the three sources must stay
-  -- identical). ⚠ gate_optional_services REMOVES these rows when the games slug
+  -- hugmesh-gateway CanonicalSeed.java fe() and compose/route-access-seed.sql mirror
+  -- these rows and must follow this seed. ⚠ gate_optional_services REMOVES these rows when the games slug
   -- is deselected (optional-services.yaml games.routeAccessRows).
   ('hugmesh-fe-gateway',  '/games/api/admin/**',   'ROLE_GAMES_ADMIN', true),  -- games BFF admin API via the browser door (games + (admin|mod) ONLY)
   ('hugmesh-fe-gateway',  '/games/api/**',         'ROLE_GAMES',     true),  -- games BFF member API floor (games-access)
   ('hugmesh-fe-gateway',  '/games/api/**',         'ROLE_ADMIN',     true),  -- (admins superset)
-  ('hugmesh-fe-gateway',  '/games/api/**',         'ROLE_MOD',       true),  -- (mods superset)
   ('hugmesh-fe-gateway',  '/games/**',             'ROLE_GAMES',     true),  -- games remote + member screens floor (games-access)
   ('hugmesh-fe-gateway',  '/games/**',             'ROLE_ADMIN',     true),  -- (admins superset)
-  ('hugmesh-fe-gateway',  '/games/**',             'ROLE_MOD',       true),  -- (mods superset)
   -- GAMES APP-STORE operator UI (the admin-ui federated remote at /admin/games-services,
   -- PR8). Keyed on the DERIVED ROLE_GAMES_SERVICES_ADMIN ONLY (= ROLE_GAMES_SERVICES ∩
   -- (ROLE_ADMIN ∪ ROLE_MOD)), so a single role is default-deny — the one allow row
