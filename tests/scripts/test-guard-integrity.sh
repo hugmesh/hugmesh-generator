@@ -937,6 +937,12 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # 24 passed / 0 failed, rc=0 (static tier; the resolution tier reports itself SKIPPED
 # there, no kernel tree), and its 30-mutation battery on a Gentoo host 30 caught / 0
 # survived. Ungated SET pin unchanged.
+# 207 -> 208 (denominator 248 -> 249) on 2026-11-04 for fix/desktop-e-arm-desktop-package-sets-20261104,
+# which adds ONE gated suite: tests/scripts/test-arm-desktop-package-sets.sh (wired in
+# shell-suites.yml's pull_request SUITES, .gitlab-ci.yml and tests/build-matrix/check.sh).
+# MEASURED by RUNNING this file with GUARD_PREMERGE=0 on that tree: '208 of 249 suites are
+# named by a pull_request-triggered workflow', ungated SET unchanged at 41; and with the suite
+# on disk but its shell-suites.yml line absent: '207 of 249' -- so the +1/+1 is this suite.
 # 207 -> 208 (denominator 248 -> 249) on 2026-11-04 when fix/games-two-realms-20261030, which
 # adds ONE gated suite (tests/scripts/test-games-two-realms.sh, in shell-suites.yml), merged
 # origin/main 8ed37a3c (207 of 248 above). MEASURED by RUNNING this file on the merged tree with
@@ -1006,6 +1012,7 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # MERGED (origin/main with #473 + #860 + this branch): 207 + 1 (#473) + 1 (#860) + 2 (this branch)
 # = 211 of 252, MEASURED by running this file on the merged tree.
 # MERGED (origin/main 3396828f into fix/desktop-b-frite-kernel-fragment-for-em-20261104): 212 of 253, MEASURED by running this file on the merged tree.
+# MERGED (origin/main 3396828f into fix/desktop-e-arm-desktop-package-sets-20261104): 212 of 253, MEASURED by running this file on the merged tree.
 # MERGED (origin/main 3396828f into fix/games-two-realms-20261030): 212 of 254, MEASURED by running this file on the merged tree.
 # MERGED (origin/main 3396828f into feat/mesh-token-g3-generator-local-stack-hea-20261104): 212 of 253, MEASURED by running this file on the merged tree.
 # MERGED (origin/main 3396828f into ci/qemu-bdd-spike-20261104): 212 of 253, MEASURED by running this file on the merged tree.
