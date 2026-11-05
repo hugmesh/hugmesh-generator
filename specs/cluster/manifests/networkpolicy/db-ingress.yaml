@@ -320,6 +320,49 @@ spec:
       ports:
         - { protocol: TCP, port: 5432 }
 ---
+# ── games-bff-db (Postgres, hugmesh-games) ──────────────────────────────────
+# The games BFF's own store (manifests/games/bff-db.yaml). Consumer: the BFF pod ONLY.
+# PAIRED with the `app NotIn` term in tier-ingress.yaml's hugmesh-games policy.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: db-ingress-games-bff-db
+  namespace: hugmesh-games
+  labels: { app: games-bff-db, app.kubernetes.io/part-of: hugmesh.games }
+spec:
+  podSelector:
+    matchLabels: { app: games-bff-db }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels: { app: hugmesh-games }
+      ports:
+        - { protocol: TCP, port: 5432 }
+---
+# ── games-cassandra (Cassandra, hugmesh-games) ─────────────────────────────
+# The BFF's session store (manifests/games/cassandra.yaml). It runs without CQL auth,
+# so this policy IS its access control: the BFF and the schema Job, nothing else.
+# PAIRED with the `app NotIn` term in tier-ingress.yaml's hugmesh-games policy.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: db-ingress-games-cassandra
+  namespace: hugmesh-games
+  labels: { app: games-cassandra, app.kubernetes.io/part-of: hugmesh.games }
+spec:
+  podSelector:
+    matchLabels: { app: games-cassandra }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels: { app: hugmesh-games }
+        - podSelector:
+            matchLabels: { app: games-cassandra-init }
+      ports:
+        - { protocol: TCP, port: 9042 }
+---
 # ── casdoor-games-pg (Postgres, hugmesh-games) ──────────────────────────────
 # The GAMES-realm IdP's store (db "threewizards"), same story as casdoor-pg above
 # and the second of the two entries this change takes off DB_ISOLATION_KNOWN_GAPS.

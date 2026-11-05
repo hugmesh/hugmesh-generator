@@ -830,25 +830,37 @@ fi
 # ── 8. THE MEASURED PREMISE: specImage carries no version on this tree ────────
 # If this ever goes RED the contract's rationale must be re-read, not the test relaxed:
 # a digest-pinned fleet would make specImage a real version and change the whole design.
+#
+# MEASURED 2026-11-05 (hugmesh-generator#848): 33 moving-tag refs and ONE digest-pinned
+# ref, manifests/games/kustomization.yaml's backend. That one is pinned on purpose: the
+# games BFF is handed a two-realm environment that a build before hugmesh-games#52
+# misreads (every mesh token 401s, a mesh-iss token signed by the games key is accepted),
+# so its tag AND digest name one verified build, judged online by
+# tests/scripts/test-games-two-realms.sh. The rationale stands for the other 33: the
+# spec image string distinguishes no two builds of those, so resolvedDigest is still
+# required. The pinned SET is pinned here by file and name; a second pin anywhere, or
+# this one going away, is a change to the premise and must be re-read, not waved past.
 MEAS="$(python3 - "${SRC}" <<'PY'
 import glob, os, sys, re
 root = sys.argv[1]
-moving = pinned = 0
+moving = 0
+pinned = []
 for f in sorted(glob.glob(os.path.join(root, "manifests", "*", "kustomization.yaml"))):
     txt = "\n".join(l for l in open(f, encoding="utf-8", errors="replace") if not l.lstrip().startswith("#"))
     # every `images:` entry naming the platform's own registry
     for m in re.finditer(r"newName:\s*(registry\.hugmesh\.net/\S+)", txt):
         seg = txt[m.start():m.start()+400]
-        if re.search(r"digest:\s*sha256:", seg[:200]): pinned += 1
+        if re.search(r"digest:\s*sha256:", seg[:200]): pinned.append(os.path.basename(os.path.dirname(f)) + ":" + m.group(1))
         else: moving += 1
-print("%d %d" % (moving, pinned))
+print("%d %s" % (moving, " ".join(pinned) or "-"))
 PY
 )"
-MOVING="${MEAS%% *}"; PINNED="${MEAS##* }"
-if [ "${PINNED}" = "0" ] && [ "${MOVING}" -ge 20 ]; then
-  ok "measured premise holds: ${MOVING} first-party image refs on this tree, ${PINNED} digest-pinned — the spec image string distinguishes no two builds, which is why resolvedDigest is required"
+MOVING="${MEAS%% *}"; PINNED="${MEAS#* }"
+PINNED_EXPECTED="games:registry.hugmesh.net/hugmesh/hugmesh-games/backend"
+if [ "${PINNED}" = "${PINNED_EXPECTED}" ] && [ "${MOVING}" -ge 20 ]; then
+  ok "measured premise holds: ${MOVING} moving-tag first-party image refs on this tree and exactly one digest-pinned (${PINNED}, the games backend pinned to a post-hugmesh-games#52 build) — for the ${MOVING} the spec image string distinguishes no two builds, which is why resolvedDigest is required"
 else
-  bad "measured premise CHANGED: ${MOVING} moving-tag / ${PINNED} digest-pinned first-party refs. Re-read the fleet-inventory rationale before touching this assertion."
+  bad "measured premise CHANGED: ${MOVING} moving-tag first-party refs; digest-pinned: ${PINNED} (expected exactly ${PINNED_EXPECTED}). Re-read the fleet-inventory rationale before touching this assertion."
 fi
 
 # ── 9. RBAC COUPLING: the contract needs no new permission — assert, don't assume ─

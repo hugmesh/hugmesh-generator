@@ -110,31 +110,48 @@ spec:
             - { name: SSL_TRUST_STORE,      value: "/stores/truststore.p12" }
             - { name: SSL_TRUST_STORE_TYPE, value: "PKCS12" }
             - { name: SPRING_CONFIG_ADDITIONAL_LOCATION, value: "file:/stores/" }
-            # ── Two-Casdoor sync (GameMasterAdminSyncAction) ──────────────────────
-            # hugmesh-actions polls TWO independent Casdoor instances and mirrors
-            # ONE systems role into ONE games role, one-way (systems -> games), pruning
-            # stale members. The ONLY automatic sync is:
-            #     ROLE_GAMES_ADMIN (systems)  ->  admin (games)
-            # i.e. only systems admins/mods who ALSO hold ROLE_GAMES (= the materialized
-            # ROLE_GAMES_ADMIN intersection) become games admins. Granting a user plain
-            # ROLE_GAMES does NOT auto-create a games login here; that on-demand
-            # provisioning is a separate admin-UI action, not this scheduled job.
-            #
-            # SYSTEMS side — the in-cluster systems Casdoor (org "hugmesh"). Its
-            # JWKS also backs the actions resource server (application.yml issuer-uri
-            # defaults to ${CASDOOR_PLATFORM_URL}).
+            # ── Systems Casdoor (org "hugmesh") ───────────────────────────────────
+            # The in-cluster systems Casdoor. Its JWKS also backs the actions resource
+            # server (application.yml issuer-uri defaults to ${CASDOOR_PLATFORM_URL}).
             - { name: CASDOOR_PLATFORM_URL, value: "http://casdoor.hugmesh-pki.svc.cluster.local:8000" }
             - { name: CASDOOR_PLATFORM_ORG, value: "hugmesh" }
             - { name: CASDOOR_PLATFORM_CLIENT_ID,     valueFrom: { secretKeyRef: { name: casdoor-sync-systems, key: clientId } } }
             - { name: CASDOOR_PLATFORM_CLIENT_SECRET, valueFrom: { secretKeyRef: { name: casdoor-sync-systems, key: clientSecret } } }
-            # GAMES side — the SEPARATE in-cluster games Casdoor (org "threewizards").
-            - { name: CASDOOR_GAMES_URL, value: "http://casdoor-games.hugmesh-games.svc.cluster.local:8000" }
-            - { name: CASDOOR_GAMES_ORG, value: "threewizards" }
-            - { name: CASDOOR_GAMES_CLIENT_ID,     valueFrom: { secretKeyRef: { name: casdoor-sync-games, key: clientId } } }
-            - { name: CASDOOR_GAMES_CLIENT_SECRET, valueFrom: { secretKeyRef: { name: casdoor-sync-games, key: clientSecret } } }
-            # The single automatic mirror: ROLE_GAMES_ADMIN(systems) -> admin(games).
-            - { name: GM_SYNC_SYSTEMS_ROLE, value: "ROLE_GAMES_ADMIN" }
-            - { name: GM_SYNC_GAMES_ROLE,   value: "admin" }
+            # ── Two-Casdoor sync (GameMasterAdminSyncAction): OFF ─────────────────
+            # hugmesh-actions carries a scheduled job that mirrors one systems role into
+            # one games role by REPLACING that games role's whole member list every tick.
+            # Before hugmesh-actions#21 (merged 2026-11-04) the job had no enable flag, it
+            # mapped members by USERNAME, and its update-role body was three fields, which
+            # on Casdoor 3.80.0 also sets isEnabled=false and blanks the role's
+            # displayName and description (measured 2026-11-04). Pointed at
+            # threewizards/admin that strips the games realm's own admins and disables
+            # the role. The design (operator, 2026-10-30) has a mesh games admin
+            # administer games with the MESH token instead, through the fe-gateway's
+            # /games/api/admin/** route, so the mirror is not needed for that path.
+            #
+            # How it is off, on every image: #21 added GM_SYNC_ENABLED (default false),
+            # set explicitly below; an image from before #21 has no such flag, so the
+            # other two knobs the job reads are held too. The first tick is scheduled
+            # 100 years out, so it never fires in a pod's lifetime, and the games-side
+            # client (CASDOOR_GAMES_URL/ORG/CLIENT_ID/CLIENT_SECRET, the casdoor-sync-games
+            # Secret) is not handed to the pod at all, so a tick that somehow ran could
+            # not reach the games realm. The interval is left alone: a huge interval
+            # would still let the first tick run after the initial delay. Do not "fix"
+            # the delay with a failing games URL instead: a tick that fails every time
+            # trips the shared `casdoor` circuit breaker, which also guards the OIDC
+            # default-role probe. hugmesh-backend's tier-egress carries no path to
+            # hugmesh-games for the same reason.
+            #
+            # Turning it on is a deliberate step, on an image that carries #21
+            # (reciprocal link, owned `mesh-` role, read-modify-write): set
+            # GM_SYNC_ENABLED=true, restore the CASDOOR_GAMES_* block from git history
+            # and the backend -> hugmesh-games:8000 egress rule, drop
+            # GM_SYNC_INITIAL_DELAY_MS, and set GM_SYNC_SYSTEMS_ROLE to ROLE_GAMES_ADMIN.
+            # GM_SYNC_GAMES_ROLE stays unset (#21 refuses a role the realm owns, such as
+            # `admin`). The casdoor-sync-games ExternalSecret is kept for that day; no
+            # container reads it now.
+            - { name: GM_SYNC_ENABLED, value: "false" }
+            - { name: GM_SYNC_INITIAL_DELAY_MS, value: "3153600000000" }
           # HTTPS exec probe: client-auth=need rejects a cert-less kubelet httpGet,
           # so curl PRESENTS this pod's client cert and validates the server cert
           # against the cluster CA (--resolve maps the SAN to loopback).
