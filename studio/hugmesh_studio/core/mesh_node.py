@@ -20,6 +20,11 @@ from . import proc_text, resource_limits
 #: the compose argv is exactly what it was before limits reached this lane.
 LIMITS_OVERLAY = "docker-compose.limits.yml"
 
+#: Beside the staged project: which credentials the RUNNING node was started with,
+#: written by the tray's token-aware node (core/mesh_token.py) and dropped by every
+#: other start, so it never describes a node someone else (re)started.
+IDENTITY_FILE = "mesh-identity.json"
+
 #: The services in docker-compose.mesh.yml that the limit is written onto. The mesh
 #: node is ONE container, so it gets the WHOLE budget (unlike the 43-service local
 #: stack, which divides it). No GPU is handed to it: it only carries tailnet traffic.
@@ -166,6 +171,13 @@ class MeshNode:
             return False, ("Set TS_AUTHKEY (a tailnet/headscale auth key) in the "
                            "environment before starting a mesh node.")
         self._stage()
+        # Whatever started the node before, this start replaces it: the tray's record
+        # of which credentials the node runs under (core/mesh_token.py) is now stale.
+        # The tray's own node writes a fresh one after its `up`.
+        try:
+            os.remove(os.path.join(self.workdir, IDENTITY_FILE))
+        except FileNotFoundError:
+            pass
         # RESOURCE LIMITS: the tray's Resource limits setting caps this node too. If
         # the overlay cannot be written the start fails loudly rather than quietly
         # running an unbounded node the dialog said was capped.

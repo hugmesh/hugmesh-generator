@@ -1977,6 +1977,18 @@ class LocalMeshPage(QtWidgets.QWizardPage):
             "first (a few seconds), then opens.")
         self.creds_btn.clicked.connect(self._show_credentials)
         brow.addWidget(self.creds_btn)
+        # The ISSUING side of HugMesh tokens (core/mesh_token.py), for the admin of the
+        # mesh this page created: the dialog opens pre-filled from this page's brand
+        # and own domain, and does its process work (ssh-keygen, docker) off-thread.
+        self.issue_token_btn = QtWidgets.QPushButton("Issue a HugMesh token…")
+        self.issue_token_btn.setToolTip(
+            "Sign a HugMesh token that lets someone's tray join this mesh in one access "
+            "domain, as one role, with or without shell access. The pre-auth key it "
+            "carries is pasted, or minted in the mesh's running headscale container "
+            "when there is one. Signed with this Studio's issuer key for the mesh, "
+            "created on first use.")
+        self.issue_token_btn.clicked.connect(self._issue_token)
+        brow.addWidget(self.issue_token_btn)
         # Runs tests/e2e against the RUNNING stack. Enablement + tooltip are
         # owned by _sync_e2e_gate (test env + stack up + seeded — live probes,
         # never the form's un-applied selection).
@@ -4885,6 +4897,23 @@ class LocalMeshPage(QtWidgets.QWizardPage):
                      lambda on_line, cancel: node._make(
                          "view-stop", timeout=60, on_line=on_line, cancel=cancel),
                      stream=True)
+
+    def issue_token_prefill(self) -> dict:
+        """What the "Issue a HugMesh token…" dialog opens with: the mesh named after
+        this page's brand (when that is a valid mesh name), the mesh's own domain as
+        the Domains step shows it, and the overlay's login server when one is typed."""
+        from ..mesh_token_issue_dialog import valid_mesh_name
+        brand = (self.brand.currentText() or "").strip().lower()
+        return {"mesh": brand if valid_mesh_name(brand) else "",
+                "domain": self._own_domain_name(),
+                "login_server": self.boot_login_server.text().strip()}
+
+    def _issue_token(self):
+        """Button-driven modal (never from validatePage/itemChanged); held on self so
+        the wrapper is not collected while the dialog is up."""
+        from ..mesh_token_issue_dialog import IssueTokenDialog
+        self._issue_token_dialog = IssueTokenDialog(self, **self.issue_token_prefill())
+        self._issue_token_dialog.exec()
 
     def _show_credentials(self):
         """Probe first, modal from the SLOT (_on_credentials) — never inline.
