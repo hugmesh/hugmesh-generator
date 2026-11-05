@@ -15,11 +15,12 @@ into their live system locations and replaces the `@@CLUSTER_DOMAIN@@`
 placeholder with the node's domain.
 
 > **Delivery note (2026-11-04).** The desktop builders now **bake** this
-> directory into the sysroot whenever the greeter SSO path is ON
-> (`scripts/_desktop-sso-lib.sh` `desktop_sso_bake`, called by
-> `build-x86-host-stage4.sh` for the client roles and by `build-frite-stage4.sh`
-> for `--desktop light`; `--skip-sso` / `--no-sso` bakes nothing here and the
-> image stays ungoverned). `provision_desktop_governance()` still renders only
+> directory into the sysroot whenever the greeter SSO path is ON on a MESH
+> image (`scripts/_desktop-sso-lib.sh` `desktop_sso_bake`, called by every
+> desktop builder: x86 client roles, Frite `--desktop light`, RPi5 / Jetson
+> `--role desktop`, Orange Pi 4 LTS / 5; `--skip-sso` / `--no-sso` bakes nothing
+> here and the image stays ungoverned, and so does every `--standalone` image,
+> SSO on or off, because no KEYS chain runs the mapper there). `provision_desktop_governance()` still renders only
 > its *named* templates through `render_gov`, and at its end it now runs the
 > baked `autostart/session-install.sh.tmpl`, which renders the GEN-SSO pieces
 > (producer, deposit, session wrapper, XDG autostart). The **KEYS-USB fallback**

@@ -805,10 +805,10 @@ chk_no_wheel_without_admin() {  # HELPER -> 0 iff no wheel without the admin rol
     local h="$1"
     new_case true "${ISSUER}"; printf '%s' "${TOK_ALICE}" > "${SRV}/access"
     auth "${h}" alice "" || return 1
-    grep -q '^useradd ' "${CASE}/log" && ! grep -q '^useradd .*wheel' "${CASE}/log" && ! sed -n 's/^alice://p' "${CASE}/etc/groups" | grep -q wheel || return 1
+    grep -q '^useradd ' "${CASE}/log" && ! grep -q '^useradd .*wheel' "${CASE}/log" && ! sed -n 's/^alice://p' "${CASE}/etc/groups" | grep wheel >/dev/null || return 1
     new_case true "${ISSUER}" governed; printf '%s' "${TOK_ALICE_ADMIN}" > "${SRV}/access"
     auth "${h}" alice "" || return 1
-    ! sed -n 's/^alice://p' "${CASE}/etc/groups" | grep -q wheel
+    ! sed -n 's/^alice://p' "${CASE}/etc/groups" | grep wheel >/dev/null
 }
 chk_no_token_in_logs() {  # HELPER -> 0 iff an online sign-in + session hand-off never print the token or the typed password
     local h="$1"
@@ -938,12 +938,12 @@ if ${PAM_OK}; then
         d="${CASE}/cd-chk-a"; mkdir -p "${d}"
         sed -e "s#/usr/lib/hugmesh/sso-greeter#${HELPER}#g" -e "s#/run/hugmesh/sso-greeter/hint#${CASE}/run/hint#" \
             -e "s#include\t\tsystem-local-login#required\tpam_permit.so#" "${sf}" > "${d}/lightdm"
-        python3 "${PAMPY}" "${d}" lightdm "hunter2" "${CASE}/env" 2>/dev/null | grep -q '^RC 0$' || return 1
+        python3 "${PAMPY}" "${d}" lightdm "hunter2" "${CASE}/env" 2>/dev/null | grep '^RC 0$' >/dev/null || return 1
         new_case true "${ISSUER}"; envfile
         d="${CASE}/cd-chk-c"; mkdir -p "${d}"
         sed -e "s#/usr/lib/hugmesh/sso-greeter#${HELPER}#g" -e "s#/run/hugmesh/sso-greeter/hint#${CASE}/run/hint#" \
             -e "s#include\t\tsystem-local-login#required\tpam_deny.so#" "${sf}" > "${d}/lightdm"
-        python3 "${PAMPY}" "${d}" lightdm "" "${CASE}/env" 2>/dev/null | grep -q '^RC 0$'
+        python3 "${PAMPY}" "${d}" lightdm "" "${CASE}/env" 2>/dev/null | grep '^RC 0$' >/dev/null
     }
     stack_mut() {  # $1=label $2=sed-expr
         local m="${WORK}/stackmut-$1"
