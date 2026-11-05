@@ -1,0 +1,137 @@
+################################################################
+# hugmesh_bootpath.te
+# Narrow grants for denials MEASURED on the boot path of an x86 image booted
+# enforcing (2026-10-30 backend live ISO, "SELinux enforcing (test)" entry, with
+# the live-overlay relabel hook in place). Each block names the AVC it answers.
+# Nothing here is inferred: a rule is added only for a denial that was logged, and
+# every grant is on the domain's own objects or one named target type.
+#
+# Every foreign domain sits in an optional_policy block, so the module loads on an
+# image that lacks snort, kubernetes or docker policy: a block whose types are
+# absent is dropped at link time, not failed. That is why this module has no entry
+# in _SLX_MODULE_DEPS and is installed on every role.
+#
+# Denials deliberately NOT answered here (recorded in the PR, not silently allowed):
+#   local_login_t { search } /root default_t   — the store maps /root to nothing
+#       (seusers has no root entry, so genhomedircon emits no /root line); fixing
+#       the mapping is a policy-store decision, not a grant. Root login still works.
+#   udev_t getattr on the live medium (iso9660_t squashfs.img) and nsfs_t — live-ISO
+#       only, read-only metadata, no service failed.
+#   systemd_tmpfiles_t creating /var/tmp/portage (and writing "/") — a build-tool
+#       directory; the tmpfiles.d entry is portage's, not a service's.
+#   NetworkManager_t { sys_admin } capability and { perfmon } capability2 —
+#       granting sys_admin would hand NetworkManager most of root; it needs its own
+#       investigation (which call wants it, and whether NM degrades without it).
+################################################################
+policy_module(hugmesh_bootpath, 1.0.0)
+
+require {
+	type initrc_t;
+	type var_run_t;
+}
+
+########################################
+# 1. /run/hugmesh — shared runtime dir of the host firewall/reconcile jobs.
+#    Created at boot by an init script (initrc_t: would be initrc_runtime_t) and
+#    written every minute by the cron jobs (system_cronjob_t). Measured:
+#      system_cronjob_t { write } on /run/hugmesh (initrc_runtime_t) for
+#      mkdir firewall-health.
+#    Give the directory its own type whoever creates it first.
+########################################
+type hugmesh_runtime_t;
+files_runtime_file(hugmesh_runtime_t)
+
+type_transition initrc_t var_run_t:dir hugmesh_runtime_t "hugmesh";
+manage_dirs_pattern(initrc_t, hugmesh_runtime_t, hugmesh_runtime_t)
+manage_files_pattern(initrc_t, hugmesh_runtime_t, hugmesh_runtime_t)
+
+########################################
+# 2. Cron-driven host firewall convergence (hugmesh-firewall-reconcile and the
+#    other /etc/cron.d nft jobs run `nft -f` as system_cronjob_t). Measured:
+#      system_cronjob_t { create setopt write } netlink_netfilter_socket (self)
+#    system_cronjob_t already holds net_admin; it lacked only the socket.
+#    firewall-cmd in the same jobs then read vm.overcommit_memory, measured on
+#    the enforcing boot of this PR: { read } sysctl_vm_overcommit_t.
+########################################
+optional_policy(`
+	gen_require(`
+		type system_cronjob_t;
+	')
+	allow system_cronjob_t self:netlink_netfilter_socket create_socket_perms;
+	kernel_read_vm_overcommit_sysctl(system_cronjob_t)
+	type_transition system_cronjob_t var_run_t:dir hugmesh_runtime_t "hugmesh";
+	manage_dirs_pattern(system_cronjob_t, hugmesh_runtime_t, hugmesh_runtime_t)
+	manage_files_pattern(system_cronjob_t, hugmesh_runtime_t, hugmesh_runtime_t)
+')
+
+########################################
+# 3. snort (uplink IDS, afpacket DAQ). Measured, all on snort_t's own objects:
+#      { create } netlink_generic_socket, { create } netlink_netfilter_socket,
+#      { map } packet_socket (the afpacket ring), { setrlimit } process.
+#    { sys_module } is a module autoload probe — not granted, not logged.
+########################################
+optional_policy(`
+	gen_require(`
+		type snort_t;
+	')
+	allow snort_t self:netlink_generic_socket create_socket_perms;
+	allow snort_t self:netlink_netfilter_socket create_socket_perms;
+	allow snort_t self:packet_socket map;
+	allow snort_t self:process setrlimit;
+	dontaudit snort_t self:capability sys_module;
+')
+
+########################################
+# 4. Service output logs. OpenRC's output_log/error_log opens
+#    /var/log/<svc>.log|.err (var_log_t) and the daemon inherits it. Measured:
+#      kubelet_t { append } /var/log/kubelet.log, /var/log/kubelet.err
+#      dockerd_t { append } /var/log/containerd.log, /var/log/containerd.err
+#    Append to an already-open generic log; no create, no read of other logs.
+########################################
+optional_policy(`
+	gen_require(`
+		type kubelet_t, var_log_t;
+	')
+	allow kubelet_t var_log_t:file append_file_perms;
+')
+optional_policy(`
+	gen_require(`
+		type dockerd_t, var_log_t;
+	')
+	allow dockerd_t var_log_t:file append_file_perms;
+')
+
+########################################
+# 5. checkpath (OpenRC, tmpfiles_t) reads /proc/sys/kernel/cap_last_cap through
+#    libcap. Measured: tmpfiles_t { search } dir and { read open } file on
+#    sysctl_kernel_t.
+########################################
+optional_policy(`
+	gen_require(`
+		type tmpfiles_t;
+	')
+	kernel_read_kernel_sysctls(tmpfiles_t)
+')
+
+########################################
+# 6. hwclock statfs()es /proc. Measured: hwclock_t { getattr } proc_t:filesystem.
+########################################
+optional_policy(`
+	gen_require(`
+		type hwclock_t;
+	')
+	kernel_getattr_proc(hwclock_t)
+')
+
+########################################
+# 7. haveged keeps a POSIX semaphore in /dev/shm (tmpfs_t). Measured:
+#      entropyd_t { write } dir and { unlink } file on tmpfs_t, and (once those
+#      were granted, on this PR's own enforcing boot) { map } on the sem.* file.
+########################################
+optional_policy(`
+	gen_require(`
+		type entropyd_t, tmpfs_t;
+	')
+	fs_manage_tmpfs_files(entropyd_t)
+	allow entropyd_t tmpfs_t:file map;
+')

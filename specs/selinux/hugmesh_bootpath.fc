@@ -1,0 +1,5 @@
+# hugmesh_bootpath.fc
+# /run/hugmesh is created at boot (initrc_t) or by the first cron run
+# (system_cronjob_t); both get hugmesh_runtime_t through the named type
+# transitions in hugmesh_bootpath.te. This line makes restorecon agree.
+/run/hugmesh(/.*)?    gen_context(system_u:object_r:hugmesh_runtime_t,s0)
