@@ -35,26 +35,66 @@ spec:
           # instance MUST get a category no other workload on the mesh uses
           # (docs/SECURITY.md §3); the element writer owns that allocation.
           level: "s0:c85"
+      initContainers:
+        # Casdoor doesn't expand beego's "${ENV||default}" syntax inside app.conf
+        # (see app-conf-configmap.yaml). Render the real conf/app.conf here instead,
+        # into an emptyDir the main container mounts read-only, the shape of
+        # manifests/casdoor and manifests/casdoor-games. Reuses the casdoor image
+        # itself (busybox sh + awk). The values come from Vault and the per-domain
+        # params and may carry anything an operator typed there, so the render is a
+        # literal replacement, never a sed expression.
+        - name: render-app-conf
+          image: casbin/casdoor:3.80.0
+          command: ["sh", "-c"]
+          args:
+            - |
+              # A literal index()/substr() replacement in awk: nothing in a value is a
+              # pattern, a delimiter or a backreference (sed's s|a|b|g broke on `|`, `&`
+              # and `\` in a Vault value and rendered a wrong conf silently). The DB user
+              # and password go into a postgres:// URL percent-encoded (RFC 3986 userinfo:
+              # every byte but A-Za-z0-9-._~), which both xorm's DSN reader and lib/pq
+              # decode, so any value Vault holds -- spaces, quotes, `#`, a newline --
+              # reaches Postgres as typed. LC_ALL=C keeps awk on bytes.
+              LC_ALL=C awk '
+                function rep(s, tok, val,   out, i) { out = ""; while ((i = index(s, tok)) > 0) { out = out substr(s, 1, i - 1) val; s = substr(s, i + length(tok)) } return out s }
+                function enc(v,   out, i, c) { out = ""; for (i = 1; i <= length(v); i++) { c = substr(v, i, 1); out = out ((c ~ /^[A-Za-z0-9._~-]$/) ? c : sprintf("%%%02X", ord[c])) } return out }
+                BEGIN { for (i = 1; i < 256; i++) ord[sprintf("%c", i)] = i }
+                { line = $0
+                  line = rep(line, "__CASDOOR_DB_USER__", enc(ENVIRON["CASDOOR_DB_USER"]))
+                  line = rep(line, "__CASDOOR_DB_PASSWORD__", enc(ENVIRON["CASDOOR_DB_PASSWORD"]))
+                  line = rep(line, "__CASDOOR_ORIGIN__", ENVIRON["CASDOOR_ORIGIN"])
+                  print line }
+              ' /template/app.conf.template > /rendered/app.conf
+          env:
+            - name: CASDOOR_DB_USER
+              valueFrom: { secretKeyRef: { name: casdoor-domain-db, key: username } }
+            - name: CASDOOR_DB_PASSWORD
+              valueFrom: { secretKeyRef: { name: casdoor-domain-db, key: password } }
+            # Public issuer origin of this domain's realm. Patched per domain via
+            # casdoor-domain-params.
+            - name: CASDOOR_ORIGIN
+              valueFrom: { configMapKeyRef: { name: casdoor-domain-params, key: CASDOOR_ORIGIN } }
+          volumeMounts:
+            - { name: app-conf-template, mountPath: /template, readOnly: true }
+            - { name: rendered-conf, mountPath: /rendered }
       containers:
         - name: casdoor
-          # Same image pin as the casdoor-games precedent — the app.conf env
-          # interpolation is validated against THIS version (see the warning in
-          # app-conf-configmap.yaml before bumping).
+          # Same image pin as the casdoor-games precedent.
           image: casbin/casdoor:3.80.0
           ports:
             - { name: http, containerPort: 8000 }
           env:
             - name: RUNNING_IN_DOCKER
               value: "true"
-            # Dedicated Postgres credentials — interpolated into conf/app.conf
-            # (casdoor-domain-app-conf). Materialized by ESO from Vault
+            # Dedicated Postgres credentials — rendered into conf/app.conf by the
+            # render-app-conf initContainer above. Materialized by ESO from Vault
             # (secret/<slug>/casdoor via external-secrets.yaml).
             - name: CASDOOR_DB_USER
               valueFrom: { secretKeyRef: { name: casdoor-domain-db, key: username } }
             - name: CASDOOR_DB_PASSWORD
               valueFrom: { secretKeyRef: { name: casdoor-domain-db, key: password } }
-            # Public issuer origin of this domain's realm — interpolated into
-            # app.conf's `origin`. Patched per domain via casdoor-domain-params.
+            # Public issuer origin of this domain's realm — rendered into app.conf's
+            # `origin` by the initContainer. Patched per domain via casdoor-domain-params.
             - name: CASDOOR_ORIGIN
               valueFrom: { configMapKeyRef: { name: casdoor-domain-params, key: CASDOOR_ORIGIN } }
           readinessProbe:
@@ -62,18 +102,21 @@ spec:
             initialDelaySeconds: 20
             periodSeconds: 10
           volumeMounts:
-            # app.conf override that points Casdoor at casdoor-domain-pg and
-            # carries the env-interpolated issuer. NOTE: the conf path is
-            # image-version-specific (casbin/casdoor reads conf/app.conf from
-            # its workdir) — validate against the deployed image.
-            - { name: app-conf, mountPath: /conf/app.conf, subPath: app.conf, readOnly: true }
+            # app.conf rendered by the render-app-conf initContainer above (points
+            # Casdoor at casdoor-domain-pg and carries the per-domain issuer). NOTE:
+            # the conf path is image-version-specific (casbin/casdoor reads
+            # conf/app.conf from its workdir) — validate against the deployed image.
+            - { name: rendered-conf, mountPath: /conf/app.conf, subPath: app.conf, readOnly: true }
           resources:
             requests: { cpu: 100m, memory: 256Mi }
             limits:   { cpu: "1",  memory: 768Mi }
       volumes:
-        # DB state lives in casdoor-domain-pg (dedicated Postgres); this
-        # configMap just points Casdoor at it. NO init-data volume: the seed is
-        # the env-driven init Job (see app-conf-configmap.yaml).
-        - name: app-conf
+        # DB state lives in casdoor-domain-pg (dedicated Postgres); this configMap
+        # template (rendered by the initContainer above) just points Casdoor at it.
+        # NO init-data volume: the seed is the env-driven init Job (see
+        # app-conf-configmap.yaml).
+        - name: app-conf-template
           configMap:
             name: casdoor-domain-app-conf
+        - name: rendered-conf
+          emptyDir: {}
