@@ -15,8 +15,9 @@
 # and asUser in users[].
 #
 # HONESTY: this models headscale's policy semantics; it does NOT prove a live
-# control node enforces them. That + forged-tag REJECTION + real :22 default-deny
-# are NEEDS-HEADSCALE (see the PR body matrix). The SOURCE side is ADVISORY until
+# control node enforces them. Real :22 default-deny is NEEDS-HEADSCALE (see the PR
+# body matrix); forged-tag REJECTION by the pinned headscale is proven by
+# test-headscale-security-tag-live.sh. The SOURCE side is ADVISORY until
 # OIDC (every edge src is tag:hugmesh); these assertions are the DESTINATION
 # cut + default-deny that ship now.
 #
@@ -170,11 +171,17 @@ echo "-- Scenario: tag:hugmesh is no longer an SSH dst --"
 strip "${RENDERED}" | jq -e '[.ssh[] | select(.dst[0]? == "tag:hugmesh")] | length == 0' >/dev/null \
     && ok "tag:hugmesh removed as an ssh dst (only tag:dev_/tag:mesh_ remain)" || bad "tag:hugmesh still an ssh dst"
 
-echo "-- Scenario: server-forced dst tags are control-owned (FIX-SERVERTAG) --"
-strip "${RENDERED}" | jq -e '.tagOwners["tag:superadmin"] == ["hugmesh"]' >/dev/null \
-    && ok "tag:superadmin owned by control 'hugmesh' user only" || bad "tag:superadmin owner wrong"
-strip "${RENDERED}" | jq -e --arg t "${TAG_A}" '.tagOwners[$t] == ["hugmesh"]' >/dev/null \
-    && ok "tag:dev_<fpA> owned by control 'hugmesh' user only (not self-applyable)" || bad "tag:dev owner wrong"
+echo "-- Scenario: server-forced security tags are owned by NO user (FIX-SERVERTAG) --"
+# headscale 0.23 grants forced tags PLUS every advertised tag the node's user owns, so
+# an owner here is a user whose pre-auth key holders can claim the tag. The full
+# no-key-minting-user-owns-a-security-tag sweep is test-headscale-security-tag-owners.sh.
+strip "${RENDERED}" | jq -e '.tagOwners["tag:superadmin"] == []' >/dev/null \
+    && ok "tag:superadmin has an EMPTY owner list" || bad "tag:superadmin has an owner — any pre-auth key holder of that user could claim it"
+strip "${RENDERED}" | jq -e --arg t "${TAG_A}" '.tagOwners[$t] == []' >/dev/null \
+    && ok "tag:dev_<fpA> has an EMPTY owner list (not self-applyable)" || bad "tag:dev has an owner"
+strip "${RENDERED}" | jq -e --arg t "${MESH_TAG}" '.tagOwners[$t] == []' >/dev/null \
+    && ok "${MESH_TAG} is declared with an EMPTY owner list (maps still build before any node is forced)" \
+    || bad "${MESH_TAG} is not declared ownerless — headscale 0.23 fails EVERY node's map update until a node is force-tagged with it"
 
 echo "-- Scenario: EMPTY export still emits the SUPERADMIN mesh rule (never all-deny-superadmin) --"
 EEMPTY="$(mktemp)"; printf '%s' '{"signed":true,"signature":"x","body":{"meshId":"east-01","generation":12,"operators":[]}}' > "${EEMPTY}"
