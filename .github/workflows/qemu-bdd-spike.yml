@@ -1,0 +1,141 @@
+# TRIAL (operator-approved 2026-11-04): can a GitHub-hosted runner boot an x86
+# guest under KVM, and is that fast enough to run QEMU scenarios as BDD in CI?
+#
+# WHAT IT RUNS. tests/qemu/features/actions-kvm-smoke.feature, executed by
+# tests/qemu/actions-kvm-smoke_test.sh (a small Gherkin interpreter — the
+# playwright-bdd lane under tests/e2e needs node_modules and a browser, and a
+# QEMU boot has no page to drive). The guest is a STOCK Alpine 'virt' ISO pinned
+# by URL AND sha256 below; the checksum is a literal in this file, never fetched
+# next to the ISO (that would be trust-on-first-use, not a pin). No hugmesh image
+# is built, downloaded or published here, and the job has no secrets.
+#
+# WHAT IT MEASURES, as labelled lines in the job log (grep for 'MEASURE '):
+# vCPU count, RAM, hardware-virt flags, free disk before/after, the KVM boot to
+# a serial login prompt, and the same boot forced to TCG for comparison. The
+# serial logs, monitor answers and timings are uploaded as an artifact.
+#
+# DISK. The ISO is 64 MB, so nothing is deleted. The job instead MEASURES what a
+# cleanup would reclaim (du, read-only) — that number is what sizing a real
+# multi-GB hugmesh test image against this runner needs.
+name: qemu-bdd-spike
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/qemu-bdd-spike.yml'
+      - 'tests/qemu/features/actions-kvm-smoke.feature'
+      - 'tests/qemu/actions-kvm-smoke_test.sh'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: qemu-bdd-spike-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  ALPINE_ISO_URL: https://dl-cdn.alpinelinux.org/alpine/v3.20/releases/x86_64/alpine-virt-3.20.9-x86_64.iso
+  ALPINE_ISO_SHA256: 0cc777ecd9220aca7fa8b91a8de73cd99ce2553329bf990abd19efd2c5c93508
+  OUT: ${{ github.workspace }}/qemu-bdd-out
+
+jobs:
+  kvm-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Interpreter self-test (no QEMU)
+        run: bash tests/qemu/actions-kvm-smoke_test.sh --self-test
+
+      - name: Measure the runner
+        run: |
+          mkdir -p "${OUT}"
+          {
+            echo "MEASURE runner_image=${ImageOS:-?}/${ImageVersion:-?}"
+            echo "MEASURE kernel=$(uname -r)"
+            echo "MEASURE vcpus=$(nproc)"
+            echo "MEASURE cpu_model=$(grep -m1 'model name' /proc/cpuinfo | cut -d: -f2- | sed 's/^ //')"
+            echo "MEASURE mem_total_kb=$(awk '/^MemTotal:/{print $2}' /proc/meminfo)"
+            echo "MEASURE virt_flag_cpus=$(grep -c -w -E 'vmx|svm' /proc/cpuinfo || true)"
+            echo "MEASURE dev_kvm_before_udev=$(ls -l /dev/kvm 2>&1)"
+            echo "MEASURE disk_free_before_kb=$(df -k --output=avail / | tail -1 | tr -d ' ')"
+          } | tee "${OUT}/runner.txt"
+          df -h / /mnt 2>/dev/null || df -h /
+
+      # Documented route: https://github.blog/changelog/2024-04-02-github-actions-hardware-accelerated-android-virtualization-now-available/
+      - name: Enable KVM for the runner user
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          ls -l /dev/kvm
+          echo "MEASURE dev_kvm_after_udev=$(ls -l /dev/kvm 2>&1)" | tee -a "${OUT}/runner.txt"
+
+      - name: Install QEMU and OVMF
+        run: |
+          start=$(date +%s)
+          sudo apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
+            qemu-system-x86 ovmf socat >/dev/null
+          {
+            echo "MEASURE apt_install_s=$(( $(date +%s) - start ))"
+            echo "MEASURE qemu_version=$(qemu-system-x86_64 --version | head -1)"
+            echo "MEASURE ovmf_files=$(ls /usr/share/OVMF/ | tr '\n' ' ')"
+          } | tee -a "${OUT}/runner.txt"
+
+      - name: Download the pinned image and verify its sha256
+        run: |
+          mkdir -p "${RUNNER_TEMP}/img"
+          start=$(date +%s)
+          curl -fsSL --retry 3 -o "${RUNNER_TEMP}/img/alpine-virt.iso" "${ALPINE_ISO_URL}"
+          echo "${ALPINE_ISO_SHA256}  ${RUNNER_TEMP}/img/alpine-virt.iso" | sha256sum -c -
+          {
+            echo "MEASURE image_download_s=$(( $(date +%s) - start ))"
+            echo "MEASURE image_bytes=$(stat -c %s "${RUNNER_TEMP}/img/alpine-virt.iso")"
+          } | tee -a "${OUT}/runner.txt"
+
+      - name: Feature — KVM scenarios
+        run: |
+          bash tests/qemu/actions-kvm-smoke_test.sh \
+            --image "${RUNNER_TEMP}/img/alpine-virt.iso" --sha256 "${ALPINE_ISO_SHA256}" --out "${OUT}"
+
+      - name: Comparison — the same boot forced to TCG
+        run: |
+          bash tests/qemu/actions-kvm-smoke_test.sh --tcg \
+            --image "${RUNNER_TEMP}/img/alpine-virt.iso" --sha256 "${ALPINE_ISO_SHA256}" --out "${OUT}"
+
+      - name: Disk — free after, and what a cleanup would reclaim (measured, nothing deleted)
+        if: always()
+        run: |
+          {
+            echo "MEASURE disk_free_after_kb=$(df -k --output=avail / | tail -1 | tr -d ' ')"
+            for d in /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache /usr/local/share/boost; do
+              if [ -d "$d" ]; then echo "MEASURE reclaimable_kb ${d}=$(sudo du -sk "$d" 2>/dev/null | cut -f1)"; fi
+            done
+            echo "MEASURE mnt_free_kb=$(df -k --output=avail /mnt 2>/dev/null | tail -1 | tr -d ' ')"
+          } | tee -a "${OUT}/runner.txt"
+
+      - name: Summary
+        if: always()
+        run: |
+          if [ -f "${OUT}/timings.env" ]; then sed 's/^/MEASURE /' "${OUT}/timings.env"; fi
+          {
+            echo "### QEMU on a GitHub-hosted runner (trial)"
+            echo '```'
+            cat "${OUT}/runner.txt" "${OUT}/timings.env" 2>/dev/null
+            echo '```'
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Upload serial logs and timings
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+        with:
+          name: qemu-bdd-spike-${{ github.run_id }}
+          path: ${{ env.OUT }}
+          retention-days: 14
+          if-no-files-found: error
