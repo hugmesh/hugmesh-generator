@@ -13,13 +13,19 @@
   // with a plain `jq` after comments are stripped.
 
   // ── Who may apply which tags ──────────────────────────────────────────────
-  // Tags are self-applied by each node at join via `tailscale up
+  // MEMBERSHIP tags are self-applied by each node at join via `tailscale up
   // --advertise-tags=...`. A node may only claim a tag whose owner is the
   // headscale user its preauth key was minted under — here, "hugmesh"
   // (see provision_headscale: `headscale users create hugmesh` + preauthkey
   // --user hugmesh). tag:hugmesh is the fleet-wide membership tag; the
-  // per-role tags are reserved for future segmentation (all owned by the same
-  // user, so any node can self-tag).
+  // per-role tags are reserved for future segmentation and are NOT used by any
+  // access rule, which is why the membership user may own them.
+  //
+  // A tag that GRANTS access (tag:superadmin, tag:mesh_*, tag:dev_*, tag:dom_*)
+  // must NEVER be owned by a user any pre-auth key is minted for: headscale
+  // 0.23 grants a node every advertised tag its user owns IN ADDITION to its
+  // forced tags. Such tags take an empty owner list and are server-forced (see
+  // policy.bootstrap.hujson + policy.hujson.tmpl, which the builders bake).
   "tagOwners": {
     "tag:hugmesh": ["hugmesh"],
     "tag:pki": ["hugmesh"],

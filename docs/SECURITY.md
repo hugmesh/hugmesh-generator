@@ -385,7 +385,7 @@ headscale so the rewritten file is the one in force.
   --advertise-tags=...`, which comes from `.tailscale.up_args` in `provision.json`
   (`keys-template/provision.json`, `keys-template/examples/`). `tagOwners` restricts
   those tags to the `hugmesh` headscale user (the preauth-key owner), so only
-  enrolled nodes can claim them. With OIDC join, the Casdoor `hugmesh/headscale`
+  enrolled nodes can claim them. That user owns **only** these membership tags. With OIDC join, the Casdoor `hugmesh/headscale`
   group gates enrolment (`allowed_groups`, matching the group's real
   `<owner>/<name>` claim shape — see `keys-template/headscale/config.yaml`) — two
   independent membership layers.
@@ -403,9 +403,14 @@ headscale so the rewritten file is the one in force.
   `headscale/policy.hujson` (that wins). On the control node, `gen-headscale-policy.sh`
   (Layer A of the device-license registry) re-renders it from
   `policy.hujson.tmpl` after the first signature-verified registry export, with
-  one `ssh` edge per permitted operator and server-forced destination tags
+  one `ssh` edge per permitted operator and server-forced security tags
   (`tag:dev_*`, `tag:dom_*`, `tag:mesh_*`, `tag:superadmin`, set by
-  `hugmesh-headscale-forcetags`, which no node can self-advertise). See
+  `hugmesh-headscale-forcetags`). Every policy gives these tags an **empty owner
+  list**, and that is what stops a node self-advertising them: headscale 0.23 grants a
+  node its forced tags plus every advertised tag its own user owns, so a security tag
+  owned by `hugmesh` could be claimed by anyone holding a pre-auth key.
+  keys-provision refuses to load a KEYS-stick policy that gives one an owner, and a
+  key minted by the Studio may not carry one (headscale forces a key's tags at join). See
   [`docs/DEVICE-REGISTRY-KEY-ROTATION.md`](DEVICE-REGISTRY-KEY-ROTATION.md).
   `specs/etc/headscale/policy.hujson` is a reference copy that the builders no
   longer bake; neither it nor `keys-template/headscale/policy.hujson` carries the
