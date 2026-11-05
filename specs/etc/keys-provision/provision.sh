@@ -700,6 +700,28 @@ provision_certs() {
 }
 
 # ── Headscale (self-hosted Tailscale control server) ───────────────
+# headscale_policy_owned_security_tags <policy.hujson>
+# Prints, one per line, every SECURITY tag (tag:superadmin, tag:mesh_*, tag:dev_*,
+# tag:dom_*) that the policy gives ANY owner. Exit 0 = the policy was read (an empty
+# output means it is clean); exit 1 = it could not be parsed, so nothing can be said
+# about it. WHY: headscale 0.23 grants a node every advertised tag its own user owns
+# IN ADDITION to the tags the control node forces on it. Every pre-auth key is minted
+# for a user, so a security tag with an owner is one any key holder can claim for
+# themselves (tag:superadmin is the SSH source of the always-on superadmin rule).
+# Security tags take an EMPTY owner list and only hugmesh-headscale-forcetags assigns
+# them. The comment strip is the same line-comment strip the policy tooling uses.
+headscale_policy_owned_security_tags() {
+    sed -e 's#//.*$##' "$1" 2>/dev/null | jq -er '
+        (.tagOwners // {}) | if type == "object" then . else error("tagOwners is not an object") end
+        | to_entries[]
+        | select(.key | test("^tag:(superadmin$|mesh_|dev_|dom_)"))
+        | select((.value // []) | length > 0)
+        | .key' 2>/dev/null
+    local rc=$?
+    # jq -e exits 4 when there was no output at all (a clean policy) — that is a read.
+    [ "${rc}" -eq 0 ] || [ "${rc}" -eq 4 ]
+}
+
 provision_headscale() {
     have headscale || { log "headscale not installed — skipping"; return 0; }
     local enabled
@@ -760,6 +782,44 @@ provision_headscale() {
     local policy_file=""
     if   [ -f "${BASE}/headscale/policy.hujson" ]; then policy_file=/etc/headscale/policy.hujson
     elif [ -f /etc/headscale/policy.hujson ];      then policy_file=/etc/headscale/policy.hujson
+    fi
+    # A policy that gives a SECURITY tag an owner lets every pre-auth key holder
+    # claim that tag (see headscale_policy_owned_security_tags). A USB override (or a
+    # stale baked file) that does so, or that cannot be read to check, is NOT loaded
+    # as is: the baked bootstrap policy is staged in its place. Only when there is no
+    # clean bootstrap to fall back on is the file itself narrowed (those owners
+    # emptied, comments lost); an unreadable file with no fallback is kept, loudly.
+    if [ -n "${policy_file}" ]; then
+        local owned_sec="" sec_readable=1
+        owned_sec="$(headscale_policy_owned_security_tags "${policy_file}")" || sec_readable=0
+        if [ "${sec_readable}" = 0 ] || [ -n "${owned_sec}" ]; then
+            if [ "${sec_readable}" = 0 ]; then
+                warn "headscale: ${policy_file} could not be parsed to check its security-tag owners — not loading it as is"
+            else
+                warn "headscale: ${policy_file} gives an owner to security tag(s): $(printf '%s' "${owned_sec}" | tr '\n' ' ')— any pre-auth key holder could claim them; not loading it as is"
+            fi
+            local boot_sec=""
+            if [ -f /etc/headscale/policy.bootstrap.hujson ] \
+               && boot_sec="$(headscale_policy_owned_security_tags /etc/headscale/policy.bootstrap.hujson)" \
+               && [ -z "${boot_sec}" ] \
+               && cp -f /etc/headscale/policy.bootstrap.hujson /etc/headscale/policy.hujson; then
+                warn "headscale: staged the baked BOOTSTRAP policy instead — fix the KEYS headscale/policy.hujson (security tags take an empty owner list)"
+            elif [ "${sec_readable}" = 1 ]; then
+                local narrowed="/etc/headscale/policy.hujson.narrowed.$$"
+                if sed -e 's#//.*$##' "${policy_file}" | jq '
+                        .tagOwners |= with_entries(
+                            if (.key | test("^tag:(superadmin$|mesh_|dev_|dom_)")) then .value = [] else . end)' \
+                        > "${narrowed}" 2>/dev/null \
+                   && mv -f "${narrowed}" /etc/headscale/policy.hujson; then
+                    warn "headscale: no clean bootstrap policy — emptied the security-tag owners in ${policy_file} instead"
+                else
+                    rm -f "${narrowed}" 2>/dev/null
+                    warn "headscale: could not narrow ${policy_file} — it is loaded UNSAFE (security tags claimable)"
+                fi
+            else
+                warn "headscale: no clean bootstrap policy to fall back on — keeping the unreadable ${policy_file}"
+            fi
+        fi
     fi
     # ── Local-first endpoint: rewrite server_url BEFORE starting the server ──
     # The baked config.yaml ships server_url=http://127.0.0.1:8080 (a placeholder
