@@ -207,6 +207,12 @@ GUEST_WEB_PORT=6080
 # --open-display: which viewer. auto = remote-viewer, else spicy, else the
 # browser (when a web port exists), else print.
 DEV_VIEWER="auto"
+# What the images of THIS run are known to do on a viewer resize, forwarded to
+# every row's record as display_resize: "scale" (the picture scales to the
+# window) until an image's guest-side resize is proven, then DISPLAY_RESIZE=guest
+# in the environment flips it for the run. Environment only — it is a statement
+# about the images, not a per-row option, and nothing here can measure it.
+DISPLAY_RESIZE="${DISPLAY_RESIZE:-scale}"
 
 # Host ports published for keep-alive devices. Loopback ONLY, and a private range
 # with nothing else in it: the operator runs a live hugmesh stack on this machine
@@ -440,6 +446,10 @@ esac
 case "${DEV_VIEWER}" in
     auto|remote-viewer|spicy|browser|print) ;;
     *) die "--viewer must be auto, remote-viewer, spicy, browser or print, got '${DEV_VIEWER}'" ;;
+esac
+case "${DISPLAY_RESIZE}" in
+    guest|scale) ;;
+    *) die "DISPLAY_RESIZE must be guest or scale, got '${DISPLAY_RESIZE}'" ;;
 esac
 
 # Same reasoning one step further: an --extra-user value is not just an argv item
@@ -2436,6 +2446,7 @@ display_publish_args() {
         return 0
     fi
     printf '%s\n' "-e" "DISPLAY_MODE=${DISPLAY_MODE}"
+    printf '%s\n' "-e" "DISPLAY_RESIZE=${DISPLAY_RESIZE}"
     printf '%s\n' "-p" "127.0.0.1:$(( sshport + DISPLAY_PORT_OFFSET )):${GUEST_SPICE_PORT}"
     printf '%s\n' "-e" "DISPLAY_HOST_PORT=$(( sshport + DISPLAY_PORT_OFFSET ))"
     if ${DISPLAY_WEB}; then

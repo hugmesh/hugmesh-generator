@@ -263,16 +263,19 @@ EXTRA_USER_ARGS=(); MESH_NET=""; MESH_NET_NAME=""
 declare -A MESH_MAC_FOR=() MESH_IP_FOR=() MESH_PLEN_FOR=()
 DEV_PORTS_TAKEN=()
 
-DISPLAY_MODE=auto; DISPLAY_WEB=false
+DISPLAY_MODE=auto; DISPLAY_WEB=false; DISPLAY_RESIZE=scale
 pub="$(display_publish_args 22300)"
 has "${pub}" $'-p\n127.0.0.1:22400:5930' "ssh 22300 => the door is -p 127.0.0.1:22400:5930"
 has "${pub}" $'-e\nDISPLAY_HOST_PORT=22400' "...and the entrypoint is told the host number"
 has "${pub}" $'-e\nDISPLAY_MODE=auto' "...and the mode"
+has "${pub}" $'-e\nDISPLAY_RESIZE=scale' "...and what the images are known to do on resize"
+eq "$(DISPLAY_RESIZE=guest display_publish_args 22300 | grep -c '^DISPLAY_RESIZE=guest$')" 1 "DISPLAY_RESIZE=guest in the environment is forwarded"
 lacks "${pub}" "22500" "no web port unless --display-web"
 lacks "${pub}" "0.0.0.0" "no 0.0.0.0 on the host side"
 # Every -p the helper emits binds loopback: count -p lines vs -p lines followed by 127.0.0.1:
 np="$(printf '%s\n' "${pub}" | grep -c '^-p$')"
 nl="$(printf '%s\n' "${pub}" | grep -A1 '^-p$' | grep -c '^127\.0\.0\.1:')"
+eq "${np}" 1 "exactly one -p (the door) without --display-web — an absolute pin, so 0 == 0 cannot pass below"
 eq "${nl}" "${np}" "every -p the door publishes starts with 127.0.0.1:"
 DISPLAY_WEB=true
 pubw="$(display_publish_args 22300)"
@@ -281,11 +284,14 @@ has "${pubw}" $'-e\nDISPLAY_WEB_PORT=22500' "...and the entrypoint is told that 
 has "${pubw}" $'-e\nDISPLAY_WEB=1' "...and that the web fallback is armed"
 np="$(printf '%s\n' "${pubw}" | grep -c '^-p$')"
 nl="$(printf '%s\n' "${pubw}" | grep -A1 '^-p$' | grep -c '^127\.0\.0\.1:')"
+eq "${np}" 2 "exactly two -p (door + noVNC) with --display-web"
 eq "${nl}" "${np}" "with the web port too, every -p starts with 127.0.0.1:"
 DISPLAY_WEB=false
 DISPLAY_MODE=none
 pubn="$(display_publish_args 22300)"
 eq "${pubn}" $'-e\nDISPLAY_MODE=none' "--display none publishes nothing and tells the entrypoint so"
+( DISPLAY_RESIZE=bogus display_publish_args 22300 | grep -c 'DISPLAY_RESIZE=bogus' ) >/dev/null; # value validation is at parse time:
+grep -q 'DISPLAY_RESIZE must be guest or scale' "${RUNNER}" && _ok "an unknown DISPLAY_RESIZE is refused at parse time" || _bad "no DISPLAY_RESIZE validation in the runner"
 DISPLAY_MODE=auto
 
 echo

@@ -214,8 +214,9 @@ visible too — not only the logged-in desktop.
 **Resize, honestly.** `display_resize` in the device record says what an image is
 *known* to do: `"guest"` (virtio-gpu + an in-guest applier that adopts the viewer's
 preferred mode) or `"scale"`. It is `"scale"` for every row until that image's
-guest-side proof lands (the runner accepts `DISPLAY_RESIZE=guest` per row for the
-image group to flip it). Whether QEMU 7.2 turns a SPICE monitors-config into a
+guest-side proof lands; `DISPLAY_RESIZE=guest` in the runner's environment then
+flips it for every row of that run (it is a statement about the images, not a
+per-row option). Whether QEMU 7.2 turns a SPICE monitors-config into a
 virtio-gpu mode change with no agent, or whether `spice-vdagent` must relay it, is
 **unverified** here; VNC never resizes the guest. An ARM board whose kernel lacks
 `DRM_VIRTIO_GPU` shows a black window: the door opens, the guest draws nothing —
