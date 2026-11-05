@@ -283,10 +283,15 @@ HEADSCALE_VERSION="0.23.0"
 TAILSCALE_VERSION="1.78.1"
 SKIP_MESH=false
 SKIP_TAILSCALE=false
-# --with-tailscale keeps the tailnet client on a --standalone desktop (situation 2
-# of docs/DESKTOP-LOGIN-SSO.md: on a tailnet, never mesh-associated); --skip-mesh
-# drops it. "" = the posture default (mesh desktop ON, --standalone OFF).
+# --with-tailscale / --no-tailscale are EXPLICIT operator choices that outrank the
+# posture defaults (x86 MESH_FORCED parity: --standalone turns the tailnet OFF
+# unless --with-tailscale forced it back ON — a standalone desktop that still sits
+# on a tailnet without any mesh association, the operator's "situation 2").
 MESH_FORCED=""
+# The LIVE / INSTALLER media are raw MBR+FAT32 .img files (what the board's u-boot
+# distro-boot can actually read — it has no ISO9660 driver). --medium-iso ADDS the
+# old ISO9660 twin next to the .img for a consumer that explicitly wants one.
+MEDIUM_ISO=false
 # Greeter SSO (the Casdoor/OIDC device-flow sign-in at lightdm, plus the baked
 # desktop-governance templates that make a KEYS-provisioned image GOVERNED).
 # ON for a mesh client; --standalone turns it OFF unless --with-sso says
@@ -353,6 +358,10 @@ OPTIONS
                                     desktop to onboard eMMC/SD.
     --live              shorthand for --flavor live.
     --installer         shorthand for --flavor installer.
+    --medium-iso        ALSO emit the old ISO9660 twin (.live.iso / .installer.iso)
+                        next to each raw .img. The .img (MBR + FAT32, label
+                        FRITE_LIVE / FRITE_INST) is what u-boot distro-boot can
+                        read; the ISO is for consumers that explicitly want one.
 
   Desktop
     --desktop light|none   light (DEFAULT) = the LEAN LXDE desktop set;
@@ -380,9 +389,12 @@ OPTIONS
 
   Mesh / radios  (same as the Pi5 builder)
     --headscale-version / --tailscale-version / --skip-mesh / --skip-tailscale
-    --with-tailscale      Keep the tailnet client on a --standalone desktop (dropped
-                          by default) so the greeter SSO can reach an IdP over a
-                          tailnet; the image stays standalone (ungoverned).
+    --with-tailscale | --no-tailscale   Force the tailnet agent ON/OFF. Outranks
+                        the --standalone default (mesh OFF): --standalone
+                        --with-tailscale = a local-login desktop that keeps the
+                        tailnet client (so the greeter SSO can reach an IdP over
+                        it) without any mesh association; the image stays
+                        standalone (ungoverned).
     --enable-wifi / --enable-bluetooth   (off by default; the boards have no radio)
     --with-sso | --no-sso | --skip-sso   Force the Casdoor/OIDC greeter sign-in ON/OFF.
                           Default ON (mesh client); --standalone turns it off unless
@@ -542,9 +554,12 @@ while [[ $# -gt 0 ]]; do
         --enable-wifi)        ENABLE_WIFI=true;           shift   ;;
         --enable-bluetooth)   ENABLE_BLUETOOTH=true;      shift   ;;
         --permit-root-login)  PERMIT_ROOT_LOGIN="$2";     shift 2 ;;
-        --skip-mesh)          SKIP_MESH=true; MESH_FORCED=off; shift   ;;
+        --skip-mesh)          SKIP_MESH=true; MESH_FORCED=off; shift ;;
         --skip-tailscale)     SKIP_TAILSCALE=true;        shift   ;;
         --with-tailscale)     SKIP_MESH=false; SKIP_TAILSCALE=false; MESH_FORCED=on; shift ;;
+        --with-mesh)          SKIP_MESH=false; SKIP_TAILSCALE=false; MESH_FORCED=on; shift ;;
+        --no-tailscale|--no-mesh)     SKIP_MESH=true; SKIP_TAILSCALE=true; MESH_FORCED=off; shift ;;
+        --medium-iso)         MEDIUM_ISO=true;            shift   ;;
         --skip-sso|--no-sso)  SKIP_SSO=true;  SSO_FORCED=off; shift ;;
         --with-sso)           SKIP_SSO=false; SSO_FORCED=on;  shift ;;
         --sso-issuer)         SSO_ISSUER="${2:-}";        shift 2 ;;
@@ -1072,8 +1087,12 @@ if ${PRINT_PLAN}; then
     _plan DESKTOP            "${DESKTOP}"
     _plan GPU_DRIVER         "lima"   # Amlogic GXL Mali-450 → mainline lima (fixed for this platform)
     _ARTS="stage4.tar.xz"
-    ${BUILD_LIVE}      && _ARTS="${_ARTS},live.iso"
-    ${BUILD_INSTALLER} && _ARTS="${_ARTS},installer.iso"
+    ${BUILD_LIVE}      && _ARTS="${_ARTS},live.img"
+    ${BUILD_INSTALLER} && _ARTS="${_ARTS},installer.img"
+    if ${MEDIUM_ISO}; then
+        ${BUILD_LIVE}      && _ARTS="${_ARTS},live.iso"
+        ${BUILD_INSTALLER} && _ARTS="${_ARTS},installer.iso"
+    fi
     _plan ARTIFACTS          "${_ARTS}"
     _plan ARTIFACT_PREFIX    "${BRAND}-frite-${FRITE_BOARD}-arm64-${ROLE}-${ENV}-<timestamp>"
     _plan WORK_DIR           "${WORK_DIR}"
@@ -1103,7 +1122,7 @@ if ${PRINT_PLAN}; then
     _plan LOCAL_USER         "${LOCAL_USER:-$DEFAULT_USER}"
     _plan LOCAL_PASS         "$([ -n "${LOCAL_PASSHASH}" ] && echo REDACTED || echo none)"
     _plan KERNEL             "mainline-arm64 (defconfig=${FRITE_DEFCONFIG} + hardened-desktop.config)"
-    _plan FLAGS_EFFECTIVE    "env=${ENV} board=${FRITE_BOARD} flavor=${_EFF_FLAVOR} desktop=${DESKTOP} img_size=${ROOT_MiB} grow=${GROW_POLICY} compress=${COMPRESS_IMG} compress_level=${COMPRESS_LEVEL} resume=${RESUME} skip_kernel=${SKIP_KERNEL} skip_uboot=${SKIP_UBOOT} skip_mesh=${SKIP_MESH} skip_tailscale=${SKIP_TAILSCALE} permit_root_login=${PERMIT_ROOT_LOGIN} enable_wifi=${ENABLE_WIFI} enable_bluetooth=${ENABLE_BLUETOOTH} standalone=${STANDALONE} encrypt_root=${ENCRYPT_ROOT}"
+    _plan FLAGS_EFFECTIVE    "env=${ENV} board=${FRITE_BOARD} flavor=${_EFF_FLAVOR} desktop=${DESKTOP} img_size=${ROOT_MiB} grow=${GROW_POLICY} compress=${COMPRESS_IMG} compress_level=${COMPRESS_LEVEL} resume=${RESUME} skip_kernel=${SKIP_KERNEL} skip_uboot=${SKIP_UBOOT} skip_mesh=${SKIP_MESH} skip_tailscale=${SKIP_TAILSCALE} permit_root_login=${PERMIT_ROOT_LOGIN} enable_wifi=${ENABLE_WIFI} enable_bluetooth=${ENABLE_BLUETOOTH} standalone=${STANDALONE} encrypt_root=${ENCRYPT_ROOT} mesh_forced=${MESH_FORCED:-none} medium_iso=${MEDIUM_ISO}"
     exit 0
 fi
 
@@ -1189,24 +1208,38 @@ banner "Verifying prerequisites"
 [ -d "${SHARED_SPECS}" ] || { err "Shared specs directory not found: ${SHARED_SPECS}"; exit 1; }
 info "Frite specs:  ${SPECS_DIR}"
 info "Shared specs: ${SHARED_SPECS}"
-for tool in "${CROSS_TARGET}-gcc" "${CROSS_TARGET}-strip" curl tar file; do
+for tool in "${CROSS_TARGET}-gcc" "${CROSS_TARGET}-strip" curl tar file getfattr; do
     command -v "${tool}" &>/dev/null || { err "${tool} not found in PATH."; exit 1; }
 done
+# The LIVE / INSTALLER media are assembled ROOTLESS from regular files (sfdisk +
+# mkfs.vfat + mtools, see build_frite_medium): a missing tool must fail here, not
+# after the multi-hour cross build.
+if ${BUILD_LIVE} || ${BUILD_INSTALLER}; then
+    for tool in sfdisk mkfs.vfat mcopy mdir; do
+        command -v "${tool}" &>/dev/null || { err "${tool} not found in PATH — the LIVE/INSTALLER .img media are assembled with sfdisk (sys-apps/util-linux), mkfs.vfat (sys-fs/dosfstools) and mtools (sys-fs/mtools)."; exit 1; }
+    done
+    if ${MEDIUM_ISO}; then
+        command -v xorriso &>/dev/null || { err "--medium-iso needs xorriso (dev-libs/libisoburn) to wrap the ISO9660 twin."; exit 1; }
+    fi
+fi
 
-# ── Cross-dracut (--encrypt-root) fail-FAST preflight ───────────────
-# An --encrypt-root Frite installer needs an arm64 disk-boot initramfs, generated
-# by chrooting into the target sysroot under qemu-aarch64. Detect a usable
-# qemu-aarch64 NOW rather than after the multi-hour @stage4/kernel build. Runs
-# only on a real build (after --print-plan), so matrix.tsv stays byte-identical.
-# The post-build refusal remains the fail-SAFE backstop.
-if ${ENCRYPT_ROOT} && ${BUILD_INSTALLER} && { ! ${SKIP_KERNEL} || ${IMAGE_ONLY}; }; then
+# ── qemu-aarch64 chroot fail-FAST preflight ──────────────────────────
+# EVERY Frite build chroots into the aarch64 sysroot under qemu-aarch64 at least
+# once: the build-time SELinux labelling (semodule + setfiles + matchpathcon run
+# INSIDE the sysroot, exactly as the x86 builder runs them in its chroot — see
+# "BUILD-TIME SELINUX LABELS" below) and, for --encrypt-root, the arm64 disk-boot
+# initramfs. Detect a usable qemu-aarch64 NOW rather than after the multi-hour
+# @stage4/kernel build. Runs only on a real build (after --print-plan), so
+# matrix.tsv stays byte-identical. The post-build refusals remain the fail-SAFE
+# backstop. (--packages-only exits before any of this and is exempt.)
+if ! ${PACKAGES_ONLY}; then
     dracut_cross_register_qemu || true
     if ! dracut_cross_preflight_ok; then
-        err "--encrypt-root on ${BRAND}-${FRITE_BOARD}-${ROLE} (if this build came from a multi-image mesh worklist, THIS node image is the affected one) needs the arm64 disk-boot initramfs, but no usable cross-dracut strategy is available: ${DRACUT_CROSS_BINFMT_NODE} is not registered and/or $(dracut_cross_qemu_interp) is missing/not executable."
+        err "${BRAND}-${FRITE_BOARD}-${ROLE} (if this build came from a multi-image mesh worklist, THIS node image is the affected one) needs a usable qemu-aarch64 chroot — build-time SELinux labelling of the sysroot$(${ENCRYPT_ROOT} && echo ' and the --encrypt-root arm64 disk-boot initramfs') — but none is available: ${DRACUT_CROSS_BINFMT_NODE} is not registered and/or $(dracut_cross_qemu_interp) is missing/not executable."
         err "Fix: rebuild the builder image so it ships a static qemu-aarch64 (make docker-image — Dockerfile.build FINAL stage now emerges app-emulation/qemu[static-user] QEMU_USER_TARGETS=aarch64) AND run the build in a --privileged container so binfmt_misc can be mounted/registered. Refusing now BEFORE the multi-hour @stage4/kernel build rather than after."
         exit 1
     fi
-    info "cross-dracut preflight OK: qemu-${DRACUT_CROSS_QEMU_ARCH} registered ($(dracut_cross_qemu_interp)); the arm64 disk-boot initramfs is buildable via qemu-chroot."
+    info "qemu-chroot preflight OK: qemu-${DRACUT_CROSS_QEMU_ARCH} registered ($(dracut_cross_qemu_interp)); the sysroot can be labelled in-chroot$(${ENCRYPT_ROOT} && echo ' and the arm64 disk-boot initramfs is buildable')."
 fi
 
 # ── General missing-qemu preflight (t=0 instead of t=40min) ─────────
@@ -1387,27 +1420,16 @@ fi
 # --with-bdeps=n means the cross emerge never upgrades it. Full rationale in
 # scripts/_host-guard-lib.sh. Must run before the first cross_emerge.
 hostguard_ensure_cross_gpep517 || exit 1
-# The LIVE/INSTALLER images need a squasher (mksquashfs, or tar2sqfs from
-# squashfs-tools-ng) + xorriso to wrap the squashfs ISO.
-# NATIVE HOST-TOOL PREFLIGHT: in the builder container this keeps TODAY'S
-# behavior verbatim (warn now, skip the image later — both tools were measured
-# present in hugmesh-builder:latest, so the hard path is unreachable during
-# fleet builds). On a real host, warning up front and then silently skipping a
-# requested image hours later is dishonest — fail fast with the exact emerge.
-# xorriso is asymmetric and the preflight must not flatten that: --flavor installer
-# hard-errors later without it ("cannot build the INSTALLER ISO"), so failing fast
-# is strictly better; a LIVE-only build instead leaves a supported LIVE TREE it
-# reports as "(tree; no xorriso to wrap an ISO)", so that site is --soft. Failing
-# fast there would turn a build that SUCCEEDS today into exit 1.
-if ${BUILD_INSTALLER}; then
-    hostguard_require_host_tools "the installer ISO (--flavor installer)" "dev-libs/libisoburn" \
+# The LIVE/INSTALLER media need a squasher (mksquashfs, or tar2sqfs from
+# squashfs-tools-ng); the raw .img assembly tools (sfdisk, mkfs.vfat, mtools)
+# were hard-checked at the top. xorriso is only needed for the --medium-iso twin.
+# NATIVE HOST-TOOL PREFLIGHT: on a real host, warning up front and then silently
+# skipping a requested image hours later is dishonest — fail fast with the exact
+# emerge (both build_live_medium and build_installer_medium hard-error without it).
+if ${MEDIUM_ISO}; then
+    hostguard_require_host_tools "the --medium-iso ISO9660 twin" "dev-libs/libisoburn" \
             -- xorriso \
-        || warn "missing xorriso — the installer image step will warn + skip"
-elif ${BUILD_LIVE}; then
-    hostguard_require_host_tools "the LIVE ISO" "dev-libs/libisoburn" --soft \
-            --hint "Without it the LIVE medium is left as an unwrapped tree." \
-            -- xorriso \
-        || warn "missing xorriso — the LIVE image will be left as a tree"
+        || { err "--medium-iso needs xorriso"; exit 1; }
 fi
 # The squasher is NOT soft: without it the live rootfs cannot be built at all
 # (installer hard-errors; LIVE dies mid-squash), so the artifact is genuinely lost.
@@ -1842,6 +1864,9 @@ if [ "${DESKTOP}" = "light" ]; then
 [LightDM]
 [Seat:*]
 greeter-session=lightdm-gtk-greeter
+# lightdm falls back to a compiled-in "lightdm-session" wrapper that Gentoo does not ship;
+# without this line every login authenticates and then the session exits (rc 1) back to the greeter.
+session-wrapper=/etc/lightdm/Xsession
 user-session=LXDE
 LIGHTDM
     # Greeter SSO login path (scripts/_desktop-sso-lib.sh): /etc/pam.d/lightdm with
@@ -2289,7 +2314,7 @@ fi
 # initramfs here (dmsquash-live module) and stage it next to the kernel; the
 # extlinux render then emits the matching `INITRD /initrd.img` line. The INSTALLER
 # flavor boots a real partitioned root (root=LABEL=FRITE_ROOT) and gets NO live
-# initramfs — see build_installer_iso (it leaves FRITE_INITRD a comment).
+# initramfs — see build_installer_medium (it leaves FRITE_INITRD a comment).
 #
 # Cross-build note (NEEDS-HARDWARE to fully confirm): dracut is a POSIX-sh/python
 # generator, so we run it as a HOST tool pointed at the aarch64 SYSROOT's module
@@ -2397,7 +2422,7 @@ build_live_initramfs() {
     return 1
 }
 # Both bootable flavors need the dmsquash-live initramfs (the INSTALLER medium is
-# itself a live boot — see build_installer_iso).
+# itself a live boot — see build_installer_medium).
 if { ${BUILD_LIVE} || ${BUILD_INSTALLER}; } && { ! ${SKIP_KERNEL} || ${IMAGE_ONLY}; }; then
     build_live_initramfs || warn "Live initramfs not built — see warnings above."
 fi
@@ -2523,20 +2548,184 @@ slx_stage_node_policy "${SYSROOT}" "${SHARED_SPECS}" \
     || { err "SELinux node-policy staging failed (see above) — refusing to ship an image whose policy modules did not build."; exit 1; }
 # ── END shared block: SELinux node-policy modules ─────────────────────────────
 
+# ── BUILD-TIME SELINUX LABELS (the x86 builder's #503 block, cross-built) ────
+# Labels and the hugmesh modules are BUILD ARTIFACTS: the stage4, the live
+# squashfs and the eMMC root install-frite.sh extracts all inherit them, and each
+# hop has a fail-closed gate. Before this block the Frite sysroot was NEVER
+# labelled, so there was nothing for the installer's --xattrs to preserve, and a
+# keyless or --standalone install never relabels either (keys-provision returns
+# "No KEYS media" before provision_selinux): every process on an installed Frite
+# ran kernel_t forever.
+# The lib's store/setfiles/matchpathcon steps chroot INTO the sysroot. On this
+# aarch64 tree that is qemu-aarch64 user emulation (the kernel resolves the
+# binfmt interpreter path inside the chroot, so the host's static qemu is staged
+# at the same path in the sysroot for the duration and removed again — the dracut
+# strategy above does the same). The lib's `host` semodule runner is NOT used:
+# it passes the module paths as /usr/share/selinux/<type>/<m>.pp, which semodule
+# opens on the HOST, where they do not exist. NO bind mounts here: slx_label_tree
+# refuses a root with anything mounted under it (a bound /dev would have the
+# HOST's /dev relabelled), and neither qemu-user nor setfiles/semodule needs
+# procfs (the lib's Step 0 measured both with an empty /dev).
+# HERE, not earlier: after slx_stage_node_policy staged the .pp (the order
+# store -> config -> setfiles -> gate is mandatory: file_contexts only gains the
+# hugmesh .fc rules once the .pp are in the store) and before ANY packing.
+FRITE_QEMU_STAGED=""
+frite_qemu_stage() {
+    local interp
+    interp="$(dracut_cross_qemu_interp)"
+    [ -n "${interp}" ] && [ -x "${interp}" ] || { err "qemu-aarch64 interpreter is unusable (${interp:-none}) — cannot chroot into the sysroot"; return 1; }
+    [ ! -e "${SYSROOT}${interp}" ] || { err "${SYSROOT}${interp} already exists — refusing to overwrite a file of the target with the host's qemu"; return 1; }
+    mkdir -p "${SYSROOT}$(dirname "${interp}")" || return 1
+    cp "${interp}" "${SYSROOT}${interp}" || { err "could not stage ${interp} into the sysroot"; return 1; }
+    FRITE_QEMU_STAGED="${SYSROOT}${interp}"
+}
+frite_qemu_unstage() {
+    [ -z "${FRITE_QEMU_STAGED}" ] || rm -f "${FRITE_QEMU_STAGED}"
+    FRITE_QEMU_STAGED=""
+}
+SLX_PROBE_TABLE="${BUILD_ROOT}/selinux-label-probes.tsv"
+SLX_TYPE="$(slx_policy_type "${SYSROOT}")"
+info "Labelling the sysroot (SELinux ${SLX_TYPE}: store install -> config -> setfiles -> gate, in a qemu-aarch64 chroot)"
+frite_qemu_stage || { err "SELinux build-time labelling needs the qemu-aarch64 chroot (see the preflight) — refusing to pack an unlabelled image."; exit 1; }
+slx_store_install_modules "${SYSROOT}" "${SLX_TYPE}" chroot \
+    && slx_write_selinux_config "${SYSROOT}" "${SLX_TYPE}" \
+    && slx_label_tree "${SYSROOT}" "${SLX_TYPE}" \
+    && slx_write_probe_table "${SYSROOT}" "${SLX_TYPE}" "${SLX_PROBE_TABLE}" \
+    && slx_label_gate "${SYSROOT}" sysroot "${SLX_PROBE_TABLE}" --census \
+    || { frite_qemu_unstage; err "SELinux build-time labelling failed (see above) — refusing to pack an unlabelled image (every process would run kernel_t)."; exit 1; }
+frite_qemu_unstage
+
 banner "Packaging stage4 tarball"
 STAGE4_TARBALL="${WORK_DIR}/${ART_PREFIX}.stage4.tar.xz"
-tar -C "${SYSROOT}" --xattrs-include='*.*' --numeric-owner --owner=0 --group=0 \
+# The host's x86 qemu interpreter staged for the chroot steps must never ship in
+# an aarch64 image: refuse to pack while it is still there.
+if [ -e "${SYSROOT}$(dracut_cross_qemu_interp)" ]; then
+    err "${SYSROOT}$(dracut_cross_qemu_interp) is still present (a staged host qemu interpreter) — refusing to pack a host binary into the image."; exit 1
+fi
+# Target accounts keep their owners; ids the target does not define map to root
+# (see hmr_pack_owner_args in scripts/_builder-resume-lib.sh).
+hmr_pack_owner_args "${SYSROOT}"
+# ONE tar, xattrs ON, failure FATAL. The old `2>/dev/null || tar ...` fallback re-ran
+# the pack WITHOUT xattrs on any error and said nothing: the stage4 (and every
+# medium built from it) then shipped with every security.selinux label stripped.
+# -I 'xz -T0': multi-threaded xz over the stream (-cJf is single-threaded).
+tar -C "${SYSROOT}" --xattrs --xattrs-include='*.*' "${HMR_PACK_OWNER_ARGS[@]}" \
+    --exclude='./proc/*' --exclude='./sys/*' --exclude='./dev/*' --exclude='./run/*' \
     --exclude='./usr/src' --exclude='./var/cache' --exclude='./tmp/*' \
-    -cJf "${STAGE4_TARBALL}" . 2>/dev/null || \
-tar -C "${SYSROOT}" --numeric-owner --owner=0 --group=0 \
-    --exclude='./usr/src' --exclude='./var/cache' --exclude='./tmp/*' \
-    -cJf "${STAGE4_TARBALL}" .
+    -I 'xz -T0 -6' -cpf "${STAGE4_TARBALL}" . \
+    || { err "stage4 tar (with xattrs) failed — not falling back to an unlabelled tarball"; exit 1; }
 info "Stage4 tarball: ${STAGE4_TARBALL} ($(du -sh "${STAGE4_TARBALL}" | cut -f1))"
+slx_tar_label_gate "${STAGE4_TARBALL}" stage4 "${SLX_PROBE_TABLE}" \
+    || { err "stage4 label gate failed — ${STAGE4_TARBALL} lost its SELinux labels"; exit 1; }
 
 LIVE_PATH="(not built)"
 INSTALLER_PATH="(not built)"
+LIVE_ISO_PATH="(not built)"
+INSTALLER_ISO_PATH="(not built)"
 
-build_live_iso() {
+# ── build_frite_medium <tree> <FAT-label> <out.img> [u-boot.bin] ─────────────
+# A raw, u-boot-bootable medium from a staged tree, assembled ROOTLESS from
+# regular files: an MBR (sfdisk on the image file) + ONE FAT32 partition
+# (mkfs.vfat -C on a regular file, filled with mtools, concatenated at the
+# partition offset). No loop device, no mount, no root — so the SAME function is
+# executed by tests/scripts/test-frite-install-layout.sh on a fixture tree.
+#
+# WHY NOT ISO9660 (what this replaced): u-boot's distro-boot scans every
+# partition of a block device for /extlinux/extlinux.conf through its
+# filesystem drivers (fs/ in the u-boot tree: fat, ext4, btrfs, squashfs, erofs,
+# ubifs — there is no ISO9660 driver; CONFIG_ISO_PARTITION only exposes El
+# Torito entries as pseudo-partitions for x86 CD boot). A plain `xorriso -as
+# mkisofs` image has no partition table either, so the board's u-boot never saw
+# the live kernel: the LIVE and INSTALLER media could not boot on the board.
+#
+# Layout: p1 = FAT32 (type 0x0c, LBA; bootable flag set — distro-boot does not
+# need it, some vendor u-boots do) starting at FRITE_MEDIUM_P1_MIB (4 MiB). The
+# Amlogic boot ROM loads the signed u-boot from SECTOR 1 of an SD card / eMMC and
+# the GXL FIP images are ~1 MiB, so the first 4 MiB are reserved for it on the
+# SD-slot boards (Le Potato / Sweet Potato: the blob, when staged from
+# --uboot-url, is written there exactly as u-boot's doc/board/amlogic/*.rst
+# says — the sectors from 1, then the first 444 bytes). La Frite boots u-boot
+# from SPI NOR and its medium is a USB stick: nothing is written there.
+# FAT32 cannot hold a file of 4 GiB or more: refused up front, never truncated.
+FRITE_MEDIUM_P1_MIB=4
+build_frite_medium() {
+    local tree="${1:?build_frite_medium: tree required}" label="${2:?FAT label required}" out="${3:?out img required}" uboot="${4:-}"
+    local fat="${out}.fat.tmp" bytes fat_kib p1_off big conf rel kind path got
+    [ -d "${tree}" ] || { err "medium: ${tree} is not a directory"; return 1; }
+    case "${label}" in ''|*[!A-Z0-9_]*) err "medium: FAT label '${label}' must be A-Z, 0-9 or _"; return 1 ;; esac
+    [ "${#label}" -le 11 ] || { err "medium: FAT label '${label}' is longer than 11 characters — mkfs.vfat refuses it, and dracut's root=live:LABEL= would never match"; return 1; }
+    conf="${tree}/extlinux/extlinux.conf"
+    [ -f "${conf}" ] || { err "medium: ${conf} missing — u-boot distro-boot would find nothing to boot"; return 1; }
+    # The medium's own boot config must point dracut at THIS medium's label.
+    grep -E -q -- "root=live:LABEL=${label}( |\$)" "${conf}" \
+        || { err "medium: ${conf} does not carry root=live:LABEL=${label} — the live initramfs would never find its squashfs (got: $(grep -o 'root=[^ ]*' "${conf}" | head -n 1))"; return 1; }
+    big="$(find "${tree}" -type f -size +4194303k -print 2>/dev/null | head -n 1)"
+    [ -z "${big}" ] || { err "medium: ${big} is 4 GiB or larger — FAT32 cannot hold it (trim the payload: --packages-drop / --desktop none)"; return 1; }
+    bytes="$(du -sb "${tree}" | cut -f1)"
+    [ -n "${bytes}" ] && [ "${bytes}" -gt 0 ] 2>/dev/null || { err "medium: could not size ${tree}"; return 1; }
+    # +10% FAT/directory overhead +64 MiB slack; mkfs.vfat -C takes KiB.
+    fat_kib=$(( bytes / 1024 * 11 / 10 + 65536 ))
+    p1_off=$(( FRITE_MEDIUM_P1_MIB * 1024 * 1024 ))
+    if [ -n "${uboot}" ]; then
+        [ -s "${uboot}" ] || { err "medium: u-boot blob ${uboot} missing or empty"; return 1; }
+        [ "$(stat -c %s "${uboot}")" -lt "$(( p1_off - 512 ))" ] \
+            || { err "medium: u-boot blob ${uboot} ($(stat -c %s "${uboot}") bytes) does not fit below the first partition at ${FRITE_MEDIUM_P1_MIB} MiB"; return 1; }
+    fi
+    rm -f "${fat}" "${out}"
+    mkfs.vfat -C -F 32 -n "${label}" "${fat}" "${fat_kib}" >/dev/null \
+        || { err "medium: mkfs.vfat -C ${fat} ${fat_kib} KiB failed"; rm -f "${fat}"; return 1; }
+    # mcopy -s recursive, -m keep mtimes, -Q stop at the first error (never a
+    # half-copied tree reported as success). MTOOLS_SKIP_CHECK: an image file has
+    # no geometry to sanity-check.
+    MTOOLS_SKIP_CHECK=1 mcopy -i "${fat}" -s -m -Q "${tree}"/* ::/ \
+        || { err "medium: mcopy into ${fat} failed (tree ${tree})"; rm -f "${fat}"; return 1; }
+    # Postconditions read back FROM THE FAT, not from mcopy's exit status: the boot
+    # config and every file it names (kernel, FDT, initrd) must be on the medium.
+    for kind in LINUX FDT INITRD; do
+        path="$(awk -v k="${kind}" '$1 == k {print $2; exit}' "${conf}")"
+        [ -n "${path}" ] || { [ "${kind}" = INITRD ] && continue; err "medium: ${conf} has no ${kind} line"; rm -f "${fat}"; return 1; }
+        MTOOLS_SKIP_CHECK=1 mdir -i "${fat}" "::${path}" >/dev/null 2>&1 \
+            || { err "medium: ${conf} names ${kind} ${path} but it is not on the FAT — the board would not boot"; rm -f "${fat}"; return 1; }
+    done
+    MTOOLS_SKIP_CHECK=1 mdir -i "${fat}" ::/extlinux/extlinux.conf >/dev/null 2>&1 \
+        || { err "medium: /extlinux/extlinux.conf did not land on the FAT"; rm -f "${fat}"; return 1; }
+    truncate -s "$(( p1_off + fat_kib * 1024 ))" "${out}" || { rm -f "${fat}"; return 1; }
+    printf 'label: dos\nunit: sectors\nsector-size: 512\n\nstart=%d, size=%d, type=c, bootable\n' \
+        "$(( p1_off / 512 ))" "$(( fat_kib * 2 ))" | sfdisk -q "${out}" \
+        || { err "medium: sfdisk could not write the MBR of ${out}"; rm -f "${fat}" "${out}"; return 1; }
+    dd if="${fat}" of="${out}" bs=1M seek="${FRITE_MEDIUM_P1_MIB}" conv=notrunc status=none \
+        || { err "medium: could not place the FAT at ${FRITE_MEDIUM_P1_MIB} MiB in ${out}"; rm -f "${fat}" "${out}"; return 1; }
+    rm -f "${fat}"
+    if [ -n "${uboot}" ]; then
+        # u-boot doc/board/amlogic/libretech-cc.rst, verbatim order: the image from
+        # sector 1, then its first 444 bytes (the MBR's partition table at 446 and
+        # the 0x55AA signature are left alone; the disk id at 440 is overwritten —
+        # the medium is found by LABEL, never by PARTUUID).
+        dd if="${uboot}" of="${out}" conv=notrunc bs=512 skip=1 seek=1 status=none \
+            && dd if="${uboot}" of="${out}" conv=notrunc bs=1 count=444 status=none \
+            || { err "medium: could not write u-boot ${uboot} into ${out}"; rm -f "${out}"; return 1; }
+    fi
+    # Final read-back: the partition table survived the u-boot write and the FAT
+    # at p1 carries the label the boot config names.
+    got="$(sfdisk -d "${out}" 2>/dev/null | awk -F'[ ,=]+' '/^[^ ]+1 :/ {for (i=1;i<=NF;i++) if ($i=="start") print $(i+1); exit}')"
+    [ "${got}" = "$(( p1_off / 512 ))" ] \
+        || { err "medium: partition 1 of ${out} starts at sector '${got:-none}', expected $(( p1_off / 512 )) — the MBR is not what was written"; rm -f "${out}"; return 1; }
+    got="$(MTOOLS_SKIP_CHECK=1 mlabel -i "${out}@@${p1_off}" -s :: 2>/dev/null | sed -n 's/^ *Volume label is *\([^ ]*\).*/\1/p')"
+    [ "${got}" = "${label}" ] \
+        || { err "medium: FAT label at p1 of ${out} reads '${got:-none}', expected ${label}"; rm -f "${out}"; return 1; }
+    info "medium: ${out} — MBR, p1 FAT32 '${label}' at ${FRITE_MEDIUM_P1_MIB} MiB, $(( fat_kib / 1024 )) MiB$([ -n "${uboot}" ] && echo ", u-boot in the user area (sector 1)")"
+    return 0
+}
+
+# ── wrap_frite_iso <tree> <volid> <out.iso> — the --medium-iso twin ──────────
+wrap_frite_iso() {
+    local tree="${1:?}" volid="${2:?}" out="${3:?}"
+    xorriso -as mkisofs -o "${out}" -volid "${volid}" -joliet -rock "${tree}" >/dev/null 2>&1 \
+        || { err "xorriso failed to wrap ${tree} into ${out}"; return 1; }
+    info "ISO twin (--medium-iso): ${out} ($(du -sh "${out}" | cut -f1))"
+}
+
+build_live_medium() {
     # The LIVE flavor: a bootable medium (USB on La Frite, SD on Le Potato) that
     # runs the rootfs ephemerally from a squashfs in RAM. We stage:
     #   /  Image, /dtb/..., /extlinux/extlinux.conf  (boot tree)
@@ -2551,7 +2740,7 @@ build_live_iso() {
         # Skipping it with exit 0 is exactly the silent-degradation class this
         # file keeps re-shipping: the run ends "complete" with LIVE "(not
         # built)". Only --skip-kernel makes that a deliberate operator choice —
-        # the INSTALLER twin of this check (build_installer_iso) already errs.
+        # the INSTALLER twin of this check (build_installer_medium) already errs.
         ${SKIP_KERNEL} || { err "no kernel in boot stage — the requested LIVE image cannot boot. The kernel phase was enabled; review it above."; exit 1; }
         warn "no kernel in boot stage (--skip-kernel) — skipping LIVE image."; return 0
     fi
@@ -2607,25 +2796,37 @@ build_live_iso() {
     FRITE_APPEND="${APPEND_BASE} root=live:LABEL=FRITE_LIVE rd.live.dir=/LiveOS rd.live.squashimg=squashfs.img rd.live.overlay.overlayfs=1"
     render_template "${SPECS_DIR}/boot/extlinux.conf.tmpl" "${live_root}/extlinux/extlinux.conf"
 
-    if command -v xorriso >/dev/null; then
-        LIVE_PATH="${WORK_DIR}/${ART_PREFIX}.live.iso"
-        xorriso -as mkisofs -o "${LIVE_PATH}" -volid FRITE_LIVE -joliet -rock "${live_root}" \
-            && info "LIVE image: ${LIVE_PATH} ($(du -sh "${LIVE_PATH}" | cut -f1))" \
-            || { warn "xorriso failed; leaving the LIVE tree at ${live_root}"; LIVE_PATH="${live_root} (tree)"; }
-    else
-        LIVE_PATH="${live_root} (tree; no xorriso to wrap an ISO)"
-        warn "no xorriso — LIVE tree left at ${live_root}"
+    # The raw medium (MBR + FAT32 'FRITE_LIVE') — what u-boot distro-boot reads.
+    # A failed assembly is FATAL: the old xorriso path left "the tree" behind with a
+    # warning and the run ended "complete".
+    LIVE_PATH="${WORK_DIR}/${ART_PREFIX}.live.img"
+    build_frite_medium "${live_root}" FRITE_LIVE "${LIVE_PATH}" "$(frite_medium_uboot_blob)" \
+        || { err "LIVE medium assembly failed (see above) — refusing to end with no bootable LIVE image."; exit 1; }
+    info "LIVE image: ${LIVE_PATH} ($(du -sh "${LIVE_PATH}" | cut -f1))"
+    if ${MEDIUM_ISO}; then
+        LIVE_ISO_PATH="${WORK_DIR}/${ART_PREFIX}.live.iso"
+        wrap_frite_iso "${live_root}" FRITE_LIVE "${LIVE_ISO_PATH}" || exit 1
     fi
     # if-form (NOT a trailing &&-chain): the &&-chain returns 1 when COMPRESS_IMG is
     # false (the default), which under `set -e` would abort the script right here —
     # killing the INSTALLER phase and the summary. Return 0 explicitly on success.
-    if ${COMPRESS_IMG} && [ -f "${LIVE_PATH}" ]; then
+    if ${COMPRESS_IMG}; then
         xz -T0 "-${COMPRESS_LEVEL}" -f "${LIVE_PATH}"; LIVE_PATH="${LIVE_PATH}.xz"
+        if ${MEDIUM_ISO}; then xz -T0 "-${COMPRESS_LEVEL}" -f "${LIVE_ISO_PATH}"; LIVE_ISO_PATH="${LIVE_ISO_PATH}.xz"; fi
     fi
     return 0
 }
 
-build_installer_iso() {
+# The signed u-boot blob written into a medium's user area: only on the SD-slot
+# boards (the boot ROM reads it from the card at sector 1) and only when one was
+# staged from --uboot-url. La Frite boots from SPI NOR, its medium is USB: none.
+frite_medium_uboot_blob() {
+    if [ "${FRITE_HAS_SD}" = true ] && [ -s "${STAGE_DIR}/uboot/u-boot.bin" ]; then
+        printf '%s' "${STAGE_DIR}/uboot/u-boot.bin"
+    fi
+}
+
+build_installer_medium() {
     # The INSTALLER flavor: a LIVE-booting medium (the operator boots it off USB,
     # gets a running system, then runs install-frite.sh to write the light desktop
     # to onboard eMMC/SD — see install-frite.sh's own header).
@@ -2638,7 +2839,6 @@ build_installer_iso() {
     # like the LIVE flavor) so the installer can actually run; the disk's
     # `root=LABEL=FRITE_ROOT` cmdline belongs on the PAYLOAD boot tree we stage for
     # install-frite.sh to copy onto the target, NOT on the medium itself.
-    command -v xorriso >/dev/null || { err "xorriso missing — cannot build the INSTALLER ISO. Install xorriso or drop --flavor installer."; exit 1; }
     [ -f "${BOOT_STAGE}/${FRITE_KERNEL_IMG}" ] || { err "no kernel in boot stage — the INSTALLER medium cannot boot. Build the kernel (drop --skip-kernel)."; exit 1; }
     if ! command -v mksquashfs >/dev/null && ! command -v tar2sqfs >/dev/null; then
         err "mksquashfs/tar2sqfs missing — cannot build the INSTALLER medium's live rootfs. Install squashfs-tools (or squashfs-tools-ng)."; exit 1
@@ -2674,9 +2874,11 @@ build_installer_iso() {
     fi
     [ -s "${inst_root}/LiveOS/squashfs.img" ] || { err "INSTALLER medium: squashfs.img was not produced — aborting."; exit 1; }
 
-    # The medium's extlinux boots the squashfs ephemerally (FRITE_INSTALL volid).
+    # The medium's extlinux boots the squashfs ephemerally. FRITE_INST, not
+    # FRITE_INSTALL: a FAT label is at most 11 characters (mkfs.vfat refuses more),
+    # and dracut's root=live:LABEL= must match the label the medium really carries.
     FRITE_INITRD_LINE="    INITRD /initrd.img"
-    FRITE_APPEND="${APPEND_BASE} root=live:LABEL=FRITE_INSTALL rd.live.dir=/LiveOS rd.live.squashimg=squashfs.img rd.live.overlay.overlayfs=1"
+    FRITE_APPEND="${APPEND_BASE} root=live:LABEL=FRITE_INST rd.live.dir=/LiveOS rd.live.squashimg=squashfs.img rd.live.overlay.overlayfs=1"
     render_template "${SPECS_DIR}/boot/extlinux.conf.tmpl" "${inst_root}/extlinux/extlinux.conf"
 
     # ── The INSTALL PAYLOAD that install-frite.sh consumes from its own dir ──
@@ -2718,29 +2920,35 @@ build_installer_iso() {
         info "INSTALLER image: encrypt-root marker set (install-frite.sh prompts for the root-unlock passphrase)."
         if [ -n "${LUKS_PASS}" ]; then
             printf '%s' "${LUKS_PASS}" > "${inst_root}/luks-passphrase"; chmod 600 "${inst_root}/luks-passphrase"
-            warn "INSTALLER image carries an unattended LUKS passphrase (luks-passphrase, 0600) — anyone with the ISO can read it. Prefer the interactive install-time prompt."
+            warn "INSTALLER image carries an unattended LUKS passphrase (luks-passphrase) — anyone with the image can read it, and the medium is FAT32 (no permission bits), so the live session's unprivileged user can too. Prefer the interactive install-time prompt."
         fi
     fi
 
-    INSTALLER_PATH="${WORK_DIR}/${ART_PREFIX}.installer.iso"
-    xorriso -as mkisofs -o "${INSTALLER_PATH}" -volid FRITE_INSTALL -joliet -rock "${inst_root}" \
-        && info "INSTALLER image: ${INSTALLER_PATH} ($(du -sh "${INSTALLER_PATH}" | cut -f1))" \
-        || { warn "xorriso failed; leaving the installer tree at ${inst_root}"; INSTALLER_PATH="${inst_root} (tree)"; }
-    # if-form (NOT a trailing &&-chain): see build_live_iso — the &&-chain returns 1
-    # under the default COMPRESS_IMG=false and would abort the caller under set -e.
-    if ${COMPRESS_IMG} && [ -f "${INSTALLER_PATH}" ]; then
+    # The raw medium (MBR + FAT32 'FRITE_INST'). Fatal on failure, like LIVE.
+    INSTALLER_PATH="${WORK_DIR}/${ART_PREFIX}.installer.img"
+    build_frite_medium "${inst_root}" FRITE_INST "${INSTALLER_PATH}" "$(frite_medium_uboot_blob)" \
+        || { err "INSTALLER medium assembly failed (see above) — refusing to end with no bootable INSTALLER image."; exit 1; }
+    info "INSTALLER image: ${INSTALLER_PATH} ($(du -sh "${INSTALLER_PATH}" | cut -f1))"
+    if ${MEDIUM_ISO}; then
+        INSTALLER_ISO_PATH="${WORK_DIR}/${ART_PREFIX}.installer.iso"
+        wrap_frite_iso "${inst_root}" FRITE_INST "${INSTALLER_ISO_PATH}" || exit 1
+    fi
+    # if-form (NOT a trailing &&-chain): see build_live_medium — the &&-chain returns
+    # 1 under the default COMPRESS_IMG=false and would abort the caller under set -e.
+    if ${COMPRESS_IMG}; then
         xz -T0 "-${COMPRESS_LEVEL}" -f "${INSTALLER_PATH}"; INSTALLER_PATH="${INSTALLER_PATH}.xz"
+        if ${MEDIUM_ISO}; then xz -T0 "-${COMPRESS_LEVEL}" -f "${INSTALLER_ISO_PATH}"; INSTALLER_ISO_PATH="${INSTALLER_ISO_PATH}.xz"; fi
     fi
     return 0
 }
 
 if ${BUILD_LIVE}; then
     banner "Building LIVE image (boots-and-runs ephemerally off USB/SD)"
-    build_live_iso
+    build_live_medium
 fi
 if ${BUILD_INSTALLER}; then
     banner "Building INSTALLER image (writes the light desktop to eMMC/SD)"
-    build_installer_iso
+    build_installer_medium
 fi
 
 echo ""
@@ -2769,16 +2977,30 @@ echo "    Work directory:   ${WORK_DIR}"
 echo "    Stage4 tarball:   ${STAGE4_TARBALL}"
 echo "    LIVE image:       ${LIVE_PATH}"
 echo "    INSTALLER image:  ${INSTALLER_PATH}"
+if ${MEDIUM_ISO}; then
+echo "    LIVE ISO twin:    ${LIVE_ISO_PATH}"
+echo "    INSTALLER ISO twin: ${INSTALLER_ISO_PATH}"
+fi
 echo ""
 echo "  RAM SKU note: La Frite 512MB and 1GB are the SAME image (RAM auto-detected);"
 echo "  the 512MB SKU leans on the zram swap configured at first boot."
 echo ""
 echo "  === Post-build ==="
-echo "  LIVE:      write ${LIVE_PATH##*/} to a USB stick (La Frite has no SD) and boot."
-echo "  INSTALLER: write ${INSTALLER_PATH##*/} to USB and boot it (it boots LIVE off the"
-echo "             squashfs); the medium auto-mounts at /run/initramfs/live, then run"
-echo "               sudo /run/initramfs/live/install-frite.sh /dev/mmcblk0"
-echo "             to write the light desktop to onboard eMMC (or SD on Le Potato)."
+echo "  Both media are raw images (MBR + one FAT32 partition at ${FRITE_MEDIUM_P1_MIB} MiB holding"
+echo "  /extlinux/extlinux.conf, the kernel, the FDT and the live squashfs): dd them whole,"
+echo "  e.g.  dd if=<image> of=/dev/sdX bs=4M conv=fsync   (never into a partition)."
+echo "  LIVE:      write ${LIVE_PATH##*/} to a USB stick (La Frite has no SD slot) or an"
+echo "             SD card (Le/Sweet Potato) and boot."
+echo "  INSTALLER: write ${INSTALLER_PATH##*/} the same way and boot it (it boots LIVE off"
+echo "             the squashfs); the medium auto-mounts at /run/initramfs/live."
+echo "             Find the eMMC first: it is the mmcblkN whose /sys/block/mmcblkN/device/type"
+echo "             reads MMC (La Frite: only the eMMC is on an mmc bus, so mmcblk0; Le/Sweet"
+echo "             Potato: SD and eMMC share the mmcblk namespace in probe order, so look):"
+echo '               for d in /sys/block/mmcblk*; do [ "$(cat "$d/device/type")" = MMC ] && echo "/dev/${d##*/}"; done'
+echo "             then  sudo bash /run/initramfs/live/install-frite.sh /dev/mmcblkN"
+echo "             (bash: FAT keeps no exec bit) to write the light desktop to that eMMC."
 echo "  u-boot:    on Amlogic GXL u-boot needs proprietary FIP/BL31 blobs — provide a"
-echo "             prebuilt signed image via --uboot-url (e.g. Tow-Boot) if not already flashed."
+echo "             prebuilt signed image via --uboot-url (e.g. Tow-Boot). SD-slot boards:"
+echo "             that blob is written into each medium's reserved first ${FRITE_MEDIUM_P1_MIB} MiB"
+echo "             (sector 1) so the card boots by itself; La Frite boots it from SPI NOR."
 echo ""

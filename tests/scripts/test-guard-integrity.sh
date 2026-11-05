@@ -929,6 +929,22 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # that tree: '207 of 248 suites are named by a pull_request-triggered workflow', ungated SET 41;
 # and with the suite on disk but its shell-suites.yml line absent: '206 of 248' + check 3 and
 # check 7 red naming it -- so the +1/+1 is this suite and nothing else.
+# 207 -> 208 (denominator 248 -> 249) on 2026-11-04 for fix/emulated-mesh-tailscale-tor-20261104,
+# which adds ONE gated suite: tests/scripts/test-stage4-pack-ownership.sh (the ARM stage4
+# tarball's owners, executed per builder; wired in shell-suites.yml's alpine job AND
+# .gitlab-ci.yml orphan-guards-verify). MEASURED by RUNNING this file on that branch (base
+# origin/main 8ed37a3c): '208 of 249 suites are named by a pull_request-triggered workflow'.
+# A branch that also raises this from 207 conflicts here by construction; whichever lands
+# second re-measures (expected 209) per the doctrine above.
+# 208 -> 209 (denominator 249 -> 250) on the same branch: tests/qemu/mesh_client_test.sh (the
+# emulated mesh client's KEYS payload, its manifest-following grade and the fleet's
+# control-first boot order; wired in shell-suites.yml's alpine job beside
+# mesh-cluster_test.sh). MEASURED by RUNNING this file on that branch:
+# '209 of 250 suites are named by a pull_request-triggered workflow'.
+# 209 -> 210 (denominator 250 -> 251) on fix/desktop-c-frite-builder-medium-format--20261104:
+# tests/scripts/test-frite-install-layout.sh (the Frite raw media + the eMMC install
+# layout, assembled as files; wired in shell-suites.yml's alpine job). MEASURED by RUNNING
+# this file on that branch: '210 of 251 suites are named by a pull_request-triggered workflow'.
 # 207 -> 208 (denominator 248 -> 249) on 2026-11-04 for fix/seed-lockout-473-20261104
 # (#473, seed side), which adds ONE gated suite: tests/stack/test-seed-e2e-lockout.sh (wired
 # in shell-suites.yml's alpine job AND .gitlab-ci.yml lint:seed-password-reconcile). MEASURED
@@ -971,6 +987,7 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # SET 41; and with the suite on disk but its CI lines absent: '211 of
 # 253' + check 3 and check 7 red naming it -- so the +1/+1 is this suite and nothing else.
 # MERGED (origin/main 3396828f into ci/qemu-bdd-spike-20261104): 212 of 253, MEASURED by running this file on the merged tree.
+# MERGED (origin/main 3f3ed7bb into fix/emulated-mesh-tailscale-tor-20261104): 214 of 255, MEASURED by running this file on the merged tree.
 # 208 -> 210 (denominator 249 -> 251) on 2026-11-04 for fix/headscale-security-tag-owners-20261104,
 # which adds TWO gated suites: tests/device-registry/test-headscale-security-tag-owners.sh
 # (shell-suites.yml debian leg 1) and tests/device-registry/test-headscale-security-tag-live.sh
@@ -979,9 +996,8 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # pull_request-triggered workflow', ungated SET stays 41.
 # MERGED (origin/main fbe7f940 at 211 of 252 + this branch's 2) = 213 of 254, MEASURED by
 # running this file with GUARD_PREMERGE=0 on the merged tree; ungated SET stays 41.
-# MERGED (origin/main 3f3ed7bb into fix/frite-img-media-consumers-20261105): 214 of 255, MEASURED by running this file on the merged tree.
-# MERGED (origin/main 3f3ed7bb into ci/qemu-bdd-spike-20261104): 214 of 255, MEASURED by running this file on the merged tree.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-214}"
+# MERGED (origin/main 3f3ed7bb into fix/emulated-mesh-tailscale-tor-20261104): 216 of 257, MEASURED by running this file on the merged tree.
+PREMERGE_BASELINE="${GUARD_PREMERGE:-216}"
 
 # 182 -> 192 (denominator 205 -> 215) on 2026-09-30 for #385: the census gained a
 # THIRD spelling, bare `tests/*.sh` at depth 1, and the ten suites it exposed were

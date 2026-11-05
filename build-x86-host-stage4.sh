@@ -5029,6 +5029,9 @@ if ${ROLE_CLIENT}; then
 [LightDM]
 [Seat:*]
 greeter-session=lightdm-gtk-greeter
+# lightdm falls back to a compiled-in "lightdm-session" wrapper that Gentoo does not ship;
+# without this line every login authenticates and then the session exits (rc 1) back to the greeter.
+session-wrapper=/etc/lightdm/Xsession
 user-session=${_user_session}
 LIGHTDM
     # Greeter SSO login path (scripts/_desktop-sso-lib.sh): /etc/pam.d/lightdm with
@@ -7349,6 +7352,26 @@ slx_store_install_modules "${SYSROOT}" "${SLX_TYPE}" chroot \
     && slx_write_probe_table "${SYSROOT}" "${SLX_TYPE}" "${SLX_PROBE_TABLE}" \
     && slx_label_gate "${SYSROOT}" sysroot "${SLX_PROBE_TABLE}" --census \
     || { err "SELinux build-time labelling failed (see above) — refusing to pack an unlabelled image (every process would run kernel_t)."; exit 1; }
+
+# ── NetworkManager: wait for the link before handing over `net` (cluster nodes) ──
+# Written HERE, after every emerge, so net-misc/networkmanager's own conf.d (which
+# ships INACTIVE_TIMEOUT=1) cannot overwrite it. With a 1s `nm-online` window a slow
+# boot (an emulated TCG node; a loaded or cold board) marks NetworkManager INACTIVE,
+# and the dispatcher hook that should flip it to started later did not (observed on
+# the 2026-11-04 QEMU rpi5 runs: nmcli `connected/full`, OpenRC still `inactive`
+# minutes later). Every `need net` service — containerd, kubelet, the host-firewall
+# reconcile, hugmesh-tor-reconcile — then silently never starts that boot. A cluster
+# node is useless without its network, so it waits for it; a client desktop keeps
+# the stock 1s (an offline laptop must not stall its boot).
+if ! ${ROLE_CLIENT}; then
+    mkdir -p "${SYSROOT}/etc/conf.d"
+    printf '%s\n' \
+        '# Written by the HugMesh builder (cluster-node roles): wait up to 60s for a' \
+        '# connection before marking NetworkManager started, so every `need net` service' \
+        '# (containerd, kubelet, the host firewall, tor) starts on a slow boot too.' \
+        'INACTIVE_TIMEOUT=60' > "${SYSROOT}/etc/conf.d/NetworkManager"
+    info "NetworkManager: INACTIVE_TIMEOUT=60 (cluster node — need-net services wait for the link)"
+fi
 
 banner "Packaging stage4 tarball"
 # The role tag IS the role. It only ever translated because `be+gpu` carried a `+`

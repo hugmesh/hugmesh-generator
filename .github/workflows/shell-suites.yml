@@ -284,6 +284,7 @@ jobs:
       # runs scripts/verify-artifact-neutrality.sh, whose host preflight FAILs closed
       # without all three; the suite builds its frite FAT media with mtools (already here).
       - run: apk add --no-cache attr bash binutils coreutils curl e2fsprogs-extra file flock gawk git git-daemon helm jq make mtools nodejs openjdk17-jre-headless openjdk21-jre-headless openssh-keygen openssl py3-yaml python3 tar util-linux xorriso xz
+      - run: apk add --no-cache attr bash coreutils curl dosfstools e2fsprogs e2fsprogs-extra flock gawk git git-daemon helm jq make mtools nodejs openjdk17-jre-headless openjdk21-jre-headless openssh-keygen openssl parted py3-yaml python3 tar util-linux xz
       - uses: actions/checkout@v4
       - name: trust the workspace
         # Container jobs run as root against a checkout git considers foreign, so
@@ -401,6 +402,7 @@ jobs:
             tests/qemu/avc-workout_test.sh
             tests/qemu/devices_test.sh
             tests/qemu/mesh-cluster_test.sh
+            tests/qemu/mesh_client_test.sh
             tests/qemu/save_test.sh
             tests/qemu/verdict_test.sh
             tests/qemu/qemu-e2e-lane_test.sh
@@ -426,6 +428,7 @@ jobs:
             tests/scripts/test-edge-ai-ollama-pin.sh
             tests/scripts/test-fetch-retry-hardening.sh
             tests/scripts/test-frite-builder-input-validation.sh
+            tests/scripts/test-frite-install-layout.sh
             tests/scripts/test-github-auth-lib.sh
             tests/scripts/test-guard-integrity.sh
             tests/scripts/test-harbor-robots-ownership.sh
@@ -470,6 +473,7 @@ jobs:
             tests/scripts/test-stack-clone-credential.sh
             tests/scripts/test-stack-e2e-argv.sh
             tests/scripts/test-stack-fetch-repos.sh
+            tests/scripts/test-stage4-pack-ownership.sh
             tests/scripts/test-studio-launch.sh
             tests/scripts/test-sunshine-fence.sh
             tests/scripts/test-superadmin-bff-reachability.sh

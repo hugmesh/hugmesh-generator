@@ -27,24 +27,24 @@ Legend: ✅ first-class selection &nbsp; ⚠️ escape-hatch only (raw builder f
 
 | image id | mode | platform | role | builder role | board | flavor | desktop | artifacts | cli | make | menu | gui | job | worklist |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | :-: | :-: | :-: | :-: | :-: | :-: |
-| `cloud/frite/frite/la-frite/both/light` | cloud | frite | `frite` | `—` | la-frite | both | light | installer.iso, live.iso, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ❌ | ✅ |
-| `cloud/frite/frite/la-frite/both/none` | cloud | frite | `frite` | `—` | la-frite | both | none | installer.iso, live.iso, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ❌ | ✅ |
-| `cloud/frite/frite/la-frite/installer/light` | cloud | frite | `frite` | `—` | la-frite | installer | light | installer.iso, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| `cloud/frite/frite/la-frite/installer/none` | cloud | frite | `frite` | `—` | la-frite | installer | none | installer.iso, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| `cloud/frite/frite/la-frite/live/light` | cloud | frite | `frite` | `—` | la-frite | live | light | live.iso, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| `cloud/frite/frite/la-frite/live/none` | cloud | frite | `frite` | `—` | la-frite | live | none | live.iso, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| `cloud/frite/frite/le-potato/both/light` | cloud | frite | `frite` | `—` | le-potato | both | light | installer.iso, live.iso, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ❌ | ✅ |
-| `cloud/frite/frite/le-potato/both/none` | cloud | frite | `frite` | `—` | le-potato | both | none | installer.iso, live.iso, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ❌ | ✅ |
-| `cloud/frite/frite/le-potato/installer/light` | cloud | frite | `frite` | `—` | le-potato | installer | light | installer.iso, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| `cloud/frite/frite/le-potato/installer/none` | cloud | frite | `frite` | `—` | le-potato | installer | none | installer.iso, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| `cloud/frite/frite/le-potato/live/light` | cloud | frite | `frite` | `—` | le-potato | live | light | live.iso, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| `cloud/frite/frite/le-potato/live/none` | cloud | frite | `frite` | `—` | le-potato | live | none | live.iso, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| `cloud/frite/frite/sweet-potato/both/light` | cloud | frite | `frite` | `—` | sweet-potato | both | light | installer.iso, live.iso, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ❌ | ✅ |
-| `cloud/frite/frite/sweet-potato/both/none` | cloud | frite | `frite` | `—` | sweet-potato | both | none | installer.iso, live.iso, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ❌ | ✅ |
-| `cloud/frite/frite/sweet-potato/installer/light` | cloud | frite | `frite` | `—` | sweet-potato | installer | light | installer.iso, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| `cloud/frite/frite/sweet-potato/installer/none` | cloud | frite | `frite` | `—` | sweet-potato | installer | none | installer.iso, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| `cloud/frite/frite/sweet-potato/live/light` | cloud | frite | `frite` | `—` | sweet-potato | live | light | live.iso, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| `cloud/frite/frite/sweet-potato/live/none` | cloud | frite | `frite` | `—` | sweet-potato | live | none | live.iso, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| `cloud/frite/frite/la-frite/both/light` | cloud | frite | `frite` | `—` | la-frite | both | light | installer.img, live.img, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ❌ | ✅ |
+| `cloud/frite/frite/la-frite/both/none` | cloud | frite | `frite` | `—` | la-frite | both | none | installer.img, live.img, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ❌ | ✅ |
+| `cloud/frite/frite/la-frite/installer/light` | cloud | frite | `frite` | `—` | la-frite | installer | light | installer.img, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| `cloud/frite/frite/la-frite/installer/none` | cloud | frite | `frite` | `—` | la-frite | installer | none | installer.img, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| `cloud/frite/frite/la-frite/live/light` | cloud | frite | `frite` | `—` | la-frite | live | light | live.img, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| `cloud/frite/frite/la-frite/live/none` | cloud | frite | `frite` | `—` | la-frite | live | none | live.img, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| `cloud/frite/frite/le-potato/both/light` | cloud | frite | `frite` | `—` | le-potato | both | light | installer.img, live.img, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ❌ | ✅ |
+| `cloud/frite/frite/le-potato/both/none` | cloud | frite | `frite` | `—` | le-potato | both | none | installer.img, live.img, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ❌ | ✅ |
+| `cloud/frite/frite/le-potato/installer/light` | cloud | frite | `frite` | `—` | le-potato | installer | light | installer.img, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| `cloud/frite/frite/le-potato/installer/none` | cloud | frite | `frite` | `—` | le-potato | installer | none | installer.img, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| `cloud/frite/frite/le-potato/live/light` | cloud | frite | `frite` | `—` | le-potato | live | light | live.img, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| `cloud/frite/frite/le-potato/live/none` | cloud | frite | `frite` | `—` | le-potato | live | none | live.img, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| `cloud/frite/frite/sweet-potato/both/light` | cloud | frite | `frite` | `—` | sweet-potato | both | light | installer.img, live.img, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ❌ | ✅ |
+| `cloud/frite/frite/sweet-potato/both/none` | cloud | frite | `frite` | `—` | sweet-potato | both | none | installer.img, live.img, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ❌ | ✅ |
+| `cloud/frite/frite/sweet-potato/installer/light` | cloud | frite | `frite` | `—` | sweet-potato | installer | light | installer.img, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| `cloud/frite/frite/sweet-potato/installer/none` | cloud | frite | `frite` | `—` | sweet-potato | installer | none | installer.img, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| `cloud/frite/frite/sweet-potato/live/light` | cloud | frite | `frite` | `—` | sweet-potato | live | light | live.img, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| `cloud/frite/frite/sweet-potato/live/none` | cloud | frite | `frite` | `—` | sweet-potato | live | none | live.img, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `cloud/orangepi3-lts/orangepi3-lts/both` | cloud | orangepi3-lts | `orangepi3-lts` | `—` | — | both | — | installer.iso, live.iso, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ❌ | ✅ |
 | `cloud/orangepi3-lts/orangepi3-lts/installer` | cloud | orangepi3-lts | `orangepi3-lts` | `—` | — | installer | — | installer.iso, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `cloud/orangepi3-lts/orangepi3-lts/live` | cloud | orangepi3-lts | `orangepi3-lts` | `—` | — | live | — | live.iso, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
@@ -122,24 +122,24 @@ Legend: ✅ first-class selection &nbsp; ⚠️ escape-hatch only (raw builder f
 | `mesh/x86/laptop/thin` | mesh | x86 | `laptop` | `laptop` | — | — | thin | fs.tar.xz, img, live.iso, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ⚠️ | ✅ |
 | `mesh/x86/omnibus` | mesh | x86 | `omnibus` | `omnibus` | — | — | — | fs.tar.xz, img, live.iso, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `mesh/x86/pki` | mesh | x86 | `pki` | `pki` | — | — | — | fs.tar.xz, img, live.iso, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| `standalone/frite/frite/la-frite/both/light` | standalone | frite | `frite` | `—` | la-frite | both | light | installer.iso, live.iso, stage4.tar.xz | ✅ | ⚠️ | ⚠️ | ✅ | ❌ | ✅ |
-| `standalone/frite/frite/la-frite/both/none` | standalone | frite | `frite` | `—` | la-frite | both | none | installer.iso, live.iso, stage4.tar.xz | ✅ | ⚠️ | ⚠️ | ✅ | ❌ | ✅ |
-| `standalone/frite/frite/la-frite/installer/light` | standalone | frite | `frite` | `—` | la-frite | installer | light | installer.iso, stage4.tar.xz | ✅ | ⚠️ | ⚠️ | ✅ | ✅ | ✅ |
-| `standalone/frite/frite/la-frite/installer/none` | standalone | frite | `frite` | `—` | la-frite | installer | none | installer.iso, stage4.tar.xz | ✅ | ⚠️ | ⚠️ | ✅ | ✅ | ✅ |
-| `standalone/frite/frite/la-frite/live/light` | standalone | frite | `frite` | `—` | la-frite | live | light | live.iso, stage4.tar.xz | ✅ | ⚠️ | ⚠️ | ✅ | ❌ | ✅ |
-| `standalone/frite/frite/la-frite/live/none` | standalone | frite | `frite` | `—` | la-frite | live | none | live.iso, stage4.tar.xz | ✅ | ⚠️ | ⚠️ | ✅ | ❌ | ✅ |
-| `standalone/frite/frite/le-potato/both/light` | standalone | frite | `frite` | `—` | le-potato | both | light | installer.iso, live.iso, stage4.tar.xz | ✅ | ⚠️ | ⚠️ | ✅ | ❌ | ✅ |
-| `standalone/frite/frite/le-potato/both/none` | standalone | frite | `frite` | `—` | le-potato | both | none | installer.iso, live.iso, stage4.tar.xz | ✅ | ⚠️ | ⚠️ | ✅ | ❌ | ✅ |
-| `standalone/frite/frite/le-potato/installer/light` | standalone | frite | `frite` | `—` | le-potato | installer | light | installer.iso, stage4.tar.xz | ✅ | ⚠️ | ⚠️ | ✅ | ✅ | ✅ |
-| `standalone/frite/frite/le-potato/installer/none` | standalone | frite | `frite` | `—` | le-potato | installer | none | installer.iso, stage4.tar.xz | ✅ | ⚠️ | ⚠️ | ✅ | ✅ | ✅ |
-| `standalone/frite/frite/le-potato/live/light` | standalone | frite | `frite` | `—` | le-potato | live | light | live.iso, stage4.tar.xz | ✅ | ⚠️ | ⚠️ | ✅ | ❌ | ✅ |
-| `standalone/frite/frite/le-potato/live/none` | standalone | frite | `frite` | `—` | le-potato | live | none | live.iso, stage4.tar.xz | ✅ | ⚠️ | ⚠️ | ✅ | ❌ | ✅ |
-| `standalone/frite/frite/sweet-potato/both/light` | standalone | frite | `frite` | `—` | sweet-potato | both | light | installer.iso, live.iso, stage4.tar.xz | ✅ | ⚠️ | ⚠️ | ✅ | ❌ | ✅ |
-| `standalone/frite/frite/sweet-potato/both/none` | standalone | frite | `frite` | `—` | sweet-potato | both | none | installer.iso, live.iso, stage4.tar.xz | ✅ | ⚠️ | ⚠️ | ✅ | ❌ | ✅ |
-| `standalone/frite/frite/sweet-potato/installer/light` | standalone | frite | `frite` | `—` | sweet-potato | installer | light | installer.iso, stage4.tar.xz | ✅ | ⚠️ | ⚠️ | ✅ | ✅ | ✅ |
-| `standalone/frite/frite/sweet-potato/installer/none` | standalone | frite | `frite` | `—` | sweet-potato | installer | none | installer.iso, stage4.tar.xz | ✅ | ⚠️ | ⚠️ | ✅ | ✅ | ✅ |
-| `standalone/frite/frite/sweet-potato/live/light` | standalone | frite | `frite` | `—` | sweet-potato | live | light | live.iso, stage4.tar.xz | ✅ | ⚠️ | ⚠️ | ✅ | ❌ | ✅ |
-| `standalone/frite/frite/sweet-potato/live/none` | standalone | frite | `frite` | `—` | sweet-potato | live | none | live.iso, stage4.tar.xz | ✅ | ⚠️ | ⚠️ | ✅ | ❌ | ✅ |
+| `standalone/frite/frite/la-frite/both/light` | standalone | frite | `frite` | `—` | la-frite | both | light | installer.img, live.img, stage4.tar.xz | ✅ | ⚠️ | ⚠️ | ✅ | ❌ | ✅ |
+| `standalone/frite/frite/la-frite/both/none` | standalone | frite | `frite` | `—` | la-frite | both | none | installer.img, live.img, stage4.tar.xz | ✅ | ⚠️ | ⚠️ | ✅ | ❌ | ✅ |
+| `standalone/frite/frite/la-frite/installer/light` | standalone | frite | `frite` | `—` | la-frite | installer | light | installer.img, stage4.tar.xz | ✅ | ⚠️ | ⚠️ | ✅ | ✅ | ✅ |
+| `standalone/frite/frite/la-frite/installer/none` | standalone | frite | `frite` | `—` | la-frite | installer | none | installer.img, stage4.tar.xz | ✅ | ⚠️ | ⚠️ | ✅ | ✅ | ✅ |
+| `standalone/frite/frite/la-frite/live/light` | standalone | frite | `frite` | `—` | la-frite | live | light | live.img, stage4.tar.xz | ✅ | ⚠️ | ⚠️ | ✅ | ❌ | ✅ |
+| `standalone/frite/frite/la-frite/live/none` | standalone | frite | `frite` | `—` | la-frite | live | none | live.img, stage4.tar.xz | ✅ | ⚠️ | ⚠️ | ✅ | ❌ | ✅ |
+| `standalone/frite/frite/le-potato/both/light` | standalone | frite | `frite` | `—` | le-potato | both | light | installer.img, live.img, stage4.tar.xz | ✅ | ⚠️ | ⚠️ | ✅ | ❌ | ✅ |
+| `standalone/frite/frite/le-potato/both/none` | standalone | frite | `frite` | `—` | le-potato | both | none | installer.img, live.img, stage4.tar.xz | ✅ | ⚠️ | ⚠️ | ✅ | ❌ | ✅ |
+| `standalone/frite/frite/le-potato/installer/light` | standalone | frite | `frite` | `—` | le-potato | installer | light | installer.img, stage4.tar.xz | ✅ | ⚠️ | ⚠️ | ✅ | ✅ | ✅ |
+| `standalone/frite/frite/le-potato/installer/none` | standalone | frite | `frite` | `—` | le-potato | installer | none | installer.img, stage4.tar.xz | ✅ | ⚠️ | ⚠️ | ✅ | ✅ | ✅ |
+| `standalone/frite/frite/le-potato/live/light` | standalone | frite | `frite` | `—` | le-potato | live | light | live.img, stage4.tar.xz | ✅ | ⚠️ | ⚠️ | ✅ | ❌ | ✅ |
+| `standalone/frite/frite/le-potato/live/none` | standalone | frite | `frite` | `—` | le-potato | live | none | live.img, stage4.tar.xz | ✅ | ⚠️ | ⚠️ | ✅ | ❌ | ✅ |
+| `standalone/frite/frite/sweet-potato/both/light` | standalone | frite | `frite` | `—` | sweet-potato | both | light | installer.img, live.img, stage4.tar.xz | ✅ | ⚠️ | ⚠️ | ✅ | ❌ | ✅ |
+| `standalone/frite/frite/sweet-potato/both/none` | standalone | frite | `frite` | `—` | sweet-potato | both | none | installer.img, live.img, stage4.tar.xz | ✅ | ⚠️ | ⚠️ | ✅ | ❌ | ✅ |
+| `standalone/frite/frite/sweet-potato/installer/light` | standalone | frite | `frite` | `—` | sweet-potato | installer | light | installer.img, stage4.tar.xz | ✅ | ⚠️ | ⚠️ | ✅ | ✅ | ✅ |
+| `standalone/frite/frite/sweet-potato/installer/none` | standalone | frite | `frite` | `—` | sweet-potato | installer | none | installer.img, stage4.tar.xz | ✅ | ⚠️ | ⚠️ | ✅ | ✅ | ✅ |
+| `standalone/frite/frite/sweet-potato/live/light` | standalone | frite | `frite` | `—` | sweet-potato | live | light | live.img, stage4.tar.xz | ✅ | ⚠️ | ⚠️ | ✅ | ❌ | ✅ |
+| `standalone/frite/frite/sweet-potato/live/none` | standalone | frite | `frite` | `—` | sweet-potato | live | none | live.img, stage4.tar.xz | ✅ | ⚠️ | ⚠️ | ✅ | ❌ | ✅ |
 | `standalone/orangepi3-lts/orangepi3-lts/both` | standalone | orangepi3-lts | `orangepi3-lts` | `—` | — | both | — | installer.iso, live.iso, stage4.tar.xz | ✅ | ⚠️ | ⚠️ | ✅ | ❌ | ✅ |
 | `standalone/orangepi3-lts/orangepi3-lts/installer` | standalone | orangepi3-lts | `orangepi3-lts` | `—` | — | installer | — | installer.iso, stage4.tar.xz | ✅ | ⚠️ | ⚠️ | ✅ | ✅ | ✅ |
 | `standalone/orangepi3-lts/orangepi3-lts/live` | standalone | orangepi3-lts | `orangepi3-lts` | `—` | — | live | — | live.iso, stage4.tar.xz | ✅ | ⚠️ | ⚠️ | ✅ | ❌ | ✅ |
