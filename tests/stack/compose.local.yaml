@@ -1284,9 +1284,12 @@ services:
       CASDOOR_GAMES_ORG: threewizards
       CASDOOR_GAMES_CLIENT_ID: dev-games-client
       CASDOOR_GAMES_CLIENT_SECRET: dev-games-secret
-      # The GM sync is OFF here as in the cluster (specs/cluster/manifests/hugmesh-apis):
-      # the image has no enable flag, so its first tick is scheduled 100 years out. No
-      # games role is named: hugmesh-actions#21 refuses a role the realm owns (`admin`).
+      # The GM sync is INERT here, via the delay: unlike the cluster manifest
+      # (specs/cluster/manifests/hugmesh-apis, which hands hugmesh-api no games-side
+      # client at all), this stack still passes the CASDOOR_GAMES_* block above, so the
+      # job is configured; GM_SYNC_ENABLED is left at its #21 default (false) and the
+      # first tick is scheduled 100 years out for an image from before #21, which has
+      # no flag. No games role is named: #21 refuses a role the realm owns (`admin`).
       GM_SYNC_INITIAL_DELAY_MS: "3153600000000"
     depends_on:
       casdoor: { condition: service_started }

@@ -23,16 +23,34 @@ resources:
 # image built before hugmesh/hugmesh-games#52 ignores both names: both issuers collapse
 # into one domain behind a single jwk-set-uri, every mesh token answers 401, and a token
 # that claims iss=mesh but is signed by the games key is accepted. So the tag here must
-# name a build that carries #52, and until one exists it names NOTHING: the placeholder
-# below resolves to no manifest, the pod stays in ImagePullBackOff, and no pre-#52 image
-# can start with this environment. The hugmesh-games Release workflow tags every main
-# build `sha-<first 12 of the commit>`; once #52 is on main, replace the placeholder with
-# that tag (and, preferably, add its `digest:`). tests/scripts/test-games-two-realms.sh
-# refuses `main` and any other floating tag here, accepts the placeholder, and for a
-# `sha-` tag fetches that commit's application.yml from the public repo to prove it reads
-# both names.
+# name a build at or after #52's merge commit, 3ae21def10e8a09c4a8bb86b4fcbccacdba6549d.
+#
+# The pin is the TAG AND THE DIGEST, and the digest is what the cluster pulls: a
+# runtime resolves `name:tag@digest` by the digest and ignores the tag. The tag is the
+# hugmesh-games Release workflow's `sha-<first 12 of the commit>` for a main build; the
+# digest is that tag's manifest (index) digest on ghcr.io/hugmesh/hugmesh-games/backend,
+# the same bytes registry.hugmesh.net serves once it holds the image (a content-addressed
+# copy keeps the digest; a re-push of one platform manifest would not).
+#
+# tests/scripts/test-games-two-realms.sh judges the RENDERED image (`kubectl kustomize`
+# of this directory), not this field: the rendered string must be exactly what this
+# entry composes (a JSON6902 or strategic patch on the container image is refused), the
+# tag must be the fail-closed placeholder `needs-hugmesh-games-pr52` (resolves to no
+# image; no digest may ride along with it, because the digest would be pulled), a
+# `sha-<12>` or a release, never `main` or another floating name; and for a sha-/release
+# tag the public registry is asked, anonymously, for that tag's manifest: a pinned
+# digest must equal it, and the image's org.opencontainers.image.revision label must be
+# a commit on hugmesh-games main at or after 3ae21def. A re-push of the tag therefore
+# turns CI red on purpose: re-verify and update both fields together.
+#
+# To move the pin: newTag = sha-<12 of the main commit>, digest = the Docker-Content-
+# Digest of GET /v2/hugmesh/hugmesh-games/backend/manifests/<tag> on ghcr.io.
 images:
-  - { name: hugmesh/hugmesh.games-backend, newName: registry.hugmesh.net/hugmesh/hugmesh-games/backend, newTag: needs-hugmesh-games-pr52 }
+  - name: hugmesh/hugmesh.games-backend
+    newName: registry.hugmesh.net/hugmesh/hugmesh-games/backend
+    # hugmesh-games main 3ae21def (#52 merged 2026-11-04), Release run 41944667036.
+    newTag: sha-3ae21def10e8
+    digest: sha256:f2142f61a782c1801de91d986182cb7eddd4b8d1a9ce1c6359ca0dd7dea3bcc9
 patches:
   # Only the two first-party images come from Harbor; the stores are stock images.
   - target: { kind: Deployment, name: "^hugmesh-games(-portal)?$" }

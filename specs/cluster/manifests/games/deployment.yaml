@@ -7,6 +7,11 @@ metadata:
   name: hugmesh-games
   namespace: hugmesh-games
   labels: { app: hugmesh-games, app.kubernetes.io/part-of: hugmesh.net }
+  annotations:
+    # Wave 2 inside this Application: after the stores (wave 0) and the keyspace Job
+    # (cassandra-init.yaml, a Sync hook in wave 1). The BFF names the keyspace with
+    # schema-action NONE, so it must not be applied before the Job has created it.
+    argocd.argoproj.io/sync-wave: "2"
 spec:
   replicas: 1
   selector: { matchLabels: { app: hugmesh-games } }

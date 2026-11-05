@@ -28,6 +28,9 @@ metadata:
   name: games-cassandra
   namespace: hugmesh-games
   labels: { app: games-cassandra, app.kubernetes.io/part-of: hugmesh.games }
+  annotations:
+    # Wave 0: the keyspace Job (cassandra-init.yaml, wave 1) and the BFF (wave 2) follow.
+    argocd.argoproj.io/sync-wave: "0"
 spec:
   replicas: 1
   strategy: { type: Recreate }

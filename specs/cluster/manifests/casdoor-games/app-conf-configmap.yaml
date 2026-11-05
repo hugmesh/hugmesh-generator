@@ -1,15 +1,19 @@
-# casdoor-games app.conf override — points the GAMES-realm Casdoor at its OWN
+# casdoor-games app.conf TEMPLATE — points the GAMES-realm Casdoor at its OWN
 # external Postgres (casdoor-games-pg, db "threewizards") instead of the all-in-one
-# image's bundled DB. Mirrors manifests/casdoor/app-conf-configmap.yaml but for the
-# SEPARATE games identity provider. Mounted over the image's conf/app.conf. NO
-# secrets here — the DB user/password are interpolated at startup from env
-# (CASDOOR_DB_USER / CASDOOR_DB_PASSWORD), which the Deployment sources from the ESO
-# Secret "casdoor-games-db".
+# image's bundled DB. Mirrors manifests/casdoor/app-conf-configmap.yaml for the
+# SEPARATE games identity provider. Rendered into the real conf/app.conf by the
+# "render-app-conf" initContainer in deployment.yaml (plain sed substitution of the
+# __TOKEN__ placeholders below against env sourced from the ESO Secret
+# casdoor-games-db). NO secrets here.
 #
-# !!! Casdoor's app.conf keys and the beego "${ENV||default}" interpolation are
-# !!! version-specific. This is a working scaffold — validate the field set and the
-# !!! Postgres dataSourceName against the deployed casbin/casdoor image; if Casdoor
-# !!! refuses to start, diff against that image's bundled conf/app.conf.
+# NOTE: casbin/casdoor does NOT expand beego's "${ENV||default}" syntax inside a
+# value: beego expands it only when the WHOLE value is one such expression. With
+# `user=${CASDOOR_DB_USER||threewizards} ...` in dataSourceName, casbin/casdoor:3.80.0
+# and v1.811.0 both used the literal string as the Postgres username and exited 2
+# with `pq: password authentication failed for user "${CASDOOR_DB_USER||threewizards}"`
+# (measured 2026-11-05 on throwaway containers). The systems Casdoor was fixed for
+# exactly this in #263; this file carries the same initContainer render.
+# tests/scripts/test-games-two-realms.sh refuses a `${` in any Casdoor dataSourceName.
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -17,7 +21,7 @@ metadata:
   namespace: hugmesh-games
   labels: { app: casdoor-games, app.kubernetes.io/part-of: hugmesh.games }
 data:
-  app.conf: |
+  app.conf.template: |
     appname = casdoor
     httpport = 8000
     runmode = prod
@@ -25,10 +29,10 @@ data:
     SessionOn = true
     # External Postgres (casdoor-games-pg, db "threewizards"). For the postgres
     # driver Casdoor uses the dataSourceName verbatim (it only appends dbName for
-    # MySQL), so dbname= must be set inline here. Credentials come from env (ESO
-    # Secret casdoor-games-db).
+    # MySQL), so dbname= must be set inline here. Credentials rendered in by the
+    # initContainer (ESO Secret casdoor-games-db).
     driverName = postgres
-    dataSourceName = "user=${CASDOOR_DB_USER||threewizards} password=${CASDOOR_DB_PASSWORD||} host=casdoor-games-pg port=5432 sslmode=disable dbname=threewizards"
+    dataSourceName = "user=__CASDOOR_DB_USER__ password=__CASDOOR_DB_PASSWORD__ host=casdoor-games-pg port=5432 sslmode=disable dbname=threewizards"
     dbName = threewizards
     tableNamePrefix =
     showSql = false

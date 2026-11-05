@@ -18,14 +18,26 @@
 #                and the registry agree; both stores are off the broad from-set.
 #   egress       tier-egress carries the paths both realms need, before anyone carves
 #                it into the manual overlay.
-#   images       the kustomize image names are the published set; the backend tag is
-#                pinned to a build that carries hugmesh-games#52 (or to the placeholder
-#                that resolves to nothing), never a floating name. For a sha-/release
-#                tag, that commit's application.yml is fetched from the public repo.
-#   sync         hugmesh-actions' GM mirror into the games realm is OFF: no games-side
-#                client in the pod, first tick 100 years out, no backend -> games
-#                egress, no `mesh-*` role seeded, every seeded description fits
-#                Casdoor's varchar(100).
+#   images       the kustomize image names are the published set; the backend image is
+#                judged RENDERED (kubectl kustomize), not by the newTag text: the string
+#                must be exactly what the images: entry composes (no patch replaces it),
+#                the tag is a sha-<12>, a release, or the placeholder that resolves to
+#                nothing (and then no digest may ride along: a runtime pulls by digest
+#                and ignores the tag), never a floating name. For a sha-/release tag the
+#                public registry is asked for the tag's manifest: a pinned digest must
+#                equal it, and the image's revision label must be a hugmesh-games main
+#                commit at or after #52's merge (3ae21def).
+#   stores (2)   the keyspace Job is a Sync-phase hook in a wave between the stores and
+#                the BFF: a PostSync hook in the same Application as the pod that needs
+#                the keyspace never runs.
+#   casdoor      no Casdoor app.conf relies on in-app `${ENV||default}` interpolation
+#                (casbin/casdoor does not expand it inside a value; the as-shipped
+#                casdoor-games conf could never connect): every __TOKEN__ in the template
+#                is rendered by a render-app-conf initContainer the pod mounts.
+#   sync         hugmesh-actions' GM mirror into the games realm is OFF: GM_SYNC_ENABLED
+#                is not true, no games-side client in the pod, first tick 100 years out,
+#                no backend -> games egress, no `mesh-*` role seeded, every seeded
+#                description fits Casdoor's varchar(100).
 #   builders     parameterize_games_domain(), run for real over a scratch tree from
 #                BOTH builders; the RELEASE_STATE=internal Ingress class rewrite; the
 #                games-deselected prune.
@@ -36,8 +48,9 @@
 # Negative controls: each mutation goes on a scratch copy, the copy must really differ,
 # and the analyser must go RED naming the planted defect.
 #
-# Offline, except the pinned-build proof: bash + python3 + PyYAML. No cluster, no
-# docker. The one network call (raw.githubusercontent.com) is REQUIRED in CI and
+# bash + python3 + PyYAML + kubectl (for `kubectl kustomize`; no cluster, no docker).
+# Offline, except the pinned-build proof: ghcr.io (anonymous manifest reads) and a
+# commit-graph-only clone of the public hugmesh-games repo. Both are REQUIRED in CI and
 # reported as NOT VERIFIED offline; a placeholder tag needs no call.
 # =============================================================================
 set -uo pipefail
@@ -46,14 +59,17 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "${HERE}/../.." && pwd)"
 
 command -v python3 >/dev/null 2>&1 || { echo "FATAL: python3 required (refusing to skip)" >&2; exit 2; }
+command -v curl >/dev/null 2>&1 || { echo "FATAL: curl required for the registry reads (refusing to skip)" >&2; exit 2; }
 python3 -c 'import yaml' 2>/dev/null || { echo "FATAL: PyYAML required (refusing to skip)" >&2; exit 2; }
+command -v kubectl >/dev/null 2>&1 || { echo "FATAL: kubectl required for kubectl kustomize (refusing to skip)" >&2; exit 2; }
+export KUBECONFIG=/dev/null
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/games-two-realms.XXXXXX")"
 trap 'rm -rf "${WORK}"' EXIT
 ANALYSER="${WORK}/analyser.py"
 
 cat > "${ANALYSER}" <<'PY'
-import os, re, sys
+import os, re, subprocess, sys
 import yaml
 
 root = sys.argv[1]
@@ -253,14 +269,91 @@ for name, want in (("hugmesh/hugmesh.games-backend", "hugmesh-games/backend"), (
     check(new == PFX + want and want in published, f"[images] {name} -> {new} is in the published set")
 check(imgs.get("hugmesh/games-ui") == PFX + "hugmesh-games/games-ui", "[images] games-ui is named under the repo's image path (publishing it is a hugmesh-games change)")
 
-# ── the backend image is pinned to a build that carries hugmesh-games#52 ─────
+# ── the backend image, as RENDERED: pinned to a build at or after hugmesh-games#52 ──
+# The rule is enforced on `kubectl kustomize` output, not on the newTag text: a digest
+# next to the placeholder renders `backend:needs-...@sha256:...`, which a runtime pulls
+# by digest with the tag ignored, and a JSON6902/strategic patch on the container image
+# renders whatever it likes while the images: entry still reads as pinned.
 PLACEHOLDER = "needs-hugmesh-games-pr52"
 SHA_TAG = re.compile(r"^sha-[0-9a-f]{12}$")
 RELEASE_TAG = re.compile(r"^\d+\.\d+\.\d+(-[0-9A-Za-z.]+)?$")
-bi = next((i for i in pk.get("images", []) if i.get("name") == "hugmesh/hugmesh.games-backend"), None)
-tag = str((bi or {}).get("newTag") or "")
+DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
+def split_ref(ref):
+    rest, _, digest = ref.partition("@")
+    name, tag = rest, ""
+    if ":" in rest.rsplit("/", 1)[-1]:
+        name, _, tag = rest.rpartition(":")
+    return name, tag, digest
+bi = next((i for i in pk.get("images", []) if i.get("name") == "hugmesh/hugmesh.games-backend"), {})
+composed = f"{bi.get('newName', '')}:{bi.get('newTag', '')}" + (f"@{bi['digest']}" if bi.get("digest") else "")
+try:
+    rendered_docs = [d for d in yaml.safe_load_all(subprocess.run(["kubectl", "kustomize", f"{M}/games"], check=True, capture_output=True, text=True, env={**os.environ, "KUBECONFIG": "/dev/null"}).stdout) if d]
+    rdep = next(d for d in rendered_docs if d["kind"] == "Deployment" and d["metadata"]["name"] == "hugmesh-games")
+    rendered = next(c for c in rdep["spec"]["template"]["spec"]["containers"] if c["name"] == "games")["image"]
+except Exception as e:  # a render that fails is a FAIL, never a skip
+    rendered = ""
+    bad(f"[image] kubectl kustomize of manifests/games did not yield the BFF image: {e}")
+rname, tag, digest = split_ref(rendered)
+check(rendered and rendered == composed, f"[image] the RENDERED backend image {rendered!r} is exactly what the images: entry composes ({composed!r}); nothing patches the container image behind the pin")
+check(rname == PFX + "hugmesh-games/backend", f"[image] the rendered backend name is {rname!r}, the published backend under the Harbor host")
 check(tag == PLACEHOLDER or SHA_TAG.match(tag) is not None or RELEASE_TAG.match(tag) is not None,
-      f"[image] backend tag {tag!r}: the fail-closed placeholder, a sha-<12> or a release, never a floating name (main moves under the cluster and a pre-#52 build accepts a mesh-iss token signed by the games key)")
+      f"[image] rendered backend tag {tag!r}: the fail-closed placeholder, a sha-<12> or a release, never a floating name (main moves under the cluster and a pre-#52 build accepts a mesh-iss token signed by the games key)")
+if tag == PLACEHOLDER:
+    check(not digest, f"[image] no digest rides with the placeholder (rendered {rendered!r}: a runtime pulls by digest and ignores the tag, so the placeholder would resolve to a real, unverified image)")
+else:
+    check(not digest or DIGEST.match(digest) is not None, f"[image] the pinned digest {digest!r} is sha256:<64 hex>")
+
+# ── the keyspace Job runs BEFORE the BFF, inside the same Application ─────────
+# PostSync fires only once every resource is Healthy; the BFF names the keyspace with
+# schema-action NONE and cannot start without it, so a PostSync keyspace Job and the
+# pod that needs it wait for each other forever (the pin above makes that real).
+def wave(d):
+    return int(((d.get("metadata") or {}).get("annotations") or {}).get("argocd.argoproj.io/sync-wave", "0"))
+kj = next((d for d in docs(f"{M}/games/cassandra-init.yaml") if d["kind"] == "Job"), None)
+if kj is None:
+    bad("[keyspace] no Job in games/cassandra-init.yaml")
+else:
+    ann = kj["metadata"].get("annotations") or {}
+    check(ann.get("argocd.argoproj.io/hook") == "Sync", f"[keyspace] the Job is a Sync-phase hook (hook={ann.get('argocd.argoproj.io/hook')!r}); PostSync in the BFF's own Application never runs")
+    check(ann.get("argocd.argoproj.io/hook-delete-policy") == "BeforeHookCreation", "[keyspace] the hook is recreated on every sync (the CQL is IF NOT EXISTS)")
+    cass = next(d for d in docs(f"{M}/games/cassandra.yaml") if d["kind"] == "Deployment")
+    check(wave(cass) < wave(kj) < wave(dep), f"[keyspace] waves order cassandra ({wave(cass)}) < keyspace Job ({wave(kj)}) < BFF ({wave(dep)})")
+
+# ── no Casdoor app.conf relies on in-app `${ENV||default}` interpolation ──────
+# casbin/casdoor expands beego's syntax only when the WHOLE value is one expression;
+# `user=${CASDOOR_DB_USER||x} ...` is used literally and the pod exits 2. The systems
+# Casdoor was fixed in #263 with a sed render in an initContainer; every Casdoor here
+# must carry that shape, with every __TOKEN__ in the template actually rendered.
+for cdir, cm_name in (("casdoor", "casdoor-app-conf"), ("casdoor-games", "casdoor-games-app-conf"), ("casdoor-domain", "casdoor-domain-app-conf")):
+    cm = next((d for d in docs(f"{M}/{cdir}/app-conf-configmap.yaml") if d["kind"] == "ConfigMap"), {})
+    data = cm.get("data") or {}
+    tpl = data.get("app.conf.template")
+    conf_lines = [l for l in (tpl or data.get("app.conf") or "").splitlines() if not l.lstrip().startswith("#")]
+    dsn = next((l for l in conf_lines if l.strip().startswith("dataSourceName")), "")
+    check("${" not in dsn, f"[casdoor:{cdir}] dataSourceName carries no `${{` (in-app interpolation never happens inside a value: {dsn.strip()[:60]!r})")
+    check(not [l for l in conf_lines if "${" in l], f"[casdoor:{cdir}] no app.conf key relies on in-app `${{ENV||default}}` interpolation")
+    check(tpl is not None and "app.conf" not in data, f"[casdoor:{cdir}] the ConfigMap ships app.conf.template (rendered by an initContainer), not a final app.conf")
+    cdep = next((d for d in docs(f"{M}/{cdir}/deployment.yaml") if d["kind"] == "Deployment"), None)
+    pod = ((cdep or {}).get("spec") or {}).get("template", {}).get("spec", {})
+    init = next((c for c in pod.get("initContainers") or [] if c.get("name") == "render-app-conf"), None)
+    if init is None:
+        bad(f"[casdoor:{cdir}] no render-app-conf initContainer: the template is mounted unrendered and Casdoor exits 2")
+        continue
+    args = "\n".join(str(a) for a in (init.get("args") or []) + (init.get("command") or []))
+    tokens = set(re.findall(r"__[A-Z_]+__", tpl or ""))
+    rendered_tokens = set(re.findall(r"s\|(__[A-Z_]+__)\|", args))
+    check(tokens and tokens == rendered_tokens, f"[casdoor:{cdir}] every template token is rendered by the initContainer (template {sorted(tokens)}, sed {sorted(rendered_tokens)})")
+    ienv = {e["name"] for e in init.get("env") or []}
+    check({x.strip("_") for x in tokens} <= ienv, f"[casdoor:{cdir}] the initContainer is handed every token's value (env {sorted(ienv)})")
+    imounts = {m["name"]: m["mountPath"] for m in init.get("volumeMounts") or []}
+    check(imounts.get("app-conf-template") == "/template" and imounts.get("rendered-conf") == "/rendered" and "/template/app.conf.template" in args and "/rendered/app.conf" in args,
+          f"[casdoor:{cdir}] the initContainer reads /template/app.conf.template and writes /rendered/app.conf")
+    main = next(c for c in pod["containers"] if c["name"] == "casdoor")
+    mm = next((m for m in main.get("volumeMounts") or [] if m.get("mountPath") == "/conf/app.conf"), {})
+    check(mm.get("name") == "rendered-conf" and mm.get("subPath") == "app.conf", f"[casdoor:{cdir}] Casdoor mounts the RENDERED app.conf at /conf/app.conf (mount {mm})")
+    vols = {v["name"]: v for v in pod.get("volumes") or []}
+    check((vols.get("app-conf-template") or {}).get("configMap", {}).get("name") == cm_name and "emptyDir" in (vols.get("rendered-conf") or {}),
+          f"[casdoor:{cdir}] app-conf-template is the {cm_name} ConfigMap and rendered-conf is an emptyDir")
 
 # ── the GM sync is off ───────────────────────────────────────────────────────
 ad = next(d for d in docs(f"{M}/hugmesh-apis/deployment.yaml") if d["kind"] == "Deployment")
@@ -268,8 +361,10 @@ ac = next(c for c in ad["spec"]["template"]["spec"]["containers"] if c["name"] =
 aenv = {e["name"]: e for e in ac["env"]}
 check(not [k for k in aenv if k.startswith("CASDOOR_GAMES_")], "[sync] hugmesh-api is handed no games-realm client (CASDOOR_GAMES_*)")
 check("casdoor-sync-games" not in uncommented(f"{M}/hugmesh-apis/deployment.yaml"), "[sync] no container reads the casdoor-sync-games Secret")
+enabled = str((aenv.get("GM_SYNC_ENABLED") or {}).get("value") or "false")
+check(enabled.lower() != "true", f"[sync] GM_SYNC_ENABLED is not true (hugmesh-actions#21's flag, default false; value {enabled!r})")
 delay = str((aenv.get("GM_SYNC_INITIAL_DELAY_MS") or {}).get("value") or "")
-check(delay.isdigit() and int(delay) >= 10 * 365 * 24 * 3600 * 1000, f"[sync] the first tick is at least ten years out (GM_SYNC_INITIAL_DELAY_MS={delay or 'unset'}; the image has no enable flag)")
+check(delay.isdigit() and int(delay) >= 10 * 365 * 24 * 3600 * 1000, f"[sync] the first tick is at least ten years out (GM_SYNC_INITIAL_DELAY_MS={delay or 'unset'}; an image from before #21 has no enable flag)")
 grole = (aenv.get("GM_SYNC_GAMES_ROLE") or {}).get("value")
 check(grole is None or str(grole).startswith("mesh-"), f"[sync] no games role the realm owns is named as the mirror target (GM_SYNC_GAMES_ROLE={grole!r})")
 for k in ("CASDOOR_PLATFORM_URL", "CASDOOR_PLATFORM_CLIENT_SECRET"):
@@ -293,7 +388,15 @@ for rel, phrase in (("tests/stack/compose.games.yaml", "two-realm portal"),
                     ("specs/cluster/manifests/games/deployment.yaml", "iss-strict JwtIssuerValidator"),
                     ("specs/cluster/manifests/hugmesh-apis/deployment.yaml", "The single automatic mirror"),
                     ("specs/cluster/manifests/casdoor-games/kustomization.yaml", "mirror is the scheduled hugmesh-actions"),
-                    ("specs/cluster/manifests/networkpolicy/tier-egress.yaml", "hugmesh-actions sync handle")):
+                    ("specs/cluster/manifests/networkpolicy/tier-egress.yaml", "hugmesh-actions sync handle"),
+                    ("specs/cluster/manifests/casdoor/games-admin-sync-job.yaml", "-> admin (games)"),
+                    ("specs/cluster/manifests/casdoor-games/deployment.yaml", "into this realm's \"admin\" role"),
+                    ("specs/cluster/manifests/hugmesh-apis/deployment.yaml", "the image has no enable flag"),
+                    ("tests/stack/compose.local.yaml", "the image has no enable flag"),
+                    ("specs/cluster/manifests/games/kustomization.yaml", "preferably, add its"),
+                    ("specs/cluster/manifests/games/cassandra-init.yaml", "ArgoCD PostSync hook, the idiom"),
+                    ("specs/cluster/manifests/casdoor-games/app-conf-configmap.yaml", "working scaffold"),
+                    ("specs/cluster/manifests/casdoor-domain/app-conf-configmap.yaml", "MUST be validated")):
     check(phrase not in text(os.path.join(root, rel)), f"[docs] {rel} no longer says {phrase!r}")
 
 print(f"== analyser: {F} failure(s) ==")
@@ -307,52 +410,130 @@ bad(){ N=$((N+1)); echo "  FAIL $*"; }
 echo "== static wiring =="
 python3 "${ANALYSER}" "${REPO}" && ok "the analyser is green on this tree" || bad "the analyser is red on this tree"
 
-# ── the pinned backend build carries hugmesh-games#52 ───────────────────────
-# A tag names a commit of the public hugmesh-games repo: sha-<12> is that commit, a
-# release N.N.N is git tag vN.N.N. The build carries #52 iff its application.yml binds
-# both names deployment.yaml sets. Required in CI (no network there is a failure, not
-# a skip); offline it is reported, loudly, as not verified.
+# ── the pinned backend build is at or after hugmesh-games#52 ─────────────────
+# Judged on the RENDERED image. A sha-<12>/release tag is looked up on the public
+# registry (anonymous pull token): a pinned digest must equal the tag's manifest digest
+# (what a runtime pulls; the tag is ignored next to a digest), and the amd64 image's
+# org.opencontainers.image.revision label (the Release workflow writes the commit) must
+# be a commit on hugmesh-games main at or after #52's merge commit, 3ae21def. The commit
+# graph comes from a commit-only clone (--filter=tree:0, no trees, no blobs). Required
+# in CI (no network there is a failure, not a skip); offline it is reported, loudly, as
+# not verified.
 echo "== the pinned backend build =="
-build_ref_carries_52(){ # $1 git ref -> 0 carries, 1 lacks, 2 unreachable; prints why
-  python3 - "$1" <<'PY'
-import sys, urllib.request
-ref = sys.argv[1]
-url = f"https://raw.githubusercontent.com/hugmesh/hugmesh-games/{ref}/backend/src/main/resources/application.yml"
+PR52_MERGE=3ae21def10e8a09c4a8bb86b4fcbccacdba6549d
+GRAPH="${WORK}/hugmesh-games.git"
+have_graph(){
+  [ -d "${GRAPH}" ] && return 0
+  git clone -q --bare --filter=tree:0 --single-branch --branch main --no-tags https://github.com/hugmesh/hugmesh-games.git "${GRAPH}" >/dev/null 2>&1
+}
+verify_pin(){ # $1 tag, $2 digest ("" = none) -> 0 ok, 1 refused, 2 unreachable; prints why
+  python3 - "$1" "$2" "${PR52_MERGE}" "${GRAPH}" <<'PY'
+import json, os, re, subprocess, sys, tempfile
+tag, digest, floor, graph = sys.argv[1:5]
+REPO = "hugmesh/hugmesh-games/backend"
+ACCEPT = ", ".join(["application/vnd.oci.image.index.v1+json", "application/vnd.oci.image.manifest.v1+json",
+                    "application/vnd.docker.distribution.manifest.list.v2+json", "application/vnd.docker.distribution.manifest.v2+json"])
+class NotFound(Exception): pass
+# curl, not urllib: a blob GET redirects to a host with four AAAA records, and urllib
+# walks each dead IPv6 address to its full timeout (80 s per blob measured on a host
+# without IPv6 reach) where curl's happy-eyeballs connect takes a second. curl also drops
+# the Authorization header on the cross-host redirect, which the signed blob URL wants.
+def get(url, headers, want_headers=False):
+    with tempfile.TemporaryDirectory() as d:
+        hf, bf = os.path.join(d, "h"), os.path.join(d, "b")
+        cmd = ["curl", "-sS", "-L", "--connect-timeout", "10", "--max-time", "60", "-D", hf, "-o", bf, "-w", "%{http_code}"]
+        for k, v in headers.items():
+            cmd += ["-H", f"{k}: {v}"]
+        r = subprocess.run(cmd + [url], capture_output=True, text=True)
+        if r.returncode != 0:
+            raise RuntimeError(f"curl rc={r.returncode}: {r.stderr.strip()[:160]}")
+        code = int((r.stdout.strip() or "0")[-3:])
+        if code == 404:
+            raise NotFound(url)
+        if code >= 400:
+            raise RuntimeError(f"HTTP {code} from {url}")
+        hdrs = {}
+        for line in open(hf, errors="replace"):
+            k, sep, v = line.partition(":")
+            if sep and k.strip().lower() not in hdrs:
+                hdrs[k.strip().lower()] = v.strip()
+        body = open(bf, "rb").read()
+        return (body, hdrs) if want_headers else body
 try:
-    body = urllib.request.urlopen(url, timeout=20).read().decode("utf-8", "replace")
+    tok = json.loads(get(f"https://ghcr.io/token?scope=repository:{REPO}:pull", {}))["token"]
+    auth = {"Authorization": f"Bearer {tok}", "Accept": ACCEPT}
+    try:
+        body, hdrs = get(f"https://ghcr.io/v2/{REPO}/manifests/{tag}", auth, True)
+    except NotFound:
+        print(f"{tag}: no manifest for this tag on ghcr.io/{REPO} (pin only a tag the Release workflow pushed)"); sys.exit(1)
+    dtag = hdrs.get("docker-content-digest", "")
+    if not re.match(r"^sha256:[0-9a-f]{64}$", dtag):
+        print(f"{tag}: registry returned no Docker-Content-Digest"); sys.exit(2)
+    if digest and digest != dtag:
+        print(f"{tag}: the pinned digest {digest[:19]}... is NOT this tag's manifest digest {dtag[:19]}...; the cluster would pull the digest, not the tag"); sys.exit(1)
+    pulled = digest or dtag
+    man = json.loads(get(f"https://ghcr.io/v2/{REPO}/manifests/{pulled}", auth))
+    if "manifests" in man:  # an index: the cluster schedules the BFF on amd64
+        sub = next((m["digest"] for m in man["manifests"] if (m.get("platform") or {}).get("architecture") == "amd64" and (m.get("platform") or {}).get("os") == "linux"), None)
+        if not sub:
+            print(f"{tag}: the index {pulled[:19]}... carries no linux/amd64 manifest"); sys.exit(1)
+        man = json.loads(get(f"https://ghcr.io/v2/{REPO}/manifests/{sub}", auth))
+    cfg = json.loads(get(f"https://ghcr.io/v2/{REPO}/blobs/{man['config']['digest']}", auth))
+    rev = ((cfg.get("config") or {}).get("Labels") or {}).get("org.opencontainers.image.revision", "")
 except Exception as e:
-    print(f"unreachable: {url}: {e}"); sys.exit(2)
-missing = [k for k in ("APP_TENANCY_JWKS_URIS", "APP_SECURITY_GAMES_REALM_ISSUERS") if k not in body]
-if missing:
-    print(f"{ref}: application.yml does not bind {', '.join(missing)}"); sys.exit(1)
-print(f"{ref}: application.yml binds both two-realm names"); sys.exit(0)
+    print(f"unreachable: ghcr.io/{REPO}:{tag}: {e}"); sys.exit(2)
+if not re.match(r"^[0-9a-f]{40}$", rev):
+    print(f"{tag}: image {pulled[:19]}... carries no org.opencontainers.image.revision label (not a Release-workflow build)"); sys.exit(1)
+if subprocess.run(["git", "-C", graph, "cat-file", "-e", f"{rev}^{{commit}}"], capture_output=True).returncode != 0:
+    print(f"{tag}: revision {rev[:12]} is not a commit on hugmesh-games main"); sys.exit(1)
+if subprocess.run(["git", "-C", graph, "merge-base", "--is-ancestor", floor, rev], capture_output=True).returncode != 0:
+    print(f"{tag}: revision {rev[:12]} is BEFORE #52's merge {floor[:12]} on main (a pre-#52 build)"); sys.exit(1)
+print(f"{tag}: manifest {dtag[:19]}..., revision {rev[:12]} is at or after #52's merge {floor[:12]}" + (" and the pinned digest equals the tag's" if digest else " (no digest pinned)")); sys.exit(0)
 PY
 }
-TAG="$(python3 -c 'import sys, yaml; k = yaml.safe_load(open(sys.argv[1])); print(next((i.get("newTag") or "") for i in k.get("images", []) if i.get("name") == "hugmesh/hugmesh.games-backend"))' "${REPO}/specs/cluster/manifests/games/kustomization.yaml")"
+read -r TAG DIGEST < <(python3 - "${REPO}/specs/cluster/manifests/games/kustomization.yaml" <<'PY'
+import sys, yaml
+k = yaml.safe_load(open(sys.argv[1]))
+i = next((i for i in k.get("images", []) if i.get("name") == "hugmesh/hugmesh.games-backend"), {})
+print(i.get("newTag") or "-", i.get("digest") or "")
+PY
+)
 case "${TAG}" in
   needs-hugmesh-games-pr52)
-    ok "backend tag is the placeholder: it names no image, so no pre-#52 build can start with the two-realm environment (replace it with the sha- tag of the first main build after #52)";;
-  sha-????????????) REF="${TAG#sha-}";;
-  [0-9]*) REF="v${TAG}";;
-  *) bad "backend tag '${TAG}' is a floating name"; REF="";;
+    ok "backend tag is the placeholder: it names no image, so no pre-#52 build can start with the two-realm environment (replace it with the sha- tag AND digest of a main build at or after 3ae21def)";;
+  sha-????????????|[0-9]*) ;;
+  *) bad "backend tag '${TAG}' is a floating name";;
 esac
-if [ -n "${REF:-}" ]; then
-  why="$(build_ref_carries_52 "${REF}")"; rc=$?
-  case "${rc}" in
-    0) ok "backend tag ${TAG}: ${why}";;
-    1) bad "backend tag ${TAG} is a PRE-#52 build: ${why}";;
-    *) if [ -n "${CI:-}" ]; then bad "cannot prove what build ${TAG} is (${why}); CI must reach the public repo"; else echo "  NOT VERIFIED (offline): ${why}"; fi;;
-  esac
+if ! have_graph; then
+  if [ -n "${CI:-}" ]; then bad "cannot fetch the hugmesh-games commit graph; CI must reach github.com"; else echo "  NOT VERIFIED (offline): no commit graph, the registry checks are skipped"; fi
+else
+  if [ "${TAG}" != needs-hugmesh-games-pr52 ] && [ "${TAG}" != "-" ]; then
+    why="$(verify_pin "${TAG}" "${DIGEST}")"; rc=$?
+    case "${rc}" in
+      0) ok "backend pin ${TAG}: ${why}";;
+      1) bad "backend pin ${TAG} REFUSED: ${why}";;
+      *) if [ -n "${CI:-}" ]; then bad "cannot prove what build ${TAG} is (${why}); CI must reach the public registry"; else echo "  NOT VERIFIED (offline): ${why}"; fi;;
+    esac
+  fi
+  # The verifier itself, against known tags. A verifier that cannot tell these apart
+  # proves nothing: the last pre-#52 main build; the refuter's m2 (a tag the Release
+  # workflow never pushed, with a pre-#52 digest); a post-#52 tag with a pre-#52 digest;
+  # a pre-#52 tag with its OWN correct digest (ancestry, not digest equality, must
+  # refuse it); and #52's merge build with its digest.
+  PRE52_DIGEST=sha256:fcc3e1ae30a4c504a7a8cdd2948107286f21eaaf1cbab4696b1e251c06808272
+  while IFS='|' read -r ctag cdigest want label; do
+    why="$(verify_pin "${ctag}" "${cdigest}")"; rc=$?
+    if [ "${rc}" -eq 2 ]; then
+      if [ -n "${CI:-}" ]; then bad "verifier control: ${why}"; else echo "  NOT VERIFIED (offline): verifier control ${ctag}"; fi
+    elif [ "${rc}" -eq "${want}" ]; then ok "verifier control: ${label} -- ${why}"; else bad "verifier control: ${label} -- got rc=${rc}: ${why}"; fi
+  done <<CASES
+sha-f111cfe3382d||1|the 0.2.0-beta.3 build (pre-#52, no digest) is refused by ancestry
+sha-b557b3944d8e|${PRE52_DIGEST}|1|m2: a tag the Release workflow never pushed is refused
+sha-3ae21def10e8|${PRE52_DIGEST}|1|a post-#52 tag with the pre-#52 digest is refused (the digest is what gets pulled)
+sha-73a5bc2c6d09|sha256:cd6c05b0a1d6f216373493d9460e5e44ca0dd6afc9ddf489ccefb6087b9a8e43|1|a pre-#52 tag with its own correct digest is refused by ancestry alone
+sha-3ae21def10e8|sha256:f2142f61a782c1801de91d986182cb7eddd4b8d1a9ce1c6359ca0dd7dea3bcc9|0|#52's merge build with its manifest digest is accepted
+CASES
 fi
-# The verifier itself, against two known commits: the last pre-#52 main build and the
-# #52 head. A verifier that cannot tell them apart proves nothing.
-for pair in "f111cfe3382d|1|the 0.2.0-beta.3 build (pre-#52) is reported as lacking the names" "b557b3944d8e|0|the #52 head is reported as carrying them"; do
-  IFS='|' read -r ref want label <<<"${pair}"
-  why="$(build_ref_carries_52 "${ref}")"; rc=$?
-  if [ "${rc}" -eq 2 ]; then
-    if [ -n "${CI:-}" ]; then bad "verifier control: ${why}"; else echo "  NOT VERIFIED (offline): verifier control ${ref}"; fi
-  elif [ "${rc}" -eq "${want}" ]; then ok "verifier control: ${label}"; else bad "verifier control: ${label} -- got: ${why}"; fi
-done
 
 # ── the builders, for real ───────────────────────────────────────────────────
 echo "== parameterize_games_domain(), run from each builder =="
@@ -483,7 +664,7 @@ expect_red(){ # $1 label, $2 string the failure must name, $3 python mutation (p
   rm -rf "${T}"; mkdir -p "${T}/specs" "${T}/tests/e2e/specs" "${T}/tests/stack" "${T}/scripts/release"
   cp -r "${REPO}/specs/cluster" "${T}/specs/cluster"
   cp "${REPO}/tests/e2e/specs/rbac-route-access.seed.ts" "${T}/tests/e2e/specs/"
-  cp "${REPO}/tests/stack/compose.games.yaml" "${T}/tests/stack/"
+  cp "${REPO}/tests/stack/compose.games.yaml" "${REPO}/tests/stack/compose.local.yaml" "${T}/tests/stack/"
   cp "${REPO}/scripts/gen-cluster-secrets.sh" "${T}/scripts/"
   cp "${REPO}/scripts/release/repos.tsv" "${T}/scripts/release/"
   local before after out
@@ -522,8 +703,20 @@ expect_red "the public egress widened to all ports" "the public path is :443 onl
 expect_red "the ESO key renamed" "games-bff-db reads" 'rep(M+"external-secrets/secretstore.yaml", "key: hugmesh/games-bff", "key: hugmesh/games-bff-renamed")'
 expect_red "the dotted image name returns" "is in the published set" 'rep(M+"games/kustomization.yaml", "hugmesh/hugmesh-games/backend", "hugmesh/hugmesh.games/backend")'
 expect_red "the stale comment returns" "no longer says" 'rep("tests/stack/compose.games.yaml", "the standalone games-realm portal", "the standalone two-realm portal")'
-expect_red "the backend tracks :main again" "never a floating name" 'rep(M+"games/kustomization.yaml", "newTag: needs-hugmesh-games-pr52", "newTag: main")'
-expect_red "the backend pinned to a branch tag" "never a floating name" 'rep(M+"games/kustomization.yaml", "newTag: needs-hugmesh-games-pr52", "newTag: fix-games-two-realms")'
+expect_red "the backend tracks :main again" "never a floating name" 'rep(M+"games/kustomization.yaml", "newTag: sha-3ae21def10e8", "newTag: main")'
+expect_red "the backend pinned to a branch tag" "never a floating name" 'rep(M+"games/kustomization.yaml", "newTag: sha-3ae21def10e8", "newTag: fix-games-two-realms")'
+expect_red "m1: the placeholder with a digest riding along" "no digest rides with the placeholder" 'rep(M+"games/kustomization.yaml", "newTag: sha-3ae21def10e8", "newTag: needs-hugmesh-games-pr52")'
+expect_red "m3: a JSON6902 patch replaces the container image with ghcr :main" "nothing patches the container image" 'rep(M+"games/kustomization.yaml", "patches:\n", "patches:\n  - target: { kind: Deployment, name: hugmesh-games }\n    patch: |\n      - op: replace\n        path: /spec/template/spec/containers/0/image\n        value: ghcr.io/hugmesh/hugmesh-games/backend:main\n")'
+expect_red "a strategic-merge patch sets an allowed-looking image behind the pin" "nothing patches the container image" 'rep(M+"games/kustomization.yaml", "patches:\n", "patches:\n  - patch: |\n      apiVersion: apps/v1\n      kind: Deployment\n      metadata: { name: hugmesh-games }\n      spec: { template: { spec: { containers: [ { name: games, image: registry.hugmesh.net/hugmesh/hugmesh-games/backend:sha-3ae21def10e8 } ] } } }\n")'
+expect_red "the keyspace Job back to PostSync" "Sync-phase hook" 'rep(M+"games/cassandra-init.yaml", "argocd.argoproj.io/hook: Sync\n", "argocd.argoproj.io/hook: PostSync\n")'
+expect_red "the BFF loses its wave" "waves order" 'rep(M+"games/deployment.yaml", "    argocd.argoproj.io/sync-wave: \"2\"\n", "")'
+expect_red "casdoor-games dataSourceName back on in-app interpolation" "dataSourceName carries no" 'rep(M+"casdoor-games/app-conf-configmap.yaml", "user=__CASDOOR_DB_USER__ password=__CASDOOR_DB_PASSWORD__", "user=${CASDOOR_DB_USER||threewizards} password=${CASDOOR_DB_PASSWORD||}")'
+expect_red "casdoor-domain origin back on in-app interpolation" "no app.conf key relies on" 'rep(M+"casdoor-domain/app-conf-configmap.yaml", "origin = \"__CASDOOR_ORIGIN__\"", "origin = \"${CASDOOR_ORIGIN||https://id.hugmesh.net}\"")'
+expect_red "casdoor-games render initContainer removed" "no render-app-conf initContainer" 'rep(M+"casdoor-games/deployment.yaml", "        - name: render-app-conf\n", "        - name: render-something-else\n")'
+expect_red "a template token the initContainer never renders" "every template token is rendered" 'rep(M+"casdoor-domain/app-conf-configmap.yaml", "dbName = casdoor", "dbName = __CASDOOR_DB_NAME__")'
+expect_red "casdoor-games mounts the unrendered template" "mounts the RENDERED app.conf" 'rep(M+"casdoor-games/deployment.yaml", "- { name: rendered-conf, mountPath: /conf/app.conf, subPath: app.conf, readOnly: true }", "- { name: app-conf-template, mountPath: /conf/app.conf, subPath: app.conf.template, readOnly: true }")'
+expect_red "the GM sync switched on" "GM_SYNC_ENABLED is not true" 'rep(M+"hugmesh-apis/deployment.yaml", "{ name: GM_SYNC_ENABLED, value: \"false\" }", "{ name: GM_SYNC_ENABLED, value: \"true\" }")'
+expect_red "the sync-job header describes the mirror again" "no longer says" 'rep(M+"casdoor/games-admin-sync-job.yaml", "#   (2) fe-gateway:", "#   (2) actions:   ROLE_GAMES_ADMIN (systems) -> admin (games)\n#   (2b) fe-gateway:")'
 expect_red "the games-side client handed back to hugmesh-api" "no games-realm client" 'rep(M+"hugmesh-apis/deployment.yaml", "            - { name: GM_SYNC_INITIAL_DELAY_MS, value: \"3153600000000\" }\n", "            - { name: CASDOOR_GAMES_URL, value: \"http://casdoor-games.hugmesh-games.svc.cluster.local:8000\" }\n            - { name: GM_SYNC_INITIAL_DELAY_MS, value: \"3153600000000\" }\n")'
 expect_red "the sync Secret mounted again" "casdoor-sync-games" 'rep(M+"hugmesh-apis/deployment.yaml", "            - { name: GM_SYNC_INITIAL_DELAY_MS, value: \"3153600000000\" }\n", "            - { name: GAMES_SECRET, valueFrom: { secretKeyRef: { name: casdoor-sync-games, key: clientSecret } } }\n            - { name: GM_SYNC_INITIAL_DELAY_MS, value: \"3153600000000\" }\n")'
 expect_red "the initial delay dropped" "ten years out" 'rep(M+"hugmesh-apis/deployment.yaml", "            - { name: GM_SYNC_INITIAL_DELAY_MS, value: \"3153600000000\" }\n", "")'

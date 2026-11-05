@@ -3,9 +3,14 @@
 # hugmesh-games docker/cassandra-init.cql (main at 34a3a32); every statement is
 # IF NOT EXISTS, so a re-run is a no-op. A new table in that file needs copying here.
 #
-# ArgoCD PostSync hook, the idiom of manifests/cassandra-init/bootstrap-job.yaml: it
-# re-runs on every sync and a failure fails the sync. The script also waits for CQL
-# itself. Same image as the node so cqlsh matches the server.
+# ArgoCD Sync-phase hook in sync-wave 1, between the stores (wave 0: cassandra.yaml,
+# bff-db.yaml) and the BFF (wave 2: deployment.yaml). It re-runs on every sync and a
+# failure fails the sync, like manifests/cassandra-init/bootstrap-job.yaml; unlike that
+# Job it is NOT PostSync, because its consumer is in the same Application: the BFF runs
+# schema-action NONE and names this keyspace, so without it the pod cannot start, a
+# PostSync hook waits for every resource to be Healthy, and the two wait for each other
+# forever. The script also waits for CQL itself. Same image as the node so cqlsh
+# matches the server.
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -214,7 +219,8 @@ metadata:
   namespace: hugmesh-games
   labels: { app: games-cassandra-init, app.kubernetes.io/part-of: hugmesh.games }
   annotations:
-    argocd.argoproj.io/hook: PostSync
+    argocd.argoproj.io/hook: Sync
+    argocd.argoproj.io/sync-wave: "1"
     argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
 spec:
   backoffLimit: 4
